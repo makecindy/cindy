@@ -440,6 +440,14 @@ describe('FindInPageBar', () => {
     await waitFor(() => expect(screen.getByText('0/0')).toBeTruthy());
   });
 
+  it('opts out of window drag regions so page drag strips cannot swallow its buttons', async () => {
+    await openFindBar();
+    const dialog = screen.getByRole('dialog');
+    expect(
+      (dialog.style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion,
+    ).toBe('no-drag');
+  });
+
   it('clears highlights when the query is cleared or the bar closes', async () => {
     const page = document.createElement('main');
     page.textContent = 'foo';

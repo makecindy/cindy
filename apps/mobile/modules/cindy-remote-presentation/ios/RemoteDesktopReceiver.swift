@@ -42,12 +42,18 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
   private var offerSent = false
   private var frameReady = false
   private var pendingViewChallenge: String?
+  private let diagnostics: Bool
+  private let diagnosticStart = ProcessInfo.processInfo.systemUptime
+  private var candidateCounts: [String: Int] = [:]
+  private var configuredTurnCount = 0
+  private var lastPairKinds: String?
 
-  init(epoch: String, audio: Bool, trickle: Bool, net: [String: Any]) {
+  init(epoch: String, audio: Bool, trickle: Bool, net: [String: Any], diagnostics: Bool = false) {
     self.epoch = epoch
     self.audio = audio
     self.trickle = trickle
     self.net = net
+    self.diagnostics = diagnostics
     super.init()
   }
   private func seconds(_ key: String, _ fallback: Double) -> Double {
@@ -57,23 +63,55 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
     guard !stopped else { return }
     emit(payload.merging(["type": type, "epoch": epoch, "attemptId": attempt]) { _, new in new })
   }
+  // Fixed enums and counts only. No SDP, addresses, URLs or TURN credentials.
+  private func diagnose(_ stage: String, _ fields: [String: Any] = [:]) {
+    guard diagnostics else { return }
+    var values: [String: Any] = ["stage": stage,
+      "elapsedMs": Int((ProcessInfo.processInfo.systemUptime - diagnosticStart) * 1000),
+      "turnUrlCount": configuredTurnCount, "localAck": localAck, "remoteAfter": remoteAfter,
+      "trickleEnabled": trickle]
+    for (key, count) in candidateCounts { values[key] = count }
+    values.merge(fields) { _, new in new }
+    post("rtcDiagnostic", values)
+  }
+  private func serverSummary(_ servers: [[String: Any]]) -> [String: Any] {
+    let urls = servers.flatMap { ($0["urls"] as? [String]) ?? ($0["urls"] as? String).map { [$0] } ?? [] }
+    return ["serverCount": servers.count,
+      "turnUrlCount": urls.filter { $0.hasPrefix("turn:") || $0.hasPrefix("turns:") }.count]
+  }
+  private func countCandidate(_ sdp: String, side: String) {
+    guard diagnostics else { return }
+    let parts = sdp.split(whereSeparator: { $0.isWhitespace })
+    let kind = parts.firstIndex(of: "typ").flatMap { $0 + 1 < parts.count ? String(parts[$0 + 1]) : nil } ?? "unknown"
+    let safeKind = ["host", "srflx", "prflx", "relay"].contains(kind) ? kind : "unknown"
+    let key = side + "_" + safeKind
+    candidateCounts[key, default: 0] += 1
+    // First occurrence proves each candidate kind was seen without a per-candidate log flood.
+    if candidateCounts[key] == 1 { diagnose("candidate-kind") }
+  }
   func begin(fallbackServers: [[String: Any]]) {
     post("iceConfig")
-    timer = Timer.scheduledTimer(withTimeInterval: 3.5, repeats: false) { [weak self] _ in
-      self?.start(servers: fallbackServers)
+    diagnose("config-requested")
+    timer = Timer.scheduledTimer(withTimeInterval: seconds("iceConfigMs", 8_000) + seconds("iceConfigBridgeMs", 500), repeats: false) { [weak self] _ in
+      self?.diagnose("config-deadline")
+      self?.start(servers: fallbackServers, source: "native-deadline")
     }
   }
   func receive(_ message: [String: Any]) {
     guard !stopped, message["epoch"] as? String == epoch,
           message["attemptId"] as? String == attempt else { return }
     switch message["type"] as? String {
-    case "iceConfig": start(servers: message["iceServers"] as? [[String: Any]] ?? [])
+    case "iceConfig":
+      let servers = message["iceServers"] as? [[String: Any]] ?? []
+      diagnose(peer == nil ? "config-received" : "config-late-ignored", serverSummary(servers))
+      start(servers: servers, source: "bridge")
     case "answer":
       guard let peer, let sdp = message["sdp"] as? String, sdp.utf8.count <= 64_000 else { return }
       peer.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: sdp)) { [weak self] error in
         DispatchQueue.main.async {
           guard let self, !self.stopped else { return }
           guard error == nil else { self.fail("answer"); return }
+          self.diagnose("answer-applied")
           self.deadline(self.seconds("connectMs", 15_000), "connect-timeout")
           self.exchangeUntil = Date().addingTimeInterval(self.seconds("exchangeMs", 30_000))
           self.pollIce()
@@ -84,7 +122,7 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
     default: break
     }
   }
-  private func start(servers: [[String: Any]]) {
+  private func start(servers: [[String: Any]], source: String) {
     guard !stopped, peer == nil else { return }
     timer?.invalidate()
     let config = RTCConfiguration()
@@ -95,6 +133,8 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
       return RTCIceServer(urlStrings: urls, username: server["username"] as? String,
                          credential: server["credential"] as? String)
     }
+    configuredTurnCount = serverSummary(servers)["turnUrlCount"] as? Int ?? 0
+    diagnose("config-applied", ["source": source, "serverCount": config.iceServers.count])
     let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
     guard let rtc = Self.factory.peerConnection(with: config, constraints: constraints, delegate: self) else {
       fail("setup"); return
@@ -128,6 +168,7 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
   private func sendOffer() {
     guard !stopped, !offerSent, let sdp = peer?.localDescription?.sdp else { return }
     offerSent = true
+    diagnose("offer-sent")
     deadline(seconds("answerMs", 45_000), "answer-timeout")
     post("offer", ["sdp": sdp])
   }
@@ -144,6 +185,7 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
     let batch = Array(candidates.dropFirst(localAck).prefix(16))
     exchange += 1
     pending = (exchange, batch.count)
+    diagnose("exchange-sent", ["exchangeId": exchange, "batchCount": batch.count])
     post("ice", ["candidates": batch, "after": remoteAfter, "exchangeId": exchange])
     scheduleIce(4.5)
   }
@@ -155,11 +197,12 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
     }
   }
   private func receiveIce(_ message: [String: Any]) {
-    guard let batch = pending, message["exchangeId"] as? Int == batch.id, let peer else { return }
+    guard let batch = pending,
+          RemoteDesktopBridgeNumber.integer(message["exchangeId"]) == batch.id, let peer else { return }
     iceTimer?.invalidate()
-    if message["error"] as? Bool == true { pending = nil; scheduleIce(1); return }
+    if message["error"] as? Bool == true { diagnose("exchange-error"); pending = nil; scheduleIce(1); return }
     guard let values = message["candidates"] as? [[String: Any]], values.count <= 16,
-          let next = message["next"] as? Int, next == remoteAfter + values.count, next <= 128 else {
+          let next = RemoteDesktopBridgeNumber.integer(message["next"]), next == remoteAfter + values.count, next <= 128 else {
       fail("candidates"); return
     }
     // WebRTC serializes addIceCandidate internally. Mark the batch complete only
@@ -170,6 +213,7 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
         localAck += batch.count
         remoteAfter = next
         pending = nil
+        if batch.count > 0 || !values.isEmpty { diagnose("exchange-applied") }
         if !(message["complete"] as? Bool == true && peer.iceGatheringState == .complete && localAck == candidates.count) {
           scheduleIce(seconds("pollMs", 250))
         }
@@ -177,7 +221,7 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
       }
       let value = values[index]
       guard let sdp = value["candidate"] as? String, sdp.utf8.count <= 4096,
-            let line = value["sdpMLineIndex"] as? Int, line >= 0, line <= 65535 else {
+            let line = RemoteDesktopBridgeNumber.integer(value["sdpMLineIndex"]), line >= 0, line <= 65535 else {
         fail("candidates"); return
       }
       let key = "\(value["sdpMid"] as? String ?? ""):\(line):\(sdp)"
@@ -188,6 +232,7 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
           guard let self, !self.stopped else { return }
           guard error == nil else { self.fail("candidates"); return }
           self.remoteSeen.insert(key)
+          self.countCandidate(sdp, side: "remote")
           add(index + 1)
         }
       }
@@ -217,13 +262,14 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
   func sendInput(_ message: [String: Any]) -> Bool {
     guard !stopped, !isPresenting(), UIApplication.shared.applicationState == .active,
           peer?.connectionState == .connected, let channel, channel.readyState == .open,
-          channel.bufferedAmount < 16384, let sequence = message["sequence"] as? Int,
+          channel.bufferedAmount < 16384, let sequence = RemoteDesktopBridgeNumber.integer(message["sequence"]), sequence >= 0,
           let events = message["events"] as? [[String: Any]], events.count <= 64,
           let data = try? JSONSerialization.data(withJSONObject: ["sequence": sequence, "events": events]),
           data.count <= 32_768 else { return false }
     return channel.sendData(RTCDataBuffer(data: data, isBinary: false))
   }
   private func fail(_ reason: String, retry: Bool = true) {
+    diagnose("failed", ["reason": reason])
     post("fallback", ["reason": reason, "retry": retry])
     stop()
   }
@@ -235,11 +281,18 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
         guard let self, !self.stopped else { return }
         self.statsBusy = false
         let rows = Array(report.statistics.values)
-        guard let video = rows.first(where: { $0.type == "inbound-rtp" && (($0.values["kind"] as? String) ?? ($0.values["mediaType"] as? String)) == "video" }) else { return }
         let pairID = rows.first(where: { $0.type == "transport" })?.values["selectedCandidatePairId"] as? String
         let pair = pairID.flatMap { report.statistics[$0] }
         let local = (pair?.values["localCandidateId"] as? String).flatMap { report.statistics[$0] }?.values["candidateType"] as? String
         let remote = (pair?.values["remoteCandidateId"] as? String).flatMap { report.statistics[$0] }?.values["candidateType"] as? String
+        if let local, let remote {
+          let kinds = local + "/" + remote
+          if kinds != self.lastPairKinds {
+            self.lastPairKinds = kinds
+            self.diagnose("selected-pair", ["localKind": local, "remoteKind": remote])
+          }
+        }
+        guard let video = rows.first(where: { $0.type == "inbound-rtp" && (($0.values["kind"] as? String) ?? ($0.values["mediaType"] as? String)) == "video" }) else { return }
         var data: [String: Any] = ["transport": local == "relay" || remote == "relay" ? "relay" : (local != nil && remote != nil ? "direct" : "video")]
         if let rtt = pair?.values["currentRoundTripTime"] as? Double { data["latencyMs"] = rtt * 1000 }
         if let bytes = video.values["bytesReceived"] as? Double {
@@ -255,7 +308,9 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
   }
   func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
     DispatchQueue.main.async { [weak self] in
-      guard let self, !self.stopped, self.trickle else { return }
+      guard let self, !self.stopped else { return }
+      self.countCandidate(candidate.sdp, side: "local")
+      guard self.trickle else { return }
       guard self.candidates.count < 128 else { self.fail("candidate-limit", retry: false); return }
       var value: [String: Any] = ["candidate": candidate.sdp, "sdpMLineIndex": Int(candidate.sdpMLineIndex)]
       if let mid = candidate.sdpMid { value["sdpMid"] = mid }
@@ -264,12 +319,14 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
   }
   func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
     DispatchQueue.main.async { [weak self] in
+      self?.diagnose("gathering", ["stateCode": newState.rawValue])
       if newState == .complete && self?.trickle == false { self?.sendOffer() }
     }
   }
   func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
     DispatchQueue.main.async { [weak self] in
       guard let self, !self.stopped else { return }
+      self.diagnose("connection", ["stateCode": newState.rawValue])
       if newState == .failed || newState == .closed { self.fail("transport") }
       else if newState == .disconnected {
         guard self.disconnectTimer == nil else { return }
@@ -298,6 +355,7 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
         guard self.onFrame(frame) else { return }
         if !self.frameReady {
           self.frameReady = true
+          self.diagnose("first-frame")
           self.post("videoFrameReady")
           self.post("streaming")
         }
@@ -336,7 +394,17 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
   func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
   func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
   func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
-  func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}
+  func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
+    DispatchQueue.main.async { [weak self] in self?.diagnose("ice-state", ["stateCode": newState.rawValue]) }
+  }
+  func peerConnection(_ peerConnection: RTCPeerConnection, didFailToGatherIceCandidate event: RTCIceCandidateErrorEvent) {
+    let code = event.errorCode
+    let kind = event.url.hasPrefix("turns:") ? "turns" : (event.url.hasPrefix("turn:") ? "turn" : "stun")
+    let transport = event.url.hasPrefix("turns:") ? "tls" : (event.url.contains("transport=tcp") ? "tcp" : "udp")
+    DispatchQueue.main.async { [weak self] in
+      self?.diagnose("ice-error", ["errorCode": code, "serverKind": kind, "transportKind": transport])
+    }
+  }
   func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
   func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
 }

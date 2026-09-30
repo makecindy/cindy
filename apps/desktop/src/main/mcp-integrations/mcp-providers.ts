@@ -1,4 +1,6 @@
+import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
+import { classifyHelperSurface } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { listProjects, renameProject, removeProject } from './projectManagement.js';
@@ -40,6 +42,7 @@ import { feishuIm, wechatIm } from '../im';
 import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { getSlackToolBridge } from '../hook-control/slackToolBridge.js';
 import { createLogger } from '../logger.js';
+import { checkAppUpdateForAgent } from '../updateService.js';
 import { getScheduler } from '../scheduler-host/index.js';
 import { stabilizeHookCommand } from '../scheduler-host/hook-script-generator.js';
 import { searchSessionsFn } from '../maker-host/session-search.js';
@@ -86,6 +89,12 @@ import {
   type ChatHistoryReaderDeps,
 } from './remoteChatHistory.js';
 import { botSessionLinks, sessions } from '../localDb/schema.js';
+import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
+import { botLearningTracker } from '../maker-ipc/botLearningTracker.js';
+import { getLearnController } from '../learn-host/index.js';
+import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
+import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
+import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } from '../maker-host/grok-device-login-service.js';
 
 export interface DesktopMcpProvidersDeps {
   botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'>;
@@ -107,6 +116,15 @@ export interface DesktopMcpProvidersDeps {
     sessionId: string,
     sessionInstanceId: string,
   ) => GhostGrantLiveSessionState | null;
+  /** Agent 发起插件安装时向该任务投宿主权限确认卡；缺失时安装 fail closed。 */
+  requestHostPermission?: CindyGhostsHostDeps['requestHostPermission'];
+  /** Reject stale, remote, or already-closed Session tool contexts. */
+  isCurrentLocalSessionInstance?: (
+    sessionId: string,
+    sessionInstanceId: string | undefined,
+  ) => boolean;
+  /** Current live session, including sessions whose agent runs over SSH. */
+  isCurrentGrokLoginCaller?: (sessionId: string, sessionInstanceId: string) => boolean;
   /** 把工具结果图片转成文字描述（视觉桥，最佳努力）。缺失 = 不处理。
    *  返回结构区分「有意跳过」(skipped:true, 视觉桥未开/模型不命中, 不告警)与
    *  「真正尝试但失败」(skipped:false + null, 计入 attemptedCount 供告警)。 */
@@ -333,6 +351,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     },
     memory: {
       getManager: deps.getMakerMemoryManager,
+      beginWrite: (context) => {
+        const saved = botLearningTracker.capture(context?.memoryScopeKey?.startsWith('bot:') ? context.sessionId ?? '' : '');
+        return receipt => saved({ ...receipt, kind: 'memory' });
+      },
       searchSessions: searchSessionsFn,
       logger: createLogger('mcp/cindy_memory'),
     },
@@ -371,25 +393,135 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // 启动早期跑, 那时 registerMakerIpc 还没执行, holder 是 null; 回调真正被调时
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
+      appUpdate: {
+        isCurrentSession: (sessionId, sessionInstanceId) =>
+          deps.isCurrentLocalSessionInstance?.(sessionId, sessionInstanceId) === true,
+        check: checkAppUpdateForAgent,
+      },
       logger: createLogger('mcp/cindy_helper'),
+      grokLogin: {
+        start: async (context) => {
+          if (!context.sessionId || !context.sessionInstanceId
+            || !deps.isCurrentGrokLoginCaller?.(context.sessionId, context.sessionInstanceId))
+            throw new Error('Stale Grok login caller');
+          return startGrokDeviceLogin();
+        },
+        status: async (context) => {
+          if (!context.sessionId || !context.sessionInstanceId
+            || !deps.isCurrentGrokLoginCaller?.(context.sessionId, context.sessionInstanceId))
+            throw new Error('Stale Grok login caller');
+          return grokDeviceLoginStatus();
+        },
+        cancel: async (context) => {
+          if (!context.sessionId || !context.sessionInstanceId
+            || !deps.isCurrentGrokLoginCaller?.(context.sessionId, context.sessionInstanceId))
+            throw new Error('Stale Grok login caller');
+          return cancelGrokDeviceLogin();
+        },
+      },
+      sessionTags: async (callerSessionId, request) => {
+        const result = await executeTaskTags(request, callerSessionId);
+        return ['update', 'delete'].includes(request.action) ? { ...result, sessions: [] } : result;
+      },
       createProject,
       moveSession: createMoveSession(isSessionInTurn),
       projectManagement: { list: listProjects, rename: renameProject, remove: removeProject },
+      authorizeSkillLearning: async (request, context) => {
+        if (!isCindyLearnSkillEnabled()) {
+          return {
+            ok: false,
+            errorCode: 'SKILL_DISABLED',
+            message: 'Cindy Learn is disabled in Local Skills.',
+          };
+        }
+        if (!getLearnController()) {
+          return {
+            ok: false,
+            errorCode: 'HOST_NOT_READY',
+            message: 'Cindy Learn is not ready yet.',
+          };
+        }
+        const sessionInstanceId = context.sessionInstanceId;
+        if (
+          !sessionInstanceId
+          || !deps.isCurrentLocalSessionInstance?.(request.callerSessionId, sessionInstanceId)
+        ) {
+          return {
+            ok: false,
+            errorCode: 'USER_REQUEST_REQUIRED',
+            message: 'Cindy Learn is not authorized for this task instance.',
+          };
+        }
+        const authorization = await consumeLearnInvocationGrant(request, sessionInstanceId);
+        return authorization.ok
+          ? { ok: true, sessionInstanceId }
+          : authorization;
+      },
+      skillLearning: async ({
+        callerSessionId,
+        input,
+        sourceKind,
+        hubSlug,
+        hubCatalogScope,
+      }, authorization) => {
+        try {
+          if (!isCindyLearnSkillEnabled()) {
+            return {
+              ok: false,
+              errorCode: 'SKILL_DISABLED',
+              message: 'Cindy Learn is disabled in Local Skills.',
+            };
+          }
+          const controller = getLearnController();
+          if (!controller) {
+            return {
+              ok: false,
+              errorCode: 'HOST_NOT_READY',
+              message: 'Cindy Learn is not ready yet.',
+            };
+          }
+          if (!deps.isCurrentLocalSessionInstance?.(
+            callerSessionId,
+            authorization.sessionInstanceId,
+          )) {
+            return {
+              ok: false,
+              errorCode: 'USER_REQUEST_REQUIRED',
+              message: 'Cindy Learn is not authorized for this task instance.',
+            };
+          }
+          const { runId } = await controller.startLearn({
+            input,
+            sourceKind,
+            originSessionId: callerSessionId,
+            ...(hubSlug ? { hubSlug } : {}),
+            ...(hubCatalogScope ? { hubCatalogScope } : {}),
+          });
+          return { ok: true, runId };
+        } catch (err) {
+          const rawCode = (err as { code?: unknown })?.code;
+          const errorCode =
+            typeof rawCode === 'string'
+            && ['LEARN_BUSY', 'LEARN_INVALID_STATE', 'INVALID_PARAMS', 'NOT_FOUND'].includes(rawCode)
+              ? rawCode
+              : 'INTERNAL';
+          return {
+            ok: false,
+            errorCode,
+            message: err instanceof Error ? err.message : 'Failed to start Cindy Learn.',
+          };
+        }
+      },
       resolveSurface: async ({ sessionId }) => {
         const dbClient = tryGetDbClient();
         if (!dbClient) return 'restricted';
-        const [owned] = await dbClient.drizzle
-          .select({ role: botSessionLinks.role })
-          .from(botSessionLinks)
-          .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
-          .where(
-            and(
-              eq(botSessionLinks.sessionId, sessionId),
-              eq(sessions.source, 'bot'),
-            ),
-          )
+        const [row] = await dbClient.drizzle
+          .select({ source: sessions.source, botId: botSessionLinks.botId })
+          .from(sessions)
+          .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+          .where(eq(sessions.id, sessionId))
           .limit(1);
-        return owned ? 'bot' : 'default';
+        return classifyHelperSurface(row?.source, Boolean(row?.botId));
       },
       sessionQueue: {
         listSessionQueue: wrap((service, sessionId: string) => service.listSessionQueue(sessionId)),
@@ -561,6 +693,16 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           }
           return svc.stopSessionTask(callerSessionId, taskId, mode);
         },
+        inspectSessionTaskRoute: async ({ callerSessionId, taskId }) => {
+          const svc = tryGetBotDelegationService();
+          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Session task service not initialized' };
+          return svc.inspectSessionTaskRoute(callerSessionId, taskId);
+        },
+        advanceSessionTaskRoute: async ({ callerSessionId, taskId, expectedGeneration, selectionToken }) => {
+          const svc = tryGetBotDelegationService();
+          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Session task service not initialized' };
+          return svc.advanceSessionTaskRoute(callerSessionId, taskId, expectedGeneration, selectionToken);
+        },
       },
       botMessaging: {
         checkMessage: async (params) => {
@@ -663,9 +805,20 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
       botCapabilities: deps.botCapabilities,
       botSkills: {
-        save: (params) => saveBotSkillForSession(params),
+        save: async (params) => {
+          const saved = botLearningTracker.capture(params.callerSessionId);
+          const result = await saveBotSkillForSession(params);
+          if (result.ok) saved({ kind: 'skill', key: result.skill.slug, title: result.skill.name,
+            action: result.created ? 'created' : 'updated' });
+          return result;
+        },
         list: (params) => listBotSkillsForSession(params),
       },
+      skillhub: createSkillhubAgentTools({
+        isCurrentSession: (context) => !!context.sessionId
+          && deps.isCurrentLocalSessionInstance?.(context.sessionId, context.sessionInstanceId) === true,
+        authorizePath: (request) => authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
+      }),
       history: {
         resolveSessionScope: async ({ callerSessionId, callerMemoryScopeKey }) => {
           try {
@@ -805,6 +958,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           pluginMarket: getPluginMarketService(),
           getAppVersion: deps.getAppVersion,
           getLiveSessionGrantState: deps.getLiveSessionGrantState,
+          requestHostPermission: deps.requestHostPermission,
           createMediaDownloadContext: deps.createMediaDownloadContext,
           describeToolResultImage: deps.describeToolResultImage,
           onToolResultImagesFailed: deps.onToolResultImagesFailed,

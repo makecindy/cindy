@@ -1,7 +1,8 @@
 import { groupWorkRuns } from './workRunGrouping.js';
+import { describeToolUse } from './toolUseDescriptor.js';
 import { isAgentPlanToolName, isDeliveryProseText } from './messageRender.js';
 import { isAgentTaskToolName } from './agentTask.js';
-import { extractPayloadToolResultMedia } from './payloadSummary.js';
+import { extractPayloadToolResultMedia, extractPayloadToolResultFiles, extractPayloadToolCardIds } from './payloadSummary.js';
 import { isOrcaCommunicationTool, messageContentToPreview, parseMessageToolUse } from './messageNormalize.js';
 import type { HistoryMessageSource, HistoryViewItem, HistoryWorkSummary } from './historyView.js';
 
@@ -23,7 +24,7 @@ export function isHistoryDetailTool(name: string): boolean {
 
 export function hasVisibleHistoryResult(content: unknown): boolean {
   const text = messageContentToPreview(content);
-  if (extractPayloadToolResultMedia(text).length > 0 || /^(?:cindy-media|xdt-file):\/\/\S+$/.test(text.trim())) return true;
+  if (extractPayloadToolResultMedia(text).length > 0 || extractPayloadToolResultFiles(text).length > 0 || extractPayloadToolCardIds(text).length > 0 || /^(?:cindy-media|xdt-file):\/\/\S+$/.test(text.trim())) return true;
   // Source listings often contain these field names and error markers. Only a
   // real result object can claim a card; ordinary tool errors remain activities.
   try {
@@ -31,6 +32,13 @@ export function hasVisibleHistoryResult(content: unknown): boolean {
     return !!value && !Array.isArray(value) && (typeof value.xdt_card_id === 'string'
       || typeof value.xdt_anchor_card_id === 'string');
   } catch { return false; }
+}
+
+function hasFileDelivery(row: HistoryMessageSource): boolean {
+  if (row.role !== 'tool_use') return false;
+  const tool = parseMessageToolUse(row);
+  const descriptor = describeToolUse(tool.toolName, tool.input);
+  return descriptor.kind === 'mcp' && !!descriptor.createdPath;
 }
 
 /**
@@ -41,6 +49,62 @@ export function hasVisibleHistoryResult(content: unknown): boolean {
 export function projectHistoryView<T extends HistoryMessageSource>(
   rows: readonly T[],
   streaming: boolean,
+  lazyDetails = false,
+): HistoryViewItem<T>[] {
+  if (lazyDetails) {
+    const scopes = historySubagentScopes(rows);
+    const visibleTools = new Set(rows.filter((row) => row.role === 'tool_result' && hasVisibleHistoryResult(row.content)).map((row) => row.toolUseId));
+    for (const row of rows) if (hasFileDelivery(row)) visibleTools.add(parseMessageToolUse(row).toolUseId);
+    const children = new Map<string, T[]>();
+    const visible = rows.filter((row) => {
+      const parent = scopes.get(row.id);
+      // Visible artifacts remain available to the desktop's media hoisting.
+      const toolId = row.role === 'tool_use' ? parseMessageToolUse(row).toolUseId : row.toolUseId;
+      if (!parent || (toolId && visibleTools.has(toolId))) return true;
+      const bucket = children.get(parent) ?? [];
+      bucket.push(row);
+      children.set(parent, bucket);
+      return false;
+    });
+    const results = new Map(rows.filter((row) => row.role === 'tool_result').map((row) => [row.toolUseId, row]));
+    const withArtifacts = (row: T): T => row.historyArtifacts?.length ? { ...row, historyArtifacts:
+      row.historyArtifacts.filter((file) => {
+        const result = file.toolUseId && results.get(file.toolUseId);
+        return !result || !messageContentToPreview(result.content).includes('<tool_use_error>');
+      }).map((file) => ({ ...file, ready: !file.toolUseId || results.has(file.toolUseId) })) } : row;
+    const projected = projectHistorySourceView(visible.map(withArtifacts), streaming, false);
+    const attach = (items: HistoryViewItem<T>[]): HistoryViewItem<T>[] => items.map((item) => {
+      if (item.type === 'work') return { ...item, ...(item.children ? { children: attach(item.children) } : {}) };
+      const header = item.messages.find((row) => row.role === 'tool_use');
+      const toolId = header && parseMessageToolUse(header).toolUseId;
+      const body = toolId ? children.get(toolId) : undefined;
+      if (!header || !toolId || !body?.length) return item;
+      const first = body[0], last = body[body.length - 1];
+      const model = body.map((row) => row.agentMeta as { parentUuid?: string; model?: unknown } | null)
+        .find((meta) => meta?.parentUuid === toolId && typeof meta.model === 'string' && meta.model)?.model;
+      return { ...item, deferred: {
+        key: `subagent-work-${header.clientId}`, anchorClientId: header.clientId,
+        parentToolUseId: toolId,
+        ...(typeof model === 'string' ? { model } : {}),
+        firstMessageId: first.id, lastMessageId: last.id,
+        ...(body.some((row) => row.id.startsWith('history-live:')) ? {
+          firstStoredMessageId: body.find((row) => !row.id.startsWith('history-live:'))?.id,
+          lastStoredMessageId: [...body].reverse().find((row) => !row.id.startsWith('history-live:'))?.id,
+          liveMessageIds: body.filter((row) => row.id.startsWith('history-live:')).map((row) => row.id),
+        } : {}),
+        startedAtMs: Date.parse(first.createdAt), endedAtMs: Date.parse(last.createdAt),
+        artifacts: body.flatMap((row) => withArtifacts(row).historyArtifacts ?? []),
+        messageCount: body.length, toolCount: body.filter((row) => row.role === 'tool_use').length,
+        isStreaming: streaming, revision: `${last.id}:${body.length}`,
+      } };
+    });
+    return attach(projected);
+  }
+  return projectHistorySourceView(rows, streaming, true);
+}
+
+function projectHistorySourceView<T extends HistoryMessageSource>(
+  rows: readonly T[], streaming: boolean, preserveMixedSegments: boolean,
 ): HistoryViewItem<T>[] {
   const names = new Map<string, string>();
   const visibleResults = new Set<string>();
@@ -49,6 +113,7 @@ export function projectHistoryView<T extends HistoryMessageSource>(
     if (row.role === 'tool_use') {
       const tool = parseMessageToolUse(row);
       if (tool.toolUseId) names.set(tool.toolUseId, tool.toolName);
+      if (!preserveMixedSegments && tool.toolUseId && hasFileDelivery(row)) visibleResults.add(tool.toolUseId);
       if (tool.toolUseId && (row.agentMeta as { parentUuid?: unknown } | null)?.parentUuid) nestedCalls.add(tool.toolUseId);
     }
     if (row.role === 'tool_result' && row.toolUseId && hasVisibleHistoryResult(row.content)) {
@@ -68,7 +133,7 @@ export function projectHistoryView<T extends HistoryMessageSource>(
       : !!thought?.text || !!thought?.durationMs || thought?.isRedacted === true);
     const activity = !nested && (visibleThinking || (
       (row.role === 'tool_use' || row.role === 'tool_result')
-      && isHistoryDetailTool(toolName ?? '')
+      && (isHistoryDetailTool(toolName ?? '') || (!preserveMixedSegments && ['Edit', 'Write', 'MultiEdit', 'edit', 'write'].includes(toolName ?? '')))
       && !(toolId && visibleResults.has(toolId))
     ));
     const plainAssistant = !nested && row.role === 'assistant' && typeof row.content === 'string'
@@ -83,7 +148,8 @@ export function projectHistoryView<T extends HistoryMessageSource>(
   // between its tools, which would move the media and create an extra work group.
   let toolSegment: SourceItem<T>[] = [];
   const flushToolSegment = () => {
-    if (toolSegment.some((item) => !item.activity)) {
+    if ((preserveMixedSegments || toolSegment.some((item) => item.row.role === 'tool_result' && hasVisibleHistoryResult(item.row.content)))
+      && toolSegment.some((item) => !item.activity)) {
       for (const item of toolSegment) { item.activity = false; item.archivable = false; }
     }
     toolSegment = [];
@@ -121,6 +187,7 @@ export function projectHistoryView<T extends HistoryMessageSource>(
       } : {}),
       startedAtMs: Number.isFinite(startedAtMs) ? startedAtMs : 0,
       endedAtMs: Number.isFinite(endedAtMs) ? endedAtMs : 0,
+      ...(run.some((item) => item.row.historyArtifacts?.length) ? { artifacts: run.flatMap((item) => item.row.historyArtifacts ?? []) } : {}),
       messageCount: run.length,
       toolCount: run.filter((item) => item.row.role === 'tool_use').length,
       isStreaming: active,
@@ -191,4 +258,30 @@ export function projectHistoryView<T extends HistoryMessageSource>(
     },
   });
   return grouped.map(toViewItem);
+}
+
+/** Resolve complete subagent trees without making orphan rows disappear. */
+export function historySubagentScopes(rows: readonly HistoryMessageSource[], rootToolUseId?: string): Map<string, string> {
+  const parents = new Map<string, string>();
+  const agents = new Set<string>(rootToolUseId ? [rootToolUseId] : []);
+  for (const row of rows) {
+    if (row.role !== 'tool_use') continue;
+    const tool = parseMessageToolUse(row);
+    if (!tool.toolUseId) continue;
+    if (tool.toolName === 'Agent') agents.add(tool.toolUseId);
+    const parent = (row.agentMeta as { parentUuid?: string } | null)?.parentUuid;
+    if (parent) parents.set(tool.toolUseId, parent);
+  }
+  const result = new Map<string, string>();
+  for (const row of rows) {
+    let parent = (row.agentMeta as { parentUuid?: string } | null)?.parentUuid
+      || (row.toolUseId ? parents.get(row.toolUseId) : undefined);
+    if (!parent || !agents.has(parent)) continue;
+    const seen = new Set<string>();
+    while (parents.has(parent) && agents.has(parents.get(parent)!) && !seen.has(parent)) {
+      seen.add(parent); parent = parents.get(parent)!;
+    }
+    result.set(row.id, parent);
+  }
+  return result;
 }

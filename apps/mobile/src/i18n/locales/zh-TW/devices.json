@@ -12,6 +12,10 @@
     "deleteFailed": "刪除裝置失敗。",
     "deleteOnline": "裝置目前在線，請讓裝置離線後再刪除。",
     "currentlyOnline": "目前在線",
+    "availableSection": "在線裝置",
+    "offlineSection": "離線裝置",
+    "showAllOffline": "顯示全部 {{count}} 台",
+    "showFewerOffline": "收合",
     "nameTooLong": "裝置名稱不能超過 {{limit}} 個字元。",
     "fields": {
       "name": "名稱",
@@ -29,12 +33,11 @@
   "common": {
     "cancel": "取消",
     "save": "儲存",
-    "saving": "儲存中",
     "delete": "刪除",
-    "deleting": "刪除中",
     "create": "新建"
   },
   "resources": {
+    "connectionUnknown": "連線狀態未知",
     "hostOffline": "離線",
     "titleFallback": "資源",
     "loading": "正在載入…",
@@ -46,7 +49,8 @@
     "openFailed": "無法開啟任務",
     "resolving": "正在開啟最新任務…",
     "retry": "重試",
-    "hostCount": "{{count}} 台電腦"
+    "hostCount": "{{count}} 台電腦",
+    "stale": "內容可能已過期，暫時無法更新"
   },
   "presentation": {
     "deviceList": {
@@ -90,13 +94,19 @@
       }
     },
     "sessionList": {
-      "section": { "pinned": "置頂", "dialogue": "對話" },
+      "section": {
+        "pinned": "置頂",
+        "dialogue": "對話"
+      },
       "filterWithCount": "{{label}} {{count}}",
       "controlsSummary": "{{filter}} · 依{{group}}分組",
       "automation": "自動化",
       "sessionCount": "{{count}} 個任務",
       "messageCount": "{{count}} 則訊息",
-      "status": { "archived": "已封存", "deleted": "已刪除" },
+      "status": {
+        "archived": "已封存",
+        "deleted": "已刪除"
+      },
       "preview": {
         "permission": "等待授權",
         "planReview": "等待計畫審閱",
@@ -130,11 +140,26 @@
         }
       },
       "empty": {
-        "search": { "title": "沒有符合的任務", "copy": "請改用其他標題、專案路徑、模型或訊息關鍵字。" },
-        "waiting": { "title": "沒有待處理請求", "copy": "權限確認、計畫審閱和問題選擇會集中顯示在這裡。" },
-        "automation": { "title": "沒有自動化產生的任務", "copy": "自動化執行後，對應任務會彙整在這裡。" },
-        "archived": { "title": "沒有封存任務", "copy": "長按任務可批次封存或刪除。" },
-        "active": { "title": "這臺電腦目前沒有活躍任務", "copy": "先在電腦端建立或繼續任務，手機端就會顯示在這裡。" }
+        "search": {
+          "title": "沒有符合的任務",
+          "copy": "請改用其他標題、專案路徑、模型或訊息關鍵字。"
+        },
+        "waiting": {
+          "title": "沒有待處理請求",
+          "copy": "權限確認、計畫審閱和問題選擇會集中顯示在這裡。"
+        },
+        "automation": {
+          "title": "沒有自動化產生的任務",
+          "copy": "自動化執行後，對應任務會彙整在這裡。"
+        },
+        "archived": {
+          "title": "沒有封存任務",
+          "copy": "長按任務可批次封存或刪除。"
+        },
+        "active": {
+          "title": "這臺電腦目前沒有活躍任務",
+          "copy": "先在電腦端建立或繼續任務，手機端就會顯示在這裡。"
+        }
       },
       "time": {
         "unknown": "最近活動時間不明",
@@ -155,27 +180,61 @@
     },
     "home": {
       "allDevices": "全部",
-      "allComputers": "全部電腦",
+      "allComputers": "全部裝置",
       "waitingCount": "{{count}} 待處理",
       "synced": "已同步",
-      "unknownComputer": "未知電腦",
+      "unknownComputer": "未知裝置",
       "uncategorizedProject": "未分類專案",
+      "cindyMake": "Cindy Make",
       "empty": {
-        "search": { "title": "沒有符合結果", "copy": "請改用其他專案名稱、任務標題、電腦名稱或訊息關鍵字。" },
-        "waiting": { "title": "沒有待處理請求", "copy": "權限確認、計畫審閱和問題選擇會集中顯示在這裡。" },
-        "automation": { "title": "沒有自動化產生的任務", "copy": "自動化執行後，對應任務會依專案彙整在這裡。" },
-        "archived": { "title": "沒有封存任務", "copy": "切換到全部或活躍篩選，繼續查看目前的專案和任務。" },
-        "noSession": { "title": "還沒有任務", "copy": "先在電腦端建立或繼續任務，手機端會直接顯示對應的專案和任務。" }
+        "search": {
+          "title": "沒有符合結果",
+          "copy": "請改用其他專案名稱、任務標題、電腦名稱或訊息關鍵字。"
+        },
+        "waiting": {
+          "title": "沒有待處理請求",
+          "copy": "權限確認、計畫審閱和問題選擇會集中顯示在這裡。"
+        },
+        "automation": {
+          "title": "沒有自動化產生的任務",
+          "copy": "自動化執行後，對應任務會依專案彙整在這裡。"
+        },
+        "archived": {
+          "title": "沒有封存任務",
+          "copy": "切換到全部或活躍篩選，繼續查看目前的專案和任務。"
+        },
+        "noSession": {
+          "title": "還沒有任務",
+          "copy": "先在電腦端建立或繼續任務，手機端會直接顯示對應的專案和任務。"
+        }
       },
       "noDevice": {
-        "accessRevoked": { "title": "存取權限已被撤銷", "copy": "{{names}} 撤銷了這支手機的遠端存取權。你可以重試申請，或在電腦上重新允許後自動恢復。" },
-        "remoteDisabled": { "title": "在電腦上允許遠端控制", "copy": "{{names}} 已經上線，還差最後一步：在電腦上開啟允許手機控制的開關。" },
-        "offline": { "title": "開啟電腦上的 Cindy", "copy": "已連接的電腦目前都不在線上。在電腦上開啟 Cindy 並保持登入，手機會自動重新連線。" },
-        "firstRun": { "title": "連接你電腦上的 Cindy", "copy": "目前 Cindy 都在你的電腦上執行，手機版透過遠端存取讓你使用該電腦上的 Agent。" }
+        "accessRevoked": {
+          "title": "存取權限已被撤銷",
+          "copy": "{{names}} 撤銷了這支手機的遠端存取權。你可以重試申請，或在電腦上重新允許後自動恢復。"
+        },
+        "remoteDisabled": {
+          "title": "在電腦上允許遠端控制",
+          "copy": "{{names}} 已經上線，還差最後一步：在電腦上開啟允許手機控制的開關。"
+        },
+        "offline": {
+          "title": "開啟電腦上的 Cindy",
+          "copy": "已連接的電腦目前都不在線上。在電腦上開啟 Cindy 並保持登入，手機會自動重新連線。"
+        },
+        "firstRun": {
+          "title": "連接你電腦上的 Cindy",
+          "copy": "目前 Cindy 都在你的電腦上執行，手機版透過遠端存取讓你使用該電腦上的 Agent。"
+        }
       }
     },
     "bulk": {
-      "action": { "archive": "封存", "delete": "刪除", "pin": "置頂", "restore": "還原", "unpin": "取消置頂" },
+      "action": {
+        "archive": "封存",
+        "delete": "刪除",
+        "pin": "置頂",
+        "restore": "還原",
+        "unpin": "取消置頂"
+      },
       "title": "{{action}} {{count}} 個任務",
       "description": "將對目前選取的 {{count}} 個任務執行{{action}}。",
       "descriptionWithSkipped": "將對目前選取的 {{count}} 個任務執行{{action}}，並略過 {{skippedCount}} 個不適用的任務。"
@@ -238,9 +297,11 @@
     "error": {
       "sessionDeviceNotFound": "找不到這個任務所屬裝置，請重新同步後再試。",
       "taskDeviceNotFound": "找不到這個任務所屬裝置，請重新同步後再試。",
-      "noDevice": "沒有可用裝置。請先開啟桌面端遠端控制，然後重新同步。"
+      "noDevice": "沒有可用裝置。請先在電腦端開啟遠端控制，然後重新同步。"
     },
     "alert": {
+      "cacheSaveFailed": "離線快取未能儲存",
+      "cacheSaveFailedDetail": "請檢查手機剩餘儲存空間。你仍可連線使用，但部分內容可能無法離線查看。",
       "actionFailed": "操作失敗",
       "renameFailed": "重新命名失敗",
       "deleteTitle": "刪除任務？",
@@ -256,7 +317,7 @@
       "syncing": "正在重新同步",
       "sync": "重新同步",
       "pinnedConversations": "置頂 {{count}} 條任務",
-      "newRemoteConversation": "新建遠端任務",
+      "newRemoteConversation": "新建任務",
       "renameDevice": "重新命名 {{label}}",
       "project": "專案 {{title}}",
       "dialogue": "對話",
@@ -392,8 +453,6 @@
       "waitingA11y": "篩選待處理任務",
       "automationA11y": "篩選自動化生成的任務"
     },
-    "plan": "計劃",
-    "automationsButtonA11y": "開啟遠端自動化",
     "search": {
       "openA11y": "搜尋遠端任務",
       "closeA11y": "關閉搜尋遠端任務",
@@ -471,288 +530,13 @@
     },
     "viewAllRuns": "檢視全部 {{count}} 次執行"
   },
-  "automations": {
-    "heading": {
-      "delete": "刪除自動化",
-      "pause": "暫停自動化",
-      "deleteRun": "刪除執行記錄"
-    },
-    "runNow": "立即執行",
-    "error": {
-      "projectMissingConfig": "專案自動化缺少 projectConfigId，請在桌面端刪除",
-      "deletePartial": "自動化已刪除，但 {{count}} 個生成任務未能更新狀態。請在桌面端檢查這些任務。"
-    },
-    "subtitle": "{{active}} 個執行中 · {{total}} 個自動化",
-    "metric": {
-      "running": "執行中",
-      "unreadResults": "未讀結果",
-      "executing": "執行中"
-    },
-    "summary": {
-      "paused": "{{count}} 個自動化已暫停。選擇後可以執行、暫停、編輯或開啟最近任務。",
-      "default": "選擇自動化後可以執行、暫停、編輯或開啟最近任務。"
-    },
-    "empty": {
-      "copy": "可以直接從手機建立第一條自動化，或在桌面端建立後同步到這裡。",
-      "title": "這臺裝置暫無自動化"
-    },
-    "createAutomation": "新建自動化",
-    "recentRuns": "最近執行",
-    "runs": {
-      "emptyCopy": "點選「{{runNow}}」後，新的執行會顯示在這裡。",
-      "emptyTitle": "還沒有執行記錄"
-    },
-    "form": {
-      "title": {
-        "create": "新建自動化",
-        "edit": "編輯自動化"
-      },
-      "sessionMode": {
-        "bound": "繫結已有任務後，目錄、worktree、Agent 和 Fast 模式跟隨該任務。",
-        "persistent": "首次觸發會建立持續任務，後續觸發繼續接在同一任務裡。",
-        "fresh": "每次觸發都會建立新的任務。"
-      },
-      "field": {
-        "name": "名稱",
-        "prompt": "提示詞",
-        "trigger": "觸發方式",
-        "runSession": "執行任務",
-        "boundSession": "繫結任務",
-        "intervalMinutes": "間隔分鐘",
-        "workspace": "工作區",
-        "projectDir": "專案目錄",
-        "model": "模型",
-        "effort": "推理強度",
-        "timezone": "時區"
-      },
-      "namePlaceholder": "例如：每日專案巡檢",
-      "scriptHint": "這是一個僅執行指令碼的自動化，指令碼配置只能在桌面端編輯；此處可以改動名稱、觸發方式、通知等其它欄位。",
-      "promptPlaceholder": "寫清楚每次自動執行要讓 {{appName}} 做什麼",
-      "trigger": {
-        "recurring": "週期",
-        "manual": "手動"
-      },
-      "session": {
-        "fresh": "新任務",
-        "persistent": "持續",
-        "bound": "繫結"
-      },
-      "boundSessionA11y": "繫結任務 {{name}}",
-      "intervalPlaceholder": "留空則使用 cron",
-      "workspace": {
-        "project": "專案",
-        "dialogue": "對話"
-      },
-      "useWorktree": "使用 worktree",
-      "modelPlaceholderBound": "跟隨任務",
-      "modelPlaceholderPiDefault": "留空使用預設模型",
-      "fastMode": "Fast 模式",
-      "notifyDesktop": "桌面通知",
-      "notifyFeishu": "飛書通知",
-      "savingA11y": "正在儲存自動化",
-      "saveA11y": "儲存自動化",
-      "cancelA11y": "取消編輯自動化"
-    },
-    "delete": {
-      "counting": "正在統計由這條自動化生成的任務…",
-      "confirmDeleteBoth": "刪除自動化和任務",
-      "confirmArchive": "刪除自動化並歸檔任務",
-      "confirmTaskOnly": "只刪除自動化",
-      "title": "刪除 {{name}}",
-      "copy": "刪除自動化不會中斷已經開始的執行。生成過的任務按下面的選項處理，和桌面端保持一致。",
-      "optionsA11y": "選擇生成任務處理方式",
-      "keepDesc": "只刪除這條自動化，歷史任務繼續保留在原列表裡。",
-      "keepLabel": "保留生成任務",
-      "archiveDesc": "刪除自動化後，把由它生成的任務移到歸檔，後續仍可搜尋。",
-      "archiveLabel": "歸檔生成任務",
-      "deleteDesc": "刪除自動化後，把由它生成的任務也標記為刪除。這個操作不可從手機端撤銷。",
-      "deleteLabel": "刪除生成任務",
-      "cancelA11y": "取消刪除自動化",
-      "confirmA11y": "確認刪除自動化"
-    },
-    "pause": {
-      "title": "暫停 {{name}}",
-      "detailFallback": "暫停會阻止這條自動化繼續觸發。",
-      "previewFallback": "沒有正在執行的 run",
-      "confirmA11y": "確認暫停自動化",
-      "pausing": "暫停中",
-      "confirm": "確認暫停",
-      "cancelA11y": "取消暫停自動化"
-    },
-    "runDelete": {
-      "title": "刪除這條執行記錄",
-      "copy": "只會刪除這條自動化執行記錄，不會刪除它開啟過的任務，也不會影響後續自動觸發。",
-      "confirmA11y": "確認刪除執行記錄",
-      "confirm": "刪除記錄",
-      "cancelA11y": "取消刪除執行記錄"
-    },
-    "template": {
-      "label": "模板",
-      "loadingA11y": "模板載入中",
-      "refreshA11y": "重新整理自動化模板",
-      "loading": "載入中",
-      "refresh": "重新整理",
-      "cardA11y": "自動化模板 {{name}}",
-      "manualConfig": "手動配置",
-      "builtin": {
-        "nightly-test-heal": {
-          "name": "夜間自愈測試",
-          "description": "每晚跑測試，失敗項在隔離 worktree 嘗試最小修復",
-          "prompt": "執行專案的測試套件，如果有失敗項，在隔離 worktree 嘗試給出最小修復。\n約束：\n- 先按倉庫文件或 package 指令碼確定標準測試命令，再完整執行\n- 只修復有明確失敗證據的問題，採用影響面最小的改法，避免順手重構\n- 修復後重跑相關測試確認通過，並複核完整 diff\n- 按倉庫工作流交付修復（如建立分支並開 PR），不要直接改動主分支\n- 無法安全修復的失敗項，輸出失敗原因、疑點檔案和建議的排查步驟"
-        },
-        "pr-gatekeeper": {
-          "name": "PR 守門人",
-          "description": "工作日預審開放 PR 的新增改動，按嚴重程度報告風險",
-          "prompt": "檢查倉庫當前開放的 PR，對新增改動做一輪預審。\n約束：\n- 逐個檢視過去 24 小時內有新提交的開放 PR（週一回看整個週末），引用 PR 編號、檔案路徑和具體 diff\n- 重點找正確性、安全、資料丟失和相容性問題，按嚴重程度分級\n- 只報告有證據支撐的問題，說明失敗場景，不要憑風格偏好挑刺\n- 除非使用者明確授權，只輸出審查結論，不要直接在 PR 上留言或改動程式碼"
-        },
-        "domain-radar": {
-          "name": "領域雷達",
-          "description": "定期蒐集你關注領域的最新動態，輸出有觀點的摘要",
-          "prompt": "圍繞主題「{{topic}}」蒐集過去 24 小時的最新動態（週一回看整個週末），輸出一份有觀點的摘要。\n約束：\n- 用 Web 搜尋獲取資訊，交叉核對多個來源後再採信，標註每條資訊的來源連結\n- 優先收錄有實質內容的進展（釋出、研究、政策、重要討論），過濾營銷軟文和重複轉載\n- 對每條動態給出一句\"為什麼值得關注\"的判斷，而不是羅列連結\n- 資訊不足或來源存疑時如實說明，不要臆造",
-          "params": {
-            "topic": {
-              "label": "關注主題",
-              "placeholder": "如：AI Agent、新能源、前端框架"
-            }
-          }
-        },
-        "competitor-watch": {
-          "name": "競品動態追蹤",
-          "description": "每週彙總競品的產品與市場動態，分析對我們的影響",
-          "prompt": "追蹤以下競品最近一週的動態：{{competitors}}。\n約束：\n- 用 Web 搜尋覆蓋產品更新、版本釋出、定價變化、市場動作和使用者口碑，標註來源\n- 區分官方資訊和第三方轉述，未經證實的傳聞要明確標註\n- 對每條重要動態給出\"對我們意味著什麼\"的分析和建議\n- 沒有實質動態時如實說明，不要湊數",
-          "params": {
-            "competitors": {
-              "label": "競品名單",
-              "placeholder": "如：Notion、Linear、Figma"
-            }
-          }
-        },
-        "weekly-work-draft": {
-          "name": "週報草稿助手",
-          "description": "從工作目錄的文件和產出物整理本週工作，生成週報草稿",
-          "prompt": "根據工作目錄中本週的文件、筆記和產出物變化，整理一份週報草稿。\n約束：\n- 只使用工作目錄內有實際修改痕跡的內容作為證據，註明對應檔案\n- 按\"本週完成 / 進行中 / 下週計劃 / 需要協調\"組織，語言簡潔可直接提交\n- 區分實質進展和例行事務，突出有價值的產出\n- 材料不足以判斷的部分留出佔位並說明，方便使用者補充"
-        },
-        "knowledge-freshness": {
-          "name": "知識庫保鮮",
-          "description": "每月體檢工作目錄文件，找出過期與矛盾內容",
-          "prompt": "體檢工作目錄中的文件，找出需要更新的內容。\n約束：\n- 檢查過期資訊（舊日期、失效連結、已廢棄的流程或工具）、前後矛盾和重複內容\n- 每個問題都註明檔案路徑和具體位置，說明判斷依據\n- 按\"建議更新 / 建議合併 / 建議刪除\"分類，給出修訂建議清單\n- 只輸出體檢報告，不要直接修改文件"
-        }
-      }
-    },
-    "scheduleRowA11y": "自動化 {{title}}",
-    "detail": {
-      "promptScriptFallback": "僅執行指令碼的自動化，配置只能在桌面端編輯",
-      "promptEmpty": "沒有儲存自動化提示詞",
-      "deleteA11y": "刪除自動化",
-      "runNowA11y": "立即執行自動化",
-      "running": "執行中",
-      "resumeA11y": "恢復自動化",
-      "pauseA11y": "暫停自動化",
-      "resume": "恢復",
-      "pause": "暫停",
-      "editA11y": "編輯自動化",
-      "edit": "編輯"
-    },
-    "run": {
-      "openSessionA11y": "開啟自動化生成的任務",
-      "opening": "開啟中",
-      "session": "任務",
-      "restartA11y": "重新執行自動化",
-      "restarting": "重跑中",
-      "restart": "重跑",
-      "markReadA11y": "標記執行記錄已讀",
-      "marking": "標記中",
-      "markRead": "已讀",
-      "deleteA11y": "刪除執行記錄"
-    },
-    "presentation": {
-      "validation": {
-        "templateParameter": "請輸入模板參數：{{label}}",
-        "name": "請輸入任務名稱",
-        "prompt": "請輸入任務提示詞",
-        "timezone": "請輸入時區",
-        "boundSession": "請選擇要繫結的任務",
-        "cron": "請輸入 cron 運算式",
-        "workingDir": "請輸入專案目錄",
-        "effort": "推理強度只能是 {{values}}",
-        "intervalPositiveInteger": "間隔分鐘必須是正整數",
-        "intervalUnsupported": "分鐘間隔只支援 1–59 分鐘，或 1–23 小時的整點間隔"
-      },
-      "schedule": {
-        "paused": "已暫停",
-        "manual": "手動觸發",
-        "once": "單次任務",
-        "waitingFirstRun": "等待首次執行",
-        "every": "每 {{duration}}",
-        "recurring": "週期任務",
-        "dialogueWorkspace": "對話工作區",
-        "noDirectory": "未設定目錄",
-        "lastRun": "上次 {{relative}}",
-        "imminent": "即將執行",
-        "nextRun": "{{duration}}後",
-        "status": {
-          "active": "執行中",
-          "paused": "已暫停",
-          "expired": "已完成"
-        },
-        "session": {
-          "persistent": "持續任務",
-          "bound": "繫結任務",
-          "fresh": "新任務",
-          "persistentWithId": "持續任務 {{id}}",
-          "persistentDetail": "首次觸發後持續複用同一任務",
-          "boundWithId": "繫結到 {{id}}"
-        }
-      },
-      "run": {
-        "session": "任務 {{id}}",
-        "delete": "刪除",
-        "markRead": "已讀",
-        "canRestart": "可重新執行",
-        "noSession": "未建立任務",
-        "open": "開啟",
-        "restart": "重跑",
-        "durationUnknown": "耗時未知",
-        "runningFor": "已執行 {{duration}}",
-        "duration": "耗時 {{duration}}",
-        "unknownTime": "未知時間",
-        "status": {
-          "running": "執行中",
-          "success": "成功",
-          "failed": "失敗",
-          "aborted": "已中止",
-          "interrupted": "被中斷",
-          "skipped": "已略過"
-        }
-      },
-      "pause": {
-        "title": "暫停 {{name}}",
-        "detail": "這條自動化目前有 {{count}} 次執行正在進行。暫停會立即阻止後續觸發，並停止這些正在進行的執行。",
-        "preview": "正在執行：{{count}} 次"
-      },
-      "delete": {
-        "noSessions": "沒有找到由它生成的任務",
-        "sessions": "找到 {{count}} 個由它生成的任務",
-        "withInflight": "{{sessions}}，還有 {{count}} 次執行正在進行"
-      },
-      "duration": {
-        "seconds": "{{count}} 秒",
-        "minutesSeconds": "{{minutes}} 分 {{seconds}} 秒",
-        "minutes": "{{count}} 分鐘",
-        "hours": "{{count}} 小時",
-        "days": "{{count}} 天"
-      },
-      "relative": {
-        "justNow": "剛剛",
-        "minutesAgo": "{{count}} 分鐘前",
-        "hoursAgo": "{{count}} 小時前",
-        "daysAgo": "{{count}} 天前"
-      }
-    }
-  },
   "companions": {
-    "messageSent": "已傳送補充訊息",
-    "privateChat": "與 {{name}} 的私聊",
+    "noCreateHosts": "目前沒有可用的相容電腦。在電腦上開啟 Cindy 並登入同一帳號後即可新建夥伴。",
+    "taskAttentionCount": "{{count}} 個任務待關注",
+    "unreadChatCount": "{{count}} 段對話未讀",
+    "messageSent": "已向背景任務傳送訊息",
+    "sentTo": "已傳訊息給 {{name}}",
+    "receivedFrom": "訊息來自 {{name}}",
     "backgroundTask": "背景任務",
     "openTask": "開啟任務",
     "viewPr": "查看 PR",
@@ -763,22 +547,221 @@
     "artifactCount_other": "{{count}} 個檔案",
     "prCount_one": "{{count}} 個 PR",
     "prCount_other": "{{count}} 個 PR",
-    "duration": {"seconds": "{{n}} 秒", "minutes": "{{n}} 分鐘", "hoursMinutes": "{{h}} 小時 {{m}} 分"},
+    "duration": {
+      "seconds": "{{n}} 秒",
+      "minutes": "{{n}} 分鐘",
+      "hoursMinutes": "{{h}} 小時 {{m}} 分"
+    },
     "retrying": "還沒開始，正在重試…",
     "stopTask": "停止任務",
     "actionFailed": "暫時無法讀取或完成操作",
     "messages": "訊息往來",
     "readOnly": "僅供檢視",
+    "directEmpty": "還沒有可查看的訊息。",
+    "directLimitReached": "本輪夥伴對話已達上限，雙方已回到各自的主任務",
+    "directUnavailable": "這則夥伴對話已無法使用。",
     "unread": "有新回覆",
     "status": {
-      "queued": "等待開始",
+      "queued": "正在開始",
       "running": "執行中",
-      "waiting": "等待回覆",
+      "waiting": "等待處理",
       "completed": "已完成",
       "failed": "失敗",
-      "cancelled": "已取消",
+      "cancelled": "已停止",
       "timed-out": "已逾時",
-      "unknown": "暫時無法確認狀態"
-    }
+      "unknown": "狀態未知"
+    },
+    "title": "夥伴",
+    "tasks": "任務",
+    "search": "搜尋夥伴",
+    "emptyTitle": "還沒有夥伴",
+    "emptyCopy": "在電腦上的 Cindy 中建立一個夥伴。",
+    "noResults": "沒有找到符合的夥伴",
+    "startChat": "開始對話",
+    "preferenceSaveFailed": "未能儲存檢視偏好，請重新切換檢視。",
+    "automation": {
+      "unsavedTitle": "放棄變更？",
+      "unsavedBody": "你的變更尚未儲存。",
+      "discard": "放棄變更"
+    },
+    "openNavigation": "開啟導覽",
+    "openProfile": "查看 {{name}} 的資料",
+    "switchCompanion": "切換夥伴",
+    "activity": {
+      "thinking": "在想",
+      "typing": "正在輸入",
+      "helping": "在幫你處理"
+    },
+    "working": {
+      "thinking": "正在思考…",
+      "replying": "正在回覆…",
+      "processing": "正在處理…",
+      "compacting": "正在整理對話…",
+      "reading-memory": "正在讀取記憶…",
+      "saving-memory": "正在儲存記憶…",
+      "deleting-memory": "正在刪除記憶…",
+      "organizing-memory": "正在整理記憶…",
+      "reading-file": "正在讀取檔案…",
+      "saving-file": "正在更新檔案…",
+      "searching": "正在搜尋網頁…",
+      "reading-web": "正在讀取網頁…",
+      "searching-files": "正在尋找檔案…",
+      "testing": "正在執行測試…",
+      "checking": "正在檢查程式碼…",
+      "reviewing-memory": "正在核對記憶…",
+      "reviewing-files": "正在核對檔案…",
+      "reviewing-sources": "正在核對網頁資料…",
+      "reviewing-checks": "正在核對檢查結果…"
+    },
+    "invitation": {
+      "title": "準備見面",
+      "waiting": "{{name}}，待會見",
+      "background": "你可以先去忙，準備好後再來見面。",
+      "profile": "正在寫下自己的故事",
+      "skills": "正在為 {{name}} 準備電腦",
+      "avatar": "{{name}} 正在挑選新頭像",
+      "welcome": "正在準備第一聲問候",
+      "failed": "準備暫時停住了。已完成的內容會保留，可以再試一次。",
+      "retryFailed": "暫時無法重試，請稍後再試。",
+      "leave": "先去忙",
+      "avatarSkipped": "暫時用了預設頭像，你隨時可以換一張。"
+    },
+    "viewResult": "查看結果",
+    "noWrittenResult": "沒有文字結果。",
+    "errorDetails": "錯誤詳情",
+    "createTeammate": "新增夥伴",
+    "createMenu": "新增",
+    "searchWithGroups": "搜尋夥伴和群聊",
+    "awaiting": "等你確認",
+    "emptyCopyCreate": "夥伴會記得你們聊過的事，也能幫你在電腦上做事。",
+    "taskResult": "任務結果",
+    "collapseResult": "收起結果"
+  },
+  "companionProfile": {
+    "avatar": "頭像",
+    "emptyEditor": "暫無內容。",
+    "searchOptions": "搜尋",
+    "changed": "內容已在別處變更，你未儲存的編輯已保留。",
+    "discardAndReload": "放棄編輯並重新載入",
+    "memoryEntries": "已存記憶",
+    "memorySearch": "搜尋記憶",
+    "memoryEmpty": "還沒有記憶",
+    "memoryNoResults": "找不到相關記憶",
+    "memoryDisabled": "記憶已關閉，夥伴不會讀取或儲存記憶；已存記憶仍可查看和刪除。",
+    "memoryLoadFailed": "無法讀取記憶",
+    "memoryToday": "今天",
+    "memoryUpdated": "{{time}} 更新",
+    "memoryEdit": "編輯",
+    "memoryDone": "完成",
+    "memoryTooLong": "內容太長，縮短後才會儲存",
+    "memoryRequired": "標題和內容都不能為空。",
+    "memoryChanged": "{{name}}剛更新了這條記憶",
+    "memoryUseLatest": "使用最新內容",
+    "memoryKeepMine": "保留我的修改",
+    "memorySaved": "已儲存",
+    "memorySaveFailed": "沒有儲存成功，你的編輯已保留。",
+    "memoryMissing": "這條記憶已不存在。",
+    "memoryDeleteFailed": "刪除失敗",
+    "create": "新建夥伴",
+    "createFailed": "尚未確認建立結果，請重試核對。",
+    "title": "夥伴資料",
+    "profile": "資料與性格",
+    "memory": "記憶",
+    "skills": "技能與連接",
+    "artifacts": "成果",
+    "direct": "夥伴往來",
+    "settings": "模型與權限",
+    "search": "搜尋訊息",
+    "models": "模型候選鏈",
+    "permissions": "操作權限",
+    "personalSkills": "個人學會的技能",
+    "connections": "引用的技能與連接",
+    "save": "儲存變更",
+    "offline": "請重新連接 {{deviceName}} 後繼續，未儲存的編輯已保留。",
+    "hostUpgrade": "請更新 {{deviceName}} 上的 Cindy 後重試，或在那台電腦上編輯夥伴設定。",
+    "readFailed": "暫時無法確認最新狀態。請重新整理後再試，操作可能已經完成。你的編輯已保留。",
+    "deleteFailed": "刪除沒有完成。",
+    "artifactsEmpty": "還沒有成果，可以讓夥伴創作一些內容。",
+    "openSourceTask": "開啟來源任務",
+    "modelFollowsDefault": "跟隨目前預設模型鏈",
+    "taskModel": "任務模型",
+    "taskInheritsPrimary": "繼承主模型",
+    "modelOverride": "使用此夥伴的自訂模型鏈",
+    "modelsUnavailable": "暫無可用模型，請在電腦上檢查此夥伴的模型設定後重新整理。",
+    "artifactsRecovery": "請從訊息卡中開啟檔案，或在 {{deviceName}} 上瀏覽檔案。",
+    "directRecovery": "暫時無法讀取夥伴往來，請更新 {{deviceName}} 上的 Cindy 後重試。",
+    "directEmpty": "還沒有夥伴往來",
+    "skillsEmpty": "還沒有個人技能，可以讓夥伴記下做事方法。",
+    "connectionsEmpty": "尚未選擇技能或連接",
+    "largeProfileRecovery": "此資料過長，無法在手機上編輯。請在 {{deviceName}} 上編輯完整資料。",
+    "addModel": "新增備用模型",
+    "removeModel": "移除模型",
+    "moveModelUp": "上移模型",
+    "backupModels": "備用模型（{{count}}）",
+    "settingsTitle": "夥伴設定",
+    "name": "名字",
+    "portraitNumber": "頭像 {{number}}",
+    "uploadAvatar": "上傳頭像",
+    "avatarFailed": "無法開啟此圖片，請換一張。",
+    "nameTaken": "已有同名夥伴，請換一個名字。"
+  },
+  "companionImport": {
+    "title": "匯入夥伴",
+    "entry": "從其他 Agent 匯入",
+    "description": "選擇要從 Hermes 或 OpenClaw 帶來的內容。",
+    "empty": "這台電腦上沒有找到已安裝的 Agent。",
+    "personality": "性格與做事習慣",
+    "memory": "關於你的記憶",
+    "skills": "技能",
+    "connections": "環境與連線",
+    "automations": "自動化",
+    "paused": "匯入後仍停用",
+    "itemAttention": "需要處理",
+    "takeover": "匯入後檢查並接管自動化",
+    "takeoverNote": "資料連線驗證通過後才暫停原任務。取消所需依賴時，原任務繼續執行。",
+    "submit": "匯入",
+    "back": "上一步",
+    "open": "開啟夥伴",
+    "running": "正在匯入並檢查連線…",
+    "complete": "匯入已儲存",
+    "attention": "部分內容需要處理，詳見下方。",
+    "error": "未能完成匯入，可按原選擇重試。",
+    "keptAtSource": "尚未完成接管",
+    "retry": "重新檢查",
+    "missingSelection": "沒有選擇這項自動化所需的內容。",
+    "authRefresh": "原授權的更新方式尚需接通。",
+    "toolMapping": "原來的工具限制尚需對應，暫不接管。",
+    "modelMapping": "原來的模型設定尚需對應。",
+    "contextMapping": "原來的工作目錄或關聯上下文尚需對應。",
+    "deliveryFailed": "尚未驗證原來的傳送位置。",
+    "sourceChanged": "原任務已變更，請重新讀取。",
+    "credentialFailed": "憑證未能安全儲存。",
+    "scriptMissing": "缺少這項任務所需的指令碼。",
+    "sourceCommand": "找不到原 Agent 的控制命令。",
+    "readFailed": "尚未驗證這項任務實際需要的資料查詢。",
+    "search": "搜尋",
+    "selectAll": "全選",
+    "previous": "上一頁",
+    "next": "下一頁",
+    "chatSetup": "已儲存可匯入的資料，可以開始交流了。部分內容還需要登入或檢查，你方便時我們再繼續。接管前，原來的自動化保持原狀。",
+    "chatReady": "資料已經匯入，可以開始交流了。",
+    "partial": "部分內容未完整匯入",
+    "details": "查看匯入詳情",
+    "partlySaved": "僅部分儲存",
+    "savedNeedsSetup": "已儲存，尚未啟用或完成設定",
+    "notSaved": "未儲存",
+    "databaseDriver": "資料庫驅動程式無法載入，請更新或修復 Cindy 後重試。",
+    "databaseUnavailable": "無法讀取來源資料庫，原資料未變更。修復後可重試。",
+    "fileTooLarge": "檔案或本次資料超過讀取上限，未截斷匯入。",
+    "memoryMetadata": "記憶摘要或標題不符合儲存要求。",
+    "memoryWrite": "記憶寫入或完整性檢查失敗，可重試。",
+    "memoryChanged": "已儲存的記憶發生變更，未覆寫。",
+    "attachmentUnsupported": "此附件格式暫不支援，原檔案保留在來源。",
+    "diskFull": "磁碟空間不足，釋放空間後可重試。",
+    "permissionDenied": "沒有權限讀取或儲存此項，修復權限後可重試。",
+    "setupDeferred": "可在夥伴對話中繼續登入與驗證。",
+    "automationInvalid": "自動化定義無法轉換，尚未建立。",
+    "itemFailed": "此項未完成，可重試並查看匯入詳情。",
+    "chatPartial": "夥伴已建立，但部分資料未完整儲存。以下項目仍需處理；其他內容和對話可以正常使用。"
   }
 }

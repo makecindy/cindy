@@ -119,7 +119,9 @@ int main(int argc, const char *argv[]) {
             if (CGCompleteDisplayConfiguration(config, kCGConfigureForSession) != kCGErrorSuccess) {
               emit(@{@"error": @"DISPLAY_MIRROR_FAILED"}); return;
             }
-            emit(@{@"id": @([display displayID]), @"width": @(width), @"height": @(height)});
+            CGRect bounds = CGDisplayBounds([display displayID]);
+            emit(@{@"id": @([display displayID]), @"width": @(width), @"height": @(height),
+                   @"logicalWidth": @(bounds.size.width), @"logicalHeight": @(bounds.size.height)});
           } @catch (NSException *exception) {
             emit(@{@"error": @"DISPLAY_UNAVAILABLE"});
           }

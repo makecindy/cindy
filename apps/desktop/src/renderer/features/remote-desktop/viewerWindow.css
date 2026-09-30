@@ -9,7 +9,7 @@
   position: relative;
   display: flex;
   flex: none;
-  height: 52px;
+  height: 60px;
   min-width: 0;
   padding-right: var(--space-3);
   gap: 6px;
@@ -33,7 +33,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--text-13);
 }
 .remote-viewer-status {
   display: flex;
@@ -71,6 +71,25 @@
   max-width: none;
   pointer-events: none;
   transform-origin: 0 0;
+}
+.remote-viewer-content #bg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  z-index: 0;
+  display: none;
+  pointer-events: none;
+}
+/* Match the Mobile ambient backdrop's blur, overscan and translucency. */
+.remote-viewer-content #bg-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  filter: blur(16px);
+  transform: scale(1.12);
+  transform-origin: center;
+  opacity: 0.72;
 }
 .remote-viewer-content video {
   display: none;
@@ -122,7 +141,7 @@
   border-radius: 12px;
   padding: 12px 20px;
   background: var(--surface);
-  font-size: 13px;
+  font-size: var(--text-13);
   z-index: 4;
 }
 .remote-viewer-network {
@@ -165,23 +184,110 @@
     display: none;
   }
 }
-.remote-viewer-settings {
-  position: absolute;
-  right: 12px;
-  top: calc(100% + var(--space-2));
-  max-height: calc(100vh - 100% - var(--space-5));
-  overflow: auto;
-  width: 320px;
+/* Each anchored panel has one job. Radix owns focus, dismissal and collision handling. */
+.remote-viewer-popover {
+  width: 360px;
   max-width: calc(100vw - 24px);
-  padding: 16px;
+  max-height: min(640px, var(--radix-popover-content-available-height));
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  border: 1px solid var(--border-default);
-  border-radius: 12px;
-  background: var(--surface);
-  z-index: 6;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--surface-elevated);
+  border-color: var(--border-default);
+  color: var(--text-primary);
   -webkit-app-region: no-drag;
+}
+.remote-viewer-popover p {
+  font-size: var(--text-12);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.remote-viewer-panel-heading,
+.remote-viewer-preference label,
+.remote-viewer-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--text-13);
+}
+.remote-viewer-panel-heading strong {
+  font-weight: 600;
+}
+.remote-viewer-panel-heading {
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-default);
+}
+.remote-viewer-preference {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.remote-viewer-panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-default);
+}
+.remote-viewer-panel-section:empty {
+  display: none;
+}
+.remote-viewer-toolgroup {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  padding-inline: var(--space-2);
+  border-right: 1px solid var(--border-default);
+  -webkit-app-region: no-drag;
+}
+.remote-viewer-icon {
+  width: var(--space-9);
+  height: var(--space-9);
+  padding: 0;
+}
+.remote-viewer-panel-trigger {
+  position: relative;
+  width: var(--space-9);
+  padding: 0;
+}
+.remote-viewer-active-dot {
+  position: absolute;
+  right: var(--space-1);
+  bottom: var(--space-1);
+  width: var(--space-1);
+  height: var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--text-primary);
+}
+.remote-viewer-feedback {
+  position: absolute;
+  bottom: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: min(600px, calc(100% - 32px));
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  background: var(--surface-elevated);
+  font-size: var(--text-12);
+  z-index: 4;
+}
+@media (max-width: 1100px) {
+  .remote-viewer-toolbar-network {
+    display: none;
+  }
+}
+@media (max-width: 900px) {
+  .remote-viewer-toolgroup {
+    padding-inline: var(--space-1);
+  }
 }
 .remote-viewer-field {
   display: grid;
@@ -189,8 +295,8 @@
   align-items: center;
 }
 .remote-viewer-display-select {
-  flex: 0 1 var(--space-40);
-  width: var(--space-40);
+  flex: none;
+  width: 100%;
 }
 @media (max-width: 620px) {
   .remote-viewer-toolbar {
@@ -200,12 +306,8 @@
     padding-block: var(--space-1);
   }
   .remote-viewer-heading {
-    flex-basis: var(--space-28);
+    flex-basis: calc(100% - 24px);
   }
-}
-.remote-viewer-settings p {
-  font-size: 12px;
-  color: var(--text-secondary);
 }
 .remote-viewer-fullscreen .remote-viewer-toolbar {
   position: absolute;
@@ -223,4 +325,38 @@
   .remote-viewer-fullscreen .remote-viewer-toolbar {
     transition: none;
   }
+}
+
+.remote-viewer-zoom-group,
+.remote-viewer-panels {
+  box-sizing: border-box;
+  height: var(--space-9);
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  background: var(--surface-elevated);
+  -webkit-app-region: no-drag;
+}
+.remote-viewer-zoom-group .remote-viewer-icon,
+.remote-viewer-panels .remote-viewer-panel-trigger {
+  height: var(--space-7);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  box-shadow: none;
+}
+.remote-viewer-zoom-group .remote-viewer-icon:enabled:hover,
+.remote-viewer-zoom-group .remote-viewer-icon[aria-pressed='true'],
+.remote-viewer-panels .remote-viewer-panel-trigger:enabled:hover,
+.remote-viewer-panels .remote-viewer-panel-trigger[aria-pressed='true'] {
+  background: var(--button-secondary-hover);
+}
+.remote-viewer-zoom-divider {
+  width: 1px;
+  height: var(--space-5);
+  background: var(--border-default);
 }

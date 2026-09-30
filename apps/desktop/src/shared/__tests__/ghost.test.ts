@@ -276,9 +276,11 @@ describe('ghost · 清单校验', () => {
     ).toEqual({ maximize: false, detach: false, minimize: false });
     expect(withPanel({ systemButtons: {} }).ok).toBe(true);
     expect(withPanel({ systemButtons: { maximize: true, detach: true } }).ok).toBe(true);
-    // 非对象 / 未知键 / 非布尔值:收词明确拒绝(规则 9)
+    // 已知按钮校验类型，未知按钮仅保留声明。
     expect(withPanel({ systemButtons: 'off' }).ok).toBe(false);
-    expect(withPanel({ systemButtons: { refresh: false } }).ok).toBe(false);
+    expect(withPanel({ systemButtons: { refresh: false } })).toMatchObject({
+      ok: true, manifest: { panel: { systemButtons: { refresh: false } } },
+    });
     expect(withPanel({ systemButtons: { maximize: 'no' } }).ok).toBe(false);
     expect(withPanel({ systemButtons: { detach: 0 } }).ok).toBe(false);
     expect(withPanel({ systemButtons: { minimize: 0 } }).ok).toBe(false);
@@ -1253,7 +1255,7 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         slots: ['panel', 'agent'],
         agent: { background: true, command: 'hidden' },
       }).ok,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('agent.errand 派活加档:单列高风险权限,可与 background 并存(2026-07-31)', () => {
@@ -1329,7 +1331,7 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     );
   });
 
-  it('node 清单拒绝任意命令字段、越界配置和无槽详单；空槽按零能力兼容', () => {
+  it('node 保留未知字段，越界配置和无槽详单仍拒绝；空槽按零能力兼容', () => {
     const withNode = (node: unknown, slots: string[] = ['panel', 'node']) =>
       validateGhostManifest({ ...goodChipManifest(), slots, node });
     expect(withNode({ entry: 'node/a.cjs', protocol: 'json-rpc-stdio' }).ok).toBe(true);
@@ -1338,10 +1340,10 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     expect(withNode({ entry: 'node/a.mjs', protocol: 'json-rpc-stdio' }).ok).toBe(false);
     expect(withNode({ entry: 'node/a.cjs', protocol: 'stdio' }).ok).toBe(false);
     expect(withNode({ entry: 'node/a.cjs', protocol: 'json-rpc-stdio', command: 'node' }).ok).toBe(
-      false,
+      true,
     );
     expect(withNode({ entry: 'node/a.cjs', protocol: 'json-rpc-stdio', args: ['--x'] }).ok).toBe(
-      false,
+      true,
     );
     expect(
       withNode({
@@ -1779,7 +1781,7 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         slots: ['panel', 'main-view'],
         mainView: { html: 'main-view.html', position: 'left' },
       }),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining('不允许的字段') });
+    ).toMatchObject({ ok: true, manifest: { mainView: { position: 'left' } } });
     expect(
       validateGhostManifest({
         ...goodChipManifest(),
@@ -1946,17 +1948,13 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
     expect(!v.ok && v.reason).toContain('cindy');
   });
 
-  it('未知类目 / 未知动作 / 空数组 / 空对象 / 重复动作 / 非对象 → 拒', () => {
+  it('空数组 / 空对象 / 重复动作 / 非对象仍拒绝', () => {
     for (const bad of [
-      { text: ['complete'] },
-      { image: ['upscale'] },
       { image: [] },
       {},
       { image: ['generate', 'generate'] },
       'image',
-      { media: ['upload'] }, // media 类目只有 deposit
       { media: [] },
-      { search: ['deep'] },
       { search: [] },
     ]) {
       const v = validateGhostManifest(chipWithModel(bad));
@@ -2028,14 +2026,14 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
     );
   });
 
-  it('embed 类目未知动作 / 空数组 → 拒', () => {
-    expect(validateGhostManifest(chipWithModel({ embed: ['image'] })).ok).toBe(false);
-    expect(validateGhostManifest(chipWithModel({ embed: ['vector'] })).ok).toBe(false);
+  it('embed 保留未知动作，空数组仍拒绝', () => {
+    expect(validateGhostManifest(chipWithModel({ embed: ['image'] })).ok).toBe(true);
+    expect(validateGhostManifest(chipWithModel({ embed: ['vector'] })).ok).toBe(true);
     expect(validateGhostManifest(chipWithModel({ embed: [] })).ok).toBe(false);
   });
 
-  it('text 类目未知动作 / 空数组 → 拒;五类目可同时声明', () => {
-    expect(validateGhostManifest(chipWithModel({ text: ['complete'] })).ok).toBe(false);
+  it('text 保留未知动作，空数组仍拒绝;五类目可同时声明', () => {
+    expect(validateGhostManifest(chipWithModel({ text: ['complete'] })).ok).toBe(true);
     expect(validateGhostManifest(chipWithModel({ text: [] })).ok).toBe(false);
     const v = validateGhostManifest(
       chipWithModel({
@@ -2224,11 +2222,11 @@ describe('ghost · subscribe 订阅详单校验(卡槽①,2026-07-12)', () => {
     if (ok.ok) expect(ok.manifest.subscribe).toEqual({ hooks: ['will-user-message'] });
   });
 
-  it('未知主题/钩子/空对象/空数组/无槽有详单一律拒', () => {
-    expect(validateGhostManifest(withSub({ topics: ['messages'] })).ok).toBe(false);
+  it('保留未知主题和钩子，空对象/空数组/无槽有详单仍拒绝', () => {
+    expect(validateGhostManifest(withSub({ topics: ['messages'] })).ok).toBe(true);
     expect(
       validateGhostManifest(withSub({ hooks: ['will-tool-call'] }, { launch: 'resident' })).ok,
-    ).toBe(false);
+    ).toBe(true);
     expect(validateGhostManifest(withSub({})).ok).toBe(false);
     expect(validateGhostManifest(withSub({ topics: [] })).ok).toBe(false);
     expect(validateGhostManifest(withSub({ topics: ['turn', 'turn'] })).ok).toBe(false);
@@ -2444,19 +2442,17 @@ describe('ghost · cindy 详单 video 类目', () => {
     expect(both.ok && both.manifest.cindy?.video).toEqual(['generate']);
   });
 
-  it('video 未知动作 / 空数组 / 重复动作 → 拒;错误话术带类目名', () => {
-    const bad = validateGhostManifest(withCindy({ video: ['transcode'] }));
-    expect(bad.ok).toBe(false);
-    expect(!bad.ok && bad.reason).toContain('video');
+  it('video 保留未知动作，空数组和重复动作仍拒绝', () => {
+    const future = validateGhostManifest(withCindy({ video: ['transcode'] }));
+    expect(future).toMatchObject({ ok: true, manifest: { cindy: { video: ['transcode'] } } });
     expect(validateGhostManifest(withCindy({ video: [] })).ok).toBe(false);
     expect(validateGhostManifest(withCindy({ video: ['generate', 'generate'] })).ok).toBe(false);
   });
 
-  it('未知类目报错列出全部支持类目(image / video / media)', () => {
-    const bad = validateGhostManifest(withCindy({ audio: ['generate'] }));
-    expect(bad.ok).toBe(false);
-    expect(!bad.ok && bad.reason).toContain('video');
-    expect(!bad.ok && bad.reason).toContain('media');
+  it('未知类目保留但不生成权限', () => {
+    const future = validateGhostManifest(withCindy({ audio: ['generate'] }));
+    expect(future).toMatchObject({ ok: true, manifest: { cindy: { audio: ['generate'] } } });
+    if (future.ok) expect(ghostPermissionItems(future.manifest).filter((item) => item.kind === 'cindy')).toEqual([]);
   });
 
   // #784:寄存是唯一"不花钱就写用户媒体库"的能力,确认框必须单独列一行,
@@ -3985,7 +3981,7 @@ describe('ghost · 2026-07-23 通用能力四件套(session-context / pick / pre
     expect(withPreview({ hosts: ['UPPER.example.com'] }).ok).toBe(false);
     expect(withPreview({ hosts: ['a.com', 'b.com', 'c.com', 'd.com', 'e.com'] }).ok).toBe(false);
     expect(withPreview({ hosts: ['a.example.com', 'a.example.com'] }).ok).toBe(false);
-    expect(withPreview({ hosts: ['a.example.com'], extra: 1 }).ok).toBe(false);
+    expect(withPreview({ hosts: ['a.example.com'], extra: 1 }).ok).toBe(true);
   });
 
   it('main-view / session-context / pick / workspace / ios-simulator 槽可装入并生成权限项', () => {
@@ -4267,12 +4263,12 @@ describe('ghost · skill 槽(捆绑 Agent Skills,2026-07-25)', () => {
     if (good.ok) expect(good.manifest.skill?.items).toEqual(goodItems);
   });
 
-  it('items 形状:空/超限/非对象/自造字段一律拒', () => {
+  it('items 形状:空/超限/非对象拒绝，未知字段保留', () => {
     expect(withSkill({ items: [] }).ok).toBe(false);
     expect(withSkill({}).ok).toBe(false);
-    expect(withSkill({ items: goodItems, extra: 1 }).ok).toBe(false);
+    expect(withSkill({ items: goodItems, extra: 1 }).ok).toBe(true);
     expect(withSkill({ items: ['skills/foo'] }).ok).toBe(false);
-    expect(withSkill({ items: [{ ...goodItems[0], scope: 'global' }] }).ok).toBe(false);
+    expect(withSkill({ items: [{ ...goodItems[0], scope: 'global' }] }).ok).toBe(true);
     const five = Array.from({ length: 5 }, (_, i) => ({
       dir: `skills/s${i}`,
       name: `s${i}`,

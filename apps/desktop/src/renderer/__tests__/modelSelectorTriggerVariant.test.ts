@@ -40,6 +40,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'settings.providers.anthropic.title': 'Anthropic',
         'settings.providers.xd.title': 'Cindy AI',
         'newChat.modelSelector.trigger.placeholder': '选择模型',
+        'newChat.modelSelector.trigger.loading': '正在读取模型…',
+        'newChat.modelSelector.trigger.unresolved': '模型信息暂不可用',
         'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
         'newChat.modelSelector.trigger.agent.codex': 'Codex',
         'newChat.modelSelector.modelListAria': '模型列表',
@@ -436,6 +438,8 @@ vi.mock('@/state/deviceLinkModelMirror', () => ({
 import {
   ModelSelector as SharedModelSelector,
   ModelSelectorContent as SharedModelSelectorContent,
+  UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX,
+  UNIFIED_COMPACT_PANEL_WIDTH_CLASS,
   modelCompactEffortLabel,
   modelEffortLabel,
   modelListMaxHeightForRows,
@@ -558,8 +562,8 @@ describe('ModelSelector trigger variants', () => {
     // 会把模型名压成 GPT-...，所以此时只保留当前模型的已隐藏标识。
     expect(modelTagDensityForWidth(320)).toBe('hidden');
     expect(modelTagDensityForWidth(370)).toBe('subscription');
-    expect(modelTagDensityForWidth(449)).toBe('subscription');
-    expect(modelTagDensityForWidth(450)).toBe('full');
+    expect(modelTagDensityForWidth(UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX)).toBe('subscription');
+    expect(modelTagDensityForWidth(UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX + 1)).toBe('full');
   });
 
   // 打开选择器既发起刷新、又把「发现在途」状态推给内容区(见 useModelDiscoveryPending),
@@ -913,12 +917,16 @@ describe('ModelSelector trigger variants', () => {
     };
     const view = render(React.createElement(ModelSelectorContent, props));
     let pane = view.container.querySelector('[data-unified-model-panel]') as HTMLElement;
-    expect(pane.className).toContain('max-w-[min(420px,calc(100vw-48px))]');
+    expect(UNIFIED_COMPACT_PANEL_WIDTH_CLASS).toContain(
+      `max-w-[min(${UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX}px,calc(100vw-48px))]`,
+    );
+    expect(pane.className).toContain(UNIFIED_COMPACT_PANEL_WIDTH_CLASS);
 
     view.rerender(React.createElement(ModelSelectorContent, { ...props, fluidWidth: true }));
     pane = view.container.querySelector('[data-unified-model-panel]') as HTMLElement;
     expect(pane.className).toContain('w-full min-w-0');
-    expect(pane.className).not.toContain('420px');
+    expect(pane.className).not.toContain(UNIFIED_COMPACT_PANEL_WIDTH_CLASS);
+    expect(pane.className).not.toContain(`${UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX}px`);
   });
 
   it('keeps the session Agent explicit when Claude Code uses an OpenAI-branded model', () => {
@@ -1069,7 +1077,7 @@ describe('ModelSelector trigger variants', () => {
         onProviderChange: vi.fn(), onNavigateToProviders: vi.fn(), onReconnectSource: navigate, unifiedPanel: true,
       }));
       const trigger = screen.getByRole('button', { name: connected ? /模型不可用/ : /已断开/ });
-      expect(trigger.textContent).toContain(connected ? '选择模型' : 'GPT-6 Astra');
+      expect(trigger.textContent).toContain(connected ? '模型信息暂不可用' : 'GPT-6 Astra');
       expect(trigger.textContent).not.toContain('gpt-6-astra');
       fireEvent.click(trigger);
       const recovery = await screen.findByRole('button', { name: connected ? '管理来源' : '重新连接' });
@@ -1780,7 +1788,7 @@ describe('ModelSelector trigger variants', () => {
     expect(trigger.textContent).not.toContain('high');
   });
 
-  it('localizes the placeholder when the current model is unavailable', () => {
+  it('localizes missing model metadata without presenting an empty selection', () => {
     render(
       React.createElement(ModelSelector, {
         modelId: 'missing-model',
@@ -1792,7 +1800,7 @@ describe('ModelSelector trigger variants', () => {
       }),
     );
 
-    expect(screen.getByRole('button', { name: /选择模型/ }).textContent).toContain('选择模型');
+    expect(screen.getByRole('button', { name: /模型信息暂不可用/ }).textContent).toContain('模型信息暂不可用');
   });
 
   it('can hide model effort and Fast editing controls for model-id-only settings', () => {

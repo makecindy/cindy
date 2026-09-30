@@ -39,6 +39,43 @@ function harness() {
       controller.request('phone', { op: 'start', displayId: '1' }) as Promise<RemoteDesktopLease>,
   };
 }
+it('finishes native host setup before exposing a lease or allocating temporary displays', async () => {
+  const h = harness();
+  let done!: () => void;
+  h.deps.prepare = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        done = resolve;
+      }),
+  );
+  const starting = h.start();
+  await Promise.resolve();
+  expect(h.controller.state).toBeNull();
+  done();
+  const lease = await starting;
+  expect(lease.controlling).toBe(false);
+  await h.controller.request('phone', { op: 'start', displayId: '1', resume: true });
+  // Resume/takeover must not reload a compositor underneath an active capture.
+  expect(h.deps.prepare).toHaveBeenCalledOnce();
+});
+it('does not allocate a lease after host setup was cancelled', async () => {
+  const h = harness();
+  let done!: () => void;
+  let current!: () => boolean;
+  h.deps.prepare = (check) => {
+    current = check;
+    return new Promise<void>((resolve) => {
+      done = resolve;
+    });
+  };
+  const starting = h.start();
+  await Promise.resolve();
+  await h.controller.stop();
+  expect(current()).toBe(false);
+  done();
+  await expect(starting).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
+  expect(h.controller.state).toBeNull();
+});
 describe('remote desktop authority and lifecycle', () => {
   it('registers the returned stop promise with the awaited quit phase', () => {
     const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
@@ -52,17 +89,22 @@ describe('remote desktop authority and lifecycle', () => {
     const stopAndRestore = vi.fn(() => pending);
     const dismiss = vi.fn();
     const clear = vi.fn();
-    new Function('onQuit', 'clearInterval', 'timer', 'permissions', 'remoteDesktop', registration)(
-      register,
-      clear,
-      1,
-      { dismiss },
-      { stop, stopAndRestore },
-    );
+    const clipboardStop = vi.fn();
+    new Function(
+      'stopLinuxClipboardWriter',
+      'onQuit',
+      'clearInterval',
+      'timer',
+      'permissions',
+      'remoteDesktop',
+      registration,
+    )(clipboardStop, register, clear, 1, { dismiss }, { stop, stopAndRestore });
     expect(register).toHaveBeenCalledWith('remote-desktop-restore', expect.any(Function), 'async');
-    register.mock.calls[0][1]();
+    register.mock.calls.find(([name]) => name === 'remote-desktop-stop')![1]();
     expect(stop).toHaveBeenCalledOnce();
-    expect(register.mock.calls[1][1]()).toBe(pending);
+    expect(register.mock.calls.find(([name]) => name === 'remote-desktop-restore')![1]()).toBe(
+      pending,
+    );
     expect(clear).toHaveBeenCalledWith(1);
     expect(dismiss).toHaveBeenCalledOnce();
   });
@@ -156,7 +198,11 @@ describe('remote desktop authority and lifecycle', () => {
     expect(foreground.deps.stopVideo).toHaveBeenCalledOnce();
     const revoked = harness();
     const presentation = await revoked.start();
-    await revoked.controller.request('phone', { op: 'presentation', lease: presentation.lease, enabled: true });
+    await revoked.controller.request('phone', {
+      op: 'presentation',
+      lease: presentation.lease,
+      enabled: true,
+    });
     revoked.revoke();
     revoked.controller.signalingLost('phone');
     revoked.controller.viewHeartbeat(presentation.lease);
@@ -171,7 +217,9 @@ describe('remote desktop authority and lifecycle', () => {
     h.controller.stopByUser();
     h.controller.viewHeartbeat(lease);
     expect(h.deps.stopVideo).toHaveBeenCalledOnce();
-    await expect(h.controller.request('phone', { op: 'heartbeat', lease })).rejects.toThrow('DESKTOP_STOPPED');
+    await expect(h.controller.request('phone', { op: 'heartbeat', lease })).rejects.toThrow(
+      'DESKTOP_STOPPED',
+    );
   });
   it('does not publish selected geometry or resume control before it is observed', async () => {
     const h = harness();
@@ -462,6 +510,7 @@ describe('remote desktop authority and lifecycle', () => {
     const h = harness(),
       { lease } = await h.start();
     let finish!: (version: string) => void;
+    h.deps.stopClipboardVersion = vi.fn();
     h.deps.clipboardVersion = () =>
       new Promise((resolve) => {
         finish = resolve;
@@ -476,9 +525,11 @@ describe('remote desktop authority and lifecycle', () => {
     );
     const read = h.controller.request('phone', { op: 'clipboardVersion', lease });
     await h.controller.request('phone', { op: 'clipboardSync', lease, enabled: false });
+    expect(h.deps.stopClipboardVersion).toHaveBeenCalledOnce();
     finish('12');
     await expect(read).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
     h.controller.stop();
+    expect(h.deps.stopClipboardVersion).toHaveBeenCalledTimes(2);
   });
   it('restores privacy on lease expiry and invalidates an older enable after disable', async () => {
     const h = harness(),

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { expect, it } from 'vitest';
@@ -14,7 +14,7 @@ it('reads real Git ancestry and divergence without moving personal or main branc
     HOME: root,
     USERPROFILE: root,
     XDG_CONFIG_HOME: root,
-    GIT_CONFIG_GLOBAL: os.devNull,
+    GIT_CONFIG_GLOBAL: path.join(root, '.git', 'empty.gitconfig'),
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_AUTHOR_NAME: 'Source Test',
     GIT_AUTHOR_EMAIL: 'source-test@example.invalid',
@@ -30,6 +30,7 @@ it('reads real Git ancestry and divergence without moving personal or main branc
   };
   try {
     await git(['init', '--initial-branch=main']);
+    await writeFile(processEnvironment.GIT_CONFIG_GLOBAL!, '');
     const base = await commit('base');
     await git(['checkout', '-b', 'cindy-personal']);
     const personal = await commit('personal');
@@ -47,6 +48,8 @@ it('reads real Git ancestry and divergence without moving personal or main branc
       mainRemoteCommit: remote,
       mainAhead: 0,
       mainBehind: 2,
+      personalAhead: 1,
+      personalBehind: 0,
     });
     await git(['checkout', 'main']);
     const local = await commit('local main only');
@@ -58,6 +61,8 @@ it('reads real Git ancestry and divergence without moving personal or main branc
       mainRemoteCommit: remote,
       mainAhead: 1,
       mainBehind: 2,
+      personalAhead: 1,
+      personalBehind: 1,
     });
     expect(await git(['rev-parse', 'HEAD'])).toBe(personal);
     expect(await git(['rev-parse', 'main'])).toBe(local);

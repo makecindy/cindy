@@ -1,3 +1,5 @@
+import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
+import { isQuietScheduledOutput } from '../scheduler-host/silent-output.js';
 import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
 import type { BotCompactRuntimeRefreshCoordinator } from './botCompactRuntimeRefresh.js';
 import type {
@@ -23,6 +25,7 @@ import {
   backgroundTurnPredatesSessionClear,
   noteAgentMeta,
   noteTurnStarted,
+  onStandaloneTextEvent,
 } from '../messagePersistBroadcaster.js';
 import { isCcMgrUpgradeInFlight } from '../remote-ssh/index.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
@@ -45,6 +48,12 @@ import {
   InterruptedTurnAutoResumeGuard,
   isSubstantiveProgressEvent,
 } from './interruptedTurnAutoResume.js';
+import { isBotGroupClientId } from '../../shared/botGroupChat.js';
+
+/** Bot DMs and group-lane turns answer an internal channel, not the user watching this Session. */
+function isBotPrivateInput(clientId: string): boolean {
+  return clientId.startsWith('bot-dm:') || isBotGroupClientId(clientId);
+}
 
 interface DismissedInteraction {
   kind: InteractionRequest['kind'];
@@ -105,7 +114,7 @@ export interface PrepareSessionEventDeps {
   readonly silentStopTurnLeaseGate: Pick<SilentStopTurnLeaseGate, 'turnLeaseIdForEvent'>;
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
-    'onTurnEvent' | 'noteSuppressedTerminalError' | 'getActiveInputClientId'
+    'onTurnEvent' | 'noteSuppressedTerminalError' | 'getActiveInputClientId' | 'getActiveInputClientIds'
   > | null;
   readonly handleSilentStopTurnEnd: (
     session: Session,
@@ -157,18 +166,48 @@ export function prepareSessionEvent(
       },
     };
   }
+  if (event.type === 'text' && event.standaloneText === true) {
+    if (isQuietScheduledOutput(event) && !event.runtimeRecovery) return;
+    // Deliver through the existing persisted-row channel only. Sending a text
+    // event as well would let older renderers adopt the notice as their active
+    // assistant stream and overwrite/misdate the next model reply.
+    const redacted = deps.redactEventForRenderer(event);
+    const text = (redacted.data as { text?: unknown } | null)?.text;
+    const inputId = deps.agentInputCoordinatorHolder?.getActiveInputClientId(session.id, event.sessionTurnGeneration);
+    // Private-message visibility is still owned by the accepted input, even
+    // though the notice is independent of the model's reply/usage state.
+    const privateReply = inputId ? isBotPrivateInput(inputId) : event.agentMeta?.botPrivateReply;
+    if (typeof text === 'string') {
+      onStandaloneTextEvent(session.id, text,
+        typeof privateReply === 'boolean' ? { botPrivateReply: privateReply } : null);
+    }
+    return;
+  }
   // 自动续跑的 pending 不能只靠 status(isRunning=true) 清理：Pi/Claude 的
   // terminal-only 路径可能首个事件就是 error。Session 已把 host-owned token
   // 盖到事件上，首个匹配 token 的事件即视为 provider accepted。
   if (typeof event.turnAttemptToken === 'number') {
     deps.interruptedTurnAutoResumeGuard.noteAttemptEvent(session.id, event.turnAttemptToken);
   }
+  // Snapshot before onTurnEvent releases the active input and drains the next queue item.
+  const botTaskResultInputIds = event.type === 'done' && event.turnScope !== 'background'
+    ? (deps.agentInputCoordinatorHolder?.getActiveInputClientIds?.(session.id, event.sessionTurnGeneration) ?? [])
+      .filter(id => taskResultClientIdForInput(id) !== null) : [];
   const activeInputId = event.turnScope === 'background' ? null
     : deps.agentInputCoordinatorHolder?.getActiveInputClientId(session.id, event.sessionTurnGeneration);
   // The host's accepted input owns provenance across all three SDKs. Explicit
   // false restores normal replies when the user steers a private message turn.
   let attributedEvent = activeInputId
-    ? { ...event, agentMeta: { ...event.agentMeta, botPrivateReply: activeInputId.startsWith('bot-dm:') } }
+    ? {
+        ...event,
+        agentMeta: {
+          ...event.agentMeta,
+          botPrivateReply: isBotPrivateInput(activeInputId),
+          // A group-lane turn is delivered into the group chat; its hidden Session never
+          // raises completion/error attention of its own (docs/product-rules/bot-group-chat.md §3).
+          ...(isBotGroupClientId(activeInputId) ? { botGroupLane: true } : {}),
+        },
+      }
     : event;
   if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
     const reason =
@@ -216,7 +255,7 @@ export function prepareSessionEvent(
     return;
   }
   if (event.type === 'image' && event.source === 'codex') {
-    void deps.broadcastCodexImageAsToolResult(session.id, event);
+    if (!isQuietScheduledOutput(event)) void deps.broadcastCodexImageAsToolResult(session.id, event);
     return;
   }
   if (event.type === 'plan_mode_changed') {
@@ -529,6 +568,7 @@ export function prepareSessionEvent(
   return {
     event,
     attributedEvent,
+    botTaskResultInputIds,
     broadcastEvent,
     eventAgentMeta,
     pendingContextSnapshot,

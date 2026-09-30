@@ -258,8 +258,8 @@ export interface GhostNodeSecretBinding {
 /**
  * 随插件安装的本地 Node 工作进程声明。
  *
- * 只允许指定包内入口和固定协议,不接受 command / args / shell / env,避免把
- * ghost.json 变成任意命令启动器。Node 进程拥有当前系统用户级本机权限,主机
+ * Host 只按已支持的包内入口和固定协议启动进程；未知的 command / args / shell /
+ * env 等扩展仅保留为数据,不传入进程启动参数。Node 进程拥有当前系统用户级本机权限,主机
  * 只保证它不能绕过 main.js 调 Cindy API,并不能把它变成系统级沙箱。
  */
 export interface GhostNodeNeeds {
@@ -353,9 +353,8 @@ export interface GhostCindyNeeds {
   /**
    * 快问快答偏好模型(目录模型 id,如 "codex/gpt-5.5";须与 text 含 "oneshot"
    * 成对)。主机能从当前供应商目录解析到(且用户未停用)就用它,解析不到按
-   * 未声明处理;用户在详情页的钉档永远优先于本声明。注意:旧宿主会把含本
-   * 字段的身份卡**整份拒装**(cindy 详单未知类目硬拒)——声明前确认目标
-   * 用户群的主机版本。
+   * 未声明处理;用户在详情页的钉档永远优先于本声明。
+   * 未实现本字段的兼容宿主保留声明但不使用它；插件仍需处理旧宿主差异。
    */
   oneshotModel?: string;
 }
@@ -1133,6 +1132,11 @@ export function supportsCindyVersion(
   return comparison !== null && comparison >= 0;
 }
 
+/** Preserve future declaration data without turning it into implemented Host permissions. */
+function unknownDeclarationFields(raw: Record<string, unknown>, known: readonly string[]): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(raw).filter(([key]) => !known.includes(key)));
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -1567,6 +1571,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       }
     }
     panel = {
+      ...unknownDeclarationFields(p, ['title', 'position', 'html', 'minWidth', 'defaultFraction']),
       ...(p.title !== undefined ? { title: p.title as string } : {}),
       ...(p.position !== undefined ? { position: p.position as GhostPanelPosition } : {}),
       html: p.html as string,
@@ -1579,15 +1584,6 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   if (raw.mainView !== undefined) {
     if (!isPlainObject(raw.mainView)) {
       return { ok: false, reason: 'mainView 必须是对象' };
-    }
-    const unknownMainViewField = Object.keys(raw.mainView).find(
-      (field) => field !== 'html' && field !== 'title' && field !== 'icon',
-    );
-    if (unknownMainViewField) {
-      return {
-        ok: false,
-        reason: `mainView 含不允许的字段 ${JSON.stringify(unknownMainViewField)}`,
-      };
     }
     if (
       raw.mainView.title !== undefined &&
@@ -1616,6 +1612,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       };
     }
     mainView = {
+      ...unknownDeclarationFields(raw.mainView, ['html', 'title', 'icon']),
       ...(raw.mainView.title !== undefined ? { title: raw.mainView.title } : {}),
       ...(raw.mainView.icon !== undefined ? { icon: raw.mainView.icon as GhostMainViewIcon } : {}),
       html: raw.mainView.html,
@@ -1716,18 +1713,12 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       };
     }
     const cardRaw = raw.card as Record<string, unknown>;
-    const unknownCardField = Object.keys(cardRaw).find((key) => key !== 'externalLinks');
-    if (unknownCardField) {
-      return {
-        ok: false,
-        reason: `card 含不允许的字段 ${JSON.stringify(unknownCardField)}`,
-      };
-    }
     if (cardRaw.externalLinks !== undefined && typeof cardRaw.externalLinks !== 'boolean') {
       return { ok: false, reason: 'card.externalLinks 必须是布尔值' };
     }
-    if (cardRaw.externalLinks === true) {
-      card = { externalLinks: true };
+    const cardExtensions = unknownDeclarationFields(cardRaw, ['externalLinks']);
+    if (cardRaw.externalLinks === true || Object.keys(cardExtensions).length > 0) {
+      card = { ...cardExtensions, ...(cardRaw.externalLinks === true ? { externalLinks: true } : {}) };
     }
   }
 
@@ -1815,7 +1806,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         reason: '声明了 cindy 能力详单但 slots 未包含 "cindy"',
       };
     }
-    cindy = {};
+    cindy = unknownDeclarationFields(cindyRaw, ['image', 'video', 'media', 'text', 'embed', 'search', 'oneshotModel']);
     // 类目 → 合法动作表(image / video / media / text / embed / search;动作集恰好
     // 同名,但按类目查表,未来某类目动作分叉时这里天然承接)。
     const actionTable: Record<string, readonly string[]> = {
@@ -1828,22 +1819,16 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     };
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
       if (category === 'oneshotModel') continue; // 标量意图键,不是类目,单独校验
-      const allowed = actionTable[category];
-      if (!allowed) {
-        return {
-          ok: false,
-          reason: `cindy 含未知能力类目 ${JSON.stringify(category)}(当前支持:${Object.keys(actionTable).join(' / ')})`,
-        };
-      }
+      if (!Object.hasOwn(actionTable, category)) continue;
       if (!Array.isArray(actionsRaw) || actionsRaw.length === 0) {
         return { ok: false, reason: `cindy.${category} 必须是非空数组` };
       }
       const actions: string[] = [];
       for (const a of actionsRaw) {
-        if (typeof a !== 'string' || !allowed.includes(a)) {
+        if (typeof a !== 'string' || !GHOST_SLOT_NAME_RE.test(a)) {
           return {
             ok: false,
-            reason: `cindy.${category} 含未知动作 ${JSON.stringify(a)}(可用:${allowed.join(' / ')})`,
+            reason: `cindy.${category} 动作必须是合法的能力标识: ${JSON.stringify(a)}`,
           };
         }
         if (actions.includes(a)) {
@@ -1866,14 +1851,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
           reason: `cindy 能力类目 ${JSON.stringify(category)} 尚未接线(协议缺陷)`,
         };
     }
-    if (
-      cindy.image === undefined &&
-      cindy.video === undefined &&
-      cindy.media === undefined &&
-      cindy.text === undefined &&
-      cindy.embed === undefined &&
-      cindy.search === undefined
-    ) {
+    if (Object.keys(cindy).filter((key) => key !== 'oneshotModel').length === 0) {
       return { ok: false, reason: 'cindy 能力详单不能是空对象' };
     }
     // oneshotModel(快问快答偏好模型)是标量意图键,不是类目:先摘出,不进类目循环。
@@ -1927,12 +1905,9 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         reason: '声明了 subscribe 订阅详单但 slots 未包含 "subscribe"',
       };
     }
-    subscribe = {};
     const subRaw = raw.subscribe as Record<string, unknown>;
-    for (const [field, allowed] of [
-      ['topics', GHOST_SUBSCRIBE_TOPICS],
-      ['hooks', GHOST_SUBSCRIBE_HOOKS],
-    ] as const) {
+    subscribe = unknownDeclarationFields(subRaw, ['topics', 'hooks']);
+    for (const field of ['topics', 'hooks'] as const) {
       const listRaw = subRaw[field];
       if (listRaw === undefined) continue;
       if (!Array.isArray(listRaw) || listRaw.length === 0) {
@@ -1940,10 +1915,10 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       }
       const list: string[] = [];
       for (const item of listRaw) {
-        if (typeof item !== 'string' || !(allowed as readonly string[]).includes(item)) {
+        if (typeof item !== 'string' || !GHOST_SLOT_NAME_RE.test(item)) {
           return {
             ok: false,
-            reason: `subscribe.${field} 含未知项 ${JSON.stringify(item)}(可用:${allowed.join(' / ')})`,
+            reason: `subscribe.${field} 必须包含合法的事件标识: ${JSON.stringify(item)}`,
           };
         }
         if (list.includes(item)) {
@@ -1957,10 +1932,10 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       if (field === 'topics') subscribe.topics = list as GhostSubscribeTopic[];
       else subscribe.hooks = list as GhostSubscribeHook[];
     }
-    if (subscribe.topics === undefined && subscribe.hooks === undefined) {
+    if (Object.keys(subscribe).length === 0) {
       return { ok: false, reason: 'subscribe 订阅详单不能是空对象' };
     }
-    if (subscribe.hooks !== undefined && raw.launch !== 'resident') {
+    if (subscribe.hooks?.some((hook) => (GHOST_SUBSCRIBE_HOOKS as readonly string[]).includes(hook)) && raw.launch !== 'resident') {
       return {
         ok: false,
         reason:
@@ -2953,15 +2928,6 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       };
     }
     const agentRaw = raw.agent as Record<string, unknown>;
-    const unknownAgentField = Object.keys(agentRaw).find(
-      (key) => key !== 'background' && key !== 'errand' && key !== 'schedule',
-    );
-    if (unknownAgentField) {
-      return {
-        ok: false,
-        reason: `agent 含不允许的字段 ${JSON.stringify(unknownAgentField)}`,
-      };
-    }
     if (agentRaw.background !== undefined && typeof agentRaw.background !== 'boolean') {
       return { ok: false, reason: 'agent.background 必须是布尔值' };
     }
@@ -2971,7 +2937,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
       return { ok: false, reason: 'agent.schedule 必须是布尔值' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true) {
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule'])).length === 0) {
       return {
         ok: false,
         reason:
@@ -2979,14 +2945,14 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       };
     }
     agent = {
+      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
     };
   }
 
-  // node 槽详单:只收包内入口 + 固定 stdio 协议 + 生命周期。这里刻意采用
-  // 字段白名单,command/args/shell/env 等任意命令启动面一律在装入前拒绝。
+  // Node 只执行受控入口与固定协议；未知扩展保留为数据，不传入进程启动参数。
   let node: GhostNodeNeeds | undefined;
   if (raw.node !== undefined) {
     if (!isPlainObject(raw.node)) {
@@ -2999,22 +2965,6 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       };
     }
     const nodeRaw = raw.node as Record<string, unknown>;
-    const allowedNodeFields = new Set([
-      'entry',
-      'protocol',
-      'lifecycle',
-      'idleTimeoutSeconds',
-      'entries',
-      'childSpawn',
-      'secretBindings',
-    ]);
-    const unknownNodeField = Object.keys(nodeRaw).find((key) => !allowedNodeFields.has(key));
-    if (unknownNodeField) {
-      return {
-        ok: false,
-        reason: `node 含不允许的字段 ${JSON.stringify(unknownNodeField)};不能声明 command/args/shell/env`,
-      };
-    }
     if (!isSafeGhostRelativePath(nodeRaw.entry)) {
       return { ok: false, reason: 'node.entry 必须是安装目录内的安全相对路径' };
     }
@@ -3149,15 +3099,6 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
           return { ok: false, reason: 'node.secretBindings 每项必须是对象' };
         }
         const binding = bindingRaw as Record<string, unknown>;
-        const unknownBindingField = Object.keys(binding).find(
-          (key) => !['key', 'label', 'methods', 'entry', 'hint', 'url', 'oauthSecret'].includes(key),
-        );
-        if (unknownBindingField) {
-          return {
-            ok: false,
-            reason: `node.secretBindings[] 含不允许的字段 ${JSON.stringify(unknownBindingField)}`,
-          };
-        }
         if (typeof binding.key !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(binding.key)) {
           return {
             ok: false,
@@ -3269,6 +3210,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
           return { ok: false, reason: 'node.secretBindings[].oauthSecret 必须是本插件 OAuth 凭证键' };
         }
         nodeSecretBindings.push({
+          ...unknownDeclarationFields(binding, ['key', 'label', 'methods', 'entry', 'hint', 'url', 'oauthSecret']),
           ...(binding.oauthSecret !== undefined ? { oauthSecret: binding.oauthSecret as string } : {}),
           key: binding.key,
           label: binding.label,
@@ -3280,6 +3222,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       }
     }
     node = {
+      ...unknownDeclarationFields(nodeRaw, ['entry', 'protocol', 'lifecycle', 'idleTimeoutSeconds', 'entries', 'childSpawn', 'secretBindings']),
       entry: nodeRaw.entry,
       protocol: nodeRaw.protocol as GhostNodeProtocol,
       ...(nodeRaw.lifecycle !== undefined
@@ -3334,13 +3277,6 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       };
     }
     const previewRaw = raw.preview as Record<string, unknown>;
-    const unknownPreviewField = Object.keys(previewRaw).find((key) => key !== 'hosts');
-    if (unknownPreviewField !== undefined) {
-      return {
-        ok: false,
-        reason: `preview 含不允许的字段 ${JSON.stringify(unknownPreviewField)}`,
-      };
-    }
     if (!Array.isArray(previewRaw.hosts) || previewRaw.hosts.length === 0) {
       return {
         ok: false,
@@ -3372,7 +3308,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       }
       seenPreviewHosts.add(host);
     }
-    preview = { hosts: previewRaw.hosts as string[] };
+    preview = { ...unknownDeclarationFields(previewRaw, ['hosts']), hosts: previewRaw.hosts as string[] };
   }
   if (slots.includes('preview') && preview === undefined) {
     return {
@@ -3398,13 +3334,6 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       return { ok: false, reason: '声明了 skill 详单但 slots 未包含 "skill"' };
     }
     const skillRaw = raw.skill as Record<string, unknown>;
-    const unknownSkillField = Object.keys(skillRaw).find((key) => key !== 'items');
-    if (unknownSkillField !== undefined) {
-      return {
-        ok: false,
-        reason: `skill 含不允许的字段 ${JSON.stringify(unknownSkillField)}`,
-      };
-    }
     if (!Array.isArray(skillRaw.items) || skillRaw.items.length === 0) {
       return {
         ok: false,
@@ -3428,15 +3357,6 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         };
       }
       const itemRaw = item as Record<string, unknown>;
-      const unknownItemField = Object.keys(itemRaw).find(
-        (key) => key !== 'dir' && key !== 'name' && key !== 'description',
-      );
-      if (unknownItemField !== undefined) {
-        return {
-          ok: false,
-          reason: `skill.items 条目含不允许的字段 ${JSON.stringify(unknownItemField)}`,
-        };
-      }
       if (!isSafeGhostRelativePath(itemRaw.dir)) {
         return {
           ok: false,
@@ -3479,13 +3399,13 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         };
       }
       seenSkillDirs.add(dirFold);
-      skillItems.push({
+      skillItems.push({ ...unknownDeclarationFields(itemRaw, ['dir', 'name', 'description']),
         dir: itemRaw.dir,
         name: itemRaw.name,
         description: itemRaw.description,
       });
     }
-    skill = { items: skillItems };
+    skill = { ...unknownDeclarationFields(skillRaw, ['items']), items: skillItems };
   }
   if (slots.includes('skill') && skill === undefined) {
     return {
@@ -3506,13 +3426,6 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       };
     }
     const manualRaw = raw.manual as Record<string, unknown>;
-    const unknownManualField = Object.keys(manualRaw).find((key) => key !== 'items');
-    if (unknownManualField !== undefined) {
-      return {
-        ok: false,
-        reason: `manual 含不允许的字段 ${JSON.stringify(unknownManualField)}`,
-      };
-    }
     if (!Array.isArray(manualRaw.items) || manualRaw.items.length === 0) {
       return { ok: false, reason: 'manual.items 必须是非空数组(随包手册索引)' };
     }
@@ -3533,15 +3446,6 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         };
       }
       const itemRaw = item as Record<string, unknown>;
-      const unknownItemField = Object.keys(itemRaw).find(
-        (key) => key !== 'dir' && key !== 'name' && key !== 'description',
-      );
-      if (unknownItemField !== undefined) {
-        return {
-          ok: false,
-          reason: `manual.items 条目含不允许的字段 ${JSON.stringify(unknownItemField)}`,
-        };
-      }
       if (!isSafeGhostRelativePath(itemRaw.dir)) {
         return {
           ok: false,
@@ -3590,24 +3494,18 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         };
       }
       seenManualDirs.add(dirFold);
-      manualItems.push({
+      manualItems.push({ ...unknownDeclarationFields(itemRaw, ['dir', 'name', 'description']),
         dir: itemRaw.dir,
         name: itemRaw.name,
         description: itemRaw.description,
       });
     }
-    manual = { items: manualItems };
+    manual = { ...unknownDeclarationFields(manualRaw, ['items']), items: manualItems };
   }
 
   // setup 引用必须在交付边界就与同一份 manifest 的凭证、连接和设置入口对齐；
   // 不能让服务端接受、Desktop 装入时才拒绝。
-  for (const binding of node?.secretBindings ?? []) {
-    if (binding.oauthSecret === undefined) continue;
-    const source = network?.secrets?.find((secret) => secret.key === binding.oauthSecret);
-    if (source?.source !== 'oauth' || !source.oauth) {
-      return { ok: false, reason: 'node.secretBindings[].oauthSecret 必须引用本插件已声明的 OAuth 凭证' };
-    }
-  }
+  // OAuth source resolution belongs to the runtime; declaration acceptance grants no credentials.
   let setup: GhostSetupDecl | undefined;
   if (raw.setup !== undefined) {
     if (!isPlainObject(raw.setup)) {

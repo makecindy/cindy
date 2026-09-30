@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * RemoteSessionBanner —— 控制端打开的远程会话状态提示条。
  *
@@ -65,24 +66,32 @@ export function RemoteSessionBanner({ status, issue, onResync, onFinalize }: Pro
       />
       <span className="flex-1 truncate text-12 text-[var(--text-secondary)]">{label}</span>
       {status === 'suspect-stall' && onFinalize && (
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          tone="quiet"
+          compact
           type="button"
           onClick={onFinalize}
-          className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+          className="shrink-0"
         >
           <Square size={12} />
           {t('ccAgent.remoteSession.finalizeStuck')}
-        </button>
+        </Button>
       )}
       {status === 'suspect-stall' && (
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          tone="quiet"
+          compact
           type="button"
           onClick={onResync}
-          className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+          className="shrink-0"
         >
           <RotateCw size={12} />
           {t('ccAgent.remoteSession.resync')}
-        </button>
+        </Button>
       )}
     </div>
   );

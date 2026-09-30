@@ -83,7 +83,7 @@ describe('ErrorBanner — LiteLLM 网关凭据失效', () => {
     expect(screen.getByText('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')).toBeTruthy();
   });
 
-  it('keeps a custom LiteLLM provider error as provider-owned raw text', () => {
+  it('keeps a custom LiteLLM provider error in details without Gateway attribution', () => {
     render(
       createElement(ErrorBanner, {
         error: LITELLM_401,
@@ -95,6 +95,9 @@ describe('ErrorBanner — LiteLLM 网关凭据失效', () => {
     );
 
     expect(screen.queryByText('chat.errorBanner.gatewayProxyTokenInvalid')).toBeNull();
+    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
+    expect(screen.queryByText(LITELLM_401)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(LITELLM_401)).toBeTruthy();
   });
 

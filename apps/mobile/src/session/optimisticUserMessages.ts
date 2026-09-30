@@ -24,9 +24,11 @@ export function appendOptimisticUserMessage(
   messages: readonly RemoteMessage[],
   queued: QueuedRemoteMessage,
   sessionId: string,
+  observedMessages: readonly RemoteMessage[] = [],
 ): readonly OptimisticUserMessage[] {
   if (current.some((entry) => entry.message.clientId === queued.clientId)
-    || messages.some((message) => message.clientId === queued.clientId)) return current;
+    || messages.some((message) => message.clientId === queued.clientId)
+    || observedMessages.some((message) => message.clientId === queued.clientId)) return current;
   const source = queued.chatMessage;
   return [...current, {
     message: {
@@ -37,6 +39,9 @@ export function appendOptimisticUserMessage(
       content: { ...source, text: pendingSendBubbleText(queued) },
     },
     precedingClientIds: new Set([
+      // History rows may be visible without ever entering the raw push store.
+      // Keep both those observed rows and pushes received since the last render.
+      ...observedMessages.map((message) => message.clientId),
       ...messages.map((message) => message.clientId),
       ...current.map((entry) => entry.message.clientId),
     ]),

@@ -255,80 +255,70 @@ export async function withMediaRefCompensation<T>(params: {
   perform: () => Promise<T>;
   compensate: (refId: string) => Promise<unknown>;
 }): Promise<T> {
-  if (params.refIds.length === 0 || params.refIds.length > MAX_REF_IDS) {
-    throw new Error('cindy-media: invalid reference compensation batch size');
-  }
-  if (!params.refIds.every((id) => UUID_PATTERN.test(id))) {
+  if (params.refIds.length === 0 || !params.refIds.every((id) => UUID_PATTERN.test(id))) {
     throw new Error('cindy-media: invalid staged reference id');
   }
   if (!OWNER_KEY_PATTERN.test(params.scope.ownerStorageKey)) {
     throw new Error('cindy-media: invalid compensation owner namespace');
   }
-
   params.scope.assertStillValid();
   await mkdir(params.scope.journalDir, { recursive: true, mode: 0o700 });
   await assertSafeJournalDirectory(params.scope.journalDir);
-  const paths = pathsFor(params.scope.journalDir, randomUUID());
-
-  return withCrossProcessLock(
-    paths.lock,
-    { label: 'cindy-media-ref-compensation', waitMs: JOURNAL_LOCK_WAIT_MS },
-    async (status) => {
-      if (!status.held) {
-        throw new Error('cindy-media: reference compensation journal lock unavailable');
-      }
-
-      const record = await writePendingRecord(params.scope, paths, params.refIds);
-      let recordCommitted = false;
-      try {
-        params.scope.assertStillValid();
-        const result = await params.perform();
-        params.scope.assertStillValid();
-        await commitRecord(params.scope, paths, record);
-        recordCommitted = true;
-        params.scope.assertStillValid();
-        await removeMarker(paths.committed, params.scope.journalDir).catch((error) => {
-          log.warn('Failed to collect a committed media reference journal', {
-            operationId: paths.operationId,
-            error: String(error),
-          });
+  const shards: Array<{ paths: JournalPaths; refIds: readonly string[]; record?: RefCompensationRecord; committed: boolean }> = [];
+  for (let i = 0; i < params.refIds.length; i += MAX_REF_IDS) {
+    shards.push({ paths: pathsFor(params.scope.journalDir, randomUUID()), refIds: params.refIds.slice(i, i + MAX_REF_IDS), committed: false });
+  }
+  // Keep each bounded journal locked for the entire batch, including rollback.
+  // A large recovery must not commit earlier shards before later attachments save.
+  const locked = async (index: number): Promise<T> => {
+    if (index < shards.length) {
+      return withCrossProcessLock(shards[index].paths.lock,
+        { label: 'cindy-media-ref-compensation', waitMs: JOURNAL_LOCK_WAIT_MS },
+        async status => {
+          if (!status.held) throw new Error('cindy-media: reference compensation journal lock unavailable');
+          return locked(index + 1);
         });
+    }
+    try {
+      for (const shard of shards) {
+        shard.record = await writePendingRecord(params.scope, shard.paths, shard.refIds);
+      }
+      params.scope.assertStillValid();
+      const result = await params.perform();
+      params.scope.assertStillValid();
+      for (const shard of shards) {
+        await commitRecord(params.scope, shard.paths, shard.record!);
+        shard.committed = true;
         params.scope.assertStillValid();
-        return result;
-      } catch (error) {
-        if (recordCommitted) {
-          await markRollbackRequired(paths, record).catch((markError) => {
-            log.warn('Failed to preserve an invalidated media reference commit for rollback', {
-              operationId: paths.operationId,
-              error: String(markError),
-            });
+      }
+      for (const shard of shards) {
+        await removeMarker(shard.paths.committed, params.scope.journalDir).catch(error => {
+          log.warn('Failed to collect a committed media reference journal', { operationId: shard.paths.operationId, error: String(error) });
+        });
+      }
+      params.scope.assertStillValid();
+      return result;
+    } catch (error) {
+      for (const shard of shards) {
+        if (!shard.record) continue;
+        if (shard.committed) {
+          await markRollbackRequired(shard.paths, shard.record).catch(markError => {
+            log.warn('Failed to preserve an invalidated media reference commit for rollback', { operationId: shard.paths.operationId, error: String(markError) });
           });
         }
-        const rollback = await Promise.allSettled(params.refIds.map(params.compensate));
-        const rollbackFailed = rollback.some((result) => result.status === 'rejected');
-        rollback.forEach((result, index) => {
-          if (result.status === 'rejected') {
-            log.warn('Failed to compensate a staged media reference', {
-              operationId: paths.operationId,
-              refId: params.refIds[index],
-              error: String(result.reason),
-            });
-          }
-        });
-        if (!rollbackFailed) {
-          await removeOperationMarkers(paths, params.scope.journalDir).catch((cleanupError) => {
-            // Keeping a pending marker is safe: startup will repeat idempotent
-            // exact-id deletes. Never replace the original ingest error.
-            log.warn('Failed to collect a compensated media reference journal', {
-              operationId: paths.operationId,
-              error: String(cleanupError),
-            });
+        const rollback = await Promise.allSettled(shard.refIds.map(params.compensate));
+        if (rollback.every(result => result.status === 'fulfilled')) {
+          await removeOperationMarkers(shard.paths, params.scope.journalDir).catch(cleanupError => {
+            log.warn('Failed to collect a compensated media reference journal', { operationId: shard.paths.operationId, error: String(cleanupError) });
           });
+        } else {
+          log.warn('Media reference compensation remains pending', { operationId: shard.paths.operationId });
         }
-        throw error;
       }
-    },
-  );
+      throw error;
+    }
+  };
+  return locked(0);
 }
 
 function parseJournalRecord(

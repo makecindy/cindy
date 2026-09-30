@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CircleAlert, Copy, FolderOpen } from 'lucide-react';
@@ -57,23 +58,24 @@ export function GhostPanelError({
         )}
       </p>
       <div className="flex items-center gap-2">
-        <button
+        <Button variant="secondary" size="sm" compact
           type="button"
           onClick={reload}
-          className="rounded-full border border-[var(--border-default)] px-3.5 py-1.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-chip)]"
         >
           {t('settings.ghosts.panelError.reload')}
-        </button>
+        </Button>
         {/* 关闭 = 转沉睡,可逆动作,按 docs/design-rules/cindy-design-system.md 红色纪律走灰度次按钮(红只留错误图标)。 */}
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          compact
           type="button"
           onClick={() =>
             void window.electronAPI.ghosts.setEnabled(manifest.id, false).catch(() => {})
           }
-          className="rounded-full border border-[var(--border-default)] px-3.5 py-1.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-chip)]"
         >
           {t('settings.ghosts.panelError.close')}
-        </button>
+        </Button>
       </div>
     </div>
   );

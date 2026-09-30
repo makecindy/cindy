@@ -48,6 +48,7 @@ const DRIZZLE_PROXY_SCHEMA = [
       feishu_bot_app_id TEXT,
       im_bot_context_id TEXT,
       im_user_id TEXT,
+      im_default_route TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
       codex_history_has_product_prompt INTEGER,
       extra_dirs TEXT NOT NULL DEFAULT '[]',

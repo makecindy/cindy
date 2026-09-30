@@ -539,9 +539,9 @@ export function catalogSurfaces() {
     {
       id: 'desktop.bots',
       platform: 'desktop',
-      title: '伙伴（列表 / 对话 / 设置 / 历史 / 伙伴私聊）',
+      title: '伙伴（列表 / 对话 / 设置 / 历史 / 伙伴私聊 / 群聊）',
       productionEntry:
-        'hash `/bots`、`/bots/list`、`/bots/:botId`、`/bots/roster` 及伙伴当前/历史任务、伙伴私聊路由（BotsFeatureLayout）',
+        'hash `/bots`、`/bots/list`、`/bots/:botId`、`/bots/roster` 及伙伴当前/历史任务、伙伴私聊、伙伴群聊路由（BotsFeatureLayout）',
       reachableComponents: [
         'BotsHomeView',
         'BotsListView',
@@ -550,6 +550,9 @@ export function catalogSurfaces() {
         'RemoteBotSessionView',
         'BotHistorySessionView',
         'BotDirectMessageView',
+        'BotGroupChatView',
+        'BotGroupSettingsDrawer',
+        'BotGroupCreateDialog',
         'BotSettingsDrawer',
         'BotBasicProfileFields',
         'BotModelChainEditor',
@@ -567,6 +570,7 @@ export function catalogSurfaces() {
         '/bots/:botId/history/:sessionId',
         '/bots/:botId/session/:sessionId',
         '/bots/roster',
+        '/bots/groups/:groupId',
         '/bots/remote/:deviceId/:botId',
       ],
       routeEntryComponents: {
@@ -577,6 +581,7 @@ export function catalogSurfaces() {
         '/bots/:botId/history/:sessionId': 'BotHistorySessionView',
         '/bots/:botId/session/:sessionId': 'BotSessionView',
         '/bots/roster': 'BotRosterView',
+        '/bots/groups/:groupId': 'BotGroupChatView',
         '/bots/remote/:deviceId/:botId': 'RemoteBotSessionView',
       },
     },
@@ -595,56 +600,64 @@ export function catalogSurfaces() {
       platform: 'desktop',
       title: 'SkillHub 本地技能',
       productionEntry:
-        'hash `/skillhub/local` 及详情 `/skillhub/local/:kind/global/:name`、`/skillhub/local/:kind/project/:projectHash/:name`',
+        'hash `/skillhub/local` 及统一详情 `/skillhub/detail`（旧详情链接重定向）',
       // SkillhubHomeView 直接渲染 PluginManagementLayout（features/plugin 共享布局）、
-      // SkillhubMarketPreviewPanel 与 InstallTargetPicker——只扫三个路由组件文件
+      // 统一详情布局与 InstallTargetPicker——只扫列表组件文件
       // 会漏掉这些子组件的样式事实。
       reachableComponents: [
+        'SkillhubLocalLayout',
         'SkillhubHomeView',
         'SkillhubDetailView',
+        'SkillhubDetailRoute',
+        'SkillDetailLayout',
         'SkillhubFeatureLayout',
         'PluginManagementLayout',
-        'SkillhubMarketPreviewPanel',
+        'SkillhubMarketDetailView',
         'InstallTargetPicker',
       ],
       styleRoots: [
+        'apps/desktop/src/renderer/features/skillhub/SkillhubLocalLayout.tsx',
         'apps/desktop/src/renderer/features/skillhub/SkillhubHomeView.tsx',
         'apps/desktop/src/renderer/features/skillhub/SkillhubDetailView.tsx',
+        'apps/desktop/src/renderer/features/skillhub/SkillhubDetailRoute.tsx',
+        'apps/desktop/src/renderer/features/skillhub/components/SkillDetailLayout.tsx',
         'apps/desktop/src/renderer/features/skillhub/SkillhubFeatureLayout.tsx',
-        'apps/desktop/src/renderer/features/skillhub/SkillhubMarketPreviewPanel.tsx',
+        'apps/desktop/src/renderer/features/skillhub/SkillhubMarketDetailView.tsx',
         'apps/desktop/src/renderer/features/skillhub/components/InstallTargetPicker.tsx',
         'apps/desktop/src/renderer/features/plugin/PluginManagementLayout.tsx',
       ],
       routerPaths: [
-        '/skillhub/local',
+        // The pathless parent renders the retained catalog itself at /skillhub/local.
+        '/skillhub',
+        '/skillhub/detail',
         '/skillhub/local/:kind/global/:name',
         '/skillhub/local/:kind/project/:projectHash/:name',
         '/skillhub/local/by-path',
       ],
-      routeEntryComponents: { '/skillhub/local': 'SkillhubHomeView', '/skillhub/local/:kind/global/:name': 'SkillhubDetailView', '/skillhub/local/:kind/project/:projectHash/:name': 'SkillhubDetailView', '/skillhub/local/by-path': 'SkillhubDetailView' },
+      routeEntryComponents: { '/skillhub': 'SkillhubLocalLayout', '/skillhub/detail': 'SkillhubDetailRoute', '/skillhub/local/:kind/global/:name': 'LegacySkillDetailRedirect', '/skillhub/local/:kind/project/:projectHash/:name': 'LegacySkillDetailRedirect', '/skillhub/local/by-path': 'LegacySkillDetailRedirect' },
     },
     {
       id: 'desktop.skillhub.market',
       platform: 'desktop',
       title: 'SkillHub 市场',
       productionEntry: 'hash `/skillhub/market`（SkillhubMarketListView）',
-      // 市场页直接渲染的子组件（MarketCard / InstallTargetPicker / 预览面板 / 两个编辑
+      // 市场页直接渲染的子组件（MarketCard / InstallTargetPicker / 详情页 / 两个编辑
       // 弹窗）在 components/ 与同目录下，只扫入口文件会漏掉它们的全部样式事实。
       reachableComponents: [
         'SkillhubMarketListView',
         'MarketCard',
         'InstallTargetPicker',
-        'SkillhubMarketPreviewPanel',
+        'SkillhubMarketDetailView',
         'MarketInfoEditDialog',
         'VisibilityEditorDialog',
       ],
       styleRoots: [
         'apps/desktop/src/renderer/features/skillhub/SkillhubMarketListView.tsx',
-        'apps/desktop/src/renderer/features/skillhub/SkillhubMarketPreviewPanel.tsx',
+        'apps/desktop/src/renderer/features/skillhub/SkillhubMarketDetailView.tsx',
         'apps/desktop/src/renderer/features/skillhub/components',
       ],
-      routerPaths: ['/skillhub/market'],
-      routeEntryComponents: { '/skillhub/market': 'SkillhubMarketListView' },
+      routerPaths: ['/skillhub/market', '/skillhub/market/:name', '/skillhub/market/:kind/:name', '/skillhub/market/manage/:name'],
+      routeEntryComponents: { '/skillhub/market': 'SkillhubMarketListView', '/skillhub/market/:name': 'LegacySkillDetailRedirect', '/skillhub/market/:kind/:name': 'LegacySkillDetailRedirect', '/skillhub/market/manage/:name': 'LegacySkillDetailRedirect' },
     },
     {
       id: 'desktop.settings',
@@ -784,10 +797,13 @@ export function catalogSurfaces() {
       platform: 'desktop',
       title: '远程桌面独立窗口',
       productionEntry: '`?remoteDesktopViewer=1` → renderer/remote-desktop-viewer-entry.tsx',
-      reachableComponents: ['RemoteDesktopViewerWindow', 'Select', 'Button', 'FormField', 'ConfirmDialog'],
+      reachableComponents: ['RemoteDesktopViewerWindow', 'Select', 'Button', 'FormField', 'ConfirmDialog', 'Switch', 'Popover', 'Tip'],
       styleRoots: [
         'apps/desktop/src/renderer/remote-desktop-viewer-entry.tsx',
         'apps/desktop/src/renderer/features/remote-desktop/RemoteDesktopViewerWindow.tsx',
+        'apps/desktop/src/renderer/components/ui/popover.tsx',
+        'apps/desktop/src/renderer/components/ui/tooltip.tsx',
+        'apps/desktop/src/renderer/components/ui/switch.tsx',
         'apps/desktop/src/renderer/components/ui/confirm-dialog.tsx',
         'apps/desktop/src/renderer/components/ui/select.tsx',
         'apps/desktop/src/renderer/components/ui/button.tsx',
@@ -1387,11 +1403,12 @@ export function mobileCatalogSurfaces() {
     ['remote-desktop', '远程桌面', ['devices/desktop/[deviceId].tsx']],
     ['resources', '远程资源列表与详情', ['resources/[collectionId].tsx', 'resources/[collectionId]/[resourceId].tsx']],
     ['companions.direct', '伙伴私聊回看', ['companions/direct/[threadId].tsx']],
+    ['companions.groups', '伙伴群聊与分工', ['companions/groups/[groupId].tsx']],
     ['chat.session', '任务内容与输入', ['sessions/[sessionId].tsx']],
+    ['chat.sharing', '共享任务邀请与成员', ['shared-session.tsx']],
     ['chat.new', '新建任务', ['sessions/new.tsx']],
     ['files', '任务文件与预览', ['files/[sessionId].tsx', 'files/preview/[sessionId].tsx']],
-    ['automations', '自动化', ['automations/[deviceId].tsx']],
-    ['settings', '设置（含调试与日志上传可见入口）', ['settings.tsx']],
+    ['settings', '设置（含调试与日志上传可见入口）', ['settings.tsx', 'settings/device-name.tsx', 'settings/voice-dictionary.tsx']],
     ['auth', '登录与添加账号', ['(auth)/login.tsx', 'add-account.tsx']],
     ['account-deletion', '账号注销', ['account-deletion.tsx']],
   ];
@@ -1416,6 +1433,7 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
   const excluded = new Map([
     ['_layout.tsx', 'layout; visible mounted feedback is a separate overlay surface'],
     ['+native-intent.ts', 'native intent routing; no screen'],
+    ['automations/[deviceId].tsx', 'legacy automation link redirect; no screen'],
     ['splash-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED preview; not production UI'],
     ['listperf.tsx', '__DEV__ list performance harness; not production UI'],
   ]);

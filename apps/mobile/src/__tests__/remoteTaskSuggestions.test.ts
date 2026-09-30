@@ -106,7 +106,7 @@ describe("suggestion route IDs", () => {
 
 describe("home recommendation connection readiness", () => {
   it("hides both modes after disconnect despite a retained online device snapshot", () => {
-    const source = readTextLf(resolve(process.cwd(), "app/devices/index.tsx"), "utf8");
+    const source = readTextLf(resolve(process.cwd(), "src/session/HomeSurface.tsx"), "utf8");
     const expression = source.match(/ready: ([\s\S]*?),\n  \}\);\n  const newSessionDeviceOptions/)?.[1];
     expect(expression).toBeTruthy();
     const evaluateReady = new Function("status", "activeConnectionIssue", "recoveringDeviceIds", "selectedDeviceId", `
@@ -138,7 +138,7 @@ describe("home recommendation connection readiness", () => {
 
 describe("recommendation route target", () => {
   it("passes the checked computer explicitly for both empty and template actions", () => {
-    const source = readTextLf(resolve(process.cwd(), "app/devices/index.tsx"), "utf8");
+    const source = readTextLf(resolve(process.cwd(), "src/session/HomeSurface.tsx"), "utf8");
     const openBody = source.match(/const openNewSession = useCallback\([^\n]*=> \{([\s\S]*?)\n  \}, \[guardedPush, home.primaryDevice/)?.[1];
     const suggestedBody = source.match(/const openSuggestedSession = useCallback\([^\n]*=> \{([\s\S]*?)\n  \}, \[openNewSession/)?.[1];
     expect(openBody).toBeTruthy();
@@ -148,6 +148,9 @@ describe("recommendation route target", () => {
     const open = new Function("project", "suggestion", "explicitDeviceId", "guardedPush", `
       const home = { primaryDevice: { deviceId: 'fallback', label: 'Fallback' } };
       const selectedDeviceId = null;
+      // 推荐入口不带 origin,不应触发 composer 形变入场。
+      const origin = undefined;
+      const rememberComposerEntry = () => { throw new Error('unexpected composer morph'); };
       const newSessionDeviceOptions = [{ deviceId: 'checked', name: 'Checked' }];
       const serializeNewSessionDeviceOptions = JSON.stringify;
       const setError = (error) => { throw new Error(error); }, t = (key) => key;

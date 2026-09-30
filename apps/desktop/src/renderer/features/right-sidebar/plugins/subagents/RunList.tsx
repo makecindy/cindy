@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * RunList — the Subagent panel's list view.
  *
@@ -107,16 +108,18 @@ export function RunList({ runs, nextCursor, loadingMore, onOpen, onLoadMore }: R
           </section>
         ) : null}
         {nextCursor ? (
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
+            loading={loadingMore}
             type="button"
             disabled={loadingMore}
             onClick={onLoadMore}
-            className="mx-3 mt-3 flex h-8 items-center justify-center rounded-full border border-[var(--border-default)] px-3 text-12 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            className="mx-3 mt-3"
           >
-            {loadingMore
-              ? t('rightSidebar.subagents.loading')
-              : t('rightSidebar.subagents.loadEarlier')}
-          </button>
+            {t('rightSidebar.subagents.loadEarlier')}
+          </Button>
         ) : null}
       </div>
     </div>

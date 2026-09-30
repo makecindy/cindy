@@ -24,6 +24,7 @@ import {
   type ProviderModelDiscoveryFailure,
   type ProviderView,
   type Provider,
+  isCustomRoutedProvider,
 } from '@cindy/model-providers';
 
 const log = createLogger('provider-service');
@@ -37,6 +38,8 @@ const log = createLogger('provider-service');
  */
 export interface ConnectionReadOptions {
   allowSideEffects: boolean;
+  /** Host-only snapshot read: never refresh CLI status or load account presentation. */
+  snapshotOnly?: boolean;
   /**
    * Wait for post-claim model discovery before materializing this snapshot.
    * This is an internal readiness hint for routing callers; ordinary provider reads
@@ -63,7 +66,7 @@ export interface ProviderListOptions extends ConnectionReadOptions {
 export interface ProviderConnectionReaders {
   /** XD 网关：托管 api_key 是否存在。 */
   xd: (opts: ConnectionReadOptions) => boolean | Promise<boolean>;
-  /** Anthropic：系统 Claude.ai OAuth 是否登录。 */
+  /** Anthropic：内置 Claude Code CLI 是否已登录且 Cindy 获准使用。 */
   anthropic: (opts: ConnectionReadOptions) => boolean | Promise<boolean>;
   /** OpenAI：Codex 是否 OAuth 登录。 */
   openai: (opts: ConnectionReadOptions) => boolean | Promise<boolean>;
@@ -139,7 +142,8 @@ export interface ProviderService {
 export function createProviderService(deps: ProviderServiceDeps): ProviderService {
   async function listProviders(opts?: Partial<ProviderListOptions>): Promise<ProviderView[]> {
     const readOpts: ConnectionReadOptions = {
-      allowSideEffects: opts?.allowSideEffects === true,
+      allowSideEffects: opts?.allowSideEffects === true && opts?.snapshotOnly !== true,
+      snapshotOnly: opts?.snapshotOnly === true,
       waitForDiscovery: opts?.waitForDiscovery === true,
     };
     const [xd, anthropic, openai, xai] = await Promise.all([
@@ -167,7 +171,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         connected[p.id] = deps.codexAccountConnected?.(p.id) ?? false;
       } else if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in connected)) {
         connected[p.id] = deps.genericOAuthConnected?.(p.id) ?? false;
-      } else if (p.source === 'user') {
+      } else if (isCustomRoutedProvider(p)) {
         connected[p.id] = deps.customApiKeyConnected?.(p) ?? false;
       }
       // 内置 API-key 供应商(如 Gemini 图像来源):连接 = key 已存。与自定义供应商
@@ -195,13 +199,13 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       );
     }
     const accountInfo = new Map<string, ProviderView['openAiAccount']>();
-    if (deps.openAiAccountInfo) {
+    if (!readOpts.snapshotOnly && deps.openAiAccountInfo) {
       await Promise.all(catalog.providers.filter((p) => p.id === 'openai' || p.auth.native === 'codex').map(async (p) => {
         accountInfo.set(p.id, await deps.openAiAccountInfo!(p.id));
       }));
     }
     const subscriptionInfo = new Map<string, ProviderView['subscriptionAccount']>();
-    if (deps.subscriptionAccountInfo) await Promise.all(catalog.providers
+    if (!readOpts.snapshotOnly && deps.subscriptionAccountInfo) await Promise.all(catalog.providers
       .filter(p => p.id === 'anthropic' || p.id === 'xai' || p.auth.native === 'claude' || p.auth.native === 'xai')
       .map(async p => subscriptionInfo.set(p.id, await deps.subscriptionAccountInfo!(p.id))));
     return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.()).map((provider) => ({

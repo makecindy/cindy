@@ -61,6 +61,33 @@ describe("legacy Responses tool item ids", () => {
   });
 });
 
+describe("legacy call_ tool item ids (issue #4023)", () => {
+  it("rewrites call_ item ids to the dialect of the item type and keeps call_id pairing", () => {
+    const body = { input: [
+      { type: "custom_tool_call", id: "call_00_nRi4LX3KqCkex4kDJqBo0978", call_id: "call_00_nRi4LX3KqCkex4kDJqBo0978", name: "exec", input: "x" },
+      { type: "custom_tool_call_output", id: "call_00_nRi4LX3KqCkex4kDJqBo0978", call_id: "call_00_nRi4LX3KqCkex4kDJqBo0978", output: "ok" },
+      { type: "function_call", id: "call_fn", call_id: "call_fn", name: "read_file", arguments: "{}" },
+      { type: "function_call_output", id: "call_fn", call_id: "call_fn", output: "{}" },
+      // Not a tool item: a legacy-looking id elsewhere stays opaque.
+      { type: "message", id: "call_message", content: "unchanged" },
+      { type: "item_reference", id: "call_ref" },
+    ] };
+    const original = structuredClone(body);
+    const repaired = normalizeResponsesToolItemIds(body)!;
+    const items = repaired.input as typeof body.input;
+    expect(items.map(item => item.id)).toEqual([
+      "ctc_00_nRi4LX3KqCkex4kDJqBo0978", "ctco_00_nRi4LX3KqCkex4kDJqBo0978", "fc_fn", "fco_fn", "call_message", "call_ref",
+    ]);
+    expect(items.map(item => (item as { call_id?: string }).call_id)).toEqual(
+      original.input.map(item => (item as { call_id?: string }).call_id),
+    );
+    expect(items[0]!.input).toBe("x");
+    expect(items[1]!.output).toBe("ok");
+    expect(body).toEqual(original);
+    expect(normalizeResponsesToolItemIds(repaired)).toBeNull();
+  });
+});
+
 describe("Responses custom-tool function adapter", () => {
   afterEach(() => {
     vi.useRealTimers();

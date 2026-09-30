@@ -1,3 +1,4 @@
+import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 /**
  * remoteProjectsStore —— 控制端「远程项目」内存层(device-link 跨设备远程控制)。
  * ---------------------------------------------------------------------------
@@ -98,9 +99,8 @@ const renameSubs = new Set<(deviceId: string, name: string) => void>();
  * 故 mark disconnected / remove / clear 都用自增(条目保留,仅随 distinct 设备数增长,可忽略)。
  */
 const snapshotEpoch = new Map<string, number>();
-// Detail reads do not share list epochs: sessions:list deliberately omits bots.
-// Keep monotonic lifecycle/patch revisions only for devices and sessions opened
-// through detail reads, including reads begun before the first shard exists.
+// Lifecycle revisions are shared by detail reads and queued refreshes. Snapshot
+// epochs alone cannot cancel a rerun that has not acquired its next epoch yet.
 const detailDeviceEpoch = new Map<string, number>();
 const detailPatchEpoch = new Map<string, number>();
 // Origin/connection restamps retain content identity. Authoritative snapshots
@@ -156,6 +156,8 @@ let bootstrapRetryImpl: ((deviceId: string) => void) | null = null;
 let mergedSnapshot: Session[] = [];
 /** sessionId → deviceId 注册表(随分片变化重建)。 */
 const sessionDeviceIndex = new Map<string, string>();
+/** sessionId → 投影后标题(含标题预览),随 recompute 重建;供消息来源标签 O(1) 查询。 */
+const sessionTitleIndex = new Map<string, string>();
 /**
  * 「归属已确定、但快照还没到」的 origin 钉子:sessionId → deviceId。
  *
@@ -333,6 +335,7 @@ function withPendingTitle(session: Session): Session {
 function recompute(): void {
   recomputeScheduleIndex();
   sessionDeviceIndex.clear();
+  sessionTitleIndex.clear();
   // 先铺 origin 钉子:分片还没到的新建远程会话也必须能被判定为远程(见 pinnedOrigins)。
   // 分片派生值随后覆盖同 id 的条目。
   for (const [sessionId, deviceId] of pinnedOrigins) sessionDeviceIndex.set(sessionId, deviceId);
@@ -342,8 +345,10 @@ function recompute(): void {
     const flat: Session[] = [];
     for (const shard of shards.values()) {
       for (const s of shard.sessions) {
-        flat.push(withPendingTitle(s));
+        const projected = withPendingTitle(s);
+        flat.push(projected);
         sessionDeviceIndex.set(s.id, shard.deviceId);
+        if (projected.title) sessionTitleIndex.set(s.id, projected.title);
       }
     }
     mergedSnapshot = flat;
@@ -631,6 +636,28 @@ const actions = {
    *  - 落到未知 session:active 一律重拉；archived 仅在归档桶已加载时重拉，避免后台
    *    为用户尚未查看的历史记录额外取数。
    */
+  applyTagCatalog(deviceId: string, tags: unknown): void {
+    const shard = shards.get(deviceId);
+    // Any list read may also be bringing in new or unarchived tasks. Reconcile
+    // every observed bucket after fencing it, not only its first snapshot.
+    for (const status of ['active', 'archived'] as const) {
+      actions.nextSnapshotEpoch(deviceId, status);
+      if (
+        shard?.loadedStatuses.has(status) ||
+        actions.isSessionStatusLoading(deviceId, status) ||
+        (!shard && status === 'active')
+      ) {
+        requestRemoteReseed(deviceId, status);
+      }
+    }
+    if (!shard) return;
+    const catalog = normalizeTaskTags(tags, 256);
+    shard.sessions = shard.sessions.map((session) => ({
+      ...session,
+      tags: reconcileTaskTags(session.tags, catalog),
+    }));
+    recompute();
+  },
   applyPatch(deviceId: string, sessionId: string, patch: Record<string, unknown>): void {
     // Even an unknown row can be deleted/archived while its first GET is in flight.
     // Usage, reply timestamps and list presentation cannot change its route
@@ -904,6 +931,13 @@ const actions = {
     return status ? sessions.filter((session) => session.status === status) : sessions;
   },
 
+  /** Cancel pending work on disconnect/removal without cancelling ordinary fresh reads. */
+  getDeviceLifecycleEpoch(deviceId: string): number {
+    const epoch = detailDeviceEpoch.get(deviceId) ?? 0;
+    detailDeviceEpoch.set(deviceId, epoch);
+    return epoch;
+  },
+
   /** A detail read must not roll back a newer push, deletion, or device lifecycle. */
   captureSessionRead(deviceId: string, sessionId: string): (() => boolean) & { mergeActivity: (detail: Session) => Session } {
     const beforeRow = shards.get(deviceId)?.sessions.find((session) => session.id === sessionId);
@@ -968,6 +1002,11 @@ const actions = {
     const failureChanged = setSessionStatusFailed(deviceId, status, true);
     if (!loadingCleared && !failureChanged) return;
     subs.forEach((fn) => fn());
+  },
+
+  /** 远端任务当前标题(含标题预览),按 id 索引;未知任务返回 null。 */
+  getSessionTitle(sessionId: string): string | null {
+    return sessionTitleIndex.get(sessionId)?.trim() || null;
   },
 
   /**
@@ -1126,6 +1165,13 @@ export function retryRemoteSessionStatus(deviceId: string, status: RemoteSession
 /** 用户可见错误态的重试入口：重新订阅并拉取该设备的首次任务快照。 */
 export function retryRemoteSessionBootstrap(deviceId: string): void {
   bootstrapRetryImpl?.(deviceId);
+}
+
+/** 组件内订阅:单个远端任务的当前标题(按 id 索引,不随其它任务变化而扫描列表)。 */
+export function useRemoteSessionTitle(sessionId: string | undefined): string | null {
+  return useSyncExternalStore(subscribe, () =>
+    sessionId ? actions.getSessionTitle(sessionId) : null,
+  );
 }
 
 /** 组件内订阅:返回扁平远端会话快照(喂给 sidebar 合并点)。 */

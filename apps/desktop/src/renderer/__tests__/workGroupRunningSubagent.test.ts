@@ -164,14 +164,22 @@ describe('运行中子 Agent — 已回答 turn(groupAnsweredTurnItems)', () => 
 
 // ── Scenario C:流式尾 turn 的 legacy 折叠路径 ───────────────────────────────
 
-describe('后台任务自动续跑 — 每个 SDK turn 的正式总结都保留', () => {
-  it('主任务总结不会被后台门禁完成后的补充回复顶进「已工作」', () => {
+describe('后台任务自动续跑 — 只有最后一次 seal 是收尾正文', () => {
+  const formalSummary = [
+    '## 改动总结',
+    '',
+    '- 实现了功能主体',
+    '- 补了回归测试',
+    '- 本地门禁通过',
+  ].join('\n');
+
+  it('交付正文形态的主任务总结不会被后台门禁完成后的补充回复顶进「已工作」', () => {
     const messages: ChatMessage[] = [
       mkUser('u1', '实现功能并跑完整门禁'),
       mkThinking('main-thinking'),
       mkTool('main-edit', 'Edit'),
       mkResult('main-edit-result', 'tu-main-edit'),
-      mkAssistant('main-summary', '功能已实现并通过验证。正式总结如下。', true),
+      mkAssistant('main-summary', formalSummary, true),
       mkTool('gate-check', 'Bash'),
       mkResult('gate-result', 'tu-gate-check', 'exit 0'),
       mkAssistant('gate-followup', '后台预跑的仓库级门禁已通过。', true),
@@ -191,6 +199,96 @@ describe('后台任务自动续跑 — 每个 SDK turn 的正式总结都保留'
     )).toBe(false);
   });
 
+  // 原始形状(2026-09-27):主对话开 4 个后台子 Agent,每回来一个就被唤醒核对一次、
+  // 各盖一次 seal。中间几句「还在等 / 核实了」曾各自当成最终答复留在外面,把工作过程
+  // 切成 5 段「已工作」。
+  it('后台唤醒产生的中间短句 seal 折进同一个「已工作」,只留最后的总结', () => {
+    const messages: ChatMessage[] = [
+      mkUser('u1', '对比安卓和 iOS 的交互差异'),
+      mkTool('survey', 'Bash'),
+      mkResult('survey-result', 'tu-survey'),
+      mkAssistant('wait', 'Four agents are still running. I\'ll hold here until they report back.', true),
+      mkAssistant('wake-1', '伙伴部分先回来了。我先抽查它报的两条行为差异。'),
+      mkTool('check-1', 'Bash'),
+      mkResult('check-1-result', 'tu-check-1'),
+      mkAssistant('verified-1', 'The host rejects it rather than truncating, so that finding holds.', true),
+      mkAssistant('wake-2', '最后一部分也回来了。我再核对两条。'),
+      mkTool('check-2', 'Bash'),
+      mkResult('check-2-result', 'tu-check-2'),
+      mkAssistant('final', formalSummary, true),
+    ];
+
+    const items = groupWorkRuns(buildRenderItems(messages).items, false);
+    const topLevelMessages = items
+      .filter((item) => item.type === 'message')
+      .map((item) => item.message.clientId);
+
+    expect(topLevelMessages).toEqual(['u1', 'final']);
+    expect(workGroups(items)).toHaveLength(1);
+  });
+
+  it('更早的交付正文 seal 仍留在组外', () => {
+    const messages: ChatMessage[] = [
+      mkUser('u1'),
+      mkTool('work', 'Bash'),
+      mkResult('work-result', 'tu-work'),
+      mkAssistant('early-report', formalSummary, true),
+      mkAssistant('short-wait', '还有一个子任务在跑。', true),
+      mkTool('check', 'Bash'),
+      mkResult('check-result', 'tu-check'),
+      mkAssistant('final', '全部核对完毕。', true),
+    ];
+
+    const items = groupWorkRuns(buildRenderItems(messages).items, false);
+    const topLevelMessages = items
+      .filter((item) => item.type === 'message')
+      .map((item) => item.message.clientId);
+
+    expect(topLevelMessages).toEqual(['u1', 'early-report', 'final']);
+  });
+
+  it('更早 seal 的引言与交付正文作为一段整体留在组外,不被拆开', () => {
+    const messages: ChatMessage[] = [
+      mkUser('u1'),
+      mkTool('work', 'Bash'),
+      mkResult('work-result', 'tu-work'),
+      mkAssistant('intro', '先给结论。'),
+      mkAssistant('report', formalSummary, true),
+      mkTool('check', 'Bash'),
+      mkResult('check-result', 'tu-check'),
+      mkAssistant('final', '后台核对也通过了。', true),
+    ];
+
+    const items = groupWorkRuns(buildRenderItems(messages).items, false);
+    const topLevelMessages = items
+      .filter((item) => item.type === 'message')
+      .map((item) => item.message.clientId);
+
+    expect(topLevelMessages).toEqual(['u1', 'intro', 'report', 'final']);
+  });
+
+  it('更早 seal 只带图片 / 文件附件和一句短说明时仍留在组外', () => {
+    const messages: ChatMessage[] = [
+      mkUser('u1'),
+      mkTool('render', 'Bash'),
+      mkResult('render-result', 'tu-render'),
+      {
+        ...mkAssistant('chart', '图表在这里。', true),
+        images: [{ url: '/chart.png', mimeType: 'image/png', originalName: 'chart.png' }],
+      },
+      mkTool('check', 'Bash'),
+      mkResult('check-result', 'tu-check'),
+      mkAssistant('final', '后台核对也通过了。', true),
+    ];
+
+    const items = groupWorkRuns(buildRenderItems(messages).items, false);
+    const topLevelMessages = items
+      .filter((item) => item.type === 'message')
+      .map((item) => item.message.clientId);
+
+    expect(topLevelMessages).toEqual(['u1', 'chart', 'final']);
+  });
+
   it('同一 sealed SDK turn 的连续多段正式正文都留在组外', () => {
     const messages: ChatMessage[] = [
       mkUser('u1'),
@@ -207,20 +305,23 @@ describe('后台任务自动续跑 — 每个 SDK turn 的正式总结都保留'
     expect(topLevelMessages).toEqual(['u1', 'summary-part-1', 'summary-part-2']);
   });
 
-  it('现有 turnCostUsd 也能让已落库历史恢复每个 SDK turn 的 seal', () => {
+  it('现有 turnCostUsd 也能让已落库历史恢复 SDK turn 的 seal', () => {
     const messages: ChatMessage[] = [
       mkUser('u1'),
+      mkTool('cost-work', 'Bash'),
+      mkResult('cost-work-result', 'tu-cost-work'),
       { ...mkAssistant('cost-summary', '历史正式总结'), turnCostUsd: 1 },
       mkTool('cost-tool', 'Bash'),
       mkResult('cost-result', 'tu-cost-tool'),
-      { ...mkAssistant('cost-followup', '历史后台补充'), turnCostUsd: 0.1 },
+      mkAssistant('trailing-progress', '未封口的尾部进度'),
     ];
 
     const items = groupWorkRuns(buildRenderItems(messages).items, false);
     const topLevelMessages = items
       .filter((item) => item.type === 'message')
       .map((item) => item.message.clientId);
-    expect(topLevelMessages).toEqual(['u1', 'cost-summary', 'cost-followup']);
+    // 没有 seal 时会回退成保留最后一条正文(trailing-progress)。
+    expect(topLevelMessages).toEqual(['u1', 'cost-summary']);
   });
 
   it('无 turn seal 的旧历史继续只保留最后一条 assistant 回退', () => {

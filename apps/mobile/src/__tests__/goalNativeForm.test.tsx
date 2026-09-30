@@ -19,9 +19,10 @@ vi.mock('@expo/ui/swift-ui', async () => {
   };
 });
 vi.mock('@expo/ui/swift-ui/modifiers', () => Object.fromEntries(
-  ['accessibilityHint', 'accessibilityLabel', 'buttonStyle', 'contentShape', 'disabled', 'font', 'foregroundStyle', 'frame', 'lineLimit', 'pickerStyle', 'tag'].map(key => [key, (value: any) => ({ [key]: value })]).concat([['shapes', { rectangle: () => ({}) }] as any]),
+  ['buttonBorderShape', 'controlSize', 'accessibilityHint', 'accessibilityLabel', 'buttonStyle', 'contentShape', 'disabled', 'font', 'foregroundStyle', 'frame', 'lineLimit', 'pickerStyle', 'tag'].map(key => [key, (value: any) => ({ [key]: value })]).concat([['shapes', { rectangle: () => ({}) }] as any]),
 ));
-vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }) }));
+vi.mock('@/theme', () => ({ navigationChrome: { target: 44 }, useTheme: () => ({ colors: {} }) }));
+vi.mock('@/session/useLiquidGlassAvailable', () => ({ useLiquidGlassAvailable: () => true }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/session/ComposerNativeSection', () => ({ ComposerNativeSection: (p: any) => createElement('section', null, p.children) }));
 vi.mock('@/session/goalStatusLabel', () => ({ goalReasonText: () => '', goalStatusLabel: (status: string) => status, GOAL_STATUS_LABEL: {} }));

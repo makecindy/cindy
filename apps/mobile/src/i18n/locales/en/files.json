@@ -80,6 +80,13 @@
     }
   },
   "preview": {
+    "browserBack": "Back",
+    "browserForward": "Forward",
+    "browserMore": "More actions",
+    "browserShowSource": "View source",
+    "browserShowPage": "Back to webpage",
+    "browserAddToTask": "Add to current task",
+    "browserFileInfo": "File information",
     "done": "Done",
     "a11yShare": "Export and share",
     "copyPath": "Copy Path",
@@ -119,7 +126,14 @@
     "originalFailedThumb": "Couldn't fetch the original; showing the thumbnail",
     "fetchingOriginalHint": "Thumbnail · fetching the original…",
     "a11yExportShareFile": "Export and share the original file",
-    "exportShare": "Export / Share"
+    "exportShare": "Export / Share",
+    "browserAddress": "Address",
+    "browserCancelAddress": "Cancel editing",
+    "browserReturnToFile": "Return to file",
+    "browserCopyAddress": "Copy address",
+    "browserCopiedAddress": "Address copied",
+    "browserInvalidAddress": "Enter a valid http or https address.",
+    "browserWebsiteFailed": "Unable to open this webpage. Try reloading."
   },
   "export": {
     "exportFailed": "Export failed",
@@ -127,6 +141,6 @@
     "exportTimeout": "Export timed out. Try again."
   },
   "gallery": {
-    "cacheMiss": "Remote media cache miss (cachedOnly)"
+    "cacheMiss": "This media isn't cached on your phone yet. Open it again once your computer is connected"
   }
 }

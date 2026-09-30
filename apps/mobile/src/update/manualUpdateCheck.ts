@@ -127,20 +127,24 @@ export async function runManualUpdateCheck({
  */
 export function manualUpdateCheckMessage(
   outcome: ManualUpdateCheckOutcome,
-  options: { isTestFlightBuild: boolean; t: TFunction },
+  options: { isTestFlightBuild: boolean; isGooglePlayInstallation?: boolean; t: TFunction },
 ): string | null {
-  const { isTestFlightBuild, t } = options;
+  const { isTestFlightBuild, isGooglePlayInstallation, t } = options;
   switch (outcome.kind) {
     case 'bundle-update-available':
       return t('settings.version.bundleUpdateFound');
     case 'up-to-date':
       return t(isTestFlightBuild
         ? 'settings.version.testFlightNoContentUpdate'
-        : 'settings.version.upToDate');
+        : isGooglePlayInstallation
+          ? 'settings.version.googlePlayNoContentUpdate'
+          : 'settings.version.upToDate');
     case 'ota-unavailable':
       return t(isTestFlightBuild
         ? 'settings.version.testFlightContentUpdateUnavailable'
-        : 'settings.version.bundleUpToDateNoOta');
+        : isGooglePlayInstallation
+          ? 'settings.version.googlePlayContentUpdateUnavailable'
+          : 'settings.version.bundleUpToDateNoOta');
     case 'reloading':
       return t('settings.version.downloadedRestarting');
     case 'restart-required':

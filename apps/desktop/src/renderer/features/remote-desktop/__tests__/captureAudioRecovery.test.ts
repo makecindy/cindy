@@ -25,6 +25,7 @@ function media(audio = true) {
     getVideoTracks: () => tracks.filter((track) => track.kind === 'video'),
     getAudioTracks: () => tracks.filter((track) => track.kind === 'audio'),
     addTrack: (track: typeof sound) => tracks.push(track),
+    removeTrack: (track: typeof sound) => tracks.splice(tracks.indexOf(track), 1),
   };
 }
 function setup() {
@@ -44,17 +45,28 @@ function setup() {
     localDescription = { sdp: 'answer' };
     iceGatheringState = 'complete';
     close = vi.fn();
-    addTrack = vi.fn();
+    addTrack = vi.fn((track: any) => {
+      if (track.kind === 'audio') this.audio.sender.track = track;
+    });
     audio = {
       direction: 'recvonly',
       receiver: { track: { kind: 'audio' } },
-      sender: { setStreams: vi.fn(), replaceTrack: vi.fn(async (_track: unknown) => {}) },
+      sender: {
+        track: undefined as any,
+        setStreams: vi.fn(),
+        replaceTrack: vi.fn(async (_track: unknown) => {}),
+      },
+    };
+    video = {
+      track: { kind: 'video' },
+      getParameters: () => ({ encodings: [{}] }),
+      setParameters: vi.fn(async (_parameters: unknown) => {}),
     };
     constructor() {
       peers.push(this);
     }
     getSenders() {
-      return [];
+      return this.audio.sender.track ? [this.video, this.audio.sender] : [this.video];
     }
     getTransceivers() {
       expect(this.remoteReady).toBe(true);
@@ -72,6 +84,8 @@ function setup() {
   let command!: (value: any) => void;
   const reply = vi.fn(async () => {});
   const api = {
+    stop: vi.fn(async () => {}),
+    nativeAudio: vi.fn(async () => new Uint8Array(0)),
     onCommand: (callback: typeof command) => {
       command = callback;
       return () => {};
@@ -80,7 +94,7 @@ function setup() {
     reply,
   };
   disposers.push(startDesktopCaptureHost(api as any));
-  const offer = (audio = true, overlay = true) =>
+  const offer = (audio = true, overlay = true, nativeAudio = false) =>
     command({
       id: 'offer',
       op: 'offer',
@@ -89,11 +103,146 @@ function setup() {
       attemptId: 'attempt',
       sourceId: 'screen:1',
       nativeCapture: true,
+      nativeAudio,
       cursorOverlay: overlay,
       settings: { audio, fps: 30 },
     });
-  return { video, nativeStop, peers, capture, reply, offer, stop: () => command({ op: 'stop' }) };
+  return {
+    api,
+    video,
+    nativeStop,
+    peers,
+    capture,
+    reply,
+    offer,
+    reset: (resume = false) =>
+      command({ op: 'capture-reset', lease: 'lease', nativeAudio: resume }),
+    stop: () => command({ op: 'stop' }),
+  };
 }
+
+function nativeSound() {
+  const sound = media().sound;
+  const close = vi.fn(async () => {});
+  vi.stubGlobal(
+    'AudioContext',
+    class {
+      close = close;
+      async resume() {}
+      createMediaStreamDestination() {
+        return { stream: { getTracks: () => [sound], getAudioTracks: () => [sound] } };
+      }
+    },
+  );
+  return { sound, close };
+}
+
+it('allows congestion-driven resolution and frame-rate reduction without restarting capture', async () => {
+  const h = setup();
+  h.offer(false);
+  await flush();
+  expect(h.peers[0].video.setParameters).toHaveBeenCalledExactlyOnceWith({
+    degradationPreference: 'balanced', encodings: [{ maxFramerate: 30 }],
+  });
+  expect(h.peers).toHaveLength(1);
+  expect(h.reply).toHaveBeenCalledWith('offer', 'answer');
+  expect(h.nativeStop).not.toHaveBeenCalled();
+});
+
+it('clears locked audio and restores its existing sender after unlock without Chromium capture', async () => {
+  const h = setup();
+  const old = nativeSound();
+  h.offer(true, true, true);
+  await flush();
+  h.capture.mockClear();
+  h.reset();
+  expect(old.sound.stop).toHaveBeenCalledOnce();
+  const next = nativeSound();
+  h.reset(true);
+  await flush();
+  expect(h.peers[0].audio.sender.replaceTrack).toHaveBeenCalledWith(next.sound);
+  expect(h.video.getAudioTracks()).toEqual([next.sound]);
+  expect(h.capture).not.toHaveBeenCalled();
+  expect(h.peers[0].close).not.toHaveBeenCalled();
+  h.stop();
+  expect(next.sound.stop).toHaveBeenCalled();
+});
+
+it.each(['lock', 'stop'])('discards late native audio recovery after %s', async (end) => {
+  const h = setup();
+  nativeSound();
+  h.offer(true, true, true);
+  await flush();
+  const next = nativeSound();
+  let resolve!: (bytes: Uint8Array<ArrayBuffer>) => void;
+  h.api.nativeAudio.mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  h.reset(true);
+  await flush();
+  if (end === 'lock') h.reset();
+  else h.stop();
+  resolve(new Uint8Array(0));
+  await flush();
+  expect(next.sound.stop).toHaveBeenCalledOnce();
+  expect(h.peers[0].audio.sender.replaceTrack).not.toHaveBeenCalled();
+});
+
+it.each(['startup', 'connected'] as const)(
+  'isolates %s native audio failure from video and the lease',
+  async (phase) => {
+    const h = setup();
+    const audio = nativeSound();
+    if (phase === 'startup') h.api.nativeAudio.mockRejectedValueOnce(new Error('audio failed'));
+    h.offer(true, true, true);
+    await flush();
+    expect(h.reply).toHaveBeenCalledWith('offer', 'answer');
+    if (phase === 'connected') {
+      h.api.nativeAudio.mockRejectedValueOnce(new Error('audio failed'));
+      await vi.advanceTimersByTimeAsync(20);
+    }
+    expect(audio.sound.stop).toHaveBeenCalledOnce();
+    expect(audio.close).toHaveBeenCalledOnce();
+    expect(h.peers[0].close).not.toHaveBeenCalled();
+    expect(h.nativeStop).not.toHaveBeenCalled();
+    expect(h.video.video.stop).not.toHaveBeenCalled();
+    expect(h.api.stop).not.toHaveBeenCalled();
+  },
+);
+
+it.each(['resolve', 'reject'] as const)(
+  'fences late native audio startup %s after a replacement offer',
+  async (outcome) => {
+    const h = setup();
+    const old = nativeSound();
+    let resolve!: (bytes: Uint8Array<ArrayBuffer>) => void;
+    let reject!: (error: Error) => void;
+    h.api.nativeAudio.mockImplementationOnce(
+      () =>
+        new Promise((yes, no) => {
+          resolve = yes;
+          reject = no;
+        }),
+    );
+    h.offer(true, true, true);
+    await flush();
+    const current = nativeSound();
+    h.offer(true, true, true);
+    await flush();
+    if (outcome === 'resolve') resolve(new Uint8Array(0));
+    else reject(new Error('old audio failed'));
+    await flush();
+    expect(old.sound.stop).toHaveBeenCalledOnce();
+    expect(current.sound.stop).not.toHaveBeenCalled();
+    expect(h.peers).toHaveLength(1);
+    expect(h.peers[0].close).not.toHaveBeenCalled();
+    expect(h.api.stop).not.toHaveBeenCalled();
+    expect(h.reply).toHaveBeenCalledTimes(1);
+  },
+);
 
 it.each(['rejected', 'missing', 'without-overlay'])(
   'keeps video after %s audio and restores only its audio sender when permission becomes ready',

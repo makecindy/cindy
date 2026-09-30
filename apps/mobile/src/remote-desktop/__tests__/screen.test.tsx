@@ -1,3 +1,5 @@
+import { GeometryContext } from '@/platform/AdaptiveWindowContext';
+import type { WindowGeometry } from '@/platform/windowGeometry';
 // @vitest-environment jsdom
 import {
   act,
@@ -15,6 +17,8 @@ import { RemoteDesktopDisplaySettings } from "../RemoteDesktopDisplaySettings";
 import { AppState } from "react-native";
 import { goBackGuarded } from "@/utils/backGuard";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+
+vi.mock('expo-blur', async () => ({ BlurView: (await import('react-native')).View }));
 
 vi.mock("react-native-reanimated", async () => {
   const { View } = await import("react-native");
@@ -66,6 +70,7 @@ vi.mock("../usePictureInPicturePreference", () => ({
 
 const fixture = vi.hoisted(() => ({
   nativeMedia: false,
+  iosVersion: 26,
   pipEnabled: false,
   nativeReceive: vi.fn(async (_message: object) => {}),
   nativeInput: vi.fn(async (_message: object) => true),
@@ -96,6 +101,7 @@ const fixture = vi.hoisted(() => ({
   reload: vi.fn(),
   message: null as null | ((e: unknown) => void),
   size: { width: 390, height: 844 },
+  displaySize: null as { width: number; height: number } | null,
   canControl: true,
   systemAudio: false,
   playback: vi.fn(async (_enabled: boolean) => {}),
@@ -156,9 +162,11 @@ vi.mock("react-native", async () => {
         return { remove() {} };
       },
     },
-    Dimensions: { get: () => fixture.size },
+    Dimensions: { get: (kind: string) => kind === "screen" ? fixture.displaySize ?? fixture.size : fixture.size },
     useWindowDimensions: () => fixture.size,
     Platform: {
+      get Version() { return fixture.iosVersion; },
+      isPad: false,
       get OS() {
         return fixture.platform;
       },
@@ -246,6 +254,8 @@ vi.mock("lucide-react-native", () => ({
   createLucideIcon: () => () => null,
   Clipboard: () => null,
   ArrowLeft: () => null,
+  ArrowRight: () => null,
+  Menu: () => null,
   RotateCw: () => null,
   Volume2: () => null,
   VolumeX: () => null,
@@ -361,14 +371,19 @@ const visibleInputHint = () =>
 const button = (key: string) =>
   host.querySelector<HTMLButtonElement>(`[aria-label="remoteDesktop.${key}"]`)!;
 beforeEach(async () => {
-  await AsyncStorage.removeItem("cindy.mobile.remote-desktop.show-mouse-buttons.v1").catch(() => undefined);
-  await AsyncStorage.removeItem("cindy.mobile.remote-desktop.audio.v1").catch(() => undefined);
+  await AsyncStorage.removeItem(
+    "cindy.mobile.remote-desktop.show-mouse-buttons.v1",
+  ).catch(() => undefined);
+  await AsyncStorage.removeItem("cindy.mobile.remote-desktop.audio.v1").catch(
+    () => undefined,
+  );
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
   fixture.beginBackgroundTransition.mockImplementation(
     () => fixture.finishBackgroundTransition,
   );
   fixture.nativeMedia = false;
+  fixture.iosVersion = 26;
   fixture.pipEnabled = false;
   fixture.nativeReceive.mockReset().mockResolvedValue(undefined);
   fixture.nativeInput.mockReset().mockResolvedValue(true);
@@ -392,6 +407,7 @@ beforeEach(async () => {
   fixture.canControl = true;
   fixture.trickleIce = false;
   fixture.size = { width: 390, height: 844 };
+  fixture.displaySize = null;
   fixture.openLink.mockResolvedValue({});
   fixture.apiFetch
     .mockReset()
@@ -450,6 +466,41 @@ const connect = async () => {
 };
 
 describe("remote desktop controls", () => {
+  it.each([false, true])(
+    "allows the Wayland consent window while keeping the overall wait bounded (native=%s)",
+    async (native) => {
+      fixture.nativeMedia = native;
+      const original = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation(async (...args) => {
+        const result = await original(...args);
+        if (args[2][0].op === "capabilities")
+          return {
+            ...result,
+            displays: [{ ...display, id: "wayland-portal" }],
+          };
+        return result;
+      });
+      await act(async () => {
+        fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
+      });
+      if (native) {
+        const init = fixture.nativeReceive.mock.calls
+          .map(([message]) => message as Record<string, any>)
+          .find((message) => message.type === "init");
+        expect(init?.net.retryMs).toEqual([
+          ...Array(15).fill(8000),
+          1000,
+          3000,
+          8000,
+        ]);
+      }
+      await act(async () => vi.advanceTimersByTimeAsync(90_000));
+      expect(host.textContent).not.toContain("remoteDesktop.connectionTimeout");
+      await act(async () => vi.advanceTimersByTimeAsync(90_000));
+      expect(host.textContent).toContain("remoteDesktop.connectionTimeout");
+    },
+  );
+
   it("bounds repeated failures without renewing the deadline on each retry", async () => {
     fixture.openLink.mockRejectedValue(new Error("INVOKE_TIMEOUT"));
     await act(async () => {
@@ -510,6 +561,33 @@ describe("remote desktop controls", () => {
     expect(host.textContent).not.toContain("remoteDesktop.connectionTimeout");
     await act(async () => vi.advanceTimersByTimeAsync(1000));
     expect(host.textContent).toContain("remoteDesktop.connectionTimeout");
+  });
+
+  it("uses advertised Omarchy actions instead of the legacy desktop buttons", async () => {
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      return args[2][0].op === "capabilities"
+        ? {
+            ...result,
+            platform: "linux",
+            workspaceNavigation: true,
+            omarchyMenu: true,
+          }
+        : result;
+    });
+    await connect();
+    for (const action of ["workspaceLeft", "workspaceRight", "omarchyMenu"])
+      await act(async () => button(action).click());
+    expect(requests().filter((r) => r.op === "windowAction")).toEqual(
+      ["workspaceLeft", "workspaceRight", "omarchyMenu"].map((action) => ({
+        op: "windowAction",
+        action,
+        lease: "lease",
+      })),
+    );
+    expect(button("showDesktop")).toBeNull();
+    expect(button("allWindows")).toBeNull();
   });
 
   const nativePresentation = async (
@@ -1287,7 +1365,10 @@ describe("remote desktop controls", () => {
       expect.objectContaining({
         type: "init",
         epoch: "lease",
-        net: expect.any(Object),
+        net: expect.objectContaining({
+          iceConfigMs: 8_000,
+          iceConfigBridgeMs: 500,
+        }),
       }),
     );
     await act(async () =>
@@ -1308,6 +1389,10 @@ describe("remote desktop controls", () => {
         attemptId: "native-1",
         iceServers: expect.any(Array),
       }),
+    );
+    expect(fixture.apiFetch).toHaveBeenCalledWith(
+      "/api/device-link/ice-servers",
+      expect.objectContaining({ timeoutMs: 8_000 }),
     );
     act(() => {
       AppState.currentState = "background";
@@ -1488,7 +1573,7 @@ describe("remote desktop controls", () => {
       "/api/device-link/ice-servers",
       {
         baseUrl: "https://relay.example.test",
-        timeoutMs: 3000,
+        timeoutMs: 8000,
         cache: "no-store",
       },
     );
@@ -2051,7 +2136,6 @@ describe("remote desktop controls", () => {
   it.each([
     ["android", "darwin"],
     ["ios", "win32"],
-    ["ios", "linux"],
     ["ios", undefined],
   ])(
     "hides unsupported unlock settings for %s / %s while retaining exit locking",
@@ -2143,7 +2227,7 @@ describe("remote desktop controls", () => {
       act(() => button("keyboard").click());
       act(() => button("computerKeyboard").click());
       const style = fixture.views["remoteDesktop.keyPageViewport"].style;
-      expect(style).toEqual({ maxHeight: landscape ? 156 : 300 });
+      expect(style).toEqual({ flexShrink: 1, maxHeight: landscape ? 156 : 300 });
       act(() => button("functionKeys").click());
       expect(fixture.views["remoteDesktop.keyPageViewport"].style).toEqual(
         style,
@@ -2221,6 +2305,27 @@ describe("remote desktop controls", () => {
     expect(requests().filter((r) => r.op === "stop")).toEqual([
       { op: "stop", lease: "lease", lockScreen: true },
     ]);
+  });
+  it("prepares Linux unlock before capture without waiting for a first frame", async () => {
+    fixture.hostPlatform = "linux";
+    let finish!: () => void;
+    const prompt = vi.fn();
+    fixture.maybeUnlock.mockImplementationOnce(async (beforeAuthentication) => {
+      await beforeAuthentication!();
+      prompt();
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    });
+    await act(async () => {
+      fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
+    });
+    expect(prompt).toHaveBeenCalledOnce();
+    expect(requests().some((r) => r.op === "start")).toBe(false);
+    await act(async () => {
+      finish();
+    });
+    expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
   });
   it.each(["framePresented", "streaming"])(
     "prepares authentication alongside capture and waits for %s before Face ID",
@@ -2440,8 +2545,8 @@ describe("remote desktop controls", () => {
           .filter((m) => m.type === "mouseButtons")
           .at(-1),
       ).toMatchObject({
-        leftInset: islandRight ? 68 : 62,
-        rightInset: islandRight ? 62 : 68,
+        leftInset: 0,
+        rightInset: 0,
       });
     }
   });
@@ -2578,6 +2683,25 @@ describe("remote desktop controls", () => {
       host.querySelector('[data-testid="remoteDesktop.toolbarPosition"]'),
     ).not.toBe(firstToolbar);
   });
+  it("keeps Android portrait fit when the IME shrinks the window, but follows real rotation", async () => {
+    fixture.platform = "android";
+    fixture.displaySize = { width: 390, height: 640 };
+    fixture.size = { width: 390, height: 616 };
+    act(() => root.render(<RemoteDesktopScreen />));
+    await connect();
+    expect(sent().find(message => message.type === "init")).toMatchObject({ fillHeight: false });
+    const viewer = host.querySelector('[data-testid="remoteDesktop.viewer"]');
+    for (const height of [300, 616, 280]) {
+      fixture.size = { width: 390, height };
+      act(() => root.render(<RemoteDesktopScreen />));
+      expect(sent().filter(message => message.type === "viewport").at(-1)).toMatchObject({ fillHeight: false });
+      expect(host.querySelector('[data-testid="remoteDesktop.viewer"]')).toBe(viewer);
+    }
+    fixture.displaySize = { width: 640, height: 390 };
+    fixture.size = { width: 640, height: 200 };
+    act(() => root.render(<RemoteDesktopScreen />));
+    expect(sent().filter(message => message.type === "viewport").at(-1)).toMatchObject({ fillHeight: true });
+  });
   it("restores the portrait top inset while the native safe area still reports landscape", async () => {
     await connect();
     const topInset = () =>
@@ -2594,6 +2718,14 @@ describe("remote desktop controls", () => {
     fixture.size = { width: 402, height: 874 };
     act(() => root.render(<RemoteDesktopScreen />));
     expect(topInset()).toBe(59);
+  });
+  it('preserves a valid side safe area on a modern tall window', async () => {
+    fixture.iosVersion = 27;
+    fixture.size = { width: 600, height: 900 };
+    fixture.safe = { top: 0, bottom: 20, left: 60, right: 0 };
+    act(() => root.render(<RemoteDesktopScreen />));
+    await connect();
+    expect(sent().filter(message => message.type === 'mouseButtons').at(-1)?.topInset).toBe(0);
   });
   it("overlays landscape keyboards and includes their measured occlusion", async () => {
     fixture.size = { width: 844, height: 390 };
@@ -3018,6 +3150,53 @@ describe("remote desktop controls", () => {
     expect(fixture.invoke).toHaveBeenCalledTimes(1);
     expect(requests().some((r) => r.op === "start")).toBe(false);
   });
+  it("replaces the foreground lease after even a brief relay interruption", async () => {
+    await connect();
+    act(() =>
+      fixture.message!({
+        nativeEvent: { data: '{"type":"streaming","epoch":"lease"}' },
+      }),
+    );
+    fixture.status = "offline";
+    act(() => root.render(<RemoteDesktopScreen />));
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(1);
+    fixture.status = "online";
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    await act(async () => vi.advanceTimersByTimeAsync(9000));
+    expect(requests().filter((r) => r.op === "start")).toHaveLength(2);
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(1);
+  });
+  it("immediately releases foreground video when signaling goes offline", async () => {
+    await connect();
+    act(() =>
+      fixture.message!({
+        nativeEvent: { data: '{"type":"streaming","epoch":"lease"}' },
+      }),
+    );
+    fixture.status = "offline";
+    act(() => root.render(<RemoteDesktopScreen />));
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(1);
+  });
+  it.each(["DEVICE_OFFLINE", "ACCESS_REVOKED"])(
+    "discards the foreground lease on a definitive heartbeat error: %s",
+    async (code) => {
+      await connect();
+      act(() =>
+        fixture.message!({
+          nativeEvent: { data: '{"type":"streaming","epoch":"lease"}' },
+        }),
+      );
+      const original = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation((...args) =>
+        args[2][0].op === "heartbeat"
+          ? Promise.reject(Object.assign(new Error(code), { code }))
+          : original(...args),
+      );
+      await act(async () => vi.advanceTimersByTimeAsync(3100));
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(1);
+    },
+  );
   it("renews again after a lost heartbeat reply without replacing the live lease", async () => {
     await connect();
     const original = fixture.invoke.getMockImplementation()!;
@@ -3337,6 +3516,48 @@ describe("remote desktop controls", () => {
     expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
     expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
   });
+  it.each(["resolve", "reject", "native fallback"])("isolates renewed control from an old input %s", async (outcome) => {
+    if (outcome === "native fallback") fixture.nativeMedia = true;
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    let settleOld!: () => void;
+    let settleNew!: () => void;
+    if (outcome === "native fallback") {
+      fixture.nativeInput.mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+        settleOld = () => resolve(false);
+      })).mockResolvedValue(false);
+    }
+    fixture.invoke.mockImplementation((...args) => {
+      const req = args[2][0];
+      if (req.op === "input" && req.sequence === 1) return new Promise((resolve, reject) => {
+        settleOld = () => outcome === "reject" ? reject(new Error("DESKTOP_VIEW_ONLY")) : resolve({});
+      });
+      if (req.op === "input" && req.sequence === 2) return new Promise((resolve) => {
+        settleNew = () => resolve({});
+      });
+      return original(...args);
+    });
+    const input = (sequence: number) => fixture.message!({ nativeEvent: { data: JSON.stringify({
+      type: "input", epoch: "lease", sequence, events: [{ kind: "move", x: 0.5, y: 0.5 }],
+    }) } });
+    await act(async () => input(1));
+    await act(async () => fixture.message!({ nativeEvent: { data: JSON.stringify({ type: "inputOverflow", epoch: "lease" }) } }));
+    act(() => button("operations").click());
+    await act(async () => button("viewOnly").click());
+    await act(async () => button("viewOnly").click());
+    await act(async () => input(2));
+    expect(requests().filter(r => r.op === "input").map(r => r.sequence)).toContain(2);
+    await act(async () => settleOld());
+    expect(sent().filter(m => m.type === "control").at(-1)).toEqual({ type: "control", enabled: true });
+    expect(sent()).not.toContainEqual({ type: "ack", epoch: "lease", sequence: 1 });
+    await act(async () => input(3));
+    expect(requests().filter(r => r.op === "input").map(r => r.sequence)).not.toContain(3);
+    if (outcome === "native fallback") expect(requests().filter(r => r.op === "input").map(r => r.sequence)).not.toContain(1);
+    await act(async () => settleNew());
+    await act(async () => input(4));
+    expect(requests().filter(r => r.op === "input").map(r => r.sequence)).toContain(4);
+    expect(requests().filter(r => r.op === "stop")).toHaveLength(0);
+  });
   it("retries a timed-out overflow release when the host still reports control", async () => {
     await connect();
     const original = fixture.invoke.getMockImplementation()!;
@@ -3505,7 +3726,9 @@ describe("remote desktop controls", () => {
     await connect();
     act(() => button("operations").click());
     expect(button("rightClick")).toBeNull();
-    expect(button("showMouseButtons").getAttribute("aria-checked")).toBe("false");
+    expect(button("showMouseButtons").getAttribute("aria-checked")).toBe(
+      "false",
+    );
     await act(async () => button("showMouseButtons").click());
     expect(button("showMouseButtons").getAttribute("aria-checked")).toBe(
       "true",
@@ -3599,6 +3822,66 @@ describe("remote desktop controls", () => {
       displayId: "display",
       takeover: true,
     });
+  });
+  it('resends the upper-pane bounds whenever a folded viewer becomes ready', async () => {
+    fixture.size = { width: 900, height: 1400 };
+    const geometry: WindowGeometry = {
+      ...fixture.size, insets: { top: 80, left: 0, right: 0, bottom: 20 },
+      regularWidth: true, regularHeight: true, barEdge: 'none', reservedRegionsSupported: true,
+      regions: [{ kind: 'division', x: 0, y: 680, width: 900, height: 30 }],
+    };
+    act(() => root.render(<GeometryContext.Provider value={geometry}><RemoteDesktopScreen /></GeometryContext.Provider>));
+    await connect();
+    fixture.post.mockClear();
+    // On reload the WebView loses all JS state even though React geometry and
+    // the active lease have not changed. Do not rely on a lease update to resend.
+    await act(async () => fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } }));
+    expect(sent()).toContainEqual(expect.objectContaining({
+      type: 'mouseButtons', fitToInsets: true, topInset: 80, bottomInset: 720,
+    }));
+  });
+  it('folding and unfolding preserve the viewer and control lease', async () => {
+    const geometry: WindowGeometry = {
+      width: 900, height: 700, insets: { top: 0, left: 0, right: 60, bottom: 20 },
+      regularWidth: true, regularHeight: true, barEdge: 'right', regions: [], reservedRegionsSupported: true,
+    };
+    fixture.size = { width: 900, height: 700 };
+    const renderGeometry = (g: WindowGeometry) => act(() => root.render(
+      <GeometryContext.Provider value={g}><RemoteDesktopScreen /></GeometryContext.Provider>,
+    ));
+    renderGeometry(geometry);
+    await connect();
+    const rail = Object.assign({}, ...fixture.views['remoteDesktop.toolbarPosition'].style.flat(Infinity).filter(Boolean));
+    expect(rail).toMatchObject({ right: 0, left: undefined, width: 72, paddingRight: 0, alignItems: 'center' });
+    const backStyle = Object.assign({}, ...fixture.views['remoteDesktop.backPosition'].style.flat(Infinity).filter(Boolean));
+    expect(backStyle).toMatchObject({ top: 120, left: 842, width: 44 });
+    act(() => fixture.views['remoteDesktop.toolbarPosition'].onLayout({
+      nativeEvent: { layout: { width: 72, height: 300 } },
+    }));
+    expect(sent().filter(m => m.type === 'mouseButtons').at(-1)).toMatchObject({ rightInset: 0 });
+    // Rotating to the opposite landscape must not send custom chrome to the left.
+    renderGeometry({ ...geometry, barEdge: 'left', insets: { ...geometry.insets, left: 60, right: 0 } });
+    const rotatedRail = Object.assign({}, ...fixture.views['remoteDesktop.toolbarPosition'].style.flat(Infinity).filter(Boolean));
+    const rotatedBack = Object.assign({}, ...fixture.views['remoteDesktop.backPosition'].style.flat(Infinity).filter(Boolean));
+    expect(rotatedRail).toMatchObject({ right: 0, left: undefined, width: 60, alignItems: 'center' });
+    expect(rotatedBack).toMatchObject({ left: 848, width: 44 });
+    expect(sent().filter(m => m.type === 'mouseButtons').at(-1)).toMatchObject({ rightInset: 0 });
+    renderGeometry({ ...geometry, barEdge: 'none' });
+    const noPreferredEdge = Object.assign({}, ...fixture.views['remoteDesktop.backPosition'].style.flat(Infinity).filter(Boolean));
+    expect(noPreferredEdge).toMatchObject({ left: 842, width: 44 });
+    const viewerNode = host.querySelector('[data-testid="remoteDesktop.viewer"]');
+    const starts = requests().filter(r => r.op === 'start').length;
+    const stops = requests().filter(r => r.op === 'stop').length;
+    renderGeometry({ ...geometry, regions: [{ kind: 'division', x: 0, y: 300, width: 900, height: 30 }] });
+    expect(sent().filter(m => m.type === 'mouseButtons').at(-1)).toMatchObject({
+      fitToInsets: true, topInset: 0, bottomInset: 400,
+    });
+    expect(host.querySelector('[data-testid="remoteDesktop.viewer"]')).toBe(viewerNode);
+    renderGeometry(geometry);
+    expect(sent().filter(m => m.type === 'mouseButtons').at(-1)).toMatchObject({ fitToInsets: false });
+    expect(host.querySelector('[data-testid="remoteDesktop.viewer"]')).toBe(viewerNode);
+    expect(requests().filter(r => r.op === 'start')).toHaveLength(starts);
+    expect(requests().filter(r => r.op === 'stop')).toHaveLength(stops);
   });
   it("rotation preserves the viewer and control lease", async () => {
     await connect();

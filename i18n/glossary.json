@@ -6,24 +6,59 @@
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
     {
+      "id": "shared-session",
+      "status": "proposed",
+      "en": "Shared Session",
+      "translations": { "zh-CN": "共享任务", "zh-TW": "共享任務", "ja": "共有セッション", "ko": "공유 세션" },
+      "note": "远程连接的多人版本，按单个任务共享完整上下文和同一 Agent，不作为独立会议产品。"
+    },
+    {
+      "id": "chat-workspace",
+      "status": "proposed",
+      "en": "Chat workspace",
+      "translations": {
+        "zh-CN": "对话工作区",
+        "zh-TW": "對話工作區",
+        "ja": "チャットワークスペース",
+        "ko": "대화 작업 공간"
+      },
+      "checkCase": false,
+      "note": "用户于 2026-09-18 明确指定的存储设置名称，表示未绑定项目的新任务工作目录的分配位置。单个任务的 working directory 仍称工作目录，不改其术语。"
+    },
+    {
       "id": "cindy-make-history",
       "status": "proposed",
       "en": "Make history",
-      "translations": { "zh-CN": "制作历史", "zh-TW": "製作歷史", "ja": "制作履歴", "ko": "제작 기록" },
+      "translations": {
+        "zh-CN": "制作历史",
+        "zh-TW": "製作歷史",
+        "ja": "制作履歴",
+        "ko": "제작 기록"
+      },
       "note": "Cindy Make 设置中保留全部制作、修改轮次与合入记录的列表；结束制作及清理工作目录后仍可回看。"
     },
     {
       "id": "cindy-make-undo-integration",
       "status": "proposed",
-      "en": "Undo integration",
-      "translations": { "zh-CN": "撤销合入", "zh-TW": "撤銷合入", "ja": "取り込みを取り消す", "ko": "반영 취소" },
-      "note": "撤销单次制作已合入个人源码的全部改动，保留其他制作与已有应用成品；通过新的反向提交实现。"
+      "en": "Remove from personal version",
+      "translations": {
+        "zh-CN": "从个人版移除",
+        "zh-TW": "從個人版移除",
+        "ja": "個人版から削除",
+        "ko": "개인 버전에서 제거"
+      },
+      "note": "从个人版移除单次制作已经加入的全部改动，保留其他制作与已有应用成品；底层通过新的反向提交实现，不改写 Git 历史。"
     },
     {
       "id": "cindy-make-reapply-integration",
       "status": "proposed",
-      "en": "Reapply integration",
-      "translations": { "zh-CN": "重新合入", "zh-TW": "重新合入", "ja": "再度取り込む", "ko": "다시 반영" },
+      "en": "Add back to personal version",
+      "translations": {
+        "zh-CN": "重新加入个人版",
+        "zh-TW": "重新加入個人版",
+        "ja": "個人版に再追加",
+        "ko": "개인 버전에 다시 추가"
+      },
       "note": "重新应用之前明确撤销的制作改动，区别于把尚未合入的新修改首次加入个人源码。"
     },
     {
@@ -42,15 +77,51 @@
       "id": "cindy-original-version",
       "status": "proposed",
       "en": "Original Version",
-      "translations": { "zh-CN": "原版", "zh-TW": "原版", "ja": "オリジナル版", "ko": "기본 버전" },
+      "translations": {
+        "zh-CN": "原版",
+        "zh-TW": "原版",
+        "ja": "オリジナル版",
+        "ko": "기본 버전"
+      },
       "note": "Cindy Make 中与个人版对应的来源应用。用户明确要求 Dev 和正式安装版属于同一个类型；Dev 只影响底层启动方式，不作为第三类版本。"
     },
     {
       "id": "cindy-personal-version",
       "status": "proposed",
       "en": "Personal Version",
-      "translations": { "zh-CN": "个人版", "zh-TW": "個人版", "ja": "個人版", "ko": "개인 버전" },
+      "translations": {
+        "zh-CN": "个人版",
+        "zh-TW": "個人版",
+        "ja": "個人版",
+        "ko": "개인 버전"
+      },
       "note": "Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一份日常数据，与使用独立数据的隔离测试版区分。"
+    },
+    {
+      "id": "task-tag",
+      "status": "proposed",
+      "en": "Tag",
+      "translations": {
+        "zh-CN": "标签",
+        "zh-TW": "標籤",
+        "ja": "タグ",
+        "ko": "태그"
+      },
+      "checkCase": false,
+      "note": "任务列表的 Finder 式颜色标签；仅标识任务，不改变运行状态。用户已确认显示为重叠色球，整合现有任务菜单，当前不增加筛选入口。"
+    },
+    {
+      "id": "remote-desktop-display-sound",
+      "status": "proposed",
+      "en": "Display & Sound",
+      "translations": {
+        "zh-CN": "影音",
+        "zh-TW": "影音",
+        "ja": "画面とサウンド",
+        "ko": "화면 및 소리"
+      },
+      "checkCase": false,
+      "note": "Remote desktop panel containing picture and audio settings; icon-only toolbar trigger."
     },
     {
       "id": "local-session-scope",
@@ -1840,6 +1911,45 @@
       "note": "Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自有记忆与技能、模型候选链，可以通过有界私信互相沟通，也可以启动独立 Cindy 任务。产品定位参照「AI teammates」，故取人称名词而非机器名词。英文用法分两层：功能名与复数用 Teammates（侧栏标题），句中单数用小写 teammate（`this teammate`、`Archive teammate`）——故 checkCase 为 false。**与 IM 平台机器人严格区分**：Telegram Bot / Discord Bot / 飞书 bot / 企业微信机器人 / @BotFather / bot token 指的是消息平台上的 bot 账号，仍写作 Bot / 机器人，不改成本词；判据是「这个词指的是 Cindy 里那个持久助手实体」才用本词。覆盖 desktop 的 bots.* 命名空间、sidebar.tabs.bots、newChat.atMention.bot 与 mobile 的 devices.json bots.*。先登记为 proposed：改名刚落地，等 UI 走查与产品评审后再定 decided，届时再决定是否把「Bot」登记为各语言的 forbidden 译法（现在不能登记——存量 IM 平台 bot 文案会被大面积误伤）。"
     },
     {
+      "id": "group-chat",
+      "status": "proposed",
+      "en": "Group chat",
+      "translations": {
+        "zh-CN": "群聊",
+        "zh-TW": "群聊",
+        "ja": "グループチャット",
+        "ko": "그룹 채팅"
+      },
+      "checkCase": false,
+      "note": "伙伴群聊：用户把 2–6 位伙伴放进一个群，用户说一句，伙伴们按规则接话（docs/product-rules/bot-group-chat.md）。群是独立对象，不是任务，也不是某位伙伴的主任务；群里的单条往来仍叫「消息」（见 task-and-conversation-naming）。英文分两层：侧栏标题与按钮用 Title Case（Group Chats、New Group Chat），句中用小写 group chat——故 checkCase 为 false。zh-CN 短句里可简称「群」（群名称、群设置）。与企业微信「群机器人」（wecom-group-bot）等 IM 平台的群概念无关。先登记为 proposed：第一阶段刚落地，等 UI 走查后再定。"
+    },
+    {
+      "id": "work-split",
+      "status": "proposed",
+      "en": "Work split",
+      "translations": {
+        "zh-CN": "分工",
+        "zh-TW": "分工",
+        "ja": "役割分担",
+        "ko": "역할 분담"
+      },
+      "checkCase": false,
+      "note": "伙伴群聊第二阶段：负责人把一件事分成几步派给群里的伙伴，用户点「开始」后伙伴一位接一位做，每做完一步停下等用户点「继续」（docs/product-rules/bot-group-chat.md §7）。英文动作说法 split the work（输入框「+」菜单「安排分工」= Split the Work），名词 work split；句中小写，故 checkCase 为 false。**不得**译作「协同 / 協同 / Collaboration」（Orca 多 Agent 协同的功能名，见 collaboration 条目）、「协作」（共享任务）或「接力」。分工里的每一步叫「一步 / step」，不叫「任务」（见 task-and-conversation-naming）；负责人出的方案叫「安排 / plan」。先登记为 proposed：第二阶段刚落地，等 UI 走查后再定。"
+    },
+    {
+      "id": "organizer",
+      "status": "proposed",
+      "en": "Organizer",
+      "translations": {
+        "zh-CN": "负责人",
+        "zh-TW": "負責人",
+        "ja": "まとめ役",
+        "ko": "담당자"
+      },
+      "checkCase": false,
+      "note": "伙伴群聊里负责出安排、改安排的那位成员（docs/product-rules/bot-group-chat.md §7.1）：群设置里指定，未指定或已不可用时由成员顺序里第一位可用的伙伴担任。英文**不得**写作 Lead——Lead 是 Orca 协同的角色名（见 lead 条目）。标签与按钮用 Title Case（Organizer、Make Organizer），句中用小写 organizer，故 checkCase 为 false。先登记为 proposed：第二阶段刚落地，等 UI 走查后再定。"
+    },
+    {
       "id": "upload-code",
       "status": "proposed",
       "en": "Upload code",
@@ -2157,6 +2267,18 @@
       },
       "checkCase": false,
       "note": "远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。"
+    },
+    {
+      "id": "invitation-code",
+      "status": "proposed",
+      "en": "Invitation Code",
+      "translations": {
+        "zh-CN": "邀请码",
+        "zh-TW": "邀請碼",
+        "ja": "招待コード",
+        "ko": "초대 코드"
+      },
+      "note": "共享任务加入表单中由房主提供、访客输入的代码；用户要求明确称为邀请码，避免被理解为任意邀请文本。"
     }
   ]
 }

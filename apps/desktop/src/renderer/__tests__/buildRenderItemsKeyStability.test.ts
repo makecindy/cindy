@@ -162,7 +162,7 @@ describe('Bot 流式正文呈现', () => {
     expect(visibleProse()).toEqual(['first', 'second']);
   });
 
-  it('运行中从首字收拢未封口正文与工具，保留可展开过程', () => {
+  it('运行中从首字隐藏未封口正文与工具，不保留过程入口', () => {
     const messages = [
       mkUser('u1'),
       mkTool('t1', 'Bash'),
@@ -175,7 +175,7 @@ describe('Bot 流式正文呈现', () => {
     expect(
       visible.flatMap((item) => (item.type === 'message' ? [item.message.clientId] : [])),
     ).toEqual(['u1']);
-    expect(visible.some((item) => item.type === 'work_group')).toBe(true);
+    expect(visible.some((item) => item.type === 'work_group')).toBe(false);
   });
 
   // Contracts: claude-code/translator assistant text blocks; pi/translator
@@ -223,7 +223,7 @@ describe('Bot 流式正文呈现', () => {
         agentMeta: { turnCompleted: true },
       });
       expect(visibleProse()).toEqual(['这是最终答复']);
-      expect(project().filter((item) => item.type === 'work_group')).toHaveLength(1);
+      expect(project().filter((item) => item.type === 'work_group')).toHaveLength(0);
       expect(state.messages.filter((message) => message.role === 'assistant').map((message) => message.content))
         .toEqual(['我查一下：', '已找到线索，继续核实', '这是最终答复']);
     },

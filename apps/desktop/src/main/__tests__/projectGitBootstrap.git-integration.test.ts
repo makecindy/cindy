@@ -129,6 +129,20 @@ describe('projectGitBootstrap', () => {
     expect(await isGitRepo(dir)).toBe(false);
   });
 
+  it('does not initialize an empty project in existing-Git-only mode', async () => {
+    const dir = await makeTempDir();
+
+    const result = await ensureProjectGitInitialized({
+      workingDir: dir,
+      workspaceKind: 'local',
+      autoSnapshotEnabled: true,
+      autoInitProjectGit: false,
+    });
+
+    expect(result).toMatchObject({ status: 'skipped', reason: 'git-safety-disabled' });
+    expect(await isGitRepo(dir)).toBe(false);
+  });
+
   it('initializes an empty local project and creates an empty XDT savepoint commit', async () => {
     const dir = await makeTempDir();
 

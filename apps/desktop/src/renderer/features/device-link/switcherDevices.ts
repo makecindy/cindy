@@ -12,6 +12,7 @@
  */
 
 import type { RemoteDeviceSummary } from './remoteProjectsStore';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { compareDevicesByName, isMobilePlatform } from '@cindy/maker-shared/device-list';
 
 export type DeviceConnectionStatus = 'connected' | 'connecting' | 'rejected';
@@ -73,6 +74,8 @@ export function buildSwitcherDevices({
 
   const devices: SwitcherDevice[] = [];
   for (const deviceId of candidates) {
+    // Shared tasks belong to task navigation, never the device selector.
+    if (isSharedTaskPeer(deviceId)) continue;
     const cachedDevice = cached.get(deviceId);
     let status: DeviceConnectionStatus = 'connecting';
     if (revoked.has(deviceId)) {

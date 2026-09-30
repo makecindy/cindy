@@ -13,7 +13,7 @@ Pi 运行时分发共用它。更新 Pi 后按整张表核对，不为单一扩�
 | 能力 | Cindy 行为 |
 | --- | --- |
 | `select` / `confirm` / `input` / `editor` | 保留现有选择卡适配和响应；带有限 `timeout` 的请求取消并回传，避免扩展等待，不输出兼容警告 |
-| `notify` | 保留扩展实际通知、命令结果和错误输出 |
+| `notify` | 保留扩展实际通知、命令结果和错误输出；作为独立完整消息落库并广播，不进入模型正文的流式缓冲，也不占用回复终态与费用归属 |
 | `setStatus` / `setWidget` / `setTitle` | RPC 单向展示请求，Cindy 静默忽略，不回传、不写聊天正文 |
 | `setEditorText` / `pasteToEditor` | 上游发出 `set_editor_text`，Cindy 静默忽略，不改写输入框 |
 | `setWorkingMessage` / `setWorkingVisible` / `setWorkingIndicator` / `setHiddenThinkingLabel` | Pi RPC 已不执行；保留原生行为 |
@@ -28,6 +28,10 @@ Pi 运行时分发共用它。更新 Pi 后按整张表核对，不为单一扩�
 Cindy 不修改第三方扩展源码、不将 `ctx.hasUI` 改成 false、不替换 Pi 原生空值或失败结果，
 不因兼容分析停用整个扩展。未知 UI 请求同样不进入聊天正文；私有权限、包管理、子代理
 控制请求仍先经现有处理链，不能被 UI 过滤吞掉。工具执行、命令、事件及消息能力继续交给 Pi。
+
+扩展通知使用 `standaloneText` 标记，经已有持久消息通道投递；不能仅将普通流式
+`text` 改成 `isFinal`，否则通知仍可能接入或冲刷正在生成的回复。回归需覆盖通知在
+用户输入前、回复生成中与结束后到达，并检查消息时间、正文、费用归属及历史重载。
 
 设置页仍展示按源码发现的 API 限制。显式数字 `timeout` 的对话框列入交互限制；静态扫描
 不能保证发现动态生成的参数或调用，不将“没有发现”视为完整兼容证明。

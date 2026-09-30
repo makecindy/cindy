@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { afterStripAttempt, decideCindyCompression } from '../cindyContextCompression';
+import { decideCindyCompression } from '../cindyContextCompression';
 
 describe('decideCindyCompression', () => {
   it('does nothing remotely', () => {
@@ -9,10 +9,10 @@ describe('decideCindyCompression', () => {
     ).toBe('none');
   });
 
-  it('strips when the byte budget is violated, even if tokens are also over', () => {
+  it.each(['violated', 'unknown', 'ok'] as const)('rebuilds oversized image history with token budget %s', (tokens) => {
     expect(
-      decideCindyCompression({ local: true, bytes: 'violated', tokens: 'violated' }),
-    ).toBe('strip');
+      decideCindyCompression({ local: true, bytes: 'violated', tokens }),
+    ).toBe('rebuild');
   });
 
   it('rebuilds when only the token budget is violated', () => {
@@ -38,30 +38,5 @@ describe('decideCindyCompression', () => {
     expect(
       decideCindyCompression({ local: true, bytes: 'unknown', tokens: 'violated' }),
     ).toBe('rebuild');
-  });
-});
-
-describe('afterStripAttempt', () => {
-  it('finishes after a successful strip', () => {
-    expect(afterStripAttempt('recovered', { local: true, tokens: 'violated' })).toBe('done');
-  });
-
-  it('rebuilds when strip fails', () => {
-    expect(afterStripAttempt('failed', { local: true, tokens: 'ok' })).toBe('rebuild');
-  });
-
-  it('re-evaluates after a healthy measurement, so token overflow still rebuilds', () => {
-    expect(afterStripAttempt('not-needed', { local: true, tokens: 'violated' })).toBe(
-      'rebuild',
-    );
-    expect(afterStripAttempt('not-needed', { local: true, tokens: 'ok' })).toBe('none');
-  });
-
-  it('does not rebuild when the turn is still running', () => {
-    expect(afterStripAttempt('busy', { local: true, tokens: 'violated' })).toBe('none');
-  });
-
-  it('does not rebuild when the owner snapshot is stale', () => {
-    expect(afterStripAttempt('stale', { local: true, tokens: 'violated' })).toBe('none');
   });
 });

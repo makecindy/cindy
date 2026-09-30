@@ -2120,6 +2120,82 @@ const GENERATED_DEFAULTS = {
   "slider-thumb-shadow": {
     "light": "0 1px 3px rgb(0 0 0 / 0.18), 0 2px 6px rgb(0 0 0 / 0.08)",
     "dark": "0 1px 3px rgb(0 0 0 / 0.3), 0 2px 6px rgb(0 0 0 / 0.16)"
+  },
+  "segmented-track": {
+    "light": "rgba(0, 0, 0, 0.06)",
+    "dark": "rgba(0, 0, 0, 0.25)"
+  },
+  "segmented-selected-shadow": {
+    "light": "0 1px 2px rgba(0, 0, 0, 0.1), 0 3px 8px rgba(0, 0, 0, 0.06)",
+    "dark": "0 1px 2px rgba(0, 0, 0, 0.4), 0 3px 8px rgba(0, 0, 0, 0.24)"
+  },
+  "segmented-selected-bg": {
+    "light": "var(--surface-elevated)",
+    "dark": "var(--surface-elevated)"
+  },
+  "segmented-selected-border": {
+    "light": "var(--border-default)",
+    "dark": "var(--border-default)"
+  },
+  "segmented-option-fg": {
+    "light": "var(--text-secondary)",
+    "dark": "var(--text-secondary)"
+  },
+  "segmented-hover-bg": {
+    "light": "var(--surface-hover)",
+    "dark": "var(--surface-hover)"
+  },
+  "task-tag-red": {
+    "light": "#ed615f",
+    "dark": "#ed615f"
+  },
+  "task-tag-orange": {
+    "light": "#eea34e",
+    "dark": "#eea34e"
+  },
+  "task-tag-yellow": {
+    "light": "#e5c744",
+    "dark": "#e5c744"
+  },
+  "task-tag-green": {
+    "light": "#70b568",
+    "dark": "#70b568"
+  },
+  "task-tag-blue": {
+    "light": "#609bd4",
+    "dark": "#609bd4"
+  },
+  "task-tag-purple": {
+    "light": "#ab7bc6",
+    "dark": "#ab7bc6"
+  },
+  "task-tag-gray": {
+    "light": "#969696",
+    "dark": "#969696"
+  },
+  "task-tag-pink": {
+    "light": "#df83b0",
+    "dark": "#e79fc1"
+  },
+  "task-tag-coral": {
+    "light": "#de8970",
+    "dark": "#e6a08c"
+  },
+  "task-tag-teal": {
+    "light": "#53a89d",
+    "dark": "#75bfb4"
+  },
+  "task-tag-indigo": {
+    "light": "#7c83cf",
+    "dark": "#999fdf"
+  },
+  "task-tag-white": {
+    "light": "#ffffff",
+    "dark": "#ffffff"
+  },
+  "task-tag-white-check": {
+    "light": "#525252",
+    "dark": "#525252"
   }
 } as const;
 
@@ -3069,3 +3145,68 @@ registerColor('slider-fill', GENERATED_DEFAULTS["slider-fill"], '共享 Slider �
 registerColor('slider-thumb', GENERATED_DEFAULTS["slider-thumb"], '共享 Slider 组件颜色');
 
 registerColor('slider-thumb-shadow', GENERATED_DEFAULTS["slider-thumb-shadow"], 'Slider 滑块阴影:用户批准 2026-09-17');
+
+// Desktop Segmented v8, owner-approved 2026-09-18. Component-local roles.
+registerColor('segmented-track', GENERATED_DEFAULTS["segmented-track"], 'Desktop segmented control: adaptive black-alpha track');
+registerColor('segmented-selected-bg', GENERATED_DEFAULTS["segmented-selected-bg"], 'Desktop segmented control: raised selected pill');
+registerColor('segmented-selected-border', GENERATED_DEFAULTS["segmented-selected-border"], 'Desktop segmented control: low-contrast selected border');
+registerColor('segmented-selected-shadow', GENERATED_DEFAULTS["segmented-selected-shadow"], 'Desktop segmented control: selected pill elevation');
+registerColor('segmented-option-fg', GENERATED_DEFAULTS["segmented-option-fg"], 'Desktop segmented control: unselected label');
+registerColor('segmented-hover-bg', GENERATED_DEFAULTS["segmented-hover-bg"], 'Desktop segmented control: hover plate');
+
+registerColor(
+  'task-tag-red',
+  GENERATED_DEFAULTS["task-tag-red"],
+  'Task label identity color; independent of runtime status',
+);
+
+registerColor(
+  'task-tag-orange',
+  GENERATED_DEFAULTS["task-tag-orange"],
+  'Task label identity color; independent of runtime status',
+);
+
+registerColor(
+  'task-tag-yellow',
+  GENERATED_DEFAULTS["task-tag-yellow"],
+  'Task label identity color; independent of runtime status',
+);
+
+registerColor(
+  'task-tag-green',
+  GENERATED_DEFAULTS["task-tag-green"],
+  'Task label identity color; independent of runtime status',
+);
+
+registerColor(
+  'task-tag-blue',
+  GENERATED_DEFAULTS["task-tag-blue"],
+  'Task label identity color; independent of runtime status',
+);
+
+registerColor(
+  'task-tag-purple',
+  GENERATED_DEFAULTS["task-tag-purple"],
+  'Task label identity color; independent of runtime status',
+);
+
+registerColor(
+  'task-tag-gray',
+  GENERATED_DEFAULTS["task-tag-gray"],
+  'Task label identity color; independent of runtime status',
+);
+
+registerColor('task-tag-pink', GENERATED_DEFAULTS["task-tag-pink"], 'Task label identity color');
+registerColor('task-tag-coral', GENERATED_DEFAULTS["task-tag-coral"], 'Task label identity color');
+registerColor('task-tag-teal', GENERATED_DEFAULTS["task-tag-teal"], 'Task label identity color');
+registerColor(
+  'task-tag-indigo',
+  GENERATED_DEFAULTS["task-tag-indigo"],
+  'Task label identity color',
+);
+registerColor('task-tag-white', GENERATED_DEFAULTS["task-tag-white"], 'Task label identity color');
+registerColor(
+  'task-tag-white-check',
+  GENERATED_DEFAULTS["task-tag-white-check"],
+  'Task label identity color',
+);

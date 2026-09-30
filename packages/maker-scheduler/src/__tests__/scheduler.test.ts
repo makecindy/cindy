@@ -515,11 +515,15 @@ describe('Scheduler', () => {
     });
 
     await expect(h.scheduler.update(script.id, { useWorktree: true })).rejects.toThrow(
-      'does not support worktrees or bound sessions',
+      'does not support worktrees or persistent sessions',
     );
     await expect(h.scheduler.update(script.id, { silentWhenIdle: true })).rejects.toThrow(
       'does not support silentWhenIdle',
     );
+
+    const bound = await h.scheduler.update(script.id, { targetSessionId: 'owner-session' });
+    expect(bound.targetSessionId).toBe('owner-session');
+    expect(bound.executionMode).toBe('script');
 
     // 堵 update 逃逸:script 任务(prompt 合法为空)只切 executionMode='agent'
     // 不带 prompt → 会落库空提示词的 agent 任务,必须拒;带 prompt 一起切才放行。
@@ -1830,6 +1834,20 @@ describe('Scheduler', () => {
     expect(h.scheduler.isRunSilenced(runId)).toBe(false);
   });
 
+  it('keeps unclassified reminders audible and preserves explicit quiet checks and script mode', async () => {
+    const reminder = await h.scheduler.create({ ...baseInput });
+    expect(reminder.silentWhenIdle).toBe(false);
+    const { runId } = await h.scheduler.runNow(reminder.id);
+    expect((await h.scheduler.listRuns(reminder.id)).find((run) => run.id === runId)?.readAt).toBeUndefined();
+    expect((await h.scheduler.create({ ...baseInput, preRunHook: { command: 'node check.mjs' } })).silentWhenIdle).toBe(false);
+    const check = await h.scheduler.create({ ...baseInput, silentWhenIdle: true });
+    expect(check.silentWhenIdle).toBe(true);
+    expect((await h.scheduler.create({ ...baseInput, executionMode: 'script', workspaceKind: 'project', workingDir: '/repo', scriptConfig: { command: 'node check.mjs', capabilities: [] } })).silentWhenIdle).toBe(false);
+    const scriptPatch = { executionMode: 'script' as const, workspaceKind: 'project' as const, workingDir: '/repo', scriptConfig: { command: 'node check.mjs', capabilities: [] } };
+    await expect(h.scheduler.update(check.id, { ...scriptPatch, silentWhenIdle: true })).rejects.toThrow('does not support silentWhenIdle');
+    expect((await h.scheduler.update(check.id, scriptPatch)).silentWhenIdle).toBe(false);
+  });
+
   it('silentWhenIdle run is silent by default', async () => {
     h = makeHarness({
       runnerImpl: async (_s, ctx) => {
@@ -1914,7 +1932,7 @@ describe('Scheduler', () => {
           gates.push(() => resolve({ sessionId: `sess-${ctx.runId}` }));
         }),
     });
-    const sch = await h.scheduler.create({ ...baseInput });
+    const sch = await h.scheduler.create({ ...baseInput, silentWhenIdle: false });
     const p1 = h.scheduler.runNow(sch.id);
     const p2 = h.scheduler.runNow(sch.id);
     await vi.waitFor(() => expect(gates).toHaveLength(2));
@@ -1940,7 +1958,7 @@ describe('Scheduler', () => {
         return { sessionId: 'sess-no-active-turn' };
       },
     });
-    const sch = await h.scheduler.create({ ...baseInput });
+    const sch = await h.scheduler.create({ ...baseInput, silentWhenIdle: false });
     const events: unknown[] = [];
     h.scheduler.on('silenced', (e) => events.push(e));
     const result = await h.scheduler.runNow(sch.id);
@@ -2364,6 +2382,40 @@ describe('Scheduler preRunHook results', () => {
     const after = await h.storage.get(sch.id);
     expect(after?.status).toBe('expired');
     expect(after?.nextFireAt).toBeUndefined();
+  });
+
+  it.each([
+    { recurring: true, manual: false, intervalMs: undefined },
+    { recurring: true, manual: false, intervalMs: 600_000 },
+    { recurring: false, manual: false, intervalMs: undefined },
+    { recurring: false, manual: true, intervalMs: undefined },
+  ])('settles an undispatched Stop without losing normal scheduling: %j', async (timing) => {
+    const h = makeHarness({
+      runnerImpl: async () => ({
+        sessionId: 'stopped-session',
+        skipped: true,
+        resultText: 'Scheduled turn stopped before vendor dispatch',
+      }),
+    });
+    const sch = await h.scheduler.create({ ...baseInput, ...timing });
+    const firedAt = sch.nextFireAt ?? h.clock.now();
+    h.clock.setTo(firedAt);
+    if (timing.manual) await h.scheduler.runNow(sch.id);
+    else await h.scheduler.tick();
+    const runs = await h.scheduler.listRuns(sch.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ status: 'skipped', sessionId: 'stopped-session', readAt: firedAt });
+    const after = await h.storage.get(sch.id);
+    if (timing.recurring) {
+      expect(after?.status).toBe('active');
+      expect(after?.nextFireAt).toBe(firedAt + (timing.intervalMs ?? 60_000));
+      h.clock.setTo(after!.nextFireAt!);
+      await h.scheduler.tick();
+      expect(await h.scheduler.listRuns(sch.id)).toHaveLength(2);
+    } else {
+      expect(after?.nextFireAt).toBeUndefined();
+      if (!timing.manual) expect(after?.status).toBe('expired');
+    }
   });
 
   it('create() 透传 preRunHook 配置', async () => {

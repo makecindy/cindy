@@ -34,6 +34,7 @@ import {
   setSessionProvider,
 } from '../../maker-host/session-provider-store';
 import {
+  applyPiImModelSelectionUnderLock,
   cancelPendingAgentSwitchForSession,
   clearPendingCredentialSwitchForSession,
   getPendingCredentialSwitchTarget,
@@ -43,6 +44,7 @@ import {
   wakeSessionInputAfterCredentialSwitch,
 } from '../../maker-ipc/register';
 import { applyRuntimeSetModelChange } from '../../maker-ipc/runtimeSetModel';
+import { cancelPendingSessionRuntimeMutation } from '../../maker-ipc/sessionRuntimeControl';
 import { getDesktopCcPrefs, type DesktopCcPrefs } from '../index';
 import {
   captureImAccountGeneration,
@@ -73,6 +75,7 @@ import {
   updateModelEffort,
   updatePermissionMode,
 } from './sessionRepo';
+import { markImSessionManualRouteOverride } from './manualRouteOverride';
 import { changeSessionPermissionMode } from './permissionModeControl';
 import type { ImCardBuilders } from './cardBuilders';
 import { enqueueAskCardPatch } from './askCardPatchQueue';
@@ -341,6 +344,10 @@ export function createCardActionHandler(
       const previousProviderId = previousRoute
         ? previousRoute.providerId
         : getSessionProvider(sessionId);
+      const liveBeforePick = turnRunner.getMakerSessionById(sessionId);
+      const sessionAgentKind = liveBeforePick?.agentKind ??
+        (await getMaker().getSessionMeta?.(sessionId))?.agentKind;
+      const isPiSession = sessionAgentKind === 'pi';
       const restorePersistentRoute = async (reason: string): Promise<void> => {
         if (!previousRoute) return;
         try {
@@ -358,12 +365,17 @@ export function createCardActionHandler(
       const rollbackRuntimeChange = async (reason: string): Promise<void> => {
         setSessionProvider(sessionId, previousProviderId);
         const liveForRollback = turnRunner.getMakerSessionById(sessionId);
-        if (!liveForRollback || !previousRoute) return;
+        if (!previousRoute) return;
         try {
-          await liveForRollback.setModel(previousRoute.model, {
-            providerId: previousRoute.providerId,
-          });
-          if (effort) {
+          if (isPiSession) {
+            await applyPiImModelSelectionUnderLock(sessionId, previousRoute.model,
+              previousRoute.providerId, { model: modelId, providerId: providerId ?? previousProviderId });
+          } else if (liveForRollback) {
+            await liveForRollback.setModel(previousRoute.model, {
+              providerId: previousRoute.providerId,
+            });
+          }
+          if (liveForRollback && effort) {
             await liveForRollback.setEffort(previousRoute.effort);
           }
         } catch (rollbackErr) {
@@ -374,16 +386,28 @@ export function createCardActionHandler(
       };
 
       // 持久化与运行态切换必须和 send / agent switch 共用 session 锁，保证后选覆盖先选。
-      try {
-        await updateModelEffort(sessionId, modelId, effort ?? 'high', providerId);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error(`model:pick DB update failed: ${msg}`);
-        return msg;
+      if (!isPiSession) {
+        try {
+          await updateModelEffort(sessionId, modelId, effort ?? 'high', providerId);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error(`model:pick DB update failed: ${msg}`);
+          return msg;
+        }
       }
 
+      let piDeferredGeneration: number | undefined;
+      const rollbackPiSelection = async (reason: string): Promise<void> => {
+        if (piDeferredGeneration !== undefined) {
+          cancelPendingSessionRuntimeMutation(sessionId, piDeferredGeneration);
+          return;
+        }
+        await rollbackRuntimeChange(reason);
+      };
       try {
-        const runtimeChange = await applyRuntimeSetModelChange({
+        const runtimeChange = isPiSession
+          ? await applyPiImModelSelectionUnderLock(sessionId, modelId, providerId, previousRoute)
+          : await applyRuntimeSetModelChange({
           maker: getMaker(),
           sessionId,
           model: modelId,
@@ -394,7 +418,25 @@ export function createCardActionHandler(
           wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
           getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
           logger: log,
-        });
+          });
+        if (isPiSession && runtimeChange.status === 'deferred' && 'generation' in runtimeChange) {
+          piDeferredGeneration = runtimeChange.generation;
+        }
+
+        if (isPiSession) {
+          try {
+            // The Pi host transaction reads the old DB route to protect native
+            // history and register a correct rollback snapshot while busy.
+            await updateModelEffort(sessionId, modelId, effort ?? 'high',
+              'effectiveProviderId' in runtimeChange ? runtimeChange.effectiveProviderId : providerId);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`model:pick DB update failed after Pi selection: ${msg}`);
+            await restorePersistentRoute('Pi DB update');
+            await rollbackPiSelection('Pi DB update');
+            return msg;
+          }
+        }
 
         const liveAfterModel = turnRunner.getMakerSessionById(sessionId);
         if (runtimeChange.status !== 'deferred' && liveAfterModel && effort) {
@@ -404,7 +446,7 @@ export function createCardActionHandler(
             const msg = err instanceof Error ? err.message : String(err);
             log.warn(`model:pick live setEffort failed: ${msg}`);
             await restorePersistentRoute('setEffort');
-            await rollbackRuntimeChange('setEffort');
+            await rollbackPiSelection('setEffort');
             return msg;
           }
         }
@@ -418,6 +460,23 @@ export function createCardActionHandler(
       const liveAfterModel = turnRunner.getMakerSessionById(sessionId);
       if (!liveAfterModel) {
         log.info(`model:pick: no live session for ${sessionId.slice(-8)} — DB updated only`);
+      }
+      // 「脱离跟随」墓碑只在选择真正落地后写: 上面任何失败都会回滚持久路由, 若在
+      // updateModelEffort 里立碑, 失败回滚(同一函数)会让失败的选择永久脱离默认
+      // 跟随(PR #5155 review P2)。写失败按选择失败处理 —— 整体回滚并报错重试。
+      try {
+        await markImSessionManualRouteOverride(sessionId);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`model:pick manual override marker failed: ${msg}`);
+        // applyRuntimeSetModelChange 可能已向 PendingCredentialSwitch 登记了延迟目标,
+        // 失败回滚必须一并撤销, 否则 turn 收口仍会应用一个卡片已报失败的选择
+        // (PR #5155 review P2)。
+        clearPendingCredentialSwitchForSession(sessionId);
+        await restorePersistentRoute('manual override marker');
+        if (isPiSession) await rollbackPiSelection('manual override marker');
+        else await rollbackRuntimeChange('manual override marker');
+        return msg;
       }
       // 这次 IM 选择晚于 renderer 登记的跨引擎 intent；只有整条 route 更新成功后
       // 才取消旧 intent，失败回滚时仍保留它供下一次发送重试。

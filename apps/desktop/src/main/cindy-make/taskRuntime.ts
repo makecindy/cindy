@@ -31,6 +31,7 @@ import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeCon
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import {
   isMakeEnvironmentReady,
+  type CindyMakeTaskOptions,
   type CindyMakeTaskStart,
   type MakeDoctorReport,
   type MakeTaskWorkspace,
@@ -48,20 +49,36 @@ type SendTask = (
 ) => Promise<DesktopMakerSendResult>;
 let sendTask: SendTask | undefined;
 let readClearBoundary: ((sessionId: string) => number | null) | undefined;
+let isEditingBlocked: (sessionId: string) => boolean = () => false;
+
+/** Every sender, including a phone with stale UI, must respect the same workspace lease. */
+export function configureCindyMakeEditingGuard(probe: typeof isEditingBlocked): void {
+  isEditingBlocked = probe;
+}
 
 /** Dispatch a Main-created task without opting it into the personal-build lifecycle. */
-export async function dispatchCindyMakeMergeTask(
-  sessionId: string, message: string, createOpts: Record<string, unknown>,
-  isCurrent: () => boolean, clientId: string,
+export async function dispatchCindyMakeTask(
+  sessionId: string,
+  message: string,
+  createOpts: Record<string, unknown>,
+  isCurrent: () => boolean,
+  clientId: string,
 ): Promise<void> {
   if (!sendTask || !isCurrent()) throwIpcError('PRECONDITION_FAILED', 'Task runner is not ready');
   const expectedClearBoundaryMs = readClearBoundary?.(sessionId) ?? null;
   const sent = await sendTask(sessionId, message, createOpts, {
     expectedClearBoundaryMs,
-    persistUserMessage: { clientId, content: message, expectedClearBoundaryMs, shouldBroadcast: isCurrent },
+    persistUserMessage: {
+      clientId,
+      content: message,
+      expectedClearBoundaryMs,
+      shouldBroadcast: isCurrent,
+    },
   });
-  if (!sent.accepted) throwIpcError('PRECONDITION_FAILED', 'Could not start upstream merge task');
+  if (!sent.accepted) throwIpcError('PRECONDITION_FAILED', 'Could not start Cindy Make task');
 }
+
+export const dispatchCindyMakeMergeTask = dispatchCindyMakeTask;
 
 export function configureCindyMakeTaskSender(
   sender: SendTask,
@@ -148,6 +165,8 @@ export async function restoreCindyMakeTaskState(): Promise<void> {
 }
 
 export async function assertCindyMakeTaskReady(sessionId: string): Promise<void> {
+  if (isEditingBlocked(sessionId))
+    throwIpcError('PRECONDITION_FAILED', 'Stop Cindy Make testing or building before editing');
   const [card] = await getDbClient()
     .drizzle.select({ content: messages.content })
     .from(messages)
@@ -239,6 +258,19 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
     ? await db.select().from(sessions).where(eq(sessions.id, input.originSessionId)).limit(1)
     : [];
   checkCurrent();
+  const effective = origin
+    ? getSessionRuntimeControlSnapshot(origin.id).effectiveOverride
+    : undefined;
+  const preferences = origin ?? input.createOptions ?? {};
+  const taskOptions: CindyMakeTaskOptions = {
+    agentKind: normalizeDbAgentKind(effective?.agentKind ?? preferences.agentKind),
+    model: effective?.model ?? preferences.model ?? undefined,
+    effort: effective ? (effective.effort ?? '') : preferences.effort,
+    providerId: effective ? effective.providerId : preferences.providerId,
+    fastMode: effective?.fastMode ?? preferences.fastMode,
+    planModeEnabled: preferences.planModeEnabled,
+    permissionMode: preferences.permissionMode,
+  };
   const userData = app.getPath('userData');
   const root = makeSourceRoot(userData);
   const clientId = 'cindy-make-preparation-' + input.runId;
@@ -339,10 +371,12 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
           throwIpcError('PRECONDITION_FAILED', 'Task preparation was cleared');
         const data = JSON.parse(previous.content).__cindyMakeCard?.data;
         if (
-          data?.report?.task?.originSessionId !== input.originSessionId ||
+          (input.originSessionId !== undefined &&
+            data?.report?.task?.originSessionId !== input.originSessionId) ||
           data?.request !== input.request
         )
           throwIpcError('INVALID_PARAMS', 'Task run does not match');
+        input.originSessionId = data.report.task?.originSessionId;
         sessionId = previous.sessionId;
         expectedClearBoundaryMs = previous.clearedAt;
         checkPreparationCurrent();
@@ -386,10 +420,6 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
           throwIpcError('NOT_FOUND', 'Origin task is unavailable');
         if (origin?.remoteHostId)
           throwIpcError('UNSUPPORTED_CAPABILITY', 'Cindy Make requires a local task');
-        const effective = origin
-          ? getSessionRuntimeControlSnapshot(origin.id).effectiveOverride
-          : undefined;
-        const preferences = origin ?? input.createOptions ?? {};
         sessionId = createBusinessSessionId();
         const row = sessionCreateToRow(
           sessionId,
@@ -398,13 +428,7 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
             workingDir: makeTaskWorktreePath(userData, input.runId),
             workspaceKind: 'project',
             source: 'cindy-make',
-            agentKind: normalizeDbAgentKind(effective?.agentKind ?? preferences.agentKind),
-            model: effective?.model ?? preferences.model,
-            effort: effective ? (effective.effort ?? '') : preferences.effort,
-            providerId: effective ? effective.providerId : preferences.providerId,
-            fastMode: effective?.fastMode ?? preferences.fastMode,
-            planModeEnabled: preferences.planModeEnabled,
-            permissionMode: preferences.permissionMode,
+            ...taskOptions,
           },
           Date.now(),
         );
@@ -512,6 +536,16 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
       signal.throwIfAborted();
       report = { ...report, source };
       cindyMakeManager.setSourceStatus(source);
+      // The task worktree must branch from the latest verified personal source.
+      // Keep the visible task shell while this runs so conflicts and Stop remain recoverable.
+      phase('updatingSource', publish);
+      const { syncSourceBeforeCindyMakeTask } = await import('./upstreamMergeRuntime.js');
+      await syncSourceBeforeCindyMakeTask(signal, taskOptions);
+      checkPreparationCurrent();
+      signal.throwIfAborted();
+      source = await readCurrentCindySourceStatus(root, env);
+      report = { ...report, source };
+      publish(report);
       phase('workspace', publish);
       await untilAborted(
         cindyMakeManager.withProject(

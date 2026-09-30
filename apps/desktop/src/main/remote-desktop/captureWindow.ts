@@ -154,6 +154,7 @@ export class DesktopCaptureWindow {
         navigateOnDragDrop: false,
         webviewTag: false,
         backgroundThrottling: false,
+        autoplayPolicy: 'no-user-gesture-required',
         spellcheck: false,
       },
     });

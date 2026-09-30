@@ -33,7 +33,7 @@ describe('controlled capability page lifetime', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
-        localDb: { sessionsPush: { onPatched: () => h.offPush } },
+        localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: { listSkills: async () => [{ slug: 'weekly-report', name: '整理工作周报', enabled: true }] } },
         maker: {
           onMcpChanged: () => h.offMcp,
           listCustomMcpServers: h.list,
@@ -52,6 +52,10 @@ describe('controlled capability page lifetime', () => {
     const props = { bot, capabilities, skills: [], onChange: vi.fn() };
     const view = render(<BotCapabilitySettings {...props} expanded />);
     await waitFor(() => expect(h.list).toHaveBeenCalledOnce());
+    await waitFor(() => expect(view.getByText('整理工作周报')).toBeTruthy());
+    const checkbox = view.getByText('整理工作周报').closest('label')!.querySelector('input')!;
+    expect(checkbox.checked).toBe(true);
+    expect(checkbox.disabled).toBe(true);
     view.rerender(<BotCapabilitySettings {...props} expanded={false} />);
     expect(h.offLocal).toHaveBeenCalledOnce();
     expect(h.offPush).toHaveBeenCalledOnce();

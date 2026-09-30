@@ -17,6 +17,9 @@ import {
   warnWindowsGitPathProbeFailure,
 } from './windows-git-path-powershell.js';
 
+// Test-only startup/teardown headroom around the unchanged 10s coordinator.
+const PATH_PROBE_TEST_PROCESS_TIMEOUT_MS = 30_000;
+
 describe('Windows Git PATH PowerShell probes', () => {
   it('locks the registry probe command and distinguishes missing keys from real failures', () => {
     const script = buildWindowsRegistryProbeScript([
@@ -105,8 +108,10 @@ describe('Windows Git PATH PowerShell probes', () => {
     expect(script).toContain('[void]$pending.Add(4321)');
     expect(script).toContain('Get-CimInstance Win32_Process');
     expect(script).toContain('ParentProcessId = ');
+    expect(script).toContain('-ErrorAction SilentlyContinue');
     expect(script).toContain('$descendants.Count - 1');
-    expect(script).toContain('Stop-Process -Id ([int]$descendants[$index]) -Force');
+    expect(script).toContain('Stop-Process -Id $childProcessId -Force');
+    expect(script).toContain('taskkill.exe /PID $childProcessId /F /T');
     expect(script).not.toContain('C:\\');
     expect(() => buildWindowsDescendantCleanupScript(0)).toThrow(RangeError);
   });
@@ -147,22 +152,37 @@ describe('Windows Git PATH PowerShell probes', () => {
             `Start-Sleep -Milliseconds ${childDelayMs}\n${Buffer.from(encoded, 'base64').toString('utf16le')}`,
             'utf16le',
           ).toString('base64');
-          return execFileSync(
-            path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-            ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script.replace(encoded, delayedCommand)],
-            {
-              encoding: 'utf8',
-              input: Buffer.from(JSON.stringify(groups), 'utf8'),
-              stdio: ['pipe', 'pipe', 'pipe'],
-              timeout: 15_000,
-              windowsHide: true,
-            },
-          );
+          const label = `[windows-git-path-test] child-delay=${childDelayMs}ms`;
+          const instrumentedScript = [
+            `[Console]::Error.WriteLine('${label} START coordinator')`,
+            script.replace(encoded, delayedCommand),
+            `[Console]::Error.WriteLine('${label} END coordinator')`,
+          ].join('\n');
+          const started = performance.now();
+          console.info(`${label} START process (timeout=${PATH_PROBE_TEST_PROCESS_TIMEOUT_MS}ms)`);
+          try {
+            return execFileSync(
+              path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+              ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', instrumentedScript],
+              {
+                encoding: 'utf8',
+                input: Buffer.from(JSON.stringify(groups), 'utf8'),
+                stdio: ['pipe', 'pipe', 'inherit'],
+                timeout: PATH_PROBE_TEST_PROCESS_TIMEOUT_MS,
+                windowsHide: true,
+              },
+            );
+          } finally {
+            console.info(`${label} END process (${Math.round(performance.now() - started)}ms)`);
+          }
         };
         if (delayMs > 0) {
           // Outlive even the outer deadline, so scheduler pauses cannot make the
           // negative case complete before the coordinator observes expiry.
-          const expired = runProbe(buildWindowsPathKindProbeScript(4, 10_000, 2), 30_000);
+          const expired = runProbe(
+            buildWindowsPathKindProbeScript(4, 10_000, 2),
+            PATH_PROBE_TEST_PROCESS_TIMEOUT_MS * 2,
+          );
           expect(expired).toMatch(/__CINDY_WINDOWS_GIT_PATH_DIAGNOSTIC__\tpath-process-(timeout|budget)/);
           expect(expired).not.toContain(`F\t${Buffer.from(validGit, 'utf16le').toString('base64')}`);
         }
@@ -179,7 +199,7 @@ describe('Windows Git PATH PowerShell probes', () => {
         rmSync(tempRoot, { recursive: true, force: true });
       }
     },
-    40_000,
+    PATH_PROBE_TEST_PROCESS_TIMEOUT_MS * 2 + 10_000,
   );
 
   it.runIf(process.platform === 'win32')(
@@ -246,24 +266,22 @@ describe('Windows Git PATH PowerShell probes', () => {
 
         terminateWindowsPowerShellDescendants(powershell, coordinatorPid);
 
-        execFileSync(
-          powershell,
-          [
-            '-NoLogo',
-            '-NoProfile',
-            '-NonInteractive',
-            '-Command',
-            [
-              '$deadline = [DateTime]::UtcNow.AddSeconds(8)',
-              `while (Get-Process -Id ${childPid} -ErrorAction SilentlyContinue) {`,
-              '  if ([DateTime]::UtcNow -ge $deadline) { exit 1 }',
-              '  Start-Sleep -Milliseconds 50',
-              '}',
-            ].join('\n'),
-          ],
-           // PowerShell startup can exceed five seconds on a busy hosted Windows runner;
-           // the in-script deadline (8s) plus startup must fit the exec timeout.
-           { stdio: 'ignore', timeout: 15_000, windowsHide: true },
+        // EncodedCommand avoids Windows argv splitting of a multi-line -Command.
+        // Poll until the orphaned child is gone; a live child after cleanup is a real leak.
+        const livenessCommand = Buffer.from(
+          `if (Get-Process -Id ${childPid} -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }`,
+          'utf16le',
+        ).toString('base64');
+        await vi.waitFor(
+          () => {
+            const liveness = spawnSync(
+              powershell,
+              ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', livenessCommand],
+              { stdio: 'ignore', timeout: 10_000, windowsHide: true },
+            );
+            expect(liveness.status).toBe(0);
+          },
+          { timeout: 8_000, interval: 50 },
         );
       } finally {
         if (coordinatorPid) {

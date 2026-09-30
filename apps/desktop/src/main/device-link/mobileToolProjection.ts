@@ -2,7 +2,9 @@ import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
 import { isAgentPlanToolName } from '@cindy/maker-shared/message-render';
 import { isOrcaCommunicationTool } from '@cindy/maker-shared/message-normalize';
 import {
-  extractPayloadToolResultMedia,
+  extractPayloadToolResultFiles,
+  extractPayloadToolCardIds,
+  parseToolResultPayload,
   formatPayloadToolUseSummary,
 } from '@cindy/maker-shared/payload-summary';
 
@@ -36,18 +38,65 @@ function exceedsInputBudget(input: unknown): boolean {
   }
 }
 
-/** Preserve structured results and all media/file references until a typed detail projection
- * exists. Cutting JSON or a reference-bearing string would silently remove artifacts. */
+/** Compact large results without cutting presentation references or emitting invalid JSON. */
 export function projectMobileToolResult(content: unknown): unknown {
   if (typeof content !== 'string' || encoder.encode(content).byteLength <= MOBILE_TOOL_RESULT_BYTES) return content;
-  // Keep structured media payloads intact because truncating them can drop an artifact
-  // reference. Plain URLs, action markers, errors, and arbitrary JSON remain bounded.
+  // References take priority over the unrelated provider response. The final
+  // serialized JSON, including escaping and multibyte text, must fit the wire budget.
   try {
-    const parsed: unknown = JSON.parse(content);
-    if (parsed !== null && typeof parsed === 'object' && extractPayloadToolResultMedia(content).length > 0) {
-      return content;
+    const source = parseToolResultPayload(content) ?? {};
+    const files = extractPayloadToolResultFiles(content);
+    const referenceKeys = [
+      'xdt_image_url', 'xdt_video_url', 'xdt_image_urls', 'xdt_video_urls',
+      'xdt_audio_urls', 'xdt_audio_tracks', '_xdt_audio_tracks', 'xdt_media_produced',
+    ];
+    if (files.length || extractPayloadToolCardIds(content).length
+      || referenceKeys.some((key) => key in source) || source._xdt_render_image === false) {
+      const projected: Record<string, unknown> = { _remote_content_truncated: true };
+      const fits = () => encoder.encode(JSON.stringify(projected)).byteLength <= MOBILE_TOOL_RESULT_BYTES;
+      const add = (key: string, value: unknown) => {
+        // Keep addresses/objects intact or omit them; never slice a reference or action.
+        if (value === undefined || encoder.encode(JSON.stringify(value)).byteLength > 2048) return false;
+        projected[key] = value;
+        if (fits()) return true;
+        delete projected[key];
+        return false;
+      };
+      // Presentation control flags precede references so compaction cannot revive
+      // suppressed assets or images already owned by a card.
+      for (const key of ['_xdt_render_image', 'xdt_images_in_card', 'xdt_audio_in_card']) {
+        if (typeof source[key] === 'boolean') add(key, source[key]);
+      }
+      for (const key of ['xdt_card_id', 'xdt_anchor_card_id', 'xdt_image_url', 'xdt_video_url']) {
+        if (typeof source[key] === 'string') add(key, source[key]);
+      }
+      let remainingItems = 64;
+      const addArray = (key: string, entries: unknown[]) => {
+        const kept: unknown[] = [];
+        for (const entry of entries.slice(0, 64)) {
+          if (remainingItems === 0) break;
+          if (encoder.encode(JSON.stringify(entry)).byteLength > 2048) continue;
+          kept.push(entry);
+          projected[key] = kept;
+          if (!fits()) { kept.pop(); break; }
+          remainingItems -= 1;
+        }
+        if (!kept.length) delete projected[key];
+      };
+      for (const key of referenceKeys) {
+        if (Array.isArray(source[key])) addArray(key, source[key]);
+      }
+      if (files.length) addArray('_xdt_model_files', files.map((file) => ({ url: file.url, name: file.title })));
+      add('_xdt_actions', source._xdt_actions);
+      for (const key of ['ok', 'status', 'errorCode', 'summary', 'message', 'note', 'text']) {
+        const value = source[key];
+        if (typeof value === 'string') add(key, value.length > 1024 ? value.slice(0, 1024) + TRUNCATION_SUFFIX : value);
+        else if (typeof value === 'boolean' || typeof value === 'number') add(key, value);
+      }
+      const serialized = JSON.stringify(projected);
+      if (encoder.encode(serialized).byteLength <= MOBILE_TOOL_RESULT_BYTES) return serialized;
     }
-  } catch { /* Plain tool output is the only format shortened in this phase. */ }
+  } catch { /* Fall back to the bounded text preview. */ }
   const bytes = encoder.encode(content);
   let cut = MOBILE_TOOL_RESULT_BYTES - encoder.encode(TRUNCATION_SUFFIX).byteLength;
   while (cut > 0 && (bytes[cut] & 0xc0) === 0x80) cut -= 1;
@@ -69,7 +118,8 @@ export function projectMobileToolMessage(message: unknown): unknown {
       || meta?.remoteContentTruncated === true || !exceedsInputBudget(content.input)) return message;
     return {
       ...row,
-      content: { ...content, input: null, mobilePayloadProjected: true },
+      content: { ...content, input: /(?:^|:|__)ghost_call$/.test(toolName)
+        ? pluginCallIdentity(content.input) : null, mobilePayloadProjected: true },
       mobileToolInputProjection: {
         projected: true,
         version: 1,
@@ -144,4 +194,13 @@ export function projectMobileMessagePage(messages: unknown[], options: unknown):
       agentMeta: { ...record(value.agentMeta), remoteRowsTrimmed: true, remoteOriginalRowCount: rows.length },
     } : row;
   });
+}
+
+
+function pluginCallIdentity(value: unknown): Record<string, unknown> {
+  const input = record(value);
+  return Object.fromEntries(['ghost_id', 'tool', 'grant_only'].flatMap((key) => {
+    const value = input?.[key];
+    return typeof value === 'boolean' || (typeof value === 'string' && value.length <= 256) ? [[key, value]] : [];
+  }));
 }

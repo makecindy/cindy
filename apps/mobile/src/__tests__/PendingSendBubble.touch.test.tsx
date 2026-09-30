@@ -39,6 +39,7 @@ let host: HTMLDivElement;
 let frameId = 0;
 const select = vi.fn();
 const openLink = vi.fn();
+const removeOutbox = vi.fn();
 const item: MobilePendingSendItem = {
   type: 'pending_send', key: 'message-a', clientId: 'a', phase: 'queued', text: 'hello',
   queueIndex: 1, sentInlineTokens: [], thumbs: [], fileCount: 0, attachmentCount: 0, uploadedCount: 0,
@@ -60,7 +61,7 @@ afterEach(() => { act(() => root.unmount()); vi.useRealTimers(); vi.unstubAllGlo
 function show(overrides: Partial<MobilePendingSendItem> = {}, selectedClientId: string | null = null) {
   handlers.clear();
   const actions: PendingSendBubbleActions = { selectedClientId, onSelect: select, onRemove: vi.fn(),
-    onBeginEdit: vi.fn(), onSteer: vi.fn(), onRetryOutbox: vi.fn(), onRemoveOutbox: vi.fn() };
+    onBeginEdit: vi.fn(), onSteer: vi.fn(), onRetryOutbox: vi.fn(), onRemoveOutbox: removeOutbox };
   act(() => root.render(<PendingSendBubble item={{ ...item, ...overrides }} actions={actions}
     renderImage={() => null} renderFile={() => null}
     renderText={() => <MessageBodyText testID="link" onPress={openLink}>link</MessageBodyText>} />));
@@ -92,6 +93,15 @@ it.each(['move', 'end', 'cancel', 'long', 'multi', 'disabled', 'unmount', 'recyc
     flush(); expect(select).not.toHaveBeenCalled();
   },
 );
+it('lets an in-flight local outbox message open its cancel action', () => {
+  show({ actions: null, phase: 'sending', queueIndex: null });
+  touch('Start'); touch('End'); flush();
+  expect(select).toHaveBeenCalledWith('a');
+
+  show({ actions: null, phase: 'sending', queueIndex: null }, 'a');
+  act(() => host.querySelector<HTMLElement>('[data-testid="pendingSend.outboxRemove.a"]')!.click());
+  expect(removeOutbox).toHaveBeenCalledWith('a');
+});
 it('lets a real body link consume the pending tap before the frame commits', () => {
   show(); touch('Start'); touch('End');
   act(() => host.querySelector<HTMLElement>('[data-testid="link"]')!.click());

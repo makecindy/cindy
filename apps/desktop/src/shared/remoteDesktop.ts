@@ -21,6 +21,7 @@ export const DESKTOP_LOCAL = {
   INPUT: 'remote-desktop:host-input',
   VIEW_HEARTBEAT: 'remote-desktop:view-heartbeat',
   NATIVE_FRAME: 'remote-desktop:native-frame',
+  NATIVE_AUDIO: 'remote-desktop:native-audio',
   WINDOWS_SUPPORT: 'remote-desktop:windows-support',
   PERMISSIONS: 'remote-desktop:permissions',
   OPEN_PERMISSION: 'remote-desktop:open-permission',
@@ -29,11 +30,17 @@ export const DESKTOP_LOCAL = {
 export interface DesktopHostCommand {
   iceServers?: DesktopIceServer[];
   id: string;
-  op: 'offer' | 'stop' | 'capture-reset' | 'ice';
+  op: 'offer' | 'stop' | 'capture-reset' | 'ice' | 'prepare' | 'frame';
+  /** Local-only: retain the system-selected Wayland stream for this lease. */
+  portalCapture?: boolean;
   attemptId?: string;
   candidates?: RemoteDesktopIceCandidate[];
   after?: number;
   nativeCapture?: boolean;
+  /** Local-only: persistent Linux capture follows the negotiated video rate. */
+  continuousNativeCapture?: boolean;
+  /** Local-only output monitor, enabled only by the main process audio grant. */
+  nativeAudio?: boolean;
   cursorOverlay?: boolean;
   lease?: string;
   sourceId?: string;
@@ -75,5 +82,6 @@ export interface DesktopCaptureApi {
   reply(id: string, result: DesktopHostReply): Promise<void>;
   viewHeartbeat(lease: string): Promise<void>;
   nativeFrame(lease: string): Promise<string | RemoteDesktopCursorFrame | null>;
+  nativeAudio?(lease: string): Promise<Uint8Array>;
   input(lease: string, sequence: number, events: DesktopInput[]): Promise<void>;
 }

@@ -1,3 +1,6 @@
+import { TaskMenuHeading, TaskTagsPanel } from './TaskTags';
+import { GestureHandlerRootView } from '@/platform/gestureHandler';
+import type { RemoteSession } from './types';
 /**
  * SessionActionSheet —— 首页会话行左滑「选项」触发的底部操作菜单
  * (重命名 / 置顶切换 / 归档 / 删除 + 独立「取消」)。
@@ -47,10 +50,13 @@ import {
 import {
   fontWeight,
   lineHeight,
+  motionDuration,
+  motionEasing,
   radius,
   spacing,
   typeScale,
 } from "@/theme/tokens";
+import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 
 /** 卡片滑入距离(略大于卡片实高即可,滑入曲线吃掉误差)。 */
 const CARD_SLIDE_DISTANCE = 360;
@@ -65,6 +71,7 @@ const ACTION_ICONS: Record<SessionSwipeAction, LucideIcon> = {
 };
 
 export function SessionActionSheet({
+  session,
   onAction,
   onClose,
   onClosed,
@@ -72,6 +79,7 @@ export function SessionActionSheet({
   status,
   visible,
 }: {
+  session?: RemoteSession | null;
   /** 点菜单项:父级负责关 sheet 并串后续(删除 Alert / 重命名弹窗 / 直接执行)。 */
   onAction(action: SessionSwipeAction): void;
   onClose(): void;
@@ -82,32 +90,47 @@ export function SessionActionSheet({
   visible: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const [tagsExpanded, setTagsExpanded] = useState(false);
+  useEffect(() => {
+    if (!visible) setTagsExpanded(false);
+  }, [visible]);
   const { colors } = useTheme();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const [mounted, setMounted] = useState(visible);
   const progress = useRef(new Animated.Value(visible ? 1 : 0)).current;
+  // 只有明确 === false 才播动画;null(尚未查到)/ true 一律直接显示 / 隐藏。
+  const animate = useReduceMotionEnabled() === false;
 
   useEffect(() => {
     if (visible) {
       setMounted(true);
+      if (!animate) {
+        progress.setValue(1);
+        return;
+      }
       Animated.timing(progress, {
-        duration: 220,
-        easing: Easing.out(Easing.cubic),
+        duration: motionDuration.enter,
+        easing: Easing.bezier(...motionEasing.out),
         toValue: 1,
         useNativeDriver: true,
       }).start();
     } else {
+      if (!animate) {
+        progress.setValue(0);
+        setMounted(false);
+        return;
+      }
       Animated.timing(progress, {
-        duration: 160,
-        easing: Easing.in(Easing.quad),
+        duration: motionDuration.exit,
+        easing: Easing.bezier(...motionEasing.in),
         toValue: 0,
         useNativeDriver: true,
       }).start(({ finished }) => {
         if (finished) setMounted(false);
       });
     }
-  }, [visible, progress]);
+  }, [animate, visible, progress]);
 
   // onClosed 等 Modal 真正从树上卸载后再触发(同 DeviceMenuModal:动画回调里同步挂
   // 第二个 Modal 会和本 Modal 的卸载挤进同一个 commit,iOS 可能吞掉新弹窗)。
@@ -128,12 +151,13 @@ export function SessionActionSheet({
 
   return (
     <Modal
+      supportedOrientations={["portrait", "portrait-upside-down", "landscape-left", "landscape-right"]}
       animationType="none"
       onRequestClose={onClose}
       transparent
       visible={mounted}
     >
-      <View style={styles.overlay}>
+      <GestureHandlerRootView style={styles.overlay}>
         <Animated.View style={[StyleSheet.absoluteFill, { opacity: progress }]}>
           <BlurBackdrop />
           <Pressable
@@ -154,44 +178,80 @@ export function SessionActionSheet({
           testID="home.sessionActions"
         >
           <View style={styles.actionCard}>
-            <BlurBackdrop
-              intensity={32}
-              overlayColor={colors.sheetActionSurface}
-            />
-            {menu.map((item) => {
-              const IconComponent = ACTION_ICONS[item.action];
-              const color = item.destructive
-                ? colors.destructive
-                : colors.sheetActionText;
-              return (
-                <Pressable
-                  accessibilityLabel={item.label}
-                  accessibilityRole="button"
-                  key={item.action}
-                  onPress={() => onAction(item.action)}
-                  style={({ pressed }) => [
-                    styles.actionRow,
-                    pressed && styles.pressed,
-                  ]}
-                  testID={`home.sessionActions.${item.action}`}
-                >
-                  <IconComponent
-                    color={color}
-                    size={iconSize.lg}
-                    strokeWidth={iconStroke.regular}
-                  />
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      styles.actionLabel,
-                      item.destructive && styles.actionLabelDanger,
-                    ]}
-                  >
-                    {item.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
+            <BlurBackdrop intensity={32} overlayColor={colors.sheetActionSurface} />
+            {session && <TaskMenuHeading session={session} />}
+            {!tagsExpanded &&
+              menu
+                .filter(
+                  (item) =>
+                    !item.destructive && item.action !== 'archive' && item.action !== 'restore',
+                )
+                .map((item) => {
+                  const IconComponent = ACTION_ICONS[item.action];
+                  const color = item.destructive ? colors.destructive : colors.textPrimary;
+                  return (
+                    <Pressable
+                      accessibilityLabel={item.label}
+                      accessibilityRole="button"
+                      key={item.action}
+                      onPress={() => onAction(item.action)}
+                      style={({ pressed }) => [styles.actionRow, pressed && styles.pressed]}
+                      testID={`home.sessionActions.${item.action}`}
+                    >
+                      <IconComponent
+                        color={color}
+                        size={iconSize.lg}
+                        strokeWidth={iconStroke.regular}
+                      />
+                      <Text
+                        numberOfLines={1}
+                        style={[styles.actionLabel, item.destructive && styles.actionLabelDanger]}
+                      >
+                        {item.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+            {visible && session && (
+              <TaskTagsPanel
+                key={`${session.canonicalDeviceId ?? session.deviceLinkDeviceId}:${session.id}`}
+                session={session}
+                expanded={tagsExpanded}
+                onExpandedChange={setTagsExpanded}
+              />
+            )}
+            {!tagsExpanded &&
+              menu
+                .filter(
+                  (item) =>
+                    item.destructive || item.action === 'archive' || item.action === 'restore',
+                )
+                .map((item) => {
+                  const IconComponent = ACTION_ICONS[item.action];
+                  const color = item.destructive ? colors.destructive : colors.textPrimary;
+                  return (
+                    <Pressable
+                      accessibilityLabel={item.label}
+                      accessibilityRole="button"
+                      key={item.action}
+                      onPress={() => onAction(item.action)}
+                      style={({ pressed }) => [styles.actionRow, pressed && styles.pressed]}
+                      testID={`home.sessionActions.${item.action}`}
+                    >
+                      <IconComponent
+                        color={color}
+                        size={iconSize.lg}
+                        strokeWidth={iconStroke.regular}
+                      />
+                      <Text
+                        numberOfLines={1}
+                        style={[styles.actionLabel, item.destructive && styles.actionLabelDanger]}
+                      >
+                        {item.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
           </View>
           <Pressable
             accessibilityLabel={t("session.common.cancel")}
@@ -210,7 +270,7 @@ export function SessionActionSheet({
             <Text style={styles.cancelText}>{t("session.common.cancel")}</Text>
           </Pressable>
         </Animated.View>
-      </View>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
@@ -245,11 +305,11 @@ const makeStyles = (colors: ThemeColors) =>
       paddingHorizontal: spacing.lg,
     },
     actionLabel: {
-      color: colors.sheetActionText,
+      color: colors.textPrimary,
       flexShrink: 1,
-      fontSize: typeScale.listBody,
-      fontWeight: fontWeight.semibold,
-      lineHeight: lineHeight.listBody,
+      fontSize: typeScale.bodySmall,
+      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.bodySmall,
     },
     actionLabelDanger: {
       color: colors.destructive,
@@ -264,10 +324,10 @@ const makeStyles = (colors: ThemeColors) =>
       minHeight: 54,
     },
     cancelText: {
-      color: colors.sheetActionText,
-      fontSize: typeScale.listBody,
-      fontWeight: fontWeight.semibold,
-      lineHeight: lineHeight.listBody,
+      color: colors.textPrimary,
+      fontSize: typeScale.bodySmall,
+      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.bodySmall,
     },
     pressed: {
       opacity: 0.72,

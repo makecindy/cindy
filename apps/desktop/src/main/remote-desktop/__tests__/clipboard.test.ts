@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+vi.mock('../linuxClipboardNative', () => ({ supportsLinuxClipboard: () => false }));
 
 const mocks = vi.hoisted(() => ({
   clipboard: {

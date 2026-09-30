@@ -1,8 +1,13 @@
+import { randomUUID } from 'node:crypto';
+import { appendCindyMakeBuildLog } from '../../shared/cindyMakeSession.js';
 import type {
   CindyMakeCompletionMeta,
   CindyMakeTestAction,
+  CindyMakeTestStep,
   CindyMakePersonalBuildState,
 } from '../../shared/cindyMakeSession.js';
+import { parseCindyMakeBuildError } from '../../shared/cindyMakeSession.js';
+import { makeBuildErrorDiagnostic } from './buildDiagnostic.js';
 import type { PersonalArtifact } from './personalBuild.js';
 import { makeTestError, type MakeTestProcess, type MakeTestWorkspace } from './testRunner.js';
 
@@ -20,7 +25,11 @@ export interface MakeTestControllerDeps {
     context: MakeTestContext,
     patch: Partial<CindyMakeCompletionMeta>,
   ): Promise<CindyMakeCompletionMeta>;
-  launch(context: MakeTestContext, signal: AbortSignal): Promise<MakeTestProcess>;
+  launch(
+    context: MakeTestContext,
+    signal: AbortSignal,
+    publish: (step: CindyMakeTestStep) => void,
+  ): Promise<MakeTestProcess>;
   withUse(context: MakeTestContext, run: () => Promise<void>): Promise<void>;
   build?(
     context: MakeTestContext,
@@ -28,6 +37,11 @@ export interface MakeTestControllerDeps {
     publish: (state: CindyMakePersonalBuildState) => Promise<void>,
   ): Promise<PersonalArtifact>;
   openBuild?(context: MakeTestContext): Promise<void>;
+  /** Publish the same build receipt to Settings and the completion card. */
+  onBuildState?(context: MakeTestContext, state: CindyMakePersonalBuildState): void;
+  /** Invalidate Settings after the terminal receipt is saved and the build lease is released. */
+  onBuildSettled?(context: MakeTestContext): void;
+  claimBuild?(context: MakeTestContext): () => void;
   now?: () => number;
 }
 
@@ -36,19 +50,61 @@ interface TestJob {
   context: MakeTestContext;
   controller: AbortController;
   process?: MakeTestProcess;
+  testReady?: boolean;
   accepted: Promise<CindyMakeCompletionMeta>;
   finished: Promise<void>;
+  buildId?: string;
+  startedAt?: number;
+  cancelled?: boolean;
+  persistence: Promise<unknown>;
+  releaseBuild?: () => void;
 }
 
 /** Owns test launches independently of any renderer, and never replays a launch after restart. */
 export function createMakeTestController(deps: MakeTestControllerDeps) {
   const jobs = new Map<string, TestJob>();
   const stop = (job: TestJob) => {
-    job.controller.abort();
+    job.controller.abort(
+      job.cancelled ? Object.assign(new Error('cancelled'), { code: 'cancelled' }) : undefined,
+    );
     job.process?.stop();
+  };
+  const waitForStopped = async (job: TestJob) => {
+    if (job.kind !== 'test') return job.finished;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        job.finished,
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(makeTestError('stopFailed')), 10_000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timeout);
+    }
+    // A timeout only rejects the action; execute retains the workspace lease and
+    // temporary files until the real process exit. A later action may retry stopping.
+  };
+  const saveBuild = (job: TestJob, state: CindyMakePersonalBuildState) => {
+    const pending = job.persistence.then(async () => {
+      if (!job.context.isCurrent()) throw makeTestError('unavailable');
+      if (state.stopping && ['ready', 'failed'].includes(job.context.meta.personal?.status ?? ''))
+        return;
+      if (job.cancelled && !state.stopping && !['ready', 'failed'].includes(state.status)) return;
+      const next = appendCindyMakeBuildLog(job.context.meta.personal, {
+        ...state,
+        buildId: job.buildId,
+        startedAt: job.startedAt,
+      });
+      job.context.meta = await deps.save(job.context, { lastAction: 'build', personal: next });
+      deps.onBuildState?.(job.context, next);
+    });
+    job.persistence = pending.catch(() => {});
+    return pending;
   };
   const execute = async (job: TestJob) => {
     const { context, controller } = job;
+    let acceptingProgress = true;
     const check = () => {
       controller.signal.throwIfAborted();
       if (!context.isCurrent()) throw makeTestError('unavailable');
@@ -64,21 +120,36 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
           if (!deps.build) throw makeTestError('unavailable');
           const artifact = await deps.build(context, controller.signal, async (state) => {
             check();
-            context.meta = await deps.save(context, { personal: state });
+            await saveBuild(job, state);
           });
           // The builder returns only after publishing the verified artifact. Preserve that
           // receipt even if Continue Editing arrived during its final publication.
           if (!context.isCurrent()) throw makeTestError('unavailable');
-          context.meta = await deps.save(context, {
-            personal: { status: 'ready', ...artifact, generatedAt: (deps.now ?? Date.now)() },
+          await saveBuild(job, {
+            status: 'ready',
+            ...artifact,
+            generatedAt: (deps.now ?? Date.now)(),
           });
           return;
         }
-        job.process = await deps.launch(context, controller.signal);
+        job.process = await deps.launch(context, controller.signal, (step) => {
+          if (!acceptingProgress || controller.signal.aborted || !context.isCurrent()) return;
+          // Serialize step writes with the terminal receipt so late progress cannot revive startup.
+          job.persistence = job.persistence
+            .then(async () => {
+              check();
+              if (context.meta.test?.step === step) return;
+              context.meta = await deps.save(context, { test: { status: 'starting', step } });
+            })
+            .catch(() => stop(job));
+        });
         try {
           await job.process.ready;
+          acceptingProgress = false;
+          await job.persistence;
           check();
           context.meta = await deps.save(context, { test: { status: 'ready' } });
+          job.testReady = true;
           await job.process.closed;
           if (context.isCurrent())
             context.meta = await deps.save(context, { test: { status: 'stopped' } });
@@ -88,28 +159,28 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
         }
       });
     } catch (error) {
+      acceptingProgress = false;
+      await job.persistence;
       job.process?.stop();
       if (context.isCurrent()) {
         const code = (error as { code?: unknown })?.code;
         if (job.kind === 'build') {
-          const known = [
-            'unavailable',
-            'changed',
-            'environment',
-            'missingShell',
-            'checksFailed',
-            'conflict',
-            'baselineChanged',
-            'interrupted',
-          ];
-          const failure = controller.signal.aborted
-            ? 'interrupted'
-            : typeof code === 'string' && known.includes(code)
-              ? (code as CindyMakePersonalBuildState['error'])
-              : 'buildFailed';
-          await deps
-            .save(context, { personal: { status: 'failed', error: failure } })
-            .catch(() => {});
+          const failure =
+            code === 'cleanupFailed'
+              ? 'cleanupFailed'
+              : controller.signal.aborted
+                ? job.cancelled
+                  ? 'cancelled'
+                  : 'interrupted'
+                : parseCindyMakeBuildError(code);
+          const diagnostic = controller.signal.aborted
+            ? undefined
+            : makeBuildErrorDiagnostic(error);
+          await saveBuild(job, {
+            status: 'failed',
+            error: failure,
+            ...(diagnostic ? { diagnostic } : {}),
+          }).catch(() => {});
           return;
         }
         const errorCode =
@@ -123,17 +194,45 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
           .save(context, {
             test: controller.signal.aborted
               ? { status: 'stopped' }
-              : { status: 'failed', error: errorCode },
+              : { status: 'failed', step: context.meta.test?.step, error: errorCode },
           })
           .catch(() => {});
       }
     } finally {
       clearInterval(ownerWatch);
       if (jobs.get(context.sessionId) === job) jobs.delete(context.sessionId);
+      job.releaseBuild?.();
+      if (
+        job.kind === 'build' &&
+        context.isCurrent() &&
+        ['ready', 'failed'].includes(context.meta.personal?.status ?? '')
+      )
+        deps.onBuildSettled?.(context);
     }
   };
   return {
     hasActiveJobs: () => jobs.size > 0,
+    isUsingSession: (sessionId: string) => jobs.has(sessionId),
+    activeBuild: () => {
+      const job = [...jobs.values()].find(
+        (entry) => entry.kind === 'build' && entry.context.isCurrent(),
+      );
+      return job?.context.meta.personal;
+    },
+    async cancelBuild(buildId: string): Promise<void> {
+      const job = [...jobs.values()].find((entry) => entry.buildId === buildId);
+      if (!job || !job.context.isCurrent() || job.cancelled) return;
+      await job.accepted;
+      const state = job.context.meta.personal;
+      if (!job.context.isCurrent() || !state || ['ready', 'failed'].includes(state.status)) return;
+      job.cancelled = true;
+      // Keep the lease until execute settles cleanup, and publish Stop before aborting.
+      try {
+        await saveBuild(job, { ...state, stopping: true });
+      } finally {
+        stop(job);
+      }
+    },
     isBuilding: (sessionId: string) => jobs.get(sessionId)?.kind === 'build',
     async stopTestForBuild(sessionId: string): Promise<void> {
       const job = jobs.get(sessionId);
@@ -141,13 +240,23 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
       if (!job.context.isCurrent()) throw makeTestError('unavailable');
       stop(job);
       await job.accepted.catch(() => {});
-      await job.finished;
+      await waitForStopped(job);
     },
     isUsingWorkspace(workingDir: string): boolean {
       return [...jobs.values()].some((job) => job.context.workingDir === workingDir);
     },
     stopAll(): void {
       for (const job of jobs.values()) stop(job);
+    },
+    async stopAllAndWait(): Promise<void> {
+      const active = [...jobs.values()];
+      for (const job of active) stop(job);
+      await Promise.all(
+        active.map(async (job) => {
+          await job.accepted.catch(() => {});
+          await waitForStopped(job);
+        }),
+      );
     },
     async act(
       sessionId: string,
@@ -160,20 +269,30 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
       const matching =
         previous?.context.completionId === completionId && previous.context.isCurrent();
       if (action === 'continue') {
-        if (previous && previous.context.isCurrent()) stop(previous);
+        if (previous?.kind === 'test' && previous.context.isCurrent() && !previous.testReady)
+          throw makeTestError('unavailable');
+        if (previous && previous.context.isCurrent()) {
+          stop(previous);
+          if (previous.kind === 'test') await waitForStopped(previous);
+        }
         return deps.save(context, { continuedAt: (deps.now ?? Date.now)() });
       }
       if (action === 'status') {
         if (matching) return previous!.accepted.then(() => previous!.context.meta);
         const patch: Partial<CindyMakeCompletionMeta> = {};
         if (['starting', 'ready'].includes(context.meta.test?.status ?? ''))
-          patch.test = { status: 'stopped', error: 'interrupted' };
+          patch.test = { ...context.meta.test, status: 'stopped', error: 'interrupted' };
         if (
-          ['waiting', 'checking', 'merging', 'packaging', 'publishing'].includes(
+          ['waiting', 'syncing', 'checking', 'merging', 'packaging', 'publishing'].includes(
             context.meta.personal?.status ?? '',
           )
         )
-          patch.personal = { status: 'failed', error: 'interrupted' };
+          patch.personal = appendCindyMakeBuildLog(context.meta.personal, {
+            ...context.meta.personal,
+            status: 'failed',
+            stopping: undefined,
+            error: 'interrupted',
+          });
         if (Object.keys(patch).length) return deps.save(context, patch);
         return context.meta;
       }
@@ -187,6 +306,13 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
         throw makeTestError('unavailable');
       const kind = action === 'build' ? 'build' : 'test';
       if (kind === 'build' && !deps.build) throw makeTestError('unavailable');
+      if (
+        kind === 'build' &&
+        [...jobs.values()].some(
+          (job) => job.kind === 'build' && job.context.sessionId !== sessionId,
+        )
+      )
+        throw makeTestError('unavailable');
       while (previous) {
         if (
           previous.context.completionId === completionId &&
@@ -197,7 +323,7 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
           return previous.accepted.then(() => previous!.context.meta);
         stop(previous);
         await previous.accepted.catch(() => {});
-        await previous.finished;
+        await waitForStopped(previous);
         context = await deps.load(sessionId, completionId);
         if (!context.isCurrent() || context.meta.continuedAt) throw makeTestError('unavailable');
         previous = jobs.get(sessionId);
@@ -208,26 +334,32 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
         controller: new AbortController(),
         accepted: Promise.resolve(context.meta),
         finished: Promise.resolve(),
+        persistence: Promise.resolve(),
+        releaseBuild: kind === 'build' ? deps.claimBuild?.(context) : undefined,
+        ...(kind === 'build' ? { buildId: randomUUID(), startedAt: (deps.now ?? Date.now)() } : {}),
       };
       jobs.set(sessionId, job);
       job.accepted = deps
         .save(
           context,
           kind === 'test'
-            ? { lastAction: 'test', test: { status: 'starting' } }
-            : { lastAction: 'build', personal: { status: 'waiting' } },
+            ? { lastAction: 'test', test: { status: 'starting', step: 'waiting' } }
+            : {
+                lastAction: 'build',
+                personal: { status: 'waiting', buildId: job.buildId, startedAt: job.startedAt },
+              },
         )
-        .then(
-          (meta) => {
-            context.meta = meta;
-            job.finished = execute(job);
-            return meta;
-          },
-          (error) => {
-            if (jobs.get(sessionId) === job) jobs.delete(sessionId);
-            throw error;
-          },
-        );
+        .then((meta) => {
+          context.meta = meta;
+          if (kind === 'build') deps.onBuildState?.(context, meta.personal!);
+          job.finished = execute(job);
+          return meta;
+        })
+        .catch((error) => {
+          if (jobs.get(sessionId) === job) jobs.delete(sessionId);
+          job.releaseBuild?.();
+          throw error;
+        });
       return job.accepted;
     },
   };

@@ -60,6 +60,7 @@ const { getWorkflowProgressForMock } = vi.hoisted(() => ({
 vi.mock('@/lib/makerTransport', () => ({
   isRemoteSessionSticky: () => false,
   getWorkflowProgressFor: getWorkflowProgressForMock,
+  readBackgroundTaskOutputTailFor: vi.fn().mockResolvedValue({ ok: false, reason: 'unavailable' }),
 }));
 
 import { AgentTaskCard } from '@/components/chat/AgentTaskCard';

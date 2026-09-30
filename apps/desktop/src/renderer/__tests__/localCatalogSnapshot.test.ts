@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
-import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 const mocks = vi.hoisted(() => ({
   beginCapabilities: vi.fn(),
@@ -9,9 +8,12 @@ const mocks = vi.hoisted(() => ({
   loadCapabilities: vi.fn(),
   beginProviders: vi.fn(),
   commitProviders: vi.fn(),
+  failProviders: vi.fn(),
   providersCurrent: vi.fn(),
   loadProviders: vi.fn(),
   initializeVisibility: vi.fn(),
+  initializationFailure: vi.fn(),
+  cachedProviders: vi.fn(),
   warn: vi.fn(),
 }));
 
@@ -25,6 +27,8 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
 vi.mock('@/lib/providersSnapshotStore', () => ({
   beginProvidersRefresh: mocks.beginProviders,
   commitProvidersSnapshot: mocks.commitProviders,
+  failProvidersRefresh: mocks.failProviders,
+  getCachedProvidersSnapshot: mocks.cachedProviders,
   isProvidersRefreshCurrent: mocks.providersCurrent,
   loadProvidersSnapshot: mocks.loadProviders,
 }));
@@ -35,9 +39,12 @@ vi.mock('@/lib/logger', () => ({
 
 vi.mock('@/state/modelVisibilityPrefs', () => ({
   migrateModelVisibilityDefaults: mocks.initializeVisibility,
+  getModelVisibilityInitializationFailure: mocks.initializationFailure,
 }));
 
-import { preloadLocalCatalogSnapshot, refreshLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
+import { preloadLocalCatalogSnapshot, refreshLocalCatalogSnapshot, startLocalCatalogRecovery } from '@/lib/localCatalogSnapshot';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { getLocalCatalogFailure, setLocalCatalogFailure } from '@/lib/localCatalogLoadState';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -48,6 +55,158 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+describe('local catalog recovery lifecycle', () => {
+  let stop: () => void;
+  let events: EventTarget;
+  const snapshot = { dataOwnerId: 'owner-a', ownerGeneration: 7, providers: [], providerOrder: [] };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    vi.clearAllMocks();
+    setDataOwnerGeneration('owner-a', 7);
+    setLocalCatalogFailure(getDataOwnerGeneration(), null);
+    mocks.beginProviders.mockReturnValue(1);
+    mocks.beginCapabilities.mockReturnValue(1);
+    mocks.providersCurrent.mockReturnValue(true);
+    mocks.capabilitiesCurrent.mockReturnValue(true);
+    mocks.loadProviders.mockResolvedValue(snapshot);
+    mocks.loadCapabilities.mockResolvedValue([]);
+    mocks.initializeVisibility.mockResolvedValue(false);
+    mocks.initializationFailure.mockReturnValue('legacy-busy');
+    mocks.cachedProviders.mockReturnValue(null);
+    events = new EventTarget();
+    vi.stubGlobal('window', events);
+    vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' }));
+    stop = startLocalCatalogRecovery();
+  });
+
+  afterEach(() => {
+    stop();
+    setLocalCatalogFailure(getDataOwnerGeneration(), null);
+    setDataOwnerGeneration(null, 0);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('recovers after the three startup attempts without another catalog event, preserving legacy off switches', async () => {
+    const legacyKey = 'xdt:modelVisibilityPrefs:v1';
+    const legacy = JSON.stringify({ 'pi:xd:hidden': false });
+    const saved = new Map<string, string>([[legacyKey, legacy]]);
+    const storage = {
+      getItem: (key: string) => saved.get(key) ?? null,
+      setItem: (key: string, value: string) => { saved.set(key, value); },
+      removeItem: (key: string) => { saved.delete(key); },
+    };
+    let exclusive = false;
+    const sync = vi.fn(async () => undefined);
+    Object.assign(events, { localStorage: storage, electronAPI: { maker: {
+      syncModelVisibility: sync,
+      claimLegacyModelVisibilityOwner: () => ({ dataOwnerId: 'owner-a', ownerGeneration: 7,
+        canWriteOwnerScoped: true, claimed: true, claimedByOtherOwner: false,
+        canInitialize: exclusive, profileOrigin: 'existing' }),
+    } } });
+    vi.stubGlobal('localStorage', storage);
+    vi.stubGlobal('navigator', { locks: { request: async (_key: string, run: () => boolean) => run() } });
+    vi.resetModules();
+    const prefs = await vi.importActual<typeof import('@/state/modelVisibilityPrefs')>('@/state/modelVisibilityPrefs');
+    const models = Array.from({ length: 29 }, (_,i) => ({ id: i === 0 ? 'hidden' : `model-${i}`, defaultEnabled: true }));
+    const provider = { id: 'xd', agents: ['pi'], routing: {}, models: { pi: models } } as unknown as ProviderView;
+    const catalog = { ...snapshot, providers: [provider] };
+    mocks.loadProviders.mockResolvedValue(catalog);
+    mocks.initializeVisibility.mockImplementation(prefs.migrateModelVisibilityDefaults);
+    mocks.initializationFailure.mockImplementation(prefs.getModelVisibilityInitializationFailure);
+    try {
+      await prefs.setModelVisibilityOwner('owner-a', 7, 'cloud');
+      const preload = preloadLocalCatalogSnapshot();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await preload;
+      expect(mocks.loadProviders).toHaveBeenCalledTimes(3);
+      expect(mocks.commitProviders).not.toHaveBeenCalled();
+      expect(getLocalCatalogFailure()?.reason).toBe('legacy-busy');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(mocks.loadProviders).toHaveBeenCalledTimes(4);
+      exclusive = true;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(mocks.commitProviders).toHaveBeenCalledExactlyOnceWith(1, catalog);
+      expect(prefs.isModelEnabled('pi', 'xd', models[0]!)).toBe(false);
+      expect(prefs.isModelEnabled('pi', 'xd', models[1]!)).toBe(true);
+      expect(saved.get(legacyKey)).toBe(legacy);
+      expect(getLocalCatalogFailure()).toBeNull();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { prefs.__resetForTest(); }
+  });
+
+  it('bounds automatic retries and recovers when the user returns after fixing storage', async () => {
+    mocks.initializationFailure.mockReturnValue('storage-quota');
+    await refreshLocalCatalogSnapshot();
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(mocks.loadProviders).toHaveBeenCalledTimes(6);
+    expect(mocks.commitProviders).not.toHaveBeenCalled();
+    expect(getLocalCatalogFailure()?.reason).toBe('storage-quota');
+    mocks.initializeVisibility.mockResolvedValue(true);
+    events.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.commitProviders).toHaveBeenCalledOnce();
+    expect(getLocalCatalogFailure()).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not keep retrying corrupt preferences but allows an explicit retry after repair', async () => {
+    mocks.initializationFailure.mockReturnValue('preferences-corrupt');
+    await refreshLocalCatalogSnapshot();
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(mocks.loadProviders).toHaveBeenCalledOnce();
+    expect(getLocalCatalogFailure()?.reason).toBe('preferences-corrupt');
+    mocks.initializeVisibility.mockResolvedValue(true);
+    await expect(refreshLocalCatalogSnapshot()).resolves.toBe(true);
+    expect(getLocalCatalogFailure()).toBeNull();
+  });
+
+  it('does not carry a failed account retry or error across an owner generation change', async () => {
+    await refreshLocalCatalogSnapshot();
+    setDataOwnerGeneration('owner-b', 8);
+    expect(getLocalCatalogFailure()).toBeNull();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.loadProviders).toHaveBeenCalledOnce();
+    mocks.initializeVisibility.mockResolvedValue(true);
+    mocks.loadProviders.mockResolvedValue({ ...snapshot, dataOwnerId: 'owner-b', ownerGeneration: 8 });
+    events.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.commitProviders).toHaveBeenCalledOnce();
+  });
+
+  it('stops an old preload instead of spending its remaining attempts in a different account', async () => {
+    const preload = preloadLocalCatalogSnapshot();
+    await vi.advanceTimersByTimeAsync(0);
+    setDataOwnerGeneration('owner-b', 8);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await preload;
+    expect(mocks.loadProviders).toHaveBeenCalledOnce();
+    expect(mocks.commitProviders).not.toHaveBeenCalled();
+  });
+
+  it('retries a snapshot invalidated only by an independent capability refresh', async () => {
+    mocks.capabilitiesCurrent.mockReturnValue(false);
+    await refreshLocalCatalogSnapshot();
+    mocks.capabilitiesCurrent.mockReturnValue(true);
+    mocks.initializeVisibility.mockResolvedValue(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(mocks.commitProviders).toHaveBeenCalledOnce();
+  });
+
+  it('removes retry timers and window listeners when the owning UI is disposed', async () => {
+    await refreshLocalCatalogSnapshot();
+    stop();
+    stop = () => {};
+    events.dispatchEvent(new Event('focus'));
+    events.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(mocks.loadProviders).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
 
 describe('refreshLocalCatalogSnapshot', () => {
   beforeEach(() => {
@@ -61,6 +220,9 @@ describe('refreshLocalCatalogSnapshot', () => {
     mocks.commitProviders.mockReturnValue(true);
     mocks.commitCapabilities.mockReturnValue(true);
     mocks.initializeVisibility.mockResolvedValue(true);
+    mocks.initializationFailure.mockReturnValue(null);
+    setDataOwnerGeneration(null, 0);
+    setLocalCatalogFailure(getDataOwnerGeneration(), null);
   });
 
   afterEach(() => {
@@ -77,6 +239,7 @@ describe('refreshLocalCatalogSnapshot', () => {
     expect(mocks.commitProviders).not.toHaveBeenCalled();
     expect(mocks.commitCapabilities).not.toHaveBeenCalled();
     expect(mocks.warn).toHaveBeenCalledOnce();
+    expect(mocks.failProviders).toHaveBeenCalledWith(1);
   });
 
   it('keeps the last valid snapshot when capabilities loading fails', async () => {
@@ -87,6 +250,7 @@ describe('refreshLocalCatalogSnapshot', () => {
     expect(mocks.commitProviders).not.toHaveBeenCalled();
     expect(mocks.commitCapabilities).not.toHaveBeenCalled();
     expect(mocks.warn).toHaveBeenCalledOnce();
+    expect(mocks.failProviders).toHaveBeenCalledWith(1);
   });
 
   it('waits for sibling reads after a failure before starting the trailing round', async () => {
@@ -102,6 +266,7 @@ describe('refreshLocalCatalogSnapshot', () => {
     await Promise.all([first, latest]);
     expect(mocks.loadProviders).toHaveBeenCalledTimes(2);
     expect(mocks.commitProviders).toHaveBeenCalledOnce();
+    expect(mocks.failProviders).not.toHaveBeenCalled();
   });
 
   it('does not commit capabilities when the provider snapshot owner is stale', async () => {
@@ -227,6 +392,7 @@ describe('refreshLocalCatalogSnapshot', () => {
       mocks.loadProviders.mockResolvedValue(snapshot);
       mocks.loadCapabilities.mockResolvedValue([]);
       mocks.initializeVisibility.mockImplementation(prefs.migrateModelVisibilityDefaults);
+      mocks.initializationFailure.mockImplementation(prefs.getModelVisibilityInitializationFailure);
       await expect(refreshLocalCatalogSnapshot()).resolves.toBe(true);
       expect(mocks.commitProviders).toHaveBeenCalledWith(expect.anything(), snapshot);
       expect(prefs.isModelEnabled('pi', 'xd', { id: 'recommended', defaultEnabled: true })).toBe(true);
@@ -292,6 +458,7 @@ describe('refreshLocalCatalogSnapshot', () => {
       mocks.loadProviders.mockResolvedValue(providers);
       mocks.loadCapabilities.mockResolvedValue([['pi', { availableModels: provider.models.pi }]]);
       mocks.initializeVisibility.mockImplementation(prefs.migrateModelVisibilityDefaults);
+      mocks.initializationFailure.mockImplementation(prefs.getModelVisibilityInitializationFailure);
       rejectWrite = failure === 'storage';
       rejectLock = failure === 'lock';
       const preload = preloadLocalCatalogSnapshot();

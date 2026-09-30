@@ -321,6 +321,11 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
       return result;
     },
     list: (input: Input & { query?: string }) => findBotCapabilities(input, deps),
+    /** Settings use the complete catalog, including removable unavailable references. */
+    async forSettings(input: Input) {
+      const ctx = await context(input.callerSessionId, { allowPaused: true });
+      return catalog(input, ctx, deps);
+    },
     select: (input: Input & { id: string; joined: boolean }) => selectBotCapability(input, deps),
     /** Renderer saves may contain stale selections; validate only new references before persistence. */
     async validateAdditions(update: BotCapabilityUpdate): Promise<void> {

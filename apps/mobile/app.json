@@ -91,6 +91,7 @@
       "expo-router",
       "expo-apple-authentication",
       "expo-notifications",
+      "./plugins/with-communication-notifications",
       "expo-secure-store",
       "expo-web-browser",
       [

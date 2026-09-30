@@ -1,11 +1,17 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 describe('mobile message content desktop-first surface', () => {
   it('uses desktop-matching file icons instead of text badges for file chips', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-    const desktopSource = readFileSync(resolve(process.cwd(), '../../apps/desktop/src/renderer/components/chat/UserMessage.tsx'), 'utf8');
+    // The desktop user-message file chip lives in UserAttachmentChip.tsx (shared with group chat).
+    const desktopChat = resolve(process.cwd(), '../../apps/desktop/src/renderer/components/chat');
+    const desktopSource = ['UserMessage.tsx', 'UserAttachmentChip.tsx']
+      .map((file) => resolve(desktopChat, file))
+      .filter((file) => existsSync(file))
+      .map((file) => readFileSync(file, 'utf8'))
+      .join('\n');
     const layoutSource = readFileSync(resolve(process.cwd(), 'src/session/messageContentLayout.ts'), 'utf8');
     const fileChipStart = source.indexOf('function FileChip');
     const fileChipEnd = source.indexOf('function DiffPreview', fileChipStart);
@@ -13,8 +19,8 @@ describe('mobile message content desktop-first surface', () => {
 
     expect(desktopSource).toContain("'h-7 px-2.5 py-1.5'");
     expect(desktopSource).toContain('<span className="truncate">{file.name}</span>');
-    expect(source).toContain('File as FileIcon,');
-    expect(source).toContain('<FileIcon color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />');
+    expect(desktopSource).toContain('<FileTypeIcon name={file.name}');
+    expect(fileChipSource).toContain('<FileTypeIcon name={name || path} color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />');
     expect(source).toContain('style={[styles.fileIconFrame, { width: layout.fileChipIconWidth }]}');
     expect(fileChipSource).toContain('<Text style={styles.fileName} numberOfLines={1}>{preview.title}</Text>');
     expect(fileChipSource).not.toContain('preview.detail');
@@ -108,9 +114,13 @@ describe('mobile message content desktop-first surface', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
     const tokenSource = readFileSync(resolve(process.cwd(), 'src/theme/tokens.ts'), 'utf8');
 
-    expect(tokenSource).toContain('code: 15');
+    expect(tokenSource).toContain('bodySmall: 15');
     expect(source).toContain('messageText: { color: colors.textPrimary, fontSize: typeScale.bodyLarge, lineHeight: lineHeight.bodyLarge }');
-    expect(source.match(/fontSize: typeScale\.code/g)).toHaveLength(4);
+    // 行内代码、代码块、表格、待办四处保持 15 号(bodySmall,原 code 档)。
+    for (const name of ['markdownInlineCode', 'markdownCodeText', 'markdownTableCell', 'todoText']) {
+      const block = source.match(new RegExp(`\\n\\s*${name}: \\{[^{}]*\\}`))?.[0] ?? '';
+      expect(block, name).toContain('fontSize: typeScale.bodySmall');
+    }
   });
 
   it('keeps message content readable on iPad and phone landscape', () => {

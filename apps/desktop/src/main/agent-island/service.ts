@@ -232,6 +232,7 @@ function sessionActivitySnapshotsEqual(
   right: AgentIslandSessionActivity,
 ): boolean {
   return left.sessionId === right.sessionId
+    && left.workingPhase === right.workingPhase
     && left.phase === right.phase
     && left.currentTurnActive === right.currentTurnActive
     && left.recordStatus === right.recordStatus
@@ -1480,7 +1481,13 @@ export class AgentIslandService {
       phase: s.phase,
       interactionKind: s.interactionKind,
       compactDetail: s.compactDetail,
+      workingPhase: s.workingPhase,
     }));
+  }
+
+  /** Current public activity only; avoids scanning historical Bot Session links. */
+  getSessionActivitySnapshots(): SessionActivitySnapshot[] {
+    return this.buildSessionActivityPayload().map(canonicalSessionActivity);
   }
 
   /** Read the same canonical snapshot used by sidebar and device-list relays. */

@@ -630,11 +630,10 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
-  it('call_tool(schedule_create, script + bound-session/worktree combos) returns INVALID_PARAMS', async () => {
+  it('call_tool(schedule_create, script + persistent-session/worktree combos) returns INVALID_PARAMS', async () => {
     for (const extra of [
       { persistentSession: true },
       { useWorktree: true },
-      { bindToCurrentSession: true },
     ]) {
       const result = await h.client.callTool({
         name: 'call_tool',
@@ -714,10 +713,8 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
-  it('call_tool(schedule_update, targetSessionId=null) unbinds so a bound schedule can switch to script mode (codex review 966)', async () => {
-    // 已绑定会话的任务:schema 只收 string 或缺省时,JSON 调用方拼不出"解绑"的
-    // 合法 patch(缺省 = 不修改),也就永远切不成 script 模式——null 必须被翻译
-    // 成 key 在但值 undefined 的引擎语义(同 preRunHook 约定)。
+  it('call_tool(schedule_update, targetSessionId=null) preserves a binding when switching to script, and explicitly unbinds with null', async () => {
+    // Omitted target preserves the lifecycle owner; explicit null clears it.
     const created = await h.client.callTool({
       name: 'call_tool',
       arguments: {
@@ -730,7 +727,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect((createdEnv.data as Schedule).targetSessionId).toBe('sess-bound-1');
     const id = (createdEnv.data as Schedule).id;
 
-    // 不解绑直接切 script → 引擎合并态校验拦下(绑定与 script 互斥)
+    // 切到 script 保留生命周期绑定；只有显式 null 才解绑。
     const stillBound = await h.client.callTool({
       name: 'call_tool',
       arguments: {
@@ -743,7 +740,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       },
     });
     const stillBoundEnv = parseToolResult(stillBound as { content: unknown[]; isError?: boolean }).envelope;
-    expect(stillBoundEnv).toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+    expect(stillBoundEnv).toMatchObject({ ok: true, data: { executionMode: 'script', targetSessionId: 'sess-bound-1' } });
 
     // targetSessionId: null 解绑 + 切 script,一个 patch 完成
     const unboundToScript = await h.client.callTool({
@@ -1064,6 +1061,16 @@ describe('schedule_create — bindToCurrentSession', () => {
     expect(env.ok).toBe(false);
     expect(env.code).toBe('INVALID_PARAMS');
     expect(created.input).toBeUndefined();
+  });
+
+  it('script binding uses caller identity and retains its own working directory', async () => {
+    const { created, registry } = setup('sess-current');
+    const env = await callCreate(registry, { executionMode: 'script',
+      scriptConfig: { command: 'node watcher.mjs', capabilities: ['sessions.dispatch'] },
+      workingDir: '/watcher', bindToCurrentSession: true, targetSessionId: 'stale',
+    });
+    expect(env.ok).toBe(true);
+    expect(created.input).toMatchObject({ targetSessionId: 'sess-current', workingDir: '/watcher' });
   });
 
   it('不设 bindToCurrentSession → 沿用 agent 传的 targetSessionId(向后兼容)', async () => {
@@ -1617,6 +1624,17 @@ describe('schedule_set_pre_run_hook — 统一安装通道', () => {
     const data = env.data as Record<string, unknown>;
     expect(data.attached).toBe(true);
     expect((data.test as Record<string, unknown>).decision).toBe('skip');
+  });
+
+  it('bound script hooks are installed in script cwd rather than owner cwd', async () => {
+    const { registry, installCalls } = setup({
+      scheduleRow: { id: 'sch-1', name: 'watcher', executionMode: 'script',
+        workingDir: '/watcher', targetSessionId: 'owner' },
+      resolveSessionWorkDir: async () => '/owner',
+    });
+    const env = await callTool(registry, { scheduleId: 'sch-1', script: 'process.exit(2)' });
+    expect(env.ok).toBe(true);
+    expect(installCalls[0]).toMatchObject({ workingDir: '/watcher' });
   });
 
   it('绑定会话任务 → 优先用 resolveSessionWorkDir 解析的会话目录落盘(schedule.workingDir 过期不用)', async () => {

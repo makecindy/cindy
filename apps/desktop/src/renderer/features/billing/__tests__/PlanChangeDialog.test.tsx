@@ -3,7 +3,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
     i18n: { language: 'en', resolvedLanguage: 'en' },
     t: (key: string, params?: Record<string, string>) =>
@@ -270,6 +271,11 @@ describe('PlanChangeTargetDialog product-first selection', () => {
       true,
     );
     expect(screen.queryByRole('combobox')).toBeNull();
+    const modelLinks = screen.getAllByRole('link', { name: 'billing.comparison.advancedModels' });
+    expect(modelLinks).toHaveLength(2);
+    for (const link of modelLinks) {
+      expect(link.getAttribute('href')).toBe('#/settings?tab=providers&connect=xd');
+    }
     fireEvent.click(screen.getByRole('button', { name: 'billing.catalog.currentPlan' }));
     expect(onSelect).not.toHaveBeenCalled();
   });
@@ -337,13 +343,35 @@ describe('PlanChangeTargetDialog product-first selection', () => {
           },
         ]}
         freeAction="Top up"
-        freeHint=""
+        onViewModels={vi.fn()}
         onFreeAction={vi.fn()}
       />,
     );
     expect(screen.getByText('$1.00')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Current' })).toHaveProperty('disabled', true);
     expect(screen.queryByRole('button', { name: 'Select' })).toBeNull();
+  });
+
+  it('links model access to Cindy AI and closes the purchase comparison', () => {
+    const onViewModels = vi.fn();
+    render(
+      <PlanComparison
+        plans={[
+          {
+            product: currentPlan.product,
+            defaultOfferCode: currentPlan.offer.code,
+            offers: [{ offer: currentPlan.offer, action: 'Select', onSelect: vi.fn() }],
+          },
+        ]}
+        freeAction="Top up"
+        onViewModels={onViewModels}
+        onFreeAction={vi.fn()}
+      />,
+    );
+    const link = screen.getByRole('link', { name: 'billing.comparison.advancedModels' });
+    expect(link.getAttribute('href')).toBe('#/settings?tab=providers&connect=xd');
+    fireEvent.click(link);
+    expect(onViewModels).toHaveBeenCalledOnce();
   });
 
   it('uses the remaining server Offer when the default Offer disappears', () => {

@@ -100,6 +100,57 @@ beforeEach(() => {
 });
 
 describe('model advanced editor', () => {
+  it('rejects ordinary managed GGUF edits above the backend maximum', async () => {
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+      llamaCppStatus: vi.fn(async () => ({ canConfigure: true, models: [{ id: 'small', repo: 'owner/small' }] })),
+    } } });
+    try {
+      const source = { ...buildUserProvider({ id: 'cindy-local-llamacpp', name: 'llama.cpp', runtimes: {
+        pi: { baseUrl: 'http://127.0.0.1:11435/v1', wireProtocol: 'openai-chat', models: [{ id: 'small', name: 'Small', contextWindow: 32768 }] },
+      } }), connected: true } as ProviderView;
+      const primary = source.models.pi![0]!;
+      render(<ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.contextLimitAria' });
+      await waitFor(() => expect(window.electronAPI.maker.llamaCppStatus).toHaveBeenCalled());
+      fireEvent.change(input, { target: { value: '64' } });
+      expect(input.getAttribute('aria-invalid')).toBe('true');
+      fireEvent.blur(input);
+      expect(mocks.setLimit).not.toHaveBeenCalled();
+      fireEvent.change(input, { target: { value: '32' } });
+      fireEvent.blur(input);
+      expect(mocks.setLimit).toHaveBeenLastCalledWith(32000);
+    } finally { cleanup(); Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+  it.each([true, false])('gates local context configuration with capability %s', async (canConfigure) => {
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+      llamaCppStatus: vi.fn(async () => ({ canConfigure, models: [{ id: 'flash', repo: 'bartowski/Qwen3.8-Flash-Next-GGUF' }] })),
+    } } });
+    try {
+      const source = { ...buildUserProvider({ id: 'cindy-local-llamacpp', name: 'llama.cpp', runtimes: {
+        pi: { baseUrl: 'http://127.0.0.1:11435/v1', wireProtocol: 'openai-chat', models: [{ id: 'flash', name: 'Flash', contextWindow: 262144 }] },
+      } }), connected: true } as ProviderView;
+      const primary = source.models.pi![0]!;
+      render(<ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      const million = await screen.findByRole('button', { name: '1M' });
+      if (!canConfigure) {
+        expect((million as HTMLButtonElement).disabled).toBe(true);
+        expect(screen.getByText('settings.providers.llamacpp.ownedElsewhere')).toBeTruthy();
+        fireEvent.click(million);
+        expect(mocks.setLimit).not.toHaveBeenCalled();
+        return;
+      }
+      fireEvent.click(million);
+      expect(mocks.setLimit).toHaveBeenLastCalledWith(1_000_000);
+      fireEvent.click(screen.getByRole('button', { name: '256K' }));
+      expect(mocks.setLimit).toHaveBeenLastCalledWith(262144);
+      expect(screen.queryByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' })).toBeNull();
+    } finally {
+      cleanup();
+      Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous });
+    }
+  });
   it('shows the imported API as a label rather than offering unrelated supplier transports', () => {
     const source = { ...buildUserProvider({ id: 'nous-test', name: 'Hermes', runtimes: {
       pi: { catalogPresetId: 'nous', baseUrl: 'https://inference-api.nousresearch.com/v1', wireProtocol: 'openai-chat', models: [{ id: 'gpt-6', name: 'GPT-6' }] },
@@ -484,9 +535,9 @@ describe('model advanced editor', () => {
       drawer({ ...model, contextWindow: 700_000, efforts: ['high', 'max'], defaultEffort: 'max' }),
     );
     expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('700');
-    expect(screen.queryByRole('button', { name: 'effortLevels.low' })).toBeNull();
+    expect(screen.queryByRole('radio', { name: 'effortLevels.low' })).toBeNull();
     expect(
-      screen.getByRole('button', { name: 'effortLevels.max' }).getAttribute('aria-pressed'),
+      screen.getByRole('radio', { name: 'effortLevels.max' }).getAttribute('aria-checked'),
     ).toBe('true');
   });
 
@@ -513,7 +564,7 @@ describe('model advanced editor', () => {
     expect(
       screen.queryByText(/settings.providers.models.advanced.engineDefaultEffort/),
     ).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'effortLevels.high' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'effortLevels.high' }));
     expect(setProviderModelEffort).toHaveBeenCalledWith('codex', 'openai', 'gpt-6', 'high');
     expect(setProviderModelEffort).toHaveBeenCalledWith('claude-code', 'openai', 'chatgpt/gpt-6', 'high');
   });
@@ -521,9 +572,9 @@ describe('model advanced editor', () => {
   it('shows one selected depth when another harness needs a supported-level mapping', () => {
     render(drawer(model, 'low', ['low']));
     expect(screen.queryByText('settings.providers.models.advanced.effortMixed')).toBeNull();
-    expect(screen.getByRole('button', { name: 'effortLevels.high' }).getAttribute('aria-pressed'))
+    expect(screen.getByRole('radio', { name: 'effortLevels.high' }).getAttribute('aria-checked'))
       .toBe('true');
-    fireEvent.click(screen.getByRole('button', { name: 'effortLevels.high' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'effortLevels.high' }));
     expect(setProviderModelEffort).toHaveBeenCalledWith('codex', 'openai', 'gpt-6', 'high');
     expect(setProviderModelEffort).toHaveBeenCalledWith('claude-code', 'openai', 'chatgpt/gpt-6', 'low');
   });
@@ -541,24 +592,24 @@ it('shows closed Gateway tiers disabled and re-enables them on catalog refresh',
     ...model, efforts: ['high'], defaultEffort: 'high', displayEfforts: ['low', 'high', 'max'],
   };
   const view = render(drawer(restricted));
-  const low = screen.getByRole('button', { name: 'effortLevels.low' }) as HTMLButtonElement;
+  const low = screen.getByRole('radio', { name: 'effortLevels.low' }) as HTMLButtonElement;
   expect(low.disabled).toBe(true);
   fireEvent.click(low);
   expect(setProviderModelEffort).not.toHaveBeenCalled();
   view.rerender(drawer({ ...restricted, efforts: ['low', 'high'] }));
-  const enabledLow = screen.getByRole('button', { name: 'effortLevels.low' }) as HTMLButtonElement;
+  const enabledLow = screen.getByRole('radio', { name: 'effortLevels.low' }) as HTMLButtonElement;
   expect(enabledLow.disabled).toBe(false);
   fireEvent.click(enabledLow);
   expect(setProviderModelEffort).toHaveBeenCalledWith('codex', 'openai', model.id, 'low');
-  expect((screen.getByRole('button', { name: 'effortLevels.max' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('radio', { name: 'effortLevels.max' }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 it('keeps the tier row visible when Gateway closes every tier', () => {
   draw({ ...model, efforts: [], defaultEffort: null, displayEfforts: ['low', 'high'] });
   for (const effort of ['low', 'high']) {
-    const button = screen.getByRole('button', { name: `effortLevels.${effort}` }) as HTMLButtonElement;
+    const button = screen.getByRole('radio', { name: `effortLevels.${effort}` }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
-    expect(button.getAttribute('aria-pressed')).toBe('false');
+    expect(button.getAttribute('aria-checked')).toBe('false');
   }
 });
 
@@ -586,7 +637,7 @@ it('limits context and effort reads, writes and resets to the chat runtime', () 
   expect(mocks.target).toHaveBeenLastCalledWith(expect.objectContaining({ agent: 'codex', relatedTargets: [] }));
   expect(screen.queryByText('settings.providers.models.advanced.effortMixed')).toBeNull();
   expect(vi.mocked(getProviderModelEffort).mock.calls.every(([agent]) => agent === 'codex')).toBe(true);
-  fireEvent.click(screen.getByRole('button', { name: 'effortLevels.low' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'effortLevels.low' }));
   expect(setProviderModelEffort).toHaveBeenCalledExactlyOnceWith('codex', 'private', 'shared', 'low');
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' }));
   expect(clearProviderModelEffort).toHaveBeenCalledExactlyOnceWith('codex', 'private', 'shared');
@@ -595,4 +646,16 @@ it('limits context and effort reads, writes and resets to the chat runtime', () 
   fireEvent.blur(input);
   expect(mocks.setLimit).toHaveBeenCalledWith(128_000);
   expect(mocks.target).toHaveBeenLastCalledWith(expect.objectContaining({ agent: 'codex', relatedTargets: [] }));
+});
+it('keeps enterprise reference prices read-only in the model drawer', () => {
+  render(
+    drawer(model, model.defaultEffort, model.efforts, {
+      ...provider,
+      id: 'byok-example',
+      source: 'organization',
+    }),
+  );
+  expect(
+    screen.queryByRole('button', { name: 'settings.providers.models.priceOverride.menu' }),
+  ).toBeNull();
 });

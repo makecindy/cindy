@@ -74,6 +74,7 @@ describe('checkDiscordSessionAuth', () => {
         providerId: 'openai',
         permissionMode: 'auto' as const,
         fastMode: false,
+        fingerprint: 'fp',
       };
     });
     const checkAuth = vi.fn(
@@ -117,6 +118,7 @@ describe('checkDiscordSessionAuth', () => {
       providerId: 'anthropic',
       permissionMode: 'auto' as const,
       fastMode: false,
+      fingerprint: 'fp',
     }));
     const checkAuth = vi.fn(async () => ({ ok: true, missing: null }));
 

@@ -166,3 +166,18 @@ export function nextHomeTaskBatch(
   }
   return { items, seenIds: [...seen], displayedCount: visibleCount };
 }
+
+/**
+ * Composer text for a plugin suggestion whose plugin is usable here. Hover preview and click
+ * fill share this so the preview always shows exactly what lands in the composer; `$command`
+ * stays as typed text and ChatInput expands it on send.
+ */
+export function pluginSuggestionComposerText(
+  prompt: string,
+  ghost: { manifest: { id: string; name: string; command?: string } },
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  return ghost.manifest.command
+    ? `$${ghost.manifest.command} ${prompt}`
+    : `${prompt}\n\n${t('newChat.pluginSuggestions.usePlugin', { name: ghost.manifest.name, id: ghost.manifest.id })}`;
+}

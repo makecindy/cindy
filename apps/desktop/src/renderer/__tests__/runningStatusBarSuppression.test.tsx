@@ -52,6 +52,7 @@ const deps = {
   Activity: Icon,
   Layers: Icon,
   Sparkles: Icon,
+  Spinner: Icon,
   Square: Icon,
   ArrowDown: Icon,
   STATUS_BAR_FADE_MS: 400,
@@ -69,6 +70,7 @@ const RunningStatusBar = new Function(
   suppressContent?: boolean;
   rightLeadingSlot?: React.ReactNode;
   status: string;
+  reconnectStatus?: string | null;
   startedAt: number;
   tokenUsage: number;
   outputTokens: number;
@@ -77,6 +79,54 @@ const RunningStatusBar = new Function(
 }>;
 
 afterEach(cleanup);
+
+it.each([false, true])('reconnect hides stale speed and pinned history, then waits for fresh samples (pinned=%s)', (pinned) => {
+  const props = {
+    visible: true, status: 'Generating...', startedAt: 1, tokenUsage: 1000,
+    outputTokens: 0, generationDurationMs: 0, generationReliable: true,
+  };
+  const { container, rerender } = render(<RunningStatusBar {...props} />);
+  const measured = { ...props, outputTokens: 465, generationDurationMs: 10000 };
+  rerender(<RunningStatusBar {...measured} />);
+  const trigger = () => container.querySelector('[data-running-status-meta] button');
+  expect(trigger()?.textContent).toContain('chat.runningStatus.tokenRate');
+  if (pinned) {
+    fireEvent.click(trigger()!);
+    expect(screen.getByRole('dialog').textContent).toContain('46.5');
+  }
+
+  rerender(<RunningStatusBar {...measured} reconnectStatus="Reconnecting 1/5" />);
+  expect(screen.getByText('Reconnecting 1/5')).toBeTruthy();
+  expect(screen.queryByText('Generating...')).toBeNull();
+  expect(trigger()).toBeNull();
+  expect(container.querySelector('[data-running-status-meta]')?.textContent).not.toContain('token');
+  expect(screen.queryByRole('dialog')).toBeNull();
+
+  rerender(<RunningStatusBar {...measured} reconnectStatus="Reconnecting 2/5" />);
+  expect(screen.getByText('Reconnecting 2/5')).toBeTruthy();
+  expect(trigger()).toBeNull();
+
+  // Recovery must not redisplay the pre-interruption 46.5 tok/s.
+  rerender(<RunningStatusBar {...measured} />);
+  expect(screen.getByText('Generating...')).toBeTruthy();
+  expect(trigger()).not.toBeNull();
+  expect(trigger()?.textContent).not.toContain('chat.runningStatus.waitingSample');
+  expect(trigger()?.textContent).not.toContain('chat.runningStatus.tokenRate');
+  expect(screen.queryByRole('dialog')).toBeNull();
+  rerender(<RunningStatusBar {...measured} outputTokens={515} generationDurationMs={11000} />);
+  expect(trigger()?.textContent).toContain('chat.runningStatus.tokenRate');
+  fireEvent.click(trigger()!);
+  expect(screen.getByRole('dialog').textContent).toContain('50');
+});
+
+it('reconnect hides token fallback for harnesses without reliable generation timing', () => {
+  const { container } = render(<RunningStatusBar
+    visible status="Generating..." reconnectStatus="Reconnecting" startedAt={1}
+    tokenUsage={1000} outputTokens={465} generationDurationMs={0} generationReliable={false}
+  />);
+  expect(screen.getByText('Reconnecting')).toBeTruthy();
+  expect(container.querySelector('[data-running-status-meta]')?.textContent).not.toContain('token');
+});
 
 it('opens measured zero history and restores fallback across reliability and turn changes', () => {
   const props = {

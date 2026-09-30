@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MakeSourceStatus } from '../../../shared/cindyMakeDoctor.js';
-import { createLatestSourceVersionReader } from '../latestSourceVersion.js';
+import { createLatestSourceVersionReader, sourceChannel } from '../latestSourceVersion.js';
 
 const local = 'a'.repeat(40);
 const remote = 'b'.repeat(40);
@@ -23,6 +23,12 @@ const comparison = { base_commit: { sha: local }, ahead_by: 7, behind_by: 2 };
 afterEach(() => vi.useRealTimers());
 
 describe('latest Cindy source version', () => {
+  it('uses the managed source channel even when the running Dev app is packaged', () => {
+    expect(sourceChannel({ channel: 'dev', ref: 'main' }, 'release')).toBe('dev');
+    expect(sourceChannel({ channel: undefined, ref: 'main' }, 'release')).toBe('dev');
+    expect(sourceChannel({ channel: 'release', ref: 'v1.2.3' }, 'dev')).toBe('release');
+  });
+
   it('queries live main and reports the local main difference in the correct direction', async () => {
     const fetch = vi
       .fn()

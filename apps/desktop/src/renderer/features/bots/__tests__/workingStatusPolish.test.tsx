@@ -3,6 +3,7 @@ import React from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import i18n from '@/i18n';
+import { BotGenerationLabel } from '../BotGenerationLabel';
 import { BotWorkingStatus } from '../BotWorkingStatus';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
@@ -111,4 +112,48 @@ it.each([
   await act(async () => {});
   tick();
   expect(screen.getByRole('status').textContent).toBe(text);
+});
+
+it('remote chat gets polished copy from the host resource, never a local model request', async () => {
+  const invoke = vi.fn().mockResolvedValue({ blocks: [{ id: 'working', fallbackMarkdown: '翻翻文件里的内容…' }] });
+  Object.assign(window.electronAPI, { deviceLink: { invoke } });
+  render(<BotWorkingStatus {...props} remote={{ deviceId: 'host', botId: 'writer' }} messages={[tool('read', { path: 'PRIVATE' })]} />);
+  await act(async () => {});
+  tick();
+  expect(screen.getByRole('status').textContent).toBe('翻翻文件里的内容…');
+  expect(request).not.toHaveBeenCalled();
+  expect(invoke).toHaveBeenCalledWith('host', expect.any(String), [{
+    client: { protocolVersion: 1, primitives: ['status'], locale: 'zh-CN' },
+    ref: { collectionId: 'teammates', kind: 'bot', id: 'working:writer/reading-file' },
+  }]);
+});
+
+
+it.each(['Compacting...', 'Compacting context…'])('localizes %s before old live blocks and clears late copy through stop/resume', async (status) => {
+  let resolve!: (value: { text: string }) => void;
+  request.mockReturnValue(new Promise(r => { resolve = r; }));
+  const messages = [tool('bot_memory', { action: 'read' })];
+  const view = render(<BotWorkingStatus {...props} messages={messages} />);
+  view.rerender(<BotWorkingStatus {...props} status={status} messages={messages} />);
+  await act(async () => resolve({ text: '翻翻之前记下的事…' }));
+  tick();
+  expect(screen.getByRole('status').textContent).toBe('正在整理对话…');
+  expect(request).toHaveBeenCalledTimes(1);
+  view.rerender(<BotWorkingStatus {...props} />);
+  tick();
+  expect(screen.getByRole('status').textContent).toBe('正在思考…');
+  view.rerender(<BotWorkingStatus {...props} visible={false} />);
+  expect(screen.queryByRole('status')).toBeNull();
+});
+
+
+it.each([
+  ['en', 'Organizing the conversation…'], ['zh-CN', '正在整理对话…'],
+  ['zh-TW', '正在整理對話…'], ['ja', '会話を整理しています…'], ['ko', '대화를 정리하는 중…'],
+])('keeps the list and composer compaction caption identical in %s', async (locale, caption) => {
+  await i18n.changeLanguage(locale);
+  render(<><BotGenerationLabel sessionId="test" phase="compacting" startedAt={1000}/>
+    <BotWorkingStatus {...props} status="Compacting context…" /></>);
+  expect(screen.getAllByText(caption)).toHaveLength(2);
+  expect(request).not.toHaveBeenCalled();
 });

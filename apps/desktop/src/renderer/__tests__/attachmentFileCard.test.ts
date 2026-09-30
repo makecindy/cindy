@@ -9,7 +9,8 @@
  *
  * 与同目录 thumbnailClickPreview.test.ts 同族,走源码断言:ThumbnailItem 依赖
  * ChatInput 的大量本地状态,单独挂载成本远高于收益,这里把关键契约钉在源码层,
- * 防止后续重构悄悄退回「只有扩展名」的形态。
+ * 防止后续重构悄悄退回「只有扩展名」的形态。托盘组件在 ComposerAttachments.tsx
+ * (ChatInput 与伙伴群聊输入框共用)。
  */
 
 import { describe, it, expect } from 'vitest';
@@ -18,7 +19,7 @@ import { resolve } from 'node:path';
 
 // 归一化 CRLF → LF：Windows autocrlf=true 检出下工作树是 CRLF。
 const chatInput = readFileSync(
-  resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
+  resolve(__dirname, '..', 'components', 'new-chat', 'ComposerAttachments.tsx'),
   'utf8',
 ).replace(/\r\n/g, '\n');
 

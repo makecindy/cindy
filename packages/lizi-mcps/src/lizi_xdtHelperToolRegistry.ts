@@ -18,6 +18,7 @@ import { z } from 'zod';
 /**
  * Category 分两类:
  *  - 'cindy'   : 只读自省 (get_capabilities / get_current_session_id)
+ *  - 'auth'    : Host 托管的供应商授权流程；短码可见，长期凭证不返回。
  *  - 'history' : 只读查询本地数据库里的历史聊天数据 (list_workdirs /
  *                list_sessions / get_chat_history / search_chat_history),
  *                方便用户自己组织 memory / 知识库系统
@@ -35,13 +36,19 @@ import { z } from 'zod';
  * session,或为业务对象新建专属 session),供 skill 路由用。单独成类(不并入 control)
  * 是为了让 list_tools(control) 的"改会话标题"结果里不混入 handoff,避免 LLM 在"改名"
  * 意图下误选 send_to_session。
+ *
+ * 'skills' 是由 Cindy 宿主管理的 Skill 工作流入口。工具只负责启动，
+ * staging、审查与安装仍由宿主状态机控制。
  */
 export type XdtHelperToolCategory =
   | 'cindy'
+  | 'auth'
   | 'history'
   | 'control'
   | 'feedback'
   | 'handoff'
+  | 'skills'
+  | 'app_update'
   | 'bots';
 
 export type XdtHelperToolContentBlock =

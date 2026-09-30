@@ -118,3 +118,31 @@ describe('伙伴行的间距基线', () => {
     expect(source).toContain('<div className="flex min-h-0 flex-1 flex-col px-3 pt-2">');
   });
 });
+
+describe('群聊分组与伙伴行同一套几何', () => {
+  const groupSection = readFileSync(
+    resolve(__dirname, '..', 'BotGroupSidebarSection.tsx'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+
+  it('挂在伙伴列表下方、同一滚动区里', () => {
+    expect(code).toContain('<BotGroupSidebarSection');
+    expect(code.indexOf('<BotGroupSidebarSection')).toBeGreaterThan(code.indexOf('archivedBots.map'));
+  });
+
+  it('小节头与「伙伴」小节头同一对齐，新建按钮与添加伙伴同尺寸', () => {
+    expect(groupSection).toContain('<div className="flex items-center justify-between px-2.5 pb-2">');
+    expect(groupSection).toContain(
+      'flex items-center gap-2 text-12 font-medium text-[var(--sidebar-list-muted)]',
+    );
+    expect(groupSection).toContain('flex h-7 w-7 items-center justify-center rounded-full');
+  });
+
+  it('群行沿用对称的 10px / 8px 内边距、40px 头像位、14/12/11 字号', () => {
+    expect(groupSection).toContain('gap-2.5 rounded-xl px-2.5 py-2 text-left');
+    expect(groupSection).toContain('<span className="flex min-w-0 flex-1 flex-col gap-0.5">');
+    expect(groupSection).toContain('min-w-0 truncate text-14 leading-5');
+    expect(groupSection).toContain("'min-w-0 flex-1 truncate text-12 leading-4'");
+    expect(groupSection).toContain("'w-10 shrink-0 self-start pt-0.5 text-right text-11 tabular-nums'");
+  });
+});

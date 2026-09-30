@@ -494,7 +494,8 @@ export async function hydrateBotProfileRuntime(
     .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
     .where(and(eq(botSessionLinks.sessionId, opts.id), eq(sessions.source, 'bot')))
     .limit(1);
-  if (!row || !['canonical', 'delegation'].includes(row.role)) return null;
+  // Group lanes are long-lived like the canonical Chat and share its Profile/Home.
+  if (!row || !['canonical', 'delegation', 'group'].includes(row.role)) return null;
   const [profile] = await db
     .select()
     .from(botProfiles)
@@ -1032,11 +1033,13 @@ export async function hydrateBotProfileRuntime(
           : JSON.stringify(previousResolved.runtimeEpoch ?? {}),
       )
     : null;
-  const runtimeEpochChanged = row.role === 'canonical' && previousSnapshot !== undefined
+  // Canonical Chats and group lanes follow Profile updates; delegation children stay frozen.
+  const followsProfile = row.role === 'canonical' || row.role === 'group';
+  const runtimeEpochChanged = followsProfile && previousSnapshot !== undefined
     ? previousSnapshot.profileVersion !== row.profileVersion
       || previousRuntimeEpoch?.sha256 !== runtimeEpochSha256
     : false;
-  if (previousSnapshot && row.role !== 'canonical') {
+  if (previousSnapshot && !followsProfile) {
     if (!previousResolved) {
       throw Object.assign(
         new Error('Bot runtime snapshot is invalid'),

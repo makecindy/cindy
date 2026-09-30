@@ -553,36 +553,49 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     const adapter = new DesktopCodexAuthAdapter();
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const callbackStarted = new Promise<void>(resolve => { entered = resolve; });
     const callback = vi.fn(async () => {
+      entered();
       await gate;
       if (outcome === 'failure') throw new Error('test host retirement failure');
     });
     adapter.setOnLoginSuccess(callback);
     const settled = vi.fn();
     const login = adapter.triggerLogin({ mode: 'local' }).then(state => { settled(); return state; });
-    await vi.waitFor(() => expect(callback).toHaveBeenCalledOnce());
-    expect(settled).not.toHaveBeenCalled();
-    await expect(adapter.getAccessToken()).resolves.toBe('system-token');
-    if (outcome === 'owner-change') h.dataOwnerId = 'owner-b';
-    if (outcome === 'cancel' || outcome === 'cancel-cleanup-failure') adapter.cancelLogin();
-    if (outcome === 'cancel-cleanup-failure') {
-      const error = new Error('test disconnect persistence failure');
-      vi.spyOn(adapter as unknown as { disconnectCodexOAuth(): Promise<void> }, 'disconnectCodexOAuth').mockRejectedValueOnce(error);
-      const rejected = expect(login).rejects.toBe(error);
-      release();
-      await rejected;
+    try {
+      // Wait for the actual refresh boundary, not vi.waitFor's 1s IO deadline.
+      // If login exits without reaching it, fail immediately rather than hang.
+      await Promise.race([callbackStarted, login.then(() => {
+        throw new Error('Login settled before the runtime refresh callback');
+      })]);
+      expect(callback).toHaveBeenCalledOnce();
       expect(settled).not.toHaveBeenCalled();
+      await expect(adapter.getAccessToken()).resolves.toBe('system-token');
+      if (outcome === 'owner-change') h.dataOwnerId = 'owner-b';
+      if (outcome === 'cancel' || outcome === 'cancel-cleanup-failure') adapter.cancelLogin();
+      if (outcome === 'cancel-cleanup-failure') {
+        const error = new Error('test disconnect persistence failure');
+        vi.spyOn(adapter as unknown as { disconnectCodexOAuth(): Promise<void> }, 'disconnectCodexOAuth').mockRejectedValueOnce(error);
+        const rejected = expect(login).rejects.toBe(error);
+        release();
+        await rejected;
+        expect(settled).not.toHaveBeenCalled();
+        expect(fs.readFileSync(systemAuth)).toEqual(before);
+        return;
+      }
+      release();
+      await expect(login).resolves.toMatchObject(outcome === 'owner-change' || outcome === 'cancel'
+        ? { authenticated: false, errorReason: 'login_cancelled' }
+        : { authenticated: true });
+      h.dataOwnerId = 'owner-a';
+      await expect(adapter.getAccessToken()).resolves.toBe(outcome === 'cancel' ? null : 'system-token');
+      await expect(new DesktopCodexAuthAdapter().getAccessToken()).resolves.toBe(outcome === 'cancel' ? null : 'system-token');
       expect(fs.readFileSync(systemAuth)).toEqual(before);
-      return;
+    } finally {
+      release();
+      await login.catch(() => undefined);
     }
-    release();
-    await expect(login).resolves.toMatchObject(outcome === 'owner-change' || outcome === 'cancel'
-      ? { authenticated: false, errorReason: 'login_cancelled' }
-      : { authenticated: true });
-    h.dataOwnerId = 'owner-a';
-    await expect(adapter.getAccessToken()).resolves.toBe(outcome === 'cancel' ? null : 'system-token');
-    await expect(new DesktopCodexAuthAdapter().getAccessToken()).resolves.toBe(outcome === 'cancel' ? null : 'system-token');
-    expect(fs.readFileSync(systemAuth)).toEqual(before);
   });
 
   it.each([false, true])('local reconnect shares native refresh writes instead of copying (existing=%s)', async (existing) => {

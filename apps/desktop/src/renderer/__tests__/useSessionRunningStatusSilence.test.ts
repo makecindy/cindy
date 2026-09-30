@@ -26,6 +26,7 @@ const storeMock = vi.hoisted(() => ({
   terminalErrorSessions: new Set<string>(),
   sideTaskStopSessions: new Set<string>(),
   privateReplySessions: new Set<string>(),
+  groupLaneSessions: new Set<string>(),
   recoverySessions: new Set<string>(),
 }));
 
@@ -41,6 +42,7 @@ vi.mock('@/lib/makerChatStore', () => ({
     hasSessionTerminalError: (sessionId: string) => storeMock.terminalErrorSessions.has(sessionId),
     hasSessionRecoveryPending: (sessionId: string) => storeMock.recoverySessions.has(sessionId),
     wasLastStopPrivateReply: (sessionId: string) => storeMock.privateReplySessions.has(sessionId),
+    wasLastStopGroupLane: (sessionId: string) => storeMock.groupLaneSessions.has(sessionId),
     wasLastStopSideTask: (sessionId: string) => storeMock.sideTaskStopSessions.has(sessionId),
   },
 }));
@@ -162,6 +164,18 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     await emitSnapshot(new Map([['private', status(false)]]));
     await act(async () => { await vi.advanceTimersByTimeAsync(500); });
     expect(onSessionDone).toHaveBeenCalledWith('private');
+  });
+
+  it('never raises attention or callbacks for a Bot group lane, even when it fails', async () => {
+    const onSessionDone = vi.fn();
+    const onSessionError = vi.fn();
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionDone, onSessionError }));
+    storeMock.groupLaneSessions.add('lane');
+    await emitSnapshot(new Map([['lane', status(true)]]));
+    await emitSnapshot(new Map([['lane', status(false, true)]]));
+    expect(addSessionAttention).not.toHaveBeenCalled();
+    expect(onSessionError).not.toHaveBeenCalled();
+    storeMock.groupLaneSessions.clear();
   });
 
   it('does not mute a normal follow-up that starts during silenced completion linger', async () => {
@@ -486,6 +500,21 @@ describe('useSessionRunningStatus silenced completion handling', () => {
 
     expect(vi.mocked(addSessionAttention)).not.toHaveBeenCalledWith('session-error', 'done');
     expect(onSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('does not replace a native Make failure with delayed Agent success attention', async () => {
+    vi.useFakeTimers();
+    renderHook(() => useSessionRunningStatus(undefined));
+    await emitSnapshot(new Map([['make', status(true)]]));
+    await emitSnapshot(new Map([['make', status(false)]]));
+    // The native build failed after the Agent finished: there is no Agent error row.
+    vi.mocked(getSessionAttentionKind).mockReturnValue('error');
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(addSessionAttention).not.toHaveBeenCalledWith('make', 'done');
+    } finally {
+      vi.mocked(getSessionAttentionKind).mockReturnValue(undefined);
+    }
   });
 
   it('preserves the prior done attention if the next turn stays in starting', async () => {

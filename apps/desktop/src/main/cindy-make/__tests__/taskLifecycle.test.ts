@@ -64,6 +64,133 @@ function sourceFixture() {
 }
 
 describe('Main-owned Cindy Make task lifecycle', () => {
+  it('reserves one build across entry points and ignores an old release after retry', () => {
+    const manager = new CindyMakeManager();
+    const release = manager.claimPersonalBuild();
+    expect(manager.isPersonalBuildRunning()).toBe(true);
+    expect(manager.hasActiveWork()).toBe(true);
+    expect(() => manager.claimPersonalBuild()).toThrow('personal build is running');
+    release();
+    const releaseRetry = manager.claimPersonalBuild();
+    release();
+    expect(manager.hasActiveWork()).toBe(true);
+    releaseRetry();
+    expect(manager.isPersonalBuildRunning()).toBe(false);
+    expect(manager.hasActiveWork()).toBe(false);
+  });
+  it('rejects a new build claim while an application version is switching', () => {
+    const manager = new CindyMakeManager();
+    manager.setVersionSwitchingProbe(() => true);
+    expect(manager.isVersionSwitching()).toBe(true);
+    expect(() => manager.claimPersonalBuild()).toThrow('version switch is running');
+    expect(manager.isPersonalBuildRunning()).toBe(false);
+    manager.setVersionSwitchingProbe(() => false);
+    const release = manager.claimPersonalBuild();
+    expect(manager.isPersonalBuildRunning()).toBe(true);
+    release();
+  });
+  it('rejects a build claim while the source is in use', async () => {
+    const manager = new CindyMakeManager();
+    await manager.withProjectUse('source', async () => {
+      expect(() => manager.claimPersonalBuild()).toThrow('source work is running');
+      expect(manager.isPersonalBuildRunning()).toBe(false);
+    });
+    const release = manager.claimPersonalBuild();
+    release();
+  });
+  it('keeps manual source sync and personal build claims mutually exclusive', () => {
+    const manager = new CindyMakeManager();
+    const releaseSync = manager.claimManualSourceSync();
+    expect(manager.hasActiveWork()).toBe(true);
+    expect(() => manager.claimPersonalBuild()).toThrow('manual source sync is running');
+    releaseSync();
+    const releaseBuild = manager.claimPersonalBuild();
+    expect(() => manager.claimManualSourceSync()).toThrow('personal build or source sync is running');
+    releaseBuild();
+    expect(manager.hasActiveWork()).toBe(false);
+  });
+  it('keeps build claims blocked until a retained source conflict is settled', () => {
+    const manager = new CindyMakeManager();
+    manager.setUpstreamMerge({
+      id: 'merge',
+      status: 'conflict',
+      ref: 'main',
+      upstreamCommit: 'a'.repeat(40),
+      hasWorkspace: true,
+    });
+    expect(() => manager.claimPersonalBuild()).toThrow('upstream merge is pending');
+    manager.setUpstreamMerge({
+      id: 'merge',
+      status: 'cancelled',
+      ref: 'main',
+      upstreamCommit: 'a'.repeat(40),
+      hasWorkspace: false,
+    });
+    const release = manager.claimPersonalBuild();
+    release();
+  });
+  it('publishes only the current build owners and clears them when the lease settles', () => {
+    const manager = new CindyMakeManager();
+    const changed = vi.fn();
+    manager.subscribe(changed);
+    let current = true;
+    const release = manager.claimPersonalBuild(['first', 'second', 'first'], () => current);
+    expect(changed).toHaveBeenLastCalledWith(
+      expect.objectContaining({ personalBuildSessionIds: ['first', 'second'] }),
+    );
+    current = false;
+    expect(manager.getState().personalBuildSessionIds).toBeUndefined();
+    // An old account still owns cleanup, but never appears in the new account's tasks.
+    expect(manager.hasActiveWork()).toBe(true);
+    release();
+    expect(changed).toHaveBeenLastCalledWith(
+      expect.objectContaining({ personalBuildSessionIds: undefined }),
+    );
+    const releaseRetry = manager.claimPersonalBuild(['retry']);
+    release();
+    expect(manager.getState().personalBuildSessionIds).toEqual(['retry']);
+    releaseRetry();
+    expect(manager.getState().personalBuildSessionIds).toBeUndefined();
+    expect(new CindyMakeManager().getState().personalBuildSessionIds).toBeUndefined();
+  });
+  it.each(['completed', 'failed', 'cancelled'] as const)(
+    'keeps the lock through final persistence, then retains %s history without staying busy',
+    async (status) => {
+      const manager = new CindyMakeManager();
+      const f = fixture();
+      const persisted = deferred();
+      f.lifecycle.persist = vi.fn(async (report) => {
+        if (report.status !== 'running') await persisted.promise;
+      });
+      if (status === 'failed')
+        f.lifecycle.start = async () => {
+          throw new Error('dispatch failed');
+        };
+      const created = manager.startTask(f.input, f.lifecycle);
+      expect(manager.hasActiveWork()).toBe(true);
+      await created;
+      if (status === 'cancelled') manager.cancel(f.input.runId, 1);
+      f.gate.resolve();
+      await vi.waitFor(() => expect(manager.taskReport(f.input.runId)?.status).toBe(status));
+      expect(manager.hasActiveWork()).toBe(true);
+      persisted.resolve();
+      await manager.waitForTask(f.input.runId);
+      expect(manager.hasActiveWork()).toBe(false);
+      expect(manager.getState().tasks?.[f.input.runId]?.status).toBe(status);
+      vi.mocked(f.lifecycle.isCurrent).mockReturnValue(false);
+      expect(manager.hasActiveWork()).toBe(false);
+    },
+  );
+  it('keeps cancelled old-owner work busy until its actual cleanup settles', async () => {
+    const manager = new CindyMakeManager();
+    const f = fixture();
+    await manager.startTask(f.input, f.lifecycle);
+    vi.mocked(f.lifecycle.isCurrent).mockReturnValue(false);
+    expect(manager.hasActiveWork()).toBe(true);
+    f.gate.resolve();
+    await manager.waitForTask(f.input.runId);
+    expect(manager.hasActiveWork()).toBe(false);
+  });
   it('keeps one cleanup running without renderer subscribers and shares duplicate requests', async () => {
     const manager = new CindyMakeManager();
     const gate = deferred();
@@ -109,6 +236,7 @@ describe('Main-owned Cindy Make task lifecycle', () => {
       status: 'failed',
       error: 'directoryBusy',
     });
+    expect(manager.hasActiveWork()).toBe(false);
     const gate = deferred();
     const retry = manager.runTaskAction(
       'session',

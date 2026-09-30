@@ -23,6 +23,7 @@ const api: DesktopCaptureApi = {
     ipcRenderer.invoke(DESKTOP_LOCAL.INPUT, lease, sequence, events),
   viewHeartbeat: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.VIEW_HEARTBEAT, lease),
   nativeFrame: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.NATIVE_FRAME, lease),
+  nativeAudio: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.NATIVE_AUDIO, lease),
 };
 if (location.search === '?mode=files') {
   const files: FilePeerHostApi = {
@@ -40,6 +41,7 @@ if (location.search === '?mode=files') {
       ipcRenderer.invoke(FILE_PEER_LOCAL.READ, connection, ticket, offset),
     write: (sink, offset, base64) =>
       ipcRenderer.invoke(FILE_PEER_LOCAL.WRITE, sink, offset, base64),
+    invoke: (connection, payload) => ipcRenderer.invoke(FILE_PEER_LOCAL.INVOKE, connection, payload),
   };
   contextBridge.exposeInMainWorld('filePeerHost', files);
 } else contextBridge.exposeInMainWorld('desktopCapture', api);

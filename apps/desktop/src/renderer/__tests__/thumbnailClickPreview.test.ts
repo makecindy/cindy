@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * Regression test for: attachment-thumb-click (2026-04-19)
  *
- * The ChatInput attachment thumbnails (image + file) must:
+ * The composer attachment thumbnails (image + file) must:
  *   1) advertise a hand cursor (`cursor-pointer`) on hover, and
  *   2) open the same overlay used in the message stream on click —
  *        image  → ImageLightbox
@@ -12,6 +12,9 @@
  * Previously the thumbnail only showed a hover preview tooltip and had no
  * click-to-open affordance. This test pins the wiring at the source level so
  * a future refactor can't silently regress to "hover-only" behaviour.
+ *
+ * The tray lives in ComposerAttachments.tsx (shared by ChatInput and the bot
+ * group chat composer).
  */
 
 import { describe, it, expect } from 'vitest';
@@ -26,7 +29,7 @@ const chatInput = readFileSync(
     '..',
     'components',
     'new-chat',
-    'ChatInput.tsx',
+    'ComposerAttachments.tsx',
   ),
   'utf8',
 ).replace(/\r\n/g, '\n');

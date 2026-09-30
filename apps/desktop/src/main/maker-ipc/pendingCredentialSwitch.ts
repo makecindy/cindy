@@ -11,19 +11,16 @@ import { setSessionProvider } from '../maker-host/session-provider-store.js';
 /**
  * PendingCredentialSwitchService —— 会话凭证形态切换的「延迟生效」登记表。
  *
- * 背景:切换模型来源本质只影响**下一次** spawn 用哪把钥匙。旧行为在会话自己
- * 跑任务时直接拒绝整个切换(CREDENTIAL_SWITCH_BUSY toast),用户的选择被丢弃
- * 且极易误以为已生效(2026-07-04 实报:06:35 切换被拒未察觉,11:07 发消息才
- * 撞出真相)。新语义:busy 时把目标 (model, providerId) 登记为 pending,当前
- * turn 结束后自动关会话,下一次发送按新来源重建 —— 切换永远"成功",只是生效
- * 时机不同。
+ * Busy 时登记目标 (model, providerId)，在 turn 结束或会话关闭时再应用。
+ * Pi 走原生模型切换和既有窗口容量事务；其它 harness 维持关闭后重建。
+ * 应用失败会回滚旧路由并广播失败，输入队列只有在结果确定后才解冻。
  *
  * 生效路径(代码保证确定性,不依赖任何 LLM 行为):
  *   turn done/error(register.ts 接线)→ onTurnSettled:
  *     仍在跑(steer 接续等)→ 保留 pending,等下一个 turn 边界;
- *     已空闲 → 关闭本会话(rehydrate suppressed)→ 写 provider store → 广播。
- *   会话被其它路径关闭 → onSessionClosed:直接写 route + 广播(下一次加载
- *     hydrate 也会从 DB 读到新值,双保险)。
+ *     已空闲 → Pi 复用 host 切换事务；其它 harness 关闭并重建。
+ *   会话被其它路径关闭 → onSessionClosed:Pi 仍经过冷会话窗口事务；
+ *     其它 harness 直接持久化目标供下次加载。
  *   自愈兜底:turn 可能只发 status idle、不发 done/error(stop/interrupt/SDK
  *     crash),此时上面两条事件路径都不触发,而 pending 存在期间输入队列被
  *     coordinator 的 hasPendingCredentialSwitch 门冻结 —— register 起周期定时器
@@ -41,6 +38,8 @@ export interface PendingCredentialSwitch {
   providerId: string | null;
   /** Configuration must be reloaded even when the provider/model stay the same. */
   forceSessionRebuild?: boolean;
+  /** Catalog/budget refresh is not a user's confirmation of a smaller window. */
+  selectionSource?: 'agent';
   /** 目标会话的 agent(register 时由调用方捕获,收口前的停用重裁决用;可缺席 = 不裁决)。 */
   agentKind?: AgentKind;
   /**
@@ -51,6 +50,8 @@ export interface PendingCredentialSwitch {
    */
   previousRoute?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean };
   requestedAt: number;
+  /** Account owner captured when this delayed choice was accepted. */
+  ownerEpoch?: string;
 }
 
 interface PendingSwitchSession {
@@ -74,6 +75,17 @@ export interface PendingCredentialSwitchDeps {
   }) => void;
   /** 生效后唤醒该会话的输入队列(排队消息此前被 pending 门挡住)。 */
   onApplied?: (sessionId: string) => void;
+  /** Pi keeps its native session and applies through the host model-window transaction. */
+  applyPiPending?: (
+    sessionId: string,
+    target: PendingCredentialSwitch,
+    resolved: { model: string; providerId: string | null },
+    isCurrent: () => boolean,
+  ) => Promise<'applied' | 'deferred'>;
+  broadcastFailed?: (payload: { sessionId: string; reason: 'apply-failed' | 'rollback-failed' }) => void;
+  isPiOwnerCurrent?: (ownerEpoch: string) => boolean;
+  /** Serialize Pi rollback with all user route selections and queued sends. */
+  withPiSessionLock?: (sessionId: string, run: () => Promise<void>) => Promise<void>;
   /**
    * 停用轴裁决(生产 = model-route-guard-live 的 resolveLenientSessionRoute)。
    * SET_MODEL 请求时刻已裁决过,但 deferred 切换的**生效**可能在数分钟后 —— 期间
@@ -120,6 +132,7 @@ export class PendingCredentialSwitchService {
   private readonly applying = new Set<string>();
   /** 自愈兜底定时器(per session,pending 收口即清)。 */
   private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly failedPiTargets = new WeakSet<PendingCredentialSwitch>();
 
   constructor(private readonly deps: PendingCredentialSwitchDeps) {}
 
@@ -129,17 +142,21 @@ export class PendingCredentialSwitchService {
       model: string;
       providerId: string | null;
       forceSessionRebuild?: boolean;
+      selectionSource?: 'agent';
       agentKind?: AgentKind;
       previousRoute?: { model: string; providerId: string | null; effort?: string; fastMode?: boolean };
+      ownerEpoch?: string;
     },
   ): void {
     this.pending.set(sessionId, {
       model: target.model,
       providerId: target.providerId,
       ...(target.forceSessionRebuild ? { forceSessionRebuild: true } : {}),
+      ...(target.selectionSource ? { selectionSource: target.selectionSource } : {}),
       ...(target.agentKind ? { agentKind: target.agentKind } : {}),
       ...(target.previousRoute ? { previousRoute: target.previousRoute } : {}),
       requestedAt: Date.now(),
+      ...(target.ownerEpoch ? { ownerEpoch: target.ownerEpoch } : {}),
     });
     this.scheduleRetry(sessionId);
     this.deps.logger?.info('pending credential switch registered', {
@@ -170,6 +187,13 @@ export class PendingCredentialSwitchService {
   async onTurnSettled(sessionId: string): Promise<void> {
     const target = this.pending.get(sessionId);
     if (!target) return;
+    if (this.failedPiTargets.has(target)) return;
+    if (target.agentKind === 'pi' && target.ownerEpoch &&
+        this.deps.isPiOwnerCurrent?.(target.ownerEpoch) === false) {
+      this.pending.delete(sessionId);
+      this.clearRetry(sessionId);
+      return;
+    }
     if (this.applying.has(sessionId)) return;
     const session = this.deps.maker
       .listActiveSessions()
@@ -178,6 +202,40 @@ export class PendingCredentialSwitchService {
 
     this.applying.add(sessionId);
     try {
+      if ((session?.agentKind ?? target.agentKind) === 'pi' && this.deps.applyPiPending) {
+        const resolved = await this.resolveApplyRoute(target);
+        if (this.pending.get(sessionId) !== target) return;
+        if (!resolved.apply) {
+          await this.failPiPending(sessionId, target, new Error('Pi model route could not be revalidated'));
+          return;
+        }
+        try {
+          const outcome = await this.deps.applyPiPending(sessionId, target, {
+            model: resolved.model ?? target.model,
+            providerId: resolved.providerId,
+          }, () => this.pending.get(sessionId) === target && this.piOwnerCurrent(target));
+          if (outcome === 'deferred' || this.pending.get(sessionId) !== target || !this.piOwnerCurrent(target)) return;
+          this.pending.delete(sessionId);
+          this.clearRetry(sessionId);
+          try { this.deps.onApplied?.(sessionId); } catch (error) {
+            this.deps.logger?.warn('pending Pi switch queue wake failed', {
+              sessionId, error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          try {
+            this.deps.broadcastApplied?.({
+              sessionId, model: resolved.model ?? target.model, providerId: resolved.providerId,
+            });
+          } catch (error) {
+            this.deps.logger?.warn('pending Pi switch applied broadcast failed', {
+              sessionId, error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        } catch (error) {
+          await this.failPiPending(sessionId, target, error);
+        }
+        return;
+      }
       if (session) {
         try {
           if (session.remoteHostId && target.forceSessionRebuild) {
@@ -218,6 +276,62 @@ export class PendingCredentialSwitchService {
     }
   }
 
+  private async failPiPending(sessionId: string, target: PendingCredentialSwitch, error: unknown): Promise<void> {
+    if (this.pending.get(sessionId) !== target) return;
+    if (!this.piOwnerCurrent(target)) {
+      this.pending.delete(sessionId);
+      this.clearRetry(sessionId);
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    this.failedPiTargets.add(target);
+    this.clearRetry(sessionId);
+    this.deps.logger?.error?.('pending Pi model switch failed', { sessionId, error: message });
+    let rollbackFailed = false;
+    let restored = false;
+    try {
+      const rollback = async () => {
+        if (this.pending.get(sessionId) !== target || !this.piOwnerCurrent(target)) return;
+        if (target.previousRoute && this.deps.persistRoute) {
+          await this.deps.persistRoute(sessionId, target.previousRoute);
+        }
+        if (this.pending.get(sessionId) !== target || !this.piOwnerCurrent(target)) return;
+        if (target.previousRoute) setSessionProvider(sessionId, target.previousRoute.providerId);
+        this.pending.delete(sessionId);
+        restored = true;
+      };
+      if (this.deps.withPiSessionLock) await this.deps.withPiSessionLock(sessionId, rollback);
+      else await rollback();
+    } catch (rollbackError) {
+      rollbackFailed = true;
+      this.deps.logger?.error?.('pending Pi model switch rollback failed; queue remains gated', {
+        sessionId, error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+      });
+    }
+    if ((!restored && !rollbackFailed) ||
+        (this.pending.has(sessionId) && this.pending.get(sessionId) !== target)) return;
+    if (this.piOwnerCurrent(target)) {
+      if (restored) {
+        try { this.deps.onApplied?.(sessionId); } catch (wakeError) {
+          this.deps.logger?.warn('pending Pi rollback queue wake failed', {
+            sessionId, error: wakeError instanceof Error ? wakeError.message : String(wakeError),
+          });
+        }
+      }
+      try {
+        this.deps.broadcastFailed?.({ sessionId, reason: rollbackFailed ? 'rollback-failed' : 'apply-failed' });
+      } catch (broadcastError) {
+        this.deps.logger?.warn('pending Pi failure broadcast failed', {
+          sessionId, error: broadcastError instanceof Error ? broadcastError.message : String(broadcastError),
+        });
+      }
+    }
+  }
+
+  private piOwnerCurrent(target: PendingCredentialSwitch): boolean {
+    return !target.ownerEpoch || this.deps.isPiOwnerCurrent?.(target.ownerEpoch) !== false;
+  }
+
   /**
    * 会话被其它路径关闭(stop 后手动关 / 升级重建等)。会话已不在,直接写 route
    * 并收口 pending;下一次加载 hydrate 从 DB 读到的也是新值(renderer 已落盘)。
@@ -229,6 +343,13 @@ export class PendingCredentialSwitchService {
     if (this.applying.has(sessionId)) return;
     const target = this.pending.get(sessionId);
     if (!target) return;
+    if (this.failedPiTargets.has(target)) return;
+    if (target.agentKind === 'pi' && this.deps.applyPiPending) {
+      // A crashed or externally closed Pi turn still has native history in the
+      // persisted task. Re-enter the same cold model-window transaction.
+      void this.onTurnSettled(sessionId);
+      return;
+    }
     this.applying.add(sessionId);
     void this.finalizeApplyChecked(sessionId, target, 'session close').finally(() => {
       this.applying.delete(sessionId);
@@ -455,7 +576,8 @@ export class PendingCredentialSwitchService {
       if (!this.pending.has(sessionId)) return;
       void this.onTurnSettled(sessionId).finally(() => {
         // 仍未收口(还在跑 / busy 竞态)→ 继续兜底。收口路径已 clearRetry。
-        if (this.pending.has(sessionId) && !this.retryTimers.has(sessionId)) {
+        const target = this.pending.get(sessionId);
+        if (target && !this.failedPiTargets.has(target) && !this.retryTimers.has(sessionId)) {
           this.scheduleRetry(sessionId);
         }
       });

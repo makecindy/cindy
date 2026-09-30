@@ -9,6 +9,20 @@ public class XdtIosActionSheetModule: Module {
 
   public func definition() -> ModuleDefinition {
     Name("XdtIosActionSheet")
+    Constant("windowLayoutAvailable") { true }
+    View(CindyWindowLayoutView.self) {
+      Events("onGeometryChange")
+    }
+    Constant("residentHistoryAvailable") { true }
+    View(CindyResidentHistoryHost.self) {
+      ViewName("ResidentHistoryHost")
+      Prop("surfaceId") { (view, id: String) in view.surfaceId = id }
+    }
+    View(CindyResidentHistorySlot.self) {
+      ViewName("ResidentHistorySlot")
+      Prop("surfaceId") { (view, id: String) in view.surfaceId = id }
+      Prop("selected") { (view, selected: Bool) in view.selected = selected }
+    }
 
     AsyncFunction("show") { (options: [String: Any], promise: Promise) in
       DispatchQueue.main.async {

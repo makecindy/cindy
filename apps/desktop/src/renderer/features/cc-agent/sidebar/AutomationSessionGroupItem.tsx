@@ -192,10 +192,22 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
         runningSessionIds,
       ],
     );
-    const alertSessionIds = useMemo(
-      () => new Set(collapsedAttention.errorSessionIds),
-      [collapsedAttention],
-    );
+    // 收起组还需露出等待回复的旧运行,承接上层展开后下放的提示;组头仍代理最新运行。
+    const alertSessionIds = useMemo(() => {
+      const ids = new Set(collapsedAttention.errorSessionIds);
+      for (const session of group.sessions) {
+        const remotePhase = groupRemotePhases.get(session.id);
+        if (
+          remotePhase === 'needs-interaction' ||
+          (!remotePhase &&
+            notifications.has(session.id) &&
+            groupAttentionKinds.get(session.id) === 'awaiting')
+        ) {
+          ids.add(session.id);
+        }
+      }
+      return ids;
+    }, [collapsedAttention, group.sessions, groupRemotePhases, notifications, groupAttentionKinds]);
     // 与组头红/绿未读点同源:没有未读就不提供「标为已读」,避免空操作占菜单。
     const canMarkRead = collapsedAttention.tone != null;
     // childView 的 24h 豁免依赖实时 now,必须每次渲染直接算,不能进 useMemo —— 否则依赖项

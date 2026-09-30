@@ -5,10 +5,24 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 
-const reads = vi.hoisted(() => ({ codex: vi.fn(), claude: vi.fn(), xai: vi.fn() }));
+const reads = vi.hoisted(() => ({
+  codex: vi.fn(),
+  claude: vi.fn(),
+  xai: vi.fn(),
+  remoteCodex: vi.fn(),
+  remoteClaude: vi.fn(),
+  remoteXai: vi.fn(),
+}));
 vi.mock('@/hooks/useCodexRateLimits', () => ({ useCodexRateLimits: reads.codex }));
 vi.mock('@/hooks/useClaudeSubscriptionUsage', () => ({ useClaudeSubscriptionUsage: reads.claude }));
 vi.mock('@/hooks/useXaiSubscriptionUsage', () => ({ useXaiSubscriptionUsage: reads.xai }));
+vi.mock('@/hooks/useRemoteDeviceUsage', () => ({
+  useRemoteCodexAccountUsage: reads.remoteCodex,
+  useRemoteXaiSubscriptionUsage: reads.remoteXai,
+}));
+vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
+  useRemoteClaudeSubscriptionUsage: reads.remoteClaude,
+}));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, args?: { percent?: number }) =>
@@ -19,6 +33,8 @@ vi.mock('react-i18next', () => ({
 import { UnifiedModelRail } from '@/components/new-chat/UnifiedModelRail';
 import {
   codexWeeklyQuota,
+  localCodexQuotaView,
+  remoteCodexQuotaView,
   weeklyQuota,
   providerWeeklyQuotaSource,
 } from '@/components/new-chat/useProviderWeeklyQuota';
@@ -53,21 +69,52 @@ afterEach(() => {
 describe('provider weekly quota identity and windows', () => {
   it('selects only the weekly generic bucket, not the latest promotion or short window', () => {
     const data = snapshot(79);
-    expect(codexWeeklyQuota(data, Date.now())?.usedPercent).toBe(79);
+    expect(codexWeeklyQuota(localCodexQuotaView(data), Date.now())?.usedPercent).toBe(79);
     data.rateLimitsByLimitId = {
       promo: { limitId: 'promo', secondary: { usedPercent: 0, windowMinutes: 10080 } },
       codex: data.rateLimits,
     };
-    expect(codexWeeklyQuota(data, Date.now())?.usedPercent).toBe(79);
+    expect(codexWeeklyQuota(localCodexQuotaView(data), Date.now())?.usedPercent).toBe(79);
     delete data.rateLimitsByLimitId.codex;
-    expect(codexWeeklyQuota(data, Date.now())).toBeNull();
+    expect(codexWeeklyQuota(localCodexQuotaView(data), Date.now())).toBeNull();
     data.rateLimitsByLimitId = {};
-    expect(codexWeeklyQuota(data, Date.now())).toBeNull();
+    expect(codexWeeklyQuota(localCodexQuotaView(data), Date.now())).toBeNull();
     data.rateLimitsByLimitId = null;
     data.rateLimits.secondary!.windowMinutes = 1440;
-    expect(codexWeeklyQuota(data, Date.now())).toBeNull();
+    expect(codexWeeklyQuota(localCodexQuotaView(data), Date.now())).toBeNull();
     data.rateLimits.primary = { usedPercent: 32, windowMinutes: 10080 };
-    expect(codexWeeklyQuota(data, Date.now())?.usedPercent).toBe(32);
+    expect(codexWeeklyQuota(localCodexQuotaView(data), Date.now())?.usedPercent).toBe(32);
+  });
+  it('reads the same weekly generic bucket from a remote account payload', () => {
+    const weekly = (used: number) => ({ usedPercent: used, windowMinutes: 10080 });
+    expect(codexWeeklyQuota(remoteCodexQuotaView(null), Date.now())).toBeNull();
+    expect(
+      codexWeeklyQuota(
+        remoteCodexQuotaView({
+          limitId: 'promo',
+          secondary: weekly(1),
+          webSnapshot: { source: 'openai-web', secondary: weekly(2) },
+          appServerBuckets: {
+            promo: { limitId: 'promo', secondary: weekly(1) },
+            codex: { limitId: 'codex', secondary: weekly(44) },
+          },
+        }),
+        Date.now(),
+      )?.usedPercent,
+    ).toBe(44);
+    // Older hosts only send the top-level compatibility snapshot.
+    expect(
+      codexWeeklyQuota(
+        remoteCodexQuotaView({ limitId: 'codex', secondary: weekly(12), webSnapshot: null }),
+        Date.now(),
+      )?.usedPercent,
+    ).toBe(12);
+    expect(
+      codexWeeklyQuota(
+        remoteCodexQuotaView({ limitId: 'promo', secondary: weekly(12), webSnapshot: null }),
+        Date.now(),
+      ),
+    ).toBeNull();
   });
   it('does not turn missing, invalid or expired values into full quota', () => {
     for (const used of [null, undefined, NaN, Infinity, '20'])
@@ -114,7 +161,7 @@ describe('provider rail weekly remaining bars', () => {
         providers,
         providerLabel: () => 'My provider',
         onSelect: () => {},
-        localProviderUsage: false,
+        providerUsage: null,
       };
       const { rerender } = render(<UnifiedModelRail {...props} />);
       const button = screen.getByRole('button', { name: 'My provider · first@example.test' });
@@ -183,7 +230,7 @@ describe('provider rail weekly remaining bars', () => {
       providers,
       providerLabel: (id: string) => `OpenAI ${id}`,
       onSelect,
-      localProviderUsage: true,
+      providerUsage: { deviceId: null },
     };
     const { container, rerender } = render(<UnifiedModelRail {...props} />);
     expect(
@@ -224,7 +271,7 @@ describe('provider rail weekly remaining bars', () => {
       providers,
       providerLabel: (id: string) => id,
       onSelect: () => {},
-      localProviderUsage: true,
+      providerUsage: { deviceId: null },
     };
     const { container, rerender } = render(<UnifiedModelRail {...props} />);
     expect(
@@ -236,7 +283,45 @@ describe('provider rail weekly remaining bars', () => {
     rerender(<UnifiedModelRail {...props} />);
     expect(container.querySelectorAll('[data-weekly-remaining]')).toHaveLength(1);
   });
-  it('does not read local quotas for remote directories', () => {
+  it('reads remote directories from the device mirrors, never local quotas', () => {
+    reads.codex.mockReturnValue({ snapshot: null });
+    reads.remoteCodex.mockImplementation((deviceId, id) =>
+      deviceId === 'device-1' && id === 'openai'
+        ? {
+            webSnapshot: null,
+            appServerBuckets: {
+              codex: { limitId: 'codex', secondary: { usedPercent: 25, windowMinutes: 10080 } },
+            },
+          }
+        : null,
+    );
+    reads.remoteClaude.mockImplementation((deviceId) =>
+      deviceId ? { sevenDay: { utilization: 70 } } : null,
+    );
+    reads.remoteXai.mockReturnValue(null);
+    const providers = [provider('openai'), provider('anthropic'), provider('xai')];
+    const { container } = render(
+      <UnifiedModelRail
+        items={providers.map((p) => ({ kind: 'provider' as const, providerId: p.id }))}
+        active={{ kind: 'all' }}
+        providers={providers}
+        providerLabel={(id) => id}
+        onSelect={() => {}}
+        providerUsage={{ deviceId: 'device-1' }}
+      />,
+    );
+    expect(
+      [...container.querySelectorAll('[data-weekly-remaining]')].map((el) =>
+        el.getAttribute('data-weekly-remaining'),
+      ),
+    ).toEqual(['75', '30']);
+    expect(reads.remoteCodex).toHaveBeenCalledWith('device-1', 'openai');
+    expect(reads.remoteClaude).toHaveBeenCalledWith('device-1', 'anthropic');
+    expect(reads.remoteXai).toHaveBeenCalledWith('device-1', 'xai');
+    for (const read of [reads.codex, reads.claude, reads.xai])
+      expect(read.mock.calls.some(([enabled]) => enabled)).toBe(false);
+  });
+  it('shows no quota when the directory may not show account usage', () => {
     render(
       <UnifiedModelRail
         items={[{ kind: 'provider', providerId: 'openai' }]}
@@ -244,11 +329,10 @@ describe('provider rail weekly remaining bars', () => {
         providers={[provider('openai')]}
         providerLabel={(id) => id}
         onSelect={() => {}}
-        localProviderUsage={false}
+        providerUsage={null}
       />,
     );
     expect(reads.codex).not.toHaveBeenCalled();
-    expect(reads.claude).not.toHaveBeenCalled();
-    expect(reads.xai).not.toHaveBeenCalled();
+    expect(reads.remoteCodex).not.toHaveBeenCalled();
   });
 });

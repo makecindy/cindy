@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 describe('mobile remote session bootstrap', () => {
   it('asks the controlled desktop to include active pinned sessions outside the recent window', () => {
-    const homeSource = readFileSync(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
+    const homeSource = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
     const detailSource = readFileSync(resolve(process.cwd(), 'app/devices/[deviceId].tsx'), 'utf8');
     const listWithPinned =
       /local-db:sessions:list'[\s\S]{0,280}\{ includePinned: true, fresh: true \}/;

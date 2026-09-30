@@ -2,8 +2,20 @@ import type { MakeSourceLatestVersion, MakeSourceStatus } from '../../shared/cin
 import { untilAborted } from './doctor.js';
 
 const API = 'https://api.github.com/repos/makecindy/cindy';
-type Channel = MakeSourceLatestVersion['channel'];
+export type Channel = MakeSourceLatestVersion['channel'];
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
+
+/**
+ * The managed checkout records the official line a personal version came
+ * from. A packaged Dev build still has app.isPackaged set, so the Electron
+ * packaging state cannot choose the source update channel reliably.
+ */
+export function sourceChannel(
+  source: Pick<MakeSourceStatus, 'channel' | 'ref'>,
+  fallback: Channel,
+): Channel {
+  return source.channel ?? (source.ref === 'main' ? 'dev' : fallback);
+}
 const isCommit = (value: unknown): value is string =>
   typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value);
 const record = (value: unknown): Record<string, unknown> =>

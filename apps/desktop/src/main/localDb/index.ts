@@ -44,7 +44,7 @@ import { reconcileKnownEquivalentMigrationHashes } from './schemaDriftCompatibil
 import { cleanupStaleOrcaLeadIndex, hasStaleOrcaLeadIndex } from './orcaStaleIndexCleanup';
 import { reconcileStrandedOrcaLeads } from './orcaStrandedLeadReconcile';
 import { initializeCodexHistoryPromptState } from './codexHistoryPromptInit';
-import { dialogueWorkspaceRootDir } from './dialogueWorkspace';
+import { dialogueWorkspaceRoots } from './dialogueWorkspace';
 import { repairManagedDialogueWorkspaceSessions } from './managedDialogueWorkspaceRepair';
 import * as schema from './schema';
 import { loadSqliteVec, resetSqliteVecState } from './sqliteVecLoader';
@@ -411,7 +411,9 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   }
 
   try {
-    const repaired = repairManagedDialogueWorkspaceSessions(db, dialogueWorkspaceRootDir());
+    const repaired = dialogueWorkspaceRoots().reduce(
+      (count, root) => count + repairManagedDialogueWorkspaceSessions(db, root), 0,
+    );
     if (repaired > 0) {
       log.info(
         JSON.stringify({

@@ -402,7 +402,14 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
       });
       if (path === 'rollback-failed') await expect(fire).rejects.toThrow('rollback unavailable');
       else if (path === 'stop-during-history' || path === 'uncertain') await expect(fire).rejects.toThrow();
-      else expect(await fire).toMatchObject({ deferred: true });
+      else if (source === 'user') {
+        expect(controller.signal.aborted).toBe(false);
+        expect(await fire).toEqual({
+          sessionId: h.session.id,
+          skipped: true,
+          resultText: 'Scheduled turn stopped before vendor dispatch',
+        });
+      } else expect(await fire).toMatchObject({ deferred: true });
       expect(mocks.createMessage).toHaveBeenCalledOnce();
       if (path === 'uncertain') {
         expect(mocks.rewindPersistedUserMessageAfterClear).not.toHaveBeenCalled();

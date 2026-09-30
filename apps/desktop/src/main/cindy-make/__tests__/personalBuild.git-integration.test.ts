@@ -3,6 +3,13 @@ import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs
 import os from 'node:os';
 import path from 'node:path';
 import { expect, it, vi } from 'vitest';
+import { brandExecutableName } from '@cindy/maker-shared/brand-identity';
+import {
+  personalVersionId,
+  readPersonalVersion,
+  runnableBundlePaths,
+  versionDirectory,
+} from '../versionStore';
 import {
   buildCindyPersonal,
   personalArtifactPath,
@@ -45,6 +52,8 @@ async function fixture() {
     await writeFile(path.join(source, '.gitignore'), 'apps/desktop/release/\n');
     await git(['add', '.']);
     await git(['commit', '-s', '-m', 'base']);
+    // A tag checkout has origin/main but no local main branch.
+    await git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
     await createCindyMakeWorktree(userData, 'run', signal, { processEnvironment: env });
     await writeFile(path.join(workingDir, 'feature.txt'), 'task change');
 
@@ -136,27 +145,37 @@ async function fixture() {
   }
 }
 
-it('merges task commits before packaging in personal, preserving integration on failure and avoiding duplicate commits on retry', async () => {
+it('rolls back failed generations, preserves concurrent edits and keeps successful retries idempotent', async () => {
   const h = await fixture();
   try {
     const baseline = await h.git(['rev-parse', 'HEAD']);
     h.pnpm.mockRejectedValueOnce(new Error('checks failed'));
     await expect(h.run()).rejects.toMatchObject({ code: 'checksFailed' });
-    const integratedCommit = await h.git(['rev-parse', 'HEAD']);
-    expect(integratedCommit).not.toBe(baseline);
-    expect(await h.git(['merge-base', '--is-ancestor', h.task.commit, integratedCommit])).toBe('');
-    expect(await readFile(path.join(h.source, 'feature.txt'), 'utf8')).toBe('task change');
+    const personalCommit = await h.git(['rev-parse', 'HEAD']);
+    // Existing uncommitted personal edits are saved before integrating the task.
+    expect(personalCommit).not.toBe(baseline);
+    expect(await h.git(['show', 'HEAD:personal.txt'])).toBe('existing personal change');
+    await expect(
+      h.git(['merge-base', '--is-ancestor', h.task.commit, personalCommit]),
+    ).rejects.toThrow();
+    await expect(access(path.join(h.source, 'feature.txt'))).rejects.toThrow();
     expect(await readFile(path.join(h.workingDir, 'feature.txt'), 'utf8')).toBe('task change');
-    expect(await h.git(['rev-parse', 'refs/cindy-make/tasks/run/integrated'])).toBe(h.task.tree);
+    expect(
+      await h.git(['for-each-ref', '--format=%(refname)', 'refs/cindy-make/tasks/run/integrated']),
+    ).toBe('');
+    const failedCommit = (
+      await h.git(['for-each-ref', '--format=%(objectname)', 'refs/cindy-make/failed-builds/'])
+    ).split('\n')[0];
+    expect(await h.git(['show', failedCommit + ':feature.txt'])).toBe('task change');
     h.packageCommand.mockRejectedValueOnce(new Error('packaging failed'));
     await expect(h.run()).rejects.toThrow('packaging failed');
-    expect(await h.git(['rev-parse', 'HEAD'])).toBe(integratedCommit);
-    expect(await readFile(path.join(h.source, 'feature.txt'), 'utf8')).toBe('task change');
+    expect(await h.git(['rev-parse', 'HEAD'])).toBe(personalCommit);
+    await expect(access(path.join(h.source, 'feature.txt'))).rejects.toThrow();
     h.packageCommand.mockImplementationOnce(async (...args) => {
       await h.pack(args[0], args[1], args[2]);
       await writeFile(path.join(h.source, 'concurrent.txt'), 'another completed personal change');
     });
-    await expect(h.run()).rejects.toMatchObject({ code: 'baselineChanged' });
+    await expect(h.run()).rejects.toMatchObject({ code: 'cleanupFailed' });
     expect(await readFile(path.join(h.source, 'concurrent.txt'), 'utf8')).toBe(
       'another completed personal change',
     );
@@ -231,6 +250,115 @@ it('merges task commits before packaging in personal, preserving integration on 
   }
 }, 90_000);
 
+it('builds the latest cindy-personal HEAD after acquiring the project lock, even from an old completion', async () => {
+  const h = await fixture();
+  try {
+    const first = await h.run();
+    let latest = '';
+    h.packageCommand.mockImplementationOnce(async (...args) => {
+      expect(await h.git(['rev-parse', 'HEAD'], args[2])).toBe(latest);
+      expect(await readFile(path.join(args[2], 'latest.txt'), 'utf8')).toBe(
+        'newer personal change',
+      );
+      await h.pack(args[0], args[1], args[2]);
+    });
+    const next = await buildCindyPersonal(
+      { mode: 'personal', userData: h.userData, completionId: h.task.completionId },
+      process.execPath,
+      h.env,
+      'global',
+      h.signal,
+      async () => {},
+      () => {},
+      async (run) => {
+        // Another completed modification can arrive while this build waits for the source lock.
+        await writeFile(path.join(h.source, 'latest.txt'), 'newer personal change');
+        await h.git(['add', 'latest.txt']);
+        await h.git(['commit', '-s', '-m', 'another personal change']);
+        latest = await h.git(['rev-parse', 'cindy-personal']);
+        return run();
+      },
+      { pnpm: h.pnpm, packageCommand: h.packageCommand },
+    );
+    expect(latest).not.toBe(first.commit);
+    expect(next.commit).toBe(latest);
+    expect(next.tree).toBe(await h.git(['rev-parse', 'cindy-personal^{tree}']));
+    expect(await h.git(['rev-parse', 'HEAD'], h.workingDir)).toBe(h.task.commit);
+    expect(await h.git(['status', '--porcelain'])).toBe('');
+  } finally {
+    await rm(h.userData, { recursive: true, force: true });
+  }
+}, 90_000);
+
+it('replaces the single personal application only after a successful build and retains it on later failure', async () => {
+  const h = await fixture();
+  try {
+    await writeFile(
+      path.join(h.source, '.gitignore'),
+      'apps/desktop/release/\napps/desktop/out/\n',
+    );
+    const appName = brandExecutableName('global');
+    h.packageCommand.mockImplementation(async (...args) => {
+      await h.pack(args[0], args[1], args[2]);
+      const packaged = path.join(
+        h.source,
+        'apps',
+        'desktop',
+        'out',
+        `${appName}-${process.platform}-${process.arch}`,
+      );
+      const bundle =
+        process.platform === 'darwin' ? path.join(packaged, appName + '.app') : packaged;
+      const { executable, resources } = runnableBundlePaths(bundle, appName);
+      await mkdir(path.dirname(executable), { recursive: true });
+      await mkdir(path.join(resources, 'drizzle'), { recursive: true });
+      await writeFile(executable, 'fixture executable');
+      await writeFile(path.join(resources, 'app.asar'), 'fixture application');
+      await writeFile(path.join(resources, 'drizzle', '0000_base.sql'), 'SELECT 1;');
+      await writeFile(
+        path.join(resources, 'cindy-version-protocol.json'),
+        JSON.stringify({ version: 1 }),
+      );
+      await writeFile(
+        path.join(resources, 'cindy-source.json'),
+        JSON.stringify({
+          sourceCommit: await h.git(['rev-parse', 'HEAD']),
+          builtAt: '2026-09-22T12:00:00+08:00',
+        }),
+      );
+    });
+    const run = () =>
+      buildCindyPersonal(
+        { ...h.task, profile: { userData: h.userData, appName, region: 'global', passive: false } },
+        process.execPath,
+        h.env,
+        'global',
+        h.signal,
+        async () => {},
+        () => {},
+        async (operation) => operation(),
+        { pnpm: h.pnpm, packageCommand: h.packageCommand },
+      );
+    const first = await run();
+    expect(personalVersionId(h.userData)).toBe(first.versionId);
+    h.packageCommand.mockRejectedValueOnce(new Error('packaging failed'));
+    await expect(run()).rejects.toThrow('packaging failed');
+    expect(personalVersionId(h.userData)).toBe(first.versionId);
+    expect(readPersonalVersion(h.userData, first.versionId!).commit).toBe(first.commit);
+    const second = await run();
+    expect(second.versionId).not.toBe(first.versionId);
+    expect(personalVersionId(h.userData)).toBe(second.versionId);
+    expect(readPersonalVersion(h.userData, second.versionId!).commit).toBe(
+      await h.git(['rev-parse', 'cindy-personal']),
+    );
+    await expect(
+      access(path.join(versionDirectory(h.userData, first.versionId!), 'runtime')),
+    ).rejects.toThrow();
+  } finally {
+    await rm(h.userData, { recursive: true, force: true });
+  }
+}, 90_000);
+
 it('converts a retained file-only completion into committed personal history and keeps retries idempotent', async () => {
   const h = await fixture();
   try {
@@ -265,7 +393,7 @@ it('rejects files edited after the completion snapshot before packaging or integ
   }
 }, 90_000);
 
-it('keeps integrated source and task files on cancellation, then retries without losing later edits', async () => {
+it('rolls back an interrupted generation and retries without losing task or personal edits', async () => {
   const h = await fixture();
   try {
     const abort = new AbortController();
@@ -278,9 +406,14 @@ it('keeps integrated source and task files on cancellation, then retries without
       code: 'interrupted',
     });
     expect(h.packageCommand).not.toHaveBeenCalled();
-    expect(await readFile(path.join(h.source, 'feature.txt'), 'utf8')).toBe('task change');
+    await expect(access(path.join(h.source, 'feature.txt'))).rejects.toThrow();
+    expect(await readFile(path.join(h.source, 'personal.txt'), 'utf8')).toBe(
+      'existing personal change',
+    );
     expect(await readFile(path.join(h.workingDir, 'feature.txt'), 'utf8')).toBe('task change');
-    expect(await h.git(['rev-parse', 'refs/cindy-make/tasks/run/integrated'])).toBe(h.task.tree);
+    expect(
+      await h.git(['for-each-ref', '--format=%(refname)', 'refs/cindy-make/tasks/run/integrated']),
+    ).toBe('');
     await writeFile(path.join(h.workingDir, 'continued.txt'), 'continued after cancellation');
     Object.assign(h.task, await collectCindyMakeChanges(h.git, h.userData, h.workingDir));
     await h.run();

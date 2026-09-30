@@ -557,13 +557,12 @@ const TASK_INFO_VALUES: ReadonlySet<string> = new Set<TaskInfoField>([
   'tokens',
   'cost',
 ]);
-/** 默认只显示最近活动时间（现状行为）。 */
+/** 默认仅显示最近活动时间。任务标签不属于可选信息项，始终跟在标题后显示。 */
 export const DEFAULT_TASK_INFO_FIELDS: readonly TaskInfoField[] = ['time'];
 
 /**
- * 读任务行右侧信息复选。存储为 JSON string[]；非法值逐项剔除。
- * 与其它维度不同：空数组是合法状态（用户显式全不选 = 行右侧留空），
- * 只有解析失败 / 未设置才回落默认。
+ * 兼容旧 string[] 与带版本号的字段列表，保留字段及顺序（全不选合法）。
+ * 旧版本存下的 'tags' 已不是信息项，按未知值静默丢弃。
  */
 export function loadTaskInfoFields(): TaskInfoField[] {
   const storage = safeStorage();
@@ -578,10 +577,12 @@ export function loadTaskInfoFields(): TaskInfoField[] {
   if (raw == null) return [...DEFAULT_TASK_INFO_FIELDS];
   try {
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [...DEFAULT_TASK_INFO_FIELDS];
+    const legacy = Array.isArray(parsed);
+    const values = legacy ? parsed : parsed?.version === 1 ? parsed.fields : null;
+    if (!Array.isArray(values)) return [...DEFAULT_TASK_INFO_FIELDS];
     const seen = new Set<string>();
     const cleaned: TaskInfoField[] = [];
-    for (const value of parsed) {
+    for (const value of values) {
       if (typeof value !== 'string' || !TASK_INFO_VALUES.has(value) || seen.has(value)) continue;
       seen.add(value);
       cleaned.push(value as TaskInfoField);
@@ -597,7 +598,7 @@ export function persistTaskInfoFields(fields: readonly TaskInfoField[]): void {
   const storage = safeStorage();
   if (!storage) return;
   try {
-    storage.setItem(TASK_INFO_KEY, JSON.stringify(fields));
+    storage.setItem(TASK_INFO_KEY, JSON.stringify({ version: 1, fields }));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist taskInfo:', err);
   }

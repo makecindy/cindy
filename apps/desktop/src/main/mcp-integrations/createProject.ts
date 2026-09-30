@@ -4,7 +4,7 @@ import { BrowserWindow } from 'electron';
 import { eq } from 'drizzle-orm';
 import { getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { tryGetDbClient } from '../localDb/client/current.js';
-import { dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace.js';
+import { dialogueWorkspaceRoots } from '../localDb/dialogueWorkspace.js';
 import { sessions, botSessionLinks } from '../localDb/schema.js';
 import { normalizeRecentWorkdirPath, upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
 import { restoreLocalProjectVisibility } from '../sidebarSettingsStore.js';
@@ -48,7 +48,7 @@ export async function withLocalProjectContext<T extends object>(
   };
   try {
     const [caller] = await client.drizzle
-      .select({ id: sessions.id, remoteHostId: sessions.remoteHostId, source: sessions.source })
+      .select({ id: sessions.id, remoteHostId: sessions.remoteHostId })
       .from(sessions)
       .where(eq(sessions.id, callerSessionId))
       .limit(1);
@@ -60,16 +60,16 @@ export async function withLocalProjectContext<T extends object>(
         'UNSUPPORTED_CAPABILITY',
         'Project registration only supports local Cindy tasks.',
       );
-    const [botLink] = await client.drizzle
+    // Account-generation checkpoint. Bot callers may manage projects; the
+    // helper surface names the five project tools and keeps the rest of
+    // control/history closed. This read must stay so an account switch during
+    // the lookup still fails closed.
+    await client.drizzle
       .select({ botId: botSessionLinks.botId })
       .from(botSessionLinks)
       .where(eq(botSessionLinks.sessionId, callerSessionId))
       .limit(1);
     assertCurrent();
-    // Legacy Bot tasks can have only one ownership signal. All five project
-    // callbacks enforce this even when the helper surface classified them as default.
-    if (caller.source === 'bot' || botLink)
-      return fail('UNSUPPORTED_CAPABILITY', 'Bot tasks cannot manage account projects.');
     const result = await run({ client, owner, assertCurrent });
     assertCurrent();
     return result;
@@ -113,20 +113,24 @@ function isWithinDirectory(directory: string, root: string): boolean {
 
 /** Check physical targets without changing the caller's normalized project identity. */
 export async function validateExistingLocalProjectDirectory(workingDir: string) {
-  const root = dialogueWorkspaceRootDir();
-  if (isWithinDirectory(workingDir, root)) {
+  const roots = dialogueWorkspaceRoots();
+  if (roots.some((root) => isWithinDirectory(workingDir, root))) {
     return fail('INVALID_ARGS', 'Managed dialogue workspaces cannot be registered as projects.');
   }
   if (!(await stat(workingDir)).isDirectory())
     return fail('NOT_A_DIRECTORY', 'working_dir is not a directory.');
   // Resolve both sides: userData itself may use a symlink (e.g. /var on macOS).
   const physicalDirectory = await realpath(workingDir);
-  const physicalRoot = await realpath(root).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'ENOENT') return root;
-    throw error;
-  });
-  if (isWithinDirectory(physicalDirectory, physicalRoot)) {
-    return fail('INVALID_ARGS', 'Managed dialogue workspaces cannot be registered as projects.');
+  for (const root of roots) {
+    const physicalRoot = await realpath(root).catch((error: NodeJS.ErrnoException) => {
+      // Unavailable current or historical roots must not block unrelated projects.
+      // Keep their lexical boundary (also checked above), and still resolve accessible aliases.
+      if (typeof error.code === 'string') return root;
+      throw error;
+    });
+    if (isWithinDirectory(physicalDirectory, physicalRoot)) {
+      return fail('INVALID_ARGS', 'Managed dialogue workspaces cannot be registered as projects.');
+    }
   }
   return validateLocalProjectDirectory(physicalDirectory);
 }

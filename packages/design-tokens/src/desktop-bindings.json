@@ -2119,6 +2119,82 @@
     "slider-thumb-shadow": {
       "light": "semantic.defaults.slider-thumb-shadow.light",
       "dark": "semantic.defaults.slider-thumb-shadow.dark"
+    },
+    "segmented-track": {
+      "light": "semantic.defaults.segmented-track.light",
+      "dark": "semantic.defaults.segmented-track.dark"
+    },
+    "segmented-selected-shadow": {
+      "light": "semantic.defaults.segmented-selected-shadow.light",
+      "dark": "semantic.defaults.segmented-selected-shadow.dark"
+    },
+    "segmented-selected-bg": {
+      "light": "component.defaults.segmented-selected-bg.light",
+      "dark": "component.defaults.segmented-selected-bg.dark"
+    },
+    "segmented-selected-border": {
+      "light": "component.defaults.segmented-selected-border.light",
+      "dark": "component.defaults.segmented-selected-border.dark"
+    },
+    "segmented-option-fg": {
+      "light": "component.defaults.segmented-option-fg.light",
+      "dark": "component.defaults.segmented-option-fg.dark"
+    },
+    "segmented-hover-bg": {
+      "light": "component.defaults.segmented-hover-bg.light",
+      "dark": "component.defaults.segmented-hover-bg.dark"
+    },
+    "task-tag-red": {
+      "light": "semantic.defaults.task-tag-red.light",
+      "dark": "semantic.defaults.task-tag-red.dark"
+    },
+    "task-tag-orange": {
+      "light": "semantic.defaults.task-tag-orange.light",
+      "dark": "semantic.defaults.task-tag-orange.dark"
+    },
+    "task-tag-yellow": {
+      "light": "semantic.defaults.task-tag-yellow.light",
+      "dark": "semantic.defaults.task-tag-yellow.dark"
+    },
+    "task-tag-green": {
+      "light": "semantic.defaults.task-tag-green.light",
+      "dark": "semantic.defaults.task-tag-green.dark"
+    },
+    "task-tag-blue": {
+      "light": "semantic.defaults.task-tag-blue.light",
+      "dark": "semantic.defaults.task-tag-blue.dark"
+    },
+    "task-tag-purple": {
+      "light": "semantic.defaults.task-tag-purple.light",
+      "dark": "semantic.defaults.task-tag-purple.dark"
+    },
+    "task-tag-gray": {
+      "light": "semantic.defaults.task-tag-gray.light",
+      "dark": "semantic.defaults.task-tag-gray.dark"
+    },
+    "task-tag-pink": {
+      "light": "semantic.defaults.task-tag-pink.light",
+      "dark": "semantic.defaults.task-tag-pink.dark"
+    },
+    "task-tag-coral": {
+      "light": "semantic.defaults.task-tag-coral.light",
+      "dark": "semantic.defaults.task-tag-coral.dark"
+    },
+    "task-tag-teal": {
+      "light": "semantic.defaults.task-tag-teal.light",
+      "dark": "semantic.defaults.task-tag-teal.dark"
+    },
+    "task-tag-indigo": {
+      "light": "semantic.defaults.task-tag-indigo.light",
+      "dark": "semantic.defaults.task-tag-indigo.dark"
+    },
+    "task-tag-white": {
+      "light": "semantic.defaults.task-tag-white.light",
+      "dark": "semantic.defaults.task-tag-white.dark"
+    },
+    "task-tag-white-check": {
+      "light": "semantic.defaults.task-tag-white-check.light",
+      "dark": "semantic.defaults.task-tag-white-check.dark"
     }
   },
   "retained": {
@@ -2428,7 +2504,11 @@
         "sidebar-user-card-text": "themes.cindy-dark.sidebar-user-card-text",
         "slider-track": "themes.cindy-dark.slider-track",
         "slider-fill": "themes.cindy-dark.slider-fill",
-        "slider-thumb": "themes.cindy-dark.slider-thumb"
+        "slider-thumb": "themes.cindy-dark.slider-thumb",
+        "segmented-selected-bg": "themes.cindy-dark.segmented-selected-bg",
+        "segmented-selected-border": "themes.cindy-dark.segmented-selected-border",
+        "segmented-option-fg": "themes.cindy-dark.segmented-option-fg",
+        "segmented-hover-bg": "themes.cindy-dark.segmented-hover-bg"
       },
       "retained": {
         "surface-translucent-sidebar": "CINDY_ACRYLIC_WINDOW_BACKING.dark"
@@ -2606,7 +2686,11 @@
         "create-agent-send-icon": "themes.cindy-light.create-agent-send-icon",
         "slider-track": "themes.cindy-light.slider-track",
         "slider-fill": "themes.cindy-light.slider-fill",
-        "slider-thumb": "themes.cindy-light.slider-thumb"
+        "slider-thumb": "themes.cindy-light.slider-thumb",
+        "segmented-selected-bg": "themes.cindy-light.segmented-selected-bg",
+        "segmented-selected-border": "themes.cindy-light.segmented-selected-border",
+        "segmented-option-fg": "themes.cindy-light.segmented-option-fg",
+        "segmented-hover-bg": "themes.cindy-light.segmented-hover-bg"
       },
       "retained": {
         "surface-translucent-sidebar": "CINDY_ACRYLIC_WINDOW_BACKING.light"

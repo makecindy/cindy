@@ -9,17 +9,35 @@
  *    `useTheme().colors` 或 `useThemedStyles(makeStyles)` 消费,**永远写 token 不写 hex**。
  *  - spacing / radius / typeScale / lineHeight / fontWeight / iconSize:主题无关的不变量阶梯。
  *
- * 色值对齐 CINDY 色板(决策表 PRE-2 / U3+U8 批准),与桌面 D2 落地同源。
+ * 底色 / 字色 / 描边为移动端独立色板(2026-09-26 用户定稿):共享 Cindy 品牌与业务语义,
+ * 色阶与对比度由移动端自定(DESIGN.md §15.13)。浅色为象牙白、正文保持中性;深色为纯中性
+ * 近黑。品牌红、状态色、任务标签、语法高亮、登录皮肤与开屏不在此列,仍按各自登记值。
  */
 
 export type ThemeMode = 'light' | 'dark';
 
 /** 随主题切换的颜色 token。light / dark 必须有完全一致的 key 集合。 */
 export interface ThemeColors {
+  taskTagRed: string;
+  taskTagOrange: string;
+  taskTagYellow: string;
+  taskTagGreen: string;
+  taskTagBlue: string;
+  taskTagPurple: string;
+  taskTagGray: string;
+  taskTagPink: string;
+  taskTagCoral: string;
+  taskTagTeal: string;
+  taskTagIndigo: string;
+  taskTagWhite: string;
+  taskTagWhiteCheck: string;
+
   /** 页面 Surface 背景 */
   surface: string;
   /** 抬一层的 Card / 弹窗 / 输入框 */
   surfaceElevated: string;
+  /** 首页导航抽屉投影，局部浮层例外（2026-09-27 用户要求）。 */
+  homeDrawerShadow: string;
   /** Surface 半透明(吸顶栏等,solid 非模糊——chrome/composer 热路径专用,守护测试禁 BlurView) */
   surfaceTranslucent: string;
   /** 侧栏/抽屉类面板毛玻璃底色(R1 audit 模式1,blur≈50 等效;BlurView tint 用) */
@@ -47,14 +65,9 @@ export interface ThemeColors {
    * borderRadius,淡底在那边只能是直角方块,成段中文里一排方块比没有底色更糟。
    * 两端不同是结论,不是漏改 —— 改这里之前先看这条。
    *
-   * 取值实测(见 themeTokens.test.ts):light #686B72 对 surface 4.56:1、对正文
-   * Δ1.98;dark #A3A3A3 对 surface 5.81:1、对正文 Δ1.70 —— 都过 AA 且压暗可辨。
-   * light 值 = textTertiary(表内 AA 中性强调灰);dark 值取自桌面基表
-   * text-secondary 的 dark 原值 —— cindy 深色批准灰阶在 #6F6F6F(2.92:1,掉 AA)与
-   * #BFC1C4(对正文 Δ1.22,压暗看不出)之间没有中间档。
-   * 刻意**不**复用 textSecondary:它是 #8C8E94 / #6F6F6F,只有 2.80:1 / 2.92:1,
-   * 用在正文流里的标识符上会直接掉出 AA(那正是本轮要修的问题)。
-   * 压暗幅度受 AA 下限约束 —— 深色底 #2A2828 比 Codex 的近黑浅得多,再压就破线。
+   * 取值(见 themeTokens.test.ts):两模式都取 textTertiary —— light #686864 对 surface
+   * 5.31:1,dark #999999 对 surface 6.58:1,都过 AA 且明显比正文浅,压暗可辨。
+   * 刻意**不**复用 textSecondary:二级文字(#4D4D4A / #BDBDBD)离正文太近,标识符看不出压暗。
    */
   chatInlineCodeText: string;
   /**
@@ -79,8 +92,6 @@ export interface ThemeColors {
   sheetActionSurface: string;
   /** Bottom sheet action group / row 描边 */
   sheetActionBorder: string;
-  /** Bottom sheet action row 正文色 */
-  sheetActionText: string;
   /** Bottom sheet / composer grabber 色 */
   sheetGrabber: string;
   /** App 内品牌 splash 背景红(仅限 splash,不进入普通 CTA 红名单) */
@@ -105,8 +116,13 @@ export interface ThemeColors {
   textPrimary: string;
   /** 次要文字 / 图标 */
   textSecondary: string;
-  /** 三级文字 / placeholder / metadata */
+  /** 三级文字 / metadata(时间、计数等真实信息) */
   textTertiary: string;
+  /**
+   * 输入框占位字专用(2026-09-27 用户定稿)。刻意低于三档文字的 4.5:1(约 3.5:1),让「还没输入」
+   * 一眼可辨;**只用于 placeholder 与同源的语音态提示**,不得当普通文字色用。
+   */
+  textPlaceholder: string;
   /** CTA / 主操作填充 —— 中性反相(常规按钮非红;红只留警告/报错。用户红色新规 2026-07-17,取代 U3+U8 全态红契约) */
   cta: string;
   /** CTA 上的文字 */
@@ -121,6 +137,8 @@ export interface ThemeColors {
   statusRecording: string;
   /** 运行 / thinking 强调 + 完全访问权限(Heart Orange,语义不变) */
   statusAccent: string;
+  /** 房主皇冠标识金色；与 Desktop --warning-fg 对齐，Light / Dark 均保持醒目。 */
+  warningFg: string;
   /** 会话状态点 — 等待用户回复/选择(TapTap 蓝,对齐桌面 --card-status-awaiting 与灵动岛 needs-interaction) */
   statusAwaiting: string;
   /**
@@ -134,6 +152,11 @@ export interface ThemeColors {
   /** 自动审批权限模式强调色(Auto Approval 蓝 #417CDD,L=D 同值,设计定稿 2026-07-17;取代 M2 的 #1D4ED8/#19D2C1 拆值) */
   permAutoAccent: string;
   /**
+   * 伙伴列表未读点(信息蓝 #417CDD,L=D 同值)。对齐桌面 `--bot-unread-bg`(DESIGN.md「Bot Unread Badge」):
+   * 表示 IM 未读语义,只用于伙伴列表行(伙伴与群聊)的未读点,不是 CTA、不是状态色,不得挪作他用。
+   */
+  botUnread: string;
+  /**
    * 错误说明文案的黑白系前景 —— **刻意跟随 textPrimary,不是红色**(黑白反色设计里成段
    * 错误文案不点红,错误语义由文案与上下文承担;"error" 是历史命名)。勿用于按钮文字
    * (破坏性按钮用 destructive)、勿用于状态指示(用 statusError / statusRecording)。
@@ -144,6 +167,9 @@ export interface ThemeColors {
    * 文字;状态指示红是另一档 #D91F37(statusError / statusRecording),不要混用。
    */
   destructive: string;
+  /** Shared-task plan B destructive confirmation fill / label (approved 2026-09-20). */
+  sharedTaskConfirmBackground: string;
+  sharedTaskConfirmForeground: string;
   /** 错误边框(跟随 borderStrong) */
   errorBorder: string;
   /**
@@ -152,7 +178,7 @@ export interface ThemeColors {
    * 注意:侧栏/抽屉毛玻璃底色另有 surfaceTranslucentSidebar(light 近白),不受本 token 影响。
    */
   overlay: string;
-  /** 素雅新建对话 FAB:dark 用柔白 #ECEDEF 而非纯白 cta,避免主入口在深底上过跳 */
+  /** 素雅新建对话 FAB:dark 用柔白 #E6E6E6 而非 cta 近白,避免主入口在深底上过跳 */
   homeListFab: string;
   /** List FAB 描边:light 无描边(transparent),dark 按 301:1073 帧白色 hairline */
   homeListFabBorder: string;
@@ -362,26 +388,44 @@ export const loginPalettes: Record<ThemeMode, LoginSkinColors> = {
 };
 
 /**
- * Default Light —— CINDY 色板(决策表 PRE-2 / U3+U8 批准)。
- * 直映:背景/卡片/边框/正文/二级信息;CTA 中性反相(常规按钮非红,红只留警告/报错)。插值档按决策表 §2(sRGB 每通道 round)。
- * 二级信息色 light 定稿 #8C8E94(用户调参 2026-07-20,自 Figma #9A9DA3 两轮加深,与桌面 text-secondary 同步);仍低于 AA,沿用 U2 显式例外。
- * borderStrong/errorBorder 取表内 AA 中性强调灰 #686B72(与 text-tertiary/ask-checkbox-border/
- * file-remove-bg 同源,非表内直落 id;lead 2026-07-17 确认采纳,errorBorder 跟随)。
+ * Default Light —— 移动端象牙白。
+ * 页面 #F9F9F6(比桌面 #F2F2ED 更亮,暖度 B = R−3)/ 卡片 #FFFFFC / 选中底 #EAEAE6 /
+ * 分隔线 #CCCCC8;正文 #0F0F0F 中性。由页面派生的半透明层(surfaceTranslucent /
+ * chatHeaderSurface / sheetSurface)是页面色加透明度,改页面时一起改。
+ * 近白页面只给卡片留 1.05 的抬升(桌面 1.12),浮起面(卡片 / 列表行 / 浮层 / 输入容器)
+ * 必须带 1px `border` 分层;需要下沉的块放到页面之下:选中底、展开块,以及代码卡 #F1F1EC。
+ * 文字由深到浅:正文 → 二级 #4D4D4A → 三级 #686864,在所在底色上均 ≥ 4.5:1;占位字 #858581 另列(≈3.5:1)。
+ * CTA 中性反相:#0F0F0F 底 + 白字。
  */
 export const lightColors: ThemeColors = {
-  surface: '#EDEDED',
-  surfaceElevated: '#F8F8F8',
-  surfaceTranslucent: 'rgba(237, 237, 237, 0.78)',
-  surfaceTranslucentSidebar: 'rgba(246, 246, 246, 0.90)',
-  chatHeaderSurface: 'rgba(246, 246, 246, 0.90)',
-  chatHeaderDivider: '#DCDFE3',
-  surfaceGlassPanel: '#F8F8F8',
-  surfaceListRow: '#F6F6F6',
-  surfaceListExpanded: '#EAEAEA',
+  surface: '#F9F9F6',
+  taskTagRed: '#ed615f',
+  taskTagOrange: '#eea34e',
+  taskTagYellow: '#e5c744',
+  taskTagGreen: '#70b568',
+  taskTagBlue: '#609bd4',
+  taskTagPurple: '#ab7bc6',
+  taskTagGray: '#969696',
+  taskTagPink: '#df83b0',
+  taskTagCoral: '#de8970',
+  taskTagTeal: '#53a89d',
+  taskTagIndigo: '#7c83cf',
+  taskTagWhite: '#ffffff',
+  taskTagWhiteCheck: '#525252',
+
+  surfaceElevated: '#FFFFFC',
+  homeDrawerShadow: 'rgba(0, 0, 0, 0.16)',
+  surfaceTranslucent: 'rgba(249, 249, 246, 0.78)',
+  surfaceTranslucentSidebar: 'rgba(255, 255, 252, 0.90)',
+  chatHeaderSurface: 'rgba(249, 249, 246, 0.90)',
+  chatHeaderDivider: '#CCCCC8',
+  surfaceGlassPanel: '#FFFFFC',
+  surfaceListRow: '#FFFFFC',
+  surfaceListExpanded: '#EAEAE6',
   activeGlyph: '#DF0C27',
-  chatCodeSurface: '#F8F8F8',
-  chatCodeBorder: '#DCDFE3',
-  chatInlineCodeText: '#686B72', // = textTertiary(表内 AA 中性强调灰),对 surface 4.56:1
+  chatCodeSurface: '#F1F1EC',
+  chatCodeBorder: '#CCCCC8',
+  chatInlineCodeText: '#686864',
   // GitHub light(highlight.js github.css)原值,与桌面端逐值一致。
   syntaxKeyword: '#D73A49',
   syntaxString: '#032F62',
@@ -390,41 +434,45 @@ export const lightColors: ThemeColors = {
   syntaxFunction: '#6F42C1',
   syntaxProperty: '#005CC5',
   inputCaret: '#417CDD',
-  sheetSurface: 'rgba(248, 248, 248, 0.95)',
-  sheetActionSurface: '#F6F6F6',
-  sheetActionBorder: '#DCDFE3',
-  sheetActionText: '#3C3F43',
-  sheetGrabber: '#DCDFE3',
+  sheetSurface: 'rgba(249, 249, 246, 0.96)',
+  sheetActionSurface: '#FFFFFC',
+  sheetActionBorder: '#CCCCC8',
+  sheetGrabber: '#C2C2BE',
   brandSplashBackground: '#DF0C27',
   brandSplashForeground: '#FFFFFF',
   brandSplashMuted: 'rgba(255, 255, 255, 0.82)',
   betaChannelBadgeBackground: '#DF0C27',
   betaChannelBadgeForeground: '#FFFFFF',
-  surfaceChip: '#F1F1F1',
-  border: '#C6C9CE', // 试穿 B 档(原 #DCDFE3,light 对 #EDEDED 仅 1.14:1 太弱 → 1.42:1)
-  borderTranslucent: 'rgba(198, 201, 206, 0.62)',
-  borderStrong: '#686B72',
-  textPrimary: '#3C3F43',
-  textSecondary: '#8C8E94',
-  textTertiary: '#686B72',
-  cta: '#3C3F43',
-  ctaText: '#FCFCFC',
+  surfaceChip: '#EAEAE6',
+  border: '#CCCCC8',
+  borderTranslucent: 'rgba(204, 204, 200, 0.62)',
+  borderStrong: '#858581',
+  textPrimary: '#0F0F0F',
+  textSecondary: '#4D4D4A',
+  textTertiary: '#686864',
+  textPlaceholder: '#858581',
+  cta: '#0F0F0F',
+  ctaText: '#FFFFFF',
   statusReady: '#19D2C1',
   statusRecording: '#D91F37',
   statusAccent: '#EA6B17',
+  warningFg: '#F3A115',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
-  errorText: '#3C3F43',
+  botUnread: '#417CDD',
+  errorText: '#0F0F0F',
   destructive: '#f43d3f',
-  errorBorder: '#686B72',
+  sharedTaskConfirmBackground: '#ac3535',
+  sharedTaskConfirmForeground: '#FFFFFF',
+  errorBorder: '#858581',
   // overlay:遮罩双模式恒深(light 原 0.24 太浅近白;0.50 实机过重,用户定稿 0.35,2026-07-21)。
   // 侧栏/抽屉毛玻璃底色另有 surfaceTranslucentSidebar,不受影响。
   overlay: 'rgba(38, 38, 38, 0.35)',
   // homeListFab:反相中性,不染品牌红(lead 裁决 2026-07-17:染红=扩张红名单,超 U8
-  // 已批决策表范围;日后要红 FAB 须单独过用户关卡)。light 对齐 textPrimary 深灰 #3C3F43。
-  homeListFab: '#3C3F43',
+  // 已批决策表范围;日后要红 FAB 须单独过用户关卡)。light 对齐 textPrimary / cta 近黑 #0F0F0F。
+  homeListFab: '#0F0F0F',
   homeListFabBorder: 'transparent',
   swipeActionPin: '#EA6B17',
   swipeActionNeutral: '#8e8e93',
@@ -434,27 +482,39 @@ export const lightColors: ThemeColors = {
 };
 
 /**
- * Default Dark —— CINDY 色板(决策表 PRE-2 / U3+U8 批准)。
- * CTA 回归中性反相:light 深底 #3C3F43 + 浅字 #FCFCFC / dark 浅底 #EEEEEE + 深字 #252222
- * (对比度 10.32/13.60 过 AA)——用户红色新规 2026-07-17:常规按钮非红,红只留警告/报错,
- * 取代 U3+U8 时期的全态红契约;themeTokens.test.ts 契约第二次改写(见 E1M)。
- * borderStrong/errorBorder 取表内 AA 中性强调灰 #BFC1C4(与 text-tertiary/ask-checkbox-border
- * 同源,非表内直落 id;lead 2026-07-17 确认采纳,errorBorder 跟随)。
+ * Default Dark —— 纯中性近黑。
+ * 页面 #121212 / 卡片 #1E1E1E / 选中底 #2A2A2A / 分隔线 #383838,不加暖。
+ * 文字:正文 #EDEDED → 二级 #BDBDBD → 三级 #999999,在所在底色上均 ≥ 4.5:1;占位字 #757575 另列(≈3.6:1)。
+ * CTA 中性反相:#EDEDED 底 + #121212 字。
  */
 export const darkColors: ThemeColors = {
-  surface: '#2A2828',
-  surfaceElevated: '#312F2F',
-  surfaceTranslucent: 'rgba(42, 40, 40, 0.78)',
-  surfaceTranslucentSidebar: 'rgba(18, 15, 15, 0.85)',
-  chatHeaderSurface: 'rgba(37, 35, 35, 0.80)',
-  chatHeaderDivider: 'rgba(255, 255, 255, 0.05)',
-  surfaceGlassPanel: 'rgba(59, 59, 59, 0.95)',
-  surfaceListRow: '#312F2F',
-  surfaceListExpanded: '#2A2828',
+  surface: '#121212',
+  taskTagRed: '#ed615f',
+  taskTagOrange: '#eea34e',
+  taskTagYellow: '#e5c744',
+  taskTagGreen: '#70b568',
+  taskTagBlue: '#609bd4',
+  taskTagPurple: '#ab7bc6',
+  taskTagGray: '#969696',
+  taskTagPink: '#e79fc1',
+  taskTagCoral: '#e6a08c',
+  taskTagTeal: '#75bfb4',
+  taskTagIndigo: '#999fdf',
+  taskTagWhite: '#ffffff',
+  taskTagWhiteCheck: '#525252',
+  surfaceElevated: '#1E1E1E',
+  homeDrawerShadow: 'rgba(0, 0, 0, 0.40)',
+  surfaceTranslucent: 'rgba(18, 18, 18, 0.78)',
+  surfaceTranslucentSidebar: 'rgba(10, 10, 10, 0.85)',
+  chatHeaderSurface: 'rgba(18, 18, 18, 0.80)',
+  chatHeaderDivider: 'rgba(255, 255, 255, 0.08)',
+  surfaceGlassPanel: '#242424',
+  surfaceListRow: '#1E1E1E',
+  surfaceListExpanded: '#121212',
   activeGlyph: '#A61629',
-  chatCodeSurface: '#353333',
-  chatCodeBorder: '#3C3C3C',
-  chatInlineCodeText: '#A3A3A3', // = 桌面基表 text-secondary dark 原值,对 surface 5.81:1
+  chatCodeSurface: '#1A1A1A',
+  chatCodeBorder: '#383838',
+  chatInlineCodeText: '#999999',
   // GitHub Dark,取自桌面 globals.css 的 .dark .n* 覆盖(#ff7b72 / #a5d6ff /
   // #8b949e / #79c0ff / #d2a8ff)。
   syntaxKeyword: '#FF7B72',
@@ -464,38 +524,42 @@ export const darkColors: ThemeColors = {
   syntaxFunction: '#D2A8FF',
   syntaxProperty: '#79C0FF',
   inputCaret: '#417CDD',
-  sheetSurface: 'rgba(59, 59, 59, 0.95)',
-  sheetActionSurface: 'rgba(59, 59, 59, 0.5)',
-  sheetActionBorder: '#505050',
-  sheetActionText: '#C1C1C1',
-  sheetGrabber: '#6F6F6F',
+  sheetSurface: 'rgba(28, 28, 28, 0.96)',
+  sheetActionSurface: '#262626',
+  sheetActionBorder: '#383838',
+  sheetGrabber: '#5C5C5C',
   brandSplashBackground: '#DF0C27',
   brandSplashForeground: '#FFFFFF',
   brandSplashMuted: 'rgba(255, 255, 255, 0.82)',
   betaChannelBadgeBackground: '#DF0C27',
   betaChannelBadgeForeground: '#FFFFFF',
-  surfaceChip: '#2F2D2D',
-  border: '#434343',
-  borderTranslucent: 'rgba(67, 67, 67, 0.62)',
-  borderStrong: '#BFC1C4',
-  textPrimary: '#D4D4D4',
-  textSecondary: '#6F6F6F',
-  textTertiary: '#BFC1C4',
-  cta: '#EEEEEE',
-  ctaText: '#252222',
+  surfaceChip: '#2A2A2A',
+  border: '#383838',
+  borderTranslucent: 'rgba(56, 56, 56, 0.62)',
+  borderStrong: '#8A8A8A',
+  textPrimary: '#EDEDED',
+  textSecondary: '#BDBDBD',
+  textTertiary: '#999999',
+  textPlaceholder: '#757575',
+  cta: '#EDEDED',
+  ctaText: '#121212',
   statusReady: '#19D2C1',
   statusRecording: '#D91F37',
   statusAccent: '#EA6B17',
+  warningFg: '#F3A115',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
-  errorText: '#D4D4D4',
+  botUnread: '#417CDD',
+  errorText: '#EDEDED',
   destructive: '#f43d3f',
-  errorBorder: '#BFC1C4',
+  sharedTaskConfirmBackground: '#ec9898',
+  sharedTaskConfirmForeground: '#121212',
+  errorBorder: '#8A8A8A',
   overlay: 'rgba(0, 0, 0, 0.45)',
-  // homeListFab:反相中性(lead 裁决,见 lightColors 注释);dark 维持 #ECEDEF 柔白(非纯白 cta)。
-  homeListFab: '#ECEDEF',
+  // homeListFab:反相中性(lead 裁决,见 lightColors 注释);dark 用 #E6E6E6 柔白(比 cta 略收)。
+  homeListFab: '#E6E6E6',
   homeListFabBorder: '#FFFFFF',
   swipeActionPin: '#EA6B17',
   swipeActionNeutral: '#636366',
@@ -537,21 +601,27 @@ export const radius = {
 } as const;
 
 /**
- * 收敛后的字号阶梯(对标桌面 hierarchy,保持克制)。
- * micro..headline 为工作号;listBody/listTitle 为 CINDY List 页专用档;
- * largeTitle 是首页大标题(iOS large title 风格);hero 留给 login 品牌位。
+ * 字号阶梯(2026-09-27 用户定稿收拢为 11 档:删 14 并入 15、删 19 并入 20)。
+ * 按角色选字号(正本见 mobile-design-guide.md §3):
+ * - micro(11):徽标、极小标签;
+ * - caption(12):短元数据——时间、计数、状态词、chip 文字,**不放成句的话**;
+ * - footnote(13):说明、提示、报错、备注、分组小标签(成句的话至少 13);
+ * - bodySmall(15):次级正文——列表预览、紧凑行、面板操作项、搜索框、输入框,以及等宽代码;
+ * - body(16):界面主文字——行标题、按钮、菜单项、导航栏标题;
+ * - bodyLarge(17):对话消息正文专用;
+ * - subtitle(18):列表 / 卡片标题(首页任务、队友);
+ * - title(20):页面、弹窗、面板大标题;
+ * - headline(24)/ largeTitle(30):大数字、大标题;hero(40)留给 login 品牌位。
  * 阶梯外字号一律禁止——需要新号先回本文件扩档,不许在组件里写字面量(有守护测试拦截)。
  */
 export const typeScale = {
   micro: 11,
   caption: 12,
   footnote: 13,
-  listBody: 14,
-  code: 15,
+  bodySmall: 15,
   body: 16,
   bodyLarge: 17,
   subtitle: 18,
-  listTitle: 19,
   title: 20,
   headline: 24,
   largeTitle: 30,
@@ -559,31 +629,37 @@ export const typeScale = {
 } as const;
 
 /**
- * 与字号配对的行高。除标准配对外只有三个场景档:
- * - bodyLarge(17/26):对话消息流正文(对齐 iOS 对话类 app 的 17pt 惯例,行高略松以改善长文可读性);
- * - bodyRelaxed(16/24):login 副标题等宽松正文;
- * - listBody/listTitleCompact(14/20、19/27):CINDY List 页 M2 施工图专用;
- * - listTitle(18/28、20/28):既有首页列表标题类,行高撑触控行。
- * micro(16) 同时服务紧凑 caption 场景(diff 行、媒体 hint 等行高即盒高的地方)。
+ * 与字号配对的行高(2026-09-27 用户定稿:每个文字样式都必须配行高,守护测试拦截)。
+ * 标准配对:11/16 · 12/18 · 13/18 · 15/20 · 16/22 · 17/26 · 18/26 · 20/25 · 24/30 · 30/36 · 40/44
+ * (`textStyles` 即这组配对)。标准之外只允许以下登记场景,不要为单个页面再造行高:
+ * - bodyRelaxed(24):login 副标题、伙伴记忆等长文阅读;
+ * - listTitle(28)与 bodyLarge / body 行高:首页列表与队友行的节奏(DESIGN.md:18/28 标题、
+ *   15/26 预览、13/22 元数据),对话流 Markdown 标题;
+ * - micro / bodySmall 行高:代码、diff、媒体 hint 等「行高即盒高」的紧凑场景;
+ * - 对齐例外:要与相邻图标 / 按钮 / 行内正文对齐的文字,行高跟随被对齐对象。
+ * 单行输入框(TextInput)不设行高:iOS 上会让占位字与光标偏位;多行编辑区可配标准行高。
  */
 export const lineHeight = {
   micro: 16,
   caption: 18,
-  listBody: 20,
-  code: 20,
+  bodySmall: 20,
   body: 22,
   bodyRelaxed: 24,
   bodyLarge: 26,
   title: 25,
   subtitle: 26,
-  listTitleCompact: 27,
   listTitle: 28,
   headline: 30,
   largeTitle: 36,
   hero: 44,
 } as const;
 
-/** 字重:克制到 4 档。默认 medium;semibold 仅限大写微标签等少量强调;bold 限 login 品牌 hero 标题与消息流 markdown 强调(对齐桌面 <strong> 的 700)。 */
+/**
+ * 字重:克制到 4 档,按角色选(2026-09-26 用户定稿,正本见 mobile-design-guide.md §3):
+ * 标题 semibold;列表行 / 选项 / 卡片标题 / 按钮 medium;正文、说明、元数据 regular;分组小标签与徽标 semibold。
+ * 浅色字不配粗字重(textTertiary 只配 regular,分组小标签除外;textSecondary 只配 regular / medium)。
+ * bold 限 login 品牌 hero 标题与消息流 markdown 强调(对齐桌面 <strong> 的 700)。
+ */
 export const fontWeight = {
   regular: '400',
   medium: '500',
@@ -600,13 +676,11 @@ export const textStyles = {
   micro: { fontSize: typeScale.micro, lineHeight: lineHeight.micro },
   caption: { fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   footnote: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  listBody: { fontSize: typeScale.listBody, lineHeight: lineHeight.listBody },
-  code: { fontSize: typeScale.code, lineHeight: lineHeight.code },
+  bodySmall: { fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   body: { fontSize: typeScale.body, lineHeight: lineHeight.body },
   bodyRelaxed: { fontSize: typeScale.body, lineHeight: lineHeight.bodyRelaxed },
   bodyLarge: { fontSize: typeScale.bodyLarge, lineHeight: lineHeight.bodyLarge },
   subtitle: { fontSize: typeScale.subtitle, lineHeight: lineHeight.subtitle },
-  listTitle: { fontSize: typeScale.listTitle, lineHeight: lineHeight.listTitleCompact },
   title: { fontSize: typeScale.title, lineHeight: lineHeight.title },
   headline: { fontSize: typeScale.headline, lineHeight: lineHeight.headline },
   largeTitle: { fontSize: typeScale.largeTitle, lineHeight: lineHeight.largeTitle },
@@ -739,4 +813,32 @@ export const motionEasing = {
   in: [0.4, 0, 1, 1],
   /** 位置 / 尺寸插值 */
   move: [0.4, 0, 0.2, 1],
+} as const;
+
+/**
+ * 移动端列表展开 / 收起节奏(DESIGN.md §14.4 登记的移动端例外,2026-09-30 用户要求
+ * 「符合 iOS 节奏」,同日要求把首版 450ms 加快一倍)。手机列表用 225ms 二次缓出,约
+ * 150ms 完成九成位移,先快后缓、无回弹(桌面 base 档为 200ms)。只用于列表分组的展开 /
+ * 收起(session/listDisclosureTransition.tsx)。
+ */
+export const listDisclosureMotion = {
+  duration: 225,
+} as const;
+
+/** Shared size for floating iOS navigation/menu controls (points). */
+export const navigationChrome = {
+  target: 44,
+  // Match navigation foreground polarity; backing stays local to the glass shape.
+  clear: {
+    light: {
+      foreground: '#000000',
+      scrim: 'rgba(255, 255, 255, 0.35)',
+      selected: 'rgba(0, 0, 0, 0.10)',
+    },
+    dark: {
+      foreground: '#FFFFFF',
+      scrim: 'rgba(0, 0, 0, 0.35)',
+      selected: 'rgba(255, 255, 255, 0.18)',
+    },
+  },
 } as const;

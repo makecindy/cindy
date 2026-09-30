@@ -15,8 +15,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildUserProvider, BUNDLED_CATALOG, parseModelsListResponse, modelProtocolComparison, type ProviderView } from '@cindy/model-providers';
 
+const testI18n = vi.hoisted(() => ({ language: 'zh-CN' }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'zh-CN' } }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: testI18n }),
 }));
 
 vi.mock('@/hooks/useCodexAuth', () => ({
@@ -242,6 +243,38 @@ function renderWizard(presetId: string) {
   );
 }
 
+it.each([
+  ['zh-CN', '小米'],
+  ['zh-TW', '小米'],
+  ['en', 'Xiaomi'],
+])('finds the displayed MiMo brand in %s', async (language, query) => {
+  testI18n.language = language;
+  const presets = BUNDLED_CATALOG.presets!.filter(p =>
+    ['xiaomi-token-plan-ams', 'xiaomi-token-plan-sgp'].includes(p.id),
+  );
+  expect(presets).toHaveLength(2);
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [...presets, deepseekPreset] });
+  render(<AddProviderWizard providers={[]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  await screen.findByText('DeepSeek');
+  fireEvent.change(screen.getByPlaceholderText('settings.providers.wizard.searchPlaceholder'), { target: { value: query } });
+  expect(screen.getAllByText('settings.providers.models.subscriptionProduct')).toHaveLength(2);
+  expect(screen.queryByText('DeepSeek')).toBeNull();
+});
+
+it.each(['xiaomi-mimo-token-plan-cn', 'xiaomi-token-plan-ams', 'xiaomi-token-plan-sgp'])(
+  'presents %s as a subscription with the dedicated key hint', async id => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === id)!;
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset, deepseekPreset] });
+    render(<AddProviderWizard providers={[]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+    const hint = await screen.findByText('settings.providers.models.subscriptionProduct');
+    fireEvent.click(hint.closest('button')!);
+    expect(await screen.findByPlaceholderText('tp-…')).toBeTruthy();
+    expect(screen.getByText('settings.providers.wizard.mimoTokenPlanNote')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'settings.providers.wizard.setupLink.apiKey' }).getAttribute('href')).toBe('https://platform.xiaomimimo.com/token-plan');
+    expect(screen.queryByPlaceholderText('sk-…')).toBeNull();
+  },
+);
+
 it.each(['openrouter', 'minimax-cn', 'minimax-global', 'moonshot-kimi-code', 'github-copilot', 'nous'])(
   'shows the same sign-in/API choice in the supplier list and connection page for %s', async id => {
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === id)!;
@@ -261,8 +294,13 @@ it.each(['openrouter', 'minimax-cn', 'minimax-global', 'moonshot-kimi-code', 'gi
 );
 
 beforeEach(() => {
+  testI18n.language = 'zh-CN';
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
+      llamaCppEnsure: vi.fn(async () => undefined),
+      llamaCppStatus: vi.fn(async () => ({ installed: false, supported: true, running: false, models: [] })),
+      llamaCppInstall: vi.fn(async () => undefined),
+      llamaCppStart: vi.fn(async () => undefined),
       onProviderOAuthProgress: vi.fn(() => () => undefined),
       localModelList: vi.fn(async () => ({
         status: { runtime: 'ollama', kind: 'absent', appInstalled: false },
@@ -297,6 +335,30 @@ afterEach(() => {
 });
 
 describe('AddProviderWizard — preset 直达', () => {
+  it('adds llama.cpp immediately without checking, installing or starting the runtime', async () => {
+    let finish!: () => void;
+    vi.mocked(window.electronAPI.maker.llamaCppEnsure).mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+    const onDone = vi.fn();
+    render(<AddProviderWizard providers={[]} onClose={vi.fn()} onDone={onDone} onOpenCustomForm={vi.fn()} />);
+    const row = await screen.findByRole('button', { name: /settings.providers.llamacpp.title/ });
+    fireEvent.click(row);
+    expect(row.getAttribute('aria-busy')).toBe('true');
+    fireEvent.click(row);
+    expect(window.electronAPI.maker.llamaCppEnsure).toHaveBeenCalledOnce();
+    finish();
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith('cindy-local-llamacpp'));
+    expect(window.electronAPI.maker.llamaCppStatus).not.toHaveBeenCalled();
+    expect(window.electronAPI.maker.llamaCppInstall).not.toHaveBeenCalled();
+    expect(window.electronAPI.maker.llamaCppStart).not.toHaveBeenCalled();
+  });
+  it('uses the same immediate add flow for llama.cpp deep links', async () => {
+    const preset = { id: 'llamacpp', name: 'llama.cpp', authMethod: 'none' as const, runtimes: { pi: { baseUrl: 'http://127.0.0.1:8080/v1', baseUrlEditable: true, wireProtocol: 'openai-chat' as const, models: [] } } };
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+    renderWizard('llamacpp');
+    await waitFor(() => expect(window.electronAPI.maker.llamaCppEnsure).toHaveBeenCalledOnce());
+    expect(screen.queryByDisplayValue('http://127.0.0.1:8080/v1')).toBeNull();
+    expect(window.electronAPI.maker.llamaCppStart).not.toHaveBeenCalled();
+  });
   it('官方 API 入口逐一显式声明 Pi 协议，不依赖 Claude runtime 派生', () => {
     expect(OFFICIAL_API_PRESETS.anthropic?.runtimes.pi?.wireProtocol).toBe('anthropic-messages');
     expect(OFFICIAL_API_PRESETS.openai?.runtimes.pi?.wireProtocol).toBe('openai-responses');
@@ -509,7 +571,7 @@ describe('AddProviderWizard — preset 直达', () => {
       catalogPresetId: 'explicit-pi',
       baseUrl: 'https://explicit.example/pi',
       wireProtocol: 'openai-chat',
-      models: [{ id: 'pi-model', name: 'Pi Model', discoveredMetadata: {}, defaultEnabled: true }],
+      models: [{ id: 'pi-model', name: 'Pi Model', discoveredMetadata: {} }],
     });
     expect(keys.pi).toBe('sk-test');
   });
@@ -529,7 +591,7 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(config.runtimes['claude-code']).toEqual({
       catalogPresetId: 'explicit-pi',
       baseUrl: 'https://explicit.example/anthropic',
-      models: [{ id: 'claude-model', name: 'Claude Model', discoveredMetadata: {}, defaultEnabled: true }],
+      models: [{ id: 'claude-model', name: 'Claude Model', discoveredMetadata: {} }],
     });
     expect(config.runtimes.pi?.models).toEqual([{ id: 'pi-model', name: 'Pi Model', discoveredMetadata: {}, defaultEnabled: false }]);
     expect(keys.pi).toBe('sk-test');
@@ -565,7 +627,7 @@ describe('AddProviderWizard — preset 直达', () => {
     await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
     const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
     expect(config.runtimes['claude-code']?.models).toEqual([
-      { id: 'claude-only-model', name: 'Claude Only Model', discoveredMetadata: {}, defaultEnabled: true },
+      { id: 'claude-only-model', name: 'Claude Only Model', discoveredMetadata: {} },
     ]);
     expect(config.runtimes.pi).toBeUndefined();
     expect(keys.pi).toBeUndefined();
@@ -707,7 +769,7 @@ describe('AddProviderWizard — preset 直达', () => {
           codex: expect.objectContaining({
             baseUrl: 'http://localhost:4100/v1',
             requestPath: '/tenant/acme/infer',
-            models: [{ id: 'local-model', name: 'local-model', discoveredMetadata: {}, defaultEnabled: true }],
+            models: [{ id: 'local-model', name: 'local-model', discoveredMetadata: {} }],
           }),
         },
       }),
@@ -897,7 +959,7 @@ describe('AddProviderWizard — preset 直达', () => {
       baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
       wireProtocol: 'openai-chat',
     });
-    expect(runtime?.models.filter(m => m.defaultEnabled !== false)).toEqual([{ id: 'glm-5.2', name: 'GLM-5.2', discoveredMetadata: {}, defaultEnabled: true }]);
+    expect(runtime?.models.filter(m => m.defaultEnabled !== false)).toEqual([{ id: 'glm-5.2', name: 'GLM-5.2', discoveredMetadata: {} }]);
   });
 
   it('可编辑预设改为同源 endpoint 后继续合并 Responses 目录', async () => {
@@ -935,12 +997,11 @@ describe('AddProviderWizard — preset 直达', () => {
       }),
     );
     expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex?.models).toEqual([
-      { id: 'chat-model', name: 'Chat Model', discoveredMetadata: {}, defaultEnabled: true },
+      { id: 'chat-model', name: 'Chat Model', discoveredMetadata: {} },
       {
         discoveredMetadata: { name: 'Responses Model' },
         id: 'responses-model',
         name: 'Responses Model',
-        defaultEnabled: true,
         route: {
           baseUrl: 'https://editable.example/api/v1',
           wireProtocol: 'openai-responses',
@@ -1111,8 +1172,47 @@ it('imports the same discovered OpenRouter identity, capabilities and prices int
       cost: { input: 0.75864, output: 1.51728 } });
     expect(modelProtocolComparison(provider, { [agent]: model }).forAgent(agent)?.mode)
       .toBe(agent === 'pi' ? 'matching' : 'compatibility');
-    expect(model.defaultEnabled).toBe(true);
+    expect(model.defaultEnabled).toBe(agent === 'pi');
   }
+});
+
+describe.each([true, false])('native defaults with discovery available=%s', discoveryAvailable => {
+  it.each([
+    ['openai/gpt-6-astra', 'openai-responses', [false, true, true]],
+    ['anthropic/claude-fable-5', 'anthropic-messages', [true, false, true]],
+    ['deepseek/deepseek-v4-pro', 'openai-completions', [false, false, true]],
+    ['google/gemini-3.8-flash', 'google-generative-ai', [false, false, true]],
+  ] as const)('enables only matching engines when selecting %s', async (id, nativeApi, enabled) => {
+    const agents = ['claude-code', 'codex', 'pi'] as const;
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'openrouter')!);
+    for (const agent of agents) {
+      const model = preset.runtimes[agent]!.models.find(m => m.id === id)!;
+      expect(model).toBeDefined();
+      preset.runtimes[agent]!.models = [{ ...model, name: 'Selected model', defaultEnabled: false }];
+    }
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue(discoveryAvailable
+      ? { ok: true, models: [{ id, name: 'Selected model' }] }
+      : { ok: false });
+    renderWizard('openrouter');
+    fireEvent.click(await screen.findByText('settings.providers.wizard.useApiKey'));
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+    fireEvent.click(await screen.findByText('Selected model'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const saved = vi.mocked(createCustomProvider).mock.calls[0][0];
+    const provider = buildUserProvider(saved, { presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    agents.forEach((agent, index) => {
+      // Model selection must not be persisted as a per-engine compatibility override.
+      expect(saved.runtimes[agent]!.models.find(m => m.id === id)).not.toHaveProperty('defaultEnabled');
+      const model = provider.models[agent]!.find(m => m.id === id)!;
+      expect(model).toMatchObject({ nativeApi, defaultEnabled: enabled[index] });
+      expect(modelProtocolComparison(provider, { [agent]: model }).forAgent(agent)?.mode)
+        .toBe(enabled[index] ? 'matching' : 'compatibility');
+    });
+  });
 });
 
 it('imports an OpenCode Go Responses model into all three engines', async () => {
@@ -1139,7 +1239,7 @@ it('imports an OpenCode Go Responses model into all three engines', async () => 
   expect(model).toMatchObject({ piApi: 'openai-responses', supportsImageInput: true });
   const projected = buildUserProvider(saved, { presets: [preset] });
   for (const agent of projected.agents) {
-    expect(projected.models[agent]?.find(m => m.id === 'gpt-5.6-luna')).toMatchObject({ api: 'openai-responses', defaultEnabled: true });
+    expect(projected.models[agent]?.find(m => m.id === 'gpt-5.6-luna')).toMatchObject({ api: 'openai-responses', defaultEnabled: agent !== 'claude-code' });
     expect(saved.runtimes[agent]?.models.find(m => m.id === 'gpt-5.6-luna')).not.toHaveProperty('route');
   }
 });
@@ -1249,7 +1349,11 @@ it('preserves OAuth-discovered prices for every engine when finishing model sele
     }),
   });
   renderWizard('openrouter');
-  fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.button.authorize' }));
+  fireEvent.click(await screen.findByRole(
+    'button',
+    { name: 'settings.providers.button.authorize' },
+    { timeout: 5000 },
+  ));
   fireEvent.click(await screen.findByText('OAuth discovered model'));
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.finish' }));
   await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledOnce());
@@ -1258,6 +1362,7 @@ it('preserves OAuth-discovered prices for every engine when finishing model sele
   for (const agent of ['claude-code', 'codex', 'pi'] as const) {
     expect(saved.runtimes[agent]!.models[0].discoveredCost).toEqual(prices[agent]);
     expect(projected.models[agent]![0].cost).toEqual(prices[agent]);
+    expect(projected.models[agent]![0].defaultEnabled).toBe(agent === 'pi');
   }
 });
 
@@ -1281,7 +1386,7 @@ it('imports the full Hermes inventory immediately, enables selected Pi models an
   expect(provider.agents).toEqual(['claude-code', 'codex', 'pi']);
   for (const agent of provider.agents) {
     expect(provider.models[agent]?.map(m => m.id)).toEqual(['google/gemini-test', 'other']);
-    expect(provider.models[agent]?.find(m => m.id === 'google/gemini-test')?.defaultEnabled).toBe(true);
+    expect(provider.models[agent]?.find(m => m.id === 'google/gemini-test')?.defaultEnabled).toBe(agent === 'pi');
     expect(provider.models[agent]?.find(m => m.id === 'other')?.defaultEnabled).toBe(false);
   }
 });
@@ -1308,4 +1413,33 @@ it('keeps legacy curated recommendations selected and newly discovered models un
   await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
   const models = vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi!.models;
   expect(models.filter(model => model.defaultEnabled !== false).map(model => model.id)).toEqual(['recommended']);
+});
+
+it('sets up Sub2API from one site address and retains discovered capabilities in all engines', async () => {
+  const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'sub2api')!;
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset] }));
+  const models = parseModelsListResponse({ models: [{ slug: 'private-sol', display_name: 'Private Sol',
+    supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }], default_reasoning_level: 'high',
+    context_window: 272000, max_context_window: 1050000,
+    input_modalities: ['text', 'image'], service_tiers: [{ id: 'priority' }],
+  }] })!;
+  window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true, models }));
+  vi.mocked(createCustomProvider).mockResolvedValue({ ok: true });
+  renderWizard('sub2api');
+  await screen.findByDisplayValue('Sub2API');
+  fireEvent.change(screen.getAllByDisplayValue('https://{endpoint}/v1')[0], { target: { value: 'https://relay.example/team' } });
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  fireEvent.click(await screen.findByText('Private Sol'));
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    const rt = config.runtimes[agent]!;
+    expect(rt.baseUrl).toBe('https://relay.example/team/v1');
+    expect(rt.modelsUrl).toBe('https://relay.example/team/v1/models?client_version=0.147.0');
+    expect(rt.catalogPresetId).toBe('sub2api');
+    expect(rt.models[0].discoveredMetadata).toMatchObject({ efforts: ['low', 'high'],
+      contextWindow: 272000, contextWindowMax: 1050000, supportsFastMode: true, supportsImageInput: true });
+  }
 });

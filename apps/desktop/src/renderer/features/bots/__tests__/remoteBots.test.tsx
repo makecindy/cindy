@@ -149,3 +149,18 @@ it('keeps cached companions offline on reconnect and preserves device-qualified 
   expect(isRemoteBotUnread(result.current.find((bot) => bot.deviceId === 'a')!)).toBe(false);
   expect(isRemoteBotUnread(result.current.find((bot) => bot.deviceId === 'b')!)).toBe(true);
 });
+
+it('does not reinterpret a resource read error as device disconnection', async () => {
+  h.devices = [host('reachable')];
+  h.invoke.mockResolvedValue(collection());
+  const { result } = renderHook(useRoster);
+  await waitFor(() => expect(result.current).toHaveLength(1));
+  expect(result.current[0].online).toBe(true);
+  h.invoke.mockRejectedValue(new Error('model/resource failure'));
+  act(() => h.status({ status: 'online' }));
+  await waitFor(() => expect(h.invoke).toHaveBeenCalledTimes(2));
+  expect(result.current[0].online).toBe(true);
+  act(() => h.status({ status: 'stopped' }));
+  expect(result.current[0].online).toBe(false);
+  expect(result.current[0].connectionKnown).toBe(true);
+});

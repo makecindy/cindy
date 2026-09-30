@@ -1,6 +1,6 @@
 import type { ImOrchestratorConfig } from '../shared/types';
 import { createImOrchestrator } from '../shared/orchestrator';
-import { resetSessionToDefaults } from '../shared/sessionRepo';
+import { resetImSessionToChannelDefaults } from '../shared/channelDefaultRouteSync';
 import { buildWechatAdapter } from './adapter';
 import type { WechatIM } from './WechatIM';
 
@@ -11,7 +11,7 @@ export function wireWechatOrchestrator(wechatIm: WechatIM, config: ImOrchestrato
     repo: orchestrator.repo,
     config,
     resetSessionToDefaults: (sessionId, nextConfig, prepared) =>
-      resetSessionToDefaults(sessionId, nextConfig, prepared, 'wechat'),
+      resetImSessionToChannelDefaults(sessionId, nextConfig, prepared, 'wechat'),
   });
 }
 

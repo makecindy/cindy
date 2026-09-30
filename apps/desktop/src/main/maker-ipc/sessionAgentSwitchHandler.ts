@@ -27,6 +27,8 @@
  */
 
 import type { AgentKind } from '@cindy/maker-core';
+import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { createSharedTaskSettingGuard } from './sharedTaskSetting.js';
 
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
@@ -210,6 +212,13 @@ export interface MakerSessionAgentSwitchHandlerDeps {
     sessionId: string,
     intent: PublicAgentSwitchIntent | null,
   ): void;
+  /**
+   * 用户选择的路由落地(应用成功)后回调 —— 供 IM 侧给任务打「脱离跟随」标记:
+   * 「单独改过」按选择行为判定, 同值重选也永久脱离跟随(greptile P1 补充, PR #5155)。
+   * 系统配置对齐(configStaged)与 Agent 自选不触发。**失败会抛错**: 墓碑写不进去时
+   * 意图保留、下一条消息重试, 不把用户选择当成功消费。
+   */
+  onUserRouteSelectionLanded?(sessionId: string): void | Promise<void>;
   log: {
     info(message: string, fields?: Record<string, unknown>): void;
     warn(message: string, fields?: Record<string, unknown>): void;
@@ -243,6 +252,11 @@ export interface SessionAgentSwitchResult {
 export interface PendingAgentSwitchIntent {
   /** Agent-requested complete selection, exposed by the runtime control query. */
   runtimeSource?: 'agent';
+  /**
+   * 系统配置对齐(IM 渠道默认跟随 / 伙伴模型对齐)登记的意图 —— 不是用户选择,
+   * 落地时不给任务打「脱离跟随」标记。用户 picker 选择不带此标(PR #5155)。
+   */
+  configStaged?: boolean;
   /** SET_MODEL intent: apply the route without a cross-engine handoff. */
   sameAgentSelection?: boolean;
   targetAgentKind: AgentKind;
@@ -369,6 +383,8 @@ export async function performSessionAgentSwitch(
     /** Abort signal for direct scheduler/IM sends; checked at side-effect boundaries. */
     signal?: AbortSignal;
     runtimeSource?: 'agent';
+    /** 系统配置对齐(IM 渠道默认跟随 / 伙伴模型对齐)登记: 落地时不打「脱离跟随」标记。 */
+    configStaged?: boolean;
     /** Recheck caller CAS after asynchronous validation, before staging any intent. */
     assertSelectionCurrent?: () => void;
   },
@@ -442,6 +458,7 @@ export async function performSessionAgentSwitch(
         ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
         sameAgentSelection: true,
         ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
+        ...(params.configStaged === true ? { configStaged: true } : {}),
       }, false, params.assertSelectionCurrent);
       return {
         switched: false,
@@ -494,6 +511,7 @@ export async function performSessionAgentSwitch(
   if (!params.applyNow && deps.pendingSwitches) {
     const intent: PendingAgentSwitchIntent = {
       ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
+      ...(params.configStaged === true ? { configStaged: true } : {}),
       targetAgentKind,
       model,
       providerId: normalizedProviderId,
@@ -648,6 +666,7 @@ export async function performSessionAgentSwitch(
               // 下一条消息先重试原子恢复尾段,而不是带半状态继续 lazy-create。
               deps.pendingSwitches?.set(sessionId, {
                 ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
+                ...(params.configStaged === true ? { configStaged: true } : {}),
                 targetAgentKind,
                 model,
                 providerId: normalizedProviderId,
@@ -672,6 +691,7 @@ export async function performSessionAgentSwitch(
             // 避免只清 sdk id 后 DB pending 与实际注入内容分叉。
             deps.pendingSwitches?.set(sessionId, {
               ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
+              ...(params.configStaged === true ? { configStaged: true } : {}),
               targetAgentKind,
               model,
               providerId: normalizedProviderId,
@@ -749,7 +769,72 @@ export async function performSessionAgentSwitch(
  *    保留原有失败后继续发送的行为。resume 回落事务
  *    已进入 commit point 后若失败,则只重试其原子恢复尾段。
  */
+/** 墓碑写失败: 一律阻止发送并保留可重试状态 —— 不适用跨引擎的 fail-continue(PR #5155 review P2)。 */
+export class UserRouteSelectionMarkerError extends Error {
+  readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = 'UserRouteSelectionMarkerError';
+    this.cause = cause;
+  }
+}
+
+/**
+ * 用户选择落地 → 给任务打「脱离跟随」标记。只认用户选择: 系统配置对齐
+ * (configStaged)与 Agent 自选都由默认变化覆盖, 不得永久脱离。
+ *
+ * **先立碑再清意图**: 同值重选的唯一证据就是这份墓碑, 写入必须等成功 —— 失败抛错
+ * 让意图保留、下一条消息重试, 不得把选择当成功消费(PR #5155 review P2)。
+ */
+async function noteLandedUserRouteSelection(
+  deps: MakerSessionAgentSwitchHandlerDeps,
+  sessionId: string,
+  intent: PendingAgentSwitchIntent,
+): Promise<void> {
+  if (intent.configStaged === true || intent.runtimeSource === 'agent') return;
+  try {
+    await deps.onUserRouteSelectionLanded?.(sessionId);
+  } catch (err) {
+    deps.log.warn('failed to record landed user route selection', {
+      sessionId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    // 保留可重试状态: 切换事务内部的同引擎 no-op 收口可能已把意图清掉, 重新登记,
+    // 下一条消息重试立碑 —— 否则进程一退, 在世证据与落点双双丢失(PR #5155 review P2)。
+    if (!deps.pendingSwitches?.get(sessionId)) deps.pendingSwitches?.set(sessionId, intent);
+    throw new UserRouteSelectionMarkerError(err);
+  }
+}
+
 const pendingAgentSwitchApplyInFlight = new Map<string, Promise<void>>();
+
+/**
+ * 系统路由切换(`applySessionRouteUnderSendLock`)应用后的意图收口裁决。
+ *
+ * `applyPendingAgentSwitchIfIdle` 对跨引擎意图是 fail-continue: 应用失败只记日志、
+ * 意图原样保留、不抛错(上一条语义注释)。调用方若把「意图还在」一律当「任务正忙」,
+ * 后续消息会反复重试同一个必然失败的切换 —— 必须区分「忙 / 恢复尾段待重试」与
+ * 「应用失败被吞」, 后者要撤回意图并报错(PR #5155 review P1)。
+ */
+export function settleSystemRouteSwitchIntent(input: {
+  /** 本次要应用的意图(登记后读回)。 */
+  stagedIntent: unknown;
+  /** 应用尝试之后仍在登记的意图。 */
+  remainingIntent: unknown;
+  /** 应用尝试之后会话是否空闲(不忙 = 意图没被真的推迟, 而是没生效)。 */
+  sessionIdle: boolean;
+}): 'applied' | 'staged' | 'failed' {
+  const { stagedIntent, remainingIntent, sessionIdle } = input;
+  if (!remainingIntent) return 'applied';
+  // resume 回落尾段待重试 = 切换已过 commit 点, 保留意图是对的, 下一条消息续跑。
+  if ((remainingIntent as { resumeFallbackRecovery?: unknown } | null)?.resumeFallbackRecovery) {
+    return 'staged';
+  }
+  // 意图被更晚的选择超车, 或应用瞬间会话又忙起来了: 留给各自的收口, 按待生效处理。
+  if (remainingIntent !== stagedIntent || !sessionIdle) return 'staged';
+  return 'failed';
+}
 
 export function applyPendingAgentSwitchIfIdle(
   deps: MakerSessionAgentSwitchHandlerDeps,
@@ -775,6 +860,7 @@ export function applyPendingAgentSwitchIfIdle(
         if (result.deferred || result.superseded) {
           throw new Error('model selection could not be applied before send');
         }
+        await noteLandedUserRouteSelection(deps, sessionId, intent);
         if (deps.pendingSwitches?.get(sessionId) === intent) {
           deps.pendingSwitches.clear(sessionId);
           deps.onPendingSwitchChanged?.(sessionId, null);
@@ -802,6 +888,7 @@ export function applyPendingAgentSwitchIfIdle(
           recovery.boundaryContent,
         );
         deps.setPendingHandoff(sessionId, recovery.handoff, recoveryHandoffGeneration);
+        await noteLandedUserRouteSelection(deps, sessionId, intent);
         if (deps.pendingSwitches?.get(sessionId) === intent) {
           deps.pendingSwitches.clear(sessionId);
           deps.onPendingSwitchChanged?.(sessionId, null);
@@ -812,6 +899,10 @@ export function applyPendingAgentSwitchIfIdle(
         sessionId,
         targetAgentKind: intent.targetAgentKind,
         runtimeSource: intent.runtimeSource,
+        // 系统配置对齐的身份必须随重入传递: resume 回落的恢复意图丢了它, 就会被
+        // 当成用户选择打上 manual 墓碑, 任务永久脱离跟随(chatgpt-codex-connector P2,
+        // PR #5155)。
+        configStaged: intent.configStaged,
         model: intent.model,
         providerId: intent.providerId,
         effort: intent.effort,
@@ -827,9 +918,16 @@ export function applyPendingAgentSwitchIfIdle(
         throw new Error('Harness switch recovery is pending; retry the send after recovery');
       }
       // CAS 语义:执行期间用户可能又选了另一个目标,不能把新意图一起清掉。
-      if (!result.retryPending && deps.pendingSwitches?.get(sessionId) === intent) {
-        deps.pendingSwitches.clear(sessionId);
-        deps.onPendingSwitchChanged?.(sessionId, null);
+      if (!result.retryPending) {
+        // 同引擎 CAS 超车(sameEngineSuperseded)= 这次选择没落地, 不立碑。
+        if (result.sameEngineSuperseded !== true) {
+          await noteLandedUserRouteSelection(deps, sessionId, intent);
+        }
+        // CAS 语义:执行期间用户可能又选了另一个目标,不能把新意图一起清掉。
+        if (deps.pendingSwitches?.get(sessionId) === intent) {
+          deps.pendingSwitches.clear(sessionId);
+          deps.onPendingSwitchChanged?.(sessionId, null);
+        }
       }
       // Once the switch has committed, the intent has been consumed even if
       // cancellation arrived during the final bootstrap step.  The caller's
@@ -843,7 +941,15 @@ export function applyPendingAgentSwitchIfIdle(
         err: err instanceof Error ? err.message : String(err),
       });
       // Never send on the old model after the user's selected route failed preparation.
-      if (intent.sameAgentSelection || intent.runtimeSource === 'agent') throw err;
+      // 墓碑写失败同理: 跨引擎的 fail-continue 也必须挡住 —— 发送继续 + 进程退出会把
+      // 同值重选的唯一证据一起丢掉(PR #5155 review P2)。
+      if (
+        err instanceof UserRouteSelectionMarkerError ||
+        intent.sameAgentSelection ||
+        intent.runtimeSource === 'agent'
+      ) {
+        throw err;
+      }
     }
   })().finally(() => {
     if (pendingAgentSwitchApplyInFlight.get(sessionId) === run) {
@@ -869,6 +975,8 @@ export function registerMakerSessionAgentSwitchHandler(
       effort: unknown,
       fastMode: unknown,
     ) => {
+      const context = getDeviceLinkInvokeContext();
+      const guard = createSharedTaskSettingGuard(context?.sharedTask, String(sessionId), context?.sharedTaskSetting ?? { admitted: false });
       const run = () => performSessionAgentSwitch(deps, {
         sessionId,
         targetAgentKind,
@@ -876,6 +984,7 @@ export function registerMakerSessionAgentSwitchHandler(
         providerId,
         effort,
         fastMode,
+        assertSelectionCurrent: guard.admit,
       });
       return typeof sessionId === 'string' && sessionId && deps.withSessionLock
         ? deps.withSessionLock(sessionId, run)

@@ -22,7 +22,7 @@ import type { Logger, ScheduleRunner } from '@cindy/maker-scheduler';
 import type { Maker } from '@cindy/maker-core';
 import type { FeishuIM } from '@cindy/im';
 
-import { dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace';
+import { dialogueWorkspaceRoots } from '../localDb/dialogueWorkspace';
 import { sessions } from '../localDb/schema.js';
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
@@ -36,6 +36,7 @@ import {
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getDesktopNotificationsEnabled } from '../notificationService.js';
 import {
+  applyPiImModelSelectionUnderLock,
   acquirePendingAgentSwitchForDirectSend,
   broadcastSessionCreated,
   cancelSchedulerAutoResume,
@@ -100,6 +101,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
   const storage = new DrizzleScheduleStorage(deps.getDb);
   _storage = storage;
   const notifier = new DesktopNotifier({
+    hasUnrecoveredMatchingFailure: (run) => storage.hasUnrecoveredMatchingFailure(run),
     sendFeishuSessionNotification: async (sessionId, text) => {
       await sendFeishuSessionNotification(deps.feishuIm, sessionId, text);
     },
@@ -122,6 +124,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     },
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
+    applyPiModelSelectionUnderLock: applyPiImModelSelectionUnderLock,
     resolveModelSelection: resolveScheduledModelSelectionLive,
     onSessionCreated: broadcastSessionCreated,
     // 停用轴裁决:每次 fire 前判保存路由是否已被用户停用(见 runner deps 注释)。
@@ -181,8 +184,10 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     // agent 在对话里建任务时常把自己的 cwd 当 workingDir 传入 —— 引擎据此归一成
     // 对话任务,避免任务/会话错误归入项目分组。path.relative 同时兼容两端分隔符。
     isManagedWorkspaceDir: (dir) => {
-      const rel = path.relative(dialogueWorkspaceRootDir(), dir);
-      return !rel.startsWith('..') && !path.isAbsolute(rel);
+      return dialogueWorkspaceRoots().some((root) => {
+        const rel = path.relative(root, dir);
+        return !rel.startsWith('..') && !path.isAbsolute(rel);
+      });
     },
     // Review sessions are host-owned read-only tasks, not normal unattended
     // automation targets. Re-read their durable source for CRUD and every fire

@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { createInstance } from "i18next";
 
 import enCommon from "@/i18n/locales/en";
 import zhCNCommon from "@/i18n/locales/zh-CN";
@@ -52,6 +53,31 @@ describe("mobile i18n catalog parity", () => {
   const locales = Object.keys(CATALOGS);
   const flat = new Map(locales.map((locale) => [locale, flatCatalog(locale)]));
   const enKeys = [...flat.get("en")!.keys()].sort();
+
+  it.each(locales)(
+    "%s resolves browser action labels at their UI paths",
+    async (locale) => {
+      const instance = createInstance();
+      await instance.init({
+        lng: locale,
+        fallbackLng: false,
+        resources: { [locale]: { translation: CATALOGS[locale] as object } },
+      });
+      for (const action of [
+        "browserBack",
+        "browserForward",
+        "browserMore",
+        "browserShowSource",
+        "browserShowPage",
+        "browserAddToTask",
+        "browserFileInfo",
+      ]) {
+        const key = `files.preview.${action}`;
+        expect(instance.exists(key), `${locale}:${key}`).toBe(true);
+        expect(instance.t(key)).not.toBe(key);
+      }
+    },
+  );
 
   it.each(locales)("%s 与 en 的 key 全集一致", (locale) => {
     expect([...flat.get(locale)!.keys()].sort()).toEqual(enKeys);

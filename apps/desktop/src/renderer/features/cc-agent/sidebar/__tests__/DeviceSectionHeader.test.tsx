@@ -12,7 +12,7 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => fixture.devices,
   useDeviceLinkDeviceListRequestState: () => ({ status: 'ready', error: null }),
 }));
-vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
+vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
 
 const capabilities = {
   version: 1,
@@ -72,11 +72,12 @@ async function hover() {
 }
 function unavailable() {
   const button = screen.getByRole('button', { name: /^Remote desktop unavailable:/ });
-  expect(button.getAttribute('aria-disabled')).toBe('true');
+  expect(button.getAttribute('aria-disabled')).toBe('false');
   expect(button.querySelector('.lucide-monitor-off')).not.toBeNull();
   fireEvent.click(button);
   expect(open).not.toHaveBeenCalled();
   expect(toggle).not.toHaveBeenCalled();
+  expect(toast.info).toHaveBeenCalledWith(button.getAttribute('aria-label'), { duration: 8000 });
   return button;
 }
 
@@ -87,13 +88,14 @@ it('does not add a remote shortcut or probe to the local machine', async () => {
   expect(invoke).not.toHaveBeenCalled();
 });
 
-it('checks on hover without starting a desktop, then opens the right machine without toggling it', async () => {
+it('checks automatically while revealing the shortcut only on hover or keyboard focus', async () => {
   render(header());
   expect(invoke).not.toHaveBeenCalled();
   const action = screen.getByRole('button', { name: 'Checking remote desktop…' });
+  expect(action.parentElement!.className).toContain('opacity-0');
   expect(action.parentElement!.className).toContain('group-hover/device-header:opacity-100');
   expect(action.parentElement!.className).toContain('has-[:focus-visible]:opacity-100');
-  await hover();
+  await act(async () => {});
   expect(invoke).toHaveBeenCalledExactlyOnceWith('remote', REMOTE_DESKTOP_CHANNEL, [
     { op: 'capabilities' },
   ]);
@@ -113,7 +115,10 @@ it.each([
     { remoteControlEnabled: false },
     i18n.getResource('en', 'common', 'remoteDesktop.remoteDisabled'),
   ],
-  [{ controlEnabled: false }, 'Allow control of this computer in Remote control settings.'],
+  [
+    { controlEnabled: false },
+    i18n.getResource('en', 'common', 'remoteDesktop.shortcut.controlDisabled'),
+  ],
   [{ platform: 'ios' }, 'This device does not support remote desktop.'],
   [{ isSelf: true }, 'This device does not support remote desktop.'],
 ] satisfies [Partial<DeviceLinkDeviceView>, string][])(
@@ -181,19 +186,19 @@ it.each(['CHANNEL_NOT_ALLOWED', 'ACCESS_REVOKED', 'INVOKE_TIMEOUT'])(
   },
 );
 
-it('debounces quick passes, refreshes on re-entry, and never polls while hovering', async () => {
+it('remembers the automatic check across pointer re-entry without polling', async () => {
   render(header());
   fireEvent.mouseEnter(row());
   fireEvent.mouseLeave(row());
   await act(async () => vi.advanceTimersByTimeAsync(200));
-  expect(invoke).not.toHaveBeenCalled();
+  expect(invoke).toHaveBeenCalledOnce();
   await hover();
   fireEvent.mouseLeave(row());
   invoke.mockResolvedValue({ ...capabilities, enabled: false });
   await hover();
-  unavailable();
+  expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBeTruthy();
   await act(async () => vi.advanceTimersByTimeAsync(60000));
-  expect(invoke).toHaveBeenCalledTimes(2);
+  expect(invoke).toHaveBeenCalledOnce();
 });
 
 it('ignores a late capability reply after the machine goes offline', async () => {
@@ -244,4 +249,60 @@ it('turns a failed open into an unavailable icon and coalesces repeated clicks',
       .querySelector('.lucide-monitor-off'),
   ).not.toBeNull();
   expect(toast.error).toHaveBeenCalledWith(i18n.t('remoteDesktop.connectionError'));
+});
+
+it('retains an in-flight result after pointer leave and a routine directory refresh', async () => {
+  let resolve!: (value: unknown) => void;
+  invoke.mockReturnValue(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
+  const view = render(header());
+  await hover();
+  fireEvent.mouseLeave(row());
+  fixture.devices = [{ ...device(), busy: false, name: 'Updated name' }];
+  view.rerender(header());
+  await act(async () => resolve(capabilities));
+  await hover();
+  expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBeTruthy();
+  expect(invoke).toHaveBeenCalledOnce();
+});
+
+it('checks again after an offline/online transition, but not on repeated hover', async () => {
+  const view = render(header());
+  await hover();
+  fixture.devices = [{ ...device(), online: false }];
+  view.rerender(header());
+  unavailable();
+  fixture.devices = [device()];
+  invoke.mockResolvedValue({ ...capabilities, enabled: false });
+  view.rerender(header());
+  await act(async () => vi.advanceTimersByTimeAsync(151));
+  unavailable();
+  fireEvent.mouseLeave(row());
+  await hover();
+  unavailable();
+  expect(invoke).toHaveBeenCalledTimes(2);
+});
+
+it('waits until the device is online, then probes without a pointer interaction', async () => {
+  fixture.devices = [{ ...device(), online: false }];
+  const view = render(header());
+  await act(async () => {});
+  expect(invoke).not.toHaveBeenCalled();
+  fixture.devices = [device()];
+  view.rerender(header());
+  await act(async () => {});
+  expect(invoke).toHaveBeenCalledOnce();
+  expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBeTruthy();
+});
+
+it('explains how to grant screen recording on the remote Mac when clicked', async () => {
+  invoke.mockResolvedValue({ ...capabilities, permissions: { screenRecording: 'missing' } });
+  render(header());
+  await act(async () => {});
+  const action = unavailable();
+  expect(action.getAttribute('aria-label')).toContain('On the remote Mac, open System Settings');
+  expect(action.getAttribute('aria-label')).not.toContain('accessibility');
 });

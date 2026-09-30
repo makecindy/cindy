@@ -134,6 +134,25 @@ describe('createResponsesHandler', () => {
     expect(standard.text).toContain('"service_tier":"default"');
   });
 
+  it.each([true, false])('Fast model mapping changes wire model only, preserves billing identity (stream=%s)', async stream => {
+    const seen: Record<string, unknown>[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      seen.push(JSON.parse(String(init.body)));
+      return new Response(sse(OK_SSE), { headers: { 'content-type': 'text/event-stream' } });
+    }));
+    const handler = createResponsesHandler({ providers: [providerConfig({ prefix: 'xai/',
+      fastModel: model => model === 'grok-4.7' ? 'grok-4.7-build-fast' : undefined,
+    })] });
+    const result = await invoke(handler, { model: 'xai/grok-4.7', messages: [], stream }, { prefs: { fast: true } });
+    expect(seen[0].model).toBe('grok-4.7-build-fast');
+    expect(seen[0].service_tier).toBeUndefined();
+    expect(result.text).toContain('"model":"xai/grok-4.7"');
+    expect(result.text).toContain('"service_tier":"priority"');
+    await invoke(handler, { model: 'xai/grok-4.7', messages: [], stream }, { prefs: { fast: false } });
+    expect(seen[1].model).toBe('grok-4.7');
+    expect(seen[1].service_tier).toBeUndefined();
+  });
+
   it('provider.strictFunctionTools 是生产控制面:启用 provider 逐工具 strict,未启用 provider 全 false', async () => {
     const seen: Array<{ body: Record<string, unknown> }> = [];
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {

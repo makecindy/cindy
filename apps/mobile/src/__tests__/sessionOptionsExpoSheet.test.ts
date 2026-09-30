@@ -1,3 +1,9 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+vi.mock('@/session/TaskTags', () => ({ TaskTagsPanel: () => null, TaskMenuHeading: () => null }));
+vi.mock('@/session/ComposerSheet', () => import('@/session/ComposerSheet.ios'));
+vi.mock('@/session/ComposerNativeRow', () => import('@/session/ComposerNativeRow.ios'));
+vi.mock('@/session/ComposerNativeSection', () => import('@/session/ComposerNativeSection.ios'));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -14,9 +20,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *   - onIsPresentedChange(false) = 用户主动关闭   → onClose
  *   - onDismiss(SwiftUI .sheet(onDismiss:)) = 已完全消失(两种关闭都触发) → onClosed
  *
- * 本测试直接调用组件函数、断言真实传给 BottomSheet 的 props 与回调行为
- * (不做源码文本匹配,等价重构不会误报)。mobile 无 react renderer 依赖,
- * 这里手动展开函数组件即可 —— 组件是纯函数,只用到被 mock 的 useTheme。
+ * 在 React server renderer 内展开组件，断言真实 BottomSheet props 与关闭回调。
+ * 原生视图被替换为标记；标签面板独立测试，不加载设备连接原生模块。
  */
 
 const platform = vi.hoisted(() => ({ os: 'ios' }));
@@ -24,7 +29,14 @@ const platform = vi.hoisted(() => ({ os: 'ios' }));
 // 原生视图在 node 下 requireNativeView 会抛,全部替换成可识别的标记。
 // 通用封装与 swift-ui 用不同标记,才能断言「没退回通用 BottomSheet」。
 vi.mock('react-native', () => ({
-  Platform: { get OS() { return platform.os; } },
+  useWindowDimensions: () => ({ width: 390, height: 844 }),
+  View: 'View',
+  ScrollView: 'ScrollView',
+  Platform: {
+    get OS() {
+      return platform.os;
+    },
+  },
 }));
 vi.mock('@expo/ui', () => ({
   BottomSheet: 'UniversalBottomSheet',
@@ -37,8 +49,36 @@ vi.mock('@expo/ui', () => ({
 vi.mock('@expo/ui/swift-ui', () => ({
   BottomSheet: 'SwiftUIBottomSheet',
   Group: 'Group',
+  RNHostView: 'RNHostView',
+  Form: 'Form',
+  Button: 'Button',
+  HStack: 'HStack',
+  Image: 'Image',
+  Spacer: 'Spacer',
+  Text: 'Text',
+  VStack: 'VStack',
+  Section: 'Section',
+  ZStack: 'ZStack',
 }));
 vi.mock('@expo/ui/swift-ui/modifiers', () => ({
+  ...Object.fromEntries(
+    [
+      'accessibilityAddTraits',
+      'accessibilityLabel',
+      'contentShape',
+      'buttonStyle',
+      'disabled',
+      'font',
+      'foregroundStyle',
+      'onGeometryChange',
+      'listRowInsets',
+      'listRowBackground',
+      'presentationDetents',
+      'interactiveDismissDisabled',
+      'scrollContentBackground',
+    ].map((name) => [name, (params: unknown) => ({ modifier: name, params })]),
+  ),
+  shapes: { rectangle: () => ({ shape: 'rectangle' }) },
   frame: (params: unknown) => ({ modifier: 'frame', params }),
   padding: (params: unknown) => ({ modifier: 'padding', params }),
   presentationDragIndicator: (visibility: unknown) => ({
@@ -50,6 +90,7 @@ vi.mock('@/session/SessionActionSheet', () => ({
   SessionActionSheet: 'SessionActionSheet',
 }));
 vi.mock('@/theme', () => ({
+  iconSize: { lg: 24 },
   useTheme: () => ({ colors: { destructive: '#ff0000' } }),
 }));
 
@@ -61,11 +102,18 @@ interface Element {
   props: Record<string, unknown> & { children?: unknown };
 }
 
-/** 手动展开函数组件(组件是纯函数,useTheme 已 mock),得到宿主元素树。 */
+/** 用 React 执行函数组件，保留 hooks，再遍历宿主元素树。 */
 function renderTree(element: unknown): unknown {
   let current = element;
   while (isElement(current) && typeof current.type === 'function') {
-    current = (current.type as (p: unknown) => unknown)(current.props);
+    const element = current;
+    // Render inside React so stateful sheets retain real hook semantics.
+    renderToStaticMarkup(
+      createElement(function Capture() {
+        current = (element.type as (p: unknown) => unknown)(element.props);
+        return null;
+      }),
+    );
   }
   return current;
 }
@@ -182,8 +230,12 @@ describe('SessionOptionsExpoSheet 关闭生命周期', () => {
 describe('SessionOptionsExpoSheet 菜单接线', () => {
   it('每个菜单项把自己的 action 透传给 onAction(含删除)', () => {
     const { props, tree } = renderSheet();
-    const items = collectByType(tree, 'ListItem');
-    const actions = items.map((item) => String(item.props.testID).replace('home.sessionActions.', ''));
+    const items = collectByType(tree, 'Button').filter((item) =>
+      String(item.props.testID).startsWith('home.sessionActions.'),
+    );
+    const actions = items.map((item) =>
+      String(item.props.testID).replace('home.sessionActions.', ''),
+    );
 
     expect(actions).toContain('delete');
     expect(actions).toContain('rename');

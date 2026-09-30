@@ -24,7 +24,7 @@ import {
 } from '@/session/remoteMedia';
 
 export interface RemoteMediaRequest {
-  kind: 'image' | 'video' | 'audio';
+  kind: 'image' | 'video' | 'audio' | 'file';
   url: string;
   /** 只要缩略图(被控端缩 1024px webp);与原图取件在队列/缓存层按不同键隔离。 */
   thumbnail?: boolean;

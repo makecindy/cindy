@@ -8,10 +8,12 @@ Mobile places **Security** at the bottom of the remote desktop control panel,
 after display settings. Automatic unlock defaults off. Face ID only protects a
 saved password; turning automatic unlock off deletes the local saved password.
 
-Automatic unlock targets iOS controlling macOS. Android hides the unsupported
+Automatic unlock supports iOS controlling macOS or supported Linux lock screens
+(see the Linux integration and acceptance limits below), and macOS Desktop controlling
+macOS. Android and Windows viewers hide the unsupported
 automatic-unlock and biometric settings; its independent lock-on-exit setting
 remains available when the host advertises support. This does not add a new server,
-identity registry, database migration, or deployment requirement. The existing
+identity registry, database migration, or server deployment requirement. The existing
 relay still authenticates the account and carries messages. Native iOS/macOS
 credential code performs no identity-directory HTTP requests or polling.
 
@@ -51,6 +53,20 @@ secrets device-only, with optional current-biometric-enrollment protection. Sett
 and pins are scoped to account, region, controller installation and target device;
 secrets additionally bind the Mac key fingerprint and OS user record.
 
+The Desktop controller reuses the native credential transaction in its own signed
+helper instance. AppKit owns password entry; only encrypted packets cross the
+dedicated viewer bridge. Its login Keychain items restrict access to the helper.
+Optional biometric protection wraps the saved password with a Secure Enclave
+key requiring the current biometric enrollment for key agreement. The Keychain
+then contains ciphertext and the hardware-wrapped key representation, never a
+biometric-protected password that can be retrieved using only a UI Boolean.
+This avoids requiring Data Protection Keychain entitlements on the standalone
+helper. Unsupported biometric hardware leaves the setting unavailable.
+
+An explicit exit cancels in-flight native authentication before requesting
+lock-on-exit. Ordinary media retries, display changes and window hiding never
+request a lock. A lock failure remains visible instead of silently closing.
+
 Biometric protection changes preserve the pin and replace the secret atomically.
 Offline deletion needs no network. Unavailable biometrics do not silently weaken
 existing protected items. When an invalidated secret no longer exists, setup can
@@ -71,11 +87,12 @@ identity without an account token or identity service. JS tests cover native
 pairing transport, ordinary desktop bypass, offline deletion, UI placement and
 focus cancellation.
 
-First setup on physical devices, Face ID success/cancellation, real locked-Mac unlock,
-Light/Dark visual inspection, and signed production-helper operation while locked
-remain acceptance work. Source tests and signed builds do not establish those facts.
-The earlier repository-wide gate still has recorded Desktop failures outside the
-remote-desktop targeted suites; no release-ready full gate is claimed.
+First setup on physical devices, Face ID/Touch ID success and cancellation, real
+locked-Mac unlock, and signed production-helper operation while locked remain
+acceptance work. Desktop Light/Dark renderer previews use synthetic connections;
+they do not validate Electron, native password UI or a real remote connection.
+Source tests, isolated native storage tests and signed builds do not establish
+those end-to-end facts.
 
 The abandoned companion-server experiment is not required and has not been deployed.
 
@@ -120,6 +137,34 @@ which can appear only after text insertion. Modern flat window layouts are accep
 Submission still requires the same signed process, console account, window and
 secure field, plus an enabled same-parent submit button; the button is revalidated
 immediately before one AXPress. Recovery dialogs, user-selection and unknown password fields fail closed.
+
+Multiple displays may expose empty `login` windows alongside the interactive
+surface. The Mac helper inspects all windows within the existing shared time/node
+budget and selects exactly one recognized password-field or own-account
+presentation surface. Empty login windows are allowed; unknown siblings and
+multiple actionable surfaces fail closed. Revalidation follows the original
+window and secure field even if the window list is reordered. See
+`MacScreenUnlock.swift` and `MacUnlockProfileTests.swift` for selection and regressions.
+Abort cleanup revalidates only the original window's subtree, retaining the
+console account, signed process and exact secure-field identity checks. A sibling
+becoming actionable or unreadable still prevents submission, but cannot by itself
+prevent clearing the password already written to the original field. Cleanup never
+falls back to a replacement window. `MacUnlockWindowCollectorTests.swift` covers
+these sibling transitions alongside traversal budgets and object mapping.
+On a two-display Mac, the old preparation probe failed with
+`CREDENTIAL_UNLOCK_UNAVAILABLE` while the updated probe returned `fieldReady: true`
+on the same locked session. This checks field preparation only, not password
+submission or successful system unlock.
+
+Mobile fingerprints exclude the explicit macOS-only source files and desktop
+entry-point directories listed in `apps/mobile/fingerprint.config.cjs`. Shared
+Swift, mobile forms, resources and the podspec remain fingerprint inputs, including
+new files unless explicitly excluded. Regression tests verify both directions.
+Adopting this narrower boundary changes existing fingerprints once and must be
+coordinated with a planned native mobile release; it does not make legacy runtime
+hashes interchangeable. Subsequent changes confined to the excluded Mac sources
+do not require another mobile runtime. Existing phones can use the updated Mac
+helper over the unchanged protocol without installing a new phone build.
 
 The `cindy-remote-unlock-inspect --prepare` diagnostic exercises wake and field
 preparation without accepting any password or submitting login. On the test Mac,
@@ -214,3 +259,80 @@ change height within its viewport limit; the stable-height contract applies to
 the settings panel and asynchronous feedback, not to different keyboard layouts.
 Light/Dark use the same geometry and semantic colors. Automated layout-contract
 checks do not replace physical-device visual acceptance.
+
+## Linux: existing system interfaces only
+
+The Linux adapter reuses the v1 signed/encrypted credential messages and the iOS
+native password vault. It adds no relay message, server dependency or migration.
+Ordinary viewing/control remains independent of automatic unlock. An unsupported
+or unavailable Linux locker returns `CREDENTIAL_UNLOCK_UNAVAILABLE` before any
+password form opens; a saved-password reconnect checks status before reading the
+secret or requesting biometrics. The phone explains the limitation and retains
+ordinary remote access.
+
+On Linux, the viewer completes optional automatic-unlock preparation before starting
+capture, since a locked compositor may not provide frames. Leaving the viewer cancels
+the pending start. macOS retains its existing first-frame-before-biometrics flow.
+
+The implemented target is **Hyprlock on Hyprland**, using its documented
+[SIGUSR1 unlock interface](https://wiki.hypr.land/Hypr-Ecosystem/hyprlock/).
+The helper first verifies the current user's password and account through the
+system `hyprlock` PAM service. It then rechecks the current local, active Wayland
+session, user, compositor lock, and the same root-owned Hyprlock executable/PID
+start time. A pidfd targets that exact process. One signal is sent, and success
+requires the compositor lock to disappear; PAM success alone is insufficient.
+There is no keyboard injection, root service, compositor force-unlock, PAM edit,
+replacement locker or installation of an Omarchy extension.
+
+The compositor probe requires `solitaryBlockedBy` in `hyprctl -j monitors` and
+uses its `LOCK` reason (also used by Omarchy's existing session-lock probe).
+Missing monitor/workspace evidence, inactive/foreign sessions, unknown lockers,
+stranded locks and ambiguous processes fail as unavailable. Logind's advisory
+`LockedHint` alone is not evidence of unlocking. Older Hyprland versions without
+this probe are unsupported. SDDM/pre-login, disk encryption, GNOME/KDE and
+Quickshell/Omarchy's built-in lock are not enabled by this implementation.
+
+The isolated Python helper uses **JWCrypto** for ES256 and ECDH-ES/A256GCM with
+the same strict JOSE header allowlists and session binding as the Swift core.
+Only public descriptors, encrypted replies and authenticated desktop commands
+cross Electron stdio; the PAM subprocess receives password bytes only through
+its private stdin. Core dumps are disabled. Cancellation/parent exit closes
+credential sessions and terminates pending PAM work. Repeated attempts are
+deduplicated and limited across peer reconnects within the helper; the system
+PAM failure policy remains authoritative across process restarts.
+
+Host signing identities are stored in the desktop **Secret Service**, scoped by
+profile and region. Only a public fingerprint is written under userData. A locked,
+missing or changed pinned key never falls back to plaintext or silent replacement.
+Unlike macOS's helper-restricted Keychain key, Linux Secret Service does not
+provide isolation from a compromised process running as the same OS user.
+
+### Runtime and distribution
+
+Linux packaging includes `native/remote-desktop/linux-credentials/*.py` (excluding
+tests) and its requirements manifest. The optional feature requires system Python
+3.11+, JWCrypto 1.6.1+, PyGObject with the Secret-1 typelib, libpam, loginctl,
+Hyprland and Hyprlock with `/etc/pam.d/hyprlock`. The default Secret Service
+collection must be available. Runtime code never downloads packages or changes
+system configuration. Distribution builds/users must provide these optional
+dependencies; otherwise the feature reports unavailable. This is not a claim
+that every Linux installation gains automatic unlock after updating Cindy.
+
+### Validation and release boundary
+
+Run `node apps/desktop/native/remote-desktop/linux-credentials/test.mjs <python>`
+with JWCrypto installed in that interpreter. Tests use only fake credentials and
+temporary storage, cover cancellation, replacement lockers, failed PAM, replay,
+key continuity and rate limits, and exchange messages with the independent Node
+`jose` implementation. This verifies the wire profile, not a real iOS/Hyprlock
+unlock. The development machine runs Quickshell, intentionally unsupported under
+the user's existing-interface-only requirement; no real password or physical
+lock/unlock has been exercised here.
+
+The existing native password/biometric labels still say “Mac”. This change keeps
+those bundled resources unchanged to avoid requiring a new mobile installation
+solely for wording. Linux credential support does not depend on that label.
+Correcting it to “computer” requires a separately approved native mobile release:
+the resource is included in both iOS and Android runtime fingerprints, even though
+Android automatic unlock remains hidden. Do not describe unpublished mobile code
+as delivered to the phone.

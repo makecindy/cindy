@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createWdaBuildPlan, createWdaChildEnvironment } from "./build-plan.js";
 
@@ -10,6 +10,24 @@ const CHECKOUT_PATH = path.resolve("/tmp/wda");
 const DERIVED_DATA_PATH = path.resolve("/tmp/wda-derived");
 
 describe("createWdaBuildPlan", () => {
+  it("pins build and launch to the inspected Xcode instead of the changed Host environment", () => {
+    const developerDirectory = "/Applications/Xcode A.app/Contents/Developer";
+    vi.stubEnv("DEVELOPER_DIR", "/Applications/Xcode B.app/Contents/Developer");
+    try {
+      const plan = createWdaBuildPlan({
+        checkoutPath: CHECKOUT_PATH,
+        derivedDataPath: DERIVED_DATA_PATH,
+        simulatorUdid: UDID,
+        ownerFingerprint: OWNER_FINGERPRINT,
+        developerDirectory,
+      });
+      expect(plan.build.env?.DEVELOPER_DIR).toBe(developerDirectory);
+      expect(plan.launch.env?.DEVELOPER_DIR).toBe(developerDirectory);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("builds exact argv plans for a pinned simulator destination", () => {
     const plan = createWdaBuildPlan({
       checkoutPath: CHECKOUT_PATH,

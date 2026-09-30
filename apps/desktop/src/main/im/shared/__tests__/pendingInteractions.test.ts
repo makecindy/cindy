@@ -119,3 +119,41 @@ describe('rejectAllPending', () => {
     expect(getPendingCount()).toBe(0);
   });
 });
+
+
+describe('runner-owned disposal', () => {
+  it('returns only the disposing runner cards and keeps other channels and legacy requests live', () => {
+    const owner = Symbol('runner');
+    const other = Symbol('runner');
+    const foreignReject = vi.fn();
+    const legacyReject = vi.fn();
+    const rejects = [vi.fn(), vi.fn(), vi.fn()];
+    for (const [i, kind] of (['permission', 'plan_review', 'ask_user_question'] as const).entries()) {
+      registerPendingExternal(`owned-${i}`, kind, `own-card-${i}`, vi.fn(), rejects[i]!, { owner });
+    }
+    registerPendingExternal('foreign', 'permission', 'same-id', vi.fn(), foreignReject, { owner: other });
+    registerPendingExternal('legacy', 'permission', 'same-id', vi.fn(), legacyReject);
+    expect(rejectAllPending('session_disposed', owner)).toEqual([
+      { requestId: 'owned-0', messageId: 'own-card-0' },
+      { requestId: 'owned-1', messageId: 'own-card-1' },
+      { requestId: 'owned-2', messageId: 'own-card-2' },
+    ]);
+    for (const reject of rejects) expect(reject).toHaveBeenCalledWith(new Error('session_disposed'));
+    expect(foreignReject).not.toHaveBeenCalled();
+    expect(legacyReject).not.toHaveBeenCalled();
+    expect(getPendingCount()).toBe(2);
+    expect(rejectAllPending('session_disposed', owner)).toEqual([]);
+    cancelPending('foreign', 'cleanup');
+    cancelPending('legacy', 'cleanup');
+  });
+
+  it('does not erase a new request registered by a rejection callback', () => {
+    const owner = Symbol('runner');
+    registerPendingExternal('old', 'permission', 'old-card', vi.fn(), () => {
+      registerPendingExternal('new', 'permission', 'new-card', vi.fn(), vi.fn(), { owner });
+    }, { owner });
+    expect(rejectAllPending('session_disposed', owner)).toEqual([{ requestId: 'old', messageId: 'old-card' }]);
+    expect(getPendingCount()).toBe(1);
+    expect(cancelPending('new', 'cleanup')).toEqual({ messageId: 'new-card' });
+  });
+});

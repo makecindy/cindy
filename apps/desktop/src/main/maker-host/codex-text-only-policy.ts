@@ -22,11 +22,19 @@ function object(value: unknown): value is Record<string, unknown> {
 function reject(): never { throw new Error('Codex text-only turn rejected a tool-capable payload'); }
 
 /** Definitions are removed before any provider adapter or hosted tool can consume them. */
-export function restrictCodexRequest(bytes: Buffer): Buffer {
+export function restrictCodexRequest(bytes: Buffer, options: { serial?: boolean; afterProvider?: boolean } = {}): Buffer {
   const body: unknown = JSON.parse(bytes.toString('utf8'));
   if (!object(body)) return reject();
-  delete body.parallel_tool_calls;
-  return Buffer.from(JSON.stringify({ ...body, tools: [], tool_choice: 'none' }));
+  const next: Record<string, unknown> = { ...body, tools: [] };
+  // Ingress disables tool selection before adapters inspect it. Non-Lite
+  // egress has no tools, so remove controls that empty-tool providers reject,
+  // including controls retained for hosted tools that we strip here.
+  if (options.afterProvider && !options.serial) delete next.tool_choice;
+  else next.tool_choice = 'none';
+  delete next.parallel_tool_calls;
+  // Only the resolved ChatGPT Responses route needs the Lite serial flag.
+  if (options.serial) next.parallel_tool_calls = false;
+  return Buffer.from(JSON.stringify(next));
 }
 
 function validateItem(item: unknown): void {
@@ -105,17 +113,21 @@ export function createCodexTextOnlyResponseGuard(contentType: string, encoding =
 export function codexTextOnlyRequestGuard(
   disabled: boolean,
   ctx: { method: string; url: string; headers: Readonly<Record<string, string>> },
+  requiresSerial: (upstreamBase: string | undefined) => boolean = () => false,
 ): ReturnType<NonNullable<ProxyOptions['requestGuard']>> {
   if (!disabled || ctx.method === 'GET' || ctx.method === 'HEAD') return null;
   if (!/\/responses\/?(?:\?.*)?$/.test(ctx.url)
     || (ctx.headers['content-encoding'] && ctx.headers['content-encoding'] !== 'identity')) return reject();
   return {
-    transformBody: restrictCodexRequest,
+    transformBody: (body, route) => restrictCodexRequest(body, {
+      afterProvider: Boolean(route),
+      serial: Boolean(route) && requiresSerial(route?.upstreamBase),
+    }),
     response: headers => createCodexTextOnlyResponseGuard(String(headers['content-type'] ?? ''), String(headers['content-encoding'] ?? '')),
   };
 }
 
-export function codexTextOnlyWebSocketTransforms(disabled: () => boolean) {
+export function codexTextOnlyWebSocketTransforms(disabled: () => boolean, requiresSerial = false) {
   // Frozen at each request, never relaxed by a subsequent UI send or teardown.
   let restricted = false;
   let completed = true;
@@ -125,7 +137,7 @@ export function codexTextOnlyWebSocketTransforms(disabled: () => boolean) {
       if (restricted && !completed) reject();
       restricted = next;
       completed = false;
-      return restricted ? restrictCodexRequest(message) : message;
+      return restricted ? restrictCodexRequest(message, { serial: requiresSerial }) : message;
     }),
     inbound: createWebSocketMessageTransform(false, message => {
       if (restricted) {

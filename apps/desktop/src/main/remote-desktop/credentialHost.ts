@@ -11,12 +11,13 @@ import {
   credentialVerificationArguments,
 } from './credentialSigning';
 import { createLogger } from '../logger';
+import { linuxCredentialCommand, readLinuxUnlockState } from './linuxCredentials';
 
 const exec = promisify(execFile);
 const diagnostic = createLogger('remote-credentials');
 const binaryName = 'cindy-macos-remote-credentials';
 let build: Promise<string> | undefined;
-async function resolveBinary(realm: 'global' | 'cn'): Promise<string> {
+async function resolveBinary(): Promise<string> {
   if (app.isPackaged) return path.join(process.resourcesPath, 'tools/remote-desktop', binaryName);
   if (build) return build;
   build = (async () => {
@@ -27,7 +28,7 @@ async function resolveBinary(realm: 'global' | 'cn'): Promise<string> {
     const hash = createHash('sha256')
       .update(process.execPath)
       .update(process.arch)
-      .update('credential-host-signed-v1')
+      .update('credential-host-signed-v2-resources')
       .update(signingIdentity);
     async function digest(directory: string): Promise<void> {
       for (const entry of (await fs.readdir(directory, { withFileTypes: true })).sort((a, b) =>
@@ -50,6 +51,7 @@ async function resolveBinary(realm: 'global' | 'cn'): Promise<string> {
     const binary = path.join(directory, binaryName);
     try {
       await fs.access(binary);
+      await fs.access(path.join(directory, 'CindyRemoteCredentials_CindyRemoteCredentials.bundle'));
       await exec('/usr/bin/codesign', credentialVerificationArguments(binary, signingIdentity));
       return binary;
     } catch {
@@ -87,7 +89,21 @@ async function resolveBinary(realm: 'global' | 'cn'): Promise<string> {
         { timeout: 240_000, maxBuffer: 1024 * 1024 },
       );
       const temporary = `${binary}.${process.pid}.tmp`;
-      await fs.copyFile(path.join(source, '.build/release', binaryName), temporary);
+      const location = await exec('swift', [
+        'build',
+        '--package-path',
+        source,
+        '-c',
+        'release',
+        '--show-bin-path',
+      ]);
+      const outputDirectory = location.stdout.trim();
+      await fs.copyFile(path.join(outputDirectory, binaryName), temporary);
+      await fs.cp(
+        path.join(outputDirectory, 'CindyRemoteCredentials_CindyRemoteCredentials.bundle'),
+        path.join(directory, 'CindyRemoteCredentials_CindyRemoteCredentials.bundle'),
+        { recursive: true },
+      );
       await fs.chmod(temporary, 0o755);
       await exec('/usr/bin/codesign', credentialSigningArguments(signingIdentity, temporary));
       await exec('/usr/bin/codesign', credentialVerificationArguments(temporary, signingIdentity));
@@ -108,7 +124,7 @@ type Pending = {
   timer: ReturnType<typeof setTimeout>;
 };
 /** Stdio is authenticated in native code. This class never receives a password. */
-class RemoteCredentialHost {
+export class RemoteCredentialHost {
   private child: ChildProcessWithoutNullStreams | null = null;
   private starting: Promise<void> | null = null;
   private pending = new Map<string, Pending>();
@@ -129,6 +145,26 @@ class RemoteCredentialHost {
       } | null)
     | undefined;
   onInvalidated: (() => void) | undefined;
+
+  /** Dedicated controller instances use the same signed pipe, never the host singleton. */
+  async viewerCall(
+    realm: 'global' | 'cn',
+    method: string,
+    args: Record<string, unknown> = {},
+  ): Promise<unknown> {
+    if (
+      !/^viewer(?:Settings|Configure|Begin|Accept|Receive|Password|AuthenticationStatus|Forget|Biometric|End|Reset)$/.test(
+        method,
+      )
+    )
+      throw new Error('CREDENTIAL_INVALID_MESSAGE');
+    this.configuredRealm = realm;
+    return this.call(
+      method,
+      args,
+      ['viewerPassword', 'viewerBiometric'].includes(method) ? 120_000 : 50_000,
+    );
+  }
 
   authenticationSession(peer: string): string | null {
     return performance.now() < this.validUntil ? (this.sessions[peer] ?? null) : null;
@@ -286,13 +322,15 @@ class RemoteCredentialHost {
     this.starting = (async () => {
       const realm = this.configuredRealm;
       if (!realm) throw new Error('CREDENTIAL_INVALID_IDENTITY');
-      const binary = await resolveBinary(realm);
+      const directory = path.join(app.getPath('userData'), 'remote-desktop/credential-identity');
+      if (process.platform === 'linux' && (await readLinuxUnlockState()) === 'unavailable')
+        throw new Error('CREDENTIAL_UNLOCK_UNAVAILABLE');
+      const command =
+        process.platform === 'linux'
+          ? linuxCredentialCommand(directory)
+          : { file: await resolveBinary(), args: [directory] };
       if (this.epoch !== epoch) throw new Error('CREDENTIAL_CANCELLED');
-      const child = spawn(
-        binary,
-        [path.join(app.getPath('userData'), 'remote-desktop/credential-identity')],
-        { stdio: ['pipe', 'pipe', 'pipe'] },
-      );
+      const child = spawn(command.file, command.args, { stdio: ['pipe', 'pipe', 'pipe'] });
       this.child = child;
       let buffer = '';
       child.stdout.setEncoding('utf8');
@@ -357,7 +395,8 @@ class RemoteCredentialHost {
     args: Record<string, unknown> = {},
     timeout = 35_000,
   ): Promise<unknown> {
-    if (process.platform !== 'darwin') throw new Error('CREDENTIAL_UNAVAILABLE');
+    if (process.platform !== 'darwin' && process.platform !== 'linux')
+      throw new Error('CREDENTIAL_UNAVAILABLE');
     if (timeout <= 0) throw new Error('CREDENTIAL_EXPIRED');
     const id = randomUUID();
     let timer: ReturnType<typeof setTimeout>;

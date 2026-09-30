@@ -83,6 +83,11 @@ export function blobUrl(hash: string, ext: string): string {
   return `${SCHEME}://${HOST_BLOBS}/${hash}${ext}`;
 }
 
+/** Canonical extension used both when planning and writing a content-addressed file. */
+export function extForMime(mimeType: string): string | null {
+  return EXT_BY_MIME[mimeType] ?? null;
+}
+
 export function supportedMime(mimeType: string): boolean {
   return Boolean(EXT_BY_MIME[mimeType]);
 }

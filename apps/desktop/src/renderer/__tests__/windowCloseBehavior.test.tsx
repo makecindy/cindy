@@ -102,6 +102,50 @@ afterEach(() => {
   delete (window as Partial<Window>).electronAPI;
 });
 
+describe.each(['win32', 'linux'] as const)('%s close prompt dismissal', (platform) => {
+  it.each(['button', 'escape'] as const)('cancels via %s without saving or closing, and can reopen', async (method) => {
+    const api = platform === 'win32' ? installWindowsApi(null) : installLinuxApi(null);
+    render(<WindowControls />);
+    act(() => api.requestCloseBehavior());
+    await screen.findByRole('alertdialog');
+
+    if (method === 'button') {
+      fireEvent.click(screen.getByRole('button', { name: 'common.dismiss' }));
+    } else {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape', code: 'Escape' });
+    }
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    const setBehavior = 'setWindowsCloseBehavior' in api ? api.setWindowsCloseBehavior : api.setLinuxCloseBehavior;
+    expect(setBehavior).not.toHaveBeenCalled();
+    expect(api.windowClose).not.toHaveBeenCalled();
+    expect(window.electronAPI.windowMinimize).not.toHaveBeenCalled();
+    expect(api.anySessionInTurn).not.toHaveBeenCalled();
+    act(() => api.requestCloseBehavior());
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+  });
+
+  it('keeps the prompt open while saving and permits dismissal after a failed save', async () => {
+    const api = platform === 'win32' ? installWindowsApi(null) : installLinuxApi(null);
+    let rejectSave!: (error: Error) => void;
+    const setBehavior = 'setWindowsCloseBehavior' in api ? api.setWindowsCloseBehavior : api.setLinuxCloseBehavior;
+    setBehavior.mockImplementation(() => new Promise<never>((_resolve, reject) => { rejectSave = reject; }));
+    render(<WindowControls />);
+    act(() => api.requestCloseBehavior());
+    await screen.findByRole('alertdialog');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.windowBehavior.closeBehavior.quit' }));
+    const dismiss = screen.getByRole('button', { name: 'common.dismiss' }) as HTMLButtonElement;
+    expect(dismiss.disabled).toBe(true);
+    fireEvent.click(dismiss);
+    fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape' });
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    await act(async () => rejectSave(new Error('failed')));
+    fireEvent.click(screen.getByRole('button', { name: 'common.dismiss' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(api.windowClose).not.toHaveBeenCalled();
+  });
+});
+
 describe('Windows close behavior', () => {
   it('uses the default minimize action when no override is provided', () => {
     installWindowsApi(null);

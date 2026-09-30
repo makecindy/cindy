@@ -62,6 +62,14 @@ describe("mobile remote media", () => {
     expect(presignGet).toHaveBeenCalledWith("cindy/device-link/user-1/a.png");
   });
 
+  it("resolves a plugin file for export without treating it as a picture", async () => {
+    const fetchRemoteMedia = vi.fn(async () => ({ ossKey: "files/report.pdf", mimeType: "application/pdf", size: 100 }));
+    const presignGet = vi.fn(async () => ({ getUrl: "https://oss.example/report.pdf", expiresAt: "2026-10-01T00:00:00Z" }));
+    const result = await resolveMobileRemoteMedia({ kind: "file", url: "xdt-file://open?path=%2Ftmp%2Freport.pdf" }, { fetchRemoteMedia, presignGet });
+    expect(result).toMatchObject({ previewable: false, mimeType: "application/pdf", url: "https://oss.example/report.pdf" });
+    expect(fetchRemoteMedia).toHaveBeenCalledWith("xdt-file://open?path=%2Ftmp%2Freport.pdf", undefined);
+  });
+
   it("hands the ossKey to onOssKey before presign, so a presign failure is still recoverable", async () => {
     // presign 失败会让本函数在返回之前抛错 —— 调用方拿不到 resolved 结果,围绕它写的
     // finally 不会执行,已上传的对象永久遗留(review P1)。onOssKey 让 key 在上传成功那一刻

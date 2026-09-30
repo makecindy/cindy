@@ -57,6 +57,17 @@ describe("resolveMobileInvokeTimeoutMs", () => {
     // 破坏性操作,误超时后删除已生效、mobile 却报失败。
     expect(resolveMobileInvokeTimeoutMs('maker:message:delete')).toBe(30_000);
     expect(MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS['device-link:media:fetch']).toBe(30_000);
+    // Orca 生命周期:主机会逐个启动 / 关闭 Worker(SSH / Agent 启停可能很慢),与开启协同同一预算。
+    for (const channel of [
+      'maker:session:enable-orca',
+      'maker:session:disable-orca',
+      'maker:worker:create',
+      'maker:worker:archive',
+      'maker:worker:acknowledge-done',
+      'maker:worker:switch-focus',
+    ]) {
+      expect(resolveMobileInvokeTimeoutMs(channel)).toBe(65_000);
+    }
   });
 
   it('maker:schedule:* 前缀整类放宽:桌面 handler 会等 scheduler 就绪(30s 上限)', () => {

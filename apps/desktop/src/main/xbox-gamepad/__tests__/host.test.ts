@@ -44,6 +44,64 @@ async function flush(): Promise<void> {
 }
 
 describe('XboxGamepadHost', () => {
+  it('does not start an idle helper for a probe', async () => {
+    const spawnHelper = vi.fn(() => fakeChild());
+    const host = createXboxGamepadHost(vi.fn(), {
+      resolveHelperPath: async () => '/helper',
+      spawnHelper,
+    });
+    host.probe();
+    await flush();
+    expect(spawnHelper).not.toHaveBeenCalled();
+  });
+
+  it('ignores old output and exit events after a quick stop and restart', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = fakeChild();
+      const second = fakeChild();
+      const onMessage = vi.fn();
+      const spawnHelper = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+      const host = createXboxGamepadHost(onMessage, {
+        resolveHelperPath: async () => '/helper',
+        spawnHelper,
+      });
+      host.start();
+      await flush();
+      (first.stdout as PassThrough).write('{"kind":');
+      host.stop();
+      host.start();
+      await flush();
+      (first.stdout as PassThrough).write('"presence","present":true}\n');
+      first.emit('error', new Error('late error'));
+      first.emit('exit', 0, null);
+      expect(onMessage).not.toHaveBeenCalled();
+      (second.stdout as PassThrough).write('{"kind":"presence","present":false}\n');
+      expect(onMessage).toHaveBeenCalledExactlyOnceWith({ kind: 'presence', present: false });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(spawnHelper).toHaveBeenCalledTimes(2);
+      host.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores a path resolution failure after disabling the helper', async () => {
+    let rejectResolve!: (error: Error) => void;
+    const onMessage = vi.fn();
+    const host = createXboxGamepadHost(onMessage, {
+      resolveHelperPath: () =>
+        new Promise((_, reject) => {
+          rejectResolve = reject;
+        }),
+    });
+    host.start();
+    host.stop();
+    rejectResolve(new Error('compile failed'));
+    await flush();
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
   it('resolves a packaged Windows helper rather than rejecting the platform', async () => {
     vi.stubGlobal('process', { ...process, resourcesPath: path.resolve('resources') });
     try {
