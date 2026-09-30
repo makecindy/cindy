@@ -59,7 +59,12 @@ import {
 import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.js';
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
-import { readBotWorkbench } from '../../maker-ipc/botWorkbenchService.js';
+import {
+  addBotWorkbenchDirectory,
+  broadcastBotWorkbenchChanged,
+  readBotWorkbench,
+  removeBotWorkbenchDirectory,
+} from '../../maker-ipc/botWorkbenchService.js';
 import {
   NEW_BOT_DEFAULT_PI_EFFORT,
   NEW_BOT_DEFAULT_PI_MODEL,
@@ -2093,6 +2098,25 @@ export function registerBotIpc(): void {
     const workbench = await readBotWorkbench(owner.userDataDir, botId);
     owner.assertCurrent();
     return workbench;
+  });
+  ipcMain.handle('local-db:bots:workbench:add-directory', async (event, rawBotId: unknown, rawPath: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const botId = readText(rawBotId, 'botId', 128, true);
+    const dirPath = readText(rawPath, 'path', 4096, true);
+    const owner = captureBotOperationOwner();
+    const result = await addBotWorkbenchDirectory(owner.userDataDir, botId, dirPath);
+    owner.assertCurrent();
+    if (result.ok) broadcastBotWorkbenchChanged(botId);
+    return result;
+  });
+  ipcMain.handle('local-db:bots:workbench:remove-directory', async (event, rawBotId: unknown, rawPath: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const botId = readText(rawBotId, 'botId', 128, true);
+    const dirPath = readText(rawPath, 'path', 4096, true);
+    const owner = captureBotOperationOwner();
+    await removeBotWorkbenchDirectory(owner.userDataDir, botId, dirPath);
+    owner.assertCurrent();
+    broadcastBotWorkbenchChanged(botId);
   });
   ipcMain.handle('local-db:bots:memory:list', async (event, rawBotId: unknown, rawQuery: unknown) => {
     assertTrustedAppRendererEvent(event);

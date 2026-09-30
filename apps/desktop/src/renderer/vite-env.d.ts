@@ -4784,6 +4784,11 @@ interface ElectronAPI {
       history: (botId: string) => Promise<unknown[]>;
       workbench: {
         get: (botId: string) => Promise<import('../shared/botWorkbench').BotWorkbench | null>;
+        addDirectory: (
+          botId: string,
+          path: string,
+        ) => Promise<{ ok: true } | { ok: false; errorCode: 'NOT_A_DIRECTORY' | 'TOO_MANY' }>;
+        removeDirectory: (botId: string, path: string) => Promise<void>;
       };
       memory: {
         list: (

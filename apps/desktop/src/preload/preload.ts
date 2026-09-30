@@ -5503,6 +5503,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       workbench: {
         get: (botId: string): Promise<unknown> =>
           ipcRenderer.invoke('local-db:bots:workbench:get', botId),
+        addDirectory: (botId: string, path: string): Promise<unknown> =>
+          ipcRenderer.invoke('local-db:bots:workbench:add-directory', botId, path),
+        removeDirectory: (botId: string, path: string): Promise<void> =>
+          ipcRenderer.invoke('local-db:bots:workbench:remove-directory', botId, path),
       },
       memory: {
         list: (botId: string, query?: string): Promise<unknown> =>
