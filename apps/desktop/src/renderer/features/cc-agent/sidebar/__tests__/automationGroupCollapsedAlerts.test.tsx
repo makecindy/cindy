@@ -15,11 +15,15 @@
  */
 
 import { createElement, useState } from 'react';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Session } from '@/lib/ccAgent.types';
 import { addSessionAttention, clearSessionAttention } from '@/lib/sessionAttentionStore';
+import {
+  applyRemoteSessionActivity,
+  clearRemoteSessionActivity,
+} from '@/features/device-link/remoteSessionActivityStore';
 
 // ── mocks:剥离与「收起态告警可见性」无关的重依赖 ─────────────────────────────
 
@@ -177,6 +181,7 @@ const childRunIds = (container: HTMLElement): string[] =>
 
 afterEach(() => {
   cleanup();
+  clearRemoteSessionActivity();
   for (const id of ALL_IDS) clearSessionAttention(id, { intent: 'explicit' });
 });
 
@@ -232,12 +237,32 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
     expect(onSessionClick).not.toHaveBeenCalledWith('run-0');
   });
 
-  it('等待回复(蓝)不升格成组头状态,也不提行', () => {
+  it('等待回复的旧运行单独成行,组头仍代表最新运行', () => {
     addSessionAttention('run-2', 'awaiting');
     const { container } = renderGroup({ notifications: ['run-2'] });
 
     expect(screen.queryByLabelText('Failed — click to view')).toBeNull();
     expect(screen.queryByLabelText('Awaiting your input')).toBeNull();
+    expect(childRunIds(container)).toEqual(['run-2']);
+    act(() => clearSessionAttention('run-2', { intent: 'explicit' }));
+    expect(childRunIds(container)).toEqual([]);
+  });
+
+  it('远程旧运行等待回复时也成行,远程运行态压过本地残留的待回复', () => {
+    const sessions = RUNS.map((run) => ({ ...run, deviceLinkDeviceId: 'remote' }));
+    addSessionAttention('run-2', 'awaiting');
+    applyRemoteSessionActivity('remote', {
+      sessionId: 'run-2', phase: 'needs-interaction', attention: true, compactDetail: '',
+    });
+    const { container, rerender } = renderGroup({ sessions });
+    expect(childRunIds(container)).toEqual(['run-2']);
+    expect(screen.queryByLabelText('Awaiting your input')).toBeNull();
+    act(() => applyRemoteSessionActivity('remote', {
+      sessionId: 'run-2', phase: 'running', attention: false, compactDetail: '',
+    }));
+    rerender(createElement(GroupHarness, {
+      sessions, notifications: ['run-2'], urgentSessionIds: new Set<string>(), initialCollapsed: true,
+    }));
     expect(childRunIds(container)).toEqual([]);
   });
 

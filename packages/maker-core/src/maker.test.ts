@@ -138,6 +138,35 @@ function createAgent(
 }
 
 describe('Maker Pi managed-package skill boundary', () => {
+  it('uses the runtime Skill view for host authorization checks', async () => {
+    const agent = createAgent(async () => {
+      throw new Error('not used');
+    }, 'claude-code');
+    agent.listRuntimeSkills = vi.fn(async () => ({ skills: [{
+      kind: 'agent-skill' as const,
+      name: 'learn',
+      source: 'skill' as const,
+      path: '/repo/.claude/skills/learn/SKILL.md',
+    }] }));
+    const maker = new Maker({
+      agents: { 'claude-code': agent },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+
+    const result = await maker.listAgentRuntimeSkills('claude-code', {
+      workingDir: '/repo/src',
+      runtimeConfigDir: '/runtime/claude-home',
+    });
+
+    expect(result.skills.map((skill) => skill.name)).toEqual(['learn']);
+    expect(agent.listRuntimeSkills).toHaveBeenCalledWith({
+      workingDir: '/repo/src',
+      runtimeConfigDir: '/runtime/claude-home',
+    });
+    await maker.shutdown();
+  });
+
   it.each(['claude-code', 'codex', 'pi'] as const)('keeps %s live palettes on their startup Skill snapshot', async (agentKind) => {
     const source = '/fixture/disabled-skill';
     let disabled: string[] = [source];
@@ -2288,6 +2317,60 @@ describe('Maker Pi runtime skill status', () => {
     }));
     expect(preview.skills.every((skill) => skill.runtimeStatus === 'discovered')).toBe(true);
     expect(wrongProject.skills.every((skill) => skill.runtimeStatus === 'discovered')).toBe(true);
+  });
+
+  it('marks Windows project-scope --skill loaded when frontmatter name differs from the folder', async () => {
+    const agent = createAgent(async (opts) => {
+      const handle = createHandle({ id: `pi-${opts.sessionId}`, agentKind: 'pi' });
+      handle.getRuntimeCapabilities = () => ({
+        sessionId: opts.sessionId,
+        capturedAt: '2026-09-14T00:00:00.000Z',
+        generation: 1,
+        status: 'loaded',
+        source: 'pi:get_commands',
+        commands: [{
+          name: 'skill:frontmatter-alias',
+          source: 'skill',
+          sourceInfo: {
+            source: 'local',
+            scope: 'project',
+            baseDir: '/repo/.pi/skills/folder-name',
+            path: '/repo/.pi/skills/folder-name/SKILL.md',
+          },
+        }],
+      });
+      return handle;
+    }, 'pi');
+    agent.listAgentSkills = vi.fn(async () => ({
+      skills: [{
+        kind: 'agent-skill' as const,
+        name: 'folder-name',
+        source: 'skill' as const,
+        scope: 'repo' as const,
+        path: '/repo/.pi/skills/folder-name/SKILL.md',
+        runtimeStatus: 'discovered' as const,
+      }],
+    }));
+    const maker = new Maker({
+      agents: { pi: agent },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    await maker.createSession({
+      id: 'win-alias',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'm',
+    });
+    const listed = await maker.listAgentSkills('pi', {
+      workingDir: '/repo',
+      sessionId: 'win-alias',
+    });
+    expect(listed.skills[0]).toMatchObject({
+      name: 'folder-name',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:frontmatter-alias',
+    });
   });
 
   it('keeps a project skill discovered when its source no longer matches the launch snapshot', async () => {

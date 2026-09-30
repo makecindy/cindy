@@ -44,7 +44,7 @@ describe('update force-quit iOS Simulator cleanup', () => {
     const hostDisposeIndex = bootstrapSource.indexOf(
       "onQuit('ios-simulator-host', disposeIOSSimulatorHost, 'async');",
     );
-    const quitHandlerIndex = bootstrapSource.indexOf('installQuitHandler(6000);');
+    const quitHandlerIndex = bootstrapSource.search(/installQuitHandler\(\d+\);/);
 
     expect(abortIndex).toBeGreaterThanOrEqual(0);
     expect(hostDisposeIndex).toBeGreaterThan(abortIndex);

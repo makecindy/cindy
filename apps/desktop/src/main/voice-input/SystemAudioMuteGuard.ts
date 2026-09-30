@@ -4,6 +4,9 @@ import { createLogger } from '../logger.js';
 
 const log = createLogger('voice-input:system-audio');
 
+// WebContents owners are numeric; the remote session has a separate identity.
+type AudioMuteOwner = number | 'remote-desktop';
+
 type AudioSnapshot = {
   outputMuted: boolean;
 };
@@ -28,9 +31,10 @@ async function loadLoudness(): Promise<LoudnessModule | null> {
   if (loudnessCache !== undefined) return loudnessCache;
   try {
     const mod = await import('loudness');
-    loudnessCache = ((mod as { default?: LoudnessModule }).default ?? (mod as unknown as LoudnessModule));
+    loudnessCache =
+      (mod as { default?: LoudnessModule }).default ?? (mod as unknown as LoudnessModule);
   } catch (err) {
-    log.warn('failed to load loudness on Windows; voice input mute will be no-op', {
+    log.warn('failed to load loudness on Windows', {
       error: err instanceof Error ? err.message : String(err),
     });
     loudnessCache = null;
@@ -52,28 +56,34 @@ const SUPPORTS_MUTE = process.platform === 'darwin' || process.platform === 'win
  *   - other:   no-op (graceful degradation).
  */
 export class SystemAudioMuteGuard {
-  private readonly owners = new Set<number>();
+  private readonly owners = new Set<AudioMuteOwner>();
   private snapshot: AudioSnapshot | null = null;
   private tail: Promise<void> = Promise.resolve();
 
-  async mute(ownerId: number): Promise<void> {
+  async mute(ownerId: AudioMuteOwner): Promise<void> {
     if (!SUPPORTS_MUTE) return;
     await this.enqueue(async () => {
       if (this.owners.has(ownerId)) return;
-      if (this.owners.size === 0) {
+      if (this.snapshot === null) {
         this.snapshot = await muteOutputAndReadSnapshot();
         log.info('muted for voice input', { ownerId, wasMuted: this.snapshot.outputMuted });
+      } else if (this.owners.size === 0) {
+        // A rejected restore may still have reached the OS. Reassert mute for
+        // the new owner without replacing the outstanding original snapshot.
+        await setOutputMuted(true);
       }
       this.owners.add(ownerId);
     });
   }
 
-  async restore(ownerId: number): Promise<void> {
+  async restore(ownerId: AudioMuteOwner): Promise<void> {
     if (!SUPPORTS_MUTE) return;
     await this.enqueue(async () => {
-      if (!this.owners.delete(ownerId)) return;
+      this.owners.delete(ownerId);
       if (this.owners.size > 0) return;
 
+      // A failed OS restore leaves the snapshot pending, even after its owner
+      // has ended. A later restore or mute cycle must retain that original state.
       const snapshot = this.snapshot;
       if (!snapshot) return;
       await setOutputMuted(snapshot.outputMuted);
@@ -97,7 +107,9 @@ export class SystemAudioMuteGuard {
   private enqueue(job: () => Promise<void>): Promise<void> {
     const next = this.tail.then(job, job);
     this.tail = next.catch((error) => {
-      log.warn('system audio mute job failed', { error: error instanceof Error ? error.message : String(error) });
+      log.warn('system audio mute job failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
     return next;
   }
@@ -129,7 +141,7 @@ async function readOutputMuted(): Promise<boolean> {
   }
   if (process.platform === 'win32') {
     const l = await loadLoudness();
-    if (!l) return false;
+    if (!l) throw new Error('SYSTEM_AUDIO_UNAVAILABLE');
     return l.getMuted();
   }
   return false;
@@ -137,12 +149,14 @@ async function readOutputMuted(): Promise<boolean> {
 
 async function setOutputMuted(muted: boolean): Promise<void> {
   if (process.platform === 'darwin') {
-    await runOsascript([muted ? 'set volume with output muted' : 'set volume without output muted']);
+    await runOsascript([
+      muted ? 'set volume with output muted' : 'set volume without output muted',
+    ]);
     return;
   }
   if (process.platform === 'win32') {
     const l = await loadLoudness();
-    if (!l) return;
+    if (!l) throw new Error('SYSTEM_AUDIO_UNAVAILABLE');
     await l.setMuted(muted);
     return;
   }

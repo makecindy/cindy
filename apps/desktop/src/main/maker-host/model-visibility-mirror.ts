@@ -60,7 +60,13 @@ function keyOf(agent: AgentKind, providerId: string, modelId: string): string {
  */
 export function setModelVisibilityMirror(raw: unknown, policy?: unknown): boolean {
   const candidate = policy as { fallback?: unknown; followCatalogKeys?: unknown; pending?: unknown } | undefined;
-  if (candidate?.pending === true) return false;
+  if (candidate?.pending === true) {
+    if (!ready) return false;
+    // Legacy preferences can appear after an empty origin first becomes ready.
+    // Stop serving its earlier defaults until the renderer finishes migration.
+    clearModelVisibilityMirror();
+    return true;
+  }
   const wasReady = ready;
   const nextStrict = candidate?.fallback === false;
   const nextFollow = new Set<string>(nextStrict && Array.isArray(candidate?.followCatalogKeys)

@@ -168,6 +168,13 @@ export function settleComposerResizeDrag(input: SettleComposerResizeDragInput): 
 /** 松手时手势向下位移达到该值即可触发「下拉收起」（配合高度处于单行吸附区）。 */
 export const COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD = 24;
 
+/** After the editor reaches one line, consume the remaining pull by folding its chrome. */
+export function composerCollapseProgress(input: ApplyComposerResizeDragInput): number {
+  'worklet';
+  const remainingPull = input.translationY - Math.max(0, input.startContentHeight - input.bounds.minContentHeight);
+  return clamp(remainingPull / COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD, 0, 1);
+}
+
 export interface ShouldDismissComposerOnReleaseInput {
   /** 松手时的拖拽内容高度（applyComposerResizeDrag 的结果）。 */
   draggedContentHeight: number;

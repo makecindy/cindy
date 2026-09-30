@@ -115,8 +115,13 @@ override 语义见 [`configuration-and-overrides.md`](configuration-and-override
 | 3 正则红线 | 抹除敏感片段 | `redact.ts`（宁可多抹，不可漏） |
 | 4 字段白名单 + 截断 | 带出哪些字段 | 只有 `ts` / `level` / `src` / `scope` / `msg` 五个字段离开本机 |
 
-`agent-<date>.ndjson` 只在崩溃路径附带，且**只取 `source === 'proxy'` 且 scope 落在 proxy 根下
-的记录**（双闸）。同一文件里还有 `maker` 源的日志，那些可能带 agent 提示词与用户内容。
+`agent-<date>.ndjson` **默认只在崩溃路径附带**。普通手动日志上传（设置页点「上传日志」）
+不打开这条流。唯一例外是 `/issue` 反馈：只有调用方把 `CollectRequest.includeAgentLogs`
+显式设为 `true` 时才打开——这条开关只由用户明确同意公开诊断信息的 `/issue` 路径传入
+（`include_related_logs=true` → `includeRelatedLogs` → `includeAgentLogs`），普通手动
+上传不得设。无论哪条路径打开这条流，读侧都**只取 `source === 'proxy'` 且 scope 落在
+proxy 根下的记录**（双闸）。同一文件里还有 `maker` 源的日志，那些可能带 agent 提示词
+与用户内容。issue 路径复用同一条窄出口与字段重建，不得为了反馈放宽。
 
 ⚠️ **proxy 记录不能原样搬 `msg`，必须逐字段重建**（2026-08-04 review P1）。proxy 自己会把
 请求体与上游错误体写进日志上下文：
@@ -263,7 +268,9 @@ Mobile 的设置 → 调试 / 开发者提供 Debug 开关、导出与手动上�
 个人排障构建可用 `EXPO_PUBLIC_CINDY_DIAGNOSTICS=1` 设置默认值，用户保存的开关优先。
 
 - 本地详细 Debug 与上传摘要分别保存。`mobileDebugLog.ts` 只接手机自身的显式记录点：连接与网络变化、
-  恢复阶段、生命周期、JS 停摆、渲染计数与解析耗时、滚动几何和键盘状态。保留级别、错误原因与堆栈，
+  恢复阶段、生命周期、JS 停摆、渲染计数与解析耗时、滚动几何和键盘状态，以及远程文件预览与播放的
+  取件阶段（`files` scope：传输路线、大小、耗时与失败原因，只记扩展名，不记文件路径、签名地址或文件内容）。
+  保留级别、错误原因与堆栈，
   `mobileDebugRecord.ts` 在落盘前过滤敏感字段、凭证、地址参数等；禁止传入消息正文、请求体或完整鉴权信息，
   不接管全局 console，不重复保存被控端任务记录。
 - 详细日志在 `Paths.document/cindy-debug/`，NDJSON 文件每份最多 1 MiB、最多 8 份、保留最近 7 天。

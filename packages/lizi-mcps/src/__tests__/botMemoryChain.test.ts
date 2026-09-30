@@ -31,18 +31,31 @@ import path from 'node:path';
 import DatabaseCtor from 'better-sqlite3';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Real better-sqlite3 + FTS rebuild on a temp disk. Windows CI shards this
+// package next to other sqlite tests, and Defender can make that synchronous
+// work exceed Vitest's default 5s — the learned-prefix case then times out
+// and afterEach unlinks fts.db while the handle is still closing (EBUSY).
+// Same bounded Windows allowance as maker-core memory/contacts sqlite tests;
+// assertions stay unchanged.
+vi.setConfig({
+  testTimeout: process.platform === 'win32' ? 30_000 : 5_000,
+  hookTimeout: process.platform === 'win32' ? 30_000 : 10_000,
+});
 
 import {
   MakerMemoryManager,
   buildBotMemoryScopeKey,
   buildMemoryScopeKey,
   memoryScopeDirName,
+  parseBotMemoryScopeKey,
   type Logger,
   type MemoryRecord,
 } from '@cindy/maker-core';
 
 import { createCindyMemoryMcpServer } from '../cindy_memoryMcpServer.js';
+import { createLiziMcpProviders } from '../providers.js';
 import type { LiziMcpSessionContext } from '../types.js';
 
 const noopLogger: Logger = {
@@ -73,13 +86,20 @@ let databases: DatabaseCtor.Database[];
 let ownerAvailable = true;
 let memoryEnabled = true;
 
-function createManager(): MakerMemoryManager {
+function createManager(independentBots = false): MakerMemoryManager {
   return new MakerMemoryManager({
     basePath: root,
     resolveBasePath: () => (ownerAvailable ? root : null),
     ownerScopeKey: () => (ownerAvailable ? 'local:owner-a:1' : 'local:none:1'),
     reloadEnabled: () => memoryEnabled,
     initialEnabled: memoryEnabled,
+    ...(independentBots ? {
+      isIndependentScope: (scopeKey: string) => parseBotMemoryScopeKey(scopeKey) !== null,
+      resolveStorageDir: (scopeKey: string) => {
+        const botId = parseBotMemoryScopeKey(scopeKey);
+        return botId ? path.join(root, 'bots', botId, 'memories') : null;
+      },
+    } : {}),
     sqliteFactory: (filePath) => {
       const database = new DatabaseCtor(filePath);
       databases.push(database);
@@ -102,7 +122,14 @@ afterEach(async () => {
   // Windows cannot remove fts.db while the manager still owns an open connection.
   manager.dispose();
   for (const database of databases) expect(database.open).toBe(false);
-  await rm(root, { recursive: true, force: true });
+  try {
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'EBUSY' && code !== 'EPERM' && code !== 'EACCES') throw error;
+    // Defender / indexer can keep fts.db briefly after close. Leave the temp
+    // directory for the OS, matching maker-core memory scope-resolver cleanup.
+  }
 });
 
 /**
@@ -110,18 +137,38 @@ afterEach(async () => {
  * 会话」。ctx 形状与修复后的三个 harness 注入一致:workingDir 仍是项目目录,
  * memoryScopeKey 才是伙伴记忆的定位键。
  */
-async function connectBotSession(ctx: Partial<LiziMcpSessionContext> & { agentKind: LiziMcpSessionContext['agentKind'] }) {
+async function connectBotSession(
+  ctx: Partial<LiziMcpSessionContext> & { agentKind: LiziMcpSessionContext['agentKind'] },
+  throughProvider = false,
+) {
   const sessionContext: LiziMcpSessionContext = {
     workingDir: PROJECT_DIR,
     vendorOptions: {},
     ...ctx,
   } as LiziMcpSessionContext;
-  const server = createCindyMemoryMcpServer({
+  const deps = {
     getManager: () => manager,
     workdir: sessionContext.workingDir,
     getSessionContext: () => sessionContext,
     logger: noopLogger,
-  });
+  };
+  let server: ReturnType<typeof createCindyMemoryMcpServer>;
+  if (throughProvider) {
+    const provider = createLiziMcpProviders({ memory: deps })
+      .find((item) => item.name === 'cindy_memory')!;
+    expect(provider.isEnabled?.(sessionContext)).toBe(true);
+    expect(provider.isEnabled?.({ ...sessionContext, memoryScopeKey: undefined })).toBe(false);
+    // Claude binds a concrete Session at registration; shared Codex/Pi
+    // bridges start without one and resolve it at tool-call time.
+    const registrationContext: LiziMcpSessionContext = ctx.agentKind === 'claude-code'
+      ? sessionContext
+      : { agentKind: ctx.agentKind, workingDir: '', getSessionContext: () => sessionContext };
+    expect(provider.isEnabled?.(registrationContext)).toBe(true);
+    const config = provider.toClaudeSdkConfig(registrationContext) as { instance: typeof server };
+    server = config.instance;
+  } else {
+    server = createCindyMemoryMcpServer(deps);
+  }
   const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'bot-memory-chain', version: '0.0.0' });
   await Promise.all([server.connect(serverTx), client.connect(clientTx)]);
@@ -182,6 +229,43 @@ function partition(records: readonly MemoryRecord[]): {
 }
 
 describe('Cindy Bot 记忆全链(形成 → 存 → 取 → 用 → 删)', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)('keeps %s Bot registration and MCP reads/writes available with global memory off', async (agentKind) => {
+    manager.dispose();
+    memoryEnabled = false;
+    manager = createManager(true);
+    const botScope = buildBotMemoryScopeKey(BOT_ID);
+    const bot = await connectBotSession({ agentKind, memoryScopeKey: botScope }, true);
+    const project = await connectBotSession({ agentKind: 'codex' });
+    const record = {
+      type: 'user', name: 'independent', title: 'Independent',
+      description: 'Bot-owned preference', body: 'Keep answers concise.',
+    };
+    try {
+      expect(await modelWritesMemory(bot.client, record)).toMatchObject({ ok: true });
+      const read = await bot.client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'memory_read', args: { filename: 'user_independent.md' } },
+      });
+      expect(parseEnvelope(read)).toMatchObject({ ok: true, data: { body: record.body } });
+      expect(await readMemoryIndex(botScope)).toContain('user_independent.md');
+      expect(existsSync(path.join(root, 'bots', BOT_ID, 'memories', 'user_independent.md'))).toBe(true);
+      expect(await modelWritesMemory(project.client, record)).toMatchObject({
+        ok: false, code: 'MAKER_MEMORY_NOT_READY',
+      });
+      expect(existsSync(path.join(root, 'maker-memory'))).toBe(false);
+
+      // Independent from the global toggle does not mean independent from
+      // the account boundary: the same bound Bot must still fail closed.
+      ownerAvailable = false;
+      expect(await modelWritesMemory(bot.client, { ...record, name: 'signed-out' })).toMatchObject({
+        ok: false, code: 'MAKER_MEMORY_NOT_READY',
+      });
+    } finally {
+      await bot.cleanup();
+      await project.cleanup();
+    }
+  });
+
   it('形成/存:模型的一次 memory_write 落进伙伴自己的记忆空间,不进项目记忆', async () => {
     const session = await connectBotSession({
       agentKind: 'claude-code',

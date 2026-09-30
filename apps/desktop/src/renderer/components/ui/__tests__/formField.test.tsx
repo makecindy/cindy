@@ -4,9 +4,27 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 import { FormField } from '../form-field';
 import { Input } from '../input';
+import { Select } from '../select';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 afterEach(cleanup);
+
+it('preserves error and required semantics when a Select is composed with FormField', () => {
+  const field = (error?: string) => (
+    <FormField label="Protocol" hint="Choose a protocol" error={error} required>
+      {(control) => <Select {...control} label="Protocol" value="http" options={[{ value: 'http', label: 'HTTP' }]} onValueChange={vi.fn()} />}
+    </FormField>
+  );
+  const { rerender } = render(field('Unavailable protocol'));
+  const select = screen.getByRole('combobox', { name: 'Protocol' });
+  expect(select.getAttribute('aria-invalid')).toBe('true');
+  expect(select.getAttribute('aria-required')).toBe('true');
+  expect(select.getAttribute('aria-describedby')?.split(' ').map(id => document.getElementById(id)?.textContent)).toEqual(['Choose a protocol', 'Unavailable protocol']);
+  expect(select.hasAttribute('error')).toBe(false);
+  rerender(field());
+  expect(select.getAttribute('aria-invalid')).not.toBe('true');
+  expect(select.getAttribute('aria-required')).toBe('true');
+});
 
 it('associates labels, hints, errors and caller descriptions without native required validation', async () => {
   const { rerender } = render(

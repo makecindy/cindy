@@ -258,7 +258,10 @@ describe('reply before user echo', () => {
     const slots = reserve();
     expect(reconcileOptimisticUserMessages(slots, [], NO_IDS, NO_IDS)).toEqual([]);
     expect(reconcileOptimisticUserMessages(slots, [], new Set(['sent']), NO_IDS)).toBe(slots);
-    expect(reconcileOptimisticUserMessages(slots, [row('sent', 'user', 2)], NO_IDS, NO_IDS)).toBe(slots);
+    const echo = row('sent', 'user', 2);
+    const echoedSlots = reconcileOptimisticUserMessages(slots, [echo], NO_IDS, NO_IDS);
+    expect(echoedSlots).toEqual([{ ...slots[0], message: echo }]);
+    expect(reconcileOptimisticUserMessages(echoedSlots, [echo], NO_IDS, NO_IDS)).toBe(echoedSlots);
     expect(reconcileOptimisticUserMessages(slots, [row('sent', 'user', 2)], NO_IDS, new Set(['sent']))).toEqual([]);
   });
 
@@ -340,6 +343,12 @@ describe('buildPendingSendItems', () => {
     expect(items[2].errorText).toBe('boom');
     // 失败条目不给队列操作(它还没入队),重试 / 删除走 outbox 侧动作。
     expect(items[2].actions).toBeNull();
+  });
+
+  it('keeps a first-message creation row non-interactive until creation recovery is available', () => {
+    const [item] = build({ outbox: [outboxItem('first', { canCancel: false })] });
+    expect(item.canCancel).toBe(false);
+    expect(isPendingSendItemSelected(item, 'first')).toBe(false);
   });
 
   it('never exposes queue actions for items that left the queue', () => {
@@ -436,7 +445,7 @@ describe('pending_send 渲染接线', () => {
     expect(bubbleSource).toContain('interactiveAtoms={false}');
     expect(bubbleSource).toContain('maxVisibleLines={collapsedLines}');
     expect(bubbleSource).toContain('LONG_USER_MESSAGE_COLLAPSED_LINES');
-    // 队列操作仅由状态徽标承接，Markdown 横向滚动不嵌套在 Pressable 中。
+    // 状态徽标保留独立入口和定位，气泡正文通过 touch end 展开队列操作；移动手势不触发菜单。
     const badgeStart = bubbleSource.indexOf('<Pressable\n          accessibilityHint={item.hint');
     const badgeEnd = bubbleSource.indexOf('\n        </Pressable>', badgeStart);
     expect(badgeStart).toBeGreaterThan(-1);
@@ -448,6 +457,7 @@ describe('pending_send 渲染接线', () => {
     expect(bubbleSource).toContain('event.nativeEvent.layout.x - 28 - spacing.sm');
     expect(bubbleSource).toContain('onLayout={hasAttachments ? undefined : measureBadgeAnchor}');
     expect(bubbleSource.indexOf('testID={`pendingSend.bubble.${item.clientId}`}')).toBeGreaterThan(badgeEnd);
+    expect(bubbleSource).toContain('onTouchEnd={interactive ? handleBubbleTouchEnd : undefined}');
     expect(bubbleSource).toContain('const collapseLatched = collapseLatchBody === displayBody;');
     expect(bubbleSource).toContain('if (collapseResolved && !collapseLatched) setCollapseLatchBody(displayBody);');
     expect(bubbleSource).toContain('(measureBody && collapseLatched) || collapseResolved');
@@ -470,5 +480,25 @@ describe('pendingSendSpins', () => {
     expect(pendingSendSpins('queued')).toBe(false);
     expect(pendingSendSpins('editing')).toBe(false);
     expect(pendingSendSpins('failed')).toBe(false);
+  });
+});
+
+describe('pending bubbles for inputs sent by another task', () => {
+  it('show the persisted visible body, not the agent-facing teammate prefix', () => {
+    const interjection = {
+      ...queued('interject', '[来自 Cindy 的补充]\n\nplease review'),
+      persistedContent: 'please review',
+      origin: { kind: 'session', senderSessionId: 'bot-task', displayText: '[来自 Cindy 的补充]\n\nplease review' },
+    } as QueuedRemoteMessage;
+    const [queuedBubble] = build({ queue: [interjection] });
+    const [settlingBubble] = build({ settling: [interjection] });
+    expect(queuedBubble.text).toBe('please review');
+    expect(settlingBubble.text).toBe('please review');
+    expect(JSON.stringify(queuedBubble.sentInlineTokens)).not.toContain('来自 Cindy');
+  });
+
+  it('keeps ordinary composer items on their own text', () => {
+    const [bubble] = build({ queue: [queued('plain', 'hello')] });
+    expect(bubble.text).toBe('hello');
   });
 });

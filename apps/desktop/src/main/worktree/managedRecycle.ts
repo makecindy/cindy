@@ -1,3 +1,4 @@
+import { deferRecycle, recycleFailureReason, recyclePolicy } from './recyclePolicy';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -7,7 +8,6 @@ import { gitExec } from './gitExec';
 import { hasLiveSessionReference, loadLiveSessionPathKeys } from './liveSessionRefs';
 import {
   newRecycleRecord, readRecycleRecord, writeRecycleRecord, worktreeGeneration,
-  type WorktreeRecycleRecord,
 } from './recycleJournal';
 import { createRecoveryArchive, inventoryWorktree, sameWorktreeFiles, verifyRecoveryArchive } from './recoveryArchive';
 import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
@@ -32,6 +32,11 @@ export async function checkpointWorktreeForReuse(meta: WorktreeMeta): Promise<vo
   await assertWorktreeGitIdentity(meta);
   if (hasLiveSessionReference(meta, await loadLiveSessionPathKeys({ contextPath: meta.path }))) {
     throw new Error('pooled worktree is referenced');
+  }
+  const previous = await readRecycleRecord(meta.path);
+  if (previous?.generation === worktreeGeneration(meta)
+    && ['paused', 'kept'].includes(recyclePolicy(previous).state)) {
+    throw new Error('pooled worktree recycling is paused');
   }
   const record = await newRecycleRecord(meta);
   record.directoryIdentity = (await directoryIdentity(meta.path)) ?? undefined;
@@ -100,10 +105,11 @@ async function recycleManagedWorktreeInSlot(meta: WorktreeMeta, options: Managed
       record.directoryIdentity = (await directoryIdentity(meta.path)) ?? undefined;
       await writeRecycleRecord(record);
     }
+    const policy = recyclePolicy(record);
+    if (policy.state === 'paused' || policy.state === 'kept') return false;
+    const startedAt = performance.now();
     const defer = async (reason: string): Promise<false> => {
-      record.reason = reason;
-      record.attempts += 1;
-      record.nextAttemptAt = Date.now() + Math.min(30 * 60_000, 5_000 * 2 ** Math.min(record.attempts, 9));
+      deferRecycle(record, reason, performance.now() - startedAt);
       await writeRecycleRecord(record);
       return false;
     };
@@ -227,7 +233,7 @@ async function recycleManagedWorktreeInSlot(meta: WorktreeMeta, options: Managed
       await unregisterResource(meta);
       return true;
     } catch (error) {
-      return defer((error as NodeJS.ErrnoException).code ?? 'recycle-failed');
+      return defer(recycleFailureReason(error));
     }
   }));
 }

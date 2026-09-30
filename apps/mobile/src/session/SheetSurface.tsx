@@ -1,3 +1,5 @@
+import { useContext, useMemo } from 'react';
+import { FloatingSheetContext, usePaneViewport } from '@/platform/AdaptiveWindowContext';
 /**
  * SheetSurface —— 可拖动底部浮窗的「面板表面」(从 ContextSheet 抽出,非 Modal)。
  *
@@ -22,7 +24,7 @@ import { Text } from '@/components/AppText';
 import { BlurBackdrop } from '@/session/BlurBackdrop';
 import type { ContextSheetSnap, ContextSheetSnapHeights } from '@/session/contextSheetModel';
 import { useContextSheetDrag } from '@/session/useContextSheetDrag';
-import { fontWeight, iconSize, iconStroke, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 export interface SheetSurfaceProps {
   /** header 居中标题。 */
@@ -75,8 +77,11 @@ export function SheetSurface({
   const styles = useThemedStyles(makeSheetSurfaceStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
+  const viewport = usePaneViewport();
+  const floating = useContext(FloatingSheetContext);
+  const boundedHeights = useMemo(() => ({ half: Math.min(heights.half, viewport.height), full: Math.min(heights.full, viewport.height) }), [heights, viewport.height]);
   const drag = useContextSheetDrag({
-    heights,
+    heights: boundedHeights,
     onDismiss: onClose,
     onSnapChange,
     snap,
@@ -87,8 +92,10 @@ export function SheetSurface({
       style={[
         styles.sheet,
         variant === 'tasksheet' && styles.sheetTasksheet,
-        { paddingBottom: bottomInset },
+        { paddingBottom: floating ? spacing.md : bottomInset },
+        floating && { borderRadius: radius.container },
         drag.animatedStyle,
+        { maxHeight: "100%" },
       ]}
       testID={testID}
     >
@@ -109,7 +116,7 @@ export function SheetSurface({
               style={styles.headerButton}
               testID={testID ? `${testID}.back` : undefined}
             >
-              <ChevronLeft color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+              <ChevronLeft color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
             </Pressable>
           ) : (
             <View style={styles.headerSpacer} />
@@ -222,6 +229,7 @@ function makeSheetSurfaceStyles(colors: ThemeColors) {
     headerTitle: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.semibold,
       textAlign: 'center' as const,
     },

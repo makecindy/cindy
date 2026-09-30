@@ -8,6 +8,10 @@
 
 import { describe, it, expect, vi } from 'vitest';
 
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
+import { getActiveCatalog, setActiveCatalog, setOpenAiImagesApiKeyConfigured } from '../../maker-host/active-catalog.js';
+import { deriveCindyMediaConfig } from '../cindyMediaCatalog.js';
+
 import { GhostCindySlot, type CindySlotDeps } from '../cindySlot';
 import { sniffMediaMime } from '../../cindy-media/sniffMediaMime';
 import {
@@ -218,6 +222,25 @@ describe('载荷校验', () => {
     expect(
       await slot.handleModelRequest('art', { kind: 'gen_image', prompt: 'x'.repeat(4001) }),
     ).toMatchObject({ ok: false });
+  });
+
+  it('Art keeps its saved subscription image selection for generation and editing with the unified label', async () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setOpenAiImagesApiKeyConfigured(false);
+    const config = deriveCindyMediaConfig(getActiveCatalog().providers, 'image');
+    const id = 'openai/gpt-image-2';
+    expect(config.models.find(m => m.id === id)).toMatchObject({ label: 'GPT Image Gen', supportsEdit: true });
+    const { slot, generateImage, editImage } = makeSlot({
+      getImageConfig: () => config,
+      getOverride: () => id,
+    });
+    for (const request of [REQ, EDIT_REQ]) {
+      expect(await slot.handleModelRequest('art', request)).toMatchObject({
+        ok: true, model: id, modelLabel: 'GPT Image Gen',
+      });
+    }
+    expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({ model: id }));
+    expect(editImage).toHaveBeenCalledWith(expect.objectContaining({ model: id }));
   });
 
   it('旧插件模型名:名单内透传,唯一 basename 升级,失效值回落当前默认', async () => {

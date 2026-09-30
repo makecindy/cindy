@@ -15,6 +15,16 @@ import {
  * 强制登出」的历史问题)。连续 N 次失败才升级、任何一次成功读取立即复位。
  */
 describe('authCredentialStoreHealth', () => {
+  it('startup read failure surfaces immediately and a later successful read clears it', () => {
+    const health = createCredentialStoreHealth();
+    health.noteStartupFailure();
+    expect(health.unavailable).toBe(true);
+    expect(health.noteReadFailure()).toBe(false);
+    expect(health.noteRecovered()).toBe(true);
+    expect(health.unavailable).toBe(false);
+    expect(health.noteReadFailure()).toBe(false);
+  });
+
   it('阈值之前保持瞬时语义,不升级', () => {
     const health = createCredentialStoreHealth(5);
     for (let i = 0; i < 4; i++) {
@@ -82,10 +92,107 @@ describe('authCredentialStoreHealth', () => {
  * authSessionExpiredDetection.test.ts 的源码守卫模式)。
  */
 describe('authManager credential-store escalation wiring', () => {
-  const authSource = readFileSync(resolve(process.cwd(), 'src/main/authManager.ts'), 'utf8').replace(
-    /\r\n/g,
-    '\n',
-  );
+  const authSource = readFileSync(
+    resolve(process.cwd(), 'src/main/authManager.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+
+  it('keeps explicit login available for corrupt vaults when encryption is healthy', () => {
+    const expression = authSource.match(
+      /'cold-start-credential-reconcile-unavailable',\s*([\s\S]*?),\s*\);/,
+    )?.[1];
+    expect(expression).toBeDefined();
+    class AuthApiError extends Error {
+      constructor(public code: string) {
+        super(code);
+      }
+    }
+    const classify = new Function(
+      'credentialEncryptionUnavailable',
+      'error',
+      'AuthApiError',
+      'hasPotentiallyPersistedAuthCredentials',
+      `return (${expression});`,
+    );
+    const unavailable = new AuthApiError('CREDENTIAL_STORE_UNAVAILABLE');
+    expect(classify(false, unavailable, AuthApiError, () => true)).toBe(false);
+    expect(classify(true, unavailable, AuthApiError, () => true)).toBe(true);
+    expect(classify(true, unavailable, AuthApiError, () => false)).toBe(false);
+    expect(classify(true, new Error('unrelated'), AuthApiError, () => true)).toBe(false);
+  });
+
+  it('distinguishes an empty profile from records, backups, tombstones and access errors without decryption', () => {
+    const body = authSource.match(
+      /function hasPotentiallyPersistedAuthCredentials\(\): boolean \{([\s\S]*?)\n\}/,
+    )?.[1];
+    expect(body).toBeDefined();
+    const keys = [
+      'AUTH_SESSION_KEY',
+      'AUTH_ACCOUNT_VAULT_KEY',
+      'AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY',
+      'LEGACY_RESOURCE_REFRESH_TOKEN_KEY',
+      'LEGACY_ACCOUNT_REFRESH_TOKEN_KEY',
+      'LEGACY_REFRESH_TOKEN_KEY',
+    ];
+    const check = new Function(
+      'fs',
+      'path',
+      'SAFE_STORAGE_DIR',
+      ...keys,
+      body!.replace(' as NodeJS.ErrnoException', ''),
+    );
+    const probe = (exists: string | null, errorCode = 'ENOENT') =>
+      check(
+        {
+          constants: { F_OK: 0 },
+          accessSync: (file: string) => {
+            if (file !== exists) throw Object.assign(new Error(), { code: errorCode });
+          },
+        },
+        { join: (...parts: string[]) => parts.join('/') },
+        () => '/fake',
+        ...keys,
+      );
+    expect(probe(null)).toBe(false);
+    for (const key of keys) {
+      expect(probe(`/fake/${key}.enc`)).toBe(true);
+      expect(probe(`/fake/${key}.enc.bak`)).toBe(true);
+    }
+    expect(probe(null, 'EACCES')).toBe(true);
+    expect(probe(null, 'EPERM')).toBe(true);
+    expect(probe(null, 'EIO')).toBe(true);
+  });
+
+  it('retains startup failure across all owner cleanup paths and exposes it before loading providers', () => {
+    const recovery = authSource.slice(
+      authSource.indexOf('async function withAccountFreeOwnerCommit'),
+      authSource.indexOf('interface CloudOwnerDataReservation'),
+    );
+    // Passive, normal commit and failed cleanup must all retain the same cause.
+    expect(
+      recovery.match(/credentialStoreUnavailable: opts\.credentialStoreUnavailable/g),
+    ).toHaveLength(3);
+    expect(recovery).toContain(
+      'if (credentialStoreUnavailable) credentialStoreHealth.noteStartupFailure();',
+    );
+    const clear = authSource.slice(
+      authSource.indexOf('function clearAuth('),
+      authSource.indexOf('// ── Public API'),
+    );
+    expect(clear.indexOf('credentialStoreHealth.noteStartupFailure()')).toBeGreaterThan(
+      clear.indexOf('credentialStoreHealth.reset()'),
+    );
+    const login = authSource.slice(
+      authSource.indexOf('export async function getLoginState()'),
+      authSource.indexOf('async function completeLogin('),
+    );
+    expect(login.indexOf('credentialStoreHealth.unavailable')).toBeLessThan(
+      login.indexOf('await loadLoginProviders'),
+    );
+    expect(login).toContain(
+      "state: { step: 'error', code: 'CREDENTIAL_STORE_UNAVAILABLE', recoverTo: 'identifier' }",
+    );
+  });
 
   it('transient-unreadable 分支喂失败计数并在翻转时广播,但仍保持瞬时语义', () => {
     const start = authSource.indexOf('export async function refresh(): Promise<boolean> {');

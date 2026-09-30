@@ -1,9 +1,12 @@
+export const BACKGROUND_TRANSITION_TIMEOUT_MS = 4_000;
+
 export interface BackgroundConnectionDiagnostic {
   phase: "background" | "release-settled" | "grace-fired" | "stop" | "active";
   generation: number;
   elapsedMs: number;
   reason?: "grace" | "suspended";
   releases?: number;
+  transitions?: number;
   failed?: number;
   releaseOutcome?: "settled" | "timed-out";
 }
@@ -11,6 +14,7 @@ export interface BackgroundConnectionDiagnostic {
 interface BackgroundConnectionOptions {
   isBackground(): boolean;
   releaseTopics(): Promise<void>[];
+  pendingTransitions?(): Promise<void>[];
   stop(): void;
   connect(): void;
   graceMs: number;
@@ -67,10 +71,23 @@ export function createBackgroundConnection(
       stopTimer = setTimeout(() => {
         stopTimer = null;
         if (!options.isBackground() || generation !== captured) return;
-        report("grace-fired");
-        const releases = Promise.allSettled(options.releaseTopics());
+        const transitions = options.pendingTransitions?.() ?? [];
+        report("grace-fired", { transitions: transitions.length });
+        // A media handoff must finish host authorization before signaling stops.
+        // This does not retain subscriptions or extend the media/lease deadline.
+        const topicReleases = options.releaseTopics();
+        const releases = Promise.allSettled([...topicReleases, ...transitions]);
+        const remainingTransitionMs = transitions.length
+          ? Math.max(
+              0,
+              BACKGROUND_TRANSITION_TIMEOUT_MS - (Date.now() - backgroundAt!),
+            )
+          : 0;
         const boundedWait = new Promise<void>((resolve) => {
-          releaseTimer = setTimeout(resolve, options.releaseWaitMs);
+          releaseTimer = setTimeout(
+            resolve,
+            transitions.length ? remainingTransitionMs : options.releaseWaitMs,
+          );
         });
         void Promise.race([releases, boundedWait]).then((result) => {
           if (generation !== captured) return;
@@ -81,10 +98,10 @@ export function createBackgroundConnection(
               releaseOutcome: Array.isArray(result) ? "settled" : "timed-out",
               ...(Array.isArray(result)
                 ? {
-                    releases: result.length,
-                    failed: result.filter(
-                      (entry) => entry.status === "rejected",
-                    ).length,
+                    releases: topicReleases.length,
+                    failed: result
+                      .slice(0, topicReleases.length)
+                      .filter((entry) => entry.status === "rejected").length,
                   }
                 : {}),
             });
@@ -103,7 +120,11 @@ export function createBackgroundConnection(
       // A timer reference cannot tell whether the socket was actually stopped:
       // JS can be suspended while the final unsubscribe is still awaiting ACK.
       if (elapsed > options.suspendMs) {
-        report("stop", { reason: "suspended", elapsedMs: elapsed, generation: backgroundGeneration });
+        report("stop", {
+          reason: "suspended",
+          elapsedMs: elapsed,
+          generation: backgroundGeneration,
+        });
         options.stop();
       }
       options.connect();

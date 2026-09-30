@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildUserProvider, type ProviderPreset, type ProviderView } from '@cindy/model-providers';
 
 import {
+  assertProviderImportModels,
   beginProviderImportConfirm,
   cancelProviderImport,
   clearProviderImportDraftsForTest,
@@ -10,6 +11,9 @@ import {
   finishProviderImportConfirm,
   previewProviderImport,
 } from '../providerImport.js';
+
+import { validateCustomProviderConfig } from '../../maker-host/custom-provider-store.js';
+import { applyRuntimeFillFields, type RuntimeFillDraft } from '../../../renderer/lib/customProviderRuntimeFill.js';
 
 const SCOPE = { dataOwnerId: 'owner-a', generation: 1 };
 
@@ -133,7 +137,7 @@ describe('provider import URL parsing', () => {
     createDraft(customPayload({ endpoints: [{ protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1', modelsUrl: 'https://api.acme.test:443/catalog/models' }] }));
   });
 
-  it('keeps an explicit defaultEnabled override on imported compatibility routes', () => {
+  it('does not treat a model enabled in a link as compatibility-engine consent', () => {
     const importId = createDraft(customPayload({
       endpoints: [{
         protocol: 'openai-chat',
@@ -146,8 +150,9 @@ describe('provider import URL parsing', () => {
     const { draft } = beginProviderImportConfirm(importId, SCOPE, []);
     expect(draft.kind === 'custom' && draft.config.runtimes['claude-code']?.models[0]).toMatchObject({
       id: 'compat-model',
-      defaultEnabled: true,
     });
+    expect(draft.kind === 'custom' && draft.config.runtimes['claude-code']?.models[0]).not.toHaveProperty('defaultEnabled');
+
   });
 
   it('imports Google generateContent endpoints for all three engines', () => {
@@ -762,4 +767,115 @@ describe('provider import draft lifecycle', () => {
       resolution: { action: 'create', providerId: preview.providerId },
     });
   });
+});
+
+
+it('imports complete metadata and explicit off into all three engines', () => {
+  const model = { id: 'gpt-7-sol', nativeApi: 'openai-responses', maxOutputTokens: 32000,
+    contextWindowMax: 1000000, supportsFastMode: false, supportsToolCalls: false,
+    supportsImageInput: false, reasoning: false, efforts: [], defaultEffort: null };
+  const importId = createDraft(customPayload({ endpoints: [{ protocol: 'openai-responses',
+    baseUrl: 'https://relay.example/v1', targets: ['claude-code', 'codex', 'pi'], models: [model],
+  }] }));
+  previewProviderImport(importId, SCOPE, []);
+  const { draft } = beginProviderImportConfirm(importId, SCOPE, []);
+  expect(draft.kind).toBe('custom');
+  if (draft.kind !== 'custom') throw new Error('wrong import kind');
+  const provider = buildUserProvider(draft.config);
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    expect(draft.config.runtimes[agent]?.models[0]).toMatchObject(model);
+    expect(provider.models[agent]?.[0]).toMatchObject({ maxOutput: 32000,
+      supportsFastMode: false, supportsImageInput: false, supportsToolCalls: false,
+      efforts: [], defaultEnabled: agent !== 'claude-code' });
+  }
+});
+
+it('accepts a discovered catalog larger than the inline-link limit', () => {
+  expect(() => assertProviderImportModels(Array.from({ length: 1000 }, (_, index) =>
+    ({ id: `model-${index}`, name: `Model ${index}` })))).not.toThrow();
+});
+
+it.each([
+  [['minimal', 'low', 'high'], 'minimal', ['low', 'high'], undefined],
+  [['minimal', 'low', 'high'], 'high', ['low', 'high'], 'high'],
+  [['minimal'], 'minimal', [], undefined],
+] as const)('imports per-engine reasoning settings through the actual save validator: %j',
+  (efforts, defaultEffort, fixedEfforts, fixedDefault) => {
+    const importId = createDraft(customPayload({ endpoints: [{ protocol: 'openai-responses',
+      baseUrl: 'https://relay.example/v1', targets: ['claude-code', 'codex', 'pi'],
+      models: [{ id: 'new-model', reasoning: true, reasoningEfforts: efforts, reasoningDefaultEffort: defaultEffort }],
+    }] }));
+    previewProviderImport(importId, SCOPE, []);
+    const { draft } = beginProviderImportConfirm(importId, SCOPE, []);
+    if (draft.kind !== 'custom') throw new Error('wrong import kind');
+    expect(validateCustomProviderConfig(draft.config)).toEqual({ ok: true });
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const model = draft.config.runtimes[agent]!.models[0];
+      expect(model.reasoning).toBe(true);
+      expect(model.reasoningEfforts).toEqual(agent === 'pi' ? efforts : fixedEfforts);
+      expect(model.reasoningDefaultEffort).toBe(agent === 'pi' ? defaultEffort : fixedDefault);
+    }
+  });
+
+
+it.each([
+  { efforts: ['minimal', 'low', 'ultra', 'max'], defaultEffort: 'ultra', fixed: ['low', 'max'], fixedDefault: undefined },
+  { efforts: ['minimal', 'high'], defaultEffort: 'high', fixed: ['high'], fixedDefault: 'high' },
+  { efforts: [], defaultEffort: null, fixed: [], fixedDefault: null },
+  { defaultEffort: 'minimal', fixedDefault: undefined },
+])('filters canonical imported efforts at both metadata layers: %j', ({ fixed, fixedDefault, ...metadata }) => {
+  const importId = createDraft(customPayload({ endpoints: [{ protocol: 'openai-responses',
+    baseUrl: 'https://relay.example/v1', targets: ['claude-code', 'codex', 'pi'],
+    models: [{ id: 'new-model', ...metadata, discoveredMetadata: metadata }],
+  }] }));
+  previewProviderImport(importId, SCOPE, []);
+  const { draft } = beginProviderImportConfirm(importId, SCOPE, []);
+  if (draft.kind !== 'custom') throw new Error('wrong import kind');
+  expect(validateCustomProviderConfig(draft.config)).toEqual({ ok: true });
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    const model = draft.config.runtimes[agent]!.models[0];
+    for (const layer of [model, model.discoveredMetadata!]) {
+      expect(layer.efforts).toEqual(agent === 'pi' ? metadata.efforts : fixed);
+      expect(layer.defaultEffort).toBe(agent === 'pi' ? metadata.defaultEffort : fixedDefault);
+    }
+    if (agent !== 'pi') {
+      const projected = buildUserProvider(draft.config).models[agent]![0];
+      expect(projected.efforts).not.toContain('minimal');
+      expect(projected.efforts).not.toContain('ultra');
+    }
+  }
+});
+
+
+it.each(['claude-code', 'codex'] as const)('saves Pi models filled into %s with target-compatible efforts', agent => {
+  const source: RuntimeFillDraft = { baseUrl: 'https://relay.example/v1', requestPath: '', apiKey: '',
+    wireProtocol: 'openai-responses', headers: [], modelsUrl: '', models: [
+      { id: 'future', name: 'Future', reasoning: true, reasoningEfforts: ['minimal', 'high'], reasoningDefaultEffort: 'minimal',
+        efforts: ['minimal', 'high', 'ultra'], defaultEffort: 'ultra',
+        discoveredMetadata: { efforts: ['minimal', 'high', 'ultra'], defaultEffort: 'ultra' } },
+      { id: 'empty', name: 'Empty', reasoning: true, reasoningEfforts: ['minimal'], reasoningDefaultEffort: 'minimal',
+        efforts: [], defaultEffort: null, discoveredMetadata: { efforts: [], defaultEffort: null } },
+      { id: 'sparse', name: 'Sparse', reasoning: true, reasoningEfforts: ['low'], efforts: ['low'] },
+    ] };
+  const target: RuntimeFillDraft = { ...source, models: [{ id: 'sparse', name: 'Old', reasoning: true,
+    reasoningEfforts: ['high'], reasoningDefaultEffort: 'high', efforts: ['high'], defaultEffort: 'high', defaultEnabled: true }] };
+  const before = structuredClone({ source, target });
+  const filled = applyRuntimeFillFields(target, source, ['models'], { sourceAgent: 'pi', targetAgent: agent });
+  const config = { id: 'filled-provider', name: 'Filled', runtimes: { [agent]: {
+    baseUrl: filled.baseUrl, wireProtocol: filled.wireProtocol, models: filled.models,
+  } } };
+  expect(validateCustomProviderConfig(config)).toEqual({ ok: true });
+  expect(filled.models.map(model => model.id)).toEqual(['future', 'empty', 'sparse']);
+  expect(filled.models[0]).toMatchObject({ reasoningEfforts: ['high'], efforts: ['high'], discoveredMetadata: { efforts: ['high'] } });
+  expect(filled.models[0].reasoningDefaultEffort).toBeUndefined();
+  expect(filled.models[0].defaultEffort).toBeUndefined();
+  expect(filled.models[0].discoveredMetadata!.defaultEffort).toBeUndefined();
+  expect(filled.models[1]).toMatchObject({ reasoningEfforts: [], efforts: [], defaultEffort: null,
+    discoveredMetadata: { efforts: [], defaultEffort: null } });
+  expect(filled.models[2]).toMatchObject({ reasoningEfforts: ['low'], efforts: ['low'], defaultEnabled: true });
+  expect(filled.models[2].reasoningDefaultEffort).toBeUndefined();
+  expect(filled.models[2].defaultEffort).toBeUndefined();
+  expect(buildUserProvider(config).models[agent]?.some(model => model.efforts.some(effort => effort === 'minimal' || effort === 'ultra'))).toBe(false);
+  expect({ source, target }).toEqual(before);
+  expect(applyRuntimeFillFields({ ...target, models: [] }, source, ['models'], { sourceAgent: 'pi', targetAgent: 'pi' }).models).toEqual(source.models);
 });

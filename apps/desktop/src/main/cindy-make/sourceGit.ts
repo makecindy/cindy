@@ -1,5 +1,18 @@
 import { spawn } from 'node:child_process';
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import type { MakeSourceGitProgress } from '../../shared/cindyMakeDoctor.js';
+
+const MAX_CAPTURED_STDOUT = 64 * 1024;
+const MAX_CAPTURED_STDERR = 16 * 1024;
+
+function sanitizeProgressLine(line: string): string {
+  return redactSensitiveText(
+    line
+      .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
+      .replace(/\b(?:https?|ssh):\/\/[^\s"'<>]+/gi, '[REDACTED_URL]')
+      .trim(),
+  ).slice(-512);
+}
 
 export function parseSourceGitProgress(line: string): MakeSourceGitProgress | undefined {
   const match =
@@ -35,13 +48,22 @@ export async function runSourceGit(
       signal,
     });
     let stdout = '';
+    let stderr = '';
+    let stderrTruncated = false;
     let stderrTail = '';
     let failed = false;
+    let spawnCode: string | undefined;
     let latest: MakeSourceGitProgress | undefined;
     let sent: MakeSourceGitProgress | undefined;
     let lastSent = 0;
     const publish = () => {
-      if (!latest || (sent?.stage === latest.stage && sent.percent === latest.percent)) return;
+      if (
+        !latest ||
+        (sent?.stage === latest.stage &&
+          sent.percent === latest.percent &&
+          sent.message === latest.message)
+      )
+        return;
       onProgress?.(latest);
       sent = latest;
       lastSent = Date.now();
@@ -50,19 +72,21 @@ export async function runSourceGit(
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
       if (failed) return;
-      stdout += chunk;
-      if (stdout.length > 64 * 1024) {
-        failed = true;
-        child.kill();
-      }
+      if (stdout.length < MAX_CAPTURED_STDOUT)
+        stdout += chunk.slice(0, MAX_CAPTURED_STDOUT - stdout.length);
     });
     child.stderr.on('data', (chunk: string) => {
+      stderr += chunk;
       const lines = (stderrTail + chunk).split(/[\r\n]/);
       stderrTail = (lines.pop() ?? '').slice(-1024);
+      if (stderr.length > MAX_CAPTURED_STDERR) {
+        stderrTruncated = true;
+        stderr = stderr.slice(-MAX_CAPTURED_STDERR);
+      }
       for (const line of lines) {
         const progress = parseSourceGitProgress(line);
         if (!progress) continue;
-        latest = progress;
+        latest = { ...progress, message: sanitizeProgressLine(line) };
         if (
           sent?.stage !== progress.stage ||
           progress.percent === 100 ||
@@ -71,15 +95,24 @@ export async function runSourceGit(
           publish();
       }
     });
-    child.on('error', () => {
+    child.on('error', (error: NodeJS.ErrnoException) => {
       failed = true;
+      spawnCode = error.code;
     });
     // Wait for close, including abort/error paths, before another operation can touch the checkout.
-    child.on('close', (code) => {
+    child.on('close', (code, exitSignal) => {
       if (signal.aborted || failed || code !== 0) {
+        const diagnostic = stderrTruncated ? `[stderr truncated] ${stderr}` : stderr;
         reject(
           Object.assign(new Error('Git source operation failed'), {
             code: signal.aborted ? 'cancelled' : 'gitFailed',
+            operation: args[0],
+            exitCode: code,
+            exitSignal,
+            spawnCode,
+            stderr: redactSensitiveText(
+              diagnostic.replace(/\b(?:https?|ssh):\/\/[^\s"'<>]+/gi, '[REDACTED_URL]'),
+            ).trim(),
           }),
         );
         return;

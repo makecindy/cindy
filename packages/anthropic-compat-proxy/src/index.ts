@@ -14,6 +14,9 @@
  */
 
 export { createAnthropicCompatProxy } from './server.js';
+export { recoverInlineAttachments } from './oversized-attachments.js';
+export type { OversizedBody, RecoveredAttachment, AttachmentKeeper } from './oversized-attachments.js';
+export type { OversizedRequestRecovery } from './types.js';
 export {
   createEnvOutboundProxyResolver,
   hasProxyEnvConfig,
@@ -41,6 +44,8 @@ export {
   createEmptyThinkingRecoveryRule,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
+  createResponsesItemIdPrefixRecoveryRule,
+  createResponsesItemIdLengthRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   compactOversizedImageHistory,
   createToolUseProviderSpecificFieldsRecoveryRule,
@@ -56,6 +61,9 @@ export {
   stripEncryptedContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
   stripNonAnthropicFields,
+  stripNonCanonicalResponsesItemIdsFromBody,
+  shortenOversizedResponsesItemIdsFromBody,
+  shortenResponsesItemId,
   stripToolUseProviderSpecificFields,
   stripToolUseProviderSpecificFieldsFromBody,
 } from './transform.js';
@@ -69,6 +77,7 @@ export {
   xaiBareModelId,
 } from './xai-model-input.js';
 export { createVllmResponsesCompatibilityRule } from './vllm-responses-compatibility.js';
+export { createAnthropicEffortCompatibilityRule } from './anthropic-effort-compatibility.js';
 export { createVisionBridgeTransform } from './vision-bridge-transform.js';
 export { createThreadStripController } from './thread-strip-controller.js';
 export type { ThreadStripController } from './thread-strip-controller.js';
@@ -99,3 +108,5 @@ export type {
   RoutingDecision,
   RoutingTransform,
 } from './types.js';
+
+export { createWebSocketMessageTransform } from './websocket-message-transform.js';

@@ -43,6 +43,7 @@ import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 import { ThinkingText } from './ThinkingText';
 
 interface ThinkingCardProps {
+  renderItemKey?: string;
   /** Thinking content with lightweight inline emphasis. Empty for redacted blocks. */
   content: string;
   /** True while the model is still streaming this block (delta still
@@ -90,6 +91,7 @@ function BodyRail({ children }: { children: React.ReactNode }) {
 }
 
 export function ThinkingCard({
+  renderItemKey,
   content,
   isStreaming,
   startedAt,
@@ -127,7 +129,7 @@ export function ThinkingCard({
   // ── Redacted variant ─────────────────────────────────────────────────
   if (isRedacted) {
     return (
-      <div className="flex w-full justify-start">
+      <div data-render-item-key={renderItemKey} className="flex w-full justify-start">
         <div className="w-full">
           {/* select-none:另两个变体的 header 是 <button> 天然禁选,redacted 分支
               是纯 div,需显式对齐,避免状态短语可被划选 */}
@@ -157,7 +159,7 @@ export function ThinkingCard({
   // dots + live duration. Body only renders when the user expands.
   if (isStreaming) {
     return (
-      <div className="flex w-full justify-start">
+      <div data-render-item-key={renderItemKey} className="flex w-full justify-start">
         <div className="w-full">
           <button
             type="button"
@@ -225,7 +227,7 @@ export function ThinkingCard({
     ? `Thought for ${formatDuration(durationMs ?? 0)} (aborted)`
     : `Thought for ${formatDuration(durationMs ?? 0)}`;
   return (
-    <div className="flex w-full justify-start">
+    <div data-render-item-key={renderItemKey} className="flex w-full justify-start">
       <div className="w-full">
         <button
           type="button"

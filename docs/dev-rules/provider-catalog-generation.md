@@ -36,7 +36,7 @@
 
 - 在线刷新已知供应商：`pnpm sync:pi-model-catalog`。公开 Pi 端点可能拒绝请求；失败时不替换目录。
 - 导入 Pi 生成器的完整导出：`pnpm sync:pi-model-catalog --input /path/to/providers.json --source-version <version>`。
-  输入是 provider ID 到完整 Pi 模型数组的映射；新供应商自动进入标准表，缺少已有供应商则报错，避免误删。
+  输入是 provider ID 到完整 Pi 模型数组的映射；新供应商自动进入标准表，未提供的供应商保留旧记录。
 - 从 Cindy 已固定版本的 Pi 二进制读取生成数据：
   `pnpm sync:pi-model-catalog --pi-bundle /path/to/pi --source-version 0.85.1 --generated-at 2026-09-12T00:00:00Z`。
   仅解析生成的字面量数据，不执行二进制。旧版本已有的 Astra/xAI 修正由具名函数保留，新版本不套旧版本修正。
@@ -80,7 +80,7 @@ authenticated online OpenCode and GUI acceptance remain unverified.
 - Vercel 读取 `max_tokens`、输入模态、`reasoning_options` 的明确 effort 取值及语言模型的 USD/token 价格；非语言模型保留类型，不把图片单价当 token 价格。单位依据官方 [模型发现文档](https://vercel.com/docs/ai-gateway/models-and-providers)。
 - LiteLLM 的 `model_name` 保留为调用 ID，`model_info` 可补窗口、输出上限、视觉与工具能力；LM Studio 的 `key` / capabilities 结构可被解析。普通 OpenAI 兼容端点的 ID 列表也保持可用。
 - 刷新仅返回 ID 时，保留此前发现的资料；明确 false 仍覆盖旧资料，用户字段仍最后覆盖。连接编辑与列表刷新均保留缺失字段。
-- 不按模型名模糊猜测厂商协议，也不把任意代理价格解释为美元。仅有 ID 且标准表无记录时，未知字段仍未知；这些事实不能靠静态代码补造。
+- 不按模型名模糊猜测厂商协议，也不把任意代理价格解释为美元。仅有 ID 且当前型号无记录时，按模型资料优先级使用同系列前代能力；API 实报与服务器修正优先。不得把继承值标记为实报，也不借用前代价格。
 
 验证：公共 GET 的 OpenRouter 445 条、Vercel 375 条（其中语言模型 252 条）在三引擎投影中核对输入能力、窗口、输出与可解析价格。OpenCode 的匿名接口仍返回 403；本地服务没有本次真实实例验收，测试覆盖其响应结构，不等同于已访问用户的服务。没有生成调用。
 
@@ -98,6 +98,11 @@ OpenAI / Anthropic / xAI API 与订阅入口分开，另加 Nous Research（Herm
 
 - Azure 资源名、Vertex location、Cloudflare account/gateway 使用可编辑的声明模板；
   绑定后同一连接的三个 runtime、发现地址与模型独立地址同步替换，不按模型名猜地址。
+  Vertex 的官方 host 不是一条 `{location}-` 正则：`global` 用无前缀
+  `aiplatform.googleapis.com`，`us`/`eu` 用 `aiplatform.{us|eu}.rep.googleapis.com`，
+  区域才用 `{region}-aiplatform.googleapis.com`。匹配只认这一族官方形态并规范化别名，
+  不把占位符放宽成任意 host。Azure OpenAI 同样认 `openai.azure.com` 与
+  `cognitiveservices.azure.com` 的 `/openai[/v1]`，保存时保留用户用的那个官方 host。
 - Bedrock 不同区域分开预设，避免把别区模型错误地借给当前 endpoint。
 - 账号模板绑定后仍按 preset ID + 精确模型 ID/API 查标准资料；普通改写地址不继承原渠道承诺。
 - 模型详情可逐引擎选八种原生 API；同处调整默认思考档位和工作上下文，上游窗口与最大输出另行展示。
@@ -237,3 +242,14 @@ OAuth 复用既有 Main 凭证存储、取消与刷新机制；新渠道登录�
 验证：兼容包 204、目录 934、三个桥接/代理包合计 788 项通过；Desktop 定向 400 项通过，另有既有跳过。受影响包类型检查通过。没有真实账号付费生成请求。本机许可证全量再生成缺 Cargo，已按两侧版本合并 Pi 0.85.1 与 OpenCodex MIT 声明并核对 SPDX 引用，无 dangling references。
 
 新隔离测试版 `dev2-provider-four-api` 已取得 `DESKTOP_DEV_VERDICT=ready`，工作区为 `cindy-provider-native-defaults`。旧测试工作区保留；新档案需重新登录、导入渠道，真实账号首次导入由用户继续验收。没有推送、发布或合并原 PR。
+
+
+## 部分失败与新型号
+
+Pi 同步先读供应商索引，合并已有供应商；单个来源或型号失败保留最后有效记录，不中断其它来源。
+供应商清单完整且全部转换成功时按新清单移除下架型号；存在无效条目或来源失败时不据此删旧型号。
+同型号、同端点和同协议刷新缺失适配字段时保留上次值，明确提供的空映射或否定值仍替换旧值。
+成功输出通过临时文件原子替换。缺失能力不合成为明确 false / 空数组，运行时继续按字段继承。
+通用 API 发现读取分页；后续页失败保留已取得的型号，不向跨域或其它路径的 next 链接发送凭证。
+链接导入、配置保存、跨引擎复制和刷新共享 ModelMetadata，保留明确否定值。
+新型号不固化为 defaultEnabled:false；原生引擎默认和用户明确开关在目录投影时统一决定。

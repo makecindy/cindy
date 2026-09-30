@@ -20,6 +20,14 @@ import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js'
 export const RELAUNCH_BLOCKING_ACTIVITY_CHANNEL = 'update-relaunch:blocking-activity';
 
 const log = createLogger('relaunch-activity');
+let currentSources: (() => RelaunchBusyActivitySources) | undefined;
+
+/** Shared by local version switching; unknown activity must not permit a restart. */
+export async function readRelaunchBlockingActivity() {
+  return currentSources
+    ? evaluateRelaunchBusyActivity(currentSources())
+    : { busy: true, reasons: ['not-ready'] };
+}
 
 /**
  * 横幅延后轮询会反复问同一条探针,但不能把每次 busy 都打成「manual relaunch」INFO。
@@ -39,6 +47,7 @@ function isSilentBusyProbe(payload: unknown): boolean {
 export function registerRelaunchBusyActivityIpc(
   resolveSources: () => RelaunchBusyActivitySources,
 ): void {
+  currentSources = resolveSources;
   // **幂等注册**,不是防御性冗余:调用点(bootstrap-electron 的 registerMakerIpcsAfterSplash)
   // 在它之后还有会抛的初始化,而那个 try 的 catch 明写「下次 splash retry 再尝试」,重试时
   // makerIpcsRegistered 仍是 false —— 于是这行会被执行第二次。ipcMain.handle 对同一 channel

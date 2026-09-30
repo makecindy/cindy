@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+vi.mock('@/session/TaskTags', () => ({ TaskTagsPanel: () => null }));
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
@@ -7,6 +8,7 @@ import {
   type SessionMenuSheetProps,
 } from "@/session/SessionMenuSheet";
 import { i18n } from "@/i18n";
+import { sharedTaskHostPeer } from '@cindy/device-link';
 
 vi.mock("react-native", async () => {
   const { createElement } = await import("react");
@@ -21,6 +23,7 @@ vi.mock("react-native", async () => {
   }) =>
     createElement("div", { onClick: onPress, "data-testid": testID }, children);
   return {
+    Platform: { OS: 'android' },
     View: view,
     Pressable: view,
     Text: view,
@@ -35,6 +38,11 @@ vi.mock("react-native", async () => {
       timing: () => ({ start: (done?: () => void) => done?.() }),
     },
     StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
+    Easing: { bezier: () => (t: number) => t },
+    AccessibilityInfo: {
+      isReduceMotionEnabled: () => Promise.resolve(false),
+      addEventListener: () => ({ remove() {} }),
+    },
     useWindowDimensions: () => ({ height: 800, width: 400 }),
   };
 });
@@ -49,12 +57,16 @@ vi.mock("lucide-react-native", () =>
       "ArchiveRestore",
       "ChevronRight",
       "Copy",
+      "Folder",
       "GitBranch",
       "Link2",
+      "LogOut",
+      "Monitor",
       "Pencil",
       "Pin",
       "PinOff",
       "RefreshCw",
+      "Search",
       "Sparkles",
       "Trash2",
     ].map((name) => [name, () => null]),
@@ -82,7 +94,7 @@ vi.mock("@/session/SheetModal", () => ({
 vi.mock("@/session/SheetSurface", () => ({
   SheetSurface: ({ children }: { children: ReactNode }) => children,
 }));
-vi.mock("@/session/messageActions", () => ({ writeClipboardText: vi.fn() }));
+vi.mock("@/session/messageActions", () => ({ writeClipboardText: vi.fn(), formatModelShortLabel: (id: string) => id }));
 
 it("reopening the primary menu after info does not initialize an engine, but entering info does", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -100,6 +112,9 @@ it("reopening the primary menu after info does not initialize an engine, but ent
     usageReader: reader,
     onContextError: vi.fn(),
     onRefreshAccountUsage: vi.fn(),
+    onOpenSearch: vi.fn(),
+    onOpenSharing: vi.fn(),
+    onLeaveSharing: vi.fn(),
     session: {
       id: "a",
       model: "custom",
@@ -126,9 +141,28 @@ it("reopening the primary menu after info does not initialize an engine, but ent
     );
     expect(reader.getContextUsage).toHaveBeenCalledOnce();
     // Both surfaces stay mounted. The primary card is the first summary entry.
+    const search = host.querySelector('[data-testid="session.detailsSearch"]');
+    expect(search).not.toBeNull();
+    await act(async () => (search as HTMLElement).click());
+    expect(props.onOpenSearch).toHaveBeenCalledOnce();
+    const sharing = host.querySelector('[data-testid="session.sharingButton"]');
+    expect(sharing?.textContent).toBe('共享任务');
+    await act(async () => root.render(<SessionMenuSheet {...props} initialView="menu" session={{ ...props.session, deviceLinkDeviceId: sharedTaskHostPeer('shared', 'desktop') }} />));
+    expect(host.querySelector('[data-testid="session.sharingButton"]')).toBeNull();
+    const leave = host.querySelector('[data-testid="session.leaveSharingButton"]');
+    expect(leave?.textContent).toBe('退出共享任务');
+    await act(async () => (leave as HTMLElement).click());
+    expect(props.onLeaveSharing).toHaveBeenCalledOnce();
+    expect(props.onOpenSharing).not.toHaveBeenCalled();
+    await act(async () => root.render(<SessionMenuSheet {...props} initialView="menu" />));
     const summary = host.querySelector('[data-testid="session.menuUsageRow"]');
     expect(summary).not.toBeNull();
     await act(async () => (summary as HTMLElement).click());
+    expect(reader.getContextUsage).toHaveBeenCalledTimes(2);
+    await act(async () => root.render(<SessionMenuSheet {...props} messageOnly initialView="menu" />));
+    expect(host.querySelector('[data-testid="session.detailsSearch"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="session.menuUsageRow"]')).toBeNull();
+    expect(host.querySelector('[data-testid="session.infoLayer"]')).toBeNull();
     expect(reader.getContextUsage).toHaveBeenCalledTimes(2);
   } finally {
     act(() => root.unmount());

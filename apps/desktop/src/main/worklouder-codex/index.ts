@@ -4,6 +4,9 @@ import path from 'node:path';
 import { app, BrowserWindow, ipcMain, powerMonitor, shell, utilityProcess } from 'electron';
 
 import { createLogger } from '../logger.js';
+import { createWorkLouderSdkResolver, queryWorkLouderStoreInstallRoots } from './sdkResolver.js';
+import { WindowsMicroHost, WINDOWS_MICRO_NATIVE_ENTRY } from './WindowsMicroHost.js';
+import type { WorkLouderCodexChildLike } from './WorkLouderCodexHostClient.js';
 import {
   getDeepLinkMainWindow,
   openMainWindowSession,
@@ -46,10 +49,7 @@ import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererWindow,
 } from '../security/trustedAppRenderer.js';
-import {
-  WorkLouderCodexHostClient,
-  type WorkLouderSdkLocation,
-} from './WorkLouderCodexHostClient.js';
+import { WorkLouderCodexHostClient } from './WorkLouderCodexHostClient.js';
 import { WorkLouderCodexLightingController } from './WorkLouderCodexLightingController.js';
 import { WorkLouderAccessories, WorkLouderLayoutPreviewSession } from './accessories.js';
 import { createWorkLouderCodexSettingsIpc } from './settingsIpc.js';
@@ -82,52 +82,20 @@ import {
 const log = createLogger('worklouder-codex');
 const requireFromMain = createRequire(__filename);
 
-function resolveWorkLouderSdk(): WorkLouderSdkLocation | null {
-  try {
-    return {
-      entry: requireFromMain.resolve('@worklouder/device-kit-oai'),
-      source: 'cindy-package',
-    };
-  } catch {
-    // The official SDK is optional until Work Louder grants Cindy registry access.
-  }
+const resolveWorkLouderSdk = createWorkLouderSdkResolver({
+  platform: process.platform,
+  paths: path,
+  env: process.env,
+  exists: fs.existsSync,
+  resolvePackage: () => requireFromMain.resolve('@worklouder/device-kit-oai'),
+  queryStoreInstallRoots: queryWorkLouderStoreInstallRoots,
+  onChanged: () => hostClient.probe(),
+  nativeFallback: { entry: WINDOWS_MICRO_NATIVE_ENTRY, source: 'cindy-native' },
+});
 
-  for (const packageDir of listBundledWorkLouderSdkDirs()) {
-    if (fs.existsSync(path.join(packageDir, 'package.json'))) {
-      return { entry: packageDir, source: 'openai-app' };
-    }
-  }
-  return null;
-}
-
-function listBundledWorkLouderSdkDirs(): string[] {
-  const packageTail = path.join(
-    'resources',
-    'app.asar',
-    'node_modules',
-    '@worklouder',
-    'device-kit-oai',
-  );
-  if (process.platform === 'darwin') {
-    return ['ChatGPT.app', 'Codex.app'].map((appName) =>
-      path.join('/Applications', appName, 'Contents', packageTail),
-    );
-  }
-  if (process.platform === 'win32') {
-    const localAppData = process.env.LOCALAPPDATA;
-    const programFiles = process.env.ProgramFiles;
-    const roots = [localAppData, programFiles].filter((root): root is string => Boolean(root));
-    return roots.flatMap((root) =>
-      ['ChatGPT', 'Codex'].flatMap((appName) => [
-        path.join(root, appName, packageTail),
-        path.join(root, 'Programs', appName, packageTail),
-      ]),
-    );
-  }
-  return [];
-}
-
-function forkWorkLouderHost(_sdkEntry: string): ReturnType<typeof utilityProcess.fork> {
+function forkWorkLouderHost(sdkEntry: string): WorkLouderCodexChildLike {
+  if (process.platform === 'win32' && sdkEntry === WINDOWS_MICRO_NATIVE_ENTRY)
+    return new WindowsMicroHost();
   return utilityProcess.fork(path.join(__dirname, 'workLouderCodexHostProcess.js'), [], {
     serviceName: 'cindy-worklouder-codex',
   });

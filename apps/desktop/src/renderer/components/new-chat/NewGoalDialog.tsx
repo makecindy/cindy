@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * NewGoalDialog —— 从 composer 「+」菜单新建目标的弹窗(create 模式)。
  *
@@ -131,30 +132,25 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
           )}
           <div className="flex justify-end gap-2">
             <AlertDialog.Cancel asChild>
-              <button
-                type="button"
-                className="h-8 rounded-full border px-3 text-12 transition-colors hover:bg-[var(--surface-elevated)]"
-                style={{
-                  backgroundColor: 'var(--surface-elevated)',
-                  borderColor: 'var(--border-default)',
-                  color: 'var(--text-primary)',
-                }}
+              <Button variant="secondary" size="md" compact type="button"
                 disabled={saving}
               >
                 {t('goal.newGoalDialog.cancel')}
-              </button>
+              </Button>
             </AlertDialog.Cancel>
-            <button
+            <Button
+              variant="cta"
+              size="md"
+              compact
+              loading={saving}
               type="button"
-              className="h-8 rounded-full px-4 text-12 font-medium transition-opacity hover:opacity-85 disabled:opacity-45"
-              style={{ backgroundColor: 'var(--accent-cta-bg-pure)', color: 'var(--accent-pure-cta-fg)' }}
               disabled={saving || !trimmed}
               onClick={() => {
                 void save();
               }}
             >
-              {saving ? t('goal.newGoalDialog.starting') : t('goal.newGoalDialog.start')}
-            </button>
+              { t('goal.newGoalDialog.start')}
+            </Button>
           </div>
         </AlertDialog.Content>
       </AlertDialog.Portal>

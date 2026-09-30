@@ -249,7 +249,7 @@ describe('mobileRealtimeAudio', () => {
       expect(source).toContain("nextState !== 'background'");
       expect(source).toContain('voiceControllerSessionRef.current = null');
       expect(source).toContain('discardPendingPrewarm()');
-      expect(source).toContain("setAudioModeAsync({ allowsRecording: false })");
+      expect(source).not.toContain("setAudioModeAsync");
     }
     expect(newSessionSource).toContain('cancelVoiceForDeviceSwitch();');
     expect(existingSessionSource).toContain('cancelVoiceForAppBackground();');

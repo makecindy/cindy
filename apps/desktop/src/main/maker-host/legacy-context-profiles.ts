@@ -1,8 +1,8 @@
-import type { AgentKind, Catalog, Provider } from '@cindy/model-providers';
+import { isOpenAiSubscriptionProvider, type AgentKind, type Catalog, type Provider } from '@cindy/model-providers';
 
 /** Old GPT window presets remain in the runtime catalog for history/resume only. */
-export function isLegacyGptContextProfile(provider: Pick<Provider, 'id' | 'source'>, modelId: string): boolean {
-  return provider.source !== 'user' && provider.id === 'openai' &&
+export function isLegacyGptContextProfile(provider: Pick<Provider, 'id' | 'auth'>, modelId: string): boolean {
+  return isOpenAiSubscriptionProvider(provider) &&
     /^(?:chatgpt\/)?gpt-[^/]+\[1m\]$/.test(modelId);
 }
 
@@ -10,7 +10,7 @@ export function filterLegacyGptContextProfiles(catalog: Catalog): Catalog {
   return {
     ...catalog,
     providers: catalog.providers.map((provider) => {
-      if (provider.id !== 'openai' || provider.source === 'user') return provider;
+      if (!isOpenAiSubscriptionProvider(provider)) return provider;
       return {
         ...provider,
         models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [

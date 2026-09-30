@@ -47,6 +47,8 @@ export interface QuotaHoverCardSessionUsage {
 export interface QuotaHoverCardProps {
   /** Embedded settings surface shares content without a second card frame. */
   variant?: 'popover' | 'embedded';
+  /** The settings identity row already names this subscription and plan. */
+  hideIdentity?: boolean;
   account: UsageCardAccount;
   sessionUsage?: QuotaHoverCardSessionUsage | null;
   turnUsage?: QuotaHoverCardTurnUsage | null;
@@ -118,6 +120,7 @@ function WindowBlock({
   detail,
   breakdown,
   showAbsoluteReset = false,
+  compact = false,
   nowMs,
   paceNowMs,
   locale,
@@ -130,6 +133,7 @@ function WindowBlock({
   detail?: string;
   breakdown?: UsageCardWindow['breakdown'];
   showAbsoluteReset?: boolean;
+  compact?: boolean;
   nowMs: number;
   paceNowMs: number | null;
   locale: string | undefined;
@@ -164,40 +168,71 @@ function WindowBlock({
           nowMs: paceNowMs,
         });
   const paceLine = pace === null ? null : formatPaceLine(pace, t);
+  const titleNode = (
+    <div
+      id={titleId}
+      data-severity={severity}
+      title={compact ? title : undefined}
+      className={cn(
+        'font-medium tracking-[-0.005em]',
+        compact ? 'min-w-0 truncate text-13' : 'mb-2 text-14',
+        severity === 'crit' ? 'text-[var(--quota-bar-crit)]' : 'text-[var(--text-primary)]',
+      )}
+    >
+      {title}
+      {severityAnnouncement !== null ? (
+        // 告警不能只依赖颜色；标题与进度条共用对应级别的屏幕阅读器文案。
+        <span className="sr-only">，{severityAnnouncement}</span>
+      ) : null}
+    </div>
+  );
+  const bar = (
+    <QuotaBar
+      usedPercent={window.utilization}
+      showRemaining={showRemaining}
+      severity={severity}
+      aria-labelledby={titleId}
+      aria-valuetext={percentText}
+    />
+  );
+
+  if (compact) {
+    // 嵌入态(设置页)一行一个窗口:标题 | 进度条 | 百分比 | 重置倒计时,列宽由外层 grid 统一,
+    // 各行进度条左右对齐。明细(绝对重置时间 / 节奏 / breakdown)只在悬浮卡里展示。
+    return (
+      <section
+        data-testid="quota-window"
+        className="col-span-full grid grid-cols-subgrid items-center py-[7px] tabular-nums"
+      >
+        {titleNode}
+        {bar}
+        <span className="text-right font-medium text-[var(--text-primary)]">{percentText}</span>
+        <span
+          className="min-w-0 truncate text-right text-12 text-[var(--text-secondary)]"
+          title={resetCountdown ?? undefined}
+        >
+          {resetCountdown}
+        </span>
+      </section>
+    );
+  }
 
   return (
     <section data-testid="quota-window" className="px-4 pb-1 pt-2">
-      <div
-        id={titleId}
-        data-severity={severity}
-        className={cn(
-          'mb-2 text-14 font-medium tracking-[-0.005em]',
-          severity === 'crit' ? 'text-[var(--quota-bar-crit)]' : 'text-[var(--text-primary)]',
-        )}
-      >
-        {title}
-        {severityAnnouncement !== null ? (
-          // 告警不能只依赖颜色；标题与进度条共用对应级别的屏幕阅读器文案。
-          <span className="sr-only">，{severityAnnouncement}</span>
-        ) : null}
-      </div>
-      <QuotaBar
-        usedPercent={window.utilization}
-        showRemaining={showRemaining}
-        severity={severity}
-        aria-labelledby={titleId}
-        aria-valuetext={percentText}
-      />
-      <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
-        <span className="font-medium text-[var(--text-primary)]">{percentText}</span>
-        {resetCountdown !== null ? (
-          <span className="flex min-w-0 flex-col items-end text-right text-12 text-[var(--text-secondary)]">
-            <span>{resetCountdown}</span>
-            {showAbsoluteReset && resetAt !== null && (
-              <span>{t('quotaCard.resetAt', { at: resetAt })}</span>
-            )}
-          </span>
-        ) : null}
+      <div>
+        {titleNode}
+        {bar}
+        <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
+          <span className="font-medium text-[var(--text-primary)]">{percentText}</span>
+          {resetCountdown !== null ? (
+            <span className="flex min-w-0 flex-col items-end text-right text-12 text-[var(--text-secondary)]">
+              <span>{resetCountdown}</span>
+              {showAbsoluteReset && resetAt !== null && (
+                <span>{t('quotaCard.resetAt', { at: resetAt })}</span>
+              )}
+            </span>
+          ) : null}
+        </div>
       </div>
       {detail ? <div className="mt-1 text-12 text-[var(--text-secondary)]">{detail}</div> : null}
       {breakdown?.length ? (
@@ -401,6 +436,7 @@ function SessionUsageSection({
 /** 套餐、配额、任务合计与本轮明细按同一信息层级渲染；供应商差异只来自 account。 */
 export function QuotaHoverCard({
   variant = 'popover',
+  hideIdentity = false,
   account,
   sessionUsage = null,
   turnUsage = null,
@@ -410,6 +446,7 @@ export function QuotaHoverCard({
   nowMs = Date.now(),
 }: QuotaHoverCardProps) {
   const { t, i18n } = useTranslation();
+  const embedded = variant === 'embedded';
   // 测试可只注入 t；运行时再优先跟随应用当前语言格式化日期。
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
   const { title, planLabel, windows, details = [], notices = [], emptyText, updatedAt } = account;
@@ -419,6 +456,17 @@ export function QuotaHoverCard({
     paceNowMs !== null && nowMs - paceNowMs > STALE_AFTER_MS
       ? Math.floor((nowMs - paceNowMs) / 60_000)
       : null;
+  const windowBlocks = windows.map(({ key, ...displayWindow }) => (
+    <WindowBlock
+      key={key}
+      {...displayWindow}
+      compact={embedded}
+      nowMs={nowMs}
+      paceNowMs={paceNowMs}
+      locale={locale}
+      t={t}
+    />
+  ));
 
   return (
     <div
@@ -435,10 +483,13 @@ export function QuotaHoverCard({
         data-testid="quota-hover-card-scroll-content"
         role="region"
         aria-label={t('quotaCard.windowsRegionLabel')}
-        tabIndex={0}
-        className="min-h-0 overflow-y-auto pt-[6px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
+        tabIndex={embedded ? undefined : 0}
+        className={cn(
+          'min-h-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
+          !embedded && 'overflow-y-auto pt-[6px]',
+        )}
       >
-        {title ? (
+        {title && (!embedded || !hideIdentity) ? (
           <>
             <div className="flex items-center gap-2 px-4 pb-2 pt-3 text-12 text-[var(--text-secondary)]">
               <span className="min-w-0 break-words font-medium">{title}</span>
@@ -453,18 +504,20 @@ export function QuotaHoverCard({
             </div>
           </>
         ) : null}
-        {title && (windows.length > 0 || emptyText) ? <CardDivider /> : null}
-        {windows.map(({ key, ...displayWindow }) => (
-          <WindowBlock
-            key={key}
-            {...displayWindow}
-            showAbsoluteReset={variant === 'embedded'}
-            nowMs={nowMs}
-            paceNowMs={paceNowMs}
-            locale={locale}
-            t={t}
-          />
-        ))}
+        {!embedded && title && (windows.length > 0 || emptyText) ? <CardDivider /> : null}
+        {embedded && windowBlocks.length ? (
+          // 嵌入态各行是 subgrid,共用这里的四列:标题 | 进度条 | 百分比 | 重置倒计时。
+          // 窄宽度时标题与倒计时列可收缩截断(全文见 title),进度条最小 48px,只有百分比
+          // 保持完整宽度,整体不横向溢出。
+          <div
+            data-testid="quota-window-grid"
+            className="grid grid-cols-[minmax(0,max-content)_minmax(48px,1fr)_max-content_minmax(0,max-content)] gap-x-4 px-4 py-1"
+          >
+            {windowBlocks}
+          </div>
+        ) : (
+          windowBlocks
+        )}
         {emptyText ? (
           <div className="px-4 py-2 text-[var(--text-secondary)]">{emptyText}</div>
         ) : null}
@@ -486,8 +539,13 @@ export function QuotaHoverCard({
         ))}
         {details.length ? (
           <>
-            <CardDivider />
-            <section className="space-y-1 px-4 py-2 text-12 tabular-nums text-[var(--text-secondary)]">
+            {!embedded && <CardDivider />}
+            <section
+              className={cn(
+                'px-4 py-2 text-12 tabular-nums text-[var(--text-secondary)]',
+                embedded ? 'flex flex-wrap gap-x-3 gap-y-1' : 'space-y-1',
+              )}
+            >
               {details.map((detail, index) => (
                 <div key={index}>{detail}</div>
               ))}

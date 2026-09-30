@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * BoundSessionCard — 任务编辑表单里"持续会话已绑定"形态的展示卡片。
  *
@@ -54,34 +55,32 @@ export function BoundSessionCard({ sessionId, onUnbind, onOpen, reference }: Bou
         )}
       </span>
       {!unavailable && (
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          compact
+          tone="quiet"
           type="button"
           onClick={onOpen}
           title={t('scheduler.editor.runSession.card.open')}
-          className={cn(
-            'inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium',
-            'text-[var(--settings-btn-secondary-text)] hover:bg-[var(--surface-hover)]',
-            'transition-colors focus:outline-none',
-          )}
         >
           <ExternalLink size={12} strokeWidth={1.75} aria-hidden />
           {t('scheduler.editor.runSession.card.open')}
-        </button>
+        </Button>
       )}
       {onUnbind && (
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          compact
+          tone="quiet"
           type="button"
           onClick={onUnbind}
           title={t('scheduler.editor.runSession.card.unbind')}
-          className={cn(
-            'inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium',
-            'text-[var(--settings-btn-secondary-text)] hover:bg-[var(--surface-hover)]',
-            'transition-colors focus:outline-none',
-          )}
         >
           <Unlink size={12} strokeWidth={1.75} aria-hidden />
           {t('scheduler.editor.runSession.card.unbind')}
-        </button>
+        </Button>
       )}
     </div>
   );

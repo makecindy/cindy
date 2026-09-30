@@ -237,6 +237,8 @@ export function startLocalDiagnostics(): () => void {
   let stopped = false;
   let state = AppState.currentState;
   let lastTick = performance.now();
+  let lastWallTick = Date.now();
+  let lifecycleAt = lastTick;
   void hydrateDiagnostics().then(() => {
     if (!stopped)
       mobileDebugLog("info", "lifecycle", "app started", { appState: state });
@@ -245,6 +247,8 @@ export function startLocalDiagnostics(): () => void {
     if (next === "active") prune();
     state = next;
     lastTick = performance.now();
+    lastWallTick = Date.now();
+    lifecycleAt = lastTick;
     mobileDebugLog("info", "lifecycle", `app ${next}`);
     void flushDiagnostics().catch(() => {});
   });
@@ -254,8 +258,12 @@ export function startLocalDiagnostics(): () => void {
     if (state === "active" && now - lastTick > 3000)
       mobileDebugLog("warn", "lifecycle", "js stall", {
         elapsedMs: now - lastTick - 2000,
+        // A timer gap alone cannot distinguish busy JS from process suspension.
+        wallElapsedMs: Math.max(0, Date.now() - lastWallTick - 2000),
+        lifecycleElapsedMs: Math.max(0, now - lifecycleAt),
       });
     lastTick = now;
+    lastWallTick = Date.now();
     if (enabled)
       mobileDebugLog("debug", "performance", "render metrics", {
         markdown: getMobileMarkdownRenderMetrics(),
@@ -269,6 +277,7 @@ export function startLocalDiagnostics(): () => void {
       timer = undefined;
     } else if (timer === undefined) {
       lastTick = performance.now();
+      lastWallTick = Date.now();
       timer = setInterval(tick, 2000);
     }
   };

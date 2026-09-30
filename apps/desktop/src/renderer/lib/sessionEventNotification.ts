@@ -1,13 +1,46 @@
 import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
 import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
+import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 export type SessionEventNotificationKind = 'done' | 'error' | 'needs-reply';
+
+/** Find a session in the snapshots available to a notification owner. */
+export function findSessionNotificationSession<T extends { id: string; title?: unknown }>(
+  sessionId: string,
+  sources: readonly (readonly T[])[],
+): T | null {
+  let fallback: T | null = null;
+  for (const source of sources) {
+    const session = source.find((candidate) => candidate.id === sessionId);
+    if (!session) continue;
+    fallback ??= session;
+
+    // A stale visible snapshot can still contain the session with its initial
+    // placeholder title. Keep looking for a complete or remote snapshot with
+    // a title that can be shown in the notification.
+    if (
+      typeof session.title === 'string'
+      && session.title.trim()
+      && !isDefaultDraftSessionTitle(session.title)
+    ) {
+      return session;
+    }
+  }
+  return fallback;
+}
+
+/**
+ * Returned instead of a title for a Bot's hidden group lane. Group lanes never
+ * reach OS / external notifications (docs/product-rules/bot-group-chat.md §3);
+ * the group chat itself shows the lane's pending confirmation.
+ */
+export const BOT_GROUP_LANE_SESSION: unique symbol = Symbol('bot-group-lane-session');
 
 /** Resolve Bot-owned tasks omitted from the ordinary desktop session list. */
 export async function botOwnedSessionNotificationTitle(
   sessionId: string,
-): Promise<string | null> {
+): Promise<string | null | typeof BOT_GROUP_LANE_SESSION> {
   const bots = await window.electronAPI.localDb.bots.list().catch(() => []);
   if (!Array.isArray(bots)) return null;
   for (const candidate of bots) {
@@ -18,8 +51,9 @@ export async function botOwnedSessionNotificationTitle(
       !!row
       && typeof row === 'object'
       && (row as { id?: unknown }).id === sessionId,
-    ) as { title?: unknown } | undefined;
+    ) as { title?: unknown; role?: unknown; kind?: unknown } | undefined;
     if (!session) continue;
+    if (session.role === 'group' || session.kind === 'group') return BOT_GROUP_LANE_SESSION;
     const sessionTitle = typeof session.title === 'string' ? session.title.trim() : '';
     return sessionTitle && sessionTitle !== bot.name
       ? `${bot.name} · ${sessionTitle}`

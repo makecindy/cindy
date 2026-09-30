@@ -297,7 +297,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
       'notification:clear-session-attention',
       ['rs1', 'passive'],
     );
-    removeRemoteSessionActivityEntry('rs1');
+    removeRemoteSessionActivityEntry('rs1', 'dev1');
   });
 
   it('aborts in-flight retries when new unread arrives, then re-queues as passive', async () => {
@@ -331,7 +331,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
         'notification:clear-session-attention',
         ['rs1', 'passive'],
       );
-      removeRemoteSessionActivityEntry('rs1');
+      removeRemoteSessionActivityEntry('rs1', 'dev1');
     } finally {
       vi.useRealTimers();
     }
@@ -382,7 +382,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
       ['rs1', 'explicit'],
     );
 
-    removeRemoteSessionActivityEntry('rs1');
+    removeRemoteSessionActivityEntry('rs1', 'dev1');
   });
 
   it('a sync already in flight at enqueue time does not release the receipt', () => {

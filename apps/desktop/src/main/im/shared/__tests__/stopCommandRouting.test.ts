@@ -97,7 +97,7 @@ describe('messageHandler !stop routing', () => {
   let consumePendingOpenerAsCard: ReturnType<typeof vi.fn>;
   let deliver: (event: IMMessageEvent) => void;
 
-  function wire(threadScoped: boolean): void {
+  function wire(threadScoped: boolean, notificationSessionId?: string): void {
     stopActiveTurn = vi.fn(async () => ({ stopped: true, droppedQueued: 0 }));
     runAgentTurn = vi.fn(async () => undefined);
     handleSlashCommand = vi.fn(async () => true);
@@ -120,6 +120,10 @@ describe('messageHandler !stop routing', () => {
 
     const adapter = {
       channel: 'slack',
+      ...(notificationSessionId ? {
+        resolveNotificationReply: async () => notificationSessionId,
+        notificationReplyText: { unavailable: 'unavailable', commands: 'topic commands' },
+      } : {}),
       im,
       output: { kind: 'rich-card', im },
       ui: slackUi,
@@ -139,6 +143,24 @@ describe('messageHandler !stop routing', () => {
     exitControl('bot-ctx', 'U123456789');
     activateImAccountBoundary();
     wire(true);
+  });
+
+  it('routes topic !stop to the original session even while /ctr is open elsewhere', async () => {
+    wire(false, 'original-session');
+    enterControl('bot-ctx', 'U123456789');
+    deliver(makeEvent({ replyThread: { rootMessageId: 'om_root', threadId: 'omt_topic' } }));
+    await vi.waitFor(() => expect(stopActiveTurn).toHaveBeenCalledWith({
+      botContextId: 'bot-ctx', userId: 'U123456789', scopeKey: 'om_root', notificationSessionId: 'original-session',
+    }));
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it('keeps slash commands in linked topics from changing the main conversation', async () => {
+    wire(false, 'original-session');
+    deliver(makeEvent({ text: '/new', replyThread: { rootMessageId: 'om_root', threadId: 'omt_topic' } }));
+    await vi.waitFor(() => expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', 'topic commands', { threadTs: 'om_root' }));
+    expect(handleSlashCommand).not.toHaveBeenCalled();
+    expect(runAgentTurn).not.toHaveBeenCalled();
   });
 
   it('silently drops messages delivered after logout closes the account boundary', async () => {

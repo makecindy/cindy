@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Text } from '@/components/AppText';
 import { getCachedReduceMotionEnabled, useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { useThemedStyles, type ThemeColors } from '@/theme';
-import { radius, typeScale } from '@/theme/tokens';
+import { lineHeight, motionDuration, radius, typeScale } from '@/theme/tokens';
 import { MOBILE_COMPOSER_CONTROL_SIZE } from '@/session/MobileComposerInputRow';
 
 // 旧架构 Android 需要显式开启 LayoutAnimation;新架构(Fabric)下该开关是 no-op。
@@ -52,8 +52,8 @@ export interface MobileVoiceRecordingTimer {
 /**
  * 录音计时状态。counting 翻 true 时从 0 重新计时,expanded 翻 false 清零。
  * 同时在展开态翻转与宽度换档的下一帧布局注册一次 LayoutAnimation
- * (一次性瞬态、用户触发、有明确结束,符合动效红线;240ms 对齐桌面胶囊
- * 展开时长),让胶囊展开/收回与左邻按钮的让位在同一段运动里完成。
+ * (一次性瞬态、用户触发、有明确结束,符合动效红线;时长取尺寸变化档
+ * motionDuration.base),让胶囊展开/收回与左邻按钮的让位在同一段运动里完成。
  */
 export function useMobileVoiceRecordingTimer(
   { expanded, counting }: MobileVoiceRecordingTimerInput,
@@ -86,8 +86,10 @@ export function useMobileVoiceRecordingTimer(
     // pillTransition = undefined 的行为。按 useReduceMotion 的约定,null
     // (首帧未查到)也按不播处理——缓存模块加载即预热,实际命中窗口极小。
     if (getCachedReduceMotionEnabled() === false) {
+      // 尺寸变化档 motionDuration.base(§14.4);LayoutAnimation 只接受预设曲线,
+      // easeInEaseOut 是与 motionEasing.move 最接近的预设。
       LayoutAnimation.configureNext({
-        duration: 240,
+        duration: motionDuration.base,
         update: { type: 'easeInEaseOut' },
       });
     }
@@ -159,6 +161,7 @@ const makeVoiceRecordingPillStyles = (colors: ThemeColors) => ({
   timeText: {
     color: colors.textPrimary,
     fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
     fontVariant: ['tabular-nums' as const],
   },
 });

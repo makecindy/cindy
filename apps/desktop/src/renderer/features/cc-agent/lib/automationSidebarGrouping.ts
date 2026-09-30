@@ -214,11 +214,17 @@ export interface AutomationGroupChildViewOptions {
   /** 轴 1(文件夹开/关)的收起态。收起时只渲染 alertSessionIds 命中的运行,见下方 ⚠️。 */
   collapsed?: boolean;
   /**
-   * 收起态仍要保留可见的**未处理告警**运行 id,来源是
+   * 收起态仍要保留可见的错误告警与待回复运行 id。错误来源是
    * `sidebar/projectCollapsedAttention.ts` 的 `resolveCollapsedAttention().errorSessionIds`
-   * —— 与组头红点、项目折叠头红点同一份判据。
+   * —— 与组头红点、项目折叠头红点同一份判据;待回复由组件按本地/远程活动补入。
    */
   alertSessionIds?: ReadonlySet<string>;
+  /**
+   * 展开态折叠的追加豁免集合(只影响折叠),语义同 SessionEntryList 的同名 prop:
+   * 父层把 device-link 远程活动镜像并进来,保证项目行 / 对话组 / 设备段头聚合灯
+   * 为之点亮的远程子运行不会藏在「显示全部」后(review P2)。
+   */
+  foldExemptSessionIds?: ReadonlySet<string>;
 }
 
 /**
@@ -235,7 +241,8 @@ export interface AutomationGroupChildViewOptions {
  * 成行。原因是「组头只代表最新一条」+「收起时子行整片不渲染」叠起来会藏掉告警 ——
  * 项目折叠头按全部子任务汇总出红点,用户展开项目却在任何一行上都看不到它
  * (实测:一条被 App 重启打断、turn 从未收尾的定时任务运行)。告警行与组头红点同源
- * (alertSessionIds ← resolveCollapsedAttention),所以不可能出现「汇总说有、列表没有」。
+ * (错误 id ← resolveCollapsedAttention),待回复运行也由组件并入 alertSessionIds,
+ * 避免上层展开后提示消失。
  * 这也是折叠上限里「需关注的条目始终显示」那条不变量本来就该覆盖的路径。
  * 收起态刻意不套 24h / active 豁免:此时列表的语义是"只列要你处理的",
  * 把非告警运行放进来会让收起形同失效。
@@ -281,7 +288,17 @@ export function getAutomationGroupChildView(
     const frozenSessions = options.frozenVisibleSessionIds
       .map((sessionId) => byId.get(sessionId))
       .filter((session): session is Session => Boolean(session));
-    return withoutOverflow(frozenSessions);
+    // 冻结只固定已点选布局，不能藏住后来变为运行/未读的本地或远程子运行。
+    const visibleIds = new Set(frozenSessions.map((session) => session.id));
+    const visibleSessions = [
+      ...frozenSessions,
+      ...allRuns.filter((session) => !visibleIds.has(session.id) &&
+        (options.notifications.has(session.id) ||
+          options.runningSessionIds?.has(session.id) ||
+          options.foldExemptSessionIds?.has(session.id))),
+    ];
+    const hiddenCount = allRuns.length - visibleSessions.length;
+    return { visibleSessions, isOverflowing: hiddenCount > 0, totalCount: allRuns.length, hiddenCount };
   }
 
   // 默认展开态:全部运行套用普通对话同款折叠,每条(含被组头代表的最新一条)各自成行。
@@ -296,7 +313,8 @@ export function getAutomationGroupChildView(
     isActiveEntry: (session) => session.id === options.activeSessionId,
     hasAttentionEntry: (session) =>
       options.notifications.has(session.id) ||
-      (options.runningSessionIds?.has(session.id) ?? false),
+      (options.runningSessionIds?.has(session.id) ?? false) ||
+      (options.foldExemptSessionIds?.has(session.id) ?? false),
   });
   return {
     visibleSessions: [...view.visibleEntries],

@@ -880,7 +880,7 @@ describe('mobileRealtimeAsrProvider', () => {
       reason: 'Received bad response code from server: 403.',
     });
 
-    await expect(started).rejects.toThrow('Cindy 语音会话已失效或没有权限（WebSocket 403）。请确认登录状态后重试。');
+    await expect(started).rejects.toThrow('Cindy 语音服务的登录已失效或没有权限，请确认登录状态后重试（状态码 403）。');
   });
 
   it('redacts the synced voice key from Volcengine websocket errors', async () => {

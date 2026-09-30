@@ -51,6 +51,12 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
   单条；未命中或需要全量实时回查时用 `ghost_list`。两者都返回完整 `CindyGhostInfo`
   （id/name/command/recall/setup/tools/manual），不存在 `ghost_list → ghost_info` 的
   固定补查链。
+- **Manual-only 插件也可被发现。** 非空 `manual.items` 不依赖 `tools`；这类插件的
+  `tools` 返回空数组，通过 `ghost_manual` 按需读取，不启动插件运行时，也不因此取得
+  `ghost_call` 能力。读取仍按插件存在、账号可用、工作目录停用、启用状态依次检查；
+  未声明手册时返回 `GHOST_NOT_FOUND`。无工具且无手册的插件仍隐藏。
+  实现与回归见 [ghost.ts](../apps/desktop/src/main/mcp-integrations/ghost.ts) 和
+  [ghostWorkdirGate.test.ts](../apps/desktop/src/main/mcp-integrations/__tests__/ghostWorkdirGate.test.ts)。
 - **取得完整 info 后有两条并行路径。** `ghost_manual` 展开根索引、`MANUAL.md` 和任意
   深度 Markdown；二级分派插件则通过
   `ghost_call({ ghost_id, tool: "list_tools", args: { category } })` 调用自己声明的顶层
@@ -64,6 +70,12 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 
 ## 3. 花名册（roster）
 
+普通任务可调用 `connect_account({kind:"plugin", id:ghost_id})`，由 Host 复用配置卡等待连接，
+不必先触发插件业务调用。等待受当前任务取消、插件可见性及原配置卡版本校验约束。
+伙伴继续使用原持久授权卡与配置策略；Host 账号入口仍只用于伙伴。显式 `reauthorize`
+只呈现已声明的 OAuth、Secret 或连接配置动作，不删除现存账号。没有 Host 配置动作的插件应使用其
+设置页或手册中的登录工具；空的配置就绪状态不能作为平台账号已登录的证据。
+
 ### 3.1 内容与口径
 
 - 每条 = `{id, name, command, recall}`；`recall = whenToUse ?? description`。
@@ -73,7 +85,7 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 - 序列化前逐字段折叠空白（`replace(/\s+/g, " ")` + trim）并防御截断
   （name ≤ 64、command ≤ 32、recall ≤ 300）；条目按 id 排序；最多 16 条、
   总预算 8000 字符。
-- 进入花名册的过滤条件：已启用 + 账号可用 + 有工具 + 当前工作目录未停用
+- 进入花名册的过滤条件：已启用的 chip 插件 + 账号可用 +（有工具或非空 `manual.items`）+ 当前工作目录未停用
   （`visibleChipGhosts`，`apps/desktop/src/main/mcp-integrations/ghost.ts`）。
 
 ### 3.2 注入位置（vendor-neutral，一份 formatter 两处消费）
@@ -222,3 +234,11 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
   `--append-system-prompt`）；Pi 的 host 侧装配在
   `apps/desktop/src/main/maker-host/pi-host.ts`（buildPiAgent /
   composePiSystemPrompt）
+
+### 任务内授权指引
+
+Desktop 的 Claude/Codex/Pi Host 追加同一静态授权指引，复用现有发现及市场安装工具，
+不改安装权限或来源策略。已有登录态时，用户明确要求更新授权仍调用 `reauthorize:true`；
+私密值只填原卡片，不进入工具参数或对话。先等待 Host 完成，再以最小只读调用验证平台权限。
+提示词保持原 system 前缀，无设备 ID、凭据、时间戳或动态账号状态；详见
+[远程授权契约](remote-plugin-oauth.md) 的兼容性与缓存影响。

@@ -1,0 +1,2358 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Cindy · 已实现界面确认</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          sans-serif;
+        background: #e5e6e3;
+        color: #353b37;
+      }
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:disabled {
+        cursor: default;
+        opacity: 0.4;
+      }
+      button:focus-visible,
+      select:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible {
+        outline: 2px solid #417cdd;
+        outline-offset: 2px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 285px 393px 285px;
+        justify-content: center;
+        align-items: start;
+        gap: 38px;
+        padding: 28px 24px;
+      }
+      .panel {
+        padding-top: 18px;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 2px;
+        color: #717a71;
+      }
+      h1 {
+        font-size: 27px;
+        font-weight: 600;
+        line-height: 1.4;
+        margin: 12px 0 8px;
+      }
+      p {
+        line-height: 1.7;
+      }
+      .intro {
+        font-size: 12px;
+        color: #778075;
+        margin: 0 0 22px;
+      }
+      .controls {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 7px;
+      }
+      .controls button {
+        border: 1px solid #cbd1c7;
+        border-radius: 9px;
+        padding: 10px 5px;
+        background: transparent;
+        font-size: 12px;
+        color: inherit;
+        min-height: 42px;
+      }
+      .controls button[aria-pressed="true"] {
+        background: #39413b;
+        color: white;
+        border-color: #39413b;
+      }
+      .config {
+        display: flex;
+        gap: 8px;
+        margin: 16px 0;
+      }
+      .config select {
+        width: 50%;
+        border: 1px solid #cbd1c7;
+        border-radius: 9px;
+        background: #edf0e9;
+        padding: 9px;
+        font-size: 12px;
+        color: inherit;
+      }
+      .note {
+        font-size: 12px;
+        color: #71796e;
+        border-top: 1px solid #cbd1c7;
+        margin-top: 22px;
+        padding-top: 17px;
+      }
+      .note strong {
+        color: #434b41;
+        font-weight: 550;
+      }
+      .rule {
+        padding: 14px 0;
+        border-bottom: 1px solid #ccd2c8;
+        font-size: 12px;
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .rule b {
+        font-weight: 550;
+      }
+      .state {
+        font-size: 16px;
+        margin: 20px 0 8px;
+      }
+      .detail {
+        font-size: 12px;
+        color: #70786d;
+        line-height: 1.8;
+      }
+      .text-inspector {
+        margin-top: 20px;
+        padding-top: 18px;
+        border-top: 1px solid #ccd2c8;
+      }
+      .text-inspector h3 {
+        font-size: 13px;
+        font-weight: 550;
+      }
+      .text-inspector p {
+        white-space: pre-wrap;
+        font-size: 13px;
+        color: #555e51;
+        word-break: break-word;
+      }
+      .text-inspector small {
+        font-size: 11px;
+        color: #7b8376;
+      }
+      .phone {
+        width: 393px;
+        height: min(852px, calc(100dvh - 56px));
+        min-height: 600px;
+        border: 6px solid #fff;
+        border-radius: 42px;
+        overflow: hidden;
+        background: var(--surface);
+        color: var(--textPrimary);
+        box-shadow: 0 14px 60px #25322012;
+        position: relative;
+        display: flex;
+        flex-direction: column;
+      }
+      .status {
+        height: 48px;
+        flex-shrink: 0;
+        padding: 13px 26px 0;
+        display: flex;
+        justify-content: space-between;
+        font-weight: 600;
+        font-size: 14px;
+      }
+      .status-right {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .status-right svg {
+        width: 16px;
+        height: 16px;
+      }
+      .battery {
+        background: var(--textPrimary);
+        color: var(--surface);
+        border-radius: 4px;
+        padding: 1px 4px;
+        font-size: 11px;
+      }
+      .ico {
+        width: 18px;
+        height: 18px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.6;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        flex-shrink: 0;
+      }
+      .top {
+        height: 60px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 4px 13px;
+        flex-shrink: 0;
+      }
+      .chrome {
+        background: var(--surfaceElevated);
+        border: 1px solid var(--border);
+        height: 43px;
+        border-radius: 9999px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--textPrimary);
+      }
+      .hamburger {
+        width: 44px;
+      }
+      .device-name {
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        overflow: hidden;
+        flex: 1;
+        font-size: 17px;
+        font-weight: 600;
+        min-width: 0;
+      }
+      .tools {
+        gap: 16px;
+        padding: 0 14px;
+      }
+      .chrome .ico {
+        width: 22px;
+        height: 22px;
+      }
+      .search-wrap {
+        padding: 7px 15px 8px;
+        flex-shrink: 0;
+      }
+      .search {
+        border: 1px solid var(--border);
+        border-radius: 9999px;
+        min-height: 44px;
+        padding: 0 4px 0 16px;
+        background: var(--surfaceElevated);
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        color: var(--textSecondary);
+      }
+      .search input {
+        min-width: 0;
+        flex: 1;
+        width: 100%;
+        font-size: 16px;
+        border: 0;
+        background: none;
+        color: var(--textPrimary);
+        outline: none;
+        padding: 8px 0;
+      }
+      .search input::placeholder {
+        color: var(--textTertiary);
+      }
+      .icon-button {
+        border: 0;
+        background: none;
+        color: inherit;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        padding: 0;
+        flex-shrink: 0;
+      }
+      .dot {
+        width: 6px;
+        height: 6px;
+        background: var(--statusReady);
+        border-radius: 50%;
+        display: inline-block;
+      }
+      .filter-dot {
+        position: absolute;
+        right: 7px;
+        top: 7px;
+        background: var(--statusAccent);
+      }
+      .scroller {
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: none;
+        flex: 1;
+        padding-bottom: 112px;
+      }
+      .scroller::-webkit-scrollbar {
+        display: none;
+      }
+      .folder {
+        border: 0;
+        border-block: 1px solid var(--border);
+        background: var(--surfaceListExpanded);
+        color: inherit;
+        display: flex;
+        width: 100%;
+        align-items: center;
+        gap: 12px;
+        height: 56px;
+        padding: 0 16px;
+        text-align: left;
+      }
+      .folder .ico {
+        width: 22px;
+        height: 22px;
+      }
+      .folder strong {
+        flex: 1;
+        font-size: 18px;
+        font-weight: 600;
+      }
+      .folder small {
+        font-size: 12px;
+        color: var(--textTertiary);
+      }
+      .session-row {
+        display: flex;
+        gap: 12px;
+        height: 78px;
+        width: 100%;
+        padding: 0 0 0 28px;
+        text-align: left;
+        border: 0;
+        background: var(--surface);
+        color: inherit;
+      }
+      .session-mark {
+        width: 24px;
+        flex-shrink: 0;
+        padding-top: 22px;
+        color: var(--textTertiary);
+      }
+      .session-body {
+        flex: 1;
+        min-width: 0;
+        padding: 8px 16px 8px 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .session-title {
+        display: flex;
+        gap: 8px;
+        height: 30px;
+        align-items: center;
+      }
+      .session-title strong {
+        font-size: 18px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        flex: 1;
+      }
+      .session-title time {
+        font-size: 13px;
+        color: var(--textTertiary);
+        flex-shrink: 0;
+      }
+      .session-preview {
+        font-size: 15px;
+        line-height: 26px;
+        color: var(--textSecondary);
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        overflow: hidden;
+      }
+      .suggestions {
+        padding: 32px 24px 24px;
+      }
+      .connection {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+      .caption {
+        font-size: 12px;
+        line-height: 18px;
+        color: var(--textSecondary);
+      }
+      .suggestions h2 {
+        white-space: pre-line;
+        font-size: 24px;
+        line-height: 30px;
+        font-weight: 500;
+        margin: 0;
+      }
+      .suggestions.footer h2 {
+        font-size: 20px;
+        line-height: 26px;
+      }
+      .copy {
+        font-size: 16px;
+        line-height: 22px;
+        color: var(--textSecondary);
+        margin: 8px 0 0;
+      }
+      .primary {
+        width: 100%;
+        border: 1px solid var(--border);
+        background: var(--cta);
+        color: var(--ctaText);
+        border-radius: 9999px;
+        min-height: 44px;
+        padding: 0 16px;
+        font-size: 16px;
+        font-weight: 500;
+        margin-top: 24px;
+      }
+      .suggest-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 16px;
+        gap: 4px;
+      }
+      .shuffle {
+        display: flex;
+        gap: 4px;
+        align-items: center;
+        min-height: 44px;
+        padding: 0 8px;
+        background: none;
+        border: 0;
+        flex-shrink: 0;
+      }
+      .shuffle .ico {
+        width: 14px;
+        height: 14px;
+        color: var(--textSecondary);
+      }
+      .suggest-row {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        gap: 12px;
+        padding: 16px 0;
+        min-height: 44px;
+        border: 0;
+        border-bottom: 1px solid var(--border);
+        background: none;
+        color: var(--textSecondary);
+        text-align: left;
+      }
+      .suggest-row .words {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .suggest-row strong {
+        font-size: 16px;
+        line-height: 22px;
+        font-weight: 500;
+        color: var(--textPrimary);
+      }
+      .suggest-row .chev {
+        width: 16px;
+        height: 16px;
+        color: var(--textTertiary);
+      }
+      .footnote {
+        font-size: 12px;
+        line-height: 18px;
+        text-align: center;
+        color: var(--textTertiary);
+        margin: 24px 0 0;
+      }
+      .fab {
+        width: 52px;
+        height: 52px;
+        border: 0;
+        border-radius: 50%;
+        background: var(--cta);
+        color: var(--ctaText);
+        position: absolute;
+        bottom: 64px;
+        right: 18px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .fab .ico {
+        width: 26px;
+        height: 26px;
+      }
+      .homebar {
+        position: absolute;
+        bottom: 8px;
+        height: 5px;
+        width: 125px;
+        border-radius: 9999px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--textPrimary);
+        pointer-events: none;
+      }
+      .empty-original {
+        margin: 32px 0 0;
+        min-height: 164px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        text-align: center;
+        padding: 16px;
+      }
+      .empty-original h3 {
+        font-size: 16px;
+        font-weight: 500;
+        margin: 0 0 8px;
+      }
+      .empty-original p {
+        font-size: 16px;
+        line-height: 22px;
+        color: var(--textSecondary);
+        margin: 0;
+      }
+      .home {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+      }
+      .new-page {
+        position: absolute;
+        inset: 48px 0 0;
+        background: var(--surface);
+        display: flex;
+        flex-direction: column;
+        padding: 0 16px 30px;
+        z-index: 3;
+      }
+      .new-top {
+        min-height: 62px;
+        display: flex;
+        align-items: center;
+      }
+      .back {
+        border: 0;
+        background: none;
+        color: var(--textPrimary);
+        width: 44px;
+        height: 44px;
+        display: grid;
+        place-items: center;
+      }
+      .new-bottom {
+        margin-top: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        max-height: calc(100% - 62px);
+        overflow-y: auto;
+      }
+      .selectors {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        padding: 0 8px;
+      }
+      .selector {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        min-height: 42px;
+        font-size: 16px;
+        color: var(--textTertiary);
+      }
+      .composer {
+        background: var(--surfaceElevated);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 10px 12px 6px;
+      }
+      .composer textarea {
+        display: block;
+        width: 100%;
+        resize: none;
+        min-height: 100px;
+        max-height: 230px;
+        border: 0;
+        outline: none;
+        color: var(--textPrimary);
+        font-size: 16px;
+        line-height: 24px;
+        background: none;
+      }
+      .composer textarea::placeholder {
+        color: var(--textTertiary);
+      }
+      .composer-tools {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--textSecondary);
+        min-height: 44px;
+        font-size: 13px;
+      }
+      .model {
+        flex: 1;
+      }
+      .send {
+        width: 36px;
+        height: 36px;
+        border: 0;
+        border-radius: 50%;
+        background: var(--cta);
+        color: var(--ctaText);
+        display: grid;
+        place-items: center;
+      }
+      .overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 4;
+        background: #00000012;
+      }
+      .menu {
+        position: absolute;
+        right: 15px;
+        top: 153px;
+        width: 260px;
+        max-height: calc(100% - 185px);
+        overflow-y: auto;
+        background: var(--surfaceElevated);
+        border-radius: 12px;
+        box-shadow: 0 12px 50px #0002;
+        color: var(--textPrimary);
+        padding: 8px 0;
+      }
+      .menu-head {
+        display: flex;
+        justify-content: space-between;
+        padding: 6px 14px;
+        font-size: 12px;
+        color: var(--textTertiary);
+      }
+      .menu-head button {
+        border: 0;
+        background: none;
+        color: inherit;
+      }
+      .menu-group {
+        border-top: 1px solid var(--border);
+        padding: 8px 0;
+      }
+      .menu-group h4 {
+        font-size: 12px;
+        color: var(--textTertiary);
+        font-weight: 400;
+        margin: 0 16px 6px;
+      }
+      .menu-option {
+        width: 100%;
+        border: 0;
+        background: none;
+        color: inherit;
+        display: flex;
+        text-align: left;
+        gap: 10px;
+        font-size: 16px;
+        min-height: 44px;
+        align-items: center;
+        padding: 8px 16px;
+      }
+      .menu-option span:first-child {
+        width: 18px;
+      }
+      .toast {
+        position: absolute;
+        bottom: 32px;
+        left: 16px;
+        right: 16px;
+        background: var(--cta);
+        color: var(--ctaText);
+        border-radius: 12px;
+        padding: 14px;
+        font-size: 13px;
+        line-height: 1.6;
+        z-index: 7;
+      }
+      .status-note {
+        padding: 8px 16px;
+        color: var(--textSecondary);
+        font-size: 12px;
+      }
+      .small-note {
+        font-size: 11px;
+        color: #7b8376;
+        margin: 12px 0 0;
+      }
+      .jump {
+        border: 0;
+        background: none;
+        color: #4e6251;
+        font-size: 12px;
+        padding: 10px 0;
+      }
+      .preview-result {
+        background: #dce3d7;
+        padding: 12px;
+        border-radius: 8px;
+        font-size: 12px;
+        line-height: 1.7;
+        white-space: pre-wrap;
+      }
+      @media (max-width: 1080px) {
+        .layout {
+          grid-template-columns: 260px 393px;
+          gap: 25px;
+        }
+        .inspect {
+          grid-column: 1 / -1;
+          max-width: 680px;
+        }
+        .phone {
+          height: 852px;
+          max-height: none;
+        }
+        .panel {
+          padding-top: 0;
+        }
+      }
+      @media (max-width: 720px) {
+        .layout {
+          display: flex;
+          flex-direction: column;
+          padding: 12px 0;
+          align-items: center;
+          gap: 14px;
+        }
+        .panel {
+          padding: 0 16px;
+          width: 100%;
+          max-width: 430px;
+        }
+        .intro,
+        .note {
+          display: none;
+        }
+        .controls {
+          grid-template-columns: repeat(4, 1fr);
+        }
+        h1 {
+          font-size: 20px;
+        }
+        .config {
+          margin: 10px 0;
+        }
+        .phone {
+          border: 0;
+          border-radius: 0;
+          box-shadow: none;
+          width: 100%;
+          max-width: 430px;
+          height: 780px;
+          min-height: 0;
+        }
+        .inspect {
+          padding: 8px 18px;
+          max-width: 430px;
+        }
+        .homebar {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="panel">
+        <div class="eyebrow">CINDY · IMPLEMENTATION PREVIEW</div>
+        <h1>确认已实现的界面</h1>
+        <p class="intro">
+          PR #4414 · 129508571 的 HTML
+          还原。文案和推荐规则来自源码；手机框是样例数据预览，非原生运行截图。
+        </p>
+        <div class="controls" id="scenarios"></div>
+        <div class="config">
+          <select id="language" aria-label="预览语言">
+            <option value="zh-CN">简体中文</option>
+            <option value="zh-TW">繁體中文</option>
+            <option value="en">English</option>
+            <option value="ja">日本語</option>
+            <option value="ko">한국어</option></select
+          ><select id="theme" aria-label="预览主题">
+            <option value="light">浅色</option>
+            <option value="dark">深色</option>
+          </select>
+        </div>
+        <button class="jump" id="scroll-bottom">↓ 查看列表底部</button>
+        <div class="note">
+          <strong>本次核对范围</strong>
+          <p>完整空态、列表底部推荐、换一组、点击预填、编辑与模拟发送。</p>
+          <strong>保持真实边界</strong>
+          <p>
+            任务和设备数据为样例。原生筛选菜单使用 HTML
+            近似展示；新建页的设备、Agent、模型显示为示例，不模拟授权或真实执行。
+          </p>
+        </div>
+      </aside>
+      <main class="phone" id="phone">
+        <div class="status">
+          <span>8:42</span>
+          <div class="status-right">
+            <svg viewBox="0 0 20 16" fill="currentColor">
+              <rect x="0" y="10" width="3" height="6" rx="1" />
+              <rect x="5" y="7" width="3" height="9" rx="1" />
+              <rect x="10" y="4" width="3" height="12" rx="1" />
+              <rect x="15" width="3" height="16" rx="1" /></svg
+            ><span class="battery">78</span>
+          </div>
+        </div>
+        <div class="home" id="home">
+          <header class="top">
+            <div
+              class="chrome hamburger"
+              title="现有导航入口，非本次变更"
+              data-icon="menu"
+            ></div>
+            <div class="device-name">Example MacBook ⌄</div>
+            <div class="chrome tools">
+              <span data-icon="monitor"></span><span>•••</span>
+            </div>
+          </header>
+          <div class="search-wrap">
+            <div class="search">
+              <span data-icon="search"></span
+              ><input id="query" aria-label="搜索标题或内容" /><button
+                id="clear"
+                class="icon-button"
+                aria-label="清空搜索"
+                hidden
+              >
+                ×</button
+              ><button
+                id="filter"
+                class="icon-button"
+                aria-label="搜索筛选"
+                aria-expanded="false"
+              >
+                <span data-icon="sliders"></span
+                ><i id="filter-dot" class="dot filter-dot" hidden></i>
+              </button>
+            </div>
+          </div>
+          <div class="status-note" id="status-note" hidden></div>
+          <div class="scroller" id="scroller">
+            <div id="sessions"></div>
+            <section id="recommendations"></section>
+            <section id="empty" hidden></section>
+          </div>
+          <button
+            class="fab"
+            id="fab"
+            aria-label="新建任务"
+            data-icon="compose"
+          ></button>
+        </div>
+        <section class="new-page" id="new-page" hidden>
+          <header class="new-top">
+            <button
+              class="back"
+              id="back"
+              aria-label="返回"
+              data-icon="back"
+            ></button>
+          </header>
+          <div class="new-bottom">
+            <div class="selectors">
+              <div class="selector">
+                <span data-icon="laptop"></span><span>Example MacBook</span>
+              </div>
+              <div class="selector">
+                <span id="agent-icon"></span><span>Codex</span><span>⌃⌄</span>
+              </div>
+              <div class="selector">
+                <span data-icon="chat"></span><span id="workspace-label"></span
+                ><span>⌃⌄</span>
+              </div>
+            </div>
+            <div class="composer">
+              <textarea id="draft" aria-label="首条消息"></textarea>
+              <div class="composer-tools">
+                <span data-icon="plus"></span><span data-icon="hand"></span
+                ><span class="model">GPT-5.4 ⌄</span
+                ><span data-icon="mic"></span
+                ><button
+                  id="send"
+                  class="send"
+                  aria-label="发送"
+                  data-icon="up"
+                ></button>
+              </div>
+            </div>
+          </div>
+        </section>
+        <div class="overlay" id="overlay" hidden>
+          <div class="menu" role="dialog" aria-label="搜索条件">
+            <div class="menu-head">
+              <span id="menu-label"></span
+              ><button id="menu-close" aria-label="关闭">×</button>
+            </div>
+            <div id="menu-items"></div>
+          </div>
+        </div>
+        <div class="toast" id="toast" role="status" hidden></div>
+        <div class="homebar"></div>
+      </main>
+      <aside class="panel inspect">
+        <div class="eyebrow">LIVE STATE</div>
+        <div class="state" id="state"></div>
+        <div class="rule"><span>当前范围内任务</span><b id="total"></b></div>
+        <div class="rule"><span>筛选后 session 数</span><b id="count"></b></div>
+        <div class="rule"><span>推荐呈现</span><b id="verdict"></b></div>
+        <p class="detail" id="explanation"></p>
+        <div class="text-inspector">
+          <h3 id="inspect-title">文案与交互</h3>
+          <p id="inspect-text">点击一条推荐，查看原样预填的完整任务内容。</p>
+          <small id="inspect-hint">切换语言查看 129508571 中的五语文案。</small>
+          <div id="send-result" class="preview-result" hidden></div>
+        </div>
+        <div class="note">
+          来源：<br />RemoteTaskSuggestions.tsx<br />remoteTaskSuggestionsModel.ts<br />locales/*/devices.json<br />theme/tokens.ts
+        </div>
+      </aside>
+    </div>
+    <script>
+      window.PREVIEW_DATA = {
+        locales: {
+          "zh-CN": {
+            devices: {
+              list: {
+                taskSuggestions: {
+                  connected: "电脑已连接",
+                  title: "不在电脑旁，\n也能开始一件事。",
+                  copy: "从这里交给 Cindy，在电脑上帮你处理。任务进展，随时回手机查看。",
+                  footerTitle: "接下来，让电脑帮你…",
+                  footerCopy: "开始一个新任务，在手机上查看进展。",
+                  newTask: "新建任务",
+                  tryThese: "试试这些新任务",
+                  shuffle: "换一组",
+                  syncHint: "在电脑上开始的任务，也会出现在这里",
+                  items: {
+                    findFile: {
+                      label: "找一份电脑上的文件",
+                      hint: "不必回到电脑前翻找",
+                      prompt:
+                        "帮我在这台电脑上找一份文件。先问我文件名关键词、文件类型或大概的修改时间，再查找并列出可能的结果。",
+                    },
+                    computerStatus: {
+                      label: "看看电脑现在忙不忙",
+                      hint: "了解运行状态和资源占用",
+                      prompt:
+                        "帮我看看这台电脑现在的 CPU、内存和磁盘占用，找出占用较高的程序，并用简单的话总结。",
+                    },
+                    projectProgress: {
+                      label: "梳理项目的最新进展",
+                      hint: "看看最近改了什么、还有什么待办",
+                      prompt:
+                        "帮我梳理这台电脑上一个项目的最新进展。先让我选择项目，再查看最近的修改和待办，整理成简短摘要。",
+                    },
+                    downloads: {
+                      label: "看看下载文件夹里有什么",
+                      hint: "先梳理，再决定怎么整理",
+                      prompt:
+                        "帮我查看这台电脑下载文件夹里的文件，按类型和时间整理一份概览，并建议如何归类。先不要移动或删除文件。",
+                    },
+                    summarizeDocument: {
+                      label: "把一份长文档变成摘要",
+                      hint: "用手机快速了解重点",
+                      prompt:
+                        "帮我总结这台电脑上的一份文档。先问我文件名或位置，读完后提炼重点、结论和待办事项。",
+                    },
+                    storageUsage: {
+                      label: "看看磁盘空间用在哪里",
+                      hint: "找出占空间的大文件",
+                      prompt:
+                        "帮我分析这台电脑的磁盘空间，列出占用较大的文件夹和文件，并给出整理建议。先不要删除任何内容。",
+                    },
+                  },
+                },
+                search: {
+                  placeholder: "搜索标题或内容…",
+                  filterA11y: "搜索筛选",
+                  filterAria:
+                    "搜索筛选与排序（排序：{{sort}}，状态：{{status}}，Agent：{{agent}}，最近活跃：{{lastActivity}}，项目：{{projects}}）",
+                  filter: {
+                    label: "搜索条件",
+                    reset: "重置",
+                    sortHeading: "排序",
+                    statusHeading: "状态",
+                    projectsHeading: "项目",
+                    agentHeading: "Agent",
+                    lastActivityHeading: "最近活跃",
+                    allProjects: "所有项目",
+                    selectedProjects: "已选 {{count}} 个",
+                    sort: {
+                      relevance: "相关度",
+                      activityDesc: "最近活跃",
+                      activityAsc: "最早活跃",
+                    },
+                    status: { active: "活跃", archived: "已归档", all: "全部" },
+                    agent: {
+                      all: "全部",
+                      cc: "Claude Code",
+                      codex: "Codex",
+                      pi: "Pi",
+                    },
+                    lastActivity: {
+                      "1d": "1 天",
+                      "3d": "3 天",
+                      "7d": "7 天",
+                      "30d": "30 天",
+                      all: "全部",
+                    },
+                  },
+                },
+              },
+              presentation: {
+                home: {
+                  empty: {
+                    search: {
+                      title: "没有匹配结果",
+                      copy: "换一个项目名、任务标题、电脑名或消息关键词再试。",
+                    },
+                    waiting: {
+                      title: "没有待处理请求",
+                      copy: "权限确认、计划审阅和问题选择会在这里集中出现。",
+                    },
+                    automation: {
+                      title: "没有自动化生成的任务",
+                      copy: "自动化运行后，对应任务会按项目聚合到这里。",
+                    },
+                    archived: {
+                      title: "没有归档任务",
+                      copy: "切到全部或活跃筛选，继续查看当前项目和任务。",
+                    },
+                    noSession: {
+                      title: "还没有任务",
+                      copy: "先在桌面端创建或继续一个任务，手机端会直接显示对应项目和任务。",
+                    },
+                  },
+                },
+              },
+            },
+            session: {
+              new: {
+                firstMessagePlaceholder: "输入首条消息",
+                dialogueWorkspace: "对话工作区",
+              },
+            },
+          },
+          "zh-TW": {
+            devices: {
+              list: {
+                taskSuggestions: {
+                  connected: "電腦已連線",
+                  title: "不在電腦旁，\n也能開始一件事。",
+                  copy: "從這裡交給 Cindy，在電腦上幫你處理。任務進度，隨時回手機查看。",
+                  footerTitle: "接下來，讓電腦幫你…",
+                  footerCopy: "開始一個新任務，在手機上查看進度。",
+                  newTask: "新建任務",
+                  tryThese: "試試這些新任務",
+                  shuffle: "換一組",
+                  syncHint: "在電腦上開始的任務，也會出現在這裡",
+                  items: {
+                    findFile: {
+                      label: "找一份電腦上的檔案",
+                      hint: "不必回到電腦前翻找",
+                      prompt:
+                        "幫我在這台電腦上找一份檔案。先問我檔案名稱關鍵字、檔案類型或大概的修改時間，再尋找並列出可能的結果。",
+                    },
+                    computerStatus: {
+                      label: "看看電腦現在忙不忙",
+                      hint: "了解運作狀態和資源使用量",
+                      prompt:
+                        "幫我看看這台電腦現在的 CPU、記憶體和磁碟用量，找出使用量較高的程式，並用簡單的話摘要說明。",
+                    },
+                    projectProgress: {
+                      label: "整理專案的最新進度",
+                      hint: "看看最近改了什麼、還有什麼待辦",
+                      prompt:
+                        "幫我整理這台電腦上一個專案的最新進度。先讓我選擇專案，再查看最近的修改和待辦，整理成簡短摘要。",
+                    },
+                    downloads: {
+                      label: "看看下載資料夾裡有什麼",
+                      hint: "先了解，再決定怎麼整理",
+                      prompt:
+                        "幫我查看這台電腦下載資料夾裡的檔案，按類型和時間整理一份概覽，並建議如何分類。先不要移動或刪除檔案。",
+                    },
+                    summarizeDocument: {
+                      label: "把一份長文件變成摘要",
+                      hint: "用手機快速了解重點",
+                      prompt:
+                        "幫我摘要這台電腦上的一份文件。先問我檔案名稱或位置，讀完後整理重點、結論和待辦事項。",
+                    },
+                    storageUsage: {
+                      label: "看看磁碟空間用在哪裡",
+                      hint: "找出佔空間的大檔案",
+                      prompt:
+                        "幫我分析這台電腦的磁碟空間，列出佔用較大的資料夾和檔案，並給出整理建議。先不要刪除任何內容。",
+                    },
+                  },
+                },
+                search: {
+                  placeholder: "搜尋標題或內容…",
+                  filterA11y: "搜尋篩選",
+                  filterAria:
+                    "搜尋篩選與排序（排序：{{sort}}，狀態：{{status}}，Agent：{{agent}}，最近活躍：{{lastActivity}}，專案：{{projects}}）",
+                  filter: {
+                    label: "搜尋條件",
+                    reset: "重置",
+                    sortHeading: "排序",
+                    statusHeading: "狀態",
+                    projectsHeading: "專案",
+                    agentHeading: "Agent",
+                    lastActivityHeading: "最近活躍",
+                    allProjects: "所有專案",
+                    selectedProjects: "已選 {{count}} 個",
+                    sort: {
+                      relevance: "相關度",
+                      activityDesc: "最近活躍",
+                      activityAsc: "最早活躍",
+                    },
+                    status: { active: "活躍", archived: "已歸檔", all: "全部" },
+                    agent: {
+                      all: "全部",
+                      cc: "Claude Code",
+                      codex: "Codex",
+                      pi: "Pi",
+                    },
+                    lastActivity: {
+                      "1d": "1 天",
+                      "3d": "3 天",
+                      "7d": "7 天",
+                      "30d": "30 天",
+                      all: "全部",
+                    },
+                  },
+                },
+              },
+              presentation: {
+                home: {
+                  empty: {
+                    search: {
+                      title: "沒有符合結果",
+                      copy: "請改用其他專案名稱、任務標題、電腦名稱或訊息關鍵字。",
+                    },
+                    waiting: {
+                      title: "沒有待處理請求",
+                      copy: "權限確認、計畫審閱和問題選擇會集中顯示在這裡。",
+                    },
+                    automation: {
+                      title: "沒有自動化產生的任務",
+                      copy: "自動化執行後，對應任務會依專案彙整在這裡。",
+                    },
+                    archived: {
+                      title: "沒有封存任務",
+                      copy: "切換到全部或活躍篩選，繼續查看目前的專案和任務。",
+                    },
+                    noSession: {
+                      title: "還沒有任務",
+                      copy: "先在電腦端建立或繼續任務，手機端會直接顯示對應的專案和任務。",
+                    },
+                  },
+                },
+              },
+            },
+            session: {
+              new: {
+                firstMessagePlaceholder: "輸入首條訊息",
+                dialogueWorkspace: "對話工作區",
+              },
+            },
+          },
+          en: {
+            devices: {
+              list: {
+                taskSuggestions: {
+                  connected: "Computer connected",
+                  title: "Away from your computer?\nYou can still get started.",
+                  copy: "Ask Cindy to work on your computer, and check progress from your phone.",
+                  footerTitle: "What can your computer help with next?",
+                  footerCopy:
+                    "Start a new session and follow its progress here.",
+                  newTask: "New session",
+                  tryThese: "Try a new task",
+                  shuffle: "Show more ideas",
+                  syncHint:
+                    "Sessions started on your computer will appear here too.",
+                  items: {
+                    findFile: {
+                      label: "Find a file on your computer",
+                      hint: "No need to go back and look for it",
+                      prompt:
+                        "Help me find a file on this computer. First ask for keywords in its name, its type, or roughly when it was modified, then search and list possible matches.",
+                    },
+                    computerStatus: {
+                      label: "See how busy your computer is",
+                      hint: "Check activity and resource usage",
+                      prompt:
+                        "Check the CPU, memory, and disk usage on this computer, identify resource-heavy programs, and summarize in plain language.",
+                    },
+                    projectProgress: {
+                      label: "Catch up on a project",
+                      hint: "Review recent changes and remaining work",
+                      prompt:
+                        "Help me catch up on a project on this computer. First let me choose the project, then review recent changes and outstanding work and give me a short summary.",
+                    },
+                    downloads: {
+                      label: "See what is in Downloads",
+                      hint: "Take stock before organizing",
+                      prompt:
+                        "Review the files in this computer’s Downloads folder, summarize them by type and date, and suggest how to organize them. Do not move or delete files yet.",
+                    },
+                    summarizeDocument: {
+                      label: "Summarize a long document",
+                      hint: "Get the key points on your phone",
+                      prompt:
+                        "Summarize a document on this computer. First ask for its file name or location, then extract the key points, conclusions, and action items.",
+                    },
+                    storageUsage: {
+                      label: "Find what is using disk space",
+                      hint: "Locate large files and folders",
+                      prompt:
+                        "Analyze disk usage on this computer, list the largest folders and files, and suggest ways to organize them. Do not delete anything yet.",
+                    },
+                  },
+                },
+                search: {
+                  placeholder: "Search titles or content…",
+                  filterA11y: "Search filters",
+                  filterAria:
+                    "Search filters and sort (Sort: {{sort}}, Status: {{status}}, Agent: {{agent}}, Last activity: {{lastActivity}}, Projects: {{projects}})",
+                  filter: {
+                    label: "Search criteria",
+                    reset: "Reset",
+                    sortHeading: "Sort by",
+                    statusHeading: "Status",
+                    projectsHeading: "Projects",
+                    agentHeading: "Agent",
+                    lastActivityHeading: "Last activity",
+                    allProjects: "All projects",
+                    selectedProjects: "{{count}} selected",
+                    sort: {
+                      relevance: "Relevance",
+                      activityDesc: "Recently active",
+                      activityAsc: "Oldest active",
+                    },
+                    status: {
+                      active: "Active",
+                      archived: "Archived",
+                      all: "All",
+                    },
+                    agent: {
+                      all: "All",
+                      cc: "Claude Code",
+                      codex: "Codex",
+                      pi: "Pi",
+                    },
+                    lastActivity: {
+                      "1d": "1d",
+                      "3d": "3d",
+                      "7d": "7d",
+                      "30d": "30d",
+                      all: "All",
+                    },
+                  },
+                },
+              },
+              presentation: {
+                home: {
+                  empty: {
+                    search: {
+                      title: "No matches",
+                      copy: "Try another project name, session title, computer name, or message keyword.",
+                    },
+                    waiting: {
+                      title: "No pending requests",
+                      copy: "Permission prompts, plan reviews, and questions will appear here.",
+                    },
+                    automation: {
+                      title: "No automation sessions",
+                      copy: "Sessions created by automations will be grouped here by project.",
+                    },
+                    archived: {
+                      title: "No archived sessions",
+                      copy: "Switch to All or Active to keep browsing your current projects and sessions.",
+                    },
+                    noSession: {
+                      title: "No sessions yet",
+                      copy: "Create or continue a session on your computer and its project will appear here.",
+                    },
+                  },
+                },
+              },
+            },
+            session: {
+              new: {
+                firstMessagePlaceholder: "Enter the first message",
+                dialogueWorkspace: "Chat workspace",
+              },
+            },
+          },
+          ja: {
+            devices: {
+              list: {
+                taskSuggestions: {
+                  connected: "コンピューターに接続済み",
+                  title: "コンピューターから離れていても、\n始められます。",
+                  copy: "コンピューターでの作業を Cindy に頼んで、進捗をスマートフォンで確認できます。",
+                  footerTitle: "次は何を手伝いましょうか？",
+                  footerCopy:
+                    "新しいセッションを始めて、ここで進捗を確認できます。",
+                  newTask: "新しいセッション",
+                  tryThese: "こんなタスクはいかがですか",
+                  shuffle: "別の候補",
+                  syncHint:
+                    "コンピューターで始めたセッションもここに表示されます。",
+                  items: {
+                    findFile: {
+                      label: "コンピューターのファイルを探す",
+                      hint: "戻って探す必要はありません",
+                      prompt:
+                        "このコンピューターでファイルを探してください。まずファイル名のキーワード、種類、おおよその更新日時を聞いてから、検索して候補を一覧にしてください。",
+                    },
+                    computerStatus: {
+                      label: "コンピューターの稼働状況を確認",
+                      hint: "動作状況とリソース使用量を確認",
+                      prompt:
+                        "このコンピューターの CPU、メモリ、ディスクの使用量を確認し、負荷の高いプログラムを見つけて、わかりやすくまとめてください。",
+                    },
+                    projectProgress: {
+                      label: "プロジェクトの進捗を把握",
+                      hint: "最近の変更と残りの作業を確認",
+                      prompt:
+                        "このコンピューターのプロジェクトの進捗をまとめてください。まずプロジェクトを選ばせてから、最近の変更と未完了の作業を確認し、短く要約してください。",
+                    },
+                    downloads: {
+                      label: "ダウンロードフォルダーを確認",
+                      hint: "中身を把握してから整理",
+                      prompt:
+                        "このコンピューターのダウンロードフォルダーを確認し、ファイルを種類と日時ごとにまとめ、整理方法を提案してください。まだ移動や削除はしないでください。",
+                    },
+                    summarizeDocument: {
+                      label: "長い文書を要約",
+                      hint: "スマートフォンで要点を把握",
+                      prompt:
+                        "このコンピューターの文書を要約してください。まずファイル名か場所を聞いてから読み、要点、結論、対応事項をまとめてください。",
+                    },
+                    storageUsage: {
+                      label: "ディスクの使用量を調べる",
+                      hint: "大きなファイルやフォルダーを探す",
+                      prompt:
+                        "このコンピューターのディスク使用量を分析し、大きなフォルダーやファイルを一覧にして、整理方法を提案してください。まだ何も削除しないでください。",
+                    },
+                  },
+                },
+                search: {
+                  placeholder: "タイトルまたは内容を検索…",
+                  filterA11y: "検索フィルター",
+                  filterAria:
+                    "検索フィルターと並び順（並び順：{{sort}}、状態：{{status}}、Agent：{{agent}}、最近のアクティビティ：{{lastActivity}}、プロジェクト：{{projects}}）",
+                  filter: {
+                    label: "検索条件",
+                    reset: "リセット",
+                    sortHeading: "並び替え",
+                    statusHeading: "ステータス",
+                    projectsHeading: "プロジェクト",
+                    agentHeading: "Agent",
+                    lastActivityHeading: "最近のアクティビティ",
+                    allProjects: "すべてのプロジェクト",
+                    selectedProjects: "{{count}} 件選択",
+                    sort: {
+                      relevance: "関連度",
+                      activityDesc: "最近アクティブ",
+                      activityAsc: "古いアクティブ順",
+                    },
+                    status: {
+                      active: "アクティブ",
+                      archived: "アーカイブ済み",
+                      all: "すべて",
+                    },
+                    agent: {
+                      all: "すべて",
+                      cc: "Claude Code",
+                      codex: "Codex",
+                      pi: "Pi",
+                    },
+                    lastActivity: {
+                      "1d": "1日",
+                      "3d": "3日",
+                      "7d": "7日",
+                      "30d": "30日",
+                      all: "すべて",
+                    },
+                  },
+                },
+              },
+              presentation: {
+                home: {
+                  empty: {
+                    search: {
+                      title: "一致する結果はありません",
+                      copy: "別のプロジェクト名、セッション名、コンピューター名、またはメッセージのキーワードを試してください。",
+                    },
+                    waiting: {
+                      title: "保留中のリクエストはありません",
+                      copy: "権限の確認、計画レビュー、質問がここに表示されます。",
+                    },
+                    automation: {
+                      title: "自動化セッションはありません",
+                      copy: "自動化の実行後に作成されたセッションがプロジェクト別にまとめられます。",
+                    },
+                    archived: {
+                      title: "アーカイブ済みセッションはありません",
+                      copy: "［すべて］または［アクティブ］に切り替えて、現在のプロジェクトとセッションを確認してください。",
+                    },
+                    noSession: {
+                      title: "セッションはまだありません",
+                      copy: "コンピューターでセッションを作成または再開すると、対応するプロジェクトとセッションがここに表示されます。",
+                    },
+                  },
+                },
+              },
+            },
+            session: {
+              new: {
+                firstMessagePlaceholder: "最初のメッセージを入力",
+                dialogueWorkspace: "会話ワークスペース",
+              },
+            },
+          },
+          ko: {
+            devices: {
+              list: {
+                taskSuggestions: {
+                  connected: "컴퓨터에 연결됨",
+                  title: "컴퓨터 앞에 없어도\n일을 시작할 수 있어요.",
+                  copy: "컴퓨터에서 할 일을 Cindy에게 맡기고, 휴대폰에서 진행 상황을 확인하세요.",
+                  footerTitle: "다음에는 무엇을 도와드릴까요?",
+                  footerCopy:
+                    "새 세션을 시작하고 여기서 진행 상황을 확인하세요.",
+                  newTask: "새 세션",
+                  tryThese: "이런 작업을 해 보세요",
+                  shuffle: "다른 추천",
+                  syncHint: "컴퓨터에서 시작한 세션도 여기에 표시됩니다.",
+                  items: {
+                    findFile: {
+                      label: "컴퓨터에서 파일 찾기",
+                      hint: "컴퓨터로 돌아가 찾을 필요 없어요",
+                      prompt:
+                        "이 컴퓨터에서 파일을 찾아 주세요. 먼저 파일 이름의 키워드, 종류 또는 대략적인 수정 시간을 물어본 다음 검색하여 가능한 결과를 나열해 주세요.",
+                    },
+                    computerStatus: {
+                      label: "컴퓨터가 얼마나 바쁜지 확인",
+                      hint: "실행 상태와 자원 사용량 확인",
+                      prompt:
+                        "이 컴퓨터의 CPU, 메모리, 디스크 사용량을 확인하고 자원을 많이 사용하는 프로그램을 찾아 쉽게 요약해 주세요.",
+                    },
+                    projectProgress: {
+                      label: "프로젝트 진행 상황 파악",
+                      hint: "최근 변경 사항과 남은 작업 확인",
+                      prompt:
+                        "이 컴퓨터에 있는 프로젝트의 진행 상황을 정리해 주세요. 먼저 프로젝트를 선택하게 한 뒤 최근 변경 사항과 남은 작업을 확인하여 간단히 요약해 주세요.",
+                    },
+                    downloads: {
+                      label: "다운로드 폴더 살펴보기",
+                      hint: "내용을 파악한 뒤 정리 방법 결정",
+                      prompt:
+                        "이 컴퓨터의 다운로드 폴더를 확인하고 파일을 종류와 날짜별로 요약한 뒤 정리 방법을 제안해 주세요. 아직 파일을 이동하거나 삭제하지 마세요.",
+                    },
+                    summarizeDocument: {
+                      label: "긴 문서 요약하기",
+                      hint: "휴대폰에서 핵심 내용 파악",
+                      prompt:
+                        "이 컴퓨터에 있는 문서를 요약해 주세요. 먼저 파일 이름이나 위치를 물어본 뒤 문서를 읽고 핵심 내용, 결론, 할 일을 정리해 주세요.",
+                    },
+                    storageUsage: {
+                      label: "디스크 공간 사용량 확인",
+                      hint: "용량이 큰 파일과 폴더 찾기",
+                      prompt:
+                        "이 컴퓨터의 디스크 사용량을 분석하여 용량이 큰 폴더와 파일을 나열하고 정리 방법을 제안해 주세요. 아직 아무것도 삭제하지 마세요.",
+                    },
+                  },
+                },
+                search: {
+                  placeholder: "제목 또는 내용 검색…",
+                  filterA11y: "검색 필터",
+                  filterAria:
+                    "검색 필터 및 정렬(정렬: {{sort}}, 상태: {{status}}, Agent: {{agent}}, 최근 활성: {{lastActivity}}, 프로젝트: {{projects}})",
+                  filter: {
+                    label: "검색 조건",
+                    reset: "초기화",
+                    sortHeading: "정렬",
+                    statusHeading: "상태",
+                    projectsHeading: "프로젝트",
+                    agentHeading: "Agent",
+                    lastActivityHeading: "최근 활성",
+                    allProjects: "모든 프로젝트",
+                    selectedProjects: "{{count}}개 선택됨",
+                    sort: {
+                      relevance: "관련도",
+                      activityDesc: "최근 활성순",
+                      activityAsc: "오래된 활성순",
+                    },
+                    status: { active: "활성", archived: "보관됨", all: "전체" },
+                    agent: {
+                      all: "전체",
+                      cc: "Claude Code",
+                      codex: "Codex",
+                      pi: "Pi",
+                    },
+                    lastActivity: {
+                      "1d": "1일",
+                      "3d": "3일",
+                      "7d": "7일",
+                      "30d": "30일",
+                      all: "전체",
+                    },
+                  },
+                },
+              },
+              presentation: {
+                home: {
+                  empty: {
+                    search: {
+                      title: "일치하는 결과 없음",
+                      copy: "다른 프로젝트 이름, 세션 제목, 컴퓨터 이름 또는 메시지 키워드를 사용해 보세요.",
+                    },
+                    waiting: {
+                      title: "대기 중인 요청 없음",
+                      copy: "권한 확인, 계획 검토 및 질문이 여기에 표시됩니다.",
+                    },
+                    automation: {
+                      title: "자동화 세션 없음",
+                      copy: "자동화 실행 후 생성된 세션이 프로젝트별로 여기에 그룹화됩니다.",
+                    },
+                    archived: {
+                      title: "보관된 세션 없음",
+                      copy: "전체 또는 활성 필터로 전환해 현재 프로젝트와 세션을 계속 확인하세요.",
+                    },
+                    noSession: {
+                      title: "아직 세션이 없습니다",
+                      copy: "컴퓨터에서 세션을 만들거나 계속하면 해당 프로젝트와 세션이 여기에 표시됩니다.",
+                    },
+                  },
+                },
+              },
+            },
+            session: {
+              new: {
+                firstMessagePlaceholder: "첫 메시지 입력",
+                dialogueWorkspace: "대화 작업 공간",
+              },
+            },
+          },
+        },
+        colors: {
+          light: {
+            surface: "#EDEDED",
+            surfaceElevated: "#F8F8F8",
+            surfaceTranslucent: "rgba(237, 237, 237, 0.78)",
+            surfaceTranslucentSidebar: "rgba(246, 246, 246, 0.90)",
+            chatHeaderSurface: "rgba(246, 246, 246, 0.90)",
+            chatHeaderDivider: "#DCDFE3",
+            surfaceGlassPanel: "#F8F8F8",
+            surfaceListRow: "#F6F6F6",
+            surfaceListExpanded: "#EAEAEA",
+            activeGlyph: "#DF0C27",
+            chatCodeSurface: "#F8F8F8",
+            chatCodeBorder: "#DCDFE3",
+            chatInlineCodeText: "#686B72",
+            syntaxKeyword: "#D73A49",
+            syntaxString: "#032F62",
+            syntaxComment: "#6A737D",
+            syntaxNumber: "#005CC5",
+            syntaxFunction: "#6F42C1",
+            syntaxProperty: "#005CC5",
+            inputCaret: "#417CDD",
+            sheetSurface: "rgba(248, 248, 248, 0.95)",
+            sheetActionSurface: "#F6F6F6",
+            sheetActionBorder: "#DCDFE3",
+            sheetActionText: "#3C3F43",
+            sheetGrabber: "#DCDFE3",
+            brandSplashBackground: "#DF0C27",
+            brandSplashForeground: "#FFFFFF",
+            brandSplashMuted: "rgba(255, 255, 255, 0.82)",
+            betaChannelBadgeBackground: "#DF0C27",
+            betaChannelBadgeForeground: "#FFFFFF",
+            surfaceChip: "#F1F1F1",
+            border: "#C6C9CE",
+            borderTranslucent: "rgba(198, 201, 206, 0.62)",
+            borderStrong: "#686B72",
+            textPrimary: "#3C3F43",
+            textSecondary: "#8C8E94",
+            textTertiary: "#686B72",
+            cta: "#3C3F43",
+            ctaText: "#FCFCFC",
+            statusReady: "#19D2C1",
+            statusRecording: "#D91F37",
+            statusAccent: "#EA6B17",
+            statusAwaiting: "#19D2C1",
+            statusError: "#D91F37",
+            statusDone: "#2AAE5B",
+            permAutoAccent: "#417CDD",
+            errorText: "#3C3F43",
+            destructive: "#f43d3f",
+            errorBorder: "#686B72",
+            overlay: "rgba(38, 38, 38, 0.35)",
+            homeListFab: "#3C3F43",
+            homeListFabBorder: "transparent",
+            swipeActionPin: "#EA6B17",
+            swipeActionNeutral: "#8e8e93",
+            swipeActionArchive: "#3b82f6",
+            swipeActionText: "#fbfbfa",
+            login: {
+              bgBase: "#EDEDED",
+              brandAccent: "#DF0C27",
+              brandAccentPressed: "#A61629",
+              panelBg: "#FBFBFB",
+              panelBorder: "#D4D4D4",
+              controlBg: "#EEEEEE",
+              actionControlBg: "#EEEEEE",
+              backBorder: "#FFFFFF",
+              controlBorder: "#D4D4D4",
+              controlBorderActive: "#2A2828",
+              controlBorderDisabled: "#B4B4B4",
+              controlText: "#252222",
+              controlPlaceholder: "#D4D4D4",
+              titleText: "#252222",
+              secondaryText: "#6F6F6F",
+              primaryButtonBg: "#2A2828",
+              primaryButtonBorder: "#434343",
+              primaryButtonText: "#D4D4D4",
+              disabledButtonOverlay: "rgba(255, 255, 255, 0.7)",
+              disabledButtonBg: "#2A2828",
+              disabledButtonText: "#D4D4D4",
+              linkText: "#2A2828",
+              linkPressed: "#1A1818",
+              loginError: "#D91F37",
+              sloganInk: "#2A2828",
+              gradientTint: "#F70121",
+              overlayButtonPressed: "rgba(0, 0, 0, 0.5)",
+              overlayControlPressed: "rgba(0, 0, 0, 0.08)",
+              invertedButtonBorder: "#FFFFFF",
+              loadingRingTrack: "rgba(42, 40, 40, 0.18)",
+              appleCircleBg: "#000000",
+              appleLogoInk: "#FFFFFF",
+              consentRadioBg: "#F1F0F1",
+              consentRadioBorder: "#434343",
+              consentRadioCheckedBg: "#2A2828",
+              consentRadioCheck: "#FFFFFF",
+              consentOverlay: "rgba(0, 0, 0, 0.85)",
+              secondaryButtonBg: "#EEEEEE",
+              secondaryButtonBorder: "#FFFFFF",
+              secondaryButtonText: "#2A2828",
+              overlaySecondaryPressed: "rgba(0, 0, 0, 0.1)",
+              deletionBubbleBg: "#FFFFFF",
+              deletionBubbleBorder: "#D7D7D4",
+            },
+          },
+          dark: {
+            surface: "#2A2828",
+            surfaceElevated: "#312F2F",
+            surfaceTranslucent: "rgba(42, 40, 40, 0.78)",
+            surfaceTranslucentSidebar: "rgba(18, 15, 15, 0.85)",
+            chatHeaderSurface: "rgba(37, 35, 35, 0.80)",
+            chatHeaderDivider: "rgba(255, 255, 255, 0.05)",
+            surfaceGlassPanel: "rgba(59, 59, 59, 0.95)",
+            surfaceListRow: "#312F2F",
+            surfaceListExpanded: "#2A2828",
+            activeGlyph: "#A61629",
+            chatCodeSurface: "#353333",
+            chatCodeBorder: "#3C3C3C",
+            chatInlineCodeText: "#A3A3A3",
+            syntaxKeyword: "#FF7B72",
+            syntaxString: "#A5D6FF",
+            syntaxComment: "#8B949E",
+            syntaxNumber: "#79C0FF",
+            syntaxFunction: "#D2A8FF",
+            syntaxProperty: "#79C0FF",
+            inputCaret: "#417CDD",
+            sheetSurface: "rgba(59, 59, 59, 0.95)",
+            sheetActionSurface: "rgba(59, 59, 59, 0.5)",
+            sheetActionBorder: "#505050",
+            sheetActionText: "#C1C1C1",
+            sheetGrabber: "#6F6F6F",
+            brandSplashBackground: "#DF0C27",
+            brandSplashForeground: "#FFFFFF",
+            brandSplashMuted: "rgba(255, 255, 255, 0.82)",
+            betaChannelBadgeBackground: "#DF0C27",
+            betaChannelBadgeForeground: "#FFFFFF",
+            surfaceChip: "#2F2D2D",
+            border: "#434343",
+            borderTranslucent: "rgba(67, 67, 67, 0.62)",
+            borderStrong: "#BFC1C4",
+            textPrimary: "#D4D4D4",
+            textSecondary: "#6F6F6F",
+            textTertiary: "#BFC1C4",
+            cta: "#EEEEEE",
+            ctaText: "#252222",
+            statusReady: "#19D2C1",
+            statusRecording: "#D91F37",
+            statusAccent: "#EA6B17",
+            statusAwaiting: "#19D2C1",
+            statusError: "#D91F37",
+            statusDone: "#2AAE5B",
+            permAutoAccent: "#417CDD",
+            errorText: "#D4D4D4",
+            destructive: "#f43d3f",
+            errorBorder: "#BFC1C4",
+            overlay: "rgba(0, 0, 0, 0.45)",
+            homeListFab: "#ECEDEF",
+            homeListFabBorder: "#FFFFFF",
+            swipeActionPin: "#EA6B17",
+            swipeActionNeutral: "#636366",
+            swipeActionArchive: "#3b82f6",
+            swipeActionText: "#fbfbfa",
+            login: {
+              bgBase: "#1F1F1E",
+              brandAccent: "#DF0C27",
+              brandAccentPressed: "#A61629",
+              panelBg: "#312F2F",
+              panelBorder: "#434343",
+              controlBg: "#2C2A2A",
+              actionControlBg: "#2A2828",
+              backBorder: "#434343",
+              controlBorder: "#434343",
+              controlBorderActive: "#EEEEEE",
+              controlBorderDisabled: "#B4B4B4",
+              controlText: "#EEEEEE",
+              controlPlaceholder: "#6F6F6F",
+              titleText: "#D4D4D4",
+              secondaryText: "#6F6F6F",
+              primaryButtonBg: "#EEEEEE",
+              primaryButtonBorder: "#FFFFFF",
+              primaryButtonText: "#2A2828",
+              disabledButtonOverlay: "rgba(255, 255, 255, 0.7)",
+              disabledButtonBg: "#2A2828",
+              disabledButtonText: "#D4D4D4",
+              linkText: "#EEEEEE",
+              linkPressed: "#C0BEBE",
+              loginError: "#D91F37",
+              sloganInk: "#EDEDED",
+              gradientTint: "#F70121",
+              overlayButtonPressed: "rgba(0, 0, 0, 0.1)",
+              overlayControlPressed: "rgba(0, 0, 0, 0.08)",
+              invertedButtonBorder: "#FFFFFF",
+              loadingRingTrack: "rgba(212, 212, 212, 0.18)",
+              appleCircleBg: "#FFFFFF",
+              appleLogoInk: "#000000",
+              consentRadioBg: "#2A2828",
+              consentRadioBorder: "#F1F0F1",
+              consentRadioCheckedBg: "#F1F0F1",
+              consentRadioCheck: "#2A2828",
+              consentOverlay: "rgba(0, 0, 0, 0.85)",
+              secondaryButtonBg: "#434141",
+              secondaryButtonBorder: "#565454",
+              secondaryButtonText: "#EEEEEE",
+              overlaySecondaryPressed: "rgba(0, 0, 0, 0.2)",
+              deletionBubbleBg: "#1F1F1E",
+              deletionBubbleBorder: "#3C3C3A",
+            },
+          },
+        },
+        spacing: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 },
+        typeScale: {
+          micro: 11,
+          caption: 12,
+          footnote: 13,
+          listBody: 14,
+          code: 15,
+          body: 16,
+          bodyLarge: 17,
+          subtitle: 18,
+          listTitle: 19,
+          title: 20,
+          headline: 24,
+          largeTitle: 30,
+          hero: 40,
+        },
+        lineHeight: {
+          micro: 16,
+          caption: 18,
+          listBody: 20,
+          code: 20,
+          body: 22,
+          bodyRelaxed: 24,
+          bodyLarge: 26,
+          title: 25,
+          subtitle: 26,
+          listTitleCompact: 27,
+          listTitle: 28,
+          headline: 30,
+          largeTitle: 36,
+          hero: 44,
+        },
+        vendor: {
+          CLAUDE_AGENT_PATH:
+            "M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0v-3.1h3V5h17.998zM6 10.949h1.488V8.102H6zm10.51 0H18V8.102h-1.49z",
+          CODEX_AGENT_FLOWER_PATH:
+            "M9.064 3.344a4.6 4.6 0 0 1 2.285-.312q1.5.173 2.673 1.275.016.015.037.021a.1.1 0 0 0 .043 0 4.55 4.55 0 0 1 3.046.275l.047.022.116.057a4.58 4.58 0 0 1 2.188 2.399q.313.765.315 1.595a4.2 4.2 0 0 1-.134 1.223.12.12 0 0 0 .03.115q.89.91 1.183 2.17.433 2.138-.887 3.854l-.136.166a4.55 4.55 0 0 1-2.201 1.388.12.12 0 0 0-.081.076c-.191.551-.383 1.023-.74 1.494-.9 1.187-2.222 1.846-3.711 1.838q-1.78-.009-3.157-1.302a.11.11 0 0 0-.105-.024c-.388.125-.78.143-1.204.138a4.44 4.44 0 0 1-1.945-.466 4.54 4.54 0 0 1-1.61-1.335c-.152-.202-.303-.392-.414-.617a6 6 0 0 1-.37-.961 4.6 4.6 0 0 1-.014-2.298.1.1 0 0 0 .006-.056.1.1 0 0 0-.027-.048 4.5 4.5 0 0 1-1.034-1.651 3.9 3.9 0 0 1-.251-1.192 5.2 5.2 0 0 1 .141-1.6Q3.659 7.92 5.086 6.97q.318-.212.601-.33a6 6 0 0 1 .646-.227.1.1 0 0 0 .065-.066 4.5 4.5 0 0 1 .829-1.615 4.54 4.54 0 0 1 1.837-1.388",
+          CODEX_AGENT_PROMPT_PATH:
+            "M12.546 13.909a.637.637 0 0 0 0 1.272h3.636a.637.637 0 1 0 0-1.272zM8.462 9.23a.637.637 0 0 0-1.106.631l1.272 2.224-1.266 2.136a.636.636 0 1 0 1.095.649l1.454-2.455a.64.64 0 0 0 .005-.64z",
+        },
+      };
+      window.SUGGESTIONS_MODEL = {};
+      (function (exports) {
+        "use strict";
+        Object.defineProperty(exports, "__esModule", { value: true });
+        exports.REMOTE_TASK_SUGGESTION_BATCHES = void 0;
+        exports.isRemoteTaskSuggestionId = isRemoteTaskSuggestionId;
+        exports.countHomeSuggestionSessions = countHomeSuggestionSessions;
+        exports.remoteTaskSuggestionsMode = remoteTaskSuggestionsMode;
+        exports.REMOTE_TASK_SUGGESTION_BATCHES = [
+          ["findFile", "computerStatus", "projectProgress"],
+          ["downloads", "summarizeDocument", "storageUsage"],
+        ];
+        function isRemoteTaskSuggestionId(value) {
+          return exports.REMOTE_TASK_SUGGESTION_BATCHES.some((batch) =>
+            batch.some((id) => id === value),
+          );
+        }
+        /** Count sessions before project, pinned and automation rows are collapsed. */
+        function countHomeSuggestionSessions(home, searchResults) {
+          const countItems = (items) =>
+            items.reduce(
+              (count, item) =>
+                count + (item.automationGroup?.sessionCount ?? 1),
+              0,
+            );
+          if (searchResults) return countItems(searchResults);
+          return (
+            countItems(home.pinned) +
+            countItems(home.chats) +
+            home.projects.reduce(
+              (count, project) => count + project.sessionCount,
+              0,
+            )
+          );
+        }
+        function remoteTaskSuggestionsMode({
+          sessionCount,
+          totalSessionCount,
+          ready,
+          hasSearchOrFilter,
+        }) {
+          if (!ready || sessionCount > 3) return null;
+          if (sessionCount > 0) return "footer";
+          return totalSessionCount === 0 && !hasSearchOrFilter ? "empty" : null;
+        }
+      })(window.SUGGESTIONS_MODEL);
+    </script>
+    <script>
+      const D = window.PREVIEW_DATA,
+        M = window.SUGGESTIONS_MODEL,
+        $ = (id) => document.getElementById(id);
+      const paths = {
+        menu: "M4 6h16M4 12h16M4 18h16",
+        monitor: "M4 3h16v13H4zM12 16v5m-4 0h8",
+        laptop: "M4 4h16v12H4zM2 20h20l-2-4H4z",
+        search: "M15 15l6 6M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0",
+        sliders: "M3 6h9m4 0h5M3 12h4m4 0h10M3 18h12m4 0h2M12 3v6M7 9v6m8 0v6",
+        compose:
+          "M13 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8M16 3l5 5M10 14l2-5 7-7a2 2 0 0 1 3 3l-7 7z",
+        folder: "M3 7V4h7l2 3h9v13H3z",
+        file: "M14 3H5v18h14V8zM14 3v5h5M8 12h8m-8 4h6",
+        gauge: "M4 19a10 10 0 1 1 16 0zM12 14l4-6",
+        book: "M12 5C8 2 4 3 2 4v15c4-2 7-1 10 1 3-2 6-3 10-1V4c-4-1-7-2-10 1v15",
+        downloads: "M3 7V4h7l2 3h9v13H3zM12 9v8m-3-3 3 3 3-3",
+        disk: "M5 4h14l3 12v4H2v-4zM2 16h20M6 18h.01M10 18h.01",
+        chev: "m9 6 6 6-6 6",
+        shuffle:
+          "M3 7h3c5 0 7 10 12 10h3m-4-4 4 4-4 4M3 17h3c2 0 4-3 5-5m3-3c1-1 2-2 4-2h3m-4-4 4 4-4 4",
+        back: "m14 5-7 7 7 7",
+        up: "M12 19V5m-6 6 6-6 6 6",
+        plus: "M12 5v14M5 12h14",
+        chat: "M21 11a9 9 0 0 1-9 9H4l-2 2V11a9 9 0 0 1 19 0z",
+        mic: "M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0zM5 11v1a7 7 0 0 0 14 0v-1M12 19v3m-4 0h8",
+        hand: "M7 12V6a2 2 0 0 1 4 0v5-8a2 2 0 0 1 4 0v8-6a2 2 0 0 1 4 0v9c0 9-10 10-14 4L2 13c-1-2 1-4 3-2l2 2",
+        archive: "M3 3h18v5H3zM5 8v12h14V8m-10 4h6",
+      };
+      function icon(name, cls = "") {
+        return (
+          '<svg class="ico ' +
+          cls +
+          '" viewBox="0 0 24 24" aria-hidden="true"><path d="' +
+          paths[name] +
+          '"/></svg>'
+        );
+      }
+      function vendor(name) {
+        return name === "cc"
+          ? '<svg class="ico" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="' +
+              D.vendor.CLAUDE_AGENT_PATH +
+              '"/></svg>'
+          : '<svg class="ico" viewBox="0 0 24 24"><path d="' +
+              D.vendor.CODEX_AGENT_FLOWER_PATH +
+              'z"/><path fill="currentColor" stroke="none" d="' +
+              D.vendor.CODEX_AGENT_PROMPT_PATH +
+              '"/></svg>';
+      }
+      for (const el of document.querySelectorAll("[data-icon]"))
+        el.innerHTML = icon(el.dataset.icon);
+      $("agent-icon").innerHTML = vendor("codex");
+      const scenes = [
+        ["empty", "0 条 · 真正空白"],
+        ["one", "1 条任务"],
+        ["three", "3 条任务"],
+        ["four", "4 条任务"],
+        ["eight", "8 条任务"],
+        ["filtered", "8 → 3 条"],
+        ["none", "搜索无结果"],
+        ["collapsed", "折叠 4 条"],
+        ["offline", "离线 · 3 条"],
+        ["loading", "同步中 · 0 条"],
+      ];
+      const sampleTitles = [
+        "梳理项目最近的修改",
+        "检查开发环境",
+        "整理项目文档",
+        "查看构建结果",
+        "定位启动问题",
+        "整理下载文件夹",
+        "分析磁盘空间",
+        "汇总测试结果",
+      ];
+      let lang = "zh-CN",
+        scene = "empty",
+        batch = 0,
+        collapsed = false,
+        query = "",
+        timer,
+        mode = null,
+        selectedSuggestion = null,
+        page = "home";
+      let filters = {
+        sort: "relevance",
+        status: "all",
+        agent: "all",
+        lastActivity: "all",
+        projects: "all",
+      };
+      const t = () => D.locales[lang].devices.list.taskSuggestions;
+      function samples() {
+        const count = {
+          empty: 0,
+          one: 1,
+          three: 3,
+          four: 4,
+          eight: 8,
+          filtered: 8,
+          none: 8,
+          collapsed: 4,
+          offline: 3,
+          loading: 0,
+        }[scene];
+        return Array.from({ length: count }, (_, i) => ({
+          id: i,
+          title: lang.startsWith("zh")
+            ? sampleTitles[i]
+            : "Project task " + (i + 1),
+          preview: lang.startsWith("zh")
+            ? "已整理相关信息，可以继续查看任务内容。"
+            : "The results are ready to review.",
+          agent: i < 3 ? "codex" : "cc",
+          status: i === 7 ? "archived" : "active",
+          age: i,
+          time: i === 0 ? "10 分钟前" : i + " 天前",
+        }));
+      }
+      function visible() {
+        let rows = samples().filter(
+          (r) =>
+            (!query ||
+              (r.title + r.preview)
+                .toLowerCase()
+                .includes(query.toLowerCase())) &&
+            (filters.status === "all" || filters.status === r.status) &&
+            (filters.agent === "all" || filters.agent === r.agent) &&
+            (filters.lastActivity === "all" ||
+              r.age < parseInt(filters.lastActivity)),
+        );
+        if (filters.sort === "activityAsc") rows.reverse();
+        return rows;
+      }
+      function setTheme() {
+        for (const [key, value] of Object.entries(D.colors[$("theme").value]))
+          $("phone").style.setProperty("--" + key, value);
+      }
+      setTheme();
+      function scenario(next) {
+        scene = next;
+        batch = 0;
+        collapsed = next === "collapsed";
+        query = next === "none" ? "__no_matching_task__" : "";
+        filters = {
+          sort: "relevance",
+          status: "all",
+          agent: next === "filtered" ? "codex" : "all",
+          lastActivity: "all",
+          projects: "all",
+        };
+        $("query").value = query;
+        back();
+        render();
+        $("scroller").scrollTop = 0;
+        for (const el of $("scenarios").children)
+          el.setAttribute("aria-pressed", String(el.dataset.scene === scene));
+      }
+      for (const [id, label] of scenes) {
+        const btn = document.createElement("button");
+        btn.textContent = label;
+        btn.dataset.scene = id;
+        btn.onclick = () => scenario(id);
+        $("scenarios").append(btn);
+      }
+      function render() {
+        const rows = visible(),
+          all = samples(),
+          hasFilters = Object.entries(filters).some(
+            ([k, v]) => k !== "sort" && v !== "all",
+          );
+        const previous = mode;
+        mode = M.remoteTaskSuggestionsMode({
+          sessionCount: rows.length,
+          totalSessionCount: all.length,
+          ready: scene !== "offline" && scene !== "loading",
+          hasSearchOrFilter: !!query.trim() || hasFilters,
+        });
+        if (previous !== mode) batch = 0;
+        $("query").placeholder =
+          D.locales[lang].devices.list.search.placeholder;
+        $("clear").hidden = !query;
+        $("filter-dot").hidden = !hasFilters;
+        $("sessions").replaceChildren();
+        if (rows.length) {
+          const head = document.createElement("button");
+          head.className = "folder";
+          head.innerHTML =
+            "<span>" +
+            (collapsed ? "›" : "⌄") +
+            "</span>" +
+            icon("folder") +
+            "<strong>Cindy</strong><small>" +
+            rows.length +
+            "</small>";
+          head.setAttribute("aria-expanded", String(!collapsed));
+          head.onclick = () => {
+            collapsed = !collapsed;
+            render();
+          };
+          if (!query) $("sessions").append(head);
+          if (!collapsed || query)
+            for (const r of rows) {
+              const row = document.createElement("button");
+              row.className = "session-row";
+              if (query) row.style.paddingLeft = "12px";
+              row.innerHTML =
+                '<span class="session-mark">' +
+                (r.status === "archived" ? icon("archive") : vendor(r.agent)) +
+                '</span><div class="session-body"><div class="session-title"><strong></strong><time></time></div><div class="session-preview"></div></div>';
+              row.querySelector("strong").textContent = r.title;
+              row.querySelector("time").textContent = lang.startsWith("zh")
+                ? r.time
+                : r.age + "d";
+              row.querySelector(".session-preview").textContent = r.preview;
+              row.onclick = () =>
+                notify("这里是样例任务。此次预览不展开现有任务详情。");
+              $("sessions").append(row);
+            }
+        }
+        renderRecommendations();
+        $("empty").hidden = !!rows.length || mode === "empty";
+        if (!$("empty").hidden) {
+          $("empty").className = "empty-original";
+          const e =
+            D.locales[lang].devices.presentation.home.empty[
+              query ? "search" : "noSession"
+            ];
+          $("empty").replaceChildren();
+          const h = document.createElement("h3"),
+            p = document.createElement("p");
+          h.textContent =
+            scene === "loading"
+              ? lang.startsWith("zh")
+                ? "正在同步…"
+                : "Syncing…"
+              : e.title;
+          p.textContent = scene === "loading" ? "" : e.copy;
+          $("empty").append(h, p);
+        }
+        $("status-note").hidden = scene !== "offline";
+        $("status-note").textContent = lang.startsWith("zh")
+          ? "电脑已离线，当前显示缓存任务"
+          : "Computer offline. Showing cached tasks.";
+        $("fab").hidden = mode === "empty";
+        $("fab").disabled = scene === "offline" || scene === "loading";
+        $("total").textContent = all.length;
+        $("count").textContent = rows.length;
+        $("verdict").textContent =
+          mode === "empty"
+            ? "完整引导"
+            : mode === "footer"
+              ? "底部推荐"
+              : "隐藏";
+        $("state").textContent = scenes.find((s) => s[0] === scene)[1];
+        $("explanation").textContent =
+          scene === "collapsed"
+            ? "折叠只改变列表展示，不改变 session 计数。4 条任务仍隐藏推荐。"
+            : mode === "empty"
+              ? "没有任务、没有搜索或筛选条件，电脑可用：显示完整引导。"
+              : mode === "footer"
+                ? "当前结果为 1–3 条：列表后接推荐，滚动即可查看；不增加重复的新建按钮。"
+                : scene === "offline" || scene === "loading"
+                  ? "当前电脑不可用或数据未就绪，不显示任务推荐。"
+                  : rows.length === 0
+                    ? "无匹配结果保留原提示，不显示完整引导或推荐。"
+                    : "实际 session 数超过 3 条，列表后不显示推荐。";
+      }
+      const iconById = {
+        findFile: "file",
+        computerStatus: "gauge",
+        projectProgress: "book",
+        downloads: "downloads",
+        summarizeDocument: "file",
+        storageUsage: "disk",
+      };
+      function renderRecommendations() {
+        const el = $("recommendations");
+        el.replaceChildren();
+        el.hidden = !mode;
+        if (!mode) return;
+        el.className = "suggestions " + (mode === "footer" ? "footer" : "");
+        const copy = t();
+        if (mode === "empty") {
+          const connection = document.createElement("div");
+          connection.className = "connection";
+          connection.innerHTML =
+            '<i class="dot"></i><span class="caption"></span>';
+          connection.querySelector("span").textContent = copy.connected;
+          el.append(connection);
+        }
+        const title = document.createElement("h2"),
+          p = document.createElement("p");
+        title.textContent = mode === "empty" ? copy.title : copy.footerTitle;
+        p.className = "copy";
+        p.textContent = mode === "empty" ? copy.copy : copy.footerCopy;
+        el.append(title, p);
+        if (mode === "empty") {
+          const b = document.createElement("button");
+          b.className = "primary";
+          b.textContent = copy.newTask;
+          b.onclick = () => openDraft(null);
+          el.append(b);
+        }
+        const head = document.createElement("div");
+        head.className = "suggest-head";
+        const cap = document.createElement("span");
+        cap.className = "caption";
+        cap.textContent = copy.tryThese;
+        const shuffle = document.createElement("button");
+        shuffle.className = "shuffle";
+        shuffle.innerHTML = icon("shuffle") + '<span class="caption"></span>';
+        shuffle.querySelector("span").textContent = copy.shuffle;
+        shuffle.onclick = () => {
+          batch = (batch + 1) % M.REMOTE_TASK_SUGGESTION_BATCHES.length;
+          renderRecommendations();
+        };
+        head.append(cap, shuffle);
+        el.append(head);
+        for (const id of M.REMOTE_TASK_SUGGESTION_BATCHES[batch]) {
+          const row = document.createElement("button");
+          row.className = "suggest-row";
+          row.dataset.suggestion = id;
+          row.innerHTML =
+            icon(iconById[id]) +
+            '<span class="words"><strong></strong><span class="caption"></span></span>' +
+            icon("chev", "chev");
+          row.querySelector("strong").textContent = copy.items[id].label;
+          row.querySelector(".caption").textContent = copy.items[id].hint;
+          row.onclick = () => openDraft(id);
+          el.append(row);
+        }
+        if (mode === "empty") {
+          const foot = document.createElement("p");
+          foot.className = "footnote";
+          foot.textContent = copy.syncHint;
+          el.append(foot);
+        }
+      }
+      function openDraft(id) {
+        selectedSuggestion = id;
+        page = "new";
+        $("new-page").hidden = false;
+        $("home").inert = true;
+        $("draft").value = id ? t().items[id].prompt : "";
+        $("draft").placeholder =
+          D.locales[lang].session.new.firstMessagePlaceholder;
+        $("workspace-label").textContent =
+          D.locales[lang].session.new.dialogueWorkspace;
+        $("send").disabled = !$("draft").value.trim();
+        $("inspect-title").textContent = id
+          ? t().items[id].label
+          : "空白新任务";
+        $("inspect-text").textContent = id
+          ? t().items[id].prompt
+          : "未选择推荐时，首条消息为空。";
+        $("inspect-hint").textContent =
+          "按当前代码：跳转 /sessions/new，预填首条消息。此处编辑不会自动发送。设备、模型为示例。";
+        $("send-result").hidden = true;
+        $("back").focus();
+      }
+      function back() {
+        page = "home";
+        $("new-page").hidden = true;
+        $("home").inert = false;
+        $("overlay").hidden = true;
+        $("toast").hidden = true;
+      }
+      function notify(message) {
+        $("toast").textContent = message;
+        $("toast").hidden = false;
+        clearTimeout(timer);
+        timer = setTimeout(() => ($("toast").hidden = true), 4000);
+      }
+      $("draft").oninput = () => {
+        $("send").disabled = !$("draft").value.trim();
+        $("inspect-text").textContent = $("draft").value;
+      };
+      $("send").onclick = () => {
+        $("send-result").hidden = false;
+        $("send-result").textContent =
+          "模拟发送内容（未发送到真实设备）\n\n" + $("draft").value;
+        notify("已完成模拟发送。没有创建真实任务。");
+      };
+      $("back").onclick = back;
+      $("fab").onclick = () => openDraft(null);
+      $("query").oninput = (e) => {
+        query = e.target.value;
+        render();
+      };
+      $("clear").onclick = () => {
+        query = "";
+        $("query").value = "";
+        render();
+      };
+      $("scroll-bottom").onclick = () =>
+        $("scroller").scrollTo({
+          top: $("scroller").scrollHeight,
+          behavior: "smooth",
+        });
+      $("theme").onchange = setTheme;
+      $("language").onchange = () => {
+        lang = $("language").value;
+        document.documentElement.lang = lang;
+        render();
+        if (page === "new") openDraft(selectedSuggestion);
+      };
+      function filterMenu() {
+        const labels = D.locales[lang].devices.list.search.filter;
+        $("menu-label").textContent = labels.label;
+        $("menu-items").replaceChildren();
+        const reset = document.createElement("button");
+        reset.className = "menu-option";
+        reset.textContent = labels.reset;
+        reset.onclick = () => {
+          filters = {
+            sort: "relevance",
+            status: "all",
+            agent: "all",
+            lastActivity: "all",
+            projects: "all",
+          };
+          render();
+          filterMenu();
+        };
+        $("menu-items").append(reset);
+        for (const [key, title, options] of [
+          ["sort", labels.sortHeading, labels.sort],
+          ["status", labels.statusHeading, labels.status],
+          ...(samples().length
+            ? [
+                [
+                  "projects",
+                  labels.projectsHeading,
+                  { all: labels.allProjects, cindy: "Cindy" },
+                ],
+              ]
+            : []),
+          ["agent", labels.agentHeading, labels.agent],
+          ["lastActivity", labels.lastActivityHeading, labels.lastActivity],
+        ]) {
+          const g = document.createElement("div");
+          g.className = "menu-group";
+          const h = document.createElement("h4");
+          h.textContent = title;
+          g.append(h);
+          for (const [value, label] of Object.entries(options)) {
+            const btn = document.createElement("button");
+            btn.className = "menu-option";
+            btn.innerHTML = "<span></span><span></span>";
+            btn.children[0].textContent = filters[key] === value ? "✓" : "";
+            btn.children[1].textContent = label;
+            btn.setAttribute("aria-pressed", String(filters[key] === value));
+            btn.onclick = () => {
+              filters[key] = value;
+              render();
+              filterMenu();
+            };
+            g.append(btn);
+          }
+          $("menu-items").append(g);
+        }
+      }
+      $("filter").onclick = () => {
+        filterMenu();
+        $("overlay").hidden = false;
+        $("filter").setAttribute("aria-expanded", "true");
+        $("menu-close").focus();
+      };
+      function closeMenu() {
+        $("overlay").hidden = true;
+        $("filter").setAttribute("aria-expanded", "false");
+        $("filter").focus();
+      }
+      $("menu-close").onclick = closeMenu;
+      $("overlay").onclick = (e) => {
+        if (e.target === $("overlay")) closeMenu();
+      };
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          if (!$("overlay").hidden) closeMenu();
+          else if (page === "new") back();
+        }
+      });
+      scenario("empty");
+    </script>
+  </body>
+</html>

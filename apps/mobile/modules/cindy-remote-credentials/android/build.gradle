@@ -20,6 +20,7 @@ dependencies {
 
 dependencies {
   testImplementation 'org.json:json:20240303'
+  testImplementation 'junit:junit:4.13.2'
 }
 // A test-only JVM peer used by Swift's opt-in two-process interoperability test.
 // The file contains class paths, never fixture keys or application credentials.

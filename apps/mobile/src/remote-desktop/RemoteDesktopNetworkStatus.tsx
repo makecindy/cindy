@@ -1,26 +1,22 @@
-import { StyleSheet, View } from "react-native";
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Text } from "@/components/AppText";
-import {
-  radius,
-  spacing,
-  typeScale,
-  useThemedStyles,
-  type ThemeColors,
-} from "@/theme";
+import { spacing, typeScale, useTheme } from "@/theme";
 import { formatReceiveRate, type DesktopNetworkStats } from "./networkStats";
 
+// Render inside the viewer, between its backdrop and interactive desktop.
 export function RemoteDesktopNetworkStatus({
   stats,
   video,
   top,
+  send,
 }: {
   stats: DesktopNetworkStats | null;
   video: boolean;
   top: number;
+  send: (message: object) => void;
 }) {
   const { t } = useTranslation();
-  const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
   const transport = stats?.transport ?? (video ? "video" : "screenshots");
   const label =
     !stats && !video
@@ -32,37 +28,22 @@ export function RemoteDesktopNetworkStatus({
           screenshots: "screenshotRelay",
         }[transport];
   const latency = stats?.latencyMs;
-  return (
-    <View
-      pointerEvents="none"
-      style={[styles.badge, { top }]}
-      testID="remoteDesktop.network"
-    >
-      <Text style={styles.text}>{t(`remoteDesktop.${label}`)}</Text>
-      <Text style={styles.text}>
-        {`↓ ${formatReceiveRate(stats?.bytesPerSecond ?? null)}`}
-        {latency != null
-          ? ` · ${t(`remoteDesktop.${transport === "screenshots" ? "frameTime" : "roundTrip"}`, { ms: Math.round(latency) })}`
-          : ""}
-      </Text>
-    </View>
-  );
-}
-const makeStyles = (colors: ThemeColors) =>
-  StyleSheet.create({
-    badge: {
-      position: "absolute",
+  const text = `${t(`remoteDesktop.${label}`)}\n${formatReceiveRate(stats?.bytesPerSecond ?? null)}${latency != null ? ` · ${Math.round(latency)} ms` : ""}`;
+  useEffect(() => {
+    send({
+      type: "networkStatus",
+      text,
+      top,
       right: spacing.sm,
-      maxWidth: "75%",
-      paddingHorizontal: spacing.sm,
-      paddingVertical: spacing.xs,
-      borderRadius: radius.control,
-      backgroundColor: colors.surfaceTranslucent,
-    },
-    text: {
       fontSize: typeScale.caption,
-      color: colors.textSecondary,
-      textAlign: "right",
-      fontVariant: ["tabular-nums"],
+      color: colors.textPrimary,
+    });
+  }, [send, text, top, colors.textPrimary]);
+  useEffect(
+    () => () => {
+      send({ type: "networkStatus", text: "" });
     },
-  });
+    [send],
+  );
+  return null;
+}

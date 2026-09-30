@@ -65,7 +65,8 @@
         "expo-build-properties",
         {
           "ios": {
-            "buildReactNativeFromSource": true
+            "buildReactNativeFromSource": true,
+            "enableSceneSupport": true
           }
         }
       ],
@@ -92,6 +93,18 @@
       "expo-notifications",
       "expo-secure-store",
       "expo-web-browser",
+      [
+        "expo-sharing",
+        {
+          "ios": {
+            "enabled": true,
+            "activationRule": {
+              "supportsFileWithMaxCount": 20,
+              "supportsImageWithMaxCount": 20
+            }
+          }
+        }
+      ],
       [
         "expo-font",
         {
@@ -120,6 +133,7 @@
           }
         }
       ],
+      "./plugins/with-incoming-share-files",
       "./plugins/with-remote-desktop-presentation",
       "./plugins/with-foreground-only-audio",
       [

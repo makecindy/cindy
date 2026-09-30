@@ -26,9 +26,9 @@ describe.each(['\n', '\r\n'])('automatic scan budget fallback owners (%j)', (new
     const view = { isActive: () => active, getSnapshot: () => ({ ready: false, error: new Error('[UNSUPPORTED_CAPABILITY] History view scan budget exceeded') }) };
     for (const current of [true, false]) {
       reconcile.mockClear();
-      callback(desktopSource, '  view.subscribe(() => {', '\n  });\n  return view;',
-        ['isCurrent', 'sessions', 'sessionId', 'view', 'isHistoryViewUnavailable', 'reconcileRemoteMessages'],
-        [() => current, new Set(['s']), 's', view, isHistoryViewUnavailable, reconcile]);
+      callback(desktopSource, '  view.subscribe(() => {', '\n  });\n  void view.restoreCachedView',
+        ['isCurrent', 'sessions', 'sessionId', 'view', 'isHistoryViewUnavailable', 'reconcileRemoteMessages', 'persistTimer', 'writeCache', 'setState'],
+        [() => current, new Set(['s']), 's', view, isHistoryViewUnavailable, reconcile, undefined, undefined, vi.fn()]);
       expect(reconcile).toHaveBeenCalledTimes(active && current ? 1 : 0);
       if (active && current) expect(reconcile).toHaveBeenCalledWith('s', { force: true });
     }

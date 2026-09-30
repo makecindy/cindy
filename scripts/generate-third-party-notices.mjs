@@ -6,7 +6,7 @@
  *
  * 范围:根目录及所有 pnpm workspace 包的生产依赖闭包(dependencies +
  * optionalDependencies,递归;workspace 内部包只穿透不收录),外加产品分发的
- * 非 npm 资产(安装包内的 ripgrep / Electron，以及运行时下载的 Codex CLI /
+ * 非 npm 资产(安装包内的 ripgrep / Electron / Skill 资源，以及运行时下载的 Codex CLI /
  * pi coding agent，另含
  * Android Platform-Tools / vendored 代码)的手工条目。
  *
@@ -33,6 +33,9 @@ const MOBILE_DIR = path.join(REPO_ROOT, "apps", "mobile");
 const NOTICES_DIR = path.join(REPO_ROOT, "docs", "legal", "notices");
 const SBOM_DIR = path.join(NOTICES_DIR, "sbom");
 const CARGO_MANIFESTS = [
+  path.join(DESKTOP_DIR, "native", "windows-taskbar", "Cargo.toml"),
+  path.join(DESKTOP_DIR, "native", "xbox-gamepad", "windows-gamepad-helper", "Cargo.toml"),
+  path.join(DESKTOP_DIR, "native", "worklouder", "windows-micro-helper", "Cargo.toml"),
   path.join(DESKTOP_DIR, "native", "remote-desktop", "windows-input", "Cargo.toml"),
   path.join(DESKTOP_DIR, "native", "remote-desktop", "windows-host", "Cargo.toml"),
   path.join(DESKTOP_DIR, "cindy-updater", "src-tauri", "Cargo.toml"),
@@ -699,6 +702,32 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
         (apacheText ||
           "Apache License 2.0 — full text: https://www.apache.org/licenses/LICENSE-2.0") +
         "\n\nCopyright (c) OpenAI",
+    }),
+  );
+
+  // Cindy adapts Codex's skill-creator source and ships it as cindy-skill-creator.
+  entries.push(
+    bundledComponent({
+      name: "OpenAI Codex skill-creator (adapted)",
+      version: "977193486dfe7a88c4dab24abeafe9b754f5b13f",
+      license: "Apache-2.0",
+      url: "https://github.com/openai/codex/tree/977193486dfe7a88c4dab24abeafe9b754f5b13f/codex-rs/skills/src/assets/samples/skill-creator",
+      licenseText: readBundledLicense(
+        "apps/desktop/resources/system-skills/cindy-skill-creator/license.txt",
+      ),
+    }),
+  );
+
+  // PyYAML — vendored pure-Python parser used by the bundled Skill tools.
+  entries.push(
+    bundledComponent({
+      name: "PyYAML (vendored pure-Python runtime)",
+      version: "6.0.3",
+      license: "MIT",
+      url: "https://github.com/yaml/pyyaml/tree/6.0.3",
+      licenseText: readBundledLicense(
+        "apps/desktop/resources/system-skills/cindy-skill-creator/scripts/_vendor/PyYAML-LICENSE.txt",
+      ),
     }),
   );
 

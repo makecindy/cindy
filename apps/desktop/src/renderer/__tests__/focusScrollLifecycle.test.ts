@@ -546,11 +546,12 @@ describe('MessageStream focus cancellation wiring', () => {
     expect(recoveredStart).toBeGreaterThanOrEqual(0);
     expect(recoveredEnd).toBeGreaterThan(recoveredStart);
     const recovered = compensation.slice(recoveredStart, recoveredEnd);
-    expect(recovered).toContain('restoreViewportSnapshot(rebased, 0)');
+    expect(recovered).toContain('offset: snapshot.offset');
+    expect(recovered).toContain('restoreViewportSnapshot(rebased)');
     expect(recovered).toContain(
       'if (!windowAnchorLost && !programmaticScrollRef.current && !isLoadingMore)',
     );
-    const restoreIndex = recovered.indexOf('restoreViewportSnapshot(rebased, 0)');
+    const restoreIndex = recovered.indexOf('restoreViewportSnapshot(rebased)');
     const guardIndex = recovered.indexOf(
       'if (!windowAnchorLost && !programmaticScrollRef.current && !isLoadingMore)',
     );

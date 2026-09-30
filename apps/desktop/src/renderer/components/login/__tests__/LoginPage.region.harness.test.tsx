@@ -3,7 +3,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { CindyAuthClient, reduceAuthFlow, type AuthFlowState } from '@cindy/auth-client';
+import { CindyAuthClient, discoverEmailLogin, reduceAuthFlow, type AuthFlowState } from '@cindy/auth-client';
 import { createScenarioFetch } from '@cindy/auth-client/fixtures';
 
 /**
@@ -38,7 +38,10 @@ const CONSENT_TEXT: Record<string, string> = {
 };
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => CONSENT_TEXT[key] ?? key }),
+  useTranslation: () => ({
+    t: (key: string, params?: { org?: string; email?: string; name?: string }) =>
+      params ? [key, ...Object.values(params)].join('#') : (CONSENT_TEXT[key] ?? key),
+  }),
 }));
 // 构建区域 = global(LEGAL_LINKS 亦随之解析为 protocol.xd.com 系)
 vi.mock('../../../../shared/brandRegion', () => ({
@@ -176,5 +179,78 @@ describe('Global 构建变体:登录改版四件事同样生效', () => {
     fireEvent.click(screen.getByTestId('login-social-apple'));
     expect(screen.getByTestId('login-consent-dialog')).toBeTruthy();
     expect(loginHook.value.dispatch).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('email enterprise region confirmation', () => {
+  it('shows the existing region confirmation, then offers SSO and the original mailbox', async () => {
+    const result = await discoverEmailLogin('User@example.com', {
+      buildRegion: 'global',
+      discoverOrganization: async () => ({
+        region: 'cn', orgName: 'Example Enterprise',
+        connections: [{ connectionId: 'cn-sso', protocol: 'oidc', connectionName: 'Work SSO' }],
+      }),
+      discoverPersonal: vi.fn(),
+    });
+    const identifier = await globalIdentifierState();
+    if (identifier.step !== 'identifier') throw new Error('Expected identifier');
+    const confirmation = reduceAuthFlow(identifier, {
+      type: 'realm-switch-required', targetRegion: result.region,
+      email: result.email, methods: result.methods, providers: identifier.providers,
+    });
+    const view = mount(confirmation);
+    expect(screen.getByText('login.realmConsent.bodyCn')).toBeTruthy();
+    expect(loginHook.value.dispatch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('login-consent-disagree'));
+    expect(loginHook.value.dispatch).toHaveBeenLastCalledWith({ type: 'cancel-sso-realm' });
+    fireEvent.click(screen.getByTestId('login-consent-agree'));
+    expect(loginHook.value.dispatch).toHaveBeenLastCalledWith({ type: 'confirm-sso-realm' });
+
+    loginHook.value.loginState = reduceAuthFlow(confirmation, {
+      type: 'discovery-loaded', email: result.email, methods: result.methods,
+    });
+    view.rerender(<LoginPage />);
+    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
+    const rows = screen.getAllByTestId(/^login-method-/);
+    expect(rows).toHaveLength(2);
+    expect(screen.getByText('login.orgDetected#user@example.com#Example Enterprise')).toBeTruthy();
+    expect(screen.getByTestId('login-method-sso-cn-sso').textContent).toContain('Work SSO');
+    expect(screen.getByTestId('login-method-personal')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('login-method-sso-cn-sso'));
+    expect(loginHook.value.dispatch).toHaveBeenLastCalledWith({
+      type: 'start-browser', kind: 'sso', providerOrConnectionId: 'cn-sso', label: 'Work SSO',
+    });
+  });
+});
+
+
+describe('fresh personal login enterprise suggestion', () => {
+  it.each(['cn', 'global'] as const)('offers enterprise SSO or the successful personal login for %s', async (targetRegion) => {
+    const identifier = await globalIdentifierState();
+    if (identifier.step !== 'identifier') throw new Error('Expected identifier');
+    mount(reduceAuthFlow(identifier, {
+      type: 'realm-switch-required', targetRegion, personalLoginAvailable: true,
+      providers: identifier.providers,
+      methods: [{ type: 'sso', connectionId: 'enterprise-sso', protocol: 'oidc', orgName: 'Enterprise', connectionName: 'Work SSO', ssoRequired: false }],
+    }));
+    expect(screen.getByText('login.realmConsent.personalTitle')).toBeTruthy();
+    expect(screen.getByText(targetRegion === 'cn'
+      ? 'login.realmConsent.personalBodyCn' : 'login.realmConsent.personalBodyGlobal')).toBeTruthy();
+    expect(screen.getByTestId('login-consent-agree').textContent).toContain('login.realmConsent.enterpriseLogin');
+    expect(screen.getByTestId('login-consent-disagree').textContent).toContain('login.realmConsent.continuePersonal');
+    expect(loginHook.value.dispatch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('login-consent-disagree'));
+    expect(loginHook.value.dispatch).toHaveBeenLastCalledWith({ type: 'cancel-sso-realm' });
+    fireEvent.click(screen.getByTestId('login-consent-agree'));
+    expect(loginHook.value.dispatch).toHaveBeenLastCalledWith({ type: 'confirm-sso-realm' });
+  });
+
+  it('submits the full email address from the email field', async () => {
+    mount(await globalIdentifierState());
+    fireEvent.change(screen.getByTestId('login-input'), { target: { value: 'xxxx@xd.com' } });
+    await act(async () => { fireEvent.click(screen.getByTestId('login-consent-radio')); });
+    await act(async () => { fireEvent.click(screen.getByTestId('login-continue-button')); });
+    expect(loginHook.value.dispatchWithResult).toHaveBeenCalledWith({ type: 'discover', email: 'xxxx@xd.com' });
   });
 });

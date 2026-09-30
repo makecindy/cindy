@@ -18,7 +18,7 @@ import {
   importExternalClaudeCodeSessions,
   scanExternalClaudeCodeSessions,
 } from '../../maker-host/claude-local-sessions.js';
-import { dialogueWorkspaceRootDir } from '../dialogueWorkspace.js';
+import { dialogueWorkspaceRoots } from '../dialogueWorkspace.js';
 import {
   normalizeWorkingDirForGrouping,
   normalizeWorkingDirForStorage,
@@ -357,6 +357,5 @@ function isSameOrChildWorkingDir(candidate: string | null | undefined, projectDi
 }
 
 function isManagedDialogueWorkingDir(dir: string | null | undefined): boolean {
-  const root = normalizeWorkingDir(dialogueWorkspaceRootDir());
-  return !!root && isSameOrChildWorkingDir(dir, root);
+  return dialogueWorkspaceRoots().some((root) => isSameOrChildWorkingDir(dir, root));
 }

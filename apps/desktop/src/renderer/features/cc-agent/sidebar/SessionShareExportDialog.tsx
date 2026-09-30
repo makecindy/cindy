@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * SessionShareExportDialog — 会话导出为 .cshare 的确认弹窗。
  *
@@ -242,28 +243,26 @@ export function SessionShareExportDialog({
 
           <div className="mt-5 flex justify-end gap-2">
             <AlertDialog.Cancel asChild>
-              <button
+              <Button
+                variant="secondary"
+                size="md"
+                compact
+                palette="confirmation"
                 type="button"
                 disabled={exporting}
-                className={cn(
-                  'h-8 rounded-lg px-3 text-sm font-medium',
-                  'text-[var(--confirm-btn-secondary-text)] bg-[var(--confirm-bg)]',
-                  'hover:bg-[var(--confirm-btn-secondary-hover)]',
-                )}
               >
                 {t('sessionShare.export.cancel')}
-              </button>
+              </Button>
             </AlertDialog.Cancel>
-            <button
+            <Button
+              variant="cta"
+              size="md"
+              compact
+              palette="confirmation"
+              loading={exporting}
               type="button"
               disabled={!canSubmit}
               onClick={() => void handleExport()}
-              className={cn(
-                'h-8 rounded-lg px-3 text-sm font-medium inline-flex items-center gap-1.5',
-                'text-[var(--confirm-btn-primary-text)] bg-[var(--confirm-btn-primary-bg)]',
-                'hover:bg-[var(--confirm-btn-primary-hover)]',
-                !canSubmit && 'opacity-50 cursor-not-allowed',
-              )}
             >
               {exporting && <Spinner size={14} />}
               {t(
@@ -271,7 +270,7 @@ export function SessionShareExportDialog({
                   ? 'sessionShare.export.confirmExcludeMedia'
                   : 'sessionShare.export.confirm',
               )}
-            </button>
+            </Button>
           </div>
         </AlertDialog.Content>
       </AlertDialog.Portal>

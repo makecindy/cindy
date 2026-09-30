@@ -623,7 +623,7 @@ export function beginLocalCapabilitiesRefresh(): number {
 export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilitiesSnapshot> {
   const api = getMakerApi();
   if (!api) throw new Error('maker IPC not available');
-  const entries = await Promise.all(
+  const results = await Promise.allSettled(
     ALL_AGENT_KINDS.map(async (agent): Promise<readonly [AgentKind, AgentCapabilities] | null> => {
       try {
         return [agent, await api.getCapabilities(agent)] as const;
@@ -640,6 +640,10 @@ export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilities
       }
     }),
   );
+  const entries = results.map((result) => {
+    if (result.status === 'rejected') throw result.reason;
+    return result.value;
+  });
   return entries.filter(
     (entry): entry is readonly [AgentKind, AgentCapabilities] => entry !== null,
   );

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findBareColors, maskColorComments } from './shared/hardcoded-color-match.mjs';
-import { reportDesignLayers } from './shared/design-layer-report.mjs';
+import { reportDesignLayers, readSpacingVariables } from './shared/design-layer-report.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const hash = (text) => createHash('sha256').update(text).digest('hex');
@@ -120,7 +120,7 @@ export function addedLines(diff) {
   return lines;
 }
 
-export function inspectFile(file, source, changed, exemptions) {
+export function inspectFile(file, source, changed, exemptions, spacingVariables) {
   const starts = [0];
   for (let i = 0; i < source.length; i++) if (source[i] === '\n') starts.push(i + 1);
   const locate = index => {
@@ -146,7 +146,7 @@ export function inspectFile(file, source, changed, exemptions) {
       suggestion: 'Desktop: find the matching role in themes/colors.ts and consume var(--role) / hsl(var(--role)); preserve local aliases. Mobile: use ThemeColors. If no role fits, request a design decision; do not guess a token.',
     }];
   });
-  const layers = scope === 'block' ? reportDesignLayers(file, clean, changed, locate) : [];
+  const layers = scope === 'block' ? reportDesignLayers(file, clean, changed, locate, spacingVariables) : [];
   return [...colors, ...layers];
 }
 
@@ -154,6 +154,10 @@ export function audit({ root = ROOT, baseRef = 'origin/main', headRef = 'HEAD', 
   const resolve = ref => git(root, ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`]).trim();
   const base = resolve(baseRef), head = resolve(headRef);
   const exemptions = readExemptions(root);
+  // Load and validate the spacing contract from the audited root on every
+  // run: a docs- or colour-only diff never reaches the lazy read inside
+  // classifySpacing, and hashing alone would accept a corrupt contract.
+  const spacingVariables = readSpacingVariables(root);
   const range = worktree ? [base] : [base, head];
   const diffArgs = ['diff', '--no-ext-diff', '--no-textconv', '--no-renames'];
   const tracked = git(root, [...diffArgs, '--name-only', '-z', ...range, '--']).split('\0').filter(Boolean);
@@ -176,12 +180,19 @@ export function audit({ root = ROOT, baseRef = 'origin/main', headRef = 'HEAD', 
     const changed = untracked.includes(file) ? new Set(source.split('\n').map((_, i) => i + 1))
       : addedLines(git(root, [...diffArgs, '--unified=0', ...range, '--', file]));
     sources.push({ file, sha256: hash(source), addedLines: [...changed] });
-    try { findings.push(...inspectFile(file, source, changed, exemptions)); }
+    try { findings.push(...inspectFile(file, source, changed, exemptions, spacingVariables)); }
     catch (error) { throw new Error(`${file}: ${error.message}`); }
   }
-  const scripts = ['scripts/hardcoded-color-audit.mjs', 'scripts/shared/hardcoded-color-match.mjs',
-    'scripts/shared/design-layer-report.mjs', 'scripts/hardcoded-color-exemptions.json'];
-  const scriptHashes = Object.fromEntries(scripts.map(f => [f, hash(fs.readFileSync(path.join(f.endsWith('.json') ? root : ROOT, f)))]));
+  // Code hashes bind the running scripts; input hashes bind the audited
+  // root's contract inputs, so audit({root}) reports that checkout's inputs.
+  const scriptFiles = ['scripts/hardcoded-color-audit.mjs', 'scripts/shared/hardcoded-color-match.mjs',
+    'scripts/shared/design-layer-report.mjs'];
+  const inputFiles = ['scripts/hardcoded-color-exemptions.json', 'packages/design-tokens/src/desktop-bindings.json',
+    'packages/design-tokens/src/semantic/foundations.json'];
+  const scriptHashes = Object.fromEntries([
+    ...scriptFiles.map(f => [f, hash(fs.readFileSync(path.join(ROOT, f)))]),
+    ...inputFiles.map(f => [f, hash(fs.readFileSync(path.join(root, f)))]),
+  ]);
   const colors = findings.filter(f => f.rule === 'bare-color');
   return { schemaVersion: 1, base, head, candidate: worktree ? 'worktree (staged + unstaged + untracked)' : 'commit',
     scriptHashes, candidateHash: hash(JSON.stringify(sources)), sources,

@@ -1,10 +1,10 @@
+import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pause, Play, X } from 'lucide-react';
 
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
-import { Spinner } from '@/components/ui/spinner';
 import type {
   CuratedOllamaModel,
   LocalInstalledModel,
@@ -402,20 +402,19 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
               onResume={() => void handlePull(entry.libraryName)}
             />
           ) : (
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
               type="button"
               disabled={!canDownload}
               onClick={() => void handlePull(entry.libraryName)}
-              className="flex h-8 shrink-0 items-center rounded-full px-3.5 text-12 font-medium disabled:opacity-50"
-              style={{
-                backgroundColor: 'var(--surface-chip)',
-                color: 'var(--text-primary)',
-              }}
+              className="shrink-0"
             >
               {failed
                 ? t('settings.providers.local.retryDownload')
                 : t('settings.providers.local.downloadAdd')}
-            </button>
+            </Button>
           )}
         </div>
         {pulling && pull && <PullMeter pull={pull} />}
@@ -425,7 +424,7 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
 
   return (
     <div
-      className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto border-t px-5 py-5"
+      className="flex flex-col gap-6 border-t px-5 py-5"
       style={{ borderColor: 'var(--settings-theme-card-border)' }}
     >
       {statusKind !== 'ready' && statusKind !== 'pulling' && statusKind !== 'absent' && (
@@ -443,16 +442,17 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
         />
       )}
       {statusKind === 'stopped' && (
-        <button
+        <Button
+          variant="cta"
+          size="lg"
+          loading={busy}
           type="button"
           disabled={busy}
           onClick={() => void handleStart()}
-          className="flex h-9 w-fit items-center gap-2 rounded-full px-4 text-13 font-medium"
-          style={{ backgroundColor: 'var(--accent-cta-bg)', color: 'var(--surface-on-card)' }}
+          className="w-fit"
         >
-          {busy && <Spinner size={13} />}
           {t('settings.providers.local.start')}
-        </button>
+        </Button>
       )}
 
       <section className="flex flex-col gap-3">
@@ -532,18 +532,15 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
               color: 'var(--settings-section-title)',
             }}
           />
-          <button
+          <Button
+            variant="secondary"
+            size="lg"
             type="button"
             disabled={!canDownload || !normalizeOllamaPullName(libraryName)}
             onClick={() => void handlePull(libraryName)}
-            className="flex h-9 items-center rounded-full px-4 text-12 font-medium disabled:opacity-50"
-            style={{
-              backgroundColor: 'var(--surface-chip)',
-              color: 'var(--text-primary)',
-            }}
           >
             {t('settings.providers.local.downloadAdd')}
-          </button>
+          </Button>
         </div>
       </section>
 

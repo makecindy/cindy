@@ -288,3 +288,39 @@ describe('Bot release migrations', () => {
       VALUES ('tab-3', 'session-1', 'bot-artifacts')`).run()).not.toThrow();
   });
 });
+
+it('preserves existing private messages while allowing a remote peer without a local profile', () => {
+  const db = createDb();
+  runBotMigrations(db);
+  db.exec(`
+    INSERT INTO bot_profiles (id, display_name, created_at, updated_at) VALUES ('a', 'A', 1, 1), ('b', 'B', 1, 1);
+    INSERT INTO sessions (id) VALUES ('a-main'), ('b-main');
+    INSERT INTO bot_direct_message_threads
+      (id, bot_a_id, bot_b_id, max_messages, expires_at, created_at, updated_at)
+      VALUES ('thread', 'a', 'b', 12, 100, 1, 1);
+    INSERT INTO bot_direct_messages
+      (id, thread_id, sequence, sender_bot_id, recipient_bot_id, sender_session_id, recipient_session_id, content, created_at)
+      VALUES ('delivery', 'thread', 1, 'a', 'b', 'a-main', 'b-main', 'keep this message', 1);
+  `);
+  const migration = ALL_MIGRATIONS.find(row => readFileSync(row.sqlPath, 'utf8').includes('CREATE TABLE `__new_bot_direct_message_threads`'))!;
+  // The production runner also wraps SQL in a transaction with foreign keys ON.
+  db.transaction(() => db.exec(readFileSync(migration.sqlPath, 'utf8')))();
+  expect(db.prepare('SELECT content, sender_name FROM bot_direct_messages').get())
+    .toEqual({ content: 'keep this message', sender_name: null });
+  db.exec(`
+    INSERT INTO bot_direct_message_threads
+      (id, bot_a_id, bot_b_id, max_messages, expires_at, created_at, updated_at)
+      VALUES ('remote', 'a', 'device::bot', 12, 100, 1, 1);
+    INSERT INTO bot_direct_messages
+      (id, thread_id, sequence, sender_bot_id, recipient_bot_id, sender_session_id, recipient_name, content, created_at)
+      VALUES ('remote-delivery', 'remote', 1, 'a', 'device::bot', 'a-main', 'Remote name', 'remote content', 2);
+  `);
+  const bridgeMigration = ALL_MIGRATIONS.find(row => readFileSync(row.sqlPath, 'utf8').includes('ADD `bridge_session_id`'))!;
+  const beforeBridge = db.prepare('SELECT * FROM bot_direct_messages ORDER BY id').all();
+  db.transaction(() => db.exec(readFileSync(bridgeMigration.sqlPath, 'utf8')))();
+  expect(db.prepare('SELECT * FROM bot_direct_messages ORDER BY id').all())
+    .toEqual(beforeBridge.map(row => ({ ...row as Record<string, unknown>, bridge_session_id: null })));
+  db.exec("UPDATE bot_direct_messages SET bridge_session_id='old-remote-session' WHERE id='remote-delivery'");
+  expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+  expect(db.prepare('SELECT count(*) AS count FROM bot_direct_messages').get()).toEqual({ count: 2 });
+});

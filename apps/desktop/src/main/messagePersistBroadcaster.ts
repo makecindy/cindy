@@ -1,3 +1,4 @@
+import { readTaskResultsForReply } from './botTaskReplyResults.js';
 /**
  * messagePersistBroadcaster — 把 agent 消息的持久化从 renderer 收口到 main 单点。
  * ---------------------------------------------------------------------------
@@ -559,11 +560,18 @@ function markAssistantTurnBoundary(
   clientId: string | undefined,
   completed: boolean,
   metaPatch?: Pick<AgentMeta, 'nativeForkAnchor'>,
+  taskResultInputIds?: readonly string[],
 ): Promise<boolean> {
   if (!sessionId || !clientId) return Promise.resolve(false);
   return enqueueDurableWrite(`turn-boundary:${sessionId}:${clientId}:${completed}`, async (ownerScope) => {
+    const botTaskResults = completed && taskResultInputIds?.length
+      ? await readTaskResultsForReply(sessionId, clientId, taskResultInputIds).catch(() => {
+        log.warn('Could not attach teammate results; standalone receipts remain available');
+        return [];
+      }) : [];
     const patched = await patchMessageAgentMetaWithResult(sessionId, clientId, {
       ...metaPatch,
+      ...(botTaskResults.length ? { botTaskResults } : {}),
       turnCompleted: completed,
     });
     if (!patched) return false;
@@ -580,8 +588,9 @@ export function markAssistantTurnCompleted(
   sessionId: string,
   clientId: string | undefined,
   metaPatch?: Pick<AgentMeta, 'nativeForkAnchor'>,
+  taskResultInputIds?: readonly string[],
 ): Promise<boolean> {
-  return markAssistantTurnBoundary(sessionId, clientId, true, metaPatch);
+  return markAssistantTurnBoundary(sessionId, clientId, true, metaPatch, taskResultInputIds);
 }
 
 /**
@@ -2056,6 +2065,29 @@ export function resetTurnPersistState(sessionId: string): void {
 }
 
 /**
+ * Extension notices are already complete. Keep them out of assistantBlocks,
+ * reply dedup/fork anchors and per-turn usage targets, including when a notice
+ * arrives between model deltas. The normal durable-row broadcast works for
+ * both local windows and older device-link clients without a new stream flag.
+ */
+export function onStandaloneTextEvent(
+  sessionId: string,
+  text: string,
+  agentMeta: Pick<AgentMeta, 'botPrivateReply'> | null = null,
+): string | undefined {
+  if (!text.trim()) return undefined;
+  const persistId = createId();
+  enqueueVisibleDbMessage(`standalone_text:${sessionId}:${persistId}`, sessionId, {
+    clientId: persistId,
+    role: 'assistant',
+    content: text,
+    agentMeta,
+    createdAt: Date.now(),
+  });
+  return persistId;
+}
+
+/**
  * 处理 assistant 'text' 事件,返回该消息的 persistId 供 onEvent 盖进广播 payload。
  *
  *  - delta(isFinal=false):首 delta 分配 persistId、建 block;后续累积全文。**不落库**。
@@ -2069,10 +2101,13 @@ export function resetTurnPersistState(sessionId: string): void {
  */
 export function onAssistantTextEvent(
   sessionId: string,
-  data: { text?: unknown; isFinal?: unknown; isFullText?: unknown; agentMessageId?: unknown },
+  data: { text?: unknown; isFinal?: unknown; isFullText?: unknown; agentMessageId?: unknown; phase?: string; runtimeRecovery?: boolean },
   agentMeta: AgentMeta | null,
   turnScope?: 'turn' | 'background',
 ): string | undefined {
+  if (typeof data.phase === 'string' || data.runtimeRecovery === true) {
+    agentMeta = { ...agentMeta, assistantPhase: data.runtimeRecovery === true ? 'commentary' : data.phase as string };
+  }
   const rawText = typeof data.text === 'string' ? data.text : '';
   const isFinal = data.isFinal === true;
   const isFullText = data.isFullText === true;

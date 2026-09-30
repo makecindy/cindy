@@ -65,7 +65,7 @@ interface Harness {
   reactToMessage: ReturnType<typeof vi.fn>;
 }
 
-function wire(opts: { withPrepare: boolean } = { withPrepare: true }): Harness {
+function wire(opts: { withPrepare: boolean; notificationSessionId?: string } = { withPrepare: true }): Harness {
   const calls: string[] = [];
   const runAgentTurn = vi.fn(async () => undefined);
   const reactToMessage = vi.fn(async () => 'reaction-1');
@@ -96,6 +96,7 @@ function wire(opts: { withPrepare: boolean } = { withPrepare: true }): Harness {
 
   const adapter = {
     channel: 'feishu',
+    ...(opts.notificationSessionId ? { resolveNotificationReply: async () => opts.notificationSessionId } : {}),
     im,
     ui: slackUi,
     threadScoped: false,
@@ -194,4 +195,15 @@ describe('messageHandler early user-message persist', () => {
     expect(h.persistEarly).not.toHaveBeenCalled();
     expect(turnArgs(h.runAgentTurn).prePersistedUserMessage).toBeUndefined();
   });
+});
+
+
+it('does not persist a notification reply into the default IM session before dispatch', async () => {
+  activateImAccountBoundary();
+  const h = wire({ withPrepare: true, notificationSessionId: 'original-session' });
+  h.deliver(makeEvent({ senderId: 'ou_owner', replyThread: { rootMessageId: 'om_root', threadId: 'omt_topic' } }));
+  await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledWith(expect.objectContaining({
+    notificationSessionId: 'original-session', scopeKey: 'om_root',
+  })));
+  expect(h.persistEarly).not.toHaveBeenCalled();
 });

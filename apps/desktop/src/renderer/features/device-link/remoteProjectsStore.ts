@@ -1,3 +1,4 @@
+import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 /**
  * remoteProjectsStore —— 控制端「远程项目」内存层(device-link 跨设备远程控制)。
  * ---------------------------------------------------------------------------
@@ -98,12 +99,40 @@ const renameSubs = new Set<(deviceId: string, name: string) => void>();
  * 故 mark disconnected / remove / clear 都用自增(条目保留,仅随 distinct 设备数增长,可忽略)。
  */
 const snapshotEpoch = new Map<string, number>();
+// Lifecycle revisions are shared by detail reads and queued refreshes. Snapshot
+// epochs alone cannot cancel a rerun that has not acquired its next epoch yet.
+const detailDeviceEpoch = new Map<string, number>();
+const detailPatchEpoch = new Map<string, number>();
+// Origin/connection restamps retain content identity. Authoritative snapshots
+// and route/content patches produce a new identity, even when values are equal.
+const sessionContentOrigins = new WeakMap<Session, Session>();
+// Activity and list presentation pushes do not establish a newer model route.
+const activityFields = ['totalMoney', 'totalCostUsd', 'totalTokenUsage', 'lastTurnEndedAt',
+  'preview', 'title', 'userSendAt', 'updatedAt'] as const;
+const activityFieldNames: ReadonlySet<string> = new Set(activityFields);
+type ActivityField = typeof activityFields[number];
+// Per-field markers distinguish pushes after a GET began, even equal-value pushes.
+const sessionActivityChanges = new WeakMap<Session, Partial<Record<ActivityField, object>>>();
+
+function preserveSessionContent(previous: Session, next: Session): Session {
+  sessionContentOrigins.set(next, sessionContentOrigin(previous)!);
+  const changes = sessionActivityChanges.get(previous);
+  if (changes) sessionActivityChanges.set(next, changes);
+  return next;
+}
+
+function sessionContentOrigin(session: Session | undefined): Session | undefined {
+  return session && (sessionContentOrigins.get(session) ?? session);
+}
 
 function snapshotEpochKey(deviceId: string, status: RemoteSessionStatus): string {
   return `${deviceId}\u0000${status}`;
 }
 
 function invalidateDeviceSnapshotEpochs(deviceId: string): void {
+  if (detailDeviceEpoch.has(deviceId)) {
+    detailDeviceEpoch.set(deviceId, detailDeviceEpoch.get(deviceId)! + 1);
+  }
   for (const status of ['active', 'archived'] as const) {
     const key = snapshotEpochKey(deviceId, status);
     snapshotEpoch.set(key, (snapshotEpoch.get(key) ?? 0) + 1);
@@ -127,6 +156,8 @@ let bootstrapRetryImpl: ((deviceId: string) => void) | null = null;
 let mergedSnapshot: Session[] = [];
 /** sessionId → deviceId 注册表(随分片变化重建)。 */
 const sessionDeviceIndex = new Map<string, string>();
+/** sessionId → 投影后标题(含标题预览),随 recompute 重建;供消息来源标签 O(1) 查询。 */
+const sessionTitleIndex = new Map<string, string>();
 /**
  * 「归属已确定、但快照还没到」的 origin 钉子:sessionId → deviceId。
  *
@@ -304,6 +335,7 @@ function withPendingTitle(session: Session): Session {
 function recompute(): void {
   recomputeScheduleIndex();
   sessionDeviceIndex.clear();
+  sessionTitleIndex.clear();
   // 先铺 origin 钉子:分片还没到的新建远程会话也必须能被判定为远程(见 pinnedOrigins)。
   // 分片派生值随后覆盖同 id 的条目。
   for (const [sessionId, deviceId] of pinnedOrigins) sessionDeviceIndex.set(sessionId, deviceId);
@@ -313,8 +345,10 @@ function recompute(): void {
     const flat: Session[] = [];
     for (const shard of shards.values()) {
       for (const s of shard.sessions) {
-        flat.push(withPendingTitle(s));
+        const projected = withPendingTitle(s);
+        flat.push(projected);
         sessionDeviceIndex.set(s.id, shard.deviceId);
+        if (projected.title) sessionTitleIndex.set(s.id, projected.title);
       }
     }
     mergedSnapshot = flat;
@@ -394,12 +428,13 @@ function stamp(
   deviceName: string,
   connectionStatus: DeviceLinkConnectionStatus,
 ): Session {
-  return {
+  const stamped: Session = {
     ...session,
     deviceLinkDeviceId: deviceId,
     deviceLinkDeviceName: deviceName,
     deviceLinkConnectionStatus: connectionStatus,
   };
+  return preserveSessionContent(session, stamped);
 }
 
 const actions = {
@@ -583,8 +618,11 @@ const actions = {
       deviceName,
       [
         ...rawSessions,
+        // setDeviceSessions already preserves missing companions. Feeding them
+        // back as incoming rows would turn a connection restamp into a snapshot.
         ...existing.sessions.filter(
-          (session) => session.status === status && !incomingIds.has(session.id),
+          (session) =>
+            session.source !== 'bot' && session.status === status && !incomingIds.has(session.id),
         ),
       ],
       status,
@@ -598,7 +636,42 @@ const actions = {
    *  - 落到未知 session:active 一律重拉；archived 仅在归档桶已加载时重拉，避免后台
    *    为用户尚未查看的历史记录额外取数。
    */
+  applyTagCatalog(deviceId: string, tags: unknown): void {
+    const shard = shards.get(deviceId);
+    // Any list read may also be bringing in new or unarchived tasks. Reconcile
+    // every observed bucket after fencing it, not only its first snapshot.
+    for (const status of ['active', 'archived'] as const) {
+      actions.nextSnapshotEpoch(deviceId, status);
+      if (
+        shard?.loadedStatuses.has(status) ||
+        actions.isSessionStatusLoading(deviceId, status) ||
+        (!shard && status === 'active')
+      ) {
+        requestRemoteReseed(deviceId, status);
+      }
+    }
+    if (!shard) return;
+    const catalog = normalizeTaskTags(tags, 256);
+    shard.sessions = shard.sessions.map((session) => ({
+      ...session,
+      tags: reconcileTaskTags(session.tags, catalog),
+    }));
+    recompute();
+  },
   applyPatch(deviceId: string, sessionId: string, patch: Record<string, unknown>): void {
+    // Even an unknown row can be deleted/archived while its first GET is in flight.
+    // Usage, reply timestamps and list presentation cannot change its route
+    // or lifecycle. These activity-only pushes are
+    // dropped before a row exists, so they must not invalidate the only detail
+    // capable of loading it. Mixed patches still invalidate; existing rows also
+    // retain newer activity through the detail read's per-field merge.
+    const changesDetail = Object.keys(patch).some((key) =>
+      !activityFieldNames.has(key),
+    );
+    const detailKey = `${deviceId}\u0000${sessionId}`;
+    if (changesDetail && detailPatchEpoch.has(detailKey)) {
+      detailPatchEpoch.set(detailKey, detailPatchEpoch.get(detailKey)! + 1);
+    }
     const deleted = patch.status === 'deleted';
     // 删除清缓存必须放在**所有早退之前**:这个会话可能不在当前(有界)分片里、甚至这台设备
     // 还没有分片,但它完全可能有一份上次打开时留下的消息缓存文件 —— 那时早退就等于把
@@ -633,17 +706,20 @@ const actions = {
     const wasPinned = shard.sessions[idx]?.pinnedAt != null;
     const unpinned =
       Object.prototype.hasOwnProperty.call(patch, 'pinnedAt') && patch.pinnedAt == null;
-    shard.sessions = shard.sessions.map((s) =>
-      s.id === sessionId
-        ? {
-            ...s,
-            ...(patch as Partial<Session>),
-            deviceLinkDeviceId: shard.deviceId,
-            deviceLinkDeviceName: shard.deviceName,
-            deviceLinkConnectionStatus: shard.connectionStatus,
-          }
-        : s,
-    );
+    shard.sessions = shard.sessions.map((session) => {
+      if (session.id !== sessionId) return session;
+      const next = stamp({ ...session, ...(patch as Partial<Session>) },
+        shard.deviceId, shard.deviceName, shard.connectionStatus);
+      if (!changesDetail) {
+        preserveSessionContent(session, next);
+        const changes = { ...sessionActivityChanges.get(session) };
+        for (const field of activityFields) {
+          if (Object.prototype.hasOwnProperty.call(patch, field)) changes[field] = {};
+        }
+        sessionActivityChanges.set(next, changes);
+      }
+      return next;
+    });
     recompute();
     if (wasPinned && unpinned) requestRemoteReseed(deviceId, 'active');
   },
@@ -656,11 +732,9 @@ const actions = {
     const shard = shards.get(deviceId);
     if (shard && shard.deviceName !== name) {
       shard.deviceName = name;
-      shard.sessions = shard.sessions.map((s) => ({
-        ...s,
-        deviceLinkDeviceName: name,
-        deviceLinkConnectionStatus: shard.connectionStatus,
-      }));
+      shard.sessions = shard.sessions.map((session) =>
+        stamp(session, deviceId, name, shard.connectionStatus),
+      );
       recompute();
     }
     renameSubs.forEach((fn) => fn(deviceId, name));
@@ -702,6 +776,7 @@ const actions = {
   /** 标记全部已缓存远程设备暂不可达,但不清空侧边栏会话快照。 */
   markAllDisconnected(): void {
     for (const [k, v] of snapshotEpoch) snapshotEpoch.set(k, v + 1);
+    for (const [k, v] of detailDeviceEpoch) detailDeviceEpoch.set(k, v + 1);
     const bootstrapStateChanged =
       bootstrapLoadingDeviceIds.size > 0 ||
       archivedLoadingDeviceIds.size > 0 ||
@@ -760,6 +835,7 @@ const actions = {
     // 所有设备 epoch 无条件**自增**(不 clear-to-0,见 snapshotEpoch 注释的 ABA):清空时在途
     // 首拉立即失效;下一轮 bootstrap 拿到更高 epoch,不会与清空前的 epoch 撞值把陈旧 snapshot 盖回。
     for (const [k, v] of snapshotEpoch) snapshotEpoch.set(k, v + 1);
+    for (const [k, v] of detailDeviceEpoch) detailDeviceEpoch.set(k, v + 1);
     // 登出 / device-link stopped 是明确的生命周期边界:叠加层是本次会话期的临时
     // 显示态,跨过边界后不该复活(也避免长期留存用户输入的文本)。
     pendingTitlePreview.clear();
@@ -855,6 +931,45 @@ const actions = {
     return status ? sessions.filter((session) => session.status === status) : sessions;
   },
 
+  /** Cancel pending work on disconnect/removal without cancelling ordinary fresh reads. */
+  getDeviceLifecycleEpoch(deviceId: string): number {
+    const epoch = detailDeviceEpoch.get(deviceId) ?? 0;
+    detailDeviceEpoch.set(deviceId, epoch);
+    return epoch;
+  },
+
+  /** A detail read must not roll back a newer push, deletion, or device lifecycle. */
+  captureSessionRead(deviceId: string, sessionId: string): (() => boolean) & { mergeActivity: (detail: Session) => Session } {
+    const beforeRow = shards.get(deviceId)?.sessions.find((session) => session.id === sessionId);
+    const before = sessionContentOrigin(beforeRow);
+    const beforeActivity = beforeRow ? sessionActivityChanges.get(beforeRow) : undefined;
+    const deviceEpoch = detailDeviceEpoch.get(deviceId) ?? 0;
+    detailDeviceEpoch.set(deviceId, deviceEpoch);
+    const detailKey = `${deviceId}\u0000${sessionId}`;
+    const patchEpoch = detailPatchEpoch.get(detailKey) ?? 0;
+    detailPatchEpoch.set(detailKey, patchEpoch);
+    const isCurrent = () =>
+      sessionContentOrigin(
+        shards.get(deviceId)?.sessions.find((session) => session.id === sessionId),
+      ) === before &&
+      detailDeviceEpoch.get(deviceId) === deviceEpoch &&
+      detailPatchEpoch.get(detailKey) === patchEpoch;
+    return Object.assign(isCurrent, {
+      mergeActivity(detail: Session): Session {
+        const current = shards.get(deviceId)?.sessions.find((session) => session.id === sessionId);
+        if (!current || !isCurrent()) return detail;
+        const changes = sessionActivityChanges.get(current);
+        const overrides: Partial<Session> = {};
+        for (const field of activityFields) {
+          if (changes?.[field] && changes[field] !== beforeActivity?.[field]) {
+            Object.assign(overrides, { [field]: current[field] });
+          }
+        }
+        return { ...detail, ...overrides };
+      },
+    });
+  },
+
   /** 该设备的指定状态桶是否已成功拿到过权威列表（权威空数组也算）。 */
   hasLoadedSessionStatus(deviceId: string, status: RemoteSessionStatus): boolean {
     return shards.get(deviceId)?.loadedStatuses.has(status) ?? false;
@@ -887,6 +1002,11 @@ const actions = {
     const failureChanged = setSessionStatusFailed(deviceId, status, true);
     if (!loadingCleared && !failureChanged) return;
     subs.forEach((fn) => fn());
+  },
+
+  /** 远端任务当前标题(含标题预览),按 id 索引;未知任务返回 null。 */
+  getSessionTitle(sessionId: string): string | null {
+    return sessionTitleIndex.get(sessionId)?.trim() || null;
   },
 
   /**
@@ -1045,6 +1165,13 @@ export function retryRemoteSessionStatus(deviceId: string, status: RemoteSession
 /** 用户可见错误态的重试入口：重新订阅并拉取该设备的首次任务快照。 */
 export function retryRemoteSessionBootstrap(deviceId: string): void {
   bootstrapRetryImpl?.(deviceId);
+}
+
+/** 组件内订阅:单个远端任务的当前标题(按 id 索引,不随其它任务变化而扫描列表)。 */
+export function useRemoteSessionTitle(sessionId: string | undefined): string | null {
+  return useSyncExternalStore(subscribe, () =>
+    sessionId ? actions.getSessionTitle(sessionId) : null,
+  );
 }
 
 /** 组件内订阅:返回扁平远端会话快照(喂给 sidebar 合并点)。 */

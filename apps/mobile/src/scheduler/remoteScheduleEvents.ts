@@ -36,6 +36,8 @@ const snapshots = new Map<string, RemoteScheduleEventSnapshot>();
 // `clearDevice()` so mounted screens can observe a presence-offline cleanup even when
 // that device had not emitted a schedule event in the current process.
 const mirrorInvalidationVersions = new Map<string, number>();
+// Keep generations monotonic across recovery/clear without retaining per-device counters.
+let nextMirrorInvalidationGeneration = 0;
 let mirrorInvalidationSnapshot: ReadonlyMap<string, number> = new Map();
 const subs = new Set<() => void>();
 
@@ -73,14 +75,7 @@ export const remoteScheduleEventStore = {
   },
 
   invalidateDeviceMirror(deviceId: string): void {
-    if (!deviceId) return;
-    snapshots.delete(deviceId);
-    mirrorInvalidationVersions.set(
-      deviceId,
-      (mirrorInvalidationVersions.get(deviceId) ?? 0) + 1,
-    );
-    mirrorInvalidationSnapshot = new Map(mirrorInvalidationVersions);
-    emit();
+    remoteScheduleEventStore.invalidateDeviceMirrors([deviceId]);
   },
 
   /**
@@ -90,12 +85,15 @@ export const remoteScheduleEventStore = {
    */
   invalidateDeviceMirrors(deviceIds: readonly string[]): void {
     let changed = false;
-    for (const deviceId of deviceIds) {
+    for (const deviceId of new Set(deviceIds)) {
       if (!deviceId) continue;
+      // Presence and Home may report the same offline state independently. Only
+      // publish again after recovery clears the marker or a fresh event arrives.
+      if (mirrorInvalidationVersions.has(deviceId) && !snapshots.has(deviceId)) continue;
       snapshots.delete(deviceId);
       mirrorInvalidationVersions.set(
         deviceId,
-        (mirrorInvalidationVersions.get(deviceId) ?? 0) + 1,
+        ++nextMirrorInvalidationGeneration,
       );
       changed = true;
     }

@@ -131,3 +131,12 @@ describe('Windows process snapshot', () => {
     expect(windowsProcessSnapshot(() => 'null')).toEqual([]);
   });
 });
+
+
+it('rejects a non-Metro Unix listener before trusting persisted owner metadata', () => {
+  const readOwner = vi.fn(() => owner);
+  expect(probeMetroOwnership(8081, {
+    platform: 'darwin', listenerPid: () => '300', isMetroPid: () => false, readOwner,
+  })).toEqual({ pid: '300', cwd: null, source: null });
+  expect(readOwner).not.toHaveBeenCalled();
+});

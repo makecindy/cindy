@@ -20,10 +20,10 @@ import type { ScheduleSidebarIndexSnapshot } from '../scheduler/lib/scheduleSide
 import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
-import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
-import type { RemoteSessionListSessionLike } from '@cindy/maker-shared/session-list';
+import { readSessionBatch, isSessionListRow as isRemoteSessionListSession } from '@/lib/sessionBatchRead';
 import { remoteProjectsStore, type RemoteSessionStatus } from './remoteProjectsStore';
 import { removeRemoteSessionActivityEntry } from './remoteSessionActivityStore';
+import { unresponsiveDevicesStore } from './unresponsiveDevicesStore';
 import type { CachedDeviceSessionsSnapshot } from './mirrorCacheClient';
 
 const log = createLogger('device-link-refresh');
@@ -101,86 +101,6 @@ export function isTransientRemoteError(message: string): boolean {
   return TRANSIENT_MARKERS.some((m) => message.includes(m));
 }
 
-function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === 'string';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function hasOptionalNullableString(record: Record<string, unknown>, key: string): boolean {
-  return record[key] === undefined || isNullableString(record[key]);
-}
-
-function hasOptionalBoolean(record: Record<string, unknown>, key: string): boolean {
-  return record[key] === undefined || typeof record[key] === 'boolean';
-}
-
-function hasOptionalFiniteNumber(record: Record<string, unknown>, key: string): boolean {
-  const value = record[key];
-  return (
-    value === undefined || value === null || (typeof value === 'number' && Number.isFinite(value))
-  );
-}
-
-function isRemoteSessionListSession(
-  value: unknown,
-  expectedStatus: RemoteSessionStatus,
-): value is RemoteSessionListSessionLike {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const session = value as Record<string, unknown>;
-  const count = session._count;
-  return (
-    typeof session.id === 'string' &&
-    session.id.length > 0 &&
-    typeof session.title === 'string' &&
-    isNullableString(session.workingDir) &&
-    typeof session.model === 'string' &&
-    session.status === expectedStatus &&
-    typeof session.agentKind === 'string' &&
-    typeof session.createdAt === 'string' &&
-    typeof session.updatedAt === 'string' &&
-    (session.userId === undefined || typeof session.userId === 'string') &&
-    hasOptionalNullableString(session, 'workspaceKind') &&
-    hasOptionalNullableString(session, 'effort') &&
-    hasOptionalNullableString(session, 'permissionMode') &&
-    hasOptionalNullableString(session, 'sdkSessionId') &&
-    hasOptionalNullableString(session, 'clearedAt') &&
-    hasOptionalNullableString(session, 'pinnedAt') &&
-    hasOptionalNullableString(session, 'userSendAt') &&
-    hasOptionalNullableString(session, 'source') &&
-    hasOptionalNullableString(session, 'orcaRole') &&
-    hasOptionalNullableString(session, 'providerId') &&
-    hasOptionalNullableString(session, 'parentSessionId') &&
-    hasOptionalNullableString(session, 'forkedAtMessageId') &&
-    hasOptionalNullableString(session, 'worktreePath') &&
-    hasOptionalNullableString(session, 'remoteHostId') &&
-    hasOptionalNullableString(session, 'preview') &&
-    hasOptionalNullableString(session, 'summary') &&
-    hasOptionalBoolean(session, 'fastMode') &&
-    hasOptionalBoolean(session, 'planModeEnabled') &&
-    hasOptionalBoolean(session, 'usedProjectContext') &&
-    hasOptionalFiniteNumber(session, 'totalTokenUsage') &&
-    hasOptionalFiniteNumber(session, 'totalCostUsd') &&
-    hasOptionalFiniteNumber(session, 'contextTokens') &&
-    hasOptionalFiniteNumber(session, 'contextWindow') &&
-    hasOptionalFiniteNumber(session, 'activeTurnStartedAt') &&
-    hasOptionalFiniteNumber(session, 'lastTurnEndedAt') &&
-    (session.extraDirs === undefined ||
-      (Array.isArray(session.extraDirs) &&
-        session.extraDirs.every((dir) => typeof dir === 'string'))) &&
-    (session.writableDirs === undefined ||
-      (Array.isArray(session.writableDirs) &&
-        session.writableDirs.every((dir) => typeof dir === 'string'))) &&
-    (count === undefined ||
-      count === null ||
-      (isRecord(count) &&
-        (count.messages === undefined ||
-          (typeof count.messages === 'number' && Number.isFinite(count.messages)))))
-  );
-}
-
 function parseRemoteSessionList(value: unknown, expectedStatus: RemoteSessionStatus): Session[] {
   if (
     !Array.isArray(value) ||
@@ -225,7 +145,9 @@ export type RefreshResult = 'ok' | 'revoked' | 'superseded' | 'gave-up';
 
 interface RefreshTask {
   promise: Promise<RefreshResult>;
+  lifecycleEpoch: number;
   rerun: boolean;
+  rerunEpoch?: number;
   name?: string;
   opts: RefreshOptions;
 }
@@ -274,10 +196,22 @@ export async function refreshRemoteDeviceSessions(
   name?: string,
   opts: RefreshOptions = {},
 ): Promise<RefreshResult> {
+  // The main-process probe owns recovery while the circuit is open. Preserve
+  // the mirror and avoid starting another listing/retry chain in every window.
+  if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
   const status = opts.status ?? 'active';
   const taskKey = refreshTaskKey(deviceId, status);
+  const lifecycleEpoch = remoteProjectsStore.getDeviceLifecycleEpoch(deviceId);
   const existing = refreshTasks.get(taskKey);
   if (existing) {
+    if (existing.lifecycleEpoch !== lifecycleEpoch) {
+      // Keep the physical request single-flight across disable/re-enable. A new
+      // caller may retry after it settles; the cancelled caller cannot do so.
+      await existing.promise;
+      if (remoteProjectsStore.getDeviceLifecycleEpoch(deviceId) !== lifecycleEpoch)
+        return 'superseded';
+      return refreshRemoteDeviceSessions(deviceId, name, opts);
+    }
     const requestedSnapshotMode = opts.snapshotMode ?? 'merge';
     // periodic tick 是弱语义：已有任意 refresh 在途时直接复用，不能每个 interval tick
     // 都 bump epoch 让慢请求自取消。bootstrap/reseed 等事件型 refresh 仍走强语义补跑。
@@ -300,12 +234,13 @@ export async function refreshRemoteDeviceSessions(
       coalescingMode: undefined,
     };
     // 先让当前 in-flight snapshot 失效,否则它可能在排队的补跑开始前覆盖 push 带来的新状态。
-    remoteProjectsStore.nextSnapshotEpoch(deviceId, status);
+    existing.rerunEpoch = remoteProjectsStore.nextSnapshotEpoch(deviceId, status);
     return existing.promise;
   }
 
   const task: RefreshTask = {
     promise: Promise.resolve('gave-up'),
+    lifecycleEpoch,
     rerun: false,
     name,
     opts,
@@ -320,10 +255,21 @@ export async function refreshRemoteDeviceSessions(
 async function drainRefreshTask(deviceId: string, task: RefreshTask): Promise<RefreshResult> {
   let result: RefreshResult = 'gave-up';
   do {
+    if (remoteProjectsStore.getDeviceLifecycleEpoch(deviceId) !== task.lifecycleEpoch)
+      return 'superseded';
     task.rerun = false;
     result = await runRefreshRemoteDeviceSessions(deviceId, task.name, task.opts);
     // revoked 是被控端明确拒绝,不再补跑排队请求。
     if (result === 'revoked') return result;
+    // Disconnect/remove/clear must cancel queued work as well as the in-flight
+    // snapshot. A new reconnect refresh can explicitly queue a newer epoch.
+    if (
+      task.rerun &&
+      task.rerunEpoch !== undefined &&
+      !remoteProjectsStore.isLatestSnapshotEpoch(deviceId, task.rerunEpoch, task.opts.status ?? 'active')
+    ) {
+      return 'superseded';
+    }
   } while (task.rerun);
   return result;
 }
@@ -342,20 +288,7 @@ async function probeMissingSessionStatuses(
   const snapshots = new Map(
     remoteProjectsStore.getDeviceSessions(deviceId).map((session) => [session.id, session]),
   );
-  const results = await Promise.all(
-    candidates.map(async (sessionId) => {
-      try {
-        const value = await window.electronAPI.deviceLink.invoke(
-          deviceId,
-          'local-db:sessions:get',
-          [sessionId, DEVICE_LINK_RECONCILIATION_PROBE_MARKER],
-        );
-        return { sessionId, value };
-      } catch (error) {
-        return { sessionId, errorCode: extractIpcError(error)?.code };
-      }
-    }),
-  );
+  const results = await readSessionBatch(candidates, deviceId);
   // 更强的 refresh / remove / disconnect 已使本轮失效时，不应用迟到的补查结果。
   if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return;
   const terminalIds = new Set<string>();
@@ -369,7 +302,7 @@ async function probeMissingSessionStatuses(
     if (result.errorCode === 'NOT_FOUND') {
       terminalIds.add(result.sessionId);
       remoteProjectsStore.applyPatch(deviceId, result.sessionId, { status: 'deleted' });
-      removeRemoteSessionActivityEntry(result.sessionId);
+      removeRemoteSessionActivityEntry(result.sessionId, deviceId);
       continue;
     }
     if (!result.value || typeof result.value !== 'object') continue;
@@ -381,7 +314,7 @@ async function probeMissingSessionStatuses(
         status: session.status,
         updatedAt: session.updatedAt,
       });
-      removeRemoteSessionActivityEntry(result.sessionId);
+      removeRemoteSessionActivityEntry(result.sessionId, deviceId);
       continue;
     }
     // sessions:get 返回缺席行时同样是权威快照，回填 title / pinnedAt / model 等
@@ -414,6 +347,7 @@ async function runRefreshRemoteDeviceSessions(
   let timeoutAttempts = 0;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
     // 被一次更新的重拉取代(期间又发起了新的 refresh)→ 停手,交给那一次(也避免无谓重试)。
     if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
     try {
@@ -452,7 +386,8 @@ async function runRefreshRemoteDeviceSessions(
           if (status === 'archived' || sessions.length < LIST_LIMIT) {
             if (status === 'active') {
               for (const session of missingSessions) {
-                if (session.source !== 'bot') removeRemoteSessionActivityEntry(session.id);
+                if (session.source !== 'bot')
+                  removeRemoteSessionActivityEntry(session.id, deviceId);
               }
             }
             remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions, status);
@@ -468,7 +403,9 @@ async function runRefreshRemoteDeviceSessions(
           await probeMissingSessionStatuses(deviceId, epoch, missingCompanionIds, status);
         }
       }
+      if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
       if (opts.scope === 'schedule' || opts.scope === 'both') {
+        if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
         try {
           const raw = await window.electronAPI.deviceLink.invoke(
             deviceId,

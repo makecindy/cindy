@@ -154,8 +154,9 @@ describe('live stream interruption wiring', () => {
   it('peer ACK reset：无 durable owner 时仍保留独立 forced-open 恢复意图', () => {
     expect(source).toContain('const forcedPeerRecoveryIntentRef = useRef(new PeerRecoveryOpenIntentRegistry());');
     expect(source).toMatch(
-      /onPeerTransportReset[\s\S]*requestForcedPeerRecovery\(client, deviceId\)[\s\S]*rehydrateWithClient\(client, deviceId\)/,
+      /onPeerTransportReset[\s\S]*requestForcedPeerRecovery\(client, deviceId\)[\s\S]*rehydrate\(deviceId\)/,
     );
+    expect(source).toMatch(/const rehydrate = \(deviceId\?: string\) => \{\s*catalogRefresh.wake\(deviceId\);\s*return rehydrateWithClient\(client, deviceId\);/);
     expect(source).toContain('resolvePeerRecoveryPlan(');
     expect(source).toContain('for (const deviceId of forcedPeerRecoveryIntentRef.current.deviceIds())');
     expect(source).toContain('forcedPeerRecoveryIntentRef.current.complete(targetDeviceId, forcedGeneration)');

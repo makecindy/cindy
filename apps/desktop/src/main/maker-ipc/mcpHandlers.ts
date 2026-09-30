@@ -45,7 +45,7 @@ export interface McpHandlerDeps {
    * 但 Codex 的 extraArgs/extraEnv 在 codexEnvironment 的模块级 `cached` 里被冻住，后续会话复用旧
    * spawn 配置——不失效则新增 server 不出现、删除 / 换 token 仍残留，直到重启 app。生产实现清
    * codexEnvironment 缓存 + dispose app-server（与 slack 变更同款,best-effort，busy 会话软重启失败
-   * 只告警不阻塞 CRUD）。测试可省略。
+   * 登记空闲重试而不阻塞 CRUD）。测试可省略。
    */
   invalidateCodex?(): Promise<void>;
   /**

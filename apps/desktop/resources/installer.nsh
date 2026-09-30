@@ -7,7 +7,18 @@
 ; 接受);dev 仍独立名,dev 安装器绝不误伤同机并存的正式安装。注册表键名
 ; Windows 大小写不敏感,shell 键 "Cindy" 与历史写入的 "cindy" 是同一个键,
 ; 行为零变化。
+!include "${BUILD_RESOURCES_DIR}\winget-shortcuts.nsh"
+!include "${BUILD_RESOURCES_DIR}\installer-directory.nsh"
+
+!ifndef BUILD_UNINSTALLER
 !macro customInit
+  !insertmacro cindyDirectoryInit
+!macroend
+
+; Run only after the directory preflight, immediately before replacing the app.
+; The upstream install section skips this hook in elevated inner instances;
+; cindyDirectoryBeforeInstall invokes it for those instances instead.
+!macro customCheckAppRunning
   ; Check if the app is already running
   check_running:
     nsProcess::_FindProcess "${APP_EXECUTABLE_FILENAME}"
@@ -15,14 +26,20 @@
     ${If} $R0 == 0
       MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
         "${PRODUCT_FILENAME} 正在运行，请先关闭后再继续安装。$\n$\n点击「确定」将在关闭后继续。" \
-        IDOK kill_app
-      Abort
+        /SD IDCANCEL IDOK kill_app
+      SetErrorLevel 1602
+      Quit
       kill_app:
         nsProcess::_KillProcess "${APP_EXECUTABLE_FILENAME}"
         Sleep 1000
         Goto check_running
     ${EndIf}
 
+  ${If} ${isUpdated}
+    ; winget passes --updated. Preserve existing links across old uninstallers,
+    ; which deleted them even when electron-builder passed --keep-shortcuts.
+    !insertmacro cindyBackupUpgradeShortcuts
+  ${Else}
   ; 删旧快捷方式：老 .lnk 里 IconLocation 仍指向上一版 exe 的资源索引，
   ; 新版 .ico 内多尺寸顺序/数量变化后那个索引会落到另一张图。
   ; 让 NSIS 在后续步骤中重建 .lnk，新的 IconLocation 自然指向当前 exe 的索引 0。
@@ -34,9 +51,14 @@
 
   ; 同步清掉 PinnedTaskbar 里的副本（任务栏固定项也会缓存图标）
   Delete "$APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\${SHORTCUT_NAME}.lnk"
+  ${EndIf}
 !macroend
+!endif
 
 !macro customInstall
+  ${If} ${isUpdated}
+    !insertmacro cindyRestoreUpgradeShortcuts
+  ${EndIf}
   ; 注册文件夹右键菜单 "通过 <区域名> 打开" (与 main/folderContextMenu.ts 写的是同一组键)。
   ; 双重保险:installer 写一次让首装即可用, app 启动时的 registerFolderContextMenu()
   ; 也会校验+修复, 覆盖 "升级后路径漂移" / "组策略清掉注册表" 等场景。
@@ -65,12 +87,33 @@
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
 !macroend
 
+; Electron registers the per-user login item under the executable basename.
+; Upgrades invoke the old uninstaller too: preserve both registration and the
+; user's StartupApproved state. Only remove entries owned by this install path.
+!macro cindyRemoveLoginItemOnUninstall
+  ${IfNot} ${isUpdated}
+    Push $R0
+    ReadRegStr $R0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_FILENAME}"
+    ${If} $R0 == '"$INSTDIR\${APP_EXECUTABLE_FILENAME}"'
+    ${OrIf} $R0 == '$INSTDIR\${APP_EXECUTABLE_FILENAME}'
+      DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_FILENAME}"
+      DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "${PRODUCT_FILENAME}"
+    ${EndIf}
+    Pop $R0
+  ${EndIf}
+!macroend
+
 !macro customUnInstall
+  !insertmacro cindyRemoveLoginItemOnUninstall
+  ; Only --keep-shortcuts opts out: manual reinstall still uses its old cleanup
+  ; path, although electron-builder also passes --updated to that uninstaller.
+  ${IfNot} ${isKeepShortcuts}
   ; 卸载时清理本产品自己的快捷方式(不碰并存的老 XDMaker / 另一区域安装)
   Delete "$DESKTOP\${SHORTCUT_NAME}.lnk"
   Delete "$SMPROGRAMS\${SHORTCUT_NAME}.lnk"
   Delete "$SMPROGRAMS\${PRODUCT_FILENAME}\${SHORTCUT_NAME}.lnk"
   Delete "$APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\${SHORTCUT_NAME}.lnk"
+  ${EndIf}
   ; 清理右键菜单注册表项 (子键 \command 必须先删 / 用 DeleteRegKey 整树删)。
   ; 老版本 (未引入此功能) 这两条键不存在, DeleteRegKey 静默 no-op 不抛错。
   DeleteRegKey HKCU "Software\Classes\Directory\shell\${PRODUCT_FILENAME}"

@@ -133,6 +133,9 @@ describe('parentRelPath / joinRelPath', () => {
 describe('fileThumbKind', () => {
   it('图片/文本/其它分派', () => {
     expect(fileThumbKind('a.PNG')).toBe('image');
+    expect(fileThumbKind('diagram.SVG')).toBe('image');
+    expect(fileThumbKind('diagram.drawio.svg')).toBe('image');
+    expect(fileThumbKind('diagram.svg.txt')).toBe('doc');
     expect(fileThumbKind('b.ts')).toBe('doc');
     expect(fileThumbKind('noext')).toBe('generic');
     expect(fileThumbKind('c.db')).toBe('generic');

@@ -326,8 +326,12 @@ describe('snapshotRealProfile', () => {
     fs.mkdirSync(path.join(destDir, 'Default'), { recursive: true });
     writeSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies', 'stale-cookie');
     writeSqlite(path.join(destDir, 'Default', 'Login Data'), 'logins', 'stale-login');
-    // Cookies copies first; a corrupt Login Data fails the later backup.
-    fs.writeFileSync(path.join(source.userDataDir, 'Profile 6', 'Login Data'), 'not-a-sqlite-db');
+    // The first cookie DB copies; failure of another required cookie DB must
+    // still leave the previous complete snapshot untouched.
+    fs.writeFileSync(
+      path.join(source.userDataDir, 'Profile 6', 'Network', 'Cookies'),
+      'not-a-sqlite-db',
+    );
 
     await expect(
       snapshotRealProfile({ source, destDir, platform: 'darwin' }),
@@ -339,6 +343,95 @@ describe('snapshotRealProfile', () => {
     expect(fs.existsSync(`${destDir}.staging`)).toBe(false);
     expect(leftoverStagingNames(destDir)).toEqual([]);
   });
+
+  it.each(['darwin', 'win32', 'linux'] as const)(
+    'copies cookies while optional stores have exclusive SQLite locks (%s)',
+    async (platform) => {
+      const source = seedSource(makeTempDir());
+      const profile = path.join(source.userDataDir, 'Profile 6');
+      const destDir = realProfileDestDir(path.join(makeTempDir(), 'runtime'));
+      const names = ['Login Data', 'Login Data For Account', 'Web Data'] as const;
+      writeSqlite(path.join(profile, names[1]), 'logins', 'account-password');
+      writeSqlite(path.join(profile, names[2]), 'autofill', 'saved-form');
+      await snapshotRealProfile({ source, destDir, platform });
+      const locks = names.map((name) => {
+        const db = new DatabaseSync(path.join(profile, name));
+        db.exec('PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE;');
+        return db;
+      });
+      try {
+        const result = await snapshotRealProfile({ source, destDir, platform });
+        expect(result.warnings).toEqual(names.map((database) => ({ database, reason: 'locked' })));
+        expect(readSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies')).toBe(
+          'session-cookie',
+        );
+        for (const name of names) {
+          // Never leave an old password store from a previous snapshot behind.
+          expect(fs.existsSync(path.join(destDir, 'Default', name))).toBe(false);
+          expect(result.filesCopied).not.toContain(path.join('Default', name));
+        }
+        expect(leftoverStagingNames(destDir)).toEqual([]);
+      } finally {
+        for (const db of locks) db.close();
+      }
+      const retry = await snapshotRealProfile({ source, destDir, platform });
+      expect(retry.warnings).toBeUndefined();
+      expect(readSqlite(path.join(destDir, 'Default', 'Login Data'), 'logins')).toBe(
+        'saved-password',
+      );
+    },
+  );
+
+  it('skips a corrupt password database with a controlled warning', async () => {
+    const source = seedSource(makeTempDir());
+    const destDir = realProfileDestDir(path.join(makeTempDir(), 'runtime'));
+    fs.writeFileSync(path.join(source.userDataDir, 'Profile 6', 'Login Data'), 'not-a-sqlite-db');
+    const result = await snapshotRealProfile({ source, destDir, platform: 'darwin' });
+    expect(result.warnings).toEqual([{ database: 'Login Data', reason: 'copy-failed' }]);
+    expect(fs.existsSync(path.join(destDir, 'Default', 'Login Data'))).toBe(false);
+    expect(readSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies')).toBe('session-cookie');
+  });
+
+  it.each(['darwin', 'win32'] as const)(
+    'skips optional read denial without exposing paths (%s)',
+    async (platform) => {
+      const source = seedSource(makeTempDir());
+      const destDir = realProfileDestDir(path.join(makeTempDir(), 'runtime'));
+      const realOpen = fs.openSync.bind(fs);
+      vi.spyOn(fs, 'openSync').mockImplementation(((file, flags, mode) => {
+        if (String(file) === path.join(source.userDataDir, 'Profile 6', 'Login Data')) {
+          throw Object.assign(new Error(`Access denied: ${file}`), { code: 'EACCES' });
+        }
+        return realOpen(file, flags, mode);
+      }) as typeof fs.openSync);
+      try {
+        const result = await snapshotRealProfile({ source, destDir, platform });
+        expect(result.warnings).toEqual([{ database: 'Login Data', reason: 'permission-denied' }]);
+        expect(fs.existsSync(path.join(destDir, 'Default', 'Login Data'))).toBe(false);
+        expect(readSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies')).toBe(
+          'session-cookie',
+        );
+      } finally {
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
+  it('fails closed with a lock reason when the required cookie DB is locked', async () => {
+    const source = seedSource(makeTempDir());
+    const destDir = realProfileDestDir(path.join(makeTempDir(), 'runtime'));
+    const db = new DatabaseSync(path.join(source.userDataDir, 'Profile 6', 'Cookies'));
+    db.exec('PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE;');
+    try {
+      await expect(
+        snapshotRealProfile({ source, destDir, platform: 'darwin' }),
+      ).rejects.toMatchObject({ code: 'PROFILE_LOCKED' });
+      expect(fs.existsSync(destDir)).toBe(false);
+      expect(leftoverStagingNames(destDir)).toEqual([]);
+    } finally {
+      db.close();
+    }
+  }, 10_000);
 
   it('uses sqlite backup so dest has no WAL sidecar from the source', async () => {
     const root = makeTempDir();
@@ -378,11 +471,11 @@ describe('snapshotRealProfile', () => {
     fs.mkdirSync(path.join(destDir, 'Default'), { recursive: true });
     writeSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies', 'existing-snapshot');
 
-    await expect(
-      snapshotRealProfile({ source, destDir, platform: 'win32' }),
-    ).rejects.toMatchObject({
-      code: 'APP_BOUND_ENCRYPTION_UNSUPPORTED',
-    });
+    await expect(snapshotRealProfile({ source, destDir, platform: 'win32' })).rejects.toMatchObject(
+      {
+        code: 'APP_BOUND_ENCRYPTION_UNSUPPORTED',
+      },
+    );
 
     expect(readSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies')).toBe(
       'existing-snapshot',
@@ -432,6 +525,22 @@ describe('snapshotRealProfile', () => {
 });
 
 describe('probeSourceProfileReadAccess', () => {
+  it('does not require optional password read permission before launching', () => {
+    const source = seedSource(makeTempDir());
+    const realOpen = fs.openSync.bind(fs);
+    vi.spyOn(fs, 'openSync').mockImplementation(((file, flags, mode) => {
+      if (String(file).endsWith(`${path.sep}Login Data`)) {
+        throw Object.assign(new Error('private source path'), { code: 'EACCES' });
+      }
+      return realOpen(file, flags, mode);
+    }) as typeof fs.openSync);
+    try {
+      expect(probeSourceProfileReadAccess(source)).toEqual({ readable: true });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('reports readable for a fake last_used profile', () => {
     const root = makeTempDir();
     expect(probeSourceProfileReadAccess(seedSource(root))).toEqual({ readable: true });

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames';
 /**
@@ -22,6 +23,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { AlertTriangle, Check, ChevronDown, CircleHelp, Minus, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { providerViewToCustomProviderConfig, updateCustomProvider } from '@/lib/customProviders';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from '@/components/ui/dropdown-menu';
@@ -58,6 +60,7 @@ import {
   clampEffortToSupported,
   EFFORT_VALUES,
   isAgentSelectableModel,
+  isOrganizationManagedProvider,
   modelProtocolComparison,
   pickRecommendedAgent,
 } from '@cindy/model-providers';
@@ -436,6 +439,7 @@ export function ModelAdvancedDrawer({
             )}
           />
           <Dialog.Content
+            onPointerDownOutside={(event) => event.preventDefault()}
             className={cn(
               'fixed inset-0 z-[10001] m-auto flex h-fit max-h-[calc(100dvh-48px)] w-[800px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-xl',
               'border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
@@ -623,16 +627,20 @@ export function ModelAdvancedDrawer({
                         );
                       })}
                       {visibilityCustomized && !paymentRequired && selectionAvailable && (
-                        <button
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          tone="quiet"
+                          compact
                           type="button"
                           onClick={async () => {
                             if (!await resetModelVisibilities(provider.id, visibilityTargets))
                               toast.error(t('settings.providers.models.visibilityWriteFailed'));
                           }}
-                          className="mt-2 rounded-full px-2 py-1 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]"
+                          className="mt-2"
                         >
                           {t('settings.providers.models.advanced.restoreDefault')}
-                        </button>
+                        </Button>
                       )}
                     </Section>
                   )}
@@ -642,31 +650,21 @@ export function ModelAdvancedDrawer({
                       title={t('settings.providers.models.advanced.defaultEffort')}
                       hint={t('settings.providers.models.advanced.defaultEffortHint')}
                     >
-                      <div className="mt-1 flex flex-wrap gap-1 rounded-2xl border border-[var(--settings-theme-card-border)] p-[3px]">
-                        {shownEfforts.map((effort) => {
-                          const available = efforts.includes(effort);
-                          const active = currentEffort === effort;
-                          return (
-                            <button
-                              key={effort}
-                              type="button"
-                              disabled={!available || paymentRequired}
-                              aria-pressed={active}
-                              onClick={() => applyEffort(effort)}
-                              className={cn(
-                                'flex-1 rounded-full py-1 text-12 transition-colors',
-                                active
-                                  ? 'bg-[var(--settings-menu-bg-hover)] text-[var(--text-primary)]'
-                                  : available
-                                    ? 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                                    : 'cursor-not-allowed text-[var(--text-tertiary)] opacity-45',
-                              )}
-                            >
-                              {t(`effortLevels.${effort}`)}
-                            </button>
-                          );
-                        })}
-                      </div>
+                      <SegmentedControl
+                        className="mt-1"
+                        fullWidth
+                        height={32}
+                        optionHeight={24}
+                        aria-label={t('settings.providers.models.advanced.defaultEffort')}
+                        value={shownEfforts.find((effort) => effort === currentEffort) ?? null}
+                        onValueChange={applyEffort}
+                        disabled={paymentRequired}
+                        options={shownEfforts.map((effort) => ({
+                          value: effort,
+                          label: t(`effortLevels.${effort}`),
+                          disabled: !efforts.includes(effort),
+                        }))}
+                      />
                       {effortMixed && (
                         <p className="mt-1.5 text-12 text-[var(--text-tertiary)]">
                           {t('settings.providers.models.advanced.effortMixed')}
@@ -676,17 +674,21 @@ export function ModelAdvancedDrawer({
                         (a) =>
                           getProviderModelEffort(a, provider.id, row.byAgent[a]!.id) !== undefined,
                       ) && (
-                        <button
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          tone="quiet"
+                          compact
                           type="button"
                           disabled={paymentRequired}
                           onClick={() => {
                             for (const a of chatAgents)
                               clearProviderModelEffort(a, provider.id, row.byAgent[a]!.id);
                           }}
-                          className="mt-2 rounded-full px-2 py-1 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]"
+                          className="mt-2"
                         >
                           {t('settings.providers.models.advanced.restoreDefault')}
-                        </button>
+                        </Button>
                       )}
                     </Section>
                   )}
@@ -888,7 +890,7 @@ export function ModelAdvancedDrawer({
                     )}
                     {/* 自定义报价:原「⋯」菜单的一项,搬到它真正相关的段落里。
                     XD 网关的价格由服务端定,不给覆盖入口(与 IPC 侧的拒绝一致)。 */}
-                    {provider.id !== 'xd' && !paymentRequired && (
+                    {provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired && (
                       <button
                         type="button"
                         onClick={() => setPriceDialogOpen(true)}
@@ -920,29 +922,35 @@ export function ModelAdvancedDrawer({
               </div>
             </div>
 
-            {/* 动作区:准入轴与本机文件。与上面的显示轴刻意隔开一段留白 ——
-                  它们不是同一件事,放在一起会让人以为关了开关就等于停用。 */}
+            {/* Missing manufacturer metadata does not make a configured
+                outbound protocol unconfirmed. Keep that distinction in
+                the manufacturer reference when one is declared. */}
             {!paymentRequired && (
               <div className="flex shrink-0 flex-col gap-2 border-t border-[var(--settings-theme-card-border)] px-5 py-3">
-                <button
+                <Button
+                  variant="secondary"
+                  size="md"
+                  compact
                   type="button"
                   disabled={disabled && !selectionAvailable}
                   onClick={() => onDisable(row)}
-                  className="h-8 rounded-full disabled:opacity-50 border border-[var(--settings-btn-secondary-border)] text-13 text-[var(--settings-btn-secondary-text)] transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
                 >
                   {disabled
                     ? t('settings.providers.models.enableModel')
                     : t('settings.providers.models.disableModel')}
-                </button>
+                </Button>
                 {isLocalOllama && onDeleteLocal && (
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    tone="danger"
+                    compact
                     type="button"
                     onClick={() => onDeleteLocal(row)}
-                    className="flex h-8 items-center justify-center gap-1.5 rounded-full text-13 text-[var(--error-flat)] transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
                   >
                     <Trash2 size={13} />
                     {t('settings.providers.local.deleteModel')}
-                  </button>
+                  </Button>
                 )}
               </div>
             )}

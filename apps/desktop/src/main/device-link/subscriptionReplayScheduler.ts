@@ -1,4 +1,4 @@
-import { DeviceLinkError } from '@cindy/device-link';
+import { DeviceLinkError, PeerRecoveryScheduler } from '@cindy/device-link';
 
 const PERMANENT_SUBSCRIPTION_REPLAY_CODES: ReadonlySet<string> = new Set([
   'VERSION_MISMATCH',
@@ -34,8 +34,6 @@ export type SubscriptionReplayScheduler = {
   teardown(): void;
 };
 
-type Timer = ReturnType<typeof setTimeout>;
-
 type SubscriptionReplaySchedulerOptions = {
   snapshotSubscriptions: (deviceId?: string) => SubscriptionReplayRef[];
   remoteSubscribe: (deviceId: string, topics: string[]) => Promise<unknown>;
@@ -63,112 +61,43 @@ type SubscriptionReplaySchedulerOptions = {
 export function createSubscriptionReplayScheduler(
   options: SubscriptionReplaySchedulerOptions,
 ): SubscriptionReplayScheduler {
-  const retryBaseMs = options.retryBaseMs ?? 3_000;
-  const retryMaxMs = options.retryMaxMs ?? 30_000;
-  const retryTimers = new Map<string, Timer>();
-  const inFlight = new Map<string, symbol>();
-  const pendingReruns = new Map<string, string>();
-  const generations = new Map<string, number>();
-
-  const currentGeneration = (deviceId: string): number => generations.get(deviceId) ?? 0;
-
-  const clearTimer = (deviceId: string): void => {
-    const timer = retryTimers.get(deviceId);
-    if (!timer) return;
-    clearTimeout(timer);
-    retryTimers.delete(deviceId);
-  };
-
-  const replayDevice = (
-    deviceId: string,
-    topics: string[],
-    reason: string,
-    attempt: number,
-    generation?: number,
-  ): void => {
-    if (inFlight.has(deviceId)) {
-      pendingReruns.set(deviceId, reason);
-      return;
-    }
-
-    const gen = generation ?? currentGeneration(deviceId) + 1;
-    if (generation === undefined) generations.set(deviceId, gen);
-    clearTimer(deviceId);
-
-    const requestToken = Symbol(deviceId);
-    inFlight.set(deviceId, requestToken);
-    void options.remoteSubscribe(deviceId, topics).catch((error: unknown) => {
-      if (currentGeneration(deviceId) !== gen) return;
-      if (options.isPermanentError(error, deviceId)) {
-        options.log.warn(
-          `device-link replay subscriptions failed (${reason}) for ${deviceId.slice(0, 8)}, permanent, giving up: ${String(error)}`,
-        );
-        return;
-      }
-
-      const delay = Math.min(retryBaseMs * 2 ** attempt, retryMaxMs);
+  // Reuse Mobile's per-peer serialization, cancellation and retry accounting.
+  // The adapter owns only Desktop's subscription snapshot and availability gates.
+  const scheduler = new PeerRecoveryScheduler(async (deviceId) => {
+    if (options.isLinkTornDown() || !options.isRelayOnline()) return { retry: false };
+    if (options.isDeviceUnresponsive(deviceId)) return { retry: false };
+    if (options.getPresenceAvailability(deviceId) === false) return { retry: false };
+    const current = options.snapshotSubscriptions(deviceId)
+      .find((ref) => ref.deviceId === deviceId);
+    if (!current || current.topics.length === 0) return { retry: false };
+    try {
+      await options.remoteSubscribe(deviceId, current.topics);
+      return { retry: false };
+    } catch (error) {
+      const retry = !options.isPermanentError(error, deviceId);
       options.log.warn(
-        `device-link replay subscriptions failed (${reason}) for ${deviceId.slice(0, 8)}, retrying in ${delay}ms: ${String(error)}`,
+        `device-link replay subscriptions failed for ${deviceId.slice(0, 8)}, ` +
+        `${retry ? 'retrying with backoff' : 'permanent, giving up'}: ${String(error)}`,
       );
-      const timer = setTimeout(() => {
-        retryTimers.delete(deviceId);
-        if (currentGeneration(deviceId) !== gen) return;
-        if (options.isLinkTornDown() || !options.isRelayOnline()) return;
-        if (options.isDeviceUnresponsive(deviceId)) return;
-        // Presence is incremental and resets on reconnect. Unknown must keep the
-        // existing backoff alive; only an explicit offline/disabled verdict stops it.
-        if (options.getPresenceAvailability(deviceId) === false) return;
-        const current = options
-          .snapshotSubscriptions(deviceId)
-          .find((ref) => ref.deviceId === deviceId);
-        if (!current || current.topics.length === 0) return;
-        replayDevice(deviceId, current.topics, `${reason}-retry`, attempt + 1, gen);
-      }, delay);
-      timer.unref?.();
-      retryTimers.set(deviceId, timer);
-    }).finally(() => {
-      // A teardown/re-acquire can start a new request before an old one settles.
-      // Only the request that registered the token may clear in-flight state.
-      if (inFlight.get(deviceId) !== requestToken) return;
-      inFlight.delete(deviceId);
-      const pendingReason = pendingReruns.get(deviceId);
-      if (!pendingReason) return;
-      pendingReruns.delete(deviceId);
-      if (options.isLinkTornDown() || !options.isRelayOnline()) return;
-      replay(pendingReason + '-pending', deviceId);
-    });
-  };
-
-  const replay = (reason: string, deviceId?: string): void => {
-    const refs = options.snapshotSubscriptions(deviceId);
-    if (refs.length === 0) return;
-    const topicCount = refs.reduce((sum, item) => sum + item.topics.length, 0);
-    options.log.debug(
-      `device-link replay subscriptions (${reason}): devices=${refs.length} topics=${topicCount}`,
-    );
-    for (const ref of refs) replayDevice(ref.deviceId, ref.topics, reason, 0);
-  };
-
-  const cancel = (deviceId: string): void => {
-    generations.set(deviceId, currentGeneration(deviceId) + 1);
-    clearTimer(deviceId);
-    pendingReruns.delete(deviceId);
-  };
-
-  const teardown = (): void => {
-    const devices = new Set([
-      ...retryTimers.keys(),
-      ...inFlight.keys(),
-      ...pendingReruns.keys(),
-      ...generations.keys(),
-    ]);
-    for (const deviceId of devices) {
-      generations.set(deviceId, currentGeneration(deviceId) + 1);
-      clearTimer(deviceId);
-      pendingReruns.delete(deviceId);
+      return { retry };
     }
-    inFlight.clear();
-  };
+  }, {
+    unrefRetryTimers: true,
+    retryBaseMs: options.retryBaseMs ?? 3_000,
+    retryMaxMs: options.retryMaxMs ?? 30_000,
+  });
 
-  return { replay, cancel, teardown };
+  return {
+    replay(reason, deviceId) {
+      const refs = options.snapshotSubscriptions(deviceId);
+      if (refs.length === 0) return;
+      options.log.debug(
+        `device-link replay subscriptions (${reason}): devices=${refs.length} ` +
+        `topics=${refs.reduce((sum, ref) => sum + ref.topics.length, 0)}`,
+      );
+      scheduler.requestMany(refs.map((ref) => ref.deviceId));
+    },
+    cancel(deviceId) { scheduler.cancel(deviceId); },
+    teardown() { scheduler.clear(); },
+  };
 }

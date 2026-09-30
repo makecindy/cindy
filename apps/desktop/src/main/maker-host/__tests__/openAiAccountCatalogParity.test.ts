@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider, type CatalogModel } from '@cindy/model-providers';
 import {
-  getActiveCatalog, setActiveCatalog, setCustomProviders, setDiscoveredCodexModels,
-  setLocalCatalogOverrides,
+  clearDiscoveredProviderModels, getActiveCatalog, setActiveCatalog, setCustomProviders,
+  setDiscoveredCodexModels, setDiscoveredProviderModels,
+  setLocalCatalogOverrides, setCustomProviderConfigs, setDiscoveredProviderMediaModels,
+  setOpenAiImagesApiKeyConfigured,
 } from '../active-catalog.js';
 import { EMPTY_MODEL_CATALOG_OVERRIDES, hasLocalAddition, sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 
@@ -15,18 +17,144 @@ function account() {
     } },
   }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
 }
+/**
+ * OpenAI 订阅成员只来自账号清单(Registry 不补型号)。这里的清单只报成员、
+ * discoveredMetadata 为空，资料由 Registry 决定。
+ */
+function accountListModels(ids: readonly string[]): CatalogModel[] {
+  return ids.map((id): CatalogModel => ({
+    id, name: id, group: 'gpt', contextWindow: 272000, efforts: [], defaultEffort: null,
+    discoveredMetadata: {},
+  }));
+}
+/** 内置 openai 连接的本机 Codex 账号清单。 */
+function seedBuiltinAccount(...ids: string[]): void {
+  setDiscoveredCodexModels(accountListModels(ids));
+}
 function entry(providerId: string, agent: 'codex' | 'claude-code' | 'pi', id: string) {
   return getActiveCatalog().providers.find(p => p.id === providerId)!.models[agent]!.find(m => m.id === id)!;
 }
 
 afterEach(() => {
+  setOpenAiImagesApiKeyConfigured(false);
   setCustomProviders([]);
   setDiscoveredCodexModels([]);
+  clearDiscoveredProviderModels();
+  setDiscoveredProviderMediaModels('openai', null);
+  setDiscoveredProviderMediaModels(accountId, null);
   setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
   setActiveCatalog(BUNDLED_CATALOG);
 });
 
 describe('OpenAI account catalog identity', () => {
+  it.each(['before', 'after', 'configs'] as const)('keeps one subscription image capability across public catalog revisions (account: %s)', (order) => {
+    const config = {
+      id: accountId, name: 'OpenAI', auth: { method: 'oauth' as const, native: 'codex' as const },
+      runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [] } },
+    };
+    if (order === 'before') setCustomProviders([account()]);
+    if (order === 'configs') setCustomProviderConfigs([config]);
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const definition = catalog.providers.find(p => p.id === 'openai')!;
+    definition.imageModels = [{ id: 'openai/gpt-image-fixture', name: 'Public image' }];
+    definition.imageDefaults = { standard: 'openai/gpt-image-fixture', best: 'openai/gpt-image-fixture' };
+    setActiveCatalog(catalog);
+    if (order === 'after') setCustomProviders([account()]);
+    const images = (id: string) => getActiveCatalog().providers.find(p => p.id === id)!;
+    for (const id of ['openai', accountId]) {
+      expect(images(id).imageModels).toEqual([expect.objectContaining({ id: `${id}/gpt-image-2`, name: 'GPT Image Gen' })]);
+      expect(images(id).imageDefaults).toEqual({ standard: `${id}/gpt-image-2` });
+    }
+    definition.imageModels = [{ id: 'openai/gpt-image-next', name: 'Next image' }];
+    delete definition.imageDefaults;
+    setActiveCatalog(structuredClone(catalog));
+    for (const id of ['openai', accountId]) {
+      expect(images(id).imageModels).toEqual([expect.objectContaining({ id: `${id}/gpt-image-2`, name: 'GPT Image Gen' })]);
+      expect(images(id).imageDefaults).toBeUndefined();
+    }
+    definition.imageModels = [];
+    setActiveCatalog(structuredClone(catalog));
+    for (const id of ['openai', accountId]) expect(images(id).imageModels).toEqual([]);
+    delete definition.imageModels;
+    setActiveCatalog(structuredClone(catalog));
+    expect(images(accountId).imageModels?.map(m => m.id.replace(`${accountId}/`, 'openai/')))
+      .toEqual(images('openai').imageModels?.map(m => m.id));
+    expect(images(accountId).imageModels?.length).toBeGreaterThan(0);
+  });
+
+  it('keeps Platform discovery and connection overrides out of other subscription image lists', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    setActiveCatalog(catalog);
+    setCustomProviders([account()]);
+    setOpenAiImagesApiKeyConfigured(true);
+    setDiscoveredProviderMediaModels('openai', { imageModels: [{ id: 'openai/gpt-image-api-only', name: 'API only' }] });
+    setLocalCatalogOverrides(sanitizeModelCatalogOverrides({ patches: {
+      [`${accountId}:${accountId}/gpt-image-2`]: { base: { name: 'My image' } },
+    } }).overrides);
+    for (let refresh = 0; refresh < 2; refresh++) {
+      const providers = getActiveCatalog().providers;
+      expect(providers.find(p => p.id === 'openai')!.imageModels?.map(m => m.id)).toEqual(['openai/gpt-image-api-only']);
+      const images = providers.find(p => p.id === accountId)!.imageModels!;
+      expect(images.some(m => m.id.endsWith('/gpt-image-api-only'))).toBe(false);
+      expect(images.find(m => m.id === `${accountId}/gpt-image-2`)?.name).toBe('My image');
+      setActiveCatalog(structuredClone(catalog));
+    }
+    setDiscoveredProviderMediaModels(accountId, { imageModels: [] });
+    expect(getActiveCatalog().providers.find(p => p.id === accountId)!.imageModels).toEqual([]);
+    expect(getActiveCatalog().providers.find(p => p.id === 'openai')!.imageModels).toHaveLength(1);
+  });
+
+  it('preserves public image metadata overrides beneath per-connection overrides and restores capability defaults', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setCustomProviders([account()]);
+    const publicMetadata = {
+      name: 'My image capability',
+      description: 'Public custom description',
+      officialDocs: 'https://docs.example.com/public-image',
+      modalities: { input: ['text'], output: ['image'] },
+    };
+    const publicOverrides = { baseModels: { 'openai/gpt-image-2': publicMetadata } };
+    const image = (id: string) => getActiveCatalog().providers.find((p) => p.id === id)!.imageModels![0]!;
+    setLocalCatalogOverrides(sanitizeModelCatalogOverrides(publicOverrides).overrides);
+    for (const id of ['openai', accountId]) {
+      expect(image(id)).toMatchObject({ id: `${id}/gpt-image-2`, ...publicMetadata });
+    }
+    const connectionMetadata = {
+      name: 'Account image capability',
+      officialDocs: 'https://docs.example.com/account-image',
+      modalities: { input: [], output: ['image'] },
+    };
+    setLocalCatalogOverrides(sanitizeModelCatalogOverrides({
+      ...publicOverrides,
+      patches: { [`${accountId}:${accountId}/gpt-image-2`]: { base: connectionMetadata } },
+    }).overrides);
+    expect(image('openai')).toMatchObject(publicMetadata);
+    expect(image(accountId)).toMatchObject({ ...publicMetadata, ...connectionMetadata });
+
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+    for (const id of ['openai', accountId]) {
+      expect(image(id)).toMatchObject({
+        name: 'GPT Image Gen', modalities: { input: ['text', 'image'], output: ['image'] },
+      });
+      expect(image(id).officialDocs).toBeUndefined();
+    }
+  });
+
+  it('switches only the builtin image connection between subscription and Platform without changing saved IDs', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setCustomProviders([account()]);
+    const images = (id: string) => getActiveCatalog().providers.find(p => p.id === id)!.imageModels!;
+    expect(images('openai')).toEqual([expect.objectContaining({ id: 'openai/gpt-image-2', name: 'GPT Image Gen' })]);
+    setOpenAiImagesApiKeyConfigured(true);
+    expect(images('openai').map(m => m.id)).toEqual([
+      'openai/gpt-image-2.5-sunburst', 'openai/gpt-image-2.5-flare', 'openai/gpt-image-2',
+    ]);
+    expect(images('openai').find(m => m.id === 'openai/gpt-image-2')?.name).toBe('GPT Image 2');
+    expect(images(accountId)).toEqual([expect.objectContaining({ id: `${accountId}/gpt-image-2`, name: 'GPT Image Gen' })]);
+    setOpenAiImagesApiKeyConfigured(false);
+    expect(images('openai')).toEqual([expect.objectContaining({ id: 'openai/gpt-image-2', name: 'GPT Image Gen' })]);
+  });
+
   it.each([false, true])('Pro/Cyber keep all Harness routes and inherit available public tiers (old snapshot: %s)', (oldSnapshot) => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     const slugs = ['gpt-5.4-pro', 'gpt-5.5-pro', 'gpt-5.6-cyber'];
@@ -41,7 +169,10 @@ describe('OpenAI account catalog identity', () => {
     provider.models.pi = slugs.map(slug => ({ id: `chatgpt/${slug}`, name: slug,
       contextWindow: 400000, efforts: [], defaultEffort: null, piApi: 'openai-responses' }));
     setActiveCatalog(catalog, { authorityCatalog: catalog });
+    // 两个连接的账号发现都返回 Pro/Cyber(Registry 不再替账号补型号)。
+    seedBuiltinAccount(...slugs);
     setCustomProviders([account()]);
+    setDiscoveredProviderModels(accountId, 'codex', accountListModels(slugs));
     for (const providerId of ['openai', accountId]) {
       for (const agent of ['codex', 'claude-code', 'pi'] as const) {
         for (const slug of slugs) {
@@ -87,7 +218,7 @@ describe('OpenAI account catalog identity', () => {
     expect(entry('api-independent', 'codex', 'gpt-local-fixture')).toBeUndefined();
     expect(getActiveCatalog().providers.some(p => p.id === 'not-added-yet')).toBe(false);
   });
-  it('projects public Codex/Claude membership and explicit server Pi entries to every account', () => {
+  it('projects the same account Codex/Claude membership and explicit server Pi entries to every account', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     const remotePi: CatalogModel = {
       id: 'chatgpt/gpt-parity-fixture', name: 'Server Pi fixture', group: 'gpt',
@@ -95,15 +226,19 @@ describe('OpenAI account catalog identity', () => {
     };
     catalog.providers.find(p => p.id === 'openai')!.models.pi = [remotePi];
     setActiveCatalog(catalog, { authorityCatalog: catalog });
+    // 两个连接的账号返回同一清单(同一份发现证据)时，三个 Harness 的投影逐项一致。
+    seedBuiltinAccount('gpt-5.6-luna');
     setCustomProviders([account()]);
+    setDiscoveredProviderModels(accountId, 'codex', accountListModels(['gpt-5.6-luna']));
     const providers = getActiveCatalog().providers;
     const original = providers.find(p => p.id === 'openai')!;
     const second = providers.find(p => p.id === accountId)!;
     for (const agent of ['codex', 'claude-code', 'pi'] as const) {
       const ids = second.models[agent]!.map(m => m.id);
-      expect(ids).toEqual(expect.arrayContaining(original.models[agent]!.map(m => m.id)));
+      expect([...ids].sort()).toEqual(original.models[agent]!.map(m => m.id).sort());
       expect(new Set(ids).size).toBe(ids.length);
     }
+    expect(second.models.codex!.map(m => m.id)).toEqual(['gpt-5.6-luna']);
     expect(entry(accountId, 'pi', remotePi.id)).toMatchObject(remotePi);
     expect(second.id).not.toBe(original.id);
     expect(second.auth).toEqual({ method: 'oauth', native: 'codex' });
@@ -111,6 +246,7 @@ describe('OpenAI account catalog identity', () => {
 
   it('keeps connection-specific local metadata patches separate through catalog refresh', () => {
     setActiveCatalog(BUNDLED_CATALOG);
+    seedBuiltinAccount('gpt-5.6-luna');
     setCustomProviders([account()]);
     setLocalCatalogOverrides(sanitizeModelCatalogOverrides({ patches: {
       'openai:gpt-5.6-luna': { base: { contextWindow: 111111 } },
@@ -131,6 +267,7 @@ describe('OpenAI account catalog identity', () => {
     const configured = account();
     const model = configured.models.codex![0]!;
     model.userModelConfig = { ...model.userModelConfig!, contextWindow };
+    seedBuiltinAccount('gpt-5.6-luna');
     setCustomProviders([configured]);
     expect(entry(accountId, 'codex', 'gpt-5.6-luna').contextWindow).toBe(contextWindow);
     expect(entry(accountId, 'claude-code', 'chatgpt/gpt-5.6-luna').contextWindow).toBe(contextWindow);
@@ -153,6 +290,8 @@ it('applies server Pi replacement, removal and missing-field fallback equally to
   }
   openai.models.pi = [];
   setActiveCatalog(structuredClone(catalog), { authorityCatalog: structuredClone(catalog) });
+  // 内置连接的 Codex 成员只来自账号清单；账号发现也不能复活显式清空的 Pi。
+  seedBuiltinAccount('gpt-5.6-luna');
   for (const providerId of ['openai', accountId]) {
     expect(getActiveCatalog().providers.find(p => p.id === providerId)!.models.pi).toEqual([]);
     expect(getActiveCatalog().providers.find(p => p.id === providerId)!.models.codex?.length).toBeGreaterThan(0);
@@ -171,6 +310,7 @@ it('legacy Pi defaults cannot override Registry definitions or per-account user 
   openai.models.pi = [{ id: 'chatgpt/gpt-5.6-luna', name: 'Remote Luna', contextWindow: 123456,
     efforts: ['low'], defaultEffort: 'low', piApi: 'openai-responses' }];
   setActiveCatalog(catalog, { authorityCatalog: catalog });
+  seedBuiltinAccount('gpt-5.6-luna');
   setCustomProviders([account()]);
   setLocalCatalogOverrides(sanitizeModelCatalogOverrides({ patches: {
     [`${accountId}:chatgpt/gpt-5.6-luna`]: { perAgent: { pi: { contextWindow: 234567 } } },

@@ -21,7 +21,14 @@ export function AddAccountLoginPage() {
   const flowFinishedRef = useRef(false);
   const closeStartedRef = useRef(false);
   const [flowInitialized, setFlowInitialized] = useState(false);
+  const [initializing, setInitializing] = useState(true);
   const returnTo = (location.state as AddAccountLocationState | null)?.returnTo ?? '/cc-agent';
+
+  useEffect(() => {
+    if (!initializing) return;
+    const progressToast = toast.loading(t('sidebar.accountSwitcher.adding'));
+    return () => toast.dismiss(progressToast);
+  }, [initializing, t]);
 
   useEffect(() => {
     // This protected route intentionally sits outside LocalDbGate: adding another account must
@@ -42,7 +49,8 @@ export function AddAccountLoginPage() {
       .catch(() => {
         toast.error(t('sidebar.accountSwitcher.startFailed'));
         navigate(returnTo, { replace: true });
-      });
+      })
+      .finally(() => setInitializing(false));
   }, [beginAddAccount, navigate, returnTo, t]);
 
   useEffect(() => {

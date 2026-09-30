@@ -25,6 +25,17 @@ function messageItem(key: string, message: Partial<MobileMessageRenderItem & { m
 }
 
 describe('message gallery', () => {
+  it('uses the same SVG file attachment URL as the thumbnail and includes it in the image gallery', () => {
+    const gallery = collectMobileMessageGalleryImages([
+      messageItem('m-svg', { attachments: [
+        { kind: 'file', name: 'diagram.svg', path: '/repo/diagram.svg', previewable: false },
+      ] }),
+    ], '/repo', 'ssh-host', 'session-1');
+    expect(gallery).toHaveLength(1);
+    expect(gallery[0].payload.media).toMatchObject({ kind: 'image', previewable: false });
+    expect(gallery[0].url).toBe('xdt-file://open?path=%2Frepo%2Fdiagram.svg&sessionId=session-1&remoteHostId=ssh-host&workdir=%2Frepo&v=m-svg');
+  });
+
   it('resolves relative markdown images against the remote session workdir', () => {
     const gallery = collectMobileMessageGalleryImages([
       messageItem('m-local', { body: '![构建图](artifacts/build result.png)' }),

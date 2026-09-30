@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { TFunction } from 'i18next';
+import { formatCompactTimeUntilReset } from '../lib/compactQuotaCountdown';
 import {
   formatClaudeSubscriptionPlanLabel,
   formatCodexPlanLabel,
@@ -161,7 +162,10 @@ describe('TodaySpendChip dashboard routing', () => {
   it('ticks the reset countdown per second in the last minute and rolls remaining % up after a reset', () => {
     // 最后一分钟秒级倒计时: formatCompactTimeUntilReset 落到秒单位, tick 节奏由
     // computeCountdownTickDelayMs 决定 (setTimeout 链, 非固定 interval)
-    expect(compact(source)).toContain(compact("t('todaySpend.unit.second')"));
+    const seconds = ((key: string) => key === 'todaySpend.unit.second' ? '秒' : key) as TFunction;
+    expect(formatCompactTimeUntilReset(61, 20_000, seconds)).toBe('41秒');
+    expect(formatCompactTimeUntilReset(61, 21_000, seconds)).toBe('40秒');
+    expect(formatCompactTimeUntilReset(61, 61_000, seconds)).toBeNull();
     expect(compact(source)).toContain(
       compact('computeCountdownTickDelayMs(chipResetsAtMsList, Date.now())'),
     );

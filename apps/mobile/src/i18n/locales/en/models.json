@@ -53,5 +53,24 @@
     "confirmMessage": "When you send the next message, {{appName}} hands the current session over to {{agent}}. The two agents may interpret context and tools differently, so confirm before choosing the target model.",
     "cancel": "Cancel",
     "confirm": "Continue"
+  },
+  "unified": {
+    "favorites": "Favorites",
+    "all": "All models",
+    "recommended": "Recommended",
+    "source": "Source",
+    "harness": "Harness",
+    "addFavorite": "Add to favorites",
+    "removeFavorite": "Remove favorite",
+    "restoreRecommended": "Restore recommended",
+    "saveFailed": "Could not save. Please try again.",
+    "configure": "Configure",
+    "syncFailed": "Favorites could not sync. Reopen the picker to retry; the remote computer may need an update.",
+    "timeUnit": {
+      "day": "d",
+      "hour": "h",
+      "minute": "m",
+      "second": "s"
+    }
   }
 }

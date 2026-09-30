@@ -12,6 +12,7 @@
  */
 
 import { Tip } from '@/components/ui/tooltip';
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { CHAT_CODE_CLASS, CHAT_CODE_SURFACE_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
@@ -699,10 +700,9 @@ const baseComponents: Components = {
     return <h6 className="text-[var(--md-h6-fg)]" {...props}>{children}</h6>;
   },
 
-  // 加粗:同上,只接颜色 token。font-weight 仍由 Tailwind preflight 的
-  // `b, strong { font-weight: bolder }` 提供,这里不覆盖。
+  // Content strong is absolute 700: nested emphasis must not accumulate to 900.
   strong({ children, ...props }) {
-    return <strong className="text-[var(--md-strong-fg)]" {...props}>{children}</strong>;
+    return <strong className="font-bold text-[var(--md-strong-fg)]" {...props}>{children}</strong>;
   },
 
   // Blockquote
@@ -1029,17 +1029,8 @@ function FileTargetChip({
     // 与输入附件一致：点击打开 lightbox 前先撤掉 hover 层，避免关闭大图后残留。
     setImagePreviewOpen(false);
     if (htmlWithSession) {
-      if (chipRemoteOrigin) {
-        void (async () => {
-          const cachePath = await fetchChatFileWithToasts(chipRemoteOrigin, fileCtx.workingDir, resolvedAbsPath);
-          if (cachePath && sidebarTargetSessionId) {
-            await openHtmlFileByPreference(sidebarTargetSessionId, cachePath, t);
-          }
-        })();
-        return;
-      }
       if (sidebarTargetSessionId) {
-        void openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t);
+        void openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t, fileCtx);
       }
       return;
     }
@@ -1076,7 +1067,7 @@ function FileTargetChip({
           'bg-[var(--msg-md-inline-code-bg)]',
           // 刻意**不**钉 text-,与 INLINE_CODE_CLASS 一样让文字色继承上下文
           // (对齐 GitHub:`.markdown-body code` 不定义 color)。这样可点 chip 与
-          // 不可点行内 code 在任何上下文里都同色,差别只剩那条下划线;原先钉
+          // 不可点行内 code 在任何上下文里都同色;文件类型由装饰图标表达。原先钉
           // --msg-assistant-text 在助手气泡里与继承值相同,但在引用块等压暗/变色
           // 上下文里会分叉。
           // 常显下划线 = 唯一的可点信号(不是 hover 才出现)。
@@ -1086,6 +1077,9 @@ function FileTargetChip({
           'cursor-pointer hover:bg-[var(--cmd-palette-item-hover)]',
         )}
       >
+        {localKind !== 'directory' && (
+          <FileTypeIcon name={resolvedAbsPath} size={14} className="mr-1 inline-block align-[-0.125em]" />
+        )}
         {children}
       </code>
       {imagePreviewSrc ? (
@@ -1136,7 +1130,6 @@ function ResolvedLocalLink({
   // 同 FileTargetChip:html + 有会话上下文时左键按偏好直开,「查看源文件」
   // 与「在侧边栏浏览器中打开」并入右键菜单;其余文件左键直开预览。
   const fileCtx = useChatSessionFile();
-  const linkRemoteOrigin = isRemoteFileOrigin(fileCtx.origin) ? fileCtx.origin : null;
   const htmlWithSession =
     localKind !== 'directory' && isHtmlFilePath(resolvedAbsPath) && sessionId ? sessionId : undefined;
   const sidebarTargetSessionId = useSidebarTargetSessionId(htmlWithSession);
@@ -1157,15 +1150,8 @@ function ResolvedLocalLink({
         onClick={async (e) => {
           e.preventDefault();
           if (htmlWithSession) {
-            if (linkRemoteOrigin) {
-              const cachePath = await fetchChatFileWithToasts(linkRemoteOrigin, fileCtx.workingDir, resolvedAbsPath);
-              if (cachePath && sidebarTargetSessionId) {
-                await openHtmlFileByPreference(sidebarTargetSessionId, cachePath, t);
-              }
-              return;
-            }
             if (sidebarTargetSessionId) {
-              await openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t);
+              await openHtmlFileByPreference(sidebarTargetSessionId, resolvedAbsPath, t, fileCtx);
             }
             return;
           }
@@ -1174,6 +1160,9 @@ function ResolvedLocalLink({
         onContextMenu={ctxMenu.onContextMenu}
         {...anchorProps}
       >
+        {localKind !== 'directory' && nodeToText(children).trim() && (
+          <FileTypeIcon name={resolvedAbsPath} size={14} className="mr-1 inline-block align-[-0.125em]" />
+        )}
         {children}
       </a>
       {ctxMenu.menu}

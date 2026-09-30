@@ -112,6 +112,7 @@ const ALLOWED_ROOT_SCOPES: readonly string[] = [
  * 不要把一个混着路径的 scope 整体放行。
  */
 const ALLOWED_EXACT_SCOPES: readonly string[] = [
+  'workdir-diagnostics',
   'device-link', //                     服务初始化、relay 连接/断开/重连、心跳
   'device-link:cross-process-lock', //   跨进程锁的获取与释放(只有锁状态,无路径)
   // 主库打开 / migration / schema 漂移 / 完整性 / fatal —— bare `localDb` 只打这些基础设施

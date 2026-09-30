@@ -92,11 +92,17 @@ type ProjectAutomationConsentInsert = typeof projectAutomationConsents.$inferIns
 type ScheduleRunRow = typeof scheduleRuns.$inferSelect;
 type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 
-type SessionRuntimeProjector = (session: Session) => Partial<Session>;
+type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'>;
+type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
 let sessionRuntimeProjector: SessionRuntimeProjector | null = null;
 
 export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | null): void {
   sessionRuntimeProjector = projector;
+}
+
+/** Full reads and committed route patches must publish the same runtime snapshot. */
+export function projectSessionRuntimeFields(session: SessionRuntimeFields): Partial<Session> {
+  return sessionRuntimeProjector?.(session) ?? {};
 }
 
 /**
@@ -113,6 +119,7 @@ export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | 
  * preview 落 null，渲染端兜底隐藏。
  */
 export type SessionRowWithCount = SessionRow & {
+  tags?: import('@cindy/maker-shared').TaskTag[];
   messageCount: number;
   latestMessageContent?: string | null;
   latestMessageExtract?: string | null;
@@ -229,6 +236,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     row.totalCostUsd + (row.totalCostCurrency === 'USD' ? row.totalCostAmount : 0);
   const base: Session = {
     id: row.id,
+    ...(row.tags ? { tags: row.tags } : {}),
     userId: '', // 本地 db 已按 user 隔离，无需冗余存储
     title: row.title,
     workingDir: row.workingDir,
@@ -290,7 +298,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     hasPendingSessionInterruption(candidate)
       ? base.activeTurnStartedAt
       : null;
-  return sessionRuntimeProjector ? { ...base, ...sessionRuntimeProjector(base) } : base;
+  return { ...base, ...projectSessionRuntimeFields(base) };
 }
 
 export function messageToCamel(row: MessageRow): Message {
@@ -348,6 +356,7 @@ export function sessionCreateToRow(
   body:
     | {
         id?: string;
+        title?: string;
         workingDir?: string;
         workspaceKind?: WorkspaceKind;
         model?: string;
@@ -370,14 +379,17 @@ export function sessionCreateToRow(
          */
         providerId?: string | null;
         /** Main-owned purposes only; the renderer create IPC validates which values it accepts. */
-        source?: 'bot' | 'cindy-make';
+        source?: 'bot' | 'cindy-make' | 'cindy-make-merge';
       }
     | undefined,
   now: number,
 ): SessionInsert {
   return {
     id,
-    title: DEFAULT_DRAFT_SESSION_TITLE,
+    title:
+      typeof body?.title === 'string' && body.title.trim().length > 0
+        ? body.title.trim()
+        : DEFAULT_DRAFT_SESSION_TITLE,
     workingDir: normalizeWorkingDirForStorage(body?.workingDir),
     workspaceKind: body?.workspaceKind ?? 'project',
     model: body?.model ?? 'claude-sonnet-4-6',

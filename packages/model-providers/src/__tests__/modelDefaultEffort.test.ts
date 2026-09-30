@@ -77,8 +77,13 @@ describe("medium-first defaults", () => {
       rawRegistry as unknown as ModelRegistry,
     )) {
       if (!model.efforts?.length) continue;
+      // Grok 4.7 (including Build Fast) uses official high; Kimi Code uses max, unlike our
+      // medium-first fallback for models without this official default.
       expect(model.defaultEffort, model.id).toBe(
-        defaultEffortForCapabilities(model.efforts),
+        model.id === "moonshotai/kimi-k2.8-preview"
+          ? "max"
+          : ["xai/grok-4.7", "xai/grok-4.7-build-fast"].includes(model.id) ? "high"
+          : defaultEffortForCapabilities(model.efforts),
       );
       for (const override of Object.values(model.perAgent ?? {})) {
         expect(override.defaultEffort, model.id).toBe(model.defaultEffort);

@@ -189,7 +189,7 @@ export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
 }
 
 /**
- * 外部硬杀 watchdog 的宽限期 (秒)。disposer 预算 6s 的 3 倍余量; 比更新脚本的
+ * 外部硬杀 watchdog 的宽限期 (秒)。大于 bootstrap 的 16s disposer 预算; 比更新脚本的
  * 120s (updateScriptMacOS) 激进得多 —— 这是常规退出路径, 用户在旁边等。
  */
 export const SHUTDOWN_HARD_KILL_GRACE_SECONDS = 20;

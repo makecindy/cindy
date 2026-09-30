@@ -11,6 +11,31 @@ Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户无
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
 Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture.md)。
 
+## 工具循环与无响应的分工
+
+工具持续返回但反复原地搜索时，复用
+`agents/shared/loop-guard.ts` 的 `ToolLoopGuard`，不能靠缩短无事件超时处理。
+Claude Code 在原有 per-sidechain 回调里检测所有模型；Pi / Codex 在 `Session` 中配对
+当前产品轮次的 `tool_use` 与 `tool_result_full`，不重复统计结果摘要、后台事件或旧轮次。
+三个引擎均关闭“参数各不相同、同类契约错误连续被拒三次即中断”的规则：同类错误
+不能证明模型没有在修正调用，Pi / Codex 也尚无可靠模型响应批次标识。运行时沿用
+`contractConsecutiveLimit: Number.POSITIVE_INFINITY` 关闭该计数阈值，不新增提醒或自动重试。
+完全相同的工具名、参数、输出连续四次仍会中断，短窗口轮转检测也保持不变；不同参数
+持续出现同类错误可能多重试几次，这是减少纠错误停的取舍。旧 `contract` 错误的展示
+和历史兼容保持不变。
+循环错误沿用 `tool_use_loop_detected` 和既有中断复核，Orca 消费普通终态链路；
+该 reason 不进入 interrupted-turn 自动续跑白名单，避免熔断后立即重复原循环。
+
+短窗口判据保持原样；较长的只读搜索轮转只在最近 128 次读/搜结果至多包含 32 种
+完整调用指纹，且至少 90% 的结果属于重复至少 4 次的指纹时判定。参数与输出都参与
+指纹，不修改实际工具结果；写入或命令结果打断该只读窗口，原生等待工具不计数。
+成功的简单 `tail` / PowerShell `Get-Content -Tail` 日志轮询同样不计数
+（只认字面 `.log` 路径，可串联多个日志读取）；
+失败、混合执行、重定向或源文件读取不套用该例外。等待调用不清空普通调用的循环轨迹。
+这仍是有界启发式，不是任意长度循环的证明，也不以没有文件改动作为失败依据。
+回归见 `loop-guard.test.ts`、`session.tool-loop.test.ts` 和 Claude Code 的
+`upstream-idle-watchdog.test.ts`。
+
 ## 上下文已满时的引擎边界
 
 Claude Code 在同一模型上达到设置页自动压缩阈值且尚未满窗时，由 host 注入 `/compact`；
@@ -43,16 +68,20 @@ timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoC
 推理密文范围）不得当成换窗。手动压缩入口不受此规则影响，
 手动 compact 失败不得锁存换窗。
 
-Cindy 保底压缩是**一套**流程，不是剥图 / 换窗两套功能。装得进当前约束就不动；
-字节预算破了（可剥的超大内联图）就剥图；token 预算破了或剥图失败，就交接重建。
-决定函数见 `cindyContextCompression.ts`。字节预算目前只有 Codex 能测量。工具输出
-不另开一档：官方 compact 会先清旧工具结果；官方失败后交接不带 tool_result 正文。
+Cindy 保底压缩是**一套**交接重建流程。装得进当前约束就不动；字节预算破了
+（可剥的超大内联图）或 token 预算破了，都直接交接重建。Codex 索引历史归原生运行时
+所有，不再先尝试改写历史／剥图。决定函数见 `cindyContextCompression.ts`。
+字节预算目前只有 Codex 能测量。工具输出不另开一档：图片恢复的交接保留受长度限制、
+带调用关联的文本结果摘要，省略图片数据；其他交接继续沿用原有结果省略规则。
 可剥图不足一半的混合大尾巴有意不救。打开会话不触发；只在终态错误或下次发送时
 由 main 侧 claim。SSH 不承诺。不确定 fail closed。救援摘要不得依赖额外模型调用。
-Codex 剥图保留原生历史后，普通用户任务可在同一任务内自动续接未完成工作，
-不重放原用户请求或已完成的工具操作；每条用户输入最多自动续接一次。
+Codex 图片历史重建后，普通用户任务可在同一任务内自动续接未完成工作。交接包含原请求
+和本轮已有进展，新原生线程只接收隐藏的继续指令，不重放原用户请求或已完成的工具操作。
+结果不明确时先核实当前状态，不盲目重试；旧原生执行句柄不能跨线程恢复。
+每条用户输入最多自动恢复一次，沿用重建记录与输入身份去重；已有助手／工具消息只禁止
+原请求 replay，不阻止本次图片恢复的 CONTINUE。普通 context overflow 的 replay 保护不变。
 停止／清空或新输入接管会取消待续接的恢复；已有排队输入时不抢先续接。
-取消也覆盖剥图失败后的重建、提交与发送边界。interrupt／unsubscribe 等待期间到达的
+取消覆盖重建、提交与发送边界。interrupt／unsubscribe 等待期间到达的
 权威成功结果优先于 oversized 错误；事件队列关闭前统一结算，不能再触发自动续接。
 续接沿用原输入的插件能力选择，不把隐藏续接提示或历史授权当作新选择。
 外部分发者仍拥有自己的重试；IM 原生任务、仍绑定 IM 的任务及尚未结束的外部分发 turn
@@ -70,8 +99,12 @@ Claude Code／Codex／Pi 的强制换窗线
 与 Pi 的日常默认值也设为 90%，对齐 Codex 口径，但用户已有显式 override 继续生效。命中
 `danger`／`overflow` 的本机会话先走同一套 `context_rebuild` bounded handoff，再落目标
 route，不能 resume 旧原生窗口。
-Codex 跨凭证时先按目标来源 resume 同一个原生线程，不因 `ordinal` / `history_base` 或来源
-变化而 fork、改写历史或交接。本地恢复与分叉必须同时固定该线程的原生历史根
+Codex 跨凭证优先保留同一个原生线程；仅当目标需要另一个 host、旧 host 仍持有原生 writer
+时，关闭该任务的业务 handle 后使用不剥离历史的原生 fork，并等待一次性 fork host 退出，
+再以任务 owner 与旧 SDK／路由版本为条件原子保存新 SDK thread 和目标路由。任务 ID 与
+消息历史不变，无关任务与 host 不退出；旧 writer 已释放则不 fork。`ordinal` /
+`history_base` 本身不能成为改写历史的理由。
+本地恢复与分叉必须同时固定该线程的原生历史根
 （`CODEX_HOME`，含 `sessions` / `archived_sessions`）和数据库根（`sqlite_home`）；
 仅固定 SQLite 不足以恢复分页祖先，原生按不可变 rollout ID 在历史根内查找祖先。
 凭证、代理路由和模型目录仍按本轮选中账号准备，不能把历史根写回全局账号配置。
@@ -81,6 +114,12 @@ Codex 跨凭证时先按目标来源 resume 同一个原生线程，不因 `ordi
 配置；每次重连重新认证，刷新必须匹配冻结的 owner、host 代次及账号，且不能复用刚被
 拒绝的 token。owner 切换 pending 期间，即使 owner key 尚未提交变化，也必须在异步认证
 读取前后拒绝提供 token。刷新有超时，失败走正常错误路径，不切回历史所属账号。
+同 owner 的 Ghost 投影修复会更新账号代次但保留 Maker 与活跃任务；凭证 reader 固定
+owner 身份、认证 realm 和 CodexAgent 实例，每次读取单独捕获代次，不能将创建时的代次永久锁在
+reader 上。跨修复的在途读取仍拒绝，修复完成后的新读取可正常刷新；真正切账号或
+切到另一认证 realm（即使 membership ID 相同且 Maker 保留）时不能提供凭证；
+Maker 被替换后旧 reader 必须失效，包括切走再切回同一 owner。回归见 Desktop
+`codexAuthTokenReaderBoundary.test.ts`，可通过 `CINDY_CODEX_TEST_BINARY` 实跑原生 401 恢复。
 该 adapter 依赖 Codex 实验性的 `chatgptAuthTokens` 协议，0.145.0 已支持该协议且通过
 真实登录及 401 刷新契约验证，不能把 0.153.4 当作协议最低版本。更换原生运行时前必须
 用目标二进制运行 `CINDY_CODEX_TEST_BINARY=<绝对路径> pnpm --filter @cindy/maker-core exec
@@ -98,9 +137,23 @@ vitest run src/agents/codex/app-server/external-auth.native.test.ts`，覆盖分
 关闭任务时也清理这些实例里的同 thread 保活状态；不能只查共享代理而漏掉实际承载连接。
 分支优先使用已保存的原生 turn 锚点。Codex 0.153.4 起，旧消息或失败轮没有锚点时，
 先用 `thread/turns/list(itemsView: notLoaded)` 查询终态边界，再 `thread/fork(lastTurnId)`，
-不能对分页线程执行 rollback。界面软删重试不代表原生 turn 消失，有复制事件时间时据此
+不能对分页线程执行 rollback；0.156.0 起运行时已移除 `thread/rollback`，编辑重发与回退
+一律走同一边界 fork。界面软删重试不代表原生 turn 消失，有复制事件时间时据此
 定位，不按可见 user 行数猜边界；复制事件时间缺失、原生时间缺失或秒级精度无法确定顺序时明确失败，不截错
-历史。查询与 fork 使用同一隔离控制面 host，关闭其写入进程后才发布子线程身份。
+历史。回退目标是当前原生线程的第一轮时（目标之前没有属于该线程的 user 行：首条消息，或
+`/clear`、上下文重建、切换引擎新开线程后的第一轮）没有可 fork 的边界，由宿主标记
+`rewindsToNativeThreadStart`，Codex 按当前配置换一条空线程；归属沿用锚点的 agent_switch
+链，切回停泊线程时更早的片段仍算当前线程，判定不出就明确失败，不能把「找不到边界」
+当成第一轮。不可解析或没有 `fromSdkSessionId` 的 `agent_switch` 视为归属不定，同样
+不得标记 `rewindsToNativeThreadStart`。最近的 `context_rebuild` 截断更早历史，不能让
+重建前的 `agent_switch` 把归属设回当前线程。`targetCreatedAt <= sessions.clearedAt` 必须拒绝，
+不能把 `/clear` 之前的目标当成当前线程第一轮。`INPUT_CLEAR_SESSION` 不进
+`withSendToSessionLock`，因此判定时读到的 `clearedAt` 必须作为 `expectedClearedAt`
+传入 `rewind.commit`，并在 SDK 换空线程之前再核一次；代次已变则整单失败，不得软删
+`/clear` 之后的新消息。实现见 Desktop `maker-orchestration/rewind.ts` 与 maker-core
+`agents/codex/index.ts` 的 `commitRewindFiles`，回归见 `rewind.test.ts`、`fork.test.ts`、
+`rewindNativeBoundarySqlite.test.ts`、`tx.test.ts` 与 `index.test.ts`。
+查询与 fork 使用同一隔离控制面 host，关闭其写入进程后才发布子线程身份。
 HTTP 回退遇到缺失 `Content-Type` 的成功响应时，只允许从明文 SSE 前缀（可带注释心跳）
 确认事件流并补齐响应头；显式非 SSE 类型、HTML／JSON、空响应与只有心跳的正文不能放行。
 正在运行的 turn、SSH 远端缺少本地交接能力、或已有恢复动作在途时必须 fail closed，不能
@@ -119,7 +172,11 @@ Codex 0.153 的 unsubscribe 会延迟卸载 30 分钟，不能靠立即 resume �
 线程迁移，不得重建后声称它仍可恢复。普通生成 502 与 stderr 文案不得触发此路径。
 
 Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志，
-不得用 `remote compaction v2` 文案驱动恢复动作。普通 timeout、纯文本大历史和网络失败
+不得用 `remote compaction v2` 文案驱动恢复动作，也不得根据图片历史大小把重连超时
+改写为历史故障（包括读取已保存消息时）。收到当前 turn 的原生 `contextCompaction`
+开始事件后，取消短重连计时，压缩期间交给既有 upstream-idle 长超时保护；完成后恢复
+普通重连规则。重连中断结算前的成功完成优先，不得提前发错误触发重建。
+普通 timeout、纯文本大历史和网络失败
 不得进入这套压缩，也不得进入自动续跑死循环。`status` / `account_usage` 是传输层或用量
 心跳，不得刷新 Session 零事件看门狗或 Codex upstream-idle 计时。`text` / `thinking`
 只有包含实质文字才刷新；仅空白、Unicode 格式字符或控制字符不算进展，原事件仍无损传递。
@@ -247,6 +304,40 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   capability selection 与 auto-review intent。不得把无人值守只读边界重置成普通
   Auto，也不得用固定 wait 提示覆盖原请求的能力选择或审查意图。
   Claude wake continuation 与 Codex yield continuation 先分账，不抽公共模块。
+
+### Auto 模式的同范围自动跟进
+
+用户授权完成一项工作时，可以通过定时任务在原目标与操作范围内继续跟进；延后执行、
+周期运行和向本人报告必要进展本身不构成新的授权请求。跟进必须保留用户限制、完成和
+取消条件；不得借调度扩大目标、收件人或部署／合并等未授权操作。工具元数据发现属于
+只读辅助步骤。流程细节继续由 Skill 决定，Core 不内置特定仓库的发布流程。
+
+宿主审批从 owning session 已保存的用户原话恢复范围。直发与排队均通过 Session 的
+`resolveAutoReviewUserIntent` 在 accepted 回调和视觉准备结束后、vendor dispatch 前读取，
+覆盖上游旧快照；读取后仍检查本轮取消，保留后续叫停与限制。
+自动执行消息使用受保护的 `autoReviewUserText.kind=scheduled-continuation` 标记，
+不作为新授权，也不占用授权历史的行数预算；普通 `origin` 可被展示层修改，不能作为
+信任依据。没有可信记录的旧消息仍会中断授权恢复，不按旧心跳 prompt 补造用户同意。
+既有的清空、回退、附件歧义和完整消息预算继续生效。
+用户原话按时间平铺为历史与唯一当前消息，不把历史包装成一律持续有效的限制。局部练习
+的限制不延伸到新任务；同任务限制、撤权与明确长期限制仍须保留。预算不足时整体省略
+旧历史并标记缺失，不能只留下旧授权、丢掉后续限制。宿主实际拒绝的动作可作为下一条
+同一身份用户补充的指代线索；动作参数与助手解释都不是用户授权。相关行为回归见
+`agents/shared/auto-review-decision.test.ts` 与 `scripts/eval-auto-approval.mts`。
+绑定原任务的心跳必须保留其权限与计划模式，包括冷启动恢复与撞忙排队；队列接受边界
+复用既有权限与计划模式稳定快照核验；任一模式切换中或运行时与落盘值不一致时顺延，
+不按旧模式派发。不得把原任务的 Auto／Ask
+落盘改为完全访问。无法恢复权限时不能套用独立调度的完全访问默认值。
+
+Cindy reviewer 与 Codex native reviewer 使用同一份范围语义，但接入不同。Codex 的主
+Agent developer 指令不会进入原生审批摘要，因此通过线程级 `auto_review.policy` 内联
+Markdown 接入；在创建或恢复线程时预装，不依赖初始权限模式，后续切到 Auto 即可使用。
+不修改用户配置文件，不改 sandbox／审批者，不覆盖用户或项目自定义策略，
+管理员策略仍由原生优先处理。当前覆盖已验证的 Codex 0.145.0 与打包运行时 0.153.4，并分别完整保留其默认租户
+策略；未知版本保留原生策略，不能拿旧版本策略覆盖新默认。原生行为验证见
+`agents/codex/native-auto-review-policy.native.test.ts`（`packages/maker-core/src/` 下），
+需显式指定 `CINDY_CODEX_TEST_BINARY`；它使用假模型与假 MCP 验证配置传递和默认策略
+完整性，不代表真实模型判定已通过。Cindy 审批模型案例见 `scripts/eval-auto-approval.mts`。
 
 ## 3. 守住四项核心数据指标
 

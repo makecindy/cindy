@@ -1,5 +1,6 @@
 import {
   createContext,
+  type ComponentProps,
   type ReactNode,
   useCallback,
   useContext,
@@ -7,6 +8,7 @@ import {
   useRef,
 } from "react";
 import { Check } from "lucide-react-native";
+import { Text } from "@/components/AppText";
 import {
   Pressable,
   StyleSheet,
@@ -34,6 +36,16 @@ interface ShareSelectionRowGesture {
 }
 
 const ShareSelectionRowInteractionContext = createContext<(() => void) | null>(null);
+// Queued bubbles and share rows use the same child-interaction cancellation channel.
+export const MessageBodyTapBoundary = ShareSelectionRowInteractionContext.Provider;
+
+export function MessageBodyText(props: ComponentProps<typeof Text>) {
+  const cancelRowTap = useCancelShareSelectionRowTap();
+  return <Text {...props} onPress={props.onPress ? (event) => {
+    cancelRowTap?.();
+    props.onPress?.(event);
+  } : undefined} />;
+}
 
 export function useCancelShareSelectionRowTap(): (() => void) | null {
   return useContext(ShareSelectionRowInteractionContext);

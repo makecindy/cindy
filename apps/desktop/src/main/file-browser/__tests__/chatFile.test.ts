@@ -241,6 +241,19 @@ describe('statChatFile — chip 点亮预检', () => {
   const ssh = { kind: 'ssh', remoteHostId: 'h1' } as const;
   const dev = { kind: 'device', deviceId: 'd1' } as const;
 
+  it.each([ssh, dev])('checks command outputs against timestamps from the file-owning host (%j)', async (origin) => {
+    const deps = makeDeps();
+    const args = { origin, workdir: '/w', absPath: '/w/report.pdf' };
+    expect(await statChatFile({ ...args, modifiedWindow: { startMs: 900, endMs: 1100 } }, deps)).toBe('file');
+    expect(await statChatFile({ ...args, modifiedWindow: { startMs: 1001, endMs: null } }, deps)).toBe('nonfile');
+    expect(await statChatFile({ ...args, modifiedWindow: { startMs: 900, endMs: 1000 } }, deps)).toBe('nonfile');
+    const noTimestamp = makeDeps({
+      deviceStat: vi.fn().mockResolvedValue({ type: 'file', size: 10 }),
+      sshStat: vi.fn().mockResolvedValue({ type: 'file', size: 10 }),
+    });
+    expect(await statChatFile({ ...args, modifiedWindow: { startMs: 900, endMs: null } }, noTimestamp)).toBe('nonfile');
+  });
+
   it('文件 → file;目录 → directory(chip 点亮,点击定位侧边栏文件浏览器)', async () => {
     const deps = makeDeps();
     expect(await statChatFile({ origin: ssh, workdir: '/w', absPath: '/w/a.txt' }, deps)).toBe('file');

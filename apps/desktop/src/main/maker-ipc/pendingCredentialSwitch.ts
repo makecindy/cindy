@@ -63,7 +63,7 @@ interface PendingSwitchSession {
 export interface PendingCredentialSwitchDeps {
   maker: {
     listActiveSessions: () => PendingSwitchSession[];
-    closeSession: (sessionId: string) => Promise<void>;
+    closeSession: (sessionId: string, reason?: 'runtime-refresh') => Promise<void>;
   };
   isSessionInTurn?: (sessionId: string) => boolean;
   /** 生效后广播给 renderer(清「任务结束后生效」标记 / 会话内 toast)。 */
@@ -181,7 +181,7 @@ export class PendingCredentialSwitchService {
       if (session) {
         try {
           if (session.remoteHostId && target.forceSessionRebuild) {
-            await withRehydrateCloseSuppressed(sessionId, () => this.deps.maker.closeSession(sessionId));
+            await withRehydrateCloseSuppressed(sessionId, () => this.deps.maker.closeSession(sessionId, 'runtime-refresh'));
           } else {
             await prepareLocalSessionCredentialModeSwitch({
               maker: this.deps.maker,

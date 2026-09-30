@@ -1,6 +1,12 @@
 # DS-9 · Desktop 核心界面本地验收
 
-实施与视觉基线 `f8aaae334f6f316d2780df362557a6c9f3c6a4dc`，分支 `ds/9-desktop-core-ui`，macOS Electron，2026-09-11。提交准备已同步主干到 `f9ce362377`，DS-9 文件无冲突。用户已通过整体视觉验收，并明确授权提交 PR、免本地双审；保留必要自查与验证。本文随 DS-9 交付，合并状态以 PR 为准。
+实施与视觉基线 `f8aaae334f6f316d2780df362557a6c9f3c6a4dc`，分支 `ds/9-desktop-core-ui`，macOS Electron，2026-09-11。提交准备已同步主干到 `f9ce362377`，DS-9 文件无冲突。用户已通过整体视觉验收，并明确授权提交 PR、免本地双审；保留必要自查与验证。本文保留原阶段证据；最终合并状态见下节。
+
+## 最终合并与交接（2026-09-13 回填）
+
+[#4300](https://github.com/makecindy/cindy/pull/4300) 于 2026-09-12 09:08:24 UTC 合并，最终 head `023bde86ac3a46d79b67d9f437abe6ae1883dcd4`，merge `f1955f9354fab599d67116bca9e1a7a415598a8a`；最终 38 文件。`5769b60c6` 补真实视频 Enter/Space、延迟关闭回归；`023bde86a` 为图片/视频/模型预览接 FocusScope 并补真实组件测试，覆盖初始/循环/恢复焦点。模型 jsdom 测试不等于实际 model-viewer 浏览器交互验证，实机复核交 DS-10。
+
+最终 DCO、verify、Windows unit tests 通过，两个审查线程已解决。Windows 单例锁探测超时在同 head 重跑通过，未弱化测试；zqchris 批准绑定 `5769b60c6`，不称最终 head 重新人工批准。最终 Codex 审查完成，Greptile 属旧 head。09-11 用户视觉通过仍只对应当时候选；本地双审豁免保留，不把单人自查写成双审。以下历史 SHA/结果不改写，工程合并不自动关闭 G2、公开图片、平台与图表待项。
 
 ## 实现与依据
 
@@ -38,7 +44,7 @@
 
 ## 范围、未验证项与交接
 
-唯一 inventory 继续登记 49 个 surface（35 Desktop、14 Mobile）。聊天与授权仍登记为 pilot，用户已确认当前本地候选整体视觉验收通过，尚未合并；静态依赖和局部回归不将其它整页升级为 migrated。Cross-entry 的 owner / 下一动作均在 inventory 维护。
+唯一 inventory 继续登记 49 个 surface（35 Desktop、14 Mobile）。聊天与授权仍登记为 pilot，用户已确认 09-11 本地候选整体视觉验收通过，09-12 最终合并另见文首；静态依赖和局部回归不将其它整页升级为 migrated。Cross-entry 的 owner / 下一动作均在 inventory 维护。
 
 - Windows/Linux、实体 IME 与原生缩放/拖窗、真实远程伙伴/断线恢复、多账号与插件授权/独立宿主、实际 Orca/调度运行未由本地场景完整验证。保留上游回归，kirozeng 安排环境，Codex 复核；2026-09-17 或 DS-10 开工前复查。
 - 图表日期命中替代方案仍待设计决定；本批没有改图表或加回已删除入口。G2 独立贡献者试用、历史 69 张图片公开及 DS-6/8 平台缺口继续交 DS-10，未记为通过。

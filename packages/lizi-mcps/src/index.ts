@@ -39,6 +39,7 @@ export * from './cindy-docs/index.js';
 export * from './orca/index.js';
 
 export * from './session-context.js';
+export * from './session-path-auth.js';
 
 export * from './lsp/index.js';
 

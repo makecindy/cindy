@@ -21,10 +21,12 @@ export interface SessionScrollSnapshot {
   windowAnchorKey: string | null;
   /** 离开时视口顶端那条 render-item 的 stable key。 */
   viewportTopKey: string;
-  /** viewportTopKey 这条 item 的顶端被滚到视口上方的像素数(>=0)。 */
+  /** 条目顶端相对视口的偏移；负值保留视口顶部到条目之间的间距。 */
   offset: number;
   /** Visible message inside a work group; optional for older snapshots. */
   messageClientId?: string;
+  /** Source message used to reload an evicted reading position. */
+  restoreClientId?: string;
   messageOffset?: number;
   /** Intrinsic estimates for the last mounted window, valid at this content width. */
   itemHeights?: { width: number; byKey: Record<string, number> };

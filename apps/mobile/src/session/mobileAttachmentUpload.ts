@@ -1,4 +1,5 @@
 import { apiFetchRaw } from '@/api/client';
+import { tryMobilePeerUpload } from '@/device-link/peerFileRegistry';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { i18n } from '@/i18n';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
@@ -66,7 +67,7 @@ export function effectiveUploadMimeType(mimeType: string | undefined): string {
 
 export async function presignMobileAttachmentUpload(
   candidate: MobileAttachmentUploadCandidate,
-  options: { token: string | null; deps?: UploadDeps },
+  options: { token: string | null; sharedTaskId?: string; deps?: UploadDeps },
 ): Promise<MobileAttachmentPresignResult> {
   const apiFetch = options.deps?.apiFetch ?? apiFetchRaw;
   const result = await withTransientRemoteRetry(
@@ -79,6 +80,7 @@ export async function presignMobileAttachmentUpload(
         size: candidate.size,
         contentType: effectiveUploadMimeType(candidate.mimeType),
         ext: uploadExtForName(candidate.name),
+        ...(options.sharedTaskId ? { sharedTaskId: options.sharedTaskId } : {}),
       },
     }),
     { maxAttempts: PRESIGN_MAX_ATTEMPTS },
@@ -294,7 +296,7 @@ export async function statMobileAttachmentFileSize(uri: string): Promise<number>
 export async function uploadMobileAttachment(
   candidate: MobileAttachmentUploadCandidate,
   body: MobileAttachmentUploadBody,
-  options: { token: string | null; id?: string; deps?: UploadDeps },
+  options: { token: string | null; sharedTaskId?: string; id?: string; deps?: UploadDeps },
 ): Promise<RemoteSerializedAttachment> {
   // 上传前先校验类型:不支持的本机文件(如 .zip)若先 presign + PUT、再在
   // buildMobileUploadedAttachment 处被拒,会在 device-link OSS 桶里留下一个永不被引用、
@@ -327,6 +329,8 @@ export async function uploadMobileAttachmentFromFile(
   fileUri: string,
   options: {
     token: string | null;
+    sharedTaskId?: string;
+    deviceId?: string;
     id?: string;
     deps?: UploadDeps;
     signal?: AbortSignal;
@@ -350,6 +354,16 @@ export async function uploadMobileAttachmentFromFile(
       readChunk: options.deps?.readFileChunk,
       signal: options.signal,
     });
+    if (options.deviceId && !options.sharedTaskId) {
+      const peerRef = await tryMobilePeerUpload(options.deviceId, snapshot.uri, {
+        size: candidate.size, sha256, mimeType: candidate.mimeType, originalName: candidate.name,
+      }, options.signal);
+      if (peerRef) {
+        const attachment = buildMobileUploadedAttachment({ ...candidate, sha256, peerRef, id: options.id });
+        if (!attachment) throw new Error(i18n.t('composer.upload.fileTypeUnsupported'));
+        return attachment;
+      }
+    }
     const presigned = await presignMobileAttachmentUpload(candidate, options);
     try {
       await putMobileAttachmentUploadFromFile(

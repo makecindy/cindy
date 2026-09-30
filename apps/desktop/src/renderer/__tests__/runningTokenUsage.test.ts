@@ -1,3 +1,4 @@
+import { formatRecentOutputTokenRate } from '@/features/cc-agent/lib/runningTokenUsage';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -68,4 +69,14 @@ describe('resolveRunningUsageMeta', () => {
       }),
     ).toEqual({ kind: 'none' });
   });
+});
+
+it.each([
+  [0.001, '<0.1'],
+  [0.049, '<0.1'],
+  [0.099, '<0.1'],
+  [0.1, '0.1'],
+  [0, '0'],
+] as const)('formats recent and peak rate %s as %s', (rate, expected) => {
+  expect(formatRecentOutputTokenRate(rate)).toBe(expected);
 });

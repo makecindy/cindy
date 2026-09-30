@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ImBotSection } from '../ImBotSection';
+import { SettingsSearchNavigationContext } from '../SettingsSearchNavigation';
+import imBotSearch from '../ImBotSection.settings-search';
 
 const authState = vi.hoisted(() => ({
   mode: 'cloud' as 'signed-out' | 'local' | 'cloud',
@@ -30,8 +32,43 @@ vi.mock('../WechatBotSection', () => ({
 vi.mock('../WecomBotSection', () => ({
   WecomBotSection: () => <div data-testid="wecom-bot" />,
 }));
-vi.mock('../FeishuBotSection', () => ({
-  FeishuBotSection: () => <div data-testid="feishu-bot" />,
+vi.mock('@/hooks/useFeishuBot', async () => {
+  const { useState } = await import('react');
+  return {
+    useFeishuBot: () => {
+      const [service, setService] = useState<'feishu' | 'lark'>('feishu');
+      return {
+        service,
+        setService,
+        appId: '',
+        setAppId: vi.fn(),
+        appSecret: '',
+        setAppSecret: vi.fn(),
+        status: 'idle',
+        errorMessage: null,
+        hasSavedCreds: false,
+        hasLoadedState: true,
+        ownerOpenId: null,
+        validationError: null,
+        isSaving: false,
+        isClearing: false,
+        isReconnecting: false,
+        save: vi.fn(),
+        reconnect: vi.fn(),
+        clear: vi.fn(),
+      };
+    },
+  };
+});
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({
+  useConfirmDialog: () => ({ confirm: vi.fn() }),
+}));
+vi.mock('../ImChannelSettingsCard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../ImChannelSettingsCard')>()),
+  useImChannelSettingsSummary: () => [null, vi.fn()],
+}));
+vi.mock('../ImDefaultSettingsSection', () => ({
+  ImDefaultSettingsSection: () => null,
 }));
 vi.mock('../DingTalkBotSection', () => ({
   DingTalkBotSection: () => <div data-testid="dingtalk-bot" />,
@@ -73,11 +110,47 @@ describe('ImBotSection', () => {
     expect(screen.getByTestId('official-connections')).toBeTruthy();
     expect(screen.getByTestId('wechat-bot')).toBeTruthy();
     expect(screen.getByTestId('wecom-bot')).toBeTruthy();
-    expect(screen.getByTestId('feishu-bot')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /settings.feishuBot.title/ })).toBeTruthy();
     expect(screen.getByTestId('dingtalk-bot')).toBeTruthy();
     expect(screen.getByTestId('discord-bot')).toBeTruthy();
     expect(screen.getByTestId('telegram-bot')).toBeTruthy();
     expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it('shows official, Discord, and Telegram bots to personal cloud accounts', () => {
+    authState.membershipKind = 'personal';
+
+    render(<ImBotSection targetGroup="cindy" />);
+
+    expect(screen.getByTestId('official-connections')).toBeTruthy();
+    expect(screen.getByTestId('discord-bot')).toBeTruthy();
+    expect(screen.getByTestId('telegram-bot')).toBeTruthy();
+    expect(scrollIntoView.mock.instances[0]).toBe(
+      screen.getByRole('heading', { name: 'settings.imBot.groups.cindy' }).closest('section'),
+    );
+  });
+
+  it('shows and selects Lark for a personal cloud account opened from Lark search', () => {
+    authState.membershipKind = 'personal';
+    const entry = imBotSearch.entries.find((item) => item.id === 'imBot.lark')!;
+
+    render(
+      <SettingsSearchNavigationContext.Provider value={{ entry, activation: 1 }}>
+        <ImBotSection targetGroup="personal" />
+      </SettingsSearchNavigationContext.Provider>,
+    );
+
+    expect(
+      screen
+        .getByRole('radio', { name: 'settings.feishuBot.services.lark' })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
+    fireEvent.click(screen.getByRole('radio', { name: 'settings.feishuBot.services.feishu' }));
+    expect(
+      screen
+        .getByRole('radio', { name: 'settings.feishuBot.services.feishu' })
+        .getAttribute('aria-checked'),
+    ).toBe('true');
   });
 
   it('keeps imGroup deep links by scrolling to the requested section', () => {

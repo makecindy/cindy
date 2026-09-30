@@ -22,6 +22,8 @@ const managedEnvKeys = [
   'EXPO_PUBLIC_CINDY_GOOGLE_WEB_CLIENT_ID',
   'EXPO_PUBLIC_CINDY_GOOGLE_IOS_CLIENT_ID',
   'EXPO_PUBLIC_CINDY_GOOGLE_IOS_URL_SCHEME',
+  'EXPO_PUBLIC_CINDY_WECHAT_APP_ID',
+  'EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK',
   'CINDY_USE_LOCAL_REGION_CONFIG',
   'CINDY_SELF_HOST_REGIONS_FILE',
   'CINDY_MOBILE_OTA_NATIVE',
@@ -49,6 +51,58 @@ afterEach(() => {
 });
 
 describe('mobile native app config', () => {
+  it('generates all three official WeChat query schemes without dropping existing callbacks', async () => {
+    const withWechatLogin = require(resolve(process.cwd(), 'modules/xdt-wechat-login/plugin/index.js'));
+    const config = withWechatLogin({ name: 'Test app', slug: 'test-app' }, {
+      appId: 'wx-test-mobile',
+      universalLink: 'https://login.example.com/app/',
+    });
+    const result = await config.mods.ios.infoPlist({
+      ...config,
+      modResults: {
+        LSApplicationQueriesSchemes: ['existing-app', 'weixin'],
+        CFBundleURLTypes: [{ CFBundleURLSchemes: ['cindycn'] }],
+      },
+      modRequest: { platform: 'ios', modName: 'infoPlist' },
+    });
+    expect(result.modResults.LSApplicationQueriesSchemes).toEqual([
+      'existing-app', 'weixin', 'weixinULAPI', 'weixinURLParamsAPI',
+    ]);
+    expect(result.modResults.CFBundleURLTypes).toEqual([
+      { CFBundleURLSchemes: ['cindycn'] },
+      { CFBundleURLName: 'wx-test-mobile', CFBundleURLSchemes: ['wx-test-mobile'] },
+    ]);
+  });
+
+  it('enables the existing WeChat SDK plugin only for configured CN builds', () => {
+    const buildConfig = require(resolve(process.cwd(), 'app.config.js'));
+    process.env.EXPO_PUBLIC_CINDY_AUTH_REGION = 'cn';
+    expect(buildConfig().plugins).not.toContainEqual(expect.arrayContaining(['xdt-wechat-login/plugin']));
+    process.env.EXPO_PUBLIC_CINDY_WECHAT_APP_ID = ' wx-test-mobile ';
+    process.env.EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK = ' https://login.example.com/wechat/ ';
+    expect(buildConfig().plugins).toContainEqual([
+      'xdt-wechat-login/plugin',
+      { appId: 'wx-test-mobile', universalLink: 'https://login.example.com/wechat/' },
+    ]);
+    process.env.EXPO_PUBLIC_CINDY_AUTH_REGION = 'global';
+    expect(buildConfig().plugins).not.toContainEqual(expect.arrayContaining(['xdt-wechat-login/plugin']));
+  });
+
+  it.each([
+    ['wx-test-mobile', ''],
+    ['', 'https://login.example.com/wechat/'],
+    ['wx-test-mobile', 'http://login.example.com/wechat/'],
+    ['wx-test-mobile', 'not-a-url'],
+    ['wx-test-mobile', 'https://user:pass@login.example.com/wechat/'],
+    ['wx-test-mobile', 'https://login.example.com/wechat/?source=build'],
+    ['wx-test-mobile', 'https://login.example.com/wechat/#callback'],
+  ])('rejects incomplete or invalid WeChat config before native generation (%s, %s)', (appId, link) => {
+    const buildConfig = require(resolve(process.cwd(), 'app.config.js'));
+    process.env.EXPO_PUBLIC_CINDY_AUTH_REGION = 'cn';
+    process.env.EXPO_PUBLIC_CINDY_WECHAT_APP_ID = appId;
+    process.env.EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK = link;
+    expect(() => buildConfig()).toThrow(/EXPO_PUBLIC_CINDY_WECHAT/);
+  });
   it('defaults to the CN app identity and requires an explicit Global build', () => {
     const appJson = JSON.parse(
       readFileSync(resolve(process.cwd(), 'app.json'), 'utf8'),
@@ -185,6 +239,7 @@ describe('mobile native app config', () => {
     const regular = buildConfig({ config: appJson.expo });
     // 账号绑定改为 env 注入后,app.json 不再带 updates;env 未设 → 无 OTA 配置。
     expect(regular.updates).toBeUndefined();
+    expect(regular.android.permissions).not.toContain('android.permission.REQUEST_INSTALL_PACKAGES');
 
     const configDir = mkdtempSync(join(tmpdir(), 'cindy-selfhost-regions-'));
     temporaryDirs.push(configDir);
@@ -225,6 +280,7 @@ describe('mobile native app config', () => {
     // 自建 app 身份按 region 从 self-host-regions.json(.example 回落)取,而非写死。
     expect(selfHosted.ios.bundleIdentifier).toBe('com.xd.cindycn');
     expect(selfHosted.android.package).toBe('com.xd.cindycn');
+    expect(selfHosted.android.permissions).toContain('android.permission.REQUEST_INSTALL_PACKAGES');
     expect(selfHosted.extra.cindy.tapdb).toEqual({
       clientId: 'json-id',
       clientToken: 'json-token',
@@ -239,6 +295,7 @@ describe('mobile native app config', () => {
     const selfHostedGlobal = buildConfig({ config: appJson.expo });
     expect(selfHostedGlobal.ios.bundleIdentifier).toBe('com.xd.cindy');
     expect(selfHostedGlobal.android.package).toBe('com.xd.cindy');
+    expect(selfHostedGlobal.android.permissions).toContain('android.permission.REQUEST_INSTALL_PACKAGES');
     expect(selfHostedGlobal.extra.cindy.tapdb.region).toBe('global');
     expect(selfHostedGlobal.extra.cindy.google).toEqual({
       webClientId: 'web.apps.googleusercontent.com',
@@ -516,6 +573,17 @@ describe('mobile native app config', () => {
     // app.config.js 不得剥离该键:以 resolved config 为准再断言一次。
     const cn = buildConfig({ config: appJson.expo });
     expect(cn.ios.infoPlist.UIViewControllerBasedStatusBarAppearance).toBe(true);
+  });
+
+  it('enables the scene lifecycle required to launch iOS 27 SDK builds', () => {
+    const appJson = JSON.parse(readFileSync(resolve(process.cwd(), 'app.json'), 'utf8'));
+    const buildConfig = require(resolve(process.cwd(), 'app.config.js'));
+    for (const config of [appJson.expo, buildConfig({ config: appJson.expo })]) {
+      const properties = config.plugins.find(
+        (plugin: unknown) => Array.isArray(plugin) && plugin[0] === 'expo-build-properties',
+      );
+      expect(properties?.[1]?.ios?.enableSceneSupport).toBe(true);
+    }
   });
 
   it('keeps audio capture foreground-only in native builds', () => {

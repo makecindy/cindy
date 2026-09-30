@@ -127,6 +127,19 @@ const READY_WITH_REAUTH_SUGGEST = {
 };
 
 describe("cindy_ghosts · ghost_list(总机接线簿,现查现报)", () => {
+  it("Manual-only plugins retain empty tools and the same manual index through list/info", async () => {
+    const ghost = { ...ART_GHOST, tools: [] };
+    const deps = fakeDeps({
+      listAwakeGhosts: async () => [ghost],
+      getAwakeGhost: async () => ({ ok: true, ghost }),
+    });
+    const list = parsePayload(await handleGhostList(deps));
+    const info = parsePayload(await handleGhostInfo(deps, { ghost_id: ghost.id }));
+    expect(list.ghosts).toEqual([ghost]);
+    expect(info).toEqual({ ok: true, ghost });
+    expect(list.hint).toContain("ghost_manual");
+  });
+
   it("返回唤醒中的意识与工具,附调用提示", async () => {
     const result = await handleGhostList(fakeDeps());
     const payload = parsePayload(result);
@@ -1216,7 +1229,7 @@ describe("cindy_ghosts · server 构建", () => {
     expect(infoDescription).toContain("完全没有目标线索时才用 ghost_list");
     expect(infoDescription).toContain("不要缓存");
     expect(infoDescription).toContain(
-      "GHOST_NOT_FOUND(不存在、已卸载或当前账号不可用)",
+      "GHOST_NOT_FOUND(不存在、已卸载、当前账号不可用或未提供工具和手册)",
     );
     expect(infoDescription).toContain("GHOST_DISABLED_IN_WORKDIR");
     expect(infoDescription).toContain("INTERNAL(内部查询失败)");
@@ -1233,6 +1246,11 @@ describe("cindy_ghosts · server 构建", () => {
     expect(manualDescription).toContain(
       'path:"x-ops/references/reply-limits.md"',
     );
+    for (const name of ["ghost_list", "ghost_info"]) {
+      expect(server._registeredTools[name]?.description).toContain("tools 可能为空");
+    }
+    expect(manualDescription).toContain("Manual-only");
+    expect(manualDescription).toContain("未声明手册");
   });
 });
 
@@ -1846,6 +1864,7 @@ describe("formatGhostRoster(花名册快照:JSONL 召回数据源)", () => {
     const prompt = buildGhostRosterPrompt(items);
     expect(prompt).toBe(formatGhostRoster(items));
     expect(prompt).toContain("直接调用 ghost_info({ghost_id})");
+    expect(prompt).toContain("ghost_manual");
     expect(prompt.indexOf('"id":"a"')).toBeLessThan(prompt.indexOf('"id":"z"'));
     expect(buildGhostRosterPrompt([])).toBe("");
   });
@@ -1961,6 +1980,55 @@ describe("cindy · 卡槽③(xdt_card_id 提升 + agentToolUseId 提取)", () =>
 });
 
 describe('connect_account transport', () => {
+  it('exposes cloud market discovery/install only when the Host supplies them', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const searchMarket = vi.fn(async () => ({ ok: true, plugins: [] }));
+    const installMarket = vi.fn(async () => ({ ok: true, ghostId: 'example-plugin', installed: true }));
+    const server = createCindyGhostsMcpServer(fakeDeps({ searchMarket, installMarket }));
+    const client = new Client({ name: 'market-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair(); await server.connect(st); await client.connect(ct);
+    try {
+      expect((await client.listTools()).tools.map(t => t.name)).toEqual(expect.arrayContaining(['ghost_market_search', 'ghost_market_install']));
+      await client.callTool({ name: 'ghost_market_search', arguments: { query: 'calendar' } });
+      expect(searchMarket).toHaveBeenCalledWith('calendar');
+      await client.callTool({ name: 'ghost_market_install', arguments: { plugin_id: 'catalog-plugin', release_id: 'release-1' } });
+      expect(installMarket).toHaveBeenCalledWith({ pluginId: 'catalog-plugin', releaseId: 'release-1' }, expect.any(AbortSignal));
+      const rejected = await client.callTool({ name: 'ghost_market_install', arguments: { plugin_id: 'catalog-plugin' } });
+      expect(rejected.isError).toBe(true); expect(installMarket).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  });
+  it('propagates MCP cancellation to the exact Host tool call', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    let aborted!: () => void;
+    const cancelled = new Promise<void>((resolve) => { aborted = resolve; });
+    const server = createCindyGhostsMcpServer(fakeDeps({
+      callGhostTool: async ({ signal }) => {
+        expect(signal).toBeInstanceOf(AbortSignal);
+        started();
+        await new Promise<void>((resolve) => signal!.addEventListener('abort', () => {
+          aborted(); resolve();
+        }, { once: true }));
+        return { ok: false, errorCode: 'INTERNAL', message: 'cancelled' };
+      },
+    }));
+    const client = new Client({ name: 'cancel-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st); await client.connect(ct);
+    try {
+      const controller = new AbortController();
+      const call = client.callTool({ name: 'ghost_call', arguments: {
+        ghost_id: 'art', tool: 'gen_image',
+      } }, undefined, { signal: controller.signal });
+      const rejected = expect(call).rejects.toBeDefined();
+      await ready; controller.abort();
+      await rejected; await cancelled;
+    } finally { await client.close(); await server.close(); }
+  });
+
   it('exposes a Host connection without requiring an installed plugin', async () => {
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
     const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
@@ -1973,10 +2041,34 @@ describe('connect_account transport', () => {
       const tools = await client.listTools();
       expect(tools.tools.some(tool => tool.name === 'connect_account')).toBe(true);
       await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'grok' } });
-      expect(connectAccount).toHaveBeenCalledWith({ kind: 'host', id: 'grok', reauthorize: undefined });
+      expect(connectAccount).toHaveBeenCalledWith({ kind: 'host', id: 'grok', reauthorize: undefined }, expect.any(AbortSignal));
       const rejected = await client.callTool({ name: 'connect_account', arguments: { kind: 'host', id: 'invented' } });
       expect(rejected.isError).toBe(true);
       expect(connectAccount).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it('forwards MCP cancellation to the ordinary connection waiter', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    let started!: () => void, cancelled!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const aborted = new Promise<void>(resolve => { cancelled = resolve; });
+    const server = createCindyGhostsMcpServer(fakeDeps({ connectAccount: async (_target, signal) => {
+      expect(signal).toBeInstanceOf(AbortSignal); started();
+      return new Promise(resolve => signal!.addEventListener('abort', () => {
+        cancelled(); resolve({ ok: false, errorCode: 'SETUP_CANCELLED' });
+      }, { once: true }));
+    } }));
+    const client = new Client({ name: 'connection-cancel', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st); await client.connect(ct);
+    try {
+      const controller = new AbortController();
+      const result = client.callTool({ name: 'connect_account', arguments: { kind: 'plugin', id: 'calendar' } },
+        undefined, { signal: controller.signal });
+      const rejected = expect(result).rejects.toBeDefined();
+      await ready; controller.abort(); await rejected; await aborted;
     } finally { await client.close(); await server.close(); }
   });
 });
@@ -2008,7 +2100,7 @@ describe('Cindy market MCP transport', () => {
       expect(callGhostTool).not.toHaveBeenCalled();
       await client.callTool({ name: 'ghost_info', arguments: { ghost_id: 'art' } });
       await client.callTool({ name: 'connect_account', arguments: { kind: 'plugin', id: 'art' } });
-      expect(connectAccount).toHaveBeenCalledWith({ kind: 'plugin', id: 'art', reauthorize: undefined });
+      expect(connectAccount).toHaveBeenCalledWith({ kind: 'plugin', id: 'art', reauthorize: undefined }, expect.any(AbortSignal));
       expect(callGhostTool).not.toHaveBeenCalled();
       // Host authorization continuation retries the original work through the same gateway.
       await client.callTool({ name: 'ghost_call', arguments: { ghost_id: 'art', tool: 'gen_image', args: {} } });
@@ -2020,5 +2112,24 @@ describe('Cindy market MCP transport', () => {
       expect(failed.isError).toBe(true);
       expect(JSON.stringify(failed)).not.toContain('private-token');
     } finally { await client.close(); await server.close(); }
+  });
+});
+
+
+describe("portable legacy plugin media", () => {
+  it("hoists singular image/video and audio arrays without claiming cards were delivered", async () => {
+    const payload = parsePayload(await handleGhostCall(fakeDeps({ callGhostTool: async () => ({ ok: true, result: {
+      xdt_image_url: "cindy-media://blobs/a.png", xdt_video_url: "cindy-media://blobs/a.mp4", xdt_audio_urls: ["cindy-media://blobs/a.mp3"],
+    } }) }), { ghost_id: "legacy", tool: "create" }));
+    expect(payload.xdt_image_url).toBe("cindy-media://blobs/a.png");
+    expect(payload.xdt_video_url).toBe("cindy-media://blobs/a.mp4");
+    expect(payload.xdt_audio_urls).toEqual(["cindy-media://blobs/a.mp3"]);
+  });
+  it("does not claim delivered media for a card-only or ledger-only result", async () => {
+    for (const result of [{ ok: true as const, result: { xdt_card_id: "c" } }, { ok: true as const, result: {}, producedMedia: ["cindy-media://blobs/a.png"] }]) {
+      const payload = parsePayload(await handleGhostCall(fakeDeps({ callGhostTool: async () => result }), { ghost_id: "art", tool: "create" }));
+      expect(payload.hint).not.toContain("已自动送达");
+      expect(payload.hint).not.toContain("媒体已由聊天气泡自动渲染");
+    }
   });
 });

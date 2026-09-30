@@ -1,0 +1,1 @@
+ALTER TABLE `bot_direct_messages` ADD `bridge_session_id` text;

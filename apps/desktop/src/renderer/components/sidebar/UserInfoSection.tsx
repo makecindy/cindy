@@ -18,6 +18,7 @@ import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provide
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useUpdateBannerDismiss } from '@/hooks/useUpdateBannerDismiss';
 import { useBetaChannelSettings } from '@/hooks/useBetaChannelSettings';
+import { useCindyVersions } from '@/lib/useCindyVersions';
 import { Tip } from '@/components/ui/tooltip';
 import { Spinner } from '@/components/ui/spinner';
 import {
@@ -79,6 +80,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const [accountsMutationAllowed, setAccountsMutationAllowed] = useState(true);
   const [accountsSyncing, setAccountsSyncing] = useState(false);
   const [switchingAccountKey, setSwitchingAccountKey] = useState<string | null>(null);
+  const [addingAccount, setAddingAccount] = useState(false);
   const mobileDownloadButtonRef = useRef<HTMLButtonElement>(null);
   const accountsLoadGenerationRef = useRef(0);
   const { t } = useTranslation();
@@ -92,6 +94,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const { status } = useUpdateStatus();
   const { dismissed, restore } = useUpdateBannerDismiss();
   const { state: betaChannelState } = useBetaChannelSettings();
+  const versions = useCindyVersions();
   const hasPendingUpdate = status === 'ready' || status === 'superseding';
   const isFlameReopen = hasPendingUpdate && dismissed;
   const showBetaLabel = !betaChannelState.loading && betaChannelState.enableBeta;
@@ -144,6 +147,14 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const appVersionLabelDetail = appRegionLabel
     ? `${appRegionLabel} · ${appDisplayVersionDetail}`
     : appDisplayVersionDetail;
+  const isPersonalVersion =
+    versions.state?.currentId !== undefined && versions.state.currentId !== 'original';
+  const visibleVersionLabel = isPersonalVersion
+    ? t('cindyMake.versions.personal')
+    : appVersionLabel;
+  const visibleVersionLabelDetail = isPersonalVersion
+    ? t('cindyMake.versions.personal') + ' · ' + appDisplayVersionDetail
+    : appVersionLabelDetail;
   const remoteAvailable = mode === 'cloud';
 
   const openSettings = () => {
@@ -151,10 +162,18 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   };
 
   const openAddAccount = async () => {
-    if (!(await confirmRunningTaskInterruption())) return;
-    navigate('/add-account', {
-      state: { returnTo: `${location.pathname}${location.search}` },
-    });
+    if (addingAccount) return;
+    setAddingAccount(true);
+    try {
+      if (!(await confirmRunningTaskInterruption())) return;
+      await navigate('/add-account', {
+        state: { returnTo: `${location.pathname}${location.search}` },
+      });
+    } catch {
+      toast.error(t('sidebar.accountSwitcher.startFailed'));
+    } finally {
+      setAddingAccount(false);
+    }
   };
 
   const refreshSavedAccounts = async () => {
@@ -210,12 +229,16 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
     )
       return;
     setSwitchingAccountKey(account.accountKey);
+    let progressToast: string | undefined;
     try {
       if (!(await confirmRunningTaskInterruption())) return;
+      // The menu closes on selection; keep progress visible outside it.
+      progressToast = toast.loading(t('sidebar.accountSwitcher.switching'));
       await switchAccount(account.accountKey);
     } catch {
       toast.error(t('sidebar.accountSwitcher.switchFailed'));
     } finally {
+      if (progressToast) toast.dismiss(progressToast);
       setSwitchingAccountKey(null);
     }
   };
@@ -261,7 +284,10 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
               {switching ? (
                 <Spinner size={14} className="shrink-0 text-[var(--text-secondary)]" />
               ) : account.isCurrent ? (
-                <Check className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span className="flex shrink-0 items-center gap-1 text-11 text-[var(--text-secondary)]">
+                  <Check className="h-4 w-4" aria-hidden="true" />
+                  {t('sidebar.accountSwitcher.current')}
+                </span>
               ) : null}
             </DropdownMenuItem>
           );
@@ -279,6 +305,11 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
     <DropdownMenu onOpenChange={(open) => open && void refreshSavedAccounts()}>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" sideOffset={8} className="min-w-[190px]">
+        {mode === 'cloud' && accountsReadyForOwner && !accountsMutationAllowed ? (
+          <p role="status" className="max-w-[280px] px-2 py-2 text-12 text-[var(--text-secondary)]">
+            {t('sidebar.accountSwitcher.sharedDataRestriction')}
+          </p>
+        ) : null}
         {renderSavedAccountItems()}
         {mode === 'cloud' &&
         accountsReadyForOwner &&
@@ -286,9 +317,17 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
           <DropdownMenuSeparator />
         ) : null}
         {mode === 'local' ? (
-          <DropdownMenuItem onSelect={() => void openAddAccount()} className="gap-2.5">
-            <UserPlus className="h-4 w-4" aria-hidden="true" />
-            {t('login.signIn')}
+          <DropdownMenuItem
+            disabled={addingAccount}
+            onSelect={() => void openAddAccount()}
+            className="gap-2.5"
+          >
+            {addingAccount ? (
+              <Spinner size={16} />
+            ) : (
+              <UserPlus className="h-4 w-4" aria-hidden="true" />
+            )}
+            {addingAccount ? t('sidebar.accountSwitcher.adding') : t('login.signIn')}
           </DropdownMenuItem>
         ) : null}
         <DropdownMenuItem onSelect={openSettings} className="gap-2.5">
@@ -466,9 +505,9 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
               {/* 2px gap 与同栏 userNameContainer 保持一致。 */}
               <p
                 className="flex min-w-0 items-center gap-1 text-10 leading-[1.3] text-[var(--sidebar-user-card-text)]"
-                title={appVersionLabelDetail}
+                title={visibleVersionLabelDetail}
               >
-                <span className="truncate opacity-80">{appVersionLabel}</span>
+                <span className="truncate opacity-80">{visibleVersionLabel}</span>
                 {showBetaLabel ? (
                   <span
                     className="shrink-0 select-none opacity-80"

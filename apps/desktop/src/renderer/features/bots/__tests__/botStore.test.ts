@@ -17,6 +17,8 @@ import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { getCachedProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { getPersistedVendorModel } from '@/state/newMakerDraft';
+import { readCachedBotWelcomeContext } from '../botWelcomeContext';
+vi.mock('../botWelcomeContext', () => ({ readCachedBotWelcomeContext: vi.fn() }));
 
 vi.mock('@/state/newMakerDraft', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/state/newMakerDraft')>(),
@@ -100,6 +102,7 @@ describe('bot profile store', () => {
   const createdIds: string[] = [];
 
   beforeEach(() => {
+    vi.mocked(readCachedBotWelcomeContext).mockReset();
     vi.mocked(getDefaultModelForVendor).mockReturnValue({
       id: 'catalog-new-session-default',
       label: 'Catalog default',
@@ -336,6 +339,8 @@ describe('bot profile store', () => {
   });
 
   it('replaces the optimistic Bot with the authoritative profile and stable ID returned by main', async () => {
+    const welcomeContext = { projects: ['Puzzle Studio'], tasks: ['Build a game editor'], automations: [] };
+    vi.mocked(readCachedBotWelcomeContext).mockReturnValue(welcomeContext);
     const create = vi.fn(async (_input: { id: string }) => ({
       id: 'existing-cindy',
       name: 'Hermes identity bot',
@@ -368,6 +373,7 @@ describe('bot profile store', () => {
     try {
       const bot = await addBotProfileAndWait({
         name: 'Draft name',
+        prepareInvitation: true,
         avatarImageBase64: 'iVBORw0KGgo=',
         description: '',
         identitySource: '# SOUL\nPersistent release steward.',
@@ -396,6 +402,7 @@ describe('bot profile store', () => {
       expect(create).toHaveBeenCalledWith(
         expect.objectContaining({
           identitySource: '# SOUL\nPersistent release steward.',
+          welcomeContext,
           avatarImageBase64: 'iVBORw0KGgo=',
           userContextSource: '# USER\nWorks with the release team.',
           avatar: '🛠️',

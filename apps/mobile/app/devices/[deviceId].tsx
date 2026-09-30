@@ -32,7 +32,8 @@ import {
 } from '@/components/MobilePrimitives';
 import {
   SimpleStackHeader,
-  simpleScreenSafeAreaEdges,
+  simpleScrollInsetProps,
+  simpleScrollScreenSafeAreaEdges,
 } from '@/platform/chrome';
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -72,8 +73,8 @@ import {
   shouldReplaceListWithSearchResults,
 } from '@/session/conversationSearch';
 import { useConversationSearch } from '@/session/useConversationSearch';
-import { sessionMatchesProjectDir } from '@/session/mobileHome';
-import { HomeSessionRow } from './index';
+import { selectVisibleDeviceSessions, sessionMatchesProjectDir } from '@/session/mobileHome';
+import { HomeSessionRow } from '@/session/HomeSurface';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
 import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
 import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/SwipeableSessionRow';
@@ -176,12 +177,13 @@ function DeviceDetailScreenContent() {
   // filter 必须 memo:裸 filter 每次渲染都产新数组,会让下游全部 [sessions, ...] 依赖的
   // useMemo 逐 emit 失效,派生链(索引 → sections → 全列表行)整体重建(2026-07-18
   // 重渲染风暴)。store 层已保证 allSessions 引用在内容未变时稳定,这里不能亲手打破。
-  const sessions = useMemo(() => allSessions.filter((s) =>
-    // 用展示用 canonicalDeviceId(设备归并结果)匹配,与首页项目卡一致 —— 被认领的 stale 会话也能显示,
-    // 数量与卡片相符。deviceLinkDeviceId 仍是物理路由 key(openSession / patch 用它),不参与此处判断。
-    (s.canonicalDeviceId ?? s.deviceLinkDeviceId) === deviceId
-    && (!projectWorkingDir || sessionMatchesProjectDir(s.workingDir, projectWorkingDir))),
-  [allSessions, deviceId, projectWorkingDir]);
+  // 列表隐藏 Orca worker 子会话(本期不支持进 worker 聊天);Lead + 普通会话保留。仅 mobile 侧过滤。
+  // 与首页卡片口径对齐:首页已 exclude worker,「查看全部 N 条」不能再把它们露出来。
+  // 用展示用 canonicalDeviceId(设备归并结果)匹配 —— 被认领的 stale 会话也能显示,数量与卡片相符。
+  const sessions = useMemo(
+    () => selectVisibleDeviceSessions(allSessions, deviceId, projectWorkingDir),
+    [allSessions, deviceId, projectWorkingDir],
+  );
   const messageVersion = useRemoteMessageVersion();
   const storeVersion = useRemoteSessionStoreVersion();
   const [statusFilter, setStatusFilter] = useState<RemoteSessionStatusFilter>(
@@ -244,6 +246,7 @@ function DeviceDetailScreenContent() {
   const showConnectionBanner = useShowConnectionBanner(status, error, connectionIssue, deviceUnresponsive);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
+  const [selectionRequested, setSelectionRequested] = useState(false);
   const [expandedAutomationGroups, setExpandedAutomationGroups] = useState<string[]>([]);
   const [bulkActionPending, setBulkActionPending] = useState<MobileSessionBulkAction | null>(null);
   const [bulkConfirmAction, setBulkConfirmAction] = useState<MobileSessionBulkAction | null>(null);
@@ -278,6 +281,7 @@ function DeviceDetailScreenContent() {
     setLoading(true);
     setError(null);
     try {
+      const mutationEpoch = remoteSessionStore.captureDeviceSessionListMutationEpoch(deviceId);
       const list = await withTransientRemoteRetry(async () => {
         await subscribe(`device:${deviceId}`, deviceId, ['sessions']);
         return invoke<RemoteSession[]>(deviceId, 'local-db:sessions:list', [
@@ -289,6 +293,11 @@ function DeviceDetailScreenContent() {
           { includePinned: true, fresh: true },
         ]);
       });
+      if (!remoteSessionStore.isDeviceSessionListMutationEpochCurrent(deviceId, mutationEpoch)) {
+        // The existing sync runner queues one follow-up after this stale read.
+        remoteSessionStore.requestReseed(deviceId);
+        return;
+      }
       remoteSessionStore.setDeviceSessions(deviceId, deviceName, Array.isArray(list) ? list : []);
       // A successful sessions:list is authoritative reachability evidence even when relay
       // presence was not replayed. Retire both offline caches before the schedule reload.
@@ -441,8 +450,7 @@ function DeviceDetailScreenContent() {
     [bulkActionSummaries],
   );
   const bulkConfirmSummary = bulkConfirmAction ? bulkActionSummaries[bulkConfirmAction] : null;
-  const selectionMode = selectedSessionIds.length > 0;
-  const runningAutomationCount = filterCounts.runningAutomation;
+  const selectionMode = selectionRequested || selectedSessionIds.length > 0;
   const controlsSummary = useMemo(
     () => remoteSessionControlsSummary(statusFilter, filterCounts),
     [filterCounts, statusFilter, t],
@@ -473,6 +481,7 @@ function DeviceDetailScreenContent() {
   }, [visibleSessionIds]);
 
   const clearSelection = useCallback(() => {
+    setSelectionRequested(false);
     setSelectedSessionIds([]);
     setBulkConfirmAction(null);
     setBulkNotice(null);
@@ -567,7 +576,8 @@ function DeviceDetailScreenContent() {
     }
     setBulkConfirmAction(null);
     setSelectedSessionIds([]);
-    try {
+      setSelectionRequested(false);
+      try {
       const failed: typeof rows = [];
       await Promise.all(rows.map(async (row) => {
         try {
@@ -672,13 +682,11 @@ function DeviceDetailScreenContent() {
       return !automationScopeDir || sessionMatchesProjectDir(item.session.workingDir, automationScopeDir);
     });
     return (
-      <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
+      <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
         <SimpleStackHeader
           syncing={!showConnectionBanner && (loading || status === 'connecting')}
           backTestID="deviceDetail.backButton"
-          eyebrow={t('devices.detail.automationScope.eyebrow')}
           onBack={() => goBackGuarded(router)}
-          subtitle={deviceName}
           title={automationScopeName ?? t('devices.detail.automationScope.title')}
           titleTestID="deviceDetail.title"
         />
@@ -694,9 +702,10 @@ function DeviceDetailScreenContent() {
           />
         ) : null}
         <SectionList
+          {...simpleScrollInsetProps}
           sections={runItems.length > 0 ? [{ key: 'automation-runs', title: '', data: runItems }] : []}
           keyExtractor={(item) => item.session.id}
-          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} />}
+          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
           stickySectionHeadersEnabled={false}
           renderSectionHeader={() => null}
           contentContainerStyle={[styles.listContent, { paddingBottom: spacing.xxl }]}
@@ -737,7 +746,7 @@ function DeviceDetailScreenContent() {
   if (projectWorkingDir) {
     const projectItems = sections.flatMap((section) => section.data);
     return (
-      <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
+      <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
         <SimpleStackHeader
           syncing={!showConnectionBanner && (loading || status === 'connecting')}
           action={{
@@ -755,9 +764,7 @@ function DeviceDetailScreenContent() {
             testID: 'deviceDetail.newSessionButton',
           }}
           backTestID="deviceDetail.backButton"
-          eyebrow={t('devices.detail.projectScope.eyebrow')}
           onBack={() => goBackGuarded(router)}
-          subtitle={`${projectWorkingDir} · ${deviceName}`}
           title={projectName ?? deviceName}
           titleTestID="deviceDetail.title"
         />
@@ -809,12 +816,13 @@ function DeviceDetailScreenContent() {
           )}
         </View>
         <SectionList
+          {...simpleScrollInsetProps}
           sections={displaySections}
           keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
           // Fabric can reattach a clipped Swipeable child before its old native parent removes it.
           // Keep JS virtualization, but avoid the Android native detach/reattach race for this list.
           removeClippedSubviews={false}
-          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} />}
+          refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
           stickySectionHeadersEnabled={false}
           renderSectionHeader={() => null}
           contentContainerStyle={[styles.listContent, { paddingBottom: spacing.xxl }]}
@@ -860,7 +868,7 @@ function DeviceDetailScreenContent() {
   }
 
   return (
-    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
+    <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
       <SimpleStackHeader
         syncing={!showConnectionBanner && (loading || status === 'connecting')}
         action={{
@@ -876,11 +884,7 @@ function DeviceDetailScreenContent() {
           testID: 'deviceDetail.newSessionButton',
         }}
         backTestID="deviceDetail.backButton"
-        eyebrow="Remote Device"
         onBack={() => goBackGuarded(router)}
-        subtitle={projectWorkingDir
-          ? t('devices.detail.subtitle.deviceActive', { deviceName, count: filterCounts.active })
-          : t('devices.detail.subtitle.activeAndProjects', { count: filterCounts.active, projects: filterCounts.projectCount })}
         title={projectName ?? deviceName}
         titleTestID="deviceDetail.title"
       />
@@ -940,27 +944,6 @@ function DeviceDetailScreenContent() {
             variant="pill"
             value={filterCounts.automation}
           />
-          <View
-            style={{ minWidth: windowLayout.metricMinWidth }}
-            testID="deviceDetail.automationActions"
-          >
-            <MainWindowActionButton
-              action={{
-                accessibilityLabel: t('devices.detail.automationsButtonA11y'),
-                label: `${t('devices.detail.plan')}${runningAutomationCount > 0 ? ` · ${runningAutomationCount}` : ''}`,
-                onPress: () => guardedPush({
-                  pathname: '/automations/[deviceId]',
-                  params: { deviceId, name: deviceName },
-                }),
-                testID: 'deviceDetail.automationsButton',
-              }}
-              density="compact"
-              style={{
-                minHeight: windowLayout.metricMinHeight,
-                minWidth: windowLayout.metricMinWidth,
-              }}
-            />
-          </View>
           {loading ? <ActivityIndicator color={colors.textSecondary} /> : null}
         </View>
       </SummaryStrip>
@@ -1002,6 +985,17 @@ function DeviceDetailScreenContent() {
                 label: t('devices.detail.filters.label'),
                 onPress: () => setFiltersOpen((value) => !value),
                 testID: 'deviceDetail.filtersToggleButton',
+              },
+              {
+                label: t('session.new.select'),
+                accessibilityLabel: t('session.new.select'),
+                active: selectionMode,
+                onPress: () => {
+                  swipeRegistry.closeOpenRow();
+                  if (selectionMode) clearSelection();
+                  else setSelectionRequested(true);
+                },
+                testID: 'deviceDetail.selectionToggleButton',
               },
             ]}
             testID="deviceDetail.toolbarActions"
@@ -1164,9 +1158,10 @@ function DeviceDetailScreenContent() {
       </View>
 
       <SectionList
+        {...simpleScrollInsetProps}
         sections={displaySections}
         keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} />}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} tintColor={colors.textSecondary} />}
         stickySectionHeadersEnabled={false}
         contentContainerStyle={[
           styles.listContent,
@@ -1316,6 +1311,7 @@ function SessionListActionOverlays({
   return (
     <>
       <SessionOptionsPresenter
+        session={actionSheetSession}
         onAction={handleSessionSheetAction}
         onClose={() => setActionSheetSession(null)}
         onClosed={handleSessionSheetClosed}
@@ -1422,32 +1418,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   controlsSummary: {
     color: colors.textSecondary,
     flex: 1,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     minWidth: 0,
   },
   projectSearchChrome: {
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
-  },
-  searchRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  searchInput: {
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    color: colors.textPrimary,
-    flex: 1,
-    fontSize: typeScale.body,
-    minHeight: 44,
-    paddingHorizontal: spacing.lg,
-  },
-  searchCloseButton: {
-    minHeight: 38,
   },
   segmentScroll: {
     marginHorizontal: -spacing.lg,
@@ -1475,8 +1453,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: 2,
     minWidth: 0,
   },
-  selectionText: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.medium },
-  selectionMeta: { color: colors.textTertiary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  selectionText: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
+  selectionMeta: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   bulkConfirmCard: {
     backgroundColor: colors.surfaceElevated,
     borderColor: colors.border,
@@ -1493,10 +1471,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   bulkConfirmText: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
-  bulkNotice: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  bulkNotice: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   listContextCard: {
     backgroundColor: colors.surfaceElevated,
     borderColor: colors.border,
@@ -1515,28 +1493,32 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
     minWidth: 0,
   },
   listContextCount: {
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
   listContextDetail: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   listContextHint: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   sectionTitle: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     paddingBottom: spacing.xs,
     paddingTop: spacing.md,
   },

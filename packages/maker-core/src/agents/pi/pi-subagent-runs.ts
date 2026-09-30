@@ -1,6 +1,7 @@
 import { execFile, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
+  constants as fsConstants,
   createReadStream,
   lstatSync,
   readFileSync,
@@ -112,6 +113,31 @@ export async function clearPiSubagentDeletedTombstone(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
     throw error;
+  }
+}
+
+async function copyStagedRipgrep(
+  fromConfigHome: string,
+  toConfigHome: string,
+  fallbackSourcePath?: string,
+): Promise<void> {
+  const basename = process.platform === 'win32' ? 'rg.exe' : 'rg';
+  const candidates = [path.join(fromConfigHome, 'bin', basename)];
+  if (fallbackSourcePath && path.isAbsolute(fallbackSourcePath)) candidates.push(fallbackSourcePath);
+  for (const source of candidates) {
+    try {
+      const sourceStat = await fs.stat(source);
+      if (!sourceStat.isFile()) continue;
+      const destDir = path.join(toConfigHome, 'bin');
+      const dest = path.join(destDir, basename);
+      await fs.mkdir(destDir, { recursive: true, mode: 0o700 });
+      await fs.copyFile(source, dest, fsConstants.COPYFILE_FICLONE);
+      if (process.platform !== 'win32') await fs.chmod(dest, 0o755);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
   }
 }
 
@@ -236,6 +262,51 @@ export type PiSubagentControlAction = 'stop' | 'steer' | 'follow_up' | 'approval
 export const PI_SUBAGENT_LAUNCH_FENCE_FILENAME = '.launch-fence.json';
 const PI_SUBAGENT_LAUNCH_FENCE_PREFIX = '.launch-fence-';
 const PI_SUBAGENT_LAUNCH_FENCE_SUFFIX = '.json';
+/**
+ * The staging name `writeAtomicJson` publishes through: `<file>.tmp-<pid>-<uuid>`,
+ * where `<pid>` is the writer. A host killed between that write and the rename
+ * leaves the staging file behind in the runs root, next to the session dirs.
+ */
+const ATOMIC_STAGING_NAME_RE = /^(.+)\.tmp-(\d{1,10})-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A file in the runs root that belongs to the launch fence, not to a session. */
+export type PiSubagentLaunchFenceArtifact =
+  | { readonly kind: 'published' }
+  | { readonly kind: 'staging'; readonly writerPid: number };
+
+/**
+ * Exactly the names `piSubagentLaunchFencePath` produces (a numeric pid between
+ * the prefix and the suffix) plus the legacy shared name. Anything looser —
+ * `.launch-fence-backup.json`, `.launch-fence-.json` — is not something the
+ * fence writer ever emits, so it must neither be swept as a fence nor skipped by
+ * the reference scan as one.
+ */
+const PUBLISHED_LAUNCH_FENCE_NAME_RE = new RegExp(
+  `^${PI_SUBAGENT_LAUNCH_FENCE_PREFIX.replace(/[.]/g, '\\.')}\\d{1,10}${PI_SUBAGENT_LAUNCH_FENCE_SUFFIX.replace(/[.]/g, '\\.')}$`,
+);
+
+function isPublishedLaunchFenceName(entry: string): boolean {
+  return entry === PI_SUBAGENT_LAUNCH_FENCE_FILENAME || PUBLISHED_LAUNCH_FENCE_NAME_RE.test(entry);
+}
+
+/**
+ * The one naming contract for what the fence machinery leaves in the runs root.
+ *
+ * Two readers walk that directory and must agree on it: the stale sweep, which
+ * decides what it may delete, and the Host's worktree-reference scan, which has
+ * to know which names are *not* parent-session directories. They drifted once —
+ * the sweep only knew the published names, the scan knew none — and a staging
+ * file a crash left behind (`.launch-fence-<pid>.json.tmp-<pid>-<uuid>`) was
+ * then neither swept nor skipped, so every worktree recycle on that machine
+ * read as "still referenced" for good. Returns null for anything else, which
+ * the callers treat as a session directory (or as something suspicious).
+ */
+export function piSubagentLaunchFenceArtifact(entry: string): PiSubagentLaunchFenceArtifact | null {
+  if (isPublishedLaunchFenceName(entry)) return { kind: 'published' };
+  const staging = ATOMIC_STAGING_NAME_RE.exec(entry);
+  if (!staging || !isPublishedLaunchFenceName(staging[1]!)) return null;
+  return { kind: 'staging', writerPid: Number(staging[2]) };
+}
 
 interface PiSubagentLaunchFence {
   version: 1;
@@ -638,14 +709,13 @@ export async function clearStalePiSubagentLaunchFence(agentHome: string): Promis
   } catch {
     return;
   }
-  const fences = entries.filter((entry) => (
-    entry === PI_SUBAGENT_LAUNCH_FENCE_FILENAME
-    || (entry.startsWith(PI_SUBAGENT_LAUNCH_FENCE_PREFIX)
-      && entry.endsWith(PI_SUBAGENT_LAUNCH_FENCE_SUFFIX))
-  ));
+  const fences = entries.flatMap((entry) => {
+    const artifact = piSubagentLaunchFenceArtifact(entry);
+    return artifact ? [{ entry, artifact }] : [];
+  });
   // One chain per path, so the scan still runs the files concurrently: two
   // different fences never share a chain and cannot block each other.
-  await Promise.all(fences.map(async (entry) => {
+  await Promise.all(fences.map(async ({ entry, artifact }) => {
     const file = path.join(runsRoot, entry);
     await queueLaunchFenceDiskWork(file, async () => {
       let content: string;
@@ -659,10 +729,31 @@ export async function clearStalePiSubagentLaunchFence(agentHome: string): Promis
         // The next sweep tries again.
         return;
       }
-      let fence: PiSubagentLaunchFence | null;
+      let fence: PiSubagentLaunchFence | null = null;
+      let malformed = false;
       try {
         fence = parseLaunchFence(JSON.parse(content));
       } catch {
+        malformed = true;
+      }
+      if (artifact.kind === 'staging') {
+        // Only ever meaningful to the host that is about to rename it into place.
+        // Between its write and that rename the file can legitimately be
+        // incomplete, so an unparseable payload proves nothing on its own — the
+        // writer named in the file name has to be gone before it counts as
+        // debris. Once it is, the sweep is the only thing that will ever remove
+        // it: no release path knows the name, and the Host's reference scan
+        // treats it as an unrelated plain file rather than a session.
+        //
+        // A recycled writer pid keeps a half-written file alive for that
+        // process's lifetime; the next sweep after it exits gets it. A payload
+        // that does parse is judged like a published fence, so a recycled pid
+        // with a different start time is not mistaken for the writer.
+        if (fence ? launchFenceOwnerAlive(fence) : isProcessAlive(artifact.writerPid) !== false) return;
+        await removeLaunchFenceFile(file);
+        return;
+      }
+      if (malformed) {
         // Readable and malformed. No atomic writer publishes that, so it names no
         // owner — and it is the one case that must still be removed: the launch
         // check now treats an unparseable file as a fence, so leaving it would
@@ -674,17 +765,28 @@ export async function clearStalePiSubagentLaunchFence(agentHome: string): Promis
       // unless the live process at that pid started at a different time than the
       // fence records, which means the pid was recycled and this file is a
       // previous life's leftover. An unreadable start time stays conservative.
-      if (fence && isProcessAlive(fence.hostPid) !== false) {
-        if (fence.hostStartTimeSec === undefined) return;
-        const startTimeSec = fence.hostPid === process.pid
-          ? ownProcessStartTimeSec()
-          : probeProcessStartTimeSec(fence.hostPid, Date.now());
-        if (startTimeSec === null) return;
-        if (Math.abs(startTimeSec - fence.hostStartTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC) return;
-      }
+      if (fence && launchFenceOwnerAlive(fence)) return;
       await removeLaunchFenceFile(file);
     });
   }));
+}
+
+/**
+ * Is the incarnation that raised `fence` still running?
+ *
+ * Conservative in one direction only: a pid that is alive but whose start time
+ * cannot be read, or a fence written before start times were recorded, counts
+ * as held. A live pid with a *different* start time is a recycled pid, and the
+ * fence is a previous life's leftover.
+ */
+function launchFenceOwnerAlive(fence: PiSubagentLaunchFence): boolean {
+  if (isProcessAlive(fence.hostPid) === false) return false;
+  if (fence.hostStartTimeSec === undefined) return true;
+  const startTimeSec = fence.hostPid === process.pid
+    ? ownProcessStartTimeSec()
+    : probeProcessStartTimeSec(fence.hostPid, Date.now());
+  if (startTimeSec === null) return true;
+  return Math.abs(startTimeSec - fence.hostStartTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC;
 }
 
 interface TranscriptCursor {
@@ -739,11 +841,70 @@ async function readSmallJson(file: string): Promise<unknown> {
   if (stat.isSymbolicLink() || !stat.isFile() || stat.size > MAX_STATUS_BYTES) {
     throw new Error('oversized, linked, or non-file subagent status');
   }
-  return JSON.parse(await fs.readFile(file, 'utf8')) as unknown;
+  const handle = await fs.open(file, 'r');
+  try {
+    // Bound the actual read as well as the preflight stat: a concurrent writer
+    // must not turn a small status into an unbounded readFile allocation.
+    const buffer = Buffer.allocUnsafe(stat.size + 1);
+    let used = 0;
+    while (used < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, used, buffer.length - used, used);
+      if (bytesRead === 0) break;
+      used += bytesRead;
+    }
+    if (used > stat.size) throw new Error('subagent status changed size while reading');
+    return JSON.parse(buffer.toString('utf8', 0, used)) as unknown;
+  } finally { await handle.close(); }
 }
 
 export function isPiSubagentTerminal(state: PiSubagentRunState): boolean {
   return state === 'completed' || state === 'failed' || state === 'stopped';
+}
+
+/** Empty/settled roots do not need the cadence used for active approvals. */
+export const PI_SUBAGENT_ACTIVE_POLL_MS = 500;
+export const PI_SUBAGENT_IDLE_POLL_MS = 2_000;
+
+/** Background polling consumes one bounded status at a time, not Promise.all(history). */
+export async function* scanPiSubagentRuns(
+  root: string,
+  options: { latestPerTask?: boolean } = {},
+): AsyncGenerator<PiSubagentRunStatus> {
+  if (options.latestPerTask) {
+    // Directory order is not generation order. Select using small identities
+    // first so an old run cannot publish a result/approval before its successor.
+    // Re-read only the selected payloads instead of retaining every output.
+    const newest = new Map<string, { runId: string; startedAt: number }>();
+    for await (const status of scanPiSubagentRuns(root)) {
+      const previous = newest.get(status.taskId);
+      if (!previous || status.startedAt > previous.startedAt
+        || (status.startedAt === previous.startedAt && status.runId.localeCompare(previous.runId) > 0)) {
+        newest.set(status.taskId, { runId: status.runId, startedAt: status.startedAt });
+      }
+    }
+    for (const [taskId, selected] of newest) {
+      let status: PiSubagentRunStatus | null;
+      try {
+        status = parseStatus(await readSmallJson(path.join(root, selected.runId, 'status.json')), selected.runId);
+      } catch { continue; }
+      if (status?.taskId === taskId && status.startedAt === selected.startedAt
+        && !isPiSubagentRunStale(status, Date.now())) yield status;
+    }
+    return;
+  }
+  let directory: Awaited<ReturnType<typeof fs.opendir>>;
+  try { directory = await fs.opendir(root); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  for await (const entry of directory) {
+    if (!entry.isDirectory() || !RUN_DIR_RE.test(entry.name)) continue;
+    let status: PiSubagentRunStatus | null;
+    try {
+      status = parseStatus(await readSmallJson(path.join(root, entry.name, 'status.json')), entry.name);
+    } catch { continue; }
+    if (status && !isPiSubagentRunStale(status, Date.now())) yield status;
+  }
 }
 
 /**
@@ -1380,23 +1541,9 @@ export async function listPiSubagentRunDirectoryIds(root: string): Promise<strin
 }
 
 export async function listPiSubagentRuns(root: string): Promise<PiSubagentRunStatus[]> {
-  const runIds = await listRunDirectoryIds(root);
-  const now = Date.now();
-  const statuses = await Promise.all(runIds
-    .map(async (runId): Promise<PiSubagentRunStatus | null> => {
-      try {
-        return parseStatus(
-          await readSmallJson(path.join(root, runId, 'status.json')),
-          runId,
-        );
-      } catch {
-        return null;
-      }
-    }));
-  return statuses
-    .filter((status): status is PiSubagentRunStatus => status !== null)
-    .filter((status) => !isPiSubagentRunStale(status, now))
-    .sort((left, right) => right.startedAt - left.startedAt || right.runId.localeCompare(left.runId));
+  const statuses: PiSubagentRunStatus[] = [];
+  for await (const status of scanPiSubagentRuns(root)) statuses.push(status);
+  return statuses.sort((left, right) => right.startedAt - left.startedAt || right.runId.localeCompare(left.runId));
 }
 
 export async function listPiSubagentRunDiagnostics(root: string): Promise<PiSubagentRunDiagnostic[]> {
@@ -2644,6 +2791,13 @@ async function resumeClaimedPiSubagentRun(
     }
     await fs.mkdir(childConfigHome, { recursive: true, mode: 0o700 });
     await fs.writeFile(path.join(childConfigHome, 'models.json'), modelsJson, { mode: 0o600, flag: 'wx' });
+    await copyStagedRipgrep(
+      sourceConfigHome,
+      childConfigHome,
+      typeof launch.env.CINDY_PI_MANAGED_RG_PATH === 'string'
+        ? launch.env.CINDY_PI_MANAGED_RG_PATH
+        : undefined,
+    );
     await fs.writeFile(bridgeExtension, bridgeSource, { mode: 0o600, flag: 'wx' });
     await writeAtomicJson(permissionFile, launch.permissionSnapshot);
     await fs.writeFile(runnerFile, runnerSource, { mode: 0o600, flag: 'wx' });

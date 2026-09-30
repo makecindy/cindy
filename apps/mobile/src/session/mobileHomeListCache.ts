@@ -1,3 +1,4 @@
+import { normalizeTaskTags } from '@cindy/maker-shared';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { RemoteSession } from '@/session/types';
 
@@ -198,6 +199,7 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
   if (orcaRole === 'worker') return null;
 
   const session: RemoteSession = {
+    ...(Array.isArray(item.tags) ? { tags: normalizeTaskTags(item.tags) } : {}),
     id,
     userId: typeof item.userId === 'string' ? item.userId : '',
     title: truncateText(typeof item.title === 'string' ? item.title : ''),

@@ -20,6 +20,7 @@ import {
   SUPPORTED_BINARY_KINDS,
   supportsCdnFallback,
   tryReuseFromSiblingWorktree,
+  tryReuseDirDistFromSiblingWorktree,
   updateScriptForKind,
 } from '../ensure-agent-binaries.mjs';
 import { verifyDirDistManifest, writeDirDistManifest } from '../../tools/shared/dir-dist-manifest.mjs';
@@ -45,6 +46,43 @@ const LFS_POINTER = [
   'size 239438648',
   '',
 ].join('\n');
+
+test('directory reuse validates all assets, skips mismatches and replaces stale files', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reuse-dir-dist-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const makeSource = (name, version) => {
+    const dir = path.join(root, name);
+    fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'bin', 'codex'), Buffer.alloc(2048, 1), { mode: 0o755 });
+    fs.writeFileSync(path.join(dir, 'asset.json'), 'good');
+    fs.writeFileSync(path.join(dir, '.version'), version);
+    writeDirDistManifest(dir);
+    return dir;
+  };
+  const old = makeSource('old', '1');
+  const damaged = makeSource('damaged', '2');
+  fs.writeFileSync(path.join(damaged, 'asset.json'), 'evil');
+  const good = makeSource('good', '2');
+  const destDir = makeSource('dest', '1');
+  fs.writeFileSync(path.join(destDir, 'stale'), 'old asset');
+  const options = {
+    binaryRelativePath: path.join('bin', 'codex'),
+    requiredFiles: ['asset.json'], version: '2', destDir,
+  };
+  assert.equal(tryReuseDirDistFromSiblingWorktree({
+    ...options, candidates: [old, damaged, path.join(root, 'missing')],
+  }), null);
+  assert.equal(fs.readFileSync(path.join(destDir, '.version'), 'utf8'), '1');
+  assert.equal(tryReuseDirDistFromSiblingWorktree({
+    ...options, candidates: [damaged, good],
+  }), good);
+  assert.equal(verifyDirDistManifest(destDir), true);
+  assert.equal(fs.existsSync(path.join(destDir, 'stale')), false);
+  assert.equal(fs.readFileSync(path.join(destDir, 'asset.json'), 'utf8'), 'good');
+  fs.writeFileSync(path.join(destDir, 'asset.json'), 'edit');
+  assert.equal(fs.readFileSync(path.join(good, 'asset.json'), 'utf8'), 'good');
+  assert.equal(fs.readdirSync(root).some((name) => name.startsWith('dest.reuse-')), false);
+});
 
 function tmpFile(name, contents) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ensure-bin-test-'));

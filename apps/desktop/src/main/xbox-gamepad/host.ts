@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { app } from 'electron';
 
 import { createLogger } from '../logger.js';
+import { resolveWindowsInputHelper } from '../input-devices/windowsHelperBinary.js';
 import { isXboxGamepadHostMessage, type XboxGamepadHostMessage } from './protocol.js';
 
 const execFilePromise = promisify(execFile);
@@ -40,7 +41,6 @@ export function createXboxGamepadHost(
   let starting = false;
   let wanted = false;
   let switch2UsbWanted = false;
-  let buffer = '';
   let consecutiveFailures = 0;
   let crashAccounted = false;
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
@@ -105,6 +105,7 @@ export function createXboxGamepadHost(
     writeHelper(switch2UsbWanted ? 'switch2-usb on\n' : 'switch2-usb off\n');
 
   const attach = (next: ChildProcessWithoutNullStreams): void => {
+    let buffer = '';
     child = next;
     starting = false;
     crashAccounted = false;
@@ -115,6 +116,7 @@ export function createXboxGamepadHost(
     stableTimer.unref?.();
     next.stdout.setEncoding('utf8');
     next.stdout.on('data', (chunk: string) => {
+      if (child !== next) return;
       buffer += chunk;
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
@@ -129,14 +131,16 @@ export function createXboxGamepadHost(
       log.debug('xbox gamepad helper stdin error', { error: error.message });
     });
     next.on('error', (error: Error) => {
-      if (child === next) child = null;
+      if (child !== next) return;
+      child = null;
       starting = false;
       if (!wanted) return;
       reportHostFailure(error.message);
       noteChildGone();
     });
     next.on('exit', (code, signal) => {
-      if (child === next) child = null;
+      if (child !== next) return;
+      child = null;
       if (!wanted) return;
       reportHostFailure(`Xbox gamepad helper exited unexpectedly (${code ?? signal ?? 'unknown'})`);
       noteChildGone();
@@ -162,6 +166,7 @@ export function createXboxGamepadHost(
       attach(next);
     } catch (error) {
       starting = false;
+      if (!wanted) return;
       const message = error instanceof Error ? error.message : String(error);
       // Not `presence: false` — a helper that won't build is an error state, not
       // "no controller plugged in", and the settings page must say so.
@@ -210,12 +215,13 @@ export function createXboxGamepadHost(
 }
 
 function defaultSpawnHelper(command: string): ChildProcessWithoutNullStreams {
-  return spawn(command, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+  return spawn(command, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 }
 
-async function resolveXboxGamepadHelperPath(): Promise<string> {
-  if (process.platform === 'darwin') return resolveMacHelperPath();
-  throw new Error(`Xbox gamepad helper is not available on ${process.platform}`);
+export async function resolveXboxGamepadHelperPath(platform = process.platform): Promise<string> {
+  if (platform === 'darwin') return resolveMacHelperPath();
+  if (platform === 'win32') return resolveWindowsInputHelper('gamepad');
+  throw new Error(`Xbox gamepad helper is not available on ${platform}`);
 }
 
 async function resolveMacHelperPath(): Promise<string> {

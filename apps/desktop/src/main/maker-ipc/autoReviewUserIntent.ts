@@ -1,5 +1,5 @@
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, appendAutoReviewUserIntent, extractAutoReviewUserIntent } from '@cindy/maker-core';
-import type { SendOptions, UserMessage } from '@cindy/maker-core';
+import type { AutoReviewUserIntent, SendOptions, UserMessage } from '@cindy/maker-core';
 import { joinChatQuoteTextSegments, parseChatQuoteSegments } from '@cindy/maker-shared/chat-quotes';
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 
@@ -27,7 +27,7 @@ export async function restoreAutoReviewSteerIntent(
   content: string | ReadonlyArray<{ type: string; [key: string]: unknown }>,
   options: SendOptions,
   readHistory: () => Promise<AutoReviewHistoryMessage[]>,
-): Promise<string | undefined> {
+): Promise<AutoReviewUserIntent | undefined> {
   options.signal?.throwIfAborted();
   // Resource changes already carry an explicit replacement, including an empty one.
   if (options[AUTO_REVIEW_USER_INTENT] !== undefined) return options[AUTO_REVIEW_USER_INTENT];
@@ -110,11 +110,11 @@ export function currentAutoReviewResourceIntent(
 /** Restore a bounded suffix of actual owner messages, without promoting assistant handoffs to consent. */
 export function restoreAutoReviewUserIntent(
   history: readonly AutoReviewHistoryMessage[],
-  current: { clientId: string; content: unknown; authoredText?: string },
-): string {
-  let intent = '';
+  current?: { clientId: string; content: unknown; authoredText?: string },
+): AutoReviewUserIntent {
+  let intent: AutoReviewUserIntent = '';
   let replayed = false;
-  const latest = current.authoredText ?? readAutoReviewUserText(current.content);
+  const latest = current ? current.authoredText ?? readAutoReviewUserText(current.content) : null;
   // Cards are created before the user answers; their acceptance time orders authority.
   const ordered = history.map((message, index) => ({ message, index,
     at: interactionAnswer(message)?.acceptedAt ?? message.createdAt ?? index,
@@ -130,8 +130,13 @@ export function restoreAutoReviewUserIntent(
       continue;
     }
     if (message.role !== 'user') continue;
+    // Host-originated scheduled turns are execution context, never new owner consent.
+    // Keep intervening human restrictions; do not let repeated heartbeats erase them.
+    // Use the protected receipt, not origin (which the renderer can edit).
+    const receipt = message.agentMeta?.autoReviewUserText as Record<string, unknown> | undefined;
+    if (receipt?.kind === 'scheduled-continuation') continue;
     // An already-persisted retry is the same input, not a second authorization.
-    if (message.clientId === current.clientId) {
+    if (current && message.clientId === current.clientId) {
       if (message.agentMeta?.autoReviewUserText !== latest) return '';
       replayed = true;
     }
@@ -152,7 +157,7 @@ export function restoreAutoReviewUserIntent(
     if (readAutoReviewUserText(message.content) === null) intent = '';
     intent = appendAutoReviewUserIntent(intent, text);
   }
-  if (replayed) return intent;
+  if (replayed || !current) return intent;
   if (readAutoReviewUserText(current.content) === null) intent = '';
   return latest !== null
     ? appendAutoReviewUserIntent(intent, latest)

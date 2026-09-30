@@ -27,6 +27,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { isSafeGhostRelativePath } from '../../shared/ghost.js';
+import {
+  initCustomLibraryTree,
+  openExistingCustomLibrary,
+  type CustomTreeInitResult,
+} from './libraryDirFd.js';
 
 /** Library 操作的结构化错误码(fs 槽只有人话 message 的缺口在这里补上)。 */
 export type LibraryErrorCode =
@@ -124,6 +129,8 @@ export interface LibraryReadHandle {
 }
 
 export interface LibraryVaultDeps {
+  /** Host bookkeeping follows commit, abort, idle expiry and IO failure. */
+  onStreamClosed?(streamId: string): void;
   /** Library 根(生产 = 默认根或 binding 解析结果;每次现取,支持切换)。 */
   rootDir(): string;
   /** 归属插件 id(写进 meta 供设置页/回收站展示;缺省空串)。 */
@@ -134,9 +141,15 @@ export interface LibraryVaultDeps {
    * 兜底——比假装知道更诚实。
    */
   getDiskFreeBytes?(root: string): Promise<number | null>;
-  /** 位置类别(仅透传给 status;binding 层提供,默认系统管理位置)。 */
+  /** 位置类别。custom 根的用户父目录消失时 open 必须 fail-closed,不得 recursive mkdir 空库。 */
   locationKind?: 'default' | 'custom';
-  log?: {
+  /** Custom parent identity from binding; compared at mkdir so a replaced inode cannot mint an empty library. */
+  customParentGrant?: {
+    realPathAtGrant: string;
+    identity: { dev: number; ino: number } | null;
+  };
+  /** false = binding already created this ghost tree; MISSING must not init an empty replacement. */
+  allowCustomInit?: boolean;  log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
   };
@@ -150,6 +163,16 @@ export interface LibraryVaultDeps {
    * 读路径打开注入点,仅单测。生产缺省走 O_RDONLY|O_NOFOLLOW,失败不得回落裸 open。
    */
   openForRead?(absPath: string, flags: number): Promise<LibraryReadHandle>;
+  /** Custom first-create via held parent fd. Tests may inject; production uses libraryDirFd. */
+  initCustomTree?(req: {
+    parentFd: number;
+    ghostId: string;
+    metaJson: string;
+  }): Promise<CustomTreeInitResult>;
+  openExistingCustom?(req: {
+    parentFd: number;
+    ghostId: string;
+  }): Promise<import('./libraryDirFd.js').CustomExistingResult>;
 }
 
 /** Windows 保留设备名(与 fsSlot/dirDeposit 同口径;目录名撞上同样出事)。 */
@@ -296,6 +319,8 @@ export class LibraryVault {
 
   private opened = false;
   private invalidated = false;
+  /** Absolute parent dirs created by recursive mkdir of a missing root; fsync these before claiming durable. */
+  private createdAncestorDirs: string[] = [];
   private state: LibraryState = 'ready';
   private unavailableReason: string | null = null;
   private readonlyReason: string | null = null;
@@ -339,6 +364,137 @@ export class LibraryVault {
     return fsFailure(err, 'INTERNAL', message);
   }
 
+  /** mkdir -p that records newly created ancestor dirs (deepest first) so their parent entries can be fsynced. */
+  private async mkdirRecordingCreated(absDir: string): Promise<string[]> {
+    const target = path.resolve(absDir);
+    const created: string[] = [];
+    let cursor = target;
+    const missing: string[] = [];
+    for (;;) {
+      try {
+        const st = await fs.promises.lstat(cursor);
+        if (st.isSymbolicLink() || !st.isDirectory()) {
+          throw Object.assign(new Error('mkdir target is not a directory'), { code: 'ENOTDIR' });
+        }
+        break;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        missing.push(cursor);
+        const parent = path.dirname(cursor);
+        if (parent === cursor) break;
+        cursor = parent;
+      }
+    }
+    for (const dir of missing.reverse()) {
+      await fs.promises.mkdir(dir);
+      created.push(dir);
+    }
+    return created;
+  }
+
+  private async fsyncAbsDir(absDir: string): Promise<LibraryResult<{ fsynced: boolean }>> {
+    const st = await this.lstatTarget(absDir);
+    if (!st) return fail('NOT_FOUND', '目录不存在');
+    if (st.isSymbolicLink() || !st.isDirectory()) {
+      return fail('PATH_INVALID', 'fsyncDir 目标必须是普通目录');
+    }
+    if (process.platform === 'win32') {
+      return { ok: true as const, fsynced: false };
+    }
+    try {
+      const fh = await fs.promises.open(absDir, 'r');
+      try {
+        await fh.sync();
+      } finally {
+        await fh.close();
+      }
+      return { ok: true as const, fsynced: true };
+    } catch (err) {
+      return this.tmpFailure(err, '目录 fsync 失败');
+    }
+  }
+
+  /**
+   * Fsync parents of directories created when open() first minted this root.
+   * Syncing the root inode is not the same as syncing the parent directory entry.
+   * Windows still reports fsynced:false after the same path checks.
+   */
+  async fsyncCreatedAncestors(): Promise<LibraryResult<{ fsynced: boolean }>> {
+    if (!this.opened) return fail('LIBRARY_UNAVAILABLE', 'Library 未打开(先调用 open)');
+    if (this.createdAncestorDirs.length === 0) {
+      return { ok: true as const, fsynced: true };
+    }
+    let anyUnsynced = false;
+    const parents = new Set<string>();
+    for (const created of this.createdAncestorDirs) {
+      parents.add(path.dirname(created));
+    }
+    for (const parent of parents) {
+      const synced = await this.fsyncAbsDir(parent);
+      if (!synced.ok) return synced;
+      if (synced.fsynced !== true) anyUnsynced = true;
+    }
+    if (process.platform !== 'win32' && !anyUnsynced) this.createdAncestorDirs = [];
+    return { ok: true as const, fsynced: !anyUnsynced };
+  }
+  /** Custom roots must not recreate a vanished or replaced user-selected parent. keep files stay in the renamed-away directory. */
+  private customRootUnavailable(
+    reason: 'disk-missing' | 'binding-moved' = 'disk-missing',
+  ): LibrarySuccess<{ state: LibraryState; reason: string | null; usedBytes: number; fileCount: number }> {
+    this.state = 'unavailable';
+    this.unavailableReason = reason;
+    this.opened = true;
+    return { ok: true as const, state: this.state, reason: this.unavailableReason, usedBytes: 0, fileCount: 0 };
+  }
+
+  private async inspectCustomParent(): Promise<ReturnType<LibraryVault['customRootUnavailable']> | null> {
+    const parent = path.dirname(this.root);
+    const grant = this.deps.customParentGrant;
+    try {
+      const st = await fs.promises.lstat(parent);
+      if (st.isSymbolicLink() || !st.isDirectory()) return this.customRootUnavailable('disk-missing');
+      let real: string;
+      try {
+        real = await fs.promises.realpath(parent);
+      } catch {
+        return this.customRootUnavailable('disk-missing');
+      }
+      if (grant && real !== grant.realPathAtGrant) return this.customRootUnavailable('binding-moved');
+      const stAfter = await fs.promises.lstat(parent);
+      if (stAfter.isSymbolicLink() || !stAfter.isDirectory()) return this.customRootUnavailable('disk-missing');
+      if (
+        grant?.identity
+        && grant.identity.ino !== 0
+        && (stAfter.dev !== grant.identity.dev || stAfter.ino !== grant.identity.ino)
+      ) {
+        return this.customRootUnavailable('binding-moved');
+      }
+      return null;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return this.customRootUnavailable('disk-missing');
+      throw err;
+    }
+  }
+
+  /** Path vs held parent inode vs grant after fd-relative create. */
+  private async assertHeldCustomParent(held: {
+    dev: number;
+    ino: number;
+  }): Promise<ReturnType<LibraryVault['customRootUnavailable']> | null> {
+    const parent = path.dirname(this.root);
+    try {
+      const st = await fs.promises.lstat(parent);
+      if (st.isSymbolicLink() || !st.isDirectory()) return this.customRootUnavailable('disk-missing');
+      if (held.ino !== 0 && (st.dev !== held.dev || st.ino !== held.ino)) {
+        return this.customRootUnavailable('binding-moved');
+      }
+      return this.inspectCustomParent();
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return this.customRootUnavailable('disk-missing');
+      throw err;
+    }
+  }
+
   /* ── 打开与状态 ─────────────────────────────────────────────────── */
 
   /**
@@ -350,19 +506,103 @@ export class LibraryVault {
       if (this.invalidated) {
         return fail('LIBRARY_UNAVAILABLE', 'Library 实例已作废(owner 切换/宿主收口);请重新 open');
       }
+      let customUsage: UsageLedger | null = null;
       try {
-        await fs.promises.mkdir(this.root, { recursive: true });
-        await fs.promises.mkdir(this.tmpDir, { recursive: true });
-        await fs.promises.mkdir(path.join(this.metaDir, 'backups'), { recursive: true });
+        if ((this.deps.locationKind ?? 'default') === 'custom') {
+          const before = await this.inspectCustomParent();
+          if (before) return before;
+          let parentHandle: fs.promises.FileHandle | null = null;
+          try {
+            const parent = path.dirname(this.root);
+            const dirSeg = path.basename(this.root);
+            const metaGhost = this.deps.ghostId || dirSeg;
+            const metaJson = JSON.stringify({
+              version: 1,
+              ghostId: metaGhost,
+              createdAt: this.now(),
+            });
+            let openFlags = fs.constants.O_RDONLY;
+            if (fs.constants.O_DIRECTORY) openFlags |= fs.constants.O_DIRECTORY;
+            if (fs.constants.O_NOFOLLOW) openFlags |= fs.constants.O_NOFOLLOW;
+            try {
+              parentHandle = await fs.promises.open(parent, openFlags);
+            } catch (err) {
+              if ((err as NodeJS.ErrnoException).code === 'ENOENT') return this.customRootUnavailable('disk-missing');
+              throw err;
+            }
+            const held = await parentHandle.stat();
+            if (!held.isDirectory()) return this.customRootUnavailable('disk-missing');
+            const heldId = { dev: held.dev, ino: held.ino };
+            const heldBefore = await this.assertHeldCustomParent(heldId);
+            if (heldBefore) return heldBefore;
+            const existing = await (this.deps.openExistingCustom ?? openExistingCustomLibrary)({
+              parentFd: parentHandle.fd,
+              ghostId: dirSeg,
+            });
+            if (existing.ok) {
+              this.meta = existing.meta;
+              if (existing.usage) customUsage = existing.usage;
+            } else if (existing.code === 'MISSING') {
+              // Same vault already had a live custom tree, or binding says this
+              // ghost dir was created before: do not mkdir an empty replacement.
+              if (this.meta || this.deps.allowCustomInit === false) {
+                return this.customRootUnavailable('disk-missing');
+              }              const tree = await (this.deps.initCustomTree ?? initCustomLibraryTree)({
+                parentFd: parentHandle.fd,
+                ghostId: dirSeg,
+                metaJson,
+              });
+              if (!tree.ok) {
+                this.state = 'unavailable';
+                this.unavailableReason = 'permission';
+                this.opened = true;
+                return { ok: true as const, state: this.state, reason: this.unavailableReason, usedBytes: 0, fileCount: 0 };
+              }
+              if (tree.createdMeta) {
+                const parsed = JSON.parse(metaJson) as LibraryMeta;
+                if (
+                  typeof parsed === 'object' && parsed !== null && parsed.version === 1 &&
+                  typeof parsed.ghostId === 'string' && typeof parsed.createdAt === 'number'
+                ) {
+                  this.meta = parsed;
+                }
+              }
+            } else {
+              this.state = 'unavailable';
+              this.unavailableReason = existing.code === 'CORRUPT' ? 'corrupt' : 'permission';
+              this.opened = true;
+              return { ok: true as const, state: this.state, reason: this.unavailableReason, usedBytes: 0, fileCount: 0 };
+            }
+            const afterTree = await this.assertHeldCustomParent(heldId);
+            if (afterTree) return afterTree;
+          } finally {
+            if (parentHandle) {
+              try {
+                await parentHandle.close();
+              } catch {
+                /* still close */
+              }
+            }
+          }
+        } else {
+          this.createdAncestorDirs = await this.mkdirRecordingCreated(this.root);
+          await fs.promises.mkdir(this.tmpDir, { recursive: true });
+          await fs.promises.mkdir(path.join(this.metaDir, 'backups'), { recursive: true });
+        }
       } catch (err) {
+        if ((this.deps.locationKind ?? 'default') === 'custom' && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+          return this.customRootUnavailable();
+        }
         this.state = 'unavailable';
         this.unavailableReason = 'permission';
         this.deps.log?.warn('library open: cannot create root', { error: err instanceof Error ? err.message : String(err) });
         return { ok: true as const, state: this.state, reason: this.unavailableReason, usedBytes: 0, fileCount: 0 };
       }
-      await this.sweepStaleTmp();
+      const customOpen = (this.deps.locationKind ?? 'default') === 'custom';
+      if (!customOpen) await this.sweepStaleTmp();
 
-      // meta:已存在必须可解析(不可用 ≠ 空);不存在则首建。
+      // meta:已存在必须可解析(不可用 ≠ 空);不存在则首建。custom 首次 open 用 held-fd 已写的 meta,不再 path 写。
+      if (!this.meta) {
       try {
         const raw = await fs.promises.readFile(this.metaFile, 'utf8');
         const parsed = JSON.parse(raw) as LibraryMeta;
@@ -375,6 +615,12 @@ export class LibraryVault {
         this.meta = parsed;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          if (customOpen) {
+            this.opened = true;
+            this.state = 'unavailable';
+            this.unavailableReason = 'permission';
+            return { ok: true as const, state: this.state, reason: this.unavailableReason, usedBytes: 0, fileCount: 0 };
+          }
           this.meta = { version: 1, ghostId: this.deps.ghostId ?? '', createdAt: this.now() };
           const w = await this.writeMetaUnlocked();
           if (w) return w;
@@ -386,9 +632,11 @@ export class LibraryVault {
           return { ok: true as const, state: this.state, reason: this.unavailableReason, usedBytes: 0, fileCount: 0 };
         }
       }
+      }
 
-      // 用量:账本读不出就全量重扫(账本是缓存,真身是文件树)。
-      let ledger: UsageLedger | null = null;
+      // 用量:合法账本只读复用;坏/缺才 scan。custom 首次 open 不 persist/unlink。
+      let ledger: UsageLedger | null = customUsage;
+      if (!ledger) {
       try {
         const raw = JSON.parse(await fs.promises.readFile(this.usageFile, 'utf8')) as UsageLedger;
         if (typeof raw === 'object' && raw !== null && typeof raw.files === 'number' && typeof raw.bytes === 'number') {
@@ -397,6 +645,7 @@ export class LibraryVault {
       } catch {
         /* 损坏/缺失 → 重扫 */
       }
+      }
       if (!ledger) {
         const scanned = await this.scanUsageUnlocked();
         if (scanned.tripped) {
@@ -404,7 +653,7 @@ export class LibraryVault {
           this.usage = { files: scanned.files, bytes: scanned.bytes, updatedAt: this.now(), mutations: 0 };
         } else {
           this.usage = { files: scanned.files, bytes: scanned.bytes, updatedAt: this.now(), mutations: 0 };
-          await this.persistUsageUnlocked();
+          if (!customOpen) await this.persistUsageUnlocked();
         }
       } else {
         this.usage = ledger;
@@ -896,12 +1145,76 @@ export class LibraryVault {
         return fail('INTERNAL', '分块提交就位校验失败');
       }
       this.streams.delete(stream.streamId);
+      this.deps.onStreamClosed?.(stream.streamId);
       this.usage.bytes += stream.totalBytes - existedBytes;
       if (!prior) this.usage.files += 1;
       this.usage.mutations += 1;
       await this.persistUsageUnlocked();
       return { ok: true as const, path: stream.relPath, bytes: stream.totalBytes, sha256 };
     });
+  }
+
+  /** Active writeBegin reservations (declared totalBytes). Staging uses this for hard 8GiB accounting. */
+  pendingStreamReservationBytes(): number {
+    let total = 0;
+    for (const stream of this.streams.values()) total += stream.totalBytes;
+    return total;
+  }
+
+  /** Leftover .cindy-library/tmp files. ENOENT = 0; permission/corrupt/symlink fail closed. */
+  async tmpResidueBytes(): Promise<LibraryResult<{ bytes: number }>> {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(this.tmpDir, { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { ok: true as const, bytes: 0 };
+      }
+      return this.tmpFailure(err, 'staging 残片目录不可读');
+    }
+    const activeTmp = new Set(Array.from(this.streams.values()).map((stream) => stream.tmpAbs));
+    let bytes = 0;
+    for (const entry of entries) {
+      const full = path.join(this.tmpDir, entry.name);
+      if (activeTmp.has(full)) continue;
+      let st: fs.Stats;
+      try {
+        st = await fs.promises.lstat(full);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        return this.tmpFailure(err, 'staging 残片不可读');
+      }
+      if (st.isSymbolicLink()) {
+        return fail('LIBRARY_UNAVAILABLE', 'staging 残片含符号链接');
+      }
+      if (st.isFile()) bytes += st.size;
+    }
+    return { ok: true as const, bytes };
+  }
+
+  /**
+   * Fsync a library-relative directory after durable rename.
+   * Reuses resolveTarget identity (symlink/root guard). POSIX failure is not durable.
+   * Windows cannot open a directory fd — returns fsynced:false after the same path checks.
+   */
+  async fsyncDir(relPath: unknown = ''): Promise<LibraryResult<{ fsynced: boolean }>> {
+    if (!this.opened) return fail('LIBRARY_UNAVAILABLE', 'Library 未打开(先调用 open)');
+    const rel = relPath === '' || relPath === undefined || relPath === null ? '' : String(relPath);
+    let target: string;
+    if (rel === '') {
+      try {
+        target = await fs.promises.realpath(this.root);
+      } catch {
+        return fail('LIBRARY_UNAVAILABLE', 'Library 根目录不可访问');
+      }
+    } else {
+      const reason = validateLibraryRelPath(rel, this.limits);
+      if (reason) return fail('PATH_INVALID', reason);
+      const resolved = await this.resolveTarget(rel);
+      if (!('target' in resolved)) return resolved;
+      target = resolved.target;
+    }
+    return this.fsyncAbsDir(target);
   }
 
   async writeAbort(req: { streamId: unknown }): Promise<LibraryResult<{ aborted: boolean }>> {
@@ -917,6 +1230,7 @@ export class LibraryVault {
     const stream = this.streams.get(streamId);
     if (!stream) return;
     this.streams.delete(streamId);
+    this.deps.onStreamClosed?.(streamId);
     await fs.promises.unlink(stream.tmpAbs).catch(() => {});
   }
 
@@ -970,7 +1284,7 @@ export class LibraryVault {
     });
   }
 
-  async list(req: { path?: unknown; recursive?: unknown; cursor?: unknown; limit?: unknown }): Promise<LibraryResult<{ entries: Array<{ path: string; kind: 'file' | 'dir'; bytes: number; mtime: number }>; hasMore: boolean; nextCursor: string | null }>> {
+  async list(req: { path?: unknown; recursive?: unknown; cursor?: unknown; limit?: unknown; strict?: unknown }): Promise<LibraryResult<{ entries: Array<{ path: string; kind: 'file' | 'dir'; bytes: number; mtime: number }>; hasMore: boolean; nextCursor: string | null }>> {
     if (!this.opened) return fail('LIBRARY_UNAVAILABLE', 'Library 未打开(先调用 open)');
     const sub = req.path === undefined || req.path === '' ? '' : String(req.path);
     if (sub !== '') {
@@ -981,6 +1295,7 @@ export class LibraryVault {
     const listRoot = sub === '' ? base : path.join(base, ...sub.split('/'));
     if (!isInsideDir(base, listRoot)) return fail('PATH_INVALID', 'path 越界');
     const recursive = req.recursive === true;
+    const strict = req.strict === true;
     const limit = Math.min(
       typeof req.limit === 'number' && Number.isInteger(req.limit) && req.limit > 0 ? req.limit : this.limits.listPageSize,
       this.limits.listPageSize,
@@ -1018,10 +1333,17 @@ export class LibraryVault {
           let st: fs.Stats;
           try {
             st = await fs.promises.lstat(full);
-          } catch {
+          } catch (err) {
+            if (strict && (err as NodeJS.ErrnoException).code !== 'ENOENT') {
+              return this.tmpFailure(err, '目录条目不可读');
+            }
             continue;
           }
           const rel = path.relative(base, full).split(path.sep).join('/');
+          if (st.isSymbolicLink()) {
+            if (strict) return fail('LIBRARY_UNAVAILABLE', '目录含符号链接');
+            continue;
+          }
           if (st.isFile()) {
             if (!push(rel, 'file', st.size, Math.round(st.mtimeMs))) break;
           } else if (st.isDirectory()) {
@@ -1277,6 +1599,44 @@ export class LibraryVault {
    * 相对路径 → 已存在普通文件的绝对路径。路径纪律与 read 同源;任何校验
    * 不过(越界/symlink/不存在/是目录)返回 null,调用方统一折叠 404。
    */
+  /** Stream the whole file for hash+size; never slurps 8GiB into memory. */
+  async hashFile(relPath: string): Promise<LibraryResult<{ path: string; bytes: number; sha256: string }>> {
+    if (!this.opened) return fail('LIBRARY_UNAVAILABLE', 'Library 未打开(先调用 open)');
+    const reason = validateLibraryRelPath(relPath, this.limits);
+    if (reason) return fail('PATH_INVALID', reason);
+    const resolved = await this.resolveTarget(relPath);
+    if (!('target' in resolved)) return resolved;
+    const expected = await this.lstatIdentityForRead(resolved.target);
+    if (!expected) return fail('NOT_FOUND', `文件不存在:${relPath}`);
+    if (!expected.isFile()) return fail('PATH_INVALID', `不是文件:${relPath}`);
+    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+    let handle: LibraryReadHandle | null = null;
+    try {
+      handle = await this.openReadHandle(resolved.target, flags);
+      const opened = await handle.stat();
+      if (!opened.isFile()) return fail('PATH_INVALID', `不是文件:${relPath}`);
+      if (!isSameLibraryFileObject(expected, opened)) {
+        return fail('INTERNAL', '读取身份校验失败(目标 identity 不一致)');
+      }
+      const size = Number(opened.size);
+      const hash = crypto.createHash('sha256');
+      const buf = Buffer.alloc(Math.min(1024 * 1024, Math.max(size, 1)));
+      let pos = 0;
+      while (pos < size) {
+        const { bytesRead } = await handle.read(buf, 0, buf.length, pos);
+        if (bytesRead === 0) break;
+        hash.update(buf.subarray(0, bytesRead));
+        pos += bytesRead;
+      }
+      if (pos !== size) return fail('INTERNAL', '读取不完整');
+      return { ok: true as const, path: relPath, bytes: size, sha256: hash.digest('hex') };
+    } catch (err) {
+      return this.tmpFailure(err, '读取失败(主机 IO 错误)');
+    } finally {
+      if (handle) await handle.close().catch(() => {});
+    }
+  }
+
   async resolveExistingFile(relPath: string): Promise<string | null> {
     const reason = validateLibraryRelPath(relPath, this.limits);
     if (reason) return null;

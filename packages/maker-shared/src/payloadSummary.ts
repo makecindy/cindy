@@ -351,14 +351,8 @@ export function buildAttachmentPayload(
 
 export function extractPayloadToolResultMedia(toolResult: string): ExtractedPayloadToolMediaLike[] {
   if (!toolResult || typeof toolResult !== 'string') return [];
-  if (
-    !toolResult.includes('xdt_image_url')
-    && !toolResult.includes('xdt_video_url')
-    && !toolResult.includes('xdt_audio_url')
-  ) {
-    return [];
-  }
-  const parsed = parsePayloadJsonObject(toolResult);
+  if (!toolResult.includes("xdt_")) return [];
+  const parsed = parseToolResultPayload(toolResult);
   if (!parsed || parsed._xdt_render_image === false) return [];
 
   const items: ExtractedPayloadToolMediaLike[] = [];
@@ -424,12 +418,74 @@ export function extractPayloadToolResultMedia(toolResult: string): ExtractedPayl
     }
   }
 
+  // A host-recorded fallback is also a delivery channel on Mobile. Never guess
+  // a local path or classify unknown blob extensions as pictures.
+  if (Array.isArray(parsed.xdt_media_produced)) {
+    for (const url of parsed.xdt_media_produced) {
+      const kind = managedToolMediaKind(url);
+      if (kind) push(kind, url as string);
+    }
+  }
+
   const seen = new Set<string>();
   return items.filter((item) => {
     if (seen.has(item.url)) return false;
     seen.add(item.url);
     return true;
   });
+}
+
+/** Only unwrap the documented ghost_call envelope, never arbitrary nested tool data. */
+export function parseToolResultPayload(text: string): Record<string, unknown> | null {
+  const outer = parsePayloadJsonObject(text);
+  if (!outer) return null;
+  const inner = outer.ok === true ? readPayloadRecord(outer.result) : null;
+  return inner ? { ...inner, ...outer, ...(inner._xdt_render_image === false ? { _xdt_render_image: false } : {}) } : outer;
+}
+
+export function managedToolMediaKind(url: unknown): 'image' | 'video' | 'audio' | null {
+  if (typeof url !== 'string') return null;
+  if (url.startsWith('xdt-image://')) return 'image';
+  if (url.startsWith('xdt-video://')) return 'video';
+  if (url.startsWith('xdt-audio://')) return 'audio';
+  const match = /^cindy-media:\/\/blobs\/[0-9a-f]{64}\.([a-z0-9]+)$/.exec(url);
+  if (!match) return null;
+  if (/^(png|jpe?g|gif|webp|avif|bmp|svg)$/.test(match[1])) return 'image';
+  if (/^(mp4|webm|mov|m4v)$/.test(match[1])) return 'video';
+  if (/^(mp3|wav|m4a|ogg|flac|aac|opus)$/.test(match[1])) return 'audio';
+  return null;
+}
+
+/** Portable read-only card references; the Host resolves their content in the owning task. */
+export function extractPayloadToolCardIds(text: string): string[] {
+  const parsed = parseToolResultPayload(text);
+  if (!parsed) return [];
+  return [...new Set([parsed.xdt_card_id, parsed.xdt_anchor_card_id]
+    .filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 128))];
+}
+
+export interface PayloadToolFile { url: string; title: string }
+
+/** Existing 3D attachments and managed file references retain a usable file entry on Mobile. */
+export function extractPayloadToolResultFiles(text: string): PayloadToolFile[] {
+  const parsed = parseToolResultPayload(text);
+  if (parsed?._xdt_render_image === false) return [];
+  const files: PayloadToolFile[] = [];
+  const add = (url: unknown, title?: unknown) => {
+    if (typeof url !== 'string' || !/^(?:xdt-file:\/\/[^\s]+|cindy-media:\/\/blobs\/[0-9a-f]{64}\.glb)$/.test(url)) return;
+    let name = url.split('/').pop()!;
+    if (url.startsWith('xdt-file://')) {
+      try { name = (new URL(url).searchParams.get('path') ?? name).split(/[\\/]/).pop() || name; } catch { /* Keep the original reference as fallback. */ }
+    }
+    if (!files.some((file) => file.url === url)) files.push({ url, title: typeof title === 'string' && title.trim() ? title : name });
+  };
+  if (Array.isArray(parsed?._xdt_model_files)) {
+    for (const raw of parsed._xdt_model_files) { const file = readPayloadRecord(raw); add(file?.url, file?.name); }
+  }
+  if (Array.isArray(parsed?.xdt_media_produced)) for (const url of parsed.xdt_media_produced) add(url);
+  // Files supplied as links in a result remain accessible without scanning arbitrary local paths.
+  for (const match of text.matchAll(/xdt-file:\/\/[^\s"<>\\)]+/g)) add(match[0]);
+  return files;
 }
 
 export function buildMermaidPayload(

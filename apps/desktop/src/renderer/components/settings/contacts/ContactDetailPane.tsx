@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, ArrowRight, Building2, Check, GitMerge, Plus, Trash2, User, X } from 'lucide-react';
 
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -46,9 +47,15 @@ const inputCls = cn(
   'text-[var(--settings-input-text)] placeholder:text-[var(--settings-section-desc)]',
 );
 
-const iconBtnCls = cn(
-  'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors',
-  'text-[var(--settings-section-desc)] hover:bg-[var(--settings-input-bg)] hover:text-[var(--settings-section-title)]',
+// Compact actions share Button feedback while retaining the contacts palette.
+const contactActionBtnCls = cn(
+  'w-8 border-0 px-0 [--button-face-outset:0px] [--button-face-border-width:0px] [--button-face-bg:transparent]',
+  'text-[var(--settings-section-desc)] enabled:hover:[--button-face-bg:var(--settings-input-bg)] enabled:hover:text-[var(--settings-section-title)]',
+);
+
+const contactDangerBtnCls = cn(
+  'enabled:hover:[--button-face-bg:var(--error-bg)] enabled:hover:text-[var(--error-fg)]',
+  'enabled:active:[--button-face-bg:var(--error-bg)] enabled:active:text-[var(--error-fg)]',
 );
 
 const confirmBtnCls = cn(
@@ -72,20 +79,19 @@ function Section(props: {
           {props.label}
         </p>
         {props.onToggleAdd && (
-          <button
+          <Button
+            variant="secondary"
+            className={cn(
+              'h-6 w-6 border-0 px-0 [--button-face-outset:0px] [--button-face-border-width:0px]',
+              !props.adding && '[--button-face-bg:transparent]',
+            )}
             type="button"
             onClick={props.onToggleAdd}
             aria-label={props.addAria}
             aria-expanded={props.adding}
-            className={cn(
-              'flex h-6 w-6 items-center justify-center rounded-md transition-colors',
-              props.adding
-                ? 'bg-[var(--settings-input-bg)] text-[var(--settings-section-title)]'
-                : 'text-[var(--settings-section-desc)] hover:bg-[var(--settings-input-bg)] hover:text-[var(--settings-section-title)]',
-            )}
           >
             {props.adding ? <X size={13} /> : <Plus size={13} />}
-          </button>
+          </Button>
         )}
       </div>
       {props.children}
@@ -320,7 +326,10 @@ export function ContactDetailPane({ profile, groups, onChanged, onDelete }: Prop
             {t('settings.contacts.detail.pendingBanner')}
           </p>
           <div className="flex shrink-0 items-center gap-1.5">
-            <button
+            <Button
+              variant="cta"
+              size="sm"
+              className="px-2.5"
               type="button"
               onClick={() =>
                 void run(
@@ -328,19 +337,21 @@ export function ContactDetailPane({ profile, groups, onChanged, onDelete }: Prop
                   'settings.contacts.toast.confirmFailed',
                 )
               }
-              className="flex h-7 items-center gap-1 rounded-lg bg-[var(--accent-cta-bg)] px-2.5 text-12 font-medium text-[var(--accent-pure-cta-fg)]"
             >
               <Check size={13} />
               {t('settings.contacts.detail.pendingConfirm')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="secondary"
+              tone="danger"
+              size="sm"
+              compact
               type="button"
               onClick={() => onDelete(profile)}
-              className="flex h-7 items-center gap-1 rounded-lg px-2.5 text-12 text-[var(--error-fg)] hover:bg-[var(--error-bg)]"
             >
               <X size={13} />
               {t('settings.contacts.detail.pendingDiscard')}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -367,23 +378,28 @@ export function ContactDetailPane({ profile, groups, onChanged, onDelete }: Prop
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <button
+          <Button
+            variant="secondary"
             type="button"
             onClick={() => setMerging((v) => !v)}
             aria-label={t('settings.contacts.merge.buttonAria')}
             title={t('settings.contacts.merge.button')}
-            className={cn(iconBtnCls, merging && 'bg-[var(--settings-input-bg)] text-[var(--settings-section-title)]')}
+            className={cn(
+              contactActionBtnCls,
+              merging && '[--button-face-bg:var(--settings-input-bg)] text-[var(--settings-section-title)]',
+            )}
           >
             <GitMerge size={15} />
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="secondary"
             type="button"
             onClick={() => onDelete(profile)}
             aria-label={t('settings.contacts.detail.deleteAria')}
-            className={cn(iconBtnCls, 'hover:bg-[var(--error-bg)] hover:text-[var(--error-fg)]')}
+            className={cn(contactActionBtnCls, contactDangerBtnCls)}
           >
             <Trash2 size={15} />
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -458,16 +474,24 @@ export function ContactDetailPane({ profile, groups, onChanged, onDelete }: Prop
             </span>
             <span className="min-w-0 flex-1 truncate text-13 text-[var(--settings-section-title)]">{i.value}</span>
             {i.label && <span className="shrink-0 text-11 text-[var(--settings-section-desc)]">{i.label}</span>}
-            <button
+            <Button
+              variant="secondary"
               type="button"
               onClick={() =>
-                void run(() => contactsService.removeIdentity(i.id), 'settings.contacts.toast.identityRemoveFailed')
+                void run(
+                  () => contactsService.removeIdentity(i.id),
+                  'settings.contacts.toast.identityRemoveFailed',
+                )
               }
               aria-label={t('settings.contacts.detail.identityRemoveAria', { value: i.value })}
-              className="shrink-0 text-[var(--settings-section-desc)] opacity-0 transition-opacity hover:text-[var(--error-fg)] group-hover:opacity-100"
+              className={cn(
+                contactActionBtnCls,
+                contactDangerBtnCls,
+                'h-6 w-6 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100',
+              )}
             >
               <X size={13} />
-            </button>
+            </Button>
           </div>
         ))}
         {addingIdentity && (
@@ -752,7 +776,11 @@ export function ContactDetailPane({ profile, groups, onChanged, onDelete }: Prop
       {/* 保存条(dirty 才出现) */}
       {dirty && (
         <div className="sticky bottom-0 -mx-5 flex items-center justify-end gap-2 border-t border-[var(--settings-theme-card-border)] bg-[var(--cmd-palette-bg)] px-5 py-2.5">
-          <button
+          <Button
+            variant="secondary"
+            tone="quiet"
+            size="md"
+            compact
             type="button"
             disabled={saving}
             onClick={() =>
@@ -763,22 +791,20 @@ export function ContactDetailPane({ profile, groups, onChanged, onDelete }: Prop
                 agentNotes: profile.agentNotes,
               })
             }
-            className="h-8 rounded-lg px-3 text-13 text-[var(--settings-section-desc)] hover:text-[var(--settings-section-title)]"
           >
             {t('settings.contacts.detail.discardChanges')}
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="cta"
+            size="md"
+            compact
+            loading={saving}
             type="button"
             disabled={saving || !draft.displayName.trim()}
             onClick={() => void handleSave()}
-            className={cn(
-              'h-8 rounded-lg px-3.5 text-13 font-medium',
-              'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-              'disabled:cursor-not-allowed disabled:opacity-40',
-            )}
           >
             {t('settings.contacts.detail.save')}
-          </button>
+          </Button>
         </div>
       )}
     </div>

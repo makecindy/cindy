@@ -118,7 +118,7 @@ describe("task menu usage summary", () => {
       expect(onPress).toHaveBeenCalledOnce();
     },
   );
-  it("labels legacy quota as account-only without attributing its plan to the task", () => {
+  it("omits the legacy quota disclaimer without attributing its plan to the task", () => {
     act(() =>
       root.render(
         <SessionUsageSummary
@@ -132,12 +132,24 @@ describe("task menu usage summary", () => {
         />,
       ),
     );
-    expect(host.textContent).toContain("gpt-5 · openai");
-    expect(host.textContent).toContain(
+    expect(host.textContent).toContain("gpt-5");
+    expect(host.textContent).not.toContain("openai");
+    expect(host.textContent).not.toContain(
       "ChatGPT 账号配额，未确认本任务使用此套餐",
     );
+    expect(host.textContent).not.toContain("pro");
     expect(host.textContent).toContain("本任务用量");
     expect(host.textContent).not.toContain("本任务价值");
+    act(() => root.render(
+      <SessionUsageSummary
+        session={{ ...session, providerId: 'openai-05c14cbf' }}
+        providerName="OpenAI"
+        usage={usage}
+        contextUsage={null}
+      />,
+    ));
+    expect(host.textContent).toContain('gpt-5 · OpenAI');
+    expect(host.textContent).not.toContain('openai-05c14cbf');
   });
   it("shows a mixed task breakdown without presenting estimated value as a charge", () => {
     act(() =>

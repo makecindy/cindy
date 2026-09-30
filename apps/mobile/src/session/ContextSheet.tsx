@@ -8,7 +8,7 @@
  * 内容由页面以 ContextSheetGroup / ContextSheetRow / ContextSheetFooterButton 组装，
  * 会话页与新建会话页共用本组件（同 MobileComposerInputRow 的共享约定）。
  */
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight } from 'lucide-react-native';
 import {
@@ -18,22 +18,14 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { Text } from '@/components/AppText';
+import { Text, TextInput } from '@/components/AppText';
+import { MainWindowActionButton } from '@/components/MobilePrimitives';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
-import {
-  fontWeight,
-  iconSize,
-  iconStroke,
-  radius,
-  spacing,
-  typeScale,
-  useTheme,
-  useThemedStyles,
-  type ThemeColors,
-} from '@/theme';
+import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 export interface ContextSheetProps {
   visible: boolean;
@@ -44,10 +36,15 @@ export interface ContextSheetProps {
   onBack?: () => void;
   keyboardAvoidingBehavior: 'height' | 'padding' | undefined;
   children: ReactNode;
+  media?: ReactNode;
+  error?: string | null;
   /** 固定在面板底部（滚动区之外）的操作区，如「加入对话」提交按钮。 */
   footer?: ReactNode;
   testID?: string;
 }
+
+/** 系统选择器要等面板真正关闭后再呈现，避免叠在面板上（与 iOS ContextSheet 同一语义）。 */
+const DismissAction = createContext<(action: () => void) => void>((action) => action());
 
 export function ContextSheet({
   visible,
@@ -56,6 +53,8 @@ export function ContextSheet({
   onBack,
   keyboardAvoidingBehavior,
   children,
+  media,
+  error,
   footer,
   testID,
 }: ContextSheetProps) {
@@ -64,10 +63,14 @@ export function ContextSheet({
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [snap, setSnap] = useState<ContextSheetSnap>('half');
+  const pendingAfterClose = useRef<(() => void) | null>(null);
 
-  // 每次重新打开都回到 half 档（与 Cursor 行为一致）。
+  // 每次重新打开都回到 half 档（与 Cursor 行为一致）；关闭动画中途重开时丢弃上次挂起的
+  // 选择器动作，避免之后普通关闭时误弹相册 / 相机 / 文件。
   useEffect(() => {
-    if (visible) setSnap('half');
+    if (!visible) return;
+    setSnap('half');
+    pendingAfterClose.current = null;
   }, [visible]);
 
   // memo 保持对象身份稳定,避免每次 render 触发 useContextSheetDrag 的吸附 effect 重跑。
@@ -77,32 +80,46 @@ export function ContextSheet({
   }), [insets.top, windowHeight]);
 
   return (
-    <SheetModal
-      backdropTestID={testID ? `${testID}.backdrop` : undefined}
-      keyboardAvoiding
-      keyboardAvoidingBehavior={keyboardAvoidingBehavior}
-      onBackdropPress={onClose}
-      // Android 返回键 / iOS 关闭手势:两段式(对齐 ModelPickerSheet / SessionMenuSheet 的
-      // handleRequestClose 语义)。子视图状态由页面持有,onBack 即「回一级」——目标模式表单 /
-      // 截图列表(传了 onBack)按返回先回根视图不丢草稿,根视图(无 onBack)才整关。
-      onRequestClose={onBack ?? onClose}
-      visible={visible}
+    <DismissAction.Provider
+      value={(action) => {
+        pendingAfterClose.current = action;
+        onClose();
+      }}
     >
-      <SheetSurface
-        backAccessibilityLabel={t('interaction.contextSheet.backAccessibility')}
-        bottomInset={insets.bottom}
-        footer={footer}
-        heights={heights}
-        onBack={onBack}
-        onClose={onClose}
-        onSnapChange={setSnap}
-        snap={snap}
-        testID={testID}
-        title={title}
+      <SheetModal
+        backdropTestID={testID ? `${testID}.backdrop` : undefined}
+        keyboardAvoiding
+        keyboardAvoidingBehavior={keyboardAvoidingBehavior}
+        onBackdropPress={onClose}
+        onClosed={() => {
+          const action = pendingAfterClose.current;
+          pendingAfterClose.current = null;
+          action?.();
+        }}
+        // Android 返回键 / iOS 关闭手势:两段式(对齐 ModelPickerSheet / SessionMenuSheet 的
+        // handleRequestClose 语义)。子视图状态由页面持有,onBack 即「回一级」——目标模式表单 /
+        // 截图列表(传了 onBack)按返回先回根视图不丢草稿,根视图(无 onBack)才整关。
+        onRequestClose={onBack ?? onClose}
+        visible={visible}
       >
-        {children}
-      </SheetSurface>
-    </SheetModal>
+        <SheetSurface
+          backAccessibilityLabel={t('interaction.contextSheet.backAccessibility')}
+          bottomInset={insets.bottom}
+          footer={footer}
+          heights={heights}
+          onBack={onBack}
+          onClose={onClose}
+          onSnapChange={setSnap}
+          snap={snap}
+          testID={testID}
+          title={title}
+        >
+          {media}
+          {children}
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        </SheetSurface>
+      </SheetModal>
+    </DismissAction.Provider>
   );
 }
 
@@ -136,29 +153,42 @@ function flattenChildren(children: ReactNode): ReactNode[] {
 }
 
 export interface ContextSheetRowProps {
+  /** Dismiss the sheet before presenting a system picker. */
+  dismissBeforePress?: boolean;
   icon: ReactNode;
   label: string;
   onPress: () => void;
+  /** 长按(如协同 Worker 行的管理操作);不传则只有点按。 */
+  onLongPress?: () => void;
   /** 'chevron' 表示带二级视图；也可以传自定义 trailing 节点。 */
   trailing?: 'chevron' | ReactNode;
   disabled?: boolean;
   busy?: boolean;
   accessibilityHint?: string;
   testID?: string;
+  /** Destructive actions (delete) read in the destructive text color. */
+  destructive?: boolean;
+  /** 标签下方的次要说明(如 Worker 的 Agent · 模型)。 */
+  detail?: string;
 }
 
 export function ContextSheetRow({
+  dismissBeforePress = false,
   icon,
   label,
   onPress,
+  onLongPress,
   trailing,
   disabled,
   busy,
   accessibilityHint,
   testID,
+  destructive = false,
+  detail,
 }: ContextSheetRowProps) {
   const styles = useThemedStyles(makeContextSheetStyles);
   const { colors } = useTheme();
+  const dismiss = useContext(DismissAction);
   return (
     <Pressable
       accessibilityHint={accessibilityHint}
@@ -166,13 +196,21 @@ export function ContextSheetRow({
       accessibilityRole="button"
       accessibilityState={{ disabled: disabled || busy }}
       disabled={disabled || busy}
-      onPress={onPress}
+      onLongPress={onLongPress}
+      onPress={() => (dismissBeforePress ? dismiss(onPress) : onPress())}
       style={({ pressed }) => [styles.row, pressed && styles.rowPressed, disabled && styles.rowDisabled]}
       testID={testID}
     >
       <View style={styles.rowLeft}>
         {icon}
-        <Text style={styles.rowLabel}>{label}</Text>
+        {detail ? (
+          <View style={styles.rowTextColumn}>
+            <Text numberOfLines={1} style={[styles.rowLabel, destructive && { color: colors.destructive }]}>{label}</Text>
+            <Text numberOfLines={1} style={styles.rowDetail}>{detail}</Text>
+          </View>
+        ) : (
+          <Text style={[styles.rowLabel, destructive && { color: colors.destructive }]}>{label}</Text>
+        )}
       </View>
       <View style={styles.rowTrailing}>
         {busy ? (
@@ -195,7 +233,7 @@ export interface ContextSheetFooterButtonProps {
   testID?: string;
 }
 
-/** footer 槽用的主操作按钮（黑底 pill，对照 Cursor「Add N」）。 */
+/** footer 槽用的主操作按钮:共享主按钮(cta 实心 pill;加载只转圈)。 */
 export function ContextSheetFooterButton({
   label,
   onPress,
@@ -203,28 +241,118 @@ export function ContextSheetFooterButton({
   disabled,
   testID,
 }: ContextSheetFooterButtonProps) {
+  return (
+    <MainWindowActionButton
+      action={{ busy, disabled, label, onPress, testID, tone: 'primary' }}
+    />
+  );
+}
+
+/** 分组内的说明文字(提示 / 错误),不可点击。 */
+export function ContextSheetNote({ text, tone = 'secondary', testID }: {
+  text: string;
+  tone?: 'secondary' | 'error';
+  testID?: string;
+}) {
+  const styles = useThemedStyles(makeContextSheetStyles);
+  return (
+    <Text style={[styles.note, tone === 'error' && styles.noteError]} testID={testID}>{text}</Text>
+  );
+}
+
+export interface ContextSheetChoiceRowProps<T extends string> {
+  label: string;
+  options: readonly { id: T; label: string }[];
+  value: T | null;
+  onChange: (value: T) => void;
+  disabled?: boolean;
+  testID?: string;
+}
+
+/** 单选(pill 组;iOS 版为原生 Picker)。 */
+export function ContextSheetChoiceRow<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+  disabled,
+  testID,
+}: ContextSheetChoiceRowProps<T>) {
+  const styles = useThemedStyles(makeContextSheetStyles);
+  return (
+    // 标签由外层分组标题承担(iOS 原生 Picker 自带 label),这里只作无障碍分组名。
+    <View accessibilityLabel={label} accessibilityRole="radiogroup" style={styles.choiceRow} testID={testID}>
+      <View style={styles.choicePills}>
+        {options.map((option) => {
+          const selected = option.id === value;
+          return (
+            <Pressable
+              accessibilityLabel={option.label}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: selected, disabled }}
+              disabled={disabled}
+              key={option.id}
+              onPress={() => onChange(option.id)}
+              style={styles.choiceHitArea}
+              testID={testID ? `${testID}.${option.id}` : undefined}
+            >
+              {({ pressed }) => (
+                <View
+                  style={[
+                    styles.choicePill,
+                    selected && styles.choicePillSelected,
+                    pressed && styles.rowPressed,
+                    disabled && styles.rowDisabled,
+                  ]}
+                >
+                  <Text style={[styles.choicePillText, selected && styles.choicePillTextSelected]}>{option.label}</Text>
+                </View>
+              )}
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+export interface ContextSheetTextFieldProps {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  accessibilityLabel: string;
+  multiline?: boolean;
+  disabled?: boolean;
+  maxLength?: number;
+  testID?: string;
+}
+
+/** 文本输入(iOS 版为原生 TextField)。 */
+export function ContextSheetTextField({
+  value,
+  onChange,
+  placeholder,
+  accessibilityLabel,
+  multiline,
+  disabled,
+  maxLength,
+  testID,
+}: ContextSheetTextFieldProps) {
   const styles = useThemedStyles(makeContextSheetStyles);
   const { colors } = useTheme();
   return (
-    <Pressable
-      accessibilityLabel={label}
-      accessibilityRole="button"
-      accessibilityState={{ disabled: disabled || busy }}
-      disabled={disabled || busy}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.footerButton,
-        disabled && styles.footerButtonDisabled,
-        pressed && styles.footerButtonPressed,
-      ]}
+    <TextInput
+      accessibilityLabel={accessibilityLabel}
+      editable={!disabled}
+      maxLength={maxLength}
+      multiline={multiline}
+      onChangeText={onChange}
+      placeholder={placeholder}
+      placeholderTextColor={colors.textTertiary}
+      style={[styles.textField, multiline && styles.textFieldMultiline]}
       testID={testID}
-    >
-      {busy ? (
-        <ActivityIndicator color={colors.ctaText} size="small" />
-      ) : (
-        <Text style={styles.footerButtonLabel}>{label}</Text>
-      )}
-    </Pressable>
+      value={value}
+    />
   );
 }
 
@@ -234,23 +362,12 @@ function makeContextSheetStyles(colors: ThemeColors) {
   return {
     // Modal 外壳样式(背板/内容层/键盘规避)已随 SheetModal 抽出;
     // sheet 表面样式(sheet/dragZone/grabber/header/滚动区/footer 容器)已随 SheetSurface 抽出。
-    footerButton: {
-      alignItems: 'center' as const,
-      backgroundColor: colors.cta,
-      borderRadius: radius.pill,
-      height: 50,
-      justifyContent: 'center' as const,
-    },
-    footerButtonDisabled: {
-      opacity: 0.4,
-    },
-    footerButtonPressed: {
-      opacity: 0.7,
-    },
-    footerButtonLabel: {
-      color: colors.ctaText,
-      fontSize: typeScale.body,
-      fontWeight: fontWeight.semibold,
+    // 说明、提示、报错(成句的话):footnote 13/18 400。
+    errorText: {
+      color: colors.errorText,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
     },
     group: {
       paddingTop: spacing.lg,
@@ -258,6 +375,7 @@ function makeContextSheetStyles(colors: ThemeColors) {
     groupLabel: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
     },
     separator: {
       backgroundColor: colors.border,
@@ -269,21 +387,90 @@ function makeContextSheetStyles(colors: ThemeColors) {
       minHeight: ROW_HEIGHT,
       justifyContent: 'space-between' as const,
     },
-    rowPressed: {
-      opacity: 0.6,
-    },
+    rowPressed: mobileInteractionStyles.pressed,
     rowDisabled: {
       opacity: 0.4,
     },
     rowLeft: {
       alignItems: 'center' as const,
       flexDirection: 'row' as const,
+      flexShrink: 1,
       gap: spacing.md,
     },
     rowLabel: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
+    },
+    rowTextColumn: {
+      flexShrink: 1,
+      gap: 2,
+    },
+    rowDetail: {
+      color: colors.textTertiary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+    },
+    note: {
+      color: colors.textTertiary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      paddingVertical: spacing.sm,
+    },
+    noteError: {
+      color: colors.errorText,
+    },
+    choiceRow: {
+      gap: spacing.sm,
+      paddingVertical: spacing.sm,
+    },
+    choicePills: {
+      columnGap: spacing.sm,
+      flexDirection: 'row' as const,
+      flexWrap: 'wrap' as const,
+    },
+    // 命中区 44pt(可见 pill 仍是 32pt);换行时相邻两行命中区之间的留白就是 pill 的上下余量。
+    choiceHitArea: {
+      height: 44,
+      justifyContent: 'center' as const,
+    },
+    choicePill: {
+      alignItems: 'center' as const,
+      backgroundColor: colors.surfaceChip,
+      borderRadius: radius.pill,
+      height: 32,
+      justifyContent: 'center' as const,
+      paddingHorizontal: spacing.md,
+    },
+    choicePillSelected: {
+      backgroundColor: colors.cta,
+    },
+    choicePillText: {
+      color: colors.textPrimary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.medium,
+    },
+    choicePillTextSelected: {
+      color: colors.ctaText,
+    },
+    // 单行输入按 pill,多行输入按 inner-control 8px(DESIGN.md §5)。
+    textField: {
+      backgroundColor: colors.surface,
+      borderColor: colors.border,
+      borderRadius: radius.pill,
+      borderWidth: StyleSheet.hairlineWidth,
+      color: colors.textPrimary,
+      fontSize: typeScale.body,
+      marginVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm + 2,
+    },
+    textFieldMultiline: {
+      borderRadius: radius.control,
+      minHeight: 96,
+      textAlignVertical: 'top' as const,
     },
     rowTrailing: {
       alignItems: 'center' as const,

@@ -8,111 +8,65 @@ import { sessionsStore } from './sessionsStore';
 import { startMakeDoctor } from './cindyMakeDoctor';
 import type { MakeDoctorReport, MakeUpstreamDecision } from '../../shared/cindyMakeDoctor';
 import type { CindyMakeInvocation } from './cindyMakeCommand';
-import { CINDY_MAKE_SESSION_SOURCE } from '../../shared/cindyMakeSession';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
-import { plainTextToTiptapDoc, saveDraft } from './composerDraftStore';
+import i18n from '@/i18n';
 
 // Only coalesce concurrent clicks. The created task id lives in the persisted card.
 const codeSessionStarts = new Map<string, Promise<string | null>>();
 
-/** Create an ordinary code task and send the original request through the normal send path. */
 export function startMakeCodeSession(sessionId: string, runId: string): Promise<string | null> {
   const owner = getDataOwnerGeneration();
-  const key = `${owner}:${sessionId}:${runId}`;
+  const key = [owner.dataOwnerId, owner.generation, sessionId, runId].join(':');
   const pending = codeSessionStarts.get(key);
   if (pending) return pending;
   if (getStickySessionDeviceId(sessionId)) return Promise.resolve(null);
-  const currentCard = () =>
-    makerChatStore
-      .getSnapshot(sessionId)
-      .messages.find(
-        (row) =>
-          row.systemCardType === 'cindy-make' &&
-          (row.systemCardData?.report as MakeDoctorReport | undefined)?.runId === runId,
-      );
-  const message = currentCard();
+  const message = makerChatStore
+    .getSnapshot(sessionId)
+    .messages.find(
+      (row) =>
+        row.systemCardType === 'cindy-make' &&
+        (row.systemCardData?.report as MakeDoctorReport | undefined)?.runId === runId,
+    );
   const data = message?.systemCardData;
   const report = data?.report as MakeDoctorReport | undefined;
-  const source = report?.source;
   const request = typeof data?.request === 'string' ? data.request : '';
-  if (
-    !message ||
-    !request.trim() ||
-    report?.status !== 'completed' ||
-    source?.status !== 'ready' ||
-    !source.path ||
-    data?.decision !== 'personal'
-  )
+  if (!message || !request.trim() || !report || data?.decision !== 'personal')
     return Promise.resolve(null);
-  // Opening an existing task must never replay its first message, including after reload.
   if (typeof data.codeSessionId === 'string') return Promise.resolve(data.codeSessionId);
-  const isCurrent = () =>
-    isDataOwnerGenerationCurrent(owner) && currentCard()?.clientId === message.clientId;
   const update = (patch: Record<string, unknown>) => {
-    if (isCurrent()) makerChatStore.updateSystemCardData(sessionId, message.clientId, patch);
+    if (isDataOwnerGenerationCurrent(owner))
+      makerChatStore.updateSystemCardData(sessionId, message.clientId, patch);
   };
-  const start = async (): Promise<string | null> => {
-    let createdId: string | null = null;
+  const start = async () => {
+    update({ codeStartPhase: 'session', codeSessionError: false });
     try {
-      const origin = await sessionService.get(sessionId);
-      if (!isCurrent() || origin.remoteHostId || origin.deviceLinkDeviceId) return null;
-      const profile = origin.runtimeEffective;
-      const agentKind =
-        profile?.agentKind === 'claude-code' ? 'cc' : (profile?.agentKind ?? origin.agentKind);
-      // Each task works in its own worktree branched from the personal baseline;
-      // the managed checkout itself is never a task's working directory.
-      update({ codeStartPhase: 'workspace' });
-      const workspace = await window.electronAPI.prepareCindyMakeWorkspace(runId);
-      if (!isCurrent()) return null;
-      update({ codeStartPhase: 'session', codeWorkspace: workspace });
-      const session = await sessionService.create({
-        workingDir: workspace.path,
-        workspaceKind: 'project',
-        // Persisted purpose: Main hydrates the cindy_make tool and task note from it.
-        source: CINDY_MAKE_SESSION_SOURCE,
-        agentKind,
-        model: profile?.model ?? origin.model,
-        effort: profile ? (profile.effort ?? '') : origin.effort,
-        providerId: profile ? profile.providerId : origin.providerId,
-        fastMode: profile?.fastMode ?? origin.fastMode,
-        permissionMode: origin.permissionMode,
-        planModeEnabled: origin.planModeEnabled ?? false,
+      const requestChars = Array.from(request.replace(/\s+/gu, ' ').trim());
+      const title = i18n.t('cindyMake.code.taskTitle', {
+        worktree: runId.slice(0, 4),
+        request:
+          requestChars.length > 60
+            ? requestChars.slice(0, 60).join('') + '…'
+            : requestChars.join(''),
       });
-      if (!isCurrent()) return null;
-      createdId = session.id;
-      sessionsStore.prependCreated(session);
-      update({ codeSessionId: session.id, codeSessionError: false });
-      makerChatStore.setSessionRuntime(session.id, {
-        agentKind: session.agentKind === 'cc' ? 'claude-code' : session.agentKind,
-        fastMode: session.fastMode,
-        planModeEnabled: session.planModeEnabled ?? false,
-        remoteHostId: null,
-      });
-      makerChatStore.mirrorSessionFields(session.id, { providerId: session.providerId ?? null });
-      const accepted = await makerChatStore.sendMessage(
-        session.id,
+      const createdId = await window.electronAPI.startCindyMakeTask({
+        originSessionId: sessionId,
+        runId,
         request,
-        session.model,
-        session.effort,
-        session.permissionMode,
-        workspace.path,
-      );
-      if (!accepted && isCurrent()) {
-        saveDraft(session.id, { text: plainTextToTiptapDoc(request), attachments: [] });
-        update({ codeSessionError: true, codeStartPhase: undefined });
-      }
-      return isCurrent() ? session.id : null;
+        title,
+      });
+      if (!isDataOwnerGenerationCurrent(owner)) return null;
+      update({ codeSessionId: createdId, codeStartPhase: undefined, codeSessionError: false });
+      makerChatStore.setSessionRuntime(createdId, { autoTitleDisabled: true });
+      const session = await sessionService.get(createdId).catch(() => null);
+      if (!isDataOwnerGenerationCurrent(owner)) return null;
+      if (session) sessionsStore.prependCreated(session);
+      return createdId;
     } catch {
-      if (createdId && isCurrent()) {
-        saveDraft(createdId, { text: plainTextToTiptapDoc(request), attachments: [] });
-      }
       update({ codeSessionError: true, codeStartPhase: undefined });
-      return isCurrent() ? createdId : null;
+      return null;
     }
   };
-  const result = start().finally(() => {
-    codeSessionStarts.delete(key);
-  });
+  const result = start().finally(() => codeSessionStarts.delete(key));
   codeSessionStarts.set(key, result);
   return result;
 }
@@ -136,6 +90,7 @@ export async function ensureMakeTask(input: {
       // The task still exists if the best-effort title write loses a race.
     }
   }
+  if (!isDataOwnerGenerationCurrent(owner)) return null;
   sessionsStore.prependCreated(session);
   return input.isCurrent() ? session.id : null;
 }
@@ -221,7 +176,6 @@ export function startMakeDoctorInStream(
   );
 }
 
-/** After the three preparation steps, the personal choice creates the code task. */
 export async function chooseMakeUpstream(
   sessionId: string,
   runId: string,
@@ -237,22 +191,15 @@ export async function chooseMakeUpstream(
   const report = message?.systemCardData?.report as MakeDoctorReport | undefined;
   if (
     !message ||
-    !report ||
-    report.status !== 'completed' ||
+    report?.status !== 'completed' ||
     !['found', 'notFound'].includes(report.upstream?.status ?? '') ||
     message.systemCardData?.decision
   )
     return null;
   makerChatStore.updateSystemCardData(sessionId, message.clientId, { decision });
-  if (decision !== 'personal') return null;
-  if (report.source?.status === 'ready' && report.source.path) {
-    return startMakeCodeSession(sessionId, runId);
-  }
-  // Historical cards from the search-first workflow may not have a checkout yet.
-  return prepareMakeSourceInStream(sessionId, runId);
+  return decision === 'personal' ? startMakeCodeSession(sessionId, runId) : null;
 }
 
-/** Starts the Main-owned source checkout while keeping the existing message card. */
 export async function prepareMakeSourceInStream(
   sessionId: string,
   runId: string,
@@ -264,102 +211,7 @@ export async function prepareMakeSourceInStream(
         row.systemCardType === 'cindy-make' &&
         (row.systemCardData?.report as MakeDoctorReport | undefined)?.runId === runId,
     );
-  const request =
-    typeof message?.systemCardData?.request === 'string' ? message.systemCardData.request : '';
-  if (
-    !message ||
-    !request.trim() ||
-    typeof window === 'undefined' ||
-    getStickySessionDeviceId(sessionId)
-  )
-    return null;
-  const currentReport = message.systemCardData?.report as MakeDoctorReport | undefined;
-  const pendingSource = currentReport?.source ?? { status: 'pending' as const, path: '' };
-  const retainUpstream = (report: MakeDoctorReport): MakeDoctorReport => {
-    const existing = makerChatStore
-      .getSnapshot(sessionId)
-      .messages.find((row) => row.clientId === message.clientId);
-    const existingReport = existing?.systemCardData?.report as MakeDoctorReport | undefined;
-    return {
-      ...report,
-      // Source reports describe only the checkout. Retain the actual results
-      // from the earlier environment step instead of inventing new passes.
-      checks: currentReport?.checks ?? report.checks,
-      platform: report.platform || currentReport?.platform || '',
-      arch: report.arch || currentReport?.arch || '',
-      ...(report.upstream || existingReport?.upstream
-        ? { upstream: report.upstream ?? existingReport?.upstream }
-        : {}),
-      ...(report.source || existingReport?.source
-        ? { source: report.source ?? existingReport?.source }
-        : {}),
-    };
-  };
-  makerChatStore.updateSystemCardData(sessionId, message.clientId, {
-    report: {
-      ...(currentReport ?? {
-        runId,
-        platform: '',
-        arch: '',
-        checks: [],
-        status: 'running' as const,
-      }),
-      mode: 'prepare',
-      status: 'running',
-      source: pendingSource,
-    },
-    request,
-    decision: 'personal',
-  });
-  const owner = getDataOwnerGeneration();
-  const isCurrent = () =>
-    isDataOwnerGenerationCurrent(owner) &&
-    (
-      makerChatStore
-        .getSnapshot(sessionId)
-        .messages.find((row) => row.clientId === message.clientId)?.systemCardData?.report as
-        MakeDoctorReport | undefined
-    )?.runId === runId;
-  let unsubscribe = () => {};
-  unsubscribe = window.electronAPI.maker.onDesktopCommandTriggered((event) => {
-    if (!isCurrent() || event.command !== 'cindy-make') return;
-    const report = event.doctorReport as MakeDoctorReport | undefined;
-    if (!report || report.runId !== runId) return;
-    makerChatStore.updateSystemCardData(sessionId, message.clientId, {
-      // The follow-up Main command receives only the request and run id. Keep the
-      // upstream lookup from the original card while its source checkout progresses.
-      report: retainUpstream(report),
-      request,
-      decision: 'personal',
-    });
-    if (
-      ['completed', 'failed', 'cancelled'].includes(report.status) &&
-      report.source?.status !== 'preparing'
-    ) {
-      unsubscribe();
-    }
-  });
-  return window.electronAPI.maker
-    .executeDesktopCommand('cindy-make', {
-      doctorRunId: runId,
-      makeAction: 'prepare-source',
-      makeRequest: request,
-      ...(currentReport?.forceManagedTools ? { forceManagedTools: true } : {}),
-    })
-    .then((result) => {
-      const report = result?.doctorReport as MakeDoctorReport | undefined;
-      if (isCurrent() && report?.runId === runId) {
-        makerChatStore.updateSystemCardData(sessionId, message.clientId, {
-          report: retainUpstream(report),
-          request,
-          decision: 'personal',
-        });
-        if (report.status === 'completed' && report.source?.status === 'ready') {
-          return startMakeCodeSession(sessionId, runId);
-        }
-      }
-      return null;
-    })
-    .catch(() => null)
-    .finally(() => unsubscribe());
+  if (!message || getStickySessionDeviceId(sessionId)) return null;
+  makerChatStore.updateSystemCardData(sessionId, message.clientId, { decision: 'personal' });
+  return startMakeCodeSession(sessionId, runId);
 }

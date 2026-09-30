@@ -214,7 +214,11 @@ export function useAutoUnlockSettings(
         generation === epoch.current &&
         activeTarget.current === target
       ) {
-        const key = credentialErrorKey(error);
+        const key =
+          getHostPlatform() === "linux" &&
+          credentialErrorKey(error) === "credentialUnlockUnavailable"
+            ? "linuxUnlockUnavailable"
+            : credentialErrorKey(error);
         const message = t(
           `remoteDesktop.${key === "credentialRequired" ? "autoUnlockUnavailable" : key}`,
         );
@@ -292,6 +296,14 @@ export function useAutoUnlockSettings(
           { preSend: current.check },
         );
         current.check();
+        if (
+          status?.version === 1 &&
+          status.state === "unavailable" &&
+          getHostPlatform() === "linux"
+        ) {
+          setNotice(t("remoteDesktop.linuxUnlockUnavailable"));
+          return;
+        }
         if (status?.version !== 1 || status.state !== "locked") return;
         if (!beforeAuthentication) attempted.current = true;
         await change(() =>

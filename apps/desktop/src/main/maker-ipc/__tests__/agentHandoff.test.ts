@@ -122,6 +122,43 @@ describe('buildHandoffText', () => {
     expect(text).not.toContain('x'.repeat(200));
   });
 
+  it('retains bounded, correlated tool outcomes for image recovery without image payloads', () => {
+    const text = buildHandoffText([
+      msg('user', 'Send once, then verify'),
+      msg('tool_use', { toolUseId: 'send-1', toolName: 'send', input: {} }),
+      { ...msg('tool_result', 'Sent: receipt 42'), toolUseId: 'send-1' },
+      msg('tool_use', { toolUseId: 'check-1', toolName: 'check', input: {} }),
+      { ...msg('tool_result', { isError: true, content: [
+        { type: 'text', text: 'Receipt lookup failed' },
+        { type: 'image', data: 'SECRET_BASE64'.repeat(5000) },
+      ] }), toolUseId: 'check-1' },
+      { ...msg('tool_result', 'Screenshot data:image/png;base64,AAAA==\n'), toolUseId: 'image-1' },
+      { ...msg('tool_result', 'Long result ' + 'x'.repeat(50_000)), toolUseId: 'long-1' },
+    ], { ...opts, reason: 'native-session-recovery', includeToolResults: true });
+    expect(text).toContain('[Tool] send (id=send-1)');
+    expect(text).toContain('[Tool result id=send-1; recorded; verify outcome from result]');
+    expect(text).toContain('Sent: receipt 42');
+    expect(text).toContain('[Tool result id=check-1; failed]');
+    expect(text).toContain('Receipt lookup failed');
+    expect(text).not.toContain('SECRET_BASE64');
+    expect(text).not.toContain('data:image');
+    expect(text).not.toContain('x'.repeat(1001));
+    expect(text.length).toBeLessThanOrEqual(16000);
+  });
+
+  it.each([
+    '{"ok":true,"receiptId":"42"}',
+    { ok: true, receiptId: '42' },
+    { fullText: '{"ok":true,"receiptId":"42"}' },
+    [{ ok: true, receiptId: '42' }],
+  ])('keeps structured tool evidence: %j', (result) => {
+    const text = buildHandoffText([
+      msg('user', 'Send once'), msg('tool_result', result),
+    ], { ...opts, includeToolResults: true });
+    expect(text).toContain('"receiptId":"42"');
+    expect(text).toContain('"ok":true');
+  });
+
   it('合成指令行([UI_ACTION_TRIGGER])不进交接', () => {
     const text = buildHandoffText(
       [msg('user', '正常消息'), msg('user', '[UI_ACTION_TRIGGER] resume'), msg('assistant', '好')],

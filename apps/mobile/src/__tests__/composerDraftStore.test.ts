@@ -24,6 +24,29 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 describe('composerDraftStore', () => {
+  it.each(['both', 'text-only', 'new-draft'] as const)('reconciles a committed send after a crash with %s remaining', async (state) => {
+    const { __testing, reconcileCommittedComposerDraft, readComposerDraft, readComposerDocumentDraft } = await import('@/session/composerDraftStore');
+    const { textComposerDocument, emptyComposerDocument } = await import('@/session/composerDocument');
+    const before = textComposerDocument('already sent');
+    const after = emptyComposerDocument();
+    store.set(__testing.storageKeyForSession('s1'), state === 'new-draft' ? 'later edit' : 'already sent');
+    if (state !== 'text-only') store.set(__testing.documentStorageKeyForSession('s1'), JSON.stringify(state === 'new-draft' ? textComposerDocument('later edit') : before));
+    await reconcileCommittedComposerDraft('s1', { before, after }, () => {});
+    expect(await readComposerDraft('s1')).toBe(state === 'new-draft' ? 'later edit' : null);
+    expect(await readComposerDocumentDraft('s1')).toEqual(state === 'new-draft' ? textComposerDocument('later edit') : state === 'text-only' ? null : after);
+  });
+  it('propagates draft handoff storage failure and retries the unmodified disk proof', async () => {
+    const { __testing, reconcileCommittedComposerDraft } = await import('@/session/composerDraftStore');
+    const { textComposerDocument, emptyComposerDocument } = await import('@/session/composerDocument');
+    const storage = (await import('@react-native-async-storage/async-storage')).default;
+    const before = textComposerDocument('sent');
+    store.set(__testing.documentStorageKeyForSession('s1'), JSON.stringify(before));
+    store.set(__testing.storageKeyForSession('s1'), 'sent');
+    vi.mocked(storage.setItem).mockRejectedValueOnce(new Error('disk busy'));
+    await expect(reconcileCommittedComposerDraft('s1', { before, after: emptyComposerDocument() }, () => {})).rejects.toThrow('disk busy');
+    await reconcileCommittedComposerDraft('s1', { before, after: emptyComposerDocument() }, () => {});
+    expect(store.get(__testing.storageKeyForSession('s1'))).toBe('');
+  });
   beforeEach(async () => {
     vi.useRealTimers();
     vi.clearAllMocks();

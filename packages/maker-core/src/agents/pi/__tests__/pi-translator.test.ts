@@ -980,7 +980,10 @@ describe('pi translator', () => {
     expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
   });
 
-  it('hands exhausted network retries back to the user instead of host auto-resume', () => {
+  it.each([
+    'The operation timed out.',
+    "Error Code null: Service temporarily unavailable. The model's availability is currently degraded.",
+  ])('hands exhausted network retries back to the user instead of host auto-resume: %s', (finalError) => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
 
@@ -989,7 +992,7 @@ describe('pi translator', () => {
       ev({
         type: 'auto_retry_end',
         success: false,
-        finalError: 'The operation timed out.',
+        finalError,
       }),
       queue,
       ctx,
@@ -1003,7 +1006,7 @@ describe('pi translator', () => {
     );
     expect(terminalErrors).toHaveLength(1);
     expect(terminalErrors[0]?.data).toMatchObject({
-      message: 'The operation timed out.',
+      message: finalError,
       reason: 'pi-gateway-drop',
     });
     expect(events.find((event) => event.type === 'done')?.data)
@@ -1437,6 +1440,23 @@ describe('pi translator', () => {
     expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
   });
 
+  it.each(['standard', 'priority'] as const)('uses the native execution receipt (%s) instead of the Fast preference', priceVariant => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.getPriceVariant = () => 'priority';
+    ctx.resolveUsagePriceVariant = vi.fn(() => priceVariant);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', model: 'grok-4.7', content: [{ type: 'text', text: 'OK' }],
+      usage: { input: 20, output: 5, cacheRead: 10 },
+    } }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    expect(ctx.resolveUsagePriceVariant).toHaveBeenCalledWith({ inputTokens: 30, outputTokens: 5, cacheReadTokens: 10 });
+    expect((events.find(event => event.type === 'done')!.data as { usage: { segments: unknown[] } }).usage.segments)
+      .toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, priceVariant })]);
+  });
+
   it('locks the Pi price variant from bridge usage metadata at each provider request boundary', () => {
     const ctx = createPiTranslateContext(noopLogger);
     let fast = false;
@@ -1661,6 +1681,39 @@ describe('pi translator', () => {
     const done2 = events2.events.find((e) => e.type === 'done');
     expect((done2!.data as { result?: unknown }).result).toBe('');
     expect(done2!.data).toMatchObject({ silentStop: true });
+  });
+
+  it.each([
+    ['empty', []],
+    ['thinking-only', [{ type: 'thinking', thinking: 'Considering the result' }]],
+  ])('does not let earlier progress hide a final %s response', (_name, content) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', stopReason: 'toolUse',
+      content: [{ type: 'text', text: 'I will inspect the files.' }, { type: 'toolCall', id: 't1', name: 'read', arguments: {} }],
+      usage: { input: 10, output: 2 },
+    } }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 't1', toolName: 'read', args: {} }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 't1', toolName: 'read', result: { content: [{ type: 'text', text: 'file contents' }] }, isError: false }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', stopReason: 'stop', content, usage: { input: 20, output: 0 },
+    } }), queue, ctx);
+    // Native agent_end alone must not terminate a run that may still recover.
+    translatePiEvent(ev({ type: 'agent_end' }), queue, ctx);
+    expect(events.filter((event) => event.type === 'done')).toHaveLength(0);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    expect(events.find((event) => event.type === 'done')?.data).toMatchObject({
+      result: '', status: 'completed', silentStop: true,
+      usage: { inputTokens: 30, outputTokens: 2 },
+    });
+    // Preserve the already-delivered progress and tool events; only the terminal latch changes.
+    expect(events.filter((event) => event.type === 'text').some((event) =>
+      (event.data as { text?: string }).text === 'I will inspect the files.')).toBe(true);
+    expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
+    disposePiTranslateContext(ctx);
   });
 
   it('resets turn usage counters on the next agent_start', () => {

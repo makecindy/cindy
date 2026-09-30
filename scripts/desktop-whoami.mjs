@@ -319,6 +319,25 @@ function printText(report) {
   }
 }
 
+/** Linux sandboxed renderers can retain their zygote argv. Require a PID from
+ * the main-window readiness report AND a live descendant from the same binary. */
+export function applyLinuxRendererEvidence(scanned, records, processes, platform = process.platform) {
+  if (platform !== 'linux') return scanned;
+  return scanned.map((instance) => {
+    if (instance.ready) return instance;
+    const record = records.find((record) => record.pid === instance.pid
+      && typeof record.rootDir === 'string'
+      && normalize(record.rootDir) === normalize(instance.rootDir));
+    if (record?.state !== 'ready' || !Number.isSafeInteger(record.rendererPid) || record.rendererPid <= 0)
+      return instance;
+    const renderer = descendants(instance.pid, processes).find((child) => child.pid === record.rendererPid);
+    if (!renderer || !/(?:^|\s)--type=zygote(?:\s|$)/.test(renderer.command)
+      || !commandContainsPath(renderer.command, path.join(instance.rootDir, 'node_modules', 'electron')))
+      return instance;
+    return { ...instance, ready: true, state: 'ready' };
+  });
+}
+
 export function collectDesktopWhoamiReport(options = {}) {
   const expectedRoot = path.resolve(options.rootDir ?? rootDir);
   const env = options.env ?? process.env;
@@ -331,7 +350,8 @@ export function collectDesktopWhoamiReport(options = {}) {
     ...preliminary.map((item) => item.userDataDir).filter(Boolean).map((item) => path.resolve(item)),
   ]);
   const records = options.records ?? readInstanceRecords(userDataDirs, worktrees);
-  const allInstances = mergeDesktopInstanceRecords(preliminary, records, worktrees);
+  const scanned = applyLinuxRendererEvidence(preliminary, records, processes, options.platform);
+  const allInstances = mergeDesktopInstanceRecords(scanned, records, worktrees);
   const expectedCommit = options.commit === undefined ? gitHead(expectedRoot) : options.commit;
   const match = allInstances.some((instance) =>
     normalize(instance.rootDir) === normalize(expectedRoot) &&

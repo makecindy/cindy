@@ -13,7 +13,7 @@ vi.mock('../localDb/schema', () => ({ sessions: {} }));
 vi.mock('../localDb/mapper', () => ({ sessionCreateToRow: (id: string, row: object) => ({ id, ...row }) }));
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../git-snapshot/projectGitBootstrap', () => ({ ensureProjectGitInitialized: mocks.bootstrap }));
-vi.mock('../maker-host/git-safety-settings-store', () => ({ readGitSafetySettings: () => ({ autoSnapshotEnabled: true }) }));
+vi.mock('../maker-host/git-safety-settings-store', () => ({ readGitSafetySettings: () => ({ mode: 'all-projects', autoSnapshotEnabled: true, autoInitProjectGit: true }) }));
 vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: mocks.recent }));
 vi.mock('../localDb/pluginWorkspaceDedupe', () => ({ pickSessionForWorkdir: vi.fn() }));
 vi.mock('../logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));

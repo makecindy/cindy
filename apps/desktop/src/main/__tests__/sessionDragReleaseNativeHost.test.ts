@@ -149,8 +149,8 @@ describe('SessionDragReleaseNativeHost', () => {
     expect(forgeSource).toContain(
       "const MACOS_REMOTE_DESKTOP_INPUT_DEPLOYMENT_TARGET = 'macos10.15';",
     );
-    expect(forgeSource).toContain(
-      "MACOS_REMOTE_DESKTOP_INPUT_DEPLOYMENT_TARGET,\n      [],\n      'remote desktop input'",
+    expect(forgeSource.replace(/\s+/g, ' ')).toContain(
+      "MACOS_REMOTE_DESKTOP_INPUT_DEPLOYMENT_TARGET, [], 'remote desktop input'",
     );
     expect(forgeSource).not.toContain("dest, arch, '10.15', [], 'remote desktop input'");
     expect(swiftTargetTriple('arm64', 'macos10.15')).toBe('arm64-apple-macos10.15');

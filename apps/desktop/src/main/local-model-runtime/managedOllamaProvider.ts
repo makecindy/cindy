@@ -98,7 +98,10 @@ export function buildEmptyManagedOllamaProvider(): CustomProviderConfig {
 }
 
 /** Keep the repository identity and quantization visible without the HF transport prefix. */
-function localModelDisplayName(name: string): string {
+function localModelDisplayName(name: string, savedName?: string, nameExplicit?: boolean): string {
+  if (savedName !== undefined && (nameExplicit || (savedName && savedName !== name))) {
+    return savedName;
+  }
   const curated = curatedOllamaDisplayName(name);
   if (curated) return curated;
   const hf = /^hf\.co\/[^/]+\/([^/:]+)(?::([^/]+))?$/.exec(name);
@@ -140,12 +143,13 @@ function toAgentModel(
 ): ProviderRuntimeModelConfig {
   const named = {
     ...model,
-    name: model.name || curatedOllamaDisplayName(model.id) || model.id,
+    name: localModelDisplayName(model.id, model.name, model.nameExplicit),
   };
   if (agent === 'pi') return named;
   return {
     id: named.id,
     name: named.name,
+    ...(named.nameExplicit !== undefined ? { nameExplicit: named.nameExplicit } : {}),
     ...(named.contextWindow ? { contextWindow: named.contextWindow } : {}),
     ...(named.supportsImageInput ? { supportsImageInput: true } : {}),
     ...(named.reasoning
@@ -160,6 +164,24 @@ function toAgentModel(
   };
 }
 
+/** Old imports saved the execution ID as the name. Repair only that fallback,
+ * without probing Ollama or changing saved capabilities and agent membership. */
+function restoreManagedModelNames(provider: CustomProviderConfig): CustomProviderConfig {
+  let next = provider;
+  for (const agent of ['pi', 'claude-code', 'codex'] as const) {
+    const runtime = provider.runtimes[agent];
+    if (!runtime) continue;
+    const models = runtime.models.map((model) => {
+      if (!model.name || model.name !== model.id) return model;
+      const name = localModelDisplayName(model.id, model.name, model.nameExplicit);
+      return name === model.name ? model : { ...model, name };
+    });
+    if (models.every((model, index) => model === runtime.models[index])) continue;
+    next = { ...next, runtimes: { ...next.runtimes, [agent]: { ...runtime, models } } };
+  }
+  return next;
+}
+
 export function migrateManagedOllamaProvider(
   existing: CustomProviderConfig,
 ): CustomProviderConfig | null {
@@ -169,6 +191,7 @@ export function migrateManagedOllamaProvider(
     runtimes: existing.runtimes,
   };
   if (matchesManagedOllamaV2Fingerprint(input)) {
+    existing = restoreManagedModelNames(existing);
     const codex = existing.runtimes.codex;
     if (codex?.wireProtocol === 'openai-responses') {
       return {
@@ -182,6 +205,7 @@ export function migrateManagedOllamaProvider(
     return existing;
   }
   if (!matchesLegacyPiOnlyOllamaFingerprint(input)) return null;
+  existing = restoreManagedModelNames(existing);
   const piModels = existing.runtimes.pi?.models ?? [];
   return {
     ...existing,
@@ -195,7 +219,7 @@ export function migrateManagedOllamaProvider(
   };
 }
 
-/** Catalog 加载前调用：不依赖打开设置页，把旧 Responses 行迁成 Chat 桥。 */
+/** Catalog 加载前调用：离线也补齐旧名称，并把旧 Responses 行迁成 Chat 桥。 */
 export async function migrateManagedOllamaOnCatalogLoad(
   stillCurrent: () => boolean = () => true,
 ): Promise<boolean> {

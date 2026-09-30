@@ -1,0 +1,737 @@
+import { app, ipcMain } from 'electron';
+import { randomUUID, createHash } from 'node:crypto';
+import { constants, promises as fs } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
+import path from 'node:path';
+import {
+  createFileReadQueue,
+  createPeerTransferCooldown,
+  canUsePeerInvoke,
+  canServePeerInvoke,
+  type InvokeResultPayload,
+  uploadPeerAttachment,
+  FILE_PEER_CHUNK_BYTES,
+  FILE_PEER_MAX_BYTES,
+  FILE_PEER_IDLE_MS,
+  FILE_PEER_CHANNEL,
+  parseFilePeerRequest,
+  parseFilePeerFile,
+  type FilePeerFile,
+  type FilePeerRequest,
+} from '@cindy/device-link';
+import { FILE_PEER_LOCAL, type FilePeerCommand } from '../../shared/filePeer';
+import { DesktopCaptureWindow } from '../remote-desktop/captureWindow';
+import { loadDesktopIceServers } from '../remote-desktop/iceConfig';
+import { resolveAuthorizedMedia } from './mediaFetch';
+import { readDeviceLinkSettings } from './settings-store';
+import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from './broadcast-tap';
+import { createLogger } from '../logger.js';
+import { handlePeerAttachment } from './peerAttachmentStore';
+
+// Local-only diagnostics (scope is not upload-allowlisted): stages, sizes and timings, never paths.
+const log = createLogger('device-link:filePeer');
+const short = (id: string | undefined) => (id ?? '?').slice(0, 8);
+const errorText = (error: unknown) =>
+  (error instanceof Error ? error.message : String(error)).slice(0, 200);
+
+type Owner = ReturnType<typeof captureDataOwnerBroadcastScope>;
+interface Connection {
+  peer: string;
+  owner: Owner;
+  timer: ReturnType<typeof setTimeout>;
+  incoming: boolean;
+  opening?: boolean;
+  invoke?: (channel: string, args: unknown[]) => Promise<unknown>;
+}
+interface Source {
+  connection: string;
+  file: FileHandle;
+  size: number;
+  mtime: number;
+  offset: number;
+  busy: boolean;
+  openedAt: number;
+}
+interface Sink {
+  connection: string;
+  file: FileHandle;
+  size: number;
+  offset: number;
+  busy: boolean;
+}
+interface Outgoing {
+  id: string;
+  remote?: string;
+  busy: boolean;
+  invoke: Invoke;
+  rpc?: boolean;
+  attachments?: boolean;
+}
+const outgoing = new Map<string, Outgoing>();
+const cooldown = createPeerTransferCooldown();
+let cooldownOwner: Owner | undefined;
+function refreshCooldownOwner() {
+  if (!cooldownOwner || !isDataOwnerBroadcastScopeCurrent(cooldownOwner)) {
+    cooldown.clear();
+    cooldownOwner = captureDataOwnerBroadcastScope();
+  }
+}
+const connections = new Map<string, Connection>();
+const sources = new Map<string, Source>();
+const sinks = new Map<string, Sink>();
+const replies = new Map<
+  string,
+  {
+    connection: string;
+    resolve(value?: string): void;
+    reject(error: Error): void;
+    timer: ReturnType<typeof setTimeout>;
+  }
+>();
+const host = new DesktopCaptureWindow(() => stopFilePeers(), 'files');
+let starting: Promise<void> | null = null;
+
+function touch(id: string) {
+  const c = connections.get(id);
+  if (!c || !isDataOwnerBroadcastScopeCurrent(c.owner)) throw new Error('FILE_PEER_CLOSED');
+  const settings = readDeviceLinkSettings();
+  if (
+    c.incoming &&
+    (!settings.remoteControlEnabled || settings.revokedControllers.includes(c.peer))
+  ) {
+    stopConnection(id, 'revoked');
+    throw new Error('FILE_PEER_REVOKED');
+  }
+  clearTimeout(c.timer);
+  c.timer = setTimeout(() => stopConnection(id, 'idle'), FILE_PEER_IDLE_MS);
+  c.timer.unref();
+  return c;
+}
+function track(id: string, peer: string, incoming: boolean) {
+  if (connections.size >= 4) throw new Error('FILE_PEER_BUSY');
+  const timer = setTimeout(() => stopConnection(id, 'idle'), FILE_PEER_IDLE_MS);
+  timer.unref();
+  connections.set(id, { peer, incoming, owner: captureDataOwnerBroadcastScope(), timer });
+}
+function stopConnection(id: string, reason: string) {
+  const c = connections.get(id);
+  if (!c) return;
+  connections.delete(id);
+  const unfinished = [...sources.values()].filter((s) => s.connection === id && s.offset < s.size);
+  const detail = `conn=${short(id)} peer=${short(c.peer)} incoming=${c.incoming} reason=${reason}`;
+  if (unfinished.length)
+    log.warn(
+      `closed with unfinished send ${detail} sent=${unfinished.map((s) => `${s.offset}/${s.size}B`).join(',')}`,
+    );
+  else log.debug(`closed ${detail}`);
+  clearTimeout(c.timer);
+  const out = outgoing.get(c.peer);
+  if (out?.id === id) {
+    outgoing.delete(c.peer);
+    if (out.remote && isDataOwnerBroadcastScopeCurrent(c.owner))
+      void out
+        .invoke(c.peer, FILE_PEER_CHANNEL, [{ action: 'close', connection: out.remote }])
+        .catch(() => {});
+  }
+  for (const [ticket, source] of sources)
+    if (source.connection === id) {
+      sources.delete(ticket);
+      void source.file.close().catch(() => {});
+    }
+  for (const [ticket, sink] of sinks)
+    if (sink.connection === id) {
+      sinks.delete(ticket);
+      void sink.file.close().catch(() => {});
+    }
+  if (host.contents && !host.contents.isDestroyed())
+    host.contents.send(FILE_PEER_LOCAL.COMMAND, randomUUID(), { action: 'close', connection: id });
+  for (const [key, p] of replies)
+    if (p.connection === id) {
+      replies.delete(key);
+      clearTimeout(p.timer);
+      p.reject(new Error('FILE_PEER_CLOSED'));
+    }
+  if (!connections.size) {
+    host.dispose();
+    for (const p of replies.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error('FILE_PEER_CLOSED'));
+    }
+    replies.clear();
+  }
+}
+export function stopFilePeers(peer?: string) {
+  for (const [id, c] of connections) if (!peer || peer === c.peer) stopConnection(id, 'stop');
+}
+async function prepareHost(connection: string): Promise<void> {
+  touch(connection);
+  if (!host.contents) {
+    if (!starting)
+      starting = host.start().finally(() => {
+        starting = null;
+      });
+    await starting;
+  } else if (starting) await starting;
+  touch(connection);
+}
+async function command(c: FilePeerCommand): Promise<string | undefined> {
+  await prepareHost(c.connection);
+  return new Promise((resolve, reject) => {
+    const id = randomUUID();
+    const timer = setTimeout(
+      () => {
+        replies.delete(id);
+        log.warn(`host ${c.action} timed out conn=${short(c.connection)}`);
+        // An RPC timeout must not cancel a concurrent file transfer on this peer.
+        if (c.action !== 'invoke') stopConnection(c.connection, `${c.action}-timeout`);
+        reject(new Error('FILE_PEER_TIMEOUT'));
+      },
+      c.action === 'receive' ? 60_000 : 15_000,
+    );
+    timer.unref();
+    replies.set(id, { connection: c.connection, resolve, reject, timer });
+    host.contents!.send(FILE_PEER_LOCAL.COMMAND, id, c);
+  });
+}
+
+export async function requestFilePeer(
+  peer: string,
+  value: unknown,
+  invoke?: Connection['invoke'],
+): Promise<unknown> {
+  const startedAt = Date.now();
+  let action = 'invalid';
+  try {
+    const r = parseFilePeerRequest(value);
+    action = r.action;
+    const result = await handleFilePeerRequest(peer, r, invoke);
+    const opened = r.action === 'open' ? (result as { size?: number; mimeType?: string }) : null;
+    const connection =
+      r.action === 'offer'
+        ? (result as { connection?: string }).connection
+        : 'connection' in r
+          ? r.connection
+          : undefined;
+    log.debug(
+      `request ${action} ok peer=${short(peer)} ms=${Date.now() - startedAt}` +
+        (connection ? ` conn=${short(connection)}` : '') +
+        (opened ? ` size=${opened.size} mime=${opened.mimeType}` : ''),
+    );
+    return result;
+  } catch (error) {
+    log.warn(
+      `request ${action} failed peer=${short(peer)} ms=${Date.now() - startedAt} error=${errorText(error)}`,
+    );
+    throw error;
+  }
+}
+
+async function handleFilePeerRequest(
+  peer: string,
+  r: FilePeerRequest,
+  invoke?: Connection['invoke'],
+): Promise<unknown> {
+  if (r.action === 'caps')
+    return { version: 1, maxBytes: FILE_PEER_MAX_BYTES, streaming: true, attachments: true };
+  if (r.action === 'offer') {
+    const id = randomUUID();
+    track(id, peer, true);
+    connections.get(id)!.invoke = invoke;
+    try {
+      // Cold host readiness and TURN configuration share the outer 30s RPC
+      // budget: max(10s, 8s) + 15s command leaves transport headroom.
+      const readyStartedAt = Date.now();
+      const [, servers] = await Promise.all([prepareHost(id), loadDesktopIceServers()]);
+      log.debug(
+        `offer host ready conn=${short(id)} ms=${Date.now() - readyStartedAt} iceServers=${servers.length}`,
+      );
+      const sdp = await command({
+        action: 'accept',
+        connection: id,
+        servers,
+        sdp: r.sdp,
+      });
+      return { connection: id, sdp };
+    } catch (error) {
+      stopConnection(id, 'offer-failed');
+      throw error;
+    }
+  }
+  const c = touch(r.connection);
+  if (!c.incoming || c.peer !== peer) throw new Error('FILE_PEER_DENIED');
+  if (r.action === 'attachment') return handlePeerAttachment(peer, r.request);
+  if (r.action === 'close') {
+    stopConnection(r.connection, 'peer-close');
+    return { ok: true };
+  }
+  if (c.opening || [...sources.values()].some((s) => s.connection === r.connection))
+    throw new Error('FILE_PEER_BUSY');
+  c.opening = true;
+  try {
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const authorized = await Promise.race([
+      resolveAuthorizedMedia({ url: r.url }, FILE_PEER_MAX_BYTES),
+      new Promise<never>((_, reject) => {
+        deadline = setTimeout(() => {
+          stopConnection(r.connection, 'open-timeout');
+          reject(new Error('FILE_PEER_TIMEOUT'));
+        }, 20_000);
+        deadline.unref();
+      }),
+    ]).finally(() => clearTimeout(deadline));
+    touch(r.connection);
+    const file = await fs.open(
+      authorized.absPath,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    );
+    try {
+      const stat = await file.stat();
+      touch(r.connection);
+      if (!stat.isFile() || stat.size > (authorized.maxBytes ?? FILE_PEER_MAX_BYTES))
+        throw new Error('FILE_PEER_SIZE');
+      const ticket = randomUUID();
+      const ext = (authorized.uploadExtHint ?? path.extname(authorized.absPath)).toLowerCase();
+      const mimeType =
+        authorized.mimeType ??
+        (
+          {
+            '.html': 'text/html',
+            '.htm': 'text/html',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.webp': 'image/webp',
+            '.svg': 'image/svg+xml',
+            '.gif': 'image/gif',
+            '.pdf': 'application/pdf',
+          } as Record<string, string>
+        )[ext] ??
+        'application/octet-stream';
+      sources.set(ticket, {
+        connection: r.connection,
+        file,
+        size: stat.size,
+        mtime: stat.mtimeMs,
+        offset: 0,
+        busy: false,
+        openedAt: Date.now(),
+      });
+      return { ticket, size: stat.size, mimeType };
+    } catch (error) {
+      await file.close();
+      throw error;
+    }
+  } finally {
+    c.opening = false;
+  }
+}
+
+export function registerFilePeerIpc() {
+  ipcMain.handle(FILE_PEER_LOCAL.INVOKE, async (e, id: unknown, text: unknown) => {
+    host.assertSender(e);
+    if (typeof id !== 'string' || typeof text !== 'string' || text.length > 4 * 1024 * 1024)
+      throw new Error('FILE_PEER_DENIED');
+    const c = touch(id);
+    const payload = JSON.parse(text);
+    if (
+      !c.incoming ||
+      !c.invoke ||
+      typeof payload.channel !== 'string' ||
+      !Array.isArray(payload.args) ||
+      !canServePeerInvoke(payload.channel, payload.args)
+    )
+      throw new Error('FILE_PEER_DENIED');
+    const result = await c.invoke(payload.channel, payload.args);
+    touch(id);
+    return JSON.stringify(result);
+  });
+  ipcMain.handle(FILE_PEER_LOCAL.REGISTER, (e) => host.registered(e));
+  ipcMain.handle(FILE_PEER_LOCAL.REPLY, (e, id: unknown, ok: unknown, value: unknown) => {
+    host.assertSender(e);
+    if (
+      typeof id !== 'string' ||
+      typeof ok !== 'boolean' ||
+      (value !== undefined && (typeof value !== 'string' || value.length > 4 * 1024 * 1024))
+    )
+      throw new Error('FILE_PEER_REPLY');
+    const pending = replies.get(id);
+    if (!pending) return;
+    replies.delete(id);
+    clearTimeout(pending.timer);
+    if (ok) pending.resolve(value as string | undefined);
+    else pending.reject(new Error('FILE_PEER_UNAVAILABLE'));
+  });
+  ipcMain.handle(
+    FILE_PEER_LOCAL.READ,
+    async (e, connection: unknown, ticket: unknown, offset: unknown) => {
+      host.assertSender(e);
+      if (
+        typeof connection !== 'string' ||
+        typeof ticket !== 'string' ||
+        !Number.isSafeInteger(offset)
+      )
+        throw new Error('FILE_PEER_BLOCK');
+      const s = sources.get(ticket);
+      if (!s || s.connection !== connection || s.busy || offset !== s.offset)
+        throw new Error('FILE_PEER_BLOCK');
+      touch(connection);
+      s.busy = true;
+      try {
+        const stat = await s.file.stat();
+        if (stat.size !== s.size || stat.mtimeMs !== s.mtime) throw new Error('FILE_PEER_CHANGED');
+        const bytes = Buffer.alloc(Math.min(FILE_PEER_CHUNK_BYTES, s.size - s.offset));
+        if (bytes.length) {
+          const read = await s.file.read(bytes, 0, bytes.length, s.offset);
+          if (read.bytesRead !== bytes.length) throw new Error('FILE_PEER_CHANGED');
+        }
+        touch(connection);
+        if (sources.get(ticket) !== s) throw new Error('FILE_PEER_CLOSED');
+        s.offset += bytes.length;
+        // Receive deadlines measure stalled disk/network progress, not total file duration.
+        for (const pending of replies.values())
+          if (pending.connection === s.connection) pending.timer.refresh();
+        if (!bytes.length) {
+          sources.delete(ticket);
+          await s.file.close();
+          log.debug(
+            `send done conn=${short(connection)} size=${s.size} ms=${Date.now() - s.openedAt}`,
+          );
+        }
+        return bytes.toString('base64');
+      } catch (error) {
+        log.warn(
+          `send failed conn=${short(connection)} sent=${s.offset}/${s.size}B error=${errorText(error)}`,
+        );
+        stopConnection(connection, 'read-failed');
+        throw error;
+      } finally {
+        s.busy = false;
+      }
+    },
+  );
+  ipcMain.handle(
+    FILE_PEER_LOCAL.WRITE,
+    async (e, id: unknown, offset: unknown, base64: unknown) => {
+      host.assertSender(e);
+      if (typeof id !== 'string' || typeof base64 !== 'string' || base64.length > 22000)
+        throw new Error('FILE_PEER_BLOCK');
+      const s = sinks.get(id),
+        bytes = Buffer.from(base64, 'base64');
+      if (
+        !s ||
+        s.busy ||
+        offset !== s.offset ||
+        bytes.length > FILE_PEER_CHUNK_BYTES ||
+        s.offset + bytes.length > s.size ||
+        bytes.toString('base64') !== base64
+      )
+        throw new Error('FILE_PEER_BLOCK');
+      touch(s.connection);
+      s.busy = true;
+      try {
+        const written = await s.file.write(bytes, 0, bytes.length, s.offset);
+        touch(s.connection);
+        if (written.bytesWritten !== bytes.length || sinks.get(id) !== s)
+          throw new Error('FILE_PEER_CLOSED');
+        s.offset += bytes.length;
+        // Receive deadlines measure stalled disk/network progress, not total file duration.
+        for (const pending of replies.values())
+          if (pending.connection === s.connection) pending.timer.refresh();
+      } finally {
+        s.busy = false;
+      }
+    },
+  );
+  app.on('before-quit', () => stopFilePeers());
+}
+
+type Invoke = (
+  peer: string,
+  channel: string,
+  args: unknown[],
+) => Promise<{ ok: boolean; result?: unknown }>;
+/** A caller owns the returned temporary file and must dispose it after consuming it. */
+const queuePeerRead = createFileReadQueue();
+export function tryPeerFile(peer: string, url: string, invoke: Invoke, signal?: AbortSignal) {
+  const owner = captureDataOwnerBroadcastScope();
+  if (!cooldownOwner || !isDataOwnerBroadcastScopeCurrent(cooldownOwner)) {
+    cooldown.clear();
+    cooldownOwner = owner;
+  }
+  return queuePeerRead(
+    peer,
+    () => {
+      if (!isDataOwnerBroadcastScopeCurrent(owner)) throw new Error('FILE_PEER_CANCELLED');
+      return receivePeerFile(peer, url, invoke, signal);
+    },
+    signal,
+  );
+}
+async function receivePeerFile(
+  peer: string,
+  url: string | null,
+  invoke: Invoke,
+  signal?: AbortSignal,
+) {
+  refreshCooldownOwner();
+  if (signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
+  const remaining = cooldown.remaining(peer);
+  if (remaining) {
+    log.debug(`fallback peer=${short(peer)} reason=cooldown remainingMs=${remaining}`);
+    return null;
+  }
+  const startedAt = Date.now();
+  let step = 'setup';
+  const owner = captureDataOwnerBroadcastScope();
+  let out = outgoing.get(peer);
+  if (out?.busy) return null;
+  if (!out) {
+    out = { id: randomUUID(), busy: false, invoke };
+    outgoing.set(peer, out);
+  }
+  out.busy = true;
+  const id = out.id;
+  let remote = out.remote,
+    directory: string | undefined,
+    complete = false;
+  const cancel = () => stopConnection(id, 'aborted');
+  try {
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (!remote) {
+      const caps = await invoke(peer, FILE_PEER_CHANNEL, [{ action: 'caps' }]);
+      if (signal?.aborted || !isDataOwnerBroadcastScopeCurrent(owner))
+        throw new Error('FILE_PEER_CANCELLED');
+      if (!caps.ok || (caps.result as { version?: unknown })?.version !== 1) {
+        cooldown.fail(peer);
+        log.debug(`fallback peer=${short(peer)} reason=unsupported`);
+        return null;
+      }
+      out.rpc = (caps.result as { streaming?: unknown }).streaming === true;
+      out.attachments = (caps.result as { attachments?: unknown }).attachments === true;
+      track(id, peer, false);
+      const [, servers] = await Promise.all([prepareHost(id), loadDesktopIceServers()]);
+      const offer = await command({
+        action: 'offer',
+        connection: id,
+        servers,
+        streaming: (caps.result as { streaming?: unknown }).streaming === true,
+      });
+      const response = await invoke(peer, FILE_PEER_CHANNEL, [{ action: 'offer', sdp: offer }]);
+      const r = response.result as { connection?: string; sdp?: string };
+      if (
+        !response.ok ||
+        !r ||
+        typeof r.connection !== 'string' ||
+        !/^[a-f0-9-]{36}$/.test(r.connection) ||
+        typeof r.sdp !== 'string' ||
+        r.sdp.length > 128 * 1024
+      )
+        throw new Error('FILE_PEER_ANSWER');
+      remote = r.connection;
+      out.remote = remote;
+      await command({ action: 'answer', connection: id, sdp: r.sdp });
+      log.debug(
+        `connected peer=${short(peer)} setupMs=${Date.now() - startedAt} stats=${await command({ action: 'stats', connection: id })}`,
+      );
+    }
+    step = 'open';
+    touch(id);
+    if (url === null) {
+      complete = true;
+      cooldown.success(peer);
+      return null;
+    }
+    const opened = await invoke(peer, FILE_PEER_CHANNEL, [
+      { action: 'open', connection: remote, url },
+    ]);
+    if (!opened.ok) throw new Error('FILE_PEER_OPEN');
+    const file: FilePeerFile = parseFilePeerFile(opened.result);
+    touch(id);
+    const space = await fs.statfs(app.getPath('temp'));
+    if (space.bavail * space.bsize < 2 * file.size + 256 * 1024 * 1024) return null;
+    directory = await fs.mkdtemp(path.join(app.getPath('temp'), 'cindy-file-peer-'));
+    const destination = path.join(directory, 'file');
+    const handle = await fs.open(destination, 'wx', 0o600),
+      sink = randomUUID();
+    sinks.set(sink, { connection: id, file: handle, offset: 0, size: file.size, busy: false });
+    step = 'receive';
+    const transferStartedAt = Date.now();
+    try {
+      await command({
+        action: 'receive',
+        connection: id,
+        ticket: file.ticket,
+        size: file.size,
+        sink,
+      });
+      if (
+        sinks.get(sink)?.offset !== file.size ||
+        signal?.aborted ||
+        !isDataOwnerBroadcastScopeCurrent(owner)
+      )
+        throw new Error('FILE_PEER_SIZE');
+    } finally {
+      sinks.delete(sink);
+      await handle.close().catch(() => {});
+    }
+    if (signal?.aborted || !isDataOwnerBroadcastScopeCurrent(owner))
+      throw new Error('FILE_PEER_CLOSED');
+    touch(id);
+    const ownedDirectory = directory;
+    directory = undefined;
+    complete = true;
+    cooldown.success(peer);
+    const transferMs = Date.now() - transferStartedAt;
+    log.debug(
+      `received peer=${short(peer)} bytes=${file.size} transferMs=${transferMs} totalMs=${Date.now() - startedAt} bytesPerSecond=${Math.round((file.size * 1000) / Math.max(1, transferMs))}`,
+    );
+    return {
+      path: destination,
+      size: file.size,
+      mimeType: file.mimeType,
+      dispose: () => fs.rm(ownedDirectory, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    if (signal?.aborted || !isDataOwnerBroadcastScopeCurrent(owner))
+      throw new Error('FILE_PEER_CANCELLED');
+    const delay = step === 'open' ? 0 : cooldown.fail(peer);
+    log.debug(
+      `fallback peer=${short(peer)} stage=${step} cooldownMs=${delay} reason=${errorText(error)}`,
+    );
+    return null;
+  } finally {
+    signal?.removeEventListener('abort', cancel);
+    out.busy = false;
+    if (!complete) {
+      stopConnection(id, 'incomplete');
+      if (outgoing.get(peer) === out) outgoing.delete(peer);
+      if (remote && isDataOwnerBroadcastScopeCurrent(owner))
+        void invoke(peer, FILE_PEER_CHANNEL, [{ action: 'close', connection: remote }]).catch(
+          () => {},
+        );
+    }
+    if (directory) await fs.rm(directory, { recursive: true, force: true });
+  }
+}
+
+const warming = new Set<string>();
+/** Upload only bytes; the eventual message still uses its original WSS acceptance semantics. */
+export async function tryUploadPeerAttachment(
+  peer: string,
+  source: string | Buffer,
+  mimeType: string | undefined,
+  invoke: Invoke,
+  onProgress?: (bytes: number) => void,
+): Promise<string | null> {
+  refreshCooldownOwner();
+  const owner = captureDataOwnerBroadcastScope();
+  const check = () => {
+    if (!isDataOwnerBroadcastScopeCurrent(owner)) throw new Error('FILE_PEER_CANCELLED');
+  };
+  return queuePeerRead(peer, async () => {
+    check();
+    if (cooldown.remaining(peer)) return null;
+    let handle: FileHandle | undefined;
+    let active: Outgoing | undefined;
+    try {
+      await receivePeerFile(peer, null, invoke);
+      check();
+      const out = outgoing.get(peer);
+      if (!out?.remote || !out.attachments) return null;
+      active = out;
+      out.busy = true;
+      if (typeof source === 'string')
+        handle = await fs.open(source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      const size = handle ? (await handle.stat()).size : (source as Buffer).length;
+      if (!size || size > FILE_PEER_MAX_BYTES) return null;
+      const read = async (offset: number, length: number) => {
+        check();
+        if (!handle) return (source as Buffer).subarray(offset, offset + length);
+        const bytes = Buffer.alloc(length);
+        if ((await handle.read(bytes, 0, length, offset)).bytesRead !== length)
+          throw new Error('FILE_PEER_CHANGED');
+        return bytes;
+      };
+      const hash = createHash('sha256');
+      for (let offset = 0; offset < size; offset += 1024 * 1024)
+        hash.update(await read(offset, Math.min(1024 * 1024, size - offset)));
+      const transferStartedAt = Date.now();
+      const result = await uploadPeerAttachment(
+        { size, sha256: hash.digest('hex'), mimeType },
+        async (offset, length) => (await read(offset, length)).toString('base64'),
+        async (request) => {
+          check();
+          const response = JSON.parse(
+            (await command({
+              action: 'invoke',
+              connection: out.id,
+              payload: JSON.stringify({
+                channel: FILE_PEER_CHANNEL,
+                args: [{ action: 'attachment', connection: out.remote, request }],
+              }),
+            }))!,
+          );
+          check();
+          if (!response.ok) throw new Error('FILE_PEER_UPLOAD');
+          return response.result;
+        },
+        check,
+        onProgress,
+      );
+      const ms = Date.now() - transferStartedAt;
+      log.debug(
+        `uploaded peer=${short(peer)} bytes=${size} transferMs=${ms} bytesPerSecond=${Math.round((size * 1000) / Math.max(1, ms))}`,
+      );
+      return result;
+    } catch {
+      check();
+      cooldown.fail(peer);
+      const failed = outgoing.get(peer);
+      if (failed) stopConnection(failed.id, 'upload-failed');
+      return null;
+    } finally {
+      if (active) active.busy = false;
+      await handle?.close();
+    }
+  });
+}
+/** Cold reads use WSS immediately; a single background setup prepares subsequent reads. */
+export async function tryPeerInvoke(
+  peer: string,
+  channel: string,
+  args: unknown[],
+  invoke: Invoke,
+): Promise<InvokeResultPayload | null> {
+  refreshCooldownOwner();
+  if (!canUsePeerInvoke(channel, args)) return null;
+  if (cooldown.remaining(peer)) return null;
+  const owner = captureDataOwnerBroadcastScope();
+  const out = outgoing.get(peer);
+  if (!out?.remote || !out.rpc) {
+    if (!out?.remote && !warming.has(peer)) {
+      warming.add(peer);
+      void queuePeerRead(peer, async () => {
+        if (isDataOwnerBroadcastScopeCurrent(owner)) await receivePeerFile(peer, null, invoke);
+      })
+        .catch(() => {})
+        .finally(() => warming.delete(peer));
+    }
+    return null;
+  }
+  try {
+    const result = await command({
+      action: 'invoke',
+      connection: out.id,
+      payload: JSON.stringify({ channel, args }),
+    });
+    if (!isDataOwnerBroadcastScopeCurrent(owner)) throw new Error('FILE_PEER_CANCELLED');
+    const response = JSON.parse(result!);
+    if (!response || typeof response.ok !== 'boolean') throw new Error('FILE_PEER_REPLY');
+    return response;
+  } catch {
+    if (!isDataOwnerBroadcastScopeCurrent(owner)) throw new Error('FILE_PEER_CANCELLED');
+    cooldown.fail(peer);
+    if (!out.busy) stopConnection(out.id, 'rpc-failed');
+    return null;
+  }
+}

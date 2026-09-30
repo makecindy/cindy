@@ -5,6 +5,8 @@ export type MainViewKey = 'cc-agent' | 'issues' | 'plugins' | 'bots';
 export interface MainViewHistory {
   lastMatchedKey: MainViewKey;
   paths: Partial<Record<MainViewKey, string>>;
+  /** Last local teammate, retained when visiting the index or creation page. */
+  lastBotId?: string;
   /** The router entry inherited at an owner change must not seed the new history. */
   ignoredLocationKey?: string;
 }

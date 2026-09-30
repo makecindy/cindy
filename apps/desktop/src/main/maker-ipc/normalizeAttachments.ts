@@ -28,9 +28,9 @@ import * as cindyMediaBlobStore from '../cindy-media/blobStore.js';
 import * as cindyMediaLedger from '../cindy-media/ledger.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
 import { createLogger } from '../logger.js';
-import { isAttachmentOssRef, parseAttachmentOssRef } from '../../shared/attachmentOssRef.js';
+import { isRemoteAttachmentRef, parseRemoteAttachmentRef, materializeRemoteAttachment } from '../device-link/remoteAttachment.js';
 import type { AttachmentIntegrity, AttachmentOssRef } from '../../shared/attachmentOssRef.js';
-import { downloadToFile, removeRemote } from '../device-link/mediaTransfer.js';
+import { removeRemote } from '../device-link/mediaTransfer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { isDangerousAttachmentName } from '../../shared/attachmentSafety.js';
 import { readReviewRunOwner, type ReviewRunOwner } from '../../shared/reviewRun.js';
@@ -328,15 +328,15 @@ export async function normalizeUserMessage(
       || (typeof block.path === 'string' && (
         block.path.startsWith('xdt-image://')
         || block.path.startsWith('cindy-media://')
-        || isAttachmentOssRef(block.path)
+        || isRemoteAttachmentRef(block.path)
       ))
     );
     if (isDesktopHostImage) block.pathOrigin = 'desktop-host';
 
     // 0) device-link 出方向 OSS 引用(控制端发来的附件)→ presign-get 下载物化到临时文件,
     //    用后删 OSS。新引用下载/校验失败 → 整条不发；旧引用保留历史的单附件降级语义。
-    if (typeof block.path === 'string' && isAttachmentOssRef(block.path)) {
-      const ref = parseAttachmentOssRef(block.path);
+    if (typeof block.path === 'string' && isRemoteAttachmentRef(block.path)) {
+      const ref = parseRemoteAttachmentRef(block.path);
       if (!ref) {
         log.warn('malformed oss attach ref, rejecting message');
         throwIpcError('DEVICE_LINK_MEDIA_TRANSFER_FAILED', '附件引用无效,请重新上传。');
@@ -345,13 +345,13 @@ export async function normalizeUserMessage(
         // 流式下载到临时文件(不整 buffer 进内存,大附件也安全)。
         const dest = await ensureTempPath(sessionId, ref.mimeType ?? block.mimeType);
         const integrity = integrityForRef(ref);
-        await downloadToFile(ref.ossKey, dest, integrity);
+        await materializeRemoteAttachment(ref, dest, integrity);
         block.path = dest;
         if (!block.mimeType && ref.mimeType) block.mimeType = ref.mimeType;
-        void removeRemote(ref.ossKey); // 用后删(best-effort,不阻塞 turn)
+        if (ref.ossKey) void removeRemote(ref.ossKey); // 用后删(best-effort,不阻塞 turn)
       } catch (e) {
         log.warn('oss attach download failed', { error: String(e) });
-        if (isIntegrityMismatch(e)) void removeRemote(ref.ossKey);
+        if (ref.ossKey && isIntegrityMismatch(e)) void removeRemote(ref.ossKey);
         // 新客户端声明了完整性时，任何下载/校验失败都必须阻止消息进入 agent；
         // 旧引用继续保留历史降级语义，避免升级接收端破坏旧发送端行为。
         if (ref.size !== undefined) {
@@ -455,7 +455,7 @@ function isQueuedImageFile(file: SerializedFileLike): boolean {
 
 /** 该字段是 device-link 出方向附件 OSS 引用串。 */
 function isOssRefField(v: unknown): v is string {
-  return typeof v === 'string' && isAttachmentOssRef(v);
+  return typeof v === 'string' && isRemoteAttachmentRef(v);
 }
 
 /** 可物化的本地图片扩展(与 imageCacheStore 的图片 MIME 支持面对齐)。 */
@@ -471,7 +471,7 @@ const LOCAL_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 function isLocalImagePathField(v: unknown): v is string {
   return (
     typeof v === 'string' &&
-    !isAttachmentOssRef(v) &&
+    !isRemoteAttachmentRef(v) &&
     path.isAbsolute(v) &&
     LOCAL_IMAGE_EXTS.has(path.extname(v).toLowerCase())
   );
@@ -693,14 +693,14 @@ async function materializeQueuedOssAttachmentsInternal(
         return null;
       }
     }
-    const ref = parseAttachmentOssRef(refStr);
+    const ref = parseRemoteAttachmentRef(refStr);
     if (!ref) {
       throwIpcError('DEVICE_LINK_MEDIA_TRANSFER_FAILED', '附件引用无效,请重新上传。');
     }
     let tmp: string | null = null;
     try {
       tmp = await ensureTempPath(sessionId, ref.mimeType ?? mimeHint);
-      await downloadToFile(ref.ossKey, tmp, integrityForRef(ref));
+      await materializeRemoteAttachment(ref, tmp, integrityForRef(ref));
       const mime = ref.mimeType ?? mimeHint;
       let entry: MaterializedRef;
       // 只收图片进总仓:ingestIntoBlobStore 是整读内存(readFile + sha256),
@@ -727,11 +727,11 @@ async function materializeQueuedOssAttachmentsInternal(
         entry = { url, absPath: imageCacheStore.resolveSafe(url).absPath };
       }
       byRef.set(refStr, entry);
-      ossKeys.add(ref.ossKey);
+      if (ref.ossKey) ossKeys.add(ref.ossKey);
       return entry;
     } catch (e) {
       log.warn('materialize queued oss attachment failed, leaving ref', { error: String(e) });
-      if (isIntegrityMismatch(e)) void removeRemote(ref.ossKey);
+      if (ref.ossKey && isIntegrityMismatch(e)) void removeRemote(ref.ossKey);
       if (ref.size !== undefined) {
         throwIpcError(
           'DEVICE_LINK_MEDIA_TRANSFER_FAILED',

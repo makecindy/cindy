@@ -4,12 +4,15 @@ import { ChevronDown, ChevronUp, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { isFindInPageClaimed } from './findInPageOwnership';
 
 const MATCH_HIGHLIGHT_NAME = 'cindy-find-in-page-match';
 const ACTIVE_HIGHLIGHT_NAME = 'cindy-find-in-page-active';
 const SEARCH_MATCH_BACKGROUND = 'hsl(var(--search-match-bg))';
 const SEARCH_MATCH_FOREGROUND = 'hsl(var(--search-match-fg))';
+const SEARCH_ACTIVE_BACKGROUND = 'hsl(var(--search-match-active-bg))';
+const SEARCH_ACTIVE_FOREGROUND = 'hsl(var(--search-match-active-fg))';
 const SEARCH_REFRESH_DEBOUNCE_MS = 120;
 
 interface TextMatch {
@@ -44,6 +47,7 @@ function applyFindHighlights(matches: readonly TextMatch[], activeIndex: number)
   const activeMatch = matches[activeIndex];
   if (activeMatch) {
     const activeHighlight = new Highlight();
+    activeHighlight.priority = 1;
     activeHighlight.add(activeMatch.range);
     registry.set(ACTIVE_HIGHLIGHT_NAME, activeHighlight);
   }
@@ -660,6 +664,12 @@ export function FindInPageBar() {
         // 关闭走 unmount 直接消失(查找栏关闭要"立即让路",不做 exit)。
         'origin-top-right animate-float-in',
       )}
+      // 页面顶行的窗口拖拽区(新建草稿页的 InvisibleWindowDragStrip、插件页
+      // 页头等)与本栏几何重叠;拖拽区不看 z-index,会把关闭 / 翻页按钮上的
+      // 点击当成拖窗吞掉(#3908)。自身标 no-drag 挖洞,同 GhostPanelBubbleLayer。
+      // ⚠️ 挖洞成立依赖布局树顺序(规则见 windowDrag.tsx 头注):本栏在 App.tsx
+      // 里必须排在承载页面路由的 LoginHandoffHost 之后,别把它挪到路由前面。
+      style={WINDOW_NO_DRAG_STYLE}
       role="dialog"
       aria-label={t('findInPage.dialogAriaLabel')}
     >
@@ -669,10 +679,10 @@ export function FindInPageBar() {
           color: ${SEARCH_MATCH_FOREGROUND};
         }
         ::highlight(${ACTIVE_HIGHLIGHT_NAME}) {
-          background-color: ${SEARCH_MATCH_BACKGROUND};
-          color: ${SEARCH_MATCH_FOREGROUND};
+          background-color: ${SEARCH_ACTIVE_BACKGROUND};
+          color: ${SEARCH_ACTIVE_FOREGROUND};
           text-decoration: underline;
-          text-decoration-color: ${SEARCH_MATCH_FOREGROUND};
+          text-decoration-color: ${SEARCH_ACTIVE_FOREGROUND};
           text-decoration-thickness: 2px;
         }
       `}</style>

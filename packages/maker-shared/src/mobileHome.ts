@@ -51,6 +51,8 @@ export function canBrowseMobileHomeDevice(item: MobileHomeDeviceFilterItem): boo
 }
 
 export interface MobileHomeProjectGroup {
+  /** A virtual task folder, with no shared filesystem directory. */
+  kind?: 'cindy-make';
   deviceId: string | null;
   deviceName: string;
   key: string;
@@ -343,11 +345,13 @@ function buildProjectGroups(
       const first = group[0];
       const firstSession = first.session as MobileHomeSessionLike;
       const deviceId = sessionDeviceKey(firstSession) ?? null;
-      const workingDir = normalizeProjectWorkingDir(firstSession.workingDir);
+      const cindyMake = isCindyMakeSession(firstSession);
+      const workingDir = cindyMake ? '' : normalizeProjectWorkingDir(firstSession.workingDir);
       const deviceName = firstSession.deviceLinkDeviceName
         ?? (deviceId ? deviceNames.get(deviceId) : null)
         ?? '未知电脑';
       return {
+        ...(cindyMake ? { kind: 'cindy-make' as const } : {}),
         deviceId,
         deviceName,
         key,
@@ -360,7 +364,7 @@ function buildProjectGroups(
         sessionCount: group.reduce((sum, item) => sum + (item.automationGroup?.sessionCount ?? 1), 0),
         sessions: group,
         subtitle: [deviceName, workingDir].filter(Boolean).join(' · '),
-        title: projectTitle(workingDir),
+        title: cindyMake ? 'Cindy Make' : projectTitle(workingDir),
         workingDir,
       };
     })
@@ -370,6 +374,7 @@ function buildProjectGroups(
 function projectGroupKey(session: RemoteSessionListSessionLike): string {
   // 分组用 canonicalDeviceId(设备归并结果),只补空值兜底 + workingDir 归一化(去尾斜杠 / Windows 大小写)。
   const deviceId = sessionDeviceKey(session as MobileHomeSessionLike)?.trim() || '__unknown_device__';
+  if (isCindyMakeSession(session)) return `cindy-make:${encodeURIComponent(deviceId)}`;
   return `device:${encodeURIComponent(deviceId)}:${normalizePathKey(session.workingDir ?? '__unknown_project__')}`;
 }
 
@@ -563,7 +568,11 @@ function sessionStatusRank(status: string): number {
 }
 
 function isDialogueSession(session: RemoteSessionListSessionLike): boolean {
-  return session.workspaceKind === 'dialogue' || !session.workingDir;
+  return !isCindyMakeSession(session) && (session.workspaceKind === 'dialogue' || !session.workingDir);
+}
+
+function isCindyMakeSession(session: RemoteSessionListSessionLike): boolean {
+  return session.source === 'cindy-make' || session.source === 'cindy-make-merge';
 }
 
 function isAutomationSession(

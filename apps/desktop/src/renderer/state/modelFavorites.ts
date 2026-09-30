@@ -1,3 +1,4 @@
+import { parseModelFavoriteMutation, sameModelFavorite, type ModelFavoriteMutation } from '@cindy/device-link';
 /**
  * modelFavorites —— 统一模型选择器的「收藏 = 配置副本」存储(model-selector-unified
  * §1.5 / §2.3),localStorage 持久化,跨会话 / 跨重启在本机生效。
@@ -75,6 +76,7 @@ import type { ModelEngine } from './modelEnginePrefs';
 import { MODEL_PRESET_SLOT_ID } from './providerModelMemory';
 import { createStorageReconciler } from './storageOpReplay';
 
+let requireDurableWrite = false;
 const STORAGE_KEY = 'xdt:modelFavorites:v1';
 
 /** 一条收藏所描述的完整配置(不含锚点)。 */
@@ -530,7 +532,8 @@ function persistTo(key: string, next: FavoritesState): void {
     try {
       // 同步写:见文件头(热更 relaunch 走 app.exit(),异步写会丢最近一次改动)。
       window.localStorage.setItem(key, JSON.stringify(next));
-    } catch {
+    } catch (error) {
+      if (requireDurableWrite) throw error;
       // localStorage 满 / 私密窗口禁写 —— 静默吞,内存态仍生效。
     }
   }
@@ -718,3 +721,31 @@ export function __resetForTest(): void {
 }
 
 export const __STORAGE_KEY = STORAGE_KEY;
+
+/** Narrow host RPC entry: preserve old data and use existing per-item operations.
+ * Synchronous execution prevents an owner change between comparison and write. */
+export function accessHostModelFavorites(ownerId: string | null, mutation?: ModelFavoriteMutation): readonly ModelFavoriteItem[] {
+  if (activeDataOwnerId !== ownerId) throw new Error('Favorites owner not ready');
+  const readDurable = () => {
+    const raw = window.localStorage.getItem(storageKey());
+    return raw === null ? emptyState() : sanitize(JSON.parse(raw));
+  };
+  const base = readDurable();
+  if (!mutation) return base.items;
+  const op = parseModelFavoriteMutation(mutation);
+  if (op.kind !== 'add') {
+    const current = base.items.find(item => item.uid === op.expected.uid);
+    if (!current || !sameModelFavorite(current, op.expected)) throw new Error('Favorite changed; refresh before retrying');
+  }
+  requireDurableWrite = true;
+  try {
+    if (op.kind === 'add') {
+      const config = normalizeConfig(op.item);
+      if (!config) throw new Error('Invalid favorite');
+      if (base.items.length >= 4096 && !base.items.some(item => identityOf(item) === identityOf(config))) throw new Error('Favorites limit reached');
+      commitOp({kind:'add',config,preferredUid:uidOfSeq(base.uidSeq)},base);
+    } else if (op.kind === 'remove') commitOp({kind:'remove',uid:op.expected.uid},base);
+    else commitOp({kind:'update',uid:op.expected.uid,patch:{agent:op.item.agent, effort:(op.item.effort as Effort | undefined) ?? null, fast:!!op.item.fast}},base);
+    return readDurable().items;
+  } finally { requireDurableWrite = false; }
+}

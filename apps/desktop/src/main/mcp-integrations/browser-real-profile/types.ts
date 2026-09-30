@@ -4,6 +4,8 @@
  * that copy. This is consent-gated convenience, not an isolation boundary.
  */
 
+import type { BrowserProfileCopyWarning } from '../../../shared/browserBackend.js';
+
 export type ChromiumKind = 'chrome' | 'edge' | 'brave' | 'chromium';
 
 export const CHROMIUM_KINDS = ['chrome', 'edge', 'brave', 'chromium'] as const;
@@ -43,12 +45,14 @@ export interface SnapshotResult {
   sourceKind: ChromiumKind;
   sourceProfile: string;
   filesCopied: string[];
+  warnings?: BrowserProfileCopyWarning[];
 }
 
 export interface RealProfileStatusHint {
   enabled: boolean;
   applied: boolean;
   source: ChromiumKind | null;
+  warnings?: BrowserProfileCopyWarning[];
 }
 
 export type DefaultBrowserKind = ChromiumKind | 'other' | null;

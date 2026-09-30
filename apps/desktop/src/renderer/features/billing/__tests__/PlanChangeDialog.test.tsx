@@ -3,7 +3,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
     i18n: { language: 'en', resolvedLanguage: 'en' },
     t: (key: string, params?: Record<string, string>) =>
@@ -21,6 +22,7 @@ import {
   type PlanChangeCandidate,
 } from '../PlanChangeDialog';
 import type { PlanChangeState } from '../usePlanChange';
+import { PlanComparison } from '../PlanComparison';
 
 function quoteReadyState(overrides: Partial<PlanChangeState> = {}): PlanChangeState {
   return {
@@ -253,28 +255,32 @@ describe('PlanChangeTargetDialog product-first selection', () => {
     },
   ];
 
-  it('submits a Product with one alternative Offer directly', () => {
+  it('keeps the current plan disabled without a price selector', () => {
     const onSelect = vi.fn();
     render(
       <PlanChangeTargetDialog
         open
         currentPlan={currentPlan}
-        candidates={candidates}
+        candidates={candidates.slice(1)}
         onClose={vi.fn()}
         onSelect={onSelect}
       />,
     );
-
-    const proProduct = screen
-      .getAllByText('Pro')
-      .map((element) => element.closest('button'))
-      .find((button): button is HTMLButtonElement => button !== null)!;
-    expect(proProduct).toHaveProperty('disabled', false);
-    fireEvent.click(proProduct);
-    expect(onSelect).toHaveBeenCalledWith(candidates[0]);
+    expect(screen.getByRole('button', { name: 'billing.catalog.currentPlan' })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    expect(screen.queryByRole('combobox')).toBeNull();
+    const modelLinks = screen.getAllByRole('link', { name: 'billing.comparison.advancedModels' });
+    expect(modelLinks).toHaveLength(2);
+    for (const link of modelLinks) {
+      expect(link.getAttribute('href')).toBe('#/settings?tab=providers&connect=xd');
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'billing.catalog.currentPlan' }));
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it('defaults to the first Offer in server order and lets the user switch before submitting', () => {
+  it('keeps alternative server offers selectable after the plan action without a dropdown', () => {
     const onSelect = vi.fn();
     render(
       <PlanChangeTargetDialog
@@ -285,58 +291,274 @@ describe('PlanChangeTargetDialog product-first selection', () => {
         onSelect={onSelect}
       />,
     );
-
-    fireEvent.click(screen.getByText('Max').closest('button')!);
-
-    const firstOffer = screen.getByText('$20.00').closest('button')!;
-    const secondOffer = screen.getByText('$200.00').closest('button')!;
-    expect(screen.queryByText('max_month')).toBeNull();
+    expect(screen.queryByRole('combobox')).toBeNull();
     expect(screen.queryByText('max_month_more')).toBeNull();
-    expect(firstOffer.getAttribute('aria-pressed')).toBe('true');
-    expect(secondOffer.getAttribute('aria-pressed')).toBe('false');
-    expect(screen.getByText('billing.planChange.back').closest('button')).toBeTruthy();
-
-    const submitButton = screen
-      .getByText('billing.settings.subscriptionCard.changeAction')
-      .closest('button')!;
-    expect(submitButton.className).toContain('bg-[var(--accent-cta-bg)]');
-    expect(submitButton.className).toContain('text-[var(--accent-pure-cta-fg)]');
-
-    fireEvent.click(secondOffer);
-    fireEvent.click(submitButton);
+    fireEvent.click(screen.getByRole('button', { name: /billing.comparison.upgrade.*Max/ }));
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(screen.queryByText('max_month_more')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /\$200\.00/ }));
     expect(onSelect).toHaveBeenCalledWith(candidates[2]);
   });
 
-  it('returns to the Product list when the selected Product disappears', async () => {
+  it('keeps the current contract as the action instead of offering unsupported same-level changes', () => {
+    const onSelect = vi.fn();
+    render(
+      <PlanChangeTargetDialog
+        open
+        currentPlan={currentPlan}
+        candidates={candidates.map((candidate) =>
+          candidate.direction === 'SAME_LEVEL' ? { ...candidate, available: false } : candidate,
+        )}
+        onClose={vi.fn()}
+        onSelect={onSelect}
+      />,
+    );
+    expect(screen.getByText('$9.00')).toBeTruthy();
+    const button = screen.getByRole('button', { name: 'billing.catalog.currentPlan' });
+    expect(button).toHaveProperty('disabled', true);
+    fireEvent.click(button);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole('button', { name: 'billing.settings.subscriptionCard.changeAction' }),
+    ).toBeNull();
+  });
+
+  it('uses the current offer action even when a cheaper offer is displayed', () => {
+    const onSelect = vi.fn();
+    render(
+      <PlanComparison
+        plans={[
+          {
+            product: currentPlan.product,
+            defaultOfferCode: 'cheaper',
+            offers: [
+              {
+                offer: { ...currentPlan.offer, code: 'cheaper', amount: '1' },
+                action: 'Select',
+                onSelect,
+              },
+              { offer: currentPlan.offer, current: true, action: 'Current', onSelect },
+            ],
+          },
+        ]}
+        freeAction="Top up"
+        onViewModels={vi.fn()}
+        onFreeAction={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('$1.00')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Current' })).toHaveProperty('disabled', true);
+    expect(screen.queryByRole('button', { name: 'Select' })).toBeNull();
+  });
+
+  it('links model access to Cindy AI and closes the purchase comparison', () => {
+    const onViewModels = vi.fn();
+    render(
+      <PlanComparison
+        plans={[
+          {
+            product: currentPlan.product,
+            defaultOfferCode: currentPlan.offer.code,
+            offers: [{ offer: currentPlan.offer, action: 'Select', onSelect: vi.fn() }],
+          },
+        ]}
+        freeAction="Top up"
+        onViewModels={onViewModels}
+        onFreeAction={vi.fn()}
+      />,
+    );
+    const link = screen.getByRole('link', { name: 'billing.comparison.advancedModels' });
+    expect(link.getAttribute('href')).toBe('#/settings?tab=providers&connect=xd');
+    fireEvent.click(link);
+    expect(onViewModels).toHaveBeenCalledOnce();
+  });
+
+  it('uses the remaining server Offer when the default Offer disappears', () => {
+    const onSelect = vi.fn();
     const view = render(
       <PlanChangeTargetDialog
         open
         currentPlan={currentPlan}
         candidates={candidates}
         onClose={vi.fn()}
-        onSelect={vi.fn()}
+        onSelect={onSelect}
       />,
     );
-
-    fireEvent.click(screen.getByText('Max').closest('button')!);
-    expect(screen.getByText('$200.00')).toBeTruthy();
-
+    expect(screen.queryByRole('combobox')).toBeNull();
     view.rerender(
       <PlanChangeTargetDialog
         open
         currentPlan={currentPlan}
-        candidates={[candidates[0]]}
+        candidates={[candidates[0], candidates[2]]}
         onClose={vi.fn()}
-        onSelect={vi.fn()}
+        onSelect={onSelect}
       />,
     );
+    fireEvent.click(screen.getByRole('button', { name: /billing.comparison.upgrade.*Max/ }));
+    expect(onSelect).toHaveBeenCalledWith(candidates[2]);
+  });
 
-    expect(await screen.findByText('billing.planChange.targetTitle')).toBeTruthy();
-    const proProduct = screen
-      .getAllByText('Pro')
-      .map((element) => element.closest('button'))
-      .find((button): button is HTMLButtonElement => button !== null)!;
-    expect(proProduct).toHaveProperty('disabled', false);
-    expect(screen.queryByLabelText('settings.back')).toBeNull();
+  it.each(['OFFER_COMING_SOON', 'NO_AVAILABLE_PAYMENT_CHANNEL'] as const)(
+    'preserves the server unavailable reason %s in plan comparison',
+    (unavailableReason) => {
+      const onSelect = vi.fn();
+      render(
+        <PlanChangeTargetDialog
+          open
+          currentPlan={currentPlan}
+          candidates={[{ ...candidates[1], available: false, unavailableReason }]}
+          onClose={vi.fn()}
+          onSelect={onSelect}
+        />,
+      );
+      expect(
+        screen.getByText(`billing.catalog.unavailableReasons.${unavailableReason}`),
+      ).toBeTruthy();
+      expect(screen.getByText('billing.planChange.emptyTitle')).toBeTruthy();
+      const button = screen.getByRole('button', {
+        name: `billing.catalog.unavailableReasons.${unavailableReason}`,
+      });
+      expect(button).toHaveProperty('disabled', true);
+      fireEvent.click(button);
+      expect(onSelect).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { amounts: ['90', '100'], from: true },
+    { amounts: ['100', '100'], from: false },
+  ])('summarizes available target prices $amounts', ({ amounts, from }) => {
+    const onSelect = vi.fn();
+    const offers = [candidates[1], candidates[2]].map((candidate, index) => ({
+      ...candidate,
+      offer: { ...candidate.offer, amount: amounts[index] },
+    }));
+    render(
+      <PlanChangeTargetDialog
+        open
+        currentPlan={currentPlan}
+        candidates={[...offers].reverse()}
+        onClose={vi.fn()}
+        onSelect={onSelect}
+      />,
+    );
+    expect(Boolean(screen.queryByText('billing.comparison.priceFromSuffix'))).toBe(from);
+    fireEvent.click(screen.getByRole('button', { name: /billing.comparison.upgrade.*Max/ }));
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getAllByRole('button', { name: /billing.providers.stripe/ })).toHaveLength(2);
+  });
+
+  it('excludes unavailable lower prices and keeps the target stable while refreshing', () => {
+    const onSelect = vi.fn();
+    const offers = [{ ...candidates[1], available: false }, candidates[2]];
+    const view = render(
+      <PlanChangeTargetDialog
+        open
+        currentPlan={currentPlan}
+        candidates={offers}
+        onClose={vi.fn()}
+        onSelect={onSelect}
+        disabled
+      />,
+    );
+    expect(screen.getByText('$200.00')).toBeTruthy();
+    expect(screen.queryByText('billing.comparison.priceFromSuffix')).toBeNull();
+    expect(screen.getByRole('button', { name: /billing.comparison.upgrade.*Max/ })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    view.rerender(
+      <PlanChangeTargetDialog
+        open
+        currentPlan={currentPlan}
+        candidates={offers}
+        onClose={vi.fn()}
+        onSelect={onSelect}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /billing.comparison.upgrade.*Max/ }));
+    expect(onSelect).toHaveBeenCalledWith(candidates[2]);
+  });
+
+  it('defaults to an available offer when the first offer in a target product is unavailable', () => {
+    const onSelect = vi.fn();
+    render(
+      <PlanChangeTargetDialog
+        open
+        currentPlan={currentPlan}
+        candidates={[{ ...candidates[1], available: false }, candidates[2]]}
+        onClose={vi.fn()}
+        onSelect={onSelect}
+      />,
+    );
+    const button = screen.getByRole('button', { name: /billing.comparison.upgrade.*Max/ });
+    expect(button).toHaveProperty('disabled', false);
+    fireEvent.click(button);
+    expect(onSelect).toHaveBeenCalledWith(candidates[2]);
+  });
+
+  it('disables topup during catalog refresh and re-enables it when ready', () => {
+    const onSelect = vi.fn();
+    const onTopup = vi.fn();
+    const view = render(
+      <PlanChangeTargetDialog
+        open
+        currentPlan={currentPlan}
+        candidates={[candidates[1]]}
+        onClose={vi.fn()}
+        onSelect={onSelect}
+        onTopup={onTopup}
+        topupDisabled
+        disabled
+      />,
+    );
+    const button = screen.getByRole('button', { name: /billing.comparison.upgrade.*Max/ });
+    expect(button).toHaveProperty('disabled', true);
+    expect(button.hasAttribute('aria-pressed')).toBe(false);
+    expect(button.className).not.toContain('accent-cta');
+    const free = screen.getByRole('button', { name: 'billing.comparison.topup' });
+    expect(free).toHaveProperty('disabled', true);
+    fireEvent.click(button);
+    fireEvent.click(free);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onTopup).not.toHaveBeenCalled();
+    view.rerender(
+      <PlanChangeTargetDialog
+        open
+        currentPlan={currentPlan}
+        candidates={[]}
+        onClose={vi.fn()}
+        onSelect={onSelect}
+        onTopup={onTopup}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'billing.comparison.topup' })).toHaveProperty(
+      'disabled',
+      false,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'billing.comparison.topup' }));
+    expect(onTopup).toHaveBeenCalledOnce();
+  });
+
+  it('keeps unavailable plans visible without quoting and routes FREE to topup', () => {
+    const onSelect = vi.fn();
+    const onTopup = vi.fn();
+    render(
+      <PlanChangeTargetDialog
+        open
+        currentPlan={currentPlan}
+        candidates={[{ ...candidates[1], available: false }]}
+        onClose={vi.fn()}
+        onSelect={onSelect}
+        onTopup={onTopup}
+      />,
+    );
+    const upgrade = screen.getByRole('button', { name: 'billing.comparison.changeUnavailable' });
+    expect(upgrade).toHaveProperty('disabled', true);
+    fireEvent.click(upgrade);
+    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'billing.comparison.topup' }));
+    expect(onTopup).toHaveBeenCalledOnce();
   });
 });

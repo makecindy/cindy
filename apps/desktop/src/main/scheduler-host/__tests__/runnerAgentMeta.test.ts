@@ -29,6 +29,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: mocks.getSessionRowSnapshot,
+  getSessionFsSnapshot: mocks.getSessionRowSnapshot,
   touchUserSendInDb: mocks.touchUserSendInDb,
 }));
 
@@ -69,6 +70,8 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
   const session = {
     id: 'scheduler-session',
     agentKind: 'codex',
+    stablePermissionModeState: { mode: 'ask', generation: 0 },
+    stablePlanModeState: { enabled: false, generation: 0 },
     send: vi.fn<SendImpl>(sendImpl),
     onEvent(listener: (event: AgentEvent) => void) {
       listeners.push(listener);
@@ -147,6 +150,8 @@ function createRunnerHarness(
     getDb: () => ({}) as never,
     notifier,
     logger,
+    readAutoReviewHistory: async () => [{ clientId: 'owner', role: 'user', content: { text: 'Submit PR. Do not merge.' },
+      agentMeta: { delivery: 'turn', autoReviewUserText: 'Submit PR. Do not merge.' } }],
   });
   return { runner, logger, notifier, maker };
 }
@@ -180,7 +185,19 @@ describe('MakerScheduleRunner agentMeta automation origin', () => {
     mocks.touchUserSendInDb.mockResolvedValue(undefined);
     mocks.backfillSessionMeta.mockResolvedValue(undefined);
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: '/repo/project' });
-    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', permissionMode: 'ask', planModeEnabled: false });
+  });
+
+  it.each(['auto', 'ask', 'bypassPermissions'] as const)('cold heartbeat preserves owner permission %s without overwriting it', async (permissionMode) => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', permissionMode, planModeEnabled: true });
+    const h = createSessionHarness(acceptingSend());
+    const { runner, maker } = createRunnerHarness(h.session, {
+      sessionMeta: { sdkSessionId: 'sdk-1', workDir: '/repo/project' },
+    });
+    await fireToCompletion(runner, baseSchedule({ targetSessionId: 'scheduler-session' }), h);
+    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode, planMode: true }));
+    expect(h.session.send).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ planMode: true }));
+    expect(mocks.backfillSessionMeta).toHaveBeenCalledWith(expect.anything(), 'scheduler-session', expect.objectContaining({ permissionMode: null }), expect.anything());
   });
 
   it('heartbeat fire 注入的 user 消息带 scheduler origin 标记', async () => {
@@ -192,12 +209,14 @@ describe('MakerScheduleRunner agentMeta automation origin', () => {
 
     await fireToCompletion(runner, schedule, h);
 
+    expect(await vi.mocked(h.session.send).mock.calls[0]?.[1]?.resolveAutoReviewUserIntent?.()).toBe('Submit PR. Do not merge.');
     expect(mocks.createMessage).toHaveBeenCalledTimes(1);
     const [sessionId, body] = mocks.createMessage.mock.calls[0];
     expect(sessionId).toBe('scheduler-session');
     expect(body.role).toBe('user');
     expect(body.content).toBe('check the PR status');
     expect(body.agentMeta).toEqual({
+      autoReviewUserText: { kind: 'scheduled-continuation' },
       origin: {
         kind: 'scheduler',
         scheduleId: 'schedule-1',

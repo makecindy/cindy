@@ -1,7 +1,9 @@
 import { SHARED_REMOTE_CONTROL_FIXTURE } from '@cindy/maker-shared/fixtures';
+import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { ApiError, type ApiFetchOptions } from '@/api/client';
 import type { DeviceView, LinkAcceptPayload } from '@cindy/device-link';
 import type { MobileUser } from '@/auth/AuthContext';
+import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { MOBILE_VISUAL_MOCK_REALDATA_URL } from '@/config/env';
 import type { DeviceLinkContextValue } from '@/device-link/DeviceLinkContext';
 import type {
@@ -16,6 +18,7 @@ import type {
   RemoteTextFilePreviewResult,
 } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { markdownPreviewFixture } from '@/debug/markdownPreviewFixture';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
 export const VISUAL_MOCK_DEVICE_ID = 'cindy-visual-mock-mac';
@@ -120,6 +123,8 @@ export function visualMockDevices(): DeviceView[] {
 }
 
 export function seedVisualMockStore(): void {
+  // The startup/home-entry gate needs the same owner as the mock AuthProvider.
+  setMobileAuthOwner(visualMockUser.id);
   const seededRealData = seedRealDataStore(realDataSnapshot);
   if (seededRealData) return;
 
@@ -201,6 +206,11 @@ async function visualMockInvoke<T = unknown>(
         return realDataSession(realData, String(args[0] ?? realData.selectedSessionId ?? '')) as T;
       case 'local-db:messages:list':
         return (realData.messagesBySession[String(args[0] ?? realData.selectedSessionId ?? '')] ?? []) as T;
+      case 'local-db:messages:view': {
+        const sessionId = String(args[0] ?? realData.selectedSessionId ?? '');
+        return { version: 1, items: projectHistoryView(realData.messagesBySession[sessionId] ?? [], false),
+          hasMore: false, nextCursor: null } as T;
+      }
       case 'maker:get-pending-interactions':
         return (realData.pendingInteractionsBySession?.[String(args[0] ?? realData.selectedSessionId ?? '')] ?? []) as T;
       case 'maker:input:get-projection':
@@ -210,12 +220,20 @@ async function visualMockInvoke<T = unknown>(
     }
   }
   switch (channel) {
+    case 'maker:predict-prompt':
+      return { prompt: (args[0] as { sessionId?: string } | undefined)?.sessionId === 'visual-prompt-recommendation'
+        ? '继续跟进 PR #4670' : null } as T;
     case 'local-db:sessions:list':
       return visualMockSessions(args[0] as string | undefined) as T;
     case 'local-db:sessions:get':
       return visualMockSession(String(args[0] ?? VISUAL_MOCK_SESSION_ID)) as T;
     case 'local-db:messages:list':
       return visualMockMessages(String(args[0] ?? VISUAL_MOCK_SESSION_ID)) as T;
+    case 'local-db:messages:view': {
+      const sessionId = String(args[0] ?? VISUAL_MOCK_SESSION_ID);
+      return { version: 1, items: projectHistoryView(visualMockMessages(sessionId),
+        sessionId.includes('running')), hasMore: false, nextCursor: null } as T;
+    }
     case 'maker:get-pending-interactions':
       return visualMockPendingInteractions(String(args[0] ?? VISUAL_MOCK_SESSION_ID)) as T;
     case 'maker:input:get-projection':
@@ -386,6 +404,9 @@ function realDataProjection(snapshot: VisualRealDataSnapshot, sessionId: string)
 
 function visualMockSessions(statusFilter?: string): RemoteSession[] {
   const sessions = [
+    visualSession('visual-prompt-recommendation', '浮动提示预览', -60_000, {
+      lastTurnEndedAt: NOW - 45_000,
+    }),
     sessionFromShared(SHARED_REMOTE_CONTROL_FIXTURE.sessions.primary, {
       preview: '请检查手机版远程控制的 shared core 迁移。',
       pinnedAt: '2026-07-18T07:59:00.000Z',
@@ -683,7 +704,7 @@ function handleVisualMockFileBrowser(input: unknown): unknown {
       elapsedMs: 8,
     } satisfies FileBrowserListAllFilesResult;
   }
-  if (op === 'readFile') return visualMockReadFile();
+  if (op === 'readFile') return visualMockReadFile(input);
   if (op === 'searchCollect') {
     return {
       matches: [
@@ -734,13 +755,17 @@ function visualMockFileBrowserEntries() {
   ];
 }
 
-function visualMockReadFile(): FileBrowserReadFileResult {
+function visualMockReadFile(input: unknown): FileBrowserReadFileResult {
+  const relPath = input && typeof input === 'object' && 'relPath' in input
+    ? String(input.relPath) : 'visual-report.md';
+  const content = relPath === 'README.md' ? markdownPreviewFixture
+    : '# Next file\n\nSwipe right to return to the Markdown reading fixture.';
   return {
     ok: true,
     data: {
-      relPath: 'visual-report.md',
-      content: '# Visual mock\n\nThis file preview is served by the mobile dev-only visual mock.',
-      size: 78,
+      relPath,
+      content,
+      size: content.length,
       mtimeMs: NOW,
     },
   };

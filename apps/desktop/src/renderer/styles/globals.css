@@ -335,6 +335,11 @@ html:lang(ko) {
 [data-recommendation-active='true'] .ProseMirror > p.is-empty:first-child:only-child::before {
   content: none;
 }
+/* 首页建议悬停预览:预览由 ChatInput 的 overlay 承载,暂时隐去正文/placeholder;
+   预览不改变编辑器高度,见 ChatInput 的 promptPreviewLines。 */
+[data-prompt-preview-active='true'] .ProseMirror {
+  opacity: 0;
+}
 .ProseMirror {
   caret-color: var(--caret-accent);
 }
@@ -652,14 +657,15 @@ html:lang(ko) {
 
 /* Keep the caret and surrounding prose a consistent, readable distance from
    every composer pill. This is external spacing, independent of chip padding. */
-.ProseMirror :is(
-  [data-mention-chip],
-  [data-pasted-text-chip],
-  [data-composer-quote],
-  .ghost-cmd-pill,
-  .slash-cmd-pill,
-  .quick-start-pill
-) {
+.ProseMirror
+  :is(
+    [data-mention-chip],
+    [data-pasted-text-chip],
+    [data-composer-quote],
+    .ghost-cmd-pill,
+    .slash-cmd-pill,
+    .quick-start-pill
+  ) {
   margin-inline: 4px;
 }
 
@@ -1132,8 +1138,10 @@ body.resizing-pane [data-ghost-webview] {
 
 /* 分享选择模式会在消息 wrapper 左侧动态挂载绝对定位的选择框。该元素需要真实
    消息盒参与布局与绘制；继续使用视口外 intrinsic 占位会让长消息末尾的选择框
-   被压缩或裁切。仅让可分享消息退出隔离，常态和工具类条目继续保留渲染跳过。 */
-.msg-stream-items[data-share-selection-active] > [data-share-message-id] {
+   被压缩或裁切。伙伴消息的分享 wrapper 位于含时间分组的条目内部，也必须让
+   外层条目退出隔离；常态和工具类条目继续保留渲染跳过。 */
+.msg-stream-items[data-share-selection-active] > [data-share-message-id],
+.msg-stream-items[data-share-selection-active] > :has([data-share-message-id]) {
   content-visibility: visible;
   contain-intrinsic-size: none;
 }
@@ -1158,12 +1166,7 @@ body.resizing-pane [data-ghost-webview] {
   position: absolute;
   inset: 0;
   width: 45%;
-  background: linear-gradient(
-    100deg,
-    transparent 10%,
-    var(--text-primary) 50%,
-    transparent 90%
-  );
+  background: linear-gradient(100deg, transparent 10%, var(--text-primary) 50%, transparent 90%);
   transform: translateX(-120%);
   animation: brand-loading-sheen 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
@@ -1574,6 +1577,23 @@ body.resizing-pane [data-ghost-webview] {
   background-color: var(--msg-scrollbar-hover);
 }
 
+/* workdir-browse FileTreeView 的横向滚动条 —— 常显,不参与 `.is-scrolling` 自动隐藏
+   体系。
+   why:文件树行宽由内容决定(行 min-w-max:深层缩进 + 完整文件名/输入框),窄面板里
+   必须横滚才能看到深层目标;横向溢出没有“被截断”的视觉线索,thumb 默认透明时用户会认为
+   这里没有滚动条(2026-09-14 用户反馈「文件树缺少横向滚动条,层级过深看不见目标层级」)。
+   槽厚 12px 与全局纵向槽宽对齐,thumb 同样靠 3px 透明 border 收成可见 6px;
+   `:horizontal` 让规则只吃横向条,纵向条继续走 auto-hide。 */
+.tree-hscroll::-webkit-scrollbar:horizontal {
+  height: 12px;
+}
+.tree-hscroll::-webkit-scrollbar-thumb:horizontal {
+  background-color: var(--msg-scrollbar);
+}
+.tree-hscroll::-webkit-scrollbar-thumb:horizontal:hover {
+  background-color: var(--msg-scrollbar-hover);
+}
+
 /* F-QUEUE-DEFER · PendingQueuePanel — slim 4px scrollbar so the
    `scrollbar-gutter: stable both-edges` reserved slot is small
    (4px each side instead of 12px). Without this, the chip-bg rows
@@ -1852,12 +1872,12 @@ body.resizing-pane [data-ghost-webview] {
 
 /* FileBodyView Ctrl+F — local search highlight inside doc preview.
    Two states:
-     .doc-search-mark              → normal match (淡黄底, text inherit)
-     .doc-search-mark[data-active] → currently focused match (中黄实底 + 1px 琥珀内描边)
-   Color spec follows the GitHub Primer attention family. */
+     .doc-search-mark              → normal match
+     .doc-search-mark[data-active] → currently focused match + inset outline
+   Share the theme tokens with global find and the file editor. */
 .doc-search-mark {
-  background-color: #fff8c5; /* Primer attention-muted */
-  color: inherit;
+  background-color: hsl(var(--search-match-bg));
+  color: hsl(var(--search-match-fg));
   /* font / line-height 显式继承 —— <mark> 是 phrasing element,Chromium UA
      默认不改字号,但跨主题 / 跨 reset 时把字体属性钉在 inherit 最稳,避免
      把 code block 里那段被高亮的字渲染得跟周围尺寸不一致。 */
@@ -1867,18 +1887,12 @@ body.resizing-pane [data-ghost-webview] {
   border-radius: 2px;
 }
 .doc-search-mark[data-active] {
-  background-color: #fae17d;
+  background-color: hsl(var(--search-match-active-bg));
+  color: hsl(var(--search-match-active-fg));
   font-weight: 500;
   /* 用 inset box-shadow 模拟外框 —— 比 outline 好在不会在盒子外多画
      1px,高亮块严格等于行高,视觉上不会觉得"字变大了"。 */
-  box-shadow: inset 0 0 0 1px #d4a72c;
-}
-.dark .doc-search-mark {
-  background-color: #362d1b; /* ≈ #bb8009 @ 15% on dark bg */
-}
-.dark .doc-search-mark[data-active] {
-  background-color: #9e6a03;
-  box-shadow: inset 0 0 0 1px #d4a72c;
+  box-shadow: inset 0 0 0 1px hsl(var(--search-match-active-fg));
 }
 
 /* CodeMirror search highlight (PlaintextEditor — code 模式 + plain 模式都
@@ -1887,24 +1901,38 @@ body.resizing-pane [data-ghost-webview] {
    the active match IN ADDITION TO .cm-doc-search-match — second selector
    wins via source order, no specificity tricks needed. */
 .cm-doc-search-match {
-  background-color: #fff8c5;
+  background-color: hsl(var(--search-match-bg));
+  color: hsl(var(--search-match-fg));
   border-radius: 2px;
 }
 .cm-doc-search-active {
-  background-color: #fae17d;
+  background-color: hsl(var(--search-match-active-bg));
+  color: hsl(var(--search-match-active-fg));
   font-weight: 500;
   /* outline 而不是 inset box-shadow:CodeMirror 的 .cm-line 自己用
      box-shadow 画选区背景层,inset 会被它的层级压掉,outline 走的是
      完全独立的绘制通道,稳定可见。1px 外描边在等宽字体里几乎不会让
      字符看起来变大。 */
-  outline: 1px solid #d4a72c;
+  outline: 1px solid hsl(var(--search-match-active-fg));
 }
-.dark .cm-doc-search-match {
-  background-color: #362d1b;
+
+/* Syntax decorations may sit inside search marks. Keep their text on the
+   mark's foreground instead of repainting pale syntax colors on a gold fill. */
+.cm-editor .cm-content .cm-doc-search-match *,
+mark.doc-search-mark [class] {
+  color: inherit;
 }
-.dark .cm-doc-search-active {
-  background-color: #9e6a03;
-  outline: 1px solid #d4a72c;
+
+/* Settings search navigation briefly marks the section selected from the
+   sidebar. Reuse the existing dual-theme search tokens instead of baking a
+   light-only color into the settings surface. */
+.settings-search-target-highlight {
+  outline: 1px solid hsl(var(--search-match-active-fg));
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px hsl(var(--search-match-active-bg) / 0.28);
+  transition:
+    outline-color var(--motion-fast) var(--motion-ease-move),
+    box-shadow var(--motion-fast) var(--motion-ease-move);
 }
 
 @layer utilities {

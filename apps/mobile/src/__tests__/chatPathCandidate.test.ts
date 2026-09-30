@@ -18,6 +18,21 @@ import {
   toWorkdirRel,
 } from '@/session/chatPathCandidate';
 
+describe('remote xdt-file links', () => {
+  it.each([
+    ['xdt-file:///tmp/site/index.html', '/tmp/site/index.html'],
+    ['xdt-file:///tmp/%E4%B8%AD%E6%96%87%20a%23b.html', '/tmp/中文 a#b.html'],
+    ['xdt-file:///C:/site/index.html', 'C:/site/index.html'],
+    ['xdt-file://open?path=C%3A%5Csite%5Cindex.html', 'C:\\site\\index.html'],
+    ['xdt-file://open?path=%2Ftmp%2Fpage.html', '/tmp/page.html'],
+  ])('resolves %s to its actual remote path', (url, href) => {
+    expect(classifyChatPathLinkTarget(url)?.href).toBe(href);
+  });
+  it.each(['xdt-file://open?path=relative.html', 'xdt-file:///tmp/%QQ.html', 'xdt-file://open?path=%00', 'xdt-file://other/index.html'])('rejects malformed or relative target %s', (url) => {
+    expect(classifyChatPathLinkTarget(url)).toBeNull();
+  });
+});
+
 describe('splitChatPathLineSuffix', () => {
   it('拆 path:line 与 path:line:column', () => {
     expect(splitChatPathLineSuffix('src/App.tsx:42')).toEqual({ href: 'src/App.tsx', line: 42 });

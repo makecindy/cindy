@@ -1,10 +1,11 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
+import { Button } from '@/components/ui/button';
 import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ChevronDown,
   ChevronUp,
   FileDiff,
-  FileText,
   LoaderCircle,
   Redo2,
   Undo2,
@@ -16,6 +17,10 @@ import { useSidebarHostSessionId } from '@/features/right-sidebar/lib/sidebarHos
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
 import { resolveToolFilePath } from '@/lib/localPathResolver';
 import { toast } from '@/lib/toast';
+import { makerApiForSticky } from '@/lib/makerTransport';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { turnChangeReadApiFor } from '@/lib/gitReviewTransport';
 import { basename, cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import { isBrowserOpenablePath } from '../../../shared/browserOpenableExts';
@@ -65,7 +70,7 @@ function TurnChangeFileRow({
         onContextMenu={contextMenu.onContextMenu}
         className="flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
       >
-        <FileText size={15} className="shrink-0 text-[var(--text-secondary)]" />
+        <FileTypeIcon name={file.path} size={15} className="shrink-0 text-[var(--text-secondary)]" />
         <span className="min-w-0 flex-1 truncate text-13 text-[var(--text-primary)]">
           {file.path}
         </span>
@@ -92,9 +97,11 @@ function TurnChangeFileRow({
 }
 
 export function TurnChangesCard({
+  renderItemKey,
   sessionId,
   changeSet,
 }: {
+  renderItemKey?: string;
   sessionId: string;
   changeSet: TurnChangeSetSummary;
 }) {
@@ -104,6 +111,13 @@ export function TurnChangesCard({
   const [workspaceStateOverride, setWorkspaceStateOverride] = useState<
     TurnChangeSetSummary['workspaceState'] | null
   >(null);
+  const activeCard = useRef<string | null>(null);
+  const cardKey = JSON.stringify([sessionId, changeSet.id]);
+  activeCard.current = cardKey;
+  useEffect(() => {
+    activeCard.current = cardKey;
+    return () => { activeCard.current = null; };
+  }, [cardKey]);
   const latestWorkspaceStateRef = useRef(changeSet.workspaceState);
   latestWorkspaceStateRef.current = changeSet.workspaceState;
   const files = changeSet.files;
@@ -114,9 +128,7 @@ export function TurnChangesCard({
   const appliesCapturedSubset = changeSet.state === 'partial' && changeSet.isReversible;
 
   useEffect(() => {
-    setWorkspaceStateOverride((current) => (
-      current === changeSet.workspaceState ? null : current
-    ));
+    setWorkspaceStateOverride(null);
   }, [changeSet.workspaceState]);
 
   useEffect(() => {
@@ -137,28 +149,53 @@ export function TurnChangesCard({
   const applyTurnChange = async (): Promise<void> => {
     if (applying || !changeSet.isReversible) return;
     const action = workspaceState === 'undone' ? 'reapply' : 'undo';
+    const owner = getDataOwnerGeneration();
+    const deviceId = getStickySessionDeviceId(sessionId);
+    const current = () => activeCard.current === cardKey &&
+      isDataOwnerGenerationCurrent(owner) && getStickySessionDeviceId(sessionId) === deviceId;
+    const notifyApplied = () => toast.success(t(
+      appliesCapturedSubset
+        ? action === 'undo'
+          ? 'chat.turnChanges.undoPartialSuccess'
+          : 'chat.turnChanges.reapplyPartialSuccess'
+        : action === 'undo'
+          ? 'chat.turnChanges.undoSuccess'
+          : 'chat.turnChanges.reapplySuccess',
+    ));
     setApplying(true);
     try {
-      const result = await window.electronAPI.maker.applyTurnChangeSet(
+      const result = await makerApiForSticky(sessionId).applyTurnChangeSet(
         sessionId,
         changeSet.id,
         action,
       );
+      if (!current()) return;
       setWorkspaceStateOverride(
         result.summary.workspaceState === latestWorkspaceStateRef.current
           ? null
           : result.summary.workspaceState,
       );
-      toast.success(t(
-        appliesCapturedSubset
-          ? action === 'undo'
-            ? 'chat.turnChanges.undoPartialSuccess'
-            : 'chat.turnChanges.reapplyPartialSuccess'
-          : action === 'undo'
-            ? 'chat.turnChanges.undoSuccess'
-            : 'chat.turnChanges.reapplySuccess',
-      ));
+      notifyApplied();
     } catch (error) {
+      if (!current()) return;
+      // A lost response does not prove the host failed to write. Reconcile once;
+      // never replay the mutation. Reconnect also refreshes the cards.
+      if (deviceId) {
+        try {
+          const summaries = await turnChangeReadApiFor(deviceId).listTurnChangeSets(sessionId);
+          const summary = summaries.find((item) => item.id === changeSet.id);
+          if (current() && summary) {
+            setWorkspaceStateOverride(
+              summary.workspaceState === latestWorkspaceStateRef.current ? null : summary.workspaceState,
+            );
+            if (summary.workspaceState === (action === 'undo' ? 'undone' : 'applied')) {
+              notifyApplied();
+              return;
+            }
+          }
+        } catch { /* Reconnect refresh in useTurnChangeSets remains authoritative. */ }
+      }
+      if (!current()) return;
       const code = extractIpcError(error)?.code;
       const key = code === 'SESSION_RUNNING'
         ? 'chat.turnChanges.actionRunning'
@@ -171,12 +208,12 @@ export function TurnChangesCard({
             : 'chat.turnChanges.actionFailed';
       toast.error(t(key));
     } finally {
-      setApplying(false);
+      if (current()) setApplying(false);
     }
   };
 
   return (
-    <section className="my-1 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+    <section data-render-item-key={renderItemKey} className="my-1 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
       <div className="flex min-h-16 items-center gap-3 px-4 py-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-chip)] text-[var(--text-secondary)]">
           <FileDiff size={18} />
@@ -210,12 +247,15 @@ export function TurnChangesCard({
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {changeSet.isReversible && (
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              tone="quiet"
+              loading={applying}
               type="button"
               disabled={applying}
-              title={appliesCapturedSubset
-                ? t('chat.turnChanges.partialActionHint')
-                : undefined}
+              title={appliesCapturedSubset ? t('chat.turnChanges.partialActionHint') : undefined}
               aria-label={t(
                 appliesCapturedSubset
                   ? workspaceState === 'undone'
@@ -226,34 +266,23 @@ export function TurnChangesCard({
                     : 'chat.turnChanges.undoAria',
               )}
               onClick={() => void applyTurnChange()}
-              className={cn(
-                'flex h-8 items-center gap-1.5 rounded-lg px-2 text-13 font-medium',
-                'text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-              )}
             >
-              {applying
-                ? <LoaderCircle size={15} className="animate-spin" />
-                : workspaceState === 'undone'
-                  ? <Redo2 size={15} />
-                  : <Undo2 size={15} />}
-              {t(
-                workspaceState === 'undone'
-                  ? 'chat.turnChanges.reapply'
-                  : 'chat.turnChanges.undo',
+              {applying ? (
+                <LoaderCircle size={15} className="animate-spin" />
+              ) : workspaceState === 'undone' ? (
+                <Redo2 size={15} />
+              ) : (
+                <Undo2 size={15} />
               )}
-            </button>
+              {t(workspaceState === 'undone' ? 'chat.turnChanges.reapply' : 'chat.turnChanges.undo')}
+            </Button>
           )}
           {files.length > 0 && (
             // 零文件卡没有可展示的 diff,审查面板必然为空;这类卡只承担
             // 「有变更但未记录」的警示职责,不提供死路入口。
-            <button
-              type="button"
-              onClick={() => openReview()}
-              className="h-8 rounded-lg border border-[var(--border-default)] px-3 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]"
-            >
+            <Button variant="secondary" size="md" compact type="button" onClick={() => openReview()}>
               {t('chat.turnChanges.review')}
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -283,16 +312,16 @@ export function TurnChangesCard({
             </button>
           )}
           {expanded && omittedCount > 0 && (
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              tone="quiet"
               type="button"
               onClick={() => openReview()}
-              className={cn(
-                'flex h-8 items-center gap-1 rounded-lg px-2 text-13 text-[var(--text-secondary)]',
-                'transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
-              )}
             >
               {t('chat.turnChanges.reviewRemaining', { count: omittedCount })}
-            </button>
+            </Button>
           )}
           {expanded && files.length > MAX_VISIBLE_FILES && (
             <button

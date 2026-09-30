@@ -3,6 +3,7 @@ import { desc } from 'drizzle-orm';
 
 import { normalizeProjectKey, projectKeyComparisonKey } from '../../../shared/projectKeys.js';
 import type { ProjectAlias } from '../../../shared/projectAliases.js';
+import type { DbClient } from '../client/DbClient.js';
 import { getDbClient } from '../client/current';
 import { projectAliases } from '../schema';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate';
@@ -44,8 +45,8 @@ function broadcastProjectAliasesChanged(): void {
   }
 }
 
-export async function listProjectAliases(): Promise<ProjectAlias[]> {
-  const db = getDbClient().drizzle;
+export async function listProjectAliases(client: DbClient = getDbClient()): Promise<ProjectAlias[]> {
+  const db = client.drizzle;
   const rows = await db
     .select()
     .from(projectAliases)
@@ -57,6 +58,7 @@ export async function upsertProjectAlias(
   projectKeyRaw: unknown,
   aliasRaw: unknown,
   localPlatform: NodeJS.Platform = process.platform,
+  scope?: { client: DbClient; assertCurrent: () => void },
 ): Promise<ProjectAlias | null> {
   const projectKey = requireProjectKey(projectKeyRaw);
   const alias = sanitizeAlias(aliasRaw);
@@ -67,13 +69,15 @@ export async function upsertProjectAlias(
   const comparisonKey = foldCase
     ? (projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey)
     : projectKey;
-  const saved = await getDbClient().tx('projectAliases.replaceIdentity', {
+  scope?.assertCurrent();
+  const saved = await (scope?.client ?? getDbClient()).tx('projectAliases.replaceIdentity', {
     projectKey,
     comparisonKey,
     foldCase,
     alias,
     updatedAt: now,
   });
+  scope?.assertCurrent();
   broadcastProjectAliasesChanged();
   return saved == null
     ? null

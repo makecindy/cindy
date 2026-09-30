@@ -202,6 +202,7 @@ const schedulerImageGenerationRoutes: readonly CodexCustomProviderRoute[] = [
       authStrategy: 'none',
     },
     responseRoutingByModel: {},
+    responseEffortsByModel: {},
     credentialRevision: 1,
   },
   {
@@ -216,6 +217,7 @@ const schedulerImageGenerationRoutes: readonly CodexCustomProviderRoute[] = [
       authStrategy: 'none',
     },
     responseRoutingByModel: {},
+    responseEffortsByModel: {},
     credentialRevision: 1,
   },
 ];
@@ -702,7 +704,7 @@ describe('MakerScheduleRunner model selection', () => {
       expect(requiresModelSwitchRebuild).toHaveBeenCalledWith('gpt-5.6-sol', {
         providerId: 'mygpt',
       });
-      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
+      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session', 'runtime-refresh');
       expect(harness.closeSession.mock.invocationCallOrder[0]).toBeLessThan(
         harness.createSession.mock.invocationCallOrder[0],
       );
@@ -1368,7 +1370,7 @@ describe('MakerScheduleRunner model selection', () => {
         }),
       );
 
-      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
+      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session', 'runtime-refresh');
       expect(harness.closeSession.mock.invocationCallOrder[0]).toBeLessThan(
         harness.createSession.mock.invocationCallOrder[0],
       );
@@ -1470,7 +1472,7 @@ describe('MakerScheduleRunner model selection', () => {
         }),
       );
 
-      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
+      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session', 'runtime-refresh');
       expect(harness.closeSession.mock.invocationCallOrder[0]).toBeLessThan(
         harness.createSession.mock.invocationCallOrder[0],
       );
@@ -1561,7 +1563,7 @@ describe('MakerScheduleRunner model selection', () => {
       );
 
       expect(harness.closeSession).toHaveBeenCalledTimes(1);
-      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
+      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session', 'runtime-refresh');
       expect(harness.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ providerId: routeB!.providerId, model: 'shared-model' }),
       );
@@ -1599,7 +1601,7 @@ describe('MakerScheduleRunner model selection', () => {
         }),
       );
 
-      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
+      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session', 'runtime-refresh');
       expect(harness.createSession).toHaveBeenCalledWith(
         expect.objectContaining({ providerId: routeA.providerId, model: 'chat-model' }),
       );
@@ -1646,7 +1648,7 @@ describe('MakerScheduleRunner model selection', () => {
       );
 
       expect(harness.closeSession).toHaveBeenCalledTimes(1);
-      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
+      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session', 'runtime-refresh');
       expect(harness.closeSession).not.toHaveBeenCalledWith('unrelated-busy-codex');
       expect(harness.closeSession.mock.invocationCallOrder[0]).toBeLessThan(
         harness.createSession.mock.invocationCallOrder[0],
@@ -1718,7 +1720,7 @@ describe('MakerScheduleRunner model selection', () => {
         }),
       );
 
-      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
+      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session', 'runtime-refresh');
       expect(harness.closeSession.mock.invocationCallOrder[0]).toBeLessThan(
         harness.createSession.mock.invocationCallOrder[0],
       );

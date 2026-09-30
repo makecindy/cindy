@@ -1,9 +1,10 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { messageCacheStorage } from './messageCacheStorage';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, type MobileAuthOwnerGeneration } from '@/auth/authOwnerGeneration';
 import { MESSAGE_PAGE_SIZE } from '@/session/messagePaging';
 import type { RemoteMessage } from '@/session/types';
 
 // 「每会话最近消息」本地缓存:冷开会话时先用上次看到的消息乐观渲染,fresh listMessages 回来后
-// 对账替换。后端用 AsyncStorage(消息体放得下);key 按 (hostDeviceId, sessionId) 多设备隔离。
+// 对账替换。两端统一使用独立文件缓存(不设总量或过期淘汰);key 按 (hostDeviceId, sessionId) 多设备隔离。
 // 关键保真度目标:缓存的消息要和 fresh 尽量逐字段一致,让 store 的 remoteMessageListsEqual 能短路、
 // 不触发可见的 cached→fresh 重渲染(开会话不再"闪一下")。因此:
 //  - 保留消息的全部原始字段(不只 typed 子集),否则 store 的逐 key 比较永远不等;
@@ -37,6 +38,7 @@ let activeGlobalClear: Promise<void> | null = null;
 
 export interface SessionMessageCacheWriteAuthority {
   readonly key: string;
+  readonly owner: MobileAuthOwnerGeneration;
   readonly globalEpoch: number;
   readonly keyEpoch: number;
 }
@@ -55,7 +57,8 @@ export function isSessionMessageCacheWriteAuthorityCurrent(
   authority: SessionMessageCacheWriteAuthority | null | undefined,
 ): authority is SessionMessageCacheWriteAuthority {
   if (!authority) return false;
-  return authority.globalEpoch === globalWriteEpoch
+  return isMobileAuthOwnerCurrent(authority.owner)
+    && authority.globalEpoch === globalWriteEpoch
     && authority.keyEpoch === (keyWriteEpochs.get(authority.key) ?? 0);
 }
 
@@ -66,10 +69,13 @@ export function captureSessionMessageCacheWriteAuthority(
   // 登出全清从推进 global epoch 到 multiRemove 完成之间禁止铸造新写权。
   // 否则卸载 flush 可在 getAllKeys 已取完快照后创建新 key，并晚于删除落盘。
   if (globalClearInProgress) return null;
+  const owner = getMobileAuthOwner();
+  if (!owner.accountKey) return null;
   const key = safeStorageKey(deviceId, sessionId);
   if (!key) return null;
   return {
     key,
+    owner,
     globalEpoch: globalWriteEpoch,
     keyEpoch: keyWriteEpochs.get(key) ?? 0,
   };
@@ -88,7 +94,7 @@ export async function cacheSessionMessagesIfCurrent(
   await enqueueCacheOperation(authority.key, async () => {
     if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
     if (normalized.length === 0) {
-      await AsyncStorage.removeItem(authority.key);
+      await messageCacheStorage.removeItem(authority.key);
       return;
     }
     const payload: StoredSessionMessageCache = {
@@ -96,7 +102,7 @@ export async function cacheSessionMessagesIfCurrent(
       updatedAt: Date.now(),
       messages: normalized,
     };
-    await AsyncStorage.setItem(authority.key, JSON.stringify(payload));
+    await messageCacheStorage.setItem(authority.key, JSON.stringify(payload));
   });
 }
 
@@ -118,22 +124,20 @@ export async function getCachedSessionMessages(
   deviceId: string,
   sessionId: string,
 ): Promise<RemoteMessage[]> {
-  const key = safeStorageKey(deviceId, sessionId);
-  if (!key) return [];
-  await pendingOperations.get(key)?.catch(() => undefined);
-  const raw = await AsyncStorage.getItem(key).catch(() => null);
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    const list = isRecord(parsed) && Array.isArray((parsed as StoredSessionMessageCache).messages)
-      ? (parsed as StoredSessionMessageCache).messages
-      : Array.isArray(parsed)
-        ? parsed
-        : [];
-    return normalizeCachedMessages(list);
-  } catch {
-    return [];
-  }
+  const authority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
+  if (!authority) return [];
+  let messages: RemoteMessage[] = [];
+  // Migration is a write too: include reads in the same queue as replacement/clear.
+  await enqueueCacheOperation(authority.key, async () => {
+    if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
+    const raw = await messageCacheStorage.getItem(authority.key);
+    if (!raw || !isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
+    const parsed: unknown = JSON.parse(raw);
+    const list = isRecord(parsed) && Array.isArray(parsed.messages)
+      ? parsed.messages : Array.isArray(parsed) ? parsed : [];
+    messages = normalizeCachedMessages(list);
+  });
+  return isSessionMessageCacheWriteAuthorityCurrent(authority) ? messages : [];
 }
 
 // 写入某 (host, session) 的缓存消息;保留最新 MAX 条、剥除 content 二进制大块。
@@ -158,9 +162,7 @@ export function clearCachedSessionMessages(): Promise<void> {
   activeGlobalClear = (async () => {
     await Promise.all([...pendingOperations.values()].map((operation) =>
       operation.catch(() => undefined)));
-    const keys = await AsyncStorage.getAllKeys().catch(() => [] as readonly string[]);
-    const owned = keys.filter((key) => key.startsWith(`${STORAGE_KEY_PREFIX}.`));
-    if (owned.length > 0) await AsyncStorage.multiRemove(owned).catch(() => undefined);
+    await messageCacheStorage.clear(STORAGE_KEY_PREFIX);
     keyWriteEpochs.clear();
   })().finally(() => {
     globalClearInProgress = false;

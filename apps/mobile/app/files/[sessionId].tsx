@@ -1,3 +1,6 @@
+import { FileTypeIcon, pickFileIcon } from '@/components/FileTypeIcon';
+import { FileTypeTile } from '@/components/FileTypeTile';
+import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
 /**
  * 远程文件浏览(网格为主视图,对标 iOS Files)。
  *
@@ -7,7 +10,9 @@
  * Quick Look 预览路由。缩略图经 thumbnail op 懒加载(fileThumbnails 内存缓存)。
  */
 import * as Clipboard from 'expo-clipboard';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { ModalContentArea } from '@/platform/ModalContentArea';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { fsWatchTopic } from '@cindy/device-link';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -18,15 +23,10 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
-  Database,
   Ellipsis,
   Eye,
-  File as FileIcon,
-  FileCode,
-  FileText,
   Folder,
   History,
-  Image as ImageIcon,
   LayoutGrid,
   List as ListIcon,
   MessageSquarePlus,
@@ -35,6 +35,7 @@ import {
   X,
 } from 'lucide-react-native';
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   FlatList,
   Image,
@@ -47,7 +48,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Text, TextInput } from '@/components/AppText';
+import { navigationTitleMaxWidth } from '@/platform/chrome/navigationTitleWidth';
 import { ScreenBackButton } from '@/components/MobilePrimitives';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
+import { simpleScreenSafeAreaEdges, usesNativeStackHeader } from '@/platform/chrome/SimpleStackHeader';
+import { FileBrowserSegmentedControl } from '@/session/FileBrowserSegmentedControl';
+import { useGuardedPush } from '@/utils/useGuardedPush';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
@@ -132,7 +138,13 @@ export default function RemoteFileBrowserScreen() {
   const deviceName = readRouteString(params.deviceName) ?? deviceId;
   const relPath = readRouteString(params.relPath) ?? '';
   const router = useRouter();
-  const { width: screenWidth } = useWindowDimensions();
+  const guardedPush = useGuardedPush();
+  const systemBack = useSystemNavigationBack();
+  // iOS 普通窗口用系统导航栏(与设置、设备管理等简单页同一顶栏);Duo 侧栏窗口
+  // 继续由 SystemNavigationBack 管返回,标题留在页内 navRow;Android 自绘 navRow。
+  const nativeHeader = usesNativeStackHeader() && !systemBack;
+  const fileWindow = useAdaptiveWindow();
+  const screenWidth = fileWindow.width - fileWindow.insets.left - fileWindow.insets.right;
   const auth = useAuth();
   const { connectionIssue, openLink, status, subscribe, unsubscribe } = useDeviceLink();
   const maker = useMobileMakerTransport(deviceId);
@@ -183,8 +195,18 @@ export default function RemoteFileBrowserScreen() {
     noticeTimerRef.current = setTimeout(() => setNotice(null), NOTICE_DISMISS_MS);
   }, []);
 
+  const [lightboxCopied, setLightboxCopied] = useState(false);
+  const lightboxCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showLightboxCopied = useCallback(() => {
+    setLightboxCopied(true);
+    AccessibilityInfo.announceForAccessibility(t('files.browser.copiedPath'));
+    if (lightboxCopiedTimerRef.current) clearTimeout(lightboxCopiedTimerRef.current);
+    lightboxCopiedTimerRef.current = setTimeout(() => setLightboxCopied(false), NOTICE_DISMISS_MS);
+  }, [t]);
+
   useEffect(() => () => {
     if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    if (lightboxCopiedTimerRef.current) clearTimeout(lightboxCopiedTimerRef.current);
   }, []);
 
   // 卸载标记:长按「导出/分享」的导出轮询最长 2 分钟,退出本屏后必须中止。
@@ -244,7 +266,7 @@ export default function RemoteFileBrowserScreen() {
       });
       if (seq !== loadSeqRef.current) return;
       rawEntriesRef.current = normalizeRemoteOpDirEntries(raw);
-      storeCachedListing(workdir, relPath, rawEntriesRef.current);
+      storeCachedListing(maker.fileBrowser.cacheScope, workdir, relPath, rawEntriesRef.current);
       setItems(buildFileBrowserGridItems(rawEntriesRef.current, sortModeRef.current, Date.now()));
       setLastSyncedAt(Date.now());
     } catch (err) {
@@ -280,12 +302,12 @@ export default function RemoteFileBrowserScreen() {
   useEffect(() => {
     if (!workdir) return undefined;
     let cancelled = false;
-    const memoryCached = getCachedListingSync(workdir, relPath);
+    const memoryCached = getCachedListingSync(maker.fileBrowser.cacheScope, workdir, relPath);
     if (memoryCached) {
       rawEntriesRef.current = memoryCached;
       setItems(buildFileBrowserGridItems(memoryCached, sortModeRef.current, Date.now()));
     } else {
-      void readCachedListing(workdir, relPath).then((persisted) => {
+      void readCachedListing(maker.fileBrowser.cacheScope, workdir, relPath).then((persisted) => {
         if (cancelled || !persisted || rawEntriesRef.current.length > 0) return;
         rawEntriesRef.current = persisted;
         setItems(buildFileBrowserGridItems(persisted, sortModeRef.current, Date.now()));
@@ -306,14 +328,14 @@ export default function RemoteFileBrowserScreen() {
   }, [workdir]);
 
   const openDirectory = useCallback((target: string) => {
-    router.push({
+    guardedPush({
       pathname: '/files/[sessionId]',
       params: { sessionId, deviceId, deviceName, relPath: target },
     });
-  }, [deviceId, deviceName, router, sessionId]);
+  }, [deviceId, deviceName, guardedPush, sessionId]);
 
   const openPreview = useCallback((target: string, line?: number) => {
-    router.push({
+    guardedPush({
       pathname: '/files/preview/[sessionId]',
       params: {
         sessionId,
@@ -324,7 +346,7 @@ export default function RemoteFileBrowserScreen() {
         ...(line ? { line: String(line) } : {}),
       },
     });
-  }, [deviceId, deviceName, router, sessionId, sortMode]);
+  }, [deviceId, deviceName, guardedPush, sessionId, sortMode]);
 
   // —— 图片统一走聊天同款 ImageLightbox(目录内全部图片为一个图集)——
   const presignGet = useCallback(async (ossKey: string) => {
@@ -506,11 +528,15 @@ export default function RemoteFileBrowserScreen() {
   const lightboxActions = useMemo((): readonly ImageLightboxAction[] => [
     {
       key: 'copyPath',
-      label: t('files.browser.copyPath'),
-      icon: Copy,
+      label: lightboxCopied ? t('files.browser.copiedPath') : t('files.browser.copyPath'),
+      icon: lightboxCopied ? Check : Copy,
       onPress: (image) => {
         const rel = relPathFromGalleryKey(image.key);
-        if (rel) void Clipboard.setStringAsync(absolutePathOf(rel));
+        if (!rel) return;
+        void Clipboard.setStringAsync(absolutePathOf(rel));
+        // lightbox 盖住了页脚 notice:复制反馈就地显示在这个按钮上(同一句「已复制路径」),
+        // 与长按菜单 / 标题菜单的复制路径保持同一提示。
+        showLightboxCopied();
       },
     },
     {
@@ -533,7 +559,7 @@ export default function RemoteFileBrowserScreen() {
         });
       },
     },
-  ], [absolutePathOf, sendItemToSession, t]);
+  ], [absolutePathOf, lightboxCopied, sendItemToSession, showLightboxCopied, t]);
 
   /**
    * lightbox 圈点标注(与聊天/托盘同一套画笔):提交只投递「图源 + 矢量笔迹」
@@ -547,6 +573,9 @@ export default function RemoteFileBrowserScreen() {
         displayUri,
         strokes,
         mimeType: context.mimeType,
+        ...(context.naturalWidth && context.naturalHeight
+          ? { naturalWidth: context.naturalWidth, naturalHeight: context.naturalHeight }
+          : {}),
       });
       setLightbox(null);
       router.navigate({
@@ -725,8 +754,62 @@ export default function RemoteFileBrowserScreen() {
     />
   ), [cellWidth, maker, openItem, workdir]);
 
+  const syncing = !showConnectionBanner && (loading || status === 'connecting');
+  const { width: windowWidth } = useWindowDimensions();
+  const titleButton = (
+    <Pressable
+      accessibilityLabel={t('files.browser.a11yTitleMenu')}
+      accessibilityRole="button"
+      onPress={() => setTitleMenuOpen(true)}
+      style={({ pressed }) => [styles.titleGroup, nativeHeader && styles.titleGroupNative, pressed && styles.pressed]}
+      testID="files.titleMenuButton"
+    >
+      <Text numberOfLines={1} style={[styles.title, nativeHeader && styles.titleNative]} testID="files.title">{title}</Text>
+      {/* Same plain chevron as the home title: no chip behind it. */}
+      <ChevronDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.medium} />
+      <QuietSyncIndicator active={syncing} />
+    </Pressable>
+  );
+  // 系统顶栏只在浏览态出现;搜索态由页内搜索头接管顶部(含取消),根容器补回顶部安全区。
+  const nativeHeaderVisible = nativeHeader && !searchOpen;
+
   return (
-    <SafeAreaView style={styles.safeArea} testID="files.screen">
+    <SafeAreaView
+      edges={nativeHeaderVisible ? simpleScreenSafeAreaEdges() : undefined}
+      style={styles.safeArea}
+      testID="files.screen"
+    >
+      {nativeHeader ? (
+        <>
+          <Stack.Screen
+            options={{
+              headerShown: nativeHeaderVisible,
+              headerShadowVisible: false,
+              headerBackVisible: false,
+              headerStyle: { backgroundColor: colors.surface },
+              headerTintColor: colors.textPrimary,
+              headerTitle: () => (
+                <View style={[styles.nativeTitleWrap, { maxWidth: navigationTitleMaxWidth(windowWidth) }]} testID="files.navRow">
+                  {titleButton}
+                </View>
+              ),
+            }}
+          />
+          {nativeHeaderVisible ? (
+            <Stack.Toolbar placement="left">
+              <Stack.Toolbar.Button icon="chevron.backward" accessibilityLabel={t('shared.back')} onPress={() => goBackGuarded(router)} />
+            </Stack.Toolbar>
+          ) : null}
+          {nativeHeaderVisible ? (
+            <Stack.Toolbar placement="right">
+              <Stack.Toolbar.Button icon="magnifyingglass" accessibilityLabel={t('files.browser.a11ySearch')} onPress={() => setSearchOpen(true)} />
+              <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t('files.browser.a11yMore')} onPress={() => setTitleMenuOpen(true)} />
+            </Stack.Toolbar>
+          ) : null}
+        </>
+      ) : (
+        <SystemNavigationBack label={t('shared.back')} onPress={() => goBackGuarded(router)} />
+      )}
       {searchOpen ? (
         <SearchHeader
           loading={searchLoading}
@@ -743,42 +826,30 @@ export default function RemoteFileBrowserScreen() {
           query={query}
           workdirLabel={pathLevels[pathLevels.length - 1]?.label ?? ''}
         />
-      ) : (
+      ) : nativeHeader ? null : (
         <View style={styles.navRow} testID="files.navRow">
-          <ScreenBackButton
-            hitSlop={8}
+          {!systemBack ? <ScreenBackButton
             onPress={() => goBackGuarded(router)}
             testID="files.backButton"
-          />
-          <Pressable
-            accessibilityLabel={t('files.browser.a11yTitleMenu')}
-            onPress={() => setTitleMenuOpen(true)}
-            style={styles.titleGroup}
-            testID="files.titleMenuButton"
-          >
-            <Text numberOfLines={1} style={styles.title} testID="files.title">{title}</Text>
-            <View style={styles.titleChevronChip}>
-              <ChevronDown color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-            </View>
-            <QuietSyncIndicator active={!showConnectionBanner && (loading || status === 'connecting')} />
-          </Pressable>
+          /> : null}
+          {titleButton}
           <Pressable
             accessibilityLabel={t('files.browser.a11ySearch')}
-            hitSlop={8}
+            accessibilityRole="button"
             onPress={() => setSearchOpen(true)}
             style={({ pressed }) => [styles.navActionBtn, pressed && styles.pressed]}
             testID="files.searchButton"
           >
-            <Search color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+            <Search color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
           </Pressable>
           <Pressable
             accessibilityLabel={t('files.browser.a11yMore')}
-            hitSlop={8}
+            accessibilityRole="button"
             onPress={() => setTitleMenuOpen(true)}
             style={({ pressed }) => [styles.navActionBtn, pressed && styles.pressed]}
             testID="files.moreButton"
           >
-            <Ellipsis color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+            <Ellipsis color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
           </Pressable>
         </View>
       )}
@@ -1021,14 +1092,14 @@ function FileThumb({
     return <RealDocThumb item={item} maker={maker} workdir={workdir} />;
   }
   if (item.thumb === 'image') {
-    // 缩略图未就绪/失败(如老版本被控端)回退迷你文档页(静默,不出 loading 态)。
-    return <DocThumbCard headed={false} seed={item.name} />;
+    // 缩略图未就绪/失败(如老版本被控端)回退统一文件类型图标(静默,不出 loading 态)。
+    return <FileTypeTile name={item.name} />;
   }
-  return <GenericThumbCard name={item.name} />;
+  return <FileTypeTile name={item.name} />;
 }
 
 /** 真实内容迷你页:小文件拉首块渲成微缩文本(缓存见 fileBrowserCache);
- *  过大/失败/加载中回退抽象线条,不出 loading 态。 */
+ *  过大/失败/加载中回退统一文件类型卡片,不出 loading 态。 */
 function RealDocThumb({
   item,
   maker,
@@ -1041,7 +1112,7 @@ function RealDocThumb({
   const styles = useThemedStyles(makeStyles);
   const snippet = useDocSnippet(maker, workdir, item.relPath, item.mtimeMs, item.sizeBytes, true);
   if (!snippet) {
-    return <DocThumbCard headed={/\.(md|mdx)$/i.test(item.name)} seed={item.name} />;
+    return <FileTypeTile name={item.name} />;
   }
   return (
     <View style={styles.docThumb}>
@@ -1054,29 +1125,6 @@ function RealDocThumb({
       </Text>
     </View>
   );
-}
-
-/** 迷你文档页:抽象线条模拟首屏内容(v1 不拉取真实文本,零流量)。 */
-function DocThumbCard({ headed, seed }: { headed: boolean; seed: string }) {
-  const styles = useThemedStyles(makeStyles);
-  const hash = hashString(seed);
-  const widths = [0.86, 0.78, 0.7, 0.82, 0.62, 0.74].map(
-    (base, i) => Math.max(0.35, base - (((hash >> (i * 3)) & 7) / 40)),
-  );
-  return (
-    <View style={styles.docThumb}>
-      {headed ? <View style={styles.docHeadingBar} /> : null}
-      {widths.map((w, i) => (
-        <View key={i} style={[styles.docLine, { width: `${Math.round(w * 100)}%` }]} />
-      ))}
-    </View>
-  );
-}
-
-function GenericThumbCard({ name }: { name: string }) {
-  const { colors } = useTheme();
-  const Icon = /\.(db|sqlite3?|realm)$/i.test(name) ? Database : FileIcon;
-  return <Icon color={colors.borderStrong} size={iconSize.glyph} strokeWidth={iconStroke.thin} absoluteStrokeWidth />;
 }
 
 function ListSeparator() {
@@ -1143,54 +1191,65 @@ function SearchHeader({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const modes = [
-    ['name', t('files.browser.searchModeName')],
-    ['content', t('files.browser.searchModeContent')],
-  ] as const;
+  const modes = (['name', 'content'] as const).map((value) => {
+    const label = t(value === 'name' ? 'files.browser.searchModeName' : 'files.browser.searchModeContent');
+    return {
+      value,
+      label,
+      accessibilityLabel: t('files.browser.searchModeA11y', { mode: label }),
+      testID: `files.searchMode.${value}`,
+    };
+  });
   return (
     <View>
       <View style={styles.searchRow}>
         <View style={styles.searchField}>
-          <Search color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+          <Search color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
           <TextInput
             autoCapitalize="none"
             autoCorrect={false}
             autoFocus
             onChangeText={onChangeQuery}
             placeholder={t('files.browser.searchPlaceholder')}
-            placeholderTextColor={colors.textTertiary}
+            placeholderTextColor={colors.textPlaceholder}
             style={styles.searchInput}
             testID="files.searchInput"
             value={query}
           />
           {query ? (
-            <Pressable accessibilityLabel={t('files.browser.a11yClear')} hitSlop={8} onPress={() => onChangeQuery('')}>
+            <Pressable
+              accessibilityLabel={t('files.browser.a11yClear')}
+              accessibilityRole="button"
+              hitSlop={4}
+              onPress={() => onChangeQuery('')}
+              style={({ pressed }) => [styles.searchClearButton, pressed && styles.pressed]}
+            >
               <X color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
             </Pressable>
           ) : null}
         </View>
-        <Pressable accessibilityLabel={t('files.browser.a11yCancelSearch')} hitSlop={8} onPress={onCancel} testID="files.searchCancel">
+        <Pressable
+          accessibilityLabel={t('files.browser.a11yCancelSearch')}
+          accessibilityRole="button"
+          onPress={onCancel}
+          style={({ pressed }) => [styles.searchCancelButton, pressed && styles.pressed]}
+          testID="files.searchCancel"
+        >
           <Text style={styles.cancelText}>{t('files.browser.cancel')}</Text>
         </Pressable>
       </View>
       <View style={styles.searchModeRow}>
-        {modes.map(([value, label]) => (
-          <Pressable
-            accessibilityLabel={t('files.browser.searchModeA11y', { mode: label })}
-            key={value}
-            onPress={() => onChangeMode(value)}
-            style={[styles.searchModePill, mode === value && styles.searchModePillActive]}
-            testID={`files.searchMode.${value}`}
-          >
-            <Text style={[styles.searchModeLabel, mode === value && styles.searchModeLabelActive]}>
-              {label}
-            </Text>
-          </Pressable>
-        ))}
-        <Text style={styles.scopeHintInline}>
-          {t('files.browser.searchScope', { workdir: workdirLabel })}{loading ? t('files.browser.searching') : ''}
-        </Text>
+        <FileBrowserSegmentedControl
+          accessibilityLabel={t('files.browser.searchPlaceholder')}
+          onChange={onChangeMode}
+          options={modes}
+          testID="files.searchMode"
+          value={mode}
+        />
       </View>
+      <Text style={styles.scopeHint}>
+        {t('files.browser.searchScope', { workdir: workdirLabel })}{loading ? t('files.browser.searching') : ''}
+      </Text>
     </View>
   );
 }
@@ -1220,7 +1279,7 @@ function ContentMatchRow({
       testID={`files.contentResult.${sanitizeTestId(name)}`}
     >
       <View style={styles.listIconWrap}>
-        <FileText color={colors.textSecondary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+        <FileTypeIcon name={name} color={colors.textSecondary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
       </View>
       <View style={styles.listTextCol}>
         <Text numberOfLines={1} style={styles.listName}>
@@ -1317,6 +1376,8 @@ function TitleMenu({
   ) => (
     <Pressable
       accessibilityLabel={label}
+      accessibilityRole="button"
+      accessibilityState={{ selected: checked }}
       key={key}
       onPress={onPress}
       style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]}
@@ -1331,8 +1392,9 @@ function TitleMenu({
   );
 
   return (
-    <Modal animationType="fade" onRequestClose={onClose} transparent visible={open}>
+    <Modal supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']} animationType="fade" onRequestClose={onClose} transparent visible={open}>
       <Pressable onPress={onClose} style={styles.overlay} testID="files.titleMenuOverlay">
+        <ModalContentArea>
         <Pressable onPress={() => undefined} style={styles.titleMenuCard}>
           {levels.map((level, index) => (
             <View key={`level:${level.relPath}`}>
@@ -1371,6 +1433,7 @@ function TitleMenu({
           {row('folder.copy', t('files.browser.copyPath'), false, onCopyCurrentPath,
             <Copy color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />)}
         </Pressable>
+        </ModalContentArea>
       </Pressable>
     </Modal>
   );
@@ -1405,14 +1468,15 @@ function ContextMenu({
   ];
 
   return (
-    <Modal animationType="fade" onRequestClose={onClose} transparent visible>
+    <Modal supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']} animationType="fade" onRequestClose={onClose} transparent visible>
       <Pressable onPress={onClose} style={styles.overlayCenter} testID="files.contextMenuOverlay">
+        <ModalContentArea>
         <View style={styles.liftedCard}>
           <View style={styles.liftedThumbZone}>
             {item.kind === 'dir' ? (
               <Folder color={colors.borderStrong} fill={colors.surfaceChip} size={iconSize.glyph} strokeWidth={iconStroke.thin} absoluteStrokeWidth />
             ) : (
-              <DocThumbCard headed={/\.(md|mdx)$/i.test(item.name)} seed={item.name} />
+              <FileTypeTile name={item.name} />
             )}
           </View>
           <Text numberOfLines={1} style={styles.listName}>{item.name}</Text>
@@ -1424,6 +1488,7 @@ function ContextMenu({
               {index > 0 ? <View style={styles.menuSep} /> : null}
               <Pressable
                 accessibilityLabel={action.label}
+                accessibilityRole="button"
                 onPress={action.onPress}
                 style={({ pressed }) => [styles.contextMenuRow, pressed && styles.pressed]}
                 testID={`files.context.${action.key}`}
@@ -1434,6 +1499,7 @@ function ContextMenu({
             </View>
           ))}
         </View>
+        </ModalContentArea>
       </Pressable>
     </Modal>
   );
@@ -1442,18 +1508,7 @@ function ContextMenu({
 /* ------------------------------ 工具 ------------------------------ */
 
 function listIconFor(item: FileBrowserGridItem) {
-  if (item.kind === 'dir') return Folder;
-  if (item.thumb === 'image') return ImageIcon;
-  if (/\.(json|ya?ml|ts|tsx|js|jsx|py|rs|go|java|kt|swift|c|h|cpp|cs|sh|lua)$/i.test(item.name)) return FileCode;
-  if (item.thumb === 'doc') return FileText;
-  if (/\.(db|sqlite3?|realm)$/i.test(item.name)) return Database;
-  return FileIcon;
-}
-
-function hashString(value: string): number {
-  let hash = 5381;
-  for (let i = 0; i < value.length; i += 1) hash = ((hash << 5) + hash + value.charCodeAt(i)) >>> 0;
-  return hash;
+  return item.kind === 'dir' ? Folder : pickFileIcon(item.name);
 }
 
 function sanitizeTestId(value: string): string {
@@ -1473,49 +1528,53 @@ function readRouteString(value: unknown): string | null {
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.surface },
-  pressed: { opacity: 0.72 },
+  pressed: mobileInteractionStyles.pressed,
+  // 自绘顶栏(Android / Duo)与共享 ScreenHeader 同高同内边距,返回键落在同一位置。
   navRow: {
     alignItems: 'center',
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     gap: spacing.sm,
+    minHeight: 72,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
+    paddingVertical: spacing.sm,
   },
   navActionBtn: {
-    // 与会话头 SessionHeaderIconButton 同规格(34×34 pill),hitSlop 补足 44 热区。
     alignItems: 'center',
     borderRadius: radius.pill,
-    height: 34,
+    height: 44,
     justifyContent: 'center',
-    width: 34,
+    width: 44,
+  },
+  nativeTitleWrap: {
+    alignItems: 'center',
+    flexDirection: 'row',
   },
   titleGroup: {
     alignItems: 'center',
     flex: 1,
     flexDirection: 'row',
-    gap: spacing.xs + 2,
+    gap: spacing.sm,
     // 标题居左贴返回箭头(与页面式头的左对齐语义一致),不再居中。
     justifyContent: 'flex-start',
+    minHeight: 44,
     minWidth: 0,
+  },
+  titleGroupNative: {
+    flex: 0,
+    flexShrink: 1,
   },
   title: {
     flexShrink: 1,
     minWidth: 0,
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.semibold,
     maxWidth: '72%',
   },
-  titleChevronChip: {
-    alignItems: 'center',
-    backgroundColor: colors.surfaceChip,
-    borderRadius: radius.pill,
-    height: 20,
-    justifyContent: 'center',
-    width: 20,
-  },
+  titleNative: { maxWidth: '100%' },
   sectionRow: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -1534,21 +1593,20 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   list: { flex: 1 },
   gridContent: { paddingBottom: spacing.xl, paddingHorizontal: spacing.lg },
   gridRow: { gap: spacing.md, marginBottom: spacing.lg },
-  gridCell: { alignItems: 'center', gap: spacing.xs + 2 },
+  gridCell: { alignItems: 'center', gap: spacing.sm },
   thumbZone: { alignItems: 'center', height: 112, justifyContent: 'center', width: '100%' },
   docThumb: {
     backgroundColor: colors.surfaceElevated,
     borderColor: colors.border,
     borderRadius: 2, // 文档缩略卡刻意 2px 锐角(iOS Files 风格,ALLOWLIST 登记豁免)
     borderWidth: StyleSheet.hairlineWidth,
-    gap: 4,
+    gap: spacing.xs,
     height: 104,
-    paddingHorizontal: 8,
-    paddingVertical: 10,
+    paddingHorizontal: spacing.sm,
+    // 14 行 × 6 = 84 的微缩文本顶端对齐,底部余 4pt 留白,不裁行。
+    paddingVertical: spacing.sm,
     width: 80,
   },
-  docHeadingBar: { backgroundColor: colors.borderStrong, height: 4, width: '54%' },
-  docLine: { backgroundColor: colors.border, height: 2 },
   // 微缩真实文本:模拟 iOS Files 的文档首屏缩略;禁用系统字号缩放。
   docSnippetText: {
     color: colors.textSecondary,
@@ -1566,6 +1624,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   cellName: {
     color: colors.textPrimary,
     fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
     textAlign: 'center',
   },
@@ -1588,7 +1647,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingBottom: spacing.xs,
     paddingTop: spacing.sm,
   },
-  footerStrong: { color: colors.textPrimary, fontSize: typeScale.footnote, fontWeight: fontWeight.semibold },
+  footerStrong: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.semibold },
   footerText: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
@@ -1603,53 +1662,45 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
+  // 与首页搜索条同一外观:胶囊 + 抬层底 + 1px 描边,44 高;输入字号走次级正文 15。
   searchField: {
     alignItems: 'center',
-    backgroundColor: colors.surfaceChip,
-    borderRadius: radius.container,
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
     flex: 1,
     flexDirection: 'row',
     gap: spacing.sm,
-    minHeight: 36,
-    paddingHorizontal: spacing.md,
+    minHeight: 44,
+    paddingLeft: spacing.lg,
+    paddingRight: spacing.xs,
   },
   searchInput: {
     color: colors.textPrimary,
     flex: 1,
-    fontSize: typeScale.code,
+    fontSize: typeScale.bodySmall,
+    minWidth: 0,
     paddingVertical: spacing.sm,
   },
-  cancelText: { color: colors.textPrimary, fontSize: typeScale.body },
-  scopeHint: {
-    color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    paddingBottom: spacing.sm,
-    paddingHorizontal: spacing.lg,
-  },
-  searchModeRow: {
+  searchClearButton: {
     alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.sm,
-    paddingBottom: spacing.sm,
-    paddingHorizontal: spacing.lg,
-  },
-  searchModePill: {
-    alignItems: 'center',
-    borderColor: colors.border,
-    borderRadius: radius.pill,
-    borderWidth: StyleSheet.hairlineWidth,
+    height: 36,
     justifyContent: 'center',
-    minHeight: 28,
-    paddingHorizontal: spacing.md,
+    width: 36,
   },
-  searchModePillActive: { backgroundColor: colors.surfaceChip, borderColor: colors.borderStrong },
-  searchModeLabel: { color: colors.textSecondary, fontSize: typeScale.caption },
-  searchModeLabelActive: { color: colors.textPrimary, fontWeight: fontWeight.medium },
-  scopeHintInline: {
-    color: colors.textTertiary,
-    flex: 1,
-    fontSize: typeScale.caption,
-    textAlign: 'right',
+  searchCancelButton: { justifyContent: 'center', minHeight: 44 },
+  cancelText: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
+  searchModeRow: {
+    paddingBottom: spacing.sm,
+    paddingHorizontal: spacing.lg,
+  },
+  scopeHint: {
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    paddingBottom: spacing.sm,
+    paddingHorizontal: spacing.lg,
   },
   contentMatchRow: {
     alignItems: 'center',
@@ -1659,7 +1710,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.xs,
   },
-  contentMatchLineNo: { color: colors.textTertiary, fontSize: typeScale.footnote },
+  contentMatchLineNo: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   contentMatchLineText: {
     color: colors.textSecondary,
     fontFamily: monoFont,
@@ -1670,7 +1721,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   searchHint: {
     color: colors.textSecondary,
     fontSize: typeScale.footnote,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.caption,
     padding: spacing.lg,
     textAlign: 'center',
   },
@@ -1686,10 +1737,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderColor: colors.border,
     borderRadius: 2, // 搜索结果迷你缩略卡同款刻意 2px 锐角(iOS Files 风格,ALLOWLIST 登记豁免)
     borderWidth: StyleSheet.hairlineWidth,
-    gap: 3,
+    gap: spacing.xs,
     height: 36,
-    paddingHorizontal: 4,
-    paddingVertical: 5,
+    padding: spacing.xs,
     width: 28,
   },
   miniThumbLine: { backgroundColor: colors.border, height: 1.5 },
@@ -1706,8 +1756,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.container,
     borderWidth: StyleSheet.hairlineWidth,
-    marginHorizontal: spacing.xxl * 2 + spacing.sm,
-    marginTop: 96,
+    width: '100%',
+    maxWidth: 360,
     overflow: 'hidden',
   },
   menuRow: {
@@ -1718,7 +1768,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   menuCheckSlot: { alignItems: 'center', justifyContent: 'center', width: 16 },
-  menuLabel: { color: colors.textPrimary, flex: 1, fontSize: typeScale.body, fontWeight: fontWeight.medium },
+  menuLabel: { color: colors.textPrimary, flex: 1, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
   menuLabelDim: { color: colors.textSecondary },
   menuSep: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth },
   menuGroupSep: { backgroundColor: colors.surfaceChip, height: 6 },

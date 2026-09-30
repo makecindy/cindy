@@ -1,3 +1,4 @@
+import { projectQuietScheduledOutput } from '../scheduler-host/silent-output.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 import { prepareSessionEvent, type PrepareSessionEventDeps } from './sessionEventPreparation.js';
 import {
@@ -39,6 +40,14 @@ export function handleSessionEvent(
 ): void {
   const prepared = prepareSessionEvent(deps, session, event);
   if (!prepared) return;
+  const projected = projectQuietScheduledOutput(prepared.event);
+  if (!projected) return;
+  if (projected !== prepared.event) {
+    prepared.event = projected;
+    prepared.attributedEvent = projectQuietScheduledOutput(prepared.attributedEvent) ?? prepared.attributedEvent;
+    // Project the already-redacted event independently; never copy raw fields back into it.
+    prepared.broadcastEvent = projectQuietScheduledOutput(prepared.broadcastEvent) ?? prepared.broadcastEvent;
+  }
   const stream = persistSessionStreamEvent(deps, session, prepared);
   const delivery = deliverSessionEvent(deps, session, prepared, stream);
   const terminal = finishSessionTerminalEvent(deps, session, prepared, delivery);

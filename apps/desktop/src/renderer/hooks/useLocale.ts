@@ -23,11 +23,10 @@ import { createElement } from 'react';
 
 import {
   i18n,
-  DEFAULT_LOCALE,
-  SUPPORTED_LOCALES,
   type LocalePreference,
   type SupportedLocale,
 } from '@/i18n';
+import { readStoredLocale, writeStoredLocale, effectiveOf, getEffectiveLocale } from '@/lib/localePreference';
 
 interface LocaleContextValue {
   /** 用户的偏好选择 (含 'system')。 */
@@ -38,36 +37,7 @@ interface LocaleContextValue {
   setLocale: (next: LocalePreference) => void;
 }
 
-const STORAGE_KEY = 'language';
 const LocaleContext = createContext<LocaleContextValue | undefined>(undefined);
-
-function isLocalePreference(v: string): v is LocalePreference {
-  if (v === 'system') return true;
-  return (SUPPORTED_LOCALES as readonly string[]).includes(v);
-}
-
-function readStoredLocale(): LocalePreference {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw && isLocalePreference(raw)) return raw;
-  } catch {
-    // localStorage 不可用 (例如 SSR / 沙箱) 时静默回退
-  }
-  return 'system';
-}
-
-function detectSystemLocale(): SupportedLocale {
-  if (typeof window === 'undefined') return DEFAULT_LOCALE;
-  const locale = window.electronAPI?.preferredSystemLocale;
-  return typeof locale === 'string' && (SUPPORTED_LOCALES as readonly string[]).includes(locale)
-    ? (locale as SupportedLocale)
-    : DEFAULT_LOCALE;
-}
-
-function effectiveOf(pref: LocalePreference): SupportedLocale {
-  if (pref === 'system') return detectSystemLocale();
-  return pref;
-}
 
 function syncApplicationMenuLocale(loc: SupportedLocale): void {
   if (typeof window === 'undefined') return;
@@ -93,24 +63,18 @@ function applyLocale(loc: SupportedLocale): void {
  * in the user's selected language.
  */
 export function bootstrapInitialLocale(): SupportedLocale {
-  const effectiveLocale = effectiveOf(readStoredLocale());
+  const effectiveLocale = getEffectiveLocale();
   applyLocale(effectiveLocale);
   return effectiveLocale;
 }
 
 export function LocaleProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<LocalePreference>(readStoredLocale);
-  const [effectiveLocale, setEffectiveLocale] = useState<SupportedLocale>(() =>
-    effectiveOf(readStoredLocale()),
-  );
+  const [effectiveLocale, setEffectiveLocale] = useState<SupportedLocale>(getEffectiveLocale);
 
   const setLocale = useCallback((next: LocalePreference) => {
     setLocaleState(next);
-    try {
-      localStorage.setItem(STORAGE_KEY, next);
-    } catch {
-      // 持久化失败不影响当前会话切换
-    }
+    writeStoredLocale(next);
     const eff = effectiveOf(next);
     setEffectiveLocale(eff);
     applyLocale(eff);

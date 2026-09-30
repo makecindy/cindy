@@ -22,7 +22,7 @@
 
 import { useCallback } from 'react';
 import { flushSync } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { useSidebarNavigate } from '../sidebar/sidebarNavigation';
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
@@ -49,7 +49,7 @@ export interface RunSessionActionOptions {
 }
 
 export function useSessionLifecycleActions(options?: { includeArchived?: ListStatusFilter }) {
-  const navigate = useNavigate();
+  const navigate = useSidebarNavigate();
   const { t } = useTranslation();
   // patchLocal / refreshSessions 转发到 sessionsStore 模块级单例，
   // 与调用方组件里的 useCCSessions 实例共享同一份 cache。

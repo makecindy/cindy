@@ -90,6 +90,7 @@ CREATE TABLE sessions (
   source TEXT NOT NULL DEFAULT 'desktop',
   im_bot_context_id TEXT,
   im_user_id TEXT,
+  im_default_route TEXT,
   remote_host_id TEXT,
   active_turn_started_at INTEGER,
   last_turn_ended_at INTEGER,
@@ -104,6 +105,20 @@ CREATE TABLE sessions (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE shared_task_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+  shared_task_id TEXT NOT NULL,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  terminal INTEGER NOT NULL,
+  snapshot TEXT,
+  recorded_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX shared_task_events_revision_idx
+  ON shared_task_events (shared_task_id, kind, revision);
+CREATE INDEX shared_task_events_session_idx
+  ON shared_task_events (session_id, id);
 CREATE TABLE orca_teams (
   id TEXT PRIMARY KEY,
   lead_session_id TEXT NOT NULL,
@@ -1197,6 +1212,34 @@ describe('db worker tx handlers', () => {
     },
   );
 
+  it.each([false, true])(
+    'rewind.commit refuses to mutate when the /clear generation has changed (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        await seedSession(client, 's1');
+        await client.exec(
+          'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)',
+          ['m1', 'c1', 's1', 'user', 'before', 100, 'm2', 'c2', 's1', 'user', 'after-clear', 400],
+        );
+        await client.exec('UPDATE sessions SET cleared_at = ? WHERE id = ?', [250, 's1']);
+
+        await expect(
+          client.tx('rewind.commit', {
+            sessionId: 's1',
+            targetCreatedAt: 100,
+            expectedClearedAt: null,
+            now: 999,
+          }),
+        ).rejects.toThrow(/CLEAR_GENERATION_CHANGED|clear-boundary changed/i);
+
+        await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual([
+          { id: 'm1', rewind_at: null },
+          { id: 'm2', rewind_at: null },
+        ]);
+      }, { useInlineWorker });
+    },
+  );
+
   it('rewind.commit uses target message id to avoid same-timestamp over-delete', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');
@@ -1765,6 +1808,34 @@ describe('db worker tx handlers', () => {
             { id: 'bot', status: 'active' },
             { id: 'regular', status: 'active' },
           ]);
+        },
+        { useInlineWorker },
+      );
+    },
+  );
+
+  it.each([false, true])(
+    'sessions.setTerminalStatus commits the local-close fence atomically (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(
+        async (client) => {
+          await seedSession(client, 'terminal');
+          await client.exec(
+            `INSERT INTO shared_task_events (shared_task_id, session_id, revision, kind, terminal, snapshot, recorded_at)
+             VALUES (?, ?, 1, 'authority', 0, ?, ?)`,
+            ['share-terminal', 'terminal', JSON.stringify({ sharedTaskId: 'share-terminal' }), Date.now()],
+          );
+          await expect(client.tx('sessions.setTerminalStatus', {
+            sessionId: 'terminal',
+            status: 'archived',
+          })).resolves.toEqual(expect.objectContaining({ sessionId: 'terminal', status: 'archived' }));
+          await expect(client.query('SELECT status FROM sessions WHERE id = ?', ['terminal']))
+            .resolves.toEqual([{ status: 'archived' }]);
+          await expect(client.query(
+            `SELECT terminal FROM shared_task_events
+             WHERE shared_task_id = ? AND kind = 'local-close' AND revision = 0`,
+            ['share-terminal'],
+          )).resolves.toEqual([{ terminal: 1 }]);
         },
         { useInlineWorker },
       );
@@ -2820,6 +2891,11 @@ describe('db worker tx handlers', () => {
            channel, bot_context_id, user_id, scope_key, target_session_id, attached_at
          ) VALUES ('telegram', 'bot', 'user', '', 'telegram-old', 100)`,
       );
+      await client.exec(
+        `INSERT INTO shared_task_events (
+           shared_task_id, session_id, revision, kind, terminal, recorded_at
+         ) VALUES ('shared-old', 'telegram-old', 1, 'authority', 0, 400)`,
+      );
 
       const result = await client.tx('im.rotateSession', {
         previousSessionId: 'telegram-old',
@@ -2841,6 +2917,7 @@ describe('db worker tx handlers', () => {
           fastMode: false,
           agentKind: 'pi',
           providerId: 'xai',
+          imDefaultRoute: 'default-route-record',
           source: 'telegram',
           imBotContextId: 'bot',
           imUserId: 'user',
@@ -2851,7 +2928,7 @@ describe('db worker tx handlers', () => {
       expect(result).toEqual({ previousStatus: 'active' });
       await expect(
         client.query(
-          `SELECT id, status, im_bot_context_id, im_user_id
+          `SELECT id, status, im_bot_context_id, im_user_id, im_default_route
            FROM sessions WHERE id IN ('telegram-old', 'telegram-new') ORDER BY id`,
         ),
       ).resolves.toEqual([
@@ -2860,15 +2937,40 @@ describe('db worker tx handlers', () => {
           status: 'active',
           im_bot_context_id: 'bot',
           im_user_id: 'user',
+          im_default_route: 'default-route-record',
         },
         {
           id: 'telegram-old',
           status: 'archived',
           im_bot_context_id: null,
           im_user_id: null,
+          im_default_route: null,
         },
       ]);
       await expect(client.query('SELECT * FROM im_bindings')).resolves.toEqual([]);
+      await expect(
+        client.query(
+          `SELECT shared_task_id, session_id, revision, kind, terminal, recorded_at
+             FROM shared_task_events ORDER BY id`,
+        ),
+      ).resolves.toEqual([
+        {
+          shared_task_id: 'shared-old',
+          session_id: 'telegram-old',
+          revision: 1,
+          kind: 'authority',
+          terminal: 0,
+          recorded_at: 400,
+        },
+        {
+          shared_task_id: 'shared-old',
+          session_id: 'telegram-old',
+          revision: 0,
+          kind: 'local-close',
+          terminal: 1,
+          recorded_at: 500,
+        },
+      ]);
     });
   });
 

@@ -37,6 +37,7 @@ import {
 import {
   buildOAuthReturnAction,
   getGhostOAuthResultCopy,
+  getRemoteOAuthCallbackCopy,
   getOAuthNeutralResultCopy,
   getProviderOAuthResultCopy,
   type OAuthResultPageLang,
@@ -76,6 +77,7 @@ function collectEntries(): { locale: string; key: string; value: string }[] {
   };
 
   for (const lang of LANGS) {
+    for (const [key, value] of Object.entries(getRemoteOAuthCallbackCopy(lang))) push(lang, `remote.${key}`, value);
     const provider = getProviderOAuthResultCopy(lang, PROVIDER, BRAND);
     for (const [k, v] of Object.entries(provider)) {
       if (typeof v === 'string') push(lang, `provider.${k}`, v);

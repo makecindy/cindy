@@ -1,7 +1,12 @@
 export * from './base-agent.js';
 // toSdkModelString: host 侧标题 oneShot 需要把 catalog model id 还原成 Anthropic wire 串
 // (claude-haiku-4-5 → claude-haiku-4-5-20251001),复用 SSoT 映射,避免在 host 硬编码 dated id。
-export { ClaudeCodeAgent, toSdkModelString, setClaudeSupportedModelsListener } from './claude-code/index.js';
+export {
+  ClaudeCodeAgent,
+  toSdkModelString,
+  setClaudeSupportedModelsListener,
+  setClaudeRateLimitInfoListener,
+} from './claude-code/index.js';
 export type {
   ClaudeSubagentModelAccessResult,
   ClaudeSubagentModelAccessStatus,
@@ -28,6 +33,7 @@ export {
 // host 在 boot 阶段需要的 env 守卫(详见 claude-code/env-builder.ts 注释)
 export {
   SENSITIVE_ANTHROPIC_ENV_KEYS,
+  cleanProcessEnv,
   stripSensitiveAnthropicEnv,
 } from './claude-code/env-builder.js';
 // host 配置 LLM-context 图片预缩 resizer (注入 logger / 调阈值)
@@ -95,7 +101,11 @@ export {
   autoReviewRetryBudgetMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   extractAutoReviewUserIntent,
+  resolveAutoReviewDecision,
+  annotatePermissionRequestForUnavailableReview,
   appendAutoReviewUserIntent,
+  normalizeAutoReviewUserIntent,
+  type AutoReviewUserIntent,
   getAutoReviewActionTextLength,
   getAutoReviewDelegateHardCeilingMs,
   isAutoReviewConfirmUndeliveredNotice,
@@ -109,6 +119,7 @@ export {
   type AutoReviewTimeoutPolicy,
 } from './shared/auto-review-decision.js';
 export { toolAutoReviewAction } from './shared/auto-review-decision.js';
+export { AUTO_REVIEW_CONTINUATION_POLICY } from './shared/continuation-policy.js';
 export type { ReviewableAction } from './shared/auto-review.js';
 export {
   ORCA_NESTED_REPORT_DENIAL_REASON,

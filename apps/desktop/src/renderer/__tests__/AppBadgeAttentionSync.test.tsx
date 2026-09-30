@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   sessions: ['a', 'b', 'c'].map((id) => ({ id, status: 'active' })),
   history: null as { id: string; status: string }[] | null,
-  remoteSessions: [] as { id: string; status: string }[],
+  remoteSessions: [] as { id: string; status: string; deviceLinkDeviceId?: string }[],
   attention: new Map<string, string>([
     ['a', 'done'],
     ['b', 'done'],
@@ -20,8 +20,17 @@ const state = vi.hoisted(() => ({
   isLoading: false,
   publish: vi.fn().mockResolvedValue(undefined),
 }));
+const botState = vi.hoisted(() => ({ bots: [] as any[], unread: {} as Record<string, number>, groups: [] as any[], remote: [] as any[] }));
+vi.mock('@/features/bots/useBotUnreadSync', () => ({ useBotUnreadSync: () => {} }));
+vi.mock('@/features/bots/botStore', () => ({ useBotProfiles: () => botState.bots, useBotUnreadCounts: () => botState.unread }));
+vi.mock('@/features/bots/botGroupStore', () => ({ useBotGroupList: () => ({ groups: botState.groups }) }));
+vi.mock('@/features/bots/useRemoteBots', () => ({ useRemoteBotSync: () => {}, useRemoteBots: () => botState.remote }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({}) }));
-vi.mock('@/contexts/dataOwnerGeneration', () => ({ getDataOwnerGeneration: () => state.owner }));
+vi.mock('@/contexts/dataOwnerGeneration', () => ({
+  getDataOwnerGeneration: () => state.owner,
+  isDataOwnerGenerationCurrent: (owner: typeof state.owner) =>
+    owner.dataOwnerId === state.owner.dataOwnerId && owner.generation === state.owner.generation,
+}));
 vi.mock('@/lib/sessionStartingStore', () => ({ useStartingSessionIds: () => state.starting }));
 vi.mock('@/lib/sessionBackgroundActivityStore', () => ({
   useBackgroundActivitySessionIds: () => state.background,
@@ -41,15 +50,11 @@ vi.mock('@/hooks/useCCSessions', () => ({
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   useRemoteProjectSessions: () => state.remoteSessions,
-  useRemoteScheduleIndex: () => state.empty,
 }));
 vi.mock('@/features/cc-agent/hooks/useAutomationScheduleSessionIndex', () => ({
   usePublishedAutomationScheduleSessionIndex: () => state.empty,
 }));
-vi.mock('@/features/device-link/remoteSessionActivityStore', () => ({
-  getRemoteSessionActivity: () => undefined,
-  useRemoteSessionActivityRevision: () => 0,
-}));
+vi.mock('@/features/device-link/remoteSessionActivityStore', () => ({}));
 vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: { subscribeAll: () => () => {}, getRunningSnapshot: () => state.running },
 }));
@@ -62,6 +67,7 @@ import { useSessionDisplayRunningState } from '../features/cc-agent/hooks/useSes
 
 afterEach(() => {
   cleanup();
+  botState.bots = []; botState.unread = {}; botState.groups = []; botState.remote = [];
   vi.unstubAllGlobals();
   state.publish.mockClear();
   state.isLoading = false;
@@ -93,9 +99,11 @@ describe('app badge projection lifecycle', () => {
     expect(projection.sessionIds).toEqual(expect.arrayContaining(['a', 'b', 'c', 'archived-0']));
   });
 
-  it('includes remote leads when projecting active workers', () => {
+  it('keeps remote IDs in the projection but excludes remote attention from the badge', () => {
     vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish });
-    state.remoteSessions = [{ id: 'remote-lead', status: 'active' }];
+    state.remoteSessions = [
+      { id: 'remote-lead', status: 'active', deviceLinkDeviceId: 'device-a' },
+    ];
     state.attention.set('remote-lead', 'done');
     state.workers = new Map([['remote-lead', new Set(['remote-worker'])]]);
     state.starting = new Set(['remote-worker']);
@@ -105,7 +113,7 @@ describe('app badge projection lifecycle', () => {
     );
     state.starting = new Set();
     view.rerender(<AppBadgeAttentionSync />);
-    expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 4 }));
+    expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 3 }));
   });
 
   it('tracks starting, background and worker activity through their transitions', () => {
@@ -184,4 +192,20 @@ describe('app badge projection lifecycle', () => {
     view.rerender(<AppBadgeAttentionSync />);
     expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 3 }));
   });
+});
+
+it('maps each unread chat once and fences all Bot lanes out of event-backed Dock attention', () => {
+  vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish });
+  botState.bots = [
+    { id: 'bot', status: 'active', sessions: [{ id: 'canonical' }, { id: 'group-lane' }] },
+    { id: 'hidden', hiddenAt: 100, sessions: [{ id: 'hidden-chat' }] },
+    { id: 'archived', status: 'archived', sessions: [{ id: 'old-chat' }] },
+  ];
+  botState.unread = { bot: 8, hidden: 3, archived: 2 };
+  const view = render(<AppBadgeAttentionSync />);
+  expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 4,
+    sessionIds: expect.arrayContaining(['canonical', 'group-lane', 'hidden-chat', 'old-chat']) }));
+  botState.unread = {};
+  view.rerender(<AppBadgeAttentionSync />);
+  expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 3 }));
 });

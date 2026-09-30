@@ -3,11 +3,14 @@ export function getVisibleSidebarSessionIds(root?: Document | Element | null): s
   const queryRoot = root ?? document;
   const ids: string[] = [];
   const seen = new Set<string>();
+  // Local to this synchronous scan: shared ancestors are checked once, and no
+  // visibility result survives a DOM/style change between scans.
+  const styleVisibility = new Map<HTMLElement, boolean>();
   const coveringAncestors = findSearchOverlayCoveringAncestors(queryRoot);
   Array.from(
     queryRoot.querySelectorAll<HTMLElement>('[data-sidebar-session-row="true"][data-session-id]'),
   )
-    .filter((node) => isRenderedVisible(node, coveringAncestors))
+    .filter((node) => isRenderedVisible(node, coveringAncestors, styleVisibility))
     .sort(compareSidebarRowOrder)
     .forEach((node) => {
       const id = node.dataset.sessionId;
@@ -51,7 +54,11 @@ function findSearchOverlayCoveringAncestors(queryRoot: Document | Element): Elem
   return ancestors;
 }
 
-function isRenderedVisible(node: HTMLElement, coveringAncestors: readonly Element[]): boolean {
+function isRenderedVisible(
+  node: HTMLElement,
+  coveringAncestors: readonly Element[],
+  styleVisibility: Map<HTMLElement, boolean>,
+): boolean {
   if (isCoveredBySearchOverlay(node, coveringAncestors)) return false;
   if (
     typeof node.closest === 'function' &&
@@ -59,22 +66,23 @@ function isRenderedVisible(node: HTMLElement, coveringAncestors: readonly Elemen
   ) {
     return false;
   }
-  const view = node.ownerDocument?.defaultView;
-  for (let current: HTMLElement | null = node; current != null; current = current.parentElement) {
-    if (current.hasAttribute?.('hidden')) return false;
+  return hasVisibleStyleChain(node, styleVisibility);
+}
 
-    const style = view?.getComputedStyle?.(current);
-    if (!style) continue;
-    if (
-      style.display === 'none' ||
-      style.visibility === 'hidden' ||
-      style.visibility === 'collapse'
-    ) {
-      return false;
-    }
-    if (style.opacity !== '' && Number(style.opacity) === 0) return false;
-  }
-  return true;
+function hasVisibleStyleChain(node: HTMLElement, cache: Map<HTMLElement, boolean>): boolean {
+  const cached = cache.get(node);
+  if (cached !== undefined) return cached;
+  const style = node.ownerDocument?.defaultView?.getComputedStyle?.(node);
+  const visible =
+    !node.hasAttribute?.('hidden') &&
+    (!style ||
+      (style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        style.visibility !== 'collapse' &&
+        (style.opacity === '' || Number(style.opacity) !== 0))) &&
+    (!node.parentElement || hasVisibleStyleChain(node.parentElement, cache));
+  cache.set(node, visible);
+  return visible;
 }
 
 /** Sidebar search sits on top of the real list without hiding it. */

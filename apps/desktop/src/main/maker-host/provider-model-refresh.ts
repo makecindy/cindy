@@ -7,6 +7,23 @@
 
 import type { BuiltinRefreshableProviderId } from '../../shared/providerModelRefresh.js';
 
+/** Refresh public definitions first without carrying an account request across an owner switch. */
+export async function refreshModelsWithCatalog<T>(deps: {
+  refreshCatalog(): Promise<unknown>;
+  refreshModels(): Promise<T>;
+  getScopeKey(): unknown;
+}): Promise<T> {
+  const scope = deps.getScopeKey();
+  const assertCurrent = (): void => {
+    if (deps.getScopeKey() !== scope) throw new Error('Account changed during model discovery');
+  };
+  await deps.refreshCatalog();
+  assertCurrent();
+  const result = await deps.refreshModels();
+  assertCurrent();
+  return result;
+}
+
 export interface BuiltinProviderModelRefreshDeps {
   refreshXd(): Promise<void>;
   refreshAnthropic(): Promise<boolean>;

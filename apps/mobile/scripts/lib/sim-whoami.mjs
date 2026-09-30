@@ -135,6 +135,34 @@ export function classifySimMetroListener({ cwd, source, targetWorktree, platform
 }
 
 /**
+ * @typedef {object} SimMetroIdentity
+ * @property {{ confirmed: boolean, isTarget?: boolean } | null} [listener]
+ * @property {string | null} [currentSource]
+ * @property {string | null} [runningSource]
+ * @property {string} [currentRegion]
+ * @property {string | null} [runningRegion]
+ * @property {string} [currentEnvFingerprint]
+ * @property {string | null} [runningEnvFingerprint]
+ * @property {boolean} [envChanged]
+ */
+/**
+ * Shared freshness verdict. Missing evidence must never count as a match.
+ * @param {SimMetroIdentity} [input]
+ */
+export function validateSimMetroIdentity({
+  listener, currentSource, runningSource, currentRegion, runningRegion,
+  currentEnvFingerprint, runningEnvFingerprint, envChanged = false,
+} = {}) {
+  let code = 'target-fresh';
+  if (!listener?.confirmed) code = 'occupied-unknown';
+  else if (!listener.isTarget) code = 'occupied-foreign';
+  else if (!currentSource || runningSource !== currentSource) code = 'target-stale';
+  else if (currentRegion !== undefined && runningRegion !== currentRegion) code = 'target-region-stale';
+  else if (envChanged || (currentEnvFingerprint !== undefined && runningEnvFingerprint !== currentEnvFingerprint)) code = 'target-env-stale';
+  return { healthy: code === 'target-fresh', code };
+}
+
+/**
  * Decide whether sim:start should reuse, restart, or refuse the occupant on 8081.
  *
  * `--takeover` may stop a confirmed Cindy Metro (cwd ends with /apps/mobile and
@@ -142,6 +170,7 @@ export function classifySimMetroListener({ cwd, source, targetWorktree, platform
  * worktree's live git fingerprint to still match the running Metro. A missing
  * worktree is an orphan Metro and is also eligible. Unknown occupants stay
  * fail-closed even with `--takeover`.
+ * @param {SimMetroIdentity & { port?: number, cwd?: string | null, takeover?: boolean, listenerWorktreeExists?: boolean }} [input]
  */
 export function resolveSimMetroHandoff({
   port = 8081,
@@ -158,6 +187,8 @@ export function resolveSimMetroHandoff({
   listenerWorktreeExists = false,
 } = {}) {
   const occupant = cwd || "(未知进程)";
+  const identity = validateSimMetroIdentity({ listener, currentSource, runningSource,
+    currentRegion, runningRegion, currentEnvFingerprint, runningEnvFingerprint, envChanged });
 
   if (!listener?.confirmed) {
     return {
@@ -172,10 +203,9 @@ export function resolveSimMetroHandoff({
   }
 
   if (listener.isTarget) {
-    if (runningSource === currentSource) {
-      const regionChanged = currentRegion !== undefined && runningRegion !== currentRegion;
-      const environmentChanged = currentEnvFingerprint !== undefined
-        && runningEnvFingerprint !== currentEnvFingerprint;
+    if (identity.code !== "target-stale") {
+      const regionChanged = identity.code === "target-region-stale";
+      const environmentChanged = identity.code === "target-env-stale";
       if ((envChanged || regionChanged || environmentChanged) && !takeover) {
         return {
           action: 'refuse',

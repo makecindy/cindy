@@ -12,6 +12,8 @@ import type { ProviderView } from '@cindy/model-providers/registry';
 /** PROVIDER_LIST 隧道回包:目录 + 被控端「模型显示/隐藏」override 快照(旧被控端无)。 */
 export interface DeviceProvidersPayload {
   providers: ProviderView[];
+  /** Host-owned display order; absent on older hosts. */
+  providerOrder?: string[];
   /** key = `${agent}:${providerId}:${modelId}`;undefined = 旧被控端,调用方不过滤。 */
   modelVisibilityOverrides?: Record<string, boolean>;
 }
@@ -44,7 +46,24 @@ async function requestDeviceProviders(
 ): Promise<DeviceProvidersPayload> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await fetcher();
+      const payload = await fetcher();
+      if (!Array.isArray(payload.providerOrder)) return payload;
+      // Match Desktop: explicitly ordered ids first, new ids append in catalog order.
+      const byId = new Map(payload.providers.map(provider => [provider.id, provider]));
+      const providers: ProviderView[] = [];
+      const seen = new Set<string>();
+      for (const id of payload.providerOrder) {
+        const provider = byId.get(id);
+        if (!provider || seen.has(id)) continue;
+        seen.add(id);
+        providers.push(provider);
+      }
+      for (const provider of payload.providers) {
+        if (seen.has(provider.id)) continue;
+        seen.add(provider.id);
+        providers.push(provider);
+      }
+      return { ...payload, providers };
     } catch (error) {
       if (!isDeviceProvidersVisibilityNotReadyError(error) || attempt >= 2 || !isCurrent()) throw error;
       await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
@@ -56,6 +75,7 @@ async function requestDeviceProviders(
 // 缓存按被控设备隔离;代际同桌面(evict 时自增,作废在途 fetch 的回写)。
 const cache = new Map<string, DeviceProvidersPayload>();
 const inflight = new Map<string, Promise<DeviceProvidersPayload>>();
+const readGeneration = new WeakMap<Promise<DeviceProvidersPayload>, number>();
 const deviceGen = new Map<string, number>();
 const listeners = new Map<string, Set<(payload: DeviceProvidersPayload) => void>>();
 const errorListeners = new Map<string, Set<(error: unknown) => void>>();
@@ -131,9 +151,9 @@ export async function fetchDeviceProviders(
   // 捕获与 fresh 相同的代际,晚于 fresh 返回仍通过 isCurrent() 覆盖共享缓存。
   // fresh 结果即工作站最新真相,普通读取 join 它语义正确且不会产生竞争请求。
   const fp = freshInflight.get(deviceId);
-  if (fp) return fp;
+  if (fp) return joinProviderRead(deviceId, fp, () => fetchDeviceProviders(deviceId, fetcher));
   const ip = inflight.get(deviceId);
-  if (ip) return ip;
+  if (ip) return joinProviderRead(deviceId, ip, () => fetchDeviceProviders(deviceId, fetcher));
 
   // 捕获发起时代际;回调里若代际已变(被 evict)则认为本次请求作废,不回写 cache / 不动 inflight。
   const startGen = deviceGen.get(deviceId) ?? 0;
@@ -162,7 +182,34 @@ export async function fetchDeviceProviders(
       throw e;
     });
   inflight.set(deviceId, p);
+  readGeneration.set(p, startGen);
+  void p.finally(() => {
+    if (inflight.get(deviceId) === p) inflight.delete(deviceId);
+  }).catch(() => undefined);
   return p;
+}
+
+/** A revision retires the result, not the physical request. New readers wait for
+ * it to settle, then share one current-generation read instead of flooding the link. */
+function joinProviderRead(
+  deviceId: string,
+  pending: Promise<DeviceProvidersPayload>,
+  next: () => Promise<DeviceProvidersPayload>,
+): Promise<DeviceProvidersPayload> {
+  const generation = getDeviceProvidersGen(deviceId);
+  if (readGeneration.get(pending) === generation) return pending;
+  return pending.catch(() => undefined).then(() => {
+    if (getDeviceProvidersGen(deviceId) !== generation) throw new Error('Provider read superseded');
+    return next();
+  });
+}
+
+/** Catalog push refresh owns the replacement read; mounted hooks only retire
+ * readiness. Keep in-flight slots so a burst cannot start overlapping reads. */
+export function invalidateDeviceProvidersForRefresh(deviceId: string): void {
+  cache.delete(deviceId);
+  deviceGen.set(deviceId, getDeviceProvidersGen(deviceId) + 1);
+  notifyDeviceProvidersGen(deviceId, 'fresh-invalidate');
 }
 
 /**
@@ -181,7 +228,10 @@ export async function fetchDeviceProvidersFresh(
   fetcher: DeviceProvidersFetcher,
 ): Promise<DeviceProvidersPayload> {
   const fp = freshInflight.get(deviceId);
-  if (fp) return fp;
+  // After an obsolete read settles, all waiters share the replacement started
+  // after this call. Re-entering fresh would invalidate a sibling waiter's new
+  // read and send a duplicate; independent fresh calls still bypass cache below.
+  if (fp) return joinProviderRead(deviceId, fp, () => fetchDeviceProviders(deviceId, fetcher));
 
   // fresh 语义 = 强制访问工作站拿当前真相。仅当确有普通请求在途时才作废它
   // (greptile/copilot/codex review P1/P2):旧普通请求若在 fresh 之后返回,仍会
@@ -191,6 +241,9 @@ export async function fetchDeviceProvidersFresh(
   // 为外部驱逐而丢弃结果;仅在确有在途时推进,守卫下一轮重跑(普通在途已清)
   // 即收敛,gen 保持稳定时 fetch 前后一致直接采信。
   const ip = inflight.get(deviceId);
+  if (ip && readGeneration.get(ip) !== getDeviceProvidersGen(deviceId)) {
+    return joinProviderRead(deviceId, ip, () => fetchDeviceProviders(deviceId, fetcher));
+  }
   if (ip) {
     inflight.delete(deviceId);
     deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
@@ -222,6 +275,7 @@ export async function fetchDeviceProvidersFresh(
       throw error;
     });
   freshInflight.set(deviceId, p);
+  readGeneration.set(p, startGen);
   void p.finally(() => {
     if (freshInflight.get(deviceId) === p) freshInflight.delete(deviceId);
   }).catch(() => undefined);

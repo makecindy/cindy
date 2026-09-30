@@ -1,12 +1,16 @@
 import { createHash } from 'node:crypto';
 
-import type {
-  Catalog,
-  CustomProviderConfig,
-  Provider,
-  RoutingDescriptor,
+import {
+  buildUserProvider,
+  isCustomRoutedProvider,
+  isOrganizationManagedProvider,
+  storedCustomProviderId,
+  type Catalog,
+  type CustomProviderConfig,
+  type Effort,
+  type Provider,
+  type RoutingDescriptor,
 } from '@cindy/model-providers';
-import { buildUserProvider, storedCustomProviderId } from '@cindy/model-providers';
 
 import {
   CODEX_GATEWAY_ENV_KEY,
@@ -43,12 +47,29 @@ export interface CodexCustomProviderRoute {
   routing: RoutingDescriptor;
   /** Per-model Responses routes frozen with the same Host snapshot. */
   responseRoutingByModel: Readonly<Record<string, RoutingDescriptor>>;
+  /** Model capabilities belong to the same Host generation as the upstream routes. */
+  responseEffortsByModel: Readonly<Record<string, readonly Effort[]>>;
   /** Non-sensitive route/capability/credential dispatch generation frozen with this Host snapshot. */
   credentialRevision: number;
 }
 
 /** Routes actually frozen into the currently running local Codex Host. */
 let appliedCustomProviderRoutes: readonly CodexCustomProviderRoute[] = [];
+const scopedAppliedCustomProviderRoutes = new Map<string, readonly CodexCustomProviderRoute[]>();
+
+/** Publish capability snapshots for independently owned Hosts without changing proxy dispatch. */
+export function registerCodexScopedCustomProviderRoutes(
+  scopeKey: string,
+  routes: readonly CodexCustomProviderRoute[],
+): () => void {
+  const snapshot = [...routes];
+  scopedAppliedCustomProviderRoutes.set(scopeKey, snapshot);
+  return () => {
+    if (scopedAppliedCustomProviderRoutes.get(scopeKey) === snapshot) {
+      scopedAppliedCustomProviderRoutes.delete(scopeKey);
+    }
+  };
+}
 
 export function setCodexAppliedCustomProviderRoutes(
   routes: readonly CodexCustomProviderRoute[],
@@ -67,7 +88,7 @@ export function hasCodexAppliedCustomProviderCapability(
   capability: keyof CodexCustomProviderCapabilities,
 ): boolean {
   const storedProviderId = storedCustomProviderId(providerId);
-  return appliedCustomProviderRoutes.some(
+  return [...appliedCustomProviderRoutes, ...Array.from(scopedAppliedCustomProviderRoutes.values()).flat()].some(
     (route) =>
       storedCustomProviderId(route.providerId) === storedProviderId &&
       route.capabilities[capability] === true,
@@ -85,8 +106,15 @@ function effectiveModelWireProtocol(
   return model.route?.wireProtocol ?? routing.wireProtocol ?? 'openai-responses';
 }
 
-function frozenRoutingDescriptor(routing: RoutingDescriptor): RoutingDescriptor {
-  const frozen = { ...routing };
+function frozenRoutingDescriptor(
+  routing: RoutingDescriptor,
+  keepImageModel: boolean,
+): RoutingDescriptor {
+  const frozen = {
+    ...routing,
+    ...(keepImageModel && routing.imageModel ? { imageModel: { ...routing.imageModel } } : {}),
+  };
+  if (!keepImageModel) delete frozen.imageModel;
   // Custom headers are credentials. Keep them out of the Host snapshot; values are read at request
   // time behind provider-route's credential generation gate.
   delete frozen.headerOverride;
@@ -98,7 +126,7 @@ function frozenRoutingDescriptor(routing: RoutingDescriptor): RoutingDescriptor 
 }
 
 function routeForProvider(provider: Provider): CodexCustomProviderRoute | null {
-  if (provider.source !== 'user' || !provider.agents.includes('codex')) return null;
+  if (!isCustomRoutedProvider(provider) || !provider.agents.includes('codex')) return null;
   const routing = provider.routing.codex;
   if (!routing || routing.disabled) return null;
   const capabilities: CodexCustomProviderCapabilities = {
@@ -111,7 +139,7 @@ function routeForProvider(provider: Provider): CodexCustomProviderRoute | null {
   const responseModelIds = responseModels.map((model) => model.id);
   if (responseModelIds.length === 0) return null;
   const routeId = stableRouteId(storedCustomProviderId(provider.id));
-  const frozenRouting = frozenRoutingDescriptor(routing);
+  const frozenRouting = frozenRoutingDescriptor(routing, isOrganizationManagedProvider(provider));
   return {
     providerId: provider.id,
     routeId,
@@ -120,6 +148,9 @@ function routeForProvider(provider: Provider): CodexCustomProviderRoute | null {
     responseModels: responseModelIds,
     credentialRevision: getProviderRouteCredentialRevision(provider.id),
     routing: frozenRouting,
+    responseEffortsByModel: Object.fromEntries(
+      responseModels.map(model => [model.id, [...model.efforts]]),
+    ),
     responseRoutingByModel: Object.fromEntries(
       responseModels.map((model) => {
         if (!model.route) return [model.id, { ...frozenRouting }];
@@ -157,6 +188,9 @@ export function codexCustomProviderConfigSignature(config: CustomProviderConfig)
           ),
         ),
         responseModels: [...route.responseModels].sort(),
+        responseEffortsByModel: Object.fromEntries(
+          Object.entries(route.responseEffortsByModel).sort(([left], [right]) => left.localeCompare(right)),
+        ),
         routing: route.routing,
         responseRoutingByModel: Object.fromEntries(
           Object.entries(route.responseRoutingByModel).sort(([left], [right]) =>
@@ -206,6 +240,7 @@ export function codexCustomProviderRoutesSignature(
       responseModels: [...route.responseModels].sort(),
       routing: route.routing,
       responseRoutingByModel: route.responseRoutingByModel,
+      responseEffortsByModel: route.responseEffortsByModel,
       credentialRevision: route.credentialRevision,
     }))
     .sort((left, right) => left.modelProviderId.localeCompare(right.modelProviderId));
@@ -249,12 +284,13 @@ export function crossesCodexAppliedCustomProviderIdentity(
   }
 
   const actual = input.currentThreadModelProviderId?.trim() || null;
+  const appliedRoutes = [...appliedCustomProviderRoutes, ...Array.from(scopedAppliedCustomProviderRoutes.values()).flat()];
   const target = resolveCodexCustomProviderModelProviderId(
-    appliedCustomProviderRoutes,
+    appliedRoutes,
     input.targetProviderId?.trim() || null,
     input.targetModel?.trim() || null,
   );
-  const actualIsAppliedCustomProviderIdentity = appliedCustomProviderRoutes.some(
+  const actualIsAppliedCustomProviderIdentity = appliedRoutes.some(
     (route) => route.modelProviderId === actual,
   );
   const actualIsRetiredPrototypeIdentity =
@@ -263,6 +299,14 @@ export function crossesCodexAppliedCustomProviderIdentity(
   return target !== null
     ? actual !== target
     : actualIsAppliedCustomProviderIdentity || actualIsRetiredPrototypeIdentity;
+}
+
+/** Whether a thread provider id belongs to the currently applied dynamic route set. */
+export function isAppliedCodexCustomProviderIdentity(providerId: string | null | undefined): boolean {
+  const actual = providerId?.trim() || null;
+  return actual !== null && appliedCustomProviderRoutes.some(
+    (route) => route.modelProviderId === actual,
+  );
 }
 
 export function buildCodexCustomProviderArgs(

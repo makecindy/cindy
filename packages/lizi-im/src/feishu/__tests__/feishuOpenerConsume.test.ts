@@ -396,7 +396,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
     await expect(im.sendText('g/oc_c/omt_t', '/help')).resolves.toEqual({
       messageId: 'om_help',
     });
-    expect(outboundMocks.sendText).toHaveBeenCalledWith('g/oc_c/omt_t', '/help');
+    expect(outboundMocks.sendText).toHaveBeenCalledWith('g/oc_c/omt_t', '/help', undefined);
 
     await expect(sendOriginalFallback('g/oc_c/omt_t', '兜底')).resolves.toEqual({
       messageId: 'om_done',
@@ -420,7 +420,7 @@ describe('FeishuIM opener consumption failure semantics', () => {
     const helpP = im.sendText('g/oc_c/omt_t', '/help');
     resolvePatch();
     await expect(helpP).resolves.toEqual({ messageId: 'om_help' });
-    expect(outboundMocks.sendText).toHaveBeenCalledWith('g/oc_c/omt_t', '/help');
+    expect(outboundMocks.sendText).toHaveBeenCalledWith('g/oc_c/omt_t', '/help', undefined);
   });
 
   it('保持连接时重新入队后按退避再排空, 不依赖下一次 connected', async () => {

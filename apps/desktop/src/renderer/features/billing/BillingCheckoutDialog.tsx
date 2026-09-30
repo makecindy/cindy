@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import * as QRCode from 'qrcode';
@@ -128,15 +129,16 @@ export function BillingCheckoutDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10001] w-[calc(100vw-40px)] max-w-[620px]',
+            'fixed left-1/2 top-1/2 z-[10001] flex max-h-[calc(100dvh-40px)] w-[calc(100vw-40px)] max-w-[620px] flex-col',
             '-translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl',
             'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
             'text-[var(--text-primary)] focus:outline-none',
           )}
           aria-describedby={undefined}
         >
-          <div className="flex items-start justify-between gap-4 border-b border-[var(--border-default)] px-6 py-5">
+          <div className="flex shrink-0 items-start justify-between gap-4 border-b border-[var(--border-default)] px-6 py-5">
             <div>
               <Dialog.Title className="text-lg font-medium">{title}</Dialog.Title>
               <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
@@ -158,61 +160,68 @@ export function BillingCheckoutDialog({
             )}
           </div>
 
-          <div className="flex min-h-[300px] flex-col items-center justify-center px-6 py-7 text-center">
-            {state.phase === 'CREATING' && (
-              <>
-                <Spinner icon={LoaderCircle} size={28} className="text-[var(--text-secondary)]" />
-                <p className="mt-4 text-sm text-[var(--text-secondary)]">
-                  {t('billing.checkout.creatingBody')}
-                </p>
-              </>
-            )}
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-7 text-center">
+            <div className="flex min-h-[244px] flex-col items-center justify-center">
+              {state.phase === 'CREATING' && (
+                <>
+                  <Spinner icon={LoaderCircle} size={28} className="text-[var(--text-secondary)]" />
+                  <p className="mt-4 text-sm text-[var(--text-secondary)]">
+                    {t('billing.checkout.creatingBody')}
+                  </p>
+                </>
+              )}
 
-            {state.phase === 'AWAITING_PAYMENT' && actionExpired && (
-              <>
-                <div className="grid size-14 place-items-center rounded-full bg-[var(--surface-chip)]">
-                  <CircleAlert size={23} />
-                </div>
-                <p className="mt-4 max-w-[320px] text-sm text-[var(--text-secondary)]">
-                  {t('billing.checkout.actionExpiredBody')}
-                </p>
-              </>
-            )}
+              {state.phase === 'AWAITING_PAYMENT' && actionExpired && (
+                <>
+                  <div className="grid size-14 place-items-center rounded-full bg-[var(--surface-chip)]">
+                    <CircleAlert size={23} />
+                  </div>
+                  <p className="mt-4 max-w-[320px] text-sm text-[var(--text-secondary)]">
+                    {t('billing.checkout.actionExpiredBody')}
+                  </p>
+                </>
+              )}
 
-            {state.phase === 'AWAITING_PAYMENT' && !actionExpired && action?.type === 'QR_CODE' && (
-              <>
-                <div
-                  className="relative grid place-items-center rounded-xl border border-[var(--border-default)] bg-white p-2"
-                  style={{
-                    width: 'min(280px, calc(100vw - 96px), calc(100vh - 260px))',
-                    height: 'min(280px, calc(100vw - 96px), calc(100vh - 260px))',
-                  }}
-                >
-                  {qrDataUrl ? (
-                    <>
-                      <img src={qrDataUrl} className="size-full" alt={t('billing.checkout.qrAlt')} />
-                      <span
-                        aria-hidden="true"
-                        className="pointer-events-none absolute grid size-10 place-items-center rounded-lg bg-white p-1"
-                      >
-                        <img src={cindyIconUrl} className="size-8 rounded-md" alt="" />
-                      </span>
-                    </>
-                  ) : (
-                    <Spinner size={24} className="text-[var(--text-secondary)]" />
-                  )}
-                </div>
-                <p className="mt-4 text-sm font-medium">{t('billing.checkout.scanHint')}</p>
-                <p className="mt-1 text-12 text-[var(--text-tertiary)]">
-                  {remainingSeconds === null
-                    ? t('billing.checkout.checkingExpiry')
-                    : t('billing.checkout.expiresIn', {
-                        minutes: Math.floor(remainingSeconds / 60),
-                        seconds: String(remainingSeconds % 60).padStart(2, '0'),
-                      })}
-                </p>
-              </>
-            )}
+              {state.phase === 'AWAITING_PAYMENT' &&
+                !actionExpired &&
+                action?.type === 'QR_CODE' && (
+                  <>
+                    <div
+                      className="relative grid place-items-center rounded-xl border border-[var(--border-default)] bg-white p-2"
+                      style={{
+                        width: 'min(280px, calc(100vw - 96px))',
+                        height: 'min(280px, calc(100vw - 96px))',
+                      }}
+                    >
+                      {qrDataUrl ? (
+                        <>
+                          <img
+                            src={qrDataUrl}
+                            className="size-full"
+                            alt={t('billing.checkout.qrAlt')}
+                          />
+                          <span
+                            aria-hidden="true"
+                            className="pointer-events-none absolute grid size-10 place-items-center rounded-lg bg-white p-1"
+                          >
+                            <img src={cindyIconUrl} className="size-8 rounded-md" alt="" />
+                          </span>
+                        </>
+                      ) : (
+                        <Spinner size={24} className="text-[var(--text-secondary)]" />
+                      )}
+                    </div>
+                    <p className="mt-4 text-sm font-medium">{t('billing.checkout.scanHint')}</p>
+                    <p className="mt-1 text-12 text-[var(--text-tertiary)]">
+                      {remainingSeconds === null
+                        ? t('billing.checkout.checkingExpiry')
+                        : t('billing.checkout.expiresIn', {
+                            minutes: Math.floor(remainingSeconds / 60),
+                            seconds: String(remainingSeconds % 60).padStart(2, '0'),
+                          })}
+                    </p>
+                  </>
+                )}
 
             {state.phase === 'AWAITING_PAYMENT' && !actionExpired && action?.type === 'REDIRECT' && (
               <>
@@ -220,85 +229,87 @@ export function BillingCheckoutDialog({
                   <ExternalLink size={22} />
                 </div>
                 <p className="mt-4 text-sm font-medium">{t('billing.checkout.redirectHint')}</p>
-                <button
+                <Button
+                    variant="cta"
+                    size="lg"
                   type="button"
                   onClick={openRedirect}
-                  className="mt-5 inline-flex h-9 items-center gap-2 rounded-full bg-[var(--text-primary)] px-5 text-sm font-medium text-[var(--surface)]"
+                  className="mt-5"
                 >
                   <ExternalLink size={14} />
                   {t('billing.checkout.openPayment')}
-                </button>
+                </Button>
               </>
             )}
 
-            {state.phase === 'AWAITING_PAYMENT' && !action && !actionExpired && (
-              <>
-                <Spinner size={26} className="text-[var(--text-secondary)]" />
-                <p className="mt-4 text-sm text-[var(--text-secondary)]">
-                  {t('billing.checkout.refreshingAction')}
-                </p>
-              </>
-            )}
+              {state.phase === 'AWAITING_PAYMENT' && !action && !actionExpired && (
+                <>
+                  <Spinner size={26} className="text-[var(--text-secondary)]" />
+                  <p className="mt-4 text-sm text-[var(--text-secondary)]">
+                    {t('billing.checkout.refreshingAction')}
+                  </p>
+                </>
+              )}
 
-            {state.phase === 'COMPLETED' && (
-              <>
-                <div className="grid size-14 place-items-center rounded-full bg-[var(--text-primary)] text-[var(--surface)]">
-                  <Check size={24} />
-                </div>
-                <p className="mt-4 text-sm font-medium">{t('billing.checkout.paymentCompleted')}</p>
-              </>
-            )}
+              {state.phase === 'COMPLETED' && (
+                <>
+                  <div className="grid size-14 place-items-center rounded-full bg-[var(--text-primary)] text-[var(--surface)]">
+                    <Check size={24} />
+                  </div>
+                  <p className="mt-4 text-sm font-medium">
+                    {t('billing.checkout.paymentCompleted')}
+                  </p>
+                </>
+              )}
 
-            {(state.phase === 'FAILED' ||
-              state.phase === 'EXPIRED' ||
-              state.phase === 'CANCELED') && (
-              <>
-                <div className="grid size-14 place-items-center rounded-full bg-[var(--surface-chip)]">
-                  <CircleAlert size={23} />
-                </div>
-                <p className="mt-4 max-w-[320px] text-sm text-[var(--text-secondary)]">
-                  {state.error
-                    ? t('billing.checkout.requestFailed')
-                    : state.phase === 'EXPIRED'
-                      ? t('billing.checkout.expiredBody')
-                      : state.phase === 'CANCELED'
-                        ? t('billing.checkout.canceledBody')
-                        : t('billing.checkout.failedBody')}
-                </p>
-              </>
-            )}
+              {(state.phase === 'FAILED' ||
+                state.phase === 'EXPIRED' ||
+                state.phase === 'CANCELED') && (
+                <>
+                  <div className="grid size-14 place-items-center rounded-full bg-[var(--surface-chip)]">
+                    <CircleAlert size={23} />
+                  </div>
+                  <p className="mt-4 max-w-[320px] text-sm text-[var(--text-secondary)]">
+                    {state.error
+                      ? t('billing.checkout.requestFailed')
+                      : state.phase === 'EXPIRED'
+                        ? t('billing.checkout.expiredBody')
+                        : state.phase === 'CANCELED'
+                          ? t('billing.checkout.canceledBody')
+                          : t('billing.checkout.failedBody')}
+                  </p>
+                </>
+              )}
+            </div>
           </div>
 
-          <div className="flex min-h-16 items-center justify-end gap-3 border-t border-[var(--border-default)] px-6 py-3">
-            <div className="flex items-center gap-2">
+          <div className="flex min-h-16 shrink-0 flex-wrap items-center justify-end gap-3 border-t border-[var(--border-default)] px-6 py-3">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               {state.phase === 'AWAITING_PAYMENT' && (
-                <button
+                <Button variant="secondary" size="lg"
                   type="button"
                   onClick={onRefresh}
-                  className="inline-flex h-9 items-center gap-2 rounded-full border border-[var(--border-default)] px-4 text-12 font-medium transition-colors hover:bg-[var(--surface-hover-soft)]"
                 >
                   <RotateCcw size={14} />
                   {t('billing.actions.refresh')}
-                </button>
+                </Button>
               )}
               {(state.phase === 'FAILED' || state.phase === 'EXPIRED') && canRetry && (
-                <button
+                <Button variant="cta" size="lg"
                   type="button"
                   onClick={onRetry}
-                  className="inline-flex h-9 items-center gap-2 rounded-full bg-[var(--text-primary)] px-4 text-12 font-medium text-[var(--surface)]"
                 >
                   <RotateCcw size={14} />
                   {t('billing.actions.retry')}
-                </button>
+                </Button>
               )}
               {isTerminalPhase(state.phase) && (
-                <button
+                <Button variant="secondary" size="lg"
                   type="button"
                   onClick={onClose}
-                  className="h-9 rounded-full border border-[var(--border-default)] px-4 text-12 font-medium transition-colors hover:bg-[var(--surface-hover-soft)]"
                 >
                   {t('billing.actions.close')}
-                </button>
+                </Button>
               )}
             </div>
           </div>

@@ -153,6 +153,52 @@ describe('sendToSessionLock', () => {
     expect(hasSendToSessionLock('s6')).toBe(false);
   });
 
+  it.each(['lease', 'wrapper'] as const)('reports the current %s holder stage at warn and bail', async (form) => {
+    const id = `staged-${form}`;
+    let stage = 'prepare';
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const run = form === 'lease'
+      ? acquireSendToSessionLock(id, undefined, () => stage).then(async (unlock) => {
+        await gate;
+        unlock();
+      })
+      : withSendToSessionLock(id, () => gate, () => stage);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(warnMock).toHaveBeenLastCalledWith(
+      'sendToSession lock still held after expected budget',
+      { sessionId: id, heldMs: 30_000, stage: 'prepare' },
+    );
+    stage = 'dispatch';
+    await vi.advanceTimersByTimeAsync(270_000);
+    expect(warnMock).toHaveBeenLastCalledWith(
+      'sendToSession lock bailed out; later senders proceed while the stuck holder finishes',
+      { sessionId: id, heldMs: 300_000, stage: 'dispatch' },
+    );
+    expect(hasSendToSessionLock(id)).toBe(false);
+    release();
+    await run;
+  });
+
+  it('samples only the acquired holder, then stops sampling after release', async () => {
+    const firstStage = vi.fn(() => 'first');
+    const secondStage = vi.fn(() => 'second');
+    const first = await acquireSendToSessionLock('staged-queue', undefined, firstStage);
+    const secondPending = acquireSendToSessionLock('staged-queue', undefined, secondStage);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(firstStage).toHaveBeenCalledTimes(1);
+    expect(secondStage).not.toHaveBeenCalled();
+    first();
+    const second = await secondPending;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(firstStage).toHaveBeenCalledTimes(1);
+    expect(secondStage).toHaveBeenCalledTimes(1);
+    second();
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(secondStage).toHaveBeenCalledTimes(1);
+    expect(hasSendToSessionLock('staged-queue')).toBe(false);
+  });
+
   it('starts each watchdog after acquisition so a stalled holder cannot release all queued sends', async () => {
     const first = await acquireSendToSessionLock('queued-watchdogs');
     let secondRelease: (() => void) | undefined;

@@ -51,7 +51,10 @@ export async function withStore(
   let scopeAtEntry: string | null = null;
   try {
     manager = deps.getManager();
-    if (!manager.isEnabled()) {
+    const ctx = deps.getSessionContext?.();
+    // Bot scope comes from the host-bound session, never tool arguments. Use
+    // the manager's independent-scope policy, just like its getStore path.
+    if (!manager.isEnabled(ctx?.memoryScopeKey)) {
       return buildJsonResult(
         { ok: false, code: 'MAKER_MEMORY_NOT_READY', message: 'maker memory disabled (mode != "maker")' },
         true,
@@ -61,7 +64,6 @@ export async function withStore(
     // 守卫之外被调用方 await — 在拿 store 前捕获 scope, fn 完成后复核, 期间
     // 登出/切账号则操作结果不可信, fail-closed。
     scopeAtEntry = manager.currentOwnerScopeKey?.() ?? null;
-    const ctx = deps.getSessionContext?.();
     const workdir = ctx?.workingDir ?? deps.workdir;
     // SSH remote 会话 (ctx 带 remoteHostId) 的 workdir 是远端路径 — 经 scope
     // key 定位, 与 agent 启动注入 (claude-code/codex index.ts) 同一键规则;

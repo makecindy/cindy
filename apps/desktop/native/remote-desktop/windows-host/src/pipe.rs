@@ -169,7 +169,15 @@ impl Pipe {
         }
     }
     pub fn write(&self, data: &[u8]) -> Result<()> {
-        if data.len() > 240001 {
+        self.write_bounded(data, 240001)
+    }
+    /// Both capture-worker and broker responses use the negotiated budget.
+    /// Ordinary requests and unnegotiated responses retain the original limit.
+    pub fn write_response(&self, data: &[u8], init: &serde_json::Value) -> Result<()> {
+        self.write_bounded(data, crate::capture_protocol::response_limit(init))
+    }
+    fn write_bounded(&self, data: &[u8], limit: usize) -> Result<()> {
+        if data.len() > limit {
             return denied();
         }
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -234,5 +242,76 @@ impl Pipe {
             }
             self.buffered.extend_from_slice(&chunk[..count]);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capture_protocol::OVERLAY_RESPONSE_LIMIT;
+    use serde_json::json;
+
+    #[test]
+    fn transfers_large_negotiated_frames_without_raising_other_write_limits() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let name = format!(r"\\.\pipe\cindy-cursor-test-{}-{nonce}", std::process::id());
+        // A caller-owned test pipe needs no SYSTEM/interactive service token.
+        // Keep the production service ACL unchanged; only exercise framing here.
+        let handle = Handle::new(unsafe {
+            CreateNamedPipeW(
+                wide(&name).as_ptr(),
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                1,
+                262144,
+                32768,
+                0,
+                ptr::null(),
+            )
+        })
+        .unwrap();
+        let server = Pipe {
+            handle,
+            buffered: Vec::new(),
+            cancel: Arc::new(AtomicBool::new(false)),
+            shutdown: None,
+        };
+        let writer = std::thread::spawn(move || {
+            server.accept(5000).unwrap();
+            let mut frame = vec![b'x'; OVERLAY_RESPONSE_LIMIT];
+            *frame.last_mut().unwrap() = b'\n';
+            assert_eq!(
+                server.write(&frame).unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+            for init in [
+                json!({"mode":"capture"}),
+                json!({"mode":"capture", "cursorOverlay":false}),
+                json!({"mode":"input", "cursorOverlay":true}),
+            ] {
+                assert_eq!(
+                    server.write_response(&frame, &init).unwrap_err().kind(),
+                    io::ErrorKind::PermissionDenied
+                );
+            }
+            let overlay = json!({"mode":"capture", "cursorOverlay":true});
+            assert_eq!(
+                server
+                    .write_response(&vec![b'x'; OVERLAY_RESPONSE_LIMIT + 1], &overlay)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::PermissionDenied
+            );
+            server.write_response(&frame, &overlay).unwrap();
+        });
+        let mut client = Pipe::client(&name).unwrap();
+        let frame = client.line(OVERLAY_RESPONSE_LIMIT).unwrap();
+        assert_eq!(frame.len(), OVERLAY_RESPONSE_LIMIT);
+        assert_eq!(frame.last(), Some(&b'\n'));
+        assert!(frame[..frame.len() - 1].iter().all(|byte| *byte == b'x'));
+        writer.join().unwrap();
     }
 }

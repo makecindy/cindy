@@ -226,8 +226,10 @@ async function fetchGatewayMediaModels(): Promise<GatewayMediaCatalogEntry[]> {
 
 export async function listAvailableMediaModels(
   capability?: MediaCapability,
+  options?: { skipGateway?: boolean },
 ): Promise<ExecutableMediaModel[]> {
   const providerModels = availableProviderMediaModels(capability);
+  if (options?.skipGateway) return providerModels;
   try {
     const gatewayModels = filterEnabledGatewayMediaModels(
       await fetchGatewayMediaModels(),

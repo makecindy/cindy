@@ -12,10 +12,10 @@ import { describe, expect, it } from 'vitest';
  * token 后,正式版进程自以为登录,模型源静默消失、device-link 无限 401。
  */
 describe('desktop auth session-expiry detection', () => {
-  const authSource = readFileSync(resolve(process.cwd(), 'src/main/authManager.ts'), 'utf8').replace(
-    /\r\n/g,
-    '\n',
-  );
+  const authSource = readFileSync(
+    resolve(process.cwd(), 'src/main/authManager.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
   const deviceLinkSource = readFileSync(
     resolve(process.cwd(), 'src/main/device-link/index.ts'),
     'utf8',
@@ -71,7 +71,9 @@ describe('desktop auth session-expiry detection', () => {
     const expireStart = authSource.indexOf('async function expireRuntimeAuth(');
     const expireEnd = authSource.indexOf('if (accountSwitchTeardown)', expireStart);
     const expireBody = authSource.slice(expireStart, expireEnd);
-    expect(expireBody).toContain('preservePersistedRefreshToken: opts.preservePersistedRefreshToken');
+    expect(expireBody).toContain(
+      'preservePersistedRefreshToken: opts.preservePersistedRefreshToken',
+    );
   });
 
   it('isPersistedSecretAbsent 只在文件确定不存在(ENOENT)时判缺席', () => {
@@ -81,7 +83,13 @@ describe('desktop auth session-expiry detection', () => {
 
     // 加密不可用不判缺席;existsSync 对 EPERM/EACCES 也返回 false,必须用
     // accessSync 并只认 ENOENT 为真缺席,其它错误一律按瞬时故障。
-    expect(body).toContain('if (!safeStorage.isEncryptionAvailable()) return false;');
+    expect(body).toContain('if (!isCredentialEncryptionAvailable()) return false;');
+    const probe = authSource.slice(
+      authSource.indexOf('function isCredentialEncryptionAvailable()'),
+      authSource.indexOf('/** Main-process recovery signal'),
+    );
+    expect(probe).toContain('const available = safeStorage.isEncryptionAvailable();');
+    expect(probe).toContain('return available;');
     expect(body).toContain('fs.accessSync(');
     expect(body).toContain("=== 'ENOENT'");
     expect(body).not.toContain('existsSync');
@@ -94,7 +102,9 @@ describe('desktop auth session-expiry detection', () => {
     const end = authSource.indexOf("} else if (action.kind === 'replacement-retry') {", anchor);
     const body = authSource.slice(start, end);
 
-    expect(body).toContain('await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code));');
+    expect(body).toContain(
+      'await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code));',
+    );
   });
 
   it('session-expired 广播携带客户端内部分类 reason,不透传服务端原文', () => {
@@ -103,7 +113,9 @@ describe('desktop auth session-expiry detection', () => {
     const body = authSource.slice(start, end);
 
     expect(body).toContain("reason: SessionExpiredReason = 'unknown'");
-    expect(body).toContain("broadcastToRenderers('auth:session-expired', { message: '', reason });");
+    expect(body).toContain(
+      "broadcastToRenderers('auth:session-expired', { message: '', reason });",
+    );
   });
 
   it('invalidateSession 只显式归类 account-unavailable,其余走通用文案', () => {
@@ -124,7 +136,9 @@ describe('desktop auth session-expiry detection', () => {
     const issueStart = deviceLinkSource.indexOf('client.onConnectionIssue((issue) => {');
     const issueEnd = deviceLinkSource.indexOf('client.onPresenceChanged', issueStart);
     const issueBody = deviceLinkSource.slice(issueStart, issueEnd);
-    expect(issueBody).toContain("if (issue?.kind === 'auth-failed') recoverFromRelayAuthFailure();");
+    expect(issueBody).toContain(
+      "if (issue?.kind === 'auth-failed') recoverFromRelayAuthFailure();",
+    );
 
     // 自救函数:节流(token-rotating 端点不能每次重连都打)+ refresh 成功后立即重连。
     const recoverStart = deviceLinkSource.indexOf('function recoverFromRelayAuthFailure(): void {');

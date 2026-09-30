@@ -12,6 +12,33 @@ import type { MobileAgentCapabilities } from '@/session/agentCapabilities';
 const cache = new Map<string, MobileAgentCapabilities>();
 const deviceGen = new Map<string, number>();
 const listeners = new Map<string, Set<(value: MobileAgentCapabilities) => void>>();
+const inflight = new Map<string, { generation: number; promise: Promise<unknown> }>();
+
+/** Share page and push-triggered reads. A newer generation waits for the old
+ * physical read to settle, but never adopts its result or revives an old owner. */
+export function fetchAgentCapabilities(
+  deviceId: string,
+  agentKind: string,
+  fetcher: () => Promise<unknown>,
+): Promise<unknown> {
+  const key = buildAgentCapabilitiesCacheKey(deviceId, agentKind);
+  const generation = getAgentCapabilitiesGeneration(deviceId);
+  deviceGen.set(deviceId, generation);
+  const pending = inflight.get(key);
+  if (pending) {
+    if (pending.generation === generation) return pending.promise;
+    return pending.promise.catch(() => undefined).then(() => {
+      if (!isAgentCapabilitiesGenerationCurrent(deviceId, generation)) throw new Error('Capabilities read superseded');
+      return fetchAgentCapabilities(deviceId, agentKind, fetcher);
+    });
+  }
+  const promise = Promise.resolve().then(fetcher);
+  inflight.set(key, { generation, promise });
+  void promise.finally(() => {
+    if (inflight.get(key)?.promise === promise) inflight.delete(key);
+  }).catch(() => undefined);
+  return promise;
+}
 
 export function buildAgentCapabilitiesCacheKey(deviceId: string, agentKind: string): string {
   return `${deviceId} ${agentKind}`;

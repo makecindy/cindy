@@ -117,7 +117,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
    */
   private extraImageAbsPaths: string[] = [];
 
-  constructor(messageId: string, openId: string, initial: string) {
+  constructor(messageId: string, openId: string, initial: string, private readonly opts?: { threadTs?: string }) {
     this.messageId = messageId;
     this.openId = openId;
     // `initial` is what's currently DISPLAYED in feishu (e.g. "🧠 思考中...").
@@ -288,7 +288,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       await Promise.all(
         fileLinks.map(async (link) => {
           try {
-            await sendFile(this.openId, link.absPath, link.alt || undefined);
+            await sendFile(this.openId, link.absPath, link.alt || undefined, this.opts);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             log.warn(
@@ -340,7 +340,7 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
           fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
         log.warn(`[feishu/streamingText] fallback patch failed: ${fallbackMsg}`);
         try {
-          await sendText(this.openId, notice);
+          await sendText(this.openId, notice, this.opts);
         } catch (textErr) {
           const textMsg = textErr instanceof Error ? textErr.message : String(textErr);
           log.error(`[feishu/streamingText] fallback text failed: ${textMsg}`);
@@ -353,15 +353,16 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
 export async function start(
   openId: string,
   initial: string = transportMessages.streaming.randomThinking(),
+  opts?: { threadTs?: string },
 ): Promise<StreamingTextHandle> {
   // 群主流 @ 开话题时, 开场白卡就是本轮流式卡(openThread 已用它开好话题) —
   // 认领后直接 patch, 不再新建一条「开个话题」占位回复。
-  const claimed = claimPatchableOpener(openId);
+  const claimed = opts?.threadTs ? null : claimPatchableOpener(openId);
   if (claimed) {
-    return new FeishuStreamingTextHandle(claimed, openId, initial);
+    return new FeishuStreamingTextHandle(claimed, openId, initial, opts);
   }
-  const { messageId } = await sendCardRaw(openId, buildMarkdownCardV2(initial));
-  return new FeishuStreamingTextHandle(messageId, openId, initial);
+  const { messageId } = await sendCardRaw(openId, buildMarkdownCardV2(initial), opts);
+  return new FeishuStreamingTextHandle(messageId, openId, initial, opts);
 }
 
 /**

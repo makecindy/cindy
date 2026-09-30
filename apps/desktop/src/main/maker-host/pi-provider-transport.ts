@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { once } from 'node:events';
 import type { ServerResponse } from 'node:http';
 import { ChatSseTranslator, translateResponsesRequestWithContext, type ResponsesRequest } from '@cindy/responses-chat-bridge';
@@ -11,12 +12,13 @@ import * as googleVertex from '@earendil-works/pi-ai/api/google-vertex';
 import * as azureOpenaiResponses from '@earendil-works/pi-ai/api/azure-openai-responses';
 import * as bedrockConverseStream from '@earendil-works/pi-ai/api/bedrock-converse-stream';
 import * as mistralConversations from '@earendil-works/pi-ai/api/mistral-conversations';
-import { PI_REASONING_EFFORTS, PROVIDER_MODEL_CATALOG, providerEndpointBindings, providerModelRecord, providerModelAdapterId, providerPresetModelRecord, type CatalogModel, type ProviderModelRecord, type PiModelApi } from '@cindy/model-providers';
+import { PI_REASONING_EFFORTS, PROVIDER_MODEL_CATALOG, providerEndpointBindings, providerModelRecord, providerModelGenerationRecord, providerModelAdapterId, providerPresetModelRecord, type CatalogModel, type ProviderModelRecord, type PiModelApi } from '@cindy/model-providers';
 
 export function invocationModelRecord(model: CatalogModel, upstream: string, api?: PiModelApi): ProviderModelRecord | undefined {
   const selected = model.api ?? api;
   const known = providerModelRecord(model.id, upstream, selected)
-    ?? (selected ? providerPresetModelRecord(model.catalogPresetId, model.id, selected) : undefined);
+    ?? (selected ? providerPresetModelRecord(model.catalogPresetId, model.id, selected) : undefined)
+    ?? providerModelGenerationRecord(model.id, upstream, selected, model.catalogPresetId);
   if (!selected && !known) return undefined;
   return {
     ...(known ?? {}), id: model.id, name: model.name, upstream,
@@ -24,6 +26,7 @@ export function invocationModelRecord(model: CatalogModel, upstream: string, api
     maxOutput: model.maxOutput ?? known?.maxOutput,
     modalities: model.modalities ?? known?.modalities ?? { input: ['text'], output: ['text'] },
     supportsImageInput: model.supportsImageInput ?? known?.supportsImageInput ?? false,
+    supportsFastMode: model.supportsFastMode,
     reasoning: model.efforts.length > 0, efforts: model.efforts, defaultEffort: model.defaultEffort,
     execution: { pi: { ...known?.execution.pi, api: selected ?? known!.execution.pi.api,
       thinkingLevelMap: { ...known?.execution.pi.thinkingLevelMap, ...(model.reasoningRequired ? { off: null } : {}) },
@@ -164,13 +167,13 @@ function nativeInvocationModel(options: PiProviderTransportOptions, modelId: str
   const destination = options.upstream ?? row.upstream;
   assertHostCredentialEndpoint(row.execution.pi.api, destination, options.apiKey);
   const model: Model<Api> = { id: modelId, name: row.name, provider: providerModelAdapterId(row) ?? options.providerId,
-    api: row.execution.pi.api, baseUrl: destination, contextWindow: row.contextWindow,
-    maxTokens: row.maxOutput ?? Math.min(4096, row.contextWindow), reasoning: row.reasoning,
+    api: row.execution.pi.api, baseUrl: destination, contextWindow: row.contextWindow ?? 200_000,
+    maxTokens: row.maxOutput ?? Math.min(4096, row.contextWindow ?? 200_000), reasoning: row.reasoning ?? (row.efforts?.length ?? 0) > 0,
     input: row.supportsImageInput ? ['text', 'image'] : ['text'],
     cost: { input: row.cost?.input ?? 0, output: row.cost?.output ?? 0,
       cacheRead: row.cost?.cacheRead ?? 0, cacheWrite: row.cost?.cacheWrite ?? 0 },
     thinkingLevelMap: { ...row.execution.pi.thinkingLevelMap, ...Object.fromEntries(PI_REASONING_EFFORTS.map(level =>
-      [level, row.efforts.includes(level) ? row.execution.pi.thinkingLevelMap?.[level] ?? level : null])) },
+      [level, row.efforts?.includes(level) ? row.execution.pi.thinkingLevelMap?.[level] ?? level : null])) },
     compat: row.execution.pi.compat,
     samplingParams: row.execution.pi.samplingParams,
     headers: row.execution.pi.headers,
@@ -240,6 +243,26 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
     if (!adapter) throw new Error('Native API is not supported by the bundled Pi adapter');
     const abort = new AbortController();
     const signal = init?.signal ? AbortSignal.any([init.signal, abort.signal]) : abort.signal;
+    // Keep diagnostics local to this invocation. Adapter error messages may contain
+    // response bodies, credentials or user content, so never forward those strings.
+    let httpStatus: number | undefined;
+    const diagnosticFetch: typeof fetch = async (input, init) => {
+      httpStatus = undefined;
+      const response = await options.fetchImpl(input, init);
+      httpStatus = response.status;
+      return response;
+    };
+    const failureMessage = (phase: 'adapter-event' | 'stream-read') => {
+      const category = httpStatus === 401 ? 'authentication'
+        : httpStatus === 403 ? 'permission'
+        : httpStatus === 429 ? 'rate_limit'
+        : httpStatus !== undefined && httpStatus >= 500 ? 'provider_unavailable'
+        : httpStatus !== undefined && httpStatus >= 400 ? 'request_rejected'
+        : 'unknown';
+      const status = httpStatus !== undefined && httpStatus >= 400 && httpStatus < 600
+        ? `; HTTP ${httpStatus}` : '';
+      return `Native provider request failed [phase=${phase}${status}; category=${category}; request=${responseId}]`;
+    };
     const cloudflareGateway = model.provider === 'cloudflare-ai-gateway';
     const events = adapter.streamSimple(model, context, {
       apiKey: cloudflareGateway ? undefined : options.apiKey, env: options.env,
@@ -247,10 +270,13 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
       // Pi's Google SDK rejects injected fetch. Its native transport must be used; all other
       // adapters that support injection use Cindy's existing outbound route.
       ...(!['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(model.api)
-        ? { fetch: options.fetchImpl } : {}),
+        ? { fetch: diagnosticFetch } : {}),
       signal, maxRetries: 0,
-      reasoning: request.reasoning?.effort && request.reasoning.effort !== 'none'
-        ? request.reasoning.effort as ThinkingLevel : undefined,
+      ...(options.row.supportsFastMode === true && request.service_tier === 'priority' &&
+        ['openai-responses', 'azure-openai-responses', 'openai-completions'].includes(model.api)
+        ? { onPayload: (payload: unknown) => payload && typeof payload === 'object' && !Array.isArray(payload)
+          ? { ...payload, service_tier: 'priority' } : payload } : {}),
+      reasoning: reconcileOutboundReasoningEffort(request.reasoning?.effort, options.row.efforts ?? []) as ThinkingLevel | undefined,
       maxTokens: typeof request.max_output_tokens === 'number' ? Math.min(request.max_output_tokens, model.maxTokens) : model.maxTokens,
     });
     const iterator = events[Symbol.asyncIterator]();
@@ -298,11 +324,11 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
                   { type: 'response.output_item.done', output_index, item: historyItem }]);
               }
               emit(translator.finish(true)); ended = true;
-            } else if (event.type === 'error') { emit(translator.fail('Native provider request failed')); ended = true; }
+            } else if (event.type === 'error') { emit(translator.fail(failureMessage('adapter-event'))); ended = true; }
           }
           if (pending.length) controller.enqueue(pending.shift()!);
           else controller.close();
-        } catch { abort.abort(); controller.error(new Error('Native provider request failed')); }
+        } catch { abort.abort(); controller.error(new Error(failureMessage('stream-read'))); }
       },
       async cancel() { abort.abort(); await iterator.return?.(); },
     }), { headers: { 'content-type': 'text/event-stream' } });

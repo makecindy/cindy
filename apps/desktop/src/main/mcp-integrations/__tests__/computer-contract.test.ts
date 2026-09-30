@@ -49,9 +49,29 @@ describe('installed Computer Use contract', () => {
   });
   it('rejects unavailable tools and incompatible arguments before dispatch', () => {
     expect(() => adaptComputerDriverArgs('missing', {}, schemas)).toThrow('does not advertise');
-    expect(() => adaptComputerDriverArgs('click', { pid: 1, unsupported: true }, schemas)).toThrow(
-      'does not accept unsupported',
-    );
+    const olderClick = new Map([['click', {
+      properties: { pid: {}, window_id: {}, element_index: {}, snapshot_id: {} },
+      additionalProperties: false,
+    }]]);
+    expect(adaptComputerDriverArgs('click', {
+      pid: 1,
+      window_id: 2,
+      element_index: 3,
+      snapshot_id: 's01234567',
+      delivery_mode: 'background',
+    }, olderClick)).toEqual({
+      pid: 1,
+      window_id: 2,
+      element_index: 3,
+      snapshot_id: 's01234567',
+    });
+    expect(() => adaptComputerDriverArgs('click', {
+      pid: 1,
+      window_id: 2,
+      element_index: 3,
+      snapshot_id: 's01234567',
+      unsupported: true,
+    }, olderClick)).toThrow('does not accept unsupported');
     expect(() =>
       adaptComputerDriverArgs('verify_state', { pid: 1, window_id: 2 }, schemas),
     ).toThrow('requires expect');

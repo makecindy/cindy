@@ -41,7 +41,7 @@ import {
   Trash2,
   Undo2,
 } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 import { cn } from '@/lib/utils';
 import { CHAT_COLOR_TRANSITION_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { Spinner } from '@/components/ui/spinner';

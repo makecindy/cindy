@@ -1,10 +1,12 @@
+import { useAdaptiveWindow, PaneViewportProvider, FloatingSheetContext } from '@/platform/AdaptiveWindowContext';
+import { modalLayout } from '@/platform/modalLayout';
 /**
  * SheetModal —— 底部 sheet 共用的 Modal 外壳(背板淡入淡出 + 面板自底部滑入滑出)。
  *
  * 动机:此前 5 个底部 sheet 都用 `<Modal animationType="slide">` 且压暗背板放在 Modal
  * 内容里,导致背板跟着面板一起从底部升起(视觉跳变,违反规则 7)。本组件把两层动画拆开:
- *   - 背板:absoluteFill,原地纯透明度淡入(150ms easeOut)/ 淡出(120ms easeIn),
- *     对齐 DeviceMenuModal 的 §14.4 ≤150ms 纯透明度过渡模式;
+ *   - 背板:absoluteFill,原地纯透明度淡入(motionDuration.enter)/ 淡出(motionDuration.exit),
+ *     按 §14.4 重浮层档位;减弱动态效果下直接到位;
  *   - 内容层:justifyContent flex-end,translateY 由同一 progress 驱动自底部滑入滑出,
  *     面板(SheetSurface 或 ad-hoc 面板)由调用方作为 children 放入。
  * 关闭动画播完才卸载 Modal(mounted 状态),避免面板/背板瞬间消失的空白帧。
@@ -21,13 +23,17 @@ import {
   Platform,
   Pressable,
   StyleSheet,
+  View,
   useWindowDimensions,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { BlurBackdrop } from '@/session/BlurBackdrop';
 import { GestureHandlerRootView } from '@/platform/gestureHandler';
+import { useMobileKeyboardState } from '@/session/useMobileKeyboardState';
 import { useModalFadeLifecycle } from '@/session/useModalFadeLifecycle';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { useThemedStyles, type ThemeColors } from '@/theme';
+import { motionDuration } from '@/theme/tokens';
 
 export interface SheetModalProps {
   visible: boolean;
@@ -58,10 +64,19 @@ export function SheetModal({
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
   const { height: windowHeight } = useWindowDimensions();
+  const geometry = useAdaptiveWindow();
+  const keyboard = useMobileKeyboardState();
+  const { region, floating } = modalLayout(geometry, keyboardAvoiding && Platform.OS !== 'android' ? keyboard.height : 0);
+  const displaced = floating || geometry.regions.length > 0 || geometry.barEdge !== 'none'
+    || geometry.insets.left > 0 || geometry.insets.right > 0;
+  const [contentHeight, setContentHeight] = useState(geometry.height);
   // 背板淡入 + 面板滑入共用一条 progress;关闭淡出/滑出播完后再卸载 Modal。
+  // sheet 是重浮层:入场 motionDuration.enter / 退场 exit(§14.4);减弱动态效果(含未查询到的
+  // 首帧)时长为 0,直接到位。
+  const reduceMotion = useReduceMotionEnabled();
   const { mounted, progress, onShowStartIn } = useModalFadeLifecycle(visible, {
-    inMs: 150,
-    outMs: 120,
+    inMs: reduceMotion === false ? motionDuration.enter : 0,
+    outMs: reduceMotion === false ? motionDuration.exit : 0,
     onClosed,
   });
 
@@ -95,8 +110,8 @@ export function SheetModal({
     [progress, windowHeight],
   );
   const contentLayerStyle = useMemo(
-    () => [styles.contentLayer, { transform: [{ translateY }] }],
-    [styles, translateY],
+    () => [styles.contentLayer, { justifyContent: floating ? 'center' as const : 'flex-end' as const, transform: [{ translateY }] }],
+    [styles, translateY, floating],
   );
   const backdropStyle = useMemo(
     () => [styles.backdrop, { opacity: progress }],
@@ -105,13 +120,17 @@ export function SheetModal({
 
   // 内容层 box-none:空白区域的点击穿透到下层背板 Pressable,面板本体照常接收触摸。
   const content = (
-    <Animated.View key={contentEpoch} pointerEvents="box-none" style={contentLayerStyle}>
-      {children}
+    <Animated.View key={contentEpoch} pointerEvents="box-none" style={contentLayerStyle}
+      onLayout={event => setContentHeight(event.nativeEvent.layout.height)}>
+      <PaneViewportProvider value={{ width: displaced ? region.width : geometry.width, height: contentHeight }}>
+        <FloatingSheetContext.Provider value={floating}>{children}</FloatingSheetContext.Provider>
+      </PaneViewportProvider>
     </Animated.View>
   );
 
   return (
     <Modal
+      supportedOrientations={["portrait", "portrait-upside-down", "landscape-left", "landscape-right"]}
       animationType="none"
       onRequestClose={onRequestClose}
       onShow={onShowStartIn}
@@ -135,18 +154,19 @@ export function SheetModal({
           触发每帧 relayout 的布局回环 → 整窗持续重绘闪烁(用户 2026-07 报「+」/模型选择弹层
           键盘开着时一直闪;logcat 实测键盘不开合、但 MainActivity 每帧重绘)。故 Android 直接
           用 content、不套 KAV;iOS(adjustResize 不适用)仍需 KAV 走 padding 避让。 */}
-      {keyboardAvoiding && Platform.OS !== 'android' ? (
+      <View pointerEvents="box-none" style={displaced ? {
+        position: 'absolute', left: region.x, top: region.y, width: region.width, height: region.height,
+      } : styles.keyboardLayer}>
         <KeyboardAvoidingView
+          enabled={keyboardAvoiding && !displaced && Platform.OS !== 'android'}
           behavior={keyboardAvoidingBehavior}
-          keyboardVerticalOffset={0}
+          keyboardVerticalOffset={displaced ? region.y : 0}
           pointerEvents="box-none"
           style={styles.keyboardLayer}
         >
           {content}
         </KeyboardAvoidingView>
-      ) : (
-        content
-      )}
+      </View>
       </GestureHandlerRootView>
     </Modal>
   );

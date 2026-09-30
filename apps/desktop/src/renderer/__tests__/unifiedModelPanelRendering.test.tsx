@@ -17,6 +17,9 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+/** 统一面板发起的深度写入带上「面板已串行」标记(见 ModelSelector 的 onEffortChangeLive)。 */
+const FROM_PANEL = { serializedByPanel: true };
+
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
@@ -195,8 +198,16 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
 vi.mock('@/state/deviceLinkModelMirror', () => ({
   useDeviceLinkModelMirrorVersion: () => 0,
 }));
+// Remote directories read account usage from device mirrors; this suite has no device link.
+vi.mock('@/hooks/useRemoteDeviceUsage', () => ({
+  useRemoteCodexAccountUsage: () => null,
+  useRemoteXaiSubscriptionUsage: () => null,
+}));
+vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
+  useRemoteClaudeSubscriptionUsage: () => null,
+}));
 
-import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { ModelSelector, ModelSelectorContent } from '@/components/new-chat/ModelSelector';
 import {
   __resetForTest as resetEnginePrefs,
   getModelEngineOverride,
@@ -208,7 +219,6 @@ import {
   updateModelFavorite,
 } from '@/state/modelFavorites';
 import { setModelEngineOverride } from '@/state/modelEnginePrefs';
-import { PRICE_TIER_COLORS } from '@/themes/effortTierColors';
 
 const onProviderChange = vi.fn();
 
@@ -894,13 +904,41 @@ describe('统一面板 · 会话内形态', () => {
       providerId: 'xd',
       modelId: 'gpt-5.5',
       targetAgent: 'claude-code',
-      effort: 'medium',
+      // 当前行实际为 high，切 Harness 不恢复成 Claude 的默认 medium。
+      effort: 'high',
       // 浮层展示的目标配置里的 Fast(cc 那条无 Fast 能力 → false)。
       fast: false,
       // 改的是**模型行**的引擎,与收藏无关 → 显式清锚点(2026-08-17 review K3:三类调用点
       // 的传值语义各不相同,一律显式给,不靠调用方的缺省)。
       favoriteUid: null,
     });
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+  });
+
+  it.each(['low', 'high'])('切换同模型 Harness 保留当前 %s 档，不改成目标默认中档', async (effort) => {
+    renderPanel({ sessionEngineFilter, currentProviderId: 'xd', modelId: 'gpt-5.5', effort });
+    const flyout = await openRowFlyout('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'xd', modelId: 'gpt-5.5', targetAgent: 'claude-code', effort,
+    }));
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+  });
+
+  it('切换 Harness 时只因目标能力限制适配当前档位', async () => {
+    renderPanel({
+      sessionEngineFilter: { ...sessionEngineFilter, currentAgent: 'claude-code', runtimeAgent: 'claude-code' },
+      currentProviderId: 'xd', modelId: 'gpt-5.5', effort: 'medium',
+    });
+    const flyout = await openRowFlyout('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="codex"]') as HTMLElement);
+    });
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'xd', modelId: 'gpt-5.5', targetAgent: 'codex', effort: 'low',
+    }));
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
   });
 
@@ -1109,7 +1147,7 @@ describe('统一面板 · 会话内形态', () => {
         key: 'ArrowRight',
       });
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
   });
 });
 
@@ -1206,7 +1244,7 @@ describe('统一面板 · 恢复推荐应用到 live 配置', () => {
     });
     expect(onCrossEngineSelect).not.toHaveBeenCalled();
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     expect(onFastModeChange).toHaveBeenCalledWith(false);
   });
 
@@ -1569,7 +1607,7 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
     });
     // 默认引擎(codex)== 会话引擎 → 无损,不该弹跨引擎确认。
     expect(onCrossEngineSelect).not.toHaveBeenCalled();
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     expect(onFastModeChange).toHaveBeenCalledWith(false);
     expect(listModelFavorites()).toHaveLength(0);
   });
@@ -1674,7 +1712,7 @@ describe('统一面板 · 同引擎实时写入成功才清存储', () => {
     await act(async () => {
       fireEvent.click(within(flyout).getByText('恢复推荐'));
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     // 深度没写成 → 整件事放弃:不该留下用户从没选过的「旧档 + 无 Fast」。
     expect(onFastModeChange).not.toHaveBeenCalled();
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
@@ -1748,7 +1786,7 @@ describe('统一面板 · 同引擎实时写入成功才清存储', () => {
     await act(async () => {
       fireEvent.click(favoriteStar());
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     // 收藏是用户手存的东西,不可逆:回落配置没落成就绝不能把记录删了。
     expect(listModelFavorites()).toHaveLength(1);
     expect(listModelFavorites()[0]?.uid).toBe(uid);
@@ -1791,7 +1829,7 @@ describe('统一面板 · 两笔实时写入要么都落要么回滚', () => {
       fireEvent.click(within(flyout).getByText('恢复推荐'));
     });
     // 第一笔写推荐档 high,第二笔关 Fast 失败 → 第一笔按进入前的实时深度 low 回滚。
-    expect(onEffortChange.mock.calls).toEqual([['high'], ['low']]);
+    expect(onEffortChange.mock.calls).toEqual([['high', FROM_PANEL], ['low', FROM_PANEL]]);
     expect(onFastModeChange).toHaveBeenCalledWith(false);
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
   });
@@ -1818,7 +1856,7 @@ describe('统一面板 · 两笔实时写入要么都落要么回滚', () => {
     await act(async () => {
       fireEvent.click(within(flyout).getByText('恢复推荐'));
     });
-    expect(onEffortChange.mock.calls).toEqual([['high'], ['low']]);
+    expect(onEffortChange.mock.calls).toEqual([['high', FROM_PANEL], ['low', FROM_PANEL]]);
     // 回滚失败不改变结论:这次「恢复推荐」没成功,override / 记忆一律原样留着。
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
   });
@@ -1843,7 +1881,7 @@ describe('统一面板 · 两笔实时写入要么都落要么回滚', () => {
     await waitFor(() => {
       expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
     });
-    expect(onEffortChange.mock.calls).toEqual([['high']]);
+    expect(onEffortChange.mock.calls).toEqual([['high', FROM_PANEL]]);
   });
 });
 
@@ -1893,7 +1931,7 @@ describe('统一面板 · 改模型行的实时配置后收藏不再选中', () 
         key: 'ArrowRight',
       });
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     await waitFor(() => {
       expect(onUnifiedSelect).toHaveBeenCalledWith({
         providerId: 'xd',
@@ -2192,7 +2230,7 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
         key: 'ArrowRight',
       });
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     await waitFor(() => {
       expect(listModelFavorites()[0]?.effort).toBe('high');
     });
@@ -2340,7 +2378,7 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
         key: 'ArrowRight',
       });
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     expect(listModelFavorites()[0]?.effort).toBe('low');
   });
 
@@ -3144,7 +3182,7 @@ describe('统一面板 · 实测回归', () => {
     await act(async () => {
       fireEvent.keyDown(slider, { key: 'ArrowRight' });
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     // 关键回归点:改完档,浮层与列表都不许消失。
     expect(screen.queryByTestId('unified-model-config-flyout')).not.toBeNull();
     expect(screen.getByRole('listbox')).toBeTruthy();
@@ -3311,17 +3349,60 @@ describe('统一面板 · 合并行与 wire id', () => {
     expect(getEffort.mock.calls).not.toContainEqual(['claude-code', 'openai', 'gpt-5.6']);
   });
 
-  it('本地简介单行截断并挂 title，不透出上游英文描述，模型名同理', () => {
+  it('全部模型优先显示来源，Cindy AI 保留单行本地简介', () => {
     renderPanel();
     const row = rowFor('GPT-5.6');
     expect(row.textContent).not.toContain('A very long English');
-    const desc = within(row).getByText('用于编写代码、排查错误与改进程序。');
+    expect(row.querySelector('[data-model-source-details]')?.textContent).toBe('OpenAI');
+    expect(within(row).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
+    const desc = within(rowFor('GPT-5.5')).getByText('用于编写代码、排查错误与改进程序。');
     expect(desc.getAttribute('title')).toBe('用于编写代码、排查错误与改进程序。');
     expect(desc).toBeTruthy();
     expect(desc.className).toContain('truncate');
     const name = within(row).getByText('GPT-5.6');
     expect(name.getAttribute('title')).toBe('GPT-5.6');
     expect(name.className).toContain('truncate');
+  });
+
+  it.each([
+    { providerId: 'openai', modelName: 'GPT-5.6', accountField: 'openAiAccount', named: false },
+    { providerId: 'openai', modelName: 'GPT-5.6', accountField: 'openAiAccount', named: true },
+    { providerId: 'anthropic', modelName: 'Opus 5', accountField: 'subscriptionAccount', named: false },
+    { providerId: 'anthropic', modelName: 'Opus 5', accountField: 'subscriptionAccount', named: true },
+  ])('全部和收藏显示识别出的账号，不重复已有账号名：$providerId / $named', ({ providerId, modelName, accountField, named }) => {
+    const original = providersRef.providers;
+    const identity = 'recognized@example.test';
+    providersRef.providers = original.map((value) => {
+      const provider = value as Record<string, unknown>;
+      return provider.id === providerId ? {
+        ...provider,
+        name: named ? `工作账号 · ${identity}` : '工作账号',
+        [accountField]: { source: 'oauth', identity },
+      } : provider;
+    });
+    try {
+      renderPanel();
+      expect(rowFor(modelName).querySelector('[data-model-source-details]')?.textContent).toBe(`工作账号 · ${identity}`);
+      fireEvent.click(within(rowFor(modelName)).getByRole('button', { name: '存为收藏' }));
+      fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!);
+      expect(rowFor(modelName).querySelector('[data-model-source-details]')?.textContent).toBe(`工作账号 · ${identity}`);
+    } finally {
+      providersRef.providers = original;
+    }
+  });
+
+  it('收藏保持来源第二行，切到单供应商分栏恢复简介', () => {
+    renderPanel();
+    fireEvent.click(within(rowFor('GPT-5.6')).getByRole('button', { name: '存为收藏' }));
+    fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!);
+    expect(rowFor('GPT-5.6').querySelector('[data-model-source-details]')?.textContent).toBe('OpenAI');
+    fireEvent.click(document.querySelector('[data-rail-item="provider:openai"]')!);
+    const providerRows = within(screen.getByRole('listbox')).getAllByText('GPT-5.6');
+    for (const name of providerRows) {
+      const row = name.closest('[data-unified-anchor]') as HTMLElement;
+      expect(row.querySelector('[data-model-source-details]')).toBeNull();
+      expect(within(row).getByText('用于编写代码、排查错误与改进程序。')).toBeTruthy();
+    }
   });
 
   it('没有折扣的行不渲染折扣徽标', () => {
@@ -3410,11 +3491,7 @@ describe('统一面板 · 行内折扣徽标', () => {
     expect(tierNode.innerHTML).toContain('inset(0 50% 0 0)');
     withBadge.unmount();
 
-    // 颜色只由点亮格数决定:亮 1 格绿 / 2 格黄 / 3 格红,与模型档位无关。
-    // jsdom 把 hex 序列化成 rgb —— 按常量换算后断言,不写死魔法数字。
-    const hexToRgb = (hex: string) =>
-      `rgb(${parseInt(hex.slice(1, 3), 16)}, ${parseInt(hex.slice(3, 5), 16)}, ${parseInt(hex.slice(5, 7), 16)})`;
-    // $$$ 六折(实付 60%)→ round(1.8)=2 格亮 → 黄(t2),裁掉右侧 1/3。
+    // 折扣档串也保持中性色。
     const solLike = render(
       React.createElement(UnifiedModelRow, {
         ...common,
@@ -3428,11 +3505,10 @@ describe('统一面板 · 行内折扣徽标', () => {
       }),
     );
     const solNode = solLike.container.querySelector('[data-price-tier]') as HTMLElement;
-    expect(solNode.innerHTML).toContain(hexToRgb(PRICE_TIER_COLORS.t2));
-    expect(solNode.innerHTML).not.toContain(hexToRgb(PRICE_TIER_COLORS.t3));
+    expect(solNode.innerHTML).toContain('color: var(--text-secondary)');
     solLike.unmount();
 
-    // $$$ 一折(实付 10%)→ 至少 1 格亮 → 绿(t1)。
+    // $$$ 一折(实付 10%)→ 至少 1 格亮，仍用中性色。
     const deepDiscount = render(
       React.createElement(UnifiedModelRow, {
         ...common,
@@ -3447,11 +3523,10 @@ describe('统一面板 · 行内折扣徽标', () => {
     );
     const deepNode = deepDiscount.container.querySelector('[data-price-tier]') as HTMLElement;
     expect(deepNode.textContent).toContain('$$$');
-    expect(deepNode.innerHTML).toContain(hexToRgb(PRICE_TIER_COLORS.t1));
-    expect(deepNode.innerHTML).not.toContain(hexToRgb(PRICE_TIER_COLORS.t3));
+    expect(deepNode.innerHTML).toContain('color: var(--text-secondary)');
     deepDiscount.unmount();
 
-    // 无折扣付费行:$ 串按档位色渲染,无 ↓ 徽标。
+    // 无折扣付费行:$ 串用中性色渲染,无 ↓ 徽标。
     const plain = render(
       React.createElement(UnifiedModelRow, {
         ...common,
@@ -3657,18 +3732,18 @@ describe('统一选择器 · 旧偏好与配置变更回归', () => {
     });
   });
 
-  it('编辑收藏的异步 Fast 写入期间，不能再改深度或删除收藏', async () => {
+  it('编辑收藏的异步 Fast 写入期间，改深度与删除收藏排队，落定后按顺序执行', async () => {
     const uid = addModelFavorite({
       providerId: 'xd',
       modelId: 'gpt-5.5',
       agent: 'codex',
       effort: 'low',
     });
-    let finish!: (value: boolean) => void;
+    const fastWrites: Array<(value: boolean) => void> = [];
     const onFastModeChange = vi.fn(
       () =>
         new Promise<boolean>((resolve) => {
-          finish = resolve;
+          fastWrites.push(resolve);
         }),
     );
     const onEffortChange = vi.fn();
@@ -3693,13 +3768,17 @@ describe('统一选择器 · 旧偏好与配置变更回归', () => {
       });
       fireEvent.click(within(favorite).getByRole('button', { name: '取消收藏' }));
     });
+    // 同一时刻只提交一笔:Fast 写入在途时,深度与删除都还没发出。
     expect(onFastModeChange).toHaveBeenCalledTimes(1);
     expect(onEffortChange).not.toHaveBeenCalled();
     expect(listModelFavorites()).toHaveLength(1);
     await act(async () => {
-      finish(true);
+      fastWrites[0]?.(true);
     });
-    expect(listModelFavorites()[0]?.fast).toBe(true);
+    // Fast 落定、收藏副本写入后,才按点击顺序提交排队的深度,最后执行删除;
+    // 全程没有第二笔并发写入。
+    await waitFor(() => expect(listModelFavorites()).toHaveLength(0));
+    expect(onFastModeChange).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -3805,7 +3884,7 @@ describe('统一面板 · 重选与草稿失败恢复', () => {
       await act(async () => {
         finish(true);
       });
-      expect(onDismiss).toHaveBeenCalledTimes(1);
+      expect(onDismiss).toHaveBeenCalledTimes(operation === 'select' ? 1 : 0);
       if (operation === 'reset') expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
       if (uid) expect(listModelFavorites()).toHaveLength(0);
     },
@@ -3841,7 +3920,7 @@ describe('统一面板 · 推理滑杆一次拖动只写最终档', () => {
     });
     if (eventType === 'pointerup') {
       expect(onEffortChange).toHaveBeenCalledTimes(1);
-      expect(onEffortChange).toHaveBeenCalledWith('high');
+      expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     } else expect(onEffortChange).not.toHaveBeenCalled();
   });
 });
@@ -4011,4 +4090,62 @@ it('teammate fallback exposes supported Harness choices and preserves the primar
   await act(async () => { fireEvent.click(cc); });
   await act(async () => { fireEvent.click(within(rowFor('GPT-5.6')).getByText('GPT-5.6')); });
   expect(change).toHaveBeenLastCalledWith([primary, expect.objectContaining({ harness: 'claude', providerId: 'openai', model: 'chatgpt/gpt-5.6' })]);
+});
+
+
+describe('harness configuration keeps the model menu open', () => {
+  it.each(['success', 'cancel', 'error'] as const)('%s keeps both menus available', async (outcome) => {
+    let finish!: (value: boolean) => void;
+    let fail!: (error: Error) => void;
+    const change = vi.fn(() => new Promise<boolean>((resolve, reject) => {
+      finish = resolve;
+      fail = reject;
+    }));
+    function Picker() {
+      const [pendingTarget, setPendingTarget] = React.useState<'claude-code' | undefined>();
+      return <ModelSelector
+        modelId="gpt-5.5" effort="high" vendorKey="codex"
+        currentProviderId="xd" onModelChange={vi.fn()} onEffortChange={vi.fn()}
+        sessionEngineFilter={{
+          currentAgent: 'codex',
+          runtimeAgent: 'codex',
+          pendingTarget,
+          onCrossEngineSelect: async ({ targetAgent }) => {
+            const applied = await change();
+            if (applied) setPendingTarget(targetAgent === 'claude-code' ? targetAgent : undefined);
+            return applied;
+          },
+        }}
+      />;
+    }
+    render(<Picker />);
+    await act(async () => { fireEvent.click(screen.getByRole('button')); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '全部' })); });
+    const flyout = await openRowFlyout('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    expect(change).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    await act(async () => {
+      if (outcome === 'error') fail(new Error('switch failed'));
+      else finish(outcome === 'success');
+    });
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    expect(screen.getByTestId('unified-model-config-flyout')).toBeTruthy();
+    if (outcome === 'success') {
+      expect(screen.getByTestId('unified-model-config-flyout')
+        .querySelector('[data-engine-capsule="cc"]')?.getAttribute('aria-pressed')).toBe('true');
+      // Switching back must clear the pending intent through the same transaction.
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('unified-model-config-flyout')
+          .querySelector('[data-engine-capsule="codex"]') as HTMLElement);
+      });
+      expect(change).toHaveBeenCalledTimes(2);
+      await act(async () => { finish(true); });
+    }
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    expect(screen.getByTestId('unified-model-config-flyout')
+      .querySelector('[data-engine-capsule="codex"]')?.getAttribute('aria-pressed')).toBe('true');
+  });
 });

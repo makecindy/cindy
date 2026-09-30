@@ -11,8 +11,7 @@
  *      有记忆才讲怎么记。伙伴不需要先去「发现」自己会什么 —— 开局就写在
  *      提示词里。判定信号用 runtime 已解析的 toolset id(等价于 Hermes 的
  *      valid_tool_names)。
- *   3. **技能索引整份进提示词**:每个技能的名字与一句话描述都可见,不靠
- *      模型自己翻目录。
+ *   3. **技能入口进提示词**:小目录直接可见，大目录提供完整检索入口，正文按需读。
  *
  * 为什么必须这么做(2026-08-21 真机实证):伙伴会话里 cindy_docs 明明挂载成功
  * (日志 instance_resolved),但 make_pptx / list_tools 的调用次数是 0 —— 模型
@@ -48,7 +47,7 @@ export interface BotSystemPromptInput {
   /** SOUL:身份正本。空则由调用方兜底。 */
   identity: string;
   capabilities: BotPromptCapabilitySignals;
-  /** 伙伴自有技能索引(全部,不截断)。 */
+  /** 宿主投影的技能入口；原文件与完整目录由存储层保留。 */
   skillIndex: readonly BotPromptSkillIndexEntry[];
   /** 队友名册(见 buildBotTeammateRoster)。没有队友时不传。 */
   teammates?: readonly { id: string; name: string; description?: string | null }[];
@@ -137,7 +136,7 @@ const TASK_AND_TEAMMATE_GUIDANCE = [
   '- `message_session_task` 默认排队补充条件；mode=steer 插入正在运行的同一轮，不支持时明确失败；mode=resume 恢复暂停且保留同一执行任务，不重放原请求。已暂停且等待授权、问题或计划确认时，先恢复再回答；不要为了补一句话另开任务。',
   '- `stop_session_task` 默认取消指定任务；mode=request-stop 只请求当前轮优雅停止；mode=pause 保留任务和排队输入直到显式恢复。pausing、requested 或 unconfirmed 不代表引擎已停，必须按回执如实说明。只有用户要求停止，或继续执行会不安全时才使用。',
   '- 后台任务完成、失败或停止时，当前时间线里的任务卡会更新，结果和文件会自动回到这里。',
-  '- `send_to_agent` 只给「你的队友」里明确存在的伙伴发一条异步消息，不启动任务，也没有进度、停止或自动交付。只有用户明确点名某个伙伴，或当前工作确实需要那个伙伴的身份和信息时，才用名册里的稳定 Bot id。编码实施和中大型工作必须用 `start_session_task`，不能把给伙伴发消息当作分配任务。',
+  '- `list_agents` 可发现本机和同账号已授权远程设备上的伙伴；用返回的稳定 id 区分同名伙伴，不猜 ID。`send_to_agent` 只给名册里明确存在的伙伴发一条异步消息，不启动任务，也没有进度、停止或自动交付。只有用户明确点名某个伙伴，或当前工作确实需要那个伙伴的身份和信息时，才用名册里的稳定 Bot id。编码实施和中大型工作必须用 `start_session_task`，不能把给伙伴发消息当作分配任务。',
   '- 收到 `[Direct message from Cindy Bot ...]` 时，在自己的当前主任务里处理。确有答案、结果或澄清要回传时，用消息头里的 Bot id 作为 `target_id` 调用 `send_to_agent`；不要只为“收到”“好的”互相确认，也不要为了等回复自建循环。',
   '后台任务负责独立工作并回传结果；伙伴消息只负责沟通，不保证对方执行或交付。它们都不是命令对方，也不会改变对方是谁。用户如果要求"让某个伙伴听话",说明这条边界,然后直接给出可以协作的做法。',
 ].join('\n');
@@ -177,7 +176,7 @@ export function buildBotTeammateRoster(
   return [
     '## 你的队友',
     ...rows,
-    '只有明确要联系某个伙伴时，才把上面的 id 传给 `send_to_agent`。开后台任务用 `start_session_task`，不要从名册挑人。不确定该找谁就别猜，问用户一句。',
+    '只有明确要联系某个伙伴时，才把上面或 `list_agents` 返回的 id 传给 `send_to_agent`。开后台任务用 `start_session_task`，不要从名册挑人。不确定该找谁就别猜，问用户一句。',
   ].join('\n');
 }
 
@@ -247,10 +246,8 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
 }
 
 /**
- * 技能索引:全部技能的名字 + 一句话描述。
- *
- * 照搬 Hermes 的口径 —— 索引里**不省略任何技能名**。模型看得见名字才知道
- * 自己有这份本事;正文按需再读。
+ * 技能索引:宿主提供的有界运行时目录。大目录由原生检索 Skill 引导按需
+ * 读取完整目录与原文件；此处不再次展开整个存储目录。
  */
 export function buildBotSkillIndex(entries: readonly BotPromptSkillIndexEntry[]): string {
   const rows = entries

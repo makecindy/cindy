@@ -5,7 +5,10 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { DownloadError } from '../../downloader/index.js';
 import { makeToolCatalog } from '../toolCatalog.js';
 import { installedMakeTool, installMakeTool } from '../toolInstaller.js';
-import { selectMakeToolchainEnvironment } from '../toolchainEnvironment.js';
+import {
+  resolveMakeToolEnvironment,
+  selectMakeToolchainEnvironment,
+} from '../toolchainEnvironment.js';
 import { makeToolProcessEnvironment } from '../doctorEnvironment.js';
 
 vi.mock('../../logger.js', () => ({
@@ -147,6 +150,107 @@ describe('private, atomic tool installation', () => {
 });
 
 describe('compatible local tool reuse and scoped environment', () => {
+  it.each(['python', 'py'] as const)(
+    'reuses a system Python available only through %s without a managed copy',
+    async (available) => {
+      const executable = path.win32.join('C:', 'System Python', 'python.exe');
+      const launcher = path.win32.join('C:', 'Windows', 'py.exe');
+      const commands: Array<[string, readonly string[]]> = [];
+      const env = selectMakeToolchainEnvironment(
+        (tools) => ({
+          platform: 'win32',
+          arch: 'x64',
+          native: vi.fn(),
+          storage: vi.fn(),
+          probe: async (command, args) => {
+            commands.push([command, args]);
+            if (command === 'python3' && !tools.python)
+              return {
+                status: 'ok',
+                stdout: 'Python 2.7.0',
+                path: path.win32.join('C:', 'old', 'python3.exe'),
+              };
+            if (tools.python) return { status: 'ok', stdout: 'Python 3.12.10', path: tools.python };
+            if (command !== available) return { status: 'missing', stdout: '' };
+            return {
+              status: 'ok',
+              path: available === 'py' ? launcher : executable,
+              stdout: args.includes('-c') ? executable + '\n' : 'Python 3.12.10',
+            };
+          },
+        }),
+        {},
+        (tools) => makeToolProcessEnvironment(tools, { PATH: '' }, 'win32', ''),
+      );
+      await expect(
+        resolveMakeToolEnvironment(env, ['python'], new AbortController().signal),
+      ).resolves.toMatchObject({ PYTHON: executable, npm_config_python: executable });
+      expect(commands.slice(0, 2)).toEqual([
+        ['python3', ['--version']],
+        ['python', ['--version']],
+      ]);
+      if (available === 'py') {
+        expect(commands.slice(2)).toEqual([
+          ['py', ['-3', '--version']],
+          ['py', ['-3', '-c', 'import sys; print(sys.executable)']],
+        ]);
+      }
+    },
+  );
+
+  it('selects cached Git, Node, pnpm and Python before taking the workspace environment snapshot', async () => {
+    const cached = {
+      git: path.join(temp, 'tools', 'git'),
+      node: path.join(temp, 'tools', 'node'),
+      pnpm: path.join(temp, 'tools', 'pnpm'),
+      python: path.join(temp, 'tools', 'python3'),
+    };
+    const commands: string[] = [];
+    const env = selectMakeToolchainEnvironment(
+      (tools) => ({
+        platform: 'linux',
+        arch: 'x64',
+        storage: vi.fn(),
+        native: vi.fn(),
+        probe: async (command) => {
+          commands.push(command);
+          const executable =
+            command === 'git'
+              ? tools.git
+              : command === 'node'
+                ? tools.node
+                : command === 'python3'
+                  ? tools.python
+                  : tools.pnpm;
+          if (!executable) return { status: 'missing', stdout: '' };
+          if (command === 'pnpm') expect(tools.node).toBe(cached.node);
+          return {
+            status: 'ok',
+            path: executable,
+            stdout:
+              command === 'git'
+                ? 'git version 2.45.0'
+                : command === 'node'
+                  ? 'v24.16.0'
+                  : command === 'python3'
+                    ? 'Python 3.12.10'
+                    : '10.33.2',
+          };
+        },
+      }),
+      cached,
+      (tools) => makeToolProcessEnvironment(tools, { PATH: '' }, 'linux', ''),
+    );
+    await expect(
+      resolveMakeToolEnvironment(
+        env,
+        ['git', 'node', 'pnpm', 'python'],
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({ PYTHON: cached.python, npm_config_python: cached.python });
+    expect(commands).toEqual(['git', 'git', 'node', 'node', 'pnpm', 'pnpm', 'python3', 'python3']);
+  });
+
   it.each([
     ['win32', path.win32, 'C:\\existing\\bin', 'C:\\managed\\node\\node.exe'],
     ['linux', path.posix, '/existing/bin', '/managed/node/bin/node'],

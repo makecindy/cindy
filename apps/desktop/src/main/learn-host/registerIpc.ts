@@ -11,6 +11,7 @@ import { BrowserWindow, ipcMain } from 'electron';
 import { createLogger } from '../logger';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap';
 import { throwIpcError } from '../utils/ipcValidate';
+import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences';
 import type { IpcErrorCode } from '../../shared/ipc-errors';
 import type {
   LearnEventPayload,
@@ -74,6 +75,9 @@ export function registerLearnIpc(): void {
   if (_learnIpcRegistered) return;
   _learnIpcRegistered = true;
   ipcMain.handle(LEARN_CHANNELS.START, async (_event, req: LearnStartRequest) => {
+    if (!isCindyLearnSkillEnabled()) {
+      throwIpcError('PERMISSION_DENIED', 'Cindy Learn is disabled in Local Skills.');
+    }
     try {
       return await mustController().startLearn(req);
     } catch (err) {

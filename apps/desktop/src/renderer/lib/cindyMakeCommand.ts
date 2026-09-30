@@ -1,4 +1,5 @@
 import type { AgentKind, UnifiedCommand } from '@cindy/maker-core';
+import { i18n } from '@/i18n';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -56,6 +57,12 @@ export interface CindyMakeCommandInput {
 type MakeCommandResult =
   | { kind: 'none' | 'stale' | 'failed' }
   | { kind: 'blocked'; messageKey: string }
+  | {
+      kind: 'preflight';
+      request: string;
+      sessionId?: string;
+      createOptions: CindyMakeCommandInput['createOptions'];
+    }
   | { kind: 'started'; sessionId: string };
 
 /** Native entry shared by home and existing-task composers, before model/send gates. */
@@ -109,19 +116,24 @@ export async function tryStartCindyMakeCommand(
     if (input.remoteHostId || input.deviceId !== null) {
       return { kind: 'blocked', messageKey: `${copy}.localOnly` };
     }
+    if (match.invocation.command === 'cindy-make') {
+      if (match.invocation.request.length > 4000)
+        return { kind: 'blocked', messageKey: 'cindyMake.usage' };
+      return {
+        kind: 'preflight',
+        request: match.invocation.request,
+        sessionId: input.sessionId,
+        createOptions: input.createOptions,
+      };
+    }
     const sessionId = await ensureMakeTask({
       sessionId: input.sessionId,
       createOptions: input.createOptions,
-      title:
-        match.kind === 'start'
-          ? match.invocation.command === 'cindy-make'
-            ? match.invocation.request.trim().replace(/\s+/g, ' ').slice(0, 80)
-            : 'Cindy Make 环境检查'
-          : undefined,
+      title: i18n.t('cindyMakeDoctor.title'),
       isCurrent,
     });
     if (!sessionId || !isCurrent()) return { kind: 'stale' };
-    return startMakeDoctorInStream(sessionId, match.invocation, undefined, { modalOnly: true })
+    return startMakeDoctorInStream(sessionId, match.invocation)
       ? { kind: 'started', sessionId }
       : { kind: 'failed' };
   } catch {

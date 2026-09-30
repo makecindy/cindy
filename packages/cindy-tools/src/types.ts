@@ -129,6 +129,7 @@ export interface CindyGhostInfo {
   recall?: string;
   /** 随包手册的轻量一级索引；正文必须另行调用 ghost_manual 按需读取。 */
   manual?: CindyGhostManualIndexItem[];
+  /** Manual-only 插件为空数组；发现或读取手册不授予插件工具能力。 */
   tools: CindyGhostToolInfo[];
   /**
    * Host 现查的配置评估。支持 Setup Runtime 的 Host 应尽量返回，但评估
@@ -223,7 +224,8 @@ export type CindyGhostCallResult =
 /** ghost_forge_pack 的结构化失败分类(host 侧产生,原样透传给 agent)。 */
 export type CindyForgePackErrorCode =
   | 'DIR_NOT_FOUND' // 目录不存在或不是目录
-  | 'SOURCE_OUTSIDE_WORKDIR' // 源目录不在当前会话工作目录内
+  | 'SOURCE_OUTSIDE_WORKDIR' // 源目录在工作目录外且未获当前会话权限,或会话工作目录缺失
+  | 'PERMISSION_DENIED' // 工作目录外源码未获 Full Access / Auto 审阅 / 用户确认
   | 'WORKDIR_NOT_LOCAL' // 当前会话工作目录在远端或无法证明为本地
   | 'WORKDIR_READ_ONLY' // 当前会话禁止写入
   | 'SOURCE_IS_INSTALLED_PLUGIN' // 源目录命中 Host 管理的已安装插件或批准状态根
@@ -320,7 +322,7 @@ export type CindyForgeScaffoldResult =
     }
   | {
       ok: false;
-      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'WORKDIR_NOT_LOCAL' | 'WORKDIR_READ_ONLY' | 'INTERNAL';
+      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'WORKDIR_NOT_LOCAL' | 'WORKDIR_READ_ONLY' | 'PERMISSION_DENIED' | 'INTERNAL';
       message: string;
     };
 
@@ -351,7 +353,7 @@ export interface CindyGhostsMcpDeps {
   searchMarket?(query: string): Promise<Record<string, unknown>>;
   installMarket?(request: { pluginId: string; releaseId: string }, signal?: AbortSignal): Promise<Record<string, unknown>>;
   /** Host-owned connection card. No URLs or credentials may be supplied by the model. */
-  connectAccount?(target: { kind: 'plugin'; id: string; reauthorize?: boolean } | { kind: 'host'; id: 'grok'; reauthorize?: boolean }): Promise<Record<string, unknown>>;
+  connectAccount?(target: { kind: 'plugin'; id: string; reauthorize?: boolean } | { kind: 'host'; id: 'grok'; reauthorize?: boolean }, signal?: AbortSignal): Promise<Record<string, unknown>>;
   /** Cindy Core 原生媒体调用器；能力本身不依赖任何插件。 */
   callMedia?(request: CindyMediaToolRequest): Promise<Record<string, unknown>>;
   /**
@@ -379,6 +381,8 @@ export interface CindyGhostsMcpDeps {
     ghostId: string;
     tool: string;
     args: Record<string, unknown>;
+    /** Host-only cancellation from the MCP request; never enters plugin args. */
+    signal?: AbortSignal;
     /**
      * 媒体过户(可选):会话里用户媒体或当前 Agent / Core 工具生成结果的
      * 地址(xdt-image:// / cindy-media://blobs/ / 本机绝对路径,主机归一化并验归属)。

@@ -10,6 +10,13 @@ Pi 的 `thinkingLevelMap` 是稀疏映射：标准档位省略时仍支持，`nu
 `xhigh`、`max` 则需要显式映射。目录导入、客户端目录和启动快照必须共用此解释，
 不能把 `Object.keys(map)` 当成完整能力列表，导致默认档被错误替换成更高档。
 
+原生档位表只为缺少公共定义的模型补默认；公共定义存在时按
+[思考强度继承规则](../product-rules/model-metadata-precedence.md#思考强度模型默认按需覆盖)
+解析。不要将静态思考档位放入 `discoveredMetadata` 压过 Registry，也不要在能力描述符
+中追加档位。原生参数别名仍在 `thinkingLevelMap` 保留，显式通道能力及用户覆盖保持优先。
+Server 明确给出的 Pi `reasoning: false` / `reasoningEfforts` 属于通道能力约束；
+旧 Pi 条目的 `efforts` / `defaultEffort` 属于默认兜底，不能冒充实报压过公共配置。
+
 删除临时兼容补项前，必须验证随包 Pi 已原生支持相同模型、协议及参数；
 仅 Server 新增该模型不足以证明可以删除兼容代码。专项规则见 [Pi harness](pi-harness.md)。
 
@@ -76,9 +83,23 @@ Server 目录；不改 Gateway 的价格、成员、上下文与可用性。
 
 ### 模型简介本地化
 
-Desktop 模型选择器（含收藏）、旧入口的配置浮层及设置详情统一使用
+Desktop 模型选择器、旧入口的配置浮层及设置详情在展示简介时统一使用
 `renderer/lib/modelDescriptions.ts` 解析本地简介，文案放在五语 `common.json` 的
 `modelDescriptions`。只写简短用途，不从文案推导能力、协议、价格、窗口或默认档位。
+
+模型选择器的「全部」「收藏」分栏中，非 Cindy AI 模型的第二行优先展示供应商、
+已识别账号及可用的订阅套餐余量；账号已包含在供应商名称中时不重复追加。余量仅用
+重置倒计时和剩余百分比表示，不显示图表或周期标题。耗量告警仅作用于百分比，
+倒计时保持普通辅助文字色；过期窗口最多显示 10 分钟「重置中」，随后显示未知值，
+不把旧百分比当作新周期余量。ChatGPT Web 套餐名不回退到 Codex CLI 来源。
+费用符号、折扣和免费标签统一使用中性色，保留原价档位的符号个数、折扣明暗与百分比标签。
+整行不换行，长来源名称省略；额度段最多占行宽 70%，过长时省略，
+给来源保留可见空间，悬停仍可查看完整来源与额度状态。远程目录不读取本机账号余量，改读被控端用量镜像
+（与会话用量 chip 共用同一缓存与推送，口径同 `useProviderWeeklyQuota.ts`）；Cindy AI 及单供应商分栏
+继续展示本地简介。实现见 `renderer/components/new-chat/ModelSourceDetails.tsx` 和
+`UnifiedModelRow.tsx`，行为覆盖见 `renderer/__tests__/modelSourceDetails.test.tsx` 及
+`unifiedModelPanelRendering.test.tsx`。
+
 同系列不同接入路径复用用途说明；特殊长上下文版本保留单独的费用提醒。
 媒体用途优先尊重明确的类型字段，不能因厂商分组是 GPT 就介绍成编程模型。
 
@@ -137,7 +158,6 @@ Server 维护 Registry V4 的 `localModels`，本仓 `model-registry.json` 仅�
 不得重新增加独立的硬编码推荐名单。更新时协调完整 Registry revision 和服务端覆盖源，
 保持旧客户端的版本投影与显式空推荐语义。
 
-
 ### 原生缓存与简略列表的字段完整性（2026-09-07）
 
 Codex 的 `context_window` 是工作默认，`max_context_window` 是原生最大窗口，不能互相代替。
@@ -150,7 +170,6 @@ Codex 的 `context_window` 是工作默认，`max_context_window` 是原生最�
 下架型号不能因为补元数据而被重新加入。无原生数据时仍依赖 Registry，不能把读取失败推断成 872K 或 1M。
 
 2026-09-07 的全目录核对与源侧待办见 [2026-09-07 核对记录](../model-catalog-audit-2026-09-07.md)。
-
 
 ### 型号标准与 Gateway 控制（2026-09-07 用户裁决）
 
@@ -174,18 +193,67 @@ GPT `[1m]` 是旧窗口预设，退出 Desktop 管理和新选择清单；完整
 
 ## 从需求找到代码
 
-| 阶段 | 代码入口与函数 | 相关验证位置 |
-| --- | --- | --- |
-| 完整 Catalog / Registry 校验 | [catalog.ts](../../packages/model-providers/src/catalog.ts) `parseCatalog`；[modelAccessValidator.ts](../../packages/model-providers/src/modelAccessValidator.ts) `parseModelRegistry` | [catalog.test.ts](../../packages/model-providers/src/__tests__/catalog.test.ts)、[modelAccessValidator.test.ts](../../packages/model-providers/src/__tests__/modelAccessValidator.test.ts) |
-| 数据源、缓存、内置回退 | [source.ts](../../packages/model-providers/src/source.ts) `loadCatalogWithSource` / `selectNewerModelRegistry`；[modelRegistry.ts](../../packages/model-providers/src/modelRegistry.ts) `decideModelRegistrySnapshot` | [source-registry.test.ts](../../packages/model-providers/src/__tests__/source-registry.test.ts)、[modelRegistry.test.ts](../../packages/model-providers/src/__tests__/modelRegistry.test.ts) |
-| 资料继承与预设 | [modelMetadataLayers.ts](../../packages/model-providers/src/modelMetadataLayers.ts) `resolveModelMetadata`；[user-provider.ts](../../packages/model-providers/src/user-provider.ts) `buildUserProvider` | [modelMetadataLayers.test.ts](../../packages/model-providers/src/__tests__/modelMetadataLayers.test.ts)、[user-provider.test.ts](../../packages/model-providers/src/__tests__/user-provider.test.ts) |
-| Desktop 活动目录与刷新 | [createDesktopProviderService.ts](../../apps/desktop/src/main/maker-host/createDesktopProviderService.ts)；[active-catalog.ts](../../apps/desktop/src/main/maker-host/active-catalog.ts) | [host 测试](../../apps/desktop/src/main/maker-host/__tests__) |
-| 用户覆盖 | [localCatalogOverrides.ts](../../apps/desktop/src/main/maker-host/model-plane/localCatalogOverrides.ts)；[model-catalog-override-store.ts](../../apps/desktop/src/main/maker-host/model-catalog-override-store.ts) | host 的 modelPlane / override 测试 |
-| 多账号与公共目录身份 | [provider-identity.ts](../../packages/model-providers/src/provider-identity.ts) `providerCatalogId`；[subscription-account-models.ts](../../apps/desktop/src/main/maker-host/subscription-account-models.ts) `refreshSubscriptionAccountModels`；凭证适配见同目录 codex-account-auth / subscription-account-auth | [目录共用与账号隔离测试](../../apps/desktop/src/main/maker-host/__tests__/openAiAccountCatalogParity.test.ts)、[订阅凭证测试](../../apps/desktop/src/main/maker-host/__tests__/subscription-account-auth.test.ts) |
-| 媒体列表投影 | [providerMediaModels.ts](../../packages/model-providers/src/providerMediaModels.ts) `projectProviderMediaModels` | [providerMediaModels.test.ts](../../packages/model-providers/src/__tests__/providerMediaModels.test.ts) |
-| 本地候选与推荐 | [localModelCatalog.ts](../../packages/model-providers/src/localModelCatalog.ts)；[localModelRuntime.ts](../../apps/desktop/src/shared/localModelRuntime.ts) `recommendForHost` | [localModelRuntime.test.ts](../../apps/desktop/src/shared/__tests__/localModelRuntime.test.ts) |
-| 模型路由进入执行配置 | [runtime-configs.ts](../../apps/desktop/src/main/maker-host/runtime-configs.ts)、[model-plane](../../apps/desktop/src/main/maker-host/model-plane)、[pi-host.ts](../../apps/desktop/src/main/maker-host/pi-host.ts) | host 及 [maker-core 测试入口](../../packages/maker-core/src/agents) |
+Desktop 本机目录只有在 providers、capabilities 和当前账号的模型显示设置均就绪后才提交。
+初始化失败保留上一份有效列表，并在选择器和供应商设置页显示原因与重新加载入口；
+启动的三次短重试结束后，主窗口还会进行有界退避重试，回到窗口或网络恢复时可再次尝试。
+错误与重试均按账号代际隔离。设置损坏不自动重置，原有显示开关和迁移归属检查继续保留；
+本机恢复不修改 device-link 的远端目录缓存或重连策略。
+
+| 阶段                         | 代码入口与函数                                                                                                                                                                                                                                                                                                   | 相关验证位置                                                                                                                                                                                                      |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 完整 Catalog / Registry 校验 | [catalog.ts](../../packages/model-providers/src/catalog.ts) `parseCatalog`；[modelAccessValidator.ts](../../packages/model-providers/src/modelAccessValidator.ts) `parseModelRegistry`                                                                                                                           | [catalog.test.ts](../../packages/model-providers/src/__tests__/catalog.test.ts)、[modelAccessValidator.test.ts](../../packages/model-providers/src/__tests__/modelAccessValidator.test.ts)                        |
+| 数据源、缓存、内置回退       | [source.ts](../../packages/model-providers/src/source.ts) `loadCatalogWithSource` / `selectNewerModelRegistry`；[modelRegistry.ts](../../packages/model-providers/src/modelRegistry.ts) `decideModelRegistrySnapshot`                                                                                            | [source-registry.test.ts](../../packages/model-providers/src/__tests__/source-registry.test.ts)、[modelRegistry.test.ts](../../packages/model-providers/src/__tests__/modelRegistry.test.ts)                      |
+| 资料继承与预设               | [modelMetadataLayers.ts](../../packages/model-providers/src/modelMetadataLayers.ts) `resolveModelMetadata`；[user-provider.ts](../../packages/model-providers/src/user-provider.ts) `buildUserProvider`                                                                                                          | [modelMetadataLayers.test.ts](../../packages/model-providers/src/__tests__/modelMetadataLayers.test.ts)、[user-provider.test.ts](../../packages/model-providers/src/__tests__/user-provider.test.ts)              |
+| Desktop 活动目录与刷新       | [createDesktopProviderService.ts](../../apps/desktop/src/main/maker-host/createDesktopProviderService.ts)；[active-catalog.ts](../../apps/desktop/src/main/maker-host/active-catalog.ts)                                                                                                                         | [host 测试](../../apps/desktop/src/main/maker-host/__tests__)                                                                                                                                                     |
+| 用户覆盖                     | [localCatalogOverrides.ts](../../apps/desktop/src/main/maker-host/model-plane/localCatalogOverrides.ts)；[model-catalog-override-store.ts](../../apps/desktop/src/main/maker-host/model-catalog-override-store.ts)                                                                                               | host 的 modelPlane / override 测试                                                                                                                                                                                |
+| 多账号与公共目录身份         | [provider-identity.ts](../../packages/model-providers/src/provider-identity.ts) `providerCatalogId`；[subscription-account-models.ts](../../apps/desktop/src/main/maker-host/subscription-account-models.ts) `refreshSubscriptionAccountModels`；凭证适配见同目录 codex-account-auth / subscription-account-auth | [目录共用与账号隔离测试](../../apps/desktop/src/main/maker-host/__tests__/openAiAccountCatalogParity.test.ts)、[订阅凭证测试](../../apps/desktop/src/main/maker-host/__tests__/subscription-account-auth.test.ts) |
+| 媒体列表投影                 | [providerMediaModels.ts](../../packages/model-providers/src/providerMediaModels.ts) `projectProviderMediaModels`                                                                                                                                                                                                 | [providerMediaModels.test.ts](../../packages/model-providers/src/__tests__/providerMediaModels.test.ts)                                                                                                           |
+| 本地候选与推荐               | [localModelCatalog.ts](../../packages/model-providers/src/localModelCatalog.ts)；[localModelRuntime.ts](../../apps/desktop/src/shared/localModelRuntime.ts) `recommendForHost`                                                                                                                                   | [localModelRuntime.test.ts](../../apps/desktop/src/shared/__tests__/localModelRuntime.test.ts)                                                                                                                    |
+| 模型路由进入执行配置         | [runtime-configs.ts](../../apps/desktop/src/main/maker-host/runtime-configs.ts)、[model-plane](../../apps/desktop/src/main/maker-host/model-plane)、[pi-host.ts](../../apps/desktop/src/main/maker-host/pi-host.ts)                                                                                              | host 及 [maker-core 测试入口](../../packages/maker-core/src/agents)                                                                                                                                               |
 
 Server 对应入口为 `model-access-server/src/routes/modelCatalog.ts`、`services/catalogSource.ts` 与本仓独立维护的 contracts。
 先确认 Server 分支是否具备目标能力；不要把本仓解析器直接视为 Server 已部署的实现。
 两仓边界遵守 [协议兼容规则](protocol-compatibility.md)。
+
+### Sub2API 与自定义模型发现
+
+- Sub2API 在供应商预设中提供自托管入口；地址与 API Key 由用户填写，不预填公共站点、
+  账号或模型清单。三个引擎共用该站点的 Responses 入口，协议兼容开关仍遵循现有用户偏好。
+- `https://{endpoint}/v1` 是整段自托管地址模板，允许 HTTP(S)、端口和部署前缀；绑定后
+  模型发现 URL 必须落在相同站点。普通站点地址补 `/v1`，已给出的 `/v1` 与
+  `/backend-api/codex` 保留。未完成的模板与内嵌凭证不得发请求或保存。
+- 预设查询 `models?client_version=0.147.0`，取得 Sub2API 的 Codex 格式能力清单；此参数
+  仅协商清单格式，不代表使用者运行该版本 Codex。404/405 时仅去掉该参数查询普通列表，
+  不对鉴权、限流或服务异常做静默回退。新预设随客户端 bundled 合并，旧线上目录缺少该
+  条目也不会遮掉它；不改变已有自定义连接地址。
+- 通用解析器兼容 `supported_reasoning_levels/default_reasoning_level` 与 Grok 的
+  `reasoningEfforts/reasoningEffort/supportsReasoningEffort`；同时读取 `input_modalities`、
+  `service_tiers` 中的 `priority` 和 `max_context_window`。未声明或非法值保持未知，空列表
+  与显式 false 保持关闭，不根据供应商品牌猜能力。
+- `max_context_window` 仅作为连接实报的 `discoveredMetadata.contextWindowMax` 持久化并投影
+  到客户端容量；`context_window` 仍是工作窗口。只有最大容量时可用它作为窗口，二者都给出
+  时不以容量覆盖工作预算；不将 `contextWindowMax` 写入 Registry。刷新保留用户显式覆盖。
+- Fast 不仅是目录字段：Claude 自定义桥按能力将用户选择转换成 `service_tier: priority`，
+  原生适配器保留它；Pi 直连在既有 `before_provider_request` 钩子通过现有 RPC 只读查询
+  宿主内存中的 Fast 开关。宿主按当前运行实例及精确 provider/model 校验，只对该连接明确
+  支持的 OpenAI 协议模型启用 Fast，不接受查询方传入的开关值。关闭、实例失效、查询失败、
+  超时或回复无效时删除该参数，使用普通档；不弹确认、不增加模型工具。
+  不再读写 `runtime/request-prefs-*.json`，遗留文件不参与判定；不改权限文件、凭证或
+  Full Access 的原生 shell 权限。详见 [Pi Fast 偏好](pi-harness.md#原生请求-fast-偏好)。
+- Mobile 与远控消费执行端已有目录和 Fast 设置入口；Pi 也接入原有设置保存／失败恢复流程。
+  不增加 IPC、凭证传输通道或独立模型配置。
+
+
+### 自定义供应商的新代际默认继承
+
+导入、刷新与读取已保存连接均在 `buildUserProvider` 中重算缺项，不把继承值写成实报或用户覆盖。
+同系列、同变体的数字代际按数值比较（含小版本），只从较旧代际继承；Sol / Luna、不同私有命名空间不互借。
+同协议的公共型号资料、同供应商适配表和同连接旧型号提供候选；较近代际优先，同代际连接配置优先。
+连接候选必须保持相同端点、请求路径与协议。预设绑定的账号地址继续使用自己的地址。
+
+继承窗口/输出上限、模态、思考档位/默认值、Fast/工具能力，以及同协议适配器的
+`thinkingLevelMap` / `compat` / `samplingParams`；不继承模型身份、价格、地址、凭证、headers、
+开关或成员资格。型号自身配置、明确实报（包括 false / [] / null）和用户覆盖高于继承层。
+继承默认档不会压过新型号实报的推荐档；既有型号目录默认优先规则保持不变。
+未来型号沿已实现的 API 序列化发送自身 ID。新协议仍需实现，不能靠继承配置获得新传输能力。
+Desktop、Mobile 和远程选择器共同消费执行端目录，不增加 UI 提示或用户步骤。

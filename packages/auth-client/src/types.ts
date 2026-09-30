@@ -321,6 +321,10 @@ export type AuthFlowState =
   | {
       step: "realm-confirmation";
       targetRegion: AuthRegion;
+      /** Present for email discovery; personal verification still uses the build region. */
+      email?: string;
+      /** Host retains the successful personal login; declining resumes it in its original region. */
+      personalLoginAvailable?: boolean;
       providers: ProviderConfig;
       methods: LoginMethod[];
     }
@@ -352,6 +356,8 @@ export type AuthFlowAction =
   | {
       type: "realm-switch-required";
       targetRegion: AuthRegion;
+      email?: string;
+      personalLoginAvailable?: boolean;
       providers: ProviderConfig;
       methods: LoginMethod[];
     }
@@ -387,6 +393,8 @@ export function reduceAuthFlow(
       return {
         step: "realm-confirmation",
         targetRegion: action.targetRegion,
+        ...(action.email !== undefined ? { email: action.email } : {}),
+        ...(action.personalLoginAvailable ? { personalLoginAvailable: true } : {}),
         providers: action.providers,
         methods: action.methods,
       };

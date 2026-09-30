@@ -1,4 +1,19 @@
+import { withoutBotGroupLanes } from './botGroupLane';
 import type { BotProfile } from './botStore';
+
+/** Keep unnamed and identically named hosts distinguishable without changing routing IDs. */
+export function botDeviceLabel(
+  device: { deviceId: string; name: string },
+  devices: readonly { deviceId: string; name: string }[],
+): string {
+  const name = device.name.trim();
+  if (!name) return device.deviceId;
+  const duplicate = devices.some(
+    (other) => other.deviceId !== device.deviceId
+      && other.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase(),
+  );
+  return duplicate ? `${name} (${device.deviceId})` : name;
+}
 
 function finiteTimestamp(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
@@ -9,7 +24,8 @@ export function botRosterActivityAt(bot: BotProfile): number {
   return Math.max(
     finiteTimestamp(bot.createdAt),
     finiteTimestamp(bot.lastMessageAt),
-    ...bot.sessions.map((session) => finiteTimestamp(session.updatedAt)),
+    // 群聊里的发言不把这位伙伴在伙伴列表里顶到前面。
+    ...withoutBotGroupLanes(bot.sessions).map((session) => finiteTimestamp(session.updatedAt)),
   );
 }
 

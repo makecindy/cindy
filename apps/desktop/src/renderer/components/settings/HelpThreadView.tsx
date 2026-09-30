@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowUpRight, ThumbsDown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -172,10 +173,13 @@ function HelpMessageRow({
           </div>
         )}
         {action?.kind === 'settings-tab' && (
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
+            compact
             type="button"
             onClick={() => onOpenTab(action.tab)}
-            className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-[var(--settings-theme-card-border)] px-3 py-1.5 text-12 font-medium text-[var(--settings-section-title)] transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
+            className="mt-3"
           >
             <ArrowUpRight size={12} />
             {t('settings.help.qnaOpenTab', {
@@ -186,7 +190,7 @@ function HelpMessageRow({
                     ? t(TAB_LABEL_KEY[action.tab])
                     : action.tab,
             })}
-          </button>
+          </Button>
         )}
         {!isNoAnswer && (
           <div className="mt-2 text-11 leading-[1.5] text-[var(--settings-section-sublabel)] opacity-60">
@@ -244,7 +248,10 @@ function FeedbackSection(props: {
 
   if (!editing) {
     return (
-      <button
+      <Button
+        variant="secondary"
+        size="sm"
+        compact
         type="button"
         onClick={() => {
           // Prefill from i18n so the user sees a draft in their own language.
@@ -275,13 +282,13 @@ function FeedbackSection(props: {
           setErrorMsg(null);
           setEditing(true);
         }}
-        className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-[var(--settings-theme-card-border)] px-2.5 py-1 text-11 text-[var(--settings-section-sublabel)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] hover:text-[var(--settings-section-title)]"
+        className="mt-2"
       >
         <ThumbsDown size={11} />
         {t('settings.help.qnaFeedbackButton', {
           defaultValue: 'Report this answer',
         })}
-      </button>
+      </Button>
     );
   }
 
@@ -345,37 +352,31 @@ function FeedbackSection(props: {
       </div>
       {errorMsg && <div className="text-11 text-[var(--error-fg)]">{errorMsg}</div>}
       <div className="flex items-center justify-end gap-2">
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          tone="quiet"
+          compact
           type="button"
           onClick={() => {
             setEditing(false);
             setErrorMsg(null);
           }}
           disabled={submitting}
-          className="rounded-full px-3 py-1 text-12 text-[var(--settings-section-sublabel)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] disabled:opacity-60"
         >
           {t('settings.help.qnaFeedbackCancel', { defaultValue: 'Cancel' })}
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          compact
+          loading={submitting}
           type="button"
           onClick={() => void submit()}
           disabled={!canSubmit}
-          className={cn(
-            'rounded-full px-3 py-1 text-12 font-medium transition-colors',
-            canSubmit
-              ? 'bg-[var(--settings-menu-bg-selected)] text-[var(--settings-menu-text-selected)]'
-              : 'bg-[var(--surface-chip)] text-[var(--settings-section-sublabel)] opacity-60',
-          )}
         >
-          {submitting ? (
-            <span className="inline-flex items-center gap-1.5">
-              <Spinner size={11} />
-              {t('settings.help.qnaFeedbackSubmit', { defaultValue: 'Save draft' })}
-            </span>
-          ) : (
-            t('settings.help.qnaFeedbackSubmit', { defaultValue: 'Save draft' })
-          )}
-        </button>
+          {t('settings.help.qnaFeedbackSubmit', { defaultValue: 'Save draft' })}
+        </Button>
       </div>
     </div>
   );

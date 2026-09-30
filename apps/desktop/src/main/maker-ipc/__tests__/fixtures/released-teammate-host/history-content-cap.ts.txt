@@ -1,0 +1,97 @@
+function contentPreview(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part === 'object' && !Array.isArray(part)) {
+          const block = part as Record<string, unknown>;
+          return block.type === 'text' && typeof block.text === 'string' ? block.text : '';
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (typeof record.text === 'string') return record.text;
+    if (typeof record.content === 'string') return record.content;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value ?? '');
+  }
+}
+
+function contentHasOmittedData(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((part) => {
+      if (typeof part === 'string') return false;
+      if (part && typeof part === 'object' && !Array.isArray(part)) {
+        const block = part as Record<string, unknown>;
+        return !(block.type === 'text' && typeof block.text === 'string');
+      }
+      return true;
+    });
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (typeof record.text === 'string' || typeof record.content === 'string') {
+      const hasNonEmptyArray = (key: string) =>
+        Array.isArray(record[key]) && record[key].length > 0;
+      return (
+        (Array.isArray(record.images) && record.images.length > 0) ||
+        (Array.isArray(record.files) && record.files.length > 0) ||
+        hasNonEmptyArray('sessionReferences') ||
+        record.quotesEncoded === true ||
+        hasNonEmptyArray('pastedTextRanges') ||
+        hasNonEmptyArray('slashCommandRanges')
+      );
+    }
+    return true;
+  }
+  return false;
+}
+
+/** Cap per-row reference text before it crosses device-link and mark lossy rows. */
+export function capReferenceMessageRows<T extends { content: unknown; agentMeta?: unknown }>(
+  items: readonly T[],
+  limit: number | null,
+  preserveStructuredRoles = false,
+): T[] {
+  if (limit === null) return [...items];
+  return items.map((item) => {
+    if (
+      preserveStructuredRoles &&
+      'role' in item &&
+      typeof item.role === 'string' &&
+      item.role !== 'user' &&
+      item.role !== 'assistant'
+    ) {
+      return item;
+    }
+    const text = contentPreview(item.content);
+    const textWasTruncated = text.length > limit;
+    const omittedData = contentHasOmittedData(item.content);
+    if (!textWasTruncated && !omittedData) {
+      return typeof item.content === 'string'
+        ? item
+        : { ...item, content: text } as T;
+    }
+    const priorMeta = item.agentMeta && typeof item.agentMeta === 'object' && !Array.isArray(item.agentMeta)
+      ? item.agentMeta as Record<string, unknown>
+      : {};
+    const content = !textWasTruncated
+      ? text
+      : limit === 1
+        ? '…'
+        : `…${text.slice(-(limit - 1))}`;
+    return {
+      ...item,
+      content,
+      agentMeta: { ...priorMeta, remoteContentTruncated: true },
+    } as T;
+  });
+}

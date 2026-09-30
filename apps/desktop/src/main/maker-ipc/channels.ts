@@ -25,6 +25,8 @@ export const MAKER_INVOKE = {
    */
   SESSION_ENABLE_ORCA: 'maker:session:enable-orca',
   SESSION_DISABLE_ORCA: 'maker:session:disable-orca',
+  /** renderer 回填「该会话是否真的在 turn 中」的权威运行态(#4513 中断横幅假阳性)。 */
+  SESSION_TURN_ACTIVE: 'maker:session:turn-active',
   CLOSE_SESSION: 'maker:close-session',
   /**
    * 单条 user / assistant 消息本地内容删除。保留后续可见消息，但清当前原生
@@ -114,6 +116,13 @@ export const MAKER_INVOKE = {
    * 读不到 / 解析失败一律返回 null,renderer 据此回退到 workflow 级卡片。
    */
   GET_WORKFLOW_PROGRESS: 'maker:get-workflow-progress',
+  /**
+   * 读取后台命令(local_bash 任务)输出文件的末尾一段 + mtime,供任务卡展开区显示
+   * 「最近输出」,让用户确认任务仍在推进。只读;入参 (sessionId, taskId),输出路径由主进程
+   * 从该会话仍在运行的后台任务登记中取,调用方不能传路径。任务已终态 / SSH 远程工作区
+   * 会话返回 unavailable。
+   */
+  READ_BACKGROUND_TASK_OUTPUT_TAIL: 'maker:background-task:output-tail',
   GET_CAPABILITIES: 'maker:get-capabilities',
   /**
    * device-link 远程草稿镜像:控制端为被控设备新建项目草稿时,经隧道读被控端**当前
@@ -280,6 +289,7 @@ export const MAKER_INVOKE = {
   REGENERATE_TITLE: 'maker:regenerate-title',
   /** 输入框推荐提示词:turn 结束后预测用户下一步输入(走 titleModel 轻量 one-shot)。 */
   PREDICT_PROMPT: 'maker:predict-prompt',
+  WORKING_STATUS: 'maker:working-status',
   HELP_ASK: 'maker:help:ask',
   /**
    * Help-assistant 反馈草稿 (Phase 1):用户对某条回答不满时,点 👎 → 弹小表单 →
@@ -321,6 +331,8 @@ export const MAKER_INVOKE = {
   AGENT_STATUS: 'maker:agent:status',
   // Agent 二进制 --version 输出 (About 面板用) —— spawn binary, 进程内缓存
   AGENT_BINARY_VERSION: 'maker:agent:binary-version',
+  PI_KERNEL_STATE: 'maker:agent:pi-kernel-state',
+  PI_KERNEL_INSTALL: 'maker:agent:pi-kernel-install',
   // Agent 今日累计 (取代老 codex:usage:today) —— 走 host 的 readAgentTodayUsage
   USAGE_TODAY: 'maker:usage:today',
   USAGE_ACCOUNT: 'maker:usage:account',
@@ -339,6 +351,9 @@ export const MAKER_INVOKE = {
   USAGE_REFERENCE_MODEL_PRICING: 'maker:usage:reference-model-pricing',
   // 用量历史聚合 (daily_spend + daily_model_usage, main 侧算好 streak/异常/估算) — 首页仪表盘用
   USAGE_HISTORY: 'maker:usage:history',
+  // 本机原始用量行 (daily_spend + daily_model_usage) — 仅供同账号其它电脑经 device-link
+  // 拉取后合并进它们的用量历史; 本机 renderer 不调用。wire 契约见 usage/usageDeviceRows.ts
+  USAGE_DEVICE_ROWS: 'maker:usage:device-rows',
   // Memory 控制 — 走 Maker.{getAgentMemoryStatus/setAgentMemory/resetAgentMemory},
   // 各 agent 子类落地 (Claude 改 SDK Settings.autoMemoryEnabled, Codex 调 app-server
   // experimentalFeature/enablement/set + memory/reset RPC)。
@@ -416,8 +431,9 @@ export const MAKER_INVOKE = {
   CHAT_EMBEDDING_SET: 'maker:chat-embedding:set',
   CHAT_EMBEDDING_RESET: 'maker:chat-embedding:reset',
   /**
-   * Git safety workflow: automatic XDT snapshot commits and the dependent
-   * Codex file rewind entry. Default false; SET writes a user override.
+   * Git safety workflow: three-state automatic XDT savepoint policy. File
+   * rewind remains available as conversation-only rewind when no savepoint
+   * exists; SET writes a user override.
    */
   GIT_SAFETY_GET: 'maker:git-safety:get',
   GIT_SAFETY_SET: 'maker:git-safety:set',
@@ -471,13 +487,12 @@ export const MAKER_INVOKE = {
    */
   CLAUDE_SESSION_ROUTE_GET: 'maker:claude-session-route:get',
   /**
-   * Claude.ai 订阅 OAuth 登录 —— 浏览器 OAuth(移植自 cc),凭证落系统 ~/.claude 凭证库
-   * (mac Keychain `Claude Code-credentials` / 其它 .credentials.json),与本地 claude 共用、
-   * 自动兼容已登录态。与鉴权模式开关正交(像 Codex 的 OAuth 登录独立于 API 模式)。
-   *  - STATUS: 返回 { authorized }(系统凭证库是否有 Claude.ai OAuth 登录)
-   *  - LOGIN: 拉起浏览器 OAuth,成功后写凭证 + 广播;返回 { authorized }
-   *  - LOGOUT: 清凭证(⚠️ 同时登出本地 claude)+ 广播
-   *  - CANCEL: 取消进行中的浏览器登录流
+   * Claude.ai 订阅 —— 登录由内置 Claude Code CLI 自己完成(`claude auth login`),凭证落在
+   * CLI 的默认凭证库(与终端里的 claude 共用);Cindy 不读取、不保存凭证,只记使用许可。
+   *  - STATUS: 返回 { authorized }(CLI 已登录且 Cindy 获准使用)
+   *  - LOGIN: CLI 已登录则直接授权;否则拉起 CLI 登录,完成后授权 + 广播;返回 { ok, reason?, authorized }
+   *  - LOGOUT: 撤销 Cindy 的使用许可 + 广播(不登出 CLI)
+   *  - CANCEL: 取消进行中的 CLI 登录
    */
   CLAUDE_OAUTH_STATUS: 'maker:claude-oauth:status',
   CLAUDE_OAUTH_LOGIN: 'maker:claude-oauth:login',
@@ -490,7 +505,7 @@ export const MAKER_INVOKE = {
   XAI_OAUTH_CANCEL: 'maker:xai-oauth:cancel',
   /**
    * 模型供应商目录（@cindy/model-providers）—— 只读聚合：内置目录元数据 + 各供应商
-   * 实时连接状态（XD=gateway key / Anthropic=Claude.ai OAuth / OpenAI=Codex OAuth）。
+   * 实时连接状态（XD=gateway key / Anthropic=本机 Claude Code 登录 / OpenAI=Codex OAuth）。
    * 供应商的「连接 / 断开」复用各 agent 已有的鉴权通道（CLAUDE_OAUTH_* / AUTH_* / 登录托管），
    * 不另立重复通道。
    */
@@ -767,6 +782,21 @@ export const MAKER_INVOKE = {
   BOT_DELEGATION_CANCEL: 'maker:bot-delegation:cancel',
   /** Read one hidden Bot-to-Bot conversation after a timeline trace is opened. */
   BOT_DIRECT_MESSAGE_THREAD_GET: 'maker:bot-direct-message-thread:get',
+  /** 伙伴群聊：列表、详情、创建、修改、成员、删除、发言、继续讨论与停止。 */
+  BOT_GROUP_LIST: 'maker:bot-group:list',
+  BOT_GROUP_GET: 'maker:bot-group:get',
+  BOT_GROUP_CREATE: 'maker:bot-group:create',
+  BOT_GROUP_UPDATE: 'maker:bot-group:update',
+  BOT_GROUP_SET_MEMBERS: 'maker:bot-group:set-members',
+  BOT_GROUP_DELETE: 'maker:bot-group:delete',
+  BOT_GROUP_SEND: 'maker:bot-group:send',
+  BOT_GROUP_CONTINUE: 'maker:bot-group:continue',
+  BOT_GROUP_STOP: 'maker:bot-group:stop',
+  BOT_GROUP_PLAN_START: 'maker:bot-group:plan-start',
+  BOT_GROUP_PLAN_DISMISS: 'maker:bot-group:plan-dismiss',
+  BOT_GROUP_PLAN_CONTINUE: 'maker:bot-group:plan-continue',
+  BOT_GROUP_PLAN_RETRY: 'maker:bot-group:plan-retry',
+  BOT_GROUP_PLAN_EDIT: 'maker:bot-group:plan-edit',
   BOT_LIFECYCLE_ACTION: 'maker:bot-lifecycle:action',
 } as const;
 
@@ -909,12 +939,16 @@ export const MAKER_PUSH = {
    * 分支处理; payload 还带 ctx (sessionId / workingDir / args) 让 renderer 知道在哪触发的。
    */
   DESKTOP_COMMAND_TRIGGERED: 'maker:desktop-command-triggered',
+  /** Main-owned Cindy Make operation snapshots, broadcast to every trusted renderer. */
+  CINDY_MAKE_STATE_CHANGED: 'maker:cindy-make:state-changed',
   /** multi-worker: worker 增删改 / focus 切换时 broadcast, renderer useWorkers hook 订阅刷新。 */
   ORCA_WORKER_CHANGED: 'maker:orca:worker-changed',
   /** Bot 间委派状态改变；payload 带父/子任务 id，广播自动附 owner generation。 */
   BOT_DELEGATION_CHANGED: 'maker:bot-delegation:changed',
   /** Hidden Bot pair conversation accepted another message or reached its limit. */
   BOT_DIRECT_MESSAGE_CHANGED: 'maker:bot-direct-message:changed',
+  /** A Bot group, its members, messages or running round changed. */
+  BOT_GROUP_CHANGED: 'maker:bot-group:changed',
   /** Bot 档案经主进程创建或更新后变化；renderer 收到后重拉伙伴列表。 */
   BOT_PROFILE_CHANGED: 'maker:bot-profile:changed',
   BOT_LIFECYCLE_CHANGED: 'maker:bot-lifecycle:changed',

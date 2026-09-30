@@ -54,6 +54,8 @@ export function parseFsWatchTopic(topic: string): string | null {
 export type SessionActivityPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 
 export interface SessionActivityPayload {
+  /** Optional public generation category; unknown values must use a generic caption. */
+  workingPhase?: string;
   sessionId: string;
   phase: SessionActivityPhase;
   compactDetail: string;
@@ -146,6 +148,7 @@ export function expandMakerEventBatchPayload(payload: unknown): unknown[] {
  */
 const SESSION_LIST_CHANNELS: ReadonlySet<string> = new Set([
   'local-db:sessions:created',
+  'local-db:task-tags:changed',
   'local-db:sessions:patched',
   'local-db:session:error-persisted',
   SESSION_ACTIVITY_CHANNEL,
@@ -175,6 +178,7 @@ const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   // 被控端「当前 New Maker 草稿」全量变更:账号 / 全局级(无 sessionId),并入 `sessions` topic
   // 随设备列表订阅一起走(控制端打开远程项目草稿时据此实时刷新),不另开一档 topic。
   'maker:new-maker-draft:changed',
+  'maker:model-favorites:changed',
   'maker:new-maker-worktree-branch:changed',
   // /learn run 状态机流转:payload = { type, run },run 同时关联触发会话与蒸馏会话
   // (状态卡两处都渲染),按单一 sessionId 路由会漏一边 → 按账号级并入 `sessions` topic

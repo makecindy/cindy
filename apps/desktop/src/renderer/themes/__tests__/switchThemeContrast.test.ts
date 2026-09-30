@@ -44,7 +44,7 @@ const SURFACES = [
 /** 开/关两态共用一套守卫:轨道×滑块、轨道×全部表面均 ≥3:1(非文字组件底线)。 */
 const CONTROL_STATES = [
   { state: 'unchecked', trackId: 'switch-track-off', thumbId: 'switch-thumb-off' },
-  { state: 'checked', trackId: 'switch-track-on', thumbId: 'background' },
+  { state: 'checked', trackId: 'switch-track-on', thumbId: 'switch-thumb-on' },
 ] as const;
 
 const importedDarkTheme: Theme = {
@@ -93,6 +93,8 @@ describe('Switch contrast', () => {
     // 开启态轨道默认沿用 primary:不覆盖的主题(Classic/导入)外观零变化
     expect(colorRegistry.resolveDefault('switch-track-on', 'light')).toBe('hsl(var(--primary))');
     expect(colorRegistry.resolveDefault('switch-track-on', 'dark')).toBe('hsl(var(--primary))');
+    expect(colorRegistry.resolveDefault('switch-thumb-on', 'light')).toBe('hsl(var(--background))');
+    expect(colorRegistry.resolveDefault('switch-thumb-on', 'dark')).toBe('hsl(var(--background))');
     // 禁用态两级弱化的全局定稿值(用户裁决 2026-08-05):整体 0.3 × 滑块 0.5
     for (const [id, expected] of [
       ['switch-disabled-opacity', '0.3'],
@@ -101,6 +103,14 @@ describe('Switch contrast', () => {
       expect(colorRegistry.resolveDefault(id, 'light'), id).toBe(expected);
       expect(colorRegistry.resolveDefault(id, 'dark'), id).toBe(expected);
     }
+  });
+
+  it('keeps old imported background overrides and accepts an explicit checked thumb', () => {
+    const legacy: Theme = { ...importedDarkTheme, colors: { ...importedDarkTheme.colors, background: '0 0% 12%' } };
+    expect(resolveColor(legacy, 'switch-thumb-on')).toBe('0 0% 12%');
+    const customized = { ...legacy, colors: { ...legacy.colors, 'switch-thumb-on': '#FDFDFD' } };
+    expect(resolveColor(customized, 'switch-thumb-on')).toBe('#FDFDFD');
+    expect(legacy.colors).not.toHaveProperty('switch-thumb-on');
   });
 
   it('fails closed for unsupported color formats', () => {

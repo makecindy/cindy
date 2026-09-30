@@ -118,21 +118,31 @@ describe('sessionActiveTurn', () => {
   }
 
   it('markSessionTurnStarted / markSessionTurnEnded write the two timestamps', async () => {
-    const { markSessionTurnStarted, markSessionTurnEnded } = await import('../sessionActiveTurn.js');
+    const { markSessionTurnStarted, markSessionTurnEnded, getSessionNotificationTurnSignal, drainSessionActiveTurnWrites } = await import('../sessionActiveTurn.js');
     const client = createTestDbClient();
     await seedSession(client, 's-1');
 
     markSessionTurnStarted('s-1');
+    const firstSignal = getSessionNotificationTurnSignal('s-1');
+    expect(firstSignal?.id).toMatch(/^signal:\d+$/);
+    expect(firstSignal?.ended).toBe(false);
     await vi.waitFor(async () => {
       expect((await readMarks(client, 's-1'))?.active_turn_started_at).toBeTypeOf('number');
     });
 
     markSessionTurnEnded('s-1');
+    expect(getSessionNotificationTurnSignal('s-1')?.id).toBe(firstSignal?.id);
+    expect(getSessionNotificationTurnSignal('s-1')?.ended).toBe(true);
+    expect(getSessionNotificationTurnSignal('s-1')?.fallbackEventId).toMatch(/^turn:\d+:\d+:signal-\d+$/);
     await vi.waitFor(async () => {
       const row = await readMarks(client, 's-1');
       expect(row?.last_turn_ended_at).toBeTypeOf('number');
       expect(row!.last_turn_ended_at!).toBeGreaterThanOrEqual(row!.active_turn_started_at!);
     });
+    markSessionTurnStarted('s-1');
+    expect(getSessionNotificationTurnSignal('s-1')?.id).not.toBe(firstSignal?.id);
+    expect(getSessionNotificationTurnSignal('s-1')?.ended).toBe(false);
+    await drainSessionActiveTurnWrites('s-1');
   });
 
   it('per-session write chain keeps started/ended landing order for very short turns', async () => {
@@ -152,6 +162,21 @@ describe('sessionActiveTurn', () => {
     const row = await readMarks(client, 's-short');
     // ended >= started → 疑似中断判定不命中。
     expect(row!.last_turn_ended_at!).toBeGreaterThanOrEqual(row!.active_turn_started_at!);
+  });
+
+  it('drains the queued turn markers before a completion reader uses them', async () => {
+    const { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites } =
+      await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    await seedSession(client, 's-notification');
+
+    markSessionTurnStarted('s-notification');
+    markSessionTurnEnded('s-notification');
+    await drainSessionActiveTurnWrites('s-notification');
+
+    const row = await readMarks(client, 's-notification');
+    expect(row?.active_turn_started_at).toBeTypeOf('number');
+    expect(row?.last_turn_ended_at).toBeGreaterThanOrEqual(row!.active_turn_started_at!);
   });
 
   it('markSessionTurnEnded honors endedAtOverride so deferred writes keep the frozen timestamp', async () => {
@@ -546,6 +571,46 @@ describe('sessionActiveTurn', () => {
     // 本 turn 的产出同毫秒但 rowid 更大 → 算产出。
     await insert('this-turn-tool', 'tool_use');
     expect(await hasAssistantProgressAfterMessage('s-same-ms', 'c-user2')).toBe(true);
+  });
+
+  it('restores native Make failures and drops them only when handled or no longer visible', async () => {
+    const { listErrorTailPendingSessionIds } = await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    const at = Date.now();
+    const insert = async (id: string, completion: unknown, options: {
+      source?: string; status?: string; clearedAt?: number; rewindAt?: number; content?: unknown;
+    } = {}) => {
+      await seedSession(client, id, { source: options.source ?? 'cindy-make', ...options });
+      await client.exec(
+        'INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, id, id, 'assistant', JSON.stringify(options.content ?? ''),
+          JSON.stringify({ cindyMakeCompletion: completion }), at, options.rewindAt ?? null],
+      );
+    };
+    const failed = { reportedAt: at, lastAction: 'build', personal: { status: 'failed', error: 'buildFailed' } };
+    await insert('make-failed', failed);
+    await insert('make-test-failed', { reportedAt: at, lastAction: 'test', test: { status: 'failed' } });
+    await insert('make-interrupted', { reportedAt: at, lastAction: 'test', test: { status: 'stopped', error: 'interrupted' } });
+    await insert('make-preparation', null, { content: { __cindyMakeCard: { type: 'cindy-make',
+      data: { report: { runId: 'run', status: 'failed' } } } } });
+    await insert('make-continued', { ...failed, continuedAt: at + 1 });
+    await insert('make-cancelled', { ...failed, personal: { status: 'failed', error: 'cancelled' } });
+    await insert('make-retried', { ...failed, personal: { status: 'checking' } });
+    await insert('make-new-test', { ...failed, lastAction: 'test', test: { status: 'ready' } });
+    await insert('make-rewound', failed, { rewindAt: at + 1 });
+    await insert('make-cleared', failed, { clearedAt: at });
+    await insert('make-archived', failed, { status: 'archived' });
+    await insert('ordinary-task', failed, { source: 'desktop' });
+    await insert('make-later-user', failed);
+    await client.exec('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ['later', 'later', 'make-later-user', 'user', '{}', at]);
+    expect((await listErrorTailPendingSessionIds()).sort()).toEqual([
+      'make-failed', 'make-interrupted', 'make-preparation', 'make-test-failed',
+    ]);
+    await client.exec('UPDATE messages SET agent_meta = ? WHERE id = ?', [
+      JSON.stringify({ cindyMakeCompletion: { ...failed, personal: { status: 'waiting' } } }), 'make-failed',
+    ]);
+    expect(await listErrorTailPendingSessionIds()).not.toContain('make-failed');
   });
 
   it('listErrorTailPendingSessionIds matches undismissed error tails only', async () => {

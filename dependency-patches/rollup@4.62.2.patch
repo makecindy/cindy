@@ -2,6 +2,23 @@ diff --git a/dist/es/shared/node-entry.js b/dist/es/shared/node-entry.js
 index 0c67f4b0befbb8af05adc5c4b0216cacbf8c169a..d270a376f10c5da4c36f8579914954c824804522 100644
 --- a/dist/es/shared/node-entry.js
 +++ b/dist/es/shared/node-entry.js
+@@ -7226,10 +7226,12 @@
+         name: null
+     });
+     return (`${index}${cnst} d${_}=${_}Object.getOwnPropertyDescriptor(e,${_}k);${n}` +
+-        `${index}Object.defineProperty(n,${_}k,${_}d.get${_}?${_}d${_}:${_}{${n}` +
+-        `${index}${t}enumerable:${_}true,${n}` +
+-        `${index}${t}get:${_}${left}e[k]${right}${n}` +
+-        `${index}});${n}`);
++        `${index}if${_}(d)${_}{${n}` +
++        `${index}${t}Object.defineProperty(n,${_}k,${_}d.get${_}?${_}d${_}:${_}{${n}` +
++        `${index}${t}${t}enumerable:${_}true,${n}` +
++        `${index}${t}${t}get:${_}${left}e[k]${right}${n}` +
++        `${index}${t}});${n}` +
++        `${index}}${n}`);
+ };
+ const copyPropertyLiveBinding = (t, index, { _, cnst, getDirectReturnFunction, n }) => {
+     const [left, right] = getDirectReturnFunction([], {
 @@ -16953,6 +16953,14 @@ function resetSourcemapCache(map, sourcemapChain) {
      }
  }

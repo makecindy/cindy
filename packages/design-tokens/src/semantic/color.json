@@ -883,6 +883,26 @@
           "$value": "{reference.defaults.search-match-fg.dark}"
         }
       },
+      "search-match-active-bg": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.search-match-active-bg.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.search-match-active-bg.dark}"
+        }
+      },
+      "search-match-active-fg": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.search-match-active-fg.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.search-match-active-fg.dark}"
+        }
+      },
       "update-btn-border": {
         "light": {
           "$type": "color",
@@ -3033,6 +3053,166 @@
         "dark": {
           "$type": "shadow",
           "$value": "{reference.defaults.shadow-menu.dark}"
+        }
+      },
+      "slider-thumb-shadow": {
+        "light": {
+          "$type": "shadow",
+          "$value": "{reference.defaults.slider-thumb-shadow.light}"
+        },
+        "dark": {
+          "$type": "shadow",
+          "$value": "{reference.defaults.slider-thumb-shadow.dark}"
+        }
+      },
+      "segmented-track": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.segmented-track.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.segmented-track.dark}"
+        }
+      },
+      "segmented-selected-shadow": {
+        "light": {
+          "$type": "shadow",
+          "$value": "{reference.defaults.segmented-selected-shadow.light}"
+        },
+        "dark": {
+          "$type": "shadow",
+          "$value": "{reference.defaults.segmented-selected-shadow.dark}"
+        }
+      },
+      "task-tag-red": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-red.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-red.dark}"
+        }
+      },
+      "task-tag-orange": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-orange.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-orange.dark}"
+        }
+      },
+      "task-tag-yellow": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-yellow.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-yellow.dark}"
+        }
+      },
+      "task-tag-green": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-green.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-green.dark}"
+        }
+      },
+      "task-tag-blue": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-blue.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-blue.dark}"
+        }
+      },
+      "task-tag-purple": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-purple.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-purple.dark}"
+        }
+      },
+      "task-tag-gray": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-gray.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-gray.dark}"
+        }
+      },
+      "task-tag-pink": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-pink.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-pink.dark}"
+        }
+      },
+      "task-tag-coral": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-coral.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-coral.dark}"
+        }
+      },
+      "task-tag-teal": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-teal.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-teal.dark}"
+        }
+      },
+      "task-tag-indigo": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-indigo.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-indigo.dark}"
+        }
+      },
+      "task-tag-white": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-white.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-white.dark}"
+        }
+      },
+      "task-tag-white-check": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-white-check.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.task-tag-white-check.dark}"
         }
       }
     }

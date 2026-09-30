@@ -5,9 +5,56 @@ import {
   consumeNewMakerFolderPickerRequest,
   makeDialogueNewMakerRouteState,
   makeFolderPickerNewMakerRouteState,
+  isSameNewMakerDevice,
   readNewMakerDialogueTargetRequest,
   readNewMakerFolderPickerRequest,
 } from '@/features/cc-agent/lib/newMakerRouteState';
+
+describe('new maker execution device identity', () => {
+  it.each([
+    {
+      label: 'local',
+      deviceLinkDeviceId: null,
+      remoteHostId: null,
+      expected: [true, false, false],
+    },
+    {
+      label: 'remote A',
+      deviceLinkDeviceId: 'a',
+      remoteHostId: null,
+      expected: [false, true, false],
+    },
+    {
+      label: 'remote B',
+      deviceLinkDeviceId: 'b',
+      remoteHostId: null,
+      expected: [false, false, true],
+    },
+    {
+      label: 'SSH',
+      deviceLinkDeviceId: null,
+      remoteHostId: 'ssh-a',
+      expected: [false, false, false],
+    },
+  ])('preserves only the matching execution target for $label drafts', ({ expected, ...draft }) => {
+    expect([null, 'a', 'b'].map((deviceId) => isSameNewMakerDevice(deviceId, draft))).toEqual(
+      expected,
+    );
+  });
+
+  it('distinguishes SSH and local even when a folder path is reused', () => {
+    const draft = {
+      deviceLinkDeviceId: null,
+      remoteHostId: 'ssh-a' as string | null,
+      workingDir: '/project',
+    };
+    expect(isSameNewMakerDevice(null, draft)).toBe(false);
+    draft.remoteHostId = null;
+    expect(isSameNewMakerDevice(null, draft)).toBe(true);
+    draft.remoteHostId = 'ssh-b';
+    expect(isSameNewMakerDevice(null, draft)).toBe(false);
+  });
+});
 
 describe('new maker dialogue route target request', () => {
   it('encodes remote and local dialogue targets', () => {

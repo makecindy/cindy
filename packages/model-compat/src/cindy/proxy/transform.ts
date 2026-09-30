@@ -12,6 +12,7 @@
  */
 
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 
 import { DEFAULT_THREAD_ID_HEADERS, selectedHeaderValue } from './headers.js';
 import type { ThreadStripController } from './thread-strip-controller.js';
@@ -320,6 +321,130 @@ export function stripImageGenerationItemsWithoutIdFromBody(rawBody: Buffer): Buf
   }
   const removed = deepDeleteImageGenerationItemsWithoutId(parsed);
   if (removed === 0) return null;
+  try {
+    return Buffer.from(JSON.stringify(parsed), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Responses 历史 item 的规范 id 前缀。OpenAI Responses 会校验 `input[n].id`:
+ * message 必须 `msg_`、reasoning 必须 `rs_`(function_call 系列另有 fc/ctc 方言校正, 不在此处)。
+ */
+const RESPONSES_ITEM_ID_PREFIXES: Readonly<Record<'message' | 'reasoning', string>> = {
+  message: 'msg_',
+  reasoning: 'rs_',
+};
+
+function nonCanonicalResponsesItemType(item: unknown): 'message' | 'reasoning' | null {
+  if (!isPlainObject(item)) return null;
+  const type = item.type;
+  if (type !== 'message' && type !== 'reasoning') return null;
+  const id = item.id;
+  if (typeof id !== 'string' || id.length === 0) return null;
+  return id.startsWith(RESPONSES_ITEM_ID_PREFIXES[type]) ? null : type;
+}
+
+/**
+ * 只清洗顶层 `body.input`(Responses 协议历史容器)。嵌套的同名 `input` 数组(消息
+ * payload / 工具参数 / 扩展字段)是不透明业务数据, 其中的 `{type:'message', id}` 不是
+ * 协议 item, 不能被当成历史清洗(Greptile P2)。
+ */
+function deleteNonCanonicalResponsesInputIds(body: unknown): number {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return 0;
+  let removed = 0;
+  for (const item of body.input) {
+    if (nonCanonicalResponsesItemType(item) !== null) {
+      delete (item as Record<string, unknown>).id;
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+/**
+ * 剔除 Responses 请求体 input 历史里前缀不合规的 message / reasoning item `id`。
+ *
+ * 背景(issue #4738): 同一会话先用 Gemini(chat-completions 上游, 由代理合成
+ * `chatcmpl-…_msg_0` 这类 id)再切到 openai-api 的 GPT 模型, Codex 把历史按原 id 回放,
+ * OpenAI Responses 直接 400:
+ * "Invalid 'input[290].id': 'chatcmpl-…_msg_0'. Expected an ID that begins with 'msg'."
+ * 之后每次发送都被同一条历史拦住, 旧会话永久不可用。
+ *
+ * 历史 message / reasoning item 的 id 对继续对话没有配对语义(Responses 接受不带 id 的
+ * 输入 item), 因此直接删掉不合规 id 而不是改写 —— 改写成 `msg_` 前缀仍可能撞上上游对
+ * 未知 id 的校验。function_call / function_call_output 的 id 与 call_id 配对一律不动。
+ * 只扫顶层 `body.input` 数组, 已是 `msg_` / `rs_` 前缀的不改; 没有可改的返回 null。
+ */
+export function stripNonCanonicalResponsesItemIdsFromBody(rawBody: Buffer): Buffer | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody.toString('utf8'));
+  } catch {
+    return null;
+  }
+  const removed = deleteNonCanonicalResponsesInputIds(parsed);
+  if (removed === 0) return null;
+  try {
+    return Buffer.from(JSON.stringify(parsed), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/** OpenAI Responses 对 `input[n].id` 的长度上限(issue #4227 实测 "maximum length 64")。 */
+export const RESPONSES_ITEM_ID_MAX_LENGTH = 64;
+
+/**
+ * 把一个超长的 Responses item id 改写成 `<类型前缀>_<sha256 前缀>`、总长 ≤ 64 的稳定 id。
+ *
+ * 前缀取原 id 第一个下划线前的字母段(`ws_` / `tco_` / `fc_` / `msg_` …), 上游按前缀判定
+ * item 类型, 必须保留; 其余用原 id 的 sha256 十六进制截断填满, 同一原 id 每轮回放映射一致,
+ * 不同原 id 互不碰撞(截断后仍 ≥ 55 hex)。没有字母前缀的 id 直接用 hash 截断。
+ * 未超长的 id 原样返回。
+ */
+export function shortenResponsesItemId(id: string): string {
+  if (id.length <= RESPONSES_ITEM_ID_MAX_LENGTH) return id;
+  const prefix = /^([A-Za-z]+)_/.exec(id)?.[1];
+  const digest = createHash('sha256').update(id, 'utf8').digest('hex');
+  if (!prefix) return digest.slice(0, RESPONSES_ITEM_ID_MAX_LENGTH);
+  return `${prefix}_${digest}`.slice(0, RESPONSES_ITEM_ID_MAX_LENGTH);
+}
+
+function shortenOversizedResponsesInputIds(body: unknown): number {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return 0;
+  let rewritten = 0;
+  for (const item of body.input) {
+    if (!isPlainObject(item) || typeof item.id !== 'string') continue;
+    if (item.id.length <= RESPONSES_ITEM_ID_MAX_LENGTH) continue;
+    item.id = shortenResponsesItemId(item.id);
+    rewritten += 1;
+  }
+  return rewritten;
+}
+
+/**
+ * 改写 Responses 请求体 input 历史里超过 64 字符的 item `id`。
+ *
+ * 背景(issue #4227): 同一会话先走 Gateway 模型(grok 等), 历史里 web_search / tool 类
+ * item 的 id 形如 `ws_<uuid>_call-<uuid>-<n>`(84~85 字符); 切到 OpenAI Responses 后
+ * Codex 原样回放, 上游 400:
+ * "Invalid 'input[74].id': string too long. Expected a string with maximum length 64, but got a string with length 84 instead."
+ * 之后每轮、重试与 compact 都被同一条历史拦住。
+ *
+ * 只改写 id 本身(保留类型前缀 + 稳定 hash), `call_id`、正文与其他字段不动: 工具配对靠
+ * `call_id`, item `id` 只需在本次请求内稳定且类型可辨。只扫顶层 `body.input`; 没有可改的返回 null。
+ */
+export function shortenOversizedResponsesItemIdsFromBody(rawBody: Buffer): Buffer | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody.toString('utf8'));
+  } catch {
+    return null;
+  }
+  const rewritten = shortenOversizedResponsesInputIds(parsed);
+  if (rewritten === 0) return null;
   try {
     return Buffer.from(JSON.stringify(parsed), 'utf8');
   } catch {
@@ -1459,6 +1584,21 @@ const EMPTY_TEXT_RE = /text content blocks must (?:be non-empty|contain non-whit
 // 只匹配不变的 role + 校验短语,不锚定会变的 position 数字。
 const EMPTY_ASSISTANT_MESSAGE_RE = /with role 'assistant' must not be empty/i;
 
+// OpenAI Responses 400(issue #4738, 2026-09-20 实测):
+// "Invalid 'input[290].id': 'chatcmpl-…_msg_0'. Expected an ID that begins with 'msg'."
+// 只匹配 message(msg)/reasoning(rs) 的前缀校验; fc/fco/ctc/ctco 工具 id 方言由
+// codex-proxy-host 的 isRepairableToolItemIdError 单独处理, 不在此规则内; 被拒 id 本身带
+// 工具前缀(fc/fco/ctc/ctco)时同样不接管 —— 那是工具项被当成 message 的方言错配, 删 id 无用。
+const RESPONSES_ITEM_ID_PREFIX_RE =
+  /Invalid\s+\\?["']input\[\d+\]\.id\\?["']:\s*\\?["'](?!(?:fc|fco|ctc|ctco)_)[^"'\\]+\\?["']\.?\s+Expected an ID that begins with \\?["'](?:msg|rs)\\?["']/i;
+
+// OpenAI Responses 400(issue #4227, 2026-09-20 两处实测):
+//   "Invalid 'input[74].id': string too long. Expected a string with maximum length 64, but got a string with length 84 instead."
+//   "[ApiIdParam] [input[59].id] [string_above_max_length] Invalid input[59].id: string too long. …"
+// 只匹配 `input[n].id` 的长度校验; `call_id` 或其他字段的长度错误不接管。
+const RESPONSES_ITEM_ID_LENGTH_RE =
+  /input\[\d+\]\.id\\?["']?[\s\S]{0,120}?(?:string too long|string_above_max_length)|string_above_max_length[\s\S]{0,120}?input\[\d+\]\.id/i;
+
 // Azure/LiteLLM 400: "Image generation items without `id` are not supported for this request."
 const IMAGE_GENERATION_WITHOUT_ID_RE =
   /image generation items without [`']?id[`']? are not supported/i;
@@ -1535,6 +1675,44 @@ export function createImageGenerationIdRecoveryRule(opts: {
     enabled: opts.enabled ?? (() => true),
     matches: (text) => IMAGE_GENERATION_WITHOUT_ID_RE.test(text),
     strip: stripImageGenerationItemsWithoutIdFromBody,
+    onRetry: opts.onRetry,
+    threadIdHeaders: opts.threadIdHeaders,
+  };
+}
+
+/**
+ * Responses 历史 item id 前缀校验 400 恢复规则(issue #4738): 剔除不合规的
+ * message / reasoning item id 后重发。默认 always-on; 只在明确命中上游错误时触发。
+ */
+export function createResponsesItemIdPrefixRecoveryRule(opts: {
+  enabled?: () => boolean;
+  onRetry?: (threadId: string, model: string) => void;
+  threadIdHeaders?: readonly string[];
+} = {}): RecoveryRule {
+  return {
+    id: 'responses_item_id_prefix',
+    enabled: opts.enabled ?? (() => true),
+    matches: (text) => RESPONSES_ITEM_ID_PREFIX_RE.test(text),
+    strip: stripNonCanonicalResponsesItemIdsFromBody,
+    onRetry: opts.onRetry,
+    threadIdHeaders: opts.threadIdHeaders,
+  };
+}
+
+/**
+ * Responses 历史 item id 超长 400 恢复规则(issue #4227): 把 > 64 字符的 item id 改写成
+ * 保留前缀的稳定短 id 后重发。默认 always-on; 只在明确命中上游错误时触发。
+ */
+export function createResponsesItemIdLengthRecoveryRule(opts: {
+  enabled?: () => boolean;
+  onRetry?: (threadId: string, model: string) => void;
+  threadIdHeaders?: readonly string[];
+} = {}): RecoveryRule {
+  return {
+    id: 'responses_item_id_length',
+    enabled: opts.enabled ?? (() => true),
+    matches: (text) => RESPONSES_ITEM_ID_LENGTH_RE.test(text),
+    strip: shortenOversizedResponsesItemIdsFromBody,
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,
   };

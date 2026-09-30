@@ -1,11 +1,23 @@
-import { REMOTE_DESKTOP_ICE_SERVERS } from "./remoteDesktopIce.js";
+import {
+  REMOTE_DESKTOP_ICE_SERVERS,
+  REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
+} from "./remoteDesktopIce.js";
+export { REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS } from "./remoteDesktopIce.js";
 
 export const REMOTE_DESKTOP_ICE_CONFIG_PATH = "/api/device-link/ice-servers";
-export const REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS = 3000;
 export interface DesktopIceServer {
   urls: string[];
   username?: string;
   credential?: string;
+}
+
+/** Counts and fixed outcomes only; never expose URLs, credentials or upstream errors. */
+export interface DesktopIceConfigDiagnostic {
+  outcome: "configured" | "empty" | "invalid" | "timeout" | "request-failed";
+  elapsedMs: number;
+  serverCount: number;
+  turnUrlCount: number;
+  status?: number;
 }
 
 const ICE_URL =
@@ -83,24 +95,54 @@ export function parseDesktopIceConfig(
 /** Per attempt, no credential cache. A slow/missing API must not hold up legacy connectivity. */
 export async function resolveDesktopIceServers(
   fetchConfig: () => Promise<unknown>,
+  diagnostic?: (result: DesktopIceConfigDiagnostic) => void,
 ): Promise<DesktopIceServer[]> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const started = performance.now();
+  let outcome: DesktopIceConfigDiagnostic["outcome"] = "request-failed";
+  let status: number | undefined;
+  let servers: DesktopIceServer[] = [];
+  let validating = false;
   try {
     const value = await Promise.race([
       Promise.resolve().then(fetchConfig),
       new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("ICE_CONFIG_TIMEOUT")),
-          REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
-        );
+        timer = setTimeout(() => {
+          outcome = "timeout";
+          reject(new Error("ICE_CONFIG_TIMEOUT"));
+        }, REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS);
       }),
     ]);
-    const servers = parseDesktopIceConfig(value);
-    if (servers.length) return servers;
-  } catch {
-    // No upstream body/error/credential logging. Existing JPEG fallback is independent.
+    validating = true;
+    servers = parseDesktopIceConfig(value);
+    outcome = servers.length ? "configured" : "empty";
+  } catch (error) {
+    if (validating) outcome = "invalid";
+    // Inspect only an own numeric status; never read arbitrary error getters/text.
+    if (error && typeof error === "object") {
+      const value = Object.getOwnPropertyDescriptor(error, "status")?.value;
+      if (Number.isInteger(value) && value >= 400 && value <= 599)
+        status = value;
+    }
   } finally {
     clearTimeout(timer);
   }
-  return REMOTE_DESKTOP_ICE_SERVERS.map((server) => ({ urls: [server.urls] }));
+  if (!servers.length)
+    servers = REMOTE_DESKTOP_ICE_SERVERS.map((server) => ({
+      urls: [server.urls],
+    }));
+  try {
+    diagnostic?.({
+      outcome,
+      elapsedMs: Math.max(0, Math.round(performance.now() - started)),
+      serverCount: servers.length,
+      turnUrlCount: servers
+        .flatMap((server) => server.urls)
+        .filter((url) => /^turns?:/.test(url)).length,
+      ...(status === undefined ? {} : { status }),
+    });
+  } catch {
+    /* Diagnostics must never change connectivity. */
+  }
+  return servers;
 }

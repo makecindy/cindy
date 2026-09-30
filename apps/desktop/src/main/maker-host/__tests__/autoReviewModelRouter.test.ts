@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { UtilityTextResult } from '../../../shared/utilityTextResult.js';
 import { DEDICATED_AUTO_REVIEW_CANDIDATES } from '../../utility-model/oneShotCandidates.js';
 import {
+  AUTO_REVIEW_CANDIDATE_TIMEOUT_MS,
   AUTO_REVIEW_CHAIN_TIMEOUT_MS,
   createAutoReviewModelRouter,
 } from '../auto-review-model-router.js';
@@ -54,6 +55,12 @@ afterEach(() => {
 });
 
 describe('dedicated Auto-review candidate policy', () => {
+  it('budgets exactly one full timeout per candidate plus a small margin', () => {
+    expect(AUTO_REVIEW_CHAIN_TIMEOUT_MS).toBe(
+      DEDICATED_AUTO_REVIEW_CANDIDATES.length * AUTO_REVIEW_CANDIDATE_TIMEOUT_MS + 4_000,
+    );
+  });
+
   it('contains only the managed Gateway and supported subscription models in fixed order', () => {
     expect(DEDICATED_AUTO_REVIEW_CANDIDATES.map((candidate) => [
       candidate.providerId,
@@ -62,10 +69,10 @@ describe('dedicated Auto-review candidate policy', () => {
       ['xd', 'cindy/auto-review'],
       ['openai', 'gpt-5.4-nano'],
       ['openai', 'gpt-5.6-luna'],
-      ['anthropic', 'claude-haiku-4-5'],
     ]);
+    // Claude 订阅只供内置 Claude Code CLI 使用,不作为 Cindy 直连审阅的候选。
     expect(JSON.stringify(DEDICATED_AUTO_REVIEW_CANDIDATES)).not.toMatch(
-      /xai|deepseek|kimi|custom/i,
+      /xai|deepseek|kimi|custom|anthropic|claude/i,
     );
   });
 
@@ -80,9 +87,10 @@ describe('dedicated Auto-review candidate policy', () => {
         case 'chatgpt-nano':
           return failed(candidate, 'http_error', 400);
         case 'chatgpt-luna':
-          return failed(candidate, 'empty_response');
-        case 'claude-haiku':
-          return succeeded(candidate, '{"verdict":"allow","reason":"Routine"}');
+          // 首次空响应在原位重试一次,重试成功即收口。
+          return calls.filter((id) => id === 'chatgpt-luna').length === 1
+            ? failed(candidate, 'empty_response')
+            : succeeded(candidate, '{"verdict":"allow","reason":"Routine"}');
         default:
           throw new Error('Unexpected Auto-review candidate');
       }
@@ -97,7 +105,6 @@ describe('dedicated Auto-review candidate policy', () => {
       'chatgpt-nano',
       'chatgpt-luna',
       'chatgpt-luna',
-      'claude-haiku',
     ]);
   });
 
@@ -136,6 +143,80 @@ describe('dedicated Auto-review candidate policy', () => {
     expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano']);
   });
 
+  it('retries a timed-out gateway after unavailable fallbacks skip instantly', async () => {
+    vi.useFakeTimers();
+    const log = logger();
+    const calls: string[] = [];
+    const requestCandidate = vi.fn((_prompt, candidate) => {
+      calls.push(candidate.id);
+      if (candidate.id === 'cindy-gateway') {
+        return calls.length === 1
+          ? new Promise<UtilityTextResult>(() => undefined)
+          : Promise.resolve(succeeded(candidate, '{"verdict":"allow"}'));
+      }
+      // 本机没有可用 OpenAI 凭证:立即返回,不占预算。
+      return Promise.resolve<UtilityTextResult>({ ok: false, reason: 'no_candidate', attempts: [] });
+    });
+    const route = createAutoReviewModelRouter({ logger: log, requestCandidate });
+
+    const pending = route('classify');
+    await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CANDIDATE_TIMEOUT_MS);
+
+    await expect(pending).resolves.toBe('{"verdict":"allow"}');
+    expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna', 'cindy-gateway']);
+    expect(log.warn).toHaveBeenCalledWith('auto-review model candidate failed', expect.objectContaining({
+      candidateId: 'cindy-gateway',
+      reason: 'timeout',
+      retrying: 'deferred',
+    }));
+  });
+
+  it('keeps an earlier deferred gateway retry ahead of a later fallback retry', async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const requestCandidate = vi.fn((_prompt, candidate) => {
+      calls.push(candidate.id);
+      if (candidate.id === 'chatgpt-nano') {
+        return Promise.resolve<UtilityTextResult>({ ok: false, reason: 'no_candidate', attempts: [] });
+      }
+      if (candidate.id === 'cindy-gateway' && calls.length > 1) {
+        return Promise.resolve(succeeded(candidate, '{"verdict":"allow"}'));
+      }
+      // 首次网关与 luna 都耗满超时。
+      return new Promise<UtilityTextResult>(() => undefined);
+    });
+    const route = createAutoReviewModelRouter({ logger: logger(), requestCandidate });
+
+    const pending = route('classify');
+    await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CANDIDATE_TIMEOUT_MS * 2);
+
+    await expect(pending).resolves.toBe('{"verdict":"allow"}');
+    // luna 不得原位重试插到已排队的网关重试前面。
+    expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna', 'cindy-gateway']);
+  });
+
+  it('does not retry a timed-out candidate without a full timeout left', async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const requestCandidate = vi.fn((_prompt, candidate) => {
+      calls.push(candidate.id);
+      return new Promise<UtilityTextResult>(() => undefined);
+    });
+    const log = logger();
+    const route = createAutoReviewModelRouter({ logger: log, requestCandidate });
+
+    const pending = route('classify');
+    await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CHAIN_TIMEOUT_MS);
+
+    await expect(pending).resolves.toBeNull();
+    expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna']);
+    // 已排队的延后重试因预算不足被跳过时要留下记录,不能只剩一条 deferred。
+    const skipped = log.warn.mock.calls
+      .filter(([message]) => message === 'auto-review model candidate retry skipped')
+      .map(([, fields]) => fields.candidateId);
+    expect(skipped).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna']);
+  });
+
   it('aborts the in-flight request at the total deadline without starting another chain', async () => {
     vi.useFakeTimers();
     const observedSignals: AbortSignal[] = [];
@@ -157,8 +238,9 @@ describe('dedicated Auto-review candidate policy', () => {
     await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CHAIN_TIMEOUT_MS);
 
     await expect(pending).resolves.toBeNull();
-    expect(requestCandidate).toHaveBeenCalledTimes(5);
-    expect(observedSignals).toHaveLength(5);
+    const attempts = Math.ceil(AUTO_REVIEW_CHAIN_TIMEOUT_MS / AUTO_REVIEW_CANDIDATE_TIMEOUT_MS);
+    expect(requestCandidate).toHaveBeenCalledTimes(attempts);
+    expect(observedSignals).toHaveLength(attempts);
     expect(observedSignals.every((signal) => signal.aborted)).toBe(true);
   });
 

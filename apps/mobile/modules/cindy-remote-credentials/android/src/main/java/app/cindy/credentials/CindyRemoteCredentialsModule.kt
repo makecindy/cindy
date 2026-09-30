@@ -40,7 +40,15 @@ class CindyRemoteCredentialsModule : Module() {
     AsyncFunction("close") Coroutine { handle: String -> guarded { client.close(handle) } }
     AsyncFunction("reset") Coroutine { -> guarded { client.reset() } }
     OnActivityEntersForeground { clientValue?.foreground = true }
-    OnActivityEntersBackground { clientValue?.foreground = false; clientValue?.close() }
-    OnDestroy { android.os.Handler(android.os.Looper.getMainLooper()).post { clientValue?.destroy(); clientValue = null } }
+    OnActivityEntersBackground {
+      clientValue?.foreground = false
+      runCredentialTeardown { clientValue?.close() }
+    }
+    OnDestroy {
+      android.os.Handler(android.os.Looper.getMainLooper()).post {
+        runCredentialTeardown { clientValue?.destroy() }
+        clientValue = null
+      }
+    }
   }
 }

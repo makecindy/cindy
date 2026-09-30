@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * 添加插件市场对话框：添加表单（来源 / Git 引用 / 稀疏路径）+ 已添加市场的
  * 管理入口（新开 MarketplaceSourcesDialog，避免本对话框被列表撑长）。
@@ -11,7 +12,6 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { extractIpcError } from '@/utils/ipcError';
@@ -183,6 +183,7 @@ export function AddMarketplaceDialog({
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
             'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
             'flex max-h-[85vh] w-full select-none flex-col rounded-xl p-4',
@@ -319,34 +320,27 @@ export function AddMarketplaceDialog({
           </div>
 
           <div className="mt-6 flex shrink-0 justify-end gap-2.5">
-            <button
+            <Button
+              variant="secondary"
+              size="lg"
               type="button"
               disabled={adding}
               onClick={() => onOpenChange(false)}
-              className={cn(
-                'inline-flex min-w-[96px] items-center justify-center rounded-full border px-6 py-2.5 text-13 font-medium',
-                'border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)]',
-                'transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--confirm-btn-secondary-border)]',
-                'active:scale-[0.98] disabled:opacity-50',
-              )}
+              className="min-w-[96px]"
             >
               {t('settings.ghosts.market.sources.close')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="cta"
+              size="lg"
+              loading={adding}
               type="button"
               disabled={addDisabled}
               onClick={() => void handleAdd()}
-              className={cn(
-                'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)]',
-                'transition-colors hover:bg-[var(--confirm-btn-primary-hover)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--confirm-btn-primary-bg)]',
-                'active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100',
-              )}
+              className="min-w-[96px]"
             >
-              {adding ? <Spinner size={14} /> : t('settings.ghosts.market.sources.add')}
-            </button>
+              { t('settings.ghosts.market.sources.add')}
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

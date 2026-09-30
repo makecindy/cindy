@@ -52,7 +52,13 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
   it('renders dialogues through the mixed ProjectsSection instead of a fixed DialogueSection', () => {
     expect(sidebarSource).toContain('dialogues={visibleDialogues}');
     expect(sidebarSource).not.toContain('<DialogueSection');
-    expect(projectsSectionSource).toContain('buildMainListEntries');
+    expect(projectsSectionSource).toContain('useMainListEntries({');
+    const entriesHook = readFileSync(
+      resolve(__dirname, '..', 'features', 'cc-agent', 'hooks', 'useMainListEntries.ts'),
+      'utf8',
+    );
+    expect(entriesHook).toContain('buildMainListEntries({');
+    expect(entriesHook).toContain('projects, dialogues, bots, unclassified');
   });
 
   it('drops the removed date-grouped section entirely', () => {
@@ -74,6 +80,9 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
 
   it('holds the current priority rank before click-path attention clear', () => {
     const clickHandler = extractHandlerBlock(sidebarSource, 'handleSessionClick');
+    // Remote rows live in the merged index, not the local sessions array.
+    expect(clickHandler).toContain('const target = sessionsByIdRef.current.get(id)');
+    expect(clickHandler).toContain('target ? [target] : []');
     expect(clickHandler.indexOf('holdSidebarViewedPriority')).toBeGreaterThan(-1);
     expect(clickHandler.indexOf('holdSidebarViewedPriority')).toBeLessThan(
       clickHandler.indexOf('clearNotification(id)'),
@@ -200,9 +209,10 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
     );
     // 不按设备分组的两条渲染路径不传目标 → 上层沿用作用域推断。
     expect(projectsSectionSource).toContain('renderNonProjectEntry(entry, DIALOGUE_GROUP_ALL_KEY)');
-    expect(projectsSectionSource).toContain(
-      'onCreateDialogue={() => onCreateDialogue(dialogueDeviceTarget)}',
-    );
+    // Cindy Make has its own local create dialog; ordinary dialogue groups
+    // still route creation to the owning device.
+    expect(projectsSectionSource).toContain('setMakeCreateOpen(true)');
+    expect(projectsSectionSource).toContain('onCreateDialogue(dialogueDeviceTarget)');
     // 目标设备离线 → 禁用新建并复用远程写保护文案(被控端才是真正的创建方)。
     expect(projectsSectionSource).toContain("t('ccAgent.remoteSession.actionsUnavailable')");
     expect(projectsSectionSource).toMatch(/const targetDeviceOffline = Boolean\(/);

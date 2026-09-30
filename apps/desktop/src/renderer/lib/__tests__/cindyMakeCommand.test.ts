@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UnifiedCommand } from '@cindy/maker-core';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { i18n } from '@/i18n';
 
 const h = vi.hoisted(() => ({ ensureTask: vi.fn(), start: vi.fn(), load: vi.fn() }));
 vi.mock('@/lib/cindyMakeDoctorStream', () => ({
@@ -42,7 +43,10 @@ beforeEach(() => {
   h.start.mockReturnValue('run');
   h.load.mockResolvedValue(commands);
 });
-afterEach(() => setDataOwnerGeneration(null));
+afterEach(async () => {
+  setDataOwnerGeneration(null);
+  await i18n.changeLanguage('en');
+});
 
 describe('explicit Make command ownership', () => {
   it.each([
@@ -154,23 +158,36 @@ describe('native environment-check entry', () => {
   ])(
     'starts the same diagnostics without a connected model: $text',
     async ({ text, invocation }) => {
-      expect(await tryStartCindyMakeCommand(input({ text, agentKind: null }))).toEqual({
-        kind: 'started',
-        sessionId: 'source-task',
-      });
-      expect(h.ensureTask).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 'source-task' }),
-      );
-      expect(h.start).toHaveBeenCalledExactlyOnceWith(
-        'source-task',
-        invocation,
-        undefined,
-        { modalOnly: true },
-      );
+      const result = await tryStartCindyMakeCommand(input({ text, agentKind: null }));
+      if (invocation.command === 'cindy-make') {
+        expect(result).toMatchObject({
+          kind: 'preflight',
+          request: 'fix scrolling',
+          sessionId: 'source-task',
+        });
+        expect(h.ensureTask).not.toHaveBeenCalled();
+        expect(h.start).not.toHaveBeenCalled();
+      } else {
+        expect(result).toEqual({ kind: 'started', sessionId: 'source-task' });
+        expect(h.start).toHaveBeenCalledExactlyOnceWith('source-task', invocation);
+      }
     },
   );
 
-  it('passes home preferences only to task creation and returns its modal target', async () => {
+  it.each([
+    ['en', 'Cindy Make · Environment'],
+    ['zh-CN', 'Cindy Make · 环境检查'],
+    ['zh-TW', 'Cindy Make · 環境檢查'],
+    ['ja', 'Cindy Make · 環境チェック'],
+    ['ko', 'Cindy Make · 환경 검사'],
+  ])('uses the selected language for a new Doctor title, keeping Cindy Make fixed: %s', async (locale, title) => {
+    await i18n.changeLanguage(locale);
+    await tryStartCindyMakeCommand(input({ text: '/cindy-make-doctor', sessionId: undefined }));
+    expect(h.ensureTask).toHaveBeenCalledWith(expect.objectContaining({ title, sessionId: undefined }));
+    expect(h.start).toHaveBeenCalledExactlyOnceWith('source-task', { command: 'cindy-make-doctor' });
+  });
+
+  it('returns home preferences for the preflight without creating a task', async () => {
     h.ensureTask.mockResolvedValue('home-task');
     const createOptions = {
       workspaceKind: 'dialogue',
@@ -183,21 +200,13 @@ describe('native environment-check entry', () => {
       planModeEnabled: true,
     } as const;
     expect(await tryStartCindyMakeCommand(input({ sessionId: undefined, createOptions }))).toEqual({
-      kind: 'started',
-      sessionId: 'home-task',
-    });
-    expect(h.ensureTask).toHaveBeenCalledWith({
+      kind: 'preflight',
       sessionId: undefined,
+      request: 'fix scrolling',
       createOptions,
-      title: 'fix scrolling',
-      isCurrent: expect.any(Function),
     });
-    expect(h.start).toHaveBeenCalledWith(
-      'home-task',
-      { command: 'cindy-make', request: 'fix scrolling' },
-      undefined,
-      { modalOnly: true },
-    );
+    expect(h.ensureTask).not.toHaveBeenCalled();
+    expect(h.start).not.toHaveBeenCalled();
   });
 
   it.each(['cindy-make', 'cindy-make-doctor'])(
@@ -250,7 +259,11 @@ describe('native environment-check entry', () => {
         else current = false;
         return 'late-task';
       });
-      expect(await tryStartCindyMakeCommand(input({ isCurrent: () => current }))).toEqual({
+      expect(
+        await tryStartCindyMakeCommand(
+          input({ text: '/cindy-make-doctor', isCurrent: () => current }),
+        ),
+      ).toEqual({
         kind: 'stale',
       });
       expect(h.start).not.toHaveBeenCalled();
@@ -259,7 +272,9 @@ describe('native environment-check entry', () => {
 
   it('returns a sanitized failure if task creation fails', async () => {
     h.ensureTask.mockRejectedValue(new Error('private error details'));
-    expect(await tryStartCindyMakeCommand(input())).toEqual({ kind: 'failed' });
+    expect(await tryStartCindyMakeCommand(input({ text: '/cindy-make-doctor' }))).toEqual({
+      kind: 'failed',
+    });
     expect(h.start).not.toHaveBeenCalled();
   });
 });

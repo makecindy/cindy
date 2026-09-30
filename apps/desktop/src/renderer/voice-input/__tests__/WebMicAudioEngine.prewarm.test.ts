@@ -114,6 +114,17 @@ describe('prewarmVoiceInputMicrophoneWithAutomaticFallback', () => {
     vi.restoreAllMocks();
   });
 
+  it('requests microphone permission only once when keep-alive capture is denied', async () => {
+    getUserMedia.mockRejectedValue(new DOMException('Permission denied', 'NotAllowedError'));
+    const engine = new WebMicAudioEngine({
+      workletUrl: 'https://app.local/pcm16k-worklet.js',
+      keepAlive: true,
+    });
+    await expect(engine.start()).rejects.toMatchObject({ name: 'NotAllowedError' });
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    await engine.stop();
+  });
+
   it('defers keep-alive disposal when the active microphone receives a devicechange event', async () => {
     const onStateChange = vi.fn();
     const engine = new WebMicAudioEngine({

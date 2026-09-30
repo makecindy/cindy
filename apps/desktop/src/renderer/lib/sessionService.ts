@@ -94,6 +94,7 @@ export async function list(
 
 export async function create(body?: {
   id?: string;
+  title?: string;
   workingDir?: string;
   workspaceKind?: WorkspaceKind;
   model?: string;
@@ -343,7 +344,7 @@ export async function rewindPreview(
 export async function rewindCommit(
   sessionId: string,
   clientId: string,
-  opts?: { requireLatestUser?: boolean; stopIfRunning?: boolean },
+  opts?: { requireLatestUser?: boolean; stopIfRunning?: boolean; allowFileRestore?: boolean },
 ): Promise<Session> {
   return wrap(
     makerApiFor(sessionId).rewindCommit(sessionId, clientId, opts) as Promise<Session>,

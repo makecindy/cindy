@@ -51,6 +51,11 @@ export interface CollectRequest {
   reason: LogUploadReason;
   /** 崩溃锚点（epoch ms）。手动上报为空数组。 */
   anchors: number[];
+  /**
+   * `/issue` 同意路径专用。普通手动上传必须保持 `undefined`/`false`（不读 agent 流）；
+   * 仅当用户明确同意公开诊断信息时由 issue 提交链路设为 `true`。崩溃路径不看此字段。
+   */
+  includeAgentLogs?: boolean;
 }
 
 /** `YYYY-MM-DD`（本地时区），与 logger 的 `dateKeyLocal` 同口径。 */
@@ -163,8 +168,8 @@ export async function collectLogs(
         anchorDistanceMs: distance,
       });
     }
-    // agent 流只在崩溃路径附带(需求 §4.2:作崩溃上下文)。
-    if (request.reason !== 'manual') {
+    // 普通手动上传不带 agent 流；反馈只有在用户明确同意后才附带安全 proxy 上下文。
+    if (request.reason !== 'manual' || request.includeAgentLogs === true) {
       const agentName = `agent-${dateKey}.ndjson`;
       if (existing.has(agentName)) {
         plans.push({

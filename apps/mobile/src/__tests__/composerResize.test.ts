@@ -5,6 +5,7 @@ import {
   COMPOSER_RESIZE_DRAG_ACTIVATION_THRESHOLD,
   COMPOSER_RESIZE_TOP_RESERVED_HEIGHT,
   applyComposerResizeDrag,
+  composerCollapseProgress,
   buildComposerResizeGestureConfig,
   buildComposerResizeTouchHandlers,
   computeComposerResizeBounds,
@@ -360,5 +361,17 @@ describe('buildComposerResizeTouchHandlers', () => {
     handlers.onTouchStart();
     handlers.onTouchCancel();
     expect(calls).toEqual([true, false, true, false]);
+  });
+});
+
+ describe('composerCollapseProgress', () => {
+  it('keeps controls visible until the editor has shrunk to one line', () => {
+    expect(composerCollapseProgress({ bounds, startContentHeight: 100, translationY: 50 })).toBe(0);
+    expect(composerCollapseProgress({ bounds, startContentHeight: 100, translationY: 72 })).toBe(0);
+  });
+  it('folds short composers continuously and reverses when the finger moves back', () => {
+    const progress = (translationY: number) => composerCollapseProgress({ bounds, startContentHeight: 28, translationY });
+    expect([0, 6, 12, 24, 12, 0, -10].map(progress)).toEqual([0, 0.25, 0.5, 1, 0.5, 0, 0]);
+    expect(progress(200)).toBe(1);
   });
 });

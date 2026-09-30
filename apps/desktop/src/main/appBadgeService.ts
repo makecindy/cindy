@@ -7,7 +7,7 @@ import {
 } from '../shared/sessionAttention';
 import { createLogger } from './logger';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer';
-import { createWindowsBadgeIcon } from './windowsBadgeIcon';
+import { setWindowsTaskbarBadge } from './windowsTaskbarBadge';
 import { t } from './i18n';
 import { throwIpcError } from './utils/ipcValidate';
 import { getActiveAppSession } from './appSessionState';
@@ -204,8 +204,9 @@ function applyWindowsBadge(count: number, updateFlash = true): void {
   if (!win || win.isDestroyed()) return;
   try {
     if (updateFlash) win.flashFrame(count > 0);
-    win.setOverlayIcon(
-      createWindowsBadgeIcon(count),
+    setWindowsTaskbarBadge(
+      win,
+      count,
       count > 0 ? t('appBadge.attentionCount').replace('{{count}}', String(count)) : '',
     );
   } catch (err) {

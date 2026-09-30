@@ -126,6 +126,27 @@ export function createMessageHandler(
       return;
     }
 
+    let notificationSessionId: string | undefined;
+    if (event.replyThread && adapter.resolveNotificationReply) {
+      try {
+        notificationSessionId = (await adapter.resolveNotificationReply(event)) ?? undefined;
+      } catch (error) {
+        if (isImAccountScopeClosedError(error)) throw error;
+        log.warn('notification reply route unavailable');
+        await im.sendMarkdownText(event.senderId, adapter.notificationReplyText!.unavailable, {
+          threadTs: event.replyThread.rootMessageId,
+        });
+        return;
+      }
+      if (notificationSessionId) {
+        event = { ...event, scopeKey: event.replyThread.rootMessageId };
+        if (pureTextCommandInput && looksLikeSlashCommand(event.text)) {
+          await im.sendMarkdownText(event.senderId, adapter.notificationReplyText!.commands, { threadTs: event.scopeKey });
+          return;
+        }
+      }
+    }
+
     // ── /ctr 原子化拦截 ────────────────────────────────────────────────
     // 该 (bot, owner) 处于 /ctr 流程中 → 任何消息都不路由到 slash/agent,
     // 直接回提示让用户走卡片按钮 (back/exit/session-pick) 退出。包括重复
@@ -138,7 +159,7 @@ export function createMessageHandler(
       ? isInControl(event.contextId, event.senderId) &&
         (!event.threadTs || event.threadTs === getControlScope(event.contextId, event.senderId))
       : isInControl(event.contextId, event.senderId);
-    if (blockedByControl) {
+    if (blockedByControl && !notificationSessionId) {
       log.info(
         `dropped (in /ctr) sender=...${event.senderId.slice(-8)} bot=...${event.contextId.slice(-8)}`,
       );
@@ -163,7 +184,8 @@ export function createMessageHandler(
         const result = await turnRunner.stopActiveTurn({
           botContextId: event.contextId,
           userId: event.senderId,
-          scopeKey: threadScoped ? event.scopeKey : undefined,
+          scopeKey: notificationSessionId || threadScoped ? event.scopeKey : undefined,
+          ...(notificationSessionId ? { notificationSessionId } : {}),
         });
         reply = result.stopped ? ui.agent.stopDone(result.droppedQueued) : ui.agent.stopIdle;
         log.info(
@@ -323,15 +345,17 @@ export function createMessageHandler(
     if (adapter.prepareAgentTurnText) {
       handedOverAck = event.messageId ? ackProcessingEarly(im, event.messageId) : null;
       try {
-        prePersisted =
-          (await turnRunner.persistInboundUserMessageEarly?.({
-            botContextId: event.contextId,
-            userId: event.senderId,
-            scopeKey: threadScoped ? event.scopeKey : undefined,
-            text: event.text,
-            attachments: event.attachments,
-            ...(event.protectedContent === true ? { protectedContent: true } : {}),
-          })) ?? null;
+        if (!notificationSessionId) {
+          prePersisted =
+            (await turnRunner.persistInboundUserMessageEarly?.({
+              botContextId: event.contextId,
+              userId: event.senderId,
+              scopeKey: threadScoped ? event.scopeKey : undefined,
+              text: event.text,
+              attachments: event.attachments,
+              ...(event.protectedContent === true ? { protectedContent: true } : {}),
+            })) ?? null;
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`early user-message persist failed (non-fatal): ${msg}`);
@@ -348,6 +372,14 @@ export function createMessageHandler(
     const groupHistoryAccess = adapter.groupHistoryAccessFor?.(event);
     try {
       await turnRunner.runAgentTurn({
+        ...(notificationSessionId ? {
+          notificationSessionId,
+          revalidateNotificationReply: async () => {
+            if (await adapter.resolveNotificationReply!(event) !== notificationSessionId) {
+              throw new Error('Notification reply identity changed before dispatch');
+            }
+          },
+        } : {}),
         botContextId: event.contextId,
         userId: event.senderId,
         userMessageId: event.messageId,
@@ -386,7 +418,7 @@ export function createMessageHandler(
           : {}),
         attachments: event.attachments,
         // threadScoped 渠道: scopeKey = thread root ts(thread = session 路由键)
-        scopeKey: threadScoped ? event.scopeKey : undefined,
+        scopeKey: notificationSessionId || threadScoped ? event.scopeKey : undefined,
         // Title generation and similar detached work must stay visible to the
         // same account drain without delaying the foreground message dispatch.
         trackBackgroundTask: (operation) => {
@@ -405,7 +437,10 @@ export function createMessageHandler(
       log.error(`runAgentTurn threw: ${msg}`);
       // 本条消息自己开了话题(groupContextLane)时, 开场白卡还没被流式认领 —
       // 用内部错误内容收口它, 否则卡永久残留且同话题下一条会 patch 错卡。
-      const errorText = ui.agent.sendInternalError(msg);
+      if (isImAccountScopeClosedError(err)) throw err;
+      const errorText = notificationSessionId
+        ? adapter.notificationReplyText!.unavailable
+        : ui.agent.sendInternalError(msg);
       const openerConsumed = event.groupContextLane
         ? await consumeOpenerWithText(event.senderId, errorText)
         : false;

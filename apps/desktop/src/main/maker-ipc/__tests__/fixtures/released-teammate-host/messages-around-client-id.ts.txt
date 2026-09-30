@@ -1,0 +1,84 @@
+  ipcMain.handle(
+    'local-db:messages:around-client-id',
+    async (_e, sessionId: unknown, clientId: unknown, opts: unknown) => {
+      const sid = requireString(sessionId, 'sessionId');
+      const cid = requireString(clientId, 'clientId');
+      const aroundOpts = opts as { radius?: unknown; contentCharLimit?: unknown } | undefined;
+      const radius = clampAroundRadius(aroundOpts?.radius);
+      const contentCharLimit = requireReferenceContentCharLimit(aroundOpts?.contentCharLimit);
+      const db = getDbClient().drizzle;
+
+      const [sessionRow] = await db
+        .select({ clearedAt: sessions.clearedAt })
+        .from(sessions)
+        .where(eq(sessions.id, sid))
+        .limit(1);
+      if (!sessionRow) throwIpcError('NOT_FOUND', 'Session 不存在');
+
+      const clearedAtMs = sessionRow.clearedAt ?? null;
+      const visibleConds = clearedAtMs === null ? [] : [gt(messages.createdAt, clearedAtMs)];
+
+      const [anchor] = await db
+        .select({
+          ...getMessageSelectFields(),
+          rowid: messageRowid,
+        })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.clientId, cid),
+            eq(messages.sessionId, sid),
+            isNull(messages.rewindAt),
+            ...visibleConds,
+          ),
+        )
+        .limit(1);
+      if (!anchor) throwIpcError('NOT_FOUND', 'Message 不存在');
+      const anchorRowid = anchor.rowid;
+
+      const before = await db
+        .select({
+          ...getMessageSelectFields(),
+          rowid: messageRowid,
+        })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.sessionId, sid),
+            isNull(messages.rewindAt),
+            ...visibleConds,
+            or(
+              lt(messages.createdAt, anchor.createdAt),
+              and(eq(messages.createdAt, anchor.createdAt), lt(messageRowid, anchorRowid)),
+            ),
+          ),
+        )
+        .orderBy(desc(messages.createdAt), desc(messageRowid))
+        .limit(radius);
+
+      const after = await db
+        .select({
+          ...getMessageSelectFields(),
+          rowid: messageRowid,
+        })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.sessionId, sid),
+            isNull(messages.rewindAt),
+            ...visibleConds,
+            or(
+              gt(messages.createdAt, anchor.createdAt),
+              and(eq(messages.createdAt, anchor.createdAt), gt(messageRowid, anchorRowid)),
+            ),
+          ),
+        )
+        .orderBy(asc(messages.createdAt), asc(messageRowid))
+        .limit(radius);
+
+      const rows = await hydrateLegacyUserTurnCosts(
+        [...before.reverse(), anchor, ...after].map(messageToCamelWithRowid),
+      );
+      return capReferenceMessageRows(rows, contentCharLimit);
+    },
+  );

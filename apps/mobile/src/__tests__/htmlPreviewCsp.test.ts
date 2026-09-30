@@ -7,9 +7,14 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { HTML_PREVIEW_CSP, withHtmlPreviewCsp } from '@/session/htmlPreviewCsp';
+import { HTML_PREVIEW_CSP, HTML_SNAPSHOT_CSP, withHtmlPreviewCsp } from '@/session/htmlPreviewCsp';
 
 describe('HTML_PREVIEW_CSP(策略内容)', () => {
+  it('blocks workers explicitly even when snapshot scripts permit self', () => {
+    expect(HTML_PREVIEW_CSP).toContain("worker-src 'none'");
+    expect(HTML_SNAPSHOT_CSP).toContain("worker-src 'none'");
+    expect(HTML_SNAPSHOT_CSP).toContain("script-src 'self' 'unsafe-inline' data:");
+  });
   it('默认全拒,网络出口关闭', () => {
     expect(HTML_PREVIEW_CSP).toContain("default-src 'none'");
     expect(HTML_PREVIEW_CSP).toContain("connect-src 'none'");
@@ -90,7 +95,7 @@ describe('withHtmlPreviewCsp(自带前导段,不定位作者 doctype)', () => {
 describe('前导段剥离设备与 WebRTC 能力(review P0)', () => {
   const prolog = withHtmlPreviewCsp('<html><body>x</body></html>');
   const cspSource = readFileSync(
-    resolve(process.cwd(), 'src/session/htmlPreviewCsp.ts'),
+    resolve(process.cwd(), '../../packages/maker-shared/src/htmlPreviewCsp.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
   const OPEN = '<script>';
@@ -210,7 +215,7 @@ describe('渲染载体的安全接线(源码级守卫)', () => {
     'utf8',
   ).replace(/\r\n/g, '\n');
   const cspSource = readFileSync(
-    resolve(process.cwd(), 'src/session/htmlPreviewCsp.ts'),
+    resolve(process.cwd(), '../../packages/maker-shared/src/htmlPreviewCsp.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
 
@@ -264,70 +269,33 @@ describe('资源取件的安全接线(源码级守卫)', () => {
     'utf8',
   );
 
-  it('预签名地址不得回填进页面:必须先转成 data: URI', () => {
-    // 取件返回的是 data: URI,不是 presign URL(review P1)。
-    expect(pageSource).toContain('downloadRemoteMediaAsDataUri(');
-    expect(pageSource).toContain('HTML_RESOURCE_MAX_BYTES');
-    // fetchResourceDataUri 必须返回 downloadRemoteMediaAsDataUri 的结果,
-    // 不能直接把 fetchRemoteAbsFileToUrl 的 URL 交出去。
-    expect(pageSource).not.toMatch(/fetchResourceDataUri[\s\S]{0,400}?return url;/);
+  const snapshotSource = readFileSync(resolve(process.cwd(), 'src/session/mobileHtmlPreview.ts'), 'utf8');
+
+  it('downloads signed URLs into private files before publishing every guarded HTML', () => {
+    expect(snapshotSource).toContain('fetchRemoteAbsFileOnce(');
+    expect(snapshotSource).toContain('createDownloadResumable(media.url, destination.uri');
+    expect(snapshotSource).toContain('destination.write(withSnapshotHtmlCsp(text))');
+    expect(snapshotSource).toContain('return { url, documents: snapshotDocumentPaths(files), close }');
+    expect(snapshotSource).not.toContain('return media.url');
   });
 
-  it('下载前先按 media.size 拒掉超限资源(别先拉几 GB 再看)', () => {
-    // downloadRemoteMediaAsDataUri 是先落盘再看 file.size;media:fetch 上限 2 GB、批量取件
-    // 4 路并发,不前置判断的话一份不可信产物能打出数 GB 流量与临时磁盘占用(review P1)。
-    const body = /const fetchResourceDataUri = useCallback\(([\s\S]*?)\n  \);/.exec(pageSource);
-    expect(body, '未找到 fetchResourceDataUri 实现').not.toBeNull();
-    // 上限是「整页剩余预算收窄出来的 maxBytes」,并夹在 HTML_RESOURCE_MAX_BYTES 以内。
-    expect(body![1]).toContain('if (media.size > maxBytes) return');
-    expect(body![1]).toContain('HTML_RESOURCE_MAX_BYTES)');
-    // 前置判断必须在下载之前。
-    expect(body![1].indexOf('media.size > maxBytes'))
-      .toBeLessThan(body![1].indexOf('downloadRemoteMediaAsDataUri('));
-    // 下载后那道判断保留(size 缺失 / 谎报时的第二道 fail-closed)。
-    const dl = readFileSync(
-      resolve(process.cwd(), 'src/session/remoteMediaDiskCacheExpo.ts'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
-    expect(dl).toContain('size > maxBytes');
-  });
-
-  it('取件必须把 baseDir / maxBytes 交给被控端强制,不能只在手机侧判', () => {
-    // 手机侧的两道判断都晚于「被控端 stat → 上传 OSS(SSH 还先整份拉进 Desktop 缓存)」,
-    // 词法 `..` 校验又只保证词法子树、绕不过产物目录里的软链(review P1 security / P2)。
-    const body = /const fetchResourceDataUri = useCallback\(([\s\S]*?)\n  \);/.exec(pageSource);
-    expect(body, '未找到 fetchResourceDataUri 实现').not.toBeNull();
-    // 约束必须随 fetchRemoteAbsFileOnce 一起下发(第 5 个参数)。
-    expect(body![1]).toMatch(/baseDir: limits\.baseDir/);
-    expect(body![1]).toMatch(/maxBytes\s*\}/);
-
-    // 被控端侧:URL 构造要带这两个参数。
-    const gallery = readFileSync(
-      resolve(process.cwd(), 'src/session/fileBrowserGallery.ts'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
+  it('checks exact manifest size before and after download and bounds upload on the controlled device', () => {
+    expect(snapshotSource).toContain('if (media.size !== file.size)');
+    expect(snapshotSource.indexOf('if (media.size !== file.size)')).toBeLessThan(snapshotSource.indexOf('createDownloadResumable(media.url'));
+    expect(snapshotSource).toContain('destination.size !== file.size');
+    expect(snapshotSource).toContain('baseDir: root, maxBytes: Math.max(1, file.size)');
+    const gallery = readFileSync(resolve(process.cwd(), 'src/session/fileBrowserGallery.ts'), 'utf8');
     expect(gallery).toContain('&baseDir=');
     expect(gallery).toContain('&maxBytes=');
   });
 
-  it('取件产生的 OSS 对象必须回收,且失败路径也删', () => {
-    // 每个资源都新建一个 OSS 对象,不删的话一页最多遗留 32 个、反复进出还会累积。
-    expect(pageSource).toContain('const deleteResourceOssObject = useCallback');
+  it('collects every upload key before presigning and cleans successful and failed downloads', () => {
+    expect(snapshotSource).toContain('const uploaded = new Set<string>()');
+    expect(snapshotSource).toContain('(key) => uploaded.add(key)');
+    expect(snapshotSource).toContain('finally { for (const key of uploaded) deps.deleteOssObject(key); }');
     expect(pageSource).toContain("method: 'DELETE'");
-    // 用带 ossKey 且不进共享缓存的一次性取件 —— 只回 url 的那个拿不到 key,
-    // 且对象删掉后缓存命中会回死 URL。
-    expect(pageSource).toContain('fetchRemoteAbsFileOnce(');
-    // 删除必须在 finally 里:下载失败 / 超限同样要回收(失败路径最容易漏)。
-    //
-    // 回收对象取自 onOssKey 累加的集合,**不是** media.ossKey(review P1 第二轮):
-    // presign 失败时取件在返回 media 之前就抛错,围绕 media 写的 finally 不会执行;
-    // 瞬断重试还会重复上传、产出不同的 key。
-    const body = /const fetchResourceDataUri = useCallback\(([\s\S]*?)\n  \);/.exec(pageSource);
-    expect(body, '未找到 fetchResourceDataUri 实现').not.toBeNull();
-    expect(body![1]).toMatch(/finally\s*\{[\s\S]*?for \(const ossKey of uploadedKeys\) deleteResourceOssObject\(ossKey\)/);
-    expect(body![1]).not.toContain('deleteResourceOssObject(media.ossKey)');
-    // 集合必须在 try 之外声明,否则取件抛错时 finally 拿不到它。
-    expect(body![1]).toMatch(/const uploadedKeys = new Set<string>\(\);\s*\n\s*try \{/);
+    const media = readFileSync(resolve(process.cwd(), 'src/session/remoteMedia.ts'), 'utf8');
+    expect(media.indexOf('opts?.onOssKey?.(fetched.ossKey);')).toBeLessThan(media.indexOf('const signed = await deps.presignGet('));
   });
 
   it('SSH 会话的资源取件必须带会话上下文', () => {

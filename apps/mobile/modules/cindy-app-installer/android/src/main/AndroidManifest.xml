@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- REQUEST_INSTALL_PACKAGES is added only by the self-host build config. -->
+  <application>
+    <provider
+      android:name="expo.modules.cindyappinstaller.UpdateFileProvider"
+      android:authorities="${applicationId}.cindy.updates"
+      android:exported="false"
+      android:grantUriPermissions="true">
+      <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/cindy_update_paths" />
+    </provider>
+  </application>
+</manifest>

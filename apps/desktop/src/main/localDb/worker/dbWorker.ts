@@ -29,14 +29,17 @@ let initError: { code: string; message: string; stack?: string } | null = null;
 setDatabase(startupOptions);
 
 activeWorkerPort.on('message', async (req: RpcRequest) => {
+  const startedAt = performance.timeOrigin + performance.now();
+  const timing = () => ({ startedAt, finishedAt: performance.timeOrigin + performance.now() });
   try {
     const result = await dispatchRequest(req);
-    activeWorkerPort.postMessage({ id: req.id, ok: true, result } satisfies RpcResponse);
+    activeWorkerPort.postMessage({ id: req.id, ok: true, result, timing: timing() } satisfies RpcResponse);
   } catch (err) {
     activeWorkerPort.postMessage({
       id: req.id,
       ok: false,
       error: serializeWorkerError(err),
+      timing: timing(),
     } satisfies RpcResponse);
   }
 });

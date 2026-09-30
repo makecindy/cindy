@@ -14,10 +14,11 @@ import {
 } from './homeProjectOrder';
 import type { RemoteSessionListItem } from './sessionList';
 
-/** 首页列表的一行:项目分组头、对话分组头,或一条会话(置顶 / 普通 / 项目内)。 */
+/** 首页列表的一行:目录分组头,或一条任务(置顶 / 普通 / 项目内)。 */
 export type HomeRow =
   | { key: string; kind: 'project'; project: MobileHomeProjectGroup }
   | { key: string; kind: 'dialogue'; project: MobileHomeProjectGroup }
+  | { key: string; kind: 'cindy-make'; project: MobileHomeProjectGroup }
   | {
       key: string;
       kind: 'session';
@@ -35,6 +36,8 @@ export const HOME_MAIN_SECTION_KEY = 'main';
 
 export interface HomeSectionOptions {
   groupDialogue?: boolean;
+  /** The compact task-switching drawer only renders flat session rows. */
+  groupCindyMake?: boolean;
   sortBy?: HomeListSortBy;
   projectOrder?: HomeProjectOrder;
   manualProjectOrder?: readonly string[];
@@ -49,7 +52,7 @@ export interface HomeSectionOptions {
  * - 置顶单独成区;`pinnedCollapsed` 时清空 data 但**保留分区**(SectionList 对空 data 仍渲染
  *   表头,所以折叠时表头照常显示,只折叠下属会话)。
  * - 分组模式保留项目 folder 行,与普通对话(或对话组)按活动时间 / 优先级倒序混排。
- * - 非分组模式把项目下属会话展平;对话组开启时对话仍收成一个 folder。
+ * - 非分组模式把项目下属会话展平;Cindy Make 保留专用目录,对话组遵循自己的开关。
  */
 export function buildHomeSections(
   home: MobileHomePresentation,
@@ -100,8 +103,8 @@ export function homeRowBefore(
   return undefined;
 }
 
-export function isFolderHomeRow(row: HomeRow | undefined): row is Extract<HomeRow, { kind: 'project' | 'dialogue' }> {
-  return !!row && (row.kind === 'project' || row.kind === 'dialogue');
+export function isFolderHomeRow(row: HomeRow | undefined): row is Extract<HomeRow, { kind: 'project' | 'dialogue' | 'cindy-make' }> {
+  return !!row && (row.kind === 'project' || row.kind === 'dialogue' || row.kind === 'cindy-make');
 }
 
 /**
@@ -152,7 +155,7 @@ export function buildProjectHomeRows(
 ): HomeRow[] {
   return home.projects.map((project) => ({
     key: project.key,
-    kind: 'project' as const,
+    kind: project.kind === 'cindy-make' ? 'cindy-make' as const : 'project' as const,
     project: withSortedProjectSessions(project, options),
   }));
 }
@@ -203,15 +206,18 @@ export function buildMixedHomeRows(
   options: HomeSectionOptions = {},
 ): HomeRow[] {
   const dialogueTitle = options.dialogueTitle ?? i18n.t('devices.list.menu.dialogueFolder');
-  const rows: HomeRow[] = home.projects.flatMap((project) =>
-    sortSessionItems(project.sessions, options).map((item) => ({
+  const rows: HomeRow[] = home.projects.flatMap((project): HomeRow[] => {
+    if (project.kind === 'cindy-make' && options.groupCindyMake !== false) {
+      return [{ key: project.key, kind: 'cindy-make', project: withSortedProjectSessions(project, options) }];
+    }
+    return sortSessionItems(project.sessions, options).map((item) => ({
       item,
       key: `project:${project.key}:${item.automationGroup?.key ?? item.session.id}`,
       kind: 'session' as const,
       source: 'project' as const,
       sourceLabel: project.title,
-    })),
-  );
+    }));
+  });
   if (options.groupDialogue) {
     const folder = buildDialogueGroupRow(home, { ...options, dialogueTitle });
     if (folder) rows.push(folder);

@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatSessionFileProvider } from '../components/chat/ChatSessionFileContext';
 import { GeneratedFilesCard } from '../components/chat/GeneratedFilesCard';
+import { groupWorkRuns, type RenderItem } from '../components/chat/messageWorkGroups';
+import { simplifyBotRenderItems } from '../features/bots/botConversationPresentation';
+import { useBotGeneratedFileDeliveries } from '../features/bots/useBotGeneratedFileDeliveries';
+import type { ChatSessionFileContextValue } from '../components/chat/ChatSessionFileContext';
 import { LOCAL_FILE_ORIGIN } from '../lib/sessionFileOrigin';
 import type { GeneratedFileRef } from '../lib/generatedFiles';
 
@@ -50,6 +54,7 @@ vi.mock('../components/chat/ModelLightbox', () => ({
   ModelLightbox: () => <div data-testid="model-lightbox" />,
 }));
 
+type FileStat = Awaited<ReturnType<typeof window.electronAPI.fsBrowse.statPath>>;
 const START = 1_000;
 const END = 5_000;
 
@@ -75,6 +80,43 @@ function renderCard(files: readonly GeneratedFileRef[]) {
       />
     </ChatSessionFileProvider>,
   );
+}
+
+const fileScope: ChatSessionFileContextValue = {
+  sessionId: 'bot-session', workingDir: '/bot/workspace', origin: LOCAL_FILE_ORIGIN,
+};
+function conversationFiles(path = '/bot/workspace/result.pdf'): RenderItem[] {
+  return [
+    { type: 'message', key: 'progress', message: {
+      clientId: 'progress', role: 'assistant', content: 'Generating the report',
+    } },
+    { type: 'tool_segment', key: 'write', toolCalls: [{
+      clientId: 'write', toolUseId: 'write', role: 'tool_use', toolName: 'Write', content: '',
+    }], resultMap: new Map(), settledIds: new Set(['write']), resultTsMap: new Map() },
+    { type: 'generated_files', key: 'files', files: [generated(path)],
+      turnStartMs: START, turnEndMs: END, turnSealed: true },
+  ];
+}
+
+// The same projection/visibility wiring as MessageStream, using the real card's
+// asynchronous checks. Only unrelated lightbox/open-file services are mocked.
+function Conversation({ items, streaming = false, scope = fileScope, mounted = true }: {
+  items: RenderItem[]; streaming?: boolean; scope?: ChatSessionFileContextValue; mounted?: boolean;
+}) {
+  const { visibleGeneratedFileKeys, onGeneratedFilesVisibilityChange } = useBotGeneratedFileDeliveries(items, scope);
+  const projected = simplifyBotRenderItems(groupWorkRuns(items, streaming), streaming, visibleGeneratedFileKeys);
+  return <ChatSessionFileProvider value={scope}>
+    {projected.map((item) => {
+      if (item.type === 'generated_files' && mounted) return <GeneratedFilesCard key={item.key}
+        files={item.files} turnStartMs={item.turnStartMs} turnEndMs={item.turnEndMs}
+        turnSealed={item.turnSealed} botArtifacts onVisibilityChange={onGeneratedFilesVisibilityChange} />;
+      if (item.type === 'message') return <div key={item.key} data-testid={item.message.role === 'assistant' ? 'main-prose' : 'error'}>{item.message.content}</div>;
+      if (item.type === 'work_group') return <div key={item.key} data-testid="public-process">
+        {item.children.flatMap((child) => child.type === 'message' ? [child.message.content] : [])}
+      </div>;
+      return null;
+    })}
+  </ChatSessionFileProvider>;
 }
 
 describe('伙伴成果卡', () => {
@@ -118,6 +160,7 @@ describe('伙伴成果卡', () => {
         'bot-session',
         '/bot/workspace/猫岛邮局-logo-方案.html',
         expect.any(Function),
+        expect.objectContaining({ origin: { kind: 'local' } }),
       );
     });
     expect(screen.queryByTestId('text-lightbox')).toBeNull();
@@ -139,4 +182,88 @@ describe('伙伴成果卡', () => {
     expect(screen.getByText('logo-A.png')).toBeTruthy();
     expect(screen.getByTestId('bot-generated-artifacts')).toBeTruthy();
   });
+
+  it.each(['stop', 'error', 'history'])('omits the preamble and process entry once a real generated file is visible: %s', async (ending) => {
+    let finish!: (value: FileStat) => void;
+    const stat = vi.fn(() => new Promise<FileStat>((resolve) => { finish = resolve; }));
+    window.electronAPI.fsBrowse.statPath = stat;
+    const items = conversationFiles();
+    if (ending === 'error') items.push({ type: 'message', key: 'error', message: {
+      clientId: 'error', role: 'error', content: 'Generation interrupted',
+    } });
+    const view = render(<Conversation items={items} streaming={ending !== 'history'} />);
+    if (ending !== 'history') expect(screen.queryByTestId('main-prose')).toBeNull();
+    view.rerender(<Conversation items={items} />);
+    // Until stat confirms a visible delivery, a no-final turn keeps useful text.
+    expect(screen.getByTestId('main-prose').textContent).toBe('Generating the report');
+    await act(async () => finish({ kind: 'file', resolvedPath: '/bot/workspace/result.pdf', birthtimeMs: START + 100, mtimeMs: START + 100 }));
+    expect(screen.getByText('result.pdf')).toBeTruthy();
+    expect(screen.queryByTestId('main-prose')).toBeNull();
+    expect(screen.queryByTestId('public-process')).toBeNull();
+    expect(screen.queryByText('Generating the report')).toBeNull();
+    if (ending === 'error') expect(screen.getByTestId('error').textContent).toBe('Generation interrupted');
+    expect(stat).toHaveBeenCalledTimes(1);
+    // Virtualized cards leaving the viewport must not revive the preamble.
+    view.rerender(<Conversation items={items} mounted={false} />);
+    expect(screen.queryByTestId('main-prose')).toBeNull();
+    view.rerender(<Conversation items={items} />);
+    expect(screen.queryByTestId('main-prose')).toBeNull();
+    expect(stat).toHaveBeenCalledTimes(2);
+    await act(async () => finish({ kind: 'missing', resolvedPath: '/bot/workspace/result.pdf' }));
+    expect(screen.getByTestId('main-prose')).toBeTruthy();
+  });
+
+  it.each(['missing', 'old', 'failure'])('retains no-final fallback when file checks reject delivery: %s', async (verdict) => {
+    const stat = vi.fn(async (): Promise<FileStat> => {
+      if (verdict === 'failure') throw new Error('stat unavailable');
+      return verdict === 'old' ? { kind: 'file', resolvedPath: '/bot/workspace/result.pdf', birthtimeMs: 1, mtimeMs: 1 } : { kind: 'missing', resolvedPath: '/bot/workspace/result.pdf' };
+    });
+    window.electronAPI.fsBrowse.statPath = stat;
+    await act(async () => { render(<Conversation items={conversationFiles()} />); });
+    expect(stat).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('bot-generated-artifacts')).toBeNull();
+    expect(screen.getByTestId('main-prose').textContent).toBe('Generating the report');
+  });
+
+  it('invalidates delivery for changed candidates and ignores an obsolete async completion', async () => {
+    let finishOld!: (value: FileStat) => void;
+    const stat = vi.fn().mockImplementationOnce(() => new Promise<FileStat>((resolve) => { finishOld = resolve; }))
+      .mockResolvedValue({ kind: 'missing', resolvedPath: '/bot/workspace/missing.pdf' });
+    window.electronAPI.fsBrowse.statPath = stat;
+    const view = render(<Conversation items={conversationFiles()} />);
+    view.rerender(<Conversation items={conversationFiles('/bot/workspace/missing.pdf')} />);
+    await act(async () => finishOld({ kind: 'file', resolvedPath: '/bot/workspace/result.pdf', birthtimeMs: START + 100, mtimeMs: START + 100 }));
+    expect(screen.queryByTestId('bot-generated-artifacts')).toBeNull();
+    expect(screen.getByTestId('main-prose')).toBeTruthy();
+    expect(stat).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not use a previous candidate confirmation for a missing replacement', async () => {
+    const view = render(<Conversation items={conversationFiles()} />);
+    await screen.findByTestId('bot-generated-artifacts');
+    expect(screen.queryByTestId('main-prose')).toBeNull();
+    window.electronAPI.fsBrowse.statPath = vi.fn(async (): Promise<FileStat> => ({ kind: 'missing', resolvedPath: '/bot/workspace/missing.pdf' }));
+    await act(async () => { view.rerender(<Conversation items={conversationFiles('/bot/workspace/missing.pdf')} />); });
+    expect(screen.queryByTestId('bot-generated-artifacts')).toBeNull();
+    expect(screen.getByTestId('main-prose')).toBeTruthy();
+  });
+
+  it('does not carry a visible delivery into a new file context or time window', async () => {
+    const items = conversationFiles();
+    const view = render(<Conversation items={items} />);
+    await screen.findByTestId('bot-generated-artifacts');
+    expect(screen.queryByTestId('main-prose')).toBeNull();
+    const stat = vi.fn(async (): Promise<FileStat> => ({ kind: 'missing', resolvedPath: '/bot/workspace/missing.pdf' }));
+    window.electronAPI.fsBrowse.statPath = stat;
+    const scope = { ...fileScope, sessionId: 'different-session', workingDir: '/different' };
+    await act(async () => { view.rerender(<Conversation items={items} scope={scope} />); });
+    expect(screen.queryByTestId('bot-generated-artifacts')).toBeNull();
+    expect(screen.getByTestId('main-prose')).toBeTruthy();
+    expect(stat).toHaveBeenCalledTimes(1);
+    const updated = items.map((item) => item.type === 'generated_files' ? { ...item, turnEndMs: END + 100 } : item);
+    await act(async () => { view.rerender(<Conversation items={updated} scope={scope} />); });
+    expect(screen.getByTestId('main-prose')).toBeTruthy();
+    expect(stat).toHaveBeenCalledTimes(2);
+  });
+
 });

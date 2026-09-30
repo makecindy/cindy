@@ -1,5 +1,8 @@
+import { ComposerFrame, nativeComposerFrameAvailable } from './ComposerFrame';
 import {
   Animated,
+  Platform,
+  Pressable,
   Easing,
   StyleSheet,
   View,
@@ -11,7 +14,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { TextInput } from '@/components/AppText';
-import Reanimated, { type useAnimatedStyle } from 'react-native-reanimated';
+import Reanimated, { useAnimatedStyle, useSharedValue, type SharedValue } from 'react-native-reanimated';
 import { GestureDetector } from '@/platform/gestureHandler';
 import type { PanGesture } from 'react-native-gesture-handler';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
@@ -19,8 +22,9 @@ import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Mic } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, type ReactNode, type Ref } from 'react';
 import { useTranslation } from 'react-i18next';
-import { iconSize, iconStroke, useThemedStyles, type ThemeColors } from '@/theme';
-import { radius, spacing } from '@/theme/tokens';
+import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { motionDuration, motionEasing, radius, spacing } from '@/theme/tokens';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import {
   COMPOSER_SINGLE_LINE_HEIGHT,
   COMPOSER_TEXT_HORIZONTAL_PADDING,
@@ -78,6 +82,14 @@ const isExpoGo =
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
 export interface MobileComposerInputRowProps {
+  entryTransitionId?: string;
+  onEntryTransitionComplete?(): void;
+  /** Compact (non-card) outer height; on the iOS composer dock it matches the new-task button. */
+  collapsedHeight?: number;
+  /** When set, a tap on the compact input calls this instead of focusing directly. */
+  onCollapsedPress?(): void;
+  /** See ComposerFrame; changes when onCollapsedPress opens the pill. */
+  expandToken?: string;
   accessibilityHint?: string;
   accessibilityLabel: string;
   /**
@@ -91,6 +103,9 @@ export interface MobileComposerInputRowProps {
    * 像抽屉滑出而非淡入重建，配合 useComposerCardTransition 的布局动画）。
    */
   cardActive?: boolean;
+  collapseProgress?: SharedValue<number>;
+  /** The enclosing scroll surface owns the native glass frame. */
+  frameOutside?: boolean;
   caretHidden?: boolean;
   compact?: boolean;
   autoFocus?: TextInputProps['autoFocus'];
@@ -183,11 +198,18 @@ export interface MobileComposerInputRowProps {
  * button placement. Page-specific actions stay injected as slots.
  */
 export function MobileComposerInputRow({
+  entryTransitionId,
+  onEntryTransitionComplete,
+  collapsedHeight,
+  onCollapsedPress,
+  expandToken,
   accessibilityHint,
   accessibilityLabel,
   accessoryAbove,
   autoFocus,
   cardActive,
+  frameOutside,
+  collapseProgress,
   caretHidden,
   compact,
   cursorColor,
@@ -235,6 +257,12 @@ export function MobileComposerInputRow({
   // 但 mode/manual 与多行草稿判定仍会让 multilineShape 为 true;若据此关掉几何居中,
   // 收起态文字会继续走 iOS 6/0 光学偏移,对不齐新增的 34pt +。
   const geometricSingleLine = !cardLayout;
+  // iOS composer dock pill: every end control sits concentric with the pill,
+  // i.e. its visible circle is as far from the pill edge as from the top and
+  // bottom. The leading attachment keeps its 44pt hit area (its visible 34pt
+  // circle is centred in it), so the row's left padding gives back that slack.
+  const concentricInset = geometricSingleLine && collapsedHeight != null
+    ? Math.max(0, (collapsedHeight - MOBILE_COMPOSER_CONTROL_SIZE) / 2) : null;
   // RN 里显式 height 压过 minHeight:manual 定高(用户拖过高度)时 frameHeight 可能小于
   // inputFrameMinHeight,直接铺开会把听写停止命中区又压回不足 44pt。数值高度在这里
   // 先 clamp;拖拽中的 Animated 值无法在 JS 侧 clamp(会打断跟手),那一瞬保持动画值,
@@ -289,19 +317,32 @@ export function MobileComposerInputRow({
     />
   );
   return (
-    <View
+    <ComposerFrame
+      entryTransitionId={entryTransitionId}
+      onEntryTransitionComplete={onEntryTransitionComplete}
+      expandToken={expandToken}
+      expanded={cardLayout}
+      unframed={frameOutside}
       style={[
         styles.row,
         compact && styles.rowCompact,
         geometricSingleLine && styles.rowCollapsedTouch,
+        geometricSingleLine && collapsedHeight != null && { minHeight: collapsedHeight },
+        concentricInset != null && {
+          paddingLeft: Math.max(0, concentricInset - (MOBILE_COMPOSER_MIN_TOUCH_TARGET - MOBILE_COMPOSER_CONTROL_SIZE) / 2),
+          paddingRight: concentricInset,
+        },
         !geometricSingleLine && multilineShape && styles.rowMultiline,
         cardLayout && styles.rowCard,
+        Platform.OS === 'ios' && cardLayout && styles.rowNativeCard,
+        // The native frame owns the contour; its child must not add a second corner.
+        nativeComposerFrameAvailable && { backgroundColor: 'transparent', borderWidth: 0, borderRadius: 0 },
         rowStyle,
       ]}
       testID={testID}
     >
       {resizeHandle}
-      {cardLayout ? accessoryAbove : null}
+      {cardLayout && accessoryAbove ? <ComposerFoldingSection progress={collapseProgress}>{accessoryAbove}</ComposerFoldingSection> : null}
       <View
         style={[
           styles.mainRow,
@@ -327,16 +368,23 @@ export function MobileComposerInputRow({
             </TextInputWrapper>
           ) : textInputElement)}
           {inputOverlay}
+          {!cardLayout && onCollapsedPress ? (
+            // VoiceOver still reaches the input itself and focuses it directly.
+            <Pressable accessible={false} importantForAccessibility="no-hide-descendants"
+              onPress={onCollapsedPress} style={StyleSheet.absoluteFill} testID={testID ? `${testID}.collapsedOpen` : undefined} />
+          ) : null}
         </Reanimated.View>
         {cardLayout ? null : trailing}
       </View>
       {cardLayout && toolbar != null ? (
+        <ComposerFoldingSection progress={collapseProgress}>
         <View
           style={styles.toolbarRow}
           testID={testID ? `${testID}.toolbar` : undefined}
         >
           {toolbar}
         </View>
+        </ComposerFoldingSection>
       ) : null}
       {voicePlacement?.inline || voicePlacement?.floating ? (
         <View
@@ -347,12 +395,19 @@ export function MobileComposerInputRow({
               cardLayout,
               floating: voicePlacement.floating,
             }),
+            // Same concentric inset as the leading control; when floating it
+            // steps left of the trailing send / create button.
+            concentricInset != null && {
+              right: voicePlacement.floating
+                ? concentricInset + MOBILE_COMPOSER_CONTROL_SIZE + MOBILE_COMPOSER_TOOL_GAP
+                : concentricInset,
+            },
           ]}
         >
           {floatingVoiceButton?.(floatingVoiceButtonStyle)}
         </View>
       ) : null}
-    </View>
+    </ComposerFrame>
   );
 }
 
@@ -412,21 +467,51 @@ export interface ComposerResizeGrabberProps {
  * 不会引起输入行高度跳变。触摸命中区是顶部居中的一段窄条，比可见的横条大得多，
  * 行两端保持穿透，不与左右按钮抢触摸。
  */
+function ComposerFoldingSection({ progress, children }: { progress?: SharedValue<number>; children: ReactNode }) {
+  const measuredHeight = useSharedValue(0);
+  const style = useAnimatedStyle(() => {
+    const amount = progress?.value ?? 0;
+    return {
+      height: measuredHeight.value > 0 ? measuredHeight.value * (1 - amount) : 'auto' as const,
+      opacity: 1 - amount,
+      overflow: 'hidden' as const,
+    };
+  });
+  return <Reanimated.View style={style}>
+    <View style={{ flexShrink: 0 }} onLayout={event => {
+      // Never feed an animated/constrained measurement back into its own height.
+      // Keep the natural expanded size until the gesture has fully reversed.
+      if ((progress?.value ?? 0) === 0 && event.nativeEvent.layout.height > 0) {
+        measuredHeight.value = event.nativeEvent.layout.height;
+      }
+    }}>
+      {children}
+    </View>
+  </Reanimated.View>;
+}
+
 export function ComposerResizeGrabber({ onAdjust, panHandlers, gesture, visible, testID }: ComposerResizeGrabberProps) {
+  const { colors, mode } = useTheme();
   const { t } = useTranslation();
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
   const opacity = useRef(new Animated.Value(visible ? 1 : 0)).current;
+  const reduceMotion = useReduceMotionEnabled();
 
   useEffect(() => {
+    // 透明度状态切换档 motionDuration.fast(§14.4);出现用 out、消失用 in;减弱动态效果直接到位。
+    if (reduceMotion !== false) {
+      opacity.setValue(visible ? 1 : 0);
+      return undefined;
+    }
     const animation = Animated.timing(opacity, {
-      duration: 150,
-      easing: Easing.out(Easing.ease),
+      duration: motionDuration.fast,
+      easing: visible ? Easing.bezier(...motionEasing.out) : Easing.bezier(...motionEasing.in),
       toValue: visible ? 1 : 0,
       useNativeDriver: true,
     });
     animation.start();
     return () => animation.stop();
-  }, [opacity, visible]);
+  }, [opacity, reduceMotion, visible]);
 
   return (
     <Animated.View
@@ -450,32 +535,42 @@ export function ComposerResizeGrabber({ onAdjust, panHandlers, gesture, visible,
         testID={testID}
         {...panHandlers}
       >
-        <View style={styles.resizeGrabberBar} />
+        <View style={[styles.resizeGrabberBar, mode === 'dark' && { backgroundColor: colors.sheetGrabber, opacity: 0.62 }]} />
       </View>
       </GestureDetector>
     </Animated.View>
   );
 }
 
+/** 语音波形:常驻「正在听」状态信号,非交互过渡,不套 motionDuration 交互档位。 */
+const VOICE_WAVE_HALF_CYCLE_MS = 550;
+const VOICE_WAVE_STAGGER_MS = 180;
+
 export function VoiceMicWaveCaret({ color, testID, viewRef }: { color: string; testID?: string; viewRef?: Ref<View> }) {
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
   const bar1 = useRef(new Animated.Value(0)).current;
   const bar2 = useRef(new Animated.Value(0)).current;
   const bar3 = useRef(new Animated.Value(0)).current;
+  const reduceMotion = useReduceMotionEnabled();
 
   useEffect(() => {
     const bars = [bar1, bar2, bar3] as const;
+    // 常驻循环:减弱动态效果(含未查询到的首帧)下静止在满幅,侧短中长的静态波形。
+    if (reduceMotion !== false) {
+      bars.forEach((bar) => bar.setValue(1));
+      return undefined;
+    }
     const loops = bars.map((bar, index) => Animated.loop(
       Animated.sequence([
-        Animated.delay(index * 180),
+        Animated.delay(index * VOICE_WAVE_STAGGER_MS),
         Animated.timing(bar, {
-          duration: 550,
+          duration: VOICE_WAVE_HALF_CYCLE_MS,
           easing: Easing.inOut(Easing.ease),
           toValue: 1,
           useNativeDriver: true,
         }),
         Animated.timing(bar, {
-          duration: 550,
+          duration: VOICE_WAVE_HALF_CYCLE_MS,
           easing: Easing.inOut(Easing.ease),
           toValue: 0,
           useNativeDriver: true,
@@ -486,7 +581,7 @@ export function VoiceMicWaveCaret({ color, testID, viewRef }: { color: string; t
     return () => {
       loops.forEach((loop) => loop.stop());
     };
-  }, [bar1, bar2, bar3]);
+  }, [bar1, bar2, bar3, reduceMotion]);
 
   const animatedBarStyle = (bar: Animated.Value) => ({
     opacity: bar.interpolate({
@@ -574,6 +669,8 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     paddingBottom: MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM,
     paddingTop: 26,
   },
+  // iOS composer uses the existing 30pt multiline geometry with a native glass surface.
+  rowNativeCard: { borderRadius: 30, paddingTop: spacing.md },
   // 水平输入行：简洁态装 [输入][发送]，card 态只剩全宽输入区；
   // 语音按钮不在流内（absolute 锚点），简洁态无发送时给它留出右侧空间。
   mainRow: {
@@ -660,13 +757,11 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     paddingTop: COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,
     textAlignVertical: 'center',
   },
-  // 外层横跨全行但 box-none 穿透触摸，只有中间的窄命中条接手势，
-  // 避免与左右两侧按钮的 hitSlop 抢触摸。
-  // 命中区拉满卡片顶部整行(与 Context 面板拖动区同手感):高度对齐 rowCard 的
-  // paddingTop(26),不侵入输入区首行;grabber 仅卡片态渲染,顶部两端无可点内容。
+  // 外层 box-none 穿透；只有把手附近接管拖动。iOS 输入区从 16pt 开始，
+  // 热区不得向下覆盖首行，否则会抢走编辑器的点击和系统粘贴长按。
   resizeGrabberTouch: {
     alignItems: 'center',
-    height: 26,
+    height: 16,
     left: 0,
     position: 'absolute',
     right: 0,
@@ -675,8 +770,9 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
   },
   resizeGrabberHit: {
     alignItems: 'center',
-    alignSelf: 'stretch' as const,
-    height: 26,
+    // 触摸热区比可见把手宽 50%，高度保持与把手附近的顶部区域一致。
+    width: 60,
+    height: 16,
   },
   resizeGrabberBar: {
     backgroundColor: colors.borderTranslucent,

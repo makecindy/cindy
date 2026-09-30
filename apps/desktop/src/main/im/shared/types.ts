@@ -137,6 +137,10 @@ export interface ImSessionNamespace {
  * 渠道适配器 — 编排层所有渠道差异的唯一注入点。
  */
 export interface ImChannelAdapter {
+  /** Resolve an authenticated private notification topic before any default-session or command routing. */
+  resolveNotificationReply?: (event: IMMessageEvent) => Promise<string | null>;
+  notificationReplyText?: { unavailable: string; commands: string };
+
   channel: ImChannelName;
   /** Selected display service; defaults to channel without changing routing identity. */
   messageSourceIm?(): string;

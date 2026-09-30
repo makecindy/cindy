@@ -9,6 +9,7 @@ export {
   iconStroke,
   lightColors,
   lineHeight,
+  navigationChrome,
   motionDuration,
   motionEasing,
   palettes,
@@ -21,3 +22,4 @@ export {
 } from './tokens';
 export { monoFont } from './monoFont';
 export { ThemeOverrideProvider, ThemeProvider, useTheme, useThemedStyles } from './ThemeProvider';
+export { THEME_PREFERENCES, type ThemePreference } from './themePreferenceStore';

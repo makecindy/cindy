@@ -15,6 +15,7 @@ import {
 	defaultIsolatedUserDataDir,
 	desktopDevCacheDirs,
 	devEnvPrefix,
+	darwinStaleDevEnvUnset,
 	hasIsolationIntent,
 	isTrustedIsolatedAuthUserDataDir,
 	ISOLATED_AUTH_LAUNCH_PROOF_FILE,
@@ -55,6 +56,7 @@ import {
 	shouldSuggestIsolatedNext,
 } from "../desktop-dev-verdict.mjs";
 import {
+	applyLinuxRendererEvidence,
 	collectDesktopWhoamiReport,
 	identifyDesktopProcesses,
 	mergeDesktopInstanceRecords,
@@ -600,6 +602,23 @@ test("desktop restart runner keeps the kill-before-deps order by default", () =>
 	]);
 });
 
+test("desktop restart reports each real step before running it and stops progress on failure", () => {
+	const events = [];
+	const run = (step) => {
+		events.push('run:' + step.progress);
+		if (step.progress === 'assets') throw new Error('missing runtime');
+	};
+	assert.throws(() => runDesktopRestart(
+		['--isolated=progress-test'], '/repo/cindy', run,
+		(step) => events.push('step:' + step),
+	), /missing runtime/);
+	assert.deepEqual(events, [
+		'step:stopping', 'run:stopping',
+		'step:dependencies', 'run:dependencies',
+		'step:assets', 'run:assets',
+	]);
+});
+
 test("desktop restart process-control phase does not initialize startup configuration", () => {
 	const processControlEnv = {};
 	assert.equal(
@@ -934,8 +953,19 @@ test("devEnvPrefix passes harness envs through on Windows cmd with quote strippi
 	);
 });
 
+test("devEnvPrefix carries the Cindy Make test-window marker through restart", () => {
+	assert.equal(
+		devEnvPrefix({ XDT_CINDY_MAKE_TEST: "1" }, "darwin"),
+		"XDT_CINDY_MAKE_TEST='1' CINDY_CUA_SMOKE='0' ",
+	);
+	assert.equal(
+		devEnvPrefix({ XDT_CINDY_MAKE_TEST: "1" }, "win32"),
+		'set "XDT_CINDY_MAKE_TEST=1" && set "CINDY_CUA_SMOKE=0" && ',
+	);
+});
+
 test("devEnvPrefix overrides a stale Computer Use smoke flag in the target shell", () => {
-	for (const value of [undefined, "", "0", "1"]) {
+	for (const value of [undefined, "", "0", "1", "cursor-goal", "invalid"]) {
 		const env = value === undefined ? {} : { CINDY_CUA_SMOKE: value };
 		const node = process.platform === "win32" ? "%CINDY_TEST_NODE%" : "$CINDY_TEST_NODE";
 		const result = spawnSync(
@@ -948,7 +978,7 @@ test("devEnvPrefix overrides a stale Computer Use smoke flag in the target shell
 			},
 		);
 		assert.equal(result.status, 0, result.stderr);
-		assert.equal(result.stdout.trim(), value === "1" ? "1" : "0", `caller value: ${value}`);
+		assert.equal(result.stdout.trim(), ["1", "cursor-goal"].includes(value) ? value : "0", `caller value: ${value}`);
 	}
 });
 
@@ -1328,4 +1358,70 @@ test("assertDesktopRestartStepSucceeded throws so runner can print a verdict", (
 		),
 		(error) => error instanceof DesktopRestartStepError && error.alreadyHasVerdict === true,
 	);
+});
+
+test('Linux readiness binds the reported renderer to a live descendant in the same checkout', () => {
+  const rootDir = path.resolve('/repo/cindy');
+  const executable = path.join(rootDir, 'node_modules', 'electron', 'dist', 'electron');
+  const scanned = [{ pid: 10, rootDir, ready: false, state: 'starting' }];
+  const records = [{ pid: 10, rootDir, state: 'ready', rendererPid: 12 }];
+  const processes = [
+    { pid: 10, ppid: 1, command: `${executable} .` },
+    { pid: 11, ppid: 10, command: `${executable} --type=zygote` },
+    { pid: 12, ppid: 11, command: `${executable} --type=zygote` },
+  ];
+  assert.equal(applyLinuxRendererEvidence(scanned, records, processes, 'linux')[0].ready, true);
+  for (const recordsVariant of [[], [{ ...records[0], rendererPid: 99 }],
+    [{ ...records[0], rootDir: path.resolve('/other') }], [{ ...records[0], state: 'starting' }]]) {
+    assert.equal(applyLinuxRendererEvidence(scanned, recordsVariant, processes, 'linux')[0].ready, false);
+  }
+  for (const replacement of [
+    { ...processes[2], ppid: 99 },
+    { ...processes[2], command: '/other/electron --type=zygote' },
+    { ...processes[2], command: `${executable} --type=utility` },
+  ]) {
+    assert.equal(applyLinuxRendererEvidence(scanned, records, [...processes.slice(0, 2), replacement], 'linux')[0].ready, false);
+  }
+  assert.equal(applyLinuxRendererEvidence(scanned, records, processes, 'darwin')[0].ready, false);
+  assert.equal(applyLinuxRendererEvidence(scanned, records, processes, 'win32')[0].ready, false);
+});
+
+function unsetKeys(prefix) {
+	const match = /^unset ([^;]+); $/.exec(prefix);
+	return match ? match[1].split(" ") : [];
+}
+
+test("darwinStaleDevEnvUnset clears every forwarded variable this launch did not set", () => {
+	const keys = unsetKeys(darwinStaleDevEnvUnset({}));
+	// 身份与数据目录类:Terminal 残留会让预览落进别的沙箱或认领错误钥匙串身份。
+	for (const key of [
+		"XDT_ISOLATED",
+		"XDT_ISOLATED_NAME",
+		"XDT_USER_DATA_DIR",
+		"XDT_USER_DATA_DIR_EPOCH",
+		"XDT_DEVICE_ID_OVERRIDE",
+		"XDT_SCHEDULER_PASSIVE",
+		"XDT_ISOLATED_AUTH",
+		"XDT_ISOLATED_AUTH_PROOF",
+	]) {
+		assert.ok(keys.includes(key), `${key} should be unset`);
+	}
+	// CINDY_CUA_SMOKE 总由 devEnvPrefix 显式赋值,不需要也不应被清。
+	assert.ok(!keys.includes("CINDY_CUA_SMOKE"));
+});
+
+test("darwinStaleDevEnvUnset keeps variables this launch forwards (isolated without isolated-auth)", () => {
+	const env = {
+		XDT_ISOLATED: "1",
+		XDT_ISOLATED_NAME: "src-feature-1a2b3c",
+		XDT_USER_DATA_DIR: "/tmp/CindyGlobal-dev2-src-feature-1a2b3c",
+	};
+	const keys = unsetKeys(darwinStaleDevEnvUnset(env));
+	for (const key of Object.keys(env)) assert.ok(!keys.includes(key), `${key} must not be unset`);
+	for (const key of ["XDT_USER_DATA_DIR_EPOCH", "XDT_ISOLATED_AUTH", "XDT_ISOLATED_AUTH_PROOF"]) {
+		assert.ok(keys.includes(key), `${key} should be unset`);
+	}
+	// 被转发的值与被清除的键互不重叠:同一次命令里不会先赋值再 unset。
+	const forwarded = devEnvPrefix(env, "darwin");
+	for (const key of keys) assert.ok(!forwarded.includes(`${key}=`), `${key} both forwarded and unset`);
 });

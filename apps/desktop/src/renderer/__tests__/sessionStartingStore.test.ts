@@ -8,6 +8,10 @@ import {
   clearRemoteSessionActivity,
   getRemoteSessionActivity,
 } from '@/features/device-link/remoteSessionActivityStore';
+vi.mock('@/features/device-link/remoteProjectsStore', () => ({
+  getSessionDeviceId: (id: string) => (id === 's1' ? 'dev-1' : undefined),
+}));
+
 import {
   absorbSessionStarting,
   clearSessionStarting,
@@ -63,7 +67,7 @@ describe('sessionStartingStore', () => {
       attention: true,
     });
     markSessionStarting('s1');
-    expect(getRemoteSessionActivity('s1')).toBeUndefined();
+    expect(getRemoteSessionActivity('s1', 'dev-1')).toBeUndefined();
     expect([...getStartingSessionIds()]).toEqual(['s1']);
 
     applyRemoteSessionActivity('dev-1', {
@@ -73,7 +77,7 @@ describe('sessionStartingStore', () => {
       attention: true,
     });
     markSessionStarting('s1');
-    expect(getRemoteSessionActivity('s1')).toMatchObject({ phase: 'completed' });
+    expect(getRemoteSessionActivity('s1', 'dev-1')).toMatchObject({ phase: 'completed' });
     absorbSessionStarting(['s1']);
     expect([...getStartingSessionIds()]).toEqual([]);
   });

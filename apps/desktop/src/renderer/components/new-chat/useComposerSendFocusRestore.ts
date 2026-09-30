@@ -47,7 +47,9 @@ export function useComposerSendFocusRestore(
   const pendingRestoreRef = useRef<PendingComposerFocusRestore | null>(null);
 
   useEffect(() => {
-    if (!editor) return;
+    // Retained sidebar panels can reconnect effects after their editor view
+    // has been unmounted. Tiptap's view.dom getter throws in that state.
+    if (!editor || editor.isDestroyed) return;
     const editorDom = editor.view.dom;
     const ownerDocument = editorDom.ownerDocument;
     const cancelRestoreForOutsidePointer = (event: PointerEvent) => {

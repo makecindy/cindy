@@ -24,6 +24,7 @@ import { app, BrowserWindow, ipcMain, powerMonitor } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
+import { isCindyPersonalRuntime } from './cindy-make/versionRuntimeIdentity.js';
 import os from 'node:os';
 
 import {
@@ -40,6 +41,8 @@ import type { Manifest } from './manifestService';
 import { download, DownloadError } from './downloader/index';
 import { ProgressNormalizer } from './updateProgressNormalizer';
 import { compareAppUpdateVersions } from './updateVersionPolicy';
+import { CURRENT_APP_ID } from '../shared/brandRegion';
+import { syncWindowsVersionAfterUpdate, windowsInstallKey } from './windowsInstallationVersion';
 import { writeStartupBinaryUpdateMarker } from './agent-binaries/startup-update';
 
 import { createLogger, maskPath } from './logger';
@@ -66,6 +69,14 @@ import { throwIpcError } from './utils/ipcValidate';
 import { noteExpectedExit } from './startup-diagnostics';
 import { buildMacOSUpdateScript } from './updateScriptMacOS';
 import { buildLinuxUpdateScript, normalizeLinuxDebSha256 } from './updateScriptLinux';
+import {
+  checkDebianManagedInstallation,
+  findLinuxUserInstallation,
+  missingLinuxUserInstallTools,
+  type LinuxUserInstallation,
+} from './linuxInstallation';
+import { linuxPasswordStoreRelaunchArgs } from './linuxPasswordStore';
+import { CURRENT_CINDY_REGION } from '../shared/brandRegion';
 import { disposeAndroidAdb } from './mcp-integrations/android';
 import { abortIOSSimulatorOperationsForExit } from './mcp-integrations/ios-simulator-exit';
 import { getGhostNodeRuntimeBroker } from './cindy-brain/index';
@@ -175,6 +186,7 @@ let readyChannelEpoch: number | undefined;
 let updateChannelEpoch = 0;
 /** 本进程上次看到的有效渠道。别的共库实例改开关后,用这个发现跨进程渠道变化。 */
 let observedEnableBeta = false;
+let firstCheckTimer: ReturnType<typeof setTimeout> | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let autoRelaunchPollTimer: ReturnType<typeof setInterval> | null = null;
 let isRelaunching = false;
@@ -238,6 +250,35 @@ function setStatus(status: UpdateStatus, extra?: Partial<UpdateStatusPayload>): 
   if (status === 'ready' && !startupUpdateCheckInProgress && !extra?.errorCode) {
     void evaluateAutoRelaunch('status-ready');
   }
+}
+
+function formatLinuxProbeError(error: unknown, exePath: string): string {
+  const details = error && typeof error === 'object'
+    ? error as { code?: unknown; status?: unknown; signal?: unknown }
+    : {};
+  const code = typeof details.code === 'string' && /^[A-Za-z0-9_]+$/.test(details.code)
+    ? details.code
+    : null;
+  const status = typeof details.status === 'number' && Number.isInteger(details.status)
+    ? details.status
+    : null;
+  const signal = typeof details.signal === 'string' && /^[A-Za-z0-9]+$/.test(details.signal)
+    ? details.signal
+    : null;
+  const reason = code === 'ETIMEDOUT' || (signal !== null && status === null)
+    ? 'timeout'
+    : code === 'ENOENT' || code === 'EACCES' || code === 'EPERM'
+      ? 'not-executable'
+      : 'query-failed';
+  // execFileSync's message embeds the queried path. Log only controlled
+  // fields; the path goes through maskPath on its own.
+  return JSON.stringify({
+    reason,
+    status,
+    code,
+    signal,
+    path: maskPath(exePath),
+  });
 }
 
 function blockWindowsUpdaterForMissingRuntime(missingFiles: readonly string[]): false {
@@ -625,6 +666,7 @@ export function clearReloginFlag(): void {
  *                  in the union for backward compatibility with prior callers.)
  */
 function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?: string } {
+  if (isCindyPersonalRuntime()) return { action: 'none' };
   const updatesDir = getUpdatesDir();
   const infoPath = path.join(updatesDir, PATCH_INFO_FILE);
 
@@ -1073,6 +1115,7 @@ export function isVersionlessAppVersion(version: string): boolean {
 }
 
 async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<CheckForUpdateResult> {
+  if (isCindyPersonalRuntime()) return 'idle';
   log.info('checkForUpdate() called, currentStatus=%s', currentStatus);
   // 先跟共享设置对一次有效渠道:共库另一实例改过开关时,本进程内存代际还停在旧值。
   if (syncObservedUpdateChannel()) {
@@ -1406,7 +1449,6 @@ function handleApplyFailure(reason: string): void {
 
 // ── F3: Platform Executors ────────────────────────────────────────────────
 
-
 function executeUpdateWindows(zipPath: string, theme: 'light' | 'dark'): void {
   const appExePath = app.getPath('exe');
   const appDir = path.dirname(appExePath);
@@ -1506,6 +1548,9 @@ function executeUpdateWindows(zipPath: string, theme: 'light' | 'dark'): void {
     detached: true,
     stdio: 'ignore',
     windowsHide: false,
+    // Optional metadata, not a new CLI flag: older updater binaries ignore it
+    // instead of rejecting the entire update. New updaters forward it on elevation.
+    env: { ...process.env, CINDY_VERSION_SYNC_KEY: windowsInstallKey(CURRENT_APP_ID) },
   });
 
   const spawnTimeout = setTimeout(() => {
@@ -1720,7 +1765,7 @@ function readStagedLinuxDebSha256(debPath: string): string | null {
   return linuxStagedDebSha256;
 }
 
-function executeUpdateLinux(debPath: string): void {
+function executeUpdateLinux(debPath: string, installation: LinuxUserInstallation | null): void {
   const exePath = app.getPath('exe');
   const lockFilePath = getUpdateLockPath();
   const logDir = path.join(app.getPath('userData'), 'logs');
@@ -1762,8 +1807,35 @@ function executeUpdateLinux(debPath: string): void {
 
   let script: string;
   try {
+    // Do not change installation strategy after the preflight (there is an
+    // await while reclaiming runners). A changed layout must fail closed.
+    const now = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
+    const debianCheck = installation ? null : checkDebianManagedInstallation(exePath);
+    if (debianCheck?.status === 'error') {
+      log.error('Linux Debian ownership recheck failed: %s', formatLinuxProbeError(debianCheck.error, exePath));
+      isRelaunching = false;
+      autoRelaunchInProgress = false;
+      // A transient ownership probe failure is not evidence that the install
+      // changed. Keep the verified .deb staged so the user can retry, and do
+      // not consume an apply attempt. checkExistingPatch deletes the .deb
+      // after three recorded attempts.
+      setStatus('ready', { version: readyVersion ?? undefined });
+      return;
+    }
+    if (installation
+      ? !now || now.prefix !== installation.prefix || now.current !== installation.current
+        || now.region !== installation.region || !readyVersion
+      : now !== null || debianCheck?.status !== 'managed') {
+      throw new Error('Linux installation changed after preflight');
+    }
+    // Count the attempt only after the recheck confirms we will launch.
+    // Incrementing earlier let three transient recheck failures burn the
+    // staged .deb on the next startup.
+    incrementApplyAttempts();
     script = buildLinuxUpdateScript({
       pid, debPath, sha256, sizeBytes, exePath, lockFilePath, logPath,
+      userInstallation: installation ? { ...installation, version: readyVersion! } : undefined,
+      relaunchArgs: linuxPasswordStoreRelaunchArgs(app.commandLine?.getSwitchValue('password-store') ?? ''),
     });
   } catch (err) {
     log.error('failed to build Linux update script:', err);
@@ -1828,9 +1900,10 @@ function executeUpdateLinux(debPath: string): void {
   });
 }
 
-async function executeRelaunch(theme: 'light' | 'dark', checkForBinaryUpdates = false): Promise<void> {
+async function executeRelaunch(theme: 'light' | 'dark'): Promise<void> {
+  if (isCindyPersonalRuntime()) return;
   try {
-    await executeRelaunchUnguarded(theme, checkForBinaryUpdates);
+    await executeRelaunchUnguarded(theme);
   } catch (err) {
     log.error('executeRelaunch() failed: %s', err instanceof Error ? err.stack ?? err.message : String(err));
     try {
@@ -1850,7 +1923,7 @@ async function executeRelaunch(theme: 'light' | 'dark', checkForBinaryUpdates = 
   }
 }
 
-async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryUpdates: boolean): Promise<void> {
+async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> {
   if (isRelaunching) {
     log.info('executeRelaunch() skipped — already in progress');
     return;
@@ -1918,6 +1991,35 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
   // keeps both Cindy and the already-downloaded patch intact.
   if (!ensureWindowsUpdaterPrerequisites()) return;
 
+  // Do not stop active work or quit into a Debian-only installer on Arch.
+  // This also protects pacman/AUR-owned and manually unpacked applications.
+  let linuxInstallation: LinuxUserInstallation | null = null;
+  if (process.platform === 'linux') {
+    const exePath = app.getPath('exe');
+    const installation = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
+    linuxInstallation = installation;
+    const debianCheck = installation ? null : checkDebianManagedInstallation(exePath);
+    if (debianCheck?.status === 'error') {
+      log.error('Linux Debian ownership check failed: %s', formatLinuxProbeError(debianCheck.error, exePath));
+      isRelaunching = false;
+      autoRelaunchInProgress = false;
+      // Keep the verified installer staged. A transient dpkg-query failure is
+      // not evidence that this executable belongs to an unsupported layout.
+      setStatus('ready', { version: readyVersion ?? undefined });
+      return;
+    }
+    const supported = installation
+      ? installation.region === CURRENT_CINDY_REGION && missingLinuxUserInstallTools().length === 0
+      : debianCheck?.status === 'managed';
+    if (!supported) {
+      log.error('Linux installation cannot self-update; use the installation guide or its package manager');
+      isRelaunching = false;
+      autoRelaunchInProgress = false;
+      setStatus('ready', { version: readyVersion ?? undefined, errorCode: 'linux_installation_unsupported' });
+      return;
+    }
+  }
+
   // Gate *before* the updater is spawned, not inside forceQuit: once the
   // updater script is running it polls our pid and SIGKILLs us after 120s
   // (`updateScriptMacOS.ts`), so a late decision not to exit does not keep this
@@ -1940,7 +2042,9 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
     maskPath(readyFilePath), fs.statSync(readyFilePath).size,
   );
 
-  if (checkForBinaryUpdates && readyVersion) {
+  // Every applied app update — manual, idle or startup auto-relaunch — checks
+  // agent binaries once on the next launch; ordinary launches do not.
+  if (readyVersion) {
     cancelStartupBinaryUpdateCheck = writeStartupBinaryUpdateMarker(app.getPath('userData'), readyVersion);
   }
 
@@ -1950,14 +2054,14 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
       break;
     case 'darwin':
       // Increment immediately before starting the platform executor so a
-      // failed updater can be bounded across restarts. Windows does this only
-      // after its final app-local/System32 Runtime check inside the executor.
+      // failed updater can be bounded across restarts. Windows and Linux do
+      // this only after the last in-executor check that can still keep the
+      // staged patch for retry (Windows Runtime, Linux ownership recheck).
       incrementApplyAttempts();
       executeUpdateMacOS(readyFilePath);
       break;
     case 'linux':
-      incrementApplyAttempts();
-      executeUpdateLinux(readyFilePath);
+      executeUpdateLinux(readyFilePath, linuxInstallation);
       break;
     default:
       log.error(`Unsupported platform: ${process.platform}`);
@@ -1967,11 +2071,89 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
+/** Report known platform apply blockers before suggesting the built-in update action. */
+function agentUpdateApplyBlockReason(): string | null {
+  if (process.platform !== 'win32' && process.platform !== 'darwin' && process.platform !== 'linux') {
+    return '当前平台不支持应用内更新。';
+  }
+  if (isMacAppTranslocated()) return '请先将 Cindy 移入「应用程序」文件夹，再安装更新。';
+  if (process.platform === 'win32' && !checkWindowsUpdaterPrerequisites(undefined, process.resourcesPath).satisfied) {
+    return 'Windows 更新器运行环境不可用；已下载的更新将保留。';
+  }
+  if (process.platform === 'linux') {
+    const exePath = app.getPath('exe');
+    const installation = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
+    if (installation) {
+      if (installation.region !== CURRENT_CINDY_REGION || missingLinuxUserInstallTools().length > 0) {
+        return '当前 Linux 用户安装环境不支持应用内更新。';
+      }
+    } else {
+      const debianCheck = checkDebianManagedInstallation(exePath);
+      if (debianCheck.status !== 'managed') {
+        return debianCheck.status === 'error'
+          ? '暂时无法验证 Linux 安装来源，请稍后重试。'
+          : '当前 Linux 安装方式不支持应用内更新；请使用安装说明或系统包管理器。';
+      }
+    }
+  }
+  return null;
+}
+
+export async function checkAppUpdateForAgent(): Promise<{
+  status: string;
+  currentVersion: string;
+  targetVersion?: string;
+  reason?: string;
+}> {
+  const currentVersion = app.getVersion();
+  if (!app.isPackaged || isDev() || isCindyPersonalRuntime() || isVersionlessAppVersion(currentVersion)) {
+    return { status: 'unsupported', currentVersion, reason: '此构建不支持应用内更新。' };
+  }
+  const platformBlock = agentUpdateApplyBlockReason();
+  if (platformBlock) return { status: 'unsupported', currentVersion, reason: platformBlock };
+  if (currentStatus === 'downloading' || currentStatus === 'superseding') {
+    return { status: 'downloading', currentVersion, targetVersion: readyVersion };
+  }
+  if (currentStatus === 'ready' && readyVersion) {
+    return { status: 'ready', currentVersion, targetVersion: readyVersion };
+  }
+  // An Agent check must not stage a patch: checkForUpdate() downloads it and
+  // enables the existing auto-relaunch-on-idle path. Read only the manifest;
+  // the user can download and install through the built-in update action.
+  const manifest = await fetchManifest();
+  if (!manifest) return { status: 'manifest_failed', currentVersion, reason: '无法读取当前渠道的更新信息。' };
+  const relation = compareAppUpdateVersions(manifest.app?.version, currentVersion);
+  if (relation === 'invalid') return {
+    status: 'manifest_failed', currentVersion, reason: '当前渠道的更新版本信息无效。',
+  };
+  if (relation === 'newer' && resolveUpdateAsset(manifest)) {
+    return { status: 'available', currentVersion, targetVersion: manifest.app.version };
+  }
+  return {
+    status: 'no_installable_update', currentVersion,
+    reason: '当前渠道没有适用于这台设备的可安装更新；也可能已是最新版本。',
+  };
+}
+
 export function initUpdateService(): void {
+  // Observe the successful old-updater receipt before existing cleanup removes
+  // it. Async and metadata-only; no effect on download/apply/rollback decisions.
+  if (process.platform === 'win32' && app.isPackaged && !isDev() && !isCindyPersonalRuntime()) {
+    void syncWindowsVersionAfterUpdate({
+      platform: process.platform,
+      packaged: true,
+      version: app.getVersion(),
+      appId: CURRENT_APP_ID,
+      exePath: app.getPath('exe'),
+      resourcesPath: process.resourcesPath,
+      patchInfoPath: path.join(getUpdatesDir(), PATCH_INFO_FILE),
+      warn: (message) => log.warn(message),
+    });
+  }
   // Best-effort cleanup of >7-day-old `cindy-update*`/`xdt-update*` leftovers in %TEMP%.
   // Counterpart to the Rust updater's own sweep — covers the case where the
   // user stays on the latest version and never triggers another updater run.
-  sweepStaleUpdateTempDirs();
+  if (!isCindyPersonalRuntime()) sweepStaleUpdateTempDirs();
 
   ipcMain.on('update-relaunch', (event, theme: 'light' | 'dark') => {
     // Linux 分支会退出应用并触发 pkexec 系统授权,属于特权操作;
@@ -1983,7 +2165,7 @@ export function initUpdateService(): void {
     // default and the .env'd-out look most users have.
     const resolved = theme === 'light' || theme === 'dark' ? theme : 'dark';
     resolvedRelaunchTheme = resolved;
-    void executeRelaunch(resolved, true);
+    void executeRelaunch(resolved);
   });
 
   ipcMain.handle(
@@ -2125,6 +2307,25 @@ export function initUpdateService(): void {
     app.quit();
   });
 
+  // About → Agent version update: keep the same graceful app relaunch lifecycle,
+  // but ask the next startup to refresh managed harness binaries before they are
+  // exposed to Maker. The marker is consumed once by agent-binaries/prepare and
+  // is scoped to the harness the user confirmed; Pi has its own kernel manager.
+  ipcMain.handle('update-harness-relaunch', (event, kind: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (kind !== 'claude-code' && kind !== 'codex') {
+      throwIpcError('INVALID_PARAMS', 'kind required (claude-code | codex)');
+    }
+    const cancelMarker = writeStartupBinaryUpdateMarker(app.getPath('userData'), app.getVersion(), [kind]);
+    if (!cancelMarker) {
+      throwIpcError('INTERNAL', 'failed to schedule harness update');
+    }
+    log.info(`harness update relaunch requested: ${kind}`);
+    app.relaunch({ args: process.argv.slice(1) });
+    app.quit();
+    return { accepted: true };
+  });
+
   ipcMain.on('update-set-relaunch-theme', (_event, theme: 'light' | 'dark') => {
     if (theme === 'light' || theme === 'dark') {
       resolvedRelaunchTheme = theme;
@@ -2161,7 +2362,7 @@ export function initUpdateService(): void {
     log.info('update-check-startup called');
     startupUpdateCheckInProgress = true;
     try {
-      if (isDev()) {
+      if (isDev() || isCindyPersonalRuntime()) {
         return { hasUpdate: false, action: 'none' as const };
       }
 
@@ -2305,7 +2506,7 @@ export function initUpdateService(): void {
     }
   });
 
-  if (isDev()) {
+  if (isDev() || isCindyPersonalRuntime()) {
     log.info('Dev mode — skipping background polling');
     return;
   }
@@ -2315,7 +2516,8 @@ export function initUpdateService(): void {
   powerMonitor.on('unlock-screen', handlePowerMonitorActivity);
   powerMonitor.on('user-did-become-active', handlePowerMonitorActivity);
 
-  setTimeout(() => {
+  firstCheckTimer = setTimeout(() => {
+    firstCheckTimer = null;
     log.info('First background check fires');
     checkForUpdate().catch((err) => {
       log.error('Background check threw:', err);
@@ -2370,6 +2572,10 @@ export async function enableUncustomizedBetaChannel(
 }
 
 export function stopUpdateService(): void {
+  if (firstCheckTimer) {
+    clearTimeout(firstCheckTimer);
+    firstCheckTimer = null;
+  }
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;

@@ -60,7 +60,7 @@ function BotHistorySessionGateView() {
       .catch(() => {
         if (!cancelled) setAllowed(false);
       });
-    // 身份是装饰,拿不到就退回没有头像的只读历史——不因为它失败挡住整页。
+    // Profile 装饰可异步补齐；已验证的伙伴历史始终保持伙伴界面。
     void window.electronAPI.localDb.bots
       .get(botId)
       .then((bot) => {
@@ -81,8 +81,13 @@ function BotHistorySessionGateView() {
       </main>
     );
   }
-  if (!allowed || !sessionId) {
+  if (!allowed || !botId || !sessionId) {
     return <Navigate to={botId ? `/bots/${botId}?settings=1` : '/bots'} replace />;
   }
-  return <CCAgentSessionView readOnly {...(identity ? { botIdentity: identity } : {})} />;
+  return (
+    <CCAgentSessionView
+      readOnly
+      botIdentity={{ ...(identity ?? { id: botId, name: '' }), sessionId }}
+    />
+  );
 }

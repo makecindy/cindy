@@ -44,6 +44,11 @@ const messages = {
     ssoOrgHint: "不知道企業登入標識？請聯絡企業管理員。",
     ssoOrgDetected: "選擇企業「{org}」的單點登入方式",
     realmConsentTitle: "連線企業所在區域",
+    realmConsentPersonalTitle: "發現企業登入",
+    realmConsentPersonalBodyCn: "信箱對應企業位於中國大陸區。\n可使用企業 SSO，或繼續個人登入。",
+    realmConsentPersonalBodyGlobal: "信箱對應企業位於國際區。\n可使用企業 SSO，或繼續個人登入。",
+    realmConsentEnterpriseLogin: "企業 SSO",
+    realmConsentContinuePersonal: "繼續個人登入",
     realmConsentBodyCn:
       "你的企業位於中國大陸區。\n繼續後，Cindy 會連線該區域。",
     realmConsentBodyGlobal:
@@ -159,6 +164,11 @@ const messages = {
     ssoOrgHint: "不知道企业登录标识？请联系企业管理员。",
     ssoOrgDetected: "选择企业「{org}」的单点登录方式",
     realmConsentTitle: "连接企业所在区域",
+    realmConsentPersonalTitle: "发现企业登录",
+    realmConsentPersonalBodyCn: "邮箱对应企业位于中国大陆区。\n可使用企业 SSO，或继续个人登录。",
+    realmConsentPersonalBodyGlobal: "邮箱对应企业位于国际区。\n可使用企业 SSO，或继续个人登录。",
+    realmConsentEnterpriseLogin: "企业 SSO",
+    realmConsentContinuePersonal: "继续个人登录",
     realmConsentBodyCn:
       "你的企业位于中国大陆区。\n继续后，Cindy 会连接该区域。",
     realmConsentBodyGlobal:
@@ -276,6 +286,11 @@ const messages = {
       "Don't know your enterprise sign-in identifier? Ask your admin.",
     ssoOrgDetected: 'Choose a single sign-on connection for "{org}"',
     realmConsentTitle: "Connect to your enterprise region",
+    realmConsentPersonalTitle: "Enterprise sign-in available",
+    realmConsentPersonalBodyCn: "Enterprise found in Mainland China.\nUse SSO or continue with your account.",
+    realmConsentPersonalBodyGlobal: "Enterprise found in the Global region.\nUse SSO or continue with your account.",
+    realmConsentEnterpriseLogin: "Enterprise SSO",
+    realmConsentContinuePersonal: "Continue personal",
     realmConsentBodyCn:
       "Your enterprise is in Mainland China.\nContinue to connect Cindy to this region.",
     realmConsentBodyGlobal:
@@ -405,6 +420,11 @@ const messages = {
       "企業のログイン識別子が不明な場合は、管理者にお問い合わせください。",
     ssoOrgDetected: "組織「{org}」のシングルサインオン方法を選択",
     realmConsentTitle: "企業のリージョンに接続",
+    realmConsentPersonalTitle: "企業ログインが見つかりました",
+    realmConsentPersonalBodyCn: "メールに対応する企業は中国本土です。\n企業 SSO または個人ログインを選べます。",
+    realmConsentPersonalBodyGlobal: "メールに対応する企業は国際地域です。\n企業 SSO または個人ログインを選べます。",
+    realmConsentEnterpriseLogin: "企業 SSO",
+    realmConsentContinuePersonal: "個人で続ける",
     realmConsentBodyCn:
       "この企業は中国本土リージョンにあります。\n続行すると Cindy はこの地域に接続します。",
     realmConsentBodyGlobal:
@@ -532,6 +552,11 @@ const messages = {
     ssoOrgHint: "기업 로그인 식별자를 모르시나요? 관리자에게 문의하세요.",
     ssoOrgDetected: '"{org}" 조직의 SSO 연결을 선택하세요',
     realmConsentTitle: "기업 지역에 연결",
+    realmConsentPersonalTitle: "기업 로그인 발견",
+    realmConsentPersonalBodyCn: "중국 본토의 기업을 찾았습니다.\n기업 SSO 또는 개인 로그인을 선택하세요.",
+    realmConsentPersonalBodyGlobal: "글로벌 지역의 기업을 찾았습니다.\n기업 SSO 또는 개인 로그인을 선택하세요.",
+    realmConsentEnterpriseLogin: "기업 SSO",
+    realmConsentContinuePersonal: "개인 로그인 계속",
     realmConsentBodyCn:
       "이 기업은 중국 본토 지역에 있습니다.\n계속하면 Cindy가 해당 지역에 연결됩니다.",
     realmConsentBodyGlobal:

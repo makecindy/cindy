@@ -15,10 +15,15 @@ non-isolated instances and does not change the saved Computer Use preference.
 
 The fixture exercises the public MCP dispatcher, host adapter and actual driver.
 It discovers its own disposable window, reads text-only state, forwards opaque
-element credentials, sets multilingual text, clicks a counter, verifies window
+element credentials, sets long multilingual text, clicks a counter, verifies window
 existence, rejects stale credentials, captures a temporary screenshot and rejects
 a cancelled action. Web AX values remain untrusted and verification must return
 unknown; DOM reads independently check exact text and click count.
+After automatic postchecks it explicitly refreshes element credentials. It also
+checks native Chinese/emoji typing with a bounded postcondition, macOS default
+drag selection, missing-app discovery without launching another app, and closed
+window rediscovery without silently selecting a replacement. Installed-bundle
+and already-running-app fallback success remain covered by unit regressions.
 The window and temporary files are removed; the report retains bounded fixture
 evidence, excluding the system menu and recent-items tree. A failure is recorded
 without terminating the development app or stopping other driver sessions.

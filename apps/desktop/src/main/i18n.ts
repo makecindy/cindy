@@ -111,8 +111,8 @@ function lookup(bundle: Record<string, unknown>, key: string): string | null {
  * {{appName}} 由品牌常量注入(本迷你 i18n 不支持其它变量,main 消费的 key 若
  * 需要更多插值,应像 bootstrap 菜单那样在调用点自行 replace)。
  */
-export function t(key: string): string {
-  const loc = getMainLocale();
+export function t(key: string, locale?: SupportedLocale): string {
+  const loc = locale ?? getMainLocale();
   let raw: string | null = null;
   for (const chainLocale of FALLBACK_CHAIN[loc]) {
     raw = lookup(resources[chainLocale], key);

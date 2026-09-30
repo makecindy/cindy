@@ -11,10 +11,11 @@
  *   - 柱高 max(3, round(ratio × H)); 零值日固定 2px, 保留"那天有格子但没用量"的视觉
  *
  * 日期推算一律以 main 返回的 todayKey 为锚, renderer 不自己取系统日期。
- * 30 根柱子用原生 title 做 tooltip (Radix per-cell 实例太重, 同热力图取舍)。
+ * 悬停 / 聚焦时整张图共用一个 UsageBarsTooltip 浮层 (日期、总量、占比条、按模型明细),
+ * 不再用原生 title —— 原生提示无法排版配色, 也不给每根柱子各挂一个 Radix 实例。
  */
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { formatCompactTokens } from '@/lib/usageFormat';
@@ -22,6 +23,7 @@ import type { UsageHistoryModelDay } from '@/hooks/useUsageHistory';
 import { usageModelKey } from '@/components/new-chat/usagePalette';
 
 import { usageHistoryModelColor } from './usageHistoryColors';
+import { UsageBarsTooltip, type UsageBarsTooltipData } from './UsageBarsTooltip';
 
 const WINDOW_DAYS = 30;
 const CHART_HEIGHT_PX = 96;
@@ -130,6 +132,44 @@ export function UsageTokenBars({
     return { list, max: Math.max(...list.map((b) => b.tokens), 0) };
   }, [modelDaily, colorOrder, todayKey, t]);
 
+  const plotRef = useRef<HTMLDivElement>(null);
+  const descriptionIdBase = useId();
+  // 悬停与键盘聚焦是两个独立的触发源:任一仍有效就显示,悬停优先。只记「哪一天」,
+  // 坐标由浮层在布局阶段按当前 DOM 测量 —— 数据刷新或重排后不会停在旧位置。
+  const [hoverDay, setHoverDay] = useState<string | null>(null);
+  const [focusDay, setFocusDay] = useState<string | null>(null);
+  const activeDay = hoverDay ?? focusDay;
+  // fixed 定位的浮层不随页面滚动:滚动或窗口尺寸变化时重新测量,跟随柱子。
+  const [layoutTick, remeasure] = useReducer((tick: number) => tick + 1, 0);
+  useEffect(() => {
+    if (!activeDay) return;
+    window.addEventListener('scroll', remeasure, true);
+    window.addEventListener('resize', remeasure);
+    return () => {
+      window.removeEventListener('scroll', remeasure, true);
+      window.removeEventListener('resize', remeasure);
+    };
+  }, [activeDay]);
+  const activeBar = activeDay ? bars.list.find((b) => b.day === activeDay) : undefined;
+  const tooltip: UsageBarsTooltipData | null = activeBar
+    ? {
+        day: activeBar.day,
+        tokens: activeBar.tokens,
+        segments: activeBar.segments.map((s) => ({
+          key: s.rank,
+          label: s.label,
+          tokens: s.tokens,
+          color: usageHistoryModelColor(s.rank, colorOrder.length),
+        })),
+        layoutTick,
+        measureAnchor: () =>
+          plotRef.current
+            ?.querySelector<HTMLElement>(`[data-day="${activeBar.day}"]`)
+            ?.getBoundingClientRect() ?? null,
+        measurePlot: () => plotRef.current?.getBoundingClientRect() ?? null,
+      }
+    : null;
+
   const ticks = niceTicks(bars.max);
   const recentWeekStart = shiftDayKeyLocal(todayKey, -6);
 
@@ -159,7 +199,11 @@ export function UsageTokenBars({
           />
         ))}
         <div className="absolute inset-0">
-          <div className="usage-token-plot flex h-full items-end gap-[3px]">
+          <div
+            ref={plotRef}
+            className="usage-token-plot flex h-full items-end gap-[3px]"
+            onPointerLeave={() => setHoverDay(null)}
+          >
             {bars.list.map((b) => {
               const ratio = bars.max > 0 ? b.tokens / bars.max : 0;
               const visualHeight =
@@ -169,21 +213,18 @@ export function UsageTokenBars({
                 b.tokens > 0
                   ? t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(b.tokens) })
                   : t('usageHistory.heatmap.emptyCell');
-              const titleLines = [
-                `${b.day} · ${usageSummary}`,
-                ...b.segments.map(
-                  (s) =>
-                    `${s.label}: ${t('usageDashboard.tokensOnly', {
-                      tokens: formatCompactTokens(s.tokens),
-                    })}`,
-                ),
-              ];
               return (
                 <button
                   key={b.day}
                   type="button"
-                  title={titleLines.join('\n')}
+                  data-day={b.day}
+                  onPointerEnter={() => setHoverDay(b.day)}
+                  onFocus={() => setFocusDay(b.day)}
+                  onBlur={() => setFocusDay((day) => (day === b.day ? null : day))}
                   aria-label={`${dateFormatter.format(parseDayKeyLocal(b.day))} · ${usageSummary}`}
+                  aria-describedby={
+                    b.segments.length > 0 ? `${descriptionIdBase}-${b.day}` : undefined
+                  }
                   aria-pressed={selectedDay === b.day}
                   data-highlighted={
                     selectedDay
@@ -227,6 +268,25 @@ export function UsageTokenBars({
           </div>
         </div>
       </div>
+      {/* 逐日模型明细的读屏文本:浮层 aria-hidden,原生 title 的这部分信息由它承接。 */}
+      <div className="sr-only">
+        {bars.list
+          .filter((b) => b.segments.length > 0)
+          .map((b) => (
+            <span key={b.day} id={`${descriptionIdBase}-${b.day}`}>
+              {[...b.segments]
+                .sort((x, y) => y.tokens - x.tokens)
+                .map(
+                  (s) =>
+                    `${s.label}: ${t('usageDashboard.tokensOnly', {
+                      tokens: formatCompactTokens(s.tokens),
+                    })}`,
+                )
+                .join('; ')}
+            </span>
+          ))}
+      </div>
+      <UsageBarsTooltip data={tooltip} />
     </div>
   );
 }

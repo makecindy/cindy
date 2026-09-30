@@ -10,15 +10,17 @@
  *  - ⚠ = 失败,可重试 / 删除。
  * 「排入队尾」是个事实断言,未确认时画它就是谎报,所以未确认一律转圈。
  */
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ActivityIndicator, Pressable, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent } from 'react-native';
 import { Text } from '@/components/AppText';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
 import { summarizeMessageBubblePresentation } from '@/session/messagePresentation';
 import { LONG_USER_MESSAGE_COLLAPSED_LINES, LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD, mayExceedVisualLineThreshold, resolveUserMessageCollapse } from '@/session/userMessageCollapse';
 import { sentInlineTokensDisplayText } from '@/session/sentMessageAtoms';
 import { SentInlineAtomBody } from '@/session/SentInlineAtomBody';
+import { MessageBodyTapBoundary } from '@/session/ShareMessageCheckbox';
+import { shareSelectionTapMoved, shouldCommitShareSelectionTap, type ShareSelectionTapPoint } from '@/session/shareSelectionTap';
 import {
   AlertCircle,
   ArrowUp,
@@ -34,6 +36,7 @@ import {
   useSentAttachmentThumbsVersion,
 } from '@/session/sentAttachmentThumbStore';
 import {
+  isPendingSendItemInteractive,
   isPendingSendItemSelected,
   pendingSendSpins,
   type MobilePendingSendItem,
@@ -205,7 +208,12 @@ export function PendingSendBubble({
   const spinning = pendingSendSpins(item.phase);
   const editing = item.phase === 'editing';
   const failed = item.phase === 'failed';
-  const interactive = item.actions !== null || failed;
+  // Local outbox rows have not reached the desktop queue yet, but users must
+  // still be able to cancel them while upload/enqueue is in flight. Settling
+  // rows deliberately remain non-interactive: they have already left the
+  // queue and use the existing recovery path instead.
+  const interactive = isPendingSendItemInteractive(item);
+  const outbox = interactive && item.actions === null;
   const selected = isPendingSendItemSelected(item, actions.selectedClientId);
   const bubbleLabel = item.text || t('message.queue.attachmentMessage');
   const uploadsPending = item.phase === 'uploading';
@@ -231,6 +239,39 @@ export function PendingSendBubble({
   const hasBody = !!displayBody;
   const hasAttachments = item.thumbs.length > 0 || !!item.fileNames?.length;
   const [badgeAnchor, setBadgeAnchor] = useState<{ clientId: string; left: number } | null>(null);
+  const bubbleTouchOriginRef = useRef<{ start: ShareSelectionTapPoint; startedAt: number } | null>(null);
+  const pendingCommitFrameRef = useRef<number | null>(null);
+  const cancelBubbleTouch = useCallback(() => {
+    bubbleTouchOriginRef.current = null;
+    if (pendingCommitFrameRef.current !== null) cancelAnimationFrame(pendingCommitFrameRef.current);
+    pendingCommitFrameRef.current = null;
+  }, []);
+  // Invalidate pending taps before a recycled row, disabled state or selection can take over.
+  useLayoutEffect(() => cancelBubbleTouch, [cancelBubbleTouch, item.clientId, interactive, selected]);
+  const handleBubbleTouchStart = (event: GestureResponderEvent) => {
+    cancelBubbleTouch();
+    if (event.nativeEvent.touches.length !== 1) return;
+    bubbleTouchOriginRef.current = { start: event.nativeEvent, startedAt: Date.now() };
+  };
+  const handleBubbleTouchMove = (event: GestureResponderEvent) => {
+    const origin = bubbleTouchOriginRef.current;
+    if (!origin) return;
+    if (shareSelectionTapMoved(origin.start, event.nativeEvent)) cancelBubbleTouch();
+  };
+  const handleBubbleTouchEnd = (event: GestureResponderEvent) => {
+    const origin = bubbleTouchOriginRef.current;
+    bubbleTouchOriginRef.current = null;
+    if (origin && event.nativeEvent.touches.length === 0 && shouldCommitShareSelectionTap({
+      durationMs: Date.now() - origin.startedAt,
+      moved: shareSelectionTapMoved(origin.start, event.nativeEvent),
+    })) {
+      // Match share rows: child link onPress gets a turn to consume the gesture.
+      pendingCommitFrameRef.current = requestAnimationFrame(() => {
+        pendingCommitFrameRef.current = null;
+        actions.onSelect(selected ? null : item.clientId);
+      });
+    }
+  };
   const measureBadgeAnchor = (event: LayoutChangeEvent) => {
     const left = Math.max(0, event.nativeEvent.layout.x - 28 - spacing.sm);
     setBadgeAnchor((current) => current?.clientId === item.clientId && current.left === left
@@ -295,7 +336,17 @@ export function PendingSendBubble({
             </View>
           ) : null}
           {hasBody ? (
-            <View key={`body:${item.clientId}`} onLayout={hasAttachments ? undefined : measureBadgeAnchor} style={[styles.bubble, density === 'compact' && styles.bubbleCompact, density === 'rich' && styles.bubbleRich]}>
+            <MessageBodyTapBoundary value={cancelBubbleTouch}>
+            <View
+              key={`body:${item.clientId}`}
+              onLayout={hasAttachments ? undefined : measureBadgeAnchor}
+              onTouchEnd={interactive ? handleBubbleTouchEnd : undefined}
+              onTouchMove={interactive ? handleBubbleTouchMove : undefined}
+              onTouchStart={interactive ? handleBubbleTouchStart : undefined}
+              onTouchCancel={cancelBubbleTouch}
+              style={[styles.bubble, density === 'compact' && styles.bubbleCompact, density === 'rich' && styles.bubbleRich]}
+              testID={`pendingSend.body.${item.clientId}`}
+            >
               {rendersSentInlineBody ? (
                 <SentInlineAtomBody
                   interactiveAtoms={false}
@@ -324,12 +375,17 @@ export function PendingSendBubble({
             {shouldCollapse ? (
               <Text accessibilityRole="button" suppressHighlighting
                 accessibilityLabel={expanded ? t('message.renderer.collapseMessage') : t('message.renderer.expandMessage')}
-                onPress={(event) => { event.stopPropagation(); setExpandedBody(expanded ? null : displayBody); }}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  cancelBubbleTouch();
+                  setExpandedBody(expanded ? null : displayBody);
+                }}
                 style={styles.collapseToggleText}>
                 {expanded ? t('message.renderer.collapse') : t('message.renderer.expand')}
               </Text>
             ) : null}
             </View>
+            </MessageBodyTapBoundary>
           ) : null}
           {(item.fileCount > 0 && !item.fileNames?.length) || uploadsPending ? (
             <View style={styles.attachmentLine}>
@@ -391,23 +447,23 @@ export function PendingSendBubble({
           />
         </View>
       ) : null}
-      {selected && failed ? (
+      {selected && outbox ? (
         <View style={styles.actionRow} testID={`pendingSend.outboxActions.${item.clientId}`}>
           <ActionPill
             busy={actions.busy}
             icon={Trash2}
-            label={t('message.queue.delete')}
+            label={t(failed ? 'message.queue.delete' : 'message.queue.cancel')}
             onPress={() => actions.onRemoveOutbox(item.clientId)}
             testID={`pendingSend.outboxRemove.${item.clientId}`}
           />
-          <ActionPill
+          {failed ? <ActionPill
             busy={actions.busy}
             cta
             icon={RotateCcw}
             label={t('message.queue.retry')}
             onPress={() => actions.onRetryOutbox(item.clientId)}
             testID={`pendingSend.outboxRetry.${item.clientId}`}
-          />
+          /> : null}
         </View>
       ) : null}
     </View>
@@ -496,7 +552,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.bodyLarge,
   },
   attachmentLine: { alignItems: 'center', flexDirection: 'row', gap: 4 },
-  attachmentLineText: { color: colors.textTertiary, fontSize: typeScale.footnote },
+  attachmentLineText: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   attachmentStrip: { alignItems: 'flex-end', marginBottom: spacing.xs, maxWidth: '100%' },
   thumbStrip: { alignItems: 'flex-end', maxWidth: '100%' },
   thumbCell: { borderRadius: radius.container, overflow: 'hidden' },
@@ -510,7 +566,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     right: 0,
     top: 0,
   },
-  editingHint: { color: colors.textTertiary, fontSize: typeScale.footnote },
+  editingHint: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   errorText: { color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   rowHint: {
     color: colors.textTertiary,
@@ -532,7 +588,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   actionPillCta: { backgroundColor: colors.cta, borderColor: colors.cta },
-  actionPillText: { color: colors.textPrimary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  actionPillText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   actionPillTextCta: { color: colors.ctaText },
   pressed: { opacity: 0.72 },
   disabled: { opacity: 0.42 },

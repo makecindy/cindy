@@ -126,7 +126,7 @@ describe('第一层源白名单：会话目录与调试原文永不被打开', (
     expect(result.records).toHaveLength(1);
   });
 
-  it('手动上报不读 agent 流（只在崩溃路径作上下文）', async () => {
+  it('普通手动上报不读 agent 流（不含 /issue 同意路径）', async () => {
     const logDir = path.join('/tmp', 'cindy-logs');
     const today = dayKey(NOW);
     const files: Record<string, string> = {
@@ -147,6 +147,42 @@ describe('第一层源白名单：会话目录与调试原文永不被打开', (
     await collectLogs(deps, { reason: 'manual', anchors: [] });
 
     expect(openedPaths.some((p) => p.includes('agent-'))).toBe(false);
+  });
+
+  it('手动路径仅在 includeAgentLogs=true 时读 agent 流，且仍只取 proxy 源', async () => {
+    const logDir = path.join('/tmp', 'cindy-logs');
+    const today = dayKey(NOW);
+    const files: Record<string, string> = {
+      [path.join(logDir, `main-${today}.log`)]: SENTINEL,
+      [path.join(logDir, `agent-${today}.ndjson`)]: [
+        JSON.stringify({
+          ts: NOW - 20_000,
+          level: 'info',
+          source: 'proxy',
+          scope: 'cc-proxy/req',
+          msg: 'POST /v1/messages 200 812ms',
+        }),
+        JSON.stringify({
+          ts: NOW - 19_000,
+          level: 'debug',
+          source: 'maker',
+          scope: 'maker/s:abc',
+          msg: '用户提示词正文',
+        }),
+      ].join('\n'),
+    };
+    const { deps, openedPaths } = harness(files);
+
+    const result = await collectLogs(deps, {
+      reason: 'manual',
+      anchors: [],
+      includeAgentLogs: true,
+    });
+
+    expect(openedPaths.some((p) => p.includes('agent-'))).toBe(true);
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0].src).toBe('proxy');
+    expect(JSON.stringify(result.records)).not.toContain('提示词');
   });
 
   it('崩溃路径读 agent 流，但只取 proxy 源', async () => {

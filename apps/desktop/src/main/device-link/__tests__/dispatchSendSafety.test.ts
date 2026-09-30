@@ -13,6 +13,7 @@ import {
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   DL_SUBSCRIBE_CHANNEL,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
@@ -42,9 +43,10 @@ vi.mock('../settings-store', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 
-import { __testing, runInvoke, wireInboundDispatch } from '../dispatch';
+import { __testing, runInvoke, wireInboundDispatch, setRemoteTurnChangeAction } from '../dispatch';
 import { __testing as registry } from '../invoke-registry';
 import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
+import { currentDbRpcAdmissionClass } from '../../localDb/client/rpcAdmission';
 import { getDeviceLinkInvokeContext } from '../invoke-context';
 import { HistoryViewController, type HistoryViewPage, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
 import * as subscriptions from '../subscriptions';
@@ -782,6 +784,44 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
     expect(subscriptions.__testing.topicsOf('ctrl-legacy')).toEqual(['*']);
   });
 
+  it('background link-open never installs the legacy wildcard or lights the controlled banner', () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+
+    __testing.handleLinkOpen(client as never, 'ctrl-background', 'open-1', {
+      controllerName: 'Desktop',
+      protocolVersion: 1,
+      appVersion: '1.0.0',
+      capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
+    });
+
+    expect(client.sendLinkAccept).toHaveBeenCalledWith(
+      'ctrl-background',
+      'open-1',
+      expect.objectContaining({
+        capabilities: expect.arrayContaining([DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1]),
+      }),
+    );
+    expect(subscriptions.__testing.topicsOf('ctrl-background')).toEqual([]);
+    expect(subscriptions.getControlControllers()).toEqual([]);
+    expect(subscriptions.getUpdateRelaunchControllers()).toEqual([]);
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', id: 'm1' });
+    expect(client.sendPush).not.toHaveBeenCalled();
+
+    // 之后用户真正开始控制:显式 subscribe 照常生效。
+    const result = __testing.handleSubscriptionFrame('ctrl-background', {
+      channel: DL_SUBSCRIBE_CHANNEL,
+      args: [{ topics: ['session:s1'] }],
+    });
+    expect(result).toEqual({ ok: true, result: { ok: true } });
+    __testing.forwardPush('local-db:messages:created', { sessionId: 's1', id: 'm1' });
+    expect(client.sendPush).toHaveBeenCalledWith(
+      'ctrl-background',
+      'local-db:messages:created',
+      { sessionId: 's1', id: 'm1' },
+    );
+  });
+
   it('remembered modern link-open waits for an explicit subscribe frame', () => {
     const client = mkClient();
     __testing.setActiveClient(client as never);
@@ -944,5 +984,255 @@ describe('remote companion Session visibility at the device-link boundary', () =
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(oldClient.sendPush).not.toHaveBeenCalled();
     expect(newClient.sendPush).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('background database admission covers the complete remote list lifecycle', () => {
+  it.each(['local-db:sessions:list', 'local-db:sessions:get-many', 'local-db:bots:list', 'maker:list-active', 'local-db:sessions:interrupted-pending', 'maker:remote-resources:list'])(
+    'keeps %s handler and visibility checks in background admission', async (channel) => {
+      const admissions: string[] = [];
+      setRemoteBotSessionLookup(async () => {
+        admissions.push(currentDbRpcAdmissionClass());
+        return 'ordinary';
+      });
+      registry.register(channel, () => {
+        admissions.push(currentDbRpcAdmissionClass());
+        return channel === 'maker:remote-resources:list'
+          ? { items: [{ ref: { id: 's1', kind: 'bot' } }] } : [{ id: 's1' }];
+      });
+      expect(await runInvoke('ctrl-1', { channel, args: ['s1'] })).toMatchObject({ ok: true });
+      expect(admissions.length).toBeGreaterThanOrEqual(4);
+      expect(new Set(admissions)).toEqual(new Set(['background']));
+      expect(currentDbRpcAdmissionClass()).toBe('interactive');
+    },
+  );
+
+  it('runs cross-device usage row reads under background admission', async () => {
+    const admissions: string[] = [];
+    registry.register('maker:usage:device-rows', () => {
+      admissions.push(currentDbRpcAdmissionClass());
+      return { format: 'usage-device-rows-v1', oversize: true };
+    });
+    expect(
+      await runInvoke('ctrl-1', { channel: 'maker:usage:device-rows', args: [{ sinceDay: '2026-09-25' }] }),
+    ).toMatchObject({ ok: true });
+    expect(admissions).toEqual(['background']);
+    expect(currentDbRpcAdmissionClass()).toBe('interactive');
+  });
+
+  it('keeps sending interactive while an unrelated background list is awaiting permission checks', async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const admissions: string[] = [];
+    setRemoteBotSessionLookup(async (id) => {
+      if (id === 'listing') await pending;
+      admissions.push(currentDbRpcAdmissionClass());
+      return 'ordinary';
+    });
+    registry.register('local-db:sessions:list', () => []);
+    registry.register('maker:send', () => { admissions.push(currentDbRpcAdmissionClass()); return {}; });
+    const list = runInvoke('ctrl-1', { channel: 'local-db:sessions:list', args: ['listing'] });
+    try {
+      expect(await runInvoke('ctrl-2', { channel: 'maker:send', args: ['s1', { text: 'hello' }] })).toMatchObject({ ok: true });
+      expect(new Set(admissions)).toEqual(new Set(['interactive']));
+    } finally { finish(); await list; }
+  });
+
+  it.each([false, true])(
+    'rechecks cached and backpressured lists using background admission and fresh visibility (catalog: %s)', async (catalog) => {
+    const admissions: string[] = [];
+    let hidden = false;
+    setRemoteBotSessionLookup(async () => {
+      admissions.push(currentDbRpcAdmissionClass());
+      return hidden ? 'hidden' : 'ordinary';
+    });
+    const rows = [{ id: 's1', tags: [{ id: 'private', name: 'Private label' }] }];
+      const args = catalog ? [20, 'active', { tagCatalog: 1 }] : [];
+      const emptyResult = catalog
+        ? { format: 'session-tag-catalog-v1', sessions: [], tags: [] }
+        : [];
+      const handler = vi.fn(() => rows);
+    registry.register('local-db:sessions:list', handler);
+    const client = mkClient();
+    wireInboundDispatch(client as never);
+    const frame = client.onFrame.mock.calls[0][0];
+    const request = { v: PROTOCOL_VERSION, kind: 'invoke', src: 'ctrl-1', id: 'cached-list', payload: { channel: 'local-db:sessions:list', args },
+      };
+    frame(request);
+    await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledTimes(1));
+    admissions.length = 0;
+    hidden = true;
+    frame(request);
+    await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledTimes(2));
+    expect(client.sendInvokeResult.mock.calls[1][2]).toEqual({ ok: true, result: emptyResult });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(admissions.length).toBeGreaterThan(0);
+    expect(new Set(admissions)).toEqual(new Set(['background']));
+
+    admissions.length = 0;
+    client.sendInvokeResult.mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); });
+    __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'queued-list', { ok: true, result: rows }, 'local-db:sessions:list',
+        args,
+      );
+    __testing.flushRemoteInvokeResultOutbox();
+    await vi.waitFor(() => expect(__testing.remoteInvokeResultOutboxSize()).toBe(0));
+    expect(client.sendInvokeResult.mock.calls.at(-1)![2]).toEqual({ ok: true, result: emptyResult,
+      });
+    expect(admissions.length).toBeGreaterThan(0);
+    expect(new Set(admissions)).toEqual(new Set(['background']));
+  },
+  );
+});
+
+
+it.each(['local-db:sessions:list', 'local-db:sessions:get', 'local-db:sessions:interrupted-pending', 'maker:list-active'])('reports DB overload during %s replay as backpressure without sending unchecked data', async (channel) => {
+  const client = mkClient({ sendInvokeResult: vi.fn().mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); }) });
+  __testing.setActiveClient(client as never);
+  __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'overloaded-list', { ok: true, result: [{ id: 'private' }] }, channel, ['s1']);
+  setRemoteBotSessionLookup(async () => { throw new Error('db worker RPC queue overloaded: op="rawAll"'); });
+  __testing.flushRemoteInvokeResultOutbox();
+  await vi.waitFor(() => expect(__testing.remoteInvokeResultOutboxSize()).toBe(0));
+  expect(client.sendInvokeResult.mock.calls.at(-1)![2]).toEqual({
+    ok: false, error: { code: 'BACKPRESSURE', message: 'db worker RPC queue overloaded: op="rawAll"' },
+  });
+});
+
+it.each(['maker:send', 'maker:input:enqueue', 'maker:remote-resources:list', 'maker:remote-resources:get', 'local-db:bots:list', 'local-db:bots:get'])(
+  'never marks a completed %s as safely retryable when outbox authorization overloads', async (channel) => {
+    const client = mkClient({ sendInvokeResult: vi.fn().mockImplementationOnce(() => { throw new DeviceLinkError('BACKPRESSURE', 'full'); }) });
+    __testing.setActiveClient(client as never);
+    __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'completed-send', { ok: true, result: { privateReceipt: 'accepted' } }, channel, ['s1']);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+    setRemoteBotSessionLookup(async () => { throw new Error('db worker RPC queue overloaded: op="rawAll"'); });
+    __testing.flushRemoteInvokeResultOutbox();
+    await vi.waitFor(() => expect(__testing.remoteInvokeResultOutboxSize()).toBe(0));
+    expect(client.sendInvokeResult.mock.calls.at(-1)![2]).toEqual({
+      ok: false, error: { code: 'IPC_ERROR', message: '[NOT_FOUND] Session does not exist' },
+    });
+  },
+);
+
+it('does not reexecute a cached send after authorization overloads and another controller stays usable', async () => {
+  let overloaded = false;
+  setRemoteBotSessionLookup(async (id) => {
+    if (overloaded && id === 's1') throw new Error('db worker RPC queue overloaded: op="rawAll"');
+    return 'ordinary';
+  });
+  const handler = vi.fn(() => ({ accepted: true }));
+  registry.register('maker:send', handler);
+  const client = mkClient();
+  wireInboundDispatch(client as never);
+  const frame = client.onFrame.mock.calls[0][0];
+  const request = { v: PROTOCOL_VERSION, kind: 'invoke', src: 'ctrl-1', id: 'cached-send', payload: { channel: 'maker:send', args: ['s1', { text: 'hello' }] } };
+  frame(request);
+  await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledTimes(1));
+  expect(client.sendInvokeResult.mock.calls[0][2]).toMatchObject({ ok: true });
+  overloaded = true;
+  frame(request);
+  await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledTimes(2));
+  expect(client.sendInvokeResult.mock.calls[1][2]).toMatchObject({ ok: false, error: { code: 'IPC_ERROR' } });
+  expect(handler).toHaveBeenCalledTimes(1);
+  frame({ ...request, src: 'ctrl-2', id: 'other-send', payload: { ...request.payload, args: ['s2', { text: 'other' }] } });
+  await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledTimes(3));
+  expect(client.sendInvokeResult.mock.calls[2]).toEqual(['ctrl-2', 'other-send', { ok: true, result: { accepted: true } }]);
+  expect(handler).toHaveBeenCalledTimes(2);
+  expect(client.closeLink).not.toHaveBeenCalled();
+});
+
+it.each(['maker:send', 'maker:input:enqueue', 'maker:remote-resources:list', 'maker:remote-resources:get', 'local-db:bots:list', 'local-db:bots:get'])('does not advertise retry after %s succeeds and post-handler authorization overloads', async (channel) => {
+  const handler = vi.fn(() => ({ accepted: true }));
+  registry.register(channel, handler);
+  setRemoteBotSessionLookup(async () => {
+    if (handler.mock.calls.length) throw new Error('db worker RPC queue overloaded: op="rawAll"');
+    return 'ordinary';
+  });
+  expect(await runInvoke('ctrl-1', { channel, args: ['s1', { text: 'hello' }] })).toMatchObject({ ok: false, error: { code: 'IPC_ERROR' } });
+  expect(handler).toHaveBeenCalledTimes(1);
+});
+
+it.each(['local-db:sessions:list', 'local-db:sessions:get', 'local-db:sessions:interrupted-pending', 'maker:list-active'])(
+  'keeps completed %s reads retryable after post-handler authorization overloads', async (channel) => {
+    const handler = vi.fn(() => []);
+    registry.register(channel, handler);
+    setRemoteBotSessionLookup(async () => {
+      if (handler.mock.calls.length) throw new Error('db worker RPC queue overloaded: op="rawAll"');
+      return 'ordinary';
+    });
+    expect(await runInvoke('ctrl-1', { channel, args: ['s1'] })).toMatchObject({ ok: false, error: { code: 'BACKPRESSURE' } });
+    expect(handler).toHaveBeenCalledTimes(1);
+  },
+);
+
+it('keeps pre-handler overload safely retryable without executing the mutation', async () => {
+  const handler = vi.fn();
+  registry.register('maker:send', handler);
+  setRemoteBotSessionLookup(async () => { throw new Error('db worker RPC queue overloaded: op="rawAll"'); });
+  expect(await runInvoke('ctrl-1', { channel: 'maker:send', args: ['s1', { text: 'hello' }] })).toMatchObject({ ok: false, error: { code: 'BACKPRESSURE' } });
+  expect(handler).not.toHaveBeenCalled();
+});
+
+it('isolates an unresponsive peer with an overloaded mutation replay from another peer', async () => {
+  const client = mkClient({ sendInvokeResult: vi.fn((dst) => {
+    if (dst === 'ctrl-1') throw new DeviceLinkError('BACKPRESSURE', 'peer stopped acknowledging');
+  }) });
+  wireInboundDispatch(client as never);
+  __testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'completed-send', { ok: true, result: { accepted: true } }, 'maker:send', ['s1']);
+  setRemoteBotSessionLookup(async (id) => {
+    if (id === 's1') throw new Error('db worker RPC queue overloaded: op="rawAll"');
+    return 'ordinary';
+  });
+  const handler = vi.fn(() => ({ accepted: true }));
+  registry.register('maker:send', handler);
+  __testing.flushRemoteInvokeResultOutbox();
+  client.onFrame.mock.calls[0][0]({ v: PROTOCOL_VERSION, kind: 'invoke', src: 'ctrl-2', id: 'other-send', payload: { channel: 'maker:send', args: ['s2', { text: 'other' }] } });
+  await vi.waitFor(() => expect(client.sendInvokeResult).toHaveBeenCalledWith('ctrl-2', 'other-send', { ok: true, result: { accepted: true } }));
+  expect(client.sendInvokeResult.mock.calls.filter(([dst]) => dst === 'ctrl-1').at(-1)![2]).toMatchObject({ ok: false, error: { code: 'IPC_ERROR' } });
+  expect(__testing.remoteInvokeResultOutboxSize()).toBe(1);
+  expect(handler).toHaveBeenCalledTimes(1);
+  expect(client.closeLink).not.toHaveBeenCalled();
+});
+
+it('lets a controller fall back to individual reads when a detail batch exceeds the frame budget', () => {
+  const client = mkClient();
+  client.sendInvokeResult.mockImplementationOnce(() => { throw tooLarge(); });
+  expect(__testing.sendInvokeResultSafe(client as never, 'ctrl-1', 'batch',
+    { ok: true, result: [{ id: 'large' }] }, 'local-db:sessions:get-many')).toBe(true);
+  expect(client.sendInvokeResult).toHaveBeenLastCalledWith('ctrl-1', 'batch', {
+    ok: false, error: { code: 'IPC_ERROR', message: '[PRECONDITION_FAILED] REMOTE_SESSION_BATCH_TOO_LARGE' },
+  });
+});
+
+
+describe('remote recorded-turn actions', () => {
+  const channel = 'maker:turn-change-set:apply';
+  it('uses the shared action without dispatching a synthetic renderer event', async () => {
+    const localHandler = vi.fn(() => { throw new Error('untrusted renderer'); });
+    registry.register(channel, localHandler);
+    const action = vi.fn(async (_session, _id, _action, assertAccess) => {
+      await assertAccess();
+      return { changed: true };
+    });
+    setRemoteTurnChangeAction(action);
+    expect(await runInvoke('ctrl', { channel, args: ['s1', 'change-1', 'undo'] }))
+      .toMatchObject({ ok: true, result: { changed: true } });
+    expect(action).toHaveBeenCalledWith('s1', 'change-1', 'undo', expect.any(Function));
+    expect(localHandler).not.toHaveBeenCalled();
+  });
+
+  it.each(['disabled', 'revoked', 'hidden'] as const)('rechecks %s access before the write', async (reason) => {
+    let hidden = false;
+    setRemoteBotSessionLookup(async () => hidden ? 'hidden' : 'ordinary');
+    const write = vi.fn();
+    setRemoteTurnChangeAction(async (_session, _id, _action, assertAccess) => {
+      if (reason === 'disabled') deviceLinkSettings.value.remoteControlEnabled = false;
+      if (reason === 'revoked') deviceLinkSettings.value.revokedControllers = ['ctrl'];
+      if (reason === 'hidden') hidden = true;
+      await assertAccess();
+      write();
+    });
+    expect(await runInvoke('ctrl', { channel, args: ['s1', 'change-1', 'undo'] }))
+      .toMatchObject({ ok: false });
+    expect(write).not.toHaveBeenCalled();
   });
 });

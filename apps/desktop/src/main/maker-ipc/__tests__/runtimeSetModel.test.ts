@@ -71,6 +71,7 @@ const imageGenerationRoutes: readonly CodexCustomProviderRoute[] = [
       authStrategy: 'none',
     },
     responseRoutingByModel: {},
+    responseEffortsByModel: {},
     credentialRevision: 1,
   },
   {
@@ -85,6 +86,7 @@ const imageGenerationRoutes: readonly CodexCustomProviderRoute[] = [
       authStrategy: 'none',
     },
     responseRoutingByModel: {},
+    responseEffortsByModel: {},
     credentialRevision: 1,
   },
 ];
@@ -234,7 +236,7 @@ describe('applyRuntimeSetModelChange', () => {
     });
 
     expect(requiresModelSwitchRebuild).not.toHaveBeenCalled();
-    expect(result.closeSession).toHaveBeenCalledWith(result.sessionId);
+    expect(result.closeSession).toHaveBeenCalledWith(result.sessionId, 'runtime-refresh');
     expect(result.setModel).not.toHaveBeenCalled();
   });
 
@@ -254,7 +256,7 @@ describe('applyRuntimeSetModelChange', () => {
     expect(requiresModelSwitchRebuild).toHaveBeenCalledWith('a-alt-model', {
       providerId: routeA.providerId,
     });
-    expect(result.closeSession).toHaveBeenCalledWith(result.sessionId);
+    expect(result.closeSession).toHaveBeenCalledWith(result.sessionId, 'runtime-refresh');
     expect(result.setModel).not.toHaveBeenCalled();
   });
 
@@ -290,7 +292,7 @@ describe('applyRuntimeSetModelChange', () => {
       nextModel: testCase.targetModel,
     });
 
-    expect(result.closeSession).toHaveBeenCalledWith(result.sessionId);
+    expect(result.closeSession).toHaveBeenCalledWith(result.sessionId, 'runtime-refresh');
     expect(result.setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(result.sessionId)).toBe(testCase.targetProvider);
   });
@@ -534,7 +536,7 @@ describe('applyRuntimeSetModelChange', () => {
       providerId: 'xd',
     });
 
-    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
@@ -606,7 +608,7 @@ describe('applyRuntimeSetModelChange', () => {
       providerId: 'xai',
     });
 
-    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('xai');
   });
@@ -715,7 +717,7 @@ describe('applyRuntimeSetModelChange', () => {
 
     expect(result).toEqual({ status: 'applied' });
     expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
-    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
@@ -751,7 +753,7 @@ describe('applyRuntimeSetModelChange', () => {
     });
 
     expect(result).toEqual({ status: 'applied' });
-    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('deepseek');
   });
@@ -922,7 +924,7 @@ describe('applyRuntimeSetModelChange', () => {
       codexAuthInjection: 'oauth-bearer',
     });
 
-    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('xai');
   });
@@ -958,7 +960,7 @@ describe('applyRuntimeSetModelChange', () => {
 
     expect(result).toEqual({ status: 'applied' });
     expect(closeSession).toHaveBeenCalledTimes(1);
-    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
@@ -1263,7 +1265,7 @@ describe('applyRuntimeSetModelChange', () => {
         wakeSessionInputQueue: vi.fn(),
       })).resolves.toEqual({ status: 'applied' });
 
-      expect(closeSession).toHaveBeenCalledWith(sessionId);
+      expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
       expect(setModel).not.toHaveBeenCalled();
       expect(getSessionProvider(sessionId)).toBe(toProvider);
     },
@@ -1358,7 +1360,7 @@ describe('applyRuntimeSetModelChange', () => {
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, { model: 'same-model', providerId: 'xd', forceSessionRebuild: true });
     busy = false;
     await expect(applyRuntimeSetModelChange(input)).resolves.toEqual({ status: 'applied' });
-    expect(closeSession).toHaveBeenCalledExactlyOnceWith(sessionId);
+    expect(closeSession).toHaveBeenCalledExactlyOnceWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('xd');
     expect(cleanup).not.toHaveBeenCalled();
@@ -1393,7 +1395,7 @@ describe('applyRuntimeSetModelChange', () => {
       clearPendingCredentialSwitch: vi.fn(),
     })).resolves.toEqual({ status: 'applied' });
 
-    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
   });
 
@@ -1428,7 +1430,7 @@ describe('applyRuntimeSetModelChange', () => {
     expect(requiresModelSwitchRebuild).toHaveBeenCalledWith('gpt-5.6-sol', {
       providerId: 'mygpt',
     });
-    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
   });
 
@@ -1663,7 +1665,7 @@ describe('context configuration refresh across live routes', () => {
       hasPendingSelection: () => false, withSessionLock: withSendToSessionLock,
       inferProviderId: () => 'xd', assertCurrent: () => {},
     });
-    expect(closeSession.mock.calls).toEqual([[sessions[0]!.id], [sessions[1]!.id]]);
+    expect(closeSession.mock.calls).toEqual([[sessions[0]!.id, 'runtime-refresh'], [sessions[1]!.id, 'runtime-refresh']]);
     expect(registerPendingCredentialSwitch).toHaveBeenCalledExactlyOnceWith(sessions[0]!.id, {
       model: 'model', providerId: null, forceSessionRebuild: true,
     });
@@ -1750,7 +1752,7 @@ describe('Claude native account switching', () => {
           expect(result.status).toBe('applied');
         }
         expect(getSessionProvider(sessionId)).toBe(to);
-        expect(closeSession).toHaveBeenLastCalledWith(sessionId);
+        expect(closeSession).toHaveBeenLastCalledWith(sessionId, 'runtime-refresh');
         expect(setModel).not.toHaveBeenCalled();
         expect(cleanup).not.toHaveBeenCalled();
       } finally { pending.clear(sessionId); }

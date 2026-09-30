@@ -1,0 +1,417 @@
+{
+  "schemaVersion": 1,
+  "readings": {
+    "neutral": {
+      "lt": 0,
+      "ry": 0
+    },
+    "held": {
+      "lt": 1,
+      "ry": 1
+    }
+  },
+  "frames": {
+    "neutral": {
+      "kind": "frame",
+      "family": "xbox",
+      "buttons": {
+        "lt": false,
+        "rt": false,
+        "a": false,
+        "b": false,
+        "x": false,
+        "y": false,
+        "lb": false,
+        "rb": false,
+        "view": false,
+        "menu": false,
+        "ls": false,
+        "rs": false,
+        "dpadUp": false,
+        "dpadDown": false,
+        "dpadLeft": false,
+        "dpadRight": false
+      },
+      "axes": {
+        "lx": 0,
+        "ly": 0,
+        "rx": 0,
+        "ry": 0
+      },
+      "triggers": {
+        "lt": 0,
+        "rt": 0
+      }
+    },
+    "held": {
+      "kind": "frame",
+      "family": "xbox",
+      "buttons": {
+        "lt": true,
+        "rt": false,
+        "a": false,
+        "b": false,
+        "x": false,
+        "y": false,
+        "lb": false,
+        "rb": false,
+        "view": false,
+        "menu": false,
+        "ls": false,
+        "rs": false,
+        "dpadUp": false,
+        "dpadDown": false,
+        "dpadLeft": false,
+        "dpadRight": false
+      },
+      "axes": {
+        "lx": 0,
+        "ly": 0,
+        "rx": 0,
+        "ry": 1
+      },
+      "triggers": {
+        "lt": 1,
+        "rt": 0
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "name": "metadata failures preserve held input and same-family selection until physical removal",
+      "steps": [
+        {
+          "kind": "snapshot",
+          "devices": [
+            {
+              "handle": "a",
+              "id": "a",
+              "name": "Xbox 测试 A",
+              "metadataOk": true
+            }
+          ],
+          "messages": [
+            {
+              "kind": "presence",
+              "family": "xbox",
+              "present": true,
+              "name": "Xbox 测试 A",
+              "category": "Windows.Gaming.Input",
+              "transport": "unknown"
+            }
+          ],
+          "expect": {
+            "present": true,
+            "name": "Xbox 测试 A",
+            "voiceHeld": false,
+            "scrollHeld": false,
+            "releases": 0
+          }
+        },
+        {
+          "kind": "frame",
+          "frame": "neutral",
+          "messages": ["neutral"],
+          "expect": {
+            "present": true,
+            "name": "Xbox 测试 A",
+            "voiceHeld": false,
+            "scrollHeld": false,
+            "releases": 0
+          }
+        },
+        {
+          "kind": "frame",
+          "frame": "held",
+          "messages": ["held"],
+          "expect": {
+            "present": true,
+            "name": "Xbox 测试 A",
+            "voiceHeld": true,
+            "scrollHeld": true,
+            "releases": 0
+          }
+        },
+        {
+          "kind": "snapshot",
+          "devices": [
+            {
+              "handle": "b",
+              "id": "b",
+              "name": "Xbox 测试 B",
+              "metadataOk": true
+            },
+            {
+              "handle": "a",
+              "id": "a",
+              "name": "Xbox 测试 A",
+              "metadataOk": false
+            }
+          ],
+          "repeat": 3,
+          "messages": [],
+          "expect": {
+            "present": true,
+            "name": "Xbox 测试 A",
+            "voiceHeld": true,
+            "scrollHeld": true,
+            "releases": 0
+          }
+        },
+        {
+          "kind": "snapshot",
+          "devices": [
+            {
+              "handle": "b",
+              "id": "b",
+              "name": "Xbox 测试 B",
+              "metadataOk": true
+            },
+            {
+              "handle": "a",
+              "id": "a",
+              "name": "Xbox 测试 A",
+              "metadataOk": false
+            }
+          ],
+          "force": true,
+          "messages": [
+            {
+              "kind": "presence",
+              "family": "xbox",
+              "present": true,
+              "name": "Xbox 测试 A",
+              "category": "Windows.Gaming.Input",
+              "transport": "unknown"
+            }
+          ],
+          "expect": {
+            "present": true,
+            "name": "Xbox 测试 A",
+            "voiceHeld": true,
+            "scrollHeld": true,
+            "releases": 0
+          }
+        },
+        {
+          "kind": "snapshot",
+          "devices": [],
+          "messages": [
+            {
+              "kind": "presence",
+              "family": "xbox",
+              "present": false
+            }
+          ],
+          "expect": {
+            "present": false,
+            "name": null,
+            "voiceHeld": false,
+            "scrollHeld": false,
+            "releases": 1
+          }
+        },
+        {
+          "kind": "snapshot",
+          "devices": [],
+          "messages": [],
+          "expect": {
+            "present": false,
+            "name": null,
+            "voiceHeld": false,
+            "scrollHeld": false,
+            "releases": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "reading failure releases voice and scroll once",
+      "steps": [
+        {
+          "kind": "snapshot",
+          "devices": [
+            {
+              "handle": "a",
+              "id": "a",
+              "name": "Xbox 测试 A",
+              "metadataOk": true
+            }
+          ],
+          "messages": [
+            {
+              "kind": "presence",
+              "family": "xbox",
+              "present": true,
+              "name": "Xbox 测试 A",
+              "category": "Windows.Gaming.Input",
+              "transport": "unknown"
+            }
+          ],
+          "expect": {
+            "present": true,
+            "name": "Xbox 测试 A",
+            "voiceHeld": false,
+            "scrollHeld": false,
+            "releases": 0
+          }
+        },
+        {
+          "kind": "frame",
+          "frame": "neutral",
+          "messages": ["neutral"],
+          "expect": {
+            "present": true,
+            "name": "Xbox 测试 A",
+            "voiceHeld": false,
+            "scrollHeld": false,
+            "releases": 0
+          }
+        },
+        {
+          "kind": "frame",
+          "frame": "held",
+          "messages": ["held"],
+          "expect": {
+            "present": true,
+            "name": "Xbox 测试 A",
+            "voiceHeld": true,
+            "scrollHeld": true,
+            "releases": 0
+          }
+        },
+        {
+          "kind": "read-error",
+          "messages": [
+            {
+              "kind": "presence",
+              "family": "xbox",
+              "present": false
+            }
+          ],
+          "expect": {
+            "present": false,
+            "name": null,
+            "voiceHeld": false,
+            "scrollHeld": false,
+            "releases": 1
+          }
+        },
+        {
+          "kind": "snapshot",
+          "devices": [],
+          "messages": [],
+          "expect": {
+            "present": false,
+            "name": null,
+            "voiceHeld": false,
+            "scrollHeld": false,
+            "releases": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "real replacement releases old holds before the new same-family device is exposed",
+      "steps": [
+        {
+          "kind": "snapshot",
+          "devices": [
+            {
+              "handle": "a",
+              "id": "a",
+              "name": "Xbox 测试 A",
+              "metadataOk": true
+            }
+          ],
+          "messages": [
+            {
+              "kind": "presence",
+              "family": "xbox",
+              "present": true,
+              "name": "Xbox 测试 A",
+              "category": "Windows.Gaming.Input",
+              "transport": "unknown"
+            }
+          ],
+          "expect": {
+            "present": true,
+            "name": "Xbox 测试 A",
+            "voiceHeld": false,
+            "scrollHeld": false,
+            "releases": 0
+          }
+        },
+        {
+          "kind": "frame",
+          "frame": "neutral",
+          "messages": ["neutral"],
+          "expect": {
+            "present": true,
+            "name": "Xbox 测试 A",
+            "voiceHeld": false,
+            "scrollHeld": false,
+            "releases": 0
+          }
+        },
+        {
+          "kind": "frame",
+          "frame": "held",
+          "messages": ["held"],
+          "expect": {
+            "present": true,
+            "name": "Xbox 测试 A",
+            "voiceHeld": true,
+            "scrollHeld": true,
+            "releases": 0
+          }
+        },
+        {
+          "kind": "snapshot",
+          "devices": [
+            {
+              "handle": "b",
+              "id": "b",
+              "name": "Xbox 测试 B",
+              "metadataOk": true
+            }
+          ],
+          "messages": [
+            {
+              "kind": "presence",
+              "family": "xbox",
+              "present": false
+            },
+            {
+              "kind": "presence",
+              "family": "xbox",
+              "present": true,
+              "name": "Xbox 测试 B",
+              "category": "Windows.Gaming.Input",
+              "transport": "unknown"
+            }
+          ],
+          "expect": {
+            "present": true,
+            "name": "Xbox 测试 B",
+            "voiceHeld": false,
+            "scrollHeld": false,
+            "releases": 1
+          }
+        },
+        {
+          "kind": "frame",
+          "frame": "neutral",
+          "messages": ["neutral"],
+          "expect": {
+            "present": true,
+            "name": "Xbox 测试 B",
+            "voiceHeld": false,
+            "scrollHeld": false,
+            "releases": 1
+          }
+        }
+      ]
+    }
+  ]
+}

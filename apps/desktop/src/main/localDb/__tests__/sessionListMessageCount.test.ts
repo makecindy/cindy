@@ -204,7 +204,7 @@ describeWithDb('sessions:list messageCount', () => {
 
 describe('sessions:list messageCount source', () => {
   it('keeps the production query pinned to the covering-index column', () => {
-    const source = readFileSync(path.join(__dirname, '..', 'ipc', 'sessions.ts'), 'utf-8');
+    const source = readFileSync(path.join(__dirname, '..', 'sessionQueries.ts'), 'utf-8');
 
     // list / get / update 都走同一条标量子查询，不再 LEFT JOIN 该会话全部消息。
     expect(source).toMatch(/messageCount: SESSION_MESSAGE_COUNT_SQL,/);
@@ -218,7 +218,7 @@ describe('sessions:list messageCount source', () => {
       /WHEN \$\{sessions\.listMessageCount\} IS NOT NULL THEN \$\{sessions\.listMessageCount\}/,
     );
     expect(source).toMatch(
-      /SELECT count\(\*\) FROM messages m WHERE m\.session_id = \$\{sessions\.id\}/,
+      /SELECT count\(\*\) FROM messages m WHERE m\.session_id = \$\{OUTER_SESSION_ID_SQL\}/,
     );
     expect(source).toMatch(/ORDER BY m\.created_at DESC, m\.rowid DESC LIMIT 1/);
 

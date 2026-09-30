@@ -26,12 +26,14 @@ import { scanCustomizationSources, type SourceDef } from '../shared/customizatio
 type Kind = 'skill' | 'command' | 'agent';
 type Scope = 'global' | 'project';
 
-function buildClaudeSources(workingDirs: string[]): SourceDef[] {
-  const home = os.homedir();
+function buildClaudeSources(
+  workingDirs: string[],
+  configDir = path.join(os.homedir(), '.claude'),
+): SourceDef[] {
   const sources: SourceDef[] = [
-    { engine: 'claude-code', kind: 'skill',   scope: 'global', dir: path.join(home, '.claude', 'skills') },
-    { engine: 'claude-code', kind: 'command', scope: 'global', dir: path.join(home, '.claude', 'commands') },
-    { engine: 'claude-code', kind: 'agent',   scope: 'global', dir: path.join(home, '.claude', 'agents') },
+    { engine: 'claude-code', kind: 'skill',   scope: 'global', dir: path.join(configDir, 'skills') },
+    { engine: 'claude-code', kind: 'command', scope: 'global', dir: path.join(configDir, 'commands') },
+    { engine: 'claude-code', kind: 'agent',   scope: 'global', dir: path.join(configDir, 'agents') },
   ];
   for (const wd of workingDirs) {
     if (!wd || !path.isAbsolute(wd)) continue;
@@ -59,10 +61,17 @@ const KIND_ORDER: Record<Kind, number> = { skill: 0, command: 1, agent: 2 };
 export async function scanClaudeCustomizations(
   opts: ListCustomizationsOptions,
 ): Promise<ListCustomizationsResult> {
+  return scanClaudeCustomizationsAtConfig(opts, path.join(os.homedir(), '.claude'));
+}
+
+function scanClaudeCustomizationsAtConfig(
+  opts: ListCustomizationsOptions,
+  configDir: string,
+): ListCustomizationsResult {
   const workingDirs = opts.workingDirs ?? [];
   const kindFilter = opts.kinds && opts.kinds.length > 0 ? new Set(opts.kinds) : null;
 
-  const sources = buildClaudeSources(workingDirs);
+  const sources = buildClaudeSources(workingDirs, configDir);
   const result = scanCustomizationSources(sources, kindFilter);
 
   result.items.sort((a, b) => {
@@ -78,11 +87,16 @@ export async function scanClaudeCustomizations(
   return result;
 }
 
-/** Native project discovery walks to the nearest Git root (or filesystem root).
+/** Native slash-command discovery walks to the nearest Git root (or filesystem root).
  * Keep this runtime view separate from SkillHub's explicitly owned project list.
+ * Legacy commands and Skills share Claude's slash-command namespace, so callers
+ * making authorization decisions must see both kinds.
  * Ancestors precede descendants so same-name winner selection keeps the closest source.
  */
-export async function scanClaudeRuntimeSkills(workingDir: string): Promise<ListCustomizationsResult> {
+export async function scanClaudeRuntimeSkills(
+  workingDir: string,
+  configDir = path.join(os.homedir(), '.claude'),
+): Promise<ListCustomizationsResult> {
   let current = fs.realpathSync(workingDir);
   const workingDirs: string[] = [];
   while (true) {
@@ -92,5 +106,8 @@ export async function scanClaudeRuntimeSkills(workingDir: string): Promise<ListC
     if (parent === current) break;
     current = parent;
   }
-  return scanClaudeCustomizations({ workingDirs, kinds: ['skill'] });
+  return scanClaudeCustomizationsAtConfig(
+    { workingDirs, kinds: ['skill', 'command'] },
+    configDir,
+  );
 }

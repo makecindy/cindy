@@ -1,8 +1,9 @@
-import { providerEndpointBindings, BUNDLED_CATALOG, classifyModel, isChatEligible, isAgentSelectableModel, mergeModelMetadata } from '@cindy/model-providers';
+import { providerEndpointBindings, canonicalProviderEndpoint, BUNDLED_CATALOG, classifyModel, isChatEligible, isAgentSelectableModel, mergeModelMetadata } from '@cindy/model-providers';
 /**
  * Connection credentials and advanced routing only. Model capabilities are imported into the
  * shared catalog and edited through standard model settings. Stored per-runtime credentials,
- * OAuth definitions, explicit routes and user overrides remain unchanged when saving.
+ * OAuth definitions and user overrides are preserved. Model routes follow endpoint
+ * edits while retaining their independent protocol and path overrides.
  */
 
 import * as Dialog from '@radix-ui/react-dialog';
@@ -28,9 +29,9 @@ import {
   X,
 } from 'lucide-react';
 
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Tip } from '@/components/ui/tooltip';
@@ -54,6 +55,7 @@ import {
 } from '@/lib/customProviders';
 import type { CodexImageGenerationRestartPolicy } from '@/../shared/customProviderUpdate';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
+import { modelsAfterProviderEndpointEdit } from '@/lib/customProviderEndpointEdit';
 import {
   areProviderRequestUrlsAllowed,
   canSendHydratedApiKey,
@@ -190,6 +192,8 @@ interface HeaderRow {
 }
 interface RuntimeFields extends RuntimeFillDraft {
   models: ModelRow[];
+  /** Draft-only provenance: model routes may come from a preset or another runtime. */
+  modelRouteBaseUrl?: string;
   headers: HeaderRow[];
   /** 隐藏字段：列模型端点（预设 / 已存配置快照进来），「获取模型列表」用；不在表单展示。 */
   modelsUrl: string;
@@ -198,6 +202,14 @@ interface RuntimeFields extends RuntimeFillDraft {
   catalogPresetId?: string;
   /** Codex Responses runtime 级原生图片生成能力。 */
   supportsImageGeneration: boolean;
+}
+
+function runtimeProbeFields(agent: DialogAgentKind, runtime: RuntimeFields): RuntimeFields {
+  return {
+    ...runtime,
+    requestPath: agent === 'pi' ? '' : runtime.requestPath,
+    models: modelsAfterProviderEndpointEdit(runtime.models, runtime.modelRouteBaseUrl, runtime.baseUrl),
+  };
 }
 
 function canRuntimeUseNativeImageGeneration(runtime: RuntimeFields): boolean {
@@ -260,6 +272,7 @@ function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, R
       if (!rc) continue;
       out[a] = normalizeRuntimeImageGenerationCapability(a, {
         baseUrl: rc.baseUrl,
+        modelRouteBaseUrl: rc.baseUrl,
         requestPath: a === 'pi' ? '' : (rc.requestPath ?? ''),
         apiKey: '',
         wireProtocol: rc.wireProtocol ?? defaultWireFor(a),
@@ -514,7 +527,6 @@ export function ProviderConnectionDialog({
   const imageGenerationHelpPointerSuppressionFrameRef = useRef<number | null>(null);
   const imageGenerationHelpPointerSuppressionGenerationRef = useRef(0);
   const modelFetchInFlightRef = useRef(false);
-  const scrimRef = useRef<HTMLDivElement>(null);
   const dialogPanelRef = useRef<HTMLDivElement>(null);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
   // 原生 window listener 的生命周期不跟着每次 render 重绑；layout effect 只把
@@ -655,24 +667,6 @@ export function ProviderConnectionDialog({
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [dismissImageGenerationHelp, dismissTopmostLayer, showImageGenerationHelp]);
-
-  useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      if (event.target !== scrimRef.current) return;
-      if (!childLayerRef.current && !runtimeFillRef.current) return;
-
-      // This must run before Radix's document-capture outside-dismiss. The
-      // scrim gesture belongs to the dialog's current child layer; consuming
-      // it here prevents Radix from committing a closed popover before the
-      // form can settle that layer exactly once.
-      event.preventDefault();
-      event.stopPropagation();
-      dismissTopmostLayer();
-    };
-    window.addEventListener('pointerdown', onPointerDown, { capture: true });
-    return () => window.removeEventListener('pointerdown', onPointerDown, true);
-  }, [dismissTopmostLayer]);
 
   useEffect(() => {
     const returnFocusElement =
@@ -847,6 +841,7 @@ export function ProviderConnectionDialog({
           }
           next[a] = {
             baseUrl: rc.baseUrl,
+            modelRouteBaseUrl: rc.baseUrl,
             requestPath: a === 'pi' ? '' : (rc.requestPath ?? ''),
             apiKey: prev[a].apiKey, // 已填的 key 保留
             wireProtocol: rc.wireProtocol ?? defaultWireFor(a),
@@ -997,7 +992,13 @@ export function ProviderConnectionDialog({
     const includeApiKey = usesApiKey;
 
     const oauthPiUnavailable = authModeRef.current === 'oauth' && source !== 'pi';
-    const sourceDraft = cloneRuntimeFillDraft(rtRef.current[source]);
+    const sourceFields = rtRef.current[source];
+    const sourceDraft = cloneRuntimeFillDraft({
+      ...sourceFields,
+      models: modelsAfterProviderEndpointEdit(
+        sourceFields.models, sourceFields.modelRouteBaseUrl, sourceFields.baseUrl,
+      ),
+    });
     const allTargets = runtimeFillTargetAgents(source, {
       includePi: authModeRef.current !== 'oauth',
     }).map((agent) => ({
@@ -1120,6 +1121,9 @@ export function ProviderConnectionDialog({
         const restored = restoreHydratedKey(target.agent, {
           ...prev[target.agent],
           ...endpointSafeFilled,
+          ...(selectedFields.includes('models')
+            ? { modelRouteBaseUrl: runtimeFill.sourceDraft.baseUrl }
+            : {}),
         });
         next[target.agent] = restored;
       }
@@ -1210,7 +1214,7 @@ export function ProviderConnectionDialog({
   const handleTest = useCallback(async () => {
     const agent = activeTab;
     const rf = rt[agent];
-    const probeFields = agent === 'pi' ? { ...rf, requestPath: '' } : rf;
+    const probeFields = runtimeProbeFields(agent, rf);
     const defaultBaseUrl = rf.baseUrl.trim();
     const firstModelConfig = firstProviderChatModel(rf.models);
     const firstModel = firstModelConfig?.id.trim();
@@ -1280,7 +1284,7 @@ export function ProviderConnectionDialog({
       );
       if (
         providerConnectionTestRequestSignature(
-          agent === 'pi' ? { ...rtRef.current[agent], requestPath: '' } : rtRef.current[agent],
+          runtimeProbeFields(agent, rtRef.current[agent]),
           authModeRef.current,
         ) !== requestSig
       )
@@ -1294,7 +1298,7 @@ export function ProviderConnectionDialog({
     } catch (e) {
       if (
         providerConnectionTestRequestSignature(
-          agent === 'pi' ? { ...rtRef.current[agent], requestPath: '' } : rtRef.current[agent],
+          runtimeProbeFields(agent, rtRef.current[agent]),
           authModeRef.current,
         ) !== requestSig
       )
@@ -1631,7 +1635,7 @@ export function ProviderConnectionDialog({
         reportFieldError(`${a}:baseUrl`, t('settings.providers.custom.errors.baseUrlInvalid'));
         return;
       }
-      const models = rf.models
+      const models = modelsAfterProviderEndpointEdit(rf.models, rf.modelRouteBaseUrl, rf.baseUrl)
         .map((m) => ({
           id: m.id.trim(),
           name: m.name.trim(),
@@ -1690,8 +1694,13 @@ export function ProviderConnectionDialog({
         rf.wireProtocol,
         defaultProtocol,
       );
+      const endpointTemplate = presets.find(preset => preset.id === rf.catalogPresetId)?.runtimes[a]?.baseUrl;
+      const typedBaseUrl = rf.baseUrl.trim();
+      const baseUrl = endpointTemplate?.includes('{')
+        ? canonicalProviderEndpoint(endpointTemplate, typedBaseUrl) ?? typedBaseUrl
+        : typedBaseUrl;
       runtimes[a] = {
-        baseUrl: rf.baseUrl.trim(),
+        baseUrl,
         ...(rf.catalogPresetId ? { catalogPresetId: rf.catalogPresetId } : {}),
         ...(requestPath ? { requestPath } : {}),
         ...(savedWireProtocol ? { wireProtocol: savedWireProtocol } : {}),
@@ -1983,18 +1992,8 @@ export function ProviderConnectionDialog({
 
   return (
     <div
-      ref={scrimRef}
       data-custom-provider-dialog-scrim="true"
       className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
-      onPointerDown={(event) => {
-        // pointerdown 时先按当前层级结算，避免 Popover 的 outside-dismiss 在随后
-        // click 前把状态改成 closed，令同一次手势继续误关底层表单。
-        if (event.button === 0 && event.target === event.currentTarget && !saving && !runtimeFill) {
-          event.preventDefault();
-          event.stopPropagation();
-          dismissTopmostLayer();
-        }
-      }}
       onKeyDown={(event) => {
         if (childLayer || runtimeFill || imageGenerationReloadConfirmation) return;
         if (event.key !== 'Tab') return;
@@ -2124,30 +2123,20 @@ export function ProviderConnectionDialog({
           {!initial?.auth?.native && <>
           <div className="flex flex-col gap-2">
             <FieldLabel>{t('settings.providers.custom.authMode.label')}</FieldLabel>
-            <div className="flex flex-wrap gap-1.5">
-              {(['apiKey', 'oauth', 'none'] as const).map((m) => (
-                <button
-                  key={m}
-                  aria-pressed={authMode === m}
-                  type="button"
-                  onClick={() => {
-                    changeAuthMode(m);
-                    setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST });
-                  }}
-                  className={cn(
-                    'rounded-full border px-3 py-1.5 text-12 font-medium transition-colors',
-                    authMode === m
-                      ? 'border-[var(--settings-input-border-focus)] text-[var(--settings-section-title)]'
-                      : 'border-[var(--settings-input-border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
-                  )}
-                  style={
-                    authMode === m ? { backgroundColor: 'var(--surface-elevated)' } : undefined
-                  }
-                >
-                  {t(`settings.providers.custom.authMode.${m}`)}
-                </button>
-              ))}
-            </div>
+            <SegmentedControl
+              aria-label={t('settings.providers.custom.authMode.label')}
+              value={authMode}
+              height={38}
+              optionHeight={32}
+              onValueChange={(mode) => {
+                changeAuthMode(mode);
+                setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST });
+              }}
+              options={(['apiKey', 'oauth', 'none'] as const).map((mode) => ({
+                value: mode,
+                label: t(`settings.providers.custom.authMode.${mode}`),
+              }))}
+            />
             {authMode === 'oauth' && (
               <>
                 <span className="text-12 leading-snug text-[var(--text-tertiary)]">
@@ -2155,29 +2144,17 @@ export function ProviderConnectionDialog({
                 </span>
                 <div className="flex flex-col gap-[7px]">
                   <FieldLabel>{t('settings.providers.custom.authMode.flowLabel')}</FieldLabel>
-                  <div className="flex gap-1.5">
-                    {(['authorization-code', 'device-code'] as const).map((flow) => (
-                      <button
-                        key={flow}
-                        aria-pressed={oauthFlow === flow}
-                        type="button"
-                        onClick={() => setOauthFlow(flow)}
-                        className={cn(
-                          'rounded-full border px-3 py-1.5 text-12 font-medium transition-colors',
-                          oauthFlow === flow
-                            ? 'border-[var(--settings-input-border-focus)] text-[var(--settings-section-title)]'
-                            : 'border-[var(--settings-input-border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
-                        )}
-                        style={
-                          oauthFlow === flow
-                            ? { backgroundColor: 'var(--surface-elevated)' }
-                            : undefined
-                        }
-                      >
-                        {t(`settings.providers.custom.authMode.flow.${flow}`)}
-                      </button>
-                    ))}
-                  </div>
+                  <SegmentedControl
+                    aria-label={t('settings.providers.custom.authMode.flowLabel')}
+                    value={oauthFlow}
+                    onValueChange={setOauthFlow}
+                    height={38}
+                    optionHeight={32}
+                    options={(['authorization-code', 'device-code'] as const).map((flow) => ({
+                      value: flow,
+                      label: t(`settings.providers.custom.authMode.flow.${flow}`),
+                    }))}
+                  />
                 </div>
                 {(
                   [
@@ -2224,52 +2201,35 @@ export function ProviderConnectionDialog({
           {/* Runtime 分段 Tab：Claude Code 与 Codex 各自维护端点、协议、模型与凭证。 */}
           <div className="flex flex-col gap-2">
             <FieldLabel>{t('settings.providers.custom.fields.protocols')}</FieldLabel>
-            <div
-              className="flex h-9 items-center gap-0.5 rounded-full p-[3px]"
-              style={{ backgroundColor: 'var(--surface-chip)' }}
+            <SegmentedControl
               role="tablist"
-            >
-              {VISIBLE_AGENTS.map((a) => {
-                const meta = TAB_META[a];
+              aria-label={t('settings.providers.custom.fields.protocols')}
+              value={activeTab}
+              onValueChange={(agent) => {
+                setChildLayer(null);
+                setActiveTab(agent);
+              }}
+              fullWidth
+              height={36}
+              optionHeight={26}
+              optionClassName="text-13 px-2"
+              options={VISIBLE_AGENTS.map((agent) => {
+                const meta = TAB_META[agent];
                 const Mark = meta.Mark;
-                const active = activeTab === a;
-                const configured = rt[a].baseUrl.trim().length > 0;
-                return (
-                  <button
-                    key={a}
-                    type="button"
-                    role="tab"
-                    aria-selected={active}
-                    onClick={() => {
-                      setChildLayer(null);
-                      setActiveTab(a);
-                    }}
-                    className={cn(
-                      'flex h-[26px] flex-1 items-center justify-center gap-1.5 rounded-full px-2 text-13 leading-none transition-colors',
-                      active ? 'font-medium' : 'font-normal',
-                    )}
-                    style={
-                      active
-                        ? {
-                            backgroundColor: 'var(--surface-elevated)',
-                            border: '1px solid var(--border-default)',
-                            color: 'var(--settings-section-title)',
-                          }
-                        : { color: 'var(--text-secondary)' }
-                    }
-                  >
-                    <Mark size={14} className="shrink-0" />
-                    <span className="whitespace-nowrap">{t(meta.labelKey)}</span>
-                    {configured && (
-                      <span
-                        className="h-1.5 w-1.5 shrink-0 rounded-full"
-                        style={{ backgroundColor: 'var(--remote-status-ready)' }}
-                      />
-                    )}
-                  </button>
-                );
+                return {
+                  value: agent,
+                  label: (
+                    <>
+                      <Mark size={14} className="shrink-0" />
+                      <span className="whitespace-nowrap">{t(meta.labelKey)}</span>
+                      {rt[agent].baseUrl.trim().length > 0 && (
+                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--remote-status-ready)]" />
+                      )}
+                    </>
+                  ),
+                };
               })}
-            </div>
+            />
             <span className="text-12 leading-snug text-[var(--text-tertiary)]">
               {templateBound ? (boundPreset ? presetDisplayName(boundPreset, i18n.language) : name) : t(TAB_META[activeTab].helpKey)}
             </span>
@@ -2468,8 +2428,10 @@ export function ProviderConnectionDialog({
                   <span>{t('settings.providers.connection.modelCount', { count: f.models.filter((model) => model.id.trim()).length })}</span>
                   <span className="text-12">{t('settings.providers.connection.modelsAutomatic')}</span>
                   <FormField id={fieldId(`${activeTab}:manualModel`)} label={t('settings.providers.connection.manualModel')} error={errorFor(`${activeTab}:manualModel`)}>
-                    {(control) => <SettingsTextInput {...control} surface="ivory" value={manualModel}
-                      onChange={setManualModel} />}
+                        {(control) => (
+                          <SettingsTextInput {...control} surface="ivory" value={manualModel}
+                      onChange={setManualModel} />
+                        )}
                   </FormField>
                   <Button variant="secondary" disabled={!manualModel.trim()} onClick={() => {
                     const ids = [...new Set(manualModel.split(/[,\n]/).map((id) => id.trim()).filter(Boolean))];
@@ -2605,7 +2567,7 @@ export function ProviderConnectionDialog({
                 {/* Codex Responses Provider 级能力。放在自定义请求头之后，默认收起；
                     同一张说明卡片支持 hover/focus 临时预览和 click/tap 固定。 */}
                 {canShowImageGenerationAdvanced && (
-                  <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] pt-3">
+                  <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
                     <button
                       type="button"
                       onClick={() => {
@@ -2742,47 +2704,37 @@ export function ProviderConnectionDialog({
               </>
             )}
 
-            {/* 测试连接：用当前 Tab 表单值发最小探测请求（与真实会话同路由口径，未保存也能测）。
-                OAuth 形态隐藏——登录前无凭证可测，保存并授权后可在供应商行验证。 */}
+                {/* 预设模板（仅新建态、有预设时显示）：下拉选择，选中即预填 baseUrl / 模型清单，
+                    用户只补 key。列表已按厂商首字母分组排序（同厂商国内/海外相邻，按构建区域排序）。 */}
             {authMode !== 'oauth' && (
               <div className="flex min-h-[32px] flex-wrap items-center gap-2.5">
-                <button
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      compact
+                      loading={test[activeTab].status === 'testing'}
                   type="button"
                   onClick={() => void handleTest()}
                   disabled={test[activeTab].status === 'testing'}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-12 font-medium transition-colors active:scale-[0.98]',
-                    'border-[var(--settings-input-border)] text-[var(--settings-section-title)] hover:bg-[var(--surface-hover)]',
-                    test[activeTab].status === 'testing' && 'cursor-not-allowed opacity-60',
-                  )}
-                >
-                  {test[activeTab].status === 'testing' ? (
-                    <Spinner size={13} />
-                  ) : (
-                    <Plug size={13} />
-                  )}
-                  {test[activeTab].status === 'testing'
-                    ? t('settings.providers.custom.test.testing')
-                    : t('settings.providers.custom.test.button')}
-                </button>
-                {/* 获取模型列表：GET 该供应商的列模型端点，成功后开勾选弹层填进上方模型行。
-                  disabled 用 anyFetching（单飞）：另一 Tab 在途时本 Tab 也不许发起。 */}
-                <button
+                    >
+                      <Plug size={13} />
+                      {t('settings.providers.custom.test.button')}
+                    </Button>
+                    {/* 预设模板（仅新建态、有预设时显示）：下拉选择，选中即预填 baseUrl / 模型清单，
+                        用户只补 key。列表已按厂商首字母分组排序（同厂商国内/海外相邻，按构建区域排序）。 */}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      compact
+                      loading={fetchingModels[activeTab]}
                   ref={modelPickerTriggerRef}
                   type="button"
                   onClick={() => void handleFetchModels()}
                   disabled={anyFetching}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-12 font-medium transition-colors active:scale-[0.98]',
-                    'border-[var(--settings-input-border)] text-[var(--settings-section-title)] hover:bg-[var(--surface-hover)]',
-                    anyFetching && 'cursor-not-allowed opacity-60',
-                  )}
-                >
-                  {fetchingModels[activeTab] ? <Spinner size={13} /> : <RefreshCw size={13} />}
-                  {fetchingModels[activeTab]
-                    ? t('settings.providers.custom.fetch.fetching')
-                    : t('settings.providers.custom.fetch.button')}
-                </button>
+                    >
+                      <RefreshCw size={13} />
+                      {t('settings.providers.custom.fetch.button')}
+                    </Button>
                 {test[activeTab].status === 'ok' && (
                   <span
                     className="flex items-center gap-1 text-12"
@@ -2812,7 +2764,7 @@ export function ProviderConnectionDialog({
             onClick={() => {
               if (!savingRef.current) onClose();
             }}
-            className="bg-transparent border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)] enabled:hover:bg-[var(--confirm-btn-secondary-hover)] enabled:active:bg-[var(--confirm-btn-secondary-hover)]"
+            palette="confirmation"
           >
             {t('settings.providers.custom.cancel')}
           </Button>
@@ -2822,7 +2774,8 @@ export function ProviderConnectionDialog({
             size="lg"
             loading={saving}
             onClick={() => void handleSave()}
-            className="min-w-[96px] border-transparent bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] enabled:hover:border-transparent enabled:active:border-transparent enabled:hover:bg-[var(--confirm-btn-primary-hover)] enabled:active:bg-[var(--confirm-btn-primary-hover)]"
+            palette="confirmation"
+            className="min-w-[96px]"
           >
             {t('settings.providers.custom.save')}
           </Button>
@@ -2873,6 +2826,7 @@ export function ProviderConnectionDialog({
             <Dialog.Overlay className="fixed inset-0 z-[10002] bg-[var(--overlay-modal)] data-[state=open]:animate-confirm-overlay-in data-[state=closed]:animate-confirm-overlay-out" />
             <Dialog.Content
               aria-describedby="custom-provider-image-generation-reload-description"
+              onPointerDownOutside={(event) => event.preventDefault()}
               onOpenAutoFocus={(event) => {
                 event.preventDefault();
                 document.getElementById('custom-provider-image-generation-reload-primary')?.focus();
@@ -2912,30 +2866,32 @@ export function ProviderConnectionDialog({
                 {t('settings.providers.custom.imageGenerationReload.description')}
               </Dialog.Description>
               <div className="mt-6 flex flex-wrap justify-end gap-2.5">
-                <button
+                <Button
+                  variant="secondary"
+                  size="lg"
                   type="button"
                   disabled={saving}
                   onClick={() => {
                     imageGenerationReloadConfirmationRef.current = null;
                     setImageGenerationReloadConfirmation(null);
                   }}
-                  className="inline-flex min-w-[96px] items-center justify-center rounded-full border border-[var(--confirm-btn-secondary-border)] bg-transparent px-6 py-2.5 text-13 font-medium text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)] focus-visible:ring-2 focus-visible:ring-[var(--confirm-btn-secondary-border)] disabled:opacity-50"
+                  className="min-w-[96px]"
                 >
                   {t('settings.providers.custom.imageGenerationReload.cancel')}
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  tone="danger-solid"
+                  loading={saving}
                   id="custom-provider-image-generation-reload-primary"
                   type="button"
                   disabled={saving}
                   onClick={() => void saveWithImageGenerationRestartPolicy('interrupt')}
-                  className="inline-flex min-w-[96px] items-center justify-center rounded-full bg-[hsl(var(--destructive))] px-6 py-2.5 text-13 font-medium text-[var(--accent-pure-cta-fg)] transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
+                  className="min-w-[96px]"
                 >
-                  {saving ? (
-                    <Spinner size={14} />
-                  ) : (
-                    t('settings.providers.custom.imageGenerationReload.interrupt')
-                  )}
-                </button>
+                  {t('settings.providers.custom.imageGenerationReload.interrupt')}
+                </Button>
               </div>
             </Dialog.Content>
           </Dialog.Portal>
@@ -2969,19 +2925,6 @@ export function ModelPickerOverlay({
         (m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q),
       )
     : picker.models;
-  useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      const target = event.target;
-      if (target instanceof Node && contentRef.current?.contains(target)) return;
-      // Close only the picker and consume the gesture before it can reach the form beneath it.
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-    };
-    window.addEventListener('pointerdown', onPointerDown, { capture: true });
-    return () => window.removeEventListener('pointerdown', onPointerDown, true);
-  }, [onClose]);
   const toggle = (id: string) => {
     const next = new Set(picker.selected);
     if (next.has(id)) next.delete(id);
@@ -3009,6 +2952,7 @@ export function ModelPickerOverlay({
         <Dialog.Content
           ref={contentRef}
           aria-describedby="custom-provider-model-picker-description"
+          onPointerDownOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => {
             if (event.isComposing || event.keyCode === 229) event.preventDefault();
           }}
@@ -3129,31 +3073,20 @@ export function ModelPickerOverlay({
           </div>
           {/* Footer */}
           <div className="flex justify-end gap-2.5 px-5 py-3.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className={cn(
-                'inline-flex items-center justify-center rounded-full border bg-transparent px-5 py-2 text-13 font-medium transition-colors active:scale-[0.98]',
-                'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)] hover:bg-[var(--confirm-btn-secondary-hover)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-              )}
-            >
+            <Button variant="secondary" size="md" compact type="button" onClick={onClose}>
               {t('settings.providers.custom.cancel')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="cta"
+              size="md"
+              compact
               ref={primaryButtonRef}
               type="button"
               onClick={onConfirm}
               disabled={picker.selected.size === 0}
-              className={cn(
-                'inline-flex items-center justify-center rounded-full px-5 py-2 text-13 font-medium transition-colors active:scale-[0.98]',
-                'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                picker.selected.size === 0 && 'cursor-not-allowed opacity-50',
-              )}
             >
               {t('settings.providers.custom.fetch.confirm', { count: picker.selected.size })}
-            </button>
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

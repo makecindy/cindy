@@ -93,7 +93,7 @@ describe('composer atomic chip presentation', () => {
     // 规则体用 [^}] 界定，不假设 `}` 前面正好是换行：CSS 声明里不会出现 `}`，
     // 所以缩进或换行风格调整不会再让这条断言失配（同下面那条间距用例）。
     const alignmentRule = globalsSource.match(
-      /\.ProseMirror :is\(\[data-mention-chip\], \[data-pasted-text-chip\], \[data-composer-quote\]\)\s*\{([^}]*)\}/,
+      /\.ProseMirror\s+:is\(\[data-mention-chip\], \[data-pasted-text-chip\], \[data-composer-quote\]\)\s*\{([^}]*)\}/,
     )?.[1];
 
     expect(alignmentRule).toContain('position: relative');
@@ -106,7 +106,7 @@ describe('composer atomic chip presentation', () => {
     // （如 #599 的 .quick-start-pill）。写死完整列表会让那类改动把断言变成
     // gapRule === undefined，报出与本意无关的 "undefined and string" 断言错误。
     const gapRuleMatch = [
-      ...globalsSource.matchAll(/\.ProseMirror :is\(([^)]*)\)\s*\{([^}]*)\}/g),
+      ...globalsSource.matchAll(/\.ProseMirror\s+:is\(([^)]*)\)\s*\{([^}]*)\}/g),
     ].find(([, , body]) => body.includes('margin-inline'));
     const [, gapSelectors, gapRule] = gapRuleMatch ?? [];
 

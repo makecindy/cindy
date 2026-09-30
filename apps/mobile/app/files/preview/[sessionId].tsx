@@ -1,3 +1,4 @@
+import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
 /**
  * 远程文件 Quick Look 预览。
  *
@@ -9,10 +10,9 @@
  * 切换文件通过 Done 返回列表完成。
  * 文本 = readFile(acceptGzip,pako 解码)+ 行号列表;图片 = 缩略图立即显示,
  * OSS 导出原图就绪后无缝换源(不出 loading 态,规则 7);其它 = 占位 + 下载。
- * markdown 与 HTML 额外有「渲染 / 源码」双态,默认渲染:两者都只用已读到的那份文本
- * (不为渲染多走一遍 OSS 导出),载体分别是 MarkdownFileReader 与 HtmlFileReader。
- * HTML 再多一步同目录资源透传:页面引用的相对资源经 media:fetch 逐个取回后回填
- * (htmlLocalResources + useHtmlLocalResources),自包含页面零请求直接过。
+ * markdown 与 HTML 额外有「渲染 / 源码」双态,默认渲染。HTML 使用浮动浏览器控件,
+ * 源码和文件操作收进更多菜单;markdown 保留原来的切换栏并复用已读文本。
+ * HTML 渲染完整目录快照,源码仍走文本通道与原有大小限制。
  *
  * absPath 单文件模式(route 参 absPath,与 relPath 互斥):聊天 chip 指向
  * workdir 外文件时进入。file-browser 的 relPath 通道(listDir / readFile /
@@ -21,23 +21,28 @@
  * (fetchRemoteAbsFileToUrl);无同目录翻页、无缩略图(直接取原图)。
  */
 import * as Clipboard from 'expo-clipboard';
+import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { Image } from 'expo-image';
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowDownToLine, Copy, Database, File as FileIcon, Info, MessageSquarePlus, Share as ShareIcon } from 'lucide-react-native';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
-  Image,
   Pressable,
   StyleSheet,
   View,
   useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
+import type { WebViewNavigation } from 'react-native-webview/lib/WebViewTypes';
 import { Text } from '@/components/AppText';
 import { goBackGuarded } from '@/utils/backGuard';
+import { errorText, resolvedUrlKind } from '@/debug/fileDiagnostics';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { useAuth } from '@/auth/AuthContext';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -47,7 +52,8 @@ import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import type { FileBrowserReadFileResult, MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { isAbsolutePathShape, pathDisplayName } from '@/session/chatPathCandidate';
-import { adaptTextFilePreviewResult, fetchRemoteAbsFileOnce, fetchRemoteAbsFileToUrl } from '@/session/remoteAbsFileFetch';
+import { adaptTextFilePreviewResult, fetchRemoteAbsFileToUrl } from '@/session/remoteAbsFileFetch';
+import { preparePdfPreviewSource } from '@/session/pdfPreviewSource';
 import { formatByteSize, isHtmlFilePreviewCandidate } from '@/session/filePreview';
 import { joinRemotePath } from '@/session/htmlLocalResources';
 import { decodeGzipBase64Text, mergePathIntoComposerDraft, shareMimeForFileName } from '@/session/fileBrowserActions';
@@ -55,14 +61,16 @@ import { appendQuote, truncateQuoteText } from '@/session/chatQuoteStore';
 import { getCachedPreviewText, storeCachedPreviewText } from '@/session/fileBrowserCache';
 import { exportRemoteFileToUrl } from '@/session/fileBrowserExport';
 import type { RemoteMediaSshContext } from '@/session/fileBrowserGallery';
-import { HtmlFileReader } from '@/session/HtmlFileReader';
-import {
-  HTML_RESOURCE_LIMIT,
-  HTML_RESOURCE_MAX_BYTES,
-  htmlBaseDirOf,
-  type HtmlResourceFetchTarget,
-} from '@/session/htmlLocalResources';
-import { useHtmlLocalResources } from '@/session/useHtmlLocalResources';
+import { HtmlSnapshotReader } from '@/session/HtmlFileReader';
+import { HtmlBrowserChrome } from '@/session/HtmlBrowserChrome';
+import { HtmlWebsiteBrowser, type WebsiteVisit } from '@/session/HtmlWebsiteBrowser';
+import { normalizeBrowserAddress } from '@/session/browserAddress';
+import { HTML_BROWSER_CONTROL_SIZE, type HtmlBrowserChromeProps } from '@/session/HtmlBrowserChrome.types';
+import type { MobileHtmlPreview } from '@/session/mobileHtmlPreview';
+import { prepareMobileHtmlPreview, type PrepareMobileHtmlPreview } from '@/session/mobileHtmlPreview';
+import { useHtmlSnapshot } from '@/session/useHtmlSnapshot';
+import { MainWindowActionButton } from '@/components/MobilePrimitives';
+import { FileBrowserSegmentedControl } from '@/session/FileBrowserSegmentedControl';
 import { MarkdownFileReader } from '@/session/MarkdownFileReader';
 import { RemoteMediaPlayerWebView } from '@/session/mediaPlayerWebView';
 import {
@@ -78,7 +86,7 @@ import { ImageLightbox } from '@/session/ImageLightbox';
 import { buildMediaPayload } from '@/session/messagePayload';
 import type { MobileMessageGalleryImage } from '@/session/messageGallery';
 import type { MobileRemoteMediaPresignResult } from '@/session/remoteMedia';
-import { downloadRemoteMediaAsDataUri, downloadRemoteMediaShareTemp } from '@/session/remoteMediaDiskCacheExpo';
+import { downloadRemoteMediaShareTemp } from '@/session/remoteMediaDiskCacheExpo';
 import { remoteSessionStore, useRemoteSessions } from '@/session/remoteSessionStore';
 import type { RemoteSession } from '@/session/types';
 import { fontWeight, lineHeight, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -90,7 +98,7 @@ const NOTICE_DISMISS_MS = 2500;
 type TextPreviewState =
   | { status: 'loading' }
   | { status: 'ready'; lines: string[]; truncated: boolean; totalLines: number; content?: string }
-  | { status: 'unavailable'; reason: string; oversize?: boolean };
+  | { status: 'unavailable'; reason: string; oversize?: boolean; retryable?: boolean };
 
 /**
  * 「渲染态」可用的两类文本:markdown 与 HTML。两者共用同一套双态机(下面
@@ -98,6 +106,9 @@ type TextPreviewState =
  * 转成我们自己的 HTML,HTML 生成物则原样进 WebView。
  */
 type RichTextKind = 'markdown' | 'html';
+
+type HtmlBrowserActions = Pick<HtmlBrowserChromeProps,
+  'busy' | 'notice' | 'onClose' | 'onShare' | 'onCopyPath' | 'onAddToTask'>;
 
 interface SiblingListing {
   key: string;
@@ -158,7 +169,10 @@ export default function RemoteFilePreviewScreen() {
   const targetLineRaw = Number(readRouteString(params.line) ?? '');
   const targetLine = Number.isInteger(targetLineRaw) && targetLineRaw > 0 ? targetLineRaw : null;
   const router = useRouter();
-  const { width: pageWidth } = useWindowDimensions();
+  const systemBack = useSystemNavigationBack();
+  const previewWindow = useAdaptiveWindow();
+  const [measuredPageWidth, setMeasuredPageWidth] = useState<number | null>(null);
+  const pageWidth = measuredPageWidth ?? Math.max(1, previewWindow.width - previewWindow.insets.left - previewWindow.insets.right);
   const { openLink } = useDeviceLink();
   const auth = useAuth();
   const maker = useMobileMakerTransport(deviceId);
@@ -187,8 +201,14 @@ export default function RemoteFilePreviewScreen() {
   // 渲染 / 源码的切换状态在子页里,所以由子页按页 key 上报;setter 用 key 比对而不是
   // 直接存布尔,避免翻页时「旧页报 false」与「新页报 true」的先后顺序决定结果。
   const [htmlPanPageKey, setHtmlPanPageKey] = useState<string | null>(null);
+  const [markdownPagerPageKey, setMarkdownPagerPageKey] = useState<string | null>(null);
   const reportHtmlPan = useCallback((key: string, wants: boolean) => {
     setHtmlPanPageKey((prev) => (wants ? key : (prev === key ? null : prev)));
+  }, []);
+  // Markdown WebView 的纵向滚动和宽公式横移保留在内层；正文明确横滑由文档
+  // 回调后在这里驱动同一个 pager，避免 WebView 与 FlatList 争抢触摸序列。
+  const reportMarkdownPager = useCallback((key: string, wants: boolean) => {
+    setMarkdownPagerPageKey((prev) => (wants ? key : (prev === key ? null : prev)));
   }, []);
 
   const showNotice = useCallback((text: string) => {
@@ -204,8 +224,9 @@ export default function RemoteFilePreviewScreen() {
   // 卸载标记:导出轮询最长 2 分钟,用户中途离开页面时必须中止循环,
   // 不能靠 busyLabel(只防并发)兜底。
   const unmountedRef = useRef(false);
-  useEffect(() => () => {
-    unmountedRef.current = true;
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => { unmountedRef.current = true; };
   }, []);
 
   // deviceUnresponsive 进依赖(review P1):深链进入且无缓存会话时,首次
@@ -248,7 +269,7 @@ export default function RemoteFilePreviewScreen() {
         setError(null);
       })
       .catch((err) => setError(formatRemoteError(err)));
-  }, [deviceId, deviceUnresponsive, knownSession, maker, openLink, sessionId]);
+  }, [deviceId, deviceUnresponsive, knownSession, maker, openLink, recoveryEpoch, sessionId]);
 
   // absPath 单文件模式:不列目录,直接以合成 item 装单页 pager。
   useEffect(() => {
@@ -327,6 +348,12 @@ export default function RemoteFilePreviewScreen() {
 
   const current = siblings?.[pageIndex] ?? null;
   const pagerRef = useRef<FlatList<FileBrowserGridItem>>(null);
+  const moveMarkdownPager = useCallback((key: string, direction: 'previous' | 'next') => {
+    if (key !== current?.key || !siblings) return;
+    const next = pageIndex + (direction === 'next' ? 1 : -1);
+    if (next < 0 || next >= siblings.length) return;
+    pagerRef.current?.scrollToOffset({ animated: true, offset: next * pageWidth });
+  }, [current?.key, pageIndex, pageWidth, siblings]);
   // 当前可见文件路径镜像(pager 重建锚定用;不能进上面 effect 的依赖,否则
   // 每次翻页都会重列目录)。
   const currentRelPathRef = useRef<string | null>(null);
@@ -375,12 +402,12 @@ export default function RemoteFilePreviewScreen() {
    * 外路径一律拒绝),relPath/mtime 参数此时被忽略。
    */
   const exportToUrl = useCallback(
-    (relPath: string, mtimeMs: number): Promise<string> => {
+    (relPath: string, mtimeMs: number, stream = true): Promise<string> => {
       if (singleAbsPath) {
-        return fetchRemoteAbsFileToUrl({ maker, deviceId, openLink, presignGet }, singleAbsPath);
+        return fetchRemoteAbsFileToUrl({ maker, deviceId, openLink, presignGet, stream }, singleAbsPath);
       }
       return exportRemoteFileToUrl(
-        { maker, deviceId, openLink, presignGet, isCancelled: () => unmountedRef.current },
+        { maker, deviceId, openLink, presignGet, stream, isCancelled: () => unmountedRef.current },
         workdir,
         relPath,
         mtimeMs,
@@ -410,73 +437,11 @@ export default function RemoteFilePreviewScreen() {
     return { sessionId, remoteHostId, workdir };
   }, [session?.remoteHostId, sessionId, workdir]);
 
-  /**
-   * 任意被控端绝对路径 → **`data:` URI**(HTML 渲染态取同目录资源用)。
-   *
-   * 与 exportToUrl 的区别:后者只服务「当前这个文件」(workdir 内走两段式导出、
-   * absPath 模式走单一路径取件);资源透传要取的是**页面引用的其它路径**,所以
-   * 统一走 media:fetch 的绝对路径通道 —— 它对 workdir 内外一视同仁,一条路径一条码。
-   *
-   * **两道边界都必须由被控端强制**(review P1/P2),手机侧的判断只能当第二道:
-   *  - `limits.baseDir` → 被控端对资源与 baseDir 各自 realpath 后判包含关系。
-   *    htmlLocalResources 的 `..` 拒绝只保证**词法**子树,产物目录里的软链绕得过去;
-   *  - `limits.maxBytes` → 被控端在 stat 之后、上传 OSS(SSH 还要先拉进 Desktop 缓存)
-   *    之前拒绝。手机拿到 `media.size` 时流量已经花完了。
-   *    该上限由整页剩余预算收窄而来,不是固定的 HTML_RESOURCE_MAX_BYTES。
-   *
-   * SSH 会话必须带上 sshMediaContext,否则被控端会把 absPath 当本机路径解析
-   * (review P2:取件必失败,同名路径还会读到错误来源)。
-   */
-  const fetchResourceDataUri = useCallback(
-    async (
-      target: HtmlResourceFetchTarget,
-      limits: { baseDir: string; maxBytes: number },
-    ): Promise<string> => {
-      // 本次允许的字节上限:取「整页剩余预算收窄出来的值」与单资源硬上限的较小者。
-      // 调度层已经收窄过,这里再夹一次是防调用方传入超大值(fail-closed 不吃亏)。
-      const maxBytes = Math.max(
-        1,
-        Math.min(limits.maxBytes || HTML_RESOURCE_MAX_BYTES, HTML_RESOURCE_MAX_BYTES),
-      );
-      // 每个资源都会在 OSS 上新建一个对象;字节一旦进了 data: URI,对象立即无用。
-      // 不回收的话一页最多遗留 32 个,反复进出预览还会累积(review P1)。
-      //
-      // **按 key 累加收集,而不是只回收 media.ossKey**(review P1 第二轮):
-      //  - presign 失败(弱网 / 回包非法)时 resolveMobileRemoteMedia 在**返回之前**抛错,
-      //    对象已经上传但 media 拿不到 —— 只围绕 media 写 finally 的话那个对象永久遗留;
-      //  - 瞬断重试的每一次都可能再上传一份,产出不同的 key,只记最后一个同样会漏。
-      // 所以在 onOssKey 里收全,统一在 finally 里逐个删。
-      const uploadedKeys = new Set<string>();
-      try {
-        // 一次性取件(带 ossKey、不进 60s 共享缓存):对象用完即删,缓存命中会回死 URL。
-        const media = await fetchRemoteAbsFileOnce(
-          { maker, deviceId, openLink, presignGet },
-          target.absPath,
-          sshMediaContext,
-          (ossKey) => uploadedKeys.add(ossKey),
-          // 服务端强制约束:新被控端在上传前就会按这两项拒绝,超限文件不产生任何流量。
-          { ...(limits.baseDir ? { baseDir: limits.baseDir } : {}), maxBytes },
-        );
-        // **下载之前先按 media.size 拒掉超限资源**(review P1):取件回包已经带了大小,
-        // 而 downloadRemoteMediaAsDataUri 是先把整个对象拉到手机缓存、再看 file.size ——
-        // media:fetch 上限有 2 GB、批量取件又有 4 路并发,不前置判断的话一份不可信产物
-        // 能凭「白名单扩展名的超大文件」打出数 GB 流量与临时磁盘占用,最后才返回空地址。
-        // **这道判断不能因为被控端也判了就删**:老被控端不认 maxBytes(版本歪斜是 fail-open),
-        // 而 size 缺失 / 谎报同样要兜住 —— 它是 fail-closed 的第二道。
-        if (media.size > maxBytes) return '';
-        // 预签名地址只在这里用一次:下载完即转成 data: URI,**绝不回填进页面**
-        // (页面里的脚本能读 DOM,凭证进 DOM 等于交给不可信文档,review P1)。
-        const dataUri = await downloadRemoteMediaAsDataUri(
-          media.url,
-          target.mimeType,
-          maxBytes,
-        );
-        return dataUri ?? '';
-      } finally {
-        // 放 finally:取件抛错 / 下载失败 / 超限同样要删,失败路径才是最容易漏掉的那条。
-        for (const ossKey of uploadedKeys) deleteResourceOssObject(ossKey);
-      }
-    },
+  const prepareHtmlPreview = useCallback<PrepareMobileHtmlPreview>(
+    (absPath, signal) => prepareMobileHtmlPreview(absPath, {
+      maker, deviceId, openLink, presignGet, ssh: sshMediaContext,
+      deleteOssObject: deleteResourceOssObject,
+    }, signal),
     [deleteResourceOssObject, deviceId, maker, openLink, presignGet, sshMediaContext],
   );
 
@@ -501,7 +466,7 @@ export default function RemoteFilePreviewScreen() {
     if (busyLabel) return;
     setBusyLabel(t('files.preview.exporting'));
     try {
-      const url = await exportToUrl(item.relPath, item.mtimeMs);
+      const url = await exportToUrl(item.relPath, item.mtimeMs, false);
       // 传原始文件名:分享单按真实扩展名识别类型(PDF/视频等非图片 mime 不在
       // extOfMime 映射里,不带名字会落成 .img 让接收方无法预览)。
       const mime = shareMimeForFileName(item.name);
@@ -549,22 +514,34 @@ export default function RemoteFilePreviewScreen() {
   if (!current || !siblings) {
     return (
       <SafeAreaView style={styles.safeArea} testID="filePreview.screen">
+        <SystemNavigationBack close label={t('files.preview.done')} onPress={() => goBackGuarded(router)} />
         <PreviewNav
-          meta={error ?? ''}
+          hideDone={systemBack}
+          meta=""
           onDone={() => goBackGuarded(router)}
           onShare={null}
           title={pathDisplayName(singleAbsPath ?? initialRelPath)}
         />
         <View style={styles.centerFill}>
-          {error ? <Text style={styles.hintText}>{error}</Text> : <ActivityIndicator color={colors.textTertiary} />}
+          {error ? <>
+            <Text style={styles.hintText}>{t('files.preview.readFailed')}</Text>
+            <MainWindowActionButton action={{ label: t('files.preview.retry'), onPress: () => {
+              setError(null);
+              setRecoveryEpoch((epoch) => epoch + 1);
+            } }} />
+          </> : <ActivityIndicator color={colors.textTertiary} />}
         </View>
       </SafeAreaView>
     );
   }
 
+  const htmlBrowser = richTextKindOf(current.relPath) === 'html';
   return (
-    <SafeAreaView style={styles.safeArea} testID="filePreview.screen">
+    <SafeAreaView edges={htmlBrowser ? [] : undefined} style={styles.safeArea} testID="filePreview.screen">
+      {!htmlBrowser ? <>
+        <SystemNavigationBack close label={t('files.preview.done')} onPress={() => goBackGuarded(router)} />
       <PreviewNav
+        hideDone={systemBack}
         meta={[
           `${pageIndex + 1} / ${siblings.length}`,
           // absPath 单文件模式没有目录列举,size 未知(0)不显示,避免「0 B」。
@@ -575,8 +552,10 @@ export default function RemoteFilePreviewScreen() {
         title={current.name}
       />
       <View style={styles.navHairline} />
+      </> : null}
 
       <FlatList
+        onLayout={event => setMeasuredPageWidth(Math.max(1, event.nativeEvent.layout.width))}
         data={siblings}
         getItemLayout={(_, index) => ({ index, length: pageWidth, offset: pageWidth * index })}
         ref={pagerRef}
@@ -605,11 +584,21 @@ export default function RemoteFilePreviewScreen() {
               // 对话界面之后继续跑脚本。screenFocused 翻假即卸载。
               visible={screenFocused && index === pageIndex}
               onHtmlPanChange={reportHtmlPan}
+              onMarkdownPagerChange={reportMarkdownPager}
+              onMarkdownPageSwipe={moveMarkdownPager}
               exportToUrl={exportToUrl}
-              fetchResourceDataUri={fetchResourceDataUri}
+              prepareHtmlPreview={prepareHtmlPreview}
               item={item}
               maker={maker}
               onDownload={() => void downloadAndShare(item)}
+              htmlBrowserActions={{
+                busy: !!busyLabel,
+                notice: busyLabel ?? notice,
+                onClose: () => goBackGuarded(router),
+                onShare: () => void downloadAndShare(item),
+                onCopyPath: () => void copyPath(item),
+                onAddToTask: () => sendToSession(item),
+              }}
               // chat-text-quote:markdown 渲染态选中文字 → 引用进会话草稿
               // (携带当前文件路径,— source: 行),随即切回对话界面——与
               // 「发送到会话」(sendToSession)的图片/路径处理一致(产品决策);
@@ -641,11 +630,12 @@ export default function RemoteFilePreviewScreen() {
         // 超出视口的内容永远看不到。手势仲裁(区分内层平移与翻页)在 RN 上要自己写一套
         // 竞态裁决,属独立改动;这里沿用本文件对 PDF 已经采用的同一口径 —— 想翻页就切到
         // 「源码」态(源码是竖向列表,不冲突),或 Done 返回列表。
-        scrollEnabled={current.previewKind !== 'pdf' && htmlPanPageKey !== current.key}
+        scrollEnabled={current.previewKind !== 'pdf' && htmlPanPageKey !== current.key && markdownPagerPageKey !== current.key}
         showsHorizontalScrollIndicator={false}
         windowSize={3}
       />
 
+      {!htmlBrowser ? <>
       <View style={styles.toolbarHairline} />
       <View style={styles.toolbar}>
         <ToolbarButton
@@ -666,6 +656,7 @@ export default function RemoteFilePreviewScreen() {
       {busyLabel || notice ? (
         <Text style={styles.noticeText} testID="filePreview.notice">{busyLabel ?? notice}</Text>
       ) : null}
+      </> : null}
 
       {lightboxImages.length > 0 ? (
         <ImageLightbox
@@ -681,11 +672,13 @@ export default function RemoteFilePreviewScreen() {
 /* ------------------------------ 页面组件 ------------------------------ */
 
 function PreviewNav({
+  hideDone = false,
   meta,
   onDone,
   onShare,
   title,
 }: {
+  hideDone?: boolean;
   meta: string;
   onDone(): void;
   onShare: (() => void) | null;
@@ -696,9 +689,9 @@ function PreviewNav({
   const { t } = useTranslation();
   return (
     <View style={styles.navRow}>
-      <Pressable accessibilityLabel={t('files.preview.done')} hitSlop={10} onPress={onDone} testID="filePreview.done">
+      {!hideDone ? <Pressable accessibilityLabel={t('files.preview.done')} hitSlop={10} onPress={onDone} testID="filePreview.done">
         <Text style={styles.doneText}>{t('files.preview.done')}</Text>
-      </Pressable>
+      </Pressable> : null}
       <View style={styles.navTitleCol}>
         <Text numberOfLines={1} style={styles.navTitle} testID="filePreview.title">{title}</Text>
         {meta ? <Text numberOfLines={1} style={styles.navMeta}>{meta}</Text> : null}
@@ -718,11 +711,14 @@ function FilePreviewPage({
   absolutePathOf,
   active,
   exportToUrl,
-  fetchResourceDataUri,
+  prepareHtmlPreview,
   item,
+  htmlBrowserActions,
   maker,
   onDownload,
   onHtmlPanChange,
+  onMarkdownPagerChange,
+  onMarkdownPageSwipe,
   onOpenLightbox,
   onQuoteSelection,
   readTextFile,
@@ -734,15 +730,15 @@ function FilePreviewPage({
   absolutePathOf(relPath: string): string;
   active: boolean;
   exportToUrl(relPath: string, mtimeMs: number): Promise<string>;
-  fetchResourceDataUri(
-    target: HtmlResourceFetchTarget,
-    limits: { baseDir: string; maxBytes: number },
-  ): Promise<string>;
+  prepareHtmlPreview: PrepareMobileHtmlPreview;
   item: FileBrowserGridItem;
+  htmlBrowserActions: HtmlBrowserActions;
   maker: Pick<MobileMakerTransport, 'fileBrowser'>;
   onDownload(): void;
   /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,仅文本页产出)。 */
   onHtmlPanChange?: (key: string, wants: boolean) => void;
+  onMarkdownPagerChange?: (key: string, wants: boolean) => void;
+  onMarkdownPageSwipe?: (key: string, direction: 'previous' | 'next') => void;
   onOpenLightbox(url: string): void;
   /** chat-text-quote:markdown 渲染态的选中引用回调(仅文本页消费)。 */
   onQuoteSelection?: (text: string) => void;
@@ -776,12 +772,17 @@ function FilePreviewPage({
   if (item.thumb === 'doc') {
     return (
       <TextPreviewPage
+        key={maker.fileBrowser.cacheScope}
+        cacheScope={maker.fileBrowser.cacheScope}
         absolutePathOf={absolutePathOf}
         active={active}
-        fetchResourceDataUri={fetchResourceDataUri}
+        prepareHtmlPreview={prepareHtmlPreview}
         item={item}
+        htmlBrowserActions={htmlBrowserActions}
         onDownload={onDownload}
         onHtmlPanChange={onHtmlPanChange}
+        onMarkdownPagerChange={onMarkdownPagerChange}
+        onMarkdownPageSwipe={onMarkdownPageSwipe}
         onQuoteSelection={onQuoteSelection}
         readTextFile={readTextFile}
         targetLine={targetLine}
@@ -814,28 +815,38 @@ function AvPreviewPage({
   const { t } = useTranslation();
   const [url, setUrl] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const [requestEpoch, setRequestEpoch] = useState(0);
   const requestedRef = useRef(false);
 
   useEffect(() => {
     if (!active || requestedRef.current || !workdir) return undefined;
     requestedRef.current = true;
     let cancelled = false;
+    const startedAt = Date.now();
+    mobileDebugLog('debug', 'files', 'av preview fetch start', { kind, size: item.sizeBytes });
     setFailure(null);
     void exportToUrl(item.relPath, item.mtimeMs)
       .then((next) => {
+        mobileDebugLog('debug', 'files', 'av preview fetch done', {
+          kind, ms: Date.now() - startedAt, source: resolvedUrlKind(next), left: cancelled,
+        });
         if (!cancelled) setUrl(next);
       })
       .catch((err) => {
+        mobileDebugLog(cancelled ? 'debug' : 'warn', 'files', 'av preview fetch failed', {
+          kind, ms: Date.now() - startedAt, left: cancelled, error: errorText(err),
+        });
         if (cancelled) return;
         setFailure(formatRemoteError(err));
       });
     return () => {
       cancelled = true;
     };
-  }, [active, exportToUrl, item.mtimeMs, item.relPath, workdir]);
+  }, [active, exportToUrl, item.mtimeMs, item.relPath, item.sizeBytes, kind, requestEpoch, workdir]);
 
   if (failure) {
-    return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.fetchAvFailed', { detail: failure })} />;
+    return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.readFailed')}
+      onRetry={() => { requestedRef.current = false; setRequestEpoch((epoch) => epoch + 1); }} />;
   }
   if (!url) {
     return (
@@ -881,6 +892,8 @@ function PdfPreviewPage({
   const [failure, setFailure] = useState<string | null>(null);
   const [requestEpoch, setRequestEpoch] = useState(0);
   const requestedRef = useRef(false);
+  const releaseSourceRef = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => releaseSourceRef.current?.(), []);
   const latestRecoveryEpochRef = useRef(recoveryEpoch);
   const requestedAtRecoveryEpochRef = useRef(recoveryEpoch);
 
@@ -904,8 +917,12 @@ function PdfPreviewPage({
     let cancelled = false;
     setFailure(null);
     void exportToUrl(item.relPath, item.mtimeMs)
-      .then((next) => {
-        if (!cancelled) setUrl(next);
+      .then(preparePdfPreviewSource)
+      .then((source) => {
+        if (cancelled) { source.release(); return; }
+        releaseSourceRef.current?.();
+        releaseSourceRef.current = source.release;
+        setUrl(source.uri);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -920,7 +937,8 @@ function PdfPreviewPage({
   const pdfSource = useMemo(() => (url ? { uri: url } : null), [url]);
 
   if (failure) {
-    return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.fetchPdfFailed', { detail: failure })} />;
+    return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.readFailed')}
+      onRetry={() => { requestedRef.current = false; setRequestEpoch((epoch) => epoch + 1); }} />;
   }
   if (!pdfSource) {
     return (
@@ -930,7 +948,7 @@ function PdfPreviewPage({
       </View>
     );
   }
-  return <WebView source={pdfSource} style={styles.pdfView} testID="filePreview.pdfView" />;
+  return <WebView source={pdfSource} originWhitelist={['https://*', 'http://*', 'file://*']} style={styles.pdfView} testID="filePreview.pdfView" />;
 }
 
 /**
@@ -938,30 +956,35 @@ function PdfPreviewPage({
  * markdown / HTML(richTextKindOf)多一层「渲染 / 源码」切换,渲染态复用同一份已读文本。
  */
 function TextPreviewPage({
+  cacheScope,
   absolutePathOf,
   active,
-  fetchResourceDataUri,
+  prepareHtmlPreview,
   item,
+  htmlBrowserActions,
   onDownload,
   onHtmlPanChange,
+  onMarkdownPagerChange,
+  onMarkdownPageSwipe,
   onQuoteSelection,
   readTextFile,
   targetLine,
   visible,
   workdir,
 }: {
+  cacheScope: string;
   /** item.relPath → 被控端绝对路径(HTML 资源透传要据此定位同目录)。 */
   absolutePathOf(relPath: string): string;
   active: boolean;
-  /** 页面引用的资源 → `data:` URI(签名地址不进页面,见屏级 fetchResourceDataUri)。 */
-  fetchResourceDataUri(
-    target: HtmlResourceFetchTarget,
-    limits: { baseDir: string; maxBytes: number },
-  ): Promise<string>;
+  /** 下载完整目录并返回受控网页预览,签名地址不进入页面。 */
+  prepareHtmlPreview: PrepareMobileHtmlPreview;
   item: FileBrowserGridItem;
+  htmlBrowserActions: HtmlBrowserActions;
   onDownload(): void;
   /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,见调用处说明)。 */
   onHtmlPanChange?: (key: string, wants: boolean) => void;
+  onMarkdownPagerChange?: (key: string, wants: boolean) => void;
+  onMarkdownPageSwipe?: (key: string, direction: 'previous' | 'next') => void;
   /** chat-text-quote:markdown 渲染态的选中引用回调(源码态暂不支持,见 PR 说明)。 */
   onQuoteSelection?: (text: string) => void;
   /** 屏级注入:readFile 带瞬断重试 + openLink(与列表/搜索/导出同路径)。 */
@@ -975,12 +998,22 @@ function TextPreviewPage({
   const { colors } = useTheme();
   const { t } = useTranslation();
   const richKind = richTextKindOf(item.relPath);
+  const insets = useSafeAreaInsets();
+  // Sit directly against the safe-area edges; only a small gap separates page content.
+  const browserTop = insets.top;
+  const browserBottom = insets.bottom;
+  const browserContentInset = { top: browserTop + HTML_BROWSER_CONTROL_SIZE + spacing.xs, bottom: browserBottom + HTML_BROWSER_CONTROL_SIZE + spacing.xs };
+  const browserRef = useRef<WebView>(null);
+  const [website, setWebsite] = useState<WebsiteVisit | null>(null);
+  const [browserNavigation, setBrowserNavigation] = useState<{
+    preview: MobileHtmlPreview; state: WebViewNavigation;
+  } | null>(null);
   // absPath 单文件模式(item.relPath 为绝对路径)没有可靠 mtime(恒 0),
   // 缓存键无法随文件覆写失效,读写一律跳过缓存。
   const cacheable = !!workdir && !isAbsolutePathShape(item.relPath);
   const [state, setState] = useState<TextPreviewState>(() => {
     // 内存缓存命中(mtime keyed)直接就绪:翻页/重进零等待、零重复拉取。
-    const cached = cacheable ? getCachedPreviewText(workdir, item.relPath, item.mtimeMs) : null;
+    const cached = cacheable ? getCachedPreviewText(cacheScope, workdir, item.relPath, item.mtimeMs) : null;
     return cached
       ? {
           status: 'ready',
@@ -996,6 +1029,7 @@ function TextPreviewPage({
   // 可切源码;其余文本恒为源码态。
   const [richView, setRichView] = useState<'rendered' | 'source'>(richKind ? 'rendered' : 'source');
   const loadedRef = useRef(state.status === 'ready');
+  const [textReloadEpoch, setTextReloadEpoch] = useState(0);
   const codeListRef = useRef<FlatList<string>>(null);
   const scrolledToTargetRef = useRef(false);
 
@@ -1018,7 +1052,7 @@ function TextPreviewPage({
           } else if (res.code === 'BINARY_FILE') {
             setState({ status: 'unavailable', reason: t('files.preview.binaryFile') });
           } else {
-            setState({ status: 'unavailable', reason: res.message ?? t('files.preview.readFailed') });
+            setState({ status: 'unavailable', reason: t('files.preview.readFailed'), retryable: true });
           }
           return;
         }
@@ -1033,100 +1067,111 @@ function TextPreviewPage({
           // 原文只为渲染态(markdown / HTML)保留,普通代码文件不留大字符串。
           content: richKind ? content : undefined,
         };
-        if (cacheable) storeCachedPreviewText(workdir, item.relPath, res.data.mtimeMs, ready);
+        if (cacheable) storeCachedPreviewText(cacheScope, workdir, item.relPath, res.data.mtimeMs, ready);
         setState({ status: 'ready', ...ready });
       })
       .catch((err) => {
         if (cancelled) return;
         loadedRef.current = false; // 传输层瞬断允许重进重试
-        setState({ status: 'unavailable', reason: formatRemoteError(err) });
+        setState({ status: 'unavailable', reason: t('files.preview.readFailed'), retryable: true });
       });
     return () => {
       cancelled = true;
     };
-  }, [active, cacheable, item.relPath, richKind, readTextFile, t, workdir]);
+  }, [active, cacheable, cacheScope, item.relPath, richKind, readTextFile, t, workdir, textReloadEpoch]);
 
-  // HTML 资源透传:页面引用的同目录资源取回后回填,自包含页面零请求直接过。
-  // hook 必须在下面的早返回之前无条件调用 —— 未就绪时传空串,内部即刻短路。
-  const htmlSource = richKind === 'html' && state.status === 'ready' ? (state.content ?? '') : '';
-  const htmlBaseDir = useMemo(
-    () => (htmlSource ? htmlBaseDirOf(absolutePathOf(item.relPath)) : ''),
-    [absolutePathOf, htmlSource, item.relPath],
+  const htmlSnapshot = useHtmlSnapshot(
+    absolutePathOf(item.relPath),
+    visible && richKind === 'html' && richView === 'rendered' && !website,
+    prepareHtmlPreview,
   );
-  const htmlResources = useHtmlLocalResources(htmlSource, htmlBaseDir, fetchResourceDataUri);
-  const resourceNotices = [
-    htmlResources.failed > 0
-      ? t('files.preview.htmlResourcesMissing', { count: htmlResources.failed })
-      : null,
-    // 条数上限与总量预算**分开提示**(review P2):只有前者才等于「前 32 项已取回」,
-    // 总量预算可能在第 3 项就用尽,合并成一条会谎报取回数量。
-    htmlResources.overLimit > 0
-      ? t('files.preview.htmlResourcesTruncated', { limit: HTML_RESOURCE_LIMIT })
-      : null,
-    htmlResources.overBudget > 0
-      ? t('files.preview.htmlResourcesOverBudget', { count: htmlResources.overBudget })
-      : null,
-  ].filter((line): line is string => line !== null);
-
-  // 只有「可见 + HTML + 渲染态 + 正文就绪 + 资源取件已结束」这一种组合真的挂着 WebView,
-  // 需要外层让出横滑。资源还在取时页面上是 spinner —— 那时禁滑只会让用户滑不走。
-  // cleanup 无条件报 false:卸载(翻页 / 失焦 / 换文件)后不能把 pager 留在禁滑状态。
+  const [htmlLoadError, setHtmlLoadError] = useState(false);
+  useEffect(() => { setHtmlLoadError(false); }, [htmlSnapshot.preview]);
+  const htmlError = htmlSnapshot.error || (htmlLoadError ? new Error('HTML_PREVIEW_LOAD_FAILED') : null);
+  const htmlErrorCode = htmlError instanceof Error ? htmlError.message : '';
+  const htmlErrorMessage = htmlErrorCode === 'HTML_PREVIEW_NATIVE_UNAVAILABLE'
+    ? t('files.preview.htmlUpdateMobile')
+    : htmlErrorCode === 'COMPLETE_DIRECTORY_LISTING_UNSUPPORTED'
+      ? t('files.preview.htmlUpdateDesktop')
+      : htmlErrorCode === 'PREVIEW_TOO_LARGE'
+        ? t('files.preview.htmlSnapshotTooLarge')
+        : t('files.preview.htmlSnapshotFailed');
   const htmlPanWanted = visible && richKind === 'html' && richView === 'rendered'
-    && state.status === 'ready' && !htmlResources.loading;
+    && htmlSnapshot.foreground && (!!website || (!!htmlSnapshot.preview && !htmlError));
   useEffect(() => {
     onHtmlPanChange?.(item.key, htmlPanWanted);
     return () => onHtmlPanChange?.(item.key, false);
   }, [htmlPanWanted, item.key, onHtmlPanChange]);
+  const markdownPagerWanted = visible && richKind === 'markdown' && richView === 'rendered'
+    && state.status === 'ready';
+  useEffect(() => {
+    onMarkdownPagerChange?.(item.key, markdownPagerWanted);
+    return () => onMarkdownPagerChange?.(item.key, false);
+  }, [item.key, markdownPagerWanted, onMarkdownPagerChange]);
 
-  if (state.status === 'loading') {
+  if (website) return visible ? <HtmlWebsiteBrowser
+    visit={website}
+    insets={{ ...browserContentInset, left: insets.left, right: insets.right }}
+    chrome={{ top: browserTop, bottom: browserBottom, left: insets.left + spacing.md, right: insets.right + spacing.md, onClose: htmlBrowserActions.onClose }}
+    onReturn={() => { setBrowserNavigation(null); setWebsite(null); }}
+  /> : <View style={styles.textPage} />;
+
+  const retryText = () => {
+    loadedRef.current = false;
+    setState({ status: 'loading' });
+    setTextReloadEpoch((epoch) => epoch + 1);
+  };
+  if (state.status === 'loading' && richKind !== 'html') {
     return (
       <View style={styles.centerFill}>
         <ActivityIndicator color={colors.textTertiary} />
       </View>
     );
   }
-  if (state.status === 'unavailable') {
-    return <UnsupportedPage item={item} onDownload={onDownload} reason={state.reason} />;
+  if (state.status === 'unavailable' && richKind !== 'html') {
+    return <UnsupportedPage item={item} onDownload={onDownload} reason={state.reason} onRetry={state.retryable ? retryText : undefined} />;
   }
 
-  const targetIndex = targetLine !== null && targetLine <= state.lines.length ? targetLine - 1 : null;
-  const lineNumWidth = String(state.lines.length).length;
-  const clipped = state.truncated || state.totalLines > state.lines.length;
-  const canRenderRich = richKind !== null && typeof state.content === 'string';
+  const ready = state.status === 'ready' ? state : null;
+  const targetIndex = targetLine !== null && targetLine <= (ready?.lines.length ?? 0) ? targetLine - 1 : null;
+  const lineNumWidth = String(ready?.lines.length ?? 0).length;
+  const clipped = ready && (ready.truncated || ready.totalLines > ready.lines.length) && !(richKind === 'html' && richView === 'rendered');
+  const canRenderRich = richKind === 'html' || (richKind !== null && typeof ready?.content === 'string');
   const showRendered = canRenderRich && richView === 'rendered';
+  // State belongs to the mounted snapshot, never to a previous file/source/foreground lifetime.
+  const navigation = htmlPanWanted && browserNavigation && browserNavigation.preview === htmlSnapshot.preview ? browserNavigation.state : null;
   return (
     <View style={styles.textPage}>
+      <View style={[styles.textPage, richKind === 'html' && richView === 'source' && {
+        paddingTop: browserContentInset.top, paddingBottom: browserContentInset.bottom,
+        paddingLeft: insets.left, paddingRight: insets.right,
+      }]}>
       {clipped ? (
         <View style={styles.truncBar} testID="filePreview.truncBanner">
           <Info color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
           <Text style={styles.truncText}>
-            {state.truncated ? t('files.preview.truncated2mb') : t('files.preview.truncatedLines', { lines: MAX_RENDERED_LINES })}
+            {ready?.truncated ? t('files.preview.truncated2mb') : t('files.preview.truncatedLines', { lines: MAX_RENDERED_LINES })}
           </Text>
         </View>
       ) : null}
-      {/* 切换胶囊的 `md*` 样式与 i18n key 是 markdown 独占时期留下的命名,现在两类
-          渲染态共用;文案本身("渲染 / 源码")与载体无关,不为改名动四份 locale。 */}
-      {canRenderRich ? (
+      {/* HTML 的模式切换在浮动浏览器菜单中;Markdown 保留原有胶囊。 */}
+      {canRenderRich && richKind !== 'html' ? (
         <View style={styles.mdToggleRow}>
-          {([['rendered', t('files.preview.mdRendered')], ['source', t('files.preview.mdSource')]] as const).map(([value, label]) => (
-            <Pressable
-              accessibilityLabel={t('files.preview.mdViewA11y', { view: label })}
-              key={value}
-              onPress={() => setRichView(value)}
-              style={[styles.mdTogglePill, richView === value && styles.mdTogglePillActive]}
-              testID={`filePreview.richView.${value}`}
-            >
-              <Text style={[styles.mdToggleLabel, richView === value && styles.mdToggleLabelActive]}>
-                {label}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-      ) : null}
-      {showRendered && richKind === 'html' && resourceNotices.length > 0 ? (
-        <View style={styles.truncBar} testID="filePreview.htmlResourceNotice">
-          <Info color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          <Text style={styles.truncText}>{resourceNotices.join(' · ')}</Text>
+          <FileBrowserSegmentedControl<'rendered' | 'source'>
+            accessibilityLabel={t('files.preview.mdViewA11y', { view: richView === 'rendered' ? t('files.preview.mdRendered') : t('files.preview.mdSource') })}
+            onChange={setRichView}
+            options={(['rendered', 'source'] as const).map((value) => {
+              const label = t(value === 'rendered' ? 'files.preview.mdRendered' : 'files.preview.mdSource');
+              return {
+                value,
+                label,
+                accessibilityLabel: t('files.preview.mdViewA11y', { view: label }),
+                testID: `filePreview.richView.${value}`,
+              };
+            })}
+            testID="filePreview.richView"
+            value={richView}
+          />
         </View>
       ) : null}
       {showRendered ? (
@@ -1134,23 +1179,42 @@ function TextPreviewPage({
           // **只在真正可见的当前页挂载**(review P1):HTML 里的脚本是可执行的不可信
           // 内容,相邻预取页提前挂 WebView 会让用户还没打开的文件里的脚本 / 计时器 /
           // 网络请求先跑起来。离开当前页即卸载 —— 卸载 WebView 是停掉这些东西最彻底
-          // 的方式(比 injectJavaScript 去逐个 clearInterval 可靠)。文本预取与资源
-          // 取件都不受影响,所以滑回来时无需重新取。
+          // 的方式(比 injectJavaScript 去逐个 clearInterval 可靠)。离开后释放快照。
           !visible ? (
             <View style={styles.centerFill} testID="filePreview.htmlOffscreen" />
-          ) : htmlResources.loading ? (
+          ) : htmlError ? (
+            <View style={styles.centerFill} testID="filePreview.htmlError">
+              <Text style={styles.hintText}>{htmlErrorMessage}</Text>
+              <MainWindowActionButton action={{ label: t('files.preview.htmlReload'), onPress: htmlSnapshot.retry }} />
+            </View>
+          ) : !htmlSnapshot.preview || !htmlSnapshot.foreground ? (
             // 取件期间不先渲染破图再热替换 —— 那会让 WebView 重载、页面闪一下。
             <View style={styles.centerFill} testID="filePreview.htmlResourceLoading">
               <ActivityIndicator color={colors.textTertiary} />
               <Text style={styles.hintText}>{t('files.preview.fetchingHtmlResources')}</Text>
             </View>
           ) : (
-            // HTML 生成物:已读到的文本 + 内联好的同目录资源进 WebView。
-            <HtmlFileReader html={htmlResources.html} testID="filePreview.htmlRendered" />
+            // 只有完整下载并加固过的目录快照才能进入 WebView。
+            <HtmlSnapshotReader preview={htmlSnapshot.preview} onError={() => setHtmlLoadError(true)}
+              webViewRef={browserRef}
+              viewportInsets={{ ...browserContentInset, left: insets.left, right: insets.right }}
+              onNavigationStateChange={(preview, state) => setBrowserNavigation({ preview, state })}
+            />
           )
         ) : (
-          <MarkdownFileReader markdown={state.content ?? ''} onQuoteSelection={onQuoteSelection} targetLine={targetLine} testID="filePreview.markdownRendered" />
+          <MarkdownFileReader
+            markdown={ready?.content ?? ''}
+            onPageSwipe={onMarkdownPageSwipe ? (direction) => onMarkdownPageSwipe(item.key, direction) : undefined}
+            onQuoteSelection={onQuoteSelection}
+            targetLine={targetLine}
+            testID="filePreview.markdownRendered"
+          />
         )
+      ) : state.status === 'loading' ? (
+        <View style={styles.centerFill}><ActivityIndicator color={colors.textTertiary} /></View>
+      ) : state.status === 'unavailable' ? (
+        <UnsupportedPage item={item} onDownload={onDownload} reason={state.reason}
+          onRetry={state.retryable ? retryText : undefined} />
       ) : (
       <FlatList
         contentContainerStyle={styles.codeContent}
@@ -1173,6 +1237,7 @@ function TextPreviewPage({
           }, 220);
         }}
         ref={codeListRef}
+        testID={visible ? 'filePreview.sourceReady' : undefined}
         renderItem={({ item: line, index }) => (
           <View style={[styles.codeLine, index === targetIndex && styles.codeLineHit]}>
             <Text style={styles.codeLineNum}>{String(index + 1).padStart(lineNumWidth, ' ')}</Text>
@@ -1182,6 +1247,43 @@ function TextPreviewPage({
         style={styles.codeList}
       />
       )}
+      </View>
+      {richKind === 'html' && visible ? (
+        <HtmlBrowserChrome
+          {...htmlBrowserActions}
+          title={item.name}
+          path={absolutePathOf(item.relPath)}
+          address={absolutePathOf(item.relPath)}
+          onNavigate={(input) => {
+            if (input.trim() === absolutePathOf(item.relPath)) return true;
+            const url = normalizeBrowserAddress(input);
+            if (!url) { Alert.alert(t('files.preview.browserInvalidAddress')); return false; }
+            // Start closing before disabling the snapshot hook; wait for this exact promise.
+            const snapshotClosed = htmlSnapshot.preview?.close() ?? Promise.resolve();
+            setRichView('rendered');
+            setWebsite({ url, snapshotClosed });
+            return true;
+          }}
+          top={browserTop}
+          bottom={browserBottom}
+          left={insets.left + spacing.md}
+          right={insets.right + spacing.md}
+          source={richView === 'source'}
+          loading={richView === 'rendered' && !htmlError && (!htmlSnapshot.preview || navigation?.loading === true)}
+          canGoBack={richView === 'source' || navigation?.canGoBack === true}
+          canGoForward={navigation?.canGoForward === true}
+          onBack={() => { if (richView === 'source') setRichView('rendered'); else if (navigation?.canGoBack) browserRef.current?.goBack(); }}
+          onForward={() => { if (navigation?.canGoForward) browserRef.current?.goForward(); }}
+          onReload={() => {
+            // Reload means fresh remote bytes in both views, not a reload of the cached local URL.
+            loadedRef.current = false;
+            setState({ status: 'loading' });
+            setTextReloadEpoch((value) => value + 1);
+            htmlSnapshot.retry();
+          }}
+          onToggleSource={() => setRichView((value) => value === 'rendered' ? 'source' : 'rendered')}
+        />
+      ) : null}
     </View>
   );
 }
@@ -1248,19 +1350,19 @@ function ImagePreviewPage({
       testID="filePreview.imagePage"
     >
       {displayUri ? (
-        <Image resizeMode="contain" source={{ uri: displayUri }} style={styles.imageFull} />
+        <Image contentFit="contain" recyclingKey={displayUri} source={{ uri: displayUri }} style={styles.imageFull} />
       ) : failure ? (
         <View style={styles.imageStateWrap} testID="filePreview.imageError">
           <GenericGlyph name={item.name} />
           <Text style={styles.hintText}>{t('files.preview.fetchOriginalFailed', { detail: failure })}</Text>
-          <Pressable
-            accessibilityLabel={t('files.preview.a11yRetryOriginal')}
-            onPress={() => setAttempt((n) => n + 1)}
-            style={({ pressed }) => [styles.retryBtn, pressed && styles.pressed]}
-            testID="filePreview.imageRetry"
-          >
-            <Text style={styles.retryLabel}>{t('files.preview.retry')}</Text>
-          </Pressable>
+          <MainWindowActionButton
+            action={{
+              accessibilityLabel: t('files.preview.a11yRetryOriginal'),
+              label: t('files.preview.retry'),
+              onPress: () => setAttempt((n) => n + 1),
+              testID: 'filePreview.imageRetry',
+            }}
+          />
         </View>
       ) : (
         <View style={styles.imageStateWrap} testID="filePreview.imageLoading">
@@ -1280,10 +1382,12 @@ function ImagePreviewPage({
 function UnsupportedPage({
   item,
   onDownload,
+  onRetry,
   reason,
 }: {
   item: FileBrowserGridItem;
   onDownload(): void;
+  onRetry?: () => void;
   reason: string;
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -1297,7 +1401,7 @@ function UnsupportedPage({
       <Text style={styles.bigName}>{item.name}</Text>
       <Text style={styles.bigMeta}>{item.metaLabel}</Text>
       <Text style={styles.hintText}>{reason}</Text>
-      <Pressable
+      {onRetry ? <MainWindowActionButton action={{ label: t('files.preview.retry'), onPress: onRetry }} /> : <Pressable
         accessibilityLabel={t('files.preview.a11yExportShareFile')}
         onPress={onDownload}
         style={({ pressed }) => [styles.ctaBtn, pressed && styles.pressed]}
@@ -1305,7 +1409,7 @@ function UnsupportedPage({
       >
         <ArrowDownToLine color={colors.ctaText} size={iconSize.md} strokeWidth={iconStroke.regular} />
         <Text style={styles.ctaLabel}>{t('files.preview.exportShare')}</Text>
-      </Pressable>
+      </Pressable>}
     </View>
   );
 }
@@ -1339,6 +1443,7 @@ function ToolbarButton({
   return (
     <Pressable
       accessibilityLabel={label}
+      accessibilityRole="button"
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [styles.toolItem, (pressed || disabled) && styles.pressed]}
@@ -1402,10 +1507,10 @@ const makeStyles = (colors: ThemeColors) => {
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
     },
-    doneText: { color: colors.textPrimary, fontSize: typeScale.bodyLarge, fontWeight: fontWeight.semibold },
+    doneText: { color: colors.textPrimary, fontSize: typeScale.bodyLarge, lineHeight: lineHeight.bodyLarge, fontWeight: fontWeight.medium },
     navTitleCol: { alignItems: 'center', flex: 1, gap: 2, minWidth: 0 },
-    navTitle: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.semibold },
-    navMeta: { color: colors.textTertiary, fontSize: typeScale.caption },
+    navTitle: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
+    navMeta: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
     navHairline: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth },
     truncBar: {
       alignItems: 'center',
@@ -1416,26 +1521,12 @@ const makeStyles = (colors: ThemeColors) => {
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.sm - 1,
     },
-    truncText: { color: colors.textSecondary, fontSize: typeScale.caption },
+    truncText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
     textPage: { flex: 1 },
     mdToggleRow: {
-      flexDirection: 'row',
-      gap: spacing.sm,
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.sm,
     },
-    mdTogglePill: {
-      alignItems: 'center',
-      borderColor: colors.border,
-      borderRadius: radius.pill,
-      borderWidth: StyleSheet.hairlineWidth,
-      justifyContent: 'center',
-      minHeight: 28,
-      paddingHorizontal: spacing.md,
-    },
-    mdTogglePillActive: { backgroundColor: colors.surfaceChip, borderColor: colors.borderStrong },
-    mdToggleLabel: { color: colors.textSecondary, fontSize: typeScale.caption },
-    mdToggleLabelActive: { color: colors.textPrimary, fontWeight: fontWeight.medium },
     codeList: { flex: 1 },
     codeContent: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
     codeLine: { flexDirection: 'row', gap: spacing.sm + 2 },
@@ -1466,21 +1557,12 @@ const makeStyles = (colors: ThemeColors) => {
     imageUpgradeHint: {
       bottom: spacing.md,
       color: colors.textTertiary,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       position: 'absolute',
       textAlign: 'center',
       width: '100%',
     },
-    retryBtn: {
-      alignItems: 'center',
-      borderColor: colors.borderStrong,
-      borderRadius: radius.pill,
-      borderWidth: StyleSheet.hairlineWidth,
-      justifyContent: 'center',
-      minHeight: 40,
-      paddingHorizontal: spacing.xl,
-    },
-    retryLabel: { color: colors.textPrimary, fontSize: typeScale.code, fontWeight: fontWeight.medium },
     pdfView: { flex: 1 },
     bigPage: {
       alignItems: 'center',
@@ -1497,12 +1579,12 @@ const makeStyles = (colors: ThemeColors) => {
       justifyContent: 'center',
       width: 122,
     },
-    bigName: { color: colors.textPrimary, fontSize: typeScale.subtitle, fontWeight: fontWeight.semibold },
-    bigMeta: { color: colors.textSecondary, fontSize: typeScale.footnote },
+    bigName: { color: colors.textPrimary, fontSize: typeScale.subtitle, lineHeight: lineHeight.subtitle, fontWeight: fontWeight.semibold },
+    bigMeta: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
     hintText: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
-      lineHeight: lineHeight.code,
+      lineHeight: lineHeight.caption,
       textAlign: 'center',
     },
     ctaBtn: {
@@ -1516,7 +1598,7 @@ const makeStyles = (colors: ThemeColors) => {
       minHeight: 44,
       paddingHorizontal: spacing.xl,
     },
-    ctaLabel: { color: colors.ctaText, fontSize: typeScale.code, fontWeight: fontWeight.medium },
+    ctaLabel: { color: colors.ctaText, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
     toolbarHairline: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth },
     toolbar: {
       backgroundColor: colors.surface,
@@ -1526,10 +1608,11 @@ const makeStyles = (colors: ThemeColors) => {
       paddingTop: spacing.md,
     },
     toolItem: { alignItems: 'center', gap: spacing.xs, minWidth: 64 },
-    toolLabel: { color: colors.textSecondary, fontSize: typeScale.micro },
+    toolLabel: { color: colors.textSecondary, fontSize: typeScale.micro, lineHeight: lineHeight.micro },
     noticeText: {
       color: colors.textSecondary,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       paddingBottom: spacing.sm,
       textAlign: 'center',
     },

@@ -51,7 +51,7 @@ export async function configureWindowsDesktopSupport(enabled: boolean): Promise<
     throw new Error('DESKTOP_SYSTEM_SERVICE_UNAVAILABLE');
 }
 export async function openWindowsDesktopConnection(
-  init: { mode: 'input' | 'probe' } | { mode: 'capture'; rect: number[] },
+  init: { mode: 'input' | 'probe' } | { mode: 'capture'; rect: number[]; cursorOverlay?: boolean; bitrate?: number },
 ): Promise<WindowsDesktopConnection> {
   if (process.platform !== 'win32' || !app.isPackaged)
     throw new Error('DESKTOP_SYSTEM_SERVICE_UNAVAILABLE');

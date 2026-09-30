@@ -1,3 +1,4 @@
+import { useRemoteModelFavorites } from '@/state/useRemoteModelFavorites';
 import { matchesModelName } from '@/lib/modelDisplayNames';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, TriangleAlert } from 'lucide-react';
@@ -27,8 +28,10 @@ import { ModelConfigFlyout, type ModelConfigFlyoutState } from './ModelConfigFly
 import type { ModelMemoryAccessors } from './ModelSelector';
 import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 import { UnifiedModelRail } from './UnifiedModelRail';
-import { useUnifiedRowActions } from './useUnifiedRowActions';
+import { useUnifiedRowActions, withOptimisticConfig } from './useUnifiedRowActions';
 import { UnifiedModelRow } from './UnifiedModelRow';
+import { ModelSourceUsageProvider } from './ModelSourceDetails';
+import type { ProviderUsageScope } from './useProviderWeeklyQuota';
 import {
   anchorKey,
   favoriteMatchesSelection,
@@ -120,8 +123,8 @@ export interface UnifiedModelPanelProps {
   effortLabelOf: (agent: AgentKind, effort: Effort) => string;
   listMaxHeight?: number;
   interactionDisabled?: boolean;
-  /** Only local directories may read this desktop’s subscription accounts. */
-  localProviderUsage?: boolean;
+  /** Whose subscription accounts the directory may show: this desktop or its linked device. */
+  providerUsage?: ProviderUsageScope | null;
   /** 保留付费模型为锁定展示行，并把点击交给统一付费提示。 */
   includePaymentRequired?: boolean;
   paymentRequiredLabel?: string;
@@ -135,6 +138,7 @@ export interface UnifiedModelPanelProps {
    * 始终使用目录为该模型给出的官方推荐引擎与默认配置。
    */
   selectionPolicy?: 'personalized' | 'official';
+  deviceId?: string;
   /**
    * **会话内形态**(规格 §1.6)。传了它 = 这是一个已经在跑的会话:
    *   - 默认展示全部，已有任务把当前模型和同引擎模型提升到「推荐」;
@@ -155,6 +159,8 @@ export interface UnifiedModelPanelProps {
     runtimeAgent?: AgentKind;
     /** 已登记、下一条消息才落地的切换目标。缺省 = 没有挂着的意图。 */
     pendingTarget?: AgentKind;
+    /** Configuration edits keep the menu open after applying the switch. */
+    onCrossEngineConfigure?: NonNullable<UnifiedModelPanelProps['sessionEngineFilter']>['onCrossEngineSelect'];
     /**
      * 返回 `false` = 调用方**没有**执行这次切换(典型:跨引擎确认弹窗被取消)。
      * 面板本身不消费返回值,但包在外面的 ModelSelector 靠它决定「收起面板」还是
@@ -275,13 +281,14 @@ export function UnifiedModelPanel({
   effortLabelOf,
   listMaxHeight,
   interactionDisabled = false,
-  localProviderUsage = false,
+  providerUsage = null,
   includePaymentRequired = false,
   paymentRequiredLabel,
   paymentRequiredUnlockLabel,
   onPaymentRequired,
   configurationEnabled = true,
   selectionPolicy = 'personalized',
+  deviceId,
   isRouteDisabled,
   sessionEngineFilter,
   followSession,
@@ -296,7 +303,8 @@ export function UnifiedModelPanel({
 }: UnifiedModelPanelProps) {
   const { t } = useTranslation();
   const storedFavorites = useModelFavorites();
-  const favorites = selectionPolicy === 'official' ? NO_FAVORITES : storedFavorites;
+  const remoteFavorites = useRemoteModelFavorites(deviceId);
+  const favorites = selectionPolicy === 'official' ? NO_FAVORITES : deviceId ? remoteFavorites.items : storedFavorites;
   // 引擎 override / 深度 / Fast 三份 store 的版本号:任一变化都要重算行三元组与浮层
   // (其它窗口的 storage 事件、device-link 推送同样经这两个版本号进来)。
   const enginePrefsVersion = useModelEnginePrefsVersion();
@@ -329,14 +337,11 @@ export function UnifiedModelPanel({
   const predicatesRef = useRef({ isVisible, excludeProvider, excludeModel });
   predicatesRef.current = { isVisible, excludeProvider, excludeModel };
   const agentsKey = agents ? agents.join(',') : 'all';
-  // 「正在用的引擎」的单一口径:会话内以 sessionAgent 为准(已确认的会话引擎 ⊕ **待切换
-  // 意图目标** —— 调用方 ChatInput 在跨引擎意图登记后把 currentAgent 换成意图目标,
-  // 2026-08-17 review:意图期内 selected.modelId / effort / fast 全是目标值,引擎口径不跟上
-  // 会把目标模型画成旧引擎、浮层摆出旧引擎档位而回调写目标引擎;liveAgentKind 在元数据
-  // 未到时可能回退成 cc),草稿才用 liveAgentKind(= 草稿 vendor)。选中行豁免
-  // (keepModel.agent)、isLiveRow 与选中行的 forceEngine 必须用**同一个**口径,否则强制显示
-  // 出来的引擎反而让 isLiveRow 判不中(2026-08-14 测试当场抓到)。
-  const liveEngineAgent = sessionAgent ?? liveAgentKind;
+  // 选中配置与 ChatInput 的展示快照一致:意图期的 model / effort / fast 已是目标值,
+  // Harness 也取 pendingTarget。currentAgent 仍用于其它行的默认引擎,
+  // runtimeAgent 仍用于切换确认;显示目标不代表运行时已经切换。
+  // keepModel、isLiveRow 与选中行 forceEngine 共用这一口径。
+  const liveEngineAgent = sessionEngineFilter?.pendingTarget ?? sessionAgent ?? liveAgentKind;
   /**
    * 选中行豁免(`keepModel`)只对**已建会话**开:
    *   - `scope:'session'` = 面板画的是一个正在跑的会话,它选中的模型即便被下架 / 停用也必须
@@ -762,8 +767,10 @@ export function UnifiedModelPanel({
     removeFavorite,
     selectRow,
     pending: actionPending,
+    optimistic: optimisticConfig,
     runExternal,
   } = useUnifiedRowActions({
+    favoriteStore: deviceId ? remoteFavorites.store : undefined,
     interactionDisabled,
     isLiveRow,
     // 两笔实时写入(深度 + Fast)里第二笔失败时回滚第一笔用的原值,以及收藏 live 判定
@@ -896,7 +903,7 @@ export function UnifiedModelPanel({
       if (price?.kind === 'free') return { kind: 'free' };
       if (price?.kind !== 'priced') return null;
       // 符号个数按**标准价**判(original;折扣不改变模型的价格档),点亮几格按折扣比例
-      // 取整;颜色只由点亮格数决定(见 UnifiedModelRow priceDisplay 头注)。
+      // 取整；费用统一使用中性色。
       const basis = price.original ?? price.current;
       const discountPct = price.discount !== undefined ? Math.round(price.discount * 100) : 0;
       return {
@@ -950,13 +957,13 @@ export function UnifiedModelPanel({
     [widthSizerActive, entries, favorites, effectiveEngineOf, providerOrder],
   );
 
-  return (
+  const panelContent = (
     <div
       className="flex min-h-0 min-w-0 shrink"
       style={{ height: `${listMaxHeight ?? 428}px` }}
     >
       <UnifiedModelRail
-        localProviderUsage={localProviderUsage}
+        providerUsage={providerUsage}
         items={railItems}
         active={effectiveRail}
         onSelect={setRail}
@@ -1005,7 +1012,7 @@ export function UnifiedModelPanel({
                 aria-selected={followSession.active}
                 data-follow-session-row
                 className={cn(
-                  'flex w-full items-center justify-between rounded-[10px] px-2.5 py-2 transition-colors',
+                  'flex w-full items-center justify-between rounded-lg px-3 py-2 transition-colors',
                   'hover:bg-[var(--model-item-hover)]',
                   followSession.active && 'bg-[var(--model-item-hover)]',
                   interactionDisabled && 'cursor-not-allowed opacity-50',
@@ -1043,6 +1050,7 @@ export function UnifiedModelPanel({
               </span>
             </div>
           )}
+          {deviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t('newChat.modelSelector.unified.favoritesSyncFailed')}</div> : null}
           {!hasRows ? (
             <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
               {/* ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;★ 常驻后必经)。 */}
@@ -1066,7 +1074,11 @@ export function UnifiedModelPanel({
                   <span className="truncate">{sectionLabel(section)}</span>
                 </div>
                 {section.rows.map((row) => {
-                  const config = configOf(row.entry, row.favorite);
+                  const config = withOptimisticConfig(
+                    row.anchor,
+                    configOf(row.entry, row.favorite),
+                    optimisticConfig,
+                  );
                   const key = anchorKey(row.anchor);
                   const priceDisplay = priceDisplayOf(row.entry, config);
                   return (
@@ -1075,6 +1087,9 @@ export function UnifiedModelPanel({
                       entry={row.entry}
                       anchor={row.anchor}
                       config={config}
+                      {...(effectiveRail.kind === 'all' || effectiveRail.kind === 'favorites'
+                        ? { sourceLabel: providerLabel(row.entry.providerId) }
+                        : {})}
                       selected={isSelectedRow(row.anchor, row.entry)}
                       active={sameAnchor(flyAnchor, row.anchor)}
                       isFavoriteRow={!!row.favorite}
@@ -1145,6 +1160,7 @@ export function UnifiedModelPanel({
                       entry={row.entry}
                       anchor={row.anchor}
                       config={config}
+                      sourceLabel={providerLabel(row.entry.providerId)}
                       selected={false}
                       active={false}
                       isFavoriteRow={!!row.favorite}
@@ -1184,7 +1200,12 @@ export function UnifiedModelPanel({
         >
           {(() => {
             const target = flyTarget;
-            const config = configOf(target.entry, target.favorite);
+            // 深度 / Fast 写入在途时显示目标值,松手即停在新档(见 withOptimisticConfig)。
+            const config = withOptimisticConfig(
+              target.anchor,
+              configOf(target.entry, target.favorite),
+              optimisticConfig,
+            );
             const state: ModelConfigFlyoutState = target.favorite
               ? 'favorite'
               : config.customized
@@ -1230,5 +1251,10 @@ export function UnifiedModelPanel({
         </UnifiedFlyoutHost>
       )}
     </div>
+  );
+  return (
+    <ModelSourceUsageProvider providers={providers} scope={providerUsage}>
+      {panelContent}
+    </ModelSourceUsageProvider>
   );
 }

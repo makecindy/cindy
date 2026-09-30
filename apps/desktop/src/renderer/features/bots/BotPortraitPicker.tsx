@@ -1,25 +1,34 @@
+import { Button } from '@/components/ui/button';
 import * as Popover from '@radix-ui/react-popover';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Camera, Check, ChevronDown } from 'lucide-react';
+import { Camera, Check, ChevronDown, Plus } from 'lucide-react';
+import cindyPortrait from '@/assets/bot-presets/cindy.png';
+import { Tip } from '@/components/ui/tooltip';
 import gallery from '../../../../resources/teammate-portrait-gallery.png';
-import { Spinner } from '@/components/ui/spinner';
 import { BOT_AVATAR_MAX_BYTES } from '../../../shared/botAvatarValue';
 
+export const BOT_PORTRAIT_COUNT = 17;
+
+/** Cindy first, followed by the original 4×4 sheet in its existing order. */
 export async function galleryPortrait(index: number): Promise<string> {
+  if (!Number.isInteger(index) || index < 0 || index >= BOT_PORTRAIT_COUNT) {
+    throw new Error('Unknown portrait');
+  }
   const image = new Image();
-  image.src = gallery;
+  image.src = index === 0 ? cindyPortrait : gallery;
   await image.decode();
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 256;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Portrait unavailable');
+  const cell = index - 1;
   ctx.drawImage(
     image,
-    ((index % 4) * image.width) / 4,
-    (Math.floor(index / 4) * image.height) / 4,
-    image.width / 4,
-    image.height / 4,
+    index === 0 ? 0 : ((cell % 4) * image.width) / 4,
+    index === 0 ? 0 : (Math.floor(cell / 4) * image.height) / 4,
+    index === 0 ? image.width : image.width / 4,
+    index === 0 ? image.height : image.height / 4,
     0,
     0,
     256,
@@ -33,11 +42,22 @@ export function BotPortraitPicker({
   token,
   disabled,
   onChange,
+  onUpload,
+  onPreparingChange,
+  trigger,
+  fallback,
 }: {
   value?: string;
   token?: string;
   disabled?: boolean;
   onChange: (value: string) => void;
+  /** Editing can retain the existing host-owned file chooser. */
+  onUpload?: () => void;
+  /** Synchronous navigation guard while decoding a selection or reading a file. */
+  onPreparingChange?: (pending: boolean) => void;
+  trigger?: ReactElement;
+  /** Current avatar artwork or glyph when there is no image draft. */
+  fallback?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -47,6 +67,17 @@ export function BotPortraitPicker({
   const file = useRef<HTMLInputElement>(null);
   const generation = useRef(0);
   const currentToken = useRef(token);
+  const preparing = useRef(false);
+  const preparingChange = useRef(onPreparingChange);
+  preparingChange.current = onPreparingChange;
+  const setPreparing = (pending: boolean) => {
+    if (preparing.current === pending) return;
+    preparing.current = pending;
+    preparingChange.current?.(pending);
+  };
+  const finishPreparing = (request: number) => {
+    if (request === generation.current) setPreparing(false);
+  };
   useEffect(() => {
     currentToken.current = token;
     setCandidate(undefined);
@@ -54,12 +85,14 @@ export function BotPortraitPicker({
   useEffect(
     () => () => {
       generation.current++;
+      setPreparing(false);
     },
     [],
   );
   const select = async (index: number) => {
     if (disabled) return;
     const current = ++generation.current;
+    setPreparing(true);
     try {
       const portrait = await galleryPortrait(index);
       if (current !== generation.current) return;
@@ -67,7 +100,9 @@ export function BotPortraitPicker({
       setOpen(false);
       setError(false);
     } catch {
-      setError(true);
+      if (current === generation.current) setError(true);
+    } finally {
+      finishPreparing(current);
     }
   };
   const generate = async () => {
@@ -87,77 +122,109 @@ export function BotPortraitPicker({
   return (
     <Popover.Root open={open && !disabled} onOpenChange={setOpen}>
       <div className="relative shrink-0">
-        <Popover.Trigger asChild>
-          <button
-            type="button"
-            disabled={disabled}
-            aria-expanded={open}
-            aria-label={t('bots.profile.changeAvatar')}
-            className="relative flex h-24 w-24 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-          >
-            {value ? (
-              <img src={value} alt="" className="h-full w-full rounded-full object-cover" />
-            ) : (
-              <Camera size={24} />
+        <Tip text={t(disabled ? 'bots.autosave.saving' : 'bots.profile.changeAvatar')}>
+          <Popover.Trigger asChild>
+            {trigger ?? (
+              <button
+                type="button"
+                disabled={disabled}
+                aria-expanded={open}
+                aria-label={t('bots.profile.changeAvatar')}
+                className="relative flex h-24 w-24 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              >
+                {value ? (
+                  <img src={value} alt="" className="h-full w-full rounded-full object-cover" />
+                ) : (
+                  (fallback ?? <Camera size={24} />)
+                )}
+                <span className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--confirm-bg)]">
+                  <ChevronDown size={14} />
+                </span>
+              </button>
             )}
-            <span className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--confirm-bg)]">
-              <ChevronDown size={14} />
-            </span>
-          </button>
-        </Popover.Trigger>
+          </Popover.Trigger>
+        </Tip>
         <Popover.Portal>
           <Popover.Content
             align="start"
             sideOffset={12}
-            className="z-[60] w-72 max-w-[calc(100vw-80px)] rounded-xl border border-[var(--border-default)] bg-[var(--confirm-bg)] p-3"
+            collisionPadding={16}
+            className="z-[60] w-[360px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--confirm-bg)] p-3"
           >
-            <div className="grid grid-cols-4 gap-2">
-              {Array.from({ length: 16 }, (_, index) => (
+            <div className="grid grid-cols-4 gap-2 min-[400px]:grid-cols-6">
+              {Array.from({ length: BOT_PORTRAIT_COUNT }, (_, index) => {
+                const label = index === 0 ? 'Cindy' : t('bots.guided.portrait', { number: index });
+                const cell = index - 1;
+                return (
+                  <Tip key={index} text={label}>
+                    <button
+                      type="button"
+                      aria-label={label}
+                      onClick={() => void select(index)}
+                      className="aspect-square rounded-full outline-none ring-offset-2 ring-offset-[var(--confirm-bg)] hover:ring-1 hover:ring-[var(--border-default)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                      style={{
+                        backgroundImage: `url(${index === 0 ? cindyPortrait : gallery})`,
+                        backgroundSize: index === 0 ? 'cover' : '400% 400%',
+                        backgroundPosition:
+                          index === 0
+                            ? 'center'
+                            : `${((cell % 4) * 100) / 3}% ${(Math.floor(cell / 4) * 100) / 3}%`,
+                      }}
+                    />
+                  </Tip>
+                );
+              })}
+              <Tip text={t('bots.guided.upload')}>
                 <button
-                  key={index}
                   type="button"
-                  aria-label={t('bots.guided.portrait', { number: index + 1 })}
-                  onClick={() => void select(index)}
-                  className="aspect-square rounded-full outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-                  style={{
-                    backgroundImage: `url(${gallery})`,
-                    backgroundSize: '400% 400%',
-                    backgroundPosition: `${((index % 4) * 100) / 3}% ${(Math.floor(index / 4) * 100) / 3}%`,
+                  aria-label={t('bots.guided.upload')}
+                  onClick={() => {
+                    generation.current++;
+                    setPreparing(false);
+                    if (onUpload) {
+                      setOpen(false);
+                      onUpload();
+                    } else file.current?.click();
                   }}
-                />
-              ))}
+                  className="flex aspect-square items-center justify-center rounded-full border border-[var(--border-default)] text-[var(--text-secondary)] outline-none hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                >
+                  <Plus size={20} aria-hidden="true" />
+                </button>
+              </Tip>
             </div>
-            <div className="mt-3 flex gap-1 border-t border-[var(--border-default)] pt-2">
-              <button
-                type="button"
-                onClick={() => file.current?.click()}
-                className="h-9 flex-1 rounded-full text-12 hover:bg-[var(--surface-hover)]"
-              >
-                {t('bots.guided.upload')}
-              </button>
-              {token && <button
-                type="button"
-                disabled={busy}
-                onClick={() => void generate()}
-                className="inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-full text-12 hover:bg-[var(--surface-hover)] disabled:opacity-50"
-              >
-                {busy && <Spinner size={12} />}
-                {t('bots.guided.generateAvatar')}
-              </button>}
-            </div>
+            {token && (
+              <div className="mt-3 flex gap-1 border-t border-[var(--border-default)] pt-2">
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  tone="quiet"
+                  loading={busy}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void generate()}
+                  className="flex-1"
+                >
+                  {t('bots.guided.generateAvatar')}
+                </Button>
+              </div>
+            )}
             {candidate && (
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
+                compact
+                tone="quiet"
                 type="button"
                 onClick={() => {
                   onChange(candidate);
                   setOpen(false);
                 }}
-                className="mt-2 flex w-full items-center gap-3 rounded-full p-1 text-12 hover:bg-[var(--surface-hover)]"
+                className="mt-2 w-full h-auto min-h-12 justify-start p-1 gap-3"
               >
                 <img src={candidate} alt="" className="h-10 w-10 rounded-full" />
                 <span>{t('bots.guided.useAvatar')}</span>
                 <Check size={14} />
-              </button>
+              </Button>
             )}
             {error && (
               <p role="alert" className="mt-2 text-12 text-[var(--text-danger)]">
@@ -183,17 +250,32 @@ export function BotPortraitPicker({
               setError(true);
               return;
             }
+            if (disabled) return;
             const current = ++generation.current;
-            const reader = new FileReader();
-            reader.onload = () => {
-              if (current === generation.current) {
-                onChange(String(reader.result));
-                setError(false);
-                setOpen(false);
-              }
-            };
-            reader.onerror = () => setError(true);
-            reader.readAsDataURL(selected);
+            setPreparing(true);
+            try {
+              const reader = new FileReader();
+              reader.onload = () => {
+                try {
+                  if (current === generation.current) {
+                    onChange(String(reader.result));
+                    setError(false);
+                    setOpen(false);
+                  }
+                } finally {
+                  finishPreparing(current);
+                }
+              };
+              reader.onerror = () => {
+                if (current === generation.current) setError(true);
+                finishPreparing(current);
+              };
+              reader.onabort = () => finishPreparing(current);
+              reader.readAsDataURL(selected);
+            } catch {
+              if (current === generation.current) setError(true);
+              finishPreparing(current);
+            }
           }}
         />
       </div>

@@ -2,8 +2,7 @@ import type { AgentEvent } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  CINDY_MAKE_COMMIT_AUTHOR,
-  commitCindyMakeChanges,
+  collectCindyMakeChanges,
   createCindyMakeCompletionTracker,
   type CindyMakeCompletionSession,
 } from '../completion';
@@ -84,12 +83,13 @@ describe('cindy_make completion tracker', () => {
     expect(warn).toHaveBeenCalled();
   });
 
-  it('treats a terminal error as the end of the turn', async () => {
+  it('does not commit or publish completion when the turn ends with an error after reporting', async () => {
     const { session, emit } = fakeSession();
     const persist = vi.fn(async () => undefined);
+    const collectFacts = vi.fn(async () => ({}));
     const tracker = createCindyMakeCompletionTracker({
       getSession: () => session,
-      collectFacts: async () => ({}),
+      collectFacts,
       persist,
       logger: { warn: vi.fn() },
     });
@@ -99,58 +99,55 @@ describe('cindy_make completion tracker', () => {
     expect(persist).not.toHaveBeenCalled();
     emit({ type: 'error', data: { isTerminal: true } } as AgentEvent);
     await flush();
-    expect(persist).toHaveBeenCalledTimes(1);
+    expect(persist).not.toHaveBeenCalled();
+    expect(collectFacts).not.toHaveBeenCalled();
+    expect(tracker.isPending('make-3')).toBe(false);
+  });
+
+  it.each([
+    { status: 'cancelled' },
+    { status: 'interrupted' },
+    { status: 'failed' },
+    { is_error: true },
+  ])('does not commit a reported change after an unsuccessful done: %j', async (data) => {
+    const { session, emit, listenerCount } = fakeSession();
+    const collectFacts = vi.fn(async () => ({}));
+    const persist = vi.fn(async () => undefined);
+    const tracker = createCindyMakeCompletionTracker({
+      getSession: () => session,
+      collectFacts,
+      persist,
+      logger: { warn: vi.fn() },
+    });
+    await tracker.report('make-stopped');
+    emit({ type: 'done', data } as AgentEvent);
+    await flush();
+    expect(collectFacts).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
+    expect(tracker.isPending('make-stopped')).toBe(false);
+    expect(listenerCount()).toBe(0);
+
+    // A later successful turn must explicitly report its own completion.
+    emit({ type: 'done', data: {} } as AgentEvent);
+    await flush();
+    expect(collectFacts).not.toHaveBeenCalled();
+    await tracker.report('make-stopped');
+    emit({ type: 'done', data: {} } as AgentEvent);
+    await flush();
+    expect(collectFacts).toHaveBeenCalledOnce();
+    expect(persist).toHaveBeenCalledOnce();
   });
 });
 
-describe('commitCindyMakeChanges', () => {
-  it('commits the worktree with a fixed identity and reports the new commit', async () => {
-    let head = 'aaaaaaa1111';
-    const git = vi.fn(async (args: string[]) => {
-      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return 'cindy-make/run-1\n';
-      if (args[0] === 'status') return ' M a.ts\n?? b.ts\n\n';
-      if (args[0] === 'add') return '';
-      if (args.includes('commit')) {
-        head = 'bbbbbbb2222';
-        return '';
-      }
-      if (args[0] === 'rev-parse') return `${head}\n`;
-      throw new Error(`unexpected ${args.join(' ')}`);
-    });
-    await expect(commitCindyMakeChanges(git, 'Cindy Make: 修复闪烁')).resolves.toEqual({
-      branch: 'cindy-make/run-1',
-      changedFiles: 2,
-      commit: 'bbbbbbb2222',
-    });
-    const commitCall = git.mock.calls.map(([args]) => args).find((args) => args.includes('commit'));
-    expect(commitCall).toEqual(
-      expect.arrayContaining([
-        `user.name=${CINDY_MAKE_COMMIT_AUTHOR}`,
-        '--no-verify',
-        '--message',
-        'Cindy Make: 修复闪烁',
-      ]),
-    );
-    expect(git).toHaveBeenCalledWith(['add', '--all']);
-  });
-
-  it('does not commit when nothing changed and keeps whichever answer Git can still give', async () => {
-    const clean = vi.fn(async (args: string[]) => {
-      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return 'HEAD';
-      if (args[0] === 'status') return '';
-      if (args[0] === 'rev-parse') return 'abcdef1234567';
-      throw new Error('unexpected');
-    });
-    await expect(commitCindyMakeChanges(clean, 'msg')).resolves.toEqual({
-      changedFiles: 0,
-      commit: 'abcdef1234567',
-    });
-    expect(clean.mock.calls.some(([args]) => args.includes('commit'))).toBe(false);
-
-    const broken = vi.fn(async (args: string[]) => {
-      if (args[0] === 'status' || args[1] === '--abbrev-ref') throw new Error('not a repo');
-      return 'not-a-hash';
-    });
-    await expect(commitCindyMakeChanges(broken, 'msg')).resolves.toEqual({});
-  });
+describe('completion branch protection', () => {
+  it.each(['main', 'cindy-personal', 'HEAD', 'cindy-make/another'])(
+    'refuses to snapshot an unexpected branch: %s',
+    async (branch) => {
+      const git = vi.fn(async () => branch);
+      await expect(
+        collectCindyMakeChanges(git, 'profile', 'profile/cindy-make/worktrees/run'),
+      ).rejects.toThrow('Unexpected Cindy Make worktree');
+      expect(git).toHaveBeenCalledTimes(1);
+    },
+  );
 });

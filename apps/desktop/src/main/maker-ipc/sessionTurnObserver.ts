@@ -7,6 +7,7 @@ import { describeModelRouteRejection } from '../maker-host/model-route-guard.js'
 import { SilentStopTurnLeaseGate, SessionTurnLeaseTracker } from './sessionTurnLease.js';
 
 export interface InstallSessionTurnObserverDeps {
+  readonly beforeLocalProviderStart?: (session: Session) => Promise<void>;
   readonly silentStopTurnLeaseGate: Pick<
     SilentStopTurnLeaseGate,
     'supersede' | 'schedule' | 'supersedeOwnedBy'
@@ -23,6 +24,7 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
   session.setTurnLifecycleObserver({
     beforeProviderStart: async (turnGeneration) => {
       if (session.remoteHostId) return;
+      await deps.beforeLocalProviderStart?.(session);
       // 每条本地 Session.send 都经过这一个 Main-owned 边界，包括 renderer、IM、
       // Goal、Learn、Hook 与 Scheduler。付费权限不能只挂在普通 IPC 发送事务上。
       const model = session.model;

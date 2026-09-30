@@ -88,7 +88,11 @@ export function projectLargeSettledToolInputs(
     return {
       ...message,
       content: {
-        input: null,
+        input: /(?:^|:|__)ghost_call$/.test(tool.toolName) && tool.input && typeof tool.input === 'object'
+          ? Object.fromEntries(['ghost_id', 'tool', 'grant_only'].flatMap((key) => {
+            const value = (tool.input as Record<string, unknown>)[key];
+            return typeof value === 'boolean' || (typeof value === 'string' && value.length <= 256) ? [[key, value]] : [];
+          })) : null,
         mobilePayloadProjected: true,
         toolName: tool.toolName,
         toolUseId: tool.toolUseId,

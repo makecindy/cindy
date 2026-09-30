@@ -15,6 +15,49 @@ import {
 // 判定单测的核心是**白名单收紧**:自动重试一个确定性失败(认证过期、协议错)会反复
 // 烧额度并反复报错,所以只有识别得了的"上游把 turn 打断了"才允许自愈。
 describe('isInterruptedTurnError', () => {
+  const availabilityError = "Error Code null: Service temporarily unavailable. The model's availability is currently degraded.";
+
+  it('recovers code-less service availability errors and opaque HTTP 503 errors', () => {
+    expect(isInterruptedTurnError({ message: availabilityError })).toBe(true);
+    expect(isInterruptedTurnError({ message: 'opaque', errorStatus: 503 })).toBe(true);
+  });
+
+  it.each([400, 401, 402, 403, 404, 413, 429])(
+    'does not override explicit HTTP %s with availability wording', (errorStatus) => {
+      expect(isInterruptedTurnError({ message: availabilityError, errorStatus })).toBe(false);
+    },
+  );
+
+  it.each(
+    ['authentication_failed', 'authentication_error', 'billing_error', 'rate_limit', 'invalid_request', 'permission_error', 'insufficient_quota', 'context_length_exceeded']
+      .flatMap(sdkError => [undefined, 502, 503, 504, 529].map(errorStatus => ({ sdkError, errorStatus }))),
+  )(
+    'does not override $sdkError with availability wording or HTTP $errorStatus', ({ sdkError, errorStatus }) => {
+      expect(isInterruptedTurnError({ message: availabilityError, sdkError, errorStatus })).toBe(false);
+    },
+  );
+
+  it.each([502, 503, 504, 529])('still recovers HTTP %s without a rejection category', (errorStatus) => {
+    expect(isInterruptedTurnError({ message: 'opaque', sdkError: 'server_error', errorStatus })).toBe(true);
+  });
+
+  it('preserves text compatibility for unclassified server errors', () => {
+    expect(isInterruptedTurnError({ message: availabilityError, errorStatus: 500 })).toBe(true);
+    expect(isInterruptedTurnError({ message: 'Selected model is at capacity.', errorStatus: 500 })).toBe(true);
+    expect(isInterruptedTurnError({ message: 'opaque', errorStatus: 500 })).toBe(false);
+  });
+
+  it('does not layer host retries over exhausted Pi retries', () => {
+    expect(isInterruptedTurnError({ message: availabilityError, reason: 'pi-gateway-drop' })).toBe(false);
+  });
+
+  it('never automatically resumes a detected tool loop, even with network-like text', () => {
+    expect(isInterruptedTurnError({
+      reason: 'tool_use_loop_detected', message: 'Request timed out',
+      toolLoop: { kind: 'rotation', count: 128 },
+    })).toBe(false);
+    expect(isAcceptedTurnContinuationOnlyReason('tool_use_loop_detected')).toBe(false);
+  });
   it.each(['bridge_upstream_response_idle_timeout', 'bridge_turn_no_event_timeout'])(
     'does not continue a bridge timeout before the user input has executed: %s', (reason) => {
     expect(isInterruptedTurnError({ reason, message: 'request timed out' })).toBe(false);
@@ -272,6 +315,48 @@ describe('isInterruptedTurnError', () => {
     expect(isInterruptedTurnError({ message: '503 Service Unavailable', errorStatus: 503 })).toBe(
       true,
     );
+  });
+
+  it('does not auto-resume when the inference gateway has no available OAuth accounts', () => {
+    const exact =
+      'API Error: 503 {"error":"No available OAuth accounts in pool","detail":"No available OAuth accounts: 12 cooling down."}';
+    expect(isInterruptedTurnError({ message: exact, errorStatus: 503 })).toBe(false);
+    expect(
+      isInterruptedTurnError({
+        message: '503 Service Unavailable: No available OAuth accounts: 12 cooling down.',
+      }),
+    ).toBe(false);
+    // A stable reason must not override this non-retryable provider signal.
+    expect(
+      isInterruptedTurnError({
+        reason: 'upstream-overload',
+        message: 'No available OAuth accounts in pool',
+        errorStatus: 503,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not broaden the OAuth-pool exception to a different HTTP status', () => {
+    expect(
+      isInterruptedTurnError({
+        message: 'No available OAuth accounts in pool',
+        errorStatus: 400,
+      }),
+    ).toBe(false);
+    // The overload reason normally bypasses message checks. Keeping it retryable
+    // for a non-503 status proves the OAuth exception is scoped to HTTP 503.
+    expect(
+      isInterruptedTurnError({
+        reason: 'upstream-overload',
+        message: 'No available OAuth accounts in pool',
+        errorStatus: 400,
+      }),
+    ).toBe(true);
+    expect(
+      isInterruptedTurnError({
+        message: 'No available OAuth accounts in pool',
+      }),
+    ).toBe(false);
   });
 
   // 第三类:上游没容量。与 #844 的分工靠「本 turn 有没有产出」划清(见判定函数注释),

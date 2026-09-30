@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>远程桌面 · 控制端比例预览</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #fafafa;
+      --surface: #fff;
+      --chip: #e5e5e5;
+      --fg: #262626;
+      --muted: #737373;
+      --border: #d7d7d4;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #202020;
+        --surface: #2c2c2a;
+        --chip: #3c3c3a;
+        --fg: #d4d4d4;
+        --muted: #a3a3a3;
+        --border: #3c3c3a;
+      }
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font:
+        14px/1.5 Inter,
+        -apple-system,
+        BlinkMacSystemFont,
+        sans-serif;
+    }
+    main {
+      max-width: 1100px;
+      margin: 32px auto;
+      padding: 0 24px;
+    }
+    h1 {
+      font-size: 18px;
+      font-weight: 500;
+    }
+    p {
+      color: var(--muted);
+    }
+    button {
+      font: inherit;
+      background: var(--chip);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 9999px;
+      min-height: 44px;
+      padding: 8px 20px;
+      cursor: pointer;
+    }
+    button:focus-visible {
+      outline: 2px solid var(--fg);
+      outline-offset: 3px;
+    }
+    button:hover {
+      filter: brightness(0.95);
+    }
+    .layout {
+      display: flex;
+      gap: 32px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .settings {
+      width: 300px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .settings h2 {
+      font-size: 14px;
+      font-weight: 500;
+      margin: 0 0 16px;
+    }
+    .settings button {
+      width: 100%;
+    }
+    .settings p {
+      font-size: 12px;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-top: 1px solid var(--border);
+    }
+    .phone {
+      width: 312px;
+      height: 620px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--chip);
+      display: flex;
+      flex-direction: column;
+    }
+    .phone.landscape {
+      width: 580px;
+      height: 300px;
+    }
+    .canvas {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .desktop {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      flex: none;
+      overflow: hidden;
+    }
+    .menu {
+      height: 24px;
+      background: var(--chip);
+      font-size: 10px;
+      padding: 4px 10px;
+    }
+    .content {
+      height: calc(100% - 24px);
+      display: flex;
+      gap: 8px;
+      padding: 10px;
+      align-items: stretch;
+    }
+    .files {
+      width: 24%;
+      min-width: 38px;
+      background: var(--bg);
+      font-size: 10px;
+      padding: 6px;
+    }
+    .editor {
+      flex: 1;
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 11px;
+    }
+    .editor h3 {
+      font-size: 12px;
+      font-weight: 500;
+      margin: 0 0 10px;
+    }
+    .editor p {
+      margin: 8px 0;
+    }
+    .toolbar {
+      height: 50px;
+      flex: none;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      font-size: 12px;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+    output {
+      font-variant-numeric: tabular-nums;
+    }
+    .caption {
+      font-size: 12px;
+      max-width: 580px;
+    }
+  </style>
+  <main>
+    <h1>远程桌面 · 按控制端比例调整</h1>
+    <p>交互预览，使用示例桌面。这里不连接或修改真实电脑。</p>
+    <div class="actions">
+      <button id="rotate">切换横竖屏</button
+      ><button id="reset">恢复电脑比例</button>
+    </div>
+    <div class="layout">
+      <section>
+        <div class="phone" id="phone">
+          <div class="canvas" id="canvas">
+            <div class="desktop" id="desktop">
+              <div class="menu">桌面　文件　编辑　窗口</div>
+              <div class="content">
+                <aside class="files">
+                  文件<br /><br />项目<br /><br />文档
+                </aside>
+                <article class="editor">
+                  <h3>今天的工作</h3>
+                  <p>继续处理电脑上的内容。</p>
+                  <p>点击右侧按钮，让桌面采用当前画面区域的比例。</p>
+                  <p>桌面尺寸改变后，内容区域随之变化。</p>
+                </article>
+              </div>
+            </div>
+          </div>
+          <div class="toolbar">
+            <span>返回</span><span>键盘</span><span>操作</span>
+          </div>
+        </div>
+        <p class="caption">
+          旋转后再点一次调整；工具栏和键盘不会自动触发远端切屏。
+        </p>
+      </section>
+      <section class="settings">
+        <h2>显示</h2>
+        <div class="row">
+          <span>电脑分辨率</span><output id="size">2560 × 1440</output>
+        </div>
+        <button id="match">按当前画面比例调整</button>
+        <p>临时调整电脑桌面比例，保留当前桌面内容。退出连接后恢复原分辨率。</p>
+        <p id="status" role="status">当前使用电脑比例。</p>
+      </section>
+    </div>
+  </main>
+  <script>
+    const canvas = document.getElementById("canvas"),
+      desktop = document.getElementById("desktop"),
+      phone = document.getElementById("phone"),
+      size = document.getElementById("size"),
+      status = document.getElementById("status");
+    let width = 2560,
+      height = 1440;
+    function render() {
+      const scale = Math.min(
+        canvas.clientWidth / width,
+        canvas.clientHeight / height,
+      );
+      desktop.style.width = width * scale + "px";
+      desktop.style.height = height * scale + "px";
+      size.value = width + " × " + height;
+    }
+    document.getElementById("match").onclick = () => {
+      const scale = 1920 / Math.max(canvas.clientWidth, canvas.clientHeight);
+      width = Math.round((canvas.clientWidth * scale) / 2) * 2;
+      height = Math.round((canvas.clientHeight * scale) / 2) * 2;
+      render();
+      status.textContent = "已按当前画面区域调整。";
+    };
+    document.getElementById("rotate").onclick = () => {
+      phone.classList.toggle("landscape");
+      render();
+      status.textContent = "画面方向已变，可再次调整桌面比例。";
+    };
+    document.getElementById("reset").onclick = () => {
+      width = 2560;
+      height = 1440;
+      render();
+      status.textContent = "已恢复电脑比例。";
+    };
+    new ResizeObserver(render).observe(canvas);
+    render();
+  </script>
+</html>

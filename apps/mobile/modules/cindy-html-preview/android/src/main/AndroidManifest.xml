@@ -1,0 +1,3 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application android:networkSecurityConfig="@xml/cindy_html_preview_network_security" />
+</manifest>

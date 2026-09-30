@@ -6,7 +6,7 @@
     "footerConnecting": "連線中…",
     "folderEmpty": "資料夾為空。",
     "noWorkdir": "該任務沒有工作目錄，無法瀏覽檔案。",
-    "rootDir": "(根目錄)",
+    "rootDir": "（根目錄）",
     "copyPath": "複製路徑",
     "sendToSession": "傳送到對話",
     "exportShare": "匯出 / 分享",
@@ -80,6 +80,13 @@
     }
   },
   "preview": {
+    "browserBack": "上一頁",
+    "browserForward": "下一頁",
+    "browserMore": "更多操作",
+    "browserShowSource": "檢視原始碼",
+    "browserShowPage": "返回網頁",
+    "browserAddToTask": "加入目前任務",
+    "browserFileInfo": "檔案資訊",
     "done": "完成",
     "a11yShare": "匯出分享",
     "copyPath": "複製路徑",
@@ -93,12 +100,17 @@
     "fetchPdfFailed": "取回 PDF 失敗：{{detail}}",
     "fetchingPdf": "正在從電腦取回 PDF…",
     "unsupportedType": "此型別暫不支援在手機上預覽",
-    "oversize": "檔案超過預覽上限({{size}})，可下載原檔案檢視",
+    "oversize": "檔案超過預覽上限（{{size}}），可下載原檔案檢視",
     "oversizeUnknown": "過大",
     "binaryFile": "二進位制檔案，無法以文字預覽",
     "readFailed": "讀取失敗",
     "truncated2mb": "檔案超過 2 MB，僅顯示前 2 MB 內容",
     "truncatedLines": "僅顯示前 {{lines}} 行",
+    "htmlUpdateMobile": "請更新手機版 Cindy 後預覽網頁，仍可切換到原始碼查看。",
+    "htmlUpdateDesktop": "請更新所連接電腦上的 Cindy 後預覽網頁。",
+    "htmlSnapshotTooLarge": "資料夾過大，請將網頁及其資源放到較小的資料夾後重試。",
+    "htmlSnapshotFailed": "網頁載入失敗，請檢查連線後重試。",
+    "htmlReload": "重新載入網頁",
     "fetchingHtmlResources": "正在取回頁面資源…",
     "htmlResourcesMissing": "{{count}} 項頁面資源沒取到，可能缺圖或缺樣式",
     "htmlResourcesTruncated": "頁面資源過多，只處理了前 {{limit}} 項",
@@ -114,7 +126,14 @@
     "originalFailedThumb": "原圖取回失敗，當前為縮圖",
     "fetchingOriginalHint": "縮圖 · 正在取回原圖…",
     "a11yExportShareFile": "匯出分享原檔案",
-    "exportShare": "匯出 / 分享"
+    "exportShare": "匯出 / 分享",
+    "browserAddress": "網址",
+    "browserCancelAddress": "取消編輯",
+    "browserReturnToFile": "返回檔案",
+    "browserCopyAddress": "複製網址",
+    "browserCopiedAddress": "已複製網址",
+    "browserInvalidAddress": "請輸入有效的 http 或 https 網址。",
+    "browserWebsiteFailed": "無法開啟網頁，請嘗試重新載入。"
   },
   "export": {
     "exportFailed": "匯出失敗",
@@ -122,6 +141,6 @@
     "exportTimeout": "匯出超時，請重試"
   },
   "gallery": {
-    "cacheMiss": "遠端媒體快取未命中(cachedOnly)"
+    "cacheMiss": "這個媒體還沒有快取到手機上，請在連上電腦後重新開啟"
   }
 }

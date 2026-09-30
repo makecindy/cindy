@@ -439,6 +439,7 @@ describe('sessionRepo.createFreshSession', () => {
       providerId: 'xai',
       permissionMode: 'bypassPermissions',
       workingDir: '/tmp/telegram',
+      defaultRouteFingerprint: 'fp-telegram',
     };
     mocks.selectLimit.mockResolvedValueOnce([old]);
     const repo = createImSessionRepo(
@@ -469,6 +470,15 @@ describe('sessionRepo.createFreshSession', () => {
         }),
       }),
     );
+    const rotateCall = (mocks.tx.mock.calls as unknown as Array<[string, unknown]>).find(
+      ([name]) => name === 'im.rotateSession',
+    );
+    const rotated = rotateCall?.[1] as { session: { imDefaultRoute: string | null; effort: string } };
+    expect(JSON.parse(rotated.session.imDefaultRoute!)).toEqual({
+      v: 1,
+      fp: 'fp-telegram',
+      route: { agentKind: 'pi', model: 'grok-4.6', providerId: 'xai', effort: rotated.session.effort },
+    });
     expect(routeLock).toHaveBeenCalledWith('telegram_bot_user', expect.any(Function));
     expect(routeLock).toHaveBeenCalledWith('old-task', expect.any(Function));
   });

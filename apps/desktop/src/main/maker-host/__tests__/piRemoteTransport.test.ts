@@ -310,10 +310,8 @@ describe('killRemotePiManagerSession sessionId validation (sync rejection)', () 
 });
 
 // ---------------------------------------------------------------------------
-// 轮 40-w5 HIGH:SSH stdout 分帧缓冲的 OOM 守卫 —— 远端输出无换行字节流超过
-// 16MB(与本地 attachJsonlReader 对齐的硬上限)时必须关闭 transport, 而不是
-// 让主进程内存随远端字节流无界增长。用直连模式 + fake ExecStreamHandle 驱动
-// onStdoutBytes, 不依赖真实 SSH。
+// SSH stdout 分帧缓冲的 OOM 守卫 —— 远端输出无换行字节流超过 16MB 时丢掉当前
+// 行并resync, 不关 transport。合法 get_entries 带图历史可以超过该上限。
 // ---------------------------------------------------------------------------
 function fakeLogger() {
   const logger = {
@@ -342,7 +340,62 @@ describe('SSH stdout buffer overflow guard', () => {
     return { handlers, handle };
   }
 
-  it('closes the transport when remote streams >16MB without a newline', async () => {
+  it.each(['close', 'error'] as const)('redacts complete stderr lines and flushes the final tail before %s', async (end) => {
+    const { handlers, handle } = fakeChannel();
+    const logger = fakeLogger();
+    const transport = createSshPiTransport({
+      remoteHost: { id: 'test-host', execStream: vi.fn().mockResolvedValue(handle) } as unknown as RemoteHost,
+      binaryPath: '/remote/pi', args: ['--mode', 'rpc'], cwd: '/remote/workdir', env: {}, logger,
+    });
+    const lines: string[] = [];
+    transport.onStderr!((line) => lines.push(line));
+    const atClose: string[][] = [];
+    transport.onClose(() => atClose.push([...lines]));
+    await vi.waitFor(() => expect(handlers.onStderr).toBeDefined());
+    handlers.onStderr!('sessionTo');
+    handlers.onStderr!('ken=FAKE_OPAQUE_CREDENTIAL\r');
+    expect(lines).toEqual([]);
+    expect(logger.warn).not.toHaveBeenCalled();
+    handlers.onStderr!('\npassword="fake spaced');
+    handlers.onStderr!(' password"\nError: Failed to load extension placeholder');
+    if (end === 'close') handlers.onClose!({ code: 1, signal: null });
+    else handlers.onError!(new Error('channel failed'));
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain('[REDACTED]');
+    expect(lines[1]).toContain('[REDACTED]');
+    expect(lines[2]).toBe('Error: Failed to load extension placeholder');
+    expect(atClose).toEqual([lines]);
+    const output = JSON.stringify({ lines, logs: logger.warn.mock.calls });
+    expect(output).not.toContain('FAKE_OPAQUE_CREDENTIAL');
+    expect(output).not.toContain('fake spaced');
+    expect(output).not.toContain(' password');
+    handlers.onStderr!('late secret');
+    expect(lines).toHaveLength(3);
+  });
+
+  it('discards an entire oversized stderr line including its later chunks, then resumes', async () => {
+    const { handlers, handle } = fakeChannel();
+    const logger = fakeLogger();
+    const transport = createSshPiTransport({
+      remoteHost: { id: 'test-host', execStream: vi.fn().mockResolvedValue(handle) } as unknown as RemoteHost,
+      binaryPath: '/remote/pi', args: ['--mode', 'rpc'], cwd: '/remote/workdir', env: {}, logger,
+    });
+    const lines: string[] = [];
+    transport.onStderr!((line) => lines.push(line));
+    await vi.waitFor(() => expect(handlers.onStderr).toBeDefined());
+    handlers.onStderr!('sessionToken=' + 'x'.repeat(16 * 1024));
+    handlers.onStderr!('FAKE_SECRET_TAIL');
+    expect(lines).toEqual([]);
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(handle.kill).not.toHaveBeenCalled();
+    handlers.onStderr!('\nError: missing extension\n');
+    handlers.onStderr!('password=' + 'x'.repeat(16 * 1024) + 'FAKE_FINAL_TAIL');
+    handlers.onClose!({ code: 1, signal: null });
+    expect(lines).toEqual(['Error: missing extension']);
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('FAKE');
+  });
+
+  it('resyncs after an oversized unterminated line instead of closing the transport', async () => {
     const execStream = vi.fn();
     const host = { id: 'test-host', execStream } as unknown as RemoteHost;
     const { handlers, handle } = fakeChannel();
@@ -356,20 +409,24 @@ describe('SSH stdout buffer overflow guard', () => {
       env: {},
       logger: fakeLogger() as never,
     });
+    const lines: string[] = [];
+    const oversized: unknown[] = [];
+    transport.onLine((line) => lines.push(line));
+    transport.onOversizedFrame?.(() => oversized.push(true));
     const closed: PiTransportCloseInfo[] = [];
     transport.onClose((info) => closed.push(info));
 
     // 等 async IIFE 完成 channel 建立并注册 handlers。
     await vi.waitFor(() => expect(handlers.onStdoutBytes).toBeDefined());
 
-    // 单块无换行字节流超过 16MB 上限。
     handlers.onStdoutBytes!(Buffer.alloc(16 * 1024 * 1024 + 1, 0x61));
+    handlers.onStdoutBytes!(Buffer.from('residual-base64-fragment\n{"ok":1}\n'));
 
-    await vi.waitFor(() => expect(closed.length).toBe(1));
-    expect(closed[0].reason).toMatch(/buffer overflow/);
-    expect(handle.kill).toHaveBeenCalled(); // fireClose 关闭 channel
-    // transport 已关闭:后续写入必须 reject。
-    await expect(transport.writeLine('{"type":"request"}')).rejects.toThrow(/closed/);
+    expect(closed).toHaveLength(0);
+    expect(handle.kill).not.toHaveBeenCalled();
+    expect(oversized).toHaveLength(1);
+    expect(lines).toEqual(['{"ok":1}']);
+    await expect(transport.writeLine('{"type":"request"}')).resolves.toBeUndefined();
   });
 
   it('does not trip the guard on legitimately large line-framed output', async () => {

@@ -2747,6 +2747,59 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.isSessionRunning('s2')).toBe(true);
   });
 
+  it('reconciles a missed error-clear push from an authoritative active activity snapshot', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.applySessionActivity('dev-1', {
+      sessionId: 's1', phase: 'error', attention: true,
+    });
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'error', attention: true });
+
+    // 旧主机没有活动字段，运行标记本身不足以判定旧错误已读。
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', [{ sessionId: 's1', isTurnRunning: true }]);
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'error', attention: true });
+
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', [{
+      sessionId: 's1', isTurnRunning: true,
+      activityPhase: 'running', activityAttention: false,
+    }]);
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'running', attention: false });
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+
+    remoteSessionStore.applySessionActivity('dev-1', {
+      sessionId: 's1', phase: 'running', attention: false, workingPhase: 'testing',
+    });
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', [{
+      sessionId: 's1', isTurnRunning: true,
+      activityPhase: 'running', activityAttention: false,
+    }]);
+    expect(remoteSessionStore.getSessionLiveActivity('s1')?.workingPhase).toBe('testing');
+  });
+
+  it('does not let a delayed activity snapshot erase a newer error push', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const epoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
+    remoteSessionStore.applySessionActivity('dev-1', {
+      sessionId: 's1', phase: 'error', attention: true,
+    });
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', [{
+      sessionId: 's1', isTurnRunning: false,
+      activityPhase: 'completed', activityAttention: false,
+    }], epoch);
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'error', attention: true });
+  });
+
+  it('clears a cached error when the host explicitly reports no remaining activity', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.applySessionActivity('dev-1', {
+      sessionId: 's1', phase: 'error', attention: true,
+    });
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', [{
+      sessionId: 's1', isTurnRunning: false,
+      activityPhase: 'idle', activityAttention: false,
+    }]);
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toBeNull();
+  });
+
   it('does not treat an absent active-session row as an idle assertion', () => {
     vi.useFakeTimers();
     try {
@@ -2767,6 +2820,45 @@ describe('remoteSessionStore', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('clears a missed error and stale running state for a runtime absent from a complete snapshot', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.setDeviceSessions('dev-2', 'Mac mini', [session('s2')]);
+    remoteSessionStore.applySessionActivity('dev-1', {
+      sessionId: 's1', phase: 'error', attention: true,
+    });
+    remoteSessionStore.applySessionActivity('dev-2', {
+      sessionId: 's2', phase: 'error', attention: true,
+    });
+    remoteSessionStore.setSessionRunning('s1', true);
+
+    // A legacy host also returns an empty array, without claiming completeness.
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', []);
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'error', attention: true });
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', {
+      format: 'active-sessions-v2', sessions: [],
+    });
+
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toBeNull();
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(false);
+    expect(remoteSessionStore.getSessionLiveActivity('s2')).toMatchObject({ phase: 'error', attention: true });
+  });
+
+  it('does not let a delayed complete snapshot clear a newer activity push', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const epoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
+    remoteSessionStore.applySessionActivity('dev-1', {
+      sessionId: 's1', phase: 'error', attention: true,
+    });
+
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', {
+      format: 'active-sessions-v2', sessions: [],
+    }, epoch);
+
+    expect(remoteSessionStore.getSessionLiveActivity('s1')).toMatchObject({ phase: 'error', attention: true });
   });
 
   it('clears stale reconnect progress from an active snapshot without erasing newer retry events', () => {
@@ -3282,6 +3374,31 @@ describe('remoteSessionStore', () => {
       event: { type: 'done', data: {} },
     });
     expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
+  });
+
+  it('keeps terminal prediction eligibility through acknowledgement and clears it for the next run', () => {
+    pushMakerStatus('s1', { isRunning: true });
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1', event: { type: 'error', data: { message: 'Failed', isTerminal: true } },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(true);
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 's1', phase: 'completed', attention: false });
+    expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(true);
+    pushMakerStatus('s1', { isRunning: false });
+    expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(true);
+    pushMakerStatus('s1', { isRunning: true });
+    expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(false);
+  });
+
+  it('recovers a terminal error from activity even without its maker event', () => {
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 's1', phase: 'error', attention: false });
+    expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(true);
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 's1', phase: 'running' });
+    expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(false);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1', event: { type: 'error', data: { message: 'Retrying', isTerminal: false, willRetry: true } },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').hasTerminalError).toBe(false);
   });
 
   it.each(['ask_user_question', 'plan_review'])('keeps the product running while %s awaits confirmation across an SDK boundary', (kind) => {
@@ -6441,5 +6558,40 @@ describe('device-clock live row clamp (applyRemoteTextEvent createdAt, cross-clo
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('task tag source isolation', () => {
+  beforeEach(() => remoteSessionStore.clear());
+  it('invalidates a first list response before a shard exists, only for the source device', () => {
+    const epoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-a');
+    const otherEpoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-b');
+    remoteSessionStore.applyRemotePush('dev-a', 'local-db:task-tags:changed', { tags: [] });
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-a', epoch)).toBe(false);
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-b', otherEpoch)).toBe(true);
+    const replacementEpoch = remoteSessionStore.captureDeviceSessionListMutationEpoch('dev-a');
+    expect(remoteSessionStore.isDeviceSessionListMutationEpochCurrent('dev-a', replacementEpoch)).toBe(true);
+  });
+  it('projects rename and deletion only into the source computer task memberships', () => {
+    const tag = {
+      id: 'default:red',
+      name: 'Red',
+      color: 'red' as const,
+      favoriteOrder: 0,
+      revision: 1,
+    };
+    remoteSessionStore.setDeviceSessions('dev-a', 'A', [session('a', { tags: [tag] })]);
+    remoteSessionStore.setDeviceSessions('dev-b', 'B', [session('b', { tags: [tag] })]);
+    const renamed = { ...tag, name: 'Work', revision: 2 };
+    remoteSessionStore.applyRemotePush('dev-a', 'local-db:task-tags:changed', {
+      tags: [renamed],
+    });
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 'a')?.tags).toEqual([renamed]);
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 'b')?.tags).toEqual([tag]);
+    remoteSessionStore.applyRemotePush('dev-a', 'local-db:task-tags:changed', {
+      tags: [],
+    });
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 'a')?.tags).toEqual([]);
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 'b')?.tags).toEqual([tag]);
   });
 });

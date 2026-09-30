@@ -12,7 +12,7 @@ import type {
   ResolvedMediaInvocationGuide,
 } from '../../shared/mediaInvocation.js';
 import { MODEL_ACCESS_INVOCATION_GUIDE_SCHEMA_VERSION } from '../../shared/mediaInvocation.js';
-import { GHOST_IMAGE_ASPECT_RATIOS, type GhostImageAspectRatio } from '../../shared/ghost.js';
+import { imageParameterSchema, normalizeImageParameters, type ImageParameters } from './imageParameters.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import * as authManager from '../authManager.js';
 import * as imageCacheStore from '../imageCacheStore.js';
@@ -34,7 +34,8 @@ import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import * as blobStore from './blobStore.js';
 import { ingestMedia } from './ingest.js';
 import { downloadMediaResult, MediaDownloadError, type MediaDownloadContext } from './mediaDownload.js';
-import { mediaRequestParamsForLog, mediaRequestUrlForLog } from './mediaRequestLog.js';
+import { mediaErrorForLog, mediaErrorStackForLog, mediaRequestParamsForLog, mediaRequestUrlForLog } from './mediaRequestLog.js';
+import { normalizeBase64Payload, parseDataUrl } from './dataUrl.js';
 import {
   invokeProviderMedia,
   resolveProviderMediaModel,
@@ -96,11 +97,13 @@ function currentAuthScope(downloadContext?: MediaDownloadContext): MediaAuthScop
   const state = authManager.getAuthState();
   const userId = state.user?.id ?? null;
   const dbOwnerId = state.dataOwnerId;
-  if (!userId || !dbOwnerId) {
+  if (!dbOwnerId || (state.mode !== 'local' && !userId) || state.mode === 'signed-out') {
     throw new MediaInvocationError('CONNECTION_UNAVAILABLE', '当前没有可用的 Cindy 登录态');
   }
   return {
-    owner: `${authManager.getActiveAuthRealm()}:${userId}`,
+    owner: state.mode === 'local'
+      ? `local:${dbOwnerId}`
+      : `${authManager.getActiveAuthRealm()}:${userId}`,
     dbOwnerId,
     generation: state.ownerGeneration,
     downloadContext,
@@ -195,7 +198,7 @@ function providerImageGuide(
     schemaVersion: MODEL_ACCESS_INVOCATION_GUIDE_SCHEMA_VERSION,
     guideId: CLIENT_PROVIDER_IMAGE_GUIDE_ID,
     modelId: model.id,
-    revision: '1',
+    revision: '2',
     connection: { providerId: model.providerId },
     capability,
     request: {
@@ -212,8 +215,8 @@ function providerImageGuide(
       media: [{ path: ['image'], encoding: 'base64', kind: 'image' }],
     },
     instructions: edit
-      ? '必填 prompt 和 image。image 可传一条 Cindy 本地媒体引用或引用数组；可选 aspect_ratio。'
-      : '必填 prompt；可选 aspect_ratio。model 与凭证由 Cindy 注入。',
+      ? '必填 prompt 和 image。image 可传一条 Cindy 本地媒体引用或引用数组。尺寸与质量参数见 inputSchema；不要丢弃用户的明确要求。'
+      : '必填 prompt。尺寸与质量参数见 inputSchema；不指定时由上游决定。model 与凭证由 Cindy 注入。',
     exampleBody: {
       prompt: edit ? '描述希望如何修改图片' : '描述希望生成的图片',
       ...(edit ? { image: 'cindy-media://blobs/<hash>.png' } : {}),
@@ -234,7 +237,7 @@ function providerImageGuide(
               },
             }
           : {}),
-        aspect_ratio: { type: 'string', enum: [...GHOST_IMAGE_ASPECT_RATIOS] },
+        ...imageParameterSchema(model.imageProtocol, model.id),
       },
     },
     officialDocs: model.officialDocs ?? 'https://platform.openai.com/docs/guides/images',
@@ -373,15 +376,18 @@ function multipartRequestBody(
       if (typeof item !== 'string') {
         throw new MediaInvocationError('MEDIA_INPUT_INVALID', `媒体字段 ${field} 必须是媒体地址`);
       }
-      const match = /^data:([^;,]+);base64,([A-Za-z0-9+/=\r\n]+)$/i.exec(item);
-      if (!match) {
+      // 结构性解析（#5081）：单张 ≥ ~3MiB 的参考图在组装阶段抛 RangeError，
+      // 这里不再对数百万字符的 base64 载荷跑带捕获组的正则，只切分前缀并逐字符校验。
+      const parsed = parseDataUrl(item);
+      const encoded = parsed?.base64 ? normalizeBase64Payload(parsed.payload) : null;
+      if (!parsed || !encoded) {
         throw new MediaInvocationError(
           'MEDIA_INPUT_INVALID',
           `multipart 媒体字段 ${field} 必须使用 Cindy 受管媒体`,
         );
       }
-      const mimeType = match[1].toLowerCase();
-      const buffer = Buffer.from(match[2].replace(/[\r\n]/g, ''), 'base64');
+      const mimeType = parsed.mimeType;
+      const buffer = Buffer.from(encoded, 'base64');
       if (
         buffer.byteLength === 0 ||
         !mimeType.startsWith(`${fileGuide.kind}/`) ||
@@ -441,6 +447,9 @@ async function dispatchRequest(input: {
     url: mediaRequestUrlForLog(url),
   };
   let responseStatus: number | undefined;
+  // 组装/日志阶段任何异常都发生在出站之前：请求从未发起、不产生费用，必须与
+  // 「结果未知」的上游失败区分开（#5081：RangeError 曾被包成 SUBMISSION_OUTCOME_UNKNOWN）。
+  let dispatched = false;
   try {
     const requestBody = input.body
       ? input.bodyEncoding === 'multipart'
@@ -451,6 +460,7 @@ async function dispatchRequest(input: {
       ...requestLog,
       params: mediaRequestParamsForLog(input.body ?? {}),
     });
+    dispatched = true;
     const response = await outboundFetch(url, {
       method: input.method,
       headers: {
@@ -505,13 +515,23 @@ async function dispatchRequest(input: {
       throw new MediaInvocationError('UPSTREAM_RESPONSE_INVALID', '上游成功响应不是合法 JSON');
     }
   } catch (error) {
+    const stack = mediaErrorStackForLog(error);
     log.warn('media request failed', {
       ...requestLog,
       ...(responseStatus !== undefined ? { status: responseStatus } : {}),
       durationMs: Date.now() - startedAt,
+      dispatched,
       error: mediaRequestParamsForLog(error instanceof Error ? error.message : String(error)),
+      ...(error instanceof Error ? { errorName: error.name } : {}),
+      ...(stack ? { stack } : {}),
     });
     if (error instanceof MediaInvocationError) throw error;
+    if (!dispatched) {
+      throw new MediaInvocationError(
+        'REQUEST_BUILD_FAILED',
+        `请求在本地组装失败，未向上游发起、不产生费用，可安全重试：${mediaErrorForLog(error)}`,
+      );
+    }
     const aborted = error instanceof Error && error.name === 'AbortError';
     if (input.operation === 'poll') {
       throw new MediaInvocationError(
@@ -696,27 +716,29 @@ async function localImagePath(
 async function providerImageRequest(
   invocation: StoredMediaInvocation,
   body: Record<string, unknown>,
-): Promise<{
+  model: ProviderMediaRuntimeModel,
+): Promise<ImageParameters & {
   prompt: string;
   imagePaths: string[];
-  aspectRatio?: GhostImageAspectRatio;
 }> {
   const prompt = body.prompt;
   if (typeof prompt !== 'string' || prompt.trim().length === 0 || prompt.length > 100_000) {
     throw new MediaInvocationError('REQUEST_INVALID', 'prompt 必须是非空字符串');
   }
-  let aspectRatio: GhostImageAspectRatio | undefined;
-  if (body.aspect_ratio !== undefined) {
-    if (
-      typeof body.aspect_ratio !== 'string' ||
-      !(GHOST_IMAGE_ASPECT_RATIOS as readonly string[]).includes(body.aspect_ratio)
-    ) {
-      throw new MediaInvocationError(
-        'REQUEST_INVALID',
-        `aspect_ratio 只支持 ${GHOST_IMAGE_ASPECT_RATIOS.join(' / ')}`,
-      );
+  let options: ImageParameters;
+  try {
+    const fields = new Set(['model', 'prompt', 'image', 'aspect_ratio', 'size', 'resolution', 'quality']);
+    for (const key of Object.keys(body)) {
+      if (!fields.has(key)) throw new Error(`Unsupported image parameter: ${key}; use prepare.input_schema.`);
     }
-    aspectRatio = body.aspect_ratio as GhostImageAspectRatio;
+    options = normalizeImageParameters(model.imageProtocol, model.id, {
+      aspectRatio: body.aspect_ratio as string | undefined,
+      size: body.size as string | undefined,
+      resolution: body.resolution as string | undefined,
+      quality: body.quality as string | undefined,
+    });
+  } catch (error) {
+    throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message);
   }
   const imagePaths: string[] = [];
   if (invocation.capability === 'image.edit') {
@@ -734,7 +756,7 @@ async function providerImageRequest(
   return {
     prompt,
     imagePaths,
-    ...(aspectRatio ? { aspectRatio } : {}),
+    ...options,
   };
 }
 
@@ -798,7 +820,9 @@ async function mediaBytes(
     if (encoded.length > Math.ceil((maxResultBytes(extractor.kind) * 4) / 3) + 16) {
       throw new MediaInvocationError('MEDIA_RESULT_TOO_LARGE', '上游 base64 媒体超过大小限制');
     }
-    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    // Repeating four-character groups exhausts V8's regexp stack on large images.
+    // Check quartet length separately so the alphabet scan uses constant stack space.
+    if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
       throw new MediaInvocationError('MEDIA_RESULT_INVALID', '上游 base64 媒体编码不合法');
     }
     buffer = Buffer.from(encoded, 'base64');
@@ -967,7 +991,7 @@ async function submitProviderInvocation(
   if (!providerModel) {
     return failure('MODEL_NOT_AVAILABLE', '该第三方媒体模型或执行来源已不可用，本次生成未发出');
   }
-  const input = await providerImageRequest(invocation, body);
+  const input = await providerImageRequest(invocation, body, providerModel);
   assertAuthScope(scope, invocation.owner);
   const claimed = await transitionMediaInvocation(
     {
@@ -1112,7 +1136,9 @@ async function prepareInvocation(
   const db = captureMediaDb(scope);
   await ensureOwnerRecovered(scope, db);
   assertAuthScope(scope);
-  const models = await listAvailableMediaModels(capability);
+  const models = await listAvailableMediaModels(capability, {
+    skipGateway: !getAppCapabilities().canUseCindyGateway,
+  });
   assertAuthScope(scope);
   let matchingModels = models.filter(
     (candidate) => candidate.id === modelId && (!providerId || candidate.providerId === providerId),
@@ -1156,6 +1182,9 @@ async function prepareInvocation(
     }
     preparedGuide = providerImageGuide(providerModel, capability);
   } else {
+    if (!getAppCapabilities().canUseCindyGateway) {
+      return failure('CONNECTION_UNAVAILABLE', '当前账号不能使用 Cindy AI 网关');
+    }
     let resolvedGuide: ResolvedMediaInvocationGuide;
     try {
       resolvedGuide = await fetchMediaInvocationGuide(resolvedModelId);
@@ -1312,12 +1341,25 @@ async function submitInvocation(
   }
   // prepare 与实际付费提交之间可能隔着 Agent 组装参数的时间；提交边界重新读取
   // Gateway 清单和客户端停用状态，避免模型/供应商刚被停用后仍发出新请求。
-  const models = await listAvailableMediaModels(invocation.capability);
+  const models = await listAvailableMediaModels(invocation.capability, {
+    skipGateway: !getAppCapabilities().canUseCindyGateway,
+  });
   assertAuthScope(scope, invocation.owner);
   if (!models.some((model) => model.providerId === 'xd' && model.id === invocation.modelId)) {
     return failure('MODEL_NOT_AVAILABLE', '该模型已下架或被停用，本次生成未发出');
   }
-  const requestBody = await prepareRequestBody(body, invocation.guide);
+  let validatedBody = body;
+  if (invocation.capability.startsWith('image.') && /^openai\/gpt-image-[12]/.test(invocation.modelId)) {
+    try {
+      validatedBody = { ...body, ...normalizeImageParameters('openai', invocation.modelId, {
+        size: body.size as string | undefined,
+        quality: body.quality as string | undefined,
+      }) };
+    } catch (error) {
+      throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message);
+    }
+  }
+  const requestBody = await prepareRequestBody(validatedBody, invocation.guide);
   assertAuthScope(scope, invocation.owner);
   let connection: MediaConnection;
   try {
@@ -1471,19 +1513,26 @@ async function submitInvocation(
     };
   } catch (error) {
     const expected = error instanceof MediaInvocationError ? error : null;
-    await transitionMediaInvocation(
+    // 本地组装失败（#5081）：请求从未出站、无费用，把 invocation 放回 prepared，
+    // 让同一 invocation_id 可以直接再次 request；其余失败仍进入 failed / unknown。
+    const buildFailed = expected?.code === 'REQUEST_BUILD_FAILED';
+    const restored = await transitionMediaInvocation(
       {
         id: invocation.id,
         owner: invocation.owner,
         from: 'submitting',
-        to: expected?.outcomeUnknown ? 'unknown' : 'failed',
+        to: buildFailed ? 'prepared' : expected?.outcomeUnknown ? 'unknown' : 'failed',
       },
       db,
     ).catch(() => false);
     if (expected) {
-      return expected.outcomeUnknown
-        ? submissionOutcomeUnknown(expected.message)
-        : failure(expected.code, expected.message, false, { outcomeKnown: true });
+      if (expected.outcomeUnknown) return submissionOutcomeUnknown(expected.message);
+      if (buildFailed && restored) {
+        return failure(expected.code, `${expected.message}；同一 invocation_id 可直接再次 request`, true, {
+          outcomeKnown: true,
+        });
+      }
+      return failure(expected.code, expected.message, false, { outcomeKnown: true });
     }
     log.warn('media submission failed', {
       error: error instanceof Error ? error.message : String(error),
@@ -1779,7 +1828,7 @@ export async function callCindyMedia(
       };
     }
     if (request.action === 'prepare') {
-      return prepareInvocation(
+      return await prepareInvocation(
         request.providerId,
         request.modelId,
         request.capability as MediaCapability,

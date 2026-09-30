@@ -21,6 +21,7 @@
 | per-plugin worker 入口 | `apps/desktop/src/main/cindy-brain/libraryDbWorker.ts` |
 | 主进程 RPC 服务（发送前语句门 / dispose 收口） | `apps/desktop/src/main/cindy-brain/librarySqlService.ts` |
 | 协议分派（资格审 / binding 根解析 / owner scope 复核） | `apps/desktop/src/main/cindy-brain/librarySlot.ts` |
+| owner-scoped staging（独立于可迁移 Library 根） | `apps/desktop/src/main/cindy-brain/libraryStaging.ts` |
 | 随时迁移状态机 | `apps/desktop/src/main/cindy-brain/libraryMigrate.ts` |
 | 回收站删除通道 | `apps/desktop/src/main/cindy-brain/libraryTrash.ts` |
 | 管子协议类型（`library-request`） | `apps/desktop/src/shared/ghost.ts`（`GhostPipeLibraryRequest/Result`） |
@@ -34,7 +35,8 @@
 owners/<ownerKey>/
 ├── libraries/<ghostId>/          # 系统管理默认根
 ├── libraries-binding.json        # 自定义位置持久 binding（原子写）
-└── libraries-trash/<ghostId>-<ts>/  # 删除通道的 30 天回收站
+├── libraries-trash/<ghostId>-<ts>/  # 删除通道的 30 天回收站
+└── library-staging/<ghostId>/    # H1 上传 staging（不可随 Library 根迁移）
 ```
 
 自定义根 = `<用户所选父目录>/<ghostId>`（binding 记录 realpath 快照 + 文件
@@ -45,7 +47,15 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
 
 1. **不可用 ≠ 空**：meta 损坏 → `unavailable(corrupt)`；binding 漂移 →
    `binding-moved` / `disk-missing`。宿主不自动重建、不清空、不回退写默认根、
-   不触发 GC、不判素材已删。插件侧同样语义写进了 FORGE_GUIDE。
+   不触发 GC、不判素材已删。缓存中的 custom 会话在真实根消失后必须现解
+   binding：`open`/`status` 报 unavailable，不得 `mkdir` 重建空库。custom vault.open
+   不得 recursive mkdir 已消失的用户父目录（父目录不在 → `disk-missing`）；仅在父目录仍在时
+   允许创建 `<parent>/<ghostId>` 子目录。建根边界须复核 binding 的 realpath/dev/ino：同路径新对象是
+   `binding-moved`，不得初始化空库或把 extraDir 授权到错误根。已挂 extraDir 后若 open 进入 drift，必须
+   实际撤 grant。自动 open 失败要把 drift 记进 session，同盘归位后仅 `status` 也须恢复。合法 default
+   首次创建仍可 mkdir。被 rename 走的原件仍在旧目录，不称已删除。同一磁盘对象归位后既有 `open`/`status`
+   恢复，删后重建的同路径是 `binding-moved` 不是原盘回归。Windows st_ino=0 检不出同路径重建，已知限制。
+   插件侧同样语义写进了 FORGE_GUIDE。
 2. **卸载不删**：uninstall 只标 orphaned + 作废会话；binding 保留（用户亲选
    事实不因重装消失）。删除 = 设置页独立破坏性确认 + `trashGhostLibrary`
    （rename 进回收站，漂移时 NOT_FOUND 不误删）。内置插件退役清理
@@ -80,8 +90,24 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
     library 根 realpath 静默写入该会话只读 extraDirs。只读、不弹 picker / 确认卡、
     不改权限档。library 专用槽不占用户 EXTRA_DIRS_MAX=10。回执 / 握手 / probe 禁绝对
     路径，相对键 `library:assets/<2>/<hash>/blob.<ext>`。路径不跨 turn 缓存。
-    confirmed 只认宿主 `librarySlot.writeCommit` ACK 的 64-hex sha256。仓内无
-    `libraryConfirmed.ts`（不存在），不得发明该文件。
+    confirmed 只认宿主 `librarySlot.write` / `writeCommit` ACK 的 64-hex sha256。
+    成功写入回执兼容可选 `libraryGeneration` / `libraryIdentity`：必须在 await 之前从
+    真正执行写入的 session 或 `writeBegin` 按 streamId 捕获的 epoch 带出，禁止事后拼当前
+    全局身份。`libraryIdentity` 是 64-hex opaque 值，须区分 owner / 迁根 / 自定义 A→B→A，且不得
+    出现 owner 原值或绝对根。二元组只表示绑定身份：默认 D→自定义 C→默认 D、owner X→Y→X
+    回到同一默认 binding 时两端可以复用同一对字段，这不证明当前激活有效。激活有效期由插件
+    用握手切换窗口判定（见到不同二元组或 unavailable 后，旧回执即使稍后与当前握手再次相等
+    也不得 confirmed）。宿主不为此新增字段或持久单调计数。旧插件忽略新可选字段仍可用；缺
+    字段旧回执由 PR4 安全恢复，禁止因此要求重装或重授权。仓内无 `libraryConfirmed.ts`（不
+    存在），不得发明该文件。
+    宿主用当前已授权 extraDir 绝对根解析 `library:assets/<2>/<hash>/blob.<ext>`；插件
+    open/status/MCP 回执不得带绝对根。Host-only `LIBRARY_READ_ROOT` 元数据随任务 extraDirs
+    保留专用槽身份，不能从普通用户目录猜根或由 Renderer JSON 提供。三 harness 只向当前
+    任务投影实际授权根；Pi 当轮在工具结果后从权限快照补映射。解析实现位于 maker-core 的
+    `agents/shared/library-native-read.ts`，由生产发送上下文消费；native 工具仍负责实际读取
+    与权限执行，映射本身不授予权限。bootstrap 校验及收窄持久记录仍保留专用槽和 10 个用户目录。
+    Claude 中途授权下一 turn resume+fork 生效；Codex
+    低于 0.144.6 不得假授权；Pi 当轮热更新权限文件。
 12. **切根像素与限额**：正本文件名是 `blob`（路径 `assets/<2>/<hash>/blob.<ext>`），
     不是 `<hash>.<ext>`。同目录 sidecar `meta.json` / `preview.webp` 禁止当像素。
     16MiB 是 library 分块阈值（更大走 writeBegin），cindy-media 单件 50MiB、配额
@@ -89,8 +115,14 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
 13. **只读操作能力合同（capabilities）**：`{op:'capabilities'}` 在资格审与 op 合法性
     校验之后、会话创建之前返回，不捕获 owner、不解析库根、不 open vault、不弹窗、
     不碰剪贴板、不泄漏 owner 或绝对库路径。成功形态固定为
-    `{ok:true, op:'capabilities', capabilities:{version:1, operations:['clipboardWrite','saveAs']}}`。
+    `{ok:true, op:'capabilities', capabilities:{version:1, operations:[...clipboardWrite/saveAs, staging.*], staging:{version:1,...limits}}}`。
     `operations` 只表达**实现支持**，不等于此刻有窗口、已授权或库可用。
+    staging 操作与 capabilities 在 Library open/root/authorizedReadonly 门之前分派，
+    仍验当前 owner 与已启用 library 能力；只有 `staging.release` 核验当前 Library ACK。
+    `disposeGhost` / `disposeAll` 先置 `relocating` 再排空该 ghost 在途 `staging.release`（tombstone/fsync 期间 Library 会话保持稳定），新的 release 在闸上拒绝；bind/unbind/relocate/delete 都先置 relocating 再 dispose，不把 owner mutation lease 当迁库锁。首次 mint staging 根时，耐久还要 fsync 新建根在其父目录中的 entry，只 fsync 根 inode 不算。Windows 仍报 `fsynced:false`。
+    staging 根按 owner×ghost 捕获后不漂移；坏/不可读 manifest 返回 `LIBRARY_UNAVAILABLE`，不得报空或释放对应空间。
+    新原件在 blob 就位前经 Vault 写下 `intent.json`（owner/ghost/id/task/revision/hash/bytes/mime/recovery）；崩溃后 new Store 只从这份可信 intent 校验 bytes/hash 再补 `manifest.json`+dirfsync，不从 blob 猜归属。不完整或冲突 fail-closed 并保留源。本 PR 新原件必有 intent；历史无 intent 的 orphan blob 只隔离计费，不 TTL 删除、不声称可恢复。原件只在 Library ACK 且调用者已保存画布后释放。
+    恢复与 release 走流式 hash，禁止 `readFile` 整文件入内存。null owner 拒。
     消费规则：仅 `version===1` 且 `operations` 为字符串数组才有效；额外字段忽略，未知
     operation 忽略，已知项保留；有效 v1 清单缺少某项才是 unsupported；缺字段、错类型、
     `version` 非 1、或旧宿主 unknown-op 一律 unknown。旧插件无需重装或重授权。

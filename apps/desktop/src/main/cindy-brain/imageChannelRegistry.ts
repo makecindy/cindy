@@ -14,11 +14,12 @@
  *     providerId 归属取通道;**未注册的 providerId 视为不就绪**——即使目录数据
  *     先于通道代码合入(多 PR 乱序),新模型也只是不出现,不会错发到别家通道。
  *
- * 注册发生在 host 装配期(cindy-brain/index.ts);本模块零 IO、零 electron 依赖
+ * 注册发生在 host 装配期(cindy-brain/index.ts);动态账号退出目录时解除注册。
+ * 本模块零 IO、零 electron 依赖
  * (规则 14),单测直测。
  */
 
-import type { GhostImageAspectRatio } from '../../shared/ghost.js';
+import type { ImageParameters, ImageProtocol } from '../cindy-media/imageParameters.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { isLibraryBlobRelPath, isLibrarySidecarRelPath } from './librarySlot.js';
 
@@ -60,11 +61,10 @@ export function decodeImageResponse(res: ImageChannelResult): { buffer: Buffer; 
 }
 
 /**
- * 单条图像执行通道。参数面收敛为「意识意图」级(aspectRatio 而非具体尺寸):
- * 意图 → 各家 wire 参数(gpt-image 的 size 枚举 / Gemini 的 imageConfig.aspectRatio)
- * 的翻译是通道自己的知识,不外泄给派发端。
+ * 图像执行通道保留尺寸、质量与分辨率；各通道按自身协议序列化。
  */
 export interface ImageChannel {
+  imageProtocol?: ImageProtocol;
   /** 执行凭证是否就绪。false ⇒ 该来源整段不进 cindy 白名单。 */
   ready(): boolean;
   /**
@@ -79,17 +79,15 @@ export interface ImageChannel {
    * 改图派发路径在出网前早失效。
    */
   supportsEdit?: boolean;
-  generateImage(params: {
+  generateImage(params: ImageParameters & {
     model: string;
     prompt: string;
-    aspectRatio?: GhostImageAspectRatio;
     signal?: AbortSignal;
   }): Promise<ImageChannelResult>;
-  editImage(params: {
+  editImage(params: ImageParameters & {
     model: string;
     prompt: string;
     imagePaths: string[];
-    aspectRatio?: GhostImageAspectRatio;
     signal?: AbortSignal;
   }): Promise<ImageChannelResult>;
 }
@@ -102,6 +100,10 @@ export class ImageChannelRegistry {
       throw new Error(`image channel already registered for provider ${providerId}`);
     }
     this.channels.set(providerId, channel);
+  }
+
+  unregister(providerId: string): void {
+    this.channels.delete(providerId);
   }
 
   /** 白名单派生用:未注册 = 不就绪(目录数据先行时的乱序安全兜底)。 */

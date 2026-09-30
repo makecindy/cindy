@@ -55,7 +55,7 @@ export function buildWindowsDescendantCleanupScript(rootProcessId: number): stri
     'while ($pending.Count -gt 0) {',
     '  $parentProcessId = [int]$pending[0]',
     '  $pending.RemoveAt(0)',
-    '  $children = @(Get-CimInstance Win32_Process -Filter ("ParentProcessId = " + $parentProcessId) -ErrorAction Stop)',
+    '  $children = @(Get-CimInstance Win32_Process -Filter ("ParentProcessId = " + $parentProcessId) -ErrorAction SilentlyContinue)',
     '  foreach ($child in $children) {',
     '    $childProcessId = [int]$child.ProcessId',
     '    [void]$descendants.Add($childProcessId)',
@@ -63,7 +63,9 @@ export function buildWindowsDescendantCleanupScript(rootProcessId: number): stri
     '  }',
     '}',
     'for ($index = $descendants.Count - 1; $index -ge 0; $index -= 1) {',
-    '  Stop-Process -Id ([int]$descendants[$index]) -Force -ErrorAction SilentlyContinue',
+    '  $childProcessId = [int]$descendants[$index]',
+    '  Stop-Process -Id $childProcessId -Force -ErrorAction SilentlyContinue',
+    "  & taskkill.exe /PID $childProcessId /F /T 2>$null | Out-Null",
     '}',
   ].join('\n');
 }
@@ -75,9 +77,13 @@ export function terminateWindowsPowerShellDescendants(
 ): void {
   if (typeof rootProcessId !== 'number' || !Number.isInteger(rootProcessId) || rootProcessId <= 0) return;
   try {
+    // EncodedCommand keeps the cleanup script as one argv on Windows. A
+    // multiline -Command can be split or fail to parse, which leaves probe
+    // descendants running after the coordinator has already exited.
+    const encoded = Buffer.from(buildWindowsDescendantCleanupScript(rootProcessId), 'utf16le').toString('base64');
     execFileSync(
       powershell,
-      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', buildWindowsDescendantCleanupScript(rootProcessId)],
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
       {
         stdio: 'ignore',
         timeout: WINDOWS_DESCENDANT_CLEANUP_TIMEOUT_MS,

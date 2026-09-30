@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { isLibraryExtraDirSlot } from './extraDirsValidator.js';
 
 import type { AgentKind, CreateSessionOptions, WorkspaceKind } from '@cindy/maker-core';
 
@@ -110,6 +111,10 @@ export function readCreateSessionOpts(
     throwIpcError('INVALID_PARAMS', 'createSession opts must be an object');
   }
   const body = requireObject(input, 'createSession opts');
+  if (Array.isArray(body.extraDirs) && body.extraDirs.some((dir) =>
+    typeof dir === 'string' && isLibraryExtraDirSlot(dir.trim()))) {
+    throwIpcError('INVALID_PARAMS', 'extraDirs must not contain Host-owned library slots');
+  }
   const agentKind = readAgentKind(body.agentKind);
   const model = requireString(body.model, 'model');
   const workspaceKind = readWorkspaceKind(body.workspaceKind);

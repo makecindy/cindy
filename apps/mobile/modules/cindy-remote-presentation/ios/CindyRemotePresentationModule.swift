@@ -2,11 +2,37 @@ import ExpoModulesCore
 import UIKit
 import AVFoundation
 import UniformTypeIdentifiers
+import WebRTC
 
 public class CindyRemotePresentationModule: Module {
   private var previousAudio: (AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)?
   public func definition() -> ModuleDefinition {
     Name("CindyRemotePresentation")
+    AsyncFunction("clipboardVersion") { () -> String in
+      try RemoteClipboard.foreground()
+      return String(UIPasteboard.general.changeCount)
+    }.runOnQueue(.main)
+    AsyncFunction("syncClipboard") { (json: String, version: String) -> String in
+      try RemoteClipboard.foreground()
+      guard String(UIPasteboard.general.changeCount) == version else {
+        throw RemoteClipboard.failure("CLIPBOARD_CHANGED")
+      }
+      try RemoteClipboard.write(json, expectedVersion: version)
+      return String(UIPasteboard.general.changeCount)
+    }.runOnQueue(.main)
+    Constants(["nativeVideo": true])
+    View(RemoteDesktopVideoView.self) {
+      Events("onMessage")
+      Prop("inlineVisible") { (view: RemoteDesktopVideoView, visible: Bool) in
+        view.inlineVisible = visible
+      }
+      AsyncFunction("receive") { (view: RemoteDesktopVideoView, message: [String: Any]) in
+        view.receive(message)
+      }
+      AsyncFunction("sendInput") { (view: RemoteDesktopVideoView, message: [String: Any]) -> Bool in
+        view.sendInput(message)
+      }
+    }
     AsyncFunction("readClipboard") { () -> String in
       try RemoteClipboard.read()
     }.runOnQueue(.main)
@@ -35,6 +61,13 @@ public class CindyRemotePresentationModule: Module {
       let session = AVAudioSession.sharedInstance()
       if enabled {
         if self.previousAudio == nil { self.previousAudio = (session.category, session.mode, session.categoryOptions) }
+        // WebRTC reapplies its own template when playout starts. Keep it aligned
+        // with PiP playback instead of restoring a cached ambient category.
+        let configuration = RTCAudioSessionConfiguration()
+        configuration.category = AVAudioSession.Category.playback.rawValue
+        configuration.mode = AVAudioSession.Mode.moviePlayback.rawValue
+        configuration.categoryOptions = [.mixWithOthers]
+        RTCAudioSessionConfiguration.setWebRTC(configuration)
         try session.setCategory(.playback, mode: .moviePlayback, options: [.mixWithOthers])
         try session.setActive(true)
       } else if let previous = self.previousAudio {
@@ -104,11 +137,17 @@ enum RemoteClipboard {
     }
     if let image = image {
       guard (image.images?.count ?? 1) <= 1 else { throw failure("CLIPBOARD_UNSUPPORTED") }
-      guard image.size.width * image.scale * image.size.height * image.scale <= 64_000_000 else {
+      guard RemoteClipboardSize.acceptsImage(
+        width: Double(image.size.width * image.scale), height: Double(image.size.height * image.scale)
+      ) else {
+        throw failure("CLIPBOARD_TOO_LONG")
+      }
+      if let bitmap = image.cgImage,
+        !RemoteClipboardSize.acceptsImage(width: Double(bitmap.width), height: Double(bitmap.height)) {
         throw failure("CLIPBOARD_TOO_LONG")
       }
       guard let png = image.pngData() else { throw failure("CLIPBOARD_UNSUPPORTED") }
-      guard png.count <= limit * 3 / 4 else { throw failure("CLIPBOARD_TOO_LONG") }
+      guard png.count <= RemoteClipboardSize.imageBytes else { throw failure("CLIPBOARD_TOO_LONG") }
       result["png"] = png.base64EncodedString()
     }
     guard !result.isEmpty else { throw failure("CLIPBOARD_UNSUPPORTED") }
@@ -120,7 +159,7 @@ enum RemoteClipboard {
     return json
   }
 
-  static func write(_ json: String) throws {
+  static func write(_ json: String, expectedVersion: String? = nil) throws {
     try foreground()
     guard RemoteClipboardSize.accepts(json) else { throw failure("CLIPBOARD_TOO_LONG") }
     guard let data = json.data(using: .utf8),
@@ -139,15 +178,24 @@ enum RemoteClipboard {
       item["public.url"] = url
     }
     if let encoded = content["png"] {
+      guard encoded.utf8.count <= ((RemoteClipboardSize.imageBytes + 2) / 3) * 4 else {
+        throw failure("CLIPBOARD_TOO_LONG")
+      }
       guard let png = Data(base64Encoded: encoded), png.count >= 24,
         Array(png.prefix(8)) == [137, 80, 78, 71, 13, 10, 26, 10] else { throw failure("CLIPBOARD_UNSUPPORTED") }
+      guard png.count <= RemoteClipboardSize.imageBytes else { throw failure("CLIPBOARD_TOO_LONG") }
       let width = png[16..<20].reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
       let height = png[20..<24].reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
-      guard width > 0, height > 0, width * height <= 64_000_000,
-        UIImage(data: png) != nil else { throw failure("CLIPBOARD_UNSUPPORTED") }
+      guard RemoteClipboardSize.acceptsImage(width: Double(width), height: Double(height)) else {
+        throw failure("CLIPBOARD_TOO_LONG")
+      }
+      guard UIImage(data: png) != nil else { throw failure("CLIPBOARD_UNSUPPORTED") }
       item["public.png"] = png
     }
     try foreground()
+    if let expectedVersion = expectedVersion, String(UIPasteboard.general.changeCount) != expectedVersion {
+      throw failure("CLIPBOARD_CHANGED")
+    }
     UIPasteboard.general.setItems([item], options: [:])
   }
 }

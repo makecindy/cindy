@@ -9,63 +9,32 @@ appId: ${APP_ID}
       id: "files.screen"
     timeout: 10000
 - assertVisible:
-    id: "files.pathInput"
+    id: "files.navRow"
 - assertVisible:
-    id: "files.locationBar"
+    id: "files.title"
 - assertVisible:
-    id: "files.currentPath"
-- assertVisible:
-    id: "files.directoryCount"
+    id: "files.summary"
+- tapOn:
+    id: "files.titleMenuButton"
+- tapOn:
+    id: "files.menu.view.list"
 - extendedWaitUntil:
     visible:
-      id: "files.dirEntry.fixtures"
-    timeout: 10000
-- assertVisible:
-    id: "files.directoryActions"
-- assertVisible:
-    id: "files.workdirButton"
-- tapOn:
-    id: "files.copyCurrentPathButton"
-- assertVisible:
-    id: "files.currentPathCopyStatus"
-- scrollUntilVisible:
-    element:
-      id: "files.fileEntry.about.txt"
-    direction: DOWN
+      id: "files.row.about.txt"
     timeout: 10000
 - tapOn:
-    id: "files.fileEntry.about.txt"
-- scrollUntilVisible:
-    element:
-      id: "files.previewBlock"
-    direction: DOWN
-    timeout: 10000
-- assertVisible:
-    id: "files.previewBlock"
-- assertVisible:
-    id: "files.selectedPath"
-- assertVisible:
-    id: "files.previewActions"
-- assertVisible:
-    id: "files.copyPathButton"
-- tapOn:
-    id: "files.copyPathButton"
-- assertVisible:
-    id: "files.copyPathStatus"
-- scrollUntilVisible:
-    element:
-      id: "files.loadPreviewButton"
-    direction: DOWN
-    timeout: 10000
+    id: "files.row.about.txt"
 - extendedWaitUntil:
     visible:
-      id: "files.loadPreviewButton"
-    timeout: 10000
-- tapOn:
-    id: "files.loadPreviewButton"
-- extendedWaitUntil:
-    notVisible:
-      id: "files.loadPreviewButton"
+      id: "filePreview.screen"
     timeout: 10000
 - assertVisible:
-    id: "files.previewText"
+    id: "filePreview.title"
+- extendedWaitUntil:
+    visible:
+      id: "filePreview.sourceReady"
+    timeout: 10000
+- tapOn:
+    id: "filePreview.copyPath"
+- assertVisible:
+    id: "filePreview.notice"

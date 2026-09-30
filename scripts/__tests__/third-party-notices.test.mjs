@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -23,6 +25,12 @@ const artifactNames = [
 function read(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
 }
+
+test("Windows input helper dependencies participate in Cargo license collection", () => {
+  const source = read("scripts/generate-third-party-notices.mjs");
+  assert.ok(source.includes('"windows-gamepad-helper"'));
+  assert.ok(source.includes('"windows-micro-helper"'));
+});
 
 test("generated artifact notices are platform-scoped and disclose restricted components separately", () => {
   const windows = read("docs/legal/notices/desktop-win.txt");
@@ -280,5 +288,221 @@ test("all shipped desktop notices contain the complete pinned OpenCodex license"
     const notice = read(file).replace(/\r\n/g, "\n");
     assert.ok(notice.includes(license), `${file} includes the full MIT text`);
     assert.ok(notice.includes(`${upstream.repository}/tree/${upstream.commit}`));
+  }
+});
+
+test("all shipped desktop notices inventory the bundled skill creator", () => {
+  const license = read(
+    "apps/desktop/resources/system-skills/cindy-skill-creator/license.txt",
+  ).replace(/\r\n/g, "\n").trim();
+  for (const artifact of ["desktop-win", "desktop-macos", "desktop-linux"]) {
+    const notice = read(`docs/legal/notices/${artifact}.txt`).replace(/\r\n/g, "\n");
+    assert.ok(notice.includes(license), `${artifact} includes the Apache text`);
+    const sbom = JSON.parse(read(`docs/legal/notices/sbom/${artifact}.spdx.json`));
+    const component = sbom.packages.find(pkg => pkg.name === "OpenAI Codex skill-creator (adapted)");
+    assert.ok(component, `${artifact} inventories skill-creator`);
+    assert.equal(component.versionInfo, "977193486dfe7a88c4dab24abeafe9b754f5b13f");
+    assert.equal(component.licenseDeclared, "Apache-2.0");
+  }
+  for (const file of ["apps/desktop/resources/THIRD-PARTY-NOTICES.txt", "docs/legal/notices/THIRD-PARTY-NOTICES.txt"]) {
+    const notice = read(file).replace(/\r\n/g, "\n");
+    assert.ok(notice.includes(license), `${file} includes the Apache text`);
+    assert.match(notice, /OpenAI Codex skill-creator \(adapted\)/);
+  }
+});
+
+test("all shipped desktop notices inventory the Skill creator's vendored PyYAML", () => {
+  const license = read(
+    "apps/desktop/resources/system-skills/cindy-skill-creator/scripts/_vendor/PyYAML-LICENSE.txt",
+  ).replace(/\r\n/g, "\n").trim();
+  for (const artifact of ["desktop-win", "desktop-macos", "desktop-linux"]) {
+    const notice = read(`docs/legal/notices/${artifact}.txt`).replace(/\r\n/g, "\n");
+    assert.ok(notice.includes(license), `${artifact} includes the PyYAML MIT text`);
+    const sbom = JSON.parse(read(`docs/legal/notices/sbom/${artifact}.spdx.json`));
+    const component = sbom.packages.find(
+      pkg => pkg.name === "PyYAML (vendored pure-Python runtime)",
+    );
+    assert.ok(component, `${artifact} inventories PyYAML`);
+    assert.equal(component.versionInfo, "6.0.3");
+    assert.equal(component.licenseDeclared, "MIT");
+  }
+  for (const file of ["apps/desktop/resources/THIRD-PARTY-NOTICES.txt", "docs/legal/notices/THIRD-PARTY-NOTICES.txt"]) {
+    const notice = read(file).replace(/\r\n/g, "\n");
+    assert.ok(notice.includes(license), `${file} includes the PyYAML MIT text`);
+    assert.match(notice, /PyYAML \(vendored pure-Python runtime\)/);
+  }
+});
+
+test("the bundled Skill validator accepts standard multiline YAML without external packages", t => {
+  const candidates = [
+    ["python3", []],
+    ["python", []],
+    ["py", ["-3"]],
+  ];
+  const python = candidates.find(([command, prefix]) => {
+    const probe = spawnSync(command, [...prefix, "-S", "-c", "print('cindy-python')"], {
+      encoding: "utf8",
+    });
+    return probe.status === 0 && probe.stdout.trim() === "cindy-python";
+  });
+  if (!python) {
+    t.skip("Python 3 is unavailable");
+    return;
+  }
+
+  const skillDir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-skill-validator-"));
+  const bundledScriptsDir = path.join(
+    repoRoot,
+    "apps/desktop/resources/system-skills/cindy-skill-creator/scripts",
+  );
+  const bytecodeArtifacts = () => {
+    const artifacts = [];
+    const visit = directory => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const absolute = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === "__pycache__") artifacts.push(absolute);
+          visit(absolute);
+        } else if (entry.name.endsWith(".pyc")) {
+          artifacts.push(absolute);
+        }
+      }
+    };
+    visit(bundledScriptsDir);
+    return artifacts;
+  };
+  try {
+    const printableBoundaries = String.fromCodePoint(
+      0xa0,
+      0xd7ff,
+      0xe000,
+      0xfffd,
+      0x10000,
+      0x10ffff,
+    );
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      `---
+name: yaml-regression
+description: "Create and update
+  skills safely"
+metadata:
+  owner: "Cindy
+    team"
+  labels: [creator, validation]
+  printable-boundaries: "${printableBoundaries}"
+---
+# YAML regression
+`,
+    );
+    const [command, prefix] = python;
+    const validator = path.join(
+      repoRoot,
+      "apps/desktop/resources/system-skills/cindy-skill-creator/scripts/quick_validate.py",
+    );
+    const result = spawnSync(command, [...prefix, "-S", validator, skillDir], {
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /Skill is valid!/);
+
+    const generator = path.join(bundledScriptsDir, "generate_openai_yaml.py");
+    const generated = spawnSync(command, [...prefix, "-S", generator, skillDir], {
+      encoding: "utf8",
+    });
+    assert.equal(generated.status, 0, `${generated.stdout}\n${generated.stderr}`);
+
+    const initializer = path.join(bundledScriptsDir, "init_skill.py");
+    const initialized = spawnSync(
+      command,
+      [...prefix, "-S", initializer, "bytecode-regression", "--path", skillDir],
+      { encoding: "utf8" },
+    );
+    assert.equal(initialized.status, 0, `${initialized.stdout}\n${initialized.stderr}`);
+
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: on\ndescription: yes\n---\n# js-yaml scalar compatibility\n",
+    );
+    const legacyBooleanWords = spawnSync(command, [...prefix, "-S", validator, skillDir], {
+      encoding: "utf8",
+    });
+    assert.equal(
+      legacyBooleanWords.status,
+      0,
+      `${legacyBooleanWords.stdout}\n${legacyBooleanWords.stderr}`,
+    );
+    assert.match(legacyBooleanWords.stdout, /Skill is valid!/);
+
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: yaml-regression\ndescription: true\n---\n",
+    );
+    const actualBoolean = spawnSync(command, [...prefix, "-S", validator, skillDir], {
+      encoding: "utf8",
+    });
+    assert.notEqual(actualBoolean.status, 0);
+    assert.match(actualBoolean.stdout, /Description must be a string, got bool/);
+
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: yaml-regression\ndescription: 1e3\n---\n",
+    );
+    const scientificNumber = spawnSync(command, [...prefix, "-S", validator, skillDir], {
+      encoding: "utf8",
+    });
+    assert.notEqual(scientificNumber.status, 0);
+    assert.match(scientificNumber.stdout, /Description must be a string, got float/);
+
+    for (const duplicateKeys of [
+      "  true: first\n  TRUE: second",
+      "  1: first\n  01: second",
+      "  1: first\n  1.0: second",
+      '  "true": first\n  true: second',
+    ]) {
+      fs.writeFileSync(
+        path.join(skillDir, "SKILL.md"),
+        `---\nname: yaml-regression\ndescription: duplicate keys\nmetadata:\n${duplicateKeys}\n---\n`,
+      );
+      const duplicate = spawnSync(command, [...prefix, "-S", validator, skillDir], {
+        encoding: "utf8",
+      });
+      assert.notEqual(duplicate.status, 0);
+      assert.match(duplicate.stdout, /Duplicate mapping key/);
+    }
+
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      `---
+name: yaml-regression
+description: timestamp keys
+metadata:
+  2023-01-01: first
+  "Sun Jan 01 2023 00:00:00 GMT+0000 (Coordinated Universal Time)": second
+---
+`,
+    );
+    const timestampKey = spawnSync(command, [...prefix, "-S", validator, skillDir], {
+      encoding: "utf8",
+    });
+    assert.notEqual(timestampKey.status, 0);
+    assert.match(timestampKey.stdout, /Timestamp mapping keys are not supported/);
+
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: yaml-regression\ndescription: invalid\0value\n---\n",
+    );
+    const rejected = spawnSync(command, [...prefix, "-S", validator, skillDir], {
+      encoding: "utf8",
+    });
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stdout, /special characters are not allowed/);
+    assert.deepEqual(
+      bytecodeArtifacts(),
+      [],
+      "bundled Python helpers must not mutate the content-addressed Skill with bytecode caches",
+    );
+  } finally {
+    fs.rmSync(skillDir, { recursive: true, force: true });
   }
 });

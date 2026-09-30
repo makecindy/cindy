@@ -86,10 +86,14 @@ describe('interrupted continuation enqueue contract', () => {
       'await this.deps.onDispatchedUserTurn?.(sessionId, head, preVendorDispatchAt)',
     );
     expect(dispatchedCall).toBeGreaterThan(-1);
-    const windowStart = Math.max(0, dispatchedCall - 500);
-    const window = coordinatorSource.slice(windowStart, dispatchedCall);
-    const dispatchedCheck = window.lastIndexOf('if (!isSendDispatched(result))');
-    expect(dispatchedCheck).toBeGreaterThan(-1);
+    const sendCall = coordinatorSource.lastIndexOf('const result = await this.deps.sendToAgent(', dispatchedCall);
+    const dispatchedCheck = coordinatorSource.indexOf('if (!isSendDispatched(result))', sendCall);
+    const dispatchedMark = coordinatorSource.indexOf('this.markActiveTurnDispatched(sessionId, active)', dispatchedCheck);
+    expect(sendCall).toBeGreaterThan(-1);
+    expect(dispatchedCheck).toBeGreaterThan(sendCall);
+    expect(dispatchedMark).toBeGreaterThan(dispatchedCheck);
+    expect(dispatchedCall).toBeGreaterThan(dispatchedMark);
+    expect(coordinatorSource.slice(dispatchedCheck, dispatchedMark)).toMatch(/return;/);
   });
 
   it('keeps a scheduler auto-resume owned until dispatch and fails it when discarded', () => {

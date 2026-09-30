@@ -11,6 +11,7 @@ import {
 } from '@cindy/maker-shared/client-endpoints';
 
 import type { LoginMessageKey } from '@/auth/loginMessages';
+import { resolveMobileEndpointManifest } from './endpointManifestLoader';
 
 export type CindyAuthRegion = 'cn' | 'global' | 'dev';
 
@@ -32,8 +33,22 @@ const configuredBuildEnv = (configuredExpoExtra.xdtProductionEnv ??
   {}) as Record<string, string>;
 const configuredRegionGoogle = configuredExpoExtra.cindy?.google;
 
-function configuredValue(key: string): string {
-  return process.env[key]?.trim() || configuredBuildEnv[key]?.trim() || '';
+// Expo only inlines static property reads; Hermes has no runtime shell env.
+const configuredPublicEnv = {
+  EXPO_PUBLIC_CINDY_AUTH_REGION: process.env.EXPO_PUBLIC_CINDY_AUTH_REGION,
+  EXPO_PUBLIC_CINDY_AUTH_BASE_URL: process.env.EXPO_PUBLIC_CINDY_AUTH_BASE_URL,
+  EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL:
+    process.env.EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL,
+  EXPO_PUBLIC_XDT_MOBILE_VOICE_LITELLM_BASE_URL:
+    process.env.EXPO_PUBLIC_XDT_MOBILE_VOICE_LITELLM_BASE_URL,
+  EXPO_PUBLIC_CINDY_VOICE_API_BASE_URL:
+    process.env.EXPO_PUBLIC_CINDY_VOICE_API_BASE_URL,
+  EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL:
+    process.env.EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL,
+};
+
+function configuredValue(key: keyof typeof configuredPublicEnv): string {
+  return configuredPublicEnv[key]?.trim() || configuredBuildEnv[key]?.trim() || '';
 }
 
 export const AUTH_REGION: CindyAuthRegion = (() => {
@@ -49,7 +64,7 @@ export const MOBILE_REDIRECT_URL = `${APP_SCHEME}://auth`;
 
 // __DEV__ 端点初值来源:metro 构建期按 AUTH_REGION 把仓内
 // config/endpoint.json 或 config/endpoint.global.json require 进 dev bundle
-// (__DEV__ 常量折叠 + DCE 后 prod bundle 不含该 JSON)。与 desktop dev 读同一份
+// 正式包的随包兜底由共享 resolver 负责；这里仅初始化 dev。与 desktop dev 读同一份
 // region 正本同语义;正本非法直接抛错红屏(阻断语义:配置错要炸出来)。
 // 显式 EXPO_PUBLIC_* env 仍然优先——「手机连本地 server」的既有工作流不变。
 // prod(非 __DEV__)此处为空:生效端点由启动闸门拉取的 endpoint.json 回填
@@ -139,10 +154,6 @@ export function resolveEnvFlag(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
   return normalized === '1' || normalized === 'true' || normalized === 'yes';
 }
-
-export const DEV_LOGIN_ENABLED = resolveEnvFlag(
-  process.env.EXPO_PUBLIC_XDT_DEV_LOGIN_ENABLED,
-);
 
 export const MOBILE_VISUAL_MOCK_ENABLED =
   __DEV__ && resolveEnvFlag(process.env.EXPO_PUBLIC_CINDY_MOBILE_VISUAL_MOCK);
@@ -234,10 +245,29 @@ const GOOGLE_CONFIG = resolveMobileGoogleConfig(
 export const GOOGLE_WEB_CLIENT_ID = GOOGLE_CONFIG.webClientId;
 export const GOOGLE_IOS_CLIENT_ID = GOOGLE_CONFIG.iosClientId;
 export const GOOGLE_IOS_URL_SCHEME = GOOGLE_CONFIG.iosUrlScheme;
-export const WECHAT_APP_ID =
-  process.env.EXPO_PUBLIC_CINDY_WECHAT_APP_ID?.trim() || '';
-export const WECHAT_UNIVERSAL_LINK =
-  process.env.EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK?.trim() || '';
+/** 微信配置只属于国内构建；与原生插件选择同源，不受登录后的组织区域影响。 */
+export function resolveMobileWechatConfig(
+  region: CindyAuthRegion,
+  env: {
+    EXPO_PUBLIC_CINDY_WECHAT_APP_ID?: string;
+    EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK?: string;
+  },
+): { appId: string; universalLink: string } {
+  if (region === 'global') return { appId: '', universalLink: '' };
+  return {
+    appId: env.EXPO_PUBLIC_CINDY_WECHAT_APP_ID?.trim() || '',
+    universalLink: env.EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK?.trim() || '',
+  };
+}
+
+const WECHAT_CONFIG = resolveMobileWechatConfig(AUTH_REGION, {
+  // Metro 只内联静态 process.env.KEY，不能改为动态键或直接传 process.env。
+  EXPO_PUBLIC_CINDY_WECHAT_APP_ID: process.env.EXPO_PUBLIC_CINDY_WECHAT_APP_ID,
+  EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK:
+    process.env.EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK,
+});
+export const WECHAT_APP_ID = WECHAT_CONFIG.appId;
+export const WECHAT_UNIVERSAL_LINK = WECHAT_CONFIG.universalLink;
 
 export let DEVICE_LINK_API_BASE_URL = resolveDeviceLinkApiBaseUrl(
   configuredValue('EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL'),
@@ -497,8 +527,6 @@ export function getMobileEndpointRealmConfig(): {
   };
 }
 
-const MOBILE_REALM_MANIFEST_TIMEOUT_MS = 10_000;
-
 /** 当前登录态消费业务请求的区域；与安装包/更新通道所在区域相互独立。 */
 export function getActiveMobileSessionRealm(): ClientEndpointRegion {
   return activeSessionRealm;
@@ -513,26 +541,10 @@ export async function loadMobileEndpointsForRealm(
   if (!baseUrl) {
     throw new Error('realm-manifest-url-unavailable');
   }
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    MOBILE_REALM_MANIFEST_TIMEOUT_MS,
-  );
-  try {
-    const response = await fetch(`${baseUrl}/endpoint.json?t=${Date.now()}`, {
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`http-${response.status}`);
-    const parsed = parseClientEndpointManifest(await response.text());
-    if (!parsed.ok) throw new Error(parsed.reason);
-    if (parsed.region !== null && parsed.region !== region) {
-      throw new Error(`region-mismatch:${region}:${parsed.region}`);
-    }
-    realmEndpointCache.set(region, parsed.endpoints);
-    return parsed.endpoints;
-  } finally {
-    clearTimeout(timer);
-  }
+  const result = await resolveMobileEndpointManifest(region, baseUrl);
+  if (!result.ok) throw new Error(result.reason);
+  realmEndpointCache.set(region, result.parsed.endpoints);
+  return result.parsed.endpoints;
 }
 
 export function getMobileEndpointForRealm(

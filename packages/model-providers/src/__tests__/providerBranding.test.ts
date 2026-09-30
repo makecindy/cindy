@@ -88,6 +88,30 @@ describe('provider branding', () => {
     }
   });
 
+  it.each([
+    'https://aiplatform.googleapis.com',
+    'https://us-central1-aiplatform.googleapis.com',
+    'https://aiplatform.us.rep.googleapis.com',
+    'https://aiplatform.eu.rep.googleapis.com',
+  ])('brands official Vertex hosts as Google: %s', upstream => {
+    expect(resolveProviderLogoKind('renamed-vertex', { pi: { upstream } })).toBe('google');
+  });
+
+  it('does not brand a lookalike Vertex host as Google', () => {
+    expect(resolveProviderLogoKind('lookalike', {
+      pi: { upstream: 'https://aiplatform.googleapis.com.evil.test' },
+    })).toBeNull();
+  });
+
+  it('brands the official Azure Cognitive Services host as Azure', () => {
+    expect(resolveProviderLogoKind('renamed-azure', {
+      pi: { upstream: 'https://my-resource.cognitiveservices.azure.com/openai/v1' },
+    })).toBe('azure');
+    expect(resolveProviderLogoKind('lookalike', {
+      pi: { upstream: 'https://my-resource.cognitiveservices.azure.com.evil.test/openai/v1' },
+    })).toBeNull();
+  });
+
   it('rejects spoofed hosts, malformed URLs, and mixed-brand routing deterministically', () => {
     expect(
       hasProviderLogo('lookalike', {

@@ -231,6 +231,8 @@ export interface IMMessageEvent {
     /** 被引消息的附件数(已并入本事件 attachments;0/缺省 = 无)。 */
     attachmentCount?: number;
   };
+  /** Native private topic metadata. Root message id and thread id are distinct. */
+  replyThread?: { rootMessageId: string; threadId: string };
   /** Channel-specific raw event for debug. */
   raw?: unknown;
   /**

@@ -1,3 +1,5 @@
+vi.mock('../botTaskReplyResults.js', () => ({ readTaskResultsForReply: vi.fn(async () => []) }));
+import { readTaskResultsForReply } from '../botTaskReplyResults.js';
 /**
  * messagePersistBroadcaster.test.ts
  * ---------------------------------------------------------------------------
@@ -82,6 +84,8 @@ import {
   onToolResultFullEvent,
   prepareSyntheticToolEventForBroadcast,
   onAssistantTextEvent,
+  drainPersistQueue,
+  onStandaloneTextEvent,
   getSessionTextSnapshot,
   onInteractionMessage,
   onInteractionResolved,
@@ -3912,4 +3916,88 @@ describe('resolved interactions publish authoritative history rows', () => {
     await flushWrites();
     expect(broadcastMessageRow).not.toHaveBeenCalled();
   });
+});
+
+describe('Pi extension notification and assistant reply isolation', () => {
+  it('keeps plan toggles before the input from backdating the next answer', async () => {
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      clock.mockReturnValue(1000);
+      const enabled = onStandaloneTextEvent(SESSION, 'Plan mode enabled.');
+      clock.mockReturnValue(2000);
+      const disabled = onStandaloneTextEvent(SESSION, 'Plan mode disabled.');
+      expect(getSessionTextSnapshot(SESSION)).toBeNull();
+      expect(consumeLastAssistantPersistId(SESSION)).toBeUndefined();
+      clock.mockReturnValue(3000); // User input precedes model output.
+      noteTurnStarted(SESSION);
+      clock.mockReturnValue(4000);
+      const reply = onAssistantTextEvent(SESSION, { text: 'Complete ', isFinal: false }, null);
+      onAssistantTextEvent(SESSION, { text: 'answer', isFinal: false }, null);
+      onAssistantTextEvent(SESSION, { text: 'Complete answer', isFinal: true, isFullText: true }, null);
+      flushAssistantBlock(SESSION);
+      await flushWrites();
+      expect(new Set([enabled, disabled, reply]).size).toBe(3);
+      const rows = vi.mocked(createMessage).mock.calls.map((call) => call[1]);
+      expect(rows.map(({ content, createdAt }) => ({ content, createdAt }))).toEqual([
+        { content: 'Plan mode enabled.', createdAt: 1000 },
+        { content: 'Plan mode disabled.', createdAt: 2000 },
+        { content: 'Complete answer', createdAt: 4000 },
+      ]);
+      expect(consumeLastAssistantPersistId(SESSION)).toBe(reply);
+      expect(consumeLastTopLevelAssistantPersistId(SESSION)).toBe(reply);
+      for (const call of vi.mocked(createMessage).mock.calls) {
+        expect(call[2]).toMatchObject({ shouldBroadcast: expect.any(Function) });
+        expect(call[2]?.shouldBroadcast?.()).toBe(true);
+      }
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('preserves a streaming reply and its terminal ownership across interleaved notices', async () => {
+    const reply = onAssistantTextEvent(SESSION, { text: 'First ', isFinal: false }, null);
+    const before = getSessionTextSnapshot(SESSION);
+    const notice = onStandaloneTextEvent(SESSION, 'Extension warning');
+    expect(getSessionTextSnapshot(SESSION)).toEqual(before);
+    expect(onAssistantTextEvent(SESSION, { text: 'second', isFinal: false }, null)).toBe(reply);
+    expect(onAssistantTextEvent(SESSION, {
+      text: 'First second', isFinal: true, isFullText: true,
+    }, { model: 'test-model' })).toBe(reply);
+    flushAssistantBlock(SESSION);
+    const after = onStandaloneTextEvent(SESSION, 'Extension finished');
+    expect(getSessionTextSnapshot(SESSION)).toBeNull();
+    expect(consumeLastAssistantPersistId(SESSION)).toBe(reply);
+    expect(consumeLastTopLevelAssistantPersistId(SESSION)).toBe(reply);
+    await flushWrites();
+    const rows = vi.mocked(createMessage).mock.calls.map((call) => call[1]);
+    expect(rows.map(({ clientId, content }) => ({ clientId, content }))).toEqual([
+      { clientId: notice, content: 'Extension warning' },
+      { clientId: reply, content: 'First second' },
+      { clientId: after, content: 'Extension finished' },
+    ]);
+    resetTurnPersistState(SESSION);
+    const next = onAssistantTextEvent(SESSION, { text: 'First second', isFinal: true }, null);
+    expect(next).not.toBe(reply);
+    await flushWrites();
+    expect(vi.mocked(createMessage).mock.calls.at(-1)?.[1].content).toBe('First second');
+  });
+});
+
+
+it('retains explicit commentary/final phases in durable assistant metadata for notification selection', async () => {
+  onAssistantTextEvent('notification-phases', { text: 'Checking…', isFinal: true, phase: 'commentary', agentMessageId: 'commentary' }, null);
+  onAssistantTextEvent('notification-phases', { text: 'Finished.', isFinal: true, phase: 'final_answer', agentMessageId: 'answer' }, null);
+  await drainPersistQueue();
+  expect(createMessage).toHaveBeenCalledWith('notification-phases', expect.objectContaining({ content: 'Checking…', agentMeta: expect.objectContaining({ assistantPhase: 'commentary' }) }), expect.anything());
+  expect(createMessage).toHaveBeenCalledWith('notification-phases', expect.objectContaining({ content: 'Finished.', agentMeta: expect.objectContaining({ assistantPhase: 'final_answer' }) }), expect.anything());
+});
+
+it('persists bound results with the final seal, and a failed result lookup cannot suppress the reply', async () => {
+  const results = [{ delegationId: 'job' }] as any;
+  vi.mocked(readTaskResultsForReply).mockResolvedValueOnce(results);
+  await markAssistantTurnCompleted(SESSION, 'summary', undefined, ['bot-delegation-completion:job']);
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(SESSION, 'summary', { turnCompleted: true, botTaskResults: results });
+  vi.mocked(readTaskResultsForReply).mockRejectedValueOnce(new Error('DB unavailable'));
+  await expect(markAssistantTurnCompleted(SESSION, 'other', undefined, ['bot-delegation-completion:job'])).resolves.toBe(true);
+  expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(SESSION, 'other', { turnCompleted: true });
 });

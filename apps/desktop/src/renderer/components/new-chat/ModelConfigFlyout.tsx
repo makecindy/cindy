@@ -16,7 +16,7 @@ import { EFFORT_TIER_COLORS } from '@/themes/effortTierColors';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 
 import { ModelHarnessPicker } from './ModelHarnessPicker';
-import { EffortSlider } from './EffortSlider';
+import { EffortSlider } from '@/components/ui/effort-slider';
 import type { UnifiedEngine, UnifiedRowConfig } from './unifiedModelSelection';
 
 /** 底栏三态(等高,切态不改变浮层高度 —— 规格 §1.3「高度恒定」)。 */

@@ -1,11 +1,13 @@
-import { access, lstat, mkdir } from 'node:fs/promises';
+import { access, lstat, mkdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import type { MakeTaskWorkspace } from '../../shared/cindyMakeDoctor.js';
+import type { CindyMakeTaskPreparation, MakeTaskWorkspace } from '../../shared/cindyMakeDoctor.js';
 import { runSourceGit } from './sourceGit.js';
+import { contentRef, snapshotContent, applyContent, taskContentRef } from './sourceContent.js';
 import { runSourcePnpm } from './sourcePnpm.js';
 import {
   CINDY_MAKE_RUN_ID_PATTERN,
   CINDY_PERSONAL_BRANCH,
+  isCindyMakeWorktreePath,
   makeSourceCheckoutPath,
   makeTaskBranch,
   makeTaskWorktreePath,
@@ -32,11 +34,11 @@ async function exists(file: string): Promise<boolean> {
 
 /**
  * Create (or reuse) the per-task worktree: a fresh branch off the personal
- * baseline, checked out under `<root>/worktrees/<runId>`, with dependencies
- * installed so the agent can run the repository's checks immediately. Reuse
+ * baseline, checked out under `<root>/worktrees/<runId>`. Dependency installation
+ * is a separate step after the task is visible. Reuse
  * keeps a retry after a crash from creating a second branch for the same task.
  */
-export async function prepareCindyMakeWorkspace(
+export async function createCindyMakeWorktree(
   userData: string,
   runId: string,
   signal: AbortSignal,
@@ -47,8 +49,9 @@ export async function prepareCindyMakeWorkspace(
     throw Object.assign(new Error('invalid run id'), { code: 'gitFailed' });
   }
   const git = deps.git ?? runSourceGit;
-  const pnpm = deps.pnpm ?? runSourcePnpm;
   const env = deps.processEnvironment;
+  const contentGit = (args: string[], cwd: string, indexFile?: string) =>
+    git({ ...env, ...(indexFile ? { GIT_INDEX_FILE: indexFile } : {}) }, args, cwd, signal);
   const sourcePath = makeSourceCheckoutPath(userData);
   const worktreePath = makeTaskWorktreePath(userData, runId);
   const branch = makeTaskBranch(runId);
@@ -85,8 +88,43 @@ export async function prepareCindyMakeWorkspace(
     if (current !== branch) {
       throw Object.assign(new Error('worktree on unexpected branch'), { code: 'gitFailed' });
     }
+    const common = (
+      await git(
+        env,
+        ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+        worktreePath,
+        signal,
+      )
+    ).trim();
+    const canonical = (value: string) =>
+      process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+    if (
+      canonical(await realpath(common)) !== canonical(await realpath(path.join(sourcePath, '.git')))
+    )
+      throw Object.assign(new Error('foreign worktree'), { code: 'gitFailed' });
+    const tree = await contentRef(contentGit, sourcePath, taskContentRef(runId, 'base'));
+    if (tree && !(await contentRef(contentGit, sourcePath, taskContentRef(runId, 'initialized')))) {
+      // Resume interrupted inheritance only when the task still has the original clean files.
+      const currentTree = await snapshotContent(contentGit, worktreePath);
+      const headTree = (await git(env, ['rev-parse', 'HEAD^{tree}'], worktreePath, signal)).trim();
+      if (currentTree !== tree) {
+        if (currentTree !== headTree)
+          throw Object.assign(new Error('unfinished inheritance with edits'), { code: 'dirty' });
+        await applyContent(contentGit, worktreePath, headTree, tree);
+      }
+      await contentGit(['update-ref', taskContentRef(runId, 'initialized'), tree], sourcePath);
+    }
   } else {
     onPhase('creating');
+    if (
+      (await git(env, ['branch', '--show-current'], sourcePath, signal)).trim() !==
+      CINDY_PERSONAL_BRANCH
+    )
+      throw Object.assign(new Error('unexpected source branch'), { code: 'gitFailed' });
+    // Persist the file baseline before creation; never replace it on a retry.
+    const baseRef = taskContentRef(runId, 'base');
+    let tree = await contentRef(contentGit, sourcePath, baseRef);
+    if (!tree && !hasBranch) tree = await snapshotContent(contentGit, sourcePath, baseRef);
     await mkdir(makeWorktreesRoot(userData), { recursive: true });
     if (hasBranch) {
       // Branch survived a removed directory (e.g. a manual clean-up). Prune the
@@ -101,21 +139,51 @@ export async function prepareCindyMakeWorkspace(
         signal,
       );
     }
+    if (tree) {
+      const headTree = (await git(env, ['rev-parse', 'HEAD^{tree}'], worktreePath, signal)).trim();
+      await applyContent(contentGit, worktreePath, headTree, tree);
+      await contentGit(['update-ref', taskContentRef(runId, 'initialized'), tree], sourcePath);
+    }
   }
-  onPhase('installing');
-  await pnpm(env, ['install', '--prefer-offline'], worktreePath, signal);
   return { path: worktreePath, branch, baseCommit: baseCommit.trim() };
 }
 
-/** Whether `workingDir` is a task worktree Cindy created (used by the session source guard). */
-export function isCindyMakeWorktreePath(userData: string, workingDir: string): boolean {
-  const root = makeWorktreesRoot(userData);
-  const relative = path.relative(root, path.resolve(workingDir));
-  return (
-    relative.length > 0 &&
-    !relative.startsWith('..') &&
-    !path.isAbsolute(relative) &&
-    !relative.includes(path.sep) &&
-    CINDY_MAKE_RUN_ID_PATTERN.test(relative)
+/** Install dependencies in an already-created task worktree. */
+export async function installCindyMakeWorktree(
+  userData: string,
+  workspace: MakeTaskWorkspace,
+  signal: AbortSignal,
+  deps: TaskWorkspaceDeps,
+  onPhase: (phase: TaskWorkspacePhase) => void = () => {},
+  onProgress?: (progress: NonNullable<CindyMakeTaskPreparation['dependencies']>) => void,
+): Promise<MakeTaskWorkspace> {
+  const pnpm = deps.pnpm ?? runSourcePnpm;
+  onPhase('installing');
+  signal.throwIfAborted();
+  if (!isCindyMakeWorktreePath(userData, workspace.path)) {
+    throw Object.assign(new Error('invalid task workspace'), { code: 'gitFailed' });
+  }
+  await pnpm(
+    deps.processEnvironment,
+    ['install', '--frozen-lockfile', '--prefer-offline', '--prod=false'],
+    workspace.path,
+    signal,
+    ...(onProgress ? [onProgress] : []),
   );
+  signal.throwIfAborted();
+  return workspace;
 }
+
+/** Backwards-compatible synchronous preparation used by existing callers/tests. */
+export async function prepareCindyMakeWorkspace(
+  userData: string,
+  runId: string,
+  signal: AbortSignal,
+  deps: TaskWorkspaceDeps,
+  onPhase: (phase: TaskWorkspacePhase) => void = () => {},
+): Promise<MakeTaskWorkspace> {
+  const workspace = await createCindyMakeWorktree(userData, runId, signal, deps, onPhase);
+  return installCindyMakeWorktree(userData, workspace, signal, deps, onPhase);
+}
+
+export { isCindyMakeWorktreePath };

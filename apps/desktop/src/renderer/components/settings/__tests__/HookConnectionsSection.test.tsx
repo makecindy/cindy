@@ -10,6 +10,7 @@ const ipc = vi.hoisted(() => ({
   onStatusChanged: vi.fn<(listener: (view: SlackHookView) => void) => () => void>(() => () => {}),
   setEnabled: vi.fn(),
   setLifecycleAnnouncement: vi.fn(),
+  setSlackCommunications: vi.fn(),
   providerBindStart: vi.fn(),
   providerBindCancel: vi.fn(),
   providerBindRevoke: vi.fn(),
@@ -109,6 +110,7 @@ vi.mock('../TelegramBehaviorSettings', () => ({
 }));
 
 import { deriveAlias, HookConnectionsSection, workspaceRowsToMap } from '../HookConnectionsSection';
+import { SettingsSearchNavigationContext } from '../SettingsSearchNavigation';
 import { resetXUsageNoticeMemoryState } from '@/state/xUsageNotice';
 
 /** 渠道卡收起时内容卸载(Collapse), 交互前先点开对应卡的头部行。 */
@@ -182,6 +184,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
         onStatusChanged: ipc.onStatusChanged,
         setEnabled: ipc.setEnabled,
         setLifecycleAnnouncement: ipc.setLifecycleAnnouncement,
+        setSlackCommunications: ipc.setSlackCommunications,
         providerBindStart: ipc.providerBindStart,
         providerBindCancel: ipc.providerBindCancel,
         providerBindRevoke: ipc.providerBindRevoke,
@@ -250,6 +253,64 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     expect(workspacePrefsEditor.render).toHaveBeenCalledWith(
       expect.objectContaining({ alias: 'chat', maxVisibleModelRows: undefined }),
     );
+  });
+
+  it('expands an official channel selected by settings search', async () => {
+    ipc.get.mockResolvedValue({ hook: BASE_HOOK });
+
+    render(
+      <SettingsSearchNavigationContext.Provider
+        value={{
+          entry: {
+            id: 'imBot.cindy.telegram',
+            tab: 'im-bot',
+            targetId: 'cindy-im-telegram',
+            titleKey: 'settings.tina.prefs.providerTelegram',
+            sectionKey: 'settings.imBot.groups.cindy',
+          },
+          activation: 1,
+        }}
+      >
+        <HookConnectionsSection />
+      </SettingsSearchNavigationContext.Provider>,
+    );
+
+    expect((await screen.findByRole('button', { name: TELEGRAM_CARD })).getAttribute('aria-expanded')).toBe(
+      'true',
+    );
+  });
+
+  it.each([true, false])('displaced workspace communications toggle (%s) never invokes Bot rebind or revoke', async (enabled) => {
+    const row = { teamId: 'T1', teamName: 'Workspace', slackUserId: 'U1', slackUserName: 'tester', displaced: true, communicationsEnabled: enabled };
+    const view: SlackHookView = { ...BASE_HOOK, enabled: true, status: 'connected', serverMultiTeam: true, serverSlackCommunications: true, bindings: [row] };
+    ipc.get.mockResolvedValue({ hook: view });
+    ipc.setSlackCommunications.mockResolvedValue({ hook: { ...view, bindings: [{ ...row, communicationsEnabled: !enabled }] } });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(SLACK_CARD);
+    const toggle = await screen.findByRole('switch', { name: 'settings.remoteControl.hook.multi.localCommunications' });
+    const masterToggle = screen.getByRole('switch', { name: 'settings.remoteControl.hook.toggleAria' });
+    expect(masterToggle.getAttribute('aria-checked')).toBe('true');
+    expect(toggle.getAttribute('aria-checked')).toBe(String(enabled));
+    fireEvent.click(toggle);
+    await waitFor(() => expect(ipc.setSlackCommunications).toHaveBeenCalledWith('T1', !enabled));
+    expect(masterToggle.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(masterToggle);
+    await waitFor(() => expect(ipc.setEnabled).toHaveBeenCalledWith(false));
+    expect(ipc.rebindTeam).not.toHaveBeenCalled();
+    expect(ipc.revokeTeam).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('workspace removal confirmation reflects device communications support (%s)', async (supported) => {
+    const row = { teamId: 'T1', teamName: 'Workspace', slackUserId: 'U1', slackUserName: 'tester', displaced: true, communicationsEnabled: true };
+    ipc.get.mockResolvedValue({ hook: { ...BASE_HOOK, enabled: true, status: 'connected', serverMultiTeam: true, serverSlackCommunications: supported, bindings: [row] } });
+    dialog.confirm.mockResolvedValue(false);
+    render(<HookConnectionsSection />);
+    await expandChannelCard(SLACK_CARD);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.remoteControl.hook.multi.removeAria' }));
+    expect(dialog.confirm).toHaveBeenCalledWith(expect.objectContaining({
+      description: supported ? 'settings.remoteControl.hook.multi.removeCommunicationsConfirmDescription' : 'settings.remoteControl.hook.multi.removeDisplacedConfirmDescription',
+    }));
+    expect(ipc.revokeTeam).not.toHaveBeenCalled();
   });
 
   it('shows the lifecycle notification switch only after Slack is bound and persists changes', async () => {
@@ -1537,6 +1598,55 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     });
 
     expect(ipc.revokeTeam).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: 'server capability lost', supported: false, enabled: true, removes: false },
+    { name: 'communication disabled', supported: true, enabled: false, removes: false },
+    { name: 'communication grant removed', supported: true, enabled: undefined, removes: false },
+    { name: 'unchanged grant', supported: true, enabled: true, removes: true },
+  ])('rechecks Slack removal confirmation: $name', async ({ supported, enabled, removes }) => {
+    let pushStatus: ((view: SlackHookView) => void) | undefined;
+    let resolveConfirm: ((value: boolean) => void) | undefined;
+    dialog.confirm.mockReturnValue(new Promise<boolean>((resolve) => { resolveConfirm = resolve; }));
+    ipc.onStatusChanged.mockImplementation((listener: (view: SlackHookView) => void) => {
+      pushStatus = listener;
+      return () => {};
+    });
+    const initial: SlackHookView = {
+      ...BASE_HOOK,
+      enabled: true,
+      status: 'connected',
+      serverMultiTeam: true,
+      serverSlackCommunications: true,
+      bindings: [{
+        teamId: 'team-1', teamName: 'Cindy Team', slackUserId: 'user-1',
+        slackUserName: 'Cindy User', displaced: true, communicationsEnabled: true,
+      }],
+    };
+    ipc.get.mockResolvedValue({ hook: initial });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(SLACK_CARD);
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'settings.remoteControl.hook.multi.removeAria',
+    }));
+    await waitFor(() => expect(dialog.confirm).toHaveBeenCalledOnce());
+    expect(dialog.confirm).toHaveBeenCalledWith(expect.objectContaining({
+      description: 'settings.remoteControl.hook.multi.removeCommunicationsConfirmDescription',
+    }));
+    act(() => {
+      pushStatus?.({
+        ...initial,
+        serverSlackCommunications: supported,
+        bindings: [{ ...initial.bindings[0], communicationsEnabled: enabled }],
+      });
+    });
+    await act(async () => { resolveConfirm?.(true); });
+    if (removes) {
+      expect(ipc.revokeTeam).toHaveBeenCalledExactlyOnceWith('team-1');
+    } else {
+      expect(ipc.revokeTeam).not.toHaveBeenCalled();
+    }
   });
 
   it('X 卡是 chip 形态, Telegram 卡是目录行内的选中态单选', async () => {

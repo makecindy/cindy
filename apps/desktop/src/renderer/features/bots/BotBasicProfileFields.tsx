@@ -1,5 +1,7 @@
 import { Camera } from 'lucide-react';
+import type { ReactNode } from 'react';
 
+import { Input, Textarea } from '@/components/ui/input';
 import { useBotTranslation } from './botPronounContext';
 import { BotAvatar } from './BotAvatar';
 
@@ -18,7 +20,16 @@ export function BotBasicProfileFields({
   autoFocusName = false,
   avatarPreview,
   centeredAvatar = false,
+  avatarControl,
+  composition,
+  onNameBlur,
+  onDescriptionBlur,
 }: {
+  avatarControl?: ReactNode;
+  /** IME composition handlers shared by both text fields (see useBotSettingsAutosave). */
+  composition?: { onCompositionStart: () => void; onCompositionEnd: () => void };
+  onNameBlur?: () => void;
+  onDescriptionBlur?: () => void;
   centeredAvatar?: boolean;
   value: BotBasicProfileValue;
   onChange: (next: BotBasicProfileValue, kind: 'text' | 'instant') => void;
@@ -39,37 +50,40 @@ export function BotBasicProfileFields({
     <div className="flex min-w-0 flex-col gap-5">
       <div className={centeredAvatar ? 'flex flex-col items-center gap-5' : 'flex items-end gap-4'}>
         <div className="shrink-0 pb-0.5">
-          {onChooseAvatar ? (
-            <button
-              type="button"
-              disabled={avatarBusy}
-              onClick={onChooseAvatar}
-              aria-label={t('bots.profile.changeAvatar')}
-              className="group relative rounded-full outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-wait"
-            >
-              {avatarPreview ? (
-                <img src={avatarPreview} alt="" className="h-14 w-14 rounded-full object-cover" />
-              ) : (
-                <BotAvatar bot={value} size={centeredAvatar ? 'xl' : 'lg'} />
-              )}
-              <span className="absolute flex items-center justify-center rounded-full bg-[var(--surface-elevated)] text-[var(--text-secondary)] border border-[var(--border-default)] -bottom-1 -right-1 h-6 w-6">
-                <Camera size={12} aria-hidden="true" />
-              </span>
-            </button>
-          ) : (
-            <BotAvatar bot={value} size="xl" />
-          )}
+          {avatarControl ??
+            (onChooseAvatar ? (
+              <button
+                type="button"
+                disabled={avatarBusy}
+                onClick={onChooseAvatar}
+                aria-label={t('bots.profile.changeAvatar')}
+                className="group relative rounded-full outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-wait"
+              >
+                {avatarPreview ? (
+                  <img src={avatarPreview} alt="" className="h-14 w-14 rounded-full object-cover" />
+                ) : (
+                  <BotAvatar bot={value} size={centeredAvatar ? 'xl' : 'lg'} />
+                )}
+                <span className="absolute flex items-center justify-center rounded-full bg-[var(--surface-elevated)] text-[var(--text-secondary)] border border-[var(--border-default)] -bottom-1 -right-1 h-6 w-6">
+                  <Camera size={12} aria-hidden="true" />
+                </span>
+              </button>
+            ) : (
+              <BotAvatar bot={value} size="xl" />
+            ))}
         </div>
 
         <label className="flex w-full min-w-0 flex-1 flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
           {t('bots.nameLabel')}
-          <input
+          <Input
             autoFocus={autoFocusName}
-            aria-label={t('bots.nameLabel')}
+            ariaLabel={t('bots.nameLabel')}
             value={value.name}
-            onChange={(event) => update('name', event.target.value, 'text')}
+            onChange={(next) => update('name', next, 'text')}
+            onBlur={onNameBlur}
+            {...composition}
             placeholder={t('bots.roster.customNamePlaceholder')}
-            className="h-10 min-w-0 rounded-full border border-[var(--border-default)] bg-[var(--surface)] px-3 text-14 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)] focus:border-[var(--focus-ring)]"
+            className="min-w-0"
             required
           />
         </label>
@@ -77,13 +91,15 @@ export function BotBasicProfileFields({
 
       <label className="flex min-w-0 flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
         {t('bots.profile.summary')}
-        <textarea
+        <Textarea
           aria-label={t('bots.profile.summary')}
           value={value.description}
-          onChange={(event) => update('description', event.target.value, 'text')}
+          onChange={(next) => update('description', next, 'text')}
+          onBlur={onDescriptionBlur}
+          {...composition}
           placeholder={t('bots.profile.summaryPlaceholder')}
           rows={3}
-          className="min-h-24 min-w-0 resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2.5 text-14 leading-6 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)] focus:border-[var(--focus-ring)]"
+          className="min-h-24 min-w-0 resize-none py-2.5 text-14 leading-6 [field-sizing:content]"
         />
       </label>
     </div>

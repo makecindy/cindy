@@ -32,11 +32,22 @@ const appGetPath = vi.fn((name: string) => {
 const fetchManifest = vi.fn();
 const getBaseUrl = vi.fn(() => CDN_EXTERNAL_BASE_URL);
 const isDev = vi.fn(() => false);
+const syncWindowsVersionAfterUpdate = vi.fn(async () => undefined);
 const download = vi.fn();
 const readAutoUpdateSettings = vi.fn(() => ({ autoRelaunchOnIdle: true }));
 const spawnProcess = vi.fn(() => ({
   unref: vi.fn(),
   on: vi.fn(),
+}));
+const findLinuxUserInstallation = vi.fn(() => null);
+const checkDebianManagedInstallation = vi.fn<() =>
+  | { status: 'managed' }
+  | { status: 'not-managed' }
+  | { status: 'error'; error: unknown }
+>(() => ({ status: 'not-managed' }));
+const missingLinuxUserInstallTools = vi.fn(() => [] as string[]);
+vi.mock('../linuxInstallation', () => ({
+  findLinuxUserInstallation, checkDebianManagedInstallation, missingLinuxUserInstallTools,
 }));
 const checkWindowsUpdaterPrerequisites = vi.fn<
   () => { satisfied: boolean; missingFiles: string[] }
@@ -52,6 +63,7 @@ const logInfo = vi.fn();
 const logWarn = vi.fn();
 const logError = vi.fn();
 const logDebug = vi.fn();
+const maskPath = vi.fn((value: string) => value);
 
 vi.mock('electron', () => ({
   app: {
@@ -152,6 +164,11 @@ vi.mock('../windowsUpdaterPrerequisites', () => ({
   stageBundledWindowsUpdaterRuntime,
 }));
 
+vi.mock('../windowsInstallationVersion', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../windowsInstallationVersion')>(),
+  syncWindowsVersionAfterUpdate,
+}));
+
 vi.mock('../security/trustedAppRenderer', () => ({
   assertTrustedAppRendererEvent: vi.fn(),
 }));
@@ -164,7 +181,7 @@ vi.mock('../logger', () => ({
     error: logError,
     debug: logDebug,
   }),
-  maskPath: (value: string) => value,
+  maskPath,
 }));
 
 function setPlatform(value: NodeJS.Platform): void {
@@ -201,6 +218,10 @@ afterAll(() => {
   fs.rmSync(TEST_ROOT, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 beforeEach(() => {
+  // Own every startup/background timer so afterEach can cancel it before the
+  // app.getPath mock starts pointing at the next test's isolated fixture.
+  vi.useFakeTimers();
+  syncWindowsVersionAfterUpdate.mockClear();
   browserWindowGetAllWindows.mockReset();
   browserWindowGetAllWindows.mockReturnValue([]);
   ipcHandlers.clear();
@@ -249,6 +270,12 @@ beforeEach(() => {
   readAutoUpdateSettings.mockReset();
   readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: true });
   spawnProcess.mockClear();
+  findLinuxUserInstallation.mockReset();
+  findLinuxUserInstallation.mockReturnValue(null);
+  checkDebianManagedInstallation.mockReset();
+  checkDebianManagedInstallation.mockReturnValue({ status: 'not-managed' });
+  missingLinuxUserInstallTools.mockReset();
+  missingLinuxUserInstallTools.mockReturnValue([]);
   checkWindowsUpdaterPrerequisites.mockReset();
   checkWindowsUpdaterPrerequisites.mockReturnValue({
     satisfied: true,
@@ -260,6 +287,7 @@ beforeEach(() => {
   logWarn.mockReset();
   logError.mockReset();
   logDebug.mockReset();
+  maskPath.mockClear();
   resetUpdateServiceFixture();
 });
 afterEach(() => {
@@ -270,7 +298,130 @@ afterEach(() => {
 });
 
 describe.sequential('updateService', () => {
-describe('binary version checks after a user-requested update', () => {
+describe('installation version repair scope', () => {
+  it.each(['darwin', 'linux'] as const)('does not add metadata work to %s startup', async (platform) => {
+    const service = await freshUpdateService(platform);
+    service.initUpdateService();
+    expect(syncWindowsVersionAfterUpdate).not.toHaveBeenCalled();
+    service.stopUpdateService();
+  });
+
+  it('does not touch Windows development installations', async () => {
+    const service = await freshUpdateService('win32');
+    isDev.mockReturnValue(true);
+    service.initUpdateService();
+    expect(syncWindowsVersionAfterUpdate).not.toHaveBeenCalled();
+    service.stopUpdateService();
+  });
+
+  it('checks only the current Windows install and its existing update receipt', async () => {
+    const service = await freshUpdateService('win32');
+    service.initUpdateService();
+    expect(syncWindowsVersionAfterUpdate).toHaveBeenCalledOnce();
+    expect(syncWindowsVersionAfterUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      platform: 'win32', packaged: true, version: appGetVersion(), exePath: TEST_EXE,
+      patchInfoPath: path.join(TEST_USER_DATA, 'updates', 'patch-info.json'),
+    }));
+    service.stopUpdateService();
+  });
+});
+
+describe('agent-facing managed app update check', () => {
+  it('checks version metadata without staging a patch or arming auto-relaunch', async () => {
+    // Auto-relaunch is enabled. The normal background check gets a same-version
+    // manifest so this test isolates any patch staged by the Agent check.
+    fetchManifest.mockResolvedValueOnce(updateManifest()).mockResolvedValue(updateManifest('0.0.64'));
+    const service = await freshUpdateService('darwin');
+    try {
+      service.initUpdateService();
+      expect(await service.checkAppUpdateForAgent()).toMatchObject({
+        status: 'available', currentVersion: '0.0.64', targetVersion: '0.0.65',
+      });
+      expect(download).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(65_000);
+      expect(download).not.toHaveBeenCalled();
+      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(appQuit).not.toHaveBeenCalled();
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('reports an already staged update while offline or when the manifest changes', async () => {
+    fetchManifest.mockResolvedValue(updateManifest());
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'update');
+      return { path: targetPath, size: 123 };
+    });
+    const service = await freshUpdateService('darwin');
+    try {
+      expect(await service.checkForUpdate()).toBe('ready');
+      expect(download).toHaveBeenCalledTimes(1);
+      fetchManifest.mockResolvedValueOnce(null).mockResolvedValue(updateManifest('0.0.64'));
+      for (let i = 0; i < 2; i += 1) {
+        expect(await service.checkAppUpdateForAgent()).toMatchObject({
+          status: 'ready', currentVersion: '0.0.64', targetVersion: '0.0.65',
+        });
+      }
+      expect(fetchManifest).toHaveBeenCalledTimes(1);
+      expect(download).toHaveBeenCalledTimes(1);
+      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(appQuit).not.toHaveBeenCalled();
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('rejects a translocated macOS app without staging a patch', async () => {
+    fetchManifest.mockResolvedValue(updateManifest());
+    const service = await freshUpdateService('darwin');
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'available' });
+    appIsInApplicationsFolder.mockReturnValue(false);
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'unsupported' });
+    expect(download).not.toHaveBeenCalled();
+    service.stopUpdateService();
+  });
+
+  it('reports an unsupported Linux installation before fetching an update', async () => {
+    const service = await freshUpdateService('linux');
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'unsupported' });
+    expect(fetchManifest).not.toHaveBeenCalled();
+    checkDebianManagedInstallation.mockReturnValue({ status: 'managed' });
+    expect(await service.checkAppUpdateForAgent()).not.toMatchObject({ status: 'unsupported' });
+    service.stopUpdateService();
+  });
+
+  it('reports missing Windows updater prerequisites before fetching an update', async () => {
+    const service = await freshUpdateService('win32');
+    checkWindowsUpdaterPrerequisites.mockReturnValue({ satisfied: false, missingFiles: ['vcruntime140.dll'] });
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'unsupported' });
+    expect(fetchManifest).not.toHaveBeenCalled();
+    service.stopUpdateService();
+  });
+
+  it('reports an unsupported development build and an up-to-date release', async () => {
+    const service = await freshUpdateService('darwin');
+    isDev.mockReturnValue(true);
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'unsupported' });
+    isDev.mockReturnValue(false);
+    fetchManifest.mockResolvedValue(updateManifest('0.0.64'));
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'no_installable_update' });
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
+
+  it('does not advertise an invalid or asset-free manifest as an installable update', async () => {
+    const service = await freshUpdateService('darwin');
+    fetchManifest.mockResolvedValueOnce(updateManifest('not-semver'));
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'manifest_failed' });
+    fetchManifest.mockResolvedValueOnce({ app: { version: '0.0.65' } });
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'no_installable_update' });
+    expect(download).not.toHaveBeenCalled();
+    service.stopUpdateService();
+  });
+});
+
+describe('binary version checks after an applied update', () => {
   beforeEach(() => {
     readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
     download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
@@ -280,7 +431,38 @@ describe('binary version checks after a user-requested update', () => {
     });
   });
 
-  it('writes the target-version marker only when the user actually applies the update', async () => {
+  it('schedules a one-time refresh of only the confirmed harness before a graceful relaunch', async () => {
+    const service = await freshUpdateService('darwin');
+    const { consumeStartupBinaryUpdateMarker } = await import('../agent-binaries/startup-update');
+    service.initUpdateService();
+    try {
+      const relaunch = ipcHandlers.get('update-harness-relaunch');
+      expect(relaunch).toBeTypeOf('function');
+      expect(relaunch?.({ sender: { id: 1 } }, 'codex')).toEqual({ accepted: true });
+      expect(appRelaunch).toHaveBeenCalledWith({ args: process.argv.slice(1) });
+      expect(appQuit).toHaveBeenCalled();
+      expect(consumeStartupBinaryUpdateMarker(TEST_USER_DATA, appGetVersion())).toEqual(['codex']);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it.each([undefined, 'pi', 'gemini'])('rejects a harness relaunch for %s without restarting', async (kind) => {
+    const service = await freshUpdateService('darwin');
+    const { consumeStartupBinaryUpdateMarker } = await import('../agent-binaries/startup-update');
+    service.initUpdateService();
+    try {
+      const relaunch = ipcHandlers.get('update-harness-relaunch');
+      expect(() => relaunch?.({ sender: { id: 1 } }, kind)).toThrow();
+      expect(appRelaunch).not.toHaveBeenCalled();
+      expect(appQuit).not.toHaveBeenCalled();
+      expect(consumeStartupBinaryUpdateMarker(TEST_USER_DATA, appGetVersion())).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('writes the target-version marker only when the update is actually applied', async () => {
     const service = await freshUpdateService('darwin');
     const { consumeStartupBinaryUpdateMarker } = await import('../agent-binaries/startup-update');
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
@@ -301,15 +483,19 @@ describe('binary version checks after a user-requested update', () => {
     }
   });
 
-  it('does not write the marker for an automatic update relaunch', async () => {
+  it('writes the same marker for an automatic update relaunch', async () => {
     const service = await freshUpdateService('darwin');
+    const { consumeStartupBinaryUpdateMarker } = await import('../agent-binaries/startup-update');
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     service.initUpdateService();
     try {
       await service.checkForUpdate(updateManifest());
+      const markerPath = path.join(TEST_USER_DATA, 'agent-binary-update-once.json');
+      expect(fs.existsSync(markerPath)).toBe(false);
       await expect(ipcHandlers.get('update-relaunch-auto')?.({}, 'dark')).resolves.toMatchObject({ accepted: true });
       await vi.waitFor(() => { expect(spawnProcess).toHaveBeenCalledOnce(); });
-      expect(fs.existsSync(path.join(TEST_USER_DATA, 'agent-binary-update-once.json'))).toBe(false);
+      expect(JSON.parse(fs.readFileSync(markerPath, 'utf8'))).toMatchObject({ version: '0.0.65' });
+      expect(consumeStartupBinaryUpdateMarker(TEST_USER_DATA, '0.0.65')).toBe(true);
     } finally {
       service.stopUpdateService();
       exitSpy.mockRestore();
@@ -349,12 +535,76 @@ describe('binary version checks after a user-requested update', () => {
       await service.checkForUpdate(updateManifest());
       ipcListeners.get('update-relaunch')?.({}, 'dark');
       await vi.waitFor(() => { expect(childListeners.has('error')).toBe(true); });
+      const [, updaterArgs, updaterOptions] = spawnProcess.mock.calls.at(-1)! as unknown as [string, string[], { env: Record<string, string> }];
+      expect(updaterArgs).not.toContain('--install-key');
+      expect(updaterOptions.env.CINDY_VERSION_SYNC_KEY).toMatch(/^[0-9a-f-]{36}$/);
       const markerPath = path.join(TEST_USER_DATA, 'agent-binary-update-once.json');
       expect(fs.existsSync(markerPath)).toBe(true);
       childListeners.get('error')?.(Object.assign(new Error('spawn denied'), { code: 'EACCES' }));
       expect(fs.existsSync(markerPath)).toBe(false);
       expect(service.getUpdateStatus()).toBe('error');
       expect(exitSpy).not.toHaveBeenCalled();
+    } finally {
+      service.stopUpdateService();
+      tmpdirSpy.mockRestore();
+      exitSpy.mockRestore();
+      if (resourcesDescriptor) Object.defineProperty(process, 'resourcesPath', resourcesDescriptor);
+      else Reflect.deleteProperty(process, 'resourcesPath');
+    }
+  });
+
+  it('launches the bundled Windows updater with the existing CLI before quitting Cindy', async () => {
+    const service = await freshUpdateService('win32');
+    const resourcesPath = path.join(TEST_ROOT, 'resources');
+    fs.mkdirSync(resourcesPath, { recursive: true });
+    fs.writeFileSync(path.join(resourcesPath, 'cindy-updater.exe'), 'installed updater');
+    const resourcesDescriptor = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
+    Object.defineProperty(process, 'resourcesPath', { value: resourcesPath, configurable: true });
+    const tmpdirSpy = vi.spyOn(os, 'tmpdir').mockReturnValue(TEST_ROOT);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const unref = vi.fn();
+    const childListeners = new Map<string, (...args: unknown[]) => void>();
+    spawnProcess.mockImplementationOnce(() => ({
+      unref,
+      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => { childListeners.set(event, listener); }),
+    }));
+    service.initUpdateService();
+    try {
+      const manifest = updateManifest('0.0.65', 'app/win32-x64/cindy-0.0.65.zip');
+      manifest.app.hotfix.sha256 = 'AB'.repeat(32);
+      await expect(service.checkForUpdate(manifest)).resolves.toBe('ready');
+      const zipPath = path.join(TEST_USER_DATA, 'updates', 'cindy-0.0.65.zip');
+      expect(download).toHaveBeenCalledWith(expect.objectContaining({
+        targetPath: zipPath, sha256: 'ab'.repeat(32), expectedSize: 123,
+      }));
+
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => { expect(childListeners.has('spawn')).toBe(true); });
+      const [updaterPath, updaterArgs, updaterOptions] = spawnProcess.mock.calls.at(-1)! as unknown as [
+        string, string[], { detached: boolean; stdio: string; windowsHide: boolean; env: Record<string, string> },
+      ];
+      const workDir = path.dirname(updaterPath);
+      expect(path.dirname(workDir)).toBe(TEST_ROOT);
+      expect(fs.readFileSync(updaterPath, 'utf8')).toBe('installed updater');
+      expect(updaterArgs).toEqual([
+        '--zip', zipPath,
+        '--app-dir', path.dirname(TEST_EXE),
+        '--exe-name', path.basename(TEST_EXE),
+        '--pid', String(process.pid),
+        '--log', path.join(TEST_USER_DATA, 'logs', 'cindy-update.log'),
+        '--lock', path.join(TEST_USER_DATA, 'updates', '.updating'),
+        '--theme', 'dark',
+        '--workdir', workDir,
+      ]);
+      expect(stageBundledWindowsUpdaterRuntime).toHaveBeenCalledWith(resourcesPath, workDir);
+      expect(updaterOptions).toMatchObject({ detached: true, stdio: 'ignore', windowsHide: false });
+      expect(updaterOptions.env.CINDY_VERSION_SYNC_KEY).toMatch(/^[0-9a-f-]{36}$/);
+      expect(exitSpy).not.toHaveBeenCalled();
+
+      childListeners.get('spawn')?.();
+      expect(unref).toHaveBeenCalledOnce();
+      expect(exitSpy).toHaveBeenCalledWith(0);
+      expect(JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf8'))).toMatchObject({ applyAttempts: 1 });
     } finally {
       service.stopUpdateService();
       tmpdirSpy.mockRestore();
@@ -448,7 +698,134 @@ function linuxInstallerManifest(version = '0.0.65') {
   };
 }
 
+function expectProbeFailureLog(
+  label: string,
+  fields: { reason: string; status: number | null; code: string | null; signal: string | null },
+  leakedPath: string,
+): void {
+  const detail = logError.mock.calls.find((call) => call[0] === label)?.[1];
+  expect(typeof detail).toBe('string');
+  const text = String(detail);
+  expect(text).not.toContain(leakedPath);
+  expect(text).not.toContain('devuser');
+  expect(text).not.toContain('Command failed');
+  expect(JSON.parse(text)).toEqual({ ...fields, path: TEST_EXE });
+  expect(maskPath).toHaveBeenCalledWith(TEST_EXE);
+}
+
 describe('checkForUpdate Linux installer flow', () => {
+  it('keeps a staged update ready when the Debian ownership check fails', async () => {
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'deb');
+      return { path: targetPath, size: 123 };
+    });
+    const leakedPath = '/home/devuser/custom-builds/Cindy';
+    checkDebianManagedInstallation.mockReturnValue({
+      status: 'error',
+      error: Object.assign(new Error(`Command failed: /usr/bin/dpkg-query -S ${leakedPath}`), {
+        code: 'ETIMEDOUT', status: null, signal: 'SIGTERM',
+      }),
+    });
+    const service = await freshUpdateService('linux', 'x64');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    service.initUpdateService();
+    try {
+      await expect(service.checkForUpdate(linuxInstallerManifest())).resolves.toBe('ready');
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => expect(ipcHandlers.get('update-get-status')?.()).toMatchObject({
+        status: 'ready', version: '0.0.65', errorCode: undefined,
+      }));
+      const info = JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf8'));
+      expect(info.applyAttempts).toBeUndefined();
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', info.fileName))).toBe(true);
+      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(logError.mock.calls.map((call) => String(call[0]))).toContain(
+        'Linux Debian ownership check failed: %s',
+      );
+      expectProbeFailureLog('Linux Debian ownership check failed: %s', {
+        reason: 'timeout', status: null, code: 'ETIMEDOUT', signal: 'SIGTERM',
+      }, leakedPath);
+    } finally {
+      service.stopUpdateService();
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('keeps the staged update when the Debian recheck fails after preflight', async () => {
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'deb');
+      return { path: targetPath, size: 123 };
+    });
+    const leakedPath = '/home/devuser/custom-builds/Cindy';
+    checkDebianManagedInstallation
+      .mockReturnValueOnce({ status: 'managed' })
+      .mockReturnValueOnce({
+        status: 'error',
+        error: Object.assign(new Error(`Command failed: /usr/bin/dpkg-query -S ${leakedPath}`), {
+          status: 2, signal: null,
+        }),
+      });
+    const service = await freshUpdateService('linux', 'x64');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    service.initUpdateService();
+    try {
+      const manifest = linuxInstallerManifest();
+      manifest.app.installer.sha256 = 'ab'.repeat(32);
+      await expect(service.checkForUpdate(manifest)).resolves.toBe('ready');
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => expect(logError.mock.calls.map((call) => String(call[0]))).toContain(
+        'Linux Debian ownership recheck failed: %s',
+      ));
+      const info = JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf8'));
+      expect(checkDebianManagedInstallation).toHaveBeenCalledTimes(2);
+      expect(info.applyAttempts).toBeUndefined();
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', info.fileName))).toBe(true);
+      expect(ipcHandlers.get('update-get-status')?.()).toMatchObject({
+        status: 'ready', version: '0.0.65', errorCode: undefined,
+      });
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(logError.mock.calls.map((call) => String(call[0]))).toContain(
+        'Linux Debian ownership recheck failed: %s',
+      );
+      expectProbeFailureLog('Linux Debian ownership recheck failed: %s', {
+        reason: 'query-failed', status: 2, code: null, signal: null,
+      }, leakedPath);
+    } finally {
+      service.stopUpdateService();
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('does not quit or increment attempts for an unmanaged Linux installation', async () => {
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'deb');
+      return { path: targetPath, size: 123 };
+    });
+    const service = await freshUpdateService('linux', 'x64');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    service.initUpdateService();
+    try {
+      await expect(service.checkForUpdate(linuxInstallerManifest())).resolves.toBe('ready');
+      ipcListeners.get('update-relaunch')?.({}, 'dark');
+      await vi.waitFor(() => expect(ipcHandlers.get('update-get-status')?.()).toMatchObject({
+        status: 'ready', errorCode: 'linux_installation_unsupported',
+      }));
+      const info = JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, 'updates', 'patch-info.json'), 'utf8'));
+      expect(info.applyAttempts).toBeUndefined();
+      expect(fs.existsSync(path.join(TEST_USER_DATA, 'updates', info.fileName))).toBe(true);
+      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      service.stopUpdateService();
+      exitSpy.mockRestore();
+    }
+  });
+
   it('downloads the Linux installer .deb instead of a hotfix zip', async () => {
     readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
     download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
@@ -621,6 +998,30 @@ describe('checkForUpdate 版本无关(占位 0.0.0)打包豁免', () => {
   });
 });
 
+describe('personal version app update policy', () => {
+  it('skips app checks, background polling and relaunch even with an ordinary version number', async () => {
+    appGetVersion.mockReturnValue('1.2.3');
+    const service = await freshUpdateService('win32');
+    const identity = await import('../cindy-make/versionRuntimeIdentity');
+    identity.setCindyPersonalRuntime(true);
+    try {
+      service.initUpdateService();
+      expect(await service.checkForUpdate(updateManifest('9.9.9'))).toBe('idle');
+      expect(await ipcHandlers.get('update-check-startup')!()).toMatchObject({ hasUpdate: false, action: 'none' });
+      ipcListeners.get('update-relaunch')!({}, 'dark');
+      expect(fetchManifest).not.toHaveBeenCalled();
+      expect(download).not.toHaveBeenCalled();
+      expect(powerMonitorOn).not.toHaveBeenCalled();
+      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(appQuit).not.toHaveBeenCalled();
+    } finally {
+      service.stopUpdateService();
+      identity.setCindyPersonalRuntime(false);
+    }
+  });
+});
+
+
 describe('app update forward-only policy', () => {
   it('does not download a manifest version lower than the running app', async () => {
     const service = await freshUpdateService('darwin');
@@ -686,7 +1087,7 @@ describe('app update forward-only policy', () => {
     },
   );
 
-  it('still restores a newer staged patch when startup is offline', async () => {
+  it.each(['darwin', 'win32'] as const)('still restores a newer staged patch when %s startup is offline', async (platform) => {
     vi.useFakeTimers();
     fetchManifest.mockResolvedValue(null);
     const updatesDir = path.join(TEST_USER_DATA, 'updates');
@@ -703,7 +1104,7 @@ describe('app update forward-only policy', () => {
       }),
     );
 
-    const service = await freshUpdateService('darwin');
+    const service = await freshUpdateService(platform);
     service.initUpdateService();
     try {
       const handler = ipcHandlers.get('update-check-startup');

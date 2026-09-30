@@ -153,6 +153,23 @@ describe('StorageManagementCard fixed cache directories', () => {
     expect(
       screen.getByRole('button', { name: 'settings.about.storage.chatAttachmentsClearButton' }),
     ).toBeTruthy();
+    // These actions used to hide behind a private CardButton with no pressed state.
+    for (const action of [
+      'legacyImagesOpenButton',
+      'legacyImagesClearButton',
+      'chatAttachmentsOpenButton',
+      'chatAttachmentsClearButton',
+    ]) {
+      const button = screen.getByRole('button', { name: `settings.about.storage.${action}` });
+      expect(button.classList.contains('cindy-button')).toBe(true);
+      expect(button.className).toContain(
+        'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:',
+      );
+      expect(button.className).toContain(
+        'enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:',
+      );
+      expect(button.getAttribute('data-press-feedback')).not.toBe('none');
+    }
     expect(window.electronAPI.cindyMediaStorage.scan).not.toHaveBeenCalled();
     expect(window.electronAPI.cindyMediaStorage.cleanup).not.toHaveBeenCalled();
   });

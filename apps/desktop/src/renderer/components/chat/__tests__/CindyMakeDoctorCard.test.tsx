@@ -1,8 +1,15 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactElement } from 'react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import { cleanup, fireEvent, render as renderUI, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as renderUI,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { CindyMakeDoctorCard, MakeDoctorReportCard } from '../CindyMakeDoctorCard';
 import { SystemCard } from '../SystemCard';
 import {
@@ -11,7 +18,23 @@ import {
   startMakeDoctorInStream,
 } from '@/lib/cindyMakeDoctorStream';
 import { cancelMakeDoctor } from '@/lib/cindyMakeDoctor';
+import { useCindyMakeState } from '@/lib/cindyMakeState';
+import { makerChatStore } from '@/lib/makerChatStore';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { MAKE_DOCTOR_CHECK_IDS, type MakeDoctorReport } from '../../../../shared/cindyMakeDoctor';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+const opening = vi.hoisted(() => ({
+  get: vi.fn(),
+  restore: vi.fn(),
+  prepend: vi.fn(),
+  error: vi.fn(),
+}));
+vi.mock('@/lib/sessionService', () => ({
+  get: opening.get,
+  restoreIfArchived: opening.restore,
+}));
+vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: { prependCreated: opening.prepend } }));
+vi.mock('@/lib/toast', () => ({ toast: { error: opening.error } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/lib/cindyMakeDoctorStream', () => ({
   startMakeDoctorInStream: vi.fn(),
@@ -19,6 +42,16 @@ vi.mock('@/lib/cindyMakeDoctorStream', () => ({
   startMakeCodeSession: vi.fn(),
 }));
 vi.mock('@/lib/cindyMakeDoctor', () => ({ cancelMakeDoctor: vi.fn(async () => {}) }));
+vi.mock('@/lib/cindyMakeState', () => ({ useCindyMakeState: vi.fn(() => ({})) }));
+vi.mock('@/lib/makerChatStore', () => ({
+  makerChatStore: {
+    getSnapshot: vi.fn(() => ({ messages: [] })),
+    updateSystemCardData: vi.fn(),
+  },
+}));
+vi.mock('@/features/device-link/stickySessionOrigin', () => ({
+  getStickySessionDeviceId: vi.fn(),
+}));
 vi.mock('@/features/bots/useRemoteBots', () => ({ useRemoteBots: () => [] }));
 // Partner task cards have their own integration suite; isolate this sibling variant.
 vi.mock('@/features/bots/BotCollaborationCard', () => ({
@@ -34,8 +67,17 @@ function Location() {
   return <span data-testid="location">{useLocation().pathname}</span>;
 }
 
+beforeEach(() => {
+  setDataOwnerGeneration('doctor-card-test');
+  opening.get.mockReset();
+  opening.restore.mockReset();
+});
+
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
+  vi.mocked(useCindyMakeState).mockReturnValue({});
+  vi.mocked(getStickySessionDeviceId).mockReset();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
@@ -95,7 +137,7 @@ describe('Make upstream step', () => {
     fireEvent.click(screen.getByRole('button', { name: 'cindyMake.upstream.personal' }));
     expect(choose).toHaveBeenCalledWith('personal');
     expect(screen.getByRole('button', { name: 'cindyMake.upstream.personal' }).className).toContain(
-      'border-[var(--border-default)]',
+      '[--button-face-border:var(--border-default)]',
     );
     fireEvent.click(screen.getByText('cindyMakeDoctor.details'));
     expect(screen.getByText('cindyMakeDoctor.checks.git')).toBeTruthy();
@@ -202,7 +244,7 @@ describe('Make upstream step', () => {
       expect(document.querySelector('.animate-spinner')).toBeNull();
       expect(screen.getByRole('status').textContent).toBe(`cindyMake.source.${status}`);
       expect(screen.getByRole('status').className).toContain(
-        status === 'failed' ? 'text-[var(--status-danger)]' : 'text-[var(--text-secondary)]',
+        status === 'failed' ? 'text-[var(--error-fg)]' : 'text-[var(--text-secondary)]',
       );
       expect(screen.queryByRole('button', { name: 'cindyMake.upstream.personal' })).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'cindyMake.prepare.retry' }));
@@ -230,7 +272,7 @@ describe('Make upstream step', () => {
       expect(document.querySelector('.animate-spinner')).toBeNull();
       expect(screen.getByRole('status').textContent).toBe(`cindyMake.upstream.${status}`);
       expect(screen.getByRole('status').className).toContain(
-        status === 'failed' ? 'text-[var(--status-danger)]' : 'text-[var(--text-secondary)]',
+        status === 'failed' ? 'text-[var(--error-fg)]' : 'text-[var(--text-secondary)]',
       );
       expect(screen.queryByRole('button', { name: 'cindyMake.upstream.personal' })).toBeNull();
     },
@@ -318,7 +360,7 @@ describe('Make upstream step', () => {
       ],
     },
   };
-  it('lists all titles and choices immediately, with independent, initially collapsed details', async () => {
+  it('shows choices immediately and reveals results only on request, without nested scrolling', async () => {
     const choose = vi.fn();
     const openExternal = vi.fn(async () => ({ success: true }));
     vi.stubGlobal('electronAPI', { openExternal });
@@ -330,6 +372,15 @@ describe('Make upstream step', () => {
         onChoose={choose}
       />,
     );
+    expect(screen.queryByRole('button', { name: /#12/ })).toBeNull();
+    expect(screen.queryByRole('list')).toBeNull();
+    expect(screen.getByText('cindyMake.upstream.count')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'cindyMake.upstream.personal' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'cindyMake.upstream.wait' })).toBeTruthy();
+    const disclosure = screen.getByRole('button', { name: 'cindyMake.upstream.expand' });
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(disclosure);
+    expect(screen.getByRole('list').className).not.toMatch(/overflow-y|max-h/);
     const first = screen.getByRole('button', { name: /#12/ });
     const second = screen.getByRole('button', { name: /#13/ });
     expect(first.querySelector('b')).toBeNull();
@@ -368,6 +419,10 @@ describe('Make upstream step', () => {
     expect(screen.queryByText('<script>literal</script>')).toBeNull();
     expect(screen.getByText('Second result details')).toBeTruthy();
     expect(second.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.upstream.collapse' }));
+    expect(screen.queryByRole('button', { name: /#12/ })).toBeNull();
+    expect(screen.queryByRole('link')).toBeNull();
+    expect(screen.getByRole('button', { name: 'cindyMake.upstream.personal' })).toBeTruthy();
   });
   it('renders upstream results directly under the upstream step', () => {
     render(
@@ -383,6 +438,58 @@ describe('Make upstream step', () => {
     expect(step.compareDocumentPosition(count) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(count.compareDocumentPosition(step) & Node.DOCUMENT_POSITION_FOLLOWING).toBeFalsy();
   });
+  it('shows PR state and runtime inclusion separately while leaving source details collapsed', () => {
+    render(
+      <MakeDoctorReportCard
+        report={{
+          ...found,
+          upstream: {
+            ...found.upstream!,
+            runtime: {
+              channel: 'dev',
+              version: '0.0.0',
+              commit: 'a'.repeat(40),
+              confidence: 'unknown',
+            },
+            items: [{ ...found.upstream!.items[0], state: 'merged', inclusion: 'unknown' }],
+            excludedIncluded: 2,
+            hasMore: true,
+          },
+        }}
+        onStop={vi.fn()}
+        onRecheck={vi.fn()}
+        onChoose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('cindyMake.upstream.runtimeUnknown')).toBeTruthy();
+    expect(screen.getByText('cindyMake.upstream.excludedIncluded')).toBeTruthy();
+    expect(screen.getByText('cindyMake.upstream.limitedHint')).toBeTruthy();
+    expect(screen.queryByText('cindyMake.upstream.runtimeVersion')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.upstream.expand' }));
+    expect(screen.getByText('cindyMake.upstream.runtimeVersion')).toBeTruthy();
+    const row = screen.getByRole('button', { name: /#12/ });
+    expect(row.textContent).toContain('cindyMake.upstream.state.merged');
+    expect(row.textContent).toContain('cindyMake.upstream.inclusion.unknown');
+    expect(row.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByRole('button', { name: 'cindyMake.upstream.personal' })).toBeTruthy();
+  });
+  it('explains an empty filtered result without claiming the search was exhaustive', () => {
+    render(
+      <MakeDoctorReportCard
+        report={{
+          ...found,
+          upstream: { status: 'notFound', items: [], excludedIncluded: 5, hasMore: true },
+        }}
+        onStop={vi.fn()}
+        onRecheck={vi.fn()}
+        onChoose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('cindyMake.upstream.excludedIncluded')).toBeTruthy();
+    expect(screen.getByText('cindyMake.upstream.limitedHint')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'cindyMake.upstream.expand' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'cindyMake.upstream.personal' })).toBeTruthy();
+  });
   it('shows a completed source status after choosing a personal build', () => {
     render(
       <MakeDoctorReportCard
@@ -395,9 +502,69 @@ describe('Make upstream step', () => {
         onRecheck={vi.fn()}
       />,
     );
-    expect(screen.getAllByText('cindyMake.source.ready')).toHaveLength(1);
+    expect(screen.getAllByText('cindyMake.source.ready')).toHaveLength(2);
     expect(screen.getByRole('status').textContent).toContain('cindyMake.source.ready');
   });
+  it('keeps source readiness visible without repository details or paths in the workflow card', () => {
+    render(
+      <MakeDoctorReportCard
+        report={{
+          ...found,
+          source: {
+            status: 'ready',
+            path: 'managed-source',
+            ref: 'main',
+            branch: 'cindy-personal',
+            currentBranch: 'feature/current',
+            commit: 'a'.repeat(40),
+            baseCommit: 'b'.repeat(40),
+            mainCommit: 'c'.repeat(40),
+            mainRemoteCommit: 'd'.repeat(40),
+            mainBehind: 5,
+            mainAhead: 2,
+          },
+        }}
+        onStop={vi.fn()}
+        onRecheck={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('cindyMake.source.ready')).toBeTruthy();
+    expect(screen.queryByText('cindy-personal')).toBeNull();
+    expect(screen.queryByText('managed-source')).toBeNull();
+    for (const prefix of ['b', 'c']) {
+      expect(screen.queryByText(prefix.repeat(12))).toBeNull();
+    }
+    expect(screen.queryByText('feature/current')).toBeNull();
+    expect(screen.queryByText('main')).toBeNull();
+    expect(screen.queryByText('a'.repeat(12))).toBeNull();
+    expect(screen.queryByText('a'.repeat(40))).toBeNull();
+    expect(screen.queryByText('d'.repeat(12))).toBeNull();
+  });
+  it('shows cache warming and counters in preflight without claiming to install dependencies', () => {
+    render(
+      <MakeDoctorReportCard
+        onStop={vi.fn()}
+        onRecheck={vi.fn()}
+        report={{
+          ...found,
+          status: 'running',
+          source: {
+            status: 'preparing',
+            phase: 'caching',
+            path: 'managed-source',
+            dependencies: { resolved: 21, reused: 12, downloaded: 9, added: 0 },
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText('cindyMake.source.phase.caching')).toBeTruthy();
+    expect(screen.getByText('cindyMake.source.cacheProgress')).toBeTruthy();
+    expect(screen.queryByText('cindyMake.code.dependencyActivity.packages')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'cindyMake.upstream.personal' }).hasAttribute('disabled'),
+    ).toBe(true);
+  });
+
   it('uses a spinner instead of a transient progress bar while preparing source', () => {
     render(
       <MakeDoctorReportCard
@@ -426,6 +593,7 @@ describe('Make upstream step', () => {
     expect(screen.getByRole('status').textContent).toContain('cindyMake.upstream.choice.personal');
     expect(screen.queryByText('cindyMake.upstream.decisionHint.personal')).toBeNull();
     expect(screen.queryByRole('button', { name: 'cindyMake.upstream.personal' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.upstream.expand' }));
     fireEvent.click(screen.getByRole('button', { name: /#12/ }));
     view.rerender(
       <MakeDoctorReportCard
@@ -434,10 +602,45 @@ describe('Make upstream step', () => {
       />,
     );
     view.rerender(<MakeDoctorReportCard {...props} report={found} />);
+    expect(screen.queryByRole('button', { name: /#12/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.upstream.expand' }));
     expect(screen.getByRole('button', { name: /#12/ }).getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(screen.getByRole('button', { name: /#12/ }));
     view.rerender(<MakeDoctorReportCard {...props} report={{ ...found, runId: 'next-run' }} />);
+    expect(screen.queryByRole('button', { name: /#12/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.upstream.expand' }));
     expect(screen.getByRole('button', { name: /#12/ }).getAttribute('aria-expanded')).toBe('false');
+  });
+  it('shows the live Git line compactly and clears stale progress once source is ready', () => {
+    const source: NonNullable<MakeDoctorReport['source']> = {
+      status: 'preparing',
+      path: 'managed-source',
+      phase: 'fetching',
+      progress: {
+        stage: 'receiving',
+        percent: 43,
+        message: 'Receiving objects: 43% (43/100), 1.00 MiB | 1.00 MiB/s',
+      },
+    };
+    const props = { onStop: vi.fn(), onRecheck: vi.fn() };
+    const view = render(
+      <MakeDoctorReportCard {...props} report={{ ...found, status: 'running', source }} />,
+    );
+    const progressLine = screen.getByText(source.progress!.message!);
+    expect(progressLine.className).toContain('truncate');
+    expect(progressLine.getAttribute('title')).toBe(source.progress!.message);
+    expect(screen.getByText('(43%)')).toBeTruthy();
+    expect(screen.queryByText('cindyMake.source.phase.fetching')).toBeNull();
+    view.rerender(
+      <MakeDoctorReportCard
+        {...props}
+        report={{ ...found, source: { ...source, status: 'ready' } }}
+      />,
+    );
+    expect(screen.getByText('cindyMake.source.ready')).toBeTruthy();
+    expect(screen.queryByText(source.progress!.message!)).toBeNull();
+    expect(screen.queryByText('cindyMake.source.gitProgress.receiving')).toBeNull();
+    expect(screen.queryByText('cindyMake.source.phase.fetching')).toBeNull();
   });
 });
 const report: MakeDoctorReport = {
@@ -448,7 +651,193 @@ const report: MakeDoctorReport = {
   checks: [{ id: 'git', status: 'passed', version: '2.55.0' }],
 };
 
+describe('Main-owned report recovery', () => {
+  const persisted: MakeDoctorReport = {
+    ...report,
+    mode: 'prepare',
+    status: 'running',
+    upstream: { status: 'pending', items: [] },
+    source: { status: 'preparing', phase: 'cloning', path: '/source' },
+  };
+  const completed: MakeDoctorReport = {
+    ...persisted,
+    status: 'completed',
+    checks: MAKE_DOCTOR_CHECK_IDS.map((id) => ({ id, status: 'passed' })),
+    source: { status: 'ready', path: '/source' },
+    upstream: { status: 'notFound', items: [] },
+  };
+  it('uses the complete Main workflow after reload instead of the old running message', () => {
+    vi.mocked(useCindyMakeState).mockReturnValue({ reports: { [report.runId]: completed } });
+    render(
+      <CindyMakeDoctorCard
+        sessionId="origin"
+        data={{ report: persisted, request: 'original request' }}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'cindyMake.upstream.personal' })).toBeTruthy();
+    expect(screen.getByText('cindyMake.upstream.notFoundHint')).toBeTruthy();
+    expect(screen.queryByText('cindyMake.source.phase.cloning')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'cindyMake.prepare.stop' })).toBeNull();
+  });
+  it('projects updated source and cancellation reports without writing a guessed message state', () => {
+    const update = vi.spyOn(makerChatStore, 'updateSystemCardData').mockImplementation(() => {});
+    vi.mocked(useCindyMakeState).mockReturnValue({
+      reports: {
+        [report.runId]: {
+          ...persisted,
+          source: { status: 'preparing', phase: 'installing', path: '/source' },
+        },
+      },
+    });
+    const view = render(<CindyMakeDoctorCard sessionId="origin" data={{ report: persisted }} />);
+    expect(screen.getByText('cindyMake.source.phase.installing')).toBeTruthy();
+    vi.mocked(useCindyMakeState).mockReturnValue({
+      reports: {
+        [report.runId]: {
+          ...persisted,
+          status: 'cancelled',
+          source: { status: 'cancelled', path: '/source' },
+        },
+      },
+    });
+    view.rerender(<CindyMakeDoctorCard sessionId="origin" data={{ report: persisted }} />);
+    expect(screen.getByRole('status').textContent).toBe('cindyMake.source.cancelled');
+    expect(screen.getByRole('button', { name: 'cindyMake.prepare.retry' })).toBeTruthy();
+    expect(update).not.toHaveBeenCalled();
+  });
+  it('falls back to the saved report when Main has no matching run', () => {
+    vi.mocked(useCindyMakeState).mockReturnValue({ reports: { other: completed } });
+    render(<CindyMakeDoctorCard sessionId="origin" data={{ report: persisted }} />);
+    expect(screen.getByText('cindyMake.source.phase.cloning')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'cindyMake.upstream.personal' })).toBeNull();
+  });
+  it.each(['choose', 'retry'] as const)(
+    'syncs only the authoritative report before the legacy %s action checks its cached message',
+    async (action) => {
+      const authoritative: MakeDoctorReport =
+        action === 'choose'
+          ? completed
+          : {
+              ...persisted,
+              status: 'cancelled',
+              source: { status: 'cancelled', path: '/source' },
+            };
+      vi.mocked(useCindyMakeState).mockReturnValue({ reports: { [report.runId]: authoritative } });
+      const request = 'original request\n  keep whitespace';
+      const snapshot = {
+        ...makerChatStore.getSnapshot('origin'),
+        messages: [
+          {
+            clientId: 'original-card',
+            role: 'assistant' as const,
+            content: '',
+            systemCardType: 'cindy-make' as const,
+            systemCardData: { report: persisted, request },
+          },
+        ],
+      };
+      vi.spyOn(makerChatStore, 'getSnapshot').mockReturnValue(snapshot);
+      const update = vi.spyOn(makerChatStore, 'updateSystemCardData').mockImplementation(() => {});
+      render(<CindyMakeDoctorCard sessionId="origin" data={{ report: persisted, request }} />);
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: action === 'choose' ? 'cindyMake.upstream.personal' : 'cindyMake.prepare.retry',
+        }),
+      );
+      await waitFor(() =>
+        expect(update).toHaveBeenCalledWith('origin', 'original-card', { report: authoritative }),
+      );
+      const command = action === 'choose' ? chooseMakeUpstream : startMakeDoctorInStream;
+      await waitFor(() => expect(command).toHaveBeenCalledOnce());
+      expect(update.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(command).mock.invocationCallOrder[0],
+      );
+      expect(snapshot.messages[0].systemCardData.request).toBe(request);
+    },
+  );
+  it('does not replace a remote task report with a matching local run or expose local controls', () => {
+    vi.mocked(getStickySessionDeviceId).mockReturnValue('remote-device');
+    const remoteReport: MakeDoctorReport = {
+      ...persisted,
+      task: { sessionId: 'remote-task', originSessionId: 'remote-origin', phase: 'dependencies' },
+    };
+    vi.mocked(useCindyMakeState).mockReturnValue({
+      reports: { [report.runId]: completed },
+      tasks: {
+        [report.runId]: {
+          ...remoteReport,
+          status: 'completed',
+          task: { ...remoteReport.task!, phase: 'completed' },
+        },
+      },
+    });
+    render(
+      <>
+        <CindyMakeDoctorCard
+          sessionId="remote-origin"
+          data={{ report: remoteReport, request: 'request' }}
+        />
+        <Location />
+      </>,
+    );
+    expect(screen.getByRole('status').textContent).toBe('cindyMake.code.phases.dependencies');
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getByTestId('location').textContent).toBe('/');
+  });
+  it('keeps remote legacy cards read-only and ignores local workflow reports', () => {
+    vi.mocked(getStickySessionDeviceId).mockReturnValue('remote-device');
+    vi.mocked(useCindyMakeState).mockReturnValue({ reports: { [report.runId]: completed } });
+    const view = render(
+      <CindyMakeDoctorCard sessionId="remote-origin" data={{ report: persisted }} />,
+    );
+    expect(screen.getByText('cindyMake.source.phase.cloning')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'cindyMake.prepare.stop' })).toBeNull();
+    view.rerender(
+      <CindyMakeDoctorCard
+        sessionId="remote-origin"
+        data={{ report: completed, decision: 'personal', codeSessionId: 'remote-task' }}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'cindyMake.upstream.retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'cindyMake.code.open' })).toBeNull();
+    expect(startMakeCodeSession).not.toHaveBeenCalled();
+    expect(cancelMakeDoctor).not.toHaveBeenCalled();
+  });
+});
+
 describe('doctor card interactions', () => {
+  it('uses a compact worktree and dependency card inside the created task', () => {
+    render(
+      <CindyMakeDoctorCard
+        sessionId="task-session"
+        data={{
+          request: '修复消息流闪烁',
+          codeSessionId: 'task-session',
+          report: {
+            ...report,
+            mode: 'prepare',
+            status: 'running',
+            checks: [],
+            source: {
+              status: 'ready',
+              branch: 'cindy-make/task-run',
+              path: 'C:/Cindy/worktrees/task-run',
+            },
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText('cindyMake.code.taskName')).toBeTruthy();
+    expect(screen.getByText('cindyMake.code.workspace')).toBeTruthy();
+    expect(screen.getByText('C:/Cindy/worktrees/task-run')).toBeTruthy();
+    expect(screen.getByText('cindyMake.code.preparingNpmDependencies')).toBeTruthy();
+    expect(screen.queryByText('修复消息流闪烁')).toBeNull();
+    expect(screen.queryByText('cindyMakeDoctor.scope')).toBeNull();
+    expect(screen.queryByText('cindyMake.stepEnvironment')).toBeNull();
+    expect(screen.queryByText('cindyMake.stepSource')).toBeNull();
+    expect(screen.queryByText('cindyMake.stepUpstream')).toBeNull();
+  });
+
   it('shows download progress and retries preparation after a checksum failure in the same card', () => {
     const retry = vi.fn();
     const view = render(
@@ -617,7 +1006,8 @@ describe('doctor card interactions', () => {
     expect(chooseMakeUpstream).toHaveBeenCalledWith('origin-task', report.runId, 'personal');
   });
 
-  it('opens the persisted task without creating or sending again, including after a failed send', () => {
+  it('opens the persisted task without creating or sending again, including after a failed send', async () => {
+    opening.get.mockResolvedValue({ id: 'existing-task', status: 'active' });
     render(
       <>
         <Location />
@@ -635,7 +1025,130 @@ describe('doctor card interactions', () => {
     );
     expect(screen.getByRole('status').textContent).toBe('cindyMake.code.sendFailed');
     fireEvent.click(screen.getByRole('button', { name: 'cindyMake.code.open' }));
-    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/existing-task');
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe('/cc-agent/existing-task'),
+    );
     expect(startMakeCodeSession).not.toHaveBeenCalled();
+    expect(opening.restore).not.toHaveBeenCalled();
+  });
+});
+
+describe.each(['task', 'legacy'] as const)('opening a %s preparation card', (kind) => {
+  const archived = {
+    id: 'existing-task',
+    status: 'archived',
+    workingDir: '/make/run',
+    workspaceKind: 'project',
+    remoteHostId: null,
+  };
+  const renderLink = (onDismiss = vi.fn()) => {
+    const saved: MakeDoctorReport = {
+      ...report,
+      status: kind === 'task' ? 'cancelled' : 'completed',
+      source: { status: 'ready', path: '/make/run' },
+      ...(kind === 'task'
+        ? { task: { sessionId: archived.id, phase: 'dependencies' as const } }
+        : {}),
+    };
+    return render(
+      <>
+        <Location />
+        <CindyMakeDoctorCard
+          sessionId="origin-task"
+          onDismiss={onDismiss}
+          data={{ report: saved, decision: 'personal', codeSessionId: archived.id }}
+        />
+      </>,
+    );
+  };
+  const clickOpen = () =>
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.code.open' }));
+
+  it('restores the archived task before dismissing and navigating, without dispatching again', async () => {
+    opening.get.mockResolvedValue(archived);
+    let finishRestore!: (value: unknown) => void;
+    opening.restore.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishRestore = resolve;
+        }),
+    );
+    const dismiss = vi.fn();
+    renderLink(dismiss);
+    clickOpen();
+    clickOpen();
+    await waitFor(() => expect(opening.restore).toHaveBeenCalledWith(archived.id, archived));
+    expect(opening.restore).toHaveBeenCalledOnce();
+    expect(dismiss).not.toHaveBeenCalled();
+    expect(opening.prepend).not.toHaveBeenCalled();
+    expect(screen.getByTestId('location').textContent).toBe('/');
+    const restored = { ...archived, status: 'active' };
+    await act(async () => finishRestore(restored));
+    expect(opening.prepend).toHaveBeenCalledWith(restored);
+    expect(dismiss).toHaveBeenCalledOnce();
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/' + archived.id);
+    expect(startMakeCodeSession).not.toHaveBeenCalled();
+    expect(chooseMakeUpstream).not.toHaveBeenCalled();
+  });
+
+  it.each(['deleted', 'changed'] as const)('does not open a %s task', async (state) => {
+    opening.get.mockResolvedValue(
+      state === 'deleted' ? { ...archived, status: 'deleted' } : archived,
+    );
+    opening.restore.mockResolvedValue(null);
+    const dismiss = vi.fn();
+    renderLink(dismiss);
+    clickOpen();
+    await waitFor(() =>
+      expect(opening.error).toHaveBeenCalledWith('settings.cindyMake.tasks.errors.unavailable'),
+    );
+    expect(screen.getByTestId('location').textContent).toBe('/');
+    expect(opening.prepend).not.toHaveBeenCalled();
+    expect(dismiss).not.toHaveBeenCalled();
+    if (state === 'deleted') expect(opening.restore).not.toHaveBeenCalled();
+  });
+
+  it.each(['owner', 'remote'] as const)(
+    'does not restore after the %s changes during lookup',
+    async (change) => {
+      let finishGet!: (value: unknown) => void;
+      opening.get.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishGet = resolve;
+          }),
+      );
+      renderLink();
+      clickOpen();
+      await waitFor(() => expect(opening.get).toHaveBeenCalledOnce());
+      if (change === 'owner') setDataOwnerGeneration('another-owner');
+      else
+        vi.mocked(getStickySessionDeviceId).mockImplementation((id) =>
+          id === archived.id ? 'remote-device' : undefined,
+        );
+      await act(async () => finishGet(archived));
+      expect(opening.restore).not.toHaveBeenCalled();
+      expect(opening.prepend).not.toHaveBeenCalled();
+      expect(screen.getByTestId('location').textContent).toBe('/');
+    },
+  );
+
+  it('does not navigate after the originating card has unmounted', async () => {
+    let finishGet!: (value: unknown) => void;
+    opening.get.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishGet = resolve;
+        }),
+    );
+    const dismiss = vi.fn();
+    const view = renderLink(dismiss);
+    clickOpen();
+    await waitFor(() => expect(opening.get).toHaveBeenCalledOnce());
+    view.unmount();
+    await act(async () => finishGet(archived));
+    expect(opening.restore).not.toHaveBeenCalled();
+    expect(opening.prepend).not.toHaveBeenCalled();
+    expect(dismiss).not.toHaveBeenCalled();
   });
 });

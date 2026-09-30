@@ -1,3 +1,5 @@
+import { runTaskTagsTransaction } from '../worker/opHandlers/taskTagsTx.js';
+import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../sharedTaskClosureSql.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -13,8 +15,11 @@ import {
   type VecStatusEvent,
   type WorkerMessage,
 } from './DbTransport.js';
+import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const CLOSE_SHARED_TASKS_FOR_SESSION_SQL = ${JSON.stringify(CLOSE_SHARED_TASKS_FOR_SESSION_SQL)};
+const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
 // 旧版 inline worker fallback。默认运行时走 .vite/build/dbWorker.js；
 // 这段只作为打包路径回滚口保留，后续验证 macOS / Windows packaged 后删除。
 const { parentPort, workerData } = require('node:worker_threads');
@@ -448,10 +453,13 @@ function dispatchTx(readyDb, payload) {
       return sessionsRenameTitles(readyDb, request.args);
     case 'sessions.setStatus':
       return sessionsSetStatus(readyDb, request.args);
+    case 'sessions.setTerminalStatus':
+      return sessionsSetTerminalStatus(readyDb, request.args);
     case 'recentWorkdirs.mergeWindowsIdentity':
       return recentWorkdirsMergeWindowsIdentity(readyDb, request.args);
     case 'recentWorkdirs.removeWindowsIdentity':
       return recentWorkdirsRemoveWindowsIdentity(readyDb, request.args);
+    case 'taskTags.execute': return runTaskTagsTransaction(readyDb, request.args);
     case 'projectAliases.replaceIdentity':
       return projectAliasesReplaceIdentity(readyDb, request.args);
     case 'toolResults.compactSession':
@@ -1070,6 +1078,7 @@ function sessionsSetStatus(readyDb, args) {
     expectString(id, 'sessionId'),
   );
   const status = expectString(payload.status, 'status');
+  const closeSharedTasks = payload.closeSharedTasks === true;
   if (status !== 'active' && status !== 'archived') {
     throw Object.assign(new Error('invalid status: ' + status), { code: 'INVALID_ARGS' });
   }
@@ -1096,6 +1105,9 @@ function sessionsSetStatus(readyDb, args) {
         });
       }
       const updated = updateSession.get(status, now, sessionId);
+      if (closeSharedTasks && status === 'archived') {
+        readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
+      }
       if (!updated) throw Object.assign(new Error('Session 不存在: ' + sessionId), { code: 'NOT_FOUND' });
       applied.push({
         sessionId: updated.id,
@@ -1108,6 +1120,29 @@ function sessionsSetStatus(readyDb, args) {
       });
     }
     return applied;
+  })();
+}
+
+// Keep this in sync with worker/opHandlers/tx.ts.
+function sessionsSetTerminalStatus(readyDb, args) {
+  const payload = asRecord(args, 'sessions.setTerminalStatus args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const status = expectString(payload.status, 'status');
+  if (status !== 'archived' && status !== 'deleted') {
+    throw Object.assign(new Error('invalid terminal status: ' + status), { code: 'INVALID_ARGS' });
+  }
+  return readyDb.transaction(() => {
+    const existing = readyDb.prepare('SELECT id, status, source FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
+    if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
+    if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    if (existing.source === 'bot') throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    const now = Date.now();
+    readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
+    const updated = readyDb.prepare(
+      'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    ).get(status, now, sessionId);
+    if (!updated) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
+    return { ...updated, sessionId: updated.id, status };
   })();
 }
 
@@ -1243,6 +1278,7 @@ function sessionImportShare(readyDb, args) {
     const replacementUpdatedAt = expectNumber(session.updatedAt, 'session.updatedAt');
     for (const replacedSession of replaceSessions) {
       deleteReplacedSession.run(replacementUpdatedAt, replacedSession.id);
+      readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(replacementUpdatedAt, replacedSession.id);
     }
     let count = insertSessionWithMessages(session, messages);
     if (orca) {
@@ -1625,6 +1661,10 @@ function rewindCommit(readyDb, args) {
   const requireLatestUser = payload.requireLatestUser === true;
   const nativeForkAnchorSessionMap = normalizeNativeForkAnchorSessionMap(payload.nativeForkAnchorSessionMap);
   const now = expectNumber(payload.now, 'now');
+  const expectedClearedAt =
+    payload.expectedClearedAt === undefined || payload.expectedClearedAt === null
+      ? null
+      : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
   const rows = readyDb.prepare(
     'SELECT id, client_id, role, created_at, agent_meta, tool_use_id FROM messages WHERE session_id = ? AND rewind_at IS NULL',
   ).all(sessionId);
@@ -1661,6 +1701,23 @@ function rewindCommit(readyDb, args) {
     : null;
   const updateAgentMeta = readyDb.prepare('UPDATE messages SET agent_meta = ? WHERE id = ?');
   readyDb.transaction(() => {
+    const session = readyDb.prepare('SELECT cleared_at FROM sessions WHERE id = ?').get(sessionId);
+    if (!session) {
+      throw Object.assign(new Error('Session missing: ' + sessionId), { code: 'NOT_FOUND' });
+    }
+    const currentClearedAt = session.cleared_at ?? null;
+    if ((currentClearedAt ?? -1) !== (expectedClearedAt ?? -1)) {
+      throw Object.assign(
+        new Error('CLEAR_GENERATION_CHANGED: clear-boundary changed for ' + sessionId),
+        { code: 'PRECONDITION_FAILED' },
+      );
+    }
+    if (currentClearedAt !== null && targetCreatedAt <= currentClearedAt) {
+      throw Object.assign(
+        new Error('CLEAR_GENERATION_CHANGED: target is at or before /clear for ' + sessionId),
+        { code: 'PRECONDITION_FAILED' },
+      );
+    }
     for (const id of idsToRewind) updateMessage.run(now, id);
     // Mirror worker/opHandlers/tx.ts: surviving rows that still anchor the old
     // Codex thread are remapped to the replacement thread in the same transaction.
@@ -2491,24 +2548,31 @@ async function dispatch(op, args) {
 setDatabase(workerData || {});
 
 parentPort.on('message', async (req) => {
+  const startedAt = performance.timeOrigin + performance.now();
+  const timing = () => ({ startedAt, finishedAt: performance.timeOrigin + performance.now() });
   try {
     const result = await dispatch(req.op, req.args);
-    parentPort.postMessage({ id: req.id, ok: true, result });
+    parentPort.postMessage({ id: req.id, ok: true, result, timing: timing() });
   } catch (err) {
-    parentPort.postMessage({ id: req.id, ok: false, error: rpcError(err) });
+    parentPort.postMessage({ id: req.id, ok: false, error: rpcError(err), timing: timing() });
   }
 });
 `;
 
 interface PendingRpc {
+  op: string;
+  enqueuedAt: number;
+  dispatchedAt: number;
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
   /** 当前预算窗口的起点(挂钟)。跨睡眠重武装时会重置,见 evaluateRpcTimeout。 */
   sentAtMs: number;
+  background: boolean;
 }
 
 interface QueuedRpc {
+  enqueuedAt: number;
   req: RpcRequest;
   transferList: unknown[];
   resolve: (value: unknown) => void;
@@ -2516,6 +2580,7 @@ interface QueuedRpc {
   /** RPC 总预算从进入 transport 开始计,而不是等 dispatch 后才开始。 */
   budgetStartedAtMs: number;
   queueTimeout?: ReturnType<typeof setTimeout>;
+  background: boolean;
 }
 
 /**
@@ -2569,12 +2634,19 @@ export interface WorkerThreadTransportOptions {
   maxQueuedRpcs?: number;
   /** 单个 RPC 从入队到完成的总预算；生产默认 30s，测试可缩短。 */
   rpcTimeoutMs?: number;
+  /** 后台读（侧栏/对账）在途上限；写入和发消息走主配额。 */
+  maxBackgroundInFlightRpcs?: number;
+  /** 后台读排队上限；超出只拒后台读，不挡写入。 */
+  maxBackgroundQueuedRpcs?: number;
 }
 
 export class WorkerThreadTransport implements DbTransport {
   private static readonly RPC_TIMEOUT_MS = 30_000;
   private static readonly DEFAULT_MAX_IN_FLIGHT_RPCS = 128;
   private static readonly DEFAULT_MAX_QUEUED_RPCS = 512;
+  /** 一次侧栏索引大约 4 路 rawAll；16 够几路对账并行，占不满 128。 */
+  private static readonly DEFAULT_MAX_BACKGROUND_IN_FLIGHT_RPCS = 16;
+  private static readonly DEFAULT_MAX_BACKGROUND_QUEUED_RPCS = 32;
 
   private worker: Worker;
   private nextId = 1;
@@ -2600,24 +2672,29 @@ export class WorkerThreadTransport implements DbTransport {
     }
     const id = this.nextId++;
     const req: RpcRequest = { id, op, args };
+    const background = isBackgroundDbRpc();
     return new Promise<R>((resolve, reject) => {
       const queued: QueuedRpc = {
+        enqueuedAt: performance.timeOrigin + performance.now(),
         req,
         transferList: transferList ?? [],
         resolve: resolve as (value: unknown) => void,
         reject,
         budgetStartedAtMs: Date.now(),
+        background,
       };
-      if (this.pending.size < this.maxInFlightRpcs) {
+      if (this.canDispatchImmediately(queued)) {
         this.dispatch(queued);
         return;
       }
-      if (this.queued.length >= this.maxQueuedRpcs) {
+      if (!this.canEnqueue(queued)) {
         reject(
           createDbTransportError(
             DB_TRANSPORT_NOT_SENT,
             `db worker RPC queue overloaded: op="${op}" inFlight=${this.pending.size}` +
-              ` queued=${this.queued.length}`,
+              ` queued=${this.queued.length}` +
+              ` backgroundInFlight=${this.backgroundPendingCount()}` +
+              ` backgroundQueued=${this.backgroundQueuedCount()}`,
           ),
         );
         return;
@@ -2683,6 +2760,52 @@ export class WorkerThreadTransport implements DbTransport {
     return this.opts.rpcTimeoutMs ?? WorkerThreadTransport.RPC_TIMEOUT_MS;
   }
 
+  private get maxBackgroundInFlightRpcs(): number {
+    return Math.min(
+      this.maxInFlightRpcs,
+      this.opts.maxBackgroundInFlightRpcs ?? WorkerThreadTransport.DEFAULT_MAX_BACKGROUND_IN_FLIGHT_RPCS,
+    );
+  }
+
+  private get maxBackgroundQueuedRpcs(): number {
+    return Math.min(
+      this.maxQueuedRpcs,
+      this.opts.maxBackgroundQueuedRpcs ?? WorkerThreadTransport.DEFAULT_MAX_BACKGROUND_QUEUED_RPCS,
+    );
+  }
+
+  private backgroundPendingCount(): number {
+    let count = 0;
+    for (const pending of this.pending.values()) {
+      if (pending.background) count += 1;
+    }
+    return count;
+  }
+
+  private backgroundQueuedCount(): number {
+    let count = 0;
+    for (const item of this.queued) {
+      if (item.background) count += 1;
+    }
+    return count;
+  }
+
+  private canDispatchImmediately(item: QueuedRpc): boolean {
+    if (this.pending.size >= this.maxInFlightRpcs) return false;
+    if (item.background && this.backgroundPendingCount() >= this.maxBackgroundInFlightRpcs) {
+      return false;
+    }
+    return true;
+  }
+
+  private canEnqueue(item: QueuedRpc): boolean {
+    if (this.queued.length >= this.maxQueuedRpcs) return false;
+    if (item.background && this.backgroundQueuedCount() >= this.maxBackgroundQueuedRpcs) {
+      return false;
+    }
+    return true;
+  }
+
   private armQueuedTimeout(item: QueuedRpc): void {
     const onTimeout = (): void => {
       const index = this.queued.indexOf(item);
@@ -2738,10 +2861,14 @@ export class WorkerThreadTransport implements DbTransport {
     const remainingBudgetMs = Math.max(1, this.rpcTimeoutMs - budgetElapsedMs);
     const timeout = setTimeout(onTimeout, remainingBudgetMs);
     this.pending.set(id, {
+      op,
+      enqueuedAt: item.enqueuedAt,
+      dispatchedAt: performance.timeOrigin + performance.now(),
       resolve: item.resolve,
       reject: item.reject,
       timeout,
       sentAtMs: item.budgetStartedAtMs,
+      background: item.background,
     });
     try {
       this.worker.postMessage(item.req, item.transferList as never);
@@ -2753,9 +2880,25 @@ export class WorkerThreadTransport implements DbTransport {
     }
   }
 
+  private takeNextQueued(): QueuedRpc | undefined {
+    const interactiveIndex = this.queued.findIndex((item) => !item.background);
+    if (interactiveIndex >= 0) {
+      const next = this.queued[interactiveIndex];
+      if (!this.canDispatchImmediately(next)) return undefined;
+      this.queued.splice(interactiveIndex, 1);
+      return next;
+    }
+    const backgroundIndex = this.queued.findIndex((item) => item.background);
+    if (backgroundIndex < 0) return undefined;
+    const next = this.queued[backgroundIndex];
+    if (!this.canDispatchImmediately(next)) return undefined;
+    this.queued.splice(backgroundIndex, 1);
+    return next;
+  }
+
   private drainQueue(): void {
     while (!this.closed && this.pending.size < this.maxInFlightRpcs) {
-      const next = this.queued.shift();
+      const next = this.takeNextQueued();
       if (!next) return;
       this.dispatch(next);
     }
@@ -2821,6 +2964,29 @@ export class WorkerThreadTransport implements DbTransport {
       if (!pending) return;
       this.pending.delete(msg.id);
       clearTimeout(pending.timeout);
+      const receivedAt = performance.timeOrigin + performance.now();
+      const totalMs = receivedAt - pending.enqueuedAt;
+      if (totalMs >= 250) {
+        // Local debug only: operation class and durations, never query/args/results.
+        // Delivery includes result transfer and main event-loop scheduling; execution
+        // includes a whole worker operation (possibly a transaction), not only SQL.
+        const ms = (value: number) => Math.round(Math.max(0, value));
+        try {
+          this.emitClientLog('debug', {
+            event: 'rpc.slow', id: msg.id, totalMs: ms(totalMs),
+            op: ['rawAll', 'rawGet', 'query', 'queryOne', 'run', 'exec', 'tx', 'closeDb', 'worktreeReferences'].includes(pending.op) ? pending.op : 'other',
+            queueMs: ms(pending.dispatchedAt - pending.enqueuedAt),
+            ...(msg.timing ? {
+              workerWaitMs: ms(msg.timing.startedAt - pending.dispatchedAt),
+              workerExecutionMs: ms(msg.timing.finishedAt - msg.timing.startedAt),
+              deliveryMs: ms(receivedAt - msg.timing.finishedAt),
+            } : {}),
+            inFlight: this.pending.size, queued: this.queued.length, ok: msg.ok,
+          });
+        } catch {
+          // Debug sinks must not prevent settling the RPC or draining the queue.
+        }
+      }
       if (msg.ok) {
         pending.resolve(msg.result);
       } else {

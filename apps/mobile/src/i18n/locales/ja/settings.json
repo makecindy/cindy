@@ -10,7 +10,7 @@
     },
     "title": "デバッグログ",
     "record": "デバッグログを記録",
-    "hint": "スマートフォンの接続、復旧、スクロール、キーボード、性能の詳細を記録します。初期設定はオフ。最大7日間・8 MB保存し、自動送信しません。",
+    "hint": "スマートフォンの接続、復旧、ファイルのプレビューと再生、スクロール、キーボード、性能の詳細を記録します。初期設定はオフ。最大7日間・8 MB保存し、自動送信しません。",
     "export": "デバッグログを書き出す",
     "clear": "ログを消去",
     "busy": "処理中…",
@@ -19,10 +19,20 @@
     "cancel": "キャンセル",
     "exportHint": "詳細なローカルログを共有して問題を調査します。会話の本文や認証情報は含みません。",
     "options": "ログのオプション",
-    "uploadCopied": "送信しました。番号 {{code}} をコピーしました。",
-    "uploadSucceeded": "送信しました。番号 {{code}}。"
+    "uploadCopied": "ログを送信しました。番号 {{code}} をコピーしました",
+    "uploadSucceeded": "ログを送信しました。番号 {{code}}"
   },
   "title": "設定",
+  "appearance": {
+    "title": "外観",
+    "modeLabel": "表示モード",
+    "options": {
+      "system": "自動 (システムに従う)",
+      "light": "ライト",
+      "dark": "ダーク"
+    },
+    "saveFailed": "表示モードを保存できませんでした。再起動すると以前の設定に戻ります。"
+  },
   "language": {
     "title": "言語",
     "hint": "アプリの UI のみに影響します。Agent の応答言語は Agent 側の設定に従います。",
@@ -37,20 +47,22 @@
   },
   "version": {
     "sectionTitle": "バージョン",
-    "currentLabel": "現在のバージョン",
-    "bundleVersion": "アプリ本体 {{version}}",
-    "otaVersion": "OTA バージョン {{version}}",
+    "appVersion": "バージョン {{version}}",
+    "updateMethodInApp": "更新方法：アプリ内で更新（再起動後に反映）",
+    "updateMethodPackage": "更新方法：新しいバージョンをダウンロードしてインストール",
+    "updateMethodUnavailable": "開発ビルドのため、アプリ内更新は利用できません",
     "pairedDesktopVersion": "対応デスクトップ版 {{version}}",
-    "devNoOta": "開発ビルドのため OTA 更新は利用できません",
     "checkAction": "更新を確認",
     "testFlightCheckAction": "コンテンツ更新を確認",
     "checking": "確認中",
-    "updating": "更新中",
     "checkingAccessibility": "更新を確認しています",
     "testFlightCheckingAccessibility": "コンテンツ更新を確認しています",
     "testFlightUpdateManaged": "テスト版アプリの更新は TestFlight で管理されます",
     "testFlightNoContentUpdate": "利用可能なコンテンツ更新はありません。新しいテスト版は TestFlight で確認してください。",
     "testFlightContentUpdateUnavailable": "このビルドではコンテンツ更新を確認できません。新しいテスト版は TestFlight で確認してください。",
+    "googlePlayUpdateManaged": "アプリ本体の更新は Google Play で管理されます",
+    "googlePlayNoContentUpdate": "利用可能なコンテンツ更新はありません。新しいアプリ版は Google Play で確認してください。",
+    "googlePlayContentUpdateUnavailable": "このビルドではコンテンツ更新を確認できません。新しいアプリ版は Google Play で確認してください。",
     "bundleUpdateFound": "アプリ本体の更新があります",
     "upToDate": "すでに最新の状態です",
     "bundleUpToDateNoOta": "アプリ本体は最新です。このバージョンは OTA 更新に対応していません",
@@ -134,7 +146,8 @@
     "runtime": "Runtime",
     "otaMarker": "OTA マーカー",
     "emergencyLaunch": "緊急起動",
-    "emergencyLaunchYes": "はい（この起動では OTA を適用できません）"
+    "emergencyLaunchYes": "はい（この起動では OTA を適用できません）",
+    "otaVersion": "OTA バージョン"
   },
   "legal": {
     "sectionTitle": "法的情報",
@@ -151,6 +164,8 @@
     "analyticsResetAction": "戻す"
   },
   "account": {
+    "logoutConfirmTitle": "ログアウトしますか？",
+    "logoutConfirmRunning": "実行中のセッションがあります。セッションはパソコンで実行を続けますが、このスマートフォンでは受信・操作できなくなり、保存されたアカウントとローカルのリモートミラーも削除されます。",
     "logoutHint": "ログアウトすると、このスマートフォンに保存されたすべてのアカウントとローカルのリモートミラーが削除されます。パソコン側のセッションには影響しません。",
     "logout": "ログアウト",
     "loggingOut": "ログアウト中",
@@ -183,9 +198,12 @@
     "resetAccessibility": "デフォルトの端末名に戻す",
     "emptyError": "デバイス名を入力してください。",
     "deviceInitializing": "デバイスを初期化しています。しばらくしてからもう一度お試しください。",
-    "saving": "保存中…",
-    "saved": "保存しました。",
-    "restoringDefault": "デフォルト名に戻しています…",
-    "restoredDefault": "デフォルト名に戻しました。"
+    "restoredDefault": "デフォルト名に戻しました。",
+    "resetAction": "デフォルト名に戻す",
+    "clearAccessibility": "名前を消去",
+    "discardTitle": "変更を破棄しますか？",
+    "discardBody": "デバイス名の変更はまだ保存されていません。",
+    "discardConfirm": "変更を破棄",
+    "keepEditing": "編集を続ける"
   }
 }

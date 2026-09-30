@@ -553,6 +553,7 @@ function validateMessageOpResult(p: Record<string, unknown>): string | null {
  * 拒收会丢帧, server 就无从判断)。
  */
 function validateBindStart(p: Record<string, unknown>): string | null {
+  if (p.purpose !== undefined && p.purpose !== 'communications') return 'bind.start.purpose must be communications';
   if (p.email !== undefined && (!isNonEmptyString(p.email) || !p.email.includes('@'))) {
     return 'bind.start.email, when present, must be an email-like string';
   }
@@ -563,6 +564,7 @@ function validateBindStart(p: Record<string, unknown>): string | null {
 }
 
 function validateBindUpdate(p: Record<string, unknown>): string | null {
+  if (p.purpose !== undefined && p.purpose !== 'communications') return 'bind.update.purpose must be communications';
   if (!BIND_UPDATE_STATES.includes(p.state as never)) {
     return `bind.update.state must be one of: ${BIND_UPDATE_STATES.join(', ')}`;
   }
@@ -622,6 +624,12 @@ function validateBindRevoke(p: Record<string, unknown>): string | null {
 
 /** bind.state(multi-team): 绑定全量快照。 */
 function validateBindState(p: Record<string, unknown>): string | null {
+  if (p.communications !== undefined) {
+    if (!Array.isArray(p.communications)) return 'bind.state.communications must be an array';
+    const error = validateBindState({ bindings: p.communications });
+    if (error) return error.replace('bindings', 'communications');
+    if (p.communications.some((row) => typeof row.enabled !== 'boolean')) return 'bind.state.communications.enabled must be boolean';
+  }
   if (!Array.isArray(p.bindings)) return 'bind.state.bindings must be an array';
   for (let i = 0; i < p.bindings.length; i++) {
     const b: unknown = p.bindings[i];

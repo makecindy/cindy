@@ -53,8 +53,11 @@ vi.mock('@/lib/orcaSessionIdentity', () => ({
   resolveSessionRoute: resolveSessionRouteMock,
 }));
 
-vi.mock('@/lib/makerTransport', () => ({
-  getSessionFor: sessionGetMock,
+vi.mock('@/lib/sessionBatchRead', () => ({
+  readSessionBatchFor: (ids: string[]) => Promise.all(ids.map(async (sessionId) => {
+    try { return { sessionId, value: await sessionGetMock(sessionId) }; }
+    catch (error) { return { sessionId, errorCode: (error as { code?: string }).code }; }
+  })),
 }));
 
 vi.mock('../CCAgentSessionView', () => ({

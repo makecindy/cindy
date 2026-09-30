@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';
 import { resolveMobileE2eProfile } from './mobile-e2e-profile.mjs';
+import { probeMetroOwnership } from './sim-metro.mjs';
 
 const scriptDir = resolve(fileURLToPath(import.meta.url), '..');
 const mobileRoot = resolve(scriptDir, '..');
 const flowRoot = resolve(mobileRoot, 'e2e', 'maestro');
 const doctorScript = resolve(scriptDir, 'native-e2e-doctor.mjs');
 const defaultAppId = 'com.xd.cindy';
+const loginScenario = 'providers:email-only';
 
 const options = parseArgs(process.argv.slice(2));
 const profile = resolveMobileE2eProfile(options.profile ?? process.env.XDT_MOBILE_E2E_PROFILE);
@@ -30,8 +32,6 @@ const expoUrl = options.expoUrl
 const hostDeviceId = process.env.XDT_MOBILE_E2E_HOST_DEVICE_ID ?? 'mobile-e2e-host';
 const hostDeviceChipId = process.env.XDT_MOBILE_E2E_HOST_DEVICE_CHIP_ID
   ?? `home.deviceChip.${sanitizeTestIdSegment(hostDeviceId)}`;
-const hostAutomationsUrl = process.env.XDT_MOBILE_E2E_HOST_AUTOMATIONS_URL
-  ?? (expoUrl ? expoUrlWithRoute(expoUrl, `/automations/${encodeURIComponent(hostDeviceId)}`) : '');
 const expoLaunchDelayMs = parseNonNegativeInteger(
   process.env.XDT_MOBILE_E2E_EXPO_LAUNCH_DELAY_MS ?? '20000',
   'XDT_MOBILE_E2E_EXPO_LAUNCH_DELAY_MS',
@@ -59,6 +59,8 @@ for (const flow of resolvedFlows) {
   }
 }
 
+const includesLogin = resolvedFlows.some((flow) => flowIncludesLogin(flow));
+
 if (options.dryRun) {
   console.log(`maestro dry run: APP_ID=${appId}`);
   console.log(`- profile: ${profile?.name ?? '<none>'}`);
@@ -69,9 +71,19 @@ if (options.dryRun) {
   if (expoUrl) console.log(`- expo terminate before open: ${expoTerminateBeforeOpen}`);
   if (expoUrl) console.log(`- expo open before test: ${expoOpenBeforeTest}`);
   console.log(`- host device chip id: ${hostDeviceChipId}`);
-  if (hostAutomationsUrl) console.log(`- host automations url: ${hostAutomationsUrl}`);
   for (const flow of resolvedFlows) console.log(`- ${flow}`);
   process.exit(0);
+}
+
+if (includesLogin) {
+  const metroPort = expoUrl ? new URL(expoUrl).port || '8081' : '8081';
+  const ownership = probeMetroOwnership(Number(metroPort));
+  if (ownership?.loginScenario !== loginScenario) {
+    throw new Error([
+      `Active Metro on port ${metroPort} is not verified with EXPO_PUBLIC_LOGIN_SCENARIO=${loginScenario}.`,
+      'Start Metro through pnpm mobile:sim:start with that variable, or use local-device-link-smoke --start-expo.',
+    ].join('\n'));
+  }
 }
 
 if (!options.skipDoctor) {
@@ -109,8 +121,6 @@ for (const flow of resolvedFlows) {
       `XDT_MOBILE_E2E_HOST_DEVICE_ID=${hostDeviceId}`,
       '-e',
       `XDT_MOBILE_E2E_EXPO_URL=${expoUrl ?? ''}`,
-      '-e',
-      `XDT_MOBILE_E2E_HOST_AUTOMATIONS_URL=${hostAutomationsUrl}`,
       flow,
     ],
     {
@@ -121,7 +131,6 @@ for (const flow of resolvedFlows) {
         APP_ID: appId,
         CLEAR_STATE: clearState,
         XDT_MOBILE_E2E_EXPO_URL: expoUrl ?? '',
-        XDT_MOBILE_E2E_HOST_AUTOMATIONS_URL: hostAutomationsUrl,
       },
       stdio: 'inherit',
     },
@@ -211,14 +220,16 @@ function sanitizeTestIdSegment(value) {
   return String(value).replace(/[^A-Za-z0-9_-]/g, '_');
 }
 
-function expoUrlWithRoute(url, route) {
-  const marker = '--/';
-  const routeValue = String(route).replace(/^\/+/, '');
-  const markerIndex = url.indexOf(marker);
-  if (markerIndex >= 0) {
-    return `${url.slice(0, markerIndex + marker.length)}${routeValue}`;
-  }
-  return `${url.replace(/\/+$/, '')}/${marker}${routeValue}`;
+function flowIncludesLogin(flow, seen = new Set()) {
+  if (seen.has(flow)) return false;
+  seen.add(flow);
+  const source = readFileSync(flow, 'utf8');
+  if (/(^|[\\/])login_mock(?:_no_clear)?\.yaml$/.test(flow)) return true;
+  if (/runFlow:\s*login_mock(?:_no_clear)?\.yaml/.test(source)) return true;
+  return [...source.matchAll(/runFlow:\s*([^\s#]+\.yaml)/g)].some(([, child]) => {
+    const childPath = resolve(flowRoot, child);
+    return existsSync(childPath) && flowIncludesLogin(childPath, seen);
+  });
 }
 
 function openExpoUrl(url, platform) {

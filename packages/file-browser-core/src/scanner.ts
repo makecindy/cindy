@@ -155,6 +155,8 @@ async function assertRealParentInsideWorkdir(
 }
 
 export interface ListDirOptions {
+  /** Optional transfer budget; exceeding it fails instead of returning a partial list. */
+  maxEntries?: number;
   /**
    * "Doc mode": only show doc/config text files (see DOC_MODE_EXTS); only
    * show directories that have at least one such file as a descendant.
@@ -278,18 +280,23 @@ async function hasDocDescendant(
 
 /**
  * List entries of one directory (single-layer, no recursion). Filtered
- * through the workdir's ignore matcher. Sort: directories before files,
+ * through an optional presentation matcher. Without a matcher all ordinary
+ * files are listed, including hidden files and build outputs. Sort: directories before files,
  * each group case-insensitive lexicographic — same convention as VSCode
  * Explorer / Obsidian.
  */
 export async function listDir(
   workdir: string,
   relPath: string,
-  matcher: Matcher,
+  matcher: Matcher | null = null,
   opts: ListDirOptions = {},
 ): Promise<DirEntry[]> {
+  if (opts.maxEntries !== undefined && (!Number.isSafeInteger(opts.maxEntries) || opts.maxEntries < 1)) {
+    throw new Error('Invalid directory entry limit');
+  }
   const sub = assertInsideWorkdir(workdir, relPath);
   const abs = sub === '' ? workdir : path.join(workdir, sub);
+  await assertRealPathInsideWorkdir(workdir, abs);
   // In doc mode this top-level read participates in the same in-flight map as
   // recursive descendant probes. An overlapping `listDir('src')` can thus
   // reuse the read already started while listing the root, without retaining
@@ -297,6 +304,9 @@ export async function listDir(
   const dirents = opts.docMode
     ? await readDocDirents(abs)
     : await fs.readdir(abs, { withFileTypes: true });
+  if (opts.maxEntries !== undefined && dirents.length > opts.maxEntries) {
+    throw new Error('DIRECTORY_TOO_LARGE');
+  }
 
   // Process all entries in parallel. With docMode on, each surviving subdir
   // triggers a recursive hasDocDescendant probe — running siblings in
@@ -306,24 +316,27 @@ export async function listDir(
     dirents.map(async (d): Promise<DirEntry | null> => {
       const childRel = sub === '' ? d.name : `${sub}/${d.name}`;
       const isDir = d.isDirectory();
-      if (matcher.ignores(childRel, isDir)) return null;
+      if (matcher?.ignores(childRel, isDir)) return null;
       // 原子写中间产物 — 隐藏不让前端看到一闪而过的临时行。
-      if (!isDir && d.name.endsWith(XDT_TMP_SUFFIX)) return null;
+      if (matcher && !isDir && d.name.endsWith(XDT_TMP_SUFFIX)) return null;
       // We need stats for size + mtime; use lstat to avoid following symlinks
       // into Library/ et al. (some Unity setups symlink huge caches in).
       let st: Stats;
       try {
         st = await fs.lstat(path.join(abs, d.name));
-      } catch {
-        // Permission denied or removed mid-scan — skip silently.
+      } catch (error) {
+        // Complete enumeration must not silently return a partial snapshot.
+        if (!matcher) throw error;
+        // Presentation mode tolerates files removed mid-scan or inaccessible entries.
         return null;
       }
       // Skip symlinks unless they point inside the workdir; cheaper to just
       // skip than to chase them. User can open via OS if needed.
       if (st.isSymbolicLink()) return null;
+      if (!st.isDirectory() && !st.isFile()) return null;
       if (opts.docMode) {
         if (isDir) {
-          if (!(await hasDocDescendant(path.join(abs, d.name), childRel, matcher))) {
+          if (!(await hasDocDescendant(path.join(abs, d.name), childRel, matcher ?? { ignores: () => false }))) {
             return null;
           }
         } else if (!isDocModeFile(d.name)) {

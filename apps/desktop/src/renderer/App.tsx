@@ -1,3 +1,4 @@
+import { useModelFavoritesHost } from './state/useModelFavoritesHost';
 import { getDataOwnerGeneration } from './contexts/dataOwnerGeneration';
 import { RouterProvider } from 'react-router-dom';
 
@@ -5,8 +6,8 @@ import { useEffect } from 'react';
 import { RemoteDesktopHost } from '@/features/remote-desktop/RemoteDesktopHost';
 
 import { useCloseWindowFallbackShortcut } from '@/hooks/useCloseWindowShortcut';
+import { useNewMakerPrefsOwnerResync } from '@/hooks/useNewMakerPrefsOwnerResync';
 import { useDisableContextMenu } from '@/hooks/useDisableContextMenu';
-import { useDisableTab } from '@/hooks/useDisableTab';
 import { ThemeProvider } from '@/hooks/useTheme';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
 import { LocaleProvider } from '@/hooks/useLocale';
@@ -31,6 +32,7 @@ import { FindInPageBar } from '@/components/find-in-page/FindInPageBar';
 import { ProjectAutomationNotifyBridge } from '@/features/scheduler/components/ProjectAutomationNotifyBridge';
 import { GhostConfirmDialogHost } from '@/cindy-brain/GhostConfirmDialogHost';
 import { ForgeOidcInstallConfirmHost } from '@/cindy-brain/ForgeOidcInstallConfirmHost';
+import { GhostInstallConsentHost } from '@/cindy-brain/GhostInstallConsentHost';
 import { PluginPublisherConfirmHost } from '@/features/plugin/PluginPublisherConfirmHost';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
@@ -46,6 +48,7 @@ import { installCcMgrUpgradeListener } from '@/state/ccMgrUpgradeStore';
 import {
   preloadLocalCatalogSnapshot,
   refreshLocalCatalogSnapshot,
+  startLocalCatalogRecovery,
 } from '@/lib/localCatalogSnapshot';
 import { useResyncAgentIslandSettingsAfterLogin } from '@/hooks/useAgentIslandSettings';
 import {
@@ -176,6 +179,7 @@ function MakerBootstrap() {
   }, [dataOwnerId, dataOwnerRecoveryEpoch]);
 
   useEffect(() => {
+    const stopCatalogRecovery = startLocalCatalogRecovery();
     makerChatStore.syncActiveTurnsFromMain();
     // main 先提交 active catalog + capabilities 再广播；renderer 收到任一目录/鉴权变化后
     // 联合重拉 providers 与两份 capabilities，整组成功且代际最新时才切换。
@@ -185,6 +189,7 @@ function MakerBootstrap() {
     const offAuth = window.electronAPI.maker.auth.onStateChanged(refresh);
     const offProviders = window.electronAPI.maker.onProvidersChanged(refresh);
     return () => {
+      stopCatalogRecovery();
       offAuth?.();
       offProviders?.();
     };
@@ -193,11 +198,12 @@ function MakerBootstrap() {
   // Auth 广播的多个 listener 没有顺序契约；等 AuthContext 提交新 owner 后再预热一次，
   // 保证 provider 快照与 capabilities 不会沿用或提交前一个 owner 的在途结果。
   useEffect(() => {
-    // Early fire-and-forget sends can precede maker IPC registration. Repeat only
-    // after the ready/owner boundary, using the same persisted preference snapshot.
-    syncNewMakerPrefs();
     void preloadLocalCatalogSnapshot();
   }, [dataOwnerId, dataOwnerRecoveryEpoch]);
+  // Early fire-and-forget sends can precede maker IPC registration. Repeat after
+  // the ready/owner boundary and after every owner generation change (same-owner
+  // repairs included, #4469), using the same persisted preference snapshot.
+  useNewMakerPrefsOwnerResync(syncNewMakerPrefs);
   return null;
 }
 
@@ -213,7 +219,6 @@ function OwnerScopedRouter() {
 
 export function App() {
   useDisableContextMenu();
-  useDisableTab();
   // mac ⌘W 根级兜底: splash / env check / 登录 / 迁移等壳外阶段关(隐藏)本窗口;
   // MainLayout / SidebarWindowLayout 挂载期间声明所有权, 本兜底让路给壳层的
   // 焦点分派消费点 (右侧栏 tab 优先)。见 useCloseWindowShortcut.ts。
@@ -236,6 +241,8 @@ export function App() {
     syncNewMakerPrefs();
     return subscribeDraft(syncNewMakerPrefs);
   }, []);
+
+  useModelFavoritesHost();
 
   // Worker 创建偏好的真源是 renderer localStorage；main 只缓存权限默认值供
   // Orca UI / agent tool 的创建路径读取。tool 显式改默认时再经 apply push 回写真源。
@@ -415,6 +422,7 @@ export function App() {
                               都挂、谁收到谁弹,不按窗口类型 gate。 */}
                           <GhostConfirmDialogHost />
                           <ForgeOidcInstallConfirmHost />
+                          <GhostInstallConsentHost />
                           <PluginPublisherConfirmHost />
                           <OwnerScopedRouter />
                         </EnvCheckGuard>

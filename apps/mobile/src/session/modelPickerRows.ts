@@ -10,10 +10,7 @@ import { getModel, modelSupportsFastMode, type ProviderView } from '@cindy/model
 import type { SectionModel } from '@cindy/model-providers/sections';
 import type { AgentKind } from '@cindy/model-providers/types';
 
-import {
-  compactEnglishEffortLabel,
-  MOBILE_EFFORT_LABELS,
-} from '@cindy/maker-shared/agent-capabilities';
+import { MOBILE_EFFORT_LABELS } from '@cindy/maker-shared/agent-capabilities';
 
 import { i18n } from '@/i18n';
 
@@ -262,24 +259,6 @@ export function effortLabelFromRuntime(
       planModeSupported: false,
     },
   );
-}
-
-/**
- * 一级列表使用稳定 effort id 生成英文紧凑标签，避免被控端下发的长文案或混合语言挤占模型名。
- * 非英文界面继续使用完整本地化标签；完整英文名称仍由模型选项页展示。
- */
-export function compactEffortLabelFor(
-  model: Pick<PickerRowModel, 'effortDisplayNames'>,
-  effort: string,
-  capabilities: MobileAgentCapabilities | null,
-): string {
-  const fullLabel = effortLabelFor(model, effort, capabilities);
-  const language = (i18n.resolvedLanguage ?? i18n.language).toLowerCase();
-  if (!language.startsWith('en')) {
-    return fullLabel;
-  }
-
-  return compactEnglishEffortLabel(effort, fullLabel);
 }
 
 /** 父 Pressable 的完整无障碍名称：基础选择动作 + 当前可见元信息的完整语义。 */

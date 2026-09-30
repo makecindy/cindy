@@ -164,11 +164,14 @@ function installSendToSessionLockEntry(
  *
  * Direct-send callers need this lease form because applying a deferred agent switch,
  * refreshing the resulting live Session, and calling Session.send happen in different
- * modules but must remain one atomic route decision.
+ * modules but must remain one atomic route decision. `getStage` is sampled when
+ * a watchdog fires, so callers can identify the current await without logging
+ * task content. Keep the getter alive until release, including lease handoffs.
  */
 export async function acquireSendToSessionLock(
   sessionId: string,
   restartToken?: symbol,
+  getStage?: () => string | undefined,
 ): Promise<() => void> {
   assertSessionNotRestarting(sessionId, restartToken);
   const previous = sendToSessionLocks.get(sessionId);
@@ -178,7 +181,7 @@ export async function acquireSendToSessionLock(
     releaseGate = resolve;
   });
   const run = waitPrevious.then(() => gate);
-  installSendToSessionLockEntry(sessionId, run);
+  installSendToSessionLockEntry(sessionId, run, getStage);
   try {
     await waitForSendToSessionLock(sessionId, previous, restartToken);
   } catch (error) {
@@ -198,8 +201,9 @@ export async function acquireSendToSessionLock(
 export async function withSendToSessionLock<T>(
   sessionId: string,
   task: () => Promise<T>,
+  getStage?: () => string | undefined,
 ): Promise<T> {
-  const release = await acquireSendToSessionLock(sessionId);
+  const release = await acquireSendToSessionLock(sessionId, undefined, getStage);
   try {
     return await task();
   } finally {

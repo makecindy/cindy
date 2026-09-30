@@ -10,7 +10,9 @@ import { Transform, type TransformCallback } from "node:stream";
  * `output_text.delta` is discarded as "without active item" (#4251). The wire contract says
  * these fields are arrays, so the only semantics-preserving repair is `null -> []`.
  *
- * Nothing else is touched: item types, ids, call ids and unknown fields pass through byte for
+ * Added events also initialize absent summary/content arrays, output_text.text, and
+ * function/custom tool argument buffers (#4509). Terminal missing fields are never invented.
+ * Item types, ids, call ids and unknown fields pass through byte for
  * byte, and frames that need no repair are re-emitted exactly as received.
  */
 
@@ -44,6 +46,40 @@ export function repairResponsesItemNullArrays(
   return next;
 }
 
+/** Only added items may initialize missing fields before later deltas populate them.
+ * Never apply this to terminal items: empty tool arguments there could execute a
+ * different command, and empty text could hide missing upstream output.
+ */
+function repairAddedItem(item: unknown): JsonObject | null {
+  if (!isObject(item) || typeof item.type !== "string") return null;
+  let next = repairResponsesItemNullArrays(item);
+  for (const field of REQUIRED_ARRAY_FIELDS[item.type] ?? []) {
+    if (item[field] === undefined) {
+      next ??= { ...item };
+      next[field] = [];
+    }
+  }
+  const field = item.type === "function_call" ? "arguments"
+    : item.type === "custom_tool_call" ? "input" : null;
+  if (field && item[field] === undefined) {
+    next ??= { ...item };
+    next[field] = "";
+  }
+  if (item.type === "message" && Array.isArray(item.content)) {
+    let changed = false;
+    const content = item.content.map((part: unknown) => {
+      if (!isObject(part) || part.type !== "output_text" || part.text !== undefined) return part;
+      changed = true;
+      return { ...part, text: "" };
+    });
+    if (changed) {
+      next ??= { ...item };
+      next.content = content;
+    }
+  }
+  return next;
+}
+
 function repairOutputList(output: unknown): unknown[] | null {
   if (!Array.isArray(output)) return null;
   let changed = false;
@@ -71,7 +107,9 @@ export function repairResponsesEventNullArrays(
     event.type === "response.output_item.added" ||
     event.type === "response.output_item.done"
   ) {
-    const item = repairResponsesItemNullArrays(event.item);
+    const item = event.type === "response.output_item.added"
+      ? repairAddedItem(event.item)
+      : repairResponsesItemNullArrays(event.item);
     return item ? { ...event, item } : null;
   }
   if (isObject(event.response)) {
@@ -114,8 +152,14 @@ export class ResponsesNullArrayRepairTransform extends Transform {
     }
     const repaired = repairResponsesEventNullArrays(event);
     if (!repaired) return frame + delimiter;
-    const eventLine = lines.find((line) => line.startsWith("event:"));
-    return `${eventLine ? `${eventLine}\n` : ""}data: ${JSON.stringify(repaired)}${delimiter}`;
+    let firstData = true;
+    // Preserve id/retry/comments/extension lines and their original line endings.
+    // Empty later data lines add only trailing JSON whitespace to the SSE data.
+    return frame.replace(/^data:[^\r\n]*/gm, () => {
+      if (!firstData) return "data:";
+      firstData = false;
+      return `data: ${JSON.stringify(repaired)}`;
+    }) + delimiter;
   }
 
   private drainFrames(): void {

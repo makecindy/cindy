@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * AddRemoteProjectDialog — pick a folder on a connected remote target.
  *
@@ -24,9 +25,14 @@ import { X, Folder, FolderSymlink, ChevronLeft, RotateCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { Spinner } from '@/components/ui/spinner';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import {
+  SshModelSelectionError,
+  sshModelSelectionErrorKeys,
+} from '@/features/cc-agent/sshSessionModelSelection';
 import { useControllableDevices } from '@/hooks/useControllableDevices';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import {
@@ -60,6 +66,10 @@ interface Props {
    * 未指名(从通用入口打开)时才由用户自己在下拉里选。
    */
   initialDeviceId?: string | null;
+  fixedDeviceId?: string;
+  title?: string;
+  confirmText?: string;
+  errorText?: string;
   /**
    * 当前 draft 选中的 agent(由父层的 VendorSegmentedSwitcher 决定,dialog 不选 vendor)。
    * 轮 35 CRITICAL:Pi 已支持 SSH 远端(startSession 全量支持 remoteHostId)——
@@ -74,6 +84,10 @@ export function AddRemoteProjectDialog({
   open,
   onOpenChange,
   initialDeviceId,
+  fixedDeviceId,
+  title,
+  confirmText,
+  errorText,
   agentVendor,
   onProjectAdded,
 }: Props) {
@@ -112,8 +126,10 @@ export function AddRemoteProjectDialog({
       deviceName: d.name,
       label: d.name,
     }));
-    return [...ssh, ...dev];
-  }, [excludeSsh, sshHosts, devices]);
+    return fixedDeviceId
+      ? dev.filter(target => target.kind === 'device' && target.deviceId === fixedDeviceId)
+      : [...ssh, ...dev];
+  }, [excludeSsh, sshHosts, devices, fixedDeviceId]);
 
   const sshTargets = useMemo(() => targets.filter((tg) => tg.kind === 'ssh'), [targets]);
   const deviceTargets = useMemo(() => targets.filter((tg) => tg.kind === 'device'), [targets]);
@@ -324,11 +340,15 @@ export function AddRemoteProjectDialog({
       }
       onOpenChange(false);
     } catch (err) {
-      toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'newChat.addRemoteProject.toast.addFailed' })));
+      toast.error(errorText ?? t(
+        err instanceof SshModelSelectionError
+          ? sshModelSelectionErrorKeys[err.reason]
+          : mapIpcErrorToI18nKey(err, { fallback: 'newChat.addRemoteProject.toast.addFailed' }),
+      ));
     } finally {
       setBusy(false);
     }
-  }, [selectedTarget, adapter, path, confirm, onProjectAdded, onOpenChange, t]);
+  }, [selectedTarget, adapter, path, confirm, onProjectAdded, onOpenChange, t, errorText]);
 
   const noTargets = targets.length === 0;
   // Pi 过滤掉 SSH 后无任何可用目标时,通用空态提示「加个 SSH 主机」是误导(Pi 用不了 SSH)。
@@ -344,10 +364,13 @@ export function AddRemoteProjectDialog({
           style={{ backgroundColor: 'var(--overlay-modal, rgba(0,0,0,0.4))' }}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className="fixed left-1/2 top-1/2 z-50 flex w-[560px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl shadow-[var(--confirm-shadow)]"
           style={{
             backgroundColor: 'var(--surface-elevated, #ffffff)',
             border: '1px solid var(--border-default, #d4d4d4)',
+            // Keep the centered shell still across mode changes and async list loading.
+            height: noTargets ? undefined : 660,
             maxHeight: '88vh',
           }}
           onEscapeKeyDown={busy ? (e) => e.preventDefault() : undefined}
@@ -363,7 +386,7 @@ export function AddRemoteProjectDialog({
         >
           {/* Header */}
           <div
-            className="flex flex-col gap-1 px-5 py-4"
+            className="flex shrink-0 flex-col gap-1 px-5 py-4"
             style={{ borderBottom: '1px solid var(--border-default, #d4d4d4)' }}
           >
             <div className="flex items-center justify-between">
@@ -371,7 +394,7 @@ export function AddRemoteProjectDialog({
                 className="text-15 font-medium"
                 style={{ color: 'var(--text-primary)' }}
               >
-                {t('newChat.addRemoteProject.title')}
+                {title ?? t('newChat.addRemoteProject.title')}
               </Dialog.Title>
               <Dialog.Close asChild disabled={busy}>
                 <button
@@ -391,7 +414,7 @@ export function AddRemoteProjectDialog({
           </div>
 
           {/* Body */}
-          <div className="flex flex-col gap-3 px-5 py-4">
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 py-4">
             {noTargets ? (
               <div className="text-13 py-8 text-center" style={{ color: 'var(--text-secondary)' }}>
                 {t(emptyIsPiSshFiltered
@@ -401,7 +424,7 @@ export function AddRemoteProjectDialog({
             ) : (
               <>
                 {/* Target selector — optgroup 区分 SSH 主机 / 我的设备 */}
-                <label className="flex flex-col gap-1">
+                <label className="flex shrink-0 flex-col gap-1">
                   <span
                     className="text-12 font-medium"
                     style={{ color: 'var(--text-secondary)' }}
@@ -458,51 +481,26 @@ export function AddRemoteProjectDialog({
                 </label>
 
                 {/* Mode toggle — 默认「已有项目」,「浏览文件夹」为次要入口 */}
-                <div
-                  className="flex items-center gap-1 rounded-lg border p-0.5"
-                  style={{ borderColor: 'var(--border-default)' }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMode('existing');
-                      setPath('');
-                    }}
-                    disabled={busy}
-                    className={cn(
-                      'flex-1 h-7 rounded-md text-12 font-medium transition-colors',
-                      busy && 'cursor-not-allowed opacity-60',
-                    )}
-                    style={
-                      mode === 'existing'
-                        ? { backgroundColor: 'var(--settings-menu-bg-selected)', color: 'var(--text-primary)' }
-                        : { color: 'var(--text-secondary)' }
-                    }
-                  >
-                    {t('newChat.addRemoteProject.tabExisting')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMode('browse')}
-                    disabled={busy}
-                    className={cn(
-                      'flex-1 h-7 rounded-md text-12 font-medium transition-colors',
-                      busy && 'cursor-not-allowed opacity-60',
-                    )}
-                    style={
-                      mode === 'browse'
-                        ? { backgroundColor: 'var(--settings-menu-bg-selected)', color: 'var(--text-primary)' }
-                        : { color: 'var(--text-secondary)' }
-                    }
-                  >
-                    {t('newChat.addRemoteProject.tabBrowse')}
-                  </button>
-                </div>
+                <SegmentedControl
+                  className="shrink-0"
+                  aria-label={title ?? t('newChat.addRemoteProject.title')}
+                  value={mode}
+                  disabled={busy}
+                  fullWidth
+                  onValueChange={(next) => {
+                    setMode(next);
+                    if (next === 'existing') setPath('');
+                  }}
+                  options={[
+                    { value: 'existing', label: t('newChat.addRemoteProject.tabExisting') },
+                    { value: 'browse', label: t('newChat.addRemoteProject.tabBrowse') },
+                  ]}
+                />
 
                 {mode === 'existing' ? (
                   /* 已有项目列表 — 单击选中、双击直接添加;空则给「浏览文件夹」兜底入口 */
                   <div
-                    className="max-h-[340px] overflow-y-auto rounded-lg border"
+                    className="min-h-0 flex-1 overflow-y-auto rounded-lg border"
                     style={{ borderColor: 'var(--border-default)' }}
                   >
                     {existingLoading ? (
@@ -565,7 +563,7 @@ export function AddRemoteProjectDialog({
                 ) : (
                   <>
                     {/* Path bar */}
-                    <label className="flex flex-col gap-1">
+                    <label className="flex shrink-0 flex-col gap-1">
                       <span
                         className="text-12 font-medium"
                         style={{ color: 'var(--text-secondary)' }}
@@ -622,7 +620,7 @@ export function AddRemoteProjectDialog({
 
                     {/* Entries list */}
                     <div
-                      className="max-h-[296px] overflow-y-auto rounded-lg border"
+                      className="min-h-0 flex-1 overflow-y-auto rounded-lg border"
                       style={{ borderColor: 'var(--border-default)' }}
                     >
                       {entries.length === 0 ? (
@@ -672,46 +670,37 @@ export function AddRemoteProjectDialog({
             )}
           </div>
 
-          {/* Footer — 按钮走通用弹窗标准(DESIGN §Dialog / confirm-dialog.tsx):
-              主按钮实心 CTA(--confirm-btn-primary-*),取消描边(--confirm-btn-secondary-*),pill。 */}
+          {/* 未选中时必须有一个 value="" 的项供受控 select 显示(Codex review P1)。
+              缺了它,浏览器会去显示第一个真实 option,而 selectedTarget 仍是 null ——
+              「添加」保持 disabled;若只有一个备选目标,点那个已显示的项也不产生 change
+              事件,弹窗就此卡死。disabled 让它只能被显示、不能被重新选回。
+              这个空态是上一轮「指名设备离线时不静默回落到别的目标」带来的,得配一个占位。 */}
           <div
-            className="flex justify-end gap-2.5 px-5 py-3"
+            className="flex shrink-0 justify-end gap-2.5 px-5 py-3"
             style={{ borderTop: '1px solid var(--border-default)' }}
           >
             <Dialog.Close asChild disabled={busy}>
-              <button
+              <Button
+                variant="secondary"
+                size="lg"
                 type="button"
                 disabled={busy}
-                className={cn(
-                  'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                  'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                  'active:scale-[0.98]',
-                  'border bg-transparent',
-                  'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
-                  'hover:bg-[var(--confirm-btn-secondary-hover)] focus-visible:ring-[var(--confirm-btn-secondary-border)]',
-                  'disabled:opacity-40',
-                )}
+                className="min-w-[96px]"
               >
                 {t('newChat.addRemoteProject.cancel')}
-              </button>
+              </Button>
             </Dialog.Close>
-            <button
+            <Button
+              variant="cta"
+              size="lg"
+              loading={busy}
               type="button"
               onClick={() => void handleAddProject()}
               disabled={busy || noTargets || !selectedTarget || !path.trim()}
-              className={cn(
-                'inline-flex min-w-[96px] items-center justify-center gap-1 rounded-full px-6 py-2.5 text-13 font-medium',
-                'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                'active:scale-[0.98]',
-                'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)]',
-                'hover:bg-[var(--confirm-btn-primary-hover)] focus-visible:ring-[var(--confirm-btn-primary-bg)]',
-                (busy || noTargets || !selectedTarget || !path.trim()) &&
-                  'cursor-not-allowed opacity-60 hover:bg-[var(--confirm-btn-primary-bg)] active:scale-100',
-              )}
+              className="min-w-[96px]"
             >
-              {busy && <Spinner size={12} />}
-              {t('newChat.addRemoteProject.add')}
-            </button>
+              {confirmText ?? t('newChat.addRemoteProject.add')}
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

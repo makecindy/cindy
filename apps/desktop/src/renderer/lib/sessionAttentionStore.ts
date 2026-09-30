@@ -136,17 +136,24 @@ function attentionEraOf(sessionId: string): number {
   return attentionEraBySession.get(sessionId) ?? 0;
 }
 
-function remoteActivitySigOf(sessionId: string): string {
-  const activity = getRemoteSessionActivity(sessionId);
+function remoteActivitySigOf(sessionId: string, deviceId = getSessionDeviceId(sessionId)): string {
+  const activity = getRemoteSessionActivity(sessionId, deviceId);
   if (!activity) return 'none';
   return `${activity.phase}\u0000${activity.attention ? 1 : 0}\u0000${activity.compactDetail}`;
 }
 
-function rebasePendingReceiptsOnNewAttention(): void {
+function rebasePendingReceiptsOnNewAttention(
+  changedDeviceId?: string,
+  changedSessionId?: string,
+): void {
   const watched = new Set([...pendingRemoteReceipts.keys(), ...inflightReceiptSessions.keys()]);
   for (const sessionId of watched) {
-    const attention = getRemoteSessionActivity(sessionId)?.attention === true;
-    const sig = remoteActivitySigOf(sessionId);
+    if (changedSessionId && sessionId !== changedSessionId) continue;
+    // Origin can disappear during bootstrap. A pending receipt must still become
+    // conservative when new unread arrives; read that event's exact device shard.
+    const deviceId = getSessionDeviceId(sessionId) ?? changedDeviceId;
+    const attention = getRemoteSessionActivity(sessionId, deviceId)?.attention === true;
+    const sig = remoteActivitySigOf(sessionId, deviceId);
     const prevSig = pendingActivitySigSeen.get(sessionId) ?? sig;
     if (attention && sig !== prevSig) {
       attentionEraBySession.set(sessionId, attentionEraOf(sessionId) + 1);
@@ -225,7 +232,7 @@ function flushPendingRemoteReceipt(sessionId: string): void {
     // 镜像缺条目(推送丢失 / 未达)时回落消息层终止错误探针:探到 error 同样按下不发,
     // 等用户处置横幅产生的 explicit-action 放行,fail-safe。告警一直不处置就一直挂着
     // (对应「未处理」语义正确),开销是一个 Map 条目。
-    const activity = getRemoteSessionActivity(sessionId);
+    const activity = getRemoteSessionActivity(sessionId, getSessionDeviceId(sessionId));
     const errorUnread = activity
       ? activity.phase === 'error' && activity.attention
       : remoteTerminalErrorProbe?.(sessionId) === true;

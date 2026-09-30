@@ -147,11 +147,19 @@ export function attachMainOwnedInputBoundary(
  * `turnPermissionPolicy` 同样只能由 Main 的 IM dispatcher 创建；Renderer/device-link
  * 即使伪造相同字段形状，也不能把普通文本升级成已认证 IM 指令。
  *
+ * `origin` 只能由宿主 dispatcher / coordinator 构造，wire 不能自报 scheduler
+ * 来源并借此恢复历史授权。
+ *
  * 非对象输入原样返回(事务自己会按 `?? {}` 兜底)。
  */
 export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
   if (!sendOpts || typeof sendOpts !== 'object' || Array.isArray(sendOpts)) return sendOpts;
-  const opts = sendOpts as Record<string, unknown>;
+  let opts = sendOpts as Record<string, unknown>;
+  const persisted = opts.persistUserMessage;
+  if (persisted && typeof persisted === 'object' && !Array.isArray(persisted) && 'sharedTaskAuthor' in persisted) {
+    const { sharedTaskAuthor: _ignoredAuthor, ...content } = persisted as Record<string, unknown>;
+    opts = { ...opts, persistUserMessage: content };
+  }
   if (
     !('fromMobileClient' in opts) &&
     !('fromDeviceLinkClient' in opts) &&
@@ -160,19 +168,25 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
     !('expectedTurnGeneration' in opts) &&
     !('inputAbortSignal' in opts) &&
     !('signal' in opts) &&
-    !('turnPermissionPolicy' in opts)
+    !('turnPermissionPolicy' in opts) &&
+    !('toolsDisabled' in opts) &&
+    !('origin' in opts) &&
+    !('uiLanguage' in opts)
   ) {
-    return sendOpts;
+    return opts;
   }
   const {
     fromMobileClient: _ignoredMobile,
     fromDeviceLinkClient: _ignoredDeviceLink,
+    uiLanguage: _ignoredUiLanguage,
     expectedInputGeneration: _ignoredGeneration,
     expectedTurnSession: _ignoredTurnSession,
     expectedTurnGeneration: _ignoredTurnGeneration,
     inputAbortSignal: _ignoredAbortSignal,
     signal: _ignoredSignal,
     turnPermissionPolicy: _ignoredTurnPermissionPolicy,
+    toolsDisabled: _ignoredToolsDisabled,
+    origin: _ignoredOrigin,
     ...rest
   } = opts;
   return rest;

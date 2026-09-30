@@ -23,9 +23,10 @@ import {
   type SQL,
 } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
+import { historyOutlineContent, withHistoryArtifacts } from './historyViewOutline';
 import { historyViewLeaves, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 
-import { getDbClient } from '../client/current';
+import { getDbClient, getCurrentDbClientSnapshot } from '../client/current';
 import type { ContextRebuildArgs } from '../client/tx/types';
 import { latestVisiblePreviewRow } from '../latestMessageText';
 import { messages, sessions } from '../schema';
@@ -63,7 +64,6 @@ import {
   type RegionalMoney,
 } from '../../../shared/regionalMoney.js';
 import { capReferenceMessageRows } from './history.js';
-import { maybeUpgradeCodexHistoryOversizedError } from '../codexHistoryOversizedUpgrade';
 import type { Message, MessageRole, AgentMeta } from '../../../renderer/lib/ccAgent.types';
 import { scheduleBotRemoteResourceChangedForSession } from '../../maker-ipc/botRemoteResourceInvalidation';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
@@ -238,9 +238,9 @@ const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
   'thinking',
 ] as const);
 
-export async function readMessagesList(sessionId: unknown, opts: unknown, skipImport = false) {
+export async function readMessagesList(sessionId: unknown, opts: unknown, skipImport = false, outline = false) {
     const sid = requireString(sessionId, 'sessionId');
-    const limit = clampLimit((opts as { limit?: number } | undefined)?.limit);
+    const limit = outline ? 1000 : clampLimit((opts as { limit?: number } | undefined)?.limit);
     const before = (opts as { before?: string } | undefined)?.before;
     const beforeTs = (opts as { beforeTs?: number } | undefined)?.beforeTs;
     const after = (opts as { after?: string } | undefined)?.after;
@@ -317,6 +317,7 @@ export async function readMessagesList(sessionId: unknown, opts: unknown, skipIm
     const rows = await db
       .select({
         ...getMessageSelectFields(),
+        ...(outline ? { content: historyOutlineContent() } : {}),
         rowid: messageRowid,
       })
       .from(messages)
@@ -327,24 +328,8 @@ export async function readMessagesList(sessionId: unknown, opts: unknown, skipIm
       )
       .limit(limit);
     const orderedRows = afterCursor ? rows.slice().reverse() : rows;
-    const listed = hydrateLegacyUserTurnCosts(orderedRows.map(messageToCamelWithRowid));
-    // 不阻塞首屏。旧 reconnect-stalled 横幅只在首页扫描一次，分页不再读 rollout。
-    if (!before && beforeTs == null && !after) {
-      const ownerScope = captureOwnerBroadcastScope();
-      void maybeUpgradeCodexHistoryOversizedError(sid)
-        .then((upgrade) => {
-          if (upgrade.result !== 'upgraded' || !upgrade.message) return;
-          if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
-          broadcastMessageRow(sid, upgrade.message, ownerScope);
-        })
-        .catch((error) => {
-          log.warn('codex oversized history upgrade rejected', {
-            sessionId: sid,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-    }
-    return listed;
+    const listed = await hydrateLegacyUserTurnCosts(orderedRows.map(messageToCamelWithRowid));
+    return outline ? listed.map(withHistoryArtifacts) : listed;
 }
 
 export function registerMessageIpc(
@@ -356,9 +341,55 @@ export function registerMessageIpc(
 
   const historyView = createHistoryViewReader({
     list: readMessagesList,
+    revision: async () => {
+      const current = getCurrentDbClientSnapshot();
+      if (!current) throw new Error('DbClient not ready');
+      // Own writes increment total_changes; writes through other connections
+      // increment data_version. Both run on the existing database worker.
+      const [version] = await current.client.query<{ changes: number; version: number }>(
+        'SELECT total_changes() AS changes, data_version AS version FROM pragma_data_version');
+      return `${current.clientEpoch}:${version.version}:${version.changes}`;
+    },
+    outline: (sid, opts, skipImport) => readMessagesList(sid, opts, skipImport, true),
+    hydrate: async (sid, ids) => {
+      const db = getDbClient().drizzle;
+      const [session] = await db.select({ clearedAt: sessions.clearedAt }).from(sessions)
+        .where(eq(sessions.id, sid)).limit(1);
+      if (!session) throwIpcError('NOT_FOUND', 'History is unavailable');
+      const result: Message[] = [];
+      for (let offset = 0; offset < ids.length; offset += 100) {
+        const batch = ids.slice(offset, offset + 100);
+        const rows = await db.select({ ...getMessageSelectFields(), rowid: messageRowid }).from(messages)
+          .where(and(eq(messages.sessionId, sid), inArray(messages.id, batch), isNull(messages.rewindAt),
+            session.clearedAt !== null ? gt(messages.createdAt, session.clearedAt) : undefined));
+        if (rows.length !== batch.length) throwIpcError('NOT_FOUND', 'History range changed');
+        result.push(...rows.map(messageToCamelWithRowid));
+      }
+      return hydrateLegacyUserTurnCosts(result);
+    },
+    validate: async (sid, ids) => {
+      const db = getDbClient().drizzle;
+      const [session] = await db.select({ clearedAt: sessions.clearedAt }).from(sessions)
+        .where(eq(sessions.id, sid)).limit(1);
+      if (!session) throwIpcError('NOT_FOUND', 'History is unavailable');
+      const valid = new Set(readLive(sid).filter((row) => session.clearedAt === null || Date.parse(row.createdAt) > session.clearedAt)
+        .map((row) => row.id));
+      const pending = ids.filter((id) => !valid.has(id));
+      for (let offset = 0; offset < pending.length; offset += 100) {
+        const batch = pending.slice(offset, offset + 100);
+        const storedIds = batch.filter((id) => !id.startsWith('history-live:'));
+        const clientIds = batch.filter((id) => id.startsWith('history-live:')).map((id) => id.slice('history-live:'.length));
+        const rows = await db.select({ id: messages.id, clientId: messages.clientId }).from(messages)
+          .where(and(eq(messages.sessionId, sid), isNull(messages.rewindAt),
+            or(inArray(messages.id, storedIds), inArray(messages.clientId, clientIds)),
+            session.clearedAt !== null ? gt(messages.createdAt, session.clearedAt) : undefined));
+        for (const row of rows) { valid.add(row.id); valid.add(`history-live:${row.clientId}`); }
+      }
+      if (ids.some((id) => !valid.has(id))) throwIpcError('NOT_FOUND', 'History range changed');
+    },
     running: readRunning,
     live: readLive,
-    anchor: async (sessionId, id) => {
+    anchor: async (sessionId, id, outline) => {
       const db = getDbClient().drizzle;
       const [session] = await db.select({ clearedAt: sessions.clearedAt }).from(sessions)
         .where(eq(sessions.id, sessionId)).limit(1);
@@ -367,20 +398,22 @@ export function registerMessageIpc(
         const live = readLive(sessionId).find((row) => row.id === id);
         if (live && (session.clearedAt === null || Date.parse(live.createdAt) > session.clearedAt)) return live;
       }
-      const [row] = await db.select({ ...getMessageSelectFields(), rowid: messageRowid }).from(messages)
+      const [row] = await db.select({ ...getMessageSelectFields(), ...(outline ? { content: historyOutlineContent() } : {}), rowid: messageRowid }).from(messages)
         .where(and(eq(messages.sessionId, sessionId),
           id.startsWith('history-live:') ? eq(messages.clientId, id.slice('history-live:'.length)) : eq(messages.id, id),
           isNull(messages.rewindAt),
           session.clearedAt !== null ? gt(messages.createdAt, session.clearedAt) : undefined)).limit(1);
       if (!row) throwIpcError('NOT_FOUND', 'History range changed');
-      return messageToCamelWithRowid(row);
+      const message = messageToCamelWithRowid(row);
+      return outline ? withHistoryArtifacts(message) : message;
     },
   });
   ipcMain.handle('local-db:messages:view', async (event, sessionId: unknown, opts: unknown) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
     const sid = requireString(sessionId, 'sessionId');
     const before = (opts as { before?: unknown } | null)?.before;
-    const page = await historyView.page(sid, before == null ? undefined : requireString(before, 'before')).catch((error) => {
+    const page = await historyView.page(sid, before == null ? undefined : requireString(before, 'before'),
+      (opts as { lazyDetails?: unknown } | null)?.lazyDetails === true).catch((error) => {
       if (isHistoryViewUnavailable(error)) getDeviceLinkInvokeContext()?.historyView?.disable();
       throw error;
     });
@@ -401,11 +434,12 @@ export function registerMessageIpc(
   ipcMain.handle('local-db:messages:work-details', async (event, sessionId: unknown, ref: unknown, opts: unknown) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
     const sid = requireString(sessionId, 'sessionId');
-    const value = ref as { key?: unknown; firstMessageId?: unknown; lastMessageId?: unknown; firstStoredMessageId?: unknown; lastStoredMessageId?: unknown; liveMessageIds?: unknown } | null;
+    const value = ref as { key?: unknown; firstMessageId?: unknown; lastMessageId?: unknown; firstStoredMessageId?: unknown; lastStoredMessageId?: unknown; liveMessageIds?: unknown; parentToolUseId?: unknown } | null;
     const after = (opts as { after?: unknown } | null)?.after;
     if (value?.liveMessageIds != null && (!Array.isArray(value.liveMessageIds) || value.liveMessageIds.length > MAX_HISTORY_SCAN_ROWS)) throwIpcError('INVALID_PARAMS', 'Invalid live work range');
     return historyView.details(sid, {
       key: requireString(value?.key, 'key'),
+      ...(value?.parentToolUseId == null ? {} : { parentToolUseId: requireString(value.parentToolUseId, 'parentToolUseId') }),
       firstMessageId: requireString(value?.firstMessageId, 'firstMessageId'),
       lastMessageId: requireString(value?.lastMessageId, 'lastMessageId'),
       ...(value?.firstStoredMessageId == null ? {} : { firstStoredMessageId: requireString(value.firstStoredMessageId, 'firstStoredMessageId') }),
@@ -1831,6 +1865,22 @@ export interface MessageAgentMetaPatchResult {
   next: Record<string, unknown>;
 }
 
+/** Stable native identity of a visible user input; do not match retries by text. */
+export async function readPiUserEntry(sessionId: string, clientId: string): Promise<string | undefined> {
+  const [row] = await getDbClient().drizzle
+    .select({ agentMeta: messages.agentMeta })
+    .from(messages)
+    .innerJoin(sessions, eq(messages.sessionId, sessions.id))
+    .where(and(
+      eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
+      eq(messages.role, 'user'), isNull(messages.rewindAt),
+      or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
+    ))
+    .limit(1);
+  const id = row && parseAgentMetaRecord(row.agentMeta)?.piEntryId;
+  return typeof id === 'string' && id.length > 0 && id.length <= 128 ? id : undefined;
+}
+
 /** 与 patchMessageAgentMeta 相同，但返回补丁前后的元数据供幂等账本计算。 */
 export async function patchMessageAgentMetaWithResult(
   sessionId: string,
@@ -2480,6 +2530,13 @@ export async function listMessagesForAgentHandoff(
       AND json_type(${messages.agentMeta}, '$.autoReviewUserText.text') = 'text'
       THEN json_extract(${messages.agentMeta}, '$.autoReviewUserText.acceptedAt')
       ELSE ${messages.createdAt} END ELSE ${messages.createdAt} END`;
+  // Scheduled executions are not owner messages. Exclude them before LIMIT so
+  // a long-running heartbeat cannot push its authorizing request out of history.
+  // Keep malformed/unknown rows: restoration must still invalidate ambiguous consent.
+  const notScheduledExecution = sql`CASE WHEN ${messages.role} = 'user'
+    AND json_valid(${messages.agentMeta}) THEN CASE
+      WHEN json_extract(${messages.agentMeta}, '$.autoReviewUserText.kind') = 'scheduled-continuation'
+      THEN 0 ELSE 1 END ELSE 1 END`;
   const rows = await db
     .select({
       rowid: messageRowid,
@@ -2493,7 +2550,7 @@ export async function listMessagesForAgentHandoff(
     .from(messages)
     .where(
       and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), afterClear, afterWatermark,
-        role === 'authorization' ? inArray(messages.role, ['user', 'ask_user', 'plan_review'])
+        role === 'authorization' ? and(inArray(messages.role, ['user', 'ask_user', 'plan_review']), notScheduledExecution)
           : role ? eq(messages.role, role) : undefined),
     )
     .orderBy(desc(role === 'authorization' ? authorityTime : messages.createdAt), desc(messageRowid))

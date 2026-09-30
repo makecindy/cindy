@@ -113,6 +113,11 @@ export interface RemoteDesktopDisplay {
   width: number;
   height: number;
 }
+export interface RemoteDesktopWindow {
+  id: string;
+  title: string;
+  app: string;
+}
 export interface RemoteDesktopCapabilities {
   version: 1;
   enabled: boolean;
@@ -131,10 +136,24 @@ export interface RemoteDesktopCapabilities {
   trickleIce?: boolean;
   systemAudio?: boolean;
   displayModes?: boolean;
+  /** System mode changes can keep the lease and restore on disconnect. */
+  resolutionRestore?: boolean;
+  /** Can temporarily lay out the desktop at the viewer's requested dimensions. */
+  viewerDisplay?: boolean;
+  viewerDisplayRestore?: boolean;
   backgroundViewing?: boolean;
   cursorOverlay?: boolean;
   clipboardText?: boolean;
   clipboardContent?: boolean;
+  clipboardSync?: boolean;
+  /** Bounded single-message clipboard payloads, with legacy chunk fallback. */
+  clipboardInline?: boolean;
+  privacyScreen?: boolean;
+  hostMute?: boolean;
+  /** Explicit host actions, independent of user-configured keyboard bindings. */
+  windowActions?: boolean;
+  workspaceNavigation?: boolean;
+  omarchyMenu?: boolean;
 }
 export type DesktopPermission = "screenRecording" | "accessibility";
 export type DesktopPermissionStatus =
@@ -157,8 +176,26 @@ export interface RemoteDesktopLease {
   lease: string;
   display: RemoteDesktopDisplay;
   controlling: boolean;
+  /** Acknowledges the requested virtual mode when OS logical geometry differs. */
+  viewerDisplayRequest?: { width: number; height: number };
 }
 export type RemoteDesktopRequest =
+  | { op: "windowAction"; lease: string; action: "list" | "desktop" }
+  | {
+      op: "windowAction";
+      lease: string;
+      action: "workspaceLeft" | "workspaceRight" | "omarchyMenu";
+    }
+  | { op: "windowAction"; lease: string; action: "activate"; id: string }
+  | {
+      op: "privacyScreen";
+      lease: string;
+      enabled: boolean;
+      lockOnExit?: boolean;
+    }
+  | { op: "hostMute"; lease: string; enabled: boolean }
+  | { op: "clipboardSync"; lease: string; enabled: boolean }
+  | { op: "clipboardVersion"; lease: string }
   | RemoteDesktopIceRequest
   | ClipboardContentRequest
   | { op: "capabilities" }
@@ -180,7 +217,9 @@ export type RemoteDesktopRequest =
   | { op: "clipboard"; lease: string; action: "copy" }
   | { op: "clipboard"; lease: string; action: "paste"; text: string }
   | { op: "displayModes"; lease: string }
-  | { op: "resolution"; lease: string; modeId: string };
+  | { op: "viewerDisplay"; lease: string; width: number; height: number }
+  | { op: "restoreViewerDisplay"; lease: string }
+  | { op: "resolution"; lease: string; modeId: string; temporary?: boolean };
 
 export function parseRemoteDesktopRequest(
   value: unknown,
@@ -198,8 +237,10 @@ export function parseRemoteDesktopRequest(
   ) {
     if (v.resume !== undefined && typeof v.resume !== "boolean")
       throw new Error("INVALID_REQUEST");
-    if (v.takeover !== undefined && typeof v.takeover !== "boolean") throw new Error("INVALID_REQUEST");
-    if (v.takeover === true && v.resume === true) throw new Error("INVALID_REQUEST");
+    if (v.takeover !== undefined && typeof v.takeover !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    if (v.takeover === true && v.resume === true)
+      throw new Error("INVALID_REQUEST");
     return {
       op: v.op,
       displayId: v.displayId,
@@ -210,6 +251,43 @@ export function parseRemoteDesktopRequest(
   if (typeof v.lease !== "string" || v.lease.length > 128 || !v.lease)
     throw new Error("INVALID_LEASE");
   const lease = v.lease;
+  if (v.op === "windowAction") {
+    if (
+      v.action === "list" ||
+      v.action === "desktop" ||
+      v.action === "workspaceLeft" ||
+      v.action === "workspaceRight" ||
+      v.action === "omarchyMenu"
+    )
+      return { op: v.op, lease, action: v.action };
+    if (
+      v.action === "activate" &&
+      typeof v.id === "string" &&
+      /^0x[a-f0-9]{1,16}$/.test(v.id)
+    )
+      return { op: v.op, lease, action: v.action, id: v.id };
+    throw new Error("INVALID_REQUEST");
+  }
+  if (v.op === "privacyScreen" && typeof v.enabled === "boolean") {
+    if (v.lockOnExit !== undefined && typeof v.lockOnExit !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      enabled: v.enabled,
+      ...(typeof v.lockOnExit === "boolean"
+        ? { lockOnExit: v.lockOnExit }
+        : {}),
+    };
+  }
+  if (
+    (v.op === "privacyScreen" ||
+      v.op === "clipboardSync" ||
+      v.op === "hostMute") &&
+    typeof v.enabled === "boolean"
+  )
+    return { op: v.op, lease, enabled: v.enabled };
+  if (v.op === "clipboardVersion") return { op: v.op, lease };
   if (v.op === "ice") {
     if (!isDesktopAttemptId(v.attemptId) || !isDesktopIceCursor(v.after))
       throw new Error("INVALID_REQUEST");
@@ -225,32 +303,73 @@ export function parseRemoteDesktopRequest(
     return parseClipboardContentRequest(v, lease);
   if (v.op === "clipboard") {
     if (v.action === "copy") return { op: v.op, lease, action: "copy" };
-    if (v.action === "paste" && typeof v.text === "string" && v.text.length > 0 && v.text.length <= REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS)
+    if (
+      v.action === "paste" &&
+      typeof v.text === "string" &&
+      v.text.length > 0 &&
+      v.text.length <= REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS
+    )
       return { op: v.op, lease, action: "paste", text: v.text };
     throw new Error("INVALID_REQUEST");
   }
   if (v.op === "frame") {
-    if (v.cursorOverlay !== undefined && typeof v.cursorOverlay !== "boolean") throw new Error("INVALID_REQUEST");
-    return { op: v.op, lease, ...(v.cursorOverlay === true ? { cursorOverlay: true } : {}) };
+    if (v.cursorOverlay !== undefined && typeof v.cursorOverlay !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      ...(v.cursorOverlay === true ? { cursorOverlay: true } : {}),
+    };
   }
   if (v.op === "stop") {
-    if (v.lockScreen !== undefined && typeof v.lockScreen !== "boolean") throw new Error("INVALID_REQUEST");
-    return { op: v.op, lease, ...(v.lockScreen === true ? { lockScreen: true } : {}) };
+    if (v.lockScreen !== undefined && typeof v.lockScreen !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      ...(v.lockScreen === true ? { lockScreen: true } : {}),
+    };
   }
-  if (v.op === "heartbeat")
-    return { op: v.op, lease };
+  if (v.op === "heartbeat") return { op: v.op, lease };
   if (
     (v.op === "control" || v.op === "presentation") &&
     typeof v.enabled === "boolean"
   )
     return { op: v.op, lease, enabled: v.enabled };
+  if (v.op === "restoreViewerDisplay") return { op: v.op, lease };
   if (v.op === "displayModes") return { op: v.op, lease };
+  if (v.op === "viewerDisplay") {
+    if (
+      ![v.width, v.height].every(
+        (size) =>
+          typeof size === "number" &&
+          Number.isInteger(size) &&
+          size >= 320 &&
+          size <= 2560,
+      )
+    )
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      width: v.width as number,
+      height: v.height as number,
+    };
+  }
   if (
     v.op === "resolution" &&
     typeof v.modeId === "string" &&
     /^[0-9]{1,10}$/.test(v.modeId)
-  )
-    return { op: v.op, lease, modeId: v.modeId };
+  ) {
+    if (v.temporary !== undefined && typeof v.temporary !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      modeId: v.modeId,
+      ...(v.temporary === true ? { temporary: true } : {}),
+    };
+  }
   if (v.op === "offer" && typeof v.sdp === "string" && v.sdp.length <= 64_000) {
     if (v.cursorOverlay !== undefined && typeof v.cursorOverlay !== "boolean")
       throw new Error("INVALID_REQUEST");

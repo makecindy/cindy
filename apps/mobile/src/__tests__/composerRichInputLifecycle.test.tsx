@@ -73,14 +73,36 @@ function mount(hidden = false) {
   };
   bridge.inject.mockImplementation((script: string) => runInNewContext(script, { window: { cindyComposer: page } }));
   root = createRoot(document.createElement('div'));
-  act(() => root!.render(createElement(ComposerRichInput, {
-    ref, document: page.document, hidden, onChangeDocument, onPasteImagesLoadFailed,
+  const renderDocument = (document: ComposerDocument) => act(() => root!.render(createElement(ComposerRichInput, {
+    ref, document, hidden, onChangeDocument, onPasteImagesLoadFailed,
     accessibilityLabel: 'input', placeholder: '', height: 40, maxHeight: 264,
     theme: { background: '#fff', border: '#aaa', chip: '#ddd', focus: '#555', placeholder: '#777', text: '#111', textSecondary: '#333' },
   })));
+  renderDocument(page.document);
   const send = (message: unknown) => act(() => bridge.onMessage({ nativeEvent: { data: JSON.stringify(message) } }));
-  return { ref, page, send, onChangeDocument, onPasteImagesLoadFailed };
+  return { ref, page, send, onChangeDocument, onPasteImagesLoadFailed, renderDocument };
 }
+
+it('never writes an older native edit back over later typing, but applies external replacements', () => {
+  const { page, send, onChangeDocument, renderDocument } = mount();
+  send({ type: 'ready' });
+  const id = page.id;
+  send({ type: 'change', documentId: id, document: textComposerDocument('a') });
+  const first = onChangeDocument.mock.lastCall![0];
+  send({ type: 'change', documentId: id, document: textComposerDocument('abc') });
+  const latest = onChangeDocument.mock.lastCall![0];
+  page.applyDocument.mockClear();
+  renderDocument(first);
+  renderDocument(latest);
+  expect(page.applyDocument).not.toHaveBeenCalled();
+  expect(page.id).toBe(id);
+  const empty = textComposerDocument('');
+  renderDocument(empty);
+  expect(page.document).toEqual(empty);
+  // Explicitly restoring a previously acknowledged draft is still a command.
+  renderDocument(first);
+  expect(page.document).toEqual(first);
+});
 
 it('restores the latest accepted draft on every ready and accepts only the new document id', () => {
   const { ref, page, send, onChangeDocument } = mount();

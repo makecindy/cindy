@@ -19,6 +19,11 @@ pub struct CliArgs {
     #[arg(long = "exe-name")]
     pub exe_name: String,
 
+    /// Metadata identity forwarded only when this updater elevates itself.
+    /// Electron uses an environment variable so old updater binaries still work.
+    #[arg(long = "install-key")]
+    pub install_key: Option<String>,
+
     /// PID of the main Electron process to wait for before swapping files.
     #[arg(long)]
     pub pid: u32,

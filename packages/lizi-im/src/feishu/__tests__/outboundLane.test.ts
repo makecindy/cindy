@@ -705,3 +705,28 @@ describe('feishu card lane registry', () => {
     expect(outbound.resolveCardLane('om_replied', 'oc_group1')).toBeNull();
   });
 });
+
+describe('private notification topic output', () => {
+  beforeEach(() => { vi.clearAllMocks(); rebindFresh(); });
+
+  it('keeps text, interactive cards and streaming openers on the explicit topic root', async () => {
+    await outbound.sendText('ou_owner', 'first', { threadTs: 'om_notification_a' });
+    await outbound.sendInteractive('ou_owner', { body: 'approval', buttons: [] }, {
+      threadTs: 'om_notification_b', deliverToOwnerDm: true,
+    });
+    await outbound.sendCardRaw('ou_owner', { elements: [] }, { threadTs: 'om_notification_a' });
+    expect(larkMocks.reply.mock.calls.map(([p]) => p.path)).toEqual([
+      { message_id: 'om_notification_a' }, { message_id: 'om_notification_b' }, { message_id: 'om_notification_a' },
+    ]);
+    for (const [p] of larkMocks.reply.mock.calls) {
+      expect(p.data).toEqual(expect.objectContaining({ reply_in_thread: true }));
+    }
+    expect(larkMocks.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects thread ids used as message ids without falling back to the main chat', async () => {
+    await expect(outbound.sendText('ou_owner', 'hello', { threadTs: 'omt_thread' })).rejects.toThrow();
+    expect(larkMocks.create).not.toHaveBeenCalled();
+    expect(larkMocks.reply).not.toHaveBeenCalled();
+  });
+});

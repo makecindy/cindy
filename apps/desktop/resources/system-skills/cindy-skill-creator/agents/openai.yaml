@@ -1,0 +1,5 @@
+interface:
+  display_name: "Cindy Skill Creator"
+  short_description: "Create or update a Cindy Skill"
+  icon_small: "./assets/skill-creator-small.svg"
+  icon_large: "./assets/skill-creator.png"

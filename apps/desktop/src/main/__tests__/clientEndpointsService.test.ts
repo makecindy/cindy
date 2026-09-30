@@ -14,6 +14,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import { app } from 'electron';
+import { setCindyPersonalRuntime, setCindyVersionEndpointOverride } from '../cindy-make/versionRuntimeIdentity';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -261,6 +263,27 @@ describe('resolveEndpointSource(清单来源三选一)', () => {
 });
 
 describe('localhost 开发端点的 realm 固定', () => {
+  it('a packaged personal version keeps the verified local Dev services instead of sending credentials to production', async () => {
+    const previousPackaged = app.isPackaged;
+    (app as { isPackaged: boolean }).isPackaged = true;
+    setCindyPersonalRuntime(true);
+    setCindyVersionEndpointOverride({ manifestText: LOCAL_MANIFEST, local: true });
+    netRequest.mockClear();
+    try {
+      await expect(initClientEndpoints()).resolves.toBe(true);
+      const local = getClientEndpoint('authApiBaseUrl');
+      expect(local.startsWith('http://localhost')).toBe(true);
+      activateClientEndpointRealm('global');
+      expect(getClientEndpoint('authApiBaseUrl')).toBe(local);
+      activateClientEndpointRealm('cn');
+      expect(getClientEndpoint('authApiBaseUrl')).toBe(local);
+      expect(netRequest).not.toHaveBeenCalled();
+    } finally {
+      setCindyPersonalRuntime(false);
+      setCindyVersionEndpointOverride(undefined);
+      (app as { isPackaged: boolean }).isPackaged = previousPackaged;
+    }
+  });
   it('登录恢复切换 realm 时仍复用本地文件清单，不加载线上清单', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'client-endpoints-local-realm-'));
     const manifestPath = path.join(root, 'endpoint.local.json');

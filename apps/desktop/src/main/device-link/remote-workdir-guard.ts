@@ -60,9 +60,9 @@ function classifyStatError(err: unknown): RemoteWorkingDirRejectionReason {
 }
 
 /**
- * 生产探测在有界 utility-process 池中执行。`fs.stat` 不支持 AbortSignal,
- * 因此超时会终止对应 host,释放其 libuv 状态并让等待请求获得槽位。
- * `options.stat` 仅为单元测试注入,同样保留业务超时语义。
+ * 生产探测在主进程的有限异步池中执行。`fs.promises` 保持事件循环可运行，
+ * 每次请求仍有端到端 deadline；底层 I/O 不可取消时会继续占用有限槽位，避免
+ * 超时重试把未完成的文件系统请求无限堆积。`options.stat` 仅为单元测试注入。
  */
 export async function probeRemoteDirectory(
   dir: string,

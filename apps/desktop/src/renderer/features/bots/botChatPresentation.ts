@@ -1,3 +1,5 @@
+import type { BotChatIdentity } from './BotSessionContentHeader';
+
 /**
  * Pure presentation rules for a teammate's chat, kept out of the 5k-line session
  * view so they are cheap to test.
@@ -20,4 +22,15 @@ export function botComposerPlaceholderKey(name: string): string {
   return isLatinBotName(name)
     ? 'bots.chat.composerPlaceholderLatin'
     : 'bots.chat.composerPlaceholder';
+}
+
+/** The route gate supplies this only after checking the durable Bot/session link. */
+export type BotChatBinding = BotChatIdentity & { sessionId: string };
+
+/** Runtime snapshots can disappear during hydration/reconnect; ownership does not. */
+export function resolveBotChatIdentity(
+  binding: BotChatBinding | undefined,
+  sessionId: string | undefined,
+): BotChatIdentity | null {
+  return binding && binding.sessionId === sessionId ? binding : null;
 }

@@ -17,6 +17,28 @@ const sourceSkips = [
 
 module.exports = {
   sourceSkips,
+  // These entry points are outside the iOS podspec's source glob, and these
+  // six core files are wholly guarded by #if os(macOS). Keep this an explicit
+  // list: new/shared Swift files and Resources must still change the runtime.
+  // fingerprintConfig.test.ts checks the platform guards and real hash effects.
+  // Adopting this boundary changes legacy hashes once; ship with a planned
+  // native release, never label old installations compatible by overriding it.
+  ignorePaths: [
+    "../../packages/remote-credentials-native/Sources/CredentialHost/**/*",
+    "../../packages/remote-credentials-native/Sources/UnlockInspect/**/*",
+    "../../packages/remote-credentials-native/Sources/DesktopNativeCaller/**/*",
+    ...[
+      "CredentialPipeInput",
+      "HostCredentialServer",
+      "MacCredentialPasswordForm",
+      "MacCredentialSecret",
+      "MacScreenUnlock",
+      "MacSystemAccount",
+    ].map(
+      (name) =>
+        `../../packages/remote-credentials-native/Sources/CindyRemoteCredentials/${name}.swift`,
+    ),
+  ],
   // These images are compiled into the native catalog, not delivered by Metro.
   extraSources: [
     "cindy-message-square-plus",

@@ -1,9 +1,12 @@
+import userInstallerSource from '../../resources/linux/install-user.sh?raw';
+import type { LinuxUserInstallation } from './linuxInstallation';
+
 /**
  * updateScriptLinux — pure builder for the Linux .deb update-apply bash script.
  *
  * Linux has no cindy-updater binary. After the Electron process exits, this
- * script asks polkit (pkexec) to install the staged .deb over the existing
- * package, then relaunches the same executable path.
+ * script either applies a managed user install without elevation, or asks
+ * polkit to replace a Debian-owned package, then relaunches the stable entry.
  *
  * Extracted so the generated script can be regression-tested without Electron.
  */
@@ -44,6 +47,9 @@ export interface LinuxUpdateScriptParams {
   lockFilePath: string;
   /** cindy-update.log path. */
   logPath: string;
+  /** Only a validated, marked user install may bypass the package manager. */
+  userInstallation?: LinuxUserInstallation & { version: string };
+  relaunchArgs?: string[];
   timings?: Partial<LinuxUpdateScriptTimings>;
 }
 
@@ -86,6 +92,9 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
   const qExe = shellSingleQuote(exePath);
   const qLock = shellSingleQuote(lockFilePath);
   const qSha = shellSingleQuote(sha256);
+  const userInstallation = params.userInstallation;
+  const launchPath = userInstallation ? `${userInstallation.prefix}/current/Cindy` : exePath;
+  const launch = [launchPath, ...(params.relaunchArgs ?? [])].map(shellSingleQuote).join(' ');
 
   return [
     '#!/bin/bash',
@@ -131,7 +140,7 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
     `    wait "$LOCK_HEARTBEAT_PID" 2>/dev/null`,
     '    rm -f "$INSTALL_PID_FILE"',
     `    rm -f ${qLock}`,
-    `    setsid nohup ${qExe} >/dev/null 2>&1 &`,
+    `    setsid nohup ${launch} >/dev/null 2>&1 &`,
     '    LAUNCHED_PID=$!',
     '}',
     '(',
@@ -174,7 +183,7 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
     'trap cleanup EXIT',
     '',
     `echo "[$(date)] Update script started, waiting for PID ${pid}" >> ${qLog}`,
-    `echo "[$(date)] deb=${qDeb} exe=${qExe}" >> ${qLog}`,
+    `printf '[%s] deb=%s exe=%s\\n' "$(date)" ${qDeb} ${qExe} >> ${qLog}`,
     '',
     'WAITED=0',
     `while kill -0 ${pid} 2>/dev/null; do`,
@@ -192,6 +201,12 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
     `echo "[$(date)] Process ${pid} exited, waiting for filesystem to settle" >> ${qLog}`,
     'sleep 2',
     '',
+    ...(userInstallation ? [
+      // Source is embedded in the packaged application, never loaded
+      // from a mutable external helper or a pinned system Node installation.
+      `INSTALLER=${shellSingleQuote(userInstallerSource)}`,
+      `bash -c "$INSTALLER" cindy-user-install --apply ${qDeb} ${qSha} ${sizeBytes} ${shellSingleQuote(userInstallation.prefix)} ${shellSingleQuote(userInstallation.version)} ${shellSingleQuote(userInstallation.region)} ${shellSingleQuote(userInstallation.current)} >> ${qLog} 2>&1 &`,
+    ] : [
     'PKEXEC=/usr/bin/pkexec',
     'if [ ! -x "$PKEXEC" ]; then',
     '    PKEXEC=$(command -v pkexec 2>/dev/null || true)',
@@ -247,6 +262,7 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
     '',
     `echo "[$(date)] invoking elevated installer via pkexec" >> ${qLog}`,
     `"$PKEXEC" /bin/bash -c "$ELEVATED" bash ${qSha} ${qDeb} ${sizeBytes} >> ${qLog} 2>&1 &`,
+    ]),
     'INSTALL_PID=$!',
     `echo "$INSTALL_PID" > "$INSTALL_PID_FILE"`,
     'wait "$INSTALL_PID"',
@@ -260,7 +276,7 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
     '    exit 1',
     'fi',
     '',
-    `echo "[$(date)] Starting app: ${qExe}" >> ${qLog}`,
+    `printf '[%s] Starting app: %s\\n' "$(date)" ${shellSingleQuote(launchPath)} >> ${qLog}`,
     // 先杀心跳、放锁,再 setsid 拉起:新进程不在本进程组里,不会
     // 被 scan_group_others 误判成安装链,也不会卡在自己的锁上。
     'relaunch_app',
@@ -279,7 +295,7 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
     '    fi',
     `    if [ "$i" -eq ${t.verifyRetryAtSeconds} ]; then`,
     `        echo "[$(date)] still not up after ${t.verifyRetryAtSeconds}s — retrying relaunch" >> ${qLog}`,
-    `        setsid nohup ${qExe} >/dev/null 2>&1 &`,
+    `        setsid nohup ${launch} >/dev/null 2>&1 &`,
     '        LAUNCHED_PID=$!',
     '    fi',
     '    sleep 1',

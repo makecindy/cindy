@@ -129,6 +129,37 @@ function clickGroup(label: string) {
 }
 
 describe('WorkGroupBlock — running latest-five preview', () => {
+  it('keeps teammate execution collapsed while streaming and preserves explicit expansion at completion', async () => {
+    const props = { compact: true, blockId: 'work:bot-public', isStreaming: true,
+      childItems: [rendered('progress', 'Checking the market'),
+        tools('tools', [mkTool('search')], new Map([['search', 'original error evidence']]), new Set(['search']))] };
+    const { rerender, container } = render(createElement(WorkGroupBlock, props));
+    expect(container.querySelector('[data-live-work-preview]')).toBeNull();
+    expect(screen.queryByTestId('assistant-progress')).toBeNull();
+    expect(screen.queryByTestId('direct-tool')).toBeNull();
+    expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
+    clickGroup('chat.workGroup.workDetails');
+    expect(screen.getByTestId('assistant-progress').textContent).toBe('Checking the market');
+    expect(screen.getByTestId('direct-tool').getAttribute('data-result')).toBe('original error evidence');
+    rerender(createElement(WorkGroupBlock, { ...props, isStreaming: false }));
+    expect(screen.getByTestId('assistant-progress')).toBeTruthy();
+    clickGroup('chat.workGroup.workDetails');
+    await waitFor(() => expect(screen.queryByTestId('assistant-progress')).toBeNull());
+  });
+
+  it('keeps lazy teammate history load and retry controls reachable without a live preview', () => {
+    const setVisible = vi.fn();
+    const retry = vi.fn();
+    const props = { compact: true, blockId: 'work:bot-lazy', isStreaming: true, childItems: [],
+      deferred: { owner: {}, key: 'range', expanded: false, loading: false, failed: true,
+        toggle: vi.fn(), retry, setVisible } };
+    render(createElement(WorkGroupBlock, props));
+    clickGroup('chat.workGroup.workDetails');
+    expect(setVisible).toHaveBeenLastCalledWith(true, false);
+    fireEvent.click(screen.getByText('chat.errorBanner.retry'));
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
   it('rebinds visible detail interest when the Host changes without changing the group key', () => {
     const first = vi.fn();
     const second = vi.fn();

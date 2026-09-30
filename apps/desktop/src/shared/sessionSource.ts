@@ -15,6 +15,7 @@ export const SESSION_SOURCES = [
   'plugin',
   'bot',
   'cindy-make',
+  'cindy-make-merge',
 ] as const;
 
 export type SessionSource = (typeof SESSION_SOURCES)[number];
@@ -28,14 +29,21 @@ export const RETAINABLE_PROJECT_SESSION_SOURCES = [
   'plugin',
 ] as const satisfies readonly SessionSource[];
 
-export type RetainableProjectSessionSource =
-  (typeof RETAINABLE_PROJECT_SESSION_SOURCES)[number];
+export type RetainableProjectSessionSource = (typeof RETAINABLE_PROJECT_SESSION_SOURCES)[number];
 
 /** Fail closed for legacy/malformed rows whose source is missing or unknown. */
 export function isRetainableProjectSessionSource(
   source: unknown,
 ): source is RetainableProjectSessionSource {
   return source === 'desktop' || source === 'plugin';
+}
+
+/** Internal worker directories are execution inputs, not user project registrations. */
+export function isRetainableProjectSession(session: {
+  source?: unknown;
+  orcaRole?: unknown;
+}): boolean {
+  return session.orcaRole !== 'worker' && isRetainableProjectSessionSource(session.source);
 }
 
 export function isReviewSessionSource(source: unknown): source is 'review' {
@@ -76,6 +84,7 @@ export const DESKTOP_VISIBLE_SESSION_SOURCES: SessionSource[] = [
   'shared',
   'plugin',
   'cindy-make',
+  'cindy-make-merge',
 ];
 
 export function normalizeSessionSource(source: unknown): SessionSource {
@@ -93,7 +102,8 @@ export function normalizeSessionSource(source: unknown): SessionSource {
     source === 'shared' ||
     source === 'plugin' ||
     source === 'bot' ||
-    source === 'cindy-make'
+    source === 'cindy-make' ||
+    source === 'cindy-make-merge'
     ? source
     : 'desktop';
 }

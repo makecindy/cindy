@@ -138,7 +138,7 @@ it("shows Face ID setting failures without exposing native error details", async
     "remoteDesktop.autoUnlockUnavailable",
   );
 });
-it.each(["win32", "linux", undefined])(
+it.each(["win32", undefined])(
   "does not access credentials for unsupported host %s",
   async (platform) => {
     fixture.hostPlatform = platform;
@@ -155,6 +155,37 @@ it.each(["win32", "linux", undefined])(
     expect(fixture.ensure).not.toHaveBeenCalled();
   },
 );
+it("uses the existing native credential flow for a locked Linux host", async () => {
+  fixture.hostPlatform = "linux";
+  fixture.settings.autoUnlock = true;
+  fixture.invoke.mockResolvedValue({
+    version: 1,
+    state: "locked",
+    ready: true,
+    descriptor: "test-descriptor",
+  });
+  await act(async () => value.maybeUnlock());
+  expect(fixture.ensure).toHaveBeenCalledOnce();
+});
+it("does not retrieve a password or run authentication for an unsupported Linux locker", async () => {
+  fixture.hostPlatform = "linux";
+  fixture.settings.autoUnlock = true;
+  fixture.invoke.mockResolvedValue({ version: 1, state: "unavailable" });
+  await act(async () => value.maybeUnlock());
+  expect(fixture.ensure).not.toHaveBeenCalled();
+  expect(fixture.biometric).not.toHaveBeenCalled();
+  expect(value.notice).toBe("remoteDesktop.linuxUnlockUnavailable");
+});
+it("explains unsupported Linux setup without opening a password form", async () => {
+  fixture.hostPlatform = "linux";
+  fixture.invoke.mockRejectedValue(new Error("CREDENTIAL_UNLOCK_UNAVAILABLE"));
+  await act(async () => value.onAutoUnlock(true));
+  expect(fixture.ensure).not.toHaveBeenCalled();
+  expect(fixture.alert).toHaveBeenCalledWith(
+    "remoteDesktop.autoUnlock",
+    "remoteDesktop.linuxUnlockUnavailable",
+  );
+});
 it("uses the just-discovered Mac platform before a React render", async () => {
   fixture.hostPlatform = undefined;
   await act(async () => value.maybeUnlock());

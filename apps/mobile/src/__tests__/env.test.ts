@@ -8,9 +8,24 @@ import {
   resolveEnvFlag,
   resolveDeviceLinkApiBaseUrl,
   resolveMobileGoogleConfig,
+  resolveMobileWechatConfig,
 } from '@/config/env';
 
 describe('mobile env', () => {
+  it('keeps WeChat public configuration in CN and explicitly configured dev builds', () => {
+    const env = {
+      EXPO_PUBLIC_CINDY_WECHAT_APP_ID: ' wx-test-mobile ',
+      EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK: ' https://login.example.com/wechat/ ',
+    };
+    for (const region of ['cn', 'dev'] as const) {
+      expect(resolveMobileWechatConfig(region, env)).toEqual({
+        appId: 'wx-test-mobile',
+        universalLink: 'https://login.example.com/wechat/',
+      });
+    }
+    expect(resolveMobileWechatConfig('global', env)).toEqual({ appId: '', universalLink: '' });
+    expect(resolveMobileWechatConfig('cn', {})).toEqual({ appId: '', universalLink: '' });
+  });
   it('resolves the device-link relay base URL(显式值优先,否则回落 env/dev 默认)', () => {
     expect(resolveDeviceLinkApiBaseUrl(undefined)).toBe(DEFAULT_DEVICE_LINK_API_BASE_URL);
     expect(resolveDeviceLinkApiBaseUrl('')).toBe(DEFAULT_DEVICE_LINK_API_BASE_URL);

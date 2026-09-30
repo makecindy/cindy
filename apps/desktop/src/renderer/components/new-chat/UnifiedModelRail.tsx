@@ -5,9 +5,10 @@ import { useTranslation } from 'react-i18next';
 import type { ProviderView } from '@cindy/model-providers';
 
 import { cn } from '@/lib/utils';
+import { providerAccountLabel } from '@/lib/providerDisplayName';
 import { Tip } from '@/components/ui/tooltip';
 
-import { useProviderWeeklyQuota } from './useProviderWeeklyQuota';
+import { useProviderWeeklyQuota, type ProviderUsageScope } from './useProviderWeeklyQuota';
 import { formatQuotaResetCountdown } from '../status/usageCardModel';
 import { agentOptionOf } from './agentOptions';
 import { ProviderRailMark } from './UnifiedFlyoutHost';
@@ -33,7 +34,7 @@ export function UnifiedModelRail({
   providers,
   providerLabel,
   interactionDisabled = false,
-  localProviderUsage = false,
+  providerUsage = null,
 }: {
   items: readonly UnifiedRailItem[];
   active: UnifiedRailFilter;
@@ -41,7 +42,8 @@ export function UnifiedModelRail({
   providers: readonly ProviderView[];
   providerLabel: (providerId: string) => string;
   interactionDisabled?: boolean;
-  localProviderUsage?: boolean;
+  /** Whose account usage the directory may show; null hides it. */
+  providerUsage?: ProviderUsageScope | null;
 }) {
   const { t } = useTranslation();
   // rail 常驻,不做「项数少就整条隐藏」——设计稿的分类栏在单来源时也在(★/全部/来源),
@@ -90,7 +92,8 @@ export function UnifiedModelRail({
               itemKey={key}
               onClick={() => onSelect(item)}
               disabled={interactionDisabled}
-              provider={localProviderUsage ? provider : undefined}
+              provider={providerUsage ? provider : undefined}
+              usageDeviceId={providerUsage?.deviceId ?? null}
             >
               {item.kind === 'favorites' ? (
                 // ☆ 未激活与其它格同灰(hover 提亮)—— 常亮金色会在没进收藏视图时也
@@ -121,11 +124,13 @@ interface RailButtonProps {
   onClick: () => void;
   disabled: boolean;
   provider?: ProviderView;
+  usageDeviceId: string | null;
   children: ReactNode;
 }
 
 function RailButton(props: RailButtonProps) {
-  // Remote directories must never borrow this desktop's account quota.
+  // Quota follows the directory's owner: remote directories read that device's mirrors
+  // and must never borrow this desktop's account quota.
   return props.provider ? (
     <ProviderQuotaButton {...props} provider={props.provider} />
   ) : (
@@ -134,24 +139,8 @@ function RailButton(props: RailButtonProps) {
 }
 
 function ProviderQuotaButton(props: RailButtonProps & { provider: ProviderView }) {
-  const quota = useProviderWeeklyQuota(props.provider);
+  const quota = useProviderWeeklyQuota(props.provider, { deviceId: props.usageDeviceId });
   return <RailButtonView {...props} quota={quota} />;
-}
-
-function accountLabel(label: string, identity?: string): string {
-  if (!identity || label === identity) return label;
-  // Independent logins already name the connection "Provider · identity".
-  // OpenAI also truncates that generated name to 50 characters and may add (2).
-  const baseLabel = label.replace(/ \(\d+\)$/, '');
-  if (baseLabel.endsWith(` · ${identity}`)) return label;
-  const separator = baseLabel.indexOf(' · ');
-  if (
-    separator >= 0 &&
-    baseLabel.length === 50 &&
-    `${baseLabel.slice(0, separator)} · ${identity}`.slice(0, 50) === baseLabel
-  )
-    return label;
-  return `${label} · ${identity}`;
 }
 
 function RailButtonView({
@@ -173,7 +162,7 @@ function RailButtonView({
       ? null
       : `${t('quotaCard.weeklyLabel')} · ${t('quotaCard.remainingPercent', { percent: remaining })}`;
   const reset = formatQuotaResetCountdown(quota?.resetsAt, Date.now(), t);
-  const displayLabel = accountLabel(label, accountIdentity);
+  const displayLabel = providerAccountLabel(label, accountIdentity);
   const tooltip = quotaLabel ? (
     <>
       <div>{displayLabel}</div>

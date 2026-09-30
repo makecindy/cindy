@@ -7,6 +7,12 @@
  */
 
 import type { AgentKind, Maker } from '@cindy/maker-core';
+import { app } from 'electron';
+import path from 'node:path';
+import {
+  isCindyMakeManagedWorktreePath,
+  makeSourceCheckoutPath,
+} from '../cindy-make/sourcePaths.js';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 
 import { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
@@ -32,11 +38,18 @@ interface LatestUserMessage {
 /** Optional dependency overrides used by focused main-process unit tests. */
 export interface GitSnapshotCoordinatorHostDeps {
   readAutoSnapshotEnabled?: () => boolean;
+  readAutoInitProjectGit?: () => boolean;
   detectRepoRoot?: (workingDir: string) => Promise<string | null>;
-  initializeProjectGit?: ConstructorParameters<typeof GitSnapshotCoordinator>[0]['initializeProjectGit'];
+  initializeProjectGit?: ConstructorParameters<
+    typeof GitSnapshotCoordinator
+  >[0]['initializeProjectGit'];
   getLatestUserMessage?: (sessionId: string) => Promise<LatestUserMessage | null>;
-  createShadowSavepoint?: ConstructorParameters<typeof GitSnapshotCoordinator>[0]['createShadowSavepoint'];
-  createShadowMarker?: ConstructorParameters<typeof GitSnapshotCoordinator>[0]['createShadowMarker'];
+  createShadowSavepoint?: ConstructorParameters<
+    typeof GitSnapshotCoordinator
+  >[0]['createShadowSavepoint'];
+  createShadowMarker?: ConstructorParameters<
+    typeof GitSnapshotCoordinator
+  >[0]['createShadowMarker'];
   logger?: ConstructorParameters<typeof GitSnapshotCoordinator>[0]['logger'];
 }
 
@@ -55,11 +68,9 @@ async function defaultGetLatestUserMessage(sessionId: string): Promise<LatestUse
   const [row] = await db
     .select({ clientId: messages.clientId, content: messages.content })
     .from(messages)
-    .where(and(
-      eq(messages.sessionId, sessionId),
-      eq(messages.role, 'user'),
-      isNull(messages.rewindAt),
-    ))
+    .where(
+      and(eq(messages.sessionId, sessionId), eq(messages.role, 'user'), isNull(messages.rewindAt)),
+    )
     .orderBy(desc(messages.createdAt))
     .limit(1);
 
@@ -93,6 +104,8 @@ export function createGitSnapshotCoordinator(
   return new GitSnapshotCoordinator({
     readAutoSnapshotEnabled:
       deps.readAutoSnapshotEnabled ?? (() => readGitSafetySettings().autoSnapshotEnabled),
+    readAutoInitProjectGit:
+      deps.readAutoInitProjectGit ?? (() => readGitSafetySettings().autoInitProjectGit),
     detectRepoRoot: deps.detectRepoRoot ?? defaultDetectRepoRoot,
     initializeProjectGit:
       deps.initializeProjectGit ??
@@ -103,11 +116,23 @@ export function createGitSnapshotCoordinator(
           remoteHostId: context.remoteHostId,
           sessionId,
           autoSnapshotEnabled: opts.autoSnapshotEnabled,
+          autoInitProjectGit: opts.autoInitProjectGit,
           source: 'git-snapshot:on-turn',
         })),
     getSessionContext: async (sessionId) => {
       const meta = await maker.getSessionMeta(sessionId);
       if (!meta?.workDir || meta.remoteHostId) return null;
+      // Cindy Make stores file trees itself. Generic savepoints create commit objects.
+      const userData = app.getPath('userData');
+      const samePath = (a: string, b: string) =>
+        process.platform === 'win32'
+          ? path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
+          : path.resolve(a) === path.resolve(b);
+      if (
+        isCindyMakeManagedWorktreePath(userData, meta.workDir) ||
+        samePath(meta.workDir, makeSourceCheckoutPath(userData))
+      )
+        return null;
       return {
         workingDir: meta.workDir,
         agentKind: meta.agentKind as AgentKind,

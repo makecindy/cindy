@@ -1,0 +1,26 @@
+[
+  {
+    "path": "SKILL.md",
+    "size": 79,
+    "sha256": "25ff5356351bcb9fec49c3f417e93dee6176eb5baa69ddf64d667d1370ef89db",
+    "base64": "LS0tCm5hbWU6IGdvbGRlbi1za2lsbApkZXNjcmlwdGlvbjogR29sZGVuIGZpeHR1cmUKdmVyc2lvbjogMS4wLjAKLS0tCiMg56S65L6LCg=="
+  },
+  {
+    "path": "scripts/run.py",
+    "size": 15,
+    "sha256": "b80792336156c7b0f7fe02eeef24610d2d52a10d1810397744471d1dc5738180",
+    "base64": "cHJpbnQoImhlbGxvIikK"
+  },
+  {
+    "path": "assets/icon.bin",
+    "size": 5,
+    "sha256": "6d1dc71fb8c1d9f7786ddddd833d3f60835dd60e3b86b652e4458f780c6532f6",
+    "base64": "AP8BgAo="
+  },
+  {
+    "path": "empty.txt",
+    "size": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "base64": ""
+  }
+]

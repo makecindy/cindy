@@ -275,9 +275,11 @@ export function WindowControls({
       <ConfirmDialog
         open={showCloseBehaviorDialog}
         onOpenChange={(next) => {
-          // 首次关闭必须明确选择；ESC / 点击遮罩不应静默写入默认值或关窗。
-          if (next) setShowCloseBehaviorDialog(true);
+          // Dismissal cancels this close request without saving a choice or closing the window.
+          if (savingCloseBehaviorRef.current && !next) return;
+          setShowCloseBehaviorDialog(next);
         }}
+        showCloseButton
         title={t('settings.windowBehavior.closePrompt.title')}
         description={t('settings.windowBehavior.closePrompt.message')}
         content={

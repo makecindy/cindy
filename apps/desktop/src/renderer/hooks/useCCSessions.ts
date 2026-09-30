@@ -125,7 +125,9 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       }
       // 只在新桶有确切数据时才覆盖, 否则其它桶的变化不应擦掉当前视图。
       if (next !== null) {
-        setSnapshotState({ data: next, filter });
+        setSnapshotState((previous) =>
+          previous.data === next && previous.filter === filter ? previous : { data: next, filter },
+        );
         setIsLoading(false);
         setError(null);
       }

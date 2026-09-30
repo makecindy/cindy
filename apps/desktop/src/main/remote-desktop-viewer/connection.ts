@@ -4,12 +4,21 @@ import {
   REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS,
   type RemoteDesktopRequest,
   type RemoteDesktopLease,
+  type RemoteDesktopCapabilities,
+  transferClipboardContent,
 } from '@cindy/device-link';
 import type {
   RemoteViewerReply,
   RemoteViewerTarget,
   RemoteViewerState,
 } from '../../shared/remoteDesktopViewer.js';
+import {
+  DEFAULT_VIEWER_PREFERENCES,
+  type RemoteViewerPreferences,
+  type RemoteViewerSafety,
+} from '../../shared/remoteDesktopViewer.js';
+import { ViewerSafety, type ViewerClipboard } from './safety.js';
+import type { ViewerCredentials } from './credentials.js';
 
 /** Main owns the target, account generation and lease for one lightweight viewer.
  * A destroyed/hidden window cannot leave late starts or inputs alive. No closeLink.
@@ -30,12 +39,25 @@ export class RemoteViewerConnection {
   private controlPending = false;
   private clipboardPending: object | null = null;
   private lifecycle: Promise<void> | null = null;
+  private caps: RemoteDesktopCapabilities | null = null;
+  private preferencesValue = { ...DEFAULT_VIEWER_PREFERENCES };
+  private safetyState = new ViewerSafety();
+  private clipboardProgress: number | null = null;
+  private closing = false;
   constructor(
     private readonly deps: {
       owner(): string;
       request(deviceId: string, request: RemoteDesktopRequest, check: () => void): Promise<unknown>;
       readClipboard(): string;
       writeClipboard(value: string): void;
+      clipboard?: ViewerClipboard;
+      credentials?: Pick<ViewerCredentials, 'run' | 'dispose'>;
+      focused?(): boolean;
+      preferences?(device: string): RemoteViewerPreferences;
+      savePreferences?(
+        device: string,
+        patch: Partial<RemoteViewerPreferences>,
+      ): Promise<RemoteViewerPreferences>;
     },
   ) {}
   bind(target: RemoteViewerTarget): void {
@@ -46,6 +68,12 @@ export class RemoteViewerConnection {
     this.owner = owner;
     this.target = target;
     this.attempted = false;
+    this.caps = null;
+    this.closing = false;
+    this.preferencesValue = this.deps.preferences?.(target.deviceId) ?? {
+      ...DEFAULT_VIEWER_PREFERENCES,
+    };
+    this.safetyState.invalidate(true);
   }
   snapshot(): RemoteViewerState {
     return {
@@ -102,6 +130,10 @@ export class RemoteViewerConnection {
     return pending;
   }
   deactivate(): void {
+    this.closing = false;
+    this.safetyState.invalidate();
+    this.clipboardProgress = null;
+    this.deps.credentials?.dispose();
     this.generation++;
     this.active = false;
     const lease = this.lease,
@@ -129,6 +161,7 @@ export class RemoteViewerConnection {
   ): Promise<RemoteViewerReply> {
     try {
       this.check(generation);
+      if (this.closing) throw new Error('DESKTOP_STOPPED');
       const request = parseRemoteDesktopRequest(value);
       const check = () =>
         request.op === 'offer' || request.op === 'ice'
@@ -138,7 +171,7 @@ export class RemoteViewerConnection {
       if ('lease' in request && request.lease !== this.lease)
         throw new Error('DESKTOP_LEASE_EXPIRED');
       if (request.op === 'start' && this.starting) throw new Error('DESKTOP_BUSY');
-      // The renderer has no generic local clipboard API, password bridge, or lock-on-exit policy.
+      // Clipboard contents and credentials are handled only by dedicated Main adapters.
       if (
         request.op === 'clipboard' ||
         request.op === 'clipboardContent' ||
@@ -152,6 +185,7 @@ export class RemoteViewerConnection {
       const isStart = request.op === 'start';
       const isControl = request.op === 'control';
       if (isControl || request.op === 'stop' || isStart) {
+        this.safetyState.invalidate();
         this.controlGeneration++;
         this.wantsControl = isControl && request.enabled;
         this.controlling = false;
@@ -171,6 +205,10 @@ export class RemoteViewerConnection {
             throw new Error('DESKTOP_LEASE_EXPIRED');
           if (isStart) this.attempted = true;
           const result = await this.deps.request(target.deviceId, request, check);
+          if (request.op === 'capabilities') {
+            check();
+            this.caps = result as RemoteDesktopCapabilities;
+          }
           if (isStart) {
             const lease = result as RemoteDesktopLease;
             if (!lease || typeof lease.lease !== 'string') throw new Error('DESKTOP_UNAVAILABLE');
@@ -191,12 +229,14 @@ export class RemoteViewerConnection {
             (isControl ||
               (request.op === 'heartbeat' && !controlPendingAtStart && !this.controlPending))
           ) {
+            const wasControlling = this.controlling;
             this.controlling =
               this.wantsControl &&
               !!result &&
               typeof result === 'object' &&
               'controlling' in result &&
               result.controlling === true;
+            if (wasControlling && !this.controlling) this.safetyState.invalidate();
           }
           if (request.op === 'stop' && this.lease === request.lease) this.lease = null;
           return result;
@@ -230,7 +270,40 @@ export class RemoteViewerConnection {
         if (!this.controlling || controlGeneration !== this.controlGeneration)
           throw new Error('DESKTOP_VIEW_ONLY');
       };
-      if (action === 'copy') {
+      if (action !== 'copy' && action !== 'paste') throw new Error('INVALID_REQUEST');
+      if (this.caps?.clipboardContent && this.deps.clipboard) {
+        const current = () => {
+          try {
+            check();
+            return true;
+          } catch {
+            return false;
+          }
+        };
+        await this.safetyState.pause();
+        check();
+        this.clipboardProgress = 0;
+        await transferClipboardContent(
+          action,
+          lease,
+          async (message) => {
+            check();
+            const result = await this.deps.request(this.target!.deviceId, message, check);
+            check();
+            return result as never;
+          },
+          check,
+          {
+            read: () => this.deps.clipboard!.read(current),
+            write: async (json) => {
+              await this.deps.clipboard!.write(json, undefined, current);
+            },
+            progress: (done, total) => {
+              if (current()) this.clipboardProgress = done / total;
+            },
+          },
+        );
+      } else if (action === 'copy') {
         const result = (await this.deps.request(
           this.target!.deviceId,
           { op: 'clipboard', lease, action: 'copy' },
@@ -259,7 +332,113 @@ export class RemoteViewerConnection {
     } catch (error) {
       return viewerFailure(error);
     } finally {
-      if (this.clipboardPending === transfer) this.clipboardPending = null;
+      if (this.clipboardPending === transfer) {
+        this.clipboardPending = null;
+        this.clipboardProgress = null;
+      }
+    }
+  }
+  async preferences(
+    generation: number,
+    patch?: Partial<RemoteViewerPreferences>,
+  ): Promise<RemoteViewerPreferences> {
+    this.check(generation);
+    if (patch !== undefined) {
+      if (!this.deps.savePreferences) throw new Error('DESKTOP_UNAVAILABLE');
+      const value = await this.deps.savePreferences(this.target!.deviceId, patch);
+      this.check(generation);
+      const reset = value.clipboardSync !== this.preferencesValue.clipboardSync;
+      this.preferencesValue = value;
+      this.safetyState.invalidate(reset);
+    }
+    return { ...this.preferencesValue };
+  }
+  async focusChanged(): Promise<void> {
+    const generation = this.generation;
+    // Cancel local reads immediately, then reconcile after any old enable has
+    // settled. Use current focus when reconciling (blur/focus may race).
+    await this.safetyState.pauseClipboard();
+    if (!this.active || generation !== this.generation) return;
+    await this.safety(generation).catch(() => {});
+  }
+  async safety(generation: number, retry = false): Promise<RemoteViewerSafety> {
+    this.check(generation);
+    if (retry) this.safetyState.invalidate(true);
+    const lease = this.lease,
+      revision = this.controlGeneration;
+    const current = () => {
+      try {
+        this.check(generation);
+        return this.controlling && this.lease === lease && this.controlGeneration === revision;
+      } catch {
+        return false;
+      }
+    };
+    const value =
+      lease && this.caps
+        ? await this.safetyState.tick({
+            lease,
+            caps: this.caps,
+            preferences: {
+              ...this.preferencesValue,
+              clipboardSync: this.preferencesValue.clipboardSync && (this.deps.focused?.() ?? true),
+            },
+            current,
+            clipboardCurrent: () =>
+              current() && !this.clipboardPending && (this.deps.focused?.() ?? true),
+            clipboard: this.deps.clipboard,
+            request: async (message, check) => {
+              check();
+              const result = await this.deps.request(this.target!.deviceId, message, check);
+              check();
+              return result as never;
+            },
+          })
+        : this.safetyState.snapshot();
+    this.check(generation);
+    return { ...value, clipboardProgress: this.clipboardProgress };
+  }
+  async credential(generation: number, action: unknown, enabled: unknown) {
+    this.check(generation);
+    if (this.closing) throw new Error('DESKTOP_STOPPED');
+    if (!this.deps.credentials) throw new Error('CREDENTIAL_UNAVAILABLE');
+    return this.deps.credentials.run(
+      this.target!.deviceId,
+      this.caps?.platform,
+      action,
+      enabled,
+      () => {
+        this.check(generation);
+        if (this.closing) throw new Error('DESKTOP_STOPPED');
+      },
+    );
+  }
+  async close(generation: number): Promise<void> {
+    this.check(generation);
+    if (this.closing) throw new Error('DESKTOP_INPUT_BUSY');
+    this.closing = true;
+    this.deps.credentials?.dispose();
+    const lease = this.lease;
+    if (!lease) return;
+    const lockScreen = this.preferencesValue.lockOnExit && this.caps?.lockOnExit === true;
+    this.safetyState.invalidate();
+    this.controlling = false;
+    this.controlGeneration++;
+    try {
+      await this.serializeLifecycle(async () => {
+        this.check(generation);
+        if (this.lease !== lease) return;
+        await this.deps.request(
+          this.target!.deviceId,
+          { op: 'stop', lease, ...(lockScreen ? { lockScreen: true } : {}) },
+          () => this.check(generation),
+        );
+        this.check(generation);
+        if (this.lease === lease) this.lease = null;
+      });
+    } catch (error) {
+      if (generation === this.generation) this.closing = false;
+      throw error;
     }
   }
 }

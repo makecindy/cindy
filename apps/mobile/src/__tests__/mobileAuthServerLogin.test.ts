@@ -55,6 +55,8 @@ describe('mobile auth-server login', () => {
     );
     expect(nativeSource).toContain('GoogleSignin.configure({');
     expect(nativeSource).toContain("import('xdt-wechat-login')");
+    expect(loginSource).toContain('useMobileSocialProviderModes({');
+    expect(loginSource).toContain('socialProviderModes.has(provider)');
     expect(nativeSource).toContain('requestWechatAuthCode({');
     expect(nativeSource).toContain('createNativeWechatLoginTimeout()');
     expect(nativeSource).toContain('cancelWechatAuthRequest().catch');
@@ -173,16 +175,16 @@ describe('mobile auth-server login', () => {
     expect(authSource).toContain("action.type === 'start-social-browser' ||");
     expect(authSource).toContain("action.type === 'native-social'");
     expect(authSource).toContain(
-      'if (startsBuildRealmFlow) {\n            pendingAuthRealmRef.current = null;',
+      "if (startsBuildRealmFlow && action.type !== 'request-code') {\n            pendingAuthRealmRef.current = null;",
     );
 
     const discoveryStart = authSource.indexOf(
-      "if (action.type === 'discover-sso-org') {",
+      'const discoverOrganization = async (',
     );
     const discoveryBody = authSource.slice(
       discoveryStart,
       authSource.indexOf(
-        'const realmConfig = getMobileEndpointRealmConfig();',
+        "if (action.type === 'reset')",
         discoveryStart,
       ),
     );
@@ -214,6 +216,20 @@ describe('mobile auth-server login', () => {
     expect(authSource).toContain("kind: 'sso'");
     expect(authSource).toContain('startBrowserAuthorization({');
     expect(authSource).toContain("sole?.type === 'email_code'");
+  });
+
+  it('shares email-domain discovery and keeps the enterprise realm until personal code sending succeeds', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/auth/AuthContext.tsx'), 'utf8');
+    const discoverStart = source.indexOf("if (action.type === 'discover') {");
+    const discover = source.slice(discoverStart, source.indexOf("if (action.type === 'discover-sso-org') {", discoverStart));
+    expect(discover).toContain('discoverEmailLogin(action.email');
+    expect(discover).toContain('discoverOrganization,');
+    expect(discover).toContain('pendingAuthRealmRef.current = region;');
+    expect(discover.indexOf("type: 'realm-switch-required'")).toBeLessThan(discover.indexOf("await ensureCaptchaGate('email')"));
+    expect(source).toContain("email: confirmation.email ?? ''");
+    const requestStart = source.indexOf("if (action.type === 'request-code') {");
+    const request = source.slice(requestStart, source.indexOf("if (action.type === 'verify-code') {", requestStart));
+    expect(request.indexOf('pendingAuthRealmRef.current = BUILD_AUTH_REGION;')).toBeGreaterThan(request.indexOf('await requestCodeWithCaptchaFallback('));
   });
 
   it('remembers successful organization discovery before sole-SSO browser auth starts', () => {
@@ -495,7 +511,7 @@ describe('mobile auth-server login', () => {
     );
     const runtimeClear = switchBody.indexOf(
       'await clearAccountScopedRuntimeForSwitch();',
-      targetWrite,
+      latestRead,
     );
     const rollbackWrite = switchBody.indexOf(
       'await restorePersistedAuthSessionRaw(previousSessionRaw);',
@@ -506,7 +522,8 @@ describe('mobile auth-server login', () => {
     expect(latestRead).toBeGreaterThan(serialized);
     expect(activeVaultCommit).toBeGreaterThan(latestRead);
     expect(targetWrite).toBeGreaterThan(activeVaultCommit);
-    expect(runtimeClear).toBeGreaterThan(targetWrite);
+    expect(runtimeClear).toBeGreaterThan(latestRead);
+    expect(runtimeClear).toBeLessThan(activeVaultCommit);
     expect(rollbackWrite).toBeGreaterThan(runtimeClear);
     expect(switchBody.slice(runtimeClear, rollbackWrite)).toContain(
       'activateMobileSessionRealm(realm!);',
@@ -515,6 +532,17 @@ describe('mobile auth-server login', () => {
       'activateMobileSessionRealm(previousRealm);',
     );
     expect(switchBody).not.toContain('const oldSession = initialVault');
+  });
+
+  it('distinguishes reversible switch invalidation from committed logout before async cleanup', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/auth/AuthContext.tsx'), 'utf8');
+    const switchStart = source.indexOf('const clearAccountScopedRuntimeForSwitch = useCallback');
+    const switchBody = source.slice(switchStart, source.indexOf('const clearAuthError', switchStart));
+    expect(switchBody.indexOf('invalidateMobileAuthOwnerForSwitch();')).toBeGreaterThan(-1);
+    expect(switchBody.indexOf('invalidateMobileAuthOwnerForSwitch();')).toBeLessThan(switchBody.indexOf('await Promise.all'));
+    const logoutStart = source.indexOf('const clearLocalSession = useCallback');
+    const logout = source.slice(logoutStart);
+    expect(logout.indexOf('setMobileAuthOwner(null);')).toBeLessThan(logout.indexOf('await unregisterPushTokenBestEffort'));
   });
 
   it('clears the previous identity deletion receipt inside saved-account activation', () => {
@@ -594,7 +622,7 @@ describe('mobile auth-server login', () => {
     ).toBeGreaterThanOrEqual(4);
   });
 
-  it('keeps the added-account vault transaction through runtime cleanup and owner commit', () => {
+  it('clears unscoped caches before persisting a new login identity', () => {
     const authSource = readFileSync(
       resolve(process.cwd(), 'src/auth/AuthContext.tsx'),
       'utf8',
@@ -621,7 +649,7 @@ describe('mobile auth-server login', () => {
     );
     const runtimeClear = acceptBody.indexOf(
       'await clearAccountScopedRuntimeForSwitch();',
-      targetWrite,
+      previousSessionSnapshot,
     );
     const ownerCommit = acceptBody.indexOf(
       'activateMobileSessionRealm(committedRealm);',
@@ -636,7 +664,9 @@ describe('mobile auth-server login', () => {
     expect(previousSessionSnapshot).toBeGreaterThan(serialized);
     expect(vaultTransaction).toBeGreaterThan(previousSessionSnapshot);
     expect(targetWrite).toBeGreaterThan(vaultTransaction);
-    expect(runtimeClear).toBeGreaterThan(targetWrite);
+    expect(runtimeClear).toBeGreaterThan(previousSessionSnapshot);
+    expect(runtimeClear).toBeLessThan(vaultTransaction);
+    expect(acceptBody).toContain('replacesActiveSession || userRef.current === null');
     expect(ownerCommit).toBeGreaterThan(runtimeClear);
     expect(rollback).toBeGreaterThan(ownerCommit);
     expect(acceptBody.slice(rollback)).toContain(
@@ -738,10 +768,13 @@ describe('mobile auth-server login', () => {
       resolve(process.cwd(), 'src/session/AccountSwitcherSheet.tsx'),
       'utf8',
     );
-    expect(sheetSource).toContain('disabled={switchingKey !== null}');
-    expect(sheetSource).not.toContain(
-      'disabled={auth.accountsLoading || switchingKey !== null}',
+    // 「添加账号」改用共享 MainWindowActionButton(action 对象传 disabled):只在切换账号时禁用,
+    // 不因后台同步 savedAccounts(accountsLoading)而阻塞。
+    expect(sheetSource).toMatch(
+      /testID: 'accountSwitcher\.addAccount'/,
     );
+    expect(sheetSource).toContain('disabled: switchingKey !== null,');
+    expect(sheetSource).not.toMatch(/disabled[=:]\s*\{?auth\.accountsLoading/);
     expect(sheetSource).toContain("t('devices.list.alert.actionFailed')");
     expect(sheetSource).toContain('formatRemoteError(error)');
     expect(sheetSource).not.toContain('.catch(() => undefined)\n        .finally');
@@ -788,5 +821,41 @@ describe('mobile auth-server login', () => {
     );
     expect(loginSource).toContain('maxLength={253}');
     expect(loginSource).toContain("type: 'discover-sso-org'");
+  });
+});
+
+
+describe('fresh personal login enterprise suggestion boundaries', () => {
+  const source = readFileSync(resolve(process.cwd(), 'src/auth/AuthContext.tsx'), 'utf8');
+  it('guards late discovery before prompting and preserves the original region until the choice', () => {
+    const start = source.indexOf('const acceptOutcome = useCallback');
+    const body = source.slice(start, source.indexOf('const refresh = useCallback', start));
+    const discovery = body.indexOf('await discoverPersonalLoginOrganization');
+    const guard = body.indexOf('assertLoginFlowCurrent(expectedLoginFlowEpoch)', discovery);
+    const prompt = body.indexOf('pendingPersonalLoginRef.current = { outcome, realm: personalRealm }');
+    expect(discovery).toBeGreaterThan(-1);
+    expect(guard).toBeGreaterThan(discovery);
+    expect(prompt).toBeGreaterThan(guard);
+    expect(body.slice(discovery, prompt)).not.toContain('pendingAuthRealmRef.current =');
+    expect(body).toContain('personalLoginAvailable: true');
+    expect(body).toContain('pendingPersonalLoginRef.current = null');
+    const lookupStart = source.indexOf('const lookupOrganizationRealm = useCallback');
+    expect(source.slice(lookupStart, start)).not.toContain('pendingAuthRealmRef.current =');
+  });
+  it('continues personal login without rediscovery or starts SSO with a freshly selected realm', () => {
+    const confirmStart = source.indexOf("if (action.type === 'confirm-sso-realm')");
+    const cancelStart = source.indexOf("if (action.type === 'cancel-sso-realm')");
+    const confirm = source.slice(confirmStart, cancelStart);
+    expect(confirm.indexOf('pendingAccountRefreshTokenRef.current = null')).toBeLessThan(confirm.indexOf('pendingAuthRealmRef.current = confirmation.targetRegion'));
+    const cancel = source.slice(cancelStart, source.indexOf("if (action.type === 'discover')", cancelStart));
+    expect(cancel).toContain('pendingAuthRealmRef.current = personal.realm');
+    expect(cancel).toContain('acceptOutcome(personal.outcome, did, expectedLoginFlowEpoch');
+    expect(cancel).toContain('skipOrganizationDiscovery: true');
+    const browserStart = source.indexOf('const startBrowserAuthorization = async');
+    const browser = source.slice(browserStart, source.indexOf('const discoverOrganization = async', browserStart));
+    expect(browser).toContain('authClientFor(did, authorizationRealm)');
+    expect(browser).toContain('realm: authorizationRealm');
+    expect(browser).toContain('authorizationClient.buildAuthorizeUrl');
+    expect(browser).not.toContain('realm: loginRealm');
   });
 });

@@ -53,6 +53,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { getSessionDeviceId, useRemoteDevices } from '@/features/device-link/remoteProjectsStore';
+import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import { makerChatStore, EMPTY_TASK_UPDATES } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate, ChatMessage } from '@/lib/makerChatStore';
 import {
@@ -551,6 +552,11 @@ export function BackgroundTasksBody({
   // 本机会话恒 'local',零开销;断连翻转的那次重跑失败降级空表,无害。
   const remoteDevices = useRemoteDevices();
   const sessionDeviceId = sessionId ? getSessionDeviceId(sessionId) : undefined;
+  const subagentRunStatuses = useSubagentRunStatusIndex({
+    sessionId,
+    deviceId: sessionDeviceId,
+    enabled: visible,
+  });
   const deviceConnectivity = sessionDeviceId
     ? `${sessionDeviceId}:${
         remoteDevices.find((d) => d.deviceId === sessionDeviceId)?.connected ? '1' : '0'
@@ -603,8 +609,9 @@ export function BackgroundTasksBody({
         messages: inputs.messages as unknown as readonly Message[],
         taskUpdates: inputs.taskUpdates,
         isSessionStreaming: inputs.isStreaming,
+        subagentRunStatuses,
       }),
-    [inputs],
+    [inputs, subagentRunStatuses],
   );
 
   // 历史 workflow 行的终态修正:workflow 的 tool_result 是启动回执(失败也存在),

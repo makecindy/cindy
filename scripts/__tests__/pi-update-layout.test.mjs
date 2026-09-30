@@ -74,6 +74,27 @@ test('Pi updater extracts tar.gz archives streamed to the system tar', async (t)
   assert.equal(fs.readFileSync(path.join(outputDir, 'pi', 'pi'), 'utf8'), 'pi-fixture');
 });
 
+test('Pi updater extracts Windows ZIP archives without dropping the first entry', async (t) => {
+  if (process.platform !== 'win32') return t.skip('Windows tar ZIP behavior');
+  const root = tempDir();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const inputDir = path.join(root, 'input');
+  const outputDir = path.join(root, 'output');
+  fs.mkdirSync(inputDir);
+  fs.mkdirSync(outputDir);
+  fs.writeFileSync(path.join(inputDir, 'pi.exe'), 'pi-fixture');
+
+  const created = spawnSync('tar', ['-a', '-cf', 'fixture.zip', '-C', 'input', 'pi.exe'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  assert.equal(created.status, 0, created.stderr || created.error?.message);
+
+  await extractArchive(path.join(root, 'fixture.zip'), outputDir);
+
+  assert.equal(fs.readFileSync(path.join(outputDir, 'pi.exe'), 'utf8'), 'pi-fixture');
+});
+
 test('Pi updater rejects unreadable archives through the returned promise', async (t) => {
   const root = tempDir();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
