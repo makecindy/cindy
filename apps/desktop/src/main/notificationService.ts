@@ -314,6 +314,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
               sessionId, title: notificationTitle, kind, generation, ...(detail ? { detail } : {}),
               ...(fallbackBody ? { fallbackBody } : {}), ...(mobileEventId ? { eventId: mobileEventId } : {}),
               ...(mobileTeammateBotId ? { teammateBotId: mobileTeammateBotId } : {}),
+              ...(preview?.teammateAvatar ? { teammateAvatar: preview.teammateAvatar } : {}),
             });
             if (kind === 'done' && accepted) {
               notifiedReplies.set(mobileKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });

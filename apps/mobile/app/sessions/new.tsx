@@ -901,7 +901,7 @@ export default function NewRemoteSessionScreen() {
         count: MOBILE_MAX_ATTACHMENTS,
       }));
     } else if (selection.rejectedUris.length > 0) {
-      setAttachmentError(i18n.t('composer.upload.fileTypeUnsupported'));
+      setAttachmentError(i18n.t('composer.upload.noFileRead'));
     } else {
       setAttachmentError(null);
     }

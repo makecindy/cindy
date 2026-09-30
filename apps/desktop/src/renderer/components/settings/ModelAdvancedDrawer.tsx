@@ -83,7 +83,8 @@ import type {
   ProviderView,
 } from '@cindy/model-providers';
 
-import { isLocalRuntimeBetaProviderId, MANAGED_OLLAMA_PROVIDER_ID } from '../../../shared/localModelRuntime';
+import { isLocalRuntimeBetaProviderId, isManagedSidecarProviderId, MANAGED_OLLAMA_PROVIDER_ID } from '../../../shared/localModelRuntime';
+import { MANAGED_LLAMACPP_PROVIDER_ID, supportsLlamaCppMillionContext, llamaCppMaxContextSize } from '../../../shared/llamaCpp';
 import { modelBrand } from './modelManagementPresentation';
 import { ModelPriceOverrideDialog } from './ModelPriceOverrideDialog';
 import type { UnionModelRow } from './UnifiedModelList';
@@ -248,6 +249,26 @@ export function ModelAdvancedDrawer({
           : agent === 'pi',
     ) ?? primaryCandidates?.[0] ?? null;
   const primaryModel = row && primaryAgent ? (row.byAgent[primaryAgent] ?? null) : null;
+  const [localModelRepo, setLocalModelRepo] = useState<{ id: string; repo: string } | null>(null);
+  const [localConfigurationBlocked, setLocalConfigurationBlocked] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setLocalModelRepo(null);
+    setLocalConfigurationBlocked(false);
+    if (open && provider.id === MANAGED_LLAMACPP_PROVIDER_ID && primaryModel) {
+      const modelId = primaryModel.id;
+      void window.electronAPI.maker.llamaCppStatus().then((snapshot) => {
+        if (active) setLocalConfigurationBlocked(snapshot.canConfigure === false);
+        if (active) setLocalModelRepo(snapshot.models.find((model) => model.id === modelId) ?? null);
+      }).catch(() => {});
+    }
+    return () => { active = false; };
+  }, [open, provider.id, primaryModel?.id]);
+  const supportsMillionContext = provider.id === MANAGED_LLAMACPP_PROVIDER_ID &&
+    !!primaryModel && localModelRepo?.id === primaryModel.id && supportsLlamaCppMillionContext(localModelRepo);
+  const maximumContext = provider.id === MANAGED_LLAMACPP_PROVIDER_ID
+    ? llamaCppMaxContextSize(localModelRepo?.id === primaryModel?.id && localModelRepo ? localModelRepo : { repo: '' })
+    : 100_000_000;
 
   const contextAgent = primaryAgent && chatAgents.includes(primaryAgent) ? primaryAgent : null;
   const contextModel = contextAgent ? row?.byAgent[contextAgent] : null;
@@ -366,8 +387,9 @@ export function ModelAdvancedDrawer({
       );
     }
   };
+  const canEditProtocol = provider.source === 'user' && !provider.auth?.native && !isManagedSidecarProviderId(provider.id);
   const setModelApi = async (agent: AgentKind, api: PiModelApi) => {
-    if (protocolSaving || provider.source !== 'user' || provider.auth?.native || !row?.byAgent[agent]) return;
+    if (protocolSaving || !canEditProtocol || !row?.byAgent[agent]) return;
     const config = providerViewToCustomProviderConfig(provider);
     const runtime = config.runtimes[agent];
     const model = runtime?.models.find(m => m.id === row.byAgent[agent]!.id);
@@ -412,14 +434,17 @@ export function ModelAdvancedDrawer({
     .filter((window): window is number => typeof window === 'number' && Number.isFinite(window) && window > 0);
   const minimumContextK = isLocalRuntimeBetaProviderId(provider.id)
     ? 1 : Math.max(1, Math.floor(Math.min(100_000, ...modelWindows) / 1000));
-  // 「上游最大上下文」这一行显示上游**确实下发过**的窗口，来源按优先级：
+  const routeWindow = supportsMillionContext ? 1_000_000 : primaryModel?.contextWindowMax ?? primaryModel?.contextWindow ?? 0;
+  // 「上游最大上下文」这一行只印上游**确实下发过**的窗口，来源按优先级：
   //   1) contextWindowMax —— 路由/网关声明的容量；
-  //   2) contextWindowVerified === true 的 contextWindow —— 用户或预设显式配置的窗口
-  //      （预设/服务端目录给自定义连接下发窗口就走这里，例如 opencode-go 的 deepseek-v4.1-flash = 1M）；
+  //   2) contextWindowVerified === true 的 contextWindow —— 用户或预设显式配置的窗口；
   //   3) 都没有 → 未声明。
-  // 第 3 条必须排除「自定义模型缺元数据时的 200K 兜底」：那个常量在 user-provider.ts 里
-  // 明确写着「仅用于展示」，不带 contextWindowVerified —— 把它印成上游下发的窗口，会让用户
-  // 以为容量只有 200K，而运行期窗口其实取模型级上下文上限（实测报障：圆环 1.0M、这里 200K）。
+  // 第 3 条必须排除「自定义模型缺元数据时的 200K 展示兜底」：那个常量在
+  // user-provider.ts 里明确写着「仅用于展示」、不带 contextWindowVerified —— 把它印成
+  // 上游下发的窗口，会让用户以为容量只有 200K，而运行期窗口取模型级上下文上限
+  // （实测报障：圆环 1.0M、这里 200K）。
+  // 与 routeWindow 的区别：routeWindow 是路由展示用的乐观值（供百万上下文档位等
+  // 比较），declaredWindow 是这一行的**如实声明**口径。
   const declaredCapacity = primaryModel?.contextWindowMax ?? 0;
   const declaredWindow =
     declaredCapacity > 0
@@ -443,25 +468,27 @@ export function ModelAdvancedDrawer({
   const parsedTokens = parsedK * 1000;
   const ctxInvalid =
     ctxDirtyRef.current && ctxDraft.trim() !== '' &&
-    (!Number.isSafeInteger(parsedK) || parsedK < minimumContextK || parsedTokens > 100_000_000);
+    (!Number.isSafeInteger(parsedK) || parsedK < minimumContextK || parsedTokens > maximumContext);
   const commitCtxDraft = useCallback(() => {
-    if (!ctxDirtyRef.current || ctxInvalid || ctx.loading) return;
+    if (!ctxDirtyRef.current || ctxInvalid || ctx.loading || localConfigurationBlocked) return;
     ctxDirtyRef.current = false;
+    // 提交在途期间锁住 displayedLimit：hook 的 promise 在它把新值（或失败回滚后的值）
+    // 写进 state 之后才 resolve，不锁会闪回一帧旧值。仅当没有更新的提交/重置发生时
+    // 才清状态（ctxCommitGen 递增即代表有更新的那次）。
     const generation = (ctxCommitGen.current += 1);
     setCtxCommitting(true);
-    // hook 的 promise 在它把新值（或失败回滚后的值）写进 state 之后才 resolve，
-    // 所以这里收口不会再产生一帧旧值。仅当没有更新的提交/重置发生时才能清状态。
     void Promise.resolve(ctx.setLimit(ctxDraft.trim() === '' ? null : parsedTokens)).finally(() => {
       if (ctxCommitGen.current === generation) setCtxCommitting(false);
     });
-  }, [ctx, ctxDraft, ctxInvalid, parsedTokens]);
+  }, [ctx, ctxDraft, ctxInvalid, parsedTokens, localConfigurationBlocked]);
   const resetCtx = useCallback(() => {
+    if (localConfigurationBlocked) return;
     ctxDirtyRef.current = false;
     ctxCommitGen.current += 1;
     setCtxCommitting(false);
     setCtxDraft(defaultWindow > 0 ? editableContextK(defaultWindow) : '');
     void ctx.reset();
-  }, [ctx, defaultWindow]);
+  }, [ctx, defaultWindow, localConfigurationBlocked]);
 
   if (!row || !primaryAgent || !primaryModel) {
     return (
@@ -658,13 +685,7 @@ export function ModelAdvancedDrawer({
                         if (model) {
                           // 同一模型在不同引擎下的元数据差异如实标出来 —— 这些值来自目录的
                           // perAgent 覆盖，用户看到「Codex 下 272K / 6 档」才知道差异是真的。
-                          if (
-                            model.contextWindow > 0 &&
-                            model.contextWindow !==
-                              (declaredWindow > 0
-                                ? declaredWindow
-                                : (primaryModel?.contextWindow ?? 0))
-                          ) {
+                          if (!supportsMillionContext && model.contextWindow > 0 && model.contextWindow !== routeWindow) {
                             notes.push(approxTokens(model.contextWindow));
                           }
                           if (
@@ -705,7 +726,7 @@ export function ModelAdvancedDrawer({
                                   id={protocolId}
                                   className="mt-0.5 text-11 leading-4 text-[var(--text-tertiary)]"
                                 >
-                                  {provider.source === 'user' && !provider.auth?.native && !model?.catalogPresetId && supported ? (
+                                  {canEditProtocol && !model?.catalogPresetId && supported ? (
                                     <DropdownMenu>
                                       <DropdownMenuTrigger asChild>
                                         <button type="button" disabled={protocolSaving}
@@ -851,12 +872,28 @@ export function ModelAdvancedDrawer({
                   {conversational && (
                     <Section
                       title={t('settings.providers.models.advanced.contextLimit')}
-                      hint={t(/^(?:(?:codex|openai|chatgpt)\/)?gpt-/.test(primaryModel.id) && provider.source !== 'user' && ['openai', 'xd'].includes(provider.id)
+                      hint={t(supportsMillionContext ? 'settings.providers.models.advanced.contextLimitLocalMillionHint' : /^(?:(?:codex|openai|chatgpt)\/)?gpt-/.test(primaryModel.id) && provider.source !== 'user' && ['openai', 'xd'].includes(provider.id)
                         ? 'settings.providers.models.advanced.contextLimitGptHint'
                         : 'settings.providers.models.advanced.contextLimitHint')}
                     >
                       {contextTarget && (
                         <>
+                          {localConfigurationBlocked && <p className="text-12 text-[var(--text-secondary)]">{t('settings.providers.llamacpp.ownedElsewhere')}</p>}
+                          {supportsMillionContext && (
+                            <div className="mt-2 flex gap-2">
+                              {[{ label: '256K', tokens: 262144 }, { label: '1M', tokens: 1_000_000 }].map((preset) => (
+                                <Button key={preset.tokens} variant={effectiveLimit === preset.tokens ? 'primary' : 'secondary'} compact
+                                  aria-pressed={effectiveLimit === preset.tokens}
+                                  disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
+                                  onClick={() => {
+                                    ctxDirtyRef.current = false;
+                                    setCtxDraft(editableContextK(preset.tokens));
+                                    void ctx.setLimit(preset.tokens);
+                                  }}
+                                >{preset.label}</Button>
+                              ))}
+                            </div>
+                          )}
                           <div className="mt-1 flex flex-wrap items-center gap-2.5">
                             <span
                               className={cn(
@@ -881,7 +918,7 @@ export function ModelAdvancedDrawer({
                                 }}
                                 aria-invalid={ctxInvalid || undefined}
                                 inputMode="numeric"
-                                disabled={paymentRequired || ctx.loading}
+                                disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                                 aria-label={t(
                                   'settings.providers.models.advanced.contextLimitAria',
                                 )}
@@ -901,7 +938,7 @@ export function ModelAdvancedDrawer({
                               <button
                                 type="button"
                                 onClick={resetCtx}
-                                disabled={paymentRequired || ctx.loading}
+                                disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                                 className="shrink-0 text-11 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
                               >
                                 {t('settings.providers.models.advanced.restoreDefault')}

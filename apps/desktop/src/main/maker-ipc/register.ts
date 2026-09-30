@@ -3,6 +3,9 @@ import { setImportProbeConfirmation } from '../bot-import/probeAuthorization.js'
 import { requestHostInteraction } from './interactionRouter.js';
 import { prepareCompanionImportDeletion } from '../bot-import/host.js';
 import { createBotMessageTransport } from './botMessageTransport.js';
+import { MANAGED_LLAMACPP_PROVIDER_ID, llamaCppModelPreset, llamaCppMaxContextSize } from '../../shared/llamaCpp.js';
+import { getManagedLlamaCppService } from '../local-model-runtime/llamaCppService.js';
+import { ensureManagedLlamaCppProvider } from '../local-model-runtime/managedLlamaCppProvider.js';
 import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { getSelfDeviceId, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
@@ -6012,6 +6015,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     syncLocalCatalogOverrides: () => syncLocalCatalogOverridesIntoActiveCatalog(),
     validateModelContextLimit: async (targets, limit) => {
+      const localTargets = targets.filter((target) => target.providerId === MANAGED_LLAMACPP_PROVIDER_ID);
+      if (localTargets.length) {
+        const { models } = await getManagedLlamaCppService(app.getPath('userData')).snapshot();
+        for (const target of localTargets) {
+          const model = models.find((entry) => entry.id === target.modelId);
+          if (!model) throwIpcError('INVALID_PARAMS', 'Local model is not installed');
+          try {
+            llamaCppModelPreset(model, { [`${target.agent}:${target.providerId}:${target.modelId}`]: limit });
+          } catch {
+            throwIpcError('INVALID_PARAMS', `This local model supports context up to ${llamaCppMaxContextSize(model)} tokens`);
+          }
+        }
+      }
       for (const target of targets.filter((t) => t.agent === 'codex')) {
         const binaryPath = getCachedBinaryStatus('codex').binaryPath;
         if (!binaryPath) throw new Error('Codex runtime is unavailable');
@@ -6021,9 +6037,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
     writeModelContextLimit: async (targets, limit) => {
-      await writeModelContextLimitsWithRefresh(targets, limit,
+      const owner = getActiveAppSession();
+      const active = () => {
+        const now = getActiveAppSession();
+        return now?.dataOwnerId === owner?.dataOwnerId && now?.generation === owner?.generation;
+      };
+      const write = () => writeModelContextLimitsWithRefresh(targets, limit,
         () => refreshContextSettings(targets),
         () => refreshContextSettings());
+      if (targets.some((target) => target.providerId === MANAGED_LLAMACPP_PROVIDER_ID)) {
+        const service = getManagedLlamaCppService(app.getPath('userData'));
+        return service.configure(async () => {
+          if (!active()) throw new Error('OWNER_CHANGED');
+          await ensureManagedLlamaCppProvider(
+            (await service.snapshot()).models, active,
+          );
+          if (!active()) throw new Error('OWNER_CHANGED');
+          await refreshCustomProvidersIntoCatalog();
+          if (!active()) throw new Error('OWNER_CHANGED');
+          await write();
+        });
+      }
+      await write();
     },
     // 通用 OAuth（目录 auth.oauth 描述符驱动）：login 成功后 best-effort 拉动态模型发现
     // (additions-only merge 进 active-catalog) 并广播 PROVIDER_CHANGED 让 UI 刷新连接态。

@@ -12,6 +12,7 @@ import {
   uploadPeerAttachment,
   FILE_PEER_CHUNK_BYTES,
   FILE_PEER_MAX_BYTES,
+  canSendPeerAttachment,
   FILE_PEER_IDLE_MS,
   FILE_PEER_CHANNEL,
   parseFilePeerRequest,
@@ -66,6 +67,8 @@ interface Outgoing {
   invoke: Invoke;
   rpc?: boolean;
   attachments?: boolean;
+  /** 对端接收直连附件不设固定上限(只看磁盘空间);旧端仍按 OSS 上限拒收更大的附件。 */
+  largeAttachments?: boolean;
 }
 const outgoing = new Map<string, Outgoing>();
 const cooldown = createPeerTransferCooldown();
@@ -106,6 +109,21 @@ function touch(id: string) {
   c.timer = setTimeout(() => stopConnection(id, 'idle'), FILE_PEER_IDLE_MS);
   c.timer.unref();
   return c;
+}
+/**
+ * 等待单次请求期间按空闲时限的一半刷新连接:大附件的摘要校验可能超过空闲时限,
+ * 进行中的请求不能被当成空闲关掉。连接已关闭或被撤权时停止刷新。
+ */
+function keepAlive(id: string): () => void {
+  const timer = setInterval(() => {
+    try {
+      touch(id);
+    } catch {
+      clearInterval(timer);
+    }
+  }, FILE_PEER_IDLE_MS / 2);
+  timer.unref();
+  return () => clearInterval(timer);
 }
 function track(id: string, peer: string, incoming: boolean) {
   if (connections.size >= 4) throw new Error('FILE_PEER_BUSY');
@@ -176,6 +194,14 @@ async function prepareHost(connection: string): Promise<void> {
 }
 async function command(c: FilePeerCommand): Promise<string | undefined> {
   await prepareHost(c.connection);
+  const stopKeepAlive = c.action === 'invoke' ? keepAlive(c.connection) : undefined;
+  try {
+    return await sendCommand(c);
+  } finally {
+    stopKeepAlive?.();
+  }
+}
+function sendCommand(c: FilePeerCommand): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
     const id = randomUUID();
     const timer = setTimeout(
@@ -186,7 +212,11 @@ async function command(c: FilePeerCommand): Promise<string | undefined> {
         if (c.action !== 'invoke') stopConnection(c.connection, `${c.action}-timeout`);
         reject(new Error('FILE_PEER_TIMEOUT'));
       },
-      c.action === 'receive' ? 60_000 : 15_000,
+      c.action === 'receive'
+        ? 60_000
+        : c.action === 'invoke' && c.timeoutMs && c.timeoutMs > 15_000
+          ? c.timeoutMs
+          : 15_000,
     );
     timer.unref();
     replies.set(id, { connection: c.connection, resolve, reject, timer });
@@ -232,7 +262,13 @@ async function handleFilePeerRequest(
   invoke?: Connection['invoke'],
 ): Promise<unknown> {
   if (r.action === 'caps')
-    return { version: 1, maxBytes: FILE_PEER_MAX_BYTES, streaming: true, attachments: true };
+    return {
+      version: 1,
+      maxBytes: FILE_PEER_MAX_BYTES,
+      streaming: true,
+      attachments: true,
+      largeAttachments: true,
+    };
   if (r.action === 'offer') {
     const id = randomUUID();
     track(id, peer, true);
@@ -341,7 +377,13 @@ export function registerFilePeerIpc() {
       !canServePeerInvoke(payload.channel, payload.args)
     )
       throw new Error('FILE_PEER_DENIED');
-    const result = await c.invoke(payload.channel, payload.args);
+    const stopKeepAlive = keepAlive(id);
+    let result: unknown;
+    try {
+      result = await c.invoke(payload.channel, payload.args);
+    } finally {
+      stopKeepAlive();
+    }
     touch(id);
     return JSON.stringify(result);
   });
@@ -508,6 +550,8 @@ async function receivePeerFile(
       }
       out.rpc = (caps.result as { streaming?: unknown }).streaming === true;
       out.attachments = (caps.result as { attachments?: unknown }).attachments === true;
+      out.largeAttachments =
+        (caps.result as { largeAttachments?: unknown }).largeAttachments === true;
       track(id, peer, false);
       const [, servers] = await Promise.all([prepareHost(id), loadDesktopIceServers()]);
       const offer = await command({
@@ -614,6 +658,28 @@ async function receivePeerFile(
   }
 }
 
+interface PeerAttachmentCaps {
+  attachments?: boolean;
+  largeAttachments?: boolean;
+}
+/** 已有连接直接复用其能力;否则只发一次 caps 查询(走既有通道,不建 WebRTC 连接)。 */
+async function peerAttachmentCaps(
+  peer: string,
+  invoke: Invoke,
+): Promise<PeerAttachmentCaps | undefined> {
+  const existing = outgoing.get(peer);
+  if (existing?.remote) return existing;
+  const caps = await invoke(peer, FILE_PEER_CHANNEL, [{ action: 'caps' }]);
+  const result = caps.ok
+    ? (caps.result as { version?: unknown; attachments?: unknown; largeAttachments?: unknown })
+    : undefined;
+  if (result?.version !== 1) return undefined;
+  return {
+    attachments: result.attachments === true,
+    largeAttachments: result.largeAttachments === true,
+  };
+}
+
 const warming = new Set<string>();
 /** Upload only bytes; the eventual message still uses its original WSS acceptance semantics. */
 export async function tryUploadPeerAttachment(
@@ -634,16 +700,13 @@ export async function tryUploadPeerAttachment(
     let handle: FileHandle | undefined;
     let active: Outgoing | undefined;
     try {
-      await receivePeerFile(peer, null, invoke);
-      check();
-      const out = outgoing.get(peer);
-      if (!out?.remote || !out.attachments) return null;
-      active = out;
-      out.busy = true;
       if (typeof source === 'string')
         handle = await fs.open(source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
       const size = handle ? (await handle.stat()).size : (source as Buffer).length;
-      if (!size || size > FILE_PEER_MAX_BYTES) return null;
+      if (!size) return null;
+      // 读整份文件算摘要之前先确认对端能收:对端离线、旧版或不支持时不白读一遍(随后还要走 OSS)。
+      if (!canSendPeerAttachment(await peerAttachmentCaps(peer, invoke), size)) return null;
+      check();
       const read = async (offset: number, length: number) => {
         check();
         if (!handle) return (source as Buffer).subarray(offset, offset + length);
@@ -652,19 +715,28 @@ export async function tryUploadPeerAttachment(
           throw new Error('FILE_PEER_CHANGED');
         return bytes;
       };
+      // 能力确认后先算摘要再建链:大文件摘要可能超过连接空闲时限,建好的连接不能在 begin 前被闲置关掉。
       const hash = createHash('sha256');
       for (let offset = 0; offset < size; offset += 1024 * 1024)
         hash.update(await read(offset, Math.min(1024 * 1024, size - offset)));
+      const sha256 = hash.digest('hex');
+      await receivePeerFile(peer, null, invoke);
+      check();
+      const out = outgoing.get(peer);
+      if (!out?.remote || !canSendPeerAttachment(out, size)) return null;
+      active = out;
+      out.busy = true;
       const transferStartedAt = Date.now();
       const result = await uploadPeerAttachment(
-        { size, sha256: hash.digest('hex'), mimeType },
+        { size, sha256, mimeType },
         async (offset, length) => (await read(offset, length)).toString('base64'),
-        async (request) => {
+        async (request, timeoutMs) => {
           check();
           const response = JSON.parse(
             (await command({
               action: 'invoke',
               connection: out.id,
+              ...(timeoutMs ? { timeoutMs } : {}),
               payload: JSON.stringify({
                 channel: FILE_PEER_CHANNEL,
                 args: [{ action: 'attachment', connection: out.remote, request }],

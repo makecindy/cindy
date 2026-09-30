@@ -5387,6 +5387,14 @@ interface ElectronAPI {
       options?: CustomProviderUpdateOptions,
     ) => Promise<CustomProviderUpdateResult>;
     localModelStatus: () => Promise<import('../shared/localModelRuntime').LocalRuntimeStatus>;
+    llamaCppEnsure: () => Promise<void>;
+    llamaCppStatus: () => Promise<import('../shared/llamaCpp').LlamaCppSnapshot>;
+    llamaCppInstall: () => Promise<void>;
+    llamaCppFiles: (repo: string) => Promise<import('../shared/llamaCpp').LlamaCppFile[]>;
+    llamaCppDownload: (input: import('../shared/llamaCpp').LlamaCppDownloadInput) => Promise<void>;
+    llamaCppStart: () => Promise<void>;
+    llamaCppStop: () => Promise<void>;
+    llamaCppCancel: (action?: 'cancel' | 'pause' | 'resume') => Promise<void>;
     localModelStart: () => Promise<import('../shared/localModelRuntime').LocalRuntimeStatus>;
     localModelList: () => Promise<{
       status: import('../shared/localModelRuntime').LocalRuntimeStatus;
@@ -7372,24 +7380,7 @@ interface SkillhubPublishParams {
   changelog?: string;
 }
 
-type SkillhubPublishErrorCode =
-  | 'NAME_TAKEN'
-  | 'INVALID_DEPT'
-  | 'INVALID_NAME'
-  | 'CATEGORY_REQUIRED'
-  | 'MANIFEST_INVALID'
-  | 'VERSION_RACE'
-  | 'CHECKSUM_MISMATCH'
-  | 'NOT_AUTHOR'
-  | 'PACK_FAILED'
-  | 'OSS_PUT_FAILED'
-  | 'OSS_PUT_EXPIRED'
-  | 'OSS_OBJECT_NOT_FOUND'
-  | 'API_KEY_MISSING'
-  | 'CANCELLED'
-  | 'SKILL_HUB_READ_ONLY'
-  | 'INVALID_VISIBILITY'
-  | 'INTERNAL';
+type SkillhubPublishErrorCode = import('../shared/skillhubPublishErrors').SkillhubPublishErrorCode;
 
 type SkillhubPublishProgressEvent = (
   | { phase: 'packing' }

@@ -55,7 +55,7 @@ export function BotGroupMessageAttachments({ messageId, attachments, onResolveRe
   };
   return <>
     <AttachmentStrip attachments={items} messageKey={messageId} align="right" layout={layout} onOpen={open}
-      onResolveRemoteMedia={onResolveRemoteMedia} />
+      onResolveRemoteMedia={onResolveRemoteMedia} usePreviewState={useState} />
     {openUrl ? <ImageLightbox images={gallery} initialUrl={openUrl} onClose={() => setOpenUrl(null)}
       onResolveRemoteMedia={onResolveRemoteMedia} /> : null}
   </>;

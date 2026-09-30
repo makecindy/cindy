@@ -26,7 +26,6 @@ import { canBrowsePhotoLibraryDirectly } from '@/session/photoLibraryPolicy';
 import {
   MOBILE_MAX_ATTACHMENTS,
   assertMobileDocumentSize,
-  categorizeMobileAttachment,
 } from '@/session/attachments';
 import { assertMobileImageSize, buildMobileImageAttachmentCandidate } from '@/session/mobileImageAttachment';
 import { preprocessMobileImageForUpload } from '@/session/mobileImagePreprocess';
@@ -510,13 +509,6 @@ export function useMobileLocalAttachments(
         optionsRef.current.onError(t('composer.upload.noFileRead'));
         return;
       }
-      // 类型白名单同步校验:不支持的类型即时报错,不进托盘、不触发上传
-      // (上传层还有同口径兜底,防 OSS 孤儿)。
-      if (!categorizeMobileAttachment(name)) {
-        optionsRef.current.onError(t('composer.upload.fileTypeUnsupported'));
-        return;
-      }
-
       const size = typeof asset.size === 'number' && Number.isFinite(asset.size) && asset.size > 0
         ? asset.size
         : 0;

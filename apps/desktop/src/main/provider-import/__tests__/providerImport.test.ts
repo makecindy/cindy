@@ -79,6 +79,12 @@ afterEach(() => {
 });
 
 describe('provider import URL parsing', () => {
+  it.each(['cindy-local-ollama', 'cindy-local-llamacpp'])(
+    'reserves the managed provider identity on import: %s', (id) => {
+      expect(createProviderImportDraftFromRest(importRest(customPayload({ id })))).toBeNull();
+    },
+  );
+
   it.each(['Bad Header', 'Foo:Bar', 'X-\u0000-Key', 'X-中文'])(
     'rejects invalid HTTP header names before creating a draft: %j', (name) => {
       expect(createProviderImportDraftFromRest(importRest(customPayload({

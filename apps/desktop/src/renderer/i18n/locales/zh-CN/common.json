@@ -1838,6 +1838,45 @@
       }
     },
     "providers": {
+      "llamacpp": {
+        "ownedElsewhere": "模型服务正在另一个 Cindy 实例中运行。请在那里下载模型或修改上下文，或先在该实例停止服务。",
+        "primaryPick": "主推 · 先试这个",
+        "recommendReason": "优先试用 {{name}}，这是为这台机器选出的能力主推型号。",
+        "recommendCaveat": "此 GGUF 包装的本机速度和峰值内存仍待实测，下载大小不等于运行内存。",
+        "candidates": "待试验模型",
+        "trialNote": "以下模型可供试验，性能和内存占用尚待验证。",
+        "downloadModel": "下载 {{name}}",
+        "title": "llama.cpp",
+        "subtitle": "安装运行环境、下载模型并在本机运行",
+        "description": "选择下方模型，下载到本机运行。",
+        "install": "安装 llama.cpp",
+        "start": "启动并连接",
+        "restart": "重启并刷新模型",
+        "stop": "停止服务",
+        "cancel": "取消操作",
+        "repository": "Hugging Face 仓库",
+        "findFiles": "查找模型文件",
+        "file": "GGUF 文件",
+        "shards": "分片模型会自动下载全部分片，上方大小为所选分片的大小。支持文本模型，暂不下载视觉投影文件。",
+        "download": "下载模型",
+        "models": "已下载模型",
+        "empty": "从上方清单选择模型，或输入 Hugging Face 仓库下载第一个模型。",
+        "unsupported": "此平台暂不支持自动安装，可通过手动配置连接 llama.cpp。",
+        "failed": "操作未完成，请检查网络和可用磁盘空间后重试。",
+        "invalid": "请输入 owner/model-GGUF 格式的仓库名称并选择 GGUF 文件。",
+        "progress": {
+          "install": "正在安装 llama.cpp…",
+          "download": "正在下载模型…",
+          "start": "正在启动 llama.cpp…"
+        },
+        "installAndConnect": "安装并连接",
+        "installDescription": "Cindy 会安装 llama.cpp。下载模型后，使用时自动启动服务。",
+        "manualConnect": "连接已有服务",
+        "manageRuntime": "管理服务",
+        "restartHint": "下载模型或修改上下文后，在「管理服务」中重启以应用更改。重启会中断正在进行的生成。",
+        "applyModels": "使用已下载模型",
+        "startOnUse": "按需启动"
+      },
       "catalogRecovery": {
         "pending": "模型设置尚未就绪，请稍后重新加载模型。",
         "legacy": "旧模型设置暂时无法读取，请退出其他正在运行的 Cindy 后重新加载模型。",
@@ -2303,6 +2342,7 @@
           "defaultEffortHint": "新任务选中该模型时的初始档位，任务内仍可临时调整。",
           "contextLimit": "上下文上限",
           "contextLimitHint": "用于此模型的所有可用引擎。以整数 K 编辑（1 K = 1,000 tokens）；未编辑时保留精确值。保存后用于后续运行，正在生成的内容不受影响。实际可用长度仍受模型服务限制。",
+          "contextLimitLocalMillionHint": "原生 256K（262,144 tokens），可选扩展至 1M（1,000,000）。服务运行时需在「管理服务」中重启以应用更改；已停止时，下次使用自动生效。长输入会增加内存占用和等待时间。",
           "contextLimitAria": "上下文上限（千 tokens）",
           "contextLimitRoute": "当前 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "已超过上游声明的长度，可能导致请求失败。",
@@ -2563,7 +2603,8 @@
           "apple-mlx": "这台 Mac 适合官方 MLX 封装。",
           "generic-27b": "这台电脑适合官方 Q4 封装。",
           "compact": "按这台电脑的内存，先从更轻量的模型开始。",
-          "unknown": "先选一个更好跑起来的模型。"
+          "unknown": "先选一个更好跑起来的模型。",
+          "high-memory": "这台电脑内存充裕，优先试用能力更强的模型；本机速度和峰值内存仍待实测。"
         },
         "searchPlaceholder": "搜索模型",
         "noSearchResults": "没有匹配的模型",
@@ -2654,7 +2695,9 @@
         "deleteModelConfirm": "删除",
         "deleteModelDone": "已删除 {{name}}",
         "deleteModelFailed": "删除失败，请确认 Ollama 正在运行后重试",
-        "noRecommendation": "这台电脑暂时没有证据充分且内存适配的推荐，可在下方手动选择候选模型。"
+        "noRecommendation": "这台电脑暂时没有证据充分且内存适配的推荐，可在下方手动选择候选模型。",
+        "lighterAlternative": "轻量备选",
+        "recommendedInstalled": "推荐模型已在本机，可直接使用。"
       },
       "xdSignin": {
         "badge": "推荐",
@@ -12429,7 +12472,8 @@
         "rename": "去改名",
         "fix": "去改",
         "republish": "重新发布",
-        "abandonPending": "放弃等待"
+        "abandonPending": "放弃等待",
+        "editPublication": "修改发布信息"
       },
       "API_KEY_MISSING": {
         "title": "未配置 API key",
@@ -12453,15 +12497,15 @@
       },
       "OSS_PUT_FAILED": {
         "title": "上传失败",
-        "message": "网络异常，请重试"
+        "message": "上传服务未能接收文件。请检查网络后重试上传；持续失败时请重新发布"
       },
       "OSS_PUT_EXPIRED": {
         "title": "上传链接过期",
         "message": "上传链接已过期，请重新发布"
       },
       "VERSION_RACE": {
-        "title": "版本冲突",
-        "message": "自动重试已失败，请稍后重试"
+        "title": "版本号已被占用",
+        "message": "该版本已发布或正在处理。请选择未使用的版本号后重新发布"
       },
       "CHECKSUM_MISMATCH": {
         "title": "校验失败",
@@ -12473,15 +12517,15 @@
       },
       "PACK_FAILED": {
         "title": "打包失败",
-        "message": "未能完成 Skill 打包，请重试"
+        "message": "请确认本地技能文件可以读取，精简不必要的大文件后重新发布"
       },
       "OSS_OBJECT_NOT_FOUND": {
         "title": "上传文件丢失",
         "message": "服务器找不到上传的文件，请重试"
       },
       "MANIFEST_INVALID": {
-        "title": "SKILL.md 格式不正确",
-        "message": "SKILL.md 文件必须以 YAML frontmatter 开头，并包含 name 和 description 字段"
+        "title": "技能包不符合要求",
+        "message": "请按下方原因检查 SKILL.md 和包内文件，修改后重新发布"
       },
       "CANCELLED": {
         "title": "已取消",
@@ -12496,12 +12540,56 @@
         "message": "请选择当前发布身份支持的可见范围"
       },
       "INTERNAL": {
-        "title": "服务器错误",
-        "message": "发布失败，请稍后重试"
+        "title": "发布未完成",
+        "message": "发生未预期的异常，请稍后重试；持续失败时请联系支持"
       },
       "UNKNOWN": {
         "title": "未知错误",
         "message": "发布失败 ({{code}})，请重试"
+      },
+      "SKILL_DELETED": {
+        "title": "同名技能已删除",
+        "message": "同名技能已被删除，但名称仍被占用。请修改技能名称后重新发布"
+      },
+      "SKILL_UNPUBLISHED": {
+        "title": "技能已下架",
+        "message": "技能在上传期间被下架，本次发布已停止。请确认发布状态后重新发布"
+      },
+      "AUTH_REQUIRED": {
+        "title": "需要登录",
+        "message": "当前登录状态已失效或尚未登录，请登录后重新发布"
+      },
+      "PERMISSION_DENIED": {
+        "title": "当前账号没有发布权限",
+        "message": "请切换到有权限的发布身份，或联系技能作者、组织管理员确认权限"
+      },
+      "INVALID_PARAMS": {
+        "title": "发布信息不符合要求",
+        "message": "请按下方原因修改发布信息后重新发布"
+      },
+      "SKILL_FILE_TOO_LARGE": {
+        "title": "技能包超过限制",
+        "message": "压缩包最多 32 MiB，解压后最多 50 MiB，SKILL.md 最多 2 MiB，包内最多 2000 个条目。请精简后重新发布"
+      },
+      "NETWORK_ERROR": {
+        "title": "无法连接发布服务",
+        "message": "请检查网络连接后重试发布"
+      },
+      "RATE_LIMITED": {
+        "title": "发布请求过于频繁",
+        "message": "请稍等片刻再重试发布"
+      },
+      "SERVICE_UNAVAILABLE": {
+        "title": "发布服务暂不可用",
+        "message": "请稍后重试发布；持续失败时请联系支持"
+      },
+      "PUBLISH_BUSY": {
+        "title": "已有技能正在发布",
+        "message": "请等待当前发布结束后再发布此技能"
+      },
+      "REQUEST_REJECTED": {
+        "title": "发布请求被拒绝",
+        "message": "请检查发布信息后重新发布；持续失败时请联系支持"
       }
     },
     "scanResult": {

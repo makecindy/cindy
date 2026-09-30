@@ -1387,6 +1387,8 @@ export default function SessionScreen() {
   const [voiceState, setVoiceStateInternal] = useState<MobileVoiceState>('idle');
   const { prompt: promptRecommendation, dismiss: dismissPromptRecommendation } = usePromptRecommendation({
     ownerId: auth.user?.id, deviceId, sessionId, maker,
+    available: remoteHistoryAvailable && !revokedDevices.has(deviceId) && !unresponsiveDevices.has(deviceId),
+    connectionEpoch,
     agentKind: recommendationSession ? agentKindForSession(recommendationSession) : null,
     revision: recommendationSession?.lastTurnEndedAt, running: remoteSessionRunning,
     composerSource: composerDraftSource,

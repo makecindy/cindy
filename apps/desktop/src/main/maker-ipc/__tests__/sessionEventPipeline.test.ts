@@ -31,6 +31,10 @@ vi.mock('../../maker-host/model-discovery/xai.js', () => ({
   discardXaiModelsDiskCache: vi.fn(async () => {}),
 }));
 
+vi.mock('../../local-model-runtime/preflight.js', () => ({
+  ensureManagedOllamaReadyForSession: effects.fn('ensureManagedOllamaReadyForSession'),
+}));
+
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
@@ -937,6 +941,31 @@ describe('provider turn observer on real Session.send', () => {
       },
     };
   }
+  it('awaits llama.cpp readiness on an existing task before dispatch and propagates startup failure', async () => {
+    const h = harness();
+    const gate = deferred();
+    effects.fn('getSessionProvider').mockReturnValue('cindy-local-llamacpp');
+    const ready = effects.fn('ensureManagedOllamaReadyForSession').mockImplementation(() => gate.promise);
+    const dispose = installSessionTurnObserver(observerDeps(), h.session);
+    try {
+      const sending = h.session.send('continue existing task');
+      await vi.waitFor(() => expect(ready).toHaveBeenCalledOnce());
+      expect(h.handle.send).not.toHaveBeenCalled();
+      gate.resolve();
+      await sending;
+      expect(ready).toHaveBeenCalledWith({ providerId: 'cindy-local-llamacpp', onlyIfStopped: true });
+      expect(h.handle.send).toHaveBeenCalledOnce();
+      h.emit(event('done', {}));
+      ready.mockRejectedValue(new Error('NOT_INSTALLED'));
+      await expect(h.session.send('next turn')).rejects.toThrow('NOT_INSTALLED');
+      expect(h.handle.send).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+      dispose();
+      await h.dispose();
+    }
+  });
+
   it('holds the send reservation while waiting for the local project boundary', async () => {
     const harnessState = harness();
     const gate = deferred();
@@ -997,6 +1026,7 @@ describe('provider turn observer on real Session.send', () => {
   it('does not apply the local project boundary to a remote session', async () => {
     const harnessState = harness();
     Object.defineProperty(harnessState.session, 'remoteHostId', { value: 'ssh-host' });
+    effects.fn('getSessionProvider').mockReturnValue('cindy-local-llamacpp');
     const beforeLocalProviderStart = vi.fn(async () => {});
     const dispose = installSessionTurnObserver(
       { ...observerDeps(), beforeLocalProviderStart }, harnessState.session,
@@ -1004,6 +1034,7 @@ describe('provider turn observer on real Session.send', () => {
     try {
       await harnessState.session.send('test');
       expect(beforeLocalProviderStart).not.toHaveBeenCalled();
+      expect(effects.fn('ensureManagedOllamaReadyForSession')).not.toHaveBeenCalled();
       expect(harnessState.handle.send).toHaveBeenCalledOnce();
     } finally {
       dispose();

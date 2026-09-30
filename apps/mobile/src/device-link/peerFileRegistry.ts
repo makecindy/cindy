@@ -14,6 +14,16 @@ export function installPeerUpload(value: PeerUpload) {
   return () => { if (upload === value) upload = null; };
 }
 export async function tryMobilePeerUpload(...args: Parameters<PeerUpload>) { return upload?.(...args) ?? null; }
+/** 读整份文件之前确认直连可用(只查对端能力,不传字节);没有可用传输时视为不可直连。 */
+type PeerUploadProbe = (device: string, size: number) => Promise<boolean>;
+let uploadProbe: PeerUploadProbe | null = null;
+export function installPeerUploadProbe(value: PeerUploadProbe) {
+  uploadProbe = value;
+  return () => { if (uploadProbe === value) uploadProbe = null; };
+}
+export async function canMobilePeerUpload(device: string, size: number) {
+  return uploadProbe ? uploadProbe(device, size).catch(() => false) : false;
+}
 type PeerInvoke = (device: string, channel: string, args: unknown[]) => Promise<InvokeResultPayload | null>;
 let invoke: PeerInvoke | null = null;
 export function installPeerInvoke(value: PeerInvoke) {
