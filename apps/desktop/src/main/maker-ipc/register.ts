@@ -5820,6 +5820,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         refreshXai: refreshXaiModelsFromHttp,
         refreshXaiMedia: refreshXaiMediaModels,
       }),
+    // Added ChatGPT / Grok accounts use the same discovery as the Settings "fetch models"
+    // action, so new account models appear without a manual refresh.
+    refreshAccount: async (providerId, family) => {
+      // The account may have been removed after the provider listing; never start a
+      // discovery host for a connection that no longer exists.
+      if (family === 'openai' ? !isCodexAccountProvider(providerId) : subscriptionAccountKind(providerId) !== 'xai') {
+        return;
+      }
+      const applied =
+        family === 'openai'
+          ? await maker.refreshAgentLocalModels('codex', {
+              credentialMode: 'oauth-bearer',
+              providerId,
+            })
+          : await refreshSubscriptionAccountModels(providerId);
+      if (!applied) {
+        throw new Error(`account model discovery did not apply for '${providerId}'`);
+      }
+    },
   });
   options.onProviderModelAutoRefreshConfigured();
 

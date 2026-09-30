@@ -83,6 +83,10 @@ Claude 取 SDK `supportedModels()` 的返回位置。用户本地 addition 按 R
 bridge 共用这一顺序；OpenAI 订阅的 Pi 清单成员与能力仍来自 Pi 目录，但同样按账号顺序排列，
 并沿用 Registry 条目的 `defaultEnabled: false`；用户本地 `sortOrder` patch 仍最高。
 
+账号清单的自动刷新（启动、打开设置页或模型选择器、回到前台，30 分钟冷却）除内置连接外，也覆盖
+用户另外添加且已登录的 ChatGPT / Grok 账号：它们随所属家族（`openai` / `xai`）一起刷新，
+各自独立冷却，与设置页手动「获取模型」走同一条发现路径，新型号无需手动刷新即可出现。
+
 Claude 订阅没有 HTTP 清单接口，清单来自内置 Claude Code 的 SDK `supportedModels()`：会话启动时
 捕获；此外 maker 就绪、登录／认领 Claude 登录以及手动刷新时，用本机 CLI 起一个空闲 Query 只读
 清单（不发消息、不产生模型调用）。SDK 对每个系列的当前型号常只给简称（`opus` / `sonnet` /
