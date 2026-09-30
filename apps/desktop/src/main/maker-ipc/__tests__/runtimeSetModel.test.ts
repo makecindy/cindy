@@ -1671,6 +1671,7 @@ describe('context configuration refresh across live routes', () => {
   it('marks a busy Pi catalog refresh as automatic before its pending boundary', async () => {
     const id = rememberSession('pi-busy-catalog-refresh');
     const session = { id, agentKind: 'pi' as const, model: 'same-model',
+      setModel: vi.fn(),
       isTurnRunning: () => true,
       requiresModelSwitchRebuild: vi.fn(async () => true),
       previewModelSwitch: vi.fn(async () => ({ action: 'refresh' as const, targetContextWindow: 32_000, windowVerified: false })),

@@ -16631,7 +16631,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     expectedAgentSwitchRevision: unknown,
     selection: unknown,
     internalOptions: InternalRuntimeSelectionOptions,
-  ) => {
+  ): ReturnType<typeof applySessionRuntimeSelection> => {
     if (typeof sessionId !== 'string' || typeof model !== 'string') {
       throwIpcError('INVALID_PARAMS', 'sessionId + model required');
     }
@@ -17595,7 +17595,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
         };
         assertRuntimeOwnerCurrent();
-        const result = routeExplicit
+        const result: Awaited<ReturnType<typeof applyRuntimeSetModelChange>> = routeExplicit
           ? await applyRuntimeSetModelChange({
               maker,
               admit: () => { assertRuntimeOwnerCurrent(); assertSharedTaskCurrent.admit(); },
@@ -17639,7 +17639,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               codexAuthInjection: getCodexProxyAuthInjectionState(),
               logger: log,
             })
-          : { status: 'applied' as const, retiredRuntime: false as const };
+          : { status: 'applied' };
         // deferred = 会话自己在跑,选择已登记、turn 结束自动生效。renderer 据此提示
         // "任务结束后生效"而不是当成已即时切换。
         const response = {

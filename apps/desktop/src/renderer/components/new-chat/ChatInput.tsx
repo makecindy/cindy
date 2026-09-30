@@ -1301,7 +1301,7 @@ export function ChatInput({
   }, [deviceLinkDeviceId, sessionId, t]);
   useEffect(() => {
     if (!sessionId) return;
-    return subscribeRemoteCredentialSwitchOutcome(sessionId, deviceLinkDeviceId, (outcome) => {
+    return subscribeRemoteCredentialSwitchOutcome(sessionId, deviceLinkDeviceId ?? undefined, (outcome) => {
       if (outcome.kind === 'applied') {
         toast.success(t('newChat.chatInput.credentialSwitchApplied'), { duration: 3000 });
       } else {
