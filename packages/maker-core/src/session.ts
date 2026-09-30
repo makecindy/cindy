@@ -52,6 +52,7 @@ import type { ContextUsageData } from './types/context-usage.js';
 import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
 import type {
   AgentSessionHandle,
+  PiModelSwitchPreview,
   AgentSessionTeardownOptions,
   BackgroundTaskSnapshot,
   SendOptions,
@@ -1720,6 +1721,13 @@ export class Session {
       throw new NotSupportedError('switchModel', { supported: false, reason: 'not-implemented' });
     }
     await this.handle.setModel(model, opts);
+  }
+
+  async previewModelSwitch(
+    model: string,
+    opts?: { providerId?: string | null },
+  ): Promise<PiModelSwitchPreview | undefined> {
+    return this.handle.previewModelSwitch?.(model, opts);
   }
 
   async requiresModelSwitchRebuild(

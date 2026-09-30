@@ -330,5 +330,10 @@
     "remove": "移除引用",
     "closePreview": "关闭引用预览",
     "menuLabel": "添加到对话"
+  },
+  "learning": {
+    "memory": "已记住：{{title}}",
+    "skillCreated": "已建立技能：{{title}}",
+    "skillUpdated": "已更新技能：{{title}}"
   }
 }

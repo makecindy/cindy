@@ -1837,6 +1837,45 @@
       }
     },
     "providers": {
+      "llamacpp": {
+        "ownedElsewhere": "模型服務正在另一個 Cindy 執行個體中執行。請在那裡下載模型或修改上下文，或先停止該執行個體的服務。",
+        "primaryPick": "主推 · 先試這個",
+        "recommendReason": "優先試用 {{name}}，這是為這台電腦選出的能力主推型號。",
+        "recommendCaveat": "此 GGUF 包裝的本機速度和峰值記憶體仍待實測，下載大小不等於執行時記憶體用量。",
+        "candidates": "待試驗模型",
+        "trialNote": "以下模型可供試驗，效能和記憶體用量尚待驗證。",
+        "downloadModel": "下載 {{name}}",
+        "title": "llama.cpp",
+        "subtitle": "安裝執行環境、下載模型並在本機執行",
+        "description": "選擇下方模型，下載到本機執行。",
+        "install": "安裝 llama.cpp",
+        "start": "啟動並連線",
+        "restart": "重新啟動並更新模型",
+        "stop": "停止服務",
+        "cancel": "取消操作",
+        "repository": "Hugging Face 儲存庫",
+        "findFiles": "尋找模型檔案",
+        "file": "GGUF 檔案",
+        "shards": "分片模型會自動下載全部分片，上方大小為所選分片的大小。支援文字模型，暫不下載視覺投影檔案。",
+        "download": "下載模型",
+        "models": "已下載模型",
+        "empty": "從上方清單選擇模型，或輸入 Hugging Face 儲存庫下載第一個模型。",
+        "unsupported": "此平台暫不支援自動安裝，可透過手動設定連線 llama.cpp。",
+        "failed": "操作未完成，請檢查網路和可用磁碟空間後重試。",
+        "invalid": "請輸入 owner/model-GGUF 格式的儲存庫名稱並選擇 GGUF 檔案。",
+        "progress": {
+          "install": "正在安裝 llama.cpp…",
+          "download": "正在下載模型…",
+          "start": "正在啟動 llama.cpp…"
+        },
+        "installAndConnect": "安裝並連線",
+        "installDescription": "Cindy 會安裝 llama.cpp。下載模型後，使用時自動啟動服務。",
+        "manualConnect": "連線已有服務",
+        "manageRuntime": "管理服務",
+        "restartHint": "下載模型或修改上下文後，在「管理服務」中重新啟動以套用變更。重新啟動會中斷正在進行的生成。",
+        "applyModels": "使用已下載模型",
+        "startOnUse": "按需啟動"
+      },
       "catalogRecovery": {
         "pending": "模型設定尚未就緒，請稍後重新載入模型。",
         "legacy": "舊模型設定暫時無法讀取，請結束其他正在執行的 Cindy 後重新載入模型。",
@@ -2294,6 +2333,7 @@
           "defaultEffortHint": "新任務選中該模型時的初始檔位，任務內仍可臨時調整。",
           "contextLimit": "上下文上限",
           "contextLimitHint": "套用至此模型所有可用引擎。以整數 K 編輯（1 K = 1,000 tokens）；未編輯時保留精確值。儲存後用於後續執行，不影響正在產生的內容。實際可用長度仍受模型服務限制。",
+          "contextLimitLocalMillionHint": "原生 256K（262,144 tokens），可選擴展至 1M（1,000,000）。服務執行時需在「管理服務」中重新啟動以套用變更；已停止時，下次使用自動生效。長輸入會增加記憶體用量和等待時間。",
           "contextLimitAria": "上下文上限（千 tokens）",
           "contextLimitRoute": "目前 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "已超過上游宣告的長度，可能導致請求失敗。",
@@ -2524,7 +2564,8 @@
           "apple-mlx": "這台 Mac 適合官方 MLX 封裝。",
           "generic-27b": "這台電腦適合官方 Q4 封裝。",
           "compact": "依這台電腦的記憶體，先從更輕量的模型開始。",
-          "unknown": "先選一個更好跑起來的模型。"
+          "unknown": "先選一個更好跑起來的模型。",
+          "high-memory": "這台電腦記憶體充裕，優先試用能力更強的模型；本機速度與峰值記憶體仍待實測。"
         },
         "searchPlaceholder": "搜尋模型",
         "noSearchResults": "沒有符合的模型",
@@ -2615,7 +2656,9 @@
         "deleteModelConfirm": "刪除",
         "deleteModelDone": "已刪除 {{name}}",
         "deleteModelFailed": "刪除失敗，請確認 Ollama 正在執行後重試",
-        "noRecommendation": "這台電腦暫時沒有證據充分且記憶體適配的推薦，可在下方手動選擇候選模型。"
+        "noRecommendation": "這台電腦暫時沒有證據充分且記憶體適配的推薦，可在下方手動選擇候選模型。",
+        "lighterAlternative": "輕量備選",
+        "recommendedInstalled": "推薦模型已在本機，可直接使用。"
       },
       "xdSignin": {
         "badge": "推薦",
@@ -8346,6 +8389,11 @@
       "automationInvalid": "自動化定義無法轉換，尚未建立。",
       "itemFailed": "此項未完成，可重試並查看匯入詳情。",
       "chatPartial": "夥伴已建立，但部分資料未完整儲存。以下項目仍需處理；其他內容和對話可以正常使用。"
+    },
+    "learning": {
+      "memory": "已記住：{{title}}",
+      "skillCreated": "已建立技能：{{title}}",
+      "skillUpdated": "已更新技能：{{title}}"
     }
   },
   "common": {
@@ -9062,6 +9110,7 @@
       "credentialSwitchDeferred": "模型來源已切換，將在當前任務結束後生效。",
       "effortRuntimeDirty": "推理強度還在更新，稍等一下再傳送",
       "credentialSwitchApplied": "模型來源切換已生效。",
+      "credentialSwitchFailed": "模型來源切換失敗，請重新選擇。",
       "modelSwitchContextGuard": {
         "title": "這個模型裝不下目前的對話",
         "warnToast": "這段對話已經用了 {{used}}，換過去大約會佔新模型容量（{{total}}）的 {{pct}}%",
@@ -12412,7 +12461,8 @@
         "rename": "去改名",
         "fix": "去改",
         "republish": "重新發布",
-        "abandonPending": "放棄等待"
+        "abandonPending": "放棄等待",
+        "editPublication": "修改發布資訊"
       },
       "API_KEY_MISSING": {
         "title": "未配置 API key",
@@ -12436,15 +12486,15 @@
       },
       "OSS_PUT_FAILED": {
         "title": "上傳失敗",
-        "message": "網路異常，請重試"
+        "message": "上傳服務未能接收檔案。請檢查網路後重試上傳；若持續失敗，請重新發布"
       },
       "OSS_PUT_EXPIRED": {
         "title": "上傳連結過期",
         "message": "上傳連結已過期，請重新發布"
       },
       "VERSION_RACE": {
-        "title": "版本衝突",
-        "message": "自動重試已失敗，請稍後重試"
+        "title": "版本號已被占用",
+        "message": "該版本已發布或正在處理。請選擇未使用的版本號後重新發布"
       },
       "CHECKSUM_MISMATCH": {
         "title": "校驗失敗",
@@ -12456,15 +12506,15 @@
       },
       "PACK_FAILED": {
         "title": "打包失敗",
-        "message": "未能完成 Skill 打包，請重試"
+        "message": "請確認本地技能檔案可以讀取，精簡不必要的大型檔案後重新發布"
       },
       "OSS_OBJECT_NOT_FOUND": {
         "title": "上傳檔案丟失",
         "message": "伺服器找不到上傳的檔案，請重試"
       },
       "MANIFEST_INVALID": {
-        "title": "SKILL.md 格式不正確",
-        "message": "SKILL.md 檔案必須以 YAML frontmatter 開頭，並包含 name 和 description 欄位"
+        "title": "技能套件不符合要求",
+        "message": "請依下方原因檢查 SKILL.md 與套件內檔案，修改後重新發布"
       },
       "CANCELLED": {
         "title": "已取消",
@@ -12479,12 +12529,56 @@
         "message": "請選擇目前發佈身分支援的可見範圍"
       },
       "INTERNAL": {
-        "title": "伺服器錯誤",
-        "message": "釋出失敗，請稍後重試"
+        "title": "發布未完成",
+        "message": "發生未預期的異常，請稍後重試；若持續失敗，請聯絡支援"
       },
       "UNKNOWN": {
         "title": "未知錯誤",
         "message": "釋出失敗 ({{code}})，請重試"
+      },
+      "SKILL_DELETED": {
+        "title": "同名技能已刪除",
+        "message": "同名技能已被刪除，但名稱仍被占用。請修改技能名稱後重新發布"
+      },
+      "SKILL_UNPUBLISHED": {
+        "title": "技能已下架",
+        "message": "技能在上傳期間被下架，本次發布已停止。請確認發布狀態後重新發布"
+      },
+      "AUTH_REQUIRED": {
+        "title": "需要登入",
+        "message": "目前登入狀態已失效或尚未登入，請登入後重新發布"
+      },
+      "PERMISSION_DENIED": {
+        "title": "目前帳號沒有發布權限",
+        "message": "請切換至有權限的發布身分，或聯絡技能作者、組織管理員確認權限"
+      },
+      "INVALID_PARAMS": {
+        "title": "發布資訊不符合要求",
+        "message": "請依下方原因修改發布資訊後重新發布"
+      },
+      "SKILL_FILE_TOO_LARGE": {
+        "title": "技能套件超過限制",
+        "message": "壓縮檔最多 32 MiB，解壓後最多 50 MiB，SKILL.md 最多 2 MiB，套件內最多 2000 個項目。請精簡後重新發布"
+      },
+      "NETWORK_ERROR": {
+        "title": "無法連線至發布服務",
+        "message": "請檢查網路連線後重試發布"
+      },
+      "RATE_LIMITED": {
+        "title": "發布請求過於頻繁",
+        "message": "請稍候再重試發布"
+      },
+      "SERVICE_UNAVAILABLE": {
+        "title": "發布服務暫時無法使用",
+        "message": "請稍後重試發布；若持續失敗，請聯絡支援"
+      },
+      "PUBLISH_BUSY": {
+        "title": "已有技能正在發布",
+        "message": "請等待目前發布結束後再發布此技能"
+      },
+      "REQUEST_REJECTED": {
+        "title": "發布請求遭拒",
+        "message": "請檢查發布資訊後重新發布；若持續失敗，請聯絡支援團隊"
       }
     },
     "scanResult": {

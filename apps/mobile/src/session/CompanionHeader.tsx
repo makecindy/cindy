@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText, type RemoteResource } from '@cindy/device-link';
@@ -21,17 +21,20 @@ export function CompanionHeader(props: {
   resource: RemoteResource; deviceId: string; deviceName: string; online: boolean; controlsReady?: boolean;
   /** The companion is working on a reply (the avatar breathes). */
   working?: boolean;
+  settingsRequest?: { page: 'memory' | 'capabilities'; sequence: number };
   onSearch(): void; onBack(): void;
 }) {
   const { accountGeneration } = useAuth();
   return <CompanionHeaderContent key={accountGeneration} {...props} />;
 }
 
-function CompanionHeaderContent({ resource, deviceId, deviceName, online, controlsReady = true, working = false, onSearch, onBack }: Parameters<typeof CompanionHeader>[0]) {
+function CompanionHeaderContent({ resource, deviceId, deviceName, online, controlsReady = true, working = false, onSearch, onBack, settingsRequest }: Parameters<typeof CompanionHeader>[0]) {
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const navigation = useTeammateNavigation();
   const [profile, setProfile] = useState(false);
+  const [initialPage, setInitialPage] = useState<'home' | 'memory' | 'capabilities'>('home');
+  useEffect(() => { if (settingsRequest) { setInitialPage(settingsRequest.page); setProfile(true); } }, [settingsRequest]);
   const pending = useRef<(() => void) | null>(null);
   const name = resolveRemoteText(resource.display.title, i18n.language);
   const afterProfile = (action: () => void) => { pending.current = action; setProfile(false); };
@@ -51,9 +54,9 @@ function CompanionHeaderContent({ resource, deviceId, deviceName, online, contro
       identityHint={t('devices.companions.openProfile', { name })}
       controlsReady={controlsReady}
       onBack={onBack}
-      onOpenSettings={() => setProfile(true)}
+      onOpenSettings={() => { setInitialPage('home'); setProfile(true); }}
       settingsLabel={t('devices.companionProfile.settingsTitle')} />
-    <CompanionProfileSheet visible={profile} onClose={() => setProfile(false)} onClosed={() => { const action = pending.current; pending.current = null; action?.(); }}
+    <CompanionProfileSheet initialPage={initialPage} visible={profile} onClose={() => setProfile(false)} onClosed={() => { const action = pending.current; pending.current = null; action?.(); }}
       resource={resource} collectionId={resource.ref.collectionId} deviceId={deviceId} deviceName={deviceName} online={online}
       onDeleted={() => void navigation.chooseMode('teammates')}
       onOpenSearch={() => afterProfile(onSearch)} />

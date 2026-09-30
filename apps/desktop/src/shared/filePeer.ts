@@ -10,7 +10,7 @@ export const FILE_PEER_LOCAL = {
 export type FilePeerCommand =
   | { action: 'offer'; connection: string; servers: DesktopIceServer[]; streaming?: boolean }
   | { action: 'stats'; connection: string }
-  | { action: 'invoke'; connection: string; payload: string }
+  | { action: 'invoke'; connection: string; payload: string; timeoutMs?: number }
   | { action: 'accept'; connection: string; servers: DesktopIceServer[]; sdp: string }
   | { action: 'answer'; connection: string; sdp: string }
   | { action: 'receive'; connection: string; ticket: string; size: number; sink: string }

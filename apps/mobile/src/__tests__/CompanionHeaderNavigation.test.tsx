@@ -115,6 +115,7 @@ const compiled = ts.transpileModule(`${moduleConstant('COMPANION_NATIVE_HEADER_O
 function PageHost({ bindings }) {
   const { auth, deviceId, sessionId, companionResource, companionEntry, shareSelectionActive, setSearchOpen, goBackToHome, companionWorkingLabel } = bindings;
   const currentSession = null;
+  const companionSettingsRequest = bindings.companionSettingsRequest;
   const deviceName = 'PC', remoteUnavailableReason = null, sessionListDrawerOverlayMounted = false;
   ${statements.slice(stateStart, stateEnd).map(n => n.getText(source)).join('\n')}
   ${relevantJsx(header)}
@@ -155,4 +156,14 @@ it('shows the ordinary task header on non-companion pages and while sharing', as
   expect(host.querySelector('[data-testid="companion.header"]')).toBeNull();
   // The task header keeps its native bar.
   expect(h.screenOptions.some((options) => options.headerShown === false)).toBe(false);
+});
+
+it('opens learning links in the existing profile sheet on the requested page', async () => {
+  await act(async () => root.render(<CompanionHeader resource={resource} deviceId="pc" deviceName="PC" online onBack={() => {}} onSearch={() => {}}
+    settingsRequest={{ page: 'memory', sequence: 1 }} />));
+  expect(h.profile).toMatchObject({ visible: true, initialPage: 'memory' });
+  await act(async () => h.profile.onClose());
+  await act(async () => root.render(<CompanionHeader resource={resource} deviceId="pc" deviceName="PC" online onBack={() => {}} onSearch={() => {}}
+    settingsRequest={{ page: 'capabilities', sequence: 2 }} />));
+  expect(h.profile).toMatchObject({ visible: true, initialPage: 'capabilities' });
 });

@@ -18,6 +18,17 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+vi.mock('electron', () => ({ app: { getPath: () => '/tmp/cindy-scheduler-test' } }));
+vi.mock('electron-store', () => ({ default: class {
+  get(): unknown { return undefined; }
+  set(): void {}
+  delete(): void {}
+} }));
+vi.mock('original-fs', async () => {
+  const fs = await import('node:fs');
+  return { ...fs, default: fs };
+});
+
 import { AcceptedCallbackDispatchCancelled } from '../../maker-ipc/acceptedCallbackRunner.js';
 
 import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
@@ -325,8 +336,11 @@ function createQueueHarness(opts: {
         if (opts.enqueueRetry) return { retry: true as const };
         if (opts.enqueueDuplicate) return { duplicate: true as const };
         enqueueCalls.push(req);
-        if (opts.acceptBeforeEnqueueResolves)
+        if (opts.acceptBeforeEnqueueResolves) {
+          try { await req.onPreparing?.(); }
+          catch (error) { req.onPreparationFailed?.(error); throw error; }
           await req.onAccepted({ permissionMode: 'ask', planMode: false });
+        }
         return { clientId: `client-${enqueueCalls.length}` };
       }),
       removeQueuedPrompt: (sessionId, clientId) => {
@@ -348,6 +362,9 @@ function createQueueHarness(opts: {
       },
     },
     async accept(permissions = { permissionMode: 'ask', planMode: false }) {
+      const request = enqueueCalls.at(-1);
+      try { await request?.onPreparing?.(); }
+      catch (error) { request?.onPreparationFailed?.(error); return; }
       await enqueueCalls.at(-1)?.onAccepted(permissions);
     },
     discard() {
@@ -378,6 +395,7 @@ function createRunnerHarness(
     checkModelRoute?: MakerScheduleRunnerDeps['checkModelRoute'];
     acquirePendingAgentSwitch?: MakerScheduleRunnerDeps['acquirePendingAgentSwitch'];
     resolveModelSelection?: MakerScheduleRunnerDeps['resolveModelSelection'];
+    applyPiModelSelectionUnderLock?: MakerScheduleRunnerDeps['applyPiModelSelectionUnderLock'];
   } = {},
 ) {
   const logger = createLogger();
@@ -415,6 +433,11 @@ function createRunnerHarness(
     schedulerQueue,
     checkModelRoute: opts.checkModelRoute,
     acquirePendingAgentSwitch: opts.acquirePendingAgentSwitch,
+    applyPiModelSelectionUnderLock: opts.applyPiModelSelectionUnderLock ?? (async (_id, model, providerId) => {
+      await liveSession.setModel(model, { providerId });
+      mocks.getSessionProvider.mockReturnValue(providerId);
+      return { status: 'applied' as const };
+    }),
     resolveModelSelection: opts.resolveModelSelection,
   });
   return {
@@ -648,7 +671,8 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       await queue.accept();
       expect(await result).toBeInstanceOf(Error);
       expect(h.send).not.toHaveBeenCalled();
-      expect(h.session.abort).toHaveBeenCalled();
+      if (failure === 'harness-changed') expect(h.session.abort).not.toHaveBeenCalled();
+      else expect(h.session.abort).toHaveBeenCalled();
     },
   );
 
@@ -1220,7 +1244,33 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(harness.listenerCount()).toBe(0);
   });
 
-  it('排队 Pi 跨 proxy 身份时本轮沿用当前路由，不热切 setModel', async () => {
+  it('prepares a queued Pi that went cold using its persisted route before acceptance', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    (h.session as { agentKind: string }).agentKind = 'pi';
+    (h.session as { model: string }).model = 'old-model';
+    mocks.getSessionProvider.mockReturnValue('byom-a');
+    const queue = createQueueHarness({ busy: true });
+    const transaction = vi.fn(async () => {
+      (h.session as { model: string }).model = 'new-model';
+      mocks.getSessionProvider.mockReturnValue('byom-b');
+      return { status: 'applied' as const };
+    });
+    const { runner, maker } = createRunnerHarness(h.session, queue.deps, {
+      metaModel: 'old-model', applyPiModelSelectionUnderLock: transaction,
+    });
+    const fire = runner.fire(heartbeatSchedule({
+      agentKind: 'pi', model: 'new-model', providerId: 'byom-b',
+    }), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    vi.mocked(maker.getSession).mockReturnValueOnce(undefined);
+    await queue.accept();
+    expect(transaction).toHaveBeenCalledWith(SESSION_ID, 'new-model', 'byom-b',
+      { model: 'old-model', providerId: 'byom-a' }, { refreshPiConfiguration: true, source: 'agent' });
+    h.emit({ type: 'done', data: {}, source: 'pi' });
+    await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID });
+  });
+
+  it('排队 Pi 跨 proxy 身份时在发送前热切到目标来源', async () => {
     mocks.getSessionRowSnapshot.mockResolvedValue({
       status: 'active',
       userSendAt: null,
@@ -1247,8 +1297,8 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
     await queue.accept();
 
-    expect(harness.setModel).not.toHaveBeenCalled();
-    expect(mocks.setSessionProvider).not.toHaveBeenCalled();
+    expect(harness.setModel).toHaveBeenCalledWith('gpt-5.6-sol', { providerId: 'byom-b' });
+    expect(mocks.setSessionProvider).toHaveBeenCalledWith(SESSION_ID, 'byom-b');
     harness.emit({ type: 'done', data: {}, source: 'pi' });
     await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
   });
@@ -1315,9 +1365,11 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await queue.accept();
 
     await expect(firePromise).rejects.toThrow(
-      'schedule Pi route sync failed before queued dispatch',
+      'set_model rejected',
     );
-    expect(harness.session.abort).toHaveBeenCalled();
+    // Preparation failed before a send reservation existed; do not abort another turn.
+    expect(harness.session.abort).not.toHaveBeenCalled();
+    expect(harness.send).not.toHaveBeenCalled();
     expect(mocks.setSessionProvider).not.toHaveBeenCalled();
   });
 

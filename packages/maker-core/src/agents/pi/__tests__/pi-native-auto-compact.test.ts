@@ -13,6 +13,8 @@ const knobs = vi.hoisted(() => ({
   compactHold: null as null | Promise<void>,
   rpcCalls: [] as Array<Record<string, unknown>>,
   switchSessionSuccess: true,
+  reserveSuccess: true,
+  reserveUnknown: false,
   autoCompactionSuccess: true,
   runtimeProvider: "cindy",
   runtimeModel: "m",
@@ -86,6 +88,12 @@ vi.mock("../rpc-client.js", () => ({
         return knobs.autoCompactionSuccess
           ? { success: true, data: {} }
           : { success: false, error: "runtime rejected" };
+      }
+      if (cmd.type === "set_compaction_reserve_tokens") {
+        if (knobs.reserveUnknown) return { success: false, error: "Unknown command: set_compaction_reserve_tokens" };
+        return knobs.reserveSuccess
+          ? { success: true, data: { reserveTokens: cmd.reserveTokens ?? 16_384 } }
+          : { success: false, error: "reserve rejected" };
       }
       if (cmd.type === "set_model") {
         knobs.runtimeProvider = String(cmd.provider);
@@ -174,6 +182,8 @@ describe("PiAgent native auto-compaction ownership", () => {
     knobs.compactHold = null;
     knobs.rpcCalls = [];
     knobs.switchSessionSuccess = true;
+    knobs.reserveSuccess = true;
+    knobs.reserveUnknown = false;
     knobs.autoCompactionSuccess = true;
     knobs.runtimeProvider = "cindy";
     knobs.runtimeModel = "m";
@@ -213,6 +223,44 @@ describe("PiAgent native auto-compaction ownership", () => {
       budget = null;
       expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'xd' })).toBe(true);
     } finally { await handle.close(); }
+  });
+
+  it('clears a startup narrow budget with the effective native default reserve', async () => {
+    let budget: number | null = 1_000;
+    const deps = buildDeps();
+    deps.runtimeConfig = { ...deps.runtimeConfig, piAutoCompactThresholdPct: undefined };
+    deps.resolveModelContextLimit = () => budget;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'clear-budget', workingDir: cwd, model: 'm', providerId: 'xd',
+    });
+    budget = null;
+    knobs.rpcCalls = [];
+    await handle.setModel!('m', { providerId: 'xd' });
+    expect(knobs.rpcCalls).toContainEqual({
+      type: 'set_compaction_reserve_tokens', reserveTokens: 16_384,
+    });
+    expect(readLatestPiSettings().compaction).toBeUndefined();
+    await handle.close();
+  });
+
+  it('applies a new narrow budget when the previous route had no budget', async () => {
+    let budget: number | null = null;
+    const deps = buildDeps();
+    deps.runtimeConfig = { ...deps.runtimeConfig, piAutoCompactThresholdPct: undefined };
+    deps.resolveModelContextLimit = () => budget;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'add-budget', workingDir: cwd, model: 'm', providerId: 'xd',
+    });
+    expect(readLatestPiSettings().compaction).toBeUndefined();
+    budget = 1_000;
+    knobs.rpcCalls = [];
+    await handle.setModel!('m', { providerId: 'xd' });
+    expect(knobs.rpcCalls).toContainEqual({
+      type: 'set_compaction_reserve_tokens', reserveTokens: 199_100,
+    });
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(199_100);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(1_000);
+    await handle.close();
   });
 
   it.each([null, 'xd', 'cindy'] as const)('refreshes gateway aliases from a %s source without changing routes', async (providerId) => {
@@ -495,10 +543,10 @@ describe("PiAgent native auto-compaction ownership", () => {
       .map((call, index) => (call.type === "set_model" ? index : -1))
       .filter((index) => index >= 0);
     const verifyIndex = knobs.rpcCalls.findLastIndex((call) => call.type === "get_state");
-    expect(setModelIndexes).toHaveLength(2);
-    expect(setModelIndexes[0]).toBeLessThan(switchIndex);
-    expect(setModelIndexes[1]).toBeGreaterThan(switchIndex);
-    expect(verifyIndex).toBeGreaterThan(setModelIndexes[1]!);
+    expect(setModelIndexes).toHaveLength(1);
+    expect(switchIndex).toBe(-1);
+    expect(verifyIndex).toBeGreaterThan(setModelIndexes[0]!);
+    expect(knobs.rpcCalls.some((call) => call.type === "set_compaction_reserve_tokens")).toBe(true);
     expect(knobs.runtimeProvider).toBe("cindy");
     expect(knobs.runtimeModel).toBe("n");
     expect(handle.getUsageSnapshot().contextWindow).toBe(100_000);
@@ -525,9 +573,9 @@ describe("PiAgent native auto-compaction ownership", () => {
     await handle.setModel!("n");
 
     expect(readLatestPiSettings().compaction?.reserveTokens).toBe(100_000);
-    expect(knobs.rpcCalls.filter((call) => call.type === "switch_session")).toHaveLength(2);
-    expect(knobs.rpcCalls.filter((call) => call.type === "set_model")).toHaveLength(3);
-    expect(knobs.rpcCalls.filter((call) => call.type === "get_state")).toHaveLength(2);
+    expect(knobs.rpcCalls.filter((call) => call.type === "switch_session")).toHaveLength(0);
+    expect(knobs.rpcCalls.filter((call) => call.type === "set_model")).toHaveLength(1);
+    expect(knobs.rpcCalls.filter((call) => call.type === "get_state")).toHaveLength(1);
     expect(handle.getUsageSnapshot().contextWindow).toBe(1_000_000);
     await handle.close();
   });
@@ -556,28 +604,29 @@ describe("PiAgent native auto-compaction ownership", () => {
     await handle.setModel!("n");
 
     expect(readLatestPiSettings().compaction?.reserveTokens).toBe(10_000);
-    expect(knobs.rpcCalls.filter((call) => call.type === "switch_session")).toHaveLength(2);
-    expect(knobs.rpcCalls.filter((call) => call.type === "set_model")).toHaveLength(3);
-    expect(knobs.rpcCalls.filter((call) => call.type === "get_state")).toHaveLength(2);
+    expect(knobs.rpcCalls.filter((call) => call.type === "switch_session")).toHaveLength(0);
+    expect(knobs.rpcCalls.filter((call) => call.type === "set_model")).toHaveLength(1);
+    expect(knobs.rpcCalls.filter((call) => call.type === "get_state")).toHaveLength(1);
     expect(handle.getUsageSnapshot().contextWindow).toBe(100_000);
     await handle.close();
   });
 
-  it("terminates when the runtime window changes again during settings verification", async () => {
+  it("uses the confirmed runtime window for native reserve", async () => {
     const handle = await start();
     knobs.targetRuntimeContextWindow = 1_000_000;
     knobs.setModelReportsContextWindow = false;
-    knobs.verifiedContextWindows = [1_000_000, 500_000];
+    knobs.verifiedContextWindows = [1_000_000];
 
-    await expect(handle.setModel!("n")).rejects.toThrow(/未能重载压缩阈值/);
-    expect(knobs.closeCalls).toBe(1);
+    await handle.setModel!("n");
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(250_000);
+    expect(knobs.closeCalls).toBe(0);
     await handle.close();
   });
 
-  it("terminates the session when the reloaded runtime does not confirm the target model", async () => {
+  it("terminates the session when native Pi does not confirm the target model", async () => {
     const handle = await start();
     knobs.stateModelOverride = "m";
-    await expect(handle.setModel!("n")).rejects.toThrow(/未能重载压缩阈值/);
+    await expect(handle.setModel!("n")).rejects.toThrow(/PI_CATALOG_RELOAD_UNCONFIRMED/);
     await handle.close();
   });
 
@@ -672,7 +721,7 @@ describe("PiAgent native auto-compaction ownership", () => {
       knobs.rpcCalls = [];
       await handle.setModel!("n");
       const rewritten = readLatestPiSettings();
-      expect(knobs.rpcCalls.filter((call) => call.type === "switch_session")).toHaveLength(2);
+      expect(knobs.rpcCalls.filter((call) => call.type === "switch_session")).toHaveLength(0);
       expect(rewritten.packages?.[0]?.source).toBe(cwd);
       expect(rewritten.skills ?? []).not.toContain(`-${b}`);
       expect(rewritten.packages?.[0]?.skills ?? []).not.toContain("-b");
@@ -682,10 +731,33 @@ describe("PiAgent native auto-compaction ownership", () => {
     } finally { await handle.close(); }
   });
 
-  it("terminates the session when compaction settings reload fails after a window change", async () => {
+  it("rejects before switching when the native reserve setter fails", async () => {
     const handle = await start();
-    knobs.switchSessionSuccess = false;
-    await expect(handle.setModel!("n")).rejects.toThrow(/未能重载压缩阈值/);
+    knobs.reserveSuccess = false;
+    await expect(handle.setModel!("n")).rejects.toThrow(/did not confirm the current compaction reserve/);
+    expect(knobs.rpcCalls.filter((call) => call.type === "set_model")).toHaveLength(0);
+    expect(knobs.closeCalls).toBe(0);
+    await handle.close();
+  });
+
+  it("keeps the old Pi route untouched when a catalog refresh also needs an unsupported reserve setter", async () => {
+    let addNative = false;
+    const deps = buildDeps();
+    deps.resolvePiNativeProviders = async () => ({
+      providers: addNative ? [{ id: "native-added", name: "Added", baseUrl: "http://a.test",
+        api: "openai-completions", models: [{ id: "native-model" }] }] : [],
+      env: {},
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: "old-pi-no-partial-refresh", workingDir: cwd, model: "m", providerId: "xd",
+    });
+    addNative = true;
+    knobs.reserveUnknown = true;
+    knobs.rpcCalls = [];
+    await expect(handle.setModel!("n", { providerId: "xd" })).rejects.toThrow(/does not support live compaction/);
+    expect(knobs.rpcCalls.map((call) => call.type)).toEqual(["set_compaction_reserve_tokens"]);
+    expect(knobs.closeCalls).toBe(0);
+    expect(handle.model).toBe("m");
     await handle.close();
   });
 

@@ -330,5 +330,10 @@
     "remove": "인용 제거",
     "closePreview": "인용 미리보기 닫기",
     "menuLabel": "대화에 추가"
+  },
+  "learning": {
+    "memory": "기억했어요: {{title}}",
+    "skillCreated": "스킬 생성: {{title}}",
+    "skillUpdated": "스킬 업데이트: {{title}}"
   }
 }

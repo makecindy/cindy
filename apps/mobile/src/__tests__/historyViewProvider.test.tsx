@@ -50,7 +50,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
 } }));
 vi.mock('@/device-link/rnWebSocket', () => ({ createRnWebSocket: vi.fn() }));
 vi.mock('@/debug/mobileDebugLog', () => ({ mobileDebugLog: vi.fn() }));
-vi.mock('@/debug/visualMock', () => ({ createVisualMockDeviceLinkContext: vi.fn(), seedVisualMockStore: vi.fn() }));
+vi.mock('@/debug/visualMock', () => ({ prepareVisualMockDeviceLinkContext: vi.fn() }));
 vi.mock('@cindy/maker-shared/device-responsiveness', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@cindy/maker-shared/device-responsiveness')>();
   return { ...actual, createDeviceResponsivenessBreaker: (options: Parameters<typeof actual.createDeviceResponsivenessBreaker>[0]) =>

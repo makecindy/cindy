@@ -45,7 +45,11 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getItem: async () => h.stored, setItem: async (_key: string, value: string) => { h.stored = value; },
 } }));
 vi.mock('@/session/HomeSurface', () => ({ MobileHome: (props: unknown) => { h.tasks = props; return null; } }));
-vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: { subscribe: () => () => {}, getSessions: () => [] } }));
+vi.mock('@/session/remoteSessionStore', () => ({
+  remoteSessionStore: { subscribe: () => () => {}, getSessions: () => [] },
+  RemoteSessionStoreSubscriptionGate: ({ children }: { children: React.ReactNode }) => children,
+  useRemoteHomeSessions: () => [], useRemoteHomeStatusVersion: () => 0,
+}));
 import HomeScreen from '../../app/devices/index';
 import { TeammateHomeScreen } from '@/session/TeammateHomeScreen';
 import { teammateIdentity } from '@/session/teammateNavigation';

@@ -19,6 +19,15 @@ describe('topicForPush', () => {
     expect(topicForPush('maker:turn-change-set:updated', { sessionId: 's1' })).toBe('session:s1');
     expect(topicForPush('maker:turn-change-set:updated', {})).toBeNull();
   });
+  it('routes delayed model-provider outcomes to the owning task', () => {
+    expect(topicForPush('maker:session-credential-switch-applied', {
+      sessionId: 's1', model: 'model', providerId: 'xd',
+    })).toBe('session:s1');
+    expect(topicForPush('maker:session-credential-switch-failed', {
+      sessionId: 's1', reason: 'apply-failed',
+    })).toBe('session:s1');
+    expect(topicForPush('maker:session-credential-switch-failed', { reason: 'apply-failed' })).toBeNull();
+  });
   it('delivers companion task state to the parent and private-thread changes to the account topic', () => {
     expect(topicForPush('maker:bot-delegation:changed', { parentSessionId: 'parent', childSessionId: 'child' })).toBe('session:parent');
     expect(topicForPush('maker:bot-delegation:changed', { parentSessionId: null })).toBeNull();

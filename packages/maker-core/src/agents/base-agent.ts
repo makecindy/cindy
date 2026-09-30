@@ -869,6 +869,8 @@ export interface AgentDeps {
       model: string;
       /** Present only when restoring an existing Pi session; permits private compatibility ids. */
       resumeSessionId?: string;
+      /** Preview must not prepare global skills or start a local model service. */
+      purpose?: 'startup' | 'preview' | 'live-refresh';
     },
   ) => Promise<PiNativeProvidersResult | null>;
 
@@ -881,6 +883,8 @@ export interface AgentDeps {
     providerId: string | null | undefined,
     modelId: string,
   ) => ModelDescriptor | null;
+  /** Current Pi-selectable catalog projection for live registry refreshes. */
+  resolvePiRuntimeModels?: () => ModelDescriptor[];
 
   /**
    * Pi-only:为 `cindy` gateway 的 models.json 块按会话实际来源解析 provider-aware 描述符。
@@ -2176,6 +2180,17 @@ export interface CodexContextWindowInfo {
  * 一个已启动的 agent 会话句柄。
  * 上层 Session 类持有此句柄并对外暴露 UI 友好的 API。
  */
+export interface PiModelSwitchPreview {
+  /** Existing Pi model snapshot can serve the target without a catalog mutation. */
+  action: 'hot' | 'refresh' | 'rebuild' | 'unavailable';
+  /** Target configuration's context capacity; null when not established. */
+  targetContextWindow: number | null;
+  /** Only true when the live Pi runtime has confirmed this exact target window. */
+  windowVerified: boolean;
+  /** Non-secret reason suitable for a host error; never include env values. */
+  reason?: string;
+}
+
 export interface AgentSessionHandle {
   /** Canonical physical Skill identities frozen at native runtime startup. */
   readonly disabledSkillPaths?: readonly string[];
@@ -2322,6 +2337,12 @@ export interface AgentSessionHandle {
 
   /** 运行时切换模型 —— 不支持时抛 NotSupportedError */
   setModel?(model: string, opts?: { providerId?: string | null; effort?: Effort }): Promise<void>;
+
+  /** Read-only Pi preflight before the host changes its persisted route or context. */
+  previewModelSwitch?(
+    model: string,
+    opts?: { providerId?: string | null },
+  ): Promise<PiModelSwitchPreview>;
 
   /**
    * 当前 provider handle 是否必须先关闭、再由同一业务任务 cold resume 才能应用目标模型。

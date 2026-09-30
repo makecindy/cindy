@@ -382,6 +382,7 @@ export interface AskUserQuestionItem {
 export interface ChatMessage {
   /** Private Bot reply provenance, projected from persisted/live agent metadata. */
   botPrivateReply?: boolean;
+  botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
   botTaskResults?: import('@cindy/maker-shared/botCollaboration').BotCollaborationMeta[];
   clientId: string;
   /** Server message id when this row came from history; used as a pagination cursor. */
@@ -18578,6 +18579,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       clientId: m.clientId,
       role: m.role,
       content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      ...(m.role === 'assistant' ? { botLearning: m.agentMeta?.botLearning } : {}),
       ...(m.agentMeta?.botPrivateReply === true ? { botPrivateReply: true } : {}),
       ...(m.role === 'assistant' && m.agentMeta?.turnCompleted === true
         ? { botTaskResults: readBotTaskResults(m.agentMeta.botTaskResults) } : {}),

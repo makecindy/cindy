@@ -98,6 +98,36 @@ describe('Bot candidate recovery', () => {
     expect(isBotCandidateUnavailable(signals)).toBe(false);
   });
 
+  // Gateway budget exhaustion is account-level: no candidate on the same account can
+  // recover it, so the shared deterministic-exhaustion signal wins over the 429 (#5266).
+  const budgetExceeded = '429: {"message":"ExceededBudget: User=[REDACTED] over budget. Spend=0.0, Budget=0.0","type":"budget_exceeded","code":"429"}';
+  it.each([
+    { errorStatus: 429, message: budgetExceeded },
+    { reason: 'turn-failed', errorStatus: 429, message: budgetExceeded },
+    { sdkError: 'rate_limit', message: 'Request failed: budget_exceeded' },
+    { errorStatus: 429, message: 'You exceeded your current quota, please check your plan and billing details.' },
+    { message: 'insufficient_quota' },
+  ])('keeps the account budget exhaustion with the user instead of switching candidates %j', (signals) => {
+    expect(isBotCandidateUnavailable(signals)).toBe(false);
+  });
+
+  it.each([
+    { errorStatus: 429, message: 'Too Many Requests' },
+    { errorStatus: 429, message: 'rate limit exceeded, retry after 3s' },
+    { sdkError: 'rate_limit', message: 'SDK error: rate_limit' },
+  ])('still switches candidates for transient rate limiting %j', (signals) => {
+    expect(isBotCandidateUnavailable(signals)).toBe(true);
+  });
+
+  it('does not schedule Bot fallback or auto-resume for a gateway budget exhaustion', () => {
+    const h = harness();
+    const signals = { errorStatus: 429, message: budgetExceeded };
+    expect(h.isResumableTurnErrorCandidate(signals, h.item)).toBe(false);
+    expect(h.onResumableTurnError('s', signals, h.item)).toBeNull();
+    expect(h.guard).not.toHaveBeenCalled();
+    expect(h.fallback).not.toHaveBeenCalled();
+  });
+
   const drop = { reason: 'pi-gateway-drop', message: 'Connection error.' };
   it('takes over an exhausted Pi route only for a host-identified Bot input', async () => {
     const ordinary = harness(false);

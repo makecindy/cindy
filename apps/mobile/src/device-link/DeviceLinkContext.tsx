@@ -8,6 +8,7 @@ import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase }
 import { confirmTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
 import { AppState, Platform } from 'react-native';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
+import { dispatchCredentialSwitchOutcome } from '@/session/credentialSwitchOutcome';
 import { mobileRuntimeIdentity } from '@/debug/mobileRuntimeIdentity';
 import {
   DeviceLinkClient,
@@ -157,7 +158,7 @@ import {
 import { createOfflineMirrorWipeQueue } from '@/device-link/offlineMirrorWipeQueue';
 import { hasMoreOlderMessages } from '@/session/messagePaging';
 import type { InputProjection, PendingInteraction, RemoteMessage } from '@/session/types';
-import { createVisualMockDeviceLinkContext, seedVisualMockStore } from '@/debug/visualMock';
+import { prepareVisualMockDeviceLinkContext } from '@/debug/visualMock';
 
 export interface DeviceLinkContextValue {
   status: DeviceLinkStatus;
@@ -1601,10 +1602,15 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
 }
 
 function VisualMockDeviceLinkProvider({ children }: { children: ReactNode }) {
+  const [value, setValue] = useState<DeviceLinkContextValue | null>(null);
   useEffect(() => {
-    seedVisualMockStore();
+    let mounted = true;
+    void prepareVisualMockDeviceLinkContext().then((context) => {
+      if (mounted) setValue(context);
+    });
+    return () => { mounted = false; };
   }, []);
-  const value = useMemo(() => createVisualMockDeviceLinkContext(), []);
+  if (!value) return null;
   return <DeviceLinkContext.Provider value={value}>{children}</DeviceLinkContext.Provider>;
 }
 
@@ -1626,6 +1632,7 @@ export function routeFrame(env: Envelope, handlers: {
   if (peerLinkClosed) return;
   if (env.kind !== 'push' || !env.src) return;
   const push = env.payload as PushPayload;
+  dispatchCredentialSwitchOutcome(env.src, push.channel, push.payload);
   if (push.channel === 'local-db:task-tags:changed') {
     writeTaskTagCatalog(
       handlers.currentDataOwnerId,

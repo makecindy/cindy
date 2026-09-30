@@ -39,6 +39,7 @@ import {
 } from './remoteBotSettingsData';
 
 interface Props {
+  initialPage?: 'home' | 'memory' | 'capabilities';
   bot: RemoteBot;
   beforeCloseRef: MutableRefObject<(() => Promise<boolean>) | null>;
   onDeleted(): void;
@@ -53,11 +54,11 @@ export function RemoteBotSettings(props: Props) {
     />
   );
 }
-function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted }: Props) {
+function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted, initialPage = 'home' }: Props) {
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
   const [data, setData] = useState<RemoteBotSettingsData | null>(null);
-  const [resourceId, setResourceId] = useState(bot.id);
+  const [resourceId, setResourceId] = useState(initialPage === 'memory' ? `settings:${bot.id}/memory` : initialPage === 'capabilities' ? `settings:${bot.id}/connections` : bot.id);
   const [page, setPage] = useState<string | null>(null);
   const [draft, setDraft] = useState<SettingsValues>({});
   const [busy, setBusy] = useState(false);

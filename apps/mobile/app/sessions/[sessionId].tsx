@@ -1,3 +1,4 @@
+import { MountOnFirstOpen } from '@/session/MountOnFirstOpen';
 import { RunningTokenRatePopover } from '@/session/RunningTokenRatePopover';
 import { companionConversationItems } from '@/session/companionConversationPresentation';
 import { useRunningTokenRateHistory } from '@/session/useRunningTokenRateHistory';
@@ -113,6 +114,7 @@ import { hasSessionEntryPreviewMismatch } from '@/session/sessionEntrySyncIndica
 import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
 import { PaperPlaneIcon } from '@/components/PaperPlaneIcon';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import { subscribeCredentialSwitchOutcome } from '@/session/credentialSwitchOutcome';
 import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useSharedTaskAccess } from '@/device-link/useSharedTaskAccess';
 import { useLeaveSharedTask } from '@/device-link/useLeaveSharedTask';
@@ -414,6 +416,7 @@ import {
 } from '@/session/MobileComposerInputRow';
 import { ComposerFrame, nativeComposerFrameAvailable } from '@/session/ComposerFrame';
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
+import { VoicePillWidthFrame } from '@/session/voicePillWidthMotion';
 import { useMobileVoiceProcessingIndicator } from '@/session/useMobileVoiceProcessingIndicator';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
@@ -990,6 +993,10 @@ export default function SessionScreen() {
   const visualOpenSearch = MOBILE_VISUAL_MOCK_ENABLED && readRouteParam(params.visualOpenSearch) === '1';
   const visualSearchQuery = MOBILE_VISUAL_MOCK_ENABLED ? readRouteParam(params.visualSearchQuery) : null;
   const navigation = useNavigation<SessionRouteParamsNavigation & { isFocused(): boolean }>();
+  useEffect(() => subscribeCredentialSwitchOutcome((outcome) => {
+    if (outcome.deviceId !== deviceId || outcome.sessionId !== sessionId || !navigation.isFocused()) return;
+    Alert.alert(t(outcome.kind === 'applied' ? 'models.switchOutcome.applied' : 'models.switchOutcome.failed'));
+  }), [deviceId, navigation, sessionId, t]);
   const router = useRouter();
   // 完整消息读取权限按「会话 + 单调代际」登记。focus 与 AppState 正交：后台时
   // 导航仍可能保持 focused，必须立即撤权；重新聚焦/回前台会生成新代际，使旧
@@ -5720,6 +5727,8 @@ export default function SessionScreen() {
   }, () => { void loadEarlierMessages(); });
   // Task links and notifications carry no teammate resource; the cached roster row supplies name and avatar.
   const companionDisplay = useCompanionDisplayResource(deviceId, sessionId, companionResource, companionChat);
+  const [companionSettingsRequest, setCompanionSettingsRequest] = useState<{ sessionId: string; page: 'memory' | 'capabilities'; sequence: number }>();
+  const openCompanionSettings = useCallback((page: 'memory' | 'capabilities') => setCompanionSettingsRequest(previous => ({ sessionId, page, sequence: (previous?.sequence ?? 0) + 1 })), [sessionId]);
   const companionWorkingLabel = useCompanionWorkingLabel({ sessionId, deviceId, botId: companionDisplay?.ref.id ?? '',
     active: companionChat && showComposerActivity, messages, reconnectAttempt: remoteSessionRunStatus.reconnectAttempt });
   const companionAvatarData = companionDisplay?.display.avatar;
@@ -6798,83 +6807,86 @@ export default function SessionScreen() {
     </>
   );
   const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (
-    <RouteActionButton
-      accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.screen.voiceStartInput')}
-      accessibilityHint={composerLayout.voice.disabledReason ?? composerSendUnavailableReason ?? undefined}
-      active={composerLayout.voice.active}
-      busy={voiceIsProcessing}
-      disabled={composerLayout.voice.disabled || (!canUseComposer && !voiceIsBusy)}
-      // 停止后的短暂收尾期仍禁止操作,但保持录音胶囊原样、不置灰。voice.disabled 在
-      // 语音处理中恒为 true,不能拿它判断;只有与语音无关的禁用原因(发送中)才置灰。
-      disabledStyle={voiceProcessingIndicator.stopping && !sending ? null : undefined}
-      delayLongPress={320}
-      hitSlop={COMPOSER_CONTROL_HIT_SLOP}
-      onPressIn={handleVoiceButtonPressIn}
-      onLongPress={() => {
-        voiceLongPressActiveRef.current = true;
-        voiceSuppressNextPressRef.current = true;
-        measureSendButtonTarget();
-        // 录音已在 pressIn 起了;这里只兜 pressIn 守卫路径没起成的边缘
-        // (startVoiceRecording 自带重入守卫,重复调用无害)。
-        if (!voiceRecordingActiveRef.current) void startVoiceRecording();
-      }}
-      onPress={() => {
-        if (voiceSuppressNextPressRef.current) {
-          voiceSuppressNextPressRef.current = false;
-          return;
-        }
-        if (voiceStartedOnPressInRef.current) {
-          // 本次按下已在 pressIn 起录:这次松手属于同一手势,不再当作
-          // 「再点一下停止」;下一次完整点击才会 toggle 停止。
+    <VoicePillWidthFrame hitSlop={COMPOSER_CONTROL_HIT_SLOP} width={voiceRecordingTimer.pillWidth}>
+      <RouteActionButton
+        accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.screen.voiceStartInput')}
+        accessibilityHint={composerLayout.voice.disabledReason ?? composerSendUnavailableReason ?? undefined}
+        active={composerLayout.voice.active}
+        busy={voiceIsProcessing}
+        disabled={composerLayout.voice.disabled || (!canUseComposer && !voiceIsBusy)}
+        // 停止后的短暂收尾期仍禁止操作,但保持录音胶囊原样、不置灰。voice.disabled 在
+        // 语音处理中恒为 true,不能拿它判断;只有与语音无关的禁用原因(发送中)才置灰。
+        disabledStyle={voiceProcessingIndicator.stopping && !sending ? null : undefined}
+        delayLongPress={320}
+        hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+        onPressIn={handleVoiceButtonPressIn}
+        onLongPress={() => {
+          voiceLongPressActiveRef.current = true;
+          voiceSuppressNextPressRef.current = true;
+          measureSendButtonTarget();
+          // 录音已在 pressIn 起了;这里只兜 pressIn 守卫路径没起成的边缘
+          // (startVoiceRecording 自带重入守卫,重复调用无害)。
+          if (!voiceRecordingActiveRef.current) void startVoiceRecording();
+        }}
+        onPress={() => {
+          if (voiceSuppressNextPressRef.current) {
+            voiceSuppressNextPressRef.current = false;
+            return;
+          }
+          if (voiceStartedOnPressInRef.current) {
+            // 本次按下已在 pressIn 起录:这次松手属于同一手势,不再当作
+            // 「再点一下停止」;下一次完整点击才会 toggle 停止。
+            voiceStartedOnPressInRef.current = false;
+            return;
+          }
+          toggleVoiceRecording();
+        }}
+        onPressOut={(event) => {
+          if (!voiceLongPressActiveRef.current) return;
+          // 长按路径在此收尾,本次按下的生命周期结束;标记同步清掉,
+          // 手势取消(onTouchCancel)不再重复处理。
           voiceStartedOnPressInRef.current = false;
-          return;
-        }
-        toggleVoiceRecording();
-      }}
-      onPressOut={(event) => {
-        if (!voiceLongPressActiveRef.current) return;
-        // 长按路径在此收尾,本次按下的生命周期结束;标记同步清掉,
-        // 手势取消(onTouchCancel)不再重复处理。
-        voiceStartedOnPressInRef.current = false;
-        const shouldSend = updateVoiceReleaseToSendTarget(event);
-        voiceLongPressActiveRef.current = false;
-        voiceSuppressNextPressRef.current = true;
-        setVoiceReleaseToSendActive(false);
-        if (!voiceRecordingActiveRef.current) {
-          voiceStopAfterStartRef.current = true;
-          return;
-        }
-        void finishVoiceRecording({ sendAfterTranscribe: shouldSend });
-      }}
-      onResponderMove={updateVoiceReleaseToSendTarget}
-      onTouchCancel={() => {
-        // 手势被系统/滚动打断(responder termination):撤销这次按下误触发的
-        // 录音——用户本意是滚动列表,不能留下一个还在采集的麦克风(review P1)。
-        // 正常松手(含拖出按钮后松开)不走这里,对齐桌面「pointercancel 才撤销」。
-        if (!voiceStartedOnPressInRef.current) return;
-        voiceStartedOnPressInRef.current = false;
-        cancelVoiceForGestureTermination();
-      }}
-      style={[
-        styles.composerInlineToolButton,
-        buttonStyle,
-        // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening——
-        // 否则按下瞬间胶囊已展开、底色却要等 ASR 连上才变,闪一次半成品态。
-        voiceRecordingTimer.label !== null && styles.composerToolButtonPrimary,
-        voiceRecordingTimer.label !== null && { width: voiceRecordingTimer.pillWidth },
-      ]}
-      testID="session.voiceButton"
-    >
-      {voiceProcessingIndicator.showProcessing ? (
-        <ActivityIndicator color={colors.textSecondary} size="small" />
-      ) : voiceRecordingTimer.label !== null ? (
-        // 录音中:胶囊展开为脉冲红点 + 计时(对齐桌面 activeRecording 形态),
-        // 点胶囊任意位置停止录音;右缘锚定不动,只向左生长。
-        <VoiceRecordingPillContent label={voiceRecordingTimer.label} testID="session.voiceRecordingPill" />
-      ) : (
-        <Mic color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-      )}
-    </RouteActionButton>
+          const shouldSend = updateVoiceReleaseToSendTarget(event);
+          voiceLongPressActiveRef.current = false;
+          voiceSuppressNextPressRef.current = true;
+          setVoiceReleaseToSendActive(false);
+          if (!voiceRecordingActiveRef.current) {
+            voiceStopAfterStartRef.current = true;
+            return;
+          }
+          void finishVoiceRecording({ sendAfterTranscribe: shouldSend });
+        }}
+        onResponderMove={updateVoiceReleaseToSendTarget}
+        onTouchCancel={() => {
+          // 手势被系统/滚动打断(responder termination):撤销这次按下误触发的
+          // 录音——用户本意是滚动列表,不能留下一个还在采集的麦克风(review P1)。
+          // 正常松手(含拖出按钮后松开)不走这里,对齐桌面「pointercancel 才撤销」。
+          if (!voiceStartedOnPressInRef.current) return;
+          voiceStartedOnPressInRef.current = false;
+          cancelVoiceForGestureTermination();
+        }}
+        style={[
+          styles.composerInlineToolButton,
+          buttonStyle,
+          // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening——
+          // 否则按下瞬间胶囊已展开、底色却要等 ASR 连上才变,闪一次半成品态。
+          voiceRecordingTimer.label !== null && styles.composerToolButtonPrimary,
+          // 宽度由外框 VoicePillWidthFrame 驱动(录音胶囊展开 / 收回的过渡),按钮撑满外框。
+          styles.voicePillFill,
+        ]}
+        testID="session.voiceButton"
+      >
+        {voiceProcessingIndicator.showProcessing ? (
+          <ActivityIndicator color={colors.textSecondary} size="small" />
+        ) : voiceRecordingTimer.label !== null ? (
+          // 录音中:胶囊展开为脉冲红点 + 计时(对齐桌面 activeRecording 形态),
+          // 点胶囊任意位置停止录音;右缘锚定不动,只向左生长。
+          <VoiceRecordingPillContent label={voiceRecordingTimer.label} testID="session.voiceRecordingPill" />
+        ) : (
+          <Mic color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+        )}
+      </RouteActionButton>
+    </VoicePillWidthFrame>
   );
 
   const renderComposerAttachmentButton = () => (
@@ -8900,6 +8912,7 @@ export default function SessionScreen() {
       <Stack.Screen options={COMPANION_NATIVE_HEADER_OPTIONS} />
       <CompanionHeader key={`${auth.accountGeneration}:${deviceId}:${companionResource.ref.id}`}
         resource={companionResource} deviceId={deviceId} deviceName={deviceName} online={!remoteUnavailableReason} controlsReady={companionEntry.ready}
+        settingsRequest={companionSettingsRequest?.sessionId === sessionId ? companionSettingsRequest : undefined}
         working={!!companionWorkingLabel}
         onSearch={() => setSearchOpen(true)}
         onBack={goBackToHome} />
@@ -9016,7 +9029,8 @@ export default function SessionScreen() {
         </View>
         </SessionChromeLayer>
         {sharedTaskExit.dialog}
-        {currentSession ? (
+        <MountOnFirstOpen open={settingsOpen}>{() => (
+          currentSession ? (
           <SessionMenuSheet
             tagDeviceId={deviceId}
             onLeaveSharing={() => void sharedTaskExit.leave()}
@@ -9075,7 +9089,8 @@ export default function SessionScreen() {
             session={currentSession}
             visible={settingsOpen}
           />
-        ) : null}
+        ) : null
+        )}</MountOnFirstOpen>
         <SessionSearchSheet
           activeIndex={activeSearchIndex}
           hasOlderMessages={hasOlderMessages && !isScheduleDetail}
@@ -9097,7 +9112,8 @@ export default function SessionScreen() {
           shareBusy={chipShareBusy}
           target={chipMenuTarget}
         />
-        <ContextSheet
+        <MountOnFirstOpen open={contextSheetOpen}>{() => (
+          <ContextSheet
         media={contextSheetView === 'main' && contextSheetMediaLibraryEnabled ? (
               <RecentPhotosStrip
                 busyAssetIds={uploadingMediaAssetIds}
@@ -9271,7 +9287,9 @@ export default function SessionScreen() {
             />
           )}
         </ContextSheet>
-        {currentSession && !sessionManagedByHost && runtimeOptions && modelSheetSelection && modelSheetRuntimeOptions ? (
+        )}</MountOnFirstOpen>
+        <MountOnFirstOpen open={modelSheetOpen && canUseRemoteSessionControls}>{() => (
+          currentSession && !sessionManagedByHost && runtimeOptions && modelSheetSelection && modelSheetRuntimeOptions ? (
           <ModelPickerSheet
             unified={{
               currentSelection: { agentKind: sessionAgentKind, activeModelId: currentSession.model, selectedProviderId: currentSession.providerId ?? null, selectedEffort: currentSession.effort ?? '', selectedFastMode: !!currentSession.fastMode },
@@ -9328,8 +9346,9 @@ export default function SessionScreen() {
             testID="session.modelSheet"
             visible={modelSheetOpen && canUseRemoteSessionControls}
           />
-        ) : null}
-        {currentSession && collab.eligible ? (
+        ) : null
+        )}</MountOnFirstOpen>
+        <MountOnFirstOpen open={collab.workerForm.modelPicker.open}>{() => currentSession && collab.eligible ? (
           // 协同 Worker 的模型选择:与会话模型浮窗同一套统一模型目录,但只回写 Worker 表单,
           // 不触碰当前任务的模型。iOS 原生 sheet 不能叠开:打开前先收起 + 面板,关闭后再展开。
           <ModelPickerSheet
@@ -9379,7 +9398,7 @@ export default function SessionScreen() {
             testID="session.collabModelSheet"
             visible={collab.workerForm.modelPicker.open}
           />
-        ) : null}
+        ) : null}</MountOnFirstOpen>
         {/* 权限模式独立浮窗(composer 权限图标钮点开)。两端同一语义:点选先关浮窗,关闭完成后
             再走 confirmFullAccessChange + maker:set-permission-mode。 */}
         {currentSession && runtimeOptions ? (
@@ -9449,7 +9468,7 @@ export default function SessionScreen() {
 
                 <ChatFilePathContext.Provider value={chatFilePathContextValue}>
                   <MessageRenderer companion={companionChat}
-                    onCompanionReadThrough={companionChat ? companionEntry.markReadThrough : undefined} companionWorkingLabel={companionWorkGroupLabel}
+                    onOpenCompanionSettings={openCompanionSettings} onCompanionReadThrough={companionChat ? companionEntry.markReadThrough : undefined} companionWorkingLabel={companionWorkGroupLabel}
                     companionAvatar={companionReplyAvatar}
                     companionPluginInvocations={companionPluginInvocations}
                     remoteDeviceId={deviceId}
@@ -12341,6 +12360,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     width: 28,
   },
+  // 语音按钮撑满 VoicePillWidthFrame,宽度由外框的过渡驱动;裁剪保证展开初段
+  // 红点 + 计时尚未装下时不会溢出盖住左邻控件。
+  voicePillFill: { overflow: 'hidden', width: '100%' },
   composerInlineToolButton: {
     alignItems: 'center',
     backgroundColor: colors.sheetActionSurface,

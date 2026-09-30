@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { resolveMobileSessionRowStatus } from '@/session/sessionRightStatus';
 import { i18n } from '@/i18n';
 import {
@@ -7,6 +7,7 @@ import {
   buildRemoteSessionListContext,
   buildRemoteSessionCardPreview,
   buildRemoteSessionSections,
+  createSessionListTranslator,
   buildSessionScheduleIndex,
   deviceSessionEmptyState,
   formatRemoteSessionSidebarTime,
@@ -22,6 +23,25 @@ import type { RemoteMessage, RemoteSession } from '@/session/types';
 
 beforeAll(async () => {
   await i18n.changeLanguage('zh-CN');
+});
+
+it('translates repeated list labels once per build and refreshes on language changes', async () => {
+  const spy = vi.spyOn(i18n, 't');
+  try {
+    const translate = createSessionListTranslator();
+    const first = translate('devices.detail.filter.active');
+    for (let i = 0; i < 1000; i++) expect(translate('devices.detail.filter.active')).toBe(first);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(translate('devices.presentation.sessionList.sessionCount', { count: 1 }))
+      .not.toBe(translate('devices.presentation.sessionList.sessionCount', { count: 2 }));
+    await i18n.changeLanguage('en');
+    const next = createSessionListTranslator();
+    expect(next('devices.detail.filter.active')).toBe(i18n.t('devices.detail.filter.active'));
+    expect(next('devices.detail.filter.active')).not.toBe(first);
+  } finally {
+    spy.mockRestore();
+    await i18n.changeLanguage('zh-CN');
+  }
 });
 
 function session(id: string, patch: Partial<RemoteSession> = {}): RemoteSession {

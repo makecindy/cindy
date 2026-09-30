@@ -4,6 +4,7 @@ import {
   createPeerTransferCooldown,
   canUsePeerInvoke,
   uploadPeerAttachment,
+  canSendPeerAttachment,
   type InvokeResultPayload,
 } from "@cindy/device-link";
 import { useEffect, useRef, useState } from "react";
@@ -32,6 +33,7 @@ import {
   installPeerFileDownload,
   installPeerInvoke,
   installPeerUpload,
+  installPeerUploadProbe,
   installPeerReset,
   recordPeerMedia,
   clearPeerMedia,
@@ -92,7 +94,7 @@ export function PeerFileTransport() {
       `window.filePeerMessage(${JSON.stringify(message)});true;`,
     );
   }
-  async function command(action: string, args: unknown[]) {
+  async function command(action: string, args: unknown[], timeoutMs?: number) {
     return new Promise<unknown>((resolve, reject) => {
       const id = randomUUID();
       let timer = setTimeout(
@@ -100,7 +102,11 @@ export function PeerFileTransport() {
           pending.current.delete(id);
           reject(new Error("FILE_PEER_TIMEOUT"));
         },
-        action === "receive" ? 60_000 : 15000,
+        action === "receive"
+          ? 60_000
+          : timeoutMs && timeoutMs > 15000
+            ? timeoutMs
+            : 15000,
       );
       const entry = {
         resolve,
@@ -171,6 +177,8 @@ export function PeerFileTransport() {
       device: string;
       rpc: boolean;
       attachments: boolean;
+      /** 电脑端直连附件不设固定上限;旧版电脑会拒收超过 OSS 上限的附件。 */
+      largeAttachments: boolean;
     } | null = null;
     let idle: ReturnType<typeof setTimeout> | undefined;
     const close = (notify = true) => {
@@ -260,6 +268,7 @@ export function PeerFileTransport() {
             version?: number;
             streaming?: boolean;
             attachments?: boolean;
+            largeAttachments?: boolean;
           };
           if (!current() || signal?.aborted)
             throw new Error("FILE_PEER_CANCELLED");
@@ -318,6 +327,7 @@ export function PeerFileTransport() {
             device,
             rpc: caps.streaming === true,
             attachments: caps.attachments === true,
+            largeAttachments: caps.largeAttachments === true,
           };
           mobileDebugLog("debug", "files", "direct transfer connected", {
             trace,
@@ -447,6 +457,33 @@ export function PeerFileTransport() {
       },
     );
     const warming = new Set<string>();
+    // 读整份大文件之前的能力确认:复用已建连接的能力,否则只发一次 caps 查询,不建 WebRTC 连接。
+    const unregisterUploadProbe = installPeerUploadProbe(async (device, size) => {
+      const current = captureDevice(device);
+      if (!current() || cooldown.current.remaining(device)) return false;
+      if (connection?.device === device)
+        return canSendPeerAttachment(connection, size);
+      await link.openLink(device);
+      if (!current()) return false;
+      const caps = (await link.invoke<unknown>(device, FILE_PEER_CHANNEL, [
+        { action: "caps" },
+      ])) as {
+        version?: number;
+        attachments?: boolean;
+        largeAttachments?: boolean;
+      } | null;
+      return (
+        current() &&
+        caps?.version === 1 &&
+        canSendPeerAttachment(
+          {
+            attachments: caps.attachments === true,
+            largeAttachments: caps.largeAttachments === true,
+          },
+          size,
+        )
+      );
+    });
     const unregisterUpload = installPeerUpload(
       (device, uri, metadata, signal) => {
         const current = captureDevice(device);
@@ -464,7 +501,12 @@ export function PeerFileTransport() {
               await transfer(device, null, signal);
               check();
               const active = connection;
-              if (!active || active.device !== device || !active.attachments)
+              // 对端不支持(含旧版电脑按 OSS 上限拒收大附件):直接放弃直连,不计入失败冷却。
+              if (
+                !active ||
+                active.device !== device ||
+                !canSendPeerAttachment(active, metadata.size)
+              )
                 return null;
               clearTimeout(idle);
               busy = true;
@@ -481,21 +523,26 @@ export function PeerFileTransport() {
                   for (const byte of bytes) binary += String.fromCharCode(byte);
                   return btoa(binary);
                 },
-                async (request) => {
+                async (request, timeoutMs) => {
                   check();
-                  const raw = await command("invoke", [
-                    active.id,
-                    JSON.stringify({
-                      channel: FILE_PEER_CHANNEL,
-                      args: [
-                        {
-                          action: "attachment",
-                          connection: active.remote,
-                          request,
-                        },
-                      ],
-                    }),
-                  ]);
+                  const raw = await command(
+                    "invoke",
+                    [
+                      active.id,
+                      JSON.stringify({
+                        channel: FILE_PEER_CHANNEL,
+                        args: [
+                          {
+                            action: "attachment",
+                            connection: active.remote,
+                            request,
+                          },
+                        ],
+                      }),
+                      timeoutMs,
+                    ],
+                    timeoutMs,
+                  );
                   check();
                   const response = JSON.parse(String(raw));
                   if (!response.ok) throw new Error("FILE_PEER_UPLOAD");
@@ -583,6 +630,7 @@ export function PeerFileTransport() {
       unregister();
       unregisterInvoke();
       unregisterUpload();
+      unregisterUploadProbe();
       unregisterReset();
       for (const p of pending.current.values()) {
         clearTimeout(p.timer);

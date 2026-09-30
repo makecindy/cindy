@@ -280,12 +280,6 @@ const EXEMPTIONS: Exemption[] = [
     signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }],
   },
   {
-    file: 'src/renderer/features/skillhub/PublishDialog.tsx',
-    rule: 'arb-size',
-    reason: '紧凑代码字号派生值',
-    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_3px)]', expected: 1 }],
-  },
-  {
     file: 'src/renderer/features/skillhub/SkillhubDetailView.tsx',
     rule: 'arb-size',
     reason: '代码字号变量',

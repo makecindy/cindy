@@ -12,6 +12,13 @@ export interface FilePeerRuntimeBridge {
  * V2 keeps a bounded 1 MiB credit window in flight; disk writes replenish credit.
  * V1 remains available for peers that did not advertise streaming support.
  */
+/** 调用方只能在默认 15 秒与 1 小时之间放宽单次 RPC 等待(大附件 finish 要整读重算摘要)。 */
+function rpcTimeoutMs(value: unknown): number {
+  return Number.isSafeInteger(value) && (value as number) > 15000
+    ? Math.min(value as number, 60 * 60_000)
+    : 15000;
+}
+
 export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
   const peers = new Map<
     string,
@@ -23,7 +30,7 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
     string,
     {
       channel: RTCDataChannel;
-      request(payload: string): Promise<string>;
+      request(payload: string, timeoutMs?: number): Promise<string>;
       close(): void;
     }
   >();
@@ -117,15 +124,18 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
     rpcPeers.set(id, {
       channel: dc,
       close: shutdown,
-      request(payload) {
+      request(payload, timeoutMs) {
         if (pending.size >= 4 || dc.readyState !== "open")
           return Promise.reject(new Error("FILE_PEER_UNAVAILABLE"));
         return new Promise((resolve, reject) => {
           const key = String(++sequence);
-          const timer = setTimeout(() => {
-            pending.delete(key);
-            reject(new Error("FILE_PEER_TIMEOUT"));
-          }, 15000);
+          const timer = setTimeout(
+            () => {
+              pending.delete(key);
+              reject(new Error("FILE_PEER_TIMEOUT"));
+            },
+            rpcTimeoutMs(timeoutMs),
+          );
           pending.set(key, { resolve, reject, timer });
           try {
             send(key, false, payload);
@@ -510,10 +520,10 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
     }
   }
   return {
-    async invoke(id: string, payload: string) {
+    async invoke(id: string, payload: string, timeoutMs?: number) {
       const rpc = rpcPeers.get(id);
       if (!rpc) throw new Error("FILE_PEER_UNAVAILABLE");
-      return rpc.request(payload);
+      return rpc.request(payload, timeoutMs);
     },
     async stats(id: string) {
       const p = peers.get(id);

@@ -1,3 +1,4 @@
+import { CompanionLearningFooter } from './CompanionLearningFooter';
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
 import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { AgentErrorDetails } from './AgentErrorDetails';
@@ -630,6 +631,7 @@ const COMPANION_AVATAR_GAP = 10;
 interface MessageActions {
   companion?: boolean;
   onCompanionReadThrough?: (at: number) => void;
+  onOpenCompanionSettings?: (page: 'memory' | 'capabilities') => void;
   companionWorkingLabel?: string | null;
   /** Teammate portrait beside its replies (Desktop withAssistantAvatar). */
   companionAvatar?: ReactNode;
@@ -693,6 +695,7 @@ interface MessageActions {
 export function MessageRenderer({
   companion = false,
   companionWorkingLabel,
+  onOpenCompanionSettings,
   companionAvatar,
   companionPluginInvocations,
   showPluginInvocations = true,
@@ -748,6 +751,7 @@ export function MessageRenderer({
   devRecycleItems = false,
 }: {
   companion?: boolean;
+  onOpenCompanionSettings?: (page: 'memory' | 'capabilities') => void;
   companionWorkingLabel?: string | null;
   companionAvatar?: ReactNode;
   companionPluginInvocations?: ReadonlyMap<string, PluginInvocation[]>;
@@ -1698,6 +1702,7 @@ export function MessageRenderer({
   const actions: MessageActions & { firstUserMessageClientId?: string } = useMemo(() => ({
     companion,
     companionWorkingLabel,
+  onOpenCompanionSettings,
     companionAvatar,
     companionTimeGroups,
     companionPluginWork,
@@ -1735,6 +1740,7 @@ export function MessageRenderer({
   }), [
     companion,
     companionWorkingLabel,
+  onOpenCompanionSettings,
     companionAvatar,
     companionTimeGroups,
     companionPluginWork,
@@ -3790,6 +3796,10 @@ function MessageBubble({
       ) : null}
       {attachmentStripNode}
       {hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0) ? bubble : null}
+      {actions.companion && item.message.kind === 'assistant' && item.message.body.trim() ? (
+        <CompanionLearningFooter receipts={item.message.source.agentMeta?.botLearning}
+          onOpenSettings={actions.onOpenCompanionSettings} />
+      ) : null}
       {actions.companion && item.message.kind === 'assistant' && item.message.turnCompleted === true
         && item.message.body.trim() ? readBotTaskResults(item.message.source.agentMeta?.botTaskResults).map(meta => (
           <CompanionTaskResultCard key={botTaskResultKey(meta)} meta={meta} attached

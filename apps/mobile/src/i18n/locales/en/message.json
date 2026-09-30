@@ -330,5 +330,10 @@
     "remove": "Remove quote",
     "closePreview": "Close quote preview",
     "menuLabel": "Add to chat"
+  },
+  "learning": {
+    "memory": "Remembered: {{title}}",
+    "skillCreated": "Created skill: {{title}}",
+    "skillUpdated": "Updated skill: {{title}}"
   }
 }
