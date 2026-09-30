@@ -908,7 +908,14 @@ export function ModelAdvancedDrawer({
                             // 只在真写入期间禁用。刷新期间(hook 收到 PROVIDER_CHANGED 会重读)
                             // 值原样保留，禁用它只会造成一次多余的明暗跳变；透明度也不动 ——
                             // 与同抽屉协议控件一致(disabled 但不改 opacity)。
-                            disabled={imageInput.saving || provider.id === 'xd'}
+                            // xd 的能力由服务端目录决定、组织托管供应商的能力由管理员下发：两者
+                            // 本机都不可覆盖，控件保留但禁用（与同抽屉其他不可改项一致）；
+                            // Main IPC 侧另有 INVALID_PARAMS / PERMISSION_DENIED 拒写兜底。
+                            disabled={
+                              imageInput.saving ||
+                              provider.id === 'xd' ||
+                              isOrganizationManagedProvider(provider)
+                            }
                             aria-label={t('settings.providers.models.advanced.imageInputOverride.label')}
                             title={
                               primaryModel.modalities || primaryModel.supportsImageInput !== undefined

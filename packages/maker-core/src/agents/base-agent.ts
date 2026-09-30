@@ -874,11 +874,26 @@ export interface AgentDeps {
 
   /**
    * Pi-only:读**活动目录**(含本机 override 合并)里某模型的图片输入能力声明。
-   * `undefined` = 目录未声明(按 override 的「缺字段继承」语义不动会话快照)。
+   * `undefined` = 目录未声明。
    * 只用于旧会话切模时的能力对账(见 pi/index.ts refreshImageCapabilityOnSwitch),
    * 不参与准入 —— 准入仍由会话快照的 input 与 assertImageInputSupported 负责。
    */
   readModelImageInput?: (providerId: string, modelId: string) => boolean | undefined;
+
+  /**
+   * Pi-only:该模型在**活动目录**里最终的图片输入能力(目录与本机 override 合并后的结论)。
+   * 与 readModelImageInput 的区别:后者只回报“显式声明了什么”(未声明即 undefined)，而本项
+   * 回报“最终会怎样”——未声明时按上游 #4854 的语义落到默认支持(见 resolvePiNativeProviders
+   * 的 `supportsImageInput === undefined ? ['text','image'] : ...`)。
+   *
+   * 为什么需要它:能力对账要在“用户把显式声明改回跟随供应商(override 被删、声明读回
+   * undefined)”时，把旧会话快照从纯文本恢复成支持。但这种状态与“目录自己就把该行标成
+   * input:['text']”在 readModelImageInput 看来完全一样(都是 undefined)，快照自身又已被
+   * 上一轮对账改成了纯文本，两者无法区分。只有活动目录的最终结论能判定。
+   *
+   * 拿不到(undefined)时调用方必须保持现状、不翻转快照。
+   */
+  readModelCatalogImageCapability?: (providerId: string, modelId: string) => boolean | undefined;
 
   /**
    * Pi-only:按实际 provider/model 路由解析运行时描述符。用于启动前校验已持久化 effort，

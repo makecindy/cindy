@@ -1990,6 +1990,11 @@ export function registerProviderHandlers(
       if (target.providerId === 'xd') {
         throwIpcError('INVALID_PARAMS', 'Cindy AI Gateway model capabilities are server-controlled');
       }
+      // 组织托管供应商的能力由管理员下发：override 是本机最高优先级，不加这道门就能让运行期
+      // 能力偏离企业配置。与价格 override 同一位置、同一错误码（UI 侧也一并禁用控件）。
+      if (deps.isOrganizationManagedProviderId(target.providerId)) {
+        throwIpcError('PERMISSION_DENIED', 'Enterprise model capabilities are managed by your organization');
+      }
       const ownerAtIngress = captureProviderOwnerSession();
       return withProviderConfigMutation(target.providerId, () =>
         enqueuePriceMutation(async () => {

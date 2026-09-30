@@ -4664,6 +4664,99 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("restores image support when the user returns to following the catalog", async () => {
+    // 用户先显式声明「不支持」（会话快照被写成纯文本），随后改回「跟随供应商」：override 被删、
+    // 声明读回 undefined。此时目录未声明 = 默认支持（上游 #4854），旧会话必须恢复支持图片 ——
+    // 否则只能重开任务。关键在于区分「改回继承」与「目录自己标了 input:['text']」：两者在
+    // readModelImageInput 看来都是 undefined，只有活动目录的最终结论(readModelCatalogImageCapability)
+    // 能分辨，所以对账在目录未声明时必须查这个钩子。
+    const declared = { image: true as boolean | null };  // null = 改回跟随供应商（未声明）
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-restore",
+              name: "Native Restore",
+              baseUrl: "http://restore.test",
+              api: "openai-completions",
+              // 目录本身不标 input（未声明 = 支持），所以“恢复继承”应当回到支持。
+              models: [{ id: "local-model", input: ["text", "image"] }],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      // 目录 spec 说支持（input 含 image），用户先显式声明不支持、随后改回继承。
+      // readModelImageInput 只回报“显式声明了什么”，两种状态在它看来都是 undefined。
+      readModelImageInput: (providerId, modelId) =>
+        providerId === "native-restore" && modelId === "local-model" && declared.image !== null
+          ? declared.image
+          : undefined,
+      // 活动目录的最终结论：未声明 → 默认支持。
+      readModelCatalogImageCapability: (providerId, modelId) =>
+        providerId === "native-restore" && modelId === "local-model" ? true : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-restored-after-inherit",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "native-restore",
+    });
+    const imagePath = path.join(cwd, "restore.png");
+    writeFileSync(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY4YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const imageMessage = {
+      type: "user" as const,
+      content: [
+        {
+          type: "image" as const,
+          path: imagePath,
+          managedUrl: "xdt-image://pi-managed/restore.png",
+        },
+      ],
+    };
+    const readRestoreInput = (): string[] => {
+      const modelsJson = JSON.parse(
+        readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, "models.json"), "utf8"),
+      ) as { providers: Record<string, { models: Array<{ id: string; input: string[] }> }> };
+      const block =
+        modelsJson.providers["native-restore"] ?? modelsJson.providers["cindy-byom-native-restore"];
+      return block!.models.find((entry) => entry.id === "local-model")!.input;
+    };
+
+    // 先显式声明「不支持」：目录 spec 说支持，但用户声明压过它 → 快照被写成纯文本，带图被拒收。
+    declared.image = false;
+    captured.requests.length = 0;
+    await handle.setModel!("local-model", { providerId: "native-restore" });
+    await expect(handle.send(imageMessage)).rejects.toMatchObject({
+      code: "PI_IMAGE_INPUT_UNSUPPORTED",
+    });
+    expect(readRestoreInput()).toEqual(["text"]);
+
+    // 用户改回「跟随供应商」：声明读回 undefined，目录未声明 = 默认支持。
+    declared.image = null;
+    captured.requests.length = 0;
+    await handle.setModel!("local-model", { providerId: "native-restore" });
+    expect(readRestoreInput()).toEqual(["text", "image"]);
+
+    // 旧会话恢复支持图片输入，无需重开任务。
+    captured.requests.length = 0;
+    await handle.send(imageMessage);
+    expect(captured.requests).toContainEqual(
+      expect.objectContaining({
+        type: "prompt",
+        images: [expect.objectContaining({ type: "image" })],
+      }),
+    );
+    await handle.close();
+  });
+
   it("skips the route replay when read-back already matches (spawn-only routes)", async () => {
     // spawn 能靠 custom model id 跑在 Pi 自带目录没有的路由上，对这种路由重发 set_model 会
     // 被 Pi 拒（见 switchModel 开头同路由 no-op 的说明）；而重放失败会 terminate 整个任务 ——

@@ -395,6 +395,18 @@ describe('model advanced editor', () => {
     );
   });
 
+  it('disables the declaration control for organization-managed providers', () => {
+    // 组织托管供应商的能力由管理员下发：本机不可覆盖。控件保留但禁用（与 xd 网关同一约定），
+    // Main IPC 侧另有 PERMISSION_DENIED 拒写兜底 —— 按钮禁用挡不住受信 renderer 直调 preload。
+    const orgProvider = { ...provider, id: 'corp-gateway', source: 'organization' } as ProviderView;
+    render(drawer(model, model.defaultEffort, model.efforts, orgProvider));
+    expect(
+      screen.getByRole('button', {
+        name: 'settings.providers.models.advanced.imageInputOverride.label',
+      }),
+    ).toHaveProperty('disabled', true);
+  });
+
   it('shows the actionable reason from main when a hand-edited file blocks the write', async () => {
     // store 拒绝写入时给出「先修正 model-catalog-overrides.json」的指引；只显示通用
     // 「保存失败」会让用户反复失败却看不到唯一的修复方式。

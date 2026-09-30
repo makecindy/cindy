@@ -3539,6 +3539,29 @@ describe('model catalog image input handlers', () => {
     expect(deps.broadcastChanged).not.toHaveBeenCalled();
   });
 
+  it('rejects enterprise-managed providers so the organization stays authoritative', async () => {
+    // 组织托管供应商的能力由管理员下发；override 是本机最高优先级，不加这道门就能让运行期
+    // 能力偏离企业配置。价格 override 已有同款拒绝，这里必须对齐。
+    const harness = new IpcHarness();
+    const deps = imageDeps({
+      listProviders: async () => [
+        catalogView('corp-gateway', { pi: ['corp-model'] }),
+      ],
+      isOrganizationManagedProviderId: (providerId: string) => providerId === 'corp-gateway',
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_CATALOG_IMAGE_INPUT_SET, {
+        ...target,
+        providerId: 'corp-gateway',
+        modelId: 'corp-model',
+        value: true,
+      }),
+    ).rejects.toThrow(/PERMISSION_DENIED.*managed by your organization/);
+    expect(deps.writeModelCatalogImageInput).not.toHaveBeenCalled();
+  });
+
   it('reports a split declaration and shows the runtime-effective (Pi) value', async () => {
     // 存量数据：手工改文件或旧版单键写入可能让同一行两个引擎键各存一个值。展示值必须取运行期
     // 真正消费该能力的 Pi 那一侧，否则 UI 显示“支持”而 Pi 实际拒收；同时用 diverged 标出分叉，

@@ -6314,7 +6314,8 @@ export class PiAgent extends BaseAgent {
      * 启动时注入的,整体换会踩 xAI 热刷新已知的坑),原子热写 models.json,再让子进程加载
      * (见 reloadImageCapabilityIntoChild;回合在跑时只对齐宿主快照).
      * 心跳会反复下发同路由(见 switchModel 开头的同路由 no-op),所以对账只做一次目录内存查找:
-     * 无变化零 I/O。目录未声明(undefined)按 override 的「缺字段继承」语义不动快照。
+     * 无变化零 I/O。目录未声明(undefined)按「默认支持图片」对齐(上游 #4854 的准入语义)——
+     * 包括「用户先声明不支持、再改回跟随供应商」时把快照从纯文本恢复回支持。
      * 网关(xd)模型的图片能力不在本机声明面内(设置里也没有该入口),不走此路径。
      */
     const refreshImageCapabilityOnSwitch = async (
@@ -6333,31 +6334,33 @@ export class PiAgent extends BaseAgent {
         resolveSourceProvider(specProviderId),
         nextModel,
       );
-      if (fresh === undefined && !imageCapabilityReloadPending) {
-        this.deps.logger.debug('pi image capability refresh skipped', {
-          reason: 'catalog-undeclared',
-          model: nextModel,
-          provider: specProviderId,
-        });
-        return;
-      }
       const specModelId = resolveNativeModelId(specProviderId, nextModel);
       const currentSpec = nativeProviderById.get(specProviderId)
         ?.models.find((candidate) => candidate.id === specModelId);
-      const wantsImage = fresh === true;
-      // 快照基线口径必须与准入门一致（上游 #4854）：目录未声明 input 时按「支持图片」算，
-      // 否则对一个没写 input 的模型声明 false 会被当成「无变化」，声明永远落不下去。
+      // 快照基线口径与准入门一致（上游 #4854）：`input` 未声明时按「支持图片」算。
       const hadImage = (currentSpec?.input ?? ['text', 'image']).includes('image');
-      const mismatch = fresh !== undefined && hadImage !== wantsImage;
-      if (!mismatch && !imageCapabilityReloadPending) {
+      // 目录已声明（本机 override，或目录自己标了不支持）→ 声明就是权威，直接对齐。
+      // 目录未声明（undefined）时需要活动目录的**最终结论**才能判定：此时
+      // 「用户曾声明不支持、刚改回跟随供应商」(应恢复支持) 与「目录自己标 input:['text']」
+      // (应保持纯文本) 在声明面上完全一样。拿不到结论就不翻转快照（保守，不猜）。
+      const catalogCapability =
+        fresh === undefined
+          ? this.deps.readModelCatalogImageCapability?.(
+              resolveSourceProvider(specProviderId),
+              nextModel,
+            )
+          : undefined;
+      const wantsImage = fresh === undefined ? catalogCapability : fresh;
+      const shouldAlign = wantsImage !== undefined && hadImage !== wantsImage;
+      if (!shouldAlign && !imageCapabilityReloadPending) {
         this.deps.logger.debug('pi image capability refresh skipped', {
-          reason: 'matches-snapshot',
+          reason: fresh === undefined ? 'catalog-undeclared' : 'matches-snapshot',
           model: nextModel,
           provider: specProviderId,
         });
         return;
       }
-      if (mismatch) {
+      if (shouldAlign) {
         // 会话快照里根本没有这条模型行（启动后才新增的 BYOM/目录行）：nextProviders 是在旧
         // 快照的 models 数组上 map，写不出这一行 —— 写盘是空操作，却会置 pending 并触发一次
         // 有终止风险的子进程重载，而准入门读的快照始终没变（声明永远不会生效）。显式跳过。
@@ -6393,7 +6396,7 @@ export class PiAgent extends BaseAgent {
         });
       }
 
-      const rollbackBaseline = mismatch ? nativeProviders.slice() : undefined;
+      const rollbackBaseline = shouldAlign ? nativeProviders.slice() : undefined;
       if (rollbackBaseline) {
         const previousProviders = rollbackBaseline;
         const nextProviders: PiNativeProviderSpec[] = previousProviders.map((provider) =>
