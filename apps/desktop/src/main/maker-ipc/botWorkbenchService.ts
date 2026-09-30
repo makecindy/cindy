@@ -34,7 +34,8 @@ import { createLogger } from '../logger.js';
 
 const log = createLogger('bot-workbench');
 const WORKBENCH_FILE = 'workbench.json';
-const MAX_CARDS = 4;
+/** 单次写入最多 4 张(工具层限制);多个工作来源合计最多保留 8 张。 */
+const MAX_CARDS = 8;
 const MAX_ROWS = 5;
 const MAX_DIRECTORIES = 6;
 const GIT_TIMEOUT_MS = 3_000;
@@ -218,7 +219,12 @@ export async function writeBotWorkbench(
 ): Promise<{ cards: BotWorkbenchCard[]; updatedAt: string }> {
   const updatedAt = now.toISOString();
   return mutate(userDataDir, botId, (stored) => {
-    const next = { ...stored, cards: normalizeCards(cards), updatedAt };
+    // 按工作来源替换:伙伴更新「星落美术」的卡片,不该冲掉它给「Filo」整理的卡片。
+    // 空数组仍表示清空全部。
+    const incoming = normalizeCards(cards);
+    const replaced = new Set(incoming.map((card) => card.source ?? ''));
+    const kept = incoming.length === 0 ? [] : stored.cards.filter((card) => !replaced.has(card.source ?? ''));
+    const next = { ...stored, cards: [...incoming, ...kept].slice(0, MAX_CARDS), updatedAt };
     return { next, result: { cards: next.cards, updatedAt } };
   });
 }

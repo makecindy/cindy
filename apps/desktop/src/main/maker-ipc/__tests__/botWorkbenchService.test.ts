@@ -87,8 +87,23 @@ describe('bot workbench storage', () => {
       ],
     });
 
-    expect(normalized?.cards).toHaveLength(4);
+    expect(normalized?.cards).toHaveLength(8);
     expect(normalized?.cards[0].rows).toHaveLength(5);
     expect(normalized?.cards[0].rows[0]).toEqual({ title: '命名不规范', status: '待处理' });
+  });
+});
+
+describe('bot workbench cards across sources', () => {
+  it('replaces only the cards of the sources being updated', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
+    await writeBotWorkbench(root, 'bot-1', [
+      { title: '进度', source: 'Filo', rows: [] },
+      { title: '资产', source: '星落美术', rows: [] },
+    ]);
+    await writeBotWorkbench(root, 'bot-1', [{ title: '交付', source: '星落美术', rows: [] }]);
+    expect((await readBotWorkbench(root, 'bot-1')).cards.map((card) => card.title)).toEqual(['交付', '进度']);
+
+    await writeBotWorkbench(root, 'bot-1', []);
+    expect((await readBotWorkbench(root, 'bot-1')).cards).toEqual([]);
   });
 });

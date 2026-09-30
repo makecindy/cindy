@@ -583,20 +583,22 @@ function WorkRow({
   disabled: boolean;
   onAction: (message: string) => void;
 }) {
+  // 状态并入第二行,标题拿满整行宽度;右侧只留主人能点的按钮。
+  const meta = [row.status, row.detail].filter(Boolean).join(' · ');
   return (
-    <div className="flex items-center gap-3 py-2 [&:not(:first-child)]:border-t [&:not(:first-child)]:border-[var(--border-default)]">
+    <div className="flex items-center gap-3 py-2.5 [&:not(:first-child)]:border-t [&:not(:first-child)]:border-[var(--border-default)]">
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex min-w-0 items-center gap-1.5">
+        <span className="flex min-w-0 items-start gap-1.5">
           {row.flag ? (
-            <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-[var(--warning-accent)]" />
+            <span aria-hidden="true" className="mt-[7px] size-1.5 shrink-0 rounded-full bg-[var(--warning-accent)]" />
           ) : null}
-          <span className="truncate text-13 leading-5 text-[var(--text-primary)]" title={row.title}>
+          <span className="line-clamp-2 text-13 leading-5 text-[var(--text-primary)]" title={row.title}>
             {row.title}
           </span>
         </span>
-        {row.detail ? (
-          <span className="line-clamp-2 text-12 leading-4 text-[var(--text-tertiary)]" title={row.detail}>
-            {row.detail}
+        {meta ? (
+          <span className="line-clamp-2 text-12 leading-4 text-[var(--text-tertiary)]" title={meta}>
+            {meta}
           </span>
         ) : null}
       </div>
@@ -612,8 +614,6 @@ function WorkRow({
         >
           {row.action.label}
         </Button>
-      ) : row.status ? (
-        <span className="shrink-0 text-12 text-[var(--text-tertiary)]">{row.status}</span>
       ) : null}
     </div>
   );
