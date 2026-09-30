@@ -6124,6 +6124,11 @@ export class PiAgent extends BaseAgent {
           if (running && (!native || !native.models.some((candidate) => candidate.id === nextNativeId))) {
             latestProviders = [...latestProviders.filter((entry) =>
               (entry.sourceProviderId ?? entry.id) !== sourceId), running];
+            // Keep the credential paired with the retained endpoint, without
+            // retaining credentials for other providers removed from the catalog.
+            if (running.apiKeyEnvVar && nativeEnv[running.apiKeyEnvVar] !== undefined) {
+              latestEnv = { ...latestEnv, [running.apiKeyEnvVar]: nativeEnv[running.apiKeyEnvVar] };
+            }
             native = running;
           }
         }
@@ -6212,7 +6217,7 @@ export class PiAgent extends BaseAgent {
         purpose: 'live-refresh',
       });
       let nextProviders = live?.providers ?? nativeProviders;
-      const nextEnv = live?.env ?? nativeEnv;
+      let nextEnv = live?.env ?? nativeEnv;
       const sameRoute = model === mutableModel && requestedProviderId === mutableProviderId;
       const sourceId = requestedProviderId === undefined
         ? (model.startsWith('xai/') ? 'xai' : model.startsWith('chatgpt/') ? 'openai' : null)
@@ -6224,6 +6229,9 @@ export class PiAgent extends BaseAgent {
           candidate.id === (next.modelIdAliases?.[model] ?? model)))) {
           nextProviders = [...nextProviders.filter((entry) =>
             (entry.sourceProviderId ?? entry.id) !== sourceId), running];
+          if (running.apiKeyEnvVar && nativeEnv[running.apiKeyEnvVar] !== undefined) {
+            nextEnv = { ...nextEnv, [running.apiKeyEnvVar]: nativeEnv[running.apiKeyEnvVar] };
+          }
         }
       }
       const nextDescriptor = this.deps.resolvePiRuntimeModelDescriptor

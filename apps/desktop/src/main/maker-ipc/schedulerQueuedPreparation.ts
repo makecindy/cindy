@@ -4,6 +4,14 @@ export interface SchedulerQueuedPreparation {
   onPreparationFailed?: (error: unknown) => void;
 }
 
+/** This scheduled run has already failed; its unpersisted prompt must not retry. */
+export class SchedulerQueuedPreparationError extends Error {
+  constructor(cause: unknown) {
+    super('Scheduled prompt preparation failed', { cause });
+    this.name = 'SchedulerQueuedPreparationError';
+  }
+}
+
 export async function runSchedulerQueuedPreparation(
   clientId: string | undefined,
   preparations: Map<string, SchedulerQueuedPreparation>,
@@ -17,6 +25,6 @@ export async function runSchedulerQueuedPreparation(
   } catch (error) {
     onFailure();
     try { preparation.onPreparationFailed?.(error); } catch { /* Preserve the preparation error. */ }
-    throw error;
+    throw new SchedulerQueuedPreparationError(error);
   }
 }

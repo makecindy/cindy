@@ -203,6 +203,7 @@ import { PiRpcRequestTimeoutError } from "../rpc-client.js";
 import {
   PiNativeProviderProxyNotReadyError,
   type AgentDeps,
+  type PiNativeProvidersResult,
 } from "../../base-agent.js";
 import type { ModelDescriptor } from "../../../types/capabilities.js";
 import type { Logger } from "../../../interfaces/logger.js";
@@ -3807,6 +3808,49 @@ describe("Pi provider-aware model routing", () => {
     }));
     expect(captured.requests.filter((request) => request.type === 'refresh_models')).toHaveLength(2);
     expect(captured.requests.some((request) => request.type === 'switch_session')).toBe(false);
+    await handle.close();
+  });
+
+  it.each(['provider', 'model'] as const)('retains only the running credential when its %s disappears during catalog refresh', async (removed) => {
+    let updated = false;
+    const running = {
+      id: 'native-a', name: 'Native A', adapterProvider: 'openai',
+      baseUrl: 'http://old.test', api: 'openai-completions' as const,
+      apiKeyEnvVar: 'CINDY_PI_KEY_ACTIVE',
+      models: [{ id: 'local-model', contextWindow: 200_000 }],
+    };
+    const deps = byomDeps(async (): Promise<PiNativeProvidersResult> => ({
+      providers: [
+        ...(!updated ? [running] : removed === 'model' ? [{ ...running,
+          baseUrl: 'http://new.test', models: [{ id: 'replacement', contextWindow: 200_000 }],
+        }] : []),
+        { id: 'native-b', name: updated ? 'Updated B' : 'B', adapterProvider: 'openai',
+          baseUrl: 'http://b.test', api: 'openai-completions' as const,
+          models: [{ id: 'other-model', contextWindow: 200_000 }] },
+      ],
+      env: updated
+        ? (removed === 'model' ? { CINDY_PI_KEY_ACTIVE: 'new-endpoint-key' } : {})
+        : { CINDY_PI_KEY_ACTIVE: 'running-endpoint-key', CINDY_PI_KEY_UNUSED: 'unused-key' },
+    }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'retained-native-credential', workingDir: cwd,
+      model: 'local-model', providerId: 'native-a',
+    });
+    updated = true;
+    expect(await handle.previewModelSwitch?.('local-model', { providerId: 'native-a' }))
+      .toMatchObject({ action: 'refresh' });
+    await handle.setModel!('local-model', { providerId: 'native-a' });
+    const snapshot = JSON.parse(String(captured.responses.find(response => response.id === 'refresh-input')?.value));
+    expect(snapshot.env.CINDY_PI_KEY_ACTIVE).toBe('running-endpoint-key');
+    expect(snapshot.env).not.toHaveProperty('CINDY_PI_KEY_UNUSED');
+    for (const alias of snapshot.aliases) {
+      if (alias.keyEnv) expect(snapshot.env).toHaveProperty(alias.keyEnv);
+    }
+    const config = JSON.parse(readFileSync(path.join(String(captured.env.PI_CODING_AGENT_DIR), 'models.json'), 'utf8'));
+    expect(config.providers['native-a'].baseUrl).toBe('http://old.test');
+    expect(await handle.previewModelSwitch?.('local-model', { providerId: 'native-a' }))
+      .toMatchObject({ action: 'hot' });
+    expect(captured.closes).toBe(0);
     await handle.close();
   });
 

@@ -29,7 +29,9 @@ describe('queued scheduler pre-send preparation', () => {
     const preparations = new Map([['queued-2', {
       onPreparing: async () => { throw error; }, onPreparationFailed,
     }]]);
-    await expect(runSchedulerQueuedPreparation('queued-2', preparations, onFailure)).rejects.toBe(error);
+    await expect(runSchedulerQueuedPreparation('queued-2', preparations, onFailure)).rejects.toMatchObject({
+      name: 'SchedulerQueuedPreparationError', cause: error,
+    });
     expect(onPreparationFailed).toHaveBeenCalledExactlyOnceWith(error);
     expect(onFailure).toHaveBeenCalledOnce();
     expect(preparations.size).toBe(0);

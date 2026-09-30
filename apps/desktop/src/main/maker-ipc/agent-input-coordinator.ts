@@ -1,6 +1,7 @@
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
+import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 /**
  * AgentInputCoordinator — main 侧排队输入事务协调器。
  *
@@ -4712,6 +4713,18 @@ export class AgentInputCoordinator {
         return;
       }
       if (!active.persisted) {
+        if (head.origin?.kind === 'scheduler' && err instanceof SchedulerQueuedPreparationError) {
+          // The scheduler already settled this run as failed. Do not restore its
+          // prompt without the one-shot route/window preparation it required.
+          latest.activeTurn = null;
+          this.clearCredentialSwitchWait(latest);
+          this.notifyRejectedUserTurn(sessionId, head);
+          this.deps.onDiscardedQueuedMessage?.(sessionId, head);
+          this.emit(sessionId);
+          this.scheduleDrain(sessionId, 'scheduler-preparation-failed');
+          this.deps.onQueueEmptied?.(sessionId);
+          return;
+        }
         if (isSessionRunningError(err)) {
           this.deferQueueHeadAfterSessionRunning(
             sessionId,
