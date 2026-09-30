@@ -37,6 +37,33 @@ import type { LocalPluginOauthRequest, LocalPluginSecretRequest, LocalPluginConn
 
 type FullMaker = typeof window.electronAPI.maker;
 
+export type RemoteCredentialSwitchOutcome =
+  | { kind: 'applied'; sessionId: string }
+  | { kind: 'failed'; sessionId: string; reason: 'apply-failed' | 'rollback-failed' };
+
+/** A deferred model choice settles on its owning device after the invoke has returned. */
+export function subscribeRemoteCredentialSwitchOutcome(
+  sessionId: string,
+  deviceId: string | undefined,
+  callback: (outcome: RemoteCredentialSwitchOutcome) => void,
+): () => void {
+  if (!sessionId) return () => {};
+  return window.electronAPI.deviceLink.onRemotePush((push, ownerStamp) => {
+    const sourceDeviceId = deviceId ?? getStickySessionDeviceId(sessionId);
+    if (!sourceDeviceId || push.deviceId !== sourceDeviceId || !isDeviceLinkRemotePushCurrent(push, ownerStamp)) return;
+    const payload = push.payload;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+    const value = payload as Record<string, unknown>;
+    if (value.sessionId !== sessionId) return;
+    if (push.channel === 'maker:session-credential-switch-applied') {
+      callback({ kind: 'applied', sessionId });
+    } else if (push.channel === 'maker:session-credential-switch-failed' &&
+      (value.reason === 'apply-failed' || value.reason === 'rollback-failed')) {
+      callback({ kind: 'failed', sessionId, reason: value.reason });
+    }
+  });
+}
+
 /** The dedicated local Main API owns the browser and encrypted callback; Renderer sees status only. */
 export function assistRemotePluginOauth(
   sessionId: string,

@@ -918,6 +918,8 @@ export const MAKER_PUSH = {
    * 会话内轻提示。
    */
   SESSION_CREDENTIAL_SWITCH_APPLIED: 'maker:session-credential-switch-applied',
+  /** A deferred Pi model switch failed; the previous route remains authoritative. */
+  SESSION_CREDENTIAL_SWITCH_FAILED: 'maker:session-credential-switch-failed',
   /** cc 默认路由会话的生效计费路由变化 (payload: { sessionId, route })。 */
   CLAUDE_SESSION_ROUTE_CHANGED: 'maker:claude-session-route-changed',
   /**
