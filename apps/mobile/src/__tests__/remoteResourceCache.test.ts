@@ -71,6 +71,29 @@ it('stays silent when a read mark or roster refresh leaves the cache unchanged',
     unsubscribe();
   }
 });
+it('retries a failed cache write on the next unchanged update without notifying', async () => {
+  const { default: storage } = await import('@react-native-async-storage/async-storage');
+  const persistedRead = () => JSON.parse(disk.get('cindy.remoteResources.v1.alice') ?? '{}').read?.['["home","writer"]'];
+  await cacheRemoteResourceItems('alice', 'teammates', rows('home', 100));
+  await cacheRemoteResourceItems('alice', 'teammates', rows('home', 200));
+  vi.mocked(storage.setItem).mockRejectedValueOnce(new Error('disk full'));
+  await markRemoteResourceRead('alice', 'home', 'writer', 200);
+  expect(isRemoteResourceUnread('alice', 'home', 'writer', 200)).toBe(false);
+  expect(persistedRead()).toBe(100);
+  const listener = vi.fn();
+  const unsubscribe = subscribeRemoteResourceCache(listener);
+  try {
+    // A later unchanged update (roster refresh or the same read mark) repairs the disk copy.
+    await markRemoteResourceRead('alice', 'home', 'writer', 200);
+    expect(persistedRead()).toBe(200);
+    expect(listener).not.toHaveBeenCalled();
+    vi.mocked(storage.setItem).mockClear();
+    await cacheRemoteResourceItems('alice', 'teammates', rows('home', 200));
+    expect(storage.setItem).not.toHaveBeenCalled();
+  } finally {
+    unsubscribe();
+  }
+});
 it('restores portable roster data after process restart and never persists runtime facts', async () => {
   await cacheRemoteResourceHome('alice', [{ id: 'teammates', title: 'Companions', resourceKind: 'bot', targets: [{ deviceId: 'home', deviceName: 'Home' }] }]);
   const items = rows('home', 100);
