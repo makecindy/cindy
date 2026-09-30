@@ -815,7 +815,9 @@ function PermissionEvidence({
           testID="interaction.permission.primaryFact">
           <Text selectable style={styles.codeText}>{primary}</Text>
         </ScrollView>
-        : <ScrollView style={styles.permissionCodeBlock} nestedScrollEnabled><Text selectable style={styles.codeText}>{presentation.code}</Text></ScrollView>}
+        // No single fact to lead with: show the whole input, never the 500-character preview, so nothing
+        // the teammate will act on stays hidden behind a truncation.
+        : <ScrollView style={styles.permissionCodeBlock} nestedScrollEnabled><Text selectable style={styles.codeText}>{fullDetails}</Text></ScrollView>}
       {rest.map(([key, value]) => <Text key={key} selectable style={styles.companionMeta}>
         <Text style={styles.companionMetaLabel}>{`${t(`interaction.companion.fields.${key}`)}  `}</Text>{value}
       </Text>)}

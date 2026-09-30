@@ -4,6 +4,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { homeEntryForRoute, readHomeEntry, saveHomeEntry, type CompanionListHref } from './homeEntryPreference';
 import { readHomeNavigationPreferences, type HomeNavigationPreferences } from './homeViewPreferenceStore';
+import { startBoundedStartupRead } from './mobileHomeStartup';
 import { homeNavigationOwner } from './useHomeMode';
 
 const HomeEntryContext = createContext<{ ready: boolean; href: CompanionListHref | null }>({ ready: false, href: null });
@@ -37,7 +38,9 @@ export function HomeEntryProvider({ children }: { children: ReactNode }) {
     const initialRoute = route.current;
     void Promise.all([
       readHomeEntry(owner.accountKey, owner.accountId),
-      readHomeNavigationPreferences(homeNavigationOwner(auth.user)).catch((): HomeNavigationPreferences => ({})),
+      // Same 2s bound as useHomeMode's read of this preference: a stalled read must not hold the splash.
+      startBoundedStartupRead<HomeNavigationPreferences>(readHomeNavigationPreferences(homeNavigationOwner(auth.user)), {})
+        .initial.then((read) => read.value),
     ]).then(([destination, navigation]) => {
       if (cancelled || !isMobileAuthOwnerCurrent(owner)) return;
       // In teammate mode the home already is the teammate list: restoring the older collection route

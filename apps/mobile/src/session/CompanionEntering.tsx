@@ -5,6 +5,8 @@ import { motionDuration, motionEasing } from '@/theme';
 
 /** Only messages this recent animate: history loads, remounts and recycled cells stay still. */
 const FRESH_MS = 15_000;
+/** Fresh ids already played, so a remount inside FRESH_MS stays still. Old rows never need an entry. */
+const MAX_REMEMBERED = 200;
 const animated = new Set<string>();
 
 /**
@@ -47,7 +49,11 @@ export function CompanionEntering({ id, createdAt, kind, children }: {
   if (fresh.current === null) {
     const at = typeof createdAt === 'number' ? createdAt : createdAt ? Date.parse(createdAt) : Number.NaN;
     fresh.current = !animated.has(id) && Number.isFinite(at) && Date.now() - at < FRESH_MS;
-    animated.add(id);
+    if (fresh.current) {
+      animated.add(id);
+      // Insertion order: the oldest id is almost always past FRESH_MS; at worst a remount replays it once.
+      if (animated.size > MAX_REMEMBERED) animated.delete(animated.values().next().value!);
+    }
   }
   return <CompanionFadeIn play={fresh.current} distance={kind === 'send' ? 8 : 6} scaleFrom={kind === 'send' ? 0.96 : undefined}>
     {children}

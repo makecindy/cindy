@@ -276,6 +276,16 @@ it.each(['allowOnce', 'deny'])('companion permission preserves complete evidence
   expect(host.querySelector('[data-testid="interaction.permission.card"]')).toBeNull();
 });
 
+it('companion permission shows the whole input when no single field leads, never the 500-character preview', async () => {
+  const tail = 'unique-tail-' + 'y'.repeat(40);
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'permission', requestId: 'permission-mcp', toolName: 'mcp__notes__append',
+    input: { body: 'z'.repeat(600), target: tail },
+  } }]);
+  await act(async () => root.render(<Harness companion />));
+  expect(host.textContent).toContain(tail);
+});
+
 it('stacks teammate card buttons one per row once any label would wrap at equal width', async () => {
   textLayouts.clear();
   remoteSessionStore.setPendingInteractions('s1', [{ request: {

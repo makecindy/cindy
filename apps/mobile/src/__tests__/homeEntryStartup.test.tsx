@@ -100,6 +100,22 @@ describe('mobile startup entry', () => {
     expect(host.textContent).toContain('tasks');
     expect(h.releaseSplash).toHaveBeenCalled();
   });
+  it('does not hold the overlay behind a stalled teammate-mode read', async () => {
+    vi.useFakeTimers();
+    try {
+      const user = { id: 'u1', passportId: 'p1', membershipKind: 'personal', orgId: null };
+      h.auth = { initialized: true, isAuthenticated: true, user } as typeof h.auth;
+      h.get.mockImplementation(async (key: string) => key.startsWith('cindy.mobile.home.navigation.v1.')
+        ? new Promise<never>(() => {}) : h.storage.get(key) ?? null);
+      await render();
+      expect(h.releaseSplash).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(host.textContent).toContain('tasks');
+      expect(h.releaseSplash).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it.each([null, 'tasks', 'invalid'])('keeps the existing home for stored value %s', async (value) => {
     if (value) h.storage.set('cindy.homeEntry.v1.' + getMobileAuthOwner().accountKey, value);
     await render();

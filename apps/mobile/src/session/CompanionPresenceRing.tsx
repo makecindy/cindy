@@ -10,7 +10,7 @@ const REDUCED_OPACITY = 0.8;
 
 /**
  * 伙伴「在做事」的呼吸环：头像外一圈 statusAccent 描边，透明度在 0.3 与 1 之间呼吸（与任务行运行中
- * 图标同一组参数）。结束时 150ms 淡出后卸载；减弱动效时静止在 0.8。只画环，不占布局：
+ * 图标同一组参数）。结束时 150ms 淡出后卸载；减弱动效时静止在 0.8，结束时直接移除。只画环，不占布局：
  * 调用方把它放在 position: relative 的头像容器里，`gap` 是环内缘到头像的距离。
  */
 export function CompanionPresenceRing({ active, gap = 2, width = 2 }: { active: boolean; gap?: number; width?: number }) {
@@ -24,6 +24,7 @@ export function CompanionPresenceRing({ active, gap = 2, width = 2 }: { active: 
     opacity.stopAnimation();
     if (!active) {
       if (!mountedRef.current) return;
+      if (reduceMotion !== false) { setMounted(false); return; }
       const fade = Animated.timing(opacity, { toValue: 0, duration: motionDuration.fast, easing: Easing.in(Easing.ease), useNativeDriver: true });
       fade.start(({ finished }) => { if (finished) setMounted(false); });
       return () => fade.stop();
