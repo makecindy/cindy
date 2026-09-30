@@ -112,6 +112,8 @@ const projectPiManagedCommandFailure = ${projectPiManagedCommandFailure.toString
 const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_SECRET_ENV_NAMES',
   'CINDY_PI_PERMISSION_FILE',
+  'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
+  'CINDY_PI_FAST_MODELS',
   'CINDY_PI_TURN_TOOL_POLICY',
   PI_PACKAGE_MANAGEMENT_ENV,
   PI_BASH_PACKAGE_HOME_ENV,
@@ -133,6 +135,12 @@ try {
 function withoutPiSecrets(env: Record<string, string | undefined>): Record<string, string | undefined> {
   const clean = { ...env };
   for (const name of SECRET_ENV_NAMES) delete clean[name];
+  // A provider added after session start was absent from the original host-generated list.
+  for (const name of Object.keys(clean)) {
+    if (/^CINDY_PI_KEY_[A-Z0-9_]+$/.test(name)
+      || name === 'CINDY_PI_SESSION_TOKEN' || name === 'CINDY_PI_API_KEY'
+      || name === 'CINDY_PI_OPENAI_PROXY_KEY' || name === 'CINDY_PI_XAI_PROXY_API_KEY') delete clean[name];
+  }
   return clean;
 }
 
@@ -3368,11 +3376,16 @@ class CindyMcpGateway {
             { type: 'object', properties: { ...routineTriggerProperties,
               kind: { type: 'string', enum: ['interval'] },
               intervalMs: { type: 'integer', minimum: 60000, description: 'Interval in milliseconds. One minute = 60000.' },
+              anchorMs: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: 'Original interval anchor in Unix milliseconds; preserve when editing.' },
             }, required: ['id', 'kind', 'intervalMs'], additionalProperties: false },
             { type: 'object', properties: { ...routineTriggerProperties,
               kind: { type: 'string', enum: ['cron'] },
               expression: { type: 'string' }, timezone: { type: 'string' },
             }, required: ['id', 'kind', 'expression', 'timezone'], additionalProperties: false },
+            { type: 'object', properties: { ...routineTriggerProperties,
+              kind: { type: 'string', enum: ['once'] },
+              at: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: 'One-time trigger timestamp in Unix milliseconds.' },
+            }, required: ['id', 'kind', 'at'], additionalProperties: false },
             { type: 'object', properties: { ...routineTriggerProperties,
               kind: { type: 'string', enum: ['event'] },
               sourceId: { type: 'string' }, eventType: { type: 'string' },
@@ -3637,13 +3650,66 @@ function astraResponsesPayload(payload, model) {
   return out;
 }
 
+async function nativeFastPayload(payload, model, ctx) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  if (!model || !['openai-responses', 'azure-openai-responses', 'openai-completions'].includes(model.api)) return undefined;
+  let models;
+  try { models = JSON.parse(process.env.CINDY_PI_FAST_MODELS || '[]'); } catch { return undefined; }
+  if (!Array.isArray(models) || !models.some(item => item.provider === model.provider && item.id === model.id)) return undefined;
+  const out = { ...payload };
+  delete out.service_tier;
+  let timer;
+  try {
+    // No UI is shown: Cindy answers this internal query from current host memory.
+    // Missing/closed hosts and malformed replies must not retain a premium tier.
+    const response = await Promise.race([
+      ctx.ui.input('cindy:request-preferences', JSON.stringify({ provider: model.provider, model: model.id })),
+      new Promise(resolve => { timer = setTimeout(() => resolve(undefined), 5000); }),
+    ]);
+    if (typeof response === 'string' && JSON.parse(response)?.fast === true) out.service_tier = 'priority';
+  } catch { /* A failed preference read falls back to the standard tier. */ }
+  finally { if (timer) clearTimeout(timer); }
+  return out;
+}
+
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
 
 export default async function cindyBridge(pi: any) {
   installTextOnlyTurnPolicy(pi);
-  await registerCindyNativeProviderAdapters(pi);
+  const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi);
+  pi.registerCommand('cindy-native-provider-refresh', {
+    description: 'Cindy internal native provider refresh',
+    handler: async (args: string, ctx: any) => {
+      const nonce = args.trim();
+      if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) return;
+      let code: 'INVALID_PAYLOAD' | 'APPLY_FAILED' | undefined;
+      let mutationStarted = false;
+      try {
+        const raw = await ctx.ui.input('cindy:provider-refresh', JSON.stringify({ nonce }));
+        const snapshot = parseCindyProviderRefreshSnapshot(raw, nonce);
+        if (!snapshot) {
+          code = 'INVALID_PAYLOAD';
+        } else {
+          mutationStarted = true;
+          await nativeProviderAdapters.refresh(snapshot, ctx, SECRET_ENV_NAMES);
+        }
+      } catch {
+        code = mutationStarted ? 'APPLY_FAILED' : 'INVALID_PAYLOAD';
+      }
+      // RPC prompt swallows extension command exceptions. The host must see an
+      // explicit, nonce-bound receipt before accepting a refreshed catalog.
+      try {
+        await ctx.ui.input('cindy:provider-refresh-ack', JSON.stringify(
+          code ? { nonce, ok: false, code } : { nonce, ok: true },
+        ));
+      } catch { /* A missing receipt forces the host to retire this process. */ }
+    },
+  });
   if (!currentPermissionState().reviewOnly) registerCindyQuestionTool(pi);
-  pi.on('before_provider_request', (event, ctx) => astraResponsesPayload(event.payload, ctx.model));
+  pi.on('before_provider_request', async (event, ctx) => {
+    const payload = astraResponsesPayload(event.payload, ctx.model) ?? event.payload;
+    return (await nativeFastPayload(payload, ctx.model, ctx)) ?? payload;
+  });
   const mcpGateway = new CindyMcpGateway();
   // bash 隔离 home 经 resolveBashPackageHome 解析(首次加载读删 + 防篡改 stash,
   // 扩展重载(#3070)经双重验证取回,而不是拿到 undefined 让 bash 永久 fail-closed)。

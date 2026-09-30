@@ -24,6 +24,7 @@ const cleanups: Array<() => void> = [];
 afterEach(() => {
   cleanups.splice(0).forEach((f) => f());
   invalidatePluginOauth();
+  vi.restoreAllMocks();
 });
 const input = { host: 'https://git.example.test/', token: 'synthetic-connection-token' };
 async function harness(fault?: 'vault' | 'owner' | 'manifest' | 'stale', configured = false) {
@@ -167,14 +168,18 @@ async function harness(fault?: 'vault' | 'owner' | 'manifest' | 'stale', configu
     localDeviceId: () => 'desktop',
     openExternal,
     trustIdentity: async () => {},
-    identity: async () => ({
-      ...(await publishedPluginOauthIdentity())!,
-      deviceId: 'cloud-device',
-      realm: 'global' as const,
-      membershipId: 'membership',
-      observedAtMs: Date.now(),
-      expiresAtMs: Date.now() + 60_000,
-    }),
+    identity: async () => {
+      const identity = (await publishedPluginOauthIdentity())!;
+      const observedAtMs = Date.now();
+      return {
+        ...identity,
+        deviceId: 'cloud-device',
+        realm: 'global' as const,
+        membershipId: 'membership',
+        observedAtMs,
+        expiresAtMs: observedAtMs + 60_000,
+      };
+    },
     invoke: async (_device, _channel, args) => {
       const result = await requestPluginOauth('desktop', args[0]);
       wire.push({ request: args[0], result });
@@ -255,6 +260,10 @@ describe('authenticated exact-host connection form', () => {
   });
   it('writes through the existing connection manager and resumes the card without plaintext in transport/history', async () => {
     const h = await harness();
+    const observedAt = Date.now();
+    let clockTicks = 0;
+    // Consecutive reads can cross a millisecond boundary on any platform.
+    vi.spyOn(Date, 'now').mockImplementation(() => observedAt + clockTicks++);
     await expect(h.submit()).resolves.toEqual({ accepted: true });
     await expect(h.ready).resolves.toMatchObject({ ok: true });
     expect(h.manager.resolveTokenByHost('demo', 'service', 'git.example.test')).toBe(input.token);

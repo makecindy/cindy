@@ -8,46 +8,31 @@
  * 本工厂接线。
  */
 
-/** onApplied 唤醒的 wake reason,coordinator 日志与测试断言共用同一常量。 */
-export const DEFERRED_RESTART_WAKE_REASON = 'deferred-codex-restart-applied';
-
-interface GateSessionShape {
-  id: string;
-  agentKind: string;
-  remoteHostId?: string | null;
-}
+/** 重启尝试收口后的 wake reason，包括失败后释放输入队列。 */
+export const DEFERRED_RESTART_WAKE_REASON = 'deferred-codex-restart-settled';
 
 /**
  * coordinator 的 hasPendingCredentialSwitch 谓词:
  *  1. 延迟凭证切换登记表里有该会话 → 挡;
- *  2. 延迟 Codex 重启 pending 期间,本地 Codex live 会话 → 挡 —— 否则排队消息
- *     在旧 host 上接续开新 turn,重启被无限顺延(review P1 2026-07-23)。未
- *     spawn / 已关闭的会话不挡:fresh spawn 本来就读新设置。
- * maker 是 dynamic facade,owner 边界窗口 listActiveSessions 会抛 → 按不挡
- * 处理(边界会清 pending)。
+ *  2. 实际重启中的本地 Codex 会话 → 暂停派发，包括重启刚关闭的会话。
+ * 等待全局空闲的 pending 不阻塞输入。重启范围由 service 的关闭前快照确定，
+ * 不能从 live 列表推断，否则关闭到 bridge 替换完成之间会过早放行。
  */
 export function createDeferredRestartQueueGate(deps: {
   hasPendingCredentialSwitchEntry: (sessionId: string) => boolean;
-  isDeferredRestartPending: () => boolean;
-  listActiveSessions: () => GateSessionShape[];
+  isSessionRestarting: (sessionId: string) => boolean;
 }): (sessionId: string) => boolean {
   return (sessionId) => {
     if (deps.hasPendingCredentialSwitchEntry(sessionId)) return true;
-    if (!deps.isDeferredRestartPending()) return false;
-    try {
-      const session = deps.listActiveSessions().find((s) => s.id === sessionId);
-      return !!session && session.agentKind === 'codex' && !session.remoteHostId;
-    } catch {
-      return false;
-    }
+    return deps.isSessionRestarting(sessionId);
   };
 }
 
 /**
- * DeferredCodexRestartService.onApplied 的接线:重启兑现后逐会话唤醒输入队列,
+ * DeferredCodexRestartService.onQueueGateReleased 的接线:尝试收口后逐会话唤醒输入队列,
  * wake reason 固定为 DEFERRED_RESTART_WAKE_REASON。
  */
-export function createDeferredRestartAppliedWake(deps: {
+export function createDeferredRestartSettledWake(deps: {
   wakeSession: (sessionId: string, reason: string) => void;
 }): (sessionIds: string[]) => void {
   return (sessionIds) => {

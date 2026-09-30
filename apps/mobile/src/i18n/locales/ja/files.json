@@ -131,6 +131,7 @@
     "browserCancelAddress": "編集をキャンセル",
     "browserReturnToFile": "ファイルに戻る",
     "browserCopyAddress": "アドレスをコピー",
+    "browserCopiedAddress": "アドレスをコピーしました",
     "browserInvalidAddress": "有効な http または https アドレスを入力してください。",
     "browserWebsiteFailed": "ウェブページを開けません。再読み込みしてください。"
   },
@@ -140,6 +141,6 @@
     "exportTimeout": "書き出しがタイムアウトしました。もう一度お試しください。"
   },
   "gallery": {
-    "cacheMiss": "リモートメディアのキャッシュミス（cachedOnly）"
+    "cacheMiss": "このメディアはまだスマートフォンにキャッシュされていません。パソコンに接続できるときにもう一度開いてください"
   }
 }

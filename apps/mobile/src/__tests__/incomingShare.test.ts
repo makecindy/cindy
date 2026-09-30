@@ -13,7 +13,7 @@ import {
 } from '@/session/incomingShare';
 
 const convertToJpeg = vi.fn(async (uri: string) => `${uri}.jpg`);
-const deleteAsync = vi.hoisted(() => vi.fn(async () => undefined));
+const deleteAsync = vi.hoisted(() => vi.fn(async (_uri: string, _options: { idempotent: boolean }) => undefined));
 vi.mock('expo-file-system/legacy', () => ({ deleteAsync }));
 
 vi.mock('@/session/pastedImageAttachment', async (importOriginal) => {
@@ -124,7 +124,7 @@ describe('incoming Share Extension payloads', () => {
     });
   });
 
-  it('falls back to a decoded URI basename and rejects unsupported attachment types', () => {
+  it('falls back to a decoded URI basename and accepts any attachment type', () => {
     const result = selectIncomingShareUploadCandidates([
       payload({
         contentUri: 'file:///shared/My%20Notes.md',
@@ -146,8 +146,12 @@ describe('incoming Share Extension payloads', () => {
       name: 'My Notes.md',
       size: 0,
       mimeType: 'text/markdown',
-    }]);
-    expect(result.rejectedUris).toEqual(['file:///shared/archive.zip']);
+    }, expect.objectContaining({
+      kind: 'file',
+      uri: 'file:///shared/archive.zip',
+      name: 'archive.zip',
+    })]);
+    expect(result.rejectedUris).toEqual([]);
   });
 
   it('keeps a batch until the matching consumer acknowledges it exactly once', () => {
@@ -190,6 +194,16 @@ describe('incoming Share Extension payloads', () => {
     })]);
     expect(consumeIncomingShareBatch(secondId)).toBe(true);
     expect(native.clearSharedPayloads).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains the mailbox until durable acknowledgement succeeds', () => {
+    const acknowledge = vi.fn().mockImplementationOnce(() => { throw new Error('storage unavailable'); });
+    const batch = stageIncomingShareBatch([payload({})], acknowledge)!;
+    expect(() => consumeIncomingShareBatch(batch.id)).toThrow('storage unavailable');
+    expect(stageIncomingShareBatch([payload({})], vi.fn())).toBe(batch);
+    expect(consumeIncomingShareBatch(batch.id)).toBe(true);
+    expect(consumeIncomingShareBatch(batch.id)).toBe(false);
+    expect(acknowledge).toHaveBeenCalledTimes(2);
   });
 
   it('never treats remote URLs as local upload/cleanup targets', () => {

@@ -79,11 +79,11 @@ describe('supplier import follows Gateway native model defaults', () => {
     expect(refreshed.models['claude-code']![0].defaultEnabled).toBe(false);
   });
 
-  it('does not infer native declarations from hand-written IDs on unrelated endpoints', () => {
+  it('uses declared manufacturer families on unrelated endpoints without enabling compatibility', () => {
     const provider = buildUserProvider({ id: 'proxy', name: 'Proxy', runtimes: {
       codex: { baseUrl: 'https://proxy.example/v1', models: [{ id: 'google/gemini-99', name: 'Gemini', api: 'openai-responses' }] },
     } }, options);
-    expect(provider.models.codex![0].nativeApi).toBeUndefined();
+    expect(provider.models.codex![0].nativeApi).toBe('google-generative-ai');
     expect(provider.models.codex![0].defaultEnabled).toBe(false);
   });
 

@@ -85,6 +85,26 @@ describe('automatic process detail reading', () => {
 
 import { HistoryViewController } from '../historyViewController.js';
 import { renderHistoryView } from '../historyViewRender.js';
+
+it('does not bind subagent detail fetching to a desktop summary-only enclosing group', async () => {
+  const source = [row(0, 'user', 'Question'), row(1, 'tool_use', { toolName: 'Agent', toolUseId: 'toolu_a', input: {} }),
+    { ...row(2, 'thinking', 'Internal'), agentMeta: { parentUuid: 'toolu_a' } }, row(3, 'assistant', 'Answer')];
+  const details = vi.fn();
+  const view = new HistoryViewController<HistoryMessageSource>({
+    page: async () => ({ version: 1, items: projectHistoryView(source, false, true), hasMore: false, nextCursor: null }),
+    details, expanded: async () => undefined,
+  });
+  await view.refresh();
+  type Item = { ids: string[]; children?: Item[]; deferred?: unknown };
+  const rendered = renderHistoryView<HistoryMessageSource, Item>({ view, snapshot: view.getSnapshot(), liveMessages: [], streaming: false,
+    build: () => [{ ids: [], children: [{ ids: ['c1'] }] }],
+    structure: { placeholder: () => source[0], children: (item) => item.children, sourceIds: (item) => item.ids,
+      rebuild: (item, children, deferred) => ({ ...item, children, deferred }) },
+  });
+  expect(rendered[0].deferred).toBeUndefined();
+  expect(details).not.toHaveBeenCalled();
+  view.setActive(false);
+});
 import type { HistoryViewPage } from '../historyView.js';
 const ungroupedStructure = {
   placeholder: (summary: import('../historyView.js').HistoryWorkSummary) => ({ ...row(1, 'thinking', ''),
@@ -436,6 +456,33 @@ describe('shared history view lifecycle', () => {
       build: rows => [...rows], structure: ungroupedStructure });
     expect(output).toEqual([known, users[0], first, users[1], users[2], second, users[3]]);
     expect(liveMessages).toEqual([known, users[0], second, users[1], users[2], first, users[3]]);
+    view.setActive(false);
+  });
+
+  it('keeps ephemeral cards in local order without reviving removed history or duplicating persisted rows', async () => {
+    type Message = HistoryMessageSource & { localCard?: boolean };
+    const source = [row(10, 'assistant', 'history'), row(11, 'user', 'next question')];
+    const view = new HistoryViewController<Message>({
+      page: async () => ({ version: 1, items: projectHistoryView(source, false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    // Local cards may be older than remote history; timestamps cannot locate them.
+    const help = { ...row(1, 'assistant', 'help'), localCard: true };
+    const cost = { ...row(2, 'assistant', 'cost'), localCard: true };
+    const render = (liveMessages: Message[]) => renderHistoryView<Message, unknown>({
+      view, snapshot: view.getSnapshot(), liveMessages, streaming: false,
+      isLocalMessage: (message) => message.localCard === true,
+      build: (rows) => [...rows], structure: ungroupedStructure,
+    });
+    expect(render([source[0], help, cost, source[1], row(20, 'assistant', 'stale history')]))
+      .toEqual([source[0], help, cost, source[1]]);
+    source.splice(1, 0, help);
+    await view.refresh();
+    expect(render([source[0], { ...help, content: 'stale local copy' }, cost, source[2]]))
+      .toEqual([source[0], help, cost, source[2]]);
+    expect(render(source)).toEqual(source);
     view.setActive(false);
   });
 

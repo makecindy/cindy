@@ -230,7 +230,7 @@ export function AgentResourceSection() {
             高度恒等于四者中最高的一段,与窗口宽度和语言都无关(固定 min-height 只是下限,
             长文案照样会溢出撑高)。因为与宽度无关,提示就留在左列、不必独占整行,分段控件
             才能像同卡其它行一样相对「标签 + 说明」整块垂直居中。 */}
-        <div className={ROW_CLASS}>
+        <div className={cn(ROW_CLASS, 'cindy-segmented-row')}>
           <div className="flex min-w-0 flex-col gap-1">
             <p id="settings-search-settings-agentResource-preset" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
               {t('settings.agentResource.preset')}
@@ -302,7 +302,7 @@ export function AgentResourceSection() {
         <div className={DIVIDER_CLASS} />
 
         {/* 进程优先级 */}
-        <div className={ROW_CLASS}>
+        <div className={cn(ROW_CLASS, 'cindy-segmented-row')}>
           <div className="flex min-w-0 flex-col gap-1">
             <p id="settings-search-settings-agentResource-priority" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
               {t('settings.agentResource.priority')}

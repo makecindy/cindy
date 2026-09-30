@@ -6,7 +6,7 @@
     "footerConnecting": "連線中…",
     "folderEmpty": "資料夾為空。",
     "noWorkdir": "該任務沒有工作目錄，無法瀏覽檔案。",
-    "rootDir": "(根目錄)",
+    "rootDir": "（根目錄）",
     "copyPath": "複製路徑",
     "sendToSession": "傳送到對話",
     "exportShare": "匯出 / 分享",
@@ -100,7 +100,7 @@
     "fetchPdfFailed": "取回 PDF 失敗：{{detail}}",
     "fetchingPdf": "正在從電腦取回 PDF…",
     "unsupportedType": "此型別暫不支援在手機上預覽",
-    "oversize": "檔案超過預覽上限({{size}})，可下載原檔案檢視",
+    "oversize": "檔案超過預覽上限（{{size}}），可下載原檔案檢視",
     "oversizeUnknown": "過大",
     "binaryFile": "二進位制檔案，無法以文字預覽",
     "readFailed": "讀取失敗",
@@ -131,6 +131,7 @@
     "browserCancelAddress": "取消編輯",
     "browserReturnToFile": "返回檔案",
     "browserCopyAddress": "複製網址",
+    "browserCopiedAddress": "已複製網址",
     "browserInvalidAddress": "請輸入有效的 http 或 https 網址。",
     "browserWebsiteFailed": "無法開啟網頁，請嘗試重新載入。"
   },
@@ -140,6 +141,6 @@
     "exportTimeout": "匯出超時，請重試"
   },
   "gallery": {
-    "cacheMiss": "遠端媒體快取未命中(cachedOnly)"
+    "cacheMiss": "這個媒體還沒有快取到手機上，請在連上電腦後重新開啟"
   }
 }

@@ -1,4 +1,5 @@
 import { recentTaskKey } from '@/session/recentTasks';
+import { readComposerEntry } from '@/session/composerMorph';
 import { RecentMessageHistoriesProvider } from '@/session/RecentMessageHistories';
 import { ResidentHomeListProvider } from '@/session/ResidentHomeList';
 import { AndroidUpdateSheet } from '@/update/AndroidUpdateSheet';
@@ -19,14 +20,7 @@ import { useTranslation } from 'react-i18next';
 import { Alert, AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import { ConnectionNoticeProvider } from '@/components/ConnectionNoticeOverlay';
-import {
-  fontWeight,
-  radius,
-  spacing,
-  typeScale,
-  useThemedStyles,
-  type ThemeColors,
-} from '@/theme';
+import { fontWeight, lineHeight, radius, spacing, typeScale, useThemedStyles, type ThemeColors } from '@/theme';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AdaptiveWindowProvider } from '@/platform/AdaptiveWindow';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
@@ -45,6 +39,7 @@ import {
 } from '@/device-link/DeviceLinkContext';
 import { PushNotificationsBridge } from '@/notifications/PushNotificationsBridge';
 import { GestureHandlerRootView } from '@/platform/gestureHandler';
+import { OutsideTapProvider } from '@/platform/OutsideTap';
 // import 即同步完成 i18next init;必须先于任何 t() 消费方挂载。
 import '@/i18n';
 import { LocaleProvider } from '@/i18n/useLocale';
@@ -83,10 +78,16 @@ import {
   recoverPendingPrecreatedWorktrees,
 } from '@/session/precreatedWorktreeRecovery';
 import { IncomingShareBridge } from '@/session/IncomingShareBridge';
+import { usePendingSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
+import { useClipboardSharedTaskInvitation } from '@/device-link/useClipboardSharedTaskInvitation';
+import { ClipboardSharedTaskPrompt } from '@/session/ClipboardSharedTaskPrompt';
 import { HomeEntryProvider, useHomeEntrySplashRelease } from '@/session/HomeEntryProvider';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
 
+const holdSplash = () => undefined;
+
 function NavigationGate() {
+  const pendingSharedTaskInvitation = usePendingSharedTaskInvitationIntent();
   const windowGeometry = useAdaptiveWindow();
   // Establish chrome before push starts, rather than revealing a hidden bar after mount.
   const sessionHeaderShown = Platform.OS === 'ios'
@@ -94,7 +95,8 @@ function NavigationGate() {
   const auth = useAuth();
   const router = useRouter();
   const segments = useSegments();
-  const { mode, colors } = useTheme();
+  useClipboardSharedTaskInvitation(auth.initialized && auth.isAuthenticated, segments.join('/') === 'shared-session');
+  const { mode, colors, preferenceReady } = useTheme();
   const { releaseSplash, splashActive } = useStartupSplash();
   // iOS 状态栏样式走 react-native-screens 的 VC-based 通道(Info.plist 已翻
   // UIViewControllerBasedStatusBarAppearance=YES):iOS 27 起 UIKit 不再接受
@@ -118,7 +120,8 @@ function NavigationGate() {
 
   // 登录与本机首页偏好就绪、默认入口重定向完成后再释放常驻 splash。
   // 深链不经过 index；同样在这里释放，避免先露出任务再跳回伙伴。
-  useHomeEntrySplashRelease(releaseSplash);
+  // 显示模式偏好读回前不释放，避免已选浅色 / 深色的用户先看到系统外观再切换。
+  useHomeEntrySplashRelease(preferenceReady ? releaseSplash : holdSplash);
 
   // 启动链走完 = 本次热更 reload(如果有)确实落地:清掉 reload 闸门记录。
   // 只在目标 update 已成为当前运行版本时才清,判定在 markStartupOtaLaunchSuccess 内。
@@ -134,9 +137,12 @@ function NavigationGate() {
       return;
     }
     if (auth.isAuthenticated && inAuthGroup) {
-      router.replace('/');
+      if (pendingSharedTaskInvitation?.source === 'link') router.replace('/shared-session');
+      else router.replace('/');
+    } else if (auth.isAuthenticated && pendingSharedTaskInvitation?.source === 'link' && segments.join('/') !== 'shared-session') {
+      router.replace('/shared-session');
     }
-  }, [auth.initialized, auth.isAuthenticated, router, segments]);
+  }, [auth.initialized, auth.isAuthenticated, pendingSharedTaskInvitation, router, segments]);
 
   useEffect(() => {
     if (!auth.isAuthenticated || !auth.accountDeletionRestored) return;
@@ -187,6 +193,11 @@ function NavigationGate() {
             headerBackVisible: false,
             headerStyle: { backgroundColor: 'transparent' },
           }} />
+          {/* 新建页只在圆钮形变仍可交接时关掉推入动画（形变本身就是入场）；
+              交接记录已过期就照常推入，页面进入后再恢复普通返回动画。 */}
+          <Stack.Screen name="sessions/new" options={({ route }) => ({
+            animation: readComposerEntry((route.params as { composerMorph?: string } | undefined)?.composerMorph) ? 'none' : 'default',
+          })} />
           {/* 设置从左侧抽屉进入:接着抽屉方向从左边推出,不要默认从右边盖上来。 */}
           <Stack.Screen name="settings" options={{ animation: 'slide_from_left' }} />
           <Stack.Screen
@@ -197,6 +208,7 @@ function NavigationGate() {
         </RecentMessageHistoriesProvider>
         </ResidentHomeListProvider>
       </RemoteDesktopHost>
+      {auth.initialized && auth.isAuthenticated && !splashActive && <ClipboardSharedTaskPrompt accountName={auth.user?.name} />}
     </NavigationThemeProvider>
   );
 }
@@ -450,6 +462,7 @@ function RootLayout() {
   }
   return (
     <GestureHandlerRootView style={styles.gestureRoot}>
+      <OutsideTapProvider>
       <SafeAreaProvider>
         <AdaptiveWindowProvider>
         <ThemeProvider>
@@ -471,6 +484,7 @@ function RootLayout() {
         </ThemeProvider>
         </AdaptiveWindowProvider>
       </SafeAreaProvider>
+      </OutsideTapProvider>
     </GestureHandlerRootView>
   );
 }
@@ -553,11 +567,13 @@ const makeGateStyles = (colors: ThemeColors) =>
     title: {
       color: colors.textPrimary,
       fontSize: typeScale.title,
-      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.title,
+      fontWeight: fontWeight.semibold,
     },
     subtitle: {
       color: colors.textSecondary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       textAlign: 'center',
     },
     retryButton: {
@@ -571,8 +587,9 @@ const makeGateStyles = (colors: ThemeColors) =>
       opacity: 0.7,
     },
     retryLabel: {
-      color: colors.surface,
+      color: colors.ctaText,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
   });

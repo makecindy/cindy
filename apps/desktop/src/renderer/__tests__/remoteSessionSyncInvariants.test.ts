@@ -150,7 +150,8 @@ describe('CCAgentSessionView 接线不变式', () => {
       resolve(__dirname, '..', 'features', 'cc-agent', 'sidebar', 'SessionTaskMenu.tsx'),
       'utf8',
     );
-    expect(menuSource).toContain("item('openInNewWindow', onOpenInNewWindow, writeBlocked)");
+    expect(menuSource).toContain('const ownerActionsBlocked = writeBlocked || guest');
+    expect(menuSource).toContain("item('openInNewWindow', onOpenInNewWindow, ownerActionsBlocked)");
     expect(menuSource).toContain('disabled={disabled}');
   });
   it('live / 历史错误横幅都携带 SSH 与 device-link 执行端归属', () => {

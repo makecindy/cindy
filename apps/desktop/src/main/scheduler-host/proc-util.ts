@@ -55,10 +55,10 @@ function killWindowsTreeBestEffort(
   pid: number,
   child: ChildProcess,
   attempt: number,
-  onSettled?: () => void,
+  onSettled?: (treeTerminated: boolean) => void,
 ): void {
   if (childExited(child)) {
-    onSettled?.();
+    onSettled?.(false);
     return;
   }
   try {
@@ -68,7 +68,7 @@ function killWindowsTreeBestEffort(
       if (attemptFinished) return;
       attemptFinished = true;
       if (childExited(child)) {
-        onSettled?.();
+        onSettled?.(false);
         return;
       }
       if (attempt < WIN32_TASKKILL_MAX_ATTEMPTS) {
@@ -78,7 +78,7 @@ function killWindowsTreeBestEffort(
         ).unref?.();
       } else {
         killDirectChild(child);
-        onSettled?.();
+        onSettled?.(false);
       }
     };
     killer.on('exit', (code) => {
@@ -88,12 +88,12 @@ function killWindowsTreeBestEffort(
       }
       if (attemptFinished) return;
       attemptFinished = true;
-      onSettled?.();
+      onSettled?.(true);
     });
     killer.on('error', onFailure);
   } catch {
     killDirectChild(child);
-    onSettled?.();
+    onSettled?.(false);
   }
 }
 
@@ -107,7 +107,8 @@ function killWindowsIdentityBoundFailClosed(child: ChildProcess): void {
 }
 
 /**
- * @param onSettled 可选:本函数已经完成安全的树杀与必要确认时调用一次。调用方
+ * @param onSettled 可选:清理尝试结束时调用一次；参数仅在树杀命令成功时为 true，
+ *   直接子进程退出或兜底 kill 不代表后代已退出。调用方
  *   应该**只在这个回调里**武装"强制 settle"
  *   计时器,不要在调用 killProcessTree 后立即武装——否则计时器和收敛动作并行
  *   赛跑,大概率在真正收敛前就抢跑判定超时。Windows 严格模式故意不回调,
@@ -116,7 +117,7 @@ function killWindowsIdentityBoundFailClosed(child: ChildProcess): void {
 export function killProcessTree(
   pid: number | undefined,
   child: ChildProcess,
-  onSettled?: () => void,
+  onSettled?: (treeTerminated: boolean) => void,
   options: KillProcessTreeOptions = {},
 ): void {
   if (process.platform === 'win32' && pid) {
@@ -130,7 +131,7 @@ export function killProcessTree(
   if (process.platform !== 'win32' && pid) {
     try {
       process.kill(-pid, 'SIGKILL');
-      onSettled?.();
+      onSettled?.(true);
       return;
     } catch {
       /* 进程组已不存在,回落单进程 kill */
@@ -141,5 +142,5 @@ export function killProcessTree(
   } catch {
     /* 进程已退出 */
   }
-  onSettled?.();
+  onSettled?.(false);
 }

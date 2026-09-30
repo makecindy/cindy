@@ -112,7 +112,13 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
     const runClient = (env: NodeJS.ProcessEnv): Record<string, unknown> => {
       const probe = spawnSync(
         PYTHON!,
-        ['-c', 'from protocol import DuplexClient\nDuplexClient().emit_complete("ok")'],
+        [
+          '-c',
+          // Inject stdin/stdout so this probe never hijacks fd 1. On Windows,
+          // DuplexClient's default stdout takeover plus spawnSync pipes can
+          // hang until timeout (status null) even when python itself is real.
+          'import sys\nfrom protocol import DuplexClient\nDuplexClient(reader=sys.stdin, writer=sys.stdout).emit_complete("ok")',
+        ],
         {
           cwd: tmp,
           env: { ...baseEnv, ...env, PYTHONUTF8: '1' },
@@ -122,7 +128,10 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
           timeout: 10_000,
         },
       );
-      expect(probe.status, probe.stderr).toBe(0);
+      expect(
+        probe.status,
+        `stderr=${probe.stderr} error=${String(probe.error ?? '')} signal=${String(probe.signal ?? '')}`,
+      ).toBe(0);
       return JSON.parse(probe.stdout.trim()) as Record<string, unknown>;
     };
 

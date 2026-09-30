@@ -19,16 +19,16 @@ function confirmingAlert() {
 describe("getFullAccessConfirmationCopy", () => {
   it("selects the supported system language and falls back to English", () => {
     expect(getFullAccessConfirmationCopy("ja").confirm).toBe(
-      "Full access を有効にする",
+      "フルアクセスを有効にする",
     );
     expect(getFullAccessConfirmationCopy("ko-KR").cancel).toBe(
       "현재 권한 유지",
     );
     expect(getFullAccessConfirmationCopy("zh-Hans-CN").title).toBe(
-      "开启 Full access？",
+      "开启完全访问？",
     );
     expect(getFullAccessConfirmationCopy("zh-Hant-TW").title).toBe(
-      "開啟 Full access？",
+      "開啟完全訪問？",
     );
     expect(getFullAccessConfirmationCopy("fr").title).toBe(
       "Enable Full access?",

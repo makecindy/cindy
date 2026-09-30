@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Image as NativeImage, Platform, StyleSheet, View } from "react-native";
+import { Image as NativeImage, PixelRatio, Platform, StyleSheet, View } from "react-native";
 import Svg, {
   ClipPath,
   Defs,
@@ -26,7 +26,7 @@ import {
   conversationShareSvgRenderSize,
   type ConversationShareSvgBubble,
 } from "@/session/conversationShareSvgLayout";
-import { typeScale } from "@/theme";
+import { monoFont, typeScale } from "@/theme";
 
 export interface ConversationShareSvgHandle {
   exportPng(): Promise<string>;
@@ -122,7 +122,11 @@ export const ConversationShareSvg = forwardRef<
     });
   }, [imageKeysByUri, layout.images]);
   const renderSize = useMemo(
-    () => conversationShareSvgRenderSize(layout),
+    () =>
+      conversationShareSvgRenderSize(
+        layout,
+        Platform.OS === "android" ? PixelRatio.get() : 1,
+      ),
     [layout],
   );
   const logoAsset = colors.dark ? shareLogoDarkAsset : shareLogoLightAsset;
@@ -387,11 +391,21 @@ function SvgBubbleView({ bubble }: { bubble: ConversationShareSvgBubble }) {
           y={bubble.y}
         />
       ) : null}
+      {bubble.rectangles?.map((rect, index) => (
+        <Rect
+          key={`rect-${index}`}
+          {...rect}
+          strokeWidth={SHARE_BUBBLE_STROKE_WIDTH}
+        />
+      ))}
       {bubble.textBlocks.map((block, blockIndex) => (
         <SvgText
           fill={block.color}
-          fontFamily="Arial"
+          fontFamily={block.monospace ? monoFont : "Arial"}
           fontSize={block.fontSize}
+          fontWeight={block.bold ? "bold" : "normal"}
+          fontStyle={block.italic ? "italic" : "normal"}
+          textDecoration={block.decoration}
           key={`text-${blockIndex}`}
           x={block.x}
           y={block.y}
@@ -402,7 +416,9 @@ function SvgBubbleView({ bubble }: { bubble: ConversationShareSvgBubble }) {
               key={`line-${lineIndex}`}
               x={block.x}
             >
-              {line || " "}
+              {/* Lines are already laid out: preserve code indentation and the
+                  spaces at styled-run boundaries in native SVG text. */}
+              {line ? line.replace(/ /g, "\u00a0") : " "}
             </TSpan>
           ))}
         </SvgText>

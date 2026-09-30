@@ -1,4 +1,5 @@
 import type { AgentKind, UnifiedCommand } from '@cindy/maker-core';
+import { i18n } from '@/i18n';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -128,7 +129,7 @@ export async function tryStartCindyMakeCommand(
     const sessionId = await ensureMakeTask({
       sessionId: input.sessionId,
       createOptions: input.createOptions,
-      title: 'Cindy Make 环境检查',
+      title: i18n.t('cindyMakeDoctor.title'),
       isCurrent,
     });
     if (!sessionId || !isCurrent()) return { kind: 'stale' };

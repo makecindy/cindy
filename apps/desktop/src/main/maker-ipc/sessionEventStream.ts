@@ -52,6 +52,7 @@ export function persistSessionStreamEvent(
         agentMessageId?: unknown;
       },
       eventAgentMeta,
+      event.turnScope,
     );
     // Pi message_end carries the authoritative whole assistant message. Commit
     // its calibrated block now: agent_settled may arrive much later (or never),

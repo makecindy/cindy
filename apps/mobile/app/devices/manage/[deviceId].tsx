@@ -3,11 +3,13 @@ import { List as SwiftUIList } from '@expo/ui/swift-ui';
 import { scrollContentBackground } from '@expo/ui/swift-ui/modifiers';
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback } from 'react';
-import { ActivityIndicator, Button, Platform, Pressable, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
 import { Text } from '@/components/AppText';
+import { MainWindowActionButton } from '@/components/MobilePrimitives';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { DeviceManagementDialogs } from '@/device-link/DeviceManagementDialogs';
 import { DeviceInformationFields } from '@/device-link/DeviceInformationFields';
 import { platformLabel, toDeviceListItem } from '@/device-link/devices';
@@ -19,9 +21,9 @@ import {
 } from '@/platform/chrome';
 import { goBackGuarded } from '@/utils/backGuard';
 import { useGuardedPush } from '@/utils/useGuardedPush';
-import { useTheme, iconSize, iconStroke } from '@/theme';
+import { useTheme, useThemedStyles, iconSize, iconStroke, type ThemeColors } from '@/theme';
 import { Monitor } from 'lucide-react-native';
-import { spacing } from '@/theme/tokens';
+import { fontWeight, lineHeight, spacing, typeScale } from '@/theme/tokens';
 
 const DeviceInformationList = Platform.OS === 'ios' ? SwiftUIList : List;
 
@@ -40,8 +42,9 @@ function DeviceInformationContent({ deviceId }: { deviceId: string }) {
   const { apiFetch } = useAuth();
   const manager = useDeviceManagement(apiFetch, useIsFocused());
   const revoked = useRevokedDevices();
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { mode, colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const router = useRouter();
   const push = useGuardedPush();
   const back = useCallback(() => goBackGuarded(router), [router]);
@@ -50,7 +53,6 @@ function DeviceInformationContent({ deviceId }: { deviceId: string }) {
     ? toDeviceListItem(device, Date.now(), revoked)
     : null;
   const unknown = t('devices.management.unknown');
-  const seen = device?.lastSeenAt ? new Date(device.lastSeenAt) : null;
   const fields = device
     ? [
         ['name', device.name],
@@ -71,10 +73,11 @@ function DeviceInformationContent({ deviceId }: { deviceId: string }) {
         ],
         [
           'lastSeen',
+          // 与设备列表同一条相对时间规则(刚刚 / N 分钟 / N 小时 / N 天前,更早显示日期)。
           device.online
             ? t('devices.management.currentlyOnline')
-            : seen && Number.isFinite(seen.getTime())
-              ? seen.toLocaleString(i18n.language)
+            : presentation?.state === 'offline'
+              ? presentation.statusDetail
               : unknown,
         ],
         ['deviceId', device.deviceId],
@@ -84,7 +87,7 @@ function DeviceInformationContent({ deviceId }: { deviceId: string }) {
   return (
     <SafeAreaView
       edges={simpleScreenSafeAreaEdges()}
-      style={{ flex: 1, backgroundColor: colors.surface }}
+      style={styles.screen}
       testID="deviceInformation.screen"
     >
       <SimpleStackHeader
@@ -94,7 +97,7 @@ function DeviceInformationContent({ deviceId }: { deviceId: string }) {
             accessibilityLabel={t('remoteDesktop.title')}
             onPress={() => push({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName: device.name } })}
             testID="deviceInformation.remoteDesktop"
-            style={({ pressed }) => ({ width: 44, height: 44, alignItems: 'center', justifyContent: 'center', opacity: pressed ? 0.72 : 1 })}
+            style={({ pressed }) => [styles.headerButton, pressed && mobileInteractionStyles.pressed]}
           >
             <Monitor color={colors.textPrimary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
           </Pressable>
@@ -103,27 +106,32 @@ function DeviceInformationContent({ deviceId }: { deviceId: string }) {
         backTestID="deviceInformation.back"
         onBack={back}
       />
-      {manager.loading ? (
-        <ActivityIndicator color={colors.textSecondary} />
+      {manager.loading && !device ? (
+        <ActivityIndicator color={colors.textSecondary} style={styles.loading} />
       ) : null}
       {manager.error ? (
-        <View style={{ padding: spacing.lg }}>
-          <Text accessibilityRole="alert" style={{ color: colors.errorText }}>
+        <View style={styles.errorBlock}>
+          <Text accessibilityRole="alert" style={styles.errorText}>
             {manager.error}
           </Text>
-          <Button
-            title={t('devices.management.retry')}
-            onPress={manager.refresh}
+          <MainWindowActionButton
+            action={{
+              busy: manager.loading,
+              label: t('devices.management.retry'),
+              onPress: manager.refresh,
+              testID: 'deviceInformation.retry',
+            }}
+            style={styles.retryButton}
           />
         </View>
       ) : null}
       {!device && !manager.loading && !manager.error ? (
-        <Text style={{ color: colors.textSecondary, padding: spacing.lg }}>
+        <Text style={styles.notFound}>
           {t('devices.management.notFound')}
         </Text>
       ) : null}
       {device ? (
-        <Host style={{ flex: 1, backgroundColor: colors.surface }} colorScheme={mode}>
+        <Host style={styles.host} colorScheme={mode}>
           <DeviceInformationList
             {...(Platform.OS === 'ios'
               ? { modifiers: [scrollContentBackground('hidden')] }
@@ -176,3 +184,16 @@ function DeviceInformationContent({ deviceId }: { deviceId: string }) {
     </SafeAreaView>
   );
 }
+
+const makeStyles = (colors: ThemeColors) => StyleSheet.create({
+  screen: { backgroundColor: colors.surface, flex: 1 },
+  host: { backgroundColor: colors.surface, flex: 1 },
+  headerButton: { alignItems: 'center', height: 44, justifyContent: 'center', width: 44 },
+  loading: { paddingVertical: spacing.lg },
+  errorBlock: { alignItems: 'flex-start', gap: spacing.md, padding: spacing.lg },
+  // 报错说明:13/18 errorText(黑白系)。
+  errorText: { color: colors.errorText, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.caption },
+  retryButton: { alignSelf: 'flex-start' },
+  // 成句的说明文字:13/18 textSecondary。
+  notFound: { color: colors.textSecondary, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.caption, padding: spacing.lg },
+});

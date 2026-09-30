@@ -1,4 +1,5 @@
 import { INVOKE_TIMEOUT_OVERRIDES_MS } from './allowlist.js';
+import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
 import type { InvokePayload } from './protocol.js';
 
 /**
@@ -45,6 +46,10 @@ import type { InvokePayload } from './protocol.js';
  *    restoreSessionForGoal 同样 await createSession 重启持久化 agent,冷启动
  *    可超 15s;两者都有真实副作用(set 落库目标并发首轮,resume 先标 active),
  *    误超时后重试会改动/重启已在跑的 goal。
+ *  - maker:session:enable-orca / maker:worker:create:建 Worker 前被控端要等 SSH 远端
+ *    就绪(ensureRemoteReadyForSessionStart)再启动 agent,冷启动可超 30s;误超时后
+ *    被控端仍会建成 Worker,手机重试会建出第二个。预算与桌面 dispatch-ui-assignment
+ *    同为 65s,超时后手机按 Worker 列表回查,不当作失败。
  * 新增合法慢通道优先登记协议契约表(桌面控制端共用),仅 mobile 特有差异放这里。
  */
 export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
@@ -63,6 +68,12 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   'maker:message:delete': 30_000,
   'maker:regenerate-title': 30_000,
   'maker:rewind:commit': 30_000,
+  'maker:session:disable-orca': 65_000,
+  'maker:session:enable-orca': 65_000,
+  'maker:worker:acknowledge-done': 65_000,
+  'maker:worker:archive': 65_000,
+  'maker:worker:create': 65_000,
+  'maker:worker:switch-focus': 65_000,
   'maker:send': 30_000,
   'maker:usage:codex-rate-limit-reset': 30_000,
   'maker:usage:codex-rate-limits': 30_000,
@@ -75,6 +86,11 @@ export function resolveRemoteInvokeTimeoutMs(
   args?: unknown[],
   platform: 'desktop' | 'mobile' = 'desktop',
 ): number | undefined {
+  if (channel === TASK_MIGRATION_CHANNEL) {
+    const request = args?.[0];
+    return request && typeof request === 'object' && 'action' in request && request.action === 'receive'
+      ? 30 * 60_000 : 30_000;
+  }
   if (platform === 'desktop') return INVOKE_TIMEOUT_OVERRIDES_MS[channel];
   // Renewals must settle before the 12s lease, independently of slow media offers.
   const request = args?.[0];

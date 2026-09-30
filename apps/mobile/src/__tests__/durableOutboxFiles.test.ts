@@ -162,6 +162,42 @@ describe("outbox-owned attachment bytes", () => {
     });
     expect(upload.size).toBe(123);
     expect(durableOutboxDirectory(record)).not.toContain("/../");
+    expect(upload.annotated).toBeUndefined();
+    expect(upload.annotationRegions).toBeUndefined();
+  });
+  it("records annotation regions for annotated uploads, but not for re-saved burns whose old marks are unknown", async () => {
+    const strokes = [{ points: [{ x: 0.1, y: 0.2 }, { x: 0.3, y: 0.4 }] }];
+    const annotated = await retainOutboxFile(record, 0, {
+      ...source,
+      annotation: { strokes, sourceUri: "file:///cache/src.jpg", sourceMimeType: "image/jpeg" },
+    });
+    expect(annotated.annotated).toBe(true);
+    expect(annotated.annotationRegions).toEqual([{ x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.4 }]);
+    const reburned = await retainOutboxFile(record, 1, {
+      ...source,
+      annotation: { strokes, sourceUri: "file:///cache/src.jpg", sourceMimeType: "image/jpeg", baseAnnotated: true },
+    });
+    expect(reburned.annotated).toBe(true);
+    expect(reburned.annotationRegions).toBeUndefined();
+  });
+  it("keeps the annotated flag and regions when an already-retained upload is retained again (new-task recovery)", async () => {
+    const first = await retainOutboxFile(record, 0, {
+      ...source,
+      annotation: {
+        strokes: [{ points: [{ x: 0.1, y: 0.2 }, { x: 0.3, y: 0.4 }] }],
+        sourceUri: "file:///cache/src.jpg",
+        sourceMimeType: "image/jpeg",
+      },
+    });
+    // new.tsx 恢复时:{ ...oldUpload, uri },没有 candidate.annotation。
+    const again = await retainOutboxFile(record, 1, {
+      ...first,
+      uri: durableOutboxUploadUri(record, first),
+    });
+    expect(again.annotated).toBe(true);
+    expect(again.annotationRegions).toEqual([{ x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.4 }]);
+    const plain = await retainOutboxFile(record, 2, { ...source, annotated: false });
+    expect(plain.annotated).toBeUndefined();
   });
   it("rejects a partial copy rather than accepting a message with missing bytes", async () => {
     fs.getInfoAsync.mockResolvedValue({

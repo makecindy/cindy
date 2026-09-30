@@ -148,6 +148,9 @@ describe("recommendation route target", () => {
     const open = new Function("project", "suggestion", "explicitDeviceId", "guardedPush", `
       const home = { primaryDevice: { deviceId: 'fallback', label: 'Fallback' } };
       const selectedDeviceId = null;
+      // 推荐入口不带 origin,不应触发 composer 形变入场。
+      const origin = undefined;
+      const rememberComposerEntry = () => { throw new Error('unexpected composer morph'); };
       const newSessionDeviceOptions = [{ deviceId: 'checked', name: 'Checked' }];
       const serializeNewSessionDeviceOptions = JSON.stringify;
       const setError = (error) => { throw new Error(error); }, t = (key) => key;

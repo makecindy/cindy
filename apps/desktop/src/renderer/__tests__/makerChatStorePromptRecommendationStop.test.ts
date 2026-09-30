@@ -41,6 +41,24 @@ describe('prompt recommendation cross-window Stop projection', () => {
   });
 });
 
+describe('group lane terminal attribution', () => {
+  it('keeps the group-lane tag when a lane turn ends with a terminal error', () => {
+    const running = {
+      ...EMPTY_SESSION_STATE,
+      agentStatus: { ...EMPTY_SESSION_STATE.agentStatus, isRunning: true, startedAt: 100 },
+    } as SessionChatState;
+    const failedLane = handleStreamEvent({ ...running, lastAgentMeta: { botGroupLane: true } }, {
+      sessionId: 'lane', type: 'error', source: 'claude-code', data: { message: 'model unavailable' },
+    });
+    expect(failedLane.error).toBeTruthy();
+    expect(failedLane.lastStopWasGroupLane).toBe(true);
+    const failedNormal = handleStreamEvent(running, {
+      sessionId: 'task', type: 'error', source: 'claude-code', data: { message: 'model unavailable' },
+    });
+    expect(failedNormal.lastStopWasGroupLane).toBe(false);
+  });
+});
+
 describe('private reply completion attribution', () => {
   it('projects private provenance into visible streaming and final replies', () => {
     const before = { ...EMPTY_SESSION_STATE } as SessionChatState;

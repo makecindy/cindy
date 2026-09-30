@@ -12,11 +12,29 @@ import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSessionDisplayRunningState } from '@/features/cc-agent/hooks/useSessionDisplayRunningState';
 
+import { useBotProfiles, useBotUnreadCounts } from '@/features/bots/botStore';
+import { useBotGroupList } from '@/features/bots/botGroupStore';
+import { isBotGroupUnread, subscribeBotReadState, getBotLastReadAtMap } from '@/features/bots/botReadState';
+import { useBotUnreadSync } from '@/features/bots/useBotUnreadSync';
+import { useRemoteBotSync, useRemoteBots } from '@/features/bots/useRemoteBots';
+import { isRemoteBotUnread } from '@/features/bots/remoteBotRoster';
+import { publishNavigationAttention } from '@/lib/navigationAttentionStore';
+const readRevision = () => JSON.stringify(getBotLastReadAtMap());
 const log = createLogger('AppBadgeAttentionSync');
 
 /** 主窗口常驻：设置/伙伴页也持续更新，独立订阅避免带动布局重渲染。 */
 export function AppBadgeAttentionSync() {
   useAuth();
+  useBotUnreadSync();
+  useRemoteBotSync();
+  const bots = useBotProfiles();
+  const unread = useBotUnreadCounts();
+  const { groups } = useBotGroupList();
+  const remoteBots = useRemoteBots();
+  useSyncExternalStore(subscribeBotReadState, readRevision, readRevision);
+  const localTeammates = bots.filter(bot => bot.status !== 'archived' && bot.status !== 'deleting' && !bot.hiddenAt && (unread[bot.id] ?? 0) > 0).length
+    + groups.filter(isBotGroupUnread).length;
+  const teammates = localTeammates + remoteBots.filter(isRemoteBotUnread).length;
   const owner = getDataOwnerGeneration();
   const { sessions, isLoading, error } = useCCSessions({ includeArchived: 'active' });
   // all 桶保留已归档目录 ID 用于通知去重；不能让它的历史上限挤掉 active 桶。
@@ -24,8 +42,8 @@ export function AppBadgeAttentionSync() {
   const remoteSessions = useRemoteProjectSessions();
   const allSessions = useMemo(() => [...sessions, ...remoteSessions], [sessions, remoteSessions]);
   const catalogSessionIds = useMemo(
-    () => [...new Set([...allSessions, ...history.sessions].map((session) => session.id))],
-    [allSessions, history.sessions],
+    () => [...new Set([...allSessions, ...history.sessions].map((session) => session.id).concat(bots.flatMap(bot => bot.sessions.map(session => session.id))))],
+    [allSessions, history.sessions, bots],
   );
   const localSchedules = usePublishedAutomationScheduleSessionIndex();
   const attentionKinds = useSessionAttentionKinds();
@@ -51,10 +69,13 @@ export function AppBadgeAttentionSync() {
     runningSessionIds: displayRunningSessionIds,
   });
   useEffect(() => {
+    publishNavigationAttention({ tasks: count, teammates });
+  }, [count, teammates, owner]);
+  useEffect(() => {
     if (isLoading || error || history.isLoading || history.error) return;
     void window.electronAPI
       .notificationSetAppAttentionCount({
-        count,
+        count: count + localTeammates,
         sessionIds: catalogSessionIds,
         dataOwnerId: owner.dataOwnerId,
         ownerGeneration: owner.generation,
@@ -63,6 +84,6 @@ export function AppBadgeAttentionSync() {
         log.warn('failed to update app attention count', err);
       });
     // 卸载/切路由不是已读，不清图标；下次挂载会重新提交完整投影。
-  }, [count, isLoading, error, history.isLoading, history.error, catalogSessionIds, owner]);
+  }, [count, localTeammates, isLoading, error, history.isLoading, history.error, catalogSessionIds, owner]);
   return null;
 }

@@ -59,6 +59,7 @@ import {
   type UnifiedModelPanelProps,
   type UnifiedSelectedRow,
 } from './UnifiedModelPanel';
+import type { ProviderUsageScope } from './useProviderWeeklyQuota';
 import { ThinkingToggle } from './ThinkingToggle';
 import { useModelDiscoveryPending } from './useModelDiscoveryPending';
 import { VendorSegmentedSwitcher } from './VendorSegmentedSwitcher';
@@ -148,6 +149,15 @@ export const UNIFIED_COMPACT_PANEL_WIDTH_CLASS =
  * full 只在宽过紧凑面板上限时启用，避免 460px 触顶时促销标签把刚留给长模型名的空间吃回去。
  */
 export type ModelTagDensity = 'full' | 'subscription' | 'hidden';
+
+/** 改深度的附加信息。 */
+export interface EffortChangeOptions {
+  /**
+   * 由统一面板发起:面板已保证同一时刻只提交一笔,调用方不必为防并发写入而锁住 selector。
+   * 其余入口(平铺选择器、快捷键)缺省为 false,仍按原样锁定。
+   */
+  serializedByPanel?: boolean;
+}
 
 export function modelTagDensityForWidth(width: number | null): ModelTagDensity {
   if (width === null || width > UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX) return 'full';
@@ -629,7 +639,10 @@ interface ModelSelectorProps {
    * 调用方视为落了)。统一面板的三个「先应用、后清存储」入口(恢复推荐 / 删选中收藏 /
    * 编辑选中收藏)靠它决定要不要收尾;其余调用方照旧无视返回值。
    */
-  onEffortChange: (effort: Effort) => void | boolean | Promise<void | boolean>;
+  onEffortChange: (
+    effort: Effort,
+    options?: EffortChangeOptions,
+  ) => void | boolean | Promise<void | boolean>;
   /**
    * per-session 来源选择(B · Provider-first)。
    *   - currentProviderId:本会话当前显式选定的供应商 id(null = 跟随默认路由)。
@@ -818,7 +831,10 @@ interface ModelSelectorContentProps {
    * 调用方视为落了)。统一面板的三个「先应用、后清存储」入口(恢复推荐 / 删选中收藏 /
    * 编辑选中收藏)靠它决定要不要收尾;其余调用方照旧无视返回值。
    */
-  onEffortChange: (effort: Effort) => void | boolean | Promise<void | boolean>;
+  onEffortChange: (
+    effort: Effort,
+    options?: EffortChangeOptions,
+  ) => void | boolean | Promise<void | boolean>;
   fastMode?: boolean;
   /** 语义同 onEffortChange(含返回值口径)。 */
   onFastModeChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
@@ -1188,6 +1204,12 @@ function ModelSelectorContentView({
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(deviceId);
   const providers = deviceId ? remoteProviders.providers : providersOverride ?? localProviders.providers;
+  // 订阅用量跟随目录归属:本机目录读本机账号,远程目录读被控端镜像(与会话用量 chip 共用缓存);
+  // 外部注入的目录(providersOverride)归属不明,不显示任何账号用量。
+  const providerUsageScope = useMemo<ProviderUsageScope | null>(
+    () => (deviceId ? { deviceId } : providersOverride ? null : { deviceId: null }),
+    [deviceId, providersOverride],
+  );
   // Old device-link hosts expose capabilities only. Never substitute local routes.
   const unifiedPanel = useUnifiedPanel && !(deviceId && remoteProviders.unsupported);
   const providersLoading = deviceId ? remoteProviders.loading : !providersOverride && localProviders.loading;
@@ -2881,7 +2903,7 @@ function ModelSelectorContentView({
           {localCatalogNotice && <div className="shrink-0 p-2">{localCatalogNotice}</div>}
           <UnifiedModelPanel
             deviceId={deviceId}
-            localProviderUsage={!deviceId && !providersOverride}
+            providerUsage={providerUsageScope}
             providers={providers}
             providerOrder={deviceId ? undefined : localProviders.providerOrder}
             {...(unifiedAgents ? { agents: unifiedAgents } : {})}
@@ -3006,7 +3028,13 @@ function ModelSelectorContentView({
               }
               onSessionFavoriteAnchorChange?.(null);
             }}
-            {...(onEffortChange ? { onEffortChangeLive: onEffortChange } : {})}
+            {...(onEffortChange
+              ? {
+                  // 统一面板自己保证同一时刻只提交一笔(在途点击排队),调用方无需再锁 selector。
+                  onEffortChangeLive: (effort: Effort) =>
+                    onEffortChange(effort, { serializedByPanel: true }),
+                }
+              : {})}
             {...(onFastModeChange ? { onFastModeChangeLive: onFastModeChange } : {})}
             panelElement={paneElement}
             {...(overlayContentClassName !== undefined

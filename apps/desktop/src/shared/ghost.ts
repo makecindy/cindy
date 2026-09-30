@@ -1882,7 +1882,7 @@ function ghostPermissionProjectionTuple(item: GhostPermissionItem): unknown[] {
   ];
 }
 
-function ghostPermissionProjectionKey(item: GhostPermissionItem): string {
+export function ghostPermissionProjectionKey(item: GhostPermissionItem): string {
   return JSON.stringify(ghostPermissionProjectionTuple(item));
 }
 
@@ -6362,9 +6362,36 @@ export type GhostPipeAgentErrandResult =
  */
 export const GHOST_NODE_REQUEST_MAX_TOTAL_MS = 15 * 60_000;
 
+/** Public artifact download; results deliberately exclude host filesystem paths. */
+export type GhostPipeDownloadRequest =
+  | { type: 'download-request'; kind: 'start'; id: string; url: string; sha256: string; bytes: number }
+  | { type: 'download-request'; kind: 'cancel'; id: string };
+
+export type GhostPipeDownloadResult =
+  | { ok: true; token: string; bytes: number; sha256: string; fromCache: boolean }
+  | { ok: true }
+  | { ok: false; message: string };
+
+export interface GhostPipeDownloadProgress {
+  type: 'event';
+  name: 'download-progress';
+  data: {
+    id: string;
+    phase: 'queued' | 'downloading' | 'verifying' | 'retrying' | 'completed' | 'failed' | 'cancelled';
+    loaded?: number;
+    total?: number | null;
+    speedBps?: number;
+    attempt?: number;
+    delayMs?: number;
+    fromCache?: boolean;
+  };
+}
+
 /** 上行:main.js 通过主机中继调用随包 Node 工作进程。 */
 export interface GhostPipeNodeRequest {
   type: 'node-request';
+  /** Host resolves same-plugin download receipts into params.downloads for this RPC only. */
+  downloadTokens?: Record<string, string>;
   /** OAuth 注入的本插件账号 id；缺省使用对应 OAuth 槽的默认账号。 */
   authAccount?: string;
   /** Live tool-call identity; only cancelWithCall opts in to the new lifecycle. */
@@ -6775,6 +6802,23 @@ export interface GhostAppContextResult {
     locale: GhostLocale;
   };
 }
+
+/** Read-only local agent routes. No credentials or provider configuration. */
+export type GhostAgentModelsResult =
+  | {
+      ok: true;
+      models: Array<{
+        visible?: boolean;
+        id: string;
+        name: string;
+        agent: 'codex' | 'claude-code' | 'pi';
+        providerId: string;
+        providerName: string;
+        efforts: string[];
+        defaultEffort: string | null;
+      }>;
+    }
+  | { ok: false; errorCode: 'PERMISSION_DENIED' | 'NOT_AVAILABLE'; message: string };
 
 /** 插件设置页 / 面板可读取的 Cindy Core 媒体模型类型。 */
 export const GHOST_MEDIA_MODEL_TYPES = ['image', 'video'] as const;
@@ -7908,6 +7952,7 @@ export type GhostMessageHookData = { sessionId: string; text: string; model?: st
  * GhostPipeEventVerdict,不回视为放行。
  */
 export type GhostPipeEventPush =
+  | GhostPipeDownloadProgress
   | {
       type: 'event';
       name: GhostDidEventName;
@@ -8228,6 +8273,13 @@ export const GHOST_LIBRARY_OPS = [
   'reveal',
   'saveAs',
   'clipboardWrite',
+  'staging.begin',
+  'staging.chunk',
+  'staging.commit',
+  'staging.list',
+  'staging.read',
+  'staging.release',
+  'staging.abort',
 ] as const;
 export type GhostLibraryOp = (typeof GHOST_LIBRARY_OPS)[number];
 
@@ -8235,9 +8287,30 @@ export type GhostLibraryOp = (typeof GHOST_LIBRARY_OPS)[number];
 export const GHOST_LIBRARY_CAPABILITY_OPERATIONS = ['clipboardWrite', 'saveAs'] as const;
 export type GhostLibraryCapabilityOperation = (typeof GHOST_LIBRARY_CAPABILITY_OPERATIONS)[number];
 
+export const GHOST_LIBRARY_STAGING_OPERATIONS = [
+  'staging.begin',
+  'staging.chunk',
+  'staging.commit',
+  'staging.list',
+  'staging.read',
+  'staging.release',
+  'staging.abort',
+] as const;
+export type GhostLibraryStagingOperation = (typeof GHOST_LIBRARY_STAGING_OPERATIONS)[number];
+
+export const GHOST_LIBRARY_STAGING_LIMITS_V1 = {
+  version: 1 as const,
+  maxTaskBytes: 8 * 1024 * 1024 * 1024,
+  maxTotalBytes: 8 * 1024 * 1024 * 1024,
+  maxConcurrentWrites: 4,
+  maxChunkBytes: 16 * 1024 * 1024,
+  reserveBytes: 1024 * 1024 * 1024,
+};
+
 export const GHOST_LIBRARY_CAPABILITIES_V1 = {
   version: 1 as const,
-  operations: GHOST_LIBRARY_CAPABILITY_OPERATIONS,
+  operations: [...GHOST_LIBRARY_CAPABILITY_OPERATIONS, ...GHOST_LIBRARY_STAGING_OPERATIONS] as const,
+  staging: GHOST_LIBRARY_STAGING_LIMITS_V1,
 };
 
 /** 宿主实际操作的稳定失败类别;TIMEOUT / TRANSPORT_ERROR 由插件查询层本地分类,不从 message 猜测。 */
@@ -8314,6 +8387,16 @@ export interface GhostPipeLibraryRequest {
   length?: number;
   /** saveAs: 另存为建议文件名(仅 basename)。 */
   name?: string;
+  /** staging: 插件任务身份 / 源版本 / MIME / 恢复元数据。 */
+  taskId?: string;
+  sourceRevision?: string;
+  mime?: string;
+  recovery?: Record<string, unknown>;
+  stagingId?: string;
+  /** staging.release: Library ACK 字节数(不是 begin 的 totalBytes)。 */
+  bytes?: number;
+  libraryIdentity?: string;
+  libraryGeneration?: number;
 }
 
 /**
@@ -8394,9 +8477,57 @@ export type GhostPipeLibraryResult =
       op: 'capabilities';
       capabilities: {
         version: 1;
-        operations: GhostLibraryCapabilityOperation[];
+        operations: ReadonlyArray<GhostLibraryCapabilityOperation | GhostLibraryStagingOperation>;
+        staging?: {
+          version: 1;
+          maxTaskBytes: number;
+          maxTotalBytes: number;
+          maxConcurrentWrites: number;
+          maxChunkBytes: number;
+          reserveBytes: number;
+        };
       };
     }
+  | { ok: true; op: 'staging.begin'; stagingId: string }
+  | { ok: true; op: 'staging.chunk'; accepted: number }
+  | {
+      ok: true;
+      op: 'staging.commit';
+      stagingId: string;
+      taskId: string;
+      sourceRevision: string;
+      sha256: string;
+      bytes: number;
+      mime: string;
+      durable: true;
+    }
+  | {
+      ok: true;
+      op: 'staging.list';
+      items: Array<{
+        stagingId: string;
+        taskId: string;
+        sourceRevision: string;
+        sha256: string;
+        bytes: number;
+        mime: string;
+        durable: true;
+        recovery: Record<string, unknown>;
+      }>;
+      hasMore: boolean;
+      nextCursor: string | null;
+    }
+  | {
+      ok: true;
+      op: 'staging.read';
+      stagingId: string;
+      content: string;
+      encoding: 'base64';
+      bytes: number;
+      sha256: string;
+    }
+  | { ok: true; op: 'staging.release'; stagingId: string; released: boolean }
+  | { ok: true; op: 'staging.abort'; aborted: boolean }
   | { ok: false; errorCode: string; message: string; reason?: GhostLibraryErrorReason };
 
 /** Library 概览(ghosts:library-overview IPC 载荷;设置页插件详情消费)。 */

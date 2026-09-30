@@ -64,7 +64,14 @@ export function createRemoteContentRecovery(deps: {
     })();
   };
   return {
-    request,
+    // A new external trigger may resume a cleared recovery using current
+    // eligibility. Internal retries retain the gate set by invalidate(), so a
+    // stale completion cannot reopen recovery after cleanup on its own.
+    request(availableNow = available) {
+      if (disposed) return;
+      available = availableNow;
+      request();
+    },
     isReady: () => ready,
     invalidate(nextAvailable: boolean) {
       if (disposed) return;

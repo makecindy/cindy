@@ -37,6 +37,7 @@ import {
   fontWeight,
   iconSize,
   iconStroke,
+  lineHeight,
   radius,
   spacing,
   typeScale,
@@ -238,6 +239,7 @@ export function RemoteDesktopControls({
               {(["touch", "pointer"] as const).map((value) => (
                 <MainWindowOptionButton
                   key={value}
+                  accessibilityRole="tab"
                   label={t(`remoteDesktop.${value}`)}
                   testID={`remoteDesktop.${value}`}
                   variant="segmented"
@@ -299,6 +301,7 @@ export function RemoteDesktopControls({
               }}
             >
               <NativeSwitch
+                seedColor={colors.inputCaret}
                 accessibilityLabel={t("remoteDesktop.showMouseButtons")}
                 testID="remoteDesktop.showMouseButtons"
                 value={showMouseButtons}
@@ -328,7 +331,7 @@ export function RemoteDesktopControls({
                 </Text>
               )}
             </View>
-            <ChevronRight size={iconSize.md} color={colors.textTertiary} />
+            <ChevronRight size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textTertiary} />
           </Pressable>
           {security && (
             <>
@@ -348,7 +351,7 @@ export function RemoteDesktopControls({
                 <Text style={[styles.rowTitle, styles.expand]}>
                   {t("remoteDesktop.security")}
                 </Text>
-                <ChevronRight size={iconSize.md} color={colors.textTertiary} />
+                <ChevronRight size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textTertiary} />
               </Pressable>
             </>
           )}
@@ -366,6 +369,7 @@ export function RemoteDesktopControls({
                 {displays.length > 0 && (
                   <>
                     <NativePullDownMenu
+                      disabled={!nativeDisplayMenu}
                       actions={
                         nativeDisplayMenu
                           ? displays.map((display, index) => ({
@@ -533,24 +537,26 @@ const makeStyles = (colors: ThemeColors) =>
     quickLabel: {
       color: colors.textPrimary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       textAlign: "center",
     },
     quickSelectedLabel: { color: colors.ctaText },
     section: { gap: spacing.sm },
     sectionTitle: {
       color: colors.textTertiary,
-      fontSize: typeScale.caption,
-      fontWeight: fontWeight.medium,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.semibold,
     },
     segments: {
       flexDirection: "row",
       gap: spacing.xs,
       backgroundColor: colors.surfaceChip,
       padding: spacing.xs,
-      borderRadius: radius.control,
+      borderRadius: radius.pill,
     },
-    segment: { flex: 1, minHeight: 44, borderRadius: radius.control },
-    hint: { color: colors.textPrimary, fontSize: typeScale.caption },
+    segment: { flex: 1, minHeight: 44, borderRadius: radius.pill },
+    hint: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
     group: {
       backgroundColor: colors.surfaceTranslucent,
       borderRadius: radius.container,
@@ -566,7 +572,7 @@ const makeStyles = (colors: ThemeColors) =>
       alignItems: "center",
       gap: spacing.sm,
     },
-    rowTitle: { color: colors.textPrimary, fontSize: typeScale.body },
+    rowTitle: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
     expand: { flex: 1 },
     divider: {
       height: StyleSheet.hairlineWidth,
@@ -591,7 +597,7 @@ const makeStyles = (colors: ThemeColors) =>
       gap: spacing.sm,
       borderRadius: radius.control,
     },
-    disconnectLabel: { color: colors.destructive, fontSize: typeScale.body },
+    disconnectLabel: { color: colors.destructive, fontSize: typeScale.body, lineHeight: lineHeight.body },
     disabled: { opacity: 0.4 },
     pressed: { opacity: 0.72 },
   });

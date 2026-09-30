@@ -99,12 +99,8 @@ export function MarketPluginDetailView({
                 aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
                 className="plugin-detail-primary-action min-w-[104px] whitespace-nowrap"
               >
-                {!busy && (
-                  <>
-                    <Download size={15} aria-hidden="true" />
-                    {t(actionKey)}
-                  </>
-                )}
+                <Download size={15} aria-hidden="true" />
+                {t(actionKey)}
               </Button>
             ) : null}
           </div>

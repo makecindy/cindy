@@ -1,4 +1,5 @@
 import { SessionTaskMenu } from './SessionTaskMenu';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
 import { Button } from '@/components/ui/button';
 /**
@@ -102,6 +103,8 @@ const log = createLogger('SessionCard');
 
 const CARD_TITLE_STATUS_SLOT_CLASS =
   'inline-flex h-[1em] w-3 items-center justify-center align-[-0.08em]';
+/** 卡片归档确认胶囊的尺寸类:胶囊本体与标题行里的隐形占位共用,保证宽度一致。 */
+const CARD_ARCHIVE_CONFIRM_CLASS = 'w-max min-w-14 whitespace-nowrap';
 const CARD_TITLE_META_SLOT_CLASS =
   'ml-1 inline-flex h-[1em] w-3 items-center justify-center align-[-0.08em]';
 
@@ -163,6 +166,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
   const ordinalBadge = useSessionOrdinalBadge(session.id);
   const ordinalBadgeLabel = navigationOnly ? null : ordinalBadge;
+  const canOpenTaskMenu = !navigationOnly || isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
   const islandActivity = useAgentIslandActivity(session.id);
   // list 变体与文字模式共用右侧状态优先级:
@@ -557,25 +561,14 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     session.status !== 'archived';
 
   const moveToProjectSubmenu = canMoveToProject ? (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger className={MENU_ROW_CLASS}>
-        <span className="flex-1">{t('ccAgent.sidebar.sessionMenu.moveToProject')}</span>
-        <ChevronRight size={14} className="ml-2 shrink-0 text-[var(--cmd-palette-item-meta)]" />
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent
-        sideOffset={4}
-        className={cn(MENU_SUB_CONTENT_CLASS, 'w-[320px] overflow-hidden')}
-      >
-        <SessionProjectMoveSubmenu
-          projectOptions={projectOptions}
-          currentWorkingDir={session.workspaceKind === 'project' ? session.workingDir : null}
-          isDialogue={session.workspaceKind === 'dialogue'}
-          onSelectProject={handleMoveToProjectSelect}
-          onBrowseProject={handleMoveToProjectBrowse}
-          onMoveToDialogue={handleMoveToDialogue}
-        />
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
+    <SessionProjectMoveSubmenu
+      projectOptions={projectOptions}
+      currentWorkingDir={session.workspaceKind === 'project' ? session.workingDir : null}
+      isDialogue={session.workspaceKind === 'dialogue'}
+      onSelectProject={handleMoveToProjectSelect}
+      onBrowseProject={handleMoveToProjectBrowse}
+      onMoveToDialogue={handleMoveToDialogue}
+    />
   ) : null;
 
   const statusIconNode = (
@@ -689,8 +682,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
         }
         e.preventDefault();
         e.stopPropagation();
-        if (navigationOnly) return;
-        prefetchRemovalPreflight();
+        if (!canOpenTaskMenu) return;
+        if (!navigationOnly) prefetchRemovalPreflight();
         setMenuPos({ x: e.clientX, y: e.clientY });
       }}
       className={cn(
@@ -708,10 +701,11 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               isActive
                 ? 'bg-sidebar-item-active [--task-tag-ring-bg:hsl(var(--sidebar-item-active))] text-sidebar-item-active-foreground shadow-[inset_0_0_0_1px_var(--sidebar-item-active-border)]'
                 : cn(
-                    'hover:bg-sidebar-item-hover hover:[--task-tag-ring-bg:hsl(var(--sidebar-item-hover))]',
+                    // 标签色球描边不随 hover 换色(同 SessionItem):半透明 hover 底
+                    // 用作描边会透出色球本色,描边消失。
+                    'hover:bg-sidebar-item-hover',
                     // 菜单开着时鼠标常会离开行,行底仍保持 hover 色。
-                    menuPos !== null &&
-                      'bg-sidebar-item-hover [--task-tag-ring-bg:hsl(var(--sidebar-item-hover))]',
+                    menuPos !== null && 'bg-sidebar-item-hover',
                   ),
             )
           : cn(
@@ -720,7 +714,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               'rounded-xl bg-[var(--surface-elevated)] border',
               isActive
                 ? 'border-[var(--sidebar-item-active-border)] !bg-sidebar-item-active [--task-tag-ring-bg:hsl(var(--sidebar-item-active))] text-sidebar-item-active-foreground'
-                : 'border-sidebar-border [--task-tag-ring-bg:var(--surface-elevated)] hover:!bg-sidebar-item-hover hover:[--task-tag-ring-bg:hsl(var(--sidebar-item-hover))]',
+                : 'border-sidebar-border [--task-tag-ring-bg:var(--surface-elevated)] hover:!bg-sidebar-item-hover',
             ),
         // 多选选中态(与列表 SessionItem 同款):内描边软高亮,不与 active 互斥。
         isSelected && 'ring-1 ring-inset ring-[var(--focus-ring-soft)]',
@@ -801,6 +795,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                         })
                       : displayTitle}
                   </SidebarTitleMarquee>
+                  {/* 任务标签常显、紧跟标题，不属于任务信息复选。 */}
+                  <TaskTagDots tags={session.tags} />
                   {remoteIconKind && (
                     <RemoteProjectIcon
                       kind={remoteIconKind}
@@ -896,7 +892,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
           {!navigationOnly && !isEditing && !archivePending && (
             <div
               className={cn(
-                'absolute right-[6px] top-[6px] z-10 flex items-center gap-0.5',
+                // peer:标题行按操作钮自身的 focus-within 让位,与其显隐条件一致。
+                'peer/card-actions absolute right-[6px] top-[6px] z-10 flex items-center gap-0.5',
                 menuPos !== null
                   ? 'opacity-100'
                   : 'opacity-0 group-hover/card:opacity-100 focus-within:opacity-100',
@@ -944,7 +941,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               }}
               onPointerDown={(e) => e.stopPropagation()}
               onDoubleClick={(e) => e.stopPropagation()}
-              className="absolute right-[6px] top-[6px] z-20 w-max min-w-14 whitespace-nowrap"
+              className={cn('absolute right-[6px] top-[6px] z-20', CARD_ARCHIVE_CONFIRM_CLASS)}
               aria-label={t('ccAgent.sidebar.sessionMenu.archived')}
             >
               {t('ccAgent.sidebar.sessionMenu.archived')}
@@ -957,7 +954,21 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             data-split-group-drag-handle={splitDragHandleActive ? 'true' : undefined}
             data-no-drag={splitDragHandleActive ? 'true' : undefined}
             draggable={splitDragHandleActive}
-            className="relative"
+            className={cn(
+              'relative flex items-start',
+              // 右上操作钮浮在内容上方:浮出时标题行右侧让出操作钮宽度(两枚固定
+              // 24px 图标钮),标题让位、紧跟标题的标签色球不被盖住。让位条件与操作钮
+              // 显隐同源(卡片 hover / 操作钮自身 focus-within / 菜单);卡片本身获得
+              // 焦点时操作钮不显示,也不让位。确认胶囊宽度随语言变化,另由下方同款
+              // 隐形占位按实际宽度让位。
+              !navigationOnly &&
+                !isEditing &&
+                !archivePending &&
+                !!session.tags?.length &&
+                (menuPos !== null
+                  ? 'pr-14'
+                  : 'group-hover/card:pr-14 peer-focus-within/card-actions:pr-14'),
+            )}
           >
             <div
               className={cn(
@@ -979,6 +990,31 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                   })
                 : displayTitle}
             </div>
+            {/* 任务标签常显、紧跟标题首行；标题两行截断时色球不被裁掉。 */}
+            {!isEditing && session.tags?.length ? (
+              <span className="flex h-[1.22em] shrink-0 items-center text-12">
+                <TaskTagDots tags={session.tags} />
+              </span>
+            ) : null}
+            {/* 归档确认胶囊的隐形同款占位:与胶囊同文案同样式,按实际宽度让位。
+                外包零高度容器只取宽度,不撑高单行标题,确认态卡片高度与瀑布流不动。 */}
+            {!isEditing && canQuickArchive && archivePending && session.tags?.length ? (
+              <span aria-hidden className="h-0 shrink-0 overflow-hidden">
+                <Button
+                  variant="secondary"
+                  tone="danger-surface"
+                  size="xxs"
+                  compact
+                  type="button"
+                  tabIndex={-1}
+                  aria-hidden
+                  data-card-archive-confirm-spacer="true"
+                  className={cn('invisible pointer-events-none shrink-0', CARD_ARCHIVE_CONFIRM_CLASS)}
+                >
+                  {t('ccAgent.sidebar.sessionMenu.archived')}
+                </Button>
+              </span>
+            ) : null}
             {isEditing && (
               <SessionRenameInput
                 sessionId={session.id}
@@ -1078,7 +1114,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       )}
 
       {/* 右键菜单——与 SessionItem 同款 coordinate-anchored DropdownMenu */}
-      {!navigationOnly && !isEditing && (
+      {canOpenTaskMenu && !isEditing && (
         <DropdownMenu
           open={menuPos !== null}
           onOpenChange={(open) => {
@@ -1167,11 +1203,6 @@ function TimeActionsSlot({
   const { t } = useTranslation();
   return (
     <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
-      {pieces.find((piece) => piece.key === 'tags')?.tags?.length ? (
-        <span className="mr-1 inline-flex shrink-0 items-center">
-          <TaskTagDots tags={pieces.find((piece) => piece.key === 'tags')?.tags} />
-        </span>
-      ) : null}
       <div className="grid h-[22px] grid-cols-[max-content] items-center justify-items-end">
         {/* 默认内容:worktree + 信息槽;hover / 菜单打开 / archivePending 时淡出让位给操作钮。 */}
         <div
@@ -1186,7 +1217,7 @@ function TimeActionsSlot({
           )}
         >
           <SessionInfoMeta
-            pieces={pieces.filter((piece) => piece.key !== 'tags')}
+            pieces={pieces}
             prRef={prRef}
             worktree={worktree}
             isActive={isActive}

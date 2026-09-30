@@ -3,9 +3,14 @@ import type { PiBinaryUpdateFailureStage } from '@cindy/maker-core';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { download } from '../downloader/index.js';
 import { extractMakeToolArchive } from '../cindy-make/toolArchive.js';
 import { isBinaryVersionNotOlder, probeBinaryVersion } from './binary-version-probe.js';
+import { createLogger } from '../logger.js';
+import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
+
+const log = createLogger('pi-self-update');
 
 const failureStages = new WeakMap<object, PiBinaryUpdateFailureStage>();
 export function piBinaryUpdateFailureStage(error: unknown): PiBinaryUpdateFailureStage | undefined {
@@ -27,10 +32,27 @@ export interface PiBinaryUpdateDeps {
 }
 export const piBinaryUpdateDefaults: PiBinaryUpdateDeps = {
   fetchRelease: async signal => {
+    signal.throwIfAborted();
+    // Reuse the host's GitHub login source; a missing/unavailable login must not
+    // prevent checking this public release. Never pass the token to downloads.
+    const token = await getSharedGhCliTokenSource().readToken().catch(() => null);
+    signal.throwIfAborted();
+    const url = 'https://api.github.com/repos/earendil-works/pi/releases/latest';
     // Match the Electron downloader's system-proxy/PAC-aware network stack.
-    const response = await net.fetch('https://api.github.com/repos/earendil-works/pi/releases/latest', {
-      signal, headers: { Accept: 'application/vnd.github+json' },
+    let response = await net.fetch(url, {
+      signal, redirect: 'error',
+      headers: { Accept: 'application/vnd.github+json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     });
+    // A revoked/restricted login must not make public releases less accessible.
+    // Retry once without credentials, within the original caller's deadline.
+    if (token && (response.status === 401 || response.status === 403)) {
+      // Stream cleanup can fail independently of the release lookup.
+      await response.body?.cancel().catch(() => undefined);
+      signal.throwIfAborted();
+      response = await net.fetch(url, {
+        signal, redirect: 'error', headers: { Accept: 'application/vnd.github+json' },
+      });
+    }
     if (!response.ok) throw new Error(`Pi release lookup failed (${response.status})`);
     return response.json();
   },
@@ -79,6 +101,38 @@ export async function installPiBinaryUpdate(
 
 export type PiBinaryRelease = ReturnType<typeof parsePiRelease>;
 
+/** Windows security software can briefly hold handles on a freshly extracted and
+ * just-executed pi.exe, so the publish rename fails with a transient code (#5204). */
+const TRANSIENT_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+/** Bounded (~9.75s) and still inside the install AbortSignal; aligned with #5026. */
+export const PI_PUBLISH_RENAME_RETRY_DELAYS_MS: readonly number[] = [250, 500, 1000, 2000, 3000, 3000];
+
+export async function renameWithTransientRetry(
+  from: string, to: string, options: { platform: string; signal: AbortSignal; delaysMs?: readonly number[] },
+): Promise<void> {
+  // Elsewhere EPERM/EACCES are real permission failures; retrying only delays the error.
+  const delays = options.platform === 'win32' ? options.delaysMs ?? PI_PUBLISH_RENAME_RETRY_DELAYS_MS : [];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fs.rename(from, to);
+      if (attempt > 0) log.info('Pi publish rename succeeded after transient retry', { attempts: attempt + 1 });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= delays.length || !code || !TRANSIENT_RENAME_CODES.has(code)) throw error;
+      log.warn('Pi publish rename hit transient error; retrying', { code, attempt: attempt + 1, delayMs: delays[attempt] });
+      await delay(delays[attempt], undefined, { signal: options.signal });
+    }
+  }
+}
+
+function logCleanupFailure(target: 'staging' | 'unpublished-destination') {
+  // Target label and code only: the path carries the user's profile directory.
+  return (error: unknown): void => log.warn('Pi install cleanup failed; leftover directory', {
+    target, code: (error as NodeJS.ErrnoException)?.code ?? 'unknown',
+  });
+}
+
 /** Both Cindy release and upstream installs publish immutable, version-named directories. */
 export async function installPiBinaryRelease(
   root: string, release: PiBinaryRelease,
@@ -112,7 +166,7 @@ export async function installPiBinaryRelease(
       if (await deps.probe(binary, signal) !== release.version) throw new Error('Downloaded Pi version verification failed');
       failureStage = 'publish';
       onPhase?.('activate');
-      await fs.rename(distribution, destination);
+      await renameWithTransientRetry(distribution, destination, { platform, signal });
       const finalBinary = path.join(destination, release.executable);
       failureStage = 'version-verification';
       onPhase?.('verify');
@@ -124,8 +178,8 @@ export async function installPiBinaryRelease(
       published = true;
       return { binaryPath: finalBinary, version: release.version };
     } finally {
-      await fs.rm(stage, { recursive: true, force: true }).catch(() => undefined);
-      if (!published) await fs.rm(destination, { recursive: true, force: true }).catch(() => undefined);
+      await fs.rm(stage, { recursive: true, force: true }).catch(logCleanupFailure('staging'));
+      if (!published) await fs.rm(destination, { recursive: true, force: true }).catch(logCleanupFailure('unpublished-destination'));
     }
   } catch (error) {
     const failure = error instanceof Error ? error : new Error('Pi installation failed');

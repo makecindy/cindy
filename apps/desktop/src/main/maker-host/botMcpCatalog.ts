@@ -31,7 +31,7 @@ export function buildBotMcpCatalog(input: {
   const builtinNames = new Set(input.builtinNames);
   const customServers = new Map(input.customServers.map((entry) => [entry.id, entry]));
   return [...new Map(input.providers.map((provider) => {
-    const builtin = builtinNames.has(provider.name);
+    const builtin = builtinNames.has(provider.name) && provider.name !== 'companion_connections';
     const custom = customServers.get(provider.name);
     // Builtins retain their SDK bridge path and are not instantiated by catalog queries.
     const available = builtin || isCustomMcpAvailable({

@@ -2,10 +2,6 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { useTranslation } from 'react-i18next';
 import type { ProviderView } from '@cindy/model-providers';
 import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
-import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
-import { useAccountUsage } from '@/hooks/useAccountUsage';
-import { useClaudeSubscriptionUsage } from '@/hooks/useClaudeSubscriptionUsage';
-import { useXaiSubscriptionUsage } from '@/hooks/useXaiSubscriptionUsage';
 import { formatCompactTimeUntilReset } from '@/lib/compactQuotaCountdown';
 import {
   formatClaudeSubscriptionPlanLabel,
@@ -15,15 +11,16 @@ import { matchScopedWindowForModel } from '../../../shared/claudeSubscriptionUsa
 import { isXaiWeeklyUsageCurrent } from '../../../shared/xaiSubscriptionUsage';
 import { CHATGPT_MODEL_PREFIX } from '../../../shared/subscriptionModels';
 import { RESET_PENDING_MAX_MS } from '../status/quotaResetRollup';
-import { providerWeeklyQuotaSource } from './useProviderWeeklyQuota';
+import {
+  providerWeeklyQuotaSource,
+  useProviderUsageSnapshots,
+  type ProviderUsageScope,
+  type ProviderUsageSnapshots,
+} from './useProviderWeeklyQuota';
 
-interface SourceUsage {
-  source: 'codex' | 'claude' | 'xai';
-  codex: ReturnType<typeof useCodexRateLimits>['snapshot'];
-  web: ReturnType<typeof useAccountUsage>;
-  claude: ReturnType<typeof useClaudeSubscriptionUsage>;
-  xai: ReturnType<typeof useXaiSubscriptionUsage>;
-}
+type SourceUsage = ProviderUsageSnapshots & {
+  source: NonNullable<ProviderUsageSnapshots['source']>;
+};
 const UsageContext = createContext<ReadonlyMap<string, SourceUsage>>(new Map());
 const ClockContext = createContext(0);
 
@@ -31,55 +28,55 @@ const ClockContext = createContext(0);
  * account-scoped hooks own fetching and invalidation; this context only composes views. */
 function SourceUsageProvider({
   provider,
-  source,
+  scope,
   children,
 }: {
   provider: ProviderView;
-  source: SourceUsage['source'];
+  scope: ProviderUsageScope;
   children: ReactNode;
 }) {
   const parent = useContext(UsageContext);
-  const { snapshot: codex } = useCodexRateLimits(source === 'codex', provider.id);
-  const web = useAccountUsage(
-    undefined,
-    source === 'codex' ? 'codex' : undefined,
-    'openai-web',
-    undefined,
-    provider.id,
-  );
-  const claude = useClaudeSubscriptionUsage(source === 'claude', provider.id);
-  const xai = useXaiSubscriptionUsage(source === 'xai', provider.id);
+  const { source, codex, claude, xai } = useProviderUsageSnapshots(provider, scope, { web: true });
   const value = useMemo(() => {
+    if (!source) return parent;
     const next = new Map(parent);
-    next.set(provider.id, { source, codex, web, claude, xai });
+    next.set(provider.id, { source, codex, claude, xai });
     return next;
-  }, [parent, provider.id, source, codex, web, claude, xai]);
+  }, [parent, provider.id, source, codex, claude, xai]);
   return <UsageContext.Provider value={value}>{children}</UsageContext.Provider>;
 }
 
 export function ModelSourceUsageProvider({
   providers,
-  enabled,
+  scope,
   children,
 }: {
   providers: readonly ProviderView[];
-  enabled: boolean;
+  /** null: this directory may not show any account's usage. */
+  scope: ProviderUsageScope | null;
   children: ReactNode;
 }) {
   const [nowMs, setNowMs] = useState(Date.now);
+  const enabled = scope !== null;
+  const deviceId = scope?.deviceId ?? null;
   useEffect(() => {
     if (!enabled) return;
     const timer = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [enabled]);
-  // Remote directories never mount local account readers, even for matching IDs.
+  // Readers follow the directory's owner: remote directories read the device's mirrors,
+  // never this desktop's accounts, even for matching IDs.
   const content = enabled
     ? providers.reduce<ReactNode>((content, provider) => {
         if (provider.auth?.method !== 'oauth') return content;
         const source = providerWeeklyQuotaSource(provider);
         if (!source || provider.subscriptionAccount?.reconnectRequired) return content;
         return (
-          <SourceUsageProvider key={provider.id} provider={provider} source={source}>
+          <SourceUsageProvider
+            key={`${deviceId ?? ''}:${provider.id}`}
+            provider={provider}
+            scope={{ deviceId }}
+          >
             {content}
           </SourceUsageProvider>
         );
@@ -106,21 +103,13 @@ function modelSourceQuota(
     const data = usage.codex;
     // ChatGPT bridge and Codex CLI consume different slots; never cross-fallback.
     const bucket = modelId.startsWith(CHATGPT_MODEL_PREFIX)
-      ? usage.web
-      : data
-        ? matchCodexBucketForModel(
-            data.rateLimitsByLimitId ?? {
-              [data.rateLimits.limitId ?? 'codex']: data.rateLimits,
-            },
-            modelId,
-            nowMs,
-          )
-        : null;
+      ? data?.web
+      : matchCodexBucketForModel(data?.buckets, modelId, nowMs);
     return {
       plan: formatCodexPlanLabel(
         modelId.startsWith(CHATGPT_MODEL_PREFIX)
           ? bucket?.planType
-          : (bucket?.planType ?? data?.account.planType),
+          : (bucket?.planType ?? data?.planType),
       ),
       windows: [bucket?.primary, bucket?.secondary].filter((w): w is NonNullable<typeof w> => !!w),
     };

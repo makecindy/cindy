@@ -11,6 +11,9 @@
  * 进程继续追加旧目录 jsonl 的分叉);'<pending>' 占位 id 不持久化不入集合但
  * 仍关 handle;空集 no-op、maker-core 抛错被吞并(移动主流程不受影响)。
  */
+import os from 'node:os';
+import path from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 
@@ -135,7 +138,7 @@ describe('relocateClaudeTranscriptsForSessionMove', () => {
     expect(out).toEqual({ persistedSdkSessionId: LIVE_ID });
   });
 
-  it('resolves projectsRoot from XDT_USER_DATA_DIR/claude-home in dev multi-instance runs', async () => {
+  it('uses the CLI default ~/.claude projects root in dev multi-instance runs too', async () => {
     const prevUserData = process.env.XDT_USER_DATA_DIR;
     const prevConfigDir = process.env.CLAUDE_CONFIG_DIR;
     process.env.XDT_USER_DATA_DIR = '/tmp/xdt-instance-b';
@@ -146,12 +149,10 @@ describe('relocateClaudeTranscriptsForSessionMove', () => {
 
       await relocateClaudeTranscriptsForSessionMove('s1', '/old/dir', '/new/dir');
 
-      // CLI 子进程被 auth-adapters 重定向到 <userData>/claude-home,迁移必须用同一根,
-      // 否则回退 ~/.claude 找不到源、也写不进 CLI 实际读取的目录。
+      // dev 与正式版一样不再给 CLI 设 CLAUDE_CONFIG_DIR,迁移必须写进 CLI 实际读取的
+      // 默认目录;旧版隔离目录 <userData>/claude-home 只作只读兜底。
       const args = h.relocate.mock.calls[0][0];
-      expect(args.projectsRoot?.split(/[\\/]/).slice(-3).join('/')).toBe(
-        'xdt-instance-b/claude-home/projects',
-      );
+      expect(args.projectsRoot).toBe(path.join(os.homedir(), '.claude', 'projects'));
     } finally {
       if (prevUserData === undefined) delete process.env.XDT_USER_DATA_DIR;
       else process.env.XDT_USER_DATA_DIR = prevUserData;

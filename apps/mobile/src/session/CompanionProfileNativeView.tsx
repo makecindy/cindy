@@ -7,11 +7,13 @@ export interface CompanionProfileNativeViewProps {
   panel?: ProfilePanel; values: ProfileValues; busy: boolean; online: boolean; dirty: boolean;
   loading: boolean; error: boolean; errorLabel?: string; conflict: boolean; receipt: string | null;
   confirmation: ProfilePanel | null; deleted: boolean; artifacts: ReactNode; models: ReactNode;
+  /** Saved-memories page (list / detail / edit), and whether the host offers it. */
+  memoryPage: ReactNode; hasMemoryEntries: boolean;
   onClose(): void; onClosed?(): void; onBack?(): void; onOpen(page: string): void;
   onChange(values: ProfileValues): void; onSubmit(panel: ProfilePanel, confirmed?: boolean): void;
   onConfirm(panel: ProfilePanel | null): void; onRetry(): void; onDiscard(reload: boolean): void;
   onEditor(resourceId: string): void; onEditorPanel(panel: ProfilePanel): void;
-  onSearch(): void; onAutomation(): void;
+  onSearch(): void;
 }
 // SwiftUI is isolated from Android's bundle. The shared component owns all draft/save logic.
 export function CompanionProfileNativeView(_props: CompanionProfileNativeViewProps) { return null; }

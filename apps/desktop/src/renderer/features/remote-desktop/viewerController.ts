@@ -87,7 +87,6 @@ export class DesktopViewerController {
   private opening = false;
   private epoch = 0;
   private resuming = false;
-  private wantsControl = true;
   private retryAt = 0;
   private retryDelay = 1000;
   private connectionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -312,7 +311,8 @@ export class DesktopViewerController {
             : 'control',
       });
       this.runtime.receive({ type: 'mode', mode: 'pointer' });
-      if (caps.canControl && this.wantsControl) await this.setControl(true);
+      if (!caps.canControl) throw new Error('DESKTOP_INPUT_UNSUPPORTED');
+      await this.acquireControl();
     } catch (error) {
       if (epoch === this.epoch) this.fail(error);
     } finally {
@@ -321,7 +321,11 @@ export class DesktopViewerController {
   }
   private fail(error: unknown): void {
     const code = error instanceof Error ? error.message : '';
-    const blocked = remoteDesktopFailureKey(code);
+    const blocked =
+      remoteDesktopFailureKey(code) ??
+      (/DESKTOP_(VIEW_ONLY|INPUT_(BUSY|UNSUPPORTED|UNAVAILABLE|TIMEOUT))/.test(code)
+        ? 'controlUnavailable'
+        : null);
     this.cancel(true);
     this.publish({ status: 'reconnecting', error: blocked });
     this.retryAt = Date.now() + this.retryDelay;
@@ -333,27 +337,17 @@ export class DesktopViewerController {
     this.resuming = false;
     void this.connect(this.state.error === 'connectionBusy');
   }
-  async setControl(enabled: boolean): Promise<void> {
+  private async acquireControl(): Promise<void> {
     if (this.state.closing || this.state.controlPending || !this.session.lease) return;
-    this.wantsControl = enabled;
     this.runtime.receive({ type: 'releaseInput' });
     const lease = this.session.lease;
     this.publish({ controlPending: true });
     this.syncControl();
     try {
-      const result = await this.session.control(enabled);
+      const result = await this.session.control(true);
       if (lease !== this.session.lease) return;
-      if (!result.controlling) this.wantsControl = false;
+      if (!result.controlling) throw new Error('DESKTOP_VIEW_ONLY');
       this.publish({ error: null });
-    } catch (error) {
-      if (lease !== this.session.lease) return;
-      this.wantsControl = false;
-      const code = error instanceof Error ? error.message : '';
-      if (/DESKTOP_(LEASE_EXPIRED|STOPPED|DISABLED)|ACCESS_REVOKED|REMOTE_DISABLED/.test(code)) {
-        this.fail(error);
-        return;
-      }
-      this.publish({ error: enabled ? (remoteDesktopFailureKey(code) ?? 'busy') : null });
     } finally {
       if (lease === this.session.lease) {
         this.publish({ controlPending: false });
@@ -366,10 +360,7 @@ export class DesktopViewerController {
    * Menu focus only releases held keys; it does not revoke desktop control. */
   private syncControl(): void {
     const controlling =
-      this.state.ready &&
-      this.wantsControl &&
-      !this.state.controlPending &&
-      this.session.lease?.controlling === true;
+      this.state.ready && !this.state.controlPending && this.session.lease?.controlling === true;
     if (controlling === this.state.controlling) return;
     this.clipboardRevision++;
     this.publish({ controlling });
@@ -669,8 +660,9 @@ export class DesktopViewerController {
     try {
       const result = await this.session.heartbeat();
       if (epoch === this.epoch) {
-        if (!result.controlling && this.state.controlling) this.wantsControl = false;
-        this.syncControl();
+        if (!result.controlling && !this.opening && !this.state.controlPending)
+          this.fail(new Error('DESKTOP_VIEW_ONLY'));
+        else this.syncControl();
       }
     } catch (error) {
       if (epoch === this.epoch && !(error instanceof Error && error.message === 'INVOKE_TIMEOUT'))
@@ -797,7 +789,7 @@ export class DesktopViewerController {
         break;
       }
       case 'inputOverflow':
-        void this.setControl(false);
+        this.fail(new Error('DESKTOP_INPUT_UNAVAILABLE'));
         break;
       case 'input':
         if (
@@ -813,8 +805,12 @@ export class DesktopViewerController {
           sequence: message.sequence as number,
           events: message.events,
         })
-          .catch(() => {
-            if (this.session.lease === lease) void this.setControl(false);
+          .catch((error) => {
+            if (
+              this.session.lease === lease &&
+              !(error instanceof Error && error.message === 'INVOKE_TIMEOUT')
+            )
+              this.fail(error);
           })
           .finally(() => {
             if (this.session.lease === lease)

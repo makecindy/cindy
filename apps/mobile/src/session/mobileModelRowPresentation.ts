@@ -105,3 +105,15 @@ export function quotaCountdown(reset: number, now: number, unitLabel: (unit: Quo
   if (remaining >= 60000) return `${Math.ceil(remaining / 60000)}${unitLabel("minute")}`;
   return `${Math.max(1, Math.ceil(remaining / 1000))}${unitLabel("second")}`;
 }
+
+/** The host's connection name and public identity, never the controller's account. */
+export function mobileProviderAccountTitle(provider: ProviderView): string {
+  const name = provider.name || provider.id;
+  const identity = provider.openAiAccount?.identity?.trim() || provider.subscriptionAccount?.identity?.trim();
+  if (!identity || name === identity) return name;
+  const base = name.replace(/ \(\d+\)$/, '');
+  if (base.endsWith(` · ${identity}`)) return name;
+  const separator = base.indexOf(' · ');
+  if (separator >= 0 && base.length === 50 && `${base.slice(0, separator)} · ${identity}`.slice(0, 50) === base) return name;
+  return `${name} · ${identity}`;
+}

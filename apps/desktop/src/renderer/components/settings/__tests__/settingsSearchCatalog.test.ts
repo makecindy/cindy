@@ -72,6 +72,7 @@ describe('settings search catalog', () => {
     expect(searchSettings(documents, '个人微信').map(({ entry }) => entry.id)).toContain(
       'imBot.wechat',
     );
+    expect(searchSettings(documents, 'Lark')[0]?.entry.id).toBe('imBot.lark');
   });
 
   it('finds common aliases and multi-word queries', () => {
@@ -82,37 +83,80 @@ describe('settings search catalog', () => {
 
   it('keeps the declaration catalog complete and unique', () => {
     expect(validateSettingsSearchCatalog()).toEqual([]);
-    expect(new Set(SETTINGS_SEARCH_MODULES.map(({ id }) => id)).size).toBe(SETTINGS_SEARCH_MODULES.length);
+    expect(new Set(SETTINGS_SEARCH_MODULES.map(({ id }) => id)).size).toBe(
+      SETTINGS_SEARCH_MODULES.length,
+    );
     for (const tab of TAB_IDS) {
-      expect(SETTINGS_SEARCH_ENTRIES.some((entry) => entry.tab === tab && entry.titleKey === TAB_LABEL_KEY[tab]), tab).toBe(true);
+      expect(
+        SETTINGS_SEARCH_ENTRIES.some(
+          (entry) => entry.tab === tab && entry.titleKey === TAB_LABEL_KEY[tab],
+        ),
+        tab,
+      ).toBe(true);
     }
   });
 
   it('uses real translated text in every supported language', async () => {
-    const locales = import.meta.glob<Record<string, unknown>>('../../../i18n/locales/*/common.json', { eager: true, import: 'default' });
+    const locales = import.meta.glob<Record<string, unknown>>(
+      '../../../i18n/locales/*/common.json',
+      { eager: true, import: 'default' },
+    );
     for (const [path, translation] of Object.entries(locales)) {
       const language = path.split('/').at(-2)!;
       const instance = createInstance();
-      await instance.init({ lng: language, resources: { [language]: { translation } }, fallbackLng: false });
+      await instance.init({
+        lng: language,
+        resources: { [language]: { translation } },
+        fallbackLng: false,
+      });
       for (const entry of SETTINGS_SEARCH_ENTRIES) {
-        for (const key of [entry.titleKey, entry.sectionKey, entry.descriptionKey, ...(entry.keywordKeys ?? [])].filter((key): key is string => Boolean(key))) {
-          expect(instance.exists(key) && typeof instance.t(key) === 'string', language + ': ' + key).toBe(true);
+        for (const key of [
+          entry.titleKey,
+          entry.sectionKey,
+          entry.descriptionKey,
+          ...(entry.keywordKeys ?? []),
+        ].filter((key): key is string => Boolean(key))) {
+          expect(
+            instance.exists(key) && typeof instance.t(key) === 'string',
+            language + ': ' + key,
+          ).toBe(true);
         }
       }
-      const documents = buildSettingsSearchDocuments(instance.t, TAB_IDS, { platform: 'win32', region: 'global', mode: 'cloud', membershipKind: 'personal' });
+      const documents = buildSettingsSearchDocuments(instance.t, TAB_IDS, {
+        platform: 'win32',
+        region: 'global',
+        mode: 'cloud',
+        membershipKind: 'personal',
+      });
       for (const document of documents) {
-        expect(searchSettings(documents, document.title).some(({ entry }) => entry.id === document.entry.id), language + ': ' + document.entry.id).toBe(true);
+        expect(
+          searchSettings(documents, document.title).some(
+            ({ entry }) => entry.id === document.entry.id,
+          ),
+          language + ': ' + document.entry.id,
+        ).toBe(true);
       }
     }
   });
 
   it('points to existing anchors and covers every search anchor', () => {
-    const sources = import.meta.glob<string>('../**/*.tsx', { query: '?raw', eager: true, import: 'default' });
-    const source = Object.entries(sources).filter(([path]) => !path.includes('__tests__') && !path.endsWith('/SettingsSearchBox.tsx')).map(([, text]) => text).join();
-    const targets = new Set(SETTINGS_SEARCH_ENTRIES.flatMap((entry) => [entry.targetId, entry.fallbackTargetId]));
+    const sources = import.meta.glob<string>('../**/*.tsx', {
+      query: '?raw',
+      eager: true,
+      import: 'default',
+    });
+    const source = Object.entries(sources)
+      .filter(([path]) => !path.includes('__tests__') && !path.endsWith('/SettingsSearchBox.tsx'))
+      .map(([, text]) => text)
+      .join();
+    const targets = new Set(
+      SETTINGS_SEARCH_ENTRIES.flatMap((entry) => [entry.targetId, entry.fallbackTargetId]),
+    );
     for (const target of targets) {
       if (target) {
-        const dynamicProviderAnchor = /^cindy-im-(slack|telegram|x)$/.test(target) && source.includes('id={\`cindy-im-\${provider}\`}');
+        const dynamicProviderAnchor =
+          /^cindy-im-(slack|telegram|x)$/.test(target) &&
+          source.includes('id={\`cindy-im-\${provider}\`}');
         expect(source.includes('id="' + target + '"') || dynamicProviderAnchor, target).toBe(true);
       }
     }
@@ -122,12 +166,28 @@ describe('settings search catalog', () => {
   });
 
   it('uses the same account and platform visibility as settings', () => {
-    const context = { platform: 'linux', region: 'cn', mode: 'local', membershipKind: null } as const;
-    const ids = (override = {}) => buildSettingsSearchDocuments(t, TAB_IDS, { ...context, ...override }).map(({ entry }) => entry.id);
+    const context = {
+      platform: 'linux',
+      region: 'cn',
+      mode: 'local',
+      membershipKind: null,
+    } as const;
+    const ids = (override = {}) =>
+      buildSettingsSearchDocuments(t, TAB_IDS, { ...context, ...override }).map(
+        ({ entry }) => entry.id,
+      );
     expect(ids()).not.toContain('remoteControl.devices');
     expect(ids({ mode: 'cloud' })).toContain('remoteControl.devices');
-    expect(ids({ mode: 'cloud', membershipKind: 'personal' })).not.toContain('imBot.discord');
-    expect(ids({ mode: 'cloud', membershipKind: 'personal' })).toContain('imBot.feishu');
+    for (const region of ['cn', 'dev', 'global'] as const) {
+      const visible = ids({ region, mode: 'cloud', membershipKind: 'personal' });
+      expect(visible).toContain('imBot.cindy');
+      expect(visible).toContain('imBot.cindy.telegram');
+      expect(visible).toContain('imBot.cindy.x');
+      expect(visible).toContain('imBot.discord');
+      expect(visible).toContain('imBot.telegram');
+      expect(visible).toContain('imBot.feishu');
+      expect(visible).toContain('imBot.lark');
+    }
     expect(ids()).not.toContain('imBot.cindy');
   });
 });

@@ -20,6 +20,7 @@ import {
   Settings2,
   Sparkles,
   Wrench,
+  Users,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -72,6 +73,7 @@ const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   'agent-island': AgentIslandNavIcon,
   import: FileUp,
   'remote-control': MonitorSmartphone,
+  'shared-tasks': Users,
   ghosts: Plug,
   'builtin-tools': Wrench,
   'computer-use': MonitorCog,

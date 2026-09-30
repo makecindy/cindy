@@ -17,6 +17,9 @@ import {
   warnWindowsGitPathProbeFailure,
 } from './windows-git-path-powershell.js';
 
+// Test-only startup/teardown headroom around the unchanged 10s coordinator.
+const PATH_PROBE_TEST_PROCESS_TIMEOUT_MS = 30_000;
+
 describe('Windows Git PATH PowerShell probes', () => {
   it('locks the registry probe command and distinguishes missing keys from real failures', () => {
     const script = buildWindowsRegistryProbeScript([
@@ -149,22 +152,37 @@ describe('Windows Git PATH PowerShell probes', () => {
             `Start-Sleep -Milliseconds ${childDelayMs}\n${Buffer.from(encoded, 'base64').toString('utf16le')}`,
             'utf16le',
           ).toString('base64');
-          return execFileSync(
-            path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-            ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script.replace(encoded, delayedCommand)],
-            {
-              encoding: 'utf8',
-              input: Buffer.from(JSON.stringify(groups), 'utf8'),
-              stdio: ['pipe', 'pipe', 'pipe'],
-              timeout: 15_000,
-              windowsHide: true,
-            },
-          );
+          const label = `[windows-git-path-test] child-delay=${childDelayMs}ms`;
+          const instrumentedScript = [
+            `[Console]::Error.WriteLine('${label} START coordinator')`,
+            script.replace(encoded, delayedCommand),
+            `[Console]::Error.WriteLine('${label} END coordinator')`,
+          ].join('\n');
+          const started = performance.now();
+          console.info(`${label} START process (timeout=${PATH_PROBE_TEST_PROCESS_TIMEOUT_MS}ms)`);
+          try {
+            return execFileSync(
+              path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+              ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', instrumentedScript],
+              {
+                encoding: 'utf8',
+                input: Buffer.from(JSON.stringify(groups), 'utf8'),
+                stdio: ['pipe', 'pipe', 'inherit'],
+                timeout: PATH_PROBE_TEST_PROCESS_TIMEOUT_MS,
+                windowsHide: true,
+              },
+            );
+          } finally {
+            console.info(`${label} END process (${Math.round(performance.now() - started)}ms)`);
+          }
         };
         if (delayMs > 0) {
           // Outlive even the outer deadline, so scheduler pauses cannot make the
           // negative case complete before the coordinator observes expiry.
-          const expired = runProbe(buildWindowsPathKindProbeScript(4, 10_000, 2), 30_000);
+          const expired = runProbe(
+            buildWindowsPathKindProbeScript(4, 10_000, 2),
+            PATH_PROBE_TEST_PROCESS_TIMEOUT_MS * 2,
+          );
           expect(expired).toMatch(/__CINDY_WINDOWS_GIT_PATH_DIAGNOSTIC__\tpath-process-(timeout|budget)/);
           expect(expired).not.toContain(`F\t${Buffer.from(validGit, 'utf16le').toString('base64')}`);
         }
@@ -181,7 +199,7 @@ describe('Windows Git PATH PowerShell probes', () => {
         rmSync(tempRoot, { recursive: true, force: true });
       }
     },
-    40_000,
+    PATH_PROBE_TEST_PROCESS_TIMEOUT_MS * 2 + 10_000,
   );
 
   it.runIf(process.platform === 'win32')(

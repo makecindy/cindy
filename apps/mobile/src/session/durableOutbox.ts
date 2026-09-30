@@ -1,3 +1,4 @@
+import type { AnnotationRegion } from "@cindy/maker-shared/image-annotation";
 import type { NewSessionDraft } from "./newSession";
 import type { ComposerDocument } from './composerDocument';
 import type { MobileOutboxItem } from "./sessionOutbox";
@@ -11,6 +12,8 @@ export interface DurableUpload {
   kind: "image" | "file";
   size: number;
   annotated?: boolean;
+  /** 标注区域(可选,见 RemoteSerializedAttachment.annotationRegions)。 */
+  annotationRegions?: AnnotationRegion[];
 }
 
 export interface DurableOutboxRecord {

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES } from '@cindy/plugin-protocol';
 
 const fetchMock = vi.hoisted(() => vi.fn());
-vi.mock('electron', () => ({ net: { fetch: fetchMock } }));
+vi.mock('../../downloader/http', () => ({ requestResponse: fetchMock }));
 
 import { downloadVerifiedPlugin } from '../download';
 
@@ -132,6 +132,7 @@ describe('downloadVerifiedPlugin', () => {
     const result = expect(
       downloadVerifiedPlugin('https://downloads.example.test/a', expected(Buffer.from('a')), file),
     ).rejects.toMatchObject({ code: 'GHOST_DOWNLOAD_TIMEOUT' });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     await vi.advanceTimersByTimeAsync(60_000);
     await result;
     expect(fs.existsSync(file)).toBe(false);

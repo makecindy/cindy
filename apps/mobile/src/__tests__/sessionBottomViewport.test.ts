@@ -44,7 +44,7 @@ it('clips the input and held card at the selected region while measuring only th
     const region = keyboardControlRegion(geometry, keyboardHeight);
     const bindings = { StyleSheet: { absoluteFill: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 } },
       adaptiveWindow: geometry, composerRegion: region, paneLayout: { detail: { x: 0, width: 800 } },
-      windowDimensions: geometry, insets: geometry.insets, styles: {}, nativeComposerFrameAvailable: true,
+      windowDimensions: geometry, insets: geometry.insets, styles: {}, nativeComposerFrameAvailable: true, androidFrostedComposer: false,
       sessionOperationLayout: { composerSlot: 'editable' }, shareSelectionActive: false,
       nativeShellLayout: { keyboardBottomInset: Math.max(0, keyboardHeight - 16) } };
     const clip = style(viewport, bindings);
@@ -60,4 +60,36 @@ it('clips the input and held card at the selected region while measuring only th
     expect(viewport.getText(source)).toContain('<ComposerActivityStatus');
     expect(viewport.getText(source)).toContain('<SessionComposerInput');
   }
+});
+
+it('keeps the newest row above the measured phone composer, including expanded input and safe area', async () => {
+  const { mobileMessageListBottomPadding, mobileMessageListEndOffset } = await import('@/session/messageScroll');
+  let inset: ts.Expression | undefined;
+  function visit(node: ts.Node) {
+    if (ts.isJsxAttribute(node) && node.name.getText(source) === 'contentBottomInset') {
+      inset = (node.initializer as ts.JsxExpression).expression;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  expect(inset).toBeDefined();
+  // Execute the actual SessionScreen prop and MessageRenderer padding helper.
+  const contentInset = new Function('bottomOverlayHeight', `
+    const companionInlineInteraction = false, shareSelectionActive = false,
+      nativeComposerFrameAvailable = true, sessionOperationLayout = { composerSlot: 'editable' },
+      MOBILE_MESSAGE_LIST_BOTTOM_PADDING = 132;
+    return (${inset!.getText(source)});
+  `);
+  for (const keyboard of [0, 310]) for (const composer of [96, 132, 280]) for (const body of [64, 2400, 3000]) {
+    const viewport = 844 - keyboard;
+    const padding = mobileMessageListBottomPadding(composer, contentInset(composer));
+    // LegendList alignItemsAtEnd aligns short histories; long histories use the
+    // same end offset that the production tail follower verifies after resize.
+    const height = Math.max(viewport, body + padding);
+    const offset = mobileMessageListEndOffset({ contentHeight: height, viewportHeight: viewport, offsetY: 0 });
+    const newestRowBottom = height - padding - offset;
+    expect(newestRowBottom).toBe(viewport - composer);
+    expect(padding).toBe(composer); // No extra gap from a fixed minimum on small inputs.
+  }
+  expect(contentInset(0)).toBe(132); // Only the as-yet unmeasured first layout uses the fallback.
 });

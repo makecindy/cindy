@@ -254,9 +254,10 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
       efforts: ['low'],
       defaultEffort: 'low',
     });
+    // The target's exact manufacturer declaration outranks a previous generation.
     expect(flatModels.find((m) => m.id === 'grok-4.5')).toMatchObject({
-      efforts: [],
-      defaultEffort: null,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium',
     });
   });
 
@@ -271,7 +272,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
           pi: {
             baseUrl: 'http://127.0.0.1:11434/v1',
             wireProtocol: 'openai-responses',
-            models: [{ id: 'grok-4.5', name: 'Grok 4.5 without reasoning' }],
+            models: [{ id: 'grok-4.5', name: 'Grok 4.5 without reasoning', reasoning: false }],
           },
         },
       }),

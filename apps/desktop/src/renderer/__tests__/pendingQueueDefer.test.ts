@@ -12,12 +12,25 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type {
-  AgentInputProjection,
-  AgentInputQueuedMessage,
-} from '../../shared/agentInputQueue';
+import type { AgentInputProjection, AgentInputQueuedMessage } from '../../shared/agentInputQueue';
+import type { AttachedFile } from '@/lib/fileTypes';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
-import { __resetStickySessionOriginForTest, getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import {
+  __resetStickySessionOriginForTest,
+  getStickySessionDeviceId,
+} from '@/features/device-link/stickySessionOrigin';
+
+const annotationBurnInMocks = vi.hoisted(() => ({
+  materialize: vi.fn(
+    async (files: readonly AttachedFile[] | undefined): Promise<AttachedFile[] | undefined> =>
+      files ? [...files] : undefined,
+  ),
+}));
+
+vi.mock('@/lib/annotationBurnIn', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/annotationBurnIn')>()),
+  materializeAnnotatedAttachmentsForSend: annotationBurnInMocks.materialize,
+}));
 
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => ({ items: [], hasMore: false, oldestId: null })),
@@ -67,7 +80,9 @@ vi.mock('@/lib/composerDraftStore', () => ({
   }),
 }));
 
-import { makerChatStore } from '@/lib/makerChatStore';
+import { makerChatStore, type QueuedMessage } from '@/lib/makerChatStore';
+import { AnnotationBurnInError } from '@/lib/annotationBurnIn';
+import { toast } from '@/lib/toast';
 
 const MODEL = 'claude-opus-4-7';
 const EFFORT = 'medium';
@@ -81,6 +96,15 @@ let remoteInvoke = vi.fn();
 const legacySend = vi.fn(async () => {});
 const legacySteer = vi.fn(async () => {});
 const generateTitle = vi.fn(async () => ({ title: 't' }));
+const cacheMediaForSession = vi.fn(async () => ({
+  url: 'xdt-image://session/copied.png',
+  name: 'copied.png',
+  ext: 'png',
+  mimeType: 'image/png',
+  size: 10,
+}));
+const cleanupCachedImages = vi.fn(async () => undefined);
+const cleanupStagedChatAttachments = vi.fn(async () => undefined);
 
 const input = {
   getProjection: vi.fn(async (sessionId: string) => projection(sessionId)),
@@ -104,6 +128,10 @@ const input = {
   clearError: vi.fn(async (sessionId: string) => projection(sessionId)),
   remove: vi.fn(async (sessionId: string) => projection(sessionId)),
   updateText: vi.fn(async (sessionId: string) => projection(sessionId)),
+  updateContent: vi.fn(
+    async (sessionId: string, _clientId: string, item: AgentInputQueuedMessage) =>
+      projection(sessionId, { pendingQueue: [item] }),
+  ),
   move: vi.fn(async (sessionId: string) => projection(sessionId)),
   setExpanded: vi.fn(async (sessionId: string, expanded: boolean) =>
     projection(sessionId, { queueExpanded: expanded }),
@@ -134,7 +162,7 @@ function projection(
   };
 }
 
-function queued(clientId: string, text: string): AgentInputQueuedMessage {
+function queued(clientId: string, text: string): QueuedMessage {
   return {
     clientId,
     text,
@@ -196,6 +224,9 @@ function installElectronBridge(): void {
       },
     },
     deviceLink: { invoke: remoteInvoke },
+    cacheMediaForSession,
+    cleanupCachedImages,
+    cleanupStagedChatAttachments,
   };
 }
 
@@ -207,6 +238,9 @@ const flushPromises = async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  annotationBurnInMocks.materialize.mockImplementation(async (files) =>
+    files ? [...files] : undefined,
+  );
   remoteProjectsStore.clear();
   __resetStickySessionOriginForTest();
   makerChatStore.__teardownGlobalListeners();
@@ -376,6 +410,636 @@ describe('renderer input queue facade', () => {
     expect(legacySteer).not.toHaveBeenCalled();
   });
 
+  it('replaces queued text and attachments through update-content', async () => {
+    const sid = `content-${Math.random().toString(36).slice(2, 8)}`;
+    const item = queued('q-content', 'keep metadata');
+    item.chatMessage.quotesEncoded = true;
+    item.chatMessage.slashCommandRanges = [{ start: 0, end: 4 }];
+
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+
+    const saved = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content: {
+        text: item.text,
+        mentions: [],
+        hasQuotes: false,
+        agentReferences: [],
+        pastedTextRanges: [],
+        slashCommandRanges: [],
+      },
+      files: [
+        {
+          id: 'new-image',
+          name: 'new.png',
+          path: 'C:\\images\\new.png',
+          ext: 'png',
+          size: 123,
+          category: 'image',
+          mimeType: 'image/png',
+          url: 'xdt-image://session/new.png',
+        },
+      ],
+    });
+
+    expect(saved).toBe(true);
+    expect(input.updateContent).toHaveBeenCalledWith(
+      sid,
+      item.clientId,
+      expect.objectContaining({
+        clientId: item.clientId,
+        files: [expect.objectContaining({ id: 'new-image' })],
+        chatMessage: expect.objectContaining({
+          quotesEncoded: true,
+          slashCommandRanges: [{ start: 0, end: 4 }],
+        }),
+      }),
+    );
+  });
+
+  it('accepts queue attachment projections after transport materializes base64', async () => {
+    const sid = `transport-fields-${Math.random().toString(36).slice(2, 8)}`;
+    const item = queued('q-transport-fields', 'keep transport fields out of intent');
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+    input.updateContent.mockImplementationOnce(
+      async (sessionId: string, _clientId: string, replacement: AgentInputQueuedMessage) =>
+        projection(sessionId, {
+          pendingQueue: [
+            {
+              ...replacement,
+              files: (replacement.files ?? []).map((file) => ({
+                ...file,
+                path: 'C:\\remote-cache\\materialized.png',
+                url: 'xdt-image://remote/materialized.png',
+                size: 87,
+                sha256: 'a'.repeat(64),
+                base64: undefined,
+              })),
+            },
+          ],
+        }),
+    );
+
+    const saved = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content: {
+        text: item.text,
+        mentions: [],
+        hasQuotes: false,
+        agentReferences: [],
+        pastedTextRanges: [],
+        slashCommandRanges: [],
+      },
+      files: [
+        {
+          id: 'transport-image',
+          name: 'transport.png',
+          path: 'C:\\images\\transport.png',
+          ext: 'png',
+          size: 123,
+          category: 'image',
+          mimeType: 'image/png',
+          base64: 'dHJhbnNwb3J0LWltYWdl',
+        },
+      ],
+    });
+
+    expect(saved).toBe(true);
+  });
+
+  it('recycles an ordinary controller image after a remote queue edit is accepted', async () => {
+    const sid = `remote-image-${Math.random().toString(36).slice(2, 8)}`;
+    const deviceId = 'dev-remote-image';
+    const item = queued('q-remote-image', 'ordinary remote image edit');
+    const sourceUrl = 'xdt-image://session/ordinary-source.png';
+    const source: AttachedFile = {
+      id: 'remote-image',
+      name: 'ordinary-source.png',
+      path: 'C:\\images\\ordinary-source.png',
+      ext: 'png',
+      size: 123,
+      category: 'image',
+      mimeType: 'image/png',
+      url: sourceUrl,
+    };
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+    remoteProjectsStore.setDeviceSessions(deviceId, 'Remote Mac', [{ id: sid } as never]);
+    remoteInvoke.mockImplementation(async (_deviceId, channel, args) => {
+      expect(channel).toBe('maker:input:update-content');
+      const replacement = args[2] as AgentInputQueuedMessage;
+      return projection(sid, {
+        pendingQueue: [
+          {
+            ...replacement,
+            files: (replacement.files ?? []).map((file) => ({
+              ...file,
+              path: 'C:\\remote-cache\\ordinary.png',
+              url: 'xdt-image://remote/ordinary.png',
+            })),
+          },
+        ],
+      });
+    });
+
+    const saved = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content: {
+        text: item.text,
+        mentions: [],
+        hasQuotes: false,
+        agentReferences: [],
+        pastedTextRanges: [],
+        slashCommandRanges: [],
+      },
+      files: [source],
+    });
+
+    expect(saved).toBe(true);
+    expect(cleanupCachedImages).toHaveBeenCalledWith([sourceUrl]);
+  });
+
+  it('recycles a newly annotated remote queue edit source only after acceptance', async () => {
+    const sid = `remote-annotation-${Math.random().toString(36).slice(2, 8)}`;
+    const deviceId = 'dev-remote-annotation';
+    const item = queued('q-remote-annotation', 'annotated remote edit');
+    const sourceUrl = 'xdt-image://session/annotation-source.png';
+    const burnedUrl = 'xdt-image://session/annotation-burned.png';
+    const source: AttachedFile = {
+      id: 'remote-annotation',
+      name: 'annotation-source.png',
+      path: 'C:\\images\\annotation-source.png',
+      ext: 'png',
+      size: 123,
+      category: 'image',
+      mimeType: 'image/png',
+      url: sourceUrl,
+      annotationStrokes: [{ points: [{ x: 0.1, y: 0.2 }] }],
+    };
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+    remoteProjectsStore.setDeviceSessions(deviceId, 'Remote Mac', [{ id: sid } as never]);
+    annotationBurnInMocks.materialize.mockResolvedValueOnce([
+      {
+        ...source,
+        url: burnedUrl,
+        annotated: true,
+        annotationStrokes: undefined,
+        annotationSourceUrl: undefined,
+      },
+    ]);
+    remoteInvoke.mockImplementation(async (_deviceId, channel, args) => {
+      expect(channel).toBe('maker:input:update-content');
+      const replacement = args[2] as AgentInputQueuedMessage;
+      return projection(sid, { pendingQueue: [replacement] });
+    });
+
+    const saved = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content: {
+        text: item.text,
+        mentions: [],
+        hasQuotes: false,
+        agentReferences: [],
+        pastedTextRanges: [],
+        slashCommandRanges: [],
+      },
+      files: [source],
+    });
+
+    expect(saved).toBe(true);
+    expect(cleanupCachedImages).toHaveBeenCalledWith([sourceUrl]);
+  });
+
+  it('keeps an annotated remote queue edit source when the replacement is rejected', async () => {
+    const sid = `remote-annotation-rejected-${Math.random().toString(36).slice(2, 8)}`;
+    const deviceId = 'dev-remote-annotation-rejected';
+    const item = queued('q-remote-annotation-rejected', 'annotated remote edit');
+    const sourceUrl = 'xdt-image://session/rejected-annotation-source.png';
+    const burnedUrl = 'xdt-image://session/rejected-annotation-burned.png';
+    const source: AttachedFile = {
+      id: 'remote-annotation-rejected',
+      name: 'rejected-annotation-source.png',
+      path: 'C:\\images\\rejected-annotation-source.png',
+      ext: 'png',
+      size: 123,
+      category: 'image',
+      mimeType: 'image/png',
+      url: sourceUrl,
+      annotationStrokes: [{ points: [{ x: 0.1, y: 0.2 }] }],
+    };
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+    remoteProjectsStore.setDeviceSessions(deviceId, 'Remote Mac', [{ id: sid } as never]);
+    annotationBurnInMocks.materialize.mockResolvedValueOnce([
+      {
+        ...source,
+        url: burnedUrl,
+        annotated: true,
+        annotationStrokes: undefined,
+        annotationSourceUrl: undefined,
+      },
+    ]);
+    remoteInvoke.mockResolvedValue(projection(sid, { pendingQueue: [item] }));
+
+    const saved = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content: {
+        text: item.text,
+        mentions: [],
+        hasQuotes: false,
+        agentReferences: [],
+        pastedTextRanges: [],
+        slashCommandRanges: [],
+      },
+      files: [source],
+    });
+
+    expect(saved).toBe(false);
+    expect(cleanupCachedImages).toHaveBeenCalledTimes(1);
+    expect(cleanupCachedImages).toHaveBeenCalledWith([burnedUrl]);
+  });
+
+  it('cleans original queue attachment artifacts only after an accepted replacement', async () => {
+    const sid = `cleanup-content-${Math.random().toString(36).slice(2, 8)}`;
+    const item = queued('q-cleanup-content', 'keep text');
+    item.files = [
+      {
+        id: 'old-image',
+        name: 'old.png',
+        path: 'C:\\images\\old.png',
+        ext: 'png',
+        size: 1,
+        category: 'image',
+        mimeType: 'image/png',
+        url: 'xdt-image://session/old.png',
+        annotated: true,
+      },
+      {
+        id: 'old-staged-file',
+        name: 'old.exe',
+        path: 'C:\\cache\\old.bin',
+        ext: 'exe',
+        size: 1,
+        category: 'file',
+        mimeType: 'application/octet-stream',
+      },
+    ];
+    item.chatMessage.retryFiles = [
+      {
+        ...item.files[0],
+        annotationSourceUrl: 'xdt-image://session/old-source.png',
+        annotationStrokes: [{ points: [{ x: 0.25, y: 0.75 }] }],
+      },
+    ];
+
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+
+    const saved = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content: {
+        text: item.text,
+        mentions: [],
+        hasQuotes: false,
+        agentReferences: [],
+        pastedTextRanges: [],
+        slashCommandRanges: [],
+      },
+      files: [],
+    });
+
+    expect(saved).toBe(true);
+    expect(cleanupCachedImages).toHaveBeenCalledWith([
+      'xdt-image://session/old.png',
+      'xdt-image://session/old-source.png',
+    ]);
+    expect(cleanupStagedChatAttachments).toHaveBeenCalledWith(['C:\\cache\\old.bin']);
+  });
+
+  it('uses the editor mentions when visible text is unchanged', async () => {
+    const sid = 'same-text-mentions-' + Math.random().toString(36).slice(2, 8);
+    const item = queued('q-same-text-mentions', 'keep @src/app.ts');
+    item.mentions = [{ type: 'file', name: 'app.ts', path: 'src/app.ts' }];
+
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+
+    const saved = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content: {
+        text: item.text,
+        mentions: [],
+        hasQuotes: false,
+        agentReferences: [],
+        pastedTextRanges: [],
+        slashCommandRanges: [],
+      },
+      files: [],
+    });
+
+    expect(saved).toBe(true);
+    expect(input.updateContent).toHaveBeenCalledWith(
+      sid,
+      item.clientId,
+      expect.objectContaining({ mentions: [] }),
+    );
+  });
+
+  it('rejects a queue edit when the projection keeps stale mentions', async () => {
+    const sid = 'stale-mentions-' + Math.random().toString(36).slice(2, 8);
+    const item = queued('q-stale-mentions', 'keep @src/app.ts');
+    item.mentions = [{ type: 'file', name: 'app.ts', path: 'src/app.ts' }];
+
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+    input.updateContent.mockImplementationOnce(async () =>
+      projection(sid, { pendingQueue: [item] }),
+    );
+
+    const saved = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content: {
+        text: item.text,
+        mentions: [],
+        hasQuotes: false,
+        agentReferences: [],
+        pastedTextRanges: [],
+        slashCommandRanges: [],
+      },
+      files: [],
+    });
+
+    expect(saved).toBe(false);
+  });
+
+  it('falls back to update-text when an old device-link target lacks update-content', async () => {
+    const sid = `legacy-content-${Math.random().toString(36).slice(2, 8)}`;
+    const item = queued('q-legacy-content', 'old text');
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+    input.updateContent.mockRejectedValueOnce(
+      new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] update-content unavailable'),
+    );
+    input.updateText.mockImplementationOnce(async (sessionId: string) =>
+      projection(sessionId, {
+        pendingQueue: [{
+          ...item,
+          text: 'edited text',
+          persistedContent: item.persistedContent,
+          chatMessage: { ...item.chatMessage, content: 'edited text' },
+        }],
+      }),
+    );
+
+    const saved = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content: {
+        text: 'edited text',
+        mentions: [],
+        hasQuotes: false,
+        agentReferences: [],
+        pastedTextRanges: [],
+        slashCommandRanges: [],
+      },
+      files: [],
+    });
+
+    expect(saved).toBe(true);
+    expect(input.updateText).toHaveBeenCalledWith(sid, item.clientId, 'edited text', undefined);
+  });
+
+  it('falls back for an unchanged annotation on an old target but rejects changed strokes', async () => {
+    const sid = `legacy-annotation-${Math.random().toString(36).slice(2, 8)}`;
+    const deviceId = 'dev-legacy-annotation';
+    const sourceUrl = 'xdt-image://session/legacy-source.jpg';
+    const burnedUrl = 'xdt-image://session/legacy-burned.png';
+    const rematerializedUrl = 'xdt-image://session/legacy-rematerialized.png';
+    const strokes = [{ points: [{ x: 0.2, y: 0.8 }] }];
+    const item = queued('q-legacy-annotation', 'old text');
+    item.files = [{
+      id: 'legacy-annotation',
+      name: 'legacy-burned.png',
+      originalName: 'legacy-burned.png',
+      path: 'C:\\images\\legacy-burned.png',
+      ext: '.png',
+      size: 123,
+      category: 'image',
+      mimeType: 'image/png',
+      url: burnedUrl,
+      annotated: true,
+    }];
+    item.chatMessage.retryFiles = [{
+      ...item.files[0],
+      annotationSourceUrl: sourceUrl,
+      annotationStrokes: strokes,
+    }];
+    const editableFile: AttachedFile = {
+      ...item.files[0],
+      path: sourceUrl,
+      url: sourceUrl,
+      ext: '.jpg',
+      mimeType: 'image/jpeg',
+      annotated: undefined,
+      annotationStrokes: strokes.map((stroke) => ({
+        points: stroke.points.map((point) => ({ ...point })),
+      })),
+      cacheUrlShared: true,
+      stagedPathShared: true,
+    };
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+    remoteProjectsStore.setDeviceSessions(deviceId, 'Remote Mac', [{ id: sid } as never]);
+    annotationBurnInMocks.materialize.mockResolvedValueOnce([{
+      ...editableFile,
+      name: 'legacy-rematerialized.png',
+      originalName: 'legacy-rematerialized.png',
+      url: rematerializedUrl,
+      ext: '.png',
+      mimeType: 'image/png',
+      annotated: true,
+      annotationStrokes: undefined,
+    }]);
+    remoteInvoke.mockImplementation(async (_deviceId, channel) => {
+      if (channel === 'maker:input:update-content') {
+        throw new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] update-content unavailable');
+      }
+      expect(channel).toBe('maker:input:update-text');
+      return projection(sid, {
+        pendingQueue: [{
+          ...item,
+          text: 'edited text',
+          persistedContent: item.persistedContent,
+          chatMessage: { ...item.chatMessage, content: 'edited text' },
+        }],
+      });
+    });
+
+    const saved = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content: {
+        text: 'edited text',
+        mentions: [],
+        hasQuotes: false,
+        agentReferences: [],
+        pastedTextRanges: [],
+        slashCommandRanges: [],
+      },
+      files: [editableFile],
+    });
+
+    expect(saved).toBe(true);
+    expect(remoteInvoke).toHaveBeenCalledWith(
+      deviceId,
+      'maker:input:update-content',
+      expect.any(Array),
+    );
+    expect(remoteInvoke).toHaveBeenCalledWith(
+      deviceId,
+      'maker:input:update-text',
+      expect.any(Array),
+    );
+    expect(cleanupCachedImages).toHaveBeenCalledWith([rematerializedUrl]);
+
+    const updateTextCalls = remoteInvoke.mock.calls.filter(
+      ([, channel]) => channel === 'maker:input:update-text',
+    ).length;
+    await expect(
+      makerChatStore.updateQueueItemContent(sid, item.clientId, {
+        content: {
+          text: 'edited again',
+          mentions: [],
+          hasQuotes: false,
+          agentReferences: [],
+          pastedTextRanges: [],
+          slashCommandRanges: [],
+        },
+        files: [{
+          ...editableFile,
+          annotationStrokes: [{ points: [{ x: 0.4, y: 0.6 }] }],
+        }],
+      }),
+    ).rejects.toThrow('update-content unavailable');
+    expect(
+      remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:input:update-text'),
+    ).toHaveLength(updateTextCalls);
+  });
+
+  it('does not fall back to update-text when queue edit attachments change', async () => {
+    const sid = `legacy-attachment-${Math.random().toString(36).slice(2, 8)}`;
+    const item = queued('q-legacy-attachment', 'keep text');
+    item.files = [{
+      id: 'old-file',
+      name: 'old.png',
+      path: 'C:\\images\\old.png',
+      ext: 'png',
+      size: 1,
+      category: 'image',
+      mimeType: 'image/png',
+    }];
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+    input.updateContent.mockRejectedValueOnce(
+      new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] update-content unavailable'),
+    );
+    input.updateText.mockClear();
+
+    await expect(
+      makerChatStore.updateQueueItemContent(sid, item.clientId, {
+        content: {
+          text: 'edited text',
+          mentions: [],
+          hasQuotes: false,
+          agentReferences: [],
+          pastedTextRanges: [],
+          slashCommandRanges: [],
+        },
+        files: [{
+          id: 'new-file',
+          name: 'new.png',
+          path: 'C:\\images\\new.png',
+          ext: 'png',
+          size: 1,
+          category: 'image',
+          mimeType: 'image/png',
+        }],
+      }),
+    ).rejects.toThrow('update-content unavailable');
+    expect(input.updateText).not.toHaveBeenCalled();
+  });
+
+  it('supports attachment-only queue edits and rejects a fully empty replacement', async () => {
+    const sid = `attachment-only-${Math.random().toString(36).slice(2, 8)}`;
+    const item = queued('q-attachment-only', '');
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+
+    const content = {
+      text: '',
+      mentions: [],
+      hasQuotes: false,
+      agentReferences: [],
+      pastedTextRanges: [],
+      slashCommandRanges: [],
+    };
+    const saved = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content,
+      files: [
+        {
+          id: 'only-image',
+          name: 'only.png',
+          path: 'C:\\images\\only.png',
+          ext: 'png',
+          size: 1,
+          category: 'image',
+          mimeType: 'image/png',
+          url: 'xdt-image://session/only.png',
+        },
+      ],
+    });
+    expect(saved).toBe(true);
+
+    input.updateContent.mockClear();
+    const rejected = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content,
+      files: [],
+    });
+    expect(rejected).toBe(false);
+    expect(input.updateContent).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unchanged queued image in place instead of copying its shared draft view', async () => {
+    const sid = `existing-image-${Math.random().toString(36).slice(2, 8)}`;
+    const item = queued('q-existing-image', 'keep image');
+    const existingImage = {
+      id: 'existing-image',
+      name: 'existing.png',
+      path: 'C:\\images\\existing.png',
+      ext: 'png',
+      size: 10,
+      category: 'image' as const,
+      mimeType: 'image/png',
+      url: 'xdt-image://session/existing.png',
+    };
+    item.files = [{ ...existingImage, pathOrigin: 'desktop-host' }];
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+
+    const saved = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content: {
+        text: item.text,
+        mentions: [],
+        hasQuotes: false,
+        agentReferences: [],
+        pastedTextRanges: [],
+        slashCommandRanges: [],
+      },
+      files: [{ ...existingImage, cacheUrlShared: true, stagedPathShared: true }],
+    });
+
+    expect(saved).toBe(true);
+    expect(cacheMediaForSession).not.toHaveBeenCalled();
+    expect(input.updateContent).toHaveBeenCalledWith(
+      sid,
+      item.clientId,
+      expect.objectContaining({
+        files: [expect.objectContaining({ url: existingImage.url })],
+      }),
+    );
+  });
+
   it('keeps queue controls on the sticky remote device while the live mirror is rebuilding', async () => {
     const sid = `sticky-row-${Math.random().toString(36).slice(2, 8)}`;
     const deviceId = 'dev-sticky';
@@ -408,6 +1072,44 @@ describe('renderer input queue facade', () => {
       messageClientId: 'new-anchor',
       deviceId: 'source-device',
     }]);
+  });
+
+  it('preserves queued source device hints in composer queue edits', async () => {
+    const sid = `content-ref-${Math.random().toString(36).slice(2, 8)}`;
+    const item = queued('q-content-ref', 'compare cindy://session/source?message=old-anchor');
+    item.sessionRefs = [
+      { sessionId: 'source', messageClientId: 'old-anchor', deviceId: 'source-device' },
+    ];
+
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+
+    const saved = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content: {
+        text: 'edited cindy://session/source?message=new-anchor',
+        mentions: [],
+        hasQuotes: false,
+        agentReferences: [],
+        pastedTextRanges: [],
+        slashCommandRanges: [],
+      },
+      files: [],
+    });
+
+    expect(saved).toBe(true);
+    expect(input.updateContent).toHaveBeenCalledWith(
+      sid,
+      item.clientId,
+      expect.objectContaining({
+        sessionRefs: [
+          {
+            sessionId: 'source',
+            messageClientId: 'new-anchor',
+            deviceId: 'source-device',
+          },
+        ],
+      }),
+    );
   });
 
   it('delegates composer steer, stop, resume and retry to main input intents', async () => {
@@ -463,5 +1165,255 @@ describe('renderer input queue facade', () => {
     await flushPromises();
 
     expect(ok).toBe(false);
+  });
+});
+
+describe('annotation burn-in in the renderer send / queue-edit paths', () => {
+  /** 最近一次物化调用的选项(mock 签名只声明了 files,这里按真实签名取第三参)。 */
+  function materializeOptions(): Record<string, unknown> | undefined {
+    const call = annotationBurnInMocks.materialize.mock.calls.at(-1) as unknown as
+      | [unknown, unknown, Record<string, unknown> | undefined]
+      | undefined;
+    return call?.[2];
+  }
+  const strokes = [{ points: [{ x: 0.2, y: 0.8 }, { x: 0.4, y: 0.6 }] }];
+  const editContent = {
+    text: 'edited text',
+    mentions: [],
+    hasQuotes: false,
+    agentReferences: [],
+    pastedTextRanges: [],
+    slashCommandRanges: [],
+  };
+
+  function annotatedQueueItem(burnedUrl: string) {
+    const sourceUrl = 'cindy-media://blobs/source.jpg';
+    const item = queued(`q-annotated-${Math.random().toString(36).slice(2, 8)}`, 'old text');
+    item.files = [{
+      id: 'annotated-image',
+      name: 'shot-annotated.png',
+      originalName: 'shot-annotated.png',
+      path: 'C:\\images\\shot.jpg',
+      ext: '.png',
+      size: 123,
+      category: 'image',
+      mimeType: 'image/png',
+      url: burnedUrl,
+      annotated: true,
+      annotationRegions: [{ x0: 0.2, y0: 0.6, x1: 0.4, y1: 0.8 }],
+    }];
+    const retryFile: AttachedFile = {
+      ...item.files[0],
+      annotationSourceUrl: sourceUrl,
+      annotationStrokes: strokes,
+      cacheUrlShared: true,
+    };
+    item.chatMessage.retryFiles = [retryFile];
+    // 队列编辑草稿里的可编辑态(queueMessageToComposerEditDraft 的产物形态)。
+    const editableFile: AttachedFile = {
+      ...item.files[0],
+      path: sourceUrl,
+      url: sourceUrl,
+      ext: '.jpg',
+      mimeType: 'image/jpeg',
+      annotated: undefined,
+      annotationRegions: undefined,
+      annotationStrokes: strokes.map((stroke) => ({
+        points: stroke.points.map((point) => ({ ...point })),
+      })),
+      cacheUrlShared: true,
+      stagedPathShared: true,
+    };
+    return { item, retryFile, editableFile };
+  }
+
+  it('reuses the queued burned bitmap when only the text of a queued message changed', async () => {
+    const sid = `annotated-reuse-${Math.random().toString(36).slice(2, 8)}`;
+    const burnedUrl = 'cindy-media://blobs/burned.png';
+    const { item, retryFile, editableFile } = annotatedQueueItem(burnedUrl);
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+
+    const saved = await makerChatStore.updateQueueItemContent(sid, item.clientId, {
+      content: editContent,
+      files: [editableFile],
+    });
+
+    expect(saved).toBe(true);
+    const [materializeInput] = annotationBurnInMocks.materialize.mock.calls.at(-1) ?? [];
+    // 交给物化的是队列里的烧录附件本身(retryFile,含所有权标记与元数据),不再重烧。
+    expect(materializeInput?.[0]).toBe(retryFile);
+    const replacement = input.updateContent.mock.calls.at(-1)?.[2] as unknown as QueuedMessage;
+    expect(replacement.files?.[0]).toMatchObject({
+      url: burnedUrl,
+      annotated: true,
+      annotationRegions: [{ x0: 0.2, y0: 0.6, x1: 0.4, y1: 0.8 }],
+    });
+    expect(replacement.chatMessage.retryFiles?.[0]).toMatchObject({
+      url: burnedUrl,
+      annotationSourceUrl: 'cindy-media://blobs/source.jpg',
+      cacheUrlShared: true,
+    });
+    for (const call of cleanupCachedImages.mock.calls as unknown as Array<[string[]]>) {
+      expect(call[0]).not.toContain(burnedUrl);
+      expect(call[0]).not.toContain('cindy-media://blobs/source.jpg');
+    }
+  });
+
+  it('re-burns when the strokes changed or the burned file is a legacy xdt-image', async () => {
+    const changedSid = `annotated-changed-${Math.random().toString(36).slice(2, 8)}`;
+    const changed = annotatedQueueItem('cindy-media://blobs/burned.png');
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(changedSid, { pendingQueue: [changed.item] }));
+    const changedFile = {
+      ...changed.editableFile,
+      annotationStrokes: [{ points: [{ x: 0.5, y: 0.5 }] }],
+    };
+    await makerChatStore.updateQueueItemContent(changedSid, changed.item.clientId, {
+      content: editContent,
+      files: [changedFile],
+    });
+    expect(annotationBurnInMocks.materialize.mock.calls.at(-1)?.[0]?.[0]).toBe(changedFile);
+
+    const legacySid = `annotated-legacy-${Math.random().toString(36).slice(2, 8)}`;
+    const legacy = annotatedQueueItem('xdt-image://session/burned.png');
+    projectionHandler?.(projection(legacySid, { pendingQueue: [legacy.item] }));
+    await makerChatStore.updateQueueItemContent(legacySid, legacy.item.clientId, {
+      content: editContent,
+      files: [legacy.editableFile],
+    });
+    expect(annotationBurnInMocks.materialize.mock.calls.at(-1)?.[0]?.[0]).toBe(
+      legacy.editableFile,
+    );
+  });
+
+  it('aborts a queue edit on burn-in failure without touching the queued item', async () => {
+    const sid = `annotated-abort-${Math.random().toString(36).slice(2, 8)}`;
+    const { item, editableFile } = annotatedQueueItem('cindy-media://blobs/burned.png');
+    makerChatStore.initGlobalListeners();
+    projectionHandler?.(projection(sid, { pendingQueue: [item] }));
+    annotationBurnInMocks.materialize.mockRejectedValueOnce(
+      new AnnotationBurnInError('shot.png', new Error('decode failed')),
+    );
+    const changedFile = { ...editableFile, annotationStrokes: [{ points: [{ x: 0.5, y: 0.5 }] }] };
+
+    await expect(
+      makerChatStore.updateQueueItemContent(sid, item.clientId, {
+        content: editContent,
+        files: [changedFile],
+      }),
+    ).rejects.toBeInstanceOf(AnnotationBurnInError);
+    expect(materializeOptions()).toMatchObject({
+      burnFailure: 'abort',
+    });
+    expect(input.updateContent).not.toHaveBeenCalled();
+    expect(input.updateText).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(sid).pendingQueue[0]).toBe(item);
+  });
+
+  it('aborts an interactive local send on burn-in failure: returns false, no enqueue, error toast', async () => {
+    const sid = `annotated-send-abort-${Math.random().toString(36).slice(2, 8)}`;
+    const errorToast = vi.spyOn(toast, 'error');
+    annotationBurnInMocks.materialize.mockRejectedValueOnce(
+      new AnnotationBurnInError('shot.png', new Error('decode failed')),
+    );
+    const file: AttachedFile = {
+      id: 'tray-image',
+      name: 'shot.png',
+      path: 'C:\\images\\shot.png',
+      ext: '.png',
+      size: 1,
+      category: 'image',
+      mimeType: 'image/png',
+      url: 'cindy-media://blobs/tray.png',
+      annotationStrokes: strokes,
+    };
+
+    const ok = await makerChatStore.sendMessage(sid, 'look here', MODEL, EFFORT, PERM, WD, [file], undefined, {
+      annotationBurnFailure: 'abort',
+    });
+    await flushPromises();
+
+    expect(ok).toBe(false);
+    expect(materializeOptions()).toMatchObject({
+      burnFailure: 'abort',
+    });
+    expect(input.enqueue).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(sid).messages).toHaveLength(0);
+    expect(errorToast).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not claim "sent without annotations" when the fallback send is not accepted', async () => {
+    const sid = `annotated-send-fallback-rejected-${Math.random().toString(36).slice(2, 8)}`;
+    const warningToast = vi.spyOn(toast, 'warning');
+    (
+      annotationBurnInMocks.materialize as unknown as ReturnType<typeof vi.fn>
+    ).mockImplementationOnce(
+      async (
+        files: readonly AttachedFile[] | undefined,
+        _sessionId: string,
+        opts?: { onFallback?: (count: number) => void },
+      ) => {
+        opts?.onFallback?.(1);
+        return files ? files.map((f) => ({ ...f, annotationStrokes: undefined })) : undefined;
+      },
+    );
+    const file: AttachedFile = {
+      id: 'tray-image',
+      name: 'shot.png',
+      path: 'C:\\images\\shot.png',
+      ext: '.png',
+      size: 1,
+      category: 'image',
+      mimeType: 'image/png',
+      url: 'cindy-media://blobs/tray.png',
+      annotationStrokes: strokes,
+    };
+
+    const ok = await makerChatStore.sendMessage(sid, 'look here', MODEL, EFFORT, PERM, WD, [file], undefined, {
+      beforeEnqueue: async () => false,
+    });
+    await flushPromises();
+
+    expect(ok).toBe(false);
+    expect(input.enqueue).not.toHaveBeenCalled();
+    expect(warningToast).not.toHaveBeenCalled();
+  });
+
+  it('keeps the fallback (and warns) for sends that did not opt into aborting', async () => {
+    const sid = `annotated-send-fallback-${Math.random().toString(36).slice(2, 8)}`;
+    const warningToast = vi.spyOn(toast, 'warning');
+    (
+      annotationBurnInMocks.materialize as unknown as ReturnType<typeof vi.fn>
+    ).mockImplementationOnce(
+      async (
+        files: readonly AttachedFile[] | undefined,
+        _sessionId: string,
+        opts?: { onFallback?: (count: number) => void },
+      ) => {
+        opts?.onFallback?.(1);
+        return files ? files.map((f) => ({ ...f, annotationStrokes: undefined })) : undefined;
+      },
+    );
+    const file: AttachedFile = {
+      id: 'tray-image',
+      name: 'shot.png',
+      path: 'C:\\images\\shot.png',
+      ext: '.png',
+      size: 1,
+      category: 'image',
+      mimeType: 'image/png',
+      url: 'cindy-media://blobs/tray.png',
+      annotationStrokes: strokes,
+    };
+
+    await makerChatStore.sendMessage(sid, 'look here', MODEL, EFFORT, PERM, WD, [file]);
+    await flushPromises();
+
+    expect(materializeOptions()).toMatchObject({
+      burnFailure: 'fallback',
+    });
+    expect(input.enqueue).toHaveBeenCalledTimes(1);
+    expect(warningToast).toHaveBeenCalledTimes(1);
   });
 });

@@ -2,9 +2,11 @@ import { createHash } from 'node:crypto';
 import { notificationPreview } from '../notificationPreview.js';
 import {
   NOTIFY_BODY_MAX_LENGTH,
+  NOTIFY_DEEP_LINK_MAX_LENGTH,
   NOTIFY_TITLE_MAX_LENGTH,
   type NotifyCategory,
   type NotifyPayload,
+  type NotifySender,
 } from '@cindy/device-link';
 
 /**
@@ -37,6 +39,12 @@ export function buildSessionNotifyPayload(opts: {
   fallbackBody: string;
   /** 内容摘要(可选):折叠空白后按协议上限截断 */
   detail?: string;
+  /**
+   * 伙伴主任务的 Bot id。带上后手机把通知打开为该伙伴的聊天(伙伴页头、抽屉与已读)，
+   * 而不是普通任务视图；参数与名册进入聊天时相同，旧手机同样识别，缺省保持原深链。
+   */
+  teammateBotId?: string;
+  teammateAvatar?: NotifySender['avatar'];
 }): NotifyPayload {
   const safeTitle = (opts.title.trim() || opts.sessionId.slice(0, 8)).slice(
     0,
@@ -47,7 +55,13 @@ export function buildSessionNotifyPayload(opts: {
     category: CATEGORY_BY_KIND[opts.kind],
     title: safeTitle,
     body: detail || opts.fallbackBody.slice(0, NOTIFY_BODY_MAX_LENGTH),
-    deepLink: `/sessions/${encodeURIComponent(opts.sessionId)}?deviceId=${encodeURIComponent(opts.selfDeviceId)}`,
+    deepLink: sessionDeepLink(opts.sessionId, opts.selfDeviceId, opts.teammateBotId),
+    ...(opts.kind === 'done' && opts.teammateBotId ? {
+      sender: {
+        id: createHash('sha256').update(`${opts.selfDeviceId}:bot:${opts.teammateBotId}`).digest('hex'),
+        ...(opts.teammateAvatar ? { avatar: opts.teammateAvatar } : {}),
+      },
+    } : {}),
     // 同会话的通知在系统层合并(APNs collapse-id / thread-id);混入 srcDeviceId,
     // 多台桌面推同名会话时互不顶替。原样拼接不可行:deviceId 可能是 64 位
     // machineId,拼出 100+ 字符会被 APNs 的 64 字节 collapse-id 上限截断成
@@ -58,6 +72,39 @@ export function buildSessionNotifyPayload(opts: {
       .digest('hex')
       .slice(0, 32),
   };
+}
+
+/**
+ * A 分工 step waiting for the phone's owner (bot-group-chat.md §8.3). There is no category for
+ * groups in the notify protocol, so it rides `session-needs-reply`; the deep link opens the
+ * group on the phone. Phones without the group screen ignore the unknown link and just open.
+ */
+export function buildBotGroupNotifyPayload(opts: {
+  groupId: string;
+  title: string;
+  body: string;
+  selfDeviceId: string;
+}): NotifyPayload {
+  const title = (opts.title.trim() || opts.groupId.slice(0, 8)).slice(0, NOTIFY_TITLE_MAX_LENGTH);
+  return {
+    category: 'session-needs-reply',
+    title,
+    body: notificationPreview(opts.body, NOTIFY_BODY_MAX_LENGTH),
+    deepLink: `/companions/groups/${encodeURIComponent(opts.groupId)}?deviceId=${encodeURIComponent(opts.selfDeviceId)}`
+      .slice(0, NOTIFY_DEEP_LINK_MAX_LENGTH),
+    collapseId: createHash('sha256')
+      .update(`${opts.selfDeviceId}:bot-group:${opts.groupId}`)
+      .digest('hex')
+      .slice(0, 32),
+  };
+}
+
+function sessionDeepLink(sessionId: string, deviceId: string, teammateBotId?: string): string {
+  const base = `/sessions/${encodeURIComponent(sessionId)}?deviceId=${encodeURIComponent(deviceId)}`;
+  if (!teammateBotId) return base;
+  const teammate = `${base}&resourceCollectionId=teammates&resourceId=${encodeURIComponent(teammateBotId)}&resourceKind=bot`;
+  // An oversized link is rejected by the protocol; the ordinary task link still opens the chat.
+  return teammate.length <= NOTIFY_DEEP_LINK_MAX_LENGTH ? teammate : base;
 }
 
 /**

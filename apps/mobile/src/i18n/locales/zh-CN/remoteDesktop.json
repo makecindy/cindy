@@ -159,7 +159,7 @@
   "lockOnExit": "退出后锁定电脑",
   "lockOnExitHint": "退出远程桌面时锁屏。重连或切换 App 不会触发。",
   "lockOnExitFailed": "未能确认电脑已锁屏，请检查电脑的锁屏状态。",
-  "hostMute": "被控端静音",
-  "hostMuteHint": "连接期间将被控电脑静音",
-  "hostMuteFailed": "无法修改被控端静音状态"
+  "hostMute": "远程电脑静音",
+  "hostMuteHint": "连接期间将远程电脑静音",
+  "hostMuteFailed": "无法修改远程电脑的静音状态"
 }

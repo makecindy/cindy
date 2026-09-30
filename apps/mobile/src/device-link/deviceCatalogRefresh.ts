@@ -15,6 +15,7 @@ export function createDeviceCatalogRefresh(options: {
   readProviders(deviceId: string): Promise<DeviceProvidersPayload>;
   readCapabilities(deviceId: string, agent: 'claude-code' | 'codex' | 'pi'): Promise<unknown>;
   connectionEpoch(): number;
+  canRead?(deviceId: string): boolean;
 }) {
   let disposed = false;
   const queued = new Map<string, ReturnType<typeof setTimeout>>();
@@ -24,11 +25,15 @@ export function createDeviceCatalogRefresh(options: {
     evictAgentCapabilitiesForDevice(id);
   };
   const scheduler = new PeerRecoveryScheduler(async (id) => {
+    if (disposed) return { retry: false };
+    // Keep the invalidation pending without putting requests on an unreadable
+    // link. Reuse the scheduler's backoff and cancellation, including dispose.
+    if (options.canRead?.(id) === false) return { retry: true };
     const epoch = options.connectionEpoch();
     const providerGeneration = getDeviceProvidersGen(id);
     const generation = getAgentCapabilitiesGeneration(id);
     const read = <T,>(fetcher: () => Promise<T>): Promise<T> => {
-      if (disposed || getAgentCapabilitiesGeneration(id) !== generation) return Promise.reject(new Error('Catalog refresh superseded'));
+      if (disposed || options.canRead?.(id) === false || getAgentCapabilitiesGeneration(id) !== generation) return Promise.reject(new Error('Catalog refresh superseded'));
       return fetcher();
     };
     await Promise.allSettled([
@@ -41,10 +46,21 @@ export function createDeviceCatalogRefresh(options: {
         if (!disposed && normalized) commitAgentCapabilities(id, agent, generation, normalized);
       }),
     ]);
-    // Failures use the existing picker/reconnect recovery, not another retry loop.
-    return { retry: false };
+    // A gate may close while a cache read waits for an older in-flight read.
+    // Retain that invalidation too; ordinary read errors keep existing policy.
+    return { retry: !disposed && options.canRead?.(id) === false };
   });
   return {
+    wake(deviceId?: string) {
+      if (disposed) return;
+      for (const id of deviceId ? [deviceId] : devices) {
+        // Resume only accepted work. Do not invalidate a healthy cache or
+        // resurrect cancellation. Include running attempts so a recovery
+        // racing their settlement cannot leave a newly installed retry asleep.
+        if (devices.has(id) && options.canRead?.(id) !== false
+          && scheduler.getSnapshot(id).phase !== 'idle') scheduler.request(id);
+      }
+    },
     notify(id: string) {
       if (disposed) return;
       devices.add(id);

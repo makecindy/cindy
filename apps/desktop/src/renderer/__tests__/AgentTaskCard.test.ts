@@ -59,6 +59,7 @@ beforeEach(() => {
 vi.mock('@/lib/makerTransport', () => ({
   isRemoteSessionSticky: () => false,
   getWorkflowProgressFor: getWorkflowProgressForMock,
+  readBackgroundTaskOutputTailFor: vi.fn().mockResolvedValue({ ok: false, reason: 'unavailable' }),
   canStopAgentTask: (sessionId: string | null | undefined) =>
     Boolean(sessionId) && canStopAgentTaskMock(sessionId as string),
   // 路由本身在 makerTransportStopRouting.test.ts 里覆盖;卡片只关心「点了会走这条通道」。

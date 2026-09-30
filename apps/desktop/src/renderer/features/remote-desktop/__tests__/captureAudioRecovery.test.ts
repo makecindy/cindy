@@ -57,11 +57,16 @@ function setup() {
         replaceTrack: vi.fn(async (_track: unknown) => {}),
       },
     };
+    video = {
+      track: { kind: 'video' },
+      getParameters: () => ({ encodings: [{}] }),
+      setParameters: vi.fn(async (_parameters: unknown) => {}),
+    };
     constructor() {
       peers.push(this);
     }
     getSenders() {
-      return this.audio.sender.track ? [this.audio.sender] : [];
+      return this.audio.sender.track ? [this.video, this.audio.sender] : [this.video];
     }
     getTransceivers() {
       expect(this.remoteReady).toBe(true);
@@ -131,6 +136,18 @@ function nativeSound() {
   );
   return { sound, close };
 }
+
+it('allows congestion-driven resolution and frame-rate reduction without restarting capture', async () => {
+  const h = setup();
+  h.offer(false);
+  await flush();
+  expect(h.peers[0].video.setParameters).toHaveBeenCalledExactlyOnceWith({
+    degradationPreference: 'balanced', encodings: [{ maxFramerate: 30 }],
+  });
+  expect(h.peers).toHaveLength(1);
+  expect(h.reply).toHaveBeenCalledWith('offer', 'answer');
+  expect(h.nativeStop).not.toHaveBeenCalled();
+});
 
 it('clears locked audio and restores its existing sender after unlock without Chromium capture', async () => {
   const h = setup();

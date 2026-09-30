@@ -49,6 +49,7 @@ import {
   type PendingRemoteDesktopConfirmation,
   type PendingPlanReview,
   type PlanViewerState,
+  type QueueItemContentUpdate,
   type QueuedMessage,
   type SessionChatLightState,
   type SessionChatState,
@@ -115,8 +116,8 @@ interface UseCCAgentChatReturn {
   setQueueEditLock: (clientId: string, locked: boolean) => void;
   /** F-QUEUE-DEFER: 从队列中移除一条未派发消息(行尾 ✕)。已在派发的不可移除。 */
   removeFromQueue: (clientId: string) => void;
-  /** F-QUEUE-DEFER: 修改一条未派发消息的文本(行尾 ✏️)。空文本/找不到/未变化时 no-op。 */
-  updateQueueItem: (clientId: string, newText: string) => void;
+  /** F-QUEUE-DEFER: replace one queued message's complete composer content. */
+  updateQueueItemContent: (clientId: string, update: QueueItemContentUpdate) => Promise<boolean>;
   sendMessage: (
     text: string,
     model: string,
@@ -133,6 +134,7 @@ interface UseCCAgentChatReturn {
       slashCommandRanges?: SlashCommandRange[];
       beforeEnqueue?: () => Promise<boolean>;
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+      annotationBurnFailure?: 'abort';
     },
   ) => Promise<boolean>;
   compactSession: (
@@ -158,6 +160,7 @@ interface UseCCAgentChatReturn {
       slashCommandRanges?: SlashCommandRange[];
       beforeEnqueue?: () => Promise<boolean>;
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+      annotationBurnFailure?: 'abort';
     },
   ) => Promise<boolean>;
   steerQueuedMessage: (clientId: string) => Promise<boolean>;
@@ -421,6 +424,7 @@ export function useCCAgentChat(
         slashCommandRanges?: SlashCommandRange[];
         beforeEnqueue?: () => Promise<boolean>;
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+        annotationBurnFailure?: 'abort';
       },
     ): Promise<boolean> => {
       if (!sessionId) return Promise.resolve(false);
@@ -477,6 +481,7 @@ export function useCCAgentChat(
         slashCommandRanges?: SlashCommandRange[];
         beforeEnqueue?: () => Promise<boolean>;
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+        annotationBurnFailure?: 'abort';
       },
     ) => {
       if (!sessionId) return Promise.resolve(false);
@@ -708,11 +713,15 @@ export function useCCAgentChat(
 
       // 2) Debounce the disk write — coalesce rapid keystrokes.
       if (planWriteTimerRef.current) clearTimeout(planWriteTimerRef.current);
+      // Remote paths belong to the host. Keep the draft in memory and send it
+      // back as editedPlan on approval; never autosave it on this client.
+      if (isRemoteSessionSticky(sessionId)) return;
       // Skip the IPC entirely when there's no path (defensive — shouldn't
       // happen in practice; ExitPlanMode always carries planFilePath).
       if (!planFilePath) return;
       planWriteTimerRef.current = setTimeout(() => {
         planWriteTimerRef.current = null;
+        if (isRemoteSessionSticky(sessionId)) return;
         window.electronAPI.maker
           .writePlanFile({ requestId, planFilePath, content })
           .then((result) => {
@@ -814,10 +823,10 @@ export function useCCAgentChat(
     [sessionId],
   );
 
-  const updateQueueItem = useCallback(
-    (clientId: string, newText: string) => {
-      if (!sessionId) return;
-      makerChatStore.updateQueueItem(sessionId, clientId, newText);
+  const updateQueueItemContent = useCallback(
+    (clientId: string, update: QueueItemContentUpdate) => {
+      if (!sessionId) return Promise.resolve(false);
+      return makerChatStore.updateQueueItemContent(sessionId, clientId, update);
     },
     [sessionId],
   );
@@ -840,7 +849,7 @@ export function useCCAgentChat(
     setQueueInteractionLock,
     setQueueEditLock,
     removeFromQueue,
-    updateQueueItem,
+    updateQueueItemContent,
     sendMessage,
     compactSession,
     steerMessage,

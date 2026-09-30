@@ -101,6 +101,7 @@ import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
 import { GhostMainViewNavEntries } from '@/components/sidebar/GhostMainViewNavEntries';
 import {
+  BOT_GROUP_LANE_SESSION,
   botOwnedSessionNotificationTitle,
   findSessionNotificationSession,
   sendSessionEventNotification,
@@ -1099,6 +1100,8 @@ function ExpandedView({
         return;
       }
       void botOwnedSessionNotificationTitle(sessionId).then((botTitle) => {
+        // 伙伴群专线不发系统通知,确认请求在群聊里提示(docs/product-rules/bot-group-chat.md §3)。
+        if (botTitle === BOT_GROUP_LANE_SESSION) return;
         sendSessionEventNotification(sessionId, botTitle ?? unnamedLabelRef.current, kind);
       });
     },

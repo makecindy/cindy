@@ -19,7 +19,6 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { CheckCircle2, AlertCircle, Play, Upload, Sparkles, Waypoints } from 'lucide-react';
 
-import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';

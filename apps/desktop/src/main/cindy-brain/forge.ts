@@ -11,7 +11,7 @@
  *   调用方(mcp-integrations 接线)处理,本文件不碰 UI。
  *
  * 安全边界:agent 能写意识源码(它本来就有文件工具),但打包与装入都必须过
- * 同一套清单/真实包校验；安装动作本身不另设能力确认弹窗。
+ * 同一套清单/真实包校验；首装与权限变多的更新还要用户在任务里确认(ghostInstallConsent.ts)。
  */
 
 import fs from 'node:fs';
@@ -1563,12 +1563,15 @@ export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 读透相关章(动手前至少读完"沙箱红线"与"打包与测试"两章) → 在工作目录写源码文件 →
 ghost_forge_pack 校验并生成 .cindy 产物；需要发布时改用 publish intent 取得一次性票据。**
 
-**安装与更新契约**：用户导入本地 \`.cindy\`、点击市场安装，或插件命中
-服务端 \`defaultInstall\`，都是明确的安装依据；
-Cindy 校验真实包后直接安装并启用，不再追加整张能力确认弹窗。唯一的窄确认是：企业作者
+**安装与更新契约**：用户导入本地 \`.cindy\`、点击市场安装、明确要求 Agent 安装，或插件命中
+服务端 \`defaultInstall\`，都是明确的安装依据。Cindy 校验真实包后，首次安装会先列出插件声明的
+全部权限请用户确认（Agent 发起的安装在任务里弹确认卡，不论任务权限档），确认后安装并启用；
+更新只在新版本比已装版本权限变多时请用户确认，权限没变多的更新直接完成。服务端
+\`defaultInstall\` 下发的插件不弹确认。另有一道窄确认：企业作者
 用 \`ghost_forge_install\` 安装声明了 \`oidc-token\` 的包时，需核对 id 与注入域名。市场安装会绑定所选来源，
-此后的新版本由 Cindy 静默更新并保留当前启用状态；本地 \`.cindy\` 不自动猜测更新来源，
-需要用户再次导入新版包。当前组织的默认插件可能在严格核对组织、前缀、批准、退订与来源后，
+此后权限没变多的新版本由 Cindy 静默更新并保留当前启用状态；权限变多的新版本会暂停自动更新，
+等用户在插件页确认，在此之前旧版本照常可用。所以发布新版时不要顺手扩大权限，确需新增的在更新
+说明里讲清楚。本地 \`.cindy\` 不自动猜测更新来源，需要用户再次导入新版包。当前组织的默认插件可能在严格核对组织、前缀、批准、退订与来源后，
 接管同 id 的普通本地导入；明确通过 \`ghost_forge_install\` 安装或更新的作者自测包会被保护，
 不会被这条自动接管路径覆盖。插件自主 Host 能力仍必须完整声明，插件详情会如实展示，Host 运行时按声明
 强制守门；市场下载包若超出该版本市场清单声明的能力，会作为包内容不一致被拒绝。
@@ -2504,6 +2507,16 @@ const r = await cindy.send({
 - 同步返回,没有异步单;每插件在途上限与媒体代办共用;详情页会单列一行
   「可把文字送去算成向量」并写明单次条数上限。
 
+## 4.0.3a 只读 Agent 模型目录
+
+设置页、panel、mainView 和电子脑均可 GET 同源 \`/agent-models\`（不接受参数）。
+返回 \`{ok:true,models:[{id,name,agent,providerId,providerName,efforts,defaultEffort,visible}]}\`。
+visible 跟随当前账号模型选择器；建议默认显示可见项，隐藏项由用户展开。旧 Host 缺此字段时兼容原列表。
+每项为独立的模型×框架×来源；空 efforts 与 null defaultEffort 表示未声明，不得猜测。
+只包含本机已连接且可用于新任务的模型，不代表远程 SSH 目录。读取不调用模型、
+不触发凭证认领或上游发现，不返回凭证、账号 identity 或 endpoint；不需要新增 manifest 权限。
+旧 Host 可能返回 404，插件应明确提示升级；503 时提供重试。运行前再次核验选定来源。
+
 ## 4.0.4 媒体模型配置与调用边界
 
 媒体上层能力由插件定义，Cindy Core 只提供两项低级能力：
@@ -3088,7 +3101,10 @@ PUT/DELETE 一律 405(派生身份不可配置)。
 两种 token 都只在 Main 的 networkSlot 内存中进入请求头,插件沙箱、settings 页面、
 Renderer、Agent、KV 和日志都拿不到。设置页 GET \`/secrets\` 对这条 key 额外返回
 \`hostSource:"gh-cli"\` 与 \`hostAvailable:boolean\`,其中 \`saved/tail\` 仍只描述备用
-PAT；页面可据此展示“已检测到 gh，可直接使用”，但不能读取 gh 的账号或 token。
+PAT。支持宿主管理连接入口时还返回可选的 \`hostManagedSetup:true\`：此时宿主统一
+展示账号状态、安装与登录入口，settingsHtml 不再重复渲染这些内容，只保留备用 PAT
+配置（可折叠到“其他连接方式”）。字段缺失或为 false 时保留旧版设置页的连接提示，
+可根据 \`hostAvailable\` 展示“已检测到 gh，可直接使用”；不能读取 gh 的账号或 token。
 此来源的注入形态固定为 \`api.github.com\` 的
 \`Authorization: Bearer {value}\`,不允许 exchange,也不要放进 \`setup.requires\`。
 
@@ -3586,7 +3602,10 @@ const st = await cindy.library({ op: 'status' });
 // 只读能力查询:资格审与 op 合法性之后、会话创建之前返回;不打开库、不弹窗
 const caps = await cindy.library({ op: 'capabilities' });
 // caps = { ok:true, op:'capabilities',
-//          capabilities:{ version:1, operations:['clipboardWrite','saveAs'] } }
+//          capabilities:{ version:1,
+//            operations:['clipboardWrite','saveAs','staging.begin',...],
+//            staging:{ version:1, maxTaskBytes, maxTotalBytes,
+//                      maxConcurrentWrites, maxChunkBytes, reserveBytes } } }
 // operations 只表示宿主实现了这些 op,不等于此刻有窗口 / 已授权 / 库可用
 
 // 文件操作(全 Family;写入原子化,大文件走分块流)
@@ -3633,6 +3652,18 @@ await cindy.library({ op: 'db.migrate', dbPath: 'canvas.sqlite', targetVersion: 
           { toVersion: 2, sql: ['CREATE TABLE v2 (a TEXT)'] }] });
 await cindy.library({ op: 'db.backup', dbPath: 'library.sqlite' });  // 宿主命名空间
 await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_check
+
+// 后台暂存(staging.*):独立于可迁移 Library 根,不是第二媒体库,不返回 imageRef。
+const up = await cindy.library({
+  op: 'staging.begin', taskId, sourceRevision, totalBytes, sha256, mime, recovery,
+});
+await cindy.library({ op: 'staging.chunk', stagingId: up.stagingId, seq: 1, content: b64, encoding: 'base64' });
+const receipt = await cindy.library({ op: 'staging.commit', stagingId: up.stagingId });
+// receipt.durable === true 才可当跨退出原件。release 带当前 Library ACK 的 bytes(不是 begin 的 totalBytes),且画布已保存后才调用。
+await cindy.library({
+  op: 'staging.release', stagingId: up.stagingId, path, sha256, bytes,
+  libraryIdentity, libraryGeneration,
+});
 \`\`\`
 
 关键语义(全部由宿主强制):
@@ -3649,6 +3680,7 @@ await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_ch
   open/status 失败),非法请求=\`INVALID_REQUEST\`(含非法/越界 dbPath 与未知 op),
   取消=\`CANCELLED\`;成功 open/status 的 \`state:'unavailable'\` 仍用结果体 reason
   (如 disk-missing),不是失败 reason 枚举;查询/传输层本地分类 \`TIMEOUT\` / \`TRANSPORT_ERROR\`;
+- **staging.***:后台暂存,不是媒体库、不弹新 UI。\`staging.read\` 未传 length 默认 16MiB 分片;负数/NaN offset/length 是 \`PATH_INVALID\`。release 必须带当前 Library ACK 的 \`bytes\`(不是 begin 的 \`totalBytes\`),且只在画布保存后调用。父目录 fsync 失败不得 \`durable:true\`。
 - **capabilities**:先查 \`{ op:'capabilities' }\`。仅 \`version===1\` 且
   \`operations\` 为**全部字符串**的数组才有效;额外字段忽略,未知 operation 忽略,
   已知项保留;有效 v1 清单缺少某项才是 unsupported。缺字段、错类型(含数组内混入
@@ -3663,6 +3695,8 @@ await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_ch
   确认后先拷到目标旁临时文件再替换,失败不破坏已有文件;
 - **clipboardWrite**:只收 \`encoding:'base64'\` 的 PNG 字节,写系统剪贴板位图,
   成功回 \`{ ok:true, bytes }\`。不是 saveAs,也不在文件夹中显示作品。
+  PNG 字节上限 20MB(20,000,000 字节,按解码后字节计),超限回 \`TOO_LARGE\`;
+  旧版宿主上限为 16MiB,同样回 \`TOO_LARGE\`,插件应提示用户更新或改用下载。
   空字节 / 非法 encoding / 非 PNG / 超限一律结构化失败,永不 \`ok:true\`。
   同插件 3 秒内连发 \`RATE_LIMITED\`;无主壳窗 / 宿主不能写剪贴板 \`UNSUPPORTED\`;
   账号切换后旧会话不得继续写(\`LIBRARY_UNAVAILABLE\`)。
@@ -3929,6 +3963,26 @@ const result = response.result;
 Node 请求及其子进程一并结束，晚到的授权或子进程启动会被拒绝。只传旧 \`callId\`
 或不启用开关都保持既有独立 RPC 生命周期，不自动弹授权卡、不回收后台进程；
 设置页等无 tool-call 的入口不能伪造或复用调用编号。
+
+#### 下载公开大文件与进度
+
+声明 node 和 network.hosts 后可用 cindy.downloads.start({id,url,sha256,bytes})；
+只接受声明的 HTTPS 主机（每次重定向复核），不发送 Cookie、凭证或自定义请求头。
+SHA-256 和精确字节数必填，单文件最多 8 GiB。下载从获得队列槽位起最多 2 小时（含重试，不计排队），不改变 Node 调用期限。返回 {ok:true,token,bytes,sha256,fromCache}，
+没有宿主路径。取消用 cindy.downloads.cancel({id})。
+订阅 onHostMessage 的 download-progress 事件：data 含 id、phase、loaded、total、speedBps；
+phase 为 queued/downloading/verifying/retrying/completed/failed/cancelled，retrying 另含 attempt、delayMs。
+无 loaded/total 时显示不确定进度，下载成功不等于解包成功。
+
+将 token 放入 cindy.node.request 的 downloadTokens，例如 {archive: token}；params 必须是对象且
+不能自带 downloads。Host 校验同账号、同插件、批准身份与文件身份后，仅向 Node 注入
+params.downloads.archive。Node 在本次 RPC 结束前读取或复制文件，不得把宿主路径回传面板或写进日志。
+旧请求不带 downloadTokens 时保持原有 params 语义。旧宿主无 downloads 时提示升级。
+
+下载队列与宿主更新隔离，传输逐块写盘并支持校验、重试与续传。每账号所有插件的缓存
+合计最多 16 GiB（含在途预留及每项 64 KiB 管理空间）；不淘汰正在下载或被 Node RPC 借用的文件，满额且无可回收项时失败。
+缓存可被回收，重启后 token 失效，重新 start 可复用经校验的文件。卸载插件回收其下载缓存；
+停用、账号切换或批准身份改变会拒绝旧凭据，不增加用户授权步骤。
 
 #### Node Worker 的持久化凭证绑定
 
@@ -4671,8 +4725,10 @@ Cindy 统一归类、随机选择与排序，同批每个场景和每个插件�
    若返回 \`SOURCE_IS_INSTALLED_PLUGIN\`,不要重试或换大小写、软链接、junction 绕过,
    按上一步迁出源码后再打包;未获会话权限时也可能返回 \`SOURCE_OUTSIDE_WORKDIR\`;
 3. 用户明确要求当前 Agent 安装或更新这份源码时，调用
-   \`ghost_forge_install({ dir: '<绝对路径>' })\`。它会重新校验并打包当前源码，再把这次
-   产生的确切包直接安装；首次安装会启用，同 id 已安装时原位更新并保留启用状态、配置、
+   \`ghost_forge_install({ dir: '<绝对路径>' })\`。它会重新校验并打包当前源码，再安装这次
+   产生的确切包：首次安装、以及权限比已装版本变多的更新，会先在任务里弹确认卡列出权限，
+   用户允许后才落位；用户拒绝返回 \`MUTATION_CANCELLED\`，不要重试，除非用户再次要求。
+   首次安装会启用，同 id 已安装时原位更新并保留启用状态、配置、
    数据与面板位置，同版本也可覆盖。不要因为 scaffold 或 pack 成功就自动调用本工具。
    企业身份下若清单声明 \`source:"oidc-token"\`，提交安装前会展示插件名、id 与精确请求
    域名，并要求用户手输相同 id；取消不会安装。个人与企业身份下的明确 Forge 安装都会标记为

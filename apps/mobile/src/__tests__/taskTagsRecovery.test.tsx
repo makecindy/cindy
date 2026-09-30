@@ -28,6 +28,14 @@ vi.mock("react-native", () => ({
   ),
   useWindowDimensions: () => ({ height: 800, width: 400 }),
 }));
+vi.mock("@/components/MobilePrimitives", () => ({
+  ScreenBackButton: ({ onPress, testID }: any) => (
+    <button aria-label="shared.back" data-testid={testID} disabled={!onPress} onClick={onPress} />
+  ),
+}));
+vi.mock("@/components/mobileInteractionStyles", () => ({
+  mobileInteractionStyles: { pressed: { opacity: 0.72 } },
+}));
 vi.mock("@/components/AppText", () => ({
   Text: ({ children }: any) => <span>{children}</span>,
   TextInput: (props: any) => {

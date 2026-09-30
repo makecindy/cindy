@@ -86,12 +86,12 @@ const makeStyles = (colors: ThemeColors) =>
     },
     title: {
       ...textStyles.title,
-      fontWeight: fontWeight.medium,
+      fontWeight: fontWeight.semibold,
       color: colors.textPrimary,
     },
     text: { ...textStyles.body, color: colors.textPrimary, flexShrink: 1 },
     caption: {
-      ...textStyles.caption,
+      ...textStyles.footnote,
       color: colors.textSecondary,
       flexShrink: 1,
     },

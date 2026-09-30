@@ -23,13 +23,26 @@ export function useMobileSocialProviderModes({
   wechatLoginEnabled?: boolean;
 }): ReadonlyMap<SocialProvider, MobileSocialLoginMode> {
   const [iosWechatAvailable, setIosWechatAvailable] = useState(false);
+  const hasWechatProvider = providers.includes('wechat');
 
   useEffect(() => {
-    if (!wechatLoginEnabled || Platform.OS !== 'ios') return;
+    if (
+      !wechatLoginEnabled ||
+      region !== 'cn' ||
+      !hasWechatProvider ||
+      Platform.OS !== 'ios'
+    ) {
+      setIosWechatAvailable(false);
+      return;
+    }
     let cancelled = false;
+    let latestRequest = 0;
     const refresh = async () => {
+      const request = ++latestRequest;
+      setIosWechatAvailable(false);
       const available = await isNativeSocialProviderAvailable('wechat');
-      if (!cancelled) setIosWechatAvailable(available);
+      if (!cancelled && request === latestRequest)
+        setIosWechatAvailable(available);
     };
     void refresh();
     const subscription = AppState.addEventListener('change', (state) => {
@@ -39,7 +52,7 @@ export function useMobileSocialProviderModes({
       cancelled = true;
       subscription.remove();
     };
-  }, [wechatLoginEnabled]);
+  }, [wechatLoginEnabled, region, hasWechatProvider]);
 
   return useMemo(() => {
     const modes = new Map<SocialProvider, MobileSocialLoginMode>();

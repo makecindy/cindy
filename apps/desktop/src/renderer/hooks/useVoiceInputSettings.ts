@@ -28,6 +28,7 @@ import {
   type VoiceInputDictionaryLearningEvidence,
   type VoiceInputLanguage,
   type VoiceInputSettings,
+  type VoiceInputSettingsPatch,
 } from '../../shared/voiceInputData';
 import type { VoiceInputShortcut } from '@/voice-input/shortcut';
 import { findComposerVoiceInputConflict } from '@/voice-input/composerVoiceInputConflict';
@@ -194,10 +195,18 @@ export function useVoiceInputSettings(): {
   setMuteSystemAudio: (enabled: boolean) => void;
   setPlayInteractionSound: (enabled: boolean) => void;
   setFastActivationEnabled: (enabled: boolean) => void;
+  setComposerLongPressEnabled: (enabled: boolean) => void;
+  /**
+   * 「恢复默认」= 传 `null` 删除 override、重新跟随当前版本默认值
+   * (`configuration-and-overrides.md` §4)。返回持久化结果,成功才收口 UI。
+   */
+  resetComposerLongPressEnabled: () => Promise<boolean>;
   setRefinementEnabled: (enabled: boolean) => void;
   setRefinementInstructions: (instructions: string) => void;
   setAutoDictionaryEnabled: (enabled: boolean) => void;
   setDictionarySyncEnabled: (enabled: boolean) => void;
+  /** 同 {@link resetComposerLongPressEnabled}:null 删 override 恢复默认。 */
+  resetDictionarySyncEnabled: () => Promise<boolean>;
   /** 这几个返回持久化结果:成功才收口 UI(关对话框、清草稿、提示成功)。 */
   addDictionaryEntry: (text: string) => Promise<boolean>;
   importDictionaryEntries: (texts: string[]) => Promise<boolean>;
@@ -210,7 +219,7 @@ export function useVoiceInputSettings(): {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<VoiceInputSettings>(getVoiceInputSettings);
 
-  const updateSettings = useCallback((patch: Partial<VoiceInputSettings>) => {
+  const updateSettings = useCallback((patch: VoiceInputSettingsPatch) => {
     const previousShortcut = getVoiceInputSettings().shortcut;
     void window.electronAPI.voiceInput
       .updateSettings(patch)
@@ -251,6 +260,11 @@ export function useVoiceInputSettings(): {
     [updateSettings],
   );
 
+  const setComposerLongPressEnabled = useCallback(
+    (composerLongPressEnabled: boolean) => updateSettings({ composerLongPressEnabled }),
+    [updateSettings],
+  );
+
   const setRefinementEnabled = useCallback(
     (refinementEnabled: boolean) => updateSettings({ refinementEnabled }),
     [updateSettings],
@@ -269,6 +283,37 @@ export function useVoiceInputSettings(): {
   const setDictionarySyncEnabled = useCallback(
     (dictionarySyncEnabled: boolean) => updateSettings({ dictionarySyncEnabled }),
     [updateSettings],
+  );
+
+  // 恢复默认与普通拨动分开:拨动写布尔 override,恢复默认要传 null 删 override
+  // (规则 §4 不允许写静态快照)。失败时 toast 由这里统一收口,成功提示交给调用方。
+  const runOverrideReset = useCallback(
+    (patch: VoiceInputSettingsPatch): Promise<boolean> =>
+      window.electronAPI.voiceInput
+        .updateSettings(patch)
+        .then((next) => {
+          setSettings(next);
+          return true;
+        })
+        .catch((error) => {
+          log.warn(
+            'voice input settings restore default failed:',
+            error instanceof Error ? error.message : String(error),
+          );
+          toast.error(formatVoiceInputPersistenceError(t, error));
+          return false;
+        }),
+    [t],
+  );
+
+  const resetComposerLongPressEnabled = useCallback(
+    () => runOverrideReset({ composerLongPressEnabled: null }),
+    [runOverrideReset],
+  );
+
+  const resetDictionarySyncEnabled = useCallback(
+    () => runOverrideReset({ dictionarySyncEnabled: null }),
+    [runOverrideReset],
   );
 
   // 词典的增改删都是语义化操作:主进程按「用户做了什么」更新同步状态,再把物化
@@ -378,10 +423,13 @@ export function useVoiceInputSettings(): {
     setMuteSystemAudio,
     setPlayInteractionSound,
     setFastActivationEnabled,
+    setComposerLongPressEnabled,
+    resetComposerLongPressEnabled,
     setRefinementEnabled,
     setRefinementInstructions,
     setAutoDictionaryEnabled,
     setDictionarySyncEnabled,
+    resetDictionarySyncEnabled,
     addDictionaryEntry,
     importDictionaryEntries,
     renameDictionaryEntry,

@@ -1,17 +1,21 @@
-import { createElement, useState } from 'react';
+// @vitest-environment jsdom
+import { act, createElement, useImperativeHandle, useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
+
+const viewportHarness = vi.hoisted(() => ({ list: null as any, finishReveal: null as any, renders: 0 }));
 
 // Keep the production list, bubble gate, invocation header, and message model.
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
 vi.mock('react-native', async () => {
   const React = await import('react');
   const view = ({ children, testID, accessibilityLabel }: any) => React.createElement('div', { 'data-testid': testID, 'aria-label': accessibilityLabel }, children);
-  class Value { constructor(public value: number) {} interpolate() { return 0; } setValue() {} }
+  class Value { constructor(public value: number) {} interpolate() { return 0; } setValue() {} stopAnimation() {} }
   return {
     View: view, Text: view, Pressable: view, ScrollView: view, Modal: () => null,
     Image: Object.assign(view, { getSize() {} }), ActivityIndicator: view,
-    Animated: { Value, View: view, Text: view, createAnimatedComponent: (c: any) => c },
+    Animated: { Value, View: view, Text: view, createAnimatedComponent: (c: any) => c,
+      timing: () => ({ start(callback: any) { viewportHarness.finishReveal = callback; }, stop() {} }), loop: () => ({ start() {}, stop() {} }), sequence: () => ({ start() {}, stop() {} }) },
     Platform: { OS: 'ios', select: (s: any) => s.ios ?? s.default },
     StyleSheet: { create: (s: any) => s, flatten: (s: any) => s, hairlineWidth: 1 },
     Easing: { linear: (n: number) => n, bezier: () => (n: number) => n },
@@ -20,7 +24,12 @@ vi.mock('react-native', async () => {
   };
 });
 vi.mock('@legendapp/list/react-native', () => ({
-  LegendList: ({ data, renderItem }: any) => data.map((item: any, index: number) => createElement('section', { key: item.key }, renderItem({ item, index }))),
+  LegendList: ({ data, renderItem, ref, ...props }: any) => {
+    viewportHarness.renders += 1;
+    viewportHarness.list = { ...props, data };
+    useImperativeHandle(ref, () => ({ scrollToEnd() {}, scrollToOffset() {}, getState() { return undefined; } }));
+    return data.map((item: any, index: number) => createElement('section', { key: item.key }, renderItem({ item, index })));
+  },
   useRecyclingState: (initial: any) => useState(initial), useViewability: () => {},
 }));
 vi.mock('lucide-react-native', () => ({
@@ -31,6 +40,12 @@ vi.mock('lucide-react-native', () => ({
 vi.mock('react-native-svg', () => ({ default: () => null, Circle: () => null }));
 vi.mock('react-native-uitextview', () => ({ UITextView: () => null }));
 vi.mock('expo-image', () => ({ Image: () => null }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }), useFocusEffect: vi.fn(), useNavigation: () => ({ isFocused: () => true, addListener: () => () => {} }) }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({
+  useDeviceLink: () => ({ status: 'offline', connectionEpoch: 0, getPresenceAvailability: () => false,
+    invoke: vi.fn(), openLink: vi.fn() }),
+  subscribeRemoteBotChanges: () => () => {},
+}));
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
@@ -59,6 +74,7 @@ vi.mock('@/session/messageActions', async (original) => ({ ...await original<obj
 
 import { MessageRenderer } from '@/session/MessageRenderer';
 import { buildMobileMessageRenderItems } from '@/session/messageRenderModel';
+import { companionConversationItems } from '@/session/companionConversationPresentation';
 import type { RemoteMessage } from '@/session/types';
 const msg = (id: string, role: RemoteMessage['role'], content: unknown, extra: Partial<RemoteMessage> = {}): RemoteMessage => ({ id, clientId: id, sessionId: 's', role, content, toolUseId: null, agentMeta: null, createdAt: '2026-01-01T00:00:00Z', ...extra });
 
@@ -104,5 +120,142 @@ describe('partner work feedback', () => {
     const completed = renderToStaticMarkup(<MessageRenderer items={done} companion companionWorkingLabel="Saving memory…" />);
     expect(completed).not.toContain('Saving memory…');
     expect(completed).toContain('message.workGroupToggle');
+  });
+});
+
+function renderClient(element: ReturnType<typeof createElement>): string {
+  const { act } = require('react') as typeof import('react');
+  const { createRoot } = require('react-dom/client') as typeof import('react-dom/client');
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  act(() => root.render(element));
+  const html = host.innerHTML;
+  act(() => root.unmount());
+  return html;
+}
+
+describe('partner conversation presentation', () => {
+  const result = (delegationId: string) => ({
+    v: 1, role: 'delegation-result', delegationId, fromBotId: 'bot', fromBotName: 'Cindy',
+    toBotId: null, toBotName: '', parentSessionId: 's', childSessionId: 'child', objective: 'Report',
+    result: { runSequence: 1, status: 'completed', title: `Result ${delegationId}`, text: 'Frozen result', artifacts: [] },
+  });
+  const resultItems = (body = 'Final summary', turnCompleted = true) => buildMobileMessageRenderItems([
+    msg('final', 'assistant', body, { agentMeta: { turnCompleted, botTaskResults: [result('one'), result('two')] } }),
+  ], { isSessionStreaming: false });
+
+  it('renders multiple real result cards after the final bubble inside the same partner reply', () => {
+    const host = document.createElement('div');
+    host.innerHTML = renderClient(<MessageRenderer items={resultItems()} companion companionAvatar={<i />} />);
+    const reply = host.querySelector('[data-testid="companion.replyRow"]');
+    const bubble = reply?.querySelector('[data-testid="message.agentBubble"]');
+    const cards = reply?.querySelectorAll('[data-testid="companion.taskResult"]');
+    expect(bubble).toBeTruthy();
+    expect(cards).toHaveLength(2);
+    expect(cards?.[0].textContent).toContain('Result one');
+    expect(cards?.[1].textContent).toContain('Result two');
+    for (const card of cards!) {
+      expect(bubble!.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(card.parentElement).toBe(bubble!.parentElement);
+    }
+  });
+
+  it('keeps result attachments out of ordinary tasks, unfinished prose and empty replies', () => {
+    const cases = [
+      <MessageRenderer items={resultItems()} />,
+      <MessageRenderer items={resultItems('Progress', false)} companion />,
+      <MessageRenderer items={resultItems('')} companion />,
+    ];
+    for (const element of cases) expect(renderClient(element)).not.toContain('companion.taskResult');
+  });
+
+  it('hangs replies from the partner portrait and stamps five-minute groups like Desktop', () => {
+    const messages = [
+      msg('u1', 'user', 'Hi', { createdAt: '2026-01-01T09:00:00Z' }),
+      msg('a1', 'assistant', 'Hello', { createdAt: '2026-01-01T09:01:00Z' }),
+      msg('u2', 'user', 'Later', { createdAt: '2026-01-01T09:10:00Z' }),
+    ];
+    const items = buildMobileMessageRenderItems(messages, { isSessionStreaming: false });
+    const portrait = <i data-testid="partner-portrait" />;
+    const html = renderClient(<MessageRenderer items={items} companion companionAvatar={portrait} />);
+    // 09:00 opens a group, 09:01 joins it, 09:10 opens the next one.
+    expect(html.match(/companion\.timeGroup/g)).toHaveLength(2);
+    expect(html.match(/companion\.replyRow/g)).toHaveLength(1);
+    expect(html.match(/partner-portrait/g)).toHaveLength(1);
+    const ordinary = renderClient(<MessageRenderer items={items} companionAvatar={portrait} />);
+    expect(ordinary).not.toContain('companion.timeGroup');
+    expect(ordinary).not.toContain('companion.replyRow');
+  });
+});
+
+describe('companion native read position', () => {
+  it('leaves ordinary task lists without the companion viewability observer', () => {
+    const acknowledge = vi.fn();
+    const items = buildMobileMessageRenderItems([msg('a', 'assistant', 'Task reply')], { isSessionStreaming: false });
+    renderClient(<MessageRenderer items={items} onCompanionReadThrough={acknowledge} />);
+    expect(viewportHarness.list.onViewableItemsChanged).toBeUndefined();
+    expect(acknowledge).not.toHaveBeenCalled();
+  });
+
+  it('keeps unseen replies unread until reveal, measured tail and row visibility agree', async () => {
+    const { createRoot } = await import('react-dom/client');
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    vi.useFakeTimers();
+    const root = createRoot(document.createElement('div'));
+    const acknowledge = vi.fn();
+    let active = true;
+    const isActive = () => active;
+    const messages = [msg('a1', 'assistant', 'First reply', { agentMeta: { turnCompleted: true } }),
+      msg('a2', 'assistant', 'Latest reply', { agentMeta: { turnCompleted: true }, createdAt: '2026-01-01T00:01:00Z' })];
+    const items = companionConversationItems(buildMobileMessageRenderItems(messages, { isSessionStreaming: false }));
+    const visible = (rows = items) => viewportHarness.list.onViewableItemsChanged({ viewableItems: rows.map((item, index) => ({
+      item, key: item.key, index, containerId: index, isViewable: true,
+    })), changed: [], start: 0, end: rows.length, startBuffered: 0, endBuffered: rows.length });
+    const scroll = (offsetY: number) => viewportHarness.list.onScroll({ nativeEvent: {
+      contentSize: { height: 2000 }, layoutMeasurement: { height: 500 }, contentOffset: { y: offsetY },
+    } });
+    try {
+      await act(async () => root.render(<MessageRenderer items={items} companion onCompanionReadThrough={acknowledge} isReadingPositionActive={isActive} />));
+      await act(async () => { await vi.advanceTimersByTimeAsync(32); });
+      expect(acknowledge).not.toHaveBeenCalled();
+      await act(async () => { visible(); scroll(0); });
+      expect(acknowledge).not.toHaveBeenCalled();
+      // Even the native opacity fallback completing is not proof of reaching the tail.
+      await act(async () => { viewportHarness.finishReveal?.({ finished: true }); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(32); });
+      expect(acknowledge).not.toHaveBeenCalled();
+      const first = items.filter(item => item.type === 'message' && item.message.source.clientId === 'a1');
+      expect(first).toHaveLength(1);
+      await act(async () => { visible(first); scroll(1500); });
+      expect(acknowledge).toHaveBeenLastCalledWith(Date.parse(messages[0].createdAt));
+      acknowledge.mockClear();
+      active = false;
+      await act(async () => visible());
+      expect(acknowledge).not.toHaveBeenCalled();
+      active = true;
+      const rendersBeforeVisibility = viewportHarness.renders;
+      await act(async () => visible());
+      expect(acknowledge).toHaveBeenLastCalledWith(Date.parse(messages[1].createdAt));
+      // A receipt must not broadcast visible keys and rerender the mounted message window.
+      expect(viewportHarness.renders).toBe(rendersBeforeVisibility);
+      acknowledge.mockClear();
+      await act(async () => root.render(<MessageRenderer items={items} companion scrollResetKey="another-chat"
+        onCompanionReadThrough={acknowledge} isReadingPositionActive={isActive} />));
+      await act(async () => { await vi.advanceTimersByTimeAsync(32); });
+      expect(acknowledge).not.toHaveBeenCalled();
+      await act(async () => {
+        visible();
+        viewportHarness.list.onLayout({ nativeEvent: { layout: { height: 500 } } });
+        viewportHarness.list.onContentSizeChange(400, 300);
+      });
+      expect(acknowledge).not.toHaveBeenCalled();
+      await act(async () => { viewportHarness.finishReveal?.({ finished: true }); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(32); });
+      expect(acknowledge).toHaveBeenLastCalledWith(Date.parse(messages[1].createdAt));
+    } finally {
+      await act(async () => root.unmount());
+      vi.useRealTimers();
+    }
   });
 });

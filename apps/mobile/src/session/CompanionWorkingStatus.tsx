@@ -1,13 +1,57 @@
 import { useCompanionGenerationCopy } from './useCompanionGenerationCopy';
-import { useMemo, useSyncExternalStore } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { isCompactingWorkingStatus, readWorkingPhase } from '@cindy/maker-shared';
-import { Text } from '@/components/AppText';
-import { spacing, typeScale, useTheme } from '@/theme';
+import { useAuth } from '@/auth/AuthContext';
+import type { RemoteCollectionItem } from '@cindy/device-link';
+import {
+  cachedBotIdForSession,
+  cachedBotItem,
+  readRemoteResourceSnapshot,
+  remoteResourceCacheRevision,
+  subscribeRemoteResourceCache,
+} from '@/device-link/remoteResourceCache';
+import { spacing, typeScale, lineHeight, useThemedStyles, type ThemeColors } from '@/theme';
+import { CompanionPresenceRing } from './CompanionPresenceRing';
+import { ThinkingDots } from './ThinkingDots';
 import { remoteSessionStore, type RemoteSessionRunStatus } from './remoteSessionStore';
 import { companionWorkingPhase } from './companionWorkingPhase';
+import { WorkingStatusText } from './WorkingStatusText';
 import type { RemoteMessage } from './types';
+
+const TEAMMATE_COLLECTION_ID = 'teammates';
+
+/** Loads the account's cached roster when the route does not already name the Bot. */
+function useCompanionRosterCache(needed: boolean): string {
+  const { user } = useAuth();
+  const userId = user?.id ?? '';
+  useSyncExternalStore(subscribeRemoteResourceCache, remoteResourceCacheRevision);
+  const [, setLoaded] = useState(0);
+  useEffect(() => {
+    if (!needed || !userId) return;
+    let current = true;
+    void readRemoteResourceSnapshot(userId).then(() => { if (current) setLoaded(value => value + 1); });
+    return () => { current = false; };
+  }, [needed, userId]);
+  return userId;
+}
+
+/** The route's resource names the Bot; a cached roster link covers ordinary task entries. */
+function useCompanionBotId(deviceId: string, sessionId: string, resourceBotId: string): string {
+  const userId = useCompanionRosterCache(!resourceBotId);
+  return resourceBotId || cachedBotIdForSession(userId, TEAMMATE_COLLECTION_ID, deviceId, sessionId);
+}
+
+/** Name and avatar for a chat opened from a task link or notification: the cached roster row, display only. */
+export function useCompanionDisplayResource(deviceId: string, sessionId: string, resource: RemoteCollectionItem | null,
+  enabled: boolean): RemoteCollectionItem | null {
+  const userId = useCompanionRosterCache(enabled && !resource);
+  if (!enabled) return null;
+  if (resource) return resource;
+  const botId = cachedBotIdForSession(userId, TEAMMATE_COLLECTION_ID, deviceId, sessionId);
+  return botId ? cachedBotItem(userId, TEAMMATE_COLLECTION_ID, deviceId, botId) : null;
+}
 
 /** One live reply position; optional host copy enriches the same factual phase. */
 export function useCompanionWorkingLabel({ sessionId, deviceId, botId, active, messages, reconnectAttempt }: {
@@ -19,18 +63,33 @@ export function useCompanionWorkingLabel({ sessionId, deviceId, botId, active, m
   const { phase: fallbackPhase, turnId } = useMemo(() => companionWorkingPhase(messages), [messages]);
   const phase = readWorkingPhase(activity?.workingPhase) ?? (isCompactingWorkingStatus(activity?.compactDetail) ? 'compacting' : fallbackPhase);
   const shown = active && activity?.phase !== 'needs-interaction' && activity?.phase !== 'error' && activity?.phase !== 'completed' && (!!reconnectAttempt || phase !== null);
-  const copy = useCompanionGenerationCopy({ deviceId, botId, phase, active: shown && !reconnectAttempt, turnId });
+  const companionBotId = useCompanionBotId(deviceId, sessionId, botId);
+  const copy = useCompanionGenerationCopy({ deviceId, botId: companionBotId, phase, active: shown && !reconnectAttempt, turnId });
   if (!shown) return null;
   return reconnectAttempt ? t(reconnectAttempt.kind === 'overload' ? 'session.screen.modelBusyRetrying'
     : reconnectAttempt.kind === 'rate-limit' ? 'session.screen.rateLimitRetrying' : 'session.screen.networkReconnecting') : copy;
 }
 
-export function CompanionWorkingStatus({ label }: { label: string | null }) {
-  const { colors } = useTheme();
+/** Desktop BotAvatar `xs`: the composer status line stays compact on a phone. */
+export const COMPANION_STATUS_AVATAR_SIZE = 20;
+
+/**
+ * Composer-owned live status (Desktop BotWorkingStatus): the avatar breathes in Heart Orange (the
+ * list's running ring), three dots wave where the system spinner used to be, and the copy is paced.
+ */
+export function CompanionWorkingStatus({ label, avatar }: { label: string | null; avatar?: ReactNode }) {
+  const styles = useThemedStyles(makeStyles);
+  // Terminal events unmount immediately; cadence only applies while the lifecycle is active.
   if (!label) return null;
   return <View style={styles.row} accessibilityLiveRegion="polite" testID="companion.workingStatus">
-    <ActivityIndicator size="small" color={colors.textSecondary} />
-    <Text style={{ color: colors.textSecondary, fontSize: typeScale.body, flexShrink: 1 }}>{label}</Text>
+    {avatar ? <View style={styles.avatar}>{avatar}<CompanionPresenceRing active width={1.5} /></View> : null}
+    <ThinkingDots />
+    <WorkingStatusText text={label} style={styles.text} />
   </View>;
 }
-const styles = StyleSheet.create({ row: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.lg, paddingHorizontal: spacing.md } });
+
+const makeStyles = (colors: ThemeColors) => StyleSheet.create({
+  row: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 32, paddingHorizontal: spacing.xs },
+  avatar: { flexShrink: 0, width: COMPANION_STATUS_AVATAR_SIZE, height: COMPANION_STATUS_AVATAR_SIZE },
+  text: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+});

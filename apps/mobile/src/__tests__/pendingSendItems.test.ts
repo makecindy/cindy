@@ -345,6 +345,12 @@ describe('buildPendingSendItems', () => {
     expect(items[2].actions).toBeNull();
   });
 
+  it('keeps a first-message creation row non-interactive until creation recovery is available', () => {
+    const [item] = build({ outbox: [outboxItem('first', { canCancel: false })] });
+    expect(item.canCancel).toBe(false);
+    expect(isPendingSendItemSelected(item, 'first')).toBe(false);
+  });
+
   it('never exposes queue actions for items that left the queue', () => {
     const [settling] = build({ settling: [queued('gone')] });
     expect(settling.actions).toBeNull();
@@ -474,5 +480,25 @@ describe('pendingSendSpins', () => {
     expect(pendingSendSpins('queued')).toBe(false);
     expect(pendingSendSpins('editing')).toBe(false);
     expect(pendingSendSpins('failed')).toBe(false);
+  });
+});
+
+describe('pending bubbles for inputs sent by another task', () => {
+  it('show the persisted visible body, not the agent-facing teammate prefix', () => {
+    const interjection = {
+      ...queued('interject', '[来自 Cindy 的补充]\n\nplease review'),
+      persistedContent: 'please review',
+      origin: { kind: 'session', senderSessionId: 'bot-task', displayText: '[来自 Cindy 的补充]\n\nplease review' },
+    } as QueuedRemoteMessage;
+    const [queuedBubble] = build({ queue: [interjection] });
+    const [settlingBubble] = build({ settling: [interjection] });
+    expect(queuedBubble.text).toBe('please review');
+    expect(settlingBubble.text).toBe('please review');
+    expect(JSON.stringify(queuedBubble.sentInlineTokens)).not.toContain('来自 Cindy');
+  });
+
+  it('keeps ordinary composer items on their own text', () => {
+    const [bubble] = build({ queue: [queued('plain', 'hello')] });
+    expect(bubble.text).toBe('hello');
   });
 });

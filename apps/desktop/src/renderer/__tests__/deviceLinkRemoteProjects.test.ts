@@ -83,6 +83,21 @@ describe('archived session retry backoff', () => {
 });
 
 describe('startRemoteSessionsReconciler', () => {
+  it('keeps a healthy third peer independent of two stalled peers and stops cleanly', async () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn((id: string) => id === 'healthy' ? Promise.resolve('ok') : new Promise<string>(() => {}));
+    const { wake, stop } = startRemoteSessionsReconciler(
+      () => new Map([['a', 'A'], ['b', 'B'], ['healthy', 'C']]), refresh, 1000,
+    );
+    wake();
+    expect(refresh.mock.calls.map(([id]) => id)).toEqual(['a', 'b', 'healthy']);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refresh.mock.calls.map(([id]) => id)).toEqual(['a', 'b', 'healthy', 'healthy']);
+    stop();
+    wake();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refresh).toHaveBeenCalledTimes(4);
+  });
   it('preserves failure backoff while a window is hidden', async () => {
     vi.useFakeTimers();
     let visible = true;

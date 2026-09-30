@@ -3,27 +3,30 @@
  *
  * 版本号:
  *   - 应用版本号:仅国内版显示,值由 window.electronAPI.appDisplayVersion 同步注入
- *   - Claude Code / Codex 版本号: spawn 当前应用使用的 binary `--version`,再比较线上版本
+ *   - Claude Code / Codex 版本号: spawn 当前应用使用的 binary `--version`,再比较当前通道的
+ *     线上版本;菜单样式与 Pi 共用 HarnessVersionMenuRow,更新仍是重启后由启动流程安装
  *   - Pi 版本号与内核更新由 PiKernelVersionRow 管理
  *
  * 卡片样式与 NotificationSection / FeishuBotSection 同级 (rounded-xl / Board border)。
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Download, ExternalLink, FolderOpen, Upload } from 'lucide-react';
+import { ExternalLink, FolderOpen, Upload } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { useExperimentalFlag } from '@/hooks/useExperimentalFeatures';
 import { useAutoUpdateSettings } from '@/hooks/useAutoUpdateSettings';
 import { useAnalyticsSettings } from '@/hooks/useAnalyticsSettings';
 import { useLogUploadSettings } from '@/hooks/useLogUploadSettings';
 import { extractIpcError } from '@/utils/ipcError';
 import { PiKernelVersionRow } from './PiKernelVersionRow';
+import { HARNESS_MENU_ITEM_CLASS, HarnessMenuFootnote, HarnessVersionMenuItem, HarnessVersionMenuRow } from './HarnessVersionMenuRow';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { LEGAL_LINKS } from '../../../shared/legalLinks';
@@ -35,10 +38,22 @@ interface AgentVersionState {
   version: string | null;
   latestVersion: string | null;
   updateAvailable: boolean;
+  checking: boolean;
+  checkFailed: boolean;
+  /** Last successful online comparison (renderer clock); a failed check keeps the previous one. */
+  checkedAt: number | null;
   error?: string;
 }
 
-const INITIAL: AgentVersionState = { loading: true, version: null, latestVersion: null, updateAvailable: false };
+const INITIAL: AgentVersionState = {
+  loading: true,
+  version: null,
+  latestVersion: null,
+  updateAvailable: false,
+  checking: false,
+  checkFailed: false,
+  checkedAt: null,
+};
 
 const DESKTOP_SOCIAL_LINKS = [
   {
@@ -61,40 +76,77 @@ const DESKTOP_SOCIAL_LINKS = [
   },
 ] as const;
 
-function useAgentBinaryVersion(kind: UpdatableAgentKind): AgentVersionState {
+function useAgentBinaryVersion(kind: UpdatableAgentKind): { state: AgentVersionState; check: () => void } {
   const [state, setState] = useState<AgentVersionState>(INITIAL);
+  const mounted = useRef(false);
+  const checkPending = useRef(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    const { getBinaryVersion } = window.electronAPI.maker.agent;
-    // Local first so the version shows immediately even offline; the online
-    // comparison follows and only ever adds the update action.
-    void getBinaryVersion(kind)
-      .then((res) => {
-        if (cancelled) return;
-        setState({ loading: false, version: res.version, latestVersion: null, updateAvailable: false, error: res.error });
-        return getBinaryVersion(kind, { checkLatest: true }).then((latest) => {
-          if (cancelled) return;
-          setState({
+  const check = useCallback(() => {
+    if (checkPending.current) return;
+    checkPending.current = true;
+    setState((prev) => ({ ...prev, checking: true }));
+    void window.electronAPI.maker.agent
+      .getBinaryVersion(kind, { checkLatest: true })
+      .then(
+        (latest) => {
+          if (!mounted.current) return;
+          const failed = latest.latestCheckFailed;
+          setState((prev) => ({
+            ...prev,
             loading: false,
             version: latest.version,
-            latestVersion: latest.latestVersion,
-            updateAvailable: latest.updateAvailable,
             error: latest.error,
-          });
-        }, () => undefined);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : String(err);
-        setState({ loading: false, version: null, latestVersion: null, updateAvailable: false, error: message });
+            // Keep the last known channel version and check time so the menu
+            // still shows what we last saw. Do not keep Update enabled: a
+            // harness relaunch re-checks the manifest, so a stale
+            // updateAvailable can confirm a version that is not installable
+            // while offline.
+            latestVersion: failed ? prev.latestVersion : latest.latestVersion,
+            updateAvailable: failed ? false : latest.updateAvailable,
+            checkFailed: failed,
+            checkedAt: failed ? prev.checkedAt : Date.now(),
+            checking: false,
+          }));
+        },
+        () => {
+          if (mounted.current) {
+            setState((prev) => ({ ...prev, checking: false, checkFailed: true, updateAvailable: false }));
+          }
+        },
+      )
+      .finally(() => {
+        checkPending.current = false;
+      });
+  }, [kind]);
+
+  useEffect(() => {
+    mounted.current = true;
+    let cancelled = false;
+    // Local first so the version shows immediately even offline; the online
+    // comparison follows and only ever adds the update action.
+    void window.electronAPI.maker.agent
+      .getBinaryVersion(kind)
+      .then(
+        (res) => {
+          if (cancelled) return;
+          setState((prev) => ({ ...prev, loading: false, version: res.version, error: res.error }));
+        },
+        (err: unknown) => {
+          if (cancelled) return;
+          const message = err instanceof Error ? err.message : String(err);
+          setState((prev) => ({ ...prev, loading: false, version: null, error: message }));
+        },
+      )
+      .then(() => {
+        if (!cancelled) check();
       });
     return () => {
       cancelled = true;
+      mounted.current = false;
     };
-  }, [kind]);
+  }, [kind, check]);
 
-  return state;
+  return { state, check };
 }
 
 const SEMVER_RE = /\d+\.\d+\.\d+(?:[-+.\w]*)?/;
@@ -119,14 +171,18 @@ export function AgentVersionsRows() {
     <>
       <AgentVersionRow
         kind="claude-code"
+        name="Claude Code"
         label={t('settings.about.claudeCodeVersionLabel')}
-        state={claudeCode}
+        state={claudeCode.state}
+        onCheck={claudeCode.check}
       />
       <Divider />
       <AgentVersionRow
         kind="codex"
+        name="Codex"
         label={t('settings.about.codexVersionLabel')}
-        state={codex}
+        state={codex.state}
+        onCheck={codex.check}
       />
       <Divider />
       <PiKernelVersionRow />
@@ -137,34 +193,62 @@ export function AgentVersionsRows() {
 
 function AgentVersionRow({
   kind,
+  name,
   label,
   state,
+  onCheck,
 }: {
   kind: UpdatableAgentKind;
+  /** Product name for actions and dialogs; `label` is the row label ("<name> version"). */
+  name: string;
   label: string;
   state: AgentVersionState;
+  onCheck: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const currentVersion = state.version ? extractSemver(state.version) : null;
   const latestVersion = state.latestVersion ? extractSemver(state.latestVersion) : null;
   // Main decides with the installer's semver ordering: a newer local build never offers a no-op relaunch.
   const updateAvailable = Boolean(state.updateAvailable && currentVersion && latestVersion);
+  // A later check keeps the last channel version in the menu, but Update must not
+  // confirm a stale result while that check is still in flight.
+  const canUpdate = () => {
+    const next = stateRef.current;
+    return Boolean(
+      !next.checking &&
+        next.updateAvailable &&
+        next.version &&
+        next.latestVersion &&
+        extractSemver(next.version) &&
+        extractSemver(next.latestVersion),
+    );
+  };
+  const status = state.checking
+    ? t('settings.about.harnessChecking')
+    : state.checkFailed
+      ? t('settings.about.harnessCheckFailed')
+      : updateAvailable
+        ? t('settings.about.harnessUpdateAvailable')
+        : '';
 
   const handleUpdate = async () => {
-    if (!currentVersion || !latestVersion) return;
+    if (!canUpdate() || !currentVersion || !latestVersion) return;
     const confirmed = await confirm({
-      title: t('settings.about.harnessUpdateTitle', { name: label }),
+      title: t('settings.about.harnessUpdateTitle', { name }),
       description: t('settings.about.harnessUpdateDescription', {
-        name: label,
+        name,
         currentVersion,
         latestVersion,
       }),
-      confirmText: t('settings.about.harnessUpdateConfirm', { name: label }),
+      confirmText: t('settings.about.harnessUpdateConfirm', { name }),
       cancelText: t('settings.about.harnessUpdateCancel'),
       autoFocusConfirm: true,
     });
     if (!confirmed) return;
+    if (!canUpdate()) return;
 
     // Same gate as the app-update banner and the beta-channel restart: a logical
     // turn, Claude background activity, or Ghost card action must not be killed
@@ -178,13 +262,14 @@ function AgentVersionRow({
     }
     if (hasInFlight) {
       const interrupt = await confirm({
-        title: t('settings.about.harnessUpdateTitle', { name: label }),
-        description: t('settings.about.harnessUpdateBusyDescription', { name: label }),
-        confirmText: t('settings.about.harnessUpdateConfirm', { name: label }),
+        title: t('settings.about.harnessUpdateTitle', { name }),
+        description: t('settings.about.harnessUpdateBusyDescription', { name }),
+        confirmText: t('settings.about.harnessUpdateConfirm', { name }),
         cancelText: t('settings.about.harnessUpdateCancel'),
       });
       if (!interrupt) return;
     }
+    if (!canUpdate()) return;
 
     try {
       await window.electronAPI.relaunchForHarnessUpdate(kind);
@@ -194,34 +279,29 @@ function AgentVersionRow({
   };
 
   return (
-    <div className="flex items-center justify-between gap-3 px-[18px] py-4">
-      <span className="text-13 text-[var(--settings-section-sublabel)]">{label}</span>
-      <div className="flex min-w-0 items-center justify-end gap-2">
-        <span
-          className={cn(
-            'truncate text-13 font-medium',
-            !state.version
-              ? 'text-[var(--settings-section-sublabel)] opacity-70'
-              : 'text-[var(--settings-section-title)]',
-          )}
-        >
-          {renderVersion(state, t)}
-        </span>
-        {updateAvailable && (
-          <Button
-            aria-label={t('settings.about.harnessUpdateButton', { name: label })}
-            className="gap-1 px-3 text-12"
-            onClick={() => void handleUpdate()}
-            size="md"
-            title={t('settings.about.harnessUpdateButton', { name: label })}
-            variant="secondary"
-          >
-            <Download aria-hidden size={12} strokeWidth={1.8} />
-            {t('settings.about.harnessUpdateButton', { name: label })}
-          </Button>
-        )}
-      </div>
-    </div>
+    <HarnessVersionMenuRow
+      label={label}
+      manageLabel={t('settings.about.harnessManage', { name })}
+      version={renderVersion(state, t)}
+      status={status}
+      pending={state.checking}
+    >
+      <HarnessVersionMenuItem
+        label={t('settings.about.harnessUpdateButton', { name })}
+        version={latestVersion}
+        disabled={!updateAvailable || state.checking}
+        onSelect={() => void handleUpdate()}
+      />
+      <DropdownMenuSeparator />
+      <DropdownMenuItem className={HARNESS_MENU_ITEM_CLASS} disabled={state.checking} onSelect={onCheck}>
+        {state.checking ? t('settings.about.harnessChecking') : t('settings.about.harnessCheck')}
+      </DropdownMenuItem>
+      {state.checkedAt && (
+        <HarnessMenuFootnote>
+          {t('settings.about.harnessCheckedAt', { time: new Date(state.checkedAt).toLocaleString(i18n.language) })}
+        </HarnessMenuFootnote>
+      )}
+    </HarnessVersionMenuRow>
   );
 }
 

@@ -192,6 +192,23 @@ afterEach(() => {
 });
 
 describe('AddProviderWizard — OpenAI 授权边界', () => {
+  it('keeps the inline cancel action named and enabled during authorization', async () => {
+    let finish!: (value: unknown) => void;
+    triggerLogin.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    cancelLogin.mockResolvedValue({});
+    const onDone = vi.fn();
+    render(<AddProviderWizard providers={[OPENAI_PROVIDER]}
+      entry={{ kind: 'builtin', providerId: 'openai' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+    fireEvent.click(await screen.findByText('settings.providers.openai.useLocalAccount'));
+    const cancel = await screen.findByRole('button', { name: 'settings.providers.button.cancel' });
+    expect((cancel as HTMLButtonElement).disabled).toBe(false);
+    expect(cancel.getAttribute('aria-busy')).toBeNull();
+    fireEvent.click(cancel);
+    expect(cancelLogin).toHaveBeenCalledOnce();
+    await act(async () => { finish({ ok: false, authenticated: false }); });
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
   it.each(['openai', 'anthropic'].flatMap(id => ['cancel', 'unmount'].map(exit => ({ id, exit }))))('discards local $id completion after $exit', async ({ id, exit }) => {
     let finish!: (value: unknown) => void;
     triggerLogin.mockReturnValue(new Promise(resolve => { finish = resolve; }));
@@ -505,7 +522,7 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
   });
 });
 
-describe('AddProviderWizard — 关闭途径(DESIGN.md §4:取消 / Esc / 遮罩)', () => {
+describe('AddProviderWizard — 关闭途径(取消 / Esc)', () => {
   it('按 Esc 关闭向导', () => {
     const onClose = vi.fn();
     render(
@@ -538,7 +555,7 @@ describe('AddProviderWizard — 关闭途径(DESIGN.md §4:取消 / Esc / 遮罩
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('点击遮罩关闭向导;点击弹窗内部不关闭', () => {
+  it('点击遮罩或弹窗内部不关闭;点击取消关闭', () => {
     const onClose = vi.fn();
     const { container } = render(
       <AddProviderWizard
@@ -548,18 +565,16 @@ describe('AddProviderWizard — 关闭途径(DESIGN.md §4:取消 / Esc / 遮罩
         onDone={vi.fn()}
       />,
     );
-    // 点弹窗内部(标题):target ≠ 遮罩本身,不得关闭。
     fireEvent.click(screen.getByText('settings.providers.wizard.title'));
     expect(onClose).not.toHaveBeenCalled();
     const overlay = container.firstElementChild as HTMLElement;
-    // 从弹窗内部按下、拖出到遮罩松开:合成 click 落在遮罩,但按下不始于遮罩,
-    // 不得误关(防丢表单)。
     fireEvent.mouseDown(screen.getByText('settings.providers.wizard.title'));
     fireEvent.click(overlay);
     expect(onClose).not.toHaveBeenCalled();
-    // 按下与松开都在遮罩上:关闭。
     fireEvent.mouseDown(overlay);
     fireEvent.click(overlay);
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('settings.providers.wizard.cancel'));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

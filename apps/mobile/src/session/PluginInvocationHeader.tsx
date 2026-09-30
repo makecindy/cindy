@@ -58,7 +58,7 @@ function PluginInvocationRow({ plugin, running, deviceId, sessionId, showComplet
         </Animated.View>
         <View>{iconUrl ? <Image source={{ uri: iconUrl }} style={{ width: 18, height: 18, borderRadius: radius.pill }} /> : <Ghost size={iconSize.sm} color={colors.textSecondary} />}</View>
         {!running && showCompletionBadge && <View style={[styles.check, { backgroundColor: colors.statusDone }]}>
-          <Check size={iconSize.xs} color={colors.surface} strokeWidth={iconStroke.regular} />
+          <Check size={iconSize.xs} color={colors.ctaText} strokeWidth={iconStroke.regular} />
         </View>}
       </View>
       <Text style={[styles.name, { color: colors.textSecondary }]}>{name}</Text>

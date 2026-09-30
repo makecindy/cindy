@@ -1,14 +1,17 @@
 import { createHash } from 'node:crypto';
 import { probeBinaryVersion } from '../binary-version-probe.js';
 import { extractMakeToolArchive } from '../../cindy-make/toolArchive.js';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { installPiBinaryUpdate, parsePiRelease, piBinaryUpdateFailureStage, type PiBinaryUpdateDeps } from '../pi-self-update.js';
+import { installPiBinaryUpdate, parsePiRelease, piBinaryUpdateDefaults, piBinaryUpdateFailureStage, renameWithTransientRetry, type PiBinaryUpdateDeps } from '../pi-self-update.js';
 
 const electronFetch = vi.hoisted(() => vi.fn());
+const readToken = vi.hoisted(() => vi.fn());
 vi.mock('electron', () => ({ net: { fetch: electronFetch } }));
+vi.mock('../../git-context/ghCliTokenSource.js', () => ({ getSharedGhCliTokenSource: () => ({ readToken }) }));
+beforeEach(() => { readToken.mockReset().mockResolvedValue(null); });
 
 const roots: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllGlobals(); electronFetch.mockReset(); await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true }))); });
@@ -33,6 +36,104 @@ async function fixture(platform: 'darwin' | 'win32' = 'darwin') {
   };
   return { root, current, deps };
 }
+describe('Pi release lookup authentication', () => {
+  const url = 'https://api.github.com/repos/earendil-works/pi/releases/latest';
+  const token = 'fixture-github-token';
+  const headers = { Accept: 'application/vnd.github+json' };
+  const success = () => new Response(JSON.stringify(release()), { status: 200 });
+
+  it('prefers the shared GitHub login and prevents authenticated redirects', async () => {
+    readToken.mockResolvedValue(token);
+    electronFetch.mockResolvedValue(success());
+    const signal = new AbortController().signal;
+    await expect(piBinaryUpdateDefaults.fetchRelease(signal)).resolves.toEqual(release());
+    expect(electronFetch).toHaveBeenCalledExactlyOnceWith(url, {
+      signal, redirect: 'error', headers: { ...headers, Authorization: `Bearer ${token}` },
+    });
+  });
+
+  it.each(['missing', 'unavailable'])('checks anonymously when the login is %s', async reason => {
+    if (reason === 'unavailable') readToken.mockRejectedValue(new Error('credential source unavailable'));
+    electronFetch.mockResolvedValue(success());
+    const signal = new AbortController().signal;
+    await expect(piBinaryUpdateDefaults.fetchRelease(signal)).resolves.toEqual(release());
+    expect(electronFetch).toHaveBeenCalledExactlyOnceWith(url, { signal, redirect: 'error', headers });
+  });
+
+  it.each([401, 403])('retries a rejected login (%s) once without credentials', async status => {
+    readToken.mockResolvedValue(token);
+    const rejected = new Response('rejected login', { status });
+    electronFetch.mockResolvedValueOnce(rejected).mockResolvedValueOnce(success());
+    const signal = new AbortController().signal;
+    await expect(piBinaryUpdateDefaults.fetchRelease(signal)).resolves.toEqual(release());
+    expect(rejected.bodyUsed).toBe(true);
+    expect(electronFetch).toHaveBeenCalledTimes(2);
+    expect(electronFetch).toHaveBeenNthCalledWith(1, url, {
+      signal, redirect: 'error', headers: { ...headers, Authorization: `Bearer ${token}` },
+    });
+    expect(electronFetch).toHaveBeenNthCalledWith(2, url, { signal, redirect: 'error', headers });
+  });
+
+  it.each([401, 403])('still retries anonymously when the rejected response (%s) stream has errored', async status => {
+    readToken.mockResolvedValue(token);
+    const body = new ReadableStream({ start(controller) { controller.error(new Error('network stream failed')); } });
+    electronFetch.mockResolvedValueOnce(new Response(body, { status })).mockResolvedValueOnce(success());
+    const signal = new AbortController().signal;
+    await expect(piBinaryUpdateDefaults.fetchRelease(signal)).resolves.toEqual(release());
+    expect(electronFetch).toHaveBeenCalledTimes(2);
+    expect(electronFetch).toHaveBeenNthCalledWith(2, url, { signal, redirect: 'error', headers });
+  });
+
+  it('keeps caller cancellation authoritative when response cleanup also fails', async () => {
+    readToken.mockResolvedValue(token);
+    const controller = new AbortController();
+    electronFetch.mockImplementationOnce(async () => {
+      controller.abort();
+      return new Response(new ReadableStream({ start(stream) { stream.error(new Error('network stream failed')); } }), { status: 401 });
+    });
+    await expect(piBinaryUpdateDefaults.fetchRelease(controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(electronFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([null, token])('bounds retries when anonymous access is also rate limited (login=%s)', async login => {
+    readToken.mockResolvedValue(login);
+    electronFetch.mockImplementation(async () => new Response('rate limited', { status: 403 }));
+    await expect(piBinaryUpdateDefaults.fetchRelease(new AbortController().signal)).rejects.toThrow('(403)');
+    expect(electronFetch).toHaveBeenCalledTimes(login ? 2 : 1);
+  });
+
+  it('does not retry server failures or expose response bodies in the error', async () => {
+    readToken.mockResolvedValue(token);
+    electronFetch.mockResolvedValue(new Response('private response detail', { status: 503 }));
+    await expect(piBinaryUpdateDefaults.fetchRelease(new AbortController().signal))
+      .rejects.toThrow(/^Pi release lookup failed \(503\)$/);
+    expect(electronFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not query credentials or the network after cancellation', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(piBinaryUpdateDefaults.fetchRelease(controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(readToken).not.toHaveBeenCalled();
+    expect(electronFetch).not.toHaveBeenCalled();
+  });
+
+  it('preserves cancellation while reading credentials and before anonymous fallback', async () => {
+    const controller = new AbortController();
+    readToken.mockImplementationOnce(async () => { controller.abort(); return token; });
+    await expect(piBinaryUpdateDefaults.fetchRelease(controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(electronFetch).not.toHaveBeenCalled();
+
+    const retry = new AbortController();
+    readToken.mockResolvedValue(token);
+    electronFetch.mockImplementationOnce(async () => {
+      retry.abort();
+      return new Response('invalid login', { status: 401 });
+    });
+    await expect(piBinaryUpdateDefaults.fetchRelease(retry.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(electronFetch).toHaveBeenCalledTimes(1);
+  });
+});
 describe('Pi standalone core update', () => {
   it.each([200, 503])('uses Electron release lookup with the existing timeout and status handling (%s)', async status => {
     const { root, current } = await fixture();
@@ -43,7 +144,7 @@ describe('Pi standalone core update', () => {
     // Exercise the production defaults, stopping before download/version probes.
     const error = await installPiBinaryUpdate(root, current, false, undefined, 'darwin', 'arm64').catch(error => error);
     expect(electronFetch).toHaveBeenCalledWith('https://api.github.com/repos/earendil-works/pi/releases/latest', {
-      signal: expect.any(AbortSignal), headers: { Accept: 'application/vnd.github+json' },
+      signal: expect.any(AbortSignal), redirect: 'error', headers: { Accept: 'application/vnd.github+json' },
     });
     expect(nodeFetch).not.toHaveBeenCalled();
     expect(piBinaryUpdateFailureStage(error)).toBe(status === 200 ? 'asset-validation' : 'release-lookup');
@@ -87,6 +188,40 @@ describe('Pi standalone core update', () => {
     expect(await fs.readFile(path.join(path.dirname(result.binaryPath), '.verified'), 'utf8')).toBe('a'.repeat(64));
     expect(deps.probe).toHaveBeenCalledTimes(3);
     await expect(fs.stat(path.dirname(extractionRoot))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('retries a publish rename briefly blocked by Windows security software (#5204)', async () => {
+    const { root, current, deps } = await fixture('win32');
+    const rename = fs.rename.bind(fs);
+    const spy = vi.spyOn(fs, 'rename').mockRejectedValueOnce(Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }))
+      .mockImplementation(rename);
+    const result = await installPiBinaryUpdate(root, current, false, deps, 'win32', 'arm64');
+    expect(result.version).toBe('0.85.1');
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(await fs.readFile(path.join(path.dirname(result.binaryPath), '.verified'), 'utf8')).toBe('a'.repeat(64));
+    expect(await fs.readFile(current, 'utf8')).toBe('old-running-runtime');
+  });
+  it('fails a permanently denied publish at the publish stage without retrying off Windows', async () => {
+    const { root, current, deps } = await fixture();
+    const spy = vi.spyOn(fs, 'rename').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
+    const error = await installPiBinaryUpdate(root, current, false, deps, 'darwin', 'arm64').catch(error => error);
+    expect(error).toMatchObject({ code: 'EPERM' });
+    expect(piBinaryUpdateFailureStage(error)).toBe('publish');
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(root)).toEqual(['0.84.4']);
+    expect(await fs.readFile(current, 'utf8')).toBe('old-running-runtime');
+  });
+  it('bounds Windows rename retries to transient codes and the install signal', async () => {
+    const signal = new AbortController().signal;
+    const eperm = vi.spyOn(fs, 'rename').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
+    await expect(renameWithTransientRetry('a', 'b', { platform: 'win32', signal, delaysMs: [1, 1, 1] })).rejects.toMatchObject({ code: 'EPERM' });
+    expect(eperm).toHaveBeenCalledTimes(4);
+    eperm.mockReset().mockRejectedValue(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }));
+    await expect(renameWithTransientRetry('a', 'b', { platform: 'win32', signal, delaysMs: [1, 1, 1] })).rejects.toMatchObject({ code: 'ENOSPC' });
+    expect(eperm).toHaveBeenCalledTimes(1);
+    eperm.mockReset().mockRejectedValue(Object.assign(new Error('EBUSY'), { code: 'EBUSY' }));
+    const aborted = new AbortController(); aborted.abort();
+    await expect(renameWithTransientRetry('a', 'b', { platform: 'win32', signal: aborted.signal, delaysMs: [60_000] })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(eperm).toHaveBeenCalledTimes(1);
   });
   it('leaves the old installation usable when version verification fails', async () => {
     const { root, current, deps } = await fixture();

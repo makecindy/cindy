@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import { Alert, Platform } from 'react-native';
+import { useEffect } from 'react';
+import { Alert } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { RenameDeviceModal } from '@/session/RenameDeviceModal';
 import type { useDeviceManagement } from './useDeviceManagement';
@@ -18,40 +18,7 @@ export function DeviceManagementDialogs({
     deleteSaving,
     closeDelete,
     confirmDelete,
-    renameTarget,
-    renameSaving,
-    renameError,
   } = manager;
-  const latest = useRef(manager);
-  latest.current = manager;
-  useEffect(() => {
-    if (Platform.OS !== 'ios' || !renameTarget || renameSaving) return;
-    Alert.prompt(
-      t('devices.list.renameDevice.title'),
-      renameError?.message,
-      [
-        {
-          text: t('devices.common.cancel'),
-          style: 'cancel',
-          onPress: () => latest.current.closeRename(),
-        },
-        {
-          text: t('devices.common.save'),
-          onPress: (value?: string) => {
-            const name = value?.trim() ?? '';
-            if (!name) {
-              latest.current.closeRename();
-              return;
-            }
-            latest.current.setRenameDraft(name);
-            void latest.current.confirmRename(name);
-          },
-        },
-      ],
-      'plain-text',
-      latest.current.renameDraft,
-    );
-  }, [renameTarget, renameSaving, renameError, t]);
   useEffect(() => {
     if (!deleteTarget || deleteSaving) return;
     Alert.alert(
@@ -84,7 +51,7 @@ export function DeviceManagementDialogs({
     onDeleted,
     t,
   ]);
-  if (Platform.OS === 'ios') return null;
+  // 重命名在 iOS / Android 统一走自绘对话框(与任务重命名同一形态),不再用 iOS Alert.prompt。
   return (
     <RenameDeviceModal
       draft={manager.renameDraft}

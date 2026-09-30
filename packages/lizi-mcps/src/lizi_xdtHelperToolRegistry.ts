@@ -48,6 +48,7 @@ export type XdtHelperToolCategory =
   | 'feedback'
   | 'handoff'
   | 'skills'
+  | 'app_update'
   | 'bots';
 
 export type XdtHelperToolContentBlock =

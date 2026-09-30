@@ -1,4 +1,4 @@
-import { normalizeBotModelChain } from '../../../shared/botModelChain.js';
+import { normalizeBotModelChain, readBotTaskModelOverride, type BotModelRoute } from '../../../shared/botModelChain.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { RemoteActionDescriptor, RemoteActionInvokeRequest, RemoteActionInvokeResponse, RemoteLocalizedText, RemoteResource } from '@cindy/device-link';
 import type { getBotRemoteSettingsSource } from './bots.js';
@@ -29,6 +29,8 @@ const copy = {
   identity: text('Personality', '性格', '性格', '性格', '성격'),
   models: text('Models', '模型', '模型', 'モデル', '모델'),
   followsDefault: text('Follow app default', '跟随应用默认', '跟隨應用預設', 'アプリのデフォルトに従う', '앱 기본값 사용'),
+  taskModel: text('Task Model', '任务模型', '任務模型', 'セッション用モデル', '세션 모델'),
+  taskFollowsPrimary: text('Inherit Primary Model', '继承主模型', '繼承主模型', 'メインモデルを継承', '기본 모델 상속'),
   memory: text('Memory', '记忆', '記憶', '記憶', '기억'),
   memoryEnabled: text('Remember Things About Me', '记住与我有关的事', '記住與我有關的事', '私に関することを覚える', '나에 관한 내용 기억하기'),
   userContext: text('What You Know About Me', '关于我的记忆', '關於我的記憶', '私についての記憶', '나에 관한 기억'),
@@ -42,6 +44,7 @@ const copy = {
   delete: text('Delete Teammate', '删除伙伴', '刪除夥伴', 'チームメイトを削除', '팀원 삭제'),
   deleteBody: text('Permanently delete this teammate’s profile, memory, skills and workspace. Task history and independent worktrees are retained. Type the full name to delete.', '永久删除伙伴的资料、记忆、技能和工作区。任务记录和独立 worktree 保留。输入完整名字后删除。', '永久刪除夥伴的資料、記憶、技能和工作區。任務記錄和獨立 worktree 保留。輸入完整名字後刪除。', 'プロフィール、記憶、スキル、ワークスペースを完全に削除します。セッション履歴と独立した worktree は保持されます。削除するには名前全体を入力してください。', '프로필, 기억, 스킬, 작업 공간을 영구 삭제합니다. 세션 기록과 독립 worktree는 유지됩니다. 삭제하려면 전체 이름을 입력하세요.'),
   resume: text('Resume Teammate', '恢复伙伴', '恢復夥伴', 'チームメイトを再開', '팀원 재개'),
+  resumeBody: text('Your teammate starts taking messages and background work again. History, memory and files are unchanged; automations you paused yourself stay paused.', '恢复后伙伴重新接收消息和后台工作。记录、记忆和文件不变，你手动暂停的自动化仍保持暂停。', '恢復後夥伴重新接收訊息和背景工作。記錄、記憶和檔案不變，你手動暫停的自動化仍保持暫停。', '再開すると、チームメイトはメッセージとバックグラウンド作業を再び受け付けます。履歴、記憶、ファイルは変わらず、手動で一時停止した自動化は一時停止のままです。', '재개하면 팀원이 메시지와 백그라운드 작업을 다시 받습니다. 기록, 기억, 파일은 그대로이며 직접 일시 중지한 자동화는 계속 일시 중지됩니다.'),
   save: text('Save Changes', '保存更改', '儲存變更', '変更を保存', '변경 사항 저장'),
   saved: text('Teammate settings saved', '伙伴设置已保存', '夥伴設定已儲存', 'チームメイトの設定を保存しました', '팀원 설정을 저장했습니다'),
   restarted: text('Teammate restarted; send a message to continue', '伙伴已重启，发送消息即可继续', '夥伴已重新啟動，傳送訊息即可繼續', 'チームメイトを再起動しました。メッセージを送って続行できます', '팀원을 다시 시작했습니다. 메시지를 보내 계속하세요'),
@@ -124,7 +127,12 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
       form('profile', [{ id: 'name', kind: 'text', label: copy.name, required: true }, { id: 'description', kind: 'multiline', label: copy.description }, { id: 'identity', kind: 'multiline', label: copy.identity }], { name: source.name, description: source.description, identity: settings.identity }),
       form('memory', [{ id: 'memory', kind: 'toggle', label: copy.memoryEnabled }, { id: 'userContext', kind: 'multiline', label: copy.userContext }], { memory: settings.memory, userContext: settings.userContext }),
       form('permissions', [{ id: 'permissions', kind: 'select', label: copy.permissions, options: ['ask', 'auto', 'trusted'].map(value => ({ value, label: copy[value as 'ask' | 'auto' | 'trusted'] })) }], { permissions: settings.permissions }),
-      form('models', [{ id: 'followsDefault', label: copy.followsDefault, kind: 'toggle' }, { id: 'modelChain', label: copy.models, kind: 'multiline' }], { followsDefault: settings.followsDefault, modelChain: JSON.stringify(settings.modelChain) }),
+      form('models', [{ id: 'followsDefault', label: copy.followsDefault, kind: 'toggle' }, { id: 'modelChain', label: copy.models, kind: 'multiline' },
+        { id: 'taskFollowsPrimary', label: copy.taskFollowsPrimary, kind: 'toggle' },
+        { id: 'taskModel', label: copy.taskModel, kind: 'multiline' }],
+        { followsDefault: settings.followsDefault, modelChain: JSON.stringify(settings.modelChain),
+          taskFollowsPrimary: !settings.taskModelOverride,
+          taskModel: JSON.stringify(settings.taskModelOverride ? [settings.taskModelOverride] : settings.modelChain.slice(0, 1)) }),
       { id: 'connections', primitive: 'markdown', fallbackMarkdown: [...settings.skills, ...settings.connections, ...settings.toolsets].join('\n') },
     ];
     // A failed shelf read must not turn into an empty shelf or prevent profile recovery.
@@ -142,7 +150,7 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
     }
     for (const operation of (source.status === 'paused' ? ['resume', 'delete'] : ['restart', 'delete']) as Array<'restart' | 'delete' | 'resume'>) {
       actions.push({ id: issue(context, owner, settings, operation), label: copy[operation], tone: operation === 'delete' ? 'destructive' : 'neutral',
-        confirmation: { title: copy[operation], body: operation === 'delete' ? copy.deleteBody : copy.restartBody, confirmLabel: copy[operation] },
+        confirmation: { title: copy[operation], body: { restart: copy.restartBody, delete: copy.deleteBody, resume: copy.resumeBody }[operation], confirmLabel: copy[operation] },
         ...(operation === 'delete' ? { fields: [{ id: 'confirmName', label: copy.name, kind: 'text', required: true }] } : {}) });
       resource.blocks.push({ id: operation, primitive: 'action', fallbackMarkdown: copy[operation].fallback, data: { actionId: actions.at(-1)!.id } });
     }
@@ -187,7 +195,7 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
     };
     await guard();
     const input = request.input ?? {};
-    const allowed: readonly string[] = { models: ['followsDefault', 'modelChain'], profile: ['name', 'description', 'identity'], memory: ['memory', 'userContext'], permissions: ['permissions'], restart: [], resume: [], delete: ['confirmName'] }[grant.operation];
+    const allowed: readonly string[] = { models: ['followsDefault', 'modelChain', 'taskFollowsPrimary', 'taskModel'], profile: ['name', 'description', 'identity'], memory: ['memory', 'userContext'], permissions: ['permissions'], restart: [], resume: [], delete: ['confirmName'] }[grant.operation];
     if (Object.keys(input).some(key => !allowed.includes(key))) throwIpcError('INVALID_PARAMS', 'Unknown teammate field');
     const string = (key: string, max = 12_000) => {
       const value = input[key];
@@ -218,7 +226,28 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
         chain = normalizeBotModelChain(value);
         if (!Array.isArray(value) || !chain.length || chain.length !== value.length || value.some(route => !['claude', 'codex', 'pi'].includes(route?.harness))) throwIpcError('INVALID_PARAMS', 'Invalid model chain');
       }
-      patch = { capabilities: { modelChainOverride: followsDefault ? null : chain, modelOverride: null } };
+      const capabilities: Record<string, unknown> = {};
+      // Old clients only send primary fields. Absence must preserve the task override.
+      if ('followsDefault' in input || 'modelChain' in input) {
+        capabilities.modelChainOverride = followsDefault ? null : chain;
+        capabilities.modelOverride = null;
+      }
+      if ('taskFollowsPrimary' in input || 'taskModel' in input) {
+        if ('taskFollowsPrimary' in input && typeof input.taskFollowsPrimary !== 'boolean')
+          throwIpcError('INVALID_PARAMS', 'Invalid task model preference');
+        const inherits = input.taskFollowsPrimary ?? !settings.taskModelOverride;
+        let route: BotModelRoute | null = settings.taskModelOverride ?? chain[0] ?? null;
+        if (!inherits && 'taskModel' in input) {
+          try {
+            const value = JSON.parse(string('taskModel'));
+            if (!Array.isArray(value) || value.length !== 1) throw new Error('Invalid task model');
+            route = readBotTaskModelOverride(value[0]);
+          } catch { throwIpcError('INVALID_PARAMS', 'Invalid task model'); }
+        }
+        if (!inherits && !route) throwIpcError('INVALID_PARAMS', 'Task model required');
+        capabilities.taskModelOverride = inherits ? null : route;
+      }
+      patch = { capabilities };
     }
     if (patch && !Object.keys(patch).length) throwIpcError('INVALID_PARAMS', 'No changed teammate fields');
     if (grant.operation === 'permissions') {
