@@ -6924,9 +6924,17 @@ export class PiAgent extends BaseAgent {
         wireModel === mutableWireModel;
       // effort 能力校验必须排在写路由快照**之前**:它会抛错中止本次切换,而快照一旦落盘就
       // 指向了新 provider —— 那正是父子路由分叉的形状(upstream #1451 与本 PR 的合并点)。
+      //
+      // 预检用**对账读到的目录结论**(pendingThinkingTiers):用户刚为目标模型声明了新档位、
+      // 随即带着新 effort 切模时,启动时冻结的 nextEffortSnapshot 里还没有这一档,
+      // 会在 RPC 发出前把它误判为不可用、让切换失败。校验只是预检,活动快照
+      // 仍只在切模成功后落定(见 routeUnchanged 早退与成功落定两处)。
       const nextEffortSnapshot = resolveAppliedEffortSnapshot(provider, model);
+      const preflightEffortSnapshot = pendingThinkingTiers
+        ? pendingThinkingTiers.tiers
+        : nextEffortSnapshot;
       if (setOpts?.effort) {
-        assertStartupEffortAllowed(nextEffortSnapshot, setOpts.effort);
+        assertStartupEffortAllowed(preflightEffortSnapshot, setOpts.effort);
       }
       // 远端启动快照保留会话内可切换的全部 native provider，但 SSH reverse-forward
       // 只为当前实际路由建立。否则用户仅仅登录过 xAI，就会在启动任意 Cindy/BYOM

@@ -4903,6 +4903,54 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("preflights a freshly declared effort tier against the catalog, not the frozen startup snapshot", async () => {
+    // 用户在设置里给 model-b 声明了新档位 max，随即带 effort=max 切模。启动时冻结的
+    // nextEffortSnapshot 里没有 max，若预检用它就会在 RPC 发出前误判「不可用」→ 切模失败。
+    // 预检必须用对账读到的目录结论；活动快照仍只在切模成功后落定。
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "tier-preflight",
+              name: "Tier Preflight",
+              baseUrl: "http://tier-preflight.test",
+              api: "openai-completions",
+              models: [
+                { id: "model-a", input: ["text"], thinkingLevelMap: { high: "high" } },
+                { id: "model-b", input: ["text"], thinkingLevelMap: { low: "low" } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      // model-b 的目录最终档位含 max（用户刚声明的），而随包目录只给了 low。
+      readModelCatalogThinkingTiers: (providerId, modelId) =>
+        providerId === "tier-preflight" && modelId === "model-b"
+          ? ["low", "medium", "high", "max"]
+          : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "thinking-tier-preflight",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "tier-preflight",
+    });
+
+    // 带新声明的 effort 切模：预检放行、set_model 发出、会话落到 model-b。
+    await handle.setModel!("model-b", { providerId: "tier-preflight", effort: "max" });
+    expect(captured.runtimeModel).toBe("model-b");
+
+    // 切模成功后活动快照已含新档位，随后 setEffort(max) 能真的下发。
+    captured.requests.length = 0;
+    await handle.setEffort!("max");
+    expect(
+      captured.requests.filter((request) => request.type === "set_thinking_level"),
+    ).not.toHaveLength(0);
+    await handle.close();
+  });
+
   it("does not realign the thinking tier snapshot when the model switch fails", async () => {
     // 对账发生在切模的最早入口（成员校验 / effort 校验 / set_model RPC 之前）。若在那里
     // 就改写 activeEffortSnapshot，set_model 被拒后子进程仍停在旧模型，快照却已是失败
