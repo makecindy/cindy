@@ -26,8 +26,8 @@ export interface BotWorkbench {
 /** 一格任务的状态。`automation` 表示一条正常待命的自动化(下次运行 / 上次结果)。 */
 export type WorkbenchTaskState = 'running' | 'waiting' | 'queued' | 'stopped' | 'automation' | 'done';
 
-/** 一格任务从哪里来:原有任务、伙伴替主人开的后台任务。 */
-export type WorkbenchTaskOrigin = 'existing' | 'delegated';
+/** 一格任务从哪里来:原有任务、伙伴替主人开的后台任务、从本机其他工具导入的任务。 */
+export type WorkbenchTaskOrigin = 'existing' | 'delegated' | 'claude-code' | 'codex';
 
 export type WorkbenchDelegationStatus =
   | 'queued'
@@ -160,7 +160,21 @@ export function isCaseInsensitivePlatform(platform: string | null | undefined): 
 }
 
 /**
- * 能作为工作台任务的会话来源。只认主人自己在项目里开的任务(含插件为项目建的任务)。自动化的每次运行由自动化那一格代表,
+ * 从本机 Claude Code / Codex 导入的任务:导入路径给它们固定的 id 前缀,且只会是对应的
+ * 引擎。二者同时满足才认,避免把普通任务误标成导入的。
+ */
+export function importedSessionOrigin(
+  sessionId: string,
+  agentKind: string | null | undefined,
+): 'claude-code' | 'codex' | null {
+  if (sessionId.startsWith('claude-') && agentKind === 'cc') return 'claude-code';
+  if (sessionId.startsWith('codex-') && agentKind === 'codex') return 'codex';
+  return null;
+}
+
+/**
+ * 能作为工作台任务的会话来源。只认主人自己在项目里开的任务(含插件为项目建的任务、
+ * 从本机工具导入的任务,它们都以 desktop 落库)。自动化的每次运行由自动化那一格代表,
  * IM 渠道、学习、评审、伙伴自身等来源都不是"项目里的任务"。缺失按 desktop 兼容旧行。
  */
 export function isWorkbenchTaskSource(source: string | null | undefined): boolean {

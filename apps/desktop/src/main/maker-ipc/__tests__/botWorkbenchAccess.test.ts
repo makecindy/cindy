@@ -31,6 +31,7 @@ function setup(overrides: Partial<BotWorkbenchAccessDeps> = {}) {
     listProjectTasks: vi.fn(async () => []),
     listDelegations: vi.fn(async () => new Map()),
     readActivityPhase: vi.fn(async () => null),
+    listRoutines: vi.fn(async () => []),
     listSchedules: vi.fn(async () => []),
     sendToSession: vi.fn(async () => ({ ok: true as const, wakeKind: 'queued', queuedMessageId: 'q-1' })),
     stopSessionTurn: vi.fn(async () => ({ ok: true as const, status: 'requested' as const })),
@@ -149,13 +150,14 @@ describe('workbench continue / stop', () => {
 });
 
 describe('workbench snapshot', () => {
-  it('projects tasks, background tasks and project automations from host signals', async () => {
+  it('projects tasks, background tasks and automations from host signals', async () => {
     const phases: Record<string, string | null> = {
       running: 'running',
       asking: 'needs-interaction',
       broken: 'error',
       idle: null,
       'delegated-1': null,
+      'claude-abc': null,
     };
     const { access } = setup({
       listDelegations: vi.fn(async () => new Map([['delegated-1', 'queued' as const]])),
@@ -165,9 +167,14 @@ describe('workbench snapshot', () => {
         { id: 'asking', title: '合并命名修正', workingDir: PROJECT, agentKind: 'codex', summary: null, lastActiveAt: 3 },
         { id: 'broken', title: '压缩原画', workingDir: PROJECT, agentKind: 'cc', summary: null, lastActiveAt: 2 },
         { id: 'delegated-1', title: '过一遍导出目录', workingDir: PROJECT, agentKind: 'pi', summary: null, lastActiveAt: 1 },
+        { id: 'claude-abc', title: '旧任务', workingDir: PROJECT, agentKind: 'cc', summary: null, lastActiveAt: 0 },
         { id: 'elsewhere', title: '别的项目', workingDir: '/other', agentKind: 'cc', summary: null, lastActiveAt: 9 },
       ]),
       readActivityPhase: vi.fn(async (id: string) => phases[id] ?? null),
+      listRoutines: vi.fn(async () => [
+        { id: 'r-1', name: '巡检导出目录', enabled: true, lastResult: 'success: 没有异常' },
+        { id: 'r-2', name: '导入的提醒', enabled: false, lastResult: null },
+      ]),
       listSchedules: vi.fn(async () => [
         { id: 's-1', name: '检查 PR', status: 'active', workspaceKind: 'project', workingDir: PROJECT, nextFireAt: 0 },
         { id: 's-2', name: '别处的自动化', status: 'active', workspaceKind: 'project', workingDir: '/other' },
@@ -182,17 +189,25 @@ describe('workbench snapshot', () => {
     expect(byId.get('broken')).toMatchObject({ state: 'stopped' });
     expect(byId.get('idle')).toMatchObject({ state: 'done', summary: '12 条意见' });
     expect(byId.get('delegated-1')).toMatchObject({ state: 'queued', kind: 'delegated' });
+    expect(byId.get('claude-abc')).toMatchObject({ kind: 'claude-code' });
     expect(byId.has('elsewhere')).toBe(false);
     expect(result.workbench.tasks.at(-1)?.state).toBe('done');
-    expect(result.workbench.automations.map((item) => [item.id, item.state])).toEqual([['s-1', 'automation']]);
-    expect(result.workbench.counts).toMatchObject({ running: 1, waiting: 1, queued: 1, stopped: 1, automation: 1, done: 1 });
-    expect(result.workbench.totalTasks).toBe(5);
+    expect(result.workbench.automations.map((item) => [item.id, item.state])).toEqual([
+      ['r-1', 'automation'],
+      ['r-2', 'stopped'],
+      ['s-1', 'automation'],
+    ]);
+    expect(result.workbench.counts).toMatchObject({ running: 1, waiting: 1, queued: 1, stopped: 2, automation: 2, done: 2 });
+    expect(result.workbench.totalTasks).toBe(6);
   });
 
-  it('reads nothing from projects before any project is handed over', async () => {
-    const { deps, access } = setup({ readProjectDirs: vi.fn(async () => []) });
+  it('still lists the Bot own routines before any project is handed over', async () => {
+    const { deps, access } = setup({
+      readProjectDirs: vi.fn(async () => []),
+      listRoutines: vi.fn(async () => [{ id: 'r-1', name: '每日提醒', enabled: true, activity: 'running' as const, lastResult: null }]),
+    });
     const result = await access.get({ callerSessionId: 'bot-main' });
-    expect(result).toMatchObject({ ok: true, workbench: { projects: [], tasks: [], automations: [] } });
+    expect(result).toMatchObject({ ok: true, workbench: { projects: [], tasks: [], automations: [{ id: 'r-1', state: 'running' }] } });
     expect(deps.listProjectTasks).not.toHaveBeenCalled();
     expect(deps.listSchedules).not.toHaveBeenCalled();
   });

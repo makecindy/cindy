@@ -3,7 +3,7 @@
  *
  * - 伙伴身份从调用方 session 反查(只认本机、在用的伙伴主任务);
  * - 已接手项目读自伙伴家的 `workbench.json`;
- * - 任务、后台任务、活动快照与自动化都读宿主已有的权威来源,不另存状态;
+ * - 任务、后台任务、活动快照、例行任务与自动化都读宿主已有的权威来源,不另存状态;
  * - 继续 / 停止复用宿主已有的发消息与优雅停止路径(与 send_to_session、
  *   stop_session_turn 同一条链路),由调用方注入。
  */
@@ -18,6 +18,7 @@ import {
   isAppSessionBoundaryPending,
   ownerScopedUserDataPath,
 } from '../appSessionState.js';
+import { routineTools } from '../routines/service.js';
 import { getSchedulerIfInitialized } from '../scheduler-host/index.js';
 import { normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
 import type { WorkbenchDelegationStatus } from '../../shared/botWorkbench.js';
@@ -169,6 +170,25 @@ async function listBotDelegationChildren(botId: string): Promise<Map<string, Wor
   return out;
 }
 
+async function listBotRoutines(botId: string) {
+  const routines = await routineTools.list(botId);
+  return Promise.all(
+    routines.map(async (routine) => {
+      const latest = (await routineTools.history(botId, routine.id).catch(() => []))[0];
+      const lastResult = latest
+        ? [latest.status, latest.resultText ?? latest.error].filter(Boolean).join(': ')
+        : null;
+      return {
+        id: routine.id,
+        name: routine.name,
+        enabled: routine.enabled,
+        ...(routine.activity ? { activity: routine.activity } : {}),
+        lastResult,
+      };
+    }),
+  );
+}
+
 async function listProjectSchedules() {
   const scheduler = getSchedulerIfInitialized();
   if (!scheduler) return [];
@@ -206,6 +226,7 @@ export function createDesktopBotWorkbenchAccess(send: BotWorkbenchSendDeps): Bot
     listProjectTasks: listWorkbenchProjectTasks,
     listDelegations: listBotDelegationChildren,
     readActivityPhase: async (sessionId) => (await readCanonicalSessionActivity(sessionId)).phase,
+    listRoutines: listBotRoutines,
     listSchedules: listProjectSchedules,
     sendToSession: send.sendToSession,
     stopSessionTurn: send.stopSessionTurn,

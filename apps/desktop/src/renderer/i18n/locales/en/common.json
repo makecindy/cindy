@@ -7790,7 +7790,8 @@
     "workbench": {
       "title": "Workbench",
       "emptyTitle": "Give {{name}} a project",
-      "emptyDescription": "{{name}} takes over the project's existing sessions and automations, and looks after new ones too.",
+      "emptyDescription": "Hand the work already on your computer to {{name}}. It takes over the project's sessions and automations, and looks after new ones too.",
+      "scanning": "Looking for projects on this computer…",
       "noProjects": "No projects with sessions yet. Pick a folder to hand to {{name}}.",
       "pickFolder": "Choose another folder",
       "cancelAdd": "Cancel",
@@ -7798,14 +7799,24 @@
       "projectTasks_other": "{{count}} sessions",
       "projectAutomations_one": "{{count}} automation",
       "projectAutomations_other": "{{count}} automations",
+      "sourceCindy": "Cindy {{count}}",
+      "sourceClaude": "Claude Code {{count}}",
+      "sourceCodex": "Codex {{count}}",
       "grant": "{{name}} can view, continue and stop {{scope}} in {{project}}, and will start new sessions for you.",
       "grantTasks_one": "{{count}} session",
       "grantTasks_other": "{{count}} sessions",
+      "grantClaude_one": "{{count}} Claude Code session",
+      "grantClaude_other": "{{count}} Claude Code sessions",
+      "grantCodex_one": "{{count}} Codex session",
+      "grantCodex_other": "{{count}} Codex sessions",
       "grantAutomations_one": "{{count}} automation",
       "grantAutomations_other": "{{count}} automations",
       "grantEverything": "the sessions and automations",
+      "grantImportLimit": "It starts with the {{count}} most recent Claude Code and Codex sessions.",
       "handOver": "Hand to {{name}}",
       "handoverMessage": "I'm handing {{project}} over to you.",
+      "importFailed_one": "{{count}} session couldn't be brought over. You can import it later in Settings.",
+      "importFailed_other": "{{count}} sessions couldn't be brought over. You can import them later in Settings.",
       "addProject": "Give {{name}} another project",
       "removeProject": "Take {{project}} back from {{name}}",
       "dirMissing": "Folder not found",
@@ -7840,11 +7851,15 @@
       "kind": {
         "existing": "Existing session",
         "delegated": "You asked",
+        "claudeCode": "From Claude Code",
+        "codex": "From Codex",
         "automation": "Automation · {{cycle}}",
         "automationPlain": "Automation"
       },
       "cycle": {
-        "manual": "Manual"
+        "manual": "Manual",
+        "once": "Once",
+        "event": "On event"
       },
       "line": {
         "waiting": "Waiting for your reply",
@@ -7853,7 +7868,12 @@
         "errored": "Last run hit an error",
         "failed": "Didn't finish",
         "manual": "Runs manually",
-        "paused": "Paused"
+        "paused": "Paused",
+        "disabled": "Turned off",
+        "lastRun": "Last: {{text}}",
+        "lastRunOk": "Last run succeeded",
+        "lastRunFailed": "Last run failed",
+        "neverRun": "Hasn't run yet"
       }
     },
     "remoteSettings": {

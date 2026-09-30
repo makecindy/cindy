@@ -19,6 +19,7 @@ import {
   deriveWorkbenchAutomationState,
   deriveWorkbenchSessionState,
   findWorkbenchProject,
+  importedSessionOrigin,
   isWorkbenchTaskSource,
   workbenchStateRank,
   type WorkbenchDelegationStatus,
@@ -93,6 +94,14 @@ export interface WorkbenchTaskRow {
   lastActiveAt: number | null;
 }
 
+export interface WorkbenchRoutineRow {
+  id: string;
+  name: string;
+  enabled: boolean;
+  activity?: 'queued' | 'running';
+  lastResult: string | null;
+}
+
 export interface WorkbenchScheduleRow {
   id: string;
   name: string;
@@ -116,6 +125,7 @@ export interface BotWorkbenchAccessDeps {
   /** 该伙伴自己的后台任务:执行任务 id → 状态。 */
   listDelegations(botId: string): Promise<Map<string, WorkbenchDelegationStatus>>;
   readActivityPhase(sessionId: string): Promise<string | null>;
+  listRoutines(botId: string): Promise<WorkbenchRoutineRow[]>;
   listSchedules(): Promise<WorkbenchScheduleRow[]>;
   sendToSession(params: {
     targetSessionId: string;
@@ -164,10 +174,11 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
       if (!caller.ok) return caller;
       const projectDirs = await deps.readProjectDirs(caller.botId);
       const delegations = await deps.listDelegations(caller.botId);
-      const [rows, schedules, exists] = await Promise.all([
+      const [rows, routines, schedules, exists] = await Promise.all([
         projectDirs.length
           ? deps.listProjectTasks(projectDirs, new Set(delegations.keys()))
           : Promise.resolve([]),
+        deps.listRoutines(caller.botId),
         projectDirs.length ? deps.listSchedules() : Promise.resolve([]),
         Promise.all(projectDirs.map((dir) => deps.projectExists?.(dir) ?? Promise.resolve(true))),
       ]);
@@ -186,7 +197,9 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
             title: row.title,
             project: projectName(project),
             state,
-            kind: delegationStatus ? ('delegated' as const) : ('existing' as const),
+            kind: delegationStatus
+              ? ('delegated' as const)
+              : (importedSessionOrigin(row.id, row.agentKind) ?? ('existing' as const)),
             summary: boundWorkbenchSummary(row.summary),
             lastActiveAt: row.lastActiveAt ? new Date(row.lastActiveAt).toISOString() : null,
             rank: workbenchStateRank(state),
@@ -195,6 +208,19 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
       );
       tasks.sort((a, b) => a.rank - b.rank);
       const automations = [
+        ...routines.map((routine) => ({
+          id: routine.id,
+          name: routine.name,
+          kind: 'routine' as const,
+          state: deriveWorkbenchAutomationState({
+            enabled: routine.enabled,
+            running: routine.activity === 'running',
+            queued: routine.activity === 'queued',
+          }),
+          project: null,
+          nextRunAt: null,
+          lastResult: boundWorkbenchSummary(routine.lastResult),
+        })),
         ...schedules.flatMap((schedule) => {
           if (schedule.source === 'bot' || schedule.workspaceKind === 'dialogue') return [];
           const project = findWorkbenchProject(schedule.workingDir, projectDirs, deps.caseInsensitive);

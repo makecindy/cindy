@@ -6,6 +6,7 @@ import {
   deriveWorkbenchAutomationState,
   deriveWorkbenchSessionState,
   findWorkbenchProject,
+  importedSessionOrigin,
   isWorkbenchTaskSource,
   workbenchStateRank,
 } from '../botWorkbench';
@@ -66,6 +67,13 @@ describe('project membership', () => {
 });
 
 describe('helpers', () => {
+  it('recognizes imported sessions only by prefix and engine together', () => {
+    expect(importedSessionOrigin('claude-123', 'cc')).toBe('claude-code');
+    expect(importedSessionOrigin('codex-123', 'codex')).toBe('codex');
+    expect(importedSessionOrigin('claude-123', 'codex')).toBeNull();
+    expect(importedSessionOrigin('abc', 'cc')).toBeNull();
+  });
+
   it('accepts only project task sources', () => {
     expect(isWorkbenchTaskSource('desktop')).toBe(true);
     expect(isWorkbenchTaskSource('plugin')).toBe(true);

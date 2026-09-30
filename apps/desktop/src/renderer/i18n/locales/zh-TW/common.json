@@ -7788,18 +7788,26 @@
     "workbench": {
       "title": "工作台",
       "emptyTitle": "交給{{name}}一個專案",
-      "emptyDescription": "它會接手專案裡已有的任務和自動化，之後的新任務也歸它管。",
+      "emptyDescription": "把電腦裡已有的工作交給{{name}}接著做。它會接手專案裡的任務和自動化，之後的新任務也歸它管。",
+      "scanning": "正在尋找電腦上的專案…",
       "noProjects": "還沒找到有任務的專案，可以選一個資料夾交給{{name}}。",
       "pickFolder": "選其他資料夾",
       "cancelAdd": "取消",
       "projectTasks_other": "{{count}} 個任務",
       "projectAutomations_other": "{{count}} 個自動化",
+      "sourceCindy": "Cindy {{count}}",
+      "sourceClaude": "Claude Code {{count}}",
+      "sourceCodex": "Codex {{count}}",
       "grant": "{{name}}可以查看、繼續和停止 {{project}} 裡的{{scope}}，也會替你開新任務。",
       "grantTasks_other": "{{count}} 個任務",
+      "grantClaude_other": "Claude Code 的 {{count}} 個任務",
+      "grantCodex_other": "Codex 的 {{count}} 個任務",
       "grantAutomations_other": "{{count}} 個自動化",
       "grantEverything": "任務和自動化",
+      "grantImportLimit": "Claude Code 和 Codex 的任務先接手最近的 {{count}} 個。",
       "handOver": "交給{{name}}",
       "handoverMessage": "把 {{project}} 交給你了。",
+      "importFailed_other": "有 {{count}} 個任務沒能接過來，可以稍後在設定裡匯入。",
       "addProject": "再交給{{name}}一個專案",
       "removeProject": "不再交給{{name}}：{{project}}",
       "dirMissing": "找不到這個資料夾",
@@ -7832,11 +7840,15 @@
       "kind": {
         "existing": "原有任務",
         "delegated": "你交代的",
+        "claudeCode": "來自 Claude Code",
+        "codex": "來自 Codex",
         "automation": "自動化 · {{cycle}}",
         "automationPlain": "自動化"
       },
       "cycle": {
-        "manual": "手動"
+        "manual": "手動",
+        "once": "一次",
+        "event": "事件觸發"
       },
       "line": {
         "waiting": "等你回覆",
@@ -7845,7 +7857,12 @@
         "errored": "上次出錯了",
         "failed": "沒做完",
         "manual": "手動執行",
-        "paused": "已暫停"
+        "paused": "已暫停",
+        "disabled": "已停用",
+        "lastRun": "上次：{{text}}",
+        "lastRunOk": "上次執行成功",
+        "lastRunFailed": "上次執行失敗",
+        "neverRun": "還沒執行過"
       }
     },
     "remoteSettings": {

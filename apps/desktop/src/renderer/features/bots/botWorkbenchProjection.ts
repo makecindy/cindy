@@ -2,9 +2,10 @@
  * 伙伴工作台的渲染层投影(纯函数)。
  *
  * 输入全是渲染层已经有的数据:任务列表缓存、伙伴档案(用来排除伙伴自己的隐藏任务)、
- * 伙伴的后台任务、灵动岛同源的活动快照、侧栏同源的待关注标记、自动化。
+ * 伙伴的后台任务、灵动岛同源的活动快照、侧栏同源的待关注标记、自动化与例行任务。
  * 输出两样东西:
- *  - 空状态的项目清单:复用任务列表的项目分组(`groupSessions`),合并项目里的自动化;
+ *  - 空状态的项目清单:复用任务列表的项目分组(`groupSessions`),合并本机 Claude Code /
+ *    Codex 的可导入候选与项目里的自动化;
  *  - 已接手项目的任务格:每格的状态用 `shared/botWorkbench.ts` 与主进程同一套规则推导。
  */
 import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activity';
@@ -16,6 +17,7 @@ import {
   deriveWorkbenchAutomationState,
   deriveWorkbenchSessionState,
   findWorkbenchProject,
+  importedSessionOrigin,
   isWorkbenchTaskSource,
   workbenchProjectKey,
   workbenchStateRank,
@@ -58,6 +60,24 @@ export interface WorkbenchScheduleInput {
   updatedAt?: number;
 }
 
+export interface WorkbenchRoutineInput {
+  id: string;
+  name: string;
+  enabled: boolean;
+  activity?: 'queued' | 'running';
+  triggers: Array<{ kind: string; expression?: string; intervalMs?: number; at?: number }>;
+  updatedAt: number;
+  lastRun?: { status: string; finishedAt?: number; createdAt: number; resultText?: string; error?: string } | null;
+}
+
+export interface ExternalSessionCandidate {
+  source: 'claude' | 'codex';
+  id: string;
+  projectDir: string | null;
+  updatedAt: string;
+  archived: boolean;
+}
+
 /** 格子底部那一行说的是什么;具体文案由界面按语言拼。 */
 export type WorkbenchTileLine =
   | { kind: 'action'; text: string }
@@ -70,6 +90,9 @@ export type WorkbenchTileLine =
   | { kind: 'next'; at: number }
   | { kind: 'manual' }
   | { kind: 'paused' }
+  | { kind: 'disabled' }
+  | { kind: 'last-run'; ok: boolean; text: string | null }
+  | { kind: 'never-run' }
   | { kind: 'none' };
 
 export type WorkbenchTile =
@@ -92,6 +115,17 @@ export type WorkbenchTile =
       title: string;
       state: WorkbenchTaskState;
       schedule: Pick<WorkbenchScheduleInput, 'manual' | 'cronExpr' | 'intervalMs'>;
+      startedAtMs: null;
+      lastActiveMs: number;
+      line: WorkbenchTileLine;
+    }
+  | {
+      type: 'routine';
+      key: string;
+      id: string;
+      title: string;
+      state: WorkbenchTaskState;
+      triggers: WorkbenchRoutineInput['triggers'];
       startedAtMs: null;
       lastActiveMs: number;
       line: WorkbenchTileLine;
@@ -137,16 +171,21 @@ export interface WorkbenchProjectOption {
   name: string;
   taskCount: number;
   automationCount: number;
+  /** 还没导入的本机 Claude Code / Codex 任务。 */
+  claudeCount: number;
+  codexCount: number;
   latestActivityMs: number;
 }
 
 /**
- * 空状态的项目清单:本机已有项目(任务列表同一套项目分组);每行给出任务数与自动化数。
+ * 空状态的项目清单:本机已有项目(任务列表同一套项目分组)+ 只在 Claude Code / Codex 里
+ * 出现过的目录;每行给出任务数、自动化数与待导入数。已导入的外部任务由扫描方去重。
  */
 export function buildWorkbenchProjectOptions(input: {
   sessions: readonly Session[];
   hiddenIds: ReadonlySet<string>;
   schedules: readonly WorkbenchScheduleInput[];
+  candidates: readonly ExternalSessionCandidate[];
   localPlatform: string;
   caseInsensitive: boolean;
   excludeDirs?: readonly string[];
@@ -168,9 +207,27 @@ export function buildWorkbenchProjectOptions(input: {
       name: project.displayName,
       taskCount: project.sessions.length,
       automationCount: 0,
+      claudeCount: 0,
+      codexCount: 0,
       latestActivityMs: toMs(project.latestActivityAt),
     });
   }
+  const ensure = (dir: string, key: string) => {
+    let option = byKey.get(key);
+    if (!option) {
+      option = {
+        dir,
+        name: dir.split(/[\\/]/).filter(Boolean).pop() ?? dir,
+        taskCount: 0,
+        automationCount: 0,
+        claudeCount: 0,
+        codexCount: 0,
+        latestActivityMs: 0,
+      };
+      byKey.set(key, option);
+    }
+    return option;
+  };
   for (const schedule of input.schedules) {
     if (schedule.source === 'bot' || schedule.workspaceKind === 'dialogue' || !schedule.workingDir) continue;
     const key = workbenchProjectKey(schedule.workingDir, input.caseInsensitive);
@@ -179,15 +236,39 @@ export function buildWorkbenchProjectOptions(input: {
     // 只有自动化、没有任何任务的目录不单独成行:自动化挂在已有项目上才有意义。
     if (option) option.automationCount += 1;
   }
+  for (const candidate of input.candidates) {
+    if (candidate.archived || !candidate.projectDir) continue;
+    const key = workbenchProjectKey(candidate.projectDir, input.caseInsensitive);
+    if (!key) continue;
+    const option = ensure(candidate.projectDir, key);
+    if (candidate.source === 'claude') option.claudeCount += 1;
+    else option.codexCount += 1;
+    option.latestActivityMs = Math.max(option.latestActivityMs, toMs(candidate.updatedAt));
+  }
   const excluded = new Set(
     (input.excludeDirs ?? [])
       .map((dir) => workbenchProjectKey(dir, input.caseInsensitive))
       .filter((key): key is string => Boolean(key)),
   );
   return [...byKey.entries()]
-    .filter(([key, option]) => !excluded.has(key) && option.taskCount > 0)
+    .filter(([key, option]) => !excluded.has(key) && option.taskCount + option.claudeCount + option.codexCount > 0)
     .map(([, option]) => option)
     .sort((a, b) => b.latestActivityMs - a.latestActivityMs || a.name.localeCompare(b.name));
+}
+
+/** 选中的项目下,还没导入的 Claude Code / Codex 候选;按最近更新倒序,最多 `limit` 条。 */
+export function pickImportCandidates(
+  candidates: readonly ExternalSessionCandidate[],
+  projectDir: string,
+  caseInsensitive: boolean,
+  limit: number,
+): { picked: ExternalSessionCandidate[]; total: number } {
+  const key = workbenchProjectKey(projectDir, caseInsensitive);
+  const matching = candidates
+    .filter((candidate) => !candidate.archived && candidate.projectDir)
+    .filter((candidate) => workbenchProjectKey(candidate.projectDir, caseInsensitive) === key)
+    .sort((a, b) => toMs(b.updatedAt) - toMs(a.updatedAt));
+  return { picked: matching.slice(0, limit), total: matching.length };
 }
 
 function sessionLine(
@@ -214,8 +295,8 @@ function sessionLine(
 }
 
 /**
- * 已接手项目的任务格:项目里的普通任务、伙伴开的后台任务(含排队)、项目里的自动化。
- * 排列见 `workbenchStateRank`。
+ * 已接手项目的任务格:项目里的普通任务、伙伴开的后台任务(含排队)、项目里的自动化、
+ * 伙伴自己的例行任务(含导入来的自动化)。排列见 `workbenchStateRank`。
  */
 export function buildWorkbenchTiles(input: {
   sessions: readonly Session[];
@@ -226,6 +307,7 @@ export function buildWorkbenchTiles(input: {
   activity: ReadonlyMap<string, WorkbenchActivity>;
   erroredIds: ReadonlySet<string>;
   schedules: readonly WorkbenchScheduleInput[];
+  routines: readonly WorkbenchRoutineInput[];
 }): WorkbenchTile[] {
   const delegationByChild = new Map<string, WorkbenchDelegationInput>();
   for (const delegation of [...input.delegations].sort((a, b) => b.createdAt - a.createdAt)) {
@@ -254,7 +336,7 @@ export function buildWorkbenchTiles(input: {
       id: session.id,
       title: session.title,
       state,
-      origin: delegation ? 'delegated' : 'existing',
+      origin: delegation ? 'delegated' : (importedSessionOrigin(session.id, session.agentKind) ?? 'existing'),
       startedAtMs: state === 'running'
         ? (activity?.startedAtMs ?? delegation?.acceptedAt ?? null)
         : null,
@@ -284,6 +366,38 @@ export function buildWorkbenchTiles(input: {
           : schedule.nextFireAt
             ? { kind: 'next', at: schedule.nextFireAt }
             : { kind: 'none' },
+    });
+  }
+
+  for (const routine of input.routines) {
+    const state = deriveWorkbenchAutomationState({
+      enabled: routine.enabled,
+      running: routine.activity === 'running',
+      queued: routine.activity === 'queued',
+    });
+    const last = routine.lastRun ?? null;
+    tiles.push({
+      type: 'routine',
+      key: `routine:${routine.id}`,
+      id: routine.id,
+      title: routine.name,
+      state,
+      triggers: routine.triggers,
+      startedAtMs: null,
+      lastActiveMs: Math.max(last?.finishedAt ?? last?.createdAt ?? 0, routine.updatedAt),
+      line: state === 'running'
+        ? { kind: 'none' }
+        : state === 'queued'
+          ? { kind: 'queued' }
+          : !routine.enabled
+            ? { kind: 'disabled' }
+            : last
+              ? {
+                  kind: 'last-run',
+                  ok: last.status === 'success' || last.status === 'skipped',
+                  text: boundWorkbenchSummary(last.resultText ?? last.error),
+                }
+              : { kind: 'never-run' },
     });
   }
 

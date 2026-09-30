@@ -7788,18 +7788,26 @@
     "workbench": {
       "title": "工作台",
       "emptyTitle": "交给{{name}}一个项目",
-      "emptyDescription": "它会接手项目里已有的任务和自动化，之后的新任务也归它管。",
+      "emptyDescription": "把电脑里已有的活交给{{name}}接着做。它会接手项目里的任务和自动化，之后的新任务也归它管。",
+      "scanning": "正在查找电脑上的项目…",
       "noProjects": "还没找到有任务的项目，可以选一个文件夹交给{{name}}。",
       "pickFolder": "选其他文件夹",
       "cancelAdd": "取消",
       "projectTasks_other": "{{count}} 个任务",
       "projectAutomations_other": "{{count}} 个自动化",
+      "sourceCindy": "Cindy {{count}}",
+      "sourceClaude": "Claude Code {{count}}",
+      "sourceCodex": "Codex {{count}}",
       "grant": "{{name}}可以查看、继续和停止 {{project}} 里的{{scope}}，也会替你开新任务。",
       "grantTasks_other": "{{count}} 个任务",
+      "grantClaude_other": "Claude Code 的 {{count}} 个任务",
+      "grantCodex_other": "Codex 的 {{count}} 个任务",
       "grantAutomations_other": "{{count}} 个自动化",
       "grantEverything": "任务和自动化",
+      "grantImportLimit": "Claude Code 和 Codex 的任务先接手最近的 {{count}} 个。",
       "handOver": "交给{{name}}",
       "handoverMessage": "把 {{project}} 交给你了。",
+      "importFailed_other": "有 {{count}} 个任务没能接过来，可以稍后在设置里导入。",
       "addProject": "再交给{{name}}一个项目",
       "removeProject": "不再交给{{name}}：{{project}}",
       "dirMissing": "找不到这个文件夹",
@@ -7832,11 +7840,15 @@
       "kind": {
         "existing": "原有任务",
         "delegated": "你交代的",
+        "claudeCode": "来自 Claude Code",
+        "codex": "来自 Codex",
         "automation": "自动化 · {{cycle}}",
         "automationPlain": "自动化"
       },
       "cycle": {
-        "manual": "手动"
+        "manual": "手动",
+        "once": "一次",
+        "event": "事件触发"
       },
       "line": {
         "waiting": "等你回复",
@@ -7845,7 +7857,12 @@
         "errored": "上次出错了",
         "failed": "没做完",
         "manual": "手动运行",
-        "paused": "已暂停"
+        "paused": "已暂停",
+        "disabled": "已停用",
+        "lastRun": "上次：{{text}}",
+        "lastRunOk": "上次运行成功",
+        "lastRunFailed": "上次运行失败",
+        "neverRun": "还没运行过"
       }
     },
     "remoteSettings": {

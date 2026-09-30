@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import { CircleCheck, CirclePause, Clock3, Folder, FolderOpen, Plus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
+import type { Routine, RoutineRun } from '@cindy/maker-scheduler';
 
 import { Button } from '@/components/ui/button';
 import { FileTypeTile } from '@/components/ui/file-type-tile';
@@ -13,6 +14,7 @@ import { useCCSessions } from '@/hooks/useCCSessions';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { useSessionAttentionKinds } from '@/lib/sessionAttentionStore';
 import * as sessionService from '@/lib/sessionService';
+import { emitRefresh } from '@/lib/sessionsBus';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -20,6 +22,7 @@ import { cronToHuman } from '@/features/scheduler/lib/cronToHuman';
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { formatNextRun } from '@/features/scheduler/lib/formatters';
 import { schedulesStore, useSchedulesSnapshot } from '@/features/scheduler/lib/schedulesStore';
+import { openRoutinesTab } from '@/features/right-sidebar/lib/openRoutinesTab';
 import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import {
   BOT_WORKBENCH_MAX_DIRECTORIES,
@@ -34,7 +37,10 @@ import {
   buildWorkbenchProjectOptions,
   buildWorkbenchTiles,
   collectBotHiddenSessionIds,
+  pickImportCandidates,
+  type ExternalSessionCandidate,
   type WorkbenchProjectOption,
+  type WorkbenchRoutineInput,
   type WorkbenchTile,
 } from './botWorkbenchProjection';
 
@@ -50,6 +56,8 @@ import {
 /** 默认展示几格;「全部 N」展开其余。 */
 const DEFAULT_TILE_COUNT = 6;
 const MAX_OUTPUTS = 4;
+/** 接手时一次最多导入几件本机 Claude Code / Codex 任务(按最近更新)。 */
+export const WORKBENCH_IMPORT_LIMIT = 20;
 
 type ChatStore = typeof import('@/lib/makerChatStore').makerChatStore;
 type ChatSnapshot = ReturnType<ChatStore['getSnapshot']>;
@@ -118,6 +126,59 @@ function listFormat(items: string[], language: string): string {
   }
 }
 
+/** 伙伴自己的例行任务(含导入来的自动化)及最近一次运行。 */
+function useBotRoutines(botId: string): WorkbenchRoutineInput[] {
+  const [routines, setRoutines] = useState<WorkbenchRoutineInput[]>([]);
+  useEffect(() => {
+    const api = window.electronAPI?.routines;
+    if (!api) return;
+    let alive = true;
+    let request = 0;
+    const owner = getDataOwnerGeneration();
+    const load = () => {
+      const current = ++request;
+      void api
+        .list(botId)
+        .then((items: Routine[]) =>
+          Promise.all(
+            items.map(async (routine): Promise<WorkbenchRoutineInput> => {
+              const history: RoutineRun[] = await api.history(botId, routine.id).catch(() => []);
+              const last = history[0];
+              return {
+                id: routine.id,
+                name: routine.name,
+                enabled: routine.enabled,
+                ...(routine.activity ? { activity: routine.activity } : {}),
+                triggers: routine.triggers,
+                updatedAt: routine.updatedAt,
+                lastRun: last
+                  ? {
+                      status: last.status,
+                      createdAt: last.createdAt,
+                      ...(last.finishedAt ? { finishedAt: last.finishedAt } : {}),
+                      ...(last.resultText ? { resultText: last.resultText } : {}),
+                      ...(last.error ? { error: last.error } : {}),
+                    }
+                  : null,
+              };
+            }),
+          ),
+        )
+        .then((rows) => {
+          if (alive && current === request && isDataOwnerGenerationCurrent(owner)) setRoutines(rows);
+        })
+        .catch(() => {});
+    };
+    load();
+    const off = api.onChanged(load);
+    return () => {
+      alive = false;
+      off();
+    };
+  }, [botId]);
+  return routines;
+}
+
 function useWorkbenchDirectories(botId: string): BotWorkbenchData | null {
   const [data, setData] = useState<BotWorkbenchData | null>(null);
   useEffect(() => {
@@ -162,6 +223,7 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
   const activityMap = useAgentIslandActivityMap();
   const attentionKinds = useSessionAttentionKinds();
   const schedules = useSchedulesSnapshot();
+  const routines = useBotRoutines(botId);
   const chatStore = useChatStore();
   const chat = useChatSnapshot(chatStore, sessionId);
   const caseInsensitive = isCaseInsensitivePlatform(window.electronAPI?.platform);
@@ -190,8 +252,9 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
         activity: activityMap,
         erroredIds,
         schedules: schedules ?? [],
+        routines,
       }),
-    [sessions, hiddenIds, projectDirs, caseInsensitive, delegations, activityMap, erroredIds, schedules],
+    [sessions, hiddenIds, projectDirs, caseInsensitive, delegations, activityMap, erroredIds, schedules, routines],
   );
 
   const [adding, setAdding] = useState(false);
@@ -202,11 +265,13 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
     (tile: WorkbenchTile) => {
       if (tile.type === 'session') {
         void resolveSessionRoute(tile.id).then((target) => navigate(target));
-      } else {
+      } else if (tile.type === 'schedule') {
         navigate(scheduleFocusPath(tile.id));
+      } else {
+        void openRoutinesTab(sessionId, botId);
       }
     },
-    [navigate],
+    [botId, navigate, sessionId],
   );
 
   const [chatWorkingDir, setChatWorkingDir] = useState<string | null>(null);
@@ -260,6 +325,8 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
     );
   }
 
+  const routineTiles = tiles.filter((tile) => tile.type === 'routine');
+
   return (
     <div className="h-full min-h-0 overflow-y-auto overflow-x-hidden bg-[var(--surface)]">
       {picking ? (
@@ -286,9 +353,10 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
         </>
       )}
 
-      {!picking ? (
+      {/* 还没接手项目时,伙伴已有的自动化(例行任务、导入来的自动化)照常列在下面。 */}
+      {!picking || routineTiles.length > 0 ? (
         <TaskSection
-          tiles={tiles}
+          tiles={picking ? routineTiles : tiles}
           now={now}
           language={i18n.language}
           onOpen={inSidebarWindow ? undefined : openTile}
@@ -332,6 +400,11 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
 
 // ─── 空状态:把一个项目交给伙伴 ─────────────────────────────────────
 
+type ScanState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; candidates: ExternalSessionCandidate[] }
+  | { kind: 'failed' };
+
 type ProjectOptionsInput = Parameters<typeof buildWorkbenchProjectOptions>[0];
 
 function ProjectPicker({
@@ -358,21 +431,58 @@ function ProjectPicker({
   const { t, i18n } = useTranslation();
   const platform = window.electronAPI?.platform ?? '';
   const caseInsensitive = isCaseInsensitivePlatform(platform);
+  const [scan, setScan] = useState<ScanState>({ kind: 'loading' });
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [now] = useState(() => Date.now());
 
+  // 本机 Claude Code / Codex 的候选只在打开空状态时扫描一次(主进程带缓存与并发去重),不轮询。
+  useEffect(() => {
+    const api = window.electronAPI?.localDb?.sessionImport;
+    if (!api) {
+      setScan({ kind: 'ready', candidates: [] });
+      return;
+    }
+    let alive = true;
+    const owner = getDataOwnerGeneration();
+    void api
+      .scan()
+      .then((result) => {
+        if (!alive || !isDataOwnerGenerationCurrent(owner)) return;
+        setScan({
+          kind: 'ready',
+          candidates: result.candidates
+            .filter((item) => item.workspaceKind === 'project')
+            .map((item) => ({
+              source: item.source,
+              id: item.id,
+              projectDir: item.projectDir,
+              updatedAt: item.updatedAt,
+              archived: item.archived,
+            })),
+        });
+      })
+      .catch(() => {
+        if (alive) setScan({ kind: 'failed' });
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const candidates = useMemo(() => (scan.kind === 'ready' ? scan.candidates : []), [scan]);
   const options = useMemo(
     () =>
       buildWorkbenchProjectOptions({
         sessions,
         hiddenIds,
         schedules,
+        candidates,
         localPlatform: platform,
         caseInsensitive,
         excludeDirs,
       }),
-    [sessions, hiddenIds, schedules, platform, caseInsensitive, excludeDirs],
+    [sessions, hiddenIds, schedules, candidates, platform, caseInsensitive, excludeDirs],
   );
   const chosen = options.find((option) => option.dir === selected) ?? null;
 
@@ -383,7 +493,22 @@ function ProjectPicker({
       setBusy(true);
       const owner = getDataOwnerGeneration();
       try {
-        // 1. 记下这个项目:这一次点击就是主人对该项目任务的授权。
+        // 1. 先把这个目录下还没导入的 Claude Code / Codex 任务接进来(与设置页同一条导入路径)。
+        const { picked } = pickImportCandidates(candidates, dir, caseInsensitive, WORKBENCH_IMPORT_LIMIT);
+        let notImported = 0;
+        if (picked.length > 0) {
+          try {
+            const result = await window.electronAPI.localDb.sessionImport.importSelected(
+              picked.map((item) => ({ source: item.source, id: item.id })),
+            );
+            notImported = Math.max(0, picked.length - (result.inserted + result.updated));
+            emitRefresh();
+          } catch {
+            notImported = picked.length;
+          }
+        }
+        if (!isDataOwnerGenerationCurrent(owner)) return;
+        // 2. 记下这个项目:这一次点击就是主人对该项目任务的授权。
         const added = await api.addDirectory(botId, dir).catch(() => null);
         if (!added?.ok) {
           toast.error(
@@ -393,8 +518,9 @@ function ProjectPicker({
           );
           return;
         }
+        if (notImported > 0) toast.warning(t('bots.workbench.importFailed', { count: notImported }));
         onHandedOver();
-        // 2. 以主人身份告诉伙伴一声;怎么接手写在伙伴的工具说明里,用户可见的消息只说人话。
+        // 3. 以主人身份告诉伙伴一声;怎么接手写在伙伴的工具说明里,用户可见的消息只说人话。
         const [chatStore, row] = await Promise.all([
           import('@/lib/makerChatStore').then((module) => module.makerChatStore),
           sessionService.get(sessionId),
@@ -417,7 +543,7 @@ function ProjectPicker({
         setBusy(false);
       }
     },
-    [botId, botName, busy, onHandedOver, sessionId, t],
+    [botId, botName, busy, candidates, caseInsensitive, onHandedOver, sessionId, t],
   );
 
   const pickFolder = useCallback(async () => {
@@ -479,7 +605,13 @@ function ProjectPicker({
             </span>
           </button>
         ))}
-        {options.length === 0 ? (
+        {scan.kind === 'loading' && options.length === 0 ? (
+          <div className="flex items-center gap-2 py-2 text-12 text-[var(--text-tertiary)]">
+            <Spinner size={14} aria-hidden />
+            {t('bots.workbench.scanning')}
+          </div>
+        ) : null}
+        {scan.kind !== 'loading' && options.length === 0 ? (
           <p className="text-12 leading-[18px] text-[var(--text-tertiary)]">
             {t('bots.workbench.noProjects', { name: botName })}
           </p>
@@ -517,18 +649,32 @@ function ProjectPicker({
 }
 
 function projectCounts(option: WorkbenchProjectOption, t: Translate): string {
-  const parts = [t('bots.workbench.projectTasks', { count: option.taskCount })];
+  const external = option.claudeCount + option.codexCount > 0;
+  const parts: string[] = external
+    ? [
+        option.taskCount > 0 ? t('bots.workbench.sourceCindy', { count: option.taskCount }) : '',
+        option.claudeCount > 0 ? t('bots.workbench.sourceClaude', { count: option.claudeCount }) : '',
+        option.codexCount > 0 ? t('bots.workbench.sourceCodex', { count: option.codexCount }) : '',
+      ]
+    : [t('bots.workbench.projectTasks', { count: option.taskCount })];
   if (option.automationCount > 0) parts.push(t('bots.workbench.projectAutomations', { count: option.automationCount }));
-  return parts.join(' · ');
+  return parts.filter(Boolean).join(' · ');
 }
 
 function grantText(option: WorkbenchProjectOption, botName: string, language: string, t: Translate): string {
+  const claude = Math.min(option.claudeCount, WORKBENCH_IMPORT_LIMIT);
+  const codex = Math.min(option.codexCount, Math.max(0, WORKBENCH_IMPORT_LIMIT - claude));
   const items = [
     option.taskCount > 0 ? t('bots.workbench.grantTasks', { count: option.taskCount }) : '',
+    claude > 0 ? t('bots.workbench.grantClaude', { count: claude }) : '',
+    codex > 0 ? t('bots.workbench.grantCodex', { count: codex }) : '',
     option.automationCount > 0 ? t('bots.workbench.grantAutomations', { count: option.automationCount }) : '',
   ].filter(Boolean);
   const scope = items.length > 0 ? listFormat(items, language) : t('bots.workbench.grantEverything');
-  return t('bots.workbench.grant', { name: botName, project: option.name, scope });
+  const base = t('bots.workbench.grant', { name: botName, project: option.name, scope });
+  return option.claudeCount + option.codexCount > WORKBENCH_IMPORT_LIMIT
+    ? `${base} ${t('bots.workbench.grantImportLimit', { count: WORKBENCH_IMPORT_LIMIT })}`
+    : base;
 }
 
 // ─── 已接手:项目胶囊 + 汇总 ─────────────────────────────────────────
@@ -708,11 +854,34 @@ function scheduleCycle(
   return null;
 }
 
+function routineCycle(triggers: WorkbenchRoutineInput['triggers'], t: Translate, language: string): string | null {
+  const first = triggers[0];
+  if (!first) return null;
+  if (first.kind === 'interval' && first.intervalMs) {
+    return t('routines.everyMinutes', { count: Math.round(first.intervalMs / 60_000) });
+  }
+  if (first.kind === 'cron' && first.expression) {
+    return first.expression === '0 * * * *' ? t('routines.hourly') : cronToHuman(first.expression, t, language);
+  }
+  if (first.kind === 'once') return t('bots.workbench.cycle.once');
+  if (first.kind === 'event') return t('bots.workbench.cycle.event');
+  return null;
+}
+
 function tileKind(tile: WorkbenchTile, t: Translate, language: string): string {
   if (tile.type === 'session') {
-    return t(`bots.workbench.kind.${tile.origin === 'delegated' ? 'delegated' : 'existing'}`);
+    const key =
+      tile.origin === 'delegated'
+        ? 'delegated'
+        : tile.origin === 'claude-code'
+          ? 'claudeCode'
+          : tile.origin === 'codex'
+            ? 'codex'
+            : 'existing';
+    return t(`bots.workbench.kind.${key}`);
   }
-  const cycle = scheduleCycle(tile.schedule, t, language);
+  const cycle =
+    tile.type === 'schedule' ? scheduleCycle(tile.schedule, t, language) : routineCycle(tile.triggers, t, language);
   return cycle ? t('bots.workbench.kind.automation', { cycle }) : t('bots.workbench.kind.automationPlain');
 }
 
@@ -738,6 +907,14 @@ function tileLine(tile: WorkbenchTile, t: Translate, now: number): string {
       return t('bots.workbench.line.manual');
     case 'paused':
       return t('bots.workbench.line.paused');
+    case 'disabled':
+      return t('bots.workbench.line.disabled');
+    case 'last-run':
+      return line.text
+        ? t('bots.workbench.line.lastRun', { text: line.text })
+        : t(line.ok ? 'bots.workbench.line.lastRunOk' : 'bots.workbench.line.lastRunFailed');
+    case 'never-run':
+      return t('bots.workbench.line.neverRun');
     default:
       return '';
   }

@@ -7788,18 +7788,26 @@
     "workbench": {
       "title": "ワークベンチ",
       "emptyTitle": "{{name}} にプロジェクトを任せる",
-      "emptyDescription": "{{name}} はプロジェクトの既存のセッションと自動化を引き受け、これからの新しいセッションも担当します。",
+      "emptyDescription": "このコンピューターにある作業を {{name}} に引き継ぎます。プロジェクトのセッションと自動化を引き受け、これからの新しいセッションも担当します。",
+      "scanning": "このコンピューターのプロジェクトを探しています…",
       "noProjects": "セッションのあるプロジェクトがまだありません。フォルダーを選んで {{name}} に任せられます。",
       "pickFolder": "別のフォルダーを選ぶ",
       "cancelAdd": "キャンセル",
       "projectTasks_other": "{{count}} 件のセッション",
       "projectAutomations_other": "{{count}} 件の自動化",
+      "sourceCindy": "Cindy {{count}}",
+      "sourceClaude": "Claude Code {{count}}",
+      "sourceCodex": "Codex {{count}}",
       "grant": "{{name}} は {{project}} の{{scope}}を確認・続行・停止でき、新しいセッションも代わりに始めます。",
       "grantTasks_other": "{{count}} 件のセッション",
+      "grantClaude_other": "Claude Code の {{count}} 件のセッション",
+      "grantCodex_other": "Codex の {{count}} 件のセッション",
       "grantAutomations_other": "{{count}} 件の自動化",
       "grantEverything": "セッションと自動化",
+      "grantImportLimit": "Claude Code と Codex のセッションは、最近の {{count}} 件から引き継ぎます。",
       "handOver": "{{name}} に任せる",
       "handoverMessage": "{{project}} を任せます。",
+      "importFailed_other": "{{count}} 件のセッションを引き継げませんでした。あとで設定から取り込めます。",
       "addProject": "{{name}} に別のプロジェクトを任せる",
       "removeProject": "{{project}} を {{name}} から外す",
       "dirMissing": "フォルダーが見つかりません",
@@ -7832,11 +7840,15 @@
       "kind": {
         "existing": "既存のセッション",
         "delegated": "あなたの依頼",
+        "claudeCode": "Claude Code から",
+        "codex": "Codex から",
         "automation": "自動化 · {{cycle}}",
         "automationPlain": "自動化"
       },
       "cycle": {
-        "manual": "手動"
+        "manual": "手動",
+        "once": "1 回",
+        "event": "イベント時"
       },
       "line": {
         "waiting": "あなたの返信を待っています",
@@ -7845,7 +7857,12 @@
         "errored": "前回エラーが発生しました",
         "failed": "完了しませんでした",
         "manual": "手動で実行",
-        "paused": "一時停止中"
+        "paused": "一時停止中",
+        "disabled": "オフ",
+        "lastRun": "前回：{{text}}",
+        "lastRunOk": "前回は成功しました",
+        "lastRunFailed": "前回は失敗しました",
+        "neverRun": "まだ実行されていません"
       }
     },
     "remoteSettings": {

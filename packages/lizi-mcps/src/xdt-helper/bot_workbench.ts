@@ -32,8 +32,8 @@ export interface WorkbenchTaskWire {
   title: string;
   project: string;
   state: WorkbenchTaskStateWire;
-  /** existing = 主人原有任务;delegated = 你开的后台任务。 */
-  kind: 'existing' | 'delegated';
+  /** existing = 主人原有任务;delegated = 你开的后台任务;claude-code / codex = 从本机工具接过来的任务。 */
+  kind: 'existing' | 'delegated' | 'claude-code' | 'codex';
   /** 最近一句话的有界摘要;没有时为 null。 */
   summary: string | null;
   lastActiveAt: string | null;
@@ -42,8 +42,8 @@ export interface WorkbenchTaskWire {
 export interface WorkbenchAutomationWire {
   id: string;
   name: string;
-  /** automation = 已接手项目里的自动化。 */
-  kind: 'automation';
+  /** routine = 你自己的例行任务;automation = 已接手项目里的自动化。 */
+  kind: 'routine' | 'automation';
   state: WorkbenchTaskStateWire;
   project: string | null;
   nextRunAt: string | null;
@@ -102,7 +102,7 @@ export function registerBotWorkbenchTools(
     name: 'get_workbench',
     category: 'bots',
     description:
-      '读取你的工作台:主人交给你的项目,以及这些项目里每件任务的 id、标题、状态、类型和最近一句摘要,还有项目里的自动化。'
+      '读取你的工作台:主人交给你的项目,以及这些项目里每件任务的 id、标题、状态、类型和最近一句摘要,还有你的例行任务与项目里的自动化。'
       + '状态由宿主从真实运行信号给出:running 在做,waiting 在等主人回复,queued 排队,stopped 停着(上一轮被打断、出错或后台任务没做完),automation 自动化待命,done 做完。不要自己猜状态。'
       + '主人把项目交给你时,先调用它,再用几句话告诉主人现状:几个在做、几个等主人、几个停着、自动化情况。'
       + '停着且明显只差收尾的任务可以用 continue_workbench_task 接着做;拿不准的先问主人,不要擅自动手。'
