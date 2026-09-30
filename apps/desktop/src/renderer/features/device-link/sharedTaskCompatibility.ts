@@ -3,6 +3,9 @@ import { extractIpcError } from '@/utils/ipcError';
 /** Only explicit capability failures imply an upgrade; offline is retryable. */
 export function sharedTaskErrorKey(error: unknown, context: 'join' | 'operation' = 'operation') {
   const code = extractIpcError(error)?.code;
+  if (code === 'SHARED_TASK_SELF_JOIN') return 'sharedTask.selfJoin';
+  if (context === 'join' && code === 'INVALID_PARAMS') return 'sharedTask.invalid';
+  if (context === 'join' && code === 'REGION_MISMATCH') return 'sharedTask.invitationDifferentServer';
   if (code === 'NOT_FOUND') return context === 'join' ? 'sharedTask.invitationUnavailable' : 'sharedTask.unavailable';
   if (code === 'PERMISSION_DENIED') return context === 'join' ? 'sharedTask.invitationRenew' : 'sharedTask.permissionDenied';
   if (code === 'DEVICE_LINK_ACCESS_REVOKED') return 'sharedTask.unavailable';

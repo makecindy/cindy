@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
@@ -9,7 +9,7 @@ import { formatBotMessageGroupTime } from '@cindy/maker-shared/botTimeline';
 import { Text } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
-import { SimpleStackHeader, simpleScreenSafeAreaEdges } from '@/platform/chrome';
+import { SimpleStackHeader, simpleScrollInsetProps, simpleScrollScreenSafeAreaEdges } from '@/platform/chrome';
 import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
@@ -21,10 +21,12 @@ import {
 } from '@/device-link/remoteResourceCache';
 import { useRemoteCompanionQuery } from '@/session/useRemoteCompanionQuery';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { goBackGuarded } from '@/utils/backGuard';
 
 const AVATAR_SIZE = 28;
+/** The shared query has no settled flag; stop the pull spinner if a read never reports back. */
+const PULL_REFRESH_FALLBACK_MS = 8000;
 
 /** Desktop BotDirectMessageView: a read-only two-sided thread, the viewing teammate on the right. */
 export default function CompanionDirectMessages() {
@@ -40,6 +42,19 @@ export default function CompanionDirectMessages() {
   const userId = user?.id ?? '';
   const { subscribe, unsubscribe } = useDeviceLink();
   const { value, error, online, refresh } = useRemoteCompanionQuery<BotDirectMessageThreadResult>(deviceId, 'maker:bot-direct-message-thread:get', [threadId, botId]);
+  // Pull to refresh re-reads the thread. The spinner ends when the read reports a new value or
+  // failure (or after a fallback), and offline pulls do not spin because no read can start.
+  const [pulling, setPulling] = useState(false);
+  const pullFallback = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => { setPulling(false); }, [value, error]);
+  useEffect(() => () => clearTimeout(pullFallback.current), []);
+  const pullRefresh = useCallback(() => {
+    refresh();
+    if (!online) return;
+    setPulling(true);
+    clearTimeout(pullFallback.current);
+    pullFallback.current = setTimeout(() => setPulling(false), PULL_REFRESH_FALLBACK_MS);
+  }, [online, refresh]);
   useFocusEffect(useCallback(() => startFocusedTopicSubscription({ deviceId, owner: `companion-direct:${threadId}`, topic: 'sessions', subscribe, unsubscribe }), [deviceId, threadId, subscribe, unsubscribe]));
   useSyncExternalStore(subscribeRemoteResourceCache, remoteResourceCacheRevision);
   useEffect(() => { if (userId) void readRemoteResourceSnapshot(userId); }, [userId]);
@@ -53,10 +68,11 @@ export default function CompanionDirectMessages() {
   const viewer = thread ? participant(botId, thread.botAId === botId ? thread.botAName : thread.botBName) : null;
   const peer = thread ? participant(peerId, thread.botAId === peerId ? thread.botAName : thread.botBName) : null;
   const messages = Array.isArray(thread?.messages) ? thread.messages : [];
-  return <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.screen}>
-    <SimpleStackHeader title={viewer && peer ? `${viewer.name} ⇄ ${peer.name}` : t('devices.companions.messages')}
-      subtitle={t('devices.companions.readOnly')} onBack={() => goBackGuarded(router)} />
-    <ScrollView contentContainerStyle={styles.content} testID="companion.directThread">
+  return <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.screen}>
+    <SimpleStackHeader scrollEdge title={viewer && peer ? `${viewer.name} ⇄ ${peer.name}` : t('devices.companions.messages')}
+      onBack={() => goBackGuarded(router)} />
+    <ScrollView {...simpleScrollInsetProps} contentContainerStyle={styles.content} testID="companion.directThread"
+      refreshControl={<RefreshControl refreshing={pulling} onRefresh={pullRefresh} tintColor={colors.textSecondary} />}>
       {!online ? <Text style={styles.note}>{t('devices.resources.hostOffline')}</Text> : null}
       {messages.map((message) => {
         const ownSide = message.senderBotId === botId;
@@ -86,21 +102,22 @@ export default function CompanionDirectMessages() {
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.surface },
   content: { padding: spacing.lg, gap: spacing.lg },
-  row: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  row: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
   rowOwn: { justifyContent: 'flex-end' },
   rowPeer: { justifyContent: 'flex-start' },
   column: { maxWidth: '74%', minWidth: 0, gap: spacing.xs },
   columnOwn: { alignItems: 'flex-end' },
   columnPeer: { alignItems: 'flex-start' },
   meta: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, paddingHorizontal: spacing.xs },
-  bubble: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 14, paddingVertical: 10, overflow: 'hidden' },
+  // §3 conversation-message role: 17/26 regular.
+  bubble: { color: colors.textPrimary, fontSize: typeScale.bodyLarge, lineHeight: lineHeight.bodyLarge, fontWeight: fontWeight.regular, borderRadius: radius.container,
+    borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, overflow: 'hidden' },
   // Own side reads like the user's bubble; the peer sits on the chip surface (Desktop msg-user / surface-chip).
   bubbleOwn: { backgroundColor: colors.surfaceElevated, borderColor: colors.borderStrong },
   bubblePeer: { backgroundColor: colors.surfaceChip, borderColor: colors.border },
-  note: { color: colors.textSecondary, fontSize: typeScale.footnote },
+  note: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   empty: { color: colors.textTertiary, textAlign: 'center', paddingVertical: spacing.xl },
   limit: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   limitLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
-  limitText: { flexShrink: 1, color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, textAlign: 'center' },
+  limitText: { flexShrink: 1, color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' },
 });

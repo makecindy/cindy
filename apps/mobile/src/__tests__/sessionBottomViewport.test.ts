@@ -44,7 +44,7 @@ it('clips the input and held card at the selected region while measuring only th
     const region = keyboardControlRegion(geometry, keyboardHeight);
     const bindings = { StyleSheet: { absoluteFill: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 } },
       adaptiveWindow: geometry, composerRegion: region, paneLayout: { detail: { x: 0, width: 800 } },
-      windowDimensions: geometry, insets: geometry.insets, styles: {}, nativeComposerFrameAvailable: true,
+      windowDimensions: geometry, insets: geometry.insets, styles: {}, nativeComposerFrameAvailable: true, androidFrostedComposer: false,
       sessionOperationLayout: { composerSlot: 'editable' }, shareSelectionActive: false,
       nativeShellLayout: { keyboardBottomInset: Math.max(0, keyboardHeight - 16) } };
     const clip = style(viewport, bindings);

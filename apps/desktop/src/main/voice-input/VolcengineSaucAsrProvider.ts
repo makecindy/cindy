@@ -1,7 +1,7 @@
 import WebSocket from 'ws';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import type { ClientRequest, IncomingMessage } from 'node:http';
-import type { AsrEvent, AsrProvider, AudioTrace } from '@cindy/voice-input-core';
+import { StopSoundActivity, type AsrEvent, type AsrProvider, type AudioTrace } from '@cindy/voice-input-core';
 import { createLogger } from '../logger.js';
 import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.js';
 import { resamplePcm16 } from './RealtimeAsrWebSocketProvider.js';
@@ -9,7 +9,6 @@ import { volcengineSaucLanguageCode } from './language.js';
 import { mergeRecoveredTranscript } from './transcriptMerge.js';
 import { describeAsrHandshakeTraceId, describeAsrWebSocketTarget } from './voiceInputAsrConfig.js';
 import { createWebSocketHandshakeTiming } from './webSocketHandshakeTiming.js';
-import { StopSoundActivity } from './StopSoundActivity.js';
 
 type VolcengineSaucAsrProviderOptions = {
   proxyApiKey?: string;

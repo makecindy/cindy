@@ -1,5 +1,8 @@
+import { prepareImportedAutomation, finishImportedAutomation } from './bot-import/automationRuntime.js';
+import { ensureImportedAutomationReady, recoverCompanionImports } from './bot-import/host.js';
 import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
 import { registerFilePeerIpc } from './device-link/filePeer';
+import { registerTaskMigrationIpc } from './task-migration/service';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import {
   createLatestSourceVersionReader,
@@ -62,7 +65,7 @@ import {
   type WebContents,
 } from 'electron';
 import { resolveVibrancyConfig } from './vibrancyConfig';
-import { getSessionThinkingSnapshots, getHistoryToolName } from './messagePersistBroadcaster';
+import { getSessionThinkingSnapshots, getHistoryToolName, drainPersistQueue } from './messagePersistBroadcaster';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
 import { rememberResolvedAppTheme, resolveAppThemeIsDark } from './resolved-app-theme';
 import {
@@ -269,6 +272,7 @@ import {
   im,
   feishuIm,
   telegramIm,
+  prepareImDefaultSettingsChange,
   registerTelegramBotConfigIpc,
   startImOrchestrators,
   startImConnection,
@@ -693,6 +697,8 @@ import { setClaudeSupportedModelsListener } from '@cindy/maker-core';
 import {
   noteAnthropicSdkSupportedModels,
   clearAnthropicDiscoveredModels,
+  requestAnthropicModelProbe,
+  syncAnthropicModelsWithClaudeLogin,
 } from './maker-host/model-discovery/anthropic.js';
 import {
   clearXaiDiscoveredModels,
@@ -761,6 +767,7 @@ import {
   registerMakerIpc as registerMakerCoreIpc,
   restoreBotRuntimeForCurrentOwner,
   isSessionTurnPendingCompletion,
+  isSessionInTurn,
   stopOrcaIdleWatcher,
   setGoalClearObserver,
   setGoalDeferredResumeCancelObserver,
@@ -769,6 +776,7 @@ import {
   setGoalAskAnswerObserver,
   withSendToSessionLock,
 } from './maker-ipc/register.js';
+import { moveSessionProjectFromHost } from './mcp-integrations/moveSession.js';
 import { cleanupActiveReviewArtifactSnapshots } from './reviewer/reviewArtifactSnapshot.js';
 import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH, MAKER_SEND } from './maker-ipc/channels.js';
 import {
@@ -801,12 +809,17 @@ import {
   shouldStartReadinessConsumers,
 } from './maker-host/account-provider-readiness-ensure.js';
 import {
+  previewImDefaultSettingsPatch,
   readImDefaultSettingsState,
   resetImDefaultSettings,
   resetImDefaultSettingsGlobal,
   resetImDefaultSettingsChannel,
   writeImDefaultSettingsPatch,
 } from './im/defaultSettingsStore.js';
+import { readImDefaultSettingsFingerprint } from './im/defaultSessionSettings.js';
+import { fingerprintImDefaultSettings } from './im/shared/channelDefaultRoute.js';
+import { IM_DEFAULT_SETTINGS } from '../shared/imDefaultSettings.js';
+import { assertOwnerScopeSettledForWrite } from './im/ownerScopedStorage.js';
 import { hasClaudeNativeLogin } from './maker-host/claude-native-auth.js';
 import {
   connectClaudeNativeLogin,
@@ -820,6 +833,7 @@ import {
   runClaudeCliLogin,
 } from './maker-host/claude-native-cli.js';
 import { closeClaudeCliProxyBridge } from './maker-host/claude-cli-proxy-bridge.js';
+import { startLegacyClaudeConfigMigration } from './maker-host/claude-legacy-config-migration.js';
 import { isNativeProviderAuthBound, isNativeProviderAuthRevoked } from './maker-host/nativeProviderAuthBinding.js';
 import {
   runGrokOAuthLogin,
@@ -1175,6 +1189,7 @@ async function waitForCurrentAccountProviderModelsReady(): Promise<void> {
 
 // Live getters preserve account/scheduler replacement without loading Main modules at dispatch time.
 configureRoutineHost({
+  assertImportedAutomationReady: ensureImportedAutomationReady, prepareImportedAutomation, finishImportedAutomation, recoverImports: recoverCompanionImports,
   getBot: getBotRemoteResourceSource,
   getScheduler: getSchedulerIfInitialized,
   getScheduleStorage,
@@ -4691,15 +4706,76 @@ const registerIpcHandlers = () => {
   });
   ipcMain.handle(
     MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_SET,
-    async (_e, patch: unknown, rawChannel: unknown) => {
+    async (event, patch: unknown, rawChannel: unknown) => {
+      // 本 handler 已升级为可批量改任务记录、并在下一条 IM 消息时切任务路由的操作,
+      // 必须先验证调用方是可信主渲染器 —— 不能让被导航到外部页面的 preload 窗口
+      // 改写渠道默认(PR #5155 review P1, 同 SUBAGENT_MODEL_SETTINGS_SET)。
+      assertTrustedAppRendererEvent(event);
+      // owner 边界(PR #5155 review P1): 回填跨多个 await, 期间登出/切号会让落库与
+      // 设置写入漂到别的 owner —— 进入时快照 owner scope; 回填自身已在
+      // prepareImDefaultSettingsChange 内固定 DbClient 并复核 epoch, 这里在写设置
+      // 前的同一同步块内再校验 scope 未变且无 boundary 在途, 不满足失败重试。
+      const ownerScopeKey = activeOwnerScopeKey();
       const channel = parseImDefaultSettingsChannel(rawChannel);
       const parsedPatch = parseImDefaultSettingsPatch(patch);
+      // 仅路由默认实际变化时才要求阻塞式回填(PR #5155 review P2): 只改权限档等
+      // 不动路由指纹的保存不该被无关的供应商目录故障挡下 —— 路由默认没变就不存在
+      // 「提交后丢失回填机会」。
+      const routeDefaultChanged =
+        fingerprintImDefaultSettings(previewImDefaultSettingsPatch(parsedPatch, channel)) !==
+        readImDefaultSettingsFingerprint(channel);
+      // 写新设置之前按旧默认给老任务补跟随记录(见 prepareImDefaultSettingsChange)。
+      // 回填失败必须挡住本次保存: 记录补不上就提交新默认的话, 还停在旧默认上的
+      // 老任务之后只能按新默认匹配, 永久失去跟随资格(PR #5155 review P2)。
+      if (routeDefaultChanged) {
+        try {
+          await prepareImDefaultSettingsChange(channel);
+        } catch (err) {
+          throwIpcError(
+            'INTERNAL',
+            `渠道默认未保存：旧任务的跟随记录补全失败，请重试（${err instanceof Error ? err.message : String(err)}）`,
+          );
+        }
+      }
+      try {
+        assertOwnerScopeSettledForWrite(ownerScopeKey);
+      } catch (err) {
+        throwIpcError(
+          'INTERNAL',
+          `渠道默认未保存：账号切换中，请重试（${err instanceof Error ? err.message : String(err)}）`,
+        );
+      }
       writeImDefaultSettingsPatch(parsedPatch, channel);
       return imDefaultSettingsWire(channel);
     },
   );
-  ipcMain.handle(MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_RESET, async (_e, rawChannel: unknown) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_RESET, async (event, rawChannel: unknown) => {
+    // 同 SET: 回填会批量改任务记录, 必须先验证调用方(PR #5155 review P1)。
+    assertTrustedAppRendererEvent(event);
+    // 同 SET: 进入时快照 owner scope, 写设置前校验 scope 未变且无 boundary 在途。
+    const ownerScopeKey = activeOwnerScopeKey();
     const channel = parseImDefaultSettingsChannel(rawChannel);
+    // 同 SET: 仅路由默认实际变化时才要求阻塞式回填(PR #5155 review P2)。
+    const routeDefaultChanged =
+      readImDefaultSettingsFingerprint(channel) !== fingerprintImDefaultSettings(IM_DEFAULT_SETTINGS);
+    if (routeDefaultChanged) {
+      try {
+        await prepareImDefaultSettingsChange(channel);
+      } catch (err) {
+        throwIpcError(
+          'INTERNAL',
+          `渠道默认未重置：旧任务的跟随记录补全失败，请重试（${err instanceof Error ? err.message : String(err)}）`,
+        );
+      }
+    }
+    try {
+      assertOwnerScopeSettledForWrite(ownerScopeKey);
+    } catch (err) {
+      throwIpcError(
+        'INTERNAL',
+        `渠道默认未重置：账号切换中，请重试（${err instanceof Error ? err.message : String(err)}）`,
+      );
+    }
     if (channel) {
       resetImDefaultSettingsChannel(channel);
     } else {
@@ -5088,14 +5164,16 @@ const registerIpcHandlers = () => {
   onClaudeCliLoginStatusChange((status) => {
     void broadcastClaudeAuthStateChanged();
     syncClaudeSubscriptionUsageForAuthChange();
-    if (!status.loggedIn) {
-      resetProviderModelAutoRefreshCooldowns('anthropic');
-      void clearAnthropicDiscoveredModels().catch(() => undefined);
-    }
+    if (!status.loggedIn) resetProviderModelAutoRefreshCooldowns('anthropic');
+    // 登出清空清单;登录(含在终端里登录)后主动读一次;直接换号先清旧账号再读。
+    syncAnthropicModelsWithClaudeLogin(status);
   });
   // 启动时后台读一次(不阻塞):已连接的用户由 provider 目录加载等这次结果;
   // 从未连接的用户据此自动沿用本机登录。明确断开过的用户不再读。
   if (!isNativeProviderAuthRevoked('anthropic')) void readClaudeCliLoginStatus();
+  // 旧版 dev 隔离目录 claude-home 的转录补拷到默认 ~/.claude(仅 dev 多实例;后台跑,
+  // 拉起 CLI 前 getAuthEnv 再等它一次)。正式版为 no-op。
+  startLegacyClaudeConfigMigration();
   // 退出时结束进行中的登录子进程(CLI 的本机回调监听没有超时),并关闭 CLI 的代理桥。
   app.once('will-quit', () => {
     cancelClaudeCliLogin();
@@ -5119,6 +5197,8 @@ const registerIpcHandlers = () => {
     resetProviderModelAutoRefreshCooldowns('anthropic');
     // Binding is the commit point; auxiliary refresh must not prolong the cancellable login.
     connectClaudeNativeLogin();
+    // CLI 登录态变化的监听先于绑定触发,那次探测会因尚未绑定而跳过;绑定后再请求一次。
+    requestAnthropicModelProbe();
     void broadcastClaudeAuthStateChanged();
     syncClaudeSubscriptionUsageForAuthChange();
     return { ok: true, authorized: hasClaudeNativeLogin() };
@@ -6364,6 +6444,10 @@ const registerIpcHandlers = () => {
 
     // setClaudeCodePath 已退役 —— agent-binaries.prepare() 成功时已写 lastReadyPath cache;
     // 任何需要 claude binary 路径的地方一律走 getReadyBinaryPath('claude-code')。
+
+    // 启动时那次 CLI 登录态读取往往早于二进制就绪(读不到);就绪后补读一次,结果变化经
+    // onClaudeCliLoginStatusChange 广播,供应商页随之更新连接态。已有结果时是 no-op。
+    if (!isNativeProviderAuthRevoked('anthropic')) void readClaudeCliLoginStatus();
 
     // ── Phase 2: codex 段 ────────────────────────────────────────────────────
     resetBeforeSegment('codex', claudeRes.downloaded === true);
@@ -9603,6 +9687,13 @@ app.on('ready', async () => {
   // owning modules above; future collections/actions do not add tunnel channels.
   registerRemoteResourcesIpc();
   registerDeviceLinkIpc();
+  registerTaskMigrationIpc((sessionId, workingDir, assertAuthority) =>
+    moveSessionProjectFromHost(isSessionInTurn, sessionId, workingDir, assertAuthority),
+    {
+      isBusy: (id) => isSessionInTurn(id) || isSessionTurnPendingCompletion(id),
+      drain: drainPersistQueue,
+    },
+  );
   registerSharedTaskIpc(isSharedTaskAvailable, () => getDeviceLinkStatus() === 'online');
   registerFilePeerIpc();
   registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender);

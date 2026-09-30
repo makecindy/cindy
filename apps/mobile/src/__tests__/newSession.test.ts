@@ -1330,7 +1330,7 @@ describe('new session model', () => {
       agentLabel: 'Codex',
       canCreate: true,
       runtimeLabel: 'Codex · gpt-5.4 · medium · Fast',
-      scopeLabel: '电脑端分配对话目录',
+      scopeLabel: '由电脑自动分配工作目录',
       workspaceLabel: '对话',
     });
   });
@@ -1895,7 +1895,7 @@ describe('new session composer surface', () => {
     expect(modelPillStyle).toContain('paddingHorizontal: spacing.md');
     expect(modelPillTextStyle).toContain('color: colors.textPrimary');
     expect(modelPillTextStyle).toContain('fontSize: typeScale.caption');
-    expect(modelPillTextStyle).toContain('fontWeight: fontWeight.semibold');
+    expect(modelPillTextStyle).toContain('fontWeight: fontWeight.medium');
     // 输入框字号档由 MobileComposerInputRow 统一持有(MOBILE_COMPOSER_DRAFT_TEXT_STYLE),
     // 页面不再覆盖;语音草稿覆盖层必须引用同一档,否则换行位置与输入框错开(见
     // composerVoiceDraftMetrics.test.ts)。
@@ -2000,8 +2000,8 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('<VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />');
     // 语音态占位文案就是普通态 TextInput 的 placeholder,必须与 placeholderTextColor 同源,
     // 否则一进语音态这行字会变色(2026-07-31 用户定案:不再用 statusReady 蓝绿)。
-    expect(newSource).toContain('placeholderTextColor={colors.textTertiary}');
-    expect(newSource).toContain('voiceDraftListeningText: {\n    color: colors.textTertiary,');
+    expect(newSource).toContain('placeholderTextColor={colors.textPlaceholder}');
+    expect(newSource).toContain('voiceDraftListeningText: {\n    color: colors.textPlaceholder,');
     expect(newSource).not.toContain('voiceDraftListeningText: {\n    color: colors.statusReady,');
     expect(newSource).toContain('const voiceDraftShowsListeningPrompt = voiceIsListening && draft.firstMessage.length === 0;');
     expect(newSource).toContain('firstMessageInputRef.current?.setNativeProps({ selection: firstMessageSelectionRef.current });');
@@ -2038,9 +2038,15 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('getAccessToken: () => auth.getAccessToken(),');
     expect(newSource).toContain('refreshAccessToken: () => auth.refreshAccessToken(),');
     expect(newSource).toContain('apiFetch: auth.apiFetch,');
-    expect(newSource).toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
-    expect(newSource).toContain('const prewarmedVoicePromise = takePrewarmedMobileVoiceAsr(selectedDeviceId) ?? Promise.resolve(null);');
-    expect(newSource).toContain('prewarmedVoicePromise.then((voice) => getMobileVoiceInputHistoryForHost(selectedDeviceId, voice?.credential.settings?.voiceInputHistory))');
+    expect(newSource).toContain('const prewarmedVoice = await (takePrewarmedMobileVoiceAsr(selectedDeviceId) ?? Promise.resolve(null));');
+    // 语音历史与词典快照只服务润色提示:后台读取,不挡在开麦之前。
+    expect(newSource).not.toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
+    expect(newSource).toContain('void getMobileVoiceInputHistoryForHost(selectedDeviceId, prewarmedVoice?.credential.settings?.voiceInputHistory)');
+    expect(newSource).toContain('localVoiceInputHistory: () => localVoiceInputHistory,');
+    // 停止后 150ms 内保持录音胶囊,超过才显示处理转圈。
+    expect(newSource).toContain('expanded: voiceIsListening || voiceStartPending || voiceProcessingIndicator.stopping,');
+    // 停止期保持胶囊外观,只有与语音无关的禁用原因(创建中)才置灰。
+    expect(newSource).toContain('(creating || (voiceIsProcessing && !voiceProcessingIndicator.stopping)) && styles.disabled,');
     expect(newSource).not.toContain('MobileVoiceServiceMode');
     expect(newSource).not.toContain('LiteLlm');
     expect(newSource).toContain('?? createMobileCindyVoiceCredential(selectedDeviceId);');

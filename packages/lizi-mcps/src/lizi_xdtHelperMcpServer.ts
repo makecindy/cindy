@@ -42,6 +42,7 @@ import { registerMoveSessionTool, type MoveSessionCallback } from './xdt-helper/
 import { registerProjectManagementTools, type ProjectManagementCallbacks } from './xdt-helper/project_management.js';
 import {
   registerGetCapabilitiesTool,
+  registerAppUpdateTools,
   registerGetCurrentSessionIdTool,
   registerSetCurrentSessionTitleTool,
   registerRenameSessionsTool,
@@ -64,6 +65,7 @@ import {
   registerSkillhubTools,
 } from './xdt-helper/index.js';
 import type { SubmitGithubIssueDeps } from './xdt-helper/submit_github_issue.js';
+import type { AppUpdateCallbacks } from './xdt-helper/app_update.js';
 import type { SkillhubAgentCallback } from './xdt-helper/skillhub.js';
 import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_session_title.js';
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
@@ -122,10 +124,11 @@ const CALL_TOOL_INPUT = {
 
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
-const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'bots'] as const;
+const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots'] as const;
 
 interface SessionTaskCallbacks {
   startSessionTask(params: {
+    modelSelection?: { id: string; effort?: string; fastMode?: boolean };
     callerSessionId: string;
     objective: string;
     contextRefs?: string[];
@@ -202,10 +205,51 @@ function cindyAvailableForSession(sessionCtx: XdtHelperMcpSessionCtx): boolean {
   return !ctx.remoteHostId || ctx.agentKind === 'pi';
 }
 
+/** Project tools a Bot may use without receiving the rest of `control` or `history`. */
+const BOT_PROJECT_TOOLS = new Set([
+  'create_project',
+  'list_projects',
+  'rename_project',
+  'remove_project',
+  'move_session',
+]);
+
+interface HelperSurfaceAllow {
+  /** null means every registered category. An empty set means none. */
+  categories: ReadonlySet<string> | null;
+  /** Named tools visible even when their category stays closed. */
+  extraTools: ReadonlySet<string>;
+}
+
+function toolAllowed(
+  allow: HelperSurfaceAllow,
+  tool: { name: string; category: string },
+): boolean {
+  if (!allow.categories) return true;
+  return allow.categories.has(tool.category) || allow.extraTools.has(tool.name);
+}
+
+/** Bot project tools must not point at history/handoff tools that stay closed. */
+function describeBotProjectTool(tool: { name: string; description: string }): string {
+  if (tool.name === 'create_project') {
+    return tool.description.replace(
+      'Pass the returned working_dir to send_to_session to start work there.',
+      'Pass the returned working_dir to start_session_task to start work there.',
+    );
+  }
+  if (tool.name === 'move_session') {
+    return tool.description.replace(
+      'Use list_sessions to find session_id and list_projects to find directories;',
+      'Pass a session_id this Bot already has, such as one returned by start_session_task. This cannot look up another task by title. Use list_projects to find directories;',
+    );
+  }
+  return tool.description;
+}
+
 function registerListToolsEntry(
   server: McpServer,
   registry: XdtHelperToolRegistry,
-  allowedCategories: () => Promise<ReadonlySet<string> | null>,
+  allowedSurface: () => Promise<HelperSurfaceAllow>,
   sessionCtx: XdtHelperMcpSessionCtx,
 ): void {
   server.tool(
@@ -213,15 +257,17 @@ function registerListToolsEntry(
     D_LIST_TOOLS,
     LIST_TOOLS_INPUT,
     async ({ category }) => {
-      const allowed = await allowedCategories();
+      const allowed = await allowedSurface();
       if (category) {
-        if (allowed && !allowed.has(category)) {
-          return errorPayload('CAPABILITY_NOT_AVAILABLE', '这个类目不属于当前任务的能力面。');
-        }
         const tools = withCindyGatedBotToolDescriptions(
-          registry.list(category as (typeof CATEGORY_ENUM)[number]),
+          registry
+            .list(category as (typeof CATEGORY_ENUM)[number])
+            .filter((tool) => toolAllowed(allowed, tool)),
           cindyAvailableForSession(sessionCtx),
         );
+        if (tools.length === 0 && allowed.categories && !allowed.categories.has(category)) {
+          return errorPayload('CAPABILITY_NOT_AVAILABLE', '这个类目不属于当前任务的能力面。');
+        }
         return {
           content: [
             {
@@ -231,7 +277,7 @@ function registerListToolsEntry(
                 category,
                 tools: tools.map((t) => ({
                   name: t.name,
-                  description: t.description,
+                  description: allowed.extraTools.has(t.name) ? describeBotProjectTool(t) : t.description,
                   ...(t.category === 'bots' || t.category === 'skills' ? {
                     inputSchema: z.toJSONSchema(z.strictObject(registry.get(t.name)!.inputShape)),
                   } : {}),
@@ -243,7 +289,7 @@ function registerListToolsEntry(
         };
       }
       const counts: Record<string, number> = {};
-      const visibleTools = registry.list().filter((tool) => !allowed || allowed.has(tool.category));
+      const visibleTools = registry.list().filter((tool) => toolAllowed(allowed, tool));
       for (const t of visibleTools) {
         counts[t.category] = (counts[t.category] ?? 0) + 1;
       }
@@ -253,7 +299,7 @@ function registerListToolsEntry(
             type: 'text' as const,
             text: JSON.stringify({
               ok: true,
-              categories: registry.listCategories().filter((c) => !allowed || allowed.has(c)).map((c) => ({
+              categories: registry.listCategories().filter((c) => (counts[c] ?? 0) > 0).map((c) => ({
                 name: c,
                 tool_count: counts[c] ?? 0,
               })),
@@ -273,16 +319,16 @@ function registerCallToolEntry(
     logger?: LiziMcpLogger;
     getSessionId: () => string | undefined;
   },
-  allowedCategories: () => Promise<ReadonlySet<string> | null>,
+  allowedSurface: () => Promise<HelperSurfaceAllow>,
 ): void {
   server.tool(
     'call_tool',
     D_CALL_TOOL,
     CALL_TOOL_INPUT,
     async ({ name, args }) => {
-      const allowed = await allowedCategories();
+      const allowed = await allowedSurface();
       const definition = registry.get(name);
-      if (allowed && definition && !allowed.has(definition.category)) {
+      if (definition && !toolAllowed(allowed, definition)) {
         return errorPayload(
           'CAPABILITY_NOT_AVAILABLE',
           '这个工具不属于当前任务的能力面；请重新调用 list_tools。',
@@ -291,7 +337,7 @@ function registerCallToolEntry(
       const result = definition
         ? await registry.call(name, args)
         : errorPayload('UNKNOWN_TOOL', 'Unknown helper tool.', {
-            available: registry.list().filter((tool) => !allowed || allowed.has(tool.category)).map((tool) => tool.name),
+            available: registry.list().filter((tool) => toolAllowed(allowed, tool)).map((tool) => tool.name),
           });
       // errorCode 遥测:UNKNOWN_TOOL / INVALID_ARGS / 业务 errorCode 返回给模型自纠
       // 之前在这里落一条日志,否则 agent 犯错→自纠 的事件在日志里完全不存在。
@@ -324,11 +370,18 @@ function registerStartSessionTaskEntry(
     description: [
       'Start one real independent Cindy Session task in the background. For project work, pass the actual project/worktree path in working_dir before starting. Set use_worktree=true to create and register an isolated worktree before runtime starts; failure never falls back to the shared directory; creating a worktree later in a shell does not relocate the registered Session. timeout_ms defaults to 1800000 (30 minutes), maximum 86400000 (24 hours); specify the needed budget at creation. Follow-up after timeout inherits the original budget, it does not extend it.',
       'Proactively use this for coding implementation and medium or large work: reading/modifying a project and running checks, multi-source research, multi-file processing, or complex analysis and deliverables. Do not wait for the user to request delegation or ask permission merely to start a task. Handle short simple questions, code explanations, small snippets, and single-step work yourself unless the user explicitly requests a separate task. Respect an explicit request to work inline.',
+      'Normally omit model_selection: the host uses the teammate task model, or inherits its current model when no task model is configured. When the user requests another model or this task needs a different available capability, read get_app_default_model and pass an available route id in model_selection, with supported effort or fast_mode if needed. The id binds model, provider account and Harness together. This changes only this task, never application or teammate defaults. An unavailable explicit choice fails instead of silently using another model.',
+      'Choose the route internally when starting the task. In ordinary replies, briefly describe the work or result; do not repeat the delegated instruction, tool names, argument names, route JSON, or task/session ids. The task card already tracks progress. Explain model or routing details when the user asks, and explain failures in plain language with the action needed.',
       'Pass the objective, constraints, known facts, relevant files, completed actions, and acceptance criteria in instruction; the task does not automatically inherit this chat. Do not duplicate its work. Review the returned result and follow up on the same task if needed.',
       "This never calls a Cindy Bot or any other teammate. Use send_to_agent for a bounded message to a named teammate.",
       "The task appears in the user's task list and returns its completion automatically. Start it once and use check_session_task, message_session_task, or stop_session_task only when there is a concrete reason.",
     ].join('\n'),
     inputShape: {
+      model_selection: z.object({
+        id: z.string().min(1).max(2048).describe('Available route id from get_app_default_model; includes provider and Harness.'),
+        effort: z.string().max(64).optional(),
+        fast_mode: z.boolean().optional(),
+      }).strict().optional(),
       instruction: z.string().min(1).max(12_000),
       title: z.string().min(1).max(120).optional(),
       working_dir: z.string().min(1).max(1_024).optional(),
@@ -336,7 +389,7 @@ function registerStartSessionTaskEntry(
       context_refs: z.array(z.string().max(512)).max(32).optional(),
       timeout_ms: z.number().int().min(1_000).max(86_400_000).optional(),
     },
-    handler: async ({ instruction, title, working_dir, use_worktree, context_refs, timeout_ms }) => {
+    handler: async ({ instruction, title, working_dir, use_worktree, context_refs, timeout_ms, model_selection }) => {
       const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
       if (!callerSessionId) {
         return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定 Cindy 伙伴任务。');
@@ -344,6 +397,11 @@ function registerStartSessionTaskEntry(
       const result = await deps.sessionTasks!.startSessionTask({
         callerSessionId,
         objective: instruction.trim(),
+        ...(model_selection ? { modelSelection: {
+          id: model_selection.id,
+          ...(model_selection.effort !== undefined ? { effort: model_selection.effort } : {}),
+          ...(model_selection.fast_mode !== undefined ? { fastMode: model_selection.fast_mode } : {}),
+        } } : {}),
         contextRefs: context_refs,
         title,
         workingDir: working_dir,
@@ -353,13 +411,14 @@ function registerStartSessionTaskEntry(
       return result.ok
         ? okPayload({
             action: 'start_session_task',
+            ...(result.modelRoute ? { model_route: result.modelRoute } : {}),
             task_id: result.delegationId,
             session_id: result.childSessionId,
             status: result.status,
             deadline_at: result.deadlineAt,
             expects_result: true,
             guidance:
-              "The Session task is tracked and will return its result automatically. Do not start it again.",
+              "The task card tracks progress and the result will return automatically. Do not start it again. Treat model_route and task/session ids as internal bookkeeping; do not echo them or the delegated instruction in ordinary replies unless the user asks for these details.",
           })
         : errorPayload(result.errorCode, result.message);
     },
@@ -664,6 +723,7 @@ export type ControlDispatchOutcome =
 
 export interface XdtHelperMcpDeps {
   logger?: LiziMcpLogger;
+  appUpdate?: AppUpdateCallbacks;
   grokLogin?: GrokLoginCallbacks;
   /** Host-owned runtime classification used to keep Bot tasks on a narrow surface. */
   resolveSurface?: (input: {
@@ -758,24 +818,45 @@ export function createXdtHelperMcpServer(
   });
 
   const registry = new XdtHelperToolRegistry();
-  const allowedCategories = async (): Promise<ReadonlySet<string> | null> => {
+  const none: HelperSurfaceAllow = { categories: new Set(), extraTools: new Set() };
+  const allowedSurface = async (): Promise<HelperSurfaceAllow> => {
     const context = resolveLiziMcpSessionContext(sessionCtx);
     const sessionId = context.sessionId;
     const remoteBotOnly = !!context.remoteHostId && context.agentKind !== 'pi';
     const defaultCategories = new Set(CATEGORY_ENUM.filter((category) => category !== 'bots'));
-    if (!sessionId) return remoteBotOnly ? new Set() : defaultCategories;
-    if (!deps.resolveSurface) return remoteBotOnly ? new Set(['auth']) : defaultCategories;
+    // Remote Pi retains the regular helper surface, but a remote task cannot
+    // check the local desktop updater; keep that unavailable tool undiscoverable.
+    if (context.remoteHostId) defaultCategories.delete('app_update');
+    const allow = (categories: ReadonlySet<string>): HelperSurfaceAllow => ({
+      categories,
+      extraTools: new Set(),
+    });
+    if (!sessionId) return allow(remoteBotOnly ? new Set() : defaultCategories);
+    if (!deps.resolveSurface) return allow(remoteBotOnly ? new Set(['auth']) : defaultCategories);
     const surface = await deps.resolveSurface({ sessionId }).catch(() => 'restricted' as const);
-    // Bot-specific memory, Skills, messaging, delegation and durable notes all
-    // live in this single category. Cindy-wide history/control/feedback/handoff
-    // stay out of the Bot's discovery loop.
-    if (surface === 'bot') return new Set(['bots', 'cindy', 'auth']);
-    if (surface === 'restricted') return new Set();
-    return remoteBotOnly ? new Set(['auth']) : defaultCategories;
+    // Bots keep bots/cindy/auth. Project tools are named exceptions so a Bot can
+    // register and organize projects without stop/steer/archive/history access.
+    // handoff/feedback/skills stay out of the Bot's discovery loop.
+    if (surface === 'bot') {
+      // Project tools run only on the local host. A remote Bot must keep its
+      // own tooling without being offered calls that always return unsupported.
+      return {
+        categories: new Set(['bots', 'cindy', 'auth']),
+        extraTools: context.remoteHostId ? new Set() : BOT_PROJECT_TOOLS,
+      };
+    }
+    if (surface === 'restricted') return none;
+    return allow(remoteBotOnly ? new Set(['auth']) : defaultCategories);
   };
 
   // 'cindy' 类: 自省 (无 host 依赖, 始终注册)。
   registerGetCapabilitiesTool(registry);
+  if (deps.appUpdate) {
+    registerAppUpdateTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      callbacks: deps.appUpdate,
+    });
+  }
   if (deps.grokLogin)
     registerGrokLoginTools(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.grokLogin);
   registerGetCurrentSessionIdTool(registry, {
@@ -913,13 +994,13 @@ export function createXdtHelperMcpServer(
       callbacks: deps.botProfiles,
     });
   }
-  registerListToolsEntry(server, registry, allowedCategories, sessionCtx);
+  registerListToolsEntry(server, registry, allowedSurface, sessionCtx);
   registerCallToolEntry(server, registry, {
     logger: deps.logger,
     // per-call 解析:codex HTTP bridge 的 server factory 阶段 ctx 是空的,
     // tool-call 阶段由 AsyncLocalStorage 恢复,所以 sessionId 必须调用时再取。
     getSessionId: () => resolveLiziMcpSessionContext(sessionCtx).sessionId,
-  }, allowedCategories);
+  }, allowedSurface);
 
   // Pi already provides direct Bot tools through its native bridge. CC and Codex
   // consume MCP tools/list instead; expose the same registered definitions there.
@@ -930,8 +1011,8 @@ export function createXdtHelperMcpServer(
       server.registerTool(definition.name, {
         description: definition.description, inputSchema: z.strictObject(definition.inputShape),
       }, async (args) => {
-        const allowed = await allowedCategories();
-        if (!allowed?.has('bots')) {
+        const allowed = await allowedSurface();
+        if (!allowed.categories?.has('bots')) {
           return errorPayload('CAPABILITY_NOT_AVAILABLE', '这个工具不属于当前任务的能力面。');
         }
         const result = await registry.call(definition.name, args);
@@ -954,7 +1035,7 @@ export function createXdtHelperMcpServer(
     // Codex/remote Claude share one helper factory; rewrite ghost guidance from
     // the request-time session, not the empty factory ctx.
     server.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: (await allowedCategories())?.has('bots')
+      tools: (await allowedSurface()).categories?.has('bots')
         ? [...entryTools, ...withCindyGatedBotToolDescriptions(botTools, cindyAvailableForSession(sessionCtx))]
         : entryTools,
     }));

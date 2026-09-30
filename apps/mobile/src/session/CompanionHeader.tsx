@@ -1,69 +1,72 @@
-import { useRef, useState } from 'react';
-import { Keyboard, Pressable, StyleSheet, View } from 'react-native';
-import { ChevronDown, PanelLeft, Settings2 } from 'lucide-react-native';
+import { useEffect, useRef, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { resolveRemoteText, type RemoteResource, type RemoteResourceRef } from '@cindy/device-link';
+import { resolveRemoteText, type RemoteResource } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
-import { Text } from '@/components/AppText';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
-import { fontWeight, iconSize, iconStroke, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { HomeHeaderGlassButton } from './HomeHeaderGlassButton';
-import { TeammatePicker } from './TeammatePicker';
-import { CompanionCreateSheet, CompanionProfileSheet } from './CompanionProfileSheet';
-import { CompanionAutomationSheet } from './CompanionAutomationSheet';
+import { radius, spacing, useThemedStyles, type ThemeColors } from '@/theme';
+import { CHAT_HEADER_MARK_SIZE, ChatIdentityHeader, ChatIdentitySubtitle } from './ChatIdentityHeader';
+import { CompanionPresenceRing } from './CompanionPresenceRing';
+import { CompanionProfileSheet } from './CompanionProfileSheet';
 import { useTeammateNavigation } from './useTeammateNavigation';
 
-const AVATAR_SIZE = 32;
+/** Presence dot before the computer name (the list's dot, sized for a 12pt line). */
+const PRESENCE_DOT = 6;
 
+/**
+ * 伙伴私聊顶栏（C1，与群聊顶栏同一个 ChatIdentityHeader）：返回 + 身份（32 头像、名字、在线点与
+ * 电脑名）+ 伙伴设置。点身份区与设置按钮都打开伙伴资料；切换伙伴回到列表里做。
+ */
 export function CompanionHeader(props: {
-  resource: RemoteResource; deviceId: string; deviceName: string; online: boolean; controlsReady?: boolean; onSearch(): void; onOpenNavigation(): void;
+  resource: RemoteResource; deviceId: string; deviceName: string; online: boolean; controlsReady?: boolean;
+  /** The companion is working on a reply (the avatar breathes). */
+  working?: boolean;
+  settingsRequest?: { page: 'memory' | 'capabilities'; sequence: number };
+  onSearch(): void; onBack(): void;
 }) {
   const { accountGeneration } = useAuth();
   return <CompanionHeaderContent key={accountGeneration} {...props} />;
 }
-function CompanionHeaderContent({ resource, deviceId, deviceName, online, controlsReady = true, onSearch, onOpenNavigation }: Parameters<typeof CompanionHeader>[0]) {
+
+function CompanionHeaderContent({ resource, deviceId, deviceName, online, controlsReady = true, working = false, onSearch, onBack, settingsRequest }: Parameters<typeof CompanionHeader>[0]) {
   const { t, i18n } = useTranslation();
-  const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const navigation = useTeammateNavigation();
-  const [picker, setPicker] = useState(false);
   const [profile, setProfile] = useState(false);
-  const [automation, setAutomation] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const created = useRef<RemoteResourceRef | null>(null);
+  const [initialPage, setInitialPage] = useState<'home' | 'memory' | 'capabilities'>('home');
+  useEffect(() => { if (settingsRequest) { setInitialPage(settingsRequest.page); setProfile(true); } }, [settingsRequest]);
   const pending = useRef<(() => void) | null>(null);
   const name = resolveRemoteText(resource.display.title, i18n.language);
   const afterProfile = (action: () => void) => { pending.current = action; setProfile(false); };
+  const connection = online ? '' : t('devices.resources.hostOffline');
   return <>
-    <View style={styles.header} testID="companion.header">
-      <HomeHeaderGlassButton testID="companion.navigation" accessibilityLabel={t('devices.companions.openNavigation')} onPress={() => { Keyboard.dismiss(); onOpenNavigation(); }}>
-        <PanelLeft size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textPrimary} />
-      </HomeHeaderGlassButton>
-      <Pressable style={styles.identity} accessibilityRole="button" accessibilityLabel={name} accessibilityHint={t('devices.companions.title')} onPress={() => setPicker(true)} testID="companion.picker">
-        <RemoteCompanionAvatar avatar={resource.display.avatar} name={name} deviceId={deviceId} online={online} size={AVATAR_SIZE} />
-        <Text numberOfLines={1} style={styles.name}>{name}</Text>
-        <ChevronDown size={iconSize.sm} color={colors.textSecondary} />
-      </Pressable>
-      <HomeHeaderGlassButton testID="companion.settings" disabled={!controlsReady} accessibilityLabel={t('devices.companionProfile.settingsTitle')} onPress={() => setProfile(true)}>
-        <Settings2 size={iconSize.lg} strokeWidth={iconStroke.regular} color={colors.textPrimary} />
-      </HomeHeaderGlassButton>
-    </View>
-    <TeammatePicker visible={picker} onClose={() => setPicker(false)} onSelect={item => void navigation.openTeammate(item)}
-      onCreate={() => { created.current = null; setCreating(true); }}
-      current={{ deviceId, collectionId: resource.ref.collectionId, resourceKind: 'bot', resourceId: resource.ref.id }} />
-    <CompanionCreateSheet visible={creating} onClose={() => setCreating(false)} deviceId={deviceId} deviceName={deviceName}
-      collectionId={resource.ref.collectionId} online={online} onCreated={ref => { created.current = ref; }}
-      onClosed={() => { const ref = created.current; created.current = null; if (ref) void navigation.openCreatedTeammate({ deviceId, deviceName }, ref); }} />
-    <CompanionProfileSheet visible={profile} onClose={() => setProfile(false)} onClosed={() => { const action = pending.current; pending.current = null; action?.(); }}
+    <ChatIdentityHeader testIDPrefix="companion"
+      mark={<>
+        <RemoteCompanionAvatar avatar={resource.display.avatar} name={name} deviceId={deviceId} online={online} size={CHAT_HEADER_MARK_SIZE} framed />
+        <CompanionPresenceRing active={working} width={1.5} />
+      </>}
+      title={name}
+      subtitle={<View style={styles.subtitleRow}>
+        <View style={[styles.presence, online ? styles.presenceOn : styles.presenceOff]} testID="companion.header.presence" />
+        <ChatIdentitySubtitle>{connection ? `${connection} · ${deviceName}` : deviceName}</ChatIdentitySubtitle>
+      </View>}
+      identityLabel={[name, deviceName, connection].filter(Boolean).join(', ')}
+      identityHint={t('devices.companions.openProfile', { name })}
+      controlsReady={controlsReady}
+      onBack={onBack}
+      onOpenSettings={() => { setInitialPage('home'); setProfile(true); }}
+      settingsLabel={t('devices.companionProfile.settingsTitle')} />
+    <CompanionProfileSheet initialPage={initialPage} visible={profile} onClose={() => setProfile(false)} onClosed={() => { const action = pending.current; pending.current = null; action?.(); }}
       resource={resource} collectionId={resource.ref.collectionId} deviceId={deviceId} deviceName={deviceName} online={online}
       onDeleted={() => void navigation.chooseMode('teammates')}
-      onOpenSearch={() => afterProfile(onSearch)} onOpenAutomation={() => afterProfile(() => setAutomation(true))} />
-    <CompanionAutomationSheet visible={automation} onClose={() => setAutomation(false)} collectionId="routines"
-      botId={resource.ref.id} deviceId={deviceId} deviceName={deviceName} online={online} />
+      onOpenSearch={() => afterProfile(onSearch)} />
   </>;
 }
+
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', minHeight: 52, gap: spacing.md, paddingHorizontal: spacing.lg },
-  identity: { flex: 1, flexDirection: 'row', alignItems: 'center', minHeight: 44, gap: spacing.sm },
-  name: { flexShrink: 1, fontSize: typeScale.subtitle, fontWeight: fontWeight.medium, color: colors.textPrimary },
+  subtitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  presence: { width: PRESENCE_DOT, height: PRESENCE_DOT, borderRadius: radius.pill },
+  // Same tones as the list's StatusDot: ready when connected, the quiet border tone when not.
+  presenceOn: { backgroundColor: colors.statusReady },
+  presenceOff: { backgroundColor: colors.borderStrong },
 });

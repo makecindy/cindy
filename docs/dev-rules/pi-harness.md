@@ -98,7 +98,7 @@ Pi 任务时冻结，并写入该任务 `settings.json` 的 `compaction.reserveT
 `switch_session`，必须重新 `set_model` 并用 `get_state` 校验
 provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建 runtime。校验完成前
 子代理 route 保持 pending，失败则终止该 live 任务。本地 Pi 跨 proxy 供应商身份切换来源
-（`x-cindy-pi-provider-id` 会变化）或 Orca worker 路由重建会退役旧 runtime（`runtimeRetired`）、
+（`x-cindy-pi-provider-id` 会变化）或 Orca worker 路由重建会退役旧 runtime（`retiredRuntime`）、
 目标 route 交给下一次发送懒创建；退役前能按目录窗口完成的 90% 固定压力线评估照旧在关闭前
 完成（保护口径不变）。但**目录窗口可能与新进程 `get_state` 回报的 contextWindow 不同**，
 所以下一次发送在消息真正发给模型之前必须用新进程的**实际窗口**重核一次：实际窗口更小且
@@ -113,6 +113,16 @@ Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
 
+用户重试已被 Pi 接受但零产出的失败输入时，用持久化的原生 user entry id 精确定位当前
+分支；确认后续只有空的错误响应及模型／推理档位变更记录，再通过原生树导航回到输入之前重发。
+导航只回退消息，保留当前模型和推理档位；重新打开任务时仍由 Cindy 已保存的选择恢复设置。
+回归见 `session-tree.test.ts` 与 `pi-provider-routing.test.ts`。旧失败分支完整保留，
+不按文本去重，也不重放已有工具结果。若该轮明确遇到 HTTP 413，用户这次重试在重发前
+调用一次原生 compact；压缩失败（包括 RPC 超时、普通错误或无法压缩）时，沿用原请求的
+413 证据，本机锁存下一次发送前换窗，并在持久错误中记录专用恢复失败标记，关闭运行时后
+仍能恢复。用户取消不触发换窗，SSH 保留错误。
+这一恢复由用户重试触发，不改变正常轮次由 Pi 自己管理自动压缩的约定。
+
 Pi 同样消费 `AgentRuntimeConfig.behaviorFlags`（静态对象或按来源、凭证形态、执行位置求值）。
 Desktop 复用既有工具链并行度设置，向本机 Pi 注入 `VITEST_MAX_FORKS`、`VITEST_MAX_THREADS`、
 `CARGO_BUILD_JOBS` 与非 Windows 的 `MAKEFLAGS`；用户已有 env 优先，关闭设置后新进程不注入，
@@ -123,6 +133,26 @@ SSH 不套用本机限核值。沿用现有默认值与 override 存储，不新
 `transport`、`retry.maxRetries=6`（provider 级保持 0）与 `compaction.reserveTokens`；
 未配置 Pi 百分比且未缩小工作预算时不写 `reserveTokens`，沿用 Pi 默认 16384；
 显式小预算仍以默认 90% 计算触发阈值。
+
+### 运行中的模型目录与凭据更新
+
+模型目录更新沿用 Cindy 的统一目录和 Pi 的原生 provider 配置，不能另建一份模型权威表。
+先预览目标资料和容量，再在现有串行切换边界应用配置；Pi 的 `refresh_models` 只刷新目录，
+即使 provider/model ID 未变也须通过 `set_model` 应用新 descriptor。刷新响应中的
+`aborted` 或 provider errors 表示未完整成功，不能仅凭 RPC `success: true` 继续。
+
+新增原生适配器使用 Pi 公开的 `unregisterProvider`／`registerProvider` 与模型目录刷新，
+不重建用户扩展。模型凭据仅通过宿主发起、绑定本次运行实例和随机 nonce 的私有交接进入
+Pi 内存，不进入 prompt、聊天历史、日志或明文配置文件。交接同时维护 bash 凭据剥离名单、
+后续子代理的启动配置和来源专用授权；已运行子代理仍保留其独立身份。私有命令的 prompt
+响应不等于配置成功，必须收到对应 nonce 的完成回执。来源一致性检查不可因热切而删除。
+
+`refresh_models` 与 `set_compaction_reserve_tokens` 需要配套 Pi 原生 RPC 支持；当前
+`tools/pi/latest.json` 的版本 pin 不代表这两项接口已经发布。旧 Pi 缺少本次操作所需接口时，
+在改变当前模型前明确反馈，不自动降级为会话重载。开发、单测或本地补丁通过不等于托管
+runtime 已升级；发布须分别核验 Pi 接口、Cindy 接入与实际 runtime 版本。
+接口补丁、重启边界和隔离验证见
+[`../research/pi-native-model-refresh.md`](../research/pi-native-model-refresh.md)。
 
 
 Skill 停用适配同时保存物理身份与管理页已扫描的词法发现入口；启动前只采用仍指向该

@@ -12,7 +12,6 @@ import type { MobileModelMemoryAccessors } from '@/session/draftModelMemory';
 import {
   budgetRowDisabled,
   buildRowMetaLine,
-  compactEffortLabelFor,
   effortLabelFor,
   effortLabelFromRuntime,
   formatContextWindow,
@@ -250,47 +249,6 @@ describe('effortLabelFromRuntime —— 会话摘要按 app 语言覆盖 snapsho
       expect(effortLabelFromRuntime(runtime, 'xhigh')).toBe('超高');
       expect(effortLabelFromRuntime(runtime, '')).toBe('');
       expect(effortLabelFromRuntime(runtime, null)).toBe('');
-    } finally {
-      await i18n.changeLanguage(previousLanguage);
-    }
-  });
-});
-
-describe('compactEffortLabelFor —— 英文列表紧凑标签', () => {
-  it('英文只压缩长档位，非英文仍用本地化全称', async () => {
-    const previousLanguage = i18n.language;
-    try {
-      await i18n.changeLanguage('en');
-      expect(effortLabelFor({}, 'xhigh', capabilities)).toBe('Extra High');
-      expect(
-        compactEffortLabelFor({ effortDisplayNames: { xhigh: '特高' } }, 'xhigh', capabilities),
-      ).toBe('Extra');
-      expect(compactEffortLabelFor({}, 'minimal', capabilities)).toBe('Minimal');
-      expect(compactEffortLabelFor({}, 'low', capabilities)).toBe('Low');
-      expect(compactEffortLabelFor({}, 'medium', capabilities)).toBe('Medium');
-      expect(compactEffortLabelFor({}, 'high', capabilities)).toBe('High');
-      expect(compactEffortLabelFor({}, 'ultra', capabilities)).toBe('Ultra');
-      expect(compactEffortLabelFor({}, 'max', capabilities)).toBe('Max');
-      expect(
-        compactEffortLabelFor(
-          { effortDisplayNames: { 'adaptive-fast': 'Adaptive Fast' } },
-          'adaptive-fast',
-          capabilities,
-        ),
-      ).toBe('Adaptive Fast');
-      expect(
-        compactEffortLabelFor({}, 'adaptive-safe', {
-          ...capabilities,
-          effortLevels: [{ id: 'adaptive-safe', label: 'Adaptive Safe' }],
-        }),
-      ).toBe('Adaptive Safe');
-
-      await i18n.changeLanguage('zh-CN');
-      expect(compactEffortLabelFor({}, 'high', null)).toBe('高');
-      await i18n.changeLanguage('ja');
-      expect(compactEffortLabelFor({}, 'ultra', null)).toBe('究極');
-      await i18n.changeLanguage('ko');
-      expect(compactEffortLabelFor({}, 'medium', null)).toBe('보통');
     } finally {
       await i18n.changeLanguage(previousLanguage);
     }

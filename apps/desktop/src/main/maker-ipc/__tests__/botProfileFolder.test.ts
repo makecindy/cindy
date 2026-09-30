@@ -9,7 +9,7 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   BOT_PROFILE_TEXT_MAX_BYTES,
@@ -239,6 +239,129 @@ describe('搬家', () => {
     const result = await migrateBotProfileFolder(root, 'bot-a', SEED);
     expect(result.seeded).toBe(false);
     expect((await readBotProfileFolder(root, 'bot-a')).identitySource).toBe('用户自己改过的');
+  });
+
+  it('缺 SOUL.md 时只补缺失的文件,留着的用户档案不被重置', async () => {
+    await writeBotProfileFolder(root, 'bot-a', { userContextSource: '用户手改的档案' });
+    const result = await migrateBotProfileFolder(root, 'bot-a', SEED);
+    expect(result.seeded).toBe(true);
+    const content = await readBotProfileFolder(root, 'bot-a');
+    expect(content.identitySource).toBe(SEED.identitySource);
+    expect(content.userContextSource).toBe('用户手改的档案');
+    expect(content.config).toEqual(SEED.config);
+  });
+
+  it('检查之后用户刚好保存了文件:补种原子地让路,不覆盖刚保存的内容', async () => {
+    await writeBotProfileFolder(root, 'bot-a', {
+      identitySource: '编辑器刚保存的灵魂',
+      userContextSource: '编辑器刚保存的档案',
+    });
+    // The existence check still saw nothing: the save landed right after it.
+    const access = vi.spyOn(fs, 'access').mockRejectedValueOnce(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    try {
+      const result = await migrateBotProfileFolder(root, 'bot-a', SEED);
+      expect(result.seeded).toBe(false);
+    } finally {
+      access.mockRestore();
+    }
+    const content = await readBotProfileFolder(root, 'bot-a');
+    expect(content.identitySource).toBe('编辑器刚保存的灵魂');
+    expect(content.userContextSource).toBe('编辑器刚保存的档案');
+    // No temp files are left in the user's folder.
+    const home = botProfileDir(root, 'bot-a');
+    expect((await fs.readdir(home)).filter((name) => name.includes('.tmp-'))).toEqual([]);
+    expect((await fs.readdir(path.join(home, 'memories'))).filter((name) => name.includes('.tmp-'))).toEqual([]);
+  });
+
+  it('不支持硬链接的文件系统确认不存在后 rename 补种:只补缺失的文件,不直接写目标,不留临时文件', async () => {
+    await writeBotProfileFolder(root, 'bot-a', { userContextSource: '用户手改的档案' });
+    const link = vi.spyOn(fs, 'link').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
+    const writeFile = vi.spyOn(fs, 'writeFile');
+    try {
+      expect((await migrateBotProfileFolder(root, 'bot-a', SEED)).seeded).toBe(true);
+      // Content only ever reaches a target path complete, through a rename.
+      for (const [target] of writeFile.mock.calls) {
+        expect(String(target)).toMatch(/\.tmp-/);
+      }
+    } finally {
+      link.mockRestore();
+      writeFile.mockRestore();
+    }
+    const content = await readBotProfileFolder(root, 'bot-a');
+    expect(content.identitySource).toBe(SEED.identitySource);
+    expect(content.userContextSource).toBe('用户手改的档案');
+    expect(content.config).toEqual(SEED.config);
+    const home = botProfileDir(root, 'bot-a');
+    const leftovers = [...await fs.readdir(home), ...await fs.readdir(path.join(home, 'memories'))]
+      .filter((name) => name.includes('.tmp-'));
+    expect(leftovers).toEqual([]);
+  });
+
+  it('link 报权限、空间等其他错误时不走 rename 回退,原样抛出,不补种', async () => {
+    const link = vi.spyOn(fs, 'link').mockRejectedValue(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }));
+    const rename = vi.spyOn(fs, 'rename');
+    const home = botProfileDir(root, 'bot-a');
+    try {
+      await expect(migrateBotProfileFolder(root, 'bot-a', SEED)).rejects.toMatchObject({ code: 'ENOSPC' });
+      // No replacing rename onto a target path.
+      expect(rename).not.toHaveBeenCalled();
+    } finally {
+      link.mockRestore();
+      rename.mockRestore();
+    }
+    await expect(fs.access(path.join(home, 'SOUL.md'))).rejects.toBeTruthy();
+    await expect(fs.access(path.join(home, 'memories', 'USER.md'))).rejects.toBeTruthy();
+    expect((await fs.readdir(path.join(home, 'memories'))).filter((name) => name.includes('.tmp-'))).toEqual([]);
+  });
+
+  it('不支持硬链接且 rename 失败时不留半截目标,下一次补种照常补齐', async () => {
+    const link = vi.spyOn(fs, 'link').mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }));
+    const realRename = fs.rename.bind(fs);
+    const rename = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (String(to).endsWith('SOUL.md')) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+      return realRename(from, to);
+    });
+    const home = botProfileDir(root, 'bot-a');
+    try {
+      await expect(migrateBotProfileFolder(root, 'bot-a', SEED)).rejects.toMatchObject({ code: 'EIO' });
+    } finally {
+      rename.mockRestore();
+    }
+    try {
+      await expect(fs.access(path.join(home, 'SOUL.md'))).rejects.toBeTruthy();
+      expect((await fs.readdir(home)).filter((name) => name.includes('.tmp-'))).toEqual([]);
+      expect((await migrateBotProfileFolder(root, 'bot-a', SEED)).seeded).toBe(true);
+    } finally {
+      link.mockRestore();
+    }
+    expect((await readBotProfileFolder(root, 'bot-a')).identitySource).toBe(SEED.identitySource);
+  });
+
+  it('SOUL.md 之外的槽写失败时不落 SOUL.md,下一次仍会补齐,而不是把缺失的 USER.md 当成清空', async () => {
+    const realWriteFile = fs.writeFile.bind(fs);
+    const writeFile = vi.spyOn(fs, 'writeFile').mockImplementation(async (target, data, options) => {
+      if (String(target).includes('USER.md.tmp-')) {
+        await realWriteFile(target, String(data).slice(0, 2), options);
+        throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      }
+      return realWriteFile(target, data, options);
+    });
+    const home = botProfileDir(root, 'bot-a');
+    try {
+      await expect(migrateBotProfileFolder(root, 'bot-a', SEED)).rejects.toMatchObject({ code: 'ENOSPC' });
+    } finally {
+      writeFile.mockRestore();
+    }
+    // SOUL.md marks a seeded Home, so it must not exist while a sibling slot is missing.
+    await expect(fs.access(path.join(home, 'SOUL.md'))).rejects.toBeTruthy();
+    // The half-written temp file does not linger either.
+    expect((await fs.readdir(path.join(home, 'memories'))).filter((name) => name.includes('.tmp-'))).toEqual([]);
+
+    expect((await migrateBotProfileFolder(root, 'bot-a', SEED)).seeded).toBe(true);
+    const content = await readBotProfileFolder(root, 'bot-a');
+    expect(content.identitySource).toBe(SEED.identitySource);
+    expect(content.userContextSource).toBe(SEED.userContextSource);
+    expect(content.config).toEqual(SEED.config);
   });
 
   it('技能从旧目录整体搬进新家,内容与 slug 都不变', async () => {

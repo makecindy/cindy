@@ -16,6 +16,8 @@ export interface LoginNativeButtonProps {
   subtitle?: string;
   children?: ReactNode;
   trailingArtwork?: ReactNode;
+  /** Fixed-size React Native contents for rows with positioned icons and text. */
+  content?: ReactNode;
   showLabel?: boolean;
   selected?: boolean;
   artworkSize?: number;

@@ -2297,7 +2297,10 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
     expect(tool).toBeDefined();
     const args = name === 'routine_save' ? {
       name: 'Rest', prompt: 'Remind me to rest', enabled: true, silentWhenIdle: false, preRunHook: { command: 'node check.mjs' },
-      triggers: [{ id: 'minute', kind: 'interval', intervalMs: 60000 }],
+      triggers: [
+        { id: 'minute', kind: 'interval', intervalMs: 60000, anchorMs: 30000 },
+        { id: 'one-shot', kind: 'once', at: 90000 },
+      ],
     } : name === 'schedule_notify_current_run' ? {} : name === 'schedule_set_pre_run_hook' ? { script: 'process.exit(2)' } : name === 'check_agent_message' ? { message_id: 'message-1' } : name === 'list_agents' || name === 'routine_list' || name === 'routine_sources' ? {}
       : name.startsWith('routine_') ? { id: 'routine-1' }
       : name === 'start_session_task' ? { instruction: 'Prepare a report' }
@@ -2308,7 +2311,16 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
     if (name === 'routine_save') {
       expect(tool.parameters.required).toEqual(['name', 'prompt', 'enabled', 'triggers']);
       expect(tool.parameters.properties.botId).toBeUndefined();
-      expect(tool.parameters.properties.triggers.items.anyOf[0].properties.intervalMs.minimum).toBe(60000);
+      const variants = tool.parameters.properties.triggers.items.anyOf;
+      const interval = variants.find((item: any) => item.properties.kind.enum.includes('interval'));
+      expect(interval.properties.intervalMs.minimum).toBe(60000);
+      expect(interval.properties.anchorMs).toMatchObject({ type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+      expect(interval.required).not.toContain('anchorMs');
+      const once = variants.find((item: any) => item.properties.kind.enum.includes('once'));
+      expect(once).toMatchObject({
+        required: ['id', 'kind', 'at'], additionalProperties: false,
+        properties: { at: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER } },
+      });
     }
     if (name === 'send_to_agent') expect(tool.parameters.properties.target_id.maxLength).toBe(210);
     const resolved = gateway.resolveDirectHelperTool(name, args);

@@ -9,14 +9,20 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en
 vi.mock('react-native', () => ({
   Platform: { OS: 'android' }, StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 }, Alert: { alert: h.alert },
   View: ({ children }: any) => <div>{children}</div>,
-  Pressable: ({ children, onPress, testID }: any) => <button data-testid={testID} onClick={onPress}>{children}</button>,
+  Pressable: ({ children, onPress, testID, disabled, accessibilityLabel }: any) => <button data-testid={testID} aria-label={accessibilityLabel} disabled={disabled} onClick={onPress}>{children}</button>,
+  ActivityIndicator: ({ accessibilityLabel }: any) => <span role="progressbar" aria-label={accessibilityLabel} />,
 }));
+vi.mock('lucide-react-native', () => ({ Search: () => null, X: () => null }));
+vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: ({ label, onPress, disabled, busy, destructive, testID }: any) =>
+  <button data-testid={testID} data-destructive={destructive ? 'true' : 'false'} data-busy={busy ? 'true' : 'false'} disabled={disabled || busy} onClick={onPress}>{label}</button> }));
 vi.mock('@/components/AppText', () => ({
-  Text: ({ children }: any) => <span>{children}</span>,
-  TextInput: (p: any) => <input aria-label={p.accessibilityLabel} value={p.value} disabled={p.editable === false} onInput={e => p.onChangeText(e.currentTarget.value)} onChange={() => {}} />,
+  // Styles resolve to token names (see the theme mock), so rendered colours are observable.
+  Text: ({ children, style, testID }: any) => <span data-testid={testID} data-color={[style].flat(Infinity).filter(Boolean).reduce((color: string | undefined, item: any) => item.color ?? color, undefined)}>{children}</span>,
+  TextInput: (p: any) => <input aria-label={p.accessibilityLabel} value={p.value} maxLength={p.maxLength} disabled={p.editable === false} onInput={e => p.onChangeText(e.currentTarget.value)} onChange={() => {}} />,
 }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: ({ action }: any) => <button disabled={!!action.disabled || !!action.busy} onClick={action.onPress}>{action.label}</button> }));
-vi.mock('@/theme', async () => ({ ...await import('@/theme/tokens'), useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
+vi.mock('@/theme', async () => ({ ...await import('@/theme/tokens'), useTheme: () => ({ colors: {} }),
+  useThemedStyles: (make: (colors: unknown) => unknown) => make(new Proxy({}, { get: (_target, key) => String(key) })) }));
 vi.mock('@/device-link/remoteResources', async original => ({ ...await original<object>(), invokeRemoteResourceAction: (...args: unknown[]) => h.invoke(...args) }));
 vi.mock('@/session/companionProfileData', async original => ({ ...await original<object>(), loadCompanionProfile: (...args: unknown[]) => h.read(...args) }));
 vi.mock('@/session/ComposerNativeSection', () => ({ ComposerNativeSection: ({ title, children }: any) => <section aria-label={title}>{children}</section> }));
@@ -79,15 +85,15 @@ function hostResource(id: string, query = '') {
 const teammateWrites = (stem: string, body: string) => { const memory = memories.find(item => item.stem === stem)!; memory.body = body; memory.revision++; };
 
 let root: Root; let container: HTMLDivElement;
-function Harness({ platform }: { platform: string }) {
+function Harness({ platform, memoryEnabled = true }: { platform: string; memoryEnabled?: boolean }) {
   const memory = useCompanionMemory({ invoke: vi.fn() as never, openLink: h.openLink, deviceId: 'host', deviceName: 'Mac', collectionId: 'teammates',
     resourceKind: 'bot', listResourceId: 'settings:bot/memory', online: true, active: true, binding: 'account-1' });
   h.state = memory;
   const Page = platform === 'ios' ? NativeCompanionMemoryPage : CompanionMemoryPage;
-  return <Page memory={memory} online botName="Sora" memoryEnabled />;
+  return <Page memory={memory} online botName="Sora" memoryEnabled={memoryEnabled} />;
 }
 const settle = () => act(async () => { for (let i = 0; i < 3; i++) await new Promise(resolve => setTimeout(resolve, 0)); });
-async function render(platform: string) { await act(async () => root.render(<Harness platform={platform} />)); await settle(); }
+async function render(platform: string, memoryEnabled = true) { await act(async () => root.render(<Harness platform={platform} memoryEnabled={memoryEnabled} />)); await settle(); }
 const buttons = () => [...container.querySelectorAll('button')];
 /** Visible copy, including native Section titles (rendered as headers, not body text). */
 const shown = (text: string) => container.textContent!.includes(text)
@@ -222,4 +228,51 @@ it('shows a memory that disappeared as missing rather than as a failure', async 
   memories = memories.filter(item => item.stem !== 'user_coffee');
   await click('companionMemory.user_coffee');
   expect(h.state.missing).toBe(true); expect(container.textContent).toContain('memoryMissing');
+});
+
+it('uses a spinner while a memory loads and an iOS-style search field with a clear button', async () => {
+  await render('android');
+  const search = container.querySelector<HTMLInputElement>('input[aria-label="memorySearch"]')!;
+  expect(search.hasAttribute('maxlength')).toBe(false);
+  expect(container.querySelector('[data-testid="companionMemory.searchClear"]')).toBeNull();
+  await type('memorySearch', 'Link');
+  const clear = container.querySelector<HTMLButtonElement>('[data-testid="companionMemory.searchClear"]')!;
+  expect(clear.getAttribute('aria-label')).toBe('clearA11y');
+  await act(async () => { clear.click(); }); await settle();
+  expect(h.state.query).toBe('');
+  let finish!: () => void;
+  const read = h.read.getMockImplementation()!;
+  h.read.mockImplementationOnce((...args: any[]) => new Promise(done => { finish = () => done(read(...args)); }));
+  const entry = container.querySelector<HTMLButtonElement>('[data-testid="companionMemory.user_coffee"]')!;
+  await act(async () => { entry.click(); });
+  expect(container.querySelector('[role="progressbar"]')!.getAttribute('aria-label')).toBe('loading');
+  expect(container.textContent).not.toContain('loading');
+  await act(async () => finish()); await settle();
+  expect(container.textContent).toContain('Black, no sugar.');
+});
+
+it('greys only the titles when memory is off and keeps title, preview and date in one row', async () => {
+  await render('android', false);
+  const title = container.querySelector('[data-testid="companionMemory.user_coffee.title"]')!;
+  expect(title.getAttribute('data-color')).toBe('textSecondary');
+  const row = container.querySelector('[data-testid="companionMemory.user_coffee"]')!;
+  const preview = [...row.querySelectorAll('span')].find(node => node.textContent === 'Black, no sugar.')!;
+  expect(preview.getAttribute('data-color')).toBe('textSecondary');
+  // Title and preview share the leading column; the date trails it.
+  expect(title.parentElement).toBe(preview.parentElement);
+  expect(row.lastElementChild!.textContent).not.toBe('');
+  expect(row.lastElementChild!.contains(title)).toBe(false);
+  await render('android', true);
+  expect(container.querySelector('[data-testid="companionMemory.user_coffee.title"]')!.getAttribute('data-color')).toBe('textPrimary');
+});
+
+it('offers Edit, Delete and Done as text rows with the delete row in the destructive colour', async () => {
+  await render('android'); await click('companionMemory.user_coffee');
+  const edit = container.querySelector<HTMLButtonElement>('[data-testid="companionMemory.edit"]')!;
+  const remove = container.querySelector<HTMLButtonElement>('[data-testid="companionMemory.delete"]')!;
+  expect(edit.textContent).toBe('memoryEdit'); expect(edit.dataset.destructive).toBe('false');
+  expect(remove.textContent).toBe('Delete Memory'); expect(remove.dataset.destructive).toBe('true');
+  await click('companionMemory.edit');
+  const done = container.querySelector<HTMLButtonElement>('[data-testid="companionMemory.done"]')!;
+  expect(done.textContent).toBe('memoryDone'); expect(done.disabled).toBe(false);
 });

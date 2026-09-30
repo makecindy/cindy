@@ -54,6 +54,16 @@ module.exports = {
     .concat([
       {
         type: "dir",
+        filePath: "plugins/communication-notifications",
+        reasons: ["notification service extension native source"],
+      },
+      ...[
+        "../desktop/src/renderer/assets/bot-presets/cindy.png",
+        "../desktop/resources/legacy-teammate-avatars/dash.png",
+        "../desktop/resources/legacy-teammate-avatars/lizi.png",
+      ].map((filePath) => ({ type: "file", filePath, reasons: ["notification sender portraits"] })),
+      {
+        type: "dir",
         filePath: "../../packages/remote-credentials-native/Sources",
         reasons: ["remote credentials native core"],
       },

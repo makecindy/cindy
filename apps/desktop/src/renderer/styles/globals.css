@@ -335,6 +335,11 @@ html:lang(ko) {
 [data-recommendation-active='true'] .ProseMirror > p.is-empty:first-child:only-child::before {
   content: none;
 }
+/* 首页建议悬停预览:预览由 ChatInput 的 overlay 承载,暂时隐去正文/placeholder;
+   预览不改变编辑器高度,见 ChatInput 的 promptPreviewLines。 */
+[data-prompt-preview-active='true'] .ProseMirror {
+  opacity: 0;
+}
 .ProseMirror {
   caret-color: var(--caret-accent);
 }

@@ -4,7 +4,7 @@ import type { ModelWindowSwitchPreparationResult } from './contextOverflowRollov
  * Pi「已退役路由」的下一次发送前窗口核验（PR #4496 / issue #4486 / #4840）。
  *
  * 背景：本地 Pi 跨 proxy 供应商身份切换、Orca worker 路由重建等场景会退役旧 live
- * runtime（`runtimeRetired`），目标 route 交给下一次发送懒创建；冷 Pi 在目录窗口对已知
+ * runtime（`retiredRuntime`），目标 route 交给下一次发送懒创建；冷 Pi 在目录窗口对已知
  * 占用有余量时也会跳过启动期核实。两种情况都让「切换时按目录窗口做的 90% 压力评估」
  * 少了对新进程真实窗口的确认——目录窗口（catalog / 历史列）可能与 Pi `get_state`
  * 回报的 contextWindow 不同。

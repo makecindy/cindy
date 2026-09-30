@@ -172,6 +172,13 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   beginDirectTurnChangeSet: (sessionId: string, clientId: string) => Promise<void>;
   abortDirectTurnChangeSet: (sessionId: string) => void;
   resolveWorkerSenderLabel: (workerId: string, fallback: string) => Promise<string>;
+  /**
+   * 反查 worker 所在的 Lead / Worker 会话，给消息来源标签定位发送方会话。
+   * 缺省或查不到时消息仍照常投递，只是来源不可点击跳转。
+   */
+  resolveWorkerSessionLink?: (
+    workerId: string,
+  ) => Promise<{ leadSessionId: string; workerSessionId: string } | null>;
   isSessionRunningError: (err: unknown) => boolean;
   log?: OrcaInterAgentDispatcherLogger;
 }
@@ -358,14 +365,25 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         return params.senderLabel;
       }
     };
+    const resolveOrigin = async (): Promise<NonNullable<AgentInputQueuedMessage['origin']>> => {
+      const [senderLabel, senderSessionId] = await Promise.all([
+        resolveSenderLabel(),
+        resolveOrcaSenderSessionId(deps, params),
+      ]);
+      return {
+        kind: 'orca',
+        senderLabel,
+        displayText: params.rawContent,
+        ...(senderSessionId ? { senderSessionId } : {}),
+      };
+    };
     const enqueueQueuedMessage = async (logEvent: string): Promise<DispatchOrcaInterAgentMessageResult> => {
       const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
       const queued = buildQueuedOrcaInterAgentMessage({
         clientId,
         agentMessageText,
         persistedContent,
-        rawContent: params.rawContent,
-        senderLabel: await resolveSenderLabel(),
+        origin: await resolveOrigin(),
         createOpts,
       });
       if (params.onAccepted) {
@@ -410,11 +428,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           onAccepted: runAccepted,
           onAcceptedRollback: params.onAcceptedRollback,
           onAcceptedCommit: params.onAcceptedCommit,
-          origin: {
-            kind: 'orca',
-            senderLabel: await resolveSenderLabel(),
-            displayText: params.rawContent,
-          },
+          origin: await resolveOrigin(),
         });
         if (result.ok) {
           if (result.wakeKind === 'queued') {
@@ -455,7 +469,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         await deps.prepareUnhealthySession?.(params.targetSessionId);
         const live = deps.getLiveSession(params.targetSessionId);
         if (!live) return null;
-        const senderLabel = await resolveSenderLabel();
+        const origin = await resolveOrigin();
         const result = await sendPersistedUserMessageToSession(deps, {
           session: live,
           dbContent: persistedContent,
@@ -463,11 +477,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           clientId,
           source: params.meta.source,
           context: params.meta.context,
-          origin: {
-            kind: 'orca',
-            senderLabel,
-            displayText: params.rawContent,
-          },
+          origin,
           onAccepted: runAccepted,
         });
         if (result.dispatched) {
@@ -542,12 +552,17 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         senderLabel = params.senderLabel;
       }
     }
+    const senderSessionId = await resolveOrcaSenderSessionId(deps, params);
     const queued = buildQueuedOrcaInterAgentMessage({
       clientId,
       agentMessageText: formatAgentMessage(params.source, params.rawContent, params.workerId),
       persistedContent: formatOrcaCommunicationMessage(params.source, params.rawContent),
-      rawContent: params.rawContent,
-      senderLabel,
+      origin: {
+        kind: 'orca',
+        senderLabel,
+        displayText: params.rawContent,
+        ...(senderSessionId ? { senderSessionId } : {}),
+      },
       createOpts,
     });
     const callbackAlreadyRegistered = queuedOrcaInterAgentAcceptedCallbacks.has(clientId);
@@ -619,6 +634,21 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     settleQueuedOrcaInterAgentAcceptedCallback,
     discardQueuedOrcaInterAgentAcceptedCallback,
   };
+}
+
+/** Lead 发出的消息来源是 Lead 会话，Worker 发出的是 Worker 会话；都以 workerId 反查。 */
+async function resolveOrcaSenderSessionId<TSessionMeta>(
+  deps: OrcaInterAgentDispatcherDeps<TSessionMeta>,
+  params: Pick<DispatchOrcaInterAgentMessageParams, 'source' | 'workerId'>,
+): Promise<string | undefined> {
+  if (!params.workerId || !deps.resolveWorkerSessionLink) return undefined;
+  try {
+    const link = await deps.resolveWorkerSessionLink(params.workerId);
+    if (!link) return undefined;
+    return params.source === 'lead' ? link.leadSessionId : link.workerSessionId;
+  } catch {
+    return undefined;
+  }
 }
 
 async function sendPersistedUserMessageToSession<TSessionMeta>(
@@ -702,8 +732,7 @@ function buildQueuedOrcaInterAgentMessage(params: {
   clientId: string;
   agentMessageText: string;
   persistedContent: string;
-  rawContent: string;
-  senderLabel: string;
+  origin: NonNullable<AgentInputQueuedMessage['origin']>;
   createOpts: AgentInputCreateOpts;
 }): AgentInputQueuedMessage {
   const createdAt = new Date().toISOString();
@@ -723,10 +752,6 @@ function buildQueuedOrcaInterAgentMessage(params: {
       createdAt,
     },
     createOpts: params.createOpts,
-    origin: {
-      kind: 'orca',
-      senderLabel: params.senderLabel,
-      displayText: params.rawContent,
-    },
+    origin: params.origin,
   };
 }

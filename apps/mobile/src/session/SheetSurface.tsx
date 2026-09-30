@@ -24,7 +24,7 @@ import { Text } from '@/components/AppText';
 import { BlurBackdrop } from '@/session/BlurBackdrop';
 import type { ContextSheetSnap, ContextSheetSnapHeights } from '@/session/contextSheetModel';
 import { useContextSheetDrag } from '@/session/useContextSheetDrag';
-import { fontWeight, iconSize, iconStroke, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 export interface SheetSurfaceProps {
   /** header 居中标题。 */
@@ -116,7 +116,7 @@ export function SheetSurface({
               style={styles.headerButton}
               testID={testID ? `${testID}.back` : undefined}
             >
-              <ChevronLeft color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+              <ChevronLeft color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
             </Pressable>
           ) : (
             <View style={styles.headerSpacer} />
@@ -229,6 +229,7 @@ function makeSheetSurfaceStyles(colors: ThemeColors) {
     headerTitle: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.semibold,
       textAlign: 'center' as const,
     },

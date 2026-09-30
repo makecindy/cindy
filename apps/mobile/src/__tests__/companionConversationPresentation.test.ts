@@ -29,6 +29,16 @@ it('keeps all contiguous blocks of a sealed final answer', () => {
   const text = items.filter(item => item.type === 'message').map(item => item.message.body);
   expect(text).toEqual(['Help', 'Part one', 'Part two']);
 });
+it('keeps every sealed reply block after a continuation even when the main timeline folds earlier seals', () => {
+  const items = bodies([...base,
+    row('a4', 'assistant', 'First block'), row('a5', 'assistant', 'First reply', { turnCompleted: true }),
+    row('t6', 'tool_use', { toolName: 'Read', toolUseId: 't6', input: { path: 'private' } }),
+    row('r7', 'tool_result', { toolUseId: 't6', result: 'more technical details' }),
+    row('a8', 'assistant', 'Second reply', { turnCompleted: true }),
+  ], false);
+  const text = items.filter(item => item.type === 'message').map(item => item.message.body);
+  expect(text).toEqual(['Help', 'First block', 'First reply', 'Second reply']);
+});
 it('keeps delivered attachments without their preamble', () => {
   const items = bodies([...base, row('a4', 'assistant', '![Picture](https://example.com/picture.png)')], false);
   expect(JSON.stringify(items)).toContain('picture.png');
@@ -106,4 +116,20 @@ it('drops persisted auto-resume separators like Desktop, keeping only the live r
     isSessionStreaming: true, autoResumePending: { attempt: 2, maxAttempts: 3 },
   }));
   expect(live.filter(isResumeCard)).toHaveLength(1);
+});
+
+it('attaches exact frozen results to their final reply across reload and keeps unbound receipts', () => {
+  const card = { v: 1, role: 'delegation-result', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Cindy',
+    toBotId: null, toBotName: '', parentSessionId: 'chat', childSessionId: 'child', objective: 'Report',
+    result: { runSequence: 1, status: 'completed', text: 'Frozen result', artifacts: [] } };
+  const input = [row('r1', 'assistant', 'Frozen result', { botCollaboration: card }),
+    row('u2', 'user', 'Include priorities'), row('a3', 'assistant', 'Checking'),
+    row('t4', 'tool_use', { toolName: 'Read', toolUseId: 't4', input: {} }),
+    row('a5', 'assistant', 'Summary', { turnCompleted: true, botTaskResults: [card] })];
+  const projected = bodies(input, false).filter(item => item.type === 'message');
+  expect(projected.map(item => item.message.body)).toEqual(['Include priorities', 'Summary']);
+  expect(projected.at(-1)?.message.source.agentMeta?.botTaskResults).toEqual([card]);
+  expect(bodies(input.slice(0, -1), false).some(item => item.type === 'message' && item.message.companion)).toBe(true);
+  expect(bodies([input[0], row('a6', 'assistant', 'Other reply', { turnCompleted: true })], false)
+    .some(item => item.type === 'message' && item.message.companion)).toBe(true);
 });

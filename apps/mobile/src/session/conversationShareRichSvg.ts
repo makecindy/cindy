@@ -198,7 +198,7 @@ export function layoutConversationShareRichBody(
                 top + padding,
                 cellWidth - padding * 2,
                 typeScale.footnote,
-                lineHeight.code,
+                lineHeight.bodySmall,
                 rowIndex === 0,
               ),
           );
@@ -249,7 +249,7 @@ export function layoutConversationShareRichBody(
           cursor + 12,
           width - 24,
           typeScale.footnote,
-          lineHeight.code,
+          lineHeight.bodySmall,
         ) +
         12;
       rectangles.push({

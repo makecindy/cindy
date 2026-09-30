@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+const localReady = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('../../local-model-runtime/preflight.js', () => ({ ensureManagedOllamaReadyForSession: localReady }));
 
 vi.mock('electron', () => ({
   app: {
@@ -804,12 +806,145 @@ describe('utility one-shot candidates', () => {
       reasoning_effort: 'low',
       messages: [{ role: 'user', content: 'generate' }],
     });
+    expect(vi.mocked(fetchMock).mock.calls[0]?.[1]?.headers).not.toHaveProperty('x-opencode-session');
   });
 
-  it('maps disabled thinking to Ollama reasoning_effort none', async () => {
+  it('attaches the OpenCode Go session header to an auxiliary chat request', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
-        id: 'cindy-local-ollama',
+        id: 'opencode-go',
+        name: 'OpenCode Go',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://opencode.ai/zen/go/v1',
+            wireProtocol: 'openai-chat',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          codex: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 1_000_000 }],
+        },
+      }],
+    } as never);
+    readCustomKey.mockReturnValue('go-secret');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({
+        choices: [{ message: { content: 'task name' } }],
+      }),
+    } as never);
+
+    const result = await requestExplicitUtilityText('name this task', {
+      providerId: 'opencode-go',
+      agentKind: 'codex',
+      model: 'deepseek-v4.1-flash',
+      maxTokens: 32,
+    });
+
+    expect(result).toMatchObject({ ok: true, text: 'task name' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://opencode.ai/zen/go/v1/chat/completions',
+      expect.anything(),
+    );
+    const headers = vi.mocked(fetchMock).mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers['x-opencode-session']).toMatch(/^[0-9a-f-]{36}$/);
+    expect(headers.Authorization).toBe('Bearer go-secret');
+  });
+
+  it('recognizes a preset-created provider after its id and endpoint changed', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'opencode-go-mirror',
+        name: 'OpenCode Go (mirror)',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://mirror.example/v1',
+            wireProtocol: 'openai-chat',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          codex: [{
+            id: 'deepseek-v4.1-flash',
+            name: 'DeepSeek V4.1 Flash',
+            contextWindow: 1_000_000,
+            catalogPresetId: 'opencode-go',
+          }],
+        },
+      }],
+    } as never);
+    readCustomKey.mockReturnValue('go-secret');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({ choices: [{ message: { content: 'task name' } }] }),
+    } as never);
+
+    const result = await requestExplicitUtilityText('name this task', {
+      providerId: 'opencode-go-mirror',
+      agentKind: 'codex',
+      model: 'deepseek-v4.1-flash',
+      maxTokens: 32,
+    });
+
+    expect(result).toMatchObject({ ok: true, text: 'task name' });
+    const headers = vi.mocked(fetchMock).mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers['x-opencode-session']).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('keeps the OpenCode Go session header on the minimal-body retry after a 400', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'opencode-go',
+        name: 'OpenCode Go',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: {
+            upstream: 'https://opencode.ai/zen/go/v1',
+            wireProtocol: 'openai-chat',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          codex: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 1_000_000 }],
+        },
+      }],
+    } as never);
+    readCustomKey.mockReturnValue('go-secret');
+    fetchMock
+      .mockResolvedValueOnce({ ok: false, status: 400, body: { cancel: async () => undefined } } as never)
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => JSON.stringify({ choices: [{ message: { content: 'task name' } }] }),
+      } as never);
+
+    const result = await requestExplicitUtilityText('name this task', {
+      providerId: 'opencode-go',
+      agentKind: 'codex',
+      model: 'deepseek-v4.1-flash',
+      maxTokens: 32,
+    });
+
+    expect(result).toMatchObject({ ok: true, text: 'task name' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstHeaders = vi.mocked(fetchMock).mock.calls[0]?.[1]?.headers as Record<string, string>;
+    const retryHeaders = vi.mocked(fetchMock).mock.calls[1]?.[1]?.headers as Record<string, string>;
+    expect(firstHeaders['x-opencode-session']).toBeTruthy();
+    expect(retryHeaders['x-opencode-session']).toBe(firstHeaders['x-opencode-session']);
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).not.toHaveProperty('thinking');
+  });
+
+  it.each(['cindy-local-ollama', 'cindy-local-llamacpp'])('starts the managed one-shot route before dispatch: %s', async (providerId) => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: providerId,
         name: 'Ollama',
         source: 'user',
         agents: ['codex'],
@@ -834,7 +969,7 @@ describe('utility one-shot candidates', () => {
     } as never);
 
     const result = await requestExplicitUtilityText('generate', {
-      providerId: 'cindy-local-ollama',
+      providerId,
       agentKind: 'codex',
       model: 'qwen3.8:27b',
       maxTokens: 32,
@@ -842,6 +977,8 @@ describe('utility one-shot candidates', () => {
     });
 
     expect(result).toMatchObject({ ok: true, text: 'local title' });
+    expect(localReady).toHaveBeenCalledWith({ providerId });
+    expect(localReady.mock.invocationCallOrder.at(-1)!).toBeLessThan(fetchMock.mock.invocationCallOrder[0]!);
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
     expect(body).toMatchObject({
       model: 'qwen3.8:27b',

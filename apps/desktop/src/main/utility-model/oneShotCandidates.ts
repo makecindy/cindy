@@ -25,9 +25,11 @@ import {
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
+import { withOpenCodeGoSessionHeader } from '../maker-host/opencode-go-session.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
-import { MANAGED_OLLAMA_PROVIDER_ID } from '../../shared/localModelRuntime.js';
+import { MANAGED_OLLAMA_PROVIDER_ID, isManagedSidecarProviderId } from '../../shared/localModelRuntime.js';
+import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
 import { parseAuxiliaryModelRef, type ParsedAuxiliaryModelRef } from '../../shared/auxiliaryModelChain.js';
 import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
 import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
@@ -760,6 +762,9 @@ async function requestExplicitProviderText(
   // which would silently turn a Claude request into a Codex request.
   const model = requestedModel || configuredModels.find((item) =>
     isModelSelectableForNewRoute(item, { userProvider: provider?.source === 'user' }))?.id || '';
+  // 预设身份随模型投影带出：从 OpenCode Go 预设创建后再改地址/复制连接时，运行时 id 与
+  // URL 都可能对不上，补会话头仍要认得出来（见 opencode-go-session.ts 的三路识别）。
+  const catalogPresetId = configuredModels.find((item) => item.id === model)?.catalogPresetId;
   const selectedRouting = agentKind ? provider?.routing[agentKind] : undefined;
   const transport: UtilityModelTransport =
     agentKind === 'codex' && selectedRouting?.wireProtocol !== 'openai-chat'
@@ -949,41 +954,52 @@ async function requestExplicitProviderText(
     model,
     transport,
     profile,
-    execute: (text, requestOpts) => requestCustomProviderText({
-      agentKind,
-      baseUrl: routing.upstream,
-      requestPath: routing.requestPath,
-      wireProtocol,
-      isOllama,
-      headers: routing.headerOverride,
-      credential: credential ?? '',
-      authStrategy,
-      model,
-      prompt: text,
-      maxTokens: requestOpts?.maxTokens,
-      timeoutMs: requestOpts?.timeoutMs,
-      reasoningEffort: requestOpts?.reasoningEffort,
-      disableReasoning: requestOpts?.disableReasoning,
-      signal: requestOpts?.signal,
-      systemPrompt: requestOpts?.systemPrompt,
-      responseInstructions: requestOpts?.responseInstructions,
-      beforeDispatch: requestOpts?.beforeDispatch
-        ? () => requestOpts.beforeDispatch!({ providerId: provider.id, agentKind, model })
-        : undefined,
-      credentialStillCurrent: requestOpts?.beforeDispatch
-        ? () => {
-            if (noAuth) return true;
-            if (isOAuth) {
-              return readCachedGenericOAuthAccessToken(
-                storedCustomProviderId(provider.id),
-                provider.auth.oauth,
-              ) === credential;
+    execute: async (text, requestOpts) => {
+      if (isManagedSidecarProviderId(provider.id)) {
+        requestOpts?.signal?.throwIfAborted();
+        await ensureManagedOllamaReadyForSession({ providerId: provider.id });
+        requestOpts?.signal?.throwIfAborted();
+      }
+      return requestCustomProviderText({
+        agentKind,
+        baseUrl: routing.upstream,
+        requestPath: routing.requestPath,
+        wireProtocol,
+        isOllama,
+        headers: withOpenCodeGoSessionHeader(routing.headerOverride, {
+          providerId: provider.id,
+          catalogPresetId,
+          upstream: routing.upstream,
+        }),
+        credential: credential ?? '',
+        authStrategy,
+        model,
+        prompt: text,
+        maxTokens: requestOpts?.maxTokens,
+        timeoutMs: requestOpts?.timeoutMs,
+        reasoningEffort: requestOpts?.reasoningEffort,
+        disableReasoning: requestOpts?.disableReasoning,
+        signal: requestOpts?.signal,
+        systemPrompt: requestOpts?.systemPrompt,
+        responseInstructions: requestOpts?.responseInstructions,
+        beforeDispatch: requestOpts?.beforeDispatch
+          ? () => requestOpts.beforeDispatch!({ providerId: provider.id, agentKind, model })
+          : undefined,
+        credentialStillCurrent: requestOpts?.beforeDispatch
+          ? () => {
+              if (noAuth) return true;
+              if (isOAuth) {
+                return readCachedGenericOAuthAccessToken(
+                  storedCustomProviderId(provider.id),
+                  provider.auth.oauth,
+                ) === credential;
+              }
+              return readCustomProviderKey(provider.id, agentKind) === credential;
             }
-            return readCustomProviderKey(provider.id, agentKind) === credential;
-          }
-        : undefined,
-      routeStillCurrent: requestOpts?.beforeDispatch ? routeStillCurrent : undefined,
-    }),
+          : undefined,
+        routeStillCurrent: requestOpts?.beforeDispatch ? routeStillCurrent : undefined,
+      });
+    },
   };
   return executeCandidates([candidate], prompt, [], opts);
 }

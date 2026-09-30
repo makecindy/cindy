@@ -102,7 +102,7 @@ export interface MessageRenderNormalizedMessage<
   settledAt?: string;
   /** Durable terminal lifecycle for an Agent/Task tool call. */
   agentTaskStatus?: AgentTaskTerminalStatus;
-  /** Host 在 SDK done 边界写入；每个 true 都是一条不应折入工作过程的正式回复。 */
+  /** Host 在 SDK done 边界写入。同一 user turn 的最后一次 seal 是最终答复；更早的 seal 只在带交付内容时留在工作过程外。 */
   turnCompleted?: boolean;
   /** tool 消息专用:配对 tool_result 提取出的产出媒体(驱动 tool_media 独立渲染项)。 */
   media?: readonly MessageRenderToolMediaLike[];
@@ -1612,10 +1612,18 @@ const MARKDOWN_LIST_ITEM_RE = /^[ \t]{0,3}(?:[-*+][ \t]+|\d{1,3}[.)][ \t]+)\S/gm
 const DELIVERY_PROSE_MIN_LIST_ITEMS = 3;
 
 /**
+ * 正文里的图片:配一句短说明发出的图也是交付成果。两端渲染器都支持 `![alt](url)` 与
+ * 带 src 的单个 raw HTML `<img>`(桌面 remarkHtmlImages、手机 messageMarkdown)。
+ * 只决定是否折叠,偶尔多认(如代码块里的 <img>)只会多显示一条,方向安全。
+ */
+const MARKDOWN_IMAGE_RE = /!\[[^\]\n]*\]\([^)\s]+(?:\s[^)]*)?\)/;
+const HTML_IMAGE_RE = /<img(?=[\s/>])[^<>]*\ssrc\s*=\s*["']?[^\s"'<>]+[^<>]*>/i;
+
+/**
  * 这段 assistant 正文是不是「交付内容」(而非进度旁白)。
  *
  * 判据刻意与位置无关:长度达阈值,或带块级 markdown 结构(标题 / 表格 /
- * ≥3 项列表)。两端共用这一份口径,不各自实现。
+ * ≥3 项列表),或内嵌图片。两端共用这一份口径,不各自实现。
  */
 export function isDeliveryProseText(text: string): boolean {
   const trimmed = text.trim();
@@ -1623,6 +1631,7 @@ export function isDeliveryProseText(text: string): boolean {
   if (trimmed.length >= DELIVERY_PROSE_MIN_LENGTH) return true;
   if (MARKDOWN_HEADING_RE.test(trimmed)) return true;
   if (MARKDOWN_TABLE_DIVIDER_RE.test(trimmed)) return true;
+  if (MARKDOWN_IMAGE_RE.test(trimmed) || HTML_IMAGE_RE.test(trimmed)) return true;
   // /g 正则不用 test():lastIndex 会在调用之间残留。
   const listItems = trimmed.match(MARKDOWN_LIST_ITEM_RE);
   return (listItems?.length ?? 0) >= DELIVERY_PROSE_MIN_LIST_ITEMS;

@@ -19,6 +19,20 @@ describe('ChatInput model source switching wiring', () => {
     expect(normalizeSourceText(windowsCheckoutSource)).toBe(chatInputSource);
   });
 
+  it('only the serialized unified panel skips the remote effort selector lock', () => {
+    const modelSelectorSource = normalizeSourceText(
+      readFileSync(resolve(__dirname, '..', 'components', 'new-chat', 'ModelSelector.tsx'), 'utf8'),
+    );
+    expect(modelSelectorSource).toContain('onEffortChange(effort, { serializedByPanel: true })');
+    const start = chatInputSource.indexOf('const handleEffortChange = useCallback(');
+    const body = chatInputSource.slice(start, chatInputSource.indexOf('\n  );\n', start));
+    expect(body).toContain('const lockSelector = options?.serializedByPanel !== true;');
+    expect(body).toContain('if (lockSelector) setRemoteSwitchInFlight(true);');
+    expect(body).toContain(
+      'if (lockSelector && isSessionScopeCurrent(sessionId, currentSessionIdRef.current))',
+    );
+  });
+
   it('uses the unified 90% switch-rebuild line instead of a harness compaction setting', () => {
     const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
     const end = chatInputSource.indexOf('// session-agent-switch', start);

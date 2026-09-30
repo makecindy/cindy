@@ -337,6 +337,9 @@ importers:
       docx:
         specifier: ^9.7.1
         version: 9.7.1
+      dotenv:
+        specifier: ^16.6.1
+        version: 16.6.1
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@types/better-sqlite3@7.6.13)(better-sqlite3@12.11.1)
@@ -373,6 +376,9 @@ importers:
       js-yaml:
         specifier: ^4.3.0
         version: 4.3.0
+      json5:
+        specifier: ^2.2.3
+        version: 2.2.3
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
@@ -6486,6 +6492,10 @@ packages:
 
   dotenv-expand@5.1.0:
     resolution: {integrity: sha512-YXQl1DSa4/PQyRfgrv6aoNjhasp/p4qs9FjJ4q4cQk+8m4r6k4ZSiEyytKG8f8W9gi8WsQtIObNmKd+tMzNTmA==}
+
+  dotenv@16.6.1:
+    resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
+    engines: {node: '>=12'}
 
   dotenv@9.0.2:
     resolution: {integrity: sha512-I9OvvrHp4pIARv4+x9iuewrWycX6CcZtoAu1XrzPxc5UygMJXJZYmBsynku8IkrJwgypE5DGNjDPmPRhDCptUg==}
@@ -17310,6 +17320,8 @@ snapshots:
       is-obj: 2.0.0
 
   dotenv-expand@5.1.0: {}
+
+  dotenv@16.6.1: {}
 
   dotenv@9.0.2: {}
 

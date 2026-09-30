@@ -1,6 +1,7 @@
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
+import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 /**
  * AgentInputCoordinator — main 侧排队输入事务协调器。
  *
@@ -65,6 +66,7 @@ import {
   buildMakerUserMessage,
   getAgentInputAttachmentBlockType,
   getAgentFacingText,
+  isAutomaticInputOriginKind,
   normalizeAgentInputClearBoundaryMs,
   parseAgentInputToolLoopDetails,
   projectionRetryText,
@@ -193,6 +195,8 @@ function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
 }
 
 export interface AgentInputSendOpts {
+  /** Main-owned identity of the zero-output user turn being replaced. */
+  retryUserClientId?: string;
   toolsDisabled?: boolean;
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: string;
   readonly [AUTO_REVIEW_USER_INTENT]?: string;
@@ -582,6 +586,8 @@ export interface AgentInputCoordinatorDeps {
 interface ActiveTurn {
   /** Retained after steering receipt cleanup until this turn ends. */
   latestSteeringClientId?: string;
+  /** Display provenance only; never changes input scheduling or execution. */
+  replyInputClientIds?: string[];
   item: AgentInputQueuedMessage | null;
   delivery: AgentInputDelivery;
   messageUuid: string;
@@ -976,10 +982,9 @@ function isSchedulerOriginItem(item: AgentInputQueuedMessage | null | undefined)
   return item?.origin?.kind === 'scheduler';
 }
 
-/** Orca and scheduler inputs are automation, not a fresh human intervention. */
+/** Scheduler / Orca / tool-sent session inputs are automation, not a fresh human intervention. */
 function isAutomaticOriginItem(item: AgentInputQueuedMessage | null | undefined): boolean {
-  const kind = item?.origin?.kind;
-  return kind === 'scheduler' || kind === 'orca';
+  return isAutomaticInputOriginKind(item?.origin?.kind);
 }
 
 function isUiContinuationItem(item: AgentInputQueuedMessage): boolean {
@@ -1094,6 +1099,16 @@ export class AgentInputCoordinator {
       && vendorGeneration !== active.vendorTurnGeneration) return null;
     // A human steering a private reply takes ownership of the resulting output.
     return active.latestSteeringClientId ?? active.item?.clientId ?? null;
+  }
+
+  /** Inputs consumed by this native turn, excluding queued work and stale generations. */
+  getActiveInputClientIds(sessionId: string, vendorGeneration?: number): string[] {
+    const active = this.states.get(sessionId)?.activeTurn;
+    if (!active || (vendorGeneration !== undefined && active.vendorTurnGeneration !== null
+      && vendorGeneration !== active.vendorTurnGeneration)) return [];
+    const item = active.item;
+    return [...new Set([...(active.replyInputClientIds ?? []),
+      item?.clientId, item?.retrySourceClientId, item?.supersedesUserClientId].filter((id): id is string => !!id))];
   }
 
   getProjection(sessionId: string): AgentInputProjection {
@@ -2430,6 +2445,9 @@ export class AgentInputCoordinator {
       steerVendorTurnGeneration !== null &&
       this.deps.getTurnGeneration?.(sessionId) === steerVendorTurnGeneration;
     accepted.activeTurn = {
+      // Only accepted steering participates. Pending/rejected delivery cannot claim an unrelated final.
+      replyInputClientIds: sameVendorTurn
+        ? this.getActiveInputClientIds(sessionId, steerVendorTurnGeneration ?? undefined) : undefined,
       item,
       delivery: 'steer',
       messageUuid,
@@ -4546,6 +4564,7 @@ export class AgentInputCoordinator {
       // post-dispatch acknowledgements must remain older than that marker.
       const preVendorDispatchAt = Math.max(0, Date.now() - 1);
       const result = await this.deps.sendToAgent(sessionId, makerUserMessage, head.createOpts, {
+        ...(head.supersedesUserClientId ? { retryUserClientId: head.supersedesUserClientId } : {}),
         [AUTO_REVIEW_SOURCE_CONTENT]: head.autoReviewUserText ?? '',
         messageUuid: active.messageUuid,
         userName: head.userName,
@@ -4694,6 +4713,18 @@ export class AgentInputCoordinator {
         return;
       }
       if (!active.persisted) {
+        if (head.origin?.kind === 'scheduler' && err instanceof SchedulerQueuedPreparationError) {
+          // The scheduler already settled this run as failed. Do not restore its
+          // prompt without the one-shot route/window preparation it required.
+          latest.activeTurn = null;
+          this.clearCredentialSwitchWait(latest);
+          this.notifyRejectedUserTurn(sessionId, head);
+          this.deps.onDiscardedQueuedMessage?.(sessionId, head);
+          this.emit(sessionId);
+          this.scheduleDrain(sessionId, 'scheduler-preparation-failed');
+          this.deps.onQueueEmptied?.(sessionId);
+          return;
+        }
         if (isSessionRunningError(err)) {
           this.deferQueueHeadAfterSessionRunning(
             sessionId,
@@ -6280,6 +6311,9 @@ export class AgentInputCoordinator {
             uuid: active.messageUuid,
             ...(item.sharedTaskAuthor ? { sharedTaskAuthor: item.sharedTaskAuthor } : {}),
             ...(item.autoReviewUserText !== undefined ? { autoReviewUserText: item.autoReviewUserText } : {}),
+            // 与 drain 派发落库（makerSendTransaction）同口径：工具 / Orca / 自动化注入的
+            // steer 也要保留来源，接收方才能渲染来源标签。
+            ...(item.origin ? { origin: item.origin } : {}),
             sdkSessionId,
             delivery: active.delivery,
             ...(transcriptParentUuid ? { transcriptParentUuid } : {}),

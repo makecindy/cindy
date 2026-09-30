@@ -532,6 +532,38 @@ describe('createResponsesChatHandler', () => {
     expect(res.ended).toBe(true);
   });
 
+  it('resumes completed web search history with one upstream request', async () => {
+    const action = { type: 'search', queries: ['image editor', 'canvas export'] };
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body)).messages).toEqual([
+        { role: 'assistant', content: '[completed web search]\n' + JSON.stringify(action) },
+        { role: 'assistant', content: 'Findings: https://example.com/docs' },
+        { role: 'user', content: 'Continue' },
+      ]);
+      return streamResponse([{ choices: [{ delta: { content: 'Continuing' }, finish_reason: 'stop' }] }]);
+    });
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1', buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: {
+        model: 'test-model',
+        input: [
+          { type: 'web_search_call', id: 'ws_history', status: 'completed', action },
+          { type: 'message', role: 'assistant', content: 'Findings: https://example.com/docs' },
+          { type: 'message', role: 'user', content: 'Continue' },
+        ],
+      },
+      res: res as never,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(res.status).toBe(200);
+    expect(res.chunks.join('')).toContain('event: response.completed');
+    expect(res.chunks.join('')).toContain('Continuing');
+  });
+
   it('drops an unsupported built-in web_search tool and continues upstream', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));

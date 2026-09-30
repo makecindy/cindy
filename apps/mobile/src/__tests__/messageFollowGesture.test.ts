@@ -66,6 +66,8 @@ function harness() {
     readingPositionActiveRef: ref(() => true),
     initialRevealAnimationRef: ref<{ stop: () => void } | null>({ stop: vi.fn() }),
     historyPrependTransactionRef: ref(null), nativeScrollEventSequenceRef: ref(0),
+    // Companion receipt behavior is covered by the mounted MessageRenderer tests.
+    acknowledgeCompanionReadRef: ref(vi.fn()),
     shareSelectionActiveRef: ref(false),
     scrollMetricsRef: ref({ contentHeight: 2000, offsetY: 1200, viewportHeight: 800 }),
   };

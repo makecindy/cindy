@@ -13,7 +13,7 @@ export interface CompanionProfileNativeViewProps {
   onChange(values: ProfileValues): void; onSubmit(panel: ProfilePanel, confirmed?: boolean): void;
   onConfirm(panel: ProfilePanel | null): void; onRetry(): void; onDiscard(reload: boolean): void;
   onEditor(resourceId: string): void; onEditorPanel(panel: ProfilePanel): void;
-  onSearch(): void; onAutomation(): void;
+  onSearch(): void;
 }
 // SwiftUI is isolated from Android's bundle. The shared component owns all draft/save logic.
 export function CompanionProfileNativeView(_props: CompanionProfileNativeViewProps) { return null; }

@@ -24,7 +24,7 @@ import { applyRuntimeSetModelChange, type RuntimeSetModelMaker } from '../runtim
  * 失败则不发送这条消息、不回退旧供应商，并把消息退回队列等用户重试。
  *
  * 本文件驱动真实单元，不做 register.ts 源码字符串断言：
- *  - `applyRuntimeSetModelChange`：`handleSetModel` 实际调用的应用事务（产出 runtimeRetired）；
+ *  - `applyRuntimeSetModelChange`：`handleSetModel` 实际调用的应用事务（产出 retiredRuntime）；
  *  - `createPiRetiredRouteWindowGuard`：退役 route 的待核验登记与发送前核验；
  *  - `createContextOverflowRollover().prepareModelWindowSwitch`：#3601 的缩窗事务本体；
  *  - `createMakerSendTransaction().sendToAgentAccepted`：真实发送事务（懒创建 → 发送）。
@@ -61,6 +61,13 @@ async function retireOldPiRuntime(): Promise<void> {
       remoteHostId: null,
       model: OLD_MODEL,
       setModel: vi.fn(async () => {}),
+      // 上游退役判定的权威来源：Pi 自己声明这次换模需要重建原生会话。
+      previewModelSwitch: vi.fn(async () => ({
+        action: 'rebuild' as const,
+        targetContextWindow: 100_000,
+        windowVerified: false,
+        reason: 'retired route test',
+      })),
     }),
     listActiveSessions: () => [
       { id: SESSION_ID, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => false },
@@ -77,7 +84,7 @@ async function retireOldPiRuntime(): Promise<void> {
       clearPendingCredentialSwitch: vi.fn(),
       wakeSessionInputQueue: vi.fn(),
     }),
-  ).resolves.toEqual({ status: 'applied', runtimeRetired: true });
+  ).resolves.toEqual({ status: 'applied', retiredRuntime: true });
   expect(getSessionProvider(SESSION_ID)).toBe(NEW_PROVIDER);
 }
 
@@ -192,7 +199,7 @@ function createFlow(
     createDbMessage: vi.fn(async () => {}),
     guard,
     deps: undefined as unknown as MakerSendTransactionDeps,
-    /** register.ts 在 apply 报出 runtimeRetired 的同一位置登记待核验。 */
+    /** register.ts 在 apply 报出 retiredRuntime 的同一位置登记待核验。 */
     recordPendingCheck() {
       guard.record(SESSION_ID, {
         model: NEW_MODEL,

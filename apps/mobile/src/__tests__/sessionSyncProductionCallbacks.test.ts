@@ -36,6 +36,20 @@ function deferred<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
+
+function historyAvailable(status: string, presence: boolean | null): boolean {
+  let expression: ts.Expression | undefined;
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'remoteHistoryAvailable') {
+      expression = node.initializer;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  if (!expression) throw new Error('Missing production history availability gate');
+  return new Function('status', 'getPresenceAvailability', 'deviceId',
+    `return ${expression.getText(source)};`)(status, () => presence, 'd1');
+}
 const tick = () => new Promise((done) => setTimeout(done, 0));
 const session = { id: 's1', updatedAt: '2026-09-06T00:00:00Z', _count: { messages: 100 } };
 const page = { messages: [{ id: 'm1' }], limit: 1, reducedByPayloadTooLarge: false };
@@ -130,6 +144,31 @@ function fixture(reopen = false, remoteHistoryAvailable = true) {
 }
 
 describe('production session recovery callbacks', () => {
+  it.each([null, true])('recovers cached history with an online relay and presence=%s', async (presence) => {
+    // A failed roster request leaves presence unknown even after link/subscription
+    // recovery. Evaluate the real page gate and then execute its real sync callback.
+    const f = fixture(true, historyAvailable('online', presence));
+    await f.sync();
+    expect(f.maker.getSession).toHaveBeenCalledTimes(1);
+    expect(f.maker.listMessages).toHaveBeenCalledTimes(1);
+    expect(f.state.rows).toEqual(page.messages);
+    expect(f.state.readAck).not.toBeNull();
+  });
+
+  it.each([
+    ['online', false], ['connecting', null], ['connecting', true],
+    ['stopped', null], ['stopped', true],
+  ] as const)('preserves cached history without remote reads when status=%s presence=%s', async (status, presence) => {
+    const f = fixture(true, historyAvailable(status, presence));
+    const rows = f.state.rows;
+    await f.sync();
+    await f.earlier();
+    expect(f.state.rows).toBe(rows);
+    expect(f.maker.getSession).not.toHaveBeenCalled();
+    expect(f.maker.listMessages).not.toHaveBeenCalled();
+    expect(f.state.readAck).toBeNull();
+  });
+
   it.each(['id', 'source', 'host'])('rejects a roster-linked task with the wrong %s before authorizing controls', async (mismatch) => {
     const f = fixture(); f.bindings.params.resourceKind = 'bot';
     f.maker.getSession.mockResolvedValue({ ...session, id: mismatch === 'id' ? 'other' : 's1', source: mismatch === 'source' ? 'manual' : 'bot' } as typeof session);

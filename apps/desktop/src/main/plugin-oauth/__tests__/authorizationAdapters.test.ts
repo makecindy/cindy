@@ -97,13 +97,14 @@ function harness(request: PluginAuthorizationRequest) {
     bind,
     request: (peer, raw) => tx.request(peer, raw),
   });
+  const observedAtMs = Date.now();
   const target = {
     ...identity.key.descriptor,
     deviceId: 'cloud-device',
     realm: 'global' as const,
     membershipId: 'membership',
-    observedAtMs: Date.now(),
-    expiresAtMs: Date.now() + 60_000,
+    observedAtMs,
+    expiresAtMs: observedAtMs + 60_000,
   };
   const invoke = async (raw: unknown) => {
     const reply = await authenticated.request('desktop', raw);

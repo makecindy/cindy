@@ -497,4 +497,12 @@ describe("ConversationShareSvg", () => {
       conversationShareSvgRenderSize({ height: 40_000, width: 390 }),
     ).toEqual({ height: 1, scale: 1, sourceTooLarge: true, width: 1 });
   });
+
+  it("limits Android SVG bitmaps by physical pixels on high density screens", () => {
+    const layout = { height: 6_000, width: 390 };
+    const renderSize = conversationShareSvgRenderSize(layout, 3);
+    expect(renderSize.sourceTooLarge).toBe(false);
+    expect(renderSize.width * renderSize.height * 3 ** 2).toBeLessThanOrEqual(12_000_000);
+    expect(renderSize.width).toBeLessThan(conversationShareSvgRenderSize(layout).width);
+  });
 });

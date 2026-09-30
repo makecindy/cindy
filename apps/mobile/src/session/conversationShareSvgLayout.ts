@@ -67,6 +67,7 @@ export interface ConversationShareSvgLayout {
 
 export function conversationShareSvgRenderSize(
   layout: Pick<ConversationShareSvgLayout, "height" | "width">,
+  pixelRatio = 1,
 ): { height: number; scale: number; sourceTooLarge: boolean; width: number } {
   const sourceTooLarge = layout.width * layout.height > MAX_OUTPUT_PIXELS;
   if (sourceTooLarge) {
@@ -74,13 +75,17 @@ export function conversationShareSvgRenderSize(
   }
   const scale = Math.min(
     DEFAULT_EXPORT_SCALE,
-    Math.sqrt(MAX_OUTPUT_PIXELS / Math.max(1, layout.width * layout.height)),
+    // SvgView allocates its bitmap in physical pixels, not React Native points.
+    Math.sqrt(
+      MAX_OUTPUT_PIXELS /
+        Math.max(1, layout.width * layout.height * Math.max(1, pixelRatio) ** 2),
+    ),
   );
   return {
-    height: Math.max(1, Math.ceil(layout.height * scale)),
+    height: Math.max(1, Math.floor(layout.height * scale)),
     scale,
     sourceTooLarge,
-    width: Math.max(1, Math.ceil(layout.width * scale)),
+    width: Math.max(1, Math.floor(layout.width * scale)),
   };
 }
 

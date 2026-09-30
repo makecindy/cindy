@@ -124,6 +124,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  if (vi.isMockFunction(os.homedir)) vi.mocked(os.homedir).mockRestore();
   if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   if (originalXdtUserDataDir === undefined) delete process.env.XDT_USER_DATA_DIR;
@@ -1908,9 +1909,12 @@ describe('forkSessionAtMessage', () => {
     });
   });
 
-  it('claude path: locates JSONL under XDT_USER_DATA_DIR claude-home when main env has no CLAUDE_CONFIG_DIR', async () => {
+  it('claude path: falls back to the legacy dev XDT_USER_DATA_DIR/claude-home when ~/.claude lacks the JSONL', async () => {
     const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-user-data-'));
     tempDirs.push(userDataDir);
+    const emptyHome = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-empty-home-'));
+    tempDirs.push(emptyHome);
+    vi.spyOn(os, 'homedir').mockReturnValue(emptyHome);
     delete process.env.CLAUDE_CONFIG_DIR;
     process.env.XDT_USER_DATA_DIR = userDataDir;
     await writeClaudeJsonlInConfigDir(

@@ -53,7 +53,7 @@ describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
     const state = resolveSessionTailBanner({ messages: [row(raw)], session: null, projection: { error: null, credentialSwitchWait: null }, isSessionStreaming: false, continuationInFlight: false, sessionMetadataSyncedForConnection: true, interruptAcked: false, hiddenErrorClientIds: new Set() });
     expect(state?.kind).toBe('error-tail');
     await act(async () => root.render(surface === 'live'
-      ? <InlineQueueSection projection={{ error: raw, errorRetryText: 'original-welcome' } as InputProjection} readOnlyReason={null} errorRecoveryReadOnlyReason={null} onRetryError={retry} onClearError={vi.fn()} onResume={vi.fn()} />
+      ? <InlineQueueSection projection={{ error: raw, errorRetryText: 'original-welcome' } as InputProjection} readOnlyReason={null} onRetryError={retry} onClearError={vi.fn()} onResume={vi.fn()} />
       : <SessionTailBanner state={state!} onContinue={retry} onDismiss={vi.fn()} />));
     expect(host.textContent).toContain(i18n.t('session.tail.requestFormatError'));
     expect(host.textContent).not.toContain('Responses-Lite');
@@ -120,7 +120,7 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
         const retry = vi.fn();
         const clear = vi.fn();
         await act(async () => root.render(surface === 'live'
-          ? <InlineQueueSection projection={{ error: message, errorRetryText: 'original user message' } as InputProjection} readOnlyReason={null} errorRecoveryReadOnlyReason={null} onRetryError={retry} onClearError={clear} onResume={vi.fn()} />
+          ? <InlineQueueSection projection={{ error: message, errorRetryText: 'original user message' } as InputProjection} readOnlyReason={null} onRetryError={retry} onClearError={clear} onResume={vi.fn()} />
           : <SessionTailBanner state={state!} onContinue={retry} onDismiss={clear} />));
         expect(host.textContent).toContain(i18n.t(key));
         expect(host.textContent).not.toContain('upstream diagnostic');
@@ -192,7 +192,7 @@ describe.each(SUPPORTED_LOCALES)('WeChat auto-review guidance in %s', locale => 
       projection={{ error: message, errorRetryText: 'original user message' } as InputProjection}
       sessionSource="wechat"
       readOnlyReason={null}
-      errorRecoveryReadOnlyReason={null}
+     
       onRetryError={vi.fn()}
       onClearError={vi.fn()}
       onResume={vi.fn()}

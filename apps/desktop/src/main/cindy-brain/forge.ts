@@ -2507,6 +2507,16 @@ const r = await cindy.send({
 - 同步返回,没有异步单;每插件在途上限与媒体代办共用;详情页会单列一行
   「可把文字送去算成向量」并写明单次条数上限。
 
+## 4.0.3a 只读 Agent 模型目录
+
+设置页、panel、mainView 和电子脑均可 GET 同源 \`/agent-models\`（不接受参数）。
+返回 \`{ok:true,models:[{id,name,agent,providerId,providerName,efforts,defaultEffort,visible}]}\`。
+visible 跟随当前账号模型选择器；建议默认显示可见项，隐藏项由用户展开。旧 Host 缺此字段时兼容原列表。
+每项为独立的模型×框架×来源；空 efforts 与 null defaultEffort 表示未声明，不得猜测。
+只包含本机已连接且可用于新任务的模型，不代表远程 SSH 目录。读取不调用模型、
+不触发凭证认领或上游发现，不返回凭证、账号 identity 或 endpoint；不需要新增 manifest 权限。
+旧 Host 可能返回 404，插件应明确提示升级；503 时提供重试。运行前再次核验选定来源。
+
 ## 4.0.4 媒体模型配置与调用边界
 
 媒体上层能力由插件定义，Cindy Core 只提供两项低级能力：
@@ -3091,7 +3101,10 @@ PUT/DELETE 一律 405(派生身份不可配置)。
 两种 token 都只在 Main 的 networkSlot 内存中进入请求头,插件沙箱、settings 页面、
 Renderer、Agent、KV 和日志都拿不到。设置页 GET \`/secrets\` 对这条 key 额外返回
 \`hostSource:"gh-cli"\` 与 \`hostAvailable:boolean\`,其中 \`saved/tail\` 仍只描述备用
-PAT；页面可据此展示“已检测到 gh，可直接使用”，但不能读取 gh 的账号或 token。
+PAT。支持宿主管理连接入口时还返回可选的 \`hostManagedSetup:true\`：此时宿主统一
+展示账号状态、安装与登录入口，settingsHtml 不再重复渲染这些内容，只保留备用 PAT
+配置（可折叠到“其他连接方式”）。字段缺失或为 false 时保留旧版设置页的连接提示，
+可根据 \`hostAvailable\` 展示“已检测到 gh，可直接使用”；不能读取 gh 的账号或 token。
 此来源的注入形态固定为 \`api.github.com\` 的
 \`Authorization: Bearer {value}\`,不允许 exchange,也不要放进 \`setup.requires\`。
 
@@ -3950,6 +3963,26 @@ const result = response.result;
 Node 请求及其子进程一并结束，晚到的授权或子进程启动会被拒绝。只传旧 \`callId\`
 或不启用开关都保持既有独立 RPC 生命周期，不自动弹授权卡、不回收后台进程；
 设置页等无 tool-call 的入口不能伪造或复用调用编号。
+
+#### 下载公开大文件与进度
+
+声明 node 和 network.hosts 后可用 cindy.downloads.start({id,url,sha256,bytes})；
+只接受声明的 HTTPS 主机（每次重定向复核），不发送 Cookie、凭证或自定义请求头。
+SHA-256 和精确字节数必填，单文件最多 8 GiB。下载从获得队列槽位起最多 2 小时（含重试，不计排队），不改变 Node 调用期限。返回 {ok:true,token,bytes,sha256,fromCache}，
+没有宿主路径。取消用 cindy.downloads.cancel({id})。
+订阅 onHostMessage 的 download-progress 事件：data 含 id、phase、loaded、total、speedBps；
+phase 为 queued/downloading/verifying/retrying/completed/failed/cancelled，retrying 另含 attempt、delayMs。
+无 loaded/total 时显示不确定进度，下载成功不等于解包成功。
+
+将 token 放入 cindy.node.request 的 downloadTokens，例如 {archive: token}；params 必须是对象且
+不能自带 downloads。Host 校验同账号、同插件、批准身份与文件身份后，仅向 Node 注入
+params.downloads.archive。Node 在本次 RPC 结束前读取或复制文件，不得把宿主路径回传面板或写进日志。
+旧请求不带 downloadTokens 时保持原有 params 语义。旧宿主无 downloads 时提示升级。
+
+下载队列与宿主更新隔离，传输逐块写盘并支持校验、重试与续传。每账号所有插件的缓存
+合计最多 16 GiB（含在途预留及每项 64 KiB 管理空间）；不淘汰正在下载或被 Node RPC 借用的文件，满额且无可回收项时失败。
+缓存可被回收，重启后 token 失效，重新 start 可复用经校验的文件。卸载插件回收其下载缓存；
+停用、账号切换或批准身份改变会拒绝旧凭据，不增加用户授权步骤。
 
 #### Node Worker 的持久化凭证绑定
 

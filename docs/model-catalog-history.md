@@ -3,6 +3,38 @@
 > 参考记录，不是当前配置或部署状态。当前维护规则见 [模型配置与下发](dev-rules/model-catalog-maintenance.md)。
 > 下列文字记录各批次当时的事实，不能相互当作后续状态的证明。引用时须带日期、来源和验证范围。
 
+## 第三方预设与服务端对齐（2026-09-26）
+
+依据各厂商官方文档（2026-09-26 核对）处理下线、别名与不存在的型号，并以线上服务端推荐清单为基础
+与客户端对齐（连接设置沿用客户端的原生协议地址）：
+
+- 百炼 Token Plan：`qwen3.8-max-preview` 已下线（旧 id 路由到 `qwen3.8-max`），改为 `qwen3.8-max`；
+  按官方清单补 Qwen3.8-Flash、DeepSeek-V4.1-Flash、GLM-5.3；团队版删去 10-10 下架的 DeepSeek-V3.2。
+  Coding Plan 改为官方推荐的 Qwen3.7-Plus、Qwen3.6-Plus、Kimi K2.5、GLM-5、MiniMax-M2.5，保留两个 Coder。
+  窗口取官方最大输入，默认开思考的型号取思考模式最大输入（Qwen3.x 为 983,616）。
+- GLM Coding Plan：官方只支持 `glm-5.3`、`glm-5.3-flash`，5.2/5.1 已路由到 5.3；Claude Code 用官方
+  `[1m]` 写法，删去文档中不存在的 `glm-5.2[1m]`。
+- DeepSeek：`deepseek-v4-flash` 为临时别名，改用官方推荐的 `deepseek-flash`（1,048,576，支持图片）。
+- OpenCode Go：MiMo V2.5 于 2026-10-21 下线且无转发，改为 MiMo-V2.6-Pro / Flash，并补兼容层配置。
+- OpenRouter：删去平台上不存在的 `qwen/qwen3.8-max`。
+- Kimi Code：`api.kimi.com` 为国内地址、`api.kimi.ai` 为海外地址，均为官方地址，不改。
+- Codex 桥接图片白名单补上官方确认支持图片的 Kimi（Moonshot / Kimi Code）与 Qwen 型号。
+- DeepSeek 直连条目以 `deepseek-flash` 为首条路由，`deepseek-v4-flash` 旧别名路由保留在后，只供已有
+  连接解析参考价。两条路由都不在路由级声明图片输入（路由默认值会作用到 Codex 的 Chat 桥接），
+  图片能力按预设各引擎声明。
+- 客户端 Registry revision 为 `2026-09-26T12:00:00.005Z`：服务端 `2026-09-26T12:00:00.004Z` 不含
+  客户端独有、需先随客户端发布的 Grok 4.7 Fast（#5060），两份内容不同故使用不同 revision。
+
+## 订阅默认只显示最新一代（2026-09-26）
+
+客户端离线 Registry revision 更新为 `2026-09-26T12:00:00.000Z`。GPT 订阅默认只显示
+GPT-6 Sol / Luna / Astra，GPT-5.6 Sol / Terra / Luna 标记 `defaultEnabled: false`；
+Claude 订阅默认显示各系列最新版 Opus 5.5、Fable 5.1、Sonnet 5、Haiku 4.5、Mythos 5，
+Opus 5、Fable 5、Opus 4.8 标记不默认显示。所有与订阅或其他供应商共用条目的 XD 路由
+（Claude 9 个、DeepSeek V4 Pro/Flash、GPT-5.4 Nano，共 13 个）拆为独立 `xd/*` 条目，
+沿用改动前的显示设置；对比 50 条 XD 路由的解析资料，拆分前后无差异。
+用户已有显示开关不变。Server 正本需同步同一改动后才会下发。
+
 ## GPT-6 Sol / Luna 与 Claude Opus 5.5（2026-09-23）
 
 客户端离线 Registry revision 更新为 `2026-09-23T00:00:00.003Z`，新增

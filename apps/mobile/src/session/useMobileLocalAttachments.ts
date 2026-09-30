@@ -26,7 +26,6 @@ import { canBrowsePhotoLibraryDirectly } from '@/session/photoLibraryPolicy';
 import {
   MOBILE_MAX_ATTACHMENTS,
   assertMobileDocumentSize,
-  categorizeMobileAttachment,
 } from '@/session/attachments';
 import { assertMobileImageSize, buildMobileImageAttachmentCandidate } from '@/session/mobileImageAttachment';
 import { preprocessMobileImageForUpload } from '@/session/mobileImagePreprocess';
@@ -295,6 +294,8 @@ export function useMobileLocalAttachments(
           getToken: () => optionsRef.current.getAccessToken(),
         });
         if (candidate.cleanupLocalUris) void candidate.cleanupLocalUris(localUris).catch(() => undefined);
+        // 结果被拒收 = 任务被放弃:让自行生成输入文件的调用方回收(见 onAbandoned)。
+        try { candidate.onAbandoned?.(); } catch { /* 回收失败不影响管线 */ }
         return;
       }
       // 发送后气泡的本地缩略图兜底:消息里持久化的是 cindy-oss-attach:// 中转引用,
@@ -329,6 +330,7 @@ export function useMobileLocalAttachments(
       uploadedSourcesRef.current.set(attachment.id, {
         ...candidate, uri: stageUri, name: attachment.name, mimeType: attachment.mimeType,
         size: attachment.size, resolve: undefined, skipPreprocess: true, cleanupLocalUris: undefined,
+        onAbandoned: undefined,
       });
       optionsRef.current.onUploaded(attachment, deliveredCandidate, localId);
       if (candidate.cleanupLocalUris) {
@@ -380,7 +382,13 @@ export function useMobileLocalAttachments(
     candidates: readonly MobileLocalAttachmentUploadCandidate[],
     opts: { token: string | Promise<string | null> },
   ) => {
-    if (!isAttachmentScopeActive()) return;
+    if (!isAttachmentScopeActive()) {
+      // 作用域已失效,任务不会入队:视同放弃,让自行生成输入文件的调用方回收。
+      for (const candidate of candidates) {
+        try { candidate.onAbandoned?.(); } catch { /* 回收失败不影响管线 */ }
+      }
+      return;
+    }
     controller.enqueue(
       candidates.map((candidate) => ({
             ...candidate,
@@ -501,13 +509,6 @@ export function useMobileLocalAttachments(
         optionsRef.current.onError(t('composer.upload.noFileRead'));
         return;
       }
-      // 类型白名单同步校验:不支持的类型即时报错,不进托盘、不触发上传
-      // (上传层还有同口径兜底,防 OSS 孤儿)。
-      if (!categorizeMobileAttachment(name)) {
-        optionsRef.current.onError(t('composer.upload.fileTypeUnsupported'));
-        return;
-      }
-
       const size = typeof asset.size === 'number' && Number.isFinite(asset.size) && asset.size > 0
         ? asset.size
         : 0;

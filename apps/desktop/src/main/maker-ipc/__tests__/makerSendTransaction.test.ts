@@ -673,7 +673,7 @@ describe('maker SEND transaction', () => {
       .toBeUndefined();
   });
 
-  it('links attachment messages to the accepted Pi transcript entry only for Pi attachments', async () => {
+  it('links both attachment and text inputs to accepted Pi entries for exact retries', async () => {
     const { deps, session } = createDeps();
     session.agentKind = 'pi';
     const transaction = createMakerSendTransaction(deps);
@@ -712,7 +712,15 @@ describe('maker SEND transaction', () => {
         },
       },
     );
-    expect(deps.linkPiUserEntry).toHaveBeenCalledTimes(1);
+    expect(deps.linkPiUserEntry).toHaveBeenCalledTimes(2);
+    expect(deps.linkPiUserEntry).toHaveBeenLastCalledWith('session-1', 'plain-client', 'pi-user-entry');
+    deps.readPiUserEntry = vi.fn(async () => 'pi-user-entry');
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: 'Plain text' }, undefined, {
+      retryUserClientId: 'plain-client',
+      persistUserMessage: { clientId: 'retry-client', content: 'Plain text' },
+    });
+    expect(deps.readPiUserEntry).toHaveBeenCalledWith('session-1', 'plain-client');
+    expect(vi.mocked(session.send).mock.lastCall?.[1]?.retryTranscriptUserEntryId).toBe('pi-user-entry');
   });
 
   it('threads scheduler origin into session.send opts and persisted agentMeta', async () => {

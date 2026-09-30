@@ -201,3 +201,18 @@ it('keeps appended result receipts visible while the teammate is busy, across hi
   expect(result.filter(item => item.type === 'message' && item.message.systemCardType === 'bot-session-task-result').map(item => item.key))
     .toEqual(['msg-result-1', 'msg-result-2']);
 });
+
+it('nests only explicitly bound results, preserving original anchor and human message order', () => {
+  const card = { v: 1 as const, role: 'delegation-result' as const, delegationId: 'job', fromBotId: 'bot',
+    fromBotName: 'Cindy', toBotId: null, toBotName: '', parentSessionId: 'chat', childSessionId: 'child', objective: 'Report',
+    result: { runSequence: 1, status: 'completed' as const, text: 'Report contents', artifacts: [] } };
+  const receipt = message('receipt', 'assistant', '', { systemCardType: 'bot-session-task-result', systemCardData: card });
+  const anchor = message('anchor', 'assistant', '', { systemCardType: 'bot-session-task' });
+  const final = message('final', 'assistant', 'Summary', { turnCompleted: true, botTaskResults: [card] });
+  const input = [anchor, receipt, message('human', 'user'), message('progress', 'assistant'), tool('t'), final];
+  expect(allKeys(project(input, false))).toEqual(['msg-anchor', 'msg-human', 'msg-final']);
+  expect(final.message.botTaskResults).toEqual([card]);
+  expect(allKeys(project(input.slice(0, -1), false))).toContain('msg-receipt');
+  expect(allKeys(project([receipt, message('unrelated', 'assistant', 'Other', { turnCompleted: true })], false))).toContain('msg-receipt');
+  expect(input[1]).toBe(receipt);
+});

@@ -63,7 +63,7 @@ export function useRemoteModelFavorites(deviceId?: string) {
       }
     });
     const offResponsive = api.onResponsivenessChanged?.((event) => {
-      if (event.deviceId === deviceId) {
+      if (event.deviceId === deviceId && !event.unresponsive && event.recovered !== false) {
         void refresh();
       }
     });

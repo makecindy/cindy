@@ -43,6 +43,8 @@ export interface BotCollaborationMeta {
   /** 委派目标摘要，用于卡片折叠态文案。 */
   objective: string;
   result?: {
+    /** Task title at completion; older receipts fall back to the known task title. */
+    title?: string;
     /** Child task directory on its host; used to resolve remote artifact links. */
     workingDir?: string;
     runSequence: number;
@@ -90,6 +92,7 @@ export function readBotCollaborationMeta(value: unknown): BotCollaborationMeta |
   if (receipt.role === 'delegation-result' && (!receipt.result || !Number.isSafeInteger(receipt.result.runSequence)
     || receipt.result.runSequence < 1 || !['completed', 'failed', 'cancelled', 'timed-out'].includes(receipt.result.status)
     || (receipt.result.workingDir !== undefined && typeof receipt.result.workingDir !== 'string')
+    || (receipt.result.title !== undefined && typeof receipt.result.title !== 'string')
     || (receipt.result.error !== undefined && typeof receipt.result.error !== 'string')
     || typeof receipt.result.text !== 'string' || !Array.isArray(receipt.result.artifacts)
     || receipt.result.artifacts.some((file) => !file || typeof file.absolutePath !== 'string'))) return null;
@@ -177,4 +180,30 @@ export function placeBotTaskCardsAfterIntroduction<T>(
   }
   flush();
   return output;
+}
+
+/** Only host-bound, frozen receipts may become attachments to a sealed reply. */
+export function readBotTaskResults(value: unknown): BotCollaborationMeta[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap(raw => {
+    const card = readBotCollaborationMeta(raw);
+    if (card?.role !== 'delegation-result' || !card.result) return [];
+    const key = botTaskResultKey(card);
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [card];
+  });
+}
+
+export function botTaskResultKey(card: BotCollaborationMeta): string {
+  return BOT_DELEGATION_CLIENT_ID.resultRun(card.delegationId, card.result!.runSequence);
+}
+
+/** Completion ids are host-generated; never parse the model's prose for ownership. */
+export function taskResultClientIdForInput(clientId: string): string | null {
+  const match = /^bot-delegation-completion:([^:]+)(?::([1-9]\d*))?$/.exec(clientId);
+  if (!match) return null;
+  const run = match[2] ? Number(match[2]) : 1;
+  return Number.isSafeInteger(run) ? BOT_DELEGATION_CLIENT_ID.resultRun(match[1], run) : null;
 }

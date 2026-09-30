@@ -1,3 +1,6 @@
+import { CompanionLearningFooter } from './CompanionLearningFooter';
+import { CompanionTaskResultCard } from './CompanionTaskResultCard';
+import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { AgentErrorDetails } from './AgentErrorDetails';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { CompanionMessageActions } from './CompanionMessageActions';
@@ -14,9 +17,10 @@ import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { sharedTaskAuthorName } from '@cindy/maker-shared';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime } from '@cindy/maker-shared/botTimeline';
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
+import { CompanionEntering } from '@/session/CompanionEntering';
 import { mobileDebugEnabled, mobileDebugLog } from '@/debug/mobileDebugLog';
 import { errorText, resolvedUrlKind } from '@/debug/fileDiagnostics';
-import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Image as ExpoImage } from 'expo-image';
 import {
@@ -78,6 +82,7 @@ import {
   useRecyclingState,
   useViewability,
   type LegendListMetrics,
+  type OnViewableItemsChangedInfo,
   type LegendListRef,
   type ViewToken as LegendListViewToken,
 } from '@legendapp/list/react-native';
@@ -267,7 +272,6 @@ import {
 } from '@/session/messageContentLayout';
 import { buildMobileReadableViewportLayout } from '@/session/responsiveViewportLayout';
 import {
-  formatDuration,
   type MobileAgentTaskItem,
   type MobileMessageItem,
   type MobileMessageRenderItem,
@@ -355,6 +359,7 @@ import {
   shouldAutoLoadEarlier,
   shouldPreserveMobileHistoryBrowseIntent,
   shouldUnpinMobileFollowOnDrag,
+  mobileMessageListNearBottomThreshold,
 } from '@/session/messageScroll';
 import { createMobileTailFollower, type MobileTailFollower } from '@/session/messageTailFollower';
 import {
@@ -391,6 +396,7 @@ import type { RemoteTextFilePreviewResult } from '@/device-link/mobileMakerTrans
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { iconSize, iconStroke, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { i18n } from '@/i18n';
+import { formatLocalizedDuration } from '@/session/sessionDurationFormat';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { mobileToolRowWording } from '@/i18n/toolWording';
 
@@ -486,7 +492,7 @@ const stylesStatic = StyleSheet.create({
   },
   workActivityIconSlot: {
     alignItems: 'center',
-    height: lineHeight.listBody,
+    height: lineHeight.bodySmall,
     justifyContent: 'center',
     width: iconSize.md,
   },
@@ -624,6 +630,8 @@ const COMPANION_AVATAR_GAP = 10;
 
 interface MessageActions {
   companion?: boolean;
+  onCompanionReadThrough?: (at: number) => void;
+  onOpenCompanionSettings?: (page: 'memory' | 'capabilities') => void;
   companionWorkingLabel?: string | null;
   /** Teammate portrait beside its replies (Desktop withAssistantAvatar). */
   companionAvatar?: ReactNode;
@@ -648,6 +656,8 @@ interface MessageActions {
   onDeleteMessage?: (clientId: string) => void;
   onLoadEarlier?: () => void | Promise<void>;
   onOpenForkOrigin?: () => void;
+  /** 「由任务「X」发送」来源标签点击:跳到同一设备上的来源任务。 */
+  onOpenOriginSession?: (sessionId: string) => void;
   onOpenPayload?: (payload: MessagePayload) => void;
   onLoadToolInput?: (ref: MobileToolInputProjection) => Promise<MobileToolInputDetail>;
   onBlockingOverlayChange?: (blocked: boolean) => void;
@@ -685,6 +695,7 @@ interface MessageActions {
 export function MessageRenderer({
   companion = false,
   companionWorkingLabel,
+  onOpenCompanionSettings,
   companionAvatar,
   companionPluginInvocations,
   showPluginInvocations = true,
@@ -701,6 +712,7 @@ export function MessageRenderer({
   onLoadEarlier,
   onLoadToolInput,
   onOpenForkOrigin,
+  onOpenOriginSession,
   onBlockingOverlayChange,
   onOpenSessionLink,
   onPreviewRewind,
@@ -732,12 +744,14 @@ export function MessageRenderer({
   queueFooter,
   scrollResetKey,
   isReadingPositionActive,
+  onCompanionReadThrough,
   syncingWhileEmpty,
   testID,
   devExposeList,
   devRecycleItems = false,
 }: {
   companion?: boolean;
+  onOpenCompanionSettings?: (page: 'memory' | 'capabilities') => void;
   companionWorkingLabel?: string | null;
   companionAvatar?: ReactNode;
   companionPluginInvocations?: ReadonlyMap<string, PluginInvocation[]>;
@@ -922,9 +936,11 @@ export function MessageRenderer({
   // onStartReached 回调、以及先于 reset effect 定义的 eligibility effect,都可能带着上个会话的
   // 「上翻意图」与去重记录先跑——冷开短窗口会在无用户操作时误触发自动拉历史(review P2)。
   // setState 类复位(浮标/红点等)不参与该竞态,仍留在下方 effect。
+  const visibleCompanionReplyKeysRef = useRef(new Set<string>());
   const prevScrollResetKeyRef = useRef(scrollResetKey);
   if (prevScrollResetKeyRef.current !== scrollResetKey) {
     prevScrollResetKeyRef.current = scrollResetKey;
+    visibleCompanionReplyKeysRef.current.clear();
     listMetricsRef.current = { footerSize: 0, headerSize: 0 };
     nearBottomRef.current = reopeningPosition?.atEnd ?? true;
     isDraggingRef.current = false;
@@ -992,6 +1008,38 @@ export function MessageRenderer({
     isAwayFromBottomRef.current = next;
     setIsAwayFromBottomState(next);
   }, []);
+  const companionReplyTimes = useMemo(() => {
+    const times = new Map<string, number>();
+    if (companion) for (const item of items) {
+      if (item.type !== 'message' || item.message.kind !== 'assistant') continue;
+      const stamp = new Date(item.message.createdAt).getTime();
+      if (Number.isFinite(stamp)) times.set(item.key, stamp);
+    }
+    return times;
+  }, [companion, items]);
+  const acknowledgeCompanionRead = useCallback(() => {
+    if (!companion || !onCompanionReadThrough || !listRevealed || !initialAnchorDoneRef.current
+      || isSessionStreaming || !historyActiveRef.current || !nearBottomRef.current
+      || isReadingPositionActive?.() === false) return;
+    const { contentHeight, viewportHeight, offsetY } = scrollMetricsRef.current;
+    // Follow intent starts true before native layout; it is not proof of having read the tail.
+    if (viewportHeight <= 0 || contentHeight <= 0
+      || contentHeight - viewportHeight - offsetY > mobileMessageListNearBottomThreshold(bottomOverlayHeight)) return;
+    let at = 0;
+    for (const key of visibleCompanionReplyKeysRef.current) at = Math.max(at, companionReplyTimes.get(key) ?? 0);
+    if (at > 0) onCompanionReadThrough(at);
+  }, [companion, onCompanionReadThrough, listRevealed, isSessionStreaming, isReadingPositionActive, companionReplyTimes, bottomOverlayHeight]);
+  const acknowledgeCompanionReadRef = useRef(acknowledgeCompanionRead);
+  acknowledgeCompanionReadRef.current = acknowledgeCompanionRead;
+  const handleCompanionViewableItems = useCallback(({ viewableItems }: OnViewableItemsChangedInfo<MobileMessageRenderItem>) => {
+    visibleCompanionReplyKeysRef.current = new Set(viewableItems.filter(item => item.isViewable).map(item => item.key));
+    acknowledgeCompanionReadRef.current();
+  }, []);
+  useEffect(() => {
+    if (!companion || !onCompanionReadThrough) return;
+    const frame = requestAnimationFrame(acknowledgeCompanionRead);
+    return () => cancelAnimationFrame(frame);
+  }, [acknowledgeCompanionRead, companion, onCompanionReadThrough, isAwayFromBottom]);
   const [previousUserTarget, setPreviousUserTarget] = useState<
     ReturnType<typeof previousUserMessageJumpTarget>
   >(null);
@@ -1654,6 +1702,7 @@ export function MessageRenderer({
   const actions: MessageActions & { firstUserMessageClientId?: string } = useMemo(() => ({
     companion,
     companionWorkingLabel,
+  onOpenCompanionSettings,
     companionAvatar,
     companionTimeGroups,
     companionPluginWork,
@@ -1664,6 +1713,7 @@ export function MessageRenderer({
     onForkMessage,
     onDeleteMessage,
     onOpenForkOrigin,
+    onOpenOriginSession,
     onOpenSessionLink,
     onPreviewRewind,
     onEnterShareSelection,
@@ -1690,6 +1740,7 @@ export function MessageRenderer({
   }), [
     companion,
     companionWorkingLabel,
+  onOpenCompanionSettings,
     companionAvatar,
     companionTimeGroups,
     companionPluginWork,
@@ -1708,6 +1759,7 @@ export function MessageRenderer({
     onDeleteMessage,
     onForkMessage,
     onOpenForkOrigin,
+    onOpenOriginSession,
     onLoadToolInput,
     onOpenSessionLink,
     onPreviewRewind,
@@ -2249,6 +2301,7 @@ export function MessageRenderer({
         setPreviousUserTarget(null);
       }
     }
+    acknowledgeCompanionReadRef.current();
     // 拖动进近顶区时 onStartReached 边沿可能早已被消费(见 attemptAutoLoadEarlier 注释),
     // 滚动事件兜底重评估;前置短路让稳态滚动只付 1~2 次 ref 比较的成本。
     attemptAutoLoadEarlier(metrics);
@@ -2419,6 +2472,7 @@ export function MessageRenderer({
     scrollMetricsRef.current = { ...scrollMetricsRef.current, viewportHeight };
     markMobileMvcpSettle();
     if (nearBottomRef.current) runStickToLatestVerify();
+    acknowledgeCompanionReadRef.current();
   }, [markMobileMvcpSettle, runStickToLatestVerify]);
 
   const handleListMetricsChange = useCallback((metrics: LegendListMetrics) => {
@@ -2466,6 +2520,7 @@ export function MessageRenderer({
       return;
     }
     getTailFollower().contentChanged();
+    acknowledgeCompanionReadRef.current();
   }, [
     getTailFollower,
     reconcileReopeningAnchor,
@@ -2768,6 +2823,7 @@ export function MessageRenderer({
         testID={testID ?? 'message.list'}
         viewabilityConfig={viewabilityConfigRef.current}
         onFirstVisibleItemChanged={handleFirstVisibleItemChangedRef.current}
+        onViewableItemsChanged={companion ? handleCompanionViewableItems : undefined}
       />
       </Animated.View>
       {isAwayFromBottom && previousUserTarget && previousUserButtonTop !== null ? (
@@ -2881,8 +2937,15 @@ const RenderItemView = memo(function RenderItemView({
         ? <CompanionMessageCard message={item.message}
             renderMarkdown={(text) => <CompanionCardMarkdown text={text} actions={actions} />} />
         : item.message.orcaCard
-        ? <OrcaCollabCard card={item.message.orcaCard} screenWidth={actions.screenWidth}
-            blockKey={JSON.stringify([actions.remoteDeviceId, item.key])} />
+        ? (
+          <>
+            {item.message.sessionOrigin ? (
+              <SessionOriginLabel origin={item.message.sessionOrigin} onOpen={actions.onOpenOriginSession} />
+            ) : null}
+            <OrcaCollabCard card={item.message.orcaCard} screenWidth={actions.screenWidth}
+              blockKey={JSON.stringify([actions.remoteDeviceId, item.key])} />
+          </>
+        )
         : <MessageBubble item={hookSourceUserItem ?? systemCardUserItem ?? item} actions={actions} />;
       break;
     case 'thinking':
@@ -2966,13 +3029,20 @@ const RenderItemView = memo(function RenderItemView({
   }
   const groupTimestamp = actions.companion && item.type === 'message'
     ? actions.companionTimeGroups?.get(item.key) : undefined;
-  // Desktop keeps the persistent task card on the replies' column with an invisible avatar.
+  // K1: every companion card (task, result, teammate-message pill) hangs on the replies' column,
+  // left-aligned with the reply text behind an invisible avatar.
   const alignWithReplies = !!actions.companionAvatar && actions.companion && item.type === 'message'
-    && item.message.companion?.kind === 'task' && item.message.companion.meta.role === 'delegation-request';
+    && !!item.message.companion;
+  const aligned = alignWithReplies ? <View style={styles.companionAvatarInset}>{node}</View> : node;
+  // Companion chats: a new message or finished reply eases in once (M4 / M5); everything else stays still.
+  const entering = actions.companion && item.type === 'message' && !item.message.systemCardType
+    && (item.message.kind === 'user' || item.message.kind === 'assistant')
+    ? <CompanionEntering key={item.key} id={item.key} createdAt={item.message.createdAt} kind={item.message.kind === 'user' ? 'send' : 'reply'}>{aligned}</CompanionEntering>
+    : aligned;
   return (
     <View style={focused ? styles.focusedItem : undefined} testID={focused ? 'message.focusedItem' : undefined}>
       {groupTimestamp !== undefined ? <CompanionTimeGroupStamp timestamp={groupTimestamp} /> : null}
-      {alignWithReplies ? <View style={styles.companionAvatarInset}>{node}</View> : node}
+      {entering}
     </View>
   );
 });
@@ -3004,6 +3074,41 @@ const RenderListItemView = memo(function RenderListItemView({
     </MessageHeavyContentVisibilityContext.Provider>
   );
 });
+
+/** 另一个任务经工具发来的消息:气泡上方的来源标签,点按跳来源任务(对齐桌面 AutomationOriginBadge)。 */
+function SessionOriginLabel({
+  origin,
+  onOpen,
+}: {
+  origin: NonNullable<NormalizedRemoteMessage['sessionOrigin']>;
+  onOpen?: (sessionId: string) => void;
+}) {
+  const { colors } = useTheme();
+  const { t } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
+  const senderSessionId = origin.senderSessionId;
+  const openTarget = onOpen && senderSessionId ? () => onOpen(senderSessionId) : undefined;
+  const label = origin.senderBotName
+    ? t('message.renderer.botOriginNamed', { name: origin.senderBotName })
+    : origin.senderSessionTitle
+      ? t('message.renderer.sessionOriginNamed', { name: origin.senderSessionTitle })
+      : t('message.renderer.sessionOrigin');
+  return (
+    <Pressable
+      accessibilityHint={openTarget ? t('message.renderer.openSessionOrigin') : undefined}
+      accessibilityLabel={label}
+      accessibilityRole={openTarget ? 'button' : 'text'}
+      disabled={!openTarget}
+      hitSlop={8}
+      onPress={openTarget}
+      style={styles.automationOriginRow}
+      testID="message.sessionOrigin"
+    >
+      <Send color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
+      <Text numberOfLines={1} style={styles.automationOriginText}>{label}</Text>
+    </Pressable>
+  );
+}
 
 function ForkOriginMarker({ onOpenForkOrigin }: { onOpenForkOrigin?: () => void }) {
   const { colors } = useTheme();
@@ -3686,8 +3791,21 @@ function MessageBubble({
           </Text>
         </View>
       ) : null}
+      {item.message.kind === 'user' && item.message.sessionOrigin ? (
+        <SessionOriginLabel origin={item.message.sessionOrigin} onOpen={actions.onOpenOriginSession} />
+      ) : null}
       {attachmentStripNode}
       {hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0) ? bubble : null}
+      {actions.companion && item.message.kind === 'assistant' && item.message.body.trim() ? (
+        <CompanionLearningFooter receipts={item.message.source.agentMeta?.botLearning}
+          onOpenSettings={actions.onOpenCompanionSettings} />
+      ) : null}
+      {actions.companion && item.message.kind === 'assistant' && item.message.turnCompleted === true
+        && item.message.body.trim() ? readBotTaskResults(item.message.source.agentMeta?.botTaskResults).map(meta => (
+          <CompanionTaskResultCard key={botTaskResultKey(meta)} meta={meta} attached
+            deviceId={actions.remoteDeviceId ?? ''} parentSessionId={item.message.source.sessionId}
+            renderMarkdown={text => <CompanionCardMarkdown text={text} actions={actions} />} />
+        )) : null}
       {item.message.rawError ? <AgentErrorDetails key={item.message.key} message={item.message.rawError} /> : null}
       {item.message.kind === 'assistant' && item.message.modelMismatch ? (
         // 模型降级提示(对齐桌面 AssistantMessage):所选模型本轮被上游静默替换,
@@ -3730,6 +3848,7 @@ function MessageBubble({
             if (id === 'more') {
               return (
                 <NativePullDownMenu
+                  disabled={disabled && !forkBusy}
                   actions={messageMenu.map((item) => ({
                     image: item.image,
                     destructive: item.destructive,
@@ -3898,9 +4017,9 @@ function ThinkingCard({
   const title = item.redacted
     ? t('message.renderer.thinkingHidden')
     : item.durationMs !== undefined
-      ? t('message.renderer.thinkingDone', { duration: formatDuration(item.durationMs) })
+      ? t('message.renderer.thinkingDone', { duration: formatLocalizedDuration(item.durationMs) })
       : elapsedMs !== null
-        ? t('message.renderer.thinkingActive', { elapsed: formatDuration(elapsedMs) })
+        ? t('message.renderer.thinkingActive', { elapsed: formatLocalizedDuration(elapsedMs) })
         : t('message.renderer.thinkingProcess');
   return (
     <FoldablePanel
@@ -4328,7 +4447,7 @@ function buildAgentTaskMeta(model: AgentTaskCardModel): string[] {
   const parts: string[] = [AGENT_TASK_PROVIDER_LABEL[model.provider], agentTaskStatusLabel(model.status)];
   if (typeof model.totalTokens === 'number') parts.push(`${formatCompactTokens(model.totalTokens)} tokens`);
   if (typeof model.toolUses === 'number') parts.push(i18n.t('message.renderer.toolUseCount', { n: model.toolUses }));
-  if (typeof model.durationMs === 'number') parts.push(formatDuration(model.durationMs));
+  if (typeof model.durationMs === 'number') parts.push(formatLocalizedDuration(model.durationMs));
   return parts;
 }
 
@@ -4360,8 +4479,7 @@ function AgentTaskCard({
       toolName: item.toolCall?.label,
       toolInput: readAgentTaskToolInput(item.toolCall),
       update: item.update,
-      // 重连后 live update 为空：结构化终态优先，存量历史再由配对结果兜底 completed。
-      // summary 仍来自 secondaryBody，与 desktop 对齐。
+      // 重连后 live update 为空：协议级子任务错误结果必须恢复为 failed。
       result: item.toolCall?.secondaryBody,
       persistedStatus: item.toolCall?.agentTaskStatus,
     }),
@@ -4549,7 +4667,7 @@ function WorkGroupElapsed({ sinceIso }: { sinceIso: string | undefined }) {
   const elapsedMs = useLiveElapsedMs(true, sinceIso);
   return elapsedMs === null
     ? null
-    : <Text style={styles.workGroupElapsed}>{formatDuration(elapsedMs)}</Text>;
+    : <Text style={styles.workGroupElapsed}>{formatLocalizedDuration(elapsedMs)}</Text>;
 }
 
 const WorkToolActivityRow = memo(function WorkToolActivityRow({
@@ -4670,7 +4788,7 @@ function SubagentCard({
     ? t('message.renderer.subagentTyped', { type: item.header.subagentType })
     : t('message.renderer.subagent');
   const statusText = item.status === 'completed' && item.durationMs !== undefined
-      ? t('message.renderer.workedDuration', { duration: formatDuration(item.durationMs) })
+      ? t('message.renderer.workedDuration', { duration: formatLocalizedDuration(item.durationMs) })
       : agentTaskStatusLabel(item.status);
   const subtitle = [item.header.description, statusText].filter(Boolean).join(' · ');
   return (
@@ -5172,8 +5290,10 @@ function OrcaCollabCard({ card, screenWidth, blockKey }: {
   const { accountGeneration } = useAuth();
   // Remember manual expansions using the
   // existing bounded block store, including across native route reconstruction.
+  // Key prefix orca-expanded- (not the old orca-toggled-): dispatch cards used to default open, so a
+  // remembered legacy toggle meant "collapsed"; never reinterpret it as "expanded".
   const [expanded, toggleExpanded] = useFoldableExpandedState(
-    `orca-toggled-${JSON.stringify([accountGeneration, blockKey, card.variant])}`, false,
+    `orca-expanded-${JSON.stringify([accountGeneration, blockKey, card.variant])}`, false,
   );
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
@@ -6140,7 +6260,12 @@ function MarkdownSessionLinkSpan({
   );
 }
 
-function AttachmentStrip({
+/** The caller selects this once for the strip's lifetime: recycled rows use list state,
+ * while ordinary ScrollView children use React state. Keep the choice fixed while mounted. */
+type MediaPreviewStateHook = <T>(initial: T | (() => T)) => readonly [T, Dispatch<SetStateAction<T>>];
+
+/** 用户消息的附件条(图片缩略图 + 文件 chip);群聊时间线复用同一实现。 */
+export function AttachmentStrip({
   attachments,
   messageKey,
   clientId,
@@ -6149,6 +6274,7 @@ function AttachmentStrip({
   layout,
   onOpen,
   onResolveRemoteMedia,
+  usePreviewState = useRecyclingState,
 }: {
   attachments: readonly NormalizedAttachment[];
   messageKey: string;
@@ -6158,6 +6284,7 @@ function AttachmentStrip({
   layout: MessageContentLayout;
   onOpen?: (payload: MessagePayload) => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
+  usePreviewState?: MediaPreviewStateHook;
 }) {
   const styles = useThemedStyles(makeStyles);
   // 订阅本地缩略兜底版本:hydrate / 新注册落盘后,已渲染的 cindy-oss-attach:// 气泡
@@ -6184,6 +6311,7 @@ function AttachmentStrip({
           onOpen={onOpen ? () => onOpen(buildAttachmentPayload(applySentAttachmentThumbOverlay(item))) : undefined}
           onResolveRemoteMedia={onResolveRemoteMedia}
           variant="attachment"
+          usePreviewState={usePreviewState}
         />
       ))}
       {fileAttachments.length > 0 ? (
@@ -6307,12 +6435,13 @@ const ATTACHMENT_INTRINSIC_CACHE_MAX = 500;
 
 // 相册候选仍可能是 ph://，必须由 expo-image 加载；只复用正式附件的布局，
 // 不把本地相册地址声明为 RN Image / 远端查看器可直接预览的媒体。
-function PendingAttachmentImage({ layout, uri, sourceUri = uri, onError, onSize }: {
+function PendingAttachmentImage({ layout, uri, sourceUri = uri, onError, onSize, usePreviewState = useRecyclingState }: {
   layout: MessageContentLayout; uri: string; sourceUri?: string; onError?: () => void;
   onSize?: (size: AttachmentImageIntrinsicSize) => void;
+  usePreviewState?: MediaPreviewStateHook;
 }) {
   const styles = useThemedStyles(makeStyles);
-  const [intrinsicSize, setIntrinsicSize] = useRecyclingState<AttachmentImageIntrinsicSize | null>(
+  const [intrinsicSize, setIntrinsicSize] = usePreviewState<AttachmentImageIntrinsicSize | null>(
     () => attachmentIntrinsicSizeCache.get(sourceUri) ?? attachmentIntrinsicSizeCache.get(uri) ?? null,
   );
   // The upload copy and materialized reference describe the same pixels. Carry their measured frame.
@@ -6369,6 +6498,7 @@ function MediaPreview({
   variant = 'card',
   presentationOnly = false,
   localPreview,
+  usePreviewState = useRecyclingState,
 }: {
   layout: MessageContentLayout;
   media: NormalizedToolMedia;
@@ -6378,6 +6508,7 @@ function MediaPreview({
   variant?: 'card' | 'attachment';
   presentationOnly?: boolean;
   localPreview?: SentMessageImagePreview;
+  usePreviewState?: MediaPreviewStateHook;
 }) {
   const styles = useThemedStyles(makeStyles);
   const preview = summarizeMessagePayloadPreview(buildMediaPayload(media, label));
@@ -6385,15 +6516,15 @@ function MediaPreview({
     ? getSentAttachmentThumbUri(localPreview?.sourceRef ?? media.url)
     : null;
   const localCandidate = localPreview?.uri ?? durableUri;
-  const [failedLocalUris, setFailedLocalUris] = useRecyclingState<readonly string[]>([]);
+  const [failedLocalUris, setFailedLocalUris] = usePreviewState<readonly string[]>([]);
   // Keep the sent source when a durable copy appears later; switch only after an actual load error.
   const localUri = [localCandidate, durableUri].find((uri) => uri && !failedLocalUris.includes(uri)) ?? null;
   const autoResolve = !localUri && shouldAutoResolveMediaThumbnail(media, !!onResolveRemoteMedia);
-  const [resolveState, setResolveState] = useRecyclingState<MediaThumbnailResolveState>({ status: 'idle' });
+  const [resolveState, setResolveState] = usePreviewState<MediaThumbnailResolveState>({ status: 'idle' });
   // attachment 变体的原图尺寸。初值走模块级缓存:FlatList 虚拟化会反复
   // unmount/remount 本组件,不缓存的话每次划回都重新 getSize、重演一次
   // 占位帧 → 真图尺寸的切换(规则 7 的跳变)。
-  const [intrinsicSize, setIntrinsicSize] = useRecyclingState<AttachmentImageIntrinsicSize | null>(
+  const [intrinsicSize, setIntrinsicSize] = usePreviewState<AttachmentImageIntrinsicSize | null>(
     () => attachmentIntrinsicSizeCache.get(localPreview?.uri ?? media.url)
       ?? attachmentIntrinsicSizeCache.get(localCandidate ?? media.url) ?? null,
   );
@@ -6469,6 +6600,7 @@ function MediaPreview({
         style={styles.attachmentImageWrap} testID="message.mediaPreviewButton">
         <PendingAttachmentImage key={localPreview?.uri ?? localUri} layout={layout}
           uri={localUri} sourceUri={localPreview?.uri ?? localUri}
+          usePreviewState={usePreviewState}
           onSize={setIntrinsicSize}
           onError={() => setFailedLocalUris((failed) => failed.includes(localUri) ? failed : [...failed, localUri])} />
       </MessageContentOpenButton>
@@ -6972,8 +7104,10 @@ function MessagePayloadModal({
           </View>
           {annotatePayload && annotateImages ? (
             // 嵌套标注层:必须渲染在本 Modal 的 children 内(见 annotatePayload 注释)。
+            // 入口本身就是「标注」:打开即进标注模式;放弃标注直接回图表(对齐桌面)。
             <ImageLightbox
               annotation={annotateLightboxAnnotation}
+              autoAnnotate
               images={annotateImages}
               initialUrl={annotatePayload.media.url}
               onClose={closeAnnotatePayload}
@@ -7383,12 +7517,10 @@ function DiffPayloadBody({
           {canPreview ? (
             <PayloadActionButton
               accessibilityLabel={t('message.renderer.readCurrentRemoteFile')}
-              disabled={previewState.status === 'loading'}
-              label={previewState.status === 'loading'
-                ? t('message.renderer.reading')
-                : previewState.status === 'unavailable'
-                  ? t('message.renderer.retryFilePreview')
-                  : t('message.renderer.readCurrentFile')}
+              busy={previewState.status === 'loading'}
+              label={previewState.status === 'unavailable'
+                ? t('message.renderer.retryFilePreview')
+                : t('message.renderer.readCurrentFile')}
               layout={layout}
               onPress={openFilePreview}
               testID="message.diffFilePreviewLoadButton"
@@ -7611,14 +7743,14 @@ function FilePayloadBody({
         </Text>
         <PayloadPathActions layout={layout} path={sourcePath}>
           {onResolveRemoteMedia && isDesktopLocalMediaUrl(sourcePath) ? <PayloadActionButton
-            accessibilityLabel={t('files.browser.exportShare')} label={t(exporting ? 'files.browser.exporting' : 'files.browser.exportShare')}
-            layout={layout} disabled={exporting} onPress={() => { void exportFile(); }} testID="message.fileExportButton" /> : null}
+            accessibilityLabel={t('files.browser.exportShare')} label={t('files.browser.exportShare')}
+            layout={layout} busy={exporting} onPress={() => { void exportFile(); }} testID="message.fileExportButton" /> : null}
 
           {canPreview && previewState.status !== 'ready' ? (
             <PayloadActionButton
               accessibilityLabel={t('message.renderer.loadRemoteTextPreview')}
-              disabled={previewState.status === 'loading'}
-              label={previewState.status === 'loading' ? t('message.renderer.loading') : previewState.status === 'unavailable' ? t('message.renderer.retryPreview') : t('message.renderer.loadPreview')}
+              busy={previewState.status === 'loading'}
+              label={previewState.status === 'unavailable' ? t('message.renderer.retryPreview') : t('message.renderer.loadPreview')}
               layout={layout}
               onPress={loadPreview}
               testID="message.filePreviewLoadButton"
@@ -7755,8 +7887,8 @@ function PayloadPathActions({
         {canCopy ? (
           <PayloadActionButton
             accessibilityLabel={t('message.renderer.copyRemoteFilePath')}
-            disabled={copyState === 'copying'}
-            label={copyState === 'copying' ? t('message.renderer.copyStateCopying') : t('message.renderer.copyPath')}
+            busy={copyState === 'copying'}
+            label={t('message.renderer.copyPath')}
             layout={layout}
             onPress={copyPath}
             testID="message.copyFilePathButton"
@@ -7775,6 +7907,7 @@ function PayloadPathActions({
 
 function PayloadActionButton({
   accessibilityLabel,
+  busy = false,
   disabled = false,
   label,
   layout,
@@ -7782,6 +7915,8 @@ function PayloadActionButton({
   testID,
 }: {
   accessibilityLabel?: string;
+  /** 进行中:按钮只转圈、不显示文字(宽高由 minWidth/minHeight 保持不跳)。 */
+  busy?: boolean;
   disabled?: boolean;
   label: string;
   layout: PayloadBodyLayout;
@@ -7789,13 +7924,15 @@ function PayloadActionButton({
   testID?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
+  const interactionDisabled = disabled || busy;
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityRole="button"
-      accessibilityState={{ disabled }}
-      disabled={disabled}
-      onPress={disabled ? undefined : onPress}
+      accessibilityState={{ busy: busy || undefined, disabled: interactionDisabled }}
+      disabled={interactionDisabled}
+      onPress={interactionDisabled ? undefined : onPress}
       style={({ pressed }) => [
         styles.payloadOpenButton,
         {
@@ -7803,11 +7940,15 @@ function PayloadActionButton({
           minWidth: layout.actionButtonMinWidth,
         },
         pressed && styles.pressed,
-        disabled && styles.disabled,
+        disabled && !busy && styles.disabled,
       ]}
       testID={testID}
     >
-      <Text style={styles.payloadOpenButtonText}>{label}</Text>
+      {busy ? (
+        <ActivityIndicator color={colors.textSecondary} size="small" />
+      ) : (
+        <Text style={styles.payloadOpenButtonText}>{label}</Text>
+      )}
     </Pressable>
   );
 }
@@ -8232,12 +8373,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   emptyTitle: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   syncingTitle: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     marginTop: spacing.sm,
   },
   messageItem: {
@@ -8333,12 +8476,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   hookSourceTitle: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.semibold,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.medium,
   },
   hookSourceChannel: {
     color: colors.textTertiary,
     flexShrink: 1,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
   },
   messageText: { color: colors.textPrimary, fontSize: typeScale.bodyLarge, lineHeight: lineHeight.bodyLarge },
   automationOriginRow: {
@@ -8362,7 +8507,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   modelMismatchText: {
     color: colors.textTertiary,
     flexShrink: 1,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   collapseMeasureWrap: {
@@ -8395,11 +8540,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   systemCardTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
   systemCardBody: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   systemCardRows: {
@@ -8414,7 +8560,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   systemCardLabel: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   systemCardValue: {
     color: colors.textPrimary,
@@ -8447,7 +8594,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     flexShrink: 1,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   autoResumeRow: {
     alignSelf: 'stretch',
@@ -8470,12 +8618,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexShrink: 1,
     flexGrow: 0,
     fontSize: typeScale.footnote,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   autoResumeSummary: {
     color: colors.textSecondary,
     flex: 1,
     fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
     minWidth: 0,
   },
   autoResumeHeaderSpacer: {
@@ -8495,12 +8645,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   autoResumeDetailLabel: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   autoResumeDetailText: {
     color: colors.textSecondary,
     fontFamily: monoFont,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     marginTop: 2,
   },
@@ -8545,18 +8696,21 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   agentSwitchPillText: {
     color: colors.textSecondary,
     fontSize: typeScale.micro,
+    lineHeight: lineHeight.micro,
     fontWeight: fontWeight.medium,
   },
+  // 分隔点:纯语义三级色,不再叠透明度「做淡」(§3 硬规则 1)。
   agentSwitchDot: {
     color: colors.textTertiary,
     fontSize: typeScale.micro,
-    opacity: 0.5,
+    lineHeight: lineHeight.micro,
   },
   agentSwitchModel: {
     color: colors.textSecondary,
     flexShrink: 1,
     fontFamily: monoFont,
     fontSize: typeScale.micro,
+    lineHeight: lineHeight.micro,
   },
   agentSwitchHandoffPanel: {
     backgroundColor: colors.surface,
@@ -8570,13 +8724,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   agentSwitchHandoffTitle: {
     color: colors.textTertiary,
     fontSize: typeScale.micro,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.micro,
+    fontWeight: fontWeight.regular,
     marginBottom: spacing.xs,
   },
   agentSwitchHandoffText: {
     color: colors.textSecondary,
     fontFamily: monoFont,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   markdownBody: {},
@@ -8614,8 +8769,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   markdownInlineCode: {
     color: colors.chatInlineCodeText,
     fontFamily: monoFont,
-    fontSize: typeScale.code,
-    lineHeight: lineHeight.code,
+    fontSize: typeScale.bodySmall,
+    lineHeight: lineHeight.bodySmall,
   },
   // 已验证存在的文件/目录路径 chip:**只加一条下划线,其它什么都不动**
   // (权威规则见 docs/design-rules/DESIGN.md §14.5,对齐 GitHub 的口径 ——
@@ -8717,8 +8872,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flexShrink: 1,
     fontFamily: monoFont,
-    fontSize: typeScale.code,
-    lineHeight: lineHeight.code,
+    fontSize: typeScale.bodySmall,
+    lineHeight: lineHeight.bodySmall,
     maxWidth: '100%',
   },
   // 语法着色:只上 color,其余(字体/字号/行高)继承 markdownCodeText —— 嵌套 Text
@@ -8751,8 +8906,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderRightWidth: StyleSheet.hairlineWidth,
     color: colors.textPrimary,
     flexShrink: 0,
-    fontSize: typeScale.code,
-    lineHeight: lineHeight.code,
+    fontSize: typeScale.bodySmall,
+    lineHeight: lineHeight.bodySmall,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
@@ -8760,7 +8915,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     fontWeight: fontWeight.medium,
   },
-  detailText: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  detailText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   italicText: { fontStyle: 'italic' },
   thinkingStrong: { fontWeight: fontWeight.medium },
   thinkingCode: { fontFamily: monoFont, fontStyle: 'normal' },
@@ -8802,8 +8957,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     padding: spacing.sm,
     width: 160,
   },
-  mediaKind: { color: colors.textTertiary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
-  mediaTitle: { color: colors.textPrimary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  mediaKind: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  mediaTitle: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   mediaHint: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.micro },
   fileChip: {
     alignItems: 'center',
@@ -8820,7 +8975,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
   },
   fileText: { flex: 1, minWidth: 0 },
-  fileName: { color: colors.textPrimary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  fileName: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   diffCard: {
     backgroundColor: colors.chatCodeSurface,
     borderColor: colors.chatCodeBorder,
@@ -8829,13 +8984,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: spacing.xs,
     padding: spacing.sm,
   },
-  diffPath: { color: colors.textPrimary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
-  diffStats: { color: colors.textSecondary, fontSize: typeScale.caption },
+  diffPath: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
+  diffStats: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   diffRows: { gap: 2 },
   diffLine: { fontSize: typeScale.caption, lineHeight: lineHeight.micro },
   diffDelete: { color: colors.textSecondary },
   diffAdd: { color: colors.textPrimary, fontWeight: fontWeight.medium },
-  diffMore: { color: colors.textTertiary, fontSize: typeScale.caption },
+  diffMore: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   messageActionBar: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -8866,7 +9021,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     alignSelf: 'center',
     color: colors.textSecondary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontWeight: fontWeight.regular,
     lineHeight: lineHeight.listTitle,
   },
   foldPlain: { alignSelf: 'stretch' },
@@ -8958,7 +9113,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   forkOriginText: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   loadEarlierButton: {
     alignItems: 'center',
@@ -8968,16 +9124,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: spacing.md,
   },
-  loadEarlierText: { color: colors.textTertiary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  loadEarlierText: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   foldText: { flex: 1, minWidth: 0 },
-  foldTitle: { color: colors.textSecondary, fontSize: typeScale.footnote, fontWeight: fontWeight.medium },
+  foldTitle: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   foldTitlePlain: {
     color: colors.textSecondary,
-    fontSize: typeScale.listBody,
+    fontSize: typeScale.bodySmall,
     fontWeight: fontWeight.regular,
-    lineHeight: lineHeight.listBody,
+    lineHeight: lineHeight.bodySmall,
   },
-  foldSubtitle: { color: colors.textTertiary, fontSize: typeScale.caption, marginTop: 2 },
+  foldSubtitle: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, marginTop: 2 },
   foldBody: { paddingHorizontal: spacing.md, paddingBottom: spacing.md },
   foldBodyPlain: {
     paddingBottom: 0,
@@ -9013,8 +9169,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   workThinkingText: { flex: 1, minWidth: 0 },
   workActivityText: {
     color: colors.textSecondary,
-    fontSize: typeScale.listBody,
-    lineHeight: lineHeight.listBody,
+    fontSize: typeScale.bodySmall,
+    lineHeight: lineHeight.bodySmall,
   },
   workThinkingMeasureWrap: {
     left: 0,
@@ -9060,14 +9216,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   toolInputActionText: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontWeight: fontWeight.regular,
     lineHeight: lineHeight.caption,
   },
   toolName: {
     color: colors.textSecondary,
-    fontSize: typeScale.listBody,
+    fontSize: typeScale.bodySmall,
     fontWeight: fontWeight.regular,
-    lineHeight: lineHeight.listBody,
+    lineHeight: lineHeight.bodySmall,
   },
   toolNameFlex: { flex: 1, minWidth: 0 },
   toolResult: {
@@ -9090,7 +9246,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   toolResultHint: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     paddingBottom: spacing.sm,
     paddingHorizontal: spacing.sm,
   },
@@ -9105,11 +9262,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.md,
   },
   payloadHeaderText: { flex: 1, minWidth: 0 },
-  payloadTitle: { color: colors.textPrimary, fontSize: typeScale.title, fontWeight: fontWeight.medium, lineHeight: lineHeight.title },
+  // 面板大标题:§3 20/25 · 600。
+  payloadTitle: { color: colors.textPrimary, fontSize: typeScale.title, fontWeight: fontWeight.semibold, lineHeight: lineHeight.title },
   payloadGalleryCount: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     marginTop: 2,
   },
   payloadHeaderActions: {
@@ -9133,7 +9292,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   payloadHeaderStatus: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   payloadCloseButton: {
     alignItems: 'center',
@@ -9145,7 +9305,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     width: 40,
   },
-  payloadCloseText: { color: colors.textPrimary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  payloadCloseText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   payloadViewerBody: {
     flex: 1,
     minHeight: 0,
@@ -9173,7 +9333,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     padding: spacing.lg,
   },
   payloadText: { color: colors.textPrimary, fontSize: typeScale.bodyLarge, lineHeight: lineHeight.bodyLarge },
-  payloadMonoText: { fontFamily: monoFont, fontSize: typeScale.footnote, lineHeight: lineHeight.code },
+  payloadMonoText: { fontFamily: monoFont, fontSize: typeScale.footnote, lineHeight: lineHeight.bodySmall },
   payloadDiffHeaderBlock: {
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -9190,7 +9350,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     fontFamily: monoFont,
     fontSize: typeScale.footnote,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.bodySmall,
   },
   payloadDiffFilePreviewBlock: {
     borderBottomColor: colors.border,
@@ -9220,8 +9380,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   payloadDiffSectionTitle: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
   },
   payloadDiffCompareRow: {
@@ -9247,6 +9408,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   payloadDiffPaneTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   payloadDiffPaneBody: {
@@ -9269,7 +9431,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     fontFamily: monoFont,
     fontSize: typeScale.caption,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.bodySmall,
     marginRight: spacing.sm,
     textAlign: 'right',
     width: 34,
@@ -9277,7 +9439,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   payloadDiffLinePrefix: {
     fontFamily: monoFont,
     fontSize: typeScale.footnote,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.bodySmall,
     marginRight: spacing.sm,
     textAlign: 'center',
     width: 14,
@@ -9293,7 +9455,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flex: 1,
     fontFamily: monoFont,
     fontSize: typeScale.footnote,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.bodySmall,
   },
   payloadDiffLineTextOld: {
     color: colors.textSecondary,
@@ -9306,7 +9468,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   payloadDiffEmptyLine: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.bodySmall,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
   },
@@ -9340,7 +9502,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: 260,
     padding: spacing.xl,
   },
-  payloadMediaKind: { color: colors.textPrimary, fontSize: typeScale.title, fontWeight: fontWeight.medium },
+  payloadMediaKind: { color: colors.textPrimary, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.medium },
   payloadMediaHint: { color: colors.textSecondary, fontSize: typeScale.body, lineHeight: lineHeight.body, textAlign: 'center' },
   payloadActionBlock: {
     alignItems: 'center',
@@ -9362,7 +9524,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: 38,
     paddingHorizontal: spacing.lg,
   },
-  payloadOpenButtonText: { color: colors.textPrimary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  payloadOpenButtonText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   payloadPathCopyStatus: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
@@ -9373,7 +9535,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   todoRowPending: { opacity: 0.72 },
   todoMark: { alignItems: 'center', justifyContent: 'center', width: 22 },
   todoCopy: { flex: 1, minWidth: 0 },
-  todoText: { color: colors.textPrimary, fontSize: typeScale.code, lineHeight: lineHeight.code },
+  todoText: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   todoPending: { color: colors.textTertiary },
   todoDone: { fontWeight: fontWeight.medium },
 });

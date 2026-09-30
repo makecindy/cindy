@@ -80,7 +80,7 @@
     { "id": "preparing", "via": null, "tab": "状态补齐",
       "note": "loginState 就绪前的准备伪态(figma §5.2),真实链路是应用启动瞬间的中间帧,静态 demo 无法经交互到达" },
     { "id": "verify.resend", "via": null, "tab": "状态补齐",
-      "note": "重发链接态需等 42s 倒计时(RESEND_COUNTDOWN_MS)自然归零,链路等待过长" },
+      "note": "重发链接态需等 60s 倒计时(RESEND_COUNTDOWN_MS)自然归零,链路等待过长" },
     { "id": "account-selection", "via": null, "tab": "状态补齐",
       "note": "多身份选择步由外部浏览器 SSO 回调携带多账号返回触发,demo 无真实浏览器回调" },
     { "id": "sso-verification", "via": null, "tab": "状态补齐",

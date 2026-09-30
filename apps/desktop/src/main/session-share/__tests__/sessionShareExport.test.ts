@@ -471,84 +471,108 @@ describe('exportSessionShare', () => {
     expect(manifest.orca).toBeUndefined();
   });
 
-  it('orca lead export bundles workers under prefixes with team graph, minReaderVersion 2', async () => {
-    sessionRowRef.row = { ...baseSession(), orcaRole: 'lead' };
-    activeTeamRef.row = { id: 'team-1', status: 'active' };
-    workerRowsRef.rows = [
-      { sessionId: 'worker-s-1', status: 'done', label: 'dev-1', role: 'developer', focused: 1 },
-      // 已归档 Worker 不在当前协同列表中,导出也应排除,避免导入后复活。
-      { sessionId: 'worker-s-archived', status: 'done', label: 'dev-2', role: 'reviewer', focused: 0 },
-    ];
-    workerSessionsById.set('worker-s-1', {
-      ...baseSession(),
-      id: 'worker-s-1',
-      title: 'Worker 1',
-      agentKind: 'codex',
-      orcaRole: 'worker',
-      sdkSessionId: 'thread-1',
-    });
-    workerSessionsById.set('worker-s-archived', {
-      ...baseSession(),
-      id: 'worker-s-archived',
-      status: 'archived',
-      orcaRole: 'worker',
-    });
-    workerMessagesBySession.set('worker-s-1', [
-      {
-        id: 'wm1',
-        clientId: 'wc1',
-        role: 'user',
-        content: JSON.stringify([{ type: 'text', text: '派活' }]),
-        toolUseId: null,
-        agentMeta: null,
+  it.each([false, true])(
+    'orca lead export preserves the team graph (migration=%s)',
+    async (migration) => {
+      sessionRowRef.row = { ...baseSession(), orcaRole: 'lead' };
+      activeTeamRef.row = { id: 'team-1', status: 'active' };
+      workerRowsRef.rows = [
+        { sessionId: 'worker-s-1', status: 'done', label: 'dev-1', role: 'developer', focused: 1 },
+        // 已归档 Worker 不在当前协同列表中,导出也应排除,避免导入后复活。
+        {
+          sessionId: 'worker-s-archived',
+          status: 'done',
+          label: 'dev-2',
+          role: 'reviewer',
+          focused: 0,
+        },
+      ];
+      workerSessionsById.set('worker-s-1', {
+        ...baseSession(),
+        id: 'worker-s-1',
+        title: 'Worker 1',
         agentKind: 'codex',
-        createdAt: 1700000000300,
-        rewindAt: null,
-      },
-    ]);
-    workerMessagesBySession.set('worker-s-archived', []);
+        orcaRole: 'worker',
+        sdkSessionId: 'thread-1',
+      });
+      workerSessionsById.set('worker-s-archived', {
+        ...baseSession(),
+        id: 'worker-s-archived',
+        status: 'archived',
+        orcaRole: 'worker',
+      });
+      workerMessagesBySession.set('worker-s-1', [
+        {
+          id: 'wm1',
+          clientId: 'wc1',
+          role: 'user',
+          content: JSON.stringify([{ type: 'text', text: '派活' }]),
+          toolUseId: null,
+          agentMeta: null,
+          agentKind: 'codex',
+          createdAt: 1700000000300,
+          rewindAt: null,
+        },
+      ]);
+      workerMessagesBySession.set('worker-s-archived', []);
 
-    const target = path.join(tmpRoot, 'out-orca.xdtshare');
-    const outcome = await exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target });
-    expect(outcome.status).toBe('ok');
-    if (outcome.status !== 'ok') return;
-    expect(getActiveTeamByLeadMock).toHaveBeenCalledWith('xdt-session-1');
-    expect(outcome.orcaWorkers).toBe(1);
-    expect(outcome.fidelity).toBe('full');
+      const target = path.join(tmpRoot, 'out-orca.xdtshare');
+      const outcome = await exportSessionShare({
+        sessionId: 'xdt-session-1',
+        targetPath: target,
+        migration,
+      });
+      expect(outcome.status).toBe('ok');
+      if (outcome.status !== 'ok') return;
+      expect(getActiveTeamByLeadMock).toHaveBeenCalledWith('xdt-session-1');
+      expect(outcome.orcaWorkers).toBe(migration ? 2 : 1);
+      expect(outcome.fidelity).toBe('full');
 
-    const zip = await unzipOf(target);
-    const manifest = validateManifest(JSON.parse(await zip.file('manifest.json')!.async('string')));
-    expect(manifest.formatVersion).toBe(2);
-    expect(manifest.minReaderVersion).toBe(2);
-    expect(manifest.agentKind).toBe('cc'); // 顶层仍描述 lead
-    expect(manifest.orca).toBeDefined();
-    expect(manifest.orca!.teamStatus).toBe('active');
-    expect(manifest.orca!.workers).toHaveLength(1);
-    const worker = manifest.orca!.workers[0];
-    expect(worker.index).toBe(0);
-    expect(worker.agentKind).toBe('codex');
-    expect(worker.role).toBe('developer');
-    expect(worker.label).toBe('dev-1');
-    expect(worker.status).toBe('done');
-    expect(worker.focused).toBe(true);
-    expect(worker.activeSdkSessionId).toBe('thread-1');
-    expect(worker.counts.messages).toBe(1);
-    expect(worker.transcripts).toEqual([
-      { sdkSessionId: 'thread-1', path: 'orca/workers/0/transcripts/codex/rollout-1-thread-1.jsonl' },
-    ]);
+      const zip = await unzipOf(target);
+      const manifest = validateManifest(
+        JSON.parse(await zip.file('manifest.json')!.async('string')),
+      );
+      expect(manifest.formatVersion).toBe(2);
+      expect(manifest.minReaderVersion).toBe(2);
+      expect(manifest.agentKind).toBe('cc'); // 顶层仍描述 lead
+      expect(manifest.orca).toBeDefined();
+      expect(manifest.orca!.teamStatus).toBe('active');
+      expect(manifest.orca!.workers).toHaveLength(migration ? 2 : 1);
+      const worker = manifest.orca!.workers[0];
+      expect(worker.index).toBe(0);
+      expect(worker.agentKind).toBe('codex');
+      expect(worker.role).toBe('developer');
+      expect(worker.label).toBe('dev-1');
+      expect(worker.status).toBe('done');
+      expect(worker.focused).toBe(true);
+      expect(worker.activeSdkSessionId).toBe('thread-1');
+      expect(worker.counts.messages).toBe(1);
+      expect(worker.transcripts).toEqual([
+        {
+          sdkSessionId: 'thread-1',
+          path: 'orca/workers/0/transcripts/codex/rollout-1-thread-1.jsonl',
+        },
+      ]);
 
-    // Worker 数据落在前缀目录下,lead 顶层结构保持不变
-    expect(zip.file('orca/workers/0/session.json')).toBeTruthy();
-    expect(zip.file('orca/workers/0/messages.jsonl')).toBeTruthy();
-    expect(zip.file('orca/workers/0/transcripts/codex/rollout-1-thread-1.jsonl')).toBeTruthy();
-    expect(zip.file('orca/workers/0/codex-state/thread.json')).toBeTruthy();
-    expect(zip.file('session.json')).toBeTruthy();
-    expect(zip.file('transcripts/claude/sid-b.jsonl')).toBeTruthy();
-    const workerSnapshot = JSON.parse(
-      await zip.file('orca/workers/0/session.json')!.async('string'),
-    ) as Record<string, unknown>;
-    expect(workerSnapshot.agentKind).toBe('codex');
-  });
+      // Worker 数据落在前缀目录下,lead 顶层结构保持不变
+      expect(zip.file('orca/workers/0/session.json')).toBeTruthy();
+      expect(zip.file('orca/workers/0/messages.jsonl')).toBeTruthy();
+      expect(zip.file('orca/workers/0/transcripts/codex/rollout-1-thread-1.jsonl')).toBeTruthy();
+      expect(zip.file('orca/workers/0/codex-state/thread.json')).toBeTruthy();
+      expect(zip.file('session.json')).toBeTruthy();
+      expect(zip.file('transcripts/claude/sid-b.jsonl')).toBeTruthy();
+      const workerSnapshot = JSON.parse(
+        await zip.file('orca/workers/0/session.json')!.async('string'),
+      ) as Record<string, unknown>;
+      expect(workerSnapshot.agentKind).toBe('codex');
+      if (migration) {
+        expect(workerSnapshot.migrationSourceId).toBe('worker-s-1');
+        expect(
+          JSON.parse(await zip.file('orca/workers/1/session.json')!.async('string')),
+        ).toMatchObject({ migrationSourceId: 'worker-s-archived', status: 'archived' });
+      } else expect(workerSnapshot).not.toHaveProperty('migrationSourceId');
+    },
+  );
 
   it('orca lead export fails closed when an active team Worker session is missing or deleted', async () => {
     sessionRowRef.row = { ...baseSession(), orcaRole: 'lead' };

@@ -199,6 +199,7 @@ export function BotRoutines({
       value && !inFlight.current ? { ...value, triggers: [...value.triggers, trigger] } : value,
     );
   const triggerSummary = (trigger: RoutineTrigger) => {
+    if (trigger.kind === 'once') return new Date(trigger.at).toLocaleString(i18n.language);
     if (trigger.kind === 'interval')
       return t('routines.everyMinutes', { count: trigger.intervalMs / 60_000 });
     if (trigger.kind === 'cron')
@@ -594,6 +595,7 @@ function TriggerFields({
         />
       </label>
     );
+  if (trigger.kind === 'once') return <time dateTime={new Date(trigger.at).toISOString()}>{new Date(trigger.at).toLocaleString()}</time>;
   if (trigger.kind === 'cron') return <CronFields trigger={trigger} onChange={onChange} />;
   const source = sources.find((item) => item.id === trigger.sourceId);
   const fields = [

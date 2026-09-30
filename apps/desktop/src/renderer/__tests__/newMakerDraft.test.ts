@@ -98,7 +98,7 @@ describe('newMakerDraft store', () => {
     expect(reloaded.getDraft().defaultTupleCustomized).toBe(false);
   });
 
-  it.each([false, true])('Gateway 后到时仅更新未自定义草稿（手动选择=%s）', async (customized) => {
+  it.each([false, true])('Gateway 后到不抢订阅，Claude 后到只更新未自定义草稿（手动选择=%s）', async (customized) => {
     const { resolveNewMakerDefaultTuple } = await import('@/lib/newMakerDefaultTuple');
     const { applySuggestedDefaultTuple, getDraft, markDefaultTupleCustomized } = await loadModule();
     const sources: import('@cindy/model-providers').ProviderView[] = [
@@ -114,8 +114,8 @@ describe('newMakerDraft store', () => {
         models: {
           codex: [
             {
-              id: 'gpt-5.6-sol',
-              name: 'Sol',
+              id: 'gpt-6-astra',
+              name: 'Astra',
               contextWindow: 272000,
               efforts: ['high'],
               defaultEffort: 'high',
@@ -157,10 +157,16 @@ describe('newMakerDraft store', () => {
         ],
       },
     });
+    expect(applySuggestedDefaultTuple(resolve())).toBe(false);
+    expect(getDraft().vendor).toBe('codex');
+    sources.push({ ...sources[0]!, id: 'anthropic', agents: ['claude-code'],
+      access: { kind: 'subscription', product: 'Claude' },
+      models: { 'claude-code': [{ id: 'claude-opus-5-5', name: 'Opus', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' }] },
+    });
     expect(applySuggestedDefaultTuple(resolve())).toBe(!customized);
     const draft = getDraft();
-    expect(draft.vendor).toBe(customized ? 'codex' : 'pi');
-    expect(draft.lastByVendor[draft.vendor].providerId).toBe(customized ? 'openai' : 'xd');
+    expect(draft.vendor).toBe(customized ? 'codex' : 'cc');
+    expect(draft.lastByVendor[draft.vendor].providerId).toBe(customized ? 'openai' : 'anthropic');
     expect(draft.defaultTupleCustomized).toBe(customized);
     expect(applySuggestedDefaultTuple(resolve())).toBe(false);
   });

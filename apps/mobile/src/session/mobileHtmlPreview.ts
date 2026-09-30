@@ -108,7 +108,8 @@ export async function prepareMobileHtmlPreview(absPath: string, deps: RemoteAbsF
           destination.write(Uint8Array.from(atob(media.inlineBase64), (char) => char.charCodeAt(0)));
           if (destination.size !== file.size) throw new Error('PREVIEW_CHANGED');
         } else if (media.url.startsWith('file://')) {
-          try { new File(media.url).copy(destination); } finally { releasePeerMedia(media.url); }
+          // File.copy is async; releasing first deletes the staged direct-transfer source mid-copy.
+          try { await new File(media.url).copy(destination); } finally { releasePeerMedia(media.url); }
           if (destination.size !== file.size) throw new Error('PREVIEW_CHANGED');
         } else {
         let exceeded = false;
@@ -202,7 +203,7 @@ async function prepareOnDemand(absPath: string, deps: RemoteAbsFileFetchDeps & {
           destination.create();
           destination.write(Uint8Array.from(atob(media.inlineBase64), (char) => char.charCodeAt(0)));
         } else if (media.url.startsWith('file://')) {
-          try { new File(media.url).copy(destination); } finally { releasePeerMedia(media.url); }
+          try { await new File(media.url).copy(destination); } finally { releasePeerMedia(media.url); }
         } else {
           let exceeded = false;
           const download = createDownloadResumable(media.url, destination.uri, {}, (progress) => {

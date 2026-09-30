@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { containImageSize, type ImageDimensions } from './imageDisplaySize';
+import { AnnotationStrokesSvg } from './AnnotationStrokesSvg';
+import type { AnnotationStroke } from './lightboxAnnotations';
 
 const PREVIEW_MAX_WIDTH = 224;
 const PREVIEW_MAX_HEIGHT = 168;
@@ -20,6 +22,8 @@ interface ImageHoverPreviewProps {
   anchorRef: RefObject<HTMLElement | null>;
   src: string;
   alt: string;
+  /** 托盘里带标注的图片:叠加矢量笔迹(与烧录同一分层渲染),所见即将发送的。 */
+  annotationStrokes?: readonly AnnotationStroke[];
 }
 
 /**
@@ -28,7 +32,13 @@ interface ImageHoverPreviewProps {
  * portal 到 body，避免被消息流 / composer 的 overflow 裁掉；默认位于锚点上方
  * 12px，空间不足时翻到下方，并始终收在视口内。最大 224×168。
  */
-export function ImageHoverPreview({ open, anchorRef, src, alt }: ImageHoverPreviewProps) {
+export function ImageHoverPreview({
+  open,
+  anchorRef,
+  src,
+  alt,
+  annotationStrokes,
+}: ImageHoverPreviewProps) {
   const [position, setPosition] = useState<PreviewPosition | null>(null);
   const [naturalSize, setNaturalSize] = useState<ImageDimensions | null>(null);
 
@@ -119,6 +129,23 @@ export function ImageHoverPreview({ open, anchorRef, src, alt }: ImageHoverPrevi
           });
         }}
       />
+      {annotationStrokes?.length && naturalSize && displaySize ? (
+        // 与图片盒同尺寸(img 是 contain 结果,宽高比与自然尺寸一致),不用 inset:0——
+        // 行内 img 的基线留白会让容器比图片略高。
+        <AnnotationStrokesSvg
+          strokes={annotationStrokes}
+          naturalWidth={naturalSize.width}
+          naturalHeight={naturalSize.height}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: displaySize.width,
+            height: displaySize.height,
+            pointerEvents: 'none',
+          }}
+        />
+      ) : null}
     </div>,
     document.body,
   );

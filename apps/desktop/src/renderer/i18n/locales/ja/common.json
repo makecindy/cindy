@@ -1,52 +1,114 @@
 {
+  "taskMove": {
+    "upgradeComputer": "このコンピューターの Cindy はタスクの移動に対応していません。「{{name}}」の Cindy を更新してください。",
+    "sourceProjects": "タスクのコンピューターのプロジェクト",
+    "otherComputers": "別のコンピューターにコピー",
+    "offline": "オフライン",
+    "loading": "読み込み中…",
+    "retry": "読み込めませんでした。再試行",
+    "moved": "タスクを移動しました",
+    "failed": "タスクを移動できませんでした。タスクを停止し、移動先フォルダーを確認して再試行してください。"
+  },
+  "taskMigration": {
+    "title": "{{name}}にコピー",
+    "description": "{{name}}にタスクのコピーを作成します。",
+    "bindingsNotice": "自動実行とメッセージ連携は元のコンピューターに残り、コピーされません。",
+    "limits": "両方のコンピューターでこの機能とリモート操作を有効にする必要があります。このフォルダーを使用するタスクを先に停止してください。コピー前にコピー先のディスク空き容量と利用可能なメモリを確認します。コピー先のモデル設定を使用し、Cindy のログイン情報やマシン設定は転送しません。",
+    "device": "コピー先",
+    "project": "保存先",
+    "newFolder": "新しいフォルダーを作成し、既存ファイルは上書きしません。",
+    "defaultFolder": "Cindy の既定の場所",
+    "noDevices": "利用可能なコンピューターがありません。別のコンピューターに接続し、両方でリモート操作を有効にしてください。",
+    "openTarget": "新しくコピーしたタスクを開く",
+    "close": "閉じる",
+    "cancel": "キャンセル",
+    "start": "タスクをコピー",
+    "failed": "コピーが完了しませんでした。両方のコンピューターを確認してから再度コピーしてください。",
+    "stages": {
+      "preparing": "スナップショットを準備中…",
+      "transferring": "ファイルを転送・検証中…",
+      "complete": "コピー完了",
+      "cancelled": "コピーをキャンセルしました。",
+      "receiving": "ファイルを受信中…",
+      "active": "このコンピューターでタスクを続けられます。"
+    },
+    "errors": {
+      "MIGRATION_TASK_RUNNING": "コピーする前にタスクを停止してください。",
+      "MIGRATION_SHARED_DIRECTORY_BUSY": "別のタスクがこのフォルダーを使用しています。停止してから再試行してください。",
+      "MIGRATION_TASK_UNSUPPORTED": "このタスクの種類または現在の状態では、別のコンピューターにコピーできません。",
+      "MIGRATION_NO_MEMORY": "タスク履歴全体を処理するためのメモリが不足しています。メモリを解放して再試行してください。",
+      "MIGRATION_INCOMPLETE_CONTEXT": "タスク履歴が不完全なため、コピーを停止しました。",
+      "MIGRATION_EXTERNAL_LINK": "フォルダー外へのリンク、または未対応のリンクチェーンがあります。元のファイルは変更されていません。",
+      "MIGRATION_REQUIRES_REPOSITORY_ROOT": "Git プロジェクトでは、タスクのフォルダーがリポジトリのルートである必要があります。",
+      "MIGRATION_SUBMODULE_UNSUPPORTED": "Git サブモジュールを含むプロジェクトのコピーは未対応です。",
+      "MIGRATION_NO_SPACE": "コピー先の空き容量が不足しています。",
+      "MIGRATION_TARGET_MODEL_UNAVAILABLE": "コピー先にこのタスクのエンジンで利用できるモデルがありません。先にプロバイダーを接続してください。",
+      "MIGRATION_UNSUPPORTED": "両方のコンピューターをタスクのコピーに対応したバージョンに更新してください。",
+      "MIGRATION_TASK_QUEUED": "このタスクには待機中のメッセージがあります。処理または削除してからコピーしてください。",
+      "MIGRATION_SOURCE_CHANGED": "準備中に元のタスクが変更されました。コピーを再試行してください。"
+    },
+    "successTitle": "コピー完了",
+    "successDescription": "{{name}}にコピーしました。",
+    "copyingTitle": "{{name}}にコピー中",
+    "keepOpen": "{{name}}にコピーしています。完了までお待ちください。",
+    "failureTitle": "コピー失敗",
+    "failureDescription": "閉じた後、タスクメニューから新しくコピーできます。",
+    "finishing": "{{name}}で受信・検証し、タスクを作成中…",
+    "transferProgress": "アップロード {{sent}} / {{total}} · 平均 {{speed}}/s（受信は未完了）",
+    "thisComputer": "このコンピューター",
+    "selectedComputer": "選択したコンピューター",
+    "estimating": "ファイル数とサイズを計算中…",
+    "fileSummary": "プロジェクトファイル：{{count}} 個、合計 {{size}}",
+    "estimateNote": "隠しファイルを含むコピー前の推定値です。別途コピーする Git 履歴、タスクの会話と添付ファイルは含みません。ファイルの変更により最終サイズは変わります。",
+    "estimateFailed": "集計できませんでした。コピー元の接続とバージョンを確認し、閉じて再試行してください。"
+  },
   "sharedTask": {
+    "selfJoin": "これは自分が開始した共有タスクのため、参加する必要はありません。「自分が共有中」から開いてください。",
     "manageSharing": "共有管理",
     "manageMembers": "メンバーを管理…",
     "cancelSharing": "共有を停止",
     "cancelTitle": "共有を停止しますか？",
-    "leaveShort": "共有から退出",
+    "leaveShort": "退出",
     "joinTab": "共有に参加",
-    "joinedEmptyTitle": "参加中の共有タスクはありません",
-    "joinedEmptyHint": "「共有に参加」でホストの招待コードを入力してください。",
+    "joinedEmptyTitle": "参加している共有タスクはありません",
+    "joinedEmptyHint": "仲間からの招待リンクを開いて共有タスクに参加できます。",
     "joinedLoadFailed": "参加中の共有タスクを取得できませんでした。再試行してください。",
-    "joinedTab": "参加",
+    "joinedTab": "参加した共有",
     "reconnecting": "再接続中…",
     "ownedLoadFailed": "取得できません",
     "loadingOwned": "取得中…",
-    "retryAction": "再試行",
-    "invitationCopyFailed": "招待コードは作成されましたが、コピーできませんでした。このウィンドウに戻って再試行してください。",
-    "accessEndedBody": "この共有セッションにはアクセスできません。再参加するには、ホストから新しい招待コードを受け取ってください。",
-    "joinIntro": "ホストから届いた招待コードを入力して、共有セッションに参加します。",
-    "invitationPlaceholder": "招待コードを入力または貼り付け",
-    "joinNickname": "タスク内でのニックネーム",
-    "nicknamePlaceholder": "表示する名前",
+    "retryAction": "再読み込み",
+    "invitationCopyFailed": "招待リンクをコピーできませんでした。もう一度お試しください。",
+    "accessEndedBody": "この共有セッションにはアクセスできません。再参加するには、ホストから新しい招待リンクを受け取ってください。",
+    "joinIntro": "ホストからの招待リンクを貼り付けると、アカウント名でタスクに参加します。",
+    "invitationPlaceholder": "招待リンクまたは招待コードを貼り付け",
     "joinNotice": "参加するとすべての履歴を閲覧でき、ホストの承認を待たずに Agent にメッセージを送信できます。",
     "joinedTitle": "「{{title}}」に参加しました",
     "joined": "共有タスクに参加しました",
     "joinedBody": "参加前のメッセージ、ツールの結果、添付ファイルを確認し、同じ Agent にメッセージを送信できます。",
     "enterTask": "タスクを開く",
-    "inviteBoxTitle": "仲間を招待",
+    "inviteBoxTitle": "招待リンクを仲間に送信",
     "roleGuest": "ゲスト",
     "removeShort": "削除",
     "removeNamedTitle": "{{name}}を削除しますか？",
     "manage": "管理",
     "ended": "共有が終了しました",
-    "rejoin": "新しい招待コードで参加",
+    "rejoin": "新しい招待リンクで参加",
     "otherDevice": "他のパソコン",
     "runsOnHostDevice": "ホストのパソコンで実行中",
-    "remoteHostOfflineNote": "ホストのパソコンがオフラインのままだと、共有は自動的に終了します。ホストによる共有の再開と新しい招待コードの送信が必要です。",
+    "remoteHostOfflineNote": "ホストのパソコンがオフラインのままだと、共有は自動的に終了します。ホストによる共有の再開と新しい招待リンクの送信が必要です。",
     "waitingHost": "ホストの対応を待っています。引き続きメッセージを送信できます。",
     "join": "共有セッションに参加",
     "login": "セッションに参加するには Cindy にログインしてください。",
-    "invitation": "招待コード",
+    "invitation": "招待リンクまたは招待コード",
     "dismiss": "ダイアログを閉じる",
     "title": "セッションを共有",
     "hostLimit": "共有タスクの開始数が現在の上限に達しました。上限を下回るまで共有タスクを終了してから再試行してください。",
     "joinLimit": "参加中の共有タスクが現在の上限に達しました。上限を下回るまで共有タスクから退出してから再試行してください。",
     "guestLimit": "この共有タスクにはすでにゲストが 2 人いるため、参加できません。",
-    "invitationUnavailable": "招待コードが無効か期限切れです。ホストに新しいコードを依頼してください。",
-    "invitationRenew": "この招待コードでは再参加できません。ホストに新しいコードを依頼してください。",
-    "unavailable": "共有が終了したか、アクセス権がありません。ホストに新しい招待コードを依頼してください。",
+    "invitationUnavailable": "招待リンクが無効か期限切れです。ホストに新しいリンクを依頼してください。",
+    "invitationRenew": "この招待リンクでは再参加できません。ホストに新しいリンクを依頼してください。",
+    "unavailable": "共有が終了したか、アクセス権がありません。ホストに新しい招待リンクを依頼してください。",
     "permissionDenied": "この操作を行う権限がありません。ホストに連絡してください。",
     "connectionFailed": "共有サービスまたはホストのコンピューターに接続できません。ネットワークを確認して再試行してください。",
     "requestTimedOut": "リクエストがタイムアウトしました。ネットワークとホストのコンピューターの接続を確認して再試行してください。",
@@ -55,45 +117,53 @@
     "open": "共有を開始",
     "host": "ホスト",
     "remove": "ゲストを削除",
-    "invite": "招待コードをコピー",
-    "invitationCopied": "招待コードをコピーしました",
+    "invite": "招待をコピー",
+    "invitationCopied": "招待をコピーしました。メッセージに貼り付けて送信してください。",
     "tabOwned": "自分が共有中",
     "startIntro": "パートナーを招待して、このセッションのすべての内容を共有し、同じ Agent で協力できます。",
     "runsOnThisDevice": "このパソコンで実行中",
-    "inviteNotice": "招待コードを持つユーザーはログイン後に参加でき、所有者と同じ Agent 権限を持ちます。",
+    "inviteNotice": "招待リンクを持つユーザーはログイン後に参加でき、所有者と同じ Agent 権限を持ちます。",
     "offlineAutoClose": "ホストのパソコンがオフラインのままだと、共有は自動的に終了します。",
-    "inviteBoxHint": "仲間は招待コードを入力して共有セッションに参加できます",
+    "inviteBoxHint": "リンクを送ると、相手はクリックして参加できます。モバイルではリンクをコピーして Cindy を開くこともできます。",
+    "invitationMessage": "「{{title}}」への招待です\n{{link}}\nリンクを開いて参加してください。モバイルではリンクをコピーして Cindy を開き、参加を確認することもできます。",
     "membersWithLimit": "メンバー · {{count}} 人（ゲストは最大 2 人）",
     "me": "自分",
     "thisDevice": "このパソコン",
     "roleHost": "ホスト",
-    "hostOfflineNote": "このパソコンがオフラインのままだと、共有は自動的に終了します。再開するには共有を開始し、新しい招待コードを送信してください。",
+    "hostOfflineNote": "このパソコンがオフラインのままだと、共有は自動的に終了します。再開するには共有を開始し、新しい招待リンクを送信してください。",
     "sharingBadge": "共有中",
     "ownedEmptyTitle": "共有中のセッションはありません",
     "ownedEmptyHint": "任意のセッションを開いて「セッションを共有」から招待できます。",
     "closeAll": "すべての共有を停止（{{count}}）",
     "closeAllTitle": "すべての共有を停止しますか？",
-    "closeAllBody": "以下のセッションにすべてのゲストがアクセスできなくなり、招待コードは無効になります。",
+    "closeAllBody": "以下のセッションにすべてのゲストがアクセスできなくなり、招待リンクは無効になります。",
     "closeAllKeep": "共有を続ける",
     "closeAllAction": "{{count}} 件の共有を停止",
     "closeAllScopeNote": "セッションの記録と Agent の作業は保持され、自分が参加している他のセッションには影響しません。",
-    "closeOneBody": "すべてのゲストはアクセスできなくなり、招待コードは無効になります。",
-    "removeBody": "そのゲストはアクセスできなくなります。再参加にはホストの新しい招待コードが必要です。",
+    "closeOneBody": "すべてのゲストはアクセスできなくなり、招待リンクは無効になります。",
+    "removeBody": "そのゲストはアクセスできなくなります。再参加にはホストの新しい招待リンクが必要です。",
     "removeKeep": "ゲストを残す",
     "leaveTitle": "共有セッションから退出しますか？",
-    "leaveBody": "退出すると、このセッションにアクセスできなくなります。再参加するには、ホストから新しい招待コードを受け取ってください。",
+    "leaveBody": "退出すると、このセッションにアクセスできなくなります。再参加するには、ホストから新しい招待リンクを受け取ってください。",
     "leaveKeep": "セッションに残る",
     "closedToast": "{{count}} 件の共有を停止しました",
     "closeFailedToast": "{{count}} 件の共有を停止できませんでした。後でもう一度お試しください。",
     "back": "戻る",
-    "cancelOperation": "操作をキャンセル",
-    "invalidInvitation": "有効な招待コードを入力してください",
-    "missingNickname": "このセッションで使うニックネームを入力してください",
-    "ownedManageIntro": "他のパソコンを含め、自分が共有しているセッションを管理できます。",
-    "joinedManageIntro": "セッションを開いて作業を続けるか、参加しなくなった共有セッションから退出できます。",
+    "cancelOperation": "キャンセル",
+    "invalidInvitation": "有効な招待リンクまたは招待コードを貼り付けてください。",
+    "ownedManageIntro": "このアカウントの別のパソコンで開始した共有も含みます。",
+    "joinedManageIntro": "退出するとこの共有にアクセスできなくなります。ホストや他のメンバーには影響しません。",
     "recordsKept": "セッションの履歴と Agent の作業は保持されます。",
     "othersUnaffected": "他のメンバーや Agent の作業には影響しません。",
-    "viewJoined": "参加中のセッションを表示"
+    "viewJoined": "参加中のセッションを表示",
+    "invalid": "有効な招待リンクまたは招待コードを貼り付けてください。",
+    "invitationDifferentServer": "この招待は別の Cindy サービスのものです。対応するアプリでリンクを開いてください。",
+    "managementIntro": "開始した共有と参加した共有を管理します。",
+    "returnToTasks": "タスク一覧に戻る",
+    "invitationDetected": "共有タスクへの招待が見つかりました",
+    "notNow": "今は参加しない",
+    "closeAllLabel": "すべての共有を停止",
+    "closeAllDescription": "すべてのゲストがアクセスできなくなります。タスクの履歴は保持されます。"
   },
   "privacyExit": {
     "status": "Cindy でリモート操作されています",
@@ -138,6 +208,7 @@
     "allow": "リモートデスクトップを許可",
     "allowHint": "同じアカウントのデバイスから、このコンピューターの全アプリの表示と操作を許可します。上のデバイス操作も有効にしてください。",
     "permissionHint": "コンピューターのシステム設定で画面収録とアクセシビリティを許可し、再接続してください。",
+    "controlUnavailable": "リモートコンピューターで操作を受け付けられません。操作権限と接続を確認して再接続してください。",
     "beingControlled": "デスクトップが操作されています",
     "beingViewed": "デスクトップが表示されています",
     "disconnect": "切断",
@@ -816,6 +887,11 @@
       "feishuHint": "連携済みの Feishu または Lark ボットからプライベートメッセージを送信します。ウィンドウが非アクティブの場合のみ送信。",
       "feishuDisabledHint": "先に「Feishu / Lark ボット」で設定し、ボットに 1 度メッセージを送ってバインドを完了してください。",
       "feishuAria": "セッション完了時の Feishu 通知を切り替え",
+      "botGroupPlan": {
+        "stepDone": "{{name}} が「{{task}}」を終えました。続行を待っています",
+        "stepFailed": "{{name}} は「{{task}}」を終えられませんでした。再試行できます",
+        "planDone": "役割分担がすべて完了しました（最後は {{name}} の「{{task}}」）"
+      },
       "sessionEvent": {
         "untitled": "無題のセッション",
         "done": "完了しました ✓",
@@ -1211,7 +1287,7 @@
         "chatAttachmentsClearFailed": "メッセージ添付ファイルのキャッシュをクリーンアップできませんでした。もう一度お試しください。",
         "dbSlimmingBackupDirectoryDialogTitle": "データベースのクリーンアップ用バックアップ先を選択",
         "dbSlimmingLabel": "データベースのクリーンアップ",
-        "dbSlimmingDescription": "選択した期間を超えて更新されていない論理削除済みおよびアーカイブ済みタスクの履歴をスキャンし、必要に応じてアクティブなタスクも対象に含めます。確認後に Cindy を再起動し、データベースを開く前に履歴を削除して圧縮します。ディスク上の添付ファイルや生成メディアは削除しません。",
+        "dbSlimmingDescription": "選択した期間を超えて更新されていない論理削除済みおよびアーカイブ済みタスクの履歴をスキャンし、必要に応じて未アーカイブのタスクも対象に含めます。確認後に Cindy を再起動し、データベースを開く前に履歴を削除して圧縮します。ディスク上の添付ファイルや生成メディアは削除しません。",
         "dbSlimmingScanButton": "データベースをスキャン",
         "dbSlimmingScanLoading": "データベースをスキャンしています…",
         "dbSlimmingScanResultTitle": "データベースのスキャン結果",
@@ -1221,12 +1297,12 @@
         "dbSlimmingArchiveAgeOption1": "1 か月",
         "dbSlimmingArchiveAgeOption3": "3 か月",
         "dbSlimmingArchiveAgeOption6": "6 か月",
-        "dbSlimmingIncludeActiveLabel": "アクティブなセッションをクリーンアップ",
-        "dbSlimmingIncludeActiveDescription": "選択した期間を超えたアクティブなセッションもクリーンアップし、一覧から削除します",
-        "dbSlimmingIncludeActiveConfirmTitle": "アクティブなタスクもデータベースのクリーンアップ対象にしますか？",
-        "dbSlimmingIncludeActiveConfirmDescription": "選択した期間を超えたアクティブなタスクでも、まだ実行中の可能性があります。クリーンアップはタスクの停止を待たず、スキャン後に追加されたメッセージも削除される場合があります。有効にすると、選択した期間を超えて更新されていないアクティブ、アーカイブ済み、論理削除済みのタスクがクリーンアップされます。対象のアクティブなセッションの履歴と Agent コンテキストは削除され、通常のセッションは一覧からも削除されます。仲間のメインセッションは残ります。データベースのバックアップではタスクとメッセージのデータを復元できます。バックアップを作成しない場合、それらのデータも復元できません。それらのメッセージによるファイル変更のレビューや元に戻す操作に使う記録はデータベースのバックアップに含まれず、復元できません。",
-        "dbSlimmingIncludeActiveConfirmButton": "アクティブなタスクを含める",
-        "dbSlimmingIncludeActiveCancelButton": "アクティブなタスクを残す",
+        "dbSlimmingIncludeActiveLabel": "未アーカイブのセッションをクリーンアップ",
+        "dbSlimmingIncludeActiveDescription": "選択した期間を超えた未アーカイブのセッションもクリーンアップし、一覧から削除します",
+        "dbSlimmingIncludeActiveConfirmTitle": "未アーカイブのタスクもデータベースのクリーンアップ対象にしますか？",
+        "dbSlimmingIncludeActiveConfirmDescription": "選択した期間を超えた未アーカイブのタスクでも、まだ実行中の可能性があります。クリーンアップはタスクの停止を待たず、スキャン後に追加されたメッセージも削除される場合があります。有効にすると、選択した期間を超えて更新されていない未アーカイブ、アーカイブ済み、論理削除済みのタスクがクリーンアップされます。対象の未アーカイブのセッションの履歴と Agent コンテキストは削除され、通常のセッションは一覧からも削除されます。仲間のメインセッションは残ります。データベースのバックアップではタスクとメッセージのデータを復元できます。バックアップを作成しない場合、それらのデータも復元できません。それらのメッセージによるファイル変更のレビューや元に戻す操作に使う記録はデータベースのバックアップに含まれず、復元できません。",
+        "dbSlimmingIncludeActiveConfirmButton": "未アーカイブのタスクを含める",
+        "dbSlimmingIncludeActiveCancelButton": "未アーカイブのタスクを残す",
         "dbSlimmingBackupLabel": "クリーンアップ前にデータベースをバックアップ",
         "dbSlimmingBackupDefaultLocation": "データベースのフォルダ（最新のクリーンアップ用バックアップのみ保持）",
         "dbSlimmingUseDefaultDirectoryButton": "既定のフォルダを使用",
@@ -1237,7 +1313,7 @@
         "dbSlimmingBackupMissing": "最新のクリーンアップ用バックアップが見つかりません。",
         "dbSlimmingBackupOpenFailed": "クリーンアップ用バックアップの場所を開けませんでした。もう一度お試しください。",
         "dbSlimmingReportTasks": "論理削除タスク {{deleted}} 件、アーカイブ済みタスク {{archived}} 件を削除します",
-        "dbSlimmingReportTasksWithActive": "アクティブなタスク {{active}} 件、論理削除済みタスク {{deleted}} 件、アーカイブ済みタスク {{archived}} 件をクリーンアップします",
+        "dbSlimmingReportTasksWithActive": "未アーカイブのタスク {{active}} 件、論理削除済みタスク {{deleted}} 件、アーカイブ済みタスク {{archived}} 件をクリーンアップします",
         "dbSlimmingReportMessages": "削除予定のメッセージ内容：{{count}} 件（約 {{size}}）",
         "dbSlimmingReportSpace": "データベース {{database}}、必要な一時領域は最低 {{temporary}}、空き容量 {{free}}",
         "dbSlimmingSpaceUnknown": "不明",
@@ -1485,6 +1561,11 @@
         "label": "音声入力をすばやく開始",
         "hint": "使用後しばらくマイクを待機状態に保ち、ショートカットやボタンを押してから録音開始までを短縮します。通常は約 100 ms 速くなります。30 分間使用しないと自動的にマイクを解放します。",
         "ariaLabel": "音声入力の高速開始を切り替え"
+      },
+      "composerLongPress": {
+        "label": "入力欄の長押しで音声入力",
+        "hint": "入力欄でマウスの左ボタンを少し長押しすると音声入力を開始し、離すと終了して文字を入力します。",
+        "ariaLabel": "入力欄の長押しで音声入力を切り替え"
       },
       "refinement": {
         "enabled": {
@@ -1756,6 +1837,45 @@
       }
     },
     "providers": {
+      "llamacpp": {
+        "ownedElsewhere": "モデルサービスは別の Cindy インスタンスで実行中です。モデルのダウンロードやコンテキストの変更はそちらで行うか、先にそのサービスを停止してください。",
+        "primaryPick": "第一候補 · まず試す",
+        "recommendReason": "共通カタログがこのパソコン向けに選んだ性能重視の {{name}} から始めてください。",
+        "recommendCaveat": "この GGUF 版のローカル速度とピークメモリは未検証です。ダウンロードサイズは実行時メモリ使用量ではありません。",
+        "candidates": "試用するモデル",
+        "trialNote": "試用できるモデルです。性能とメモリ使用量は未検証です。",
+        "downloadModel": "{{name}} をダウンロード",
+        "title": "llama.cpp",
+        "subtitle": "実行環境とモデルをダウンロードしてローカルで実行",
+        "description": "下のモデルを選び、ダウンロードしてローカルで実行します。",
+        "install": "llama.cpp をインストール",
+        "start": "起動して接続",
+        "restart": "再起動してモデルを更新",
+        "stop": "サービスを停止",
+        "cancel": "操作をキャンセル",
+        "repository": "Hugging Face リポジトリ",
+        "findFiles": "モデルファイルを検索",
+        "file": "GGUF ファイル",
+        "shards": "分割モデルは全ファイルをダウンロードします。表示サイズは選択したファイルのみです。テキストモデルに対応し、画像用プロジェクターはダウンロードしません。",
+        "download": "モデルをダウンロード",
+        "models": "ダウンロード済みモデル",
+        "empty": "上の一覧からモデルを選ぶか、Hugging Face リポジトリを入力してダウンロードしてください。",
+        "unsupported": "この環境では自動インストールに対応していません。llama.cpp 接続を手動で設定してください。",
+        "failed": "操作を完了できませんでした。ネットワークとディスク空き容量を確認して再試行してください。",
+        "invalid": "owner/model-GGUF 形式でリポジトリを入力し、GGUF ファイルを選択してください。",
+        "progress": {
+          "install": "llama.cpp をインストール中…",
+          "download": "モデルをダウンロード中…",
+          "start": "llama.cpp を起動中…"
+        },
+        "installAndConnect": "インストールして接続",
+        "installDescription": "Cindy が llama.cpp をインストールします。モデルをダウンロードすると、使用時にサービスが自動で起動します。",
+        "manualConnect": "既存のサービスに接続",
+        "manageRuntime": "サービスを管理",
+        "restartHint": "モデルのダウンロードやコンテキストの変更後は、「サービスを管理」で再起動すると変更が反映されます。再起動すると進行中の生成が中断されます。",
+        "applyModels": "ダウンロード済みモデルを使用",
+        "startOnUse": "使用時に起動"
+      },
       "catalogRecovery": {
         "pending": "モデル設定の準備ができていません。しばらく待ってからモデルを再読み込みしてください。",
         "legacy": "以前のモデル設定を一時的に読み込めません。他の Cindy を終了してから、モデルを再読み込みしてください。",
@@ -2213,6 +2333,7 @@
           "defaultEffortHint": "新しいタスクの初期推論強度です。タスク内でも変更できます。",
           "contextLimit": "コンテキスト上限",
           "contextLimitHint": "このモデルのすべての利用可能なエンジンに適用されます。整数 K（1 K = 1,000 tokens）で編集します。未編集の値は精度を保持します。保存した変更は以降の実行に適用され、生成中の応答を中断しません。実際に利用できる長さはモデルサービスの制限に従います。",
+          "contextLimitLocalMillionHint": "標準は 256K（262,144 tokens）で、1M（1,000,000）への拡張を選べます。サービスの実行中は「サービスを管理」で再起動すると変更が反映されます。停止中なら次回の使用時に反映されます。長い入力ほどメモリと処理時間が必要です。",
           "contextLimitAria": "コンテキスト上限（千 tokens）",
           "contextLimitRoute": "現在 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "プロバイダーが宣言した上限を超えています。リクエストが失敗する可能性があります。",
@@ -2443,7 +2564,8 @@
           "apple-mlx": "この Mac には公式 MLX が向いています。",
           "generic-27b": "このコンピュータには公式 Q4 が向いています。",
           "compact": "このコンピュータのメモリなら、より軽いモデルから始めましょう。",
-          "unknown": "まずは動かしやすいモデルを選びます。"
+          "unknown": "まずは動かしやすいモデルを選びます。",
+          "high-memory": "大容量メモリを活かし、より高性能なモデルを優先します。ローカルの速度とピークメモリは要検証です。"
         },
         "searchPlaceholder": "モデルを検索",
         "noSearchResults": "一致するモデルがありません",
@@ -2534,7 +2656,9 @@
         "deleteModelConfirm": "削除",
         "deleteModelDone": "{{name}} を削除しました",
         "deleteModelFailed": "削除できませんでした。Ollama が起動していることを確認して、もう一度お試しください。",
-        "noRecommendation": "このコンピュータのメモリに適合し、十分な根拠のある推奨モデルはまだありません。下の候補から選べます。"
+        "noRecommendation": "このコンピュータのメモリに適合し、十分な根拠のある推奨モデルはまだありません。下の候補から選べます。",
+        "lighterAlternative": "軽量な代替モデル",
+        "recommendedInstalled": "推奨モデルはインストール済みです。"
       },
       "xdSignin": {
         "badge": "おすすめ",
@@ -2591,7 +2715,7 @@
         "pending": "認証情報を準備中",
         "unavailable": "一時的に利用できません"
       },
-      "claudeAccountRetired": "個別の Claude アカウントは利用できなくなりました。「Claude Code でログイン」から Claude サブスクリプションを接続してください。このアカウントは削除できます。"
+      "claudeAccountRetired": "Cindy では、この旧式の Claude 接続を使ったサブスクリプションへのログインに対応していません。Claude アカウントとサブスクリプションには影響ありません。「Claude Code でログイン」から接続してください。"
     },
     "experimental": {
       "title": "実験的機能",
@@ -4258,13 +4382,13 @@
       "defaults": {
         "title": "新規会話設定",
         "channelDescriptions": {
-          "feishu": "Feishu の新規会話では、この Agent とモデルを使用します。既存の DM には /new で適用します。",
+          "feishu": "Feishu の新規会話では、この Agent とモデルを使用します。モデルを個別に変更していない既存のセッションは、次のメッセージを受信したときに切り替わります。",
           "slack": "Slack の新しいスレッドでは、この Agent とモデルを使用します。",
-          "discord": "Discord の新規会話では、この Agent とモデルを使用します。既存の DM には /new で適用します。",
-          "wechat": "WeChat の新規会話では、この Agent・モデル・権限モードを使用します。既存のチャットには /new で適用します。",
-          "telegram": "Telegram の新規会話では、この Agent とモデルを使用します。既存の会話には /new で適用します。",
-          "dingtalk": "DingTalk の新規会話では、この Agent とモデルを使用します。既存の会話には /new で適用します。",
-          "wecom": "WeCom の新規会話では、この Agent・モデル・権限モードを使用します。既存のチャットには /new で適用します。"
+          "discord": "Discord の新規会話では、この Agent とモデルを使用します。モデルを個別に変更していない既存のセッションは、次のメッセージを受信したときに切り替わります。",
+          "wechat": "WeChat の新規会話では、この Agent・モデル・権限モードを使用します。モデルを個別に変更していない既存のセッションは、次のメッセージを受信したときにこの Agent とモデルに切り替わります。権限モードは既存のチャットに /new を送信すると適用されます。",
+          "telegram": "Telegram の新規会話では、この Agent とモデルを使用します。モデルを個別に変更していない既存のセッションは、次のメッセージを受信したときに切り替わります。",
+          "dingtalk": "DingTalk の新規会話では、この Agent とモデルを使用します。モデルを個別に変更していない既存のセッションは、次のメッセージを受信したときに切り替わります。",
+          "wecom": "WeCom の新規会話では、この Agent・モデル・権限モードを使用します。モデルを個別に変更していない既存のセッションは、次のメッセージを受信したときにこの Agent とモデルに切り替わります。権限モードは既存のチャットに /new を送信すると適用されます。"
         },
         "agentLabel": "Agent",
         "agentUnsupportedOnChannelHint": "{{agent}} Agent はこのチャンネルでメッセージごとの権限確認に対応していないため、メッセージを処理できません。Claude Code または Codex に切り替えてください。",
@@ -6514,7 +6638,7 @@
     }
   },
   "usageHistory": {
-    "description": "このデバイスの Cindy 内で発生したトークン使用量です。記録は機能の提供開始時から蓄積され、それ以前の履歴は補完されません。",
+    "description": "お使いの各コンピュータの Cindy 内で発生したトークン使用量です。既定では合算して表示し、1 台ずつ表示することもできます。ほかのコンピュータはオンラインでリモート操作を許可している場合に読み取れます。読み取れないときは前回読み取ったデータを使います。記録は機能の提供開始時から蓄積され、それ以前の履歴は補完されません。",
     "empty": "まだ使用記録がありません。会話を実行すると蓄積が始まります。",
     "loadFailed": "使用履歴を読み込めませんでした。設定を開き直して、もう一度お試しください。",
     "range": {
@@ -6525,6 +6649,24 @@
       "30d": "直近 30 日",
       "7d": "直近 7 日",
       "today": "今日"
+    },
+    "device": {
+      "label": "デバイス",
+      "ariaLabel": "使用量のデバイスを絞り込む",
+      "all": "すべてのデバイス",
+      "self": "このデバイス",
+      "selfNamed": "このデバイス（{{name}}）",
+      "loading": "ほかのデバイスの使用量を読み込み中…",
+      "status": {
+        "syncing": "読み取り中…",
+        "syncedAt": "{{time}} 時点のデータ",
+        "offline": "オフライン",
+        "remoteDisabled": "リモート操作が許可されていません",
+        "unsupported": "Cindy の更新が必要です",
+        "error": "読み取りに失敗しました",
+        "noData": "データなし"
+      },
+      "partial": "一部のコンピュータの最新使用量を読み取れなかったため、合計が少なく表示されている可能性があります。デバイス一覧で各台の状態を確認できます。"
     },
     "cacheHitTooltip": "キャッシュ読取 ÷（入力 + キャッシュ読取 + キャッシュ書込）。メッセージカードと同じ基準です。",
     "summary": {
@@ -6547,7 +6689,12 @@
     },
     "daily": {
       "title": "直近 30 日の日次トークン",
-      "subtitle": "モデル別の積み上げ"
+      "subtitle": "モデル別の積み上げ",
+      "tooltip": {
+        "unit": "トークン",
+        "more_one": "ほか {{count}} モデル",
+        "more_other": "ほか {{count}} モデル"
+      }
     },
     "byAgent": {
       "title": "Agent / harness 別",
@@ -6579,7 +6726,8 @@
     },
     "tasks": {
       "title": "トークン消費の多いセッション",
-      "subtitle": "{{range}}に稼働したセッションを累計トークン順に表示",
+      "subtitle": "{{range}}にトークンを最も消費したセッション",
+      "coverage": "日別集計は {{date}} から",
       "col": {
         "task": "セッション",
         "model": "モデル",
@@ -6589,7 +6737,7 @@
         "lastActive": "最終アクティブ"
       },
       "providerTooltip": "セッションで現在選択されているプロバイダー。未指定の場合は空欄です。",
-      "tokensTooltip": "セッションの累計値です。{{range}}はアクティブなセッションの絞り込みにのみ使われ、期間内の増分ではありません。"
+      "tokensTooltip": "このセッションが{{range}}に使用したトークンのみを集計します。"
     }
   },
   "usageDashboard": {
@@ -7558,6 +7706,8 @@
   },
   "sidebar": {
     "backToSessions": "セッションに戻る",
+    "taskAttentionCount": "確認が必要なタスク：{{count}}",
+    "teammateUnreadCount": "未読のチャット：{{count}}",
     "vendorReadiness": {
       "loading": "利用可否を確認中",
       "ready": "準備完了",
@@ -7717,6 +7867,10 @@
     },
     "model": {
       "description": "このパートナーが使用するモデルを選びます。",
+      "primary": "メインモデル",
+      "task": "セッション用モデル",
+      "inheritPrimary": "メインモデルを継承",
+      "inheritingPrimary": "新しいバックグラウンドセッションはメインモデルを継承します",
       "restoreDefault": "デフォルトのモデルに戻す"
     },
     "modelChain": {
@@ -7882,6 +8036,181 @@
       "empty": "表示できるメッセージはまだありません。",
       "limitReached": "今回の会話は上限に達し、双方がそれぞれのメインタスクに戻りました"
     },
+    "groupChat": {
+      "memberSeparator": "、",
+      "memberCount_one": "仲間 {{count}} 人",
+      "memberCount_other": "仲間 {{count}} 人",
+      "nameLabel": "グループ名",
+      "waitingConfirm": "{{name}} があなたの確認を待っています",
+      "loadFailedTitle": "このグループチャットを読み込めません",
+      "loadFailedDescription": "Cindy は現在このグループチャットを読み込めません。再試行するか、仲間のページに戻ってください。",
+      "unavailableTitle": "このグループチャットは利用できません",
+      "unavailableDescription": "削除された可能性があります。仲間のページに戻ると、ほかのグループチャットや仲間を開けます。",
+      "sidebar": {
+        "title": "グループチャット",
+        "empty": "メッセージはまだありません",
+        "preview": "{{name}}: {{text}}",
+        "previewYou": "あなた: {{text}}",
+        "waiting": "確認待ち",
+        "planProposed": "{{name}}: 計画ができました。開始を待っています",
+        "planProposedAnonymous": "計画ができました。開始を待っています",
+        "planRunning": "役割分担 {{step}}/{{total}} · {{name}} が作業中",
+        "planRunningNoStep": "{{name}} が作業中",
+        "planPlanning": "{{name}} が役割分担を考えています…",
+        "planStepDone": "{{name}} の作業が終わりました。続行を待っています",
+        "planStepFailed": "{{name}} は完了できませんでした",
+        "planWaitingAnonymous": "役割分担が止まっています"
+      },
+      "create": {
+        "title": "グループチャットを作成",
+        "description": "何人かの仲間を 1 つのグループにまとめます。あなたが話しかけると、仲間たちが一緒に返信します。",
+        "namePlaceholder": "例: 週末のお出かけ",
+        "nameRequired": "グループ名を入力してください",
+        "membersLabel": "仲間を選択",
+        "selectedCount_one": "{{count}} 人選択中（最大 {{max}} 人）",
+        "selectedCount_other": "{{count}} 人選択中（最大 {{max}} 人）",
+        "minMembers": "仲間を {{min}} 人以上選択してください",
+        "notEnoughBots": "グループチャットを作成するには、利用できる仲間が {{min}} 人以上必要です。まず仲間を追加してください。",
+        "submit": "グループチャットを作成",
+        "failed": "グループチャットを作成できませんでした。しばらくしてから再試行してください"
+      },
+      "memberStatus": {
+        "paused": "一時停止中",
+        "unavailable": "利用不可"
+      },
+      "mention": {
+        "all": "全員",
+        "allHint": "全員が返信",
+        "label": "仲間をメンション"
+      },
+      "composer": {
+        "label": "グループチャットのメッセージ",
+        "placeholder": "グループに話しかけましょう。@ で仲間を指名すると、その仲間だけが返信します…",
+        "noMembers": "今返信できる仲間がいません。グループの設定で仲間を追加してください",
+        "tooLong": "メッセージが長すぎます。上限は {{max}} 文字です",
+        "sendFailed": "メッセージを送信できませんでした。しばらくしてから再試行してください",
+        "stopFailed": "このラウンドを停止できませんでした。もう一度お試しください",
+        "stop": "このラウンドを停止",
+        "more": "その他の操作",
+        "division": "役割分担する",
+        "divisionDescription": "まとめ役が先に役割を分け、仲間が一歩ずつ進めます",
+        "divisionBusy": "役割分担の途中です。終わるか停止してから新しく始めてください",
+        "divisionTag": "役割分担",
+        "removeDivision": "役割分担を外す",
+        "placeholderDivision": "やりたいことを書いてください。まとめ役が先に役割を分けます…",
+        "placeholderPlanProposed": "担当や手順を変えたいときは、そのまま話しかけてください…",
+        "placeholderPlanWaiting": "{{name}} に直してほしいことがあれば、そのまま話しかけてください…",
+        "placeholderPlanRunning": "送った内容は作業中の {{name}} に届きます…",
+        "tooManyAttachments": "添付ファイルが多すぎます。1 件のメッセージにつき最大 {{max}} 個です",
+        "attachmentsFailed": "添付ファイルを送信できませんでした。ファイルが残っているか確認するか、削除してから再試行してください",
+        "folderNotSupported": "フォルダーは添付できません。中のファイルを選んでください"
+      },
+      "timeline": {
+        "loadEarlier": "以前のメッセージを表示",
+        "loadEarlierFailed": "以前のメッセージを読み込めませんでした。もう一度お試しください",
+        "emptyTitle": "このグループにはまだメッセージがありません",
+        "emptyDescription": "話しかけると仲間たちが会話を続けます。@ で仲間を指名すると、その仲間だけが返信します。",
+        "roundEnded": "仲間たちの発言が終わりました",
+        "continue": "議論を続ける",
+        "continueFailed": "議論を続けられませんでした。もう一度お試しください",
+        "nextStep": "次のステップ:",
+        "continuePlan": "次へ進む",
+        "continuePlanFailed": "次のステップに進めませんでした。もう一度お試しください",
+        "stepFailed": "{{name}} は完了できませんでした",
+        "retryStep": "やり直す",
+        "retryFailed": "このステップをやり直せませんでした。もう一度お試しください",
+        "endPlan": "役割分担を終える",
+        "planDone_one": "{{count}} ステップすべて完了しました",
+        "planDone_other": "{{count}} ステップすべて完了しました",
+        "planDoneGeneric": "役割分担が完了しました"
+      },
+      "notice": {
+        "memberFailed": "{{name}} は今回返信できませんでした",
+        "memberTimeout": "{{name}} の返信に時間がかかりすぎたため、今回はスキップしました",
+        "memberUnavailable": "{{name}} は現在利用できないため、今回は発言しませんでした",
+        "planFailed": "{{name}} は役割分担を決められませんでした。もう一度お試しください",
+        "planStopped": "役割分担を停止しました",
+        "workdirUnavailable": "{{name}} が作業ディレクトリを見つけられません",
+        "stepFailed": "{{name}} はエラーのため、このステップを完了できませんでした",
+        "stepTimeout": "{{name}} の作業に時間がかかりすぎたため、このステップを止めました",
+        "stepUnavailable": "{{name}} は現在利用できないため、このステップを進められません"
+      },
+      "settings": {
+        "open": "グループの設定",
+        "title": "グループの設定",
+        "members": "メンバー",
+        "remove": "外す",
+        "removeNamed": "{{name}} をグループから外す",
+        "minMembers": "グループチャットには仲間が {{min}} 人以上必要です",
+        "maxMembers": "最大 {{max}} 人",
+        "noMoreBots": "追加できるほかの仲間はいません",
+        "nameSaveFailed": "グループ名を保存できなかったため、元の名前に戻しました",
+        "membersSaveFailed": "メンバーを更新できませんでした。もう一度お試しください",
+        "replyMode": "誰も @ されていないとき",
+        "replyModeAll": "誰でも返信できる",
+        "replyModeMentioned": "@ された仲間だけ返信",
+        "replyModeNote": "付け加えることがない仲間は発言しません。1 ラウンドは最大 3 周・10 件までで、その後は「議論を続ける」を押すまで待ちます。",
+        "replyModeSaveFailed": "返信の設定を保存できませんでした。もう一度お試しください",
+        "delete": "グループチャットを削除",
+        "deleteNote": "削除されるのはこのグループチャットとそのメッセージだけです。仲間本人、その記憶、個別のチャットには影響しません。",
+        "deleteConfirmTitle": "「{{name}}」を削除しますか？",
+        "deleteFailed": "グループチャットを削除できませんでした。しばらくしてから再試行してください",
+        "speakingMode": "発言の順番",
+        "speakingModeAuto": "自動",
+        "speakingModeSequential": "常に順番に",
+        "speakingModeAutoNote": "メンションなし、または @全員 のときは、最初の一巡は全員が同時に考え、その後は順番に話します。メンションした仲間は、メンションした順に答えます。",
+        "speakingModeSequentialNote": "一度に一人の仲間だけが話し、後の仲間は前の返信を見てから答えます。",
+        "speakingModeSaveFailed": "発言の順番を保存できませんでした。もう一度お試しください。",
+        "setOrganizer": "まとめ役にする",
+        "setOrganizerNamed": "{{name}} をまとめ役にする",
+        "organizerNote": "まとめ役が、どのステップを誰が担当するかを決めます。既定では最初の仲間です。",
+        "organizerSaveFailed": "まとめ役を変更できませんでした。もう一度お試しください",
+        "projectDir": "プロジェクトフォルダ",
+        "projectDirNone": "未選択",
+        "projectDirChoose": "フォルダを選択",
+        "projectDirChange": "フォルダを変更",
+        "projectDirClear": "クリア",
+        "projectDirNote": "役割分担で作業するとき、仲間はここで作業します。選ばなくてもかまいません。その場合はこのグループチャット専用のフォルダを使います。git プロジェクトを選ぶと、役割分担のたびに新しい worktree とブランチを作るので、手元のコードには触れません。",
+        "projectDirSaveFailed": "プロジェクトフォルダを保存できませんでした。フォルダがまだあるか確認してから、もう一度お試しください"
+      },
+      "errors": {
+        "memberLimit": "グループチャットには仲間が 2〜6 人必要です",
+        "memberUnavailable": "利用できない仲間がいます。別の仲間を選んで再試行してください",
+        "notFound": "このグループチャットはもう存在しません",
+        "hostNotReady": "Cindy の準備がまだ終わっていません。しばらくしてから再試行してください",
+        "planOpen": "役割分担の途中です。終わるか停止してから新しく始めてください",
+        "planClosed": "この計画はすでに終了したか、更新されています"
+      },
+      "organizer": "まとめ役",
+      "plan": {
+        "intro_one": "この件は {{count}} ステップに分けて、次のように分担します:",
+        "intro_other": "この件は {{count}} ステップに分けて、次のように分担します:",
+        "missing": "この計画は読み込めなくなりました",
+        "start": "開始する",
+        "dismiss": "今回はやめる",
+        "editHint": "担当や手順を変えたいときは、そのまま話しかけてください",
+        "pauseNote": "1 ステップ終わるごとに止まり、「次へ進む」を押すまで待ちます。",
+        "superseded": "更新済み",
+        "dismissed": "見送りました",
+        "stopped": "停止しました",
+        "stepDone": "完了",
+        "stepRunning": "作業中",
+        "stepFailed": "未完了",
+        "stepPending": "未着手",
+        "stepMenuTitle": "このステップの担当",
+        "removeStep": "このステップを削除",
+        "keepOneStep": "1 つは残す必要があります",
+        "startFailed": "役割分担を開始できませんでした。もう一度お試しください",
+        "dismissFailed": "この計画を終了できませんでした。もう一度お試しください",
+        "editFailed": "このステップを変更できませんでした。もう一度お試しください"
+      },
+      "speaking": {
+        "planning": "役割分担を考えています…"
+      },
+      "files": {
+        "openFailed": "ファイルを開けませんでした。移動または削除された可能性があります"
+      }
+    },
     "joined": {
       "today": "今日加入",
       "yesterday": "昨日加入",
@@ -7973,6 +8302,70 @@
           "prompt": "温かくユーモアがあり、すぐに助言せず日々の小さな話を聞いてくれるパートナー。"
         }
       }
+    },
+    "import": {
+      "title": "仲間をインポート",
+      "entry": "Agent からインポート",
+      "description": "Hermes または OpenClaw から引き継ぐ内容を選びます。",
+      "empty": "このコンピュータに Agent が見つかりません。",
+      "personality": "性格と仕事の習慣",
+      "memory": "メモリー",
+      "skills": "スキル",
+      "connections": "環境と接続",
+      "automations": "自動化",
+      "paused": "停止状態を維持",
+      "itemAttention": "確認が必要",
+      "takeover": "インポート後に自動化を確認して引き継ぐ",
+      "takeoverNote": "データ接続を確認してから元のタスクを停止します。必要な項目を除外した場合、元のタスクは実行を続けます。",
+      "submit": "インポート",
+      "back": "戻る",
+      "open": "仲間を開く",
+      "running": "インポートと接続確認中…",
+      "complete": "インポートを保存しました",
+      "attention": "確認が必要な項目があります。詳細をご確認ください。",
+      "error": "インポートできませんでした。同じ選択で再試行できます。",
+      "keptAtSource": "引き継ぎは未完了です",
+      "retry": "再確認",
+      "missingSelection": "必要な項目が選択されていません。",
+      "authRefresh": "元の認証の更新接続が必要です。",
+      "toolMapping": "元のツール制限の対応付けが必要です。",
+      "modelMapping": "元のモデル設定の対応付けが必要です。",
+      "contextMapping": "元の作業ディレクトリまたは関連コンテキストの対応付けが必要です。",
+      "deliveryFailed": "元の送信先を確認できていません。",
+      "sourceChanged": "元のタスクが変更されました。再読み込みしてください。",
+      "credentialFailed": "認証情報を安全に保存できませんでした。",
+      "scriptMissing": "必要なスクリプトがありません。",
+      "sourceCommand": "元の Agent の制御コマンドが見つかりません。",
+      "readFailed": "このタスクに必要なデータ取得を確認できていません。",
+      "search": "検索",
+      "selectAll": "すべて選択",
+      "previous": "前のページ",
+      "next": "次のページ",
+      "chatSetup": "取り込める情報を保存しました。すぐに会話を始められます。ログインや確認が必要な項目は、都合のよいときに進めましょう。引き継ぎが完了するまで、元の自動化の状態は変わりません。",
+      "chatReady": "情報をインポートしました。会話を始められます。",
+      "partial": "一部の内容は完全にインポートされていません",
+      "details": "インポートの詳細",
+      "partlySaved": "一部のみ保存済み",
+      "savedNeedsSetup": "保存済み・設定または有効化が必要",
+      "notSaved": "未保存",
+      "databaseDriver": "データベースドライバーを読み込めません。Cindy を更新または修復して再試行してください。",
+      "databaseUnavailable": "元のデータベースを読み込めません。元データは変更されていません。修復後に再試行できます。",
+      "fileTooLarge": "ファイルまたはインポート全体が読み取り上限を超えています。内容は切り捨てていません。",
+      "memoryMetadata": "メモリの概要またはタイトルが保存要件を満たしていません。",
+      "memoryWrite": "メモリの保存または整合性確認に失敗しました。再試行できます。",
+      "memoryChanged": "保存済みのメモリが変更されているため、上書きしていません。",
+      "attachmentUnsupported": "この添付形式にはまだ対応していません。元ファイルはインポート元に残っています。",
+      "diskFull": "ディスク容量が不足しています。空きを確保して再試行してください。",
+      "permissionDenied": "読み取りまたは保存の権限がありません。権限を修正して再試行してください。",
+      "setupDeferred": "パートナーとのチャットでログインと確認を続けられます。",
+      "automationInvalid": "自動化の定義を変換できず、作成されていません。",
+      "itemFailed": "この項目は未完了です。再試行するか詳細を確認してください。",
+      "chatPartial": "パートナーは作成されましたが、一部の情報は完全に保存されていません。以下の項目は対応が必要です。他の情報とチャットは利用できます。"
+    },
+    "learning": {
+      "memory": "記憶しました：{{title}}",
+      "skillCreated": "スキルを作成：{{title}}",
+      "skillUpdated": "スキルを更新：{{title}}"
     }
   },
   "common": {
@@ -8558,6 +8951,9 @@
       "noTextContent": "(テキストなし)",
       "orcaRowAria": "{{sender}} からの協同キュー内メッセージ",
       "schedulerRowAria": "自動化タスク「{{sender}}」のキュー内メッセージ",
+      "sessionRowAria": "セッション「{{sender}}」からのキュー内メッセージ",
+      "sessionSenderFallback": "別のセッション",
+      "botRowAria": "仲間「{{sender}}」からのキュー内メッセージ",
       "dragAria": "キューの {{index}} 番目のメッセージをドラッグして並べ替え",
       "steerAction": "割り込み",
       "steerRunningTip": "実行中のタスクを中断せずに割り込み送信します。現在の操作が完了した後に優先して処理されます",
@@ -8686,6 +9082,7 @@
       "credentialSwitchDeferred": "モデルプロバイダーを切り替えました。現在のタスク終了後に有効になります。",
       "effortRuntimeDirty": "推論強度を更新しています。少し待ってからもう一度送信してください。",
       "credentialSwitchApplied": "モデルプロバイダーの切り替えが有効になりました。",
+      "credentialSwitchFailed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。",
       "modelSwitchContextGuard": {
         "title": "このモデルには今の会話が収まりません",
         "warnToast": "この会話はすでに {{used}} 使っています。切替後は新しいモデルの容量（{{total}}）の約 {{pct}}% になります",
@@ -8984,7 +9381,11 @@
       "toolUses_one": "{{count}} 回のツール使用",
       "toolUses_other": "{{count}} 回のツール使用",
       "lastTool": "直近のツール: {{tool}}",
-      "outputFile": "出力: {{path}}"
+      "outputFile": "出力: {{path}}",
+      "runningFor": "実行時間 {{duration}}",
+      "startedAt": "開始 {{time}}",
+      "recentOutput": "最近の出力 · {{time}} 前に更新",
+      "noOutputYet": "まだ出力はありません"
     },
     "planPill": {
       "step": "ステップ {{current}} / {{total}}",
@@ -9208,6 +9609,14 @@
       "annotateDiscard": "注釈を破棄",
       "annotateSave": "注釈を保存",
       "annotateSaveFailed": "注釈の保存に失敗しました",
+      "annotateRedo": "やり直す",
+      "annotateDiscardConfirmTitle": "注釈の変更を破棄しますか？",
+      "annotateDiscardConfirmDescription": "注釈はこの画像を開いたときの状態に戻ります。",
+      "annotateDiscardConfirmAction": "破棄",
+      "annotateDiscardConfirmCancel": "注釈を続ける",
+      "annotateBurnFailedNotSent": "画像への注釈の合成に失敗したため、メッセージは送信されませんでした。再試行するか、注釈を削除してから送信してください。",
+      "annotateBurnFailedNotSaved": "画像への注釈の合成に失敗したため、変更は保存されませんでした。再試行するか、注釈を削除してから保存してください。",
+      "annotateBurnFailedSentOriginal": "画像への注釈の合成に失敗したため、注釈なしの元画像を送信しました。",
       "prevImage": "前の画像",
       "nextImage": "次の画像",
       "openModel": "モデルを開く",
@@ -9301,7 +9710,7 @@
       "promptSend": "送信",
       "promptCancel": "キャンセル"
     },
-    "toolResultCompacted": "Full tool output was released (original size {{size}})",
+    "toolResultCompacted": "ツールの完全な出力は解放されました（元のサイズ：{{size}}）",
     "agentActionRow": {
       "noContent": "表示できる内容はありません",
       "fileChange": {
@@ -9417,6 +9826,29 @@
       }
     },
     "systemCard": {
+      "help": {
+        "title": "利用可能なコマンド",
+        "builtInCommands": "組み込みコマンド",
+        "projectCommands": "プロジェクトのコマンド",
+        "empty": "利用可能なコマンドはありません。"
+      },
+      "cost": {
+        "title": "セッションの使用量",
+        "tokensUsed": "このターンの使用トークン数"
+      },
+      "pwd": {
+        "title": "作業ディレクトリ",
+        "notSet": "（未設定）"
+      },
+      "status": {
+        "title": "セッションの状態",
+        "agent": "Agent",
+        "model": "モデル",
+        "effort": "推論強度",
+        "permissionMode": "権限モード",
+        "running": "実行中",
+        "idle": "待機中"
+      },
       "context": {
         "title": "コンテキスト使用量",
         "loading": "読み込み中…",
@@ -9588,6 +10020,10 @@
       "automationSent": "自動化タスクから送信",
       "automationSentNamed": "自動化タスク「{{name}}」から送信",
       "automationViewTask": "自動化タスクを表示",
+      "sessionSent": "別のセッションから送信",
+      "sessionSentNamed": "セッション「{{name}}」から送信",
+      "sessionViewSource": "送信元のセッションを表示",
+      "botSentNamed": "仲間「{{name}}」から送信",
       "orcaFromLead": "Lead からのメッセージ",
       "orcaFromWorker": "Worker からのメッセージ",
       "expandLongMessage": "全文を表示",
@@ -10270,8 +10706,8 @@
         "pin": "ピン留め",
         "unpin": "ピン留め解除",
         "archived": "アーカイブ済み",
-        "moveToProject": "プロジェクトへ移動",
-        "moveToProjectHeading": "プロジェクトを選択",
+        "moveToProject": "タスクを移動",
+        "moveToProjectHeading": "現在のコンピューターのプロジェクト",
         "browseProjectFolder": "プロジェクトフォルダーを選択",
         "moveToDialogue": "対話へ移動",
         "noProjects": "最近使ったプロジェクトはありません",
@@ -10404,14 +10840,89 @@
         "clickToOpen": "クリックしてブラウザで PR を開く",
         "guidance": {
           "login": {
-            "hint": "クリックすると Agent がログインを手伝います",
-            "aria": "PR #{{number}} の状態を取得できません：Agent に GitHub へのログインを任せる",
-            "prompt": "GitHub CLI にログインしてください：`gh auth login -h github.com -w` を実行し、表示されたワンタイムのデバイスコードと URL を教えてください。ブラウザで認可したら、`gh auth status` でログイン成功を確認してください。"
+            "hint": "クリックして GitHub に接続",
+            "aria": "PR #{{number}} の状態を取得できません：GitHub に接続"
           },
           "install": {
-            "hint": "クリックすると Agent がインストールとログインを手伝います",
-            "aria": "PR #{{number}} の状態を取得できません：Agent に GitHub CLI のインストールとログインを任せる",
-            "prompt": "GitHub CLI（gh）をインストールしてください（macOS は `brew install gh`、Windows は `winget install GitHub.cli`）。その後 `gh auth login -h github.com -w` を実行してログインし、表示されたワンタイムのデバイスコードと URL を教えてください。ブラウザで認可したら、`gh auth status` でログイン成功を確認してください。"
+            "hint": "クリックして GitHub に接続",
+            "aria": "PR #{{number}} の状態を取得できません：GitHub に接続"
+          }
+        },
+        "setup": {
+          "install": "インストールして続行",
+          "connect": "GitHub にログイン",
+          "cancel": "キャンセル",
+          "retry": "再試行",
+          "done": "完了",
+          "openBrowser": "GitHub を開いて認可",
+          "deviceCode": "ワンタイムデバイスコード",
+          "copyCode": "コードをコピー",
+          "copied": "コピーしました",
+          "copyFailed": "コピーできませんでした。コードを選択して手動でコピーしてください。",
+          "openFailed": "ブラウザを開けませんでした。github.com/login/device を手動で開いてください。",
+          "stages": {
+            "install": {
+              "title": "GitHub CLI をインストール",
+              "description": "GitHub CLI をインストールして GitHub アカウントに接続します。"
+            },
+            "login": {
+              "title": "GitHub に接続",
+              "description": "GitHub アカウントに接続します。GitHub CLI が未インストールの場合は自動でインストールします。"
+            },
+            "checking": {
+              "title": "接続を確認中…",
+              "description": "GitHub のログイン状態を確認しています。"
+            },
+            "downloading": {
+              "title": "GitHub CLI をダウンロード中…",
+              "description": "ダウンロードが終わると自動でインストールします。"
+            },
+            "installing": {
+              "title": "GitHub CLI をインストール中…",
+              "description": "ダウンロードが完了しました。"
+            },
+            "preparing": {
+              "title": "ログインを準備中…",
+              "description": "ワンタイムデバイスコードを取得しています。"
+            },
+            "authorizing": {
+              "title": "GitHub にログイン",
+              "description": "このコードをコピーし、GitHub のページに入力して認可してください。"
+            },
+            "connected": {
+              "title": "GitHub に接続しました",
+              "description": "この画面を閉じて操作を続けられます。"
+            },
+            "cancelled": {
+              "title": "接続をキャンセルしました",
+              "description": "準備ができたら再試行できます。"
+            },
+            "unavailable": {
+              "title": "進捗を取得できません",
+              "description": "現在の進捗を取得できません。再試行してください。"
+            },
+            "error": {
+              "title": "接続が完了していません"
+            }
+          },
+          "errors": {
+            "unsupported": "この OS またはプロセッサにはまだ対応していません。",
+            "install": "インストールに失敗しました。ネットワークと空き容量を確認して再試行してください。",
+            "login": "ログインに失敗したか、認可が拒否されました。再試行して新しいコードを取得してください。",
+            "timeout": "コードの有効期限が切れました。再試行してください。"
+          },
+          "account": {
+            "checking": "GitHub への接続を確認中…",
+            "connected": "接続済み · @{{login}}",
+            "missing": "GitHub に接続すると利用できます。",
+            "auth": "認証が失効しました。再ログインするか、下の予備トークンを変更してください。",
+            "network": "GitHub に接続できません。ネットワークを確認して再試行してください。",
+            "forbidden": "接続を確認できません。権限や API の利用制限を確認して再試行してください。",
+            "gh-cli": "この端末の GitHub ログインを使用中",
+            "token": "予備トークンを使用中",
+            "recheck": "接続を確認",
+            "summary": "GitHub のリポジトリ、Issue、PR、Actions を管理。",
+            "otherMethods": "その他の接続方法"
           }
         },
         "unresolved": "未解決のレビューコメント: {{count}} 件"
@@ -11922,7 +12433,8 @@
         "rename": "改名へ",
         "fix": "修正へ",
         "republish": "再公開",
-        "abandonPending": "待機をやめる"
+        "abandonPending": "待機をやめる",
+        "editPublication": "公開情報を修正"
       },
       "API_KEY_MISSING": {
         "title": "API key が未設定",
@@ -11946,15 +12458,15 @@
       },
       "OSS_PUT_FAILED": {
         "title": "アップロード失敗",
-        "message": "ネットワーク異常、再試行してください"
+        "message": "アップロードサービスがファイルを受信できませんでした。ネットワークを確認してアップロードを再試行してください。問題が続く場合は再公開してください。"
       },
       "OSS_PUT_EXPIRED": {
         "title": "アップロードリンク失効",
         "message": "アップロードリンクが失効しました、再公開してください"
       },
       "VERSION_RACE": {
-        "title": "バージョン競合",
-        "message": "自動再試行に失敗しました、後ほど再試行してください"
+        "title": "バージョン番号は使用済みです",
+        "message": "このバージョンは公開済みか処理中です。未使用のバージョン番号を指定して再公開してください。"
       },
       "CHECKSUM_MISMATCH": {
         "title": "チェックサム失敗",
@@ -11966,15 +12478,15 @@
       },
       "PACK_FAILED": {
         "title": "パッケージ化に失敗しました",
-        "message": "skill のパッケージを作成できませんでした。再試行してください"
+        "message": "ローカルのスキルファイルを読み取れるか確認し、不要な大きいファイルを削除して再公開してください。"
       },
       "OSS_OBJECT_NOT_FOUND": {
         "title": "アップロードファイルが見つかりません",
         "message": "サーバーがアップロード済みファイルを見つけられません、再試行してください"
       },
       "MANIFEST_INVALID": {
-        "title": "SKILL.md の形式が正しくありません",
-        "message": "SKILL.md は YAML frontmatter で始まり、name と description フィールドを含む必要があります"
+        "title": "スキルパッケージが要件を満たしていません",
+        "message": "以下の理由に従って SKILL.md とパッケージ内のファイルを確認し、修正して再公開してください。"
       },
       "CANCELLED": {
         "title": "キャンセル済み",
@@ -11989,12 +12501,56 @@
         "message": "現在の公開者が利用できる公開範囲を選択してください"
       },
       "INTERNAL": {
-        "title": "サーバーエラー",
-        "message": "公開失敗、後ほど再試行してください"
+        "title": "公開が完了しませんでした",
+        "message": "予期しないエラーが発生しました。時間をおいて再試行してください。問題が続く場合はサポートにお問い合わせください。"
       },
       "UNKNOWN": {
         "title": "不明なエラー",
         "message": "公開失敗 ({{code}})、再試行してください"
+      },
+      "SKILL_DELETED": {
+        "title": "同名のスキルは削除済み",
+        "message": "同名のスキルは削除されていますが、名前は引き続き予約されています。スキル名を変更して再公開してください。"
+      },
+      "SKILL_UNPUBLISHED": {
+        "title": "スキルが公開停止されました",
+        "message": "アップロード中にスキルが公開停止されたため、今回の公開は中止されました。公開状態を確認して再公開してください。"
+      },
+      "AUTH_REQUIRED": {
+        "title": "ログインが必要です",
+        "message": "未ログインか、ログインの有効期限が切れています。ログインして再公開してください。"
+      },
+      "PERMISSION_DENIED": {
+        "title": "公開権限がありません",
+        "message": "公開権限のあるアカウントに切り替えるか、スキルの作者または組織の管理者に権限を確認してください。"
+      },
+      "INVALID_PARAMS": {
+        "title": "公開情報が要件を満たしていません",
+        "message": "以下の理由に従って公開情報を修正し、再公開してください。"
+      },
+      "SKILL_FILE_TOO_LARGE": {
+        "title": "スキルパッケージが上限を超えています",
+        "message": "上限は圧縮時 32 MiB、展開後 50 MiB、SKILL.md は 2 MiB、アーカイブ内は 2000 項目です。内容を減らして再公開してください。"
+      },
+      "NETWORK_ERROR": {
+        "title": "公開サービスに接続できません",
+        "message": "ネットワーク接続を確認して公開を再試行してください。"
+      },
+      "RATE_LIMITED": {
+        "title": "公開リクエストが多すぎます",
+        "message": "少し待ってから公開を再試行してください。"
+      },
+      "SERVICE_UNAVAILABLE": {
+        "title": "公開サービスを利用できません",
+        "message": "時間をおいて公開を再試行してください。問題が続く場合はサポートにお問い合わせください。"
+      },
+      "PUBLISH_BUSY": {
+        "title": "別のスキルを公開中です",
+        "message": "現在の公開処理が完了してから、このスキルを公開してください。"
+      },
+      "REQUEST_REJECTED": {
+        "title": "公開リクエストが拒否されました",
+        "message": "公開情報を確認して再公開してください。繰り返し失敗する場合はサポートにお問い合わせください。"
       }
     },
     "scanResult": {

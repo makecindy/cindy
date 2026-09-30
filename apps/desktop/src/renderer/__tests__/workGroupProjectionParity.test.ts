@@ -204,7 +204,7 @@ const cases: Array<{ name: string; events: Event[]; streaming?: boolean; expecte
     expected: [['u'], ['work-read', [['read']]], ['compact'], ['work-think', [['think']]]],
   },
   {
-    name: 'each seal retains its contiguous final prose through continuation',
+    name: 'only the last seal stays final; earlier short seals fold through continuation',
     events: [
       user(),
       tool('read', 1, 2),
@@ -215,12 +215,42 @@ const cases: Array<{ name: string; events: Event[]; streaming?: boolean; expecte
     ],
     expected: [
       ['u'],
+      [
+        'work-summary-read',
+        [['work-read', [['read']]], ['part1'], ['part2'], ['work-next', [['next']]]],
+      ],
+      ['final'],
+    ],
+  },
+  {
+    name: 'an earlier seal keeps its intro together with the delivery report',
+    events: [
+      user(),
+      tool('read', 1, 2),
+      answer('intro', 3),
+      answer('report', 4, true, '# Report\nThe result'),
+      thinking('next', 5),
+      answer('final', 6, true),
+    ],
+    expected: [
+      ['u'],
       ['work-read', [['read']]],
-      ['part1'],
-      ['part2'],
+      ['intro'],
+      ['report'],
       ['work-next', [['next']]],
       ['final'],
     ],
+  },
+  {
+    name: 'an earlier delivery-prose seal stays visible through continuation',
+    events: [
+      user(),
+      tool('read', 1, 2),
+      answer('report', 3, true, '# Report\nThe result'),
+      thinking('next', 4),
+      answer('final', 5, true),
+    ],
+    expected: [['u'], ['work-read', [['read']]], ['report'], ['work-next', [['next']]], ['final']],
   },
   {
     name: 'legacy text followed by more work remains a visible boundary',

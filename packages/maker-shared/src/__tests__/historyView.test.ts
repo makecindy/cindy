@@ -459,6 +459,33 @@ describe('shared history view lifecycle', () => {
     view.setActive(false);
   });
 
+  it('keeps ephemeral cards in local order without reviving removed history or duplicating persisted rows', async () => {
+    type Message = HistoryMessageSource & { localCard?: boolean };
+    const source = [row(10, 'assistant', 'history'), row(11, 'user', 'next question')];
+    const view = new HistoryViewController<Message>({
+      page: async () => ({ version: 1, items: projectHistoryView(source, false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    // Local cards may be older than remote history; timestamps cannot locate them.
+    const help = { ...row(1, 'assistant', 'help'), localCard: true };
+    const cost = { ...row(2, 'assistant', 'cost'), localCard: true };
+    const render = (liveMessages: Message[]) => renderHistoryView<Message, unknown>({
+      view, snapshot: view.getSnapshot(), liveMessages, streaming: false,
+      isLocalMessage: (message) => message.localCard === true,
+      build: (rows) => [...rows], structure: ungroupedStructure,
+    });
+    expect(render([source[0], help, cost, source[1], row(20, 'assistant', 'stale history')]))
+      .toEqual([source[0], help, cost, source[1]]);
+    source.splice(1, 0, help);
+    await view.refresh();
+    expect(render([source[0], { ...help, content: 'stale local copy' }, cost, source[2]]))
+      .toEqual([source[0], help, cost, source[2]]);
+    expect(render(source)).toEqual(source);
+    view.setActive(false);
+  });
+
   it('preserves current local user bubbles, source authority and store order despite clock skew', async () => {
     type Message = HistoryMessageSource & { isPendingPersist?: boolean; blockedByGhost?: boolean };
     const source = [row(1, 'user', 'kept'), row(10, 'assistant', 'answer'), row(11, 'user', 'persisted rewrite')];

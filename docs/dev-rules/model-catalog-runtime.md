@@ -94,7 +94,8 @@ Desktop 模型选择器、旧入口的配置浮层及设置详情在展示简介
 不把旧百分比当作新周期余量。ChatGPT Web 套餐名不回退到 Codex CLI 来源。
 费用符号、折扣和免费标签统一使用中性色，保留原价档位的符号个数、折扣明暗与百分比标签。
 整行不换行，长来源名称省略；额度段最多占行宽 70%，过长时省略，
-给来源保留可见空间，悬停仍可查看完整来源与额度状态。远程目录不读取本机账号余量；Cindy AI 及单供应商分栏
+给来源保留可见空间，悬停仍可查看完整来源与额度状态。远程目录不读取本机账号余量，改读被控端用量镜像
+（与会话用量 chip 共用同一缓存与推送，口径同 `useProviderWeeklyQuota.ts`）；Cindy AI 及单供应商分栏
 继续展示本地简介。实现见 `renderer/components/new-chat/ModelSourceDetails.tsx` 和
 `UnifiedModelRow.tsx`，行为覆盖见 `renderer/__tests__/modelSourceDetails.test.tsx` 及
 `unifiedModelPanelRendering.test.tsx`。
@@ -111,11 +112,15 @@ Registry 的全部模型及其 routes，防止只翻译当前默认启用的几�
 
 ### GPT 日常窗口与 Codex Chat Completions（2026-09-06 用户裁决）
 
-- 内置 OpenAI 订阅与 XD 的 GPT 路由采用至多 272,000 tokens 的日常默认窗口，
-  覆盖普通、`codex/`、`openai/`、`chatgpt/` 别名及各引擎。较小模型不扩容。
+- 所有来源的 OpenAI 聊天模型采用至多 272,000 tokens 的日常默认窗口，包括内置订阅、XD、
+  自定义 API／Sub2API、第三方预设和组织连接，覆盖 Claude Code、Codex、Pi。
+  覆盖 GPT、Codex、o 系列的原始 ID、`codex/`、`openai/`、`chatgpt/` 别名，以及 Registry
+  明确关联到 OpenAI 公共型号的部署 ID。已解析的公共型号身份优先于名称；只有未解析身份时
+  才按上述系列与命名空间推断，任意私有命名空间不推断。较小模型不扩容；仅有兼容协议不推断厂商。
   `contextWindowMax` 保留供应商容量；这是客户端工作默认策略，不修改服务端能力声明。
 - 显式上下文 override 仍优先，可设置 1M；恢复默认删除 override 后采用 272K。
-  自定义供应商与非 GPT 模型不套用此默认策略。
+  用户显式模型窗口、公共型号与连接／引擎补丁仍优先；非 OpenAI 模型和媒体模型不套用此策略。
+  导入、刷新、离线回退、组织同步与本地 addition 经同一活动目录出口投影，不把默认值写回发现快照或用户配置。
 - Codex CLI 0.153.0 已移除原生 Chat Completions。Cindy 的既有转换路径仍可使用，
   但按 2026-09-07 用户更正，界面恢复「兼容模式」、默认关闭，允许用户手动开启。
   不新增「支持」协议分类；用户显式开关保持优先。GPT 窗口默认与自动压缩修复不回退。

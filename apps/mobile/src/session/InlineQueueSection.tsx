@@ -43,7 +43,6 @@ export interface InlineQueueSectionProps {
   sessionSource?: string | null;
   busy?: boolean;
   readOnlyReason?: string | null;
-  errorRecoveryReadOnlyReason: string | null;
   onResume(): void;
   onRetryError(): void;
   onClearError(): void;
@@ -54,7 +53,6 @@ export function InlineQueueSection({
   sessionSource,
   busy,
   readOnlyReason,
-  errorRecoveryReadOnlyReason,
   onResume,
   onRetryError,
   onClearError,
@@ -70,7 +68,7 @@ export function InlineQueueSection({
   if (!hasBanner) return null;
 
   const controlsDisabled = busy || !!readOnlyReason;
-  const errorDisabledReason = errorRecoveryReadOnlyReason
+  const errorDisabledReason = readOnlyReason
     || (busy ? t('message.queuePresentation.row.busy') : null);
   const retryable = !requiresAgentErrorConfigurationChange(projection.error ?? '');
   const retryDisabledReason = errorDisabledReason
@@ -244,7 +242,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   bannerText: {
     color: colors.textSecondary,
     flex: 1,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     minWidth: 0,
   },
@@ -258,7 +256,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: 30,
     paddingHorizontal: spacing.md,
   },
-  resumePillText: { color: colors.ctaText, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  resumePillText: { color: colors.ctaText, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   errorBox: {
     backgroundColor: colors.surfaceElevated,
     borderColor: colors.border,
@@ -267,8 +265,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: spacing.sm,
     padding: spacing.md,
   },
-  errorText: { color: colors.errorText, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
-  disabledHint: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  errorText: { color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  disabledHint: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   errorActions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   actionPill: {
     alignItems: 'center',
@@ -282,7 +280,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: 36,
     paddingHorizontal: spacing.md,
   },
-  actionPillText: { color: colors.textPrimary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  actionPillText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   pressed: { opacity: 0.72 },
   disabled: { opacity: 0.42 },
 });

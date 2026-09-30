@@ -268,7 +268,13 @@ export function MobileOutboxBridge() {
           throw new Error("OUTBOX_OWNER_CHANGED");
         }
         return upload.annotated
-          ? { ...attachment, annotated: true }
+          ? {
+              ...attachment,
+              annotated: true,
+              ...(upload.annotationRegions?.length
+                ? { annotationRegions: upload.annotationRegions }
+                : {}),
+            }
           : attachment;
       },
       enqueue: (r) =>

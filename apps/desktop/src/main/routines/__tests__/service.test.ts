@@ -100,6 +100,90 @@ it('dispatches into the current canonical task through the existing silent runne
   );
   expect((await routineTools.history('bot', routine.id))[0].resultText).toBe('Reviewed PR');
 });
+
+it('blocks enabling and manual runs until imported handover is ready while retaining disabled edits', async () => {
+  let ready = false;
+  configureRoutineHost({
+    getBot: mock.getBot, getScheduler: () => mock.scheduler, getScheduleStorage: () => mock.storage,
+    assertImportedAutomationReady: async (_root, _botId, id) => { if (id === 'imported-routine-id' && !ready) throw new Error('AUTOMATION_HANDOVER_REQUIRED'); },
+  });
+  const input = { name: 'Imported', prompt: 'Read data', enabled: false, triggers: [{ id: 'tick', kind: 'interval' as const, intervalMs: 60000 }] };
+  const routine = await routineTools.createOnce('bot', input, 'imported-routine-id');
+  await expect(routineTools.save('bot', { ...input, enabled: true }, routine.id)).rejects.toThrow('AUTOMATION_HANDOVER_REQUIRED');
+  await expect(routineTools.createOnce('bot', { ...input, enabled: true }, routine.id)).rejects.toThrow('AUTOMATION_HANDOVER_REQUIRED');
+  await expect(routineTools.runNow('bot', routine.id)).rejects.toThrow('AUTOMATION_HANDOVER_REQUIRED');
+  expect((await routineTools.list('bot'))[0]?.enabled).toBe(false);
+  expect(await routineTools.history('bot', routine.id)).toEqual([]);
+  const edited = await routineTools.save('bot', { ...input, name: 'Edited' }, routine.id);
+  expect(edited.name).toBe('Edited');
+  ready = true;
+  await routineTools.save('bot', { ...edited, enabled: true }, routine.id, edited.revision);
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(() => expect(mock.scheduler.runNow).toHaveBeenCalledOnce());
+});
+
+it('uses the revision committed by an explicit handover retry when saving or manually running a routine', async () => {
+  const engine = await getRoutineEngine();
+  configureRoutineHost({
+    getBot: mock.getBot, getScheduler: () => mock.scheduler, getScheduleStorage: () => mock.storage,
+    assertImportedAutomationReady: async (_root, botId, id) => {
+      const current = engine.list(botId).find(routine => routine.id === id);
+      if (!current || current.enabled) return;
+      return (await engine.put(botId, { ...current, enabled: true }, id, current.revision)).revision;
+    },
+  });
+  const input = { name: 'Imported', prompt: 'Read data', enabled: false, triggers: [{ id: 'tick', kind: 'interval' as const, intervalMs: 60000 }] };
+  const saved = await routineTools.createOnce('bot', input, 'recovered-save-12345');
+  expect((await routineTools.save('bot', { ...input, enabled: true }, saved.id, saved.revision)).enabled).toBe(true);
+  const manual = await routineTools.createOnce('bot', input, 'recovered-run-12345');
+  await routineTools.runNow('bot', manual.id, manual.revision);
+  await vi.waitFor(() => expect(mock.scheduler.runNow).toHaveBeenCalledOnce());
+});
+
+it('defers a queued imported run during an unacknowledged handover without dispatching', async () => {
+  configureRoutineHost({
+    getBot: mock.getBot, getScheduler: () => mock.scheduler, getScheduleStorage: () => mock.storage,
+    prepareImportedAutomation: async (_root, _routine, runId) => ({ runId, prompt: '', deferred: true }),
+  });
+  const routine = await routineTools.save('bot', { name: 'Imported', prompt: 'Read data', enabled: true, triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('queued'));
+  expect(mock.storage.insert).not.toHaveBeenCalled();
+  expect(mock.scheduler.runNow).not.toHaveBeenCalled();
+});
+
+it.each(['direct', 'model'] as const)('disables an exhausted imported %s routine after recording its final success', async mode => {
+  const finish = vi.fn(async () => true);
+  configureRoutineHost({
+    getBot: mock.getBot, getScheduler: () => mock.scheduler, getScheduleStorage: () => mock.storage,
+    prepareImportedAutomation: async (_root, _routine, runId) => ({ runId, prompt: 'Imported', ...(mode === 'direct' ? { direct: 'Report' } : {}) }),
+    finishImportedAutomation: finish,
+  });
+  const routine = await routineTools.save('bot', { name: 'Limited', prompt: 'Report', enabled: true, triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.list('bot'))[0]!.enabled).toBe(false));
+  expect((await routineTools.history('bot', routine.id))[0]!.status).toBe('success');
+  expect(finish).toHaveBeenCalledOnce();
+  expect(mock.scheduler.runNow).toHaveBeenCalledTimes(mode === 'direct' ? 0 : 1);
+  expect(mock.save.mock.calls.at(-1)![0].next).toEqual({});
+});
+
+it('disables a previously exhausted import without dispatching, while ordinary monitor skips stay enabled', async () => {
+  let exhausted = false;
+  configureRoutineHost({
+    getBot: mock.getBot, getScheduler: () => mock.scheduler, getScheduleStorage: () => mock.storage,
+    prepareImportedAutomation: async (_root, _routine, runId) => ({ runId, prompt: '', skipped: true, exhausted }),
+  });
+  const routine = await routineTools.save('bot', { name: 'Limited', prompt: 'Report', enabled: true, triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]!.status).toBe('skipped'));
+  expect((await routineTools.list('bot'))[0]!.enabled).toBe(true);
+  exhausted = true;
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.list('bot'))[0]!.enabled).toBe(false));
+  expect(mock.scheduler.runNow).not.toHaveBeenCalled();
+  expect(mock.storage.insert).not.toHaveBeenCalled();
+});
 it('keeps an unclassified teammate reminder audible when quiet is omitted', async () => {
   const reminder = await routineTools.save('bot', {
     name: 'Reminder', prompt: 'Remind me to rest', enabled: true,
@@ -213,13 +297,16 @@ it('pauses backing execution and purges rules only after backing cleanup succeed
   await routineTools.runNow('bot', routine.id);
   await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0].status).toBe('success'));
   mock.storage.get.mockResolvedValue({ id: `routine-${routine.id}`, source: 'bot' } as Schedule);
+  const history = await routineTools.history('bot', routine.id);
   await updateBotRoutineLifecycle('bot', 'pause');
   expect(mock.scheduler.pause).toHaveBeenCalledWith(`routine-${routine.id}`, { internalRoutine: true });
   expect((await getRoutineEngine()).list('bot')[0].enabled).toBe(true);
+  expect(await routineTools.history('bot', routine.id)).toEqual(history);
   await updateBotRoutineLifecycle('bot', 'resume');
   mock.scheduler.delete.mockRejectedValueOnce(new Error('cleanup failed'));
   await expect(updateBotRoutineLifecycle('bot', 'delete')).rejects.toThrow('cleanup failed');
   expect((await getRoutineEngine()).list('bot')).toHaveLength(1);
+  expect(await routineTools.history('bot', routine.id)).toEqual(history);
   await expect((await getRoutineEngine()).runNow('bot', routine.id)).rejects.toThrow('paused');
   await updateBotRoutineLifecycle('bot', 'delete');
   expect((await getRoutineEngine()).list('bot')).toEqual([]);
@@ -494,4 +581,27 @@ it('passes the saved reminder choice and check into the shared runner and return
   await routineTools.runNow('bot', routine.id);
   await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0].status).toBe('skipped'));
   expect(mock.storage.insert).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'canonical-task', silentWhenIdle: false, preRunHook }));
+});
+
+it('persists all imported paused routines before tool-policy setup and never dispatches them', async () => {
+  const { indexAutomationDependencies, normalizeAutomation } = await import('../../bot-import/sourceAutomations.js');
+  const dependencies = indexAutomationDependencies([]);
+  const guard = vi.fn(async () => { throw new Error('SOURCE_TOOL_POLICY_NEEDS_MAPPING'); });
+  configureRoutineHost({ getBot: mock.getBot, getScheduler: () => mock.scheduler, getScheduleStorage: () => mock.storage, assertImportedAutomationReady: guard });
+  for (let index = 0; index < 11; index++) {
+    const item = normalizeAutomation({ agentId: 'source', kind: 'openclaw', name: 'Source', root: '/fixture', workspace: '/fixture', configFile: '/fixture/openclaw.json' }, {
+      id: `report-${index}`, name: `Report ${index}`, enabled: false,
+      schedule: { kind: 'every', everyMs: 60_000 }, payload: { message: 'Read the report' },
+      ...(index < 4 ? { tools: { allow: ['read'] } } : {}),
+    }, dependencies, 'UTC');
+    expect(item.automation?.input).toBeDefined();
+    if (index < 4) expect(item.view.issues).toContain('SOURCE_TOOL_POLICY_NEEDS_MAPPING');
+    await routineTools.createOnce('bot', item.automation!.input!, `imported-report-${index}`);
+  }
+  expect(guard).not.toHaveBeenCalled();
+  const routines = await routineTools.list('bot');
+  expect(routines).toHaveLength(11);
+  expect(routines.every(routine => !routine.enabled)).toBe(true);
+  expect(mock.scheduler.runNow).not.toHaveBeenCalled();
+  await expect(routineTools.runNow('bot', routines[0].id)).rejects.toThrow('SOURCE_TOOL_POLICY_NEEDS_MAPPING');
 });

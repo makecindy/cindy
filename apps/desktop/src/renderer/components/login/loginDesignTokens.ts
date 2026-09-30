@@ -239,8 +239,8 @@ export const CONSENT_DIALOG = {
 /** 顶部拖拽条 overlay 高度(附录 C §1.4 条4 工程定案:46px 独立层,不占文档流)。 */
 export const DRAG_BAR_HEIGHT = 46;
 
-/** 验证码重发倒计时时长(Step 3a 契约:双端 42s,绝对 deadline 模型)。 */
-export const RESEND_COUNTDOWN_MS = 42_000;
+/** 验证码重发倒计时时长(双端 60s,与 auth-server 单目标冷却一致;绝对 deadline 模型)。 */
+export const RESEND_COUNTDOWN_MS = 60_000;
 
 /**
  * Splash 统一面板(wave4 五帧 379:581/525/607/633/655 实测,figma §10.3;

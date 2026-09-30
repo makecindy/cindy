@@ -3,9 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { resolveMobileSocialLoginMode } from '@/auth/mobileSocialLoginMode';
 
 describe('resolveMobileSocialLoginMode', () => {
-  it.each(['ios', 'android'])(
-    'temporarily hides WeChat on %s even when configured',
-    (platform) => {
+  it('uses native WeChat only on configured Mainland China iOS builds', () => {
+    for (const platform of ['ios', 'android']) {
       for (const region of ['cn', 'global'] as const) {
         for (const nativeSupported of [true, false]) {
           expect(
@@ -15,14 +14,14 @@ describe('resolveMobileSocialLoginMode', () => {
               platform,
               nativeSupported,
             }),
-          ).toBeNull();
+          ).toBe(platform === 'ios' && region === 'cn' && nativeSupported ? 'native' : null);
         }
       }
-    },
-  );
+    }
+  });
 
   it.each(['ios', 'android'])(
-    'restores the configured CN WeChat path on %s when re-enabled',
+    'hides WeChat on %s when explicitly disabled',
     (platform) => {
       expect(
         resolveMobileSocialLoginMode({
@@ -30,25 +29,7 @@ describe('resolveMobileSocialLoginMode', () => {
           region: 'cn',
           platform,
           nativeSupported: true,
-          wechatLoginEnabled: true,
-        }),
-      ).toBe('native');
-      expect(
-        resolveMobileSocialLoginMode({
-          provider: 'wechat',
-          region: 'cn',
-          platform,
-          nativeSupported: false,
-          wechatLoginEnabled: true,
-        }),
-      ).toBeNull();
-      expect(
-        resolveMobileSocialLoginMode({
-          provider: 'wechat',
-          region: 'global',
-          platform,
-          nativeSupported: true,
-          wechatLoginEnabled: true,
+          wechatLoginEnabled: false,
         }),
       ).toBeNull();
     },

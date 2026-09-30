@@ -40,6 +40,7 @@ import {
 } from '@cindy/model-providers';
 import type { SubagentRunsListResponse } from '@cindy/maker-shared/subagent-workspace';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
+import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import {
   Activity,
   AlertCircle,
@@ -518,6 +519,7 @@ interface CCAgentSessionViewProps {
   botIdentity?: BotChatBinding;
   /** Entry-time read boundary for a Bot chat; preserved after the live read position advances. */
   botUnreadBoundaryAt?: number | null;
+  onBotReadThrough?: (at: number) => void;
 }
 
 /**
@@ -770,6 +772,7 @@ export function CCAgentSessionView({
   botMentions,
   botIdentity,
   botUnreadBoundaryAt,
+  onBotReadThrough,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
@@ -1056,6 +1059,13 @@ export function CCAgentSessionView({
   // 冷启动 / bootstrap 竞态期间宁可暂时禁用系统文件打开，也不能把被控端 file:// 交给控制端。
   const rightSidebarDeviceLinkDeviceId =
     remoteDeviceId ?? session?.deviceLinkDeviceId ?? (session ? null : undefined);
+  // Durable Subagent status for the chat cards. Wait until ownership resolves:
+  // an unresolved task must not read this machine's store for a remote task.
+  const subagentRunStatuses = useSubagentRunStatusIndex({
+    sessionId,
+    deviceId: rightSidebarDeviceLinkDeviceId,
+    enabled: rightSidebarDeviceLinkDeviceId !== undefined,
+  });
 
   /**
    * Does this task own durable Pi Subagent runs?
@@ -3633,6 +3643,7 @@ export function CCAgentSessionView({
         slashCommandRanges?: SlashCommandRange[];
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
         onDeferredAccepted?: () => void;
+        annotationBurnFailure?: 'abort';
       },
     ) => {
       if (readOnly) return false;
@@ -3857,6 +3868,10 @@ export function CCAgentSessionView({
           ? { onRemoteOptimisticFailure: opts.onRemoteOptimisticFailure }
           : {}),
         ...(opts?.onDeferredAccepted ? { onDeferredAccepted: opts.onDeferredAccepted } : {}),
+        // 输入框在返回 false 时会原样恢复草稿:标注烧录失败可安全中止(见 SendMessageOpts)。
+        ...(opts?.annotationBurnFailure
+          ? { annotationBurnFailure: opts.annotationBurnFailure }
+          : {}),
       };
       if (deliveryMode === 'steer') {
         const followStartGeneration = readSendFollowCancelGeneration(sessionId);
@@ -4734,12 +4749,14 @@ export function CCAgentSessionView({
       assistantAvatar={botAssistantAvatar}
       simplifiedBotConversation={Boolean(botChatIdentity)}
       botUnreadBoundaryAt={botChatIdentity ? botUnreadBoundaryAt : null}
+      onBotReadThrough={viewVisible ? onBotReadThrough : undefined}
       messages={messages}
       cindyMakeSessionId={session?.source === 'cindy-make' ? sessionId : undefined}
       cindyMakeCompletionInComposer={session?.source === 'cindy-make' && (remoteMakeCards.supported || (!remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'))}
       historyLoaded={historyLoaded}
       historyCleared={Boolean(session?.clearedAt)}
       taskUpdates={taskUpdates}
+      subagentRunStatuses={subagentRunStatuses}
       isSessionStreaming={isStreaming}
       continuationTurnClientId={continuationTurnClientId}
       continuationInFlightProjectionCapability={continuationInFlightProjectionCapability}
@@ -5335,13 +5352,12 @@ export function CCAgentSessionView({
                   </div>
                 }
               >
-                {isSharedTaskPeer(remoteDeviceId ?? '') ? (
-                  (pendingPlanReview || pendingPermission || pendingAskUser || pendingPluginSetup || pendingIssueConfirm || pendingRenameSessionsConfirm || pendingGhostGrantConfirm) &&
+                {isSharedTaskPeer(remoteDeviceId ?? '') &&
+                !pendingPlanReview && !pendingPermission && !pendingAskUser &&
+                (pendingPluginSetup || pendingIssueConfirm || pendingRenameSessionsConfirm || pendingGhostGrantConfirm || pendingRemoteDesktopConfirmation) ? (
                   <div className="space-y-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4 text-[var(--text-primary)]">
                     <p className="text-13 text-[var(--text-secondary)]">{t('sharedTask.waitingHost')}</p>
-                    <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-13">{pendingPlanReview?.plan ?? (pendingPermission
-                      ? [pendingPermission.title ?? pendingPermission.toolName, pendingPermission.description, JSON.stringify(pendingPermission.input, null, 2)].filter(Boolean).join('\n')
-                      : JSON.stringify(pendingAskUser?.questions ?? pendingPluginSetup ?? pendingIssueConfirm ?? pendingRenameSessionsConfirm ?? pendingGhostGrantConfirm, null, 2))}</pre>
+                    <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-13">{JSON.stringify(pendingPluginSetup ?? pendingIssueConfirm ?? pendingRenameSessionsConfirm ?? pendingGhostGrantConfirm ?? pendingRemoteDesktopConfirmation, null, 2)}</pre>
                   </div>
                 ) : pendingPlanReview ? (
                   <>

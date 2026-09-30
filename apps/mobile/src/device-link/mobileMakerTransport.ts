@@ -4,6 +4,7 @@ import {
   releasePeerMedia,
 } from "./peerFileRegistry";
 import { withTransientRemoteRetry } from "./remoteRetry";
+import type { OrcaWorkerAgentKind, OrcaWorkerPermissionMode } from "@cindy/maker-shared/orca-team";
 import { fetchAgentCapabilities } from "@/session/agentCapabilitiesCache";
 import {
   getMobileAuthOwner,
@@ -700,6 +701,24 @@ export interface MobileMakerTransport {
   ): Promise<{ sessionId: string; clientId: string; clientIds?: string[] }>;
   closeSession(sessionId: string): Promise<void>;
   /**
+   * Orca 协同编排:Lead / Worker / team 真身在被控端,这里只是隧道封装(与桌面控制端
+   * makerTransport 的 remoteMakerApi / remoteOrcaWorkflows 同一组 channel 与参数形状)。
+   * 写操作(enable / create / archive / disable)一律不自动重试:超时不代表被控端没执行。
+   */
+  orca: {
+    /** 被控端协同插件开关(项目级 / 对话用户级);结果形状见 readOrcaCollabPolicy。 */
+    getCollabPolicy(workingDir: string | undefined, workspaceKind: 'project' | 'dialogue'): Promise<unknown>;
+    enable(leadSessionId: string, options: MobileOrcaEnableOptions): Promise<MobileOrcaEnableResult>;
+    disable(leadSessionId: string): Promise<unknown>;
+    createWorker(input: MobileOrcaCreateWorkerInput): Promise<MobileOrcaCreateWorkerResult>;
+    listWorkers(leadSessionId: string): Promise<unknown>;
+    getTeamByWorkerSession(workerSessionId: string): Promise<unknown>;
+    switchFocus(leadSessionId: string, workerIdOrLabel: string): Promise<unknown>;
+    acknowledgeDone(leadSessionId: string, workerId: string): Promise<unknown>;
+    archiveWorker(leadSessionId: string, workerId: string): Promise<unknown>;
+    getCollaborationSettings(): Promise<unknown>;
+  };
+  /**
    * 会话未读已读回执:手机端真实展示会话内容后,清掉被控端该会话的未读态
    * (灵动岛 / Dock 角标 / 桌面侧栏红绿点)。被控端清完会经 sessions relay 推回
    * attention=false,手机端列表绿/红点随之收敛。intent 语义与桌面一致:
@@ -865,6 +884,47 @@ export interface MobileMakerTransport {
       transferId: string,
     ): Promise<FileBrowserExportStatusResult>;
   };
+}
+
+/** `maker:session:enable-orca` 的 options(与桌面 preload maker.enableOrca 同形状)。 */
+export interface MobileOrcaEnableOptions {
+  workerAgent: OrcaWorkerAgentKind;
+  role?: string;
+  label?: string;
+  model?: string;
+  effort?: string;
+  fast?: boolean;
+  providerId?: string;
+  delegateTask?: string;
+  workerPermissionMode: OrcaWorkerPermissionMode;
+}
+
+export interface MobileOrcaEnableResult {
+  teamId?: string;
+  workerSessionId?: string;
+  workerId?: string;
+  dispatched?: boolean;
+}
+
+/** `maker:worker:create` 的 body(与桌面 useOrcaWorkerSelection 提交同形状)。 */
+export interface MobileOrcaCreateWorkerInput {
+  leadSessionId: string;
+  role: string;
+  label: string;
+  agent: OrcaWorkerAgentKind;
+  model?: string;
+  effort?: string;
+  fast?: boolean;
+  providerId?: string;
+  workerPermissionMode: OrcaWorkerPermissionMode;
+  initialTask?: string;
+}
+
+export interface MobileOrcaCreateWorkerResult {
+  ok?: boolean;
+  workerId?: string;
+  workerSessionId?: string;
+  softLimitExceeded?: boolean;
 }
 
 export type SessionMetaPatch = Partial<
@@ -1190,6 +1250,25 @@ export function createMobileMakerTransport({
     deleteMessage: (sessionId, clientId) =>
       call("maker:message:delete", [sessionId, clientId]),
     closeSession: (sessionId) => call("maker:close-session", [sessionId]),
+    orca: {
+      getCollabPolicy: (workingDir, workspaceKind) =>
+        call("maker:plugins:get-state", ["collab", workingDir, workspaceKind]),
+      enable: (leadSessionId, options) =>
+        call("maker:session:enable-orca", [leadSessionId, options]),
+      disable: (leadSessionId) => call("maker:session:disable-orca", [leadSessionId]),
+      createWorker: (input) => call("maker:worker:create", [input]),
+      listWorkers: (leadSessionId) =>
+        call("local-db:orca-workflows:list-workers-by-lead", [leadSessionId]),
+      getTeamByWorkerSession: (workerSessionId) =>
+        call("local-db:orca-workflows:get-by-worker-session", [workerSessionId]),
+      switchFocus: (leadSessionId, workerIdOrLabel) =>
+        call("maker:worker:switch-focus", [{ leadSessionId, workerIdOrLabel }]),
+      acknowledgeDone: (leadSessionId, workerId) =>
+        call("maker:worker:acknowledge-done", [{ leadSessionId, workerId }]),
+      archiveWorker: (leadSessionId, workerId) =>
+        call("maker:worker:archive", [{ leadSessionId, workerId }]),
+      getCollaborationSettings: () => call("maker:collaboration-settings:get"),
+    },
     clearSessionAttention: (sessionId, intent) =>
       call("notification:clear-session-attention", [sessionId, intent]),
     goal: {

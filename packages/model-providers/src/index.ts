@@ -77,6 +77,7 @@ export {
   sanitizePresets,
   sortPresetsForRegion,
 } from "./catalog.js";
+export { expandPresetModels } from "./presetModels.js";
 
 export {
   buildUserProvider,
@@ -289,6 +290,7 @@ export type {
   LocalModelCatalog,
   LocalCatalogModel,
   LocalModelVariant,
+  LocalGgufVariant,
 } from "./localModelCatalog.js";
 
 export {

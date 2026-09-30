@@ -152,6 +152,7 @@ export function recordSessionCodexTurnUsage(
           ? codexSubscriptionUsageModelKey(pricingModel)
           : codexApiUsageModelKey(pricingModel);
         await recordModelTurnUsage({
+          sessionId: session.id,
           agentKind: 'codex',
           model: modelUsageKey,
           money: isSubscriptionValue ? deps.unpricedSubscriptionValueMarker() : undefined,
@@ -223,6 +224,7 @@ export function recordSessionCodexTurnUsage(
           // writing them into #billing=api would later reconstruct an estimate as actual cost.
           if (money && (isSubscriptionValue || price?.source === 'gateway')) {
             await recordModelTurnUsage({
+              sessionId: session.id,
               agentKind: 'codex',
               model: modelUsageKey,
               money,

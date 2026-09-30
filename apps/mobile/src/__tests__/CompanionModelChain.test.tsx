@@ -40,9 +40,11 @@ vi.mock("@/theme", () => ({
   iconSize: {},
   spacing: {},
   typeScale: {},
+  lineHeight: {},
   useTheme: () => ({ colors: {} }),
 }));
 vi.mock("@/components/AppText", () => ({ Text: "span" }));
+vi.mock("@/platform/chrome/NativeSwitch", () => ({ NativeSwitch: () => null }));
 vi.mock("@/device-link/useDeviceProviders", () => ({
   useDeviceProviders: (id: string) => {
     h.device(id);

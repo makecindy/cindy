@@ -1,3 +1,4 @@
+import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { HISTORY_GAP_SPLIT_MS } from '@cindy/maker-shared/history-gap';
 import { collectMobileMarkdownImages } from './messageMarkdown';
 import type { MobileMessageRenderItem } from './messageRenderModel';
@@ -7,12 +8,17 @@ const isDelivery = (item: MobileMessageRenderItem) => item.type === 'tool_media'
     || !!item.message.attachments?.length || !!item.message.media?.length
     || !!item.message.files?.length || collectMobileMarkdownImages(item.message.body).length > 0);
 
+const expandWorkGroups = (items: readonly MobileMessageRenderItem[]): MobileMessageRenderItem[] =>
+  items.flatMap(item => item.type === 'work_group' ? expandWorkGroups(item.children) : [item]);
+
 /** Presentation only. The host's persisted messages and lazy history remain intact. */
 export function companionConversationItems(items: readonly MobileMessageRenderItem[]): MobileMessageRenderItem[] {
+  // The main timeline folds earlier background-wake seals into work groups; teammate chats
+  // still show every sealed reply, so find sealed runs with tools/thinking as boundaries.
   const sealed = new Set<string>();
   let sealedRun = false;
   let nextAssistantAt: number | null = null;
-  for (const item of [...items].reverse()) {
+  for (const item of expandWorkGroups(items).reverse()) {
     if (item.type !== 'message' || item.message.kind !== 'assistant' || !item.message.body.trim() || item.message.systemCardType) {
       sealedRun = false;
       nextAssistantAt = null;
@@ -46,7 +52,13 @@ export function companionConversationItems(items: readonly MobileMessageRenderIt
     else if (isDelivery(item)) delivery = true;
     else if (delivery) deliveredAfter.add(item.key);
   }
+  const attached = new Set(flattened.flatMap(item => item.type === 'message'
+    && item.message.kind === 'assistant' && item.message.turnCompleted === true && item.message.body.trim()
+    ? readBotTaskResults(item.message.source.agentMeta?.botTaskResults).map(botTaskResultKey) : []));
   return flattened.filter(item => {
+    if (item.type === 'message' && item.message.companion?.kind === 'task'
+      && item.message.companion.meta.role === 'delegation-result'
+      && attached.has(botTaskResultKey(item.message.companion.meta))) return false;
     if (item.type === 'thinking' || item.type === 'tool_group' || item.type === 'agent_task'
       || item.type === 'subagent_group' || item.type === 'todo') return false;
     if (item.type !== 'message') return true;

@@ -4,6 +4,7 @@
  * 失败传播 / 非媒体 channel 与无附件透传。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import path from 'node:path';
 
 const uploadLocalFile = vi.hoisted(() => vi.fn());
 const uploadBuffer = vi.hoisted(() => vi.fn());
@@ -300,6 +301,73 @@ describe('rewriteOutboundMedia — send/steer content-block 形态', () => {
 });
 
 describe('rewriteOutboundMedia — enqueue files 形态', () => {
+  it.each([
+    ['maker:input:enqueue', undefined],
+    ['maker:input:steer', { touchUserSend: true }],
+    ['maker:input:steer', { removeFromQueue: false }],
+  ])('uploads a new local HTML attachment for %s with %j', async (channel, opts) => {
+    const localPath = path.resolve('controller-files', 'report.html');
+    const payload = buildUserMessageAttachmentPayload([{
+      id: 'html',
+      name: 'report.html',
+      path: localPath,
+      size: 42,
+      ext: '.html',
+      category: 'text',
+      mimeType: 'text/html',
+    }]);
+    uploadLocalFile.mockResolvedValue({
+      key: 'cindy/device-link/u/report.html',
+      size: 42,
+      contentType: 'text/html',
+      sha256: SHA256,
+    });
+    const item = {
+      clientId: 'new-html',
+      files: payload.serializedFiles,
+      persistedContent: JSON.stringify({ text: 'read this', files: payload.persistFileRefs }),
+    };
+
+    const out = await rewriteOutboundMedia(channel, ['sess', item, opts]);
+    const rewritten = out[1] as typeof item;
+    const ref = rewritten.files![0].path;
+    expect(uploadLocalFile).toHaveBeenCalledExactlyOnceWith(localPath, { contentType: 'text/html' });
+    expect(parseAttachmentOssRef(ref)).toMatchObject({
+      originalName: 'report.html',
+      mimeType: 'text/html',
+      size: 42,
+      sha256: SHA256,
+    });
+    expect(JSON.parse(rewritten.persistedContent).files[0].path).toBe(ref);
+    expect(item.files![0].path).toBe(localPath);
+  });
+
+  it.each([
+    ['cached HTML', 'xdt-image://sess/report.html', 'report.html', 'text/html'],
+    ['absolute PDF path', undefined, 'report.pdf', 'application/pdf'],
+    ['media blob', `cindy-media://blobs/${SHA256}.png`, 'picture.png', 'image/png'],
+  ])('preserves host-owned %s when sending an existing queue item', async (_label, url, name, mimeType) => {
+    // These POSIX paths describe the remote host, regardless of the test platform.
+    const hostPath = `/remote/cache/sess/${name}`;
+    const item = {
+      clientId: 'already-queued',
+      text: 'read this',
+      files: [{ name, path: hostPath, ...(url ? { url } : {}), mimeType }],
+      persistedContent: JSON.stringify({ text: 'read this', files: [{ name, path: hostPath }] }),
+    };
+    const args = ['sess', item, { removeFromQueue: true, expectedClearBoundaryMs: null }];
+    resolveSafe.mockReturnValue({ absPath: path.resolve('missing-controller-cache', name), mimeType });
+    uploadLocalFile.mockRejectedValue(new Error('ENOENT: host attachment is not on the controller'));
+
+    const out = await rewriteOutboundMedia('maker:input:steer', args);
+
+    expect(out).toEqual(args);
+    expect(out[1]).toBe(item);
+    expect(resolveSafe).not.toHaveBeenCalled();
+    expect(uploadLocalFile).not.toHaveBeenCalled();
+    expect(uploadBuffer).not.toHaveBeenCalled();
+  });
+
   it('item.files[] 上传 + url/path 变引用、base64 清掉(buildMakerUserMessage 取 url)', async () => {
     const out = await rewriteOutboundMedia('maker:input:enqueue', [
       'sess',

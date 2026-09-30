@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MainViewHistoryProvider } from '@/contexts/MainViewHistoryContext';
+import { publishNavigationAttention } from '@/lib/navigationAttentionStore';
 import { SidebarTopNav } from '../SidebarTopNav';
 
 vi.mock('react-i18next', () => ({
@@ -20,7 +21,7 @@ vi.mock('@/features/cc-agent/sidebar/conversationSearchContext', () => ({
   useConversationSearchContext: () => ({ search: { query: '' }, allKnownProjects: [] }),
 }));
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); publishNavigationAttention({ tasks: 0, teammates: 0 }); });
 
 function NavigationHarness() {
   const location = useLocation();
@@ -49,6 +50,18 @@ function Harness({ initialPath, owner = 'one' }: { initialPath: string; owner?: 
 }
 
 describe('Sidebar teammate return action', () => {
+  it('shows the destination count, preserves it when switching sections, hides zero and reuses 99+ overflow', () => {
+    publishNavigationAttention({ tasks: 4, teammates: 105 });
+    render(<Harness initialPath="/cc-agent" />);
+    expect(screen.getByRole('button', { name: '伙伴' }).textContent).toBe('伙伴99+');
+    fireEvent.click(screen.getByRole('button', { name: '伙伴' }));
+    expect(screen.getByRole('button', { name: '返回任务' }).textContent).toBe('返回任务4');
+    fireEvent.click(screen.getByRole('button', { name: '返回任务' }));
+    expect(screen.getByRole('button', { name: '伙伴' }).textContent).toBe('伙伴99+');
+    act(() => publishNavigationAttention({ tasks: 4, teammates: 0 }));
+    expect(screen.getByRole('button', { name: '伙伴' }).textContent).toBe('伙伴');
+  });
+
   it('keeps the previous task when visiting automations before teammates', () => {
     const sessionPath = '/cc-agent/session-1?remoteHostId=host-1#message-2';
     render(<Harness initialPath={sessionPath} />);

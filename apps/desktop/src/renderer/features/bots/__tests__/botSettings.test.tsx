@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotCapabilities, BotModelRoute, BotProfile } from '../botStore';
 import { MainViewHistoryContext, type MainViewHistory } from '@/contexts/MainViewHistoryContext';
@@ -18,6 +18,7 @@ vi.mock('@/components/onboarding/ConnectProviderCard', () => ({
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate }) }));
 
 const mocks = vi.hoisted(() => {
@@ -237,7 +238,7 @@ beforeEach(() => {
   ] }));
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     openPath: mocks.openPath,
-    localDb: { sessionsPush: { onPatched: mocks.onSessionPatched } },
+    localDb: { sessionsPush: { onPatched: mocks.onSessionPatched }, bots: { listSkills: vi.fn().mockResolvedValue([]) } },
     maker: {
       onMcpChanged: mocks.onMcpChanged,
       listAgentSkills: mocks.listAgentSkills,
@@ -433,12 +434,30 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.getByLabelText('bots.profile.summary')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'bots.profile.changeAvatar' })).toBeTruthy();
     expect(screen.getByText('bots.homeFolder.title')).toBeTruthy();
-    expect(screen.getByTestId('model-selector')).toBeTruthy();
+    expect(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('model-selector')).toBeTruthy();
     expect(screen.getByTestId('bot-lifecycle-settings')).toBeTruthy();
     expect(screen.getByTestId('bot-lifecycle-settings').closest('details')).toBeNull();
     expect(screen.queryByText('bots.settingsTabs.growth')).toBeNull();
     expect(screen.queryByText('bots.persona.adjustButton')).toBeNull();
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('saves a task route with its own harness and restores inheritance without changing the primary', async () => {
+    mocks.defaultModelChain = capabilities().modelChain;
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsTabs.model' }));
+    const task = within(screen.getByTestId('bot-task-model-controls'));
+    await act(async () => { fireEvent.click(task.getByTestId('codex-model-selector')); });
+    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalled());
+    const saved = mocks.updateBotProfile.mock.calls.at(-1)![1].capabilities;
+    expect(saved).toHaveProperty('taskModelOverride', { harness: 'codex', providerId: 'custom', model: 'custom-model', effort: 'high', fastMode: false });
+    expect(saved).not.toHaveProperty('modelChainOverride');
+    expect(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('current-model').textContent).toBe('claude-x');
+    mocks.updateBotProfile.mockClear();
+    await act(async () => { fireEvent.click(task.getByRole('button', { name: 'bots.model.inheritPrimary' })); });
+    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalled());
+    expect(mocks.updateBotProfile.mock.calls.at(-1)![1].capabilities).toHaveProperty('taskModelOverride', null);
+    expect(task.getByTestId('current-model').textContent).toBe('claude-x');
   });
 
   it('keeps a long description inside the single editable field', () => {
@@ -551,16 +570,16 @@ describe('Bot settings unified autosave', () => {
           for (const listener of mocks.modelListeners) listener();
         }
       });
-      expect(screen.getByTestId('current-model').textContent).toBe('new-default');
+      expect(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('current-model').textContent).toBe('new-default');
       await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
       expect(mocks.updateBotProfile).not.toHaveBeenCalled();
       fireEvent.change(screen.getByLabelText('bots.nameLabel'), { target: { value: 'Pending name' } });
-      fireEvent.click(screen.getByTestId('current-model'));
+      fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('current-model'));
       act(() => {
         mocks.defaultModelChain = [{ ...nextRoute, model: 'later-default' }];
         for (const listener of mocks.modelListeners) listener();
       });
-      expect(screen.getByTestId('current-model').textContent).toBe('new-default');
+      expect(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('current-model').textContent).toBe('new-default');
       expect((screen.getByLabelText('bots.nameLabel') as HTMLInputElement).value).toBe('Pending name');
       await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
       expect(mocks.updateBotProfile.mock.lastCall?.[1]).toMatchObject({
@@ -769,7 +788,7 @@ describe('same-Bot capability updates while editing settings', () => {
       };
       const next = [{ ...capabilities().modelChain[0]!, harness: 'codex' as const, model: 'next-default' }];
       await act(async () => { mocks.defaultModelChain = next; publish(); });
-      expect(screen.getByTestId('current-model').textContent).toBe('next-default');
+      expect(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('current-model').textContent).toBe('next-default');
       expect(mocks.listCustomMcpServers).toHaveBeenLastCalledWith(expect.objectContaining({ modelChain: next }));
       expect(mocks.listAgentSkills).toHaveBeenLastCalledWith('codex', expect.anything());
       expect(mocks.listToolsets).toHaveBeenLastCalledWith('/bot/workspace', true, expect.objectContaining({ agentKind: 'codex' }));
@@ -790,7 +809,7 @@ describe('same-Bot capability updates while editing settings', () => {
     renderSettings();
     await openCapabilities();
     fireEvent.change(screen.getByLabelText('bots.nameLabel'), { target: { value: 'Pending name' } });
-    await act(async () => { fireEvent.click(screen.getByTestId('codex-model-selector')); });
+    await act(async () => { fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector')); });
     const calls = mocks.listCustomMcpServers.mock.calls.length;
     await act(async () => {
       mocks.defaultModelChain = [{ ...capabilities().modelChain[0]!, model: 'later-default' }];
@@ -914,7 +933,7 @@ describe('same-Bot capability updates while editing settings', () => {
     mocks.updateBotProfile.mockImplementationOnce(() => new Promise(() => {}));
     renderSettings();
     await openCapabilities();
-    await act(async () => { fireEvent.click(screen.getByTestId('codex-model-selector')); });
+    await act(async () => { fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector')); });
     expect(mocks.listCustomMcpServers).toHaveBeenLastCalledWith(expect.objectContaining({ modelChain: [expect.objectContaining({ harness: 'codex' })] }));
     expect((screen.getByRole('checkbox', { name: /SSE Events/ }) as HTMLInputElement).disabled).toBe(true);
     await act(async () => { finishOld(sseCatalog('claude-code')); });
@@ -996,6 +1015,30 @@ describe('same-Bot capability updates while editing settings', () => {
     expect((screen.getByRole('checkbox', { name: 'Scheduler' }) as HTMLInputElement).checked).toBe(true);
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', { name: 'Local name', capabilities: { toolsets: ['docs', 'scheduler'] }, capabilityBaseline: { toolsets: ['docs'] } });
+  });
+
+  it('explains a rename that collides with another teammate instead of a generic save failure', async () => {
+    mocks.profiles = [bot(), bot({ id: 'bot-2', name: 'Ｒｅｌｅａｓｅ Buddy' })];
+    renderSettings();
+    fireEvent.change(screen.getByLabelText('bots.nameLabel'), { target: { value: ' release buddy ' } });
+    expect(screen.getByRole('alert').textContent).toBe('bots.guided.duplicateName');
+    expect(screen.queryByText('bots.autosave.retry')).toBeNull();
+    fireEvent.change(screen.getByLabelText('bots.nameLabel'), { target: { value: 'Release buddy 2' } });
+    expect(screen.queryByText('bots.guided.duplicateName')).toBeNull();
+  });
+
+  it('keeps a trailing line break typed before the debounced save lands', async () => {
+    vi.useFakeTimers();
+    const view = renderSettings();
+    fireEvent.change(screen.getByLabelText('bots.profile.summary'), { target: { value: 'Own releases\n' } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+    expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', { description: 'Own releases' });
+    // The host stores the trimmed text; the field must not snap the caret back a line.
+    view.rerender(<BotSettings bot={bot({ description: 'Own releases' })} onBack={view.onBack} onOpenSession={view.onOpenSession} />);
+    await act(async () => {});
+    expect((screen.getByLabelText('bots.profile.summary') as HTMLTextAreaElement).value).toBe('Own releases\n');
+    await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+    expect(mocks.updateBotProfile).toHaveBeenCalledOnce();
   });
 
   it('keeps edits made during a successful save and adopts concurrent capability updates', async () => {

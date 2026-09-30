@@ -49,6 +49,7 @@ import {
   type SwipeRowRegistry,
 } from "@/session/swipeRowRegistry";
 import type { RemoteSession } from "@/session/types";
+import { useDisclosurePrepare } from "@/session/listDisclosureTransition";
 import {
   iconSize,
   iconStroke,
@@ -279,6 +280,8 @@ function PinActionPanel({
   translation: SharedValue<number>;
 }) {
   const { colors } = useTheme();
+  // 置顶 / 归档会让行移位:按下即提前挂上列表过渡,松手时直接执行。
+  const prepareDisclosure = useDisclosurePrepare();
   const buttonStyle = useAnimatedStyle(() => {
     const revealed = Math.max(0, translation.value);
     const progress = Math.min(1, revealed / LEFT_PANEL_WIDTH);
@@ -299,6 +302,7 @@ function PinActionPanel({
           accessibilityLabel={label}
           accessibilityRole="button"
           onPress={onPress}
+          onPressIn={() => prepareDisclosure(true)}
           style={styles.actionPressable}
           testID={testID}
         >
@@ -340,6 +344,8 @@ function RightActionsPanel({
   translation: SharedValue<number>;
 }) {
   const { colors } = useTheme();
+  // 置顶 / 归档会让行移位:按下即提前挂上列表过渡,松手时直接执行。
+  const prepareDisclosure = useDisclosurePrepare();
   const { t } = useTranslation();
   const StatusIcon = archived ? ArchiveRestore : Archive;
   // 挂载时同步落初值,只在真正跨越阈值时启动 timing。若每个面板挂载都执行
@@ -419,6 +425,7 @@ function RightActionsPanel({
           accessibilityLabel={archiveLabel}
           accessibilityRole="button"
           onPress={onArchive}
+          onPressIn={() => prepareDisclosure(true)}
           style={styles.actionPressable}
           testID={testID ? `${testID}.archiveAction` : undefined}
         >

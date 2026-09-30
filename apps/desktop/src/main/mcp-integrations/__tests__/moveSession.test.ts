@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   owner: { dataOwnerId: 'owner-a', ownerGeneration: 1 },
   query: vi.fn(),
   botLinks: [] as Array<{ botId: string }>,
+  botLinkSequence: null as null | Array<Array<{ botId: string }>>,
   workers: [] as Array<{ sessionId: string }>,
   running: new Set<string>(),
   attached: false,
@@ -31,7 +32,12 @@ vi.mock('../../localDb/client/current.js', async () => {
     drizzle: {
       select: () => ({
         from: (table: unknown) => ({
-          where: () => ({ limit: table === botSessionLinks ? async () => h.botLinks : h.query }),
+          where: () => ({
+            limit:
+              table === botSessionLinks
+                ? async () => h.botLinkSequence?.shift() ?? h.botLinks
+                : h.query,
+          }),
           innerJoin: () => ({ where: async () => h.workers }),
         }),
       }),
@@ -53,7 +59,7 @@ vi.mock('../../im/binding.js', () => ({
 }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({ updateSessionInDb: h.update }));
 
-import { createMoveSession } from '../moveSession.js';
+import { createMoveSession, moveSessionProjectFromHost } from '../moveSession.js';
 
 describe('moveSession host', () => {
   let directory: string;
@@ -65,6 +71,7 @@ describe('moveSession host', () => {
     h.running = new Set();
     h.workers = [];
     h.botLinks = [];
+    h.botLinkSequence = null;
     h.attached = false;
     h.enterLock.mockImplementation(() => undefined);
     h.beforeCommit.mockImplementation(() => undefined);
@@ -92,6 +99,25 @@ describe('moveSession host', () => {
       sessionId: 'target',
       workingDir,
     });
+
+  it('keeps agent self-moves forbidden while the trusted UI uses the same guarded update', async () => {
+    const agent = createMoveSession((id) => h.running.has(id));
+    expect(await agent({ callerSessionId: 'target', sessionId: 'target', workingDir: directory })).toMatchObject({ ok: false });
+    expect(h.update).not.toHaveBeenCalled();
+    expect(await moveSessionProjectFromHost((id) => h.running.has(id), 'target', directory, () => {})).toMatchObject({ ok: true, workspaceKind: 'project' });
+    h.saved.mockClear();
+    h.running.add('target');
+    expect(await moveSessionProjectFromHost((id) => h.running.has(id), 'target', null, () => {})).toMatchObject({ ok: false });
+    expect(h.saved).not.toHaveBeenCalled();
+  });
+  it.each(['lock', 'commit'])('rechecks remote authority at %s before moving', async phase => {
+    let revoked = false;
+    (phase === 'lock' ? h.enterLock : h.beforeCommit).mockImplementationOnce(() => { revoked = true; });
+    expect(await moveSessionProjectFromHost(() => false, 'target', directory, () => {
+      if (revoked) throw new Error('MIGRATION_ACCESS_REVOKED');
+    })).toMatchObject({ ok: false });
+    expect(h.saved).not.toHaveBeenCalled();
+  });
 
   it('uses the shared update path for moving projects and preserves cwd when removing grouping', async () => {
     // recent_workdirs stores logical project identities with forward slashes on all platforms.
@@ -155,13 +181,16 @@ describe('moveSession host', () => {
   );
 
   it.each(['source', 'link'])(
-    'rejects Bot %s callers before entering the target update',
+    'lets Bot %s callers move ordinary tasks',
     async (signal) => {
-      h.query.mockResolvedValueOnce([{ id: 'caller', source: signal === 'source' ? 'bot' : null }]);
-      h.botLinks = signal === 'link' ? [{ botId: 'bot' }] : [];
-      expect(await run(directory)).toMatchObject({ errorCode: 'UNSUPPORTED_CAPABILITY' });
-      expect(h.update).not.toHaveBeenCalled();
-      expect(h.saved).not.toHaveBeenCalled();
+      h.query
+        .mockResolvedValueOnce([
+          { id: 'caller', remoteHostId: null, source: signal === 'source' ? 'bot' : null },
+        ])
+        .mockResolvedValue([{ id: 'target', status: 'active', remoteHostId: null, source: null }]);
+      if (signal === 'link') h.botLinkSequence = [[{ botId: 'bot' }], []];
+      expect(await run(directory)).toMatchObject({ ok: true });
+      expect(h.update).toHaveBeenCalled();
     },
   );
 

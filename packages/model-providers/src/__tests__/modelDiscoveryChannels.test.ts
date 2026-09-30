@@ -69,6 +69,19 @@ describe('shared provider discovery', () => {
     }
   });
 
+  it('retains maximum-only account capacity below the public working default', () => {
+    const models = mergeDiscoveredRuntimeModels([], parseModelsListResponse({ data: [{
+      id: 'gpt-6-astra', max_context_window: 872000,
+    }] })!);
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        [agent]: { baseUrl: 'https://relay.example/v1', models },
+      } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      expect(provider.models[agent]?.[0]).toMatchObject({ contextWindow: 872000, contextWindowMax: 872000 });
+      expect(provider.models[agent]?.[0].discoveredMetadata).toEqual({ contextWindowMax: 872000 });
+    }
+  });
+
   it('uses maximum-only discovery as an unverified working fallback without saving it as a report', () => {
     const discovered = parseModelsListResponse({ data: [{ id: 'private-model', max_context_window: 64000 }] })!;
     const models = mergeDiscoveredRuntimeModels([], discovered);
@@ -297,5 +310,21 @@ describe('Sub2API manifest capabilities', () => {
     expect(models.map(m => m.discoveredMetadata?.supportsImageInput)).toEqual([undefined, undefined, false, false, undefined]);
     expect(models.map(m => m.discoveredMetadata?.supportsFastMode)).toEqual([undefined, undefined, false, false, undefined]);
     expect(models.every(m => m.discoveredMetadata?.contextWindowMax === undefined)).toBe(true);
+  });
+});
+
+describe('mergeDiscoveredRuntimeModels 排序', () => {
+  it('新发现的型号排在已有型号之前，已有型号位置不动', () => {
+    const existing = [
+      { id: 'old-b', name: 'Old B' },
+      { id: 'old-a', name: 'Old A' },
+    ];
+    const merged = mergeDiscoveredRuntimeModels(existing, [
+      { id: 'old-a', name: 'Old A' },
+      { id: 'new-1', name: 'New 1' },
+      { id: 'old-b', name: 'Old B' },
+      { id: 'new-2', name: 'New 2' },
+    ]);
+    expect(merged.map((model) => model.id)).toEqual(['new-1', 'new-2', 'old-b', 'old-a']);
   });
 });

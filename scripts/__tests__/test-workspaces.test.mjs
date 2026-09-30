@@ -2228,9 +2228,22 @@ test("CLI runs independently while another worktree budget is held, and waits on
 		for (const dir of [".git", "scripts/shared", "packages/sample"]) {
 			fs.mkdirSync(path.join(root, dir), { recursive: true });
 		}
-		for (const file of ["test-workspaces.mjs", "test-related.mjs", "test-gate-lock.mjs", "shared/pnpm-invocation.mjs"]) {
+		for (const file of ["test-workspaces.mjs", "test-related.mjs", "shared/pnpm-invocation.mjs"]) {
 			fs.copyFileSync(path.join(ROOT, "scripts", file), path.join(root, "scripts", file));
 		}
+		// Both the holder and the real CLI child must use the same dispersed test
+		// ports. The production dynamic-port range can be unavailable on Windows CI.
+		const lockPorts = {
+			lockPortStart: REAL_LOCK_TEST_PORT_START,
+			lockPortCount: REAL_LOCK_TEST_PORT_COUNT,
+			lockPortStride: REAL_LOCK_TEST_PORT_STRIDE,
+		};
+		const lockModule = JSON.stringify(new URL("../test-gate-lock.mjs", import.meta.url).href);
+		fs.writeFileSync(path.join(root, "scripts/test-gate-lock.mjs"), `
+export * from ${lockModule};
+import { acquireTestGateLock as acquire } from ${lockModule};
+export const acquireTestGateLock = (options) => acquire({ ...options, ...${JSON.stringify(lockPorts)} });
+`);
 		fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), 'packages:\n  - "packages/*"\n');
 		fs.writeFileSync(path.join(root, "packages/sample/package.json"), '{"name":"sample"}');
 		fs.writeFileSync(path.join(root, "packages/sample/sample.test.js"), "// test fixture\n");
@@ -2241,7 +2254,7 @@ test("CLI runs independently while another worktree budget is held, and waits on
 		})};`);
 		const pnpmStub = path.join(root, "pnpm-probe.mjs");
 		fs.writeFileSync(pnpmStub, 'import assert from "node:assert/strict"; assert.ok(process.argv.includes("probe")); console.log("PROBE_EXECUTED");');
-		heldLock = await acquireTestGateLock({ repoRoot: root, owner: { pid: process.pid, tier: "unit", cwd: root } });
+		heldLock = await acquireTestGateLock({ repoRoot: root, owner: { pid: process.pid, tier: "unit", cwd: root }, ...lockPorts });
 		const run = (args, onOutput) => new Promise((resolve, reject) => {
 			const child = spawn(process.execPath, [path.join(root, "scripts/test-workspaces.mjs"), ...args], {
 				env: { ...process.env, CI: "false", GITHUB_ACTIONS: "false", npm_execpath: pnpmStub },

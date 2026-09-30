@@ -382,11 +382,14 @@ describe('session runtime control wiring', () => {
     const axisValidation = setModel.indexOf('if (atomicSelection) {');
     expect(axisValidation).toBeGreaterThan(-1);
     expect(setModel).not.toContain("if (internalOptions.source !== 'user' && atomicSelection)");
+    // 用户 picker 选择按显式能力校验; 配置跟随(configStaged)带的是任务已有的
+    // 档位/Fast(Fast 根本不在渠道默认里), 不是用户对目标模型的显式选择 ——
+    // 目标模型不支持时轴收敛而不是拒(PR #5155 review P2)。
     expect(setModel).toContain(
-      "internalOptions.source === 'user' || internalOptions.effortExplicit === true",
+      'effortExplicit:\n            (internalOptions.source === \'user\' && internalOptions.configStaged !== true) ||\n            internalOptions.effortExplicit === true',
     );
     expect(setModel).toContain(
-      "internalOptions.source === 'user' || internalOptions.fastExplicit === true",
+      'fastExplicit:\n            (internalOptions.source === \'user\' && internalOptions.configStaged !== true) ||\n            internalOptions.fastExplicit === true',
     );
     expect(setModel).toContain("allowFixedEffortPlaceholder: internalOptions.source === 'user'");
     expect(axisValidation).toBeLessThan(setModel.indexOf('applyRuntimeSetModelChange({'));
@@ -401,7 +404,7 @@ describe('session runtime control wiring', () => {
     );
     const resolveAxes = persistRoute.indexOf('const axes = resolveSessionRuntimeAxes({');
     const persist = persistRoute.indexOf(
-      'await getDbClient().drizzle.update(sessions).set(patch)',
+      'await pendingDb.drizzle.update(sessions).set(patch)',
       resolveAxes,
     );
     const commitEffort = persistRoute.indexOf('setSessionEffort(sessionId, finalEffort);', persist);
@@ -411,7 +414,8 @@ describe('session runtime control wiring', () => {
     );
     const broadcast = persistRoute.indexOf('broadcastSessionPatched(sessionId, patch);', persist);
 
-    expect(persistRoute).toContain('const [desiredRow] = await getDbClient()');
+    expect(persistRoute).toContain('const [desiredRow] = await pendingDb');
+    expect(persistRoute).toContain('assertPendingOwner();');
     expect(persistRoute).toContain('const restoringPreviousRoute =');
     expect(persistRoute).toContain('let finalEffort = restoringPreviousRoute && route.effort');
     expect(persistRoute).toContain(
@@ -441,7 +445,7 @@ describe('session runtime control wiring', () => {
       patchFast,
     );
     const normalWakeGuard = setModel.indexOf(
-      'if ((rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection) && !response.deferred)',
+      'if (!internalOptions.applyingPiCredentialPending && (rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection ||',
       persistSelection,
     );
     const wakeQueue = setModel.indexOf(
@@ -482,7 +486,7 @@ describe('session runtime control wiring', () => {
     const apply = setModel.indexOf('applyRuntimeSetModelChange({');
     expect(verifiedWindowOnly).toBeGreaterThan(-1);
     expect(setModel).toContain('contextWindow: sessions.contextWindow,');
-    expect(setModel).toContain('effectiveContextWindow(');
+    expect(setModel).toContain('verifiedCurrentWindow =');
     expect(setModel).toContain('hasModelWindowContextToProtect(');
     expect(setModel).toContain("'MODEL_CONTEXT_USAGE_UNKNOWN'");
     expect(setModel).toContain("'MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN'");
@@ -497,7 +501,7 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain("return isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : code;");
     expect(setModel).toContain('await maker.getSessionMeta(sessionId)');
     expect(setModel).toContain(
-      'liveSessionBeforeRouteChange?.model ?? persistedSessionMeta?.model',
+      'internalOptions.previousPiRoute?.model ?? persistedSessionMeta?.model',
     );
     expect(setModel).not.toContain(
       'if (liveSessionBeforeRouteChange && runtimeAgentKind && runtimeRouteChanged)',
@@ -525,7 +529,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)');
     expect(setModel).toContain('modelWindowRebuilt ||');
     expect(setModel).toContain('patch.contextWindow = targetContextWindow;');
-    expect(setModel).toContain('(rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection)');
+    expect(setModel).toContain('(rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection ||');
     expect(setModel).toContain('wakeSessionInputAfterCredentialSwitch(sessionId);');
   });
 
@@ -546,7 +550,7 @@ describe('session runtime control wiring', () => {
     const requested = setModel.indexOf('const requestedProviderId = normalizeSessionProviderId(');
     const restore = setModel.indexOf('if (!hasSessionProvider(sessionId)) {');
     const hydrate = setModel.indexOf('hydrateSessionProvider(sessionId, persistedProviderId);');
-    const current = setModel.indexOf('const currentProviderId = resolveCurrentSetModelProviderId(');
+    const current = setModel.indexOf('const currentProviderId = internalOptions.previousPiRoute');
     const catalogCurrent = setModel.indexOf('const catalogCurrentWindow =');
     expect(requested).toBeGreaterThan(-1);
     expect(restore).toBeGreaterThan(requested);
@@ -1138,10 +1142,13 @@ describe('session runtime control wiring', () => {
     expect(setModel.indexOf('cold remote Pi runtime cannot verify the target window')).toBeLessThan(
       apply,
     );
-    expect(setModel).toContain("runtimeAgentKind === 'pi' && runtimeRouteChanged");
+    expect(setModel).toContain("runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh)");
     expect(setModel).not.toContain('busy Pi task cannot change runtime selection');
     expect(setModel).toContain('finalPiWindow < verifiedCurrentWindow!');
     expect(setModel).not.toContain('finalPiWindow < targetContextWindow');
+    expect(setModel).toContain('internalOptions.previousPiRoute.providerId');
+    expect(setModel).toContain('setSessionProvider(sessionId, internalOptions.previousPiRoute.providerId)');
+    expect(setModel).toContain('coldPiRouteWithoutLiveWindowCheck = true');
   });
 
   it('switches and verifies Pi before deciding whether the actual window needs rebuild', () => {
@@ -1161,12 +1168,8 @@ describe('session runtime control wiring', () => {
       'preparation = await contextOverflowRolloverHolder.prepareModelWindowSwitch(',
     );
 
-    const piPreflightGuard = setModel.lastIndexOf(
-      "runtimeAgentKind !== 'pi'",
-      preflightPreparation,
-    );
-    expect(piPreflightGuard).toBeGreaterThan(-1);
-    expect(preflightPreparation - piPreflightGuard).toBeLessThan(700);
+    expect(preflightPreparation).toBeGreaterThan(-1);
+    expect(preflightPreparation).toBeLessThan(apply);
     expect(closeRecovery).toBeGreaterThan(-1);
     expect(closeRecovery).toBeLessThan(finalWindow);
     expect(finalWindow).toBeGreaterThan(apply);
@@ -1188,7 +1191,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('contextWindowConfirmationRequired: finalPiWindow');
     expect(setModel).toContain('contextTokensForConfirmation: finalPressureContextTokens');
     expect(setModel).toContain('finalPressureContextTokens = contextTokens');
-    expect(setModel).toContain('runtimeRouteChanged || confirmedContextWindow !== undefined');
+    expect(setModel).toContain('runtimeRouteChanged || piConfigurationRefresh || confirmedContextWindow !== undefined');
     expect(setModel).toContain('targetContextWindow = finalPiWindow');
     expect(setModel).toContain("if (!isDeviceLinkInvoke() && runtimeAgentKind === 'pi') {");
     expect(setModel).toContain('planUserRuntimeModelSwitch({');
@@ -1214,58 +1217,42 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('`Pi final-window context preparation failed: ${finalPreparation}`');
   });
 
-  it('retires an expected local Pi route replacement without bypassing window protection', () => {
+  it('defers the retired Pi route window verification to the next send', () => {
     const setModel = handlerBody(
       registerSource,
       'const handleSetModel = async (',
       'const recoverRemoteRuntimeAxisPersistence',
     );
 
-    // 退役判定：仅本地，且与 helper 的关闭判定同源（worker 强制重建 / proxy 身份穿越 /
-    // 同 route 配置重载）。它必须在 apply 前得到，保护事务和守卫都依赖它。
-    const retirementGate = setModel.indexOf('let piRouteChangeRetiresRuntime = false;');
-    expect(retirementGate).toBeGreaterThan(-1);
-    const retirementBlock = setModel.slice(
-      retirementGate,
-      setModel.indexOf('let targetContextWindow: number | undefined;', retirementGate),
+    // 退役判定由 apply 自己给出（result.retiredRuntime，含 Pi previewModelSwitch 的
+    // rebuild），register 不再做预判——预判与实际关闭判定会分叉。
+    expect(registerSource).not.toContain('piRouteChangeRetiresRuntime');
+    expect(registerSource).not.toContain(
+      'Pi target route requires an unsupported runtime replacement',
     );
-    expect(retirementBlock).toContain(
-      "runtimeAgentKind === 'pi' && runtimeRouteChanged && !runtimeStatus.remoteHostId",
-    );
-    expect(retirementBlock).toContain('rebuildLiveOrcaWorker ||');
-    expect(retirementBlock).toContain('shouldCloseSessionForCredentialSwitch({');
-    expect(retirementBlock).toContain('requiresModelSwitchRebuild?.(model, {');
-    expect(registerSource).toContain('shouldCloseSessionForCredentialSwitch,');
     const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
-    expect(retirementGate).toBeLessThan(apply);
+    expect(apply).toBeGreaterThan(-1);
 
-    // 需要缩窗保护的替换必须在关闭前跑保护事务；否则只跳过不存在的活进程终态核验。
+    // 需要缩窗保护的替换必须在关闭前（apply 之前）跑保护事务。
     const preflightPreparation = setModel.indexOf(
       'preparation = await contextOverflowRolloverHolder.prepareModelWindowSwitch(',
     );
-    expect(retirementGate).toBeLessThan(preflightPreparation);
-    expect(setModel).toContain("(runtimeAgentKind !== 'pi' || piRouteChangeRetiresRuntime)");
-    const skipLiveVerification = setModel.indexOf('const runtimeRetiredForRouteChange =');
+    expect(preflightPreparation).toBeGreaterThan(-1);
+    expect(preflightPreparation).toBeLessThan(apply);
+    const skipLiveVerification = setModel.indexOf('result.retiredRuntime !== true &&');
     const liveVerification = setModel.indexOf(
       'const reportedPiWindow = piSessionAfterRouteChange.getUsageSnapshot?.().contextWindow;',
     );
     expect(skipLiveVerification).toBeGreaterThan(preflightPreparation);
     expect(skipLiveVerification).toBeLessThan(liveVerification);
-    expect(setModel).toContain("result.status !== 'deferred' && result.runtimeRetired === true");
-    expect(setModel).toContain('!runtimeRetiredForRouteChange');
-
-    // 守卫只对未预期的退役 fail closed，不整体删除。
-    expect(setModel).toContain(
-      "runtimeAgentKind === 'pi' && runtimeRouteChanged && !piRouteChangeRetiresRuntime",
-    );
-    expect(setModel).toContain('unsupported runtime replacement; runtime selection was not changed');
 
     // 退役/冷跳过的 route 把「新进程实际窗口」核验挪到下一次发送：register 在 apply 之后
     // 登记待核验，发送事务在懒创建之后、Session.send 之前核验（piRetiredRouteWindowGuard）。
     expect(registerSource).toContain('createPiRetiredRouteWindowGuard({');
     const recordPendingCheck = setModel.indexOf('piRetiredRouteWindowGuardHolder?.record(');
-    expect(recordPendingCheck).toBeGreaterThan(skipLiveVerification);
-    expect(setModel).toContain('(runtimeRetiredForRouteChange || coldPiRouteWithoutLiveWindowCheck)');
+    expect(recordPendingCheck).toBeGreaterThan(apply);
+    expect(recordPendingCheck).toBeLessThan(skipLiveVerification);
+    expect(setModel).toContain('(result.retiredRuntime === true || coldPiRouteWithoutLiveWindowCheck)');
     expect(registerSource).toContain('verifyRetiredRouteWindowBeforeSend:');
     const guardCall = makerSendSource.indexOf(
       'await deps.verifyRetiredRouteWindowBeforeSend?.(sessionId);',
@@ -1398,7 +1385,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('forceSessionRebuild:');
     expect(setModel).toContain('rebuildLiveOrcaWorker ||');
     expect(setModel).toContain(
-      'if ((rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection) && !response.deferred)',
+      'if (!internalOptions.applyingPiCredentialPending && (rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection ||',
     );
   });
 });

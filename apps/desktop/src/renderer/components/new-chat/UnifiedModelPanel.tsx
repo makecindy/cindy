@@ -28,9 +28,10 @@ import { ModelConfigFlyout, type ModelConfigFlyoutState } from './ModelConfigFly
 import type { ModelMemoryAccessors } from './ModelSelector';
 import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 import { UnifiedModelRail } from './UnifiedModelRail';
-import { useUnifiedRowActions } from './useUnifiedRowActions';
+import { useUnifiedRowActions, withOptimisticConfig } from './useUnifiedRowActions';
 import { UnifiedModelRow } from './UnifiedModelRow';
 import { ModelSourceUsageProvider } from './ModelSourceDetails';
+import type { ProviderUsageScope } from './useProviderWeeklyQuota';
 import {
   anchorKey,
   favoriteMatchesSelection,
@@ -122,8 +123,8 @@ export interface UnifiedModelPanelProps {
   effortLabelOf: (agent: AgentKind, effort: Effort) => string;
   listMaxHeight?: number;
   interactionDisabled?: boolean;
-  /** Only local directories may read this desktop’s subscription accounts. */
-  localProviderUsage?: boolean;
+  /** Whose subscription accounts the directory may show: this desktop or its linked device. */
+  providerUsage?: ProviderUsageScope | null;
   /** 保留付费模型为锁定展示行，并把点击交给统一付费提示。 */
   includePaymentRequired?: boolean;
   paymentRequiredLabel?: string;
@@ -280,7 +281,7 @@ export function UnifiedModelPanel({
   effortLabelOf,
   listMaxHeight,
   interactionDisabled = false,
-  localProviderUsage = false,
+  providerUsage = null,
   includePaymentRequired = false,
   paymentRequiredLabel,
   paymentRequiredUnlockLabel,
@@ -766,6 +767,7 @@ export function UnifiedModelPanel({
     removeFavorite,
     selectRow,
     pending: actionPending,
+    optimistic: optimisticConfig,
     runExternal,
   } = useUnifiedRowActions({
     favoriteStore: deviceId ? remoteFavorites.store : undefined,
@@ -961,7 +963,7 @@ export function UnifiedModelPanel({
       style={{ height: `${listMaxHeight ?? 428}px` }}
     >
       <UnifiedModelRail
-        localProviderUsage={localProviderUsage}
+        providerUsage={providerUsage}
         items={railItems}
         active={effectiveRail}
         onSelect={setRail}
@@ -1072,7 +1074,11 @@ export function UnifiedModelPanel({
                   <span className="truncate">{sectionLabel(section)}</span>
                 </div>
                 {section.rows.map((row) => {
-                  const config = configOf(row.entry, row.favorite);
+                  const config = withOptimisticConfig(
+                    row.anchor,
+                    configOf(row.entry, row.favorite),
+                    optimisticConfig,
+                  );
                   const key = anchorKey(row.anchor);
                   const priceDisplay = priceDisplayOf(row.entry, config);
                   return (
@@ -1194,7 +1200,12 @@ export function UnifiedModelPanel({
         >
           {(() => {
             const target = flyTarget;
-            const config = configOf(target.entry, target.favorite);
+            // 深度 / Fast 写入在途时显示目标值,松手即停在新档(见 withOptimisticConfig)。
+            const config = withOptimisticConfig(
+              target.anchor,
+              configOf(target.entry, target.favorite),
+              optimisticConfig,
+            );
             const state: ModelConfigFlyoutState = target.favorite
               ? 'favorite'
               : config.customized
@@ -1242,7 +1253,7 @@ export function UnifiedModelPanel({
     </div>
   );
   return (
-    <ModelSourceUsageProvider providers={providers} enabled={localProviderUsage}>
+    <ModelSourceUsageProvider providers={providers} scope={providerUsage}>
       {panelContent}
     </ModelSourceUsageProvider>
   );

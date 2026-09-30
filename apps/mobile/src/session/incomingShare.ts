@@ -183,10 +183,12 @@ export function consumeIncomingShareBatch(id: string): boolean {
   if (getMobileAuthOwner().switching || !currentBatch || currentBatch.id !== id
     || !currentBatch.owner.accountKey || !isMobileAuthOwnerCurrent(currentBatch.owner)) return false;
   const consumed = currentBatch;
+  // Do not expose a removable attachment until consumption is durable. On failure
+  // keep the mailbox entry so focusing the screen again can retry the handoff.
+  consumed.acknowledge();
   pendingBatches.shift();
   currentBatch = pendingBatches[0] ?? null;
   emit();
-  acknowledgeBatch(consumed);
   return true;
 }
 
@@ -248,19 +250,20 @@ export function selectIncomingShareUploadCandidates(
     if (!uri || !uri.startsWith('file://')) continue;
 
     const name = payload.originalName?.trim() || basenameFromUri(uri);
-    const category = name ? categorizeMobileAttachment(name) : null;
-    const isImage = payload.contentType === 'image' || payload.shareType === 'image';
-    if (!name || (!category && !isImage)) {
+    if (!name) {
       rejectedUris.push(uri);
       continue;
     }
+    const category = categorizeMobileAttachment(name);
+    const isImage = payload.contentType === 'image' || payload.shareType === 'image';
 
     const size = typeof payload.contentSize === 'number'
       && Number.isFinite(payload.contentSize)
       && payload.contentSize > 0
       ? payload.contentSize
       : 0;
-    if (!category && isImage) {
+    // 系统判定为图片、但扩展名不是可直传的图片格式(如 HEIC):转 JPEG 后按图片发送。
+    if (category === 'file' && isImage) {
       const index = candidates.length;
       candidates.push({
         kind: 'image',
@@ -282,7 +285,7 @@ export function selectIncomingShareUploadCandidates(
       continue;
     }
     candidates.push({
-      kind: candidateKind(category!),
+      kind: candidateKind(category),
       uri,
       name,
       size,

@@ -47,6 +47,7 @@ import {
 import { BotRosterView } from './BotRosterView';
 import { BotAvatar } from './BotAvatar';
 import { BotBasicProfileFields } from './BotBasicProfileFields';
+import { normalizeBotName } from '../../../shared/botCreation';
 import {
   botEntryTarget,
   createBotCanonicalSessionWithRetry,
@@ -56,6 +57,7 @@ import {
 import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotInvitationWelcome } from './BotInvitationWelcome';
 import { BotModelChainEditor } from './BotModelChainEditor';
+import { BotTaskModelEditor } from './BotTaskModelEditor';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
 import { BotRoutines } from './BotRoutines';
 import { BotMemorySettings } from './BotMemorySettings';
@@ -96,7 +98,9 @@ export function BotSettings({
   onBack,
   onOpenSession,
   beforeCloseRef,
+  initialPage = 'home',
 }: {
+  initialPage?: 'home' | 'memory' | 'capabilities';
   bot: BotProfile;
   beforeCloseRef?: { current: (() => Promise<boolean>) | null };
   onBack: () => void;
@@ -106,6 +110,10 @@ export function BotSettings({
   const navigate = useNavigate();
   const [name, setName] = useState(bot.name);
   const [description, setDescription] = useState(bot.description);
+  const profiles = useBotProfiles();
+  // Same identity rule as creation and the host: NFKC, trimmed, case-insensitive.
+  const nameTaken = !!name.trim() && profiles.some((other) => other.id !== bot.id && other.status !== 'archived'
+    && normalizeBotName(other.name) === normalizeBotName(name));
   const [portraitRetryFailed, setPortraitRetryFailed] = useState(false);
   const [identitySource, setIdentitySource] = useState(bot.identitySource ?? '');
   const [userContextSource, setUserContextSource] = useState(bot.userContextSource ?? '');
@@ -136,7 +144,7 @@ export function BotSettings({
     | 'advanced'
     | 'routines'
     | 'memory'
-  >('home');
+  >(initialPage);
   const routineLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
   const routineBackRef = useRef<(() => Promise<boolean>) | null>(null);
   const memoryLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -435,7 +443,12 @@ export function BotSettings({
           ) : (
             <span />
           )}
-          {autosave.status === 'saving' ? (
+          {nameTaken ? (
+            // The host rejects the rename; say why instead of a generic save failure and a futile retry.
+            <p className="text-11 text-[var(--text-danger)]" role="alert">
+              {t('bots.guided.duplicateName')}
+            </p>
+          ) : autosave.status === 'saving' ? (
             <span
               role="status"
               className="inline-flex items-center gap-1 text-11 text-[var(--text-tertiary)]"
@@ -565,40 +578,48 @@ export function BotSettings({
           aria-label={t('bots.settingsTabs.model')}
         >
           <div data-testid="bot-model-controls" className="min-w-0">
-            <BotModelChainEditor
-              label={t('bots.settingsTabs.model')}
-              hiddenVendors={hiddenVendors}
-              onRestoreDefault={() => {
-                const modelChain = getEffectiveBotModelChain();
-                const primary = modelChain[0];
-                setCapabilities((current) => ({
-                  ...current,
-                  ...(primary ?? { model: '', providerId: null, effort: '', fastMode: false }),
-                  modelOverride: null,
-                  modelChain,
-                  modelChainOverride: null,
-                }));
+            <div data-testid="bot-primary-model-controls">
+              <BotModelChainEditor
+                label={t('bots.model.primary')}
+                hiddenVendors={hiddenVendors}
+                onRestoreDefault={() => {
+                  const modelChain = getEffectiveBotModelChain();
+                  const primary = modelChain[0];
+                  setCapabilities((current) => ({
+                    ...current,
+                    ...(primary ?? { model: '', providerId: null, effort: '', fastMode: false }),
+                    modelOverride: null,
+                    modelChain,
+                    modelChainOverride: null,
+                  }));
+                  autosave.onEdit('instant');
+                }}
+                value={displayedModelChain}
+                onChange={(modelChain) => {
+                  const primary = modelChain[0];
+                  if (!primary) return;
+                  setCapabilities((current) => ({
+                    ...current,
+                    ...primary,
+                    modelChain,
+                    modelChainOverride: modelChain,
+                    modelOverride: {
+                      model: primary.model,
+                      providerId: primary.providerId,
+                      effort: primary.effort,
+                      fastMode: primary.fastMode,
+                    },
+                  }));
+                  autosave.onEdit('instant');
+                }}
+              />
+            </div>
+            <BotTaskModelEditor value={capabilities.taskModelOverride ?? null}
+              inheritedRoute={displayedModelChain[0]} hiddenVendors={hiddenVendors}
+              onChange={taskModelOverride => {
+                setCapabilities(current => ({ ...current, taskModelOverride }));
                 autosave.onEdit('instant');
-              }}
-              value={displayedModelChain}
-              onChange={(modelChain) => {
-                const primary = modelChain[0];
-                if (!primary) return;
-                setCapabilities((current) => ({
-                  ...current,
-                  ...primary,
-                  modelChain,
-                  modelChainOverride: modelChain,
-                  modelOverride: {
-                    model: primary.model,
-                    providerId: primary.providerId,
-                    effort: primary.effort,
-                    fastMode: primary.fastMode,
-                  },
-                }));
-                autosave.onEdit('instant');
-              }}
-            />
+              }} />
           </div>
         </section>
         {page === 'capabilities' && (

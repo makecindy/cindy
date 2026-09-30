@@ -13,12 +13,13 @@
  *   Esc         → Deny
  */
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import type { BotChatIdentity } from '@/features/bots/BotSessionContentHeader';
 
+import { shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
@@ -102,6 +103,7 @@ const allowActionClass = cn(
 
 export function PermissionPrompt({ permission, onRespond, companion }: PermissionPromptProps) {
   const { t } = useTranslation();
+  const cardRef = useRef<HTMLDivElement>(null);
   const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable,
     submitting, submissionFailed } = permission;
   const isMediaDownload = toolName === 'cindy.media.download';
@@ -170,12 +172,12 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // IME 组合期间的 Enter(确认候选词)不算快捷键;焦点在可编辑元素上时
-      // (侧栏重命名/查找栏等)也不劫持按键,避免把输入操作误判成授权决定。
-      if (e.isComposing) return;
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+      // 按键已有归属时不替用户做授权决定：输入法组字、正在打字、刚被菜单处理的 Esc、
+      // 焦点在「拒绝」等按钮上的回车（交给按钮本身激活）都让位。
+      if (e.key !== 'Enter' && e.key !== 'Escape') return;
+      const shortcutKind =
+        e.key === 'Escape' ? 'dismiss' : e.ctrlKey || e.metaKey ? 'modifiedActivate' : 'activate';
+      if (shouldCardShortcutYield(e, shortcutKind, cardRef.current)) return;
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         handleAlwaysAllow();
@@ -196,6 +198,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
   return (
     <div
+      ref={cardRef}
       className={cn(
         'w-full max-w-[914px] rounded-xl border p-4',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',

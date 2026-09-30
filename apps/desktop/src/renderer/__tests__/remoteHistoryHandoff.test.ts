@@ -114,8 +114,9 @@ describe('desktop remote history uses the shared live-to-history handoff', () =>
     const source = readFileSync(new URL('../components/chat/MessageStream.tsx', import.meta.url), 'utf8');
     expect(source).toContain('selectVisibleMessages(displayMessages)');
     expect(source).toContain('planSessionBelongsToLatestUserTurn(displayMessages,');
-    expect(source).toContain('findFirstUserMessageClientId(displayMessages,');
-    expect(source).toContain('collectAssistantTurnUsageDetails(displayMessages,');
+    expect(source).toContain('const metadataMessages = metadataProjection(displayMessages)');
+    expect(source).toContain('findFirstUserMessageClientId(metadataMessages,');
+    expect(source).toContain('collectAssistantTurnUsageDetails(metadataMessages,');
   });
 
   it.each([{ predecessors: [] as string[] }, { predecessors: ['removed'] }, { predecessors: ['user'] }])('anchors a send after late history with $predecessors', async ({ predecessors }) => {

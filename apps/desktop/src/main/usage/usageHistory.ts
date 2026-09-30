@@ -11,6 +11,13 @@
  *   - 有缓存时立即返回 stale payload, 后台刷新并写回磁盘; renderer 保持"更新中"感知并短轮询补 fresh。
  *   - 无缓存时才走同步聚合, 成功后落盘。纯函数 readUsageHistoryWith() 不带 IO 缓存, 便于单测。
  *
+ * 设备范围 (device):
+ *   - 'local' (默认): 只读本机库, 首页仪表盘沿用。
+ *   - 'all': 本机 + 同账号其它电脑的原始行 (peerUsageSync 经 device-link 拉取并缓存),
+ *     合并后走同一条聚合链路。设置 → 用量历史默认使用。
+ *   - 其它值: 某一台其它电脑的 deviceId, 只聚合该设备的缓存行。
+ *   多设备范围在其它设备同步期间返回 stale, renderer 的短轮询据此拿到合并后的结果。
+ *
  * streak / anomaly / 估算全部是导出的纯函数, 单测不需要 DB / Electron。
  * 日期一律用本地时区 day key (localDayKey 同口径); renderer 以 payload.todayKey 为锚,
  * 不自己取系统日期。
@@ -21,6 +28,7 @@ import path from 'node:path';
 import { app } from 'electron';
 import { getAllSpendDays, localDayKey } from '../localDb/dailySpend';
 import { getModelUsageSince, type DailyModelUsageRow } from '../localDb/dailyModelUsage';
+import { getSessionUsageSince, getUsageTaskMeta } from '../localDb/dailySessionUsage';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { createLogger } from '../logger';
 import {
@@ -38,6 +46,12 @@ import {
   type ModelPriceOverridesSnapshot,
 } from './referenceModelPricing';
 import { computePriceQuoteTurnMoney } from './turnCostCalculator';
+import {
+  getPeerUsageSync,
+  type PeerUsageSnapshot,
+  type UsageDeviceSummary,
+} from './peerUsageSync';
+import type { UsageDeviceRows } from './usageDeviceRows';
 import { currentLedgerCurrency } from './ledgerCurrency.js';
 import {
   addCompatibleRegionalMoney,
@@ -144,6 +158,89 @@ export interface UsageHistoryPayload {
     last30DaysTokens: number;
   };
   anomaly: { isAnomalous: boolean; trailing7DayAvg: RegionalMoney | null };
+  /**
+   * 多设备范围才有: 参与合并的电脑 (含本机), 供设备选择器与「数据截至」标注。
+   * 'local' 范围与旧快照缺省。
+   */
+  devices?: UsageDeviceSummary[];
+  /** true = 正在从其它电脑读取, 结果可能还不含它们的最新数据。 */
+  devicesSyncing?: boolean;
+  /** 聚合时使用的跨设备数据版本 (main 内部新鲜度判断用)。 */
+  peerVersion?: number;
+  /** 按 modelDays 窗口返回的每日 × 任务 token (「最耗 token 的任务」按范围统计)。 */
+  taskDaily?: UsageHistoryTaskDay[];
+  /** taskDaily 涉及任务的元数据。 */
+  tasks?: UsageHistoryTask[];
+}
+
+export type UsageHistoryDeviceScope = 'local' | 'all' | (string & {});
+
+/** 本机任务的设备键;其它电脑的任务用它的 deviceId。 */
+export const LOCAL_TASK_DEVICE = 'local';
+
+/** 「最耗 token 的任务」的每日 × 任务一行。taskKey = `${deviceId}:${sessionId}`。 */
+export interface UsageHistoryTaskDay {
+  day: string;
+  taskKey: string;
+  tokens: number;
+}
+
+export interface UsageHistoryTask {
+  taskKey: string;
+  /** LOCAL_TASK_DEVICE 或其它电脑的 deviceId。 */
+  deviceId: string;
+  sessionId: string;
+  title: string;
+  model: string;
+  providerId: string | null;
+  contextTokens: number;
+  contextWindow: number;
+  /** unix ms */
+  lastActiveAt: number;
+}
+
+export function usageTaskKey(deviceId: string, sessionId: string): string {
+  return `${deviceId}:${sessionId}`;
+}
+
+/**
+ * 合并多台设备的原始行。同一 (天, agent, 模型, 币种, 金额口径) 的模型行相加,
+ * 保持与单机库一致的「每键一行」形状 —— 下游 modelDaily 与柱图按行取值, 不能出现重复键。
+ * 日账按天拼接各设备的多币种金额, 折叠仍由聚合链路按账本币种完成。
+ */
+export function combineUsageDeviceRows(sources: readonly UsageDeviceRows[]): UsageDeviceRows {
+  const spendByDay = new Map<string, RegionalMoney[]>();
+  const modelByKey = new Map<string, DailyModelUsageRow>();
+  for (const source of sources) {
+    for (const row of source.spendDays) {
+      const monies = spendByDay.get(row.day) ?? [];
+      monies.push(...row.monies);
+      spendByDay.set(row.day, monies);
+    }
+    for (const row of source.modelRows) {
+      const key = [row.day, row.agentKind, row.model, row.money.currency, row.money.kind].join('\u0000');
+      const existing = modelByKey.get(key);
+      if (!existing) {
+        modelByKey.set(key, { ...row });
+        continue;
+      }
+      existing.money =
+        addCompatibleRegionalMoney([existing.money, row.money], row.money.currency) ?? existing.money;
+      existing.inputTokens += row.inputTokens;
+      existing.outputTokens += row.outputTokens;
+      existing.cacheReadTokens += row.cacheReadTokens;
+      existing.cacheCreateTokens += row.cacheCreateTokens;
+    }
+  }
+  return {
+    spendDays: [...spendByDay.entries()]
+      .map(([day, monies]) => ({ day, monies }))
+      .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)),
+    modelRows: [...modelByKey.values()].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)),
+    // 任务行需保留设备归属,不在这里合并 —— 由 getTaskUsageSince 按设备分别打键。
+    sessionRows: [],
+    tasks: [],
+  };
 }
 
 /** YYYY-MM-DD → 前一天 (本地时区语义, 纯字符串进出)。 */
@@ -233,6 +330,10 @@ export function computeAnomaly(
 export interface UsageHistoryDeps {
   getAllSpendDays(): Promise<Array<{ day: string; monies: RegionalMoney[] }>>;
   getModelUsageSince(sinceDayKey: string): Promise<DailyModelUsageRow[]>;
+  /** 每日 × 任务用量;缺省(旧测试替身)视为没有任务数据。 */
+  getTaskUsageSince?(
+    sinceDayKey: string,
+  ): Promise<{ rows: UsageHistoryTaskDay[]; tasks: UsageHistoryTask[] }>;
   getGatewayModelPricing(): Promise<ModelPricingMap | null>;
   getReferenceModelPricing(): ModelPricingMap;
   /** 覆盖记录快照,一次聚合读一份——历史重合并逐行读文件会在慢盘上拖垮 Main 线程。 */
@@ -241,9 +342,35 @@ export interface UsageHistoryDeps {
   todayKey(): string;
 }
 
+/** 本机任务用量,按 LOCAL_TASK_DEVICE 打上设备键。 */
+function localTaskUsage(
+  rows: Awaited<ReturnType<typeof getSessionUsageSince>>,
+): { rows: UsageHistoryTaskDay[]; tasks: UsageHistoryTask[] } {
+  return tagTaskUsage(LOCAL_TASK_DEVICE, rows);
+}
+
+function tagTaskUsage(
+  deviceId: string,
+  usage: { rows: UsageDeviceRows['sessionRows']; tasks: UsageDeviceRows['tasks'] },
+): { rows: UsageHistoryTaskDay[]; tasks: UsageHistoryTask[] } {
+  return {
+    rows: usage.rows.map((row) => ({
+      day: row.day,
+      taskKey: usageTaskKey(deviceId, row.sessionId),
+      tokens: row.tokens,
+    })),
+    tasks: usage.tasks.map((task) => ({
+      ...task,
+      taskKey: usageTaskKey(deviceId, task.sessionId),
+      deviceId,
+    })),
+  };
+}
+
 const defaultDeps: UsageHistoryDeps = {
   getAllSpendDays,
   getModelUsageSince,
+  getTaskUsageSince: async (sinceDayKey) => localTaskUsage(await getSessionUsageSince(sinceDayKey)),
   getGatewayModelPricing,
   getReferenceModelPricing,
   getModelPriceOverridesSnapshot: readModelPriceOverridesSnapshot,
@@ -274,14 +401,22 @@ function normalizeWindowDays(value: number | 'all' | undefined, fallback: number
   return Math.min(366, Math.max(1, Math.floor(value ?? fallback)));
 }
 
+function normalizeDeviceScope(value: UsageHistoryDeviceScope | undefined): UsageHistoryDeviceScope {
+  return value && value.length > 0 ? value : 'local';
+}
+
 function optsKey(opts?: UsageHistoryReadOptions): string {
+  const device = normalizeDeviceScope(opts?.device);
   const days = normalizeWindowDays(opts?.days, 140);
   const modelDays = normalizeWindowDays(opts?.modelDays, MODEL_WINDOW_DAYS);
   const userId = getCurrentDbClientUserId() ?? 'anonymous';
   // Keep the pre-window-split key for the default request so existing disk
   // snapshots remain readable. Non-default model windows get their own key.
   const modelSuffix = modelDays === MODEL_WINDOW_DAYS ? '' : `|modelDays=${modelDays}`;
-  return `user=${encodeURIComponent(userId)}|days=${days}${modelSuffix}`;
+  // 'local' 沿用旧 key, 升级后首页与已有磁盘快照照常命中。
+  const deviceSuffix = device === 'local' ? '' : `|device=${encodeURIComponent(device)}`;
+  const taskSuffix = opts?.includeTasks ? '|tasks=1' : '';
+  return `user=${encodeURIComponent(userId)}|days=${days}${modelSuffix}${deviceSuffix}${taskSuffix}`;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -329,6 +464,10 @@ function validateUsageHistoryPayload(value: unknown): UsageHistoryPayload | null
     streak: payload.streak,
     totals: payload.totals,
     anomaly: payload.anomaly,
+    ...(Array.isArray(payload.devices) ? { devices: payload.devices } : {}),
+    ...(Array.isArray(payload.taskDaily) && Array.isArray(payload.tasks)
+      ? { taskDaily: payload.taskDaily, tasks: payload.tasks }
+      : {}),
   };
 }
 
@@ -475,6 +614,13 @@ export interface UsageHistoryReadOptions {
   days?: number | 'all';
   /** Model/table aggregation window. `all` is used by Settings → Usage History. */
   modelDays?: number | 'all';
+  /** 设备范围, 缺省 'local'。见文件头注释。 */
+  device?: UsageHistoryDeviceScope;
+  /**
+   * 附带「最耗 token 的任务」数据(taskDaily / tasks)。只有设置 → 用量历史需要;首页看板
+   * 每次用量变化都会刷新,不承担任务全量查询。
+   */
+  includeTasks?: boolean;
   /**
    * true = 事件触发的刷新, 需要绕过 10s 内存快返, 立即重新聚合 DB。
    * mount / 展开仍使用 stale-while-refresh 快路径保证首帧速度。
@@ -486,7 +632,7 @@ async function refreshUsageHistory(expectedOptsKey: string, opts?: UsageHistoryR
   if (opts?.forceRefresh) {
     refreshInFlightByOptsKey.delete(expectedOptsKey);
     const generation = nextRefreshGeneration(expectedOptsKey);
-    return readUsageHistoryWith(defaultDeps, opts)
+    return readScopedUsageHistory(opts)
       .then((payload) => {
         const next = freshPayload(payload);
         if (isLatestRefreshGeneration(expectedOptsKey, generation)) {
@@ -502,7 +648,7 @@ async function refreshUsageHistory(expectedOptsKey: string, opts?: UsageHistoryR
   const current = refreshInFlightByOptsKey.get(expectedOptsKey);
   if (current) return current;
   const generation = nextRefreshGeneration(expectedOptsKey);
-  const nextRefresh = readUsageHistoryWith(defaultDeps, opts)
+  const nextRefresh = readScopedUsageHistory(opts)
       .then((payload) => {
         const next = freshPayload(payload);
         if (isLatestRefreshGeneration(expectedOptsKey, generation)) {
@@ -607,6 +753,9 @@ export async function readUsageHistoryWith(
   const modelRows = modelCutoff === null
     ? allModelRows
     : allModelRows.filter((r) => r.day >= modelCutoff);
+  const taskUsage = opts?.includeTasks && deps.getTaskUsageSince
+    ? await deps.getTaskUsageSince(modelCutoff ?? '0000-01-01')
+    : null;
 
   // 每日 token 合计 → days 的 tooltip 数据。codex-only 日 daily_spend 无行 ($ 只有
   // Claude 记), 也要并进 days, 否则热力图那天 hover 不到 token。
@@ -827,6 +976,7 @@ export async function readUsageHistoryWith(
     days,
     modelDaily,
     models,
+    ...(taskUsage ? { taskDaily: taskUsage.rows, tasks: taskUsage.tasks } : {}),
     streak: computeStreaks(activeDays, todayKey),
     totals: {
       today,
@@ -854,12 +1004,179 @@ export async function readUsageHistoryWith(
   };
 }
 
-/** 生产入口 (usage.ts adapter 注入给 IPC handler)。 */
+/**
+ * 其它电脑的行按它自己的本地日历记账,只精确到天,无法按小时换算到本机日历。
+ * 合并口径:各设备按本地日期计;对方已跨入本机的「明天」时,超出本机今天的行归到本机
+ * 今天 —— 否则那部分用量既不进今日合计,也不会出现在以本机今天为锚的图表里。
+ */
+export function clampPeerRowsToToday(rows: UsageDeviceRows, todayKey: string): UsageDeviceRows {
+  const clamp = (day: string): string => (day > todayKey ? todayKey : day);
+  return {
+    spendDays: rows.spendDays.map((row) => ({ ...row, day: clamp(row.day) })),
+    modelRows: rows.modelRows.map((row) => ({ ...row, day: clamp(row.day) })),
+    sessionRows: rows.sessionRows.map((row) => ({ ...row, day: clamp(row.day) })),
+    tasks: rows.tasks,
+  };
+}
+
+/** 按设备范围替换原始行读取; 价格、账本币种等其余依赖不变。 */
+export function usageHistoryDepsForScope(
+  base: UsageHistoryDeps,
+  scope: UsageHistoryDeviceScope,
+  snapshot: Pick<PeerUsageSnapshot, 'peerRows'>,
+): UsageHistoryDeps {
+  if (scope === 'local') return base;
+  let combined: Promise<UsageDeviceRows> | null = null;
+  const rows = (): Promise<UsageDeviceRows> => {
+    combined ??= (async () => {
+      const todayKey = base.todayKey();
+      const peer = (rows: UsageDeviceRows): UsageDeviceRows => clampPeerRowsToToday(rows, todayKey);
+      if (scope !== 'all') {
+        const one = snapshot.peerRows.get(scope);
+        return one
+          ? combineUsageDeviceRows([peer(one)])
+          : { spendDays: [], modelRows: [], sessionRows: [], tasks: [] };
+      }
+      const [spendDays, modelRows] = await Promise.all([
+        base.getAllSpendDays(),
+        base.getModelUsageSince('0000-01-01'),
+      ]);
+      return combineUsageDeviceRows([
+        { spendDays, modelRows, sessionRows: [], tasks: [] },
+        ...[...snapshot.peerRows.values()].map(peer),
+      ]);
+    })();
+    return combined;
+  };
+  return {
+    ...base,
+    getAllSpendDays: async () => (await rows()).spendDays,
+    getModelUsageSince: async (sinceDayKey) =>
+      (await rows()).modelRows.filter((row) => row.day >= sinceDayKey),
+    // 任务按设备分开保留(同一任务 id 在两台电脑上互不合并),其它电脑的行同样按本机今天夹取。
+    getTaskUsageSince: async (sinceDayKey) => {
+      const todayKey = base.todayKey();
+      const parts: Array<{ rows: UsageHistoryTaskDay[]; tasks: UsageHistoryTask[] }> = [];
+      if (scope === 'all' && base.getTaskUsageSince) {
+        parts.push(await base.getTaskUsageSince(sinceDayKey));
+      }
+      for (const [deviceId, peerRows] of snapshot.peerRows) {
+        if (scope !== 'all' && scope !== deviceId) continue;
+        const clamped = clampPeerRowsToToday(peerRows, todayKey);
+        parts.push(
+          tagTaskUsage(deviceId, {
+            rows: clamped.sessionRows.filter((row) => row.day >= sinceDayKey),
+            tasks: clamped.tasks,
+          }),
+        );
+      }
+      return {
+        rows: parts.flatMap((part) => part.rows),
+        tasks: parts.flatMap((part) => part.tasks),
+      };
+    },
+  };
+}
+
+/** 本机设备条目兜底: 设备目录尚未读到 (未登录 / 未连接) 时选择器仍有「本机」。 */
+function devicesWithSelf(snapshot: PeerUsageSnapshot): UsageDeviceSummary[] {
+  if (snapshot.devices.some((device) => device.isSelf)) return snapshot.devices;
+  return [
+    {
+      deviceId: snapshot.selfDeviceId ?? 'local',
+      name: '',
+      platform: null,
+      isSelf: true,
+      syncedAt: null,
+      status: 'ok',
+    },
+    ...snapshot.devices,
+  ];
+}
+
+async function readScopedUsageHistory(opts?: UsageHistoryReadOptions): Promise<UsageHistoryPayload> {
+  const scope = normalizeDeviceScope(opts?.device);
+  const peerSync = scope === 'local' ? null : getPeerUsageSync();
+  if (!peerSync) {
+    const payload = await readUsageHistoryWith(defaultDeps, opts);
+    // 未注入跨设备同步 (单测 / 启动窗口) 时多设备范围退化为本机, 选择器只剩本机。
+    return scope === 'local'
+      ? payload
+      : { ...payload, devices: devicesWithSelf({ version: 0, selfDeviceId: null, devices: [], peerRows: new Map() }) };
+  }
+  const snapshot = await peerSync.snapshot();
+  const payload = await readUsageHistoryWith(usageHistoryDepsForScope(defaultDeps, scope, snapshot), opts);
+  return {
+    ...payload,
+    devices: devicesWithSelf(snapshot),
+    devicesSyncing: peerSync.isSyncing(),
+    peerVersion: snapshot.version,
+  };
+}
+
+/**
+ * 生产入口 (usage.ts adapter 注入给 IPC handler)。
+ * 设备目录 / 状态 / 同步时间是展示元数据:在唯一出口按当前快照附上,不参与聚合与缓存
+ * 失效判断 —— 聚合只随用量行变化(见 peerUsageSync 的聚合版本)。
+ */
 export async function readUsageHistory(opts?: UsageHistoryReadOptions): Promise<UsageHistoryPayload> {
+  const payload = await withCurrentLocalTasks(await readAggregatedUsageHistory(opts));
+  const peerSync = normalizeDeviceScope(opts?.device) === 'local' ? null : getPeerUsageSync();
+  if (!peerSync) return payload;
+  return {
+    ...payload,
+    devices: devicesWithSelf(await peerSync.snapshot()),
+    devicesSyncing: peerSync.isSyncing(),
+  };
+}
+
+/**
+ * 本机任务的标题 / 模型 / 删除状态同属展示元数据:在唯一出口按当前库覆盖,聚合缓存
+ * 只提供用量行。重命名、删除不产生用量,不能等下一次重聚合才生效。
+ */
+async function withCurrentLocalTasks(payload: UsageHistoryPayload): Promise<UsageHistoryPayload> {
+  if (!payload.tasks?.some((task) => task.deviceId === LOCAL_TASK_DEVICE)) return payload;
+  let current: Map<string, Awaited<ReturnType<typeof getUsageTaskMeta>>[number]>;
+  try {
+    current = new Map((await getUsageTaskMeta()).map((task) => [task.sessionId, task]));
+  } catch (err) {
+    log.debug('read usage task meta failed:', err instanceof Error ? err.message : String(err));
+    return payload;
+  }
+  return {
+    ...payload,
+    tasks: payload.tasks.flatMap((task) => {
+      if (task.deviceId !== LOCAL_TASK_DEVICE) return [task];
+      const meta = current.get(task.sessionId);
+      return meta ? [{ ...task, ...meta }] : [];
+    }),
+  };
+}
+
+async function readAggregatedUsageHistory(
+  opts?: UsageHistoryReadOptions,
+): Promise<UsageHistoryPayload> {
   const key = optsKey(opts);
+  const peerSync = normalizeDeviceScope(opts?.device) === 'local' ? null : getPeerUsageSync();
+  // 节流的跨设备同步; 同步期间返回 stale, renderer 短轮询直到拿到合并后的结果。
+  if (peerSync) void peerSync.sync();
+  // 唯一的跨设备新鲜度判据:同步已结束,且聚合所用的设备数据版本就是当前版本。
+  // 同步在聚合过程中结束时版本已前进,这份结果不能标成最新。
+  const peerFresh = (payload: UsageHistoryPayload): boolean =>
+    !peerSync || (!peerSync.isSyncing() && payload.peerVersion === peerSync.version());
+  const settle = (payload: UsageHistoryPayload): UsageHistoryPayload => {
+    if (peerFresh(payload)) {
+      return freshPayload({ ...payload, ...(peerSync ? { devicesSyncing: false } : {}) });
+    }
+    // 版本已前进:后台按新数据重聚合,renderer 的 stale 短轮询随后拿到它。
+    if (peerSync && payload.peerVersion !== peerSync.version()) {
+      refreshUsageHistoryInBackground(key, opts);
+    }
+    return stalePayload({ ...payload, devicesSyncing: peerSync?.isSyncing() ?? false });
+  };
   if (opts?.forceRefresh) {
     const fresh = await refreshUsageHistory(key, opts);
-    if (fresh) return freshPayload(fresh);
+    if (fresh) return settle(fresh);
     if (cachedHistory && cachedHistoryOptsKey === key) return stalePayload(cachedHistory);
     const diskPayload = await hydrateFromDisk(key);
     if (diskPayload) return stalePayload(diskPayload);
@@ -867,7 +1184,15 @@ export async function readUsageHistory(opts?: UsageHistoryReadOptions): Promise<
   }
   if (cachedHistory && cachedHistoryOptsKey === key) {
     if (refreshInFlightByOptsKey.has(key)) return stalePayload(cachedHistory);
-    if (isMemoryFresh(cachedHistory)) return freshPayload(cachedHistory);
+    // 多设备范围只在输入变化时重聚合:本机用量 / 价格变化走 forceRefresh 推送,设备数据
+    // 变化体现为版本前进,跨天由 todayKey 判定。其余定时重读直接复用,不重扫全量历史;
+    // 同步进行中是否标为更新中由 settle(peerFresh)决定,与是否重聚合分开。
+    const reusable =
+      isMemoryFresh(cachedHistory) ||
+      (peerSync !== null &&
+        cachedHistory.peerVersion === peerSync.version() &&
+        cachedHistory.todayKey === localDayKey());
+    if (reusable) return settle(cachedHistory);
     refreshUsageHistoryInBackground(key, opts);
     return stalePayload(cachedHistory);
   }
@@ -877,7 +1202,7 @@ export async function readUsageHistory(opts?: UsageHistoryReadOptions): Promise<
     return stalePayload(diskPayload);
   }
   const fresh = await refreshUsageHistory(key, opts);
-  return fresh ?? emptyUsageHistoryPayload();
+  return fresh ? settle(fresh) : emptyUsageHistoryPayload();
 }
 
 /** DB 出错时的兜底空 payload (查询型 handler fallback-data 模式)。 */

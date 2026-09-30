@@ -79,6 +79,7 @@ import {
   resolveDesktopIceServers,
 } from "@cindy/device-link";
 import { Text } from "@/components/AppText";
+import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 import { useScreenEdgePadding } from "@/components/screenEdgeInsets";
 import { goBackGuarded } from "@/utils/backGuard";
 import { mobileDebugEnabled, mobileDebugLog } from "@/debug/mobileDebugLog";
@@ -90,6 +91,7 @@ import {
   fontWeight,
   iconSize,
   iconStroke,
+  lineHeight,
   radius,
   spacing,
   typeScale,
@@ -333,7 +335,7 @@ export function RemoteDesktopSession({
   const [network, setNetwork] = useState<DesktopNetworkStats | null>(null);
   const frameBusy = useRef<string | null>(null);
   const unlockFrame = useRef<((presented: boolean) => void) | null>(null);
-  const inputBusy = useRef<string | null>(null);
+  const inputBusy = useRef<{ lease: string } | null>(null);
   const [lease, setLease] = useState<RemoteDesktopLease | null>(null);
   const [windowsOpen, setWindowsOpen] = useState(false);
   useEffect(() => {
@@ -458,6 +460,9 @@ export function RemoteDesktopSession({
   const [modifiers, setModifiers] = useState<string[]>([]);
   const send = useCallback((message: object) => {
     const command = message as Record<string, unknown>;
+    // Every control handoff retires the parent batch together with the viewer
+    // queue. A late native fallback, failure or ACK cannot own the next batch.
+    if (command.type === "control" || command.type === "stop") inputBusy.current = null;
     const owner = active.current;
     const attempt = command.attemptId ?? mediaAttempt.current;
     webview.current?.postMessage(JSON.stringify(message));
@@ -1942,7 +1947,7 @@ export function RemoteDesktopSession({
         };
         if (
           !current.controlling ||
-          inputBusy.current === current.lease ||
+          inputBusy.current?.lease === current.lease ||
           !Number.isSafeInteger(message.sequence) ||
           !Array.isArray(message.events) ||
           message.events.length > 64 ||
@@ -1951,7 +1956,9 @@ export function RemoteDesktopSession({
           send(ack);
           return;
         }
-        inputBusy.current = current.lease;
+        const batch = { lease: current.lease };
+        inputBusy.current = batch;
+        const ownsBatch = () => active.current === current && inputBusy.current === batch;
         const events = message.events;
         void (async () => {
           if (
@@ -1959,7 +1966,7 @@ export function RemoteDesktopSession({
             (await nativeViewer.current?.sendInput(message).catch(() => false))
           )
             return;
-          if (active.current !== current || !current.controlling) return;
+          if (!ownsBatch() || !current.controlling) return;
           await request({
             op: "input",
             lease: current.lease,
@@ -1968,11 +1975,12 @@ export function RemoteDesktopSession({
           });
         })()
           .catch((cause) => {
-            if (active.current !== current) return;
+            if (!ownsBatch()) return;
             resolveControlFailure(cause);
           })
           .finally(() => {
-            if (inputBusy.current === current.lease) inputBusy.current = null;
+            if (!ownsBatch()) return;
+            inputBusy.current = null;
             send(ack);
           });
         break;
@@ -3195,7 +3203,7 @@ export function RemoteDesktopSession({
                     style={({ pressed }) => [
                       styles.modeTab,
                       fullKeys === computer && styles.modeTabSelected,
-                      pressed && styles.keyPressed,
+                      pressed && mobileInteractionStyles.pressed,
                     ]}
                   >
                     <Text
@@ -3394,6 +3402,7 @@ const makeStyles = (colors: ThemeColors) =>
     caption: {
       color: colors.textTertiary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       paddingHorizontal: spacing.sm,
       paddingVertical: spacing.xs,
     },
@@ -3420,6 +3429,7 @@ const makeStyles = (colors: ThemeColors) =>
     waitingComputerName: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.semibold,
       textAlign: "center",
     },
@@ -3430,7 +3440,8 @@ const makeStyles = (colors: ThemeColors) =>
     },
     waitingLabel: {
       color: colors.textSecondary,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.regular,
       textAlign: "center",
     },
@@ -3447,7 +3458,8 @@ const makeStyles = (colors: ThemeColors) =>
     connectionLabel: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
-      fontWeight: fontWeight.semibold,
+      lineHeight: lineHeight.body,
+      fontWeight: fontWeight.medium,
     },
     actionRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
     viewOnly: {
@@ -3455,6 +3467,7 @@ const makeStyles = (colors: ThemeColors) =>
       alignSelf: "center",
       color: colors.textPrimary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       backgroundColor: colors.surfaceElevated,
       padding: spacing.xs,
       borderRadius: radius.control,
@@ -3490,7 +3503,7 @@ const makeStyles = (colors: ThemeColors) =>
       borderColor: colors.textPrimary,
     },
     disabled: { opacity: 0.4 },
-    buttonText: { color: colors.textPrimary, fontSize: typeScale.caption },
+    buttonText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
     keyboardOverlay: { position: "absolute", left: 0, right: 0 },
     keyboard: {
       backgroundColor: colors.surfaceTranslucent,
@@ -3508,7 +3521,7 @@ const makeStyles = (colors: ThemeColors) =>
       flex: 1,
       flexDirection: "row",
       backgroundColor: colors.surfaceChip,
-      borderRadius: radius.container,
+      borderRadius: radius.pill,
       padding: spacing.xs,
     },
     modeTab: {
@@ -3516,17 +3529,18 @@ const makeStyles = (colors: ThemeColors) =>
       minHeight: 36,
       alignItems: "center",
       justifyContent: "center",
-      borderRadius: radius.control,
+      borderRadius: radius.pill,
     },
     modeTabSelected: { backgroundColor: colors.surfaceElevated },
     modeText: {
-      fontSize: typeScale.listBody,
+      fontSize: typeScale.bodySmall,
+      lineHeight: lineHeight.bodySmall,
       fontWeight: fontWeight.regular,
       color: colors.textTertiary,
     },
+    // 选中只换色,字重保持与未选一致。
     modeTextSelected: {
       color: colors.textPrimary,
-      fontWeight: fontWeight.semibold,
     },
     closeKey: {
       width: 44,
@@ -3561,16 +3575,18 @@ const makeStyles = (colors: ThemeColors) =>
     modifierText: {
       color: colors.textPrimary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
     },
-    modifierTextSelected: { color: colors.surface },
+    modifierTextSelected: { color: colors.ctaText },
     keyPressed: { opacity: 0.55 },
     keyText: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
-    specialKeyText: { color: colors.textPrimary, fontSize: typeScale.caption },
+    specialKeyText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
     pageNavigation: {
       flexDirection: "row",
       justifyContent: "center",
@@ -3587,7 +3603,8 @@ const makeStyles = (colors: ThemeColors) =>
     pageLabel: {
       color: colors.textTertiary,
       fontSize: typeScale.caption,
-      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
     },
     pageLabelSelected: { color: colors.textPrimary },
     pageIndicator: {

@@ -1,4 +1,4 @@
-import { isOpenAiSubscriptionProvider, providerCatalogId, sourceProviderForPreset } from '@cindy/model-providers';
+import { providerCatalogId, sourceProviderForPreset } from '@cindy/model-providers';
 import {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,
@@ -284,53 +284,22 @@ function throwIfCredentialSwitchAborted(signal: AbortSignal | undefined): void {
 }
 
 /**
- * Pi loopback proxy identity that must agree across request header
- * `x-cindy-pi-provider-id`, `registerPiProxySession`, and `sessions.provider_id`.
- *
- * Cindy gateway (`xd` / `cindy` / unset) sends no provider header. Native
- * subscription and BYOM sources pin that id. Pi `set_model` does not reread
- * spawn-time `models.json`, so crossing this identity on a live process leaves
- * a stale header and the proxy returns 403 `pi_provider_mismatch`.
- */
-export function piProxyProviderIdentity(
-  providerId: string | null | undefined,
-): string | null {
-  const normalized = normalizeProviderId(providerId);
-  if (!normalized || normalized === 'xd' || normalized === 'cindy') return null;
-  return normalized;
-}
-
-/**
  * 判断运行中的本地会话是否必须关闭后重建。
  *
  * provider route 可以在空闲时或 turn 边界热切，但 agent 子进程的凭证形态是 spawn-time 状态；
  * 只要旧/新来源解析出的 credential family 不同，就不能继续复用当前进程。
- * Pi 还要额外对齐 proxy 供应商身份：Grok/xAI 与 GPT/OpenAI 同属
- * `provider-oauth`，但活进程仍会带旧 `x-cindy-pi-provider-id`。
+ * Pi 的实际启动输入和目录刷新能力由该会话的 previewModelSwitch 判定，
+ * 不能用来源身份或凭证家族代替原生运行时的判断。
  */
 export function shouldCloseSessionForCredentialSwitch(
   input: ShouldCloseSessionForCredentialSwitchInput,
 ): boolean {
   if (input.remoteHostId) return false;
 
+  if (input.agentKind === 'pi') return false;
+
   const currentProviderId = normalizeProviderId(input.currentProviderId);
   const nextProviderId = normalizeProviderId(input.nextProviderId);
-  if (
-    input.agentKind === 'pi'
-    && piProxyProviderIdentity(currentProviderId) !== piProxyProviderIdentity(nextProviderId)
-  ) {
-    // Native ChatGPT accounts have independent startup provider blocks and placeholder
-    // credentials. Pi's verified set_model switches the live proxy/subagent identity;
-    // no account token is frozen in the process. Missing startup routes still fail
-    // before RPC inside Pi, preserving the old route and pending message.
-    const providers = getActiveCatalog().providers;
-    const current = providers.find(provider => provider.id === currentProviderId);
-    const next = providers.find(provider => provider.id === nextProviderId);
-    if (current && next && isOpenAiSubscriptionProvider(current) && isOpenAiSubscriptionProvider(next)) {
-      return false;
-    }
-    return true;
-  }
   const currentMode = resolveAgentCredentialMode({
     agentKind: input.agentKind,
     providerId: currentProviderId,

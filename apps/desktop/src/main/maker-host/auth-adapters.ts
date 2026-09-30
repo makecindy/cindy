@@ -86,7 +86,8 @@ import {
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, isAnthropicWireModel } from './claude-gateway-config.js';
 import { hasClaudeNativeLogin } from './claude-native-auth.js';
 import { disconnectClaudeNativeLogin, readClaudeNativeLogin } from './claude-native-connection.js';
-import { claudeCliConfigDirOverride, claudeCliNetworkEnv } from './claude-native-cli.js';
+import { claudeCliNetworkEnv } from './claude-native-cli.js';
+import { ensureLegacyClaudeConfigMigrated } from './claude-legacy-config-migration.js';
 import { isAnthropicCompatProxyHandleReady } from './anthropic-compat-proxy-host.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
@@ -748,14 +749,10 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
         else env.ANTHROPIC_API_KEY = CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
       }
     }
-    // dev 多实例隔离:设了 XDT_USER_DATA_DIR(device-link 本地联调跑多实例)时,把
-    // Claude Code 的配置目录也切到 userData 下。否则多实例共用全局 ~/.claude
-    // (~/.claude.json / projects 下的 transcripts)会互相干扰,无法当作两台独立设备。
-    // 仅 dev(非 packaged)生效,生产忽略;auth 走 ANTHROPIC_API_KEY,重定向 config
-    // dir 不影响鉴权。process.env 路线行不通(CLAUDE_CONFIG_DIR 在 boot 期被
-    // stripSensitiveAnthropicEnv 清掉),故经 getAuthEnv 注入子进程 env(覆盖优先)。
-    const configDir = claudeCliConfigDirOverride();
-    if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
+    // 所有来源都用 CLI 默认配置目录(dev 多实例与正式版一致,不设 CLAUDE_CONFIG_DIR):
+    // 订阅会话的凭证库按配置目录区分,隔离会看不到本机已有的 Claude Code 登录。
+    // 旧版 dev 隔离在 <userData>/claude-home 的转录,拉起 CLI 前补拷到默认目录供 resume。
+    await ensureLegacyClaudeConfigMigrated();
     return env;
   }
 

@@ -1,52 +1,114 @@
 {
+  "taskMove": {
+    "upgradeComputer": "이 컴퓨터의 Cindy 버전은 작업 이동을 지원하지 않습니다. “{{name}}”의 Cindy를 업데이트해 주세요.",
+    "sourceProjects": "작업이 있는 컴퓨터의 프로젝트",
+    "otherComputers": "다른 컴퓨터로 복사",
+    "offline": "오프라인",
+    "loading": "불러오는 중…",
+    "retry": "불러오지 못했습니다. 다시 시도",
+    "moved": "작업을 이동했습니다",
+    "failed": "작업을 이동할 수 없습니다. 작업을 중지하고 대상 폴더를 확인한 후 다시 시도하세요."
+  },
+  "taskMigration": {
+    "title": "{{name}}로 복사",
+    "description": "{{name}}에 작업 사본을 만듭니다.",
+    "bindingsNotice": "자동 실행과 메시지 연결은 원본 컴퓨터에 남으며 복사되지 않습니다.",
+    "limits": "두 컴퓨터 모두 이 기능을 지원하고 원격 제어가 켜져 있어야 합니다. 먼저 이 폴더를 사용하는 작업을 중지하세요. 복사 전에 대상 컴퓨터의 디스크 여유 공간과 사용 가능한 메모리를 확인합니다. 대상 컴퓨터의 모델 설정을 사용하며 Cindy 로그인 정보와 컴퓨터 설정은 전송하지 않습니다.",
+    "device": "복사 위치",
+    "project": "저장 위치",
+    "newFolder": "새 폴더를 만들며 기존 파일은 덮어쓰지 않습니다.",
+    "defaultFolder": "Cindy 기본 위치",
+    "noDevices": "사용 가능한 컴퓨터가 없습니다. 다른 컴퓨터를 연결하고 두 컴퓨터 모두 원격 제어를 켜세요.",
+    "openTarget": "새로 복사한 작업 열기",
+    "close": "닫기",
+    "cancel": "취소",
+    "start": "작업 복사",
+    "failed": "복사가 완료되지 않았습니다. 두 컴퓨터를 확인한 후 다시 복사하세요.",
+    "stages": {
+      "preparing": "스냅샷 준비 중…",
+      "transferring": "파일 전송 및 검증 중…",
+      "complete": "복사 완료",
+      "cancelled": "복사이 취소되었습니다.",
+      "receiving": "파일 수신 중…",
+      "active": "이 컴퓨터에서 작업을 계속할 수 있습니다."
+    },
+    "errors": {
+      "MIGRATION_TASK_RUNNING": "복사하기 전에 작업을 중지하세요.",
+      "MIGRATION_SHARED_DIRECTORY_BUSY": "다른 작업이 이 폴더를 사용 중입니다. 중지한 후 다시 시도하세요.",
+      "MIGRATION_TASK_UNSUPPORTED": "이 작업의 유형 또는 현재 상태에서는 다른 컴퓨터로 복사할 수 없습니다.",
+      "MIGRATION_NO_MEMORY": "전체 작업 기록을 처리할 메모리가 부족합니다. 메모리를 확보한 후 다시 시도하세요.",
+      "MIGRATION_INCOMPLETE_CONTEXT": "전체 작업 기록을 가져올 수 없어 복사을 중지했습니다.",
+      "MIGRATION_EXTERNAL_LINK": "폴더 외부 링크 또는 지원되지 않는 링크 체인이 있습니다. 원본 파일은 변경되지 않았습니다.",
+      "MIGRATION_REQUIRES_REPOSITORY_ROOT": "Git 프로젝트의 작업 폴더는 저장소 루트여야 합니다.",
+      "MIGRATION_SUBMODULE_UNSUPPORTED": "Git 하위 모듈이 있는 프로젝트는 아직 복사할 수 없습니다.",
+      "MIGRATION_NO_SPACE": "대상 컴퓨터의 저장 공간이 부족합니다.",
+      "MIGRATION_TARGET_MODEL_UNAVAILABLE": "대상 컴퓨터에 이 작업 엔진에서 사용할 수 있는 모델이 없습니다. 먼저 제공자를 연결하세요.",
+      "MIGRATION_UNSUPPORTED": "두 컴퓨터 모두 작업 복사을 지원하는 버전으로 업데이트하세요.",
+      "MIGRATION_TASK_QUEUED": "이 작업에 대기 중인 메시지가 있습니다. 처리하거나 삭제한 후 복사하세요.",
+      "MIGRATION_SOURCE_CHANGED": "준비 중 원본 작업이 변경되었습니다. 복사를 다시 시도하세요."
+    },
+    "successTitle": "복사 완료",
+    "successDescription": "{{name}}에 복사했습니다.",
+    "copyingTitle": "{{name}}로 복사 중",
+    "keepOpen": "{{name}}로 복사 중입니다. 완료될 때까지 기다려 주세요.",
+    "failureTitle": "복사 실패",
+    "failureDescription": "창을 닫은 후 작업 메뉴에서 새로 복사할 수 있습니다.",
+    "finishing": "{{name}}에서 수신, 검증 및 작업 생성 중…",
+    "transferProgress": "업로드 {{sent}} / {{total}} · 평균 {{speed}}/s (수신 미완료)",
+    "thisComputer": "이 컴퓨터",
+    "selectedComputer": "선택한 컴퓨터",
+    "estimating": "파일 수와 크기 계산 중…",
+    "fileSummary": "프로젝트 파일: {{count}}개, 총 {{size}}",
+    "estimateNote": "숨김 파일을 포함한 복사 전 예상치입니다. 별도로 복사하는 Git 기록, 작업 대화 및 첨부 파일은 제외됩니다. 파일 변경에 따라 최종 크기가 달라질 수 있습니다.",
+    "estimateFailed": "파일을 집계하지 못했습니다. 원본 컴퓨터의 연결과 버전을 확인한 후 닫고 다시 시도하세요."
+  },
   "sharedTask": {
+    "selfJoin": "내가 시작한 공유 작업이므로 참여할 필요가 없습니다. “내가 공유한 항목”에서 여세요.",
     "manageSharing": "공유 관리",
     "manageMembers": "멤버 관리…",
     "cancelSharing": "공유 중지",
     "cancelTitle": "공유를 중지할까요?",
-    "leaveShort": "공유 나가기",
+    "leaveShort": "나가기",
     "joinTab": "공유 참여",
-    "joinedEmptyTitle": "참여 중인 공유 작업이 없습니다",
-    "joinedEmptyHint": "“공유 참여”에서 호스트의 초대 코드를 입력하세요.",
+    "joinedEmptyTitle": "참여한 공유 작업이 없습니다",
+    "joinedEmptyHint": "동료가 보낸 초대 링크를 열어 공유 작업에 참여하세요.",
     "joinedLoadFailed": "참여 중인 공유 작업을 불러오지 못했습니다. 다시 시도하세요.",
-    "joinedTab": "참여",
+    "joinedTab": "참여한 공유",
     "reconnecting": "다시 연결 중…",
     "ownedLoadFailed": "불러올 수 없음",
     "loadingOwned": "불러오는 중…",
-    "retryAction": "다시 시도",
-    "invitationCopyFailed": "초대 코드가 생성되었지만 복사하지 못했습니다. 이 창으로 돌아와 다시 시도해 주세요.",
-    "accessEndedBody": "이 공유 작업에 더 이상 접근할 수 없습니다. 다시 참여하려면 호스트에게 새 초대 코드를 요청하세요.",
-    "joinIntro": "호스트가 보낸 초대 코드를 입력하여 공유 세션에 참여하세요.",
-    "invitationPlaceholder": "초대 코드 입력 또는 붙여넣기",
-    "joinNickname": "작업에서 사용할 닉네임",
-    "nicknamePlaceholder": "표시할 이름",
+    "retryAction": "새로 고침",
+    "invitationCopyFailed": "초대 링크를 복사하지 못했습니다. 다시 시도하세요.",
+    "accessEndedBody": "이 공유 작업에 더 이상 접근할 수 없습니다. 다시 참여하려면 호스트에게 새 초대 링크를 요청하세요.",
+    "joinIntro": "호스트의 초대 링크를 붙여넣으면 계정 이름으로 작업에 참여합니다.",
+    "invitationPlaceholder": "초대 링크 또는 초대 코드 붙여넣기",
     "joinNotice": "참여하면 전체 기록을 보고 호스트의 승인을 기다리지 않고 Agent에게 메시지를 보낼 수 있습니다.",
     "joinedTitle": "「{{title}}」에 참여했습니다",
     "joined": "공유 작업에 참여했습니다",
     "joinedBody": "참여 전의 메시지, 도구 결과, 첨부 파일을 확인하고 같은 Agent에게 메시지를 보낼 수 있습니다.",
     "enterTask": "작업 열기",
-    "inviteBoxTitle": "함께할 사람 초대",
+    "inviteBoxTitle": "동료에게 초대 링크 보내기",
     "roleGuest": "게스트",
     "removeShort": "제거",
     "removeNamedTitle": "{{name}} 님을 제거할까요?",
     "manage": "관리",
     "ended": "공유가 종료되었습니다",
-    "rejoin": "새 초대 코드로 참여",
+    "rejoin": "새 초대 링크로 참여",
     "otherDevice": "다른 컴퓨터",
     "runsOnHostDevice": "호스트 컴퓨터에서 실행 중",
-    "remoteHostOfflineNote": "호스트 컴퓨터가 계속 오프라인 상태이면 공유가 자동으로 종료됩니다. 호스트가 공유를 다시 시작하고 새 초대 코드를 보내야 합니다.",
+    "remoteHostOfflineNote": "호스트 컴퓨터가 계속 오프라인 상태이면 공유가 자동으로 종료됩니다. 호스트가 공유를 다시 시작하고 새 초대 링크를 보내야 합니다.",
     "waitingHost": "호스트의 응답을 기다리고 있습니다. 메시지는 계속 보낼 수 있습니다.",
     "join": "공유 세션 참여",
     "login": "세션에 참가하려면 Cindy에 로그인하세요.",
-    "invitation": "초대 코드",
+    "invitation": "초대 링크 또는 초대 코드",
     "dismiss": "대화 상자 닫기",
     "title": "세션 공유",
     "hostLimit": "공유 중인 작업 수가 현재 한도에 도달했습니다. 한도 미만이 될 때까지 공유 작업을 종료한 후 다시 시도하세요.",
     "joinLimit": "참여 중인 공유 작업 수가 현재 한도에 도달했습니다. 한도 미만이 될 때까지 공유 작업에서 나간 후 다시 시도하세요.",
     "guestLimit": "이 공유 작업에는 이미 게스트가 2명 있어 참여할 수 없습니다.",
-    "invitationUnavailable": "초대 코드가 유효하지 않거나 만료되었습니다. 호스트에게 새 코드를 요청하세요.",
-    "invitationRenew": "이 초대 코드로는 다시 참여할 수 없습니다. 호스트에게 새 코드를 요청하세요.",
-    "unavailable": "공유가 종료되었거나 접근 권한이 없습니다. 호스트에게 새 초대 코드를 요청하세요.",
+    "invitationUnavailable": "초대 링크가 유효하지 않거나 만료되었습니다. 호스트에게 새 코드를 요청하세요.",
+    "invitationRenew": "이 초대 링크로는 다시 참여할 수 없습니다. 호스트에게 새 코드를 요청하세요.",
+    "unavailable": "공유가 종료되었거나 접근 권한이 없습니다. 호스트에게 새 초대 링크를 요청하세요.",
     "permissionDenied": "이 작업을 수행할 권한이 없습니다. 호스트에게 문의하세요.",
     "connectionFailed": "공유 서비스 또는 호스트 컴퓨터에 연결할 수 없습니다. 네트워크를 확인한 후 다시 시도하세요.",
     "requestTimedOut": "요청 시간이 초과되었습니다. 네트워크와 호스트 컴퓨터의 연결을 확인한 후 다시 시도하세요.",
@@ -55,45 +117,53 @@
     "open": "공유 시작",
     "host": "호스트",
     "remove": "게스트 내보내기",
-    "invite": "초대 코드 복사",
-    "invitationCopied": "초대 코드를 복사했습니다",
+    "invite": "초대 복사",
+    "invitationCopied": "초대를 복사했습니다. 메시지에 붙여넣어 동료에게 보내세요.",
     "tabOwned": "내가 공유한 항목",
     "startIntro": "파트너를 초대해 이 세션의 모든 내용을 함께 보고, 같은 Agent로 협업하세요.",
     "runsOnThisDevice": "이 PC에서 실행 중",
-    "inviteNotice": "초대 코드를 가진 사용자는 로그인 후 참여할 수 있으며, 호스트와 동일한 Agent 권한을 갖습니다.",
+    "inviteNotice": "초대 링크를 가진 사용자는 로그인 후 참여할 수 있으며, 호스트와 동일한 Agent 권한을 갖습니다.",
     "offlineAutoClose": "호스트 컴퓨터가 계속 오프라인 상태이면 공유가 자동으로 종료됩니다.",
-    "inviteBoxHint": "동료가 초대 코드를 입력하면 공유 세션에 참여할 수 있습니다",
+    "inviteBoxHint": "동료에게 링크를 보내면 클릭하여 참여할 수 있습니다. 모바일에서는 링크를 복사한 뒤 Cindy를 열어도 됩니다.",
+    "invitationMessage": "“{{title}}”에 초대합니다\n{{link}}\n링크를 열어 참여하세요. 모바일에서는 링크를 복사한 뒤 Cindy를 열고 참여를 확인할 수도 있습니다.",
     "membersWithLimit": "멤버 · {{count}}명 (최대 게스트 2명)",
     "me": "나",
     "thisDevice": "이 PC",
     "roleHost": "호스트",
-    "hostOfflineNote": "이 컴퓨터가 계속 오프라인 상태이면 공유가 자동으로 종료됩니다. 다시 공유하려면 공유를 시작하고 새 초대 코드를 보내세요.",
+    "hostOfflineNote": "이 컴퓨터가 계속 오프라인 상태이면 공유가 자동으로 종료됩니다. 다시 공유하려면 공유를 시작하고 새 초대 링크를 보내세요.",
     "sharingBadge": "공유 중",
     "ownedEmptyTitle": "공유 중인 세션이 없습니다",
     "ownedEmptyHint": "아무 세션이나 열고 \"세션 공유\"를 눌러 파트너를 초대하세요.",
     "closeAll": "모든 공유 중지 ({{count}})",
     "closeAllTitle": "모든 공유를 중지할까요?",
-    "closeAllBody": "모든 게스트가 아래 작업에 접근할 수 없게 되며 초대 코드가 만료됩니다.",
+    "closeAllBody": "모든 게스트가 아래 작업에 접근할 수 없게 되며 초대 링크가 만료됩니다.",
     "closeAllKeep": "공유 유지",
     "closeAllAction": "작업 {{count}}개 공유 중지",
     "closeAllScopeNote": "세션 기록과 Agent 작업은 유지되며, 내가 참여한 다른 세션에는 영향이 없습니다.",
-    "closeOneBody": "모든 게스트가 접근할 수 없게 되고 초대 코드는 만료됩니다.",
-    "removeBody": "해당 게스트는 접근할 수 없게 됩니다. 다시 참여하려면 호스트의 새 초대 코드가 필요합니다.",
+    "closeOneBody": "모든 게스트가 접근할 수 없게 되고 초대 링크는 만료됩니다.",
+    "removeBody": "해당 게스트는 접근할 수 없게 됩니다. 다시 참여하려면 호스트의 새 초대 링크가 필요합니다.",
     "removeKeep": "게스트 유지",
     "leaveTitle": "공유 세션에서 나설까요?",
-    "leaveBody": "나가면 이 작업에 접근할 수 없습니다. 다시 참여하려면 호스트에게 새 초대 코드를 요청하세요.",
+    "leaveBody": "나가면 이 작업에 접근할 수 없습니다. 다시 참여하려면 호스트에게 새 초대 링크를 요청하세요.",
     "leaveKeep": "세션에 남기",
     "closedToast": "작업 {{count}}개의 공유를 중지했습니다",
     "closeFailedToast": "작업 {{count}}개의 공유를 중지하지 못했습니다. 나중에 다시 시도하세요.",
     "back": "뒤로",
-    "cancelOperation": "작업 취소",
-    "invalidInvitation": "유효한 초대 코드를 입력하세요",
-    "missingNickname": "이 작업에서 사용할 닉네임을 입력하세요",
-    "ownedManageIntro": "다른 컴퓨터의 작업을 포함하여 내가 공유한 작업을 관리합니다.",
-    "joinedManageIntro": "작업을 열어 계속 진행하거나 더 이상 참여하지 않는 공유 작업에서 나갈 수 있습니다.",
+    "cancelOperation": "취소",
+    "invalidInvitation": "유효한 초대 링크 또는 초대 코드를 붙여넣으세요.",
+    "ownedManageIntro": "이 계정의 다른 컴퓨터에서 시작한 공유도 포함합니다.",
+    "joinedManageIntro": "나가면 이 공유에 접근할 수 없습니다. 호스트와 다른 멤버에게는 영향이 없습니다.",
     "recordsKept": "작업 기록과 Agent 작업은 유지됩니다.",
     "othersUnaffected": "다른 멤버와 Agent 작업에는 영향을 주지 않습니다.",
-    "viewJoined": "참여한 작업 보기"
+    "viewJoined": "참여한 작업 보기",
+    "invalid": "유효한 초대 링크 또는 초대 코드를 붙여넣으세요.",
+    "invitationDifferentServer": "다른 Cindy 서비스의 초대입니다. 해당 앱에서 링크를 여세요.",
+    "managementIntro": "시작하거나 참여한 공유를 관리합니다.",
+    "returnToTasks": "작업 목록으로 돌아가기",
+    "invitationDetected": "공유 작업 초대를 찾았습니다",
+    "notNow": "나중에",
+    "closeAllLabel": "모든 공유 중지",
+    "closeAllDescription": "모든 게스트의 접근이 차단됩니다. 작업 기록은 유지됩니다."
   },
   "privacyExit": {
     "status": "Cindy를 통해 원격 제어 중입니다",
@@ -138,6 +208,7 @@
     "allow": "원격 데스크톱 허용",
     "allowHint": "같은 계정의 기기에서 이 컴퓨터의 모든 앱을 보고 조작하도록 허용합니다. 위의 기기 제어도 켜주세요.",
     "permissionHint": "컴퓨터 시스템 설정에서 화면 기록과 손쉬운 사용을 허용한 후 다시 연결하세요.",
+    "controlUnavailable": "원격 컴퓨터에서 입력을 받을 수 없습니다. 제어 권한과 연결을 확인한 다음 다시 연결하세요.",
     "beingControlled": "데스크톱을 원격으로 제어 중",
     "beingViewed": "데스크톱을 원격으로 보는 중",
     "disconnect": "연결 끊기",
@@ -816,6 +887,11 @@
       "feishuHint": "연동된 Feishu 또는 Lark 봇을 통해 개인 메시지를 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
       "feishuDisabledHint": "먼저 \"Feishu / Lark 봇\"에서 봇을 설정하고 한 번 메시지를 보내 바인딩을 완료하세요.",
       "feishuAria": "세션 완료 Feishu 알림 전환",
+      "botGroupPlan": {
+        "stepDone": "{{name}} 님이 「{{task}}」를 끝냈어요. 계속을 기다려요",
+        "stepFailed": "{{name}} 님이 「{{task}}」를 끝내지 못했어요. 다시 시도할 수 있어요",
+        "planDone": "역할 분담이 모두 끝났어요. 마지막은 {{name}} 님의 「{{task}}」"
+      },
       "sessionEvent": {
         "untitled": "제목 없는 세션",
         "done": "완료됨 ✓",
@@ -1211,7 +1287,7 @@
         "chatAttachmentsClearFailed": "메시지 첨부 파일 캐시를 정리할 수 없습니다. 다시 시도해 주세요.",
         "dbSlimmingBackupDirectoryDialogTitle": "데이터베이스 정리 백업 폴더 선택",
         "dbSlimmingLabel": "데이터베이스 정리",
-        "dbSlimmingDescription": "선택한 기간보다 오래 업데이트되지 않은 소프트 삭제 및 보관 작업의 기록을 검사하며, 활성 작업도 선택적으로 포함할 수 있습니다. 확인 후 Cindy를 다시 시작하고 데이터베이스를 열기 전에 기록을 정리하고 압축합니다. 디스크의 첨부 파일과 생성 미디어는 삭제하지 않습니다.",
+        "dbSlimmingDescription": "선택한 기간보다 오래 업데이트되지 않은 소프트 삭제 및 보관 작업의 기록을 검사하며, 보관되지 않은 작업도 선택적으로 포함할 수 있습니다. 확인 후 Cindy를 다시 시작하고 데이터베이스를 열기 전에 기록을 정리하고 압축합니다. 디스크의 첨부 파일과 생성 미디어는 삭제하지 않습니다.",
         "dbSlimmingScanButton": "데이터베이스 검사",
         "dbSlimmingScanLoading": "데이터베이스를 검사하는 중…",
         "dbSlimmingScanResultTitle": "데이터베이스 검사 결과",
@@ -1221,12 +1297,12 @@
         "dbSlimmingArchiveAgeOption1": "1개월",
         "dbSlimmingArchiveAgeOption3": "3개월",
         "dbSlimmingArchiveAgeOption6": "6개월",
-        "dbSlimmingIncludeActiveLabel": "활성 세션 정리",
-        "dbSlimmingIncludeActiveDescription": "선택한 기간보다 오래된 활성 세션도 정리하고 세션 목록에서 제거합니다",
-        "dbSlimmingIncludeActiveConfirmTitle": "활성 작업도 데이터베이스 정리 대상에 포함할까요?",
-        "dbSlimmingIncludeActiveConfirmDescription": "선택한 기간보다 오래된 활성 작업도 아직 실행 중일 수 있습니다. 정리는 작업이 중지될 때까지 기다리지 않으며 스캔 후 추가된 메시지도 삭제될 수 있습니다. 사용하면 선택한 기간보다 오래 업데이트되지 않은 활성, 보관 및 소프트 삭제 작업이 정리됩니다. 대상 활성 세션의 기록과 Agent 컨텍스트가 삭제되며 일반 세션 항목도 목록에서 제거됩니다. 동료의 기본 세션은 유지됩니다. 데이터베이스 백업으로 작업과 메시지 데이터는 복구할 수 있습니다. 백업을 만들지 않으면 해당 데이터도 복구할 수 없습니다. 해당 메시지의 파일 변경 사항을 검토하거나 실행 취소하는 데 사용되는 기록은 데이터베이스 백업에 포함되지 않으며 복구할 수 없습니다.",
-        "dbSlimmingIncludeActiveConfirmButton": "활성 작업 포함",
-        "dbSlimmingIncludeActiveCancelButton": "활성 작업 유지",
+        "dbSlimmingIncludeActiveLabel": "보관되지 않은 세션 정리",
+        "dbSlimmingIncludeActiveDescription": "선택한 기간보다 오래된 보관되지 않은 세션도 정리하고 세션 목록에서 제거합니다",
+        "dbSlimmingIncludeActiveConfirmTitle": "보관되지 않은 작업도 데이터베이스 정리 대상에 포함할까요?",
+        "dbSlimmingIncludeActiveConfirmDescription": "선택한 기간보다 오래된 보관되지 않은 작업도 아직 실행 중일 수 있습니다. 정리는 작업이 중지될 때까지 기다리지 않으며 스캔 후 추가된 메시지도 삭제될 수 있습니다. 사용하면 선택한 기간보다 오래 업데이트되지 않은 미보관, 보관 및 소프트 삭제 작업이 정리됩니다. 대상 보관되지 않은 세션의 기록과 Agent 컨텍스트가 삭제되며 일반 세션 항목도 목록에서 제거됩니다. 동료의 기본 세션은 유지됩니다. 데이터베이스 백업으로 작업과 메시지 데이터는 복구할 수 있습니다. 백업을 만들지 않으면 해당 데이터도 복구할 수 없습니다. 해당 메시지의 파일 변경 사항을 검토하거나 실행 취소하는 데 사용되는 기록은 데이터베이스 백업에 포함되지 않으며 복구할 수 없습니다.",
+        "dbSlimmingIncludeActiveConfirmButton": "보관되지 않은 작업 포함",
+        "dbSlimmingIncludeActiveCancelButton": "보관되지 않은 작업 유지",
         "dbSlimmingBackupLabel": "정리 전 데이터베이스 백업",
         "dbSlimmingBackupDefaultLocation": "데이터베이스 폴더(최근 정리 백업만 유지)",
         "dbSlimmingUseDefaultDirectoryButton": "기본 폴더 사용",
@@ -1237,7 +1313,7 @@
         "dbSlimmingBackupMissing": "최근 정리 백업을 찾을 수 없습니다.",
         "dbSlimmingBackupOpenFailed": "정리 백업 위치를 열 수 없습니다. 다시 시도해 주세요.",
         "dbSlimmingReportTasks": "소프트 삭제 작업 {{deleted}}개와 보관된 작업 {{archived}}개를 정리합니다",
-        "dbSlimmingReportTasksWithActive": "활성 작업 {{active}}개, 소프트 삭제된 작업 {{deleted}}개, 보관된 작업 {{archived}}개를 정리합니다",
+        "dbSlimmingReportTasksWithActive": "보관되지 않은 작업 {{active}}개, 소프트 삭제된 작업 {{deleted}}개, 보관된 작업 {{archived}}개를 정리합니다",
         "dbSlimmingReportMessages": "정리할 메시지 내용: {{count}}개(약 {{size}})",
         "dbSlimmingReportSpace": "데이터베이스 {{database}}, 필요한 임시 공간 최소 {{temporary}}, 사용 가능 {{free}}",
         "dbSlimmingSpaceUnknown": "알 수 없음",
@@ -1485,6 +1561,11 @@
         "label": "음성 입력 빠른 시작",
         "hint": "사용 후 잠시 마이크를 대기 상태로 유지해 단축키나 버튼을 누른 뒤 녹음이 시작되기까지의 시간을 줄입니다. 보통 약 100 ms 빨라집니다. 30분 동안 다시 사용하지 않으면 마이크를 자동으로 해제합니다.",
         "ariaLabel": "음성 입력 빠른 시작 전환"
+      },
+      "composerLongPress": {
+        "label": "입력창 길게 눌러 음성 입력",
+        "hint": "입력창에서 마우스 왼쪽 버튼을 잠시 길게 누르면 음성 입력이 시작되고, 버튼을 놓으면 종료되어 텍스트가 입력됩니다.",
+        "ariaLabel": "입력창 길게 눌러 음성 입력 전환"
       },
       "refinement": {
         "enabled": {
@@ -1756,6 +1837,45 @@
       }
     },
     "providers": {
+      "llamacpp": {
+        "ownedElsewhere": "다른 Cindy 인스턴스에서 모델 서비스가 실행 중입니다. 해당 인스턴스에서 모델을 다운로드하거나 컨텍스트를 변경하거나, 먼저 서비스를 중지하세요.",
+        "primaryPick": "우선 선택 · 먼저 사용",
+        "recommendReason": "공통 카탈로그가 이 컴퓨터에 맞춰 선택한 성능 중심 모델 {{name}}부터 시작하세요.",
+        "recommendCaveat": "이 GGUF 버전의 로컬 속도와 최대 메모리는 실측이 필요합니다. 다운로드 크기는 실행 중 메모리 사용량이 아닙니다.",
+        "candidates": "시험할 모델",
+        "trialNote": "시험할 수 있는 모델입니다. 성능과 메모리 사용량은 아직 미검증입니다.",
+        "downloadModel": "{{name}} 다운로드",
+        "title": "llama.cpp",
+        "subtitle": "실행 환경과 모델을 다운로드하여 로컬에서 실행",
+        "description": "아래에서 모델을 선택하여 다운로드하고 로컬에서 실행하세요.",
+        "install": "llama.cpp 설치",
+        "start": "시작 및 연결",
+        "restart": "다시 시작 및 모델 새로 고침",
+        "stop": "서비스 중지",
+        "cancel": "작업 취소",
+        "repository": "Hugging Face 저장소",
+        "findFiles": "모델 파일 찾기",
+        "file": "GGUF 파일",
+        "shards": "분할 모델은 모든 파일을 다운로드합니다. 표시된 크기는 선택한 파일의 크기입니다. 텍스트 모델을 지원하며 비전 프로젝터는 다운로드하지 않습니다.",
+        "download": "모델 다운로드",
+        "models": "다운로드한 모델",
+        "empty": "위 목록에서 모델을 선택하거나 Hugging Face 저장소를 입력하여 첫 모델을 다운로드하세요.",
+        "unsupported": "이 플랫폼은 자동 설치를 지원하지 않습니다. llama.cpp 연결을 수동으로 설정하세요.",
+        "failed": "작업을 완료하지 못했습니다. 네트워크와 디스크 여유 공간을 확인한 후 다시 시도하세요.",
+        "invalid": "owner/model-GGUF 형식의 저장소를 입력하고 GGUF 파일을 선택하세요.",
+        "progress": {
+          "install": "llama.cpp 설치 중…",
+          "download": "모델 다운로드 중…",
+          "start": "llama.cpp 시작 중…"
+        },
+        "installAndConnect": "설치 및 연결",
+        "installDescription": "Cindy가 llama.cpp를 설치합니다. 모델을 다운로드하면 사용 시 서비스가 자동으로 시작됩니다.",
+        "manualConnect": "기존 서비스 연결",
+        "manageRuntime": "서비스 관리",
+        "restartHint": "모델을 다운로드하거나 컨텍스트를 변경한 후에는 ‘서비스 관리’에서 다시 시작해야 변경 사항이 적용됩니다. 다시 시작하면 진행 중인 생성이 중단됩니다.",
+        "applyModels": "다운로드한 모델 사용",
+        "startOnUse": "사용 시 시작"
+      },
       "catalogRecovery": {
         "pending": "모델 설정이 아직 준비되지 않았습니다. 잠시 후 모델을 다시 불러오세요.",
         "legacy": "이전 모델 설정을 일시적으로 읽을 수 없습니다. 실행 중인 다른 Cindy를 종료한 후 모델을 다시 불러오세요.",
@@ -2213,6 +2333,7 @@
           "defaultEffortHint": "새 작업의 초기 추론 강도입니다. 작업 안에서도 변경할 수 있습니다.",
           "contextLimit": "컨텍스트 상한",
           "contextLimitHint": "이 모델의 모든 사용 가능한 엔진에 적용됩니다. 정수 K 단위로 편집합니다(1 K = 1,000 tokens). 수정하지 않은 값은 정밀도를 유지합니다. 저장한 변경 사항은 이후 실행에 적용되며 생성 중인 응답을 중단하지 않습니다. 실제로 사용할 수 있는 길이는 모델 서비스의 제한을 따릅니다.",
+          "contextLimitLocalMillionHint": "기본 256K(262,144 tokens)에서 1M(1,000,000) 확장을 선택할 수 있습니다. 서비스가 실행 중이면 ‘서비스 관리’에서 다시 시작해야 변경 사항이 적용되며, 중지된 상태라면 다음 사용 시 적용됩니다. 긴 입력은 더 많은 메모리와 처리 시간이 필요합니다.",
           "contextLimitAria": "컨텍스트 상한(천 tokens)",
           "contextLimitRoute": "현재 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "공급업체가 명시한 한도를 초과하여 요청이 실패할 수 있습니다.",
@@ -2443,7 +2564,8 @@
           "apple-mlx": "이 Mac에는 공식 MLX가 맞습니다.",
           "generic-27b": "이 컴퓨터에는 공식 Q4가 맞습니다.",
           "compact": "이 컴퓨터 메모리라면 더 가벼운 모델부터 시작하세요.",
-          "unknown": "먼저 실행하기 쉬운 모델을 고릅니다."
+          "unknown": "먼저 실행하기 쉬운 모델을 고릅니다.",
+          "high-memory": "충분한 메모리를 활용해 더 강력한 모델을 우선 추천합니다. 로컬 속도와 최대 메모리는 추가 검증이 필요합니다."
         },
         "searchPlaceholder": "모델 검색",
         "noSearchResults": "일치하는 모델이 없습니다",
@@ -2534,7 +2656,9 @@
         "deleteModelConfirm": "삭제",
         "deleteModelDone": "{{name}}을(를) 삭제했습니다",
         "deleteModelFailed": "삭제하지 못했습니다. Ollama가 실행 중인지 확인한 뒤 다시 시도해 주세요.",
-        "noRecommendation": "아직 이 컴퓨터의 메모리에 맞고 근거가 충분한 추천 모델이 없습니다. 아래에서 후보를 직접 선택할 수 있습니다."
+        "noRecommendation": "아직 이 컴퓨터의 메모리에 맞고 근거가 충분한 추천 모델이 없습니다. 아래에서 후보를 직접 선택할 수 있습니다.",
+        "lighterAlternative": "가벼운 대안",
+        "recommendedInstalled": "추천 모델이 이미 설치되어 있습니다."
       },
       "xdSignin": {
         "badge": "추천",
@@ -2591,7 +2715,7 @@
         "pending": "인증 정보 준비 중",
         "unavailable": "일시적으로 사용할 수 없음"
       },
-      "claudeAccountRetired": "별도 Claude 계정은 더 이상 지원되지 않습니다. 'Claude Code로 로그인'으로 Claude 구독을 연결하세요. 이 계정은 삭제해도 됩니다."
+      "claudeAccountRetired": "Cindy에서는 이 이전 Claude 연결 방식으로 구독에 로그인할 수 없습니다. Claude 계정과 구독에는 영향이 없습니다. ‘Claude Code로 로그인’을 사용해 구독을 연결하세요."
     },
     "experimental": {
       "title": "실험적 기능",
@@ -4258,13 +4382,13 @@
       "defaults": {
         "title": "새 대화 설정",
         "channelDescriptions": {
-          "feishu": "새 Feishu 대화는 이 Agent와 모델을 사용합니다. 기존 DM에는 /new를 보내 적용하세요.",
+          "feishu": "새 Feishu 대화는 이 Agent와 모델을 사용합니다. 모델을 따로 바꾸지 않은 기존 세션은 다음 메시지를 받을 때 전환됩니다.",
           "slack": "새 Slack 스레드는 이 Agent와 모델을 사용합니다.",
-          "discord": "새 Discord 대화는 이 Agent와 모델을 사용합니다. 기존 DM에는 /new를 보내 적용하세요.",
-          "wechat": "새 WeChat 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요.",
-          "telegram": "새 Telegram 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요.",
-          "dingtalk": "새 DingTalk 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요.",
-          "wecom": "새 WeCom 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요."
+          "discord": "새 Discord 대화는 이 Agent와 모델을 사용합니다. 모델을 따로 바꾸지 않은 기존 세션은 다음 메시지를 받을 때 전환됩니다.",
+          "wechat": "새 WeChat 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 모델을 따로 바꾸지 않은 기존 세션은 다음 메시지를 받을 때 이 Agent와 모델로 전환되며, 권한 모드는 기존 채팅에 /new를 보내 적용하세요.",
+          "telegram": "새 Telegram 대화는 이 Agent와 모델을 사용합니다. 모델을 따로 바꾸지 않은 기존 세션은 다음 메시지를 받을 때 전환됩니다.",
+          "dingtalk": "새 DingTalk 대화는 이 Agent와 모델을 사용합니다. 모델을 따로 바꾸지 않은 기존 세션은 다음 메시지를 받을 때 전환됩니다.",
+          "wecom": "새 WeCom 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 모델을 따로 바꾸지 않은 기존 세션은 다음 메시지를 받을 때 이 Agent와 모델로 전환되며, 권한 모드는 기존 채팅에 /new를 보내 적용하세요."
         },
         "agentLabel": "Agent",
         "agentUnsupportedOnChannelHint": "{{agent}} Agent는 이 채널에서 메시지별 권한 확인을 지원하지 않아 메시지를 처리할 수 없습니다. Claude Code 또는 Codex로 전환하세요.",
@@ -6514,7 +6638,7 @@
     }
   },
   "usageHistory": {
-    "description": "이 기기의 Cindy 내부에서 발생한 토큰 사용량입니다. 기능 출시 시점부터 기록이 쌓이며 이전 기록은 채워지지 않습니다.",
+    "description": "내 여러 컴퓨터의 Cindy 내부에서 발생한 토큰 사용량입니다. 기본적으로 합산해 표시하며 한 대씩 볼 수도 있습니다. 다른 컴퓨터는 온라인 상태이고 원격 제어를 허용해야 읽을 수 있으며, 읽지 못할 때는 마지막으로 읽은 데이터를 사용합니다. 기능 출시 시점부터 기록이 쌓이며 이전 기록은 채워지지 않습니다.",
     "empty": "아직 사용 기록이 없습니다. 대화를 실행하면 쌓이기 시작합니다.",
     "loadFailed": "사용량 기록을 불러오지 못했습니다. 설정을 다시 열어 재시도해 주세요.",
     "range": {
@@ -6525,6 +6649,24 @@
       "30d": "최근 30일",
       "7d": "최근 7일",
       "today": "오늘"
+    },
+    "device": {
+      "label": "기기",
+      "ariaLabel": "사용량 기기 필터",
+      "all": "모든 기기",
+      "self": "이 기기",
+      "selfNamed": "이 기기 ({{name}})",
+      "loading": "다른 기기의 사용량을 불러오는 중…",
+      "status": {
+        "syncing": "읽는 중…",
+        "syncedAt": "{{time}} 기준 데이터",
+        "offline": "오프라인",
+        "remoteDisabled": "원격 제어가 허용되지 않음",
+        "unsupported": "Cindy 업데이트 필요",
+        "error": "읽기 실패",
+        "noData": "데이터 없음"
+      },
+      "partial": "일부 컴퓨터의 최신 사용량을 읽지 못해 합계가 적게 표시될 수 있습니다. 기기 목록에서 각 기기의 상태를 확인하세요."
     },
     "cacheHitTooltip": "캐시 읽기 ÷ (입력 + 캐시 읽기 + 캐시 쓰기) — 메시지 카드와 동일한 기준입니다.",
     "summary": {
@@ -6547,7 +6689,12 @@
     },
     "daily": {
       "title": "최근 30일 일별 토큰",
-      "subtitle": "모델별 누적"
+      "subtitle": "모델별 누적",
+      "tooltip": {
+        "unit": "토큰",
+        "more_one": "외 {{count}}개 모델",
+        "more_other": "외 {{count}}개 모델"
+      }
     },
     "byAgent": {
       "title": "Agent / harness별",
@@ -6579,7 +6726,8 @@
     },
     "tasks": {
       "title": "토큰 사용이 많은 세션",
-      "subtitle": "{{range}} 동안 활동한 세션을 누적 토큰 순으로 정렬",
+      "subtitle": "{{range}} 동안 토큰을 가장 많이 사용한 세션",
+      "coverage": "일별 집계는 {{date}}부터",
       "col": {
         "task": "세션",
         "model": "모델",
@@ -6589,7 +6737,7 @@
         "lastActive": "마지막 활동"
       },
       "providerTooltip": "세션에 현재 선택된 제공자입니다. 지정하지 않은 경우 비워 둡니다.",
-      "tokensTooltip": "해당 세션의 누적 값입니다. {{range}}은(는) 활성 세션을 필터링하는 데만 사용되며 해당 기간의 증가분이 아닙니다."
+      "tokensTooltip": "이 세션이 {{range}} 동안 사용한 토큰만 집계합니다."
     }
   },
   "usageDashboard": {
@@ -7558,6 +7706,8 @@
   },
   "sidebar": {
     "backToSessions": "세션으로 돌아가기",
+    "taskAttentionCount": "확인이 필요한 작업: {{count}}",
+    "teammateUnreadCount": "읽지 않은 채팅: {{count}}",
     "vendorReadiness": {
       "loading": "사용 가능 여부 확인 중",
       "ready": "준비됨",
@@ -7717,6 +7867,10 @@
     },
     "model": {
       "description": "이 팀원이 사용할 모델을 선택합니다.",
+      "primary": "기본 모델",
+      "task": "세션 모델",
+      "inheritPrimary": "기본 모델 상속",
+      "inheritingPrimary": "새 백그라운드 세션은 기본 모델을 상속합니다",
       "restoreDefault": "기본 모델로 되돌리기"
     },
     "modelChain": {
@@ -7882,6 +8036,181 @@
       "empty": "아직 볼 수 있는 메시지가 없습니다.",
       "limitReached": "이번 동료 간 대화가 한도에 도달해 양쪽 모두 각자의 기본 작업으로 돌아갔습니다"
     },
+    "groupChat": {
+      "memberSeparator": ", ",
+      "memberCount_one": "동료 {{count}}명",
+      "memberCount_other": "동료 {{count}}명",
+      "nameLabel": "그룹 이름",
+      "waitingConfirm": "{{name}} 님이 확인을 기다리고 있어요",
+      "loadFailedTitle": "이 그룹 채팅을 불러올 수 없습니다",
+      "loadFailedDescription": "Cindy가 지금 이 그룹 채팅을 읽을 수 없습니다. 다시 시도하거나 동료 페이지로 돌아가세요.",
+      "unavailableTitle": "이 그룹 채팅을 더 이상 사용할 수 없습니다",
+      "unavailableDescription": "삭제되었을 수 있습니다. 동료 페이지로 돌아가 다른 그룹 채팅이나 동료를 열어 보세요.",
+      "sidebar": {
+        "title": "그룹 채팅",
+        "empty": "아직 메시지가 없습니다",
+        "preview": "{{name}}: {{text}}",
+        "previewYou": "나: {{text}}",
+        "waiting": "확인 대기 중",
+        "planProposed": "{{name}}: 계획이 준비됐어요. 시작을 기다리는 중",
+        "planProposedAnonymous": "계획이 준비됐어요. 시작을 기다리는 중",
+        "planRunning": "역할 분담 {{step}}/{{total}} · {{name}} 님이 작업 중",
+        "planRunningNoStep": "{{name}} 님이 작업 중",
+        "planPlanning": "{{name}} 님이 역할을 나누는 중…",
+        "planStepDone": "{{name}} 님이 마쳤어요. 다음 단계를 기다리는 중",
+        "planStepFailed": "{{name}} 님이 끝내지 못했어요",
+        "planWaitingAnonymous": "역할 분담이 멈췄어요"
+      },
+      "create": {
+        "title": "새 그룹 채팅",
+        "description": "동료 몇 명을 한 그룹에 모아 보세요. 한마디 하면 동료들이 함께 이어서 답합니다.",
+        "namePlaceholder": "예: 주말 나들이",
+        "nameRequired": "그룹 이름을 입력하세요",
+        "membersLabel": "동료 선택",
+        "selectedCount_one": "{{count}}명 선택됨, 최대 {{max}}명",
+        "selectedCount_other": "{{count}}명 선택됨, 최대 {{max}}명",
+        "minMembers": "동료를 {{min}}명 이상 선택하세요",
+        "notEnoughBots": "그룹 채팅을 만들려면 사용할 수 있는 동료가 {{min}}명 이상 필요합니다. 먼저 동료를 추가하세요.",
+        "submit": "그룹 채팅 만들기",
+        "failed": "그룹 채팅을 만들지 못했습니다. 잠시 후 다시 시도하세요."
+      },
+      "memberStatus": {
+        "paused": "일시 중지됨",
+        "unavailable": "사용 불가"
+      },
+      "mention": {
+        "all": "모두",
+        "allHint": "모두 답변",
+        "label": "동료 멘션"
+      },
+      "composer": {
+        "label": "그룹 채팅 메시지",
+        "placeholder": "그룹에 말을 걸어 보세요. @로 동료를 지정하면 그 동료만 답합니다…",
+        "noMembers": "지금 답할 수 있는 동료가 없습니다. 그룹 설정에서 동료를 추가하세요",
+        "tooLong": "메시지가 너무 깁니다. 최대 {{max}}자까지 보낼 수 있습니다",
+        "sendFailed": "메시지를 보내지 못했습니다. 잠시 후 다시 시도하세요",
+        "stopFailed": "이번 라운드를 멈추지 못했습니다. 다시 시도하세요",
+        "stop": "이번 라운드 중지",
+        "more": "더 보기",
+        "division": "역할 분담하기",
+        "divisionDescription": "담당자가 먼저 역할을 나누고, 동료들이 한 단계씩 진행합니다",
+        "divisionBusy": "역할 분담이 진행 중입니다. 끝내거나 중지한 뒤 새로 시작하세요",
+        "divisionTag": "역할 분담",
+        "removeDivision": "역할 분담 해제",
+        "placeholderDivision": "하고 싶은 일을 적어 주세요. 담당자가 먼저 역할을 나눕니다…",
+        "placeholderPlanProposed": "담당이나 단계를 바꾸려면 그냥 말해 주세요…",
+        "placeholderPlanWaiting": "{{name}} 님에게 고칠 점이 있으면 그냥 말해 주세요…",
+        "placeholderPlanRunning": "보내는 말은 작업 중인 {{name}} 님에게 전달됩니다…",
+        "tooManyAttachments": "첨부 파일이 너무 많습니다. 메시지 하나에 최대 {{max}}개까지 보낼 수 있습니다",
+        "attachmentsFailed": "첨부 파일을 보내지 못했습니다. 파일이 아직 있는지 확인하거나, 제거한 후 다시 시도하세요",
+        "folderNotSupported": "폴더는 첨부할 수 없습니다. 폴더 안의 파일을 선택하세요"
+      },
+      "timeline": {
+        "loadEarlier": "이전 메시지 보기",
+        "loadEarlierFailed": "이전 메시지를 불러오지 못했습니다. 다시 시도하세요",
+        "emptyTitle": "이 그룹에는 아직 메시지가 없습니다",
+        "emptyDescription": "한마디 하면 동료들이 이어서 대화합니다. @로 동료를 지정하면 그 동료만 답합니다.",
+        "roundEnded": "동료들이 말을 마쳤습니다",
+        "continue": "토론 계속하기",
+        "continueFailed": "토론을 이어 가지 못했습니다. 다시 시도하세요",
+        "nextStep": "다음 단계:",
+        "continuePlan": "다음 단계 시작",
+        "continuePlanFailed": "다음 단계를 시작하지 못했습니다. 다시 시도하세요",
+        "stepFailed": "{{name}} 님이 끝내지 못했습니다",
+        "retryStep": "다시 시도",
+        "retryFailed": "이 단계를 다시 시도하지 못했습니다. 잠시 후 다시 시도하세요",
+        "endPlan": "역할 분담 끝내기",
+        "planDone_one": "{{count}}단계를 모두 마쳤습니다",
+        "planDone_other": "{{count}}단계를 모두 마쳤습니다",
+        "planDoneGeneric": "역할 분담을 마쳤습니다"
+      },
+      "notice": {
+        "memberFailed": "{{name}} 님이 이번에는 답하지 못했습니다",
+        "memberTimeout": "{{name}} 님의 답이 너무 늦어 이번에는 건너뛰었습니다",
+        "memberUnavailable": "{{name}} 님을 지금 사용할 수 없어 이번에는 발언하지 않았습니다",
+        "planFailed": "{{name}} 님이 역할 분담을 정하지 못했습니다. 다시 시도해 보세요",
+        "planStopped": "역할 분담을 중지했습니다",
+        "workdirUnavailable": "{{name}} 님이 작업 디렉터리를 찾지 못했습니다",
+        "stepFailed": "{{name}} 님이 오류로 이 단계를 끝내지 못했습니다",
+        "stepTimeout": "{{name}} 님의 작업이 너무 오래 걸려 이 단계를 멈췄습니다",
+        "stepUnavailable": "{{name}} 님을 지금 사용할 수 없어 이 단계를 진행할 수 없습니다"
+      },
+      "settings": {
+        "open": "그룹 설정",
+        "title": "그룹 설정",
+        "members": "멤버",
+        "remove": "내보내기",
+        "removeNamed": "{{name}} 님을 그룹에서 내보내기",
+        "minMembers": "그룹 채팅에는 동료가 {{min}}명 이상 있어야 합니다",
+        "maxMembers": "최대 {{max}}명",
+        "noMoreBots": "추가할 수 있는 다른 동료가 없습니다",
+        "nameSaveFailed": "그룹 이름을 저장하지 못해 이전 이름으로 되돌렸습니다",
+        "membersSaveFailed": "멤버를 업데이트하지 못했습니다. 다시 시도하세요",
+        "replyMode": "아무도 @멘션되지 않았을 때",
+        "replyModeAll": "누구나 답할 수 있음",
+        "replyModeMentioned": "@된 동료만 답함",
+        "replyModeNote": "더 보탤 말이 없는 동료는 말하지 않습니다. 한 라운드는 최대 3바퀴, 메시지 10개까지이며, 그 후에는 ‘토론 계속하기’를 누를 때까지 기다립니다.",
+        "replyModeSaveFailed": "답변 방식을 저장하지 못했습니다. 다시 시도하세요",
+        "delete": "그룹 채팅 삭제",
+        "deleteNote": "이 그룹 채팅과 그 안의 메시지만 삭제됩니다. 동료 자체와 동료의 기억, 개인 대화에는 영향이 없습니다.",
+        "deleteConfirmTitle": "‘{{name}}’을(를) 삭제할까요?",
+        "deleteFailed": "그룹 채팅을 삭제하지 못했습니다. 잠시 후 다시 시도하세요",
+        "speakingMode": "발언 순서",
+        "speakingModeAuto": "자동",
+        "speakingModeSequential": "항상 차례대로",
+        "speakingModeAutoNote": "멘션이 없거나 @모두일 때는 첫 순서에서 모두 동시에 생각하고, 이후에는 차례대로 이어서 말합니다. 멘션한 동료는 멘션한 순서대로 답합니다.",
+        "speakingModeSequentialNote": "한 번에 한 동료만 말하며, 뒤에 말하는 동료는 앞의 답을 보고 답합니다.",
+        "speakingModeSaveFailed": "발언 순서를 저장하지 못했습니다. 다시 시도해 주세요.",
+        "setOrganizer": "담당자로 지정",
+        "setOrganizerNamed": "{{name}} 님을 담당자로 지정",
+        "organizerNote": "담당자가 각 단계를 누가 맡을지 정합니다. 기본값은 첫 번째 동료입니다.",
+        "organizerSaveFailed": "담당자를 바꾸지 못했습니다. 다시 시도하세요",
+        "projectDir": "프로젝트 폴더",
+        "projectDirNone": "선택 안 함",
+        "projectDirChoose": "폴더 선택",
+        "projectDirChange": "폴더 변경",
+        "projectDirClear": "지우기",
+        "projectDirNote": "역할 분담으로 일할 때 동료들이 여기서 작업합니다. 선택하지 않아도 되며, 그러면 이 그룹 채팅 전용 폴더를 사용합니다. git 프로젝트를 선택하면 역할 분담마다 새 worktree와 브랜치를 만들어, 지금 작업 중인 코드는 건드리지 않습니다.",
+        "projectDirSaveFailed": "프로젝트 폴더를 저장하지 못했습니다. 폴더가 아직 있는지 확인한 뒤 다시 시도하세요"
+      },
+      "errors": {
+        "memberLimit": "그룹 채팅에는 동료가 2~6명 필요합니다",
+        "memberUnavailable": "사용할 수 없는 동료가 있습니다. 다른 동료를 골라 다시 시도하세요",
+        "notFound": "이 그룹 채팅은 더 이상 존재하지 않습니다",
+        "hostNotReady": "Cindy가 아직 준비 중입니다. 잠시 후 다시 시도하세요",
+        "planOpen": "역할 분담이 진행 중입니다. 끝내거나 중지한 뒤 새로 시작하세요",
+        "planClosed": "이 계획은 이미 끝났거나 업데이트되었습니다"
+      },
+      "organizer": "담당자",
+      "plan": {
+        "intro_one": "이 일은 {{count}}단계로 나눠서 이렇게 분담할게요:",
+        "intro_other": "이 일은 {{count}}단계로 나눠서 이렇게 분담할게요:",
+        "missing": "이 계획을 더 이상 불러올 수 없습니다",
+        "start": "시작하기",
+        "dismiss": "필요 없어요",
+        "editHint": "담당이나 단계를 바꾸려면 그냥 말해 주세요",
+        "pauseNote": "한 단계가 끝날 때마다 멈추고, ‘다음 단계 시작’을 누를 때까지 기다립니다.",
+        "superseded": "업데이트됨",
+        "dismissed": "사용 안 함",
+        "stopped": "중지됨",
+        "stepDone": "완료",
+        "stepRunning": "진행 중",
+        "stepFailed": "끝내지 못함",
+        "stepPending": "시작 전",
+        "stepMenuTitle": "이 단계를 맡을 동료",
+        "removeStep": "이 단계 삭제",
+        "keepOneStep": "최소 한 단계는 남겨야 합니다",
+        "startFailed": "역할 분담을 시작하지 못했습니다. 다시 시도하세요",
+        "dismissFailed": "이 계획을 끝내지 못했습니다. 다시 시도하세요",
+        "editFailed": "이 단계를 바꾸지 못했습니다. 다시 시도하세요"
+      },
+      "speaking": {
+        "planning": "역할을 나누는 중…"
+      },
+      "files": {
+        "openFailed": "파일을 열지 못했습니다. 이동되었거나 삭제되었을 수 있습니다"
+      }
+    },
     "joined": {
       "today": "오늘 합류",
       "yesterday": "어제 합류",
@@ -7973,6 +8302,70 @@
           "prompt": "따뜻하고 유머 있는 파트너. 성급하게 조언하기보다 일상의 작은 이야기를 들어줬으면 해요."
         }
       }
+    },
+    "import": {
+      "title": "동료 가져오기",
+      "entry": "Agent에서 가져오기",
+      "description": "Hermes 또는 OpenClaw에서 가져올 내용을 선택하세요.",
+      "empty": "이 컴퓨터에서 설치된 Agent를 찾지 못했습니다.",
+      "personality": "성격과 업무 습관",
+      "memory": "기억",
+      "skills": "스킬",
+      "connections": "환경 및 연결",
+      "automations": "자동화",
+      "paused": "일시 중지 유지",
+      "itemAttention": "확인 필요",
+      "takeover": "가져온 후 자동화 확인 및 인계",
+      "takeoverNote": "데이터 연결 확인 후 원본 작업을 중지합니다. 필요한 항목을 제외하면 원본 작업은 계속 실행됩니다.",
+      "submit": "가져오기",
+      "back": "이전",
+      "open": "동료 열기",
+      "running": "가져오기 및 연결 확인 중…",
+      "complete": "가져온 내용을 저장했습니다",
+      "attention": "확인이 필요한 항목이 있습니다. 아래 내용을 확인하세요.",
+      "error": "가져오기를 완료하지 못했습니다. 같은 선택으로 재시도하세요.",
+      "keptAtSource": "인계가 완료되지 않았습니다",
+      "retry": "다시 확인",
+      "missingSelection": "필요한 항목이 선택되지 않았습니다.",
+      "authRefresh": "기존 인증 갱신 연결이 필요합니다.",
+      "toolMapping": "기존 도구 제한을 연결해야 인계할 수 있습니다.",
+      "modelMapping": "기존 모델 설정을 연결해야 합니다.",
+      "contextMapping": "기존 작업 폴더 또는 연결된 컨텍스트를 연결해야 합니다.",
+      "deliveryFailed": "기존 전송 대상을 확인하지 못했습니다.",
+      "sourceChanged": "원본 작업이 변경됐습니다. 다시 읽어 주세요.",
+      "credentialFailed": "인증 정보를 안전하게 저장하지 못했습니다.",
+      "scriptMissing": "필요한 스크립트가 없습니다.",
+      "sourceCommand": "기존 Agent 제어 명령을 찾지 못했습니다.",
+      "readFailed": "작업에 필요한 실제 데이터 조회를 확인하지 못했습니다.",
+      "search": "검색",
+      "selectAll": "모두 선택",
+      "previous": "이전 페이지",
+      "next": "다음 페이지",
+      "chatSetup": "가져올 수 있는 자료를 저장했어요. 바로 대화를 시작할 수 있어요. 로그인이나 확인이 필요한 항목은 편할 때 마무리하면 돼요. 인계가 끝날 때까지 기존 자동화 상태는 그대로 유지돼요.",
+      "chatReady": "정보를 가져왔습니다. 이제 대화를 시작할 수 있어요.",
+      "partial": "일부 내용을 완전히 가져오지 못했습니다",
+      "details": "가져오기 세부 정보",
+      "partlySaved": "일부만 저장됨",
+      "savedNeedsSetup": "저장됨 · 설정 또는 활성화 필요",
+      "notSaved": "저장되지 않음",
+      "databaseDriver": "데이터베이스 드라이버를 불러올 수 없습니다. Cindy를 업데이트하거나 복구한 뒤 다시 시도하세요.",
+      "databaseUnavailable": "원본 데이터베이스를 읽을 수 없습니다. 원본은 변경되지 않았으며 복구 후 다시 시도할 수 있습니다.",
+      "fileTooLarge": "파일 또는 전체 자료가 읽기 한도를 초과했습니다. 내용을 잘라서 가져오지 않았습니다.",
+      "memoryMetadata": "기억 요약 또는 제목이 저장 요건에 맞지 않습니다.",
+      "memoryWrite": "기억 저장 또는 무결성 확인에 실패했습니다. 다시 시도할 수 있습니다.",
+      "memoryChanged": "저장된 기억이 변경되어 덮어쓰지 않았습니다.",
+      "attachmentUnsupported": "아직 지원하지 않는 첨부 형식입니다. 원본 파일은 소스에 남아 있습니다.",
+      "diskFull": "디스크 공간이 부족합니다. 공간을 확보한 뒤 다시 시도하세요.",
+      "permissionDenied": "읽기 또는 저장 권한이 없습니다. 권한을 수정한 뒤 다시 시도하세요.",
+      "setupDeferred": "파트너 채팅에서 로그인과 확인을 계속할 수 있습니다.",
+      "automationInvalid": "자동화 정의를 변환할 수 없어 생성되지 않았습니다.",
+      "itemFailed": "아직 완료되지 않은 항목입니다. 다시 시도하거나 세부 정보를 확인하세요.",
+      "chatPartial": "파트너가 생성되었지만 일부 자료는 완전히 저장되지 않았습니다. 아래 항목은 추가 처리가 필요하며 다른 내용과 채팅은 계속 사용할 수 있습니다."
+    },
+    "learning": {
+      "memory": "기억했어요: {{title}}",
+      "skillCreated": "스킬 생성: {{title}}",
+      "skillUpdated": "스킬 업데이트: {{title}}"
     }
   },
   "common": {
@@ -8558,6 +8951,9 @@
       "noTextContent": "(텍스트 내용 없음)",
       "orcaRowAria": "{{sender}}의 협업 대기 메시지",
       "schedulerRowAria": "자동화 작업 “{{sender}}”의 대기 메시지",
+      "sessionRowAria": "세션 \"{{sender}}\"에서 온 대기 메시지",
+      "sessionSenderFallback": "다른 세션",
+      "botRowAria": "동료 \"{{sender}}\"에서 온 대기 메시지",
       "dragAria": "큐의 {{index}}번째 메시지를 드래그해 순서 변경",
       "steerAction": "끼어들기",
       "steerRunningTip": "실행 중인 작업을 중단하지 않고 끼어듭니다. 현재 동작이 끝난 후 이 메시지를 우선 처리합니다",
@@ -8686,6 +9082,7 @@
       "credentialSwitchDeferred": "모델 제공자를 전환했습니다. 현재 작업이 끝난 후 적용됩니다.",
       "effortRuntimeDirty": "추론 강도를 업데이트하고 있습니다. 잠시 후 다시 전송해 주세요.",
       "credentialSwitchApplied": "모델 제공자 전환이 적용되었습니다.",
+      "credentialSwitchFailed": "모델 제공자 전환에 실패했습니다. 모델을 다시 선택해 주세요.",
       "modelSwitchContextGuard": {
         "title": "이 모델에는 지금 대화를 다 넣을 수 없습니다",
         "warnToast": "이 대화는 이미 {{used}}를 사용 중입니다. 바꾸면 새 모델 용량({{total}})의 약 {{pct}}%가 됩니다",
@@ -8984,7 +9381,11 @@
       "toolUses_one": "도구 호출 {{count}}회",
       "toolUses_other": "도구 호출 {{count}}회",
       "lastTool": "최근 도구: {{tool}}",
-      "outputFile": "출력: {{path}}"
+      "outputFile": "출력: {{path}}",
+      "runningFor": "{{duration}} 실행 중",
+      "startedAt": "{{time}} 시작",
+      "recentOutput": "최근 출력 · {{time}} 전 업데이트",
+      "noOutputYet": "아직 출력이 없습니다"
     },
     "planPill": {
       "step": "{{current}} / {{total}}단계",
@@ -9208,6 +9609,14 @@
       "annotateDiscard": "주석 취소",
       "annotateSave": "주석 저장",
       "annotateSaveFailed": "주석 저장에 실패했습니다",
+      "annotateRedo": "다시 실행",
+      "annotateDiscardConfirmTitle": "주석 변경 사항을 버릴까요?",
+      "annotateDiscardConfirmDescription": "주석이 이 이미지를 열었을 때의 상태로 돌아갑니다.",
+      "annotateDiscardConfirmAction": "버리기",
+      "annotateDiscardConfirmCancel": "계속 주석 달기",
+      "annotateBurnFailedNotSent": "이미지에 주석을 합성하지 못해 메시지를 보내지 않았습니다. 다시 시도하거나 주석을 제거한 후 보내세요.",
+      "annotateBurnFailedNotSaved": "이미지에 주석을 합성하지 못해 변경 사항을 저장하지 않았습니다. 다시 시도하거나 주석을 제거한 후 저장하세요.",
+      "annotateBurnFailedSentOriginal": "이미지에 주석을 합성하지 못해 주석 없는 원본 이미지를 보냈습니다.",
       "prevImage": "이전 이미지",
       "nextImage": "다음 이미지",
       "openModel": "모델 열기",
@@ -9301,7 +9710,7 @@
       "promptSend": "보내기",
       "promptCancel": "취소"
     },
-    "toolResultCompacted": "Full tool output was released (original size {{size}})",
+    "toolResultCompacted": "전체 도구 출력이 해제되었습니다(원래 크기 {{size}})",
     "agentActionRow": {
       "noContent": "표시할 내용이 없음",
       "fileChange": {
@@ -9417,6 +9826,29 @@
       }
     },
     "systemCard": {
+      "help": {
+        "title": "사용 가능한 명령",
+        "builtInCommands": "기본 제공 명령",
+        "projectCommands": "프로젝트 명령",
+        "empty": "사용할 수 있는 명령이 없습니다."
+      },
+      "cost": {
+        "title": "세션 사용량",
+        "tokensUsed": "이번 턴의 사용 토큰 수"
+      },
+      "pwd": {
+        "title": "작업 디렉터리",
+        "notSet": "(설정되지 않음)"
+      },
+      "status": {
+        "title": "세션 상태",
+        "agent": "Agent",
+        "model": "모델",
+        "effort": "추론 강도",
+        "permissionMode": "권한 모드",
+        "running": "실행 중",
+        "idle": "대기 중"
+      },
       "context": {
         "title": "컨텍스트 사용량",
         "loading": "불러오는 중…",
@@ -9588,6 +10020,10 @@
       "automationSent": "자동화 작업에서 보냄",
       "automationSentNamed": "자동화 작업 \"{{name}}\"에서 보냄",
       "automationViewTask": "자동화 작업 보기",
+      "sessionSent": "다른 세션에서 보냄",
+      "sessionSentNamed": "세션 \"{{name}}\"에서 보냄",
+      "sessionViewSource": "보낸 세션 보기",
+      "botSentNamed": "동료 \"{{name}}\"에서 보냄",
       "orcaFromLead": "Lead에서 온 메시지",
       "orcaFromWorker": "Worker에서 온 메시지",
       "expandLongMessage": "전체 메시지 보기",
@@ -10270,8 +10706,8 @@
         "pin": "고정",
         "unpin": "고정 해제",
         "archived": "보관됨",
-        "moveToProject": "프로젝트로 이동",
-        "moveToProjectHeading": "프로젝트 선택",
+        "moveToProject": "작업 이동",
+        "moveToProjectHeading": "현재 컴퓨터의 프로젝트",
         "browseProjectFolder": "프로젝트 폴더 선택",
         "moveToDialogue": "대화로 이동",
         "noProjects": "최근 프로젝트 없음",
@@ -10404,14 +10840,89 @@
         "clickToOpen": "클릭하여 브라우저에서 PR 열기",
         "guidance": {
           "login": {
-            "hint": "클릭하면 Agent가 로그인을 도와줍니다",
-            "aria": "PR #{{number}} 상태를 가져올 수 없음: Agent에게 GitHub 로그인 맡기기",
-            "prompt": "GitHub CLI에 로그인해 주세요: `gh auth login -h github.com -w`를 실행하고 표시되는 일회용 기기 코드와 URL을 알려 주세요. 제가 브라우저에서 승인한 뒤 `gh auth status`로 로그인 성공 여부를 확인해 주세요."
+            "hint": "클릭하여 GitHub 연결",
+            "aria": "PR #{{number}} 상태를 가져올 수 없음: GitHub 연결"
           },
           "install": {
-            "hint": "클릭하면 Agent가 설치와 로그인을 도와줍니다",
-            "aria": "PR #{{number}} 상태를 가져올 수 없음: Agent에게 GitHub CLI 설치와 로그인 맡기기",
-            "prompt": "GitHub CLI(gh)를 설치해 주세요(macOS는 `brew install gh`, Windows는 `winget install GitHub.cli`). 그다음 `gh auth login -h github.com -w`를 실행해 로그인하고, 표시되는 일회용 기기 코드와 URL을 알려 주세요. 제가 브라우저에서 승인한 뒤 `gh auth status`로 로그인 성공 여부를 확인해 주세요."
+            "hint": "클릭하여 GitHub 연결",
+            "aria": "PR #{{number}} 상태를 가져올 수 없음: GitHub 연결"
+          }
+        },
+        "setup": {
+          "install": "설치하고 계속",
+          "connect": "GitHub 로그인",
+          "cancel": "취소",
+          "retry": "다시 시도",
+          "done": "완료",
+          "openBrowser": "GitHub에서 승인",
+          "deviceCode": "일회용 기기 코드",
+          "copyCode": "코드 복사",
+          "copied": "복사됨",
+          "copyFailed": "복사하지 못했습니다. 코드를 선택하여 직접 복사해 주세요.",
+          "openFailed": "브라우저를 열지 못했습니다. github.com/login/device를 직접 열어 주세요.",
+          "stages": {
+            "install": {
+              "title": "GitHub CLI 설치",
+              "description": "GitHub CLI를 설치하여 GitHub 계정에 연결하세요."
+            },
+            "login": {
+              "title": "GitHub 연결",
+              "description": "GitHub 계정에 연결하세요. GitHub CLI가 없으면 자동으로 설치합니다."
+            },
+            "checking": {
+              "title": "연결 확인 중…",
+              "description": "GitHub 로그인 상태를 확인하고 있습니다."
+            },
+            "downloading": {
+              "title": "GitHub CLI 다운로드 중…",
+              "description": "다운로드가 끝나면 자동으로 설치합니다."
+            },
+            "installing": {
+              "title": "GitHub CLI 설치 중…",
+              "description": "다운로드가 완료되었습니다."
+            },
+            "preparing": {
+              "title": "로그인 준비 중…",
+              "description": "일회용 기기 코드를 가져오고 있습니다."
+            },
+            "authorizing": {
+              "title": "GitHub 로그인",
+              "description": "아래 코드를 복사한 뒤 GitHub 페이지에 입력하여 승인하세요."
+            },
+            "connected": {
+              "title": "GitHub에 연결되었습니다",
+              "description": "이 창을 닫고 계속 사용할 수 있습니다."
+            },
+            "cancelled": {
+              "title": "연결이 취소되었습니다",
+              "description": "준비되면 다시 연결할 수 있습니다."
+            },
+            "unavailable": {
+              "title": "진행 상황을 읽을 수 없음",
+              "description": "현재 진행 상황을 가져올 수 없습니다. 다시 시도해 주세요."
+            },
+            "error": {
+              "title": "연결이 완료되지 않음"
+            }
+          },
+          "errors": {
+            "unsupported": "아직 지원하지 않는 운영 체제 또는 프로세서입니다.",
+            "install": "설치에 실패했습니다. 네트워크와 디스크 공간을 확인하고 다시 시도하세요.",
+            "login": "로그인에 실패했거나 승인이 거부되었습니다. 다시 시도하여 새 코드를 받으세요.",
+            "timeout": "코드가 만료되었습니다. 다시 시도하여 새 코드를 받으세요."
+          },
+          "account": {
+            "checking": "GitHub 연결 확인 중…",
+            "connected": "연결됨 · @{{login}}",
+            "missing": "GitHub에 연결하여 시작하세요.",
+            "auth": "인증이 만료되었습니다. 다시 로그인하거나 아래 예비 토큰을 변경하세요.",
+            "network": "GitHub에 연결할 수 없습니다. 네트워크를 확인하고 다시 시도하세요.",
+            "forbidden": "연결을 확인할 수 없습니다. 권한이나 요청 한도를 확인하고 다시 시도하세요.",
+            "gh-cli": "이 컴퓨터의 GitHub 로그인 사용 중",
+            "token": "예비 토큰 사용 중",
+            "recheck": "연결 확인",
+            "summary": "GitHub 저장소, 이슈, PR 및 Actions를 관리합니다.",
+            "otherMethods": "다른 연결 방법"
           }
         },
         "unresolved": "미해결 리뷰 코멘트: {{count}}건"
@@ -11922,7 +12433,8 @@
         "rename": "이름 변경",
         "fix": "수정",
         "republish": "다시 게시",
-        "abandonPending": "대기 포기"
+        "abandonPending": "대기 포기",
+        "editPublication": "게시 정보 수정"
       },
       "API_KEY_MISSING": {
         "title": "API key 미설정",
@@ -11946,15 +12458,15 @@
       },
       "OSS_PUT_FAILED": {
         "title": "업로드 실패",
-        "message": "네트워크 이상, 재시도하세요"
+        "message": "업로드 서비스가 파일을 받지 못했습니다. 네트워크를 확인한 후 업로드를 다시 시도하세요. 문제가 계속되면 새로 게시하세요."
       },
       "OSS_PUT_EXPIRED": {
         "title": "업로드 링크 만료",
         "message": "업로드 링크가 만료되었습니다, 다시 게시하세요"
       },
       "VERSION_RACE": {
-        "title": "버전 충돌",
-        "message": "자동 재시도 실패, 잠시 후 재시도하세요"
+        "title": "이미 사용 중인 버전 번호",
+        "message": "이 버전은 이미 게시되었거나 처리 중입니다. 사용하지 않은 버전 번호를 선택한 후 다시 게시하세요."
       },
       "CHECKSUM_MISMATCH": {
         "title": "체크섬 실패",
@@ -11966,15 +12478,15 @@
       },
       "PACK_FAILED": {
         "title": "패키징 실패",
-        "message": "skill 패키지를 만들지 못했습니다. 다시 시도하세요"
+        "message": "로컬 스킬 파일을 읽을 수 있는지 확인하고 불필요한 대용량 파일을 제거한 후 다시 게시하세요."
       },
       "OSS_OBJECT_NOT_FOUND": {
         "title": "업로드 파일 손실",
         "message": "서버에서 업로드된 파일을 찾을 수 없습니다, 재시도하세요"
       },
       "MANIFEST_INVALID": {
-        "title": "SKILL.md 형식이 올바르지 않습니다",
-        "message": "SKILL.md 파일은 YAML frontmatter 로 시작하고 name 및 description 필드를 포함해야 합니다"
+        "title": "스킬 패키지가 요구 사항에 맞지 않음",
+        "message": "아래 원인에 따라 SKILL.md와 패키지 파일을 확인하고 수정한 후 다시 게시하세요."
       },
       "CANCELLED": {
         "title": "취소됨",
@@ -11989,12 +12501,56 @@
         "message": "현재 게시자에게 허용된 공개 범위를 선택하세요"
       },
       "INTERNAL": {
-        "title": "서버 오류",
-        "message": "게시 실패, 잠시 후 재시도하세요"
+        "title": "게시 미완료",
+        "message": "예기치 않은 오류가 발생했습니다. 나중에 다시 시도하세요. 문제가 계속되면 지원팀에 문의하세요."
       },
       "UNKNOWN": {
         "title": "알 수 없는 오류",
         "message": "게시 실패 ({{code}}), 재시도하세요"
+      },
+      "SKILL_DELETED": {
+        "title": "같은 이름의 스킬이 삭제됨",
+        "message": "같은 이름의 스킬이 삭제되었지만 이름은 계속 예약되어 있습니다. 스킬 이름을 변경한 후 다시 게시하세요."
+      },
+      "SKILL_UNPUBLISHED": {
+        "title": "스킬 게시가 중단됨",
+        "message": "업로드 중 스킬 게시가 중단되어 이번 게시가 취소되었습니다. 게시 상태를 확인한 후 다시 게시하세요."
+      },
+      "AUTH_REQUIRED": {
+        "title": "로그인 필요",
+        "message": "로그인하지 않았거나 로그인 상태가 만료되었습니다. 로그인한 후 다시 게시하세요."
+      },
+      "PERMISSION_DENIED": {
+        "title": "게시 권한 없음",
+        "message": "게시 권한이 있는 계정으로 전환하거나 스킬 작성자 또는 조직 관리자에게 권한을 확인하세요."
+      },
+      "INVALID_PARAMS": {
+        "title": "게시 정보가 요구 사항에 맞지 않음",
+        "message": "아래 원인에 따라 게시 정보를 수정한 후 다시 게시하세요."
+      },
+      "SKILL_FILE_TOO_LARGE": {
+        "title": "스킬 패키지가 제한을 초과함",
+        "message": "압축 파일은 32 MiB, 압축 해제 후 50 MiB, SKILL.md는 2 MiB, 파일 및 폴더 항목은 2000개까지 허용됩니다. 패키지를 줄인 후 다시 게시하세요."
+      },
+      "NETWORK_ERROR": {
+        "title": "게시 서비스에 연결할 수 없음",
+        "message": "네트워크 연결을 확인한 후 게시를 다시 시도하세요."
+      },
+      "RATE_LIMITED": {
+        "title": "게시 요청이 너무 많음",
+        "message": "잠시 기다린 후 게시를 다시 시도하세요."
+      },
+      "SERVICE_UNAVAILABLE": {
+        "title": "게시 서비스를 사용할 수 없음",
+        "message": "나중에 게시를 다시 시도하세요. 문제가 계속되면 지원팀에 문의하세요."
+      },
+      "PUBLISH_BUSY": {
+        "title": "다른 스킬을 게시 중",
+        "message": "현재 게시가 끝난 후 이 스킬을 게시하세요."
+      },
+      "REQUEST_REJECTED": {
+        "title": "게시 요청이 거부됨",
+        "message": "게시 정보를 확인한 후 다시 게시하세요. 계속 실패하면 지원팀에 문의하세요."
       }
     },
     "scanResult": {

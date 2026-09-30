@@ -66,6 +66,20 @@ async function fixture(
 }
 
 describe("Routine event admission and execution", () => {
+  it('persists a disabled draft without inventing a trigger and rejects premature activation', async () => {
+    const f = await fixture();
+    const draft = await f.engine.createOnce('bot', { ...input, enabled: false, triggers: [] }, 'imported-draft-fixture');
+    await f.engine.stop();
+    const restored = await fixture(undefined, f.snapshot());
+    try {
+      expect(restored.engine.list('bot')).toEqual([draft]);
+      restored.advance(3600_000);
+      await restored.engine.tick();
+      expect(restored.execute).not.toHaveBeenCalled();
+      await expect(restored.engine.put('bot', { ...draft, enabled: true }, draft.id)).rejects.toThrow('requires');
+      expect(restored.engine.list('bot')).toEqual([draft]);
+    } finally { await restored.engine.stop(); }
+  });
   it('deduplicates concurrent creation and a retry after restart without overwriting newer edits', async () => {
     const f = await fixture();
     const creationId = 'mobile-request-123456';

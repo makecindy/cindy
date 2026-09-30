@@ -6,7 +6,7 @@ import type {
   RemoteDesktopWindow,
 } from "@cindy/device-link";
 import { Text } from "@/components/AppText";
-import { radius, spacing, typeScale, useTheme } from "@/theme";
+import { lineHeight, radius, spacing, typeScale, useTheme } from "@/theme";
 import { RemoteDesktopPanel } from "./RemoteDesktopChrome";
 
 export function RemoteDesktopWindows({
@@ -123,7 +123,7 @@ export function RemoteDesktopWindows({
             >
               <Text
                 numberOfLines={2}
-                style={{ fontSize: typeScale.body, color: colors.textPrimary }}
+                style={{ fontSize: typeScale.body, lineHeight: lineHeight.body, color: colors.textPrimary }}
               >
                 {window.title || window.app}
               </Text>
@@ -131,6 +131,7 @@ export function RemoteDesktopWindows({
                 numberOfLines={1}
                 style={{
                   fontSize: typeScale.caption,
+                  lineHeight: lineHeight.caption,
                   color: colors.textSecondary,
                 }}
               >

@@ -22,7 +22,8 @@ export interface RoutineEvent {
 
 export type RoutineTrigger =
   | { id: string; kind: "cron"; expression: string; timezone: string }
-  | { id: string; kind: "interval"; intervalMs: number }
+  | { id: string; kind: "interval"; intervalMs: number; anchorMs?: number }
+  | { id: string; kind: "once"; at: number }
   | {
       id: string;
       kind: "event";
@@ -79,10 +80,10 @@ export function parseRoutineInput(value: unknown): RoutineInput {
     throw new Error("enabled must be boolean");
   if (
     !Array.isArray(input.triggers) ||
-    input.triggers.length < 1 ||
+    (input.enabled && input.triggers.length < 1) ||
     input.triggers.length > 32
   ) {
-    throw new Error("A routine requires between 1 and 32 triggers");
+    throw new Error("An enabled routine requires between 1 and 32 triggers; disabled drafts allow none");
   }
   const triggers = input.triggers.map((raw): RoutineTrigger => {
     const trigger = record(raw);
@@ -100,7 +101,15 @@ export function parseRoutineInput(value: unknown): RoutineInput {
       ) {
         throw new Error("Interval must be an integer of at least one minute");
       }
-      return { id, kind: "interval", intervalMs: Number(trigger.intervalMs) };
+      if (trigger.anchorMs !== undefined && (!Number.isSafeInteger(trigger.anchorMs) || Number(trigger.anchorMs) < 0))
+        throw new Error("Invalid interval anchor");
+      return { id, kind: "interval", intervalMs: Number(trigger.intervalMs),
+        ...(trigger.anchorMs === undefined ? {} : { anchorMs: Number(trigger.anchorMs) }) };
+    }
+    if (trigger.kind === "once") {
+      if (!Number.isSafeInteger(trigger.at) || Number(trigger.at) < 0)
+        throw new Error("Invalid one-time trigger");
+      return { id, kind: "once", at: Number(trigger.at) };
     }
     if (
       trigger.kind !== "event" ||
@@ -250,7 +259,10 @@ export function nextRoutineTriggerAt(
   from: number,
 ): number | undefined {
   if (trigger.kind === "event") return undefined;
+  if (trigger.kind === "once") return trigger.at > from ? trigger.at : undefined;
   return trigger.kind === "interval"
-    ? from + trigger.intervalMs
+    ? trigger.anchorMs === undefined ? from + trigger.intervalMs
+      : trigger.anchorMs > from ? trigger.anchorMs
+        : trigger.anchorMs + (Math.floor((from - trigger.anchorMs) / trigger.intervalMs) + 1) * trigger.intervalMs
     : nextRun(trigger.expression, from, trigger.timezone);
 }

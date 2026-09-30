@@ -272,6 +272,15 @@ export function resolveModelMetadata(
     result.contextWindow = result.contextWindowMax;
     result[inheritedContextWindow] = true;
   }
+  // A maximum-only report can be below a public/preset working default.
+  // Tighten that default to this connection's capacity instead of discarding
+  // the live maximum. Explicit user/force windows still own their semantics.
+  if (currentLive?.contextWindowMax !== undefined && currentLive.contextWindow === undefined &&
+      user?.contextWindow === undefined && matched?.route.forceOverrides?.contextWindow === undefined &&
+      result.contextWindow !== undefined && result.contextWindow > currentLive.contextWindowMax) {
+    result.contextWindow = currentLive.contextWindowMax;
+    result[inheritedContextWindow] = true;
+  }
   if (result.contextWindow !== undefined && result.contextWindowMax !== undefined &&
       result.contextWindowMax < result.contextWindow) {
     delete result.contextWindowMax;
@@ -471,6 +480,8 @@ export function mergeDiscoveredRuntimeModels(
   hideNew = false,
 ) {
   const models = existing.map((model) => ({ ...model }));
+  // 新发现的型号排在已有型号之前(保持接口返回的相对顺序)，已有型号位置不动。
+  const added: import("./types.js").ProviderRuntimeModelConfig[] = [];
   const seen = new Set<string>();
   for (const model of discovered) {
     if (!model.id || !model.name || seen.has(model.id)) continue;
@@ -488,7 +499,7 @@ export function mergeDiscoveredRuntimeModels(
       delete discoveredMetadata.contextWindowMax;
     }
     if (index < 0)
-      models.push({
+      added.push({
         id: model.id,
         name: model.name,
         discoveredMetadata,
@@ -503,7 +514,7 @@ export function mergeDiscoveredRuntimeModels(
         ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),
       };
   }
-  return models;
+  return [...added, ...models];
 }
 
 /** Explicit runtime user fields, shared by initial construction and local public overlays. */

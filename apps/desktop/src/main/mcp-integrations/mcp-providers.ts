@@ -1,5 +1,6 @@
 import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
+import { classifyHelperSurface } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { listProjects, renameProject, removeProject } from './projectManagement.js';
@@ -41,6 +42,7 @@ import { feishuIm, wechatIm } from '../im';
 import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { getSlackToolBridge } from '../hook-control/slackToolBridge.js';
 import { createLogger } from '../logger.js';
+import { checkAppUpdateForAgent } from '../updateService.js';
 import { getScheduler } from '../scheduler-host/index.js';
 import { stabilizeHookCommand } from '../scheduler-host/hook-script-generator.js';
 import { searchSessionsFn } from '../maker-host/session-search.js';
@@ -88,6 +90,7 @@ import {
 } from './remoteChatHistory.js';
 import { botSessionLinks, sessions } from '../localDb/schema.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
+import { botLearningTracker } from '../maker-ipc/botLearningTracker.js';
 import { getLearnController } from '../learn-host/index.js';
 import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
@@ -348,6 +351,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     },
     memory: {
       getManager: deps.getMakerMemoryManager,
+      beginWrite: (context) => {
+        const saved = botLearningTracker.capture(context?.memoryScopeKey?.startsWith('bot:') ? context.sessionId ?? '' : '');
+        return receipt => saved({ ...receipt, kind: 'memory' });
+      },
       searchSessions: searchSessionsFn,
       logger: createLogger('mcp/cindy_memory'),
     },
@@ -386,6 +393,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // 启动早期跑, 那时 registerMakerIpc 还没执行, holder 是 null; 回调真正被调时
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
+      appUpdate: {
+        isCurrentSession: (sessionId, sessionInstanceId) =>
+          deps.isCurrentLocalSessionInstance?.(sessionId, sessionInstanceId) === true,
+        check: checkAppUpdateForAgent,
+      },
       logger: createLogger('mcp/cindy_helper'),
       grokLogin: {
         start: async (context) => {
@@ -503,18 +515,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       resolveSurface: async ({ sessionId }) => {
         const dbClient = tryGetDbClient();
         if (!dbClient) return 'restricted';
-        const [owned] = await dbClient.drizzle
-          .select({ role: botSessionLinks.role })
-          .from(botSessionLinks)
-          .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
-          .where(
-            and(
-              eq(botSessionLinks.sessionId, sessionId),
-              eq(sessions.source, 'bot'),
-            ),
-          )
+        const [row] = await dbClient.drizzle
+          .select({ source: sessions.source, botId: botSessionLinks.botId })
+          .from(sessions)
+          .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+          .where(eq(sessions.id, sessionId))
           .limit(1);
-        return owned ? 'bot' : 'default';
+        return classifyHelperSurface(row?.source, Boolean(row?.botId));
       },
       sessionQueue: {
         listSessionQueue: wrap((service, sessionId: string) => service.listSessionQueue(sessionId)),
@@ -798,7 +805,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
       botCapabilities: deps.botCapabilities,
       botSkills: {
-        save: (params) => saveBotSkillForSession(params),
+        save: async (params) => {
+          const saved = botLearningTracker.capture(params.callerSessionId);
+          const result = await saveBotSkillForSession(params);
+          if (result.ok) saved({ kind: 'skill', key: result.skill.slug, title: result.skill.name,
+            action: result.created ? 'created' : 'updated' });
+          return result;
+        },
         list: (params) => listBotSkillsForSession(params),
       },
       skillhub: createSkillhubAgentTools({

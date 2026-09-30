@@ -72,3 +72,21 @@ it('shows cached teammates while host discovery is pending, then removes revoked
   h.revoked = new Set(['old']); await render();
   expect(result.items).toEqual([]);
 });
+
+it('exposes only computers whose manifest advertises group chats, keeping them through a failed read', async () => {
+  const manifest = (groups: boolean) => ({ protocolVersion: 1, collections: [
+    { id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope' },
+    ...(groups ? [{ id: 'bot-groups', title: 'Group Chats', resourceKind: 'bot-group' }] : []),
+  ] });
+  h.link.invoke.mockImplementation(async (deviceId) => manifest(deviceId === 'new'));
+  await render();
+  expect(result.groupTargets).toEqual([{ deviceId: 'new', deviceName: 'new' }]);
+  // A transient manifest failure keeps the computer's groups; an older desktop never gains them.
+  h.link.invoke.mockImplementation(async (deviceId) => { if (deviceId === 'new') throw new Error('timeout'); return manifest(false); });
+  h.link.connectionEpoch++; await render();
+  expect(result.groupTargets.map((host) => host.deviceId)).toEqual(['new']);
+  // A computer that answers without the collection drops it.
+  h.link.invoke.mockImplementation(async () => manifest(false));
+  h.link.connectionEpoch++; await render();
+  expect(result.groupTargets).toEqual([]);
+});

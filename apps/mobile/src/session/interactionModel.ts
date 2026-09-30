@@ -49,6 +49,7 @@ export {
   selectionFromAnswer,
   sessionScopedPermissionSuggestions,
   sortPendingInteractions,
+  visibleAskOptions,
   type AskQuestion,
   type AskQuestionReviewPresentation,
   type PermissionReviewPresentation,

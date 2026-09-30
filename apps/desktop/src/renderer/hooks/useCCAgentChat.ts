@@ -134,6 +134,7 @@ interface UseCCAgentChatReturn {
       slashCommandRanges?: SlashCommandRange[];
       beforeEnqueue?: () => Promise<boolean>;
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+      annotationBurnFailure?: 'abort';
     },
   ) => Promise<boolean>;
   compactSession: (
@@ -159,6 +160,7 @@ interface UseCCAgentChatReturn {
       slashCommandRanges?: SlashCommandRange[];
       beforeEnqueue?: () => Promise<boolean>;
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+      annotationBurnFailure?: 'abort';
     },
   ) => Promise<boolean>;
   steerQueuedMessage: (clientId: string) => Promise<boolean>;
@@ -422,6 +424,7 @@ export function useCCAgentChat(
         slashCommandRanges?: SlashCommandRange[];
         beforeEnqueue?: () => Promise<boolean>;
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+        annotationBurnFailure?: 'abort';
       },
     ): Promise<boolean> => {
       if (!sessionId) return Promise.resolve(false);
@@ -478,6 +481,7 @@ export function useCCAgentChat(
         slashCommandRanges?: SlashCommandRange[];
         beforeEnqueue?: () => Promise<boolean>;
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
+        annotationBurnFailure?: 'abort';
       },
     ) => {
       if (!sessionId) return Promise.resolve(false);
@@ -709,11 +713,15 @@ export function useCCAgentChat(
 
       // 2) Debounce the disk write — coalesce rapid keystrokes.
       if (planWriteTimerRef.current) clearTimeout(planWriteTimerRef.current);
+      // Remote paths belong to the host. Keep the draft in memory and send it
+      // back as editedPlan on approval; never autosave it on this client.
+      if (isRemoteSessionSticky(sessionId)) return;
       // Skip the IPC entirely when there's no path (defensive — shouldn't
       // happen in practice; ExitPlanMode always carries planFilePath).
       if (!planFilePath) return;
       planWriteTimerRef.current = setTimeout(() => {
         planWriteTimerRef.current = null;
+        if (isRemoteSessionSticky(sessionId)) return;
         window.electronAPI.maker
           .writePlanFile({ requestId, planFilePath, content })
           .then((result) => {

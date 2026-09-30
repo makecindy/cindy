@@ -1,7 +1,6 @@
 import { Button } from '@/components/ui/button';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Pause, Play, X } from 'lucide-react';
 
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
@@ -24,34 +23,19 @@ import {
 import { DownloadMeter } from './DownloadMeter';
 import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaInstall';
 import { LocalPackagingTag } from './LocalPackagingTag';
+import {
+  LocalDownloadActions,
+  LocalModelCard,
+  LocalModelDownloadButton,
+  LocalModelBrowser,
+  LocalModelManualDownload,
+  localModelBrowserItems,
+} from './LocalModelDownloadUI';
 
 function formatModelSize(bytes?: number): string {
   if (!bytes || bytes <= 0) return '';
   const gb = bytes / (1024 * 1024 * 1024);
   return gb >= 10 ? `${Math.round(gb)} GB` : `${gb.toFixed(1)} GB`;
-}
-
-function IconAction({
-  label,
-  onClick,
-  children,
-}: {
-  label: string;
-  onClick?: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full outline-none transition-colors hover:opacity-80 focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-      style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
-    >
-      {children}
-    </button>
-  );
 }
 
 function PullMeter({ pull }: { pull: LocalModelPullProgress }) {
@@ -72,43 +56,6 @@ function PullMeter({ pull }: { pull: LocalModelPullProgress }) {
         paused: pull.phase === 'paused',
       }}
     />
-  );
-}
-
-function PullActions({
-  pull,
-  onPause,
-  onCancel,
-  onResume,
-}: {
-  pull: LocalModelPullProgress;
-  onPause?: () => void;
-  onCancel?: () => void;
-  onResume?: () => void;
-}) {
-  const { t } = useTranslation();
-  const showControls =
-    (onPause || onCancel || onResume) &&
-    (pull.phase === 'paused' || !pull.done) &&
-    pull.phase !== 'success' &&
-    pull.phase !== 'error' &&
-    pull.phase !== 'cancelled';
-  if (!showControls) return null;
-  return (
-    <div className="flex shrink-0 items-center gap-1.5">
-      {pull.phase === 'paused' ? (
-        <IconAction label={t('settings.providers.local.resumeDownload')} onClick={onResume}>
-          <Play size={13} fill="currentColor" />
-        </IconAction>
-      ) : (
-        <IconAction label={t('settings.providers.local.pauseDownload')} onClick={onPause}>
-          <Pause size={13} fill="currentColor" />
-        </IconAction>
-      )}
-      <IconAction label={t('settings.providers.local.cancelDownload')} onClick={onCancel}>
-        <X size={14} />
-      </IconAction>
-    </div>
   );
 }
 
@@ -293,20 +240,21 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
   const statusKind = status?.kind ?? 'absent';
   const canDownload = statusKind === 'ready' || statusKind === 'pulling';
   const searching = query.trim().length > 0;
-  const featuredIds = useMemo(() => new Set(featured.map((entry) => entry.id)), [featured]);
-  const moreModels = useMemo(
-    () => catalog.filter((entry) => !featuredIds.has(entry.id)),
-    [catalog, featuredIds],
-  );
-  const visibleCatalog = useMemo(() => {
-    const base = searching ? filterCuratedOllamaModels(catalog, query) : featured;
+  const browserItems = useMemo(() => {
     const extras = Object.values(pulls)
       .filter((item) => !item.done || item.phase === 'paused' || item.phase === 'error')
       .map((item) => catalog.find((entry) => ollamaModelRefsEqual(entry.libraryName, item.name)))
-      .filter((entry): entry is CuratedOllamaModel => Boolean(entry))
-      .filter((entry) => !base.some((item) => item.id === entry.id));
-    return extras.length > 0 ? [...extras, ...base] : base;
-  }, [catalog, featured, pulls, query, searching]);
+      .filter((entry): entry is CuratedOllamaModel => Boolean(entry));
+    return localModelBrowserItems({
+      catalog,
+      featured: featured.map((entry) => catalog.find((item) => item.id === entry.id) ?? entry),
+      active: extras,
+      query,
+      matches: (entry, text) => filterCuratedOllamaModels([entry], text).length > 0,
+      isInstalled: (entry) =>
+        models.some((model) => ollamaModelRefsEqual(model.name, entry.libraryName)),
+    });
+  }, [catalog, featured, pulls, query, models]);
   const catalogLibraryNames = useMemo(
     () => new Set(catalog.map((model) => model.libraryName)),
     [catalog],
@@ -328,48 +276,23 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
       !searching && featured[0]?.id === entry.id
         ? t('settings.providers.local.bestForYou')
         : !searching && featured[1]?.id === entry.id
-          ? t('settings.providers.local.alsoCoding')
+          ? t('settings.providers.local.lighterAlternative')
           : null;
     return (
-      <article
+      <LocalModelCard
         key={entry.id}
-        className="flex flex-col gap-3 rounded-[12px] border px-4 py-3.5"
-        style={{
-          borderColor: 'var(--border-default)',
-          backgroundColor: 'var(--surface-elevated)',
-        }}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span
-                className="text-14 font-medium leading-tight"
-                style={{ color: 'var(--settings-section-title)' }}
-              >
-                {entry.name}
-              </span>
-              <LocalPackagingTag libraryName={entry.libraryName} />
-              {badge && (
-                <span
-                  className="rounded-full px-2 py-0.5 text-11 font-medium"
-                  style={{
-                    backgroundColor: 'var(--surface-chip)',
-                    color: 'var(--text-secondary)',
-                  }}
-                >
-                  {badge}
-                </span>
-              )}
-            </div>
-            <span className="text-12 leading-snug" style={{ color: 'var(--text-secondary)' }}>
-              {entry.descriptions?.[
-                (i18n.resolvedLanguage ?? i18n.language) as keyof NonNullable<
-                  typeof entry.descriptions
-                >
-              ] ??
-                entry.descriptions?.en ??
-                ''}
-            </span>
+        name={entry.name}
+        packaging={<LocalPackagingTag libraryName={entry.libraryName} />}
+        badge={badge}
+        description={
+          entry.descriptions?.[
+            (i18n.resolvedLanguage ?? i18n.language) as keyof NonNullable<typeof entry.descriptions>
+          ] ??
+          entry.descriptions?.en ??
+          ''
+        }
+        details={
+          <>
             <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>
               {t(
                 appleSilicon
@@ -389,36 +312,28 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
                 })}
               </span>
             )}
-          </div>
-          {installed && !pulling ? (
-            <span className="shrink-0 pt-0.5 text-12" style={{ color: 'var(--text-tertiary)' }}>
-              {t('settings.providers.local.alreadyInstalled')}
-            </span>
-          ) : pulling && pull ? (
-            <PullActions
-              pull={pull}
+          </>
+        }
+        actions={
+          pulling && pull ? (
+            <LocalDownloadActions
+              active
+              paused={pull.phase === 'paused'}
               onPause={() => void handleAbort('pause', entry.libraryName)}
               onCancel={() => void handleAbort('cancel', entry.libraryName)}
               onResume={() => void handlePull(entry.libraryName)}
             />
           ) : (
-            <Button
-              variant="secondary"
-              size="md"
-              compact
-              type="button"
+            <LocalModelDownloadButton
+              installed={installed}
+              failed={failed}
               disabled={!canDownload}
               onClick={() => void handlePull(entry.libraryName)}
-              className="shrink-0"
-            >
-              {failed
-                ? t('settings.providers.local.retryDownload')
-                : t('settings.providers.local.downloadAdd')}
-            </Button>
-          )}
-        </div>
-        {pulling && pull && <PullMeter pull={pull} />}
-      </article>
+            />
+          )
+        }
+        progress={pulling && pull ? <PullMeter pull={pull} /> : undefined}
+      />
     );
   };
 
@@ -455,120 +370,59 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
         </Button>
       )}
 
-      <section className="flex flex-col gap-3">
-        <div className="flex flex-col gap-1">
-          <span className="text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
-            {searching
-              ? t('settings.providers.local.searchResults')
-              : t('settings.providers.local.recommendedForThisDevice')}
-          </span>
-          {!searching && (
-            <>
-              <span className="text-12" style={{ color: 'var(--text-tertiary)' }}>
-                {memoryGb > 0
-                  ? t(
-                      appleSilicon
-                        ? 'settings.providers.local.hostProfileApple'
-                        : 'settings.providers.local.hostProfileGeneric',
-                      { memory: memoryGb },
-                    )
-                  : t('settings.providers.local.hostProfileUnknown')}
-              </span>
-              <span className="text-12 leading-snug" style={{ color: 'var(--text-secondary)' }}>
-                {t(
-                  featured.length > 0
-                    ? `settings.providers.local.recommendReason.${recommendReason}`
-                    : 'settings.providers.local.noRecommendation',
-                )}
-              </span>
-            </>
-          )}
-        </div>
-        <input
-          id="ollama-model-search"
-          aria-label={t('settings.providers.local.searchPlaceholder')}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder={t('settings.providers.local.searchPlaceholder')}
-          className="h-9 rounded-full border px-4 text-13 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
-          style={{
-            borderColor: 'var(--border-default)',
-            backgroundColor: 'var(--surface-elevated)',
-            color: 'var(--settings-section-title)',
-          }}
-        />
-        {searching && visibleCatalog.length === 0 && (
-          <span className="text-12" style={{ color: 'var(--text-tertiary)' }}>
-            {t('settings.providers.local.noSearchResults')}
-          </span>
-        )}
-        {visibleCatalog.map((entry) => renderCatalogCard(entry))}
-      </section>
-
-      {!searching && moreModels.length > 0 && (
-        <section className="flex flex-col gap-3">
-          <span className="text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
-            {t('settings.providers.local.moreModels')}
-          </span>
-          {moreModels.map((entry) => renderCatalogCard(entry))}
-        </section>
-      )}
-
-      <section className="flex flex-col gap-3">
-        <span className="text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
-          {t('settings.providers.local.manualDownload')}
-        </span>
-        <div className="flex gap-2">
-          <input
-            id="ollama-manual-download"
-            aria-label={t('settings.providers.local.manualDownload')}
-            value={libraryName}
-            onChange={(event) => setLibraryName(event.target.value)}
-            placeholder={t('settings.providers.local.manualDownloadPlaceholder')}
-            className="h-9 min-w-0 flex-1 rounded-full border px-4 font-mono text-12 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
-            style={{
-              borderColor: 'var(--border-default)',
-              backgroundColor: 'var(--surface-elevated)',
-              color: 'var(--settings-section-title)',
-            }}
-          />
-          <Button
-            variant="secondary"
-            size="lg"
-            type="button"
-            disabled={!canDownload || !normalizeOllamaPullName(libraryName)}
-            onClick={() => void handlePull(libraryName)}
-          >
-            {t('settings.providers.local.downloadAdd')}
-          </Button>
-        </div>
-      </section>
+      <LocalModelBrowser
+        id="ollama-model-search"
+        query={query}
+        onQuery={setQuery}
+        visible={browserItems.visible}
+        more={browserItems.more}
+        renderCard={renderCatalogCard}
+        summary={
+          <>
+            <span className="text-12" style={{ color: 'var(--text-tertiary)' }}>
+              {memoryGb > 0
+                ? t(
+                    appleSilicon
+                      ? 'settings.providers.local.hostProfileApple'
+                      : 'settings.providers.local.hostProfileGeneric',
+                    { memory: memoryGb },
+                  )
+                : t('settings.providers.local.hostProfileUnknown')}
+            </span>
+            <span className="text-12 leading-snug" style={{ color: 'var(--text-secondary)' }}>
+              {t(
+                featured.length > 0
+                  ? `settings.providers.local.recommendReason.${recommendReason}`
+                  : 'settings.providers.local.noRecommendation',
+              )}
+            </span>
+          </>
+        }
+      />
+      <LocalModelManualDownload
+        id="ollama-manual-download"
+        value={libraryName}
+        onChange={setLibraryName}
+        placeholder={t('settings.providers.local.manualDownloadPlaceholder')}
+        disabled={!canDownload || !normalizeOllamaPullName(libraryName)}
+        onSubmit={() => void handlePull(libraryName)}
+      />
 
       {customPulls.map((customPull) => (
-        <article
+        <LocalModelCard
           key={customPull.name}
-          className="flex flex-col gap-3 rounded-[12px] border px-4 py-3.5"
-          style={{
-            borderColor: 'var(--border-default)',
-            backgroundColor: 'var(--surface-elevated)',
-          }}
-        >
-          <div className="flex items-start justify-between gap-3">
-            <span
-              className="min-w-0 truncate text-14 font-medium"
-              style={{ color: 'var(--settings-section-title)' }}
-            >
-              {t('settings.providers.local.pullingTitle', { name: customPull.name })}
-            </span>
-            <PullActions
-              pull={customPull}
+          name={t('settings.providers.local.pullingTitle', { name: customPull.name })}
+          actions={
+            <LocalDownloadActions
+              active={!customPull.done || customPull.phase === 'paused'}
+              paused={customPull.phase === 'paused'}
               onPause={() => void handleAbort('pause', customPull.name)}
               onCancel={() => void handleAbort('cancel', customPull.name)}
               onResume={() => void handlePull(customPull.name)}
             />
-          </div>
-          <PullMeter pull={customPull} />
-        </article>
+          }
+          progress={<PullMeter pull={customPull} />}
+        />
       ))}
     </div>
   );

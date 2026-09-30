@@ -61,6 +61,9 @@ it("reports only safe result categories and counts without altering returned con
     elapsedMs: expect.any(Number),
     serverCount: 2,
     turnUrlCount: 2,
+    turnUdpUrlCount: 1,
+    turnTcpUrlCount: 0,
+    turnTlsUrlCount: 1,
   });
   for (const [fetch, outcome] of [
     [async () => ({ iceServers: [], expiresAt: null }), "empty"],
@@ -78,6 +81,9 @@ it("reports only safe result categories and counts without altering returned con
     expect(diagnostic.mock.lastCall?.[0]).toMatchObject({
       outcome,
       turnUrlCount: 0,
+      turnUdpUrlCount: 0,
+      turnTcpUrlCount: 0,
+      turnTlsUrlCount: 0,
     });
   }
   expect(diagnostic.mock.lastCall?.[0].status).toBe(503);

@@ -11,7 +11,14 @@ Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择�
 命令默认使用固定的 `dev` 命名隔离沙箱（等价于自动附加 `--isolated=dev`），
 不再默认共享 Cindy 账号登录态与业务数据。OpenAI 模型登录态是刻意保留的例外：
 普通 Dev 可只读复用同区域 Release／本机 Codex 已有登录态，能够调用模型，但不能在
-Dev 内发起 OpenAI 登录或断开共享登录态：
+Dev 内发起 OpenAI 登录或断开共享登录态。Claude Code 的配置目录同样不隔离：Dev 与正式版
+一样使用 CLI 默认的 `~/.claude`（不设 `CLAUDE_CONFIG_DIR`），所以直接沿用本机 Claude Code
+的订阅登录；在 Dev 里「使用 Claude Code 登录」等同于在终端运行 `claude auth login`，「断开」
+只撤销本实例的使用许可。代价是多个 Dev 实例与安装版在同机共用 `~/.claude` 下的 Claude 转录
+（按 sdk session id 区分；同机导入分享包时同 id 转录会复用同一份）。旧版 Dev 隔离在
+`<userData>/claude-home` 的转录与文件检查点，会在启动时后台一次性补拷到默认目录（只补缺、
+不覆盖、不删旧目录；拉起 Claude CLI 前最多等一次 15s）；补拷完成后，旧 checkout 再写进旧目录的
+转录不会再补拷：
 
 ```bash
 pnpm restart:desktop:remote --region=global
@@ -64,7 +71,7 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
   时使用；禁止与 `--isolated` 或环境里的 `XDT_ISOLATED=1` 组合。
 - `--isolated` / `--isolated=<名字>` / `--isolated=@worktree`：使用独立 userData 沙箱，数据库、Cindy 账号登录态、会话、定时
   任务与设备身份都与正式版彻底隔离（首次需重新登录 Cindy 账号）；OpenAI 模型登录态按
-  上述只读例外复用。命名沙箱每个名字一条独立沙箱，
+  上述只读例外复用，Claude Code 按上述约定使用默认 `~/.claude`。命名沙箱每个名字一条独立沙箱，
   名字限 `A-Za-z0-9_-`、≤32 字符。`@worktree` 是保留名，按当前 checkout 目录派生沙箱名。
   用户说「独立数据库／隔离数据／沙箱启动／不要动正式版
   数据」时用；Agent 把「启动开发版」也落在这条路径。**未合入主干的 migration 必须在 `--isolated` 沙箱里跑，不得连共享 userData**

@@ -26,6 +26,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { structuredPatch } from 'diff';
+import { syncCodexArchiveState } from './archive-state.js';
 
 import {
   BaseAgent,
@@ -93,6 +94,7 @@ import {
   assertReviewMessageContentPaths,
   buildReviewReadGrants,
 } from '../shared/review-read-scope.js';
+import { REVIEW_READ_TOOLS, callReviewReadTool, isWindowsReviewLocalPath, reviewReadDenied } from './review-read-tools.js';
 import {
   annotatePermissionRequestForUnavailableReview,
   composeAutoReviewIntentWithApprovedPlan,
@@ -511,12 +513,13 @@ function localSessionHostIdentity(input: {
   customContext: boolean;
   storage?: { sqliteHome: string; historyHome: string };
   policy: 'isolated' | 'legacy-shared';
+  environmentIdentity?: string;
 }): string {
   const base = input.accountSessionHost
     ? `local-account:${input.accountProviderId ?? 'openai'}:session:${input.sessionId}`
     : input.reviewMode ? localReviewHostKey(input.sessionId)
       : input.customContext ? localCustomContextHostKey(input.sessionId) : hostKey(input.remoteHostId);
-  return codexLocalAuthHostIdentity(base + (input.storage
+  return codexLocalAuthHostIdentity(base + (input.environmentIdentity ? `:environment:${input.environmentIdentity}` : '') + (input.storage
     ? `:storage:${input.storage.sqliteHome}:history:${input.storage.historyHome}` : ''), input.policy);
 }
 
@@ -1942,6 +1945,73 @@ export class CodexAgent extends BaseAgent {
    * "1 agent N host" 是 codex 端做不到 "1 server N transport" 的必然后果。
    */
   private hosts = new Map<string, AppServerHost>();
+  private archiveHostKeys = new Set<string>();
+
+  /** Project the host's durable task status through Codex's own storage API. */
+  async syncThreadArchiveState(opts: {
+    threadId: string;
+    archived: boolean;
+    remoteHostId?: string;
+    assertCurrent: () => void;
+  }): Promise<void> {
+    opts.assertCurrent();
+    const storage = opts.remoteHostId ? undefined : await this.deps.resolveCodexThreadStorage?.(opts.threadId, { readOnly: true });
+    if (!opts.remoteHostId && this.deps.resolveCodexThreadStorage && !storage) {
+      throw new Error('Codex archive storage is unavailable');
+    }
+    opts.assertCurrent();
+    let target: { key: string; host: AppServerHost } | undefined;
+    // Unsubscribe does not release the native writer immediately. Use its host
+    // when it still owns this thread; never kill a shared host to move a file.
+    for (const [key, host] of this.hosts) {
+      if (this.archiveHostKeys.has(key) || !host.writerCandidate) continue;
+      if (opts.remoteHostId ? key !== hostKey(opts.remoteHostId) : !key.startsWith('local')) continue;
+      let cursor: string | null = null;
+      do {
+        const page: { data: string[]; nextCursor?: string | null } = await host.request(
+          'thread/loaded/list', { cursor }, { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+        );
+        opts.assertCurrent();
+        if (page.data.includes(opts.threadId)) { target = { key, host }; break; }
+        cursor = page.nextCursor ?? null;
+      } while (cursor);
+      if (target) break;
+    }
+    const key = opts.remoteHostId ? hostKey(opts.remoteHostId)
+      : `local:archive:${JSON.stringify(storage ? [storage.historyHome, storage.sqliteHome] : [])}`;
+    await this.withHostOperation(async () => {
+      opts.assertCurrent();
+      if (target && this.hosts.get(target.key) === target.host) return target;
+      if (!opts.remoteHostId) this.archiveHostKeys.add(key);
+      const host = await this.getHost(opts.remoteHostId, undefined, {
+        keyOverride: key, hostPurpose: 'control-plane',
+        ...(storage ? { historyHome: storage.historyHome, sqliteHome: storage.sqliteHome } : {}),
+      });
+      return { key, host };
+    }, async (host) => {
+      const init = await host.ensureStarted();
+      opts.assertCurrent();
+      const rollout = await syncCodexArchiveState(
+        (method, params) => host.request(method, params, { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS }),
+        opts.threadId, opts.archived, opts.assertCurrent,
+      );
+      opts.assertCurrent();
+      if (!opts.remoteHostId) {
+        const home = storage?.sqliteHome ?? init.codexHome;
+        if (home) await this.deps.recordCodexThreadLocation?.(opts.threadId, home, rollout);
+      }
+    });
+  }
+
+  /** A backfill reuses one control host per storage root, then releases them. */
+  async releaseArchiveHosts(): Promise<void> {
+    for (const key of this.archiveHostKeys) {
+      await this.retireHostKey(key, 'Codex archive sync finished', {
+        failIfActive: true, logPrefix: 'codex archive host cleanup', throwOnShutdownFailure: true,
+      });
+      this.archiveHostKeys.delete(key);
+    }
+  }
 
   /**
    * getHost() 的 in-flight Promise 去重, per target — 创建过程含 3 个 await
@@ -4828,7 +4898,15 @@ assertRouteCurrent();
     let reviewReadGrants: Awaited<ReturnType<typeof buildReviewReadGrants>> = [];
     if (reviewMode) {
       try {
+        if (process.platform === 'win32') {
+          if ([opts.workingDir, ...(opts.reviewReadPaths ?? [])].some((candidate) => !isWindowsReviewLocalPath(candidate, opts.workingDir))) {
+            throw new Error('Windows Cindy Review requires local drive paths; UNC shares, device paths and alternate data streams are not supported. Use a local copy before retrying Review.');
+          }
+        }
         reviewReadGrants = await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? []);
+        if (process.platform === 'win32' && reviewReadGrants.some((grant) => !isWindowsReviewLocalPath(grant.realPath, opts.workingDir))) {
+          throw new Error('Windows Cindy Review requires evidence paths that resolve to a local drive. Use a local copy before retrying Review.');
+        }
       } catch (error) {
         // Codex app-server has not been contacted before review grants are validated.
         throw new AgentStartupStoppedError(error);
@@ -4901,6 +4979,9 @@ assertRouteCurrent();
     }
     const registeredHostDynamicToolKeys = new Set(hostDynamicTools.map(dynamicToolKey));
     const sessionDynamicTools = [
+      // Windows Review requires 0.156+ and exposes flat function tools. The legacy
+      // provider gate above concerns namespace tools, not these scoped reads.
+      ...(reviewMode && process.platform === 'win32' ? REVIEW_READ_TOOLS : []),
       ...(!reviewMode && shouldRegisterAskUserDynamicTool(opts) ? [ASK_USER_DYNAMIC_TOOL] : []),
       ...(!reviewMode ? hostDynamicTools : []),
     ];
@@ -4974,9 +5055,12 @@ assertRouteCurrent();
       ? await this.deps.resolveCodexThreadStorage?.(opts.resumeSessionId)
       : undefined;
     const sessionSqliteHome = sessionStorage?.sqliteHome;
+    const companionEnvironment = opts.botRuntimeProfile && !opts.remoteHostId && sid
+      ? await this.deps.resolveSessionEnvironment?.(sid) : undefined;
     const resolveSessionHostKey = (): string => localSessionHostIdentity({
       sessionId: sid, remoteHostId: opts.remoteHostId, accountSessionHost, accountProviderId,
       reviewMode, customContext: usesCustomContextHost, storage: sessionStorage, policy: localAuthPolicy,
+      environmentIdentity: companionEnvironment?.identity,
     });
     let currentHostKey = resolveSessionHostKey();
     let releaseHostBindingLease: (() => void) | null = null;
@@ -4998,12 +5082,13 @@ assertRouteCurrent();
       if (!routeSelection.isCurrent()) throw new CodexRouteSelectionChangedError();
       acquireHostBindingLeaseIfNeeded();
       return await this.getHost(opts.remoteHostId, credentialMode, {
+        ...(companionEnvironment ? { keyOverride: currentHostKey } : {}),
         ...(accountProviderId ? { providerId: accountProviderId } : {}),
         ...(sessionSqliteHome ? { sqliteHome: sessionSqliteHome } : {}),
         ...(sessionStorage ? { historyHome: sessionStorage.historyHome } : {}),
         ...(accountSessionHost || reviewMode || usesCustomContextHost || sessionSqliteHome ? { keyOverride: currentHostKey } : {}),
         ignoreBindingLeases: 1,
-        routeIsCurrent: routeSelection.isCurrent,
+        routeIsCurrent: () => { companionEnvironment?.assertCurrent?.(); return routeSelection.isCurrent(); },
         routeSignal: startupRouteSignal,
         ...(localAuthPolicy === 'isolated' || reviewMode || usesCustomContextHost
           ? { keyOverride: currentHostKey }
@@ -5483,6 +5568,14 @@ assertRouteCurrent();
     }
     const readonlyReferenceDirsSupported = supportsCodexReadonlyReferenceDirs(initResp.userAgent);
     const resumeExcludeTurnsSupported = supportsCodexResumeExcludeTurns(initResp.userAgent);
+    // Verified with 0.156.0: features.view_image removes the native reader.
+    // 0.145.0 ignores this flag and reads images outside the permission scope.
+    if (reviewMode && process.platform === 'win32' && !codexUserAgentAtLeast(initResp.userAgent, [0, 156, 0])) {
+      releaseHostBindingLeaseIfNeeded();
+      throw new Error(
+        `Windows Cindy Review requires Codex app-server 0.156.0 or newer to enforce scoped reads (current: ${initResp.userAgent ?? 'unknown'})`,
+      );
+    }
     if (reviewMode && !readonlyReferenceDirsSupported) {
       releaseHostBindingLeaseIfNeeded();
       throw new Error(
@@ -6271,6 +6364,24 @@ assertRouteCurrent();
           : {}),
         ...(reviewMode
           ? {
+              // Windows native sandboxes cannot enforce this split read scope.
+              // Keep the deny policy, and route evidence reads through the host.
+              // Native AGENTS discovery also invokes that incompatible sandbox.
+              ...(process.platform === 'win32' ? {
+                project_doc_max_bytes: 0,
+                'features.shell_tool': false,
+                'features.unified_exec': false,
+                'features.shell_snapshot': false,
+                'features.view_image': false,
+                'features.code_mode': false,
+                'features.code_mode_only': false,
+                'features.js_repl': false,
+                'features.browser_use': false,
+                'features.browser_use_external': false,
+                'features.computer_use': false,
+                'features.image_generation': false,
+                'features.multi_agent_v2': false,
+              } : {}),
               web_search: 'disabled',
               'features.apps': false,
               'features.goals': false,
@@ -6279,7 +6390,10 @@ assertRouteCurrent();
               'features.remote_plugin': false,
             }
           : {}),
-        ...(!makerMemoryEnabled && !opts.botRuntimeProfile
+        // Review disables only transport-bearing entries discovered above.
+        // Its host omits Cindy's MCP bridge, so a bare memory override would
+        // create an invalid transport even though the entry is disabled.
+        ...(!reviewMode && !makerMemoryEnabled && !opts.botRuntimeProfile
           ? { 'mcp_servers.cindy_memory.enabled': false }
           : {}),
         // Configure the native window and its 90% compaction budget together.
@@ -7096,7 +7210,8 @@ assertRouteCurrent();
             cwd: opts.workingDir,
             // Recovery belongs to the running send, whose catalog/window is already frozen.
             ...currentThreadWorkspaceConfig(retainHistory ? appliedContextLimit : undefined),
-            ...(sessionDynamicTools.length > 0 ? { dynamicTools: sessionDynamicTools } : {}),
+            // Fork inherits the source tools; only thread/start accepts their registration.
+            ...(!retainHistory && sessionDynamicTools.length > 0 ? { dynamicTools: sessionDynamicTools } : {}),
             ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
             ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
             ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
@@ -7275,9 +7390,9 @@ assertRouteCurrent();
 
     // Loaded-thread resume ignores arbitrary config. Release only this thread,
     // then cold-resume its intact rollout before accepting another turn.
-    const ensureContextLimitForNextTurn = (signal?: AbortSignal): Promise<void> | null => {
+    const ensureContextLimitForNextTurn = (signal?: AbortSignal, forceMcpRefresh = false): Promise<void> | null => {
       const desired = currentContextLimit();
-      if (desired === appliedContextLimit) return null;
+      if (desired === appliedContextLimit && !forceMcpRefresh) return null;
       return (async () => {
         if (signal?.aborted || closed) throw new Error('Codex context settings update cancelled');
         if (!threadMayHaveRollout) {
@@ -7298,6 +7413,7 @@ assertRouteCurrent();
                 ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
                 ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
                 ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
+                ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
               }),
               onLateResolve: async () => {
                 await runThreadCleanupOrRetire({
@@ -7326,6 +7442,81 @@ assertRouteCurrent();
         lastNativeContextWindow = null;
         usageTracker.setContextWindow(0);
       })();
+    };
+
+    // The host-level MCP probe can be green while a loaded thread still has an
+    // older per-thread catalog. Codex ignores MCP config on a loaded-thread
+    // resume; the release + cold resume above is required to add the server.
+    const ensureSchedulerMcpForResumedThread = (): Promise<void> | null => {
+      if (reviewMode || !threadMayHaveRollout) return null;
+      const config = currentThreadWorkspaceConfig().config;
+      if ((typeof config?.['mcp_servers.cindy_scheduler.url'] !== 'string' &&
+          typeof config?.['mcp_servers.cindy_scheduler.command'] !== 'string') ||
+        config?.['mcp_servers.cindy_scheduler.enabled'] === false) return null;
+
+      const verifyAndRecover = async (): Promise<void> => {
+        const hasScheduler = async (deadline: number): Promise<boolean> => {
+          let cursor: string | null = null;
+          const seenCursors = new Set<string>();
+          do {
+            if (cursor !== null) {
+              if (seenCursors.has(cursor)) throw new Error('Codex MCP status pagination repeated a cursor');
+              seenCursors.add(cursor);
+            }
+            if (seenCursors.size >= 5) throw new Error('Codex MCP status pagination exceeded five pages');
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0) return false;
+            const status: CodexMcpServerStatusListResponse = await host.request<CodexMcpServerStatusListResponse>(
+              Method.McpServerStatusList,
+              { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId },
+              { timeoutMs: remainingMs },
+            );
+            const scheduler = status.data.find((server) => server.name === 'cindy_scheduler');
+            if (scheduler && Object.hasOwn(scheduler.tools, 'list_tools') &&
+              Object.hasOwn(scheduler.tools, 'call_tool')) return true;
+            cursor = status.nextCursor;
+          } while (cursor !== null);
+          return false;
+        };
+
+        let available: boolean;
+        try {
+          available = await hasScheduler(Date.now() + 10_000);
+        } catch (error) {
+          // A failed diagnostic must not prevent unrelated work.
+          log.warn('scheduler MCP verification failed', {
+            threadId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return;
+        }
+        if (available) return;
+        log.warn('expected scheduler MCP is missing from Codex thread; cold-resuming', { threadId });
+        // The existing refresh path closes this handle if the cold resume cannot
+        // be confirmed. Propagate that failure instead of sending on a stale one.
+        await ensureContextLimitForNextTurn(undefined, true);
+        const startupDeadline = Date.now() + 10_000;
+        while (!closed && Date.now() < startupDeadline) {
+          try {
+            available = await hasScheduler(startupDeadline);
+          } catch (error) {
+            log.warn('scheduler MCP verification after cold resume failed', {
+              threadId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return;
+          }
+          if (available) return;
+          const remainingMs = startupDeadline - Date.now();
+          if (remainingMs > 0) {
+            await new Promise<void>((resolve) => setTimeout(resolve, Math.min(100, remainingMs)));
+          }
+        }
+        if (!available) {
+          log.warn('scheduler MCP remains unavailable after Codex thread cold resume', { threadId });
+        }
+      };
+      return verifyAndRecover();
     };
 
     // ── dispatchInteraction + pendingApprovals (Claude 同款 dismissAllPending 模式) ──
@@ -9605,7 +9796,7 @@ assertRouteCurrent();
       params: DynamicToolCallParams,
       meta: { requestId: string | number },
     ): Promise<DynamicToolCallResponse> => {
-      if (reviewMode) {
+      if (reviewMode && process.platform !== 'win32') {
         return {
           contentItems: [{ type: 'inputText', text: 'Cindy Review does not allow dynamic tools.' }],
           success: false,
@@ -9628,6 +9819,16 @@ assertRouteCurrent();
           ],
           success: false,
         };
+      }
+      if (reviewMode) {
+        const readIsActive = () => !closed && isCurrentHost()
+          && params.threadId === threadId && params.turnId === currentTurnId
+          && !turnInterruptOrigins.has(params.turnId)
+          && !resolvedWhileBufferedRequestIds.has(String(meta.requestId));
+        if (!readIsActive() || params.namespace) return reviewReadDenied();
+        const response = await callReviewReadTool(params.tool, params.arguments, opts.workingDir, reviewReadGrants);
+        return await gateServerRequestTurn(params.turnId, params.threadId) && readIsActive()
+          ? response : reviewReadDenied();
       }
       const toolUseId = activeDynamicToolUseId(params);
       if (isAskUserDynamicTool(params)) {
@@ -14512,6 +14713,10 @@ assertRouteCurrent();
       },
     };
 
+    if (opts.resumeSessionId && threadMayHaveRollout) {
+      const schedulerRefresh = ensureSchedulerMcpForResumedThread();
+      if (schedulerRefresh) await schedulerRefresh;
+    }
     return handle;
   }
 
@@ -14620,12 +14825,14 @@ assertRouteCurrent();
         : await this.deps.resolveCodexThreadContextWindow?.(opts.providerId, opts.model);
       const accountProviderId = this.deps.isCodexAccountProvider?.(opts.providerId) ? opts.providerId! : undefined;
       const storage = await this.deps.resolveCodexThreadStorage?.(opts.threadId);
+      const companionEnvironment = opts.sessionId
+        ? await this.deps.resolveSessionEnvironment?.(opts.sessionId) : undefined;
       const targetKey = localSessionHostIdentity({
         sessionId: opts.sessionId ?? '', accountProviderId,
         accountSessionHost: accountProviderId !== undefined || this.deps.isolateCodexAccountSessions === true,
         reviewMode: opts.reviewMode === true,
         customContext: typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0,
-        storage, policy: selection.policy,
+        storage, policy: selection.policy, environmentIdentity: companionEnvironment?.identity,
       });
       if (!selection.isCurrent()) throw new CodexRouteSelectionChangedError();
       for (const [key, host] of hosts) {

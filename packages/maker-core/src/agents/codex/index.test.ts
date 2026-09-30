@@ -368,6 +368,63 @@ function createDeps(
   };
 }
 
+describe('Codex archive synchronization', () => {
+  it('uses the retained writer and records the native archive path without closing sibling tasks', async () => {
+    const storage = { historyHome: '/history', sqliteHome: '/state' };
+    const resolveCodexThreadStorage = vi.fn(async () => storage);
+    const recordCodexThreadLocation = vi.fn(async () => {});
+    const agent = new CodexAgent(createDeps({}, { resolveCodexThreadStorage, recordCodexThreadLocation }));
+    try {
+      const source = await agent.startSession({ sessionId: 'source', model: 'gpt-5.4', workingDir: '/repo' });
+      const sibling = await agent.startSession({ sessionId: 'sibling', model: 'gpt-5.4', workingDir: '/repo' });
+      await source.close();
+      const transport = createdTransports[0];
+      transport.setMockResponse('thread/loaded/list', { result: { data: [source.id, sibling.id] } });
+      let archived = false;
+      const write = transport.writeLine.bind(transport);
+      vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+        const { method } = JSON.parse(line);
+        if (method === 'thread/archive') {
+          archived = true;
+          transport.setMockResponse(method, { result: {} });
+        }
+        if (method === 'thread/read') transport.setMockResponse(method, { result: { thread: {
+          id: source.id, status: { type: 'idle' },
+          path: `/history/${archived ? 'archived_sessions' : 'sessions'}/rollout.jsonl`,
+        } } });
+        await write(line);
+      });
+
+      await agent.syncThreadArchiveState({ threadId: source.id, archived: true, assertCurrent: () => {} });
+      await agent.releaseArchiveHosts();
+      expect(resolveCodexThreadStorage).toHaveBeenCalledWith(source.id, { readOnly: true });
+      expect(recordCodexThreadLocation).toHaveBeenLastCalledWith(source.id, '/state', '/history/archived_sessions/rollout.jsonl');
+      expect(createdTransports).toHaveLength(1);
+      expect(transport.closed).toBe(false);
+      await sibling.close();
+    } finally { await agent.dispose(); }
+  });
+
+  it('uses a storage-scoped control host for cold history and releases it after the batch', async () => {
+    const recordCodexThreadLocation = vi.fn(async () => {});
+    MockCodexTransport.onCreate = transport => transport.setMockResponse('thread/read', { result: {
+      thread: { id: 'archived-thread', path: '/history/archived_sessions/rollout.jsonl' },
+    } });
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadStorage: async () => ({ historyHome: '/history', sqliteHome: '/state' }),
+      recordCodexThreadLocation,
+    }));
+    try {
+      await agent.syncThreadArchiveState({ threadId: 'archived-thread', archived: true, assertCurrent: () => {} });
+      expect(createdTransports).toHaveLength(1);
+      expect(createdStdioOptions[0].extraArgs).toContain('sqlite_home="/state"');
+      expect(recordCodexThreadLocation).toHaveBeenCalledWith('archived-thread', '/state', '/history/archived_sessions/rollout.jsonl');
+      await agent.releaseArchiveHosts();
+      expect(createdTransports[0].closed).toBe(true);
+    } finally { await agent.dispose(); }
+  });
+});
+
 describe('Codex official OAuth host isolation', () => {
   function isolatedDeps() {
     return createDeps({}, {
@@ -692,7 +749,7 @@ describe('Codex official OAuth host isolation', () => {
   });
 
   it.each([false, true])('retires scoped snapshots and blocks new hosts during configuration persistence (review=%s)', async (reviewMode) => {
-    if (reviewMode) MockCodexTransport.userAgent = 'mock-codex/0.145.0';
+    if (reviewMode) MockCodexTransport.userAgent = 'mock-codex/0.156.0';
     if (reviewMode) MockCodexTransport.onCreate = (transport) => transport.setMockResponse('config/read', { result: { config: { cli_auth_credentials_store: 'ephemeral', mcp_servers: { node_repl: { command: 'synthetic-node-repl' } } } } });
     const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-scope-change-'));
     const deps = isolatedDeps();
@@ -725,7 +782,7 @@ describe('Codex official OAuth host isolation', () => {
   });
 
   it.each([false, true])('supersedes an in-flight scoped creation at the configuration boundary (review=%s)', async (reviewMode) => {
-    MockCodexTransport.userAgent = 'mock-codex/0.145.0';
+    MockCodexTransport.userAgent = 'mock-codex/0.156.0';
     if (reviewMode) MockCodexTransport.onCreate = (transport) => transport.setMockResponse('config/read', { result: { config: { cli_auth_credentials_store: 'ephemeral', mcp_servers: { node_repl: { command: 'synthetic-node-repl' } } } } });
     const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-scope-inflight-'));
     const deps = isolatedDeps();
@@ -896,6 +953,9 @@ describe('Codex official OAuth host isolation', () => {
 
 describe('CodexAgent spawn configuration', () => {
   it('holds account session recovery until the MCP bridge replacement is ready', async () => {
+    MockCodexTransport.onCreate = transport => transport.setMockResponse(Method.McpServerStatusList, {
+      result: { data: [{ name: 'cindy_scheduler', tools: { list_tools: {}, call_tool: {} } }], nextCursor: null },
+    });
     let endpoint = 'http://127.0.0.1:51359/mcp/cindy_scheduler';
     const prepare = vi.fn(async () => {
       const frozenEndpoint = endpoint;
@@ -1630,7 +1690,11 @@ describe('CodexAgent permissions', () => {
     });
   });
 
-  it('starts Review on an isolated memory-free host with an immutable read-only sandbox', async () => {
+  it.each([
+    { transport: 'absent', memoryConfig: undefined },
+    { transport: 'stdio', memoryConfig: { command: 'memory-server', enabled: true } },
+    { transport: 'http', memoryConfig: { url: 'http://127.0.0.1:45831/mcp', enabled: true } },
+  ])('starts Review on an isolated memory-free host with an immutable read-only sandbox (memory: $transport)', async ({ memoryConfig }) => {
     const artifactDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-artifact-'));
     tempRoots.push(artifactDir);
     const artifactPath = path.join(artifactDir, 'artifact.txt');
@@ -1680,7 +1744,10 @@ describe('CodexAgent permissions', () => {
         if (method === Method.ConfigRead) {
           return {
             config: {
-              mcp_servers: { local_docs: { command: '/usr/bin/local-docs', enabled: true } },
+              mcp_servers: {
+                local_docs: { command: '/usr/bin/local-docs', enabled: true },
+                ...(memoryConfig ? { cindy_memory: memoryConfig } : {}),
+              },
               plugins: {
                 'configured@personal': {
                   mcp_servers: {
@@ -1697,6 +1764,7 @@ describe('CodexAgent permissions', () => {
               { name: 'codex_apps', tools: {} },
               { name: 'local_docs', tools: {} },
               { name: 'configured_server', tools: {} },
+              ...(memoryConfig ? [{ name: 'cindy_memory', tools: {} }] : []),
             ],
             nextCursor: null,
           };
@@ -1706,7 +1774,7 @@ describe('CodexAgent permissions', () => {
       },
       {
         buildSessionMcpConfig: () => ({ 'mcp_servers.should_not_exist': { command: 'write' } }),
-        userAgent: 'mock-codex/0.145.0',
+        userAgent: 'mock-codex/0.156.0',
       },
     );
 
@@ -1774,7 +1842,22 @@ describe('CodexAgent permissions', () => {
       },
     });
     expect(threadStart).not.toHaveProperty('sandbox');
-    expect(threadStart).not.toHaveProperty('dynamicTools');
+    if (process.platform === 'win32') {
+      expect(threadStart.config).toMatchObject({
+        project_doc_max_bytes: 0,
+        'features.shell_tool': false,
+        'features.unified_exec': false,
+      });
+      expect(threadStart.dynamicTools).toEqual([
+        expect.objectContaining({ name: 'review_read_file' }),
+        expect.objectContaining({ name: 'review_list_directory' }),
+        expect.objectContaining({ name: 'review_view_image' }),
+      ]);
+    } else {
+      expect(threadStart.config).not.toHaveProperty('project_doc_max_bytes');
+      expect(threadStart).not.toHaveProperty('dynamicTools');
+    }
+    expect(threadStart.config).not.toHaveProperty(['windows.sandbox']);
     expect((threadStart.config as Record<string, unknown>)['skills.config']).toEqual([
       {
         path: '/home/test/.codex/plugins/cache/personal/unsafe-plugin/1.0.0/skills/review/SKILL.md',
@@ -1784,6 +1867,11 @@ describe('CodexAgent permissions', () => {
     expect(threadStart.config).not.toHaveProperty(['mcp_servers.should_not_exist']);
     expect(threadStart.config).not.toHaveProperty(['mcp_servers.codex_apps.enabled']);
     expect(threadStart.config).not.toHaveProperty(['mcp_servers.configured_server.enabled']);
+    if (memoryConfig) {
+      expect(threadStart.config).toHaveProperty(['mcp_servers.cindy_memory.enabled'], false);
+    } else {
+      expect(threadStart.config).not.toHaveProperty(['mcp_servers.cindy_memory.enabled']);
+    }
     expect(handle.getPlanMode?.()).toBe(false);
 
     await expect(
@@ -1849,7 +1937,85 @@ describe('CodexAgent permissions', () => {
     await handle.setPermissionMode('bypassPermissions');
     await handle.setPlanMode?.(true);
     expect(handle.getPlanMode?.()).toBe(false);
+    if (process.platform === 'win32') {
+      const read = (overrides = {}) => handlers.dynamicToolCall!({
+        threadId: 'start-thread-id', turnId: 'turn-review', callId: 'read-1',
+        namespace: null, tool: 'review_read_file', arguments: { path: artifactPath },
+        ...overrides,
+      }, { requestId: 'read-request' });
+      await expect(read()).resolves.toMatchObject({ success: true });
+      await expect(read({ threadId: 'child-thread' })).resolves.toMatchObject({ success: false });
+      await expect(read({ namespace: 'untrusted' })).resolves.toMatchObject({ success: false });
+      await expect(read({ tool: 'exec_command' })).resolves.toMatchObject({ success: false });
+      await expect(read({ arguments: { path: dotenvPath } })).resolves.toMatchObject({ success: false });
+      // Stop after the descriptor opens, before any bytes are returned.
+      const open = fs.open.bind(fs);
+      const opening = vi.spyOn(fs, 'open').mockImplementationOnce(async (...args) => {
+        const file = await open(...args);
+        await handle.abort();
+        return file;
+      });
+      await expect(read()).resolves.toMatchObject({ success: false });
+      opening.mockRestore();
+      await expect(read()).resolves.toMatchObject({ success: false });
+      await handle.close();
+      await expect(read()).resolves.toMatchObject({ success: false });
+    }
     await handle.close();
+  });
+
+  it.skipIf(process.platform !== 'win32')('rejects Windows Review runtimes without a disableable native image reader', async () => {
+    const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-old-windows-'));
+    tempRoots.push(workingDir);
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.145.0' });
+    await expect(agent.startSession({
+      sessionId: 'review-old-windows', model: 'gpt-5.5', workingDir, reviewMode: true,
+    })).rejects.toThrow('Windows Cindy Review requires Codex app-server 0.156.0');
+    expect(host.request.mock.calls.some(([method]) => method === Method.ThreadStart)).toBe(false);
+  });
+
+  it.skipIf(process.platform !== 'win32').each([
+    { providerId: 'xai', model: 'grok-4' },
+    { providerId: ' xai ', model: 'grok-4' },
+    { providerId: undefined, model: 'xai/grok-4' },
+  ])('starts Windows Review with flat read tools on xAI routes ($providerId, $model)', async ({ providerId, model }) => {
+    const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-xai-'));
+    tempRoots.push(workingDir);
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.ExperimentalFeatureEnablementSet ? {} : undefined,
+      { userAgent: 'mock-codex/0.156.0' });
+    const handle = await agent.startSession({
+      sessionId: 'review-xai', providerId, model, workingDir, reviewMode: true,
+    });
+    const start = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)![1] as Record<string, unknown>;
+    expect(start.dynamicTools).toEqual([
+      expect.objectContaining({ type: 'function', name: 'review_read_file' }),
+      expect.objectContaining({ type: 'function', name: 'review_list_directory' }),
+      expect.objectContaining({ type: 'function', name: 'review_view_image' }),
+    ]);
+    expect(start.config).toMatchObject({ 'features.shell_tool': false, 'features.view_image': false });
+    expect(start).toHaveProperty('permissions');
+    await handle.close();
+  });
+
+  it.skipIf(process.platform !== 'win32').each([
+    { workingDir: '\\\\server\\share\\review', reviewReadPaths: [] },
+    { workingDir: 'C:\\review', reviewReadPaths: ['\\\\server\\share\\artifact.md'] },
+    { workingDir: 'C:\\review', reviewReadPaths: ['file://server/share/artifact.md'] },
+    { workingDir: 'C:\\review', reviewReadPaths: ['  \\\\server\\share\\artifact.md  '] },
+    { workingDir: '\\\\?\\C:\\review', reviewReadPaths: [] },
+    { workingDir: 'C:\\review', reviewReadPaths: ['artifact.md:stream'] },
+  ])('rejects unreadable Windows Review scopes before filesystem access ($workingDir, $reviewReadPaths)', async ({ workingDir, reviewReadPaths }) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.156.0' });
+    const realpath = vi.spyOn(fs, 'realpath');
+    await expect(agent.startSession({
+      sessionId: 'review-unsupported-path', model: 'gpt-5.5', workingDir, reviewReadPaths, reviewMode: true,
+    })).rejects.toThrow('requires local drive paths');
+    expect(realpath).not.toHaveBeenCalled();
+    expect(host.request).not.toHaveBeenCalled();
+    realpath.mockRestore();
   });
 
   it('keeps Bot identity and MCP config while honoring the selected task permission mode', async () => {
@@ -1973,7 +2139,7 @@ describe('CodexAgent permissions', () => {
         }
         return undefined;
       },
-      { userAgent: 'mock-codex/0.145.0' },
+      { userAgent: 'mock-codex/0.156.0' },
     );
 
     await expect(
@@ -10028,6 +10194,184 @@ describe('CodexAgent MCP thread context hooks', () => {
     await resumeHandle.close();
   });
 
+  it('cold-resumes the same Codex thread when its configured scheduler MCP is missing', async () => {
+    const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const agent = new CodexAgent(createDeps({ systemPrompt: 'HOST PRODUCT PROMPT' }));
+    let resumeCount = 0;
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.ThreadResume) {
+        resumeCount++;
+        return { thread: { id: threadId }, model: 'gpt-5.4', modelProvider: 'openai' };
+      }
+      if (method === Method.McpServerStatusList) {
+        expect(params).toMatchObject({ threadId, detail: 'toolsAndAuthOnly' });
+        return {
+          data: resumeCount > 1 ? [{ name: 'cindy_scheduler', tools: { list_tools: {}, call_tool: {} } }] : [],
+          nextCursor: null,
+        };
+      }
+      if (method === Method.TurnStart) return { turn: { id: 'scheduler-turn' } };
+      return undefined;
+    }, {
+      buildSessionMcpConfig: () => ({ 'mcp_servers.cindy_scheduler.url': 'http://127.0.0.1:47100/mcp/cindy_scheduler' }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-scheduler-recovery', resumeSessionId: threadId,
+      model: 'gpt-5.4', workingDir: '/repo', userPrompt: 'USER PROMPT',
+    });
+    const originalSubscription = host.subscribeThread.mock.results[0]!.value;
+    expect(originalSubscription.release).toHaveBeenCalledOnce();
+    expect(host.subscribeThread).toHaveBeenCalledTimes(2);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
+    const coldResume = host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)[1]![1] as {
+      threadId: string; config: Record<string, unknown>; developerInstructions?: string;
+    };
+    expect(coldResume).toMatchObject({ threadId, config: { 'mcp_servers.cindy_scheduler.url': 'http://127.0.0.1:47100/mcp/cindy_scheduler' } });
+    expect(coldResume.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(coldResume.developerInstructions).toContain('USER PROMPT');
+    const checksBeforeSend = host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList).length;
+    await handle.send({ type: 'user', content: 'Create the heartbeat.' });
+    expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList)).toHaveLength(checksBeforeSend);
+    expect(host.request.mock.calls.map(([method]) => method).lastIndexOf(Method.McpServerStatusList))
+      .toBeLessThan(host.request.mock.calls.findIndex(([method]) => method === Method.TurnStart));
+    await handle.close();
+  });
+
+  it('leaves a resumed Codex thread intact when its scheduler MCP is available', async () => {
+    const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.ThreadResume) {
+        return { thread: { id: threadId }, model: 'gpt-5.4', modelProvider: 'openai' };
+      }
+      if (method === Method.McpServerStatusList) {
+        expect(params).toMatchObject({ threadId });
+        return { data: [{ name: 'cindy_scheduler', tools: { list_tools: {}, call_tool: {} } }], nextCursor: null };
+      }
+      if (method === Method.TurnStart) return { turn: { id: 'available-scheduler-turn' } };
+      return undefined;
+    }, {
+      buildSessionMcpConfig: () => ({ 'mcp_servers.cindy_scheduler.url': 'http://127.0.0.1:47100/mcp/cindy_scheduler' }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-scheduler-available', resumeSessionId: threadId,
+      model: 'gpt-5.4', workingDir: '/repo',
+    });
+    const checksBeforeSend = host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList).length;
+    await handle.send({ type: 'user', content: 'Continue.' });
+    expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList)).toHaveLength(checksBeforeSend);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    expect(host.subscribeThread).toHaveBeenCalledOnce();
+    await handle.close();
+  });
+
+  it('waits for scheduler tools to appear after cold resume before returning the handle', async () => {
+    const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const agent = new CodexAgent(createDeps());
+    let resumeCount = 0;
+    let checksAfterColdResume = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) {
+        resumeCount++;
+        return { thread: { id: threadId }, model: 'gpt-5.4', modelProvider: 'openai' };
+      }
+      if (method === Method.McpServerStatusList) {
+        if (resumeCount > 1 && ++checksAfterColdResume >= 3) {
+          return { data: [{ name: 'cindy_scheduler', tools: { list_tools: {}, call_tool: {} } }], nextCursor: null };
+        }
+        return { data: [], nextCursor: null };
+      }
+      return undefined;
+    }, {
+      buildSessionMcpConfig: () => ({ 'mcp_servers.cindy_scheduler.url': 'http://127.0.0.1:47100/mcp/cindy_scheduler' }),
+    });
+    const handle = await agent.startSession({ sessionId: 'scheduler-startup', resumeSessionId: threadId,
+      model: 'gpt-5.4', workingDir: '/repo' });
+    expect(resumeCount).toBe(2);
+    expect(checksAfterColdResume).toBe(3);
+    expect(host.subscribeThread).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
+
+  it('rechecks scheduler MCP on the next task resume after a transient status error', async () => {
+    const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const agent = new CodexAgent(createDeps());
+    let checks = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) return { thread: { id: threadId }, model: 'gpt-5.4', modelProvider: 'openai' };
+      if (method === Method.McpServerStatusList) {
+        if (++checks === 1) throw new Error('temporary status failure');
+        return { data: [{ name: 'cindy_scheduler', tools: { list_tools: {}, call_tool: {} } }], nextCursor: null };
+      }
+      return undefined;
+    }, {
+      buildSessionMcpConfig: () => ({ 'mcp_servers.cindy_scheduler.url': 'http://127.0.0.1:47100/mcp/cindy_scheduler' }),
+    });
+    const first = await agent.startSession({ sessionId: 'scheduler-retry', resumeSessionId: threadId,
+      model: 'gpt-5.4', workingDir: '/repo' });
+    expect(checks).toBe(1);
+    await first.close();
+    const second = await agent.startSession({ sessionId: 'scheduler-retry', resumeSessionId: threadId,
+      model: 'gpt-5.4', workingDir: '/repo' });
+    expect(checks).toBe(2);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
+    await second.close();
+  });
+
+  it('bounds scheduler MCP status pagination when Codex repeats a cursor', async () => {
+    const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) return { thread: { id: threadId }, model: 'gpt-5.4', modelProvider: 'openai' };
+      if (method === Method.McpServerStatusList) return { data: [], nextCursor: 'repeated' };
+      return undefined;
+    }, {
+      buildSessionMcpConfig: () => ({ 'mcp_servers.cindy_scheduler.url': 'http://127.0.0.1:47100/mcp/cindy_scheduler' }),
+    });
+    const handle = await agent.startSession({ sessionId: 'scheduler-cursor', resumeSessionId: threadId,
+      model: 'gpt-5.4', workingDir: '/repo' });
+    expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList)).toHaveLength(2);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('does not recover a scheduler MCP explicitly disabled for the task', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'disabled-scheduler-turn' } };
+      return undefined;
+    }, {
+      buildSessionMcpConfig: () => ({
+        'mcp_servers.cindy_scheduler.url': 'http://127.0.0.1:47100/mcp/cindy_scheduler',
+        'mcp_servers.cindy_scheduler.enabled': false,
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-scheduler-disabled', model: 'gpt-5.4', workingDir: '/repo',
+    });
+    await handle.send({ type: 'user', content: 'Continue.' });
+    expect(host.request.mock.calls.some(([method]) => method === Method.McpServerStatusList)).toBe(false);
+    expect(host.request.mock.calls.some(([method]) => method === Method.ThreadResume)).toBe(false);
+    await handle.close();
+  });
+
+  it('waits for a saved rollout before checking a new thread scheduler MCP', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'new-thread-turn' } };
+      return undefined;
+    }, {
+      buildSessionMcpConfig: () => ({ 'mcp_servers.cindy_scheduler.url': 'http://127.0.0.1:47100/mcp/cindy_scheduler' }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-scheduler-new-thread', model: 'gpt-5.4', workingDir: '/repo',
+    });
+    await handle.send({ type: 'user', content: 'First turn.' });
+    expect(host.request.mock.calls.some(([method]) => method === Method.McpServerStatusList)).toBe(false);
+    expect(host.request.mock.calls.some(([method]) => method === Method.ThreadResume)).toBe(false);
+    await handle.close();
+  });
+
   it('unsubscribes the app-server thread when closing a local session without stopping the shared host', async () => {
     const agent = new CodexAgent(createDeps());
     const handle = await agent.startSession({
@@ -10188,10 +10532,11 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     const failure = { message: 'unexpected status 502 Bad Gateway', codexErrorInfo: 'other' as const };
     const nativeId = '0199ae4e-d6b0-7755-a755-66754cd7a847';
-    function setup(savedProvider = 'cindy_codex', resolveModelContextLimit = () => 1_000_000) {
+    function setup(savedProvider = 'cindy_codex', resolveModelContextLimit = () => 1_000_000, reviewMode = false) {
       const agent = new CodexAgent(createDeps({}, { resolveModelContextLimit }));
       let turns = 0;
       const host = installFakeHost(agent, (method, raw) => {
+        if (method === Method.ExperimentalFeatureEnablementSet) return {};
         const params = raw as { threadId?: string; modelProvider?: string };
         if (method === Method.TurnStart) return { turn: { id: `turn-${++turns}` } };
         if (method === Method.ThreadFork) return { thread: { id: 'fork-thread-id' }, model: 'codex/gpt-6-astra', modelProvider: params.modelProvider };
@@ -10201,7 +10546,8 @@ describe('CodexAgent MCP thread context hooks', () => {
         if (method === 'thread/read') return { thread: { id: nativeId, modelProvider: savedProvider } };
         if (method === Method.TurnInterrupt) return {};
         return undefined;
-      }, { codexProxyActive: true, cindyRemoteCompactionProviderId: 'cindy_codex', localCompactionProviderId: 'cindy_summary' });
+      }, { codexProxyActive: true, cindyRemoteCompactionProviderId: 'cindy_codex', localCompactionProviderId: 'cindy_summary',
+        ...(reviewMode ? { userAgent: 'mock-codex/0.156.0' } : {}) });
       return { agent, host };
     }
     async function start(savedProvider?: string) {
@@ -10244,6 +10590,40 @@ describe('CodexAgent MCP thread context hooks', () => {
       await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
       expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(2);
       await handle.close();
+    });
+    it.skipIf(process.platform !== 'win32')('inherits Review read tools on a history fork without sending start-only parameters', async () => {
+      const workingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-fork-'));
+      await fs.writeFile(path.join(workingDir, 'evidence.md'), 'FORK_REVIEW_EVIDENCE');
+      const { agent, host } = setup('cindy_codex', () => 1_000_000, true);
+      try {
+        const handle = await agent.startSession({ sessionId: 'review-summary-task', providerId: 'xd',
+          model: 'codex/gpt-6-astra', workingDir, reviewMode: true });
+        const started = host.request.mock.calls.find(([m]) => m === Method.ThreadStart)![1] as Record<string, unknown>;
+        expect(started.dynamicTools).toEqual(expect.arrayContaining([
+          expect.objectContaining({ name: 'review_read_file' }),
+          expect.objectContaining({ name: 'review_list_directory' }),
+          expect.objectContaining({ name: 'review_view_image' }),
+        ]));
+        await handle.send({ type: 'user', content: 'Review the existing evidence.' });
+        compact(host); fail(host);
+        await waitForExpectation(() => expect(handle.getCurrentTurnId?.()).toBe('turn-2'));
+        const forked = host.request.mock.calls.find(([m]) => m === Method.ThreadFork)![1] as Record<string, unknown>;
+        expect(forked).not.toHaveProperty('dynamicTools');
+        expect(forked).toMatchObject({ threadId: nativeId, permissions: started.permissions,
+          config: expect.objectContaining({ 'features.shell_tool': false, 'features.view_image': false }) });
+        const read = (target: string) => host.getThreadHandlers()!.dynamicToolCall!({
+          threadId: 'fork-thread-id', turnId: 'turn-2', callId: 'fork-read', namespace: null,
+          tool: 'review_read_file', arguments: { path: target },
+        }, { requestId: 'fork-read-request' });
+        const result = await read('evidence.md');
+        expect(result.success).toBe(true);
+        expect(JSON.stringify(result)).toContain('FORK_REVIEW_EVIDENCE');
+        expect((await read('../outside.md')).success).toBe(false);
+        await handle.close();
+      } finally {
+        await agent.dispose();
+        await fs.rm(workingDir, { recursive: true, force: true });
+      }
     });
     it('switches after remote compact exhausts 429 retries, only when the native turn finishes', async () => {
       const { host, handle } = await start();
@@ -15462,6 +15842,47 @@ describe('CodexAgent MCP thread context hooks', () => {
       _meta: null,
     });
     expect(resolver).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
+
+  it.each(['companion_connections', 'companion_import'])('does not persist an imported bridge approval across tools or operations: %s', async (serverName) => {
+    const policy = vi.fn(() => 'prompt-each-time' as const);
+    const agent = new CodexAgent(createDeps({}, { getMcpToolApprovalPolicy: policy }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-imported-mcp-approval', model: 'gpt-5.4',
+      workingDir: '/repo', permissionMode: 'ask',
+    });
+    const resolver = vi.fn(async (req: InteractionRequest) => {
+      expect(req).toMatchObject({ kind: 'permission', toolName: `mcp:${serverName}` });
+      if (req.kind !== 'permission') throw new Error('expected permission request');
+      expect(req.suggestions).toBeUndefined();
+      const allowed = req.input.toolName === 'c_first_read_data'
+        || (req.input.toolParams as Record<string, unknown>)?.operation === 'sources';
+      return {
+        kind: 'permission' as const, behavior: allowed ? 'allow' as const : 'deny' as const,
+        // A stale/custom UI must not give Codex a bridge-wide session grant.
+        ...(allowed ? { permissionUpdates: [{ destination: 'session' }] } : {}),
+      };
+    });
+    handle.setInteractionResolver(resolver);
+    const handler = host.getThreadHandlers()?.mcpServerElicitation;
+    if (!handler) throw new Error('expected mcpServerElicitation handler');
+    const calls = serverName === 'companion_import'
+      ? ['sources', 'start', 'start'].map((operation, i) => ({ toolName: 'import_agent', toolParams: { operation, selection: { requestId: `request-${i}`, takeover: true } } }))
+      : ['c_first_read_data', 'c_first_delete_data', 'c_other_send_message'].map(toolName => ({ toolName, toolParams: { id: 'item-1' } }));
+    for (const [index, { toolName, toolParams }] of calls.entries()) {
+      expect(await handler({
+        threadId: 'start-thread-id', turnId: 'turn-1', serverName,
+        mode: 'form', message: 'Allow tool call', requestedSchema: {},
+        _meta: { codex_approval_kind: 'mcp_tool_call', persist: ['session'],
+          tool_name: toolName, tool_params: toolParams },
+      })).toEqual({
+        action: index === 0 ? 'accept' : 'decline', content: null, _meta: null,
+      });
+      expect(policy).toHaveBeenLastCalledWith({ serverName, toolName, toolParams });
+    }
+    expect(resolver).toHaveBeenCalledTimes(3);
     await handle.close();
   });
 

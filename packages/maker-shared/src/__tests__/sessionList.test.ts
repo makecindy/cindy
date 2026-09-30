@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 import {
+  compareSessionListStrings,
   buildRemoteSessionListContext,
   buildRemoteSessionCardPreview,
   buildRemoteSessionSections,
@@ -18,6 +19,14 @@ import {
   toRemoteSessionListItem,
   formatRemoteSessionSidebarTime,
 } from '../sessionList.js';
+
+it('preserves default locale ordering for dates, paths, IDs and multilingual titles', () => {
+  const values = ['', '2026-01-01T00:00:00Z', '2026-09-30T10:00:00.000Z',
+    '/test/History-1', '/test/History-10', 'a', 'A', 'é', 'e', '任务', 'タスク'];
+  for (const left of values) for (const right of values) {
+    expect(Math.sign(compareSessionListStrings(left, right))).toBe(Math.sign(left.localeCompare(right)));
+  }
+});
 import type { PresentationLocalizer } from '../presentationLocalization.js';
 import type { RemoteSchedule, RemoteScheduleRun } from '../scheduleTypes.js';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '../syntheticTrigger.js';

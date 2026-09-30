@@ -2065,6 +2065,8 @@ describe('FORGE_GUIDE', () => {
       'gh-cli',
       'gh auth token',
       'hostAvailable',
+      'hostManagedSetup',
+      '字段缺失或为 false 时保留旧版设置页的连接提示',
       // 多连接(connections,2026-07-14):声明形态 / 设置页协议 / 主机受信确认。
       'connections',
       '/connections',
