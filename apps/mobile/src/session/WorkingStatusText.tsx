@@ -6,6 +6,8 @@ import { motionDuration, motionEasing } from '@/theme';
 
 /** Product cadence shared with Desktop `WorkingStatusText`. */
 export const WORKING_STATUS_MIN_INTERVAL_MS = 1000;
+/** While fading, copy sits 3pt low: the old copy sinks out and the new one rises into place. */
+const COPY_SHIFT = 3;
 
 /** Mount only for an active lifecycle (key it by turn). Unmounting cancels all pending copy. */
 export function WorkingStatusText({ text, style }: { text: string; style?: StyleProp<TextStyle> }) {
@@ -13,6 +15,7 @@ export function WorkingStatusText({ text, style }: { text: string; style?: Style
   const animate = useReduceMotionEnabled() === false;
   const [displayed, setDisplayed] = useState(text);
   const opacity = useRef(new Animated.Value(1)).current;
+  const translateY = useRef(opacity.interpolate({ inputRange: [0, 1], outputRange: [COPY_SHIFT, 0] })).current;
   const state = useRef({
     displayed: text,
     latest: text,
@@ -88,7 +91,7 @@ export function WorkingStatusText({ text, style }: { text: string; style?: Style
   }, [opacity]);
 
   return (
-    <Animated.View style={{ opacity, flexShrink: 1, minWidth: 0 }}>
+    <Animated.View style={{ opacity, transform: [{ translateY }], flexShrink: 1, minWidth: 0 }}>
       <Text numberOfLines={1} style={style}>{displayed}</Text>
     </Animated.View>
   );

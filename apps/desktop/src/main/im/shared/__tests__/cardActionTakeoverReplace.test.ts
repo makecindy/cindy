@@ -23,6 +23,10 @@ const mocks = vi.hoisted(() => ({
   resolveLenientSessionRoute: vi.fn(),
   applyRuntimeSetModelChange:
     vi.fn<(input: unknown) => Promise<{ status: 'applied' | 'deferred' }>>(),
+  applyPiImModelSelectionUnderLock: vi.fn(async (): Promise<{
+    status: 'applied' | 'deferred'; generation?: number; effectiveProviderId?: string | null;
+  }> => ({ status: 'applied' })),
+  cancelPendingSessionRuntimeMutation: vi.fn(() => true),
   actualApplyRuntimeSetModelChange: null as null | ((input: never) => Promise<unknown>),
   registerPendingCredentialSwitchForSession: vi.fn(),
   clearPendingCredentialSwitchForSession: vi.fn(),
@@ -100,6 +104,7 @@ vi.mock('../../../maker-ipc/runtimeSetModel', async (importOriginal) => {
   return { applyRuntimeSetModelChange: mocks.applyRuntimeSetModelChange };
 });
 vi.mock('../../../maker-ipc/register', () => ({
+  applyPiImModelSelectionUnderLock: mocks.applyPiImModelSelectionUnderLock,
   cancelPendingAgentSwitchForSession: mocks.cancelPendingAgentSwitchForSession,
   isSessionInTurn: mocks.isSessionInTurn,
   registerPendingCredentialSwitchForSession: mocks.registerPendingCredentialSwitchForSession,
@@ -107,6 +112,9 @@ vi.mock('../../../maker-ipc/register', () => ({
   wakeSessionInputAfterCredentialSwitch: mocks.wakeSessionInputAfterCredentialSwitch,
   getPendingCredentialSwitchTarget: mocks.getPendingCredentialSwitchTarget,
   withSendToSessionLock: mocks.withSendToSessionLock,
+}));
+vi.mock('../../../maker-ipc/sessionRuntimeControl', () => ({
+  cancelPendingSessionRuntimeMutation: mocks.cancelPendingSessionRuntimeMutation,
 }));
 vi.mock('../pendingInteractions', () => ({
   resolvePending: vi.fn(() => false),
@@ -224,6 +232,7 @@ beforeEach(() => {
   mocks.readPermissionMode.mockResolvedValue('auto');
   mocks.updatePermissionMode.mockResolvedValue(undefined);
   mocks.applyRuntimeSetModelChange.mockResolvedValue({ status: 'applied' });
+  mocks.applyPiImModelSelectionUnderLock.mockResolvedValue({ status: 'applied' });
   mocks.getMaker.mockReturnValue({
     createSession: vi.fn(async () => ({ id: 'sess-new' })),
     closeSession: mocks.closeSession,
@@ -630,6 +639,60 @@ describe('model:pick 持久化失败', () => {
     expect(mocks.updateModelEffort).toHaveBeenCalled();
     expect(mocks.applyRuntimeSetModelChange).toHaveBeenCalled();
     expect(mocks.cancelPendingAgentSwitchForSession).toHaveBeenCalledWith('sess-target');
+  });
+
+  it('routes a live Pi model card through the window-safe host selection under the existing lock', async () => {
+    const live = { agentKind: 'pi', model: 'old-model', setEffort: vi.fn(async () => {}) };
+    (turnRunner.getMakerSessionById as ReturnType<typeof vi.fn>).mockReturnValue(live);
+    mocks.readModelRouteSnapshot.mockResolvedValue({ model: 'old-model', effort: 'medium', providerId: 'old-source' });
+    const im = makeIm();
+    await pressModelPick(im, 'new-source');
+    expect(mocks.updateModelEffort).toHaveBeenCalled();
+    expect(mocks.applyRuntimeSetModelChange).not.toHaveBeenCalled();
+    expect(mocks.applyPiImModelSelectionUnderLock).toHaveBeenCalledExactlyOnceWith(
+      'sess-target', 'claude-opus-4-7', 'new-source', expect.objectContaining({ model: 'old-model', providerId: 'old-source' }),
+    );
+    expect(mocks.applyRuntimeSetModelChange).not.toHaveBeenCalled();
+    expect(mocks.withSendToSessionLock).toHaveBeenCalledWith('sess-target', expect.any(Function));
+    expect(live.setEffort).toHaveBeenCalledWith('high');
+  });
+
+  it('routes a cold Pi model card through the same host selection with its persisted source route', async () => {
+    const maker = mocks.getMaker();
+    mocks.getMaker.mockReturnValue({ ...maker, getSessionMeta: vi.fn(async () => ({ agentKind: 'pi' })) });
+    mocks.readModelRouteSnapshot.mockResolvedValue({ model: 'old-model', effort: 'medium', providerId: 'old-source' });
+    const im = makeIm();
+    await pressModelPick(im, 'new-source');
+    expect(mocks.updateModelEffort).toHaveBeenCalled();
+    expect(mocks.applyPiImModelSelectionUnderLock).toHaveBeenCalledExactlyOnceWith(
+      'sess-target', 'claude-opus-4-7', 'new-source', expect.objectContaining({ model: 'old-model', providerId: 'old-source' }),
+    );
+    expect(mocks.applyRuntimeSetModelChange).not.toHaveBeenCalled();
+  });
+
+  it('persists the Pi host-selected source when a card target was rerouted', async () => {
+    (turnRunner.getMakerSessionById as ReturnType<typeof vi.fn>).mockReturnValue({ agentKind: 'pi', model: 'old-model' });
+    mocks.readModelRouteSnapshot.mockResolvedValue({ model: 'old-model', effort: 'medium', providerId: 'old-source' });
+    mocks.applyPiImModelSelectionUnderLock.mockResolvedValueOnce({
+      status: 'applied', effectiveProviderId: 'enabled-source',
+    });
+    await pressModelPick(makeIm(), 'disabled-source');
+    expect(mocks.updateModelEffort).toHaveBeenCalledWith(
+      'sess-target', 'claude-opus-4-7', 'high', 'enabled-source',
+    );
+  });
+
+  it('cancels the exact deferred Pi choice if the IM card cannot persist it', async () => {
+    (turnRunner.getMakerSessionById as ReturnType<typeof vi.fn>).mockReturnValue({ agentKind: 'pi', model: 'old-model' });
+    mocks.readModelRouteSnapshot.mockResolvedValue({ model: 'old-model', effort: 'medium', providerId: 'old-source' });
+    mocks.applyPiImModelSelectionUnderLock.mockResolvedValueOnce({
+      status: 'deferred', generation: 7, effectiveProviderId: 'enabled-source',
+    });
+    mocks.updateModelEffort.mockRejectedValueOnce(new Error('write failed'));
+    await pressModelPick(makeIm(), 'disabled-source');
+    expect(mocks.cancelPendingSessionRuntimeMutation).toHaveBeenCalledWith('sess-target', 7);
+    expect(mocks.applyPiImModelSelectionUnderLock).toHaveBeenCalledTimes(1);
+    expect(mocks.markManualOverride).not.toHaveBeenCalled();
   });
 
   it('在持久化和运行态切换前统一归一化 providerId', async () => {

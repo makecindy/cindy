@@ -9,6 +9,7 @@
 import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { Check } from 'lucide-react-native';
 
 import type { MobileChoiceOption } from '@/session/agentCapabilities';
@@ -80,7 +81,7 @@ export function MobilePermissionPickerList({
               style={({ pressed }) => [
                 styles.optionRow,
                 rowStyle,
-                pressed && { opacity: 0.65 },
+                pressed && mobileInteractionStyles.pressed,
               ]}
               testID={testID}
             >

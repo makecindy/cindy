@@ -116,7 +116,7 @@ export function SheetSurface({
               style={styles.headerButton}
               testID={testID ? `${testID}.back` : undefined}
             >
-              <ChevronLeft color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+              <ChevronLeft color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
             </Pressable>
           ) : (
             <View style={styles.headerSpacer} />

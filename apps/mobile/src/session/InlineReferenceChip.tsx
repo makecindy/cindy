@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { fontWeight, lineHeight, radius, spacing, typeScale, useThemedStyles, type ThemeColors } from '@/theme';
 
 /** Shared compact pill shell for composer-adjacent and sent-message references. */
@@ -61,5 +62,5 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontWeight: fontWeight.regular,
     lineHeight: lineHeight.bodySmall,
   },
-  pressed: { opacity: 0.7 },
+  pressed: mobileInteractionStyles.pressed,
 });

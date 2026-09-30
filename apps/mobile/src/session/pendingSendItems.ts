@@ -71,6 +71,8 @@ export interface MobilePendingSendItem {
   attachmentCount: number;
   uploadedCount: number;
   errorText: string | null;
+  /** Local outbox may defer cancellation while the first-message creation task owns recovery. */
+  canCancel?: boolean;
   /** 可否轻点展开操作行:只有还在队列里的条目能取消 / 编辑 / 插队。 */
   actions: MobilePendingSendActions | null;
   /** 展开后显示的提示(插队限制等)。 */
@@ -95,11 +97,20 @@ export function buildMobileMessageListExtraData(
 
 /** 待发送气泡是否处于展开态；生产渲染与状态转换测试共用同一判据。 */
 export function isPendingSendItemSelected(
-  item: Pick<MobilePendingSendItem, 'actions' | 'clientId' | 'phase'>,
+  item: Pick<MobilePendingSendItem, 'actions' | 'canCancel' | 'clientId' | 'phase' | 'queueIndex'>,
   selectedClientId: string | null,
 ): boolean {
-  const interactive = item.actions !== null || item.phase === 'failed';
-  return interactive && selectedClientId === item.clientId;
+  return isPendingSendItemInteractive(item) && selectedClientId === item.clientId;
+}
+
+/** Local outbox rows can be cancelled before desktop accepts them; settled rows cannot. */
+export function isPendingSendItemInteractive(
+  item: Pick<MobilePendingSendItem, 'actions' | 'canCancel' | 'phase' | 'queueIndex'>,
+): boolean {
+  return item.actions !== null
+    || (item.canCancel !== false && (item.phase === 'uploading'
+      || item.phase === 'failed'
+      || (item.phase === 'sending' && item.queueIndex === null)));
 }
 
 export function pendingSendItemKey(clientId: string): string {
@@ -313,6 +324,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       attachmentCount: item.attachmentCount,
       uploadedCount: item.uploadedCount,
       errorText: item.errorText,
+      canCancel: item.canCancel,
       actions: null,
       hint: null,
     });

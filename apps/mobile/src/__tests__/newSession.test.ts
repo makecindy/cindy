@@ -1330,7 +1330,7 @@ describe('new session model', () => {
       agentLabel: 'Codex',
       canCreate: true,
       runtimeLabel: 'Codex · gpt-5.4 · medium · Fast',
-      scopeLabel: '电脑端分配对话目录',
+      scopeLabel: '由电脑自动分配工作目录',
       workspaceLabel: '对话',
     });
   });

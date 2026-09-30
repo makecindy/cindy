@@ -158,6 +158,16 @@ pnpm --filter mobile test:smoke
 
 ## 原生配置与 runtime fingerprint(冷更边界)
 
+### 伙伴通信通知
+
+`plugins/with-communication-notifications.js` 为当前 bundle identity 生成
+`CindyNotificationService` 扩展，启用 Communication Notifications，并向 EAS 登记扩展签名。
+扩展仅消费伙伴回复的可选 `sender` 数据；保留正文、深链和系统隐私设置，任何处理失败或
+系统超时都回退原通知，且只交付一次。头像不发起网络请求、不读取用户账号存储。
+Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生新包和重新生成的签名配置；
+服务端须先支持可选发送者透传和 `aps.mutable-content = 1`，未升级双方保持普通推送。
+这不是 OTA 可独立交付的功能，仍受下述冷更审核门约束。
+
 Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致**的装机上生效,
 指纹一旦变化就必须**冷更出包**(新商店包 / 自建重装),存量装机拿不到该次热更。
 

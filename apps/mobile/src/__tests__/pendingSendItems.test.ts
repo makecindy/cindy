@@ -345,6 +345,12 @@ describe('buildPendingSendItems', () => {
     expect(items[2].actions).toBeNull();
   });
 
+  it('keeps a first-message creation row non-interactive until creation recovery is available', () => {
+    const [item] = build({ outbox: [outboxItem('first', { canCancel: false })] });
+    expect(item.canCancel).toBe(false);
+    expect(isPendingSendItemSelected(item, 'first')).toBe(false);
+  });
+
   it('never exposes queue actions for items that left the queue', () => {
     const [settling] = build({ settling: [queued('gone')] });
     expect(settling.actions).toBeNull();

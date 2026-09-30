@@ -96,6 +96,22 @@ function renderSettings(settingsHeight?: number, measuredHeight?: number) {
 }
 
 describe('GhostSettingsWebview layout ownership', () => {
+  it('keeps account status visible and the plugin form collapsed without a duplicate title', () => {
+    const { ghost, view } = renderSettings();
+    view.rerender(
+      <GhostSettingsWebview
+        ghost={ghost}
+        title="Duplicate title"
+        account={<span>Connected account</span>}
+      />,
+    );
+    expect(view.queryByText('Duplicate title')).toBeNull();
+    expect(view.getByText('Connected account')).toBeTruthy();
+    const disclosure = view.container.querySelector('details');
+    expect(disclosure).toBeTruthy();
+    expect(disclosure?.open).toBe(false);
+    expect(disclosure?.querySelector('webview')).toBeTruthy();
+  });
   it('does not inject responsive width rules into fixed-height guests', async () => {
     const { executeJavaScript, host } = renderSettings(360);
 
@@ -104,6 +120,24 @@ describe('GhostSettingsWebview layout ownership', () => {
       executeJavaScript.mock.calls.some(([script]) => String(script).includes('__xdt_settings_w')),
     ).toBe(false);
     expect(host.classList.contains('overflow-hidden')).toBe(false);
+  });
+
+  it('keeps exactly one account row across owner changes and repeated refreshes', () => {
+    const { ghost, view } = renderSettings();
+    for (const owner of ['owner-a', 'owner-b', 'owner-a', 'owner-c']) {
+      authState.dataOwnerId = owner;
+      for (let reloadKey = 0; reloadKey < 3; reloadKey++) {
+        view.rerender(
+          <GhostSettingsWebview
+            ghost={ghost}
+            reloadKey={reloadKey}
+            account={<span>Connected account</span>}
+          />,
+        );
+        expect(view.getAllByText('Connected account')).toHaveLength(1);
+        expect(view.container.querySelectorAll('details')).toHaveLength(1);
+      }
+    }
   });
 
   it('keeps responsive containment for auto-height guests', async () => {
@@ -149,7 +183,10 @@ describe('GhostSettingsWebview layout ownership', () => {
   });
 
   it.each([
-    ['version', false], ['version', true], ['id', false], ['id', true],
+    ['version', false],
+    ['version', true],
+    ['id', false],
+    ['id', true],
   ] as const)('resets guest state when %s changes in place (cached: %s)', async (field, cached) => {
     const { ghost, host, view, webview } = renderSettings(undefined, 432);
     await waitFor(() => expect(host.style.height).toBe('432px'));
@@ -166,8 +203,9 @@ describe('GhostSettingsWebview layout ownership', () => {
     expect(webview.isConnected).toBe(false);
     expect(view.container.querySelector('webview')).not.toBe(webview);
     // 新 guest 尚未 dom-ready，首帧也不能复用旧组件的高度。
-    expect(view.container.querySelector<HTMLElement>('[data-ghost-webview]')?.style.height)
-      .toBe(cached ? '240px' : '160px');
+    expect(view.container.querySelector<HTMLElement>('[data-ghost-webview]')?.style.height).toBe(
+      cached ? '240px' : '160px',
+    );
   });
 
   it('reopens a fresh guest with height-only spacing, without replaying or capturing old UI', async () => {

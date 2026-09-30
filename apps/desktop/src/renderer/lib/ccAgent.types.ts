@@ -82,6 +82,7 @@ export type StoredMessageOrigin =
  * 只接受 SDK 自己分配的 uuid，所以这是 fork 的唯一主键。
  */
 export interface CcMeta {
+  botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
   /** Provider text phase, retained to exclude commentary from notification previews. */
   assistantPhase?: string;
   uuid?: string;
@@ -106,6 +107,8 @@ export interface CcMeta {
   // result / host turn 边界
   /** Host 在 done 边界写到该 SDK turn 最后一条 assistant 上的持久化收尾标记。 */
   turnCompleted?: boolean;
+  /** Frozen task results bound by the host to this successful reply. */
+  botTaskResults?: import('../../shared/botCollaboration').BotCollaborationMeta[];
   numTurns?: number;
   durationMs?: number;
   durationApiMs?: number;

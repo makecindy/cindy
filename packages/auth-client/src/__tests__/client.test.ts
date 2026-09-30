@@ -33,6 +33,22 @@ function client(fetch: AuthFetch = vi.fn(async () => response(200, {}))) {
 }
 
 describe("CindyAuthClient", () => {
+  it("propagates SMS request-code rate limits instead of reporting a successful send", async () => {
+    const fetch = vi.fn<AuthFetch>(async () =>
+      response(429, {
+        error: { code: "RATE_LIMITED", message: "Too many requests" },
+      }),
+    );
+    await expect(client(fetch).requestCode("phone", "13800138000")).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+      statusCode: 429,
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      "https://auth.example.com/api/auth/phone/request-code",
+    );
+  });
+
   it("validates provider region and normalizes the base URL", async () => {
     const fetch = vi.fn(async () =>
       response(200, {

@@ -19,6 +19,9 @@ import { clearCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
 import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
 import { isCodexAccountProvider, codexAccountHome, setCodexAccountRetirement } from './codex-account-auth.js';
 import { CodexThreadLocations } from './codex-thread-locations.js';
+import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
+import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
+import { setSessionArchiveSyncRequester } from '../localDb/sessionArchiveSync.js';
 import { getActiveAppSession, activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { remoteCodexProvider } from './ssh-codex-models.js';
 import { getActiveAuthRealm } from '../authManager.js';
@@ -341,7 +344,7 @@ import {
 } from '../process-monitor/codex-process-registry.js';
 import { getOutboundPathSnapshotFor } from './outbound-proxy-resolver.js';
 import { createDesktopMakerMemoryManager, attachAgentsToMakerMemory } from './maker-memory-host.js';
-import { prepareExternalCodexSessionForResume } from './codex-local-sessions.js';
+import { prepareExternalCodexSessionForResume, readCodexThreadStorageForArchive } from './codex-local-sessions.js';
 import {
   rehydrateCloseSuppression,
   withRehydrateCloseSuppressed,
@@ -499,6 +502,7 @@ export function refreshProviderAccessAfterAuthChange(): void {
  * api_key 变更时 dispose 重建 app-server。getMaker() 构造后回填,resetMaker() 清空。
  */
 let _codexAgent: CodexAgent | null = null;
+let _sessionArchiveSync: ReturnType<typeof createSessionArchiveSync> | null = null;
 /**
  * Actual provider array references, shared by runtime catalogs and the lazy Codex bridge.
  * Custom MCP refresh mutates these arrays in place; resetMaker drops every reference.
@@ -1961,10 +1965,13 @@ export function getMaker(): Maker {
         const locations = new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations'));
         return locations.prepareResume(threadId, prepareExternalCodexSessionForResume);
       },
-      resolveCodexThreadStorage: async (threadId) => {
-        if (!getActiveAppSession().dataOwnerId) return;
+      resolveCodexThreadStorage: async (threadId, options) => {
+        if (!getActiveAppSession().dataOwnerId) return options?.readOnly ? readCodexThreadStorageForArchive(threadId) : undefined;
         const ownerScope = activeOwnerScopeKey();
-        const storage = await new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations')).readStorage(threadId, {
+        const locations = new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations'));
+        const storage = options?.readOnly
+          ? await locations.readStorage(threadId) ?? readCodexThreadStorageForArchive(threadId)
+          : await locations.readStorage(threadId, {
           home: getCodexHome(),
           prepare: prepareExternalCodexSessionForResume,
         });
@@ -2259,6 +2266,7 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
       },
+      resolvePiRuntimeModels: () => deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
       resolvePiRuntimeModelDescriptor: (providerId, modelId) =>
         resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId, {
           localOverrides: getLocalCatalogOverridesSnapshot(),
@@ -2838,6 +2846,27 @@ export function getMaker(): Maker {
     // 为 false —— 一次性调用会被 skipped-unauthed 白白消费掉唯一机会。授权就绪后的重试
     // 由 codex auth 事件驱动(见下方 requestCodexModelBackfill 的调用点)。
     const makerRef = _maker;
+    _sessionArchiveSync = createSessionArchiveSync({
+      capture: () => {
+        const snapshot = getCurrentDbClientSnapshot();
+        if (!snapshot) throw new Error('Archive sync database is not ready');
+        const owner = activeOwnerScopeKey();
+        return { client: snapshot.client, assertCurrent: () => {
+          if (_maker !== makerRef || _codexAgent !== codexAgent || isAppSessionBoundaryPending()
+            || activeOwnerScopeKey() !== owner || getCurrentDbClientSnapshot() !== snapshot) {
+            throw new Error('Archive sync owner changed');
+          }
+        } };
+      },
+      prepare: (rows) => prepareArchiveSessions(rows, id => makerRef.getSession(id)),
+      canUseRemote: (id) => getRemoteSshPool().get(id)?.getStatus() === 'ready',
+      sync: (input) => codexAgent.syncThreadArchiveState(input),
+      release: () => codexAgent.releaseArchiveHosts(),
+      warn: (failures) => desktopMakerLogger.warn('native archive sync deferred', { failures }),
+    });
+    const archiveSync = _sessionArchiveSync;
+    setSessionArchiveSyncRequester(() => { void archiveSync.request(); });
+    void archiveSync.request();
     _codexModelBackfill = createCodexModelBackfillCoordinator({
       hasCodexLogin: () => desktopCodexAuthAdapter.hasCodexOAuthLogin(),
       hasCodexModels: () =>
@@ -2973,6 +3002,9 @@ export async function preflightBotRuntimeResources(
  * 重置 Maker 单例（切账号 / 测试用）。
  */
 export function resetMaker(): void {
+  _sessionArchiveSync?.stop();
+  _sessionArchiveSync = null;
+  setSessionArchiveSyncRequester(null);
   cancelCodexAuthModeChange();
   setCodexAppliedCustomProviderRoutes([]);
   _maker = null;

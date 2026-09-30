@@ -18,14 +18,8 @@ vi.mock('electron', () => ({
 }));
 
 // logger 依赖 electron-log + app path, 在测试里要么 mock 要么吞日志。给个 noop logger。
-vi.mock('../logger', () => ({
-  createLogger: () => ({
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    debug: () => {},
-  }),
-}));
+const logs = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
+vi.mock('../logger', () => ({ createLogger: () => logs }));
 
 import { vi } from 'vitest';
 import {
@@ -63,6 +57,27 @@ function providerImportUrl(scheme: 'cindy' | 'xdt-maker'): string {
   };
   return `${scheme}://provider/import?v=1&data=${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`;
 }
+
+describe('shared task invitation handoff', () => {
+  it('buffers until the authenticated renderer takes it, without logging the secret', () => {
+    const invitation = 'A'.repeat(43);
+    const url = 'cindy://shared-task/join?invitation=' + invitation + '&server=https%3A%2F%2Frelay.example.test';
+    setDeepLinkMainWindow(null);
+    handleIncomingDeepLink(url, 'test');
+    expect(takePendingDeepLink()).toEqual({ type: 'shared-task-join', invitation, server: 'https://relay.example.test' });
+    expect(takePendingDeepLink()).toBeNull();
+    expect(JSON.stringify(Object.values(logs).map(log => log.mock.calls))).not.toContain(invitation);
+    const argv = ['cindy.exe', url, 'cindy://shared-task/join?invitation=invalid-secret'];
+    redactConsumedDeepLinkInArgv(argv, url);
+    expect(argv.join(' ')).not.toContain(invitation);
+    expect(argv.join(' ')).not.toContain('invalid-secret');
+  });
+  it('rejects malformed and duplicate invitation fields', () => {
+    const url = 'cindy://shared-task/join?invitation=' + 'A'.repeat(43) + '&server=https%3A%2F%2Frelay.example.test';
+    expect(parseDeepLink(url + '&invitation=' + 'B'.repeat(43))).toBeNull();
+    expect(parseDeepLink(url.replace('https%3A%2F%2Frelay.example.test', 'javascript%3Aalert(1)'))).toBeNull();
+  });
+});
 
 describe('user-initiated main-window focus', () => {
   it('activates and raises the target window before focusing on Windows', () => {

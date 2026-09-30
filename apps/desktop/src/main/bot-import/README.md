@@ -5,6 +5,13 @@ Remote Resource transport, and the `companion_import.import_agent` command.
 Desktop IPC encodes stable import errors through `throwIpcError`; the form uses
 the shared decoder to distinguish editable rejections from uncertain outcomes.
 Mobile retains the existing Remote Resource error codes and retry behavior.
+Controllers without `companion-import-chunks-v1` keep the complete legacy
+projection when its serialized UTF-8 JSON fits 1.5 MiB, leaving envelope space
+within the 2 MiB frame. Larger source lists, previews and results return the
+existing `UNSUPPORTED_CAPABILITY` error with `IMPORT_CLIENT_UPGRADE_REQUIRED`;
+no partial selection/catalog is presented. Older UI may show its generic error,
+so upgrading the controller is required for large reads. Chunk-capable clients
+and local imports keep the complete data; no import count cap is restored.
 The command has `sources`, `preview`, `start`, and `status` operations. Callers
 retain one `requestId` across reconnects and retries. Previews expose selectable
 metadata, never source paths, environment values or credential contents.
@@ -21,6 +28,12 @@ preview retains its full snapshot and normal error path. Discovery performs no w
 Retained previews are limited to one per controller, four total and 128 MiB of
 snapshot data combined. Oldest previews are evicted through the existing expired
 preview flow. Recovery reads its durable checkpoint without caching another preview.
+Preview/retry accounting and source fingerprints stream the existing item graph
+without a mapped clone or full metadata JSON string. Strings use 16 Ki-character
+chunks (preserving surrogate pairs); each 64 KiB of work yields to Main and retry/
+preview accounting rechecks the owner. Binary files are charged directly and the
+legacy byte/hash representation remains unchanged. A refreshed cache entry cannot
+replace a newer preview while waiting; over-budget reads stop during accounting.
 All command operations use the existing per-call approval policy. Discovery never
 persists a native tool/server grant that could authorize a later `start` operation.
 Auto still reviews the actual invocation; Full Access retains its normal behavior.
@@ -34,7 +47,8 @@ Mobile can select automations during import and request host-owned takeover.
 Reopening creation after dismissing import starts with the normal creation form;
 reconnecting an open import preserves its current selection and request.
 Import adds category/item selection, including
-unselecting defaults; unused skills start unselected. Both platforms use semantic
+unselecting defaults; every discovered skill starts selected. The summary has five flat
+category rows; category details use search and 20-row pages. Both platforms use semantic
 theme tokens. No new native Mobile dependencies or fingerprint inputs are added.
 Every supplied avatar uses the existing companion image validation before any
 receipt or credential checkpoint is written. An empty supplied image is invalid;
@@ -44,11 +58,40 @@ omitting it retains normal companion defaults, and a rejected request can be cor
 
 - Hermes default/profile homes and OpenClaw's selected agent workspace are read
   independently. OpenClaw's current SQLite cron store takes precedence over the
-  legacy JSON store; a database failure never substitutes a stale backup.
+  legacy JSON store; a database failure never substitutes a stale backup. The worker
+  uses the native SQLite binding selected by Main, including isolated Electron dev
+  bindings. Driver, size and database failures retain distinct safe reason codes.
+- Memory discovery includes UTF-8 text (including JSON, backups and extensionless notes) and attachments under the memory trees,
+  including hidden subdirectories. Hermes `memories/` and a user-maintained `memory/`
+  archive stay separate; OpenClaw also includes workspace `DREAMS.md`.
+  Retry metadata retains each tree's logical prefix; legacy checkpoints infer it
+  only when the original entry ID and physical memory root agree. Repaired files
+  and subtrees therefore keep distinct archive keys even for identical names.
+  Supported media originals enter the shared media ledger with a companion-owned import reference
+  and a memory document linking the managed URL. Retry reuses that reference;
+  companion deletion releases only its own refs through recoverable cleanup.
+  Empty files such as delivery/lock markers do not become attachment failures. Explicit native memory file links into the source-declared document vault retain their logical names and bounded file reads; undeclared external files and external directory links remain rejected. Retry applies the same classification to legacy checkpoints. Unsupported binary attachments remain visible failures, not silently omitted files.
 - Selected identity/user/instruction documents and memories retain their original
   text in the encrypted environment. Profile prompt fields and the native memory
   store receive copies with known selected env/MCP/auth credentials masked, while
-  ordinary text stays unchanged. Env references and original credentials remain
+  ordinary text stays unchanged. Oversized profile fields retain a UTF-8-safe source
+  prefix within the existing profile capacity; the complete documents remain in memory
+  and the encrypted archive, without synthesized system instructions. Import summaries/titles obey the storage UTF-16
+  length bounds, and document parts preserve source frontmatter and whitespace.
+  Each new part is read back before it counts as saved; failures preserve part
+  progress accumulated across all documents in a recovered directory, and safe storage
+  reasons. Existing edited parts are not overwritten. New exact-body parts compare
+  their complete body on retry, including whitespace; `bodyLength` remains present
+  through storage reads and subsequent editor/tool writes. A whitespace-only edit
+  therefore reports `MEMORY_CHANGED` and keeps the checkpoint pending. Legacy parts
+  without that marker retain their historical trimmed-body comparison.
+  On a repaired subtree retry, successfully saved role documents update the
+  profile and its baseline before a failed sibling is reported. Missing baseline
+  values do not contribute synthetic blank lines; earlier saved role text remains
+  available even if its memory write temporarily fails on a later retry. Unsaved
+  siblings remain in the checkpoint and user profile edits are not overwritten.
+  Individually repaired memory USER.md files also recover their user role.
+  Env references and original credentials remain
   available to host execution; no model call or extra confirmation is added.
   Selected skill folders retain their
   real scripts, templates, executable bits and `SKILL.md`.
@@ -56,20 +99,90 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   name; referenced skill scripts contribute their environment dependencies.
   Hermes entry and monitor scripts select their entire directory subtrees,
   preserving sibling modules and resource paths in the encrypted snapshot.
+  Script assets retain their captured executable flags through the encrypted
+  archive and execution tree, so direct sibling helper calls keep working.
+  Legacy archives without those flags retain their non-executable default.
   These files remain individually deselectable; deselecting a subtree dependency
   prevents that automation's takeover, leaving its source running. Helper code
   contributes environment dependencies and bounded verification planning text.
-  A shared 128 MiB / 4096-file read budget bounds each source snapshot, including
+  A shared 128 MiB read budget bounds each source snapshot, including
   config includes, documents, credentials, scripts and all referenced skill trees.
   Additional selected skill resources use the same cumulative limit before any
-  import writes. Exceeding it fails explicitly without truncation; the existing
-  form unlocks on a definitive pre-import limit rejection. Fingerprints hash raw
+  import writes. An unreadable/oversized selected resource retains a per-item failure
+  for retry; healthy items and the conversation are saved. No item is truncated. Fingerprints hash raw
   file bytes, and encrypted checkpoints use base64 while still reading legacy
   numeric-array checkpoints.
-  Before the first receipt/checkpoint/profile write, selected skills also use the
-  existing store validation: at most 100 skills and a 64 KiB SKILL.md entrypoint,
-  measured after any publication guidance is appended. Invalid selections return
-  the existing editable-form error without leaving a partial companion.
+  Skill count, source entry count, resource file count and cron row count have no
+  fixed quota. Imported SKILL.md files preserve their full body rather than using
+  the interactive skill editor's 64 KiB authoring limit. Individual file and total
+  in-memory snapshot byte bounds remain; this is not an unlimited-byte importer.
+  Skill-root discovery charges each streamed directory entry before retaining it.
+  Native alphabetical precedence uses 256 KiB sort batches, 64 KiB merge I/O and
+  a logarithmic set of runs instead of a whole-directory Dirent array. Large
+  roots spill only names/types into a private OS temporary directory, removed
+  after success, failure or an early consumer return; small roots stay in memory.
+  Skill files, duplicate-name precedence, disabled state and link policy are unchanged.
+  Skills disabled at the source are saved outside the active native skills folder
+  and stay disabled when read or edited.
+  Runtime discovery is separately bounded: small shelves mount directly; headers
+  or catalogs exceeding the startup metadata/path byte budget use one native
+  discovery Skill for Pi, Codex and Claude Code. A streamed, complete JSONL index
+  points to original files and body line offsets; names/descriptions are previews
+  within the existing 64/280-character limits, never rewrites of source files.
+  `list_teammate_skills` searches full original metadata and pages by count and
+  response bytes. Relative resources remain rooted at the original Skill folder;
+  later saves, deletion and disabling refresh the discovery index on the next turn.
+  Repeated runtime hydrations reuse the small per-owner/bot projection and saved
+  catalog. Typed writes invalidate it synchronously; filesystem observation plus
+  directory identity checks cover hand edits, moves and replacement. Watcher
+  errors fall back to rebuilding, and missing generated catalogs, discovery
+  Skills or Claude plugin manifests are recreated on the next hydration.
+  The cache retains at most 32 runtime/query entries, not a maximum number of stored Skills.
+  In-flight catalog writers are serialized per root independently of cache
+  eviction, so an evicted snapshot cannot overwrite its newer replacement.
+  Failed writers release their successor; idle writer records are removed.
+  Initial hydration uses `opendir` and bounded header reads, writing JSONL chunks
+  as entries arrive. Only the native-mount byte budget is retained/sorted; a large
+  shelf is never collected into a runtime array. Giant metadata lines keep short
+  previews while the scanner finds the original body offset; ordinary Skill
+  bodies are not loaded/parsed in full for indexing. Existing legacy migration
+  remains for small authored files; oversized legacy files retain their original
+  bytes and use discovery. Authoring/detail APIs still read the originals.
+  Streamed and full-file metadata readers share block-scalar handling: YAML `>`
+  folding, `|` literal lines, indentation and chomping use the existing YAML
+  parser. Runtime previews retain at most 4 KiB of block source per field;
+  query construction retains the complete description for one header at a time.
+  Colons inside block content never become metadata keys. Imported source bytes
+  and original body offsets remain unchanged, including empty block scalars.
+  Full-metadata queries reuse a separate disk index of enabled and disabled
+  headers. Construction streams headers (never bodies), sorts byte-bounded runs
+  and merges two records at a time; an oversized header occupies its own run.
+  Warm search and pagination stream that index and retain only the requested
+  response page, without reopening each source file. Full name/description
+  matching, stable name/slug ordering and disabled entries remain available.
+  Disabled query results retain management/deduplication metadata and `enabled:
+  false`, but omit `filePath` and `bodyStartLine`. Original files and the settings
+  read remain intact; enabling a Skill restores its body/resource discovery path.
+  Mutation invalidation and watcher recovery also cover this query index and
+  disabled metadata. A cold cache builds it once; subsequent queries still scan
+  index bytes for exact matching/counts, rather than maintaining a search database.
+  Failed directory scans leave the last complete catalog intact for retry.
+- Skill discovery follows grouped Hermes directories, configured external roots,
+  native directory links and disabled lists. OpenClaw discovery covers workspace,
+  workspace `.agents`, personal/managed/workshop, installed bundled, extra and
+  enabled plugin manifest roots, with native precedence and symlink trust rules.
+  Hermes personal/external roots and OpenClaw managed/personal roots intentionally
+  accept directory links outside their lexical root, as their native loaders do.
+  Selecting such a source trusts that source's Skill catalog and link targets;
+  this importer does not sandbox a compromised source home. Other OpenClaw roots
+  retain canonical containment / configured target checks. Once a Skill is found,
+  only its canonical subtree is captured (including ordinary hidden resources);
+  unrelated resource-link escapes remain rejected. Adding a new folder-grant flow
+  or disallowing native personal links would change the full-import contract and
+  is not part of this fix.
+  Nested archive/environment/support directories are excluded. Names and skillKey
+  overrides are resolved before deduplication; skill-owned credential alternatives
+  are selected separately so credential ambiguity cannot deselect a skill.
 - Selected variables, MCP env/headers, source credentials and automation assets
   use the existing account encrypted credential store. The teammate folder has
   a non-secret `environment.json` binding. Variable/connection names in that file
@@ -84,6 +197,12 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   reordered or truncated chunks. Large JSON encode/decode/hash work runs in a
   short-lived Node worker; checkpoint conversion yields between resource files
   and reuses already captured bytes when publishing the environment.
+  Tool discovery and harness session initialization read a separate encrypted
+  projection containing only connection inputs, a credential identity hash and
+  the pending-setup flag. Source files and the retry snapshot stay in the original
+  archive. Writes invalidate/rebuild the projection under a per-companion lock;
+  legacy or missing projections rebuild once, with large archive parsing and
+  projection in a worker. Both encrypted records participate in deletion recovery.
   Legacy single-value ciphertext and numeric-array snapshots remain readable;
   normal writes automatically use the chunked format. Legacy decryption itself
   remains synchronous until that first rewrite. This changes only the private
@@ -91,7 +210,16 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   secretly copy its expanded value into another selected connection.
   Public profile/memory/Skill text and routine names/prompts redact all known
   source credentials, including unchecked accounts; memory titles use the same
-  mask. Routine publication happens before createOnce persists the definition,
+  mask. Preview, entry-caption and selected-content traversals compile a local
+  matcher once and reuse it for their strings; nested structured-data redaction
+  likewise compiles once per traversal. No global credential matcher is retained.
+  Repaired manifests adding new credentials refresh the import's matcher before
+  publishing recovered content.
+  Matching still prefers longer values, bounds short tokens, and never rescans
+  replacement labels. URL paths use an explicit transport-route allowlist; unknown segments are
+  private regardless of length or case, including encoded forms and subsequent
+  route-looking values. Named local endpoints are exempt only as single loopback
+  paths; explicit credential fields always take precedence. Routine publication happens before createOnce persists the definition,
   and activation compares that same projection so masking does not block takeover.
   The encrypted checkpoint retains only masks actually matching selected source
   content, with stable labels for restart. These values were already embedded in
@@ -100,6 +228,9 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   never for subprocess env or connection authentication. Only selected credential
   entries are activated; selected original documents/automation definitions stay
   private and unmodified.
+  Structured private-key fields also recognize PEM/Base64 format suffixes and
+  redact their string descendants in published content and command output;
+  ordinary public-key, format-name and key-path fields retain their values.
   Profiles supplying different values for one variable are alternatives in the
   existing checkboxes; none is guessed by file order. Picking one clears its
   conflicting choices, and group selection keeps an existing account choice.
@@ -134,7 +265,9 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   Codex hosts remain partitioned by companion environment identity.
   Before publishing a selected Skill, UTF-8 and BOM-marked UTF-16 text (including
   SKILL.md, scripts and reference resources) masks all known source credentials.
-  Unchanged resources and binary assets retain their bytes. Affected skills keep
+  Recognizable boolean/numeric settings and ordinary MCP endpoint names are not
+  treated as credentials. Explicit credentials (including short values) and unknown
+  private settings remain masked. Unchanged resources and binary assets retain their bytes. Affected skills keep
   their complete original resource tree in the encrypted environment after the
   restart checkpoint is cleared. Their readable SKILL.md points commands to the
   existing `run_command` bridge and its private `CINDY_IMPORTED_SKILLS/<slug>`
@@ -226,9 +359,10 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   with the final successful history entry. Failed result saves retry persistence
   without rerunning; recovery of an already exhausted counter also disables the
   routine. Ordinary unchanged-monitor skips remain eligible for the next trigger.
-  Pure-script output appears in the canonical teammate chat. Explicit Telegram
-  source destinations use the selected original bot credential; they do not
-  change Cindy's official/personal bot implementations.
+  All newly imported output goes to the canonical teammate chat. Source delivery
+  channels and failure delivery destinations do not gate selection or verification.
+  Existing imported bindings that already carry Telegram destinations retain their
+  legacy delivery behavior; no existing routine is silently rerouted.
   Each confirmed target/message chunk advances progress in the same encrypted
   automation binding. A retry or next occurrence resumes the captured output and
   destinations before rerunning the model/script; counters commit only after all
@@ -239,7 +373,7 @@ Copying and field conversion do not call a model. The optional takeover check
 uses the teammate's current model to plan bounded read-only probes, then the
 host executes real MCP/HTTP reads and validates response data. The planner sees
 variable names and redacted task/script text and Skill/file identifiers, not credential values. HTTP checks
-reject redirects; Telegram checks read identity/destination without test sends.
+reject redirects. Legacy Telegram bindings still check identity/destination without test sends.
 The MCP server's `readOnlyHint` only filters planning candidates; it does not
 authorize execution. Each planned MCP/HTTP call and literal monitor GET uses the companion's existing
 Auto/Ask/Full Access policy with its exact connection, tool and arguments. Auto
@@ -281,10 +415,10 @@ query values in encoded/decoded forms, even when they are absent from `.env`.
 The same known-credential mask applies to prior output, legacy prepared retries,
 script output, planning text and the final imported delivery boundary. Requests
 still use the private original URL; redacted output retains normal change detection.
-Verified delivery-only credentials are excluded from data-read dependencies, so
-local reminders can retain their Telegram destination. Variables also referenced
+Legacy delivery-only credentials are excluded from data-read dependencies. New
+imports have no source delivery dependency and local reminders use teammate chat. Variables also referenced
 by the task or its skills still require data verification.
-Telegram destinations without an explicit source account bind only when exactly
+For legacy bindings, Telegram destinations without an explicit source account bind only when exactly
 one source account is available. Multiple candidates or a missing explicit account
 use the existing `DELIVERY_NEEDS_ADAPTER` state and keep the source task running;
 being able to reach a chat does not identify the intended sending bot.
@@ -292,6 +426,32 @@ For scripts classified as local-only with no data/connection dependency, the sam
 runtime interpreter parses the selected script without executing business actions.
 This checks availability and syntax, not a full business execution; scripts with
 external data still require actual read evidence.
+
+## Save first, finish setup in chat
+
+GUI imports send the additive `deferSetup` flag (the command defaults it to true).
+Saving personality/memory/skills, private connections and disabled routine definitions
+finishes before any data probe, source pause or target activation. `savedEntryIds`
+counts saved definitions independently of activation status. `saved: true` means
+that the save pass finished, not that every selected item succeeded. After all
+selected content is saved, both clients open the teammate chat once,
+including when sign-in or mapping remains. Partial-save results
+show saved/selected counts and distinguish partial imports from setup-only checks.
+An expandable, paginated detail list shows filenames, safe reasons and partial
+progress. Chat remains available alongside retry. Idempotent chat notices distinguish
+partial saves, pending setup and eventual completion without exposing raw exceptions.
+Every source automation is preserved, including native Heartbeat and unsupported definitions.
+Unconvertible schedules become disabled drafts with no trigger; unresolved issues
+block both activation and manual execution. Full original definitions remain encrypted.
+Empty memory markers and Heartbeat instructions are retained as well. Completeness
+is audited against the source inventory, not just the converted selection count.
+
+The owner-scoped `companion_connections.import_setup` tool lists remaining checks
+in pages, retries from the encrypted checkpoint, and permits explicit adoption of
+Cindy model/tool settings for selected entries with `use_cindy_settings`. That
+operation does not activate anything or waive context/workdir/data checks. Login
+uses the real existing account/plugin connection UI; credentials are never requested
+in chat. Ordinary conversation remains available while setup is deferred.
 
 ## Handover and compatibility
 
@@ -358,9 +518,18 @@ Remote Resource boundary so the existing form can be edited and resubmitted.
 Expired or changed previews clear the frozen intent and refresh the existing
 source step on Desktop and Mobile; a new preview gets a fresh request.
 Mobile validates the complete action through the existing Remote Resource parser
-before freezing its request. A payload exceeding the 64 KiB input budget stays
-editable so the user can adjust the portrait/selection; no oversized write is sent.
-The wire format and limits are unchanged. Unexpected/ambiguous failures still
+before freezing its request. New hosts advertise `selectionRanges`; new clients can
+encode exact selections as inclusive immutable preview-index ranges. Selected-only
+checkpoints retain the original indexes. Old hosts receive the existing ID arrays;
+old clients can continue using ID arrays on a new host. The 64 KiB wire action
+budget is unchanged; 10,000 selected entries need one range, not 10,000 IDs.
+Previously released controllers retain their own 2,000-entry preview/result limits;
+large catalogs require an updated controller as well as host. A new controller with
+an old host retains the old ID-array/inline-check behavior and retry/open actions;
+it does not claim deferred setup when the host has not saved it. Existing receipts
+without range indexes, deferred-setup flags or saved counts remain resumable, and
+their existing delivery bindings are retained rather than rewritten on upgrade.
+Unexpected/ambiguous failures still
 retain the original request for reconciliation.
 The optional public credential-alternative IDs are additive: older clients may
 ignore them, but the host still rejects a conflicting selection before writing.
@@ -374,8 +543,7 @@ subscription authentication path. Preserving a source profile does not mean its
 OAuth refresh is supported or its subscription can be used by another harness.
 The preview/result explicitly retains and identifies configurations requiring
 an adapter: native subscription OAuth refresh, source-specific tool policies,
-per-job model/context/workspace overrides, staggered schedules, and delivery
-channels other than explicit Telegram/local chat. Their selected source values
+per-job model/context/workspace overrides and staggered schedules. Their selected source values
 are retained privately, the affected automation stays at the source, and its
 imported routine cannot execute with silently weakened semantics. Missing
 selected dependencies and failed data probes behave the same way.
@@ -401,3 +569,110 @@ Large real-source latency and peak memory are not claimed as benchmarked.
 Downgrading to a build predating chunked companion storage cannot read the new
 private format; hand automations back before downgrade and retain the current
 build/data for recovery.
+
+Native OpenClaw `payload.kind=command` jobs retain argv, cwd, stdin, environment,
+wall-clock/idle timeouts and output limits in the encrypted definition. They are
+saved disabled and execute as literal subprocess argv only after the existing
+verification and handover gates. They never start a model turn or inherit model/tool
+policy requirements. Read-only verification must verify their actual dependencies;
+it cannot accept a command as a simple local reminder. Native `heartbeat` payloads
+are preserved disabled with their schedule and original definition; native context
+semantics remain explicitly pending, rather than being silently reduced to a reminder.
+
+Ordinary content/routine progress uses indexed checks and batches by serialized
+UTF-8 bytes. Each changed record is charged against the last complete receipt's
+size (including the display-name index), with a 64 KiB floor. Growing receipts
+therefore save progressively less often instead of rewriting every name/check
+roughly 100 times; measuring a change never scans the accumulated receipt. The
+host returns the byte count from its single serialization. Phase boundaries and
+terminal results still save complete, backward-compatible atomic receipts.
+An interrupted batch replays idempotent writes and `createOnce` under the same
+IDs; a large name index can mean replaying a larger unsaved batch. Handover intent,
+source pause, target enable and rollback milestones still persist immediately.
+
+New hosts also advertise `selectionChunks` on previews. The shared remote client
+uploads large selections (including sparse ranges and portraits) in 8 Ki UTF-16
+pieces through the existing import action, below its unchanged 64 KiB input limit.
+The host bounds retained uploads by owner/controller, expiry and the snapshot byte
+budget. Repeated identical pieces are accepted; changed or out-of-order pieces
+are rejected. Only a complete upload reaches the existing selection validation
+and durable import transaction. A disconnected client can replay from zero using
+the same request ID. This recovery affects only that import, never reconnects the
+peer or replays other actions. Old hosts keep their original single-action path;
+old clients continue sending plain selections to new hosts. No relay or server
+change is required.
+
+Native memory file links are restricted to canonical document vault roots named
+by `OBSIDIAN_VAULT_PATH` in the selected source's own config/.env. Memory files
+cannot add roots, and Cindy's process environment is not a grant. Other external
+files and all external directory traversal remain rejected, including retries of
+old checkpoints that only contained a boolean link exception. Native command
+argv, cwd and stdin are now opaque to the read planner, even when a literal secret
+is absent from every configured credential map; the original payload remains in
+local encrypted storage for authorized execution.
+
+Readable import copies collect credentials from structured argv/stdin as well as
+command env. The same literal/JSON/URL/form traversal is shared with output masking;
+publication treats stdin and credential-named options as private literals and
+examines other arguments for structured credential fields and capability URLs.
+Credential-named header literals (including X-API-Key and X-Auth-Token) mask
+their payload; Authorization/Proxy-Authorization additionally mask the credential
+after the scheme. For Basic authentication, canonical standard Base64 (padded or
+unpadded) also supplies the decoded userinfo and the entire password after its
+first colon; UTF-8 and legacy single-byte text are preserved. Invalid encoding
+or userinfo without a colon adds no decoded guesses; usernames alone and the
+empty `:` pair do not become masks. Original headers are never rewritten.
+MCP and commands share Cookie decomposition: every nonempty
+cookie value, including quoted and percent-decoded forms, stays private because
+cookie names are application-defined. This does not make scheme names or ordinary
+Accept/Content-Type values global masks. This covers
+separate `-H`/`--header` arguments, `--header=value`, and joined `-Hvalue` forms
+in both publication and execution-output paths; original argv remains intact.
+Form-encoded stdin, argv and command environment values collect credential-named
+fields in both wire and decoded form, including repeated fields, percent-encoded
+names and `+` spaces. Ordinary form values such as city/day-count/token type stay
+readable. Execution retries and final chat publication apply the same masks;
+the original form bytes remain in the encrypted command archive.
+For curl/curl.exe, `-u`/`--user` and `-U`/`--proxy-user` also contribute the password
+after the first userinfo colon, including joined short and assigned long forms.
+Preview/public copies and runtime/retry output share this extraction. Usernames,
+ordinary colon-containing values, other executables and arguments after `--` do
+not gain userinfo masks; original argv bytes are unchanged.
+It does not blanket-mask ordinary positional arguments or command settings:
+doing so corrupts day counts, output formats and subcommands in imported text.
+Unlabelled opaque positional values are not newly classified as credentials by
+this publication pass. Raw commands, source documents and Skill resources remain
+in the encrypted archive; the existing execution-output mask stays conservative.
+
+Full preservation also includes unused Hermes scripts, disabled MCP definitions,
+empty marker bytes and UTF-8 text documents containing terminal control characters.
+Initial profile projection and its retry baseline include only role documents
+whose memory import completed in full. Healthy role children of partial items
+still apply; failed/partial role originals remain in the encrypted checkpoint
+until retry succeeds. A durable copied receipt restores this eligibility if the
+profile/environment save was interrupted, and retries still preserve user edits.
+Native Python virtualenv interpreter aliases retain their original runtime targets only when `pyvenv.cfg`
+declares their exact runtime home and the resolved target is a native executable.
+Their captured bytes remain in the import checkpoint; native links preserve dynamic
+library resolution when the skill is saved or temporarily materialized.
+This grants no access to neighboring credentials or external directories. The
+original virtualenv configuration and resource files stay intact; cross-machine
+runtime availability is not implied by saving their definitions.
+
+### Setup status metadata and raw command URLs (2026-09-29)
+
+Setup status resolves the active Main-owned session/owner and reads the opaque
+import request ID from the existing environment manifest. The receipt retains
+already-redacted entry captions (at most 200 characters for status display).
+Paging never opens the vault or reconstructs Skill/attachment buffers. Existing
+manifests/receipts upgrade once under the import lock; normal recovery and explicit
+retry still load the checkpoint when required. Caption clipping does not alter
+source names, files, automation definitions, or encrypted originals. Repaired
+capture metadata replaces the captions on the next checkpoint save.
+
+Raw command environment capability URLs use the same URL component masks as JSON
+command environments, before Remote Resource previews and public Skill/memory/
+routine/receipt publication. Encoded and decoded path, query and fragment values
+are covered even when the command is deselected but its token occurs in selected
+content. This remains scoped to command environment values; ordinary provider
+base URLs do not create global path-word masks. Encrypted originals are retained.

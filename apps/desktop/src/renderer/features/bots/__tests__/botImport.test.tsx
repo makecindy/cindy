@@ -73,13 +73,15 @@ it.each(['SOURCE_FILE_TOO_LARGE', 'SOURCE_ITEM_TOO_LARGE', 'SOURCE_LINK_OUTSIDE_
     start: vi.fn<CompanionImportApi['start']>().mockRejectedValueOnce(new Error(`Error invoking remote method 'companion-import': Error: [${code}] Import rejected; INVALID_SELECTION PREVIEW_EXPIRED`)).mockImplementation(async input => ({ requestId: input.requestId, botId: 'bot', status: 'complete', checks: [] })) };
   render(<BotImportForm api={api} onCreated={() => {}} onBack={() => {}} onBusy={() => {}} />);
   fireEvent.click(await screen.findByRole('button', { name: /Ada.*Hermes/ }));
-  fireEvent.click(await screen.findByText('bots.import.skills', { selector: 'summary' }));
+  fireEvent.click(await screen.findByRole('button', { name: /bots.import.skills/ }));
   fireEvent.click(screen.getByLabelText('Optional skill'));
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.back' }));
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.submit' }));
   await screen.findByRole('alert');
   expect((screen.getByRole('textbox') as HTMLInputElement).disabled).toBe(['INTERNAL', 'IMPORT_FAILED'].includes(code));
-  expect((screen.getByLabelText('Optional skill').closest('fieldset') as HTMLFieldSetElement).disabled).toBe(['INTERNAL', 'IMPORT_FAILED'].includes(code));
-  if (!['INTERNAL', 'IMPORT_FAILED'].includes(code)) fireEvent.click(screen.getByLabelText('Optional skill'));
+  expect((screen.getByRole('checkbox', { name: 'bots.import.skills' }) as HTMLInputElement).disabled).toBe(['INTERNAL', 'IMPORT_FAILED'].includes(code));
+  if (!['INTERNAL', 'IMPORT_FAILED'].includes(code)) fireEvent.click(screen.getByRole('checkbox', { name: 'bots.import.skills' }));
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.back' }));
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.submit' }));
   await screen.findByRole('button', { name: 'bots.import.open' });
   const [first, second] = vi.mocked(api.start).mock.calls.map(call => call[0]);
@@ -122,8 +124,8 @@ it('uses the original portrait control and sends only the items still selected',
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.submit' }));
   await waitFor(() => expect(api.start).toHaveBeenCalledTimes(1));
   expect(vi.mocked(api.start).mock.calls[0]![0]).toMatchObject({ name: 'Ada', entryIds: ['skill'], avatarImageBase64: 'chosen' });
-  fireEvent.click(await screen.findByRole('button', { name: 'bots.import.open' }));
-  expect(open).toHaveBeenCalledWith('imported');
+  await waitFor(() => expect(open).toHaveBeenCalledExactlyOnceWith('imported'));
+  expect(screen.queryByRole('button', { name: 'bots.import.open' })).toBeNull();
 });
 
 
@@ -135,13 +137,63 @@ it('uses the existing credential checkboxes as alternatives without selecting an
   render(<BotImportForm api={api} onCreated={() => {}} onBack={() => {}} onBusy={() => {}} />);
   fireEvent.click(await screen.findByRole('button', { name: /Ada.*Hermes/ }));
   await screen.findByRole('button', { name: 'existing-portrait-picker' });
-  fireEvent.click(screen.getByText('bots.import.connections', { selector: 'summary' }));
-  fireEvent.click(screen.getByRole('checkbox', { name: 'bots.import.connections' }));
+  fireEvent.click(screen.getByRole('button', { name: /bots.import.connections/ }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'bots.import.selectAll' }));
   expect((screen.getByLabelText('Work') as HTMLInputElement).checked).toBe(false);
   fireEvent.click(screen.getByLabelText('Work'));
   fireEvent.click(screen.getByLabelText('Personal'));
   expect((screen.getByLabelText('Work') as HTMLInputElement).checked).toBe(false);
   expect((screen.getByLabelText('Personal') as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.back' }));
   fireEvent.click(screen.getByRole('button', { name: 'bots.import.submit' }));
   await waitFor(() => expect(api.start).toHaveBeenCalledWith(expect.objectContaining({ entryIds: ['personal'] })));
+});
+
+it('shows 142 selected skills in a flat searchable paginated list and opens chat after deferred setup', async () => {
+  const entries = Array.from({ length: 142 }, (_, i) => ({ id: `skill-${i}`, category: 'skills' as const, name: `Skill ${i}`, selected: true }));
+  const api: CompanionImportApi = { sources: async () => [{ id: 'source', name: 'Ada', kind: 'hermes' }],
+    preview: async () => ({ id: 'preview', name: 'Ada', source: { id: 'source', name: 'Ada', kind: 'hermes' }, entries }), status: async () => undefined,
+    start: async input => ({ requestId: input.requestId, botId: 'bot', canonicalSessionId: 'chat', status: 'needs-attention', saved: true, savedEntryIds: entries.map(entry => entry.id), checks: [{ entryId: 'skill-0', status: 'needs-attention', message: 'NATIVE_AUTH_REFRESH_REQUIRED' }] }) };
+  const open = vi.fn();
+  const { container } = render(<BotImportForm api={api} onCreated={open} onBack={() => {}} onBusy={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: /Ada.*Hermes/ }));
+  fireEvent.click(await screen.findByRole('button', { name: /bots.import.skills/ }));
+  expect(screen.getAllByRole('checkbox')).toHaveLength(21);
+  expect(container.querySelector('details')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.next' }));
+  expect(screen.getByLabelText('Skill 20')).toBeDefined();
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Skill 141' } });
+  expect((screen.getByLabelText('Skill 141') as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.back' }));
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.submit' }));
+  await waitFor(() => expect(open).toHaveBeenCalledExactlyOnceWith('bot'));
+  expect(screen.queryByRole('button', { name: 'bots.import.open' })).toBeNull();
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'bots.import.retry' })).toBeNull();
+});
+
+it('distinguishes partial saves, setup-only checks and failed automations while leaving chat and retry available', async () => {
+  const entries = [
+    { id: 'partial', name: 'long-document.md', category: 'memory' as const, selected: true },
+    { id: 'saved', name: 'ready.md', category: 'memory' as const, selected: true },
+    { id: 'routine', name: 'Daily report', category: 'automations' as const, selected: true },
+  ];
+  const api: CompanionImportApi = { sources: async () => [{ id: 'source', name: 'Ada', kind: 'hermes' }],
+    preview: async () => ({ id: 'preview', name: 'Ada', source: { id: 'source', name: 'Ada', kind: 'hermes' }, entries }), status: async () => undefined,
+    start: vi.fn(async input => ({ requestId: input.requestId, botId: 'bot', canonicalSessionId: 'chat', saved: true, savedEntryIds: ['saved'], status: 'needs-attention' as const,
+      checks: [{ entryId: 'partial', status: 'needs-attention' as const, message: 'IMPORT_DISK_FULL', progress: { saved: 1, total: 3 } }, { entryId: 'routine', status: 'needs-attention' as const, message: 'SOURCE_AUTOMATION_INVALID' }] })) };
+  const created = vi.fn();
+  render(<BotImportForm api={api} onCreated={created} onBack={() => {}} onBusy={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: /Ada.*Hermes/ }));
+  fireEvent.click(await screen.findByRole('button', { name: 'bots.import.submit' }));
+  await screen.findByText('bots.import.partial');
+  expect(screen.queryByText('bots.import.complete')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /bots.import.details/ }));
+  expect(screen.getByText('long-document.md')).toBeTruthy();
+  expect(screen.getByText(/bots.import.partlySaved.*bots.import.diskFull/)).toBeTruthy();
+  expect(screen.getByText('1 / 3')).toBeTruthy();
+  expect(screen.getByText(/bots.import.notSaved.*bots.import.automationInvalid/)).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'bots.import.retry' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.open' }));
+  expect(created).toHaveBeenCalledWith('bot');
 });

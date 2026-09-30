@@ -127,6 +127,13 @@ export class PrStatusService {
   private readonly now: () => number;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, Promise<PrStatusResult>>();
+  private generation = 0;
+
+  invalidate(): void {
+    this.generation += 1;
+    this.cache.clear();
+    this.inFlight.clear();
+  }
 
   constructor(deps: PrStatusServiceDeps) {
     this.deps = deps;
@@ -161,6 +168,7 @@ export class PrStatusService {
     const inflight = this.inFlight.get(key);
     if (inflight) return inflight;
 
+    const generation = this.generation;
     const p = this.fetchOne(q)
       .then((result) => {
         // 只缓存确定性结果(ok / not-found)。其余失败都不缓存:
@@ -168,13 +176,13 @@ export class PrStatusService {
         //    下一次查询应立即生效(token source 自带 30s 负缓存兜底);
         //  - fetch-failed:瞬时网络抖动 / 临时 5xx 不该把失败钉死满 TTL,
         //    下次渲染触发查询时立即重试(review 反馈)。
-        if (result.ok || result.reason === 'not-found') {
+        if (generation === this.generation && (result.ok || result.reason === 'not-found')) {
           this.cache.set(key, { result, expiresAt: this.now() + this.ttlMs });
         }
         return result;
       })
       .finally(() => {
-        this.inFlight.delete(key);
+        if (this.inFlight.get(key) === p) this.inFlight.delete(key);
       });
     this.inFlight.set(key, p);
     return p;
@@ -215,8 +223,12 @@ export class PrStatusService {
       };
     } catch (err) {
       const status = (err as { status?: unknown })?.status;
+      if (status === 401) return { ok: false, ...base, reason: 'gh-not-logged-in' };
       if (status === 404) return { ok: false, ...base, reason: 'not-found' };
-      log.warn('fetch pr status failed', { key: `${q.owner}/${q.repo}#${q.prNumber}`, err: String(err) });
+      log.warn('fetch pr status failed', {
+        key: `${q.owner}/${q.repo}#${q.prNumber}`,
+        err: String(err),
+      });
       return { ok: false, ...base, reason: 'fetch-failed' };
     }
   }

@@ -628,6 +628,7 @@ export const botGroupMessages = sqliteTable(
     planId: text('plan_id'),
     /** Step hand-off files relative to the plan's work directory. */
     filesJson: text('files_json').notNull().default('[]'),
+    attachmentsJson: text('attachments_json').notNull().default('[]'),
     createdAt: integer('created_at').notNull(),
   },
   (t) => ({
@@ -654,6 +655,7 @@ export const botGroupPlans = sqliteTable(
     }).notNull(),
     /** The user's request the plan answers; step inputs quote it. */
     requestText: text('request_text').notNull(),
+    attachmentsJson: text('attachments_json').notNull().default('[]'),
     organizerBotId: text('organizer_bot_id').notNull(),
     organizerName: text('organizer_name').notNull(),
     currentStep: integer('current_step'),

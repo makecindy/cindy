@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -7,8 +7,10 @@ import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 vi.mock('@cindy/mcps', () => ({ resolveLiziMcpSessionContext: () => ({ sessionId: 'fixture-session' }) }));
-vi.mock('../runtime.js', () => ({ readCompanionSessionEnvironment: vi.fn() }));
-import { readCompanionSessionEnvironment } from '../runtime.js';
+vi.mock('../host.js', () => ({ continueCompanionImport: vi.fn(), getCompanionImportSetupStatus: vi.fn(), useCindyImportSettings: vi.fn() }));
+vi.mock('../runtime.js', () => ({ readCompanionSessionDiscovery: vi.fn(), readCompanionSessionEnvironment: vi.fn(), readCompanionSessionScope: vi.fn() }));
+import { readCompanionSessionDiscovery, readCompanionSessionEnvironment, readCompanionSessionScope } from '../runtime.js';
+import { projectEnvironmentDiscovery } from '../environmentJson.js';
 import { createCompanionConnectionsProvider } from '../connectionProvider.js';
 import { redactEnvironmentData } from '../process.js';
 import { withImportedConnection } from '../connections.js';
@@ -16,7 +18,29 @@ import * as connectionModule from '../connections.js';
 import { connectionRedactions, redactImportedTool, restoreImportedArguments } from '../connectionCatalog.js';
 import { CallToolResultSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 let root: string | undefined;
+beforeEach(() => {
+  vi.mocked(readCompanionSessionDiscovery).mockReset().mockImplementation(async session => {
+    const scope = await readCompanionSessionEnvironment(session);
+    return scope ? { ...scope, environment: projectEnvironmentDiscovery(scope.environment) } : undefined;
+  });
+});
 afterEach(async () => { vi.unstubAllEnvs(); if (root) await fs.rm(root, { recursive: true, force: true }); });
+
+it('lists and refreshes pending setup tools without loading the retry archive', async () => {
+  vi.mocked(readCompanionSessionEnvironment).mockReset().mockRejectedValue(new Error('must not load full environment'));
+  const assertOwner = vi.fn();
+  vi.mocked(readCompanionSessionDiscovery).mockResolvedValue({ identity: 'fixture', botId: 'bot', userData: '/fixture', assertOwner,
+    environment: { env: {}, mcp: [], identity: 'fixture', pendingImport: true } });
+  const config = createCompanionConnectionsProvider().toClaudeSdkConfig!({} as never) as { instance: McpServer };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'fixture', version: '1' });
+  await config.instance.connect(serverTransport); await client.connect(clientTransport);
+  try {
+    for (let i = 0; i < 3; i++) expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(['run_command', 'import_setup']);
+    expect(readCompanionSessionEnvironment).not.toHaveBeenCalled();
+    expect(assertOwner).toHaveBeenCalled();
+  } finally { await client.close(); await config.instance.close(); }
+});
 
 it.skipIf(process.platform === 'win32')('uses original credentials in a real imported command and redacts arbitrary names from its response', async () => {
   vi.stubEnv('CINDY_UNRELATED_TEST_SECRET', 'fixture-launch-secret');
@@ -311,9 +335,14 @@ it.each([true, false])('preserves MCP response syntax and isError=%s when enviro
 
 it('redacts resolved catalog credentials without changing schema syntax, tool dispatch or connection configuration', async () => {
   const env = { TOKEN: 'fixture-global-token', TYPE: 'object' };
-  const connection = { name: 'fixture-server', url: 'https://fixture-user:fixture-password@example.invalid/mcp/fixture-path%2Ftoken?key=fixture-url-key',
-    env: { TOKEN: 'fixture-local-token' }, headers: { Authorization: 'Bearer fixture-header-token', 'X-Api-Key': 'fixture-api-key' } };
-  const secrets = [env.TOKEN, connection.env.TOKEN, connection.headers.Authorization, 'fixture-header-token', connection.headers['X-Api-Key'], connection.url, 'fixture-user', 'fixture-password', 'fixture-url-key', 'fixture-path%2Ftoken', 'fixture-path/token'];
+  const basicUserinfo = 'alice:fixture-mcp-basic:password';
+  const basicEncoded = Buffer.from(basicUserinfo).toString('base64');
+  const connection = { name: 'fixture-server', url: 'https://fixture-user:fixture-password@example.invalid/mcp/fixture-path%2Ftoken?key=fixture-url-key#access_token=fixture%2Ffragment%2Bsecret',
+    env: { TOKEN: 'fixture-local-token' }, headers: { Authorization: 'Bearer fixture-header-token', 'X-Api-Key': 'fixture-api-key',
+      'Proxy-Authorization': `Basic ${basicEncoded}`,
+      cOoKiE: 'session=fixture-cookie-session; alternate="fixture-cookie%2Fquoted=="; preference=dark' } };
+  const secrets = [env.TOKEN, connection.env.TOKEN, connection.headers.Authorization, 'fixture-header-token', connection.headers['X-Api-Key'], connection.url, 'fixture-user', 'fixture-password', 'fixture-url-key', 'fixture-path%2Ftoken', 'fixture-path/token', 'fixture/fragment+secret', 'fixture%2Ffragment%2Bsecret',
+    'fixture-cookie-session', 'fixture-cookie%2Fquoted==', 'fixture-cookie/quoted==', 'dark', basicUserinfo, basicEncoded, 'fixture-mcp-basic:password'];
   const echo = secrets.join(' ');
   const secretKey = 'argument_fixture-path/token';
   const tool: Tool = { name: `read_${connection.env.TOKEN}`, title: echo, description: echo,
@@ -398,4 +427,38 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     // Dispose the cached healthy fixture process; failed catalogs already close theirs.
     await withImportedConnection(mcp[2]!, {}, () => {}, async () => { throw new Error('fixture cleanup'); }, { identity: scope.identity, signal: new AbortController().signal }).catch(() => {});
   }
+});
+
+it('offers paginated private import setup only in the owning companion and masks credential-bearing names', async () => {
+  const { getCompanionImportSetupStatus, continueCompanionImport } = await import('../host.js');
+  const secret = 'fixture-name-secret';
+  const checks = Array.from({ length: 23 }, (_, index) => ({ entryId: `entry-${index}`, status: 'needs-attention' as const, message: 'IMPORT_SETUP_DEFERRED' }));
+  const result = { requestId: 'fixture-request-setup', botId: 'bot', status: 'needs-attention' as const, checks, saved: true };
+  vi.mocked(getCompanionImportSetupStatus).mockImplementation(async (_bot, _root, _assert, offset) => ({ status: result.status, total: 23, nextOffset: offset === 0 ? 20 : undefined, items: checks.slice(offset, offset + 20).map(check => ({ ...check, name: 'Job [API_KEY]' })) }));
+  vi.mocked(continueCompanionImport).mockResolvedValue(result);
+  const assertOwner = vi.fn();
+  vi.mocked(readCompanionSessionScope).mockResolvedValue({ owner: 'fixture', botId: 'bot', userData: '/fixture', assertOwner });
+  vi.mocked(readCompanionSessionEnvironment).mockResolvedValue({ identity: 'fixture', botId: 'bot', userData: '/fixture', assertOwner,
+    environment: { version: 1, env: { API_KEY: secret }, mcp: [], credentials: [], pendingImport: {
+      selection: { previewId: 'p', requestId: result.requestId, name: 'Ada', entryIds: [], takeover: true, deferSetup: true },
+      snapshotJson: JSON.stringify({ source: {}, fingerprint: 'fixture', items: checks.map(check => ({ view: { id: check.entryId, name: `Job ${secret}`, category: 'automations', selected: true } })) }),
+    } } });
+  const config = createCompanionConnectionsProvider().toClaudeSdkConfig!({} as never) as { instance: McpServer };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'fixture', version: '1' });
+  await config.instance.connect(serverTransport); await client.connect(clientTransport);
+  try {
+    expect((await client.listTools()).tools.some(tool => tool.name === 'import_setup')).toBe(true);
+    vi.mocked(readCompanionSessionEnvironment).mockClear().mockRejectedValue(new Error('must not load full environment'));
+    const first = await client.callTool({ name: 'import_setup', arguments: { operation: 'status' } });
+    const text = (first.content as Array<{ text: string }>)[0]!.text;
+    expect(text).not.toContain(secret);
+    expect(JSON.parse(text)).toMatchObject({ total: 23, nextOffset: 20 });
+    expect(JSON.parse(text).items).toHaveLength(20);
+    await client.callTool({ name: 'import_setup', arguments: { operation: 'retry', offset: 20 } });
+    expect(continueCompanionImport).toHaveBeenCalledWith('bot', '/fixture', assertOwner);
+    expect(getCompanionImportSetupStatus).toHaveBeenLastCalledWith('bot', '/fixture', assertOwner, 20);
+    expect(readCompanionSessionEnvironment).not.toHaveBeenCalled();
+    expect(assertOwner).toHaveBeenCalled();
+  } finally { await client.close(); await config.instance.close(); }
 });

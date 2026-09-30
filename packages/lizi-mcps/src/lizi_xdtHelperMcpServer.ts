@@ -128,6 +128,7 @@ const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'hando
 
 interface SessionTaskCallbacks {
   startSessionTask(params: {
+    modelSelection?: { id: string; effort?: string; fastMode?: boolean };
     callerSessionId: string;
     objective: string;
     contextRefs?: string[];
@@ -369,11 +370,18 @@ function registerStartSessionTaskEntry(
     description: [
       'Start one real independent Cindy Session task in the background. For project work, pass the actual project/worktree path in working_dir before starting. Set use_worktree=true to create and register an isolated worktree before runtime starts; failure never falls back to the shared directory; creating a worktree later in a shell does not relocate the registered Session. timeout_ms defaults to 1800000 (30 minutes), maximum 86400000 (24 hours); specify the needed budget at creation. Follow-up after timeout inherits the original budget, it does not extend it.',
       'Proactively use this for coding implementation and medium or large work: reading/modifying a project and running checks, multi-source research, multi-file processing, or complex analysis and deliverables. Do not wait for the user to request delegation or ask permission merely to start a task. Handle short simple questions, code explanations, small snippets, and single-step work yourself unless the user explicitly requests a separate task. Respect an explicit request to work inline.',
+      'Normally omit model_selection: the host uses the teammate task model, or inherits its current model when no task model is configured. When the user requests another model or this task needs a different available capability, read get_app_default_model and pass an available route id in model_selection, with supported effort or fast_mode if needed. The id binds model, provider account and Harness together. This changes only this task, never application or teammate defaults. An unavailable explicit choice fails instead of silently using another model.',
+      'Choose the route internally when starting the task. In ordinary replies, briefly describe the work or result; do not repeat the delegated instruction, tool names, argument names, route JSON, or task/session ids. The task card already tracks progress. Explain model or routing details when the user asks, and explain failures in plain language with the action needed.',
       'Pass the objective, constraints, known facts, relevant files, completed actions, and acceptance criteria in instruction; the task does not automatically inherit this chat. Do not duplicate its work. Review the returned result and follow up on the same task if needed.',
       "This never calls a Cindy Bot or any other teammate. Use send_to_agent for a bounded message to a named teammate.",
       "The task appears in the user's task list and returns its completion automatically. Start it once and use check_session_task, message_session_task, or stop_session_task only when there is a concrete reason.",
     ].join('\n'),
     inputShape: {
+      model_selection: z.object({
+        id: z.string().min(1).max(2048).describe('Available route id from get_app_default_model; includes provider and Harness.'),
+        effort: z.string().max(64).optional(),
+        fast_mode: z.boolean().optional(),
+      }).strict().optional(),
       instruction: z.string().min(1).max(12_000),
       title: z.string().min(1).max(120).optional(),
       working_dir: z.string().min(1).max(1_024).optional(),
@@ -381,7 +389,7 @@ function registerStartSessionTaskEntry(
       context_refs: z.array(z.string().max(512)).max(32).optional(),
       timeout_ms: z.number().int().min(1_000).max(86_400_000).optional(),
     },
-    handler: async ({ instruction, title, working_dir, use_worktree, context_refs, timeout_ms }) => {
+    handler: async ({ instruction, title, working_dir, use_worktree, context_refs, timeout_ms, model_selection }) => {
       const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
       if (!callerSessionId) {
         return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定 Cindy 伙伴任务。');
@@ -389,6 +397,11 @@ function registerStartSessionTaskEntry(
       const result = await deps.sessionTasks!.startSessionTask({
         callerSessionId,
         objective: instruction.trim(),
+        ...(model_selection ? { modelSelection: {
+          id: model_selection.id,
+          ...(model_selection.effort !== undefined ? { effort: model_selection.effort } : {}),
+          ...(model_selection.fast_mode !== undefined ? { fastMode: model_selection.fast_mode } : {}),
+        } } : {}),
         contextRefs: context_refs,
         title,
         workingDir: working_dir,
@@ -398,13 +411,14 @@ function registerStartSessionTaskEntry(
       return result.ok
         ? okPayload({
             action: 'start_session_task',
+            ...(result.modelRoute ? { model_route: result.modelRoute } : {}),
             task_id: result.delegationId,
             session_id: result.childSessionId,
             status: result.status,
             deadline_at: result.deadlineAt,
             expects_result: true,
             guidance:
-              "The Session task is tracked and will return its result automatically. Do not start it again.",
+              "The task card tracks progress and the result will return automatically. Do not start it again. Treat model_route and task/session ids as internal bookkeeping; do not echo them or the delegated instruction in ordinary replies unless the user asks for these details.",
           })
         : errorPayload(result.errorCode, result.message);
     },

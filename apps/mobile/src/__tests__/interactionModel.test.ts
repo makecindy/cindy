@@ -397,9 +397,10 @@ describe('interactionModel', () => {
     ])).toBe(false);
   });
 
-  it('keeps shared-task guest pending interactions as a short desktop-style blocker', () => {
+  it('keeps host-only shared-task confirmations as a short desktop-style blocker', () => {
     const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
-    const readOnlyStart = interactionPanelSource.indexOf('if (isSharedTaskPeer(deviceId)) {');
+    const readOnlyStart = interactionPanelSource.indexOf("if (isSharedTaskPeer(deviceId) && !['permission', 'ask_user_question', 'plan_review'].includes(kind)) {");
+    expect(readOnlyStart).toBeGreaterThan(-1);
     const readOnlyEnd = interactionPanelSource.indexOf('return (', interactionPanelSource.indexOf('}', readOnlyStart));
     const readOnlySource = interactionPanelSource.slice(readOnlyStart, readOnlyEnd);
 

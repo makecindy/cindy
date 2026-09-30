@@ -1,5 +1,5 @@
 /**
- * 群设置（对照桌面 BotGroupSettingsDrawer.tsx）：群名称、成员（移出 / 添加伙伴 / 设为负责人）、
+ * 群设置（对照桌面 BotGroupSettingsDrawer.tsx）：群名称、成员（点成员行弹菜单：设为负责人 / 移出；添加伙伴）、
  * 项目文件夹（只读：手机不能指定电脑上的文件夹，在电脑上选择或更换）、没有 @ 人时的回复方式、
  * 发言方式、删除群聊（系统确认框二次确认）。
  *
@@ -8,7 +8,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
-import { Folder, Plus } from 'lucide-react-native';
+import { Ellipsis, Folder, Plus } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
 import {
@@ -22,17 +22,18 @@ import {
 } from '@cindy/maker-shared/botGroupChat';
 import { isActiveBotGroupMember } from '@cindy/maker-shared/botGroupPresentation';
 import { Text, TextInput } from '@/components/AppText';
-import { MainWindowActionButton, MainWindowOptionButton } from '@/components/MobilePrimitives';
+import { MainWindowOptionButton } from '@/components/MobilePrimitives';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import type { RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { showConfirm } from '@/platform/chrome';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { BOT_GROUP_ROW_AVATAR_SIZE, BotGroupAvatar } from './BotGroupAvatars';
-import { BOT_GROUP_COMPACT_HIT_SLOP, BotGroupOrganizerTag, type BotGroupIdentityLookup } from './BotGroupPlan';
+import { BotGroupOrganizerTag, type BotGroupIdentityLookup } from './BotGroupPlan';
 import { botGroupActionErrorText } from './botGroupCopy';
 import { CompanionSheet } from './CompanionSheet';
 import { useHostTeammates } from './useHostTeammates';
+import { BotGroupMenu } from './BotGroupMenu';
 
 type Busy = 'name' | 'members' | 'organizer' | 'replyMode' | 'speakingMode' | 'delete' | null;
 type Act = (actionId: BotGroupRemoteActionId, input?: Record<string, unknown>) => Promise<unknown>;
@@ -148,50 +149,58 @@ export function BotGroupSettingsSheet({ visible, group, host, identityFor, onlin
             const identity = identityFor(member.botId, member.name);
             const active = isActiveBotGroupMember(member);
             const organizer = member.botId === group.organizerBotId;
-            return <View key={member.botId} style={styles.memberRow} testID={`botGroup.settings.member.${member.botId}`}>
-              <View style={!active ? styles.inactive : undefined}>
-                <BotGroupAvatar deviceId={host.deviceId} identity={identity} size={BOT_GROUP_ROW_AVATAR_SIZE} online={online} />
-              </View>
-              <View style={styles.memberName}>
-                <Text numberOfLines={1} style={styles.rowTitle}>{identity.name}</Text>
-                {organizer ? <BotGroupOrganizerTag /> : null}
-                {!active ? <Text numberOfLines={1} style={styles.rowMeta}>
-                  {t(member.status === 'paused' ? 'groupChat.memberStatus.paused' : 'groupChat.memberStatus.unavailable')}
-                </Text> : null}
-              </View>
-              {!organizer && active ? <MainWindowActionButton density="compact" hitSlop={BOT_GROUP_COMPACT_HIT_SLOP} action={{
-                label: t('groupChat.settings.setOrganizer'),
-                accessibilityLabel: t('groupChat.settings.setOrganizerNamed', { name: identity.name }),
-                busy: busy === 'organizer', disabled: locked,
-                onPress: () => void run('organizer', 'update', { organizerBotId: member.botId }, 'groupChat.settings.organizerSaveFailed'),
-                testID: `botGroup.settings.organizer.${member.botId}`,
-              }} /> : null}
-              <MainWindowActionButton density="compact" hitSlop={BOT_GROUP_COMPACT_HIT_SLOP} action={{
-                label: t('groupChat.settings.remove'),
-                accessibilityLabel: canRemove
-                  ? t('groupChat.settings.removeNamed', { name: identity.name })
-                  : t('groupChat.settings.minMembers', { min: BOT_GROUP_MIN_MEMBERS }),
-                disabled: locked || !canRemove,
-                onPress: () => void setMembers(memberIds.filter((botId) => botId !== member.botId)),
-                testID: `botGroup.settings.remove.${member.botId}`,
-              }} />
-            </View>;
+            // G12: one row per member; a tap opens its menu (设为负责人 / 移出群聊) instead of two inline buttons.
+            const options = [
+              ...(!organizer && active ? [{ id: `organizer:${member.botId}`, title: t('groupChat.settings.setOrganizer') }] : []),
+              {
+                id: `remove:${member.botId}`, title: t('groupChat.settings.remove'), destructive: true, disabled: !canRemove,
+                ...(canRemove ? {} : { subtitle: t('groupChat.settings.minMembers', { min: BOT_GROUP_MIN_MEMBERS }) }),
+              },
+            ];
+            const rowBusy = busy === 'organizer' || busy === 'members';
+            return <BotGroupMenu key={member.botId} title={identity.name} disabled={locked}
+              accessibilityLabel={t('groupChat.settings.memberActions', { name: identity.name })}
+              testID={`botGroup.settings.memberMenu.${member.botId}`}
+              sections={[{ id: 'member', options }]}
+              onSelect={(id) => {
+                if (id.startsWith('organizer:')) void run('organizer', 'update', { organizerBotId: member.botId }, 'groupChat.settings.organizerSaveFailed');
+                else if (id.startsWith('remove:')) void setMembers(memberIds.filter((botId) => botId !== member.botId));
+              }}>
+              {(open) => <Pressable accessibilityRole="button" accessibilityLabel={t('groupChat.settings.memberActions', { name: identity.name })}
+                disabled={locked} onPress={open}
+                style={({ pressed }) => [styles.memberRow, pressed && mobileInteractionStyles.pressed]}
+                testID={`botGroup.settings.member.${member.botId}`}>
+                <View style={!active ? styles.inactive : undefined}>
+                  <BotGroupAvatar deviceId={host.deviceId} identity={identity} size={BOT_GROUP_ROW_AVATAR_SIZE} online={online} />
+                </View>
+                <View style={styles.memberName}>
+                  <Text numberOfLines={1} style={styles.rowTitle}>{identity.name}</Text>
+                  {organizer ? <BotGroupOrganizerTag /> : null}
+                  {!active ? <Text numberOfLines={1} style={styles.rowMeta}>
+                    {t(member.status === 'paused' ? 'groupChat.memberStatus.paused' : 'groupChat.memberStatus.unavailable')}
+                  </Text> : null}
+                </View>
+                {rowBusy ? <ActivityIndicator color={colors.textSecondary} /> : <Ellipsis size={iconSize.lg} color={colors.textTertiary} />}
+                <View style={styles.rowDivider} />
+              </Pressable>}
+            </BotGroupMenu>;
           })}
           <Pressable accessibilityRole="button" accessibilityState={{ expanded: picking, disabled: locked || !canAdd }}
             accessibilityLabel={canAdd ? t('groupChat.settings.add') : t('groupChat.settings.maxMembers', { max: BOT_GROUP_MAX_MEMBERS })}
             disabled={locked || !canAdd} onPress={() => setPicking((value) => !value)}
-            style={({ pressed }) => [styles.memberRow, styles.lastRow, pressed && mobileInteractionStyles.pressed, (locked || !canAdd) && styles.inactive]}
+            style={({ pressed }) => [styles.memberRow, pressed && mobileInteractionStyles.pressed, (locked || !canAdd) && styles.inactive]}
             testID="botGroup.settings.add">
             <View style={styles.addMark}><Plus size={iconSize.sm} color={colors.textSecondary} /></View>
             <Text numberOfLines={1} style={[styles.rowTitle, styles.flex]}>{t('groupChat.settings.add')}</Text>
             {!canAdd ? <Text style={styles.rowMeta}>{t('groupChat.settings.maxMembers', { max: BOT_GROUP_MAX_MEMBERS })}</Text> : null}
+            {picking && canAdd ? <View style={styles.rowDivider} /> : null}
           </Pressable>
-          {picking && canAdd ? <View style={styles.picker} testID="botGroup.settings.addable">
+          {picking && canAdd ? <View testID="botGroup.settings.addable">
             {teammates.loading && addable.length === 0 ? <ActivityIndicator color={colors.textSecondary} style={styles.spinner} /> : null}
             {!teammates.loading && addable.length === 0
               ? <Text style={styles.note}>{t(teammates.failed ? 'devices.resources.loadFailed' : 'groupChat.settings.noMoreBots')}</Text>
               : null}
-            {addable.map((row) => {
+            {addable.map((row, index) => {
               const title = resolveRemoteText(row.item.display.title, i18n.language);
               return <Pressable key={row.key} accessibilityRole="button" accessibilityLabel={title} disabled={locked}
                 onPress={() => void setMembers([...memberIds, row.item.ref.id])}
@@ -201,6 +210,7 @@ export function BotGroupSettingsSheet({ visible, group, host, identityFor, onlin
                   size={BOT_GROUP_ROW_AVATAR_SIZE} online={online} />
                 <Text numberOfLines={1} style={[styles.rowTitle, styles.flex]}>{title}</Text>
                 <Plus size={iconSize.sm} color={colors.textTertiary} />
+                {index < addable.length - 1 ? <View style={styles.rowDivider} /> : null}
               </Pressable>;
             })}
           </View> : null}
@@ -266,8 +276,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   group: { backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.container, overflow: 'hidden' },
   memberRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 52, paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm, borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth },
-  lastRow: { borderBottomWidth: 0 },
+    paddingVertical: spacing.sm },
+  // Dividers start at the name column (after the avatar), like the companion list rows; the add row is last and has none.
+  rowDivider: { position: 'absolute', left: spacing.md + BOT_GROUP_ROW_AVATAR_SIZE + spacing.sm, right: 0, bottom: 0,
+    height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
   memberName: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   rowTitle: { flexShrink: 1, color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
   rowValue: { color: colors.textSecondary, fontSize: typeScale.body, lineHeight: lineHeight.body },
@@ -276,7 +288,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   inactive: { opacity: 0.6 },
   addMark: { width: BOT_GROUP_ROW_AVATAR_SIZE, height: BOT_GROUP_ROW_AVATAR_SIZE, borderRadius: radius.pill, borderWidth: 1,
     borderStyle: 'dashed', borderColor: colors.borderStrong, alignItems: 'center', justifyContent: 'center' },
-  picker: { borderTopColor: colors.border, borderTopWidth: StyleSheet.hairlineWidth },
   spinner: { paddingVertical: spacing.md },
   segments: { flexDirection: 'row', backgroundColor: colors.surfaceChip, borderRadius: radius.pill, padding: spacing.xs },
   segment: { flex: 1, minHeight: 44 },

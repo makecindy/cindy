@@ -5352,13 +5352,12 @@ export function CCAgentSessionView({
                   </div>
                 }
               >
-                {isSharedTaskPeer(remoteDeviceId ?? '') ? (
-                  (pendingPlanReview || pendingPermission || pendingAskUser || pendingPluginSetup || pendingIssueConfirm || pendingRenameSessionsConfirm || pendingGhostGrantConfirm) &&
+                {isSharedTaskPeer(remoteDeviceId ?? '') &&
+                !pendingPlanReview && !pendingPermission && !pendingAskUser &&
+                (pendingPluginSetup || pendingIssueConfirm || pendingRenameSessionsConfirm || pendingGhostGrantConfirm || pendingRemoteDesktopConfirmation) ? (
                   <div className="space-y-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4 text-[var(--text-primary)]">
                     <p className="text-13 text-[var(--text-secondary)]">{t('sharedTask.waitingHost')}</p>
-                    <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-13">{pendingPlanReview?.plan ?? (pendingPermission
-                      ? [pendingPermission.title ?? pendingPermission.toolName, pendingPermission.description, JSON.stringify(pendingPermission.input, null, 2)].filter(Boolean).join('\n')
-                      : JSON.stringify(pendingAskUser?.questions ?? pendingPluginSetup ?? pendingIssueConfirm ?? pendingRenameSessionsConfirm ?? pendingGhostGrantConfirm, null, 2))}</pre>
+                    <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-13">{JSON.stringify(pendingPluginSetup ?? pendingIssueConfirm ?? pendingRenameSessionsConfirm ?? pendingGhostGrantConfirm ?? pendingRemoteDesktopConfirmation, null, 2)}</pre>
                   </div>
                 ) : pendingPlanReview ? (
                   <>

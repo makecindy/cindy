@@ -63,53 +63,52 @@
     "estimateFailed": "无法统计文件。请检查任务所在电脑的连接和版本，然后关闭重试。"
   },
   "sharedTask": {
+    "selfJoin": "这是你发起的共享任务，无需加入。请从“我发起的”打开",
     "manageSharing": "共享管理",
     "manageMembers": "管理成员…",
     "cancelSharing": "取消共享",
     "cancelTitle": "取消共享？",
-    "leaveShort": "退出共享",
+    "leaveShort": "退出",
     "joinTab": "加入共享",
-    "joinedEmptyTitle": "还没有加入共享任务",
-    "joinedEmptyHint": "在「加入共享」中填入房主提供的邀请码。",
+    "joinedEmptyTitle": "还没有加入共享",
+    "joinedEmptyHint": "打开伙伴发来的邀请链接，即可加入共享任务。",
     "joinedLoadFailed": "暂时无法获取已加入的共享任务，请重试",
     "joinedTab": "我加入的",
     "reconnecting": "正在重新连接…",
     "ownedLoadFailed": "暂时无法获取",
     "loadingOwned": "正在获取…",
-    "retryAction": "重试",
-    "invitationCopyFailed": "邀请码已生成，但未能复制。请回到此窗口后重试。",
-    "accessEndedBody": "当前已无法访问这个共享任务。如需再次加入，请联系房主发送新的邀请码。",
-    "joinIntro": "填入房主发来的邀请码，加入共享任务。",
-    "invitationPlaceholder": "请输入或粘贴邀请码",
-    "joinNickname": "你在任务中的昵称",
-    "nicknamePlaceholder": "怎么称呼你",
+    "retryAction": "重新加载",
+    "invitationCopyFailed": "未能复制邀请链接，请重试",
+    "accessEndedBody": "当前已无法访问这个共享任务。如需再次加入，请联系房主发送新的邀请链接。",
+    "joinIntro": "粘贴房主发来的邀请链接，使用你的账号昵称加入任务。",
+    "invitationPlaceholder": "粘贴邀请链接或邀请码",
     "joinNotice": "加入后可查看全部历史，并直接向 Agent 发消息，无需等待房主审批。",
     "joinedTitle": "已加入「{{title}}」",
     "joined": "已加入共享任务",
     "joinedBody": "你可以查看加入前的消息、工具结果和附件，也可以向同一个 Agent 发消息。",
     "enterTask": "进入任务",
-    "inviteBoxTitle": "邀请伙伴加入",
+    "inviteBoxTitle": "将邀请链接发给你的伙伴",
     "roleGuest": "访客",
     "removeShort": "移除",
     "removeNamedTitle": "移除{{name}}？",
     "manage": "管理",
     "ended": "共享已结束",
-    "rejoin": "使用新邀请码加入",
+    "rejoin": "使用新邀请链接加入",
     "otherDevice": "其他电脑",
     "runsOnHostDevice": "运行在房主电脑",
-    "remoteHostOfflineNote": "房主电脑持续离线后，共享会自动结束。再次共享需重新开启并发送新的邀请码。",
+    "remoteHostOfflineNote": "房主电脑持续离线后，共享会自动结束。再次共享需重新开启并发送新的邀请链接。",
     "waitingHost": "等待房主处理，你可以继续发送消息。",
     "join": "加入共享任务",
     "login": "请登录 Cindy 后加入任务",
-    "invitation": "邀请码",
+    "invitation": "邀请链接或邀请码",
     "dismiss": "关闭窗口",
     "title": "共享任务",
     "hostLimit": "开启的共享任务已达当前上限，请关闭共享任务，直到数量低于上限后再试。",
     "joinLimit": "加入的共享任务已达当前上限，请退出共享任务，直到数量低于上限后再试。",
     "guestLimit": "此共享任务已有 2 名访客，暂时无法加入。",
-    "invitationUnavailable": "邀请码无效或已失效，请向房主获取新的邀请码",
-    "invitationRenew": "旧邀请码无法再次加入，请向房主获取新的邀请码",
-    "unavailable": "共享已结束或你已无权访问，请向房主获取新的邀请码",
+    "invitationUnavailable": "邀请链接无效或已失效，请向房主获取新的邀请链接",
+    "invitationRenew": "旧邀请链接无法再次加入，请向房主获取新的邀请链接",
+    "unavailable": "共享已结束或你已无权访问，请向房主获取新的邀请链接",
     "permissionDenied": "你没有权限执行此操作，请联系房主",
     "connectionFailed": "无法连接共享服务或房主电脑，请检查网络后重试",
     "requestTimedOut": "请求超时，请检查网络和房主电脑的连接后重试",
@@ -118,45 +117,53 @@
     "open": "开启共享",
     "host": "房主",
     "remove": "移除访客",
-    "invite": "复制邀请码",
-    "invitationCopied": "邀请码已复制",
+    "invite": "复制邀请",
+    "invitationCopied": "邀请已复制，粘贴发送给伙伴即可。",
     "tabOwned": "我发起的",
     "startIntro": "邀请伙伴查看这个任务的全部内容，一起与同一个 Agent 协作。",
     "runsOnThisDevice": "运行在这台电脑",
-    "inviteNotice": "持有邀请码的用户登录后即可加入，拥有与房主相同的 Agent 使用权限。",
+    "inviteNotice": "持有邀请链接的用户登录后即可加入，拥有与房主相同的 Agent 使用权限。",
     "offlineAutoClose": "房主电脑持续离线后，共享会自动结束。",
-    "inviteBoxHint": "伙伴填入邀请码后，即可加入共享任务",
+    "inviteBoxHint": "将链接发送给伙伴，对方点击即可加入。手机端也可复制链接后打开 Cindy。",
+    "invitationMessage": "邀请你加入「{{title}}」\n{{link}}\n点击链接加入；手机端也可复制链接后打开 Cindy，确认加入。",
     "membersWithLimit": "成员 · {{count}} 人（最多 2 位访客）",
     "me": "我",
     "thisDevice": "这台电脑",
     "roleHost": "房主",
-    "hostOfflineNote": "这台电脑持续离线后，共享会自动结束。再次共享需重新开启并发送新的邀请码。",
+    "hostOfflineNote": "这台电脑持续离线后，共享会自动结束。再次共享需重新开启并发送新的邀请链接。",
     "sharingBadge": "共享中",
     "ownedEmptyTitle": "没有正在共享的任务",
     "ownedEmptyHint": "回到任意任务，点击「共享任务」邀请伙伴。",
     "closeAll": "取消全部共享（{{count}}）",
     "closeAllTitle": "取消全部共享？",
-    "closeAllBody": "以下任务的所有访客将无法继续访问，原邀请码将失效。",
+    "closeAllBody": "以下任务的所有访客将无法继续访问，原邀请链接将失效。",
     "closeAllKeep": "保持共享",
     "closeAllAction": "取消 {{count}} 个共享",
     "closeAllScopeNote": "任务记录和 Agent 工作保留；你加入别人的任务不受影响。",
-    "closeOneBody": "所有访客将无法继续访问，原邀请码将失效。",
-    "removeBody": "该访客将无法继续访问。再次加入需要房主生成新的邀请码。",
+    "closeOneBody": "所有访客将无法继续访问，原邀请链接将失效。",
+    "removeBody": "该访客将无法继续访问。再次加入需要房主生成新的邀请链接。",
     "removeKeep": "保留访客",
     "leaveTitle": "退出共享任务？",
-    "leaveBody": "退出后将无法访问这个任务。再次加入需要房主发送新的邀请码。",
+    "leaveBody": "退出后将无法访问这个任务。再次加入需要房主发送新的邀请链接。",
     "leaveKeep": "留在任务",
     "closedToast": "已取消 {{count}} 个任务的共享",
     "closeFailedToast": "部分共享未能取消（{{count}} 项），可稍后重试。",
     "back": "返回",
-    "cancelOperation": "取消操作",
-    "invalidInvitation": "请输入有效的邀请码",
-    "missingNickname": "请输入你在任务中的昵称",
-    "ownedManageIntro": "管理你发起的共享，包括其他电脑上的任务。",
-    "joinedManageIntro": "打开任务继续工作，或退出不再参与的共享。",
+    "cancelOperation": "取消",
+    "invalidInvitation": "请粘贴有效的邀请链接或邀请码",
+    "ownedManageIntro": "包含这个账号在其他电脑上发起的共享。",
+    "joinedManageIntro": "退出后将无法继续访问该共享；房主和其他成员不受影响。",
     "recordsKept": "任务记录和 Agent 工作保留。",
     "othersUnaffected": "其他成员与 Agent 的工作不受影响。",
-    "viewJoined": "查看我加入的"
+    "viewJoined": "查看我加入的",
+    "invalid": "请粘贴有效的邀请链接或邀请码",
+    "invitationDifferentServer": "此邀请属于其他 Cindy 服务，请用对应的客户端打开链接",
+    "managementIntro": "管理你发起和加入的共享。",
+    "returnToTasks": "返回任务列表",
+    "invitationDetected": "发现共享任务邀请",
+    "notNow": "暂不加入",
+    "closeAllLabel": "取消全部共享",
+    "closeAllDescription": "所有访客将无法继续访问，任务记录保留。"
   },
   "privacyExit": {
     "status": "正在通过 Cindy 被远程控制",
@@ -1280,7 +1287,7 @@
         "chatAttachmentsClearFailed": "无法清理消息附件缓存，请重试",
         "dbSlimmingBackupDirectoryDialogTitle": "选择数据库清理备份目录",
         "dbSlimmingLabel": "数据库清理",
-        "dbSlimmingDescription": "扫描超过所选时间未更新的软删除和已归档任务历史，可选择同时纳入活跃任务。确认后重启 Cindy，在数据库打开前清理并压缩。不会删除磁盘附件或生成媒体。",
+        "dbSlimmingDescription": "扫描超过所选时间未更新的软删除和已归档任务历史，可选择同时纳入未归档任务。确认后重启 Cindy，在数据库打开前清理并压缩。不会删除磁盘附件或生成媒体。",
         "dbSlimmingScanButton": "扫描数据库",
         "dbSlimmingScanLoading": "正在扫描数据库，请稍候…",
         "dbSlimmingScanResultTitle": "数据库扫描结果",
@@ -1290,12 +1297,12 @@
         "dbSlimmingArchiveAgeOption1": "1 个月",
         "dbSlimmingArchiveAgeOption3": "3 个月",
         "dbSlimmingArchiveAgeOption6": "6 个月",
-        "dbSlimmingIncludeActiveLabel": "清理活跃任务",
-        "dbSlimmingIncludeActiveDescription": "同时清理超过所选时间的活跃任务，并从任务列表移除",
-        "dbSlimmingIncludeActiveConfirmTitle": "将活跃任务纳入数据库清理？",
-        "dbSlimmingIncludeActiveConfirmDescription": "活跃任务即使超过所选时间，也可能仍在运行。清理不会等待任务停止，任务在扫描后继续产生的消息也可能被清除。启用后，超过所选时间的活跃、已归档和软删除任务都会被清理。符合范围的活跃任务历史消息和 Agent 上下文将被清除；普通任务条目也将从列表移除，伙伴主任务仍会保留。数据库备份可以恢复任务和消息数据；不创建备份时，这些数据也无法恢复。用于审查或撤销这些消息所产生文件改动的记录不包含在数据库备份中，无法恢复。",
-        "dbSlimmingIncludeActiveConfirmButton": "纳入活跃任务",
-        "dbSlimmingIncludeActiveCancelButton": "保留活跃任务",
+        "dbSlimmingIncludeActiveLabel": "清理未归档任务",
+        "dbSlimmingIncludeActiveDescription": "同时清理超过所选时间的未归档任务，并从任务列表移除",
+        "dbSlimmingIncludeActiveConfirmTitle": "将未归档任务纳入数据库清理？",
+        "dbSlimmingIncludeActiveConfirmDescription": "未归档任务即使超过所选时间，也可能仍在运行。清理不会等待任务停止，任务在扫描后继续产生的消息也可能被清除。启用后，超过所选时间的未归档、已归档和软删除任务都会被清理。符合范围的未归档任务历史消息和 Agent 上下文将被清除；普通任务条目也将从列表移除，伙伴主任务仍会保留。数据库备份可以恢复任务和消息数据；不创建备份时，这些数据也无法恢复。用于审查或撤销这些消息所产生文件改动的记录不包含在数据库备份中，无法恢复。",
+        "dbSlimmingIncludeActiveConfirmButton": "纳入未归档任务",
+        "dbSlimmingIncludeActiveCancelButton": "保留未归档任务",
         "dbSlimmingBackupLabel": "清理前备份数据库",
         "dbSlimmingBackupDefaultLocation": "数据库所在目录（只保留最近一次清理备份）",
         "dbSlimmingUseDefaultDirectoryButton": "使用默认目录",
@@ -1306,7 +1313,7 @@
         "dbSlimmingBackupMissing": "没有找到最近一次清理备份",
         "dbSlimmingBackupOpenFailed": "无法打开清理备份位置，请重试",
         "dbSlimmingReportTasks": "将清理软删除任务 {{deleted}} 个、归档任务 {{archived}} 个",
-        "dbSlimmingReportTasksWithActive": "将清理活跃任务 {{active}} 个、软删除任务 {{deleted}} 个、归档任务 {{archived}} 个",
+        "dbSlimmingReportTasksWithActive": "将清理未归档任务 {{active}} 个、软删除任务 {{deleted}} 个、归档任务 {{archived}} 个",
         "dbSlimmingReportMessages": "预计清理 {{count}} 条消息内容（约 {{size}}）",
         "dbSlimmingReportSpace": "数据库 {{database}}；临时空间至少需要 {{temporary}}；当前可用 {{free}}",
         "dbSlimmingSpaceUnknown": "未知",
@@ -1830,6 +1837,45 @@
       }
     },
     "providers": {
+      "llamacpp": {
+        "ownedElsewhere": "模型服务正在另一个 Cindy 实例中运行。请在那里下载模型或修改上下文，或先在该实例停止服务。",
+        "primaryPick": "主推 · 先试这个",
+        "recommendReason": "优先试用 {{name}}，这是为这台机器选出的能力主推型号。",
+        "recommendCaveat": "此 GGUF 包装的本机速度和峰值内存仍待实测，下载大小不等于运行内存。",
+        "candidates": "待试验模型",
+        "trialNote": "以下模型可供试验，性能和内存占用尚待验证。",
+        "downloadModel": "下载 {{name}}",
+        "title": "llama.cpp",
+        "subtitle": "安装运行环境、下载模型并在本机运行",
+        "description": "选择下方模型，下载到本机运行。",
+        "install": "安装 llama.cpp",
+        "start": "启动并连接",
+        "restart": "重启并刷新模型",
+        "stop": "停止服务",
+        "cancel": "取消操作",
+        "repository": "Hugging Face 仓库",
+        "findFiles": "查找模型文件",
+        "file": "GGUF 文件",
+        "shards": "分片模型会自动下载全部分片，上方大小为所选分片的大小。支持文本模型，暂不下载视觉投影文件。",
+        "download": "下载模型",
+        "models": "已下载模型",
+        "empty": "从上方清单选择模型，或输入 Hugging Face 仓库下载第一个模型。",
+        "unsupported": "此平台暂不支持自动安装，可通过手动配置连接 llama.cpp。",
+        "failed": "操作未完成，请检查网络和可用磁盘空间后重试。",
+        "invalid": "请输入 owner/model-GGUF 格式的仓库名称并选择 GGUF 文件。",
+        "progress": {
+          "install": "正在安装 llama.cpp…",
+          "download": "正在下载模型…",
+          "start": "正在启动 llama.cpp…"
+        },
+        "installAndConnect": "安装并连接",
+        "installDescription": "Cindy 会安装 llama.cpp。下载模型后，使用时自动启动服务。",
+        "manualConnect": "连接已有服务",
+        "manageRuntime": "管理服务",
+        "restartHint": "下载模型或修改上下文后，在「管理服务」中重启以应用更改。重启会中断正在进行的生成。",
+        "applyModels": "使用已下载模型",
+        "startOnUse": "按需启动"
+      },
       "catalogRecovery": {
         "pending": "模型设置尚未就绪，请稍后重新加载模型。",
         "legacy": "旧模型设置暂时无法读取，请退出其他正在运行的 Cindy 后重新加载模型。",
@@ -2287,6 +2333,7 @@
           "defaultEffortHint": "新任务选中该模型时的初始档位，任务内仍可临时调整。",
           "contextLimit": "上下文上限",
           "contextLimitHint": "用于此模型的所有可用引擎。以整数 K 编辑（1 K = 1,000 tokens）；未编辑时保留精确值。保存后用于后续运行，正在生成的内容不受影响。实际可用长度仍受模型服务限制。",
+          "contextLimitLocalMillionHint": "原生 256K（262,144 tokens），可选扩展至 1M（1,000,000）。服务运行时需在「管理服务」中重启以应用更改；已停止时，下次使用自动生效。长输入会增加内存占用和等待时间。",
           "contextLimitAria": "上下文上限（千 tokens）",
           "contextLimitRoute": "当前 {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "已超过上游声明的长度，可能导致请求失败。",
@@ -2517,7 +2564,8 @@
           "apple-mlx": "这台 Mac 适合官方 MLX 封装。",
           "generic-27b": "这台电脑适合官方 Q4 封装。",
           "compact": "按这台电脑的内存，先从更轻量的模型开始。",
-          "unknown": "先选一个更好跑起来的模型。"
+          "unknown": "先选一个更好跑起来的模型。",
+          "high-memory": "这台电脑内存充裕，优先试用能力更强的模型；本机速度和峰值内存仍待实测。"
         },
         "searchPlaceholder": "搜索模型",
         "noSearchResults": "没有匹配的模型",
@@ -2608,7 +2656,9 @@
         "deleteModelConfirm": "删除",
         "deleteModelDone": "已删除 {{name}}",
         "deleteModelFailed": "删除失败，请确认 Ollama 正在运行后重试",
-        "noRecommendation": "这台电脑暂时没有证据充分且内存适配的推荐，可在下方手动选择候选模型。"
+        "noRecommendation": "这台电脑暂时没有证据充分且内存适配的推荐，可在下方手动选择候选模型。",
+        "lighterAlternative": "轻量备选",
+        "recommendedInstalled": "推荐模型已在本机，可直接使用。"
       },
       "xdSignin": {
         "badge": "推荐",
@@ -2665,7 +2715,7 @@
         "pending": "凭据准备中",
         "unavailable": "暂时不可用"
       },
-      "claudeAccountRetired": "独立 Claude 账号已停用。请改用「使用 Claude Code 登录」连接 Claude 订阅，这个账号可以删除。"
+      "claudeAccountRetired": "Cindy 已不再支持通过这条旧版 Claude 连接登录订阅，不影响你的 Claude 账号和订阅。请改用「使用 Claude Code 登录」连接订阅"
     },
     "experimental": {
       "title": "实验性功能",
@@ -7817,6 +7867,10 @@
     },
     "model": {
       "description": "选择这个伙伴使用的模型。",
+      "primary": "主模型",
+      "task": "任务模型",
+      "inheritPrimary": "继承主模型",
+      "inheritingPrimary": "继承主模型，用于新建后台任务",
       "restoreDefault": "恢复默认模型"
     },
     "modelChain": {
@@ -8046,7 +8100,10 @@
         "placeholderDivision": "说说要做成什么，负责人会先分好工…",
         "placeholderPlanProposed": "想换人或改步骤，直接说…",
         "placeholderPlanWaiting": "想让{{name}}改改，直接说…",
-        "placeholderPlanRunning": "说的话会带给正在做的{{name}}…"
+        "placeholderPlanRunning": "说的话会带给正在做的{{name}}…",
+        "tooManyAttachments": "附件太多了，一条消息最多 {{max}} 个",
+        "attachmentsFailed": "附件没能发出去，请检查文件是否还在，或移除后重试",
+        "folderNotSupported": "文件夹不能作为附件，请选择其中的文件"
       },
       "timeline": {
         "loadEarlier": "查看更早的消息",
@@ -8258,13 +8315,13 @@
       "automations": "自动化",
       "paused": "导入后仍停用",
       "itemAttention": "需要处理",
-      "takeover": "检查通过后，由伙伴接管自动化",
+      "takeover": "导入后检查并接管自动化",
       "takeoverNote": "数据连接验证通过后才暂停原任务。取消所需依赖时，原任务继续运行。",
       "submit": "导入",
       "back": "上一步",
       "open": "打开伙伴",
       "running": "正在导入并检查连接…",
-      "complete": "导入完成",
+      "complete": "导入已保存",
       "attention": "部分内容需要处理，详见下方。",
       "error": "未能完成导入，可按原选择重试。",
       "keptAtSource": "尚未完成接管",
@@ -8279,7 +8336,36 @@
       "credentialFailed": "凭证未能安全保存。",
       "scriptMissing": "缺少这项任务所需的脚本。",
       "sourceCommand": "找不到原 Agent 的控制命令。",
-      "readFailed": "尚未验证这项任务实际需要的数据查询。"
+      "readFailed": "尚未验证这项任务实际需要的数据查询。",
+      "search": "搜索",
+      "selectAll": "全选",
+      "previous": "上一页",
+      "next": "下一页",
+      "chatSetup": "已保存可导入的资料，可以开始交流了。部分内容还需要登录或检查，你方便时我们再继续。接管前，原来的自动化保持原状。",
+      "chatReady": "资料已经导入，可以开始交流了。",
+      "partial": "部分内容未完整导入",
+      "details": "查看导入详情",
+      "partlySaved": "仅部分保存",
+      "savedNeedsSetup": "已保存，尚未启用或完成设置",
+      "notSaved": "未保存",
+      "databaseDriver": "数据库驱动无法加载，请更新或修复 Cindy 后重试。",
+      "databaseUnavailable": "无法读取来源数据库，原数据未改动。修复后可重试。",
+      "fileTooLarge": "文件或本次资料超过读取上限，未截断导入。",
+      "memoryMetadata": "记忆摘要或标题不符合存储要求。",
+      "memoryWrite": "记忆写入或完整性检查失败，可重试。",
+      "memoryChanged": "已保存的记忆发生变化，未覆盖。",
+      "attachmentUnsupported": "此附件格式暂不支持，原文件保留在来源。",
+      "diskFull": "磁盘空间不足，释放空间后可重试。",
+      "permissionDenied": "没有权限读取或保存此项，修复权限后可重试。",
+      "setupDeferred": "可在伙伴对话中继续登录与验证。",
+      "automationInvalid": "自动化定义无法转换，尚未创建。",
+      "itemFailed": "此项未完成，可重试并查看导入详情。",
+      "chatPartial": "伙伴已创建，但部分资料未完整保存。以下项目仍需处理；其他内容和对话可以正常使用。"
+    },
+    "learning": {
+      "memory": "已记住：{{title}}",
+      "skillCreated": "已建立技能：{{title}}",
+      "skillUpdated": "已更新技能：{{title}}"
     }
   },
   "common": {
@@ -8996,6 +9082,7 @@
       "credentialSwitchDeferred": "模型来源已切换，将在当前任务结束后生效。",
       "effortRuntimeDirty": "推理强度还在更新，稍等一下再发送",
       "credentialSwitchApplied": "模型来源切换已生效。",
+      "credentialSwitchFailed": "模型来源切换失败，请重新选择。",
       "modelSwitchContextGuard": {
         "title": "这个模型装不下当前对话",
         "warnToast": "这段对话已经用了 {{used}}，换过去大约会占新模型容量（{{total}}）的 {{pct}}%",
@@ -9623,7 +9710,7 @@
       "promptSend": "发送",
       "promptCancel": "取消"
     },
-    "toolResultCompacted": "Full tool output was released (original size {{size}})",
+    "toolResultCompacted": "完整工具输出已释放（原始大小 {{size}}）",
     "agentActionRow": {
       "noContent": "无可展示内容",
       "fileChange": {
@@ -9739,6 +9826,29 @@
       }
     },
     "systemCard": {
+      "help": {
+        "title": "可用命令",
+        "builtInCommands": "内置命令",
+        "projectCommands": "项目命令",
+        "empty": "暂无可用命令"
+      },
+      "cost": {
+        "title": "任务用量",
+        "tokensUsed": "本轮 Token 用量"
+      },
+      "pwd": {
+        "title": "工作目录",
+        "notSet": "（未设置）"
+      },
+      "status": {
+        "title": "任务状态",
+        "agent": "Agent",
+        "model": "模型",
+        "effort": "推理强度",
+        "permissionMode": "权限模式",
+        "running": "运行中",
+        "idle": "空闲"
+      },
       "context": {
         "title": "上下文用量",
         "loading": "正在加载…",
@@ -10730,14 +10840,89 @@
         "clickToOpen": "点击在浏览器打开 PR",
         "guidance": {
           "login": {
-            "hint": "点击让 Agent 帮你登录",
-            "aria": "PR #{{number}} 状态不可用：让 Agent 登录 GitHub",
-            "prompt": "请帮我登录 GitHub CLI：运行 `gh auth login -h github.com -w`，把出现的一次性设备码和网址告诉我；我在浏览器完成授权后，你再用 `gh auth status` 确认登录成功。"
+            "hint": "点击连接 GitHub",
+            "aria": "PR #{{number}} 状态不可用：连接 GitHub"
           },
           "install": {
-            "hint": "点击让 Agent 帮你安装并登录",
-            "aria": "PR #{{number}} 状态不可用：让 Agent 安装并登录 GitHub CLI",
-            "prompt": "请帮我安装 GitHub CLI（gh，macOS 用 `brew install gh`，Windows 用 `winget install GitHub.cli`），然后运行 `gh auth login -h github.com -w` 登录，把出现的一次性设备码和网址告诉我；我在浏览器完成授权后，你再用 `gh auth status` 确认登录成功。"
+            "hint": "点击连接 GitHub",
+            "aria": "PR #{{number}} 状态不可用：连接 GitHub"
+          }
+        },
+        "setup": {
+          "install": "安装并继续",
+          "connect": "登录 GitHub",
+          "cancel": "取消",
+          "retry": "重试",
+          "done": "完成",
+          "openBrowser": "打开 GitHub 授权",
+          "deviceCode": "一次性设备码",
+          "copyCode": "复制设备码",
+          "copied": "已复制",
+          "copyFailed": "未能复制，请手动选中并复制设备码。",
+          "openFailed": "未能打开浏览器，请手动访问 github.com/login/device。",
+          "stages": {
+            "install": {
+              "title": "安装 GitHub CLI",
+              "description": "安装 GitHub CLI，以连接你的 GitHub 账号。"
+            },
+            "login": {
+              "title": "连接 GitHub",
+              "description": "连接你的 GitHub 账号；尚未安装 GitHub CLI 时会自动安装。"
+            },
+            "checking": {
+              "title": "正在检查连接…",
+              "description": "正在确认 GitHub 登录状态。"
+            },
+            "downloading": {
+              "title": "正在下载 GitHub CLI…",
+              "description": "下载完成后会自动安装。"
+            },
+            "installing": {
+              "title": "正在安装 GitHub CLI…",
+              "description": "下载已完成。"
+            },
+            "preparing": {
+              "title": "正在准备登录…",
+              "description": "正在获取一次性设备码。"
+            },
+            "authorizing": {
+              "title": "登录 GitHub",
+              "description": "复制下方设备码，在 GitHub 页面输入并授权。"
+            },
+            "connected": {
+              "title": "GitHub 已连接",
+              "description": "可以关闭此窗口，继续使用。"
+            },
+            "cancelled": {
+              "title": "已取消连接",
+              "description": "准备好后可以重新连接。"
+            },
+            "unavailable": {
+              "title": "无法读取进度",
+              "description": "暂时无法获取当前进度，请重试。"
+            },
+            "error": {
+              "title": "连接未完成"
+            }
+          },
+          "errors": {
+            "unsupported": "暂不支持此操作系统或处理器。",
+            "install": "安装失败，请检查网络和磁盘空间后重试。",
+            "login": "登录失败或授权被拒绝，请重试获取新设备码。",
+            "timeout": "设备码已过期，请重试获取新设备码。"
+          },
+          "account": {
+            "checking": "正在检查 GitHub 连接…",
+            "connected": "已连接 · @{{login}}",
+            "missing": "连接 GitHub 后即可使用。",
+            "auth": "授权已失效，请重新登录或更换下方备用 Token。",
+            "network": "暂时无法连接 GitHub，请检查网络后重试。",
+            "forbidden": "GitHub 暂时无法验证此连接，请检查权限或请求额度后重试。",
+            "gh-cli": "当前使用本机 GitHub 登录",
+            "token": "当前使用备用 Token",
+            "recheck": "检查连接",
+            "summary": "管理 GitHub 仓库、Issues、PR 和 Actions。",
+            "otherMethods": "其他连接方式"
           }
         },
         "unresolved": "{{count}} 条未解决的 review 评论"
@@ -12248,7 +12433,8 @@
         "rename": "去改名",
         "fix": "去改",
         "republish": "重新发布",
-        "abandonPending": "放弃等待"
+        "abandonPending": "放弃等待",
+        "editPublication": "修改发布信息"
       },
       "API_KEY_MISSING": {
         "title": "未配置 API key",
@@ -12272,15 +12458,15 @@
       },
       "OSS_PUT_FAILED": {
         "title": "上传失败",
-        "message": "网络异常，请重试"
+        "message": "上传服务未能接收文件。请检查网络后重试上传；持续失败时请重新发布"
       },
       "OSS_PUT_EXPIRED": {
         "title": "上传链接过期",
         "message": "上传链接已过期，请重新发布"
       },
       "VERSION_RACE": {
-        "title": "版本冲突",
-        "message": "自动重试已失败，请稍后重试"
+        "title": "版本号已被占用",
+        "message": "该版本已发布或正在处理。请选择未使用的版本号后重新发布"
       },
       "CHECKSUM_MISMATCH": {
         "title": "校验失败",
@@ -12292,15 +12478,15 @@
       },
       "PACK_FAILED": {
         "title": "打包失败",
-        "message": "未能完成 Skill 打包，请重试"
+        "message": "请确认本地技能文件可以读取，精简不必要的大文件后重新发布"
       },
       "OSS_OBJECT_NOT_FOUND": {
         "title": "上传文件丢失",
         "message": "服务器找不到上传的文件，请重试"
       },
       "MANIFEST_INVALID": {
-        "title": "SKILL.md 格式不正确",
-        "message": "SKILL.md 文件必须以 YAML frontmatter 开头，并包含 name 和 description 字段"
+        "title": "技能包不符合要求",
+        "message": "请按下方原因检查 SKILL.md 和包内文件，修改后重新发布"
       },
       "CANCELLED": {
         "title": "已取消",
@@ -12315,12 +12501,56 @@
         "message": "请选择当前发布身份支持的可见范围"
       },
       "INTERNAL": {
-        "title": "服务器错误",
-        "message": "发布失败，请稍后重试"
+        "title": "发布未完成",
+        "message": "发生未预期的异常，请稍后重试；持续失败时请联系支持"
       },
       "UNKNOWN": {
         "title": "未知错误",
         "message": "发布失败 ({{code}})，请重试"
+      },
+      "SKILL_DELETED": {
+        "title": "同名技能已删除",
+        "message": "同名技能已被删除，但名称仍被占用。请修改技能名称后重新发布"
+      },
+      "SKILL_UNPUBLISHED": {
+        "title": "技能已下架",
+        "message": "技能在上传期间被下架，本次发布已停止。请确认发布状态后重新发布"
+      },
+      "AUTH_REQUIRED": {
+        "title": "需要登录",
+        "message": "当前登录状态已失效或尚未登录，请登录后重新发布"
+      },
+      "PERMISSION_DENIED": {
+        "title": "当前账号没有发布权限",
+        "message": "请切换到有权限的发布身份，或联系技能作者、组织管理员确认权限"
+      },
+      "INVALID_PARAMS": {
+        "title": "发布信息不符合要求",
+        "message": "请按下方原因修改发布信息后重新发布"
+      },
+      "SKILL_FILE_TOO_LARGE": {
+        "title": "技能包超过限制",
+        "message": "压缩包最多 32 MiB，解压后最多 50 MiB，SKILL.md 最多 2 MiB，包内最多 2000 个条目。请精简后重新发布"
+      },
+      "NETWORK_ERROR": {
+        "title": "无法连接发布服务",
+        "message": "请检查网络连接后重试发布"
+      },
+      "RATE_LIMITED": {
+        "title": "发布请求过于频繁",
+        "message": "请稍等片刻再重试发布"
+      },
+      "SERVICE_UNAVAILABLE": {
+        "title": "发布服务暂不可用",
+        "message": "请稍后重试发布；持续失败时请联系支持"
+      },
+      "PUBLISH_BUSY": {
+        "title": "已有技能正在发布",
+        "message": "请等待当前发布结束后再发布此技能"
+      },
+      "REQUEST_REJECTED": {
+        "title": "发布请求被拒绝",
+        "message": "请检查发布信息后重新发布；持续失败时请联系支持"
       }
     },
     "scanResult": {

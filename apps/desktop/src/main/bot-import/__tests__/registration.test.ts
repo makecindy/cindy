@@ -1,9 +1,9 @@
 import { beforeAll, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ start: vi.fn(), sources: vi.fn(), preview: vi.fn(), status: vi.fn(), handlers: new Map<string, (event: unknown, operation: unknown, input?: unknown) => Promise<unknown>>() }));
+const h = vi.hoisted(() => ({ channel: 'maker:remote-resources:invoke', remote: vi.fn(), start: vi.fn(), sources: vi.fn(), preview: vi.fn(), status: vi.fn(), handlers: new Map<string, (event: unknown, operation: unknown, input?: unknown) => Promise<unknown>>() }));
 vi.mock('electron', () => ({ ipcMain: { handle: (name: string, fn: (event: unknown, operation: unknown, input?: unknown) => Promise<unknown>) => h.handlers.set(name, fn) } }));
-vi.mock('../host.js', () => ({ startCompanionImport: h.start, listCompanionImportSources: h.sources, previewCompanionImport: h.preview, getCompanionImportResult: h.status }));
+vi.mock('../host.js', () => ({ startCompanionImport: h.start, submitRemoteCompanionImport: h.start, listCompanionImportSources: h.sources, previewCompanionImport: h.preview, getCompanionImportResult: h.status, readRemoteCompanionImport: h.remote }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
-vi.mock('../../device-link/invoke-context.js', () => ({ getDeviceLinkInvokeContext: () => ({ controllerDeviceId: 'phone', channel: 'maker:remote-resources:invoke' }) }));
+vi.mock('../../device-link/invoke-context.js', () => ({ getDeviceLinkInvokeContext: () => ({ controllerDeviceId: 'phone', channel: h.channel }) }));
 import { registerCompanionImport } from '../registration.js';
 import { registerRemoteResourcesIpc } from '../../device-link/remoteResourcesIpc.js';
 import { CompanionImportError } from '../types.js';
@@ -42,4 +42,24 @@ it.each(['IMPORT_NAME_EXISTS', 'INVALID_SELECTION', 'PROFILE_TEXT_TOO_LARGE', 'S
 it('continues to hide unexpected provider failures from mobile', async () => {
   h.start.mockRejectedValueOnce(new Error('fixture private filesystem path'));
   await expect(invoke()).rejects.toThrow('[INTERNAL] remote resource provider failed');
+});
+
+it.each([false, true])('negotiates chunk reads without changing the legacy resource (%s)', async supported => {
+  h.channel = 'maker:remote-resources:get';
+  h.remote.mockResolvedValueOnce({ preview: { id: 'preview', entries: [] } });
+  await h.handlers.get('maker:remote-resources:get')!({}, { ref: { collectionId: 'companion-import', kind: 'import', id: 'preview:source' }, client: { protocolVersion: 1, primitives: ['companion-import', ...(supported ? ['companion-import-chunks-v1'] : [])] } });
+  expect(h.remote).toHaveBeenLastCalledWith('preview:source', 'phone', supported);
+});
+
+it('acknowledges a selection chunk without navigating before the host accepts the full import', async () => {
+  h.channel = 'maker:remote-resources:invoke';
+  h.start.mockResolvedValueOnce(undefined);
+  expect(await invoke()).toMatchObject({ effects: [] });
+});
+
+it('returns a bounded upgrade error through the legacy Remote Resource IPC', async () => {
+  h.channel = 'maker:remote-resources:get';
+  h.remote.mockRejectedValueOnce(new CompanionImportError('IMPORT_CLIENT_UPGRADE_REQUIRED'));
+  await expect(h.handlers.get(h.channel)!({}, { ref: { collectionId: 'companion-import', kind: 'import', id: 'preview:source' },
+    client: { protocolVersion: 1, primitives: ['companion-import'] } })).rejects.toThrow('[UNSUPPORTED_CAPABILITY] IMPORT_CLIENT_UPGRADE_REQUIRED');
 });

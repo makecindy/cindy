@@ -16,6 +16,7 @@ vi.mock('react-native', () => ({
 }));
 vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'test-id' }));
+vi.mock('@/platform/chrome', () => ({ NativeSwitch: () => null }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
 vi.mock('lucide-react-native', () => Object.fromEntries(['Brain', 'Camera', 'FileText', 'Hand', 'History', 'Info', 'Link2', 'Settings2', 'Sparkles']
   .map(name => [name, Object.assign(() => null, { displayName: name })])));

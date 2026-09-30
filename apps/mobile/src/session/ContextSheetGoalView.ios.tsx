@@ -84,7 +84,7 @@ export function ContextSheetGoalView(props: ContextSheetGoalViewProps) {
   const action = (label: string, onPress: () => void, testID: string, destructive = false) =>
     <Button onPress={onPress} testID={testID} modifiers={[
       buttonStyle('plain'), disable(busy),
-      ...(destructive ? [foregroundStyle(colors.statusRecording)] : []),
+      ...(destructive ? [foregroundStyle(colors.destructive)] : []),
     ]}><Text modifiers={[frame({ maxWidth: Infinity, minHeight: 44, alignment: 'leading' }), contentShape(shapes.rectangle())]}>{label}</Text></Button>;
   return <>
     <Section title={goalStatusLabel(goal.status, goal.lastReason)}>

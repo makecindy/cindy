@@ -22,7 +22,7 @@ const state = vi.hoisted(() => ({
   writeClipboard: vi.fn(),
 }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key.startsWith('taskMigration.') ? key : key.split('.').at(-1) }),
+  useTranslation: () => ({ t: (key: string, values?: { title: string; link: string }) => key === 'sharedTask.invitationMessage' ? `Join ${values?.title}\n${values?.link}\nOpen Cindy on mobile.` : key.startsWith('taskMigration.') ? key : key.split('.').at(-1) }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: { removeDevice: state.removeDevice, getDeviceName: () => undefined },
@@ -320,6 +320,15 @@ it('does not copy a late invitation after the account changes', async () => {
   setDataOwnerGeneration('other-account');
   await act(async () => finish({ invitation: 'old-account-invitation' }));
   expect(state.writeClipboard).not.toHaveBeenCalled();
+});
+it('copies the public link and joining instructions from the quick sharing submenu', async () => {
+  const invitationLink = 'https://relay.example.test/shared-task/join#' + 'A'.repeat(43);
+  state.host.mockImplementation(async command => command.action === 'invite'
+    ? { invitation: 'A'.repeat(43), invitationLink }
+    : { available: true, detail: { sharedTaskId: 'share', status: 'active', title: 'Shared task' } });
+  render(<Harness />); openMenu(); await openSharingSubmenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'invite' }));
+  await waitFor(() => expect(state.writeClipboard).toHaveBeenCalledWith(`Join Shared task\n${invitationLink}\nOpen Cindy on mobile.`));
 });
 
 it('reports clipboard failure separately and allows retrying', async () => {

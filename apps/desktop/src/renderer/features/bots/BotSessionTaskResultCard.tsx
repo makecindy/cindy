@@ -16,23 +16,27 @@ import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 export function BotSessionTaskResultCard({
   data,
   sessionId,
+  attached = false,
 }: {
   data?: Record<string, unknown>;
   sessionId?: string;
+  attached?: boolean;
 }) {
   const card = readBotCollaborationMeta(data);
   if (card?.role !== 'delegation-result' || !card.result) return null;
-  return <TaskResultBody card={card} result={card.result} sessionId={sessionId} />;
+  return <TaskResultBody card={card} result={card.result} sessionId={sessionId} attached={attached} />;
 }
 
 function TaskResultBody({
   card,
   result,
   sessionId,
+  attached,
 }: {
   card: BotCollaborationMeta;
   result: NonNullable<BotCollaborationMeta['result']>;
   sessionId?: string;
+  attached: boolean;
 }) {
   const { t } = useTranslation();
   const fileContext = useChatSessionFile();
@@ -55,7 +59,7 @@ function TaskResultBody({
         : 'text-[var(--error-fg)]';
   const workingDir = result.workingDir ?? fileContext.workingDir;
   return (
-    <div className={BOT_TASK_CARD_CLASS}>
+    <div className={attached ? "w-full min-w-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-3" : BOT_TASK_CARD_CLASS}>
       <BotTaskCardHeader
         title={title}
         status={t(`bots.collab.status.${result.status}`)}

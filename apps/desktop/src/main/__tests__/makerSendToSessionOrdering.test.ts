@@ -545,7 +545,7 @@ describe('sendToSession ordering', () => {
     );
     const directSendSwitchBlock = extractBetween(
       source,
-      'pendingAgentSwitchApplyHolder = async (sessionId, signal, selection) =>',
+      'pendingAgentSwitchApplyHolder = async (',
       'ipcMain.handle(MAKER_INVOKE.MARK_ORCA_ROLE',
     );
 

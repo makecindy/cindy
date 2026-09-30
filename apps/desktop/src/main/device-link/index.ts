@@ -44,6 +44,7 @@ import {
   type LinkClosePayload,
   type Envelope,
   type PushPayload,
+  type NotifySender,
   DeviceLinkError,
   resolveRemoteInvokeTimeoutMs,
 } from '@cindy/device-link';
@@ -1918,6 +1919,7 @@ export function sendMobileSessionNotify(payload: {
   eventId?: string;
   /** 伙伴主任务的 Bot id；让手机按伙伴聊天打开通知。 */
   teammateBotId?: string;
+  teammateAvatar?: NotifySender['avatar'];
   /**
    * 发起时捕获的 getMobileNotifyGeneration()。调用路径里有 await(取正文/等
    * 其它通道)时必传:与当前代次不一致说明期间发生过登出/失去持有权,任务
@@ -1951,6 +1953,7 @@ export function sendMobileSessionNotify(payload: {
       fallbackBody: payload.fallbackBody ?? getSessionNotificationBody(payload.kind),
       detail: payload.detail,
       ...(payload.teammateBotId ? { teammateBotId: payload.teammateBotId } : {}),
+      ...(payload.teammateAvatar ? { teammateAvatar: payload.teammateAvatar } : {}),
     }),
   );
   if (sent) {

@@ -42,6 +42,9 @@ const captured = vi.hoisted(() => ({
   initialModel: undefined as string | undefined,
   runtimeProvider: undefined as string | undefined,
   runtimeModel: undefined as string | undefined,
+  remoteModels: new Map<string, string>(),
+  refreshAckMode: 'ok' as 'ok' | 'invalid',
+  hasRefreshCommand: true,
   requestHandler: undefined as
     | undefined
     | ((command: Record<string, unknown>) => Promise<{
@@ -128,6 +131,37 @@ vi.mock("../rpc-client.js", () => {
                 },
               }
             : { success: true, data: {} };
+        if (response.success && command.type === "prompt" &&
+            typeof command.message === "string" && command.message.startsWith("/cindy-native-provider-refresh ")) {
+          const nonce = command.message.split(" ")[1];
+          captured.onEvent?.({ type: "extension_ui_request", method: "input",
+            title: "cindy:provider-refresh", id: "refresh-input", placeholder: JSON.stringify({ nonce }) });
+          captured.onEvent?.({ type: "extension_ui_request", method: "input",
+            title: "cindy:provider-refresh-ack", id: "refresh-ack",
+            placeholder: JSON.stringify(captured.refreshAckMode === 'invalid'
+              ? { nonce, ok: false, code: 'INVALID_PAYLOAD' } : { nonce, ok: true }) });
+        }
+        if (response.success && command.type === "refresh_models" &&
+            !Array.isArray((response.data as { models?: unknown } | undefined)?.models)) {
+          const modelFile = path.join(String(captured.env.PI_CODING_AGENT_DIR), "models.json");
+          const remoteModelContent = captured.remoteModels.get(modelFile)
+            ?? [...captured.remoteModels].find(([file]) => file.endsWith("/models.json"))?.[1];
+          const configured = JSON.parse(remoteModelContent
+            ?? readFileSync(modelFile, "utf8")) as {
+            providers: Record<string, { models?: Array<{ id: string }> }>;
+          };
+          return { success: true, data: { aborted: false, errors: {}, models:
+            Object.entries(configured.providers).flatMap(([provider, spec]) =>
+              (spec.models ?? []).map((model) => ({ provider, id: model.id }))) } };
+        }
+        if (response.success && command.type === "set_compaction_reserve_tokens") {
+          return { success: true, data: { reserveTokens: command.reserveTokens ?? 16_384 } };
+        }
+        if (response.success && command.type === "get_commands" &&
+            !Array.isArray((response.data as { commands?: unknown } | undefined)?.commands)) {
+          return { success: true, data: { commands: captured.hasRefreshCommand
+            ? [{ name: 'cindy-native-provider-refresh', source: 'extension' }] : [] } };
+        }
         if (response.success && command.type === "set_model") {
           captured.runtimeProvider = String(command.provider);
           captured.runtimeModel = String(command.modelId);
@@ -169,6 +203,7 @@ import { PiRpcRequestTimeoutError } from "../rpc-client.js";
 import {
   PiNativeProviderProxyNotReadyError,
   type AgentDeps,
+  type PiNativeProvidersResult,
 } from "../../base-agent.js";
 import type { ModelDescriptor } from "../../../types/capabilities.js";
 import type { Logger } from "../../../interfaces/logger.js";
@@ -231,6 +266,9 @@ describe("Pi provider-aware model routing", () => {
     captured.initialModel = undefined;
     captured.runtimeProvider = undefined;
     captured.runtimeModel = undefined;
+    captured.remoteModels.clear();
+    captured.refreshAckMode = 'ok';
+    captured.hasRefreshCommand = true;
     captured.requestHandler = undefined;
     agentHome = mkdtempSync(path.join(tmpdir(), "pi-provider-home-"));
     cwd = mkdtempSync(path.join(tmpdir(), "pi-provider-cwd-"));
@@ -431,8 +469,8 @@ describe("Pi provider-aware model routing", () => {
 
     await expect(
       handle.setModel!("shared-model", { providerId: "xd" }),
-    ).rejects.toThrow(/restart the Pi session to change provider API/);
-    expect(captured.requests).not.toContainEqual({
+    ).resolves.toBeUndefined();
+    expect(captured.requests).toContainEqual({
       type: "set_model",
       provider: "cindy",
       modelId: "shared-model",
@@ -1558,14 +1596,12 @@ describe("Pi provider-aware model routing", () => {
     captured.requests.length = 0;
     await expect(
       handle.setModel!("shared-model", { providerId: "xd" }),
-    ).rejects.toThrow(/restart the Pi session to change provider API/);
-    expect(
-      captured.requests.filter((request) => request.type === "set_model"),
-    ).toEqual([]);
+    ).resolves.toBeUndefined();
+    expect(captured.requests.some((request) => request.type === "refresh_models")).toBe(true);
     await handle.close();
   });
 
-  it("reloads models.json via switch_session when SuperGrok appears after session start", async () => {
+  it("refreshes models.json natively when SuperGrok appears after session start", async () => {
     const xaiProvider = {
       id: "xai",
       sourceProviderId: "xai" as const,
@@ -1649,10 +1685,8 @@ describe("Pi provider-aware model routing", () => {
     });
     includeXai = true;
     await handle.setModel!("xai/grok-4.6", { providerId: "xai" });
-    expect(captured.requests).toContainEqual({
-      type: "switch_session",
-      sessionPath: "/mock/s.jsonl",
-    });
+    expect(captured.requests.some((request) => request.type === "refresh_models")).toBe(true);
+    expect(captured.requests.some((request) => request.type === "switch_session")).toBe(false);
     expect(captured.requests).toContainEqual({
       type: "set_model",
       provider: "xai",
@@ -1795,7 +1829,7 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
-  it("rolls models.json back when switch_session fails after an xAI catalog refresh", async () => {
+  it("retires Pi when a native catalog refresh fails after publishing models", async () => {
     const xaiProvider = {
       id: "xai",
       sourceProviderId: "xai" as const,
@@ -1813,6 +1847,7 @@ describe("Pi provider-aware model routing", () => {
         },
       ],
     };
+    let refreshCalls = 0;
     captured.requestHandler = async (command) => {
       if (command.type === "get_state") {
         return {
@@ -1823,8 +1858,8 @@ describe("Pi provider-aware model routing", () => {
           },
         };
       }
-      if (command.type === "switch_session") {
-        return { success: false, error: "reload failed" };
+      if (command.type === "refresh_models" && ++refreshCalls === 2) {
+        return { success: false, error: "refresh failed" };
       }
       return { success: true, data: {} };
     };
@@ -1890,20 +1925,22 @@ describe("Pi provider-aware model routing", () => {
     includeXai = true;
     await expect(
       handle.setModel!("xai/grok-4.6", { providerId: "xai" }),
-    ).rejects.toThrow(/reload models/);
+    ).rejects.toThrow(/PI_CATALOG_RELOAD_UNCONFIRMED/);
     const models = JSON.parse(
       readFileSync(
         path.join(captured.env.PI_CODING_AGENT_DIR as string, "models.json"),
         "utf8",
       ),
     ) as { providers: Record<string, unknown> };
-    expect(models.providers.xai).toBeUndefined();
+    expect(models.providers.xai).toBeDefined();
+    expect(captured.closes).toBeGreaterThan(0);
     await handle.close();
   });
 
-  it("terminates the session when catalog rollback cannot be written after switch_session fails", async () => {
+  it("retires Pi when a rejected private bridge command cannot restore models.json", async () => {
     const xaiProvider = {
       id: "xai",
+      adapterProvider: "openai",
       sourceProviderId: "xai" as const,
       name: "xAI",
       baseUrl: "http://127.0.0.1:9/v1",
@@ -1929,14 +1966,14 @@ describe("Pi provider-aware model routing", () => {
           },
         };
       }
-      if (command.type === "switch_session") {
+      if (command.type === "prompt") {
         const modelsPath = path.join(
           captured.env.PI_CODING_AGENT_DIR as string,
           "models.json",
         );
         unlinkSync(modelsPath);
         mkdirSync(modelsPath);
-        return { success: false, error: "reload failed" };
+        return { success: false, error: "Unknown command: prompt" };
       }
       return { success: true, data: {} };
     };
@@ -2006,9 +2043,10 @@ describe("Pi provider-aware model routing", () => {
     expect(captured.closes).toBeGreaterThan(0);
   });
 
-  it("terminates the session when switch_session neither confirms nor rejects after an xAI catalog refresh", async () => {
+  it("terminates the session when the private bridge command neither confirms nor rejects", async () => {
     const xaiProvider = {
       id: "xai",
+      adapterProvider: "openai",
       sourceProviderId: "xai" as const,
       name: "xAI",
       baseUrl: "http://127.0.0.1:9/v1",
@@ -2034,8 +2072,8 @@ describe("Pi provider-aware model routing", () => {
           },
         };
       }
-      if (command.type === "switch_session") {
-        throw new Error("pi rpc timeout after 30000ms: switch_session");
+      if (command.type === "prompt") {
+        throw new Error("pi rpc timeout after 30000ms: prompt");
       }
       return { success: true, data: {} };
     };
@@ -2105,7 +2143,7 @@ describe("Pi provider-aware model routing", () => {
     expect(captured.closes).toBeGreaterThan(0);
   });
 
-  it("refuses a live xAI refresh when the provider endpoint would change", async () => {
+  it("refreshes a live xAI provider when its configured endpoint changes", async () => {
     let call = 0;
     const agent = new PiAgent({
       auth: {
@@ -2190,10 +2228,9 @@ describe("Pi provider-aware model routing", () => {
     });
     await expect(
       handle.setModel!("xai/grok-4.6", { providerId: "xai" }),
-    ).rejects.toThrow(/cannot serve model/);
-    expect(captured.requests).not.toContainEqual(
-      expect.objectContaining({ type: "switch_session" }),
-    );
+    ).resolves.toBeUndefined();
+    expect(captured.requests).toContainEqual({ type: "set_model", provider: "xai", modelId: "grok-4.6" });
+    expect(captured.requests.some((request) => request.type === "switch_session")).toBe(false);
     await handle.close();
   });
 
@@ -2283,7 +2320,7 @@ describe("Pi provider-aware model routing", () => {
     expect(resolves).toBe(1);
     captured.requests.length = 0;
     await handle.setModel!("xai/grok-4.5", { providerId: "xai" });
-    expect(resolves).toBe(1);
+    expect(resolves).toBe(2);
     expect(captured.requests).toContainEqual({
       type: "set_model",
       provider: "xai",
@@ -2291,7 +2328,7 @@ describe("Pi provider-aware model routing", () => {
     });
     expect(
       captured.requests.filter((request) => request.type === "switch_session"),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     await handle.close();
   });
 
@@ -2369,7 +2406,7 @@ describe("Pi provider-aware model routing", () => {
     expect(resolves).toBe(1);
     captured.requests.length = 0;
     await handle.setModel!("xai/grok-4.6", { providerId: null });
-    expect(resolves).toBe(1);
+    expect(resolves).toBe(2);
     expect(captured.requests).toContainEqual({
       type: "set_model",
       provider: "cindy",
@@ -2377,11 +2414,11 @@ describe("Pi provider-aware model routing", () => {
     });
     expect(
       captured.requests.filter((request) => request.type === "switch_session"),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     await handle.close();
   });
 
-  it("refuses to add a remote xAI proxy that was not provisioned at startup", async () => {
+  it("adds a remote xAI proxy to a running gateway task without a new Pi process", async () => {
     let resolves = 0;
     const agent = new PiAgent({
       auth: {
@@ -2423,12 +2460,19 @@ describe("Pi provider-aware model routing", () => {
       resolveRemotePiBinaryPath: async () => "/remote/pi",
       getRemotePiFileOps: () => ({
         mkdirp: async () => {},
-        writeFile: async () => {},
+        writeFile: async (file: string, content: string) => {
+          captured.remoteModels.set(file, content);
+        },
         stat: async () => ({ isFile: true }),
         rm: async () => {},
         listDir: async () => [],
-        readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
-        sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
+        readFile: async (file: string) => {
+          const value = captured.remoteModels.get(file);
+          if (value === undefined) throw new Error("Unexpected remote file read in empty directory fixture");
+          return value;
+        },
+        sha256File: async (file: string) => createHash("sha256")
+          .update(captured.remoteModels.get(file) ?? "").digest("hex"),
       }),
       getRemotePiTransport: async () => ({
         writeLine: async () => {},
@@ -2489,7 +2533,8 @@ describe("Pi provider-aware model routing", () => {
     });
     await expect(
       handle.setModel!("xai/grok-4.6", { providerId: "xai" }),
-    ).rejects.toThrow(/cannot serve model/);
+    ).resolves.toBeUndefined();
+    expect(captured.requests).toContainEqual({ type: "set_model", provider: "xai", modelId: "grok-4.6" });
     expect(captured.requests).not.toContainEqual(
       expect.objectContaining({ type: "switch_session" }),
     );
@@ -3517,7 +3562,7 @@ describe("Pi provider-aware model routing", () => {
 
     // provider 保存后 renderer 目录可能已出现 xhigh，但这个活动 Pi 进程仍读旧 models.json。
     await expect(handle.setEffort!("xhigh")).rejects.toThrow(
-      /startup model snapshot.*restart the Pi session/,
+      /applied model catalog/,
     );
     expect(
       captured.requests.filter(
@@ -3596,7 +3641,7 @@ describe("Pi provider-aware model routing", () => {
         providerId: "native-a",
         effort: "high",
       }),
-    ).rejects.toThrow(/startup model snapshot/);
+    ).rejects.toThrow(/applied model catalog/);
     expect(captured.requests.slice(beforeSwitch)).not.toContainEqual({
       type: "set_model",
       provider: "native-a",
@@ -3630,7 +3675,7 @@ describe("Pi provider-aware model routing", () => {
     });
 
     await expect(handle.setEffort!("xhigh")).rejects.toThrow(
-      /startup model snapshot/,
+      /applied model catalog/,
     );
     expect(
       captured.requests.some(
@@ -3742,6 +3787,230 @@ describe("Pi provider-aware model routing", () => {
     resolvePiNativeProviders,
   });
 
+  it('refreshes a managed adapter when the same model ID gets a new descriptor', async () => {
+    let window = 100_000;
+    const deps = byomDeps(async () => ({ providers: [{
+      id: 'native-a', name: 'Native A', adapterProvider: 'openai',
+      baseUrl: 'http://a.test', api: 'openai-completions',
+      models: [{ id: 'local-model', contextWindow: window }],
+    }], env: {} }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'adapter-descriptor-refresh', workingDir: cwd,
+      model: 'local-model', providerId: 'native-a',
+    });
+    window = 200_000;
+    captured.requests.length = 0;
+    expect(await handle.previewModelSwitch?.('local-model', { providerId: 'native-a' }))
+      .toMatchObject({ action: 'refresh', targetContextWindow: 200_000 });
+    await handle.setModel!('local-model', { providerId: 'native-a' });
+    expect(captured.requests).toContainEqual(expect.objectContaining({
+      type: 'prompt', message: expect.stringMatching(/^\/cindy-native-provider-refresh /),
+    }));
+    expect(captured.requests.filter((request) => request.type === 'refresh_models')).toHaveLength(2);
+    expect(captured.requests.some((request) => request.type === 'switch_session')).toBe(false);
+    await handle.close();
+  });
+
+  it.each(['provider', 'model'] as const)('retains only the running credential when its %s disappears during catalog refresh', async (removed) => {
+    let updated = false;
+    const running = {
+      id: 'native-a', name: 'Native A', adapterProvider: 'openai',
+      baseUrl: 'http://old.test', api: 'openai-completions' as const,
+      apiKeyEnvVar: 'CINDY_PI_KEY_ACTIVE',
+      models: [{ id: 'local-model', contextWindow: 200_000 }],
+    };
+    const deps = byomDeps(async (): Promise<PiNativeProvidersResult> => ({
+      providers: [
+        ...(!updated ? [running] : removed === 'model' ? [{ ...running,
+          baseUrl: 'http://new.test', models: [{ id: 'replacement', contextWindow: 200_000 }],
+        }] : []),
+        { id: 'native-b', name: updated ? 'Updated B' : 'B', adapterProvider: 'openai',
+          baseUrl: 'http://b.test', api: 'openai-completions' as const,
+          models: [{ id: 'other-model', contextWindow: 200_000 }] },
+      ],
+      env: updated
+        ? (removed === 'model' ? { CINDY_PI_KEY_ACTIVE: 'new-endpoint-key' } : {})
+        : { CINDY_PI_KEY_ACTIVE: 'running-endpoint-key', CINDY_PI_KEY_UNUSED: 'unused-key' },
+    }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'retained-native-credential', workingDir: cwd,
+      model: 'local-model', providerId: 'native-a',
+    });
+    updated = true;
+    expect(await handle.previewModelSwitch?.('local-model', { providerId: 'native-a' }))
+      .toMatchObject({ action: 'refresh' });
+    await handle.setModel!('local-model', { providerId: 'native-a' });
+    const snapshot = JSON.parse(String(captured.responses.find(response => response.id === 'refresh-input')?.value));
+    expect(snapshot.env.CINDY_PI_KEY_ACTIVE).toBe('running-endpoint-key');
+    expect(snapshot.env).not.toHaveProperty('CINDY_PI_KEY_UNUSED');
+    for (const alias of snapshot.aliases) {
+      if (alias.keyEnv) expect(snapshot.env).toHaveProperty(alias.keyEnv);
+    }
+    const config = JSON.parse(readFileSync(path.join(String(captured.env.PI_CODING_AGENT_DIR), 'models.json'), 'utf8'));
+    expect(config.providers['native-a'].baseUrl).toBe('http://old.test');
+    expect(await handle.previewModelSwitch?.('local-model', { providerId: 'native-a' }))
+      .toMatchObject({ action: 'hot' });
+    expect(captured.closes).toBe(0);
+    await handle.close();
+  });
+
+  it('retries the active model after a catalog refresh whose first set_model is rejected', async () => {
+    let name = 'First';
+    let rejectNextModel = false;
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') return { success: true, data: {
+        sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
+      } };
+      if (command.type === 'set_model' && rejectNextModel) {
+        rejectNextModel = false;
+        return { success: false, error: 'temporary rejection' };
+      }
+      return { success: true, data: {} };
+    };
+    const deps = byomDeps(async () => ({ providers: [{
+      id: 'native-a', name: 'Native A', baseUrl: 'http://a.test',
+      api: 'openai-completions', models: [{ id: 'local-model', name, contextWindow: 200_000 }],
+    }], env: {} }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'same-id-retry', workingDir: cwd, model: 'local-model', providerId: 'native-a',
+    });
+    name = 'Second';
+    rejectNextModel = true;
+    captured.requests.length = 0;
+    await expect(handle.setModel!('local-model', { providerId: 'native-a' }))
+      .rejects.toThrow(/temporary rejection/);
+    expect(captured.closes).toBe(0);
+    await handle.setModel!('local-model', { providerId: 'native-a' });
+    expect(captured.requests.filter((request) => request.type === 'set_model')).toHaveLength(2);
+    expect(captured.requests.filter((request) => request.type === 'refresh_models')).toHaveLength(2);
+    await handle.close();
+  });
+
+  it('reapplies the current model after another target is rejected following a full catalog refresh', async () => {
+    let updated = false;
+    let rejectB = true;
+    const descriptor = (id: string): ModelDescriptor => ({
+      id, displayName: id === 'model-a' && updated ? 'A updated' : id,
+      contextWindow: 200_000, efforts: [], defaultEffort: null,
+    });
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') return { success: true, data: {
+        sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
+      } };
+      if (command.type === 'set_model' && command.modelId === 'model-b' && rejectB) {
+        rejectB = false;
+        return { success: false, error: 'B rejected' };
+      }
+      return { success: true, data: {} };
+    };
+    const deps = byomDeps(async () => ({ providers: [], env: {} }),
+      [descriptor('model-a'), descriptor('model-b')]);
+    deps.resolvePiRuntimeModels = () => [descriptor('model-a'), descriptor('model-b')];
+    deps.resolvePiRuntimeModelDescriptor = (_provider, id) => descriptor(id);
+    deps.resolvePiGatewayModelDescriptor = (_provider, id) => descriptor(id);
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'current-after-other-rejected', workingDir: cwd,
+      model: 'model-a', providerId: 'xd',
+    });
+    updated = true;
+    await expect(handle.setModel!('model-b', { providerId: 'xd' })).rejects.toThrow(/B rejected/);
+    expect(captured.closes).toBe(0);
+    captured.requests.length = 0;
+    await handle.setModel!('model-a', { providerId: 'xd' });
+    expect(captured.requests).toContainEqual({ type: 'set_model', provider: 'cindy', modelId: 'model-a' });
+    expect(captured.requests.some((request) => request.type === 'switch_session')).toBe(false);
+    await handle.close();
+  });
+
+  it('restores exact private catalog bytes when the adapter rejects before mutation', async () => {
+    let name = 'Before';
+    const deps = byomDeps(async () => ({ providers: [{
+      id: 'native-a', name: 'Native A', adapterProvider: 'openai',
+      baseUrl: 'http://a.test', api: 'openai-completions',
+      models: [{ id: 'local-model', name, contextWindow: 200_000 }],
+    }], env: {} }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'invalid-refresh-rollback', workingDir: cwd,
+      model: 'local-model', providerId: 'native-a',
+    });
+    const configHome = captured.env.PI_CODING_AGENT_DIR!;
+    const modelsPath = path.join(configHome, 'models.json');
+    const settingsPath = path.join(configHome, 'settings.json');
+    const beforeModels = readFileSync(modelsPath, 'utf8');
+    const beforeSettings = readFileSync(settingsPath, 'utf8');
+    name = 'After';
+    captured.refreshAckMode = 'invalid';
+    captured.requests.length = 0;
+    await expect(handle.setModel!('local-model', { providerId: 'native-a' }))
+      .rejects.toThrow(/rejected the native provider refresh payload/);
+    expect(readFileSync(modelsPath, 'utf8')).toBe(beforeModels);
+    expect(readFileSync(settingsPath, 'utf8')).toBe(beforeSettings);
+    expect(captured.requests.some((request) => request.type === 'set_model')).toBe(false);
+    expect(captured.closes).toBe(0);
+    await handle.close();
+  });
+
+  it('does not prompt, write, or close when the private refresh command is absent', async () => {
+    let name = 'Before';
+    const deps = byomDeps(async () => ({ providers: [{
+      id: 'native-a', name: 'Native A', adapterProvider: 'openai',
+      baseUrl: 'http://a.test', api: 'openai-completions',
+      models: [{ id: 'local-model', name, contextWindow: 200_000 }],
+    }], env: {} }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'missing-refresh-command', workingDir: cwd,
+      model: 'local-model', providerId: 'native-a',
+    });
+    const configHome = captured.env.PI_CODING_AGENT_DIR!;
+    const modelsPath = path.join(configHome, 'models.json');
+    const settingsPath = path.join(configHome, 'settings.json');
+    const beforeModels = readFileSync(modelsPath, 'utf8');
+    const beforeSettings = readFileSync(settingsPath, 'utf8');
+    name = 'After';
+    captured.hasRefreshCommand = false;
+    captured.requests.length = 0;
+    await expect(handle.setModel!('local-model', { providerId: 'native-a' }))
+      .rejects.toThrow(/refresh extension is unavailable/);
+    expect(captured.requests.map((request) => request.type)).toEqual(['get_commands']);
+    expect(readFileSync(modelsPath, 'utf8')).toBe(beforeModels);
+    expect(readFileSync(settingsPath, 'utf8')).toBe(beforeSettings);
+    expect(captured.closes).toBe(0);
+    await handle.close();
+  });
+
+  it('adds all live Gateway rows to child routes and admits newly applied efforts', async () => {
+    let addModel = false;
+    let expandEffort = false;
+    const descriptor = (id: string): ModelDescriptor => ({
+      id, displayName: id, contextWindow: 200_000,
+      efforts: id === 'gateway-m' && expandEffort ? ['low', 'high'] : ['low'],
+      defaultEffort: 'low',
+    });
+    const deps = byomDeps(async () => ({ providers: [], env: {} }), [descriptor('gateway-m')]);
+    deps.resolvePiRuntimeModels = () => addModel
+      ? [descriptor('gateway-m'), descriptor('gateway-n')] : [descriptor('gateway-m')];
+    deps.resolvePiRuntimeModelDescriptor = (_provider, id) =>
+      id === 'gateway-n' && !addModel ? null : descriptor(id);
+    deps.resolvePiGatewayModelDescriptor = (_provider, id) =>
+      id === 'gateway-n' && !addModel ? null : descriptor(id);
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'gateway-live-child-routes', workingDir: cwd,
+      model: 'gateway-m', providerId: 'xd',
+    });
+    addModel = true;
+    expandEffort = true;
+    await handle.setModel!('gateway-m', { providerId: 'xd', effort: 'high' });
+    const snapshot = JSON.parse(readFileSync(runtimeFileOf('subagent', 'gateway-live-child-routes'), 'utf8')) as {
+      modelRoutes: Record<string, Array<{ provider: string; model: string }>>;
+    };
+    expect(snapshot.modelRoutes['gateway-n']).toContainEqual(expect.objectContaining({
+      provider: 'cindy', model: 'gateway-n',
+    }));
+    await expect(handle.setEffort?.('high')).resolves.toBeUndefined();
+    expect(captured.requests.some((request) => request.type === 'switch_session')).toBe(false);
+    await handle.close();
+  });
+
   it("reads back the Pi route even when set_model reports the catalog-sized window", async () => {
     captured.requestHandler = async (command) => {
       if (command.type === "get_state") {
@@ -3801,8 +4070,6 @@ describe("Pi provider-aware model routing", () => {
     captured.requests.length = 0;
     await handle.setModel!("model-b", { providerId: "native-a" });
     expect(captured.requests.map((request) => request.type)).toEqual([
-      "set_model",
-      "switch_session",
       "set_model",
       "get_state",
     ]);
@@ -3993,7 +4260,7 @@ describe("Pi provider-aware model routing", () => {
     });
     await expect(
       handle.setModel!("local-model", { providerId: "added-later" }),
-    ).rejects.toThrow(/cannot serve model 'local-model'|restart the session/);
+    ).rejects.toThrow(/not available in the current catalog/);
     // 已在快照里的 provider 仍可正常切换。
     await expect(
       handle.setModel!("local-model", { providerId: "native-a" }),
@@ -4025,7 +4292,7 @@ describe("Pi provider-aware model routing", () => {
     });
     await expect(
       handle.setModel!("ghost-model", { providerId: "native-a" }),
-    ).rejects.toThrow(/cannot serve model 'ghost-model'/);
+    ).rejects.toThrow(/does not offer model 'ghost-model'/);
     await handle.close();
   });
 
@@ -4298,9 +4565,7 @@ describe("Pi provider-aware model routing", () => {
     }
     gatewayModels[0]!.supportsImageInput = true;
     await handle.setModel!("gateway-text", { providerId: null });
-    await expect(handle.send(imageMessage)).rejects.toMatchObject({
-      code: "PI_IMAGE_INPUT_UNSUPPORTED",
-    });
+    await expect(handle.send(imageMessage)).resolves.toBeUndefined();
 
     // 明确支持图片的网关模型保留全部图片块，多图不被剥离或改写。
     await handle.setModel!("gateway-vision", { providerId: null });
@@ -4327,7 +4592,7 @@ describe("Pi provider-aware model routing", () => {
       }),
     ).rejects.toThrow(/failed to read image attachment/);
     // 未发送任何 prompt(失败在 dispatch 前)
-    expect(captured.requests).toHaveLength(0);
+    expect(captured.requests.some((request) => request.type === "prompt")).toBe(false);
     await handle.close();
   });
 
@@ -4728,11 +4993,7 @@ describe("Pi provider-aware model routing", () => {
     // setModel 传 null 同样固定走网关(不落到 native-a)。
     captured.requests.length = 0;
     await handle.setModel!("local-model", { providerId: null });
-    expect(captured.requests).toContainEqual({
-      type: "set_model",
-      provider: "cindy",
-      modelId: "local-model",
-    });
+    expect(captured.runtimeProvider).toBe("cindy");
     await handle.close();
   });
 
@@ -5661,8 +5922,6 @@ describe("Pi provider-aware model routing", () => {
     expect(forwardEvents).toEqual([
       "forward:http://127.0.0.1:18765:47989",
       "set_model",
-      // switch_session rebuilds from the original CLI route; target is re-applied.
-      "set_model",
     ]);
     await handle.close();
   });
@@ -6113,7 +6372,7 @@ describe("Pi provider-aware model routing", () => {
       expect(snapshot.pending).not.toBe(true);
     }
     const requestsBefore = captured.requests.length;
-    await expect(handle.setModel!(model, { providerId: "not-in-startup" })).rejects.toThrow(/cannot serve/);
+    await expect(handle.setModel!(model, { providerId: "not-in-startup" })).rejects.toThrow(/not available in the current catalog/);
     expect(captured.requests.length).toBe(requestsBefore);
     expect(resolveParent?.()).toBe("openai");
     await handle.close();

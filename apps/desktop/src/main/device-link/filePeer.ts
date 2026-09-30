@@ -12,6 +12,7 @@ import {
   uploadPeerAttachment,
   FILE_PEER_CHUNK_BYTES,
   FILE_PEER_MAX_BYTES,
+  canSendPeerAttachment,
   FILE_PEER_IDLE_MS,
   FILE_PEER_CHANNEL,
   parseFilePeerRequest,
@@ -66,6 +67,8 @@ interface Outgoing {
   invoke: Invoke;
   rpc?: boolean;
   attachments?: boolean;
+  /** 对端接收直连附件不设固定上限(只看磁盘空间);旧端仍按 OSS 上限拒收更大的附件。 */
+  largeAttachments?: boolean;
 }
 const outgoing = new Map<string, Outgoing>();
 const cooldown = createPeerTransferCooldown();
@@ -86,10 +89,132 @@ const replies = new Map<
     resolve(value?: string): void;
     reject(error: Error): void;
     timer: ReturnType<typeof setTimeout>;
+    /** Diagnostics probe: transfer progress must never refresh its timeout. */
+    probe?: boolean;
   }
 >();
 const host = new DesktopCaptureWindow(() => stopFilePeers(), 'files');
 let starting: Promise<void> | null = null;
+/** Transfers slower than one sample interval log runtime stats once per interval. */
+const PROGRESS_SAMPLE_MS = 1_000;
+/** After EOF, keep sampling until the data channel buffer drains, at most this long. */
+const DRAIN_SAMPLE_MS = 30_000;
+const monitors = new Map<string, { connection: string; stop(): void }>();
+
+/**
+ * Diagnostics-only stats probe. Unlike command(), it neither renews the idle timer nor
+ * stops the connection on timeout, and its pending entry is marked `probe` so transfer
+ * chunks cannot stretch the 5s budget. Sampling can neither keep alive nor break a
+ * transfer.
+ */
+function probeStats(connection: string): Promise<string | null> {
+  if (!connections.has(connection) || !host.contents || host.contents.isDestroyed())
+    return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const id = randomUUID();
+    const timer = setTimeout(() => {
+      replies.delete(id);
+      resolve(null);
+    }, 5_000);
+    timer.unref();
+    replies.set(id, {
+      connection,
+      resolve: (value) => resolve(value ?? null),
+      reject: () => resolve(null),
+      timer,
+      probe: true,
+    });
+    try {
+      host.contents!.send(FILE_PEER_LOCAL.COMMAND, id, { action: 'stats', connection });
+    } catch {
+      replies.delete(id);
+      clearTimeout(timer);
+      resolve(null);
+    }
+  });
+}
+function bufferedAmountOf(stats: string | null): number | null {
+  try {
+    const value = stats ? JSON.parse(stats)?.channel?.bufferedAmount : undefined;
+    return typeof value === 'number' ? value : null;
+  } catch {
+    return null;
+  }
+}
+function startMonitor(key: string, connection: string, sample: () => Promise<boolean>) {
+  monitors.get(key)?.stop();
+  let busy = false;
+  const timer = setInterval(() => {
+    if (busy) return;
+    busy = true;
+    void sample()
+      .then((keep) => {
+        if (!keep) stop();
+      }, stop)
+      .finally(() => {
+        busy = false;
+      });
+  }, PROGRESS_SAMPLE_MS);
+  timer.unref();
+  const stop = () => {
+    clearInterval(timer);
+    if (monitors.get(key)?.stop === stop) monitors.delete(key);
+  };
+  monitors.set(key, { connection, stop });
+  return stop;
+}
+/** Host → controller send: progress while reading, then SCTP buffer drain after EOF. */
+function monitorSend(ticket: string, s: Source) {
+  const tag = `conn=${short(s.connection)}`;
+  // Only one file drains a connection at a time: bufferedAmount covers the whole
+  // channel, so a previous file's monitor cannot attribute the next transfer's
+  // buffered bytes once its send starts.
+  for (const [key, monitor] of [...monitors])
+    if (key.startsWith('send:') && monitor.connection === s.connection) {
+      log.debug(`send drain superseded ${tag} ticket=${short(ticket)}`);
+      monitor.stop();
+    }
+  void probeStats(s.connection).then((stats) =>
+    log.debug(`send start ${tag} size=${s.size} stats=${stats ?? 'unavailable'}`),
+  );
+  let eofAt: number | undefined;
+  startMonitor(`send:${ticket}`, s.connection, async () => {
+    if (sources.get(ticket) !== s) {
+      // Closed before EOF: stopConnection already logged the unfinished byte count.
+      if (s.offset < s.size || !connections.has(s.connection)) return false;
+      eofAt ??= Date.now();
+    }
+    const stats = await probeStats(s.connection);
+    const now = Date.now();
+    if (!stats) {
+      // One failed probe skips its sample only; monitoring continues while the
+      // transfer (or the bounded drain phase) is still active.
+      if (eofAt !== undefined && now - eofAt >= DRAIN_SAMPLE_MS) {
+        log.debug(`send drain unobserved ${tag} buffered=unknown afterEofMs=${now - eofAt}`);
+        return false;
+      }
+      return true;
+    }
+    log.debug(
+      `send progress ${tag} sent=${s.offset}/${s.size}B elapsedMs=${now - s.openedAt}` +
+        (eofAt === undefined ? '' : ` afterEofMs=${now - eofAt}`) +
+        ` stats=${stats}`,
+    );
+    if (eofAt === undefined) return true;
+    const buffered = bufferedAmountOf(stats);
+    if (buffered === 0) {
+      log.debug(`send drained ${tag} ms=${now - s.openedAt} afterEofMs=${now - eofAt}`);
+      return false;
+    }
+    if (buffered === null || now - eofAt >= DRAIN_SAMPLE_MS) {
+      log.debug(
+        `send drain unobserved ${tag} buffered=${buffered ?? 'unknown'} afterEofMs=${now - eofAt}`,
+      );
+      return false;
+    }
+    return true;
+  });
+}
 
 function touch(id: string) {
   const c = connections.get(id);
@@ -106,6 +231,21 @@ function touch(id: string) {
   c.timer = setTimeout(() => stopConnection(id, 'idle'), FILE_PEER_IDLE_MS);
   c.timer.unref();
   return c;
+}
+/**
+ * 等待单次请求期间按空闲时限的一半刷新连接:大附件的摘要校验可能超过空闲时限,
+ * 进行中的请求不能被当成空闲关掉。连接已关闭或被撤权时停止刷新。
+ */
+function keepAlive(id: string): () => void {
+  const timer = setInterval(() => {
+    try {
+      touch(id);
+    } catch {
+      clearInterval(timer);
+    }
+  }, FILE_PEER_IDLE_MS / 2);
+  timer.unref();
+  return () => clearInterval(timer);
 }
 function track(id: string, peer: string, incoming: boolean) {
   if (connections.size >= 4) throw new Error('FILE_PEER_BUSY');
@@ -125,6 +265,7 @@ function stopConnection(id: string, reason: string) {
     );
   else log.debug(`closed ${detail}`);
   clearTimeout(c.timer);
+  for (const monitor of [...monitors.values()]) if (monitor.connection === id) monitor.stop();
   const out = outgoing.get(c.peer);
   if (out?.id === id) {
     outgoing.delete(c.peer);
@@ -176,6 +317,14 @@ async function prepareHost(connection: string): Promise<void> {
 }
 async function command(c: FilePeerCommand): Promise<string | undefined> {
   await prepareHost(c.connection);
+  const stopKeepAlive = c.action === 'invoke' ? keepAlive(c.connection) : undefined;
+  try {
+    return await sendCommand(c);
+  } finally {
+    stopKeepAlive?.();
+  }
+}
+function sendCommand(c: FilePeerCommand): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
     const id = randomUUID();
     const timer = setTimeout(
@@ -186,7 +335,11 @@ async function command(c: FilePeerCommand): Promise<string | undefined> {
         if (c.action !== 'invoke') stopConnection(c.connection, `${c.action}-timeout`);
         reject(new Error('FILE_PEER_TIMEOUT'));
       },
-      c.action === 'receive' ? 60_000 : 15_000,
+      c.action === 'receive'
+        ? 60_000
+        : c.action === 'invoke' && c.timeoutMs && c.timeoutMs > 15_000
+          ? c.timeoutMs
+          : 15_000,
     );
     timer.unref();
     replies.set(id, { connection: c.connection, resolve, reject, timer });
@@ -232,7 +385,13 @@ async function handleFilePeerRequest(
   invoke?: Connection['invoke'],
 ): Promise<unknown> {
   if (r.action === 'caps')
-    return { version: 1, maxBytes: FILE_PEER_MAX_BYTES, streaming: true, attachments: true };
+    return {
+      version: 1,
+      maxBytes: FILE_PEER_MAX_BYTES,
+      streaming: true,
+      attachments: true,
+      largeAttachments: true,
+    };
   if (r.action === 'offer') {
     const id = randomUUID();
     track(id, peer, true);
@@ -307,7 +466,7 @@ async function handleFilePeerRequest(
           } as Record<string, string>
         )[ext] ??
         'application/octet-stream';
-      sources.set(ticket, {
+      const source: Source = {
         connection: r.connection,
         file,
         size: stat.size,
@@ -315,7 +474,9 @@ async function handleFilePeerRequest(
         offset: 0,
         busy: false,
         openedAt: Date.now(),
-      });
+      };
+      sources.set(ticket, source);
+      monitorSend(ticket, source);
       return { ticket, size: stat.size, mimeType };
     } catch (error) {
       await file.close();
@@ -341,7 +502,13 @@ export function registerFilePeerIpc() {
       !canServePeerInvoke(payload.channel, payload.args)
     )
       throw new Error('FILE_PEER_DENIED');
-    const result = await c.invoke(payload.channel, payload.args);
+    const stopKeepAlive = keepAlive(id);
+    let result: unknown;
+    try {
+      result = await c.invoke(payload.channel, payload.args);
+    } finally {
+      stopKeepAlive();
+    }
     touch(id);
     return JSON.stringify(result);
   });
@@ -387,9 +554,11 @@ export function registerFilePeerIpc() {
         touch(connection);
         if (sources.get(ticket) !== s) throw new Error('FILE_PEER_CLOSED');
         s.offset += bytes.length;
-        // Receive deadlines measure stalled disk/network progress, not total file duration.
+        // Receive deadlines measure stalled disk/network progress, not total file
+        // duration. Diagnostic probes keep their own 5s budget instead: chunk
+        // refreshes must not stretch a stalled getStats() past its timeout.
         for (const pending of replies.values())
-          if (pending.connection === s.connection) pending.timer.refresh();
+          if (pending.connection === s.connection && !pending.probe) pending.timer.refresh();
         if (!bytes.length) {
           sources.delete(ticket);
           await s.file.close();
@@ -434,9 +603,9 @@ export function registerFilePeerIpc() {
         if (written.bytesWritten !== bytes.length || sinks.get(id) !== s)
           throw new Error('FILE_PEER_CLOSED');
         s.offset += bytes.length;
-        // Receive deadlines measure stalled disk/network progress, not total file duration.
+        // Same as READ: transfer progress never refreshes diagnostic probe timers.
         for (const pending of replies.values())
-          if (pending.connection === s.connection) pending.timer.refresh();
+          if (pending.connection === s.connection && !pending.probe) pending.timer.refresh();
       } finally {
         s.busy = false;
       }
@@ -508,6 +677,8 @@ async function receivePeerFile(
       }
       out.rpc = (caps.result as { streaming?: unknown }).streaming === true;
       out.attachments = (caps.result as { attachments?: unknown }).attachments === true;
+      out.largeAttachments =
+        (caps.result as { largeAttachments?: unknown }).largeAttachments === true;
       track(id, peer, false);
       const [, servers] = await Promise.all([prepareHost(id), loadDesktopIceServers()]);
       const offer = await command({
@@ -531,7 +702,7 @@ async function receivePeerFile(
       out.remote = remote;
       await command({ action: 'answer', connection: id, sdp: r.sdp });
       log.debug(
-        `connected peer=${short(peer)} setupMs=${Date.now() - startedAt} stats=${await command({ action: 'stats', connection: id })}`,
+        `connected peer=${short(peer)} setupMs=${Date.now() - startedAt} stats=${(await probeStats(id)) ?? 'unavailable'}`,
       );
     }
     step = 'open';
@@ -556,6 +727,16 @@ async function receivePeerFile(
     sinks.set(sink, { connection: id, file: handle, offset: 0, size: file.size, busy: false });
     step = 'receive';
     const transferStartedAt = Date.now();
+    const stopProgress = startMonitor(`receive:${sink}`, id, async () => {
+      const stats = await probeStats(id);
+      // One failed probe skips its sample only; stopProgress() below bounds the
+      // monitor, so a stats hiccup cannot silence the rest of the transfer.
+      if (!stats) return sinks.has(sink);
+      log.debug(
+        `receive progress peer=${short(peer)} conn=${short(id)} written=${sinks.get(sink)?.offset ?? '?'}/${file.size}B elapsedMs=${Date.now() - transferStartedAt} stats=${stats}`,
+      );
+      return sinks.has(sink);
+    });
     try {
       await command({
         action: 'receive',
@@ -571,6 +752,7 @@ async function receivePeerFile(
       )
         throw new Error('FILE_PEER_SIZE');
     } finally {
+      stopProgress();
       sinks.delete(sink);
       await handle.close().catch(() => {});
     }
@@ -614,6 +796,28 @@ async function receivePeerFile(
   }
 }
 
+interface PeerAttachmentCaps {
+  attachments?: boolean;
+  largeAttachments?: boolean;
+}
+/** 已有连接直接复用其能力;否则只发一次 caps 查询(走既有通道,不建 WebRTC 连接)。 */
+async function peerAttachmentCaps(
+  peer: string,
+  invoke: Invoke,
+): Promise<PeerAttachmentCaps | undefined> {
+  const existing = outgoing.get(peer);
+  if (existing?.remote) return existing;
+  const caps = await invoke(peer, FILE_PEER_CHANNEL, [{ action: 'caps' }]);
+  const result = caps.ok
+    ? (caps.result as { version?: unknown; attachments?: unknown; largeAttachments?: unknown })
+    : undefined;
+  if (result?.version !== 1) return undefined;
+  return {
+    attachments: result.attachments === true,
+    largeAttachments: result.largeAttachments === true,
+  };
+}
+
 const warming = new Set<string>();
 /** Upload only bytes; the eventual message still uses its original WSS acceptance semantics. */
 export async function tryUploadPeerAttachment(
@@ -634,16 +838,13 @@ export async function tryUploadPeerAttachment(
     let handle: FileHandle | undefined;
     let active: Outgoing | undefined;
     try {
-      await receivePeerFile(peer, null, invoke);
-      check();
-      const out = outgoing.get(peer);
-      if (!out?.remote || !out.attachments) return null;
-      active = out;
-      out.busy = true;
       if (typeof source === 'string')
         handle = await fs.open(source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
       const size = handle ? (await handle.stat()).size : (source as Buffer).length;
-      if (!size || size > FILE_PEER_MAX_BYTES) return null;
+      if (!size) return null;
+      // 读整份文件算摘要之前先确认对端能收:对端离线、旧版或不支持时不白读一遍(随后还要走 OSS)。
+      if (!canSendPeerAttachment(await peerAttachmentCaps(peer, invoke), size)) return null;
+      check();
       const read = async (offset: number, length: number) => {
         check();
         if (!handle) return (source as Buffer).subarray(offset, offset + length);
@@ -652,19 +853,28 @@ export async function tryUploadPeerAttachment(
           throw new Error('FILE_PEER_CHANGED');
         return bytes;
       };
+      // 能力确认后先算摘要再建链:大文件摘要可能超过连接空闲时限,建好的连接不能在 begin 前被闲置关掉。
       const hash = createHash('sha256');
       for (let offset = 0; offset < size; offset += 1024 * 1024)
         hash.update(await read(offset, Math.min(1024 * 1024, size - offset)));
+      const sha256 = hash.digest('hex');
+      await receivePeerFile(peer, null, invoke);
+      check();
+      const out = outgoing.get(peer);
+      if (!out?.remote || !canSendPeerAttachment(out, size)) return null;
+      active = out;
+      out.busy = true;
       const transferStartedAt = Date.now();
       const result = await uploadPeerAttachment(
-        { size, sha256: hash.digest('hex'), mimeType },
+        { size, sha256, mimeType },
         async (offset, length) => (await read(offset, length)).toString('base64'),
-        async (request) => {
+        async (request, timeoutMs) => {
           check();
           const response = JSON.parse(
             (await command({
               action: 'invoke',
               connection: out.id,
+              ...(timeoutMs ? { timeoutMs } : {}),
               payload: JSON.stringify({
                 channel: FILE_PEER_CHANNEL,
                 args: [{ action: 'attachment', connection: out.remote, request }],

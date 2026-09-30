@@ -1,13 +1,49 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/config/env', () => ({
   WECHAT_APP_ID: 'wx-test-mobile',
   WECHAT_UNIVERSAL_LINK: 'https://login.example.com/app/',
 }));
 
+import { setMobileAuthOwner, invalidateMobileAuthOwnerForSwitch } from '@/auth/authOwnerGeneration';
+import { clearSharedTaskInvitationIntent, getPendingSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
 import { redirectSystemPath } from '../../app/+native-intent';
 
+const invitation = 'A'.repeat(43);
+const incoming = 'cindy://shared-session?invitation=' + invitation + '&server=https%3A%2F%2Frelay.example.test';
+beforeEach(() => { vi.useFakeTimers(); clearSharedTaskInvitationIntent(); setMobileAuthOwner(null); });
+afterEach(() => { clearSharedTaskInvitationIntent(); vi.useRealTimers(); });
+
 describe('mobile native deep-link redirects', () => {
+  it('keeps the invitation out of router state, survives login, and clears on an account change', () => {
+    expect(redirectSystemPath({ path: incoming, initial: true })).toBe('/shared-session');
+    expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation, server: 'https://relay.example.test' });
+    setMobileAuthOwner('first');
+    expect(getPendingSharedTaskInvitationIntent()).not.toBeNull();
+    invalidateMobileAuthOwnerForSwitch();
+    expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+  });
+  it('handles a warm path and expires an unclaimed invitation', () => {
+    redirectSystemPath({ path: incoming.replace('cindy:/', ''), initial: false });
+    expect(getPendingSharedTaskInvitationIntent()).not.toBeNull();
+    vi.advanceTimersByTime(15 * 60_000);
+    expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+  });
+  it.each([true, false])('normalizes both relative invitation routes without retaining secrets (initial=%s)', initial => {
+    for (const route of ['/shared-session', '/shared-task/join']) {
+      const path = route + incoming.slice(incoming.indexOf('?'));
+      expect(redirectSystemPath({ path, initial })).toBe('/shared-session');
+      expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation, server: 'https://relay.example.test' });
+      expect(redirectSystemPath({ path: path + '&invitation=bad', initial })).toBe('/shared-session');
+      expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+    }
+  });
+  it('drops an earlier pending invitation when a malformed one arrives', () => {
+    redirectSystemPath({ path: incoming, initial: false });
+    expect(redirectSystemPath({ path: incoming + '&invitation=bad', initial: false })).toBe('/shared-session');
+    expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+  });
+
   it.each([true, false])('keeps WeChat SDK callbacks out of navigation (initial=%s)', (initial) => {
     for (const path of [
       'cindycn://oauth?code=test-wechat-code&state=test-state',

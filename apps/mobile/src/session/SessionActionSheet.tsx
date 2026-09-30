@@ -50,10 +50,13 @@ import {
 import {
   fontWeight,
   lineHeight,
+  motionDuration,
+  motionEasing,
   radius,
   spacing,
   typeScale,
 } from "@/theme/tokens";
+import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 
 /** 卡片滑入距离(略大于卡片实高即可,滑入曲线吃掉误差)。 */
 const CARD_SLIDE_DISTANCE = 360;
@@ -96,27 +99,38 @@ export function SessionActionSheet({
   const insets = useSafeAreaInsets();
   const [mounted, setMounted] = useState(visible);
   const progress = useRef(new Animated.Value(visible ? 1 : 0)).current;
+  // 只有明确 === false 才播动画;null(尚未查到)/ true 一律直接显示 / 隐藏。
+  const animate = useReduceMotionEnabled() === false;
 
   useEffect(() => {
     if (visible) {
       setMounted(true);
+      if (!animate) {
+        progress.setValue(1);
+        return;
+      }
       Animated.timing(progress, {
-        duration: 220,
-        easing: Easing.out(Easing.cubic),
+        duration: motionDuration.enter,
+        easing: Easing.bezier(...motionEasing.out),
         toValue: 1,
         useNativeDriver: true,
       }).start();
     } else {
+      if (!animate) {
+        progress.setValue(0);
+        setMounted(false);
+        return;
+      }
       Animated.timing(progress, {
-        duration: 160,
-        easing: Easing.in(Easing.quad),
+        duration: motionDuration.exit,
+        easing: Easing.bezier(...motionEasing.in),
         toValue: 0,
         useNativeDriver: true,
       }).start(({ finished }) => {
         if (finished) setMounted(false);
       });
     }
-  }, [visible, progress]);
+  }, [animate, visible, progress]);
 
   // onClosed 等 Modal 真正从树上卸载后再触发(同 DeviceMenuModal:动画回调里同步挂
   // 第二个 Modal 会和本 Modal 的卸载挤进同一个 commit,iOS 可能吞掉新弹窗)。

@@ -126,7 +126,7 @@ export interface RemoteMessage {
     | 'help' | 'context' | 'cost' | 'pwd' | 'status' | 'compact' | 'cmd' | 'goal-complete' | 'goal-resumed' | 'context-rebuild' | 'auto-resume' | 'learn' | 'agent-switch';
 }
 
-export type RemoteAttachmentCategory = 'image' | 'pdf' | 'text' | 'office';
+export type RemoteAttachmentCategory = 'image' | 'pdf' | 'text' | 'office' | 'file';
 
 export interface RemoteFileRef {
   name: string;

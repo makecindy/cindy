@@ -582,3 +582,26 @@ it('passes the saved reminder choice and check into the shared runner and return
   await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0].status).toBe('skipped'));
   expect(mock.storage.insert).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'canonical-task', silentWhenIdle: false, preRunHook }));
 });
+
+it('persists all imported paused routines before tool-policy setup and never dispatches them', async () => {
+  const { indexAutomationDependencies, normalizeAutomation } = await import('../../bot-import/sourceAutomations.js');
+  const dependencies = indexAutomationDependencies([]);
+  const guard = vi.fn(async () => { throw new Error('SOURCE_TOOL_POLICY_NEEDS_MAPPING'); });
+  configureRoutineHost({ getBot: mock.getBot, getScheduler: () => mock.scheduler, getScheduleStorage: () => mock.storage, assertImportedAutomationReady: guard });
+  for (let index = 0; index < 11; index++) {
+    const item = normalizeAutomation({ agentId: 'source', kind: 'openclaw', name: 'Source', root: '/fixture', workspace: '/fixture', configFile: '/fixture/openclaw.json' }, {
+      id: `report-${index}`, name: `Report ${index}`, enabled: false,
+      schedule: { kind: 'every', everyMs: 60_000 }, payload: { message: 'Read the report' },
+      ...(index < 4 ? { tools: { allow: ['read'] } } : {}),
+    }, dependencies, 'UTC');
+    expect(item.automation?.input).toBeDefined();
+    if (index < 4) expect(item.view.issues).toContain('SOURCE_TOOL_POLICY_NEEDS_MAPPING');
+    await routineTools.createOnce('bot', item.automation!.input!, `imported-report-${index}`);
+  }
+  expect(guard).not.toHaveBeenCalled();
+  const routines = await routineTools.list('bot');
+  expect(routines).toHaveLength(11);
+  expect(routines.every(routine => !routine.enabled)).toBe(true);
+  expect(mock.scheduler.runNow).not.toHaveBeenCalled();
+  await expect(routineTools.runNow('bot', routines[0].id)).rejects.toThrow('SOURCE_TOOL_POLICY_NEEDS_MAPPING');
+});

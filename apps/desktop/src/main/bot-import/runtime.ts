@@ -4,8 +4,10 @@ import { getDbClient } from '../localDb/client/current.js';
 import { botSessionLinks, botProfiles, sessions } from '../localDb/schema.js';
 import { botEnvironmentSecretIo } from '../secrets/providerSecretStore.js';
 import { createCompanionEnvironmentStore } from './environment.js';
+import { projectEnvironmentDiscovery } from './environmentJson.js';
 import { fingerprint } from './files.js';
 import { CompanionImportError } from './types.js';
+import { removeImportedMemoryMedia } from './memoryMedia.js';
 import { closeInvalidImportedConnections } from './connections.js';
 
 // Bot IDs are not reused. Retain a process-local deletion fence so a delayed DB
@@ -18,6 +20,7 @@ export const companionEnvironmentStore = createCompanionEnvironmentStore({
   read: (key, assertOwner) => botEnvironmentSecretIo.read(key, assertOwner),
   write: (key, value, assertOwner) => botEnvironmentSecretIo.write(key, value, assertOwner),
   remove: key => botEnvironmentSecretIo.remove(key),
+  removeResources: removeImportedMemoryMedia,
 });
 
 /** Called only after profile deletion commits; failed deletions retain access. */
@@ -44,7 +47,7 @@ export async function recoverCompanionEnvironmentRemovals(): Promise<void> {
 }
 
 /** Resolve from the main-owned session link, never from a renderer-supplied Bot ID or path. */
-export async function readCompanionSessionEnvironment(sessionId: string) {
+export async function readCompanionSessionScope(sessionId: string) {
   const owner = activeOwnerScopeKey();
   const userData = ownerScopedUserDataPath();
   let botId: string | undefined;
@@ -60,12 +63,28 @@ export async function readCompanionSessionEnvironment(sessionId: string) {
   botId = link?.botId;
   assertOwner();
   if (!link) return undefined;
-  const environment = await companionEnvironmentStore.read(userData, link.botId, assertOwner);
+  return { owner, assertOwner, botId: link.botId, userData };
+}
+
+export async function readCompanionSessionEnvironment(sessionId: string) {
+  const scope = await readCompanionSessionScope(sessionId);
+  if (!scope) return undefined;
+  const { owner, userData, botId, assertOwner } = scope;
+  const environment = await companionEnvironmentStore.read(userData, botId, assertOwner);
   if (!environment) return undefined;
-  return { identity: fingerprint([owner, link.botId, environment.env, environment.mcp, environment.credentials]), environment, assertOwner, botId: link.botId, userData };
+  return { identity: fingerprint([owner, botId, projectEnvironmentDiscovery(environment).identity]), environment, assertOwner, botId, userData };
+}
+
+export async function readCompanionSessionDiscovery(sessionId: string) {
+  const scope = await readCompanionSessionScope(sessionId);
+  if (!scope) return undefined;
+  const { owner, userData, botId, assertOwner } = scope;
+  const environment = await companionEnvironmentStore.readDiscovery(userData, botId, assertOwner);
+  if (!environment) return undefined;
+  return { identity: fingerprint([owner, botId, environment.identity]), environment, assertOwner, botId, userData };
 }
 
 export async function resolveCompanionRuntimeEnvironment(sessionId: string) {
-  const result = await readCompanionSessionEnvironment(sessionId);
+  const result = await readCompanionSessionDiscovery(sessionId);
   return result ? { identity: result.identity, assertCurrent: result.assertOwner } : undefined;
 }

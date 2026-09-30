@@ -17,6 +17,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import ts from 'typescript';
+import { sharedTaskHostPeer } from '@cindy/device-link';
+import { isRemoteSessionSticky } from '@/lib/makerTransport';
+import { bindSharedTaskPushOwner, resetRemoteDataOwnerPushFence } from '@/lib/remoteDataOwnerPushFence';
 
 import type { Session } from '@/lib/ccAgent.types';
 import {
@@ -206,6 +210,29 @@ function emptyProjection(sessionId: string) {
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+
+// Execute the hook's real edit callback with the real store and transport,
+// without mounting unrelated hook effects or starting Electron.
+function planEditor(sessionId: string) {
+  const source = readFileSync(resolve(__dirname, '../hooks/useCCAgentChat.ts'), 'utf8');
+  const ast = ts.createSourceFile('hook.ts', source, ts.ScriptTarget.ES2022, true);
+  let callback = '';
+  function visit(node: ts.Node): void {
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'updatePlanContent'
+      && node.initializer && ts.isCallExpression(node.initializer)) {
+      callback = node.initializer.arguments[0].getText(ast);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+  if (!callback) throw new Error('Plan edit callback missing');
+  const compiled = ts.transpileModule(`return (${callback});`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  return new Function('sessionId', 'makerChatStore', 'isRemoteSessionSticky', 'planWriteTimerRef', 'log', compiled)(
+    sessionId, makerChatStore, isRemoteSessionSticky, { current: null }, { error: vi.fn() },
+  ) as (requestId: string, path: string, content: string) => void;
+}
 const DEVICE_ID = 'dev-int-scn';
 let n = 0;
 const sid = () => `int-scn-${n++}`;
@@ -230,6 +257,7 @@ beforeEach(() => {
 
 afterEach(() => {
   makerChatStore.__teardownGlobalListeners();
+  resetRemoteDataOwnerPushFence();
   remoteProjectsStore.clear();
   delete (globalThis as { window?: unknown }).window;
   vi.clearAllMocks();
@@ -314,6 +342,64 @@ describe('device-link 远程交互往返 — permission', () => {
 });
 
 describe('device-link 远程交互往返 — plan_review', () => {
+  it('shared guest edits stay in memory and approval sends the edited plan to the host', async () => {
+    const peer = sharedTaskHostPeer('plan-share', 'host');
+    makerChatStore.__teardownGlobalListeners();
+    host = makeFakeHost(peer);
+    local = stubElectronApi(host);
+    makerChatStore.initGlobalListeners();
+    const s = sid();
+    remoteProjectsStore.setDeviceSessions(peer, 'Host', [{ id: s } as Session]);
+    bindSharedTaskPushOwner(peer, TEST_OWNER_STAMP.dataOwnerId);
+    host.hostInteraction(s, { kind: 'plan_review', requestId: 'guest-plan', plan: 'Original', planFilePath: '/host/plan.md' });
+    await flush();
+    const write = vi.fn(async () => ({ success: true }));
+    window.electronAPI.maker.writePlanFile = write;
+    vi.useFakeTimers();
+    try {
+      const edit = planEditor(s);
+      edit('guest-plan', '/host/plan.md', 'Edited');
+      // A reconnect clears the mirror but must not turn a host path local.
+      remoteProjectsStore.clear();
+      edit('guest-plan', '/host/plan.md', 'Final draft');
+      await vi.advanceTimersByTimeAsync(600);
+      expect(write).not.toHaveBeenCalled();
+      expect(makerChatStore.getSnapshot(s).pendingPlanReview?.plan).toBe('Final draft');
+    } finally {
+      vi.useRealTimers();
+    }
+    remoteProjectsStore.setDeviceSessions(peer, 'Host', [{ id: s } as Session]);
+    makerChatStore.respondToPlanReview(s, 'guest-plan', true);
+    await flush();
+    expect(host.resolved).toEqual([{ requestId: 'guest-plan', decision: {
+      kind: 'plan_review', behavior: 'allow', editedPlan: 'Final draft',
+    } }]);
+    expect(local.localResolveInteraction).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('local autosave respects remote origin discovered during debounce: %s', async (becomesRemote) => {
+    const s = sid();
+    const write = vi.fn(async () => ({ success: true }));
+    window.electronAPI.maker.writePlanFile = write;
+    vi.useFakeTimers();
+    try {
+      const edit = planEditor(s);
+      edit('local-plan', '/local/plan.md', 'First draft');
+      edit('local-plan', '/local/plan.md', 'Final draft');
+      if (becomesRemote) {
+        remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Host', [{ id: s } as Session]);
+      }
+      await vi.advanceTimersByTimeAsync(600);
+      if (becomesRemote) expect(write).not.toHaveBeenCalled();
+      else {
+        expect(write).toHaveBeenCalledTimes(1);
+        expect(write).toHaveBeenCalledWith({ requestId: 'local-plan', planFilePath: '/local/plan.md', content: 'Final draft' });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('plan approve → behavior=allow + editedPlan(用户当前 plan)', async () => {
     const s = openRemoteSession();
     host.hostInteraction(

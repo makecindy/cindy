@@ -15,7 +15,7 @@ export function createCompanionImportProvider(): McpProvider {
     const server = new McpServer({ name: 'companion_import', version: '1.0.0' });
     server.tool('import_agent', 'Import a selected local Hermes/OpenClaw agent into a teammate. Discover sources, preview selectable metadata, then import only IDs explicitly selected by the user. Secrets remain on the host. For takeover, the user must request taking over the automations. Poll status by the same requestId; never invent a new requestId after a lost reply.', {
       operation: z.enum(['sources', 'preview', 'start', 'status']), sourceId: z.string().optional(),
-      selection: z.object({ previewId: z.string(), requestId: z.string(), name: z.string(), avatarImageBase64: z.string().min(1).max(2_000_000).optional(), entryIds: z.array(z.string()), takeover: z.boolean() }).optional(),
+      selection: z.object({ previewId: z.string(), requestId: z.string(), name: z.string(), avatarImageBase64: z.string().min(1).max(2_000_000).optional(), entryIds: z.array(z.string()), takeover: z.boolean(), deferSetup: z.boolean().default(true), entryRanges: z.array(z.tuple([z.number().int().nonnegative(), z.number().int().nonnegative()])).optional() }).optional(),
       requestId: z.string().optional(),
     }, async input => {
       const session = resolveLiziMcpSessionContext(context);

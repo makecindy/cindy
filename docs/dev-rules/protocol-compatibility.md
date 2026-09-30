@@ -11,6 +11,32 @@
 
 > **增量适用原则**：wire protocol 兼容对所有跨端改动生效，不因是小改而豁免。
 
+## SkillHub 发布失败原因
+
+发布错误继续使用 `{ error: { code, message } }`，Desktop 保留已知业务码与具体原因，
+同步用于进度事件和 IPC 结果回退；短原因也展示。未知 4xx 错误保留业务原因，网络故障、
+限流和服务不可用各自提供重试建议。缺少标准错误码的 HTTP 403 也归为权限不足，不引导编辑请求。
+只有明确的业务拒绝原因可展示原文；认证、权限不足（含 `NOT_AUTHOR`）、凭证配置、只读能力、限流、
+服务不可用及未预期的内部异常使用恢复文案，不展示原始诊断，包括异步结果与复制内容。
+init/commit 的服务端拒绝在主进程过滤非公开详情；非标准 `HTTP_*` 回退也不透传原始 message，
+未知但符合错误体契约的 4xx 业务码仍保留公开原因，客户端使用固定提示补足空详情。
+主进程的本地可见范围拒绝只返回 `INVALID_VISIBILITY`，由 Renderer 使用当前语言的恢复提示，
+不透传硬编码英文；服务端的可见范围业务原因仍可展示。
+新服务端的 `SKILL_DELETED`（409）表示同名技能已删除但名称仍被占用，客户端引导改名；
+新客户端兼容旧服务端 `FORBIDDEN` + “已删除的 Skill 不能继续发布”。旧客户端遇到新错误码
+仍可按原有通用提示降级，不要求同步发布。
+
+后台处理失败复用扫描结果的 `gates[].issues[]`（severity、code、message），客户端
+同时识别失败项的 issue 错误码与旧版错误码检查项名称，展示具体原因与相应修改建议，
+避免把包校验或名称冲突描述为安全审核失败；只对失败检查项进行该分类，已通过项、
+warn/warning 状态检查项、等待或处理中的检查项和 warning issue
+不参与失败分类。`package-validation`、`publication`、`publication-processing`、`upload-processing`
+表示发布处理检查项，其中未知错误使用内部失败的公开恢复说明，并移除诊断路径与证据；
+普通安全扫描的 findings 继续保留具体原因与相对文件位置。旧客户端本来就能
+展示 issue。服务端只向上传者返回会话原因，公开目录权限不变；未知内部异常仍返回公开的
+重试说明。实现与回归见 `shared/skillhubPublishErrors.ts`、`publishService.test.ts`、
+`PublishDialog.feedback.test.tsx` 和 `ScanResultDialog.test.tsx`。
+
 ## 电脑互联的消息文件与历史变更
 
 跨电脑任务复制使用同账号业务通道 `maker:task-copy`，受信 Renderer 使用 `task-copy:request`。
@@ -176,6 +202,22 @@ link-accept 双向声明，不改 relay）。Desktop 控制端在本机没有订
 旧版逐字节相同。remote 会话剥离 `annotationSourceUrl` / `annotationStrokes` 时保留区域字段。
 Mobile 以同一归纳算法在上传后的附件（含持久发件箱 `DurableUpload`，可选字段、旧记录缺省）
 上携带该字段；底图本身已是烧录图、旧红线位置不可知时不带区域。服务端无需改动。
+
+## 附件类型与直连附件体积
+
+Mobile 发送的队列附件（`RemoteSerializedAttachment.category`）与 Desktop `AgentInputFileCategory`
+对齐，追加 `'file'`：认不出的扩展名不再拒收，按通用文件以 `application/octet-stream` 上传。
+主机只按 `category === 'image'` 分流，其余一律作为文件路径交给 Agent，并以 `originalName`
+落地保留扩展名，新旧主机都已认得 `'file'`。
+
+附件不设产品层体积上限。直连附件（`cindy-peer-attach://`）的引用去掉固定 2GB 上限，只要求
+安全整数；接收端不设收件箱总量上限，只按剩余磁盘空间准入（未写完的上传按剩余待写字节预留）。
+OSS 保底仍受服务端 presign 单对象上限（`OSS_ATTACHMENT_MAX_BYTES`，2GB），超过它的附件
+没有保底，只能直连发送。`device-link:file-peer` 的 `caps` 追加可选 `largeAttachments: true`；
+发送端（Mobile 与 Desktop 控制端）仅在对端声明该能力时直连超过 2GB 的附件，旧主机未声明时
+直接放弃直连且不计入失败冷却，随后按 OSS 上限提示失败。旧控制端忽略新增字段，行为不变。
+文件读取（`open`）仍沿用 `FILE_PEER_MAX_BYTES`。不新增 channel、relay 类型或持久化 schema，
+服务端无需改动。
 
 ## 事实来源
 
@@ -482,6 +524,13 @@ canonical 主任务时，宿主额外追加 `resourceCollectionId=teammates&reso
 点开只进入 App；旧主机没有该 collection，新手机不显示群聊入口。未新增 channel、allowlist、relay 类型、
 notify 类别或协议版本，服务端无需升级；Mobile 无原生 fingerprint 变更。
 
+群附件按字段追加演进：`send` 动作的 input 可选携带 `attachments`（与会话消息相同的上传引用形状，
+`cindy-peer-attach://` / `cindy-oss-attach://`，最多 20 个）；主机只接受该手机自己的上传，不接受主机路径。
+消息追加 `attachments`（图片给 `cindy-media://` 地址，`path` 一律为 null）。`BotGroupRemoteChatData` 追加
+`supportsAttachments: true`，新手机只在看到它时提供附件入口；旧主机不回这个字段，新手机不会把附件发给会丢掉
+它们的旧主机。旧手机忽略新字段，Markdown 摘要里列出附件名。图片缩略图沿用既有 `device-link:media:fetch`。
+未新增 channel、allowlist、relay 类型或协议版本。
+
 ## 伙伴记忆远程页面与资源内搜索
 
 伙伴设置主资源（声明 `form` 的控制端）追加 `memories` list 块，入口指向 `settings:<botId>/memory`；
@@ -501,3 +550,12 @@ Mobile 原生 fingerprint 输入，服务端无需改动。
 任务迁移业务通道的 `move-project` action 在任务所属宿主复用项目移动校验与更新，
 仅接受任务 ID 和明确的目录（null 表示移到对话）。不开放远程 sessions 原始 patch；
 旧宿主拒绝未知 action，不回退到控制端本机执行。
+
+## 伙伴学习保存回执
+
+消息 `agent_meta` 追加可选 `botLearning` 数组，仅承载已保存的记忆/技能标题、类型、稳定键与新建/更新动作。
+执行宿主沿用 `local-db:messages:created` 广播完整原消息更新；桌面和手机只在该消息正文底部呈现两行。
+旧端忽略字段，新端对无字段历史不推测保存结果。不新增远程 channel、数据库 schema、服务端能力或原生指纹。
+桌面能力页新增仅限可信本地 renderer 的 `local-db:bots:skills:list` 读取伙伴自有技能；
+远程端继续使用已有 `settings:<botId>/skills` 资源，不扩 IPC allowlist。
+SSH 继续沿用现有伙伴远端技能限制，不读取控制端本机资料；设备互联由执行宿主保存与复盘。

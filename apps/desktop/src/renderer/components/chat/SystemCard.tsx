@@ -151,11 +151,13 @@ function HelpCard({ data }: { data?: Record<string, unknown> }) {
 
   return (
     <div className={cardClass}>
-      <div className={titleClass}>Available Commands</div>
+      <div className={titleClass}>{t('chat.systemCard.help.title')}</div>
       {desktopCmds.length > 0 && renderCommandRows(desktopCmds)}
       {agentBuiltinCmds.length > 0 && (
         <>
-          <div className={cn(titleClass, desktopCmds.length > 0 && 'mt-3')}>Built-in Commands</div>
+          <div className={cn(titleClass, desktopCmds.length > 0 && 'mt-3')}>
+            {t('chat.systemCard.help.builtInCommands')}
+          </div>
           {renderCommandRows(agentBuiltinCmds)}
         </>
       )}
@@ -167,26 +169,27 @@ function HelpCard({ data }: { data?: Record<string, unknown> }) {
               (desktopCmds.length > 0 || agentBuiltinCmds.length > 0) && 'mt-3',
             )}
           >
-            Project Commands
+            {t('chat.systemCard.help.projectCommands')}
           </div>
           {renderCommandRows(projectCmds)}
         </>
       )}
-      {commands.length === 0 && <div className={labelClass}>No commands available.</div>}
+      {commands.length === 0 && <div className={labelClass}>{t('chat.systemCard.help.empty')}</div>}
     </div>
   );
 }
 
 function CostCard({ data }: { data?: Record<string, unknown> }) {
+  const { t } = useTranslation();
   const tokenUsage = (data?.tokenUsage as number) ?? 0;
   const tokenText = tokenUsage >= 1000 ? `${(tokenUsage / 1000).toFixed(1)}k` : String(tokenUsage);
 
   return (
     <div className={cardClass}>
-      <div className={titleClass}>Session Cost</div>
+      <div className={titleClass}>{t('chat.systemCard.cost.title')}</div>
       <div className="flex flex-col gap-[2px]">
         <div className={rowClass}>
-          <span className={labelClass}>Tokens used (this turn)</span>
+          <span className={labelClass}>{t('chat.systemCard.cost.tokensUsed')}</span>
           <span className={valueClass}>{tokenText}</span>
         </div>
       </div>
@@ -696,45 +699,49 @@ function fmtContextTokens(n: number): string {
 }
 
 function PwdCard({ data }: { data?: Record<string, unknown> }) {
-  const workingDir = (data?.workingDir as string) ?? '(not set)';
+  const { t } = useTranslation();
+  const workingDir = (data?.workingDir as string) ?? t('chat.systemCard.pwd.notSet');
 
   return (
     <div className={cardClass}>
-      <div className={titleClass}>Working Directory</div>
+      <div className={titleClass}>{t('chat.systemCard.pwd.title')}</div>
       <span className={cn(codeClass, 'text-14')}>{workingDir}</span>
     </div>
   );
 }
 
 function StatusCard({ data }: { data?: Record<string, unknown> }) {
+  const { t } = useTranslation();
   const model = (data?.model as string) ?? '';
   const effort = (data?.effort as string) ?? '';
   const permissionMode = (data?.permissionMode as string) ?? '';
-  const workingDir = (data?.workingDir as string) ?? '(not set)';
+  const workingDir = (data?.workingDir as string) ?? t('chat.systemCard.pwd.notSet');
   const isRunning = (data?.isRunning as boolean) ?? false;
 
   return (
     <div className={cardClass}>
-      <div className={titleClass}>Session Status</div>
+      <div className={titleClass}>{t('chat.systemCard.status.title')}</div>
       <div className="flex flex-col gap-[2px]">
         <div className={rowClass}>
-          <span className={labelClass}>Agent</span>
-          <span className={valueClass}>{isRunning ? 'Running' : 'Idle'}</span>
+          <span className={labelClass}>{t('chat.systemCard.status.agent')}</span>
+          <span className={valueClass}>
+            {isRunning ? t('chat.systemCard.status.running') : t('chat.systemCard.status.idle')}
+          </span>
         </div>
         <div className={rowClass}>
-          <span className={labelClass}>Model</span>
+          <span className={labelClass}>{t('chat.systemCard.status.model')}</span>
           <span className={valueClass}>{model}</span>
         </div>
         <div className={rowClass}>
-          <span className={labelClass}>Effort</span>
+          <span className={labelClass}>{t('chat.systemCard.status.effort')}</span>
           <span className={valueClass}>{effort}</span>
         </div>
         <div className={rowClass}>
-          <span className={labelClass}>Permission mode</span>
+          <span className={labelClass}>{t('chat.systemCard.status.permissionMode')}</span>
           <span className={valueClass}>{permissionMode}</span>
         </div>
         <div className={rowClass}>
-          <span className={labelClass}>Working directory</span>
+          <span className={labelClass}>{t('chat.systemCard.pwd.title')}</span>
           <span className={valueClass}>{workingDir}</span>
         </div>
       </div>

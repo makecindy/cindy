@@ -856,6 +856,7 @@ export interface BotGroupsMessageRow {
   clientId: string | null;
   planId?: string | null;
   filesJson?: string;
+  attachmentsJson?: string;
   createdAt: number;
 }
 
@@ -865,6 +866,8 @@ export interface BotGroupsCreatePlanArgs {
     id: string;
     groupId: string;
     requestText: string;
+    /** The request's attachments, handed to every step. */
+    attachmentsJson?: string;
     organizerBotId: string;
     organizerName: string;
   };

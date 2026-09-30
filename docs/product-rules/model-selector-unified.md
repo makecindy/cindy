@@ -223,6 +223,17 @@
 - `providerModelMemory` snapshot 原样进 `RemoteNewMakerDefaults` wire——**不改其 schema**;新 store 不进该 payload(老控制端看不到引擎 override 属可接受降级,新被控端按 override 生效,四格矩阵在 PR 写明)。
 - 旧控制端 `maker:set-session-model-pref` 与新 `apply-new-maker-draft-pref` 双写桥保留。
 - `pendingRemoteSwitch` 5s 兜底、`remoteSwitchInFlight` 绑 ack、镜像不写控制端本地记忆——原样保留。
+  例外:**统一面板发起的**只改深度(模型 / 来源不变,`serializedByPanel`)不置 `remoteSwitchInFlight`,
+  靠 `pendingRemoteSwitch` 乐观显示,调档期间 selector 保持可操作,顺序由面板的单笔提交保证;
+  平铺选择器、快捷键等没有这层串行的入口仍在隧道 await 期间置灰。远程深度写入不进本机 effort
+  commit lane(该 lane 的已提交值不随远程回流更新)。
+- 面板里深度 / Fast 写入在途时行上先显示目标值(`withOptimisticConfig`),且可继续调。写入在途时
+  看上去可点的控件一定接得住:点击进队列而非静默丢弃 —— 深度 / Fast 按「行 + 维度」各留最新一笔,
+  其余动作只留最新一个,上一笔落定并重新渲染后按先后提交(用最新闭包),失败则丢弃排队项;
+  非深度 / Fast 写入超过 400ms 才显示为不可操作。队列以「失败即回报 false」为判据:所有「先应用、
+  后收尾」路径(跨引擎事务、恢复推荐、收藏编辑 / 删除、清锚点)没写成时都必须 resolve false。
+  已知边界(刻意不处理):上一笔深度在途时再调档并立即发送,这一轮用的是在途那一档,排队的新档
+  在落定后才提交、从下一轮起生效。
 - SSH:`excludeSubscriptionDirect`/`excludeChatBridgedCodex` 只在 remoteHostId 非空时开;device-link 下 CreateWorkerPopover 外置 Fast 开关不能删。
 - 老被控端 capabilities-only flat fallback(`resolveRemoteModelListStatus`)保留。
 

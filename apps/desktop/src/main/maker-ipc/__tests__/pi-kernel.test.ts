@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPiKernelIpc } from '../pi-kernel.js';
 import { PiKernelError } from '../../agent-binaries/pi-kernel-manager.js';
+import { piBinaryUpdateError } from '../../agent-binaries/pi-self-update.js';
+const logError = vi.hoisted(() => vi.fn());
+vi.mock('../../logger.js', () => ({ createLogger: () => ({ trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: logError, fatal: vi.fn() }) }));
 vi.mock('../../agent-binaries/index.js', () => ({ getPiKernelManager: vi.fn() }));
 vi.mock('../../manifestService.js', () => ({ getBaseUrl: vi.fn(), getPlatformKey: vi.fn() }));
 const manager = { state: vi.fn(), check: vi.fn(), install: vi.fn() };
@@ -27,5 +30,18 @@ describe('Pi version IPC boundary', () => {
     await expect(handlers.install({}, { source: 'upstream', version: '0.87.1' })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] version-changed' });
     manager.install.mockRejectedValueOnce(new Error('/Users/private/secret'));
     await expect(handlers.install({}, { source: 'upstream', version: '0.87.1' })).rejects.toMatchObject({ code: 'INTERNAL', message: '[INTERNAL] Pi kernel installation failed' });
+  });
+  it('logs the failure stage and errno locally without the path-bearing message (#5204)', async () => {
+    manager.install.mockRejectedValueOnce(piBinaryUpdateError(Object.assign(new Error("EPERM: rename 'C:\\Users\\me\\x'"), { code: 'EPERM' }), 'publish'));
+    await expect(handlers.install({}, { source: 'upstream', version: '0.87.1' })).rejects.toMatchObject({ code: 'INTERNAL', message: '[INTERNAL] Pi kernel installation failed' });
+    expect(logError).toHaveBeenCalledWith('Pi kernel installation failed', { source: 'upstream', stage: 'publish', code: 'EPERM' });
+    expect(JSON.stringify(logError.mock.calls)).not.toContain('Users');
+    logError.mockClear();
+    manager.install.mockRejectedValueOnce(new PiKernelError('busy'));
+    await expect(handlers.install({}, { source: 'upstream', version: '0.87.1' })).rejects.toMatchObject({ code: 'INTERNAL' });
+    expect(logError).not.toHaveBeenCalled();
+    manager.state.mockRejectedValueOnce(new Error('state unavailable'));
+    await expect(handlers.install({}, { source: 'upstream', version: '0.87.1' })).rejects.toMatchObject({ code: 'INTERNAL' });
+    expect(logError).not.toHaveBeenCalled();
   });
 });

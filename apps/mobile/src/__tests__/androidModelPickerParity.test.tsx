@@ -30,6 +30,7 @@ const flatStyle = (style: unknown): AnyProps => {
   if (Array.isArray(value)) return Object.assign({}, ...value.map(flatStyle));
   return value && typeof value === "object" ? (value as AnyProps) : {};
 };
+vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => false, getCachedReduceMotionEnabled: () => false }));
 vi.mock("react-native", async () => {
   const { createElement: el } = await import("react");
   const passthrough = ({ children }: AnyProps) => el("div", null, children);
@@ -101,6 +102,7 @@ vi.mock("react-native", async () => {
     },
     ScrollView: passthrough,
     StyleSheet: { create: <T,>(styles: T) => styles, hairlineWidth: 1 },
+    Easing: { bezier: () => (t: number) => t },
     View,
     useWindowDimensions: () => ({ height: 800, width: 400 }),
   };

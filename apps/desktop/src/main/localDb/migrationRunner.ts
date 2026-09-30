@@ -46,6 +46,29 @@ export interface MigrationRuntimeManifest {
   migrations: MigrationRuntimeIdentity[];
 }
 
+export type MigrationRuntimeManifestErrorCode =
+  | 'applied-migration-missing-from-application';
+
+/**
+ * A stable, structured failure for callers that need to distinguish an older
+ * application package from migration identity drift. Both cases remain
+ * fail-closed: old code must never open a newer local schema.
+ */
+export class MigrationRuntimeManifestError extends Error {
+  readonly name = 'MigrationRuntimeManifestError';
+
+  constructor(
+    readonly code: MigrationRuntimeManifestErrorCode,
+    readonly seq: number,
+    readonly fileName: string,
+  ) {
+    super(
+      `current application is missing applied migration at seq ${seq} (${fileName}); `
+      + 'verify that the application package contains this migration',
+    );
+  }
+}
+
 export type MigrationCompatibilityIssue =
   | {
       kind: 'schema-version-behind' | 'schema-version-ahead';
@@ -233,7 +256,14 @@ export function prepareMigrationRuntimeManifest(
     for (const identity of existing.migrations) {
       if (identity.seq > databaseVersion) continue;
       const current = expectedBySeq.get(identity.seq);
-      if (!current || !runtimeIdentityMatches(identity, current)) {
+      if (!current) {
+        throw new MigrationRuntimeManifestError(
+          'applied-migration-missing-from-application',
+          identity.seq,
+          identity.fileName,
+        );
+      }
+      if (!runtimeIdentityMatches(identity, current)) {
         throw new Error(
           `applied migration runtime identity changed at seq ${identity.seq} (${identity.fileName})`,
         );

@@ -68,6 +68,14 @@ describe('createPiStdioTransport', () => {
     );
   });
 
+  // #5173:Windows 上未设 windowsHide 时,每个本机 Pi 会话都会派生一个 conhost.exe,
+  // 与仓库内其它 spawn(binary-version-probe / piSubagentRunnerHost 等)口径不一致。
+  it('spawns pi with windowsHide so Windows sessions do not fork conhost.exe (#5173)', () => {
+    makeTransport();
+    const options = mocks.spawn.mock.calls[0]?.[2] as Record<string, unknown> | undefined;
+    expect(options).toMatchObject({ windowsHide: true });
+  });
+
   it('close() is idempotent under concurrency (round 21 H-1 — no twin SIGTERM/SIGKILL)', async () => {
     const { transport, child } = makeTransport();
     // 并发两个 close:closed 标志须同步置位, 第二次直接 return。

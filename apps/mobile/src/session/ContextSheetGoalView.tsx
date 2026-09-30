@@ -21,6 +21,7 @@ import {
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
 import { NativePullDownMenu, usesNativePullDownMenu } from '@/platform/chrome';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import type {
   MobileGoalLimitsInput,
   MobileGoalStatus,
@@ -529,9 +530,7 @@ function makeGoalStyles(colors: ThemeColors) {
       lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
-    pressed: {
-      opacity: 0.7,
-    },
+    pressed: mobileInteractionStyles.pressed,
     statusMeta: {
       color: colors.textSecondary,
       fontSize: typeScale.footnote,

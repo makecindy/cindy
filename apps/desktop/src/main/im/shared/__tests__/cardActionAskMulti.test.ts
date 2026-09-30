@@ -64,6 +64,7 @@ vi.mock('../../../maker-ipc/runtimeSetModel', () => ({
   applyRuntimeSetModelChange: vi.fn(),
 }));
 vi.mock('../../../maker-ipc/register', () => ({
+  applyPiImModelSelectionUnderLock: vi.fn(async () => ({ status: 'applied' })),
   cancelPendingAgentSwitchForSession: vi.fn(),
   isSessionInTurn: vi.fn(() => false),
   registerPendingCredentialSwitchForSession: vi.fn(),

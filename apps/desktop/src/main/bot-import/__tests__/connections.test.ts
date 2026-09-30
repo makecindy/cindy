@@ -81,7 +81,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
 });`);
   }
   const secretValues = new Map<string, string>();
-  const secretIo = { read: (key: string) => secretValues.get(key) ?? null, write: (key: string, value: string) => { secretValues.set(key, value); return true; }, remove: (key: string) => secretValues.delete(key) };
+  const secretIo = { read: (key: string) => secretValues.get(key) ?? null, write: (key: string, value: string) => { secretValues.set(key, value); return true; }, remove: (key: string) => { secretValues.delete(key); return true; } };
   for (const cwd of [undefined, 'server files', custom, `~/${path.relative(directory, custom).split(path.sep).join('/')}`]) {
     const config = { workdir: workspace, agents: { defaults: { workspace } }, mcpServers: { fixture: { command: process.execPath, args: ['./server.cjs'], ...(cwd === undefined ? {} : { cwd }) } } };
     await fs.writeFile(path.join(root, kind === 'hermes' ? 'config.yaml' : 'openclaw.json'), JSON.stringify(config));

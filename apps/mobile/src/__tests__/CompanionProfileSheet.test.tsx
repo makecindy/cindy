@@ -14,7 +14,7 @@ vi.mock('@/device-link/remoteResources', () => ({ invokeRemoteResourceAction: (.
 vi.mock('@/components/AppText', () => ({ Text: 'span', TextInput: 'input' }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: () => null }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: () => null }));
-vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: () => null, usesNativePullDownMenu: () => true }));
+vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: () => null, NativeSwitch: () => null, usesNativePullDownMenu: () => true }));
 vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: () => null }));
 vi.mock('@/session/CompanionChoice', () => ({ CompanionChoice: () => null }));
 vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: () => null }));
@@ -82,6 +82,26 @@ it('waits for native dismissal before presenting the model picker and preserves 
   await act(async () => h.picker.onClosed());
   expect(h.view.visible).toBe(true); expect(h.view.page).toBe('models'); expect(h.view.dirty).toBe(true);
   expect(JSON.parse(h.view.values.modelChain)[0].model).toBe('real-model');
+});
+it('keeps the primary route while choosing a task model with a different harness', async () => {
+  const primary = { harness: 'claude', model: 'claude-opus-5-5', providerId: 'anthropic', effort: 'medium', fastMode: false };
+  const task = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai:account', effort: 'high', fastMode: true };
+  h.read.mockResolvedValue({ resource, panels: [{ ...panel, id: 'models',
+    values: { modelChain: JSON.stringify([primary]), followsDefault: false, taskFollowsPrimary: true, taskModel: JSON.stringify([primary]) },
+    action: { id: 'model-grant', fields: ['modelChain', 'followsDefault', 'taskModel', 'taskFollowsPrimary'].map(id => ({ id, kind: 'text' })) } }] });
+  await render(); await act(async () => h.view.onOpen('models'));
+  expect(h.model.single).toBe(true); expect(h.model.values.followsDefault).toBe(true);
+  await act(async () => h.model.onPick(0));
+  await act(async () => h.view.onClosed());
+  await act(async () => h.picker.onSelect(task));
+  await act(async () => h.picker.onClose()); await act(async () => h.picker.onClosed());
+  expect(JSON.parse(h.view.values.modelChain)).toEqual([primary]);
+  expect(JSON.parse(h.view.values.taskModel)).toEqual([task]);
+  expect(h.view.values.taskFollowsPrimary).toBe(false);
+  await act(async () => h.view.onSubmit(h.view.panel));
+  expect(h.invoke).toHaveBeenCalledWith(expect.anything(), { deviceId: 'host', deviceName: 'Mac' }, expect.objectContaining({
+    actionId: 'model-grant', input: { taskModel: JSON.stringify([task]), taskFollowsPrimary: false },
+  }), 'en');
 });
 it('ignores a late save response after changing accounts', async () => {
   await render(); await act(async () => h.view.onOpen('profile'));

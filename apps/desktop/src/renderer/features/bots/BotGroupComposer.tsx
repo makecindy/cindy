@@ -11,11 +11,25 @@
  * 「+」菜单里的「安排分工」（§7.2）给输入框加上「分工」标签：带标签发出的消息一定交给
  * 负责人出安排（`division: true`），发出后标签清掉。安排进行中或等继续时不能再安排新的，
  * 菜单项置灰并说明原因。占位文字跟随未结束的安排，告诉用户这时说的话会交给谁。
+ *
+ * 附件（§3.1）与普通聊天同一套：托盘状态来自页面持有的 `useAttachments`（整页拖入也能
+ * 加），缩略图与拒收提示复用 ComposerAttachments；「+」→「添加文件、图片或视频…」、粘贴
+ * 文件或截图都进托盘。有附件时可以不写字。发送前烧录图片标注，发出去之后才从托盘移走
+ * 这一批；没发出去就原样留着。
  */
-import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { Plus, Users, X } from 'lucide-react';
+import {
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type KeyboardEvent,
+} from 'react';
+import { Paperclip, Plus, Users, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { AttachmentRejectionStrip, ThumbnailStrip } from '@/components/new-chat/ComposerAttachments';
 import { SendButton } from '@/components/new-chat/SendButton';
 import {
   DropdownMenu,
@@ -26,10 +40,18 @@ import {
 import { Tip } from '@/components/ui/tooltip';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
+import type { UseAttachmentsReturn } from '@/hooks/useAttachments';
+import { isAnnotationBurnInError, materializeAnnotatedAttachmentsForSend } from '@/lib/annotationBurnIn';
+import type { AttachedFile } from '@/lib/fileTypes';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { BOT_GROUP_MESSAGE_MAX_CHARS, type BotGroupMemberView } from '../../../shared/botGroupChat';
+import {
+  BOT_GROUP_ATTACHMENTS_MAX,
+  BOT_GROUP_MESSAGE_MAX_CHARS,
+  type BotGroupMemberView,
+} from '../../../shared/botGroupChat';
 import { BotAvatar } from './BotAvatar';
+import { botGroupAttachmentSignature, toBotGroupAttachmentInputs } from './botGroupAttachments';
 import {
   filterBotGroupMentionCandidates,
   findBotGroupMentionQuery,
@@ -53,11 +75,37 @@ function isComposingKey(event: KeyboardEvent): boolean {
   return event.nativeEvent.isComposing || event.keyCode === 229;
 }
 
+/** The composer's slice of `useAttachments`, owned by the page so a drop anywhere adds files. */
+export type BotGroupComposerAttachments = Pick<
+  UseAttachmentsReturn,
+  | 'attachments'
+  | 'addFiles'
+  | 'addClipboardImage'
+  | 'rejections'
+  | 'dismissRejection'
+  | 'removeFile'
+  | 'updateFile'
+  | 'restoreFiles'
+  | 'clearFiles'
+>;
+
+/** Real path of a pasted or dropped file; empty for an in-memory bitmap. */
+function filePathOf(file: File): string {
+  try {
+    return window.electronAPI.getFilePath(file);
+  } catch {
+    return '';
+  }
+}
+
 export function BotGroupComposer({
   groupId,
   members,
   running,
   planState = null,
+  attachments: attachmentState,
+  attachmentScope,
+  dragOver = false,
   onSent,
 }: {
   groupId: string;
@@ -65,6 +113,11 @@ export function BotGroupComposer({
   running: boolean;
   /** The group's open plan, for placeholders and the 「安排分工」 gate. */
   planState?: BotGroupComposerPlanState | null;
+  attachments: BotGroupComposerAttachments;
+  /** Scope for writing annotated images before send (see botGroupAttachmentScope). */
+  attachmentScope: string;
+  /** Files are being dragged over the page: the card shows the same drop hint as a task's. */
+  dragOver?: boolean;
   /** Called after main accepted the message, so the view can re-read at once. */
   onSent: () => void;
 }) {
@@ -77,18 +130,28 @@ export function BotGroupComposer({
   const [dismissedStart, setDismissedStart] = useState<number | null>(null);
   const [tracked, setTracked] = useState<BotGroupTrackedMention[]>([]);
   const [stopping, setStopping] = useState(false);
+  /** A send is in flight: its attachments stay in the tray but cannot change. */
+  const [sending, setSending] = useState(false);
   /** 「分工」 tag from 「+」→「安排分工」: this message goes to the organizer for a plan. */
   const [division, setDivision] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const textRef = useRef(text);
   textRef.current = text;
+  const attachmentsRef = useRef(attachmentState.attachments);
+  attachmentsRef.current = attachmentState.attachments;
   const focusInputOnMenuCloseRef = useRef(false);
   const pendingCaretRef = useRef<number | null>(null);
   const sendingRef = useRef(false);
   const stoppingRef = useRef(false);
-  /** Idempotency key for the text currently being (re)sent. */
-  const attemptRef = useRef<{ text: string; clientId: string; division: boolean } | null>(null);
+  /** Idempotency key for the text and attachments currently being (re)sent. */
+  const attemptRef = useRef<{
+    text: string;
+    clientId: string;
+    division: boolean;
+    attachments: string;
+  } | null>(null);
 
   const activeMembers = useMemo(() => members.filter(isActiveBotGroupMember), [members]);
   const allLabel = t('bots.groupChat.mention.all');
@@ -110,8 +173,11 @@ export function BotGroupComposer({
   const trimmed = text.trim();
   const tooLong = trimmed.length > BOT_GROUP_MESSAGE_MAX_CHARS;
   const hasMembers = activeMembers.length > 0;
-  const canSend = trimmed.length > 0 && !tooLong && hasMembers;
-  const showStop = running && trimmed.length === 0;
+  const attachmentCount = attachmentState.attachments.length;
+  const tooManyAttachments = attachmentCount > BOT_GROUP_ATTACHMENTS_MAX;
+  const canSend =
+    (trimmed.length > 0 || attachmentCount > 0) && !tooLong && !tooManyAttachments && hasMembers;
+  const showStop = running && trimmed.length === 0 && attachmentCount === 0;
   const divisionBlocked = isBotGroupDivisionBlocked(planState);
 
   // Auto-grow; the CSS max height caps it and turns on scrolling.
@@ -155,11 +221,16 @@ export function BotGroupComposer({
       toast.error(t('bots.groupChat.composer.sendFailed'));
       return;
     }
-    // The tag changes what main does with the text, so it is part of the idempotency key.
+    const files: readonly AttachedFile[] = attachmentState.attachments;
+    const signature = botGroupAttachmentSignature(files);
+    // The tag changes what main does with the text, so it is part of the idempotency key;
+    // so are the attachments that go with it.
     const attempt =
-      attemptRef.current?.text === trimmed && attemptRef.current.division === division
+      attemptRef.current?.text === trimmed &&
+      attemptRef.current.division === division &&
+      attemptRef.current.attachments === signature
         ? attemptRef.current
-        : { text: trimmed, clientId: crypto.randomUUID(), division };
+        : { text: trimmed, clientId: crypto.randomUUID(), division, attachments: signature };
     attemptRef.current = attempt;
     const mentions = resolveBotGroupMentions(trimmed, {
       members: members.map((member) => ({ botId: member.botId, name: member.name })),
@@ -168,8 +239,10 @@ export function BotGroupComposer({
     });
     const draft = text;
     sendingRef.current = true;
+    setSending(true);
     // Clear at once like any chat; a failed send puts the draft back if the
-    // user has not started typing something else meanwhile.
+    // user has not started typing something else meanwhile. Attachments stay in
+    // the tray until main has them.
     setText('');
     setCaret(0);
     setTracked([]);
@@ -182,28 +255,76 @@ export function BotGroupComposer({
       setText((current) => (current ? current : draft));
     };
     try {
+      // Drawn annotations are burned in first, as in a task; a failure keeps everything for a retry.
+      const prepared =
+        files.length > 0
+          ? ((await materializeAnnotatedAttachmentsForSend(files, attachmentScope, { burnFailure: 'abort' })) ?? [])
+          : [];
       const result = await api.sendBotGroupMessage({
         groupId,
         text: attempt.text,
         mentions,
         clientId: attempt.clientId,
         ...(attempt.division ? { division: true } : {}),
+        ...(prepared.length > 0 ? { attachments: toBotGroupAttachmentInputs(prepared) } : {}),
       });
       if (!isDataOwnerGenerationCurrent(owner)) return;
       if (!result.ok) {
         restore();
-        toast.error(t(botGroupErrorKey(result.errorCode, 'bots.groupChat.composer.sendFailed')));
+        toast.error(
+          t(
+            result.errorCode === 'INVALID_PARAMS' && prepared.length > 0
+              ? 'bots.groupChat.composer.attachmentsFailed'
+              : botGroupErrorKey(result.errorCode, 'bots.groupChat.composer.sendFailed'),
+          ),
+        );
         return;
       }
       attemptRef.current = null;
+      if (files.length > 0) {
+        // Main now holds these files; take only this batch out of the tray (never delete
+        // them) and keep anything added while the message was on its way.
+        const sentIds = new Set(files.map((file) => file.id));
+        const remaining = attachmentsRef.current.filter((file) => !sentIds.has(file.id));
+        attachmentState.clearFiles();
+        attachmentState.restoreFiles(remaining);
+      }
       onSent();
-    } catch {
+    } catch (error) {
       if (!isDataOwnerGenerationCurrent(owner)) return;
       restore();
-      toast.error(t('bots.groupChat.composer.sendFailed'));
+      toast.error(
+        t(isAnnotationBurnInError(error) ? 'chat.media.annotateBurnFailedNotSent' : 'bots.groupChat.composer.sendFailed'),
+      );
     } finally {
       sendingRef.current = false;
+      setSending(false);
     }
+  };
+
+  /** Files copied in a file manager attach by path; a screenshot or copied image attaches as an image. */
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = event.clipboardData?.items;
+    if (!items || items.length === 0) return;
+    const filesWithPath: File[] = [];
+    let handled = false;
+    for (const item of Array.from(items)) {
+      if (item.kind !== 'file') continue;
+      const file = item.getAsFile();
+      if (!file) continue;
+      // A group has no folder reference; a copied folder pastes as its text.
+      if (item.webkitGetAsEntry?.()?.isDirectory) continue;
+      if (filePathOf(file)) {
+        filesWithPath.push(file);
+        handled = true;
+      } else if (item.type.startsWith('image/')) {
+        void attachmentState.addClipboardImage(file);
+        handled = true;
+      }
+    }
+    if (filesWithPath.length > 0) void attachmentState.addFiles(filesWithPath);
+    // The file is an attachment, not text; text in the same paste is dropped, as in a task.
+    if (handled) event.preventDefault();
   };
 
   const stop = async () => {
@@ -227,7 +348,9 @@ export function BotGroupComposer({
     ? t('bots.groupChat.composer.noMembers')
     : tooLong
       ? t('bots.groupChat.composer.tooLong', { max: BOT_GROUP_MESSAGE_MAX_CHARS })
-      : null;
+      : tooManyAttachments
+        ? t('bots.groupChat.composer.tooManyAttachments', { max: BOT_GROUP_ATTACHMENTS_MAX })
+        : null;
   const actionLabel = showStop ? t('bots.groupChat.composer.stop') : t('bots.send');
   const moreLabel = t('bots.groupChat.composer.more');
   const removeDivisionLabel = t('bots.groupChat.composer.removeDivision');
@@ -243,9 +366,20 @@ export function BotGroupComposer({
             ? t('bots.groupChat.composer.placeholderPlanWaiting', { name: planState.botName })
             : t('bots.groupChat.composer.placeholder');
 
+  const noop = () => undefined;
+
   return (
     <div className="shrink-0 px-5 pb-4 pt-2">
       <div className="relative mx-auto w-full max-w-[760px]">
+        {/* Same floating slot above the card as a task's composer: files that did not attach. */}
+        {attachmentState.rejections.length > 0 ? (
+          <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
+            <AttachmentRejectionStrip
+              rejections={attachmentState.rejections}
+              onDismiss={attachmentState.dismissRejection}
+            />
+          </div>
+        ) : null}
         {popoverOpen ? (
           <div
             id={listboxId}
@@ -288,7 +422,17 @@ export function BotGroupComposer({
             ))}
           </div>
         ) : null}
-        <div className="flex flex-col gap-2 rounded-xl border border-[var(--chat-input-border)] bg-[var(--chat-input-bg)] px-3.5 pb-2.5 pt-3 transition-colors focus-within:border-[var(--chat-input-border-focus)]">
+        <div className="relative flex flex-col gap-2 rounded-xl border border-[var(--chat-input-border)] bg-[var(--chat-input-bg)] px-3.5 pb-2.5 pt-3 transition-colors focus-within:border-[var(--chat-input-border-focus)]">
+          {dragOver ? (
+            <div
+              data-testid="bot-group-drop-hint"
+              className="pointer-events-none absolute inset-0 z-10 rounded-[12px]"
+              style={{
+                backgroundColor: 'var(--drop-overlay-bg)',
+                border: '2px dashed var(--drop-overlay-border)',
+              }}
+            />
+          ) : null}
           {division ? (
             <div className="flex">
               <span
@@ -313,6 +457,13 @@ export function BotGroupComposer({
               </span>
             </div>
           ) : null}
+          {attachmentCount > 0 ? (
+            <ThumbnailStrip
+              attachments={attachmentState.attachments}
+              onRemove={sending ? noop : attachmentState.removeFile}
+              onUpdate={sending ? noop : attachmentState.updateFile}
+            />
+          ) : null}
           <textarea
             ref={textareaRef}
             value={text}
@@ -334,6 +485,7 @@ export function BotGroupComposer({
               }
             }}
             onSelect={syncCaret}
+            onPaste={handlePaste}
             onFocus={() => {
               setFocused(true);
               syncCaret();
@@ -375,6 +527,17 @@ export function BotGroupComposer({
           />
           <div className="flex min-h-7 items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  const files = Array.from(event.currentTarget.files ?? []);
+                  event.currentTarget.value = '';
+                  if (files.length > 0) void attachmentState.addFiles(files);
+                }}
+              />
               <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
                 <DropdownMenuTrigger asChild>
                   <Tip text={moreLabel}>
@@ -402,6 +565,18 @@ export function BotGroupComposer({
                     textareaRef.current?.focus();
                   }}
                 >
+                  <DropdownMenuItem
+                    className={cn(MENU_ITEM_CLASS, 'gap-2.5')}
+                    onSelect={() => {
+                      focusInputOnMenuCloseRef.current = true;
+                      fileInputRef.current?.click();
+                    }}
+                  >
+                    <Paperclip size={16} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
+                    <span className="min-w-0 truncate text-13 font-medium text-[var(--text-primary)]">
+                      {t('extraDirs.addFiles')}
+                    </span>
+                  </DropdownMenuItem>
                   <DropdownMenuItem
                     disabled={divisionBlocked}
                     className={cn(MENU_ITEM_CLASS, 'h-auto items-start gap-2.5 py-2')}

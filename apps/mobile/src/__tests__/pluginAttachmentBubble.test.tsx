@@ -40,6 +40,12 @@ vi.mock('lucide-react-native', () => ({
 vi.mock('react-native-svg', () => ({ default: () => null, Circle: () => null }));
 vi.mock('react-native-uitextview', () => ({ UITextView: () => null }));
 vi.mock('expo-image', () => ({ Image: () => null }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: vi.fn() }), useFocusEffect: vi.fn(), useNavigation: () => ({ isFocused: () => true, addListener: () => () => {} }) }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({
+  useDeviceLink: () => ({ status: 'offline', connectionEpoch: 0, getPresenceAvailability: () => false,
+    invoke: vi.fn(), openLink: vi.fn() }),
+  subscribeRemoteBotChanges: () => () => {},
+}));
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
@@ -130,6 +136,40 @@ function renderClient(element: ReturnType<typeof createElement>): string {
 }
 
 describe('partner conversation presentation', () => {
+  const result = (delegationId: string) => ({
+    v: 1, role: 'delegation-result', delegationId, fromBotId: 'bot', fromBotName: 'Cindy',
+    toBotId: null, toBotName: '', parentSessionId: 's', childSessionId: 'child', objective: 'Report',
+    result: { runSequence: 1, status: 'completed', title: `Result ${delegationId}`, text: 'Frozen result', artifacts: [] },
+  });
+  const resultItems = (body = 'Final summary', turnCompleted = true) => buildMobileMessageRenderItems([
+    msg('final', 'assistant', body, { agentMeta: { turnCompleted, botTaskResults: [result('one'), result('two')] } }),
+  ], { isSessionStreaming: false });
+
+  it('renders multiple real result cards after the final bubble inside the same partner reply', () => {
+    const host = document.createElement('div');
+    host.innerHTML = renderClient(<MessageRenderer items={resultItems()} companion companionAvatar={<i />} />);
+    const reply = host.querySelector('[data-testid="companion.replyRow"]');
+    const bubble = reply?.querySelector('[data-testid="message.agentBubble"]');
+    const cards = reply?.querySelectorAll('[data-testid="companion.taskResult"]');
+    expect(bubble).toBeTruthy();
+    expect(cards).toHaveLength(2);
+    expect(cards?.[0].textContent).toContain('Result one');
+    expect(cards?.[1].textContent).toContain('Result two');
+    for (const card of cards!) {
+      expect(bubble!.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(card.parentElement).toBe(bubble!.parentElement);
+    }
+  });
+
+  it('keeps result attachments out of ordinary tasks, unfinished prose and empty replies', () => {
+    const cases = [
+      <MessageRenderer items={resultItems()} />,
+      <MessageRenderer items={resultItems('Progress', false)} companion />,
+      <MessageRenderer items={resultItems('')} companion />,
+    ];
+    for (const element of cases) expect(renderClient(element)).not.toContain('companion.taskResult');
+  });
+
   it('hangs replies from the partner portrait and stamps five-minute groups like Desktop', () => {
     const messages = [
       msg('u1', 'user', 'Hi', { createdAt: '2026-01-01T09:00:00Z' }),

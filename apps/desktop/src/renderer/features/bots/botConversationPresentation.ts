@@ -1,3 +1,4 @@
+import { botTaskResultKey, readBotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { extractRenderedMarkdownImageTargets } from '@/components/chat/markdownImageTargets';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import type { ChatMessage } from '@/lib/makerChatStore';
@@ -66,7 +67,14 @@ export function simplifyBotRenderItems(
     else if (end !== null) previousEnd = previousEnd === null ? end : Math.max(previousEnd, end);
   }
   result.push(...projectWindow(window, isStreaming, visibleGeneratedFileKeys));
-  return result;
+  const attached = new Set(result.flatMap(item => item.type === 'message'
+    && item.message.role === 'assistant' && item.message.turnCompleted === true && item.message.content.trim()
+    ? (item.message.botTaskResults ?? []).map(botTaskResultKey) : []));
+  return result.filter(item => {
+    if (item.type !== 'message' || item.message.systemCardType !== 'bot-session-task-result') return true;
+    const card = readBotCollaborationMeta(item.message.systemCardData);
+    return !card?.result || !attached.has(botTaskResultKey(card));
+  });
 }
 
 function projectWindow(

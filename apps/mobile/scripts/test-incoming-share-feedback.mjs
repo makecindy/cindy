@@ -1,10 +1,39 @@
 // Executes the generated Swift launch/feedback methods with deterministic UIKit
-// and clock doubles. Requires macOS + Swift; no simulator or signing is needed.
+// and clock doubles. Requires Swift; no simulator or signing is needed.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
+
+function runPhase(phase, command, args, timeout) {
+  const started = performance.now();
+  console.error(`[share-feedback] START ${phase} (timeout=${timeout}ms)`);
+  try {
+    execFileSync(command, args, {
+      stdio: "inherit",
+      timeout,
+      killSignal: "SIGKILL",
+    });
+    console.error(
+      `[share-feedback] PASS ${phase} (${Math.round(performance.now() - started)}ms)`,
+    );
+    return true;
+  } catch (error) {
+    // Compilation doubles as the capability check: a separate --version process
+    // can time out before the real test starts. Only a missing compiler may skip.
+    if (phase === "compile" && error.code === "ENOENT") {
+      console.error("[share-feedback] SKIP compile (swiftc not found)");
+      process.exitCode = 77;
+      return false;
+    }
+    console.error(
+      `[share-feedback] FAIL ${phase} (${Math.round(performance.now() - started)}ms, ${error.code ?? `exit ${error.status}`})`,
+    );
+    throw error;
+  }
+}
+
 const require = createRequire(import.meta.url);
 const { patchShareExtension } = require("../plugins/with-incoming-share-files");
 const template = readFileSync(
@@ -137,8 +166,11 @@ const dir = mkdtempSync(join(tmpdir(), "cindy-share-feedback-test-"));
 try {
   const file = join(dir, "main.swift");
   writeFileSync(file, harness);
-  execFileSync("swiftc", [file, "-o", join(dir, "test")], { stdio: "inherit" });
-  execFileSync(join(dir, "test"), [], { stdio: "inherit" });
+  // Allow cold Swift compilation extra headroom on shared CI runners. Keep the
+  // behavior executable's budget short: its clock and callbacks are simulated.
+  if (runPhase("compile", "swiftc", [file, "-o", join(dir, "test")], 120_000)) {
+    runPhase("execute", join(dir, "test"), [], 10_000);
+  }
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { GithubAccountCard } from '@/features/cc-agent/GithubAccountCard';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * Plugin detail presentation for configuration, Tools, permissions, and factual metadata.
@@ -123,6 +124,7 @@ export function GhostPluginDetailView({
   const { scrolled, onScroll } = usePluginDetailScrolled();
   const enableSwitchId = useId();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [githubConnectionVersion, setGithubConnectionVersion] = useState(0);
   const [descriptionOverflows, setDescriptionOverflows] = useState(false);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
   // 安装记录不完整时不可运行:enabled 直接门控为 false(说明现状 + 给恢复入口,不让它
@@ -136,13 +138,26 @@ export function GhostPluginDetailView({
       primaryAction === 'capability' ||
       (primaryAction === 'command' && detail.canUse));
   const cindyCapabilities = detail.cindyCapabilities;
+  // Local imports with the same id cannot use the host gh credential. Match the
+  // official receipt before advertising that connection in this plugin's UI.
+  const hasGithubConnection =
+    detail.id === 'cindy-github' &&
+    Boolean(ghost) &&
+    ghost?.trust?.level === 'cindy-official' &&
+    ghost.trust.publisherSigned &&
+    ghost.trust.publisherVerified &&
+    ghost.trust.reviewed &&
+    ghost.trust.publisherName === 'Cindy Plugin Market';
   const hasConfiguration =
+    hasGithubConnection ||
     detail.hasMainView ||
     detail.hasSettingsUi ||
     detail.hostCapability === 'ios-simulator' ||
     cindyCapabilities.length > 0 ||
     detail.hasErrand;
-  const summary = ghostPluginSummary(detail.description, detail.id);
+  const summary = hasGithubConnection
+    ? t('ccAgent.gitContext.pr.setup.account.summary')
+    : ghostPluginSummary(detail.description, detail.id);
   /**
    * 「从 .cindy 文件更新」是否可用。官方保留前缀(cindy- / filo- / xd-)在**非 dev
    * 构建**上会被 Main 的用户装入通道以 GHOST_ID_RESERVED 直接拒绝(见
@@ -256,12 +271,12 @@ export function GhostPluginDetailView({
                   }
                   aria-busy={updateBusy || undefined}
                 >
-                    <>
-                      <ArrowUp size={14} aria-hidden="true" />
-                      {updateVersion === detail.version
-                        ? t('settings.ghosts.market.update')
-                        : t('settings.ghosts.market.updateTo', { version: updateVersion })}
-                    </>
+                  <>
+                    <ArrowUp size={14} aria-hidden="true" />
+                    {updateVersion === detail.version
+                      ? t('settings.ghosts.market.update')
+                      : t('settings.ghosts.market.updateTo', { version: updateVersion })}
+                  </>
                 </Button>
               ) : null}
               {primaryAction !== 'manage' ? (
@@ -407,12 +422,22 @@ export function GhostPluginDetailView({
         </header>
 
         {hasConfiguration ? (
-          <section className={DETAIL_SECTION_CLASS} aria-labelledby="ghost-configuration-title">
-            <DetailSectionHeader
-              id="ghost-configuration-title"
-              title={t('settings.ghosts.detail.configurationTitle')}
-            />
-            <div className={cn(DETAIL_SECTION_CONTENT_CLASS, 'space-y-3')}>
+          <section
+            className={hasGithubConnection ? 'mt-6' : DETAIL_SECTION_CLASS}
+            aria-labelledby={hasGithubConnection ? undefined : 'ghost-configuration-title'}
+          >
+            {!hasGithubConnection && (
+              <DetailSectionHeader
+                id="ghost-configuration-title"
+                title={t('settings.ghosts.detail.configurationTitle')}
+              />
+            )}
+            <div
+              className={cn(
+                hasGithubConnection ? 'max-w-[760px]' : DETAIL_SECTION_CONTENT_CLASS,
+                'space-y-3',
+              )}
+            >
               {detail.hostCapability === 'ios-simulator' ? <IOSSimulatorPreferences /> : null}
               {detail.hasMainView ? (
                 <div
@@ -448,6 +473,14 @@ export function GhostPluginDetailView({
                   <>
                     {ghost.oauthScopeStale ? <OauthScopeStaleBadge /> : null}
                     <GhostSettingsWebview
+                      reloadKey={githubConnectionVersion}
+                      account={
+                        hasGithubConnection ? (
+                          <GithubAccountCard
+                            onConnected={() => setGithubConnectionVersion((version) => version + 1)}
+                          />
+                        ) : undefined
+                      }
                       ghost={ghost}
                       title={t('settings.ghosts.detail.settingsTitle', { name: detail.name })}
                       appearance="plugin"
@@ -476,7 +509,11 @@ export function GhostPluginDetailView({
                   </div>
                 )
               ) : null}
-              {ghost?.manifest.routineEvents ? <p className="text-13 text-[var(--text-secondary)]">{t('routines.pluginCapability')}</p> : null}
+              {ghost?.manifest.routineEvents ? (
+                <p className="text-13 text-[var(--text-secondary)]">
+                  {t('routines.pluginCapability')}
+                </p>
+              ) : null}
               {cindyCapabilities.length > 0 ? (
                 <CindyCapabilityPrefs
                   ghostId={detail.id}
@@ -853,7 +890,8 @@ export function DetailsSection({
                     if (!installDir) return;
                     void window.electronAPI.openPath(installDir).then(
                       (result) => {
-                        if (shouldShowOpenPathError(result)) toast.error(t('settings.ghosts.errors.generic'));
+                        if (shouldShowOpenPathError(result))
+                          toast.error(t('settings.ghosts.errors.generic'));
                       },
                       () => toast.error(t('settings.ghosts.errors.generic')),
                     );

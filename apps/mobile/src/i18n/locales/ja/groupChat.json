@@ -110,7 +110,13 @@
     "dismissFailed": "この計画を終了できませんでした。もう一度お試しください",
     "editFailed": "このステップを変更できませんでした。もう一度お試しください",
     "editStepHint": "担当を変えるか、このステップを削除します",
-    "reassignStepHint": "このステップの担当を変えます"
+    "reassignStepHint": "このステップの担当を変えます",
+    "eyebrow_one": "分担 · {{count}} ステップ",
+    "eyebrow_other": "分担 · {{count}} ステップ",
+    "awaitingStart": "開始待ち",
+    "progressRunning": "作業中 {{current}} / {{total}}",
+    "progressDone": "完了 {{done}} / {{total}}",
+    "allDone": "すべて完了"
   },
   "speaking": {
     "planning": "役割分担を考えています…",
@@ -153,7 +159,8 @@
     "projectDirNone": "未選択",
     "projectDirNote": "役割分担で作業するとき、仲間はここで作業します。選ばなくてもかまいません。その場合はこのグループチャット専用のフォルダを使います。git プロジェクトを選ぶと、役割分担のたびに新しい worktree とブランチを作るので、手元のコードには触れません。",
     "add": "仲間を追加",
-    "projectDirOnComputer": "パソコンで選択・変更できます"
+    "projectDirOnComputer": "パソコンで選択・変更できます",
+    "memberActions": "{{name}} の操作"
   },
   "errors": {
     "memberLimit": "グループチャットには仲間が 2〜6 人必要です",
@@ -162,5 +169,9 @@
     "hostNotReady": "Cindy の準備がまだ終わっていません。しばらくしてから再試行してください",
     "planOpen": "役割分担の途中です。終わるか停止してから新しく始めてください",
     "planClosed": "この計画はすでに終了したか、更新されています"
+  },
+  "followUp": {
+    "next": "分担 · 次のステップ",
+    "failedStep": "ステップ {{step}} は完了できませんでした"
   }
 }

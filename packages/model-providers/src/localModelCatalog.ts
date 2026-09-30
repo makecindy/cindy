@@ -5,12 +5,21 @@ export interface LocalModelVariant {
   minUnifiedMemoryGb: number;
   appleSiliconOnly?: boolean;
 }
+/** Download metadata only. Availability does not establish runtime performance. */
+export interface LocalGgufVariant {
+  repo: string;
+  file: string;
+  quantization: string;
+  sizeBytes: number;
+  verifiedAt: string;
+}
 export interface LocalCatalogModel {
   modelRef?: string;
   id: string;
   name: string;
   aliases: string[];
   variants: LocalModelVariant[];
+  llamacpp?: LocalGgufVariant[];
   descriptions?: Partial<
     Record<"en" | "zh-CN" | "zh-TW" | "ja" | "ko", string>
   >;
@@ -81,6 +90,7 @@ export function parseLocalModelCatalog(v: unknown): LocalModelCatalog | null {
         "descriptions",
         "runtimeProfile",
         "evidence",
+        "llamacpp",
       ]) ||
       !id(m.id) ||
       (m.modelRef !== undefined && !string(m.modelRef, 256)) ||
@@ -95,6 +105,16 @@ export function parseLocalModelCatalog(v: unknown): LocalModelCatalog | null {
     )
       return null;
     ids.add(m.id);
+    if (m.llamacpp !== undefined) {
+      if (!Array.isArray(m.llamacpp) || m.llamacpp.length > 8) return null;
+      const files = new Set<string>();
+      for (const entry of m.llamacpp) {
+        if (!isLocalGgufVariant(entry)) return null;
+        const key = entry.repo + "/" + entry.file;
+        if (files.has(key)) return null;
+        files.add(key);
+      }
+    }
     for (const tag of m.variants) {
       if (
         !object(tag) ||
@@ -169,4 +189,35 @@ export function parseLocalModelCatalog(v: unknown): LocalModelCatalog | null {
   )
     return null;
   return v as unknown as LocalModelCatalog;
+}
+
+function isLocalGgufVariant(v: unknown): v is LocalGgufVariant {
+  if (
+    !object(v) ||
+    !fields(v, ["repo", "file", "quantization", "sizeBytes", "verifiedAt"])
+  )
+    return false;
+  return (
+    typeof v.repo === "string" &&
+    /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$/.test(
+      v.repo,
+    ) &&
+    typeof v.file === "string" &&
+    v.file.length <= 240 &&
+    v.file
+      .split("/")
+      .every((part) => /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(part)) &&
+    v.file.endsWith(".gguf") &&
+    !/^(mmproj|mtp|dflash)[-_.]/i.test(v.file.split("/").at(-1)!) &&
+    typeof v.quantization === "string" &&
+    /^[A-Za-z0-9_]{1,24}$/.test(v.quantization) &&
+    typeof v.sizeBytes === "number" &&
+    Number.isSafeInteger(v.sizeBytes) &&
+    v.sizeBytes > 0 &&
+    v.sizeBytes <= 512 * 1024 ** 3 &&
+    typeof v.verifiedAt === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(v.verifiedAt) &&
+    Number.isFinite(Date.parse(v.verifiedAt)) &&
+    new Date(v.verifiedAt).toISOString().slice(0, 10) === v.verifiedAt
+  );
 }

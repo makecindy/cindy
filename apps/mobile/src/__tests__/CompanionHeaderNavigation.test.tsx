@@ -2,135 +2,84 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
-import { act, createContext, createElement, Fragment, useState } from 'react';
+import { act, createElement, Fragment, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useHostManagedSession } from '@/session/hostManagedSession';
 import type { RemoteResource } from '@cindy/device-link';
 
 const h = vi.hoisted(() => ({
-  focused: true, drawer: {} as any, accounts: {} as any, profile: {} as any,
-  dismiss: vi.fn(), push: vi.fn(), chooseMode: vi.fn(),
-  auth: { accountGeneration: 1, user: null, logout: vi.fn(), beginAddAccount: vi.fn() },
+  profile: {} as any, dismiss: vi.fn(), chooseMode: vi.fn(), screenOptions: [] as Array<Record<string, unknown>>,
+  auth: { accountGeneration: 1, user: null },
 }));
 vi.mock('react-native', () => ({
-  Keyboard: { dismiss: h.dismiss }, Alert: { alert: vi.fn() },
+  Keyboard: { dismiss: h.dismiss },
   View: ({ children, testID }: any) => createElement('div', { 'data-testid': testID }, children),
-  Pressable: ({ children, onPress, testID }: any) => createElement('button', { onClick: onPress, 'data-testid': testID }, children),
+  Pressable: ({ children, onPress, testID, disabled }: any) => createElement('button', { onClick: onPress, disabled, 'data-testid': testID },
+    typeof children === 'function' ? children({ pressed: false }) : children),
   StyleSheet: { create: (s: unknown) => s },
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (s: string) => s, i18n: { language: 'en' } }) }));
-vi.mock('expo-router', () => ({ useSegments: () => ['sessions', '[sessionId]'] }));
-vi.mock('expo-router/react-navigation', () => ({
-  useIsFocused: () => h.focused, NavigationContext: createContext(null), NavigationRouteContext: createContext(null),
-}));
-vi.mock('@/session/NativeResidentHistory', () => ({ NativeHistoryHost: null, NativeHistorySlot: null, needsResidentHistoryUpgrade: false }));
-vi.mock('@/platform/AdaptiveWindowContext', () => ({
-  usePaneViewport: () => ({ width: 390, height: 844 }), PaneViewportProvider: ({ children }: any) => children,
-}));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
-vi.mock('@/components/AppText', () => ({ Text: 'span' }));
+vi.mock('@/components/AppText', () => ({ Text: ({ children }: any) => createElement('span', null, children) }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: () => null }));
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
   return { ...tokens, useTheme: () => ({ colors: tokens.lightColors }), useThemedStyles: (fn: any) => fn(tokens.lightColors) };
 });
-vi.mock('lucide-react-native', () => ({ ChevronDown: () => null, PanelLeft: () => null, Settings2: () => null }));
+vi.mock('lucide-react-native', () => ({ ChevronLeft: () => null, Settings2: () => null }));
 vi.mock('@/session/HomeHeaderGlassButton', () => ({ HomeHeaderGlassButton: ({ onPress, testID, children, disabled }: any) =>
   createElement('button', { onClick: onPress, disabled, 'data-testid': testID }, children) }));
-vi.mock('@/session/TeammatePicker', () => ({ TeammatePicker: () => null }));
-vi.mock('@/session/CompanionProfileSheet', () => ({ CompanionCreateSheet: () => null,
-  CompanionProfileSheet: (props: unknown) => { h.profile = props; return null; } }));
+vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: ({ active }: any) => active ? createElement('i', { 'data-testid': 'ring' }) : null }));
+vi.mock('@/session/CompanionProfileSheet', () => ({ CompanionProfileSheet: (props: unknown) => { h.profile = props; return null; } }));
 vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () => ({ chooseMode: h.chooseMode }) }));
-vi.mock('@/utils/useGuardedPush', () => ({ useGuardedPush: () => h.push }));
-vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: String }));
-vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: {
-  subscribe: () => () => {}, getSessions: () => [], isSessionRunning: () => false,
-} }));
-vi.mock('@/session/AccountSwitcherSheet', () => ({ AccountSwitcherSheet: (props: unknown) => { h.accounts = props; return null; } }));
-vi.mock('@/session/HomeChromeDrawer', () => ({ HomeChromeDrawer: (props: any) => {
-  h.drawer = props;
-  return createElement('div', { 'data-drawer': true, 'data-open': props.open });
-} }));
-import { MessageHistoryOverlay, RecentMessageHistoriesProvider } from '@/session/RecentMessageHistories';
 import { CompanionHeader } from '@/session/CompanionHeader';
-import { CompanionNavigationDrawer } from '@/session/CompanionNavigationDrawer';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root; let host: HTMLDivElement;
+const resource = { ref: { kind: 'bot', collectionId: 'bots', id: 'bot' }, display: { title: 'Cindy' } } as RemoteResource;
+const button = (id: string) => host.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`)!;
 beforeEach(() => {
-  vi.clearAllMocks(); h.auth.accountGeneration = 1; h.focused = true;
-  h.drawer = {}; h.accounts = {}; h.profile = {};
+  vi.clearAllMocks(); h.auth.accountGeneration = 1; h.profile = {}; h.screenOptions = [];
   host = document.createElement('div'); root = createRoot(host);
 });
 afterEach(() => act(() => root.unmount()));
 
-it('opens navigation through the page owner without mounting an overlay inside the clipped header', async () => {
-  const onOpenNavigation = vi.fn(), onSearch = vi.fn();
-  const resource = { ref: { kind: 'bot', collectionId: 'bots', id: 'bot' }, display: { title: 'Cindy' } } as RemoteResource;
-  await act(async () => root.render(<CompanionHeader resource={resource} deviceId="pc" deviceName="PC" online
-    onOpenNavigation={onOpenNavigation} onSearch={onSearch} />));
-  await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="companion.navigation"]')!.click());
+it('goes back from the chat instead of opening a drawer, and opens the profile from the name or the settings button', async () => {
+  const onBack = vi.fn(), onSearch = vi.fn();
+  await act(async () => root.render(<CompanionHeader resource={resource} deviceId="pc" deviceName="PC" online onBack={onBack} onSearch={onSearch} />));
+  await act(async () => button('companion.back').click());
   expect(h.dismiss).toHaveBeenCalledOnce();
-  expect(onOpenNavigation).toHaveBeenCalledOnce();
-  expect(host.querySelector('[data-drawer]')).toBeNull();
-  // Profile/search remain the existing sheet flow, independent of drawer ownership.
-  await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="companion.settings"]')!.click());
+  expect(onBack).toHaveBeenCalledOnce();
+  await act(async () => button('companion.identity').click());
   expect(h.profile.visible).toBe(true);
+  await act(async () => h.profile.onClose());
+  await act(async () => button('companion.settings').click());
+  expect(h.profile.visible).toBe(true);
+  // Search from the profile waits until the sheet has closed.
   await act(async () => h.profile.onOpenSearch());
   expect(onSearch).not.toHaveBeenCalled();
   await act(async () => h.profile.onClosed());
   expect(onSearch).toHaveBeenCalledOnce();
 });
 
-it.each([
-  ['onOpenSettings', '/settings'], ['onOpenDevices', '/devices/manage'],
-])('preserves %s navigation after the full-screen drawer finishes closing', async (action, route) => {
-  const onClose = vi.fn();
-  await act(async () => root.render(<CompanionNavigationDrawer open onClose={onClose} onSearch={() => {}} />));
-  await act(async () => h.drawer[action]());
-  expect(onClose).toHaveBeenCalledOnce(); expect(h.push).not.toHaveBeenCalled();
-  await act(async () => h.drawer.onClosed());
-  expect(h.push).toHaveBeenCalledExactlyOnceWith(route);
-  await act(async () => h.drawer.onClosed());
-  expect(h.push).toHaveBeenCalledTimes(1);
+it('shows the computer and whether it is online, and breathes while the companion works', async () => {
+  await act(async () => root.render(<CompanionHeader resource={resource} deviceId="pc" deviceName="Office iMac" online={false} working onBack={() => {}} onSearch={() => {}} />));
+  expect(host.textContent).toContain('devices.resources.hostOffline · Office iMac');
+  expect(host.querySelector('[data-testid="ring"]')).not.toBeNull();
+  await act(async () => root.render(<CompanionHeader resource={resource} deviceId="pc" deviceName="Office iMac" online onBack={() => {}} onSearch={() => {}} />));
+  expect(host.textContent).toContain('Office iMac');
+  expect(host.textContent).not.toContain('devices.resources.hostOffline');
+  expect(host.querySelector('[data-testid="ring"]')).toBeNull();
 });
 
-it('preserves search, mode switching, account switching and logout actions', async () => {
-  const onSearch = vi.fn();
-  await act(async () => root.render(<CompanionNavigationDrawer open onClose={() => {}} onSearch={onSearch} />));
-  await act(async () => h.drawer.onOpenSearch()); expect(onSearch).not.toHaveBeenCalled();
-  await act(async () => h.drawer.onClosed()); expect(onSearch).toHaveBeenCalledOnce();
-  await act(async () => h.drawer.onModeChange('tasks')); expect(h.chooseMode).not.toHaveBeenCalled();
-  await act(async () => h.drawer.onClosed()); expect(h.chooseMode).toHaveBeenCalledWith('tasks');
-  await act(async () => { h.drawer.onOpenAccounts(); h.drawer.onClosed(); }); expect(h.accounts.visible).toBe(true);
-  h.auth.logout.mockResolvedValue(undefined);
-  await act(async () => h.drawer.onLogout()); expect(h.auth.logout).toHaveBeenCalledOnce();
+it('keeps profile controls closed until the chat entry is validated', async () => {
+  await act(async () => root.render(<CompanionHeader resource={resource} deviceId="pc" deviceName="PC" online controlsReady={false} onBack={() => {}} onSearch={() => {}} />));
+  expect(button('companion.settings').disabled).toBe(true);
+  expect(button('companion.identity').disabled).toBe(true);
+  expect(h.profile.visible).toBe(false);
 });
 
-it('returns to the roster when the already-active companion mode is selected', async () => {
-  const onClose = vi.fn();
-  await act(async () => root.render(<CompanionNavigationDrawer open onClose={onClose} onSearch={() => {}} />));
-  await act(async () => h.drawer.onModeChange('teammates'));
-  expect(onClose).toHaveBeenCalledOnce(); expect(h.chooseMode).not.toHaveBeenCalled();
-  await act(async () => h.drawer.onClosed());
-  expect(h.chooseMode).toHaveBeenCalledExactlyOnceWith('teammates');
-});
-
-it.each(['account', 'companion'])('drops a queued navigation action when the %s scope changes', async (change) => {
-  const render = (scope: string) => act(async () => root.render(<CompanionNavigationDrawer key={scope} open onClose={() => {}} onSearch={() => {}} />));
-  await render('old');
-  await act(async () => h.drawer.onOpenSettings());
-  const staleFinish = h.drawer.onClosed;
-  if (change === 'account') h.auth.accountGeneration++;
-  await render('new');
-  await act(async () => staleFinish());
-  expect(h.push).not.toHaveBeenCalled();
-});
-
-// Execute production page state, callbacks and conditional JSX, following the
-// existing page-hook tests. Do not reconstruct the navigation wiring in a fixture.
-// Only unrelated chrome/sidebar components are omitted; the Android overlay
-// provider and both companion components below are the production implementations.
+// Execute the production page header state and JSX, following the existing page-hook tests.
 const source = ts.createSourceFile('screen.tsx', readFileSync(
   resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8',
 ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -143,18 +92,14 @@ const stateStart = declaration('companionChat');
 const stateEnd = declaration('lastAckKeyRef');
 if (stateStart < 0 || stateEnd <= stateStart) throw new Error('Missing companion page state');
 const header = statements[declaration('headerNode')];
-const returned = statements.find(ts.isReturnStatement)!.expression as ts.ParenthesizedExpression;
-const screenRoot = returned.expression as ts.JsxElement;
-// Select from the screen root, never from a descendant under session.chrome.
-const overlay = screenRoot.children.find(n => ts.isJsxElement(n)
-  && n.openingElement.tagName.getText(source) === 'MessageHistoryOverlay');
-if (!overlay) throw new Error('Missing page-root MessageHistoryOverlay');
 const printer = ts.createPrinter();
 function relevantJsx(node: ts.Node): string {
   const result = ts.transform(node, [context => root => {
     const visit: ts.Visitor = child => {
-      if (ts.isJsxSelfClosingElement(child)
-        && ['Stack.Screen', 'SystemNavigationBack', 'SessionHeaderBar', 'SessionListDrawer'].includes(child.tagName.getText(source))) {
+      if (ts.isJsxSelfClosingElement(child) && child.tagName.getText(source) === 'Stack.Screen') {
+        return ts.factory.createJsxSelfClosingElement(ts.factory.createIdentifier('StackScreen'), undefined, child.attributes);
+      }
+      if (ts.isJsxSelfClosingElement(child) && child.tagName.getText(source) === 'SessionHeaderBar') {
         return ts.factory.createJsxSelfClosingElement(ts.factory.createIdentifier('span'), undefined, ts.factory.createJsxAttributes([]));
       }
       return ts.visitEachChild(child, visit, context);
@@ -164,76 +109,61 @@ function relevantJsx(node: ts.Node): string {
   const text = printer.printNode(ts.EmitHint.Unspecified, result.transformed[0], source);
   result.dispose(); return text;
 }
-const compiled = ts.transpileModule(`function PageHost({ bindings }) {
-  const { auth, deviceId, sessionId, companionResource, companionEntry, shareSelectionActive, setSearchOpen } = bindings;
+const moduleConstant = (name: string) => source.statements.find(n => ts.isVariableStatement(n)
+  && n.declarationList.declarations.some(d => d.name.getText(source) === name))!.getText(source);
+const compiled = ts.transpileModule(`${moduleConstant('COMPANION_NATIVE_HEADER_OPTIONS')}
+function PageHost({ bindings }) {
+  const { auth, deviceId, sessionId, companionResource, companionEntry, shareSelectionActive, setSearchOpen, goBackToHome, companionWorkingLabel } = bindings;
   const currentSession = null;
+  const companionSettingsRequest = bindings.companionSettingsRequest;
   const deviceName = 'PC', remoteUnavailableReason = null, sessionListDrawerOverlayMounted = false;
   ${statements.slice(stateStart, stateEnd).map(n => n.getText(source)).join('\n')}
   ${relevantJsx(header)}
-  return <div data-testid="page-route"><div data-testid="clipped-chrome">{headerNode}</div>${relevantJsx(overlay)}</div>;
+  return <div data-testid="page-route">{headerNode}</div>;
 }`, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText;
-const PageHost = new Function('React', 'useState', 'useHostManagedSession', 'CompanionHeader', 'CompanionNavigationDrawer', 'MessageHistoryOverlay',
-  `${compiled}; return PageHost;`)({ createElement, Fragment }, useState, useHostManagedSession, CompanionHeader, CompanionNavigationDrawer, MessageHistoryOverlay);
+function StackScreen({ options }: { options: Record<string, unknown> }) { h.screenOptions.push(options); return null; }
+const PageHost = new Function('React', 'useState', 'useHostManagedSession', 'CompanionHeader', 'StackScreen',
+  `${compiled}; return PageHost;`)({ createElement, Fragment }, useState, useHostManagedSession, CompanionHeader, StackScreen);
 const pageBindings = () => ({ auth: h.auth, deviceId: 'pc', sessionId: 'session-a', shareSelectionActive: false,
   companionEntry: { ready: true },
   companionResource: { ref: { kind: 'bot', collectionId: 'bots', id: 'bot-a' }, display: { title: 'Cindy' } } as RemoteResource | null,
-  setSearchOpen: vi.fn() });
-const showPage = (bindings: ReturnType<typeof pageBindings>) => act(async () => {
-  root.render(<RecentMessageHistoriesProvider><PageHost bindings={bindings} /></RecentMessageHistoriesProvider>);
-});
-const openPageDrawer = () => act(async () => host.querySelector<HTMLButtonElement>('[data-testid="companion.navigation"]')!.click());
+  setSearchOpen: vi.fn(), goBackToHome: vi.fn(), companionWorkingLabel: null as string | null });
+const showPage = (bindings: ReturnType<typeof pageBindings>) => act(async () => { root.render(<PageHost bindings={bindings} />); });
 
-it('shows the companion title while profile controls wait for entry validation', async () => {
+it('wires the page: title while entry validation runs, Back to the roster, and the working breath', async () => {
   const bindings = pageBindings(); bindings.companionEntry.ready = false;
   await showPage(bindings);
   expect(host.textContent).toContain('Cindy');
-  expect(host.querySelector<HTMLButtonElement>('[data-testid="companion.settings"]')!.disabled).toBe(true);
+  expect(button('companion.settings').disabled).toBe(true);
   expect(h.profile.online).toBe(true); // Synchronizing is not an offline connection.
-  bindings.companionEntry.ready = true;
+  bindings.companionEntry.ready = true; bindings.companionWorkingLabel = 'Thinking…';
   await showPage(bindings);
-  expect(host.querySelector<HTMLButtonElement>('[data-testid="companion.settings"]')!.disabled).toBe(false);
+  expect(button('companion.settings').disabled).toBe(false);
+  expect(host.querySelector('[data-testid="ring"]')).not.toBeNull();
+  await act(async () => button('companion.back').click());
+  expect(bindings.goBackToHome).toHaveBeenCalledOnce();
+  // The companion row is the only header: the native bar the task header configured while the
+  // entry resolved must not keep its title and sync spinner on top of the identity.
+  expect(h.screenOptions).toContainEqual(expect.objectContaining({ headerShown: false, headerTitle: '' }));
 });
 
-it('opens the page-owned drawer in the real Android history overlay and closes before searching', async () => {
-  const bindings = pageBindings();
-  await showPage(bindings); await openPageDrawer();
-  const drawer = host.querySelector('[data-drawer]')!;
-  expect(drawer.getAttribute('data-open')).toBe('true');
-  expect(host.querySelector('[data-testid="page-route"]')!.contains(drawer)).toBe(false);
-  expect(host.querySelector('[data-testid="clipped-chrome"]')!.contains(drawer)).toBe(false);
-  await act(async () => h.drawer.onOpenSearch());
-  expect(host.querySelector('[data-drawer]')!.getAttribute('data-open')).toBe('false');
-  expect(bindings.setSearchOpen).not.toHaveBeenCalled();
-  await act(async () => h.drawer.onClosed());
-  expect(bindings.setSearchOpen).toHaveBeenCalledExactlyOnceWith(true);
-});
-
-it.each(['account', 'device', 'session', 'companion', 'share'] as const)('resets the page drawer across the %s boundary', async change => {
-  const bindings = pageBindings();
-  await showPage(bindings); await openPageDrawer();
-  await act(async () => h.drawer.onOpenSettings());
-  const staleFinish = h.drawer.onClosed;
-  await openPageDrawer();
-  if (change === 'account') h.auth.accountGeneration++;
-  if (change === 'device') bindings.deviceId = 'pc-b';
-  if (change === 'session') bindings.sessionId = 'session-b';
-  if (change === 'companion') bindings.companionResource = { ...bindings.companionResource!, ref: { kind: 'bot', collectionId: 'bots', id: 'bot-b' } };
-  if (change === 'share') bindings.shareSelectionActive = true;
-  await showPage(bindings);
-  expect(host.querySelector('[data-open="true"]')).toBeNull();
-  await act(async () => staleFinish()); expect(h.push).not.toHaveBeenCalled();
-  if (change === 'share') {
-    expect(host.querySelector('[data-drawer]')).toBeNull();
-    bindings.shareSelectionActive = false; await showPage(bindings);
-    expect(host.querySelector('[data-open="true"]')).toBeNull();
-  }
-});
-
-it('does not mount a companion drawer on an ordinary task or unfocused route', async () => {
+it('shows the ordinary task header on non-companion pages and while sharing', async () => {
   const bindings = pageBindings(); bindings.companionResource = null;
-  await showPage(bindings); expect(host.querySelector('[data-drawer]')).toBeNull();
-  bindings.companionResource = pageBindings().companionResource;
-  await showPage(bindings); await openPageDrawer();
-  h.focused = false; await showPage(bindings);
-  expect(host.querySelector('[data-drawer]')).toBeNull();
+  await showPage(bindings);
+  expect(host.querySelector('[data-testid="companion.header"]')).toBeNull();
+  bindings.companionResource = pageBindings().companionResource; bindings.shareSelectionActive = true;
+  await showPage(bindings);
+  expect(host.querySelector('[data-testid="companion.header"]')).toBeNull();
+  // The task header keeps its native bar.
+  expect(h.screenOptions.some((options) => options.headerShown === false)).toBe(false);
+});
+
+it('opens learning links in the existing profile sheet on the requested page', async () => {
+  await act(async () => root.render(<CompanionHeader resource={resource} deviceId="pc" deviceName="PC" online onBack={() => {}} onSearch={() => {}}
+    settingsRequest={{ page: 'memory', sequence: 1 }} />));
+  expect(h.profile).toMatchObject({ visible: true, initialPage: 'memory' });
+  await act(async () => h.profile.onClose());
+  await act(async () => root.render(<CompanionHeader resource={resource} deviceId="pc" deviceName="PC" online onBack={() => {}} onSearch={() => {}}
+    settingsRequest={{ page: 'capabilities', sequence: 2 }} />));
+  expect(h.profile).toMatchObject({ visible: true, initialPage: 'capabilities' });
 });

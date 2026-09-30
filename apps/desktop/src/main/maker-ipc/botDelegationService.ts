@@ -17,6 +17,7 @@ import { sessionCreateToRow } from '../localDb/mapper.js';
 import {
   botDelegations,
   botProfiles,
+  botProfileVersions,
   botSessionLinks,
   messages,
   sessions,
@@ -49,6 +50,8 @@ import { ensureBotWorkspaceDir } from './botProfileFolder.js';
 import type { SessionQueuedMessageControlResult, SessionSteerResult, SessionStopResult } from './sessionControlService.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import type { SessionRuntimeProfile } from './sessionRuntimeControl.js';
+import { readBotTaskModelOverride, type BotModelRoute } from '../../shared/botModelChain.js';
+import { validateBotTaskModel, resolveBotTaskModelSelection, type BotTaskModelSelection } from './appDefaultModelControl.js';
 
 const ACTIVE_DELEGATION_STATUSES = ['queued', 'running', 'waiting'] as const;
 /** 一条补充消息的正文上限：够写清「先别做 X，改做 Y」，又不至于变成另一项任务。 */
@@ -177,6 +180,8 @@ export interface BotDelegationServiceDeps {
     typeof sessions.$inferSelect,
     'model' | 'agentKind' | 'providerId' | 'fastMode'
   > & { effort?: (typeof sessions.$inferSelect)['effort'] }) | null;
+  validateTaskModel?: typeof validateBotTaskModel;
+  resolveTaskModelSelection?: typeof resolveBotTaskModelSelection;
   /** null means the live permission is changing or the caller is closing. */
   readCallerPermission?: (sessionId: string) => string | { mode: string; generation: number } | null;
   /** Narrow, owner-checked bridge to the ordinary Session runtime controller. */
@@ -197,6 +202,8 @@ export interface BotDelegationServiceDeps {
 
 /** Start one tracked Cindy Session task from a persistent Bot task. */
 export interface SessionTaskInput {
+  /** One task only; the catalog id includes source and Harness. */
+  modelSelection?: BotTaskModelSelection;
   callerSessionId: string;
   objective: string;
   contextRefs?: string[];
@@ -236,6 +243,16 @@ function parseRecord(value: string | null | undefined): Record<string, unknown> 
   } catch {
     return {};
   }
+}
+
+/** Use the creation snapshot, not today's companion settings, during recovery. */
+export async function hasExplicitSessionTaskModel(sessionId: string): Promise<boolean> {
+  const [row] = await getDbClient().drizzle
+    .select({ permissionSnapshotJson: botDelegations.permissionSnapshotJson })
+    .from(botDelegations)
+    .where(eq(botDelegations.childSessionId, sessionId))
+    .limit(1);
+  return !!parseRecord(row?.permissionSnapshotJson).taskModelOverride;
 }
 
 /** Mutable execution hold lives beside the frozen plan, without changing its authority fields. */
@@ -2092,6 +2109,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     objective: string;
     contextRefs: string[];
     plan: Omit<BotDelegationPlanSnapshot, 'permission'>;
+    taskModelOverride?: BotModelRoute;
     useWorktree?: boolean;
     session: {
       workingDir: string;
@@ -2161,6 +2179,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     };
     const createdAt = plan.createdAt;
     const permissionSnapshotJson = JSON.stringify({ ...plan,
+      ...(input.taskModelOverride ? { taskModelOverride: input.taskModelOverride } : {}),
       taskInput: { runSequence: 1, originalObjective: input.objective, followUp: null } satisfies SessionTaskInputSnapshot,
     });
     const childRow = {
@@ -2170,7 +2189,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           workspaceKind: input.session.workspaceKind ?? 'dialogue',
           workingDir: input.session.workingDir,
           model: input.session.model,
-          // 后台任务沿用发起伙伴当前任务的模型、来源和执行档位。
+          // Persist the selected task route, including its source, Harness and tuning.
           ...(input.session.effort !== undefined ? { effort: input.session.effort } : {}),
           ...(input.session.fastMode !== undefined ? { fastMode: input.session.fastMode } : {}),
           ...(input.session.providerId !== undefined
@@ -2302,6 +2321,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   const startSessionTask = async (
     input: SessionTaskInput,
   ): Promise<BotDelegationResult<{
+    modelRoute: BotModelRoute;
     delegationId: string;
     childSessionId: string;
     /**
@@ -2329,7 +2349,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const createdAt = now();
     const deadlineAt = createdAt + timeoutMs;
 
-    // 子任务承接发起伙伴的实际路由与权限档；一次性工具批准仍只属于原请求。
+    // No override inherits the live route (including fallback), never a stale creation snapshot.
     const [callerSession] = await db
       .select({
         model: sessions.model,
@@ -2345,6 +2365,29 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于任何伙伴' };
     }
     const callerRuntime = deps.readCallerRuntime?.(input.callerSessionId) ?? callerSession;
+    const [profile] = await db.select({ config: botProfileVersions.capabilitiesJson })
+      .from(botProfiles)
+      .innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id),
+        eq(botProfileVersions.version, botProfiles.currentVersion)))
+      .where(eq(botProfiles.id, caller.botId)).limit(1);
+    let taskModel: BotModelRoute | null;
+    try {
+      taskModel = input.modelSelection !== undefined
+        ? await (deps.resolveTaskModelSelection ?? resolveBotTaskModelSelection)(input.modelSelection)
+        : readBotTaskModelOverride(parseRecord(profile?.config).taskModelOverride);
+      if (input.modelSelection === undefined && taskModel && !await (deps.validateTaskModel ?? validateBotTaskModel)(taskModel)) {
+        return { ok: false, errorCode: 'TASK_MODEL_UNAVAILABLE', message: '任务模型不可用，请在伙伴模型设置中重新选择后重试' };
+      }
+    } catch {
+      return { ok: false, errorCode: 'TASK_MODEL_UNAVAILABLE', message: '无法确认任务模型或参数，请重新查询可用模型并检查伙伴模型设置后重试' };
+    }
+    const taskRuntime = taskModel ? {
+      agentKind: taskModel.harness === 'claude' ? 'cc' : taskModel.harness,
+      model: taskModel.model,
+      providerId: taskModel.providerId,
+      effort: taskModel.effort as typeof callerRuntime.effort,
+      fastMode: taskModel.fastMode,
+    } : callerRuntime;
     let workingDir = input.workingDir?.trim() || '';
     if (workingDir) {
       const isDirectory = (() => {
@@ -2382,17 +2425,18 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       objective,
       contextRefs: contextRefs.refs,
       plan,
+      taskModelOverride: taskModel ?? undefined,
       useWorktree: input.useWorktree,
       session: {
         workingDir,
         workspaceKind: input.workingDir?.trim() ? 'project' : 'dialogue',
-        model: callerRuntime.model,
-        ...(callerRuntime.effort ? { effort: callerRuntime.effort } : {}),
-        ...(callerRuntime.fastMode !== null && callerRuntime.fastMode !== undefined
-          ? { fastMode: callerRuntime.fastMode }
+        model: taskRuntime.model,
+        ...(taskRuntime.effort ? { effort: taskRuntime.effort } : {}),
+        ...(taskRuntime.fastMode !== null && taskRuntime.fastMode !== undefined
+          ? { fastMode: taskRuntime.fastMode }
           : {}),
-        ...(callerRuntime.providerId ? { providerId: callerRuntime.providerId } : {}),
-        agentKind: callerRuntime.agentKind as 'cc' | 'codex' | 'pi',
+        ...(taskRuntime.providerId ? { providerId: taskRuntime.providerId } : {}),
+        agentKind: taskRuntime.agentKind as 'cc' | 'codex' | 'pi',
         title: input.title?.trim() || objective.split('\n')[0]!.slice(0, 60),
         source: 'desktop',
       },
@@ -2404,6 +2448,13 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       childSessionId: started.childSessionId,
       status: started.status,
       deadlineAt: started.deadlineAt,
+      modelRoute: {
+        harness: taskRuntime.agentKind === 'codex' ? 'codex' : taskRuntime.agentKind === 'pi' ? 'pi' : 'claude',
+        model: taskRuntime.model,
+        providerId: taskRuntime.providerId ?? null,
+        effort: taskRuntime.effort ?? '',
+        fastMode: Boolean(taskRuntime.fastMode),
+      },
     };
   };
 
@@ -3197,6 +3248,11 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         return { ok: false as const, errorCode: 'TASK_ACTIVE', message: 'Finish or stop the current execution before changing its model' };
       }
       const inspected = await deps.taskRoute.inspect(callerSessionId, found.row.childSessionId);
+      // An explicit task model has no backup chain. Freeze this at creation so a later
+      // profile edit cannot offer the primary chain to an already-created task.
+      if (inspected.ok && parseRecord(found.row.permissionSnapshotJson).taskModelOverride) {
+        return { ...inspected, next: null, selectionToken: null };
+      }
       return inspected.ok ? { ...inspected, selectionToken: inspected.next
         ? createHash('sha256').update(JSON.stringify([inspected.generation, inspected.next])).digest('hex')
         : null } : inspected;
@@ -3223,7 +3279,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       if (inspected.generation !== expectedGeneration) {
         return { ok: false as const, errorCode: 'CONFLICT', message: 'Task model changed; inspect it again before retrying' };
       }
-      if (!inspected.next) {
+      if (!inspected.next || parseRecord(row.permissionSnapshotJson).taskModelOverride) {
         return { ok: false as const, errorCode: 'NO_CONFIGURED_ROUTE', message: 'No further configured model route is available' };
       }
       const currentToken = createHash('sha256')

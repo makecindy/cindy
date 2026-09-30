@@ -14,6 +14,7 @@
 //
 // 纯 JS(不进 @expo/fingerprint / 不改 runtimeVersion),可随热更下发。
 
+import { clearSharedTaskInvitationIntent, receiveSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
 import { WECHAT_APP_ID, WECHAT_UNIVERSAL_LINK } from '@/config/env';
 import { isWechatSdkCallback } from '@/auth/wechatCallback';
 
@@ -26,6 +27,8 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
       appId: WECHAT_APP_ID,
       universalLink: WECHAT_UNIVERSAL_LINK,
     })) return '/';
+    const invitationUrl = /^\/(?:shared-session|shared-task\/join)\?/.test(path) ? `cindy:/${path}` : path;
+    if (receiveSharedTaskInvitationIntent(invitationUrl)) return '/shared-session';
     // path 可能是完整 URL('cindycn://auth?code=...')或路径('/auth?code=...'),统一取出 pathname。
     const noScheme = path.replace(/^[a-zA-Z][\w+.-]*:\/\//, '/');
     const pathname = noScheme.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
@@ -34,6 +37,11 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     // A restored launch URL is not proof of an unconsumed share. On cold start,
     // let IncomingShareBridge navigate only after reading an actual pending batch.
     if (pathname === '/expo-sharing') return initial ? '/' : '/sessions/new';
+    // Invalid invitations must not leave secrets in router state or diagnostics.
+    if (pathname === '/shared-session' || pathname === '/shared-task/join') {
+      clearSharedTaskInvitationIntent();
+      return '/shared-session';
+    }
     return path;
   } catch {
     return path;

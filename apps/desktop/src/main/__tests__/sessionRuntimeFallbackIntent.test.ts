@@ -34,6 +34,7 @@ function harness() {
     captureSessionRuntimeControlOwnerEpoch: () => 'owner',
     sessionRuntimeControlOwnerEpochMatches: () => true,
     readSessionRuntimeProfiles: async () => ({ effective: current, control: { generation, pending: null } }),
+    hasExplicitSessionTaskModel: async () => false,
     readBotFallbackCandidate: readCandidate,
     maker: { getSession: () => current },
     pendingSessionRuntimeFallbackRebuilds: new WeakMap(),

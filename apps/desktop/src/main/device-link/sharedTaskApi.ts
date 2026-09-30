@@ -1,4 +1,4 @@
-import { createSharedTaskApi, SharedTaskScopeChangedError } from '@cindy/device-link';
+import { buildSharedTaskInvitationLink, createSharedTaskApi, parseSharedTaskInvitation, sharedTaskAccountName, SharedTaskScopeChangedError } from '@cindy/device-link';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getAccessToken, getActiveAuthRealm, getAuthState, getCurrentUserId } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
@@ -6,7 +6,7 @@ import { serverApiFetch } from '../serverApiClient.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
 /** Main-owned adapter. Tokens remain inside the existing authenticated HTTP client. */
-export const sharedTaskApi = createSharedTaskApi({
+const accountApi = createSharedTaskApi({
   captureScope() {
     const key = activeOwnerScopeKey();
     const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
@@ -29,7 +29,7 @@ export const sharedTaskApi = createSharedTaskApi({
         logLabel: '/api/device-link/shared-tasks',
         redactErrorDetails: true,
         allowedRedactedErrorCodes: ['NOT_FOUND', 'CONFLICT', 'PERMISSION_DENIED', 'INVALID_PARAMS', 'RATE_LIMITED',
-          'SHARED_TASK_HOST_LIMIT', 'SHARED_TASK_JOIN_LIMIT', 'SHARED_TASK_GUEST_LIMIT'],
+          'SHARED_TASK_HOST_LIMIT', 'SHARED_TASK_JOIN_LIMIT', 'SHARED_TASK_GUEST_LIMIT', 'SHARED_TASK_SELF_JOIN'],
       });
     } catch (error) {
       const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
@@ -38,7 +38,7 @@ export const sharedTaskApi = createSharedTaskApi({
       }
       // Error properties do not survive Electron serialization. Preserve only
       // actionable codes, never the server response or invitation details.
-      if (code === 'NOT_FOUND' || code === 'PERMISSION_DENIED' || code === 'INVALID_PARAMS') {
+      if (code === 'NOT_FOUND' || code === 'PERMISSION_DENIED' || code === 'INVALID_PARAMS' || code === 'SHARED_TASK_SELF_JOIN') {
         throwIpcError(code, 'Shared task request rejected');
       }
       if (code === 'NETWORK_ERROR') throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Shared task service unreachable');
@@ -46,6 +46,23 @@ export const sharedTaskApi = createSharedTaskApi({
     }
   },
 });
+
+export const sharedTaskApi = {
+  ...accountApi,
+  async invite(sharedTaskId: string) {
+    const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
+    const result = await accountApi.invite(sharedTaskId);
+    // Keep the bare token for older controlling clients; new clients copy the link.
+    const region = import.meta.env.VITE_CINDY_AUTH_REGION;
+    const app = region === 'cn' ? 'cindycn' : region === 'dev' ? 'cindydev' : 'cindy';
+    return { ...result, invitationLink: buildSharedTaskInvitationLink(result.invitation, endpoint, app) };
+  },
+  async join(input: string, _displayName: string) {
+    const parsed = parseSharedTaskInvitation(input, getClientEndpoint('deviceLinkApiBaseUrl'));
+    if (!parsed.ok) throwIpcError(parsed.reason === 'different-server' ? 'REGION_MISMATCH' : 'INVALID_PARAMS', 'Invalid shared task invitation or service mismatch');
+    return accountApi.join(parsed.invitation, sharedTaskAccountName(getAuthState().user?.name));
+  },
+};
 
 /** Capture only while the outgoing identity still owns the credentials. Unlike
  * ordinary requests, this close-only cleanup may cross the pending boundary:

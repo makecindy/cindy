@@ -26,6 +26,7 @@ import {
   TRANSPORT_RETRY_PASS_BUDGET,
   encodeReliableFrames,
   makeTransportSkipPayload,
+  isTransportSkipPayload,
   parseTransportAck,
   parseTransportPayload,
 } from '../transport.js';
@@ -1446,6 +1447,47 @@ describe('DeviceLinkClient', () => {
       await result;
       expect(debug).toHaveBeenCalledWith(expect.stringContaining('firstWriteWaitMs=0 afterFirstWriteMs=1500'));
     } finally { h.client.stop(); clock.mockRestore(); wall.mockRestore(); }
+  });
+
+  it.each([
+    [1, 60_000, 0], [8, 60_000, 0],
+    [1, 0, 60_000], [8, 0, 60_000],
+    [1, 60_000, -60_000], [8, 60_000, -60_000],
+  ])('expires a suspended request before replay with retry limit %i (monotonic %i ms, wall %i ms) without resetting another peer', async (transportMaxRetryAttempts, monotonicAdvance, wallAdvance) => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000, transportMaxRetryAttempts } });
+    let now = 100;
+    const clock = vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => now);
+    let wallNow = Date.now();
+    const wallClock = vi.spyOn(Date, 'now').mockImplementation(() => wallNow);
+    try {
+      h.client.start(); await tick(); h.current().ack();
+      await establishInboundReliableLink(h, 'suspended-stream');
+      await establishInboundReliableLink(h, 'healthy-stream', 1, 'dev-c');
+      const result = h.client.invoke('dev-b', { channel: 'device-link:unsubscribe', args: ['sessions'] });
+      const outcome = result.catch((error: DeviceLinkError) => error.code);
+      const request = h.current().sent.filter(e => e.kind === 'invoke' && e.dst === 'dev-b').at(-1)!;
+      const healthy = h.client.invoke('dev-c', { channel: 'local-db:sessions:list', args: [] }, 120_000)
+        .catch((error: unknown) => error);
+      const healthyRequest = h.current().sent.filter(e => e.kind === 'invoke' && e.dst === 'dev-c').at(-1)!;
+      const reset = vi.fn();
+      h.client.onPeerTransportReset(reset);
+      const before = h.current().sent.length;
+      // Model suspension without firing any timeout callback. Link recovery wins the callback race.
+      now += monotonicAdvance;
+      wallNow += wallAdvance;
+      await establishInboundReliableLink(h, 'resumed-stream');
+      const replay = h.current().sent.slice(before).filter(e => e.id === request.id);
+      expect(replay.length).toBeGreaterThan(0);
+      expect(replay.every(e => isTransportSkipPayload(JSON.parse(parseTransportPayload(e.payload)!.data)))).toBe(true);
+      expect(await outcome).toBe('INVOKE_TIMEOUT');
+      encodeReliableFrames({ v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'dev-c', id: healthyRequest.id,
+        payload: { ok: true, result: ['healthy'] },
+      }, 'healthy-stream', 1).forEach(frame => h.current().push(frame));
+      await expect(healthy).resolves.toMatchObject({ result: ['healthy'] });
+      expect(reset).not.toHaveBeenCalled();
+      expect(h.sockets).toHaveLength(1);
+      expect(h.current().closed).toBeNull();
+    } finally { h.client.stop(); clock.mockRestore(); wallClock.mockRestore(); }
   });
 
   it('bounds recovery stage logs, measures with monotonic time and records a fresh outbound handshake', async () => {
@@ -7005,7 +7047,11 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
 
   it('admits an atomic maximum-size reply after draining without pacing a fast empty socket', async () => {
     vi.useFakeTimers();
-    const h = makeHarness({ timing: { pingIntervalMs: 600_000 } });
+    const debug = vi.fn();
+    const h = makeHarness({ timing: { pingIntervalMs: 600_000 },
+      logger: { debug, info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+    let now = 100;
+    const clock = vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => now);
     try {
       h.client.start();
       await vi.advanceTimersByTimeAsync(0);
@@ -7019,11 +7065,13 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
       h.client.sendInvokeResult('a', 'max-reply', { ok: true, result: 'x'.repeat(4 * 1024 * 1024 - 1024) });
       expect(socket.sent).toHaveLength(0);
       socket.bufferedAmount = 0;
+      now += 300;
       await vi.advanceTimersByTimeAsync(250);
       const large = socket.sent.filter((env) => env.id === 'max-reply');
       expect(large.length).toBeGreaterThan(1);
       const last = parseTransportPayload(large.at(-1)!.payload)!;
       expect(large.length).toBe(last.meta.segment!.total);
+      expect(debug).toHaveBeenCalledWith(expect.stringContaining('lastBlockedBy=socket socketBufferedBytes=0'));
       socket.push({ v: 1, kind: 'push', src: 'a', payload: {
         channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
         payload: { streamId: last.meta.streamId, ackSeq: last.meta.seq },
@@ -7035,7 +7083,7 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
       for (let i = 0; i < 10; i++) h.client.sendInvokeResult('a', `fast-${i}`, { ok: true, result: 'ok' });
       expect(socket.sent.length - before).toBe(10);
       expect(socket.closed).toBeNull();
-    } finally { h.client.stop(); vi.useRealTimers(); }
+    } finally { h.client.stop(); clock.mockRestore(); vi.useRealTimers(); }
   });
 
   it('paces all reliable sends after 1013 without starving another peer or control ACKs', async () => {

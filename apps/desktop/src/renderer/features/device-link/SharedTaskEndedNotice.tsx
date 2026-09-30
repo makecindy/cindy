@@ -17,7 +17,7 @@ export function notifySharedTaskEnded(peer: string | undefined): boolean {
 }
 
 /** Lives in the window menu so leaving the revoked task cannot unmount the ending screen. */
-export function SharedTaskEndedNotice({ onJoin }: { onJoin(): void }) {
+export function SharedTaskEndedNotice({ onReturnToTasks }: { onReturnToTasks(): void }) {
   const { t } = useTranslation();
   const { dataOwnerId } = useAuth();
   const [owner, setOwner] = useState<DataOwnerGeneration | null>(null);
@@ -42,7 +42,7 @@ export function SharedTaskEndedNotice({ onJoin }: { onJoin(): void }) {
           <span className="mb-4 inline-flex size-11 items-center justify-center rounded-full border border-[var(--border-default)]"><CircleStop size={18} aria-hidden /></span>
           <h3 className="text-14 font-medium">{t('sharedTask.ended')}</h3>
           <Dialog.Description className="mx-auto mb-5 mt-2 max-w-[280px] text-12 text-[var(--text-secondary)]">{t('sharedTask.accessEndedBody')}</Dialog.Description>
-          <Button variant="cta" size="lg" onClick={() => { setOwner(null); onJoin(); }}>{t('sharedTask.rejoin')}</Button>
+          <Button variant="cta" size="lg" onClick={() => { setOwner(null); onReturnToTasks(); }}>{t('sharedTask.returnToTasks')}</Button>
         </div>
       </Dialog.Content>
     </Dialog.Portal>

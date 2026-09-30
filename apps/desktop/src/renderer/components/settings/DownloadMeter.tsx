@@ -32,11 +32,15 @@ export function downloadPercent(progress: {
   completed?: number;
   total?: number;
 }): number | null {
-  if (progress.percent != null) return Math.min(100, Math.max(0, progress.percent));
-  if (progress.total && progress.total > 0) {
-    return Math.min(100, Math.round(((progress.completed ?? 0) / progress.total) * 100));
-  }
-  return null;
+  const raw =
+    progress.percent != null && Number.isFinite(progress.percent)
+      ? progress.percent
+      : progress.total && progress.total > 0
+        ? ((progress.completed ?? 0) / progress.total) * 100
+        : null;
+  if (raw === null || !Number.isFinite(raw)) return null;
+  // Keep raw transfer precision out of the label; only completed transfers show 100%.
+  return raw >= 100 ? 100 : Math.min(99, Math.max(0, Math.round(raw)));
 }
 
 export function DownloadMeter({ progress }: { progress: DownloadMeterProgress }) {

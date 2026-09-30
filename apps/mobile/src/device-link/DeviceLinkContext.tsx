@@ -8,6 +8,8 @@ import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase }
 import { confirmTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
 import { AppState, Platform } from 'react-native';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
+import { dispatchCredentialSwitchOutcome } from '@/session/credentialSwitchOutcome';
+import { mobileRuntimeIdentity } from '@/debug/mobileRuntimeIdentity';
 import {
   DeviceLinkClient,
   isSharedTaskPeer,
@@ -156,7 +158,7 @@ import {
 import { createOfflineMirrorWipeQueue } from '@/device-link/offlineMirrorWipeQueue';
 import { hasMoreOlderMessages } from '@/session/messagePaging';
 import type { InputProjection, PendingInteraction, RemoteMessage } from '@/session/types';
-import { createVisualMockDeviceLinkContext, seedVisualMockStore } from '@/debug/visualMock';
+import { prepareVisualMockDeviceLinkContext } from '@/debug/visualMock';
 
 export interface DeviceLinkContextValue {
   status: DeviceLinkStatus;
@@ -400,14 +402,25 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const presenceWipeTimersRef = useRef(
     new Map<string, PresenceWipeTimerEntry>(),
   );
+  const [offlineMirrorWipeQueue] = useState(() => createOfflineMirrorWipeQueue(markOfflineDeviceMirrors));
+  const clearOnePresenceWipeTimer = useCallback((timers: Map<string, PresenceWipeTimerEntry>, deviceId: string) => {
+    clearPresenceWipeTimer(timers, deviceId, clearTimeout);
+    offlineMirrorWipeQueue.cancel(deviceId);
+  }, [offlineMirrorWipeQueue]);
+  const clearAllPresenceWipeTimers = useCallback((timers: Map<string, PresenceWipeTimerEntry>) => {
+    clearPresenceWipeTimers(timers, clearTimeout);
+    offlineMirrorWipeQueue.clear();
+  }, [offlineMirrorWipeQueue]);
   const openLinkInFlightRef = useRef(
     new Map<string, PresenceTrackedRequest<LinkAcceptPayload>>(),
   );
   const presenceWipeTimerDeps = useMemo(() => ({
     ...basePresenceWipeTimerDeps,
+    wipe: offlineMirrorWipeQueue.enqueue,
+    deferWipe: offlineMirrorWipeQueue.enqueue,
     isConfirmationInFlight: (deviceId: string) =>
       openLinkInFlightRef.current.get(deviceId)?.pending === true,
-  }), []);
+  }), [offlineMirrorWipeQueue]);
   const presenceAvailableByDeviceRef = useRef(new Map<string, boolean>());
   const rosterConsumerRef = useRef<(() => (devices: DeviceView[]) => void) | null>(null);
   const rosterRequestRef = useRef<{ client: DeviceLinkClient | null; epoch: number; promise: Promise<{ devices: DeviceView[] }> } | null>(null);
@@ -819,6 +832,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     };
   }, [
     probeUnresponsiveDevice,
+    clearOnePresenceWipeTimer,
+    presenceWipeTimerDeps,
     hasOutboundPeerRecoveryIntent,
     publishPresenceAvailabilityMutation,
     sendOpenLinkOnce,
@@ -963,12 +978,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       catalogRefresh.wake(deviceId);
       return rehydrateWithClient(client, deviceId);
     };
-    mobileDebugLog('debug', 'device-link', 'runtime identity', {
-      commit: /^[a-f0-9]{7,40}$/i.test(process.env.EXPO_PUBLIC_XDT_GIT_COMMIT ?? '')
-        ? process.env.EXPO_PUBLIC_XDT_GIT_COMMIT : 'unknown',
-      version: Constants.nativeAppVersion ?? 'unknown',
-      build: Constants.nativeBuildVersion ?? 'unknown',
-    });
+    mobileDebugLog('debug', 'device-link', 'runtime identity', mobileRuntimeIdentity());
     const diagnostics = createRecoveryDiagnostics(
       (event) => mobileDeviceLinkLogger.info('recovery phase', event),
       () => connectionEpochRef.current,
@@ -1143,6 +1153,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const offFrame = client.onFrame((env) => routeFrame(env, {
       currentDataOwnerId: currentDataOwnerIdRef.current,
       onAccessRevoked: (deviceId) => {
+        clearOnePresenceWipeTimer(presenceWipeTimersRef.current, deviceId);
         if (isSharedTaskPeer(deviceId)) setPresenceVersion((version) => version + 1);
         catalogRefresh.cancel(deviceId);
         remoteSubscribedTopicsRef.current.delete(deviceId);
@@ -1424,6 +1435,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     auth.getAccessToken,
     auth.isAuthenticated,
     clearPerAccountDeviceLinkState,
+    clearOnePresenceWipeTimer,
+    clearAllPresenceWipeTimers,
+    presenceWipeTimerDeps,
     publishPresenceAvailabilityMutation,
     rehydrateWithClient,
     restorePendingReplyLinks,
@@ -1588,10 +1602,15 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
 }
 
 function VisualMockDeviceLinkProvider({ children }: { children: ReactNode }) {
+  const [value, setValue] = useState<DeviceLinkContextValue | null>(null);
   useEffect(() => {
-    seedVisualMockStore();
+    let mounted = true;
+    void prepareVisualMockDeviceLinkContext().then((context) => {
+      if (mounted) setValue(context);
+    });
+    return () => { mounted = false; };
   }, []);
-  const value = useMemo(() => createVisualMockDeviceLinkContext(), []);
+  if (!value) return null;
   return <DeviceLinkContext.Provider value={value}>{children}</DeviceLinkContext.Provider>;
 }
 
@@ -1613,6 +1632,7 @@ export function routeFrame(env: Envelope, handlers: {
   if (peerLinkClosed) return;
   if (env.kind !== 'push' || !env.src) return;
   const push = env.payload as PushPayload;
+  dispatchCredentialSwitchOutcome(env.src, push.channel, push.payload);
   if (push.channel === 'local-db:task-tags:changed') {
     writeTaskTagCatalog(
       handlers.currentDataOwnerId,
@@ -2142,10 +2162,6 @@ function markOfflineDeviceMirrors(deviceIds: readonly string[]): void {
   remoteScheduleEventStore.invalidateDeviceMirrors(deviceIds);
 }
 
-function markOfflineDeviceMirror(deviceId: string): void {
-  markOfflineDeviceMirrors([deviceId]);
-}
-
 function wipeUnavailableDeviceMirror(deviceId: string): void {
   evictTaskTagCatalog(deviceId);
   resetRemoteProjectOrderPushFence(deviceId);
@@ -2163,23 +2179,18 @@ function wipeUnavailableDeviceMirror(deviceId: string): void {
   evictComposerPaletteCacheForDevice(deviceId);
 }
 
-// 离线 wipe 的通知合并:同一 task 内到期/调度的多台设备收拢成一次批量清理。
-// 逐台通知时设备数超过 React 嵌套更新上限即致命退出(2026-09-10 Android)。
-const offlineMirrorWipeQueue = createOfflineMirrorWipeQueue(markOfflineDeviceMirrors);
-
 const basePresenceWipeTimerDeps = {
   now: Date.now,
   setTimer: (callback: () => void, delayMs: number) =>
     setTimeout(callback, delayMs),
   clearTimer: clearTimeout,
-  wipe: offlineMirrorWipeQueue.enqueue,
 };
 
 function scheduleUnavailableDeviceMirrorWipe(
   timers: Map<string, PresenceWipeTimerEntry>,
   availabilityByDevice: ReadonlyMap<string, boolean>,
   deviceId: string,
-  deps: typeof basePresenceWipeTimerDeps,
+  deps: typeof basePresenceWipeTimerDeps & { wipe(deviceId: string): void },
 ): void {
   schedulePresenceWipeTimer(
     timers,
@@ -2188,19 +2199,6 @@ function scheduleUnavailableDeviceMirrorWipe(
     PRESENCE_OFFLINE_WIPE_GRACE_MS,
     deps,
   );
-}
-
-function clearOnePresenceWipeTimer(
-  timers: Map<string, PresenceWipeTimerEntry>,
-  deviceId: string,
-): void {
-  clearPresenceWipeTimer(timers, deviceId, clearTimeout);
-}
-
-function clearAllPresenceWipeTimers(
-  timers: Map<string, PresenceWipeTimerEntry>,
-): void {
-  clearPresenceWipeTimers(timers, clearTimeout);
 }
 
 function isDeviceLinkTopic(topic: string): boolean {

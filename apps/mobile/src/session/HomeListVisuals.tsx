@@ -2,11 +2,17 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { Animated, Easing, StyleSheet, View } from 'react-native';
 import { Archive, UsersRound, RadioTower, Pencil } from 'lucide-react-native';
 import { MobileVendorIcon } from '@/components/MobileVendorIcon';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { spacing, typeScale, lineHeight, fontWeight, iconSize, iconStroke } from '@/theme/tokens';
 import type { RemoteSessionListItem } from './sessionList';
 const HOME_SESSION_ROW_HEIGHT = 78;
 const HOME_SESSION_SINGLE_LINE_ROW_HEIGHT = 60;
+/**
+ * 任务行长按唤起选项的时长(ms)。首页、设备页任务列表都经 HomeSessionRow 消费,
+ * 新增任务行长按入口一律引用这里,不要回落到 RN Pressable 默认 500ms。
+ */
+export const SESSION_ROW_LONG_PRESS_MS = 400;
 /** Shared by the full home list and its persistent, narrow task pane. */
 export function SessionStatusMark({
   item,
@@ -56,27 +62,37 @@ export function SessionStatusMark({
   );
 }
 
+/**
+ * 运行中呼吸:常驻循环的状态信号,不是交互过渡,不套 motionDuration 交互档位。
+ * 与 MobileVendorIcon 的 RUNNING_BREATH_* 同值,两处行内标志呼吸节奏保持一致;
+ * 减弱动态效果(含首帧未知)下静止在全不透明。
+ */
+const RUNNING_BREATH_HALF_CYCLE_MS = 750;
+const RUNNING_BREATH_MIN_OPACITY = 0.3;
+
 function SessionStatusPulse({ children, running }: { children: ReactNode; running: boolean }) {
-  const opacity = useRef(new Animated.Value(running ? 0.3 : 1)).current;
+  const reduceMotion = useReduceMotionEnabled();
+  const animate = running && reduceMotion === false;
+  const opacity = useRef(new Animated.Value(animate ? RUNNING_BREATH_MIN_OPACITY : 1)).current;
   useEffect(() => {
     opacity.stopAnimation();
-    if (!running) {
+    if (!animate) {
       opacity.setValue(1);
       return;
     }
-    opacity.setValue(0.3);
+    opacity.setValue(RUNNING_BREATH_MIN_OPACITY);
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(opacity, {
-          duration: 750,
+          duration: RUNNING_BREATH_HALF_CYCLE_MS,
           easing: Easing.inOut(Easing.ease),
           toValue: 1,
           useNativeDriver: true,
         }),
         Animated.timing(opacity, {
-          duration: 750,
+          duration: RUNNING_BREATH_HALF_CYCLE_MS,
           easing: Easing.inOut(Easing.ease),
-          toValue: 0.3,
+          toValue: RUNNING_BREATH_MIN_OPACITY,
           useNativeDriver: true,
         }),
       ]),
@@ -85,7 +101,7 @@ function SessionStatusPulse({ children, running }: { children: ReactNode; runnin
     return () => {
       loop.stop();
     };
-  }, [opacity, running]);
+  }, [animate, opacity]);
 
   return <Animated.View style={{ opacity }}>{children}</Animated.View>;
 }
@@ -209,7 +225,7 @@ export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
     alignItems: 'center',
     backgroundColor: colors.surface,
     flexDirection: 'row',
-    gap: 8,
+    gap: spacing.sm,
     minHeight: 56,
     paddingLeft: spacing.md,
     paddingRight: spacing.lg,

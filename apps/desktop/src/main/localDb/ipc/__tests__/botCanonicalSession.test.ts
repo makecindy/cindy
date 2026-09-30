@@ -1,3 +1,5 @@
+import { ScriptTarget, transpileModule } from 'typescript';
+import { canResumeAfterRuntimeFallback } from '../../../maker-ipc/botCandidateRecovery';
 import { createDrizzleProxy } from '../../client/drizzleProxy';
 import type { DbTransport } from '../../client/DbTransport';
 import { getSelectedNewMakerRoute, setNewMakerDraftCache } from '../../../maker-host/newMakerDefaultsCache';
@@ -41,6 +43,18 @@ import {
   messages,
   sessions,
 } from '../../schema';
+
+// Host preference storage is outside this database/runtime integration test.
+vi.mock('electron-store', () => ({ default: class {
+  private values = new Map<string, unknown>();
+  get(key: string, fallback?: unknown) { return this.values.get(key) ?? fallback; }
+  set(key: string, value: unknown) { this.values.set(key, value); }
+  delete(key: string) { this.values.delete(key); }
+} }));
+vi.mock('../../../maker-ipc/appDefaultModelControl.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../../../maker-ipc/appDefaultModelControl.js')>(),
+  validateBotTaskModel: vi.fn(async () => true),
+}));
 
 const h = await vi.hoisted(async () => {
   const { mkdtempSync } = await import('node:fs');
@@ -215,7 +229,7 @@ import {
 } from '../../../maker-ipc/botProfileRuntime';
 import { createBotLifecycleService } from '../../../maker-ipc/botLifecycleService';
 import { createBotDirectMessageService } from '../../../maker-ipc/botDirectMessageService';
-import { createBotDelegationService, discardDelegationQueuedInputs } from '../../../maker-ipc/botDelegationService';
+import { createBotDelegationService, discardDelegationQueuedInputs, hasExplicitSessionTaskModel } from '../../../maker-ipc/botDelegationService';
 import {
   BOT_DELEGATION_MAX_DISPATCH_ATTEMPTS,
 } from '../../../maker-ipc/botDelegationDispatchOutcome';
@@ -3612,6 +3626,8 @@ describe('Bot Session task end-to-end runtime', () => {
     stopUnsupported?: boolean;
     steerUnsupported?: boolean;
     readCallerRuntime?: Parameters<typeof createBotDelegationService>[0]['readCallerRuntime'];
+    validateTaskModel?: Parameters<typeof createBotDelegationService>[0]['validateTaskModel'];
+    resolveTaskModelSelection?: Parameters<typeof createBotDelegationService>[0]['resolveTaskModelSelection'];
     readCallerPermission?: Parameters<typeof createBotDelegationService>[0]['readCallerPermission'];
     accountReady?: () => boolean;
     transientUnavailable?: () => boolean;
@@ -3863,6 +3879,8 @@ describe('Bot Session task end-to-end runtime', () => {
         resumeInput: async id => { coordinator?.resume(id); },
       } } : {}),
       readCallerRuntime: options.readCallerRuntime,
+      validateTaskModel: options.validateTaskModel,
+      resolveTaskModelSelection: options.resolveTaskModelSelection,
       readCallerPermission: options.readCallerPermission,
       persistTimelineMessage: options.onResultReceiptPersisted ? async params => {
         await createMessage(params.sessionId, {
@@ -4130,6 +4148,143 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally {
       runtime.delegation.dispose();
     }
+  });
+
+  // Execute the production fallback entry with the real delegation snapshot query.
+  // Native engine mutation is unnecessary: an unpinned task reaches the catalog picker.
+  function automaticTaskFallback() {
+    const source = readFileSync(new URL('../../../maker-ipc/register.ts', import.meta.url), 'utf8');
+    const body = source.slice(source.indexOf('  const maybeApplySessionRuntimeFallback ='),
+      source.indexOf('  const sessionControlService ='));
+    const pick = vi.fn(() => null);
+    const deps = {
+      hasExplicitSessionTaskModel,
+      captureSessionRuntimeControlOwnerEpoch: () => 1,
+      readSessionRuntimeProfiles: async () => ({ effective: { providerId: 'openai', model: 'gpt-6-astra' },
+        control: { generation: 1, visitedRoutes: [], fallbackHop: 0 } }),
+      canApplyAutomaticRuntimeSelection: () => true,
+      readBotFallbackCandidate: async () => ({ isBot: false, candidate: null }),
+      readSessionRuntimeFallbackSettings: () => ({ enabled: true }),
+      getDesktopProviderService: () => ({ listProviders: async () => [] }),
+      getActiveCatalog: () => ({}),
+      pickSessionRuntimeFallback: pick,
+      log: { warn: vi.fn() },
+    };
+    const js = transpileModule(`${body}\nreturn maybeApplySessionRuntimeFallback;`, {
+      compilerOptions: { target: ScriptTarget.ES2022 },
+    }).outputText;
+    const apply = new Function(...Object.keys(deps), js)(...Object.values(deps)) as
+      (id: string, attempt: number, token: number, requireRouteChange?: boolean) => Promise<{
+        session: null; outcome: 'unchanged' | 'exhausted';
+      }>;
+    return { apply, pick };
+  }
+
+  it.each([
+    { harness: 'claude', agentKind: 'cc', model: 'claude-opus-5-5', providerId: 'anthropic' },
+    { harness: 'codex', agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' },
+    { harness: 'pi', agentKind: 'pi', model: 'z-ai/glm-5.3-flash', providerId: 'xd' },
+  ])('uses the independent task model with its own $harness harness', async ({ agentKind, ...selection }) => {
+    await seedPair();
+    const taskModelOverride = { ...selection, effort: 'high', fastMode: false };
+    const saved = await invoke('local-db:bots:update', { id: 'bot-a', capabilities: { taskModelOverride } });
+    expect(saved.capabilities.taskModelOverride).toEqual(taskModelOverride);
+    const validateTaskModel = vi.fn(async () => true);
+    const taskRoute = {
+      inspect: vi.fn(async () => ({ ok: true as const, generation: 1,
+        current: { agentKind: 'codex' as const, model: 'task-model', providerId: 'openai', effort: 'high' as const, fastMode: false },
+        next: { agentKind: 'pi' as const, model: 'primary-backup', providerId: 'xd', effort: 'high' as const, fastMode: false },
+      })),
+      advance: vi.fn(async () => ({ ok: true as const, status: 'applied' as const, generation: 2 })),
+    };
+    const runtime = createDelegationRuntime({ validateTaskModel, taskRoute,
+      readCallerRuntime: () => ({ agentKind: 'pi', model: 'primary-model', providerId: 'primary-provider', effort: 'low', fastMode: true }),
+    });
+    try {
+      const result = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Use the independent task model.' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.message);
+      expect(validateTaskModel).toHaveBeenCalledWith(taskModelOverride);
+      expect(runtime.started).toContainEqual({ sessionId: result.childSessionId, agentKind,
+        model: selection.model, providerId: selection.providerId, effort: 'high', fastMode: 0 });
+      // Clearing the override resumes live inheritance and keeps the existing child intact.
+      const cleared = await invoke('local-db:bots:update', { id: 'bot-a', capabilities: { taskModelOverride: null } });
+      expect(cleared.capabilities.taskModelOverride).toBeNull();
+      const inherited = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Inherit again.' });
+      expect(inherited.ok).toBe(true);
+      if (!inherited.ok) throw new Error(inherited.message);
+      expect(runtime.started).toContainEqual({ sessionId: inherited.childSessionId, agentKind: 'pi', model: 'primary-model', providerId: 'primary-provider', effort: 'low', fastMode: 1 });
+      expect(runtime.started[0]?.model).toBe(selection.model);
+      const recovery = automaticTaskFallback();
+      for (const attempt of [1, 2, 3]) {
+        const fallback = await recovery.apply(result.childSessionId, attempt, attempt);
+        expect(fallback.outcome).toBe('unchanged');
+        expect(canResumeAfterRuntimeFallback(false, fallback)).toBe(true);
+      }
+      const required = await recovery.apply(result.childSessionId, 2, 4, true);
+      expect(required.outcome).toBe('exhausted');
+      expect(canResumeAfterRuntimeFallback(true, required)).toBe(false);
+      expect(recovery.pick).not.toHaveBeenCalled();
+      await recovery.apply(inherited.childSessionId, 1, 1);
+      expect(recovery.pick).not.toHaveBeenCalled();
+      await recovery.apply(inherited.childSessionId, 2, 2);
+      expect(recovery.pick).toHaveBeenCalledOnce();
+
+      await runtime.settleChild(result.childSessionId, 'Task complete.');
+      expect(await runtime.delegation.inspectSessionTaskRoute('session-1', result.delegationId)).toMatchObject({ ok: true, next: null, selectionToken: null });
+      expect(await runtime.delegation.advanceSessionTaskRoute('session-1', result.delegationId, 1, 'anything')).toMatchObject({ ok: false, errorCode: 'NO_CONFIGURED_ROUTE' });
+      expect(taskRoute.advance).not.toHaveBeenCalled();
+    } finally { runtime.dispose(); }
+  });
+
+  it.each([
+    { harness: 'claude' as const, agentKind: 'cc', model: 'claude-opus-5-5', providerId: 'anthropic' },
+    { harness: 'codex' as const, agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' },
+    { harness: 'pi' as const, agentKind: 'pi', model: 'z-ai/glm-5.3-flash', providerId: 'xd' },
+  ])('starts a one-task model selection on $harness without changing the task default', async ({ agentKind, ...route }) => {
+    const configured = { harness: 'pi', model: 'saved-default', providerId: 'saved-source', effort: 'low', fastMode: false };
+    await seedPair({ taskModelOverride: configured });
+    const chosen = { ...route, effort: 'high', fastMode: true };
+    const selection = { id: JSON.stringify([route.harness, route.providerId, route.model]), effort: 'high', fastMode: true };
+    const resolveTaskModelSelection = vi.fn(async () => chosen);
+    const runtime = createDelegationRuntime({ resolveTaskModelSelection });
+    try {
+      const result = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Use this model once.', modelSelection: selection });
+      expect(result.ok).toBe(true); if (!result.ok) throw new Error(result.message);
+      expect(resolveTaskModelSelection).toHaveBeenCalledWith(selection);
+      expect(result.modelRoute).toEqual(chosen);
+      const recovery = automaticTaskFallback();
+      expect((await recovery.apply(result.childSessionId, 2, 2)).outcome).toBe('unchanged');
+      expect(recovery.pick).not.toHaveBeenCalled();
+      expect(runtime.started).toContainEqual({ sessionId: result.childSessionId, agentKind, model: route.model, providerId: route.providerId, effort: 'high', fastMode: 1 });
+      const next = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Use the saved default.' });
+      expect(next.ok).toBe(true); if (!next.ok) throw new Error(next.message);
+      expect(next.modelRoute).toEqual(configured);
+      expect(resolveTaskModelSelection).toHaveBeenCalledTimes(1);
+    } finally { runtime.dispose(); }
+  });
+
+  it('rejects a stale one-task model selection before creating a task instead of using the default', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ resolveTaskModelSelection: async () => { throw new Error('Unavailable'); } });
+    try {
+      expect(await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Do work.', modelSelection: { id: 'stale' } }))
+        .toMatchObject({ ok: false, errorCode: 'TASK_MODEL_UNAVAILABLE' });
+      expect(runtime.started).toEqual([]);
+      expect(h.sqlite!.prepare('SELECT count(*) FROM bot_delegations').pluck().get()).toBe(0);
+    } finally { runtime.dispose(); }
+  });
+
+  it('does not fall back to the primary model when an independent task model is unavailable', async () => {
+    await seedPair();
+    h.sqlite!.prepare("UPDATE bot_profile_versions SET capabilities_json = json_set(capabilities_json, '$.taskModelOverride', json(?)) WHERE bot_id = 'bot-a'").run(JSON.stringify({ harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false }));
+    const runtime = createDelegationRuntime({ validateTaskModel: async () => false });
+    try {
+      expect(await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Do work.' }))
+        .toMatchObject({ ok: false, errorCode: 'TASK_MODEL_UNAVAILABLE' });
+      expect(runtime.started).toEqual([]);
+      expect(h.sqlite!.prepare('SELECT count(*) FROM bot_delegations').pluck().get()).toBe(0);
+    } finally { runtime.dispose(); }
   });
 
   it.each(['ask', 'auto', 'bypassPermissions'])('inherits the live %s permission in the child task', async (mode) => {

@@ -1,8 +1,8 @@
 import { ipcMain } from 'electron';
-import type { CompanionImportSelection } from '@cindy/maker-shared/companion-import';
+import { COMPANION_IMPORT_CHUNK_PRIMITIVE, type CompanionImportSelection, type CompanionImportSubmission } from '@cindy/maker-shared/companion-import';
 import { remoteResourceRegistry, RemoteResourceRegistryError } from '../device-link/remoteResourceRegistry.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
-import { listCompanionImportSources, previewCompanionImport, startCompanionImport, getCompanionImportResult } from './host.js';
+import { listCompanionImportSources, previewCompanionImport, startCompanionImport, getCompanionImportResult, readRemoteCompanionImport, submitRemoteCompanionImport } from './host.js';
 import { CompanionImportError } from './types.js';
 import { isIpcErrorCode } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -29,19 +29,21 @@ export function registerCompanionImport(): void {
     async get(context, request) {
       try {
         const id = request.ref.id;
-        const data = id === 'sources' ? { sources: await listCompanionImportSources(context.controllerDeviceId) }
-          : id.startsWith('preview:') ? { preview: await previewCompanionImport(id.slice(8), context.controllerDeviceId) }
-            : id.startsWith('result:') ? { result: await getCompanionImportResult(id.slice(7)) ?? null } : undefined;
-        if (!data) throw new CompanionImportError('INVALID_REQUEST');
+        const data = await readRemoteCompanionImport(id, context.controllerDeviceId,
+          request.client.primitives.includes(COMPANION_IMPORT_CHUNK_PRIMITIVE));
         return { ref: request.ref, revision: '1', display: { title: 'Import' }, links: [],
           blocks: [{ id: 'import', primitive: 'companion-import', fallbackMarkdown: 'Hermes / OpenClaw', data }],
           actions: id.startsWith('preview:') ? [{ id: 'import', label: 'Import' }] : [] };
-      } catch (error) { throw new RemoteResourceRegistryError('NOT_FOUND', error instanceof CompanionImportError ? error.code : 'IMPORT_FAILED'); }
+      } catch (error) {
+        const code = error instanceof CompanionImportError ? error.code : 'IMPORT_FAILED';
+        throw new RemoteResourceRegistryError(code === 'IMPORT_CLIENT_UPGRADE_REQUIRED' ? 'UNSUPPORTED_CAPABILITY' : 'NOT_FOUND', code);
+      }
     },
     async invoke(context, request) {
       try {
         if (request.actionId !== 'import' || !request.resourceRef?.id.startsWith('preview:')) throw new CompanionImportError('INVALID_REQUEST');
-        const result = await startCompanionImport(request.input as unknown as CompanionImportSelection, context.controllerDeviceId);
+        const result = await submitRemoteCompanionImport(request.input as unknown as CompanionImportSubmission, context.controllerDeviceId);
+        if (!result) return { effects: [] };
         return { effects: [{ kind: 'navigate', target: { kind: 'resource', ref: { collectionId: 'companion-import', kind: 'import', id: `result:${result.requestId}` } } }] };
       } catch (error) {
         // Stable host rejections must survive the IPC boundary so the phone can

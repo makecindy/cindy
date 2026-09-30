@@ -37,6 +37,7 @@ export * from "./filePeerRuntime.js";
 export { FILE_PEER_RUNTIME_SOURCE } from "./filePeerRuntimeSource.js";
 export * from "./sharedTask.js";
 export * from "./sharedTaskApi.js";
+export * from "./sharedTaskInvitation.js";
 export * from "./sharedTaskProbe.js";
 export * from "./modelFavorites.js";
 export * from "./sessionListTransport.js";

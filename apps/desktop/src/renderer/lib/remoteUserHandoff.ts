@@ -3,6 +3,7 @@ export interface LocalUserHandoff {
   clientId: string;
   role: string;
   localSendPrecedingClientIds?: readonly string[];
+  isLocalSystemCard?: boolean;
 }
 
 export function reserveRemoteUser<T extends LocalUserHandoff>(row: T, preceding: readonly T[]): T {
@@ -36,6 +37,19 @@ export function projectRemoteUsers<T extends LocalUserHandoff>(
       if (preceding.has(result[index].clientId) || historical(result[index])) after = index;
     }
     result.splice(after + 1, 0, row);
+  }
+  // Command cards never acquire a history row. Keep their slots even after a
+  // later user send becomes historical and moves into the authoritative prefix.
+  let beforeClientId: string | undefined;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const row = messages[index];
+    if (row.isLocalSystemCard) {
+      result.splice(result.findIndex((message) => message.clientId === row.clientId), 1);
+      const before = beforeClientId === undefined ? -1
+        : result.findIndex((message) => message.clientId === beforeClientId);
+      result.splice(before < 0 ? result.length : before, 0, row);
+    }
+    beforeClientId = row.clientId;
   }
   return result;
 }

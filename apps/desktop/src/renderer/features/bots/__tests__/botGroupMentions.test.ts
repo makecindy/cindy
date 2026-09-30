@@ -113,6 +113,7 @@ function message(overrides: Partial<BotGroupMessageView>): BotGroupMessageView {
     noticeCode: null,
     planId: null,
     files: [],
+    attachments: [],
     createdAt: 1,
     ...overrides,
   };

@@ -63,6 +63,42 @@ describe('remote file preview pager wiring', () => {
     expect(source).toContain('requestedAtRecoveryEpochRef.current >= recoveryEpoch');
     expect(source).toContain('setRequestEpoch((epoch) => epoch + 1)');
   });
+
+  it('gives the audio/video player a definite height inside the preview page', () => {
+    // RemoteMediaPlayerWebView fills its wrapper with flex: 1. A width-only wrapper
+    // collapsed the player to 0 pt: media loaded, but no picture or controls to tap.
+    expect(source).toMatch(/avPlayer: \{[^}]*\bflex: 1\b[^}]*\}/);
+    expect(source).toContain('style={styles.avPlayer}');
+  });
+
+  it('pins every link of the player height chain, not just avPlayer (review P2)', () => {
+    // 上一条只看 avPlayer 自己的 flex: 1 —— 外层 avPage / 分页容器一旦失去高度约束,
+    // 用例照样绿,播放器又会塌成 0(review P2)。高度链每一环都要钉住:
+    // 1) 分页 cell 只定宽,高度靠横向 FlatList 的行向拉伸(默认 alignItems: stretch
+    //    把 cell 拉到 pager 高度)+ RN ScrollView 的隐式 flexGrow 填满 safeArea;
+    //    cell 改成按内容收高即破。
+    expect(source).toContain('<View style={{ width: pageWidth }}>');
+    // 2) avPlayer 的父级 avPage 以 flex: 1 占满 cell。
+    expect(source).toMatch(/avPage: \{[^}]*\bflex: 1\b[^}]*\}/);
+    // 3) 预览屏根容器把高度传给 pager。
+    expect(source).toMatch(/safeArea: \{[^}]*\bflex: 1\b[^}]*\}/);
+    // 4) 链条最里层:WebView 以 flex: 1 填满 RemoteMediaPlayerWebView 的样式外层。
+    const playerSource = readSource('src/session/mediaPlayerWebView.tsx');
+    expect(playerSource).toContain("style={{ backgroundColor: 'transparent', flex: 1 }}");
+  });
+
+  it('pauses the audio/video player when its preview page becomes inactive', () => {
+    // pager 用 windowSize={3} 保留相邻页,相邻页的 active 仍为 true —— 可见性(visible
+    // = screenFocused && 当前页)必须一路传进播放器,翻页失活时暂停,否则上一页的
+    // 媒体在后台继续播(review P1)。
+    const filePage = source.slice(source.indexOf('function FilePreviewPage('), source.indexOf('function AvPreviewPage('));
+    expect(filePage).toMatch(/<AvPreviewPage[^>]*visible=\{visible\}[^>]*\/>/);
+    const avPage = source.slice(source.indexOf('function AvPreviewPage('), source.indexOf('function PdfPreviewPage('));
+    expect(avPage).toMatch(/<RemoteMediaPlayerWebView[^>]*visible=\{visible\}[^>]*\/>/);
+    // 判定落在纯生命周期模块(行为级用例在 mediaPlayerWebView.test.ts),载体只发 pause。
+    const playerSource = readSource('src/session/mediaPlayerWebView.tsx');
+    expect(playerSource).toContain('if (lifecycleRef.current.onVisibilityChange(visible)) pausePlayback();');
+  });
 });
 
 const htmlReaderSource = readSource('src/session/HtmlFileReader.tsx');

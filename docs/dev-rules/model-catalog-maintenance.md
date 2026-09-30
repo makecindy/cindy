@@ -95,8 +95,14 @@ xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受�
 顺序排：首次添加用接口返回的顺序；之后刷新发现的新型号排在已有型号之前（保持接口返回的
 相对顺序），已有型号位置不动（`mergeDiscoveredRuntimeModels`）。
 
-新对话默认模型不跟排序绑定的例外只有服务端按区域下发的 `newSessionDefault`；公共 Registry 的
+来源内的默认推荐可由服务端按区域下发的 `newSessionDefault` 指定；公共 Registry 的
 同名字段不进入活动目录。未标记时取排序第一的默认可见模型，即账号返回的第一个可见模型。
+
+未手动选择模型时，客户端出厂来源顺序为 Claude 订阅 Opus 5.5（Claude Code）、
+Codex 订阅 Astra（Codex）、Cindy 推荐模型（Pi），最后保留 xAI 回退。
+策略在 `apps/desktop/src/shared/newMakerDefaultTuple.ts`；连接、型号和对应引擎必须实际可用，
+不能为了满足推荐而把 Opus / Astra 放入另一个引擎。用户手动选择及型号开关始终优先，
+不修改已有任务的运行配置；伙伴默认复用应用选择，不另造一套来源优先级。
 
 设置页管理列表组内与选择器同序：组内每项都带 `sortOrder` 时按它排；只要有一项缺失，退回
 按系列名 A–Z、同系列版本号降序，避免局部权重把新型号压到旧策展位置之后。
@@ -160,6 +166,70 @@ localModels 整域缺失才用随包本地域，显式空不兜底。
 兼容补全只能补缺项：旧快照缺失 nativeApi 可由内置补全；明确协议、null、retired 优先。
 它不改窗口、价格、成员资格，也不从 Gateway wireProtocol 或 Pi piApi 猜原生协议。
 旧格式迁移中若两份 Registry 有差异，必须使用不同 revision 并记录原因，不能伪造同版本一致。
+
+## llama.cpp 托管接入
+
+客户端的「添加供应商」只展示一个 llama.cpp 主入口，点击立即保存并进入详情，
+不等待安装或连接。安装与下载在详情中进行；外部服务走「自定义端点」。
+与 Ollama 共用 `LocalModelDownloadUI.tsx` 的安装提示、目录搜索、模型卡片、量化标签、
+下载按钮、进度操作与手动下载布局，各运行时只适配传输和状态。
+实现位于 `apps/desktop/src/main/local-model-runtime/llamaCpp*.ts`，界面为
+`LlamaCppProviderDetail.tsx`。运行环境从 llama.cpp 官方 GitHub Releases 安装到
+userData 下的 `llamacpp-runtime`；macOS 使用对应架构构建，Windows / Linux 先使用
+CPU 构建。下载校验官方 SHA-256，不调用系统包管理器。
+
+模型可从共用清单一键下载，也可由用户指定公开 Hugging Face 仓库并选择 GGUF 文件；下载固定到仓库 revision，
+校验大小与 LFS SHA-256，自动补齐分片，全部完成后才移入已安装列表。取消或失败清理
+本次暂存文件；磁盘不足在下载前提示。当前支持文本模型，不自动下载视觉 projector，
+下载清单复用 Server Registry 的 `localModels.models[].llamacpp[]`，只增加
+`repo / file / quantization / sizeBytes / verifiedAt` 下载资料，不维护第二份模型名单。
+名称、搜索别名、五语简介、顺序来自同一模型条目和 `featuredIds`；两个运行时共用分档推荐。
+GGUF 的型号级试用主推复用 `recommendForHost` 与 `featuredIds`，显示实际芯片和内存；
+只保留存在 GGUF 包装且文件大小小于物理内存的主推型号。未知硬件、主推撤下或包装缺失时不从其他候选补位。
+这是共用型号筛选，不是该 GGUF 的运行内存测量；卡片标明「主推 · 先试这个」，并说明本机速度与峰值内存待实测。
+不继承 Ollama 包装的思考配置或实测结论，也不因内存充裕把其他候选自动提升为主推。
+2026-09-26 按用户要求将 Flash-Next 显式加入共用主推首位（现有 192 GB 门槛），27B 为轻量备选。
+`localModelBrowserItems` 统一过滤已安装项、保留活动下载、搜索与去重；已安装主推也从默认下载区隐藏。
+下载支持同一次运行中的暂停/继续：保留暂存字节，按固定 revision 用 HTTP Range 续传，重新校验完整 SHA-256。
+取消清理本次暂存；退出应用仍会取消，尚不恢复跨进程的下载。当前一次只执行一个托管操作。
+`verifiedAt` 表示文件存在与大小核验日期，不能解释为运行验证；分片大小为总和。
+明确空的 `llamacpp: []` 撤下该模型的 GGUF 候选，旧快照缺字段也不按型号猜下载地址。
+试验范围与维护记录见 [llama.cpp 试验清单](../llamacpp-trial.md)。
+
+托管服务只绑定 `127.0.0.1:11435`，与原手动预设的 8080 分开；端口被占用时不接管。
+router 按请求加载模型，最多同时加载一个模型，默认上下文 32,768、单并发。
+2026-09-26 经用户授权，当前 bartowski Flash-Next 试验包装使用 262,144；
+按模型生成原生 INI preset，不用全局 CLI 窗口覆盖其它模型。发布模型资料时同步升级旧的托管默认值。
+下载完成后自动同步供应商模型列表并广播刷新。服务运行时保留当前模型清单和上下文，
+下载模型或修改上下文后，由拥有方在「管理服务」中手动重启生效；停止后的下次使用自动启动并应用最新配置。
+普通使用不探测空闲后重载，不因待生效配置阻止已有模型继续使用；手动重启会中断当前生成。
+添加时创建 `cindy-local-llamacpp` 连接，经现有 Chat 协议桥供 Pi / Codex / Claude Code 使用，
+并保留已有模型的用户设置。后续使用该连接时自动启动服务；Cindy 退出时停止自有子进程。
+2026-09-26 用户确认按需启动：安装后不立即启动，详情页不展示启动按钮，停止时显示「按需启动」。
+会话启动和 Pi provider 装配均复用 preflight；下载不依赖服务运行。高级管理中保留停止/重启用于排障。
+这不代表任意 GGUF 都支持工具调用。Flash-Next 可选 1,000,000 tokens，并自动配置 YaRN；
+已完成本机单次 982,003 token 合成检索验证，不能据此承诺其他包装或复杂任务质量。
+
+安装与下载管理目前与既有 Ollama 管理入口一样，只在执行端 Desktop 设置页开放，
+不新增远程 privileged IPC 白名单。手机仍可通过已有执行端模型目录使用已连接模型；
+SSH 执行路径跳过本机启动，不会把本机模型安装到远端。
+安装与手动下载独立于服务端；共用目录的后续更新需要配套发布 Server。
+客户端请求增加 `registryLocalRuntimes=1`，服务端仅向同时声明 media 和本能力的 V4/V5
+客户端下发 `llamacpp`，旧端剥离该字段并重新计算 ETag。未知能力值等同未声明。
+初次同步的完整 Registry 与 Server `dash/llamacpp-catalog` 工作树的生成快照一致，revision 为
+`2026-09-26T00:00:00.000Z`（包含 26 日更新的主推顺序）；此为工作副本核验，不代表已合并或部署。同步前将客户端
+已有但 Server 主干尚缺的 Grok 4.7 / Build Fast 配置原样补入 Server，避免回退已有型号。
+没有仅拼入本地域、改变用户 override 或发布到线上。
+随后同步客户端主干 #5119 的目录变更，保留其订阅排序与默认显示资料，以及本 PR 的本地包装和主推顺序；
+2026-09-29 再次同步主干目录后，合并快照使用独立递增 revision `2026-09-29T19:00:00.002Z`，
+避免与主干 `2026-09-29T19:00:00.001Z` 同版本不同内容。
+此合并快照尚未同步 Server 工作树或部署，不能继续声称当前两边整表一致。
+2026-09-30 用户确认 Server 配置更新单独推进，不作为客户端 PR #5118 的合并前置。
+客户端可先使用随包目录；Server 完整目录同步、兼容下发及部署仍需分别核验，不能以客户端
+合并代替 Server 发布，也不因审查线程关闭而声称线上已更新。
+
+回归测试为 `llamaCppDownloads.test.ts`、`llamaCppService.test.ts`、`llamaCppIpc.test.ts`、
+`managedLlamaCppProvider.test.ts` 与 `LlamaCppProviderDetail.test.tsx`。
 
 ## 通用供应商导入
 

@@ -25,9 +25,11 @@ import {
 } from '@/components/MobilePrimitives';
 import {
   SimpleStackHeader,
-  simpleScreenSafeAreaEdges,
+  simpleScrollInsetProps,
+  simpleScrollScreenSafeAreaEdges,
 } from '@/platform/chrome';
 import { goBackGuarded } from '@/utils/backGuard';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import {
   fontWeight,
@@ -111,8 +113,9 @@ export default function AccountDeletionScreen() {
 
   const available = availability?.available;
   return (
-    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="accountDeletion.screen">
+    <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="accountDeletion.screen">
       <SimpleStackHeader
+        scrollEdge
         backTestID="accountDeletion.backButton"
         onBack={() => goBackGuarded(router)}
         title={loginText('accountDeletionScreenTitle')}
@@ -123,6 +126,7 @@ export default function AccountDeletionScreen() {
         style={styles.flex}
       >
         <ScrollView
+          {...simpleScrollInsetProps}
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
           testID="accountDeletion.scroll"
@@ -415,5 +419,5 @@ const makeStyles = (colors: ThemeColors) =>
       backgroundColor: colors.cta,
       borderColor: colors.cta,
     },
-    pressed: { opacity: 0.6 },
+    pressed: mobileInteractionStyles.pressed,
   });

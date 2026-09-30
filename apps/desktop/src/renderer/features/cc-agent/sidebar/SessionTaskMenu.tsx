@@ -162,10 +162,12 @@ function ActiveSessionTaskMenu({
             SHARED_TASK_HOST_CHANNEL,
             [command],
           )
-        : window.electronAPI.sharedTask.host(command))) as { invitation: string };
+        : window.electronAPI.sharedTask.host(command))) as { invitation: string; invitationLink?: string };
       if (!current()) return;
       try {
-        await navigator.clipboard.writeText(result.invitation);
+        await navigator.clipboard.writeText(result.invitationLink
+          ? t('sharedTask.invitationMessage', { title: hosted.title || session.title, link: result.invitationLink })
+          : result.invitation);
       } catch {
         if (current()) toast.error(t('sharedTask.invitationCopyFailed'));
         return;

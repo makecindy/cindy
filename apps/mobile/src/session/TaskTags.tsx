@@ -25,7 +25,7 @@ import Animated, {
   Easing,
   type SharedValue,
 } from 'react-native-reanimated';
-import { GripVertical, Pencil, MoreHorizontal, ArrowLeft } from 'lucide-react-native';
+import { GripVertical, Pencil, MoreHorizontal } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -41,6 +41,8 @@ import {
   type TaskTagResult,
 } from '@cindy/maker-shared';
 import { Text, TextInput } from '@/components/AppText';
+import { ScreenBackButton } from '@/components/MobilePrimitives';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useDeviceLink, subscribeRemoteTaskTagsChanged } from '@/device-link/DeviceLinkContext';
 import { useTheme, type ThemeColors } from '@/theme';
 import { radius, spacing, typeScale, iconSize, fontWeight, lineHeight, motionDuration, motionEasing } from '@/theme/tokens';
@@ -54,6 +56,24 @@ import {
   sameTaskTags,
 } from './taskTagCatalogCache';
 import type { RemoteSession } from './types';
+
+function taskTagsHeadingCollapsed(colors: ThemeColors) {
+  return {
+    color: colors.textSecondary,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
+  } as const;
+}
+
+function taskTagsHeadingExpanded(colors: ThemeColors) {
+  return {
+    color: colors.textPrimary,
+    fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
+    fontWeight: fontWeight.semibold,
+  } as const;
+}
 
 function colorFor(tag: TaskTag, colors: ThemeColors) {
   const palette = {
@@ -660,7 +680,7 @@ export function TaskTagsPanel({
         backgroundColor: primary ? colors.cta : undefined,
         justifyContent: 'center',
         paddingHorizontal: spacing.md,
-        opacity: busy || (!local && blocked) || inactive ? 0.4 : pressed ? 0.75 : 1,
+        opacity: busy || (!local && blocked) || inactive ? 0.4 : pressed ? mobileInteractionStyles.pressed.opacity : 1,
       })}
     >
       <Text
@@ -788,29 +808,19 @@ export function TaskTagsPanel({
         }}
       >
         {formOpen && !deletion && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t('taskTags.back')}
-            onPress={closeEditor}
-            disabled={busy}
-            style={{
-              width: 44,
-              height: 44,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: radius.pill,
-            }}
-          >
-            <ArrowLeft size={iconSize.action} color={colors.textPrimary} />
-          </Pressable>
+          // 统一返回键:共享 ScreenBackButton(44pt、ChevronLeft、统一按压态)。
+          <ScreenBackButton
+            onPress={busy ? undefined : closeEditor}
+            testID="taskTags.back"
+          />
         )}
         <Text
-          style={{
-            flex: 1,
-            color: expanded ? colors.textPrimary : colors.textSecondary,
-            fontSize: expanded ? typeScale.body : typeScale.caption,
-            fontWeight: expanded ? fontWeight.semibold : fontWeight.regular,
-          }}
+          style={[
+            { flex: 1 },
+            // 两种形态是两个角色,各自整行照抄 §3:收起 = 短元数据 12/18 · 400 · 二级色;
+            // 展开 = 面板顶栏标题 16/22 · 600 · 主色。每档都配行高。
+            expanded ? taskTagsHeadingExpanded(colors) : taskTagsHeadingCollapsed(colors),
+          ]}
         >
           {deletion
             ? t('taskTags.delete')

@@ -9,7 +9,12 @@ export type SchedulerEvent =
   | { type: 'changed'; scheduleId: string }
   | { type: 'read'; scheduleId: string }
   | { type: 'all-read' }
-  | { type: 'ready' };
+  | { type: 'ready' }
+  /**
+   * In-flight 数量或并发闸门等待队列变化的运行诊断(desktop engine 高频广播)。与 desktop
+   * renderer 一致,不驱动任何列表 / run / 未读刷新;投影不需要 snapshot,因此不校验也不保留。
+   */
+  | { type: 'runtime-state' };
 
 export type SchedulerEventType = SchedulerEvent['type'];
 export type NormalizedSchedulerEvent = SchedulerEvent | { type: 'unknown'; rawType: string | null };
@@ -82,6 +87,7 @@ export function normalizeSchedulerEvent(value: unknown): NormalizedSchedulerEven
     }
     case 'all-read':
     case 'ready':
+    case 'runtime-state':
       return { type };
     default:
       return unknownEvent(type);
@@ -166,6 +172,15 @@ export function projectNormalizedScheduleEvent(event: NormalizedSchedulerEvent):
         sessionIndex: true,
         unreadSummary: true,
       }, 'clear-all', runPatch(null, null, null, 'read'));
+    case 'runtime-state':
+      // 纯运行诊断:不能落进 unknown 的全量刷新,否则每次 in-flight 变化都让消费方重拉
+      // schedule index / 列表 / runs。
+      return projection(event, {
+        runRefresh: { mode: 'none' },
+        scheduleList: false,
+        sessionIndex: false,
+        unreadSummary: false,
+      }, 'none', runPatch(null, null, null, 'unknown'));
     case 'unknown':
       return projection(event, {
         runRefresh: { mode: 'all' },

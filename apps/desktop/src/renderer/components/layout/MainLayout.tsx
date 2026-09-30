@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { buildSharedTaskInvitationLink } from '@cindy/device-link';
+import { JoinSharedTaskDialog } from '@/features/device-link/JoinSharedTaskDialog';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useRememberMainEntry } from './MainEntryRedirect';
 import { useTranslation } from 'react-i18next';
@@ -227,6 +229,8 @@ export function MainLayout() {
   usePendingAlertAttention();
   const splitGroup = useSplitGroup();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(getInitialCollapsed);
+  const [sharedTaskInvitation, setSharedTaskInvitation] = useState<{ link: string; id: number } | null>(null);
+  const invitationSequence = useRef(0);
   const [shareImportRequest, setShareImportRequest] = useState<{
     id: number;
     filePath: string;
@@ -627,8 +631,13 @@ export function MainLayout() {
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
         | { type: 'provider-import'; importId: string }
+        | { type: 'shared-task-join'; invitation: string; server: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
     ) => {
+      if (payload.type === 'shared-task-join') {
+        setSharedTaskInvitation({ link: buildSharedTaskInvitationLink(payload.invitation, payload.server), id: ++invitationSequence.current });
+        return;
+      }
       if (payload.type === 'session') {
         navigateToSession(payload.id, payload.messageClientId);
         return;
@@ -670,7 +679,7 @@ export function MainLayout() {
   );
   useEffect(() => {
     const unsubscribe = window.electronAPI.onDeepLinkNavigate((payload) => {
-      if (payload.type !== 'provider-import') {
+      if (payload.type !== 'provider-import' && payload.type !== 'shared-task-join') {
         handleDeepLinkPayload(payload);
         return;
       }
@@ -1650,6 +1659,8 @@ export function MainLayout() {
       )}
       {/* FeiShu Bot conflict dialog -- subscribes to main process push and surfaces a global modal */}
       <FeishuConflictDialogHost />
+      {sharedTaskInvitation && <JoinSharedTaskDialog key={sharedTaskInvitation.id} open initialInvitation={sharedTaskInvitation.link}
+        onOpenChange={(open) => { if (!open) setSharedTaskInvitation(null); }} />}
       {/* 窗口级拖拽兜底:拖 .cshare 进窗口空白处 → 会话导入向导 */}
       <GlobalDropImportListener onOpenShareImport={openShareImport} />
       {shareImportRequest && (

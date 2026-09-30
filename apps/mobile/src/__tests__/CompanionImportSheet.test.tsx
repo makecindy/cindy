@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ invoke: vi.fn(), submit: vi.fn(), openLink: vi.fn(), created: vi.fn(), uuid: vi.fn(() => 'fixture-request-12345') }));
 vi.mock('react-native', () => ({
-  StyleSheet: { create: (v: unknown) => v }, View: 'div', ScrollView: 'div',
+  StyleSheet: { create: (v: unknown) => v }, View: ({ children }: any) => createElement('div', {}, children), ScrollView: ({ children }: any) => createElement('div', {}, children),
   Pressable: ({ onPress, children }: any) => createElement('button', { onClick: onPress }, children),
   Switch: ({ accessibilityLabel, value, disabled, onValueChange }: any) => createElement('input', { type: 'checkbox', 'aria-label': accessibilityLabel, checked: value, disabled, onChange: (e: any) => onValueChange(e.target.checked) }),
 }));
@@ -12,7 +12,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 vi.mock('expo-crypto', () => ({ randomUUID: () => h.uuid() }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke, openLink: h.openLink }) }));
 vi.mock('@/device-link/remoteResources', () => ({ invokeRemoteResourceAction: (...args: unknown[]) => h.submit(...args) }));
-vi.mock('@/components/AppText', () => ({ Text: 'span', TextInput: ({ value, editable, onChangeText }: any) => createElement('input', { value, disabled: !editable, onInput: (e: any) => onChangeText(e.target.value), onChange() {} }) }));
+vi.mock('@/components/AppText', () => ({ Text: ({ children }: any) => createElement('span', {}, children), TextInput: ({ value, editable, onChangeText }: any) => createElement('input', { value, disabled: !editable, onInput: (e: any) => onChangeText(e.target.value), onChange() {} }) }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: ({ action }: any) => createElement('button', { onClick: action.onPress, disabled: action.disabled }, action.label) }));
 vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: ({ children }: any) => children }));
 vi.mock('@/session/CompanionPortraitPicker', () => ({ randomCompanionPortrait: async () => 'original-portrait', CompanionPortraitPicker: ({ onChange }: any) => createElement('button', { onClick: () => onChange('chosen-existing-portrait') }, 'existing portrait picker') }));
@@ -41,7 +41,8 @@ it('uses the existing portrait picker and sends only the remaining selections th
   await act(async () => (container.querySelector('[aria-label="devices.companionImport.memory"]') as HTMLInputElement).click());
   await click('devices.companionImport.submit');
   expect(h.submit.mock.calls[0]?.[2].input).toMatchObject({ entryIds: ['personality'], avatarImageBase64: 'chosen-existing-portrait' });
-  await click('devices.companionImport.open'); expect(h.created).toHaveBeenCalledWith({ collectionId: 'teammates', kind: 'bot', id: 'bot' });
+  expect(h.created).toHaveBeenCalledExactlyOnceWith({ collectionId: 'teammates', kind: 'bot', id: 'bot' });
+  expect(container.textContent).not.toContain('devices.companionImport.open');
 });
 
 
@@ -63,6 +64,7 @@ it.each(['IMPORT_NAME_EXISTS', 'INVALID_SELECTION', 'PROFILE_TEXT_TOO_LARGE', 'S
   await act(async () => (container.querySelector('[aria-label="Work"]') as HTMLInputElement).click());
   await act(async () => (container.querySelector('[aria-label="Personal"]') as HTMLInputElement).click());
   expect((container.querySelector('[aria-label="Work"]') as HTMLInputElement).checked).toBe(false);
+  await click('devices.companionImport.back');
   await click('devices.companionImport.submit');
   const input = container.querySelector('input:not([type="checkbox"])') as HTMLInputElement;
   expect(input.disabled).toBe(code === 'INTERNAL');
@@ -70,7 +72,7 @@ it.each(['IMPORT_NAME_EXISTS', 'INVALID_SELECTION', 'PROFILE_TEXT_TOO_LARGE', 'S
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Corrected name');
       input.dispatchEvent(new Event('input', { bubbles: true }));
-      (container.querySelector('[aria-label="Personal"]') as HTMLInputElement).click();
+      (container.querySelector('[aria-label="devices.companionImport.connections"]') as HTMLInputElement).click();
     });
   }
   await click('devices.companionImport.submit');
@@ -157,4 +159,70 @@ it('rejects an oversized action before freezing the selection and can submit aft
   expect(request.input).toMatchObject({ entryIds: [], avatarImageBase64: avatar });
   const { parseRemoteActionInvokeRequest, REMOTE_RESOURCE_PROTOCOL_VERSION } = await import('@cindy/device-link');
   expect(parseRemoteActionInvokeRequest({ ...request, client: { protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: [] } })).not.toBeNull();
+});
+
+it('submits all 10,000 selected entries compactly without raising the transport budget', async () => {
+  const entries = Array.from({ length: 10_000 }, (_, index) => ({ id: `entry-${index}`, name: `Memory ${index}`, category: 'memory', selected: true }));
+  h.invoke.mockImplementation(async (_host: string, _channel: string, args: any[]) => {
+    const id = args[0].ref.id;
+    return { blocks: [{ primitive: 'companion-import', data: id === 'sources' ? { sources: [{ id: 'source', name: 'Ada', kind: 'hermes' }] }
+      : id.startsWith('preview:') ? { preview: { id: 'preview', selectionRanges: true, name: 'Ada', source: { id: 'source', name: 'Ada', kind: 'hermes' }, entries } }
+      : { result: null } }] };
+  });
+  h.submit.mockReset().mockResolvedValue({ effects: [] });
+  const container = document.createElement('div'); root = createRoot(container);
+  await act(async () => root!.render(createElement(CompanionImportSheet, { visible: true, deviceId: 'host', deviceName: 'Mac', online: true, onClose() {}, onCreated: h.created })));
+  const click = async (text: string) => { await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === text)!.click()); };
+  await click('Ada · Hermes'); await click('devices.companionImport.submit');
+  expect(h.submit.mock.calls[0]?.[2].input).toMatchObject({ entryIds: [], entryRanges: [[0, 9999]], deferSetup: true });
+});
+
+it('shows failed filenames and saved parts after a partial import without blocking chat or retry', async () => {
+  const result = { requestId: 'fixture-request-12345', botId: 'bot', canonicalSessionId: 'chat', saved: true, savedEntryIds: [], status: 'needs-attention',
+    checks: [{ entryId: 'memory', status: 'needs-attention', message: 'IMPORT_DISK_FULL', progress: { saved: 1, total: 3 } }] };
+  h.invoke.mockImplementation(async (_host: string, _channel: string, args: any[]) => {
+    const id = args[0].ref.id;
+    return { blocks: [{ primitive: 'companion-import', data: id === 'sources' ? { sources: [{ id: 'source', name: 'Ada', kind: 'hermes' }] }
+      : id.startsWith('preview:') ? { preview: { id: 'preview', name: 'Ada', source: { id: 'source', name: 'Ada', kind: 'hermes' }, entries: [{ id: 'memory', name: 'long-document.md', category: 'memory', selected: true }] } }
+      : { result } }] };
+  });
+  h.submit.mockReset().mockResolvedValue({ effects: [] });
+  const container = document.createElement('div'); root = createRoot(container);
+  await act(async () => root!.render(createElement(CompanionImportSheet, { visible: true, deviceId: 'host', deviceName: 'Mac', online: true, onClose() {}, onCreated: h.created })));
+  const click = async (text: string) => { await act(async () => { const button = [...container.querySelectorAll('button')].find(button => button.textContent?.startsWith(text)); expect(button).toBeDefined(); button!.click(); }); };
+  await click('Ada · Hermes'); await click('devices.companionImport.submit');
+  expect(container.textContent).toContain('devices.companionImport.partial');
+  expect(container.textContent).not.toContain('devices.companionImport.complete');
+  await click('devices.companionImport.details');
+  expect(container.textContent).toContain('long-document.md');
+  expect(container.textContent).toContain('devices.companionImport.partlySaved');
+  expect(container.textContent).toContain('devices.companionImport.diskFull');
+  expect(container.textContent).toContain('1 / 3');
+  expect(container.textContent).toContain('devices.companionImport.retry');
+  await click('devices.companionImport.open');
+  expect(h.created).toHaveBeenCalledWith({ collectionId: 'teammates', kind: 'bot', id: 'bot' });
+});
+
+it('submits sparse 100,000-entry choices using bounded actions with the original selection intact', async () => {
+  const entries = Array.from({ length: 100_000 }, (_, index) => ({ id: `entry-${index}`, name: `Memory ${index}`, category: 'memory', selected: index % 2 === 0 }));
+  h.invoke.mockImplementation(async (_host: string, _channel: string, args: any[]) => {
+    const id = args[0].ref.id;
+    return { blocks: [{ primitive: 'companion-import', data: id === 'sources' ? { sources: [{ id: 'source', name: 'Ada', kind: 'hermes' }] }
+      : id.startsWith('preview:') ? { preview: { id: 'preview', selectionRanges: true, selectionChunks: true, name: 'Ada', source: { id: 'source', name: 'Ada', kind: 'hermes' }, entries } }
+      : { result: null } }] };
+  });
+  h.submit.mockReset().mockResolvedValue({ effects: [] });
+  const container = document.createElement('div'); root = createRoot(container);
+  await act(async () => root!.render(createElement(CompanionImportSheet, { visible: true, deviceId: 'host', deviceName: 'Mac', online: true, onClose() {}, onCreated: h.created })));
+  const click = async (text: string) => { await act(async () => [...container.querySelectorAll('button')].find(button => button.textContent === text)!.click()); };
+  await click('Ada · Hermes'); await click('devices.companionImport.submit');
+  const { parseRemoteActionInvokeRequest, REMOTE_RESOURCE_PROTOCOL_VERSION } = await import('@cindy/device-link');
+  expect(h.submit.mock.calls.length).toBeGreaterThan(2);
+  let text = '';
+  for (const call of h.submit.mock.calls) {
+    const request = call[2];
+    expect(parseRemoteActionInvokeRequest({ ...request, client: { protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: [] } })).not.toBeNull();
+    text += request.input.selectionChunk.text;
+  }
+  expect(JSON.parse(text)).toMatchObject({ entryIds: [], entryRanges: entries.filter(entry => entry.selected).map(entry => { const index = Number(entry.id.slice(6)); return [index, index]; }), deferSetup: true });
 });

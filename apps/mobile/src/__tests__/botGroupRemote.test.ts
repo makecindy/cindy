@@ -61,6 +61,28 @@ describe('parseBotGroupChatData', () => {
     expect(parsed.hasMoreBefore).toBe(true);
   });
 
+  it('reads attachments and the attachment support flag, keeping only computer media addresses', () => {
+    const data = chatData({ supportsAttachments: true });
+    (data.messages[1] as Record<string, unknown>).attachments = [
+      { id: 'x1', name: 'shot.png', category: 'image', mimeType: 'image/png', size: 12, url: 'cindy-media://blobs/abc.png', path: '/Users/me/shot.png' },
+      { id: 'x2', name: 'brief.pdf', category: 'pdf', mimeType: 'application/pdf', size: 30, url: null, path: null, annotated: 'yes' },
+      { id: 'x3', name: 'odd.bin', category: 'future', mimeType: 7, size: -1, url: 'https://elsewhere.example/x.png' },
+      { id: '', name: 'no-id.png' },
+      'garbage',
+    ];
+    const parsed = parseBotGroupChatData(data)!;
+    expect(parsed.supportsAttachments).toBe(true);
+    expect(parsed.messages[0]!.attachments).toEqual([
+      { id: 'x1', name: 'shot.png', category: 'image', mimeType: 'image/png', size: 12, url: 'cindy-media://blobs/abc.png', path: null },
+      { id: 'x2', name: 'brief.pdf', category: 'pdf', mimeType: 'application/pdf', size: 30, url: null, path: null },
+      { id: 'x3', name: 'odd.bin', category: 'file', mimeType: '', size: 0, url: null, path: null },
+    ]);
+    // Older computers: no attachments, no flag.
+    const old = parseBotGroupChatData(chatData())!;
+    expect(old.supportsAttachments).toBe(false);
+    expect(old.messages.every((message) => message.attachments.length === 0)).toBe(true);
+  });
+
   it('rejects data without the essentials', () => {
     expect(parseBotGroupChatData(null)).toBeNull();
     expect(parseBotGroupChatData(chatData({ id: '' }))).toBeNull();
@@ -146,5 +168,15 @@ describe('actions', () => {
     expect(nextBotGroupSendAttempt(first, 'hi', false, next)).toBe(first);
     expect(nextBotGroupSendAttempt(first, 'hi', true, next).clientId).toBe('c2');
     expect(nextBotGroupSendAttempt(first, 'hello', false, next).clientId).toBe('c3');
+  });
+
+  it('treats different attachments as a different message', () => {
+    let serial = 0;
+    const next = () => `c${++serial}`;
+    const first = nextBotGroupSendAttempt(null, '', false, next, ['a1', 'a2']);
+    expect(nextBotGroupSendAttempt(first, '', false, next, ['a1', 'a2'])).toBe(first);
+    expect(nextBotGroupSendAttempt(first, '', false, next, ['a1']).clientId).toBe('c2');
+    expect(nextBotGroupSendAttempt(first, '', false, next, ['a2', 'a1']).clientId).toBe('c3');
+    expect(nextBotGroupSendAttempt(first, '', false, next).clientId).toBe('c4');
   });
 });

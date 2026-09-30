@@ -60,6 +60,11 @@ export interface RemoteResourceHostTarget {
   deviceName: string;
 }
 
+/** Availability applies to discovery only; offline entries retain their cached projection. */
+export interface RemoteResourceDiscoveryTarget extends RemoteResourceHostTarget {
+  offline?: boolean;
+}
+
 export interface RemoteHomeCollection {
   id: string;
   title: string;
@@ -73,11 +78,13 @@ export interface RemoteHomeCollection {
 export function remoteResourceDiscoveryTargets(
   devices: readonly { canOpen: boolean; state: string; deviceId: string; name: string }[],
   previous: readonly RemoteHomeCollection[],
-): RemoteResourceHostTarget[] {
+): RemoteResourceDiscoveryTarget[] {
   const known = new Set(previous.flatMap((collection) => collection.targets.map((host) => host.deviceId)));
   return devices
     .filter((device) => device.canOpen || (device.state === 'offline' && known.has(device.deviceId)))
-    .map((device) => ({ deviceId: device.deviceId, deviceName: device.name }));
+    .map((device) => ({ deviceId: device.deviceId, deviceName: device.name,
+      ...(!device.canOpen ? { offline: true } : {}),
+    }));
 }
 
 function clientDescriptor(locale?: string): RemoteResourceClientDescriptor {
@@ -273,37 +280,35 @@ export async function loadRemoteResourceManifest(
  */
 export async function discoverRemoteHomeCollections(
   invoke: RemoteInvoke,
-  targets: readonly RemoteResourceHostTarget[],
+  targets: readonly RemoteResourceDiscoveryTarget[],
   locale?: string,
   previous: readonly RemoteHomeCollection[] = [],
 ): Promise<RemoteHomeCollection[]> {
-  const settled = await Promise.allSettled(targets.map(async (target) => ({
+  const cachedManifest = (target: RemoteResourceHostTarget): RemoteResourceManifestResponse => ({
+    protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,
+    collections: previous.filter((collection) => collection.targets.some(
+      (candidate) => candidate.deviceId === target.deviceId,
+    )).map((collection) => ({
+      id: collection.id,
+      resourceKind: collection.resourceKind,
+      title: collection.title,
+      ...(collection.placement ? { placement: collection.placement } : {}),
+      ...(collection.iconName ? { icon: { name: collection.iconName, fallbackText: '' } } : {}),
+    })),
+  });
+  const settled = await Promise.allSettled(targets.map(async ({ offline, ...target }) => ({
     target,
-    manifest: await loadRemoteResourceManifest(invoke, target, locale),
+    manifest: offline ? cachedManifest(target) : await loadRemoteResourceManifest(invoke, target, locale),
   })));
   const discovered = settled.flatMap((result, index) => {
     if (result.status === 'fulfilled') {
       return result.value.manifest ? [result.value] : [];
     }
-    const target = targets[index];
-    if (!target) return [];
-    return previous.flatMap((collection) => collection.targets.some(
-      (candidate) => candidate.deviceId === target.deviceId,
-    ) ? [{
-      target,
-      manifest: {
-        protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,
-        collections: [{
-          id: collection.id,
-          resourceKind: collection.resourceKind,
-          title: collection.title,
-          ...(collection.placement ? { placement: collection.placement } : {}),
-          ...(collection.iconName
-            ? { icon: { name: collection.iconName, fallbackText: '' } }
-            : {}),
-        }],
-      },
-    }] : []);
+    const selected = targets[index];
+    if (!selected) return [];
+    const target = { deviceId: selected.deviceId, deviceName: selected.deviceName };
+    const manifest = cachedManifest(target);
+    return manifest.collections.length ? [{ target, manifest }] : [];
   });
   if (targets.length > 0 && discovered.length === 0) {
     const failure = settled.find((result) => result.status === 'rejected');

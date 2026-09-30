@@ -14,6 +14,7 @@ import type {
   RemoteDesktopVideoSettings,
 } from "@cindy/device-link";
 import { Text } from "@/components/AppText";
+import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 import { RemoteDesktopActionButton } from "./RemoteDesktopActionButton";
 import {
   NativePullDownMenu,
@@ -82,9 +83,10 @@ export function RemoteDesktopDisplaySettings({
   }, [connected, video.modesSupported, video.displayGeometry, reload]);
   const disabled = !connected || !video.supported;
   const title = { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body };
+  // 说明档(13/18,二级字色):成句的提示与当前分辨率取值。
   const hint = {
-    color: colors.textPrimary,
-    fontSize: typeScale.caption,
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   };
   const segment = (label: string, selected: boolean, onPress: () => void) => (
@@ -98,19 +100,20 @@ export function RemoteDesktopDisplaySettings({
         {
           flex: 1,
           minHeight: 44,
-          borderRadius: radius.control,
+          borderRadius: radius.pill,
           alignItems: "center",
           justifyContent: "center",
           backgroundColor: selected ? colors.cta : "transparent",
-          opacity: disabled ? 0.6 : pressed ? 0.85 : 1,
         },
+        disabled && { opacity: 0.6 },
+        pressed && !disabled && mobileInteractionStyles.pressed,
       ]}
     >
       <Text
         style={{
           ...title,
           color: selected ? colors.ctaText : colors.textPrimary,
-          fontWeight: selected ? fontWeight.semibold : fontWeight.medium,
+          fontWeight: fontWeight.medium,
         }}
       >
         {label}
@@ -120,7 +123,7 @@ export function RemoteDesktopDisplaySettings({
   const segments = {
     flexDirection: "row" as const,
     padding: spacing.xs,
-    borderRadius: radius.control,
+    borderRadius: radius.pill,
     backgroundColor: colors.surfaceChip,
   };
   const segmented = (
@@ -354,7 +357,8 @@ export function RemoteDesktopDisplaySettings({
                 onPress={() => chooseMode(mode.id)}
                 style={({ pressed }) => [
                   styles.row,
-                  { opacity: pressed ? 0.6 : !controlling ? 0.4 : 1 },
+                  !controlling && { opacity: 0.4 },
+                  pressed && mobileInteractionStyles.pressed,
                 ]}
               >
                 <Text style={[title, { flex: 1 }]}>{modeLabel(mode)}</Text>

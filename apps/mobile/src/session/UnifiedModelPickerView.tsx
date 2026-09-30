@@ -61,6 +61,7 @@ import type {
   UnifiedMobilePickerViewProps,
   UnifiedMobileRow,
 } from "./UnifiedModelPickerSheet";
+import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 
 type Page = "sources" | "harness" | null;
 
@@ -778,9 +779,7 @@ function makeStyles(colors: ThemeColors) {
     rowDisabled: {
       opacity: 0.4,
     },
-    pressed: {
-      opacity: 0.6,
-    },
+    pressed: mobileInteractionStyles.pressed,
     leading: {
       alignItems: "center",
       justifyContent: "center",

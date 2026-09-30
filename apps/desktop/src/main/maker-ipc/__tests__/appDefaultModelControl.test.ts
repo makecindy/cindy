@@ -1,7 +1,7 @@
 import type { BotModelRoute } from '../../../shared/botModelChain';
 import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { changeAppDefaultModel, configureAppDefaultModelSelection, inspectAppDefaultModel } from '../appDefaultModelControl';
+import { changeAppDefaultModel, configureAppDefaultModelSelection, inspectAppDefaultModel, validateBotTaskModel, resolveBotTaskModelSelection } from '../appDefaultModelControl';
 import { setNewMakerDraftCache, syncNewMakerDraftCache } from '../../maker-host/newMakerDefaultsCache';
 
 const host = vi.hoisted(() => ({ owner: 'owner:1', enabled: true, connected: true, agents: ['codex'],
@@ -45,6 +45,35 @@ describe('Bot control of the real Cindy default', () => {
     const dispatch = vi.fn(); configureAppDefaultModelSelection(dispatch);
     await expect(changeAppDefaultModel(id)).rejects.toThrow();
     expect(dispatch).not.toHaveBeenCalled();
+  });
+  it('validates the complete task route including harness, account and tuning without changing defaults', async () => {
+    expect(await validateBotTaskModel(route)).toBe(true);
+    for (const patch of [{ harness: 'pi' as const }, { providerId: 'another-account' }, { effort: 'ultra' }]) {
+      expect(await validateBotTaskModel({ ...route, ...patch })).toBe(false);
+    }
+    host.connected = false;
+    expect(await validateBotTaskModel(route)).toBe(false);
+    expect((await inspectAppDefaultModel()).current).toEqual(route);
+  });
+  it('resolves a one-task selection without changing application preferences', async () => {
+    const dispatch = vi.fn(); configureAppDefaultModelSelection(dispatch);
+    expect(await resolveBotTaskModelSelection({ id, effort: 'low', fastMode: true })).toEqual({ ...route, effort: 'low', fastMode: true });
+    expect(await resolveBotTaskModelSelection({ id })).toEqual(route);
+    expect((await inspectAppDefaultModel()).current).toEqual(route);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it.each(['disabled', 'disconnected', 'harness', 'account', 'effort', 'fast'] as const)('rejects an unavailable one-task selection: %s', async failure => {
+    const selection = { id, effort: 'medium', fastMode: false };
+    if (failure === 'disabled') host.enabled = false;
+    if (failure === 'disconnected') host.connected = false;
+    if (failure === 'harness') host.agents = [];
+    if (failure === 'account') selection.id = JSON.stringify(['codex', 'other-account', 'luna']);
+    if (failure === 'effort') selection.effort = 'ultra';
+    if (failure === 'fast') {
+      const providers = await host.providers(); providers[0].models.codex[0].supportsFastMode = false;
+      host.providers.mockResolvedValue(providers); selection.fastMode = true;
+    }
+    await expect(resolveBotTaskModelSelection(selection)).rejects.toThrow();
   });
   it('waits for the real owner-fenced mirror instead of mutating the cache itself', async () => {
     const dispatch = vi.fn(selection => mirror(selection.route, selection.requestId));

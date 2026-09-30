@@ -147,6 +147,7 @@ Hook 与本地 IM 共享消息级来源及上下文快照结构。本地所有�
 
 | 差异 | 官方 | 个人 | 裁决与理由 |
 |---|---|---|---|
+| 桌面设置入口的区域与账号可见性 | 中国大陆版与国际版的云账号均显示官方 Telegram 入口；本地模式不显示需要 Cindy 账号的官方分栏 | 中国大陆版与国际版的个人、组织及本地模式均显示个人 Telegram 入口 | 2026-09-29 按 Dash 的跨版本入口一致要求，`ImBotSection.tsx` 与 `imBotVisibility.ts` 不再按区域或个人账号隐藏两侧入口；设置搜索由 `ImBotSection.settings-search.ts` 同步。两侧仍是独立机器人，官方入口需要云账号，个人入口由用户自配凭证；这项架构差异不应再造成中国大陆版缺入口。 |
 | 群轮次权限档 | 完全按用户配的走 | Auto 对渠道策略命中的动作先交 AI 三态审阅；Ask 保留逐次确认；「完全访问」只让 owner 触发的轮次按该档直接执行，非 owner 的群消息继续保留逐轮策略并 fail-closed | Chris 2026-09-04 实踩裁决：个人 bot 的群任务已经明确设成 Pi + Grok + Full access，Cindy 侧能继续对话，Telegram 却因额外挂的逐轮策略与 Full access 互斥而在模型启动前拒绝每条消息。**owner 明确选择的完全访问必须正常执行，但不能把这份授权扩给同群其他成员**；个人侧在 `bypassPermissions` 下仅对 owner 触发的 policy 通过 `turnPolicyOptionalForMode` 取缔逐轮策略，非 owner 的授权边界与群历史 lane 隔离照常保留；scheduler 的创建、修改、前置脚本安装、恢复和立即运行同样进入该逐轮策略，防止可信 MCP 绕过群轮次权限；Auto 的风险判定交 AI，只有 ask 或服务不可用才转 owner 确认。官方侧继续完全按用户配置，不改服务端行为。见 `hook-control/session-runner.ts`、`im/telegram/adapter.ts`、`im/shared/channelToolPolicy.ts` 与 `im/shared/turnRunner.ts` |
 | 私聊过程态的载体 | 默认真实进度消息；开启 `TELEGRAM_DM_DRAFT_ENABLED` 时使用 Telegram **草稿**（`sendDraft`），终稿一发草稿自然消失 | 真实消息，原地 `editMessageText` 覆盖 | 草稿只有官方路径拿得到。个人栈**不是零推送**：惰性占位让「没有真实内容就不建消息」，但**第一帧真实内容那次 `sendMessage` 会推送**，之后的编辑才不推送。`presentationCapabilities.ts` 的 `progressSilent: true` 说的是「过程帧不额外推送」，不是「整轮零推送」 |
 | `/status` | 有 | 无 | 官方 bot 经服务端中继，链路可断，所以有「关联状态」可看；个人 bot 由桌面直连 Bot API，没有等价概念。见注册表 `parityNote` |

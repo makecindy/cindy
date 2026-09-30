@@ -713,11 +713,15 @@ export function useCCAgentChat(
 
       // 2) Debounce the disk write — coalesce rapid keystrokes.
       if (planWriteTimerRef.current) clearTimeout(planWriteTimerRef.current);
+      // Remote paths belong to the host. Keep the draft in memory and send it
+      // back as editedPlan on approval; never autosave it on this client.
+      if (isRemoteSessionSticky(sessionId)) return;
       // Skip the IPC entirely when there's no path (defensive — shouldn't
       // happen in practice; ExitPlanMode always carries planFilePath).
       if (!planFilePath) return;
       planWriteTimerRef.current = setTimeout(() => {
         planWriteTimerRef.current = null;
+        if (isRemoteSessionSticky(sessionId)) return;
         window.electronAPI.maker
           .writePlanFile({ requestId, planFilePath, content })
           .then((result) => {

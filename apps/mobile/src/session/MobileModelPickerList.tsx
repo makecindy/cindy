@@ -16,6 +16,7 @@ import { useRef } from 'react';
 import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { Check, SlidersHorizontal } from 'lucide-react-native';
 
 import type { MobileAgentCapabilities, MobileModelOption } from '@/session/agentCapabilities';
@@ -113,9 +114,7 @@ const makeStyles = (c: ThemeColors) =>
     optionRowDisabled: {
       opacity: 0.45,
     },
-    pressed: {
-      opacity: 0.65,
-    },
+    pressed: mobileInteractionStyles.pressed,
     optionMain: {
       flex: 1,
       minWidth: 0,

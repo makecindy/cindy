@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -17,19 +17,30 @@ const template = readFileSync(
   "utf8",
 );
 
-it("runs the generated Swift launch and feedback behavior", () => {
-  if (spawnSync("swiftc", ["--version"], { encoding: "utf8" }).status !== 0)
-    return;
+it("runs the generated Swift launch and feedback behavior", ({ skip }) => {
   const script = join(
     dirname(fileURLToPath(import.meta.url)),
     "../../scripts/test-incoming-share-feedback.mjs",
   );
-  const output = execFileSync(process.execPath, [script], {
+  const started = performance.now();
+  console.info("[share-feedback] START harness (timeout=150000ms)");
+  const result = spawnSync(process.execPath, [script], {
     encoding: "utf8",
-    timeout: 60_000,
+    stdio: ["ignore", "pipe", "inherit"],
+    // The script bounds compilation at 120s and execution at 10s. Leave room
+    // for Node startup and cleanup. Compilation also checks Swift availability.
+    timeout: 150_000,
+    killSignal: "SIGKILL",
   });
-  expect(output).toContain("PASS: generated Swift share feedback");
-}, 60_000);
+  console.info(
+    `[share-feedback] END harness (${Math.round(performance.now() - started)}ms, status=${result.status}, error=${(result.error as NodeJS.ErrnoException | undefined)?.code ?? "none"})`,
+  );
+  if (result.error) throw result.error;
+  // The harness reserves 77 for compile ENOENT, never for a timeout or failure.
+  if (result.status === 77) return skip();
+  expect(result.status).toBe(0);
+  expect(result.stdout).toContain("PASS: generated Swift share feedback");
+}, 180_000);
 
 describe("incoming share native file ownership", () => {
   it("isolates both file-copy and raw-image paths without changing display names", () => {
