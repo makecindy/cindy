@@ -58,18 +58,31 @@ export function localizeAgentError(
   return i18n.t(TOOL_LOOP_I18N_KEYS[toolLoop.kind], { count: toolLoop.count });
 }
 
+/**
+ * Personal WeChat cannot use Full access, so the shared outage key must not
+ * suggest that mode when the task being viewed came from WeChat.
+ */
+export function autoReviewUnavailableGuidanceCode(sessionSource: unknown): string {
+  return sessionSource === 'wechat'
+    ? 'AUTO_REVIEW_UNAVAILABLE_WECHAT'
+    : 'AUTO_REVIEW_UNAVAILABLE';
+}
+
 /** Unknown provider messages stay in diagnostic details, never in the localized summary. */
-export function unclassifiedAgentErrorI18nKey(message: string): string {
+export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: unknown): string {
   const parsed = parseAgentErrorCode(message);
-  const key = parsed ? `session.remoteError.${parsed.code}` : null;
+  const code = parsed?.code === 'AUTO_REVIEW_UNAVAILABLE'
+    ? autoReviewUnavailableGuidanceCode(sessionSource)
+    : parsed?.code;
+  const key = code ? `session.remoteError.${code}` : null;
   if (key && i18n.exists(key)) return key;
   return isResponsesLiteParallelToolCallsError(message)
     ? 'session.tail.requestFormatError'
     : 'session.tail.replyFailed';
 }
 
-export function localizeUnclassifiedAgentError(message: string): string {
-  return i18n.t(unclassifiedAgentErrorI18nKey(message));
+export function localizeUnclassifiedAgentError(message: string, sessionSource?: unknown): string {
+  return i18n.t(unclassifiedAgentErrorI18nKey(message, sessionSource));
 }
 
 /** Resending unchanged content cannot fix these explicit configuration failures. */

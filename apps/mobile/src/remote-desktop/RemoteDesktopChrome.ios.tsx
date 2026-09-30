@@ -30,6 +30,7 @@ import { Keyboard, SlidersHorizontal } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
+  lineHeight,
   navigationChrome,
   fontWeight,
   iconSize,
@@ -224,6 +225,7 @@ export function RemoteDesktopPanel(props: ComponentProps<typeof Panel>) {
               style={{
                 color: colors.textPrimary,
                 fontSize: typeScale.body,
+                lineHeight: lineHeight.body,
                 fontWeight: fontWeight.semibold,
               }}
             >
@@ -234,6 +236,7 @@ export function RemoteDesktopPanel(props: ComponentProps<typeof Panel>) {
               style={{
                 color: colors.textPrimary,
                 fontSize: typeScale.caption,
+                lineHeight: lineHeight.caption,
               }}
             >
               {props.caption}

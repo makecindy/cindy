@@ -131,6 +131,7 @@
     "browserCancelAddress": "Cancel editing",
     "browserReturnToFile": "Return to file",
     "browserCopyAddress": "Copy address",
+    "browserCopiedAddress": "Address copied",
     "browserInvalidAddress": "Enter a valid http or https address.",
     "browserWebsiteFailed": "Unable to open this webpage. Try reloading."
   },
@@ -140,6 +141,6 @@
     "exportTimeout": "Export timed out. Try again."
   },
   "gallery": {
-    "cacheMiss": "Remote media cache miss (cachedOnly)"
+    "cacheMiss": "This media isn't cached on your phone yet. Open it again once your computer is connected"
   }
 }

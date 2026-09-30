@@ -23,10 +23,12 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowRight } from 'lucide-react';
+import { visibleAskOptions } from '@cindy/maker-shared';
 
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
 import { Tip } from '@/components/ui/tooltip';
 import { useAutoResize } from '@/hooks/useAutoResize';
+import { shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
 import type { AskUserDraft, AskUserViewerState, PendingAskUser } from '@/lib/makerChatStore';
 
@@ -155,6 +157,10 @@ function AskUserQuestionForm({
   // Custom input
   const [customInput, setCustomInput] = useState('');
   const [showCustomInput, setShowCustomInput] = useState(false);
+  const cardRef = useRef<HTMLElement | null>(null);
+  const setCardNode = useCallback((node: HTMLElement | null) => {
+    cardRef.current = node;
+  }, []);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // ── Animation state ──
@@ -167,7 +173,7 @@ function AskUserQuestionForm({
   const currentQ = questions[currentIndex];
   const isMultiSelect = currentQ?.multiSelect === true;
   const isLastQuestion = currentIndex === totalQuestions - 1;
-  const options = currentQ?.options ?? [];
+  const options = visibleAskOptions(currentQ?.options);
   const pageIndicator = totalQuestions > 1 ? `${currentIndex + 1}/${totalQuestions}` : undefined;
 
   // Check if this question was already answered (revisiting via Back)
@@ -183,7 +189,7 @@ function AskUserQuestionForm({
 
       const ans = answersSnapshot[q.question];
       const isMulti = q.multiSelect === true;
-      const opts = q.options ?? [];
+      const opts = visibleAskOptions(q.options);
 
       if (isMulti && ans) {
         try {
@@ -389,12 +395,25 @@ function AskUserQuestionForm({
     setShowCustomInput(false);
   }, [customInput, isMultiSelect, advance]);
 
+  // ── Direct free-text answer when no option rows render ──
+  // Multi-select keeps the documented JSON-array encoding (`["text"]`), otherwise
+  // the answer cannot be parsed back when the user returns to edit this question.
+  const submitDirectAnswer = useCallback(() => {
+    const trimmed = customInput.trim();
+    if (!trimmed) return;
+    advance(isMultiSelect ? JSON.stringify([trimmed]) : trimmed);
+  }, [customInput, isMultiSelect, advance]);
+
   // ── Keyboard shortcuts ──
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       // F-AUQ-MIN-5: minimized 时数字键 1-N / 回车 / N+1 全部透传，
       // 避免"无视觉反馈地选中选项"。Escape 仍保留——满足 F-AUQ-MIN-5 的取消语义。
       if (viewerState === 'minimized' && e.key !== 'Escape') return;
+      // Numbers typed into the sidebar search, a terminal or a rename field,
+      // and Escape that closed a menu, belong to that place — not to this
+      // question. The answer inputs handle their own keys.
+      if (shouldCardShortcutYield(e, e.key === 'Escape' ? 'dismiss' : 'character', cardRef.current)) return;
 
       // If custom input is focused in single-select mode, handle Escape only
       if (showCustomInput && !isMultiSelect) {
@@ -524,9 +543,120 @@ function AskUserQuestionForm({
     </div>
   );
 
+  // ── Free-text entry (pinned, always visible) ──
+  // The model's own "other" option is filtered out of the option list and this
+  // host entry stands in for it. It lives outside the card's scroll region so a
+  // long option list can never push the user's only free-text escape out of
+  // view (DESIGN.md §4: permanent entries pin below the scroll region).
+  const customAnswerEntry =
+    options.length > 0 ? (
+      <div className="overflow-hidden rounded-[12px] border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
+        {showCustomInput ? (
+          <div className="flex items-start gap-2 px-[16px] py-[14px]">
+            {isMultiSelect && (
+              <div
+                className={cn(
+                  'mt-[2px] flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[4px]',
+                  customInput.trim()
+                    ? 'bg-[var(--ask-checkbox-checked-bg)]'
+                    : 'border-[1.5px] border-[var(--ask-checkbox-border)]',
+                )}
+              >
+                {customInput.trim() && (
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="var(--ask-checkbox-checked-icon)"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+              </div>
+            )}
+            <AutoGrowingAnswerTextarea
+              textareaRef={inputRef}
+              value={customInput}
+              onChange={(e) => setCustomInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  if (isMultiSelect) handleNext();
+                  else handleCustomSubmit();
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setShowCustomInput(false);
+                  setCustomInput('');
+                }
+              }}
+              placeholder={t('chat.askUserQuestion.answerPlaceholder')}
+              className={cn(
+                'min-h-[22px] min-w-0 flex-1 bg-transparent text-14 font-normal leading-[1.571] outline-none',
+                'text-[var(--ask-input-text)] placeholder:text-[var(--ask-input-placeholder)]',
+                'select-text',
+              )}
+            />
+            {!isMultiSelect && (
+              <Tip text={isLastQuestion ? null : t('chat.askUserQuestion.next')}>
+                <button
+                  type="button"
+                  onClick={handleCustomSubmit}
+                  disabled={!customInput.trim()}
+                  data-testid={isLastQuestion ? undefined : 'ask-user-custom-next'}
+                  aria-label={isLastQuestion ? undefined : t('chat.askUserQuestion.next')}
+                  className={cn(
+                    'self-end shrink-0 rounded-[9999px] text-13 font-medium',
+                    isLastQuestion
+                      ? 'px-[16px] py-[6px]'
+                      : 'flex h-8 w-8 items-center justify-center',
+                    customInput.trim()
+                      ? 'bg-[var(--ask-send-bg)] text-[var(--ask-send-text)]'
+                      : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
+                  )}
+                >
+                  {isLastQuestion ? (
+                    t('chat.askUserQuestion.submit')
+                  ) : (
+                    <ArrowRight size={15} strokeWidth={2} aria-hidden="true" />
+                  )}
+                </button>
+              </Tip>
+            )}
+          </div>
+        ) : (
+          <button
+            type="button"
+            className={cn(
+              'flex w-full items-center justify-between px-[16px] py-[14px] text-left',
+              'transition-colors hover:bg-[var(--ask-option-hover)]',
+            )}
+            onClick={handleCustomOptionClick}
+          >
+            <div className="flex items-center gap-3">
+              {isMultiSelect && (
+                <div className="h-[18px] w-[18px] shrink-0 rounded-[4px] border-[1.5px] border-[var(--ask-checkbox-border)]" />
+              )}
+              <span className="text-14 italic text-[var(--ask-option-custom)]">
+                {t('chat.askUserQuestion.customAnswer')}
+              </span>
+            </div>
+            <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]">
+              {options.length + 1}
+            </div>
+          </button>
+        )}
+      </div>
+    ) : null;
+
   // ── Render ──
   return (
     <InteractionPromptCardShell
+      rootRef={setCardNode}
       viewerState={viewerState}
       onViewerStateChange={onViewerStateChange}
       minimizedTitle={t('chat.askUserQuestion.pendingTitle')}
@@ -534,6 +664,7 @@ function AskUserQuestionForm({
       restoreAriaLabel={t('chat.askUserQuestion.restoreAriaLabel')}
       minimizeAriaLabel={t('chat.askUserQuestion.minimizeAriaLabel')}
       minimizeDisabled={isAnimating}
+      pinnedContent={customAnswerEntry}
       headerLeading={
         currentQ?.header ? (
           <Tip text={currentQ.header}>
@@ -633,108 +764,6 @@ function AskUserQuestionForm({
                 </button>
               </div>
             ))}
-
-            {/* "Type something else..." row */}
-            <div className="h-px bg-[var(--ask-option-divider)]" />
-            {showCustomInput ? (
-              <div className="flex items-start gap-2 px-[16px] py-[14px]">
-                {isMultiSelect && (
-                  <div
-                    className={cn(
-                      'mt-[2px] flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[4px]',
-                      customInput.trim()
-                        ? 'bg-[var(--ask-checkbox-checked-bg)]'
-                        : 'border-[1.5px] border-[var(--ask-checkbox-border)]',
-                    )}
-                  >
-                    {customInput.trim() && (
-                      <svg
-                        width="12"
-                        height="12"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="var(--ask-checkbox-checked-icon)"
-                        strokeWidth="3"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    )}
-                  </div>
-                )}
-                <AutoGrowingAnswerTextarea
-                  textareaRef={inputRef}
-                  value={customInput}
-                  onChange={(e) => setCustomInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                      e.preventDefault();
-                      if (isMultiSelect) handleNext();
-                      else handleCustomSubmit();
-                    }
-                    if (e.key === 'Escape') {
-                      e.preventDefault();
-                      setShowCustomInput(false);
-                      setCustomInput('');
-                    }
-                  }}
-                  placeholder={t('chat.askUserQuestion.answerPlaceholder')}
-                  className={cn(
-                    'min-h-[22px] min-w-0 flex-1 bg-transparent text-14 font-normal leading-[1.571] outline-none',
-                    'text-[var(--ask-input-text)] placeholder:text-[var(--ask-input-placeholder)]',
-                    'select-text',
-                  )}
-                />
-                {!isMultiSelect && (
-                  <Tip text={isLastQuestion ? null : t('chat.askUserQuestion.next')}>
-                    <button
-                      type="button"
-                      onClick={handleCustomSubmit}
-                      disabled={!customInput.trim()}
-                      data-testid={isLastQuestion ? undefined : 'ask-user-custom-next'}
-                      aria-label={isLastQuestion ? undefined : t('chat.askUserQuestion.next')}
-                      className={cn(
-                        'self-end shrink-0 rounded-[9999px] text-13 font-medium',
-                        isLastQuestion
-                          ? 'px-[16px] py-[6px]'
-                          : 'flex h-8 w-8 items-center justify-center',
-                        customInput.trim()
-                          ? 'bg-[var(--ask-send-bg)] text-[var(--ask-send-text)]'
-                          : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
-                      )}
-                    >
-                      {isLastQuestion ? (
-                        t('chat.askUserQuestion.submit')
-                      ) : (
-                        <ArrowRight size={15} strokeWidth={2} aria-hidden="true" />
-                      )}
-                    </button>
-                  </Tip>
-                )}
-              </div>
-            ) : (
-              <button
-                type="button"
-                className={cn(
-                  'flex w-full items-center justify-between px-[16px] py-[14px] text-left',
-                  'transition-colors hover:bg-[var(--ask-option-hover)]',
-                )}
-                onClick={handleCustomOptionClick}
-              >
-                <div className="flex items-center gap-3">
-                  {isMultiSelect && (
-                    <div className="h-[18px] w-[18px] shrink-0 rounded-[4px] border-[1.5px] border-[var(--ask-checkbox-border)]" />
-                  )}
-                  <span className="text-14 italic text-[var(--ask-option-custom)]">
-                    {t('chat.askUserQuestion.customAnswer')}
-                  </span>
-                </div>
-                <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]">
-                  {options.length + 1}
-                </div>
-              </button>
-            )}
           </div>
         )}
 
@@ -748,7 +777,7 @@ function AskUserQuestionForm({
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
-                  if (customInput.trim()) advance(customInput.trim());
+                  submitDirectAnswer();
                 }
                 if (e.key === 'Escape') {
                   e.preventDefault();
@@ -766,7 +795,7 @@ function AskUserQuestionForm({
             <Tip text={isLastQuestion ? null : t('chat.askUserQuestion.next')}>
               <button
                 type="button"
-                onClick={() => customInput.trim() && advance(customInput.trim())}
+                onClick={submitDirectAnswer}
                 disabled={!customInput.trim()}
                 data-testid={isLastQuestion ? undefined : 'ask-user-custom-next'}
                 aria-label={isLastQuestion ? undefined : t('chat.askUserQuestion.next')}

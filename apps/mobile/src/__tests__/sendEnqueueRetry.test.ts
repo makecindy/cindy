@@ -30,7 +30,7 @@ describe('send enqueue weak-network retry ordering', () => {
   };
 
   it('重试门槛必须要求可安全重发的传输错误且非 in-flight(兼容直发路径)', () => {
-    expect(source).toContain("import { isInFlightDeviceLinkError, isSharedTaskPeer } from '@cindy/device-link';");
+    expect(source).toMatch(/import \{ isInFlightDeviceLinkError, isSharedTaskPeer(?:, \w+)* \} from '@cindy\/device-link';/);
     expect(source).toContain("code === 'NOT_CONNECTED' || code === 'BACKPRESSURE'");
     expect(source).toContain("formatted.includes('[BACKPRESSURE]')");
     const loops = extractRetryLoops();

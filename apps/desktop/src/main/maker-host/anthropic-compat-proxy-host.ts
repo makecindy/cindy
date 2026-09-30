@@ -29,6 +29,7 @@ import {
   createToolUseProviderSpecificFieldsRecoveryRule,
   createXaiModelInputRecoveryRule,
   createXaiModelInputSanitizeTransform,
+  createAnthropicEffortCompatibilityRule,
   dedupeDuplicateToolUseIds,
   repairToolExchangeAdjacency,
   sanitizeXaiModelInputFromBody,
@@ -156,6 +157,7 @@ function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, 
     const handler = createClaudeProviderBridge({
       url: `${base.replace(/\/+$/, '')}/${requestPath.replace(/^\/+/, '')}`,
       protocol, headers: route.headerOverride ?? {}, efforts: model.efforts,
+      supportsFastMode: model.supportsFastMode === true,
       providerId: provider.id,
       ...(row && (protocol === 'openai-chat' || model.api) ? { model: row, nativeUpstream: base } : {}),
       capabilities: {
@@ -1141,6 +1143,10 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         createXaiModelInputRecoveryRule({
           onRetry: (threadId, model) => xaiModelInputStripController.markActive(threadId, model),
         }),
+        // 自定义 Anthropic 兼容网关不认 Claude Code 默认档位的精确 400(#5032)→ 省略
+        // output_config.effort 重发一次。只在该文本命中时生效,官方 Claude / 订阅直连
+        // 不会返回它;能力未声明的模型本就不该收到客户端偏好(#4860 出站不变量)。
+        createAnthropicEffortCompatibilityRule(),
       ],
       logger: log,
       // 请求体 dump 默认关(dev trace 级别 + agent 高并发会刷爆 main event loop

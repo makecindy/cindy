@@ -35,7 +35,7 @@ import { parseLegalSegments } from '@/auth/legalText';
 import { Text, TextInput } from '@/components/AppText';
 import { hasNativeLoginButtons, LoginNativeButton } from './LoginNativeButton';
 import { useTheme, useThemedStyles } from '@/theme';
-import { fontWeight, loginSizes, radius, type ThemeColors } from '@/theme/tokens';
+import { fontWeight, loginSizes, motionDuration, radius, type ThemeColors } from '@/theme/tokens';
 
 /**
  * LoginSkinControls —— 登录布局与跨平台入口。iOS 按钮交给 LoginNativeButton，
@@ -748,7 +748,7 @@ function SpinBox({ box, children }: { box: number; children: ReactNode }) {
   useEffect(() => {
     const loop = Animated.loop(
       Animated.timing(spin, {
-        duration: 900,
+        duration: motionDuration.spinnerCycle,
         easing: Easing.linear,
         toValue: 1,
         useNativeDriver: true,
@@ -1057,14 +1057,29 @@ export function LoginMethodRow({
   accessibilityLabel?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
-  if (hasNativeLoginButtons) return <LoginNativeButton label={title} subtitle={subtitle}
-    accessibilityLabel={accessibilityLabel} showLabel artworkSize={LOGIN_METHOD_ROW.leftIcon.size}
-    trailingArtwork={<ShareIcon />}
+  const rowContent = <View
+    pointerEvents="none"
+    style={[StyleSheet.absoluteFill, disabled && styles.disabledText]}
+  >
+    <View style={icon === 'person' ? styles.methodRowPersonIcon : styles.methodRowLeftIcon}>
+      {icon === 'person' ? <PersonIcon /> : <EnterpriseIcon />}
+    </View>
+    <View style={styles.methodRowTextBox}>
+      <Text
+        numberOfLines={1}
+        style={[styles.methodRowTitle, disabled && styles.methodRowDisabledTitle]}
+      >
+        {title}
+      </Text>
+      {subtitle != null ? <Text numberOfLines={1} style={styles.methodRowSubtitle}>{subtitle}</Text> : null}
+    </View>
+    <View style={styles.methodRowRightIcon}><ShareIcon /></View>
+  </View>;
+  if (hasNativeLoginButtons) return <LoginNativeButton label={title}
+    accessibilityLabel={accessibilityLabel} content={rowContent}
     onPress={onPress} disabled={disabled} testID={testID}
     width={LOGIN_METHOD_ROW.width} height={LOGIN_METHOD_ROW.height} fontSize={LOGIN_METHOD_ROW.titleFont}
-    style={{ position: 'absolute', left: LOGIN_METHOD_ROW.x, top }}>
-    {icon === 'person' ? <PersonIcon /> : <EnterpriseIcon />}
-  </LoginNativeButton>;
+    style={{ position: 'absolute', left: LOGIN_METHOD_ROW.x, top }} />;
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel ?? title}
@@ -1077,28 +1092,7 @@ export function LoginMethodRow({
     >
       {({ pressed }) => (
         <>
-          <View
-            style={
-              icon === 'person'
-                ? styles.methodRowPersonIcon
-                : styles.methodRowLeftIcon
-            }
-          >
-            {icon === 'person' ? <PersonIcon /> : <EnterpriseIcon />}
-          </View>
-          <View style={styles.methodRowTextBox}>
-            <Text numberOfLines={1} style={styles.methodRowTitle}>
-              {title}
-            </Text>
-            {subtitle != null ? (
-              <Text numberOfLines={1} style={styles.methodRowSubtitle}>
-                {subtitle}
-              </Text>
-            ) : null}
-          </View>
-          <View style={styles.methodRowRightIcon}>
-            <ShareIcon />
-          </View>
+          {rowContent}
           <StateOverlay
             cornerRadius={LOGIN_METHOD_ROW.radius}
             pressed={pressed && !disabled}
@@ -1152,7 +1146,7 @@ export function LoginLoadingRing({ y, label }: { y: number; label: string }) {
 
 /**
  * 验证码重发倒计时链接(figma §4.7 + Step 3a 契约:@(70,238) 540×50 20;
- * 倒计时中 = controlPlaceholder 无下划线「{n} 秒后可重新发送」(42 起,首帧 42);
+ * 倒计时中 = controlPlaceholder 无下划线「{n} 秒后可重新发送」(60 起,首帧 60);
  * 归零 = controlText 带下划线「重新发送验证码」可点)。
  * 绝对 deadline 模型:渲染每 tick 用 Date.now() 重算剩余秒(非递减计数,
  * 系统休眠/挂起恢复自校正);deadline 变化(重发成功重置)即重启 tick;
@@ -1658,6 +1652,9 @@ const makeStyles = (colors: ThemeColors) =>
     color: colors.login.controlText,
     fontSize: LOGIN_METHOD_ROW.titleFont,
     fontWeight: fontWeight.bold,
+  },
+  methodRowDisabledTitle: {
+    color: colors.login.secondaryText,
   },
   methodRowSubtitle: {
     color: colors.login.secondaryText,

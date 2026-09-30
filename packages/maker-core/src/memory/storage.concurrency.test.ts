@@ -39,6 +39,21 @@ function pauseNextRead() {
 }
 
 describe('conditional memory mutations', () => {
+  it('retains the exact-body format through editor and tool updates to an imported shard', async () => {
+    await storage.write({ ...seed, mode: 'update', body: '  Original\n\n', preserveBody: true });
+    const imported = await storage.read(filename);
+    expect(imported.frontmatter.bodyLength).toBe(imported.body.length);
+    const body = '\tOriginal\n';
+    const edited = await storage.update(filename, imported.frontmatter.updatedAt, { ...seed, body });
+    expect(edited.body).toBe(body);
+    expect(edited.frontmatter.bodyLength).toBe(body.length);
+    const toolBody = '\nOriginal  ';
+    await storage.write({ ...seed, mode: 'update', body: toolBody });
+    const saved = await storage.read(filename);
+    expect(saved.body).toBe(toolBody);
+    expect(saved.frontmatter.bodyLength).toBe(toolBody.length);
+  });
+
   it.each(['update', 'delete'] as const)('rejects stale %s after an in-flight tool write, across storage instances', async (operation) => {
     const opened = await storage.read(filename);
     const pause = pauseNextRead();

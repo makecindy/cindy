@@ -90,6 +90,7 @@ CREATE TABLE sessions (
   source TEXT NOT NULL DEFAULT 'desktop',
   im_bot_context_id TEXT,
   im_user_id TEXT,
+  im_default_route TEXT,
   remote_host_id TEXT,
   active_turn_started_at INTEGER,
   last_turn_ended_at INTEGER,
@@ -1208,6 +1209,34 @@ describe('db worker tx handlers', () => {
       expect(rows[1]!.agent_meta).toBe(foreignMeta);
       expect(rows[3]!.agent_meta).toBe(droppedMeta);
     }, { useInlineWorker });
+    },
+  );
+
+  it.each([false, true])(
+    'rewind.commit refuses to mutate when the /clear generation has changed (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(async (client) => {
+        await seedSession(client, 's1');
+        await client.exec(
+          'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)',
+          ['m1', 'c1', 's1', 'user', 'before', 100, 'm2', 'c2', 's1', 'user', 'after-clear', 400],
+        );
+        await client.exec('UPDATE sessions SET cleared_at = ? WHERE id = ?', [250, 's1']);
+
+        await expect(
+          client.tx('rewind.commit', {
+            sessionId: 's1',
+            targetCreatedAt: 100,
+            expectedClearedAt: null,
+            now: 999,
+          }),
+        ).rejects.toThrow(/CLEAR_GENERATION_CHANGED|clear-boundary changed/i);
+
+        await expect(client.query('SELECT id, rewind_at FROM messages ORDER BY id')).resolves.toEqual([
+          { id: 'm1', rewind_at: null },
+          { id: 'm2', rewind_at: null },
+        ]);
+      }, { useInlineWorker });
     },
   );
 
@@ -2888,6 +2917,7 @@ describe('db worker tx handlers', () => {
           fastMode: false,
           agentKind: 'pi',
           providerId: 'xai',
+          imDefaultRoute: 'default-route-record',
           source: 'telegram',
           imBotContextId: 'bot',
           imUserId: 'user',
@@ -2898,7 +2928,7 @@ describe('db worker tx handlers', () => {
       expect(result).toEqual({ previousStatus: 'active' });
       await expect(
         client.query(
-          `SELECT id, status, im_bot_context_id, im_user_id
+          `SELECT id, status, im_bot_context_id, im_user_id, im_default_route
            FROM sessions WHERE id IN ('telegram-old', 'telegram-new') ORDER BY id`,
         ),
       ).resolves.toEqual([
@@ -2907,12 +2937,14 @@ describe('db worker tx handlers', () => {
           status: 'active',
           im_bot_context_id: 'bot',
           im_user_id: 'user',
+          im_default_route: 'default-route-record',
         },
         {
           id: 'telegram-old',
           status: 'archived',
           im_bot_context_id: null,
           im_user_id: null,
+          im_default_route: null,
         },
       ]);
       await expect(client.query('SELECT * FROM im_bindings')).resolves.toEqual([]);

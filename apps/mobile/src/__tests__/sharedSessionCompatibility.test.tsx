@@ -11,6 +11,8 @@ const state = vi.hoisted(() => ({
   t: (key: string) => key,
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: state.t }) }));
+vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://relay.example.test', APP_SCHEME: 'cindy' }));
+vi.mock('expo-clipboard', () => ({ getStringAsync: vi.fn(), isPasteButtonAvailable: false }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('lucide-react-native', () => ({ Check: () => null, Laptop: () => null, Link: () => null, Users: () => null, Clock: () => null, FileText: () => null, Square: () => null, X: () => null }));
 vi.mock('@/device-link/accessRevoked', () => ({ markDeviceAccessRevoked: vi.fn() }));
@@ -44,7 +46,7 @@ vi.mock('@/components/MobilePrimitives', () => ({
   MainWindowRowButton: () => null,
   MainWindowOptionButton: ({ label }: { label: string }) => createElement('button', null, label),
 }));
-vi.mock('@/platform/chrome/SimpleStackHeader', () => ({ SimpleStackHeader: () => null, simpleScreenSafeAreaEdges: () => [] }));
+vi.mock('@/platform/chrome/SimpleStackHeader', () => ({ SimpleStackHeader: () => null, simpleScreenSafeAreaEdges: () => [], simpleScrollInsetProps: {}, simpleScrollScreenSafeAreaEdges: () => [] }));
 vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
 let host: HTMLDivElement;
 let root: Root;

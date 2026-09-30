@@ -1,6 +1,7 @@
 import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useGuardedPush } from '@/utils/useGuardedPush';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import {
@@ -19,6 +20,7 @@ import {
 import {
   Image,
   Pressable,
+  type PressableProps,
   ScrollView,
   StyleSheet,
   View,
@@ -58,6 +60,7 @@ import {
   selectionFromAnswer,
   sessionScopedPermissionSuggestions,
   sortPendingInteractions,
+  visibleAskOptions,
   type AskQuestion,
   type PermissionReviewPresentation,
   type PlanReviewEvidencePresentation,
@@ -76,7 +79,7 @@ import {
   buildInteractionTouchLayout,
   type InteractionTouchLayout,
 } from '@/session/interactionTouchLayout';
-import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { remoteSessionStore, useRemoteDeviceIdentity } from '@/session/remoteSessionStore';
 import type { PendingInteraction } from '@/session/types';
 import { fontWeight, iconStroke, lineHeight, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { iconSize, radius, spacing, typeScale } from '@/theme/tokens';
@@ -112,11 +115,42 @@ export type MobilePlanViewerState = 'half' | 'expanded' | 'minimized' | 'edit';
 type RestorablePlanViewerState = Exclude<MobilePlanViewerState, 'minimized'>;
 
 const CompanionInteractionContext = createContext(false);
+/** Who is asking in a teammate chat (Desktop PermissionPrompt `companion`). */
+export interface CompanionInteractionIdentity { name: string; avatar?: ReactNode }
+const CompanionIdentityContext = createContext<CompanionInteractionIdentity | null>(null);
 
-export function InteractionPanel(props: Parameters<typeof InteractionPanelContent>[0] & { companion?: boolean }) {
+export function InteractionPanel({ companionIdentity, hangFromAvatar = false, ...props }: Parameters<typeof InteractionPanelContent>[0] & {
+  companion?: boolean;
+  companionIdentity?: CompanionInteractionIdentity | null;
+  /**
+   * Teammate chat timeline: the card hangs from the companion's portrait like a reply (avatar 28 + gap 10),
+   * so the card itself no longer repeats who is asking.
+   */
+  hangFromAvatar?: boolean;
+}) {
+  const identity = props.companion === true && companionIdentity?.name ? companionIdentity : null;
+  const content = <InteractionPanelContent {...props} />;
   return <CompanionInteractionContext.Provider value={props.companion === true}>
-    <InteractionPanelContent {...props} />
+    <CompanionIdentityContext.Provider value={identity}>
+      <CompanionHungContext.Provider value={hangFromAvatar && !!identity?.avatar}>
+        {hangFromAvatar && identity?.avatar ? <CompanionHungRow avatar={identity.avatar}>{content}</CompanionHungRow> : content}
+      </CompanionHungContext.Provider>
+    </CompanionIdentityContext.Provider>
   </CompanionInteractionContext.Provider>;
+}
+
+/** Whether the card already hangs from the companion's portrait (the card then skips its own requester row). */
+const CompanionHungContext = createContext(false);
+/** Visible height of companion card buttons; hitSlop brings the touch target to 44. */
+const COMPANION_BUTTON_HEIGHT = 38;
+const COMPANION_BUTTON_HIT_SLOP = { top: 3, bottom: 3 } as const;
+
+function CompanionHungRow({ avatar, children }: { avatar: ReactNode; children: ReactNode }) {
+  const styles = useInteractionStyles();
+  return <View style={styles.companionHungRow} testID="interaction.companionRow">
+    <View style={styles.companionHungAvatar}>{avatar}</View>
+    <View style={styles.companionHungContent}>{children}</View>
+  </View>;
 }
 
 function useInteractionStyles() {
@@ -136,7 +170,6 @@ function InteractionPanelContent({
   planViewerState,
   onPlanViewerStateChange,
   onError,
-  readOnlyReason,
 }: {
   embedded?: boolean;
   safeAreaBottomInset?: number;
@@ -160,7 +193,6 @@ function InteractionPanelContent({
   onActiveRequestIdChange?(requestId: string | null): void;
   planViewerState?: MobilePlanViewerState;
   onPlanViewerStateChange?(state: MobilePlanViewerState): void;
-  readOnlyReason?: string | null;
   onError(message: string | null): void;
 }) {
   const styles = useInteractionStyles();
@@ -194,7 +226,6 @@ function InteractionPanelContent({
   const kind = interactionKind(activeInteraction);
   const queuePresentation = buildPendingInteractionQueuePresentation(sortedInteractions, {
     maxVisible: sortedInteractions.length || 1,
-    readOnly: !!readOnlyReason,
   }, mobilePresentationLocalizer);
   const activeRequestIdForPresentation = readRequestId(activeInteraction);
   const selectedQueueItem = queuePresentation.items.find((item) => item.requestId === activeRequestIdForPresentation)
@@ -244,7 +275,7 @@ function InteractionPanelContent({
     gap: touchLayout.cardGap,
     padding: touchLayout.cardPadding,
   };
-  if (readOnlyReason || isSharedTaskPeer(deviceId)) {
+  if (isSharedTaskPeer(deviceId) && !['permission', 'ask_user_question', 'plan_review'].includes(kind)) {
     return (
       <View style={[styles.root, fillAvailableHeight && styles.rootFill, rootLayoutStyle]} testID="interaction.panel">
         <PendingTaskHeader
@@ -255,8 +286,8 @@ function InteractionPanelContent({
         <View style={[styles.card, cardLayoutStyle]} testID="interaction.readOnlyCard">
           <Text style={styles.kind}>{t('interaction.panel.readOnlyKind')}</Text>
           <Text style={styles.cardTitle}>{t('interaction.panel.readOnlyTitle')}</Text>
-          <Text style={styles.body}>{readOnlyReason ?? t('sharedTask.waitingHost')}</Text>
-          {isSharedTaskPeer(deviceId) && <Text selectable style={styles.body}>{JSON.stringify(activeInteraction.request, null, 2)}</Text>}
+          <Text style={styles.body}>{t('sharedTask.waitingHost')}</Text>
+          <Text selectable style={styles.body}>{JSON.stringify(activeInteraction.request, null, 2)}</Text>
         </View>
       </View>
     );
@@ -344,7 +375,9 @@ function resolveActionCount(kind: string): number {
 
 type InteractionStyles = ReturnType<typeof makeStyles> | ReturnType<typeof makeCompanionStyles>;
 
-function cardStyle(styles: InteractionStyles, touchLayout: InteractionTouchLayout): StyleProp<ViewStyle> {
+function cardStyle(styles: InteractionStyles, touchLayout: InteractionTouchLayout, companion = false): StyleProp<ViewStyle> {
+  // Teammate cards (K1): one fixed padding and rhythm, independent of the task chat's density table.
+  if (companion) return [styles.card, { gap: spacing.sm, padding: spacing.lg }];
   return [
     styles.card,
     {
@@ -354,7 +387,9 @@ function cardStyle(styles: InteractionStyles, touchLayout: InteractionTouchLayou
   ];
 }
 
-function actionsStyle(styles: InteractionStyles, touchLayout: InteractionTouchLayout): StyleProp<ViewStyle> {
+function actionsStyle(styles: InteractionStyles, touchLayout: InteractionTouchLayout, companion = false): StyleProp<ViewStyle> {
+  // Teammate cards (K5): equal-width buttons; a full-width primary takes its own row.
+  if (companion) return [styles.actions, { gap: spacing.sm, justifyContent: 'flex-start', marginTop: spacing.sm }];
   return [
     styles.actions,
     {
@@ -363,10 +398,33 @@ function actionsStyle(styles: InteractionStyles, touchLayout: InteractionTouchLa
   ];
 }
 
+/**
+ * K5 on teammate cards: buttons share one row at equal widths. If any label would wrap at that width
+ * (long English / Japanese copy on a narrow card), the whole group switches once to one full-width
+ * button per row, so no pill ever grows to two lines.
+ */
+const CompanionActionsStackContext = createContext<{ stacked: boolean; onWrap(): void } | null>(null);
+// A width, not a percentage flexBasis: Fabric does not re-lay out a basis that changes from 0 to '100%'.
+const STACKED_COMPANION_BUTTON = { flexBasis: 'auto', width: '100%' } as const;
+
+function InteractionActions({ touchLayout, children }: { touchLayout: InteractionTouchLayout; children: ReactNode }) {
+  const styles = useInteractionStyles();
+  const companion = useContext(CompanionInteractionContext);
+  const [stacked, setStacked] = useState(false);
+  const stack = useMemo(() => ({ stacked, onWrap: () => setStacked(true) }), [stacked]);
+  if (!companion) return <View style={actionsStyle(styles, touchLayout)}>{children}</View>;
+  return <CompanionActionsStackContext.Provider value={stack}>
+    <View style={actionsStyle(styles, touchLayout, true)} testID={stacked ? 'interaction.actions.stacked' : undefined}>{children}</View>
+  </CompanionActionsStackContext.Provider>;
+}
+
 function resolveButtonLayoutStyle(
   touchLayout: InteractionTouchLayout,
   variant: 'primary' | 'secondary' | 'inline',
+  companion = false,
+  fullWidth = false,
 ): StyleProp<ViewStyle> {
+  if (companion) return { minHeight: COMPANION_BUTTON_HEIGHT, flexGrow: 1, flexBasis: fullWidth ? '100%' : 0 };
   return {
     minHeight: touchLayout.actionButtonMinHeight,
     minWidth: variant === 'inline' ? touchLayout.inlineButtonMinWidth : touchLayout.actionButtonMinWidth,
@@ -392,6 +450,8 @@ function PendingTaskHeader({
   const nextItem = presentation.items.length > 1
     ? presentation.items[(activeIndex + 1) % presentation.items.length]
     : null;
+  // Teammate chats: the card's own eyebrow says what is pending; keep only the queue and collapse controls.
+  if (companion && presentation.totalCount <= 1 && !onCollapse) return null;
   return (
     <View style={styles.taskHeaderWrap} testID="interaction.panelHeader">
       <View
@@ -405,7 +465,7 @@ function PendingTaskHeader({
       >
         <View style={styles.taskHeaderText}>
           {!companion && <Text style={styles.taskEyebrow}>{t('interaction.panel.pendingRequests')}</Text>}
-          <Text numberOfLines={1} style={styles.taskTitle}>{companion ? t('interaction.panel.pendingRequests') : presentation.title}</Text>
+          {!companion && <Text numberOfLines={1} style={styles.taskTitle}>{presentation.title}</Text>}
         </View>
         {presentation.totalCount > 1 ? (
           <InteractionTouchButton
@@ -584,6 +644,7 @@ function InteractionItem({
       : null;
     return (
       <PluginSetupCard
+        deviceId={deviceId}
         busy={busy}
         cancel={cancelDecision
           ? {
@@ -628,6 +689,7 @@ function PermissionCard({
     [i18nInstance.language, item.request],
   );
   const companion = useContext(CompanionInteractionContext);
+  const companionIdentity = useContext(CompanionIdentityContext);
   const { colors } = useTheme();
   const suggestions = sessionScopedPermissionSuggestions(item.request.suggestions);
   const requestId = readRequestId(item);
@@ -644,14 +706,63 @@ function PermissionCard({
     onDecision(decision);
   };
 
+  const denyButton = (
+    <ResolveButton
+      key="deny"
+      accessibilityLabel={t('interaction.permission.denyAccessibility')}
+      busy={busy}
+      label={t('interaction.permission.deny')}
+      onPress={() => onDecision(buildPermissionDecision('deny', { reason: 'User denied' }))}
+      requestId={requestId}
+      touchStyle={resolveButtonLayoutStyle(touchLayout, 'secondary', companion)}
+      testID="interaction.permission.denyButton"
+      variant="secondary"
+    />
+  );
+  const alwaysButton = permissionState.canShowAlwaysAllow ? (
+    <ResolveButton
+      key="always"
+      accessibilityLabel={t('interaction.permission.alwaysAllowAccessibility')}
+      armed={armedDecision === 'always-allow'}
+      busy={busy}
+      confirmLabel={t('interaction.permission.alwaysAllowConfirm')}
+      label={t('interaction.permission.alwaysAllow')}
+      onPress={() => requestDecision(
+        'always-allow',
+        buildPermissionDecision('allow', { permissionUpdates: suggestions }),
+      )}
+      requestId={requestId}
+      touchStyle={resolveButtonLayoutStyle(touchLayout, 'secondary', companion)}
+      testID="interaction.permission.alwaysAllowButton"
+      variant="secondary"
+    />
+  ) : null;
+  const allowButton = (
+    <ResolveButton
+      key="allow"
+      accessibilityLabel={t('interaction.permission.allowOnceAccessibility')}
+      armed={armedDecision === 'allow-once'}
+      busy={busy}
+      confirmLabel={t('interaction.permission.allowOnceConfirm')}
+      label={t('interaction.permission.allowOnce')}
+      onPress={() => requestDecision('allow-once', buildPermissionDecision('allow'))}
+      requestId={requestId}
+      // K5: with three choices the primary takes its own full-width row on top.
+      touchStyle={resolveButtonLayoutStyle(touchLayout, 'primary', companion, companion && !!alwaysButton)}
+      testID="interaction.permission.allowOnceButton"
+      variant="primary"
+    />
+  );
   return (
-    <View style={cardStyle(styles, touchLayout)} testID="interaction.permission.card">
+    <View style={cardStyle(styles, touchLayout, companion)} testID="interaction.permission.card">
       {companion ? <>
-        <View style={styles.companionCaption}>
+        {/* K2 / K3: kind as the eyebrow, then what it will do; who asks is the portrait the card hangs from. */}
+        <View style={styles.companionCaption} testID="interaction.permission.requester">
           <ShieldCheck size={iconSize.sm} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
-          <Text style={styles.kind}>{t('interaction.kinds.permission.label')}</Text>
+          <Text style={styles.kind}>{permissionState.title}</Text>
         </View>
-        <Text style={styles.cardTitle}>{permissionState.title}</Text>
+        <Text style={styles.cardTitle}>{presentation.description
+          || (companionIdentity ? t('interaction.companion.permissionRequest', { name: companionIdentity.name }) : permissionState.title)}</Text>
       </> : <View style={styles.compactCardHeader}>
         <Text style={styles.kind}>{t('interaction.permission.kind')}</Text>
         <Text numberOfLines={1} style={styles.compactCardTitle}>{permissionState.title}</Text>
@@ -663,47 +774,9 @@ function PermissionCard({
         riskWarningText={permissionState.riskWarningText}
         touchLayout={touchLayout}
       />
-      <View style={actionsStyle(styles, touchLayout)}>
-        <ResolveButton
-          accessibilityLabel={t('interaction.permission.denyAccessibility')}
-          busy={busy}
-          label={t('interaction.permission.deny')}
-          onPress={() => onDecision(buildPermissionDecision('deny', { reason: 'User denied' }))}
-          requestId={requestId}
-          touchStyle={resolveButtonLayoutStyle(touchLayout, 'secondary')}
-          testID="interaction.permission.denyButton"
-          variant="secondary"
-        />
-        {permissionState.canShowAlwaysAllow ? (
-          <ResolveButton
-            accessibilityLabel={t('interaction.permission.alwaysAllowAccessibility')}
-            armed={armedDecision === 'always-allow'}
-            busy={busy}
-            confirmLabel={t('interaction.permission.alwaysAllowConfirm')}
-            label={t('interaction.permission.alwaysAllow')}
-            onPress={() => requestDecision(
-              'always-allow',
-              buildPermissionDecision('allow', { permissionUpdates: suggestions }),
-            )}
-            requestId={requestId}
-            touchStyle={resolveButtonLayoutStyle(touchLayout, 'secondary')}
-            testID="interaction.permission.alwaysAllowButton"
-            variant="secondary"
-          />
-        ) : null}
-        <ResolveButton
-          accessibilityLabel={t('interaction.permission.allowOnceAccessibility')}
-          armed={armedDecision === 'allow-once'}
-          busy={busy}
-          confirmLabel={t('interaction.permission.allowOnceConfirm')}
-          label={t('interaction.permission.allowOnce')}
-          onPress={() => requestDecision('allow-once', buildPermissionDecision('allow'))}
-          requestId={requestId}
-          touchStyle={resolveButtonLayoutStyle(touchLayout, 'primary')}
-          testID="interaction.permission.allowOnceButton"
-          variant="primary"
-        />
-      </View>
+      <InteractionActions touchLayout={touchLayout}>
+        {companion && alwaysButton ? [allowButton, denyButton, alwaysButton] : [denyButton, alwaysButton, allowButton]}
+      </InteractionActions>
     </View>
   );
 }
@@ -730,23 +803,37 @@ function PermissionEvidence({
   const facts = Object.entries(fields).filter((entry): entry is [string, string] =>
     typeof entry[1] === 'string' && ['path', 'file_path', 'url', 'command', 'ghost_id', 'tool'].includes(entry[0]));
   const fullDetails = Object.keys(fields).length ? JSON.stringify(fields, null, 2) : presentation.code;
-  if (companion) return <View style={styles.companionEvidence} testID="interaction.permission.decisionSummary">
-    <View style={styles.companionFact}><Text style={styles.companionFactLabel}>{t('interaction.companion.operation')}</Text><Text selectable style={styles.companionFactValue}>{presentation.toolName}</Text></View>
-    {facts.map(([key, value]) => <View key={key} style={styles.companionFact}>
-      <Text style={styles.companionFactLabel}>{t(`interaction.companion.fields.${key}`)}</Text>
-      <Text selectable style={styles.companionFactValue}>{value}</Text>
-    </View>)}
-    {presentation.autoReviewUnavailable || presentation.description ? <Text style={styles.body}>{presentation.autoReviewUnavailable ? t('interaction.permission.autoReviewUnavailable') : presentation.description}</Text> : null}
-    {riskWarningText ? <View style={[styles.permissionRiskRow, armed && styles.permissionRiskRowArmed]} testID="interaction.permission.riskWarning">
-      <Text style={styles.permissionRiskLabel}>{t('interaction.permission.highRisk')}</Text><Text style={styles.permissionRiskText}>{riskWarningText}</Text>
-    </View> : null}
-    {facts.length > 0 ? <InteractionTouchButton accessibilityLabel={t('interaction.companion.details')} expanded={detailsOpen}
-      onPress={() => setDetailsOpen(value => !value)} style={styles.companionDetailsButton} testID="interaction.permission.detailsButton">
-      <Text style={styles.kind}>{t('interaction.companion.details')}</Text>
-      {detailsOpen ? <ChevronUp size={iconSize.sm} color={colors.textSecondary} /> : <ChevronDown size={iconSize.sm} color={colors.textSecondary} />}
-    </InteractionTouchButton> : null}
-    {(!facts.length || detailsOpen) && <ScrollView style={styles.permissionCodeBlock} nestedScrollEnabled><Text selectable style={styles.codeText}>{fullDetails}</Text></ScrollView>}
-  </View>;
+  if (companion) {
+    // K4: the one thing it will run or touch goes in a code block that scrolls sideways instead of
+    // breaking a path mid-word; the rest reads as short lines on the card's single left edge.
+    const primaryKey = ['command', 'url', 'file_path', 'path'].find((key) => facts.some(([name]) => name === key));
+    const primary = facts.find(([name]) => name === primaryKey)?.[1] ?? null;
+    const rest = facts.filter(([name]) => name !== primaryKey);
+    return <View style={styles.companionEvidence} testID="interaction.permission.decisionSummary">
+      {primary
+        ? <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.companionCode} contentContainerStyle={styles.companionCodeContent}
+          testID="interaction.permission.primaryFact">
+          <Text selectable style={styles.codeText}>{primary}</Text>
+        </ScrollView>
+        // No single fact to lead with: show the whole input, never the 500-character preview, so nothing
+        // the teammate will act on stays hidden behind a truncation.
+        : <ScrollView style={styles.permissionCodeBlock} nestedScrollEnabled><Text selectable style={styles.codeText}>{fullDetails}</Text></ScrollView>}
+      {rest.map(([key, value]) => <Text key={key} selectable style={styles.companionMeta}>
+        <Text style={styles.companionMetaLabel}>{`${t(`interaction.companion.fields.${key}`)}  `}</Text>{value}
+      </Text>)}
+      <Text style={styles.companionMeta}><Text style={styles.companionMetaLabel}>{`${t('interaction.companion.operation')}  `}</Text>{presentation.toolName}</Text>
+      {presentation.autoReviewUnavailable ? <Text style={styles.body}>{t('interaction.permission.autoReviewUnavailable')}</Text> : null}
+      {riskWarningText ? <View style={[styles.permissionRiskRow, armed && styles.permissionRiskRowArmed]} testID="interaction.permission.riskWarning">
+        <Text style={styles.permissionRiskLabel}>{t('interaction.permission.highRisk')}</Text><Text style={styles.permissionRiskText}>{riskWarningText}</Text>
+      </View> : null}
+      {facts.length > 0 ? <InteractionTouchButton accessibilityLabel={t('interaction.companion.details')} expanded={detailsOpen}
+        onPress={() => setDetailsOpen(value => !value)} style={styles.companionDetailsButton} testID="interaction.permission.detailsButton">
+        <Text style={styles.companionDetailsText}>{t('interaction.companion.details')}</Text>
+        {detailsOpen ? <ChevronUp size={iconSize.sm} color={colors.textSecondary} /> : <ChevronDown size={iconSize.sm} color={colors.textSecondary} />}
+      </InteractionTouchButton> : null}
+      {facts.length > 0 && detailsOpen ? <ScrollView style={styles.permissionCodeBlock} nestedScrollEnabled><Text selectable style={styles.codeText}>{fullDetails}</Text></ScrollView> : null}
+    </View>;
+  }
   return (
     <View
       style={[
@@ -837,7 +924,10 @@ function AskUserQuestionCard({
       skipNextQuestionSyncRef.current = false;
       return;
     }
-    const next = selectionFromAnswer(current, answers[answerKey(current)]);
+    const next = selectionFromAnswer(
+      { ...current, options: visibleAskOptions(current.options) },
+      answers[answerKey(current)],
+    );
     setSelectedLabels(next.selectedLabels);
     setCustomInput(next.customInput);
     setShowCustomInput(next.showCustomInput);
@@ -856,11 +946,11 @@ function AskUserQuestionCard({
 
   if (questions.length === 0) {
     return (
-      <View style={cardStyle(styles, touchLayout)} testID="interaction.ask.card">
+      <View style={cardStyle(styles, touchLayout, companion)} testID="interaction.ask.card">
         <Text style={styles.kind}>{t('interaction.panel.awaitingAnswer')}</Text>
         <Text style={styles.askQuestion} testID="interaction.ask.question">{presentation.title}</Text>
         <Text style={styles.askMetaCaption}>{presentation.summary.detail}</Text>
-        <View style={actionsStyle(styles, touchLayout)}>
+        <InteractionActions touchLayout={touchLayout}>
           <ResolveButton
             accessibilityLabel={t('interaction.panel.continueAccessibility')}
             busy={busy}
@@ -870,18 +960,18 @@ function AskUserQuestionCard({
               onDecision(buildAskUserQuestionDecision({}));
             }}
             requestId={requestId}
-            touchStyle={resolveButtonLayoutStyle(touchLayout, 'primary')}
+            touchStyle={resolveButtonLayoutStyle(touchLayout, 'primary', companion)}
             testID="interaction.ask.continueButton"
             variant="primary"
           />
-        </View>
+        </InteractionActions>
       </View>
     );
   }
   if (!current) return null;
 
   const isLast = currentIndex === questions.length - 1;
-  const options = current.options ?? [];
+  const options = visibleAskOptions(current.options);
   const isMulti = current.multiSelect === true;
   const currentAnswerKey = answerKey(current);
   const existingAnswer = answers[currentAnswerKey];
@@ -905,7 +995,7 @@ function AskUserQuestionCard({
       draftCompletedRef.current = true;
       // Optimistic dismissal unmounts this form immediately. Save the final
       // choice now so a refused/lost receipt can restore exactly this draft.
-      const finalSelection = selectionFromAnswer(current, answer);
+      const finalSelection = selectionFromAnswer({ ...current, options }, answer);
       saveAskUserDraft(requestId, {
         answers: nextAnswers, currentIndex,
         customInput: finalSelection.customInput,
@@ -953,7 +1043,7 @@ function AskUserQuestionCard({
   };
 
   return (
-    <View style={cardStyle(styles, touchLayout)} testID="interaction.ask.card">
+    <View style={cardStyle(styles, touchLayout, companion)} testID="interaction.ask.card">
       {/* 收起入口统一在队列头(PendingTaskHeader),卡内不再自持一份 collapsed state:
           两套状态时页面级那份被卡片 key 变化冲掉,收起会自己弹回来。 */}
       <View style={styles.compactCardHeader}>
@@ -1028,7 +1118,7 @@ function AskUserQuestionCard({
                 autoFocus
                 onChangeText={setCustomInput}
                 placeholder={t('interaction.panel.customAnswerPlaceholder')}
-                placeholderTextColor={colors.textTertiary}
+                placeholderTextColor={colors.textPlaceholder}
                 style={styles.inlineInput}
                 testID="interaction.ask.customInput"
                 value={customInput}
@@ -1071,7 +1161,7 @@ function AskUserQuestionCard({
             autoFocus
             onChangeText={setCustomInput}
             placeholder={t('interaction.panel.answerInput')}
-            placeholderTextColor={colors.textTertiary}
+            placeholderTextColor={colors.textPlaceholder}
             style={styles.inlineInput}
             testID="interaction.ask.textInput"
             value={customInput}
@@ -1079,7 +1169,7 @@ function AskUserQuestionCard({
         </View>
       )}
 
-      <View style={actionsStyle(styles, touchLayout)}>
+      <InteractionActions touchLayout={touchLayout}>
         {currentIndex > 0 ? (
           <InteractionTouchButton
             accessibilityLabel={t('interaction.panel.previous')}
@@ -1093,7 +1183,7 @@ function AskUserQuestionCard({
             }}
             style={[
               styles.secondaryButton,
-              resolveButtonLayoutStyle(touchLayout, 'secondary'),
+              resolveButtonLayoutStyle(touchLayout, 'secondary', companion),
             ]}
             testID="interaction.ask.previousButton"
           >
@@ -1106,7 +1196,7 @@ function AskUserQuestionCard({
           label={t('interaction.panel.skip')}
           onPress={() => advance('')}
           requestId={requestId}
-          touchStyle={resolveButtonLayoutStyle(touchLayout, 'secondary')}
+          touchStyle={resolveButtonLayoutStyle(touchLayout, 'secondary', companion)}
           testID="interaction.ask.skipButton"
           variant="secondary"
         />
@@ -1118,7 +1208,7 @@ function AskUserQuestionCard({
             label={isLast ? t('interaction.panel.submit') : t('interaction.panel.next')}
             onPress={submitMulti}
             requestId={requestId}
-            touchStyle={resolveButtonLayoutStyle(touchLayout, 'primary')}
+            touchStyle={resolveButtonLayoutStyle(touchLayout, 'primary', companion)}
             testID="interaction.ask.submitButton"
             variant="primary"
           />
@@ -1130,12 +1220,12 @@ function AskUserQuestionCard({
             label={isLast ? t('interaction.panel.submit') : t('interaction.panel.next')}
             onPress={submitSingle}
             requestId={requestId}
-            touchStyle={resolveButtonLayoutStyle(touchLayout, 'primary')}
+            touchStyle={resolveButtonLayoutStyle(touchLayout, 'primary', companion)}
             testID="interaction.ask.submitButton"
             variant="primary"
           />
         )}
-      </View>
+      </InteractionActions>
     </View>
   );
 }
@@ -1326,7 +1416,7 @@ function PlanReviewCard({
                   multiline
                   onChangeText={setPlanText}
                   placeholder={t('interaction.panel.planEditorPlaceholder')}
-                  placeholderTextColor={colors.textTertiary}
+                  placeholderTextColor={colors.textPlaceholder}
                   style={[
                     styles.planEditor,
                     fillAvailableHeight
@@ -1435,7 +1525,7 @@ function PlanReviewCard({
               multiline
               onChangeText={setFeedback}
               placeholder={t('interaction.panel.planFeedbackPlaceholder')}
-              placeholderTextColor={colors.textTertiary}
+              placeholderTextColor={colors.textPlaceholder}
               style={styles.planFeedbackInput}
               testID="interaction.plan.feedbackInput"
               value={feedback}
@@ -1480,27 +1570,29 @@ function PlanReviewCard({
  * 手机端做不了配置动作(Secret 输入与 OAuth 必须留在被控端,见
  * docs/dev-rules/plugin-security-and-authoring.md §4 与 desktop 的
  * interactionResolveOrigin),所以这张卡的价值全在「看懂」:哪个插件、卡在哪一步、
- * 为什么失败、回电脑端要做什么。动作只有取消。
+ * 为什么失败、回电脑端要做什么。可进入目标电脑的远程桌面或取消请求。
  */
-export function PluginSetupMessageContent({ request, busy, onCancel }: {
-  request: PendingInteraction['request']; busy: boolean; onCancel?: () => void;
+export function PluginSetupMessageContent({ request, busy, onCancel, deviceId }: {
+  request: PendingInteraction['request']; busy: boolean; onCancel?: () => void; deviceId?: string;
 }) {
   const { width } = useWindowDimensions();
   const { t } = useTranslation();
   return <CompanionInteractionContext.Provider value>
-    <PluginSetupCard item={{ request }} requestId={typeof request.requestId === 'string' ? request.requestId : null}
+    <PluginSetupCard deviceId={deviceId} item={{ request }} requestId={typeof request.requestId === 'string' ? request.requestId : null}
       busy={busy} touchLayout={buildInteractionTouchLayout({ screenWidth: width, actionCount: 1 })}
       cancel={onCancel ? { label: t('interaction.panel.cancelRequest'), accessibilityLabel: t('interaction.panel.cancelRequestAccessibility'), onPress: onCancel } : null} />
   </CompanionInteractionContext.Provider>;
 }
 
 function PluginSetupCard({
+  deviceId,
   busy,
   cancel,
   item,
   requestId,
   touchLayout,
 }: {
+  deviceId?: string;
   busy: boolean;
   cancel: { accessibilityLabel: string; label: string; onPress(): void } | null;
   item: PendingInteraction;
@@ -1508,6 +1600,7 @@ function PluginSetupCard({
   touchLayout: InteractionTouchLayout;
 }) {
   const styles = useInteractionStyles();
+  const companion = useContext(CompanionInteractionContext);
   const { t } = useTranslation();
   const presentation = useMemo(
     () => buildRemotePluginSetupPresentation(item.request),
@@ -1515,7 +1608,7 @@ function PluginSetupCard({
   );
   const title = presentation.ghostName ?? t('interaction.kinds.plugin_setup.title');
   return (
-    <View style={cardStyle(styles, touchLayout)} testID="interaction.pluginSetup.card">
+    <View style={cardStyle(styles, touchLayout, companion)} testID="interaction.pluginSetup.card">
       <View style={styles.compactCardHeader}>
         {presentation.iconDataUrl ? (
           <Image
@@ -1558,22 +1651,40 @@ function PluginSetupCard({
       {presentation.terminal ? null : (
         <Text style={styles.pluginSetupFootnote}>{t('interaction.pluginSetup.completeOnDesktop')}</Text>
       )}
+      {!presentation.terminal && deviceId && !isSharedTaskPeer(deviceId) ? (
+        <PluginSetupRemoteDesktopButton deviceId={deviceId} busy={busy} />
+      ) : null}
       {cancel ? (
-        <View style={actionsStyle(styles, touchLayout)}>
+        <InteractionActions touchLayout={touchLayout}>
           <ResolveButton
             accessibilityLabel={cancel.accessibilityLabel}
             busy={busy}
             label={cancel.label}
             onPress={cancel.onPress}
             requestId={requestId}
-            touchStyle={resolveButtonLayoutStyle(touchLayout, 'secondary')}
+            touchStyle={resolveButtonLayoutStyle(touchLayout, 'secondary', companion)}
             testID="interaction.pluginSetup.cancelButton"
             variant="secondary"
           />
-        </View>
+        </InteractionActions>
       ) : null}
     </View>
   );
+}
+
+/** Navigation only: authorization and credentials stay in the computer's own UI. */
+function PluginSetupRemoteDesktopButton({ deviceId, busy }: { deviceId: string; busy: boolean }) {
+  const push = useGuardedPush();
+  const devices = useRemoteDeviceIdentity();
+  const styles = useInteractionStyles();
+  const { t } = useTranslation();
+  const deviceName = devices.find(device => device.deviceId === deviceId)?.name || deviceId;
+  const label = t('interaction.pluginSetup.remoteDesktop');
+  return <InteractionTouchButton accessibilityLabel={label} disabled={busy}
+    style={styles.primaryButton} testID="interaction.pluginSetup.remoteDesktop"
+    onPress={() => push({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } })}>
+    <Text style={styles.primaryText}>{label}</Text>
+  </InteractionTouchButton>;
 }
 
 /** 运行中的步骤:与桌面同语义,用 Heart Orange 表示「正在进行」。 */
@@ -1653,12 +1764,13 @@ function UnsupportedCard({
   touchLayout: InteractionTouchLayout;
 }) {
   const styles = useInteractionStyles();
+  const companion = useContext(CompanionInteractionContext);
   const { t } = useTranslation();
   // 未知类型只能靠 request 预览交底;整段一次限行,不按行各自限行(每行各自
   // numberOfLines={6} 会把总可见行数放大成 6 × 行数,#530 review)。
   const summaryText = contentToPreview(request);
   return (
-    <View style={cardStyle(styles, touchLayout)} testID="interaction.unsupported.card">
+    <View style={cardStyle(styles, touchLayout, companion)} testID="interaction.unsupported.card">
       <Text style={styles.kind}>{t('interaction.panel.unsupportedKind')}</Text>
       <Text style={styles.cardTitle}>{message}</Text>
       {summaryText ? <Text style={styles.body} numberOfLines={6}>{summaryText}</Text> : null}
@@ -1692,6 +1804,8 @@ function ResolveButton({
   variant: 'primary' | 'secondary' | 'inline';
 }) {
   const styles = useInteractionStyles();
+  const companion = useContext(CompanionInteractionContext);
+  const stack = useContext(CompanionActionsStackContext);
   const presentation = buildInteractionResolveActionPresentation({
     armed,
     busy,
@@ -1723,11 +1837,13 @@ function ResolveButton({
       accessibilityHint={presentation.disabledReason ?? undefined}
       busy={busy}
       disabled={presentation.disabled}
+      hitSlop={companion ? COMPANION_BUTTON_HIT_SLOP : undefined}
       onPress={onPress}
-      style={[buttonStyle, disabledButtonStyle, touchStyle]}
+      style={[buttonStyle, disabledButtonStyle, touchStyle, stack?.stacked && STACKED_COMPANION_BUTTON]}
       testID={testID}
     >
-      <Text style={[textStyle, disabledTextStyle]}>{presentation.label}</Text>
+      <Text onTextLayout={stack && !stack.stacked ? (event) => { if (event.nativeEvent.lines.length > 1) stack.onWrap(); } : undefined}
+        style={[textStyle, disabledTextStyle]}>{presentation.label}</Text>
     </InteractionTouchButton>
   );
 }
@@ -1741,6 +1857,7 @@ function InteractionTouchButton({
   onPress,
   selected = false,
   expanded,
+  hitSlop,
   style,
   testID,
 }: {
@@ -1749,6 +1866,7 @@ function InteractionTouchButton({
   busy?: boolean;
   children: ReactNode;
   disabled?: boolean;
+  hitSlop?: PressableProps['hitSlop'];
   onPress?: () => void;
   selected?: boolean;
   expanded?: boolean;
@@ -1769,6 +1887,7 @@ function InteractionTouchButton({
         ...(expanded !== undefined ? { expanded } : {}),
       }}
       disabled={interactionDisabled}
+      hitSlop={hitSlop}
       onPress={interactionDisabled ? undefined : onPress}
       style={({ pressed }) => [
         style,
@@ -1784,10 +1903,21 @@ function InteractionTouchButton({
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   companionCaption: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  companionRequester: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  companionRequesterAvatar: { flexShrink: 0 },
+  companionRequesterText: { flex: 1, minWidth: 0, gap: 2 },
   companionEvidence: { gap: spacing.sm },
+  companionHungRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  companionHungAvatar: { flexShrink: 0, marginTop: 2 },
+  companionHungContent: { flex: 1, minWidth: 0 },
+  companionCode: { flexGrow: 0, backgroundColor: colors.chatCodeSurface, borderRadius: radius.control },
+  companionCodeContent: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  companionMeta: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  companionMetaLabel: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  companionDetailsText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   companionFact: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
-  companionFactLabel: { width: 64, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.body },
-  companionFactValue: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.body },
+  companionFactLabel: { width: 64, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  companionFactValue: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   companionDetailsButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, alignSelf: 'flex-start' },
   root: {
     borderBottomColor: colors.border,
@@ -1818,14 +1948,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   taskEyebrow: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
   },
   taskTitle: {
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
     minWidth: 0,
   },
@@ -1841,6 +1973,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   taskCountText: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   taskCollapseButton: {
@@ -1858,6 +1991,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   taskCollapseText: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   card: {
@@ -1889,14 +2023,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   kind: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
   },
   pageText: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     flexShrink: 0,
   },
   cardTitle: {
@@ -1938,12 +2074,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     flexShrink: 0,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
   },
   collapsedInteractionTitle: {
     color: colors.textPrimary,
     flexShrink: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
     minWidth: 0,
   },
@@ -1951,11 +2089,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     flexShrink: 0,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.regular,
   },
   body: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   pluginSetupIcon: {
@@ -1969,8 +2108,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   pluginSetupGroupHint: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    fontWeight: fontWeight.regular,
     lineHeight: lineHeight.caption,
   },
   pluginSetupStep: {
@@ -1993,33 +2132,35 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     // 颜色随 phase 内联(已完成 statusReady / 进行中 statusAccent / 其余 textTertiary)。
     flexShrink: 0,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   pluginSetupStepBody: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   pluginSetupStepAction: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   pluginSetupStepError: {
     color: colors.errorText,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   pluginSetupFootnote: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   askHeaderKind: {
     color: colors.textTertiary,
     flex: 1,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
   },
   askQuestion: {
@@ -2061,7 +2202,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   permissionEvidenceDetail: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   permissionToolPill: {
@@ -2070,6 +2211,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     flexShrink: 1,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
     maxWidth: 112,
     overflow: 'hidden',
@@ -2080,7 +2222,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderTopColor: colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     paddingTop: spacing.sm,
   },
@@ -2099,11 +2241,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   permissionRiskLabel: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   permissionRiskText: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   },
   permissionCodeBlock: {
@@ -2163,11 +2306,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   optionTitle: {
     color: colors.textPrimary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
   optionDescription: {
     color: colors.textSecondary,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     marginTop: spacing.xs,
   },
@@ -2175,6 +2319,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textSecondary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontStyle: 'italic',
   },
   customInputRow: {
@@ -2218,6 +2363,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   inlineButtonText: {
     color: colors.ctaText,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   planReviewStack: {
@@ -2257,6 +2403,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
     minWidth: 0,
   },
@@ -2281,12 +2428,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flexShrink: 0,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
   planViewerHint: {
     color: colors.textTertiary,
     flex: 1,
-    fontSize: typeScale.caption,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
     minWidth: 0,
   },
   planToolbar: {
@@ -2325,8 +2474,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   planOutlineLabel: {
     color: colors.textTertiary,
-    fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.semibold,
     paddingHorizontal: spacing.xs,
   },
   planOutlineChip: {
@@ -2347,6 +2497,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   planOutlineChipText: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
     maxWidth: 144,
   },
@@ -2356,7 +2507,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   planOutlineMore: {
     color: colors.textTertiary,
     fontSize: typeScale.caption,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
     paddingHorizontal: spacing.sm,
   },
   planPreview: {
@@ -2375,8 +2527,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   planText: {
     color: colors.textPrimary,
-    fontSize: typeScale.caption,
-    lineHeight: lineHeight.code,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
   },
   planEditor: {
     backgroundColor: colors.surface,
@@ -2385,7 +2537,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     color: colors.textPrimary,
     fontSize: typeScale.caption,
-    lineHeight: lineHeight.code,
+    lineHeight: lineHeight.bodySmall,
     minHeight: 176,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
@@ -2426,6 +2578,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.regular,
     minWidth: 0,
   },
@@ -2440,6 +2593,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textTertiary,
     flex: 1,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     minWidth: 0,
   },
   planFeedbackEditorRow: {
@@ -2486,6 +2640,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   primaryText: {
     color: colors.ctaText,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   primaryTextDisabled: {
@@ -2503,6 +2658,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   secondaryText: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     fontWeight: fontWeight.medium,
   },
   pressed: {
@@ -2518,17 +2674,23 @@ const makeCompanionStyles = (colors: ThemeColors) => {
   return {
     ...base,
     root: { ...base.root, borderBottomWidth: 0, paddingHorizontal: 0, paddingVertical: spacing.sm },
-    taskTitle: { ...base.taskTitle, color: colors.textSecondary, fontSize: typeScale.caption },
+    taskTitle: { ...base.taskTitle, color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
     taskCollapseButton: { ...base.taskCollapseButton, borderWidth: 0, paddingHorizontal: spacing.sm },
-    kind: { ...base.kind, textTransform: 'none' as const, color: colors.textSecondary },
-    askHeaderKind: { ...base.askHeaderKind, textTransform: 'none' as const, color: colors.textSecondary },
+    kind: { ...base.kind, textTransform: 'none' as const, color: colors.textSecondary, fontWeight: fontWeight.medium },
+    askHeaderKind: { ...base.askHeaderKind, textTransform: 'none' as const, color: colors.textSecondary, fontWeight: fontWeight.medium },
     compactCardHeader: { ...base.compactCardHeader, minHeight: 0, flexWrap: 'wrap' as const },
     compactCardTitleWrap: { ...base.compactCardTitleWrap, flexDirection: 'column' as const, alignItems: 'flex-start' as const },
     compactCardTitle: { ...base.compactCardTitle, flex: 0, flexShrink: 1 },
-    permissionCodeBlock: { ...base.permissionCodeBlock, backgroundColor: colors.surface, borderRadius: radius.control, borderWidth: 0 },
+    permissionCodeBlock: { ...base.permissionCodeBlock, backgroundColor: colors.chatCodeSurface, borderRadius: radius.control, borderWidth: 0 },
+    codeText: { ...base.codeText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+    // K5: 38pt buttons (hitSlop to 44), 15/20 labels centered; secondary is a quiet chip fill without a border.
+    primaryButton: { ...base.primaryButton, minHeight: COMPANION_BUTTON_HEIGHT, paddingHorizontal: spacing.md },
+    secondaryButton: { ...base.secondaryButton, minHeight: COMPANION_BUTTON_HEIGHT, paddingHorizontal: spacing.md, borderWidth: 0, backgroundColor: colors.surfaceChip },
+    primaryText: { ...base.primaryText, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, textAlign: 'center' as const },
+    secondaryText: { ...base.secondaryText, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, textAlign: 'center' as const },
     permissionRiskRow: { ...base.permissionRiskRow, borderRadius: radius.control },
-    optionList: { ...base.optionList, borderWidth: 0, overflow: 'visible' as const, gap: spacing.sm },
-    optionRow: { ...base.optionRow, borderRadius: radius.control, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+    // K8: options read as one grouped list inside the card.
+    optionList: { ...base.optionList, borderRadius: radius.control },
     inlineInput: { ...base.inlineInput, borderRadius: radius.pill },
     inlineInputWide: { ...base.inlineInputWide, borderRadius: radius.pill },
     planEditor: { ...base.planEditor, borderRadius: radius.control },

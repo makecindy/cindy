@@ -76,7 +76,9 @@ describe('mobile message list container', () => {
     expect(source).toContain('if (token.key !== itemKeyRef.current) return;');
     expect(source).toContain('maxTextRunInlineFragments: ANDROID_SELECTABLE_TEXT_RUN_MAX_INLINE_FRAGMENTS');
     expect(listSource).toContain('onFirstVisibleItemChanged={handleFirstVisibleItemChangedRef.current}');
-    expect(listSource).not.toContain('onViewableItemsChanged=');
+    // Companion receipts observe visible rows through a ref, without broadcasting cell visibility.
+    // Ordinary tasks retain cell-local viewability and have no list-level receipt observer.
+    expect(listSource).toContain('onViewableItemsChanged={companion ? handleCompanionViewableItems : undefined}');
     // 上滑加载:LegendList 近顶阈值触发自动预取(替代手搓的滚动 metric 判定)。
     expect(listSource).toContain('onStartReached={handleStartReached}');
     // 自动预取必须是电平判定(shouldAutoLoadEarlier + 多时机重评估),不许退回只吃 onStartReached
@@ -212,7 +214,8 @@ describe('mobile message list container', () => {
     const focusEffectStart = source.indexOf('// 深链/搜索:滚到指定消息');
     const focusEffectEnd = source.indexOf('// 新消息红点', focusEffectStart);
     const focusEffectSource = source.slice(focusEffectStart, focusEffectEnd);
-    expect(focusEffectSource).toContain('if (!listRevealed) return;');
+    // Entry/focus ordering is executed in messageEntryPositioning.test.ts:
+    // a linked row now positions before reveal, without a preceding tail seek.
     expect(focusEffectSource).toContain('userScrollForOlderRef.current = true');
     expect(focusEffectSource).toContain('lastAutoLoadEarlierKeyRef.current = null');
   });
@@ -280,7 +283,24 @@ describe('mobile message list container', () => {
     expect(bubbleSource).toContain('useRecyclingState<{');
     expect(bubbleSource).toContain('useRecyclingState<string | null>(null)');
     expect(source).toContain('const [contentWidth, setContentWidth] = useRecyclingState(0);');
-    expect(source).toContain('const [resolveState, setResolveState] = useRecyclingState<MediaThumbnailResolveState>');
+    // 普通列表仍默认使用回收态；只有群聊的普通 ScrollView 注入 React 状态。
+    // 同时守住逐层传递，避免嵌套缩略图漏接后恢复原来的群聊崩溃。
+    for (const component of ['AttachmentStrip', 'MediaPreview', 'PendingAttachmentImage']) {
+      const componentStart = source.indexOf(`function ${component}(`);
+      const propsEnd = source.indexOf('}: {', componentStart);
+      expect(componentStart).toBeGreaterThan(-1);
+      expect(propsEnd).toBeGreaterThan(componentStart);
+      expect(source.slice(componentStart, propsEnd)).toContain('usePreviewState = useRecyclingState');
+    }
+    expect(source).toContain('const [resolveState, setResolveState] = usePreviewState<MediaThumbnailResolveState>');
+    expect(source).toContain('const [failedLocalUris, setFailedLocalUris] = usePreviewState<readonly string[]>([]);');
+    expect(source.match(/const \[intrinsicSize, setIntrinsicSize\] = usePreviewState</g)).toHaveLength(2);
+    expect(source.match(/usePreviewState=\{usePreviewState\}/g)).toHaveLength(2);
+    expect(source).not.toContain('usePreviewState={useState}');
+    const groupSource = readFileSync(
+      resolve(process.cwd(), 'src/session/BotGroupMessageAttachments.tsx'), 'utf8',
+    );
+    expect(groupSource).toContain('usePreviewState={useState}');
     expect(source).toContain('const [recycledLocalExpanded, setRecycledLocalExpanded] = useRecyclingState(defaultExpanded);');
     expect(expandedStateSource).toContain('blockId ? store.subscribe(listener) : () => {}');
   });

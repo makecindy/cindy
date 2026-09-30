@@ -49,10 +49,9 @@ export function isNativeSocialProviderSupported(
 
 /**
  * Resolves whether a configured native provider should be offered on this
- * device. WeChat's iOS flow requires the companion app, so App Review builds
- * hide that entry when the SDK cannot find WeChat. Android keeps the entry and
- * reports an unavailable provider after a tap, matching the platform's normal
- * install flow.
+ * device. The current login UI offers WeChat only on Mainland China iOS after
+ * the SDK confirms that WeChat is installed. Android credential acquisition
+ * remains available to callers, but the login UI does not advertise it.
  */
 export async function isNativeSocialProviderAvailable(
   provider: SocialProvider,

@@ -19,6 +19,7 @@ vi.mock('@/lib/logger', () => ({
 }));
 
 import { PrRefsProvider, usePrRefsForSession, usePrActions, usePrStatuses } from '../PrRefsContext';
+import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
 
 function RefCount() {
   return <div>{usePrRefsForSession('session-local').length}</div>;
@@ -74,6 +75,24 @@ function RemoteRefs() {
 
 describe('remote task association invalidation', () => {
   afterEach(cleanup);
+  it('suppresses PR reads while the device circuit is open, then permits a fresh read on recovery', async () => {
+    mocks.listAllPrRefs.mockResolvedValue([]);
+    const invoke = vi.fn(async () => []);
+    window.electronAPI = {
+      gitContext: { listAllPrRefs: mocks.listAllPrRefs, onPrRefsChanged: mocks.onPrRefsChanged },
+      deviceLink: { invoke },
+    } as any;
+    unresponsiveDevicesStore.apply('home', true);
+    try {
+      render(<PrRefsProvider><RemoteRefs /></PrRefsProvider>);
+      await act(async () => {});
+      fireEvent.click(screen.getByRole('button', { name: 'remote:0' }));
+      expect(invoke).not.toHaveBeenCalled();
+      unresponsiveDevicesStore.apply('home', false);
+      fireEvent.click(screen.getByRole('button', { name: 'remote:0' }));
+      await waitFor(() => expect(invoke).toHaveBeenCalledOnce());
+    } finally { unresponsiveDevicesStore.clearAll(); }
+  });
   it.each([false, true])(
     'refreshes empty refs without waiting for TTL (in flight: %s)',
     async (inFlight) => {

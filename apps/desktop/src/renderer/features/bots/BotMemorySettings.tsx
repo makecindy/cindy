@@ -448,12 +448,19 @@ function MemoryEditor({
   const [state, setState] = useState<SaveState>('idle');
   const [latest, setLatest] = useState<BotMemoryDetail | null>(null);
   const saved = useRef(initial);
+  // `draft` is what saving may send; `shown` also holds uncommitted IME text,
+  // which joins the draft only once composition ends.
   const draft = useRef({ title: initial.title, body: initial.body });
+  const shown = useRef(draft.current);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlight = useRef<Promise<boolean> | null>(null);
   const blocked = useRef(false);
+  const composing = useRef(false);
+  const fieldsRef = useRef<HTMLDivElement>(null);
 
-  const invalid = !title.trim() || !body.trim() || bodyTooLong(body);
+  const titleMissing = !title.trim();
+  const bodyMissing = !body.trim();
+  const invalid = titleMissing || bodyMissing || bodyTooLong(body);
   // 与主进程保存时的规范化一致,避免只差空白的标题永远算作未保存。
   const isDirty = () =>
     normalizeTitle(draft.current.title) !== saved.current.title ||
@@ -536,13 +543,24 @@ function MemoryEditor({
   }, [editorRef, settle]);
 
   const edit = (patch: Partial<{ title: string; body: string }>) => {
-    draft.current = { ...draft.current, ...patch };
+    shown.current = { ...shown.current, ...patch };
     if (patch.title !== undefined) setTitle(patch.title);
     if (patch.body !== undefined) setBody(patch.body);
+    if (composing.current) return;
+    draft.current = shown.current;
     if (blocked.current) return;
     setState('idle');
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => void save(), SAVE_DEBOUNCE_MS);
+  };
+  const composition = {
+    onCompositionStart: () => {
+      composing.current = true;
+    },
+    onCompositionEnd: () => {
+      composing.current = false;
+      edit({});
+    },
   };
 
   // 冲突时最新内容可能没读到;两个选择都先确保拿到它,读不到就留在原处。
@@ -561,6 +579,7 @@ function MemoryEditor({
     blocked.current = false;
     saved.current = next;
     draft.current = { title: next.title, body: next.body };
+    shown.current = draft.current;
     setTitle(next.title);
     setBody(next.body);
     onSaved(next);
@@ -602,35 +621,45 @@ function MemoryEditor({
           </div>
         </div>
       ) : null}
-      <label className="block">
-        <span className="mb-1.5 ml-1 block text-12 text-[var(--text-secondary)]">
-          {t('bots.memory.titleLabel')}
-        </span>
-        <Input
-          size="md"
-          value={title}
-          maxLength={BOT_MEMORY_TITLE_MAX}
-          onChange={(value) => edit({ title: value })}
-          error={!title.trim()}
-        />
-      </label>
-      <label className="block">
-        <span className="mb-1.5 ml-1 block text-12 text-[var(--text-secondary)]">
-          {t('bots.memory.bodyLabel')}
-        </span>
-        <Textarea
-          rows={10}
-          value={body}
-          onChange={(value) => edit({ body: value })}
-          error={!body.trim() || bodyTooLong(body)}
-          className="min-h-[220px] resize-y text-14 leading-[1.75]"
-        />
-      </label>
-      {bodyTooLong(body) ? (
-        <p className="ml-1 text-12 text-[var(--text-danger)]" role="alert">
-          {t('bots.memory.tooLong')}
-        </p>
-      ) : null}
+      <div ref={fieldsRef} className="flex flex-col gap-3">
+        <label className="block">
+          <span className="mb-1.5 ml-1 block text-12 text-[var(--text-secondary)]">
+            {t('bots.memory.titleLabel')}
+          </span>
+          <Input
+            size="md"
+            value={title}
+            maxLength={BOT_MEMORY_TITLE_MAX}
+            onChange={(value) => edit({ title: value })}
+            {...composition}
+            error={titleMissing}
+          />
+        </label>
+        {titleMissing ? (
+          <p className="-mt-1.5 ml-1 text-12 text-[var(--text-danger)]" role="alert">
+            {t('bots.memory.titleRequired')}
+          </p>
+        ) : null}
+        <label className="block">
+          <span className="mb-1.5 ml-1 block text-12 text-[var(--text-secondary)]">
+            {t('bots.memory.bodyLabel')}
+          </span>
+          <Textarea
+            rows={10}
+            value={body}
+            onChange={(value) => edit({ body: value })}
+            {...composition}
+            error={bodyMissing || bodyTooLong(body)}
+            aria-invalid={bodyMissing || bodyTooLong(body) || undefined}
+            className="min-h-[220px] resize-y text-14 leading-[1.75]"
+          />
+        </label>
+        {bodyMissing || bodyTooLong(body) ? (
+          <p className="-mt-1.5 ml-1 text-12 text-[var(--text-danger)]" role="alert">
+            {t(bodyMissing ? 'bots.memory.bodyRequired' : 'bots.memory.tooLong')}
+          </p>
+        ) : null}
+      </div>
       <div className="mt-1 flex items-center justify-end gap-3">
         {state === 'saving' ? (
           <span
@@ -657,7 +686,10 @@ function MemoryEditor({
           disabled={state === 'conflict'}
           onClick={() =>
             void (async () => {
-              if (invalid && isDirty()) return;
+              if (invalid && isDirty()) {
+                fieldsRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
+                return;
+              }
               if (await save()) onDone();
             })()
           }

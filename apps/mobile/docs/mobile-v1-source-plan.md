@@ -1,5 +1,7 @@
 # Cindy Mobile V1 Source-Based Implementation Plan
 
+> 自动化范围修订（2026-09-27）：手机已移除旧 Scheduler 管理页和 Routines，包括「所有任务」下拉及伙伴资料入口；不再把查看、创建、编辑或运行规则列为手机交付、后续计划或验收项。PC 管理与执行、已有任务数据和运行历史保留。本文所有旧自动化管理实现、原型验证和计划记录仅作历史背景，不代表待恢复功能；当前边界以[伙伴运行时合同](../../../docs/product-rules/cindy-bots-runtime.md)为准。
+
 > 日期: 2026-06-18
 > 目标: 按桌面版源码逐项对齐手机版远程控制能力。
 > 边界: V1 做完除完整协作 / Orca 编排外的单会话远程控制能力;协作模式 V1 只识别、只读、安全降级。
@@ -43,7 +45,7 @@ V1 不应做:
 - 完整 Orca lead / worker split 或 focus 编排。
 - 手机端完整文件编辑器和 dirty conflict 处理。
 - 手机端直接触发被控电脑 reveal/open/exec 这类远程执行入口。
-- project automation 的高级管理闭环,除非后续专门补移动端设计。
+- Scheduler / Routines 管理已退出手机范围，后续不安排高级编辑器。
 
 ### 1.1 Shared Core 架构修正
 
@@ -150,7 +152,7 @@ V1 不应做:
 | P0 | Composer 改成桌面 `ChatInput` 的 icon-first 触控版 | 附件/更多、输入框、语音、发送/停止按桌面顺序和语义渲染,语音在发送左侧。 | 不使用“附件 / 语音 / 发送”大文字按钮;不新增桌面没有的主层说明。 | `sessionComposer*` 单测锁顺序和图标化;typecheck;Maestro source anchor;截图检查。 |
 | P1 | Pending / queue / controls sheet 降噪 | 权限、提问、计划、队列、设置进入 sheet,只显示当前必须处理的信息。 | 不把桌面右栏/hover/tooltip 内容展开到主层;Issue confirm 不做手机表单。 | shared interaction/queue/control tests + iOS 主要路径截图。 |
 | P1 | 文件、payload、diff 只读承载 | 消息内 file/diff/media chip 进入 full-screen viewer 或只读文件页。 | V1 不做完整文件编辑器、dirty/conflict/save。 | file/payload shared fixture、viewer smoke、source anchor。 |
-| P2 | 自动化基础查看和运行 | schedules 列表、run history、run now、pause/resume、基础创建/编辑。 | 不先做 project automation 高级管理闭环。 | schedule shared tests、mobile flow smoke。 |
+| 已移除 | 手机自动化管理 | 不提供 schedules / routines 管理入口；保留已有任务和运行历史。 | PC 管理功能保留。 | 资源过滤及旧链接跳转回归；不再运行已删除的管理流程。 |
 | P2 | Android 不埋坑 | 所有布局模型平台无关;保留 Android profile/doctor/dry-run。 | iOS 未验收前不把 Android baseline 作为阻断项。 | Android dry-run/profile 通过,不写 iOS-only 协议和布局假设。 |
 
 #### 1.4.3 每个界面的执行模板
@@ -234,7 +236,7 @@ V1 不应做:
    聊天正文必须尽量在当前可见文本上直接选择部分内容。弹窗、整条复制、长按菜单只能是辅助,不能成为唯一复制路径。
 
 5. **主要窗口优先**
-   先把首页和会话页打磨到能长期使用,再做文件、自动化、协作、Android baseline 等外围能力。Android 暂时可以简单,但 shared model 和布局不能写死 iOS-only 假设。
+   先把首页和会话页打磨到能长期使用,再做文件、协作、Android baseline 等外围能力。Android 暂时可以简单,但 shared model 和布局不能写死 iOS-only 假设。
 
 #### 1.6.2 Home 主窗口目标
 
@@ -413,7 +415,7 @@ P1 在 P0 稳定后进入,目标是让主窗口的二级能力可用但不喧宾
 
 P2 继续后移:
 
-- automations 的创建/编辑闭环。
+- 不恢复已移除的 Scheduler / Routines 管理入口。
 - 完整文件编辑器、dirty conflict、远程 reveal/open/exec。
 - 完整 Orca 协作编排。
 - Android 视觉 baseline。Android 先保留 profile、doctor、dry-run 和不写死 iOS-only 假设。
@@ -492,7 +494,7 @@ P2 继续后移:
 | Computer Detail | desktop sidebar filter/search/bulk affordances + remote device state | 二级/调试页。只承载设备级状态、不可用原因、撤权/离线提示、同步失败和高级调试;不再作为打开会话的必经首页。 |
 | Session Detail | `CCAgentSessionView` | 单会话完整控制:消息流、输入、队列、pending interaction、会话设置、媒体、diff、fork/rewind。 |
 | New Session | `NewMakerDraftRoute` + `ChatInput` | 远程项目/对话工作区、agent/model/effort/permission/fast、extra dirs、首条消息、附件、语音。 |
-| Automations | `SchedulerPage` | 查看和基础管理自动化计划;V1B 补创建/编辑普通 schedule。 |
+| Automations（已移除） | `SchedulerPage` 仅保留桌面管理 | 手机无管理页，旧链接仅跳转。 |
 | Settings | desktop settings remote/device/login | 登录态、手机设备名、relay 状态、调试信息、退出登录。 |
 
 ### 3.2 手机会话详情结构
@@ -1044,6 +1046,8 @@ P2 继续后移:
 
 ## 12. 自动化 / Scheduler
 
+> 历史设计：手机版已移除自动化与例行任务管理入口及其 Maestro 流程，保留运行历史。当前测试命令以 [README](../README.md) 为准。
+
 ### 12.1 桌面事实
 
 `SchedulerPage` 的关键语义:
@@ -1108,8 +1112,6 @@ V1 暂缓:
 - 当前已有 `scheduleModel.test` 覆盖 sort/filter/summary/run folding。
 - 当前已有 `scheduleFormModel.test` 覆盖 create/update/template input serialization。
 - 当前已有 `scheduleDelete.test` 覆盖生成会话 keep/archive/delete 删除策略。
-- 当前已有 `automations.yaml` 覆盖 run now、pause/resume、open session。
-- 当前已有 `automations_create_edit.yaml` 覆盖 template gallery、create/edit、delete dialog。
 
 ## 13. 文件页和选项卡
 
@@ -1282,7 +1284,7 @@ pnpm --filter mobile test -- <对应 mobile adapter 测试>
 - issue confirm。
 - media image/video/audio。
 - fork/rewind。
-- automations run now。
+- 旧自动化链接跳转，routines 集合不展示且不可调用管理动作。
 - device offline。
 - revoked。
 - reconnect rehydrate。
@@ -1297,7 +1299,7 @@ pnpm --filter mobile test -- <对应 mobile adapter 测试>
 - Message: user、assistant、tool collapsed/expanded、todo、work group、system。
 - Payload: media、diff、tool result、file preview、Mermaid。
 - Interactions: permission、ask、plan、issue。
-- Automations: list、detail、form。
+- 已移除的 Automations 管理页不再纳入视觉矩阵。
 
 检查点:
 
@@ -1344,7 +1346,7 @@ V1 验收线:
 | 7 | Media/diff/payload | 图片/视频/音频/diff/tool payload/Mermaid 完成。 |
 | 8 | Fork/rewind | fork、preview、commit、回填 draft 完成。 |
 | 9 | New session | project/dialogue、remote dir、agent settings、首条消息、附件/语音完成。 |
-| 10 | Automations V1B | list/detail/run/pause/resume/delete/create/edit 普通 schedule 已完成基础闭环;fresh/persistent/bound 运行会话编辑第一刀已对齐桌面语义;project automation 完整编辑仍按 V2 级别继续对齐。 |
+| 10 | Automations V1B（历史交付，已退役） | 手机管理页及入口已移除，不再继续补齐 project automation 编辑；PC 功能、已有任务及运行历史保留。 |
 | 11 | File preview V1B | message file chip、diff 当前文件按需读取、独立 `/files/[sessionId]` 只读远程文件页、目录浏览、手动文件路径预览、路径复制、oversize/not_found/forbidden/read_failed 文案、PDF/drawio 降级卡片和 `file_preview.yaml` / `file_browser.yaml` 自动化锚点已完成;真实 native Maestro 点击运行待 CLI 可用后补。 |
 | 12 | Collaboration safe degrade | lead/worker 识别、会话只读、pending interaction 只读、queue 只读、session controls 写操作禁用已完成;真实 Orca fixture 点击流待 Maestro 可用后补。 |
 | 13 | E2E/visual/perf | web smoke、Maestro 静态锚点、本地 relay preflight、native doctor、local full preflight、1000 message 和 1000 session 性能门禁已跑通;`ios-iphone-17-pro-expo-go` 当前已接受 12 张视觉基线并可严格 hash 校验,包括 `visual-settings` 和 `visual-session-payload`;Android 设备 profile 后补。 |
@@ -1416,7 +1418,7 @@ Shared core 迁移并不是额外阶段,而是 1-13 每个阶段的实现约束:
 1. **先迁共享语义**:schedule list/run overview、schedule form serialization、delete policy、device-link channel/error contract、allowlist drift fixture、shared fixture baseline、raw desktop-like message parity、schedule/file raw payload parity 已迁到 `packages/maker-shared`;后续新增业务语义仍先进入 shared core。
 2. **再重构移动端壳层**:保留 React Native 原生壳,但重新组织一级入口、详情页层级、sheet/full-screen route 和 debug surface。所有正式页面都只消费 shared model 或 typed mobile adapter,不直接解析桌面 raw payload。
 3. **然后做会话页视觉和触控 pass**:按 `docs/design-rules/cindy-design-system.md` 的黑白灰、无阴影、12px container、pill interactive、克制字重整理 header、消息、工具、队列、pending interaction、composer 和状态提示。手机端只因触控和窄屏调整布局,不改变桌面业务语义。
-4. **最后补功能缺口和调优**:在 UI 层级稳定后,再补 project automation 完整编辑、worktree 创建设计、Orca V2、native share extension、真实 OSS 媒体播放 fixture 这些后续项。
+4. **最后补功能缺口和调优**:在 UI 层级稳定后,再补 worktree 创建设计、Orca V2、native share extension、真实 OSS 媒体播放 fixture 这些后续项。
 
 当前下一批具体任务按产品化重构排序:
 
@@ -1426,13 +1428,13 @@ Shared core 迁移并不是额外阶段,而是 1-13 每个阶段的实现约束:
 | P0 | Home/sidebar parity baseline | `PinnedSection`、`ProjectsSection`、`DialogueSection`、`ProjectNode`、`SessionItem`、`VendorIcon`、`formatSidebarTime` | 首页继续作为全局主窗口样板:保留 Projects / Chats / Pinned 层级、一行 session row、桌面同源图标、右侧短时间、attention dot 和真实可用 action;设备筛选 chip 只做筛选,不把“选电脑”变成一级流程。 | iOS 首页截图与桌面侧栏源码规则逐项对齐;不出现 Relay 成功态、debug 说明、session subtitle/preview/detail 这类桌面侧栏主层没有的信息。 |
 | P0 | shared core 第一轮收口 | `MessageStream`、`PendingQueuePanel`、`PermissionPrompt`、`ScheduleFormDialog`、`WorkdirBrowseRoute`、device-link dispatch | 已完成 automation/schedule、device-link contract、fixture baseline、raw message parity、schedule/file raw payload parity;后续新增业务语义仍先进入 shared model。 | shared build/test、mobile typecheck/test、desktop parity、web smoke、Maestro 静态检查、local full check-only 全部可跑。 |
 | P0 | shared core 剩余抽取边界 | tool input diff/summary projection、tool_result media extraction、attachment -> file/media payload projection、message normalize content preview / stable sort / tool_use parse / tool_result pairing、`MessageStream` search/window、`ChatInput` capability projection、scheduler event projection 和 payload preview/severity 第一刀已完成 | 只抽纯模型:后续若出现新的排序、状态优先级、disabled reason、payload body presentation 或 decision serialization,继续先进入 shared。纯触控尺寸、SafeArea、WebView、Audio、ImagePicker、SecureStore 留在 mobile。 | 每个抽取都有 shared fixture;mobile 保留 re-export 兼容;桌面消费前至少有 parity test。 |
-| P1 | mobile shell 信息架构 | `App.tsx`、`router.tsx`、`CCAgentFeatureLayout`、desktop sidebar/settings | 重排 Home/Computer Detail/Session/New/Automations/Files/Settings;debug/local test 移入 dev panel;正式路径只显示真实远程控制任务。 | web smoke 和 Maestro anchor 可区分正式路径和 debug 路径;首次进入不出现本地联调说明、mock 表单或成功态连接噪音。 |
-| P1 | 重要主窗口产品化 | `CCAgentFeatureLayout`、`NewMakerDraftRoute`、`SchedulerPage`、`WorkdirBrowseRoute`、desktop sidebar/session list | 以首页为样板逐一重做 Computer Detail、New Session、Session Detail、Files、Automations、Settings 的主层信息密度。每个主窗口只保留桌面同级主层信息;其它状态进入 sheet/full-screen/detail。 | iOS 主要路径窗口在 320/393 宽度下无挤压、无多余卡片嵌套、testID 不断;每个窗口有降噪清单和截图;Android 只消费同一布局模型和 dry-run profile。 |
+| P1 | mobile shell 信息架构 | `App.tsx`、`router.tsx`、`CCAgentFeatureLayout`、desktop sidebar/settings | 重排 Home/Computer Detail/Session/New/Files/Settings;debug/local test 移入 dev panel;正式路径只显示真实远程控制任务。 | web smoke 和 Maestro anchor 可区分正式路径和 debug 路径;首次进入不出现本地联调说明、mock 表单或成功态连接噪音。 |
+| P1 | 重要主窗口产品化 | `CCAgentFeatureLayout`、`NewMakerDraftRoute`、`SchedulerPage`、`WorkdirBrowseRoute`、desktop sidebar/session list | 以首页为样板逐一重做 Computer Detail、New Session、Session Detail、Files、Settings 的主层信息密度。每个主窗口只保留桌面同级主层信息;其它状态进入 sheet/full-screen/detail。 | iOS 主要路径窗口在 320/393 宽度下无挤压、无多余卡片嵌套、testID 不断;每个窗口有降噪清单和截图;Android 只消费同一布局模型和 dry-run profile。 |
 | P1 | RN 视觉 primitives | `docs/design-rules/cindy-design-system.md`、桌面按钮/卡片/状态 chip 语义 | 在 `apps/mobile` 建轻量 touch primitives:screen header、status strip、action pill、segmented control、bottom sheet container。只共享语义,不共享桌面 React 组件。 | iPhone SE 宽度按钮文字不挤压;所有新增颜色可回指到 mobile token;不引入阴影和装饰性渐变。 |
 | P1 | session detail shell | `CCAgentSessionView`、`SessionContentHeader`、`RemoteSessionBanner`、`TopRightChipStack` | 固定 header、connection strip、message list、bottom composer/interaction 四层;controls/queue/search/files/diff/context/cost 转为 action strip + sheet/full-screen。 | idle、running、pending、queue、offline、revoked 六个状态截图无重叠;消息列表不因打开 sheet 被卸载。 |
 | P1 | composer/pending 触控重构 | `ChatInput`、`PendingQueuePanel`、`PermissionPrompt`、`AskUserQuestionPrompt`、`PlanViewerCard`;`IssueConfirmCard` desktop-only | composer 保持底部主入口;pending interaction 优先占用底部面板;queue 和 controls 用 sheet;resolve 操作防重复提交;Issue Confirm 只提示回桌面端处理。 | permission/ask/plan/queue/send/stop/resume 都有 mock host flow 或 unit;键盘弹出后最后消息仍可见。 |
 | P2 | message/payload 视觉重构 | `UserMessage`、`AssistantMessage`、`AgentActionsBlock`、`TodoListCard`、`ToolPayloadLightbox` | 按 shared render item 渲染;tool/work/todo 默认折叠;payload、diff、media、Mermaid、file preview 全屏查看。 | 1000 message fixture 可滚动;长 tool result 和大 diff 不撑爆消息列表;媒体关闭释放中转对象。 |
-| P2 | feature parity hardening | `NewMakerDraftRoute`、`SessionControlsPanel`、`SchedulerPage`、`WorkdirBrowseRoute`、`MessageActionBar` | UI 稳定后补 new session、session controls、automations、file preview、fork/rewind 的细节缺口;不在粗糙壳层上继续加入口。fork/rewind 已先把 preview 面板触控布局补成可测 mobile shell 模型。 | 每个缺口至少一个 unit 或 E2E;桌面协议 shape 用 shared fixture 或 desktop parity 锁定。 |
+| P2 | feature parity hardening | `NewMakerDraftRoute`、`SessionControlsPanel`、`SchedulerPage`、`WorkdirBrowseRoute`、`MessageActionBar` | UI 稳定后补 new session、session controls、file preview、fork/rewind 的细节缺口;不在粗糙壳层上继续加入口。fork/rewind 已先把 preview 面板触控布局补成可测 mobile shell 模型。 | 每个缺口至少一个 unit 或 E2E;桌面协议 shape 用 shared fixture 或 desktop parity 锁定。 |
 | P2 | release-grade gate | desktop remote runner、mock host、Maestro、visual baseline、performance fixture | iOS profile 先固定为主回归;Android 保留 profile/doctor/dry-run 防坑,最终 release 前补同级 native flow / visual baseline。 | 用户复测前脚本给出明确通过/失败原因;不能把手工点测当主回归。 |
 
 当前执行进展和下一步:
@@ -1450,7 +1452,7 @@ Shared core 迁移并不是额外阶段,而是 1-13 每个阶段的实现约束:
 11. **重要主窗口优先第二十四刀已完成**:`mainWindowLayout.ts` 留在 mobile shell,按 screen width + window kind 输出 summary、toolbar、content、block、list、empty、inline action 的 padding/gap/min-size。设备列表、设备详情、新建会话、文件浏览、自动化窗口已接入;summary 指标支持小屏换行,文件路径输入在窄屏自动堆叠,空态和主内容边距统一;第二刀新增 `MainWindowMetric` / `MainWindowEmptyState`,把设备、新建会话、自动化和文件页的重复 metric / empty UI 收敛成移动端 primitives;第三刀新增 `MainWindowActionGroup`,自动化详情把 Run now 放主操作、暂停/恢复与编辑放次级操作、删除放危险操作,并用 `automations.detailActions` 锚点锁住层级;第四刀继续把新建会话底部提交区、文件浏览目录操作区和选中文件预览操作区接入 `MainWindowActionGroup`,新增 `newSession.actions`、`files.directoryActions`、`files.previewActions` 容器锚点;第五刀把设备详情顶部 toolbar、批量选择操作和批量确认操作接入 `MainWindowActionGroup`,新增 `deviceDetail.toolbarActions`、`deviceDetail.selectionHeaderActions`、`deviceDetail.bulkPrimaryActions`、`deviceDetail.bulkDangerActions`、`deviceDetail.bulkConfirmActions` 容器锚点,并给 toolbar/选择头补 compact density;第六刀把自动化空态创建、表单保存/取消、删除确认和暂停确认接入 `MainWindowActionGroup`,新增 `automations.emptyActions`、`automations.form.actions`、`automations.delete.actions`、`automations.pause.actions` 容器锚点;第七刀把设备列表顶部不可用设备切换和空态重新同步接入 `MainWindowActionGroup`,新增 `devices.filterActions`、`devices.emptyActions` 容器锚点;第八刀把新建会话远程目录浏览打开/刷新/上级/使用当前目录接入 `MainWindowActionGroup`,新增 `newSession.remoteBrowseActions`、`newSession.remoteBrowsePanelActions` 容器锚点;第九刀把文件页当前目录复制和路径前往动作改用 `MainWindowActionButton`,新增 `files.locationActions`、`files.pathInputActions` 容器锚点,并继续消费 `mainWindowLayout` 的 inline action 尺寸;第十刀把自动化运行历史打开会话动作改用 `MainWindowActionButton`,新增 `automations.runActions` 容器锚点;第十一刀把设备详情 summary 的自动化入口改用 `MainWindowActionButton`,新增 `deviceDetail.automationActions` 容器锚点;第十二刀新增 `MainWindowOptionButton` / `MainWindowRowButton`,设备详情筛选/分组/session row/自动化子 row 和新建会话最近项目/运行选项/远程目录行已接入统一 pressed / selected / expanded / disabled accessibility state;第十三刀把文件页面包屑/文件行和自动化 segment/schedule row 继续接入同一套 option/row primitive;第十四刀新增 `MainWindowCardButton`,设备列表行、自动化删除单选、模板刷新、模板卡片和 boolean toggle 已接入统一 pressed / selected / checked / disabled accessibility state;第十五刀把全局 `ConnectionBanner` 重新同步入口接入 busy-aware `MainWindowActionButton`;第十六刀把登录页 Feishu 登录、debug entry、dev modal 关闭、mock 登录、callback 兜底和 Web 关闭入口接入同一 action primitive;第十七刀把 `ScreenHeader` 右侧 action 接入 compact `MainWindowActionButton`,并删除旧 `PillButton`;第十八刀让主窗口 action/option/row/card primitive 把缺少 handler 的入口也视为 disabled,统一不可交互事实源;第十九刀给可点击 `MainWindowMetric` 补 selected accessibility state;第二十刀把 `ScreenHeader` 左侧返回入口抽成 `ScreenBackButton`,统一 pressed / disabled / accessibility state;第二十一刀把自动化表单的运行会话三态接入 shared schedule form model,并用当前设备会话选项 + ID 输入兜底承载 bound;第二十二刀让自动化列表/详情消费 shared schedule summary 显示新会话/持续会话/绑定会话,并新增 automations.runSessionDetail 锚点;第二十三刀让运行历史消费 shared run summary 显示耗时 meta 和会话短标识,并新增 automations.runMeta 锚点;第二十四刀让运行历史行消费 shared action capability,补齐打开会话、标已读、无会话异常重跑和删除确认,并新增 `automations.markRunReadButton`、`automations.restartRunButton`、`automations.deleteRunButton`、`automations.runDelete*` 锚点。路由和远程调用仍走现有 typed transport;run action 容器从 `automations.runSessionActions` 收敛为 `automations.runActions`。
 12. **Session route action primitive 第四刀已完成**:`app/sessions/[sessionId].tsx` 新增局部 `RouteActionButton` / `SheetBackdropButton`,composer 附件/语音/停止/发送、搜索上一条/下一条/加载更早、未同步重新同步、历史消息展开和 settings/queue/search backdrop 已统一 pressed / disabled / busy / selected accessibility state。第二刀补齐 `ActionPill` 的 selected/disabled accessibility state,并把 queue/search sheet header 的关闭入口接入 `RouteActionButton`;第三刀让 `RouteActionButton` 在 busy 期间不可重复触发;第四刀让 `ActionPill` 和 `RouteActionButton` 在缺少 handler 时也进入 disabled 状态。业务语义仍来自 shared composer/search/window/session operation model,route 只负责触控反馈、sheet 关闭和 native 输入能力。
 13. **Android baseline 后置**:Android 当前不作为 C/D 阶段阻断项;只保留 `android-pixel-expo-go` profile、doctor 和 dry-run 防坑。等 iOS 高标准验收后,再采集独立 Android baseline 目录并提升为发布前门禁。
-14. **最后补剩余 parity 缺口**:在 shell 和视觉基线稳定后继续补 project automation、share extension、Orca V2 和真实 OSS 媒体 fixture;这些不能插队到 C1 前面。
+14. **最后补剩余 parity 缺口**:在 shell 和视觉基线稳定后继续补 share extension、Orca V2 和真实 OSS 媒体 fixture;这些不能插队到 C1 前面。
 
 ### 16.2 更新后的下一批执行批次
 
@@ -1463,7 +1465,7 @@ Shared core 迁移并不是额外阶段,而是 1-13 每个阶段的实现约束:
 | C0 | Shared UI model increment | message normalize 已完成第一刀:`messageNormalize.ts` 输出 desktop content preview、stable key、createdAt stable sort、tool_use parse、tool_result by-id / legacy adjacency pairing 和 Orca 空通信结果隐藏;payload summary/body/preview/tool input diff/summary projection/tool_result media extraction/attachment projection 已完成第一刀:`payloadSummary.ts` 输出 payload kind/title/subtitle/copy/open target、body presentation、preview severity、primary action、compact meta、ToolCallCard 同款 summary、Edit/Write/MultiEdit diff projection、tool_result media extraction、attachment -> file/media payload projection、diff/media/file/mermaid/text 构造/格式化;message presentation 已完成第一刀:`messagePresentation.ts` 输出 bubble density/role、desktop-style fold header、todo progress/summary/status、错误识别和 diff 计数,不再产出 mobile-only badge/signals 字段;system card presentation 已完成第一刀:`systemCard.ts` 输出 help/context/cost/pwd/status/compact/cmd 的行、标题和正文模型;message window/search 已完成第一刀:`messageWindow.ts` / `messageSearch.ts` 输出滚动锚点、新消息提示、加载更早 action、搜索命中、preview 和 index wrap;capability projection 已完成第一刀:`agentCapabilities.ts` 输出远端能力归一、运行选项和跨模型切换确认;session action strip 已完成第一刀:`sessionActionStrip.ts` / `sessionIdentity.ts` 输出 header、state chips、action labels、disabled reason、协作/Worktree/Dialogue 标识;device list 已完成第一刀:`deviceList.ts` 输出可控性分类、排序、平台标签、可见性、header/filter/empty/toggle presentation;session list / bulk selection 已完成第一刀:`sessionList.ts` / `sessionSelection.ts` 输出筛选、搜索、分组、自动化组行、列表上下文、空状态和批量 patch projection;scheduler event projection 已完成第一刀:`scheduleEvents.ts` 输出 list/runs/session-index/unread refresh intent;mobile payload viewer、消息流、system card、controls、new session、action strip、device list、session list、schedule event store 和 payload preview 入口已消费。 | shared fixture + mobile adapter test;桌面消费前至少有 desktop parity test 或 fixture 对齐。 |
 | C1 | Message/payload polish | 第二刀进行中:payload viewer header 统一使用 shared summary/preview,并提供复制 payload 内容 / 安全打开直接 URL 的触控动作;`payloadHeaderLayout.ts` 已把复制/打开/关闭/图库翻页的窄屏堆叠规则做成平台无关 mobile layout model;header 内复制、打开、上一张、下一张和关闭动作已统一到局部 `PayloadHeaderActionButton`;payload body 使用 shared media/file/text/Mermaid presentation;message bubble 使用 shared density/role;message action bar 已把 copy/more/fork/rewind 的 36px 触控尺寸和小屏宽度纳入 `messageActions.ts` 状态;tool row 使用 shared diff/媒体/输出/错误信号;todo card 使用 shared progress/active/summary/default expanded;work group 固定 `message.workGroupToggle` 锚点。`messageContentLayout.ts` 已把 markdown code/table/list、Mermaid preview、附件图片/file chip、媒体 preview、diff preview、tool result preview 的宽高/gap/行数转成 screen width 模型;媒体、文件、diff、tool result 和 Mermaid source 打开详情动作已统一到局部 `MessageContentOpenButton`,保留原 payload 语义和 testID。payload media viewer 已有 `visual_session_payload.yaml` 视觉 flow,后续 JDK 17 就绪后补 hash baseline。下一步在 iOS visual baseline 保护下继续做 diff/file/media/Mermaid body 的触控细节和视觉截图采集。 | 1000 message fixture 可滚动;长 tool result 和大 diff 不撑爆列表;payload header 在 320/360/393 宽度下不挤压标题或动作;payload header 原 action testID 保持稳定;message action bar 小屏可触达;markdown/附件/媒体 preview 在 320/393 宽度下不出现固定宽度挤压;消息内容打开详情入口保留 `message.mediaPreviewButton` / `message.filePreviewButton*` / `message.diffPreviewButton` / `message.toolPayloadButton` / `message.mermaidSourceButton` 锚点;媒体关闭释放中转对象;视觉 baseline hash 不被无意改动。 |
 | C2 | Composer/pending/queue polish | 当前批次。先把 slot priority、send/stop/queue disabled reason、inflight guard、pending resolve 防重复提交和 controls sheet 入口状态整理成 shared model 或 typed mobile adapter;再调整键盘、附件、语音、slash/@、pending wizard、queue sheet、controls sheet 的触控节奏。`composerTouchLayout.ts` 已进入第二刀,把附件快捷动作 gap、远程路径行堆叠/gap、添加按钮宽度和 composer 横向 padding 纳入平台无关布局模型;`queueTouchLayout.ts` 已进入队列触控第二刀,把五动作队列行在 320/393 宽度下的 36px 可触达尺寸、compact gap 和容器 padding 锁成纯模型;`QueuePanel` 已新增局部 `QueueTouchButton`,统一 resume/retry/clear/error/edit/save/move/steer/remove/toggle 的 pressed/disabled accessibility 表达;`sessionControlsTouchLayout.ts` 已进入 controls sheet 第二刀,把 overview / tabs / inputs / actions / remote-dir browser 的窄屏节奏锁成纯模型,第三刀补齐 controls inline 入口、tabs、远程目录进入行和连接 banner sync 的 action primitive / accessibility state;`interactionTouchLayout.ts` 已进入 pending interaction 第二刀,把 permission/ask/plan/issue 动作行、Ask 输入行、plan preview 和 interaction queue chip 的窄屏节奏锁成纯模型;`InteractionPanel` 已新增局部 `InteractionTouchButton`,统一 Ask 选项、Plan 模式/目录/反馈、Issue 类型和 resolve 按钮的 pressed/disabled/selected accessibility 表达。 | send/stop/resume/permission/ask/plan/issue/queue/attachment/voice/controls 都有 unit 或 mock host flow;键盘弹起时最后消息仍可见;附件 picker 在 320/384/393 宽度下不挤压;队列五动作、controls sheet 和 pending interaction 主要按钮在 320/393 宽度下不出现过小触控目标;重复点击不会产生重复 resolve/enqueue。 |
-| D1 | Feature parity hardening | 回到桌面源码矩阵,补 new session、session controls、automations、file preview、fork/rewind 的体验细节。 | 每个缺口至少一个 unit、desktop parity 或 E2E flow;不靠人工点测兜底。 |
+| D1 | Feature parity hardening | 回到桌面源码矩阵,补 new session、session controls、file preview、fork/rewind 的体验细节。 | 每个缺口至少一个 unit、desktop parity 或 E2E flow;不靠人工点测兜底。 |
 | E1 | Release-grade gate | iOS 先固定 native profile、visual baseline、reconnect、1000 message/session、日志/截图/残留进程输出;Android 等 iOS 验收后补同级 baseline。 | 用户复测前脚本先给出通过/失败原因;手工点测只做产品体验确认,不做主回归。 |
 
 ### 16.3 C/D/E 当前执行拆解
@@ -1499,7 +1501,7 @@ C 阶段只做会话页产品化和必要的 shared model 增量,不插入新的
 - 不再让手机主层展示比桌面同级主层更多的信息;额外说明、debug、成功态、长 meta、预览和高级状态必须进入 sheet/detail/debug surface。
 - 不再用近似图标、字符图标或临时图标替代桌面同源图标;自定义图标需要复用桌面 path 或明确加入 mobile icon source。
 - 不再放没有真实 handler 的按钮;桌面 hover action 未迁移为手机真实动作前,默认隐藏或进入后续清单。
-- 不先做 project automation 高级编辑、share extension、完整 Orca、完整文件编辑器。
+- 不先做 share extension、完整 Orca、完整文件编辑器。
 - 不因为某个页面“能点通”就算完成;必须有对应的 source parity、fixture、视觉或 E2E 证据。
 - 不要求桌面 UI 同步重写,但 shared model 新增时必须标明桌面来源和后续 parity 入口。
 

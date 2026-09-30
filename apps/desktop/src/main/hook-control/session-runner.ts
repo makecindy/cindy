@@ -123,6 +123,8 @@ import {
   registerHookInteraction,
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
+import { getResolvedMainLocale } from '../i18n.js';
+import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 
 type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
 
@@ -1045,7 +1047,7 @@ export function createMakerHookSessionRunner(deps: {
       // 渲染层展示的用户消息保持来源 IM 原话。逐 turn 追加固定文本,教模型
       // 用 xdt-file 引用回传文件而非误用 cindy_feishu_bot(规则 9,实踩背景
       // 见 outbound.ts 的常量注释)。
-      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}`;
+      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`;
       let replacementHandoff: string | null = null;
       if (req.isNew && req.replacementOfSessionId && req.source?.im === 'slack') {
         try {

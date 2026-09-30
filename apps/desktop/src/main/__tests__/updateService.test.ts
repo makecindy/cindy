@@ -326,6 +326,101 @@ describe('installation version repair scope', () => {
   });
 });
 
+describe('agent-facing managed app update check', () => {
+  it('checks version metadata without staging a patch or arming auto-relaunch', async () => {
+    // Auto-relaunch is enabled. The normal background check gets a same-version
+    // manifest so this test isolates any patch staged by the Agent check.
+    fetchManifest.mockResolvedValueOnce(updateManifest()).mockResolvedValue(updateManifest('0.0.64'));
+    const service = await freshUpdateService('darwin');
+    try {
+      service.initUpdateService();
+      expect(await service.checkAppUpdateForAgent()).toMatchObject({
+        status: 'available', currentVersion: '0.0.64', targetVersion: '0.0.65',
+      });
+      expect(download).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(65_000);
+      expect(download).not.toHaveBeenCalled();
+      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(appQuit).not.toHaveBeenCalled();
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('reports an already staged update while offline or when the manifest changes', async () => {
+    fetchManifest.mockResolvedValue(updateManifest());
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'update');
+      return { path: targetPath, size: 123 };
+    });
+    const service = await freshUpdateService('darwin');
+    try {
+      expect(await service.checkForUpdate()).toBe('ready');
+      expect(download).toHaveBeenCalledTimes(1);
+      fetchManifest.mockResolvedValueOnce(null).mockResolvedValue(updateManifest('0.0.64'));
+      for (let i = 0; i < 2; i += 1) {
+        expect(await service.checkAppUpdateForAgent()).toMatchObject({
+          status: 'ready', currentVersion: '0.0.64', targetVersion: '0.0.65',
+        });
+      }
+      expect(fetchManifest).toHaveBeenCalledTimes(1);
+      expect(download).toHaveBeenCalledTimes(1);
+      expect(spawnProcess).not.toHaveBeenCalled();
+      expect(appQuit).not.toHaveBeenCalled();
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('rejects a translocated macOS app without staging a patch', async () => {
+    fetchManifest.mockResolvedValue(updateManifest());
+    const service = await freshUpdateService('darwin');
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'available' });
+    appIsInApplicationsFolder.mockReturnValue(false);
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'unsupported' });
+    expect(download).not.toHaveBeenCalled();
+    service.stopUpdateService();
+  });
+
+  it('reports an unsupported Linux installation before fetching an update', async () => {
+    const service = await freshUpdateService('linux');
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'unsupported' });
+    expect(fetchManifest).not.toHaveBeenCalled();
+    checkDebianManagedInstallation.mockReturnValue({ status: 'managed' });
+    expect(await service.checkAppUpdateForAgent()).not.toMatchObject({ status: 'unsupported' });
+    service.stopUpdateService();
+  });
+
+  it('reports missing Windows updater prerequisites before fetching an update', async () => {
+    const service = await freshUpdateService('win32');
+    checkWindowsUpdaterPrerequisites.mockReturnValue({ satisfied: false, missingFiles: ['vcruntime140.dll'] });
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'unsupported' });
+    expect(fetchManifest).not.toHaveBeenCalled();
+    service.stopUpdateService();
+  });
+
+  it('reports an unsupported development build and an up-to-date release', async () => {
+    const service = await freshUpdateService('darwin');
+    isDev.mockReturnValue(true);
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'unsupported' });
+    isDev.mockReturnValue(false);
+    fetchManifest.mockResolvedValue(updateManifest('0.0.64'));
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'no_installable_update' });
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
+
+  it('does not advertise an invalid or asset-free manifest as an installable update', async () => {
+    const service = await freshUpdateService('darwin');
+    fetchManifest.mockResolvedValueOnce(updateManifest('not-semver'));
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'manifest_failed' });
+    fetchManifest.mockResolvedValueOnce({ app: { version: '0.0.65' } });
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({ status: 'no_installable_update' });
+    expect(download).not.toHaveBeenCalled();
+    service.stopUpdateService();
+  });
+});
+
 describe('binary version checks after an applied update', () => {
   beforeEach(() => {
     readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });

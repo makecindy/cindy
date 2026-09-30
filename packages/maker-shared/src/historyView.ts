@@ -8,6 +8,17 @@ export function isHistoryViewUnavailable(error: unknown): boolean {
   return /CHANNEL_NOT_ALLOWED|UNSUPPORTED_CAPABILITY|not registered|No handler/i.test(String(error));
 }
 
+/** Visible file candidates, independent of the folded tool body that produced them. */
+export interface HistoryFileArtifact {
+  path: string;
+  source: 'tool' | 'command';
+  createdAt: string;
+  toolUseId?: string;
+  ready?: boolean;
+  /** Preserve file-card suppression when the editing tool body is deferred. */
+  exclude?: 'command' | 'all';
+}
+
 export interface HistoryMessageSource {
   id: string;
   clientId: string;
@@ -17,6 +28,8 @@ export interface HistoryMessageSource {
   rowid?: number;
   toolUseId?: string | null;
   agentMeta?: object | null;
+  /** Host outline only; transferred in work summaries, never as a replacement body. */
+  historyArtifacts?: HistoryFileArtifact[];
 }
 
 /** Both endpoints are real host message IDs, inclusive, in host database order. */
@@ -28,11 +41,16 @@ export interface HistoryWorkReference {
   firstStoredMessageId?: string;
   lastStoredMessageId?: string;
   liveMessageIds?: string[];
+  /** Restricts a subagent detail range to this tool and its descendants. */
+  parentToolUseId?: string;
 }
 
 export interface HistoryWorkSummary extends HistoryWorkReference {
   /** Original activity anchor; stable when its body has not been read yet. */
   anchorClientId?: string;
+  artifacts?: HistoryFileArtifact[];
+  /** Actual child model from persisted metadata; not the requested model. */
+  model?: string;
   /** Existing detail endpoint can read just the visible desktop tail. */
   preview?: HistoryWorkSummary;
   startedAtMs: number;
@@ -48,6 +66,7 @@ export interface HistoryWorkSummary extends HistoryWorkReference {
 export interface DeferredHistoryWork {
   owner?: object;
   key?: string;
+  revision?: string;
   setVisible?(expanded: boolean, preview: boolean): void;
   previewComplete?: boolean;
   expanded: boolean;
@@ -58,7 +77,7 @@ export interface DeferredHistoryWork {
 }
 
 export type HistoryViewItem<TMessage extends HistoryMessageSource> =
-  | { type: 'messages'; key: string; messages: TMessage[] }
+  | { type: 'messages'; key: string; messages: TMessage[]; deferred?: HistoryWorkSummary }
   | { type: 'work'; key: string; summary: HistoryWorkSummary; children?: HistoryViewItem<TMessage>[] };
 
 /** Outer summaries retain only prose and action references, never hidden bodies. */
@@ -68,7 +87,7 @@ export function historyViewLeaves<T extends HistoryMessageSource>(items: readonl
 
 export function historyWorkSummaries<T extends HistoryMessageSource>(items: readonly HistoryViewItem<T>[]): HistoryWorkSummary[] {
   return historyViewLeaves(items).flatMap((item) => item.type === 'work'
-    ? [item.summary, ...(item.summary.preview ? [item.summary.preview] : [])] : []);
+    ? [item.summary, ...(item.summary.preview ? [item.summary.preview] : [])] : item.deferred ? [item.deferred] : []);
 }
 
 export function mapHistoryViewMessages<T extends HistoryMessageSource, U extends HistoryMessageSource>(

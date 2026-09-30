@@ -39,6 +39,19 @@ export function normalizeBotModelRoute(value: unknown): BotModelRoute | null {
   };
 }
 
+/** Optional task-specific route. Absence inherits the live primary route, never a stored copy. */
+export function readBotTaskModelOverride(value: unknown): BotModelRoute | null {
+  if (value === null || value === undefined) return null;
+  const record = value as Partial<BotModelRoute>;
+  const route = normalizeBotModelRoute(value);
+  if (!route || !['claude', 'codex', 'pi'].includes(String(record.harness))
+    || (record.providerId !== null && typeof record.providerId !== 'string')
+    || typeof record.effort !== 'string' || typeof record.fastMode !== 'boolean') {
+    throw new Error('Invalid task model route');
+  }
+  return route;
+}
+
 /**
  * Read the ordered route chain while preserving every legacy single-model Bot.
  * Duplicate routes are dropped because retrying the same endpoint cannot recover it.

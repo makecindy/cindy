@@ -77,6 +77,7 @@ export {
   sanitizePresets,
   sortPresetsForRegion,
 } from "./catalog.js";
+export { expandPresetModels } from "./presetModels.js";
 
 export {
   buildUserProvider,
@@ -111,6 +112,7 @@ export {
   decideModelRegistrySnapshot,
   findModelRegistryRoute,
   resolveModelNativeApi,
+  resolveCatalogModelNativeApi,
   resolveModelReferencePrice,
   resolveBaseModelReferencePrice,
 } from "./modelRegistry.js";
@@ -288,6 +290,7 @@ export type {
   LocalModelCatalog,
   LocalCatalogModel,
   LocalModelVariant,
+  LocalGgufVariant,
 } from "./localModelCatalog.js";
 
 export {
@@ -296,6 +299,7 @@ export {
   registryEntryDefaults,
   expandedRegistryEntries,
   pickModelMetadata,
+  MODEL_METADATA_FIELDS,
   validModelMetadata,
   mergeModelMetadata,
 } from "./modelMetadataLayers.js";
@@ -313,7 +317,7 @@ export { runtimeUserModelMetadata } from "./modelMetadataLayers.js";
 
 export { PROVIDER_MEDIA_FIELDS, providerMediaField, projectProviderMediaModels } from "./providerMediaModels.js";
 
-export { PROVIDER_MODEL_CATALOG, providerModelRecord, providerModelAdapterId, providerPresetModelRecord, providerModelMetadata, providerCatalogForPi, providerModelsForRoute } from "./providerModelCatalog.js";
+export { PROVIDER_MODEL_CATALOG, providerModelRecord, providerModelGenerationRecord, providerModelAdapterId, providerPresetModelRecord, providerModelMetadata, providerCatalogForPi, providerModelsForRoute } from "./providerModelCatalog.js";
 
 export { parseModelsListResponse, isOpenRouterModelsUrl } from "./modelDiscovery.js";
 

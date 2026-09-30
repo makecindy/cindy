@@ -10,9 +10,9 @@ import {
 import { ghostInstallErrorKey } from './installErrorKey';
 
 /**
- * 本地 .cindy 的统一一键安装／更新编排：inspect 验证真实包后直接交给 Main
- * 落位。文件选择、拖入和双击都是用户明确安装动作，不再追加插件权限确认层。
- * 同 id 已安装时转为原位更新；更新继续由 Main 延续当前启用状态。
+ * 本地 .cindy 的统一安装／更新编排：inspect 验证真实包后交给 Main。首装与权限
+ * 变多的更新由 Main 在落位前向本窗口弹确认（GhostInstallConsentHost），用户取消
+ * 时静默收口、不报错。同 id 已安装时转为原位更新；更新继续由 Main 延续当前启用状态。
  */
 
 interface InstallFlowDeps {
@@ -25,9 +25,10 @@ interface InstallFlowDeps {
   openPluginPanel?: (ghostId: string) => void;
 }
 
-/** 安装事务失败统一走 toast。 */
+/** 安装事务失败统一走 toast；用户在确认框里取消不算失败。 */
 async function showInstallError(error: unknown, deps: InstallFlowDeps): Promise<void> {
   const code = extractIpcError(error)?.code;
+  if (code === 'MUTATION_CANCELLED') return;
   toast.error(deps.t(ghostInstallErrorKey(code)));
 }
 
@@ -91,7 +92,7 @@ export async function installGhostFromFile(
     return;
   }
 
-  // 安装动作本身已经由用户通过文件选择／拖入／双击明确发起。安装后默认启用；
+  // 用户通过文件选择／拖入／双击发起安装，Main 会先弹确认框。安装后默认启用；
   // tab 型插件在入口能提供页面板宿主时直接打开。
   const willOpenPanel = manifest.panel?.position === 'tab' && deps.openPluginPanel !== undefined;
   try {

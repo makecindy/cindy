@@ -38,6 +38,19 @@ const SEARCH_LIMIT = 50;
 const REFRESH_COALESCE_MS = 3_000;
 const FILENAME_RE = /^(user|feedback|project|reference)_[a-z0-9_-]{1,64}\.md$/;
 
+/** Shared with import progress so counts use the storage service's exact boundaries. */
+export function splitImportedMemoryText(text: string): string[] {
+  const chunks: string[] = [];
+  let chunk = '', bytes = 0;
+  for (const char of text) {
+    const size = Buffer.byteLength(char, 'utf8');
+    if (bytes + size > BOT_MEMORY_BODY_MAX_BYTES) { chunks.push(chunk); chunk = ''; bytes = 0; }
+    chunk += char; bytes += size;
+  }
+  if (chunk) chunks.push(chunk);
+  return chunks;
+}
+
 interface BotMemoryOwner {
   canonicalSessionId: string | null;
   assertCurrent?: () => void;
@@ -68,7 +81,7 @@ function plainText(body: string): string {
 export function botMemoryDescriptionFromBody(body: string): string {
   const text = plainText(body);
   const sentence = /^.+?[。！？!?；;](?=\s|$|[^。！？!?；;])/u.exec(text)?.[0] ?? text;
-  return Array.from(sentence).slice(0, DESCRIPTION_MAX).join('').trim();
+  return sentence.slice(0, DESCRIPTION_MAX).replace(/[\uD800-\uDBFF]$/u, '').trim();
 }
 
 function preview(body: string): string {
@@ -190,6 +203,41 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
   }
 
   return {
+    /** Deterministic source-document import; uses the same index, FTS and owner fence as settings. */
+    async importDocument(botId: string, id: string, title: string, text: string, type: 'user' | 'reference' = 'reference'): Promise<void> {
+      if (!/^[a-z0-9_-]{1,40}$/.test(id) || !text.trim()) throwIpcError('INVALID_PARAMS', 'Invalid imported memory');
+      const { store, owner } = await storeOf(botId);
+      const chunks = splitImportedMemoryText(text);
+      for (const [index, body] of chunks.entries()) {
+        // Whitespace inside a source document is content too.
+        if (!body) continue;
+        const name = `import_${id}_${index}`;
+        try { await serialized(`${botId}/${type}_${name}.md`, async () => {
+          owner.assertCurrent?.();
+          const existing = await store.read(`${type}_${name}.md`).catch(error => {
+            if (error instanceof MemoryError && error.code === 'not-found') return null;
+            throw error;
+          });
+          if (existing) {
+            // Exact-body imports include whitespace in their identity. Only old
+            // shards whose storage format discarded it use the legacy comparison.
+            const unchanged = existing.frontmatter.bodyLength === undefined
+              ? existing.body.trim() === body.trim() : existing.body === body;
+            if (!unchanged) throw new MemoryError('version-conflict', '[PRECONDITION_FAILED] Imported memory was edited');
+            return;
+          }
+          await store.write({ type, name, title: title.slice(0, BOT_MEMORY_TITLE_MAX).replace(/[\uD800-\uDBFF]$/u, ''),
+            description: botMemoryDescriptionFromBody(body) || botMemoryDescriptionFromBody(title) || id, body, preserveBody: true });
+          const saved = await store.read(`${type}_${name}.md`);
+          if (saved.body !== body) throw new MemoryError('io-error', 'Imported content readback mismatch');
+          owner.assertCurrent?.();
+        }); } catch (error) {
+          if (error instanceof Error) Object.assign(error, { importProgress: { saved: index, total: chunks.length } });
+          throw error;
+        }
+      }
+      scheduleRefresh(owner);
+    },
     async list(botId: string, rawQuery?: unknown): Promise<BotMemorySummary[]> {
       const { store } = await storeOf(botId);
       const query = typeof rawQuery === 'string' ? rawQuery.trim().slice(0, 200) : '';

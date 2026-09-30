@@ -25,7 +25,6 @@ import {
 import { Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { Spinner } from '@/components/ui/spinner';
 import { blobToDataUrl } from '@/lib/annotationBurnIn';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';

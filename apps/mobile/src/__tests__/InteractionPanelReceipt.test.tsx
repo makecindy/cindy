@@ -2,14 +2,23 @@
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 import { AuthorizationMessageCard } from '@/session/AuthorizationMessageCard';
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
 import { InteractionPanel, PluginSetupMessageContent } from '@/session/InteractionPanel';
 import { remoteSessionStore, useSessionPendingInteractions } from '@/session/remoteSessionStore';
 import { clearAllInteractionDrafts, readAskUserDraft, readPlanReviewDraft } from '@/session/interactionDraftStore';
+import { forwardNavigationLock } from '@/utils/navigationLock';
 
-const { resolveInteraction, invoke } = vi.hoisted(() => ({ resolveInteraction: vi.fn(), invoke: vi.fn() }));
-vi.mock('expo-router', () => ({ useLocalSearchParams: () => ({ deviceId: 'd1' }) }));
+const { resolveInteraction, invoke, push } = vi.hoisted(() => ({ resolveInteraction: vi.fn(), invoke: vi.fn(), push: vi.fn() }));
+const { routeParams } = vi.hoisted(() => ({ routeParams: {} as { deviceId?: string; sessionId?: string } }));
+const { textLayouts } = vi.hoisted(() => ({ textLayouts: new Map<string, (event: { nativeEvent: { lines: unknown[] } }) => void>() }));
+vi.mock('expo-router', async () => {
+  const { useEffect } = await import('react');
+  return { useLocalSearchParams: () => routeParams, useRouter: () => ({ push }),
+    useNavigation: () => ({ isFocused: () => true, addListener: () => () => {} }),
+    useFocusEffect: useEffect };
+});
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke }) }));
 vi.mock('@/device-link/useMobileMakerTransport', () => ({
   useMobileMakerTransport: () => ({ resolveInteraction }),
@@ -20,7 +29,12 @@ vi.mock('react-native', async () => {
   const view = (tag: string) => ({ children, onPress, disabled, testID }: {
     children?: ReactNode; onPress?: () => void; disabled?: boolean; testID?: string;
   }) => createElement(tag, { onClick: onPress, disabled, 'data-testid': testID }, children);
-  return { View: view('div'), Text: view('span'), Pressable: view('button'),
+  // Text keeps its onTextLayout so a test can report how many lines a label took.
+  const Text = ({ children, onTextLayout }: { children?: ReactNode; onTextLayout?: (event: { nativeEvent: { lines: unknown[] } }) => void }) => {
+    if (onTextLayout) textLayouts.set(String(children), onTextLayout);
+    return createElement('span', null, children);
+  };
+  return { View: view('div'), Text, Pressable: view('button'),
     ScrollView: view('div'), Image: () => null,
     useWindowDimensions: () => ({ width: 390, height: 844 }),
     StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 } };
@@ -51,13 +65,15 @@ let root: Root;
 let host: HTMLDivElement;
 const requestId = 'codex:test:0';
 const onError = vi.fn();
-function Harness({ companion = false }: { companion?: boolean }) {
+function Harness({ companion = false, deviceId = 'd1' }: { companion?: boolean; deviceId?: string }) {
   const interactions = useSessionPendingInteractions('s1');
-  return <InteractionPanel companion={companion} deviceId="d1" sessionId="s1" interactions={interactions} onError={onError} />;
+  return <InteractionPanel companion={companion} deviceId={deviceId} sessionId="s1" interactions={interactions} onError={onError} />;
 }
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.resetAllMocks();
+  routeParams.deviceId = 'd1'; routeParams.sessionId = 's1';
+  forwardNavigationLock.reset();
   remoteSessionStore.clear();
   clearAllInteractionDrafts();
   host = document.createElement('div');
@@ -77,6 +93,44 @@ async function type(id: string, value: string) {
     input.dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
+
+it.each(['permission', 'ask_user_question', 'plan_review'])('lets a shared guest submit %s through its decision button', async (kind) => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind, requestId, toolName: 'Read', input: { path: '/tmp/test.txt' },
+    questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }], plan: 'Read the file.',
+  } }]);
+  await act(async () => root.render(<Harness deviceId={sharedTaskHostPeer('shared', 'd1')} />));
+  expect(host.querySelector('[data-testid="interaction.readOnlyCard"]')).toBeNull();
+  resolveInteraction.mockResolvedValueOnce({ accepted: true });
+  if (kind === 'ask_user_question') {
+    await click('interaction.ask.option.1');
+    await click('interaction.ask.submitButton');
+  }
+  else await click(kind === 'permission' ? 'interaction.permission.allowOnceButton' : 'interaction.plan.approveButton');
+  expect(resolveInteraction).toHaveBeenCalledWith(requestId, expect.objectContaining(
+    kind === 'ask_user_question' ? { kind, answers: { 'Continue?': 'Yes' } } : { kind, behavior: 'allow' },
+  ));
+});
+
+it('submits the host-provided Codex session approval from the shared guest always-allow button', async () => {
+  const suggestions = [{ type: 'codexSessionApproval', destination: 'session' }];
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'permission', requestId, toolName: 'Shell', input: { command: 'git status' }, suggestions,
+  } }]);
+  await act(async () => root.render(<Harness deviceId={sharedTaskHostPeer('shared', 'd1')} />));
+  resolveInteraction.mockResolvedValueOnce({ accepted: true });
+  await click('interaction.permission.alwaysAllowButton');
+  expect(resolveInteraction).toHaveBeenCalledExactlyOnceWith(requestId, {
+    kind: 'permission', behavior: 'allow', permissionUpdates: suggestions,
+  });
+});
+
+it.each(['plugin_setup', 'issue_confirm', 'ghost_grant_confirm', 'rename_sessions_confirm'])('keeps shared guest %s confirmation read-only', async (kind) => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind, requestId } }]);
+  await act(async () => root.render(<Harness deviceId={sharedTaskHostPeer('shared', 'd1')} />));
+  expect(host.querySelector('[data-testid="interaction.readOnlyCard"]')).not.toBeNull();
+  expect(resolveInteraction).not.toHaveBeenCalled();
+});
 
 it('keeps multiple selections and the free answer when moving back, remounting, and retrying', async () => {
   remoteSessionStore.setPendingInteractions('s1', [{ request: {
@@ -105,6 +159,43 @@ it('keeps multiple selections and the free answer when moving back, remounting, 
   expect(resolveInteraction.mock.calls[1]).toEqual(resolveInteraction.mock.calls[0]);
   expect(resolveInteraction.mock.calls[1][1]).toMatchObject({ answers: { 'Colors?': '["Red","Blue"]', 'Note?': 'Keep both' } });
   expect(readAskUserDraft(requestId)).toBeNull();
+});
+
+it('replaces a model-authored "Other" option with the single host custom input', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'ask_user_question', requestId, questions: [
+      { question: 'Which approach?', options: [{ label: 'Approach A' }, { label: '其他（回复说明）' }] },
+    ],
+  } }]);
+  await act(async () => root.render(<Harness />));
+  // 模型选项被宿主入口取代:只剩 option.1 + 自定义入口,不再有 option.2。
+  expect(host.querySelector('[data-testid="interaction.ask.option.1"]')).not.toBeNull();
+  expect(host.querySelector('[data-testid="interaction.ask.option.2"]')).toBeNull();
+  await click('interaction.ask.showCustomButton');
+  await type('interaction.ask.customInput', 'Use approach C first');
+  resolveInteraction.mockResolvedValueOnce({ accepted: true });
+  await click('interaction.ask.submitButton');
+  expect(resolveInteraction.mock.calls[0][1]).toMatchObject({
+    kind: 'ask_user_question',
+    answers: { 'Which approach?': 'Use approach C first' },
+  });
+});
+
+it('shows the direct free-text input when every option is an "Other" entry', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'ask_user_question', requestId, questions: [
+      { question: 'Which approach?', options: [{ label: '其他（回复说明）' }, { label: 'Other (please specify)' }] },
+    ],
+  } }]);
+  await act(async () => root.render(<Harness />));
+  expect(host.querySelector('[data-testid="interaction.ask.option.1"]')).toBeNull();
+  await type('interaction.ask.textInput', 'Something specific');
+  resolveInteraction.mockResolvedValueOnce({ accepted: true });
+  await click('interaction.ask.submitButton');
+  expect(resolveInteraction.mock.calls[0][1]).toMatchObject({
+    kind: 'ask_user_question',
+    answers: { 'Which approach?': 'Something specific' },
+  });
 });
 
 it.each([true, false])('preserves edited plan and feedback through rejected receipt (approve=%s)', async (approve) => {
@@ -185,6 +276,35 @@ it.each(['allowOnce', 'deny'])('companion permission preserves complete evidence
   expect(host.querySelector('[data-testid="interaction.permission.card"]')).toBeNull();
 });
 
+it('companion permission shows the whole input when no single field leads, never the 500-character preview', async () => {
+  const tail = 'unique-tail-' + 'y'.repeat(40);
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'permission', requestId: 'permission-mcp', toolName: 'mcp__notes__append',
+    input: { body: 'z'.repeat(600), target: tail },
+  } }]);
+  await act(async () => root.render(<Harness companion />));
+  expect(host.textContent).toContain(tail);
+});
+
+it('stacks teammate card buttons one per row once any label would wrap at equal width', async () => {
+  textLayouts.clear();
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'permission', requestId: 'p-wrap', toolName: 'Read', input: { path: '/tmp/qa.txt' },
+    suggestions: [{ destination: 'session', rules: [{ toolName: 'Read' }] }],
+  } }]);
+  await act(async () => root.render(<Harness companion />));
+  const stacked = () => host.querySelector('[data-testid="interaction.actions.stacked"]');
+  await act(async () => textLayouts.get('interaction.permission.deny')!({ nativeEvent: { lines: [{}] } }));
+  expect(stacked()).toBeNull();
+  // A long label (English 「Always allow this session」 on a narrow card) takes two lines.
+  await act(async () => textLayouts.get('interaction.permission.alwaysAllow')!({ nativeEvent: { lines: [{}, {}] } }));
+  expect(stacked()).not.toBeNull();
+  // Ordinary task cards keep their own layout.
+  textLayouts.clear();
+  await act(async () => root.render(<Harness />));
+  expect(textLayouts.size).toBe(0);
+});
+
 it('preserves session-only persistent permission and the high-risk confirmation step', async () => {
   const sessionRule = { destination: 'session', rules: [{ toolName: 'Read' }] };
   remoteSessionStore.setPendingInteractions('s1', [{ request: {
@@ -238,6 +358,56 @@ it('persistent setup shows actual steps and errors, retires desktop instructions
   expect(host.querySelector('[data-testid="interaction.pluginSetup.cancelButton"]')).toBeNull();
 });
 
+
+it('opens only the target computer desktop without resolving or authorizing the plugin', async () => {
+  const request = { kind: 'plugin_setup', requestId: 'setup-remote', revision: 1,
+    ghost: { id: 'google-gmail', name: 'Gmail' }, remoteOauth: true, remoteSecret: true,
+    steps: [{ id: 'account', title: 'Connect Gmail', phase: 'pending', action: { id: 'connect', kind: 'oauth_connect' } }] };
+  remoteSessionStore.setPendingInteractions('s1', [{ request }]);
+  await act(async () => root.render(<Harness />));
+  await click('interaction.pluginSetup.remoteDesktop');
+  await click('interaction.pluginSetup.remoteDesktop');
+  expect(push).toHaveBeenCalledTimes(1);
+  expect(push).toHaveBeenLastCalledWith({ pathname: '/devices/desktop/[deviceId]', params: { deviceId: 'd1', deviceName: 'd1' } });
+  expect(resolveInteraction).not.toHaveBeenCalled(); expect(invoke).not.toHaveBeenCalled();
+  expect(host.querySelector('input')).toBeNull();
+  forwardNavigationLock.reset();
+  await act(async () => root.render(<AuthorizationMessageCard message={{ authorization: request } as unknown as NormalizedRemoteMessage} />));
+  await click('interaction.pluginSetup.remoteDesktop');
+  await click('interaction.pluginSetup.remoteDesktop');
+  expect(push).toHaveBeenCalledTimes(2);
+  for (const deviceId of [undefined, sharedTaskHostPeer('test', 'd1')]) {
+    await act(async () => root.render(<PluginSetupMessageContent request={request} deviceId={deviceId} busy={false} />));
+    expect(host.querySelector('[data-testid="interaction.pluginSetup.remoteDesktop"]')).toBeNull();
+  }
+  await act(async () => root.render(<PluginSetupMessageContent request={{ ...request, terminal: true }} deviceId="d1" busy={false} />));
+  expect(host.querySelector('[data-testid="interaction.pluginSetup.remoteDesktop"]')).toBeNull();
+});
+
+it('uses the session device when a message route omits it, including a late store update', async () => {
+  delete routeParams.deviceId;
+  const authorization = { kind: 'plugin_setup', requestId: 'setup-fallback', revision: 1,
+    ghost: { id: 'google-gmail', name: 'Gmail' },
+    steps: [{ id: 'account', title: 'Connect Gmail', phase: 'pending' }] };
+  await act(async () => root.render(<AuthorizationMessageCard message={{ authorization } as unknown as NormalizedRemoteMessage} />));
+  expect(host.querySelector('[data-testid="interaction.pluginSetup.remoteDesktop"]')).toBeNull();
+  await act(async () => remoteSessionStore.setDeviceIdentity([{ deviceId: 'stored-device', name: 'Work computer' }]));
+  await act(async () => remoteSessionStore.setDeviceSessions('stored-device', 'Work computer', [
+    { id: 's1' } as Parameters<typeof remoteSessionStore.setDeviceSessions>[2][number],
+  ]));
+  await click('interaction.pluginSetup.remoteDesktop');
+  expect(push).toHaveBeenLastCalledWith({ pathname: '/devices/desktop/[deviceId]',
+    params: { deviceId: 'stored-device', deviceName: 'Work computer' } });
+  expect(invoke).not.toHaveBeenCalled();
+  invoke.mockResolvedValueOnce({ accepted: true });
+  await click('interaction.pluginSetup.cancelButton');
+  expect(invoke.mock.calls[0][0]).toBe('stored-device');
+  routeParams.deviceId = 'explicit-device';
+  forwardNavigationLock.reset();
+  await act(async () => root.render(<AuthorizationMessageCard message={{ authorization } as unknown as NormalizedRemoteMessage} />));
+  await click('interaction.pluginSetup.remoteDesktop');
+  expect(push.mock.calls.at(-1)?.[0].params.deviceId).toBe('explicit-device');
+});
 
 it('persistent setup cancellation waits for a host terminal update and allows retry after failure', async () => {
   let receipt!: (value: { accepted: boolean }) => void;

@@ -10,8 +10,15 @@ export interface ProfilePanel {
   values: ProfileValues;
   followsDefault?: boolean;
   title?: RemoteText;
-  entries?: Array<{ id: string; title: RemoteText; resourceId: string }>;
+  entries?: Array<{ id: string; title: RemoteText; resourceId: string; subtitle?: RemoteText; timestamp?: number }>;
   portraits?: Array<{ value: string; uri: string }>;
+  /** Open primitive name, kept so pages can recognize portable blocks such as `search`. */
+  primitive?: string;
+  /** Host-counted list size; the entries may be a bounded page of it. */
+  count?: number;
+  /** `search` block: the query this read was filtered by, and host-owned placeholder copy. */
+  query?: string;
+  placeholder?: RemoteText;
 }
 export interface CompanionProfileData { resource: RemoteResource; panels: ProfilePanel[] }
 const record = (value: unknown): Record<string, unknown> | null => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -76,7 +83,9 @@ export function parseCompanionProfileData(raw: unknown, ref: RemoteResourceRef):
     const entries = Array.isArray(payload?.entries) ? payload.entries.slice(0, 2000).flatMap(item => {
       const entry = record(item);
       return entry && string(entry.id, 160) && text(entry.title) && string(entry.resourceId, 256)
-        ? [{ id: entry.id, title: entry.title, resourceId: entry.resourceId }] : [];
+        ? [{ id: entry.id, title: entry.title, resourceId: entry.resourceId,
+          ...(text(entry.subtitle) ? { subtitle: entry.subtitle } : {}),
+          ...(typeof entry.timestamp === 'number' && Number.isFinite(entry.timestamp) ? { timestamp: entry.timestamp } : {}) }] : [];
     }) : undefined;
     const portraits = Array.isArray(payload?.portraits) ? payload.portraits.slice(0, 16).flatMap(item => {
       const portrait = record(item);
@@ -84,13 +93,20 @@ export function parseCompanionProfileData(raw: unknown, ref: RemoteResourceRef):
         ? [{ value: portrait.value, uri: portrait.uri }] : [];
     }) : undefined;
     panels.push({ id: block.id, text: block.fallbackMarkdown, action: formAction, values, entries, portraits,
+      ...(string(block.primitive, 64) ? { primitive: block.primitive } : {}),
+      ...(Number.isSafeInteger(payload?.count) && Number(payload?.count) >= 0 ? { count: Number(payload?.count) } : {}),
+      ...(block.primitive === 'search' && string(payload?.query, 1_000) ? { query: payload?.query as string } : {}),
+      ...(block.primitive === 'search' && text(payload?.placeholder) ? { placeholder: payload?.placeholder as RemoteText } : {}),
       ...(text(block.title) ? { title: block.title } : {}),
       ...(typeof payload?.followsDefault === 'boolean' ? { followsDefault: payload.followsDefault } : {}) });
   }
   return { resource, panels };
 }
-export async function loadCompanionProfile(invoke: RemoteInvoke, deviceId: string, ref: RemoteResourceRef, locale: string): Promise<CompanionProfileData> {
-  const raw = await invoke<unknown>(deviceId, REMOTE_RESOURCE_GET_CHANNEL, [{ client: { protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: ['status', 'session-link', 'markdown', 'form', 'action', 'list'], locale }, ref }]);
+/** `search` is declared so hosts may add a search block; the query is only sent where one was advertised. */
+export const COMPANION_PROFILE_PRIMITIVES = ['status', 'session-link', 'markdown', 'form', 'action', 'list', 'search'] as const;
+export async function loadCompanionProfile(invoke: RemoteInvoke, deviceId: string, ref: RemoteResourceRef, locale: string, options: { query?: string } = {}): Promise<CompanionProfileData> {
+  const query = options.query?.trim();
+  const raw = await invoke<unknown>(deviceId, REMOTE_RESOURCE_GET_CHANNEL, [{ client: { protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION, primitives: [...COMPANION_PROFILE_PRIMITIVES], locale }, ref, ...(query ? { query } : {}) }]);
   return parseCompanionProfileData(raw, ref);
 }
 /** Task output inventory is already host-authorized; project only relative display names and source links. */

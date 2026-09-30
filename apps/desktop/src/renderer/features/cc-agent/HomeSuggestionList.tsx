@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { useState } from 'react';
+import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   AppWindow,
@@ -76,11 +76,17 @@ export function HomeSuggestionList({
   narrow,
   onSelect,
   onPluginSelect,
+  onPreviewChange,
+  composerTextFor,
   includePlugins = true,
 }: {
   narrow: boolean;
   onSelect: (id: HomeSuggestionId) => void;
   onPluginSelect?: (suggestion: HomeTaskSuggestion) => void;
+  /** 鼠标悬停某条建议时报告该条目,离开时报告 null;由调用方算出与点击填入一致的预览文字。 */
+  onPreviewChange?: (suggestion: HomeTaskSuggestion | null) => void;
+  /** 点击该条建议后实际填入输入框的文字(与视觉预览同源),用作读屏描述;缺省为建议 prompt。 */
+  composerTextFor?: (suggestion: HomeTaskSuggestion) => string;
   includePlugins?: boolean;
 }) {
   const { t, i18n } = useTranslation();
@@ -101,11 +107,31 @@ export function HomeSuggestionList({
   };
   const [batch, setBatch] = useState(() => draw(null));
   const [hidden, setHidden] = useState(isHomeSuggestionsHidden);
+  // 行在悬停中被卸载(隐藏、换批、整块被替换)时收不到 mouseleave,由这里兜底清掉预览。
+  const onPreviewChangeRef = useRef(onPreviewChange);
+  onPreviewChangeRef.current = onPreviewChange;
+  useEffect(() => () => onPreviewChangeRef.current?.(null), []);
+  // 预览只跟随鼠标悬停:移入报告该条,移出清空;点击(填入)视为本次悬停结束,直到再次移入。
+  // 键盘 / 读屏用户通过按钮描述得到同样的文字,且点击只填入不发送,可在输入框里再看再改。
+  const hoveredRef = useRef<HomeTaskSuggestion | null>(null);
+  const setHovered = (item: HomeTaskSuggestion | null) => {
+    hoveredRef.current = item;
+    onPreviewChange?.(item);
+  };
+  const descriptionIdPrefix = useId();
 
   if (batchSize > batch.displayedCount) {
     setBatch({ ...batch, displayedCount: batchSize });
   }
   const visible = batch.items.slice(0, batchSize);
+  // 预览只能指向当前仍显示的条目:窄屏裁掉行、换一批等让行离开 DOM 时收不到可靠的
+  // mouseleave,这里按可见集合统一清掉失效的悬停项。
+  const visibleKey = visible.map((item) => item.id).join('\n');
+  useEffect(() => {
+    const hovered = hoveredRef.current;
+    if (hovered && !visibleKey.split('\n').includes(hovered.id)) setHovered(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setHovered 每次渲染重建,只在可见集合变化时核对
+  }, [visibleKey]);
 
   if (hidden) return null;
 
@@ -116,20 +142,33 @@ export function HomeSuggestionList({
           const { id } = item;
           const Icon = item.builtinId ? ICONS[item.builtinId] : Puzzle;
           return (
-            <button
-              key={id}
-              type="button"
-              data-testid={`home-suggestion-${id}`}
-              onClick={() => (item.builtinId ? onSelect(item.builtinId) : onPluginSelect?.(item))}
-              className={cn(
-                'inline-flex h-[38px] max-w-full items-center gap-2.5 rounded-full px-3',
-                'text-14 text-[var(--text-secondary)] transition-colors',
-                'hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
-              )}
-            >
-              <Icon size={16} strokeWidth={2} className="shrink-0 text-current" />
-              <span className="min-w-0 truncate">{item.label}</span>
-            </button>
+            <Fragment key={id}>
+              <button
+                type="button"
+                data-testid={`home-suggestion-${id}`}
+                // 输入框里的视觉预览对读屏隐藏;点击后实际填入的文字通过描述关联到按钮本身。
+                aria-describedby={`${descriptionIdPrefix}-${id}`}
+                onClick={() => {
+                  setHovered(null);
+                  if (item.builtinId) onSelect(item.builtinId);
+                  else onPluginSelect?.(item);
+                }}
+                onMouseEnter={() => setHovered(item)}
+                onMouseLeave={() => setHovered(null)}
+                className={cn(
+                  'inline-flex h-[38px] max-w-full items-center gap-2.5 rounded-full px-3',
+                  'text-14 text-[var(--text-secondary)] transition-colors',
+                  'hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+                )}
+              >
+                <Icon size={16} strokeWidth={2} className="shrink-0 text-current" />
+                <span className="min-w-0 truncate">{item.label}</span>
+              </button>
+              {/* 放在按钮外,只作描述,不并入按钮名称。 */}
+              <span id={`${descriptionIdPrefix}-${id}`} className="sr-only">
+                {composerTextFor ? composerTextFor(item) : item.prompt}
+              </span>
+            </Fragment>
           );
         })}
       </div>
@@ -141,7 +180,10 @@ export function HomeSuggestionList({
           tone="quiet"
           type="button"
           data-testid="home-suggestions-shuffle"
-          onClick={() => setBatch((previous) => draw(previous))}
+          onClick={() => {
+            setHovered(null);
+            setBatch((previous) => draw(previous));
+          }}
           className="opacity-0 group-hover/sug:opacity-100 focus-visible:opacity-100"
         >
           <Shuffle size={11} strokeWidth={2} />
@@ -155,6 +197,7 @@ export function HomeSuggestionList({
           type="button"
           data-testid="home-suggestions-dismiss"
           onClick={() => {
+            setHovered(null);
             setHomeSuggestionsHidden(true);
             setHidden(true);
           }}

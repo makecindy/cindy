@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 /**
- * PR4a 750 stage 布局引擎 + 42s 倒计时纯函数测试(SC-7 slice pr4a)。
+ * PR4a 750 stage 布局引擎 + 60s 倒计时纯函数测试(SC-7 slice pr4a)。
  * 期望值全部来自权威链硬编码(demo phoneLayout wave3.5 旧表 / Step 3a 契约),
  * 不引用实现内部公式回算,防「实现测实现」自证。
  */
@@ -241,18 +241,22 @@ describe("loginSkin 750 stage 布局引擎", () => {
   });
 });
 
-describe("loginSkin 42s 重发倒计时纯函数(Step 3a 契约)", () => {
-  it("42s 起点:deadline=now+42000,首帧显示 42", () => {
-    expect(RESEND_COUNTDOWN_SECONDS).toBe(42);
+describe("loginSkin 60s 重发倒计时纯函数(Step 3a 契约)", () => {
+  it("60s 起点:deadline=now+60000,首帧显示 60", () => {
+    expect(RESEND_COUNTDOWN_SECONDS).toBe(60);
     const now = 1_000_000;
     const deadline = createResendDeadline(now);
-    expect(deadline).toBe(now + 42_000);
-    expect(resendCountdownRemaining(deadline, now)).toBe(42);
+    expect(deadline).toBe(now + 60_000);
+    expect(resendCountdownRemaining(deadline, now)).toBe(60);
+    // 旧的 42 秒截止点仍在服务端冷却内，不能提前开放重发。
+    expect(resendCountdownRemaining(deadline, now + 42_000)).toBe(18);
+    expect(resendCountdownRemaining(deadline, now + 59_999)).toBe(1);
+    expect(resendCountdownRemaining(deadline, now + 60_000)).toBe(0);
   });
 
-  it("显示数学边界:41999/1000/1/0ms 与超时(ceil 向上,非负 clamp)", () => {
+  it("显示数学边界:59999/1000/1/0ms 与超时(ceil 向上,非负 clamp)", () => {
     const deadline = 100_000;
-    expect(resendCountdownRemaining(deadline, deadline - 41_999)).toBe(42);
+    expect(resendCountdownRemaining(deadline, deadline - 59_999)).toBe(60);
     expect(resendCountdownRemaining(deadline, deadline - 1_000)).toBe(1);
     expect(resendCountdownRemaining(deadline, deadline - 1)).toBe(1);
     expect(resendCountdownRemaining(deadline, deadline)).toBe(0);
@@ -262,17 +266,17 @@ describe("loginSkin 42s 重发倒计时纯函数(Step 3a 契约)", () => {
   it("重置/保持语义:新 deadline 恢复满值,旧 deadline 不受 now 回拨影响非递减假设", () => {
     const now = 50_000;
     const first = createResendDeadline(now);
-    // 重发成功 → 以成功时刻重建 deadline,剩余回到 42
+    // 重发成功 → 以成功时刻重建 deadline,剩余回到 60
     const second = createResendDeadline(now + 30_000);
-    expect(resendCountdownRemaining(first, now + 30_000)).toBe(12);
-    expect(resendCountdownRemaining(second, now + 30_000)).toBe(42);
+    expect(resendCountdownRemaining(first, now + 30_000)).toBe(30);
+    expect(resendCountdownRemaining(second, now + 30_000)).toBe(60);
     // 挂起恢复自校正:绝对 deadline 模型下,恢复时刻直接重算(可跳变,不递减计数)
-    expect(resendCountdownRemaining(first, now + 41_500)).toBe(1);
+    expect(resendCountdownRemaining(first, now + 59_500)).toBe(1);
   });
 
   it("模板渲染:{n} 占位替换,5 语 catalog resendCountdown 均带 {n}", () => {
-    expect(formatResendCountdown("{n} 秒后可重新发送", 42)).toBe(
-      "42 秒后可重新发送",
+    expect(formatResendCountdown("{n} 秒后可重新发送", 60)).toBe(
+      "60 秒后可重新发送",
     );
     expect(formatResendCountdown("Resend available in {n}s", 7)).toBe(
       "Resend available in 7s",
@@ -280,8 +284,8 @@ describe("loginSkin 42s 重发倒计时纯函数(Step 3a 契约)", () => {
     for (const locale of ["zh-CN", "zh-TW", "en", "ja", "ko"] as const) {
       const template = loginMessages[locale].resendCountdown;
       expect(template, locale).toContain("{n}");
-      expect(formatResendCountdown(template, 42), locale).toContain("42");
-      expect(formatResendCountdown(template, 42), locale).not.toContain("{n}");
+      expect(formatResendCountdown(template, 60), locale).toContain("60");
+      expect(formatResendCountdown(template, 60), locale).not.toContain("{n}");
     }
   });
 });

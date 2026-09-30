@@ -16,6 +16,7 @@ import {
 } from '@/contexts/dataOwnerGeneration';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 import { ghostInstallApprovalToken } from '../../../../shared/ghost';
+import { extractIpcError } from '@/utils/ipcError';
 import { pluginMarketErrorKey } from './pluginMarketErrorKey';
 import {
   batchSummary,
@@ -180,6 +181,11 @@ async function runQueue(generation: number): Promise<void> {
         if (!batchOwnerCurrent()) {
           voidStaleBatch();
           return;
+        }
+        // 新版本权限变多时 Main 会逐个弹确认；用户取消只跳过这一个插件。
+        if (extractIpcError(error)?.code === 'MUTATION_CANCELLED') {
+          patchRow(generation, next.pluginId, { status: 'skipped' });
+          continue;
         }
         patchRow(generation, next.pluginId, {
           status: 'failed',

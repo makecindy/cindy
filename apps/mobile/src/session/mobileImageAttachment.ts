@@ -1,5 +1,5 @@
 import { i18n } from '@/i18n';
-import { MOBILE_MAX_ATTACHMENT_BYTES, extractRemoteFileExt } from '@/session/attachments';
+import { extractRemoteFileExt } from '@/session/attachments';
 import type { MobileAttachmentUploadCandidate } from '@/session/mobileAttachmentUpload';
 
 export type MobileImagePickerAssetLike = {
@@ -105,9 +105,6 @@ export async function convertMobileImageToJpegNative(uri: string): Promise<strin
 export function assertMobileImageSize(size: number): void {
   if (!Number.isFinite(size) || size <= 0) {
     throw new Error(i18n.t('composer.upload.emptyImage'));
-  }
-  if (size > MOBILE_MAX_ATTACHMENT_BYTES) {
-    throw new Error(i18n.t('composer.upload.imageTooLarge', { size: Math.round(MOBILE_MAX_ATTACHMENT_BYTES / 1024 / 1024) }));
   }
 }
 

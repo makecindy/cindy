@@ -114,3 +114,19 @@ it('distinguishes model selections from identity and capability-only refreshes',
     expect(botProfileModelSelectionChanged(previous, { ...previous, modelChain: [{ ...route, ...patch }] })).toBe(true);
   }
 });
+
+
+describe('independent task model configuration', () => {
+  const route = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false };
+  it('preserves the complete route without changing the primary model or its selection revision', () => {
+    const before = { modelChainOverride: null, model: 'primary' };
+    const after = normalizeBotProfileModelChain({ ...before, taskModelOverride: route });
+    expect(after).toEqual({ ...before, taskModelOverride: route });
+    expect(botProfileModelSelectionChanged(before, after)).toBe(false);
+    expect(normalizeBotProfileModelChain({ ...after, taskModelOverride: null }).taskModelOverride).toBeNull();
+    expect(normalizeBotProfileModelChain(before)).toEqual(before);
+  });
+  it.each([{ ...route, harness: 'unknown' }, { ...route, model: '' }, { ...route, fastMode: 'true' }])('rejects incomplete task routes: %j', taskModelOverride => {
+    expect(() => normalizeBotProfileModelChain({ taskModelOverride })).toThrow();
+  });
+});

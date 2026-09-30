@@ -68,6 +68,15 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   时从本机 session JSONL 校正（只打开启动时 `--session-dir` 真身内的普通文件，
   并有字节/时间预算，超限回退 RPC）；远端仍走 `get_entries`。
 
+### 原生请求 Fast 偏好
+
+支持 Fast 的原生模型在 `before_provider_request` 中经现有 RPC 通道发出
+`cindy:request-preferences` 只读查询。宿主按当前运行实例、精确 provider/model 与
+内存中的 Fast 开关返回结果，不接受查询传入的开关值；不弹用户确认，不增加模型工具。
+开关不再写入 `runtime/request-prefs-*.json`，遗留文件不参与判定。关闭实例、查询失败、
+超时或回复无效时使用普通档；已开启的正常请求仍发送 `service_tier: priority`。
+这修复偏好文件被改写或重放的路径，不改变 Pi Full Access 的原生 shell 权限边界。
+
 ## 2. 配置面:Cindy 显式设置 vs 放任 pi 默认
 
 图片能力未声明时，Pi 的模型配置与发送校验默认允许图片输入，不因新型号缺少能力资料而
@@ -85,13 +94,27 @@ Pi 任务时冻结，并写入该任务 `settings.json` 的 `compaction.reserveT
 模型容量用于 Pi 原生请求长度裁剪，不能随小预算缩到 1K；工作预算只调整原生压缩阈值，
 并作为已应用预算进入 Cindy 的用量快照。
 大窗切小窗先由 Desktop 的统一目标窗口事务按目标窗口 90% 固定压力线评估（独立于 Pi
-日常自动压缩百分比），命中时换干净原生窗口；未命中时 Pi 重写 settings 后调用
-`switch_session`，必须重新 `set_model` 并用 `get_state` 校验
-provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建 runtime。校验完成前
-子代理 route 保持 pending，失败则终止该 live 任务。Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
+日常自动压缩百分比），命中时复用既有上下文接续事务；未命中时保留当前原生会话，使用
+`set_compaction_reserve_tokens` 原地更新压缩保留量，再用原生 `set_model` 与 `get_state`
+确认 provider／model／contextWindow。同 ID 模型的目录资料或工作预算改变也属于这条路径。
+普通切模不得用 `switch_session` 或扩展 `/reload` 重读压缩配置：两者会重建会话或扩展状态，
+不能当成无损配置刷新。忙时选择必须在回合结束后走同一切换与容量事务，不能由延后服务
+直接关闭 Pi。原生校验完成前，子代理 route 保持 pending；确认并持久化目标路由后才放行
+排队消息。
+Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
+
+用户重试已被 Pi 接受但零产出的失败输入时，用持久化的原生 user entry id 精确定位当前
+分支；确认后续只有空的错误响应及模型／推理档位变更记录，再通过原生树导航回到输入之前重发。
+导航只回退消息，保留当前模型和推理档位；重新打开任务时仍由 Cindy 已保存的选择恢复设置。
+回归见 `session-tree.test.ts` 与 `pi-provider-routing.test.ts`。旧失败分支完整保留，
+不按文本去重，也不重放已有工具结果。若该轮明确遇到 HTTP 413，用户这次重试在重发前
+调用一次原生 compact；压缩失败（包括 RPC 超时、普通错误或无法压缩）时，沿用原请求的
+413 证据，本机锁存下一次发送前换窗，并在持久错误中记录专用恢复失败标记，关闭运行时后
+仍能恢复。用户取消不触发换窗，SSH 保留错误。
+这一恢复由用户重试触发，不改变正常轮次由 Pi 自己管理自动压缩的约定。
 
 Pi 同样消费 `AgentRuntimeConfig.behaviorFlags`（静态对象或按来源、凭证形态、执行位置求值）。
 Desktop 复用既有工具链并行度设置，向本机 Pi 注入 `VITEST_MAX_FORKS`、`VITEST_MAX_THREADS`、
@@ -103,6 +126,26 @@ SSH 不套用本机限核值。沿用现有默认值与 override 存储，不新
 `transport`、`retry.maxRetries=6`（provider 级保持 0）与 `compaction.reserveTokens`；
 未配置 Pi 百分比且未缩小工作预算时不写 `reserveTokens`，沿用 Pi 默认 16384；
 显式小预算仍以默认 90% 计算触发阈值。
+
+### 运行中的模型目录与凭据更新
+
+模型目录更新沿用 Cindy 的统一目录和 Pi 的原生 provider 配置，不能另建一份模型权威表。
+先预览目标资料和容量，再在现有串行切换边界应用配置；Pi 的 `refresh_models` 只刷新目录，
+即使 provider/model ID 未变也须通过 `set_model` 应用新 descriptor。刷新响应中的
+`aborted` 或 provider errors 表示未完整成功，不能仅凭 RPC `success: true` 继续。
+
+新增原生适配器使用 Pi 公开的 `unregisterProvider`／`registerProvider` 与模型目录刷新，
+不重建用户扩展。模型凭据仅通过宿主发起、绑定本次运行实例和随机 nonce 的私有交接进入
+Pi 内存，不进入 prompt、聊天历史、日志或明文配置文件。交接同时维护 bash 凭据剥离名单、
+后续子代理的启动配置和来源专用授权；已运行子代理仍保留其独立身份。私有命令的 prompt
+响应不等于配置成功，必须收到对应 nonce 的完成回执。来源一致性检查不可因热切而删除。
+
+`refresh_models` 与 `set_compaction_reserve_tokens` 需要配套 Pi 原生 RPC 支持；当前
+`tools/pi/latest.json` 的版本 pin 不代表这两项接口已经发布。旧 Pi 缺少本次操作所需接口时，
+在改变当前模型前明确反馈，不自动降级为会话重载。开发、单测或本地补丁通过不等于托管
+runtime 已升级；发布须分别核验 Pi 接口、Cindy 接入与实际 runtime 版本。
+接口补丁、重启边界和隔离验证见
+[`../research/pi-native-model-refresh.md`](../research/pi-native-model-refresh.md)。
 
 
 Skill 停用适配同时保存物理身份与管理页已扫描的词法发现入口；启动前只采用仍指向该
@@ -281,6 +324,12 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   改判成失败，provider continuation claim 也不能被当作最终结束。
 - Pi 的 `Request was aborted` 只在无当前 generation 的 Host Stop 时归入请求断流失败；
   无错误正文的 bare abort 仍保持取消。复用既有错误收口及重试预算，不重放包命令或工具。
+- Pi 未归类的缺码临时服务故障（如 `Service temporarily unavailable` 或明确的模型
+  availability degraded）由 Cindy 的既有有界续跑守卫兜底；结构化状态／错误类别优先，
+  不把裸 `unavailable`／`degraded` 当重试依据，不伪造 HTTP 503。已有正文或工具结果时
+  发送续跑指令，保留已有结果；用户 Stop 取消待续跑。Pi `auto_retry_end(success=false)`
+  已用尽原生预算时保持 `pi-gateway-drop` 终态，不再叠加 Host 重试。本规则不修改受管
+  Pi 二进制、版本或原生重试上限；原生分类兼容需由 Pi 上游独立修正。
 - SDK 成功与正文入库／交付分开取证。只见 JSONL 成功但 SQLite 缺正文时，不能自动重跑
   已成功的工作；应沿 RPC → translator → Session → persistence 查丢失边界。
 

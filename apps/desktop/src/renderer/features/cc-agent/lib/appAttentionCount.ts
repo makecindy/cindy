@@ -24,6 +24,7 @@ export function countAppAttention(input: AppAttentionCountInput): number {
   for (const session of input.sessions) {
     if (
       session.status !== 'active' ||
+      session.source === 'bot' ||
       isOrcaWorkerSession(session) ||
       session.deviceLinkDeviceId !== undefined ||
       isAutomationGeneratedSession(session) ||

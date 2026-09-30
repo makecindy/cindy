@@ -1,3 +1,4 @@
+import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { readCachedGenericOAuthAccessToken } from './generic-oauth.js';
 import { providerPresetModelRecord, providerModelAdapterId } from '@cindy/model-providers';
 import { mergeByokNativeConfigs } from '../model-access/byokProvider.js';
@@ -54,7 +55,7 @@ import {
   runtimeCustomProviderId,
   storedCustomProviderId,
 } from '@cindy/model-providers';
-import { providerCatalogForPi, providerModelRecord } from '@cindy/model-providers';
+import { providerCatalogForPi, providerModelRecord, providerModelGenerationRecord } from '@cindy/model-providers';
 import type {
   Catalog,
   ModelCost,
@@ -74,6 +75,7 @@ import {
   matchesManagedOllamaFingerprint,
 } from '../../shared/localModelRuntime.js';
 import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
+import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
 import {
   applyQwen38NativeOverlay,
   shouldApplyQwen38Overlay,
@@ -397,6 +399,7 @@ async function readPiCatalogProbeEnv(binaryPath: string): Promise<Record<string,
 
 export async function readPiBundledModels(
   binaryPath: string,
+  options: { cachedOnly?: boolean } = {},
 ): Promise<PiBundledModelCatalog | null> {
   const cached = piBundledModelsByBinary.get(binaryPath);
   if (cached) {
@@ -405,6 +408,9 @@ export async function readPiBundledModels(
     if (catalog === null) piBundledModelsByBinary.delete(binaryPath);
     return catalog;
   }
+  // A model-switch preview may inspect a live task without launching another Pi
+  // process. Its startup already attempted this exact binary's offline probe.
+  if (options.cachedOnly) return null;
   const pending = (async () => {
     let configDir: string | undefined;
     try {
@@ -898,6 +904,7 @@ export interface BuildPiAgentOpts {
   onPiManagedPackageMutationCommitted?: () => Promise<void>;
   onPiManagedPackageMutationSettled?: AgentDeps['onPiManagedPackageMutationSettled'];
   resolvePiRuntimeModelDescriptor?: AgentDeps['resolvePiRuntimeModelDescriptor'];
+  resolvePiRuntimeModels?: AgentDeps['resolvePiRuntimeModels'];
   resolvePiGatewayModelDescriptor?: AgentDeps['resolvePiGatewayModelDescriptor'];
   getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
   /** Trusted project-approval authority; omitted until the host has one, which fails closed. */
@@ -1279,13 +1286,15 @@ export function buildPiNativeProvidersFromConfigs(
       const row = providerModelRecord(model.id, model.route?.baseUrl ?? rt.baseUrl,
         model.api ?? model.piApi ?? (model.route ? model.route.wireProtocol : rt.wireProtocol),
         !model.api && !model.piApi && !model.route)
-        ?? ((model.api ?? model.piApi) ? providerPresetModelRecord(rt.catalogPresetId, model.id, model.api ?? model.piApi) : undefined);
+        ?? ((model.api ?? model.piApi) ? providerPresetModelRecord(rt.catalogPresetId, model.id, model.api ?? model.piApi) : undefined)
+        ?? providerModelGenerationRecord(model.id, model.route?.baseUrl ?? rt.baseUrl,
+          model.api ?? model.piApi ?? (model.route ? model.route.wireProtocol : rt.wireProtocol), rt.catalogPresetId);
       if (!row || !PI_NATIVE_APIS.has(row.execution.pi.api as PiNativeApi)) return undefined;
       return {
         id: row.id, name: row.name, baseUrl: row.upstream,
         ...row.execution.pi, api: row.execution.pi.api as PiModelApi,
         contextWindow: row.contextWindow, maxTokens: row.maxOutput,
-        input: row.modalities.input.filter((value): value is 'text' | 'image' => value === 'text' || value === 'image'),
+        input: (row.modalities?.input ?? ['text']).filter((value): value is 'text' | 'image' => value === 'text' || value === 'image'),
         reasoning: row.reasoning,
         cost: row.cost?.input !== undefined && row.cost.output !== undefined
           ? { input: row.cost.input, output: row.cost.output,
@@ -1351,10 +1360,14 @@ export function buildPiNativeProvidersFromConfigs(
       onSkip?.(cfg.id, 'native SDK requires an approved cloud endpoint');
       continue;
     }
-    const adapterIds = new Set(rt.models.flatMap(model => {
-      const row = providerModelRecord(model.id, model.route?.baseUrl ?? rt.baseUrl, model.api ?? model.piApi)
-        ?? providerPresetModelRecord(rt.catalogPresetId, model.id, model.api ?? model.piApi);
-      const adapter = row ? providerModelAdapterId(row) : undefined;
+    const adapterIds = new Set(rt.models.flatMap((model, index) => {
+      const api = modelApis[index];
+      // The native ChatGPT subscription transport owns its authentication separately.
+      if (!api || api === 'openai-codex-responses') return [];
+      const row = providerModelRecord(model.id, model.route?.baseUrl ?? rt.baseUrl, api)
+        ?? providerPresetModelRecord(rt.catalogPresetId, model.id, api)
+        ?? providerModelGenerationRecord(model.id, model.route?.baseUrl ?? rt.baseUrl, api, rt.catalogPresetId);
+      const adapter = row ? providerModelAdapterId(row, rt.catalogPresetId) : undefined;
       return adapter ? [adapter] : [];
     }));
     providers.push({
@@ -1401,6 +1414,7 @@ export function buildPiNativeProvidersFromConfigs(
           m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : undefined;
         const spec = {
           id: m.id,
+          ...(resolved?.supportsFastMode !== undefined ? { supportsFastMode: resolved.supportsFastMode } : {}),
           ...(m.api || m.piApi || modelApi !== providerApi ? { api: modelApi } : {}),
           ...(authMethod === 'oauth'
             ? { baseUrl: oauthProxyEndpoint! }
@@ -1701,8 +1715,9 @@ export async function resolvePiNativeProviders(ctx: {
   providerId?: string | null;
   model: string;
   resumeSessionId?: string;
+  purpose?: 'startup' | 'preview' | 'live-refresh';
 }): Promise<PiNativeProvidersResult> {
-  if (!ctx.remoteHostId) {
+  if (!ctx.remoteHostId && (ctx.purpose === undefined || ctx.purpose === 'startup')) {
     // Pi scans the local ~/.agents/skills root when it starts. This hook is awaited by every
     // Desktop Pi startSession caller, so refresh Codex-only projections added after app startup
     // before the process snapshots its global skills. Remote Pi has a different HOME/root.
@@ -1722,7 +1737,7 @@ export async function resolvePiNativeProviders(ctx: {
   const piBinaryPath = resolvePiBinaryPath();
   // Never treat the Desktop executable as the catalog of a different remote Pi binary.
   const bundledModels = !ctx.remoteHostId && piBinaryPath
-    ? await readPiBundledModels(piBinaryPath)
+    ? await readPiBundledModels(piBinaryPath, { cachedOnly: ctx.purpose === 'preview' })
     : null;
   let subscriptions: PiNativeProvidersResult = { providers: [], env: {} };
   if (!ctx?.remoteHostId && compatProxyReady) {
@@ -1753,7 +1768,11 @@ export async function resolvePiNativeProviders(ctx: {
     );
   }
   const isRemote = Boolean(ctx.remoteHostId);
-  if (!isRemote && ctx.providerId === MANAGED_OLLAMA_PROVIDER_ID) {
+  if (
+    !isRemote &&
+    ctx.purpose !== 'preview' &&
+    (ctx.providerId === MANAGED_OLLAMA_PROVIDER_ID || ctx.providerId === MANAGED_LLAMACPP_PROVIDER_ID)
+  ) {
     await ensureManagedOllamaReadyForSession({
       providerId: ctx.providerId,
       remoteHostId: ctx.remoteHostId ?? null,
@@ -1855,6 +1874,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
   }
   log.info('pi agent enabled', { binaryPath });
   return new PiAgent({
+    resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
     getDisabledSkillPaths: readDisabledSkillPaths,
     resolveModelContextLimit: (providerId, modelId) => {
       const catalog = getActiveCatalog();
@@ -1996,6 +2016,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     registerPiProxySession,
     resolvePiNativeProviders: (ctx) => resolvePiNativeProviders(ctx),
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
+    resolvePiRuntimeModels: opts.resolvePiRuntimeModels,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,
     // `cindy` is the gateway fallback block even when the session starts on a subscription or
     // BYOM provider. Its explicit protocol comes from the exact XD model; the local Pi table only

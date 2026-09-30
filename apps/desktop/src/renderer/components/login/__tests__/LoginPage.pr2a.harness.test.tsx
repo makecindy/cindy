@@ -184,7 +184,7 @@ describe('method-choice', () => {
 
 /* ── verification-code 三态 + 倒计时接线(Step 3a) ── */
 describe('verification-code', () => {
-  it('empty:输入空 → 登录钮 disabled;phone 提交成功后入场即带 42s 倒计时', async () => {
+  it('empty:输入空 → 登录钮 disabled;phone 提交成功后入场即带 60s 倒计时', async () => {
     vi.useFakeTimers();
     // 全链时序:identifier(phone)提交 request-code 成功 → arm → 状态切 verification
     const providers = await scenarioClient('providers:both').getProviders();
@@ -209,17 +209,24 @@ describe('verification-code', () => {
 
     expect((screen.getByTestId('login-input') as HTMLInputElement).value).toBe('');
     expect(screen.getByText('login.signIn').closest('button')?.disabled).toBe(true);
-    // 倒计时首帧 42(247:1614 样式:placeholder 色无 underline 不可交互)
+    // 倒计时首帧 60(247:1614 样式:placeholder 色无 underline 不可交互)
     const countdown = screen.getByTestId('login-resend-countdown');
-    expect(countdown.textContent).toBe('login.resendCountdown#42');
+    expect(countdown.textContent).toBe('login.resendCountdown#60');
     expect(countdown.getAttribute('style')).toContain('var(--login-control-placeholder)');
     expect(countdown.className).not.toContain('underline');
     // tick 后逐秒重算;到 0 切重发链接
     act(() => vi.advanceTimersByTime(1_000));
     expect(screen.getByTestId('login-resend-countdown').textContent).toBe(
-      'login.resendCountdown#41',
+      'login.resendCountdown#59',
     );
     act(() => vi.advanceTimersByTime(41_000));
+    expect(screen.getByTestId('login-resend-countdown').textContent).toBe(
+      'login.resendCountdown#18',
+    );
+    expect(screen.queryByTestId('login-resend-link')).toBeNull();
+    act(() => vi.advanceTimersByTime(17_000));
+    expect(screen.queryByTestId('login-resend-link')).toBeNull();
+    act(() => vi.advanceTimersByTime(1_000));
     expect(screen.queryByTestId('login-resend-countdown')).toBeNull();
     expect(screen.getByTestId('login-resend-link')).toBeTruthy();
   });
@@ -246,7 +253,7 @@ describe('verification-code', () => {
     expect(spin.className).toContain('motion-reduce:animate-none');
   });
 
-  it('identifier → verification-code 自动起算 42s(含 AuthContext 自动发码路径)', async () => {
+  it('identifier → verification-code 自动起算 60s(含 AuthContext 自动发码路径)', async () => {
     const view = mount(await identifierState());
     expect(screen.queryByTestId('login-resend-countdown')).toBeNull();
     loginHook.value = {
@@ -255,7 +262,7 @@ describe('verification-code', () => {
     };
     view.rerender(<LoginPage />);
     expect(screen.getByTestId('login-resend-countdown').textContent).toBe(
-      'login.resendCountdown#42',
+      'login.resendCountdown#60',
     );
   });
 
@@ -273,10 +280,10 @@ describe('verification-code', () => {
       expect.objectContaining({ type: 'request-code', kind: 'email' }),
     );
     expect(screen.getByTestId('login-resend-countdown').textContent).toBe(
-      'login.resendCountdown#42',
+      'login.resendCountdown#60',
     );
     // 走到 0 → 再点一次但失败:不 arm,链接保持
-    act(() => vi.advanceTimersByTime(42_000));
+    act(() => vi.advanceTimersByTime(60_000));
     dispatchWithResult.mockResolvedValueOnce({ success: false, code: 'RATE_LIMITED' });
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-resend-link'));

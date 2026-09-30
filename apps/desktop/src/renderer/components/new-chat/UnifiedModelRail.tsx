@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
 import { providerAccountLabel } from '@/lib/providerDisplayName';
 import { Tip } from '@/components/ui/tooltip';
 
-import { useProviderWeeklyQuota } from './useProviderWeeklyQuota';
+import { useProviderWeeklyQuota, type ProviderUsageScope } from './useProviderWeeklyQuota';
 import { formatQuotaResetCountdown } from '../status/usageCardModel';
 import { agentOptionOf } from './agentOptions';
 import { ProviderRailMark } from './UnifiedFlyoutHost';
@@ -34,7 +34,7 @@ export function UnifiedModelRail({
   providers,
   providerLabel,
   interactionDisabled = false,
-  localProviderUsage = false,
+  providerUsage = null,
 }: {
   items: readonly UnifiedRailItem[];
   active: UnifiedRailFilter;
@@ -42,7 +42,8 @@ export function UnifiedModelRail({
   providers: readonly ProviderView[];
   providerLabel: (providerId: string) => string;
   interactionDisabled?: boolean;
-  localProviderUsage?: boolean;
+  /** Whose account usage the directory may show; null hides it. */
+  providerUsage?: ProviderUsageScope | null;
 }) {
   const { t } = useTranslation();
   // rail 常驻,不做「项数少就整条隐藏」——设计稿的分类栏在单来源时也在(★/全部/来源),
@@ -91,7 +92,8 @@ export function UnifiedModelRail({
               itemKey={key}
               onClick={() => onSelect(item)}
               disabled={interactionDisabled}
-              provider={localProviderUsage ? provider : undefined}
+              provider={providerUsage ? provider : undefined}
+              usageDeviceId={providerUsage?.deviceId ?? null}
             >
               {item.kind === 'favorites' ? (
                 // ☆ 未激活与其它格同灰(hover 提亮)—— 常亮金色会在没进收藏视图时也
@@ -122,11 +124,13 @@ interface RailButtonProps {
   onClick: () => void;
   disabled: boolean;
   provider?: ProviderView;
+  usageDeviceId: string | null;
   children: ReactNode;
 }
 
 function RailButton(props: RailButtonProps) {
-  // Remote directories must never borrow this desktop's account quota.
+  // Quota follows the directory's owner: remote directories read that device's mirrors
+  // and must never borrow this desktop's account quota.
   return props.provider ? (
     <ProviderQuotaButton {...props} provider={props.provider} />
   ) : (
@@ -135,7 +139,7 @@ function RailButton(props: RailButtonProps) {
 }
 
 function ProviderQuotaButton(props: RailButtonProps & { provider: ProviderView }) {
-  const quota = useProviderWeeklyQuota(props.provider);
+  const quota = useProviderWeeklyQuota(props.provider, { deviceId: props.usageDeviceId });
   return <RailButtonView {...props} quota={quota} />;
 }
 

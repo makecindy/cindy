@@ -20,7 +20,6 @@ import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X, Copy, Key, KeyRound, Lock, Plus, Server, CheckCircle2, Circle, Unlock, Eye, EyeOff, AlertTriangle } from 'lucide-react';
 
-import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
@@ -213,6 +212,7 @@ export function SshKeySetupDialog({ hostId, hostInline, open, onOpenChange, onKe
           style={{ backgroundColor: 'var(--overlay-modal, rgba(0,0,0,0.4))' }}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className="fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl flex flex-col"
           style={{
             backgroundColor: 'var(--surface-elevated, #ffffff)',
@@ -648,6 +648,7 @@ function UnlockDialog({ privateKeyPath, onClose, onSubmit }: UnlockDialogProps) 
           style={{ backgroundColor: 'var(--overlay-modal, rgba(0,0,0,0.5))' }}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className="fixed left-1/2 top-1/2 z-[60] w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl"
           style={{
             backgroundColor: 'var(--surface-elevated, #ffffff)',
@@ -1008,6 +1009,7 @@ function AgentTroubleDialog({ state, onClose }: AgentTroubleDialogProps) {
           style={{ backgroundColor: 'var(--overlay-modal, rgba(0,0,0,0.5))' }}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className="fixed left-1/2 top-1/2 z-[60] w-[520px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl flex flex-col"
           style={{
             backgroundColor: 'var(--surface-elevated, #ffffff)',

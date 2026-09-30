@@ -1,10 +1,10 @@
 import type { ComponentProps, ReactNode } from "react";
 import { Stack } from "expo-router";
 import { HomeHeaderGlassButton } from "@/session/HomeHeaderGlassButton";
-import { BlurBackdrop } from "@/session/BlurBackdrop";
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { ChevronDown, Menu } from "lucide-react-native";
 import { Pressable, StyleSheet, View } from "react-native";
+import { useSafeAreaFrame, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Text } from "@/components/AppText";
 import {
   NativePullDownMenu,
@@ -21,7 +21,7 @@ import {
   useThemedStyles,
   type ThemeColors,
 } from "@/theme";
-import { lineHeight, radius, spacing } from "@/theme/tokens";
+import { lineHeight, navigationChrome, spacing } from "@/theme/tokens";
 
 /**
  * 首页 iOS 顶栏走系统 UINavigationBar。
@@ -64,6 +64,17 @@ export function HomeNativeStackHeader({
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const nativeMenus = usesNativePullDownMenu();
+  const { width } = useSafeAreaFrame();
+  const insets = useSafeAreaInsets();
+  // Keep the native title view's width independent of the selected device and
+  // sync indicator. The guide only has the left menu; otherwise reserve the
+  // two-action toolbar. Mirror that space, outer margin and UIKit's title
+  // clearance on both sides. Without the extra clearance, iOS 26 moves
+  // an otherwise centered title toward the leading edge to avoid the toolbar.
+  const actionCount = showRemoteGuide ? 1 : 2;
+  const sideSpace = navigationChrome.target * actionCount + spacing.lg * 2 + spacing.md;
+  const titleWidth = Math.max(navigationChrome.target,
+    Math.min(220, width - insets.left - insets.right - sideSpace * 2));
 
   if (!usesNativeStackHeader()) return null;
 
@@ -83,7 +94,7 @@ export function HomeNativeStackHeader({
         style={({ pressed }) => [styles.titleHit, pressed && styles.pressed]}
         testID="devices.title"
       >
-        <BlurBackdrop intensity={20} overlayColor={colors.surfaceTranslucent} />
+        {/* The title sits directly on the bar: no capsule material behind it. */}
         <View style={styles.titleCluster}>
           <Text numberOfLines={1} style={styles.title}>
             {title}
@@ -109,7 +120,11 @@ export function HomeNativeStackHeader({
           headerStyle: { backgroundColor: "transparent" },
           headerTintColor: colors.textPrimary,
           headerTransparent: true,
-          headerTitle: () => titleNode,
+          headerTitle: () => (
+            <View style={[styles.titleFrame, { width: titleWidth }]}>
+              {titleNode}
+            </View>
+          ),
         }}
       />
       <Stack.Header
@@ -165,25 +180,28 @@ function displayMenuItems(actions: readonly NativePullDownAction[], onAction: (i
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     pressed: { opacity: 0.72 },
+    titleFrame: {
+      flexShrink: 1,
+      justifyContent: "center",
+      height: navigationChrome.target,
+    },
     title: {
       color: colors.textPrimary,
       flexShrink: 1,
-      fontSize: typeScale.listTitle,
+      fontSize: typeScale.title,
       fontWeight: fontWeight.semibold,
-      lineHeight: lineHeight.listTitleCompact,
+      lineHeight: lineHeight.title,
     },
     titleCluster: {
       alignItems: "center",
       flexDirection: "row",
       flexShrink: 1,
       gap: spacing.xs,
-      maxWidth: 220,
+      maxWidth: "100%",
       minWidth: 0,
     },
     titleHit: {
-      borderRadius: radius.pill,
-      overflow: "hidden",
-      paddingHorizontal: spacing.md,
+      paddingHorizontal: spacing.xs,
       alignItems: "center",
       justifyContent: "center",
       minHeight: 44,

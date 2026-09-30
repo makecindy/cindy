@@ -28,6 +28,7 @@ import type { EditorView } from '@tiptap/pm/view';
 
 import {
   createVoiceInputDraftPlugin,
+  clearVoiceInputDraftInTransaction,
   setVoiceInputDraftDecoration,
   type VoiceInputCaretState,
 } from '../components/new-chat/VoiceInputDraftDecoration';
@@ -84,6 +85,20 @@ function widgetKeys(plugin: ReturnType<typeof createVoiceInputDraftPlugin>, stat
 }
 
 describe('voice input draft decoration anti-flicker contract', () => {
+  it.each([false, true])('clears the draft atomically with committed text (replacement=%s)', (replace) => {
+    const { plugin, state } = makeState(replace ? '原来的文字' : '');
+    const from = 1;
+    const to = replace ? state.doc.content.size - 1 : 1;
+    const draft = applyDraftMeta(state, { text: '最终文字', source: 'stable', from, to, caretState: 'processing' });
+    // Reproduce the old two-phase path: the widget survives the document write.
+    const oldCommit = draft.apply(draft.tr.insertText('最终文字', from, to));
+    expect(plugin.getState(oldCommit)?.text).toBe('最终文字');
+    const committed = draft.apply(clearVoiceInputDraftInTransaction(draft.tr.insertText('最终文字', from, to)));
+    expect(committed.doc.textContent).toBe('最终文字');
+    expect(plugin.getState(committed)?.text).toBe('');
+    expect(widgetKeys(plugin, committed).draft).toBeNull();
+    expect(widgetKeys(plugin, committed).caret).not.toBeNull();
+  });
   it('keeps the draft widget key stable across streamed text and source updates', () => {
     const { plugin, state } = makeState('前文');
     const listening = applyDraftMeta(state, {

@@ -36,6 +36,7 @@ import {
   useSentAttachmentThumbsVersion,
 } from '@/session/sentAttachmentThumbStore';
 import {
+  isPendingSendItemInteractive,
   isPendingSendItemSelected,
   pendingSendSpins,
   type MobilePendingSendItem,
@@ -207,7 +208,12 @@ export function PendingSendBubble({
   const spinning = pendingSendSpins(item.phase);
   const editing = item.phase === 'editing';
   const failed = item.phase === 'failed';
-  const interactive = item.actions !== null || failed;
+  // Local outbox rows have not reached the desktop queue yet, but users must
+  // still be able to cancel them while upload/enqueue is in flight. Settling
+  // rows deliberately remain non-interactive: they have already left the
+  // queue and use the existing recovery path instead.
+  const interactive = isPendingSendItemInteractive(item);
+  const outbox = interactive && item.actions === null;
   const selected = isPendingSendItemSelected(item, actions.selectedClientId);
   const bubbleLabel = item.text || t('message.queue.attachmentMessage');
   const uploadsPending = item.phase === 'uploading';
@@ -441,23 +447,23 @@ export function PendingSendBubble({
           />
         </View>
       ) : null}
-      {selected && failed ? (
+      {selected && outbox ? (
         <View style={styles.actionRow} testID={`pendingSend.outboxActions.${item.clientId}`}>
           <ActionPill
             busy={actions.busy}
             icon={Trash2}
-            label={t('message.queue.delete')}
+            label={t(failed ? 'message.queue.delete' : 'message.queue.cancel')}
             onPress={() => actions.onRemoveOutbox(item.clientId)}
             testID={`pendingSend.outboxRemove.${item.clientId}`}
           />
-          <ActionPill
+          {failed ? <ActionPill
             busy={actions.busy}
             cta
             icon={RotateCcw}
             label={t('message.queue.retry')}
             onPress={() => actions.onRetryOutbox(item.clientId)}
             testID={`pendingSend.outboxRetry.${item.clientId}`}
-          />
+          /> : null}
         </View>
       ) : null}
     </View>
@@ -546,7 +552,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.bodyLarge,
   },
   attachmentLine: { alignItems: 'center', flexDirection: 'row', gap: 4 },
-  attachmentLineText: { color: colors.textTertiary, fontSize: typeScale.footnote },
+  attachmentLineText: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   attachmentStrip: { alignItems: 'flex-end', marginBottom: spacing.xs, maxWidth: '100%' },
   thumbStrip: { alignItems: 'flex-end', maxWidth: '100%' },
   thumbCell: { borderRadius: radius.container, overflow: 'hidden' },
@@ -560,7 +566,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     right: 0,
     top: 0,
   },
-  editingHint: { color: colors.textTertiary, fontSize: typeScale.footnote },
+  editingHint: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   errorText: { color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   rowHint: {
     color: colors.textTertiary,
@@ -582,7 +588,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   actionPillCta: { backgroundColor: colors.cta, borderColor: colors.cta },
-  actionPillText: { color: colors.textPrimary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  actionPillText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   actionPillTextCta: { color: colors.ctaText },
   pressed: { opacity: 0.72 },
   disabled: { opacity: 0.42 },

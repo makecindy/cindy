@@ -38,6 +38,8 @@ const log = createLogger('provider-service');
  */
 export interface ConnectionReadOptions {
   allowSideEffects: boolean;
+  /** Host-only snapshot read: never refresh CLI status or load account presentation. */
+  snapshotOnly?: boolean;
   /**
    * Wait for post-claim model discovery before materializing this snapshot.
    * This is an internal readiness hint for routing callers; ordinary provider reads
@@ -140,7 +142,8 @@ export interface ProviderService {
 export function createProviderService(deps: ProviderServiceDeps): ProviderService {
   async function listProviders(opts?: Partial<ProviderListOptions>): Promise<ProviderView[]> {
     const readOpts: ConnectionReadOptions = {
-      allowSideEffects: opts?.allowSideEffects === true,
+      allowSideEffects: opts?.allowSideEffects === true && opts?.snapshotOnly !== true,
+      snapshotOnly: opts?.snapshotOnly === true,
       waitForDiscovery: opts?.waitForDiscovery === true,
     };
     const [xd, anthropic, openai, xai] = await Promise.all([
@@ -196,13 +199,13 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       );
     }
     const accountInfo = new Map<string, ProviderView['openAiAccount']>();
-    if (deps.openAiAccountInfo) {
+    if (!readOpts.snapshotOnly && deps.openAiAccountInfo) {
       await Promise.all(catalog.providers.filter((p) => p.id === 'openai' || p.auth.native === 'codex').map(async (p) => {
         accountInfo.set(p.id, await deps.openAiAccountInfo!(p.id));
       }));
     }
     const subscriptionInfo = new Map<string, ProviderView['subscriptionAccount']>();
-    if (deps.subscriptionAccountInfo) await Promise.all(catalog.providers
+    if (!readOpts.snapshotOnly && deps.subscriptionAccountInfo) await Promise.all(catalog.providers
       .filter(p => p.id === 'anthropic' || p.id === 'xai' || p.auth.native === 'claude' || p.auth.native === 'xai')
       .map(async p => subscriptionInfo.set(p.id, await deps.subscriptionAccountInfo!(p.id))));
     return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.()).map((provider) => ({

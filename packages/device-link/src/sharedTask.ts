@@ -16,8 +16,6 @@ export function isSharedTaskAttachment(value: string, sharedTaskId: string): boo
 }
 
 export const SHARED_TASK_CAPABILITY = 'shared-task-v2';
-export const SHARED_TASK_MAX_ACTIVE_PER_OWNER = 2;
-export const SHARED_TASK_MAX_JOINED_PER_ACCOUNT = 2;
 export const SHARED_TASK_MAX_GUESTS = 2;
 /** Read existing development snapshots without revoking already joined guests.
  * Admission limits are enforced by the server, not by rejecting stored history. */
@@ -83,10 +81,10 @@ export type SharedTaskDecision =
 
 const sharedOperations: ReadonlySet<string> = new Set<SharedTaskOperation>([
   'history.read', 'events.subscribe', 'attachment.read', 'attachment.upload',
-  'file.read', 'input.send', 'agent.stop', 'agent.configure',
+  'file.read', 'input.send', 'agent.stop', 'agent.configure', 'approval.resolve',
 ]);
 const ownerOperations: ReadonlySet<string> = new Set<SharedTaskOperation>([
-  'approval.resolve', 'permission.configure', 'workdir.configure', 'plugins.configure',
+  'permission.configure', 'workdir.configure', 'plugins.configure',
   'history.delete', 'session.archive', 'session.export', 'session.fork',
   'background.create', 'schedule.create', 'sharedTask.manage',
 ]);

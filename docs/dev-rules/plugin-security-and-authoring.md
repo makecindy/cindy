@@ -24,19 +24,19 @@
 
 ## 事实来源
 
-| 内容                                                 | 权威来源 |
-| ---------------------------------------------------- | -------- |
-| 编写手册（作者唯一教材，现拿现读）                   | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `FORGE_GUIDE`，经 `ghost_forge_guide` 工具下发 |
-| `ghost.json` 身份卡字段与校验                        | `packages/plugin-protocol/src/manifest.ts` 是跨消费者协议正本；`apps/desktop/src/shared/ghost.ts` 是 Desktop 运行时 validator。除下文登记的 Desktop-only 能力外，两端必须同步维护 |
-| 管子协议类型                                         | `apps/desktop/src/shared/ghost.ts`（`cindy.send` / `cindy.onHostMessage` 类型） |
-| 打包限制                                             | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `packGhostDir` |
-| 运行时、沙箱进程与生命周期                           | `apps/desktop/src/main/cindy-brain/runtime/GhostRuntime.ts`、`GhostManager.ts` |
-| 安装事务状态、内容摘要与技能快照 receipt             | `apps/desktop/src/main/cindy-brain/ghostInstallReceipt.ts`，状态投影见 `shared/ghost.ts` 的 `GhostInstallApproval` |
+| 内容                                                 | 权威来源                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 编写手册（作者唯一教材，现拿现读）                   | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `FORGE_GUIDE`，经 `ghost_forge_guide` 工具下发                                                                                                                                                                                                                    |
+| `ghost.json` 身份卡字段与校验                        | `packages/plugin-protocol/src/manifest.ts` 是跨消费者协议正本；`apps/desktop/src/shared/ghost.ts` 是 Desktop 运行时 validator。除下文登记的 Desktop-only 能力外，两端必须同步维护                                                                                                                                 |
+| 管子协议类型                                         | `apps/desktop/src/shared/ghost.ts`（`cindy.send` / `cindy.onHostMessage` 类型）                                                                                                                                                                                                                                   |
+| 打包限制                                             | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `packGhostDir`                                                                                                                                                                                                                                                    |
+| 运行时、沙箱进程与生命周期                           | `apps/desktop/src/main/cindy-brain/runtime/GhostRuntime.ts`、`GhostManager.ts`                                                                                                                                                                                                                                    |
+| 安装事务状态、内容摘要与技能快照 receipt             | `apps/desktop/src/main/cindy-brain/ghostInstallReceipt.ts`，状态投影见 `shared/ghost.ts` 的 `GhostInstallApproval`                                                                                                                                                                                                |
 | 能力实现（网络／通知／确认／文件系统／技能／宿主等） | `networkSlot.ts`、`notifySlot.ts`、`badgeSlot.ts`、`confirmSlot.ts`、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts`、`agentSlot.ts`、`errandSlot.ts`、`iosSimulatorSlot.ts`；持久作品库见 [`plugin-library-storage.md`](plugin-library-storage.md)，主实现在 `libraryVault.ts`、`librarySlot.ts`、`libraryDbCore.ts` |
-| 面板供片、注入主题 token 与协议                      | `apps/desktop/src/renderer/cindy-brain/ghostPanelTheme.ts`、`cindy-ghost://` 分支 |
-| 插件详情能力说明 UI                                  | `apps/desktop/src/renderer/features/plugin/GhostPluginDetailView.tsx` |
-| 远程／手机版能力准入白名单                           | `packages/device-link/src/allowlist.ts` |
-| 行为与安全不变量                                     | `apps/desktop/src/main/cindy-brain/__tests__/`、`forge.test.ts` |
+| 面板供片、注入主题 token 与协议                      | `apps/desktop/src/renderer/cindy-brain/ghostPanelTheme.ts`、`cindy-ghost://` 分支                                                                                                                                                                                                                                 |
+| 插件详情能力说明 UI                                  | `apps/desktop/src/renderer/features/plugin/GhostPluginDetailView.tsx`                                                                                                                                                                                                                                             |
+| 远程／手机版能力准入白名单                           | `packages/device-link/src/allowlist.ts`                                                                                                                                                                                                                                                                           |
+| 行为与安全不变量                                     | `apps/desktop/src/main/cindy-brain/__tests__/`、`forge.test.ts`                                                                                                                                                                                                                                                   |
 
 文档与实现冲突时以代码为准，但必须在同一改动内同步修正本文与手册。
 
@@ -76,12 +76,12 @@
   运行时也不授予任何能力。未来支持必须新增明确映射，不得按名称猜测。
 - v2 的空 `slots` 和历史零能力声明可继续安装，规范化时直接丢弃。v2 → v3 更新按规范化
   后的直接能力比较；只删除 `slots`、能力等价时不算新增权限。
-- 安装／更新与能力授权解耦：用户导入 `.cindy`、明确要求当前 Agent 通过 Forge 安装、
-  点击市场安装或命中服务端
-  `defaultInstall` 即构成安装依据，真实包校验通过后直接安装并启用，不追加能力确认弹窗。
-  插件自主 Host 能力仍须在 manifest 如实声明、在插件详情展示，并由 Host
-  运行时强制守门；动态资源与 Agent 在途操作不重复建权限实体，继续复用 Cindy 既有
-  Agent 授权系统，不新增 grant／申请状态机。
+- 安装／更新前向用户确认插件声明的权限（2026-09-25 用户裁决，取代此前「安装不设能力
+  确认弹窗」的做法）：首次安装一律确认；更新只在新版本权限变多时确认；服务端
+  `defaultInstall` 下发的插件首装与后续更新都不确认。判据、入口与落位前复核见第 3.1 节。
+  确认只决定这次安装／更新是否进行，不是运行期授权：插件自主 Host 能力仍须在 manifest
+  如实声明、在插件详情展示，并由 Host 运行时强制守门；动态资源与 Agent 在途操作不重复
+  建权限实体，继续复用 Cindy 既有 Agent 授权系统，不新增 grant／申请状态机。
 
 ## 2. 运行时沙箱与进程隔离
 
@@ -109,8 +109,9 @@
   前再次复核同一 `callId`；直连与系统代理都只能连接该次守门确认的 IP，代理不得
   重新解析插件提供的域名。选中代理不构成私网授权；无法证明由当前代理生成的 fake-IP
   仍按特殊用途／私有地址拒绝。
-- 安装／更新不以弹窗点击作为能力授权事实；
-  **prompt 和前端展示都不构成安全边界**。
+- 安装／更新确认只决定这次落位是否进行，不以弹窗点击作为运行期能力授权事实；
+  **prompt 和前端展示都不构成运行期安全边界**。确认结论由 Main 在安装锁内按真实包复核，
+  不能由 Renderer 或 Agent 自报（第 3.1 节）。
 - 新增或修改能力声明时，除同步编写手册与校验（下节 6）外，还必须同步 shared 类型、
   preload／host handler、详情能力 UI（`GhostPluginDetailView.tsx`）、错误边界和测试。
 
@@ -119,8 +120,31 @@
 - 首次安装只来自明确依据：用户导入本地 `.cindy`、明确要求当前 Agent 调用
   `ghost_forge_install`、用户点击某个市场条目的安装、当前 Agent 按用户请求与既有操作授权
   调用 `ghost_market_install` 安装选定的缺失插件，或服务端为当前 owner 下发
-  `defaultInstall`。安装成功默认启用；插件声明哪些能力不改变
-  安装动作是否需要确认，因为安装不设能力确认弹窗。
+  `defaultInstall`。安装成功默认启用。
+- **安装／更新确认**（`shared/ghostInstallConsent.ts` 判据，`main/cindy-brain/ghostInstallConsent.ts`
+  两段式实现）：
+  - 判据：「权限」与插件详情页权限区同口径，即 `ghostPermissionItems` 中除 Agent 工具外的
+    全部条目。首次安装展示全部权限并确认；更新相对当前已装版本按 `diffInstalledGhostPermissionItems`
+    比较，新增条目、同 key 条目内容变化或内置 OAuth 客户端变化才算权限变多，只删除不算；
+    已装版本没有有效批准基线时按全部权限新增处理。
+  - 入口与确认界面：插件页、拖入、双击 `.cindy` 与设置页导入由发起窗口弹确认框
+    （`GhostInstallConsentWindowBridge` → `GhostInstallConsentHost`，只投给、也只接受发起安装
+    的那个 webContents）；Agent 调用 `ghost_market_install`／`ghost_forge_install` 不论任务权限档
+    （含 Full Access）都向调用所在任务投宿主权限确认卡（`permission` 交互 +
+    `hostOwnedConfirmation: 'plugin_install'`，经 `requestHostInteraction` 路由），桌面对话、
+    手机远控与 IM 渠道卡都能处理，旧版手机无需升级。用户拒绝返回 `MUTATION_CANCELLED`，
+    Agent 不得自行重试；确认界面不可用时 fail closed。
+  - 两段式：确认在任何安装锁、来源锁与 owner 租约之外求得（等待期间不阻塞其它插件）；
+    落位前在按 ghostId 的安装锁内用即将落位的真实包、现读受体 receipt 与确认前钉住的包摘要重算
+    （`assertGhostInstallConsent`），确认后权限面、已装版本、受体 receipt 或包字节变化就拒绝；
+    用户确认过的更新不能因为受体已被换成权限已覆盖候选包的版本而静默落位。自定义市场在
+    来源 cache-path 租约内只打包，释放租约后再求确认；提交时仍复核来源。Forge 在 packing
+    租约内捕获 owner 并传入装入入口，等锁结束后若账号已切换则拒绝取租约。每条装入路径都
+    必须显式交出确认策略（`prompt`／`automatic`／`exempt`）或锁外求得的结论，签名上必填，
+    新增路径无法漏掉。
+  - 服务端 `defaultInstall` 插件（首装、组织默认接管与之后的自动更新）按下发方决定，
+    策略为 `exempt`，不向用户确认。豁免只绑当前用户对该条目的默认下发资格：目录仍标
+    `defaultInstall`、但用户已退订后再自行从市场安装的，扩权更新必须确认。
 - 市场安装账本是后续更新来源的唯一事实：服务端市场按 `pluginId + releaseId` 路由，
   自定义市场还必须匹配 `sourceKey`；已装目录的原始 `ghost.json` 字节 SHA-256 必须与账本
   一致。旧记录缺少 raw 字段时，Host 只能按已发布的 legacy digest 编码核对同一份受限读取
@@ -135,9 +159,15 @@
   不进入自动接管；普通 `.cindy` 导入仍是 `manual`，不享受这项保护。自动接管不得复用用户手动
   换源的退订语义，不写 `markRemoved` 或 default-install opt-out。普通本地／Forge 换源只把
   旧来源记录置为 `installed=false`，不得新增或清除 opt-out；只有用户显式卸载才写 opt-out。
-- 所有仍匹配稳定来源的已装插件都静默自动更新，不限 public／organization、也不限
-  `defaultInstall`。更新保持现有启用状态，不弹成功 toast；插件正有调用、派活或 Cindy
-  工作时跳过，下一轮重试。服务端市场按客户端版本投影最近发布、曾上架且仍有效的兼容
+- 仍匹配稳定来源的已装插件自动更新，不限 public／organization；更新保持现有启用状态，
+  不弹成功 toast；插件正有调用、派活或 Cindy 工作时跳过，下一轮重试。权限没变多的更新
+  静默完成；新版本权限变多时（按下载后的真实包判定，策略 `automatic`）放弃本轮、不记失败、
+  不退避，同一 release 在当前进程内不再重复下载，旧版本照常可用；市场条目带
+  `updateRequiresConsent`，插件页标出「需确认新权限」，用户点更新时再弹确认。Renderer
+  目录走延后对账时，记下新 hold 后立即通知重投影，不等无关前台刷新。自定义
+  市场暂停记录同时钉住 release 与包内容指纹，同版本包被改掉后必须重新判定。仍具备
+  默认下发资格的服务端 `defaultInstall` 插件不受此限，权限变多也静默更新。
+- 服务端市场按客户端版本投影最近发布、曾上架且仍有效的兼容
   Release；current 不兼容时回退兼容历史版本，没有兼容版本时不展示。Desktop 信任该投影，
   不再用 `minCindyVersion` 二次筛选、跳过或弹兼容性确认。自定义市场和本地 `.cindy` 采用
   同一安装策略：`minCindyVersion` 是发布／发现元数据，不是客户端安装授权或确认闸门。
@@ -150,14 +180,14 @@
   解除。忙碌跳过不记失败，用户手动重试不受退避限制。
 - 服务端包必须通过 release SHA／大小及 id／版本校验，安装与运行时能力以真实包内的
   Manifest 为准，不将服务端目录的 Manifest 投影作为第二份能力上限。
-  自定义市场以发现并规范化的 manifest 为能力上限。能力上限内的新版声明可静默更新，超出
-  则按包内容不一致拒绝并留待来源修复，不转成用户审批流程。能力上限按 Host 实际消费语义
+  自定义市场以发现并规范化的 manifest 为能力上限。超出能力上限按包内容不一致拒绝并留待
+  来源修复，不转成用户审批流程；上限内的新版声明仍按上一条判断是否需要用户确认。能力上限按 Host 实际消费语义
   比较：真实包不得从无到有增加 `settingsHtml` 设置 WebView 或扩大固定 `settingsHeight`；
   OAuth `scopes` 换序或取子集属于收权，其它 OAuth、凭证标签与注入字段仍须保持在清单上限内；
   `setup.requires` 只能保留或删除市场已有的完整需求组，不能增加组、收紧 `anyOf` 或更换引用；
   真实包同名工具的 `parameters` JSON Schema 必须与市场规范值一致（仅对象键顺序可不同）。
-- 本地 `.cindy` 没有稳定来源，不自动更新；用户再次导入同 id 新包时直接原位更新，由 Main
-  保持当前启用状态。
+- 本地 `.cindy` 没有稳定来源，不自动更新；用户再次导入同 id 新包时原位更新（权限变多时
+  先确认），由 Main 保持当前启用状态。
 - 市场下载与本地安装使用一致的 Node 包体边界：压缩包最多 128 MiB、解包总量最多
   256 MiB、最多 2048 个条目；普通沙箱包仍为 8 MiB／32 MiB／256 个条目。
   下载前尚未识别真实包类型，按 128 MiB 限流；下载后由共用安装器按真实包类型校验。
@@ -167,12 +197,13 @@
   实现与回归见 `apps/desktop/src/main/plugin-market/download.ts` 及同目录的
   `__tests__/download.test.ts`。
 - Host receipt 是安装事务和运行完整性的状态记录，不是一次交互式“能力授权”。合法的安装／更新
-  事务直接写入 receipt，钉住 canonical manifest、trust、启停态与随机 `revision`；
+  事务（已按上文求得确认）写入 receipt，钉住 canonical manifest、trust、启停态与随机 `revision`；
   `ghostInstallApprovalToken()` 只是 Renderer 与 Main 之间防止并发漂移的前置条件，不是权限凭证。
-  没有或损坏 receipt 的存量安装优先走自动迁移／对账，不能改成逐插件能力确认弹窗。
+  没有或损坏 receipt 的存量安装优先走自动迁移／对账，不能改成逐插件能力确认弹窗；安装确认只作用
+  于新的安装／更新事务，Cindy 升级后已装插件不因此需要重新确认（以当前已装版本为基准）。
 - receipt 不等于“安装目录从此不可变”的证明：普通 `packageSha256` 仍是安装时点来源指纹；
   真正越出沙箱的技能继续使用 receipt 绑定的字节指纹与 Host 状态根快照。不要把审计字段误写成
-  全量运行时内容校验，也不要因取消能力确认弹窗而删除现有完整性守门。
+  全量运行时内容校验，也不要把安装确认当成完整性守门而删减现有校验。
 - **Forge 的源码区与 Host 受管根互斥。** `ghost_forge_scaffold` / `ghost_forge_pack` /
   `ghost_forge_install` 的目标必须是独立作者目录，不得是安装根或状态根；按 realpath
   挡住大小写折叠与软链／junction 别名。会话工作目录内直接放行；工作目录外走与
@@ -227,7 +258,7 @@
     能在其中一处找到没覆盖的角落，补一处、下一轮换另一处。
   - 新增任何"读插件内容目录"的代码一律从这里取判据，**不要就地 `readdir` + `isDirectory()`
     或 `stat` 直读**。只 `lstat` 最终段等于没判：中间段被换成软链／junction 时 OS 会
-     静默穿透，最终段报的是"真目录、非链接"，字节却来自插件目录之外。
+    静默穿透，最终段报的是"真目录、非链接"，字节却来自插件目录之外。
   - `hashGhostContentFiles` 的摘要编码必须保持无歧义 framing（当前为
     `cindy-ghost-content-v2` + UTF-8 路径长度前缀 + 每文件摘要），不得恢复成
     `path + NUL + bytes + NUL`；文件内容本身允许包含 NUL，分隔符编码会产生不同文件树
@@ -237,8 +268,8 @@
     receipt（安全水位与旧版本已提供的保证等价），只有对不上（真漂移）才 fail closed 并
     要求重新安装合法包——不得把一次纯格式升级直接变成全体用户的重新安装操作。
   - 同理，"源目录与受管根的包含关系"必须**双向**判（既不能落在受管根内，也不能是受管
-     根的祖先）：单向判定下只要在 owner 数据目录里放一个 `ghost.json`，递归打包就会把
-     已安装插件字节、批准 receipt 与技能快照打进 `.cindy`。
+    根的祖先）：单向判定下只要在 owner 数据目录里放一个 `ghost.json`，递归打包就会把
+    已安装插件字节、批准 receipt 与技能快照打进 `.cindy`。
   - 随包种子是第一方输入；发现链接、junction、FIFO 等非普通条目必须整颗跳过并告警，
     不得在复制时静默丢弃后继续写批准 receipt。
 
@@ -250,9 +281,11 @@
   未命中目标 host 的托管凭证。
 - `source: "gh-cli"` 是只为官方 `cindy-github` 保留的宿主凭证来源：Host 优先读取
   本机 `gh auth token`，不可用时才回落到同 key 经 `/secrets` 保存的 PAT。两种 token
-  均只在 Main 的 networkSlot 内存中注入 `api.github.com` 的
+  均只在 Main 的 networkSlot 或受信本机账号检查中注入 `api.github.com` 的
   `Authorization: Bearer` 请求头，不得进入插件、Renderer、Agent、KV、日志或 Node
-  Worker。设置页只能读取 `hostAvailable` 布尔与备用 PAT 的 `saved/tail` 状态。该来源
+  Worker。本机账号检查仅允许固定 GET `/user`，拒绝重定向，限时 15 秒；只返回
+  连接分类、用户名和来源，不返回响应原文。插件设置页只能读取 `hostAvailable`、
+  `hostManagedSetup` 布尔与备用 PAT 的 `saved/tail` 状态。该来源
   不允许 `exchange` 或 `setup.requires` 引用，第三方插件不得声明。
 - `source: "oidc-token"` 是 Host 托管的短时 Cindy Connection JWT：只对当前企业
   Membership 生效。资格有两条默认基座：当前组织的 Plugin Market organization 安装记录仍有效、
@@ -329,7 +362,7 @@
   close／detach 已开始、会话缺失、实例不匹配、查询失败、远程会话均 fail closed。
   对 Codex、Pi 与远端 Claude Code 这类进程外 harness，instance 只作为 opaque MCP route
   identity 写入 Host 生成的 loopback URL；桥接层必须将 URL identity 与注册表中的当前实例
-  严格比对，不匹配直接 401。  兼容旧客户端时，缺 instance 的 URL 可继续获得普通会话上下文，
+  严格比对，不匹配直接 401。 兼容旧客户端时，缺 instance 的 URL 可继续获得普通会话上下文，
   但必须剥除 instance 能力，使 Full Access 自动交接继续 fail closed。
   越界文件系统副作用（cindy-docs / 电脑工具的 `outside_workdir`，以及 Forge 的
   `forge_source`）在缺少 instance、live grant 读不到或实例已失效时直接拒绝，
@@ -573,7 +606,10 @@ topic 路由；产品层多端语义见
    在详情如实展示并由 Host 守门？是否误把安装弹窗或前端展示当成授权事实？
 3. receipt 是否仍只由 Main 的合法安装／更新／迁移事务写入？跨进程更新是否回传
    `ghostInstallApprovalToken()` 并在锁内重读比对？缺失或损坏状态是否优先无感迁移，
-   而不是重新引入能力确认？停用方向是否始终可成功？技能快照与字节指纹是否仍受保护？
+   而不是用安装确认充当恢复方案？停用方向是否始终可成功？技能快照与字节指纹是否仍受保护？
+   3.5. 新增或改动的装入路径是否显式交出安装确认策略，并在锁内用真实包复核
+   （`assertGhostInstallConsent`）？确认等待是否在所有安装锁与 owner 租约之外？后台路径是否
+   只会 `automatic` 放弃、从不替用户确认？Agent 路径是否不受任务权限档影响、始终确认？
 4. Agent 在途网络是否仍通过 URL／SSRF／重定向等 Host 守门，自主网络是否限 manifest
    白名单，托管凭证是否只向声明且命中的 host 注入、无明文读回？附件／媒体／目录是否经
    归属校验的 grant／deposit／ledger 交接，未暴露宿主绝对路径？
@@ -582,9 +618,9 @@ topic 路由；产品层多端语义见
 6. Forge（scaffold／pack／install）是否排除了 Host 受管根，按 realpath 双向判定并挡住
    大小写与软链／junction 别名？`ghost_forge_pack` 是否仍然只产出 `.cindy`，没有隐式安装；
    `ghost_forge_install` 是否只在用户明确要求时调用并复用本地安装／更新事务？
-6.5. 新增的“读插件内容目录”代码是否走 `ghostContentTree.ts` 的统一分类、逐段路径解析和
+   6.5. 新增的“读插件内容目录”代码是否走 `ghostContentTree.ts` 的统一分类、逐段路径解析和
    指纹格式，而不是就地复制一份 `readdir`／`stat` 实现？
-6.6. **存量插件升级后还能不能用（第 5 节红线）**：改动安装状态记录、manifest、能力字段、
+   6.6. **存量插件升级后还能不能用（第 5 节红线）**：改动安装状态记录、manifest、能力字段、
    快照、安装根、包格式或管子协议时，是否提供无感 backfill，保留已装、启停、凭证与偏好，
    并覆盖旧布局 fixture？让存量插件失效且无迁移 = P0。
 7. 改动是否命中作者可见契约（身份卡／管子／模型代办能力／面板供片／打包）？命中就必须
@@ -601,3 +637,14 @@ pnpm --filter desktop typecheck
 
 其余按 [`desktop-development.md`](desktop-development.md) 的分层验证选择；命中媒体、协议或
 IPC 时追加对应专项规则要求的验证。
+
+### 只读 Agent 模型目录
+
+插件自己的同源 `GET /agent-models` 面向 settings、panel、mainView 与电子脑。
+无需新增 manifest 权限，不改变存量批准状态。仅投影已连接来源中可用于新任务的本机
+`id/name/agent/providerId/providerName/efforts/defaultEffort/visible`，来源级强度不能被跨来源合并。
+visible 复用当前账号模型选择器的用户开关与目录默认值；隐藏项保留供显式展开，偏好未就绪不伪造默认。
+使用 ProviderService 的 `allowSideEffects:false` 读取，不主动发现或认领凭证，不调用模型。
+不暴露 ProviderView、auth、账号 identity 或 endpoint；响应 no-store、仅 GET、无参数，
+检查插件在装启用与 owner 归属，异步返回前复核。旧 Host 404 时插件应明确提示升级。
+此端点不覆盖远程 SSH 模型，执行前仍需核验真实路由。

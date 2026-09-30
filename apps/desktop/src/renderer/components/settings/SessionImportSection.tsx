@@ -6,7 +6,6 @@ import { Check, ChevronDown, ChevronRight, Download, FileUp, RefreshCw } from 'l
 import { basename, cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { emitRefresh } from '@/lib/sessionsBus';
-import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { formatSidebarTime, formatSidebarTimeAbsolute } from '@/features/cc-agent/lib/formatSidebarTime';
 import { SessionShareImportWizard } from './SessionShareImportWizard';

@@ -18,8 +18,7 @@ import { Text } from '@/components/AppText';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import type { PendingLocalAttachmentUpload } from '@/session/mobileLocalAttachmentUpload';
 import { attachmentDisplayLabel, pendingUploadDisplayLabel } from '@/session/attachments';
-import { ANNOTATION_OUTLINE_COLOR, ANNOTATION_STROKE_COLOR } from '@/session/imageAnnotationModel';
-import { fontWeight, iconSize, iconStroke, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 /** 输入卡内的缩略图为正方形(产品决策,不用横长方)。 */
 const THUMB_SIZE = 72;
@@ -82,10 +81,11 @@ export function ComposerAttachmentTray({
                 <Image contentFit="cover" source={{ uri: preview }} style={styles.thumbImage} transition={0} />
                 {attachment.annotated ? (
                   // 圈点标注角标:提示这张是带手绘标注的烧录图,点开可继续编辑/撤销。
-                  // 微徽标几何(designTokenDiscipline 登记);icon 用标注体系描边白,
-                  // 恒红底上跨主题恒定,与桌面标注视觉同族。
+                  // 微徽标几何(designTokenDiscipline 登记)。输入框 chrome 不在 Lightbox 标注
+                  // 豁免内:底色走徽标红 statusError,画笔走恒白前景 swipeActionText
+                  // (ctaText 在深色模式反相为近黑,不适合恒红底)。
                   <View style={styles.thumbAnnotatedBadge} testID={`${testIDPrefix}.attachmentAnnotatedBadge`}>
-                    <Pen color={ANNOTATION_OUTLINE_COLOR} size={10} strokeWidth={2.5} />
+                    <Pen color={colors.swipeActionText} size={10} strokeWidth={2.5} />
                   </View>
                 ) : null}
               </Pressable>
@@ -324,12 +324,13 @@ function makeTrayStyles(colors: ThemeColors) {
     thumbFailedText: {
       color: colors.ctaText,
       fontSize: typeScale.micro,
+      lineHeight: lineHeight.micro,
       fontWeight: fontWeight.semibold,
     },
-    // 标注角标:左下角红底画笔(标注红为语义豁免色,跨主题恒定,引语义常量)。
+    // 标注角标:左下角红底画笔(状态指示徽标红,跨主题恒定)。
     thumbAnnotatedBadge: {
       alignItems: 'center' as const,
-      backgroundColor: ANNOTATION_STROKE_COLOR,
+      backgroundColor: colors.statusError,
       borderRadius: radius.pill,
       bottom: 4,
       height: 18,
@@ -364,6 +365,7 @@ function makeTrayStyles(colors: ThemeColors) {
     chipText: {
       color: colors.textPrimary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       maxWidth: 220,
     },
     chipRemove: {
@@ -396,6 +398,7 @@ function makeTrayStyles(colors: ThemeColors) {
     collapsedBadgeFallbackText: {
       color: colors.textPrimary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.semibold,
     },
     collapsedBadgeOverlay: {
@@ -412,6 +415,7 @@ function makeTrayStyles(colors: ThemeColors) {
     collapsedBadgeOverlayText: {
       color: colors.ctaText,
       fontSize: typeScale.micro,
+      lineHeight: lineHeight.micro,
       fontWeight: fontWeight.semibold,
     },
   };

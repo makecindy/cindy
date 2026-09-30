@@ -82,6 +82,12 @@ export function registerRoutineTools(
               id: z.string(),
               kind: z.literal("interval"),
               intervalMs: z.number().int().min(60000),
+              anchorMs: z.number().int().min(0).optional().describe("Original interval anchor in Unix milliseconds; preserve when editing."),
+            }),
+            z.object({
+              id: z.string(),
+              kind: z.literal("once"),
+              at: z.number().int().min(0).describe("One-time trigger timestamp in Unix milliseconds."),
             }),
             z.object({
               id: z.string(),

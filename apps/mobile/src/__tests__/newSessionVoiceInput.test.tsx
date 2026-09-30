@@ -18,6 +18,11 @@ vi.mock('react-native', () => ({
   Platform: { get OS() { return native.platform; } },
   StyleSheet: { hairlineWidth: 1 },
   View: ({ children }: { children: ReactNode }) => createElement('div', null, children),
+  // MobileComposerInputRow 经 useReduceMotionEnabled 读系统「减弱动态效果」偏好。
+  AccessibilityInfo: {
+    isReduceMotionEnabled: () => Promise.resolve(false),
+    addEventListener: () => ({ remove: () => {} }),
+  },
 }));
 vi.mock('@/components/AppText', async () => {
   const { forwardRef } = await import('react');

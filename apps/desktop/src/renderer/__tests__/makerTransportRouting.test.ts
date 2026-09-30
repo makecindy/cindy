@@ -66,6 +66,31 @@ function stubElectron() {
 const sess = (id: string): Session => ({ id }) as unknown as Session;
 
 describe('makerApiFor 路由(完整对等会话级操作)', () => {
+  it('accepts deferred switch outcomes only from the owning remote device and session', async () => {
+    stubElectron();
+    let listener: ((push: { deviceId: string; channel: string; payload: unknown }, stamp?: unknown) => void) | undefined;
+    const off = vi.fn();
+    window.electronAPI.deviceLink.onRemotePush = vi.fn((callback) => {
+      listener = callback as typeof listener;
+      return off;
+    });
+    const { setDataOwnerGeneration } = await import('@/contexts/dataOwnerGeneration');
+    setDataOwnerGeneration('owner-a', 1);
+    const { subscribeRemoteCredentialSwitchOutcome } = await import('@/lib/makerTransport');
+    const outcomes: unknown[] = [];
+    const dispose = subscribeRemoteCredentialSwitchOutcome('session-a', 'device-a', (value) => outcomes.push(value));
+    listener?.({ deviceId: 'device-b', channel: 'maker:session-credential-switch-failed', payload: { sessionId: 'session-a', reason: 'apply-failed' } });
+    listener?.({ deviceId: 'device-a', channel: 'maker:session-credential-switch-failed', payload: { sessionId: 'session-b', reason: 'apply-failed' } });
+    listener?.({ deviceId: 'device-a', channel: 'maker:session-credential-switch-failed', payload: { sessionId: 'session-a', reason: 'unexpected' } });
+    listener?.({ deviceId: 'device-a', channel: 'maker:session-credential-switch-failed', payload: { sessionId: 'session-a', reason: 'apply-failed', error: 'never show secret' } });
+    listener?.({ deviceId: 'device-a', channel: 'maker:session-credential-switch-applied', payload: { sessionId: 'session-a', model: 'next', providerId: null } });
+    expect(outcomes).toEqual([
+      { kind: 'failed', sessionId: 'session-a', reason: 'apply-failed' },
+      { kind: 'applied', sessionId: 'session-a' },
+    ]);
+    dispose();
+    expect(off).toHaveBeenCalledOnce();
+  });
   it('routes connection input only through the dedicated local Main bridge', async () => {
     const {makerSpies, invoke} = stubElectron();
     const {submitRemotePluginConnection} = await import('@/lib/makerTransport');
@@ -117,6 +142,8 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
       { userName: 'Carol' },
     );
     api.input.clearSession('rs');
+    const replacement = { clientId: 'q1' } as never;
+    api.input.updateContent('rs', 'q1', replacement);
 
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:fork', ['rs', 'msg']);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:fork-strip-encrypted', ['rs']);
@@ -147,6 +174,11 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
       { userName: 'Carol' },
     ]);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:input:clear-session', ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:input:update-content', [
+      'rs',
+      'q1',
+      replacement,
+    ]);
   });
 
   it('已捕获的 deviceId 在 session origin 暂时消失后仍固定走远程隧道', async () => {

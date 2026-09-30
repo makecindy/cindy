@@ -13,6 +13,7 @@ import { AgentErrorDetails } from './AgentErrorDetails';
 import { Pressable, StyleSheet } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { View } from 'react-native';
 import type { SessionTailBannerState } from '@/session/sessionTailBannerModel';
 import { fontWeight, lineHeight, useThemedStyles, type ThemeColors } from '@/theme';
@@ -21,17 +22,11 @@ import { radius, spacing, typeScale } from '@/theme/tokens';
 export interface SessionTailBannerProps {
   state: NonNullable<SessionTailBannerState>;
   busy?: boolean;
-  /**
-   * 只读信息版(协同只读 worker 会话):只显示文案不渲染操作行——interrupted
-   * 状态没有任何消息行可回落,不显示会让用户不知道任务为何停了(review P2);
-   * 操作(续跑/忽略)是写行为,只读会话不给入口。
-   */
-  readOnly?: boolean;
   onContinue(): void;
   onDismiss(): void;
 }
 
-export function SessionTailBanner({ state, busy, readOnly, onContinue, onDismiss }: SessionTailBannerProps) {
+export function SessionTailBanner({ state, busy, onContinue, onDismiss }: SessionTailBannerProps) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
   const isInterrupted = state.kind === 'interrupted' || state.continueKind === 'interrupted';
@@ -48,25 +43,23 @@ export function SessionTailBanner({ state, busy, readOnly, onContinue, onDismiss
         {text}
       </Text>
       {state.kind === 'error-tail' && state.rawError && !isInterrupted ? <AgentErrorDetails message={state.rawError} /> : null}
-      {readOnly ? null : (
-        <View style={styles.actions}>
-          {showContinue ? (
-            <TailPill
-              busy={busy}
-              cta
-              label={isInterrupted ? t('session.tail.continueTask') : t('session.tail.retry')}
-              onPress={onContinue}
-              testID="session.tailBanner.continue"
-            />
-          ) : null}
+      <View style={styles.actions}>
+        {showContinue ? (
           <TailPill
             busy={busy}
-            label={t('session.tail.ignore')}
-            onPress={onDismiss}
-            testID="session.tailBanner.dismiss"
+            cta
+            label={isInterrupted ? t('session.tail.continueTask') : t('session.tail.retry')}
+            onPress={onContinue}
+            testID="session.tailBanner.continue"
           />
-        </View>
-      )}
+        ) : null}
+        <TailPill
+          busy={busy}
+          label={t('session.tail.ignore')}
+          onPress={onDismiss}
+          testID="session.tailBanner.dismiss"
+        />
+      </View>
     </View>
   );
 }
@@ -117,8 +110,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     padding: spacing.md,
     width: '100%',
   },
-  errorText: { color: colors.errorText, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
-  infoText: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  errorText: { color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  infoText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   pill: {
     alignItems: 'center',
@@ -131,8 +124,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   pillCta: { backgroundColor: colors.cta },
-  pillText: { color: colors.textSecondary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
+  pillText: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   pillTextCta: { color: colors.ctaText },
-  pressed: { opacity: 0.7 },
+  pressed: mobileInteractionStyles.pressed,
   disabled: { opacity: 0.5 },
 });

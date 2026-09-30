@@ -412,17 +412,8 @@ try {
     path: path.join(artifacts, 'settings-zh-light.png'),
   });
   await checkSelect(settings.getByRole('combobox').nth(1), 'quality-select-zh-light.png');
-  const releaseLabel = await viewer.evaluate(async () =>
-    (await import('/i18n/index.ts')).default.t('remoteDesktop.releaseControl'),
-  );
-  await viewer.getByRole('button', { name: releaseLabel, exact: true }).click();
   const desktopButton = settings.getByRole('button', { name: '桌面', exact: true });
-  assert(await desktopButton.isDisabled(), 'view-only actions explain why control is required');
-  await settings.getByText('当前仅查看，取得控制权后可使用剪贴板和桌面操作。').waitFor();
-  const takeLabel = await viewer.evaluate(async () =>
-    (await import('/i18n/index.ts')).default.t('remoteDesktop.takeControl'),
-  );
-  await settings.getByRole('button', { name: takeLabel, exact: true }).click();
+  assert(await desktopButton.isEnabled(), 'desktop viewer opens with control');
   await viewer.waitForFunction(() => {
     const button = [...document.querySelectorAll('aside button')].find(
       (item) => item.textContent === '桌面',

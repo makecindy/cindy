@@ -37,6 +37,17 @@ beforeEach(() => {
   root = createRoot(document.createElement('div'));
 });
 afterEach(() => act(() => root.unmount()));
+it('does not refresh for an opened or administratively cleared breaker', async () => {
+  await act(async () => root.render(createElement(Probe, {})));
+  invoke.mockClear();
+  await act(async () => {
+    responsive({ deviceId: 'a', unresponsive: true, recovered: false });
+    responsive({ deviceId: 'a', unresponsive: false, recovered: false });
+  });
+  expect(invoke).not.toHaveBeenCalled();
+  await act(async () => responsive({ deviceId: 'a', unresponsive: false, recovered: true }));
+  expect(invoke).toHaveBeenCalledTimes(1);
+});
 it.each(['status', 'peer', 'responsive'])('retains keyed favorites on failed %s refresh and replaces only on success', async event => {
   await act(async () => root.render(createElement(Probe, {})));
   const refresh = () => event === 'status' ? statusChanged()

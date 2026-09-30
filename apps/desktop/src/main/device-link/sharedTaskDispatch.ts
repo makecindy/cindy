@@ -2,9 +2,17 @@ import { isSharedTaskPeer, parseSharedTaskPeer, isSharedTaskAttachment, type Inv
 import type { SharedTaskHost } from './sharedTaskHost.js';
 
 export type SharedTaskPeerCapture = NonNullable<ReturnType<SharedTaskHost['capturePeer']>>;
+export interface SharedTaskInteractionCapture {
+  sessionId: string;
+  kind: 'permission' | 'ask_user_question' | 'plan_review';
+  toolName?: string;
+  suggestions?: unknown[];
+}
 let host: SharedTaskHost | null = null;
 let readQueueItem: ((sessionId: string, clientId: string) => (SharedTaskQueueItem & { attachments?: unknown }) | undefined) | null = null;
+let readInteractionSession: ((requestId: string) => SharedTaskInteractionCapture | undefined) | null = null;
 export function setSharedTaskQueueReader(value: typeof readQueueItem): void { readQueueItem = value; }
+export function setSharedTaskInteractionReader(value: typeof readInteractionSession): void { readInteractionSession = value; }
 export function setSharedTaskDispatchHost(value: SharedTaskHost | null): void { host = value; }
 export function captureSharedTaskPeer(source: string): SharedTaskPeerCapture | null {
   return host?.capturePeer(source) ?? null;
@@ -49,16 +57,82 @@ const sessionReads = new Set([
   'local-db:messages:around', 'local-db:messages:around-client-id',
   'local-db:messages:estimatedSessionValue', 'maker:input:get-projection',
   'maker:session-in-turn', 'maker:session-background-activity',
-  'maker:session-background-tasks:list', 'maker:get-context-usage',
+  'maker:session-background-tasks:list', 'maker:background-task:output-tail', 'maker:get-context-usage',
   'maker:get-pending-interactions', 'maker:get-session-agent-switch-intent',
 ]);
 const inputEdits = new Set(['maker:input:update-text', 'maker:input:update-content', 'maker:input:set-edit-lock']);
 const agentSettings = new Set(['maker:set-model', 'maker:set-effort', 'maker:set-fast-mode', 'maker:set-thinking-enabled', 'maker:switch-session-agent']);
+const interactionDecisionKinds = new Set(['permission', 'ask_user_question', 'plan_review']);
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 function deny(): never { throw new Error('[PERMISSION_DENIED] SharedTask task access denied'); }
+
+function sameJson(left: unknown, right: unknown): boolean {
+  try { return JSON.stringify(left) === JSON.stringify(right); } catch { return false; }
+}
+
+function isSafeSessionPermissionUpdate(value: unknown, toolName: string): boolean {
+  const update = record(value);
+  if (!update || update.destination !== 'session') return false;
+  if (update.type === 'codexSessionApproval') {
+    return Object.keys(update).every((key) => key === 'type' || key === 'destination');
+  }
+  if (update.type !== 'addRules' || update.behavior !== 'allow' ||
+      Object.keys(update).some((key) => !['type', 'behavior', 'destination', 'rules'].includes(key)) ||
+      !Array.isArray(update.rules) || update.rules.length === 0) return false;
+  return update.rules.every((rawRule) => {
+    const rule = record(rawRule);
+    return !!rule && typeof rule.toolName === 'string' && rule.toolName === toolName &&
+      Object.keys(rule).every((key) => key === 'toolName' || key === 'ruleContent') &&
+      (rule.ruleContent === undefined || typeof rule.ruleContent === 'string');
+  });
+}
+
+function assertSharedTaskPermissionUpdates(
+  decision: Record<string, unknown>, interaction: SharedTaskInteractionCapture,
+): void {
+  if (decision.permissionUpdates === undefined) return;
+  if (interaction.kind !== 'permission' || !interaction.toolName ||
+      !Array.isArray(decision.permissionUpdates) || decision.permissionUpdates.length === 0 ||
+      !Array.isArray(interaction.suggestions)) deny();
+  for (const update of decision.permissionUpdates) {
+    if (!isSafeSessionPermissionUpdate(update, interaction.toolName) ||
+        !interaction.suggestions.some((suggestion) => sameJson(update, suggestion))) deny();
+  }
+}
+
+/** Shared-task guests may answer the generic Agent interaction cards. Host-only
+ * confirmations (plugin setup, issue review, grants, and rename prompts) never
+ * enter this branch and remain protected by the normal origin gate. */
+function assertSharedTaskInteractionResolve(
+  capture: SharedTaskPeerCapture, args: unknown[], sessionId: string,
+  phase: 'invoke' | 'result',
+): void {
+  if (args.length !== 2 || typeof args[0] !== 'string' || !args[0]) deny();
+  const interaction = phase === 'invoke' ? readInteractionSession?.(args[0]) : undefined;
+  if (phase === 'invoke' && (!interaction || interaction.sessionId !== sessionId)) deny();
+  const decision = record(args[1]);
+  if (!decision || typeof decision.kind !== 'string' || !interactionDecisionKinds.has(decision.kind)) deny();
+  // Guests approve the host-displayed input, never substitute executable input.
+  if (decision.updatedInput !== undefined) deny();
+  if (phase === 'invoke' && interaction?.kind !== decision.kind) deny();
+  if (decision.kind === 'permission' || decision.kind === 'plan_review') {
+    if (decision.behavior !== 'allow' && decision.behavior !== 'deny') deny();
+  } else if (!record(decision.answers)) {
+    deny();
+  }
+  if (phase === 'invoke' && interaction) assertSharedTaskPermissionUpdates(decision, interaction);
+  if (!capture.authorize('approval.resolve')) deny();
+}
+
+/** Re-run the shared-task gate immediately before a pending decision is consumed. */
+export function assertSharedTaskInteractionResolveCurrent(
+  capture: SharedTaskPeerCapture, args: unknown[],
+): void {
+  assertSharedTaskInteractionResolve(capture, args, capture.author.sessionId, 'invoke');
+}
 
 /** Existing attachments can survive a text edit without being re-uploaded. The
  * set comes exclusively from this member's current host-owned pending row. */
@@ -140,6 +214,10 @@ export function assertSharedTaskInvoke(
     const topics = record(args[0])?.topics;
     if (!Array.isArray(topics) || topics.length > 1 || topics.some((topic) => topic !== `session:${sessionId}`)) deny();
     if (!capture.authorize('events.subscribe')) deny();
+    return;
+  }
+  if (channel === 'maker:resolve-interaction') {
+    assertSharedTaskInteractionResolve(capture, args, sessionId, phase);
     return;
   }
   if (args[0] !== sessionId) deny();

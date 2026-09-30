@@ -8,14 +8,16 @@
  *      档案知道;档案迟到的那一瞬间宁可落到未分类,也不能整个不见。
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
 import type { Session } from '@/lib/ccAgent.types';
 import {
   botRouteForOwnedSession,
   buildBotSessionOwners,
+  createSessionEntryNavigator,
   findBotProfileForSession,
+  resolveBotRouteForSessionEntry,
 } from '../botSessionOwners';
 import type { BotProfile } from '../botStore';
 
@@ -83,6 +85,89 @@ describe('伙伴归属表', () => {
       '/bots/bot%2Fa/session/s-telegram',
     );
     expect(botRouteForOwnedSession([bot], 'not-owned')).toBeNull();
+  });
+});
+
+describe('通知入口在伙伴投影未加载时的路由', () => {
+  function deps(over: {
+    current?: BotProfile[];
+    loaded?: BotProfile[];
+  }) {
+    const loadProfiles = vi.fn<(refresh: boolean) => Promise<BotProfile[]>>(async () => over.loaded ?? []);
+    return {
+      loadProfiles,
+      deps: {
+        readProfiles: () => over.current ?? [],
+        loadProfiles,
+      },
+    };
+  }
+
+  it('投影已含该任务时直接回伙伴页，不重载', async () => {
+    const { deps: d, loadProfiles } = deps({ current: [profile()] });
+    await expect(resolveBotRouteForSessionEntry('s-main', d)).resolves.toBe('/bots/bot-a');
+    expect(loadProfiles).not.toHaveBeenCalled();
+  });
+
+  it('启动后从未进过伙伴页时先加载投影，再回伙伴页', async () => {
+    const { deps: d, loadProfiles } = deps({ loaded: [profile()] });
+    await expect(resolveBotRouteForSessionEntry('s-old', d)).resolves.toBe('/bots/bot-a/session/s-old');
+    expect(loadProfiles).toHaveBeenCalledWith(true);
+  });
+
+  it('投影已加载后新委派出去的任务（行上仍是 desktop）也会重读投影，回到接手伙伴', async () => {
+    const stale = profile();
+    const delegated = profile({
+      id: 'bot-b',
+      canonicalSessionId: 's-b-main',
+      sessions: [
+        { id: 's-b-main', role: 'canonical' },
+        { id: 's-delegated', role: 'delegation' },
+      ] as unknown as BotProfile['sessions'],
+    });
+    const { deps: d, loadProfiles } = deps({ current: [stale], loaded: [stale, delegated] });
+    await expect(resolveBotRouteForSessionEntry('s-delegated', d)).resolves.toBe(
+      '/bots/bot-b/session/s-delegated',
+    );
+    expect(loadProfiles).toHaveBeenCalledWith(true);
+  });
+
+  it('不属于任何伙伴的任务重读后仍回普通任务路由', async () => {
+    const { deps: d, loadProfiles } = deps({ current: [profile()], loaded: [profile()] });
+    await expect(resolveBotRouteForSessionEntry('plain', d)).resolves.toBeNull();
+    expect(loadProfiles).toHaveBeenCalledTimes(1);
+  });
+
+  it('连续点击时，先点的慢查询不会覆盖后点的导航', async () => {
+    const pending = new Map<string, (route: string | null) => void>();
+    const openBotRoute = vi.fn();
+    const openOrdinary = vi.fn();
+    const open = createSessionEntryNavigator({
+      resolveBotRoute: (sessionId) => new Promise((resolve) => pending.set(sessionId, resolve)),
+      openBotRoute,
+      openOrdinary,
+    });
+    open('first');
+    open('second', 'message-1');
+    pending.get('second')!(null);
+    await Promise.resolve();
+    expect(openOrdinary).toHaveBeenCalledWith('second', 'message-1', expect.any(Function));
+    pending.get('first')!('/bots/bot-a');
+    await Promise.resolve();
+    expect(openBotRoute).not.toHaveBeenCalled();
+    // The ordinary path's own late async route checks the same latest gate.
+    const isLatest = openOrdinary.mock.calls[0]![2] as () => boolean;
+    expect(isLatest()).toBe(true);
+    open('third');
+    expect(isLatest()).toBe(false);
+  });
+
+  it('加载投影失败时退回普通任务路由，不吞掉这次点击', async () => {
+    const d = {
+      readProfiles: () => [],
+      loadProfiles: vi.fn(async () => { throw new Error('not ready'); }),
+    };
+    await expect(resolveBotRouteForSessionEntry('s-main', d)).resolves.toBeNull();
   });
 });
 

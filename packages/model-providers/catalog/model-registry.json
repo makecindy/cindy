@@ -1,7 +1,52 @@
 {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-23T00:00:00.005Z",
+  "updatedAt": "2026-09-29T19:00:00.002Z",
   "models": [
+    {
+      "id": "openai/gpt-6.1-sol",
+      "name": "GPT-6.1 Sol",
+      "status": "active",
+      "sortOrder": 14,
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "gpt-6.1-sol",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "defaults": {
+            "supportsFastMode": true
+          },
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-6.1-sol",
+      "perAgent": {
+        "codex": {
+          "contextWindow": 272000,
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
+        },
+        "claude-code": {
+          "contextWindow": 272000,
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      }
+    },
     {
       "id": "openai/gpt-6-sol",
       "name": "GPT-6 Sol",
@@ -102,7 +147,8 @@
         }
       ],
       "nativeApi": "openai-responses",
-      "modelRef": "openai/gpt-5.6-sol"
+      "modelRef": "openai/gpt-5.6-sol",
+      "defaultEnabled": false
     },
     {
       "id": "openai/gpt-5.6-sol[1m]",
@@ -188,7 +234,8 @@
         }
       ],
       "nativeApi": "openai-responses",
-      "modelRef": "openai/gpt-5.6-terra"
+      "modelRef": "openai/gpt-5.6-terra",
+      "defaultEnabled": false
     },
     {
       "id": "xd/gpt-5.6-terra",
@@ -248,7 +295,8 @@
         "claude-code": {
           "contextWindow": 272000
         }
-      }
+      },
+      "defaultEnabled": false
     },
     {
       "id": "xd/gpt-5.6-luna",
@@ -561,7 +609,18 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-fable-5",
+      "defaultEnabled": false
+    },
+    {
+      "id": "xd/claude-fable-5",
+      "name": "Fable 5",
+      "status": "active",
+      "sortOrder": 1,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-fable-5",
@@ -603,7 +662,18 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-5",
+      "defaultEnabled": false
+    },
+    {
+      "id": "xd/claude-opus-5",
+      "name": "Opus 5",
+      "status": "active",
+      "sortOrder": 0,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-opus-5",
@@ -630,7 +700,18 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-4-8",
+      "defaultEnabled": false
+    },
+    {
+      "id": "xd/claude-opus-4-8",
+      "name": "Opus 4.8",
+      "status": "active",
+      "sortOrder": 2,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-8",
@@ -658,7 +739,17 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-4-7"
+    },
+    {
+      "id": "xd/claude-opus-4-7",
+      "name": "Opus 4.7",
+      "status": "active",
+      "sortOrder": 3,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-7",
@@ -669,7 +760,8 @@
         }
       ],
       "nativeApi": "anthropic-messages",
-      "modelRef": "anthropic/claude-opus-4-7"
+      "modelRef": "anthropic/claude-opus-4-7",
+      "defaultEnabled": false
     },
     {
       "id": "anthropic/claude-opus-4-6",
@@ -686,7 +778,17 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-4-6"
+    },
+    {
+      "id": "xd/claude-opus-4-6",
+      "name": "Opus 4.6",
+      "status": "active",
+      "sortOrder": 4,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-6",
@@ -697,7 +799,8 @@
         }
       ],
       "nativeApi": "anthropic-messages",
-      "modelRef": "anthropic/claude-opus-4-6"
+      "modelRef": "anthropic/claude-opus-4-6",
+      "defaultEnabled": false
     },
     {
       "id": "anthropic/claude-opus-4-5",
@@ -714,7 +817,17 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-opus-4-5"
+    },
+    {
+      "id": "xd/claude-opus-4-5",
+      "name": "Opus 4.5",
+      "status": "active",
+      "sortOrder": 5,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-opus-4-5",
@@ -725,7 +838,8 @@
         }
       ],
       "nativeApi": "anthropic-messages",
-      "modelRef": "anthropic/claude-opus-4-5"
+      "modelRef": "anthropic/claude-opus-4-5",
+      "defaultEnabled": false
     },
     {
       "id": "anthropic/claude-sonnet-5",
@@ -741,7 +855,17 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-sonnet-5"
+    },
+    {
+      "id": "xd/claude-sonnet-5",
+      "name": "Sonnet 5",
+      "status": "active",
+      "sortOrder": 6,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-sonnet-5",
@@ -769,7 +893,17 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-sonnet-4-6"
+    },
+    {
+      "id": "xd/claude-sonnet-4-6",
+      "name": "Sonnet 4.6",
+      "status": "active",
+      "sortOrder": 7,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-sonnet-4-6",
@@ -780,7 +914,8 @@
         }
       ],
       "nativeApi": "anthropic-messages",
-      "modelRef": "anthropic/claude-sonnet-4-6"
+      "modelRef": "anthropic/claude-sonnet-4-6",
+      "defaultEnabled": false
     },
     {
       "id": "anthropic/claude-sonnet-4-5",
@@ -797,7 +932,17 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-sonnet-4-5"
+    },
+    {
+      "id": "xd/claude-sonnet-4-5",
+      "name": "Sonnet 4.5",
+      "status": "active",
+      "sortOrder": 8,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-sonnet-4-5",
@@ -808,7 +953,8 @@
         }
       ],
       "nativeApi": "anthropic-messages",
-      "modelRef": "anthropic/claude-sonnet-4-5"
+      "modelRef": "anthropic/claude-sonnet-4-5",
+      "defaultEnabled": false
     },
     {
       "id": "anthropic/claude-haiku-4-5",
@@ -825,7 +971,17 @@
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "anthropic-messages",
+      "modelRef": "anthropic/claude-haiku-4-5"
+    },
+    {
+      "id": "xd/claude-haiku-4-5",
+      "name": "Haiku 4.5",
+      "status": "active",
+      "sortOrder": 9,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "claude-haiku-4-5",
@@ -836,7 +992,8 @@
         }
       ],
       "nativeApi": "anthropic-messages",
-      "modelRef": "anthropic/claude-haiku-4-5"
+      "modelRef": "anthropic/claude-haiku-4-5",
+      "defaultEnabled": true
     },
     {
       "id": "xai/grok-4.7",
@@ -852,7 +1009,28 @@
         }
       ],
       "nativeApi": "openai-responses",
-      "modelRef": "xai/grok-4.7"
+      "modelRef": "xai/grok-4.7",
+      "perAgent": {
+        "claude-code": {
+          "defaultEnabled": false
+        }
+      }
+    },
+    {
+      "id": "xai/grok-4.7-build-fast",
+      "name": "Grok 4.7 Fast",
+      "status": "active",
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "xai",
+          "modelId": "xai/grok-4.7-build-fast",
+          "agents": ["claude-code", "codex"],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "openai-responses",
+      "modelRef": "xai/grok-4.7-build-fast"
     },
     {
       "id": "xai/grok-4.6",
@@ -1508,17 +1686,26 @@
       "sortOrder": 45,
       "routes": [
         {
-          "providerId": "xd",
-          "modelId": "deepseek/deepseek-v4-pro",
+          "providerId": "deepseek",
+          "modelId": "deepseek-v4-pro",
           "agents": ["claude-code", "codex"],
           "defaults": {
             "supportsFastMode": false
           },
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "openai-completions",
+      "modelRef": "deepseek/deepseek-v4-pro"
+    },
+    {
+      "id": "xd/deepseek-deepseek-v4-pro",
+      "name": "DeepSeek V4 Pro",
+      "sortOrder": 45,
+      "routes": [
         {
-          "providerId": "deepseek",
-          "modelId": "deepseek-v4-pro",
+          "providerId": "xd",
+          "modelId": "deepseek/deepseek-v4-pro",
           "agents": ["claude-code", "codex"],
           "defaults": {
             "supportsFastMode": false
@@ -1535,17 +1722,36 @@
       "sortOrder": 46,
       "routes": [
         {
-          "providerId": "xd",
-          "modelId": "deepseek/deepseek-v4-flash",
+          "providerId": "deepseek",
+          "modelId": "deepseek-flash",
           "agents": ["claude-code", "codex"],
           "defaults": {
-            "supportsFastMode": false
+            "supportsFastMode": false,
+            "name": "DeepSeek-Flash"
           },
           "referencePriceGroup": "global"
         },
         {
           "providerId": "deepseek",
           "modelId": "deepseek-v4-flash",
+          "agents": ["claude-code", "codex"],
+          "defaults": {
+            "supportsFastMode": false
+          },
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "openai-completions",
+      "modelRef": "deepseek/deepseek-v4-flash"
+    },
+    {
+      "id": "xd/deepseek-deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash",
+      "sortOrder": 46,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "deepseek/deepseek-v4-flash",
           "agents": ["claude-code", "codex"],
           "defaults": {
             "supportsFastMode": false
@@ -1568,7 +1774,17 @@
           "modelId": "gpt-5.4-nano",
           "agents": ["claude-code", "codex"],
           "referencePriceGroup": "global"
-        },
+        }
+      ],
+      "nativeApi": "openai-responses",
+      "modelRef": "openai/gpt-5.4-nano"
+    },
+    {
+      "id": "xd/gpt-5.4-nano",
+      "name": "GPT-5.4-Nano",
+      "status": "active",
+      "sortOrder": 101,
+      "routes": [
         {
           "providerId": "xd",
           "modelId": "gpt-5.4-nano",
@@ -1576,7 +1792,8 @@
         }
       ],
       "nativeApi": "openai-responses",
-      "modelRef": "openai/gpt-5.4-nano"
+      "modelRef": "openai/gpt-5.4-nano",
+      "defaultEnabled": false
     },
     {
       "id": "xd/codex-gpt-5.4-mini",
@@ -2355,7 +2572,7 @@
   ],
   "localModels": {
     "version": 1,
-    "featuredIds": ["qwen38-27b"],
+    "featuredIds": ["qwen38-flash-next", "qwen38-27b"],
     "models": [
       {
         "id": "qwen38-27b",
@@ -2402,11 +2619,25 @@
         "evidence": [
           {
             "url": "https://artificialanalysis.ai/models/qwen3-8-27b",
-            "verifiedAt": "2026-09-05",
+            "verifiedAt": "2026-09-24",
             "status": "measured"
+          },
+          {
+            "url": "https://ollama.com/library/qwen3.8/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
           }
         ],
-        "modelRef": "qwen/qwen3.8-27b"
+        "modelRef": "qwen/qwen3.8-27b",
+        "llamacpp": [
+          {
+            "repo": "ggml-org/Qwen3.8-27B-GGUF",
+            "file": "Qwen3.8-27B-Q4_K_M.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 18973870528,
+            "verifiedAt": "2026-09-25"
+          }
+        ]
       },
       {
         "id": "qwen35-4b",
@@ -2435,11 +2666,25 @@
         "evidence": [
           {
             "url": "https://artificialanalysis.ai/models/qwen3-5-4b",
-            "verifiedAt": "2026-09-05",
+            "verifiedAt": "2026-09-24",
             "status": "estimated"
+          },
+          {
+            "url": "https://ollama.com/library/qwen3.5/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
           }
         ],
-        "modelRef": "qwen/qwen3.5-4b"
+        "modelRef": "qwen/qwen3.5-4b",
+        "llamacpp": [
+          {
+            "repo": "bartowski/Qwen_Qwen3.5-4B-GGUF",
+            "file": "Qwen_Qwen3.5-4B-Q4_K_M.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 3013027808,
+            "verifiedAt": "2026-09-25"
+          }
+        ]
       },
       {
         "id": "qwen35-9b",
@@ -2468,11 +2713,25 @@
         "evidence": [
           {
             "url": "https://artificialanalysis.ai/models/qwen3-5-9b",
-            "verifiedAt": "2026-09-05",
+            "verifiedAt": "2026-09-24",
             "status": "estimated"
+          },
+          {
+            "url": "https://ollama.com/library/qwen3.5/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
           }
         ],
-        "modelRef": "qwen/qwen3.5-9b"
+        "modelRef": "qwen/qwen3.5-9b",
+        "llamacpp": [
+          {
+            "repo": "bartowski/Qwen_Qwen3.5-9B-GGUF",
+            "file": "Qwen_Qwen3.5-9B-Q4_K_M.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 6169341984,
+            "verifiedAt": "2026-09-25"
+          }
+        ]
       },
       {
         "id": "gemma4-12b",
@@ -2501,11 +2760,25 @@
         "evidence": [
           {
             "url": "https://artificialanalysis.ai/models/gemma-4-12b",
-            "verifiedAt": "2026-09-05",
+            "verifiedAt": "2026-09-24",
             "status": "estimated"
+          },
+          {
+            "url": "https://ollama.com/library/gemma4/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
           }
         ],
-        "modelRef": "google/gemma-4-12b"
+        "modelRef": "google/gemma-4-12b",
+        "llamacpp": [
+          {
+            "repo": "bartowski/gemma-4-12B-it-GGUF",
+            "file": "gemma-4-12B-it-Q4_K_M.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 7662533088,
+            "verifiedAt": "2026-09-25"
+          }
+        ]
       },
       {
         "id": "qwen36-35b",
@@ -2534,11 +2807,25 @@
         "evidence": [
           {
             "url": "https://artificialanalysis.ai/models/qwen3-6-35b-a3b",
-            "verifiedAt": "2026-09-05",
-            "status": "estimated"
+            "verifiedAt": "2026-09-24",
+            "status": "measured"
+          },
+          {
+            "url": "https://ollama.com/library/qwen3.6/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
           }
         ],
-        "modelRef": "qwen/qwen36-35b"
+        "modelRef": "qwen/qwen36-35b",
+        "llamacpp": [
+          {
+            "repo": "ggml-org/Qwen3.6-35B-A3B-GGUF",
+            "file": "Qwen3.6-35B-A3B-Q4_K_M.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 20419565568,
+            "verifiedAt": "2026-09-25"
+          }
+        ]
       },
       {
         "id": "nemotron35-30b",
@@ -2567,11 +2854,25 @@
         "evidence": [
           {
             "url": "https://artificialanalysis.ai/models/nemotron-3-5-lightning",
-            "verifiedAt": "2026-09-05",
-            "status": "estimated"
+            "verifiedAt": "2026-09-24",
+            "status": "measured"
+          },
+          {
+            "url": "https://ollama.com/library/nemotron-3.5-lightning/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
           }
         ],
-        "modelRef": "nvidia/nemotron-3.5-lightning"
+        "modelRef": "nvidia/nemotron-3.5-lightning",
+        "llamacpp": [
+          {
+            "repo": "bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
+            "file": "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_K_M.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 25477403616,
+            "verifiedAt": "2026-09-25"
+          }
+        ]
       },
       {
         "id": "qwen38-flash-next",
@@ -2583,27 +2884,232 @@
             "sizeBytes": 104852025885,
             "minUnifiedMemoryGb": 192,
             "appleSiliconOnly": true
+          },
+          {
+            "libraryName": "qwen3.8-flash-next:125b-a6b-q4_K_M",
+            "sizeBytes": 120058268208,
+            "minUnifiedMemoryGb": 192
           }
         ],
         "descriptions": {
-          "en": "High-memory candidate; local peak memory and performance still need validation.",
-          "zh-CN": "大内存候选，仍需验证本机峰值内存与性能。",
-          "zh-TW": "大記憶體候選，仍需驗證本機峰值記憶體與效能。",
-          "ja": "大容量メモリ向け候補。本機でのピークメモリと性能は未検証。",
-          "ko": "대용량 메모리 후보. 로컬 최대 메모리와 성능 검증이 필요합니다."
+          "en": "Capability pick for high-memory computers (192 GB or more). Local speed and peak memory still need testing.",
+          "zh-CN": "192 GB 及以上大内存电脑的能力主推，本机速度与峰值内存仍待实测。",
+          "zh-TW": "192 GB 以上大記憶體電腦的能力主推，本機速度與峰值記憶體仍待實測。",
+          "ja": "192 GB 以上の大容量メモリ向けの性能重視の推奨。ローカルの速度とピークメモリは要検証です。",
+          "ko": "192 GB 이상 대용량 메모리 컴퓨터의 성능 추천. 로컬 속도와 최대 메모리는 추가 검증이 필요합니다."
         },
         "evidence": [
           {
             "url": "https://artificialanalysis.ai/models/qwen3-8-flash-next",
-            "verifiedAt": "2026-09-05",
-            "status": "estimated"
+            "verifiedAt": "2026-09-24",
+            "status": "measured"
+          },
+          {
+            "url": "https://ollama.com/library/qwen3.8-flash-next/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
+          },
+          {
+            "url": "https://huggingface.co/rapid-mlx/Qwen3.8-Flash-Next-4bit",
+            "verifiedAt": "2026-09-24",
+            "status": "measured"
           }
         ],
-        "modelRef": "qwen/qwen3.8-flash-next"
+        "modelRef": "qwen/qwen3.8-flash-next",
+        "llamacpp": [
+          {
+            "repo": "bartowski/Qwen3.8-Flash-Next-GGUF",
+            "file": "Qwen3.8-Flash-Next-Q4_K_M/Qwen3.8-Flash-Next-Q4_K_M-00001-of-00004.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 119599030080,
+            "verifiedAt": "2026-09-25"
+          }
+        ]
+      },
+      {
+        "id": "laguna-s21-118b",
+        "modelRef": "poolside/laguna-s-2.1",
+        "name": "Laguna S 2.1 118B A8B",
+        "aliases": ["laguna", "poolside", "laguna-s-2.1", "118b", "moe"],
+        "variants": [
+          {
+            "libraryName": "laguna-s-2.1:nvfp4",
+            "sizeBytes": 66189691080,
+            "minUnifiedMemoryGb": 128,
+            "appleSiliconOnly": true
+          },
+          {
+            "libraryName": "laguna-s-2.1:q4_K_M",
+            "sizeBytes": 96031832391,
+            "minUnifiedMemoryGb": 192
+          }
+        ],
+        "descriptions": {
+          "en": "Coding candidate with a smaller Mac download than Flash-Next. Memory thresholds are estimates; Ollama tool use, speed and peak memory are unverified.",
+          "zh-CN": "Mac 下载体积小于 Flash-Next 的编程候选。内存门槛为估计，Ollama 工具调用、速度与峰值内存仍待验证。",
+          "zh-TW": "Mac 下載體積小於 Flash-Next 的程式設計候選。記憶體門檻為估計，Ollama 工具呼叫、速度與峰值記憶體仍待驗證。",
+          "ja": "Mac 用のダウンロードが Flash-Next より小さいコーディング候補。メモリ要件は推定値。Ollama のツール呼び出し、速度、ピークメモリは未検証です。",
+          "ko": "Mac 다운로드 크기가 Flash-Next보다 작은 코딩 후보. 메모리 기준은 추정치이며 Ollama 도구 호출, 속도, 최대 메모리는 미검증입니다."
+        },
+        "evidence": [
+          {
+            "url": "https://huggingface.co/poolside/Laguna-S-2.1",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
+          },
+          {
+            "url": "https://ollama.com/library/laguna-s-2.1/tags",
+            "verifiedAt": "2026-09-24",
+            "status": "pending"
+          },
+          {
+            "url": "https://github.com/tanishq-dubey/macos-laguna-s2.1/blob/main/BENCHMARK_RESULTS.md",
+            "verifiedAt": "2026-09-24",
+            "status": "measured"
+          }
+        ],
+        "llamacpp": [
+          {
+            "repo": "poolside/Laguna-S-2.1-GGUF",
+            "file": "laguna-s-2.1-Q4_K_M.gguf",
+            "quantization": "Q4_K_M",
+            "sizeBytes": 96031829760,
+            "verifiedAt": "2026-09-25"
+          }
+        ]
       }
     ]
   },
   "baseModels": [
+    {
+      "id": "openai/gpt-6.1-sol",
+      "aliases": [
+        "gpt-6.1-sol"
+      ],
+      "defaults": {
+        "name": "GPT-6.1 Sol",
+        "group": "gpt",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-6.1-sol"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 10,
+              "cacheReadPerMtok": 0.1,
+              "cacheWritePerMtok": 2.5,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-09-29",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+                "verifiedAt": "2026-09-29"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 15,
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 5,
+              "minInputTokens": 272001,
+              "effectiveFrom": "2026-09-29",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+                "verifiedAt": "2026-09-29"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 4,
+              "outputPerMtok": 20,
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 5.0,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-09-29",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+                "verifiedAt": "2026-09-29"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 8,
+              "outputPerMtok": 30,
+              "cacheReadPerMtok": 0.4,
+              "cacheWritePerMtok": 10,
+              "minInputTokens": 272001,
+              "effectiveFrom": "2026-09-29",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+                "verifiedAt": "2026-09-29"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1.0,
+              "outputPerMtok": 5.0,
+              "cacheReadPerMtok": 0.05,
+              "cacheWritePerMtok": 1.25,
+              "maxInputTokens": 272001,
+              "effectiveFrom": "2026-09-29",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+                "verifiedAt": "2026-09-29"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2.0,
+              "outputPerMtok": 7.5,
+              "cacheReadPerMtok": 0.1,
+              "cacheWritePerMtok": 2.5,
+              "minInputTokens": 272001,
+              "effectiveFrom": "2026-09-29",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+                "verifiedAt": "2026-09-29"
+              }
+            }
+          ]
+        }
+      ]
+    },
     {
       "id": "openai/gpt-6-sol",
       "aliases": ["gpt-6-sol"],
@@ -2639,9 +3145,9 @@
               "currency": "USD",
               "variant": "standard",
               "inputPerMtok": 4,
-              "outputPerMtok": 15.0,
+              "outputPerMtok": 15,
               "cacheReadPerMtok": 0.4,
-              "cacheWritePerMtok": 5.0,
+              "cacheWritePerMtok": 5,
               "effectiveFrom": "2026-09-22",
               "source": {
                 "kind": "provider-official",
@@ -2656,7 +3162,7 @@
               "inputPerMtok": 4,
               "outputPerMtok": 20,
               "cacheReadPerMtok": 0.4,
-              "cacheWritePerMtok": 5.0,
+              "cacheWritePerMtok": 5,
               "effectiveFrom": "2026-09-22",
               "source": {
                 "kind": "provider-official",
@@ -2669,9 +3175,9 @@
               "currency": "USD",
               "variant": "fast",
               "inputPerMtok": 8,
-              "outputPerMtok": 30.0,
+              "outputPerMtok": 30,
               "cacheReadPerMtok": 0.8,
-              "cacheWritePerMtok": 10.0,
+              "cacheWritePerMtok": 10,
               "effectiveFrom": "2026-09-22",
               "source": {
                 "kind": "provider-official",
@@ -2734,7 +3240,7 @@
               "currency": "USD",
               "variant": "fast",
               "inputPerMtok": 0.2,
-              "outputPerMtok": 1.0,
+              "outputPerMtok": 1,
               "cacheReadPerMtok": 0.02,
               "cacheWritePerMtok": 0.25,
               "effectiveFrom": "2026-09-22",
@@ -2786,7 +3292,7 @@
               "inputPerMtok": 4,
               "outputPerMtok": 20,
               "cacheReadPerMtok": 0.2,
-              "cacheWritePerMtok": 5.0,
+              "cacheWritePerMtok": 5,
               "effectiveFrom": "2026-09-22",
               "source": {
                 "kind": "provider-official",
@@ -2801,7 +3307,7 @@
               "inputPerMtok": 8,
               "outputPerMtok": 40,
               "cacheReadPerMtok": 0.4,
-              "cacheWritePerMtok": 10.0,
+              "cacheWritePerMtok": 10,
               "effectiveFrom": "2026-09-22",
               "source": {
                 "kind": "provider-official",
@@ -2907,14 +3413,14 @@
                 "verifiedAt": "2026-09-11"
               },
               "cacheReadPerMtok": 0.8,
-              "cacheWritePerMtok": 10.0,
+              "cacheWritePerMtok": 10,
               "maxInputTokens": 272001
             },
             {
               "currency": "USD",
               "variant": "fast",
               "inputPerMtok": 16,
-              "outputPerMtok": 60.0,
+              "outputPerMtok": 60,
               "effectiveFrom": "2026-09-11",
               "source": {
                 "kind": "provider-official",
@@ -2922,7 +3428,7 @@
                 "verifiedAt": "2026-09-11"
               },
               "cacheReadPerMtok": 1.6,
-              "cacheWritePerMtok": 20.0,
+              "cacheWritePerMtok": 20,
               "minInputTokens": 272001
             }
           ]
@@ -3022,14 +3528,14 @@
                 "verifiedAt": "2026-09-11"
               },
               "cacheReadPerMtok": 0.4,
-              "cacheWritePerMtok": 5.0,
+              "cacheWritePerMtok": 5,
               "maxInputTokens": 272001
             },
             {
               "currency": "USD",
               "variant": "fast",
               "inputPerMtok": 8,
-              "outputPerMtok": 36.0,
+              "outputPerMtok": 36,
               "effectiveFrom": "2026-09-11",
               "source": {
                 "kind": "provider-official",
@@ -3037,7 +3543,7 @@
                 "verifiedAt": "2026-09-11"
               },
               "cacheReadPerMtok": 0.8,
-              "cacheWritePerMtok": 10.0,
+              "cacheWritePerMtok": 10,
               "minInputTokens": 272001
             }
           ]
@@ -3150,7 +3656,7 @@
                 "verifiedAt": "2026-09-11"
               },
               "cacheReadPerMtok": 0.08,
-              "cacheWritePerMtok": 1.0,
+              "cacheWritePerMtok": 1,
               "minInputTokens": 272001
             }
           ]
@@ -3315,7 +3821,7 @@
               "currency": "USD",
               "variant": "standard",
               "inputPerMtok": 60,
-              "outputPerMtok": 270.0,
+              "outputPerMtok": 270,
               "effectiveFrom": "2026-09-11",
               "source": {
                 "kind": "provider-official",
@@ -3996,6 +4502,82 @@
                 "kind": "provider-official",
                 "url": "https://docs.x.ai/developers/pricing",
                 "verifiedAt": "2026-09-22"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 4,
+              "outputPerMtok": 12,
+              "cacheReadPerMtok": 1,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-09-24",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-09-24"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "fast",
+              "inputPerMtok": 6,
+              "outputPerMtok": 18,
+              "cacheReadPerMtok": 1.5,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-09-24",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-09-24"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xai/grok-4.7-build-fast",
+      "aliases": [],
+      "defaults": {
+        "name": "Grok 4.7 Fast",
+        "group": "grok",
+        "contextWindow": 500000,
+        "efforts": ["low", "medium", "high", "xhigh"],
+        "defaultEffort": "high",
+        "supportsImageInput": true,
+        "supportsFastMode": false
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 12,
+              "cacheReadPerMtok": 1,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-09-24",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-09-24"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 6,
+              "outputPerMtok": 18,
+              "cacheReadPerMtok": 1.5,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-09-24",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-09-24"
               }
             }
           ]
@@ -6218,6 +6800,13 @@
           ]
         }
       ]
+    },
+    {
+      "id": "poolside/laguna-s-2.1",
+      "aliases": [],
+      "defaults": {
+        "name": "Laguna S 2.1 118B A8B"
+      }
     }
   ]
 }

@@ -6,7 +6,6 @@ import { useTranslation } from 'react-i18next';
 import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import * as sessionService from '@/lib/sessionService';
 import { makerChatStore } from '@/lib/makerChatStore';

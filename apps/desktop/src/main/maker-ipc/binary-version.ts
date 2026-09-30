@@ -46,6 +46,8 @@ export interface AgentBinaryVersionResult {
   latestVersion: string | null;
   /** The channel version is strictly newer than the local one (Claude/Codex only). */
   updateAvailable: boolean;
+  /** `checkLatest` could not read the channel manifest, so "no update" is unknown. */
+  latestCheckFailed: boolean;
   error?: string;
 }
 
@@ -121,7 +123,7 @@ function parseOptions(value: unknown): AgentBinaryVersionOptions {
 async function probeLocalVersion(
   agentKind: AgentBinaryKind,
   options?: { bypassCache?: boolean },
-): Promise<Omit<AgentBinaryVersionResult, 'latestVersion' | 'updateAvailable'>> {
+): Promise<Omit<AgentBinaryVersionResult, 'latestVersion' | 'updateAvailable' | 'latestCheckFailed'>> {
   const binaryPath = resolveBinaryPath(agentKind);
   // 执行前复核路径确为受管二进制(CodeQL js/command-line-injection 防御纵深)
   if (!binaryPath || !isVettedAgentBinaryPath(agentKind, binaryPath)) {
@@ -200,13 +202,24 @@ export function registerMakerBinaryVersionIpc(): void {
       // The plain call never waits on the network, so About shows the local
       // version immediately even offline; the online comparison is a second call.
       if (!checkLatest) {
-        return { ...(await probeLocalVersion(agentKind)), latestVersion: null, updateAvailable: false };
+        return {
+          ...(await probeLocalVersion(agentKind)),
+          latestVersion: null,
+          updateAvailable: false,
+          latestCheckFailed: false,
+        };
       }
       // Start before probing so concurrent About rows join one in-flight lookup.
       const onlineManifest = getLatestManifest();
       const local = await probeLocalVersion(agentKind, { bypassCache: true });
-      const latestVersion = latestVersionFor(agentKind, await onlineManifest);
-      return { ...local, latestVersion, updateAvailable: isUpdateAvailable(agentKind, local.version, latestVersion) };
+      const manifest = await onlineManifest;
+      const latestVersion = latestVersionFor(agentKind, manifest);
+      return {
+        ...local,
+        latestVersion,
+        updateAvailable: isUpdateAvailable(agentKind, local.version, latestVersion),
+        latestCheckFailed: manifest === null,
+      };
     },
   );
 

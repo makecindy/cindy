@@ -194,3 +194,26 @@ describe('PermissionPrompt 的会话级授权按钮', () => {
     );
   });
 });
+
+describe('PermissionPrompt 的插件安装确认', () => {
+  it('首行作说明，权限清单放进可滚动区域，不显示内部参数', () => {
+    render(
+      <PermissionPrompt
+        permission={{
+          requestId: 'req-install',
+          toolName: 'cindy.plugin.install',
+          input: { ghost_id: 'weather-chip', version: '1.0.0' },
+          title: '安装插件「Weather」？',
+          description: '版本 1.0.0 · 由 Agent 发起 · 来自 Cindy 插件市场\n确认后才会安装。\n安装后它将拥有：\n• 访问 api.weather.test',
+        }}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('版本 1.0.0 · 由 Agent 发起 · 来自 Cindy 插件市场')).toBeTruthy();
+    const list = screen.getByText(/安装后它将拥有/);
+    expect(list.textContent).toContain('• 访问 api.weather.test');
+    expect(list.textContent).not.toContain('版本 1.0.0');
+    expect(screen.queryByText(/weather-chip/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /alwaysAllow/ })).toBeNull();
+  });
+});

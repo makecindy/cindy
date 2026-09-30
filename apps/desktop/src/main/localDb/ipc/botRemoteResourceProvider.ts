@@ -87,7 +87,9 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
     },
     async get(context, request) {
       if (management && (request.ref.id === 'create' || request.ref.id.startsWith('settings:'))) {
-        return management.getEditor(context, request.ref.id, request.client.locale);
+        const resource = await management.getEditor(context, request.ref.id, request.client.locale, { query: request.query, primitives: request.client.primitives });
+        if (request.ref.id === 'create') resource.actions = [...(resource.actions ?? []), { id: 'open-agent-import', label: { fallback: 'Import an Agent', translations: { 'zh-CN': '从其他 Agent 导入', 'zh-TW': '從其他 Agent 匯入', ja: 'Agent からインポート', ko: 'Agent에서 가져오기' } } }];
+        return resource;
       }
       if (request.ref.id.startsWith('working:')) {
         const [botId, phase, extra] = request.ref.id.slice('working:'.length).split('/');
@@ -119,10 +121,17 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
           if (block) block.data = data;
           else resource.blocks?.push({ id: page, primitive: 'list', fallbackMarkdown: '', data });
         }
+        // The `memory` block stays the toggle/USER.md form; saved entries are a separate list page.
+        resource.blocks?.push({ id: 'memories', primitive: 'list', fallbackMarkdown: '', data: {
+          entries: [{ id: 'memories', title: editorCopy.memories, resourceId: `settings:${source.id}/memory` }],
+        } });
       }
       return { ...resource, teammateMessaging: { version: 1, available: source.status === 'active' } };
     },
     async invoke(context, request) {
+      if (management && request.actionId === 'open-agent-import' && request.resourceRef?.id === 'create') return {
+        effects: [{ kind: 'navigate', target: { kind: 'resource', ref: { collectionId: 'companion-import', kind: 'import', id: 'sources' } } }],
+      };
       const scope = captureDataOwnerBroadcastScope();
       if (request.actionId !== 'send-message' && request.actionId !== 'verify-message' && request.actionId !== 'message-receipt') {
         if (management) return management.invoke(context, request);

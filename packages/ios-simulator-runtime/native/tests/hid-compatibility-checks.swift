@@ -21,9 +21,9 @@ struct HIDCompatibilityChecks {
             guard try body() else { throw NSError(domain: name, code: 1) }
             passed.append(name)
         }
-        func rejectsTarget(_ screen: NSObject?, _ id: UInt32? = 1) -> Bool {
+        func rejectsTarget(_ screen: NSObject?, _ id: UInt32? = 1, _ buildXcode: String? = nil) -> Bool {
             do {
-                _ = try nativeHIDTarget(screenClass: Screen.self, screen: screen, expectedScreenID: id)
+                _ = try nativeHIDTarget(screenClass: Screen.self, screen: screen, expectedScreenID: id, simulatorKitBuildXcode: buildXcode)
                 return false
             } catch NativeHIDError.targetUnavailable { return true }
             catch { return false }
@@ -36,6 +36,28 @@ struct HIDCompatibilityChecks {
         try check("legacy target") {
             try nativeHIDTarget(screenClass: LegacyScreen.self, screen: nil, expectedScreenID: nil) == 0x32
         }
+        // Xcode 26.6 exposes the screen API even for its type-0 built-in
+        // display. Treating API presence as screen-addressed HID crashes the
+        // simulator's backboardd on the first sample (then machPortInvalid).
+        try check("legacy built-in target with screen API") {
+            try nativeHIDTarget(screenClass: Screen.self, screen: screen, expectedScreenID: 1, simulatorKitBuildXcode: "2660") == 0x32
+        }
+        try check("legacy built-in still requires matching screen identity") {
+            rejectsTarget(screen, 7, "2660")
+        }
+        for buildXcode in ["2700", "2710"] {
+            try check("Xcode \(buildXcode) built-in screen keeps screen-addressed input") {
+                try nativeHIDTarget(screenClass: Screen.self, screen: screen, expectedScreenID: 1, simulatorKitBuildXcode: buildXcode) == 0x40000001
+            }
+        }
+        for buildXcode in [nil, "", "unknown", "0"] as [String?] {
+            do {
+                _ = try nativeHIDTarget(screenClass: Screen.self, screen: screen, expectedScreenID: 1, simulatorKitBuildXcode: buildXcode)
+                throw NSError(domain: "accepted unknown built-in routing", code: 1)
+            } catch NativeHIDError.targetUnavailable {}
+        }
+        passed.append("unknown built-in routing fails closed")
+        properties.screenType = 3
         try check("screen 1 target") {
             try nativeHIDTarget(screenClass: Screen.self, screen: screen, expectedScreenID: 1) == 0x40000001
         }
@@ -47,6 +69,12 @@ struct HIDCompatibilityChecks {
         properties.screenID = 0x40000000
         try check("screen ID flag collision") { rejectsTarget(screen, 0x40000000) }
         properties.screenID = 1
+        for screenType: UInt in [4, 5] {
+            properties.screenType = screenType
+            try check("screen-addressed type \(screenType)") {
+                try nativeHIDTarget(screenClass: Screen.self, screen: screen, expectedScreenID: 1) == 0x40000001
+            }
+        }
         for screenType: UInt in [1, 2] {
             properties.screenType = screenType
             try check("indirect screen \(screenType)") {

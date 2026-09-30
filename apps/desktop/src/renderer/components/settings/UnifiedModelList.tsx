@@ -73,10 +73,10 @@ import {
 import { LocalPackagingTag } from './LocalPackagingTag';
 import { ModelAdvancedDrawer } from './ModelAdvancedDrawer';
 import {
-  compareModelNames,
   groupModelsForManagement,
   MANAGEMENT_KIND_ORDER,
   modelBrand,
+  sortModelsForManagement,
   type ManagementKind,
   type ManagementView,
 } from './modelManagementPresentation';
@@ -401,6 +401,18 @@ function rowModelIds(row: UnionModelRow): string[] {
 function rowCategory(row: UnionModelRow): ModelCategory {
   const rep = row.byAgent[row.avail[0]];
   return rep ? classifyModel(rep) : 'ungrouped';
+}
+
+/** 沉底分区与分组同口径排序:sortOrder 取自每行代表条目。 */
+function sortRowsForManagement(rows: readonly UnionModelRow[]): UnionModelRow[] {
+  return sortModelsForManagement(
+    rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      sortOrder: row.byAgent[row.avail[0]]?.sortOrder,
+      row,
+    })),
+  ).map(({ row }) => row);
 }
 
 export function managementKindsOfRow(row: UnionModelRow, userProvider: boolean): ManagementKind[] {
@@ -777,8 +789,8 @@ export function UnifiedModelList({
         brand: g.brand,
         rows: g.models.map((m) => repByRow.get(m.id)).filter((r): r is UnionModelRow => !!r),
       })),
-      hiddenRows: [...hidden].sort(compareModelNames),
-      disabledRows: [...disabled].sort(compareModelNames),
+      hiddenRows: sortRowsForManagement(hidden),
+      disabledRows: sortRowsForManagement(disabled),
     };
     // visibilityVersion:沉底判定读 modelVisibilityPrefs,开关一拨行要立刻迁移。
   }, [

@@ -25,6 +25,7 @@ const h = vi.hoisted(() => ({
   accounts: new Map<string, 'claude' | 'xai'>(),
   retainPresentation: vi.fn(),
   readLoginCalls: [] as Array<{ maxAgeMs?: number } | undefined>,
+  legacyMigrations: 0,
 }));
 
 vi.mock('../provider-presentation-store.js', () => ({
@@ -69,7 +70,12 @@ vi.mock('../claude-native-connection.js', () => ({
 
 vi.mock('../claude-native-cli.js', () => ({
   claudeCliNetworkEnv: async () => ({ ...h.networkEnv }),
-  claudeCliConfigDirOverride: () => undefined,
+}));
+
+vi.mock('../claude-legacy-config-migration.js', () => ({
+  ensureLegacyClaudeConfigMigrated: async () => {
+    h.legacyMigrations += 1;
+  },
 }));
 
 vi.mock('../subscription-account-auth.js', () => ({
@@ -131,6 +137,7 @@ describe('DesktopClaudeAuthAdapter — Claude 订阅只经 CLI 自己的登录',
     h.accounts.clear();
     h.retainPresentation.mockReset();
     h.readLoginCalls = [];
+    h.legacyMigrations = 0;
   });
 
   it('keeps the owner-scoped BYOK key readable when Cindy gateway access is disabled', async () => {
@@ -157,6 +164,22 @@ describe('DesktopClaudeAuthAdapter — Claude 订阅只经 CLI 自己的登录',
     const env = await adapter.getAuthEnv({ credentialMode: 'oauth-bearer' });
     for (const key of CREDENTIAL_KEYS) expect(env[key]).toBeUndefined();
     expect(env.HTTPS_PROXY).toBe('http://127.0.0.1:7890');
+  });
+
+  it('各来源都用 CLI 默认配置目录:不设 CLAUDE_CONFIG_DIR,拉起前先过旧 dev 目录补拷', async () => {
+    h.gatewayKey = null;
+    const adapter = await makeAdapter();
+    const optionsList = [
+      { credentialMode: 'oauth-bearer' as const },
+      { credentialMode: 'gateway-key' as const },
+      { credentialMode: 'provider-oauth' as const },
+      undefined,
+    ];
+    for (const options of optionsList) {
+      const env = await adapter.getAuthEnv(options);
+      expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    }
+    expect(h.legacyMigrations).toBe(optionsList.length);
   });
 
   it('订阅会话:未连接(CLI 未登录或 Cindy 未获许可)→ no_oauth', async () => {

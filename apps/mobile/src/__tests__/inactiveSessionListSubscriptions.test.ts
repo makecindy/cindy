@@ -7,22 +7,20 @@ function source(path: string): string {
 }
 
 describe('inactive session list subscriptions', () => {
-  it('gates both mounted list routes by navigation focus', () => {
+  it('keeps the home unread mirror active between panes but pauses covered routes', () => {
     for (const path of ['src/session/HomeSurface.tsx', 'app/devices/[deviceId].tsx']) {
       const screen = source(path);
       expect(screen).toContain('const screenFocused = useIsFocused();');
-      expect(screen).toContain(
-        path === 'src/session/HomeSurface.tsx'
-          ? '<RemoteSessionStoreSubscriptionGate enabled={screenFocused && props.active !== false}>'
-          : '<RemoteSessionStoreSubscriptionGate enabled={screenFocused}>',
-      );
+      expect(screen).toContain('<RemoteSessionStoreSubscriptionGate enabled={screenFocused}>');
     }
+    // Home mirrors feed the task badge from the teammate pane; list presentation remains hidden.
+    expect(source('src/session/HomeSurface.tsx')).toContain('<ResidentHomeList focused={screenFocused && active}');
   });
 
   it('pauses list and row subscriptions while their route is covered', () => {
     const store = source('src/session/remoteSessionStore.ts');
     expect(store).toContain(
-      'enabled ? subscribe : INACTIVE_REMOTE_SESSION_STORE_SUBSCRIBE',
+      'gate ? gate.subscribe(subscribe, notify) : subscribe(notify)',
     );
     expect(store).toContain(
       "usePausableRemoteSessionStoreSnapshot('sessions', remoteSessionStore.getSessions)",

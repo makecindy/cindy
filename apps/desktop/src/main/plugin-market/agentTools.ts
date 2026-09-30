@@ -1,3 +1,4 @@
+import type { GhostInstallConsentPrompt } from '../cindy-brain/ghostInstallConsent.js';
 import type { PluginMarketService } from './service.js';
 import type { PluginMarketItem } from '../../shared/pluginMarket.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
@@ -14,8 +15,16 @@ export interface PluginMarketAgentDeps {
   installedState(ghostId: string): InstalledState;
   /** Owner generation and caller identity are captured before discovery's first await. */
   captureRead(): () => void;
-  /** Holds the existing owner lease and live task authority through package placement. */
-  captureInstall(signal?: AbortSignal): { assertCurrent(): void; release(): void };
+  /**
+   * Captures live task authority before install. Confirmation must not hold an
+   * owner lease; package placement rechecks `assertCurrent` and takes its own lease.
+   * `consentPrompt` shows the Host-owned install confirmation in the calling task.
+   */
+  captureInstall(signal?: AbortSignal): {
+    assertCurrent(): void;
+    release(): void;
+    consentPrompt: GhostInstallConsentPrompt;
+  };
 }
 
 function catalogItem(item: PluginMarketItem, installed: InstalledState) {
@@ -77,11 +86,16 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
             throwIpcError('PRECONDITION_FAILED', 'Plugin appeared during installation; inspect it before continuing');
           }
         };
-        const result = await deps.market.install(request.pluginId, {
-          expectedReleaseId: request.releaseId,
-          expectedManifest: detail.manifest,
-          allowSourceReplacement: false,
-        }, assertCurrent);
+        // Agent installs always ask the user in the task, whatever its permission mode.
+        const result = await deps.market.install(
+          request.pluginId,
+          {
+            expectedReleaseId: request.releaseId,
+            expectedManifest: detail.manifest,
+            allowSourceReplacement: false,
+          },
+          { consent: { prompt: authority.consentPrompt, initiator: 'agent' }, assertCurrent },
+        );
         // Once committed, cancellation cannot turn the durable installation
         // into a failure. The live check runs at package placement instead.
         return {
@@ -91,6 +105,12 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
           next: 'Inspect ghost_info for the real tools and setup. Installation is not account connection or task completion.',
         };
       } catch (error) {
+        if (isIpcError(error) && error.code === 'MUTATION_CANCELLED') {
+          return {
+            ok: false, errorCode: 'MUTATION_CANCELLED',
+            message: 'The user declined this plugin installation. Do not retry unless the user asks for it again.',
+          };
+        }
         return {
           ok: false, errorCode: isIpcError(error) ? error.code : 'INSTALL_UNAVAILABLE',
           message: 'Installation was not confirmed. Inspect the selected plugin before retrying; do not claim an account connection or completed work.',

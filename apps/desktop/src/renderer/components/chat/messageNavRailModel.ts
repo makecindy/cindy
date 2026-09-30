@@ -197,7 +197,11 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
       const attachmentCount = (m.images?.length ?? 0) + (m.files?.length ?? 0);
       if (preview) {
         closeAnswerTurn();
-        entries.push({ id: m.clientId, preview, isAutomation: Boolean(m.automationOrigin) });
+        entries.push({
+          id: m.clientId,
+          preview,
+          isAutomation: m.automationOrigin?.kind === 'scheduler',
+        });
         lastOwnsAnswers = true;
       } else if (attachmentCount > 0) {
         // 有附件但一个名字都取不到(粘贴截图):仍是真实提问,保留刻度,
@@ -207,7 +211,7 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
           id: m.clientId,
           preview: '',
           attachmentsOnly: attachmentCount,
-          isAutomation: Boolean(m.automationOrigin),
+          isAutomation: m.automationOrigin?.kind === 'scheduler',
         });
         lastOwnsAnswers = true;
       } else {

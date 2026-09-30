@@ -402,10 +402,6 @@ function DefaultWorkspaceRadio({
   );
 }
 
-/** 小号胶囊按钮(「复制链接 / 安装 Slack App」共用)。 */
-const pillBtn =
-  'flex h-6 shrink-0 items-center rounded-full border border-[var(--border-default)] px-2.5 text-11 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50';
-
 const RESERVED_WORKSPACE_ALIASES = new Set([
   HOOK_CHAT_WORKSPACE_ALIAS,
   '__proto__',

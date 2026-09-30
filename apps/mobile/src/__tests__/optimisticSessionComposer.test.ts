@@ -40,21 +40,19 @@ describe('mobile optimistic composer while session is not ready', () => {
   it('keeps the composer out of the read-only slot while gating remote controls separately', () => {
     const source = readSource(SCREEN);
 
-    // composer 只认真正的协作只读理由。
-    expect(source).toContain('      readOnlyReason: composerReadOnlyReason,\n');
+    // composer 不再接收任何只读理由(协同任务也可在手机上操作)。
     expect(source).not.toContain('readOnlyReason: cacheSeededReason');
     // 断线 / 弱网 / 熔断只锁 outbox 派发；确定性错误仍进共享布局锁 composer。
     expect(source).toContain('remoteUnavailableReason: composerRemoteUnavailableReason,');
     expect(source).toContain('describeRemoteComposerBlockingError(connectionError)');
     // 会话尚未在被控端建成时,队列行(取消 / 编辑 / 插队)仍然只读。
     expect(source).toContain('const queueAvailabilityReason = cacheSeededReason\n    ?? pendingCreationReason');
-    expect(source).toContain('const queueInlineReadOnlyReason = collaborationReadOnlyReason ?? queueAvailabilityReason');
-    expect(source).toContain('const errorRecoveryReadOnlyReason = composerReadOnlyReason ?? queueAvailabilityReason');
+    expect(source).toContain('readOnlyReason={queueAvailabilityReason}');
   });
 
   it('matches Desktop control behavior during a transient disconnect', () => {
     const source = readSource(SCREEN);
-    const queueGateStart = source.indexOf('const queueInlineReadOnlyReason =');
+    const queueGateStart = source.indexOf('const queueAvailabilityReason =');
     const queueGateEnd = source.indexOf(';', queueGateStart);
     const queueGate = source.slice(queueGateStart, queueGateEnd);
     const stopStart = source.indexOf('const stopSession = () => {');
@@ -79,7 +77,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain('error: string | null;');
     expect(source).toContain('const latchOutboxTransportHold = useCallback(');
     expect(source).toContain('const outboxRecoverySyncHeld = hasLatchedOutboxTransportHold');
-    expect(source).toContain('autoRecoveringError: outboxRecoverySyncHeld,');
+    expect(source).toContain('autoRecoveringError: outboxRecoverySyncHeld || !companionEntry.ready,');
     expect(source).toContain('setOutboxTransportHold((current) => current?.deviceId === deviceId ? null : current);');
     expect(source).not.toContain('autoRecoveringError: isAutoRecoveringRemoteError(connectionError),');
     // Desktop 断线时仍允许尝试队列编辑类动作,不把整行切成只读。

@@ -13,17 +13,19 @@
  *   Esc         → Deny
  */
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import type { BotChatIdentity } from '@/features/bots/BotSessionContentHeader';
 
+import { shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import type { PendingPermission } from '@/lib/makerChatStore';
 import { describeSessionPermissionScope } from '@/lib/permissionSuggestionScope';
+import { GHOST_INSTALL_CONSENT_TOOL_NAME } from '../../../shared/ghostInstallConsent';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -101,17 +103,28 @@ const allowActionClass = cn(
 
 export function PermissionPrompt({ permission, onRespond, companion }: PermissionPromptProps) {
   const { t } = useTranslation();
+  const cardRef = useRef<HTMLDivElement>(null);
   const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable,
     submitting, submissionFailed } = permission;
   const isMediaDownload = toolName === 'cindy.media.download';
+  // 插件安装确认由 Host 渲染成纯文本：首行是版本与来源，其余是权限清单。手机按原样
+  // 逐行显示；这里首行作说明，清单放进可滚动区域，不显示内部参数。
+  const isPluginInstallConsent = toolName === GHOST_INSTALL_CONSENT_TOOL_NAME;
+  const [consentHead, ...consentBody] = isPluginInstallConsent
+    ? (description ?? '').split('\n')
+    : [];
   const promptDescription = autoReviewUnavailable
     ? t('newChat.permissionPrompt.autoReviewUnavailable')
-    : description;
+    : isPluginInstallConsent
+      ? consentHead
+      : description;
 
   const displayTitle = displayName
     ? t('agentIsland.native.permissionPromptTitleWithTool', { toolName: displayName })
     : title || t('agentIsland.native.permissionPromptTitleWithTool', { toolName });
-  const codeContent = formatToolInput(toolName, input);
+  const codeContent = isPluginInstallConsent
+    ? consentBody.join('\n')
+    : formatToolInput(toolName, input);
   const sessionSuggestions = useMemo(() => filterSessionScopedSuggestions(suggestions), [suggestions]);
   const canAlwaysAllowForSession = sessionSuggestions.length > 0;
   // 这个按钮加的是 agent 给的一条具体规则(Bash 多为 `curl:*` 这类前缀模式),
@@ -159,12 +172,12 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // IME 组合期间的 Enter(确认候选词)不算快捷键;焦点在可编辑元素上时
-      // (侧栏重命名/查找栏等)也不劫持按键,避免把输入操作误判成授权决定。
-      if (e.isComposing) return;
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+      // 按键已有归属时不替用户做授权决定：输入法组字、正在打字、刚被菜单处理的 Esc、
+      // 焦点在「拒绝」等按钮上的回车（交给按钮本身激活）都让位。
+      if (e.key !== 'Enter' && e.key !== 'Escape') return;
+      const shortcutKind =
+        e.key === 'Escape' ? 'dismiss' : e.ctrlKey || e.metaKey ? 'modifiedActivate' : 'activate';
+      if (shouldCardShortcutYield(e, shortcutKind, cardRef.current)) return;
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         handleAlwaysAllow();
@@ -185,6 +198,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
   return (
     <div
+      ref={cardRef}
       className={cn(
         'w-full max-w-[914px] rounded-xl border p-4',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
@@ -213,12 +227,18 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       {/* Code block */}
       <div
         className={cn(
-          'mt-3 max-h-[120px] overflow-auto rounded-[8px] border px-3.5 py-2.5',
+          'mt-3 overflow-auto rounded-[8px] border px-3.5 py-2.5',
           'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
-          'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-relaxed text-[var(--chat-input-text)]',
+          isPluginInstallConsent
+            ? 'max-h-[240px] text-13 leading-relaxed text-[var(--chat-input-text)]'
+            : 'max-h-[120px] font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-relaxed text-[var(--chat-input-text)]',
         )}
       >
-        <pre className="whitespace-pre-wrap break-all">{codeContent}</pre>
+        {isPluginInstallConsent ? (
+          <p className="whitespace-pre-wrap break-words">{codeContent}</p>
+        ) : (
+          <pre className="whitespace-pre-wrap break-all">{codeContent}</pre>
+        )}
       </div>
 
       {/* Action buttons — inline text + kbd badges, right-aligned.

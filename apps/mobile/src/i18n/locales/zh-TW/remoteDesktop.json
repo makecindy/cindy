@@ -159,7 +159,7 @@
   "lockOnExit": "退出後鎖定電腦",
   "lockOnExitHint": "離開遠端桌面時鎖定螢幕。重新連線或切換 App 不會觸發。",
   "lockOnExitFailed": "無法確認電腦已鎖定螢幕，請檢查電腦狀態。",
-  "hostMute": "被控端靜音",
-  "hostMuteHint": "連線期間將被控電腦靜音",
-  "hostMuteFailed": "無法修改被控端靜音狀態"
+  "hostMute": "遠端電腦靜音",
+  "hostMuteHint": "連線期間將遠端電腦靜音",
+  "hostMuteFailed": "無法修改遠端電腦的靜音狀態"
 }

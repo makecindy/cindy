@@ -16,8 +16,8 @@ import { useTheme } from '@/theme/ThemeProvider';
  */
 export const MAX_FONT_SIZE_MULTIPLIER = 1.2;
 
-export function Text(props: TextProps) {
-  return <RNText maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} {...props} />;
+export function Text({ ref, ...props }: TextProps & { ref?: Ref<RNText> }) {
+  return <RNText ref={ref} maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} {...props} />;
 }
 
 /** ref 直接透传给原生 TextInput(React 19 ref-as-prop),`focus()` 等命令式调用不受影响。 */

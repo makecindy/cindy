@@ -1,4 +1,5 @@
 import {
+  compareSessionListStrings,
   groupAutomationListItems,
   remoteSessionDisplayTitle,
   sessionRowMessagePreview,
@@ -358,7 +359,7 @@ function buildProjectGroups(
         // 用列表项的 lastActivityAt 而非 item.session 的时间:自动化组行的 session 是
         // primary(可能是较旧的未读 run),但其 lastActivityAt 已被共享层修正为组内最新。
         latestActivityAt: group.reduce((latest, item) =>
-          item.lastActivityAt.localeCompare(latest) > 0 ? item.lastActivityAt : latest,
+          compareSessionListStrings(item.lastActivityAt, latest) > 0 ? item.lastActivityAt : latest,
         first.lastActivityAt),
         pendingInteractionCount: group.reduce((sum, item) => sum + item.pendingInteractionCount, 0),
         sessionCount: group.reduce((sum, item) => sum + (item.automationGroup?.sessionCount ?? 1), 0),
@@ -368,7 +369,7 @@ function buildProjectGroups(
         workingDir,
       };
     })
-    .sort((a, b) => b.latestActivityAt.localeCompare(a.latestActivityAt));
+    .sort((a, b) => compareSessionListStrings(b.latestActivityAt, a.latestActivityAt));
 }
 
 function projectGroupKey(session: RemoteSessionListSessionLike): string {
@@ -558,7 +559,7 @@ function matchesSearchQuery(
 function compareSessionsByStatusThenActivityDesc(a: MobileHomeSessionLike, b: MobileHomeSessionLike): number {
   const statusDiff = sessionStatusRank(a.status) - sessionStatusRank(b.status);
   if (statusDiff !== 0) return statusDiff;
-  return lastActivityTime(b).localeCompare(lastActivityTime(a));
+  return compareSessionListStrings(lastActivityTime(b), lastActivityTime(a));
 }
 
 function sessionStatusRank(status: string): number {
