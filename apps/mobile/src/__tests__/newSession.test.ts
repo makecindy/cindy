@@ -1948,7 +1948,7 @@ describe('new session composer surface', () => {
     expect(newSource).toContain("import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';");
     expect(newSource).toContain("const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteString(params.visualFocusComposer) === '1';");
     expect(newSource).toContain('const visualInitialDraft = MOBILE_VISUAL_MOCK_ENABLED ? readRouteString(params.visualDraft) : null;');
-    expect(newSource).toContain('firstMessage: visualInitialDraft ?? (isRemoteTaskSuggestionId(params.suggestion)');
+    expect(newSource).toContain('firstMessage: visualInitialDraft ?? readRouteString(params.draft) ?? (isRemoteTaskSuggestionId(params.suggestion)');
     expect(newSource).toContain('t(`devices.list.taskSuggestions.items.${params.suggestion}.prompt`)');
     expect(newSource).toContain(': DEFAULT_NEW_SESSION_DRAFT.firstMessage)');
     expect(newComposerSource).toContain('inputTestID="newSession.firstMessageInput"');

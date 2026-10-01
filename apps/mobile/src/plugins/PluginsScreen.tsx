@@ -12,6 +12,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { useIsFocused, useRouter } from "expo-router";
+import { goBackGuarded } from "@/utils/backGuard";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import {
@@ -116,7 +117,7 @@ function PluginDirectory() {
     else if (selected && !wide) {
       detailGeneration.current += 1;
       setSelected(undefined);
-    } else router.back();
+    } else goBackGuarded(router);
   }, [detailOpen, selected, wide, router]);
   useEffect(() => {
     if (!focused || !selected || wide) return;
