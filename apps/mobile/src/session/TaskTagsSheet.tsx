@@ -73,6 +73,7 @@ export function TaskTagsSheet({
   }
   return (
     <SheetModal
+      nativePresentation
       visible={visible}
       onRequestClose={onClose}
       onBackdropPress={onClose}

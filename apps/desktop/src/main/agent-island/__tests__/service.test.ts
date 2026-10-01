@@ -3523,6 +3523,52 @@ describe('AgentIslandService native publishing', () => {
     });
   });
 
+  it('keeps a deferred completion running for activity consumers until it is replayed', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    let deferCompletion = true;
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void frameOrFrames;
+      return state.visible;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const onSessionActivityChange = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+      onSessionActivityChange,
+    });
+    service.setCompletionDeferResolver(() => deferCompletion);
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        complete: customSound('complete.wav'),
+      },
+    });
+
+    // An Orca Lead turn that only dispatched Workers ends while their reports are owed.
+    service.handleUserPrompt({ sessionId: 'lead', agentKind: 'codex' }, 'split the work');
+    service.handleAgentEvent({ sessionId: 'lead', agentKind: 'codex' }, doneEvent());
+    playSound.mockClear();
+
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'lead', phase: 'running', attention: false }),
+    ]);
+
+    // Still owed: a replay attempt keeps the Lead running.
+    service.notifyQueueEmptied('lead');
+    expect(playSound).not.toHaveBeenCalled();
+
+    deferCompletion = false;
+    service.notifyQueueEmptied('lead');
+
+    expect(playSound).toHaveBeenCalledWith(customSound('complete.wav'));
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'lead', phase: 'completed', attention: true }),
+    ]);
+  });
+
   it('does not play a completion sound or reveal card for a silenced scheduler completion', async () => {
     vi.useFakeTimers();
     try {

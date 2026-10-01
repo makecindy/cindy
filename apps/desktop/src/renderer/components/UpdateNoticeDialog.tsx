@@ -386,10 +386,8 @@ interface VersionDropdownProps {
    */
   triggerAriaLabel: string;
   /**
-   * Bubble open state up so the parent AlertDialog can guard its overlay
-   * onClick — Radix outside-click closes the dropdown but the click continues
-   * to propagate; without the guard it would land on `AlertDialog.Overlay`
-   * and dismiss the whole dialog too.
+   * Bubble open state up so the parent AlertDialog can guard its own
+   * dismissal while the dropdown is open or has just closed.
    */
   onOpenChange?: (open: boolean) => void;
 }
@@ -888,24 +886,10 @@ export function UpdateNoticeDialog({
     jumpRef.current = fn;
   }, []);
 
-  // Track version-dropdown open state + timestamp of most recent close.
-  //
-  // The tricky case: a single user click that starts on an area outside the
-  // dropdown fires pointerdown → pointerup → click in sequence. Radix's
-  // DismissableLayer catches pointerdown outside and synchronously calls
-  // onOpenChange(false), which flips our ref via setTimeout(0). But browser
-  // event dispatch may schedule these three events as separate macrotasks
-  // (spec-legal), so setTimeout(0) can fire BEFORE the trailing click event.
-  // The overlay's onClick then sees ref === false and dismisses the dialog.
-  //
-  // Fix: track a timestamp of when the dropdown was last observed to close;
-  // guard dismissIfDialogOnly by BOTH the ref and a grace window. Any click
-  // within `GRACE_MS` of a dropdown close is treated as "part of the same
-  // dismissal gesture" and bounces. Independent of scheduler ordering.
-  //
-  // 200ms is generous vs typical event cascades (< 20ms) but well below any
-  // human double-click cadence — if the user actually wants to close the
-  // dialog after the dropdown closes, they click again after the grace.
+  // Track version-dropdown open state + timestamp of most recent close, so a
+  // dismissal aimed at the dropdown (e.g. Escape) never cascades into closing
+  // the whole dialog. Any dismissal within `GRACE_MS` of a dropdown close is
+  // treated as part of the same gesture and bounces.
   const DROPDOWN_CLOSE_GRACE_MS = 200;
   const dropdownOpenRef = useRef(false);
   const dropdownClosedAtRef = useRef(0);
@@ -964,11 +948,9 @@ export function UpdateNoticeDialog({
   return (
     <AlertDialog.Root
       open={open}
-      // Route Radix-driven dismissal (Escape key) through the same guard as
-      // the manual overlay click: dropdownOpenRef + grace window prevent
-      // spurious closes triggered by the version dropdown's pointerdown
-      // event cascade. This re-enables keyboard (Escape) dismissal without
-      // the race condition that required the previous no-op approach.
+      // Route Radix-driven dismissal (Escape key) through dismissIfDialogOnly:
+      // dropdownOpenRef + grace window prevent spurious closes triggered by
+      // the version dropdown's own dismissal.
       onOpenChange={(v) => { if (!v) dismissIfDialogOnly(); }}
     >
       <AlertDialog.Portal>
@@ -980,20 +962,8 @@ export function UpdateNoticeDialog({
             'data-[state=closed]:animate-confirm-overlay-out',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-          // Overlay click-to-dismiss: only when nothing else is claiming the
-          // click. Two guards:
-          //   1. e.target === e.currentTarget — ensures we only respond to a
-          //      click on the overlay itself, not a synthetic-event bubble
-          //      from portaled children (defensive; React's tree bubbling
-          //      shouldn't route Content clicks here, but Radix's nested
-          //      dismissable layers have historically produced surprises).
-          //   2. dropdownOpenRef — dropdown-outside clicks land on the
-          //      overlay while dropdown is closing; we want those to only
-          //      close the dropdown, not cascade into a dialog dismiss.
-          onClick={(e) => {
-            if (e.target !== e.currentTarget) return;
-            dismissIfDialogOnly();
-          }}
+          // No scrim click-to-dismiss (DESIGN.md closing affordance): the
+          // dialog closes only via 「知道了」 or Escape.
         />
 
         <AlertDialog.Content
@@ -1039,14 +1009,9 @@ export function UpdateNoticeDialog({
                   onSelect={(v) => jumpRef.current?.(v)}
                   onOpenChange={(dropOpen) => {
                     dropdownOpenRef.current = dropOpen;
-                    // Record close timestamp so dismissIfDialogOnly can
-                    // recognize any trailing click within the grace window
-                    // as "part of the same close gesture" and bounce. This
-                    // replaces the earlier setTimeout(0) ref-flip trick,
-                    // which was unreliable — the browser is free to schedule
-                    // pointerdown/pointerup/click as separate macrotasks
-                    // with setTimeout(0) sandwiched between, causing the
-                    // guard to release too early.
+                    // Record close timestamp so dismissIfDialogOnly can treat
+                    // a dismissal within the grace window as part of the
+                    // same close gesture and bounce it.
                     if (!dropOpen) dropdownClosedAtRef.current = Date.now();
                   }}
                 />

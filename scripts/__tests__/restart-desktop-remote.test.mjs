@@ -32,6 +32,9 @@ import {
 	readDesktopStartupStatus,
 	parseWorktreePaths,
 	osascriptLaunchDarwinTerminalArgs,
+	writeDarwinTerminalLaunchScript,
+	darwinTerminalSourceCommand,
+	prepareDarwinTerminalLaunch,
 	waitForDesktopStartup,
 	shouldRefuseHostedRestart,
 	commandContainsPath,
@@ -93,6 +96,42 @@ test("macOS Terminal launch runs command before activating Terminal", () => {
 		doScriptIndex < activateIndex,
 		"do script must run before activate to avoid Terminal creating an empty default window",
 	);
+});
+
+test("macOS Terminal launch sends a short source command for long dev commands", {
+	skip: process.platform === "win32",
+}, () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-terminal-launch-"));
+	const marker = path.join(dir, "ran.txt");
+	// 超过 tty canonical 行上限 1024 字节,模拟长 worktree 路径 + 大量 unset 的真实命令。
+	const command = `PADDING='${"x".repeat(1600)}'; echo "ok $PADDING" > '${marker}'`;
+	const scriptPath = writeDarwinTerminalLaunchScript(command, dir);
+	const sourceCommand = darwinTerminalSourceCommand(scriptPath);
+
+	assert.ok(sourceCommand.length < 1024, "Terminal input must stay under MAX_CANON");
+	assert.equal(fs.statSync(scriptPath).mode & 0o777, 0o600);
+
+	const result = spawnSync("/bin/sh", ["-c", sourceCommand], { encoding: "utf8" });
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(fs.readFileSync(marker, "utf8").trim(), `ok ${"x".repeat(1600)}`);
+	assert.equal(fs.existsSync(scriptPath), false, "launch script removes itself once sourced");
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("macOS Terminal launch passes only the short source command to do script", {
+	skip: process.platform === "win32",
+}, () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-terminal-args-"));
+	const command = `echo '${"y".repeat(1600)}'`;
+	const { scriptPath, args } = prepareDarwinTerminalLaunch(command, dir);
+	const devCommand = args.at(-1);
+
+	assert.ok(appleScriptLines(args).includes("set targetTab to do script devCommand"));
+	assert.equal(devCommand, darwinTerminalSourceCommand(scriptPath));
+	assert.ok(devCommand.length < 1024, "Terminal input must stay under MAX_CANON");
+	assert.ok(!args.some((arg) => arg.includes("y".repeat(1600))), "long command must not reach do script");
+	assert.ok(fs.readFileSync(scriptPath, "utf8").includes(command));
+	fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test("desktop restart no longer depends on the retired Feishu build app id", () => {

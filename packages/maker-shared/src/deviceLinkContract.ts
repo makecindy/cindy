@@ -439,6 +439,7 @@ const TRANSIENT_REMOTE_ERROR_MARKERS = [
   'NOT_CONNECTED',
   'LINK_NOT_OPEN',
   'BACKPRESSURE',
+  'DEVICE_LINK_BUSY',
   'DEVICE_OFFLINE',
   'DEVICE_LINK_TIMEOUT',
   'INVOKE_TIMEOUT',
@@ -583,6 +584,9 @@ export function describeRemoteError(error: string | null): string | null {
     if (error.includes('ACCOUNT_CHANGED')) return 'Codex 账号或工作区已变化，请刷新额度后重新确认。';
     if (error.includes('OFFER_EXPIRED')) return 'Codex 重置凭证已失效，请刷新额度后重新确认。';
     return '操作条件已变化，请刷新后重新确认。';
+  }
+  if (error.includes('BACKPRESSURE') || error.includes('DEVICE_LINK_BUSY')) {
+    return '远端繁忙，请稍后重试。';
   }
   if (TRANSIENT_REMOTE_ERROR_MARKERS.some((marker) => error.includes(marker))) {
     return '网络或被控端暂时不可用，可以稍后重新同步。';

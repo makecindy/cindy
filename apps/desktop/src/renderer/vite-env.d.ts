@@ -6598,6 +6598,11 @@ interface ElectronAPI {
       workingDir?: string;
       turnGen: number;
       completionRevision: number;
+      cancel?: false;
+    } | {
+      sessionId: string;
+      completionRevision: number;
+      cancel: true;
     }) => Promise<{ prompt: string | null }>;
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,

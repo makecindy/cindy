@@ -320,7 +320,7 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
       });
       scope.assertCurrent();
       if (result.status === 'oversize') throw new Error('MIGRATION_NO_MEMORY');
-      if (result.status !== 'ok' || result.fidelity !== 'full' || result.mediaMissing)
+      if (result.status !== 'ok' || result.fidelity !== 'full' || result.mediaDropped)
         throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
       const snapshots: PortableWorkspace[] = [];
       for (const [index, dir] of sourceKeys.entries())

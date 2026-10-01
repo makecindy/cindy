@@ -115,15 +115,15 @@ describe('shouldShowComposerPromptRecommendation', () => {
   });
 
   it('等待目标 session 草稿水合后才判断 candidate 是否为空输入', () => {
-    expect(CHAT_INPUT_SOURCE).toContain('storageKeyForDraftRef.current !== storageKey');
+    expect(CHAT_INPUT_SOURCE).toContain('storageKeyForDraftRef.current === storageKey');
     expect(CHAT_INPUT_SOURCE).toContain(
       'setComposerHydrationGeneration((generation) => generation + 1);',
     );
   });
 
-  it('只让当前 session 拥有的语音草稿消费推荐', () => {
+  it('只让当前 session 拥有的语音草稿暂停推荐', () => {
     expect(CHAT_INPUT_SOURCE).toContain(
-      '(voiceBusyOnCurrentComposer && voiceInput.draftText.trim().length > 0)',
+      'voiceBusyOnCurrentComposer && voiceInput.draftText.trim().length > 0',
     );
   });
 

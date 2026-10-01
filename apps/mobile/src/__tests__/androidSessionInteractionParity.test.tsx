@@ -9,6 +9,7 @@ const sheet = vi.hoisted(() => ({ onClosed: undefined as (() => void) | undefine
 
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => false, getCachedReduceMotionEnabled: () => false }));
 vi.mock('react-native', () => ({
+  Platform: { OS: 'android' },
   ActivityIndicator: () => null,
   Pressable: ({ children, onPress, testID }: { children?: ReactNode; onPress?: () => void; testID?: string }) =>
     createElement('button', { 'data-testid': testID, onClick: onPress }, children as ReactNode),

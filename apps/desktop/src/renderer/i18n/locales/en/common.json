@@ -334,6 +334,7 @@
     "credentialRequired": "Complete Mac password verification. If unavailable, update Cindy on both computers."
   },
   "ipcError": {
+    "DEVICE_LINK_BUSY": "The remote computer is busy. Please try again shortly.",
     "INVALID_PARAMS": "Invalid input. Please check and try again.",
     "PRECONDITION_FAILED": "This action is unavailable in the current state. Please try again.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Model not switched: Cindy can’t verify how much context this task uses. Keep the current model or start a new task.",
@@ -10115,6 +10116,7 @@
       "daemonNotReady": "{{manager}} upgraded, but the remote daemon hasn't started yet — please resend your message manually"
     },
     "remoteError": {
+      "DEVICE_LINK_BUSY": "The remote computer is busy. Please try again shortly.",
       "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
       "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
@@ -14230,6 +14232,7 @@
     }
   },
   "taskTags": {
+    "remoteBusy": "The remote computer is busy. Please try again shortly.",
     "loadFailed": "Could not load tags. Try again.",
     "retry": "Retry",
     "editLabel": "Edit “{{name}}”",

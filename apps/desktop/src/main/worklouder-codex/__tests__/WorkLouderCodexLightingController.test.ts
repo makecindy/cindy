@@ -36,40 +36,7 @@ describe('WorkLouderCodexLightingController', () => {
     expect(sink.update).toHaveBeenCalledTimes(1);
   });
 
-  it('lights a lead task key from a running Orca worker', async () => {
-    const sink = {
-      update: vi.fn(),
-      setAgentKeyPressHandler: vi.fn(),
-      setDeviceActivityHandler: vi.fn(),
-      setConnectionStatusHandler: vi.fn(),
-      dispose: vi.fn(async () => undefined),
-    };
-    const controller = new WorkLouderCodexLightingController(
-      sink,
-      vi.fn(),
-      async () => ['lead-1'],
-      vi.fn(),
-      vi.fn(),
-      async () => ({ 'lead-1': ['worker-1'] }),
-    );
-    await controller.resumeTaskSlots();
-    sink.update.mockClear();
-
-    controller.updateSessionActivity([
-      {
-        sessionId: 'worker-1',
-        phase: 'running',
-        compactDetail: '',
-        attention: false,
-      },
-    ]);
-
-    const frame = sink.update.mock.lastCall?.[0];
-    expect(isWorkLouderCodexLightingFrameOff(frame)).toBe(false);
-    expect(frame?.threads[0]?.brightness).toBeGreaterThan(0);
-  });
-
-  it('promotes an unslotted lead when only its worker is running', async () => {
+  it('promotes an unslotted running task in priority mode', async () => {
     const sink = {
       update: vi.fn(),
       setAgentKeyPressHandler: vi.fn(),
@@ -86,24 +53,14 @@ describe('WorkLouderCodexLightingController', () => {
       'idle-6',
       'lead-outside',
     ];
-    const loadWorkerSessions = vi.fn(async (leadIds: readonly string[]) => {
-      expect(leadIds).toContain('lead-outside');
-      return { 'lead-outside': ['worker-1'] };
-    });
-    const controller = new WorkLouderCodexLightingController(
-      sink,
-      vi.fn(),
-      async () => catalog,
-      vi.fn(),
-      vi.fn(),
-      loadWorkerSessions,
-    );
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => catalog);
     controller.applySettings(settings({ agentSource: 'priority' }));
     await controller.resumeTaskSlots();
 
+    // Agent Island keeps an Orca Lead running while its Workers still owe reports.
     controller.updateSessionActivity([
       {
-        sessionId: 'worker-1',
+        sessionId: 'lead-outside',
         phase: 'running',
         compactDetail: '',
         attention: false,

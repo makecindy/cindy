@@ -43,6 +43,7 @@ import {
 } from 'lucide-react';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 import { cn } from '@/lib/utils';
+import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import { CHAT_COLOR_TRANSITION_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip, Tooltip } from '@/components/ui/tooltip';
@@ -581,9 +582,9 @@ export function MessageActionBar({
               event.stopPropagation();
               addToChatInMenu();
             }}
-            className="h-8 cursor-pointer select-none rounded-lg px-2 text-sm focus:bg-[var(--cmd-palette-item-hover)]"
+            className={MENU_ITEM_CLASS}
           >
-            <MessageSquarePlus size={14} strokeWidth={2} className="mr-2 shrink-0" />
+            <MessageSquarePlus size={14} strokeWidth={2} className="shrink-0" />
             {t('chat.quote.addToChat')}
           </DropdownMenuItem>
         )}
@@ -593,9 +594,9 @@ export function MessageActionBar({
               event.stopPropagation();
               void handleCopyLink();
             }}
-            className="h-8 cursor-pointer select-none rounded-lg px-2 text-sm focus:bg-[var(--cmd-palette-item-hover)]"
+            className={MENU_ITEM_CLASS}
           >
-            <Link2 size={14} strokeWidth={2} className="mr-2 shrink-0" />
+            <Link2 size={14} strokeWidth={2} className="shrink-0" />
             {t('chat.messageActionBar.copyLink')}
           </DropdownMenuItem>
         )}
@@ -606,9 +607,9 @@ export function MessageActionBar({
               event.stopPropagation();
               if (!rewindInFlight) onRewind?.();
             }}
-            className="h-8 cursor-pointer select-none rounded-lg px-2 text-sm focus:bg-[var(--cmd-palette-item-hover)]"
+            className={MENU_ITEM_CLASS}
           >
-            <Undo2 size={14} strokeWidth={2} className="mr-2 shrink-0" />
+            <Undo2 size={14} strokeWidth={2} className="shrink-0" />
             {t('chat.messageActionBar.rewind')}
           </DropdownMenuItem>
         )}
@@ -623,12 +624,10 @@ export function MessageActionBar({
                 event.stopPropagation();
                 void handleDelete();
               }}
-              className={cn(
-                'h-8 cursor-pointer select-none rounded-lg px-2 text-sm',
-                'text-[hsl(var(--destructive))] focus:bg-[var(--cmd-palette-item-hover)]',
-              )}
+              variant="danger"
+              className={MENU_ITEM_CLASS}
             >
-              <Trash2 size={14} strokeWidth={2} className="mr-2 shrink-0" />
+              <Trash2 size={14} strokeWidth={2} className="shrink-0" />
               {t('chat.messageActionBar.delete')}
             </DropdownMenuItem>
           </>

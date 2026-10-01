@@ -28,6 +28,7 @@ const state = vi.hoisted(() => ({
   siblingRunning: false,
   noSpace: false,
   restoresFail: false,
+  exportMedia: { mediaMissing: 0, mediaDropped: 0 },
   sharingLatest: [] as Array<{
     shared_task_id: string;
     session_id: string;
@@ -145,7 +146,7 @@ vi.mock('../../session-share/sessionShareExport', () => ({
   exportSessionShare: async ({ targetPath }: { targetPath: string }) => {
     state.exported();
     await fs.writeFile(targetPath, 'conversation');
-    return { status: 'ok', fidelity: 'full', mediaMissing: false };
+    return { status: 'ok', fidelity: 'full', ...state.exportMedia };
   },
 }));
 vi.mock('../../session-share/sessionShareImport', () => ({
@@ -249,6 +250,7 @@ describe('resumable cross-computer copy', () => {
     state.siblingRunning = false;
     state.noSpace = false;
     state.restoresFail = false;
+    state.exportMedia = { mediaMissing: 0, mediaDropped: 0 };
     state.sharingLatest = [];
     state.workers = [];
     const cwd = path.join(state.root, 'shared');
@@ -803,6 +805,17 @@ describe('resumable cross-computer copy', () => {
     ).rejects.toThrow('MIGRATION_ID_CONFLICT');
   });
 
+  it('copies a task whose only missing media were already missing on the source', async () => {
+    state.exportMedia = { mediaMissing: 3, mediaDropped: 0 };
+    await start();
+    expect((await settled()).stage).toBe('complete');
+  });
+  it('stops copying when source media exists but could not be packaged', async () => {
+    state.exportMedia = { mediaMissing: 1, mediaDropped: 1 };
+    await start();
+    expect(await settled()).toMatchObject({ stage: 'preparing', error: 'MIGRATION_INCOMPLETE_CONTEXT' });
+    expect(state.imports).not.toHaveBeenCalled();
+  });
   it('discards a snapshot when a new turn finishes during preparation', async () => {
     state.snapshot.mockImplementationOnce(() => {
       state.rows.get('A')!.get('fork')!.updatedAt = 123;

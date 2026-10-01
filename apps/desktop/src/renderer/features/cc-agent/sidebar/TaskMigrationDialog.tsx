@@ -272,6 +272,8 @@ export function TaskMigrationDialog({
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
+          // 按 DESIGN.md 关闭规则:点遮罩不关闭,只能用取消按钮或 Esc。
+          onPointerDownOutside={(event) => event.preventDefault()}
         >
           <Dialog.Title className="text-lg font-medium text-[var(--confirm-title)]">
             {t(

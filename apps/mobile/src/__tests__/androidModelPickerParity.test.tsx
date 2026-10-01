@@ -101,6 +101,22 @@ vi.mock("react-native", async () => {
       );
     },
     ScrollView: passthrough,
+    FlatList: ({
+      data,
+      renderItem,
+      ListHeaderComponent,
+      ListEmptyComponent,
+    }: AnyProps) =>
+      el(
+        "div",
+        null,
+        ListHeaderComponent,
+        data.length
+          ? data.map((item: any, index: number) =>
+              el("div", { key: item.key }, renderItem({ item, index })),
+            )
+          : ListEmptyComponent,
+      ),
     StyleSheet: { create: <T,>(styles: T) => styles, hairlineWidth: 1 },
     Easing: { bezier: () => (t: number) => t },
     View,
@@ -231,7 +247,14 @@ vi.mock("@/session/SheetModal", async () => {
 vi.mock("@/session/SheetSurface", async () => {
   const { createElement: el } = await import("react");
   return {
-    SheetSurface: ({ children, title, pinnedTop, onBack, testID }: AnyProps) =>
+    SheetSurface: ({
+      children,
+      title,
+      pinnedTop,
+      onBack,
+      testID,
+      renderScrollContent,
+    }: AnyProps) =>
       el(
         "section",
         { "data-testid": testID, "data-title": title },
@@ -239,7 +262,7 @@ vi.mock("@/session/SheetSurface", async () => {
           ? el("button", { "data-testid": `${testID}.back`, onClick: onBack })
           : null,
         pinnedTop,
-        children,
+        renderScrollContent ? renderScrollContent({}) : children,
       ),
   };
 });
@@ -650,7 +673,14 @@ describe("Android legacy model list groups by source like iOS", () => {
     try {
       render(
         createElement(MobileModelPickerList, {
-          providerRows: [{ provider: provider("sub", "ChatGPT", { access: { kind: "subscription" } }), model: model("a") }],
+          providerRows: [
+            {
+              provider: provider("sub", "ChatGPT", {
+                access: { kind: "subscription" },
+              }),
+              model: model("a"),
+            },
+          ],
           flatOptions: [],
           activeModelId: "b",
           activeSourceId: "sub",
@@ -665,7 +695,9 @@ describe("Android legacy model list groups by source like iOS", () => {
       expect(hint.textContent).toBe("needs key");
       expect(hint.getAttribute("data-lines")).toBeNull();
       const row = host.querySelector('button[data-testid="list"]')!;
-      const meta = [...row.querySelectorAll('span[data-lines="1"]')].map((node) => node.textContent);
+      const meta = [...row.querySelectorAll('span[data-lines="1"]')].map(
+        (node) => node.textContent,
+      );
       expect(meta.some((text) => text?.includes("needs key"))).toBe(false);
     } finally {
       native.budgetDisabled = false;
@@ -717,9 +749,17 @@ describe("Android legacy model list groups by source like iOS", () => {
         testID: "flat",
       } as never),
     );
-    act(() => native.layouts.get("flat.selectedRow")!({ nativeEvent: { layout: { y: 60 } } }));
+    act(() =>
+      native.layouts.get("flat.selectedRow")!({
+        nativeEvent: { layout: { y: 60 } },
+      }),
+    );
     expect(onSelectedRowLayout).not.toHaveBeenCalled();
-    act(() => native.layouts.get("flat.group.__flat__")!({ nativeEvent: { layout: { y: 120 } } }));
+    act(() =>
+      native.layouts.get("flat.group.__flat__")!({
+        nativeEvent: { layout: { y: 120 } },
+      }),
+    );
     expect(onSelectedRowLayout).toHaveBeenLastCalledWith(180);
   });
 });
