@@ -251,15 +251,10 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       } else { setEditor(next); setError(false); }
     } catch { if (current.current === started && generation.current === sequence) setError(true); }
   };
-  // Leaving a page saves its dirty draft first. When the draft cannot be saved right now
-  // (offline, a host-disabled action or an unresolved version conflict), ask whether to
-  // discard it instead of silently keeping the user on a page they cannot leave.
+  // Leaving a page never saves a dirty draft implicitly. Keep explicit Save as the only
+  // mutation path and let the user either continue editing or discard the draft.
   const settleDraft = async (proceed: () => void | Promise<void>) => {
     if (!dirty || !panel) { await proceed(); return; }
-    if (online && resource && panel.action && !panel.action.disabled && conflict?.page !== page) {
-      if (await submit(panel)) await proceed();
-      return;
-    }
     const started = binding;
     Alert.alert(t('devices.companions.automation.unsavedTitle'), t('devices.companions.automation.unsavedBody'), [
       { text: t('devices.common.cancel'), style: 'cancel' },

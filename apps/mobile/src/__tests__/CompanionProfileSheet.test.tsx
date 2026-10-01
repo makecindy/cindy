@@ -41,13 +41,39 @@ let root: Root | undefined;
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(CompanionProfileSheet, { visible: true, resource, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online: true, onClose: h.close, onClosed: h.closed, onDeleted: h.deleted, onOpenSearch() {} }))); }
 beforeEach(() => { vi.clearAllMocks(); h.account = 1; h.read.mockResolvedValue({ resource, panels: [panel, { ...panel, id: 'models', values: { modelChain: '[]', followsDefault: false }, action: { id: 'model-grant', fields: [{ id: 'modelChain', kind: 'multiline' }, { id: 'followsDefault', kind: 'toggle' }] } }] }); h.invoke.mockResolvedValue({ effects: [] }); });
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
-it('keeps the draft and page when saving during dismissal fails', async () => {
+it('does not save a dirty draft when dismissing the sheet', async () => {
   await render(); await act(async () => h.view.onOpen('profile'));
   await act(async () => h.view.onChange({ name: 'Unsaved' }));
-  h.invoke.mockRejectedValue(new Error('offline'));
   await act(async () => h.view.onClose());
-  expect(h.close).not.toHaveBeenCalled(); expect(h.view.page).toBe('profile');
-  expect(h.view.values.name).toBe('Unsaved'); expect(h.view.dirty).toBe(true); expect(h.view.error).toBe(true);
+  expect(h.invoke).not.toHaveBeenCalled(); expect(h.close).not.toHaveBeenCalled();
+  expect(h.view.values.name).toBe('Unsaved'); expect(h.view.dirty).toBe(true);
+  const { Alert } = await import('react-native');
+  const discard = vi.mocked(Alert.alert).mock.calls[0][2]!.find(button => button.style === 'destructive')!;
+  await act(async () => discard.onPress!());
+  expect(h.invoke).not.toHaveBeenCalled(); expect(h.close).toHaveBeenCalledOnce();
+});
+it('keeps a dirty draft when canceling back navigation and discards it on confirmation', async () => {
+  await render(); await act(async () => h.view.onOpen('profile'));
+  await act(async () => h.view.onChange({ name: 'Unsaved' }));
+  await act(async () => h.view.onBack());
+  const { Alert } = await import('react-native');
+  const cancel = vi.mocked(Alert.alert).mock.calls[0][2]!.find(button => button.style === 'cancel')!;
+  await act(async () => cancel.onPress?.());
+  expect(h.view.page).toBe('profile'); expect(h.view.dirty).toBe(true); expect(h.invoke).not.toHaveBeenCalled();
+  await act(async () => h.view.onBack());
+  const discard = vi.mocked(Alert.alert).mock.calls[1][2]!.find(button => button.style === 'destructive')!;
+  await act(async () => discard.onPress!());
+  expect(h.view.page).toBe('home'); expect(h.view.dirty).toBe(false); expect(h.invoke).not.toHaveBeenCalled();
+});
+it('does not save a dirty draft before opening a profile subpage', async () => {
+  await render(); await act(async () => h.view.onOpen('profile'));
+  await act(async () => h.view.onChange({ name: 'Unsaved' }));
+  await act(async () => h.view.onOpen('avatar'));
+  expect(h.view.page).toBe('profile'); expect(h.invoke).not.toHaveBeenCalled();
+  const { Alert } = await import('react-native');
+  const discard = vi.mocked(Alert.alert).mock.calls[0][2]!.find(button => button.style === 'destructive')!;
+  await act(async () => discard.onPress!());
+  expect(h.invoke).not.toHaveBeenCalled(); expect(h.view.page).toBe('editor');
 });
 it('does not renew a dirty draft against a newer remote revision', async () => {
   await render(); await act(async () => h.view.onOpen('profile'));
@@ -103,11 +129,11 @@ it('keeps the primary route while choosing a task model with a different harness
     actionId: 'model-grant', input: { taskModel: JSON.stringify([task]), taskFollowsPrimary: false },
   }), 'en');
 });
-it('ignores a late save response after changing accounts', async () => {
+it('ignores a late explicit save response after changing accounts', async () => {
   await render(); await act(async () => h.view.onOpen('profile'));
   await act(async () => h.view.onChange({ name: 'Old account draft' }));
   let done!: (v: unknown) => void; h.invoke.mockReturnValue(new Promise(resolve => { done = resolve; }));
-  await act(async () => h.view.onClose());
+  await act(async () => h.view.onSubmit(h.view.panel));
   h.account++; await render();
   await act(async () => done({ effects: [{ kind: 'toast', message: 'Saved' }] }));
   expect(h.close).not.toHaveBeenCalled(); expect(h.view.page).toBe('home'); expect(h.view.receipt).toBeNull(); expect(h.view.dirty).toBe(false);
