@@ -7560,16 +7560,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await assertCurrent?.();
     if (isCancelled?.()) return false;
     const { session: resumedSession } = await bootstrapSession(opts);
-    await assertCurrent?.();
-    // 关闭协同 / 归档 / 显式 idle 可能和冷启动交错：bootstrap 返回后必须重新确认这次
-    // 唤醒仍然有效，否则关掉刚拉起的 runtime，不能把已归档 worker 留在运行态。
-    if (isCancelled?.() || !(await isOrcaWorkerSessionResumable(target.sessionId))) {
+    // bootstrap 之后 runtime 已经存在：从这里开始的任何失败（授权失效 / 账号切换 /
+    // 关闭协同 / 归档 / 显式 idle）都必须先关掉刚拉起的 session 再返回或抛错，
+    // 否则已归档 worker 会留在运行态（review P1 + Security）。
+    const closeResumedSession = async (reason: string) => {
       await maker.closeSession(resumedSession.id).catch((err) => {
-        log.warn('orcaWorkerResume: cancelled after bootstrap, close failed', {
+        log.warn('orcaWorkerResume: close resumed session failed', {
           sessionId: resumedSession.id,
+          reason,
           err: err instanceof Error ? err.message : String(err),
         });
       });
+    };
+    try {
+      await assertCurrent?.();
+    } catch (err) {
+      await closeResumedSession('assert-current-after-bootstrap');
+      throw err;
+    }
+    if (isCancelled?.() || !(await isOrcaWorkerSessionResumable(target.sessionId))) {
+      await closeResumedSession('resume-invalid-after-bootstrap');
       return false;
     }
     await markOrcaRoleIfNeeded(resumedSession.id, 'worker');

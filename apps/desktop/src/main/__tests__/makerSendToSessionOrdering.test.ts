@@ -791,6 +791,19 @@ describe('sendToSession ordering', () => {
     // 返回后关掉刚拉起的 session（review P1：不得把已归档 worker 留在运行态）。
     expect(resumeBranch).toContain('if (isCancelled?.()) return false;');
     expect(resumeBranch).toContain('await maker.closeSession(resumedSession.id).catch((err) => {');
+    // bootstrap 之后 runtime 已存在，授权复核失败也必须先清理再抛（Security review）。
+    expect(resumeBranch).toContain("await closeResumedSession('assert-current-after-bootstrap');");
+    expect(resumeBranch).toContain('throw err;');
+    expectOrder(
+      resumeBranch,
+      'const { session: resumedSession } = await bootstrapSession(opts);',
+      "await closeResumedSession('assert-current-after-bootstrap');",
+    );
+    expectOrder(
+      resumeBranch,
+      "await closeResumedSession('assert-current-after-bootstrap');",
+      'await markOrcaRoleIfNeeded(resumedSession.id,',
+    );
     expect(serviceDepsBlock).toContain(
       'cancelWorkerResume: (sessionId) => orcaWorkerResumeScheduler.cancel(sessionId),',
     );
