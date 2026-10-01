@@ -242,6 +242,7 @@ import {
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { AttachedFile, ComposerBotMention, MentionedResource } from '@/lib/fileTypes';
 import { serializeAttachedFiles } from '@/lib/messageAttachmentPayload';
+import { startReviewOnDevice } from '@/lib/startReviewOnDevice';
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
 import {
   isQueueComposerEditCurrent,
@@ -3280,8 +3281,7 @@ export function CCAgentSessionView({
         return {
           handled: false,
           accepted: false,
-          message:
-            agentKind === 'pi' ? rewriteAgentSkillInvocationForDispatch(message, hit) : message,
+          message: rewriteAgentSkillInvocationForDispatch(message, hit),
         };
       }
       // Desktop commands stay `^/` only. A whitespace-prefixed `/help` is not a dispatch.
@@ -3292,19 +3292,20 @@ export function CCAgentSessionView({
       // nor share a mutable attachment ref with a later command.
       if (hit.name === 'review') {
         if (!sessionId) return { handled: true, accepted: false, message };
-        if (remoteDeviceId || session?.remoteHostId) {
-          // 轮 35 HIGH-2:SSH 远端会话同样不支持 /review —— 与 device-link 并列
-          // 前置拦截, 避免命令进入 main 后被 UNSUPPORTED_CAPABILITY 拒绝。
+        if (session?.remoteHostId) {
+          // SSH workspaces still have no Review transport. Device-link tasks
+          // use the controlled Desktop's local Review lifecycle below.
           toast.warning(t('review.toast.remoteUnsupported'));
           return { handled: true, accepted: false, message };
         }
         const attachments = files?.length ? serializeAttachedFiles(files) : undefined;
         try {
-          await window.electronAPI.maker.startReview({
+          const request = {
             sourceSessionId: sessionId,
             ...(args.trim() ? { focus: args.trim() } : {}),
             ...(attachments?.length ? { attachments } : {}),
-          });
+          };
+          await startReviewOnDevice(request, rightSidebarDeviceLinkDeviceId);
           return { handled: true, accepted: true, message };
         } catch (err) {
           const ipcError = extractIpcError(err);
@@ -3345,6 +3346,7 @@ export function CCAgentSessionView({
       session?.workingDir,
       sessionId,
       remoteDeviceId,
+      rightSidebarDeviceLinkDeviceId,
       t,
     ],
   );

@@ -61,23 +61,36 @@ vi.mock('../../maker-host/claude-transcript-relocation.js', () => ({
     activeId: 'sid-b',
   }),
 }));
+const dumpCodexThreadStateRowsMock = vi.fn(async (_threadId: string, _storage?: unknown) => ({
+  threads: [{ id: 'thread-1', cwd: '/old/cwd' }],
+  threadDynamicTools: [],
+  threadSpawnEdges: [],
+  rolloutPath: path.join(tmpRoot, 'rollout-1-thread-1.jsonl'),
+}));
 vi.mock('../../maker-host/codex-local-sessions.js', () => ({
-  dumpCodexThreadStateRows: async () => ({
-    threads: [{ id: 'thread-1', cwd: '/old/cwd' }],
-    threadDynamicTools: [],
-    threadSpawnEdges: [],
-    rolloutPath: path.join(tmpRoot, 'rollout-1-thread-1.jsonl'),
-  }),
+  dumpCodexThreadStateRows: dumpCodexThreadStateRowsMock,
+}));
+const readCodexThreadStorageReadOnlyMock = vi.fn(
+  async (_threadId: string): Promise<{ historyHome: string; sqliteHome: string; rolloutPath?: string } | undefined> =>
+    undefined,
+);
+vi.mock('../../maker-host/codex-thread-storage.js', () => ({
+  readCodexThreadStorageReadOnly: readCodexThreadStorageReadOnlyMock,
 }));
 const configDirCandidatesRef = { dirs: [path.join(tmpRoot, 'claude-home')] };
 vi.mock('../../maker-orchestration/claudeTranscriptAnchors.js', () => ({
   defaultClaudeConfigDirCandidates: () => configDirCandidatesRef.dirs,
 }));
+const imagePathRef = { path: path.join(tmpRoot, 'img.png') };
 vi.mock('../../imageCacheStore.js', () => ({
   resolveSafe: (url: string) => {
     if (!url.startsWith('xdt-image://')) throw new Error('bad url');
-    return { absPath: path.join(tmpRoot, 'img.png'), mimeType: 'image/png' };
+    return { absPath: imagePathRef.path, mimeType: 'image/png' };
   },
+}));
+const ownerScopeRef = { keys: [] as string[] };
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => ownerScopeRef.keys.shift() ?? 'owner:a:1',
 }));
 vi.mock('../../videoCacheStore.js', () => ({
   resolveSafe: () => ({ absPath: path.join(tmpRoot, 'missing-video.mp4'), mimeType: 'video/mp4' }),
@@ -162,6 +175,11 @@ describe('exportSessionShare', () => {
     messagesRef.rows = baseMessages();
     activeTeamRef.row = null;
     getActiveTeamByLeadMock.mockClear();
+    dumpCodexThreadStateRowsMock.mockClear();
+    imagePathRef.path = path.join(tmpRoot, 'img.png');
+    ownerScopeRef.keys = [];
+    readCodexThreadStorageReadOnlyMock.mockReset();
+    readCodexThreadStorageReadOnlyMock.mockResolvedValue(undefined);
     workerRowsRef.rows = [];
     workerSessionsById.clear();
     workerMessagesBySession.clear();
@@ -253,6 +271,39 @@ describe('exportSessionShare', () => {
     expect(zip.file('transcripts/codex/rollout-1-thread-1.jsonl')).toBeTruthy();
     const state = JSON.parse(await zip.file('codex-state/thread.json')!.async('string'));
     expect(state.threads[0].id).toBe('thread-1');
+  });
+
+  it('codex export reads multi-account history from the thread location index', async () => {
+    // 多账号线程的历史在 codex-accounts/<owner>/<账号>/ 下,只有 thread-index 知道位置。
+    const storage = {
+      historyHome: path.join(tmpRoot, 'codex-accounts', 'owner', 'openai-a'),
+      sqliteHome: path.join(tmpRoot, 'codex-accounts', 'owner', 'openai-a'),
+      rolloutPath: path.join(tmpRoot, 'codex-accounts', 'owner', 'openai-a', 'sessions', 'rollout.jsonl'),
+    };
+    readCodexThreadStorageReadOnlyMock.mockResolvedValue(storage);
+    sessionRowRef.row = { ...baseSession(), agentKind: 'codex', sdkSessionId: 'thread-1' };
+    const outcome = await exportSessionShare({
+      sessionId: 'xdt-session-1',
+      targetPath: path.join(tmpRoot, 'out-codex-indexed.xdtshare'),
+    });
+    expect(outcome.status).toBe('ok');
+    expect(readCodexThreadStorageReadOnlyMock).toHaveBeenCalledWith('thread-1');
+    expect(dumpCodexThreadStateRowsMock).toHaveBeenCalledWith('thread-1', storage);
+  });
+
+  it('codex export never substitutes legacy history when the location index is unreadable', async () => {
+    // 记录存在却读不出:旧 HOME 可能留着同一线程的过期副本,不得回退去拿。
+    readCodexThreadStorageReadOnlyMock.mockRejectedValue(new Error('Invalid Codex thread location'));
+    sessionRowRef.row = { ...baseSession(), agentKind: 'codex', sdkSessionId: 'thread-1' };
+    const outcome = await exportSessionShare({
+      sessionId: 'xdt-session-1',
+      targetPath: path.join(tmpRoot, 'out-codex-index-error.xdtshare'),
+    });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(dumpCodexThreadStateRowsMock).not.toHaveBeenCalled();
+    expect(outcome.fidelity).toBe('db-only');
+    expect(outcome.missingTranscripts).toEqual(['thread-1']);
   });
 
   it('pi export replaces absolute session paths with portable ids', async () => {
@@ -378,11 +429,14 @@ describe('exportSessionShare', () => {
     const pastedUrl = `xdt-file://local/?path=${encodeURIComponent(pastedDoc)}`;
     const plantedUrl = `xdt-file://local/?path=${encodeURIComponent(plantedDoc)}`;
     const managedUrl = `xdt-audio://local/?path=${encodeURIComponent(managedAudio)}`;
+    const absentUrl = `xdt-file://local/?path=${encodeURIComponent(path.join(tmpRoot, 'never-existed.pdf'))}`;
     messagesRef.rows = [
       { ...baseMessages()[0], content: JSON.stringify([{ type: 'text', text: `粘贴的 ${pastedUrl}` }]) },
       {
         ...baseMessages()[1],
-        content: JSON.stringify([{ type: 'text', text: `工具输出 ${plantedUrl} 与生成音频 ${managedUrl}` }]),
+        content: JSON.stringify([
+          { type: 'text', text: `工具输出 ${plantedUrl} 与生成音频 ${managedUrl} 示例 ${absentUrl}` },
+        ]),
       },
     ];
     const target = path.join(tmpRoot, 'out-loose.xdtshare');
@@ -397,6 +451,11 @@ describe('exportSessionShare', () => {
     expect(byUrl.get(pastedUrl)).toBeNull();
     expect(byUrl.get(plantedUrl)).toBeNull(); // assistant 输出的任意路径:拒绝
     expect(byUrl.get(managedUrl)).toMatch(/^media\/loose\//); // 受管媒体区:放行
+    expect(byUrl.get(absentUrl)).toBeNull();
+    if (outcome.status !== 'ok') return;
+    expect(outcome.mediaMissing).toBe(3);
+    // 源机器上真实存在却被拦下的两份才算丢失;本就不存在的示例地址不算。
+    expect(outcome.mediaDropped).toBe(2);
   });
 
   it('cleared session: pre-clear messages and their fork transcripts stay out of the bundle', async () => {
@@ -428,9 +487,43 @@ describe('exportSessionShare', () => {
     expect(outcome.status).toBe('ok');
     if (outcome.status !== 'ok') return;
     expect(outcome.mediaMissing).toBe(1);
+    // 源端本就缺失:复制不会让它更缺,迁移不应据此拦截。
+    expect(outcome.mediaDropped).toBe(0);
     const zip = await unzipOf(target);
     const mediaMap = JSON.parse(await zip.file('media-map.json')!.async('string'));
     expect(mediaMap.entries[0].zipPath).toBeNull();
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'media whose state cannot be read counts as dropped, not as already missing',
+    async () => {
+      const lockedDir = path.join(tmpRoot, 'locked');
+      await fsp.mkdir(lockedDir, { recursive: true });
+      await fsp.writeFile(path.join(lockedDir, 'img.png'), Buffer.from([0x89, 0x50]));
+      imagePathRef.path = path.join(lockedDir, 'img.png');
+      await fsp.chmod(lockedDir, 0o000);
+      try {
+        const outcome = await exportSessionShare({
+          sessionId: 'xdt-session-1',
+          targetPath: path.join(tmpRoot, 'out-locked-media.xdtshare'),
+        });
+        expect(outcome.status).toBe('ok');
+        if (outcome.status !== 'ok') return;
+        expect(outcome.mediaMissing).toBe(1);
+        expect(outcome.mediaDropped).toBe(1);
+      } finally {
+        await fsp.chmod(lockedDir, 0o755);
+      }
+    },
+  );
+
+  it('aborts without writing when the account changes during export', async () => {
+    ownerScopeRef.keys = ['owner:a:1', 'owner:b:2'];
+    const target = path.join(tmpRoot, 'out-owner-changed.xdtshare');
+    await expect(exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target })).rejects.toThrow(
+      'account changed during export',
+    );
+    await expect(fsp.stat(target)).rejects.toThrow();
   });
 
   it('rejects remote / orca worker / deleted / empty sessions', async () => {

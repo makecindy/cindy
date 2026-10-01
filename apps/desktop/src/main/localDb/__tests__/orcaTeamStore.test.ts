@@ -53,6 +53,23 @@ describe('orcaTeamStore', () => {
     rawDb = null;
   });
 
+  it.each(['team', 'stranded', 'single'])('rechecks %s archive authority after the existing route lock wait', async action => {
+    const store = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    if (action === 'stranded') await client.exec('UPDATE orca_teams SET status = ?', ['completed']);
+    let allowed = true;
+    setSessionRouteLockImplementation(async (_id, task) => { allowed = false; return task(); });
+    const assertCurrent = async () => { if (!allowed) throw Error('Revoked'); };
+    const result = action === 'team' ? store.archiveWorkersByTeam('team-1', assertCurrent)
+      : action === 'stranded' ? store.reconcileInactiveTeamWorkersForLead('lead-session-1', assertCurrent)
+      : store.archiveSingleWorkerSession('worker-session-1', assertCurrent);
+    await expect(result).rejects.toThrow('Revoked');
+    expect(await client.queryOne('SELECT status FROM sessions WHERE id = ?', ['worker-session-1'])).toEqual({ status: 'active' });
+    expect(h.runtimeCleanup).not.toHaveBeenCalled();
+  });
+
   it('requires workerId and workerSessionId to match the same row when both are supplied', async () => {
     const { getWorkerLink } = await import('../orcaTeamStore.js');
     const client = createTestDbClient();

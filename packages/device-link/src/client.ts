@@ -1,4 +1,5 @@
-import { isPeerResetRetryableReadChannel } from './invokePolicy.js';
+import { isPeerResetRetryableReadChannel, isBackgroundInvoke, bypassInvokeScheduling } from './invokePolicy.js';
+import { InvokeScheduler } from './invokeScheduler.js';
 import { encodeSharedTaskEnvelope, decodeSharedTaskEnvelope } from './sharedTaskEnvelope.js';
 import { isSharedTaskPeer } from './sharedTaskPeer.js';
 import { SHARED_TASK_RELAY_CAPABILITY } from '@cindy/device-link-protocol';
@@ -670,6 +671,7 @@ interface ReceiveStreamState {
 // ─── 客户端实现 ───────────────────────────────────────────────────────────────
 
 export class DeviceLinkClient {
+  private readonly invokeScheduler = new InvokeScheduler();
   private readonly opts: DeviceLinkClientOptions;
   private readonly timing: DeviceLinkTiming;
   private readonly log: DeviceLinkLogger;
@@ -1340,12 +1342,26 @@ export class DeviceLinkClient {
   }
 
   /** 控制端:远程 invoke,等待 invoke-result */
-  async invoke(dst: string, payload: InvokePayload, timeoutMs?: number): Promise<InvokeResultPayload> {
-    const env = await this.request(
-      { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: requestSessionTagCatalog(payload) },
-      'invoke-result',
-      timeoutMs,
-    );
+  async invoke(
+    dst: string,
+    payload: InvokePayload,
+    timeoutMs?: number,
+    options?: { preSend?: () => void },
+  ): Promise<InvokeResultPayload> {
+    if (this.status !== 'online') throw new DeviceLinkError('NOT_CONNECTED', 'not connected to relay');
+    const send = () => {
+      // Admission may wait: validate caller ownership/cancellation after dequeue,
+      // synchronously before creating the request or retaining a transport frame.
+      options?.preSend?.();
+      return this.request(
+        { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: requestSessionTagCatalog(payload) },
+        'invoke-result',
+        timeoutMs,
+      );
+    };
+    const env = await (bypassInvokeScheduling(payload) ? send() : this.invokeScheduler.run(
+      dst, isBackgroundInvoke(payload.channel), Math.min(timeoutMs ?? this.timing.requestTimeoutMs, 30_000), send,
+    ));
     const result = env.payload as InvokeResultPayload;
     return result.ok
       ? {
@@ -1648,6 +1664,7 @@ export class DeviceLinkClient {
   }
 
   private failAllPending(err: DeviceLinkError): void {
+    this.invokeScheduler.clear(err);
     // pending 里的请求全部已经 sendEnvelope 成功(in-flight):打上标记,
     // 让控制端的重试逻辑知道「请求可能已送达对端,只是响应丢了」,
     // 与发送前本地拒绝的 NOT_CONNECTED 区分开。
@@ -1657,6 +1674,7 @@ export class DeviceLinkClient {
   }
 
   private failNonReliablePending(err: DeviceLinkError): void {
+    this.invokeScheduler.clear(err);
     err.inFlight = true;
     for (const [id, pending] of this.pending) {
       if (pending.reliableDst) continue;
@@ -4614,6 +4632,7 @@ export class DeviceLinkClient {
   }
 
   private abandonReliablePending(dst: string, message: string): void {
+    this.invokeScheduler.cancel(dst, new DeviceLinkError('NOT_CONNECTED', message));
     const peer = this.peerTransport.get(dst);
     if (peer) {
       if (peer.retryTimer) {

@@ -24,6 +24,16 @@ function sessionIds(value: unknown): string[] {
 
 /** Resolve channel-specific Bot IDs before checking generic Session references. */
 export async function assertRemoteBotInvocationAllowed(args: unknown[], channel = ''): Promise<void> {
+  if (channel === 'maker:review:start') {
+    const id = record(args[0])?.sourceSessionId;
+    if (typeof id !== 'string' || !id.trim() || id.length > 512) {
+      throw new Error('[INVALID_PARAMS] Invalid review source session ID');
+    }
+    if (lookup && await lookup(id.trim(), 'session') === 'hidden') {
+      throw new Error('[NOT_FOUND] Session does not exist');
+    }
+    return;
+  }
   // Review queries nest the target under payload; recheck it before execution
   // and on cached/queued replies just like top-level Session reads.
   if (channel === 'git-review:remote-op') {

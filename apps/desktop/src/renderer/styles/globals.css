@@ -2128,6 +2128,33 @@ mark.doc-search-mark [class] {
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
+/* Windows 例外:cmd-palette 浮层一律不透明、不加模糊 —— 透明窗口背景上的 CSS
+   backdrop-filter 可能渲染成黑块(§15.12,菜单常在侧栏上方打开),集显 / 软件渲染有性能风险,
+   Windows 原生材质也未实机验证。回落 --cmd-palette-bg 本身(CINDY 下即 Card 面板色
+   --surface-elevated),1px 描边与阴影不变。 */
+[data-platform='win32'][data-theme='cindy-light'] .bg-\[var\(--cmd-palette-bg\)\],
+[data-platform='win32'][data-theme='cindy-dark'] .bg-\[var\(--cmd-palette-bg\)\] {
+  background: var(--cmd-palette-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* 共享下拉菜单行(components/ui/dropdown-menu.tsx,DESIGN §4):行内 Lucide 图标平时线宽 1.5,
+   高亮 / 勾选 / 展开时回到 2。只动默认线宽(stroke-width="2")的图标:显式传了其他 strokeWidth 的
+   不命中;显式传 2 的由组件标上 data-menu-icon-stroke(行内直接子元素与普通标签内可识别)。 */
+[data-menu-row] svg.lucide[stroke-width='2']:not([data-menu-icon-stroke]) {
+  stroke-width: 1.5;
+  transition: stroke-width var(--motion-instant) var(--motion-ease-out);
+}
+[data-menu-row]:is(
+    [data-menu-active],
+    [data-highlighted],
+    [data-state='checked'],
+    [data-state='open']
+  )
+  svg.lucide[stroke-width='2']:not([data-menu-icon-stroke]) {
+  stroke-width: 2;
+}
 
 /* ── 插件面板悬浮球(GhostPanelBubbleLayer)────────────────────────────
    动效按 engineering-conventions §7 红线:只动 transform/opacity、动画挂

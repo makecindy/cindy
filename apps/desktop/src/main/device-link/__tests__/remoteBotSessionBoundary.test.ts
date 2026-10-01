@@ -5,6 +5,21 @@ import {
 
 afterEach(() => setRemoteBotSessionLookup(null));
 
+it('checks the normalized source task before remote Review and rechecks visibility changes', async () => {
+  let hidden = false;
+  const lookup = vi.fn(async () => hidden ? 'hidden' as const : 'ordinary' as const);
+  setRemoteBotSessionLookup(lookup);
+  const args = [{ sourceSessionId: ' source ' }];
+  await assertRemoteBotInvocationAllowed(args, 'maker:review:start');
+  expect(lookup).toHaveBeenCalledWith('source', 'session');
+  hidden = true;
+  await expect(assertRemoteBotInvocationAllowed(args, 'maker:review:start')).rejects.toThrow('[NOT_FOUND]');
+});
+
+it.each([undefined, '', '   ', 123, 'x'.repeat(513)])('rejects invalid Review source ID %s', async (sourceSessionId) => {
+  await expect(assertRemoteBotInvocationAllowed([{ sourceSessionId }], 'maker:review:start')).rejects.toThrow('[INVALID_PARAMS]');
+});
+
 it.each(['turn-list', 'turn-get'])('rechecks nested %s targets before returning remote snapshots', async (op) => {
   let hidden = false;
   setRemoteBotSessionLookup(async () => hidden ? 'hidden' : 'visible');

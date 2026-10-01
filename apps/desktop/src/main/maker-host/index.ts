@@ -1,3 +1,4 @@
+import { listCindyManagedSkills, prepareCindyCodexSkills } from './managed-skills.js';
 import { createCompanionImportProvider } from '../bot-import/importProvider.js';
 import { createCompanionConnectionsProvider } from '../bot-import/connectionProvider.js';
 import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
@@ -17,8 +18,8 @@ import { clearCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
  */
 
 import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
-import { isCodexAccountProvider, codexAccountHome, setCodexAccountRetirement } from './codex-account-auth.js';
-import { CodexThreadLocations } from './codex-thread-locations.js';
+import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.js';
+import { ownerCodexThreadLocations, readCodexThreadStorageReadOnly } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { setSessionArchiveSyncRequester } from '../localDb/sessionArchiveSync.js';
@@ -1172,6 +1173,7 @@ export function getMaker(): Maker {
     const claudeAgent = new ClaudeCodeAgent({
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
+      getManagedSkills: listCindyManagedSkills,
       auth: desktopClaudeAuthAdapter,
       runtimeConfig: buildDesktopClaudeRuntimeConfig(getClaudeEndpoint),
       binaryPath: claudePath,
@@ -1500,6 +1502,8 @@ export function getMaker(): Maker {
     const codexAgent = new CodexAgent({
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
+      getManagedSkills: listCindyManagedSkills,
+      prepareCodexSkills: prepareCindyCodexSkills,
       auth: desktopCodexAuthAdapter,
       runtimeConfig: desktopCodexRuntimeConfig,
       binaryPath: codexPath,
@@ -1962,16 +1966,14 @@ export function getMaker(): Maker {
       unregisterCodexMcpThreadContext,
       prepareCodexResumeSession: async (threadId) => {
         if (!getActiveAppSession().dataOwnerId) return prepareExternalCodexSessionForResume(threadId);
-        const locations = new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations'));
-        return locations.prepareResume(threadId, prepareExternalCodexSessionForResume);
+        return ownerCodexThreadLocations().prepareResume(threadId, prepareExternalCodexSessionForResume);
       },
       resolveCodexThreadStorage: async (threadId, options) => {
         if (!getActiveAppSession().dataOwnerId) return options?.readOnly ? readCodexThreadStorageForArchive(threadId) : undefined;
         const ownerScope = activeOwnerScopeKey();
-        const locations = new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations'));
         const storage = options?.readOnly
-          ? await locations.readStorage(threadId) ?? readCodexThreadStorageForArchive(threadId)
-          : await locations.readStorage(threadId, {
+          ? await readCodexThreadStorageReadOnly(threadId)
+          : await ownerCodexThreadLocations().readStorage(threadId, {
           home: getCodexHome(),
           prepare: prepareExternalCodexSessionForResume,
         });
@@ -2005,8 +2007,7 @@ export function getMaker(): Maker {
       },
       recordCodexThreadLocation: async (threadId, storageHome, rolloutPath) => {
         if (!rolloutPath || !getActiveAppSession().dataOwnerId) return;
-        const locations = new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations'));
-        await locations.record(threadId, rolloutPath, storageHome);
+        await ownerCodexThreadLocations().record(threadId, rolloutPath, storageHome);
       },
       registerCodexSystemPromptForThread: ({
         sessionId,

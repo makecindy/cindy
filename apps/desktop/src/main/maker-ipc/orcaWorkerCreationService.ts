@@ -208,6 +208,9 @@ export interface OrcaWorkerCreationDeps {
   getActiveTeamByLead(leadSessionId: string): Promise<OrcaTeamSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerListSnapshot[]>;
   isActiveWorkerStatus(status: OrcaWorkerStatus): boolean;
+  validateCreationPlan?(params: OrcaWorkerCreateInTeamParams, resolvedWorkingDir?: string,
+    resolvedRoute?: { model: string; providerId: string | null; effort: string | null; fastMode: boolean },
+    assertCurrent?: () => Promise<void>): Promise<number | null | undefined>;
   readCollaborationSettings(): { workerSoftLimit: number; workerHardLimit: number };
   getLeadSessionRow(leadSessionId: string): Promise<OrcaLeadSessionSnapshot | null>;
   getWorkerDefaults(agent: AgentKind): OrcaWorkerDefaultsSnapshot;
@@ -271,8 +274,9 @@ export interface OrcaWorkerCreationDeps {
 
 /** Orca worker 创建服务，只负责创建既有 team 下的新 worker，不负责 team lifecycle。 */
 export interface OrcaWorkerCreationService {
-  createWorker(params: OrcaWorkerCreateParams): Promise<OrcaWorkerCreationResult>;
-  createWorkerInTeam(params: OrcaWorkerCreateInTeamParams): Promise<OrcaWorkerCreationResult>;
+  createWorker(params: OrcaWorkerCreateParams, assertCurrent?: () => Promise<void>): Promise<OrcaWorkerCreationResult>;
+  createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
+    onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult>;
 }
 
 function toInternalFailure(err: unknown): Extract<OrcaWorkerCreationResult, { ok: false }> {
@@ -595,7 +599,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     await deps.archiveWorkerSession(sessionId).catch(() => undefined);
   }
 
-  async function createWorker(params: OrcaWorkerCreateParams): Promise<OrcaWorkerCreationResult> {
+  async function createWorker(params: OrcaWorkerCreateParams, assertCurrent?: () => Promise<void>): Promise<OrcaWorkerCreationResult> {
     const team = await deps.getActiveTeamByLead(params.leadSessionId);
     if (!team) {
       return { ok: false, errorCode: 'NOT_FOUND', message: 'no active team for this lead' };
@@ -607,10 +611,11 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         params.workerPermissionMode === undefined
           ? deps.getWorkerPermissionMode()
           : resolveOrcaWorkerPermissionMode(params.workerPermissionMode),
-    });
+    }, assertCurrent);
   }
 
-  async function createWorkerInTeam(params: OrcaWorkerCreateInTeamParams): Promise<OrcaWorkerCreationResult> {
+  async function createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
+    onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult> {
     const role = normalizeRequiredText(params.role, 'role');
     if (!role.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: role.message };
     if (role.value.length > 32) {
@@ -618,13 +623,22 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     }
     const label = normalizeOrcaWorkerLabel(params.label);
     if (!label.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: label.message };
+    params = { ...params, label: label.value };
+    const validatePlan = async (workingDir?: string, route?: Parameters<NonNullable<OrcaWorkerCreationDeps['validateCreationPlan']>>[2]) => {
+      await assertCurrent?.();
+      // Host validation runs the captured source check before its final synchronous
+      // directory grant check. No trailing await may stale that grant observation.
+      return deps.validateCreationPlan?.(params, workingDir, route, assertCurrent);
+    };
 
     const existing = await deps.listWorkersByLead(params.leadSessionId);
     if (existing.some((worker) => worker.label?.toLowerCase() === label.value)) {
       return { ok: false, errorCode: 'DUPLICATE_LABEL', message: `label "${label.value}" already used in this team` };
     }
 
-    const settings = deps.readCollaborationSettings();
+    const planLimit = await validatePlan();
+    const settings = {...deps.readCollaborationSettings()};
+    if (planLimit != null) settings.workerHardLimit = Math.min(settings.workerHardLimit, planLimit);
     const activeCount = existing.filter((worker) => deps.isActiveWorkerStatus(worker.status)).length;
     if (activeCount >= settings.workerHardLimit) {
       return {
@@ -1021,6 +1035,12 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     renewalTimer.unref?.();
 
     try {
+      // Registration may race the preflight. Once a reservation exists, a new
+      // plan cannot be registered; reread any plan that won before reservation.
+      const reservedPlanLimit = await validatePlan(workingDir, resolved);
+      if (reservedPlanLimit != null && reservation.occupiedSlotsBefore >= reservedPlanLimit) {
+        return { ok: false, errorCode: 'WORKER_LIMIT_HARD_EXCEEDED', message: 'Registered plan concurrency reached' };
+      }
       const workerSessionId = deps.createSessionId();
       const workerVendorOptions = {
         orcaRole: 'worker' as const,
@@ -1058,6 +1078,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         if (lead.remoteHostId && deps.ensureRemoteReadyForSessionStart) {
           await deps.ensureRemoteReadyForSessionStart({ createOpts: workerOpts });
         }
+        await assertCurrent?.();
         const bootstrapped = await deps.bootstrapSession(workerOpts);
         workerSession = bootstrapped.session;
       } catch (err) {
@@ -1070,6 +1091,13 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       if (!renewed) {
         await cleanupBootstrappedWorkerSession(workerSession.id);
         return { ok: false, errorCode: 'INTERNAL', message: 'worker creation reservation expired before persistence' };
+      }
+
+      try {
+        await validatePlan(workingDir, resolved);
+      } catch (err) {
+        await cleanupBootstrappedWorkerSession(workerSession.id);
+        return toInternalFailure(err);
       }
 
       try {
@@ -1092,12 +1120,16 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
 
       try {
         await deps.markOrcaRoleIfNeeded(workerSession.id, 'worker');
+        await validatePlan(workingDir, resolved);
       } catch (err) {
         await cleanupBootstrappedWorkerSession(workerSession.id);
         await deps.removeWorker(workerId).catch(() => undefined);
         return toInternalFailure(err);
       }
 
+      // Carry the resolved spawn facts through lifecycle/accepted callbacks only;
+      // neither the function nor its closure is part of the public result.
+      onCreated?.(async () => { await validatePlan(workingDir, resolved); });
       return {
         ok: true,
         teamId: params.teamId,

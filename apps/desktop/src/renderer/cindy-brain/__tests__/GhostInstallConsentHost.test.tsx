@@ -88,6 +88,24 @@ describe('GhostInstallConsentHost', () => {
     expect(screen.getByText('settings.ghosts.installConsent.addedBadge')).toBeTruthy();
   });
 
+  it('shows first-use capability consent without claiming a package update or source', async () => {
+    render(<GhostInstallConsentHost />);
+    await act(async () => push?.({
+      requestId:'tasks', purpose:'task-capability', initiator:'user', origin:'local-file',
+      facts:{kind:'update',ghostId:'p',name:'Plugin',version:'1',previousVersion:'1',
+        added:[{key:'agent:tasks',kind:'agent',labelKey:'agentTasks',detailKey:'agentTasksDetail'}],
+        removed:[],unchangedCount:2,builtinOauthClientChanged:false},
+    }));
+    const options = mocks.confirm.mock.calls[0][0];
+    expect(options.title).toBe('Plugin');
+    expect(options.description).toBe('settings.ghosts.installConsent.addedTitle');
+    expect(options.confirmText).toBe('settings.ghosts.connections.confirmAllow');
+    render(<>{options.content}</>);
+    expect(screen.getByText('settings.ghosts.perm.agentTasksDetail')).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.installConsent.updateDescription')).toBeNull();
+    await waitFor(()=>expect(resolveInstallConsent).toHaveBeenCalledWith('tasks',true));
+  });
+
   it('answers cancel when Main dismisses the pending dialog', async () => {
     let seenSignal: AbortSignal | undefined;
     mocks.confirm.mockImplementation(

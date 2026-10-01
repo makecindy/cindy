@@ -1167,6 +1167,7 @@ export default function SettingsScreen() {
       </ScrollView>
       <SheetModal
         backdropTestID="settings.appearancePicker.backdrop"
+        nativePresentation
         onBackdropPress={() => setAppearancePickerOpen(false)}
         onRequestClose={() => setAppearancePickerOpen(false)}
         visible={appearancePickerOpen}
@@ -1190,6 +1191,7 @@ export default function SettingsScreen() {
       </SheetModal>
       <SheetModal
         backdropTestID="settings.languagePicker.backdrop"
+        nativePresentation
         onBackdropPress={() => setLanguagePickerOpen(false)}
         onRequestClose={() => setLanguagePickerOpen(false)}
         visible={languagePickerOpen}

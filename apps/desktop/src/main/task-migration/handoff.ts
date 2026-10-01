@@ -47,6 +47,6 @@ export async function advanceHandoff(
 
 export function canCancelHandoff(record: MigrationHandoff): boolean {
   // Abandon only source staging. Never roll back a target that may have committed.
-  // The service rejects cancellation while a local transfer is still running.
+  // A running copy is cancelled only before the target starts receiving it.
   return record.stage === 'preparing' || record.stage === 'transferring';
 }

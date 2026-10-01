@@ -5,6 +5,9 @@ import { app, ipcMain } from 'electron';
 import {
   TASK_MIGRATION_CHANNEL,
   TASK_MIGRATION_LOCAL_CHANNEL,
+  TASK_MIGRATION_MAX_FILES,
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
+  DeviceLinkError,
   parseTaskMigrationRequest,
   buildAttachmentOssRef,
   parsePeerAttachmentRef,
@@ -53,6 +56,8 @@ import {
   snapshotWorkspace,
   restoreWorkspace,
   estimateWorkspace,
+  isExcludedFromWorkspace,
+  managedWorktreeExclusions,
   type PortableWorkspace,
 } from './workspace';
 
@@ -67,7 +72,13 @@ type MoveProject = (
 // Bootstrap supplies the existing business handler; importing maker IPC here creates a cycle.
 let moveProjectOnHost: MoveProject | undefined;
 let sourceBoundary: { isBusy(sessionId: string): boolean; drain(): Promise<void> } | undefined;
-const running = new Map<string, { progress?: TaskMigrationView['progress'] }>();
+interface RunningCopy {
+  progress?: TaskMigrationView['progress'];
+  /** The target may commit from here on; cancelling would orphan its copy. */
+  committing?: boolean;
+  cancelRequested?: boolean;
+}
+const running = new Map<string, RunningCopy>();
 const errorCode = (error: unknown): string => {
   if ((error as NodeJS.ErrnoException)?.code === 'ENOSPC') return 'MIGRATION_NO_SPACE';
   const message = error instanceof Error ? error.message : '';
@@ -127,9 +138,17 @@ async function invoke(
   scope: Scope,
 ): Promise<TaskMigrationView> {
   scope.assertCurrent();
-  const response = await remoteInvoke(device, TASK_MIGRATION_CHANNEL, [request], {
-    preSend: scope.assertCurrent,
-  });
+  let response: Awaited<ReturnType<typeof remoteInvoke>>;
+  try {
+    response = await remoteInvoke(device, TASK_MIGRATION_CHANNEL, [request], {
+      preSend: scope.assertCurrent,
+    });
+  } catch (error) {
+    // The source may still be working; tell the user it was slow, not that it is offline.
+    if (error instanceof DeviceLinkError && error.code === 'INVOKE_TIMEOUT')
+      throw new Error('MIGRATION_TIMEOUT');
+    throw error;
+  }
   scope.assertCurrent();
   if (!response.ok)
     throw new Error(
@@ -143,14 +162,20 @@ async function invoke(
   return result;
 }
 function view(scope: Scope, record: MigrationRecord | null): TaskMigrationView {
+  const live = record ? running.get(`${scope.root}:${record.sessionId}`) : undefined;
   return {
     supported: true,
     deviceId: selfId(),
     ...(record
       ? {
           stage: record.stage,
-          running: running.has(`${scope.root}:${record.sessionId}`),
-          progress: running.get(`${scope.root}:${record.sessionId}`)?.progress,
+          running: !!live,
+          progress: live?.progress,
+          ...(live?.cancelRequested
+            ? { cancelling: true as const }
+            : live && !live.committing && record.kind === 'outgoing'
+              ? { cancellable: true as const }
+              : {}),
           ...(record.kind === 'outgoing'
             ? {
                 targetDeviceId: record.targetDeviceId,
@@ -285,6 +310,8 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
           await Promise.all(members.map((member) => physicalWorktreeKey(member.workingDir))),
         ),
       ];
+      // A task inside another managed worktree under a copied root does not touch copied files.
+      const excluded = await Promise.all(sourceKeys.map(managedWorktreeExclusions));
       for (const session of getMakerIfReady()?.listActiveSessions() ?? []) {
         if (!session.isTurnRunning() && !sourceBoundary!.isBusy(session.id)) continue;
         const row = await scope.db.queryOne<{
@@ -298,9 +325,10 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
           const key = await physicalWorktreeKey(row.workingDir);
           if (
             sourceKeys.some(
-              (sourceKey) =>
+              (sourceKey, index) =>
                 key === sourceKey ||
-                key.startsWith(sourceKey + path.sep) ||
+                (key.startsWith(sourceKey + path.sep) &&
+                  !isExcludedFromWorkspace(sourceKey, key, excluded[index])) ||
                 sourceKey.startsWith(key + path.sep),
             )
           )
@@ -320,7 +348,7 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
       });
       scope.assertCurrent();
       if (result.status === 'oversize') throw new Error('MIGRATION_NO_MEMORY');
-      if (result.status !== 'ok' || result.fidelity !== 'full' || result.mediaMissing)
+      if (result.status !== 'ok' || result.fidelity !== 'full' || result.mediaDropped)
         throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
       const snapshots: PortableWorkspace[] = [];
       for (const [index, dir] of sourceKeys.entries())
@@ -401,10 +429,11 @@ async function sendPart(
   }
   onProgress?.(0); // OSS fallback starts this part again, not a second completed part.
   const result = await uploadLocalFile(file, { maxBytes: (await fs.stat(file)).size, onProgress });
-  scope.assertCurrent();
+  // Record the upload before the checkpoint so a cancelled copy still deletes it.
   const keysFile = path.join(artifacts, 'transfer-keys.json');
   const keys = JSON.parse(readAtomicFileSync(keysFile) ?? '[]') as string[];
   atomicWriteFileSync(keysFile, JSON.stringify([...keys, result.key]));
+  scope.assertCurrent();
   return {
     ref: buildAttachmentOssRef({ ossKey: result.key, size: result.size, sha256: result.sha256 }),
     size: result.size,
@@ -477,12 +506,17 @@ async function checkTargetResources(
   scope.assertCurrent();
 }
 async function transfer(scope: Scope, record: MigrationHandoff) {
+  const live = running.get(`${scope.root}:${record.sessionId}`)!;
+  // A retried transfer may follow a lost receive reply; until the target proves it has
+  // no receipt for this copy, it may be importing or already committed.
+  live.committing = true;
   const existing = await invoke(
     record.targetDeviceId,
     { action: 'receipt', id: record.id, sourceSessionId: record.sessionId },
     scope,
   );
   if (existing.stage === 'active') return;
+  if (!existing.stage) live.committing = false;
   const directory = path.join(scope.root, 'outgoing', record.id);
   const workspace = JSON.parse(
     readAtomicFileSync(path.join(directory, 'workspace.json')) ?? 'null',
@@ -501,7 +535,6 @@ async function transfer(scope: Scope, record: MigrationHandoff) {
   }
   scope.assertCurrent();
   const resources = await preflight(scope, record, workspace, directory);
-  const live = running.get(`${scope.root}:${record.sessionId}`)!;
   const startedAt = Date.now();
   let completed = 0;
   live.progress = {
@@ -548,6 +581,8 @@ async function transfer(scope: Scope, record: MigrationHandoff) {
     }
   }
   live.progress = { ...live.progress!, phase: 'finishing', bytesPerSecond: 0 };
+  // A cancel accepted before this point still aborts in invoke's preSend check.
+  live.committing = true;
   const result = await invoke(
     record.targetDeviceId,
     {
@@ -579,7 +614,17 @@ async function cleanupOutgoing(scope: Scope, record: MigrationHandoff) {
 function launch(scope: Scope, record: MigrationHandoff & { kind: 'outgoing' }) {
   const key = `${scope.root}:${record.sessionId}`;
   if (running.has(key)) return;
-  running.set(key, {});
+  // See transfer(): a resumed transfer stays non-cancellable until its receipt is checked.
+  const live: RunningCopy = { committing: record.stage !== 'preparing' };
+  running.set(key, live);
+  // Every existing checkpoint doubles as a cancellation point for this copy.
+  const copyScope: Scope = {
+    ...scope,
+    assertCurrent: () => {
+      scope.assertCurrent();
+      if (live.cancelRequested) throw new Error('MIGRATION_CANCELLED');
+    },
+  };
   void withCrossProcessLock(
     path.join(scope.root, `source-${record.sessionId}.lock`),
     { label: 'task-migration', waitMs: 0 },
@@ -587,13 +632,24 @@ function launch(scope: Scope, record: MigrationHandoff & { kind: 'outgoing' }) {
       if (!lock.held) return;
       const current = scope.read(record.sessionId);
       if (!current || current.kind !== 'outgoing' || current.id !== record.id) return;
-      await advanceHandoff(current, {
-        assertCurrent: scope.assertCurrent,
-        save: async (next) => scope.save({ ...next, kind: 'outgoing' }),
-        prepare: (r) => prepare(scope, r),
-        import: (r) => transfer(scope, r),
-        cleanup: (r) => cleanupOutgoing(scope, r),
-      });
+      try {
+        await advanceHandoff(current, {
+          assertCurrent: copyScope.assertCurrent,
+          save: async (next) => scope.save({ ...next, kind: 'outgoing' }),
+          prepare: (r) => prepare(copyScope, r),
+          import: (r) => transfer(copyScope, r),
+          cleanup: (r) => cleanupOutgoing(copyScope, r),
+        });
+      } catch (error) {
+        if (!live.cancelRequested) throw error;
+        // Same cleanup as cancelling a stopped copy, still under this copy's lock.
+        scope.assertCurrent();
+        const latest = scope.read(record.sessionId);
+        if (latest?.kind !== 'outgoing' || latest.id !== record.id) return;
+        await cleanupOutgoing(scope, latest);
+        scope.assertCurrent();
+        scope.save({ ...latest, stage: 'cancelled', error: undefined });
+      }
     },
   )
     .catch((error) => {
@@ -908,8 +964,19 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
       await Promise.all(members.map((member) => physicalWorktreeKey(member.workingDir))),
     );
     const estimate = { fileCount: 0, bytes: 0 };
+    // Same budget as the remote wait, enforced here so a local or orphaned scan also stops.
+    const deadline = Date.now() + TASK_MIGRATION_ESTIMATE_TIMEOUT_MS;
+    const check = () => {
+      scope.assertCurrent();
+      if (Date.now() > deadline) throw new Error('MIGRATION_TIMEOUT');
+    };
     for (const root of roots) {
-      const next = await estimateWorkspace(root, scope.assertCurrent);
+      // The cap covers every copied directory together.
+      const next = await estimateWorkspace(
+        root,
+        check,
+        TASK_MIGRATION_MAX_FILES - estimate.fileCount,
+      );
       estimate.fileCount += next.fileCount;
       estimate.bytes += next.bytes;
     }
@@ -949,6 +1016,15 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
     throw new Error('MIGRATION_INVALID_REQUEST');
   }
   if (request.action === 'status') return view(scope, scope.read(request.sessionId));
+  if (request.action === 'cancel') {
+    // A running copy holds the source lock; signal it instead of waiting for the lock.
+    const live = running.get(`${scope.root}:${request.sessionId}`);
+    if (live) {
+      if (live.committing) throw new Error('MIGRATION_CANNOT_CANCEL');
+      live.cancelRequested = true;
+      return view(scope, scope.read(request.sessionId));
+    }
+  }
   await fs.mkdir(scope.root, { recursive: true, mode: 0o700 });
   scope.assertCurrent();
   const initialMembers =

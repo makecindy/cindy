@@ -2,7 +2,7 @@ import { normalizeProviderRequest } from '@cindy/model-compat';
 import { createHash } from 'node:crypto';
 import type { Effort, ProviderModelRecord } from '@cindy/model-providers';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
-import { createPiProviderFetch, nativeBridgeApiKey } from './pi-provider-transport.js';
+import { createPiProviderFetch, nativeBridgeApiKey, NATIVE_BRIDGE_SESSION_HEADER } from './pi-provider-transport.js';
 import { createResponsesHandler, type ResponsesBridgeHandler } from '@cindy/anthropic-responses-bridge';
 import { ChatSseTranslator, classifySystemOrderError, coalesceLeadingSystemMessages, shouldRetrySystemNormalization, translateResponsesRequestWithContext, type ChatBridgeCapabilities, type ResponsesRequest } from '@cindy/responses-chat-bridge';
 
@@ -48,6 +48,8 @@ export function createClaudeProviderBridge(options: {
   capabilities?: ChatBridgeCapabilities;
   model?: ProviderModelRecord;
   providerId?: string;
+  /** Preset the connection derives from; lets the native route keep its provider-specific headers after edits. */
+  catalogPresetId?: string;
   nativeUpstream?: string;
   fetchImpl: typeof fetch;
 }): ResponsesBridgeHandler {
@@ -55,6 +57,7 @@ export function createClaudeProviderBridge(options: {
     ...options.model, supportsFastMode: options.supportsFastMode ?? options.model.supportsFastMode,
   },
     providerId: options.providerId ?? 'custom',
+    catalogPresetId: options.catalogPresetId,
     upstream: options.nativeUpstream,
     apiKey: nativeBridgeApiKey(options.headers),
     headers: Object.fromEntries(Object.entries(options.headers).filter(([name]) =>
@@ -155,8 +158,14 @@ export function createClaudeProviderBridge(options: {
   return createResponsesHandler({
     providers: [{
       prefix: '', reasoningNamespace: claudeProviderReasoningNamespace(options.url, options.providerId), upstreamBase: options.url, wireProtocol: 'openai-responses',
-      buildHeaders: async () => Object.fromEntries(Object.entries(options.headers).filter(([name]) =>
-        !['x-api-key', 'anthropic-version', 'anthropic-beta'].includes(name.toLowerCase()))),
+      // The native branch rebuilds the SDK request from its own headers and never forwards
+      // `init.headers`, so the per-request session carrier only travels into
+      // createPiProviderFetch (#5325). Pass-through protocols must not receive it.
+      buildHeaders: async ({ sessionId }) => ({
+        ...Object.fromEntries(Object.entries(options.headers).filter(([name]) =>
+          !['x-api-key', 'anthropic-version', 'anthropic-beta'].includes(name.toLowerCase()))),
+        ...(nativeFetch && sessionId?.trim() ? { [NATIVE_BRIDGE_SESSION_HEADER]: sessionId.trim() } : {}),
+      }),
       preserveReasoningState: !!options.model,
       maxOutputTokensSupported: true,
       supportsReasoning: () => options.efforts.length > 0,

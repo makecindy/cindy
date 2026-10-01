@@ -72,6 +72,7 @@ import type {
   ScanAtResourcesOptions,
   ScanAtResourcesResult,
   AgentBuiltinCommand,
+  AgentSkillCommand,
   ListAgentSkillsOptions,
   ListAgentSkillsResult,
   ListRuntimeSkillsOptions,
@@ -691,6 +692,12 @@ export interface AgentDeps {
   resolveSessionEnvironment?: (sessionId: string) => Promise<{ identity: string; assertCurrent?(): void } | undefined>;
   /** Cindy-only local Skill overrides. Freeze at native runtime startup; never apply to SSH. */
   getDisabledSkillPaths?: () => readonly string[];
+  /** Host-owned local Skills, loaded without writing user/project discovery directories. */
+  getManagedSkills?: () => Promise<Array<AgentSkillCommand & {
+    claudeCommandName: string;
+  }>>;
+  /** Refresh host-owned Skill links in the actual local Codex home before each thread, including reused servers. */
+  prepareCodexSkills?: (codexHome: string) => Promise<void>;
   /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
   turnChangeCapture?: TurnChangeCaptureHooks;
   auth: AuthAdapter;

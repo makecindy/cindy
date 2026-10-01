@@ -11,6 +11,23 @@
 
 > **增量适用原则**：wire protocol 兼容对所有跨端改动生效，不因是小改而豁免。
 
+## Desktop 设备互联 Review
+
+桌面控制端的 /review 通过 maker:review:start 请求被控 Desktop 执行。证据收集、Reviewer
+任务创建、只读生命周期和 Review 卡片持久化始终发生在被控端；结果沿现有 session、message
+和 maker:event 推送回控制端，不新增独立结果协议。该 channel 仅加入
+packages/device-link 的 invoke allowlist，仍受控制租约、会话可见性和被控端 Review 输入
+保护约束；SSH remoteHostId 不因此获得 Review 能力。
+
+旧被控端不认识该 channel 时返回 CHANNEL_NOT_ALLOWED，控制端沿用 Review 失败提示，
+不得回退到控制端本机执行。Review Reviewer session 的后续输入仍被远程 Review 外部输入门禁拒绝。
+控制端先整批校验 Review 请求，再复用现有上传／被控端物化链路。控制端外部文件与内联
+内容在上传前通过原生确认，文件只上传已授权的只读快照；被控端的工作区不授予控制端同名
+路径的读取权。禁止把控制端本机路径当作被控端文件。被控端自身仍需本机确认的工作区外
+成果不自动放行；确认尚无远控入口时返回权限错误。归属未解析的任务不启动 Review，只有
+明确归属本机才调用本机入口；已知远端归属在重连期间仍沿用远端。写请求不新增自动重试，
+90 秒超时仅作用于该请求，超时不代表被控端未创建 Reviewer，应先查看任务里的 Review 卡片。
+
 ## SkillHub 发布失败原因
 
 发布错误继续使用 `{ error: { code, message } }`，Desktop 保留已知业务码与具体原因，
@@ -45,9 +62,12 @@ warn/warning 状态检查项、等待或处理中的检查项和 warning issue
 源任务和文件保留可用，自动任务及消息渠道不转移。数据复用 peer 附件与 OSS；复制记录及目标回执
 仅用于幂等重试，不管理源任务执行权。写请求不进入自动重试白名单，无需服务端变更。
 `preflight` 检查目标实时资源；文件描述可为单附件或有序分段附件，每段复用已有协议和校验，
-复制不设固定总量上限。整组 Orca 沿用可选 `teamMigration: true` 能力声明，缺省不支持；
+复制不设固定总量上限；`estimate` 超过 `TASK_MIGRATION_MAX_FILES`（50 万）个项目文件时返回
+`MIGRATION_TOO_MANY_FILES`，控制端据此不开始复制，旧源端不返回该错误码。
+整组 Orca 沿用可选 `teamMigration: true` 能力声明，缺省不支持；
 `receive.files.additionalWorkspaces` 沿用同一文件描述，manifest 记录成员到目录的映射。
 双方必须支持复制通道；收到整组能力声明才发送团队，不尝试部分导入。
+运行中取消由源端状态的可选 `cancellable` / `cancelling` 声明，旧源端缺省时控制端不提供取消。
 范围、恢复与源目录保护见 [同机移动与跨电脑复制任务](../product-rules/task-device-migration.md)。
 
 设备互联生成文件沿用远端文件服务的 stat 与修改时间，控制端按被控端消息时间窗校验命令产物；

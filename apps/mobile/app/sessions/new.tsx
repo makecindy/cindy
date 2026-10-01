@@ -485,7 +485,7 @@ export default function NewRemoteSessionScreen() {
   const composerDock = useComposerDock();
   const visualInitialDraft = MOBILE_VISUAL_MOCK_ENABLED ? readRouteString(params.visualDraft) : null;
   const router = useRouter();
-  const nativeSelectionSheet = Platform.OS === 'ios';
+  const nativeSelectionSheet = Platform.OS === 'ios' || Platform.OS === 'android';
   const auth = useAuth();
   const outboxOwner = useSyncExternalStore(subscribeMobileAuthOwner, getMobileAuthOwner, getMobileAuthOwner);
   const {
@@ -6489,6 +6489,7 @@ export default function NewRemoteSessionScreen() {
       /> : null}
       <SheetModal
         backdropTestID="newSession.worktreeBranchSheet.backdrop"
+        nativePresentation
         onBackdropPress={() => setWorktreeBranchSheetOpen(false)}
         onRequestClose={() => setWorktreeBranchSheetOpen(false)}
         visible={worktreeBranchSheetVisible}

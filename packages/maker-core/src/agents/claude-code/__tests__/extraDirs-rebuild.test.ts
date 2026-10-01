@@ -156,7 +156,7 @@ afterEach(async () => {
 });
 
 describe('Claude extraDirs mid-session rebuild', () => {
-  it('setExtraDirs 后下一次 send 走 resume+fork,不用 fresh:true', async () => {
+  it.each(['none', 'remove', 'disable', 'enable'] as const)('setExtraDirs rebuild preserves conversation and launch skill preferences: %s', async (change) => {
     const configDir = await makeTempDir();
     const workingDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -168,8 +168,21 @@ describe('Claude extraDirs mid-session rebuild', () => {
     await fs.writeFile(path.join(projectDir, `${sdkSessionId}.jsonl`), '{"type":"summary"}\n', 'utf8');
 
     const firstQuery = createFakeQuery();
+    const closeFirstQuery = firstQuery.close;
     sdkMock.query.mockReturnValue(firstQuery);
-    const agent = new ClaudeCodeAgent(createDeps());
+    const deps = createDeps();
+    const managedDir = path.join(configDir, 'managed', 'example--demo');
+    let disabledPaths = change === 'enable' ? [managedDir] : [];
+    deps.getDisabledSkillPaths = () => disabledPaths;
+    if (change !== 'none') {
+      await fs.mkdir(managedDir, { recursive: true });
+      await fs.writeFile(path.join(managedDir, 'SKILL.md'), '---\nname: demo\ndescription: Fixture\n---\nBody');
+      deps.getManagedSkills = vi.fn(async () => await fs.stat(managedDir).then(() => [{
+        kind: 'agent-skill' as const, name: 'demo', source: 'skill' as const,
+        path: path.join(managedDir, 'SKILL.md'), claudeCommandName: 'cindy-plugin-example:demo',
+      }]).catch(() => []));
+    }
+    const agent = new ClaudeCodeAgent(deps);
     const handle = await agent.startSession({
       sessionId: 'session-library-extradirs',
       model: 'claude-opus-4-6',
@@ -177,6 +190,16 @@ describe('Claude extraDirs mid-session rebuild', () => {
       resumeSessionId: sdkSessionId,
     });
 
+    if (change === 'remove' || change === 'disable') {
+      expect(sdkMock.query.mock.calls[0]?.[0].options.plugins).toHaveLength(1);
+    } else {
+      expect(sdkMock.query.mock.calls[0]?.[0].options.plugins).toBeUndefined();
+    }
+    if (change === 'remove') {
+      await fs.rm(managedDir, { recursive: true });
+    }
+    if (change === 'disable') disabledPaths = [managedDir];
+    if (change === 'enable') disabledPaths = [];
     const libraryRoot = '/Users/example/libraries/xd-mivo';
     await handle.setExtraDirs?.([libraryRoot], libraryRoot);
 
@@ -193,7 +216,15 @@ describe('Claude extraDirs mid-session rebuild', () => {
     expect(rebuildArgs.options.additionalDirectories).toEqual([libraryRoot]);
     expect(rebuildArgs.options.resumeSessionAt).toBeUndefined();
     expect(rebuildArgs.options).not.toHaveProperty('fresh');
-    expect(firstQuery.close).toHaveBeenCalled();
+    expect(closeFirstQuery).toHaveBeenCalled();
+    if (change !== 'none') {
+      expect(deps.getManagedSkills).toHaveBeenCalledTimes(2);
+    }
+    if (change === 'disable') {
+      expect(rebuildArgs.options.plugins).toHaveLength(1);
+    } else {
+      expect(rebuildArgs.options.plugins).toBeUndefined();
+    }
     const wire = sdkMock.query.mock.calls[1][0].prompt as AsyncIterable<{ message: { content: unknown } }>;
     const next = await wire[Symbol.asyncIterator]().next();
     expect(JSON.stringify(next.value.message.content)).toContain('libraryRoot');

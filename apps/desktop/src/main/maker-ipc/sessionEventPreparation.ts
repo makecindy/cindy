@@ -15,7 +15,6 @@ import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-contin
 import type { AgentMeta } from '../../renderer/lib/ccAgent.types';
 import { parseAgentInputToolLoopDetails } from '../../shared/agentInputQueue.js';
 import { noteSubagentObservationTurnStarted } from '../subagentObservationRewindFence.js';
-import { persistSessionFields } from '../localDb/ipc/sessions.js';
 
 import { createLogger } from '../logger.js';
 import { t } from '../i18n.js';
@@ -256,21 +255,6 @@ export function prepareSessionEvent(
   }
   if (event.type === 'image' && event.source === 'codex') {
     if (!isQuietScheduledOutput(event)) void deps.broadcastCodexImageAsToolResult(session.id, event);
-    return;
-  }
-  if (event.type === 'plan_mode_changed') {
-    // agent 自行切换计划模式(典型: 计划批准后自动退出)。main 是持久化收口点:
-    // 复用 persistSessionFields 回写 sessions.plan_mode_enabled 并广播
-    // sessions:patched, 本机窗口与 device-link 控制端镜像同步收敛。
-    const data = event.data as { enabled?: unknown };
-    if (typeof data?.enabled === 'boolean') {
-      void persistSessionFields(session.id, { planModeEnabled: data.enabled }).catch((err) => {
-        deps.log.warn('persist plan_mode_changed failed', {
-          sessionId: session.id,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-    }
     return;
   }
   // turn 结束的 status event (isRunning=false + status='Done') 携带 endSnapshot。

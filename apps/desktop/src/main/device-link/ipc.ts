@@ -62,6 +62,8 @@ import {
 } from './index';
 import { getActiveControllers } from './dispatch';
 import { rewriteOutboundMedia, withPeerAttachmentUpload } from './outboundMedia';
+import { withOutboundReviewConfirmation } from '../maker-ipc/reviewOutboundInput.js';
+import { confirmReviewArtifacts } from '../reviewer/confirmReviewArtifacts.js';
 import { tryUploadPeerAttachment } from './filePeer';
 import { parseSharedTaskPeer } from '@cindy/device-link';
 import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
@@ -221,7 +223,7 @@ const DEVICE_LINK_CODE_MAP: Record<string, IpcErrorCode> = {
   NOT_CONNECTED: 'DEVICE_LINK_NOT_CONNECTED',
   LINK_NOT_OPEN: 'DEVICE_LINK_NOT_CONNECTED',
   PEER_RESET: 'DEVICE_LINK_NOT_CONNECTED',
-  BACKPRESSURE: 'DEVICE_LINK_NOT_CONNECTED',
+  BACKPRESSURE: 'DEVICE_LINK_BUSY',
 };
 
 /**
@@ -1404,6 +1406,13 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
   ipcMain.handle(DEVICE_LINK_INVOKE.INVOKE, (e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; channel?: unknown; args?: unknown };
+    if (p.channel === 'maker:review:start') {
+      assertTrustedAppRendererEvent(e);
+      return withOutboundReviewConfirmation(
+        (items) => confirmReviewArtifacts(e, items),
+        () => handleInvoke(diagnostics.forWindow(deps, e.sender.id), p.deviceId, p.channel, p.args),
+      );
+    }
     return handleInvoke(diagnostics.forWindow(deps, e.sender.id), p.deviceId, p.channel, p.args);
   });
   // 多窗口订阅引用计数:每个发起订阅的窗口(WebContents)挂一次 'destroyed' 清理,

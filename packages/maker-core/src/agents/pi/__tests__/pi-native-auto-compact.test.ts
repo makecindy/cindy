@@ -3,12 +3,15 @@
  * events and only latches deterministic failures for the next-send rollover.
  */
 
-import { mkdtempSync, mkdirSync, renameSync, symlinkSync, unlinkSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fsSync, { promises as fs, existsSync, mkdtempSync, mkdirSync, realpathSync, renameSync, symlinkSync, unlinkSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { assertPiSpawnArgvFitsPlatform } from '../project-resource-cli.js';
+import { preparePinnedPiSkillInvocation } from '../runtime-capabilities.js';
 
 const knobs = vi.hoisted(() => ({
+  spawnArgs: [] as string[],
   compactCalls: [] as Array<Record<string, unknown>>,
   compactHold: null as null | Promise<void>,
   rpcCalls: [] as Array<Record<string, unknown>>,
@@ -31,8 +34,10 @@ const knobs = vi.hoisted(() => ({
 
 vi.mock("../transport.js", () => ({
   createPiStdioTransport: (opts: {
+    args?: string[];
     onProcessSpawned?: (pid: number) => void | (() => void);
   }) => {
+    knobs.spawnArgs = opts.args ?? [];
     opts.onProcessSpawned?.(1234);
     return {
       writeLine: async () => {},
@@ -178,6 +183,7 @@ describe("PiAgent native auto-compaction ownership", () => {
   let cwd = "";
 
   beforeEach(() => {
+    knobs.spawnArgs = [];
     knobs.compactCalls = [];
     knobs.compactHold = null;
     knobs.rpcCalls = [];
@@ -200,6 +206,7 @@ describe("PiAgent native auto-compaction ownership", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(agentHome, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
   });
@@ -344,6 +351,114 @@ describe("PiAgent native auto-compaction ownership", () => {
     });
     knobs.onEvent?.({ type: "agent_settled" });
   }
+
+  it.each(['ordinary', 'disabled', 'bot-allow', 'bot-deny', 'bot-failed', 'bot-disabled', 'bot-missing', 'bot-user-collision', 'bot-global-disabled'] as const)('loads managed skills through explicit paths: %s', async (mode) => {
+    const skill = path.join(agentHome, 'managed', 'learn', 'SKILL.md');
+    mkdirSync(path.dirname(skill), {recursive:true}); writeFileSync(skill, '---\nname: learn\ndescription: fixture\n---\nLearn');
+    const deps = buildDeps();
+    deps.getManagedSkills = async () => [{kind:'agent-skill', name:'learn', source:'skill', path:skill,
+      claudeCommandName:'cindy:learn'}];
+    if(mode === 'disabled' || mode === 'bot-global-disabled') deps.getDisabledSkillPaths = () => [path.dirname(skill)];
+    const bot = mode.startsWith('bot');
+    const handle = await new PiAgent(deps).startSession({ sessionId:'managed-skills', workingDir:cwd, model:'m',
+      ...(bot ? {botRuntimeProfile:{botId:'fixture',profileVersion:1,
+        skillPolicy:{mode:'allowlist' as const, configured:mode === 'bot-deny' ? [] : ['skill:learn'],
+          catalog: mode === 'bot-missing' ? [] : [
+            { name: 'learn', runtimeCommandName: 'skill:learn', path: skill,
+              enabled: mode !== 'bot-disabled', runtimeStatus: mode === 'bot-failed' ? 'failed' as const : 'loaded' as const },
+            ...(mode === 'bot-user-collision' ? [{ name: 'learn', runtimeCommandName: 'skill:learn',
+              path: path.join(agentHome, 'user-learn', 'SKILL.md'), enabled: true }] : []),
+          ]},
+        mcpPolicy:{mode:'inherit' as const,configured:[],catalog:[]},
+        toolsetPolicy:{mode:'inherit' as const,configured:[],catalog:[]}}} : {})});
+    try {
+      const projection = knobs.spawnArgs.find((arg) => path.basename(arg) === 'cindy-managed-skills');
+      expect(!!projection).toBe(mode === 'ordinary' || mode === 'bot-allow');
+      expect(knobs.spawnArgs).not.toContain(realpathSync(skill));
+      if (projection) {
+        const entries = readdirSync(projection);
+        expect(entries).toHaveLength(1);
+        const projectedFile = path.join(projection, entries[0]!, 'SKILL.md');
+        expect(realpathSync(projectedFile)).toBe(realpathSync(skill));
+        expect(preparePinnedPiSkillInvocation('/learn', { name: 'learn', path: skill }, {
+          capturedAt: '2026-10-01T00:00:00.000Z', generation: 1, status: 'loaded', source: 'pi:get_commands',
+          commands: [{ name: 'skill:learn', source: 'skill', sourceInfo: { path: projectedFile, baseDir: path.dirname(projectedFile) } }],
+        })).toBe('/skill:learn');
+      }
+      if(bot) expect(knobs.spawnArgs).toContain('--no-skills');
+      if(mode === 'bot-allow') expect(knobs.spawnArgs.filter((arg) => arg === '--skill')).toHaveLength(1);
+    } finally {await handle.close();}
+  });
+
+  it('keeps hundreds of long managed skill paths out of Windows argv and cleans only session links', async () => {
+    const skills = Array.from({ length: 350 }, (_, index) => {
+      const file = path.join(agentHome, 'approved', 'revision-'.repeat(12), String(index), 'SKILL.md');
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, `---\nname: fixture-${index}\ndescription: fixture\n---\nBody`);
+      return { kind: 'agent-skill' as const, name: `fixture-${index}`, source: 'skill' as const,
+        path: file, claudeCommandName: `cindy-plugin-example:fixture-${index}` };
+    });
+    expect(() => assertPiSpawnArgvFitsPlatform(skills.flatMap((skill) => ['--skill', skill.path]), 'win32')).toThrow();
+    const deps = buildDeps();
+    deps.getManagedSkills = async () => skills;
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'many-skills', workingDir: cwd, model: 'm' });
+    const projection = knobs.spawnArgs.find((arg) => path.basename(arg) === 'cindy-managed-skills')!;
+    try {
+      expect(() => assertPiSpawnArgvFitsPlatform(knobs.spawnArgs, 'win32')).not.toThrow();
+      expect(knobs.spawnArgs.filter((arg) => arg === '--skill')).toHaveLength(1);
+      expect(knobs.spawnArgs.some((arg) => skills.some((skill) => arg === skill.path))).toBe(false);
+      const entries = readdirSync(projection).sort();
+      expect(entries).toHaveLength(skills.length);
+      expect(entries.map((entry) => realpathSync(path.join(projection, entry, 'SKILL.md'))))
+        .toEqual(skills.map((skill) => realpathSync(skill.path)));
+    } finally { await handle.close(); }
+    await vi.waitFor(() => expect(existsSync(projection)).toBe(false));
+    expect(skills.every((skill) => existsSync(skill.path))).toBe(true);
+  });
+
+  it.each(['discovery', 'realpath', 'mkdir', 'symlink'] as const)('cleans startup resources when managed Skill %s fails', async (operation) => {
+    const skill = path.join(agentHome, 'managed', 'learn', 'SKILL.md');
+    mkdirSync(path.dirname(skill), { recursive: true });
+    writeFileSync(skill, '---\nname: learn\ndescription: fixture\n---\nLearn');
+    const deps = buildDeps();
+    const disposeSessionCtx = vi.fn();
+    deps.preparePiExtraSpawnConfig = async () => ({ disposeSessionCtx });
+    deps.getManagedSkills = async () => [{ kind: 'agent-skill', name: 'learn', source: 'skill',
+      path: skill, claudeCommandName: 'cindy:learn' }];
+    const failure = Object.assign(new Error('managed projection I/O failed'), { code: 'EACCES' });
+    const originalMkdir = fs.mkdir;
+    const originalSymlink = fs.symlink;
+    let failedPath = '';
+    if (operation === 'discovery') {
+      deps.getManagedSkills = async () => { failedPath = skill; throw failure; };
+    } else if (operation === 'realpath') {
+      const originalRealpath = fsSync.realpathSync;
+      vi.spyOn(fsSync, 'realpathSync').mockImplementation(((target: string, options: unknown) => {
+        if (String(target) === skill) { failedPath = skill; throw failure; }
+        return originalRealpath(target, options as never);
+      }) as typeof fsSync.realpathSync);
+    } else if (operation === 'mkdir') {
+      vi.spyOn(fs, 'mkdir').mockImplementation((async (target: string, options: unknown) => {
+        if (String(target).endsWith('cindy-managed-skills')) { failedPath = String(target); throw failure; }
+        return originalMkdir(target, options as never);
+      }) as typeof fs.mkdir);
+    } else {
+      vi.spyOn(fs, 'symlink').mockImplementation(async (target, link, type) => {
+        if (String(link).includes('cindy-managed-skills')) { failedPath = String(link); throw failure; }
+        return originalSymlink(target, link, type);
+      });
+    }
+    await expect(new PiAgent(deps).startSession({ sessionId: 'failed-skill', workingDir: cwd, model: 'm' }))
+      .rejects.toBe(failure);
+    expect(failedPath).not.toBe('');
+    expect(disposeSessionCtx).toHaveBeenCalledTimes(1);
+    expect(knobs.spawnArgs).toEqual([]);
+    await vi.waitFor(() => {
+      expect(readdirSync(path.join(agentHome, 'run-tmp'))).toEqual([]);
+      expect(readdirSync(path.join(agentHome, 'runtime')).filter(name => /^(perm|subagent)-/.test(name))).toEqual([]);
+    });
+    expect(existsSync(skill)).toBe(true);
+  });
 
   it("enables Pi native auto-compaction during startup", async () => {
     const handle = await start();

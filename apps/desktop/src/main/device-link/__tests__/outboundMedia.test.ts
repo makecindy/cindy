@@ -20,6 +20,12 @@ vi.mock('../../logger', () => ({
 import { rewriteOutboundMedia, withPeerAttachmentUpload, __testing } from '../outboundMedia';
 import { buildPeerAttachmentRef, parsePeerAttachmentRef } from '@cindy/device-link';
 import { buildUserMessageAttachmentPayload } from '../../../renderer/lib/messageAttachmentPayload';
+import { REVIEW_START_REQUEST_LIMITS } from '../../maker-ipc/reviewStartHandler';
+
+// Authorization/snapshot behavior has its own filesystem-backed regression suite.
+vi.mock('../../maker-ipc/reviewOutboundInput', () => ({
+  withPreparedOutboundReview: (request: unknown, upload: (value: unknown) => unknown) => upload(request),
+}));
 import { withSharedTaskMedia } from '../sharedTaskMediaContext.js';
 import { assertSharedTaskReferences } from '../sharedTaskDispatch.js';
 import { parseAttachmentOssRef, isAttachmentOssRef } from '../../../shared/attachmentOssRef';
@@ -43,6 +49,43 @@ beforeEach(() => {
 });
 
 describe('rewriteOutboundMedia — channel gating', () => {
+  it.each([
+    ['count', () => Array.from({ length: 21 }, () => ({ name: 'a', path: '/controller/a' }))],
+    ['metadata', () => [{ name: 'a', path: '/controller/a' }, { name: 'x'.repeat(4097), path: '/controller/b' }]],
+    ['total metadata', () => Array.from({ length: 5 }, () => ({ name: 'a', url: 'a'.repeat(64 * 1024) }))],
+    ['single inline payload', () => [{ name: 'a', base64: 'a'.repeat(REVIEW_START_REQUEST_LIMITS.attachmentBase64Chars + 1) }]],
+    ['total inline payload', () => Array.from({ length: 3 }, () => ({ name: 'a', base64: 'a'.repeat(24 * 1024 * 1024) }))],
+  ] as const)('rejects Review %s limits before reading, compressing or staging any attachment', async (_label, attachments) => {
+    const peerUpload = vi.fn();
+    await expect(withPeerAttachmentUpload(peerUpload, () => rewriteOutboundMedia('maker:review:start', [{
+      sourceSessionId: 'source', attachments: attachments(),
+    }]))).rejects.toThrow('INVALID_PARAMS');
+    expect(peerUpload).not.toHaveBeenCalled();
+    expect(uploadLocalFile).not.toHaveBeenCalled();
+    expect(uploadBuffer).not.toHaveBeenCalled();
+    expect(resolveSafe).not.toHaveBeenCalled();
+  });
+
+  it('uploads Review attachments and strips controller-local paths without mutating the request', async () => {
+    const request = { sourceSessionId: 'source', focus: 'docs', attachments: [
+      { name: 'notes.md', path: '/controller/notes.md', category: 'text' },
+    ] };
+    const result = await rewriteOutboundMedia('maker:review:start', [request]);
+    const rewritten = result[0] as typeof request;
+    expect(rewritten.sourceSessionId).toBe('source');
+    expect(rewritten.focus).toBe('docs');
+    expect(isAttachmentOssRef(rewritten.attachments[0].path)).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('/controller/notes.md');
+    expect(request.attachments[0].path).toBe('/controller/notes.md');
+    expect(uploadLocalFile).toHaveBeenCalledOnce();
+  });
+
+  it('rejects Review when attachment upload fails', async () => {
+    uploadLocalFile.mockRejectedValue(new Error('upload failed'));
+    await expect(rewriteOutboundMedia('maker:review:start', [{
+      sourceSessionId: 'source', attachments: [{ name: 'notes.md', path: '/controller/notes.md' }],
+    }])).rejects.toThrow('upload failed');
+  });
   it('uses peer staging for exact file bytes, preserves the name and retains OSS fallback', async () => {
     const direct = vi.fn(async () => buildPeerAttachmentRef({ ticket: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', size: 10, sha256: SHA256, mimeType: 'text/plain' }));
     const args = ['session', { type: 'user', content: [{ type: 'file', path: '/controller/a.txt', originalName: 'a.txt' }] }];

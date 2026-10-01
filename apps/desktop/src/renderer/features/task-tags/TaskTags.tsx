@@ -255,7 +255,7 @@ export function TaskTagMenuSection({ session, onMore }: { session: Session; onMo
       {error && (
         <p className="max-w-64 text-xs text-[var(--text-secondary)]" role="status">
           {t(`taskTags.${error}`)}
-          {error === 'loadFailed' && (
+          {(error === 'loadFailed' || error === 'remoteBusy') && (
             <button
               type="button"
               className={button}
@@ -902,7 +902,7 @@ export function TaskTagEditor({ session, onClose }: { session: Session; onClose:
               role="alert"
             >
               {t(`taskTags.${blocked ? 'offline' : error}`)}
-              {!blocked && error === 'loadFailed' && (
+              {!blocked && (error === 'loadFailed' || error === 'remoteBusy') && (
                 <button
                   type="button"
                   className={button}
