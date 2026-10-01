@@ -1,3 +1,4 @@
+import { listCindyManagedSkills } from './managed-skills.js';
 import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { readCachedGenericOAuthAccessToken } from './generic-oauth.js';
 import { providerPresetModelRecord, providerModelAdapterId } from '@cindy/model-providers';
@@ -1881,6 +1882,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     // 写 models.json 时合并；只改 compat，不动路由与凭证。
     resolvePiNativeCompatOverride: (providerId, modelId) =>
       readPiNativeCompatOverride(providerId, modelId),
+    getManagedSkills: listCindyManagedSkills,
     resolveModelContextLimit: (providerId, modelId) => {
       const catalog = getActiveCatalog();
       const source = resolveModelContextProviderId(catalog, 'pi', providerId, modelId);

@@ -211,7 +211,7 @@ import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
 import { getResolvedMainLocale, t } from '../i18n.js';
 import { getDeepLinkMainWindow } from '../deepLink.js';
-import { reconcileGhostSkillLinks, removeGhostSkillLinksForRoots } from './skillSlot.js';
+import { reconcileGhostSkillLinks, removeGhostSkillLinksForRoots, ghostSkillPluginRoot } from './skillSlot.js';
 import { assertGhostSkillProjectionStableOwner } from '../authBoundaryQuarantine.js';
 import { type GhostOwnerScope } from './ghostOwnerScope.js';
 import {
@@ -1102,12 +1102,14 @@ function listGhostOwnerProjectionRoots(): string[] {
   ];
 }
 
-/** Stop every sandbox and revoke global skill projections before changing the active data owner. */
+/** Stop every sandbox and revoke private and legacy skill projections before changing the active data owner. */
 export async function suspendAllGhosts(): Promise<void> {
   runtimeSingleton?.destroyAll();
   resetNodeRuntimeBrokerForAccountBoundary();
   brainRootCache = null;
-  const skillCleanup = await removeGhostSkillLinksForRoots(listGhostOwnerProjectionRoots());
+  const roots = listGhostOwnerProjectionRoots();
+  const skillCleanup = await removeGhostSkillLinksForRoots(roots, undefined,
+    roots.map((root) => path.join(ghostSkillPluginRoot(root), 'skills')));
   for (const warning of skillCleanup.warnings) {
     log.warn('ghost owner skill cleanup warning', { warning });
   }

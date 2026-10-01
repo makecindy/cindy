@@ -368,6 +368,129 @@ function createDeps(
   };
 }
 
+describe('Codex managed Skill startup', () => {
+  it('does not submit a Bot thread when refreshed discovery has an unscoped error', async () => {
+    const agent = new CodexAgent(createDeps({}, { prepareCodexSkills: async () => {} }));
+    const host = installFakeHost(agent, method => method === Method.SkillsList
+      ? { data: [{ cwd: '/repo', skills: [], errors: [{ message: 'catalog unavailable' }] }] } : undefined,
+    { codexHome: '/tmp/mock-codex-home' });
+    try {
+      await expect(agent.startSession({ sessionId: 'bot-error', workingDir: '/repo', model: 'gpt-5.4',
+        botRuntimeProfile: { botId: 'bot-1', profileVersion: 1,
+          skillPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+          mcpPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+          toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        },
+      })).rejects.toThrow('catalog unavailable');
+      expect(host.request.mock.calls.some(([method]) => method === Method.ThreadStart || method === Method.ThreadResume)).toBe(false);
+    } finally { await agent.dispose(); }
+  });
+
+  it.each(['start', 'resume'] as const)('keeps late discovered skills outside frozen Bot grants on %s', async (operation) => {
+    let projected = false;
+    const known = '/skills/approved/SKILL.md';
+    const late = '/skills/late/SKILL.md';
+    const failed = '/skills/failed/SKILL.md';
+    const own = '/bots/bot-1/skills/own/SKILL.md';
+    const agent = new CodexAgent(createDeps({}, {
+      prepareCodexSkills: async () => { projected = true; },
+    }));
+    const host = installFakeHost(agent, (method) => {
+      if (method !== Method.SkillsList) return undefined;
+      expect(projected).toBe(true);
+      return { data: [{ cwd: '/repo', errors: [], skills: [known, late, failed].map(source => ({
+        name: 'same-name', description: 'fixture', path: source, scope: 'user', enabled: true,
+      })) }] };
+    }, { codexHome: '/tmp/mock-codex-home', userAgent: 'mock-codex/0.145.0' });
+    try {
+      for (const restricted of [false, true]) {
+        const handle = await agent.startSession({
+          sessionId: `bot-${restricted}`, model: 'gpt-5.4', workingDir: '/repo',
+          ...(operation === 'resume' ? { resumeSessionId: '11111111-1111-4111-8111-111111111111' } : {}),
+          botRuntimeProfile: { botId: 'bot-1', profileVersion: 1,
+            skillPolicy: { mode: 'allowlist', configured: ['same-name', 'failed'],
+              catalog: restricted ? [] : [
+                { name: 'same-name', path: known },
+                { name: 'failed', path: failed, runtimeStatus: 'failed' },
+              ], ownSkills: [{ name: 'own', path: own }] },
+            mcpPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+            toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+          },
+        });
+        const method = operation === 'resume' ? Method.ThreadResume : Method.ThreadStart;
+        const params = host.request.mock.calls.filter(([m]) => m === method).at(-1)?.[1] as { config: Record<string, unknown> };
+        expect(params.config['skills.config']).toEqual(expect.arrayContaining([
+          { path: known, enabled: !restricted }, { path: late, enabled: false },
+          { path: failed, enabled: false }, { path: own, enabled: true },
+        ]));
+        await handle.close();
+      }
+    } finally { await agent.dispose(); }
+  });
+
+  it.each(['start', 'resume'] as const)('refreshes projections and reloads the catalog before %s on a reused server', async (operation) => {
+    let enabled = true;
+    let projected = false;
+    const prepareCodexSkills = vi.fn(async (home: string) => {
+      expect(home).toBe('/tmp/mock-codex-home');
+      projected = enabled;
+    });
+    const discovered: boolean[] = [];
+    MockCodexTransport.beforeSkillsListResponse = () => { discovered.push(projected); };
+    const agent = new CodexAgent(createDeps({}, { prepareCodexSkills }));
+    try {
+      const first = await agent.startSession({ sessionId: 'enabled', model: 'gpt-5.4', workingDir: '/repo' });
+      enabled = false;
+      const second = await agent.startSession({ sessionId: 'disabled', model: 'gpt-5.4', workingDir: '/repo',
+        ...(operation === 'resume' ? { resumeSessionId: '11111111-1111-4111-8111-111111111111' } : {}) });
+      expect(prepareCodexSkills).toHaveBeenCalledTimes(2);
+      expect(discovered).toEqual([true, false]);
+      expect(createdTransports).toHaveLength(1);
+      const requests = createdTransports[0]!.lines.map(line => JSON.parse(line))
+        .filter(item => [Method.SkillsList, Method.ThreadStart, Method.ThreadResume].includes(item.method));
+      expect(requests.map(item => item.method)).toEqual([
+        Method.SkillsList, Method.ThreadStart, Method.SkillsList,
+        operation === 'resume' ? Method.ThreadResume : Method.ThreadStart,
+      ]);
+      expect(requests.filter(item => item.method === Method.SkillsList)
+        .every(item => item.params.forceReload === true)).toBe(true);
+      await first.close();
+      await second.close();
+    } finally { await agent.dispose(); }
+  });
+
+  it('does not project local managed Skills into a remote server', async () => {
+    const prepareCodexSkills = vi.fn(async () => {});
+    const agent = new CodexAgent(createDeps({}, { prepareCodexSkills, getRemoteCodexTransport: () => {
+      const transport = new MockCodexTransport();
+      createdTransports.push(transport);
+      return transport;
+    } }));
+    try {
+      const handle = await agent.startSession({ sessionId: 'remote', model: 'gpt-5.4',
+        workingDir: '/remote', remoteHostId: 'remote-skills' });
+      expect(prepareCodexSkills).not.toHaveBeenCalled();
+      await handle.close();
+    } finally { await agent.dispose(); }
+  });
+
+  it.each(['projection', 'reload'])('does not submit a thread after %s failure', async (failure) => {
+    const prepareCodexSkills = vi.fn(async () => {
+      if (failure === 'projection') throw new Error('projection unavailable');
+    });
+    if (failure === 'reload') MockCodexTransport.onCreate = transport => {
+      transport.setMockResponse(Method.SkillsList, { error: { code: -32000, message: 'reload unavailable' } });
+    };
+    const agent = new CodexAgent(createDeps({}, { prepareCodexSkills }));
+    try {
+      await expect(agent.startSession({ sessionId: 'failure', model: 'gpt-5.4', workingDir: '/repo' }))
+        .rejects.toThrow(/unavailable/);
+      expect(createdTransports.flatMap(transport => transport.lines).map(line => JSON.parse(line))
+        .some(item => item.method === Method.ThreadStart)).toBe(false);
+    } finally { await agent.dispose(); }
+  });
+});
+
 describe('Codex archive synchronization', () => {
   it('uses the retained writer and records the native archive path without closing sibling tasks', async () => {
     const storage = { historyHome: '/history', sqliteHome: '/state' };

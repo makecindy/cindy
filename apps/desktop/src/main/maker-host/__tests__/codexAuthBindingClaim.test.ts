@@ -27,6 +27,12 @@ vi.mock('electron', () => ({
   safeStorage: { isEncryptionAvailable: () => false },
 }));
 
+// Skill discovery is covered separately; keep cold plugin transforms out of auth timing.
+vi.mock('../managed-skills.js', () => ({
+  listCindyManagedSkills: async () => [],
+  cindyManagedSkillRoots: async () => [],
+}));
+
 vi.mock('@cindy/maker-core', () => ({}));
 
 vi.mock('../../authBoundaryQuarantine.js', async (importOriginal) => {

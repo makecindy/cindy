@@ -1,6 +1,6 @@
 import { getPiExtensionUiCapability } from './extension-ui-capabilities.js';
 import { parsePiManagementArgs, parsePiManagementText } from './managed-command.js';
-import { snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths, extendDisabledSkillLaunchPaths, type DisabledSkillLaunchSnapshot } from '../shared/skill-activation.js';
+import { canonicalSkillPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths, extendDisabledSkillLaunchPaths, type DisabledSkillLaunchSnapshot } from '../shared/skill-activation.js';
 /**
  * PiAgent —— pi coding agent(earendil-works/pi)接入。
  *
@@ -210,6 +210,7 @@ import {
   unavailablePiProjectResourceAssembly,
 } from './project-resource-assembly.js';
 import { applyPiBotSkillPolicy } from './bot-skill-policy.js';
+import { resolveAllowedManagedSkills, snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
 import {
   assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
@@ -3792,44 +3793,83 @@ export class PiAgent extends BaseAgent {
         }
       : collectedProjectResources;
 
-    const args = [
-      '--mode',
-      'rpc',
-      // --no-approve remains the hard project-settings gate. Explicit --skill /
-      // --prompt-template / --extension pass original in-repo paths without
-      // trusting `.pi/settings.json` or auto-installing project packages.
-      '--no-approve',
-      ...(nativePackagePaths.length === 0 ? ['--no-extensions'] : []),
-      '--session-dir',
-      sessionDir,
-      '--provider',
-      initialProvider,
-      '--model',
-      initialWireModel,
-      ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
-      // Bot sessions must not absorb project/global AGENTS.md or CLAUDE.md from
-      // the cwd chain — their context is the Bot profile, not the workspace.
-      ...(opts.botRuntimeProfile ? ['--no-context-files'] : []),
-      ...(botSkillSelection.disableImplicitSkills ? ['--no-skills'] : []),
-      ...(appendSystemPrompt.length > 0 ? ['--append-system-prompt', appendSystemPrompt] : []),
-      '--extension',
-      bridgeExtensionPath,
-      ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
-      ...(!reviewMode && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
-      ...(loadProjectResourcesInPlace
-        ? piProjectResourceCliArgs(projectResourceCli)
-        : botSkillSelection.explicitSkillPaths.flatMap((skillPath) => ['--skill', skillPath])),
-    ];
+    // Own the entire managed-skill setup in the existing startup rollback:
+    // discovery and path checks can fail before any projection is created.
+    let managedSkillPaths: string[];
+    let managedSkillRoot: string | undefined;
+    let args: string[];
     try {
+      const managedSkillGrants = snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy);
+      const managedSkills = opts.remoteHostId || reviewMode ? [] : await this.deps.getManagedSkills?.() ?? [];
+      const managedDisabledPaths = snapshotDisabledSkillLaunch(opts.remoteHostId || reviewMode ? [] : this.deps.getDisabledSkillPaths?.() ?? []);
+      const managedSourceIdentities = new Set(managedSkills.flatMap((skill) =>
+        skill.path ? [canonicalSkillPath(skill.path)] : []));
+      const managedSourcePaths = new Set(managedSkills.flatMap((skill) => skill.path ? [path.resolve(skill.path)] : []));
+      managedSkillPaths = resolveAllowedManagedSkills(managedSkills, managedSkillGrants,
+        currentDisabledSkillLaunchPaths(managedDisabledPaths)).map((skill) => skill.path);
+      // The catalog path may alias a managed source. Apply the managed grant and
+      // activation checks once, including paths already selected by the Bot.
+      const additionalSkillPaths = [...new Map([
+        ...(loadProjectResourcesInPlace ? [] : botSkillSelection.explicitSkillPaths.filter((skillPath) =>
+          !managedSourcePaths.has(path.resolve(skillPath)) && !managedSourceIdentities.has(canonicalSkillPath(skillPath)))),
+      ].map((skillPath) => [canonicalSkillPath(skillPath), skillPath])).values()];
+
+      // One explicit directory also works with --no-skills. Keep its lifetime in
+      // the existing per-session configHome and link only already-authorized
+      // physical sources; argv size must not grow with installed plugin count.
+      const managedLaunchSkills = managedSkillPaths.filter((skillPath) => !projectResourceCli.skills
+        .some((existing) => canonicalSkillPath(existing) === canonicalSkillPath(skillPath)));
+      managedSkillRoot = managedLaunchSkills.length ? path.join(configHome, 'cindy-managed-skills') : undefined;
+
+      args = [
+        '--mode',
+        'rpc',
+        // --no-approve remains the hard project-settings gate. Explicit --skill /
+        // --prompt-template / --extension pass original in-repo paths without
+        // trusting `.pi/settings.json` or auto-installing project packages.
+        '--no-approve',
+        ...(nativePackagePaths.length === 0 ? ['--no-extensions'] : []),
+        '--session-dir',
+        sessionDir,
+        '--provider',
+        initialProvider,
+        '--model',
+        initialWireModel,
+        ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
+        // Bot sessions must not absorb project/global AGENTS.md or CLAUDE.md from
+        // the cwd chain — their context is the Bot profile, not the workspace.
+        ...(opts.botRuntimeProfile ? ['--no-context-files'] : []),
+        ...(botSkillSelection.disableImplicitSkills ? ['--no-skills'] : []),
+        ...additionalSkillPaths.filter((skillPath) => !projectResourceCli.skills
+          .some((existing) => canonicalSkillPath(existing) === canonicalSkillPath(skillPath)))
+          .flatMap((skillPath) => ['--skill', skillPath]),
+        ...(managedSkillRoot ? ['--skill', managedSkillRoot] : []),
+        ...(appendSystemPrompt.length > 0 ? ['--append-system-prompt', appendSystemPrompt] : []),
+        '--extension',
+        bridgeExtensionPath,
+        ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
+        ...(!reviewMode && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
+        ...(loadProjectResourcesInPlace
+          ? piProjectResourceCliArgs(projectResourceCli)
+          : []),
+      ];
+      if (managedSkillRoot) {
+        await fs.mkdir(managedSkillRoot);
+        for (const [index, skillPath] of managedLaunchSkills.entries()) {
+          // Preserve discovery order for same-name skills without long filenames.
+          await fs.symlink(path.dirname(skillPath), path.join(managedSkillRoot, String(index).padStart(12, '0')),
+            process.platform === 'win32' ? 'junction' : 'dir');
+        }
+      }
       assertPiSpawnArgvFitsPlatform(args);
     } catch (error) {
       try {
         disposeSessionCtx?.();
       } catch {
-        /* best-effort: cleanup failure must not mask argv budget failure */
+        /* best-effort: cleanup failure must not mask Skill setup / argv failure */
       }
       disposeSessionCtx = undefined;
-      cleanupConfigHome();
+      await cleanupConfigHome();
       cleanupRuntimeFiles();
       throw error;
     }
@@ -5727,6 +5767,8 @@ export class PiAgent extends BaseAgent {
         [
           ...managedPackageRoots,
           ...projectResourceCli.skills,
+          ...managedSkillPaths,
+          ...(managedSkillRoot ? [managedSkillRoot] : []),
           ...projectResourceCli.promptTemplates,
           ...projectResourceCli.extensions,
         ],
@@ -7992,7 +8034,15 @@ export class PiAgent extends BaseAgent {
 
   /** SkillHub raw view; project items remain discovered until runtime truth says otherwise. */
   override async listCustomizations(opts: ListCustomizationsOptions): Promise<ListCustomizationsResult> {
-    return scanPiCustomizations(opts);
+    const result = await scanPiCustomizations(opts);
+    if (!opts.kinds || opts.kinds.includes('skill')) {
+      result.items.push(...(await this.deps.getManagedSkills?.() ?? []).filter((skill) => skill.path).map((skill) => ({
+        engine: 'pi' as const, kind: 'skill', scope: 'user', name: skill.name,
+        description: skill.description, absolutePath: path.dirname(skill.path!), mdPath: skill.path,
+        enabled: skill.enabled,
+      })));
+    }
+    return result;
   }
 
   /**
@@ -8015,6 +8065,8 @@ export class PiAgent extends BaseAgent {
     ]);
     const out: ListAgentSkillsResult = {
       skills: [
+        ...(await this.deps.getManagedSkills?.() ?? []).map(({ claudeCommandName: _command, ...skill }) =>
+          ({ ...skill, runtimeCommandName: `skill:${skill.name}` })),
         ...items
           .filter((it) => it.kind === 'skill' && it.enabled !== false)
           .map((it) => ({

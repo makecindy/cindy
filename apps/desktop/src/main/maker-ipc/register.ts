@@ -441,6 +441,7 @@ import {
 import { isCindySkillEnabled } from '../skillhub/activationPreferences.js';
 import {
   parseDirectLearnInvocation,
+  canGrantUnqualifiedClaudeLearnInvocation,
   type CindyLearnInvocationGrant,
 } from '../learn-host/invocationGrant.js';
 import { ensurePiManagerInstalled } from '../maker-host/pi-manager-client.js';
@@ -13772,6 +13773,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         || (session.getStatus && session.getStatus() !== 'active')
       ) return null;
 
+      if (session.agentKind === 'claude-code'
+        && !/^\/cindy:learn(?:\s|$)/i.test(dispatchedText.trim())
+        && !await canGrantUnqualifiedClaudeLearnInvocation(session.id)) return null;
+
       const descriptors = builtInSkillDescriptors(
         app.getPath('userData'),
         app.getPath('appData'),
@@ -13794,7 +13799,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         result.skills,
         descriptors,
         isCindySkillEnabled,
-      ).filter((skill) => skill.name.toLowerCase() === 'learn');
+      ).filter((skill) => (skill.name.toLowerCase() === 'learn' || skill.runtimeCommandName === 'cindy:learn')
+        && (!/^\/cindy:learn(?:\s|$)/i.test(dispatchedText.trim())
+          || (skill.builtIn === true && skill.runtimeCommandName === 'cindy:learn')));
       if (
         learnCandidates.length !== 1
         || learnCandidates.some((skill) => skill.builtIn !== true || !skill.path)

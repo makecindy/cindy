@@ -4,7 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import type { AuthState } from '@cindy/maker-core';
+import type { AgentDeps, AuthState } from '@cindy/maker-core';
 import { getActiveAppSession } from '../appSessionState.js';
 import { getCachedBinaryStatus, isVettedAgentBinaryPath } from '../agent-binaries/index.js';
 import { getActiveCatalog } from './active-catalog.js';
@@ -120,10 +120,10 @@ export function codexAccountState(providerId: string): AuthState {
   }
 }
 
-export async function prepareCodexAccountHome(providerId: string): Promise<string> {
+export async function prepareCodexAccountHome(providerId: string, managedRoots: readonly string[], managedSkills: Awaited<ReturnType<NonNullable<AgentDeps['getManagedSkills']>>>): Promise<string> {
   if (!codexAccountState(providerId).authenticated) throw new Error('Codex account requires login');
   const home = codexAccountHome(providerId);
-  await Promise.all([prepareCodexGlobalSkillsLinks(home), prepareCodexGlobalRulesCopy(home)]);
+  await Promise.all([prepareCodexGlobalSkillsLinks(home, { managedRoots, managedSkills }), prepareCodexGlobalRulesCopy(home)]);
   const plugins = await prepareCodexGlobalPluginsBridge(home, {
     capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
   });

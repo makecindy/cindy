@@ -48,6 +48,7 @@ import {
   type TurnPermissionPolicy,
 } from '../base-agent.js';
 import { skillEntryPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from '../shared/skill-activation.js';
+import { snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
 import type { AgentCredentialMode } from '../../interfaces/auth-adapter.js';
 import type {
   Capabilities,
@@ -3615,6 +3616,9 @@ assertRouteCurrent();
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/codex` : 'codex');
     const reviewMode = opts.reviewMode === true;
+    const botSkillGrants = !opts.remoteHostId && !reviewMode
+      ? snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy) : undefined;
+    let refreshedBotSkillConfig: Record<string, unknown> | undefined;
     if (reviewMode && opts.remoteHostId) {
       throw new Error('Cindy Review currently supports local Codex sessions only');
     }
@@ -5206,6 +5210,24 @@ assertRouteCurrent();
       // 永不返回, UI 无限卡初始化 — 与 request() 的 startup deadline 同款。
       initResp = await host.ensureStartedWithTimeout(CRITICAL_THREAD_RPC_TIMEOUT_MS, 'startSession initialize');
       assertCurrentHost('initialize');
+      if (!opts.remoteHostId && this.deps.prepareCodexSkills) {
+        if (!initResp.codexHome) throw new Error('Codex did not report its local Skill home');
+        await this.deps.prepareCodexSkills(initResp.codexHome);
+        assertCurrentHost('Skill projection refresh');
+        // app-server outlives threads; refreshing files alone leaves its cached
+        // catalog available to the next thread after a plugin is disabled.
+        const refreshed = await this.listSkillsForHost(host, opts.workingDir, true, CRITICAL_THREAD_RPC_TIMEOUT_MS);
+        if (botSkillGrants !== undefined) {
+          const unscopedError = refreshed.errors.find(error => !error.path);
+          if (unscopedError) throw new Error(unscopedError.message);
+          refreshedBotSkillConfig = buildCodexBotSkillConfigOverrides(opts.botRuntimeProfile?.skillPolicy, {
+            grants: botSkillGrants,
+            skills: [...refreshed.skills, ...refreshed.errors.flatMap(error =>
+              error.path ? [{ path: error.path, enabled: false }] : [])],
+          });
+        }
+        assertCurrentHost('Skill catalog reload');
+      }
     } catch (error) {
       releaseHostBindingLeaseIfNeeded();
       // Exhaustion/cancellation of native startup is terminal for this request;
@@ -5500,7 +5522,7 @@ assertRouteCurrent();
     }
     capabilityRoutingConfig = mergeCodexSkillConfigOverrides(
       capabilityRoutingConfig,
-      buildCodexBotSkillConfigOverrides(
+      refreshedBotSkillConfig ?? buildCodexBotSkillConfigOverrides(
         reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
       ),
     );

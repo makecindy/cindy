@@ -3280,8 +3280,7 @@ export function CCAgentSessionView({
         return {
           handled: false,
           accepted: false,
-          message:
-            agentKind === 'pi' ? rewriteAgentSkillInvocationForDispatch(message, hit) : message,
+          message: rewriteAgentSkillInvocationForDispatch(message, hit),
         };
       }
       // Desktop commands stay `^/` only. A whitespace-prefixed `/help` is not a dispatch.
