@@ -2982,7 +2982,7 @@ describe('production plugin Auto admission after reservation', () => {
         if (JSON.parse(receipt.payload).ownershipRevoked) throw new PluginTaskError('TASK_NOT_FOUND', 'Not owned');
         return { ...task };
       } }),
-      readGhostErrandConfig: () => ({ permissionMode: 'auto', workingDir: task.workingDir }),
+      readPluginTaskConfig: () => ({ permissionMode: 'auto', workingDir: task.workingDir }),
       isPluginTaskAuthorized: () => enabled,
       resolvePluginWorkerDirectory: async () => task.workingDir,
       isGhostPickedDir: () => false, PluginTaskError,
