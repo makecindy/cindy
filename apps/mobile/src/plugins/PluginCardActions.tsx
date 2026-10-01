@@ -259,8 +259,10 @@ function CardControls({
       if (valid() && revisionRef.current === expectedRevision) {
         setPrompt(undefined);
         setDraft("");
+        sending.current = false;
+        setBusy(false);
       }
-      // Delivery acknowledgement is not business completion. Wait for the actual card update.
+      // A known delivery permits a new deliberate click, never an automatic replay.
     } catch {
       if (valid() && revisionRef.current === expectedRevision) setUnknown(true);
     }

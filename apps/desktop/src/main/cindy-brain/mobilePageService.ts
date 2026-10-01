@@ -521,6 +521,8 @@ export class MobilePluginPages {
           }
           case 'suspend': {
             page.active = false;
+            // Suspension removes native intents; their cover must not survive resume.
+            page.sourceHidden = false;
             this.cancelDirectory(page);
             page.intents = [];
             page.previews?.clear();

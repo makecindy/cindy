@@ -37,6 +37,9 @@ export function bootstrap(config: PageConfig) {
   >();
   const backListeners = new Set<() => void>();
   const lifecycleListeners = new Set<(active: boolean) => void>();
+  const unreadListeners = new Set<(version: number) => void>();
+  let unreadVersion = config.document.unreadAt;
+  let active = false;
   let request = 0,
     delivered = 0;
   let closed = false;
@@ -63,6 +66,29 @@ export function bootstrap(config: PageConfig) {
       onLifecycle: (listener: (active: boolean) => void) => {
         lifecycleListeners.add(listener);
         return () => lifecycleListeners.delete(listener);
+      },
+      onUnread: (listener: (version: number) => void) => {
+        unreadListeners.add(listener);
+        if (Number.isSafeInteger(unreadVersion)) {
+          const version = unreadVersion!;
+          queueMicrotask(() => {
+            if (unreadListeners.has(listener) && unreadVersion === version)
+              listener(version);
+          });
+        }
+        return () => unreadListeners.delete(listener);
+      },
+      contentRendered: (version: number) => {
+        if (
+          config.document.surface !== "panel" ||
+          !Number.isSafeInteger(version) ||
+          version !== unreadVersion
+        )
+          return;
+        requestAnimationFrame(() => {
+          if (!closed && active && version === unreadVersion)
+            send({ type: "content-rendered", seenAt: version });
+        });
       },
       openTask: (taskId: string) =>
         send({
@@ -161,13 +187,16 @@ export function bootstrap(config: PageConfig) {
         throw new Error("PLUGIN_RESPONSE_INVALID");
       offset = next ? Number(next) : undefined;
     } while (offset !== undefined);
-    return new Response(new Blob(parts), {
-      status: response.status,
-      headers: {
-        "content-type":
-          response.headers.get("content-type") ?? "application/octet-stream",
+    return new Response(
+      [204, 205, 304].includes(response.status) ? null : new Blob(parts),
+      {
+        status: response.status,
+        headers: {
+          "content-type":
+            response.headers.get("content-type") ?? "application/octet-stream",
+        },
       },
-    });
+    );
   };
   const receive = (event: MessageEvent) => {
     let message;
@@ -185,8 +214,8 @@ export function bootstrap(config: PageConfig) {
     if (message.type === "back") {
       for (const listener of backListeners) listener();
     } else if (message.type === "lifecycle") {
-      for (const listener of lifecycleListeners)
-        listener(message.active === true);
+      active = message.active === true;
+      for (const listener of lifecycleListeners) listener(active);
     } else if (message.type === "draft:reply") {
       const waiter = localRequests.get(message.id);
       if (!waiter) return;
@@ -195,6 +224,13 @@ export function bootstrap(config: PageConfig) {
       if (message.error) waiter.reject(new Error("PLUGIN_DRAFT_UNCONFIRMED"));
       else waiter.resolve(message.value);
     } else if (message.type === "events") {
+      if (message.unreadAt !== unreadVersion) {
+        unreadVersion = Number.isSafeInteger(message.unreadAt)
+          ? message.unreadAt
+          : undefined;
+        if (unreadVersion !== undefined)
+          for (const listener of unreadListeners) listener(unreadVersion);
+      }
       for (const item of message.events) {
         if (!Number.isSafeInteger(item.sequence) || item.sequence <= delivered)
           continue;
@@ -206,11 +242,6 @@ export function bootstrap(config: PageConfig) {
         delivered = item.sequence;
       }
       send({ type: "events-ack", sequence: delivered });
-      if (Number.isSafeInteger(message.unreadAt)) {
-        requestAnimationFrame(() =>
-          send({ type: "content-rendered", seenAt: message.unreadAt }),
-        );
-      }
     } else if (message.type === "theme") {
       document.documentElement.dataset.theme = message.theme;
       document.documentElement.classList.toggle(
@@ -230,18 +261,25 @@ export function bootstrap(config: PageConfig) {
       if (message.error) waiter.reject(new Error("PLUGIN_REQUEST_UNCONFIRMED"));
       else
         waiter.resolve(
-          new Response(decode(message.result), {
-            status: message.result.status,
-            headers: {
-              "content-type": message.result.mime,
-              ...(message.result.revision
-                ? { "x-cindy-revision": message.result.revision }
-                : {}),
-              ...(message.result.nextOffset === undefined
-                ? {}
-                : { "x-cindy-next-offset": String(message.result.nextOffset) }),
+          new Response(
+            [204, 205, 304].includes(message.result.status)
+              ? null
+              : decode(message.result),
+            {
+              status: message.result.status,
+              headers: {
+                "content-type": message.result.mime,
+                ...(message.result.revision
+                  ? { "x-cindy-revision": message.result.revision }
+                  : {}),
+                ...(message.result.nextOffset === undefined
+                  ? {}
+                  : {
+                      "x-cindy-next-offset": String(message.result.nextOffset),
+                    }),
+              },
             },
-          }),
+          ),
         );
     }
   };
@@ -383,6 +421,7 @@ export function bootstrap(config: PageConfig) {
     localRequests.clear();
     backListeners.clear();
     lifecycleListeners.clear();
+    unreadListeners.clear();
     receivedDeliveries.clear();
     channels.clear();
   });

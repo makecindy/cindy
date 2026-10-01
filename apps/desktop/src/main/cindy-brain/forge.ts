@@ -2528,7 +2528,11 @@ const r = await cindy.send({
   只有 \`answer.ok && answer.confirmed\` 才能继续；页面关闭、覆盖、超时或撤权均不能当成同意。
   普通确认不授予目录、账号、任务或文件权限；任务授权仍由专用 Host 校验链决定。
 - notify 只交给来源页面；后台提醒用原 \`badge\` 能力。badge 是 boolean + summary，
-  没有计数字段。目录、详情及 mainView 不清 panel 未读，Host 在 panel 真正显示后按观察版本清除。
+  没有计数字段。目录、详情及 mainView 不清 panel 未读。panel 用
+  \`window.cindyMobile.onUnread(version => { /* 读取并呈现对应内容后调用 contentRendered(version) */ })\`
+  接收未读版本；读取失败、只收到轮询或页面加载完成都不能确认已读。
+  \`window.cindyMobile.contentRendered(version)\` 在下一帧回报该版本，Host 复核可见性和版本。
+  异步读取必须捕获开始时的 version，不得用读取结束时的新版本代替；前台恢复后重新呈现再回报。
 - 包内静态资源按打开时的文件身份读取，整页资源最多 64 MiB。大媒体用归属明确的
   \`/media/\` 或 \`/library/\`；不要把课程/用户媒体打进页面启动包。
 - 普通数据端点支持 \`/kv\`、\`/app-context\`、\`/agent-models\`、\`/media-models\`、\`/gallery\`。

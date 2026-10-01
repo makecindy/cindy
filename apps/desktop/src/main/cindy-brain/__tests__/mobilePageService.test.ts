@@ -270,6 +270,20 @@ describe('mobile plugin pages', () => {
     await h.invoke('poll', { pageId: page.pageId, after: 0 });
     expect(h.service.notify(page.pageId, 'practice', 'Foreground toast')).toBe(true);
   });
+  it('drops native cover when suspending and resumes business requests without a lost uncover effect', async () => {
+    const h = setup(), page = await h.open();
+    h.service.present(page.pageId, 'practice', { kind: 'preview', url: 'https://example.invalid' });
+    await h.invoke('cover', { pageId: page.pageId, hidden: true });
+    await h.invoke('suspend', { pageId: page.pageId });
+    await expect(h.invoke('cover', { pageId: page.pageId, hidden: false })).rejects.toThrow();
+    await expect(h.invoke('post', { pageId: page.pageId, channel: 'practice-ui', data: {} })).rejects.toThrow();
+    const resumed = await h.invoke('poll', { pageId: page.pageId, after: 0 });
+    expect(resumed.result).toMatchObject({ intents: [] });
+    await h.invoke('post', { pageId: page.pageId, channel: 'practice-ui', data: { resumed: true } });
+    await h.invoke('seen', { pageId: page.pageId, seenAt: 42 });
+    expect(h.post).toHaveBeenCalledOnce();
+    expect(h.clearUnread).toHaveBeenCalledWith('practice', 42);
+  });
   it.each(['changeOwner', 'changePeer', 'changeRevision', 'expire'] as const)(
     'rejects a stale page after %s before dispatching business data',
     async (change) => {

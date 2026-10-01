@@ -306,7 +306,13 @@ export function PluginPage({
   }, [nativeIntent?.id, focused]);
   useEffect(() => {
     const call = request.current;
-    if (!call || !focused || !documentRef.current) return;
+    if (
+      !call ||
+      !focused ||
+      !documentRef.current ||
+      AppState.currentState !== "active"
+    )
+      return;
     const hidden = !!nativeIntent && nativeIntent.kind !== "task";
     send({ type: "lifecycle", active: !hidden });
     void call("cover", { hidden }).catch(() => {
@@ -446,9 +452,6 @@ export function PluginPage({
           active: focusedRef.current && AppState.currentState === "active",
         });
         startPolling.current?.();
-        const doc = documentRef.current;
-        if (doc?.surface === "panel" && doc.unreadAt !== undefined)
-          await call("seen", { seenAt: doc.unreadAt });
       } else if (
         message.type === "content-rendered" &&
         documentRef.current?.surface === "panel" &&

@@ -158,3 +158,122 @@ describe("mobile plugin page transport", () => {
     }
   });
 });
+
+describe("mobile plugin render and empty-response receipts", () => {
+  async function harness() {
+    const messages: Array<Record<string, any>> = [];
+    const frames: FrameRequestCallback[] = [];
+    const dom = new JSDOM(
+      pluginPageHtml({
+        document: { ...document, unreadAt: 42 },
+        assets: {
+          "panel.html": {
+            mime: "text/html",
+            base64: Buffer.from("<html><body>Loading…</body></html>").toString(
+              "base64",
+            ),
+          },
+        },
+        theme: "light",
+        colors: {},
+      }),
+      {
+        runScripts: "dangerously",
+        url: "https://plugin.invalid/",
+        pretendToBeVisual: true,
+        beforeParse(window: Window & typeof globalThis) {
+          Object.assign(window, {
+            TextEncoder,
+            TextDecoder,
+            Request,
+            Response,
+            fetch,
+            ReactNativeWebView: {
+              postMessage: (message: string) =>
+                messages.push(JSON.parse(message)),
+            },
+            requestAnimationFrame: (frame: FrameRequestCallback) => {
+              frames.push(frame);
+              return frames.length;
+            },
+          });
+        },
+      },
+    );
+    const receive = (message: unknown) =>
+      dom.window.dispatchEvent(
+        new dom.window.MessageEvent("message", {
+          data: JSON.stringify(message),
+        }),
+      );
+    const frame = () => {
+      for (const callback of frames.splice(0)) callback(0);
+    };
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return { dom, messages, receive, frame };
+  }
+  it.each([204, 205, 304])(
+    "reconstructs HTTP %i without a body at both fetch layers",
+    async (status) => {
+      const h = await harness();
+      try {
+        const result = h.dom.window.fetch("/kv", {
+          method: "POST",
+          body: "{}",
+        });
+        const request = h.messages.find((message) => message.type === "fetch")!;
+        h.receive({
+          type: "reply",
+          id: request.id,
+          result: { status, mime: "application/json", base64: "" },
+        });
+        const response = await result;
+        expect(response.status).toBe(status);
+        expect(await response.text()).toBe("");
+        expect(
+          h.messages.filter((message) => message.type === "fetch"),
+        ).toHaveLength(1);
+      } finally {
+        h.dom.window.close();
+      }
+    },
+  );
+  it("requires the author's matching content receipt; polling, load and stale/covered frames cannot mark read", async () => {
+    const h = await harness();
+    try {
+      const helper = h.dom.window.eval("window.cindyMobile");
+      const unread = vi.fn();
+      helper.onUnread(unread);
+      await Promise.resolve();
+      expect(unread).toHaveBeenCalledWith(42);
+      h.receive({ type: "lifecycle", active: true });
+      h.receive({ type: "events", events: [], unreadAt: 43 });
+      h.frame();
+      expect(
+        h.messages.filter((message) => message.type === "content-rendered"),
+      ).toEqual([]);
+      helper.contentRendered(42);
+      helper.contentRendered(43);
+      h.receive({ type: "events", events: [], unreadAt: 44 });
+      h.frame();
+      expect(
+        h.messages.filter((message) => message.type === "content-rendered"),
+      ).toEqual([]);
+      helper.contentRendered(44);
+      h.receive({ type: "lifecycle", active: false });
+      h.frame();
+      expect(
+        h.messages.filter((message) => message.type === "content-rendered"),
+      ).toEqual([]);
+      h.receive({ type: "lifecycle", active: true });
+      h.dom.window.document.body.textContent = "New course displayed";
+      helper.contentRendered(44);
+      h.frame();
+      expect(
+        h.messages.filter((message) => message.type === "content-rendered"),
+      ).toEqual([{ type: "content-rendered", seenAt: 44, pageId: "page" }]);
+    } finally {
+      h.dom.window.close();
+    }
+  });
+});
