@@ -41,8 +41,6 @@ describe('decideBotToolCall', () => {
     ['continue_workbench_task', 'arranged'],
     ['create_project', 'arranged'],
     ['routine_save', 'arranged'],
-    ['create_teammate', 'arranged'],
-    ['set_teammate_capability', 'arranged'],
     ['find_teammate_capabilities', 'other'],
   ])('allows %s in a %s turn', (tool, authority) => {
     expect(decideBotToolCall('cindy_helper', tool, {}, authority)).toEqual({ kind: 'allow' });
@@ -60,6 +58,9 @@ describe('decideBotToolCall', () => {
     ['routine_save', 'other'],
     ['create_project', 'other'],
     ['create_teammate', 'other'],
+    ['create_teammate', 'arranged'],
+    ['set_teammate_capability', 'arranged'],
+    ['update_teammate_profile', 'arranged'],
     ['update_teammate_profile', 'other'],
     ['set_teammate_capability', 'other'],
     ['update_bot_profile', 'other'],
@@ -197,6 +198,16 @@ describe('resolveBotTurnAuthority', () => {
     expect(await resolveBotTurnAuthority(db, 'bot-main', input('bot-authorization-resume:r2'))).toBe('other');
   });
 
+  it('drops to the lowest tier once another task or Bot steers into the turn', async () => {
+    message('bot-main', 'owner-msg', ownerMeta);
+    expect(await resolveBotTurnAuthority(db, 'bot-main', OWNER_INPUT)).toBe('owner');
+    // The owner's own composer steer carries no origin and keeps the tier.
+    message('bot-main', 'owner-steer', { delivery: 'steer', autoReviewUserText: '再加一句' });
+    expect(await resolveBotTurnAuthority(db, 'bot-main', OWNER_INPUT)).toBe('owner');
+    message('bot-main', 'foreign-steer', { delivery: 'steer', origin: { kind: 'session' } });
+    expect(await resolveBotTurnAuthority(db, 'bot-main', OWNER_INPUT)).toBe('other');
+  });
+
   it('falls back to the latest root input when the coordinator has none', async () => {
     message('bot-main', 'schedule-run:9', { origin: { kind: 'scheduler' } });
     expect(await resolveBotTurnAuthority(db, 'bot-main', { executing: false, input: null })).toBe('arranged');
@@ -262,6 +273,11 @@ describe('createBotToolCallAuthorizer', () => {
     expect(await authorizer(OWNER_INPUT)(call('schedule_create', {}, 'bot-remote', 'cindy_scheduler'))).toEqual({ ok: true });
     expect(await authorizer(input('bot-dm:1'))(call('schedule_create', {}, 'bot-remote', 'cindy_scheduler')))
       .toMatchObject({ ok: false, errorCode: 'OWNER_TURN_REQUIRED' });
+  });
+
+  it('refuses a call it cannot attribute to a task', async () => {
+    expect(await authorizer(OWNER_INPUT)({ sessionId: undefined, server: 'cindy_scheduler', tool: 'schedule_list', args: {} }))
+      .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
   });
 
   it('refuses while the account database is unavailable or switching', async () => {

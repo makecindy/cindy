@@ -396,7 +396,7 @@ export function registerBotWorkbenchTools(
     category: 'bots',
     description:
       '主人本人这一轮说不用你再管某个项目时,把它从你的工作台移除。项目里的任务、文件和你写过的判断都不会被删,只是不再归你跟进。'
-      + 'path 用 get_workbench 里该项目的 path。',
+      + 'path 用 get_workbench 里该项目的 path（也可以写 ~/ 开头）。工作台里没有这个项目时返回 PROJECT_NOT_IN_WORKBENCH，什么都没移除，照实告诉主人。',
     inputShape: {
       path: z.string().min(1).max(4096).describe('要移除的项目路径'),
     },

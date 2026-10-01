@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { checkHandoverDirectory, type HandoverDirectoryEnv } from '../botWorkbenchHandover.js';
+import { checkHandoverDirectory, findHandedProject, type HandoverDirectoryEnv } from '../botWorkbenchHandover.js';
 
 let root: string;
 let env: HandoverDirectoryEnv;
@@ -45,5 +45,20 @@ describe('checkHandoverDirectory', () => {
       path.join(env.userDataDir, 'owners'), path.join(root, 'data-link')]) {
       expect(await checkHandoverDirectory(target, env)).toMatchObject({ ok: false, errorCode: 'INVALID_PROJECT_PATH' });
     }
+  });
+});
+
+describe('findHandedProject', () => {
+  it('finds the handed project through ~/, a trailing slash, case and symlinks, and nothing else', async () => {
+    const repo = path.join(env.homeDir, 'code', 'repo');
+    const link = path.join(root, 'repo-link');
+    await symlink(repo, link);
+    const dirs = [repo];
+    const opts = { homeDir: env.homeDir, caseInsensitive: true };
+    expect(await findHandedProject('~/code/repo/', dirs, opts)).toBe(repo);
+    expect(await findHandedProject(repo.toUpperCase(), dirs, opts)).toBe(repo);
+    expect(await findHandedProject(link, dirs, opts)).toBe(repo);
+    expect(await findHandedProject(path.join(env.homeDir, 'code'), dirs, opts)).toBeNull();
+    expect(await findHandedProject('code/repo', dirs, opts)).toBeNull();
   });
 });

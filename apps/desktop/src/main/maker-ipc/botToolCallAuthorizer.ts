@@ -104,7 +104,10 @@ export function createBotToolCallAuthorizer(deps: BotToolCallAuthorizerDeps): To
     return { ok: true };
   };
   return async (input) => {
-    if (!input.sessionId) return { ok: true };
+    // 权限闸门:认不出调用方就拒绝。普通任务的自动化调用本来也要求 session(withAccountDataAccess)。
+    if (!input.sessionId) {
+      return { ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE', message: '认不出这次调用来自哪个任务，已拒绝。' };
+    }
     const db = deps.getDb();
     if (!db) return { ok: false, errorCode: 'HOST_NOT_READY', message: '本机数据还没准备好，请稍后重试。' };
     const result = await judge(db, { ...input, sessionId: input.sessionId });

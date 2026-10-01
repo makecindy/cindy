@@ -54,7 +54,7 @@ import {
   readSessionTranscript,
 } from './botWorkbenchTranscripts.js';
 import { workbenchSessionRoots } from './botWorkbenchSessionRoots.js';
-import { checkHandoverDirectory } from './botWorkbenchHandover.js';
+import { checkHandoverDirectory, findHandedProject } from './botWorkbenchHandover.js';
 import { createBriefCache, type WorkbenchBriefGithubItem } from './botWorkbenchBrief.js';
 import { readCanonicalSessionActivity } from './sessionActivityProjection.js';
 import {
@@ -511,18 +511,23 @@ export function removeBotWorkbenchProjectForCaller(params: { callerSessionId: st
     const userDataDir = ownerScopedUserDataPath();
     const caller = await resolveWorkbenchCaller(params.callerSessionId);
     if (!caller.ok) return caller;
-    const trimmed = params.path.trim();
-    if (!path.isAbsolute(trimmed)) {
-      return { ok: false as const, errorCode: 'INVALID_PROJECT_PATH', message: '请用 get_workbench 里该项目的 path' };
-    }
-    const resolved = path.resolve(trimmed);
     const before = await readBotWorkbenchDirectoryPaths(userDataDir, caller.botId);
-    if (!before.includes(resolved)) return { ok: true as const, path: resolved, removed: false };
+    const matched = await findHandedProject(params.path, before, {
+      homeDir: os.homedir(),
+      caseInsensitive: process.platform === 'darwin' || isCaseInsensitivePlatform(process.platform),
+    });
+    if (!matched) {
+      return {
+        ok: false as const,
+        errorCode: 'PROJECT_NOT_IN_WORKBENCH',
+        message: `工作台里没有这个项目,没有移除任何东西。现在交给你的项目:${before.join('、') || '(无)'}`,
+      };
+    }
     if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scopeKey) {
       return { ok: false as const, errorCode: 'OWNER_SCOPE_CHANGED', message: '账号已切换,请重试' };
     }
-    await removeBotWorkbenchDirectory(userDataDir, caller.botId, resolved);
+    await removeBotWorkbenchDirectory(userDataDir, caller.botId, matched);
     broadcastBotWorkbenchChanged(caller.botId);
-    return { ok: true as const, path: resolved, removed: true };
+    return { ok: true as const, path: matched, removed: true };
   });
 }

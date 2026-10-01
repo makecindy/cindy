@@ -53,3 +53,28 @@ export async function checkHandoverDirectory(raw: string, env: HandoverDirectory
   }
   return { ok: true, path: resolved };
 }
+
+/**
+ * 移除项目时找到工作台里对应的那一条:允许 `~/` 开头、尾斜杠、大小写不同(macOS / Windows 默认文件系统
+ * 不区分大小写),以及指向同一真实目录的符号链接。找不到返回 null。
+ */
+export async function findHandedProject(
+  raw: string,
+  directories: readonly string[],
+  env: Pick<HandoverDirectoryEnv, 'homeDir'> & { caseInsensitive: boolean },
+): Promise<string | null> {
+  const trimmed = raw.trim();
+  const expanded = trimmed === '~' || trimmed.startsWith('~/') ? path.join(env.homeDir, trimmed.slice(1)) : trimmed;
+  if (!path.isAbsolute(expanded)) return null;
+  const resolved = path.resolve(expanded);
+  const key = (value: string) => (env.caseInsensitive ? value.toLowerCase() : value);
+  const literal = directories.find((dir) => key(path.resolve(dir)) === key(resolved));
+  if (literal) return literal;
+  const real = await fs.realpath(resolved).catch(() => null);
+  if (!real) return null;
+  for (const dir of directories) {
+    const dirReal = await fs.realpath(dir).catch(() => null);
+    if (dirReal && key(dirReal) === key(real)) return dir;
+  }
+  return null;
+}

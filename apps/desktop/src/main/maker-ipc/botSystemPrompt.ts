@@ -155,7 +155,7 @@ const TASK_AND_TEAMMATE_GUIDANCE = [
 const SESSION_CONTROL_GUIDANCE = [
   '## 你能看、能管主人的任务',
   '你和主人开的普通任务用同一套工具（cindy_helper，先 `list_tools` 看类目再 `call_tool`）：history 类的 `list_sessions` / `get_chat_history` / `search_chat_history` 看有哪些任务、它们在说什么；control 类的 `steer_session`、`stop_session_turn`、`set_session_runtime`、`rename_sessions`、`archive_sessions`、标签与项目工具管理任务；handoff 类的 `send_to_session` 给已有任务发话或开一条新的普通任务。',
-  '能做多少取决于这一轮是谁触发的，宿主每次调用都会核对：主人本人在这里发话的那一轮，这些都能用；自动化、例行任务、你开的后台任务回报这类主人事先安排的，能看全部，只能动交给你的项目里的任务和你自己开的任务；群聊、其他伙伴或别的任务转来的消息，只能动你自己开的任务。被拒（`OWNER_TURN_REQUIRED` / `TASK_OUT_OF_SCOPE`）就照实告诉主人，等主人自己说，不要换个工具绕过去。',
+  '能做多少取决于这一轮是谁触发的，宿主每次调用都会核对：主人本人在这里发话的那一轮，这些都能用；自动化、例行任务、你开的后台任务回报这类主人事先安排的，能看全部，只能动交给你的项目里的任务和你自己开的任务；群聊、其他伙伴或别的任务转来的消息，只能动你自己开的任务。被拒（`OWNER_TURN_REQUIRED` / `TASK_OUT_OF_SCOPE`）就照实告诉主人，等主人自己说；不要换个工具、开后台任务、用命令行或请别的伙伴去做被拒的事。新建伙伴、改你自己的资料与能力只在主人本人发话的那一轮做。',
   '停止、归档、改名、给正在跑的任务插话这类会影响主人工作的事，主人没开口就不做；做之前用一句话说清要动哪件、做什么。',
   '主人让你接手一个项目时，用 `add_workbench_project` 记下它的目录；不再负责时用 `remove_workbench_project`。这两个只在主人本人发话的那一轮可用。',
 ].join('\n');

@@ -121,7 +121,49 @@ async function continuationAuthority(
   return continuationAuthority(db, anchor.sessionId, root.clientId, hops + 1);
 }
 
+/**
+ * 这一轮开始后，有没有别的任务或伙伴用插话（steer）塞进来的输入。插话进来的内容和这一轮混在一起，
+ * 不能沿用这一轮起点的档位。主人自己在输入框里插话不带 origin，不算。
+ */
+async function hasForeignSteerSince(
+  db: Pick<DbClient, 'drizzle'>,
+  sessionId: string,
+  turnClientId: string,
+): Promise<boolean> {
+  const [start] = await db.drizzle
+    .select({ createdAt: messages.createdAt })
+    .from(messages)
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, turnClientId)))
+    .limit(1);
+  if (!start) return false;
+  const meta = sql`CASE WHEN json_valid(${messages.agentMeta}) THEN ${messages.agentMeta} ELSE '{}' END`;
+  const [steer] = await db.drizzle
+    .select({ clientId: messages.clientId })
+    .from(messages)
+    .where(and(
+      eq(messages.sessionId, sessionId),
+      eq(messages.role, 'user'),
+      isNull(messages.rewindAt),
+      sql`${messages.createdAt} >= ${start.createdAt}`,
+      sql`json_extract(${meta}, '$.delivery') = 'steer'`,
+      sql`json_extract(${meta}, '$.origin') IS NOT NULL`,
+    ))
+    .limit(1);
+  return Boolean(steer);
+}
+
 export async function resolveBotTurnAuthority(
+  db: Pick<DbClient, 'drizzle'>,
+  sessionId: string,
+  execution: BotTurnExecution,
+): Promise<BotTurnAuthority> {
+  const authority = await resolveTurnStartAuthority(db, sessionId, execution);
+  const turnClientId = execution.input ? execution.input.retrySourceClientId ?? execution.input.clientId : null;
+  if (authority !== 'other' && turnClientId && await hasForeignSteerSince(db, sessionId, turnClientId)) return 'other';
+  return authority;
+}
+
+async function resolveTurnStartAuthority(
   db: Pick<DbClient, 'drizzle'>,
   sessionId: string,
   execution: BotTurnExecution,
@@ -202,12 +244,6 @@ const OWNER_OR_ARRANGED_TOOLS = new Set([
   'routine_delete',
   'routine_run_now',
   'schedule_set_pre_run_hook',
-  // 新建伙伴、改自己的资料与能力会持久生效，下一轮起变成伙伴本身的一部分，不能由别的来源引出。
-  'create_teammate',
-  'update_teammate_profile',
-  'set_teammate_capability',
-  'update_bot_profile',
-  'set_bot_capability',
 ]);
 
 /**
@@ -295,7 +331,8 @@ export function decideBotToolCall(
     return { kind: 'targets', sessionIds: [target], scope: authority === 'arranged' ? 'own-or-handed' : 'own' };
   }
 
-  // 其余一律只在主人本人那一轮：标签 / 项目改名移除与移动任务 / 改应用默认模型 /
+  // 其余一律只在主人本人那一轮：新建伙伴、改伙伴自己的资料与能力（持久生效，后台任务回报里可能夹带外部内容）/
+  // 标签 / 项目改名移除与移动任务 / 改应用默认模型 /
   // 接手或移除项目 / 反馈 / 技能发布与学习 / 应用更新，以及将来新增、这里还没登记的工具。
   return OWNER_TURN_REQUIRED;
 }
