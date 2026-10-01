@@ -279,7 +279,25 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
 #### 消息派发与 auto-bridge
 
 1. **忙碌目标不丢消息（状态：不变量）**<br>
-   Lead/Worker 互发消息时，如果目标 session 正在跑 turn、存在 queue lock，或刚好在派发竞态里返回 `SESSION_RUNNING`，消息必须进入输入队列，而不是丢弃或直接失败。实现指针：`orcaInterAgentDispatcher.ts` 的 `dispatchOrEnqueueOrcaInterAgentMessage`，以及 `register.ts` 的 `AgentInputCoordinator` wiring。
+   Lead/Worker 互发消息时，如果目标 session 正在跑 turn、存在 queue lock，或刚好在派发竞态里返回 `SESSION_RUNNING`，默认进入输入队列。本机 Worker→Lead 回报按 1b 优先同轮插话；已尝试插话后的拒绝不能当成普通忙碌重发。实现指针：`orcaInterAgentDispatcher.ts` 的 `dispatchOrEnqueueOrcaInterAgentMessage`，以及 `register.ts` 的 `AgentInputCoordinator` wiring。
+
+1b. **Worker 回报优先同轮投递，接管后不重复补报（状态：不变量）**<br>
+   `send_to_lead` 与 terminal auto-bridge 共用 host dispatcher；本机 Lead 正在运行、声明
+   `sameTurnSteer` 且 send lock 空闲时，通过 input coordinator 尝试同轮插话。Worker 仍只
+   使用 `send_to_lead`，不需要另调通用 `steer_session`。来源、原始正文和
+   `delegated-continuation` 人类授权语义沿用原 Orca 消息格式，不新增工具或跨端协议。
+   coordinator 先恢复队列，禁止越过已有排队输入、暂停、Stop、编辑/交互锁、压缩、恢复、
+   凭证切换、其它插话和未完成的派发边界；active turn 本身不阻止回报插话。
+   session 对象与 turn generation 必须在准备后及 provider 投递前复核。
+   provider 接受后运行原 accepted/commit 生命周期，清除该 Worker 的待补报标记；
+   后续副作用失败不能将已投递回报改为可重试失败。回执不确定而 coordinator 已将同一
+   `clientId` 保留在暂停队列时，dispatcher 返回 queued 接管结果，不再 enqueue、不解除
+   暂停，并注册原 accepted 回调；bridge 立即结清回报，避免 terminal 再补一份。
+   真正拒绝且没有保留行时返回失败，维持既有待补报机制，不以 turn 已结束推断可重发。
+   未开始插话、能力不支持、SSH Lead、非运行态及 Lead→Worker 仍沿用普通直发/排队；
+   device-link / 手机控制场景由被控 Desktop 执行同一判断，不在控制端另外发送。
+   实现指针：`AgentInputCoordinator.steerInterAgentReport` 与
+   `OrcaInterAgentDispatcher.dispatchOrEnqueueOrcaInterAgentMessage`。
 
 1a. **空闲 live 直发前必须先做换窗预检（状态：不变量）**<br>
 目标空闲且已有 live session 时，dispatcher 仍走 `session.send()`，不经过 `sendToSessionInternal()`。这条直发必须先调用与用户发送相同的 `prepareUnhealthySession`：满窗或当前进程内 `needsRollover` 锁存时关闭旧原生窗口，再 `getLiveSession`。不能把 inter-agent 消息打进应被丢弃的旧窗口。prepare → 重新取 live → send 整段必须复用 `sendToSessionInternal` 的 per-session 锁；锁已被占用时先排队，不要把 in-flight prepare 当成健康状态继续直发。没有 live 后释放锁再走 `sendToSessionInternal`，避免自己把自己排队。实现指针：`orcaInterAgentDispatcher.ts` 的 live 分支，以及 `register.ts` 注入的 `prepareUnhealthySession` / `withSendToSessionLock`。

@@ -1982,6 +1982,44 @@ export class AgentInputCoordinator {
     }
   }
 
+  /**
+   * Automatic inter-agent reports may join an active turn, but must not overtake
+   * queued user input or reopen Stop/restore/recovery boundaries. A failed ACK can
+   * leave the same item in a paused queue: that is host ownership, not permission
+   * to send a second copy. Keep this policy beside the authoritative queue state.
+   */
+  async steerInterAgentReport(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    expectedTurn: { session: object; turnGeneration: number },
+  ): Promise<'steered' | 'queued' | 'not-attempted' | 'rejected'> {
+    await this.ensureQueueRestored(sessionId).catch(() => undefined);
+    const state = this.getState(sessionId);
+    if (
+      !this.isQueueRestored(sessionId) ||
+      this.deps.getTurnSessionIdentity?.(sessionId) !== expectedTurn.session ||
+      this.deps.getTurnGeneration?.(sessionId) !== expectedTurn.turnGeneration ||
+      !this.deps.isTurnRunning(sessionId) ||
+      state.pendingQueue.length > 0 || state.pendingCompacts.length > 0 ||
+      state.queuePaused || state.queueAbortPending || state.abortBoundaryToken ||
+      state.queueInteractionLocks.length > 0 || state.queueEditLocks.length > 0 ||
+      state.steeringQueueClientIds.length > 0 || state.recovery ||
+      state.pendingExternalTerminalDone || this.deps.hasPendingInteraction(sessionId) ||
+      this.deps.hasPendingCredentialSwitch?.(sessionId) ||
+      (state.activeTurn && !isActiveTurnDispatched(state.activeTurn))
+    ) return 'not-attempted';
+
+    const accepted = await this.steer(sessionId, item, {
+      fallbackToTurn: false,
+      expectedTurnSession: expectedTurn.session,
+      expectedTurnGeneration: expectedTurn.turnGeneration,
+    });
+    if (accepted) return 'steered';
+    // In particular, preserve ACK-uncertain items and their protective pause.
+    // Do not infer non-delivery from the live turn ending during the request.
+    return this.hasPendingQueueItem(sessionId, item.clientId) ? 'queued' : 'rejected';
+  }
+
   async steer(
     sessionId: string,
     item: AgentInputQueuedMessage,
