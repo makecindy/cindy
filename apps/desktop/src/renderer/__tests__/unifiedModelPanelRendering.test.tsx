@@ -4140,6 +4140,63 @@ it('teammate fallback exposes supported Harness choices and preserves the primar
   expect(change).toHaveBeenLastCalledWith([primary, expect.objectContaining({ harness: 'claude', providerId: 'openai', model: 'chatgpt/gpt-5.6' })]);
 });
 
+describe('harness configuration keeps the model menu open', () => {
+  it.each(['success', 'cancel', 'error'] as const)('%s keeps both menus available', async (outcome) => {
+    let finish!: (value: boolean) => void;
+    let fail!: (error: Error) => void;
+    const change = vi.fn(() => new Promise<boolean>((resolve, reject) => {
+      finish = resolve;
+      fail = reject;
+    }));
+    function Picker() {
+      const [pendingTarget, setPendingTarget] = React.useState<'claude-code' | undefined>();
+      return <ModelSelector
+        modelId="gpt-5.5" effort="high" vendorKey="codex"
+        currentProviderId="xd" onModelChange={vi.fn()} onEffortChange={vi.fn()}
+        sessionEngineFilter={{
+          currentAgent: 'codex',
+          runtimeAgent: 'codex',
+          pendingTarget,
+          onCrossEngineSelect: async ({ targetAgent }) => {
+            const applied = await change();
+            if (applied) setPendingTarget(targetAgent === 'claude-code' ? targetAgent : undefined);
+            return applied;
+          },
+        }}
+      />;
+    }
+    render(<Picker />);
+    await act(async () => { fireEvent.click(screen.getByRole('button')); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '全部' })); });
+    const flyout = await openRowFlyout('GPT-5.5');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    expect(change).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    await act(async () => {
+      if (outcome === 'error') fail(new Error('switch failed'));
+      else finish(outcome === 'success');
+    });
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    expect(screen.getByTestId('unified-model-config-flyout')).toBeTruthy();
+    if (outcome === 'success') {
+      expect(screen.getByTestId('unified-model-config-flyout')
+        .querySelector('[data-engine-capsule="cc"]')?.getAttribute('aria-pressed')).toBe('true');
+      // Switching back must clear the pending intent through the same transaction.
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('unified-model-config-flyout')
+          .querySelector('[data-engine-capsule="codex"]') as HTMLElement);
+      });
+      expect(change).toHaveBeenCalledTimes(2);
+      await act(async () => { finish(true); });
+    }
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    expect(screen.getByTestId('unified-model-config-flyout')
+      .querySelector('[data-engine-capsule="codex"]')?.getAttribute('aria-pressed')).toBe('true');
+  });
+});
+
 describe('统一面板 · 最近使用记录与陈列', () => {
   it('默认不记录(非对话入口不开 recordRecentUsage)', async () => {
     renderPanel();
