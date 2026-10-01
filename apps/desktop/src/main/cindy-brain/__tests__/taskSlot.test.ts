@@ -83,3 +83,20 @@ it('allows an Auto request but never Full access', () => {
  expect(validPluginTaskRequest({type:'tasks-request',kind:'requestWriteAccess',taskId:'own',mode:'auto'})).toBe(true);
  expect(validPluginTaskRequest({type:'tasks-request',kind:'requestWriteAccess',taskId:'own',mode:'bypassPermissions'})).toBe(false);
 });
+
+ it('accepts opt-in call context only for creation, never a claimed source session', () => {
+   const create = { type: 'tasks-request', kind: 'create', requestKey: 'one', title: 'Work' };
+   expect(validPluginTaskRequest({ ...create, callId: 'active-call' })).toBe(true);
+   expect(validPluginTaskRequest({ ...create, sourceSessionId: 'foreign' })).toBe(false);
+   expect(validPluginTaskRequest({ ...create, callId: '' })).toBe(false);
+   expect(validPluginTaskRequest({ ...create, route: { agentKind: 'pi', providerId: 'mine', model: 'no-reasoning', effort: '', fastMode: false } })).toBe(true);
+ });
+
+it('exposes catalog and guarded model changes without accepting permission overrides', () => {
+  expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'models' })).toBe(true);
+  const request = { type: 'tasks-request', kind: 'setModel', taskId: 'own', expectedRevision: 1,
+    route: { agentKind: 'codex', model: 'm', providerId: 'p', effort: '', fastMode: false } };
+  expect(validPluginTaskRequest(request)).toBe(true);
+  expect(validPluginTaskRequest({ ...request, expectedRevision: undefined })).toBe(false);
+  expect(validPluginTaskRequest({ ...request, permissionMode: 'bypassPermissions' })).toBe(false);
+});

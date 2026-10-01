@@ -1,3 +1,4 @@
+import { setSessionOpeningModelAdmission } from '../../sessionOpening';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { canResumeAfterRuntimeFallback } from '../../../maker-ipc/botCandidateRecovery';
 import { createDrizzleProxy } from '../../client/drizzleProxy';
@@ -53,7 +54,7 @@ vi.mock('electron-store', () => ({ default: class {
 } }));
 vi.mock('../../../maker-ipc/appDefaultModelControl.js', async importOriginal => ({
   ...await importOriginal<typeof import('../../../maker-ipc/appDefaultModelControl.js')>(),
-  validateBotTaskModel: vi.fn(async () => true),
+  validateTaskModel: vi.fn(async () => true),
 }));
 
 const h = await vi.hoisted(async () => {
@@ -135,6 +136,7 @@ vi.mock('electron', () => ({
   dialog: { showOpenDialog: h.showOpenDialog },
 }));
 vi.mock('../../client/current', () => ({
+  getCurrentDbClientSnapshot: () => h,
   getDbClient: () => ({ drizzle: h.db, tx: h.tx }),
   tryGetDbClient: () => ({ drizzle: h.db, tx: h.tx }),
 }));
@@ -481,6 +483,7 @@ const capabilityDeps = {
 const { list: findBotCapabilities, select: selectBotCapability } = createBotCapabilityService(capabilityDeps);
 
 beforeEach(async () => {
+  setSessionOpeningModelAdmission(async body => body);
   setModelVisibilityMirror({}, { fallback: true });
   h.toolsetsAvailable = false;
   h.validateCapabilityAdditions.mockReset().mockResolvedValue(undefined);
@@ -3614,6 +3617,7 @@ describe('Bot Session task end-to-end runtime', () => {
     getWorktree?: Parameters<typeof createBotDelegationService>[0]['getWorktree'];
     withTransferredWorktree?: Parameters<typeof createBotDelegationService>[0]['withTransferredWorktree'];
     prepareWorktree?: Parameters<typeof createBotDelegationService>[0]['prepareWorktree'];
+    discardUnusedWorktree?: Parameters<typeof createBotDelegationService>[0]['discardUnusedWorktree'];
     taskQueue?: Parameters<typeof createBotDelegationService>[0]['taskQueue'];
     taskRoute?: Parameters<typeof createBotDelegationService>[0]['taskRoute'];
     taskControl?: boolean;
@@ -3859,6 +3863,7 @@ describe('Bot Session task end-to-end runtime', () => {
         : undefined),
       withSessionLock: options.withSessionLock,
       prepareWorktree: options.prepareWorktree,
+      discardUnusedWorktree: options.discardUnusedWorktree,
       getWorktree: options.getWorktree,
       reconcileWorktree: options.reconcileWorktree,
       withTransferredWorktree: options.withTransferredWorktree,
@@ -4309,7 +4314,7 @@ describe('Bot Session task end-to-end runtime', () => {
     const runtime = createDelegationRuntime({ readCallerPermission: () => permission });
     const starting = runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Run the requested checks.' });
     try {
-      await vi.waitFor(() => expect(h.ensureGit).toHaveBeenCalledWith(expect.objectContaining({ source: 'bot-delegation' })));
+      await vi.waitFor(() => expect(h.ensureGit).toHaveBeenCalledWith(expect.objectContaining({ source: 'session-open' })));
       permission = settledMode;
       finishPreparation();
       const result = await starting;
@@ -5693,6 +5698,29 @@ describe('Bot Session task end-to-end runtime', () => {
       h.sqlite!.exec('DROP TRIGGER IF EXISTS fail_reopen_binding');
       runtime.dispose();
     }
+  });
+
+  it('keeps a committed task workspace when a later authority read fails', async () => {
+    await seedPair();
+    const discard = vi.fn(async () => undefined);
+    const runtime = createDelegationRuntime({
+      prepareWorktree: async () => ({ ok: true, sessionId: 'committed-task', workingDir: h.userDataDir }),
+      discardUnusedWorktree: discard,
+      readCallerPermission: () => {
+        if (h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('committed-task')) {
+          throw new Error('authority temporarily unavailable');
+        }
+        return 'auto';
+      },
+    });
+    try {
+      await expect(runtime.delegation.startSessionTask({ callerSessionId: 'session-1',
+        objective: 'Keep committed history and workspace.', workingDir: h.userDataDir, useWorktree: true }))
+        .rejects.toThrow('authority temporarily unavailable');
+      expect(h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('committed-task')).toBeTruthy();
+      expect(discard).not.toHaveBeenCalled();
+      expect(runtime.started).toEqual([]);
+    } finally { runtime.dispose(); }
   });
 
   it('still publishes and dispatches a committed worktree task when its display snapshot fails', async () => {

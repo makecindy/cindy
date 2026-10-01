@@ -1,3 +1,4 @@
+import { openSession, setSessionOpeningModelAdmission } from '../localDb/sessionOpening.js';
 import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
 import { assertPluginWorkerDirectoryScope, resolvePluginWorkerDirectory } from './pluginWorkerDirectory.js';
 import { PluginWriteAccessGate } from './pluginWriteAccessGate.js';
@@ -5,7 +6,7 @@ import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
 import { createPluginTaskStore } from './pluginTaskStore.js';
 import { hasAcceptedUserTaskInput } from './pluginTaskInput.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
-import { setPluginTaskHandler, setPluginTaskUninstaller, isPluginTaskAuthorized, getPluginTaskInstallRevision } from '../cindy-brain/index.js';
+import { setPluginTaskHandler, getPluginTaskSourceSessionId, setPluginTaskUninstaller, isPluginTaskAuthorized, getPluginTaskInstallRevision } from '../cindy-brain/index.js';
 import type { PluginTaskRoute, PluginTaskRequest } from '../../shared/pluginTasks.js';
 import { createHash as pluginTaskConfigHash } from 'node:crypto';
 import { finishCompanionEnvironmentRemoval } from '../bot-import/runtime.js';
@@ -22,7 +23,7 @@ import { getSelfDeviceId, remoteInvoke as invokeBotPeer } from '../device-link/i
 import { registerModelFavoritesSync } from './modelFavoritesSync.js';
 import { advanceRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
 import { markImSessionManualRouteOverride } from '../im/shared/manualRouteOverride.js';
-import { configureAppDefaultModelSelection } from './appDefaultModelControl.js';
+import { configureAppDefaultModelSelection, inspectAppDefaultModel } from './appDefaultModelControl.js';
 import type { BuiltinApiKeyBridgeDeps } from '../secrets/builtinApiKeyBridge.js';
 import { setBotInvitationWelcomeDispatch } from './botInvitation.js';
 import { createQueuedDispatchReceipts } from './queuedDispatchReceipts.js';
@@ -75,6 +76,7 @@ import { readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReview
 import type {
   AgentEvent,
   AgentKind,
+  Effort,
   ContextUsageData,
   InteractionDecision,
   InteractionRequest,
@@ -542,6 +544,7 @@ import {
   getRemoteNewMakerDefaults,
   getRemoteNewMakerDefaultsByVendor,
   getWorkerDefaultsFromNewMaker,
+  getSelectedNewMakerRoute,
   getWorkerPermissionModeFromCreationPrefs,
   type ProviderModelMemorySnapshot,
   syncNewMakerDraftCache,
@@ -1200,19 +1203,22 @@ import {
   getInstalledGhostName,
 } from '../cindy-brain/index.js';
 import {
-  readGhostErrandConfig,
-  writeGhostErrandConfig,
+  readPluginTaskConfig,
+  clampPluginTaskPermissionMode,
+  setPluginTaskConfigValidator,
+  writePluginTaskConfig,
   readGhostErrandSessionId,
   writeGhostErrandSessionId,
-} from '../cindy-brain/errandPrefsStore.js';
+} from '../cindy-brain/pluginTaskPrefsStore.js';
 import { isGhostPickedDir } from '../cindy-brain/pickGrantsStore.js';
 import {
   resolveGhostUserHookModel,
   withGhostUserHookModel,
 } from '../cindy-brain/subscriptionGateway.js';
-import { createGhostErrandRunner, clampErrandPermissionMode } from './ghostErrandRunner.js';
+import { createSessionExecutionResolver } from './sessionExecutionSelection.js';
+import { createGhostErrandRunner } from './ghostErrandRunner.js';
 import {
-  createGhostErrandSession,
+  createPluginTaskSession,
   createPluginDraftSession,
   findActiveSessionByWorkdir,
 } from '../localDb/ipc/pluginWorkspaceSessions.js';
@@ -9359,7 +9365,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           title: newTitle,
           permissionMode: inherited.permissionMode ?? 'bypassPermissions',
         });
-        const { session } = await bootstrapSession(createOpts);
+        const { row: openedRow, value: { session } } = await openSession({
+          id: createOpts.id, body: { title: newTitle,
+            agentKind: inherited.agentKind === 'claude-code' ? 'cc' : inherited.agentKind,
+            model: inherited.model, providerId: inherited.providerId, effort: inherited.effort,
+            fastMode: !!inherited.fastMode, permissionMode: createOpts.permissionMode,
+            workspaceKind: inherited.workspaceKind, workingDir: createOpts.workingDir },
+        }, async (row, assertCurrent) => {
+          const created = await bootstrapSession({ ...createOpts, id: row.id, model: row.model,
+            providerId: row.providerId, effort: (row.effort || undefined) as CreateOpts['effort'],
+            fastMode: row.fastMode, workingDir: row.workingDir ?? createOpts.workingDir }, assertCurrent);
+          // A later owner check must not reclaim a worktree whose Session already exists.
+          createdPreviewSessionId = created.session.id;
+          return created;
+        });
         // worktree 场景补写 sessions.worktree_path 反范式快照:createWorktree 时
         // session 行还不存在,worktreeStore.set 的 DB 同步落空(仅 warn),这里 session
         // 行已建,补一次。失败非致命——徽标以 worktreeStore 为准。
@@ -9427,10 +9446,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           targetTitle: newTitle,
           targetLastUserSendAt: null,
           worktreePath: handoffWorktree?.meta.path ?? null,
-          model: inherited.model,
-          effort: inherited.effort ?? null,
-          fastMode: !!inherited.fastMode,
-          providerId: inherited.providerId ?? null,
+          model: openedRow.model,
+          effort: openedRow.effort || null,
+          fastMode: openedRow.fastMode,
+          providerId: openedRow.providerId ?? null,
         };
       } catch (err) {
         if (createdPreviewStarted && createdPreviewSessionId && createdPreviewClientId) {
@@ -10469,6 +10488,42 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return delegationForRestore.cancelDelegation(parentSessionId, delegationId);
     },
   );
+  const captureSessionOwner = () => {
+    const owner = getCurrentDbClientSnapshot();
+    return () => {
+      if (!owner || isAppSessionBoundaryPending() || getCurrentDbClientSnapshot() !== owner) throw new Error('账号已变化，请重新发起任务');
+    };
+  };
+  const resolveSessionExecution = createSessionExecutionResolver({
+    captureOwner: captureSessionOwner,
+    readCaller: async sessionId => {
+      const meta = await maker.getSessionMeta(sessionId);
+      if (!meta || meta.remoteHostId) throw new Error('无法读取发起任务的本机模型配置，请明确选择新任务的模型');
+      const profile = await readSessionRuntimeProfiles(sessionId);
+      if (!profile || profile.pendingMutation) throw new Error('发起任务正在切换模型，请稍后重试');
+      return { ...profile.effective, effort: profile.effective.effort ?? undefined };
+    },
+    readDefault: () => {
+      const route = getSelectedNewMakerRoute(activeOwnerScopeKey());
+      return route ? { agentKind: route.harness === 'claude' ? 'claude-code' : route.harness,
+        model: route.model, providerId: route.providerId, effort: (route.effort || undefined) as Effort | undefined,
+        fastMode: route.fastMode } : undefined;
+    },
+    availableAgents: () => maker.listAvailableAgents(),
+    availableModels: agent => maker.getCapabilities(agent).availableModels,
+    readProviderRouting: () => getProviderRoutingContext(),
+    hasCindyAiApiKey: () => readClaudeApiKey() != null,
+  });
+  setSessionOpeningModelAdmission(async body => {
+    const execution = await resolveSessionExecution({
+      agentKind: body.agentKind, model: body.model, providerId: body.providerId,
+      effort: body.effort, fastMode: body.fastMode,
+    });
+    return { ...body, ...execution, effort: execution.effort ?? '',
+      agentKind: execution.agentKind === 'claude-code' ? 'cc' : execution.agentKind };
+  });
+  setPluginTaskConfigValidator(async config => { await resolveSessionExecution(config); });
+
   // Ghost 的 Agent 槽只负责验证权限和整理 prompt；真正的新回合仍走
   // sendToSessionInternal 这一条主机通路，因此会话恢复、繁忙排队、消息落库与
   // 费用行为都和用户亲自在聊天框发送一致。runner 通过回调注入，避免
@@ -10488,6 +10543,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return 'queued';
       }
     };
+
+    // This surface acts on the user's task, so keep its own route/permissions.
+    // Admission is shared with plugin-owned tasks; their defaults must not replace it.
+    try {
+      // A remote task's model is owned by its execution host, not this device's catalog.
+      const source = await maker.getSessionMeta(request.sourceSessionId);
+      if (!source?.remoteHostId) await resolveSessionExecution({}, request.sourceSessionId);
+    }
+    catch (error) { return { ok: false, errorCode: 'MODEL_UNAVAILABLE',
+      message: error instanceof Error ? error.message : '任务模型不可用，请在任务中重新选择' }; }
 
     if (request.mode === 'new') {
       const result = await sendToSessionInternal({
@@ -10571,10 +10636,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   setGhostSessionRevealer((sessionId) => openMainWindowSession(sessionId));
 
-  // Ghost 的派活取件(agent 槽 errand 加档):守门在 cindy-brain/errandSlot,
-  // 这里注入真实执行链——专属会话确保/统一投递/turn 收口。投递仍走
-  // sendToSessionInternal 这一条主机通路(消息落库、进程拉起与用户亲发一致);
-  // 收口复用 hook-control 的 observeHookTurn(与飞书 bot 同一套 turn 观察语义)。
   // One receipt service per account/database epoch. No mutable current-DB lookup
   // is retained by an asynchronous task request.
   let pluginTaskEpoch: ReturnType<typeof getCurrentDbClientSnapshot> = null;
@@ -10592,24 +10653,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!isPluginTaskAuthorized(pluginId)) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin task capability is unavailable');
     };
     const routeUnavailable = (): never => { throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected provider, model or effort is unavailable'); };
-    const resolveRoute = async (pluginId: string, requested?: PluginTaskRoute): Promise<PluginTaskRoute> => {
+    const resolveRoute = async (pluginId: string, requested?: PluginTaskRoute, callId?: string): Promise<PluginTaskRoute> => {
       assertPlugin(pluginId);
-      const cfg = readGhostErrandConfig(pluginId);
-      const agentKind = requested?.agentKind ?? cfg.agentKind ?? 'cc';
-      const defaults = getWorkerDefaultsFromNewMaker(agentKind === 'cc' ? 'claude-code' : agentKind);
-      const modelId = requested?.model ?? cfg.model ?? defaults.model;
-      if (!modelId) return routeUnavailable();
-      const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false, catalog: getActiveCatalog() });
-      assertPlugin(pluginId);
-      const providerId = requested?.providerId ?? cfg.providerId ?? defaults.providerId ?? effectiveSourceIdForModel(providers, null, modelId, agentKind === 'cc' ? 'claude-code' : agentKind);
-      const provider = providers.find(p => p.id === providerId && p.connected && !p.suspended && !p.removed);
-      const model = findCatalogModel(provider, modelId, agentKind === 'cc' ? 'claude-code' : agentKind, { exact: true });
-      if (!provider || !model || !isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) return routeUnavailable();
-      const effort = requested?.effort ?? cfg.effort ?? defaults.effort ?? model.defaultEffort ?? 'high';
-      const fastMode = requested?.fastMode ?? cfg.fastMode ?? defaults.fastMode ?? false;
-      if (!model.efforts.some(e => e === effort)) return routeUnavailable();
-      if (fastMode && model.supportsFastMode !== true) return routeUnavailable();
-      return { agentKind, providerId: provider.id, model: modelId, effort, fastMode };
+      const selection = { ...readPluginTaskConfig(pluginId), ...requested };
+      const sourceSessionId = getPluginTaskSourceSessionId(pluginId, callId);
+      if (callId && !sourceSessionId && !(selection.agentKind && selection.model && selection.providerId)) throw new PluginTaskError('ROUTE_UNAVAILABLE', '发起任务已不可用，请重新调用，或在面板选择模型后创建任务');
+      try {
+        const execution = await resolveSessionExecution(selection, sourceSessionId);
+        assertPlugin(pluginId);
+        if (!execution.providerId) return routeUnavailable();
+        return { ...execution, agentKind: execution.agentKind === 'claude-code' ? 'cc' : execution.agentKind,
+          providerId: execution.providerId, effort: execution.effort ?? '' };
+      } catch (error) {
+        throw new PluginTaskError('ROUTE_UNAVAILABLE', error instanceof Error ? error.message : '任务模型不可用，请重新选择');
+      }
     };
     const readExecution = (taskId: string) => {
       const live = maker.getSession(taskId);
@@ -10618,7 +10675,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     pluginTaskEpoch = snapshot;
     pluginTasks = createPluginTaskService({
       store: createPluginTaskStore(snapshot.client), assertCurrent, assertAuthorized: assertPlugin, resolveRoute,
-      readPermissionMode: pluginId => readGhostErrandConfig(pluginId).permissionMode,
+      readPermissionMode: pluginId => clampPluginTaskPermissionMode(readPluginTaskConfig(pluginId).permissionMode),
+      setModel: async (taskId, route, assertUnchanged) => {
+        const current = await sessionControlService.getSessionRuntime({ targetSessionId: taskId });
+        if (!current.ok) throw new PluginTaskError('TASK_NOT_FOUND', current.message);
+        await assertUnchanged();
+        const result = await sessionControlService.setSessionRuntime({ targetSessionId: taskId,
+          expectedGeneration: current.runtime.runtimeGeneration,
+          patch: { harness: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
+            model: route.model, providerId: route.providerId, effort: (route.effort || null) as Effort | null,
+            fastMode: route.fastMode } });
+        if (!result.ok) throw new PluginTaskError(result.errorCode, result.message);
+        return { status: result.status };
+      },
       assertTeamPlanUnstarted: async taskId => {
         assertCurrent();
         await drainPersistQueue();
@@ -10632,11 +10701,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrent();
         if (workers.length || reservations.length) throw new PluginTaskError('TASK_BUSY', 'Register the team plan before creating Workers');
       },
-      createSession: async (pluginId, taskId, title, route, isolatedWorkspace, requestedRoute, onPersistenceStarted) => {
+      createSession: async (pluginId, taskId, title, route, isolatedWorkspace, requestedRoute, onPersistenceStarted, callId) => {
         assertPlugin(pluginId);
-        const cfg = readGhostErrandConfig(pluginId);
+        const cfg = readPluginTaskConfig(pluginId);
         const configurationIsCurrent = () => {
-          const current = readGhostErrandConfig(pluginId);
+          const current = readPluginTaskConfig(pluginId);
           return current.workingDir === cfg.workingDir && current.permissionMode === cfg.permissionMode
             && current.agentKind === cfg.agentKind && current.model === cfg.model
             && current.providerId === cfg.providerId && current.effort === cfg.effort
@@ -10645,7 +10714,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // Receipt persistence/provider lookup can yield after the first resolution.
         // Reuse the resolver with the original request, then guard this configuration
         // through directory validation and the creator's final continuation.
-        const currentRoute = await resolveRoute(pluginId, requestedRoute);
+        const currentRoute = await resolveRoute(pluginId, requestedRoute, callId);
         if ((Object.keys(currentRoute) as Array<keyof PluginTaskRoute>).some(key => currentRoute[key] !== route[key]))
           throw new PluginTaskError('ROUTE_UNAVAILABLE', 'Plugin task route changed');
         const workingDir = !isolatedWorkspace && cfg.workingDir
@@ -10660,10 +10729,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           : undefined;
         assertPlugin(pluginId);
         if (!configurationIsCurrent()) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin task configuration changed');
-        await createGhostErrandSession({
+        await createPluginTaskSession({
           ghostId: pluginId, sessionId: taskId, title, ...route,
           onPersistenceStarted,
-          permissionMode: clampErrandPermissionMode(cfg.permissionMode),
+          permissionMode: clampPluginTaskPermissionMode(cfg.permissionMode),
           ...(workingDir ? { workingDir } : {}),
           shouldContinue: () => getCurrentDbClientSnapshot() === snapshot && isPluginTaskAuthorized(pluginId) && configurationIsCurrent(),
           notifySessionCreated: ({ sessionId, workdir }) => {
@@ -10810,7 +10879,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertPlanInactive();
         if (task.planModeEnabled) throw new PluginTaskError('PERMISSION_DENIED', 'Exit Plan Mode before requesting write access');
         const mode = request.mode ?? 'acceptEdits';
-        const cfg = readGhostErrandConfig(pluginId);
+        const cfg = readPluginTaskConfig(pluginId);
         assertCallerCurrent();
         if (isPluginTaskPermissionAllowed(task.permissionMode, cfg.permissionMode) && (mode === 'acceptEdits' ? task.permissionMode === 'acceptEdits' || task.permissionMode === 'auto' : task.permissionMode === 'auto')) return { granted: true, task };
         if (pluginPermissionRequests.size) throw new PluginTaskError('TASK_BUSY', 'A permission request is already open');
@@ -10857,7 +10926,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // permission writers never hold that fence while awaiting this queue.
           return await withSessionPermissionChange(task.taskId, () => service.completeOperation(() => withSessionRestartLock(task.taskId, async () => {
             assertRequestCurrent();
-            if (snapshot !== getCurrentDbClientSnapshot() || before !== JSON.stringify(readGhostErrandConfig(pluginId))) throw new PluginTaskError('PERMISSION_DENIED', 'Account or permission settings changed');
+            if (snapshot !== getCurrentDbClientSnapshot() || before !== JSON.stringify(readPluginTaskConfig(pluginId))) throw new PluginTaskError('PERMISSION_DENIED', 'Account or permission settings changed');
             const fresh = await service.get(pluginId, task.taskId);
             if (fresh.status !== 'active') throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot request write access');
             if (fresh.planModeEnabled) throw new PluginTaskError('PERMISSION_DENIED', 'Exit Plan Mode before requesting write access');
@@ -10880,9 +10949,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               assertRequestCurrent();
               if (snapshot !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
               assertPlanInactive();
-              const currentConfig = readGhostErrandConfig(pluginId);
+              const currentConfig = readPluginTaskConfig(pluginId);
               if (currentConfig.permissionMode !== cfg.permissionMode) throw new PluginTaskError('PERMISSION_DENIED', 'Permission settings changed');
-              if (mode === 'auto' || clampErrandPermissionMode(currentConfig.permissionMode) === 'plan') writeGhostErrandConfig(pluginId, {...currentConfig, permissionMode: mode});
+              if (mode === 'auto' || ['ask', 'plan'].includes(clampPluginTaskPermissionMode(currentConfig.permissionMode))) writePluginTaskConfig(pluginId, {...currentConfig, permissionMode: mode});
               broadcastSessionPatched(task.taskId, {permissionMode: mode});
               return { granted: true, task: updatedTask };
             } catch (error) {
@@ -10897,7 +10966,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       case 'startTeam': {
         const epoch = getCurrentDbClientSnapshot();
         const task = await service.get(pluginId, request.taskId);
-        const configuredDirectory = readGhostErrandConfig(pluginId).workingDir;
+        const configuredDirectory = readPluginTaskConfig(pluginId).workingDir;
         // Becoming Lead changes revision through orcaRole, but may not change admission facts.
         const admission = (view: typeof task) => JSON.stringify([view.resolvedConfig, view.permissionMode, view.planModeEnabled, view.workingDir]);
         const expectedAdmission = admission(task);
@@ -10907,7 +10976,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const fresh = await service.get(pluginId, task.taskId);
           if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
           assertPluginWorkerAutoAuthorized(pluginId, fresh);
-          if (configuredDirectory !== readGhostErrandConfig(pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin directory authorization changed');
+          if (configuredDirectory !== readPluginTaskConfig(pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin directory authorization changed');
           if ((!activationStarted && fresh.revision !== task.revision) || admission(fresh) !== expectedAdmission) throw new PluginTaskError('STALE_REVISION', 'Task changed during team activation');
         }, service.completeOperation);
         assertPluginTaskResult(result, 'Collaboration could not be started');
@@ -10916,9 +10985,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       case 'setTeamPlan': return withSendToSessionLock(request.taskId, async () => {
         const epoch = getCurrentDbClientSnapshot();
         const task = await service.get(pluginId, request.taskId);
-        const cfg = readGhostErrandConfig(pluginId);
+        const cfg = readPluginTaskConfig(pluginId);
         const assertCurrent = () => {
-          if (epoch !== getCurrentDbClientSnapshot() || !isPluginTaskAuthorized(pluginId) || cfg.workingDir !== readGhostErrandConfig(pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin directory authorization changed');
+          if (epoch !== getCurrentDbClientSnapshot() || !isPluginTaskAuthorized(pluginId) || cfg.workingDir !== readPluginTaskConfig(pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin directory authorization changed');
         };
         const items = [];
         for (const item of request.plan.items) {
@@ -10991,6 +11060,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const live = maker.getSession(request.taskId);
         return {...team, capacity:{hardLimit,occupiedSlots,remainingSlots:Math.max(0,hardLimit-occupiedSlots),advisory:true}, coordinatorUsage:{scope:'session-total',tokens:leadRow?.totalTokenUsage ?? null,costUSD:leadRow?.totalCostCurrency==='USD' && leadRow.totalCostAmount>0 ? leadRow.totalCostAmount : null, approximate:leadRow?.totalCostIsApproximate ?? false}, workers, waitingForUser:!!live && live.getTurnControlSnapshot().pendingInteractionCount > 0, leadWorking:(!!live && (live.isTurnRunning() || live.getTurnControlSnapshot().pendingInteractionCount > 0)) || inputCoordinator.getQueueControlSnapshot(request.taskId).pendingQueue.length > 0};
       }
+      case 'models': {
+        const snapshot = getCurrentDbClientSnapshot();
+        const { available } = await inspectAppDefaultModel();
+        if (snapshot !== getCurrentDbClientSnapshot() || !isPluginTaskAuthorized(pluginId)) throw new PluginTaskError('PERMISSION_DENIED', '账号或插件授权已变化');
+        return { models: available.map(option => ({ id: option.id,
+          route: { agentKind: option.route.harness === 'claude' ? 'cc' : option.route.harness,
+            model: option.route.model, providerId: option.route.providerId,
+            effort: option.route.effort, fastMode: option.route.fastMode },
+          efforts: option.efforts, supportsFastMode: option.supportsFastMode })) };
+      }
+      case 'setModel': return service.setModel(pluginId, request);
       case 'create': return service.create(pluginId, request);
       case 'get': return service.get(pluginId, request.taskId);
       case 'list': return service.list(pluginId, request.after, request.limit);
@@ -11059,9 +11139,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle('maker:get-plugin-write-access-recovery', (event, taskId: unknown) => pluginWriteAccessFromHost(event, taskId, false));
   ipcMain.handle('maker:retry-plugin-write-access', (event, taskId: unknown) => pluginWriteAccessFromHost(event, taskId, true));
 
+  // Legacy result-returning adapter; ordinary task configuration lives above.
   setGhostErrandRunner(
     createGhostErrandRunner({
-      readConfig: readGhostErrandConfig,
+      readConfig: readPluginTaskConfig,
       readSessionId: readGhostErrandSessionId,
       writeSessionId: writeGhostErrandSessionId,
       getSessionRow: async (sessionId) => {
@@ -11070,6 +11151,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             status: sessions.status,
             agentKind: sessions.agentKind,
             model: sessions.model,
+            providerId: sessions.providerId,
+            effort: sessions.effort,
+            fastMode: sessions.fastMode,
             permissionMode: sessions.permissionMode,
             workingDir: sessions.workingDir,
             workspaceKind: sessions.workspaceKind,
@@ -11077,10 +11161,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           .from(sessions)
           .where(eq(sessions.id, sessionId))
           .limit(1);
-        return row ?? null;
+        if (!row) return null;
+        const profile = await readSessionRuntimeProfiles(sessionId);
+        if (profile?.pendingMutation) throw new Error('任务正在切换模型，请稍后重试');
+        const live = maker.getSession(sessionId);
+        const mode = live ? live.stablePermissionModeState?.mode : row.permissionMode;
+        if (live && !mode) throw new Error('任务正在切换权限，请稍后重试');
+        return { ...row, ...(profile ? { ...profile.effective,
+          agentKind: profile.effective.agentKind === 'claude-code' ? 'cc' : profile.effective.agentKind } : {}),
+          permissionMode: mode ?? row.permissionMode };
       },
       createSession: async (params) => {
-        const sessionId = await createGhostErrandSession({
+        const sessionId = await createPluginTaskSession({
           ...params,
           notifySessionCreated: (info) => notifyGhostSessionEvent('created', info),
         });
@@ -11090,7 +11182,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return sessionId;
       },
       getGhostName: getInstalledGhostName,
-      getDraftDefaults: getWorkerDefaultsFromNewMaker,
+      resolveExecution: resolveSessionExecution,
+      captureOwner: captureSessionOwner,
       normalizeWorkingDir: (dir) => normalizeWorkingDirForStorage(dir),
       isUserPickedDir: isGhostPickedDir,
       isSessionBusy: isSessionInTurn,
@@ -11151,34 +11244,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     findActiveSessionByWorkdir,
     createDraftSession: async (params) => {
-      // draft 跟随用户在 New Maker 面板的当前选择,与用户手建草稿的默认体验
-      // 一致。main 侧缓存没有"当前激活 vendor"信号,取有选择记录的一档:
-      // cc 有记录用 cc;cc 无则 codex;再无则 pi(整套跟随,避免给 pi-only 用户
-      // 建出带 Claude 默认值的会话);都没有走 mapper 兜底。
-      const ccDefaults = getWorkerDefaultsFromNewMaker('claude-code');
-      const codexDefaults = ccDefaults.model ? null : getWorkerDefaultsFromNewMaker('codex');
-      const piDefaults =
-        ccDefaults.model || codexDefaults?.model ? null : getWorkerDefaultsFromNewMaker('pi');
-      const picked = ccDefaults.model
-        ? { agentKind: 'cc' as const, d: ccDefaults }
-        : codexDefaults?.model
-          ? { agentKind: 'codex' as const, d: codexDefaults }
-          : piDefaults?.model
-            ? { agentKind: 'pi' as const, d: piDefaults }
-            : null;
+      const assertOwner = captureSessionOwner();
+      const config = readPluginTaskConfig(params.ghostId);
+      const execution = await resolveSessionExecution(config, params.sourceSessionId);
+      assertOwner();
       const sessionId = await createPluginDraftSession({
         ...params,
-        ...(picked
-          ? {
-              defaults: {
-                agentKind: picked.agentKind,
-                ...(picked.d.model ? { model: picked.d.model } : {}),
-                ...(picked.d.effort ? { effort: picked.d.effort } : {}),
-                ...(picked.d.fastMode !== undefined ? { fastMode: picked.d.fastMode } : {}),
-                ...(picked.d.providerId !== undefined ? { providerId: picked.d.providerId } : {}),
-              },
-            }
-          : {}),
+        shouldContinue: () => { assertOwner(); return (params.shouldContinue?.() ?? true)
+          && JSON.stringify(readPluginTaskConfig(params.ghostId)) === JSON.stringify(config); },
+        defaults: { ...execution, effort: execution.effort ?? '', permissionMode: clampPluginTaskPermissionMode(config.permissionMode), agentKind: execution.agentKind === 'claude-code' ? 'cc' : execution.agentKind },
         notifySessionCreated: (info) => notifyGhostSessionEvent('created', info),
       });
       if (!sessionId) return null;
@@ -12061,7 +12135,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (task.status !== 'active') {
       throw new PluginTaskError('TASK_BUSY', 'Archived tasks cannot create Workers');
     }
-    if (!isPluginTaskAuthorized(pluginId) || task.planModeEnabled || task.permissionMode !== 'auto' || readGhostErrandConfig(pluginId).permissionMode !== 'auto') {
+    if (!isPluginTaskAuthorized(pluginId) || task.planModeEnabled || task.permissionMode !== 'auto' || readPluginTaskConfig(pluginId).permissionMode !== 'auto') {
       throw new PluginTaskError('PERMISSION_DENIED', 'Authorize Auto for the plugin coordinator before creating Workers');
     }
   };
@@ -12125,12 +12199,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const task = await pluginTaskServiceForCurrentOwner!().get(receipt.pluginId,params.leadSessionId);
       if (epoch !== getCurrentDbClientSnapshot()) throw new PluginTaskError('PERMISSION_DENIED','Account changed');
       assertPluginWorkerAutoAuthorized(receipt.pluginId, task);
-      const cfg = readGhostErrandConfig(receipt.pluginId);
+      const cfg = readPluginTaskConfig(receipt.pluginId);
       const resolveAuthorizedDirectory = (requested: string) => resolvePluginWorkerDirectory({
         requested, leadDirectory: task.workingDir,
         configuredDirectory: cfg.workingDir, isPickedDirectory: dir => isGhostPickedDir(receipt.pluginId,dir),
         assertCurrent: () => {
-          if (epoch !== getCurrentDbClientSnapshot() || !isPluginTaskAuthorized(receipt.pluginId) || cfg.workingDir !== readGhostErrandConfig(receipt.pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED','Plugin directory authorization changed');
+          if (epoch !== getCurrentDbClientSnapshot() || !isPluginTaskAuthorized(receipt.pluginId) || cfg.workingDir !== readPluginTaskConfig(receipt.pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED','Plugin directory authorization changed');
         },
       });
       const directory = await resolveAuthorizedDirectory(params.workingDir ?? task.workingDir ?? '');
@@ -12152,7 +12226,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Last admission check also covers no-plan plugin tasks and revocation
       // while directory/receipt reads or the existing reservation were pending.
       assertPluginWorkerAutoAuthorized(receipt.pluginId, currentTask);
-      if (cfg.workingDir !== readGhostErrandConfig(receipt.pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED','Plugin directory authorization changed');
+      if (cfg.workingDir !== readPluginTaskConfig(receipt.pluginId).workingDir) throw new PluginTaskError('PERMISSION_DENIED','Plugin directory authorization changed');
       assertPluginWorkerDirectoryScope({ requested: directory, leadDirectory: currentTask.workingDir,
         configuredDirectory: cfg.workingDir, isPickedDirectory: dir => isGhostPickedDir(receipt.pluginId, dir) });
       if (!data.teamPlan) return undefined; // Existing plugins retain their original behavior.

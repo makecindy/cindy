@@ -4,6 +4,8 @@ import { hasPluginTaskApproval } from './taskCapability.js';
 
 export const PLUGIN_TASK_OPERATIONS = [
   'capabilities',
+  'models',
+  'setModel',
   'requestWriteAccess',
   'startTeam',
   'getTeam',
@@ -27,7 +29,9 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
   if (!object(value) || value.type !== 'tasks-request') return false;
   const allowed: Record<string, string[]> = {
     capabilities: [],
-    create: ['requestKey', 'title', 'route', 'isolatedWorkspace'],
+    models: [],
+    setModel: ['taskId', 'expectedRevision', 'route'],
+    create: ['requestKey', 'title', 'route', 'isolatedWorkspace', 'callId'],
     list: ['after', 'limit'],
     get: ['taskId'],
     requestWriteAccess: ['taskId', 'mode'],
@@ -48,9 +52,11 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
   if (kind === 'requestWriteAccess' && value.mode !== undefined && !['acceptEdits', 'auto'].includes(String(value.mode))) return false;
   const requires = (key: string) => text(value[key], 128);
   if (['create', 'send', 'cancel'].includes(value.kind) && !requires('requestKey')) return false;
-  if (['get', 'send', 'listRuns', 'readMessages', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker'].includes(value.kind) && !requires('taskId'))
+  if (['get', 'setModel', 'send', 'listRuns', 'readMessages', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker'].includes(value.kind) && !requires('taskId'))
     return false;
   if (['getRun', 'cancel'].includes(value.kind) && !requires('runId')) return false;
+  if (kind === 'setModel' && (!object(value.route) || !Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0)) return false;
+  if (value.callId !== undefined && !text(value.callId, 128)) return false;
   if (value.isolatedWorkspace !== undefined && typeof value.isolatedWorkspace !== 'boolean') return false;
   if (value.kind === 'create' && !text(value.title, 100)) return false;
   if (
@@ -93,7 +99,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
       !['cc', 'codex', 'pi'].includes(String(r.agentKind)) ||
       !text(r.providerId, 128) ||
       !text(r.model, 256) ||
-      !text(r.effort, 32) ||
+      (typeof r.effort !== 'string' || r.effort.length > 32) ||
       typeof r.fastMode !== 'boolean'
     )
       return false;
@@ -134,6 +140,7 @@ export async function handlePluginTaskRequest(
         targets: ['own-plugin-local-session'],
         maxPageSize: 100,
         exactRoute: true,
+        sourceCallContext: true,
       },
     };
   if (!deps.handler) return error('HOST_NOT_READY', 'Task service is not ready', true);

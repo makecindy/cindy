@@ -81,7 +81,7 @@ describe('Host provenance across Orca creation waits', () => {
         if (!receipt || receipt.pluginId !== pluginId || JSON.parse(receipt.payload).ownershipRevoked) throw new PluginTaskError('TASK_NOT_FOUND', 'Revoked');
         return { ...task };
       } }),
-      isPluginTaskAuthorized: () => enabled, readGhostErrandConfig: () => ({ permissionMode: 'auto', workingDir: directoryCase ? configured : task.workingDir }),
+      isPluginTaskAuthorized: () => enabled, readPluginTaskConfig: () => ({ permissionMode: 'auto', workingDir: directoryCase ? configured : task.workingDir }),
       resolvePluginWorkerDirectory: async () => {
         directoryResolved = true; directoryReads = 0;
         if (directoryCase && !configured && !picked) throw new PluginTaskError('PERMISSION_DENIED', 'Directory revoked');
@@ -2964,7 +2964,7 @@ describe('production plugin Auto admission after reservation', () => {
     const callbackDeps = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError, assertPluginWorkerDirectoryScope,
       createPluginTaskStore: () => ({ get: async () => ({ operation: 'create', pluginId: 'plugin', payload: state === 'malformed' ? '{' : JSON.stringify({ ownershipRevoked: true, teamPlan: { items: [] } }) }) }),
       pluginTaskServiceForCurrentOwner: () => ({ get }), isPluginTaskAuthorized: () => state === 'reinstalled',
-      readGhostErrandConfig: () => ({ permissionMode: 'auto' }),
+      readPluginTaskConfig: () => ({ permissionMode: 'auto' }),
     };
     const validateCreationPlan = new Function(...Object.keys(callbackDeps), js)(...Object.values(callbackDeps));
     const { deps, service } = createDeps({ validateCreationPlan });
@@ -3018,7 +3018,7 @@ describe('production plugin Auto admission after reservation', () => {
         }
         return task();
       } }),
-      readGhostErrandConfig: () => ({ permissionMode: mode, workingDir: path.resolve('repo') }),
+      readPluginTaskConfig: () => ({ permissionMode: mode, workingDir: path.resolve('repo') }),
       isPluginTaskAuthorized: () => enabled,
       resolvePluginWorkerDirectory: async ({requested}: {requested: string}) => { if (reserved && point === 'directory') revoke(); return requested === path.resolve('other') ? requested : path.resolve('repo'); },
       realpathWorkingDirectory: async (dir: string) => dir === path.resolve('other') ? dir : path.resolve('repo'),

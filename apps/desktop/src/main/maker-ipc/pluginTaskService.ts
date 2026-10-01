@@ -64,7 +64,7 @@ export function assertPluginTaskResult(result: { ok: boolean; errorCode?: string
 }
 /** A live task cannot exercise more authority than the plugin's current setting. */
 export function isPluginTaskPermissionAllowed(taskMode: unknown, configuredMode: unknown, planModeEnabled = false): boolean {
-  const rank = (mode: unknown) => mode === 'plan' ? 0 : mode === 'acceptEdits' ? 1 : mode === 'auto' ? 2 : -1;
+  const rank = (mode: unknown) => mode === 'plan' ? 0 : mode === 'ask' ? 1 : mode === 'acceptEdits' ? 2 : mode === 'auto' ? 3 : -1;
   const task = rank(taskMode);
   return !planModeEnabled && task >= 0 && task <= Math.max(0, rank(configuredMode));
 }
@@ -87,7 +87,7 @@ export interface PluginTaskServiceDeps {
   assertCurrent(): void;
   assertAuthorized(pluginId: string): void;
   readPermissionMode(pluginId: string): unknown;
-  resolveRoute(pluginId: string, route?: PluginTaskRoute): Promise<PluginTaskRoute>;
+  resolveRoute(pluginId: string, route?: PluginTaskRoute, callId?: string): Promise<PluginTaskRoute>;
   createSession(
     pluginId: string,
     taskId: string,
@@ -96,7 +96,9 @@ export interface PluginTaskServiceDeps {
     isolatedWorkspace: boolean | undefined,
     requestedRoute: PluginTaskRoute | undefined,
     onPersistenceStarted: () => void,
+    callId?: string,
   ): Promise<void>;
+  setModel?(taskId: string, route: PluginTaskRoute, assertCurrent: () => Promise<void>): Promise<{ status: string }>;
   readSession(taskId: string): Promise<PluginTaskView | null>;
   assertTeamPlanUnstarted?(taskId: string): Promise<void>;
   dispatch(
@@ -237,11 +239,11 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     },
     create: (
       pluginId: string,
-      request: { requestKey: string; title: string; route?: PluginTaskRoute; isolatedWorkspace?: boolean },
+      request: { requestKey: string; title: string; route?: PluginTaskRoute; isolatedWorkspace?: boolean; callId?: string },
     ) =>
       exclusive(async () => {
         deps.assertAuthorized(pluginId);
-        const input = [request.title, request.route ?? null, ...(request.isolatedWorkspace ? [true] : [])];
+        const input = [request.title, request.route ?? null, ...(request.isolatedWorkspace ? [true] : []), ...(request.callId ? [{ callId: request.callId }] : [])];
         const fingerprint = hash(input);
         let row = replay(
           await deps.store.find(pluginId, 'create', '', request.requestKey),
@@ -253,7 +255,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           // Do not recreate a deleted/ambiguous task on replay.
           return ownTask(pluginId, row.id);
         }
-        const route = await deps.resolveRoute(pluginId, request.route);
+        const route = await deps.resolveRoute(pluginId, request.route, request.callId);
         deps.assertCurrent();
         const taskId = id();
         row = newReceipt(
@@ -270,7 +272,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         try {
           deps.assertCurrent();
           await deps.createSession(pluginId, taskId, request.title, route, request.isolatedWorkspace, request.route,
-            () => { persistenceStarted = true; });
+            () => { persistenceStarted = true; }, request.callId);
         } catch (error) {
           // Once INSERT starts, even an error is ambiguous. Never free that key
           // or infer failure from a subsequently deleted/filtered Session.
@@ -301,6 +303,19 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       await save(row,{...data,settledLabels:[...new Set([...(data.settledLabels||[]),label])]});
     }),
     assertDispatch,
+    setModel: (pluginId: string, request: { taskId: string; expectedRevision: number; route: PluginTaskRoute }) => exclusive(async () => {
+      const assertUnchanged = async () => {
+        const task = await ownTask(pluginId, request.taskId);
+        if (task.status !== 'active') return fail('TASK_BUSY', '任务已归档，请先恢复任务');
+        if (task.revision !== request.expectedRevision) return fail('STALE_REVISION', '任务配置已变化，请刷新后重试');
+      };
+      await assertUnchanged();
+      const route = await deps.resolveRoute(pluginId, request.route);
+      await assertUnchanged();
+      if (!deps.setModel) return fail('HOST_NOT_READY', '任务模型服务尚未就绪');
+      const result = await deps.setModel(request.taskId, route, assertUnchanged);
+      return { ...result, task: await ownTask(pluginId, request.taskId) };
+    }),
     get: (pluginId: string, taskId: string) => exclusive(() => ownTask(pluginId, taskId)),
     list: (pluginId: string, after = '', limit = 50) =>
       exclusive(async () => {

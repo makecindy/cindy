@@ -1,10 +1,135 @@
-# 插件普通任务接口：第一阶段实现
+# 插件调用普通任务（Session）
 
 状态：实验接口，尚未发布。入口为插件逻辑页 `cindy.tasks`，声明 `agent.tasks: true` 后由既有插件权限流程确认。存量 `errand` 声明不自动获得此权限。
 
+## 新建任务、继续任务与读取结果
+
+插件调用的是 Cindy 普通任务（Session）能力。界面、工具说明和文档统一使用「新建任务」「打开任务」「继续任务」，不另设 AI 代办或插件专属任务概念。
+
+| 作者要实现的事情 | 使用方式 | 是否创建新任务／自动回叫 |
+| --- | --- | --- |
+| 当前任务正在用你的工具，只需读写稿件或业务数据 | 工具直接返回数据，由当前 Agent 继续工作 | 不新建，不回叫 |
+| 用户在稿件、批注面板中提交新的修改意见 | `cindy.agent.run({mode: 'continue', ...})`，走原有点击票或已关联任务授权 | 继续原任务，不另开任务 |
+| 独立完成一项工作，需要单独的历史与模型 | `cindy.tasks.create(...)`，随后 `cindy.tasks.send(...)` | 创建普通任务；创建本身不启动模型 |
+| 再给同一项工作追加要求 | 保存 taskId；`get` 获取最新 revision，再 `send` | 保留同一任务与历史 |
+| 查询进度／完成后更新插件页面 | `getRun` / `listRuns`，完成后 `readMessages` | 查询状态和结果，不唤醒任何伙伴或 Agent |
+| 只需一次短文本结果，无工具、无任务历史 | 原有 `cindy.text.oneshot` | 使用现有轻量模型通道，不创建任务 |
+
+伙伴任务完成后向伙伴自己的时间线回报，是伙伴的业务流程。插件新建任务不默认附带该流程；
+普通任务创建入口不发送完成回叫。插件根据需要读取回执和结果，无需模拟一个伙伴。
+当前没有任务事件订阅接口，请查询持久回执；不要把「已创建」或「已接受输入」显示成「执行完成」。
+
+### 作者使用示例
+
+先声明 `agent.tasks: true`，按既有插件能力授权使用。面板按钮应转交逻辑页执行，不能访问宿主内部 IPC。
+
+```js
+const capabilities = await cindy.tasks.capabilities();
+// 每个逻辑操作保存一个稳定 requestKey；重试沿用，不能每次生成新键。
+const task = await cindy.tasks.create({
+  requestKey: 'course:git:create', title: '学习 Git',
+  // 处理在途工具调用时可传 callId，使用其发起任务的当前模型。
+  // 面板直接点击省略 callId，使用 Cindy 当前的新任务选择。
+});
+// taskId 必须存到插件自己的业务记录里。新建成功并不表示模型已运行。
+const run = await cindy.tasks.send({
+  taskId: task.taskId, expectedRevision: task.revision,
+  requestKey: 'course:git:first-input', text: '请生成 Git 第一课。',
+});
+const state = await cindy.tasks.getRun({ runId: run.runId });
+if (state.status === 'completed') {
+  const page = await cindy.tasks.readMessages({ taskId: task.taskId, limit: 50 });
+  // 使用 outputMessageId 与消息游标读取本次结果，保存 nextCursor 后可继续分页。
+}
+```
+
+需要显式选模时，使用现有统一目录的投影，不拼接供应商或型号：
+
+```js
+if (capabilities.operations.includes('models')) {
+  const { models } = await cindy.tasks.models();
+  // 让用户选择或按其明确偏好匹配 models 中的项，不擅自取第一项作为降级。
+  // selected 是所选目录项；直接把 selected.route 传给 create 的 route。
+}
+// 已有任务要改模型，先 get 获取最新 revision，再调用：
+// await cindy.tasks.setModel({taskId, expectedRevision: task.revision, route: selected.route});
+// 遵循返回 status 和最新 get 的配置；运行中的切换可能推迟到安全边界。
+```
+
+`models` 与 `setModel` 是可发现的增量能力；调用前检查 `capabilities.operations`。
+旧客户端不支持时显示不支持或使用当前任务选择，不自行调用私有 IPC。模型清单只包含宿主当前可选来源；
+连接存在不等于远端凭证、配额和请求一定成功。保存、创建、发送／改模仍分别验证，错误应显示给用户，
+允许恢复连接或明确改选同一任务的模型；不得自动改成另一型号、另一个账号或清掉历史后重建。
+
+### 宿主实现边界
+
+`localDb/sessionOpening.openSession` 是普通新建任务的公共入口：模型准入、目录准备、Session 行构造与提交。
+普通新建任务 UI、`send_to_session` 新建、伙伴普通任务、插件普通任务和工作区创建均使用该入口。
+伙伴通过提交回调把 Session 与原有委派回执保存在同一个事务中；伙伴信号、卡片、超时及完成回报留在伙伴层。
+插件继续使用自己的持久操作回执。公共入口不认识伙伴／插件身份，不创建回叫任务。
+`sessionExecutionSelection` 复用普通模型能力及供应商校验；显式目录选项沿用 `appDefaultModelControl`。
+已有任务改模复用 `sessionControlService`，不另造运行时或供应商选择器。
+
+## 模型配置与创建来源
+
+插件是小程序；普通任务 API、用户任务交互、快速调用和旧派活接口是不同能力。
+共用的是普通 Session 的模型配置与可用性校验，不是 errand 的取件生命周期。
+
+2026-10-01 确认的默认行为：新建任务沿用发起任务的模型；从面板直接新建时使用当前
+新任务选择；用户可为插件单独覆盖。模型、Agent、供应商、推理强度和 Fast 作为完整组合
+解析，绝不从另一 Agent 的历史草稿拼出一组值。权限独立设置，不随模型来源继承。
+
+| 入口 | 模型来源与复用 | 权限与结果 |
+| --- | --- | --- |
+| `tasks.create` | 显式 route → 插件任务设置 → 经验证的 callId 发起任务 → 当前新任务选择；保存准入后的完整 route | 用户插件权限，默认普通任务的 ask；返回普通任务及持久创建回执 |
+| `tasks.send` | 使用该任务当前 route，检查 revision 和当前可用性；不因新默认变化重建任务 | 复核插件归属与权限；结果使用逐输入 run 回执 |
+| `agent.errand` | 共用模型解析；无显式覆盖时优先保留已有专属任务的当前模型。配置冲突时只在新任务创建成功后替换映射，旧历史保留 | 旧权限边界、sessionKey、jobId 与结果取回协议保持兼容 |
+| `workspace.ensureSession` | 已有工作区入口照常复用；新建才使用插件设置／发起任务／当前新任务完整组合 | 目录仍经亲选或原有确认流程；只建入口、不运行 Agent |
+| `agent.run` | 操作已有用户任务；本机任务校验其当前组合，远程任务交由执行宿主校验，继续／新建／分叉仍按原接口继承用户任务 | 保留原有点击票、任务关联和源权限限制；不套用插件自有任务权限或取件协议 |
+| 快问快答／媒体生成 | 各自已有通道，不受任务默认配置支配 | 不变成普通任务或代办 |
+
+`tasks.capabilities().sourceCallContext` 声明支持 create 的可选 `callId`。Agent 在处理
+在途插件工具时可转传该调用 ID；宿主只接受同插件、本机、仍在途的归属，不接受插件
+自报 sourceSessionId。失效来源且没有完整显式模型配置时拒绝创建，不悄悄改用面板默认。
+面板直接创建省略 callId。旧客户端不支持该能力时不能发送新字段；旧插件无新字段的
+创建请求保持兼容。来源字段参与新请求的幂等摘要；已有回执重放不重新读取过期调用。
+
+设置页使用现有 ModelSelector／PermissionSelector，显示默认来源与面板模型预览。
+选择模型时保存完整组合；「恢复默认模型」只清除模型覆盖，保留目录与权限。保存被拒时
+恢复原选项并就地展示可操作原因。普通任务、工作区及旧 errand 插件均可见这份设置。
+新普通任务缺省使用 `ask`，与所选 Agent 的普通任务一致；已有任务不因默认值变化改权。
+旧 errand 缺省及显式 `plan` 配置保留原行为，设置页显示保留的权限而不冒充 `ask` 或
+跨 Agent 的只读保证。用户明确选择普通权限后才覆盖旧值；完全访问不在可选范围。
+
+`pluginTaskPrefsStore` 保留历史 `ghost-errand-prefs.json`、`errand` 与 `sessions` 键以及
+既有 IPC 名；无需重装、重新授权或人工迁移。`sessions` 键只供旧 errand 映射使用。
+`sessionExecutionSelection` 只处理来源组合，调用 `resolveSendToSessionExecutionConfig`
+及实时已连接供应商快照，复用普通任务准入，不定义平行模型目录。
+
+恢复路径：未就绪 Agent 则完成安装或改选；失效连接则修复供应商连接或明确改选；已有普通
+任务在任务内修正模型后继续使用原历史。校验失败不创建任务、不投递首条消息、不自动换
+廉价模型或其它账号。无推理档位模型使用空 effort，不凭空写 high。
+
+### 2026-10-01 失败场景的证据边界
+
+日志证明：旧 errand 在没有插件覆盖的情况下采用 Claude Code 的历史草稿，执行收到
+API 400 / code 1210；该路径未做完整路由准入。不能由这一错误推断凭证失效。
+Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`；日志中的该后缀
+不是用户保存了无效模型 ID 的证据，不能用简单拒绝带后缀 ID 的测试宣称修好了远端 400。
+
+本次配置修复应分别验证来源选择、宿主准入以及真实 provider 推理。实时目录／已连接
+快照能证明当前路由存在，不证明额度及远端参数有效。原失败请求的上游参数原因和新版
+真实点击执行，在没有对应运行证据前继续标为未验证；不把单测、桥接替身或目录回放当作
+已部署修复，也不重跑用户正在使用的学习任务。
+
+隔离开发版的真实验收已覆盖：面板创建及 Astra 执行、同任务继续、Agent 经真实插件工具
+发起创建、不可用供应商拒绝及明确选模恢复、旧 errand 执行并读取结果。权限修正后仅补验
+新任务落库为 `ask`，与设置页「默认权限」一致；上述已通过流程不重复执行。
+这些结果不证明原 GLM 请求的参数、凭证或配额有效；该供应商的 400 根因仍未验证。
+
 ## 已接入
 
-- `capabilities/create/list/get/send/getRun/listRuns/readMessages/cancel`。
+- `capabilities/models/create/list/get/setModel/send/getRun/listRuns/readMessages/cancel`。
 - create 可传 isolatedWorkspace:true，由宿主分配独立空作答目录；返回本任务 workingDir 与 permissionMode，插件不能覆盖权限。
 - 创建用户可见的普通本地 Session；工作目录及权限来自用户配置，不接受插件传入绕过权限、任意目录或另一插件身份。普通任务创建前复用 Worker 的目录身份判据：配置路径必须仍为原规范路径，改链、缺失或非目录拒绝；异步解析后复核账号、tasks 批准及配置。缺省/isolatedWorkspace 仍由宿主分配目录，旧 errand 路径不变。旧别名配置没有原目标证据，不自动授权当前目标；这不解决校验后的目录置换窗口。
 - 发送走普通输入协调器，使用持久 requestKey 去重和稳定输入 ID；重复请求不会再次启动模型。
@@ -30,10 +155,10 @@
 ## 当前限制与后续工作
 
 - 仅本插件创建的本地普通任务；不支持选择既有任务、远端任务或 Bot；自有普通任务可通过 startTeam 成为 Orca Lead。
-- 尚未开放修改/归档任务、队列暂停、事件订阅、逐输入费用与用量。usage 明确返回 unavailable。
+- 已支持通过 `setModel` 修改任务模型；尚未开放其它配置修改/归档任务、队列暂停、事件订阅、逐输入费用与用量。usage 明确返回 unavailable。
 - 回执已经持久化，但完整的重启后终态补账、无输入别名的自动续跑归属尚未闭环。缺少原生证据时返回 reconciling，不重放请求、不报告成功；目前不应作为无人值守正式评测的完成依据。
 - 一旦 Session INSERT 已开始、创建进程中断或回执撤回失败，结果仍可能不明：保留回执，重放只读取已存在任务，不补建，可能返回 TASK_NOT_FOUND。旧孤立回执没有本次失败证据，不自动修复；已删除任务不复活、已撤销任务及旧 key 不接管。此限制与创建前明确失败后的显式重试不同。
-- 无推理档位的模型暂不支持；不支持的 route 明确拒绝。
+- 无推理档位的模型以空 effort 表示；显式提供不支持的档位仍拒绝。
 - cancel 的 requestKey 当前不建立独立账本；同一 run 的终态保持幂等，进行中的重复取消仍可能再次请求原生停止。
 - 评测插件已接入此接口；实际 UI 联调结果另记，未自动启动付费模型。
 

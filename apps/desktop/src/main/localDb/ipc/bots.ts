@@ -66,7 +66,7 @@ import {
   NEW_BOT_DEFAULT_PI_PROVIDER,
 } from '../../../shared/botDefaults.js';
 import { normalizeBotModelChain, readBotTaskModelOverride } from '../../../shared/botModelChain.js';
-import { validateBotTaskModel } from '../../maker-ipc/appDefaultModelControl.js';
+import { validateTaskModel } from '../../maker-ipc/appDefaultModelControl.js';
 import {
   activeOwnerScopeKey,
   isAppSessionBoundaryPending,
@@ -1522,7 +1522,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   const normalizedNextConfig = normalizeBotModelCapabilitiesOrThrow(nextConfig);
   if (JSON.stringify(previous.taskModelOverride ?? null) !== JSON.stringify(normalizedNextConfig.taskModelOverride ?? null)) {
     const taskModel = readBotTaskModelOverride(normalizedNextConfig.taskModelOverride);
-    if (taskModel && !await validateBotTaskModel(taskModel)) {
+    if (taskModel && !await validateTaskModel(taskModel)) {
       throwIpcError('INVALID_PARAMS', '任务模型不可用，请重新选择模型、来源与引擎');
     }
     owner.assertCurrent();

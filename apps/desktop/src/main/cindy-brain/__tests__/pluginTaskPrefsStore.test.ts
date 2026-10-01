@@ -1,5 +1,5 @@
 /**
- * errandPrefsStore.test.ts — 派活配置存储的 normalize 单测。
+ * pluginTaskPrefsStore.test.ts — 派活配置存储的 normalize 单测。
  * 存储真身经 createOverrideSettingsFile 落 userData,依赖 electron;这里
  * 只测纯函数(坏形态清洗与权限档白名单),读写链路由 IPC 层与 runner 测试覆盖。
  */
@@ -11,7 +11,7 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));
 
-const { __testing } = await import('../errandPrefsStore');
+const { __testing, validatePluginTaskConfig, setPluginTaskConfigValidator } = await import('../pluginTaskPrefsStore');
 
 describe('normalizeConfig(单插件配置清洗)', () => {
   it('合法字段保留,非法值逐字段丢弃(= 回到跟随默认)', () => {
@@ -38,7 +38,7 @@ describe('normalizeConfig(单插件配置清洗)', () => {
       __testing.normalizeConfig({
         agentKind: 'claude',
         model: '',
-        effort: 'minimal',
+        effort: 'unknown',
         fastMode: 'yes',
         permissionMode: 'bypassPermissions',
         workingDir: 42,
@@ -46,7 +46,7 @@ describe('normalizeConfig(单插件配置清洗)', () => {
     ).toEqual({});
   });
 
-  it('permissionMode 白名单:bypassPermissions / ask 等一律清掉', () => {
+  it('保留普通任务的 ask 和旧 plan 配置，拒绝完全访问', () => {
     expect(__testing.normalizeConfig({ permissionMode: 'plan' })).toEqual({
       permissionMode: 'plan',
     });
@@ -54,7 +54,7 @@ describe('normalizeConfig(单插件配置清洗)', () => {
       permissionMode: 'auto',
     });
     expect(__testing.normalizeConfig({ permissionMode: 'bypassPermissions' })).toEqual({});
-    expect(__testing.normalizeConfig({ permissionMode: 'ask' })).toEqual({});
+    expect(__testing.normalizeConfig({ permissionMode: 'ask' })).toEqual({ permissionMode: 'ask' });
   });
 
   it('Pi 是合法的代办 agent', () => {
@@ -107,5 +107,24 @@ describe('sessionMapKey(会话映射键)', () => {
     expect(__testing.sessionMapKey('helper')).toBe('helper');
     expect(__testing.sessionMapKey('helper', undefined)).toBe('helper');
     expect(__testing.sessionMapKey('helper', 'pr-123')).toBe('helper#pr-123');
+  });
+});
+
+
+describe('validating user task preferences before saving', () => {
+  it('rejects unavailable explicit routes and malformed authority instead of silently saving defaults', async () => {
+    const validate = vi.fn(async () => { throw new Error('供应商未连接，请修复连接'); });
+    setPluginTaskConfigValidator(validate);
+    await expect(validatePluginTaskConfig({ agentKind: 'codex', model: 'selected', providerId: 'removed' }))
+      .rejects.toThrow('修复连接');
+    await expect(validatePluginTaskConfig({ permissionMode: 'bypassPermissions' })).rejects.toThrow('permissionMode');
+    expect(validate).toHaveBeenCalledOnce();
+  });
+  it('lets the user clear a broken model without losing independent permissions or directory', async () => {
+    const validate = vi.fn(async () => { throw new Error('model unavailable'); });
+    setPluginTaskConfigValidator(validate);
+    await expect(validatePluginTaskConfig({ permissionMode: 'auto', workingDir: '/user-selected' })).resolves.toBeUndefined();
+    await expect(validatePluginTaskConfig(null)).resolves.toBeUndefined();
+    expect(validate).not.toHaveBeenCalled();
   });
 });

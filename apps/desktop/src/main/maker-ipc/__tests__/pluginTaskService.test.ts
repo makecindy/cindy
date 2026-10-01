@@ -296,11 +296,22 @@ describe('plugin ordinary task receipts', () => {
     const f = fixture();
     const input = { requestKey: 'isolated', title: 'Test', isolatedWorkspace: true };
     const task = await f.service.create('p', input);
-    expect(f.deps.createSession).toHaveBeenCalledWith('p', task.taskId, 'Test', f.route, true, undefined, expect.any(Function));
+    expect(f.deps.createSession).toHaveBeenCalledWith('p', task.taskId, 'Test', f.route, true, undefined, expect.any(Function), undefined);
     await f.service.create('p', input);
     expect(f.deps.createSession).toHaveBeenCalledTimes(1);
     await expect(f.service.create('p', { ...input, isolatedWorkspace: false }))
       .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  });
+
+  it('binds the originating call to creation without re-resolving it on receipt replay', async () => {
+    const f = fixture();
+    const input = { requestKey: 'call-source', title: 'Test', callId: 'active-call' };
+    const task = await f.service.create('p', input);
+    expect(f.deps.resolveRoute).toHaveBeenCalledWith('p', undefined, 'active-call');
+    expect(f.deps.createSession).toHaveBeenCalledWith('p', task.taskId, 'Test', f.route, undefined, undefined, expect.any(Function), 'active-call');
+    vi.mocked(f.deps.resolveRoute).mockRejectedValue(new Error('call ended'));
+    expect((await f.service.create('p', input)).taskId).toBe(task.taskId);
+    await expect(f.service.create('p', { ...input, callId: 'other-call' })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
   });
 
   it('creates once under concurrent retries and rejects conflicting keys', async () => {
@@ -716,8 +727,8 @@ describe('current plugin dispatch authority', () => {
     await expect(f.service.get('p',run.taskId)).resolves.toMatchObject({planModeEnabled:true});
     await expect(f.service.cancel('p',run.runId)).resolves.toMatchObject({status:'cancelled'});
   });
-  it.each(['plan', 'acceptEdits', 'auto'])('allows only authority within %s configuration', configured => {
-    const modes = ['plan', 'acceptEdits', 'auto'];
+  it.each(['plan', 'ask', 'acceptEdits', 'auto'])('allows only authority within %s configuration', configured => {
+    const modes = ['plan', 'ask', 'acceptEdits', 'auto'];
     for (const mode of [...modes, 'bypassPermissions', 'unknown', undefined]) {
       expect(isPluginTaskPermissionAllowed(mode, configured)).toBe(modes.includes(mode!) && modes.indexOf(mode!) <= modes.indexOf(configured));
     }
@@ -838,4 +849,33 @@ describe('current plugin dispatch authority', () => {
     expect(await f.send()).toEqual(run);
     expect(f.deps.dispatch).toHaveBeenCalledTimes(1);
   });
+});
+
+it('changes only the owned task model through the ordinary runtime adapter', async () => {
+  const f = fixture();
+  const task = await f.create();
+  const route = task.resolvedConfig;
+  const next = { ...route, model: 'next-model' };
+  f.deps.setModel = vi.fn<NonNullable<PluginTaskServiceDeps['setModel']>>(async (id, selected, assertCurrent) => {
+    await assertCurrent();
+    const stored = f.tasks.get(id)!;
+    f.tasks.set(id, { ...stored, revision: stored.revision + 1, resolvedConfig: selected });
+    return { status: 'applied' };
+  });
+  const changed = await f.service.setModel('p', { taskId: task.taskId, expectedRevision: task.revision, route: next });
+  expect(changed.task).toMatchObject({ taskId: task.taskId, permissionMode: task.permissionMode, resolvedConfig: next });
+  expect(f.tasks.size).toBe(1);
+  await expect(f.service.setModel('other', { taskId: task.taskId, expectedRevision: 2, route: next })).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+  await expect(f.service.setModel('p', { taskId: task.taskId, expectedRevision: 1, route: next })).rejects.toMatchObject({ code: 'STALE_REVISION' });
+  expect(f.deps.setModel).toHaveBeenCalledOnce();
+});
+
+it('does not apply a model after the task changes while route admission is pending', async () => {
+  const f = fixture();
+  const task = await f.create();
+  const route = task.resolvedConfig;
+  f.deps.resolveRoute = async () => { f.tasks.get(task.taskId)!.revision++; return route; };
+  f.deps.setModel = vi.fn();
+  await expect(f.service.setModel('p', { taskId: task.taskId, expectedRevision: task.revision, route })).rejects.toMatchObject({ code: 'STALE_REVISION' });
+  expect(f.deps.setModel).not.toHaveBeenCalled();
 });
