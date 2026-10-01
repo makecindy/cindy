@@ -390,7 +390,12 @@ describe("PiAgent native auto-compaction ownership", () => {
     } finally {await handle.close();}
   });
 
-  it('keeps hundreds of long managed skill paths out of Windows argv and cleans only session links', async () => {
+  // 350 real skill files + 350 session junctions make this case load-sensitive on the
+  // shared Windows PR runners (repeated "Test timed out in 5000ms", #5350). Only the
+  // Windows budget is widened; the fixture size and every assertion stay as in #5318.
+  it('keeps hundreds of long managed skill paths out of Windows argv and cleans only session links', {
+    timeout: process.platform === 'win32' ? 30_000 : 5_000,
+  }, async () => {
     const skills = Array.from({ length: 350 }, (_, index) => {
       const file = path.join(agentHome, 'approved', 'revision-'.repeat(12), String(index), 'SKILL.md');
       mkdirSync(path.dirname(file), { recursive: true });
