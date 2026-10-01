@@ -10708,7 +10708,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await assertUnchanged();
         const result = await sessionControlService.setSessionRuntime({ targetSessionId: taskId,
           expectedGeneration: current.runtime.runtimeGeneration,
-          patch: { harness: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
+          patch: { ...(current.runtime.effectiveProfile.agentKind !== (route.agentKind === 'cc' ? 'claude-code' : route.agentKind)
+              ? { harness: route.agentKind === 'cc' ? 'claude-code' as const : route.agentKind } : {}),
             model: route.model, providerId: route.providerId, effort: (route.effort || null) as Effort | null,
             fastMode: route.fastMode } });
         if (!result.ok) throw new PluginTaskError(result.errorCode, result.message);
@@ -10772,7 +10773,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const [row] = await snapshot.client.drizzle.select().from(sessions).where(eq(sessions.id, taskId)).limit(1);
         assertCurrent();
         if (!row || row.source !== 'plugin' || row.remoteHostId || (row.orcaRole && row.orcaRole !== 'lead') || !['cc', 'codex', 'pi'].includes(row.agentKind)) return null;
-        const resolvedConfig: PluginTaskRoute = { agentKind: row.agentKind as PluginTaskRoute['agentKind'], providerId: row.providerId ?? '', model: row.model, effort: row.effort, fastMode: row.fastMode };
+        const runtime = await readSessionRuntimeProfiles(taskId);
+        assertCurrent();
+        // A queued input will execute the accepted next-send route. Keep its
+        // receipt stable as a deferred model/Harness switch reaches that boundary.
+        const selected = runtime?.pendingMutation?.profile ?? runtime?.effective;
+        const resolvedConfig: PluginTaskRoute = selected
+          ? { agentKind: selected.agentKind === 'claude-code' ? 'cc' : selected.agentKind,
+            providerId: selected.providerId ?? '', model: selected.model,
+            effort: selected.effort ?? '', fastMode: selected.fastMode }
+          : { agentKind: row.agentKind as PluginTaskRoute['agentKind'], providerId: row.providerId ?? '', model: row.model, effort: row.effort, fastMode: row.fastMode };
         const revision = Number.parseInt(pluginTaskConfigHash('sha256').update(JSON.stringify([resolvedConfig, row.permissionMode, row.planModeEnabled, row.workingDir, row.status, row.orcaRole])).digest('hex').slice(0, 12), 16);
         return { taskId, title: row.title, status: row.status, revision, resolvedConfig, workingDir: row.workingDir ?? undefined, permissionMode: row.permissionMode, planModeEnabled: !!row.planModeEnabled };
       },
@@ -13913,7 +13923,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       projection.revision,
     ]);
     if (epoch !== getCurrentDbClientSnapshot()) throw new Error('Account changed');
-    const config = readGhostErrandConfig(receipt.pluginId);
+    const config = readPluginTaskConfig(receipt.pluginId);
     const approvalRevision = pluginTaskAuthorizationRevision(receipt.pluginId);
     return {
       pluginId: receipt.pluginId,

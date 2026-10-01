@@ -27,13 +27,34 @@ it.each(['auto', 'acceptEdits'])('exposes independent Plan Mode alongside stored
   const property = source.slice(start, source.indexOf('      dispatch:', start)).trim().replace(/,$/, '');
   const row = {id:'task',source:'plugin',agentKind:'codex',status:'active',permissionMode,planModeEnabled:true};
   const query = {from:()=>query,where:()=>query,limit:async()=>[row]};
-  const read = compile(`return ({${property}}).readSession;`, {assertCurrent:()=>{},snapshot:{client:{drizzle:{select:()=>query}}},sessions:{},eq:()=>true,pluginTaskConfigHash:createHash});
+  const read = compile(`return ({${property}}).readSession;`, {assertCurrent:()=>{},snapshot:{client:{drizzle:{select:()=>query}}},sessions:{},eq:()=>true,pluginTaskConfigHash:createHash,readSessionRuntimeProfiles:async()=>null});
   const plan = await read('task');
   expect(plan).toMatchObject({permissionMode,planModeEnabled:true});
   row.planModeEnabled=false;
   const normal = await read('task');
   expect(normal).toMatchObject({permissionMode,planModeEnabled:false});
   expect(normal.revision).not.toBe(plan.revision);
+});
+
+it.each(['codex', 'claude-code'] as const)('keeps the accepted next-input route stable when a deferred %s switch settles', async agentKind => {
+  const start = source.indexOf('      readSession: async taskId =>');
+  const property = source.slice(start, source.indexOf('      dispatch:', start)).trim().replace(/,$/, '');
+  const old = {agentKind:'codex',providerId:'old-provider',model:'old',effort:'medium',fastMode:false};
+  const next = {agentKind,providerId:'selected-provider',model:'selected',effort:'high',fastMode:false};
+  const row = {id:'task',source:'plugin',status:'active',permissionMode:'ask',planModeEnabled:false,...old};
+  let pending = true;
+  const query = {from:()=>query,where:()=>query,limit:async()=>[row]};
+  const read = compile(`return ({${property}}).readSession;`, {
+    assertCurrent:()=>{}, snapshot:{client:{drizzle:{select:()=>query}}}, sessions:{},eq:()=>true,pluginTaskConfigHash:createHash,
+    readSessionRuntimeProfiles:async()=>({effective:pending ? old : next,pendingMutation:pending ? {profile:next} : null}),
+  });
+  const accepted = await read('task');
+  expect(accepted.resolvedConfig).toEqual({...next,agentKind:agentKind==='claude-code'?'cc':agentKind});
+  pending=false;
+  Object.assign(row,next,{agentKind:agentKind==='claude-code'?'cc':agentKind});
+  const applied = await read('task');
+  expect(applied.resolvedConfig).toEqual(accepted.resolvedConfig);
+  expect(applied.revision).toBe(accepted.revision);
 });
 
 it('freezes the directory returned by admission without mutating the caller plan', async () => {

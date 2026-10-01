@@ -39,7 +39,7 @@ it.each([false,true])('production Auto context checks uninstall after its projec
     const deps={setAutoReviewContextResolver:(callback:typeof load)=>{load=callback;},createPluginTaskReviewResolver:(callback:typeof load)=>callback,
       getCurrentDbClientSnapshot:()=>epoch,sessions:{},orcaWorkers:{},orcaTeams:{},eq:()=>true,
       createPluginTaskStore:()=>f.deps.store,drainPersistQueue:async()=>{},
-      pluginTaskServiceForCurrentOwner:()=>f.service,readGhostErrandConfig:()=>({permissionMode:'auto'}),
+      pluginTaskServiceForCurrentOwner:()=>f.service,readPluginTaskConfig:()=>({permissionMode:'auto'}),
       readPluginTaskPlanReceipt,pluginTaskAuthorizationRevision:()=> 'new-install',isPluginTaskAuthorized:()=>true};
     const source=readFileSync(new URL('../register.ts',import.meta.url),'utf8');
     const start=source.indexOf('  setAutoReviewContextResolver(createPluginTaskReviewResolver(async sessionId => {');
