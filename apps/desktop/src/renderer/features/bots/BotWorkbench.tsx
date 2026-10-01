@@ -536,7 +536,7 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
             {t('bots.workbench.outputs')}
           </h3>
           {outputs.length === 0 ? (
-            <p className="text-12 leading-[18px] text-[var(--text-tertiary)]">
+            <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
               {t('bots.workbench.outputsEmpty', { name: botName })}
             </p>
           ) : (
@@ -715,7 +715,7 @@ function ProjectPicker({
   return (
     <section className="px-5 pb-5 pt-3">
       <div className="flex items-start gap-2">
-        <h2 className="min-w-0 flex-1 text-18 font-medium leading-[26px] text-[var(--text-primary)]">
+        <h2 className="min-w-0 flex-1 text-18 font-medium leading-[1.44] text-[var(--text-primary)]">
           {t('bots.workbench.emptyTitle', { name: botName })}
         </h2>
         {onCancel ? (
@@ -751,8 +751,8 @@ function ProjectPicker({
           >
             <Folder size={18} strokeWidth={1.8} className="shrink-0 text-[var(--text-secondary)]" aria-hidden />
             <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate text-14 font-medium leading-[22px] text-[var(--text-primary)]">{option.name}</span>
-              <span className="truncate text-12 leading-[18px] text-[var(--text-tertiary)]">
+              <span className="truncate text-14 font-medium leading-[1.57] text-[var(--text-primary)]">{option.name}</span>
+              <span className="truncate text-12 leading-[1.5] text-[var(--text-tertiary)]">
                 {projectCounts(option, t)}
               </span>
             </span>
@@ -783,7 +783,7 @@ function ProjectPicker({
           </div>
         ) : null}
         {scan.kind !== 'loading' && listed === 0 ? (
-          <p className="text-12 leading-[18px] text-[var(--text-tertiary)]">
+          <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
             {t('bots.workbench.noProjects', { name: botName })}
           </p>
         ) : null}
@@ -1107,7 +1107,7 @@ function TaskGroups({
   const [openDone, setOpenDone] = useState(false);
   if (groups.length === 0) {
     return showEmpty ? (
-      <p className="px-5 pb-5 pt-1 text-12 leading-[18px] text-[var(--text-tertiary)]">{t('bots.workbench.tasksEmpty')}</p>
+      <p className="px-5 pb-5 pt-1 text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('bots.workbench.tasksEmpty')}</p>
     ) : null;
   }
   return (
@@ -1158,7 +1158,7 @@ function TaskGroups({
                   />
                 ))}
                 {group.hiddenCount > 0 ? (
-                  <li className="px-3.5 pt-1 text-12 leading-[18px] text-[var(--text-tertiary)]">
+                  <li className="px-3.5 pt-1 text-12 leading-[1.5] text-[var(--text-tertiary)]">
                     {t('bots.workbench.olderCount', { count: group.hiddenCount })}
                   </li>
                 ) : null}
@@ -1400,7 +1400,7 @@ function TaskDetail({
             <ArrowLeft size={16} aria-hidden />
           </button>
         </Tip>
-        <h3 className="min-w-0 flex-1 truncate text-15 font-medium leading-[22px] text-[var(--text-primary)]">{title}</h3>
+        <h3 className="min-w-0 flex-1 truncate text-15 font-medium leading-[1.47] text-[var(--text-primary)]">{title}</h3>
         {tile.type === 'session' && tile.state === 'running' ? (
           <Tip text={t('bots.workbench.detail.stop')}>
             <button
@@ -1426,7 +1426,7 @@ function TaskDetail({
           </Tip>
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center gap-2 px-5 pb-3 text-12 leading-[18px] text-[var(--text-tertiary)]">
+      <div className="flex shrink-0 items-center gap-2 px-5 pb-3 text-12 leading-[1.5] text-[var(--text-tertiary)]">
         {tile.type === 'item' ? <ItemIcon tile={tile} /> : <StateIcon state={tile.state} verdict={tile.verdict} />}
         <span className="text-[var(--text-secondary)]">
           {statusText}
@@ -1438,7 +1438,7 @@ function TaskDetail({
       <div className="min-h-0 flex-1 overflow-y-auto border-t border-[var(--border-default)] px-5 py-4">
         {tile.verdict && tile.next ? (
           <section className="mb-4 rounded-xl border border-[var(--border-default)] px-3.5 py-3">
-            <p className="text-12 leading-[18px] text-[var(--text-tertiary)]">
+            <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
               {t('bots.workbench.detail.judgment', { name: botName })}
             </p>
             <p className="mt-1 text-13 leading-5 text-[var(--text-primary)]">{tile.next}</p>
@@ -1470,21 +1470,21 @@ function TaskDetail({
                 <FileText size={14} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
               )}
               <span className="min-w-0 flex-1">
-                <span className="block text-12 leading-[18px] text-[var(--text-tertiary)]">{t('bots.workbench.detail.ref')}</span>
+                <span className="block text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('bots.workbench.detail.ref')}</span>
                 <span className="block truncate text-13 leading-5 text-[var(--text-primary)]">{reference}</span>
               </span>
             </button>
           ) : null) : (
-            <p className="text-12 leading-[18px] text-[var(--text-tertiary)]">{t('bots.workbench.detail.noRef')}</p>
+            <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('bots.workbench.detail.noRef')}</p>
           )
         ) : transcript.kind === 'loading' ? (
           <div className="flex justify-center py-6">
             <Spinner size={16} className="text-[var(--text-tertiary)]" role="status" aria-label={t('ccAgent.common.loading')} />
           </div>
         ) : transcript.kind === 'failed' ? (
-          <p className="text-12 leading-[18px] text-[var(--text-tertiary)]">{t('bots.workbench.detail.loadFailed')}</p>
+          <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('bots.workbench.detail.loadFailed')}</p>
         ) : transcript.transcript.items.length === 0 ? (
-          <p className="text-12 leading-[18px] text-[var(--text-tertiary)]">{t('bots.workbench.detail.empty')}</p>
+          <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('bots.workbench.detail.empty')}</p>
         ) : (
           <div className="flex flex-col gap-3">
             {transcript.transcript.truncated ? (
@@ -1501,7 +1501,7 @@ function TaskDetail({
               ) : (
                 <div
                   key={`${item.at}-${index}`}
-                  className="whitespace-pre-wrap break-words text-13 leading-[22px] text-[var(--text-primary)] [overflow-wrap:anywhere]"
+                  className="whitespace-pre-wrap break-words text-13 leading-[1.69] text-[var(--text-primary)] [overflow-wrap:anywhere]"
                 >
                   {item.text}
                 </div>
