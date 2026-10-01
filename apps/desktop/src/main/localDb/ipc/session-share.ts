@@ -17,6 +17,7 @@ import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { isIpcErrorCode } from '../../../shared/ipc-errors.js';
 import { createLogger } from '../../logger.js';
+import { clearSessionAttention } from '../../appBadgeService.js';
 import { notifyGhostSessionEvent } from '../../cindy-brain/index.js';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
 import {
@@ -206,6 +207,7 @@ export function registerSessionShareIpc(): void {
         // 不直接删除转录或媒体字节：同 resume id/内容的新任务可能复用它们。
         for (const replaced of result.replacedSessions) {
           if (!isStillCurrent()) break;
+          clearSessionAttention(replaced.id, 'explicit');
           broadcastSessionPatched(replaced.id, { status: 'deleted' }, recycleScope.ownerScope);
           void compactSessionToolResultsBestEffort({
             client: importDbClient,
