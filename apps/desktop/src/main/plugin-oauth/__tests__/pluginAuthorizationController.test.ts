@@ -1,10 +1,12 @@
+// Cross-platform tests use the Node host environment; importing Desktop main
+// from Mobile tests pulls Node-only APIs into the React Native type environment.
 import { describe, expect, it, vi } from "vitest";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { OauthTransactions } from "../../../desktop/src/main/plugin-oauth/transactions";
-import { getRemoteOauthContext } from "../../../desktop/src/main/plugin-oauth/context";
-import { runMobilePluginAuthorization } from "../plugins/pluginAuthorizationController";
-import { mobilePluginSetupActions } from "../plugins/pluginSetupActions";
-import type { PluginOauthCrypto } from "../plugins/pluginOauthCrypto";
+import { OauthTransactions } from "../transactions";
+import { getRemoteOauthContext } from "../context";
+import { runMobilePluginAuthorization } from "../../../../../mobile/src/plugins/pluginAuthorizationController";
+import { mobilePluginSetupActions } from "../../../../../mobile/src/plugins/pluginSetupActions";
+import type { PluginOauthCrypto } from "../../../../../mobile/src/plugins/pluginOauthCrypto";
 const crypto: PluginOauthCrypto = {
   random: (n) => new Uint8Array(randomBytes(n)),
   encrypt: async (key, iv, body, aad) => {
