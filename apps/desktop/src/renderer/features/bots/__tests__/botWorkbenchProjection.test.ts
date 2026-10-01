@@ -10,6 +10,7 @@ import {
   countUnjudgedCandidates,
   groupWorkbenchTiles,
   tierWorkbenchProjectOptions,
+  workbenchGroupHasFollowUp,
   workbenchTileGroup,
   type WorkbenchProjectOption,
   type WorkbenchDelegationInput,
@@ -340,6 +341,20 @@ describe('groupWorkbenchTiles', () => {
       ['done', true],
     ]);
     expect(groups.find((group) => group.key === 'done')!.tiles).toHaveLength(3);
+  });
+
+  it('offers 跟进 only on to-do and waiting entries', () => {
+    const withFollowUp = groupWorkbenchTiles(fixture())
+      .filter((group) => workbenchGroupHasFollowUp(group.key))
+      .map((group) => group.key);
+    expect(withFollowUp).toEqual(['waiting', 'todo']);
+    expect(workbenchGroupHasFollowUp('running')).toBe(false);
+    expect(workbenchGroupHasFollowUp('done')).toBe(false);
+  });
+
+  it('keeps the Bot own background tasks in the groups by their real state', () => {
+    const groupOf = new Map(fixture().map((tile) => [tile.id, workbenchTileGroup(tile)]));
+    expect([groupOf.get('queued-bg'), groupOf.get('failed-bg'), groupOf.get('finished-bg')]).toEqual(['todo', 'waiting', 'done']);
   });
 
   it('leaves empty groups out', () => {

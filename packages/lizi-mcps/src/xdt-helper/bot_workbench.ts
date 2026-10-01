@@ -252,6 +252,9 @@ export function registerBotWorkbenchTools(
       + '项目文档(如 DESIGN.md)、最近的 PR 与 issue 同样是素材:值得做的写成 pr:<owner>/<repo>#<n>、issue:<owner>/<repo>#<n> 或 idea:<slug> 条目,带上 ref。'
       + '判断标准:最后一条是没被执行的要求、报错中断、明确留下的待办 → unfinished;讨论过方案或想法但之后没人动 → idea;已交付、纯问答、与项目无关 → done。'
       + '写完后在聊天里用几句话告诉主人:没做完的几件各一句下一步,值得做的几件各一句建议,问主人要接着做哪件。不要自作主张开始做;只有主人点头的那件才 continue_workbench_task。'
+      + '主人在工作台上点「跟进」时会发来「跟进「<标题>」」(其它语言如 Follow up on “<标题>”):先调用本工具按标题找到那一条,'
+      + '再 continue_workbench_task——会话条目发一句承接上文、收到就能接着做的指令;PR / issue / 建议条目会在项目目录开后台任务。'
+      + '找不到同名条目就问主人是哪一件,不要猜;有几条同名时列出候选让主人选。'
       + '要在项目里开全新的任务时用 start_session_task,把 working_dir 设为该项目路径。',
     inputShape: {},
     handler: async () => {
@@ -326,7 +329,7 @@ export function registerBotWorkbenchTools(
     name: 'continue_workbench_task',
     category: 'bots',
     description:
-      '主人点头后,让工作台上的一件任务接着做:给它发一句话,消息以你的名义投递,任务正忙时排到当前一轮之后。'
+      '主人点头后(包括主人在工作台上点「跟进」),让工作台上的一件任务接着做:给它发一句话,消息以你的名义投递,任务正忙时排到当前一轮之后。'
       + '如果它还是没接过来的本机 Claude Code / Codex 会话,宿主先只导入这一条,再投递;返回里的 task_id 是导入后的新任务 id,之后用它。'
       + 'Pi 会话、导入不了的会话,以及 PR / issue / 建议条目:宿主在该项目目录里开一条你的后台任务(与 start_session_task 同一条路径),'
       + '目标是条目标题 + 你的 message + 参考与摘要;返回 started_from 为原条目,task_id 是新后台任务,之后用 message_session_task 跟进。'

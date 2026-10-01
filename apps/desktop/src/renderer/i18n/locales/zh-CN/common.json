@@ -7855,6 +7855,11 @@
         "todo": "待做",
         "done": "做完"
       },
+      "followUp": {
+        "label": "跟进",
+        "message": "跟进「{{title}}」",
+        "aria": "跟进「{{title}}」"
+      },
       "kind": {
         "existing": "原有任务",
         "delegated": "你交代的",
@@ -7877,13 +7882,8 @@
         "interrupted": "上次没跑完",
         "errored": "上次出错了",
         "failed": "没做完",
-        "manual": "手动运行",
         "paused": "已暂停",
-        "disabled": "已停用",
-        "lastRun": "上次：{{text}}",
-        "lastRunOk": "上次运行成功",
-        "lastRunFailed": "上次运行失败",
-        "neverRun": "还没运行过"
+        "disabled": "已停用"
       }
     },
     "remoteSettings": {

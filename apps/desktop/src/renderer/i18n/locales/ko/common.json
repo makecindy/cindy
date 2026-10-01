@@ -7855,6 +7855,11 @@
         "todo": "할 일",
         "done": "완료"
       },
+      "followUp": {
+        "label": "진행",
+        "message": "「{{title}}」 이어서 진행해 줘",
+        "aria": "「{{title}}」 진행하기"
+      },
       "kind": {
         "existing": "기존 세션",
         "delegated": "요청한 일",
@@ -7877,13 +7882,8 @@
         "interrupted": "지난번 실행이 끝나지 않았습니다",
         "errored": "지난번 실행에서 오류가 났습니다",
         "failed": "끝내지 못했습니다",
-        "manual": "수동 실행",
         "paused": "일시 중지됨",
-        "disabled": "꺼짐",
-        "lastRun": "지난번: {{text}}",
-        "lastRunOk": "지난번 실행 성공",
-        "lastRunFailed": "지난번 실행 실패",
-        "neverRun": "아직 실행되지 않음"
+        "disabled": "꺼짐"
       }
     },
     "remoteSettings": {

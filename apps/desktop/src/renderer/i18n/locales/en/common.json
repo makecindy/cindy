@@ -7867,6 +7867,11 @@
         "todo": "To do",
         "done": "Done"
       },
+      "followUp": {
+        "label": "Follow up",
+        "message": "Follow up on “{{title}}”",
+        "aria": "Follow up on “{{title}}”"
+      },
       "kind": {
         "existing": "Existing session",
         "delegated": "You asked",
@@ -7889,13 +7894,8 @@
         "interrupted": "Last run didn't finish",
         "errored": "Last run hit an error",
         "failed": "Didn't finish",
-        "manual": "Runs manually",
         "paused": "Paused",
-        "disabled": "Turned off",
-        "lastRun": "Last: {{text}}",
-        "lastRunOk": "Last run succeeded",
-        "lastRunFailed": "Last run failed",
-        "neverRun": "Hasn't run yet"
+        "disabled": "Turned off"
       }
     },
     "remoteSettings": {

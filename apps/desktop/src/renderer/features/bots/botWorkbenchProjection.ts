@@ -576,6 +576,14 @@ export function workbenchTileGroup(tile: WorkbenchTile): WorkbenchGroupKey {
   return 'done';
 }
 
+/**
+ * 哪些组的条目带「跟进」:待做与等你——主人点一下,伙伴在左边接着干。
+ * 在做的已经在跑,做完的不需要再推。
+ */
+export function workbenchGroupHasFollowUp(key: WorkbenchGroupKey): boolean {
+  return key === 'todo' || key === 'waiting';
+}
+
 export interface WorkbenchTileGroup {
   key: WorkbenchGroupKey;
   tiles: WorkbenchTile[];

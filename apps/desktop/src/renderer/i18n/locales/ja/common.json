@@ -7855,6 +7855,11 @@
         "todo": "やること",
         "done": "完了"
       },
+      "followUp": {
+        "label": "進める",
+        "message": "「{{title}}」を進めて",
+        "aria": "「{{title}}」を進める"
+      },
       "kind": {
         "existing": "既存のセッション",
         "delegated": "あなたの依頼",
@@ -7877,13 +7882,8 @@
         "interrupted": "前回は最後まで実行されませんでした",
         "errored": "前回エラーが発生しました",
         "failed": "完了しませんでした",
-        "manual": "手動で実行",
         "paused": "一時停止中",
-        "disabled": "オフ",
-        "lastRun": "前回：{{text}}",
-        "lastRunOk": "前回は成功しました",
-        "lastRunFailed": "前回は失敗しました",
-        "neverRun": "まだ実行されていません"
+        "disabled": "オフ"
       }
     },
     "remoteSettings": {

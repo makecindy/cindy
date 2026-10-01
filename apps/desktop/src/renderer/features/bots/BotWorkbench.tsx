@@ -60,6 +60,7 @@ import {
   collectBotHiddenSessionIds,
   countUnjudgedCandidates,
   groupWorkbenchTiles,
+  workbenchGroupHasFollowUp,
   tierWorkbenchProjectOptions,
   type ExternalSessionCandidate,
   type WorkbenchPathHints,
@@ -378,6 +379,40 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
     [botId, inSidebarWindow, navigate, sessionId],
   );
 
+  // 跟进:以主人身份往伙伴聊天发「跟进「<标题>」」,由伙伴在左边接着干。按钮转圈直到伙伴主任务
+  // 开始运行(或已在运行、消息排进队列);条目怎么移动交给真实状态,不做乐观更新。
+  const botPhase = activityMap.get(sessionId)?.phase ?? null;
+  const [following, setFollowing] = useState<{ key: string; sentWhileRunning: boolean } | null>(null);
+  const followingKey = following?.key ?? null;
+  useEffect(() => {
+    if (!following) return;
+    if (botPhase === 'running' && !following.sentWhileRunning) setFollowing(null);
+    if (botPhase !== 'running' && following.sentWhileRunning) setFollowing((value) => value && { ...value, sentWhileRunning: false });
+  }, [botPhase, following]);
+  useEffect(() => {
+    if (!following) return;
+    const timer = setTimeout(() => setFollowing(null), 30_000);
+    return () => clearTimeout(timer);
+  }, [following?.key]);
+  const followUp = useCallback(
+    (tile: WorkbenchTile) => {
+      if (following) return;
+      const title = tile.title || t('bots.workbench.untitled');
+      setFollowing({ key: tile.key, sentWhileRunning: botPhase === 'running' });
+      void sendAsOwner(sessionId, t('bots.workbench.followUp.message', { title }))
+        .then((sent) => {
+          if (sent) return;
+          setFollowing(null);
+          toast.error(t('bots.workbench.sendFailed', { name: botName }));
+        })
+        .catch(() => {
+          setFollowing(null);
+          toast.error(t('bots.workbench.sendFailed', { name: botName }));
+        });
+    },
+    [botName, botPhase, following, sessionId, t],
+  );
+
   const [chatWorkingDir, setChatWorkingDir] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
@@ -490,7 +525,9 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
           now={now}
           language={i18n.language}
           showEmpty={!picking && !understanding}
+          followingKey={followingKey}
           onOpen={openTile}
+          onFollowUp={followUp}
         />
       ) : null}
 
@@ -885,12 +922,9 @@ function waitingText(tile: WorkbenchTile, t: Translate): string {
   return t('bots.workbench.line.errored');
 }
 
-/** 第二层的标签:非 Cindy 来源、PR / Issue / 建议、自动化的周期与下次运行。 */
-function tileLabels(tile: WorkbenchTile, t: Translate, language: string, now: number): string[] {
-  if (tile.type === 'item') return [itemLabel(tile, t)];
-  if (tile.type === 'session' || tile.type === 'external') {
-    return tile.origin === 'claude-code' || tile.origin === 'codex' || tile.origin === 'pi' ? [originLabel(tile.origin, t)] : [];
-  }
+/** 自动化的第二层:周期 + 下次运行(或已暂停 / 已停用)。 */
+function automationLine(tile: WorkbenchTile, t: Translate, language: string, now: number): string | null {
+  if (tile.type !== 'schedule' && tile.type !== 'routine') return null;
   const cycle =
     (tile.type === 'schedule' ? scheduleCycle(tile.schedule, t, language) : routineCycle(tile.triggers, t, language))
     ?? t('bots.workbench.kind.automationPlain');
@@ -901,13 +935,24 @@ function tileLabels(tile: WorkbenchTile, t: Translate, language: string, now: nu
       : line.kind === 'paused' || line.kind === 'disabled'
         ? t(`bots.workbench.line.${line.kind}`)
         : null;
-  return extra ? [cycle, extra] : [cycle];
+  return extra ? `${cycle} · ${extra}` : cycle;
 }
 
-function tileTime(tile: WorkbenchTile, language: string, now: number): string | null {
-  if (tile.state === 'running' && tile.startedAtMs) return elapsed(tile.startedAtMs, now);
-  if (tile.type === 'schedule' || tile.type === 'routine') return null;
-  return relativeTime(tile.lastActiveMs, language, now);
+/**
+ * 第二层只写「伙伴的意见」:伙伴写的下一步;没有时在做的写「在做 · 用时」,自动化写周期与下次运行,
+ * 排队的写「排队中」,做完的不写。来源与相对时间都不显示(在详情里)。
+ */
+function tileNote(tile: WorkbenchTile, group: WorkbenchGroupKey, t: Translate, language: string, now: number): string | null {
+  if ('next' in tile && tile.next) return tile.next;
+  const automation = automationLine(tile, t, language, now);
+  if (automation) return automation;
+  if (group === 'running') {
+    return tile.startedAtMs
+      ? `${t('bots.workbench.state.running')} · ${elapsed(tile.startedAtMs, now)}`
+      : t('bots.workbench.state.running');
+  }
+  if (tile.state === 'queued') return t('bots.workbench.line.queued');
+  return null;
 }
 
 function TaskRow({
@@ -915,47 +960,59 @@ function TaskRow({
   group,
   now,
   language,
+  following,
   onOpen,
+  onFollowUp,
 }: {
   tile: WorkbenchTile;
   group: WorkbenchGroupKey;
   now: number;
   language: string;
+  /** 这一条刚点了「跟进」,在等伙伴开始干活。 */
+  following: boolean;
   onOpen: (tile: WorkbenchTile) => void;
+  onFollowUp?: (tile: WorkbenchTile) => void;
 }) {
   const { t } = useTranslation();
   const title = tile.title || t('bots.workbench.untitled');
   const waiting = group === 'waiting' ? waitingText(tile, t) : null;
-  const labels = tileLabels(tile, t, language, now);
-  const time = tileTime(tile, language, now);
+  const note = tileNote(tile, group, t, language, now);
+  const second = waiting ? (note ? `${waiting} · ${note}` : waiting) : note;
   return (
-    <li>
+    <li className="group flex min-w-0 items-start rounded-xl bg-[var(--surface-elevated)] transition-colors hover:bg-[var(--surface-hover)]">
       <button
         type="button"
         onClick={() => onOpen(tile)}
         aria-label={t('bots.workbench.openTask', { title, state: t(`bots.workbench.group.${group}`) })}
-        className="flex w-full min-w-0 flex-col rounded-xl bg-[var(--surface-elevated)] px-3.5 py-3 text-left outline-none transition-colors hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        className={cn(
+          'flex min-w-0 flex-1 flex-col rounded-xl py-3 pl-3.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+          onFollowUp ? 'pr-2' : 'pr-3.5',
+        )}
       >
         <span className="line-clamp-3 text-14 font-medium leading-5 text-[var(--text-primary)] [overflow-wrap:anywhere]">
           {title}
         </span>
-        <span className="mt-1.5 flex min-w-0 items-center gap-1.5 text-12 leading-[18px] text-[var(--text-tertiary)]">
-          {waiting ? (
-            <>
-              <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--card-status-awaiting)]" />
-              <span className="shrink-0 text-[var(--text-secondary)]">{waiting}</span>
-            </>
-          ) : null}
-          {labels.length > 0 ? (
-            <span className="min-w-0 truncate">
-              {waiting ? '· ' : ''}
-              {labels.join(' · ')}
-            </span>
-          ) : null}
-          <span className="flex-1" />
-          {time ? <span className="shrink-0 tabular-nums">{time}</span> : null}
-        </span>
+        {second ? (
+          <span className="mt-1.5 flex min-w-0 items-start gap-1.5 text-13 leading-5 text-[var(--text-secondary)]">
+            {waiting ? (
+              <span aria-hidden className="mt-[7px] size-1.5 shrink-0 rounded-full bg-[var(--card-status-awaiting)]" />
+            ) : null}
+            <span className="line-clamp-2 min-w-0 [overflow-wrap:anywhere]">{second}</span>
+          </span>
+        ) : null}
       </button>
+      {onFollowUp ? (
+        <button
+          type="button"
+          onClick={() => onFollowUp(tile)}
+          disabled={following}
+          aria-label={t('bots.workbench.followUp.aria', { title })}
+          className="mr-2.5 mt-2.5 flex h-7 shrink-0 items-center gap-1 rounded-[8px] px-2.5 text-12 font-medium leading-4 text-[var(--text-tertiary)] outline-none transition-colors hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] group-hover:text-[var(--text-secondary)] disabled:cursor-default"
+        >
+          {following ? <Spinner size={12} aria-hidden /> : null}
+          {t('bots.workbench.followUp.label')}
+        </button>
+      ) : null}
     </li>
   );
 }
@@ -965,13 +1022,17 @@ function TaskGroups({
   now,
   language,
   showEmpty,
+  followingKey,
   onOpen,
+  onFollowUp,
 }: {
   tiles: readonly WorkbenchTile[];
   now: number;
   language: string;
   showEmpty: boolean;
+  followingKey: string | null;
   onOpen: (tile: WorkbenchTile) => void;
+  onFollowUp?: (tile: WorkbenchTile) => void;
 }) {
   const { t } = useTranslation();
   const groups = useMemo(() => groupWorkbenchTiles(tiles), [tiles]);
@@ -992,6 +1053,7 @@ function TaskGroups({
             <span className="font-normal tabular-nums text-[var(--text-tertiary)]">{group.tiles.length}</span>
           </>
         );
+        const followUp = onFollowUp && workbenchGroupHasFollowUp(group.key) ? onFollowUp : undefined;
         return (
           <section key={group.key} aria-label={label}>
             {group.defaultCollapsed ? (
@@ -1016,7 +1078,16 @@ function TaskGroups({
             {open ? (
               <ul className="mt-2 flex flex-col gap-2">
                 {group.tiles.map((tile) => (
-                  <TaskRow key={tile.key} tile={tile} group={group.key} now={now} language={language} onOpen={onOpen} />
+                  <TaskRow
+                    key={tile.key}
+                    tile={tile}
+                    group={group.key}
+                    now={now}
+                    language={language}
+                    following={followingKey === tile.key}
+                    onOpen={onOpen}
+                    onFollowUp={followUp}
+                  />
                 ))}
               </ul>
             ) : null}
