@@ -7815,17 +7815,7 @@
       "dirUnavailable": "這個資料夾打不開，換一個試試",
       "tooManyDirs": "最多交給{{name}} {{count}} 個專案",
       "sendFailed": "沒能傳給{{name}}，請重試",
-      "summaryAutomations_other": "{{count}} 個自動化",
-      "summary": {
-        "running": "{{count}} 在做",
-        "waiting": "{{count}} 等你",
-        "queued": "{{count}} 排隊",
-        "unfinished": "{{count}} 件沒做完",
-        "idea": "{{count}} 件聊過沒下文"
-      },
-      "tasks": "任務",
       "tasksEmpty": "還沒有需要接著做的任務。",
-      "summaryEmpty": "還沒有需要接著做的任務",
       "understanding": "{{name}}正在了解 {{project}}…",
       "untitled": "未命名任務",
       "continueMessage": "接著做「{{title}}」：{{text}}",
@@ -7848,8 +7838,6 @@
         "noRef": "沒有附參考連結。",
         "refBlocked": "這個路徑不在交給夥伴的專案裡，沒有開啟。"
       },
-      "showAll": "全部 {{count}}",
-      "showLess": "收起",
       "openTask": "開啟「{{title}}」（{{state}}）",
       "outputs": "產出",
       "outputsEmpty": "{{name}}做出的檔案會放在這裡。",
@@ -7861,6 +7849,12 @@
         "automation": "自動化",
         "done": "做完"
       },
+      "group": {
+        "waiting": "等你",
+        "running": "在做",
+        "todo": "待做",
+        "done": "做完"
+      },
       "kind": {
         "existing": "原有任務",
         "delegated": "你交代的",
@@ -7870,7 +7864,6 @@
         "pr": "PR #{{number}}",
         "issue": "Issue #{{number}}",
         "idea": "建議",
-        "automation": "自動化 · {{cycle}}",
         "automationPlain": "自動化"
       },
       "cycle": {

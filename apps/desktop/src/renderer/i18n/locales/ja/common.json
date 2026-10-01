@@ -7815,17 +7815,7 @@
       "dirUnavailable": "このフォルダーを開けません。別のフォルダーを選んでください。",
       "tooManyDirs": "{{name}} に任せられるプロジェクトは最大 {{count}} 件です",
       "sendFailed": "{{name}} に送信できませんでした。もう一度お試しください。",
-      "summaryAutomations_other": "{{count}} 件の自動化",
-      "summary": {
-        "running": "{{count}} 件 実行中",
-        "waiting": "{{count}} 件 返信待ち",
-        "queued": "{{count}} 件 待機中",
-        "unfinished": "{{count}} 件 未完了",
-        "idea": "{{count}} 件 話したまま"
-      },
-      "tasks": "セッション",
       "tasksEmpty": "続けるべきセッションはまだありません。",
-      "summaryEmpty": "続けるべきセッションはまだありません",
       "understanding": "{{name}} が {{project}} を把握しています…",
       "untitled": "無題のセッション",
       "continueMessage": "「{{title}}」を続けて：{{text}}",
@@ -7848,8 +7838,6 @@
         "noRef": "参考リンクはありません。",
         "refBlocked": "このパスは任せたプロジェクトの外にあるため開きませんでした。"
       },
-      "showAll": "すべて {{count}}",
-      "showLess": "閉じる",
       "openTask": "「{{title}}」を開く（{{state}}）",
       "outputs": "成果物",
       "outputsEmpty": "{{name}} が作ったファイルはここに表示されます。",
@@ -7861,6 +7849,12 @@
         "automation": "自動化",
         "done": "完了"
       },
+      "group": {
+        "waiting": "返信待ち",
+        "running": "実行中",
+        "todo": "やること",
+        "done": "完了"
+      },
       "kind": {
         "existing": "既存のセッション",
         "delegated": "あなたの依頼",
@@ -7870,7 +7864,6 @@
         "pr": "PR #{{number}}",
         "issue": "Issue #{{number}}",
         "idea": "提案",
-        "automation": "自動化 · {{cycle}}",
         "automationPlain": "自動化"
       },
       "cycle": {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import {
   ArrowLeft,
   ArrowUp,
+  ChevronRight,
   CircleCheck,
   CircleDot,
   CirclePause,
@@ -58,9 +59,11 @@ import {
   buildWorkbenchTiles,
   collectBotHiddenSessionIds,
   countUnjudgedCandidates,
+  groupWorkbenchTiles,
   tierWorkbenchProjectOptions,
   type ExternalSessionCandidate,
   type WorkbenchPathHints,
+  type WorkbenchGroupKey,
   type WorkbenchProjectOption,
   type WorkbenchRoutineInput,
   type WorkbenchTile,
@@ -70,14 +73,13 @@ import {
  * 伙伴工作台(右侧栏的一个标签,只对本机伙伴主任务提供)。
  *
  * - 没接手项目时:从已有项目里选一个 →「交给<伙伴>」,两次点击完成接手。接手 = 理解:
- *   只记下目录、告诉伙伴一声,不批量导入;伙伴随后读候选、写判断,格子随之出现。
- * - 接手后:项目胶囊、一行汇总(伙伴还在读时显示「正在了解…」)、两列等高的任务格、最近产出。
- *   只显示伙伴判为没做完 / 聊过没下文的,以及本来就在跑 / 等你 / 排队的任务与自动化。
- * - 点任务格在本标签内打开详情:伙伴的判断、最近内容、补一句让伙伴接着做。
+ *   只记下目录、告诉伙伴一声,不批量导入;伙伴随后读候选、写判断,条目随之出现。
+ * - 接手后:项目胶囊、伙伴还在读时一行「正在了解…」、单列任务列表、最近产出。列表按
+ *   等你 / 在做 / 待做 / 做完 分组(做完默认折叠),每条两层:完整标题 + 一行小标签。
+ * - 点一条在本标签内打开详情:伙伴的判断、最近内容、补一句让伙伴接着做。
  */
 
 /** 默认展示几格;「全部 N」展开其余。 */
-const DEFAULT_TILE_COUNT = 6;
 const MAX_OUTPUTS = 4;
 
 type ChatStore = typeof import('@/lib/makerChatStore').makerChatStore;
@@ -470,19 +472,24 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
             directories={directories}
             onAdd={directories.length < BOT_WORKBENCH_MAX_DIRECTORIES ? () => setAdding(true) : undefined}
           />
-          <Summary
-            tiles={tiles}
-            understanding={understanding ? { name: botName, project: understandingProject } : null}
-          />
+          {understanding ? (
+            <p className="flex items-center gap-1.5 px-5 pb-3 pt-1 text-13 leading-5 text-[var(--text-secondary)]">
+              <Spinner size={12} aria-hidden className="shrink-0" />
+              <span className="min-w-0 truncate">
+                {t('bots.workbench.understanding', { name: botName, project: understandingProject })}
+              </span>
+            </p>
+          ) : null}
         </>
       )}
 
       {/* 还没接手项目时,伙伴已有的自动化(例行任务、导入来的自动化)照常列在下面。 */}
       {!picking || routineTiles.length > 0 ? (
-        <TaskSection
+        <TaskGroups
           tiles={picking ? routineTiles : tiles}
           now={now}
           language={i18n.language}
+          showEmpty={!picking && !understanding}
           onOpen={openTile}
         />
       ) : null}
@@ -868,90 +875,155 @@ function ProjectCapsules({
   );
 }
 
-function Summary({
-  tiles,
-  understanding,
+// ─── 任务列表:单列、按四组、每条两层 ─────────────────────────────────
+
+/** 「等你」组第二层写等的是什么;其它组不写状态词。 */
+function waitingText(tile: WorkbenchTile, t: Translate): string {
+  if (tile.state === 'waiting') return t('bots.workbench.line.waiting');
+  const kind = tile.line.kind;
+  if (kind === 'interrupted' || kind === 'errored' || kind === 'failed') return t(`bots.workbench.line.${kind}`);
+  return t('bots.workbench.line.errored');
+}
+
+/** 第二层的标签:非 Cindy 来源、PR / Issue / 建议、自动化的周期与下次运行。 */
+function tileLabels(tile: WorkbenchTile, t: Translate, language: string, now: number): string[] {
+  if (tile.type === 'item') return [itemLabel(tile, t)];
+  if (tile.type === 'session' || tile.type === 'external') {
+    return tile.origin === 'claude-code' || tile.origin === 'codex' || tile.origin === 'pi' ? [originLabel(tile.origin, t)] : [];
+  }
+  const cycle =
+    (tile.type === 'schedule' ? scheduleCycle(tile.schedule, t, language) : routineCycle(tile.triggers, t, language))
+    ?? t('bots.workbench.kind.automationPlain');
+  const line = tile.line;
+  const extra =
+    line.kind === 'next'
+      ? formatNextRun(line.at, now, t as Parameters<typeof formatNextRun>[2])
+      : line.kind === 'paused' || line.kind === 'disabled'
+        ? t(`bots.workbench.line.${line.kind}`)
+        : null;
+  return extra ? [cycle, extra] : [cycle];
+}
+
+function tileTime(tile: WorkbenchTile, language: string, now: number): string | null {
+  if (tile.state === 'running' && tile.startedAtMs) return elapsed(tile.startedAtMs, now);
+  if (tile.type === 'schedule' || tile.type === 'routine') return null;
+  return relativeTime(tile.lastActiveMs, language, now);
+}
+
+function TaskRow({
+  tile,
+  group,
+  now,
+  language,
+  onOpen,
 }: {
-  tiles: readonly WorkbenchTile[];
-  understanding: { name: string; project: string } | null;
+  tile: WorkbenchTile;
+  group: WorkbenchGroupKey;
+  now: number;
+  language: string;
+  onOpen: (tile: WorkbenchTile) => void;
 }) {
   const { t } = useTranslation();
-  if (understanding) {
-    return (
-      <p className="flex items-center gap-1.5 truncate px-5 pb-4 pt-2.5 text-13 leading-5 text-[var(--text-secondary)]">
-        <Spinner size={12} aria-hidden className="shrink-0" />
-        <span className="truncate">{t('bots.workbench.understanding', understanding)}</span>
-      </p>
-    );
-  }
-  const live = (state: WorkbenchTaskState) => tiles.filter((tile) => tile.state === state).length;
-  const verdict = (value: 'unfinished' | 'idea') =>
-    tiles.filter((tile) => 'verdict' in tile && tile.verdict === value && workbenchTileLiveRank(tile) > 0).length;
-  const automations = tiles.filter((tile) => tile.type === 'schedule' || tile.type === 'routine').length;
-  const parts = [
-    ...(['running', 'waiting', 'queued'] as const)
-      .filter((state) => live(state) > 0)
-      .map((state) => t(`bots.workbench.summary.${state}`, { count: live(state) })),
-    ...(['unfinished', 'idea'] as const)
-      .filter((value) => verdict(value) > 0)
-      .map((value) => t(`bots.workbench.summary.${value}`, { count: verdict(value) })),
-    ...(automations > 0 ? [t('bots.workbench.summaryAutomations', { count: automations })] : []),
-  ];
+  const title = tile.title || t('bots.workbench.untitled');
+  const waiting = group === 'waiting' ? waitingText(tile, t) : null;
+  const labels = tileLabels(tile, t, language, now);
+  const time = tileTime(tile, language, now);
   return (
-    <p className="truncate px-5 pb-4 pt-2.5 text-13 leading-5 tabular-nums text-[var(--text-secondary)]">
-      {parts.length > 0 ? parts.join(' · ') : t('bots.workbench.summaryEmpty')}
-    </p>
+    <li>
+      <button
+        type="button"
+        onClick={() => onOpen(tile)}
+        aria-label={t('bots.workbench.openTask', { title, state: t(`bots.workbench.group.${group}`) })}
+        className="flex w-full min-w-0 flex-col rounded-xl bg-[var(--surface-elevated)] px-3.5 py-3 text-left outline-none transition-colors hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+      >
+        <span className="line-clamp-3 text-14 font-medium leading-5 text-[var(--text-primary)] [overflow-wrap:anywhere]">
+          {title}
+        </span>
+        <span className="mt-1.5 flex min-w-0 items-center gap-1.5 text-12 leading-[18px] text-[var(--text-tertiary)]">
+          {waiting ? (
+            <>
+              <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--card-status-awaiting)]" />
+              <span className="shrink-0 text-[var(--text-secondary)]">{waiting}</span>
+            </>
+          ) : null}
+          {labels.length > 0 ? (
+            <span className="min-w-0 truncate">
+              {waiting ? '· ' : ''}
+              {labels.join(' · ')}
+            </span>
+          ) : null}
+          <span className="flex-1" />
+          {time ? <span className="shrink-0 tabular-nums">{time}</span> : null}
+        </span>
+      </button>
+    </li>
   );
 }
 
-/** 在做 / 等你 / 排队的格子返回 0,其余 1;汇总里没做完 / 聊过没下文只数没在跑的。 */
-function workbenchTileLiveRank(tile: WorkbenchTile): number {
-  return tile.state === 'running' || tile.state === 'waiting' || tile.state === 'queued' ? 0 : 1;
-}
-
-// ─── 任务格 ─────────────────────────────────────────────────────────
-
-function TaskSection({
+function TaskGroups({
   tiles,
   now,
   language,
+  showEmpty,
   onOpen,
 }: {
   tiles: readonly WorkbenchTile[];
   now: number;
   language: string;
-  onOpen?: (tile: WorkbenchTile) => void;
+  showEmpty: boolean;
+  onOpen: (tile: WorkbenchTile) => void;
 }) {
   const { t } = useTranslation();
-  const [expanded, setExpanded] = useState(false);
-  const shown = expanded ? tiles : tiles.slice(0, DEFAULT_TILE_COUNT);
+  const groups = useMemo(() => groupWorkbenchTiles(tiles), [tiles]);
+  const [openDone, setOpenDone] = useState(false);
+  if (groups.length === 0) {
+    return showEmpty ? (
+      <p className="px-5 pb-5 pt-1 text-12 leading-[18px] text-[var(--text-tertiary)]">{t('bots.workbench.tasksEmpty')}</p>
+    ) : null;
+  }
   return (
-    <section className="border-t border-[var(--border-default)]">
-      <div className="flex h-11 items-center gap-1.5 pl-5 pr-3.5">
-        <h3 className="flex-1 text-16 font-medium leading-6 text-[var(--text-primary)]">{t('bots.workbench.tasks')}</h3>
-        {tiles.length > DEFAULT_TILE_COUNT ? (
-          <Button
-            variant="secondary"
-            size="sm"
-            tone="quiet"
-            compact
-            aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            {expanded ? t('bots.workbench.showLess') : t('bots.workbench.showAll', { count: tiles.length })}
-          </Button>
-        ) : null}
-      </div>
-      {tiles.length === 0 ? (
-        <p className="px-5 pb-5 text-12 leading-[18px] text-[var(--text-tertiary)]">{t('bots.workbench.tasksEmpty')}</p>
-      ) : (
-        <div className="grid grid-cols-2 gap-2 px-5 pb-5">
-          {shown.map((tile) => (
-            <TaskTile key={tile.key} tile={tile} now={now} language={language} onOpen={onOpen} />
-          ))}
-        </div>
-      )}
-    </section>
+    <div className="flex flex-col gap-5 px-5 pb-5 pt-1">
+      {groups.map((group) => {
+        const open = !group.defaultCollapsed || openDone;
+        const label = t(`bots.workbench.group.${group.key}`);
+        const heading = (
+          <>
+            <span>{label}</span>
+            <span className="font-normal tabular-nums text-[var(--text-tertiary)]">{group.tiles.length}</span>
+          </>
+        );
+        return (
+          <section key={group.key} aria-label={label}>
+            {group.defaultCollapsed ? (
+              <button
+                type="button"
+                aria-expanded={open}
+                onClick={() => setOpenDone((value) => !value)}
+                className="-mx-1 flex h-6 items-center gap-1.5 rounded-[8px] px-1 text-13 font-medium leading-5 text-[var(--text-secondary)] outline-none transition-colors hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              >
+                {heading}
+                <ChevronRight
+                  size={14}
+                  aria-hidden
+                  className={cn('text-[var(--text-tertiary)] transition-transform', open && 'rotate-90')}
+                />
+              </button>
+            ) : (
+              <h3 className="flex h-6 items-center gap-1.5 text-13 font-medium leading-5 text-[var(--text-secondary)]">
+                {heading}
+              </h3>
+            )}
+            {open ? (
+              <ul className="mt-2 flex flex-col gap-2">
+                {group.tiles.map((tile) => (
+                  <TaskRow key={tile.key} tile={tile} group={group.key} now={now} language={language} onOpen={onOpen} />
+                ))}
+              </ul>
+            ) : null}
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1053,131 +1125,6 @@ function ItemIcon({ tile }: { tile: ItemTile }) {
     <span aria-hidden className="flex size-3 shrink-0 items-center justify-center">
       <Icon size={13} strokeWidth={1.8} className="text-[var(--text-tertiary)]" />
     </span>
-  );
-}
-
-function tileKind(tile: WorkbenchTile, t: Translate, language: string): string {
-  if (tile.type === 'item') return `${t(`bots.workbench.verdict.${tile.verdict}`)} · ${itemLabel(tile, t)}`;
-  if (tile.type === 'session' || tile.type === 'external') {
-    const live = tile.state === 'running' || tile.state === 'waiting' || tile.state === 'queued';
-    if (tile.verdict && !live) {
-      // 「没做完 · 来自 Claude Code」;Cindy 里的原有任务只写判断。
-      const verdict = t(`bots.workbench.verdict.${tile.verdict}`);
-      return tile.origin !== 'existing' ? `${verdict} · ${originLabel(tile.origin, t)}` : verdict;
-    }
-    return originLabel(tile.origin, t);
-  }
-  const cycle =
-    tile.type === 'schedule' ? scheduleCycle(tile.schedule, t, language) : routineCycle(tile.triggers, t, language);
-  return cycle ? t('bots.workbench.kind.automation', { cycle }) : t('bots.workbench.kind.automationPlain');
-}
-
-function tileLine(tile: WorkbenchTile, t: Translate, now: number): string {
-  // 伙伴写的下一步优先;在跑的任务仍显示当前动作。
-  const live = tile.state === 'running' || tile.state === 'waiting' || tile.state === 'queued';
-  if ('next' in tile && tile.next && !live) return tile.next;
-  const line = tile.line;
-  switch (line.kind) {
-    case 'action':
-    case 'summary':
-      return line.text;
-    case 'waiting':
-      return t('bots.workbench.line.waiting');
-    case 'queued':
-      return t('bots.workbench.line.queued');
-    case 'interrupted':
-      return t('bots.workbench.line.interrupted');
-    case 'errored':
-      return t('bots.workbench.line.errored');
-    case 'failed':
-      return line.text ?? t('bots.workbench.line.failed');
-    case 'next':
-      return formatNextRun(line.at, now, t as Parameters<typeof formatNextRun>[2]) ?? '';
-    case 'manual':
-      return t('bots.workbench.line.manual');
-    case 'paused':
-      return t('bots.workbench.line.paused');
-    case 'disabled':
-      return t('bots.workbench.line.disabled');
-    case 'last-run':
-      return line.text
-        ? t('bots.workbench.line.lastRun', { text: line.text })
-        : t(line.ok ? 'bots.workbench.line.lastRunOk' : 'bots.workbench.line.lastRunFailed');
-    case 'never-run':
-      return t('bots.workbench.line.neverRun');
-    default:
-      return '';
-  }
-}
-
-function TaskTile({
-  tile,
-  now,
-  language,
-  onOpen,
-}: {
-  tile: WorkbenchTile;
-  now: number;
-  language: string;
-  onOpen?: (tile: WorkbenchTile) => void;
-}) {
-  const { t } = useTranslation();
-  const title = tile.title || t('bots.workbench.untitled');
-  const judged = 'verdict' in tile && tile.verdict !== null;
-  const time =
-    tile.state === 'running' && tile.startedAtMs
-      ? elapsed(tile.startedAtMs, now)
-      : tile.state === 'done' || judged
-        ? relativeTime(tile.lastActiveMs, language, now)
-        : null;
-  const content = (
-    <>
-      <span className="flex h-[18px] items-center gap-1.5 text-12 leading-[18px] text-[var(--text-tertiary)]">
-        {tile.type === 'item' ? (
-          <ItemIcon tile={tile} />
-        ) : (
-          <StateIcon state={tile.state} verdict={'verdict' in tile ? tile.verdict : null} />
-        )}
-        <span className="min-w-0 flex-1 truncate">{tileKind(tile, t, language)}</span>
-        {time ? <span className="shrink-0 tabular-nums">{time}</span> : null}
-      </span>
-      <span
-        className={cn(
-          'mt-1 line-clamp-2 h-10 text-14 font-medium leading-5 [overflow-wrap:anywhere]',
-          tile.state === 'done' && !judged ? 'text-[var(--text-secondary)]' : 'text-[var(--text-primary)]',
-        )}
-      >
-        {title}
-      </span>
-      <span
-        className={cn(
-          'mt-auto block h-[18px] truncate text-12 leading-[18px]',
-          tile.state === 'waiting'
-            ? 'text-[var(--text-primary)]'
-            : tile.state === 'running' || tile.state === 'queued'
-              ? 'text-[var(--text-secondary)]'
-              : 'text-[var(--text-tertiary)]',
-        )}
-      >
-        {tileLine(tile, t, now)}
-      </span>
-    </>
-  );
-  const frame =
-    'flex h-[104px] w-full min-w-0 flex-col rounded-xl border border-[var(--border-default)] px-3 py-2.5 text-left';
-  if (!onOpen) return <div className={frame}>{content}</div>;
-  return (
-    <button
-      type="button"
-      onClick={() => onOpen(tile)}
-      aria-label={t('bots.workbench.openTask', { title, state: tileKind(tile, t, language) })}
-      className={cn(
-        frame,
-        'outline-none transition-colors hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-      )}
-    >
-      {content}
-    </button>
   );
 }
 

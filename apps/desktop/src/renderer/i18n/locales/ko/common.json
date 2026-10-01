@@ -7815,17 +7815,7 @@
       "dirUnavailable": "이 폴더를 열 수 없습니다. 다른 폴더를 선택하세요.",
       "tooManyDirs": "{{name}}에게는 프로젝트를 최대 {{count}}개까지 맡길 수 있습니다",
       "sendFailed": "{{name}}에게 보내지 못했습니다. 다시 시도하세요.",
-      "summaryAutomations_other": "자동화 {{count}}개",
-      "summary": {
-        "running": "{{count}}개 실행 중",
-        "waiting": "{{count}}개 응답 대기",
-        "queued": "{{count}}개 대기 중",
-        "unfinished": "{{count}}개 미완료",
-        "idea": "{{count}}개 후속 없음"
-      },
-      "tasks": "세션",
       "tasksEmpty": "이어서 할 세션이 아직 없습니다.",
-      "summaryEmpty": "이어서 할 세션이 아직 없습니다",
       "understanding": "{{name}}이(가) {{project}}을(를) 파악하는 중…",
       "untitled": "제목 없는 세션",
       "continueMessage": "‘{{title}}’ 이어서: {{text}}",
@@ -7848,8 +7838,6 @@
         "noRef": "첨부된 참고 링크가 없습니다.",
         "refBlocked": "맡긴 프로젝트 밖의 경로라서 열지 않았습니다."
       },
-      "showAll": "전체 {{count}}",
-      "showLess": "접기",
       "openTask": "‘{{title}}’ 열기({{state}})",
       "outputs": "결과물",
       "outputsEmpty": "{{name}}이(가) 만든 파일이 여기에 표시됩니다.",
@@ -7861,6 +7849,12 @@
         "automation": "자동화",
         "done": "완료"
       },
+      "group": {
+        "waiting": "응답 대기",
+        "running": "실행 중",
+        "todo": "할 일",
+        "done": "완료"
+      },
       "kind": {
         "existing": "기존 세션",
         "delegated": "요청한 일",
@@ -7870,7 +7864,6 @@
         "pr": "PR #{{number}}",
         "issue": "Issue #{{number}}",
         "idea": "제안",
-        "automation": "자동화 · {{cycle}}",
         "automationPlain": "자동화"
       },
       "cycle": {

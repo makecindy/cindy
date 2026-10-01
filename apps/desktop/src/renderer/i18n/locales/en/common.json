@@ -7827,18 +7827,7 @@
       "dirUnavailable": "This folder can't be opened. Try another one.",
       "tooManyDirs": "{{name}} can look after up to {{count}} projects",
       "sendFailed": "Could not send to {{name}}. Try again.",
-      "summaryAutomations_one": "{{count}} automation",
-      "summaryAutomations_other": "{{count}} automations",
-      "summary": {
-        "running": "{{count}} running",
-        "waiting": "{{count}} waiting on you",
-        "queued": "{{count}} queued",
-        "unfinished": "{{count}} unfinished",
-        "idea": "{{count}} not followed up"
-      },
-      "tasks": "Sessions",
       "tasksEmpty": "Nothing to pick up yet.",
-      "summaryEmpty": "Nothing to pick up yet",
       "understanding": "{{name}} is getting to know {{project}}…",
       "untitled": "Untitled session",
       "continueMessage": "Continue “{{title}}”: {{text}}",
@@ -7861,8 +7850,6 @@
         "noRef": "No reference attached.",
         "refBlocked": "This path is outside the handed-over projects, so it wasn't opened."
       },
-      "showAll": "All {{count}}",
-      "showLess": "Show less",
       "openTask": "Open “{{title}}” ({{state}})",
       "outputs": "Outputs",
       "outputsEmpty": "Files {{name}} makes will show up here.",
@@ -7874,6 +7861,12 @@
         "automation": "Automation",
         "done": "Done"
       },
+      "group": {
+        "waiting": "Waiting on you",
+        "running": "Running",
+        "todo": "To do",
+        "done": "Done"
+      },
       "kind": {
         "existing": "Existing session",
         "delegated": "You asked",
@@ -7883,7 +7876,6 @@
         "pr": "PR #{{number}}",
         "issue": "Issue #{{number}}",
         "idea": "Suggestion",
-        "automation": "Automation · {{cycle}}",
         "automationPlain": "Automation"
       },
       "cycle": {

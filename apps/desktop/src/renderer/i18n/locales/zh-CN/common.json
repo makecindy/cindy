@@ -7815,17 +7815,7 @@
       "dirUnavailable": "这个文件夹打不开，换一个试试",
       "tooManyDirs": "最多交给{{name}} {{count}} 个项目",
       "sendFailed": "没能发给{{name}}，请重试",
-      "summaryAutomations_other": "{{count}} 个自动化",
-      "summary": {
-        "running": "{{count}} 在做",
-        "waiting": "{{count}} 等你",
-        "queued": "{{count}} 排队",
-        "unfinished": "{{count}} 件没做完",
-        "idea": "{{count}} 件聊过没下文"
-      },
-      "tasks": "任务",
       "tasksEmpty": "还没有需要接着做的任务。",
-      "summaryEmpty": "还没有需要接着做的任务",
       "understanding": "{{name}}正在了解 {{project}}…",
       "untitled": "未命名任务",
       "continueMessage": "接着做「{{title}}」：{{text}}",
@@ -7848,8 +7838,6 @@
         "noRef": "没有附参考链接。",
         "refBlocked": "这个路径不在交给伙伴的项目里，没有打开。"
       },
-      "showAll": "全部 {{count}}",
-      "showLess": "收起",
       "openTask": "打开「{{title}}」（{{state}}）",
       "outputs": "产出",
       "outputsEmpty": "{{name}}做出的文件会放在这里。",
@@ -7861,6 +7849,12 @@
         "automation": "自动化",
         "done": "做完"
       },
+      "group": {
+        "waiting": "等你",
+        "running": "在做",
+        "todo": "待做",
+        "done": "做完"
+      },
       "kind": {
         "existing": "原有任务",
         "delegated": "你交代的",
@@ -7870,7 +7864,6 @@
         "pr": "PR #{{number}}",
         "issue": "Issue #{{number}}",
         "idea": "建议",
-        "automation": "自动化 · {{cycle}}",
         "automationPlain": "自动化"
       },
       "cycle": {

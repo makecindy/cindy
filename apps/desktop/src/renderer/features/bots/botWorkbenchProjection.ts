@@ -553,6 +553,47 @@ export function buildWorkbenchTiles(input: {
   return tiles.sort((a, b) => workbenchTileRank(a) - workbenchTileRank(b) || b.lastActiveMs - a.lastActiveMs);
 }
 
+// ─── 工作台列表的分组 ─────────────────────────────────────────────
+
+/** 列表分四组,顺序固定:等你 → 在做 → 待做 → 做完。状态由所在组表达,条目里不再写状态词。 */
+export type WorkbenchGroupKey = 'waiting' | 'running' | 'todo' | 'done';
+
+export const WORKBENCH_GROUP_ORDER: readonly WorkbenchGroupKey[] = ['waiting', 'running', 'todo', 'done'];
+
+/**
+ * 一条归哪一组:
+ * - 等你:在等主人回复,或任务停在出错 / 被打断 / 后台任务失败(要主人拿主意);
+ * - 在做:正在跑的任务与自动化;
+ * - 待做:伙伴判为没做完 / 聊过没下文的、排队中的、PR / issue / 建议条目;
+ * - 做完:其余——收尾了的后台任务、待命或停用的自动化。
+ */
+export function workbenchTileGroup(tile: WorkbenchTile): WorkbenchGroupKey {
+  if (tile.state === 'waiting') return 'waiting';
+  if (tile.state === 'stopped' && (tile.type === 'session' || tile.type === 'external')) return 'waiting';
+  if (tile.state === 'running') return 'running';
+  if (tile.state === 'queued' || tile.type === 'item') return 'todo';
+  if ('verdict' in tile && tile.verdict) return 'todo';
+  return 'done';
+}
+
+export interface WorkbenchTileGroup {
+  key: WorkbenchGroupKey;
+  tiles: WorkbenchTile[];
+  /** 做完一组默认折叠,只在标题旁显示数量。 */
+  defaultCollapsed: boolean;
+}
+
+/** 按固定顺序分组,组内保持输入顺序(`buildWorkbenchTiles` 已按最近活动排好);空组不出。 */
+export function groupWorkbenchTiles(tiles: readonly WorkbenchTile[]): WorkbenchTileGroup[] {
+  const buckets = new Map<WorkbenchGroupKey, WorkbenchTile[]>(WORKBENCH_GROUP_ORDER.map((key) => [key, []]));
+  for (const tile of tiles) buckets.get(workbenchTileGroup(tile))!.push(tile);
+  return WORKBENCH_GROUP_ORDER.flatMap((key) => {
+    const grouped = buckets.get(key)!;
+    if (key === 'done') grouped.sort((a, b) => b.lastActiveMs - a.lastActiveMs);
+    return grouped.length > 0 ? [{ key, tiles: grouped, defaultCollapsed: key === 'done' }] : [];
+  });
+}
+
 // ─── 空状态项目清单的过滤与分档 ─────────────────────────────────────
 
 /** 主进程给的本机路径(主目录、应用数据目录、系统临时目录);拿不到时为 null。 */

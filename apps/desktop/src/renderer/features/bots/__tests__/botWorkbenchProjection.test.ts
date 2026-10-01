@@ -8,7 +8,9 @@ import {
   isNonProjectDir,
   looksGeneratedDirName,
   countUnjudgedCandidates,
+  groupWorkbenchTiles,
   tierWorkbenchProjectOptions,
+  workbenchTileGroup,
   type WorkbenchProjectOption,
   type WorkbenchDelegationInput,
 } from '../botWorkbenchProjection';
@@ -262,6 +264,92 @@ describe('buildWorkbenchTiles', () => {
       routines: [{ id: 'r-1', name: '每日提醒', enabled: true, triggers: [], updatedAt: 1 }],
     });
     expect(tiles.map((tile) => tile.id)).toEqual(['r-1']);
+  });
+});
+
+describe('groupWorkbenchTiles', () => {
+  const judgment = (verdict: 'unfinished' | 'idea', title: string) => ({
+    title,
+    verdict,
+    next: `${title}的下一步`,
+    project: ART,
+    updatedAt: '2026-10-01T00:00:00.000Z',
+  });
+
+  function fixture() {
+    return buildWorkbenchTiles({
+      ...base,
+      sessions: [
+        session('waiting'),
+        session('errored'),
+        session('running'),
+        session('queued-bg'),
+        session('judged', { updatedAt: '2026-10-01T03:00:00.000Z' }),
+        session('finished-bg', { updatedAt: '2026-10-01T02:00:00.000Z' }),
+        session('failed-bg'),
+      ],
+      activity: new Map([
+        ['waiting', { phase: 'needs-interaction' }],
+        ['running', { phase: 'running', startedAtMs: 5 }],
+      ]),
+      erroredIds: new Set(['errored']),
+      delegations: [
+        delegation('queued-bg', 'queued'),
+        delegation('finished-bg', 'completed'),
+        delegation('failed-bg', 'failed'),
+      ],
+      judgments: {
+        judged: judgment('unfinished', '补描边'),
+        // 出错停下的任务即使伙伴判为没做完,也先放「等你」。
+        errored: judgment('unfinished', '导出报错'),
+        'idea:dark-icons': judgment('idea', '暗色图标'),
+        'pr:me/art#12': judgment('unfinished', '图标 PR'),
+      },
+      schedules: [
+        { id: 's-idle', name: '检查 PR', status: 'active', workspaceKind: 'project', workingDir: ART, nextFireAt: 99 },
+        { id: 's-off', name: '暂停的', status: 'paused', workspaceKind: 'project', workingDir: ART },
+      ],
+      routines: [{ id: 'r-run', name: '每日整理', enabled: true, activity: 'running', triggers: [], updatedAt: 1 }],
+    });
+  }
+
+  it('sorts every tile into waiting / running / to do / done', () => {
+    const groupOf = new Map(fixture().map((tile) => [tile.id, workbenchTileGroup(tile)]));
+    expect(Object.fromEntries(groupOf)).toEqual({
+      waiting: 'waiting',
+      errored: 'waiting',
+      'failed-bg': 'waiting',
+      running: 'running',
+      'r-run': 'running',
+      'queued-bg': 'todo',
+      judged: 'todo',
+      'idea:dark-icons': 'todo',
+      'pr:me/art#12': 'todo',
+      'finished-bg': 'done',
+      's-idle': 'done',
+      's-off': 'done',
+    });
+  });
+
+  it('keeps the fixed group order, collapses only done and reports its count', () => {
+    const groups = groupWorkbenchTiles(fixture());
+    expect(groups.map((group) => [group.key, group.defaultCollapsed])).toEqual([
+      ['waiting', false],
+      ['running', false],
+      ['todo', false],
+      ['done', true],
+    ]);
+    expect(groups.find((group) => group.key === 'done')!.tiles).toHaveLength(3);
+  });
+
+  it('leaves empty groups out', () => {
+    const tiles = buildWorkbenchTiles({
+      ...base,
+      sessions: [],
+      judgments: { 'idea:dark-icons': judgment('idea', '暗色图标') },
+    });
+    expect(groupWorkbenchTiles(tiles).map((group) => group.key)).toEqual(['todo']);
+    expect(groupWorkbenchTiles([])).toEqual([]);
   });
 });
 
