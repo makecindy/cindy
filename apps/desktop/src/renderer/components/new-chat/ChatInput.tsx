@@ -165,6 +165,7 @@ import {
 } from './sourceSwitch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PermissionSelector } from './PermissionSelector';
+import { PluginWriteAccessRecovery } from './PluginWriteAccessRecovery';
 import { ExtraDirsButton, type CollaborationMenuConfig } from './ExtraDirsButton';
 import { expandHostCapabilityInvocation } from '../../cindy-brain/hostCapabilityInvocation';
 import {
@@ -8223,19 +8224,8 @@ export function ChatInput({
             // 控制端纯镜像:运行时隧道 setPermissionMode,被控端持久化后广播回流更新分片。
             await makerApiFor(sessionId).setPermissionMode(sessionId, newMode);
           } else {
-            // runtime-first:运行时成功后才持久化，避免 UI/DB 先显示已切换而实际 agent 仍是旧档。
+            // Host 串行完成运行时、持久化和失败恢复，界面只等待最终结果。
             await window.electronAPI.maker.setPermissionMode(sessionId, newMode);
-            try {
-              await sessionService.update(sessionId, { permissionMode: newMode });
-            } catch (persistError) {
-              // DB 写入失败时尽力恢复运行时，保持用户看到的旧设置与实际行为一致。
-              try {
-                await window.electronAPI.maker.setPermissionMode(sessionId, previousMode);
-              } catch (rollbackError) {
-                log.warn('permission runtime rollback failed:', rollbackError);
-              }
-              throw persistError;
-            }
           }
         }
         // SSoT: notify parent so it refreshes `session.permissionMode` → props update.
@@ -9029,6 +9019,7 @@ export function ChatInput({
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
                 <PermissionSelector
+                  footer={sessionId && !getSessionDeviceId(sessionId) && !deviceLinkDeviceId && !sharedGuest ? <PluginWriteAccessRecovery key={sessionId} sessionId={sessionId} onGranted={onPermissionModeDidChange} /> : undefined}
                   permissionMode={activePermissionMode}
                   onPermissionModeChange={handlePermissionModeChange}
                   vendorKey={vendorKey}

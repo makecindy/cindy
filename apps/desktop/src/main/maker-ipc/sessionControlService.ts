@@ -110,8 +110,8 @@ export interface SessionControlServiceDeps {
     pendingQueue: AgentInputQueuedMessage[];
     consumingClientIds: string[];
   }>;
-  replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage): boolean;
-  removeQueuedMessage(sessionId: string, clientId: string): boolean;
+  replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage, expected?: AgentInputQueuedMessage): boolean;
+  removeQueuedMessage(sessionId: string, clientId: string, expected?: AgentInputQueuedMessage): boolean;
   createId(): string;
 }
 

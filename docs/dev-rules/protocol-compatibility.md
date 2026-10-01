@@ -45,7 +45,9 @@ warn/warning 状态检查项、等待或处理中的检查项和 warning issue
 源任务和文件保留可用，自动任务及消息渠道不转移。数据复用 peer 附件与 OSS；复制记录及目标回执
 仅用于幂等重试，不管理源任务执行权。写请求不进入自动重试白名单，无需服务端变更。
 `preflight` 检查目标实时资源；文件描述可为单附件或有序分段附件，每段复用已有协议和校验，
-复制不设固定总量上限。整组 Orca 沿用可选 `teamMigration: true` 能力声明，缺省不支持；
+复制不设固定总量上限；`estimate` 超过 `TASK_MIGRATION_MAX_FILES`（50 万）个项目文件时返回
+`MIGRATION_TOO_MANY_FILES`，控制端据此不开始复制，旧源端不返回该错误码。
+整组 Orca 沿用可选 `teamMigration: true` 能力声明，缺省不支持；
 `receive.files.additionalWorkspaces` 沿用同一文件描述，manifest 记录成员到目录的映射。
 双方必须支持复制通道；收到整组能力声明才发送团队，不尝试部分导入。
 范围、恢复与源目录保护见 [同机移动与跨电脑复制任务](../product-rules/task-device-migration.md)。

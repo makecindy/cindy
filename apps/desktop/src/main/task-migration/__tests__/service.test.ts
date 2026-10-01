@@ -6,7 +6,12 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { parseAttachmentOssRef } from '@cindy/device-link';
+import {
+  parseAttachmentOssRef,
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
+  TASK_MIGRATION_LOCAL_CHANNEL,
+  TASK_MIGRATION_MAX_FILES,
+} from '@cindy/device-link';
 
 const state = vi.hoisted(() => ({
   root: '',
@@ -36,6 +41,9 @@ const state = vi.hoisted(() => ({
     snapshot: null;
   }>,
   workers: [] as string[],
+  estimateLimits: [] as number[],
+  timeoutAction: '' as string,
+  exclusions: [] as string[],
 }));
 vi.mock('../../localDb/ipc/sessionCreatedBroadcast', () => ({
   emitSessionCreated: (id: string) => state.created(id),
@@ -88,6 +96,10 @@ vi.mock('../../device-link', () => ({
     opts?: { preSend(): void },
   ) => {
     opts?.preSend();
+    if (state.timeoutAction === args[0].action) {
+      const { DeviceLinkError } = await import('@cindy/device-link');
+      throw new DeviceLinkError('INVOKE_TIMEOUT', 'no invoke-result within 180000ms');
+    }
     const peer = device();
     const result = await state.context.run({ device: target, peer }, () =>
       requestTaskMigration(args[0]),
@@ -195,8 +207,15 @@ vi.mock('../../session-share/sessionShareImport', () => ({
     return { fidelity: 'full' };
   },
 }));
-vi.mock('../workspace', () => ({
-  estimateWorkspace: async () => ({ fileCount: 1, bytes: 8 }),
+vi.mock('../workspace', async (original) => ({
+  isExcludedFromWorkspace: (await original<typeof import('../workspace')>())
+    .isExcludedFromWorkspace,
+  managedWorktreeExclusions: async () => state.exclusions,
+  estimateWorkspace: async (_root: string, check: () => void, maxFiles: number) => {
+    state.estimateLimits.push(maxFiles);
+    check();
+    return { fileCount: 1, bytes: 8 };
+  },
   snapshotWorkspace: async (source: string, directory: string) => {
     state.snapshot();
     await fs.mkdir(directory, { recursive: true });
@@ -253,6 +272,9 @@ describe('resumable cross-computer copy', () => {
     state.exportMedia = { mediaMissing: 0, mediaDropped: 0 };
     state.sharingLatest = [];
     state.workers = [];
+    state.estimateLimits = [];
+    state.timeoutAction = '';
+    state.exclusions = [];
     const cwd = path.join(state.root, 'shared');
     await fs.mkdir(cwd);
     await fs.writeFile(path.join(cwd, 'draft'), 'original');
@@ -479,8 +501,55 @@ describe('resumable cross-computer copy', () => {
     await team();
     const result = await requestTaskMigration({ action: 'estimate', sessionId: 'fork' });
     expect(result.estimate).toEqual({ fileCount: 2, bytes: 16 });
+    // The file cap applies to the whole team, not to each directory separately.
+    expect(state.estimateLimits).toEqual([TASK_MIGRATION_MAX_FILES, TASK_MIGRATION_MAX_FILES - 1]);
     expect(state.exported).not.toHaveBeenCalled();
     expect(state.files.size).toBe(0);
+  });
+  it('stops a local estimate at the same budget the remote wait uses', async () => {
+    const start = Date.now();
+    const now = vi
+      .spyOn(Date, 'now')
+      .mockReturnValueOnce(start)
+      .mockReturnValue(start + TASK_MIGRATION_ESTIMATE_TIMEOUT_MS + 1);
+    try {
+      await expect(requestTaskMigration({ action: 'estimate', sessionId: 'fork' })).rejects.toThrow(
+        'MIGRATION_TIMEOUT',
+      );
+    } finally {
+      now.mockRestore();
+    }
+  });
+  it('reports a timed-out remote request as MIGRATION_TIMEOUT instead of a generic failure', async () => {
+    const { ipcMain } = await import('electron');
+    const handler = vi
+      .mocked(ipcMain.handle)
+      .mock.calls.findLast(([channel]) => channel === TASK_MIGRATION_LOCAL_CHANNEL)![1];
+    state.timeoutAction = 'estimate';
+    await expect(
+      handler({} as never, 'B', { action: 'estimate', sessionId: 'fork' }),
+    ).rejects.toThrow('MIGRATION_TIMEOUT');
+  });
+  it('ignores tasks running in other registered worktrees under the copied root', async () => {
+    const rows = state.rows.get('A')!;
+    const cwd = rows.get('fork')!.workingDir as string;
+    const managed = path.join(cwd, '.cindy-worktrees', 'other');
+    await fs.mkdir(managed, { recursive: true });
+    // Git's worktree registry is covered by the integration tier; inject its verdict here.
+    state.exclusions = [path.join('.cindy-worktrees', 'other')];
+    rows.get('sibling')!.workingDir = managed;
+    state.siblingRunning = true;
+    await start();
+    expect((await settled()).stage).toBe('complete');
+  });
+  it('still refuses while another task runs in an ordinary subdirectory of the copied root', async () => {
+    const rows = state.rows.get('A')!;
+    const nested = path.join(rows.get('fork')!.workingDir as string, 'packages');
+    await fs.mkdir(nested);
+    rows.get('sibling')!.workingDir = nested;
+    state.siblingRunning = true;
+    await start();
+    expect((await settled()).error).toBe('MIGRATION_SHARED_DIRECTORY_BUSY');
   });
   it('acknowledges start and retry with the registered running state', async () => {
     state.noSpace = true;

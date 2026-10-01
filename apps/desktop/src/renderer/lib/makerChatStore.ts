@@ -16623,9 +16623,8 @@ async function setFastMode(
  * 与 setFastMode 同款双路径:
  *  - 远程会话:控制端纯镜像, 只发运行时隧道 setPlanMode, 被控端持久化后经
  *    sessions:patched 回流收敛; 失败回滚乐观值并 reject。
- *  - 本机会话:server-first —— sessionService.update({ planModeEnabled }) 落库,
- *    再推 maker runtime(session 未 spawn / 已 close 时 no-op, 下次 lazy-create
- *    由 createOpts.planMode 兜底)。
+ *  - 本机会话:同步更新乐观 UI 并发送 IPC；Host 完成 runtime、落库和失败恢复。
+ *    UI 不再另写数据库或发第二次回滚，以免覆盖后来的用户选择。
  */
 async function setPlanMode(sessionId: string, enabled: boolean): Promise<void> {
   if (!sessionId) return;
@@ -16651,45 +16650,26 @@ async function setPlanMode(sessionId: string, enabled: boolean): Promise<void> {
     return;
   }
   // 乐观先行(bot review P2):store(下一次 createOpts / lazy-create 读)与 maker
-  // runtime(已 spawn 会话的 send 读 agent 武装态)都必须在任何 await 之前可见,
-  // 否则「勾选后立即回车」会以未武装状态发出(maker:send 对已存在会话忽略
-  // createOpts)。setPlanMode IPC 同步 invoke 也保证其先于后续 send IPC 到达 main。
+  // 输入快照必须在任何 await 之前可见。同步 invoke 保持与后续发送 IPC 的顺序，
+  // Host 的新输入入口在 send fence 外等待已有权限提交，内部续跑不等待。
   const previous = getOrCreateState(sessionId).planModeEnabled;
   setState(sessionId, (s) =>
     s.planModeEnabled === enabled
       ? s
       : { ...s, planModeEnabled: enabled, planModeRev: s.planModeRev + 1 },
   );
-  // 轮 40-w4-t17 HIGH-1:runtime setPlanMode 失败必须 fail-closed —— 旧实现只
-  // catch 记日志, 继续持久化 DB, UI/DB 显示已开启但 PI runtime 实际未进入
-  // plan mode(状态分叉, 下一条消息以普通模式执行)。
-  const runtimePush = window.electronAPI.maker
-    .setPlanMode(sessionId, enabled)
-    .catch((err: unknown) => {
-      // 回滚乐观值, 不持久化, UI 不谎报。
-      setState(sessionId, (s) =>
-        s.planModeEnabled === enabled
-          ? { ...s, planModeEnabled: previous, planModeRev: s.planModeRev + 1 }
-          : s,
-      );
-      log.warn('setPlanMode runtime push failed — plan mode not applied', err);
-      throw err;
-    });
   try {
-    await runtimePush;
-    await sessionService.update(sessionId, { planModeEnabled: enabled });
+    // Host owns runtime, persistence and recovery as one permission commit.
+    await window.electronAPI.maker.setPlanMode(sessionId, enabled);
   } catch (err) {
-    // 持久化失败 → 回滚乐观值(store + runtime 尽力), UI 不谎报已开启。
     setState(sessionId, (s) =>
       s.planModeEnabled === enabled
         ? { ...s, planModeEnabled: previous, planModeRev: s.planModeRev + 1 }
         : s,
     );
-    void window.electronAPI.maker.setPlanMode(sessionId, previous).catch(() => {});
-    log.warn('setPlanMode persist failed:', err);
+    log.warn('setPlanMode commit failed:', err);
     throw err;
   }
-  await runtimePush;
 }
 
 /**

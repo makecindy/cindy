@@ -45,7 +45,8 @@
       "MIGRATION_TARGET_MODEL_UNAVAILABLE": "대상 컴퓨터에 이 작업 엔진에서 사용할 수 있는 모델이 없습니다. 먼저 제공자를 연결하세요.",
       "MIGRATION_UNSUPPORTED": "두 컴퓨터 모두 작업 복사을 지원하는 버전으로 업데이트하세요.",
       "MIGRATION_TASK_QUEUED": "이 작업에 대기 중인 메시지가 있습니다. 처리하거나 삭제한 후 복사하세요.",
-      "MIGRATION_SOURCE_CHANGED": "준비 중 원본 작업이 변경되었습니다. 복사를 다시 시도하세요."
+      "MIGRATION_SOURCE_CHANGED": "준비 중 원본 작업이 변경되었습니다. 복사를 다시 시도하세요.",
+      "MIGRATION_TIMEOUT": "원본 컴퓨터가 제한 시간 내에 응답하지 않았습니다. 잠시 후 다시 시도하세요."
     },
     "successTitle": "복사 완료",
     "successDescription": "{{name}}에 복사했습니다.",
@@ -60,7 +61,9 @@
     "estimating": "파일 수와 크기 계산 중…",
     "fileSummary": "프로젝트 파일: {{count}}개, 총 {{size}}",
     "estimateNote": "숨김 파일을 포함한 복사 전 예상치입니다. 별도로 복사하는 Git 기록, 작업 대화 및 첨부 파일은 제외됩니다. 파일 변경에 따라 최종 크기가 달라질 수 있습니다.",
-    "estimateFailed": "파일을 집계하지 못했습니다. 원본 컴퓨터의 연결과 버전을 확인한 후 닫고 다시 시도하세요."
+    "estimateFailed": "파일을 집계하지 못했습니다. 원본 컴퓨터의 연결과 버전을 확인한 후 닫고 다시 시도하세요.",
+    "estimateTimeout": "집계 시간이 초과되었습니다. 프로젝트 파일이 너무 많아 원본 컴퓨터가 제한 시간 내에 집계하지 못했습니다. 파일이 더 적은 프로젝트를 복사해 보세요.",
+    "estimateTooManyFiles": "프로젝트 파일이 {{limit, number}}개를 넘어 복사할 수 없습니다. 파일이 더 적은 프로젝트를 복사하세요."
   },
   "sharedTask": {
     "selfJoin": "내가 시작한 공유 작업이므로 참여할 필요가 없습니다. “내가 공유한 항목”에서 여세요.",
@@ -5490,6 +5493,9 @@
         "agentUserActionDetail": "클릭 한 번마다 한 번만 시작할 수 있으며, 해당 카드가 속한 세션에서만 사용할 수 있습니다.",
         "agentBackground": "백그라운드에서 Agent의 새 작업을 자동으로 시작할 수 있음",
         "agentBackgroundDetail": "매번 클릭할 필요는 없지만, 이전에 이 플러그인과 연결한 세션에서만 사용할 수 있습니다. 모델 비용이 발생할 수 있습니다.",
+        "agentTasksRequest": "세션 권한 확인",
+        "agentTasks": "이 플러그인의 Cindy 세션을 만들고 관리할 수 있음",
+        "agentTasksDetail": "메시지를 보내고 결과를 읽으며 자신의 실행을 중지할 수 있습니다. 세션은 사용자에게 표시됩니다. 플러그인의 AI 설정을 사용하며 모델 비용이 발생할 수 있습니다. 다른 세션에 대한 접근 권한은 부여하지 않습니다.",
         "agentErrand": "Cindy Agent에게 작업을 맡기고 결과를 받아올 수 있음",
         "agentErrandDetail": "작업은 이 플러그인 전용 세션에서 실행되며, 사이드바에서 언제든 확인하고 중단할 수 있습니다. 기본은 읽기 전용이며, 권한 상향은 플러그인 설정에서 직접 해야 합니다. 모델 비용이 발생할 수 있습니다.",
         "agentSchedule": "자동화 새로 만들기를 요청할 수 있음",
@@ -9056,6 +9062,7 @@
         "openSettings": "설정 열기"
       },
       "permissionSwitchFailed": "권한 모드 변경에 실패해 이전 설정을 유지했습니다",
+      "retryPluginWriteAccess": "플러그인 쓰기 권한 다시 확인",
       "fullAccessConfirmation": {
         "title": "Full access를 활성화할까요?",
         "description": "Full access는 작업 공간 샌드박스를 비활성화하고 일반 승인을 건너뜁니다. Cindy는 확인 없이 다음 작업을 할 수 있습니다:",
@@ -10483,6 +10490,7 @@
       "projects": "프로젝트",
       "newProject": "새 프로젝트",
       "createProjectFailed": "프로젝트 생성 실패",
+      "selectFolderFailed": "폴더를 선택하지 못했습니다. 다시 시도해 주세요.",
       "projectsToggleExpand": "모든 프로젝트 세션 펼치기",
       "projectsToggleCollapse": "모든 프로젝트 세션 접기",
       "filterAria": "사이드바 표시 설정(상태: {{status}}, Harness: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}})",
@@ -14270,5 +14278,15 @@
   "pluginDeviceAuthorization": {
     "title": "플러그인 로그인 인증",
     "description": "이 기기에서 {{host}}를 열어 이 작업을 실행하는 플러그인을 인증하세요. 인증 정보는 인증을 시작한 기기에 저장됩니다."
+  },
+  "pluginTaskWriteAccess": {
+    "title": "이 플러그인의 AI가 파일을 수정하도록 허용할까요?",
+    "message": "“{{name}}”의 AI가 파일을 수정하도록 허용하고 계속할까요?",
+    "detail": "이 플러그인의 AI 권한을 수정 가능으로 변경하며, 이후 작업에도 적용됩니다. 별도의 작업 디렉터리는 시스템 샌드박스가 아니며, 명령에는 계속 Cindy의 권한 검사가 적용됩니다. 플러그인 AI 설정에서 언제든지 읽기 전용으로 되돌릴 수 있습니다.",
+    "allow": "허용하고 계속",
+    "cancel": "지금은 허용 안 함",
+    "autoTitle": "Auto 자동 승인 사용",
+    "autoMessage": "“{{name}}”에 Auto 자동 승인을 허용할까요?",
+    "autoDetail": "Cindy가 주 작업과 Worker 동작을 자동 심사합니다. 확인이 필요하거나 거부된 동작은 일시 중지됩니다. 전체 접근 권한이 아니며 다른 작업의 전역 권한은 변경하지 않습니다."
   }
 }

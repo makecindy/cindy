@@ -324,6 +324,8 @@ export interface GetMessagesParams {
 
 export interface HistoryMessage {
   id: string;
+  /** Stable send/terminal identity, distinct from the storage row ID. */
+  clientId?: string;
   sessionId: string;
   sessionWorkingDir: string | null;
   sessionAgentKind: string;
@@ -462,6 +464,7 @@ export async function getMessagesForHistory(
     const camel = messageToCamel(r.m);
     return {
       id: camel.id,
+      clientId: camel.clientId,
       sessionId: camel.sessionId,
       sessionWorkingDir: r.sWorkingDir,
       sessionAgentKind: r.sAgentKind,

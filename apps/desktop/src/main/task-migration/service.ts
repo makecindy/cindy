@@ -5,6 +5,9 @@ import { app, ipcMain } from 'electron';
 import {
   TASK_MIGRATION_CHANNEL,
   TASK_MIGRATION_LOCAL_CHANNEL,
+  TASK_MIGRATION_MAX_FILES,
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
+  DeviceLinkError,
   parseTaskMigrationRequest,
   buildAttachmentOssRef,
   parsePeerAttachmentRef,
@@ -53,6 +56,8 @@ import {
   snapshotWorkspace,
   restoreWorkspace,
   estimateWorkspace,
+  isExcludedFromWorkspace,
+  managedWorktreeExclusions,
   type PortableWorkspace,
 } from './workspace';
 
@@ -127,9 +132,17 @@ async function invoke(
   scope: Scope,
 ): Promise<TaskMigrationView> {
   scope.assertCurrent();
-  const response = await remoteInvoke(device, TASK_MIGRATION_CHANNEL, [request], {
-    preSend: scope.assertCurrent,
-  });
+  let response: Awaited<ReturnType<typeof remoteInvoke>>;
+  try {
+    response = await remoteInvoke(device, TASK_MIGRATION_CHANNEL, [request], {
+      preSend: scope.assertCurrent,
+    });
+  } catch (error) {
+    // The source may still be working; tell the user it was slow, not that it is offline.
+    if (error instanceof DeviceLinkError && error.code === 'INVOKE_TIMEOUT')
+      throw new Error('MIGRATION_TIMEOUT');
+    throw error;
+  }
   scope.assertCurrent();
   if (!response.ok)
     throw new Error(
@@ -285,6 +298,8 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
           await Promise.all(members.map((member) => physicalWorktreeKey(member.workingDir))),
         ),
       ];
+      // A task inside another managed worktree under a copied root does not touch copied files.
+      const excluded = await Promise.all(sourceKeys.map(managedWorktreeExclusions));
       for (const session of getMakerIfReady()?.listActiveSessions() ?? []) {
         if (!session.isTurnRunning() && !sourceBoundary!.isBusy(session.id)) continue;
         const row = await scope.db.queryOne<{
@@ -298,9 +313,10 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
           const key = await physicalWorktreeKey(row.workingDir);
           if (
             sourceKeys.some(
-              (sourceKey) =>
+              (sourceKey, index) =>
                 key === sourceKey ||
-                key.startsWith(sourceKey + path.sep) ||
+                (key.startsWith(sourceKey + path.sep) &&
+                  !isExcludedFromWorkspace(sourceKey, key, excluded[index])) ||
                 sourceKey.startsWith(key + path.sep),
             )
           )
@@ -908,8 +924,19 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
       await Promise.all(members.map((member) => physicalWorktreeKey(member.workingDir))),
     );
     const estimate = { fileCount: 0, bytes: 0 };
+    // Same budget as the remote wait, enforced here so a local or orphaned scan also stops.
+    const deadline = Date.now() + TASK_MIGRATION_ESTIMATE_TIMEOUT_MS;
+    const check = () => {
+      scope.assertCurrent();
+      if (Date.now() > deadline) throw new Error('MIGRATION_TIMEOUT');
+    };
     for (const root of roots) {
-      const next = await estimateWorkspace(root, scope.assertCurrent);
+      // The cap covers every copied directory together.
+      const next = await estimateWorkspace(
+        root,
+        check,
+        TASK_MIGRATION_MAX_FILES - estimate.fileCount,
+      );
       estimate.fileCount += next.fileCount;
       estimate.bytes += next.bytes;
     }

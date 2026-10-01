@@ -45,7 +45,8 @@
       "MIGRATION_TARGET_MODEL_UNAVAILABLE": "The destination has no available model for this task’s engine. Connect a provider there first.",
       "MIGRATION_UNSUPPORTED": "Update both computers to a version that supports task copy.",
       "MIGRATION_TASK_QUEUED": "This task has queued messages. Finish or remove them before copying it.",
-      "MIGRATION_SOURCE_CHANGED": "The source task changed during preparation. Retry the copy."
+      "MIGRATION_SOURCE_CHANGED": "The source task changed during preparation. Retry the copy.",
+      "MIGRATION_TIMEOUT": "The source computer did not respond in time. Try again later."
     },
     "successTitle": "Copy successful",
     "successDescription": "Copied to {{name}}.",
@@ -60,7 +61,9 @@
     "estimating": "Counting files and calculating size…",
     "fileSummary": "Project files: {{count}}, totaling {{size}}",
     "estimateNote": "Pre-copy estimate including hidden files. Git history, conversation and attachments are copied separately and excluded from this size. Files may change before copying.",
-    "estimateFailed": "Could not count files. Check the source computer’s connection and version, then close and try again."
+    "estimateFailed": "Could not count files. Check the source computer’s connection and version, then close and try again.",
+    "estimateTimeout": "Counting timed out: the project has too many files for the source computer to finish in time. Try copying a project with fewer files.",
+    "estimateTooManyFiles": "The project has more than {{limit, number}} files and cannot be copied. Copy a project with fewer files instead."
   },
   "sharedTask": {
     "selfJoin": "You started this shared task, so you don’t need to join. Open it from “Shared by Me”.",
@@ -5491,6 +5494,9 @@
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",
         "agentBackgroundDetail": "Does not require a click each time, but can only use sessions you previously connected to this plugin. Model charges may apply.",
+        "agentTasksRequest": "Review task permission",
+        "agentTasks": "Can create and manage its own Cindy tasks",
+        "agentTasksDetail": "Can send messages, read results and stop its own executions. Tasks remain visible to you. Uses this plugin’s AI settings and may incur model charges; does not grant access to other tasks.",
         "agentErrand": "Can hand tasks to the Cindy Agent and collect the result",
         "agentErrandDetail": "Tasks run in this plugin's dedicated session, always visible in the sidebar and stoppable at any time. Read-only by default; raising the level requires your change in the plugin settings. Model charges may apply.",
         "agentSchedule": "Can ask you to create an automation",
@@ -9058,6 +9064,7 @@
         "openSettings": "Open Settings"
       },
       "permissionSwitchFailed": "Permission mode change failed; the previous setting was kept",
+      "retryPluginWriteAccess": "Confirm plugin write permission again",
       "fullAccessConfirmation": {
         "title": "Enable Full access?",
         "description": "Full access disables the workspace sandbox and skips routine approvals. Cindy can then do the following without asking:",
@@ -10498,6 +10505,7 @@
       "projects": "Projects",
       "newProject": "New project",
       "createProjectFailed": "Failed to create project",
+      "selectFolderFailed": "Could not select folder. Try again.",
       "projectsToggleExpand": "Expand all project sessions",
       "projectsToggleCollapse": "Collapse all project sessions",
       "filterAria": "Sidebar settings (Status: {{status}}, Harness: {{vendor}}, Last activity: {{lastActivity}}, Group by: {{groupBy}}, Sort by: {{sortBy}}, Projects: {{projects}})",
@@ -14289,5 +14297,16 @@
   "pluginDeviceAuthorization": {
     "title": "Authorize Plugin Login",
     "description": "Open {{host}} on this device to authorize the plugin running this task. Its credentials stay on the originating device."
+  },
+  "pluginTaskWriteAccess": {
+    "autoTitle": "Enable Auto approval",
+    "autoMessage": "Allow “{{name}}” to use Auto approval?",
+    "autoDetail": "Cindy will review coordinator and Worker actions automatically. Actions requiring confirmation or denied actions still pause. This is not Full access. The choice is saved in plugin AI settings without changing global permissions for other tasks.",
+
+    "title": "Allow this plugin’s AI to edit files?",
+    "message": "Allow the AI in “{{name}}” to edit files and continue?",
+    "detail": "This sets the plugin’s AI permission to Allow edits for future tasks too. A separate working directory is not a system sandbox; commands still follow Cindy permission checks. You can switch back to read-only in the plugin’s AI settings.",
+    "allow": "Allow and continue",
+    "cancel": "Not now"
   }
 }

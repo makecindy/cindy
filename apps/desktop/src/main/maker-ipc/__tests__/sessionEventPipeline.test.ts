@@ -246,6 +246,7 @@ function harness() {
   });
   const activity = new SessionTurnActivityTracker();
   const deps = {
+    onPluginTaskTerminal: vi.fn(),
     onSuccessfulProductTurn: vi.fn(async () => {}),
     onUnsuccessfulProductTurn: vi.fn(async () => {}),
     log,
@@ -493,6 +494,24 @@ describe('production Session event pipeline', () => {
       await microtasks();
       expect(h.deps.onSuccessfulProductTurn).toHaveBeenCalledTimes(status === 'completed' ? 1 : 0);
       expect(h.deps.onUnsuccessfulProductTurn).toHaveBeenCalledTimes(status === 'completed' ? 0 : 1);
+      await h.dispose();
+    },
+  );
+  it.each(['completed', 'failed', 'cancelled', 'interrupted'])(
+    'preserves the plugin terminal %s before generic failure bookkeeping', async status => {
+      const h = harness();
+      h.emit(event('done', { status }, {
+        sessionInstanceId: h.session.instanceId, sessionTurnGeneration: 0,
+      }));
+      await microtasks();
+      expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledWith('task', {
+        instanceId: h.session.instanceId, generation: 0,
+      }, status, undefined);
+      if (status !== 'completed') {
+        expect(h.deps.onPluginTaskTerminal.mock.invocationCallOrder[0]).toBeLessThan(
+          h.deps.onUnsuccessfulProductTurn.mock.invocationCallOrder[0],
+        );
+      }
       await h.dispose();
     },
   );

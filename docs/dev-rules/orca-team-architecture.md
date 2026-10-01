@@ -290,6 +290,8 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
 3. **queued accepted 也要同样结算（状态：不变量）**<br>
    如果 inter-agent 消息进入队列，accepted callback 必须与直发路径保持同样的 settle / rollback / discard 语义，避免 auto-bridge pending 泄漏。accepted 只表示临时接管 worker 的 running／auto-bridge／manual-interrupt 身份；只有 vendor dispatch 成功后才 commit。直发／恢复路径 accepted 后若因 `SESSION_RUNNING` 转回排队，必须先 rollback 本次临时接管，再等待下一次 accepted；accepted 生命周期函数自身失败则必须回滚并取消 vendor dispatch，不能让普通 callback 异常被吞后留下半套状态。旧 terminal 若撞上这个窗口，必须先释放 worker transition 锁，再等 commit／rollback：commit 后旧 terminal 作废，rollback 后恢复旧身份并继续最终收口；不得持锁等待 settlement；rollback 也不得覆盖 provisional 期间产生的更新 manual-interrupt 标记。若 Stop 在 provisional 窗口写入了更新标记，rollback settlement 必须携带最终保留的 manual identity，等待中的旧 terminal 重绑该 identity 后再收口，不能继续拿最初快照把自己判 stale。实现指针：`orcaInterAgentDispatcher.ts` 的 queued accepted callback API、`orcaTeamService.ts` 的 provisional dispatch settlement，以及 `register.ts` 的 `AgentInputCoordinator` callbacks。
 
+   Host 为插件 Worker 的首次输入传入调用内来源复核时，直发与排队后的 accepted 均沿现有回调检查；任务接收的异步生命周期更新前后都要复核。就绪消息也使用同一来源复核并以 `AcceptedCallbackDispatchCancelled` 拒绝派发，不能让普通 callback 错误被吞后继续执行。直接拒绝后再由 lifecycle 清理本次新 Worker，不在 send／transition 锁内关闭 Session；排队后迟到的拒绝只取消该输入和本次 provisional 状态，保留 Worker。普通发送错误仍沿原有返回语义。此回调不是跨重启或跨工具执行的权限事务。
+
 4. **worker 主动回报会结清自动回报态（状态：不变量）**<br>
    worker 主动 `send_to_lead` 一旦入队或 accepted，就必须清掉该 worker 的 auto-bridge pending，防止 Lead 同时收到手动回报和 auto-bridge 双份结果。实现指针：`orca-bridge-mcp.ts` 的 `send_to_lead` tool handler，以及 `orcaTeamService.ts` 的 `clearAutoBridgeState` / `clearRuntimeState`。
 

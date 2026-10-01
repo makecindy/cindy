@@ -370,6 +370,22 @@ it('does not copy when the source does not support inventory', async () => {
   expect(state.request.mock.calls.some(([, c]) => c.action === 'estimate')).toBe(false);
 });
 
+it.each([
+  ['[PRECONDITION_FAILED] MIGRATION_TIMEOUT', 'taskMigration.estimateTimeout'],
+  ['[PRECONDITION_FAILED] MIGRATION_TOO_MANY_FILES', 'taskMigration.estimateTooManyFiles'],
+  ['[PRECONDITION_FAILED] MIGRATION_FAILED', 'taskMigration.estimateFailed'],
+])('explains why inventory failed (%s) and keeps Copy disabled', async (message, text) => {
+  const original = state.request.getMockImplementation()!;
+  state.request.mockImplementation((device, command) =>
+    command.action === 'estimate' ? Promise.reject(new Error(message)) : original(device, command),
+  );
+  mount();
+  await screen.findByText(text);
+  expect(
+    (screen.getByRole('button', { name: 'taskMigration.start' }) as HTMLButtonElement).disabled,
+  ).toBe(true);
+});
+
 it.each(['confirm', 'complete'])(
   'clears recovered status errors on %s without erasing action errors',
   async (stage) => {

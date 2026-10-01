@@ -2,7 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import type { TaskMigrationRequest, TaskMigrationView } from '@cindy/device-link';
+import {
+  TASK_MIGRATION_MAX_FILES,
+  type TaskMigrationRequest,
+  type TaskMigrationView,
+} from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
 import type { TaskMoveDestination } from './TaskMoveSubmenu';
 import { Button } from '@/components/ui/button';
@@ -37,7 +41,7 @@ export function TaskMigrationDialog({
   const [pollError, setPollError] = useState('');
   const [self, setSelf] = useState('');
   const [estimate, setEstimate] = useState<TaskMigrationView['estimate']>();
-  const [estimateError, setEstimateError] = useState(false);
+  const [estimateError, setEstimateError] = useState('');
   const pending = useRef(false);
   const observingCopy = useRef(!destination);
   const previousCopy = useRef<string | undefined>(undefined);
@@ -204,7 +208,7 @@ export function TaskMigrationDialog({
     if (!confirming) return;
     let disposed = false;
     setEstimate(undefined);
-    setEstimateError(false);
+    setEstimateError('');
     void request({ action: 'caps' })
       .then(async (caps) => {
         if (!caps.copyEstimate) throw new Error('Estimate unavailable');
@@ -221,8 +225,8 @@ export function TaskMigrationDialog({
           throw new Error('Invalid estimate');
         if (!disposed && current()) setEstimate(result.estimate);
       })
-      .catch(() => {
-        if (!disposed && current()) setEstimateError(true);
+      .catch((e: unknown) => {
+        if (!disposed && current()) setEstimateError(errorCode(e));
       });
     return () => {
       disposed = true;
@@ -253,6 +257,19 @@ export function TaskMigrationDialog({
     if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
     return `${(Math.max(0, value) / 1024).toFixed(1)} KB`;
   };
+  const estimateText =
+    estimateError === 'MIGRATION_TIMEOUT'
+      ? t('taskMigration.estimateTimeout')
+      : estimateError === 'MIGRATION_TOO_MANY_FILES'
+        ? t('taskMigration.estimateTooManyFiles', { limit: TASK_MIGRATION_MAX_FILES })
+        : estimateError
+          ? t('taskMigration.estimateFailed')
+          : estimate
+            ? t('taskMigration.fileSummary', {
+                count: estimate.fileCount,
+                size: bytes(estimate.bytes),
+              })
+            : t('taskMigration.estimating');
   const errorKey =
     failure && t(`taskMigration.errors.${failure}`, { defaultValue: t('taskMigration.failed') });
   return (
@@ -357,14 +374,7 @@ export function TaskMigrationDialog({
                 role="status"
                 className={estimateError ? 'text-[var(--error-fg)]' : 'text-[var(--confirm-title)]'}
               >
-                {estimateError
-                  ? t('taskMigration.estimateFailed')
-                  : estimate
-                    ? t('taskMigration.fileSummary', {
-                        count: estimate.fileCount,
-                        size: bytes(estimate.bytes),
-                      })
-                    : t('taskMigration.estimating')}
+                {estimateText}
               </p>
               {estimate && (
                 <p className="mt-2 text-[var(--confirm-desc)]">{t('taskMigration.estimateNote')}</p>

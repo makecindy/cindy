@@ -1,5 +1,9 @@
 import { INVOKE_TIMEOUT_OVERRIDES_MS } from './allowlist.js';
-import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
+import {
+  TASK_MIGRATION_CHANNEL,
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
+  TASK_MIGRATION_RECEIVE_TIMEOUT_MS,
+} from './taskMigration.js';
 import type { InvokePayload } from './protocol.js';
 
 /** These reads may wait behind current-task work. Not a retry or authorization policy.
@@ -103,6 +107,16 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
 
 export const MOBILE_SCHEDULE_CHANNEL_TIMEOUT_MS = 40_000;
 
+/**
+ * Every action-specific desktop budget `resolveRemoteInvokeTimeoutMs` can return beyond
+ * INVOKE_TIMEOUT_OVERRIDES_MS. Hosts size their global orphan/outbox ceilings from both,
+ * so a host never gives up before the controller stops waiting.
+ */
+export const ACTION_INVOKE_TIMEOUTS_MS: readonly number[] = [
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
+  TASK_MIGRATION_RECEIVE_TIMEOUT_MS,
+];
+
 export function resolveRemoteInvokeTimeoutMs(
   channel: string,
   args?: unknown[],
@@ -110,8 +124,11 @@ export function resolveRemoteInvokeTimeoutMs(
 ): number | undefined {
   if (channel === TASK_MIGRATION_CHANNEL) {
     const request = args?.[0];
-    return request && typeof request === 'object' && 'action' in request && request.action === 'receive'
-      ? 30 * 60_000 : 30_000;
+    const action = request && typeof request === 'object' && 'action' in request ? request.action : undefined;
+    if (action === 'receive') return TASK_MIGRATION_RECEIVE_TIMEOUT_MS;
+    // Read-only inventory of a large project (dependencies included) can legitimately exceed 30s.
+    if (action === 'estimate') return TASK_MIGRATION_ESTIMATE_TIMEOUT_MS;
+    return 30_000;
   }
   if (platform === 'desktop') return INVOKE_TIMEOUT_OVERRIDES_MS[channel];
   // Renewals must settle before the 12s lease, independently of slow media offers.
