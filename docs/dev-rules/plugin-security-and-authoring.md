@@ -619,6 +619,14 @@
 
 ## 8. 远程与手机版
 
+移动页面契约见 [移动插件接入](plugin-mobile-implementation.md)。可选 `mobile` 声明
+只选择已有能力的页面入口，不改变旧插件批准、凭证或安装布局。逻辑仍由执行电脑运行。
+Host 为页面消息附加 `mobilePageId`，原生弹窗、任务操作、目录选择和预览等必须保留
+该来源；页面覆盖、关闭、账号/连接/安装代次改变后，旧响应不得继续写入或清除未读。
+手机任务配置复用普通任务配置校验。密钥/连接表单走 Host 原生 v3 加密授权通道，
+不得通过 WebView、BroadcastChannel 或通用插件 fetch 传递凭证。
+
+
 插件能力可能运行在 SSH 远程工作区、设备互联远程控制或手机版控制端。新增或修改 IPC
 channel 与推送事件时，若手机／远程控制场景需要用到，必须按
 `packages/device-link/src/allowlist.ts` 顶部注释的准入判据登记 invoke／push 白名单并同步

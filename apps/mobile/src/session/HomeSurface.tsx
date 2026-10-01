@@ -3082,6 +3082,12 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
           setChromeMenuCloseInstant(false);
           setChromeMenuOpen(false);
         }}
+        onOpenPlugins={() => {
+          pendingMenuActionRef.current = null;
+          guardedPush('/plugins');
+          setChromeMenuCloseInstant(true);
+          setChromeMenuOpen(false);
+        }}
         onOpenDevices={() => {
           pendingMenuActionRef.current = null;
           guardedPush('/devices/manage');

@@ -467,6 +467,7 @@ export default function NewRemoteSessionScreen() {
     composerMorph?: string;
     visualDraft?: string;
     suggestion?: string;
+    draft?: string;
     recoverySessionId?: string;
   }>();
   const routeDeviceId = String(params.deviceId ?? '');
@@ -557,7 +558,7 @@ export default function NewRemoteSessionScreen() {
   );
   const [draft, setDraft] = useState<NewSessionDraft>({
     ...DEFAULT_NEW_SESSION_DRAFT,
-    firstMessage: visualInitialDraft ?? (isRemoteTaskSuggestionId(params.suggestion)
+    firstMessage: visualInitialDraft ?? readRouteString(params.draft) ?? (isRemoteTaskSuggestionId(params.suggestion)
       ? t(`devices.list.taskSuggestions.items.${params.suggestion}.prompt`)
       : DEFAULT_NEW_SESSION_DRAFT.firstMessage),
     // 无记忆时默认对话；偏好加载后恢复上次选择，显式项目入口优先。

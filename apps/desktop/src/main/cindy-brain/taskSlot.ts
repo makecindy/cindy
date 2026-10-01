@@ -48,7 +48,8 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
   };
   if (typeof value.kind !== 'string' || !Object.hasOwn(allowed, value.kind)) return false;
   const kind = value.kind;
-  if (Object.keys(value).some((key) => !['type', 'kind', ...allowed[kind]].includes(key)))
+  if (value.mobilePageId !== undefined && (typeof value.mobilePageId !== 'string' || !/^[a-f0-9-]{36}$/.test(value.mobilePageId))) return false;
+  if (Object.keys(value).some((key) => !['type', 'kind', 'mobilePageId', ...allowed[kind]].includes(key)))
     return false;
   if (kind === 'requestWriteAccess' && value.mode !== undefined && !['acceptEdits', 'auto'].includes(String(value.mode))) return false;
   const requires = (key: string) => text(value[key], 128);

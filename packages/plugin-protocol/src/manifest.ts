@@ -918,6 +918,8 @@ export interface GhostManifest {
    * `/kv`；其它自定义参数持久化走同源 `fetch('/kv')`。
    */
   settingsHtml?: string;
+  /** Optional mobile page projection; unknown/invalid declarations leave desktop behavior unchanged. */
+  mobile?: { channels: string[]; panel?: string; mainView?: string; settings?: string };
   /**
    * 自定义设置区固定高度(px,可选;160–800)。缺省 = 宿主量 guest 内容
    * 高度自适应(同区间收口);声明本字段 = 固定高度(内容动态增减的设置
@@ -3734,6 +3736,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         : {}),
       ...(node !== undefined ? { node } : {}),
       ...(raw.settingsHtml !== undefined ? { settingsHtml: raw.settingsHtml as string } : {}),
+      ...(raw.mobile !== undefined ? { mobile: raw.mobile as GhostManifest['mobile'] } : {}),
       ...(raw.settingsHeight !== undefined ? { settingsHeight: raw.settingsHeight as number } : {}),
       ...(prepared.schemaVersion === 2 ? { slots } : {}),
       ...(card !== undefined
