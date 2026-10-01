@@ -39,6 +39,7 @@ export type GhostCardEntry =
 export interface GhostLiveCard {
   callId: string;
   ghostId: string;
+  logicalGhostId?: string;
   /** agent 侧 tool_use id(claude 路径推送里带;codex 为 null → 启发式锚定)。 */
   toolUseId: string | null;
   receivedAt: number;
@@ -79,6 +80,7 @@ function sweepLive(now: number): void {
 export function ingestCardPush(payload: {
   callId: string;
   ghostId: string;
+  logicalGhostId?: string;
   toolUseId: string | null;
   html: string;
   animatedHtml?: string | null;
@@ -119,7 +121,13 @@ export function ingestCardPush(payload: {
   } else {
     liveCards = [
       ...liveCards,
-      { callId: payload.callId, ghostId: payload.ghostId, toolUseId: payload.toolUseId, receivedAt: now },
+      {
+        callId: payload.callId,
+        ghostId: payload.ghostId,
+        ...(payload.logicalGhostId !== undefined ? { logicalGhostId: payload.logicalGhostId } : {}),
+        toolUseId: payload.toolUseId,
+        receivedAt: now,
+      },
     ];
   }
   bump();

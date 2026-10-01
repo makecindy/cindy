@@ -89,6 +89,24 @@ describe('sidebar settings snapshot validation', () => {
         hiddenMainViewGhostIds: ['XD Sites'],
       }),
     ).toBe(false);
+    expect(
+      isSidebarSettingsSnapshot({
+        ...OWNER_STAMP,
+        pinnedOrderIsAuthoritative: false,
+        pinnedOrder: [],
+        hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: ['_ns__acme__helper'],
+      }),
+    ).toBe(true);
+    expect(
+      isSidebarSettingsSnapshot({
+        ...OWNER_STAMP,
+        pinnedOrderIsAuthoritative: false,
+        pinnedOrder: [],
+        hiddenProjectKeys: [],
+        hiddenMainViewGhostIds: ['_ns/acme/helper'],
+      }),
+    ).toBe(false);
   });
 });
 

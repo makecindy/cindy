@@ -35,6 +35,7 @@ import { sanitizeGhostNoticeText } from './notifySlot.js';
 
 export interface PickSlotDeps {
   getGhost(id: string): InstalledGhost | null;
+  getMutationTarget(id: string): string | null;
   /**
    * 弹系统级选文件夹窗口;返回所选绝对路径,取消返回 null。
    * 找不到可挂靠的 Cindy 窗口时应 reject(失败关闭,不弹无主对话框)。
@@ -114,6 +115,8 @@ export class GhostPickSlot {
     const purposeRaw =
       typeof request.title === 'string' ? sanitizeGhostNoticeText(request.title) : '';
     const purpose = purposeRaw ? purposeRaw.slice(0, GHOST_PICK_TITLE_MAX_CHARS) : null;
+    const target = this.deps.getMutationTarget(ghostId);
+    if (target === null) return fail('PERMISSION_DENIED', '插件安装或账户状态已变化');
 
     this.dialogInFlight = true;
     let picked: string | null;
@@ -133,6 +136,11 @@ export class GhostPickSlot {
     }
     if (picked === null) {
       return fail('CANCELLED', '用户取消了选择');
+    }
+    const current = this.deps.getGhost(ghostId);
+    if (!current?.enabled || current.manifest.pick !== true ||
+        this.deps.getMutationTarget(ghostId) !== target) {
+      return fail('PERMISSION_DENIED', '插件安装或账户状态已变化,请重新选择');
     }
     // 用户已亲手选中:先记台账再分档发结果(票据签发失败也不该丢掉这次
     // 授权事实——用户确实选了)。

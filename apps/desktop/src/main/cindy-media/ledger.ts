@@ -17,7 +17,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, exists, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, inArray, lt, ne, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
 import { getDbClient } from '../localDb/client/current';
@@ -29,6 +29,24 @@ export type LedgerDb = BetterSQLite3Database<typeof schema>;
 /** 生产默认句柄:DbClient 的 drizzle 代理(未就绪时抛错,由调用方折叠成结构化失败)。 */
 function defaultDb(): LedgerDb {
   return getDbClient().drizzle;
+}
+
+const ghostOwnedRefKinds = [
+  'ghost-gallery', 'ghost-grant', 'ghost-tool-grant', 'ghost-deposit',
+] as const;
+
+export async function relocateGhostMediaRefs(
+  fromId: string,
+  toId: string,
+  db: LedgerDb = defaultDb(),
+): Promise<void> {
+  if (fromId === toId) return;
+  const ownedOrigin = and(eq(mediaRefs.originKind, 'ghost'), eq(mediaRefs.originId, fromId));
+  const ownedRef = and(inArray(mediaRefs.refKind, ghostOwnedRefKinds), eq(mediaRefs.refId, fromId));
+  await db.update(mediaRefs).set({
+    originId: sql`case when ${ownedOrigin} then ${toId} else ${mediaRefs.originId} end`,
+    refId: sql`case when ${ownedRef} then ${toId} else ${mediaRefs.refId} end`,
+  }).where(or(ownedOrigin, ownedRef)).run();
 }
 
 /** Shared task reads use existing provenance; knowing a blob hash grants nothing. */

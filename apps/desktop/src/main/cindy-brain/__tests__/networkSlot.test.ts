@@ -1559,6 +1559,21 @@ describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
     expect(readGhCliToken).not.toHaveBeenCalled();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it('组织同名或尚未确认 root 的 cindy-github 不能借用 gh-cli token', async () => {
+    for (const identity of [{ namespace: 'acme' }, { namespaceMigration: 'pending' }] as const) {
+      const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
+      const { slot, fetchImpl } = makeGithubSlot({
+        getGhost: () => ({ ...fakeGhost({ id: 'cindy-github', network: githubNetwork,
+          trust: { level: 'cindy-official', publisherSigned: true, publisherVerified: true,
+            reviewed: true, publisherName: 'Cindy Plugin Market' } }), ...identity }),
+        readGhCliToken,
+      });
+      expect((await slot.handleFetchRequest('web-search', { url: GITHUB_URL })).ok).toBe(false);
+      expect(readGhCliToken).not.toHaveBeenCalled();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+  });
 });
 
 describe('networkSlot · 目录上传(uploadDir,过户票据)', () => {

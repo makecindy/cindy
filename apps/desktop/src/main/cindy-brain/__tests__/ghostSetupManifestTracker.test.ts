@@ -28,6 +28,44 @@ function ghost(
 }
 
 describe('GhostSetupManifestTracker', () => {
+  it('tracks colliding ids independently by physical instance', () => {
+    const bus = new GhostSetupChangeBus();
+    const onRoot = vi.fn();
+    const onOrg = vi.fn();
+    bus.subscribe('helper', onRoot);
+    bus.subscribe('_ns__acme__helper', onOrg);
+    const tracker = new GhostSetupManifestTracker(bus, () => true);
+    const root = ghost('helper');
+    const org = { ...ghost('helper'), namespace: 'acme', dir: '/plugins/_ns/acme/helper' };
+    tracker.seed([root, org]);
+    expect(tracker.note([{ ...root, enabled: false }, org])).toEqual(['helper']);
+    expect(onRoot).toHaveBeenCalledTimes(1);
+    expect(onOrg).not.toHaveBeenCalled();
+    expect(tracker.note([{ ...root, enabled: false }, { ...org, enabled: false }])).toEqual(['_ns__acme__helper']);
+    expect(onOrg).toHaveBeenCalledTimes(1);
+    expect(tracker.note([{ ...root, enabled: false }])).toEqual(['_ns__acme__helper']);
+    expect(onOrg).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the bare physical id for an in-place namespace stamp', () => {
+    const bus = new GhostSetupChangeBus();
+    const listener = vi.fn();
+    bus.subscribe('helper', listener);
+    const tracker = new GhostSetupManifestTracker(bus, () => true);
+    const org = { ...ghost('helper'), namespace: 'acme' };
+    tracker.seed([org]);
+    expect(tracker.note([{ ...org, enabled: false }])).toEqual(['helper']);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('checks availability against each installed physical id', () => {
+    const availability = vi.fn((_instanceId: string) => true);
+    const tracker = new GhostSetupManifestTracker(new GhostSetupChangeBus(), availability);
+    tracker.seed([ghost('helper'), { ...ghost('helper'), namespace: 'acme', dir: '/plugins/_ns/acme/helper' }]);
+    expect(availability.mock.calls.map(([instanceId]) => instanceId)).toEqual([
+      'helper', '_ns__acme__helper',
+    ]);
+  });
   it('emits only for install, update, enable/disable, and uninstall diffs', () => {
     const bus = new GhostSetupChangeBus();
     const listener = vi.fn();

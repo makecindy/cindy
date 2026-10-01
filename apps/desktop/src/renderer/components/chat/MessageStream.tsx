@@ -125,6 +125,9 @@ import {
 import { SHARE_MESSAGE_ATTR, SHARE_SESSION_ATTR } from '@/lib/shareConversationImage';
 import { ShareMessageCheckbox } from './ShareMessageCheckbox';
 import { isShareableMessage, useShareSelectionActive } from './shareSelectionStore';
+import { parsePluginInstanceId, pluginStoragePart } from '../../../shared/pluginIdentity';
+import { isValidGhostId } from '../../../shared/ghost';
+import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 
 // perf-baseline: 大 session 切换 first-paint 性能基线,保留用于回归监测。
 // 历史:commit ffff3603 (render-window 首引入) 因 687 条 session first-paint
@@ -776,7 +779,9 @@ export function collectGhostCallsByUserTurn(
       m.toolInput &&
       typeof (m.toolInput as Record<string, unknown>).ghost_id === 'string'
     ) {
-      const gid = (m.toolInput as Record<string, unknown>).ghost_id as string;
+      const input = m.toolInput as Record<string, unknown>;
+      const gid = ghostCardInstanceId(input.ghost_id as string, input.namespace);
+      if (!gid) continue;
       const set = out.get(currentUserClientId) ?? new Set<string>();
       set.add(gid);
       out.set(currentUserClientId, set);
@@ -1454,6 +1459,17 @@ function isRenderTurnBoundary(message: ChatMessage): boolean {
   );
 }
 
+function ghostCardInstanceId(ghostId: string, namespace: unknown): string | null {
+  if (!isValidGhostId(ghostId)) {
+    const identity = parsePluginInstanceId(ghostId);
+    return identity && namespace === undefined ? pluginStoragePart(identity) : null;
+  }
+  if (namespace === null || namespace === undefined) return ghostId;
+  return typeof namespace === 'string' && isValidPluginNamespace(namespace)
+    ? pluginStoragePart({ namespace, ghostId })
+    : null;
+}
+
 export function buildRenderItems(
   allMessages: ChatMessage[],
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
@@ -2009,6 +2025,7 @@ export function buildRenderItems(
         if (!ghostCards || !isGhostCallToolName(toolName)) return;
         const inp = (msg.toolInput ?? null) as Record<string, unknown> | null;
         const ghostIdFromInput = typeof inp?.ghost_id === 'string' ? inp.ghost_id : '';
+        const candidateGhostId = ghostCardInstanceId(ghostIdFromInput, inp?.namespace);
         const toolFromInput = typeof inp?.tool === 'string' ? inp.tool : '';
         if (result !== undefined) {
           const cardId = extractGhostCardId(result);
@@ -2022,7 +2039,7 @@ export function buildRenderItems(
               type: 'ghost_card',
               key: `ghostcard-${msg.clientId}`,
               callId: cardId,
-              ghostId: ghostIdFromInput || entry.ghostId,
+              ghostId: entry.ghostId,
               tool: toolFromInput,
               toolCall: msg,
               settled: true,
@@ -2046,13 +2063,15 @@ export function buildRenderItems(
               typeof msg.toolUseId === 'string' &&
               lc.toolUseId === msg.toolUseId,
           ) ??
-          (ghostIdFromInput
+          (candidateGhostId
             ? ghostCards.liveCards.find(
                 (lc) =>
                   !claimedLiveCallIds.has(lc.callId) &&
                   !settledCardIds.has(lc.callId) &&
                   lc.toolUseId === null &&
-                  lc.ghostId === ghostIdFromInput,
+                  ((lc.logicalGhostId ?? lc.ghostId) === candidateGhostId ||
+                    (lc.logicalGhostId === undefined && inp?.namespace === undefined &&
+                      lc.ghostId === candidateGhostId)),
               )
             : undefined);
         if (!live) return;
@@ -2063,7 +2082,7 @@ export function buildRenderItems(
           type: 'ghost_card',
           key: `ghostcard-${msg.clientId}`,
           callId: live.callId,
-          ghostId: ghostIdFromInput || live.ghostId,
+          ghostId: live.ghostId,
           tool: toolFromInput,
           toolCall: msg,
           settled: false,
@@ -2086,9 +2105,9 @@ export function buildRenderItems(
           const anchor = extractAnchorCardId(result);
           const inp = (msg.toolInput ?? null) as Record<string, unknown> | null;
           const ghostIdFromInput = typeof inp?.ghost_id === 'string' ? inp.ghost_id : '';
+          const candidateGhostId = ghostCardInstanceId(ghostIdFromInput, inp?.namespace);
           const target = anchor ? ghostCardItemByCallId.get(anchor) : undefined;
-          const sameGhostTarget =
-            target && ghostIdFromInput && target.ghostId === ghostIdFromInput ? target : undefined;
+          const sameGhostTarget = target && candidateGhostId === target.ghostId ? target : undefined;
           // 音频入卡令牌(audioInCard)= 意识的**待验证声明**:锚到的同意识卡
           // 确实 ready 且 html 真含对应 data-ghost-audio 插槽(播放器已由卡内
           // 受信桥渲染)才压掉基座音频卡,防同一首歌双播放器;验证不过(远程

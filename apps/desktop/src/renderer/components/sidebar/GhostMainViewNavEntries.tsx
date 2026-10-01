@@ -45,11 +45,11 @@ export function GhostMainViewNavEntries({ variant }: { variant: 'row' | 'rail' }
   const { t } = useTranslation();
   const navigate = useNavigate();
   const activeMatch = useMatch('/apps/:ghostId');
-  const activeGhostId = activeMatch?.params.ghostId;
+  const activeInstanceId = activeMatch?.params.ghostId;
   const { sidebarVisible } = useGhostMainViews();
 
   return sidebarVisible.map((item) => {
-    const active = activeGhostId === item.ghostId;
+    const active = activeInstanceId === item.instanceId;
     const Icon = MAIN_VIEW_ICONS[item.icon];
     const icon = (
       <Icon
@@ -59,13 +59,13 @@ export function GhostMainViewNavEntries({ variant }: { variant: 'row' | 'rail' }
         className="shrink-0"
       />
     );
-    const open = () => navigate(`/apps/${encodeURIComponent(item.ghostId)}`);
+    const open = () => navigate(`/apps/${encodeURIComponent(item.instanceId)}`);
     const openDetails = () =>
-      navigate(`/settings?tab=ghosts&ghost=${encodeURIComponent(item.ghostId)}`);
+      navigate(`/settings?tab=ghosts&ghost=${encodeURIComponent(item.instanceId)}`);
 
     if (variant === 'rail') {
       return (
-        <Tip key={item.ghostId} text={item.title} side="right">
+        <Tip key={item.instanceId} text={item.title} side="right">
           <button
             type="button"
             aria-label={item.title}
@@ -81,7 +81,7 @@ export function GhostMainViewNavEntries({ variant }: { variant: 'row' | 'rail' }
 
     return (
       <div
-        key={item.ghostId}
+        key={item.instanceId}
         className={cn(ROW_CLASS, 'group/main-view gap-0 px-0', active && ROW_ACTIVE_CLASS)}
       >
         <button

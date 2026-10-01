@@ -20,7 +20,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import type { LocalThemesResult } from '../shared/local-themes';
 import type { GhostPanelWindowsState } from '../shared/ghostPanelWindow';
-import { isValidGhostId } from '../shared/ghost';
+import { isValidPluginStoragePart } from '../shared/pluginIdentity';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
 import {
   GHOST_PANEL_WINDOW_CLOSE_REQUESTED_CHANNEL,
@@ -54,7 +54,7 @@ function onPayload<T>(channel: string, cb: (payload: T) => void): Unsub {
 
 const currentGhostPanelId = (() => {
   const raw = new URLSearchParams(window.location.search).get('ghostPanelWindow');
-  return isValidGhostId(raw) ? raw : null;
+  return isValidPluginStoragePart(raw) ? raw : null;
 })();
 
 function mutationErrorForGhostPanel(id: string): Error | null {
@@ -255,10 +255,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     resolvePanelMedia: (
       uri: string,
       purpose?: 'attach' | 'menu',
+      instanceId?: string,
+      sourceToken?: string,
     ): Promise<
       | { url: string; kind?: 'image' }
       | { url: string; kind: 'video'; absPath: string; size: number; name: string; ext: string; mimeType: string }
-    > => ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose),
+    > => sourceToken !== undefined
+      ? ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose, instanceId, sourceToken)
+      : instanceId === undefined
+        ? ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose)
+        : ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose, instanceId),
     /** 运行时状态快照（面板崩溃/熔断错误态接管）。 */
     runtimeStates: (): Promise<{ states: Record<string, string> }> =>
       ipcRenderer.invoke('ghosts:runtime-states'),

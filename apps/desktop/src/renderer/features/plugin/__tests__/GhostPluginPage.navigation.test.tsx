@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PluginMarketDetail } from '../../../../shared/pluginMarket';
+import type { InstalledGhost } from '../../../../shared/ghost';
 import { __resetInstalledGhostsStoreForTest } from '@/cindy-brain/useInstalledGhosts';
 import {
   cancelPendingPluginSuggestion,
@@ -15,7 +16,8 @@ import {
 } from '@/features/cc-agent/pendingPluginSuggestion';
 import { GhostPluginPage } from '../GhostPluginPage';
 
-const { auth, translation } = vi.hoisted(() => ({
+const { auth, translation, pickAndUpdateGhost } = vi.hoisted(() => ({
+  pickAndUpdateGhost: vi.fn(),
   auth: { user: { membershipKind: 'personal' }, mode: 'local', dataOwnerId: 'navigation-owner' },
   translation: {
     t: (key: string) => key,
@@ -24,6 +26,10 @@ const { auth, translation } = vi.hoisted(() => ({
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => auth }));
+vi.mock('@/cindy-brain/installFlow', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/cindy-brain/installFlow')>()),
+  pickAndUpdateGhost,
+}));
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => translation,
@@ -80,6 +86,7 @@ beforeEach(() => {
   cancelPendingPluginSuggestion();
   __resetInstalledGhostsStoreForTest();
   loadDetail.mockReset().mockResolvedValue(detail);
+  pickAndUpdateGhost.mockReset().mockResolvedValue(undefined);
   vi.stubGlobal('electronAPI', {
     platform: 'win32',
     sidebarSettings: {
@@ -111,6 +118,7 @@ afterEach(() => {
   cancelPendingPluginSuggestion();
   __resetInstalledGhostsStoreForTest();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 function page(entry: string) {
@@ -131,6 +139,54 @@ async function openFromCatalog() {
 }
 
 describe('plugin page return navigation', () => {
+  it.each(['xd-ordinary', 'filo-ordinary'])(
+    'updates an ordinary root %s from a local file and offers export in packaged builds',
+    async (ghostId) => {
+      vi.stubEnv('DEV', false);
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+      const installed: InstalledGhost = {
+        manifest: { ...detail.manifest, id: ghostId, name: ghostId },
+        dir: '/tmp/brain/' + ghostId,
+        namespace: null,
+        enabled: true,
+        approval: { state: 'approved', revision: 'ordinary-root-revision' },
+        trust: {
+          level: 'unverified',
+          publisherSigned: false,
+          publisherVerified: false,
+          reviewed: false,
+        },
+      };
+      window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+      window.electronAPI.pluginMarket.snapshot = async () => ({
+        items: [],
+        unavailableReason: null,
+        customSourceNames: [],
+        unavailableCustomSourceNames: [],
+      });
+      render(page('/plugins?ghost=' + ghostId));
+      await screen.findByRole('button', { name: 'settings.ghosts.detail.backToList' });
+      fireEvent.pointerDown(
+        screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+        { button: 0, ctrlKey: false },
+      );
+      expect(
+        screen.getByRole('menuitem', { name: 'settings.ghosts.detail.exportPackage' }),
+      ).toBeTruthy();
+      fireEvent.click(
+        screen.getByRole('menuitem', { name: 'settings.ghosts.detail.updateFromFile' }),
+      );
+      expect(pickAndUpdateGhost).toHaveBeenCalledWith(ghostId, { t: translation.t });
+    },
+  );
+
   it.each(['button', 'Escape'] as const)(
     '%s cancels the recommendation and restores the catalog scroll position',
     async (method) => {

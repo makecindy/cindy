@@ -21,6 +21,11 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import {
+  createPluginLogicalIdentity,
+  type PluginLogicalIdentity,
+} from '../../shared/pluginIdentity.js';
+
 /** 当前异步上下文已持有的 ghostId 集合(重入判定依据)。 */
 const heldIds = new AsyncLocalStorage<ReadonlySet<string>>();
 
@@ -63,4 +68,29 @@ export async function withGhostInstallLock<T>(
 /** 仅测试用:清空等待链,避免用例间互相影响。 */
 export function resetGhostInstallLocksForTest(): void {
   locks.clear();
+}
+
+/**
+ * Market paths that already have a logical identity should enter here.
+ * Install directories are still ghostId-addressed, so different namespaces of
+ * the same ghostId stay serial until those roots are split.
+ */
+export function withPluginInstallLock<T>(
+  identity: PluginLogicalIdentity,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return withGhostInstallLock(identity.ghostId, fn);
+}
+
+export function withPluginDeliveryInstallLock<T>(
+  plugin: { ghostId: string; namespace?: string | null },
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (Object.prototype.hasOwnProperty.call(plugin, "namespace")) {
+    return withPluginInstallLock(
+      createPluginLogicalIdentity(plugin.namespace ?? null, plugin.ghostId),
+      fn,
+    );
+  }
+  return withGhostInstallLock(plugin.ghostId, fn);
 }

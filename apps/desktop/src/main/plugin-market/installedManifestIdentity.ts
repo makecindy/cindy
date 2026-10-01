@@ -1,4 +1,5 @@
 import type { GhostManifest } from '../../shared/ghost.js';
+import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 import type { InstalledGhostManifestSnapshot } from '../installedGhostManifest.js';
 import {
   ghostManifestDigest,
@@ -72,4 +73,28 @@ export function installedIdentityMatchesManifest(
   manifest: GhostManifest,
 ): boolean {
   return identity.legacyManifestDigests.includes(ghostManifestDigest(manifest));
+}
+
+export function verifiedUnstampedOrganizationNamespace(input: {
+  records: readonly PluginMarketInstallationRecord[];
+  organizationId: string | null;
+  orgSlug: string | null;
+  evidence: { packageSha256: string | null; approvedManifest: GhostManifest; legacyMigrated: boolean } | null;
+  identity: InstalledMarketManifestIdentity | null;
+}): string | null {
+  const installedRecords = input.records.filter((record) => record.installed);
+  if (installedRecords.length !== 1 || !input.evidence || !input.identity ||
+      !input.orgSlug || !isValidPluginNamespace(input.orgSlug)) return null;
+  const record = installedRecords[0];
+  if (record.scope !== 'organization' ||
+      (record.source !== 'market' && record.source !== 'legacy-adopted') ||
+      !record.organizationId || record.organizationId !== input.organizationId ||
+      (record.namespace !== undefined && record.namespace !== input.orgSlug) ||
+      (input.evidence.packageSha256 !== null && input.evidence.packageSha256 !== record.sha256) ||
+      (input.evidence.packageSha256 === null && !input.evidence.legacyMigrated) ||
+      !installedIdentityMatchesManifest(input.identity, input.evidence.approvedManifest)) return null;
+  if (!verifyInstalledMarketManifest(record, input.identity) &&
+      !(input.evidence.packageSha256 === record.sha256 &&
+        record.rawManifestSha256 === undefined && record.manifestDigest === undefined)) return null;
+  return input.orgSlug;
 }

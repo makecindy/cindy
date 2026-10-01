@@ -38,6 +38,29 @@ import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
 
 const log = createLogger('providerSecretStore');
 
+let canUseMivoAlias: ((ghostId: string) => boolean) | null = null;
+
+export function setMivoSecretAliasVerifier(verifier: ((ghostId: string) => boolean) | null): void {
+  canUseMivoAlias = verifier;
+}
+
+function approvedGhostSecretStorageKey(ghostId: string, secretKey: string): string {
+  return ghostSecretStorageKey(ghostId, secretKey, canUseMivoAlias?.(ghostId) === true);
+}
+
+function isUntrustedMivoKey(ghostId: string, secretKey: string): boolean {
+  return secretKey === 'mivo_api_key' &&
+    (ghostId === 'xd-mivo' || ghostId === '_ns__xd__xd-mivo') &&
+    canUseMivoAlias?.(ghostId) !== true;
+}
+
+function approvedGhostSecretHintKey(ghostId: string, secretKey: string): string {
+  const key = ghostSecretHintStorageKey(ghostId, secretKey);
+  return isUntrustedMivoKey(ghostId, secretKey)
+    ? 'ghost_hint__local__' + ghostId + '_' + secretKey
+    : key;
+}
+
 /**
  * 记录「本机这批 provider 密钥归属哪个账号」的标记键(非密钥,存同目录便于统一管理)。
  * 用于账号边界:登录 / 冷启动确立 userId 后,若 owner 与之不同(同机换账号),清掉
@@ -210,9 +233,11 @@ const electronSecretIo: SecretStorageIo = {
         .readdirSync(secretDir())
         .filter((f) => f.startsWith(prefix) && f.endsWith('.enc'))
         .map((f) => f.slice(prefix.length, -'.enc'.length));
-    } catch {
-      // 目录不存在(尚无任何密钥落盘)等 → 空列表。
-      return [];
+    } catch (err) {
+      if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return [];
+      }
+      throw err;
     }
   },
 };
@@ -682,7 +707,7 @@ export function readCustomMcpToken(mcpId: string): string | null {
  */
 export function readGhostSecret(ghostId: string, secretKey: string): string | null {
   try {
-    return electronSecretIo.read(ghostSecretStorageKey(ghostId, secretKey));
+    return electronSecretIo.read(approvedGhostSecretStorageKey(ghostId, secretKey));
   } catch (err) {
     log.warn(
       { ghostId, secretKey, err: err instanceof Error ? err.message : String(err) },
@@ -699,7 +724,7 @@ export function readGhostSecret(ghostId: string, secretKey: string): string | nu
  */
 export function readGhostSecretStrict(ghostId: string, secretKey: string): string | null {
   const physicalKey = resolveOwnerScopedSecretStorageKey(
-    ghostSecretStorageKey(ghostId, secretKey),
+    approvedGhostSecretStorageKey(ghostId, secretKey),
   );
   if (!physicalKey) return null;
   const filepath = path.join(secretDir(), `${physicalKey}.enc`);
@@ -728,7 +753,7 @@ export function readGhostSecretStrict(ghostId: string, secretKey: string): strin
 export function ghostSecretSaved(ghostId: string, secretKey: string): boolean {
   try {
     const physicalKey = resolveOwnerScopedSecretStorageKey(
-      ghostSecretStorageKey(ghostId, secretKey),
+      approvedGhostSecretStorageKey(ghostId, secretKey),
     );
     if (!physicalKey) return false;
     fs.statSync(path.join(secretDir(), `${physicalKey}.enc`));
@@ -747,13 +772,13 @@ export function ghostSecretSaved(ghostId: string, secretKey: string): boolean {
  */
 export function storeGhostSecret(ghostId: string, secretKey: string, value: string): boolean {
   try {
-    const ok = electronSecretIo.write(ghostSecretStorageKey(ghostId, secretKey), value);
+    const ok = electronSecretIo.write(approvedGhostSecretStorageKey(ghostId, secretKey), value);
     if (ok) {
       // 入库即截尾 4 位指纹(分键保管,读路径永不碰明文);值太短不产指纹,
       // 且要清掉旧值可能留下的指纹。指纹写失败不连坐主凭证(best-effort)。
       try {
         const tail = deriveGhostSecretTail(value);
-        const hintKey = ghostSecretHintStorageKey(ghostId, secretKey);
+        const hintKey = approvedGhostSecretHintKey(ghostId, secretKey);
         if (tail) electronSecretIo.write(hintKey, tail);
         else electronSecretIo.remove(hintKey);
       } catch (err) {
@@ -787,10 +812,10 @@ export function readGhostSecretTailFromIo(
   secretKey: string,
 ): string | null {
   try {
-    const hintKey = ghostSecretHintStorageKey(ghostId, secretKey);
+    const hintKey = approvedGhostSecretHintKey(ghostId, secretKey);
     const existing = io.read(hintKey);
     if (existing !== null) return existing;
-    const value = io.read(ghostSecretStorageKey(ghostId, secretKey));
+    const value = io.read(approvedGhostSecretStorageKey(ghostId, secretKey));
     if (value === null) return null;
     const tail = deriveGhostSecretTail(value);
     if (tail) io.write(hintKey, tail);
@@ -812,8 +837,8 @@ export function readGhostSecretTail(ghostId: string, secretKey: string): string 
 /** 清除某意识的单条 network 槽凭证(/secrets DELETE 用;幂等,连同尾指纹)。 */
 export function removeGhostSecret(ghostId: string, secretKey: string): void {
   try {
-    electronSecretIo.remove(ghostSecretStorageKey(ghostId, secretKey));
-    electronSecretIo.remove(ghostSecretHintStorageKey(ghostId, secretKey));
+    electronSecretIo.remove(approvedGhostSecretStorageKey(ghostId, secretKey));
+    electronSecretIo.remove(approvedGhostSecretHintKey(ghostId, secretKey));
   } catch (err) {
     log.warn(
       { ghostId, secretKey, err: err instanceof Error ? err.message : String(err) },
@@ -828,7 +853,11 @@ export function removeGhostSecret(ghostId: string, secretKey: string): void {
  * 声明——旧版本声明过、新版本删掉的孤儿键也一并清。
  */
 export function removeGhostSecrets(ghostId: string): void {
-  const prefixes = [`${GHOST_SECRET_PREFIX}${ghostId}_`, `${GHOST_SECRET_HINT_PREFIX}${ghostId}_`];
+  const prefixes = [
+    `${GHOST_SECRET_PREFIX}${ghostId}_`,
+    `${GHOST_SECRET_HINT_PREFIX}${ghostId}_`,
+    `ghost_hint__local__${ghostId}_`,
+  ];
   try {
     for (const key of electronSecretIo.list()) {
       if (prefixes.some((prefix) => key.startsWith(prefix))) electronSecretIo.remove(key);
@@ -839,6 +868,93 @@ export function removeGhostSecrets(ghostId: string): void {
       'remove ghost secrets failed',
     );
   }
+}
+
+function ghostSecretRelocationPrefixes(fromGhostId: string, toGhostId: string): Array<[string, string]> {
+  const localHintTarget = toGhostId === 'xd-mivo' && fromGhostId !== '_ns__xd__xd-mivo';
+  return [
+    [`${GHOST_SECRET_PREFIX}${fromGhostId}_`, `${GHOST_SECRET_PREFIX}${toGhostId}_`],
+    [`${GHOST_SECRET_HINT_PREFIX}${fromGhostId}_`, localHintTarget
+      ? `ghost_hint__local__${toGhostId}_`
+      : `${GHOST_SECRET_HINT_PREFIX}${toGhostId}_`],
+    [`ghost_hint__local__${fromGhostId}_`, toGhostId === '_ns__xd__xd-mivo' || toGhostId === 'xd-mivo'
+      ? `ghost_hint__local__${toGhostId}_`
+      : `${GHOST_SECRET_HINT_PREFIX}${toGhostId}_`],
+  ];
+}
+
+/** Rename ghost_secret_/ghost_hint_ keys after a physical relocate. Conflicts fail closed. */
+export function assertGhostSecretsCanRelocate(fromGhostId: string, toGhostId: string): void {
+  if (fromGhostId === toGhostId) return;
+  for (const key of electronSecretIo.list()) {
+    for (const [sourcePrefix, destinationPrefix] of ghostSecretRelocationPrefixes(fromGhostId, toGhostId)) {
+      if (!key.startsWith(sourcePrefix)) continue;
+      const destination = `${destinationPrefix}${key.slice(sourcePrefix.length)}`;
+      const value = electronSecretIo.read(key);
+      if (value === null) throw new Error('relocate source secret is unreadable');
+      const existing = electronSecretIo.read(destination);
+      if (existing !== null && existing !== value) {
+        throw new Error('relocate secret destination already exists');
+      }
+    }
+  }
+}
+
+export function migrateGhostSecrets(
+  fromGhostId: string,
+  toGhostId: string,
+  io: SecretStorageIo = electronSecretIo,
+): () => void {
+  if (fromGhostId === toGhostId) return () => {};
+  const pairs = ghostSecretRelocationPrefixes(fromGhostId, toGhostId);
+  const moves: Array<{ from: string; to: string; value: string; destinationExisted: boolean }> = [];
+  for (const key of io.list()) {
+    for (const [fromPrefix, toPrefix] of pairs) {
+      if (!key.startsWith(fromPrefix)) continue;
+      const dest = `${toPrefix}${key.slice(fromPrefix.length)}`;
+      const value = io.read(key);
+      if (value === null) throw new Error('relocate source secret is unreadable');
+      const existing = io.read(dest);
+      if (existing !== null && existing !== value) {
+        throw new Error(`relocate secret destination already exists: ${dest}`);
+      }
+      moves.push({ from: key, to: dest, value, destinationExisted: existing !== null });
+      break;
+    }
+  }
+  const attempted: typeof moves = [];
+  const rollback = () => {
+    let failure: unknown;
+    for (const move of [...attempted].reverse()) {
+      try {
+        const sourceRestored = io.read(move.from) === move.value || io.write(move.from, move.value);
+        if (!sourceRestored) throw new Error('failed to restore relocated secret: ' + move.from);
+        if (!move.destinationExisted && !io.remove(move.to).success) {
+          throw new Error('failed to remove relocated secret: ' + move.to);
+        }
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    if (failure) throw failure;
+  };
+  try {
+    for (const move of moves) {
+      attempted.push(move);
+      if (io.read(move.to) !== move.value && !io.write(move.to, move.value)) {
+        throw new Error(`failed to write relocated secret: ${move.to}`);
+      }
+      if (!io.remove(move.from).success) {
+        throw new Error(`failed to remove relocated secret: ${move.from}`);
+      }
+    }
+  } catch (error) {
+    try { rollback(); } catch (rollbackError) {
+      void rollbackError;
+    }
+    throw error;
+  }
+  return rollback;
 }
 
 export const genericOAuthSecretIo = {

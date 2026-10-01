@@ -18,8 +18,15 @@
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { assertGhostPrefsWritable, relocateGhostPreferenceMaps } from './ghostPreferenceRelocation.js';
 
 const log = desktopMakerLogger.child('cindy-prefs-store');
+
+export async function relocateGhostCindyPrefs(from: string, to: string): Promise<void> {
+  await relocateGhostPreferenceMaps('ghost-cindy-prefs.json', ['overrides', 'inflightLimits'], from, to, () => {
+    store = createStore();
+  });
+}
 
 /** cindy 槽能力键(类目.动作;与身份卡详单同一词汇表,当前包含 video)。 */
 // text.oneshot(快问快答)与图像/视频同表:每项覆盖记的都是一组供应商×模型。
@@ -113,13 +120,18 @@ function normalize(raw: unknown): GhostCindyPrefs {
   return { overrides, inflightLimits };
 }
 
-const store = createOverrideSettingsFile<GhostCindyPrefs>({
-  filePath: () => ownerScopedUserDataPath('ghost-cindy-prefs.json'),
-  defaults: DEFAULTS,
-  normalize,
-  log,
-  label: 'ghost-cindy-prefs',
-});
+function createStore() {
+  return createOverrideSettingsFile<GhostCindyPrefs>({
+    filePath: () => ownerScopedUserDataPath('ghost-cindy-prefs.json'),
+    defaults: DEFAULTS,
+    normalize,
+    log,
+    label: 'ghost-cindy-prefs',
+    preserveUnreadableFile: true,
+  });
+}
+
+let store = createStore();
 
 /** 读某意识的全部覆盖(缺省空对象 = 全跟随默认)。 */
 export function readGhostCindyOverrides(ghostId: string): Partial<Record<CindyCapabilityKey, string>> {
@@ -138,6 +150,7 @@ export function writeGhostCindyOverride(
   capability: CindyCapabilityKey,
   model: string | null,
 ): Partial<Record<CindyCapabilityKey, string>> {
+  assertGhostPrefsWritable('ghost-cindy-prefs.json');
   // 写前同样失效缓存:避免把用户刚手改的文件内容用旧缓存整体覆写掉。
   store.invalidateIfChanged();
   const overrides = { ...store.read().overrides };
@@ -163,6 +176,7 @@ export function readGhostCindyInflightLimit(ghostId: string): number | null {
  * 只收正整数,非法值直接抛(调用方应在入口校验,这里是最后防线)。
  */
 export function writeGhostCindyInflightLimit(ghostId: string, limit: number | null): void {
+  assertGhostPrefsWritable('ghost-cindy-prefs.json');
   if (limit !== null && (!Number.isInteger(limit) || limit < 1)) {
     throw new Error(`inflight limit 必须是正整数或 null,收到:${String(limit)}`);
   }

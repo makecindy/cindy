@@ -82,9 +82,12 @@ export async function handleGhostKvRequest(args: {
   readBodyText: () => Promise<string>;
   store: GhostKvEndpointStore;
   ghostId: string;
+  isCurrent?: () => boolean;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }): Promise<GhostKvRequestOutcome> {
   const { method, readBodyText, store, ghostId, log } = args;
+  const isCurrent = args.isCurrent ?? (() => true);
+  if (!isCurrent()) return { status: 403 };
 
   if (method === 'GET') {
     try {
@@ -100,12 +103,14 @@ export async function handleGhostKvRequest(args: {
     try {
       text = await readBodyText();
     } catch (err) {
+      if (!isCurrent()) return { status: 403 };
       // 有界读取器的超限断流 → 413;其它读流失败(中断等)→ 400。
       if (err instanceof GhostKvError && err.code === 'TOO_LARGE') {
         return { status: 413 };
       }
       return { status: 400 };
     }
+    if (!isCurrent()) return { status: 403 };
     // 体积双保险(readBodyText 已流式限额;这里兜非有界注入的调用方)
     // 且先量再 parse:不给超限 payload 任何 JSON.parse 面。
     if (Buffer.byteLength(text, 'utf8') > GHOST_KV_MAX_BYTES) {
@@ -121,6 +126,7 @@ export async function handleGhostKvRequest(args: {
       return { status: 400 };
     }
     try {
+      if (!isCurrent()) return { status: 403 };
       store.write(ghostId, value as Record<string, unknown>);
       return { status: 204 };
     } catch (err) {

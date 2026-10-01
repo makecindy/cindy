@@ -7,6 +7,7 @@
  */
 
 import type { InstalledGhost } from '../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import type { GhostSetupChangeBus } from './ghostSetupChangeBus.js';
 
 export class GhostSetupManifestTracker {
@@ -41,10 +42,10 @@ export class GhostSetupManifestTracker {
   private snapshot(ghosts: InstalledGhost[]): Map<string, string> {
     return new Map(
       ghosts.map((ghost) => [
-        ghost.manifest.id,
+        installedGhostStoragePart(ghost),
         JSON.stringify({
           enabled: ghost.enabled,
-          available: this.isAvailable(ghost.manifest.id),
+          available: this.isAvailable(installedGhostStoragePart(ghost)),
           manifest: ghost.manifest,
         }),
       ]),

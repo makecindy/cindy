@@ -1,6 +1,6 @@
 import { advanceSessionRewindGeneration, withSendToSessionLock } from '../sendToSessionLock';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { GhostSetupAssessment } from '../../../shared/ghost';
+import type { GhostSetupAssessment, InstalledGhost } from '../../../shared/ghost';
 import type { BotAuthorizationCard } from '../../../shared/botAuthorization';
 import type { initBotAuthorizationService } from '../botAuthorizationService';
 
@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   login: vi.fn(async () => ({ ok: true })),
   continued: vi.fn(),
   visible: true,
+  ghost: null as InstalledGhost | null,
   realService: false,
   persistedCard: null as BotAuthorizationCard | null,
   deps: null as unknown as Parameters<typeof initBotAuthorizationService>[0],
@@ -55,7 +56,7 @@ vi.mock('../../cindy-brain/index.js', () => ({
 }));
 vi.mock('../../cindy-brain/ghostVisibility.js', () => ({
   classifyGhostVisibility: () => state.visible
-    ? { ok: true, ghost: { manifest: { id: 'art', name: 'Art' } } }
+    ? { ok: true, ghost: state.ghost }
     : { ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR' },
 }));
 vi.mock('../../cindy-brain/ghostWorkdirPrefs.js', () => ({ isGhostDisabledForWorkdir: () => false }));
@@ -74,6 +75,10 @@ describe('authorization Host live plugin policy', () => {
     state.assessment.mockReturnValue({ state: 'ready', revision: 1, groups: [] });
     state.subscribe.mockClear();
     state.visible = true;
+    state.ghost = { dir: '/fake/art', namespace: null,
+      manifest: { id: 'art', name: 'Art' },
+      approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+    } as InstalledGhost;
     state.realService = false;
     state.persistedCard = null;
     state.save.mockClear();
@@ -85,6 +90,57 @@ describe('authorization Host live plugin policy', () => {
       await validate();
       state.continued();
     });
+  });
+
+  it.each(['move', 'replace'] as const)('rejects a stale adapter after its physical target changes by %s', async (change) => {
+    state.ghost = { ...state.ghost!, namespace: 'acme' };
+    const adapter = await state.deps.adapter('session', { kind: 'plugin', id: 'art', namespace: 'acme' });
+    state.ghost = change === 'move'
+      ? { ...state.ghost, dir: '/fake/_ns/acme/art' }
+      : { ...state.ghost, approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' } };
+    await expect(adapter.assess()).rejects.toThrow();
+    await expect(adapter.execute({ id: 'save', kind: 'inline_form' } as never,
+      undefined, 'synthetic-secret')).rejects.toThrow();
+    expect(state.execute).not.toHaveBeenCalled();
+    const current = await state.deps.adapter('session', { kind: 'plugin', id: 'art', namespace: 'acme' });
+    await expect(current.assess()).resolves.toMatchObject({ state: 'ready' });
+  });
+
+  it('invalidates a relocated card and restores it with a fresh revision before executing on the new instance', async () => {
+    state.realService = true;
+    state.ghost = { ...state.ghost!, namespace: 'acme' };
+    state.save.mockImplementation(async (_sessionId, message) => {
+      state.persistedCard = structuredClone(message.agentMeta.botAuthorization);
+    });
+    state.assessment.mockReturnValue({ state: 'required', revision: 1, groups: [{
+      id: 'account', mode: 'any_of', items: [{ ref: 'oauth:account', kind: 'oauth', label: 'Account', state: 'missing',
+        actions: [{ id: 'connect', kind: 'oauth_connect' }] }],
+    }] });
+    const service = initializeBotAuthorizationHost(async () => {});
+    const sender = { id: 1, isDestroyed: () => false, send: vi.fn() };
+    try {
+      await service.request('session', { kind: 'plugin', id: 'art', namespace: 'acme' });
+      const original = structuredClone(state.persistedCard!);
+      service.invalidatePlugin('art');
+      state.ghost = { ...state.ghost!, dir: '/fake/_ns/acme/art' };
+      const action = { kind: 'plugin_setup' as const, action: 'run_action' as const,
+        actionId: original.snapshot.steps[0]!.action!.id, expectedRevision: original.snapshot.revision };
+      expect(await service.resolve(original.snapshot.requestId, action, sender)).toBe(true);
+      expect(state.execute).not.toHaveBeenCalled();
+      const restored = state.persistedCard!;
+      expect(restored.snapshot.ghost.id).toBe('_ns__acme__art');
+      expect(restored.snapshot.revision).toBeGreaterThan(original.snapshot.revision);
+      expect(await service.resolve(restored.snapshot.requestId, { ...action, expectedRevision: restored.snapshot.revision }, sender)).toBe(true);
+      await vi.waitFor(() => expect(state.execute).toHaveBeenCalledTimes(1));
+      expect(state.execute).toHaveBeenCalledWith(expect.objectContaining({ ghostId: '_ns__acme__art' }));
+      expect(await service.resolve(restored.snapshot.requestId, {
+        kind: 'plugin_setup', action: 'cancel', expectedRevision: state.persistedCard!.snapshot.revision,
+      }, sender)).toBe(true);
+      expect(state.persistedCard!.snapshot.terminal).toBe(true);
+    } finally {
+      await service.dispose();
+      state.save.mockReset();
+    }
   });
 
   it('runs the real Host and card lifecycle: dynamic plugin login saves a card and completion resumes once', async () => {

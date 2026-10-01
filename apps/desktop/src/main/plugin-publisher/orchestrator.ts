@@ -32,6 +32,7 @@ import {
   PLUGIN_PUBLISHER_POLL_TRANSIENT_BACKOFF_MS,
   putDeadlineAtMs,
   type PluginPublisherProgress,
+  type PluginPublisherIdentity,
   type PluginPublisherStage,
   type PluginPublisherStartResult,
 } from './types.js';
@@ -56,7 +57,7 @@ export interface PluginPublisherOrchestratorDeps {
     },
     signal: AbortSignal,
   ): Promise<boolean>;
-  identity(): { membershipId: string; orgSlug: string; orgName: string | null } | null;
+  identity(): PluginPublisherIdentity | null | Promise<PluginPublisherIdentity | null>;
   owner?: () => ActiveAppSession;
   now?: () => number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -337,9 +338,17 @@ export class PluginPublisherOrchestrator {
         this.fail(record, 'INVALID_PARAMS', '只能发布 .cindy 插件包');
         return;
       }
-      const identity = this.deps.identity();
+      const identity = await this.deps.identity();
+      if (signal.aborted || !sameActiveAppSessionOwner(record.owner, this.owner())) {
+        this.update(record, { stage: 'cancelled' });
+        return;
+      }
       if (!identity) {
         this.fail(record, 'NOT_ORG_MEMBER', '需要组织身份才能发布插件');
+        return;
+      }
+      if (!identity.orgSlug) {
+        this.fail(record, 'PUBLISHER_IDENTITY_UNAVAILABLE', '无法确认发布组织 namespace，请刷新登录后重试');
         return;
       }
 
@@ -702,6 +711,7 @@ function isTerminalPublisherClientError(error: PluginPublisherApiError): boolean
 }
 
 function mapPublisherApiMessage(error: PluginPublisherApiError): string {
+  if (error.code === 'PLUGIN_NAMESPACE_CLIENT_REQUIRED') return '请更新 Cindy 后再发布此组织的插件';
   if (error.status === 403 && error.code === 'FORBIDDEN') {
     return '本企业未开启成员发布，请联系管理员';
   }

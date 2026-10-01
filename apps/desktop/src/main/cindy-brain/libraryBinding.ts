@@ -21,6 +21,9 @@
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+
+import { isValidPluginStoragePart } from '../../shared/pluginIdentity.js';
 
 /** 单个插件的自定义位置记录。 */
 export interface LibraryBindingRecord {
@@ -43,6 +46,96 @@ export interface LibraryBindingRecord {
 export interface LibraryBindingFileData {
   version: 1;
   bindings: Record<string, LibraryBindingRecord>;
+  pendingRelocation?: LibraryBindingRelocation;
+}
+
+interface LibraryBindingRelocation {
+  version: 1;
+  ownerFile: string;
+  fromGhostId: string;
+  toGhostId: string;
+  record: LibraryBindingRecord;
+  rootIdentity: { dev: number; ino: number };
+  libraryIdentity: { dev: number; ino: number } | null;
+}
+
+async function directoryIdentity(root: string): Promise<{ dev: number; ino: number } | null> {
+  try {
+    const stat = await fs.promises.lstat(root);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.ino === 0) {
+      throw new Error('library relocation directory identity unavailable');
+    }
+    return { dev: stat.dev, ino: stat.ino };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function syncDirectory(root: string): Promise<void> {
+  if (process.platform === 'win32') return;
+  const directory = await fs.promises.open(root, 'r');
+  try {
+    await directory.sync();
+  } finally {
+    await directory.close();
+  }
+}
+
+function isDirectoryIdentity(value: unknown): value is { dev: number; ino: number } {
+  if (!value || typeof value !== 'object') return false;
+  const identity = value as { dev?: unknown; ino?: unknown };
+  return typeof identity.dev === 'number' && Number.isFinite(identity.dev) &&
+    typeof identity.ino === 'number' && Number.isFinite(identity.ino) && identity.ino > 0;
+}
+
+async function readLibraryMeta(root: string): Promise<Record<string, unknown> | null> {
+  const file = path.join(root, '.cindy-library', 'meta.json');
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !fs.existsSync(root)) return null;
+    throw error;
+  }
+  const meta: unknown = JSON.parse(raw);
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta) ||
+      (meta as { version?: unknown }).version !== 1 ||
+      typeof (meta as { createdAt?: unknown }).createdAt !== 'number' ||
+      typeof (meta as { ghostId?: unknown }).ghostId !== 'string') {
+    throw new Error('library meta is invalid');
+  }
+  return meta as Record<string, unknown>;
+}
+
+export async function assertLibraryMetaOwner(root: string, ownerId: string): Promise<void> {
+  if (!isValidPluginStoragePart(ownerId)) throw new Error('library owner id is invalid');
+  const meta = await readLibraryMeta(root);
+  if (meta && meta.ghostId !== ownerId) throw new Error('library meta belongs to a different plugin');
+}
+
+export async function relocateLibraryMetaOwner(
+  root: string, fromId: string, toId: string, assertCurrent: () => void = () => {},
+): Promise<boolean> {
+  if (!isValidPluginStoragePart(fromId) || !isValidPluginStoragePart(toId)) {
+    throw new Error('library meta relocate ids are invalid');
+  }
+  const meta = await readLibraryMeta(root);
+  assertCurrent();
+  if (!meta) return false;
+  const owner = meta.ghostId;
+  if (owner === toId) return false;
+  if (owner !== fromId) throw new Error('library meta belongs to a different plugin');
+  const file = path.join(root, '.cindy-library', 'meta.json');
+  const temporary = file + '.' + randomUUID() + '.tmp';
+  try {
+    await fs.promises.writeFile(temporary, JSON.stringify({ ...meta, ghostId: toId }), { flag: 'wx', mode: 0o600 });
+    assertCurrent();
+    await fs.promises.rename(temporary, file);
+  } finally {
+    await fs.promises.rm(temporary, { force: true });
+  }
+  return true;
 }
 
 export type LibraryLocationResolution =
@@ -200,29 +293,107 @@ export class LibraryBindingStore {
   }
 
   private async readData(): Promise<LibraryBindingFileData> {
+    const file = this.deps.getFile();
+    let data: LibraryBindingFileData;
+    let hasRelocation = false;
     try {
-      const raw = JSON.parse(await fs.promises.readFile(this.deps.getFile(), 'utf8')) as LibraryBindingFileData;
-      if (typeof raw === 'object' && raw !== null && raw.version === 1 && typeof raw.bindings === 'object' && raw.bindings !== null) {
-        return raw;
+      const raw = JSON.parse(await fs.promises.readFile(file, 'utf8')) as LibraryBindingFileData;
+      hasRelocation = typeof raw === 'object' && raw !== null && 'pendingRelocation' in raw;
+      if (typeof raw === 'object' && raw !== null && raw.version === 1 &&
+          typeof raw.bindings === 'object' && raw.bindings !== null && !Array.isArray(raw.bindings)) {
+        data = raw;
+      } else {
+        throw new Error('malformed');
       }
-      throw new Error('malformed');
     } catch (err) {
+      if (hasRelocation) throw new Error('library relocation journal is invalid');
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
         this.deps.log?.warn('library binding file unreadable; falling back to default roots', {
           error: err instanceof Error ? err.message : String(err),
         });
       }
-      return { version: 1, bindings: {} };
+      data = { version: 1, bindings: {} };
     }
+    if (file !== this.deps.getFile()) throw new Error('library binding owner changed');
+    return this.recoverRelocation(data, file);
   }
 
   /** 原子写(tmp+rename;损坏不放大)。 */
-  private async writeData(data: LibraryBindingFileData): Promise<void> {
-    const file = this.deps.getFile();
+  private async writeData(data: LibraryBindingFileData, file = this.deps.getFile()): Promise<void> {
+    if (file !== this.deps.getFile()) throw new Error('library binding owner changed');
     await fs.promises.mkdir(path.dirname(file), { recursive: true });
     const tmp = `${file}.${randomUUID()}.tmp`;
-    await fs.promises.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
+    const handle = await fs.promises.open(tmp, 'wx', 0o600);
+    try {
+      await handle.writeFile(JSON.stringify(data, null, 2), 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    if (file !== this.deps.getFile()) throw new Error('library binding owner changed');
     await fs.promises.rename(tmp, file);
+    await syncDirectory(path.dirname(file));
+  }
+
+  private async assertRelocationRoot(pending: LibraryBindingRelocation): Promise<void> {
+    const realRoot = await fs.promises.realpath(pending.record.root);
+    const identity = await directoryIdentity(realRoot);
+    if (realRoot !== pending.record.realPathAtGrant ||
+        !isDeepStrictEqual(identity, pending.rootIdentity) ||
+        (pending.record.identity?.ino && !isDeepStrictEqual(identity, pending.record.identity))) {
+      throw new Error('library relocation root identity changed');
+    }
+  }
+
+  private async recoverRelocation(data: LibraryBindingFileData, file: string): Promise<LibraryBindingFileData> {
+    if (data.pendingRelocation === undefined) return data;
+    const pending = data.pendingRelocation;
+    if (!pending || pending.version !== 1 || pending.ownerFile !== path.resolve(file) ||
+        !isValidPluginStoragePart(pending.fromGhostId) || !isValidPluginStoragePart(pending.toGhostId) ||
+        pending.fromGhostId === pending.toGhostId || !pending.record ||
+        typeof pending.record.root !== 'string' || !path.isAbsolute(pending.record.root) ||
+        typeof pending.record.realPathAtGrant !== 'string' ||
+        !Number.isInteger(pending.record.generation) || pending.record.generation < 1 ||
+        !isDirectoryIdentity(pending.rootIdentity) ||
+        (pending.libraryIdentity !== null && !isDirectoryIdentity(pending.libraryIdentity))) {
+      throw new Error('library relocation journal is invalid');
+    }
+    const sourceBinding = data.bindings[pending.fromGhostId];
+    const targetBinding = data.bindings[pending.toGhostId];
+    const beforeCommit = sourceBinding !== undefined && targetBinding === undefined &&
+      isDeepStrictEqual(sourceBinding, pending.record);
+    const afterCommit = sourceBinding === undefined && targetBinding !== undefined &&
+      isDeepStrictEqual(targetBinding, pending.record);
+    if (!beforeCommit && !afterCommit) throw new Error('library relocation binding generation changed');
+    await this.assertRelocationRoot(pending);
+    const fromRoot = path.join(pending.record.realPathAtGrant, pending.fromGhostId);
+    const toRoot = path.join(pending.record.realPathAtGrant, pending.toGhostId);
+    const sourceIdentity = await directoryIdentity(fromRoot);
+    const targetIdentity = await directoryIdentity(toRoot);
+    if (pending.libraryIdentity === null) {
+      if (sourceIdentity !== null || targetIdentity !== null || pending.record.libraryReady !== false) {
+        throw new Error('library relocation directory identity changed');
+      }
+    } else if (beforeCommit && isDeepStrictEqual(sourceIdentity, pending.libraryIdentity) && targetIdentity === null) {
+      if (file !== this.deps.getFile()) throw new Error('library binding owner changed');
+      await fs.promises.rename(fromRoot, toRoot);
+    } else if (sourceIdentity !== null || !isDeepStrictEqual(targetIdentity, pending.libraryIdentity)) {
+      throw new Error('library relocation directory identity changed');
+    }
+    await syncDirectory(pending.record.realPathAtGrant);
+    await this.assertRelocationRoot(pending);
+    if (!isDeepStrictEqual(await directoryIdentity(toRoot), pending.libraryIdentity) ||
+        await directoryIdentity(fromRoot) !== null) {
+      throw new Error('library relocation directory identity changed');
+    }
+    if (beforeCommit) {
+      data.bindings[pending.toGhostId] = pending.record;
+      delete data.bindings[pending.fromGhostId];
+      await this.writeData(data, file);
+    }
+    delete data.pendingRelocation;
+    await this.writeData(data, file);
+    return data;
   }
 
   /**
@@ -235,7 +406,7 @@ export class LibraryBindingStore {
     getDiskFreeBytes?: (root: string) => Promise<number | null>,
     opts?: { allowInsideManagedRoot?: boolean },
   ): Promise<{ ok: true; record: LibraryBindingRecord; warnings: string[] } | LocationValidationFailure> {
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(ghostId)) {
+    if (!isValidPluginStoragePart(ghostId)) {
       return { ok: false, errorCode: 'PATH_INVALID', message: 'ghostId 非法' };
     }
     return this.runSerialized(async () => {
@@ -289,7 +460,63 @@ export class LibraryBindingStore {
   }
 
   getBinding(ghostId: string): Promise<LibraryBindingRecord | null> {
-    return this.readData().then((d) => d.bindings[ghostId] ?? null);
+    return this.runSerialized(async () => (await this.readData()).bindings[ghostId] ?? null);
+  }
+
+  async assertCanRelocateBinding(fromGhostId: string, toGhostId: string): Promise<void> {
+    if (!isValidPluginStoragePart(fromGhostId) || !isValidPluginStoragePart(toGhostId)) {
+      throw new Error('library relocate ids are invalid');
+    }
+    if (fromGhostId === toGhostId) return;
+    await this.runSerialized(async () => {
+      const data = await this.readData();
+      this.assertRelocationDestination(data, fromGhostId, toGhostId);
+    });
+  }
+
+  private assertRelocationDestination(data: LibraryBindingFileData, fromGhostId: string, toGhostId: string): void {
+    const record = data.bindings[fromGhostId];
+    if (!record) return;
+    if (data.bindings[toGhostId]) {
+      throw new Error(`library binding destination already exists: ${toGhostId}`);
+    }
+    const toRoot = path.join(record.root, toGhostId);
+    if (fs.lstatSync(toRoot, { throwIfNoEntry: false })) {
+      throw new Error(`library custom root destination already exists: ${toRoot}`);
+    }
+  }
+
+  /** Move a custom binding key after a physical instance relocate. */
+  async relocateBinding(fromGhostId: string, toGhostId: string): Promise<void> {
+    if (fromGhostId === toGhostId) return;
+    if (!isValidPluginStoragePart(fromGhostId) || !isValidPluginStoragePart(toGhostId)) {
+      throw new Error('library relocate ids are invalid');
+    }
+    await this.runSerialized(async () => {
+      const file = this.deps.getFile();
+      const data = await this.readData();
+      const record = data.bindings[fromGhostId];
+      if (!record) return;
+      this.assertRelocationDestination(data, fromGhostId, toGhostId);
+      const rootIdentity = await directoryIdentity(record.realPathAtGrant);
+      if (!rootIdentity) throw new Error('library relocation root is missing');
+      const libraryIdentity = await directoryIdentity(path.join(record.realPathAtGrant, fromGhostId));
+      if (libraryIdentity === null && record.libraryReady !== false) {
+        throw new Error('library relocation source is missing');
+      }
+      data.pendingRelocation = {
+        version: 1,
+        ownerFile: path.resolve(file),
+        fromGhostId,
+        toGhostId,
+        record,
+        rootIdentity,
+        libraryIdentity,
+      };
+      await this.assertRelocationRoot(data.pendingRelocation);
+      await this.writeData(data, file);
+      await this.recoverRelocation(data, file);
+    });
   }
 
   /** First successful custom open: persist ready without bumping generation. */

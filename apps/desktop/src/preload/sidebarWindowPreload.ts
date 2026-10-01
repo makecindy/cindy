@@ -280,7 +280,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     resolvePanelMedia: (
       uri: string,
       purpose?: 'attach' | 'menu',
-    ): Promise<unknown> => ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose),
+      instanceId?: string,
+      sourceToken?: string,
+    ): Promise<unknown> => sourceToken !== undefined
+      ? ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose, instanceId, sourceToken)
+      : instanceId === undefined
+        ? ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose)
+        : ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose, instanceId),
     runtimeStates: (): Promise<{ states: Record<string, string> }> =>
       ipcRenderer.invoke('ghosts:runtime-states'),
     onChanged: (cb: (payload: unknown) => void): (() => void) => onPayload('ghosts:changed', cb),

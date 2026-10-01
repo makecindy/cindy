@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 vi.mock('../cardStoreDb.js', () => ({ getGhostCard: vi.fn(), upsertGhostCard: vi.fn() }));
 vi.mock('../../device-link/broadcast-tap.js', () => ({ captureDataOwnerBroadcastScope: vi.fn(), isDataOwnerBroadcastScopeCurrent: vi.fn(), tapWindowBroadcast: vi.fn(), getSafeDataOwnerPushStamp: vi.fn() }));
-import { createPluginIdentityRemoteProvider, createGhostCardRemoteProvider, projectGhostCardBlocks, persistGhostCardWithRemoteChange } from '../cardRemoteResource.js';
+import { createPluginIdentityRemoteProvider, createGhostCardRemoteProvider, projectGhostCardBlocks, persistGhostCardWithRemoteChange, findGhostForRemotePluginIdentity } from '../cardRemoteResource.js';
 import { upsertGhostCard } from '../cardStoreDb.js';
 import { isDataOwnerBroadcastScopeCurrent, tapWindowBroadcast } from '../../device-link/broadcast-tap.js';
 const image = `cindy-media://blobs/${'b'.repeat(64)}.png`;
@@ -63,6 +63,38 @@ describe('read-only plugin card projection', () => {
 
 
 describe('plugin identity for mobile annotations', () => {
+  it('resolves explicit root and organization identities, but never guesses an ambiguous legacy id', () => {
+    const root = { manifest: { id: 'helper' }, namespace: null, name: 'Root' };
+    const org = { manifest: { id: 'helper' }, namespace: 'acme', name: 'Organization' };
+    expect(findGhostForRemotePluginIdentity([root, org], JSON.stringify([null, 'helper']))).toBe(root);
+    expect(findGhostForRemotePluginIdentity([root, org], JSON.stringify(['acme', 'helper']))).toBe(org);
+    expect(findGhostForRemotePluginIdentity([root, org], '_ns__acme__helper')).toBe(org);
+    expect(findGhostForRemotePluginIdentity([root, org], '_ns/acme/helper')).toBe(org);
+    expect(findGhostForRemotePluginIdentity([root, org], 'helper')).toBeUndefined();
+    expect(findGhostForRemotePluginIdentity([org], 'helper')).toBe(org);
+    expect(findGhostForRemotePluginIdentity([root, org], JSON.stringify(['other', 'helper']))).toBeUndefined();
+    expect(findGhostForRemotePluginIdentity([root, org], '["acme","../helper"]')).toBeUndefined();
+  });
+  it('projects the requested organization identity through the task-scoped resource', async () => {
+    const ghosts = [
+      { manifest: { id: 'helper' }, namespace: null, name: 'Root' },
+      { manifest: { id: 'helper' }, namespace: 'acme', name: 'Organization' },
+    ];
+    const provider = createPluginIdentityRemoteProvider({
+      readIdentity: (id) => {
+        const ghost = findGhostForRemotePluginIdentity(ghosts, id);
+        return ghost ? { name: ghost.name } : undefined;
+      },
+      authorize: async () => {}, captureScope: () => () => true,
+    });
+    const ref = { ...request.ref, id: JSON.stringify(['s', JSON.stringify(['acme', 'helper'])]) };
+    expect((await provider.get!(context, { ...request, ref })).display.title).toBe('Organization');
+    await expect(provider.get!(context, { ...request, ref: { ...ref, id: JSON.stringify(['s', 'helper']) } })).rejects.toThrow('Plugin not found');
+    const longNamespace = 'a'.repeat(126);
+    ghosts.push({ manifest: { id: 'helper' }, namespace: longNamespace, name: 'Long Namespace' });
+    const longRef = { ...ref, id: JSON.stringify(['s', JSON.stringify([longNamespace, 'helper'])]) };
+    expect((await provider.get!(context, { ...request, ref: longRef })).display.title).toBe('Long Namespace');
+  });
   const request = { ref: { collectionId: 'plugin-identities', kind: 'plugin', id: '["s","art"]' }, client: { protocolVersion: 1, primitives: [] } };
   it('projects only public name and bounded raster data, never credentials or local URLs', async () => {
     const readIdentity = vi.fn(() => ({ name: 'Art', iconDataUrl: 'data:image/png;base64,YQ==', secret: 'private' }));

@@ -200,6 +200,7 @@ describe('sidebarSettingsStore', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     fs.rmSync(harness.root, { recursive: true, force: true });
   });
 

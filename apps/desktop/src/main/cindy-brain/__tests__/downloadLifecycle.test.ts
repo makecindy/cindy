@@ -8,10 +8,10 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
 it('uninstall waits for actual Node exit before removing plugin files and cache', () => {
   const start = source.indexOf('async function uninstallGhostAndCleanupLocked(');
   const body = source.slice(start, source.indexOf('\n}', start));
-  const wait = body.indexOf('await getGhostNodeRuntimeBroker().stopAndWait(id)');
+  const wait = body.indexOf('await getGhostNodeRuntimeBroker().stopAndWait(storagePart)');
   expect(wait).toBeGreaterThan(0);
-  expect(body.indexOf('runtime.stop(id)')).toBeGreaterThan(0);
-  expect(body.indexOf('runtime.stop(id)')).toBeLessThan(wait);
+  expect(body.indexOf('runtime.stop(storagePart)')).toBeGreaterThan(0);
+  expect(body.indexOf('runtime.stop(storagePart)')).toBeLessThan(wait);
   expect(body.indexOf('await manager.uninstall(')).toBeGreaterThan(wait);
   expect(body.indexOf('await pluginDownloads.removePlugin(')).toBeGreaterThan(wait);
 });

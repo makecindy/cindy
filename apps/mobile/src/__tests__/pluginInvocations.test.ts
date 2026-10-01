@@ -10,6 +10,30 @@ const msg = (id: string, role: RemoteMessage['role'], content: unknown, extra: P
 const call = (id: string, name = 'mcp__cindy__ghost_call', input: unknown = { ghost_id: 'art', tool: 'generate' }) =>
   msg(id, 'tool_use', { toolName: name, toolUseId: id, input }, { toolUseId: id });
 describe('plugin annotations on user messages', () => {
+  it('keeps root and organization calls with the same id independent, even after projection', () => {
+    const rows = [msg('u', 'user', 'Use both'),
+      call('root', undefined, { ghost_id: 'helper', namespace: null, tool: 'root_tool' }),
+      msg('done', 'tool_result', 'done', { toolUseId: 'root' }),
+      call('org', undefined, { ghost_id: 'helper', namespace: 'acme', tool: 'org_tool' })];
+    expect(normalizeRemoteMessages(rows)[0].pluginInvocations).toMatchObject([
+      { id: 'helper', namespace: null, tools: ['root_tool'], hasPendingCalls: false },
+      { id: 'helper', namespace: 'acme', tools: ['org_tool'], hasPendingCalls: true },
+    ]);
+    const projected = projectLargeSettledToolInputs([
+      msg('u2', 'user', 'Use org'),
+      call('big', undefined, { ghost_id: 'helper', namespace: 'acme', tool: 'org_tool', args: { data: 'x'.repeat(40_000) } }),
+      msg('result', 'tool_result', 'done', { toolUseId: 'big' }),
+    ]);
+    expect(normalizeRemoteMessages(projected)[0].pluginInvocations).toMatchObject([
+      { id: 'helper', namespace: 'acme', tools: ['org_tool'], hasPendingCalls: false },
+    ]);
+    const projectedRoot = projectLargeSettledToolInputs([
+      msg('u3', 'user', 'Use root'),
+      call('big-root', undefined, { ghost_id: 'helper', namespace: null, tool: 'root_tool', args: { data: 'x'.repeat(40_000) } }),
+      msg('root-result', 'tool_result', 'done', { toolUseId: 'big-root' }),
+    ]);
+    expect(normalizeRemoteMessages(projectedRoot)[0].pluginInvocations?.[0]).toMatchObject({ namespace: null });
+  });
   it('retains call identity when large arguments are released after completion', () => {
     const source = [msg('u', 'user', 'Draw'), call('c', undefined, { ghost_id: 'art', tool: 'generate', args: { data: 'x'.repeat(40_000) } }), msg('r', 'tool_result', 'done', { toolUseId: 'c' })];
     const projected = projectLargeSettledToolInputs(source);

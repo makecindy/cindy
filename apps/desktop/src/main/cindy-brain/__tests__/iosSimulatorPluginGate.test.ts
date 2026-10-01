@@ -60,6 +60,39 @@ describe('iOS Simulator plugin Host gate', () => {
     ).toEqual({ allowed: true });
   });
 
+  it('denies a namespaced provider disabled for the working directory', () => {
+    const enterprise = { ...ghost('ios-simulator', true), namespace: 'xd' };
+    expect(resolve([enterprise], { disabledInWorkdirIds: ['_ns__xd__ios-simulator'] })).toMatchObject({
+      allowed: false,
+      errorCode: 'IOS_SIMULATOR_DISABLED',
+      data: { reason: 'disabled-in-workdir' },
+    });
+  });
+
+  it('keeps namespace available when only root is disabled for the working directory', () => {
+    const root = { ...ghost('ios-simulator', true), namespace: null };
+    const enterprise = { ...ghost('ios-simulator', true), namespace: 'xd' };
+    expect(resolve([root, enterprise], { disabledInWorkdirIds: ['ios-simulator'] })).toEqual({ allowed: true });
+  });
+
+  it('checks session availability using the namespaced instance', () => {
+    const enterprise = { ...ghost('ios-simulator', true), namespace: 'xd' };
+    expect(resolve([enterprise], { unavailableIds: ['_ns__xd__ios-simulator'] })).toMatchObject({
+      allowed: false,
+      data: { reason: 'session-unavailable' },
+    });
+    expect(resolve([enterprise], { unavailableIds: ['ios-simulator'] })).toEqual({ allowed: true });
+  });
+
+  it('keeps the physical key for an in-place migrated provider', () => {
+    const enterprise = { ...ghost('ios-simulator', true), namespace: 'xd', dir: '/fake/ghosts/ios-simulator' };
+    expect(resolve([enterprise], { disabledInWorkdirIds: ['ios-simulator'] })).toMatchObject({
+      allowed: false,
+      data: { reason: 'disabled-in-workdir' },
+    });
+    expect(resolve([enterprise], { disabledInWorkdirIds: ['_ns__xd__ios-simulator'] })).toEqual({ allowed: true });
+  });
+
   it('does not treat an unrelated enabled plugin as a capability provider', () => {
     expect(resolve([ghost('ordinary-plugin', true, false)])).toMatchObject({
       allowed: false,

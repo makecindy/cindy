@@ -134,6 +134,46 @@ describe('skillSlot · checkSkillMdConsistency', () => {
 });
 
 describe('skillSlot · reconcileGhostSkillLinks', () => {
+  it('projects root and organization skills separately and reclaims a namespaced dangling link', async () => {
+    const root = ghost('my-ghost', [{ dir: 'skills/foo', name: 'foo' }]);
+    const organization = {
+      ...ghost('my-ghost', [{ dir: 'skills/foo', name: 'foo' }]),
+      namespace: 'acme',
+      dir: path.join(brainRoot, '_ns', 'acme', 'my-ghost'),
+      approvedSkillRoot: path.join(approvalStateRoot, 'skill-snapshots', '_ns', 'acme', 'my-ghost', 'revision'),
+    };
+    await writeSkillDir('my-ghost', 'skills/foo', 'foo');
+    await fs.promises.mkdir(path.join(organization.approvedSkillRoot, 'skills', 'foo'), { recursive: true });
+    await fs.promises.writeFile(path.join(organization.approvedSkillRoot, 'skills', 'foo', 'SKILL.md'),
+      '---\nname: foo\ndescription: 说明\n---\n正文\n');
+    await reconcileGhostSkillLinks({ ghosts: [root, organization], brainRoot, approvalStateRoot, homeDir });
+    const rootLink = path.join(sharedDir(), ghostSkillLinkName('my-ghost', 'foo'));
+    const orgLink = path.join(sharedDir(), ghostSkillLinkName('_ns__acme__my-ghost', 'foo'));
+    expect(sameRealPath(rootLink, path.join(brainRoot, 'my-ghost', 'skills', 'foo'))).toBe(true);
+    expect(sameRealPath(orgLink, path.join(organization.approvedSkillRoot, 'skills', 'foo'))).toBe(true);
+    await fs.promises.rm(organization.approvedSkillRoot, { recursive: true });
+    await reconcileGhostSkillLinks({ ghosts: [root], brainRoot, approvalStateRoot, homeDir });
+    await expect(fs.promises.lstat(orgLink)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('reclaims a pre-namespace-link-named orphan under a namespaced snapshot path', async () => {
+    const snapshot = path.join(approvalStateRoot, 'skill-snapshots', '_ns', 'acme', 'my-ghost', 'revision', 'skills', 'foo');
+    const legacyLink = path.join(sharedDir(), ghostSkillLinkName('my-ghost', 'foo'));
+    await fs.promises.mkdir(sharedDir(), { recursive: true });
+    await fs.promises.symlink(snapshot, legacyLink, process.platform === 'win32' ? 'junction' : 'dir');
+    await reconcileGhostSkillLinks({ ghosts: [], brainRoot, approvalStateRoot, homeDir });
+    await expect(fs.promises.lstat(legacyLink)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not reclaim a namespaced dangling link to another namespace snapshot', async () => {
+    const snapshot = path.join(approvalStateRoot, 'skill-snapshots', '_ns', 'other', 'my-ghost', 'revision', 'skills', 'foo');
+    const externalLink = path.join(sharedDir(), ghostSkillLinkName('_ns__acme__my-ghost', 'foo'));
+    await fs.promises.mkdir(sharedDir(), { recursive: true });
+    await fs.promises.symlink(snapshot, externalLink, process.platform === 'win32' ? 'junction' : 'dir');
+    await reconcileGhostSkillLinks({ ghosts: [], brainRoot, approvalStateRoot, homeDir });
+    expect(await fs.promises.readlink(externalLink)).toBe(snapshot);
+  });
+
   it('启用插件 → 建链进共享根并扇出 .claude;二次对账幂等', async () => {
     await writeSkillDir('my-ghost', 'skills/foo', 'foo');
     const ghosts = [ghost('my-ghost', [{ dir: 'skills/foo', name: 'foo' }])];
@@ -710,7 +750,7 @@ describe('skillSlot · 全链路(打包 → 装入 → 对账 → 双端可见)'
       await fs.promises.readFile(path.join(sharedDir(), linkName, 'SKILL.md'), 'utf8'),
     ).toContain('演示技能');
     await fs.promises.writeFile(
-      path.join(brainRoot, 'e2e-ghost', 'skills', 'demo', 'SKILL.md'),
+      path.join(manager.list()[0].dir, 'skills', 'demo', 'SKILL.md'),
       '---\nname: demo\ndescription: 演示技能\n---\n\n篡改后的指令\n',
     );
     expect(

@@ -104,6 +104,7 @@ describe('ghostPluginViewModel', () => {
     const items = [
       {
         id: 'xd-mivo',
+        ghostId: 'xd-mivo',
         name: 'XD Mivo',
         description: 'media',
         version: '1',
@@ -118,6 +119,7 @@ describe('ghostPluginViewModel', () => {
       },
       {
         id: 'lizi-mivo',
+        ghostId: 'lizi-mivo',
         name: 'Lizi Mivo',
         description: 'media',
         version: '1',
@@ -132,6 +134,7 @@ describe('ghostPluginViewModel', () => {
       },
       {
         id: 'slack',
+        ghostId: 'slack',
         name: 'Cindy Slack',
         description: 'messages',
         version: '1',
@@ -225,11 +228,26 @@ describe('ghostPluginViewModel', () => {
     });
   });
 
+  it('uses the physical storage part as the instance id', () => {
+    const item = toGhostPluginListItem(
+      installed({
+        manifest: manifest({ id: 'helper' }),
+        namespace: 'acme',
+        dir: '/tmp/cindy-brain/_ns/acme/helper',
+      }),
+    );
+    expect(item).toMatchObject({
+      id: '_ns__acme__helper',
+      ghostId: 'helper',
+    });
+  });
+
   it('maps install-record facts onto the list item', () => {
     const item = toGhostPluginListItem(installed());
 
     expect(item).toMatchObject({
       id: 'xd-mivo',
+      ghostId: 'xd-mivo',
       name: 'XD Mivo',
       enabled: true,
       canUse: true,

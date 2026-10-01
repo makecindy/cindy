@@ -11,9 +11,18 @@ import {
   effectiveInstallOrigin,
   type GhostInstallReceipt,
   GhostInstallReceiptStore,
+  isValidGhostSourceStateArchiveId,
 } from '../ghostInstallReceipt';
 
 describe('GhostInstallReceiptStore cleanup', () => {
+  it('accepts only a canonical random archive namespace destination', () => {
+    expect(isValidGhostSourceStateArchiveId('_ns__cindy-archive-00000000-0000-4000-8000-000000000002__hello')).toBe(true);
+    for (const value of ['hello', '../hello', '_ns__acme__hello',
+      'cindy-source-00000000-0000-4000-8000-000000000002',
+      '_ns__cindy-archive-not-random__hello']) {
+      expect(isValidGhostSourceStateArchiveId(value)).toBe(false);
+    }
+  });
   let workDir: string;
   let stateRoot: string;
   let store: GhostInstallReceiptStore;

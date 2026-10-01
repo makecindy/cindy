@@ -1206,6 +1206,28 @@ describe('connect_account shares Host live plugin policy', () => {
 });
 
 describe('connect_account ordinary task entry', () => {
+  it('selects an explicit root when an organization instance shares its id', async () => {
+    setupAssessmentMock.mockReturnValue(configured);
+    listMock.mockReturnValue([
+      { ...(chipGhost('art') as object), namespace: null },
+      { ...(chipGhost('art') as object), namespace: 'acme', dir: '/fake/_ns/acme/art' },
+    ]);
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'art' }))
+      .toMatchObject({ ok: false, errorCode: 'GHOST_AMBIGUOUS' });
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'art', namespace: null }))
+      .toMatchObject({ ok: true, status: 'ready' });
+    expect(ensureReadyMock).toHaveBeenCalledWith(expect.objectContaining({ ghostId: 'art' }));
+  });
+  it('rechecks a physically namespaced organization after its setup completes', async () => {
+    setupAssessmentMock.mockReturnValue(configured);
+    listMock.mockReturnValue([
+      { ...(chipGhost('art') as object), namespace: null },
+      { ...(chipGhost('art') as object), namespace: 'acme', dir: '/fake/_ns/acme/art' },
+    ]);
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'art', namespace: 'acme' }))
+      .toMatchObject({ ok: true, status: 'ready' });
+    expect(ensureReadyMock).toHaveBeenCalledWith(expect.objectContaining({ ghostId: '_ns__acme__art' }));
+  });
   it('keeps Host-derived GitHub login on its existing path without a cloud-only adapter', async () => {
     listMock.mockReturnValue([chipGhost('cindy-github')]);
     const signal = new AbortController().signal;
@@ -1516,12 +1538,13 @@ describe('Manual-only Ghost discovery and read gates', () => {
       const roster = deps.getRosterItems?.() ?? [];
       expect(roster.map(({ id }) => id)).toEqual(['ios-simulator', 'art']);
       expect(roster[0]).toEqual({
-        id: 'ios-simulator', name: 'iOS Simulator', recall: ghost.manifest.whenToUse,
+        id: 'ios-simulator', namespace: null, name: 'iOS Simulator', recall: ghost.manifest.whenToUse,
       });
       const ghosts = await deps.listAwakeGhosts();
       expect(ghosts).toHaveLength(2);
       expect(ghosts[0]).toEqual({
         ...roster[0],
+        namespace: null,
         tools: [],
         manual: [{ name: 'ios-simulator', description: 'Simulator workflow' }],
         setup: { state: 'ready', revision: 0, groups: [] },
@@ -1899,6 +1922,58 @@ describe('ghost_call 兜底拒绝', () => {
 });
 
 describe('session-context 宿主铸造', () => {
+  it.each([null, 'acme'])('pins namespace %s across revalidation when a twin exists', async (namespace) => {
+    listMock.mockReturnValue([
+      chipGhost('art', ['tool', 'session-context']),
+      {
+        ...(chipGhost('art', ['tool', 'session-context']) as object),
+        namespace: 'acme',
+        dir: path.join(tmpUserData, '_ns', 'acme', 'art'),
+      },
+    ]);
+    sessionSnapshotMock.mockResolvedValueOnce({
+      workingDir: WORKDIR,
+      permissionMode: 'auto',
+      planModeEnabled: true,
+      remoteHostId: null,
+    });
+
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'art',
+      namespace,
+      tool: 'run',
+      args: {
+        session_context: {
+          session_id: 'forged',
+          workdir: '/tmp/forged',
+          workdir_is_local: true,
+          workdir_is_read_only: false,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, result: 'done' });
+    expect(ensureReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ghostId: namespace === null ? 'art' : '_ns__acme__art' }),
+    );
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ghostId: namespace === null ? 'art' : '_ns__acme__art',
+        args: {
+          session_context: {
+            session_id: 's1',
+            workdir: WORKDIR,
+            workdir_is_local: true,
+            workdir_is_read_only: true,
+          },
+        },
+      }),
+    );
+    const dispatched = dispatchMock.mock.calls.at(0)?.at(0) as Record<string, unknown> | undefined;
+    expect(dispatched).not.toHaveProperty('namespace');
+  });
+
   it('剥除上游伪造值，并按会话权限注入可信只读状态', async () => {
     listMock.mockReturnValue([chipGhost('art', ['tool', 'session-context'])]);
     sessionSnapshotMock.mockResolvedValueOnce({

@@ -5242,7 +5242,7 @@
         "installed": "설치됨",
         "replace": "교체",
         "replaceAria": "{{name}}을(를) 이 마켓 버전으로 교체",
-        "replaceDescription": "같은 ID의 플러그인이 이미 설치되어 있습니다. 계속하면 이 마켓 버전으로 교체하고 플러그인 데이터는 유지됩니다.",
+        "replaceDescription": "같은 ID의 플러그인이 이미 설치되어 있습니다. 계속하면 제공자가 변경됩니다. 기존 데이터는 별도로 보관되며 새 제공자는 계정과 비밀 키를 이어받지 않으므로 다시 연결해야 합니다.",
         "unavailable": "플러그인 마켓을 일시적으로 사용할 수 없습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
         "customSourcesUnavailable": "다음 사용자 지정 마켓을 일시적으로 사용할 수 없습니다: {{names}}. 다른 마켓에는 영향을 주지 않습니다.",
         "authenticationRequired": "플러그인 마켓을 보려면 Cindy에 로그인하세요.",

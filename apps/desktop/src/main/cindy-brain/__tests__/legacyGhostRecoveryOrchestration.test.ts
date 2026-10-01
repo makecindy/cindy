@@ -61,5 +61,9 @@ describe('legacy Ghost recovery acknowledgement orchestration', () => {
     expect(acknowledgementBlock).toContain(
       'recoveredLegacyIds.filter((id) => !pending.has(id) && !failed.has(id))',
     );
+    expect(acknowledgementBlock.indexOf('captureRecoveredLegacyNamespace(')).toBeGreaterThan(0);
+    expect(acknowledgementBlock.indexOf('captureRecoveredLegacyNamespace(')).toBeLessThan(
+      acknowledgementBlock.indexOf('await acknowledgeRecoveredLegacyGhosts('),
+    );
   });
 });

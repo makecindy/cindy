@@ -36,6 +36,7 @@
 
 import { GHOST_SECRET_VALUE_MAX_CHARS } from '../../../shared/ghost.js';
 import { GhostKvError } from '../ghostKvStore.js';
+import { assertGhostProtocolTargetCurrent, GhostProtocolTargetChangedError } from './ghostProtocolTargetGuard.js';
 
 /** 单条凭证值的字符上限(粘贴的 key/token 量级;超限 413)。 */
 export { GHOST_SECRET_VALUE_MAX_CHARS };
@@ -82,6 +83,7 @@ export async function handleGhostSecretsRequest(args: {
   }>;
   vault: GhostSecretsVault;
   ghostId: string;
+  isCurrent?: () => boolean;
   /**
    * 入库成功(PUT/POST → 204)后的通知钩子(2026-07-14):调用方拿它广播
    * "凭证已保存"的主机代言 tips。只报成功——失败面(400/413/500)设置页
@@ -91,6 +93,7 @@ export async function handleGhostSecretsRequest(args: {
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }): Promise<GhostSecretsRequestOutcome> {
   const { method, pathname, readBodyText, userSecretKeys, vault, ghostId, log } = args;
+  if (args.isCurrent?.() === false) return { status: 403 };
   const identityKeys = args.identitySecretKeys ?? [];
   const managedStates = args.managedSecretStates ?? [];
   const managedKeys = managedStates.map(({ key }) => key);
@@ -145,9 +148,11 @@ export async function handleGhostSecretsRequest(args: {
     try {
       text = await readBodyText();
     } catch (err) {
+      if (args.isCurrent?.() === false || err instanceof GhostProtocolTargetChangedError) return { status: 403 };
       if (err instanceof GhostKvError && err.code === 'TOO_LARGE') return { status: 413 };
       return { status: 400 };
     }
+    if (args.isCurrent?.() === false) return { status: 403 };
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -161,8 +166,10 @@ export async function handleGhostSecretsRequest(args: {
     if (typeof value !== 'string' || value.trim().length === 0) return { status: 400 };
     if (value.length > GHOST_SECRET_VALUE_MAX_CHARS) return { status: 413 };
     try {
+      assertGhostProtocolTargetCurrent(args.isCurrent);
       if (!vault.store(ghostId, secretKey, value.trim())) return { status: 500 };
     } catch (err) {
+      if (err instanceof GhostProtocolTargetChangedError) return { status: 403 };
       log?.warn('ghost secret 入库意外失败', { ghostId, secretKey, err: String(err) });
       return { status: 500 };
     }
@@ -181,9 +188,11 @@ export async function handleGhostSecretsRequest(args: {
 
   if (method === 'DELETE') {
     try {
+      assertGhostProtocolTargetCurrent(args.isCurrent);
       vault.remove(ghostId, secretKey);
       return { status: 204 };
     } catch (err) {
+      if (err instanceof GhostProtocolTargetChangedError) return { status: 403 };
       log?.warn('ghost secret 清除意外失败', { ghostId, secretKey, err: String(err) });
       return { status: 500 };
     }

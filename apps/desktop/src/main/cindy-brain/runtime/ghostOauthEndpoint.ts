@@ -28,8 +28,8 @@
  * 产生的全部令牌只存在主机保险库与内存缓存,本端点没有任何读回动作。
  */
 
-import { isBrokerEligibleGhostId } from '../../../shared/ghost.js';
 import { GhostKvError } from '../ghostKvStore.js';
+import { assertGhostProtocolTargetCurrent, GhostProtocolTargetChangedError } from './ghostProtocolTargetGuard.js';
 import { GHOST_SECRET_VALUE_MAX_CHARS } from './ghostSecretsEndpoint.js';
 import type {
   GhostOauthAccountView,
@@ -57,6 +57,7 @@ export interface GhostOauthEndpointManager {
   ): boolean;
   clearClientConfig(ghostId: string, secretKey: string): void;
   listAccounts(ghostId: string, secretKey: string, decl?: GhostOauthDecl): GhostOauthAccountView[];
+  captureConnectTarget?(ghostId: string): unknown;
   connectAccount(
     ghostId: string,
     secretKey: string,
@@ -65,6 +66,8 @@ export interface GhostOauthEndpointManager {
       scopes?: readonly string[];
       clientId?: string;
       deliveryHosts?: readonly string[];
+      expectedConnectTarget?: unknown;
+      assertCurrent?: () => void;
     },
   ): Promise<GhostOauthConnectResult>;
   disconnectAccount(ghostId: string, secretKey: string, accountId: string): void;
@@ -90,6 +93,7 @@ export async function handleGhostOauthRequest(args: {
   networkHosts?: readonly string[];
   manager: GhostOauthEndpointManager;
   ghostId: string;
+  isCurrent?: () => boolean;
   /** Official prefix first; otherwise first-party resolver. Defaults to official-prefix only. */
   isTokenBrokerAuthorized?: (ghostId: string) => boolean;
   /** Serialize credential/account persistence with package OAuth migration. */
@@ -100,8 +104,17 @@ export async function handleGhostOauthRequest(args: {
 }): Promise<GhostOauthRequestOutcome> {
   const { method, pathname, readBodyText, oauthSecrets, networkHosts, manager, ghostId, log } =
     args;
-  const runMutation = <T>(task: () => Promise<T> | T): Promise<T> =>
-    args.withMutationLock?.(ghostId, task) ?? Promise.resolve(task());
+  if (args.isCurrent?.() === false) return { status: 403 };
+  const assertCurrent = (): void => assertGhostProtocolTargetCurrent(args.isCurrent);
+  const runMutation = async <T>(task: () => Promise<T> | T): Promise<T> => {
+    const guardedTask = () => {
+      assertCurrent();
+      return task();
+    };
+    const result = await (args.withMutationLock?.(ghostId, guardedTask) ?? guardedTask());
+    assertCurrent();
+    return result;
+  };
   const notifyChanged = (secretKey: string): void => {
     try {
       args.onChanged?.(secretKey);
@@ -147,10 +160,12 @@ export async function handleGhostOauthRequest(args: {
     try {
       text = await readBodyText();
     } catch (err) {
+      if (args.isCurrent?.() === false || err instanceof GhostProtocolTargetChangedError) return { ok: false, status: 403 };
       if (err instanceof GhostKvError && err.code === 'TOO_LARGE')
         return { ok: false, status: 413 };
       return { ok: false, status: 400 };
     }
+    if (args.isCurrent?.() === false) return { ok: false, status: 403 };
     try {
       const parsed = JSON.parse(text) as unknown;
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
@@ -168,6 +183,7 @@ export async function handleGhostOauthRequest(args: {
     if (decl.tokenBroker !== undefined) return { status: 405 };
     if (method === 'PUT' || method === 'POST') {
       const parsed = await readJsonBody();
+      if (args.isCurrent?.() === false) return { status: 403 };
       if (!parsed.ok) return { status: parsed.status };
       const body = parsed.body;
       const clientId = typeof body.clientId === 'string' ? body.clientId.trim() : '';
@@ -188,6 +204,7 @@ export async function handleGhostOauthRequest(args: {
         notifyChanged(secretKey);
         return { status: 204 };
       } catch (err) {
+        if (err instanceof GhostProtocolTargetChangedError || args.isCurrent?.() === false) return { status: 403 };
         log?.warn('ghost oauth client 凭证入库意外失败', { ghostId, secretKey, err: String(err) });
         return { status: 500 };
       }
@@ -198,6 +215,7 @@ export async function handleGhostOauthRequest(args: {
         notifyChanged(secretKey);
         return { status: 204 };
       } catch (err) {
+        if (err instanceof GhostProtocolTargetChangedError || args.isCurrent?.() === false) return { status: 403 };
         log?.warn('ghost oauth client 凭证清除意外失败', { ghostId, secretKey, err: String(err) });
         return { status: 500 };
       }
@@ -207,9 +225,9 @@ export async function handleGhostOauthRequest(args: {
 
   if (action === 'connect' && segments.length === 2) {
     if (method !== 'POST') return { status: 405 };
-    // tokenBroker 第一方门控·连接闸。官方前缀命中照今天放行；否则问接线处判据。
+    // tokenBroker 第一方门控·连接闸。接线处按可信安装事实判定，缺省拒绝。
     const brokerAuthorized =
-      args.isTokenBrokerAuthorized?.(ghostId) ?? isBrokerEligibleGhostId(ghostId);
+      args.isTokenBrokerAuthorized?.(ghostId) === true;
     if (decl.tokenBroker !== undefined && !brokerAuthorized) {
       return {
         status: 200,
@@ -224,10 +242,14 @@ export async function handleGhostOauthRequest(args: {
     // 清单的非空子集;clientId 仅 broker 模式可从默认/备用声明值中选择。
     // (设置页"只读连接"这类降面授权)。无 body / 空 body = 申请全量声明面;
     // 越界或形态不对 400(意识不能借连接动作扩权,manager 侧还有防御性重验)。
+    const connectTarget = manager.captureConnectTarget
+      ? { expectedConnectTarget: manager.captureConnectTarget(ghostId) }
+      : {};
     let scopesOverride: string[] | undefined;
     let clientIdOverride: string | undefined;
     try {
       const text = await readBodyText();
+      assertCurrent();
       if (text.trim().length > 0) {
         const parsed = JSON.parse(text) as unknown;
         if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
@@ -262,11 +284,14 @@ export async function handleGhostOauthRequest(args: {
         }
       }
     } catch (err) {
+      if (err instanceof GhostProtocolTargetChangedError || args.isCurrent?.() === false) return { status: 403 };
       if (err instanceof GhostKvError && err.code === 'TOO_LARGE') return { status: 413 };
       return { status: 400 };
     }
     try {
       const opts = {
+        ...connectTarget,
+        ...(args.isCurrent ? { assertCurrent } : {}),
         ...(scopesOverride !== undefined ? { scopes: scopesOverride } : {}),
         ...(clientIdOverride !== undefined ? { clientId: clientIdOverride } : {}),
         ...(networkHosts?.length ? { deliveryHosts: networkHosts } : {}),
@@ -277,10 +302,12 @@ export async function handleGhostOauthRequest(args: {
         decl,
         Object.keys(opts).length > 0 ? opts : undefined,
       );
+      assertCurrent();
       // 结构化透传(ok:false 也是 200——授权被拒/超时是业务态不是协议错;
       // detail 可能含服务端错误摘录,已由引擎保证不含凭证字节)。
       return { status: 200, body: JSON.stringify(result) };
     } catch (err) {
+      if (err instanceof GhostProtocolTargetChangedError || args.isCurrent?.() === false) return { status: 403 };
       log?.warn('ghost oauth 授权流程意外失败', { ghostId, secretKey, err: String(err) });
       return { status: 500 };
     }
@@ -289,6 +316,7 @@ export async function handleGhostOauthRequest(args: {
   if (action === 'insufficient-scopes' && segments.length === 2) {
     if (method !== 'POST') return { status: 405 };
     const parsed = await readJsonBody();
+    if (args.isCurrent?.() === false) return { status: 403 };
     if (!parsed.ok) return { status: parsed.status };
     const rawScopes = parsed.body.scopes;
     if (!Array.isArray(rawScopes) || rawScopes.length === 0 || rawScopes.length > 320) {
@@ -312,6 +340,7 @@ export async function handleGhostOauthRequest(args: {
       if (stored === 'stored') notifyChanged(secretKey);
       return { status: 204 };
     } catch (err) {
+      if (err instanceof GhostProtocolTargetChangedError || args.isCurrent?.() === false) return { status: 403 };
       log?.warn('ghost oauth 缺失 scope 证据入库失败', { ghostId, secretKey, err: String(err) });
       return { status: 500 };
     }
@@ -326,6 +355,7 @@ export async function handleGhostOauthRequest(args: {
       notifyChanged(secretKey);
       return { status: 204 };
     } catch (err) {
+      if (err instanceof GhostProtocolTargetChangedError || args.isCurrent?.() === false) return { status: 403 };
       log?.warn('ghost oauth 断开账号意外失败', { ghostId, secretKey, err: String(err) });
       return { status: 500 };
     }
@@ -334,6 +364,7 @@ export async function handleGhostOauthRequest(args: {
   if (action === 'default' && segments.length === 2) {
     if (method !== 'POST') return { status: 405 };
     const parsed = await readJsonBody();
+    if (args.isCurrent?.() === false) return { status: 403 };
     if (!parsed.ok) return { status: parsed.status };
     const accountId = parsed.body.accountId;
     if (typeof accountId !== 'string' || accountId.length === 0) return { status: 400 };
@@ -344,6 +375,7 @@ export async function handleGhostOauthRequest(args: {
       notifyChanged(secretKey);
       return { status: 204 };
     } catch (err) {
+      if (err instanceof GhostProtocolTargetChangedError || args.isCurrent?.() === false) return { status: 403 };
       log?.warn('ghost oauth 设默认账号意外失败', { ghostId, secretKey, err: String(err) });
       return { status: 500 };
     }

@@ -205,6 +205,31 @@ describe('PluginMarketApi', () => {
     });
   });
 
+  it('rejects a later page whose organization namespace conflicts with the first-page identity', async () => {
+    const fetcher = pagedFetcher(
+      {
+        plugins: [], nextCursor: PLUGIN_A,
+        currentOrganization: { organizationId: 'org-acme', orgSlug: 'acme', pluginPrefix: 'acme' },
+      },
+      {
+        plugins: [{ ...summary(PLUGIN_B, 'beta'), scope: 'organization',
+          organizationId: 'org-other', namespace: 'other' }],
+        nextCursor: null,
+      },
+    );
+    await expect(new PluginMarketApi(fetcher).listAll()).rejects.toThrow('namespace');
+  });
+
+  it('rejects conflicting organization facts across pages even with empty listings', async () => {
+    const fetcher = pagedFetcher(
+      { plugins: [], nextCursor: PLUGIN_A,
+        currentOrganization: { organizationId: 'org-acme', orgSlug: 'acme', pluginPrefix: 'acme' } },
+      { plugins: [], nextCursor: null,
+        currentOrganization: { organizationId: 'org-other', orgSlug: 'other', pluginPrefix: 'other' } },
+    );
+    await expect(new PluginMarketApi(fetcher).listAll()).rejects.toThrow('currentOrganization');
+  });
+
   it('keeps a null currentOrganization as a personal-identity fact', async () => {
     const fetcher = pagedFetcher({
       plugins: [summary(PLUGIN_A, 'alpha')],

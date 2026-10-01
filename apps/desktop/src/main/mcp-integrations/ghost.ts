@@ -83,6 +83,14 @@ import {
   type GhostSetupAssessment,
   type InstalledGhost,
 } from '../../shared/ghost.js';
+import {
+  findInstalledGhostByInstanceId,
+  installedGhostLogicalIdentity,
+  deliveryNamespaceFields,
+  installedGhostStoragePart,
+  pluginStoragePart,
+  resolveInstalledGhost,
+} from '../../shared/pluginIdentity.js';
 import { withCardToken } from '../cindy-brain/cardService.js';
 import { drainGhostCallMedia } from '../cindy-brain/ghostMediaLedger.js';
 import {
@@ -98,7 +106,7 @@ import {
 } from '../cindy-brain/index.js';
 import { writeForgeScaffoldWithStableParent } from '../cindy-brain/forgeScaffoldCapability.js';
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
-import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
+import { classifyGhostVisibility, classifyInstalledGhostVisibility } from '../cindy-brain/ghostVisibility.js';
 import { readInstalledGhostManual } from '../cindy-brain/ghostManual.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
@@ -628,9 +636,7 @@ async function getForgeSessionFsGate(
 function ghostDisplayName(ghostId: string): string {
   if (ghostId === CINDY_FORGE_GRANT_ID) return 'Forge';
   if (ghostId === CINDY_SESSION_FS_GRANT_ID) return 'Cindy';
-  const g = getGhostManager()
-    .list()
-    .find((x) => x.manifest.id === ghostId);
+  const g = findInstalledGhostByInstanceId(getGhostManager().list(), ghostId);
   return g?.manifest.name ?? ghostId;
 }
 
@@ -1588,7 +1594,7 @@ function visibleChipGhosts(
         isGhostAvailableForActiveSession(ghost.manifest.id) &&
         ghost.manifest.kind === 'chip' &&
         (ghostHasTools(ghost) || ghostHasManual(ghost)) &&
-        !isGhostDisabledForWorkdir(ghost.manifest.id, workdir),
+        !isGhostDisabledForWorkdir(installedGhostStoragePart(ghost), workdir),
     );
 }
 
@@ -1609,6 +1615,7 @@ export function getGhostRosterPrompt({ workingDir }: { workingDir?: string }): s
     const recall = ghostRecall(ghost);
     return {
       id: ghost.manifest.id,
+      ...(ghost.namespaceMigration === 'pending' ? {} : { namespace: ghost.namespace ?? null }),
       name: ghost.manifest.name,
       ...(ghost.manifest.command ? { command: ghost.manifest.command } : {}),
       ...(recall ? { recall } : {}),
@@ -1621,17 +1628,20 @@ function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
   const recall = ghostRecall(ghost);
   let setup: CindyGhostInfo['setup'];
   try {
-    setup = getGhostSetupAssessment(ghost.manifest.id);
+    setup = getGhostSetupAssessment(installedGhostStoragePart(ghost));
   } catch (error) {
     // Discovery is best-effort per plugin. Keep this plugin discoverable
     // without claiming it is ready; ghost_call retains the strict setup gate.
     log.warn('ghost setup assessment omitted from discovery', {
-      ghostId: ghost.manifest.id,
+      ghostId: installedGhostStoragePart(ghost),
       errorType: error instanceof Error ? error.name : typeof error,
     });
   }
   return {
     id: ghost.manifest.id,
+    namespace: Object.prototype.hasOwnProperty.call(ghost, 'namespace')
+      ? ghost.namespace ?? null
+      : null,
     name: ghost.manifest.name,
     ...(ghost.manifest.command ? { command: ghost.manifest.command } : {}),
     ...(recall ? { recall } : {}),
@@ -1678,10 +1688,11 @@ export function getCindyGhostsMcpDeps(
   };
   const marketTools = hostDeps.pluginMarket && createPluginMarketAgentTools({
     market: hostDeps.pluginMarket,
-    installedState: (ghostId) => {
-      const visibility = classifyGhostVisibility(ghostId, resolveSessionContext()?.workingDir ?? null, ghostVisibilityDeps);
+    installedState: (ghostId, namespace) => {
+      const visibility = classifyGhostVisibility(ghostId, resolveSessionContext()?.workingDir ?? null, ghostVisibilityDeps, namespace);
+      const resolved = resolveInstalledGhost(getGhostManager().list(), ghostId, namespace);
       return {
-        exists: getGhostManager().list().some(ghost => ghost.manifest.id === ghostId),
+        exists: resolved.status === 'unique',
         errorCode: visibility.ok ? null : visibility.errorCode,
       };
     },
@@ -1735,9 +1746,11 @@ export function getCindyGhostsMcpDeps(
         return service.request(sessionId, target);
       }
       const workingDir = context?.workingDir ?? null;
-      const visible = classifyGhostVisibility(target.id, workingDir, ghostVisibilityDeps);
+      const visible = classifyGhostVisibility(target.id, workingDir, ghostVisibilityDeps,
+        target.kind === 'plugin' ? target.namespace : undefined);
       if (!visible.ok) return visible;
-      const assessment = getGhostSetupAssessment(target.id);
+      const instanceId = installedGhostStoragePart(visible.ghost);
+      const assessment = getGhostSetupAssessment(instanceId);
       if (assessment.state === 'ready' && assessment.groups.length === 0) {
         // gh-cli and other Host-derived sources deliberately have no synchronous
         // setup requirement. An empty assessment is not proof of platform login.
@@ -1752,14 +1765,18 @@ export function getCindyGhostsMcpDeps(
       const coordinator = getGhostSetupCoordinator();
       if (!coordinator) return { ok: false, errorCode: 'HOST_NOT_READY' };
       const result = await coordinator.ensureReady({
-        sessionId, ghostId: target.id, workingDir, signal,
+        sessionId, ghostId: instanceId, workingDir, signal,
         ...(target.reauthorize ? { reauthorize: true } : {}),
       });
       if (!result.ok) return result;
       if (signal?.aborted) return { ok: false, errorCode: 'SETUP_CANCELLED' };
-      const current = classifyGhostVisibility(target.id, workingDir, ghostVisibilityDeps);
+      const current = classifyGhostVisibility(target.id, workingDir, ghostVisibilityDeps,
+        target.namespace);
       if (!current.ok) return current;
-      const final = getGhostSetupAssessment(target.id);
+      if (installedGhostStoragePart(current.ghost) !== instanceId) {
+        return { ok: false, errorCode: 'GHOST_NOT_FOUND' };
+      }
+      const final = getGhostSetupAssessment(instanceId);
       if (final.state !== 'ready') return { ok: false, errorCode: 'SETUP_REQUIRED' };
       return { ok: true, status: 'ready', ghostId: target.id,
         message: 'Host setup is ready. No plugin business operation was executed. Platform permissions are verified only by the requested operation.' };
@@ -1843,6 +1860,7 @@ export function getCindyGhostsMcpDeps(
           const recall = ghostRecall(g);
           return {
             id: g.manifest.id,
+            ...(g.namespaceMigration === 'pending' ? {} : { namespace: g.namespace ?? null }),
             name: g.manifest.name,
             ...(g.manifest.command ? { command: g.manifest.command } : {}),
             ...(recall ? { recall } : {}),
@@ -1857,15 +1875,15 @@ export function getCindyGhostsMcpDeps(
       return visibleChipGhosts(workdir)
         .map(toCindyGhostInfo);
     },
-    async getAwakeGhost(ghostId) {
+    async getAwakeGhost(ghostId, namespace) {
       const workdir = resolveSessionContext()?.workingDir ?? null;
-      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps);
+      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps, namespace);
       if (!visibility.ok) return visibility;
-      const visible = visibleChipGhosts(workdir).find(
-        (ghost) => ghost.manifest.id === ghostId,
+      const visible = visibleChipGhosts(workdir).some(
+        (ghost) => ghost === visibility.ghost || ghost.dir === visibility.ghost.dir,
       );
       if (visible) {
-        return { ok: true, ghost: toCindyGhostInfo(visible) };
+        return { ok: true, ghost: toCindyGhostInfo(visibility.ghost) };
       }
       return {
         ok: false,
@@ -1873,9 +1891,9 @@ export function getCindyGhostsMcpDeps(
         message: GHOST_NO_AGENT_SURFACE_MESSAGE,
       };
     },
-    async readGhostManual({ ghostId, path: manualPath }) {
+    async readGhostManual({ ghostId, namespace, path: manualPath }) {
       const workdir = resolveSessionContext()?.workingDir ?? null;
-      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps);
+      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps, namespace);
       if (!visibility.ok) {
         return {
           ok: false,
@@ -1898,6 +1916,7 @@ export function getCindyGhostsMcpDeps(
     },
     async callGhostTool({
       ghostId,
+      namespace,
       tool,
       args,
       attachments,
@@ -1916,9 +1935,11 @@ export function getCindyGhostsMcpDeps(
         ghostId,
         sessionWorkdir,
         ghostVisibilityDeps,
+        namespace,
       );
       if (!initialVisibility.ok) return initialVisibility;
       const target = initialVisibility.ghost;
+      const instanceId = installedGhostStoragePart(target);
       // 媒体过户:显式 attachments 逐张落媒体总仓 + 记可读引用
       // (人工确认 = ghost-grant；Host 工具代办 = ghost-tool-grant),指纹注入
       // args.attachments 交给意识。任何一张失败整批拒(ATTACHMENT_INVALID),
@@ -1961,12 +1982,12 @@ export function getCindyGhostsMcpDeps(
       const authorizationService = getBotAuthorizationService();
       if (authorizationService && authorizationSessionId && await isBotAuthorizationSession(authorizationSessionId)) {
         const service = authorizationService;
-        const card = await service.request(authorizationSessionId, { kind: 'plugin', id: ghostId, ...(setupPlan && getGhostSetupAssessment(ghostId).reauthSuggest ? { reauthorize: true } : {}) }, setupPlan);
+        const card = await service.request(authorizationSessionId, { kind: 'plugin', id: target.manifest.id, ...deliveryNamespaceFields(target), ...(setupPlan && getGhostSetupAssessment(instanceId).reauthSuggest ? { reauthorize: true } : {}) }, setupPlan);
         if (!card.ok) return card;
       }
       const setup = await setupCoordinator.ensureReady({
         sessionId: ghostSetupInteractionSessionId(sessionContext),
-        ghostId,
+        ghostId: instanceId,
         ...(!grantOnly ? { tool } : {}),
         workingDir: sessionWorkdir,
         ...(setupPlan ? { plan: setupPlan } : {}),
@@ -1975,8 +1996,8 @@ export function getCindyGhostsMcpDeps(
 
       // OAuth/settings may take minutes. Re-resolve mutable target facts after
       // the waiter completes and before beginning the existing side effects.
-      const refreshedVisibility = classifyGhostVisibility(
-        ghostId,
+      const refreshedVisibility = classifyInstalledGhostVisibility(
+        target,
         sessionWorkdir,
         ghostVisibilityDeps,
       );
@@ -1994,7 +2015,7 @@ export function getCindyGhostsMcpDeps(
       }
       let finalAssessment;
       try {
-        finalAssessment = getGhostSetupAssessment(ghostId);
+        finalAssessment = getGhostSetupAssessment(instanceId);
       } catch {
         return {
           ok: false,
@@ -2015,14 +2036,14 @@ export function getCindyGhostsMcpDeps(
       if (grantOnly) {
         // Full pre-grant gate: confirm target, workdir, and setup readiness
         // BEFORE grantAttachmentUrls creates durable ledger entries.
-        const grantVisibility = classifyGhostVisibility(
-          ghostId,
+        const grantVisibility = classifyInstalledGhostVisibility(
+          target,
           sessionWorkdir,
           ghostVisibilityDeps,
         );
         if (!grantVisibility.ok) return grantVisibility;
         try {
-          const grantOnlyAssessment = getGhostSetupAssessment(ghostId);
+          const grantOnlyAssessment = getGhostSetupAssessment(instanceId);
           if (grantOnlyAssessment.state !== 'ready') {
             return {
               ok: false,
@@ -2039,7 +2060,7 @@ export function getCindyGhostsMcpDeps(
           };
         }
         const grant = await grantAttachmentUrls({
-          ghostId,
+          ghostId: instanceId,
           urls: attachments!,
           workdirAbs: sessionWorkdir,
           sessionId: sessionIdForConfirm,
@@ -2052,15 +2073,15 @@ export function getCindyGhostsMcpDeps(
         }
         // Post-grant revalidation: the grant process includes an async user
         // confirmation step; re-check everything before returning success.
-        const postGrantVisibility = classifyGhostVisibility(
-          ghostId,
+        const postGrantVisibility = classifyInstalledGhostVisibility(
+          target,
           sessionWorkdir,
           ghostVisibilityDeps,
         );
         if (!postGrantVisibility.ok) return postGrantVisibility;
         let postGrantAssessment: GhostSetupAssessment;
         try {
-          postGrantAssessment = getGhostSetupAssessment(ghostId);
+          postGrantAssessment = getGhostSetupAssessment(instanceId);
           if (postGrantAssessment.state !== 'ready') {
             return {
               ok: false,
@@ -2093,7 +2114,7 @@ export function getCindyGhostsMcpDeps(
       const attachmentUrls = [...new Set(attachments ?? [])];
       if (attachmentUrls.length > 0) {
         const grant = await grantAttachmentUrls({
-          ghostId,
+          ghostId: instanceId,
           urls: attachmentUrls,
           workdirAbs: sessionWorkdir,
           sessionId: sessionIdForConfirm,
@@ -2115,7 +2136,7 @@ export function getCindyGhostsMcpDeps(
       if (dir !== undefined) {
         if (handoffExpired()) return handoffDenied;
         const dirConfirm = await confirmDepositOutsideWorkdir({
-          ghostId,
+          ghostId: instanceId,
           sessionId: sessionIdForConfirm,
           sessionInstanceId: sessionInstanceIdForGrant,
           lane: 'dir',
@@ -2129,7 +2150,7 @@ export function getCindyGhostsMcpDeps(
         if (dirConfirm.isCurrent) handoffChecks.push(dirConfirm.isCurrent);
         if (handoffExpired()) return handoffDenied;
         const deposited = getDirDepositVault().deposit({
-          ghostId,
+          ghostId: installedGhostStoragePart(target),
           dirAbs: dirConfirm.userGranted ? dirConfirm.approvedRealPath : dir,
           workdirAbs: sessionWorkdir,
           userGranted: dirConfirm.userGranted,
@@ -2146,7 +2167,7 @@ export function getCindyGhostsMcpDeps(
       if (saveDir !== undefined) {
         if (handoffExpired()) return handoffDenied;
         const saveConfirm = await confirmDepositOutsideWorkdir({
-          ghostId,
+          ghostId: instanceId,
           sessionId: sessionIdForConfirm,
           sessionInstanceId: sessionInstanceIdForGrant,
           lane: 'save_dir',
@@ -2160,7 +2181,7 @@ export function getCindyGhostsMcpDeps(
         if (saveConfirm.isCurrent) handoffChecks.push(saveConfirm.isCurrent);
         if (handoffExpired()) return handoffDenied;
         const saveDeposited = getSaveDepositVault().deposit({
-          ghostId,
+          ghostId: installedGhostStoragePart(target),
           dirAbs: saveConfirm.userGranted ? saveConfirm.approvedRealPath : saveDir,
           workdirAbs: sessionWorkdir,
           userGranted: saveConfirm.userGranted,
@@ -2182,8 +2203,8 @@ export function getCindyGhostsMcpDeps(
       // Pre-dispatch revalidation: attachment grants and dir tickets may have
       // taken time; confirm the target is still available before committing the
       // callId and dispatching to the sandbox.
-      const preDispatchVisibility = classifyGhostVisibility(
-        ghostId,
+      const preDispatchVisibility = classifyInstalledGhostVisibility(
+        target,
         sessionWorkdir,
         ghostVisibilityDeps,
       );
@@ -2197,7 +2218,7 @@ export function getCindyGhostsMcpDeps(
         };
       }
       try {
-        const preDispatchAssessment = getGhostSetupAssessment(ghostId);
+        const preDispatchAssessment = getGhostSetupAssessment(instanceId);
         if (preDispatchAssessment.state !== 'ready') {
           return {
             ok: false,
@@ -2218,16 +2239,17 @@ export function getCindyGhostsMcpDeps(
       // a same-ID plugin replacement removing the declaration during the await.
       if (preDispatch.manifest.sessionContext === true) {
         const ctx = await buildGhostSessionContext(sessionIdForConfirm, sessionWorkdir);
-        const postCtxManifest = getGhostManager()
-          .list()
-          .find((g) => g.manifest.id === ghostId)?.manifest;
+        const postCtxManifest = findInstalledGhostByInstanceId(
+          getGhostManager().list(),
+          instanceId,
+        )?.manifest;
         if (postCtxManifest?.sessionContext === true) {
           mergedArgs = { ...mergedArgs, session_context: ctx };
         }
       }
       // Full revalidation after session-context await (DB query may take time)
-      const postCtxVisibility = classifyGhostVisibility(
-        ghostId,
+      const postCtxVisibility = classifyInstalledGhostVisibility(
+        target,
         sessionWorkdir,
         ghostVisibilityDeps,
       );
@@ -2242,7 +2264,7 @@ export function getCindyGhostsMcpDeps(
       }
       let postCtxAssessment: GhostSetupAssessment;
       try {
-        postCtxAssessment = getGhostSetupAssessment(ghostId);
+        postCtxAssessment = getGhostSetupAssessment(instanceId);
         if (postCtxAssessment.state !== 'ready') {
           return {
             ok: false,
@@ -2268,7 +2290,8 @@ export function getCindyGhostsMcpDeps(
       const cardService = getGhostCardService();
       const callSessionContext = resolveSessionContext();
       cardService.registerCall(callId, {
-        ghostId,
+        ghostId: instanceId,
+        logicalGhostId: pluginStoragePart(installedGhostLogicalIdentity(target)),
         toolUseId: agentToolUseId ?? null,
         // ALS 优先(codex 每单恢复)、闭包兜底(claude 建线期按 session 绑定)
         // ——此前 claude 路径这里恒为 null,卡片只能靠 toolUseId 启发式锚定。
@@ -2281,7 +2304,7 @@ export function getCindyGhostsMcpDeps(
       // GhostToolCallResult 与 CindyGhostCallResult 同构(错误码枚举一致),
       // 原样透传;类型层若有漂移 tsc 会拦。
       const result = await getGhostPipeDispatcher().callGhostTool({
-        ghostId,
+        ghostId: instanceId,
         tool,
         args: mergedArgs,
         callId,
@@ -2291,7 +2314,7 @@ export function getCindyGhostsMcpDeps(
       // 收口取账(ghostMediaLedger):本次调用期间主机实际入库的媒体地址。
       // 失败也 drain(清账防泄漏),但只在成功结果上附带——cindy-tools 层
       // 在意识未声明媒体字段时以 xdt_media_produced 注入,兜底 IM/hook 送达。
-      const producedMedia = drainGhostCallMedia(ghostId, callId);
+      const producedMedia = drainGhostCallMedia(instanceId, callId);
       const finalized = withCardToken(result, cardService.finalizeCall(callId), callId);
       if (!finalized.ok) return finalized;
       // 附最后一道 gate(postCtx)的快照:它是派发前最新的 ready 判定。

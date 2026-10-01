@@ -29,6 +29,47 @@ function call(args: {
 }
 
 describe('cindy-brain · ghostKvEndpoint(/kv 分派纯函数)', () => {
+  it.each(['PUT', 'POST'])('rejects a late %s body after its install target changes', async (method) => {
+    const store = memStore({ source: 'replacement' });
+    let current = true;
+    let finishBody!: (body: string) => void;
+    const body = new Promise<string>((resolve) => { finishBody = resolve; });
+    const pending = handleGhostKvRequest({
+      method, ghostId: 'demo', store, readBodyText: () => body,
+      isCurrent: () => current,
+    });
+    current = false;
+    finishBody('{"source":"old"}');
+    expect(await pending).toEqual({ status: 403 });
+    expect(store.write).not.toHaveBeenCalled();
+    expect(store.read('demo')).toEqual({ source: 'replacement' });
+  });
+
+  it('rejects a non-current request before reading either its body or stored data', async () => {
+    const store = memStore();
+    const readBodyText = vi.fn(async () => '{"source":"old"}');
+    for (const method of ['GET', 'PUT', 'POST']) {
+      expect(await handleGhostKvRequest({
+        method, ghostId: 'demo', store, readBodyText, isCurrent: () => false,
+      })).toEqual({ status: 403 });
+    }
+    expect(readBodyText).not.toHaveBeenCalled();
+    expect(store.read).not.toHaveBeenCalled();
+    expect(store.write).not.toHaveBeenCalled();
+  });
+
+  it('preserves a late body from the unchanged current install', async () => {
+    const store = memStore();
+    let finishBody!: (body: string) => void;
+    const body = new Promise<string>((resolve) => { finishBody = resolve; });
+    const pending = handleGhostKvRequest({
+      method: 'PUT', ghostId: 'demo', store, readBodyText: () => body, isCurrent: () => true,
+    });
+    finishBody('{"source":"current"}');
+    expect(await pending).toEqual({ status: 204 });
+    expect(store.write).toHaveBeenCalledExactlyOnceWith('demo', { source: 'current' });
+  });
+
   it('GET → 200 + store 内容 JSON', async () => {
     const store = memStore({ theme: 'dark' });
     const out = await call({ method: 'GET', store });

@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { authorDeclaredNamespaceReason } from '@cindy/plugin-protocol';
 import { validateGhostManifest, type GhostManifest } from '../../../shared/ghost.js';
 import { createLogger } from '../../logger.js';
 import {
@@ -356,6 +357,7 @@ async function resolvePluginDir(
     const errno = errnoOf(error);
     return skippedBy(kind, manifestReadReason(kind, errno), errno);
   }
+  if (authorDeclaredNamespaceReason(raw)) return { kind: 'invalid', reason: 'manifest-invalid' };
   const validated = validateGhostManifest(raw);
   if (!validated.ok) return { kind: 'invalid', reason: 'manifest-invalid' };
   return {

@@ -5334,7 +5334,7 @@
         "customSourcesUnavailable": "以下自訂市場暫時無法存取：{{names}}，其他市場不受影響。",
         "replace": "取代",
         "replaceAria": "以此市場版本取代 {{name}}",
-        "replaceDescription": "已安裝相同 ID 的插件，繼續將以市場版本取代，原有資料會保留。"
+        "replaceDescription": "已安裝相同 ID 的插件；繼續安裝會切換來源。原來源的資料將隔離保留，新來源不會繼承原帳號和金鑰，需要重新連接。"
       },
       "install": "安裝插件…",
       "empty": "還沒有安裝任何插件",

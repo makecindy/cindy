@@ -22,8 +22,15 @@ import {
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { assertGhostPrefsWritable, relocateGhostPreferenceMaps } from './ghostPreferenceRelocation.js';
 
 const log = desktopMakerLogger.child('errand-prefs-store');
+
+export async function relocateGhostErrandPrefs(from: string, to: string): Promise<void> {
+  await relocateGhostPreferenceMaps('ghost-errand-prefs.json', ['errand', 'sessions'], from, to, () => {
+    store = createStore();
+  });
+}
 
 /** errand 会话可选的 agent 种类(与 sessions.agent_kind 同词汇表)。 */
 export const GHOST_ERRAND_AGENT_KINDS = ['cc', 'codex', 'pi'] as const;
@@ -120,13 +127,18 @@ function normalize(raw: unknown): GhostErrandPrefs {
   return { errand, sessions };
 }
 
-const store = createOverrideSettingsFile<GhostErrandPrefs>({
-  filePath: () => ownerScopedUserDataPath('ghost-errand-prefs.json'),
-  defaults: DEFAULTS,
-  normalize,
-  log,
-  label: 'ghost-errand-prefs',
-});
+function createStore() {
+  return createOverrideSettingsFile<GhostErrandPrefs>({
+    filePath: () => ownerScopedUserDataPath('ghost-errand-prefs.json'),
+    defaults: DEFAULTS,
+    normalize,
+    log,
+    label: 'ghost-errand-prefs',
+    preserveUnreadableFile: true,
+  });
+}
+
+let store = createStore();
 
 /** 读某插件的 errand 配置(缺省空对象 = 全跟随默认)。 */
 export function readGhostErrandConfig(ghostId: string): GhostErrandConfig {
@@ -141,6 +153,7 @@ export function readGhostErrandConfig(ghostId: string): GhostErrandConfig {
  * 形状粗筛,逐字段值域清洗统一在这里(单一执法点)。返回清洗后的落盘值。
  */
 export function writeGhostErrandConfig(ghostId: string, config: unknown): GhostErrandConfig {
+  assertGhostPrefsWritable('ghost-errand-prefs.json');
   store.invalidateIfChanged();
   const errand = { ...store.read().errand };
   const cfg = config === null ? {} : normalizeConfig(config);
@@ -163,6 +176,7 @@ export function writeGhostErrandSessionId(
   sessionId: string | null,
   sessionKey?: string,
 ): void {
+  assertGhostPrefsWritable('ghost-errand-prefs.json');
   store.invalidateIfChanged();
   const key = sessionMapKey(ghostId, sessionKey);
   const sessions = { ...store.read().sessions };

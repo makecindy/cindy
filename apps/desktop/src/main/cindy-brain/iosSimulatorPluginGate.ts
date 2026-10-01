@@ -1,6 +1,7 @@
 import type { IOSSimulatorMcpAccessDecision } from '@cindy/mcps';
 
 import type { InstalledGhost } from '../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 
 export interface IOSSimulatorPluginGateDeps {
   isAvailableForActiveSession(ghostId: string): boolean;
@@ -47,11 +48,11 @@ export function resolveIOSSimulatorPluginAccess(
   }
 
   const sessionCandidates = candidates.filter((ghost) =>
-    deps.isAvailableForActiveSession(ghost.manifest.id),
+    deps.isAvailableForActiveSession(installedGhostStoragePart(ghost)),
   );
   const enabledCandidates = sessionCandidates.filter((ghost) => ghost.enabled === true);
   const available = enabledCandidates.find(
-    (ghost) => !deps.isDisabledForWorkdir(ghost.manifest.id, workingDir),
+    (ghost) => !deps.isDisabledForWorkdir(installedGhostStoragePart(ghost), workingDir),
   );
   if (available) return { allowed: true };
 

@@ -5,9 +5,16 @@ export const SIDEBAR_PINNED_ORDER_MAX_ENTRIES = 10_000;
 export const SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH = 4_096;
 export const SIDEBAR_HIDDEN_MAIN_VIEW_MAX_ENTRIES = 1_000;
 
-/** Matches the Ghost manifest id grammar without importing the large runtime contract. */
+/** Matches a Ghost id or namespaced storage part without importing the runtime contract. */
+const SIDEBAR_GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const SIDEBAR_NS_STORAGE_RE =
+  /^_ns__[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?__[a-z0-9][a-z0-9-]{0,31}$/;
+
 export function isSidebarGhostId(value: unknown): value is string {
-  return typeof value === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(value);
+  return (
+    typeof value === 'string' &&
+    (SIDEBAR_GHOST_ID_RE.test(value) || SIDEBAR_NS_STORAGE_RE.test(value))
+  );
 }
 
 export interface SidebarSettingsSnapshot extends DataOwnerPushStamp {

@@ -46,8 +46,22 @@ it('preserves disabled/unavailable gates and ordinary on-demand startup behavior
   const ghost = { enabled: true, manifest: checked.manifest } as InstalledGhost;
   const deps = { isAvailable: () => true, startNode: vi.fn(), spawnBrowser: vi.fn(), warn: vi.fn() };
   spawnResidentGhost({ ...ghost, enabled: false }, deps);
+  spawnResidentGhost({ ...ghost, namespaceMigration: 'pending' }, deps);
   spawnResidentGhost(ghost, { ...deps, isAvailable: () => false });
   spawnResidentGhost({ ...ghost, manifest: { ...ghost.manifest, routineEvents: undefined } }, deps);
   expect(deps.startNode).not.toHaveBeenCalled();
   expect(deps.spawnBrowser).not.toHaveBeenCalled();
+});
+
+it('starts a pending approved legacy resident only with an explicit offline recovery grant', () => {
+  const checked = validateGhostManifest(manifest);
+  if (!checked.ok) throw new Error(checked.reason);
+  const ghost = { enabled: true, manifest: checked.manifest, namespaceMigration: 'pending' } as InstalledGhost;
+  const deps = { isAvailable: () => true, startNode: vi.fn(), spawnBrowser: vi.fn(async () => ({ ok: true })), warn: vi.fn() };
+  spawnResidentGhost(ghost, deps);
+  expect(deps.spawnBrowser).not.toHaveBeenCalled();
+  spawnResidentGhost(ghost, { ...deps, allowPendingLegacy: true });
+  expect(deps.spawnBrowser).toHaveBeenCalledOnce();
+  spawnResidentGhost({ ...ghost, enabled: false }, { ...deps, allowPendingLegacy: true });
+  expect(deps.spawnBrowser).toHaveBeenCalledOnce();
 });

@@ -173,8 +173,8 @@ describe('ChatInput session switch focus contract', () => {
       'const handleComposerSuggestionSelect = useCallback(',
     );
 
-    expect(pluginPageSource).toContain('pendingGhostId: ghost.manifest.id');
-    expect(pluginPageSource).toContain('pendingHostCapabilityGhostId: ghost.manifest.id');
+    expect(pluginPageSource).toContain('pendingGhostId: installedGhostStoragePart(ghost)');
+    expect(pluginPageSource).toContain('pendingHostCapabilityGhostId: installedGhostStoragePart(ghost)');
     expect(pluginPageSource.match(/focusAtEnd: true/g)).toHaveLength(1);
     expect(
       chatInputSource.match(/placeGhostAtComposerStart\(editor, ghost, installedGhosts\)/g),
@@ -214,7 +214,7 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
       'worktreeCreationStore.clear(newSession.id);',
     );
 
-    expect(chatInputSource).toContain('findGhostByCommand(eligibleGhosts, ghostCommandWord)');
+    expect(chatInputSource).toContain('findGhostByCommand(eligibleGhosts, ghostCommandToken.word, ghostCommandToken.namespace)');
     expect(chatInputSource).toContain('onAccepted: markRecentPluginUsage');
     expect(successfulSendBlock).toContain('markRecentPluginUsage();');
     expect(newMakerDraftRouteSource.match(/opts\?\.onAccepted\?\.\(\);/g)).toHaveLength(3);

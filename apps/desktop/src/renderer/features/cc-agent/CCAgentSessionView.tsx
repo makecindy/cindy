@@ -296,7 +296,7 @@ import { hasSplitGroupSessionType } from './splitGroupDnd';
 import { splitGroupStore } from './splitGroupStore';
 import {
   attachGhostMediaToSession,
-  getGhostMediaUriFromDataTransfer,
+  getGhostMediaHandoverFromDataTransfer,
 } from '@/cindy-brain/ghostMediaHandover';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import {
@@ -4900,7 +4900,7 @@ export function CCAgentSessionView({
           // 意识面板拖来的产物(cindy-ghost:// 媒体地址,不带 files):落在聊天区
           // 任意位置都算数,与 ChatInput 自己的 onDrop 同一条引渡链路——
           // main 验归属后图片落图片附件、视频落路径引用的 file 附件(托盘可见)。
-          const ghostMediaUri = getGhostMediaUriFromDataTransfer(e.dataTransfer);
+          const ghostMediaUri = getGhostMediaHandoverFromDataTransfer(e.dataTransfer);
           if (ghostMediaUri) {
             if (sessionId) void attachGhostMediaToSession(ghostMediaUri, sessionId, t);
             return;

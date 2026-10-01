@@ -23,6 +23,19 @@ function random(seed: number) {
 }
 
 describe('host plugin recommendation selection', () => {
+  it('keeps same-name instances as separate recommendations', () => {
+    const snapshot = {
+      ...empty,
+      sources: [
+        { ghostId: 'helper', name: 'Root', enabled: true, items: [task] },
+        { ghostId: '_ns__acme__helper', name: 'Org', enabled: true, items: [task] },
+      ],
+    };
+    const catalog = buildHomeTaskCatalog(snapshot, 'en', t).filter((entry) => entry.pluginId?.includes('helper'));
+    expect(catalog.map((entry) => entry.id)).toEqual([
+      'plugin:helper:one', 'plugin:_ns__acme__helper:one',
+    ]);
+  });
   it('includes curated installation tasks and respects an explicit empty author catalog', () => {
     expect(buildHomeTaskCatalog(empty, 'en', t).filter((x) => x.needsInstall)).toHaveLength(3);
     const snapshot = {

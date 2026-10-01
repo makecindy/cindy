@@ -25,6 +25,7 @@ import {
 } from '../cindy-brain/index.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
+import { installedGhostStoragePart, installedGhostMutationTargetToken } from '../../shared/pluginIdentity.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import {
   getGrokAccessToken,
@@ -155,27 +156,33 @@ export function initializeBotAuthorizationHost(
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
-      const validate = async () => {
+      const validate = async (expectedTarget?: string | null) => {
         await assertSession(sessionId);
         const result = classifyGhostVisibility(target.id, session?.workingDir ?? null, {
           listGhosts: () => getGhostManager().list(),
           isAvailableForActiveSession: isGhostAvailableForActiveSession,
           isDisabledForWorkdir: isGhostDisabledForWorkdir,
-        });
+        }, target.namespace);
         if (!result.ok) throw new Error('Plugin is unavailable');
+        if (expectedTarget !== undefined && (expectedTarget === null ||
+            installedGhostMutationTargetToken(result.ghost, '') !== expectedTarget)) {
+          throw new Error('Authorization plugin instance changed');
+        }
         return result.ghost;
       };
       const ghost = await validate();
+      const expectedTarget = installedGhostMutationTargetToken(ghost, '');
+      const instanceId = installedGhostStoragePart(ghost);
       let reconnected = false;
       return {
         identity: {
-          id: target.id,
+          id: instanceId,
           name: ghost.manifest.name,
           ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
         },
         async assess() {
-          await validate();
-          const assessment = getGhostSetupAssessment(target.id);
+          await validate(expectedTarget);
+          const assessment = getGhostSetupAssessment(instanceId);
           if (!target.reauthorize) return assessment;
           const suggested = toReauthInteractionAssessment(assessment);
           // A plugin-wide OAuth event (or successful action) cannot satisfy a
@@ -196,12 +203,12 @@ export function initializeBotAuthorizationHost(
           return groups.length ? { ...assessment, state: 'required' as const, groups } : assessment;
         },
         subscribe: (wake) =>
-          bus.subscribe(target.id, (event) => {
+          bus.subscribe(instanceId, (event) => {
             if (event.source === 'oauth') reconnected = true;
             wake();
           }),
         async execute(action, sender, value, onAuthorizationUrl, assertCurrent, beforeCommit) {
-          await validate();
+          await validate(expectedTarget);
           assertCurrent?.();
           const release = acquireGhostMutationLeaseForMcp(captureGhostMutationOwnerForMcp());
           try {
@@ -209,14 +216,14 @@ export function initializeBotAuthorizationHost(
               if (value === undefined) return { ok: false, errorCode: 'INLINE_UNAVAILABLE' };
               return await executeGhostSetupInlineAction({
                 sessionId,
-                ghostId: target.id,
+                ghostId: instanceId,
                 action,
                 value,
               });
             }
             const result = await executeGhostSetupAction({
               sessionId,
-              ghostId: target.id,
+              ghostId: instanceId,
               action,
               responseTarget: sender,
               onAuthorizationUrl,
@@ -327,6 +334,7 @@ export function initializeBotAuthorizationHost(
           !card.snapshot.terminal &&
           card.target.kind === target.kind &&
           card.target.id === target.id &&
+          (card.target.kind !== 'plugin' || card.target.namespace === (target.kind === 'plugin' ? target.namespace : undefined)) &&
           !!card.target.reauthorize === !!target.reauthorize
         )
           return card;

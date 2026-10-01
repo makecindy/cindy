@@ -51,6 +51,8 @@ import {
   readCustomProviderKeyForMutation,
   readGhostSecretStrict,
   readGhostSecretTailFromIo,
+  migrateGhostSecrets,
+  setMivoSecretAliasVerifier,
   resolveOwnerScopedSecretStorageKey,
   setProviderSecretsClearedListener,
   UNRECOVERABLE_PROVIDER_CREDENTIAL,
@@ -90,6 +92,47 @@ function createMemoryIo(): SecretStorageIo & { store: Map<string, string> } {
     list: () => [...store.keys()],
   };
 }
+
+describe('ghost secret relocation rollback', () => {
+  const source = ghostSecretStorageKey('helper', 'one');
+  const destination = ghostSecretStorageKey('_ns__acme__helper', 'one');
+  const secondSource = ghostSecretStorageKey('helper', 'two');
+  const secondDestination = ghostSecretStorageKey('_ns__acme__helper', 'two');
+
+  it('keeps the destination when restoring the only old copy fails', () => {
+    const io = createMemoryIo();
+    io.store.set(source, 'fake-one');
+    io.store.set(secondSource, 'fake-two');
+    const write = io.write;
+    const remove = io.remove;
+    io.write = (key, value) => key === source ? false : write(key, value);
+    io.remove = (key) => key === secondSource ? { success: false } : remove(key);
+    expect(() => migrateGhostSecrets('helper', '_ns__acme__helper', io)).toThrow();
+    expect(io.store.get(destination)).toBe('fake-one');
+    expect(io.store.has(source)).toBe(false);
+    expect(io.store.get(secondSource)).toBe('fake-two');
+    expect(io.store.has(secondDestination)).toBe(false);
+  });
+
+  it('rolls back the current write if removing its source fails', () => {
+    const io = createMemoryIo();
+    io.store.set(source, 'fake-one');
+    io.remove = (key) => key === source ? { success: false } : (io.store.delete(key), { success: true });
+    expect(() => migrateGhostSecrets('helper', '_ns__acme__helper', io)).toThrow();
+    expect(io.store.get(source)).toBe('fake-one');
+    expect(io.store.has(destination)).toBe(false);
+  });
+
+  it('does not delete a same-valued destination that predates a later rollback', () => {
+    const io = createMemoryIo();
+    io.store.set(source, 'fake-one');
+    io.store.set(destination, 'fake-one');
+    const undo = migrateGhostSecrets('helper', '_ns__acme__helper', io);
+    undo();
+    expect(io.store.get(source)).toBe('fake-one');
+    expect(io.store.get(destination)).toBe('fake-one');
+  });
+});
 
 describe('providerSecrets registry', () => {
   it('maps known providers to their stable storage keys', () => {
@@ -153,6 +196,25 @@ describe('providerSecrets registry', () => {
     expect(() => ghostSecretStorageKey('ok', 'k.ey')).toThrow(/illegal characters/);
   });
 
+  it('企业实例 storage part 与 root 凭证键隔离,且不继承官方别名', () => {
+    expect(ghostSecretStorageKey('helper', 'token')).toBe('ghost_secret_helper_token');
+    expect(ghostSecretStorageKey('_ns__acme__helper', 'token')).toBe(
+      'ghost_secret__ns__acme__helper_token',
+    );
+    expect(ghostSecretHintStorageKey('_ns__acme__helper', 'token')).toBe(
+      'ghost_hint__ns__acme__helper_token',
+    );
+    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key', true)).toBe(
+      ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true),
+    );
+    expect(ghostSecretStorageKey('_ns__acme__xd-mivo', 'mivo_api_key')).toBe(
+      'ghost_secret__ns__acme__xd-mivo_mivo_api_key',
+    );
+    expect(ghostSecretStorageKey('_ns__acme__xd-mivo', 'mivo_api_key')).not.toBe(
+      ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true),
+    );
+  });
+
   it('官方别名:cindy-web-search 的凭证映射到历史 brave/tavily 存储键(老用户零迁移)', () => {
     // 与「工具密钥」时代同一 .enc 文件:老用户已填 key 对意识立即生效,
     // lizi_web_search MCP 也照读同一份。
@@ -164,7 +226,9 @@ describe('providerSecrets registry', () => {
   });
 
   it('官方别名:xd-mivo 的 mivo_api_key 映射到历史 mivo 存储键(老用户零迁移)', () => {
-    expect(ghostSecretStorageKey('xd-mivo', 'mivo_api_key')).toBe(providerSecretStorageKey('mivo'));
+    expect(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true)).toBe(providerSecretStorageKey('mivo'));
+    expect(ghostSecretStorageKey('xd-mivo', 'mivo_api_key')).not.toBe(providerSecretStorageKey('mivo'));
+    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key')).not.toBe(providerSecretStorageKey('mivo'));
     expect(ghostSecretStorageKey('xd-mivo', 'other_key')).toBe('ghost_secret_xd-mivo_other_key');
     expect(ghostSecretStorageKey('third-party', 'mivo_api_key')).toBe('ghost_secret_third-party_mivo_api_key');
   });
@@ -359,9 +423,21 @@ describe('readGhostSecretTailFromIo(尾指纹读取 + 老键懒回填)', () => {
   });
 
   it('官方别名键(xd-mivo 老用户)同样能懒回填', () => {
-    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key'), 'mivo_legacy_key_9999');
+    setMivoSecretAliasVerifier((id) => id === 'xd-mivo');
+    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true), 'mivo_legacy_key_9999');
     expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBe('9999');
     expect(io.store.get(ghostSecretHintStorageKey('xd-mivo', 'mivo_api_key'))).toBe('9999');
+    setMivoSecretAliasVerifier(null);
+  });
+
+  it('a name-only Mivo cannot read the historical secret or its cached hint', () => {
+    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true), 'mivo_legacy_key_9999');
+    io.store.set(ghostSecretHintStorageKey('xd-mivo', 'mivo_api_key'), '9999');
+    setMivoSecretAliasVerifier(null);
+    expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBeNull();
+    setMivoSecretAliasVerifier((id) => id === 'xd-mivo');
+    expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBe('9999');
+    setMivoSecretAliasVerifier(null);
   });
 
   it('没存过 / 值太短不产指纹 → null 且不落回填键', () => {

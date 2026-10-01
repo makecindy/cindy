@@ -18,7 +18,7 @@ import { ArrowLeft, CircleAlert, RefreshCcw, Settings2, Sparkles } from 'lucide-
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
-import { attachGhostMediaToSession, getGhostMediaUriFromDataTransfer } from '@/cindy-brain/ghostMediaHandover';
+import { attachGhostMediaToSession, getGhostMediaHandoverFromDataTransfer } from '@/cindy-brain/ghostMediaHandover';
 import { ChatImageView } from '@/components/chat/ChatImageView';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { TextLightbox } from '@/components/chat/TextLightbox';
@@ -421,7 +421,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   const dropAttachments = (event: DragEvent) => {
     // .cindy / .cshare drops belong to the window-level import; only clear the hint.
     if (isGlobalDropIntercepted(event.nativeEvent)) return;
-    const ghostMediaUri = getGhostMediaUriFromDataTransfer(event.dataTransfer);
+    const ghostMediaUri = getGhostMediaHandoverFromDataTransfer(event.dataTransfer);
     if (ghostMediaUri) {
       void attachGhostMediaToSession(ghostMediaUri, attachmentScope, t);
       return;

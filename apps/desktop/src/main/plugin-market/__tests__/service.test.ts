@@ -19,6 +19,7 @@ const runtime = vi.hoisted(() => ({
     manifest: Record<string, unknown>;
     dir: string;
     enabled: boolean;
+    namespace?: string | null;
     approval?: GhostInstallApproval;
     trust?: GhostTrustInfo;
   }>,
@@ -31,9 +32,11 @@ const runtime = vi.hoisted(() => ({
   pendingCalls: false,
   runningErrand: false,
   cindyWork: false,
+  busyQueryIds: [] as string[],
   generatedInstallDirs: [] as string[],
   installOrigins: new Map<string, 'manual' | 'agent-forge'>(),
   installOriginError: false,
+  resumeOfflineResidents: vi.fn(),
   currentOrganization: null as {
     organizationId: string;
     pluginPrefix: string | null;
@@ -81,6 +84,7 @@ vi.mock('../../logger.js', () => ({
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
   getGhostManager: () => ({
+    resumePendingResidentsOffline: runtime.resumeOfflineResidents,
     list: () =>
       runtime.ghosts.map((ghost) => {
         // Historical service tests used a production-looking placeholder path.
@@ -162,9 +166,18 @@ vi.mock('../../cindy-brain/index.js', () => ({
     });
     return installed;
   },
-  hasPendingGhostCalls: vi.fn(() => runtime.pendingCalls),
-  hasRunningGhostErrand: vi.fn(() => runtime.runningErrand),
-  hasRunningGhostCindyWork: vi.fn(() => runtime.cindyWork),
+  hasPendingGhostCalls: vi.fn((id: string) => {
+    runtime.busyQueryIds.push(id);
+    return runtime.pendingCalls;
+  }),
+  hasRunningGhostErrand: vi.fn((id: string) => {
+    runtime.busyQueryIds.push(id);
+    return runtime.runningErrand;
+  }),
+  hasRunningGhostCindyWork: vi.fn((id: string) => {
+    runtime.busyQueryIds.push(id);
+    return runtime.cindyWork;
+  }),
   isBuiltinGhostRemovedByUser: (id: string) => runtime.builtinRemoved.has(id),
   uninstallGhostAndCleanup: runtime.uninstall,
 }));
@@ -173,6 +186,7 @@ vi.mock('../download.js', () => ({
 }));
 
 import type {
+  PluginDownloadResponse,
   PluginRemovalNotice,
   VisiblePluginDetail,
   VisiblePluginSummary,
@@ -223,11 +237,13 @@ afterEach(() => {
   runtime.pendingCalls = false;
   runtime.runningErrand = false;
   runtime.cindyWork = false;
+  runtime.busyQueryIds = [];
   for (const dir of runtime.generatedInstallDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
   runtime.installOrigins.clear();
   runtime.installOriginError = false;
+  runtime.resumeOfflineResidents.mockClear();
   runtime.currentOrganization = null;
   runtime.boundaryPending = false;
   runtime.approvedInstallEvidence.mockReset();
@@ -398,7 +414,7 @@ function harness(items: VisiblePluginSummary[], removals: PluginRemovalNotice[] 
         },
       } satisfies VisiblePluginDetail;
     }),
-    download: vi.fn(async () => ({
+    download: vi.fn(async (): Promise<PluginDownloadResponse> => ({
       url: 'https://downloads.test.invalid/plugin.cindy',
       expiresAt: '2099-01-01T00:00:00.000Z',
       sha256: 'a'.repeat(64),
@@ -452,6 +468,19 @@ function mockUninstallDropsGhost(failFor?: string): void {
 }
 
 describe('PluginMarketService migration and defaultInstall', () => {
+  it('resumes eligible pending residents only when market discovery is unavailable', async () => {
+    const h = harness([]);
+    h.api.listAll.mockRejectedValueOnce(new Error('market offline'));
+    await h.service.snapshot();
+    expect(runtime.resumeOfflineResidents).toHaveBeenCalledOnce();
+    await h.service.snapshot();
+    expect(runtime.resumeOfflineResidents).toHaveBeenCalledOnce();
+    runtime.pluginApiBaseUrl = null;
+    await h.service.snapshot({ discoveryOnly: true });
+    expect(runtime.resumeOfflineResidents).toHaveBeenCalledOnce();
+    await h.service.snapshot();
+    expect(runtime.resumeOfflineResidents).toHaveBeenCalledTimes(2);
+  });
   it('backfills the exact raw identity for an unchanged v0.1.61 v2 card record', async () => {
     const rawManifest = {
       schemaVersion: 2 as const,
@@ -1135,6 +1164,72 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
+  it('recovers a disconnected namespaced install beside a same-id public catalog entry', async () => {
+    const publicItem = summary({ ghostId: 'helper', namespace: null });
+    const orgItem = summary({
+      id: `c${'d'.repeat(24)}`,
+      ghostId: 'helper', namespace: 'acme', scope: 'organization', organizationId: 'org-1',
+      currentRelease: { ...summary().currentRelease, id: RELEASE_ID },
+    });
+    const canonicalManifest = normalizedManifest(manifest('helper'));
+    const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-namespace-recovery-'));
+    roots.push(installRoot);
+    const orgDir = path.join(installRoot, '_ns', 'acme', 'helper');
+    fs.mkdirSync(orgDir, { recursive: true });
+    fs.writeFileSync(path.join(orgDir, 'ghost.json'), JSON.stringify(canonicalManifest));
+    runtime.ghosts = [{ manifest: canonicalManifest as unknown as Record<string, unknown>,
+      dir: orgDir, namespace: 'acme', enabled: true }];
+    runtime.approvedInstallEvidence.mockReturnValue({
+      packageSha256: orgItem.currentRelease.sha256,
+      approvedManifest: canonicalManifest,
+      legacyMigrated: false,
+    });
+    const h = harness([publicItem, orgItem]);
+    const record = recordForTest(orgItem, {
+      namespace: 'acme', manifestDigest: ghostManifestDigest(canonicalManifest),
+    });
+    h.ledger.upsertInstallation(record);
+    h.ledger.markRemovedRecord(record, 'user-1');
+
+    const snapshot = await h.service.snapshot();
+
+    expect(h.ledger.installationForIdentity({ namespace: 'acme', ghostId: 'helper' }))
+      .toMatchObject({ installed: true, pluginId: orgItem.id });
+    expect(snapshot.items.find((item) => item.pluginId === orgItem.id)?.installState).toBe('installed');
+    expect(h.api.download).not.toHaveBeenCalled();
+  });
+
+  it('does not reconnect a namespaced install to a same-id catalog entry from another namespace', async () => {
+    const canonicalManifest = normalizedManifest(manifest('helper'));
+    const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-namespace-drift-'));
+    roots.push(installRoot);
+    const orgDir = path.join(installRoot, '_ns', 'acme', 'helper');
+    fs.mkdirSync(orgDir, { recursive: true });
+    fs.writeFileSync(path.join(orgDir, 'ghost.json'), JSON.stringify(canonicalManifest));
+    runtime.ghosts = [{ manifest: canonicalManifest as unknown as Record<string, unknown>,
+      dir: orgDir, namespace: 'acme', enabled: true }];
+    runtime.approvedInstallEvidence.mockReturnValue({
+      packageSha256: summary().currentRelease.sha256,
+      approvedManifest: canonicalManifest,
+      legacyMigrated: false,
+    });
+    const catalogItem = summary({
+      ghostId: 'helper', namespace: 'other', scope: 'organization', organizationId: 'org-1',
+      currentRelease: { ...summary().currentRelease, id: RELEASE_ID },
+    });
+    const h = harness([catalogItem, summary({ id: `c${'d'.repeat(24)}`, ghostId: 'helper', namespace: null })]);
+    const record = recordForTest(catalogItem, {
+      namespace: 'acme', manifestDigest: ghostManifestDigest(canonicalManifest),
+    });
+    h.ledger.upsertInstallation(record);
+    h.ledger.markRemovedRecord(record, 'user-1');
+
+    await h.service.snapshot();
+
+    expect(h.ledger.installationForIdentity({ namespace: 'acme', ghostId: 'helper' }))
+      .toMatchObject({ installed: false });
+  });
+
   it('keeps a disconnected route detached when a modern receipt names another manifest', async () => {
     const canonicalManifest = normalizedManifest(manifest());
     const item = summary({
@@ -1418,6 +1513,25 @@ describe('PluginMarketService migration and defaultInstall', () => {
       manifestDigest: ghostManifestDigest(manifest()),
     });
   });
+  it('installs a namespaced default even when a public catalog entry shares the ghostId', async () => {
+    const publicItem = summary({ ghostId: 'helper', namespace: null });
+    const orgItem = summary({
+      id: 'c'.repeat(25), ghostId: 'helper', namespace: 'acme', scope: 'organization',
+      organizationId: 'org-1', defaultInstall: true,
+    });
+    const h = harness([publicItem, orgItem]);
+    runtime.install.mockImplementationOnce(async () => {
+      const ghost = { manifest: manifest('helper'), namespace: 'acme',
+        dir: '/userData/cindy-brain/_ns/acme/helper', enabled: true };
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+    await h.service.snapshot();
+    expect(runtime.install).toHaveBeenCalledWith(expect.any(String),
+      expect.objectContaining({ ghostId: 'helper', namespace: 'acme' }));
+    expect(h.ledger.installationForIdentity({ namespace: 'acme', ghostId: 'helper' }))
+      .toMatchObject({ installed: true, pluginId: orgItem.id });
+  });
 
   it('installs a default package whose detail manifest contains normalized setup requirements', async () => {
     const item = summary({ defaultInstall: true });
@@ -1443,6 +1557,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       items: [{ installState: 'installed', enabled: true }],
     });
     expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('manifestCap');
+    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('sourceChanged');
   });
 
   it('returns a Renderer snapshot before a default install download finishes', async () => {
@@ -1569,6 +1684,10 @@ describe('PluginMarketService migration and defaultInstall', () => {
       version: '1.0.0',
       consent: { mode: 'confirmed', key: expect.any(String) },
       afterCommitInLock: expect.any(Function),
+      pendingMarketRecord: {
+        scope: 'public', organizationId: null, source: 'market', installed: true,
+        sha256: item.currentRelease.sha256,
+      },
     });
   });
 
@@ -1696,42 +1815,40 @@ describe('PluginMarketService migration and defaultInstall', () => {
       version: '1.0.0',
       consent: { mode: 'confirmed', key: expect.any(String) },
       afterCommitInLock: expect.any(Function),
+      pendingMarketRecord: {
+        scope: 'public', organizationId: null, source: 'market', installed: true,
+        sha256: item.currentRelease.sha256,
+      },
     });
     // 安装入口用目录 summary 做 detail 身份绑定(防止把 A 的确认导向 B 的内容),
     // 因此手动安装也会先取一次目录,但不做任何 listAll 之外的多余请求。
     expect(h.api.listAll).toHaveBeenCalledTimes(1);
     // 锁定装完即开的最终结果:装入入口返回的 ghost 必须是启用态。
     expect(ghost?.enabled).toBe(true);
-    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('pendingMarketRecord');
+    expect(runtime.install.mock.calls[0]?.[1]?.pendingMarketRecord).toMatchObject({
+      scope: 'public', organizationId: null, source: 'market', sha256: item.currentRelease.sha256,
+    });
   });
 
-  it('passes a Host-built pendingMarketRecord only for organization server-market packages', async () => {
-    const orgItem = summary({
-      ghostId: 'acme-tool',
-      scope: 'organization',
-      organizationId: 'org-1',
-      source: 'local-market',
-      installed: false,
-    } as Partial<VisiblePluginSummary> & { source: string; installed: boolean });
+  it.each([
+    { scope: 'organization', organizationId: 'org-1', ghostId: 'acme-tool', source: 'local-market', installed: false },
+    { scope: 'public', organizationId: null },
+    { scope: 'personal', organizationId: null },
+  ] as const)('passes a Host-built pendingMarketRecord for $scope server-market installs', async (overrides) => {
+    const item = summary(overrides);
     runtime.install.mockResolvedValue({
-      manifest: manifest('acme-tool'),
-      dir: '/userData/cindy-brain/acme-tool',
+      manifest: manifest(item.ghostId),
+      dir: '/userData/cindy-brain/' + item.ghostId,
       enabled: true,
     });
-    const orgHarness = harness([orgItem]);
-    await orgHarness.service.install(orgItem.id, {
-      ...reviewedInstallOptions(orgItem),
-      expectedManifest: manifest('acme-tool'),
-    }, TEST_INSTALL_CONTEXT);
+    const target = harness([item]);
+    await target.service.install(item.id, reviewedInstallOptions(item), TEST_INSTALL_CONTEXT);
     expect(runtime.install).toHaveBeenCalledWith(
       expect.stringMatching(/\.cindy$/),
       expect.objectContaining({
         pendingMarketRecord: {
-          scope: 'organization',
-          organizationId: 'org-1',
-          source: 'market',
-          installed: true,
-          sha256: orgItem.currentRelease.sha256,
+          scope: item.scope, organizationId: item.organizationId,
+          source: 'market', installed: true, sha256: item.currentRelease.sha256,
         },
       }),
     );
@@ -1742,33 +1859,8 @@ describe('PluginMarketService migration and defaultInstall', () => {
     };
     expect(pending.source).toBe('market');
     expect(pending.installed).toBe(true);
-    // The pending ticket carries only the server Release hash. The approved
-    // side is Host-bound later to inspect(package bytes), so the service cannot
-    // mint a self-reported match.
-    expect(pending.sha256).toBe(orgItem.currentRelease.sha256);
+    expect(pending.sha256).toBe(item.currentRelease.sha256);
     expect(pending).not.toHaveProperty('approvedPackageSha256');
-
-    runtime.install.mockReset();
-    const publicItem = summary({ scope: 'public', organizationId: null });
-    runtime.install.mockResolvedValue({
-      manifest: manifest(),
-      dir: '/userData/cindy-brain/cindy-test',
-      enabled: true,
-    });
-    const publicHarness = harness([publicItem]);
-    await publicHarness.service.install(publicItem.id, reviewedInstallOptions(publicItem), TEST_INSTALL_CONTEXT);
-    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('pendingMarketRecord');
-
-    runtime.install.mockReset();
-    const personalItem = summary({ scope: 'personal', organizationId: null });
-    runtime.install.mockResolvedValue({
-      manifest: manifest(),
-      dir: '/userData/cindy-brain/cindy-test',
-      enabled: true,
-    });
-    const personalHarness = harness([personalItem]);
-    await personalHarness.service.install(personalItem.id, reviewedInstallOptions(personalItem), TEST_INSTALL_CONTEXT);
-    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('pendingMarketRecord');
   });
 
   it('manual market install accepts the normalized setup manifest returned by detail', async () => {
@@ -1845,7 +1937,35 @@ describe('PluginMarketService migration and defaultInstall', () => {
       version: '1.0.0',
       consent: { mode: 'confirmed', key: expect.any(String) },
       afterCommitInLock: expect.any(Function),
+      pendingMarketRecord: {
+        scope: 'public', organizationId: null, source: 'market', installed: true,
+        sha256: ordinary.currentRelease.sha256,
+      },
     });
+  });
+
+  it('organization cindy-github cannot receive root official trust', async () => {
+    const github = summary({
+      ghostId: 'cindy-github', scope: 'organization', organizationId: 'org-1', namespace: 'acme',
+    });
+    runtime.install.mockResolvedValue({
+      manifest: manifest('cindy-github'), namespace: 'acme',
+      dir: '/userData/cindy-brain/_ns/acme/cindy-github', enabled: true,
+    });
+    const h = harness([github]);
+    await h.service.install(github.id, reviewedInstallOptions(github), TEST_INSTALL_CONTEXT);
+    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('officialCindyGithub');
+  });
+
+  it('explicit root public cindy-github keeps its official trust', async () => {
+    const github = summary({ ghostId: 'cindy-github', namespace: null });
+    runtime.install.mockResolvedValue({
+      manifest: manifest('cindy-github'), namespace: null,
+      dir: '/userData/cindy-brain/cindy-github', enabled: true,
+    });
+    const h = harness([github]);
+    await h.service.install(github.id, reviewedInstallOptions(github), TEST_INSTALL_CONTEXT);
+    expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({ officialCindyGithub: true });
   });
 
   it('writes the v0.1.61 digest for a newly installed v2 card package', async () => {
@@ -1934,6 +2054,17 @@ describe('PluginMarketService migration and defaultInstall', () => {
       installed: true,
       updatedAt: '2026-08-07T00:00:00.000Z',
       manifestDigest: digest,
+    });
+    h.ledger.upsertInstallation({
+      ...recordForTest(item), pluginId: 'c'.repeat(25), namespace: 'acme',
+      scope: 'organization', organizationId: 'org-1',
+    });
+    runtime.ghosts.unshift({
+      manifest: rawManifest,
+      namespace: 'acme',
+      dir: '/userData/cindy-brain/_ns/acme/cindy-github',
+      enabled: true,
+      trust: { level: 'unverified', publisherSigned: false, publisherVerified: false, reviewed: false },
     });
 
     runtime.install.mockResolvedValue({
@@ -2919,6 +3050,136 @@ describe('PluginMarketService migration and defaultInstall', () => {
     },
   );
 
+  it('uses the namespaced storage part as the busy key', async () => {
+    const item = summary({
+      ghostId: 'helper',
+      namespace: 'acme',
+      scope: 'organization',
+      organizationId: 'org-1',
+      defaultInstall: true,
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const oldManifest = manifest(item.ghostId, '1.0.0');
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-ns-busy-'));
+    roots.push(installDir);
+    const ghostDir = path.join(installDir, '_ns', 'acme', 'helper');
+    fs.mkdirSync(ghostDir, { recursive: true });
+    fs.writeFileSync(path.join(ghostDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: ghostDir, enabled: true, namespace: 'acme' }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item, { namespace: 'acme', scope: 'organization', organizationId: 'org-1' }),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      manifestDigest: ghostManifestDigest(oldManifest),
+    });
+    runtime.pendingCalls = true;
+    runtime.install.mockImplementation(async () => {
+      throw new Error('should not install while namespaced instance is busy');
+    });
+
+    await h.service.snapshot();
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(runtime.busyQueryIds).toContain('_ns__acme__helper');
+    expect(runtime.busyQueryIds).not.toContain('helper');
+  });
+
+  it('recognizes an in-place organization install when an older server omits namespace', async () => {
+    const item = summary({ ghostId: 'helper', scope: 'organization', organizationId: 'org-1' });
+    const installedManifest = manifest('helper');
+    const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-legacy-organization-'));
+    roots.push(installRoot);
+    const installDir = path.join(installRoot, 'helper');
+    fs.mkdirSync(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(installedManifest));
+    runtime.ghosts = [{ manifest: installedManifest, dir: installDir, namespace: 'acme', enabled: true }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item, {
+      namespace: 'acme',
+      manifestDigest: ghostManifestDigest(installedManifest),
+    }));
+
+    expect((await h.service.snapshot()).items[0]?.installState).toBe('installed');
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('updates the in-place organization instance instead of installing a root copy for an older server', async () => {
+    const item = summary({
+      ghostId: 'helper', scope: 'organization', organizationId: 'org-1',
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const oldManifest = manifest('helper');
+    const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-legacy-update-'));
+    roots.push(installRoot);
+    const installDir = path.join(installRoot, 'helper');
+    fs.mkdirSync(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: installDir, namespace: 'acme', enabled: true }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item, {
+      namespace: 'acme', releaseId: 'release-1', version: '1.0.0',
+      manifestDigest: ghostManifestDigest(oldManifest),
+    }));
+    const updatedManifest = manifest('helper', '2.0.0');
+    runtime.install.mockImplementation(async (_filePath, options) => {
+      expect(options.namespace).toBe('acme');
+      fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(updatedManifest));
+      const updated = { manifest: updatedManifest, dir: installDir, namespace: 'acme', enabled: true };
+      runtime.ghosts = [updated];
+      return updated;
+    });
+
+    await h.service.install(item.id, {
+      ...reviewedInstallOptions(item), expectedInstalledApproval: APPROVED_INSTALL_TOKEN,
+    }, TEST_INSTALL_CONTEXT);
+    expect(runtime.install).toHaveBeenCalledOnce();
+    expect(h.ledger.installationForPlugin({ ghostId: 'helper', namespace: 'acme' })).toMatchObject({
+      releaseId: 'release-2', installed: true,
+    });
+    expect(h.ledger.installationForPlugin({ ghostId: 'helper', namespace: null })).toBeNull();
+  });
+
+  it('does not bind an ambiguous old organization response to either same-name instance', async () => {
+    const item = summary({ ghostId: 'helper', scope: 'organization', organizationId: 'org-1' });
+    const root = manifest('helper');
+    const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-legacy-ambiguous-'));
+    roots.push(installRoot);
+    const rootDir = path.join(installRoot, 'helper');
+    const orgDir = path.join(installRoot, '_ns', 'acme', 'helper');
+    fs.mkdirSync(rootDir);
+    fs.mkdirSync(orgDir, { recursive: true });
+    fs.writeFileSync(path.join(rootDir, 'ghost.json'), JSON.stringify(root));
+    fs.writeFileSync(path.join(orgDir, 'ghost.json'), JSON.stringify(root));
+    runtime.ghosts = [
+      { manifest: root, dir: rootDir, namespace: null, enabled: true },
+      { manifest: root, dir: orgDir, namespace: 'acme', enabled: true },
+    ];
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item, { namespace: 'acme', manifestDigest: ghostManifestDigest(root) }));
+    expect((await h.service.snapshot()).items[0]?.installState).toBe('conflict');
+    expect(runtime.install).not.toHaveBeenCalled();
+    await expect(h.service.install(item.id, {
+      ...reviewedInstallOptions(item, true), expectedInstalledApproval: APPROVED_INSTALL_TOKEN,
+    }, TEST_INSTALL_CONTEXT)).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('does not claim a namespace from an unverified legacy market record', async () => {
+    const item = summary({ ghostId: 'helper', scope: 'organization', organizationId: 'org-1' });
+    const installedManifest = manifest('helper');
+    const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-legacy-unverified-'));
+    roots.push(installRoot);
+    const installDir = path.join(installRoot, 'helper');
+    fs.mkdirSync(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(installedManifest));
+    runtime.ghosts = [{ manifest: installedManifest, dir: installDir, namespace: 'acme', enabled: true }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item, { namespace: 'acme' }));
+
+    expect((await h.service.snapshot()).items[0]?.installState).toBe('conflict');
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
   it('does not re-check the server-selected organization upgrade against the client version', async () => {
     const item = summary({
       scope: 'organization',
@@ -3258,10 +3519,47 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(false);
   });
 
+  it.each([false, true])('does not track an unowned root uninstall through an org sibling (root tombstone: %s)', async (tombstone) => {
+    const item = summary({ ghostId: 'helper', namespace: 'acme', scope: 'organization', organizationId: 'org-1' });
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item, { namespace: 'acme' }));
+    if (tombstone) {
+      h.ledger.upsertInstallation(recordForTest(summary({ ghostId: 'helper' }), { namespace: null, installed: false }));
+    }
+    installRuntimeGhost({ ...manifest('helper'), namespace: undefined });
+    runtime.ghosts[0]!.namespace = null;
+    expect(h.service.prepareLocalUninstallTracking('helper')).toBeNull();
+    expect(h.ledger.installationForPlugin({ ghostId: 'helper', namespace: 'acme' })?.installed).toBe(true);
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(false);
+  });
+
+  it('does not track a local replacement with a stale provenance digest', () => {
+    const item = summary();
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item, { manifestDigest: 'f'.repeat(64) }));
+    installRuntimeGhost(manifest(item.ghostId));
+    expect(h.service.prepareLocalUninstallTracking(item.ghostId)).toBeNull();
+    expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(true);
+  });
+
+  it('does not retire a replacement route after local uninstall tracking was prepared', async () => {
+    const item = summary();
+    const h = harness([item]);
+    installRuntimeGhost(manifest(item.ghostId));
+    h.ledger.upsertInstallation(recordForTest(item, { manifestDigest: ghostManifestDigest(manifest(item.ghostId)) }));
+    const complete = h.service.prepareLocalUninstallTracking(item.ghostId);
+    expect(complete).not.toBeNull();
+    h.ledger.upsertInstallation(recordForTest(item, { pluginId: 'replacement-resource', source: 'local-market', sourceKey: 'replacement' }));
+    await complete?.();
+    expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({ pluginId: 'replacement-resource', installed: true });
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', 'replacement-resource')).toBe(false);
+  });
+
   it('records an opt-out only after a tracked local uninstall succeeds', async () => {
     const item = summary({ defaultInstall: true });
     const h = harness([item]);
     h.ledger.upsertInstallation(recordForTest(item));
+    installRuntimeGhost(manifest(item.ghostId));
 
     const complete = h.service.prepareLocalUninstallTracking(item.ghostId);
 
@@ -3295,7 +3593,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     const item = summary({ defaultInstall: true });
     const h = harness([item]);
     h.ledger.upsertInstallation(recordForTest(item));
-    runtime.ghosts = [ghostEntry(item.ghostId)];
+    installRuntimeGhost(manifest(item.ghostId));
     const completeLocalUninstall = h.service.prepareLocalUninstallTracking(item.ghostId);
     expect(completeLocalUninstall).not.toBeNull();
 
@@ -3333,6 +3631,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     const item = summary({ defaultInstall: true });
     const h = harness([item]);
     h.ledger.upsertInstallation(recordForTest(item));
+    installRuntimeGhost(manifest(item.ghostId));
 
     const complete = h.service.prepareLocalUninstallTracking(item.ghostId);
 
@@ -3346,6 +3645,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     const item = summary({ defaultInstall: true });
     const h = harness([item]);
     h.ledger.upsertInstallation(recordForTest(item));
+    installRuntimeGhost(manifest(item.ghostId));
     const complete = h.service.prepareLocalUninstallTracking(item.ghostId);
 
     runtime.session = {
@@ -3395,6 +3695,50 @@ describe('PluginMarketService migration and defaultInstall', () => {
       });
     },
   );
+
+  it('purges only the matching namespaced organization installation from a legacy notice', async () => {
+    const notice = removal({ ghostId: 'helper' });
+    const h = harness([], [notice]);
+    const orgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-org-'));
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-root-'));
+    roots.push(orgDir, rootDir);
+    fs.writeFileSync(path.join(orgDir, 'ghost.json'), JSON.stringify(manifest('helper')));
+    fs.writeFileSync(path.join(rootDir, 'ghost.json'), JSON.stringify(manifest('helper')));
+    runtime.ghosts = [
+      { ...ghostEntry('helper'), dir: rootDir, namespace: null },
+      { ...ghostEntry('helper'), dir: orgDir, namespace: 'acme' },
+    ];
+    h.ledger.upsertInstallation(removalRecord({ ghostId: 'helper', namespace: 'acme', manifestDigest: ghostManifestDigest(manifest('helper')) }));
+    h.ledger.upsertInstallation(removalRecord({ ghostId: 'helper', namespace: null, pluginId: 'other-plugin', scope: 'public', organizationId: null }));
+    await h.service.snapshot();
+    expect(runtime.uninstall).toHaveBeenCalledWith('_ns/acme/helper', { skipMarketLedger: true });
+    expect(h.ledger.installationForPlugin({ ghostId: 'helper', namespace: 'acme' })?.installed).toBe(false);
+    expect(h.ledger.installationForPlugin({ ghostId: 'helper', namespace: null })?.installed).toBe(true);
+  });
+
+  it('does not purge a namespaced organization for another organization', async () => {
+    const notice = removal({ ghostId: 'helper' });
+    const h = harness([], [notice]);
+    runtime.ghosts = [{ ...ghostEntry('helper'), namespace: 'acme' }];
+    h.ledger.upsertInstallation(removalRecord({ ghostId: 'helper', namespace: 'acme', organizationId: 'other-org' }));
+    await h.service.snapshot();
+    expect(runtime.uninstall).not.toHaveBeenCalled();
+    expect(h.ledger.installationForPlugin({ ghostId: 'helper', namespace: 'acme' })?.installed).toBe(true);
+  });
+
+  it('does not guess a namespace for an ambiguous old notice or override an explicit namespace', async () => {
+    const notice = removal({ ghostId: 'helper' });
+    const h = harness([], [notice]);
+    runtime.ghosts = [{ ...ghostEntry('helper'), namespace: 'acme' }];
+    h.ledger.upsertInstallation(removalRecord({ ghostId: 'helper', namespace: 'acme' }));
+    h.ledger.upsertInstallation(removalRecord({ ghostId: 'helper', namespace: 'other' }));
+    h.ledger.upsertInstallation(removalRecord({ ghostId: 'helper', namespace: null }));
+    await h.service.snapshot();
+    expect(runtime.uninstall).not.toHaveBeenCalled();
+    h.api.listAll.mockResolvedValueOnce({ plugins: [], removals: [{ ...notice, namespace: 'unknown' }], currentOrganization: null });
+    await h.service.snapshot();
+    expect(runtime.uninstall).not.toHaveBeenCalled();
+  });
 
   it('purges when the ledger provenance digest matches the installed package', async () => {
     const notice = removal();
@@ -3634,7 +3978,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.ledger.installationForGhost('third-party')).toBeNull();
   });
 
-  it('allows explicit replacement when a removed market record has an existing directory', async () => {
+  it.each([false, true])('archives an explicit local-to-server replacement with a removed ledger row=%s', async (removedRecord) => {
     const item = summary();
     const installedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-local-installed-'));
     roots.push(installedDir);
@@ -3652,10 +3996,9 @@ describe('PluginMarketService migration and defaultInstall', () => {
       enabled: true,
     });
     const h = harness([item]);
-    h.ledger.upsertInstallation({
-      ...recordForTest(item),
-      installed: false,
-    });
+    if (removedRecord) {
+      h.ledger.upsertInstallation({ ...recordForTest(item), installed: false });
+    }
 
     await expect(
       h.service.install(item.id, {
@@ -3666,6 +4009,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       ghost: { manifest: { id: item.ghostId } },
     });
     expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('manifestCap');
+    expect(runtime.install.mock.calls[0]?.[1]).toHaveProperty('sourceChanged', true);
     expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({
       pluginId: item.id,
       source: 'market',
@@ -3979,6 +4323,39 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(false);
     expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(true);
   });
+
+  it('does not uninstall a public sibling when the org instance is already gone', async () => {
+    const publicItem = summary({ ghostId: 'helper' });
+    const orgItem = summary({
+      id: `c${'d'.repeat(24)}`,
+      ghostId: 'helper',
+      namespace: 'acme',
+      scope: 'organization',
+      organizationId: 'org-1',
+    });
+    const h = harness([publicItem, orgItem]);
+    h.ledger.upsertInstallation(recordForTest(publicItem, { namespace: null }));
+    h.ledger.upsertInstallation(
+      recordForTest(orgItem, {
+        namespace: 'acme',
+        scope: 'organization',
+        organizationId: 'org-1',
+      }),
+    );
+    runtime.ghosts = [ghostEntry('helper')];
+
+    await expect(h.service.uninstall(orgItem.id)).resolves.toEqual({ ok: true });
+
+    expect(runtime.uninstall).not.toHaveBeenCalled();
+    expect(runtime.ghosts).toHaveLength(1);
+    expect(h.ledger.installationForPlugin({ ghostId: 'helper', namespace: 'acme' })?.installed).toBe(
+      false,
+    );
+    expect(h.ledger.installationForPlugin({ ghostId: 'helper', namespace: null })?.installed).toBe(
+      true,
+    );
+  });
+
 });
 
 function recordForTest(
@@ -4040,6 +4417,82 @@ function installRuntimeGhost(
 }
 
 describe('organization default Plugin takeover', () => {
+  it.each([
+    ['S1 verified namespace without token slug', 'acme', 'acme', undefined, 'old-prefix', 'helper', true],
+    ['S2-off pending legacy prefix', undefined, undefined, undefined, 'acme', 'acme-tool', true],
+    ['pending legacy cannot guess a natural name', undefined, undefined, 'acme', 'acme', 'helper', false],
+    ['pending legacy cannot guess a namespace', undefined, 'acme', 'acme', 'acme', 'acme-tool', false],
+    ['known organization cannot select root', 'acme', null, 'acme', 'acme', 'acme-tool', false],
+    ['known organization cannot select pending legacy', 'acme', undefined, 'acme', 'acme', 'acme-tool', false],
+    ['known namespace rejects conflicting verified slug', 'acme', 'acme', 'other', 'acme', 'acme-tool', false],
+    ['organization default cannot have root identity', null, null, 'acme', 'acme', 'acme-tool', false],
+  ] as const)('uses verified identity instead of guessing: %s', (_name, namespace, installedNamespace, orgSlug, pluginPrefix, ghostId, eligible) => {
+    const item = organizationDefaultSummary({ ghostId, ...(namespace !== undefined ? { namespace } : {}) });
+    const installed = {
+      manifest: manifest(ghostId), dir: '/unused', enabled: true,
+      ...(installedNamespace !== undefined ? { namespace: installedNamespace } : {}),
+      approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+      trust: { level: 'unverified', publisherSigned: false, publisherVerified: false, reviewed: false },
+    } satisfies InstalledGhost;
+    expect(organizationDefaultTakeoverEligibility({
+      summary: item, currentOrganization: { organizationId: 'org-1', pluginPrefix, ...(orgSlug ? { orgSlug } : {}) },
+      uniqueGhostId: true, installed, record: null, installOrigin: 'manual',
+      runtimeAvailable: true, optedOut: false, builtinRemoved: false, busy: false,
+    }).eligible).toBe(eligible);
+  });
+
+  it.each([null, 'old-prefix'])('allows verified natural namespace default takeover with prefix %s', (pluginPrefix) => {
+    const item = organizationDefaultSummary({ namespace: 'acme', ghostId: 'helper' });
+    const installed = {
+      manifest: manifest(item.ghostId), namespace: 'acme', dir: '/unused', enabled: true,
+      approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+      trust: { level: 'unverified', publisherSigned: false, publisherVerified: false, reviewed: false },
+    } satisfies InstalledGhost;
+    expect(organizationDefaultTakeoverEligibility({
+      summary: item, currentOrganization: { organizationId: 'org-1', orgSlug: 'acme', pluginPrefix },
+      uniqueGhostId: false, installed, record: null, installOrigin: 'manual',
+      runtimeAvailable: true, optedOut: false, builtinRemoved: true, busy: false,
+    })).toEqual({ eligible: true });
+  });
+
+  it('installs a namespaced organization default despite a root tombstone and public same-id listing', async () => {
+    setCurrentOrganization();
+    const item = organizationDefaultSummary({ namespace: 'acme' });
+    const publicItem = summary({ id: 'c' + 'f'.repeat(24), ghostId: item.ghostId });
+    runtime.builtinRemoved.add(item.ghostId);
+    runtime.install.mockResolvedValue({
+      manifest: manifest(item.ghostId), namespace: 'acme',
+      dir: '/userData/cindy-brain/_ns/acme/acme-tool', enabled: true,
+    });
+    const h = harness([item, publicItem]);
+    await h.service.snapshot();
+    expect(runtime.install).toHaveBeenCalledWith(
+      expect.any(String), expect.objectContaining({ namespace: 'acme', ghostId: item.ghostId }),
+    );
+  });
+
+  it('keeps an explicit root default uninstall suppressed by the root tombstone', async () => {
+    const item = summary({ ghostId: 'cindy-art', namespace: null, defaultInstall: true });
+    runtime.builtinRemoved.add(item.ghostId);
+    const h = harness([item]);
+    await h.service.snapshot();
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('allows a namespaced approved manual takeover even if a public entry shares the id', () => {
+    const item = organizationDefaultSummary({ namespace: 'acme' });
+    const installed = {
+      manifest: manifest(item.ghostId), namespace: 'acme', dir: '/unused', enabled: true,
+      approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+      trust: { level: 'unverified', publisherSigned: false, publisherVerified: false, reviewed: false },
+    } satisfies InstalledGhost;
+    expect(organizationDefaultTakeoverEligibility({
+      summary: item, currentOrganization: { organizationId: 'org-1', pluginPrefix: 'acme' },
+      uniqueGhostId: false, installed, record: null, installOrigin: 'manual',
+      runtimeAvailable: true, optedOut: false, builtinRemoved: true, busy: false,
+    })).toEqual({ eligible: true });
+  });
+
   it('re-downloads and replaces a same-release bad target record without writing opt-out', async () => {
     setCurrentOrganization();
     const item = organizationDefaultSummary();
@@ -4052,6 +4505,7 @@ describe('organization default Plugin takeover', () => {
       manifestDigest: ghostManifestDigest(manifest(item.ghostId)),
     });
     runtime.install.mockImplementationOnce(async (_file, options) => {
+      expect(options.sourceChanged).toBe(true);
       options.beforeCommitInLock?.();
       expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({ installed: true });
       expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(false);
@@ -4300,6 +4754,7 @@ describe('organization default Plugin takeover', () => {
     h.ledger.upsertInstallation(recordForTest(item));
     h.ledger.markRemoved(item.ghostId, null);
     runtime.install.mockImplementationOnce(async (_file, options) => {
+      expect(options.sourceChanged).toBe(true);
       options.beforeCommitInLock?.();
       const installed = { manifest: manifest(item.ghostId), dir, enabled: true };
       fs.writeFileSync(path.join(dir, 'ghost.json'), JSON.stringify(installed.manifest));
@@ -4521,6 +4976,43 @@ describe('organization default Plugin takeover', () => {
         busy: false,
       }).eligible,
     ).toBe(false);
+  });
+
+  it('does not take over a known root instance for an organization namespace', () => {
+    const item = organizationDefaultSummary({ namespace: 'acme' });
+    const installed = {
+      manifest: manifest(item.ghostId),
+      dir: '/not-read-for-cross-namespace',
+      enabled: true,
+      approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+      trust: {
+        level: 'unverified',
+        publisherSigned: false,
+        publisherVerified: false,
+        reviewed: false,
+      },
+    } satisfies InstalledGhost;
+    expect(
+      organizationDefaultTakeoverEligibility({
+        summary: item,
+        currentOrganization: { organizationId: 'org-1', pluginPrefix: 'acme' },
+        uniqueGhostId: true,
+        installed,
+        record: {
+          ...recordForTest(item),
+          pluginId: `c${'d'.repeat(24)}`,
+          source: 'market',
+          scope: 'public',
+          organizationId: null,
+          namespace: null,
+        },
+        installOrigin: 'manual',
+        runtimeAvailable: true,
+        optedOut: false,
+        builtinRemoved: false,
+        busy: false,
+      }),
+    ).toEqual({ eligible: false, reason: 'cross-namespace' });
   });
 
   it('skips busy work without backoff and retries after it becomes idle', async () => {
@@ -4876,6 +5368,30 @@ describe('market detail 响应身份绑定', () => {
     await expect(h.service.detail(item.id)).rejects.toThrow('[PRECONDITION_FAILED]');
     h.api.detail.mockImplementation(async () => detail({ ...item, id: 'plg_other' }));
     await expect(h.service.detail(item.id)).rejects.toThrow('[PRECONDITION_FAILED]');
+  });
+
+  it('rejects list/detail namespace drift and mismatched download identity', async () => {
+    const item = summary({ namespace: null });
+    const h = harness([item]);
+    h.api.detail.mockImplementationOnce(async () => detail({ ...item, namespace: 'acme' }));
+    await expect(h.service.detail(item.id)).rejects.toThrow('[PRECONDITION_FAILED]');
+
+    const enterprise = summary({ namespace: 'acme' });
+    const h2 = harness([enterprise]);
+    h2.api.download.mockResolvedValue({
+      pluginId: enterprise.id,
+      releaseId: enterprise.currentRelease.id,
+      ghostId: enterprise.ghostId,
+      namespace: null,
+      url: 'https://downloads.test.invalid/plugin.cindy',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      sha256: 'a'.repeat(64),
+      sizeBytes: 42,
+    });
+    await expect(
+      h2.service.install(enterprise.id, reviewedInstallOptions(enterprise), TEST_INSTALL_CONTEXT),
+    ).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(runtime.install).not.toHaveBeenCalled();
   });
 });
 

@@ -1,4 +1,5 @@
 import type { GhostSetupAllowedAction, GhostSetupStepPhase, GhostSetupErrorCode } from './ghost.js';
+import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 export interface AuthorizationSnapshot {
   remoteOauth?: true;
   reopenActionId?: string;
@@ -22,7 +23,7 @@ export interface AuthorizationSnapshot {
 
 /** Stored presentation and opaque target only; never store an OAuth URL or a credential. */
 export type BotAuthorizationTarget =
-  | { kind: 'plugin'; id: string; reauthorize?: boolean }
+  | { kind: 'plugin'; id: string; namespace?: string | null; reauthorize?: boolean }
   | { kind: 'host'; id: 'grok'; reauthorize?: boolean };
 export interface BotAuthorizationCard {
   v: 1;
@@ -44,6 +45,9 @@ export function readBotAuthorizationCard(value: unknown): BotAuthorizationCard |
     !['plugin', 'host'].includes(v.target.kind) ||
     typeof v.target.id !== 'string' ||
     (v.target.kind === 'host' && v.target.id !== 'grok') ||
+    ('namespace' in v.target &&
+      (v.target.kind !== 'plugin' ||
+        (v.target.namespace !== null && !isValidPluginNamespace(v.target.namespace)))) ||
     !v.snapshot ||
     v.snapshot.kind !== 'plugin_setup' ||
     typeof v.snapshot.requestId !== 'string' ||

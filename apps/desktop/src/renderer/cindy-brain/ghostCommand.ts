@@ -20,32 +20,91 @@
  */
 
 import type { GhostToolDecl, InstalledGhost } from '../../shared/ghost';
+import {
+  formatInstalledGhostAmbiguity,
+  hasDeliveryNamespace,
+  installedGhostStoragePart,
+  pluginStoragePart,
+  listGhostsByCommand,
+} from '../../shared/pluginIdentity';
 
 /**
- * `$` 后紧跟指令词(与 ghost.json command 约束同宽:无空白,≤32 字符)。
+ * `$` 后紧跟指令词(与 ghost.json command 约束同宽:无空白、不含 `/`,≤32 字符),可选 `/namespace`（与协议 orgSlug 同宽，最长 128）。
  * 触发符同时认全角变体(＄ U+FF04 / ¥ U+00A5 / ￥ U+FFE5):中文输入法下
  * Shift+4 产出的是 ￥,不切输入法也能触发——与 ChatInput 的
  * GHOST_SIGIL_CHARS 是同一字符集,两端必须保持一致。
  */
-const COMMAND_RE = /^[$＄¥￥](\S{1,32})(?:\s|$)/;
+const COMMAND_RE =
+  /^[$＄¥￥]([^/\s]{1,32})(?:\/(@root|[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?))?(?:\s|$)/;
+
+export interface GhostCommandToken {
+  word: string;
+  /** null = unqualified `$draw`; a slug selects `$draw/acme`. */
+  namespace: string | null;
+}
 
 /** 解析消息开头的意识指令词;非 `$`(含全角变体)开头或形状不合返回 null。 */
-export function parseGhostCommandWord(text: string): string | null {
+export function parseGhostCommandToken(text: string): GhostCommandToken | null {
   const m = COMMAND_RE.exec(text);
-  return m ? m[1] : null;
+  return m ? { word: m[1]!, namespace: m[2] ?? null } : null;
+}
+
+export function ghostCommandTokenLength(token: GhostCommandToken): number {
+  return token.word.length + (token.namespace ? 1 + token.namespace.length : 0);
+}
+
+/** 解析消息开头的意识指令词;限定符 `/ns` 不计入返回值。 */
+export function parseGhostCommandWord(text: string): string | null {
+  return parseGhostCommandToken(text)?.word ?? null;
+}
+
+/** Palette / insertion token: `draw` or `draw/acme`. */
+export function formatGhostCommandToken(ghost: {
+  manifest: { command?: string };
+  namespace?: string | null;
+}, roster: readonly { manifest: { command?: string }; namespace?: string | null }[] = []): string | null {
+  const command = ghost.manifest.command;
+  if (!command) return null;
+  if (ghost.namespace === null && roster.some((other) =>
+    other !== ghost && other.manifest.command?.toLowerCase() === command.toLowerCase())) {
+    return command + '/@root';
+  }
+  return hasDeliveryNamespace(ghost) && ghost.namespace
+    ? `${command}/${ghost.namespace}`
+    : command;
+}
+
+export function formatGhostCommandInsertion(ghost: {
+  manifest: { command?: string };
+  namespace?: string | null;
+}, roster?: readonly { manifest: { command?: string }; namespace?: string | null }[]): string | null {
+  const token = formatGhostCommandToken(ghost, roster);
+  return token ? `$${token}` : null;
+}
+
+function listGhostsMatchingCommandToken(
+  ghosts: InstalledGhost[],
+  token: GhostCommandToken,
+  enabledOnly: boolean,
+): InstalledGhost[] {
+  const matches = listGhostsByCommand(ghosts, token.word, enabledOnly);
+  if (token.namespace === null) return matches;
+  if (token.namespace === '@root') return matches.filter((ghost) => ghost.namespace === null);
+  return matches.filter((ghost) => ghost.namespace === token.namespace);
 }
 
 /** 按指令词(大小写折叠)找已唤醒的意识;找不到 → null(消息原样发送)。 */
 export function findGhostByCommand(
   ghosts: InstalledGhost[],
   word: string,
+  namespace: string | null = null,
 ): InstalledGhost | null {
-  const fold = word.toLowerCase();
-  return (
-    ghosts.find(
-      (g) => g.enabled && g.manifest.command !== undefined && g.manifest.command.toLowerCase() === fold,
-    ) ?? null
+  const matches = listGhostsMatchingCommandToken(
+    ghosts,
+    { word, namespace },
+    true,
   );
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 /**
@@ -57,15 +116,14 @@ export function findGhostByCommand(
 export function findGhostByCommandIncludingDisabled(
   ghosts: InstalledGhost[],
   word: string,
+  namespace: string | null = null,
 ): InstalledGhost | null {
-  const fold = word.toLowerCase();
-  return (
-    ghosts.find(
-      (ghost) =>
-        ghost.manifest.command !== undefined &&
-        ghost.manifest.command.toLowerCase() === fold,
-    ) ?? null
+  const matches = listGhostsMatchingCommandToken(
+    ghosts,
+    { word, namespace },
+    false,
   );
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -83,9 +141,11 @@ export interface GhostDirectiveSegment {
   injected: boolean;
 }
 
-const DIRECT_GHOST_TOOL_HINT =
+const PRE_ROOT_GHOST_TOOL_HINT =
   '插件本身不会作为独立 MCP server/resource 出现;ghost_call 的完整工具名是 mcp__cindy__ghost_call。' +
   '不得查询 MCP resources、插件文件、ghost.json、宿主进程或本地 API,直接调用 cindy 总机工具。';
+const DIRECT_GHOST_TOOL_HINT = PRE_ROOT_GHOST_TOOL_HINT +
+  '若指令带 /@root，ghost_call 必须显式传 namespace:null。';
 
 /**
  * 硬指令追加段——分段形态(单一事实源):发送文本 = 各段 text 相连;
@@ -286,17 +346,35 @@ const buildMentionDirective = (roster: string): string => `${MENTION_HEAD}${rost
  *   (agent 免 ghost_list 直接调),超体积闸回落"先 ghost_list"旧形态;
  * - 未命中(没这个指令 / 意识沉睡 / 非 `$` 开头)原样返回——绝不吞掉用户的字。
  */
+function buildAmbiguousCommandDirective(command: string, ghosts: readonly InstalledGhost[]): string {
+  return (
+    `[插件指令] 用户以 $${command} 显式点名插件，但` +
+    formatInstalledGhostAmbiguity(ghosts[0]?.manifest.id ?? command, ghosts) +
+    '不得自行挑选其中一个。'
+  );
+}
+
 export function expandGhostCommand(text: string, ghosts: InstalledGhost[]): string {
-  const word = parseGhostCommandWord(text);
-  if (!word) return text;
-  const ghost = findGhostByCommand(ghosts, word);
+  const token = parseGhostCommandToken(text);
+  if (!token) return text;
+  const matches = listGhostsMatchingCommandToken(ghosts, token, true);
+  if (matches.length > 1) {
+    return `${text}
+
+${buildAmbiguousCommandDirective(token.word, matches)}`;
+  }
+  const ghost = matches[0];
   if (!ghost) return text;
-  const { id, name, command } = ghost.manifest;
+  const { name, command } = ghost.manifest;
+  const id = ghost.namespace
+    ? pluginStoragePart({ namespace: ghost.namespace, ghostId: ghost.manifest.id })
+    : installedGhostStoragePart(ghost);
+  const commandToken = token.namespace === '@root' ? token.word + '/@root' : command as string;
   const toolsJson = buildGhostToolsJson(ghost.manifest.tools);
   const directive =
     toolsJson !== null
-      ? buildCommandToolsDirective(command as string, name, id, toolsJson)
-      : buildCommandDirective(command as string, name, id);
+      ? buildCommandToolsDirective(commandToken, name, id, toolsJson)
+      : buildCommandDirective(commandToken, name, id);
   return `${text}\n\n${directive}`;
 }
 
@@ -333,10 +411,18 @@ const P4 = String.fromCharCode(4);
 /** 由生成模板反推的解析正则——锚定消息末尾,只认完整模板(旧形态)。 */
 const COMMAND_DIRECTIVE_RE = new RegExp(
   `\\n\\n(${escapeRegExp(buildCommandDirective(P1, P2, P3))
-    .replace(P1, '(\\S{1,32})')
+    .replace(P1, '(\\S{1,161})')
     .replace(P2, '(.+?)')
     .replace(P3, '(.+?)')})$`,
 );
+
+function preRootCommandRegex(pattern: RegExp): RegExp {
+  const rootHint = escapeRegExp(DIRECT_GHOST_TOOL_HINT.slice(PRE_ROOT_GHOST_TOOL_HINT.length))
+    .replaceAll('/', '\\/');
+  return new RegExp(pattern.source.replace(rootHint, ''));
+}
+
+const PRE_ROOT_COMMAND_DIRECTIVE_RE = preRootCommandRegex(COMMAND_DIRECTIVE_RE);
 
 /** 直达规则补强前的插件硬指令解析器。 */
 const PREVIOUS_PLUGIN_COMMAND_DIRECTIVE_RE = new RegExp(
@@ -360,11 +446,13 @@ const LEGACY_COMMAND_DIRECTIVE_RE = new RegExp(
  *  不可能撞上占位符)。 */
 const COMMAND_TOOLS_DIRECTIVE_RE = new RegExp(
   `\\n\\n(${escapeRegExp(buildCommandToolsDirective(P1, P2, P3, P4))
-    .replace(P1, '(\\S{1,32})')
+    .replace(P1, '(\\S{1,161})')
     .replace(P2, '(.+?)')
     .replace(P3, '(.+?)')
     .replace(P4, '(.+)')})$`,
 );
+
+const PRE_ROOT_COMMAND_TOOLS_DIRECTIVE_RE = preRootCommandRegex(COMMAND_TOOLS_DIRECTIVE_RE);
 
 /** 直达规则补强前、带内嵌工具清单的插件硬指令解析器。 */
 const PREVIOUS_PLUGIN_COMMAND_TOOLS_DIRECTIVE_RE = new RegExp(
@@ -402,6 +490,7 @@ export function splitGhostDirective(
   // 新形态(内嵌工具清单)优先;两个 command 模板尾部文案不同,互不误伤。
   for (const pattern of [
     COMMAND_TOOLS_DIRECTIVE_RE,
+    PRE_ROOT_COMMAND_TOOLS_DIRECTIVE_RE,
     PREVIOUS_PLUGIN_COMMAND_TOOLS_DIRECTIVE_RE,
     LEGACY_COMMAND_TOOLS_DIRECTIVE_RE,
   ]) {
@@ -422,6 +511,7 @@ export function splitGhostDirective(
   }
   for (const pattern of [
     COMMAND_DIRECTIVE_RE,
+    PRE_ROOT_COMMAND_DIRECTIVE_RE,
     PREVIOUS_PLUGIN_COMMAND_DIRECTIVE_RE,
     LEGACY_COMMAND_DIRECTIVE_RE,
   ]) {

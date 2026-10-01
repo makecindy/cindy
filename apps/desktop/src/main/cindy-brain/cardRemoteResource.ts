@@ -6,9 +6,31 @@ import { getGhostCard, upsertGhostCard, type GhostCardRecord } from './cardStore
 import { assertRemoteBotInvocationAllowed } from '../device-link/remoteBotSessionBoundary.js';
 import { remoteResourceRegistry, RemoteResourceRegistryError, type RemoteResourceProvider } from '../device-link/remoteResourceRegistry.js';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent, tapWindowBroadcast, getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
+import { isValidGhostId } from '../../shared/ghost.js';
+import { createPluginLogicalIdentity, findInstalledGhostByIdentity, findInstalledGhostByInstanceId, isGhostInstanceId } from '../../shared/pluginIdentity.js';
 
 const COLLECTION = 'plugin-results';
 const KIND = 'card';
+
+export function findGhostForRemotePluginIdentity<T extends { manifest: { id: string }; namespace?: string | null }>(
+  ghosts: readonly T[], id: string,
+): T | undefined {
+  if (isGhostInstanceId(id) && !isValidGhostId(id)) {
+    return findInstalledGhostByInstanceId(ghosts, id);
+  }
+  if (!id.startsWith('[')) {
+    const matches = ghosts.filter((ghost) => ghost.manifest.id === id);
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(id);
+    if (!Array.isArray(parsed) || parsed.length !== 2 ||
+        (parsed[0] !== null && typeof parsed[0] !== 'string') || !isValidGhostId(parsed[1])) return undefined;
+    return findInstalledGhostByIdentity(ghosts, createPluginLogicalIdentity(parsed[0], parsed[1]));
+  } catch {
+    return undefined;
+  }
+}
 
 function decodeText(value: string): string {
   return value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (full, entity: string) => {
@@ -125,7 +147,9 @@ export function createPluginIdentityRemoteProvider(deps: {
       const valid = deps.captureScope();
       let ids: unknown;
       try { ids = JSON.parse(request.ref.id); } catch { /* validated below */ }
-      if (!Array.isArray(ids) || ids.length !== 2 || !ids.every((id) => typeof id === 'string' && id.length > 0 && id.length <= 128)) {
+      if (!Array.isArray(ids) || ids.length !== 2 ||
+          typeof ids[0] !== 'string' || ids[0].length === 0 || ids[0].length > 128 ||
+          typeof ids[1] !== 'string' || ids[1].length === 0 || ids[1].length > 320) {
         throw new RemoteResourceRegistryError('NOT_FOUND', 'Plugin not found');
       }
       await deps.authorize(ids[0]);
