@@ -92,7 +92,7 @@ it('asks to discard an offline draft on back instead of trapping the page', asyn
   expect(h.sheet.onBack).toBeUndefined(); expect(h.close).not.toHaveBeenCalled();
 });
 
-it('closes after discarding an offline draft, and still saves an online draft first', async () => {
+it('closes only after discarding either an offline or online draft', async () => {
   await render(); await openProfile();
   await act(async () => h.inputs.Name.onChangeText('Unsaved'));
   await render(false);
@@ -102,9 +102,10 @@ it('closes after discarding an offline draft, and still saves an online draft fi
 
   h.close.mockClear(); h.alert.mockClear();
   await render(true); await openProfile();
-  await act(async () => h.inputs.Name.onChangeText('Saved on close'));
+  await act(async () => h.inputs.Name.onChangeText('Unsaved online'));
   await act(async () => h.sheet.onClose());
-  expect(h.alert).not.toHaveBeenCalled();
-  expect(h.invoke.mock.calls[0][2].input).toEqual({ name: 'Saved on close' });
+  expect(h.alert).toHaveBeenCalledOnce(); expect(h.invoke).not.toHaveBeenCalled(); expect(h.close).not.toHaveBeenCalled();
+  await act(async () => alertButton('devices.companions.automation.discard').onPress!());
+  expect(h.invoke).not.toHaveBeenCalled();
   expect(h.close).toHaveBeenCalledOnce();
 });

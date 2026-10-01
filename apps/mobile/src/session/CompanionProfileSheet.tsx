@@ -153,7 +153,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       }); return;
     }
     if (next === 'avatar' || next === 'connections' || next === 'personalSkills') {
-      void settleDraft(() => openEditor(`settings:${resource?.ref.id}/${next === 'personalSkills' ? 'skills' : next}`));
+      confirmDiscard(() => openEditor(`settings:${resource?.ref.id}/${next === 'personalSkills' ? 'skills' : next}`));
       return;
     }
     setConflict(null); setEditor(null); setEditorPanel(null); setPage(next); setReceipt(null); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setConfirmation(null); setEditing(false);
@@ -225,7 +225,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       else if (!(await memory.back())) open('memory');
       return;
     }
-    await settleDraft(() => leavePage(close));
+    confirmDiscard(() => leavePage(close));
   };
   const leavePage = async (close: boolean) => {
     if (close) { onClose(); return; }
@@ -251,10 +251,27 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       } else { setEditor(next); setError(false); }
     } catch { if (current.current === started && generation.current === sequence) setError(true); }
   };
-  // Leaving a page never saves a dirty draft implicitly. Keep explicit Save as the only
-  // mutation path and let the user either continue editing or discard the draft.
+  const confirmDiscard = (proceed: () => void | Promise<void>) => {
+    if (!dirty || !panel) { void proceed(); return; }
+    const started = binding;
+    Alert.alert(t('devices.companions.automation.unsavedTitle'), t('devices.companions.automation.unsavedBody'), [
+      { text: t('devices.common.cancel'), style: 'cancel' },
+      { text: t('devices.companions.automation.discard'), style: 'destructive', onPress: () => {
+        if (current.current !== started || inFlight.current) return;
+        if (conflict?.page === page) {
+          if (page === 'editor') setEditor(conflict.next); else setData(conflict.next);
+        }
+        setEditing(false); setConflict(null); void proceed();
+      } },
+    ]);
+  };
+  // The memory toggle retains main's existing save-before-navigation contract.
   const settleDraft = async (proceed: () => void | Promise<void>) => {
     if (!dirty || !panel) { await proceed(); return; }
+    if (online && resource && panel.action && !panel.action.disabled && conflict?.page !== page) {
+      if (await submit(panel)) await proceed();
+      return;
+    }
     const started = binding;
     Alert.alert(t('devices.companions.automation.unsavedTitle'), t('devices.companions.automation.unsavedBody'), [
       { text: t('devices.common.cancel'), style: 'cancel' },

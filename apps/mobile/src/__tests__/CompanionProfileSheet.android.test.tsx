@@ -125,8 +125,9 @@ it('keeps Settings to Permissions and opens selects through the system menu with
   await act(async () => choice.onChange(''));
   expect(h.sheet.preventDismiss).toBe(true);
   await act(async () => h.sheet.onBack()); await settle();
-  // Back saves the draft first, exactly like the iOS page Back, then lands on Settings.
-  expect(h.invoke.mock.calls[0][2]).toMatchObject({ actionId: 'models-grant', input: { route0: '' } });
+  expect(h.invoke).not.toHaveBeenCalled(); expect(h.alert).toHaveBeenCalledOnce();
+  const discard = h.alert.mock.calls[0][2].find((button: { style?: string }) => button.style === 'destructive');
+  await act(async () => discard.onPress()); await settle();
   const rows = buttons().map(node => node.dataset.testid).filter(Boolean);
   expect(rows).toEqual(['companionProfile.permissions']); expect(byTest('companionProfile.permissions')!.dataset.icon).toBe('Hand');
 });
