@@ -7887,6 +7887,7 @@
         "message": "「{{title}}」を進めて",
         "aria": "「{{title}}」を進める"
       },
+      "followingMark": "このプロジェクトの担当: {{names}}",
       "olderCount_other": "さらに前の {{count}} 件",
       "kind": {
         "existing": "既存のセッション",

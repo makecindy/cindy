@@ -165,7 +165,7 @@ export function BotCapabilitySettings({
         }));
         if (toolsetResult.status === 'fulfilled')
           next.toolset = toolsetResult.value
-            .filter((item) => !['memory', 'xdt_helper', 'collab'].includes(item.id))
+            .filter((item) => !['memory', 'xdt_helper', 'scheduler', 'collab'].includes(item.id))
             .map((item) => ({
               id: item.id,
               name: item.name,

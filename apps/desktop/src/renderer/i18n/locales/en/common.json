@@ -7899,6 +7899,7 @@
         "message": "Follow up on “{{title}}”",
         "aria": "Follow up on “{{title}}”"
       },
+      "followingMark": "Looked after by {{names}}",
       "olderCount_one": "{{count}} older",
       "olderCount_other": "{{count}} older",
       "kind": {

@@ -7887,6 +7887,7 @@
         "message": "「{{title}}」 이어서 진행해 줘",
         "aria": "「{{title}}」 진행하기"
       },
+      "followingMark": "이 프로젝트 담당: {{names}}",
       "olderCount_other": "이전 {{count}}개",
       "kind": {
         "existing": "기존 세션",

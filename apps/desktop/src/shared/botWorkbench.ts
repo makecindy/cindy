@@ -8,8 +8,11 @@
  */
 import { normalizeWorkingDirForGrouping, normalizeWorkingDirForStorage } from './workingDir';
 
-/** 主人最多交给一个伙伴几个项目;与存储层的上限同源。 */
-export const BOT_WORKBENCH_MAX_DIRECTORIES = 6;
+/**
+ * 交给一个伙伴的项目数的防护上限(不是产品限制):工作台是伙伴的负责范围,主人交多少都行;
+ * 这里只防一份失控的 workbench.json 拖垮读取与素材计算。与存储层的上限同源。
+ */
+export const BOT_WORKBENCH_MAX_DIRECTORIES = 50;
 
 /** 主人交给伙伴的项目目录。目录本身由宿主记录,`exists` 是读取时现查的事实。 */
 export interface BotWorkbenchDirectory {

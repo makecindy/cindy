@@ -808,6 +808,11 @@ export async function hydrateBotProfileRuntime(
     // index must not hide the instructions for learning the first reusable method.
     ownSkillsEnabled: row.role === 'canonical' && helperAvailable && !opts.remoteHostId,
     botModeEnabled: row.role === 'canonical',
+    // Same condition as the `bot-main` helper surface (mcp-integrations/helperSurface.ts).
+    sessionControlEnabled: row.role === 'canonical' && helperAvailable && !opts.remoteHostId,
+    // scheduler 是伙伴基线工具(maker-host/plugins/types.ts),与挂载 allowlist 同一份目录判定。
+    automationEnabled: row.role === 'canonical' && !opts.remoteHostId
+      && toolsetCatalog.some((item) => item.id === 'scheduler' && item.available !== false),
   };
   /*
     伙伴的家。读失败一律当"没有" —— 一次读不动不该让整个伙伴起不来,只是这一轮

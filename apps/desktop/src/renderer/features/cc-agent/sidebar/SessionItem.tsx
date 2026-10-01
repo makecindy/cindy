@@ -81,6 +81,7 @@ import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
 import type { SessionMoveTarget } from './sessionMoveTarget';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
+import { BotFollowMark } from '@/features/bots/BotFollowMark';
 import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
 import { Tip } from '@/components/ui/tooltip';
@@ -1064,6 +1065,8 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           </SidebarTitleMarquee>
           {/* 任务标签常显、紧跟标题，不属于任务信息复选；标题过长时标题截断让位。 */}
           <TaskTagDots tags={session.tags} />
+          {/* 这件任务所在的项目交给了伙伴时，显示伙伴头像（伙伴在跟进）。 */}
+          <BotFollowMark session={session} />
           {remoteIconKind && (
             <RemoteProjectIcon
               kind={remoteIconKind}

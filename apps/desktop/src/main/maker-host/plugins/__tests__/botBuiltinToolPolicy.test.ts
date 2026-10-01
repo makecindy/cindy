@@ -12,10 +12,11 @@ describe('Bot built-in tool baseline', () => {
     { id: 'browser', available: false },
   ];
 
-  it('keeps only memory and the narrow Bot helper by default', () => {
+  it('keeps memory, the Bot helper and automations by default', () => {
     expect(resolveBotAllowedBuiltinPluginIds(catalog, [])).toEqual([
       'memory',
       'xdt_helper',
+      'scheduler',
     ]);
   });
 
@@ -23,6 +24,7 @@ describe('Bot built-in tool baseline', () => {
     expect(resolveBotAllowedBuiltinPluginIds(catalog, ['docs', 'browser'])).toEqual([
       'memory',
       'xdt_helper',
+      'scheduler',
       'docs',
     ]);
   });

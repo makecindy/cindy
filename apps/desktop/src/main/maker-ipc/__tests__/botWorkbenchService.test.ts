@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] } }));
 
+import { BOT_WORKBENCH_MAX_DIRECTORIES } from '../../../shared/botWorkbench.js';
 import { botProfileDir } from '../botProfileFolder.js';
 import {
   addBotWorkbenchDirectory,
@@ -50,13 +51,13 @@ describe('bot workbench storage', () => {
     expect(await readBotWorkbenchDirectoryPaths(root, 'bot-2')).toEqual([]);
   });
 
-  it('rejects missing folders and more than six projects', async () => {
+  it('rejects missing folders and only stops at the sanity bound, well past six projects', async () => {
     root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
     expect(await addBotWorkbenchDirectory(root, 'bot-1', path.join(root, 'missing'))).toEqual({
       ok: false,
       errorCode: 'NOT_A_DIRECTORY',
     });
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < BOT_WORKBENCH_MAX_DIRECTORIES; index += 1) {
       const dir = path.join(root, `p${index}`);
       await mkdir(dir);
       expect(await addBotWorkbenchDirectory(root, 'bot-1', dir)).toEqual({ ok: true });
@@ -104,10 +105,10 @@ describe('bot workbench storage', () => {
         { path: 'relative/path' },
         { path: '/a', addedAt: 7 },
         { path: '/a' },
-        ...Array.from({ length: 8 }, (_, index) => ({ path: `/p${index}`, addedAt: 'x' })),
+        ...Array.from({ length: BOT_WORKBENCH_MAX_DIRECTORIES + 5 }, (_, index) => ({ path: `/p${index}`, addedAt: 'x' })),
       ],
     });
-    expect(normalized?.directories).toHaveLength(6);
+    expect(normalized?.directories).toHaveLength(BOT_WORKBENCH_MAX_DIRECTORIES);
     expect(normalized?.directories[0]).toEqual({ path: '/a', addedAt: new Date(0).toISOString() });
   });
 });

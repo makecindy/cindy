@@ -58,10 +58,15 @@ function setup(sessionId: string | null = 'bot-session') {
       delivery: 'queued' as const,
       queuedMessageId: 'q-1',
     })),
-    stopTask: vi.fn(async ({ taskId }: { taskId: string }) => ({
+    addProject: vi.fn(async ({ path }: { path: string }) => ({
       ok: true as const,
-      taskId,
-      status: 'requested' as const,
+      project: { name: 'repo', path },
+      projectCount: 1,
+    })),
+    removeProject: vi.fn(async ({ path }: { path: string }) => ({
+      ok: true as const,
+      path,
+      removed: true,
     })),
   };
   const reg = new XdtHelperToolRegistry();
@@ -80,7 +85,7 @@ describe('bot workbench tools', () => {
     expect(callbacks.get).toHaveBeenCalledWith({ callerSessionId: 'bot-session' });
   });
 
-  it('continues and stops a task by id, never by a caller-supplied Bot or project', async () => {
+  it('continues a task by id, never by a caller-supplied Bot or project', async () => {
     const { reg, callbacks } = setup();
     expect(parse(await reg.call('continue_workbench_task', { task_id: 'task-1', message: '把剩下的导出做完' })))
       .toMatchObject({ ok: true, task_id: 'task-1', delivery: 'queued', queued_message_id: 'q-1' });
@@ -89,9 +94,16 @@ describe('bot workbench tools', () => {
       taskId: 'task-1',
       message: '把剩下的导出做完',
     });
-    expect(parse(await reg.call('stop_workbench_task', { task_id: 'task-1' })))
-      .toMatchObject({ ok: true, task_id: 'task-1', status: 'requested' });
-    expect(callbacks.stopTask).toHaveBeenCalledWith({ callerSessionId: 'bot-session', taskId: 'task-1' });
+  });
+
+  it('hands projects over and back through the caller Session only', async () => {
+    const { reg, callbacks } = setup();
+    expect(parse(await reg.call('add_workbench_project', { path: '/Users/me/repo' })))
+      .toMatchObject({ ok: true, project: { name: 'repo', path: '/Users/me/repo' }, project_count: 1 });
+    expect(callbacks.addProject).toHaveBeenCalledWith({ callerSessionId: 'bot-session', path: '/Users/me/repo' });
+    expect(parse(await reg.call('remove_workbench_project', { path: '/Users/me/repo' })))
+      .toMatchObject({ ok: true, path: '/Users/me/repo', removed: true });
+    expect(callbacks.removeProject).toHaveBeenCalledWith({ callerSessionId: 'bot-session', path: '/Users/me/repo' });
   });
 
   it('reads a candidate and records a judgment for it', async () => {
@@ -179,16 +191,18 @@ describe('bot workbench tools', () => {
   it('requires a bound Bot session', async () => {
     const { reg, callbacks } = setup(null);
     expect(parse(await reg.call('get_workbench', {}))).toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
-    expect(parse(await reg.call('stop_workbench_task', { task_id: 'task-1' })))
+    expect(parse(await reg.call('add_workbench_project', { path: '/Users/me/repo' })))
       .toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
     expect(callbacks.get).not.toHaveBeenCalled();
-    expect(callbacks.stopTask).not.toHaveBeenCalled();
+    expect(callbacks.addProject).not.toHaveBeenCalled();
   });
 
-  it('no longer offers the card-writing tool', () => {
+  it('no longer offers the card-writing or duplicate stop tool', () => {
     const { reg } = setup();
     expect(reg.has('update_workbench')).toBe(false);
-    for (const name of ['get_workbench', 'read_workbench_task', 'set_workbench_task', 'set_workbench_tasks', 'continue_workbench_task', 'stop_workbench_task']) {
+    // Stopping goes through the general stop_session_turn, judged per turn by the host.
+    expect(reg.has('stop_workbench_task')).toBe(false);
+    for (const name of ['get_workbench', 'read_workbench_task', 'set_workbench_task', 'set_workbench_tasks', 'continue_workbench_task', 'add_workbench_project', 'remove_workbench_project']) {
       expect(reg.has(name)).toBe(true);
     }
   });

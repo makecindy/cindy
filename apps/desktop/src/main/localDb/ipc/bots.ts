@@ -64,6 +64,7 @@ import {
   addBotWorkbenchDirectory,
   broadcastBotWorkbenchChanged,
   readBotWorkbench,
+  readBotWorkbenchDirectoryPaths,
   removeBotWorkbenchDirectory,
 } from '../../maker-ipc/botWorkbenchService.js';
 import {
@@ -2113,6 +2114,22 @@ export function registerBotIpc(): void {
     owner.assertCurrent();
     if (result.ok) broadcastBotWorkbenchChanged(botId);
     return result;
+  });
+  // 侧栏「<伙伴>在跟进」:每个在用的本机伙伴接手了哪些项目。只给路径列表,不做文件系统探测,
+  // 也不带判断与会话内容;渲染层按任务的工作目录自己匹配。
+  ipcMain.handle('local-db:bots:workbench:follow-scopes', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const owner = captureBotOperationOwner();
+    const bots = await getDbClient().drizzle
+      .select({ id: botProfiles.id })
+      .from(botProfiles)
+      .where(eq(botProfiles.status, 'active'));
+    const scopes = await Promise.all(bots.map(async (bot) => ({
+      botId: bot.id,
+      directories: await readBotWorkbenchDirectoryPaths(owner.userDataDir, bot.id),
+    })));
+    owner.assertCurrent();
+    return scopes.filter((scope) => scope.directories.length > 0);
   });
   // 工作台详情视图:只读一件任务的最近内容(有界)。范围限于该伙伴已接手的项目,
   // 外部会话只读转录尾部,不写库、不导入。

@@ -7887,6 +7887,7 @@
         "message": "跟进「{{title}}」",
         "aria": "跟进「{{title}}」"
       },
+      "followingMark": "{{names}}在跟进这个项目",
       "olderCount_other": "更早的 {{count}} 个",
       "kind": {
         "existing": "原有任务",

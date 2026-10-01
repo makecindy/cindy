@@ -38,9 +38,15 @@ export async function hasAcceptedUserTaskInput(
         AND COALESCE(json_extract(${meta}, '$.contextRebuild'), 0) != 1
         AND (${isWorker ? 1 : 0} = 1 OR COALESCE(json_extract(${meta}, '$.origin.kind'), '') != 'orca')))`))
     .orderBy(desc(messages.createdAt), desc(sql`messages.rowid`)).limit(1);
-  if (!source || source.clientId.startsWith('plugin-task:')) return false;
+  return !!source && isAcceptedUserInputRow(source);
+}
+
+/** The persisted half of the evidence above: a root user row stamped by the trusted human input path. */
+export function isAcceptedUserInputRow(row: { clientId: string; agentMeta: string | null }): boolean {
+  if (row.clientId.startsWith('plugin-task:')) return false;
   let evidence: Record<string, unknown> | null;
-  try { evidence = JSON.parse(source.agentMeta ?? '{}'); } catch { return false; }
+  try { evidence = JSON.parse(row.agentMeta ?? '{}'); } catch { return false; }
+  const text = evidence?.autoReviewUserText;
   return !!evidence && !evidence.origin && ['turn', 'steer'].includes(String(evidence.delivery))
-    && authored(evidence.autoReviewUserText);
+    && typeof text === 'string' && !!text.trim() && !text.startsWith('[UI_ACTION_TRIGGER]');
 }
