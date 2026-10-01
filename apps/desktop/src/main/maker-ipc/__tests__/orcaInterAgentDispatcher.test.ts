@@ -1,5 +1,7 @@
 import type { SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import {
@@ -432,7 +434,7 @@ describe('Orca lead/worker dispatcher', () => {
     expect(h.deps.abortDirectTurnChangeSet).not.toHaveBeenCalled();
   });
 
-  it('rolls back queued accepted side effects when dispatch settles as not dispatched', async () => {
+  it.each(['cancelled-before-dispatch', 'provider-rejected-before-dispatch'] as const)('passes only explicit cancellation to queued rollback: %s', async (reason) => {
     const accepted = vi.fn();
     const rollback = vi.fn();
     const commit = vi.fn();
@@ -466,14 +468,14 @@ describe('Orca lead/worker dispatcher', () => {
         kind: 'session-dispatch',
         source: 'maker-ipc',
         dispatched: false,
-        reason: 'cancelled-before-dispatch',
+        reason,
         context: 'queued-rollback-test',
         message: 'Session send was cancelled before vendor dispatch: queued-rollback-test',
       },
     );
 
     expect(accepted).toHaveBeenCalledTimes(1);
-    expect(rollback).toHaveBeenCalledTimes(1);
+    expect(rollback).toHaveBeenCalledExactlyOnceWith(reason === 'cancelled-before-dispatch' ? reason : undefined);
     expect(commit).not.toHaveBeenCalled();
   });
 
@@ -653,6 +655,62 @@ describe('Orca lead/worker dispatcher', () => {
       },
     });
   });
+  it('records the sending Lead or Worker session so the receiver can link back to it', async () => {
+    const resolveWorkerSessionLink = vi.fn(async () => ({
+      leadSessionId: 'lead-session',
+      workerSessionId: 'worker-session',
+    }));
+    const h = createHarness({ shouldQueueNewTurn: vi.fn(() => true), resolveWorkerSessionLink });
+
+    await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Implement feature',
+      source: 'lead',
+      senderLabel: 'Lead',
+      workerId: 'worker-1',
+      meta: { source: 'orca', context: 'origin-test' },
+    });
+    await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Done',
+      source: 'worker',
+      senderLabel: 'Worker',
+      workerId: 'worker-1',
+      meta: { source: 'orca', context: 'origin-test' },
+    });
+
+    expect(resolveWorkerSessionLink).toHaveBeenCalledWith('worker-1');
+    expect(h.queuedItems.map((queued) => queued.origin)).toEqual([
+      expect.objectContaining({ kind: 'orca', senderSessionId: 'lead-session' }),
+      expect.objectContaining({ kind: 'orca', senderSessionId: 'worker-session' }),
+    ]);
+  });
+
+  it('still delivers when the sender session cannot be resolved', async () => {
+    const h = createHarness({
+      shouldQueueNewTurn: vi.fn(() => true),
+      resolveWorkerSessionLink: vi.fn(async () => {
+        throw new Error('db unavailable');
+      }),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Implement feature',
+      source: 'lead',
+      senderLabel: 'Lead',
+      workerId: 'worker-1',
+      meta: { source: 'orca', context: 'origin-test' },
+    });
+
+    expect(result).toMatchObject({ ok: true, mode: 'queued' });
+    expect(h.queuedItems[0]?.origin).toEqual({
+      kind: 'orca',
+      senderLabel: 'Lead',
+      displayText: 'Implement feature',
+    });
+  });
+
   it('builds the standard Orca queue item and runs the reserve hook at the head boundary', async () => {
     const order: string[] = [];
     const reserveNextQueuedMessage = vi.fn(async (_sessionId, item, onReserved) => {
@@ -682,7 +740,32 @@ describe('Orca lead/worker dispatcher', () => {
         origin: { kind: 'orca', senderLabel: 'Lead', displayText: 'Replace current task' },
       }),
       expect.any(Function),
+      undefined,
     );
+  });
+
+  it.each([false, true])('checks authority after production queue restore before interrupt reservation: revoked=%s', async revoked => {
+    let restored = false;
+    const stop = vi.fn();
+    const inputCoordinator = {
+      ensureQueueRestored: async () => { restored = true; },
+      isQueueRestored: () => restored,
+      reserveNextInput: vi.fn((_id, _item, opts) => { opts.onReserved(); return { reserved: true }; }),
+    };
+    const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+    const start = source.indexOf('    reserveNextQueuedMessage: async');
+    const adapter = source.slice(start, source.indexOf('    sendToSessionInternal,', start));
+    const reserveNextQueuedMessage = new Function('inputCoordinator', ts.transpileModule(`return ({${adapter}}).reserveNextQueuedMessage;`, {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText)(inputCoordinator);
+    const h = createHarness({ reserveNextQueuedMessage });
+    const result = await h.dispatcher.reserveNextOrcaInterAgentMessage({
+      targetSessionId: 'target-session', rawContent: 'replacement', source: 'lead', senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'restore-check' }, onReserved: stop,
+      beforeReserve: async () => { if (restored && revoked) throw new Error('revoked during restore'); },
+    });
+    expect(restored).toBe(true);
+    expect(result.ok).toBe(!revoked);
+    expect(inputCoordinator.reserveNextInput).toHaveBeenCalledTimes(revoked ? 0 : 1);
+    expect(stop).toHaveBeenCalledTimes(revoked ? 0 : 1);
   });
 
   it('discards the accepted callback when priority reservation throws', async () => {

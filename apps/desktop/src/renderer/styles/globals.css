@@ -335,6 +335,11 @@ html:lang(ko) {
 [data-recommendation-active='true'] .ProseMirror > p.is-empty:first-child:only-child::before {
   content: none;
 }
+/* 首页建议悬停预览:预览由 ChatInput 的 overlay 承载,暂时隐去正文/placeholder;
+   预览不改变编辑器高度,见 ChatInput 的 promptPreviewLines。 */
+[data-prompt-preview-active='true'] .ProseMirror {
+  opacity: 0;
+}
 .ProseMirror {
   caret-color: var(--caret-accent);
 }
@@ -652,14 +657,15 @@ html:lang(ko) {
 
 /* Keep the caret and surrounding prose a consistent, readable distance from
    every composer pill. This is external spacing, independent of chip padding. */
-.ProseMirror :is(
-  [data-mention-chip],
-  [data-pasted-text-chip],
-  [data-composer-quote],
-  .ghost-cmd-pill,
-  .slash-cmd-pill,
-  .quick-start-pill
-) {
+.ProseMirror
+  :is(
+    [data-mention-chip],
+    [data-pasted-text-chip],
+    [data-composer-quote],
+    .ghost-cmd-pill,
+    .slash-cmd-pill,
+    .quick-start-pill
+  ) {
   margin-inline: 4px;
 }
 
@@ -1132,8 +1138,10 @@ body.resizing-pane [data-ghost-webview] {
 
 /* 分享选择模式会在消息 wrapper 左侧动态挂载绝对定位的选择框。该元素需要真实
    消息盒参与布局与绘制；继续使用视口外 intrinsic 占位会让长消息末尾的选择框
-   被压缩或裁切。仅让可分享消息退出隔离，常态和工具类条目继续保留渲染跳过。 */
-.msg-stream-items[data-share-selection-active] > [data-share-message-id] {
+   被压缩或裁切。伙伴消息的分享 wrapper 位于含时间分组的条目内部，也必须让
+   外层条目退出隔离；常态和工具类条目继续保留渲染跳过。 */
+.msg-stream-items[data-share-selection-active] > [data-share-message-id],
+.msg-stream-items[data-share-selection-active] > :has([data-share-message-id]) {
   content-visibility: visible;
   contain-intrinsic-size: none;
 }
@@ -1158,12 +1166,7 @@ body.resizing-pane [data-ghost-webview] {
   position: absolute;
   inset: 0;
   width: 45%;
-  background: linear-gradient(
-    100deg,
-    transparent 10%,
-    var(--text-primary) 50%,
-    transparent 90%
-  );
+  background: linear-gradient(100deg, transparent 10%, var(--text-primary) 50%, transparent 90%);
   transform: translateX(-120%);
   animation: brand-loading-sheen 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
@@ -1920,6 +1923,18 @@ mark.doc-search-mark [class] {
   color: inherit;
 }
 
+/* Settings search navigation briefly marks the section selected from the
+   sidebar. Reuse the existing dual-theme search tokens instead of baking a
+   light-only color into the settings surface. */
+.settings-search-target-highlight {
+  outline: 1px solid hsl(var(--search-match-active-fg));
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px hsl(var(--search-match-active-bg) / 0.28);
+  transition:
+    outline-color var(--motion-fast) var(--motion-ease-move),
+    box-shadow var(--motion-fast) var(--motion-ease-move);
+}
+
 @layer utilities {
   .text-sidebar-item-active-foreground {
     color: var(--sidebar-item-active-foreground);
@@ -2112,6 +2127,33 @@ mark.doc-search-mark [class] {
   background: var(--surface-translucent-overlay);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
+}
+/* Windows 例外:cmd-palette 浮层一律不透明、不加模糊 —— 透明窗口背景上的 CSS
+   backdrop-filter 可能渲染成黑块(§15.12,菜单常在侧栏上方打开),集显 / 软件渲染有性能风险,
+   Windows 原生材质也未实机验证。回落 --cmd-palette-bg 本身(CINDY 下即 Card 面板色
+   --surface-elevated),1px 描边与阴影不变。 */
+[data-platform='win32'][data-theme='cindy-light'] .bg-\[var\(--cmd-palette-bg\)\],
+[data-platform='win32'][data-theme='cindy-dark'] .bg-\[var\(--cmd-palette-bg\)\] {
+  background: var(--cmd-palette-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* 共享下拉菜单行(components/ui/dropdown-menu.tsx,DESIGN §4):行内 Lucide 图标平时线宽 1.5,
+   高亮 / 勾选 / 展开时回到 2。只动默认线宽(stroke-width="2")的图标:显式传了其他 strokeWidth 的
+   不命中;显式传 2 的由组件标上 data-menu-icon-stroke(行内直接子元素与普通标签内可识别)。 */
+[data-menu-row] svg.lucide[stroke-width='2']:not([data-menu-icon-stroke]) {
+  stroke-width: 1.5;
+  transition: stroke-width var(--motion-instant) var(--motion-ease-out);
+}
+[data-menu-row]:is(
+    [data-menu-active],
+    [data-highlighted],
+    [data-state='checked'],
+    [data-state='open']
+  )
+  svg.lucide[stroke-width='2']:not([data-menu-icon-stroke]) {
+  stroke-width: 2;
 }
 
 /* ── 插件面板悬浮球(GhostPanelBubbleLayer)────────────────────────────

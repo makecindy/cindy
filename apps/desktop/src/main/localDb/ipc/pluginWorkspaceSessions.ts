@@ -114,14 +114,16 @@ export async function createPluginDraftSession(params: {
     source: 'plugin' as const,
     ...(params.title ? { title: params.title } : {}),
   };
-  // 与 local-db:sessions:create 同流程:空目录且用户开了快照才会 git init,
-  // 非空目录/未开快照原样跳过(projectGitBootstrap 自带守卫)。
+  // 与 local-db:sessions:create 同流程:只有“所有项目”模式才会给空目录 git init,
+  // 已有 Git 项目仍可在“已有 Git 项目”模式下记录保存点。
+  const gitSafety = readGitSafetySettings();
   await ensureProjectGitInitialized({
     workingDir: insertRow.workingDir,
     workspaceKind: insertRow.workspaceKind,
     remoteHostId: insertRow.remoteHostId,
     sessionId: id,
-    autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
+    autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
+    autoInitProjectGit: gitSafety.autoInitProjectGit,
     source: 'plugin-workspace-session',
   });
   if (params.shouldContinue && !params.shouldContinue()) return null;
@@ -166,6 +168,11 @@ export async function createPluginDraftSession(params: {
  */
 export async function createGhostErrandSession(params: {
   ghostId: string;
+  /** Host-allocated durable task identity; never taken directly from plugin payload. */
+  sessionId?: string;
+  /** Synchronous boundary: after this callback, a failed INSERT is not proof of absence. */
+  onPersistenceStarted?: () => void;
+  shouldContinue?: () => boolean;
   title: string | null;
   agentKind?: 'cc' | 'codex' | 'pi';
   model?: string;
@@ -177,9 +184,10 @@ export async function createGhostErrandSession(params: {
   workingDir?: string;
   notifySessionCreated?: (info: { sessionId: string; workdir?: string }) => void;
 }): Promise<string> {
+  if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed');
   const db = getDbClient().drizzle;
   const now = Date.now();
-  const id = randomUUID();
+  const id = params.sessionId ?? randomUUID();
   const projectDir = params.workingDir
     ? (normalizeWorkingDirForStorage(params.workingDir) ?? undefined)
     : undefined;
@@ -204,15 +212,20 @@ export async function createGhostErrandSession(params: {
     ...(params.title ? { title: params.title } : {}),
   };
   // 与既有 create 同流程;dialogue 目录由 projectGitBootstrap 自带守卫跳过。
+  const gitSafety = readGitSafetySettings();
   await ensureProjectGitInitialized({
     workingDir: insertRow.workingDir,
     workspaceKind: insertRow.workspaceKind,
     remoteHostId: insertRow.remoteHostId,
     sessionId: id,
-    autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
+    autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
+    autoInitProjectGit: gitSafety.autoInitProjectGit,
     source: 'plugin-errand-session',
   });
+  if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed');
+  params.onPersistenceStarted?.();
   await db.insert(sessions).values(insertRow);
+  if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed');
   if (projectDir && insertRow.workingDir) {
     // 项目目录是用户在插件详情页亲手选的,进"最近项目"合理;dialogue 目录
     // 是 app 管理的临时间,不进。失败仅日志,不阻断创建。

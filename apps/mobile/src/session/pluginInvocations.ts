@@ -1,4 +1,4 @@
-import { parseMessageToolUse, type MessageToolResultPairing } from '@cindy/maker-shared/message-normalize';
+import { buildMessageToolResultPairing, parseMessageToolUse, type MessageToolResultPairing } from '@cindy/maker-shared/message-normalize';
 import type { RemoteMessage } from './types';
 
 export interface PluginInvocation {
@@ -78,4 +78,34 @@ export function collectPluginInvocations(
     turns.set(owner, calls);
   }
   return turns;
+}
+
+/** Attach plugin activity to its assistant work, never the user's bubble. One entry per turn. */
+export function companionPluginWorkEntries(items: readonly import('./messageRenderModel').MobileMessageRenderItem[], invocations?: ReadonlyMap<string, PluginInvocation[]>) {
+  const entries = new Map<string, { plugins: PluginInvocation[]; sessionId: string; running: boolean }>();
+  let owner: { plugins: PluginInvocation[]; sessionId: string; running: boolean } | undefined;
+  let attached = false;
+  for (const item of items) {
+    if (item.type === 'message' && item.message.kind === 'user' && item.message.source.agentMeta?.delivery !== 'steer') {
+      const plugins = invocations?.get(item.message.source.clientId || item.message.source.id) ?? item.message.pluginInvocations;
+      owner = plugins?.length
+        ? { plugins, sessionId: item.message.source.sessionId, running: false }
+        : undefined;
+      attached = false;
+    } else if (item.type === 'work_group' && owner) {
+      // A turn may contain several work groups around intermediate output.
+      // Keep one stable entry, but derive activity from the entire owning turn.
+      owner.running ||= item.isStreaming === true;
+      if (!attached) entries.set(item.key, owner);
+      attached = true;
+    }
+  }
+  return entries;
+}
+
+/** History work rows may be deferred placeholders; derive identity from available source messages. */
+export function collectCompanionPluginInvocations(messages: readonly RemoteMessage[]) {
+  return collectPluginInvocations(messages, buildMessageToolResultPairing(messages, {
+    contentToPreview: (content) => typeof content === 'string' ? content : JSON.stringify(content) ?? '',
+  }));
 }

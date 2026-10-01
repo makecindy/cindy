@@ -22,6 +22,7 @@ export type CindyMakeMergeError =
   | 'busy'
   | 'dirty'
   | 'localMain'
+  | 'localMainAhead'
   | 'unavailable'
   | 'gitFailed'
   | 'baselineChanged'
@@ -51,11 +52,15 @@ export interface CindyMakeMergeState {
   rebaseReview?: boolean;
   /** Native feature integration/undo shares the same retained conflict lifecycle. */
   feature?: MakeFeatureMergePlan;
+  /** Source sync started while preparing a task; stopping preparation owns its candidate. */
+  taskOwned?: boolean;
   tree?: string;
   commit?: string;
   sessionId?: string;
   /** A retained candidate must not be removed by source preparation/reset. */
   hasWorkspace?: boolean;
+  /** Adoption succeeded; disposable files/ref still need cleanup before another operation. */
+  cleanupPending?: boolean;
   /** Persisted before cleanup so interruption retries cancellation, never starts a resolution task. */
   cancellationRequested?: boolean;
   ownedByAnotherAccount?: boolean;

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   buildQueuePanelSummary,
   buildQueueRowPresentation,
+  isAutoSentQueueItem,
   isOrcaQueueItem,
+  queueItemVisibleText,
   queueMoveTargetIndex,
   stopOptionsForProjection,
 } from '../queue.js';
@@ -185,7 +187,8 @@ describe('shared queue presentation model', () => {
       },
       queueLength: 3,
     });
-    expect(busyOrca.actions.edit.disabledReason).toBe('协同消息由桌面端编排，手机端只读显示。');
+    expect(busyOrca.actions.edit.disabledReason).toBe('队列操作同步中，完成后再继续操作。');
+    expect(busyOrca.actions.remove.disabledReason).toBe('队列操作同步中，完成后再继续操作。');
   });
 
   it('explains steering, edit-lock, interaction-lock, and Orca row states', () => {
@@ -239,9 +242,14 @@ describe('shared queue presentation model', () => {
       },
       queueLength: 2,
     });
+    // 对齐桌面:协同消息不能编辑或插话,但可以调整顺序和删除。
     expect(orca.title).toBe('协同队列 2');
-    expect(orca.hint).toBe('协同消息由桌面端编排，手机端只读显示。');
-    expect(orca.actions.steer.disabledReason).toBe('协同消息由桌面端编排，手机端只读显示。');
+    expect(orca.hint).toBeNull();
+    expect(orca.actions.steer.disabledReason).toBe('协同消息不支持编辑或插话发送。');
+    expect(orca.actions.edit.disabledReason).toBe('协同消息不支持编辑或插话发送。');
+    expect(orca.actions.remove.disabled).toBe(false);
+    expect(orca.actions.moveUp.disabled).toBe(false);
+    expect(orca.actions.moveDown).toMatchObject({ disabled: true, disabledReason: '已经是队列最后一条。' });
   });
 
   it('locks edit and steer (but keeps remove and reorder) for synthetic trigger rows', () => {
@@ -281,5 +289,59 @@ describe('shared queue presentation model', () => {
     });
     expect(normalRow.syntheticKind).toBeNull();
     expect(normalRow.actions.edit.disabled).toBe(false);
+  });
+
+  it('locks edit and steer (but keeps remove and reorder) for auto-sent rows', () => {
+    const projection = {
+      steeringQueueClientIds: [],
+      queueEditLocks: [],
+      queueInteractionLocks: [],
+    };
+    for (const origin of [
+      { kind: 'session', senderSessionId: 'caller', displayText: 'follow-up' },
+      { kind: 'scheduler', scheduleId: 's', scheduleName: 'nightly' },
+    ]) {
+      const item = { ...queued('q-1'), text: 'follow-up', origin };
+      expect(isAutoSentQueueItem(item)).toBe(true);
+      const row = buildQueueRowPresentation({ item, originalIndex: 0, projection, queueLength: 2 });
+      expect(row.actions.edit.disabled).toBe(true);
+      expect(row.actions.steer.disabled).toBe(true);
+      expect(row.actions.edit.disabledReason).toBe('自动发送的消息不支持编辑或插话发送。');
+      expect(row.actions.remove.disabled).toBe(false);
+      expect(row.actions.moveDown.disabled).toBe(false);
+    }
+    expect(isAutoSentQueueItem({ origin: { kind: 'orca', senderLabel: 'Lead' } })).toBe(false);
+    expect(isAutoSentQueueItem({})).toBe(false);
+  });
+});
+
+describe('queueItemVisibleText', () => {
+  it('shows the persisted body for session and scheduler items', () => {
+    expect(queueItemVisibleText({
+      text: '[来自 Cindy 的补充]\n\nplease review',
+      persistedContent: 'please review',
+      origin: { kind: 'session', senderSessionId: 'bot-task' },
+    })).toBe('please review');
+    expect(queueItemVisibleText({
+      text: 'heartbeat prompt\n[silent-run protocol]',
+      persistedContent: 'heartbeat prompt',
+      origin: { kind: 'scheduler', scheduleId: 's' },
+    })).toBe('heartbeat prompt');
+  });
+
+  it('unwraps the host attachment envelope only when files are attached', () => {
+    const origin = { kind: 'session', senderSessionId: 'caller' };
+    expect(queueItemVisibleText({
+      text: 'see attached',
+      persistedContent: JSON.stringify({ text: 'see attached', images: [], files: [{ name: 'a.txt' }] }),
+      files: [{ name: 'a.txt' }],
+      origin,
+    })).toBe('see attached');
+    expect(queueItemVisibleText({ text: '{"text":"x"}', persistedContent: '{"text":"x"}', origin })).toBe('{"text":"x"}');
+  });
+
+  it('keeps the agent text for composer and Orca items', () => {
+    expect(queueItemVisibleText({ text: 'hello', persistedContent: 'other' })).toBe('hello');
+    expect(queueItemVisibleText({ text: 'wire', persistedContent: '{}', origin: { kind: 'orca', senderLabel: 'Lead' } })).toBe('wire');
   });
 });

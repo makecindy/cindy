@@ -26,11 +26,24 @@ import { BUNDLED_CATALOG } from "../catalog.js";
 import { providerCatalogId } from "../provider-identity.js";
 
 describe('native subscription instances', () => {
-  it.each(['claude', 'xai'] as const)('%s shares definitions but keeps unique routing identity', native => {
-    const brand = native === 'claude' ? 'anthropic' : 'xai';
-    const make = (id: string) => buildUserProvider({ id, name: brand, auth: { method: 'oauth', native }, runtimes: native === 'claude'
-      ? { 'claude-code': { baseUrl: 'https://api.anthropic.com', wireProtocol: 'anthropic-messages', models: [] } }
-      : { codex: { baseUrl: 'https://api.x.ai/v1', wireProtocol: 'openai-responses', models: [] } } });
+  it('retired independent Claude accounts stay listed but serve no agent', () => {
+    const account = buildUserProvider({
+      id: 'anthropic-a',
+      name: 'anthropic',
+      auth: { method: 'oauth', native: 'claude' },
+      runtimes: { 'claude-code': { baseUrl: 'https://api.anthropic.com', wireProtocol: 'anthropic-messages', models: [] } },
+    });
+    expect(providerCatalogId(account)).toBe('anthropic');
+    expect(account.auth.native).toBe('claude');
+    expect(account.agents).toEqual([]);
+    expect(Object.keys(account.routing)).toEqual(['claude-code']);
+  });
+
+  it('xai shares definitions but keeps unique routing identity', () => {
+    const native = 'xai' as const;
+    const brand = 'xai';
+    const make = (id: string) => buildUserProvider({ id, name: brand, auth: { method: 'oauth', native },
+      runtimes: { codex: { baseUrl: 'https://api.x.ai/v1', wireProtocol: 'openai-responses', models: [] } } });
     const a = make(`${brand}-a`);
     const b = make(`${brand}-b`);
     expect(a.id).not.toBe(b.id);
@@ -40,11 +53,7 @@ describe('native subscription instances', () => {
     for (const agent of a.agents) expect(a.routing[agent]?.authStrategy).toBe('provider-oauth-header');
     const builtin = BUNDLED_CATALOG.providers.find(provider => provider.id === brand)!;
     for (const agent of a.agents) {
-      expect(a.routing[agent]).toEqual({
-        ...builtin.routing[agent],
-        authStrategy: 'provider-oauth-header',
-        ...(native === 'claude' && agent === 'claude-code' ? { headerDelete: ['x-api-key'] } : {}),
-      });
+      expect(a.routing[agent]).toEqual({ ...builtin.routing[agent], authStrategy: 'provider-oauth-header' });
     }
     expect(a.auth.native).toBe(native);
     expect(a.imageModels).toBeUndefined();
@@ -289,13 +298,138 @@ describe("buildUserProvider (per-runtime)", () => {
       id: "meta/llama-4-405b",
       name: "Llama 4 405B",
       contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
-      // codex runtime：参考内置默认 effort 档位（low/medium/high/xhigh/max，默认 medium）。
-      efforts: ["low", "medium", "high", "xhigh", "max"],
-      defaultEffort: "medium",
+      // 未声明能力时不指定推理档位，让供应商使用默认行为。
+      efforts: [],
+      defaultEffort: null,
       group: "custom:openrouter",
       defaultEnabled: false,
     });
   });
+
+  it.each(["claude-code", "codex", "pi"] as const)(
+    "%s inherits GPT-6 Sol/Luna reasoning for an unknown custom supplier",
+    (agent) => {
+      for (const id of ["gpt-6-sol", "gpt-6-luna", "openai/gpt-6-sol", "openai/gpt-6-luna"]) {
+        const config: CustomProviderConfig = {
+          id: "custom-xdtai",
+          name: "XDTAI",
+          runtimes: {
+            [agent]: {
+              baseUrl: "https://custom.example/v1",
+              models: [{ id, name: id, discoveredMetadata: { supportsImageInput: true } }],
+            },
+          },
+        };
+        const before = structuredClone(config);
+        const oldRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+        oldRegistry.baseModels = oldRegistry.baseModels?.filter(
+          (model) => !["openai/gpt-6-sol", "openai/gpt-6-luna"].includes(model.id),
+        );
+        oldRegistry.models = oldRegistry.models.filter(
+          (model) => !["openai/gpt-6-sol", "openai/gpt-6-luna"].includes(model.modelRef ?? model.id),
+        );
+        // Without current-generation catalog data, compatible Responses routes now
+        // inherit the previous generation; Messages/Chat do not borrow its protocol.
+        expect(buildUserProvider(config, { modelRegistry: oldRegistry }).models[agent]?.[0])
+          .toMatchObject(agent === 'codex'
+            ? { efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' }
+            : { efforts: [], defaultEffort: null });
+        const provider = buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+        expect(provider.models[agent]?.[0]).toMatchObject({
+          id,
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          defaultEffort: "medium",
+        });
+        expect(provider.routing[agent]?.upstream).toBe("https://custom.example/v1");
+        expect(config).toEqual(before);
+        const stored = config.runtimes[agent]!.models[0];
+        stored.discoveredMetadata = { efforts: ["low", "high"] };
+        expect(buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry }).models[agent]?.[0])
+          .toMatchObject({ efforts: ["low", "high"], defaultEffort: "low" });
+        stored.reasoning = false;
+        expect(buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry }).models[agent]?.[0])
+          .toMatchObject({ efforts: [], defaultEffort: null });
+      }
+    },
+  );
+
+  it.each(["claude-code", "codex", "pi"] as const)(
+    "%s leaves unknown reasoning unspecified and preserves declared capabilities",
+    (agent) => {
+      for (const modelRegistry of [
+        undefined,
+        LEGACY_REGISTRY,
+        BUNDLED_CATALOG.modelRegistry,
+      ]) {
+        const models = [
+          { id: "unknown-model", name: "Unknown" },
+          {
+            id: "discovered-model",
+            name: "Discovered",
+            discoveredMetadata: {
+              efforts: ["low", "high"] as const,
+              defaultEffort: "high" as const,
+            },
+          },
+          {
+            id: "configured-model",
+            name: "Configured",
+            reasoning: true,
+            reasoningEfforts: ["high", "max"] as const,
+            reasoningDefaultEffort: "max" as const,
+            discoveredMetadata: {
+              efforts: ["low"] as const,
+              defaultEffort: "low" as const,
+            },
+          },
+          {
+            id: "disabled-model",
+            name: "Disabled",
+            reasoning: false,
+            discoveredMetadata: {
+              efforts: ["high"] as const,
+              defaultEffort: "high" as const,
+            },
+          },
+        ];
+        const config: CustomProviderConfig = {
+          id: "unknown-provider",
+          name: "Unknown provider",
+          runtimes: {
+            [agent]: { baseUrl: "https://unknown.example/v1", models },
+          },
+        };
+        const before = structuredClone(config);
+        const provider = buildUserProvider(config, { modelRegistry });
+        expect(provider.models[agent]).toEqual([
+          expect.objectContaining({
+            id: "unknown-model",
+            efforts: [],
+            defaultEffort: null,
+          }),
+          expect.objectContaining({
+            id: "discovered-model",
+            efforts: ["low", "high"],
+            defaultEffort: "high",
+          }),
+          expect.objectContaining({
+            id: "configured-model",
+            efforts: ["high", "max"],
+            defaultEffort: "max",
+          }),
+          expect.objectContaining({
+            id: "disabled-model",
+            efforts: [],
+            defaultEffort: null,
+          }),
+        ]);
+        expect(config).toEqual(before);
+        expect(provider.models[agent]?.[0].userModelConfig).not.toHaveProperty(
+          "reasoning",
+        );
+      }
+    },
+  );
 
   it("projects a model-specific protocol route into the provider catalog", () => {
     const provider = buildUserProvider({
@@ -363,14 +497,14 @@ describe("buildUserProvider (per-runtime)", () => {
       }),
       expect.objectContaining({
         id: "unregistered-model",
-        efforts: ["low", "medium", "high", "xhigh", "max"],
-        defaultEffort: "medium",
+        efforts: [],
+        defaultEffort: null,
       }),
     ]);
     expect(provider.models["claude-code"]?.[0]).toMatchObject({
       id: "gpt-5.6-sol",
-      efforts: ["low", "medium", "high", "xhigh", "max"],
-      defaultEffort: "medium",
+      efforts: [],
+      defaultEffort: null,
     });
   });
 
@@ -478,7 +612,7 @@ describe("buildUserProvider (per-runtime)", () => {
     });
   });
 
-  it("unregistered prefix falls back to CUSTOM_EFFORTS", () => {
+  it("unregistered prefix does not invent reasoning efforts", () => {
     const p = buildUserProvider(
       {
         id: "unknown-relay",
@@ -492,11 +626,11 @@ describe("buildUserProvider (per-runtime)", () => {
       },
       { modelRegistry: LEGACY_REGISTRY },
     );
-    // custom/my-model → no registry match → CUSTOM_EFFORTS for codex
+    // custom/my-model has no matching capability declaration.
     expect(p.models.codex?.[0]).toMatchObject({
       id: "custom/my-model",
-      efforts: ["low", "medium", "high", "xhigh", "max"],
-      defaultEffort: "medium",
+      efforts: [],
+      defaultEffort: null,
     });
   });
 
@@ -609,8 +743,8 @@ describe("buildUserProvider (per-runtime)", () => {
     );
 
     expect(provider.models.codex?.[0]).toMatchObject({
-      efforts: ["low", "medium", "high", "xhigh", "max"],
-      defaultEffort: "medium",
+      efforts: [],
+      defaultEffort: null,
     });
   });
 
@@ -649,8 +783,8 @@ describe("buildUserProvider (per-runtime)", () => {
       { modelRegistry: registry },
     );
     expect(ambiguous.models.codex?.[0]).toMatchObject({
-      efforts: ["low", "medium", "high", "xhigh", "max"],
-      defaultEffort: "medium",
+      efforts: [],
+      defaultEffort: null,
     });
 
     registry.models.pop();
@@ -688,8 +822,8 @@ describe("buildUserProvider (per-runtime)", () => {
       { modelRegistry: LEGACY_REGISTRY },
     );
     expect(noTargetRoute.models.codex?.[0]).toMatchObject({
-      efforts: ["low", "medium", "high", "xhigh", "max"],
-      defaultEffort: "medium",
+      efforts: [],
+      defaultEffort: null,
     });
   });
 
@@ -1042,7 +1176,7 @@ describe("buildUserProvider (per-runtime)", () => {
     );
     // xd/codex/gpt-5.6-sol → strips xd/ → codex/gpt-5.6-sol → matches route for claude-code
     // without prefix-stripping, the model ID wouldn't match any registry entry
-    // and efforts would fall back to CUSTOM_EFFORTS (no 'xhigh' from registry).
+    // and efforts would remain empty.
     const model = p.models["claude-code"]?.[0];
     expect(model?.efforts?.length).toBeGreaterThan(0);
     expect(model?.efforts).toContain("xhigh");
@@ -1139,7 +1273,7 @@ describe("buildUserProvider (per-runtime)", () => {
     );
     expect(pChatgpt.models["claude-code"]?.[0]?.efforts).toContain("ultra");
 
-    // unknown prefix: should NOT match registry, gets default CUSTOM_EFFORTS (no 'ultra')
+    // Unknown prefix must not borrow capability declarations.
     const pUnknown = buildUserProvider(
       {
         id: "relay",
@@ -1256,7 +1390,7 @@ describe("buildUserProvider (per-runtime)", () => {
     expect(p.models["claude-code"]?.[0]?.defaultEffort).toBe("max");
   });
 
-  it("Case C: no exact match → prefix fallback yields ambiguity → CUSTOM_EFFORTS", () => {
+  it("Case C: no exact match → prefix fallback yields ambiguity → no declared efforts", () => {
     // Two entries both have route.modelId='baz' after stripping openai/
     const reg: ModelRegistry = {
       updatedAt: "2026-01-01T00:00:00Z",
@@ -1289,7 +1423,7 @@ describe("buildUserProvider (per-runtime)", () => {
       },
       { modelRegistry: reg },
     );
-    // Ambiguous → falls back to CUSTOM_EFFORTS (no 'ultra')
+    // Ambiguous declarations must not invent capabilities.
     expect(p.models.codex?.[0]?.efforts).not.toContain("ultra");
   });
 
@@ -1618,6 +1752,34 @@ describe('imported model native engine defaults', () => {
     } });
     expect(agents.map(agent => provider.models[agent]?.[0]?.defaultEnabled)).toEqual(expected);
   });
+
+  it.each([
+    [null, 'openai-responses', null, [false, false, true]],
+    ['anthropic-messages', 'openai-responses', 'anthropic-messages', [true, false, true]],
+    ['openai-responses', 'anthropic-messages', 'openai-responses', [false, true, true]],
+    [undefined, 'anthropic-messages', 'anthropic-messages', [true, false, true]],
+    [undefined, undefined, 'openai-responses', [false, true, true]],
+  ] as const)('applies current native declaration %s ahead of live %s and bundled fallback',
+    (declaration, live, expectedApi, expectedEnabled) => {
+      const agents = ['claude-code', 'codex', 'pi'] as const;
+      const config: CustomProviderConfig = {
+        id: 'native-default-test', name: 'Test',
+        runtimes: Object.fromEntries(agents.map(agent => [agent, {
+          baseUrl: 'https://example.com/v1',
+          wireProtocol: agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses',
+          models: [{ id: 'gpt-6', name: 'GPT 6', discoveredMetadata: { nativeApi: live } }],
+        }])),
+      };
+      const provider = buildUserProvider(config, { modelRegistry: {
+        schemaVersion: 5, updatedAt: '2026-09-24T00:00:00Z',
+        models: [{ id: 'gpt-6', name: 'GPT 6', nativeApi: declaration, routes: [{
+          providerId: config.id, modelId: 'gpt-6', agents: ['claude-code', 'codex'],
+        }] }],
+      } });
+      expect(agents.map(agent => provider.models[agent]?.[0]?.nativeApi)).toEqual(agents.map(() => expectedApi));
+      expect(agents.map(agent => provider.models[agent]?.[0]?.defaultEnabled)).toEqual(expectedEnabled);
+      expect(config.runtimes?.codex?.models[0].discoveredMetadata?.nativeApi).toBe(live);
+    });
 
   it('preserves explicit configuration defaults', () => {
     const provider = buildUserProvider({ id: 'explicit-defaults', name: 'Test', runtimes: {

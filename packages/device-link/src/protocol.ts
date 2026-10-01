@@ -7,6 +7,7 @@
 import {
   MAX_FRAME_BYTES,
   NOTIFY_BODY_MAX_LENGTH,
+  NOTIFY_AVATAR_JPEG_MAX_LENGTH,
   NOTIFY_COLLAPSE_ID_MAX_LENGTH,
   NOTIFY_DEEP_LINK_MAX_LENGTH,
   NOTIFY_TITLE_MAX_LENGTH,
@@ -19,15 +20,21 @@ import {
   type HelloPayload,
   type NotifyCategory,
   type NotifyPayload,
+  type NotifySender,
   type PresenceSetPayload,
   type PresenceSnapshot,
   type RelayErrorCode,
   type RelayErrorPayload,
 } from '@cindy/device-link-protocol';
 
+export { SHARED_TASK_RELAY_CAPABILITY, sharedTaskDeviceId, parseSharedTaskScope, type SharedTaskScope } from '@cindy/device-link-protocol';
+export { sharedTaskHostPeer, sharedTaskGuestPeer, isSharedTaskPeer, parseSharedTaskPeer } from './sharedTaskPeer.js';
+export type { SharedTaskPeer } from './sharedTaskPeer.js';
+
 export {
   MAX_FRAME_BYTES,
   NOTIFY_BODY_MAX_LENGTH,
+  NOTIFY_AVATAR_JPEG_MAX_LENGTH,
   NOTIFY_COLLAPSE_ID_MAX_LENGTH,
   NOTIFY_DEEP_LINK_MAX_LENGTH,
   NOTIFY_TITLE_MAX_LENGTH,
@@ -42,6 +49,7 @@ export type {
   HelloPayload,
   NotifyCategory,
   NotifyPayload,
+  NotifySender,
   PresenceSetPayload,
   PresenceSnapshot,
   RelayErrorCode,
@@ -132,6 +140,14 @@ export const CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1 = 'maker-event-batch-v1'
 
 /** Accepts ordered current-text snapshots and history repair hints, including after backpressure. */
 export const CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1 = 'session-text-snapshot-v1';
+
+/**
+ * 后台链路(link-open / link-accept 双向声明)。控制端在本机没有订阅对端任何 topic 时建链
+ * 即声明:被控端不装 legacy `'*'` 兼容订阅 —— 不亮被控横幅、不转发推送、不挡无人值守更新
+ * 重启 —— 直到控制端显式 subscribe。被控端在 link-accept 声明支持;旧被控端忽略该能力,
+ * 照旧装 legacy `'*'`,只读类后台请求须先确认对端支持(见 desktop remoteBackgroundInvoke)。
+ */
+export const DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1 = 'background-link-v1';
 
 export interface LinkAcceptPayload {
   appVersion: string;

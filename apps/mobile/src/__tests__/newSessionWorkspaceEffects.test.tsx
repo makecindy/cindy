@@ -33,6 +33,8 @@ const declarations = new Set([
   'patchDraft', 'selectWorkingDir', 'rememberWorkingDirForDevice', 'selectDialogueWorkspace',
   'selectRecentProject', 'openProjectBrowse',
   'firstMessageRef', 'firstMessageSelectionRef', 'firstMessageSelection',
+  'restoreCreationDraft', 'userTouchedRuntimeRef', 'appliedPermissionMemoryRef',
+  'runtimeActionSeqRef', 'attachments', 'attachmentsRef', 'planModeDraftOn', 'prePlanPermissionModeRef',
 ]);
 const effectMarkers = new Set([
   'drainStashedNewSessionDraft', 'readNewSessionPreferences',
@@ -83,7 +85,7 @@ const bindingNames = [
   'isRemoteTaskSuggestionId', 'params', 't',
   'initialWorkingDir', 'visualInitialDraft', 'sessions', 'readNewSessionPreferences',
   'saveNewSessionPreferences', 'drainStashedNewSessionDraft', 'loadBrowsePath', 'setDevicePickerOpen',
-  'setAttachments', 'setAttachmentError', 'setBrowseOpen', 'setBrowseError',
+  'setAttachmentError', 'setBrowseOpen', 'setBrowseError',
   'setShowHiddenDirectories', 'setWorkspacePickerOpen',
 ];
 const compiled = ts.transpileModule(`function usePageWorkspace(bindings) {

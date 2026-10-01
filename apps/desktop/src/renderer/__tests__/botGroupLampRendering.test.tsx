@@ -101,8 +101,7 @@ describe.each([false, true])('Bot groups with device grouping %s', (groupDevice)
       expect(marker.className).toContain('ring-[var(--status-bar-accent)]');
     } else {
       expect(header.querySelector('[data-running-marker]')).toBeNull();
-      const tone = phase === 'needs-interaction' ? 'awaiting' : phase === 'error' ? 'error' : 'done';
-      expect(header.querySelector(`[class*="--card-status-${tone}"]`)).not.toBeNull();
+      expectLamp(header, phase);
     }
   });
 

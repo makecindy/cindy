@@ -9,9 +9,7 @@ import {
 import {
   accessibilityAddTraits,
   background,
-  buttonBorderShape,
   buttonStyle,
-  controlSize,
   disabled,
   fixedSize,
   font,
@@ -24,15 +22,12 @@ import {
 import { View } from "react-native";
 import { Text as AppText } from "@/components/AppText";
 import { radius, spacing, textStyles, useTheme } from "@/theme";
-import { useLiquidGlassAvailable } from "@/session/useLiquidGlassAvailable";
+import { useNativeGlassButtonStyle } from "@/platform/chrome/nativeGlassButtonStyle.ios";
 import type { PermissionGuideViewProps } from "./PermissionGuideView";
 
 export function PermissionGuideView(props: PermissionGuideViewProps) {
   const { colors, mode } = useTheme();
-  const glass = useLiquidGlassAvailable();
-  const primaryStyle = buttonStyle(
-    glass ? "glassProminent" : "borderedProminent",
-  );
+  const primaryStyle = useNativeGlassButtonStyle({ prominent: true });
   return (
     <View
       style={{
@@ -102,9 +97,7 @@ export function PermissionGuideView(props: PermissionGuideViewProps) {
             <Button
               onPress={props.onGuide}
               modifiers={[
-                primaryStyle,
-                buttonBorderShape("capsule"),
-                controlSize("large"),
+                ...primaryStyle,
                 disabled(props.pending),
               ]}
             >
@@ -122,9 +115,7 @@ export function PermissionGuideView(props: PermissionGuideViewProps) {
           <Button
             onPress={props.onReconnect}
             modifiers={[
-              props.guideLabel ? buttonStyle("plain") : primaryStyle,
-              buttonBorderShape("capsule"),
-              controlSize("large"),
+              ...(props.guideLabel ? [buttonStyle("plain")] : primaryStyle),
             ]}
           >
             <Text

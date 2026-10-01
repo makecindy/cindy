@@ -121,7 +121,8 @@ import { resetAgentCapabilitiesCache } from '@/session/agentCapabilitiesCache';
 import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
-import { invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { getMobileAuthOwner, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { clearClipboardInvitationHistory } from '@/device-link/clipboardInvitationHistory';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
@@ -862,7 +863,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAllMobileVoiceCredentials().catch(() => undefined),
       clearAllMobileVoiceInputHistories().catch(() => undefined),
       clearAllMobileVoiceDictionaryCaches().catch(() => undefined),
-      clearCachedSessionMessages().catch(() => undefined),
+      clearCachedSessionMessages(),
       clearHistoryDisk(),
       clearRemoteResourceCache().catch(() => undefined),
       clearCachedHomeListSnapshot().catch(() => undefined),
@@ -1074,6 +1075,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         const previousPersistedSessionRaw = await getSecureItem(AUTH_SESSION_KEY);
         try {
+          // Clear unscoped caches before either durable store can name the new
+          // account. Fresh login must also retry a previously failed logout clear.
+          if (replacesActiveSession || userRef.current === null) {
+            runtimeCleanupStarted = true;
+            await clearAccountScopedRuntimeForSwitch();
+            if (authGenerationRef.current !== generation) {
+              throw authCodeError('AUTH_FLOW_SUPERSEDED');
+            }
+            assertLoginFlowCurrent(expectedLoginFlowEpoch);
+          }
           await commitMobileLoginSessions(
             {
               pair: outcome,
@@ -1092,14 +1103,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 throw authCodeError('AUTH_FLOW_SUPERSEDED');
               }
               assertLoginFlowCurrent(expectedLoginFlowEpoch);
-              if (replacesActiveSession) {
-                runtimeCleanupStarted = true;
-                await clearAccountScopedRuntimeForSwitch();
-                if (authGenerationRef.current !== generation) {
-                  throw authCodeError('AUTH_FLOW_SUPERSEDED');
-                }
-                assertLoginFlowCurrent(expectedLoginFlowEpoch);
-              }
 
               await commitWithClearedAccountDeletionReceipt(() => {
                 if (authGenerationRef.current !== generation) {
@@ -2535,15 +2538,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // initial vault snapshot.
             const previousSessionRaw = await getSecureItem(AUTH_SESSION_KEY);
             try {
+              runtimeCleanupStarted = true;
+              await clearAccountScopedRuntimeForSwitch();
+              if (authGenerationRef.current !== generation) {
+                throw authCodeError('AUTH_FLOW_SUPERSEDED');
+              }
               await commitMobileSavedAccountActivation(
                 accountKey,
                 async () => {
                   await writePersistedAuthSession(pair!.refreshToken, realm!);
-                  if (authGenerationRef.current !== generation) {
-                    throw authCodeError('AUTH_FLOW_SUPERSEDED');
-                  }
-                  runtimeCleanupStarted = true;
-                  await clearAccountScopedRuntimeForSwitch();
                   if (authGenerationRef.current !== generation) {
                     throw authCodeError('AUTH_FLOW_SUPERSEDED');
                   }
@@ -2659,7 +2662,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 继续收到旧账号的任务通知。token 此刻可能已失效(账号不可用),失败静默,
     // 残留由 server 侧 APNs 410 回收与换账号重注册的让位逻辑兜底。
     // Invalidate in-flight remote creates before any async logout cleanup begins.
+    const invitationHistoryOwner = getMobileAuthOwner();
+    // Switching temporarily empties the owner fence; the committed user/realm
+    // still identify the session being terminated until the new owner is applied.
+    const invitationHistoryAccountKey = invitationHistoryOwner.accountKey || (userRef.current
+      ? accountVaultKey(activeAuthRealmRef.current, userRef.current.id)
+      : '');
     setMobileAuthOwner(null);
+    const clearInvitationHistory = clearClipboardInvitationHistory(invitationHistoryAccountKey).catch(() => undefined);
     setAccountGeneration((value) => value + 1);
     // 同步失效认证代次，必须早于第一个 await。否则推送 token 注销的网络等待窗口内，
     // 迟到的 canary / XD beta 探测仍会把旧账号结果写回本地。
@@ -2700,6 +2710,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await clearCachedHomeListSnapshot().catch(() => undefined);
     resetComposerPaletteCache();
     resetAgentCapabilitiesCache();
+    await clearInvitationHistory;
     await clearCanaryChannel().catch(() => undefined);
     // 使用统计的同意记录也随登出清除。手机端没有游客模式:登出后 NavigationGate 会
     // 把所有路由重定向到 /login,设置页里的统计开关从此不可达。保留同意会让用户处在
@@ -3023,11 +3034,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       path: string,
       opts: Omit<ApiFetchOptions, 'token'>,
     ): Promise<T> => {
+      opts.assertCurrent?.();
       const token = await getAccessToken();
+      opts.assertCurrent?.();
       if (!token) throw new Error('UNAUTHENTICATED');
       try {
         return await apiFetchRaw<T>(path, { ...opts, token });
       } catch (error) {
+        opts.assertCurrent?.();
         if (!(error instanceof ApiError) || error.status !== 401) throw error;
         if (error.code === 'ACCOUNT_UNAVAILABLE') {
           if (userRef.current) {
@@ -3038,6 +3052,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!isRefreshableUnauthorizedCode(error.code)) throw error;
 
         const fresh = await refresh();
+        opts.assertCurrent?.();
         if (!fresh) {
           if (userRef.current) await terminateSession();
           throw error;
@@ -3045,6 +3060,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           return await apiFetchRaw<T>(path, { ...opts, token: fresh });
         } catch (retryError) {
+          opts.assertCurrent?.();
           if (
             retryError instanceof ApiError &&
             retryError.status === 401 &&

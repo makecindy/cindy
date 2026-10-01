@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { AlertTriangle, X } from 'lucide-react';
@@ -199,6 +200,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[10001] bg-[var(--overlay-modal)]" />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
             'fixed left-1/2 top-1/2 z-[10001] w-[520px] max-w-[92vw]',
             '-translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl',
@@ -318,33 +320,36 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
             <footer className="flex items-center justify-between border-t border-[var(--border-default)] pt-3">
               <div>
                 {view?.override && (
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    tone="quiet"
+                    compact
                     type="button"
                     onClick={() => void reset()}
                     disabled={saving}
-                    className="h-8 rounded-full px-3 text-12 font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
                   >
                     {t('settings.providers.models.priceOverride.reset')}
-                  </button>
+                  </Button>
                 )}
               </div>
               <div className="flex gap-2">
                 <Dialog.Close asChild>
-                  <button
-                    type="button"
-                    className="h-8 rounded-full border border-[var(--settings-btn-secondary-border)] px-3.5 text-12 font-medium text-[var(--settings-btn-secondary-text)] hover:bg-[var(--surface-hover)]"
-                  >
+                  <Button variant="secondary" size="md" compact type="button">
                     {t('settings.providers.models.priceOverride.cancel')}
-                  </button>
+                  </Button>
                 </Dialog.Close>
-                <button
+                <Button
+                  variant="cta"
+                  size="md"
+                  compact
+                  loading={saving}
                   type="button"
                   onClick={() => void save()}
                   disabled={loading || saving || !view}
-                  className="h-8 rounded-full bg-[var(--settings-btn-primary-bg)] px-3.5 text-12 font-medium text-[var(--settings-btn-primary-text)] disabled:opacity-50"
                 >
                   {t('settings.providers.models.priceOverride.save')}
-                </button>
+                </Button>
               </div>
             </footer>
           </div>

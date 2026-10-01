@@ -66,9 +66,11 @@ export async function commitLocalFiles(
   cwd: string,
   message: string,
   allowMerge = false,
+  expectedTree?: string,
 ): Promise<{ commit: string; tree: string }> {
   await assertNoGitOperation(git, cwd, allowMerge);
   const tree = await snapshotContent(git, cwd);
+  if (expectedTree !== undefined && tree !== expectedTree) throw historyError('baselineChanged');
   const before = (await git(['rev-parse', 'HEAD^{tree}'], cwd)).trim();
   const merging = allowMerge && (await gitOperationExists(git, cwd, 'MERGE_HEAD'));
   if (tree !== before || merging) {

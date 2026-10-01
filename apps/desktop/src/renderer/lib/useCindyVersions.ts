@@ -50,7 +50,7 @@ export function useCindyVersions(enabled = true, refreshKey?: string) {
       const code = extractIpcError(failure)?.message;
       if (current())
         setError(
-          code && ['busy', 'incompatible', 'launchFailed'].includes(code) ? code : 'unavailable',
+          code && ['busy', 'building', 'incompatible', 'launchFailed'].includes(code) ? code : 'unavailable',
         );
     } finally {
       busy.current = false;

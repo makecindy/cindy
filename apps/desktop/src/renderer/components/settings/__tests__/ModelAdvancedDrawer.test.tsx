@@ -100,6 +100,57 @@ beforeEach(() => {
 });
 
 describe('model advanced editor', () => {
+  it('rejects ordinary managed GGUF edits above the backend maximum', async () => {
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+      llamaCppStatus: vi.fn(async () => ({ canConfigure: true, models: [{ id: 'small', repo: 'owner/small' }] })),
+    } } });
+    try {
+      const source = { ...buildUserProvider({ id: 'cindy-local-llamacpp', name: 'llama.cpp', runtimes: {
+        pi: { baseUrl: 'http://127.0.0.1:11435/v1', wireProtocol: 'openai-chat', models: [{ id: 'small', name: 'Small', contextWindow: 32768 }] },
+      } }), connected: true } as ProviderView;
+      const primary = source.models.pi![0]!;
+      render(<ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.contextLimitAria' });
+      await waitFor(() => expect(window.electronAPI.maker.llamaCppStatus).toHaveBeenCalled());
+      fireEvent.change(input, { target: { value: '64' } });
+      expect(input.getAttribute('aria-invalid')).toBe('true');
+      fireEvent.blur(input);
+      expect(mocks.setLimit).not.toHaveBeenCalled();
+      fireEvent.change(input, { target: { value: '32' } });
+      fireEvent.blur(input);
+      expect(mocks.setLimit).toHaveBeenLastCalledWith(32000);
+    } finally { cleanup(); Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+  it.each([true, false])('gates local context configuration with capability %s', async (canConfigure) => {
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+      llamaCppStatus: vi.fn(async () => ({ canConfigure, models: [{ id: 'flash', repo: 'bartowski/Qwen3.8-Flash-Next-GGUF' }] })),
+    } } });
+    try {
+      const source = { ...buildUserProvider({ id: 'cindy-local-llamacpp', name: 'llama.cpp', runtimes: {
+        pi: { baseUrl: 'http://127.0.0.1:11435/v1', wireProtocol: 'openai-chat', models: [{ id: 'flash', name: 'Flash', contextWindow: 262144 }] },
+      } }), connected: true } as ProviderView;
+      const primary = source.models.pi![0]!;
+      render(<ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+      const million = await screen.findByRole('button', { name: '1M' });
+      if (!canConfigure) {
+        expect((million as HTMLButtonElement).disabled).toBe(true);
+        expect(screen.getByText('settings.providers.llamacpp.ownedElsewhere')).toBeTruthy();
+        fireEvent.click(million);
+        expect(mocks.setLimit).not.toHaveBeenCalled();
+        return;
+      }
+      fireEvent.click(million);
+      expect(mocks.setLimit).toHaveBeenLastCalledWith(1_000_000);
+      fireEvent.click(screen.getByRole('button', { name: '256K' }));
+      expect(mocks.setLimit).toHaveBeenLastCalledWith(262144);
+      expect(screen.queryByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' })).toBeNull();
+    } finally {
+      cleanup();
+      Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous });
+    }
+  });
   it('shows the imported API as a label rather than offering unrelated supplier transports', () => {
     const source = { ...buildUserProvider({ id: 'nous-test', name: 'Hermes', runtimes: {
       pi: { catalogPresetId: 'nous', baseUrl: 'https://inference-api.nousresearch.com/v1', wireProtocol: 'openai-chat', models: [{ id: 'gpt-6', name: 'GPT-6' }] },
@@ -595,4 +646,16 @@ it('limits context and effort reads, writes and resets to the chat runtime', () 
   fireEvent.blur(input);
   expect(mocks.setLimit).toHaveBeenCalledWith(128_000);
   expect(mocks.target).toHaveBeenLastCalledWith(expect.objectContaining({ agent: 'codex', relatedTargets: [] }));
+});
+it('keeps enterprise reference prices read-only in the model drawer', () => {
+  render(
+    drawer(model, model.defaultEffort, model.efforts, {
+      ...provider,
+      id: 'byok-example',
+      source: 'organization',
+    }),
+  );
+  expect(
+    screen.queryByRole('button', { name: 'settings.providers.models.priceOverride.menu' }),
+  ).toBeNull();
 });

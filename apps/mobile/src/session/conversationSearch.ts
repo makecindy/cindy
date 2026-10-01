@@ -399,6 +399,8 @@ export function reconcileConversationSearchProjectSelection(
   if (selection === 'all') return 'all';
   const visible = new Set(visibleKeys);
   const next = selection.filter((key) => visible.has(key));
+  // Preserve identity when hydration or a host change leaves the selection intact.
+  if (next.length === selection.length && next.length > 0) return selection;
   return next.length > 0 ? next : 'all';
 }
 

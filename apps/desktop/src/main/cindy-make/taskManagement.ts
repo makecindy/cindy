@@ -20,6 +20,7 @@ import { manageCindyMakeWorkspace, taskError, type MakeTaskAction } from './task
 import type { MakeDoctorReport } from '../../shared/cindyMakeDoctor.js';
 import { captureMakeHistoryReport } from './historyCapture.js';
 import { captureMakeHistoryStore } from './historyOwner.js';
+import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 
 interface TaskManagementRuntime {
   isAlive(sessionId: string): boolean | undefined;
@@ -35,6 +36,66 @@ let runtime: TaskManagementRuntime | undefined;
 /** The composition root supplies runtime shutdown and canonical session writes. */
 export function configureCindyMakeTaskManagement(deps: TaskManagementRuntime): void {
   runtime = deps;
+}
+
+/** Close the disposable resolution task before reclaiming its working directory. */
+export async function cleanupCompletedMakeMergeTask(
+  sessionId: string,
+  workingDir: string,
+  ownerCurrent: () => boolean,
+  cleanup: (canCleanup: () => boolean) => Promise<boolean>,
+  stopRunning = false,
+): Promise<boolean> {
+  const client = getDbClient();
+  const owner = captureDataOwnerBroadcastScope();
+  const current = () => {
+    try {
+      return ownerCurrent() && isDataOwnerBroadcastScopeCurrent(owner) && getDbClient() === client;
+    } catch {
+      return false;
+    }
+  };
+  const valid = (row: typeof sessions.$inferSelect | undefined) =>
+    row?.source === 'cindy-make-merge' &&
+    !row.remoteHostId &&
+    normalizeWorkingDirForStorage(row.workingDir) === normalizeWorkingDirForStorage(workingDir);
+  const read = async () =>
+    (await client.drizzle.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1))[0];
+  const row = await read();
+  if (
+    !current() ||
+    !runtime ||
+    !row ||
+    !valid(row) ||
+    (!stopRunning && runtime.isRunning(sessionId))
+  )
+    return false;
+  if (row.status === 'active')
+    await runtime.setStatus(sessionId, { status: 'archived', pinnedAt: null });
+  if (!current()) return false;
+  await runtime.recycle(sessionId, row.status === 'deleted' ? 'deleted' : 'archived');
+  return withSessionRouteLock(sessionId, async () => {
+    const closed = await read();
+    const canCleanup = () =>
+      current() &&
+      !!runtime &&
+      !runtime.isAlive(sessionId) &&
+      !runtime.isRunning(sessionId) &&
+      !runtime.isWorkspaceBusy?.(workingDir);
+    if (!canCleanup() || !closed || !valid(closed) || closed.status === 'active') return false;
+    const borrowers = await client.drizzle
+      .select({ id: sessions.id, status: sessions.status })
+      .from(sessions)
+      .where(eq(sessions.workingDir, normalizeWorkingDirForStorage(workingDir)!));
+    if (
+      borrowers.some(
+        (other) =>
+          other.id !== sessionId && (other.status === 'active' || runtime!.isAlive(other.id)),
+      )
+    )
+      return false;
+    return cleanup(canCleanup);
+  });
 }
 
 let integrationRefresh: { isCurrent: () => boolean; done: Promise<void> } | undefined;
@@ -141,7 +202,11 @@ export async function recycleCindyMakeTask(
   const workingDir = row.workingDir;
   const runId = path.basename(workingDir);
   const featureOperation = cindyMakeManager.getState().upstreamMerge;
-  if (featureOperation?.feature?.taskSessionId === sessionId && featureOperation.status !== 'merged' && featureOperation.hasWorkspace)
+  if (
+    featureOperation?.feature?.taskSessionId === sessionId &&
+    featureOperation.status !== 'merged' &&
+    featureOperation.hasWorkspace
+  )
     throw taskError('busy');
   const [card] = await db
     .select({ content: messages.content, clientId: messages.clientId })
@@ -284,7 +349,11 @@ export async function manageCindyMakeTask(sessionId: unknown, action: unknown): 
     throwIpcError('NOT_FOUND', 'Cindy Make task unavailable');
   if (!runtime) throwIpcError('PRECONDITION_FAILED', 'busy');
   const featureOperation = cindyMakeManager.getState().upstreamMerge;
-  if (featureOperation?.feature?.taskSessionId === sessionId && featureOperation.status !== 'merged' && featureOperation.hasWorkspace)
+  if (
+    featureOperation?.feature?.taskSessionId === sessionId &&
+    featureOperation.status !== 'merged' &&
+    featureOperation.hasWorkspace
+  )
     throwIpcError('PRECONDITION_FAILED', 'busy');
   if (runtime.isWorkspaceBusy?.(row.workingDir)) throwIpcError('PRECONDITION_FAILED', 'busy');
   if (

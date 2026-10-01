@@ -26,7 +26,16 @@ const storeMock = vi.hoisted(() => ({
   terminalErrorSessions: new Set<string>(),
   sideTaskStopSessions: new Set<string>(),
   privateReplySessions: new Set<string>(),
+  groupLaneSessions: new Set<string>(),
   recoverySessions: new Set<string>(),
+  heldByAgentIsland: new Set<string>(),
+  pausedQueueSessions: new Set<string>(),
+}));
+
+vi.mock('@/state/agentIslandActivity', () => ({
+  ensureAgentIslandActivitySubscribed: vi.fn(),
+  isSessionCompletionHeldByAgentIsland: (sessionId: string, hasPausedQueue: boolean) =>
+    !hasPausedQueue && storeMock.heldByAgentIsland.has(sessionId),
 }));
 
 vi.mock('@/lib/makerChatStore', () => ({
@@ -41,7 +50,9 @@ vi.mock('@/lib/makerChatStore', () => ({
     hasSessionTerminalError: (sessionId: string) => storeMock.terminalErrorSessions.has(sessionId),
     hasSessionRecoveryPending: (sessionId: string) => storeMock.recoverySessions.has(sessionId),
     wasLastStopPrivateReply: (sessionId: string) => storeMock.privateReplySessions.has(sessionId),
+    wasLastStopGroupLane: (sessionId: string) => storeMock.groupLaneSessions.has(sessionId),
     wasLastStopSideTask: (sessionId: string) => storeMock.sideTaskStopSessions.has(sessionId),
+    hasPausedQueue: (sessionId: string) => storeMock.pausedQueueSessions.has(sessionId),
   },
 }));
 
@@ -84,6 +95,8 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     storeMock.sideTaskStopSessions.clear();
     storeMock.privateReplySessions.clear();
     storeMock.recoverySessions.clear();
+    storeMock.heldByAgentIsland.clear();
+    storeMock.pausedQueueSessions.clear();
     resetSilencedSessionDoneStoreForTests();
     resetSessionStartingStoreForTests();
     vi.clearAllMocks();
@@ -162,6 +175,18 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     await emitSnapshot(new Map([['private', status(false)]]));
     await act(async () => { await vi.advanceTimersByTimeAsync(500); });
     expect(onSessionDone).toHaveBeenCalledWith('private');
+  });
+
+  it('never raises attention or callbacks for a Bot group lane, even when it fails', async () => {
+    const onSessionDone = vi.fn();
+    const onSessionError = vi.fn();
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionDone, onSessionError }));
+    storeMock.groupLaneSessions.add('lane');
+    await emitSnapshot(new Map([['lane', status(true)]]));
+    await emitSnapshot(new Map([['lane', status(false, true)]]));
+    expect(addSessionAttention).not.toHaveBeenCalled();
+    expect(onSessionError).not.toHaveBeenCalled();
+    storeMock.groupLaneSessions.clear();
   });
 
   it('does not mute a normal follow-up that starts during silenced completion linger', async () => {
@@ -703,5 +728,41 @@ describe('useSessionRunningStatus silenced completion handling', () => {
 
     expect(onSessionDone).not.toHaveBeenCalled();
     vi.useRealTimers();
+  });
+
+  it('holds an Orca Lead completion while Main keeps its team running', async () => {
+    vi.useFakeTimers();
+    const onSessionDone = vi.fn();
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionDone }));
+
+    // The Lead only dispatched work; Agent Island defers its completion.
+    storeMock.heldByAgentIsland.add('lead');
+    await emitSnapshot(new Map([['lead', status(true)]]));
+    await emitSnapshot(new Map([['lead', status(false)]]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    expect(onSessionDone).not.toHaveBeenCalled();
+    expect(addSessionAttention).not.toHaveBeenCalledWith('lead', 'done');
+
+    // The Worker report wakes the Lead; that turn's done is the team's completion.
+    storeMock.heldByAgentIsland.delete('lead');
+    await emitSnapshot(new Map([['lead', status(true)]]));
+    await emitSnapshot(new Map([['lead', status(false)]]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    expect(onSessionDone).toHaveBeenCalledExactlyOnceWith('lead');
+    expect(addSessionAttention).toHaveBeenCalledWith('lead', 'done');
+  });
+
+  it('keeps the completion of a session whose paused queue holds Agent Island', async () => {
+    vi.useFakeTimers();
+    const onSessionDone = vi.fn();
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionDone }));
+    storeMock.heldByAgentIsland.add('paused');
+    storeMock.pausedQueueSessions.add('paused');
+
+    await emitSnapshot(new Map([['paused', status(true)]]));
+    await emitSnapshot(new Map([['paused', status(false)]]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+    expect(onSessionDone).toHaveBeenCalledExactlyOnceWith('paused');
   });
 });

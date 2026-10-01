@@ -1671,6 +1671,27 @@ describe('computer mcp integration', () => {
     expect(events).toEqual(['type_text', 'type_text', 'type_text', 'launch_app']);
   });
 
+  it('stops remaining text chunks on session close and releases input only after the in-flight call settles', async () => {
+    const first = createDeferred<unknown>();
+    const events: string[] = [];
+    mcpCallToolMock.mockImplementation(({ name }) => {
+      events.push(name);
+      if (name === 'type_text') return first.promise;
+      return { structuredContent: { ok: true, effect: 'confirmed' } };
+    });
+    const typing = callComputerDriverTool('type_text', { pid: 123, text: 'a'.repeat(850) }, { sessionId: 'closing-input' });
+    const rejected = expect(typing).rejects.toBeDefined();
+    await waitForCondition(() => events.includes('type_text'));
+    await cleanupComputerDriverSession('closing-input');
+    const next = callComputerDriverTool('launch_app', { name: 'Calculator' }, { sessionId: 'after-close' });
+    await waitForCondition(() => transportCtorMock.mock.calls.length === 2);
+    expect(events).not.toContain('launch_app');
+    first.resolve({ structuredContent: { ok: true, effect: 'confirmed' } });
+    await Promise.all([rejected, next]);
+    expect(events.filter((name) => name === 'type_text')).toHaveLength(1);
+    expect(events.filter((name) => name === 'launch_app')).toHaveLength(1);
+  });
+
   it('holds ownership through failed-input teardown before admitting the next Agent', async () => {
     const input = createDeferred<unknown>();
     const teardown = createDeferred<unknown>();

@@ -5,6 +5,7 @@ import os from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   listPersonalVersions,
+  personalVersionId,
   hasPublishedPersonalVersionCommit,
   migrationIdentity,
   publishPersonalVersion,
@@ -23,6 +24,7 @@ import {
   type OriginalVersion,
   type VersionProfile,
 } from '../versionStore';
+import { cleanupPersonalVersions } from '../personalVersionCleanup';
 vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
@@ -113,9 +115,15 @@ describe('local Cindy version snapshots', () => {
     const a = await verifyPersonalVersion(h.userData, first, h.original);
     expect(a.builtAt).toBe(h.builtAt);
     expect(a.version).toBe(`Cindy Make ${first.slice(0, 8)}`);
-    expect(
-      listPersonalVersions(h.userData, h.original).find((item) => item.id === first)?.version,
-    ).toBe(`Cindy Make ${first.slice(0, 8)}`);
+    expect(listPersonalVersions(h.userData, h.original)).toEqual([
+      expect.objectContaining({
+        id: first,
+        commit: h.commit,
+        builtAt: h.builtAt,
+      }),
+    ]);
+    expect(listPersonalVersions(h.userData, h.original)[0].title).toBeUndefined();
+    expect(listPersonalVersions(h.userData, h.original)[0].version).toBeUndefined();
     await writeFile(path.join(h.resources, 'app.asar'), 'application B');
     const second = (await h.retain())!;
     expect(second).not.toBe(first);
@@ -126,12 +134,114 @@ describe('local Cindy version snapshots', () => {
         'utf8',
       ),
     ).toBe('application A');
-    expect(listPersonalVersions(h.userData, h.original)).toHaveLength(2);
+    expect(listPersonalVersions(h.userData, h.original).map((item) => item.id)).toEqual([second]);
     expect(selectedVersion(h.userData)).toBe('original');
     // Clearing Make source cannot erase the runnable versions.
     await mkdir(path.join(h.userData, 'cindy-make', 'source'), { recursive: true });
     await rm(path.join(h.userData, 'cindy-make'), { recursive: true });
     expect(await verifyPersonalVersion(h.userData, first, h.original)).toMatchObject({ id: first });
+  });
+  it('keeps only the latest personal slot while staging and preserves running files and publication facts', async () => {
+    const h = await fixture();
+    const first = (await h.retain())!;
+    publishPersonalVersion(h.userData, first);
+    await selectVersion(h.userData, first);
+    writeVersionJson(path.join(versionsRoot(h.userData), 'active.json'), {
+      id: first,
+      pid: process.pid,
+    });
+    const secondCommit = 'b'.repeat(40);
+    await writeFile(
+      path.join(h.resources, 'cindy-source.json'),
+      JSON.stringify({
+        sourceCommit: secondCommit,
+        builtAt: h.builtAt,
+      }),
+    );
+    const second = (await retainPersonalVersion({
+      profile: h.profile,
+      sourceDirectory: h.source,
+      appName: 'Cindy',
+      title: 'Another task',
+      commit: secondCommit,
+    }))!;
+    // Even with identical build timestamps, staging cannot replace the last good version.
+    expect(personalVersionId(h.userData)).toBe(first);
+    await cleanupPersonalVersions(h.userData);
+    expect(fs.existsSync(path.join(versionDirectory(h.userData, second), 'runtime'))).toBe(true);
+    publishPersonalVersion(h.userData, second);
+    await cleanupPersonalVersions(h.userData);
+    expect(personalVersionId(h.userData)).toBe(second);
+    expect(await verifyPersonalVersion(h.userData, first, h.original)).toMatchObject({ id: first });
+    await selectVersion(h.userData, second);
+    writeVersionJson(path.join(versionsRoot(h.userData), 'active.json'), {
+      id: second,
+      pid: process.pid,
+    });
+    await cleanupPersonalVersions(h.userData);
+    expect(fs.existsSync(path.join(versionDirectory(h.userData, first), 'runtime'))).toBe(false);
+    expect(hasPublishedPersonalVersionCommit(h.userData, h.commit)).toBe(true);
+    expect(hasPublishedPersonalVersionCommit(h.userData, secondCommit)).toBe(true);
+    expect(await verifyPersonalVersion(h.userData, second, h.original)).toMatchObject({
+      id: second,
+    });
+    expect(listPersonalVersions(h.userData, h.original)).toHaveLength(1);
+  });
+  it('adopts only the newest legacy application and never resurrects it after explicit deletion', async () => {
+    const h = await fixture();
+    const first = (await h.retain())!;
+    publishPersonalVersion(h.userData, first);
+    await writeFile(
+      path.join(h.resources, 'cindy-source.json'),
+      JSON.stringify({
+        sourceCommit: h.commit,
+        builtAt: '2026-09-18T01:00:00.000+08:00',
+      }),
+    );
+    const second = (await h.retain())!;
+    publishPersonalVersion(h.userData, second);
+    await rm(path.join(versionsRoot(h.userData), 'personal.json'));
+    expect(personalVersionId(h.userData)).toBe(second);
+    expect(listPersonalVersions(h.userData, h.original)).toHaveLength(1);
+    writeVersionJson(path.join(versionsRoot(h.userData), 'personal.json'), { id: null });
+    expect(personalVersionId(h.userData)).toBeUndefined();
+    expect(listPersonalVersions(h.userData, h.original)).toEqual([]);
+  });
+  it('retains the fallback bundle until the handoff helper has really exited', async () => {
+    const h = await fixture();
+    const first = (await h.retain())!;
+    publishPersonalVersion(h.userData, first);
+    const second = (await h.retain())!;
+    publishPersonalVersion(h.userData, second);
+    const launch = path.join(versionsRoot(h.userData), 'launches', 'a'.repeat(36) + '.json');
+    writeVersionJson(launch, {
+      state: 'ready',
+      helperPid: process.pid,
+      targetId: second,
+      fallbackId: first,
+    });
+    await cleanupPersonalVersions(h.userData);
+    expect(fs.existsSync(path.join(versionDirectory(h.userData, first), 'runtime'))).toBe(true);
+    await rm(launch);
+    await cleanupPersonalVersions(h.userData);
+    expect(fs.existsSync(path.join(versionDirectory(h.userData, first), 'runtime'))).toBe(false);
+  });
+  it('never follows a replaced runtime junction while retiring old application files', async () => {
+    const h = await fixture();
+    const first = (await h.retain())!;
+    publishPersonalVersion(h.userData, first);
+    const second = (await h.retain())!;
+    publishPersonalVersion(h.userData, second);
+    const runtime = path.join(versionDirectory(h.userData, first), 'runtime');
+    await rm(runtime, { recursive: true, force: true });
+    const outside = path.join(h.root, 'outside');
+    await mkdir(outside);
+    await writeFile(path.join(outside, 'keep'), 'unrelated data');
+    await symlink(outside, runtime, process.platform === 'win32' ? 'junction' : 'dir');
+    await cleanupPersonalVersions(h.userData);
+    expect(await readFile(path.join(outside, 'keep'), 'utf8')).toBe('unrelated data');
+    expect(fs.lstatSync(runtime).isSymbolicLink()).toBe(true);
+    expect(personalVersionId(h.userData)).toBe(second);
   });
   it('rejects modified applications and mismatched database migrations before launch', async () => {
     const h = await fixture();

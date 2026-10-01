@@ -13,7 +13,7 @@ const ready = {
   conflict: false,
 };
 describe('history action admission', () => {
-  it('locks editing during launch but lets a ready test stop through Continue', () => {
+  it('locks editing during launch and permits controller-owned restart/build once ready', () => {
     expect(makeHistoryActions({ ...ready, busy: true, test: { status: 'starting' } })).toEqual([
       'open',
     ]);
@@ -23,6 +23,8 @@ describe('history action admission', () => {
     expect(makeHistoryActions({ ...ready, busy: true, test: { status: 'ready' } })).toEqual([
       'open',
       'continue',
+      'test',
+      'build',
     ]);
     expect(
       makeHistoryActions({ ...ready, busy: true, test: { status: 'ready' }, completed: false }),

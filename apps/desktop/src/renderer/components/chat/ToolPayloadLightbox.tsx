@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * ToolPayloadLightbox
  * ---------------------------------------------------------------------------
@@ -34,6 +35,7 @@ import { useTranslation } from 'react-i18next';
 import { cn, basename } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Tooltip } from '@/components/ui/tooltip';
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 
 import { DiffView } from './DiffView';
 import { MarkdownDiffBlock } from './MarkdownDiffBlock';
@@ -338,7 +340,11 @@ export function ToolPayloadLightbox({
                   'text-left cursor-pointer',
                 )}
               >
-                <FileText size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+                {singleDiffFile ? (
+                  <FileTypeIcon name={singleDiffFile.filePath} size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+                ) : (
+                  <FileText size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+                )}
                 <span
                   className={cn(
                     'font-semibold text-14',
@@ -536,30 +542,12 @@ export function ToolPayloadLightbox({
               'border-t border-[var(--msg-tool-card-border)]',
             )}
           >
-            <button
-              type="button"
-              onClick={handleClose}
-              className={cn(
-                'h-8 rounded-full border px-4 text-12 font-medium',
-                'border-[var(--border-default)] bg-[var(--surface-elevated)]',
-                'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-              )}
-            >
+            <Button variant="secondary" size="md" compact type="button" onClick={handleClose}>
               {textEdit.cancelLabel}
-            </button>
-            <button
-              type="button"
-              onClick={handleSaveText}
-              className={cn(
-                'h-8 rounded-full px-4 text-12 font-medium',
-                'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-                'hover:opacity-90 transition-opacity',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-              )}
-            >
+            </Button>
+            <Button variant="cta" size="md" compact type="button" onClick={handleSaveText}>
               {textEdit.saveLabel}
-            </button>
+            </Button>
           </div>
         )}
       </div>

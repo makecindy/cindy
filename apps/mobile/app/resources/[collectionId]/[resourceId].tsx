@@ -1,21 +1,23 @@
 import { useAuth } from '@/auth/AuthContext';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { Redirect, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, AppState, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import type { RemoteSessionLinkTarget } from '@cindy/device-link';
+import { resolveRemoteText, type RemoteResource, type RemoteSessionLinkTarget } from '@cindy/device-link';
 
+import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
+import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { Text } from '@/components/AppText';
 import { MainWindowActionButton, MainWindowEmptyState } from '@/components/MobilePrimitives';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
-import { getRemoteResource, type RemoteResourceHostTarget } from '@/device-link/remoteResources';
+import { getRemoteResource, invokeRemoteResourceAction, isMobileRemoteCollectionSupported, type RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { SimpleStackHeader, simpleScreenSafeAreaEdges } from '@/platform/chrome';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import type { RemoteSession } from '@/session/types';
-import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { iconSize, lineHeight, spacing, typeScale } from '@/theme/tokens';
 import { goBackGuarded } from '@/utils/backGuard';
 
 function firstParam(value: string | string[] | undefined): string {
@@ -23,11 +25,17 @@ function firstParam(value: string | string[] | undefined): string {
 }
 
 export default function RemoteResourceResolverScreen() {
+  const params = useLocalSearchParams<{ collectionId?: string | string[] }>();
+  if (!isMobileRemoteCollectionSupported(firstParam(params.collectionId))) return <Redirect href="/devices" />;
+  return <RemoteResourceResolverScreenContent />;
+}
+
+function RemoteResourceResolverScreenContent() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n } = useTranslation();
   const router = useRouter();
-  const { invoke, connectionEpoch } = useDeviceLink();
+  const { invoke, connectionEpoch, status, onRemoteResourceChanged, subscribe, unsubscribe } = useDeviceLink();
   const { accountGeneration } = useAuth();
   const binding = `${accountGeneration}:${connectionEpoch}`;
   const currentBinding = useRef(binding); currentBinding.current = binding;
@@ -50,6 +58,12 @@ export default function RemoteResourceResolverScreen() {
     [deviceId, deviceName],
   );
   const [error, setError] = useState<string | null>(null);
+  const [preparation, setPreparation] = useState<{ binding: string; resource: RemoteResource; stage: string } | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  // Scoped to the resource binding so another teammate never inherits this notice.
+  const [retryFailed, setRetryFailed] = useState<string | null>(null);
+  const retryLock = useRef(false);
+  const visiblePreparation = preparation?.binding === binding ? preparation : null;
   const [attempt, setAttempt] = useState(0);
   const resolveGenerationRef = useRef(0);
 
@@ -69,6 +83,13 @@ export default function RemoteResourceResolverScreen() {
         kind: resourceKind,
       }, i18n.language);
       if (resolveGenerationRef.current !== generation || currentBinding.current !== binding) return;
+      const invitation = response.blocks?.find(block => block.id === 'invitation' && block.primitive === 'status');
+      const stage = (invitation?.data as { stage?: string } | undefined)?.stage;
+      if (resourceKind === 'bot' && stage && stage !== 'ready') {
+        setPreparation({ binding, resource: response, stage });
+        return stage !== 'failed';
+      }
+      setPreparation(null);
       const link = response.links.find((item) => item.rel === 'conversation');
       const target = link?.target as RemoteSessionLinkTarget | undefined;
       if (!target || target.kind !== 'session' || typeof target.sessionId !== 'string') {
@@ -93,14 +114,50 @@ export default function RemoteResourceResolverScreen() {
         },
       });
     } catch (cause) {
-      if (resolveGenerationRef.current === generation) setError(formatRemoteError(cause));
+      if (resolveGenerationRef.current === generation && currentBinding.current === binding) setError(formatRemoteError(cause));
     }
   }, [binding, collectionId, deviceId, deviceName, host, i18n.language, invoke, resourceId, resourceKind, router, t]);
 
-  useEffect(() => {
-    void resolveConversation();
-    return () => { resolveGenerationRef.current += 1; };
-  }, [attempt, resolveConversation]);
+  useFocusEffect(useCallback(() => {
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let loading = false;
+    let refreshAgain = false;
+    const load = async () => {
+      if (disposed || AppState.currentState !== 'active') return;
+      if (loading) { refreshAgain = true; return; }
+      if (timer) clearTimeout(timer);
+      loading = true;
+      const pending = await resolveConversation();
+      loading = false;
+      if (disposed) return;
+      if (refreshAgain) { refreshAgain = false; void load(); }
+      else if (pending) timer = setTimeout(() => { void load(); }, 2500);
+    };
+    const offPush = onRemoteResourceChanged((source, payload) => {
+      if (source === deviceId && payload.collectionId === collectionId) void load();
+    });
+    const offTopic = startFocusedTopicSubscription({ deviceId, owner: `resource-resolver:${resourceId}`, topic: 'sessions', subscribe, unsubscribe });
+    const appState = AppState.addEventListener('change', state => {
+      if (state === 'active') void load();
+      else { resolveGenerationRef.current += 1; if (timer) clearTimeout(timer); }
+    });
+    void load();
+    return () => { disposed = true; resolveGenerationRef.current += 1; if (timer) clearTimeout(timer); offPush(); offTopic(); appState.remove(); };
+  }, [attempt, collectionId, deviceId, onRemoteResourceChanged, resolveConversation, resourceId, status, subscribe, unsubscribe]));
+
+  const retryInvitation = async () => {
+    const action = visiblePreparation?.resource.actions?.find(item => !item.disabled);
+    if (!action || retryLock.current) return;
+    retryLock.current = true; setRetrying(true); setRetryFailed(null);
+    try {
+      await invokeRemoteResourceAction(invoke, host, { collectionId, resourceRef: visiblePreparation!.resource.ref, actionId: action.id }, i18n.language);
+      if (currentBinding.current === binding) setAttempt(value => value + 1);
+    } catch {
+      // Keep the preparation (and its completed work) visible; only this retry failed.
+      if (currentBinding.current === binding) setRetryFailed(binding);
+    } finally { retryLock.current = false; setRetrying(false); }
+  };
 
   return (
     <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="remoteResourceResolver.screen">
@@ -126,6 +183,22 @@ export default function RemoteResourceResolverScreen() {
             }}
           />
         </View>
+      ) : visiblePreparation ? (
+        <View style={styles.center} testID="remoteResourceResolver.preparation">
+          <RemoteCompanionAvatar avatar={visiblePreparation.resource.display.avatar} deviceId={deviceId} name={resolveRemoteText(visiblePreparation.resource.display.title, i18n.language)} online={status === 'online'} size={iconSize.glyph} />
+          <Text style={styles.preparationTitle}>{t('devices.companions.invitation.waiting', { name: resolveRemoteText(visiblePreparation.resource.display.title, i18n.language) })}</Text>
+          {/* Desktop BotInvitationWelcome: reassurance (or the failure) first, then the live stage. */}
+          <Text style={styles.muted}>{t(visiblePreparation.stage === 'failed' ? 'devices.companions.invitation.failed' : 'devices.companions.invitation.background')}</Text>
+          {visiblePreparation.stage !== 'failed' ? (
+            <View accessibilityLiveRegion="polite" style={styles.preparationStage} testID="remoteResourceResolver.preparationStage">
+              <ActivityIndicator color={colors.textSecondary} />
+              <Text style={styles.preparationStageText}>{t(`devices.companions.invitation.${visiblePreparation.stage === 'ready' ? 'welcome' : visiblePreparation.stage}`, { name: resolveRemoteText(visiblePreparation.resource.display.title, i18n.language) })}</Text>
+            </View>
+          ) : visiblePreparation.resource.actions?.some(action => !action.disabled) ? (
+            <MainWindowActionButton action={{ label: retrying ? t('devices.resources.resolving') : t('devices.resources.retry'), onPress: () => { void retryInvitation(); }, testID: 'remoteResourceResolver.retryInvitation' }} />
+          ) : null}
+          {retryFailed === binding ? <Text accessibilityRole="alert" style={styles.muted} testID="remoteResourceResolver.retryInvitationFailed">{t('devices.companions.invitation.retryFailed')}</Text> : null}
+        </View>
       ) : (
         <View style={styles.center}>
           <ActivityIndicator color={colors.textSecondary} />
@@ -138,7 +211,10 @@ export default function RemoteResourceResolverScreen() {
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   safeArea: { backgroundColor: colors.surface, flex: 1 },
-  center: { alignItems: 'center', flex: 1, gap: spacing.sm, justifyContent: 'center' },
+  center: { alignItems: 'center', flex: 1, gap: spacing.lg, justifyContent: 'center', padding: spacing.xl },
   content: { flex: 1, gap: spacing.lg, justifyContent: 'center', padding: spacing.xl },
-  muted: { color: colors.textSecondary, fontSize: typeScale.footnote },
+  preparationTitle: { color: colors.textPrimary, fontSize: typeScale.title, lineHeight: lineHeight.title, fontWeight: fontWeight.semibold, textAlign: 'center' },
+  muted: { textAlign: 'center', color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  preparationStage: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
+  preparationStageText: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
 });

@@ -201,6 +201,8 @@ export interface SlackToolBridgeLike {
  * (大结果落盘的钳制根)。
  */
 export interface SlackHookMcpDeps {
+  withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
+  getSessionContext?: () => LiziMcpSessionContext;
   getBridge(): SlackToolBridgeLike | null;
   /** 当前会话工作目录(out_file 泄洪根; 空 = 不落盘只截断)。 */
   workingDir?: string;
@@ -229,6 +231,7 @@ export interface RoutineToolService {
  * @cindy/maker-scheduler still has zero runtime deps per Phase 1).
  */
 export interface SchedulerMcpDeps {
+  withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
   getScheduler(): import('@cindy/maker-scheduler').Scheduler;
   /**
    * 前置检查脚本(preRunHook)统一安装服务(host 注入,desktop 实现为
@@ -298,6 +301,10 @@ export interface SchedulerHookScriptService {
  * vCard 序列化, workspace dep 已声明), 依赖方向仍单向 @cindy/mcps → maker-core。
  */
 export interface MemoryMcpDeps {
+  withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
+  /** Host captures the source turn before storage; invoked only for a successful write. */
+  beginWrite?: (context: LiziMcpSessionContext | undefined) => ((receipt: { key: string; title: string; action: 'created' | 'updated' }) => void);
+
   getManager(): import('@cindy/maker-core').MakerMemoryManager;
   workdir: string;
   getSessionContext?: () => LiziMcpSessionContext;
@@ -402,8 +409,8 @@ export interface SshMcpDeps {
 /**
  * cindy_contacts(智能通讯录)MCP server 工厂参数。
  *
- * 与 memory 的差异: 通讯录是全局单库(人不属于 workdir), 不需要 workdir /
- * getSessionContext。开关由 host 设置层注入 isEnabled — provider 注册门控 +
+ * 与 memory 的差异: 通讯录是全局单库(人不属于 workdir)，调用上下文仅供 Host
+ * 核验账号数据访问边界。开关由 host 设置层注入 isEnabled — provider 注册门控 +
  * withContacts 工具级双重拦截(Codex host 长生命周期下 server 可能已 spawn,
  * 运行期关闭靠工具级拦截兜底, 跟 memory 的 MAKER_MEMORY_NOT_READY 同模式)。
  *
@@ -411,6 +418,8 @@ export interface SshMcpDeps {
  * vCard 序列化, workspace dep 已声明), 依赖方向仍单向 @cindy/mcps → maker-core。
  */
 export interface ContactsMcpDeps {
+  withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
+  getSessionContext?: () => LiziMcpSessionContext;
   getManager(): import('@cindy/maker-core').MakerContactsManager;
   /** host 设置层的功能开关. 缺省视为常开(测试/独立复用场景) */
   isEnabled?: () => boolean;

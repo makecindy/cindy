@@ -5,6 +5,7 @@ import {
 
 import { defaultEffortForCapabilities } from "./effortResolution.js";
 import { piSupportedEfforts } from "./piThinkingLevels.mjs";
+import { previousModelGenerations } from "./modelGeneration.js";
 import type { ModelMetadata } from "./modelMetadataLayers.js";
 import type {
   CatalogModel,
@@ -19,7 +20,7 @@ interface PiCatalogRow {
   api?: string;
   provider: string;
   baseUrl?: string;
-  contextWindow: number;
+  contextWindow?: number;
   maxTokens?: number;
   input?: string[];
   reasoning?: boolean;
@@ -81,32 +82,39 @@ export function piNativeCatalogModels(
     );
   }
   return rows.map((row, index) => {
-    if (
-      row.provider !== piProviderId ||
-      !Number.isFinite(row.contextWindow) ||
-      row.contextWindow <= 0
-    ) {
+    if (row.provider !== piProviderId) {
       throw new Error(
         `[model-providers] invalid Pi catalog row '${piProviderId}/${row.id}'`,
       );
     }
     const efforts = piSupportedEfforts(row);
     const piApi = portablePiApi(row.api);
+    const declaredWindow = Number.isSafeInteger(row.contextWindow) && row.contextWindow! > 0
+      ? row.contextWindow : undefined;
+    const previousWindow = declaredWindow === undefined
+      ? previousModelGenerations(row.id, rows.filter(candidate =>
+          candidate.baseUrl === row.baseUrl && candidate.api === row.api &&
+          Number.isSafeInteger(candidate.contextWindow) && candidate.contextWindow! > 0), candidate => candidate.id)
+        .at(-1)?.contextWindow
+      : undefined;
     return {
       id: `${options.idPrefix ?? ""}${row.id}`,
       name: row.name ?? row.id,
       ...(options.group ? { group: options.group } : {}),
       sortOrder: index,
-      contextWindow: row.contextWindow,
-      contextWindowVerified: true,
+      // Unknown models remain usable. Neither a predecessor window nor the
+      // generic working budget is a verified limit of the newly imported model.
+      contextWindow: declaredWindow ?? previousWindow ?? 200_000,
+      contextWindowVerified: declaredWindow !== undefined,
       ...(Number.isFinite(row.maxTokens) && row.maxTokens! > 0
         ? { maxOutput: row.maxTokens }
         : {}),
       efforts,
       discoveredMetadata: {
         ...(row.name ? { name: row.name } : {}),
-        contextWindow: row.contextWindow,
-        efforts,
+        ...(declaredWindow !== undefined ? { contextWindow: declaredWindow } : {}),
+        // Thinking tiers are imported defaults, not account discovery. Keep
+        // them on the fallback model so shared Registry efforts can replace them.
         ...(row.maxTokens ? { maxOutputTokens: row.maxTokens } : {}),
         ...(row.input
           ? { supportsImageInput: row.input.includes("image") }

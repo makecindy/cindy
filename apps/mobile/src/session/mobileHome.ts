@@ -1,9 +1,11 @@
 import type { RemoteSession } from '@/session/types';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { i18n } from '@/i18n';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
-import { localizeRemoteSessionListItem } from '@/session/sessionList';
+import { createSessionListTranslator, localizeRemoteSessionListItem } from '@/session/sessionList';
 import {
   buildMobileHomePresentation as buildMobileHomePresentationShared,
+  sessionMatchesProjectDir,
   type MobileHomeSessionLike,
   type MobileHomeNoDeviceContext,
   type MobileHomeOptions,
@@ -14,8 +16,13 @@ export * from '@cindy/maker-shared/mobile-home';
 
 export function buildMobileHomePresentation(options: MobileHomeOptions): MobileHomePresentation {
   const now = options.now ?? Date.now();
-  const base = buildMobileHomePresentationShared({ ...options, localizer: mobilePresentationLocalizer });
-  const deviceFilters = base.deviceFilters.map((filter) => ({
+  const translate = createSessionListTranslator();
+  // Shared peers route individual tasks, not device scopes. Retain their task
+  // rows, but discard legacy selections of these synthetic device entries.
+  const selectedDeviceId = options.selectedDeviceId && isSharedTaskPeer(options.selectedDeviceId)
+    ? null : options.selectedDeviceId;
+  const base = buildMobileHomePresentationShared({ ...options, selectedDeviceId, localizer: mobilePresentationLocalizer });
+  const deviceFilters = base.deviceFilters.filter((filter) => !filter.deviceId || !isSharedTaskPeer(filter.deviceId)).map((filter) => ({
     ...filter,
     label: filter.deviceId === null ? i18n.t('devices.presentation.home.allDevices') : filter.label,
     statusLabel: filter.waitingCount > 0
@@ -32,11 +39,11 @@ export function buildMobileHomePresentation(options: MobileHomeOptions): MobileH
   const empty = localizedHomeEmpty(base.emptyKind, base.emptyNoDevice);
   return {
     ...base,
-    chats: base.chats.map((item) => localizeRemoteSessionListItem(item, now)),
+    chats: base.chats.map((item) => localizeRemoteSessionListItem(item, now, translate)),
     deviceFilters,
     emptyCopy: empty.copy,
     emptyTitle: empty.title,
-    pinned: base.pinned.map((item) => localizeRemoteSessionListItem(item, now)),
+    pinned: base.pinned.map((item) => localizeRemoteSessionListItem(item, now, translate)),
     primaryDevice,
     projects: base.projects.map((project) => {
       const sourceDeviceName = (project.sessions[0]?.session as MobileHomeSessionLike | undefined)?.deviceLinkDeviceName
@@ -50,11 +57,13 @@ export function buildMobileHomePresentation(options: MobileHomeOptions): MobileH
       return {
         ...project,
         deviceName,
-        sessions: project.sessions.map((item) => localizeRemoteSessionListItem(item, now)),
+        sessions: project.sessions.map((item) => localizeRemoteSessionListItem(item, now, translate)),
         subtitle: [deviceName, workingDir].filter(Boolean).join(' · '),
-        title: project.workingDir
-          ? project.title
-          : i18n.t('devices.presentation.home.uncategorizedProject'),
+        title: project.kind === 'cindy-make'
+          ? i18n.t('devices.presentation.home.cindyMake')
+          : project.workingDir
+            ? project.title
+            : i18n.t('devices.presentation.home.uncategorizedProject'),
       };
     }),
   };
@@ -98,4 +107,20 @@ export function excludeOrcaWorkerSessions<T extends Pick<RemoteSession, 'orcaRol
   sessions: readonly T[],
 ): T[] {
   return sessions.filter((session) => session.orcaRole !== 'worker');
+}
+
+/**
+ * 设备/项目「查看全部」列表的会话派生:先丢掉 Orca worker,再按规范设备 id 与项目目录收口。
+ * 结果必须直接喂给该页的 sections / 计数,不能只在别处调用 helper。
+ */
+export function selectVisibleDeviceSessions<
+  T extends Pick<RemoteSession, 'orcaRole' | 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'workingDir'>,
+>(
+  sessions: readonly T[],
+  deviceId: string,
+  projectWorkingDir?: string | null,
+): T[] {
+  return excludeOrcaWorkerSessions(sessions).filter((session) =>
+    (session.canonicalDeviceId ?? session.deviceLinkDeviceId) === deviceId
+    && (!projectWorkingDir || sessionMatchesProjectDir(session.workingDir, projectWorkingDir)));
 }

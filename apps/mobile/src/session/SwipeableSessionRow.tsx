@@ -30,6 +30,7 @@ import { Archive, ArchiveRestore, Ellipsis, Pin, PinOff } from 'lucide-react-nat
 import { useTranslation } from 'react-i18next';
 import { pinToggleAction, statusToggleAction, type SwipeRowRegistry } from '@/session/swipeRowRegistry';
 import type { RemoteSession } from '@/session/types';
+import { useDisclosurePrepare } from '@/session/listDisclosureTransition';
 import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing } from '@/theme/tokens';
 
@@ -322,6 +323,8 @@ function PinActionContent({
   windowWidth: number;
 }) {
   const { colors } = useTheme();
+  // 置顶 / 归档会让行移位:按下即提前挂上列表过渡,松手时直接执行。
+  const prepareDisclosure = useDisclosurePrepare();
   const opacity = translation.interpolate({
     extrapolate: 'clamp',
     inputRange: [LEFT_PANEL_WIDTH * 0.15, LEFT_PANEL_WIDTH * 0.7],
@@ -356,6 +359,7 @@ function PinActionContent({
             accessibilityLabel={label}
             accessibilityRole="button"
             onPress={onPress}
+            onPressIn={() => prepareDisclosure(true)}
             style={styles.actionPressable}
             testID={testID}
           >
@@ -398,6 +402,8 @@ function RightActionsContent({
   windowWidth: number;
 }) {
   const { colors } = useTheme();
+  // 置顶 / 归档会让行移位:按下即提前挂上列表过渡,松手时直接执行。
+  const prepareDisclosure = useDisclosurePrepare();
   const { t } = useTranslation();
   const StatusIcon = archived ? ArchiveRestore : Archive;
   const revealed = Animated.multiply(translation, -1);
@@ -475,6 +481,7 @@ function RightActionsContent({
             accessibilityLabel={archiveLabel}
             accessibilityRole="button"
             onPress={onArchive}
+            onPressIn={() => prepareDisclosure(true)}
             style={styles.actionPressable}
             testID={testID ? `${testID}.archiveAction` : undefined}
           >

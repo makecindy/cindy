@@ -232,7 +232,7 @@ describe("ConversationShareSvg", () => {
       expect(layout.images).toHaveLength(3);
       const bubble = layout.bubbles[0]!;
       const text = bubble.textBlocks;
-      expect(text.map((block) => block.lines.join(""))).toEqual([
+      expect(text.map((block) => block.lines.join("").trim())).toEqual([
         "before",
         "middle",
         "after",
@@ -418,17 +418,25 @@ describe("ConversationShareSvg", () => {
       width: 390,
     });
 
-    expect(layout.bubbles[0]?.textBlocks[0]?.lines).toEqual([
-      "[x] shipped",
-      "[ ] pending",
-      "1. first",
-      "* bullet",
-      "2. [x] ordered done",
-      "3. [ ] ordered pending",
+    expect(
+      layout.bubbles[0]?.textBlocks.flatMap((block) => block.lines),
+    ).toEqual([
+      "☑",
+      "shipped",
+      "☐",
+      "pending",
+      "1.",
+      "first",
+      "*",
+      "bullet",
+      "2. ☑",
+      "ordered done",
+      "3. ☐",
+      "ordered pending",
     ]);
   });
 
-  it("preserves semantic plaintext markers without altering chip labels", () => {
+  it("renders quote and strikethrough styling without altering chip labels", () => {
     const layout = buildConversationShareSvgLayout({
       allShareableIds: ["chips", "markdown"],
       colors,
@@ -452,16 +460,19 @@ describe("ConversationShareSvg", () => {
       width: 390,
     });
 
-    expect(layout.bubbles[0]?.textBlocks[0]?.lines).toEqual([
-      "quoted context",
-      "pasted text",
-      "/review",
-    ]);
-    expect(layout.bubbles[1]?.textBlocks[0]?.lines).toEqual([
-      "> do not deploy",
-      "> until reviewed",
-      "Use v2, ~~not v1~~",
-    ]);
+    expect(
+      layout.bubbles[0]?.textBlocks.flatMap((block) => block.lines),
+    ).toEqual(["quoted context", "pasted text", "/review"]);
+    expect(
+      layout.bubbles[1]?.textBlocks.flatMap((block) => block.lines),
+    ).toEqual(["do not deploy", "until reviewed", "Use v2, ", "not v1"]);
+    expect(layout.bubbles[1]?.rectangles?.[0]).toMatchObject({
+      width: 2,
+      fill: colors.border,
+    });
+    expect(layout.bubbles[1]?.textBlocks.at(-1)?.decoration).toBe(
+      "line-through",
+    );
   });
 
   it("waits for both footer assets before allowing export", async () => {
@@ -485,5 +496,13 @@ describe("ConversationShareSvg", () => {
     expect(
       conversationShareSvgRenderSize({ height: 40_000, width: 390 }),
     ).toEqual({ height: 1, scale: 1, sourceTooLarge: true, width: 1 });
+  });
+
+  it("limits Android SVG bitmaps by physical pixels on high density screens", () => {
+    const layout = { height: 6_000, width: 390 };
+    const renderSize = conversationShareSvgRenderSize(layout, 3);
+    expect(renderSize.sourceTooLarge).toBe(false);
+    expect(renderSize.width * renderSize.height * 3 ** 2).toBeLessThanOrEqual(12_000_000);
+    expect(renderSize.width).toBeLessThan(conversationShareSvgRenderSize(layout).width);
   });
 });

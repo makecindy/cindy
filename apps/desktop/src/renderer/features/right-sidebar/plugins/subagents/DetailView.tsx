@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * DetailView — a single Subagent run, read as a conversation.
  *
@@ -642,14 +643,18 @@ function PiDurableDetailView({
                         </p>
                       )}
                       {transcriptCursor ? (
-                        <button
+                        <Button
+                          variant="secondary"
+                          size="md"
+                          compact
+                          loading={transcriptLoading}
                           type="button"
                           disabled={transcriptLoading}
                           onClick={onLoadMoreTranscript}
-                          className="mt-3 inline-flex h-8 items-center rounded-full border border-[var(--border-default)] px-3 text-12 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-wait disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                          className="mt-3"
                         >
                           {t('rightSidebar.subagents.loadMoreTranscript')}
-                        </button>
+                        </Button>
                       ) : null}
                     </section>
                   ) : null}

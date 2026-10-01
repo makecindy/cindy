@@ -63,7 +63,8 @@ describe('BrowserBackendSubsection', () => {
     ).toBeTruthy();
   });
 
-  it('uses the semantic spinner motion and stays static under reduced motion', () => {
+  it('keeps its accessible name while loading, prevents repeats and uses reduced-motion-aware feedback', () => {
+    const onRecover = vi.fn();
     render(
       <BrowserBackendSubsection
         active="rsb-webview"
@@ -71,14 +72,21 @@ describe('BrowserBackendSubsection', () => {
         recovering
         health={{ active: 'rsb-webview', status: 'ready', canRecover: true }}
         onSelect={vi.fn()}
-        onRecover={vi.fn()}
+        onRecover={onRecover}
       />,
     );
 
     const button = screen.getByRole('button', {
-      name: 'settings.computerUse.browserBackend.health.recovering',
+      name: 'settings.computerUse.browserBackend.health.reconnect',
     });
-    const spinner = button.querySelector('span');
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(button);
+    expect(onRecover).not.toHaveBeenCalled();
+    expect(button.querySelector('.opacity-0')?.textContent).toContain(
+      'settings.computerUse.browserBackend.health.reconnect',
+    );
+    const spinner = button.querySelector('.animate-spinner');
     expect(spinner?.classList.contains('animate-spinner')).toBe(true);
     expect(spinner?.classList.contains('motion-reduce:animate-none')).toBe(true);
     expect(spinner?.classList.contains('animate-spin')).toBe(false);

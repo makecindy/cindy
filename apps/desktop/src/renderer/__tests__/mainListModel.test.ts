@@ -151,7 +151,7 @@ describe('Cindy Make sidebar group', () => {
     expect(mixed.sessions).toEqual([personal, ordinary]);
   });
 
-  it('orders the root and its tasks by the existing attention priorities', () => {
+  it('keeps the root first while ordering its tasks by the existing attention priorities', () => {
     const waiting = make('waiting', '2026-09-17T01:00:00Z');
     const newer = make('newer', '2026-09-17T02:00:00Z');
     const newest = session({ updatedAt: '2026-09-17T03:00:00Z' });
@@ -171,6 +171,47 @@ describe('Cindy Make sidebar group', () => {
     expect(entries[0].kind).toBe('cindy-make-group');
     expect(getMainListEntrySessions(entries[0])).toEqual([waiting, newer]);
   });
+
+  it.each(['recency', 'created', 'priority'] as const)(
+    'keeps idle Cindy Make first under %s, custom project order and device grouping',
+    (sortBy) => {
+      const local = make('local', '2026-09-17T01:00:00Z');
+      const remote = make('remote', '2026-09-17T01:00:00Z', { deviceLinkDeviceId: 'remote-device' });
+      const newer = session({ updatedAt: '2026-09-18T00:00:00Z' });
+      const remoteNewer = session({ updatedAt: '2026-09-18T00:00:00Z', deviceLinkDeviceId: 'remote-device' });
+      for (const groupBy of ['project', 'flat'] as const) {
+        for (const projectOrder of ['activity', 'custom'] as const) {
+          const options = {
+            sortBy,
+            projectOrder,
+            manualProjectOrder: ['local:ordinary'],
+            priorityContext: {
+              ...NO_PRIORITY,
+              attentionSessionIds: new Set([newer.id, remoteNewer.id]),
+              waitingSessionIds: new Set([newer.id, remoteNewer.id]),
+            },
+          };
+          const entries = buildMainListEntries({
+            projects: [project('ordinary', [newer]), project('make', [local])],
+            dialogues: [remoteNewer],
+            unclassified: [remote],
+            groupBy,
+            groupDialogue: false,
+            ...options,
+          });
+          expect(entries[0].kind).toBe('cindy-make-group');
+          expect(getMainListEntrySessions(entries[0])).toHaveLength(2);
+          const sections = splitEntriesByDevice(entries, ['remote-device'], options);
+          expect(sections.map((section) => section.entries[0].kind)).toEqual([
+            'cindy-make-group',
+            'cindy-make-group',
+          ]);
+          expect(getMainListEntrySessions(sections[0].entries[0])).toEqual([local]);
+          expect(getMainListEntrySessions(sections[1].entries[0])).toEqual([remote]);
+        }
+      }
+    },
+  );
 
   it('separates local and remote Cindy Make roots by device', () => {
     const local = make('local', '2026-09-17T01:00:00Z');

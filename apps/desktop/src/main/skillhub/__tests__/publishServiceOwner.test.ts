@@ -55,6 +55,27 @@ describe('publication owner across commit reconciliation', () => {
   });
   afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
+  it.each(['identity', 'packing', 'init'] as const)('stops an invalidated Agent publication after %s, before upload or commit', async (stage) => {
+    let current = true;
+    if (stage === 'identity') mocks.identity.mockImplementationOnce(async () => {
+      current = false;
+      return { canWrite: true, allowedVisibilities: ['PUBLIC'] };
+    });
+    if (stage === 'packing') mocks.pack.mockImplementationOnce(async () => {
+      current = false;
+      return { buffer: Buffer.from('zip'), size: 3, sha256: 'hash', manifest: { files: [] } };
+    });
+    if (stage === 'init') mocks.api.mockImplementationOnce(async () => {
+      current = false;
+      return { nextVersion: '1.0.0', ossKey: 'object', uploadUrl: 'https://upload.invalid/object' };
+    });
+    const service = new SkillPublishService();
+    await expect(service.publish({ absolutePath: 'virtual-skill', name: 'review-helper', isFirstPublish: false }, undefined, { isCurrent: () => current }))
+      .resolves.toMatchObject({ success: false, errorCode: 'CANCELLED' });
+    expect(mocks.api.mock.calls.some(([apiPath]) => String(apiPath).endsWith('/publish/commit'))).toBe(false);
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+  });
+
   it.each((['commit', 'snapshot', 'registry'] as const).flatMap(stage =>
     (['unchanged', 'different-owner', 'new-generation', 'boundary-pending'] as const).map(transition => ({ stage, transition })),
   ))('preserves committed success during $stage / $transition', async ({ stage, transition }) => {

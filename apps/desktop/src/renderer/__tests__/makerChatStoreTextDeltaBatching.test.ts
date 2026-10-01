@@ -300,6 +300,8 @@ function installElectronBridge(): void {
         send: vi.fn(async () => ({ accepted: true })),
         resolveInteraction: vi.fn(async () => ({ accepted: true })),
         submitPluginSetupInline: vi.fn(async () => {}),
+        assistPluginOauth: vi.fn(async () => ({ accepted: true })),
+        submitRemotePluginSecret: vi.fn(async () => ({ accepted: true })),
         getPendingInteractions,
         steer: vi.fn(async () => true),
         generateTitle: vi.fn(async () => ({ title: 't' })),
@@ -1612,6 +1614,68 @@ describe('makerChatStore text delta batching', () => {
     emitInteractionRequest(pluginSetupRequest(2));
     expect(makerChatStore.getSnapshot(SESSION_ID).pluginSetupCommandInFlight).toBeNull();
     await flushPromises();
+  });
+
+  it.each([
+    ['UNSUPPORTED_CAPABILITY', 'REMOTE_UNSUPPORTED'],
+    ['PRECONDITION_FAILED', 'REMOTE_FAILED'],
+  ])('keeps %s visible on the current remote card without retaining private error details', async (code, expected) => {
+    deviceLinkInvoke.mockResolvedValue(null);
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    emitInteractionRequest({ ...pluginSetupRequest(1), remoteOauth: true });
+    const api = vi.mocked(window.electronAPI.maker.assistPluginOauth);
+    api.mockRejectedValueOnce(new Error(`Error invoking remote method: Error: [${code}] private-provider-payload`));
+    makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'run_action', 'oauth:google-account');
+    await flushPromises();
+    let state = makerChatStore.getSnapshot(SESSION_ID);
+    expect(api).toHaveBeenCalledOnce();
+    expect(state.pluginSetupCommandInFlight).toBeNull();
+    expect(state.pluginSetupCommandError).toEqual({ requestId: 'plugin-setup-1', revision: 1, code: expected });
+    expect(state.pendingPluginSetup?.steps[0].phase).toBe('pending');
+    expect(JSON.stringify(state)).not.toContain('private-provider-payload');
+    let finish!: (result: { accepted: boolean }) => void;
+    api.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'run_action', 'oauth:google-account');
+    makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'run_action', 'oauth:google-account');
+    state = makerChatStore.getSnapshot(SESSION_ID);
+    expect(api).toHaveBeenCalledTimes(2);
+    expect(state.pluginSetupCommandError).toBeNull();
+    expect(state.pluginSetupCommandInFlight?.action).toBe('run_action');
+    finish({ accepted: true });
+    await flushPromises();
+  });
+
+  it.each(['cancel', 'revision', 'owner'])('discards a remote authorization failure after %s changes', async (change) => {
+    deviceLinkInvoke.mockResolvedValue(null);
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    emitInteractionRequest({ ...pluginSetupRequest(1), remoteOauth: true });
+    let reject!: (error: Error) => void;
+    vi.mocked(window.electronAPI.maker.assistPluginOauth).mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'run_action', 'oauth:google-account');
+    if (change === 'cancel') makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'cancel');
+    if (change === 'revision') emitInteractionRequest({ ...pluginSetupRequest(2), remoteOauth: true });
+    if (change === 'owner') setDataOwnerGeneration('owner-b');
+    const before = makerChatStore.getSnapshot(SESSION_ID).pluginSetupCommandInFlight;
+    reject(new Error('[UNSUPPORTED_CAPABILITY] private-provider-payload'));
+    await flushPromises();
+    const state = makerChatStore.getSnapshot(SESSION_ID);
+    expect(state.pluginSetupCommandError).toBeNull();
+    expect(state.pluginSetupCommandInFlight).toBe(before);
+  });
+
+  it('reports remote secret submission failure without retaining the input or provider payload', async () => {
+    deviceLinkInvoke.mockResolvedValue(null);
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    emitInteractionRequest({ ...inlinePluginSetupRequest(1), remoteSecret: true });
+    const api = vi.mocked(window.electronAPI.maker.submitRemotePluginSecret);
+    api.mockRejectedValueOnce(new Error('[UNSUPPORTED_CAPABILITY] synthetic-private-token'));
+    makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'submit_form', 'inline:api-key', { value: 'synthetic-private-token' });
+    await flushPromises();
+    const state = makerChatStore.getSnapshot(SESSION_ID);
+    expect(api).toHaveBeenCalledOnce();
+    expect(state.pluginSetupCommandError?.code).toBe('REMOTE_UNSUPPORTED');
+    expect(state.pluginSetupCommandInFlight).toBeNull();
+    expect(JSON.stringify(state)).not.toContain('synthetic-private-token');
   });
 
   it('submits an inline Secret only through the local narrow API without retaining it', async () => {
@@ -5144,6 +5208,9 @@ describe('makerChatStore text delta batching', () => {
     expect(makerChatStore.getSnapshot(SESSION_ID).queueInteractionLocks).toEqual([
       'new-owner-lock',
     ]);
+    // This session remains sticky-remote even after the local remote-project
+    // projection is cleared. Account teardown must not finalize it locally:
+    // the controlled Desktop owns the running task and its steer marker.
     expect(makerChatStore.getSnapshot(SESSION_ID).steeringQueueClientIds).toEqual([
       'already-steering',
     ]);

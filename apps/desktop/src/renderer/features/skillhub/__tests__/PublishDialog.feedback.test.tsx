@@ -21,6 +21,7 @@ vi.mock('../hooks/useSkillFolderHash', () => ({ invalidateHash: vi.fn() }));
 vi.mock('../components/PlatformTagSelector', () => ({ PlatformTagSelector: () => null }));
 
 import { PublishDialog, type PublishDialogProps } from '../PublishDialog';
+import { getPublishErrorCopy } from '../lib/publishErrorMap';
 
 let progress!: (event: SkillhubPublishProgressEvent) => void;
 const feedback: SkillhubPublishProgressEvent = {
@@ -47,22 +48,24 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
+const skillFixture: PublishDialogProps['skill'] = {
+  id: 'review-helper', urlKey: 'review-helper', engine: 'claude-code', linkedEngines: [],
+  kind: 'skill', scope: 'global', mdPath: '/fixture/review-helper/SKILL.md', files: [], registryEntry: null,
+  name: 'review-helper', absolutePath: '/fixture/review-helper', frontmatter: { version: '1.0.1' },
+};
+
 function mountPublication(overrides: Partial<PublishDialogProps> = {}) {
   const onScanResult = vi.fn();
   const onOpenChange = vi.fn();
   const onLocalRenamed = vi.fn();
   const props: PublishDialogProps = {
-    open: true, onOpenChange, onScanResult, onLocalRenamed, isFirstPublish: false, latestVersion: '1.0.0', skill: {
-      id: 'review-helper', urlKey: 'review-helper', engine: 'claude-code', linkedEngines: [],
-      kind: 'skill', scope: 'global', mdPath: '/fixture/review-helper/SKILL.md', files: [], registryEntry: null,
-      name: 'review-helper', absolutePath: '/fixture/review-helper', frontmatter: { version: '1.0.1' },
-    },
+    open: true, onOpenChange, onScanResult, onLocalRenamed, isFirstPublish: false, latestVersion: '1.0.0', skill: skillFixture,
     ...overrides,
   };
   const view = render(<PublishDialog {...props} />);
-  if (props.isFirstPublish) {
+  if (props.isFirstPublish && props.autoCleanName) {
     fireEvent.change(screen.getByPlaceholderText('skillhub.publishDialog.skillNamePlaceholder'), { target: { value: 'renamed-helper' } });
-  } else {
+  } else if (!props.isFirstPublish) {
     fireEvent.change(screen.getByPlaceholderText('skillhub.publishDialog.changelogPlaceholder'), { target: { value: 'Improve documentation' } });
   }
   return { onScanResult, onOpenChange, onLocalRenamed, unmount: view.unmount,
@@ -77,6 +80,72 @@ async function startPublication(overrides: Partial<PublishDialogProps> = {}) {
 }
 
 describe('PublishDialog result delivery', () => {
+  it.each([true, false])('lets the user rename after deletion when first publication is %s', async (isFirstPublish) => {
+    mocks.publish.mockResolvedValueOnce({ success: false, errorCode: 'SKILL_DELETED', error: '同名技能已删除' });
+    await startPublication({ isFirstPublish });
+    const renameAction = getPublishErrorCopy('SKILL_DELETED').primaryAction.label;
+    fireEvent.click(await screen.findByRole('button', { name: renameAction }));
+    fireEvent.change(screen.getByPlaceholderText('skillhub.publishDialog.skillNamePlaceholder'), { target: { value: 'renamed-helper' } });
+    fireEvent.click(screen.getByRole('button', { name: 'skillhub.publishDialog.startPublish' }));
+    await waitFor(() => expect(mocks.renameLocal).toHaveBeenCalledWith({ absolutePath: '/fixture/review-helper', newName: 'renamed-helper' }));
+    await waitFor(() => expect(mocks.publish).toHaveBeenCalledTimes(2));
+    expect(mocks.publish.mock.calls[1][0]).toMatchObject({
+      name: 'renamed-helper', absolutePath: '/fixture/renamed-helper', isFirstPublish: true,
+    });
+  });
+
+  it('checks the discovered path on the first rename and the current path on a subsequent rename', async () => {
+    mocks.publish.mockResolvedValueOnce({ success: false, errorCode: 'SKILL_DELETED', error: '同名技能已删除' });
+    await startPublication({ isFirstPublish: true, autoCleanName: true,
+      skill: { ...skillFixture, discoveredPath: '/fixture/link-helper' } });
+    expect(mocks.renameLocal).toHaveBeenNthCalledWith(1, {
+      absolutePath: '/fixture/link-helper', newName: 'renamed-helper',
+    });
+    expect(mocks.publish.mock.calls[0][0]).toMatchObject({ absolutePath: '/fixture/renamed-helper' });
+
+    mocks.renameLocal.mockResolvedValueOnce({ success: true, newAbsolutePath: '/fixture/final-helper' });
+    fireEvent.click(await screen.findByRole('button', { name: getPublishErrorCopy('SKILL_DELETED').primaryAction.label }));
+    fireEvent.change(screen.getByPlaceholderText('skillhub.publishDialog.skillNamePlaceholder'), { target: { value: 'final-helper' } });
+    fireEvent.click(screen.getByRole('button', { name: 'skillhub.publishDialog.startPublish' }));
+    await waitFor(() => expect(mocks.renameLocal).toHaveBeenNthCalledWith(2, {
+      absolutePath: '/fixture/renamed-helper', newName: 'final-helper',
+    }));
+    await waitFor(() => expect(mocks.publish).toHaveBeenCalledTimes(2));
+    expect(mocks.publish.mock.calls[1][0]).toMatchObject({
+      name: 'final-helper', absolutePath: '/fixture/final-helper', isFirstPublish: true,
+    });
+  });
+
+  it('shows a short validation reason delivered through the IPC result fallback', async () => {
+    mocks.publish.mockResolvedValue({ success: false, errorCode: 'INVALID_PARAMS', error: '标签不存在' });
+    await startPublication();
+    expect(await screen.findByText('标签不存在')).toBeTruthy();
+  });
+
+  it('uses localized recovery copy when local visibility validation has no server detail', async () => {
+    await startPublication();
+    act(() => progress({ phase: 'failed', name: 'review-helper', errorCode: 'INVALID_VISIBILITY', message: '',
+      ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 1 } }));
+    expect(await screen.findByText(getPublishErrorCopy('INVALID_VISIBILITY').message)).toBeTruthy();
+    expect(screen.queryByText('Organization skills only support public or organization visibility')).toBeNull();
+    expect(screen.queryByText('Personal skills only support public or private visibility')).toBeNull();
+  });
+
+  it.each(['PERMISSION_DENIED', 'NOT_AUTHOR', 'API_KEY_MISSING', 'SKILL_HUB_READ_ONLY', 'OSS_PUT_EXPIRED', 'OSS_OBJECT_NOT_FOUND'] as const)('does not expose %s diagnostics or offer to edit the request', async (errorCode) => {
+    mocks.publish.mockResolvedValue({ success: false, errorCode, error: 'private diagnostic' });
+    await startPublication();
+    expect(await screen.findByText(getPublishErrorCopy(errorCode).title)).toBeTruthy();
+    expect(screen.queryByText('private diagnostic')).toBeNull();
+    expect(screen.queryByRole('button', { name: getPublishErrorCopy('INVALID_PARAMS').primaryAction.label })).toBeNull();
+  });
+
+  it('shows a short reason from a failed progress event', async () => {
+    await startPublication();
+    act(() => progress({ phase: 'failed', name: 'review-helper', errorCode: 'MANIFEST_INVALID', message: '缺少 description',
+      ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 1 } }));
+    expect(await screen.findByText('缺少 description')).toBeTruthy();
+  });
+
   it.each(['unchanged', 'different-owner', 'same-owner-new-generation'] as const)(
     'forwards feedback after refresh only when the owner is %s', async (transition) => {
       let finishRefresh!: (value: unknown[]) => void;

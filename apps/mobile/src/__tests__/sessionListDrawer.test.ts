@@ -20,8 +20,6 @@ describe('mobile session list drawer', () => {
     expect(text).not.toContain('elevation:');
     expect(text).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     expect(text).not.toMatch(/borderRadius:\s*\d/);
-    expect(text).toContain('borderRadius: radius.pill');
-    expect(text).toContain('borderRadius: radius.container');
     // 主题接入模式:模块级 makeStyles + useThemedStyles,不用静态色。
     expect(text).toContain('const makeStyles = (colors: ThemeColors) =>');
     expect(text).toContain('useThemedStyles(makeStyles)');
@@ -40,7 +38,6 @@ describe('mobile session list drawer', () => {
     expect(text).toContain('duration: motionDuration.enter');
     expect(text).toContain('duration: motionDuration.exit');
     expect(text).toContain('duration: motionDuration.fast');
-    expect(text).toContain('duration: motionDuration.spinnerCycle');
     expect(text).toContain('Easing.bezier(...motionEasing.out)');
     expect(text).toContain('Easing.bezier(...motionEasing.in)');
     expect(text).toContain('Easing.bezier(...motionEasing.move)');
@@ -60,29 +57,24 @@ describe('mobile session list drawer', () => {
     expect(text).toContain('.failOffsetY([-16, 16])');
     // 关闭动画期间 overlay 恒拦截,不放行点击穿透半透明 scrim(review #1328)。
     expect(text).toContain('pointerEvents="auto"');
-    // 抽屉 presentation 必须带权威设备身份,防 canonicalDeviceId 被弱推断覆盖(review #1328)。
-    expect(text).toContain('const devices = useRemoteDeviceIdentity();');
-    expect(text).toMatch(/buildMobileHomePresentation\(\{(?:(?!\}\);)[\s\S])*?\n\s*devices,/);
-    // 行内状态与标题兜底与首页同口径:pending/liveActivity 索引 + 已解析 unnamedLabel(review #1328)。
-    expect(text).toContain('remoteSessionStore.getPendingInteractions(session.id).length');
-    expect(text).toContain('remoteSessionStore.getSessionLiveActivity(session.id)');
-    expect(text).toContain("unnamedLabel: t('session.menu.unnamedTitle')");
-    // 底部主操作行触控目标 >=44。
-    expect(text).toContain('minHeight: 44,');
+    // 临时面板使用主页的关闭入口，不再有重复主页底栏。
+    expect(text).not.toContain('sessionDrawer.home');
+    expect(text).toContain('onDismiss={persistent ? undefined : onClose}');
   });
 
-  it('keeps the drawer aligned with the home list presentation pipeline', () => {
+  it('uses the actual Home instead of maintaining a second list or data controller', () => {
     const text = source();
-    // 与首页同一套共享层口径:排序 / 置顶 / 自动化折叠 / Orca worker 过滤 / 右槽状态档位。
-    expect(text).toContain('excludeOrcaWorkerSessions(sessions)');
-    expect(text).toContain('buildMobileHomePresentation({');
-    expect(text).toContain('buildHomeSections(home, false, false)');
-    expect(text).toContain('resolveMobileSessionRowStatus(item, sessionIsRunning)');
-    expect(text).toMatch(/buildRemoteSessionCardPreview\((?:(?!\);)[\s\S])*?\{ running \},?\s*\)/);
-    expect(text).toContain('formatRemoteSessionSidebarTime(lastActivityAt)');
-    expect(text).toContain('conversationSearchOriginsFromDeviceModels');
-    expect(text).toContain('useRemoteConversationSearchDeviceModels()');
-    expect(text).toContain('useRemoteDeviceIdentity()');
+    const route = readTextLf(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
+    const home = readTextLf(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
+    expect(route).toContain("tasks={<MobileHome active={navigation.mode === 'tasks'} onModeChange={navigation.setMode} />}");
+    expect(route).toContain("@/session/HomeSurface");
+    expect(text).toContain("import { MobileHome } from './HomeSurface'");
+    expect(text).toContain('<MobileHome');
+    expect(text).not.toMatch(/<SectionList|DrawerSessionRow|buildMobileHomePresentation|useRemoteSessions/);
+    expect(home).toContain('<SectionList');
+    expect(home).toContain('renderItem={renderHomeRow}');
+    expect(home).toContain('onSelectSession(item)');
+    expect(home).toContain('!embedded && usesNativeStackHeader()');
   });
 
   it('exposes stable testIDs and modal accessibility semantics', () => {
@@ -91,17 +83,16 @@ describe('mobile session list drawer', () => {
       'sessionDrawer.overlay',
       'sessionDrawer.scrim',
       'sessionDrawer.panel',
-      'sessionDrawer.newSession',
-      'sessionDrawer.home',
     ]) {
       expect(text).toContain(`testID="${testId}"`);
     }
-    expect(text).toContain('accessibilityViewIsModal={mounted}');
+    expect(text).toContain('accessibilityViewIsModal={mounted && !persistent}');
+    expect(text).toContain('if (!open || persistent) return;');
     expect(text).toContain("t('home.drawer.closeA11y')");
     // 打开时把读屏焦点移到面板首控件;关闭后的背景焦点归还由父级在解除
     // accessibility 隔离后的 commit effect 负责。
     expect(text).toContain('AccessibilityInfo.setAccessibilityFocus(node)');
-    expect(text).toContain('ref={newSessionButtonRef}');
+    expect(text).toContain('ref={homeContentRef}');
     // 导航动作必须等 overlay 的 mounted=false commit 后执行,不能与 Android 原生换屏同帧。
     expect(text).toContain('onClosedRef.current?.();');
     expect(text).not.toContain('returnFocusRef');

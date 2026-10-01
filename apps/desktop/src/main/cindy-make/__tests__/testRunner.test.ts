@@ -309,6 +309,22 @@ describe('isolated Make test runner', () => {
       }),
     ).toEqual({ PATH: '/tools', HOME: '/user', TERM: 'xterm-256color', FORCE_COLOR: '0' });
   });
+  it('preserves the Windows system drive needed by MSBuild inside ConPTY', () => {
+    const env = makeTestEnvironment({
+      SystemDrive: 'C:',
+      SystemRoot: 'C:\\Windows',
+      ProgramData: 'C:\\ProgramData',
+      NODE_OPTIONS: '--require private-hook',
+      OPENAI_API_KEY: 'fake-secret',
+    });
+    expect(env).toMatchObject({
+      SystemDrive: 'C:',
+      SystemRoot: 'C:\\Windows',
+      ProgramData: 'C:\\ProgramData',
+    });
+    expect(env).not.toHaveProperty('NODE_OPTIONS');
+    expect(env).not.toHaveProperty('OPENAI_API_KEY');
+  });
   it('uses the existing wrapper, explicit isolation and a real PTY without a shell command', async () => {
     const h = await processHarness();
     expect(h.spawn.mock.calls[0][1]).toEqual([

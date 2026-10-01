@@ -317,8 +317,8 @@ export function SlashCommandPalette({
               && focusedCmd.source === 'skill' && focusedCmd.path && focusedCmd.origin !== 'package'
               && (allowProjectSkillDetails || focusedCmd.scope === 'global' || focusedCmd.scope === 'user') && (
               <Tip text={t('commandPalette.viewSkillDetails')}>
-                <Button variant="secondary"
-                  className="w-8 border-transparent bg-transparent p-0 text-[var(--cmd-palette-item-meta)]"
+                <Button variant="secondary" pressFeedback={false}
+                  className="w-8 [--button-face-border:transparent] [--button-face-bg:transparent] p-0 text-[var(--cmd-palette-item-meta)]"
                   aria-label={t('commandPalette.viewSkillDetails')}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={(event) => {

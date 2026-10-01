@@ -6,7 +6,7 @@ import { Check, ChevronDown, ChevronRight, Download, FileUp, RefreshCw } from 'l
 import { basename, cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { emitRefresh } from '@/lib/sessionsBus';
-import { Spinner } from '@/components/ui/spinner';
+import { Button } from '@/components/ui/button';
 import { formatSidebarTime, formatSidebarTimeAbsolute } from '@/features/cc-agent/lib/formatSidebarTime';
 import { SessionShareImportWizard } from './SessionShareImportWizard';
 
@@ -179,33 +179,28 @@ export function SessionImportSection() {
           </p>
         </div>
         <div className="flex shrink-0 items-center justify-end gap-2 select-none">
-          <button
+          <Button
+            variant="secondary"
+            size="lg"
             type="button"
             onClick={() => setShareWizardOpen(true)}
-            className={cn(
-              'inline-flex h-10 shrink-0 items-center gap-2 rounded-full px-4 text-13 font-medium active:scale-[0.98]',
-              'border border-[var(--settings-btn-secondary-border)]',
-              'bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
-              'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-            )}
+            className="shrink-0"
           >
             <FileUp size={15} />
             {t('sessionShare.import.entryButton')}
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="cta"
+            size="lg"
+            loading={scanning}
             type="button"
             onClick={() => runScan({ force: true })}
             disabled={scanning}
-            className={cn(
-              'inline-flex h-10 shrink-0 items-center gap-2 rounded-full px-5 text-13 font-medium active:scale-[0.98]',
-              'border border-[var(--settings-btn-primary-border)]',
-              'bg-[var(--settings-btn-primary-bg)] text-[var(--settings-btn-primary-text)]',
-              'transition-colors hover:bg-[var(--settings-btn-primary-hover-bg)] disabled:cursor-not-allowed disabled:opacity-60',
-            )}
+            className="shrink-0"
           >
-            <Spinner icon={RefreshCw} size={15} spinning={scanning} />
-            {scanning ? t('settings.sessionImport.scanning') : t('settings.sessionImport.scan')}
-          </button>
+            <RefreshCw size={15} />
+            { t('settings.sessionImport.scan')}
+          </Button>
         </div>
       </header>
 
@@ -361,23 +356,21 @@ export function SessionImportSection() {
               <p className="text-12 text-[var(--settings-section-desc)]">
                 {t('settings.sessionImport.selected', { count: selectedItems.length })}
                 {hiddenSelectedCount > 0 && (
-                  <span> {t('settings.sessionImport.selectedOutsideFilter', { count: hiddenSelectedCount })}</span>
+                  <span> {' '}
+                    {t('settings.sessionImport.selectedOutsideFilter', { count: hiddenSelectedCount })}</span>
                 )}
               </p>
-              <button
+              <Button
+                variant="cta"
+                size="lg"
+                loading={importing}
                 type="button"
                 onClick={importSelected}
                 disabled={selectedItems.length === 0 || importing}
-                className={cn(
-                  'inline-flex h-10 items-center gap-2 rounded-full px-5 text-13 font-medium active:scale-[0.98]',
-                  'border border-[var(--settings-btn-primary-border)]',
-                  'bg-[var(--settings-btn-primary-bg)] text-[var(--settings-btn-primary-text)]',
-                  'transition-colors hover:bg-[var(--settings-btn-primary-hover-bg)] disabled:cursor-not-allowed disabled:opacity-60',
-                )}
               >
                 <Check size={15} />
-                {importing ? t('settings.sessionImport.importing') : t('settings.sessionImport.importSelected')}
-              </button>
+                { t('settings.sessionImport.importSelected')}
+              </Button>
             </footer>
           </div>
         )}

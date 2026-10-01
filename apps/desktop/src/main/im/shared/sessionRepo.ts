@@ -32,6 +32,7 @@ import {
   resolveImSessionDefaults,
   type ResolvedImSessionDefaults,
 } from '../defaultSessionSettings';
+import { buildImDefaultRouteRecord } from './channelDefaultRoute';
 import { broadcastSessionCreated, broadcastSessionPatched } from './sessionBroadcast';
 import type { ImOrchestratorConfig, ImSessionNamespace } from './types';
 
@@ -73,6 +74,11 @@ export interface ImSessionRow {
    * 只读路径按需带出, 建会话路径不填(那时归属由 ns.workspaceKind 决定)。
    */
   workspaceKind?: 'project' | 'dialogue' | null;
+  /**
+   * 仅 prepareNewSession 产出的行带: 解析这组默认值时所读渠道设置的指纹。
+   * 建任务 / `/new` 把它连同路由写进 `im_default_route`(跟随记录)。
+   */
+  defaultRouteFingerprint?: string;
 }
 
 export interface SessionModelRouteSnapshot {
@@ -426,6 +432,7 @@ export function createImSessionRepo(
             status: 'active',
             agentKind: toDbAgentKind(row.agentKind),
             providerId: row.providerId,
+            imDefaultRoute: defaultRouteRecordFor(row),
             source: ns.source,
             ...ns.extraInsertColumns(botContextId, userId),
             createdAt: now,
@@ -552,6 +559,7 @@ export function createImSessionRepo(
               fastMode: fresh.fastMode,
               agentKind: toDbAgentKind(fresh.agentKind),
               providerId: fresh.providerId,
+              imDefaultRoute: defaultRouteRecordFor(fresh),
               source: ns.source,
               imBotContextId,
               imUserId,
@@ -597,7 +605,19 @@ function rowFromDefaults(
     sdkSessionId: null,
     remoteHostId: null,
     providerId: defaults.providerId,
+    defaultRouteFingerprint: defaults.fingerprint,
   };
+}
+
+/** 按渠道默认建出 / 重置的行对应的跟随记录; 非默认来源的行返回 null。 */
+function defaultRouteRecordFor(row: ImSessionRow): string | null {
+  if (!row.defaultRouteFingerprint) return null;
+  return buildImDefaultRouteRecord(row.defaultRouteFingerprint, {
+    agentKind: row.agentKind,
+    model: row.model,
+    providerId: row.providerId,
+    effort: row.effort,
+  });
 }
 
 // ── sessionId 维度的更新操作(渠道无关, 无需工厂) ─────────────────────────────
@@ -662,6 +682,7 @@ export async function resetSessionToDefaults(
       providerId: defaults.providerId,
       permissionMode: defaults.permissionMode,
       fastMode: defaults.fastMode,
+      imDefaultRoute: defaultRouteRecordFor(defaults),
       // Personal WeChat exposes a user-selected channel working directory.
       // It applies only at the explicit `/new` boundary; existing context is
       // never moved silently.
@@ -735,6 +756,9 @@ export async function readModelRouteSnapshot(
  *   - string    → 显式选定该供应商(路由按它走);
  *   - null      → 清除显式选择,回落默认路由。
  * 显式传入(含 null)时一并写列,使 IM 选模型与应用内一样能锁定路由源、跨重启 hydrate 仍生效。
+ *
+ * 只写路由列 —— 「脱离跟随」墓碑由调用方在**选择真正落地后**写(PR #5155 review P2):
+ * 本函数也被失败回滚复用, 在这里立碑会让失败的选择永久脱离默认跟随。
  */
 export async function updateModelEffort(
   sessionId: string,

@@ -44,7 +44,7 @@ export function getCindyMakeMessageAttention(message: {
     if (state.status === 'ready') return { kind: 'done', key };
     if (state.status === 'stopped') return { kind: 'none', key };
     if (
-      ['starting', 'waiting', 'merging', 'checking', 'packaging', 'publishing'].includes(
+      ['starting', 'waiting', 'syncing', 'merging', 'checking', 'packaging', 'publishing'].includes(
         String(state.status),
       )
     )

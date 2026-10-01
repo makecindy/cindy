@@ -1,3 +1,4 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 /**
  * ToolCallCard
  * ---------------------------------------------------------------------------
@@ -16,7 +17,7 @@ import {
   CHAT_COLOR_TRANSITION_CLASS,
 } from './chatChrome';
 import { useRef, useState } from 'react';
-import { ChevronRight, FileText } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn, basename } from '@/lib/utils';
@@ -205,7 +206,7 @@ export function ToolCallCard({ toolName, toolInput, summary, toolResult }: ToolC
                         'cursor-pointer',
                       )}
                     >
-                      <FileText size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+                      <FileTypeIcon name={p} size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
                       <span className="truncate">{basename(p)}</span>
                     </button>
                   </Tip>

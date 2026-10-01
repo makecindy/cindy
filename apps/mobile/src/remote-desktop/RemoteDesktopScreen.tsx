@@ -1,3 +1,7 @@
+import { foldDesktopLayout } from './foldDesktopLayout';
+import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { windowDivision, controlRegion } from '@/platform/windowGeometry';
+import { FoldTouchpad } from './FoldTouchpad';
 import {
   useCallback,
   useMemo,
@@ -75,6 +79,7 @@ import {
   resolveDesktopIceServers,
 } from "@cindy/device-link";
 import { Text } from "@/components/AppText";
+import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 import { useScreenEdgePadding } from "@/components/screenEdgeInsets";
 import { goBackGuarded } from "@/utils/backGuard";
 import { mobileDebugEnabled, mobileDebugLog } from "@/debug/mobileDebugLog";
@@ -86,6 +91,7 @@ import {
   fontWeight,
   iconSize,
   iconStroke,
+  lineHeight,
   radius,
   spacing,
   typeScale,
@@ -109,6 +115,7 @@ import { useRemoteDesktopSafety } from "./useRemoteDesktopSafety";
 import { useVideoSettingsPreference } from "./useVideoSettingsPreference";
 import { usePictureInPicturePreference } from "./usePictureInPicturePreference";
 import { PermissionGuide } from "./PermissionGuide";
+import { navigationChrome } from "@/theme/tokens";
 import { RemoteDesktopBackButton } from "./RemoteDesktopBackButton";
 import { RemoteDesktopWindows } from "./RemoteDesktopWindows";
 import { RemoteDesktopNetworkStatus } from "./RemoteDesktopNetworkStatus";
@@ -259,23 +266,40 @@ export function RemoteDesktopSession({
     windowWidth: windowSize.width,
     windowHeight: windowSize.height,
   });
-  const screenSize = Dimensions.get("screen");
-  const landscape = screenSize.width > screenSize.height;
+  const screenSize = windowSize;
+  const geometry = useAdaptiveWindow();
+  const division = windowDivision(geometry);
+  const tableRegion = division && division.first.height >= 160 && division.second.height >= 160 && division.first.width >= 160 && division.second.width >= 160 ? division : null;
+
+  const systemSideRail = Platform.OS === 'ios' && !tableRegion && (geometry.barEdge !== 'none' || (geometry.reservedRegionsSupported && geometry.regularWidth && windowSize.width > windowSize.height));
+  // Android adjustResize shrinks the window for the IME, not the display.
+  // Keep its device orientation stable; iOS/Duo still use the adaptive window.
+  const orientationSize = Platform.OS === 'android' ? Dimensions.get('screen') : windowSize;
+  const landscape = systemSideRail || (!tableRegion && orientationSize.width > orientationSize.height);
+  const sideRailWidth = Math.max(60, geometry.insets.right + spacing.md);
+  // The native status/navigation center sits 6pt inward from the safe strip center.
+  // Use the reported status reservation for vertical clearance when available.
+  const statusReservation = geometry.regions.filter(r => r.kind === 'occlusion' && r.y === 0 && r.x + r.width >= geometry.width);
+  const sideRailTop = Math.max(insets.top, statusReservation.length ? Math.max(...statusReservation.map(r => r.y + r.height)) : 120);
   const [interfaceAngle, setInterfaceAngle] = useState<number | null>(null);
   const toolbarOnLeft =
+    systemSideRail ? false :
     Platform.OS === "ios" &&
     landscape &&
     (interfaceAngle === 270 ||
       (interfaceAngle === null && insets.right > insets.left));
   const webview = useRef<ComponentRef<typeof WebView>>(null);
   const nativeViewer = useRef<NativeRemoteDesktopHandle>(null);
-  const html = useRef(
+  // Memo survives ordinary renders, but Fast Refresh invalidates it when the
+  // bundled viewer changes. A ref kept the old script alongside new RN layout.
+  const html = useMemo(() =>
     remoteDesktopViewerHtml(
       colors.surface,
       colors.textPrimary,
       Boolean(NativeRemoteDesktopView),
     ),
-  ).current;
+  []);
+  const [viewerReadyRevision, setViewerReadyRevision] = useState(0);
   const active = useRef<RemoteDesktopLease | null>(null);
   const wantsControl = useRef(true);
   const [viewOnlySelected, setViewOnlySelected] = useState(false);
@@ -311,7 +335,7 @@ export function RemoteDesktopSession({
   const [network, setNetwork] = useState<DesktopNetworkStats | null>(null);
   const frameBusy = useRef<string | null>(null);
   const unlockFrame = useRef<((presented: boolean) => void) | null>(null);
-  const inputBusy = useRef<string | null>(null);
+  const inputBusy = useRef<{ lease: string } | null>(null);
   const [lease, setLease] = useState<RemoteDesktopLease | null>(null);
   const [windowsOpen, setWindowsOpen] = useState(false);
   useEffect(() => {
@@ -427,12 +451,18 @@ export function RemoteDesktopSession({
     landscape && (Platform.OS === "ios" || fullKeys);
   const keyboardBottom =
     Platform.OS === "ios" && keyboard && !fullKeys ? nativeKeyboardHeight : 0;
+  const foldLayout = foldDesktopLayout(geometry, keyboardBottom, keyboardPanelHeight, keyboard);
+  const fullScreenFoldBackground = Boolean(foldLayout && division?.axis === 'horizontal');
+  const foldControls = foldLayout?.controls ?? controlRegion(geometry);
   const heldKeys = useRef(new Map<string, string[]>());
   const [keyPage, setKeyPage] = useState(0);
   const [comboMode, setComboMode] = useState(true);
   const [modifiers, setModifiers] = useState<string[]>([]);
   const send = useCallback((message: object) => {
     const command = message as Record<string, unknown>;
+    // Every control handoff retires the parent batch together with the viewer
+    // queue. A late native fallback, failure or ACK cannot own the next batch.
+    if (command.type === "control" || command.type === "stop") inputBusy.current = null;
     const owner = active.current;
     const attempt = command.attemptId ?? mediaAttempt.current;
     webview.current?.postMessage(JSON.stringify(message));
@@ -648,7 +678,7 @@ export function RemoteDesktopSession({
     const updateFrame = (event: KeyboardEvent) => {
       const height = Math.max(
         0,
-        Dimensions.get("screen").height - event.endCoordinates.screenY,
+        Dimensions.get("window").height - event.endCoordinates.screenY,
       );
       setNativeKeyboardHeight(height);
       setNativeKeyboard(height > 0);
@@ -1200,7 +1230,7 @@ export function RemoteDesktopSession({
   };
   useEffect(() => {
     send({ type: "viewport", fillHeight: landscape });
-  }, [landscape, send]);
+  }, [landscape, send, viewerReadyRevision]);
 
   useEffect(() => {
     alive.current = true;
@@ -1449,8 +1479,10 @@ export function RemoteDesktopSession({
     send({
       type: "mouseButtons",
       native: Platform.OS === "ios",
-      topInset: edgePadding.paddingTop,
-      bottomInset:
+      fitToInsets: fullScreenFoldBackground,
+      topInset: fullScreenFoldBackground ? foldLayout!.media.y : tableRegion ? 0 : edgePadding.paddingTop,
+      bottomInset: fullScreenFoldBackground
+        ? Math.max(0, geometry.height - foldLayout!.media.y - foldLayout!.media.height) : tableRegion ? 0 :
         keyboard && landscapeKeyboardOverlay
           ? keyboardPanelHeight + keyboardBottom
           : !keyboard && !landscape
@@ -1458,19 +1490,13 @@ export function RemoteDesktopSession({
             : 0,
       keyboardOpen: keyboard && landscapeKeyboardOverlay,
       portraitKeyboardTopInset:
-        keyboard && !landscape
+        keyboard && !landscape && !tableRegion
           ? edgePadding.paddingTop + spacing.xs + backControlHeight + spacing.sm
           : 0,
-      rightInset: landscape
-        ? !keyboard && !toolbarOnLeft
-          ? toolbarSize.width
-          : insets.right
-        : 0,
-      leftInset: landscape
-        ? !keyboard && toolbarOnLeft
-          ? toolbarSize.width
-          : insets.left
-        : 0,
+      // Side controls float over the desktop; fit against the full canvas width
+      // in either landscape direction, including while the keyboard is open.
+      rightInset: 0,
+      leftInset: 0,
       enabled:
         showMouseButtons &&
         focused &&
@@ -1484,12 +1510,12 @@ export function RemoteDesktopSession({
       },
     });
   }, [
+    tableRegion?.first.height, tableRegion?.first.width,
+    fullScreenFoldBackground, foldLayout?.media.y, foldLayout?.media.height, geometry.height,
+    viewerReadyRevision,
     showMouseButtons,
     edgePadding.paddingTop,
     backControlHeight,
-    insets.left,
-    insets.right,
-    toolbarOnLeft,
     toolbarSize,
     keyboardPanelHeight,
     landscapeKeyboardOverlay,
@@ -1543,6 +1569,7 @@ export function RemoteDesktopSession({
     }
     if (message.type === "ready") {
       ready.current = true;
+      setViewerReadyRevision(revision => revision + 1);
       void connectRef.current();
       return;
     }
@@ -1920,7 +1947,7 @@ export function RemoteDesktopSession({
         };
         if (
           !current.controlling ||
-          inputBusy.current === current.lease ||
+          inputBusy.current?.lease === current.lease ||
           !Number.isSafeInteger(message.sequence) ||
           !Array.isArray(message.events) ||
           message.events.length > 64 ||
@@ -1929,7 +1956,9 @@ export function RemoteDesktopSession({
           send(ack);
           return;
         }
-        inputBusy.current = current.lease;
+        const batch = { lease: current.lease };
+        inputBusy.current = batch;
+        const ownsBatch = () => active.current === current && inputBusy.current === batch;
         const events = message.events;
         void (async () => {
           if (
@@ -1937,7 +1966,7 @@ export function RemoteDesktopSession({
             (await nativeViewer.current?.sendInput(message).catch(() => false))
           )
             return;
-          if (active.current !== current || !current.controlling) return;
+          if (!ownsBatch() || !current.controlling) return;
           await request({
             op: "input",
             lease: current.lease,
@@ -1946,11 +1975,12 @@ export function RemoteDesktopSession({
           });
         })()
           .catch((cause) => {
-            if (active.current !== current) return;
+            if (!ownsBatch()) return;
             resolveControlFailure(cause);
           })
           .finally(() => {
-            if (inputBusy.current === current.lease) inputBusy.current = null;
+            if (!ownsBatch()) return;
+            inputBusy.current = null;
             send(ack);
           });
         break;
@@ -2572,7 +2602,7 @@ export function RemoteDesktopSession({
   return (
     <KeyboardAvoidingView
       testID="remoteDesktop.layout"
-      enabled={!landscapeKeyboardOverlay}
+      enabled={!landscapeKeyboardOverlay && !foldLayout}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       style={styles.root}
     >
@@ -2581,7 +2611,9 @@ export function RemoteDesktopSession({
         <View
           style={[
             styles.canvas,
-            { marginLeft: landscape ? 0 : edgePadding.paddingLeft },
+            { marginLeft: landscape ? 0 : edgePadding.paddingLeft, marginRight: landscape ? 0 : edgePadding.paddingRight },
+            fullScreenFoldBackground ? { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, marginLeft: 0, marginRight: 0 } : foldLayout && { position: 'absolute', flex: 0, left: foldLayout.media.x, top: foldLayout.media.y,
+              width: foldLayout.media.width, height: foldLayout.media.height, marginLeft: 0, marginRight: 0 },
           ]}
         >
           <Animated.View
@@ -2642,6 +2674,7 @@ export function RemoteDesktopSession({
           </Animated.View>
           {frameReady &&
             Platform.OS === "ios" &&
+            !tableRegion &&
             showMouseButtons &&
             focused &&
             !operations &&
@@ -2823,6 +2856,10 @@ export function RemoteDesktopSession({
               ]}
             >
               <RemoteDesktopPanel
+                railAnchor={systemSideRail ? {
+                  right: (sideRailWidth - navigationChrome.target) / 2,
+                  top: (sideRailTop + navigationChrome.target + spacing.lg + windowSize.height - insets.bottom - navigationChrome.target * (caps?.omarchyMenu ? 5 : 4)) / 2,
+                } : undefined}
                 toolbarOnLeft={toolbarOnLeft}
                 toolbarActionCount={caps?.omarchyMenu ? 5 : 4}
                 visible={operations && focused}
@@ -2868,7 +2905,7 @@ export function RemoteDesktopSession({
                   }
                   presentation={{
                     enabled: pipEnabled,
-                    canRotate: typeof remotePresentation?.rotate === "function",
+                    canRotate: typeof remotePresentation?.rotate === "function" && !(geometry.reservedRegionsSupported && Platform.OS === "ios" && !Platform.isPad && geometry.regularWidth && geometry.regularHeight),
                     canPip: Boolean(
                       remotePresentation &&
                       caps?.backgroundViewing &&
@@ -2924,6 +2961,16 @@ export function RemoteDesktopSession({
             </View>
           )}
         </View>
+        {tableRegion && frameReady && focused && !keyboard && !operations ? (
+          <View testID="remoteDesktop.foldControls" style={{ position: 'absolute', left: foldControls.x,
+            top: foldControls.y, width: foldControls.width, height: foldControls.height,
+            paddingBottom: toolbarSize.height + (showMouseButtons ? 80 : 0) }}>
+            <FoldTouchpad send={send} enabled={Boolean(lease?.controlling)} />
+            {showMouseButtons && lease?.controlling ? <RemoteDesktopMouseControls send={send}
+              bottom={toolbarSize.height} right={0} compact labels={{ left: t("remoteDesktop.leftClick"),
+                right: t("remoteDesktop.rightClick"), wheel: t("remoteDesktop.mouseWheel") }} /> : null}
+          </View>
+        ) : null}
         {!keyboard && (
           <Animated.View
             key={landscape ? "landscape-toolbar" : "portrait-toolbar"}
@@ -2975,10 +3022,25 @@ export function RemoteDesktopSession({
                       paddingBottom: Math.max(spacing.sm, insets.bottom),
                     }),
               },
+              tableRegion && { left: foldControls.x, right: undefined, width: foldControls.width,
+                bottom: geometry.height - foldControls.y - foldControls.height, paddingBottom: spacing.sm },
+              systemSideRail && {
+                left: toolbarOnLeft ? 0 : undefined,
+                right: toolbarOnLeft ? undefined : 0,
+                width: sideRailWidth,
+                // Leave room for the system clock/signal and the 44pt Back control.
+                top: sideRailTop + navigationChrome.target + spacing.lg,
+                bottom: insets.bottom,
+                paddingLeft: 0,
+                paddingRight: 0,
+                paddingBottom: 0,
+                alignItems: 'center',
+                justifyContent: 'center',
+              },
             ]}
           >
             <RemoteDesktopToolbar
-              landscape={landscape}
+              landscape={landscape || systemSideRail}
               onWorkspaceLeft={
                 caps?.workspaceNavigation
                   ? () => workspaceAction("workspaceLeft")
@@ -3065,10 +3127,15 @@ export function RemoteDesktopSession({
             // occupying the corner, not a centered island. Android left
             // insets are an unsafe strip (cutout/curve), not an island.
             left: landscape
-              ? (Platform.OS === "ios" && insets.top === 0 ? 0 : insets.left) +
+              ? (Platform.OS === "ios" && !geometry.reservedRegionsSupported && insets.top === 0 ? 0 : insets.left) +
                 spacing.lg +
                 (Platform.OS === "ios" ? spacing.xs : 0)
               : edgePadding.paddingLeft + spacing.lg,
+          },
+          systemSideRail && {
+            top: sideRailTop,
+            left: windowSize.width - (sideRailWidth + navigationChrome.target) / 2,
+            width: navigationChrome.target,
           },
         ]}
       >
@@ -3096,6 +3163,9 @@ export function RemoteDesktopSession({
                 ? Math.max(spacing.sm, insets.bottom)
                 : spacing.xs,
             },
+            foldLayout && { position: 'absolute', left: foldControls.x, width: foldControls.width,
+              bottom: geometry.height - foldControls.y - foldControls.height,
+              maxHeight: foldControls.height, paddingLeft: spacing.xs, paddingRight: spacing.sm, paddingBottom: 0 },
           ]}
         >
           <View style={styles.keyboardHeader}>
@@ -3133,7 +3203,7 @@ export function RemoteDesktopSession({
                     style={({ pressed }) => [
                       styles.modeTab,
                       fullKeys === computer && styles.modeTabSelected,
-                      pressed && styles.keyPressed,
+                      pressed && mobileInteractionStyles.pressed,
                     ]}
                   >
                     <Text
@@ -3245,7 +3315,7 @@ export function RemoteDesktopSession({
               </View>
               <ScrollView
                 testID="remoteDesktop.keyPageViewport"
-                style={{ maxHeight: landscape ? 156 : 300 }}
+                style={{ flexShrink: 1, maxHeight: landscape ? 156 : 300 }}
                 keyboardShouldPersistTaps="always"
               >
                 <View style={styles.tools}>
@@ -3332,6 +3402,7 @@ const makeStyles = (colors: ThemeColors) =>
     caption: {
       color: colors.textTertiary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       paddingHorizontal: spacing.sm,
       paddingVertical: spacing.xs,
     },
@@ -3358,6 +3429,7 @@ const makeStyles = (colors: ThemeColors) =>
     waitingComputerName: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.semibold,
       textAlign: "center",
     },
@@ -3368,7 +3440,8 @@ const makeStyles = (colors: ThemeColors) =>
     },
     waitingLabel: {
       color: colors.textSecondary,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.regular,
       textAlign: "center",
     },
@@ -3385,7 +3458,8 @@ const makeStyles = (colors: ThemeColors) =>
     connectionLabel: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
-      fontWeight: fontWeight.semibold,
+      lineHeight: lineHeight.body,
+      fontWeight: fontWeight.medium,
     },
     actionRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
     viewOnly: {
@@ -3393,6 +3467,7 @@ const makeStyles = (colors: ThemeColors) =>
       alignSelf: "center",
       color: colors.textPrimary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       backgroundColor: colors.surfaceElevated,
       padding: spacing.xs,
       borderRadius: radius.control,
@@ -3428,7 +3503,7 @@ const makeStyles = (colors: ThemeColors) =>
       borderColor: colors.textPrimary,
     },
     disabled: { opacity: 0.4 },
-    buttonText: { color: colors.textPrimary, fontSize: typeScale.caption },
+    buttonText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
     keyboardOverlay: { position: "absolute", left: 0, right: 0 },
     keyboard: {
       backgroundColor: colors.surfaceTranslucent,
@@ -3446,7 +3521,7 @@ const makeStyles = (colors: ThemeColors) =>
       flex: 1,
       flexDirection: "row",
       backgroundColor: colors.surfaceChip,
-      borderRadius: radius.container,
+      borderRadius: radius.pill,
       padding: spacing.xs,
     },
     modeTab: {
@@ -3454,17 +3529,18 @@ const makeStyles = (colors: ThemeColors) =>
       minHeight: 36,
       alignItems: "center",
       justifyContent: "center",
-      borderRadius: radius.control,
+      borderRadius: radius.pill,
     },
     modeTabSelected: { backgroundColor: colors.surfaceElevated },
     modeText: {
-      fontSize: typeScale.listBody,
+      fontSize: typeScale.bodySmall,
+      lineHeight: lineHeight.bodySmall,
       fontWeight: fontWeight.regular,
       color: colors.textTertiary,
     },
+    // 选中只换色,字重保持与未选一致。
     modeTextSelected: {
       color: colors.textPrimary,
-      fontWeight: fontWeight.semibold,
     },
     closeKey: {
       width: 44,
@@ -3499,16 +3575,18 @@ const makeStyles = (colors: ThemeColors) =>
     modifierText: {
       color: colors.textPrimary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
     },
-    modifierTextSelected: { color: colors.surface },
+    modifierTextSelected: { color: colors.ctaText },
     keyPressed: { opacity: 0.55 },
     keyText: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
-    specialKeyText: { color: colors.textPrimary, fontSize: typeScale.caption },
+    specialKeyText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
     pageNavigation: {
       flexDirection: "row",
       justifyContent: "center",
@@ -3525,7 +3603,8 @@ const makeStyles = (colors: ThemeColors) =>
     pageLabel: {
       color: colors.textTertiary,
       fontSize: typeScale.caption,
-      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
     },
     pageLabelSelected: { color: colors.textPrimary },
     pageIndicator: {

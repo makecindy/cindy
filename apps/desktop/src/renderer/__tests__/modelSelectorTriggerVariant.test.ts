@@ -438,6 +438,8 @@ vi.mock('@/state/deviceLinkModelMirror', () => ({
 import {
   ModelSelector as SharedModelSelector,
   ModelSelectorContent as SharedModelSelectorContent,
+  UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX,
+  UNIFIED_COMPACT_PANEL_WIDTH_CLASS,
   modelCompactEffortLabel,
   modelEffortLabel,
   modelListMaxHeightForRows,
@@ -560,8 +562,8 @@ describe('ModelSelector trigger variants', () => {
     // 会把模型名压成 GPT-...，所以此时只保留当前模型的已隐藏标识。
     expect(modelTagDensityForWidth(320)).toBe('hidden');
     expect(modelTagDensityForWidth(370)).toBe('subscription');
-    expect(modelTagDensityForWidth(449)).toBe('subscription');
-    expect(modelTagDensityForWidth(450)).toBe('full');
+    expect(modelTagDensityForWidth(UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX)).toBe('subscription');
+    expect(modelTagDensityForWidth(UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX + 1)).toBe('full');
   });
 
   // 打开选择器既发起刷新、又把「发现在途」状态推给内容区(见 useModelDiscoveryPending),
@@ -915,12 +917,16 @@ describe('ModelSelector trigger variants', () => {
     };
     const view = render(React.createElement(ModelSelectorContent, props));
     let pane = view.container.querySelector('[data-unified-model-panel]') as HTMLElement;
-    expect(pane.className).toContain('max-w-[min(420px,calc(100vw-48px))]');
+    expect(UNIFIED_COMPACT_PANEL_WIDTH_CLASS).toContain(
+      `max-w-[min(${UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX}px,calc(100vw-48px))]`,
+    );
+    expect(pane.className).toContain(UNIFIED_COMPACT_PANEL_WIDTH_CLASS);
 
     view.rerender(React.createElement(ModelSelectorContent, { ...props, fluidWidth: true }));
     pane = view.container.querySelector('[data-unified-model-panel]') as HTMLElement;
     expect(pane.className).toContain('w-full min-w-0');
-    expect(pane.className).not.toContain('420px');
+    expect(pane.className).not.toContain(UNIFIED_COMPACT_PANEL_WIDTH_CLASS);
+    expect(pane.className).not.toContain(`${UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX}px`);
   });
 
   it('keeps the session Agent explicit when Claude Code uses an OpenAI-branded model', () => {

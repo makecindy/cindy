@@ -1,3 +1,4 @@
+import { sharedTaskGuestPeer } from '@cindy/device-link';
 /**
  * dispatchWeakNetwork.test.ts — 被控端弱网收尾行为契约。
  * -------------------------------------------------------------------------
@@ -13,11 +14,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DeviceLinkClient,
+  SHARED_TASK_CAPABILITY,
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   DL_SUBSCRIBE_CHANNEL,
   INVOKE_TIMEOUT_OVERRIDES_MS,
   PROTOCOL_VERSION,
+  TASK_MIGRATION_CHANNEL,
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
+  resolveRemoteInvokeTimeoutMs,
   type Envelope,
 } from '@cindy/device-link';
 
@@ -46,6 +51,12 @@ vi.mock('../../logger', async (importOriginal) => ({
 
 vi.mock('../settings-store', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
+}));
+const sharedTask = vi.hoisted(() => ({ refresh: vi.fn(), capture: vi.fn() }));
+vi.mock('../sharedTaskDispatch.js', async (original) => ({
+  ...await original<typeof import('../sharedTaskDispatch.js')>(),
+  refreshSharedTaskPeer: sharedTask.refresh,
+  captureSharedTaskPeer: sharedTask.capture,
 }));
 
 import {
@@ -237,6 +248,24 @@ afterEach(() => {
 });
 
 describe('[1] link-accept 发送失败的有限重试', () => {
+  it('refreshes first-join authority and ignores an older failed open after a newer success', async () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    const peer = sharedTaskGuestPeer('m', 'g', 'd');
+    const payload = { controllerName: 'Guest', protocolVersion: PROTOCOL_VERSION, appVersion: '0.0.0-test', capabilities: [SHARED_TASK_CAPABILITY] };
+    let rejectOld!: (error: Error) => void;
+    sharedTask.capture.mockReturnValue({ author: { displayName: 'Guest' } });
+    sharedTask.refresh.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectOld = reject; })).mockResolvedValue(undefined);
+    __testing.handleLinkOpen(client as never, peer, 'old', payload);
+    expect(client.sendLinkAccept).not.toHaveBeenCalled();
+    __testing.handleLinkOpen(client as never, peer, 'new', payload);
+    await Promise.resolve();
+    expect(client.sendLinkAccept).toHaveBeenCalledWith(peer, 'new', expect.anything());
+    rejectOld(new Error('old network failure'));
+    await Promise.resolve(); await Promise.resolve();
+    expect(client.closeLink).not.toHaveBeenCalled();
+    expect(client.sendLinkAccept).toHaveBeenCalledTimes(1);
+  });
   it('declares history projection support in the host accept, including for legacy controllers', () => {
     const client = mkClient();
     __testing.setActiveClient(client as never);
@@ -646,6 +675,38 @@ describe('[5] orphan 截止时间按 channel 收窄', () => {
     expect(__testing.remoteInvokeOrphanTimeoutForChannelMs('maker:compact-session')).toBe(
       compactBudget * 2,
     );
+  });
+
+  it('按与控制端相同的动作级预算给任务复制统计留足时间', () => {
+    const orphan = (action: string) =>
+      __testing.remoteInvokeOrphanTimeoutForChannelMs(TASK_MIGRATION_CHANNEL, [
+        { action, sessionId: 's' },
+      ]);
+    expect(orphan('estimate')).toBe(TASK_MIGRATION_ESTIMATE_TIMEOUT_MS * 2);
+    expect(orphan('status')).toBe(60_000);
+    // A reply that could not be sent is kept for the same action-specific window.
+    const outbox = (action: string) =>
+      __testing.outboxEntryMaxAgeMs(TASK_MIGRATION_CHANNEL, [{ action, sessionId: 's' }]);
+    expect(outbox('estimate')).toBe(TASK_MIGRATION_ESTIMATE_TIMEOUT_MS * 2);
+    expect(outbox('status')).toBe(60_000);
+  });
+
+  it('被控端从不早于控制端放弃：orphan 与 outbox 覆盖每个通道与动作的等待预算', () => {
+    const calls: Array<[string | undefined, unknown[] | undefined]> = [
+      [undefined, undefined],
+      ...Object.keys(INVOKE_TIMEOUT_OVERRIDES_MS).map(
+        (channel) => [channel, undefined] as [string, undefined],
+      ),
+      ...['estimate', 'receive', 'status', 'start', 'caps'].map(
+        (action) => [TASK_MIGRATION_CHANNEL, [{ action, sessionId: 's' }]] as [string, unknown[]],
+      ),
+    ];
+    for (const [channel, args] of calls) {
+      const budget =
+        (channel && resolveRemoteInvokeTimeoutMs(channel, args, 'desktop')) || 30_000;
+      expect(__testing.remoteInvokeOrphanTimeoutForChannelMs(channel, args)).toBeGreaterThanOrEqual(budget);
+      expect(__testing.outboxEntryMaxAgeMs(channel, args)).toBeGreaterThanOrEqual(budget);
+    }
   });
 });
 

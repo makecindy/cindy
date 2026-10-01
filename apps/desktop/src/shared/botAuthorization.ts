@@ -1,5 +1,6 @@
 import type { GhostSetupAllowedAction, GhostSetupStepPhase, GhostSetupErrorCode } from './ghost.js';
 export interface AuthorizationSnapshot {
+  remoteOauth?: true;
   reopenActionId?: string;
   kind: 'plugin_setup';
   requestId: string;

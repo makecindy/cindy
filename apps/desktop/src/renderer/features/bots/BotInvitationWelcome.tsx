@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
@@ -26,7 +27,10 @@ export function BotInvitationWelcome({ bot }: { bot: BotProfile }) {
         </p>
       </div>
       {stage === 'failed' ? (
-        <button
+        <Button
+          variant="secondary"
+          size="lg"
+          loading={retrying}
           type="button"
           disabled={retrying}
           onClick={() => {
@@ -36,11 +40,10 @@ export function BotInvitationWelcome({ bot }: { bot: BotProfile }) {
               .catch(() => setRetryFailed(true))
               .finally(() => setRetrying(false));
           }}
-          className="inline-flex h-9 items-center gap-2 rounded-full border border-[var(--border-default)] px-4 text-13 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
         >
           <RefreshCw size={14} />
           {t('commonUi.retry')}
-        </button>
+        </Button>
       ) : (
         <p
           className="flex items-center gap-2 text-13 text-[var(--text-primary)]"

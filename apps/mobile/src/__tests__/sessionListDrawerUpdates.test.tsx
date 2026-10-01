@@ -2,30 +2,22 @@ vi.mock('@/session/SessionOptionsExpoSheet', () => ({ SessionOptionsPresenter: (
 vi.mock('@/session/RenameSessionModal', () => ({ RenameSessionModal: () => null }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'test-owner' } }) }));
 // @vitest-environment jsdom
-import { act, type ReactNode } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SESSION_ACTIVITY_CHANNEL } from "@cindy/device-link";
-import { SessionListDrawer } from "@/session/SessionListDrawer";
-import { remoteSessionStore } from "@/session/remoteSessionStore";
-import { buildMobileHomePresentation } from "@/session/mobileHome";
-import { buildRemoteSessionCardPreview } from "@/session/sessionList";
-import { clearSessionScheduleIndexCache } from "@/session/scheduleIndex";
-import { remoteScheduleEventStore } from "@/scheduler/remoteScheduleEvents";
-import { i18n } from "@/i18n";
-import type { HomeRow, HomeSection } from "@/session/homeSections";
-import type { RemoteMessage, RemoteSession } from "@/session/types";
-
-// Keep React, the store, search hook and presentation real. Only native views/gestures are
-// replaced: assertions observe committed rows and count actual presentation executions.
-const native = vi.hoisted(() => ({
-  sections: [] as HomeSection[],
-  search: { query: "", onChangeQuery: (_value: string) => {} },
-  invoke: vi.fn(),
-  appState: 'active',
-  appStateListeners: new Set<(state: string) => void>(),
-}));
-
+import { act, type ReactNode } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SessionListDrawer } from '@/session/SessionListDrawer';
+import { motionDuration } from '@/theme/tokens';
+import type { MobileHomeProps } from '@/session/HomeSurface';
+const native = vi.hoisted(() => ({ home: null as MobileHomeProps | null, mounts: 0, unmounts: 0, reduceMotion: true }));
+vi.mock('@/session/HomeSurface', async () => {
+  const { useEffect } = await import('react');
+  return { MobileHome: (props: MobileHomeProps) => {
+    native.home = props;
+    useEffect(() => { native.mounts++; return () => { native.unmounts++; }; }, []);
+    return null;
+  } };
+});
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock("react-native", async () => {
   const { createElement } = await import("react");
   type Props = {
@@ -55,30 +47,11 @@ vi.mock("react-native", async () => {
   return {
     View,
     Pressable: View,
-    SectionList: ({
-      sections,
-      renderItem,
-    }: {
-      sections: HomeSection[];
-      renderItem: (info: { item: HomeRow }) => ReactNode;
-    }) => {
-      native.sections = sections;
-      return createElement(
-        "div",
-        {},
-        sections.flatMap((section) =>
-          section.data.map((item) =>
-            createElement("div", { key: item.key }, renderItem({ item })),
-          ),
-        ),
-      );
-    },
     AccessibilityInfo: { setAccessibilityFocus: vi.fn() },
     AppState: {
-      get currentState() { return native.appState; },
+      get currentState() { return 'active'; },
       addEventListener: (_event: string, listener: (state: string) => void) => {
-        native.appStateListeners.add(listener);
-        return { remove: () => native.appStateListeners.delete(listener) };
+        return { remove() {} };
       },
     },
     BackHandler: { addEventListener: () => ({ remove() {} }) },
@@ -113,6 +86,7 @@ vi.mock("@/platform/gestureHandler", () => ({
   Gesture: {
     Pan: () => {
       const chain = {
+        enabled: () => chain,
         activeOffsetX: () => chain,
         failOffsetX: () => chain,
         failOffsetY: () => chain,
@@ -124,6 +98,7 @@ vi.mock("@/platform/gestureHandler", () => ({
   },
 }));
 vi.mock("lucide-react-native", () => ({
+  ChevronDown: () => null, ChevronRight: () => null, Folder: () => null, FolderOpen: () => null, MessagesSquare: () => null,
   House: () => null,
   LoaderCircle: () => null,
   SquarePen: () => null,
@@ -139,413 +114,81 @@ vi.mock("@/theme", () => ({
   useTheme: () => ({ colors: {} }),
 }));
 vi.mock("@/hooks/useReduceMotion", () => ({
-  useReduceMotionEnabled: () => true,
+  useReduceMotionEnabled: () => native.reduceMotion,
 }));
-vi.mock("@/session/HomeSearchBar", () => ({
-  HomeSearchBar: (props: typeof native.search) => {
-    native.search = props;
-    return null;
-  },
-}));
-vi.mock("@/session/ConversationSearchFilterSheet", () => ({
-  ConversationSearchFilterSheet: () => null,
-}));
-vi.mock("@/device-link/DeviceLinkContext", () => ({
-  useDeviceLink: () => ({ invoke: native.invoke }),
-}));
-vi.mock("@/session/mobileHome", async (importOriginal) => {
-  const original =
-    await importOriginal<typeof import("@/session/mobileHome")>();
-  return {
-    ...original,
-    buildMobileHomePresentation: vi.fn(original.buildMobileHomePresentation),
-  };
-});
-vi.mock("@/session/sessionList", async (importOriginal) => {
-  const original =
-    await importOriginal<typeof import("@/session/sessionList")>();
-  return {
-    ...original,
-    buildRemoteSessionCardPreview: vi.fn(
-      original.buildRemoteSessionCardPreview,
-    ),
-  };
-});
 
-function session(
-  id: string,
-  patch: Partial<RemoteSession> = {},
-): RemoteSession {
-  return {
-    id,
-    userId: "user",
-    title: id,
-    workingDir: "/repo",
-    workspaceKind: "project",
-    model: "claude",
-    effort: "medium",
-    permissionMode: "default",
-    fastMode: false,
-    status: "active",
-    agentKind: "cc",
-    userSendAt: null,
-    createdAt: "2026-09-01T00:00:00.000Z",
-    updatedAt: "2026-09-01T00:00:00.000Z",
-    ...patch,
-  };
-}
-
-function message(sessionId: string, content: string): RemoteMessage {
-  return {
-    id: `m-${sessionId}`,
-    clientId: `m-${sessionId}`,
-    sessionId,
-    role: "assistant",
-    content,
-    toolUseId: null,
-    agentMeta: null,
-    createdAt: "2026-09-01T00:00:01.000Z",
-  };
-}
-
-function delta(sessionId: string, text: string) {
-  remoteSessionStore.applyRemotePush("dev-1", "maker:event", {
-    sessionId,
-    persistId: `live-${sessionId}`,
-    event: { type: "text", data: { text, isFinal: false } },
-  });
-}
-
-describe("drawer selective updates", () => {
+describe('shared Home drawer host', () => {
   let root: Root;
   let container: HTMLDivElement;
-  const onSelect = vi.fn();
-  const onClosed = vi.fn();
-  const props = {
-    currentSessionId: "s1",
-    onClose() {},
-    onClosed,
-    onGoHome() {},
-    onNewSession() {},
-    onSelectSession: onSelect,
-    open: true,
-    width: 360,
-  };
-  const render = async (open = true) => {
-    await act(async () =>
-      root.render(<SessionListDrawer {...props} open={open} />),
-    );
-  };
-  const row = (id: string) =>
-    container.querySelector(`[data-testid="sessionDrawer.row.${id}"]`);
-  const status = (id: string, value: string) =>
-    container.querySelector(
-      `[data-testid="sessionDrawer.rowStatus.${value}.${id}"]`,
-    );
-  const tick = async (ms: number) => {
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(ms);
-    });
-  };
-
-  beforeEach(async () => {
-    native.appState = 'active';
-    native.appStateListeners.clear();
-    clearSessionScheduleIndexCache();
-    remoteScheduleEventStore.clearAll();
+  const props = { currentSessionId: 's1', onClose: vi.fn(), onClosed: vi.fn(),
+    onSelectSession: vi.fn(), runNavigation: vi.fn((action: () => void) => action()), open: true, width: 320 };
+  beforeEach(() => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    native.home = null; native.mounts = 0; native.unmounts = 0;
+    native.reduceMotion = true;
+    vi.clearAllMocks();
     vi.useFakeTimers();
-    remoteSessionStore.clear();
-    native.invoke
-      .mockReset()
-      .mockResolvedValue({
-        query: "needle",
-        results: [],
-        vectorUsed: false,
-        vectorSkipReason: null,
-        poolCapped: false,
-      });
-    onSelect.mockClear();
-    onClosed.mockClear();
-    await i18n.changeLanguage("zh-CN");
-    container = document.createElement("div");
-    document.body.appendChild(container);
-    root = createRoot(container);
-    remoteSessionStore.setDeviceIdentity([
-      { deviceId: "dev-1", name: "Studio" },
-    ]);
-    remoteSessionStore.setConversationSearchDeviceModels([
-      { deviceId: "dev-1", name: "Studio", canOpen: true, state: "ready" },
-    ]);
-    remoteSessionStore.setDeviceSessions("dev-1", "Studio", [
-      session("s1"),
-      session("s2"),
-    ]);
+    container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
   });
-
-  afterEach(async () => {
-    await act(async () => root.unmount());
-    container.remove();
-    remoteSessionStore.clear();
-    vi.clearAllTimers();
-    vi.useRealTimers();
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); });
+  it('unmounts the invisible blocker even when the animation never calls completion', async () => {
+    native.reduceMotion = false;
+    await act(async () => root.render(<SessionListDrawer {...props} />));
+    await act(async () => root.render(<SessionListDrawer {...props} open={false} />));
+    expect(container.querySelector('[data-testid="sessionDrawer.overlay"]')).not.toBeNull();
+    expect(props.onClosed).not.toHaveBeenCalled();
+    // withTiming deliberately never delivers a completion in this test driver.
+    await act(async () => vi.advanceTimersByTime(motionDuration.exit));
+    expect(container.querySelector('[data-testid="sessionDrawer.overlay"]')).toBeNull();
+    expect(native.unmounts).toBe(1);
+    expect(props.onClosed).toHaveBeenCalledOnce();
   });
-
-  it("updates only the changed preview without rebuilding sections, including a parent rerender", async () => {
-    remoteSessionStore.setDeviceSessions(
-      "dev-1",
-      "Studio",
-      Array.from({ length: 40 }, (_, i) => session(`s${i + 1}`)),
-    );
-    remoteSessionStore.setMessages("s2", [message("s2", "unchanged preview")]);
-    await render();
-    const sections = native.sections;
-    vi.mocked(buildMobileHomePresentation).mockClear();
-    vi.mocked(buildRemoteSessionCardPreview).mockClear();
-    await act(async () => delta("s1", "first"));
-    await tick(100);
-    await act(async () => delta("s1", " second"));
-    await tick(100);
-    for (let index = 0; index < 98; index += 1) {
-      await act(async () => delta("s1", "."));
-      await tick(100);
-    }
-    expect(row("s1")?.textContent).toContain("first second");
-    expect(row("s2")?.textContent).toContain("unchanged preview");
-    expect(native.sections).toBe(sections);
-    expect(buildMobileHomePresentation).not.toHaveBeenCalled();
-    expect(buildRemoteSessionCardPreview).toHaveBeenCalled();
-    expect(
-      vi
-        .mocked(buildRemoteSessionCardPreview)
-        .mock.calls.every(([item]) => item.session.id === "s1"),
-    ).toBe(true);
-    await render(); // The surrounding session screen itself still renders while streaming.
-    expect(buildMobileHomePresentation).not.toHaveBeenCalled();
-    expect(native.sections).toBe(sections);
+  it('cancels pending close settlement when reopened, then closes the new presentation once', async () => {
+    native.reduceMotion = false;
+    await act(async () => root.render(<SessionListDrawer {...props} />));
+    await act(async () => root.render(<SessionListDrawer {...props} open={false} />));
+    await act(async () => vi.advanceTimersByTime(motionDuration.exit / 2));
+    await act(async () => root.render(<SessionListDrawer {...props} />));
+    await act(async () => vi.advanceTimersByTime(motionDuration.exit));
+    expect(container.querySelector('[data-testid="sessionDrawer.overlay"]')).not.toBeNull();
+    expect(props.onClosed).not.toHaveBeenCalled();
+    await act(async () => root.render(<SessionListDrawer {...props} open={false} />));
+    await act(async () => vi.advanceTimersByTime(motionDuration.exit));
+    expect(props.onClosed).toHaveBeenCalledOnce();
+    expect(native.unmounts).toBe(1);
   });
-
-  it("falls back to the host preview when loaded messages are cleared", async () => {
-    remoteSessionStore.setDeviceSessions("dev-1", "Studio", [
-      session("s1", { preview: "host preview" }),
-      session("s2"),
-    ]);
-    await render();
-    expect(row("s1")?.textContent).toContain("host preview");
-    await act(async () => {
-      remoteSessionStore.setMessages("s1", [message("s1", "loaded preview")]);
-    });
-    expect(row("s1")?.textContent).toContain("host preview");
-    await act(async () => {
-      remoteSessionStore.markSessionMessagesSynced(
-        "s1",
-        session("s1", { preview: "host preview" }),
-      );
-    });
-    expect(row("s1")?.textContent).toContain("loaded preview");
-    await act(async () => remoteSessionStore.setMessages("s1", []));
-    expect(row("s1")?.textContent).toContain("host preview");
-    expect(row("s1")?.textContent).not.toContain("loaded preview");
+  it('hosts the complete Home with container width, selection and the navigation coordinator', async () => {
+    await act(async () => root.render(<SessionListDrawer {...props} persistent newSessionInSystemBar />));
+    expect(native.home).toMatchObject({ width: 320, currentSessionId: 's1', newSessionInSystemBar: true,
+      onSelectSession: props.onSelectSession, runNavigation: props.runNavigation });
+    expect(container.querySelector('[data-testid="sessionDrawer.home"]')).toBeNull();
+    expect(container.querySelector('[data-testid="sessionDrawer.scrim"]')).toBeNull();
   });
-
-  it("keeps pending, running, error and completed indicators current", async () => {
-    await render();
-    await act(async () => remoteSessionStore.setSessionRunning("s1", true));
-    expect(status("s1", "running")).not.toBeNull();
-    await act(async () =>
-      remoteSessionStore.setPendingInteractions("s1", [
-        { request: { kind: "permission", requestId: "p1" } },
-      ]),
-    );
-    expect(status("s1", "awaiting")).not.toBeNull();
-    await act(async () => remoteSessionStore.setPendingInteractions("s1", []));
-    expect(status("s1", "running")).not.toBeNull();
-    for (const [phase, rightStatus] of [
-      ["error", "error"],
-      ["completed", "done"],
-    ] as const) {
-      await act(async () =>
-        remoteSessionStore.applyRemotePush("dev-1", SESSION_ACTIVITY_CHANNEL, {
-          sessionId: "s1",
-          phase,
-          compactDetail: phase,
-          attention: true,
-        }),
-      );
-      expect(status("s1", rightStatus)).not.toBeNull();
-    }
+  it('uses the Home leading close action and has no home footer in the temporary panel', async () => {
+    await act(async () => root.render(<SessionListDrawer {...props} />));
+    expect(container.querySelector('[data-testid="sessionDrawer.home"]')).toBeNull();
+    expect(native.home?.onDismiss).toBe(props.onClose);
+    await act(async () => native.home?.onDismiss?.());
+    expect(props.onClose).toHaveBeenCalledOnce();
   });
-
-  it("keeps the latest group run for an older waiting interaction, matching desktop", async () => {
-    remoteSessionStore.setDeviceSessions("dev-1", "Studio", [
-      session("old", { source: "scheduler", title: "daily" }),
-      session("new", {
-        source: "scheduler",
-        title: "daily",
-        updatedAt: "2026-09-02T00:00:00.000Z",
-      }),
-    ]);
-    // Schedule histories are intentionally retained only while their detail is in use.
-    remoteSessionStore.enterSessionMessageDetail("old");
-    remoteSessionStore.enterSessionMessageDetail("new");
-    remoteSessionStore.setMessages("old", [message("old", "older run")]);
-    remoteSessionStore.setMessages("new", [message("new", "newer run")]);
-    await render();
-    expect(row("new")?.textContent).toContain("newer run");
-    await act(async () =>
-      remoteSessionStore.setPendingInteractions("old", [
-        { request: { kind: "ask_user_question", requestId: "question" } },
-      ]),
-    );
-    expect(row("old")).toBeNull();
-    expect(row("new")?.textContent).toContain("newer run");
-    await act(async () => (row("new") as HTMLElement).click());
-    expect(onSelect.mock.calls.at(-1)?.[0].session.id).toBe("new");
-    await act(async () => remoteSessionStore.setPendingInteractions("old", []));
-    expect(row("new")?.textContent).toContain("newer run");
+  it('keeps Home mounted while changing task, width, or drawer presentation', async () => {
+    await act(async () => root.render(<SessionListDrawer {...props} persistent />));
+    await act(async () => root.render(<SessionListDrawer {...props} currentSessionId="s2" width={360} persistent={false} />));
+    expect(native.home).toMatchObject({ width: 360, currentSessionId: 's2' });
+    expect(native.mounts).toBe(1); expect(native.unmounts).toBe(0);
   });
-
-  it("refreshes failed unread from the lightweight host index when read elsewhere", async () => {
-    let readAt: number | undefined;
-    native.invoke.mockImplementation(async (_device, channel) => {
-      if (channel === 'maker:schedule:list') return [{ id: 'auto', name: 'auto', status: 'active', targetSessionId: 's1' }];
-      expect(channel).toBe("maker:schedule:list-sidebar-index-runs");
-      return { runs: [{ sessionId: "s1", scheduleId: "auto", runId: "run", scheduleName: "auto", scheduleStatus: "active", status: "failed", firedAt: 1, readAt }] };
-    });
-    await render();
-    expect(status("s1", "error")).not.toBeNull();
-    readAt = 10;
-    await act(async () => remoteScheduleEventStore.apply("dev-1", { type: "read", scheduleId: "auto" }));
-    expect(status("s1", "error")).toBeNull();
-    expect(native.invoke).toHaveBeenCalledTimes(4);
+  it('collapses a persistent column without a modal exit or a leftover scrim', async () => {
+    await act(async () => root.render(<SessionListDrawer {...props} persistent />));
+    await act(async () => root.render(<SessionListDrawer {...props} persistent={false} open={false} />));
+    expect(container.querySelector('[data-testid="sessionDrawer.overlay"]')).toBeNull();
+    expect(props.onClosed).not.toHaveBeenCalled();
+    expect(native.unmounts).toBe(1);
   });
-
-  it('does not retry or start schedule scans in the background and refreshes on return', async () => {
-    native.invoke.mockRejectedValue(new Error('[INVOKE_TIMEOUT] timeout'));
-    await render();
-    expect(native.invoke).toHaveBeenCalledTimes(1);
-    native.appState = 'background';
-    await act(async () => native.appStateListeners.forEach((listener) => listener('background')));
-    await tick(5000);
-    await act(async () => remoteScheduleEventStore.apply('dev-1', { type: 'read', scheduleId: 'auto' }));
-    expect(native.invoke).toHaveBeenCalledTimes(1);
-    native.invoke.mockImplementation(async (_device, channel) => channel === 'maker:schedule:list' ? [] : { runs: [] });
-    native.appState = 'active';
-    await act(async () => native.appStateListeners.forEach((listener) => listener('active')));
-    expect(native.invoke).toHaveBeenCalledTimes(3);
-  });
-
-  it("refreshes device search reachability without a session-array change", async () => {
-    remoteSessionStore.setConversationSearchDeviceModels([
-      { deviceId: "dev-1", name: "Studio", canOpen: false, state: "offline" },
-    ]);
-    await render();
-    await act(async () => native.search.onChangeQuery("needle"));
-    await tick(300);
-    expect(native.invoke.mock.calls.filter((call) => call[1] === "local-db:conversations:search")).toHaveLength(0);
-    const sessions = remoteSessionStore.getSessions();
-    await act(async () =>
-      remoteSessionStore.setConversationSearchDeviceModels([
-        { deviceId: "dev-1", name: "Studio", canOpen: true, state: "ready" },
-      ]),
-    );
-    expect(remoteSessionStore.getSessions()).toBe(sessions);
-    await tick(300);
-    expect(native.invoke.mock.calls.filter((call) => call[1] === "local-db:conversations:search")).toHaveLength(1);
-    expect(native.invoke.mock.calls.find((call) => call[1] === "local-db:conversations:search")?.slice(0, 2)).toEqual([
-      "dev-1",
-      "local-db:conversations:search",
-    ]);
-  });
-
-  it("refreshes device identity even when no session changes, with a stable empty snapshot", async () => {
-    remoteSessionStore.clear();
-    expect(remoteSessionStore.getDeviceIdentity()).toBe(
-      remoteSessionStore.getDeviceIdentity(),
-    );
-    await render();
-    const sessions = remoteSessionStore.getSessions();
-    vi.mocked(buildMobileHomePresentation).mockClear();
-    await act(async () =>
-      remoteSessionStore.setDeviceIdentity([
-        { deviceId: "empty-device", name: "Renamed" },
-      ]),
-    );
-    expect(remoteSessionStore.getSessions()).toBe(sessions);
-    expect(
-      vi.mocked(buildMobileHomePresentation).mock.calls.at(-1)?.[0].devices,
-    ).toEqual([{ deviceId: "empty-device", name: "Renamed" }]);
-  });
-
-  it("matches loaded text during search debounce without restarting the indexed request on each delta", async () => {
-    await render();
-    await act(async () => native.search.onChangeQuery("needle"));
-    expect(row("s1")).toBeNull();
-    await tick(100);
-    await act(async () => delta("s1", "needle"));
-    await tick(100);
-    expect(row("s1")?.textContent).toContain("needle");
-    await act(async () => delta("s1", " more"));
-    await tick(100);
-    expect(native.invoke.mock.calls.filter((call) => call[1] === "local-db:conversations:search")).toHaveLength(1);
-    await tick(300);
-    expect(native.invoke.mock.calls.filter((call) => call[1] === "local-db:conversations:search")).toHaveLength(1);
-  });
-
-  it("preserves indexed hit snippets and message focus while newer loaded messages arrive", async () => {
-    const contentHit = {
-      messageClientId: "hit-message",
-      preview: "needle in old message",
-      role: "assistant",
-      createdAt: "2026-09-01T00:00:01.000Z",
-    };
-    native.invoke.mockResolvedValue({
-      query: "needle",
-      results: [
-        {
-          session: session("s1"),
-          matchKind: "content",
-          titleMatchIndices: [],
-          titleScore: 0,
-          contentHit,
-          contentHits: [contentHit],
-          rankScore: 10,
-        },
-      ],
-      vectorUsed: false,
-      vectorSkipReason: null,
-      poolCapped: false,
-    });
-    remoteSessionStore.setMessages("s1", [
-      message("s1", "latest unrelated message"),
-    ]);
-    await render();
-    await act(async () => native.search.onChangeQuery("needle"));
-    await tick(300);
-    expect(row("s1")?.textContent).toContain("needle in old message");
-    await act(async () =>
-      remoteSessionStore.setMessages("s1", [
-        message("s1", "even newer unrelated message"),
-      ]),
-    );
-    expect(row("s1")?.textContent).toContain("needle in old message");
-    await act(async () => (row("s1") as HTMLElement).click());
-    expect(onSelect.mock.calls.at(-1)?.[0].searchFocusClientId).toBe(
-      "hit-message",
-    );
-  });
-
-  it("reads current previews when reopened and keeps the active selection and close callback", async () => {
-    await render();
-    await render(false);
-    expect(onClosed).toHaveBeenCalledTimes(1);
-    vi.mocked(buildMobileHomePresentation).mockClear();
-    await act(async () => delta("s1", "received while closed"));
-    await tick(100);
-    expect(row("s1")).toBeNull();
-    expect(buildMobileHomePresentation).not.toHaveBeenCalled();
-    await render();
-    expect(row("s1")?.textContent).toContain("received while closed");
-    expect(row("s1")?.getAttribute("aria-selected")).toBe("true");
+  it('finishes an overlay exit after unmount so queued navigation cannot race its native views', async () => {
+    await act(async () => root.render(<SessionListDrawer {...props} />));
+    await act(async () => root.render(<SessionListDrawer {...props} open={false} />));
+    expect(native.unmounts).toBe(1);
+    expect(props.onClosed).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[data-testid="sessionDrawer.overlay"]')).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { AppState, Linking, Platform } from 'react-native';
 import { useRouter, useSegments } from 'expo-router';
 
@@ -19,6 +19,7 @@ export function IncomingShareBridge() {
   const router = useRouter();
   const segments = useSegments();
   const batch = useIncomingShareBatch();
+  const presentedBatchId = useRef<string | null>(null);
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
     let active = true;
@@ -35,8 +36,8 @@ export function IncomingShareBridge() {
           .then(() => {
             if (!active) return;
             // Sweep before staging, so an expired native copy cannot start a new
-            // upload concurrently with deletion. Missing copies use the existing
-            // upload error path; the user can share the original again.
+            // upload concurrently with deletion. The native adapter filters missing
+            // copies before they can trigger navigation.
             try {
               receiveIncomingShare(sharing);
             } catch {
@@ -61,15 +62,25 @@ export function IncomingShareBridge() {
   }, []);
 
   useEffect(() => {
+    if (!batch) {
+      presentedBatchId.current = null;
+      return;
+    }
     if (
-      !batch
-      || !auth.initialized
+      !auth.initialized
       || !auth.isAuthenticated
       || segments[0] === '(auth)'
-      || segments.join('/') === 'sessions/new'
+      || presentedBatchId.current === batch.id
     ) {
       return;
     }
+    if (segments.join('/') === 'sessions/new') {
+      presentedBatchId.current = batch.id;
+      return;
+    }
+    // A storage error leaves the batch pending. Let the user leave the error
+    // screen and return to retry instead of repeatedly forcing it back open.
+    presentedBatchId.current = batch.id;
     router.navigate('/sessions/new');
   }, [auth.initialized, auth.isAuthenticated, batch, router, segments]);
 

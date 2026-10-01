@@ -145,6 +145,62 @@ describe('typography token discipline', () => {
     expect(violations).toEqual([]);
   });
 
+  it('pairs every text style that sets a fontSize token with a lineHeight (2026-09-27)', () => {
+    // 行高收拢后每个文字样式都必须成对配行高,否则中英混排行距会忽松忽紧。
+    // 豁免:TextInput 上的样式(iOS 设行高会让占位字与光标偏位)、登录品牌画布(已登记例外)。
+    const LOGIN_CANVAS = [/^app\/\(auth\)\/login\.tsx$/, /^src\/components\/LoginSkinControls\.tsx$/];
+    const violations: string[] = [];
+    for (const rel of files) {
+      if (!rel.endsWith('.tsx') || LOGIN_CANVAS.some((re) => re.test(rel))) continue;
+      const source = readFileSync(join(ROOT, rel), 'utf8');
+      const inputKeys = new Set<string>();
+      for (const tag of source.matchAll(/<TextInput\b[\s\S]*?\/>/g)) {
+        for (const key of tag[0].matchAll(/styles\.(\w+)/g)) inputKeys.add(key[1]);
+      }
+      for (const block of source.matchAll(/(?:const\s+)?(\w+)(?::|\s*=)\s*\{([^{}]*)\}/g)) {
+        const [, key, body] = block;
+        if (!/fontSize:\s*typeScale\.\w+/.test(body) || /textStyles\./.test(body)) continue;
+        if (/\blineHeight\s*:/.test(body)) continue;
+        if (inputKeys.has(key) || /input|Input|editor|Editor/.test(key)) continue;
+        violations.push(`${rel}: ${key} sets fontSize without lineHeight`);
+      }
+      for (const inline of source.matchAll(/<(\w+)\b[^<>]*?style=\{\{([^{}]*)\}\}/g)) {
+        const [, tag, body] = inline;
+        if (tag === 'TextInput' || !/fontSize:\s*typeScale\.\w+/.test(body)) continue;
+        if (!/\blineHeight\s*:/.test(body)) violations.push(`${rel}: inline <${tag}> style sets fontSize without lineHeight`);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it('keeps lighter text colors on lighter weights (2026-09-26 role rules)', () => {
+    // 颜色越浅,字重不能越粗(mobile-design-guide.md §3):
+    // - textTertiary 只配 regular;分组小标签(eyebrow / 区块标题 / 类别标签)可用 semibold;
+    // - textSecondary 只配 regular / medium;chip 底上的徽标与字母标记可用 semibold。
+    // 例外靠样式名识别:新增分组小标签或徽标时请沿用下列命名,不要为消红灯改成其它颜色。
+    const GROUP_LABEL = /eyebrow|Eyebrow|section(Title|Label)|Section(Title|Label)|group(Title|Label)|Group(Title|Label)|^heading$|^kind$|Kind$|OutlineLabel|^headerTitle$|peopleTitle/;
+    const BADGE = /badge|Badge|monogram|Monogram/;
+    const LOGIN_CANVAS = [/^app\/\(auth\)\/login\.tsx$/, /^src\/components\/LoginSkinControls\.tsx$/];
+    const violations: string[] = [];
+    for (const rel of files) {
+      if (!rel.endsWith('.tsx') || LOGIN_CANVAS.some((re) => re.test(rel))) continue;
+      const source = readFileSync(join(ROOT, rel), 'utf8');
+      for (const block of source.matchAll(/(?:const\s+)?(\w+)(?::|\s*=)\s*\{([^{}]*)\}/g)) {
+        const [, key, body] = block;
+        const color = body.match(/\bcolor:\s*(?:colors|c)\.(\w+)/)?.[1];
+        const weight = body.match(/fontWeight\.(\w+)/)?.[1];
+        if (!color || !weight) continue;
+        if (color === 'textTertiary' && weight !== 'regular' && !(weight === 'semibold' && GROUP_LABEL.test(key))) {
+          violations.push(`${rel}: ${key} pairs textTertiary with ${weight}`);
+        }
+        if (color === 'textSecondary' && (weight === 'semibold' || weight === 'bold') && !(weight === 'semibold' && BADGE.test(key))) {
+          violations.push(`${rel}: ${key} pairs textSecondary with ${weight}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
   it('keeps textStyles presets composed from the typeScale / lineHeight ladders', () => {
     const sizes = new Set<number>(Object.values(typeScale));
     const heights = new Set<number>(Object.values(lineHeight));

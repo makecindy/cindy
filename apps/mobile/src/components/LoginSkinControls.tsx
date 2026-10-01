@@ -33,12 +33,14 @@ import {
 } from '@/auth/loginSkinLayout';
 import { parseLegalSegments } from '@/auth/legalText';
 import { Text, TextInput } from '@/components/AppText';
+import { hasNativeLoginButtons, LoginNativeButton } from './LoginNativeButton';
 import { useTheme, useThemedStyles } from '@/theme';
-import { fontWeight, loginSizes, radius, type ThemeColors } from '@/theme/tokens';
+import { fontWeight, loginSizes, motionDuration, radius, type ThemeColors } from '@/theme/tokens';
 
 /**
- * LoginSkinControls —— 移动端登录皮肤组件库(figma-component-spec §4 RN 重建,
- * PR4a Step 5 WHAT2;与桌面 LoginControls.tsx 同参数源对齐)。
+ * LoginSkinControls —— 登录布局与跨平台入口。iOS 按钮交给 LoginNativeButton，
+ * 共用应用的原生玻璃样式、SwiftUI 点击反馈与 ProgressView；以下手绘态系仅为
+ * 非 iOS 回退。输入框、协议勾选与内联法律链接仍沿用 RN 实现。
  *
  * 态系(design.md §2,移动无 hover):
  *  - pressed = 叠遮罩不改布局:主钮/圆钮亮色叠黑 50% / 暗色叠黑 10%(figma
@@ -271,6 +273,10 @@ function ConsentDialogButton({
   const B = LOGIN_CONSENT_DIALOG.button;
   const [pressed, setPressed] = useState(false);
   const primary = kind === 'primary';
+  if (hasNativeLoginButtons) return <LoginNativeButton label={label} onPress={onPress}
+    testID={testID} variant={primary ? 'primary' : 'secondary'}
+    width={B.width} height={B.height} fontSize={B.font}
+    style={{ position: 'absolute', left: x, top: B.y }} />;
   return (
     <Pressable
       accessibilityRole="button"
@@ -598,6 +604,10 @@ export function LoginSsoOrgHistoryList({
       >
         {entries.map((entry, index) => {
           const selected = entry.toLowerCase() === selectedKey;
+          if (hasNativeLoginButtons) return <LoginNativeButton key={entry.toLowerCase()}
+            label={entry} onPress={() => onSelect(entry)} selected={selected} variant="text"
+            width={LOGIN_SSO_ORG_HISTORY.width} height={LOGIN_SSO_ORG_HISTORY.rowMinHeight}
+            fontSize={LOGIN_SSO_ORG_HISTORY.font} testID={`login.ssoOrgHistoryOption.${index}`} />;
           return (
             <Pressable
               accessibilityRole="menuitem"
@@ -738,7 +748,7 @@ function SpinBox({ box, children }: { box: number; children: ReactNode }) {
   useEffect(() => {
     const loop = Animated.loop(
       Animated.timing(spin, {
-        duration: 900,
+        duration: motionDuration.spinnerCycle,
         easing: Easing.linear,
         toValue: 1,
         useNativeDriver: true,
@@ -781,6 +791,10 @@ export function LoginPrimaryButton({
   const inert = disabled || busy;
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
+  if (hasNativeLoginButtons) return <LoginNativeButton label={label} onPress={onPress}
+    disabled={disabled} busy={busy} testID={testID} variant="primary"
+    width={LOGIN_CONTROL.width} height={LOGIN_CONTROL.height} fontSize={LOGIN_CONTROL.font}
+    style={{ position: 'absolute', left: LOGIN_CONTROL.x, top }} />;
   return (
     <Pressable
       accessibilityRole="button"
@@ -885,6 +899,7 @@ export function LoginSocialButton({
    * 圆钮无 disabled 视觉态(§10 拍板 2026-07-21 移除 loading/disabled 态),视觉/交互态不变;
    * 交互 guard 由调用方 onPress 闭包兜(login.tsx SC-SOC-7:`if (disabled) return`),
    * 与本组件对称的桌面 LoginSocialButton `aria-disabled` 语义一致。
+   * iOS 原生路径同时禁用 Button，阻止飞行中的重复激活，保留品牌图标。
    */
   busy?: boolean;
   /** 'apple' = ADR 官方配色圆钮(纯黑/白底 appleCircleBg、无描边 borderWidth 0);
@@ -895,6 +910,10 @@ export function LoginSocialButton({
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const isApple = variant === 'apple';
+  if (hasNativeLoginButtons) return <LoginNativeButton label={label} onPress={onPress}
+    disabled={busy} testID={testID} variant="circle"
+    width={LOGIN_SOCIAL.size} height={LOGIN_SOCIAL.size} fontSize={LOGIN_CONTROL.font}
+    artworkSize={LOGIN_SOCIAL.icon}>{children}</LoginNativeButton>;
   return (
     <Pressable
       accessibilityLabel={label}
@@ -942,6 +961,14 @@ export function LoginBackButton({
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
+  if (hasNativeLoginButtons) return <LoginNativeButton label={label} onPress={onPress}
+    disabled={disabled} testID={testID} width={LOGIN_BACK.size} height={LOGIN_BACK.size}
+    fontSize={LOGIN_BACK.icon} artworkSize={LOGIN_BACK.icon}
+    style={{ position: 'absolute', left: LOGIN_BACK.x, top: LOGIN_BACK.y, zIndex: 2 }}>
+    <Svg width={LOGIN_BACK.icon} height={LOGIN_BACK.icon} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <Path d="M14.5 5.5 8 12l6.5 6.5" stroke={colors.textPrimary} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  </LoginNativeButton>;
   return (
     <Pressable
       accessibilityLabel={label}
@@ -1030,6 +1057,29 @@ export function LoginMethodRow({
   accessibilityLabel?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const rowContent = <View
+    pointerEvents="none"
+    style={[StyleSheet.absoluteFill, disabled && styles.disabledText]}
+  >
+    <View style={icon === 'person' ? styles.methodRowPersonIcon : styles.methodRowLeftIcon}>
+      {icon === 'person' ? <PersonIcon /> : <EnterpriseIcon />}
+    </View>
+    <View style={styles.methodRowTextBox}>
+      <Text
+        numberOfLines={1}
+        style={[styles.methodRowTitle, disabled && styles.methodRowDisabledTitle]}
+      >
+        {title}
+      </Text>
+      {subtitle != null ? <Text numberOfLines={1} style={styles.methodRowSubtitle}>{subtitle}</Text> : null}
+    </View>
+    <View style={styles.methodRowRightIcon}><ShareIcon /></View>
+  </View>;
+  if (hasNativeLoginButtons) return <LoginNativeButton label={title}
+    accessibilityLabel={accessibilityLabel} content={rowContent}
+    onPress={onPress} disabled={disabled} testID={testID}
+    width={LOGIN_METHOD_ROW.width} height={LOGIN_METHOD_ROW.height} fontSize={LOGIN_METHOD_ROW.titleFont}
+    style={{ position: 'absolute', left: LOGIN_METHOD_ROW.x, top }} />;
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel ?? title}
@@ -1042,28 +1092,7 @@ export function LoginMethodRow({
     >
       {({ pressed }) => (
         <>
-          <View
-            style={
-              icon === 'person'
-                ? styles.methodRowPersonIcon
-                : styles.methodRowLeftIcon
-            }
-          >
-            {icon === 'person' ? <PersonIcon /> : <EnterpriseIcon />}
-          </View>
-          <View style={styles.methodRowTextBox}>
-            <Text numberOfLines={1} style={styles.methodRowTitle}>
-              {title}
-            </Text>
-            {subtitle != null ? (
-              <Text numberOfLines={1} style={styles.methodRowSubtitle}>
-                {subtitle}
-              </Text>
-            ) : null}
-          </View>
-          <View style={styles.methodRowRightIcon}>
-            <ShareIcon />
-          </View>
+          {rowContent}
           <StateOverlay
             cornerRadius={LOGIN_METHOD_ROW.radius}
             pressed={pressed && !disabled}
@@ -1117,7 +1146,7 @@ export function LoginLoadingRing({ y, label }: { y: number; label: string }) {
 
 /**
  * 验证码重发倒计时链接(figma §4.7 + Step 3a 契约:@(70,238) 540×50 20;
- * 倒计时中 = controlPlaceholder 无下划线「{n} 秒后可重新发送」(42 起,首帧 42);
+ * 倒计时中 = controlPlaceholder 无下划线「{n} 秒后可重新发送」(60 起,首帧 60);
  * 归零 = controlText 带下划线「重新发送验证码」可点)。
  * 绝对 deadline 模型:渲染每 tick 用 Date.now() 重算剩余秒(非递减计数,
  * 系统休眠/挂起恢复自校正);deadline 变化(重发成功重置)即重启 tick;
@@ -1195,6 +1224,10 @@ export function LoginTextAction({
   top?: number;
 }) {
   const styles = useThemedStyles(makeStyles);
+  if (hasNativeLoginButtons) return <LoginNativeButton label={label} onPress={onPress}
+    disabled={disabled} testID={testID} variant="text"
+    width={LOGIN_TEXT_LINK.width} height={LOGIN_TEXT_LINK.height} fontSize={LOGIN_TEXT_LINK.font}
+    style={{ position: 'absolute', left: LOGIN_TEXT_LINK.x, top: top ?? LOGIN_TEXT_LINK.y }} />;
   return (
     <Pressable
       accessibilityRole="button"
@@ -1619,6 +1652,9 @@ const makeStyles = (colors: ThemeColors) =>
     color: colors.login.controlText,
     fontSize: LOGIN_METHOD_ROW.titleFont,
     fontWeight: fontWeight.bold,
+  },
+  methodRowDisabledTitle: {
+    color: colors.login.secondaryText,
   },
   methodRowSubtitle: {
     color: colors.login.secondaryText,

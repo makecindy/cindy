@@ -27,7 +27,7 @@ import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
-import { useCindyMakePreparing } from './useCindyMakePreparing';
+import { useCindyMakeActivity } from './useCindyMakeActivity';
 
 export interface SessionStatusIconProps {
   session: Session;
@@ -71,10 +71,10 @@ export function SessionStatusIcon({
   // fire-and-forget 任务期间用户也能看出"这个会话还有活在跑"。per-row
   // primitive 订阅(性能不变量同下方 attention hooks)。
   const isGhostBusy = useGhostSessionBusy(session.id);
-  // Preparation is task activity before an Agent turn exists. Keep this local
-  // to presentation, including pinned rail icons that have no row projection.
-  const cindyMakePreparing = useCindyMakePreparing(session);
-  const isRunning = isAgentRunning || isGhostBusy || cindyMakePreparing != null;
+  // Native preparation/builds remain task activity outside an Agent turn,
+  // including pinned rail icons that have no row projection.
+  const cindyMakeActivity = useCindyMakeActivity(session);
+  const isRunning = isAgentRunning || isGhostBusy || cindyMakeActivity != null;
   const vendor = agentKindToVendor(session.agentKind);
   const isOrcaLead = isOrcaLeadSession(session);
   const isArchived = session.status === 'archived';

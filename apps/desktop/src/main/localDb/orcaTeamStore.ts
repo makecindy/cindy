@@ -289,10 +289,11 @@ export async function markTeamEnded(
  * sessions.status='archived' 让 sidebar 自然隐藏(其他列表 / 历史搜索仍可查到)。
  * orca_role 字段保留 'worker' 不动 — 历史上下文识别需要它。
  */
-export async function archiveWorkersByTeam(teamId: string): Promise<string[]> {
+export async function archiveWorkersByTeam(teamId: string, beforeMutation?: () => Promise<void>): Promise<string[]> {
   const client = getDbClient();
   const candidateIds = await listActiveWorkerSessionIdsForTeam(teamId);
   const updatedIds = await withSessionRouteLocks(candidateIds, async () => {
+    await beforeMutation?.();
     const ids = await client.tx('orca.archiveWorkersByTeam', {
       teamId,
       sessionIds: candidateIds,
@@ -336,10 +337,12 @@ export async function markWorkersStatusByTeam(
  */
 export async function reconcileInactiveTeamWorkersForLead(
   leadSessionId: string,
+  beforeMutation?: () => Promise<void>,
 ): Promise<string[]> {
   const client = getDbClient();
   const candidateIds = await listActiveWorkerSessionIdsForInactiveTeams(leadSessionId);
   const updatedIds = await withSessionRouteLocks(candidateIds, async () => {
+    await beforeMutation?.();
     const ids = await client.tx('orca.reconcileInactiveTeamWorkersForLead', {
       leadSessionId,
       sessionIds: candidateIds,
@@ -575,9 +578,10 @@ export async function setWorkerFocus(teamId: string, workerId: string): Promise<
 /**
  * 归档单个 worker session, 不牵连同 team 其他 worker。
  */
-export async function archiveSingleWorkerSession(sessionId: string): Promise<void> {
+export async function archiveSingleWorkerSession(sessionId: string, beforeMutation?: () => Promise<void>): Promise<void> {
   const client = getDbClient();
   const changed = await withSessionRouteLock(sessionId, async () => {
+    await beforeMutation?.();
     const result = await client.drizzle
       .update(sessions)
       .set({ status: 'archived', updatedAt: Date.now() })

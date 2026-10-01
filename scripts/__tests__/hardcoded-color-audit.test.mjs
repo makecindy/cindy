@@ -9,10 +9,13 @@ import { fileURLToPath } from 'node:url';
 import { findBareColors, matchBareColors } from '../shared/hardcoded-color-match.mjs';
 import { addedLines, inspectFile, readExemptions, objectPathAt, audit } from '../hardcoded-color-audit.mjs';
 import { classifyDesignLayer, reportDesignLayers } from '../shared/design-layer-report.mjs';
+import { resolvePosixShell } from '../lib/posix-shell.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const exemptions = readExemptions(root);
 const renderer = 'apps/desktop/src/renderer/';
 const inspect = (file, source) => inspectFile(file, source, new Set(source.split('\n').map((_, i) => i + 1)), exemptions);
+const bash = resolvePosixShell('bash');
+const runBash = script => bash ? spawnSync(bash, ['-e', '-c', script]) : null;
 
 test('Tailwind palette candidates report light/dark variants without expanding blocking scope', () => {
   const hits = inspect(`${renderer}components/Example.tsx`, '<div className="bg-red-50 dark:bg-red-950/30 text-red-600 border-[var(--error-border)]" />');
@@ -283,11 +286,22 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
   const summary = workflow.jobs.verify.steps[0];
   for (const checks of ['success','failure','cancelled','skipped']) {
     for (const shards of ['success','failure','cancelled','skipped']) {
-      const aggregate = spawnSync('bash',['-e','-c',summary.run], {env:{...process.env,VERIFY_CHECKS_RESULT:checks,LINUX_UNIT_SHARDS_RESULT:shards}});
+      // Windows' bash.exe is a WSL shim and does not forward Node's ad-hoc
+      // environment object. Set fixture values inside the shell script so
+      // this contract test behaves the same on Windows and Linux.
+      const aggregateScript = summary.run
+        .replaceAll('$VERIFY_CHECKS_RESULT', checks)
+        .replaceAll('$LINUX_UNIT_SHARDS_RESULT', shards);
+      const aggregate = runBash(aggregateScript);
+      if (!aggregate) return t.skip('Git Bash is unavailable on this host');
       assert.equal(aggregate.status === 0, checks === 'success' && shards === 'success');
     }
   }
-  const propagated = spawnSync('bash',['-e','-c',summary.run], {env:{...process.env,VERIFY_CHECKS_RESULT:failed.status ? 'failure' : 'success',LINUX_UNIT_SHARDS_RESULT:'success'}});
+  const propagatedScript = summary.run
+    .replaceAll('$VERIFY_CHECKS_RESULT', failed.status ? 'failure' : 'success')
+    .replaceAll('$LINUX_UNIT_SHARDS_RESULT', 'success');
+  const propagated = runBash(propagatedScript);
+  if (!propagated) return t.skip('Git Bash is unavailable on this host');
   assert.notEqual(propagated.status,0);
   fs.writeFileSync(path.join(temp,'scripts/hardcoded-color-exemptions.json'),'{bad json');
   assert.throws(()=>audit({root:temp,baseRef:commit,worktree:true}));
@@ -369,7 +383,7 @@ test('actual layer reporter keeps visible keycap and chart marks separate from t
   }
 });
 
-test('CI design commands feed the existing verify job and preserve Windows aggregation', () => {
+test('CI design commands feed the existing verify job and preserve Windows aggregation', (t) => {
   const workflow = matter.engines.yaml.parse(fs.readFileSync(path.join(root,'.github/workflows/ci.yml'),'utf8'));
   const pkg = JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));
   const checks = workflow.jobs['verify-checks'];
@@ -401,7 +415,9 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
     assert.ok(job.steps.some(s=>s.name==='Run companion database regressions' && s.if==='matrix.shard == 1'));
   }
   for(const result of ['success','failure','cancelled','skipped']) {
-    const run=spawnSync('bash',['-e','-c',windows.steps[0].run],{env:{...process.env,WINDOWS_UNIT_SHARDS_RESULT:result}});
+    const windowsScript = windows.steps[0].run.replaceAll('$WINDOWS_UNIT_SHARDS_RESULT', result);
+    const run=runBash(windowsScript);
+    if (!run) return t.skip('Git Bash is unavailable on this host');
     assert.equal(run.status===0,result==='success');
   }
 });

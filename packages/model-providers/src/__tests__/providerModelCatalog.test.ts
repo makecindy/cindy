@@ -132,9 +132,10 @@ it('keeps generated defaults consistent with Cindy model preferences', async () 
   const { PROVIDER_MODEL_CATALOG } = await import('../providerModelCatalog.js');
   const { defaultEffortForCapabilities } = await import('../effortResolution.js');
   for (const model of Object.values(PROVIDER_MODEL_CATALOG.providers).flat()) {
-    // K2.8's official default is max; other imported models keep the generic preference.
+    // Explicit official defaults: K2.8 max and Grok 4.7 high.
     const expected = model.id === 'kimi-for-coding' && model.upstream === 'https://api.kimi.com/coding'
-      ? 'max' : defaultEffortForCapabilities(model.efforts);
+      ? 'max' : model.id === 'grok-4.7' && model.upstream === 'https://api.x.ai/v1'
+        ? 'high' : defaultEffortForCapabilities(model.efforts ?? []);
     expect(model.defaultEffort, model.id).toBe(expected);
   }
 });

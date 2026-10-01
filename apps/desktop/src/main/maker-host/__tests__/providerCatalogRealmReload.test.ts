@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   endpoint: 'https://model.cn.example',
   buildEndpoint: 'https://model.cn.example',
   owner: 'owner-default',
+  imageKeys: new Map<string, string>(),
+  secretsClearedListeners: new Set<() => void>(),
   canUseCindyGateway: true,
   loads: [] as Array<{
     source: Record<string, unknown>;
@@ -115,10 +117,12 @@ vi.mock('../auth-adapters.js', () => ({
     hasCodexOAuthLoginUnbound: () => false,
   },
 }));
-vi.mock('../claude-credentials-store.js', () => ({
-  hasClaudeAiOAuth: () => false,
-  hasClaudeAiOAuthUnbound: () => false,
+vi.mock('../claude-native-auth.js', () => ({
+  hasClaudeNativeLogin: () => false,
+  hasClaudeNativeLoginUnbound: () => false,
 }));
+vi.mock('../claude-native-connection.js', () => ({ readClaudeNativeLogin: async () => null }));
+vi.mock('../claude-native-cli.js', () => ({ readClaudeCliLoginStatus: async () => ({ loggedIn: false }) }));
 vi.mock('../grok-oauth-login.js', () => ({
   getGrokAccessToken: h.getGrokAccessToken,
   peekGrokAccessToken: () => null,
@@ -137,9 +141,15 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   genericOAuthSecretIo: {},
   readCustomProviderHeaders: () => null,
   readCustomProviderKey: () => null,
-  getProviderSecretStore: () => ({ get: () => null }),
+  getProviderSecretStore: () => ({
+    get: (id: string) => id === 'openai-images' ? h.imageKeys.get(h.owner) ?? null : null,
+    invalidateCaches: () => h.secretsClearedListeners.forEach((listener) => listener()),
+  }),
   setProviderSecretsClearedListener: () => undefined,
-  addProviderSecretsClearedListener: () => undefined,
+  addProviderSecretsClearedListener: (listener: () => void) => h.secretsClearedListeners.add(listener),
+}));
+vi.mock('../outbound-fetch.js', () => ({
+  outboundFetch: vi.fn(async () => { throw new Error('offline'); }),
 }));
 vi.mock('../provider-route.js', () => ({
   getProviderRouteCredentialRevision: () => 0,
@@ -188,6 +198,7 @@ import {
   XAI_API_CUSTOM_PROVIDER_ID,
 } from '@cindy/model-providers';
 import { deriveCindyMediaConfig } from '../../cindy-brain/cindyMediaCatalog.js';
+import { getProviderSecretStore } from '../../secrets/providerSecretStore.js';
 import {
   getActiveCatalog,
   commitModelPlaneFromCatalog,
@@ -1244,6 +1255,38 @@ describe('provider catalog realm reload', () => {
       h.owner = 'owner-default';
       await fsp.rm(root, { recursive: true, force: true });
       syncLocalCatalogOverridesIntoActiveCatalog();
+    }
+  });
+
+  it.each([false, true])('recomputes Images API mode after a same-endpoint owner commit (outgoing key: %s)', async (outgoingHasKey) => {
+    const originalOwner = h.owner;
+    const loadsBefore = h.loads.length;
+    const images = () => getActiveCatalog().providers.find((provider) => provider.id === 'openai')!.imageModels!;
+    const expectMode = (hasKey: boolean) => {
+      expect(images().map((model) => model.id)).toEqual(hasKey
+        ? ['openai/gpt-image-2.5-sunburst', 'openai/gpt-image-2.5-flare', 'openai/gpt-image-2']
+        : ['openai/gpt-image-2']);
+      expect(images().find((model) => model.id === 'openai/gpt-image-2')?.name)
+        .toBe(hasKey ? 'GPT Image 2' : 'GPT Image Gen');
+    };
+    try {
+      h.owner = 'outgoing-owner';
+      h.imageKeys.set(outgoingHasKey ? h.owner : 'local-owner', 'fixture-image-key');
+      // enterLocalMode invalidates caches before committing the next owner.
+      getProviderSecretStore().invalidateCaches();
+      expectMode(outgoingHasKey);
+      h.owner = 'local-owner';
+      const reload = reloadActiveCatalogForEndpointChange();
+      // Correct the projection synchronously, even if background discovery fails.
+      expectMode(!outgoingHasKey);
+      await reload;
+      expectMode(!outgoingHasKey);
+      expect(h.loads).toHaveLength(loadsBefore);
+    } finally {
+      h.imageKeys.clear();
+      h.owner = originalOwner;
+      getProviderSecretStore().invalidateCaches();
+      await reloadActiveCatalogForEndpointChange();
     }
   });
 

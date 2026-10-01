@@ -237,6 +237,7 @@ describe('docs output cwd-bound writer', () => {
           [
             '--import',
             tsxLoader,
+            '--input-type=module',
             '-e',
             `
 const fs = (await import('node:fs')).default;

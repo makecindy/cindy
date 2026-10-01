@@ -161,3 +161,13 @@
 | server 中继(presence / 路由 / pub-sub) | `apps/server/src/device-link/*` |
 | 被控端 dispatch(双层校验 + 合成 event) | `apps/desktop/src/main/device-link/dispatch.ts` |
 | 桌面控制端传输路由(本地/远程按 session 切换) | `apps/desktop/src/renderer/lib/makerTransport.ts` |
+
+## Remote plugin authorization transport v3
+
+`device-link:plugin-oauth:v3` is a Host-only signed/encrypted channel carried by the existing authorized account route. It does not require CIS or an instance identity endpoint. Both Desktops must support v3; older peers fail without falling back to raw setup, plaintext input, v1 or the separate cloud v2 protocol.
+
+A Host lazily persists a separate Ed25519 signing key in OS secure storage. The controller resolves the exact realm/membership/device descriptor over Device Link, verifies the signed card/nonce/ephemeral-key transcript, then pins the peer public key in its own encrypted owner-scoped store. Restarts retain the key and change the boot identifier; changed peer keys are rejected. **First admission trusts account services and the relay**, like upstream same-account key registration; this does not protect first contact against a malicious relay and is not mutual attestation.
+
+All inner offers, callbacks, codes and private form values use authenticated encryption. Local Renderer supplies card IDs or one-shot protected input to dedicated local IPC; it cannot invoke this channel directly. A short-lived user code can be displayed/copied only on its initiating local card. Tokens, callback codes, full URLs and state stay out of card snapshots, logs, history and the model. Capability flags are additive and must be explicitly negotiated.
+
+See [remote-plugin-oauth.md](../../docs/remote-plugin-oauth.md) for exact shapes, target validation, supported adapters, lifecycle and trust limits. No relay/Auth/Model Access deployment is introduced.

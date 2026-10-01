@@ -1,3 +1,4 @@
+import type { ToolArtifact } from '../managed-tools/types.js';
 import type { MakeToolId } from '../../shared/cindyMakeDoctor.js';
 import { isSupportedMakeHost } from './doctor.js';
 
@@ -5,15 +6,8 @@ import { isSupportedMakeHost } from './doctor.js';
  * Node: nodejs.org SHASUMS256.txt; other hashes: publisher release asset digests.
  * Refresh these together with the repository's engine/packageManager requirements.
  */
-export interface MakeToolArtifact {
+export interface MakeToolArtifact extends ToolArtifact {
   id: MakeToolId;
-  version: string;
-  host: string;
-  url: string;
-  sha256: string;
-  format: 'binary' | 'zip' | 'tar.gz';
-  /** POSIX archive-relative path, including the publisher's top-level directory. */
-  executable: string;
 }
 
 const nodeHashes: Record<string, string> = {

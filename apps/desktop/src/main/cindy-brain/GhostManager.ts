@@ -4,6 +4,11 @@ import crypto from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
 import JSZip from 'jszip';
+import {
+  PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES,
+  PLUGIN_MEMBER_UPLOAD_MAX_UNCOMPRESSED_BYTES,
+  PLUGIN_MEMBER_UPLOAD_MAX_ZIP_ENTRIES,
+} from '@cindy/plugin-protocol';
 
 import {
   GHOST_MANIFEST_FILE,
@@ -60,7 +65,7 @@ import { installedFileModeFromZip, isZipSymbolicLinkMode } from './ghostZipPermi
 
 /** 普通沙箱插件维持小包上限；随包 Node/CLI 允许更大的预打包产物。 */
 export const MAX_BASIC_CINDY_FILE_BYTES = 8 * 1024 * 1024;
-export const MAX_NODE_CINDY_FILE_BYTES = 128 * 1024 * 1024;
+export const MAX_NODE_CINDY_FILE_BYTES = PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES;
 /** 身份卡本身只应是小 JSON；先限流读取，避免在识别包类型前被单文件撑爆内存。 */
 const MAX_GHOST_MANIFEST_BYTES = GHOST_MANIFEST_MAX_BYTES;
 
@@ -104,9 +109,9 @@ async function readRegularFileStableWithLimit(
 }
 /** 解压后总大小/条目数上限；Node 包允许携带已打包 CLI，但仍有硬闸。 */
 export const MAX_BASIC_UNCOMPRESSED_BYTES = 32 * 1024 * 1024;
-export const MAX_NODE_UNCOMPRESSED_BYTES = 256 * 1024 * 1024;
+export const MAX_NODE_UNCOMPRESSED_BYTES = PLUGIN_MEMBER_UPLOAD_MAX_UNCOMPRESSED_BYTES;
 export const MAX_BASIC_ZIP_ENTRIES = 256;
-export const MAX_NODE_ZIP_ENTRIES = 2_048;
+export const MAX_NODE_ZIP_ENTRIES = PLUGIN_MEMBER_UPLOAD_MAX_ZIP_ENTRIES;
 /** 停用标记文件名(安装目录内;存在即停用)。 */
 const DISABLED_MARKER_FILE = '.disabled';
 /** 安装时由主机写入的信任快照与权限 receipt；作者包不能提供。 */
@@ -1800,6 +1805,7 @@ export class GhostManager {
           dir,
           enabled: this.effectiveEnabled(dir, receipt.enabled),
           approval: { state: 'approved', revision: receipt.revision },
+          ...(receipt.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
           trust: receipt.trust,
           ...(receipt.manifest.skill?.items.length
             ? {
@@ -1972,6 +1978,28 @@ export class GhostManager {
       localePath,
     });
     return runtimeManifest;
+  }
+
+  /** Called only after Host permission UI confirms this exact installed revision. */
+  async approveTaskCapability(id: string, revision: string, isCurrent: () => boolean): Promise<boolean> {
+    return this.runExclusiveMutation(async () => {
+      const approval = this.readApproval(id);
+      if (!isCurrent() || approval.state !== 'approved' || approval.receipt.revision !== revision ||
+          approval.receipt.manifest.agent?.tasks !== true ||
+          !this.list().some(ghost => ghost.manifest.id === id && ghost.enabled)) return false;
+      if (approval.receipt.taskCapabilityApproved !== true) {
+        const expired = new Error('Task capability approval owner changed');
+        try {
+          await this.receiptStore.write({ ...approval.receipt, taskCapabilityApproved: true }, {
+            assertCurrent: () => { if (!isCurrent()) throw expired; },
+          });
+        } catch (error) {
+          if (error === expired) return false;
+          throw error;
+        }
+      }
+      return isCurrent();
+    });
   }
 
   /**
@@ -2589,6 +2617,7 @@ export class GhostManager {
   async install(
     lizFilePath: string,
     opts?: {
+      taskCapabilityApproved?: true;
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -2603,6 +2632,7 @@ export class GhostManager {
   private async installUnlocked(
     lizFilePath: string,
     opts?: {
+      taskCapabilityApproved?: true;
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -2712,6 +2742,7 @@ export class GhostManager {
           manifest: approvedManifest,
           localeResources,
           enabled: initiallyEnabled,
+          ...(opts?.taskCapabilityApproved === true && approvedManifest.agent?.tasks === true ? {taskCapabilityApproved:true as const} : {}),
           trust,
           // 指纹取自包投影而不是刚发布的 finalDir:发布后被换的字节应当在快照
           // 对账时被拒,而不是被首读钉成批准基线(P0-8)。
@@ -2818,6 +2849,7 @@ export class GhostManager {
   async update(
     lizFilePath: string,
     opts: {
+      taskCapabilityApproved?: true;
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -2833,6 +2865,7 @@ export class GhostManager {
   private async updateUnlocked(
     lizFilePath: string,
     opts: {
+      taskCapabilityApproved?: true;
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -3053,6 +3086,8 @@ export class GhostManager {
         manifest: approvedManifest,
         localeResources,
         enabled,
+        ...((opts.taskCapabilityApproved === true || (approvalResult.state === 'approved' && approvalResult.receipt.taskCapabilityApproved === true)) &&
+          approvedManifest.agent?.tasks === true ? { taskCapabilityApproved: true as const } : {}),
         trust,
         // 同 install:指纹取自包投影,发布后的目录漂移在快照对账时 fail closed(P0-8)。
         skillContentSha256: await this.hashSkillContentFromPackage(
@@ -3432,6 +3467,8 @@ export class GhostManager {
         trust,
         skillContentSha256,
         packageSha256,
+        ...(current.state === 'approved' && current.receipt.taskCapabilityApproved === true &&
+          approvedManifest.agent?.tasks === true ? { taskCapabilityApproved: true as const } : {}),
         ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
       }),
       { skillSourceDir: sourceDir },

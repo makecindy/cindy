@@ -77,6 +77,8 @@ vi.mock('@/lib/makerTransport', () => ({
 }));
 
 import {
+  cancelRemoteOptimisticSendsForDataOwnerBoundary,
+  reconcileSessionsAfterDataOwnerRollback,
   EMPTY_SESSION_STATE,
   handleStreamEvent,
   makerChatStore,
@@ -84,6 +86,7 @@ import {
 } from '@/lib/makerChatStore';
 import type { SessionChatState } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
+import { setDataOwnerGeneration, __testing as dataOwnerGenerationTesting } from '@/contexts/dataOwnerGeneration';
 
 describe('makerChatStore IM source projection', () => {
   it.each(['imSource', 'hookSource'] as const)('projects %s into the common Desktop card', (field) => {
@@ -935,6 +938,139 @@ describe('getRunningSnapshot 后台 subagent 折算(真 store)', () => {
     }
   });
 
+  it('account teardown reuses the Stop/closed finalizer and does not revive on A→B→A', () => {
+    const sid = `account-boundary-${Math.random().toString(36).slice(2, 8)}`;
+    const remoteSid = 'remote-account-boundary-' + Math.random().toString(36).slice(2, 8);
+    try {
+      setDataOwnerGeneration('account-a', 1);
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, true));
+      applyTask(sid, { taskId: 't1', status: 'running', taskType: 'local_agent' });
+      const autoResume = {
+        clientId: 'auto-resume-owner-finalize',
+        text: '',
+        persistedContent: '',
+        model: 'model',
+        effort: 'medium',
+        permissionMode: 'default',
+        workingDir: '',
+        autoResume: true,
+        chatMessage: { clientId: 'auto-resume-owner-finalize', role: 'user' as const, content: '' },
+        createOpts: { agentKind: 'codex' as const, workingDir: '', model: 'model' },
+      };
+      const queuedByUser = {
+        ...autoResume,
+        clientId: 'user-queued-owner-finalize',
+        autoResume: false,
+        chatMessage: { clientId: 'user-queued-owner-finalize', role: 'user' as const, content: '' },
+      };
+      makerChatStore.__applyInputProjectionForTest({
+        sessionId: sid,
+        pendingQueue: [autoResume, queuedByUser],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+        credentialSwitchWait: null,
+        continuationInFlightClientId: 'manual-continuation',
+        continuationTurnClientId: 'manual-continuation-turn',
+      });
+      makerChatStore.__applyStatusUpdateForTest(remoteSid, statusUpdate(remoteSid, true));
+      applyTask(remoteSid, { taskId: 'remote-t1', status: 'running', taskType: 'local_agent' });
+      expect(makerChatStore.getSnapshot(sid).agentStatus.startedAt).toBeTruthy();
+
+      // AuthContext invokes this synchronously when the outgoing owner enters
+      // teardown; the old stamped status=closed push is no longer required.
+      setDataOwnerGeneration(null, 2);
+      cancelRemoteOptimisticSendsForDataOwnerBoundary({ finalizeSessions: false });
+      let state = makerChatStore.getSnapshot(sid);
+      // A rejected switch restores A, so the pre-commit invalidation must not
+      // stop the task that still belongs to the active account.
+      expect(state.agentStatus.isRunning).toBe(true);
+      expect(state.agentStatus.startedAt).toBeTruthy();
+      expect(makerChatStore.getSnapshot(remoteSid).agentStatus.isRunning).toBe(true);
+      setDataOwnerGeneration('account-a', 3);
+
+      // A successful A→B commit finalizes the old owner exactly once.
+      setDataOwnerGeneration(null, 4);
+      cancelRemoteOptimisticSendsForDataOwnerBoundary({ finalizeSessions: false });
+      setDataOwnerGeneration('account-b', 5);
+      cancelRemoteOptimisticSendsForDataOwnerBoundary();
+      state = makerChatStore.getSnapshot(sid);
+      expect(state.agentStatus.isRunning).toBe(false);
+      expect(state.agentStatus.startedAt).toBeNull();
+      expect(state.taskUpdates?.get('t1')?.status).toBe('stopped');
+      expect(state.pendingQueue.map((item) => item.clientId)).toEqual([
+        'user-queued-owner-finalize',
+      ]);
+      expect(state.continuationInFlightClientId).toBeNull();
+      expect(state.continuationTurnClientId).toBeNull();
+      expect(state.continuationInFlightProjectionCapability).toBe('unknown');
+      expect(makerChatStore.getSnapshot(remoteSid).agentStatus.isRunning).toBe(true);
+
+      // Re-entering account A must observe the stopped snapshot, with no
+      // automatic continuation caused by the boundary cleanup.
+      setDataOwnerGeneration(null, 6);
+      cancelRemoteOptimisticSendsForDataOwnerBoundary({ finalizeSessions: false });
+      setDataOwnerGeneration('account-a', 7);
+      state = makerChatStore.getSnapshot(sid);
+      expect(state.agentStatus.isRunning).toBe(false);
+      expect(state.agentStatus.startedAt).toBeNull();
+    } finally {
+      makerChatStore.purgeSession(sid);
+      makerChatStore.purgeSession(remoteSid);
+      dataOwnerGenerationTesting.reset();
+    }
+  });
+
+  it('rollback reconciliation finalizes only sessions absent from Main after teardown', async () => {
+    const sid = 'rollback-reconcile-' + Math.random().toString(36).slice(2, 8);
+    const remoteSid = 'remote-rollback-reconcile-' + Math.random().toString(36).slice(2, 8);
+    const globalWindow = globalThis as typeof globalThis & {
+      window?: { electronAPI?: unknown };
+    };
+    const previousWindow = globalWindow.window;
+    const previousElectronApi = previousWindow?.electronAPI;
+    try {
+      setDataOwnerGeneration('account-a', 1);
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, true));
+      applyTask(sid, { taskId: 't1', status: 'running', taskType: 'local_agent' });
+      makerChatStore.__applyStatusUpdateForTest(remoteSid, statusUpdate(remoteSid, true));
+      applyTask(remoteSid, { taskId: 'remote-t1', status: 'running', taskType: 'local_agent' });
+      let resolveListActive!: (value: unknown[]) => void;
+      let listActiveCalls = 0;
+      const listActive = vi.fn(() => {
+        listActiveCalls += 1;
+        return listActiveCalls === 1
+          ? new Promise<unknown[]>((resolve) => { resolveListActive = resolve; })
+          : Promise.resolve([]);
+      });
+      globalWindow.window = {
+        electronAPI: { maker: { listActive } },
+      } as typeof globalWindow.window;
+
+      const reconciliation = reconcileSessionsAfterDataOwnerRollback();
+      await Promise.resolve();
+      // An unrelated renderer update replaces the state object while Main is
+      // being queried; it must not hide the still-eligible rollback candidate.
+      makerChatStore.setContextWindow(sid, 1234);
+      resolveListActive([]);
+      await reconciliation;
+      expect(makerChatStore.getSnapshot(sid).agentStatus.isRunning).toBe(false);
+      expect(makerChatStore.getSnapshot(sid).taskUpdates?.get('t1')?.status).toBe('stopped');
+      expect(makerChatStore.getSnapshot(remoteSid).agentStatus.isRunning).toBe(true);
+    } finally {
+      makerChatStore.purgeSession(sid);
+      makerChatStore.purgeSession(remoteSid);
+      dataOwnerGenerationTesting.reset();
+      globalWindow.window = previousWindow;
+    }
+  });
+
   it('session closed 兜底(finalizeStuckRemoteTurn → forceFinalize):running 任务全收口、桥接清零', () => {
     const sid = `remote-closed-${Math.random().toString(36).slice(2, 8)}`;
     try {
@@ -1022,6 +1158,322 @@ describe('getRunningSnapshot 后台 subagent 折算(真 store)', () => {
       expect(makerChatStore.getSnapshot(sid).pendingTaskWake).toBe(0);
     } finally {
       makerChatStore.purgeSession(sid);
+    }
+  });
+
+  it('rollback reconciliation preserves local wake work on an idle Main session', async () => {
+    const sid = 'rollback-idle-wake-' + Math.random().toString(36).slice(2, 8);
+    const globalWindow = globalThis as typeof globalThis & {
+      window?: { electronAPI?: unknown };
+    };
+    const previousWindow = globalWindow.window;
+    try {
+      setDataOwnerGeneration('account-a', 1);
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, true));
+      applyTask(sid, { taskId: 'wake-1', status: 'running', taskType: 'local_agent' });
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, false));
+      expect(makerChatStore.getSnapshot(sid).agentStatus.isRunning).toBe(false);
+
+      globalWindow.window = {
+        electronAPI: {
+          maker: {
+            listActive: vi.fn(async () => [
+              { sessionId: sid, agentKind: 'codex', isTurnRunning: false },
+            ]),
+          },
+        },
+      } as typeof globalWindow.window;
+
+      await reconcileSessionsAfterDataOwnerRollback();
+      const state = makerChatStore.getSnapshot(sid);
+      expect(state.agentStatus.isRunning).toBe(false);
+      expect(state.taskUpdates?.get('wake-1')?.status).toBe('running');
+    } finally {
+      makerChatStore.purgeSession(sid);
+      dataOwnerGenerationTesting.reset();
+      globalWindow.window = previousWindow;
+    }
+  });
+
+  it('rollback reconciliation preserves non-wake background work on an idle Main session', async () => {
+    const sid = 'rollback-idle-bash-' + Math.random().toString(36).slice(2, 8);
+    const globalWindow = globalThis as typeof globalThis & {
+      window?: { electronAPI?: unknown };
+    };
+    const previousWindow = globalWindow.window;
+    try {
+      setDataOwnerGeneration('account-a', 1);
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, true));
+      applyTask(sid, { taskId: 'bash-1', status: 'running', taskType: 'local_bash' });
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, false));
+
+      globalWindow.window = {
+        electronAPI: {
+          maker: {
+            listActive: vi.fn(async () => [
+              { sessionId: sid, agentKind: 'codex', isTurnRunning: false },
+            ]),
+          },
+        },
+      } as typeof globalWindow.window;
+
+      await reconcileSessionsAfterDataOwnerRollback();
+      expect(makerChatStore.getSnapshot(sid).taskUpdates?.get('bash-1')?.status).toBe('running');
+    } finally {
+      makerChatStore.purgeSession(sid);
+      dataOwnerGenerationTesting.reset();
+      globalWindow.window = previousWindow;
+    }
+  });
+
+  it('rollback reconciliation preserves an automatic-resume item during backoff', async () => {
+    const sid = 'rollback-auto-resume-' + Math.random().toString(36).slice(2, 8);
+    const globalWindow = globalThis as typeof globalThis & {
+      window?: { electronAPI?: unknown };
+    };
+    const previousWindow = globalWindow.window;
+    try {
+      setDataOwnerGeneration('account-a', 1);
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, true));
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, false));
+      const clientId = 'auto-resume-backoff';
+      const queuedAutoResume = {
+        clientId,
+        text: '',
+        persistedContent: '',
+        model: 'model',
+        effort: 'medium',
+        permissionMode: 'default',
+        workingDir: '',
+        autoResume: true,
+        chatMessage: { clientId, role: 'user' as const, content: '' },
+        createOpts: { agentKind: 'codex' as const, workingDir: '', model: 'model' },
+      };
+      makerChatStore.__applyInputProjectionForTest({
+        sessionId: sid,
+        pendingQueue: [queuedAutoResume],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+        credentialSwitchWait: null,
+      });
+
+      globalWindow.window = {
+        electronAPI: {
+          maker: {
+            listActive: vi.fn(async () => [
+              { sessionId: sid, agentKind: 'codex', isTurnRunning: false },
+            ]),
+          },
+        },
+      } as typeof globalWindow.window;
+
+      await reconcileSessionsAfterDataOwnerRollback();
+      const state = makerChatStore.getSnapshot(sid);
+      expect(state.pendingQueue.some((item) => item.clientId === clientId)).toBe(true);
+      expect(state.agentStatus.isRunning).toBe(false);
+    } finally {
+      makerChatStore.purgeSession(sid);
+      dataOwnerGenerationTesting.reset();
+      globalWindow.window = previousWindow;
+    }
+  });
+
+  it('owner finalization clears a queued input recovery marker', async () => {
+    const sid = 'rollback-queued-recovery-' + Math.random().toString(36).slice(2, 8);
+    const globalWindow = globalThis as typeof globalThis & {
+      window?: { electronAPI?: unknown };
+    };
+    const previousWindow = globalWindow.window;
+    try {
+      setDataOwnerGeneration('account-a', 1);
+      makerChatStore.__applyInputProjectionForTest({
+        sessionId: sid,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: true,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        error: null,
+        recovery: { kind: 'queue-head', clientId: 'recovery-1' },
+        errorRetryText: null,
+        credentialSwitchWait: null,
+      });
+
+      globalWindow.window = {
+        electronAPI: {
+          maker: {
+            listActive: vi.fn(async () => [
+              { sessionId: sid, agentKind: 'codex', isTurnRunning: false },
+            ]),
+          },
+        },
+      } as typeof globalWindow.window;
+
+      await reconcileSessionsAfterDataOwnerRollback();
+      expect(makerChatStore.getSnapshot(sid).inputRecovery).toBeNull();
+    } finally {
+      makerChatStore.purgeSession(sid);
+      dataOwnerGenerationTesting.reset();
+      globalWindow.window = previousWindow;
+    }
+  });
+
+  it('does not finalize a replacement session created while Main is queried', async () => {
+    const sid = 'rollback-replaced-' + Math.random().toString(36).slice(2, 8);
+    const globalWindow = globalThis as typeof globalThis & {
+      window?: { electronAPI?: unknown };
+    };
+    const previousWindow = globalWindow.window;
+    try {
+      setDataOwnerGeneration('account-a', 1);
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, true));
+      let resolveListActive!: (value: unknown[]) => void;
+      globalWindow.window = {
+        electronAPI: {
+          maker: {
+            listActive: vi.fn(
+              () => new Promise<unknown[]>((resolve) => { resolveListActive = resolve; }),
+            ),
+          },
+        },
+      } as typeof globalWindow.window;
+
+      const reconciliation = reconcileSessionsAfterDataOwnerRollback();
+      await Promise.resolve();
+      makerChatStore.purgeSession(sid);
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, false));
+      resolveListActive([]);
+      await reconciliation;
+
+      const replacement = makerChatStore.getSnapshot(sid);
+      expect(replacement.agentStatus.isRunning).toBe(false);
+      expect(replacement.taskUpdates?.size ?? 0).toBe(0);
+    } finally {
+      makerChatStore.purgeSession(sid);
+      dataOwnerGenerationTesting.reset();
+      globalWindow.window = previousWindow;
+    }
+  });
+
+  it('rechecks Main before finalizing a same-session replacement turn', async () => {
+    const sid = 'rollback-same-session-replaced-' + Math.random().toString(36).slice(2, 8);
+    const globalWindow = globalThis as typeof globalThis & {
+      window?: { electronAPI?: unknown };
+    };
+    const previousWindow = globalWindow.window;
+    try {
+      setDataOwnerGeneration('account-a', 1);
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, true));
+      let resolveFirst!: (value: unknown[]) => void;
+      let listActiveCalls = 0;
+      const listActive = vi.fn(() => {
+        listActiveCalls += 1;
+        if (listActiveCalls === 1) {
+          return new Promise<unknown[]>((resolve) => { resolveFirst = resolve; });
+        }
+        return Promise.resolve([{ sessionId: sid, agentKind: 'codex', isTurnRunning: true }]);
+      });
+      globalWindow.window = {
+        electronAPI: { maker: { listActive } },
+      } as typeof globalWindow.window;
+
+      const reconciliation = reconcileSessionsAfterDataOwnerRollback();
+      await Promise.resolve();
+      resolveFirst([]);
+      await reconciliation;
+
+      expect(listActive).toHaveBeenCalledTimes(2);
+      expect(makerChatStore.getSnapshot(sid).agentStatus.isRunning).toBe(true);
+    } finally {
+      makerChatStore.purgeSession(sid);
+      dataOwnerGenerationTesting.reset();
+      globalWindow.window = previousWindow;
+    }
+  });
+
+  it('rechecks Main when the first snapshot is idle', async () => {
+    const sid = 'rollback-idle-replaced-' + Math.random().toString(36).slice(2, 8);
+    const globalWindow = globalThis as typeof globalThis & {
+      window?: { electronAPI?: unknown };
+    };
+    const previousWindow = globalWindow.window;
+    try {
+      setDataOwnerGeneration('account-a', 1);
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, true));
+      let listActiveCalls = 0;
+      const listActive = vi.fn(() => {
+        listActiveCalls += 1;
+        return listActiveCalls === 1
+          ? Promise.resolve([{ sessionId: sid, agentKind: 'codex', isTurnRunning: false }])
+          : Promise.resolve([{ sessionId: sid, agentKind: 'codex', isTurnRunning: true }]);
+      });
+      globalWindow.window = {
+        electronAPI: { maker: { listActive } },
+      } as typeof globalWindow.window;
+
+      await reconcileSessionsAfterDataOwnerRollback();
+
+      expect(listActive).toHaveBeenCalledTimes(2);
+      expect(makerChatStore.getSnapshot(sid).agentStatus.isRunning).toBe(true);
+    } finally {
+      makerChatStore.purgeSession(sid);
+      dataOwnerGenerationTesting.reset();
+      globalWindow.window = previousWindow;
+    }
+  });
+
+  it('preserves idle background work found by the second Main reconciliation read', async () => {
+    const sid = 'rollback-second-read-idle-' + Math.random().toString(36).slice(2, 8);
+    const globalWindow = globalThis as typeof globalThis & {
+      window?: { electronAPI?: unknown };
+    };
+    const previousWindow = globalWindow.window;
+    try {
+      setDataOwnerGeneration('account-a', 1);
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, true));
+      applyTask(sid, {
+        taskId: 'second-read-background',
+        status: 'running',
+        taskType: 'local_bash',
+      });
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, false));
+      let resolveFirst!: (value: unknown[]) => void;
+      let listActiveCalls = 0;
+      const listActive = vi.fn(() => {
+        listActiveCalls += 1;
+        if (listActiveCalls === 1) {
+          return new Promise<unknown[]>((resolve) => { resolveFirst = resolve; });
+        }
+        return Promise.resolve([
+          { sessionId: sid, agentKind: 'codex', isTurnRunning: false },
+        ]);
+      });
+      globalWindow.window = {
+        electronAPI: { maker: { listActive } },
+      } as typeof globalWindow.window;
+
+      const reconciliation = reconcileSessionsAfterDataOwnerRollback();
+      await Promise.resolve();
+      resolveFirst([]);
+      await reconciliation;
+
+      expect(listActive).toHaveBeenCalledTimes(2);
+      expect(
+        makerChatStore.getSnapshot(sid).taskUpdates?.get('second-read-background')?.status,
+      ).toBe('running');
+    } finally {
+      makerChatStore.purgeSession(sid);
+      dataOwnerGenerationTesting.reset();
+      globalWindow.window = previousWindow;
     }
   });
 });

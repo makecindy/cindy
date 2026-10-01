@@ -39,7 +39,7 @@ export function CindyMakeTabBody({ ctx }: TabKindBodyProps<CindyMakeState>) {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[var(--surface-base)]">
+    <div className="flex h-full min-h-0 flex-col bg-[var(--surface)]">
       {request && (
         <CindyMakePreflightDialog
           key={ctx.sessionId}
@@ -84,7 +84,7 @@ export function CindyMakeTabBody({ ctx }: TabKindBodyProps<CindyMakeState>) {
           rows={3}
           disabled={!ctx.workdir || chat.isStreaming}
           placeholder={t('cindyMake.usage')}
-          className="w-full resize-none rounded-lg border border-[var(--border-default)] bg-[var(--surface-base)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          className="w-full resize-none rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 py-2 text-13 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         />
         <div className="mt-2 flex justify-end">
           <Button

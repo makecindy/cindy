@@ -1,4 +1,5 @@
 import { i18n } from '@/i18n';
+import { formatPresentationDate, formatPresentationTime } from './dateFormatters';
 import type {
   PresentationLocalizer,
   PresentationTranslator,
@@ -9,9 +10,6 @@ export const mobilePresentationTranslate: PresentationTranslator = (key, fallbac
 
 export const mobilePresentationLocalizer: PresentationLocalizer = {
   translate: mobilePresentationTranslate,
-  formatDate: (date) => new Intl.DateTimeFormat(i18n.resolvedLanguage || i18n.language).format(date),
-  formatTime: (date) => new Intl.DateTimeFormat(i18n.resolvedLanguage || i18n.language, {
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date),
+  formatDate: (date) => formatPresentationDate(date, i18n.resolvedLanguage || i18n.language),
+  formatTime: (date) => formatPresentationTime(date, i18n.resolvedLanguage || i18n.language),
 };

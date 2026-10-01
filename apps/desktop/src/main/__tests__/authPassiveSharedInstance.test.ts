@@ -423,4 +423,17 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(passiveBranch).not.toContain('removeSafe(');
     expect(passiveBranch).not.toContain('clearReloginFlag();');
   });
+
+  it('keeps a renderer fail-closed when it initializes during an owner boundary', () => {
+    const initializeStart = authSource.indexOf(
+      'export async function initialize(options: AuthInitializeOptions = {}): Promise<AuthState> {',
+    );
+    const localModeStart = authSource.indexOf(
+      "if (getActiveAppSession().mode === 'local') {",
+      initializeStart,
+    );
+    const initializePrefix = authSource.slice(initializeStart, localModeStart);
+    expect(initializePrefix).toContain('if (isOwnerChangeShellPending())');
+    expect(initializePrefix).toContain('return snapshotLoggedOutAuthState(true);');
+  });
 });

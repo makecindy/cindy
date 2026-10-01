@@ -30,6 +30,7 @@ import {
 } from '@/lib/authService';
 import {
   cancelRemoteOptimisticSendsForDataOwnerBoundary,
+  reconcileSessionsAfterDataOwnerRollback,
   setCurrentUserName,
 } from '@/lib/makerChatStore';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
@@ -121,11 +122,21 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 const log = createLogger('AuthContext');
 
-function publishDataOwnerGeneration(dataOwnerId: string | null, ownerGeneration?: number): void {
+function publishDataOwnerGeneration(
+  dataOwnerId: string | null,
+  ownerGeneration?: number,
+  options?: { finalizeSessions?: boolean },
+): void {
   const previousOwnerId = getDataOwnerGeneration().dataOwnerId;
-  if (previousOwnerId !== dataOwnerId) {
+  const ownerChanged = previousOwnerId !== dataOwnerId;
+  if (ownerChanged) {
     resetTaskTagCatalogCache();
-    cancelRemoteOptimisticSendsForDataOwnerBoundary();
+  }
+  // The pre-commit fence may already publish null. A committed owner change
+  // must still close sessions even when that published owner stays null.
+  if (ownerChanged || options?.finalizeSessions === true) {
+    if (options) cancelRemoteOptimisticSendsForDataOwnerBoundary(options);
+    else cancelRemoteOptimisticSendsForDataOwnerBoundary();
   }
   setDataOwnerGeneration(dataOwnerId, ownerGeneration);
   recentWorkdirsStore.setDataOwner(getDataOwnerGeneration());
@@ -167,14 +178,24 @@ export function AuthProvider({
   const activeDataOwnerIdRef = useRef<string | null>(null);
   const activeDataOwnerGenerationRef = useRef(0);
   const authStateVersionRef = useRef(0);
+  const hasAppliedAuthStateRef = useRef(false);
+  // Main broadcasts pending projections to every renderer. Keep this marker
+  // tied to the authoritative owner snapshots rather than local IPC promises:
+  // another window may have started a second boundary before this renderer's
+  // first operation settles.
+  const pendingOwnerProjectionRef = useRef(false);
 
   // Auth mutations invalidate owner-bound in-flight reads before crossing IPC. If Main rejects
   // the transition, restore the single authoritative owner ref (which successful siblings and
   // newer pushes both update), then rebuild the cache because React state may never have changed.
   const runDataOwnerBoundary = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
-    publishDataOwnerGeneration(null);
+    // Invalidate old-owner ingress before crossing IPC, but defer stopping the
+    // cached turn until the new owner has committed. On failure, reconcile
+    // against Main: an early rejection keeps the runtime, a late one may not.
+    publishDataOwnerGeneration(null, undefined, { finalizeSessions: false });
     try {
-      return await operation();
+      const result = await operation();
+      return result;
     } catch (error) {
       // Restore the exact main-owned generation. Recomputing it locally would
       // make every stamped push from the still-active owner look stale after a
@@ -182,7 +203,12 @@ export function AuthProvider({
       publishDataOwnerGeneration(
         activeDataOwnerIdRef.current,
         activeDataOwnerGenerationRef.current,
+        { finalizeSessions: false },
       );
+      const rollbackNeedsReconcile = pendingOwnerProjectionRef.current;
+      if (rollbackNeedsReconcile) {
+        void reconcileSessionsAfterDataOwnerRollback();
+      }
       setDataOwnerGenerationState(activeDataOwnerGenerationRef.current);
       setDataOwnerRecoveryEpoch((epoch) => epoch + 1);
       void preloadLocalCatalogSnapshot();
@@ -204,14 +230,106 @@ export function AuthProvider({
 
   const applyIncomingState = useCallback(
     (state: AuthState) => {
-      const ownerChanged = activeDataOwnerIdRef.current !== state.dataOwnerId;
-      publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);
-      if (ownerChanged) {
+      // Main briefly projects signed-out while an owner transition is pending.
+      // It keeps the old owner generation, so retain the authoritative owner
+      // refs until the commit or rollback arrives; otherwise the rollback is
+      // mistaken for a new owner and finalizes the task that should resume.
+      const rendererOwnerGeneration = getDataOwnerGeneration();
+      const signedOutProjection =
+        state.dataOwnerId === null
+        && state.mode === 'signed-out'
+        && !state.canEnterApp;
+      const initialBoundaryPendingProjection =
+        !hasAppliedAuthStateRef.current
+        && activeDataOwnerIdRef.current === null
+        && signedOutProjection
+        && (
+          state.ownerBoundaryPending === true
+          ||
+          (rendererOwnerGeneration.dataOwnerId !== null
+            && state.ownerGeneration === rendererOwnerGeneration.generation)
+          // A newly opened renderer has no synchronous owner stamp. Main's
+          // pending projection keeps the outgoing owner's generation, so a
+          // positive generation above the fresh renderer's zero baseline is
+          // the only boundary evidence available before the rollback push.
+          || (rendererOwnerGeneration.dataOwnerId === null
+            && rendererOwnerGeneration.generation === 0
+            && state.ownerGeneration > rendererOwnerGeneration.generation)
+        );
+      const pendingSignedOutProjection =
+        signedOutProjection
+        && (
+          (activeDataOwnerIdRef.current !== null
+            && state.ownerGeneration === activeDataOwnerGenerationRef.current)
+          || initialBoundaryPendingProjection
+        );
+      if (initialBoundaryPendingProjection && pendingSignedOutProjection) {
+        // A newly mounted renderer may receive the transient signed-out
+        // projection before it has hydrated its refs. Seed the known owner
+        // and generation (or just the generation for a fresh renderer) so the
+        // following rollback cannot finalize the running task.
+        if (rendererOwnerGeneration.dataOwnerId !== null) {
+          activeDataOwnerIdRef.current = rendererOwnerGeneration.dataOwnerId;
+        }
+        activeDataOwnerGenerationRef.current = state.ownerGeneration;
+      }
+      const initialOwnerHydration =
+        !hasAppliedAuthStateRef.current
+        && !pendingSignedOutProjection
+        && !pendingOwnerProjectionRef.current;
+      const unknownOwnerRollbackProjection =
+        pendingOwnerProjectionRef.current
+        && !pendingSignedOutProjection
+        && activeDataOwnerIdRef.current === null
+        && state.dataOwnerId !== null
+        && state.ownerGeneration === activeDataOwnerGenerationRef.current;
+      const ownerChanged =
+        !pendingSignedOutProjection
+        && !unknownOwnerRollbackProjection
+        && activeDataOwnerIdRef.current !== state.dataOwnerId;
+      const ownerRollbackProjection =
+        pendingOwnerProjectionRef.current
+        && !pendingSignedOutProjection
+        && (
+          unknownOwnerRollbackProjection
+          || (activeDataOwnerIdRef.current !== null && !ownerChanged)
+        );
+      // A fresh renderer starts with a null owner. When it observes the
+      // transient signed-out projection first, the successful null-owner
+      // commit keeps the same owner id but advances the generation. Treat
+      // that generation advance as the boundary commit so the renderer still
+      // finalizes the outgoing session cache and rehydrates owner-scoped data.
+      const committedNullOwnerProjection =
+        pendingOwnerProjectionRef.current
+        && !pendingSignedOutProjection
+        && state.dataOwnerId === null
+        && state.ownerGeneration !== activeDataOwnerGenerationRef.current;
+      const ownerBoundaryCommitted = ownerChanged || committedNullOwnerProjection;
+      if (pendingSignedOutProjection) pendingOwnerProjectionRef.current = true;
+      // A same-owner push can arrive while an auth boundary is still waiting
+      // for IPC. The pre-commit fence temporarily publishes null, so letting
+      // that push use the default finalizer would stop the current owner's
+      // task even when the boundary later rejects. Only a committed owner
+      // change may finalize the previous owner's sessions.
+      publishDataOwnerGeneration(
+        state.dataOwnerId,
+        state.ownerGeneration,
+        { finalizeSessions: ownerBoundaryCommitted && !initialOwnerHydration },
+      );
+      if (ownerBoundaryCommitted) {
+        pendingOwnerProjectionRef.current = false;
         sessionsStore.reset();
         clearWorkersCache();
       }
-      activeDataOwnerIdRef.current = state.dataOwnerId;
-      activeDataOwnerGenerationRef.current = state.ownerGeneration;
+      // Any renderer may receive the rollback projection before the initiating
+      // IPC promise rejects. Reconcile without consuming the operation marker;
+      // listActive keeps a still-running old-owner turn resumable.
+      if (ownerRollbackProjection) void reconcileSessionsAfterDataOwnerRollback();
+      if (!pendingSignedOutProjection) {
+        activeDataOwnerIdRef.current = state.dataOwnerId;
+        activeDataOwnerGenerationRef.current = state.ownerGeneration;
+        hasAppliedAuthStateRef.current = true;
+      }
       setDataOwnerGenerationState(state.ownerGeneration);
       setNewMakerDraftOwner(state.dataOwnerId);
       setProviderModelMemoryOwner(state.dataOwnerId);
@@ -236,7 +354,7 @@ export function AuthProvider({
           && state.user?.membershipKind === 'org',
       );
       if (chatEmbeddingOwnerChanged) void refreshChatEmbeddingFromMain();
-      if (ownerChanged) {
+      if (ownerBoundaryCommitted || ownerRollbackProjection) {
         setMemorySettingsOwner(state.dataOwnerId);
         void bootstrapMemorySettingsFromMain();
       }
@@ -258,7 +376,7 @@ export function AuthProvider({
           applyIncomingUser(state.user);
         }
       } else {
-        activeUserIdRef.current = null;
+        if (!pendingSignedOutProjection) activeUserIdRef.current = null;
         setUser(null);
         // Both signed-out and local sessions have no Cindy user. Clear any
         // in-progress SSO/OTP step so returning to /login always starts fresh.

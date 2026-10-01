@@ -383,6 +383,12 @@ describe('stripMainOnlySendOpts(直连路径消毒)', () => {
     expect(stripMainOnlySendOpts(opts)).toEqual(opts);
   });
 
+  it('strips nested sharedTask authors without mutating the input', () => {
+    const opts = { persistUserMessage: { clientId: 'message', content: 'text', sharedTaskAuthor: { accountId: 'forged' } } };
+    expect(stripMainOnlySendOpts(opts)).toEqual({ persistUserMessage: { clientId: 'message', content: 'text' } });
+    expect(opts.persistUserMessage.sharedTaskAuthor).toEqual({ accountId: 'forged' });
+  });
+
   it('非对象输入原样返回(事务自己 ?? {} 兜底)', () => {
     expect(stripMainOnlySendOpts(undefined)).toBeUndefined();
     expect(stripMainOnlySendOpts(null)).toBeNull();

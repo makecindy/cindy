@@ -29,6 +29,7 @@ import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import JSZip from 'jszip';
 import { findClaudeSessionJsonl } from '@cindy/maker-core';
 
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { getActiveTeamByLead } from '../localDb/orcaTeamStore.js';
 import { createLogger } from '../logger.js';
@@ -37,6 +38,7 @@ import {
   dumpCodexThreadStateRows,
   type CodexThreadStateDump,
 } from '../maker-host/codex-local-sessions.js';
+import { readCodexThreadStorageReadOnly } from '../maker-host/codex-thread-storage.js';
 import { defaultClaudeConfigDirCandidates } from '../maker-orchestration/claudeTranscriptAnchors.js';
 import { resolveSafe as resolveImageUrl } from '../imageCacheStore.js';
 import { resolveSafe as resolveVideoUrl } from '../videoCacheStore.js';
@@ -79,19 +81,24 @@ export interface SessionShareExportOptions {
   password?: string | null;
   /** 超限重试时由 renderer 显式传入:跳过全部媒体,只保消息文本与转录。 */
   excludeMedia?: boolean;
-  /** 仅测试用:覆盖体积上限(默认 SHARE_EXPORT_SIZE_LIMIT_BYTES)。 */
+  /** Host resource budget override; ordinary sharing retains its default limit. */
   sizeLimitBytes?: number;
+  /** Host-only migration includes archived members without reviving them. */
+  migration?: boolean;
 }
 
 export type SessionShareExportOutcome =
   | {
       status: 'ok';
+      unpackedBytes: number;
       filePath: string;
       fidelity: XdtshareFidelity;
       /** 导出端没找到转录的 sdkSessionId 列表(cc fork 链部分缺失时非空)。 */
       missingTranscripts: string[];
       /** 引用了但文件已不存在的媒体数。 */
       mediaMissing: number;
+      /** 其中源机器上仍存在、只是没能打进包的媒体数(迁移据此判定会丢内容)。 */
+      mediaDropped: number;
       /** 随包携带的协同 Worker 会话数(非协同包为 0)。 */
       orcaWorkers: number;
     }
@@ -264,7 +271,7 @@ async function collectSessionPhaseA(
       sdkSessionIds = sdkSessionIds.filter((id) => allowed.has(id));
     }
     // 与 loadClaudeTranscriptAnchorIndex 同口径:遍历全部候选目录
-    // (CLAUDE_CONFIG_DIR → XDT_USER_DATA_DIR/claude-home → ~/.claude),
+    // (CLAUDE_CONFIG_DIR → ~/.claude → 旧版 dev 的 XDT_USER_DATA_DIR/claude-home),
     // 只查第一个会把落在后续候选的 jsonl 误记缺失(review bot P1)。
     const projectsRoots = defaultClaudeConfigDirCandidates().map((dir) =>
       path.join(dir, 'projects'),
@@ -312,7 +319,21 @@ async function collectSessionPhaseA(
     activeSdkSessionId = session.sdkSessionId;
     sdkSessionIds = session.sdkSessionId ? [session.sdkSessionId] : [];
     if (session.sdkSessionId) {
-      codexState = await dumpCodexThreadStateRows(session.sdkSessionId);
+      // 多账号线程的 state/rollout 在 codex-accounts 下,只有 thread-index 记着位置;
+      // 与 resume 共用只读定位,没有记录时才走旧的 desktop/外部 HOME 查找。记录存在
+      // 却读不出时不回退:旧 HOME 里可能留着同一线程的过期副本,按缺转录降档。
+      let lookupFailed = false;
+      const storage = await readCodexThreadStorageReadOnly(session.sdkSessionId).catch((err) => {
+        log.warn('codex thread storage lookup failed, exporting without its history', {
+          sessionId: session.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        lookupFailed = true;
+        return undefined;
+      });
+      codexState = lookupFailed
+        ? { threads: [], threadDynamicTools: [], threadSpawnEdges: [], rolloutPath: null }
+        : await dumpCodexThreadStateRows(session.sdkSessionId, storage);
       const bytes = codexState.rolloutPath ? await statSize(codexState.rolloutPath) : null;
       if (codexState.rolloutPath && bytes) {
         const zipPath = `${zipPrefix}transcripts/codex/${path.basename(codexState.rolloutPath)}`;
@@ -386,6 +407,7 @@ async function readSessionPhaseB(a: SessionPhaseA): Promise<SessionPhaseB> {
 /** lead 的 active team + Worker 会话收集;无 active team 返回 null(按普通会话导出)。 */
 async function collectOrcaWorkerSources(
   leadSessionId: string,
+  includeArchived = false,
 ): Promise<{ teamStatus: XdtshareOrcaManifest['teamStatus']; workers: OrcaWorkerSource[] } | null> {
   // 与运行期使用同一个 active team 选择与去重入口。历史 migration / drift
   // 可能留下多个 active team；直接 LIMIT 1 会导出用户当前看不到的旧 Worker 图。
@@ -415,7 +437,7 @@ async function collectOrcaWorkerSources(
         `orca worker session is missing or deleted: ${record.sessionId}`,
       );
     }
-    if (workerSession.status === 'archived') {
+    if (workerSession.status === 'archived' && !includeArchived) {
       log.info('archived orca worker excluded from export', {
         workerSessionId: record.sessionId,
       });
@@ -443,6 +465,9 @@ async function collectOrcaWorkerSources(
 export async function exportSessionShare(
   opts: SessionShareExportOptions,
 ): Promise<SessionShareExportOutcome> {
+  // 会话行、消息与 Codex thread-index 都按当前账号读取;中途换账号会把两个账号
+  // 的数据拼进同一个包,落盘前复核(scope 含代次,A→B→A 同样能识别)。
+  const ownerScope = activeOwnerScopeKey();
   const session = await readSessionRow(opts.sessionId);
   if (!session) throw codedError('NOT_FOUND', `session not found: ${opts.sessionId}`);
   if (session.status === 'deleted') {
@@ -472,7 +497,7 @@ export async function exportSessionShare(
   // ── 协同收集:lead 的 active team 全部 Worker 随包(stale lead 无 active
   //    team 时按普通会话导出)。Worker 允许 0 条消息(刚创建未派活)。──
   const orcaSources =
-    session.orcaRole === 'lead' ? await collectOrcaWorkerSources(session.id) : null;
+    session.orcaRole === 'lead' ? await collectOrcaWorkerSources(session.id, opts.migration) : null;
   const workerSources = orcaSources?.workers ?? [];
 
   // ── 阶段 A(lead + 每个 Worker) ──
@@ -496,6 +521,9 @@ export async function exportSessionShare(
     folder: string;
     bytes: number;
   }> = [];
+  // 源机器上存在却没进包的媒体(受管区外的 loose 文件、读失败)。源端本就缺失
+  // 的引用(文件已删、正文里仅以文字出现的地址)不计入:复制不会让它们更缺。
+  let mediaDropped = 0;
   if (!opts.excludeMedia) {
     // loose(xdt-file/xdt-audio)的 ?path= 指向本机任意绝对路径。为防被塞进消息
     // 文本的 URL 把无关本地文件(如凭证)静默打进分享包,只放行 userData/cc-agent
@@ -525,6 +553,16 @@ export async function exportSessionShare(
       const stat = await fsp.stat(absPath).catch(() => null);
       return stat?.isFile() && stat.size > 0 ? stat.size : null;
     };
+    // 只有确认源端没有内容才算「本就缺失」;权限/IO 错误读不到状态时按未打包计。
+    const confirmedAbsent = async (absPath: string): Promise<boolean> => {
+      try {
+        const stat = await fsp.stat(absPath);
+        return !stat.isFile() || stat.size === 0;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        return code === 'ENOENT' || code === 'ENOTDIR';
+      }
+    };
     const seenUrls = new Set<string>();
     // 协同包:媒体收集覆盖 lead 与全部 Worker 的消息(URL 全局去重,media-map
     // 仍是包级单份——xdt-image 按 URL host 解析,与展示会话无关)。
@@ -540,6 +578,9 @@ export async function exportSessionShare(
             (!resolved.absPath || !(await isManagedMediaPath(resolved.absPath)));
           const bytes = !looseBlocked && resolved.absPath ? await statSize(resolved.absPath) : null;
           if (!bytes) {
+            if (resolved.absPath && !(await confirmedAbsent(resolved.absPath))) {
+              mediaDropped += 1;
+            }
             mediaMap.push({ ...resolved.entry, zipPath: null });
             continue;
           }
@@ -582,6 +623,7 @@ export async function exportSessionShare(
   for (const candidate of mediaCandidates) {
     const buffer = await fsp.readFile(candidate.absPath).catch(() => null);
     if (!buffer || buffer.length === 0) {
+      mediaDropped += 1;
       mediaMap.push({ ...candidate.entry, zipPath: null });
       continue;
     }
@@ -624,7 +666,14 @@ export async function exportSessionShare(
   const addSessionEntries = async (a: SessionPhaseA, b: SessionPhaseB): Promise<void> => {
     await addEntry(
       `${a.zipPrefix}session.json`,
-      JSON.stringify(buildSessionSnapshot(a.session, b.activeSdkSessionId), null, 2),
+      JSON.stringify(
+        {
+          ...buildSessionSnapshot(a.session, b.activeSdkSessionId),
+          ...(opts.migration ? { migrationSourceId: a.session.id, status: a.session.status } : {}),
+        },
+        null,
+        2,
+      ),
     );
     await addEntry(
       `${a.zipPrefix}messages.jsonl`,
@@ -693,6 +742,11 @@ export async function exportSessionShare(
   };
   zip.file('manifest.json', JSON.stringify(manifest, null, 2));
 
+  const unpackedBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0) +
+    Buffer.byteLength(JSON.stringify(manifest, null, 2));
+  if (opts.sizeLimitBytes !== undefined && unpackedBytes > limitBytes)
+    return { status: 'oversize', totalBytes: unpackedBytes, mediaBytes, limitBytes };
+
   const zipBytes = await zip.generateAsync({
     type: 'nodebuffer',
     compression: 'DEFLATE',
@@ -706,6 +760,9 @@ export async function exportSessionShare(
   // tmp 名带随机段 + 'wx' 独占创建:固定 `${target}.tmp` 可被共享目录里预先
   // 种下的同名 symlink 劫持(writeFile 跟随链接覆盖任意目标,review bot 指出),
   // 随机名不可预测,wx 在路径已存在(含 symlink)时直接 EEXIST 拒写。
+  if (activeOwnerScopeKey() !== ownerScope) {
+    throw codedError('SHARE_EXPORT_FAILED', 'account changed during export');
+  }
   const tmpPath = `${opts.targetPath}.${randomBytes(8).toString('hex')}.tmp`;
   try {
     await fsp.writeFile(tmpPath, fileBytes, { flag: 'wx' });
@@ -727,15 +784,18 @@ export async function exportSessionShare(
     missingTranscripts: missingTranscripts.length,
     media: mediaFiles.length,
     mediaMissing,
+    mediaDropped,
     encrypted: !!opts.password,
     fileBytes: fileBytes.length,
   });
   return {
     status: 'ok',
+    unpackedBytes,
     filePath: opts.targetPath,
     fidelity,
     missingTranscripts,
     mediaMissing,
+    mediaDropped,
     orcaWorkers: workerSources.length,
   };
 }

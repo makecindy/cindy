@@ -98,6 +98,7 @@ function startOptions(
   runtime: IOSSimulatorRuntimeInfo | null,
   xcodeVersion: string | null,
   architecture: 'arm64' | 'x86_64',
+  developerDirectory: string | null,
 ): IOSSimulatorNativeSidecarStartOptions {
   return {
     instanceId: 'ios-simulator-release-gate',
@@ -108,6 +109,7 @@ function startOptions(
           runtimeIdentifier: runtime.identifier,
           runtimeBuildVersion: runtime.buildVersion,
           xcodeBuild: xcodeVersion ?? 'unknown',
+          developerDirectory: developerDirectory ?? undefined,
           architecture,
         }
       : undefined,
@@ -325,11 +327,17 @@ export async function runIOSSimulatorReleaseGate(
     availableRuntimes[0] ?? null,
     environment.xcodeVersion,
     architecture,
+    environment.xcodeSelectPath,
   );
   const artifact = await dependencies.resolveArtifact(initialStart);
 
   const candidates = (availableRuntimes.length > 0 ? availableRuntimes : [null]).map((runtime) => {
-    const start = startOptions(runtime, environment.xcodeVersion, architecture);
+    const start = startOptions(
+      runtime,
+      environment.xcodeVersion,
+      architecture,
+      environment.xcodeSelectPath,
+    );
     const policy = resolveIOSSimulatorDesktopAdmissionPolicy({
       packaged: true,
       platform: options.platform,

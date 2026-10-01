@@ -2,14 +2,17 @@ import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import originalFs from 'original-fs';
-import type { CindyVersionsState } from '../../shared/cindyVersions.js';
+import {
+  CINDY_PERSONAL_VERSION,
+  type CindyVersionInfo,
+  type CindyVersionsState,
+} from '../../shared/cindyVersions.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   captureDataOwnerBroadcastScope,
   isDataOwnerBroadcastScopeCurrent,
 } from '../device-link/broadcast-tap.js';
-import { readRelaunchBlockingActivity } from '../relaunchBusyActivityIpc.js';
 import {
   describeOriginalVersion,
   getCurrentCindyVersionId,
@@ -18,7 +21,9 @@ import {
 } from './versionStartup.js';
 import {
   assertVersionDirectory,
+  describePersonalVersion,
   listPersonalVersions,
+  personalVersionId,
   readOriginalVersion,
   readVersionJson,
   selectedVersion,
@@ -26,11 +31,15 @@ import {
   versionsRoot,
   VERSION_ID,
   withVersionStore,
+  writeVersionJson,
 } from './versionStore.js';
+import { cleanupPersonalVersions } from './personalVersionCleanup.js';
 
 let makeBusy: () => boolean = () => true;
-export function configureCindyVersions(probe: () => boolean): void {
+let buildBusy: () => boolean = () => false;
+export function configureCindyVersions(probe: () => boolean, buildProbe: () => boolean = () => false): void {
   makeBusy = probe;
+  buildBusy = buildProbe;
 }
 export async function getCindyVersions(): Promise<CindyVersionsState> {
   const profile = app.getPath('userData');
@@ -46,30 +55,38 @@ export async function getCindyVersions(): Promise<CindyVersionsState> {
       )?.version;
     } catch {}
   }
+  const originalInfo: CindyVersionInfo = {
+    id: 'original',
+    kind: 'original',
+    development: Boolean(original?.development),
+    version: typeof version === 'string' ? version : undefined,
+    commit: typeof original?.commit === 'string' ? original.commit : undefined,
+    dirty: original?.dirty === true,
+    available: !!original && fs.existsSync(original.executable),
+    compatible: true,
+  };
+  const personal = listPersonalVersions(profile, original)[0];
+  const publicId = (id: string) => (id === 'original' ? id : CINDY_PERSONAL_VERSION);
   return {
-    currentId,
-    selectedId: selectedVersion(profile),
+    currentId: publicId(currentId),
+    selectedId: publicId(selectedVersion(profile)),
     switching: isCindyVersionSwitching(),
-    versions: [
-      {
-        id: 'original',
-        kind: 'original',
-        development: Boolean(original?.development),
-        version: typeof version === 'string' ? version : undefined,
-        commit: typeof original?.commit === 'string' ? original.commit : undefined,
-        dirty: original?.dirty === true,
-        available: !!original && fs.existsSync(original.executable),
-        compatible: true,
-      },
-      ...listPersonalVersions(profile, original),
-    ],
+    versions: [originalInfo, ...(personal ? [{ ...personal, id: CINDY_PERSONAL_VERSION }] : [])],
+    currentVersion:
+      currentId === 'original'
+        ? originalInfo
+        : {
+            ...describePersonalVersion(profile, currentId, original),
+            id: CINDY_PERSONAL_VERSION,
+          },
+    personalUpdateAvailable: currentId !== 'original' && !!personal && personal.id !== currentId,
   };
 }
 export async function actCindyVersion(action: unknown, id: unknown): Promise<CindyVersionsState> {
   if (
     (action !== 'switch' && action !== 'remove') ||
     typeof id !== 'string' ||
-    (id !== 'original' && !VERSION_ID.test(id))
+    (id !== 'original' && id !== CINDY_PERSONAL_VERSION && !VERSION_ID.test(id))
   )
     throwIpcError('INVALID_PARAMS', 'Invalid version action');
   const scope = captureDataOwnerBroadcastScope();
@@ -77,31 +94,45 @@ export async function actCindyVersion(action: unknown, id: unknown): Promise<Cin
   const current = () =>
     isDataOwnerBroadcastScopeCurrent(scope) && app.getPath('userData') === profile;
   try {
-    if (makeBusy() || isCindyVersionSwitching()) throwIpcError('PRECONDITION_FAILED', 'busy');
+    // An explicit switch may interrupt tasks and tests, but a personal build must
+    // finish or stop first. Normal quit does not replay background build jobs.
+    // Removing the personal version still requires the broad busy guard below.
+    if (action === 'switch' && buildBusy())
+      throwIpcError('PRECONDITION_FAILED', 'building');
+    if ((action === 'remove' && makeBusy()) || isCindyVersionSwitching())
+      throwIpcError('PRECONDITION_FAILED', 'busy');
     if (action === 'switch') {
-      if (getCurrentCindyVersionId() === id) return getCindyVersions();
-      if ((await readRelaunchBlockingActivity()).busy || !current())
-        throwIpcError('PRECONDITION_FAILED', 'busy');
+      // Old completion cards carry generation UUIDs. They now address the same personal
+      // slot instead of resurrecting the application built for that historical task.
+      const targetId = id === 'original' ? id : personalVersionId(profile);
+      if (!targetId) throwIpcError('PRECONDITION_FAILED', 'unavailable');
+      if (getCurrentCindyVersionId() === targetId) return getCindyVersions();
       await startVersionHandoff(
-        id,
-        async () => current() && !makeBusy() && !(await readRelaunchBlockingActivity()).busy,
+        targetId,
+        async () =>
+          current() &&
+          !buildBusy() &&
+          (targetId === 'original' || personalVersionId(profile) === targetId),
       );
       if (!current()) throwIpcError('PRECONDITION_FAILED', 'busy');
       // Normal quit awaits the existing Maker, plugin, credential and DB disposers.
       setImmediate(() => app.quit());
     } else {
       await withVersionStore(profile, async () => {
+        const targetId = personalVersionId(profile);
         if (
           !current() ||
           id === 'original' ||
-          id === getCurrentCindyVersionId() ||
-          id === selectedVersion(profile)
+          getCurrentCindyVersionId() !== 'original' ||
+          selectedVersion(profile) !== 'original'
         )
           throwIpcError('PRECONDITION_FAILED', 'busy');
+        if (!targetId || (id !== CINDY_PERSONAL_VERSION && id !== targetId))
+          throwIpcError('PRECONDITION_FAILED', 'unavailable');
         const active = readVersionJson<{ id: string; pid: number }>(
           path.join(versionsRoot(profile), 'active.json'),
         );
-        if (active?.id === id) {
+        if (active && active.id !== 'original') {
           try {
             process.kill(active.pid, 0);
             throwIpcError('PRECONDITION_FAILED', 'busy');
@@ -109,20 +140,27 @@ export async function actCindyVersion(action: unknown, id: unknown): Promise<Cin
             if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
           }
         }
-        const directory = versionDirectory(profile, id);
+        const directory = versionDirectory(profile, targetId);
         assertVersionDirectory(profile, directory);
-        await originalFs.promises.rm(directory, {
-          recursive: true,
-          force: true,
-          maxRetries: 3,
-          retryDelay: 200,
-        });
+        const runtime = path.join(directory, 'runtime');
+        if (fs.existsSync(runtime)) {
+          assertVersionDirectory(profile, runtime);
+          await originalFs.promises.rm(runtime, {
+            recursive: true,
+            force: true,
+            maxRetries: 3,
+            retryDelay: 200,
+          });
+        }
+        // Explicit deletion must not rediscover an older generation from the legacy registry.
+        writeVersionJson(path.join(versionsRoot(profile), 'personal.json'), { id: null });
       });
+      await cleanupPersonalVersions(profile);
     }
     return getCindyVersions();
   } catch (error) {
     const code = (error as { code?: string }).code;
-    if (code === 'busy' || code === 'incompatible' || code === 'launchFailed')
+    if (code === 'busy' || code === 'building' || code === 'incompatible' || code === 'launchFailed')
       throwIpcError('PRECONDITION_FAILED', code);
     if (isIpcError(error)) throw error;
     throwIpcError('PRECONDITION_FAILED', 'unavailable');

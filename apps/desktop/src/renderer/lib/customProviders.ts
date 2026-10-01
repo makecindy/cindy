@@ -1,4 +1,4 @@
-import { mergeDiscoveredRuntimeModels, isOpenRouterModelsUrl, type DiscoveredModel } from '@cindy/model-providers';
+import { catalogModelMetadata, mergeDiscoveredRuntimeModels, isOpenRouterModelsUrl, type DiscoveredModel } from '@cindy/model-providers';
 /**
  * customProviders —— 自定义供应商「配置 + per-runtime 密钥」的 renderer 侧写入编排。
  *
@@ -75,25 +75,11 @@ export function customProviderWireProtocolForSave(
  * 推断（PR review P1）；无标记的旧视图快照回退等值判断,行为不变。
  */
 export function customProviderModelConfigFromCatalogModel(
-  model: Pick<
-    CatalogModel,
-    | 'id'
-    | 'name'
-    | 'contextWindow'
-    | 'contextWindowExplicit'
-    | 'userModelConfig'
-    | 'discoveredMetadata'
-    | 'discoveredCost'
-    | 'nameExplicit'
-    | 'defaultEnabled'
-    | 'supportsImageInput'
-    | 'piApi'
-    | 'route'
-  > &
-    Partial<Pick<CatalogModel, 'efforts' | 'defaultEffort'>>,
+  model: Pick<CatalogModel, 'id' | 'name' | 'contextWindow'> & Partial<CatalogModel>,
   agent?: AgentKind,
 ): ProviderRuntimeModelConfig {
   if (model.userModelConfig) return structuredClone(model.userModelConfig);
+  const { contextWindow: _window, name: _name, ...capabilities } = catalogModelMetadata(model);
   const reasoningEfforts =
     agent === 'pi'
       ? (model.efforts ?? []).filter((effort): effort is PiReasoningEffort =>
@@ -101,6 +87,8 @@ export function customProviderModelConfigFromCatalogModel(
         )
       : [];
   return {
+    ...capabilities,
+    ...(model.api ? { api: model.api } : {}),
     id: model.id,
     name: model.name,
     discoveredMetadata: model.discoveredMetadata,
@@ -169,7 +157,7 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
   };
 }
 
-/** 刷新时只追加接口新发现的模型，并让新增模型默认隐藏。端点声明的 contextWindow 随发现带入(#386)。 */
+/** Refresh metadata and append new models; native-engine defaults decide visibility. */
 export function appendDiscoveredCustomProviderModels(
   existing: readonly ProviderRuntimeModelConfig[],
   discovered: readonly DiscoveredModel[],
@@ -195,7 +183,7 @@ export function appendDiscoveredCustomProviderModels(
     }
     prior = [...normalized.values()];
   }
-  const models = mergeDiscoveredRuntimeModels(prior, discovered, true);
+  const models = mergeDiscoveredRuntimeModels(prior, discovered);
   const known = new Set(existing.map((model) => model.id));
   return {
     models,

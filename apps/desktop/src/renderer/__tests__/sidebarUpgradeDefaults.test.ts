@@ -85,12 +85,12 @@ describe('侧边栏升级兼容性:默认配置', () => {
     vintageTesting.resetMemo();
   });
 
-  it('新用户默认:项目 + 设备 + 对话三层分组,按时间排序,任务信息显示标签和时间', () => {
+  it('新用户默认:项目 + 设备 + 对话三层分组,按时间排序,任务信息只显示时间', () => {
     expect(loadGroupBy()).toBe('project');
     expect(loadGroupDevice()).toBe(true);
     expect(loadGroupDialogue()).toBe(true);
     expect(loadSortBy()).toBe('recency');
-    expect(loadTaskInfoFields()).toEqual(['tags', 'time']);
+    expect(loadTaskInfoFields()).toEqual(['time']);
   });
 
   it('分组默认不分老新:老安装拿到同一套分组默认', () => {

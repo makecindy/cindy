@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   resolveModelMetadata,
   expandedRegistryEntries,
+  applyModelMetadata,
+  catalogModelMetadata,
+  pickModelMetadata,
 } from "../modelMetadataLayers.js";
+import type { CatalogModel } from '../types.js';
 import { parseModelRegistry } from "../modelAccessValidator.js";
 import type { ModelRegistry } from "../modelAccessBean.js";
 
@@ -41,6 +45,43 @@ const registry: ModelRegistry = {
     },
   ],
 };
+
+it('keeps inherited capacity unverified through resolution and repeated catalog projection', () => {
+  const r: ModelRegistry = { schemaVersion: 4, updatedAt: registry.updatedAt, models: [],
+    baseModels: [{ id: 'private-6', aliases: [], defaults: { contextWindow: 64000 } }] };
+  const model: CatalogModel = { id: 'private-7', name: 'New', contextWindow: 200000,
+    contextWindowVerified: true, efforts: [], defaultEffort: null };
+  const metadata = resolveModelMetadata(r, 'supplier', model.id);
+  const inherited = applyModelMetadata(model, metadata);
+  expect(inherited).toMatchObject({ contextWindow: 64000, contextWindowVerified: false });
+  expect(JSON.parse(JSON.stringify(metadata))).toEqual(pickModelMetadata(metadata));
+  const live = catalogModelMetadata(inherited);
+  expect(applyModelMetadata(inherited, resolveModelMetadata(r, 'supplier', model.id, live)))
+    .toMatchObject({ contextWindow: 64000, contextWindowVerified: false });
+  for (const [reported, user] of [[{ contextWindow: 64000 }, undefined], [live, { contextWindow: 64000 }]] as const) {
+    expect(applyModelMetadata(inherited, resolveModelMetadata(r, 'supplier', model.id, reported, user)))
+      .toMatchObject({ contextWindow: 64000, contextWindowVerified: true });
+  }
+  r.models = [{ id: 'new-model', name: 'New', routes: [{ providerId: 'supplier', modelId: model.id,
+    agents: ['codex'], forceOverrides: { contextWindow: 32000 }, overrideReason: 'Verified capacity' }] }];
+  expect(applyModelMetadata(inherited, resolveModelMetadata(r, 'supplier', model.id, live)))
+    .toMatchObject({ contextWindow: 32000, contextWindowVerified: true });
+});
+
+it('drops an inherited maximum below the current model working window through repeated projection', () => {
+  const r: ModelRegistry = { schemaVersion: 4, updatedAt: registry.updatedAt, models: [],
+    baseModels: [{ id: 'private-6', aliases: [], defaults: { contextWindow: 128000, contextWindowMax: 128000 } }] };
+  const base: CatalogModel = { id: 'private-7', name: 'New', contextWindow: 200000, contextWindowMax: 128000,
+    efforts: [], defaultEffort: null };
+  const resolved = resolveModelMetadata(r, 'supplier', base.id, { contextWindow: 256000 });
+  expect(resolved.contextWindow).toBe(256000);
+  expect(resolved.contextWindowMax).toBeUndefined();
+  const projected = applyModelMetadata(base, resolved);
+  expect(projected).toMatchObject({ contextWindow: 256000, contextWindowVerified: true });
+  const again = applyModelMetadata(projected, resolveModelMetadata(r, 'supplier', base.id, catalogModelMetadata(projected)));
+  expect(again.contextWindowMax).toBeUndefined();
+  expect(again.contextWindow).toBe(256000);
+});
 
 it("honors entry names below route, live, force and user names", () => {
   const r = structuredClone(registry);
@@ -96,6 +137,28 @@ it("requires public effort defaults to stand alone even without registry routes"
   expect(parseModelRegistry(r).ok).toBe(true);
 });
 describe("model metadata precedence", () => {
+  it("keeps one model default across Harness recommendations and adapts only to real capabilities", () => {
+    const r = structuredClone(registry);
+    r.models[0].routes[0].agents = ["claude-code", "codex"];
+    for (const agent of ["claude-code", "codex", "pi"]) {
+      expect(resolveModelMetadata(r, "supplier", "model", {
+        efforts: ["low", "high"], defaultEffort: "high",
+      }, undefined, agent)).toMatchObject({ efforts: ["low", "high"], defaultEffort: "low" });
+      expect(resolveModelMetadata(r, "supplier", "model", {
+        efforts: ["high"], defaultEffort: "high",
+      }, undefined, agent).defaultEffort).toBe("high");
+    }
+    r.models[0].perAgent = { codex: { defaultEffort: "high" } };
+    expect(resolveModelMetadata(r, "supplier", "model", undefined, undefined, "codex").defaultEffort)
+      .toBe("high");
+    expect(resolveModelMetadata(r, "supplier", "model", undefined, undefined, "pi").defaultEffort)
+      .toBe("low");
+    expect(resolveModelMetadata(r, "supplier", "model", undefined, { defaultEffort: "low" }, "codex").defaultEffort)
+      .toBe("low");
+    expect(resolveModelMetadata(undefined, "supplier", "unknown", { defaultEffort: "high" }).defaultEffort)
+      .toBe("high");
+  });
+
   it("inherits per field and lets supplier data beat defaults, explicit force beat supplier and user beat force", () => {
     expect(parseModelRegistry(registry).ok).toBe(true);
     expect(resolveModelMetadata(registry, "supplier", "model")).toMatchObject({
@@ -147,7 +210,7 @@ describe("model metadata precedence", () => {
       supportsFastMode: false,
     });
     expect(
-      resolveModelMetadata(registry, "supplier", "model", {
+      resolveModelMetadata(registry, "supplier", "model", undefined, {
         defaultEffort: null,
       }).defaultEffort,
     ).toBeNull();

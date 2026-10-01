@@ -17,6 +17,12 @@ import {
 describe('isNetworkishErrorMessage', () => {
   it.each([
     // Anthropic SDK 重试耗尽后透传的终止型错误原文
+    'Error Code null: Service temporarily unavailable. The model\'s availability is currently degraded.',
+    'SERVICE TEMPORARILY UNAVAILABLE',
+    'Service is temporarily unavailable.',
+    'Service Unavailable',
+    "The model's availability is currently degraded.",
+    'Model availability is degraded.',
     'Request timed out.',
     'API Error: The operation timed out.',
     'Connection error.',
@@ -39,6 +45,11 @@ describe('isNetworkishErrorMessage', () => {
 
   it.each([
     'Invalid API key',
+    'Permission denied',
+    'Insufficient quota',
+    'Model unavailable for this account',
+    'Tool availability is currently degraded',
+    'Degraded performance',
     'thread not found',
     'context window exceeded',
     'Local tool operation timed out.',

@@ -348,7 +348,10 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     const reasoningEffort = !reasoningSupported ? 'none' : prefEffort;
 
     // Fast 模式:prefs.fast × provider.fastServiceTier(codex='priority')。
-    const serviceTier = prefs?.fast === true && provider.fastServiceTier ? provider.fastServiceTier : undefined;
+    const fastModel = prefs?.fast === true ? provider.fastModel?.(realModel) : undefined;
+    const serviceTier = !fastModel && prefs?.fast === true ? provider.fastServiceTier : undefined;
+    // Cindy's existing usage variant uses priority for Fast pricing, independently of wire service_tier.
+    const priceTier = fastModel ? 'priority' : serviceTier ?? 'default';
 
     // 上游服务端工具(如 xAI x_search):只由 provider 按 model 静态声明,不受会话态影响,
     // 保证同一会话逐轮请求带同一份工具列表(前缀稳定)。
@@ -363,7 +366,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       && provider.prefix === 'xai/'
       && realModel === 'grok-4.6';
     const responsesReq = translateRequest(parsed, {
-      model: realModel,
+      model: fastModel ?? realModel,
       promptCacheKey: sessionId,
       maxOutputTokensSupported: provider.maxOutputTokensSupported,
       reasoningEffort,
@@ -481,7 +484,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     // 完整的 Anthropic Message JSON。上游恒回 SSE(只接受流式),所以这里缓冲整流后组装;
     // 同时兼容个别上游直接给 Responses JSON 的情况。
     if (!downstreamStreaming) {
-      const translator = new SseTranslator(wireModel, serviceTier ?? 'default', provider.reasoningNamespace);
+      const translator = new SseTranslator(wireModel, priceTier, provider.reasoningNamespace);
       const collector = new AnthropicMessageCollector();
       const collect = (event: AnthropicSseEvent): void => {
         diagnostics?.recordDownstreamEvent(event);
@@ -547,7 +550,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
 
     // 用 wireModel(带前缀,如 chatgpt/gpt-5.5)而非 realModel 构造 —— message_start 回显带前缀 id,
     // CC 的 modelUsage 据此记账,下游 usage 可按前缀区分订阅轮,不与真网关同名裸模型混淆。
-    const translator = new SseTranslator(wireModel, serviceTier ?? 'default', provider.reasoningNamespace);
+    const translator = new SseTranslator(wireModel, priceTier, provider.reasoningNamespace);
     const reader = upstream.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';

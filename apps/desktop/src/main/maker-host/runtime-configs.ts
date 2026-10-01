@@ -18,8 +18,8 @@ import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js'
 import { getActiveCatalog } from './active-catalog.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import { claudeBehaviorFlagsForSpawn } from './claude-behavior-flags.js';
-import { hasClaudeAiOAuth } from './claude-credentials-store.js';
-import { readClaudeAccountOAuth } from './subscription-account-auth.js';
+import { isAnthropicWireModel } from './claude-gateway-config.js';
+import { hasClaudeNativeLogin } from './claude-native-auth.js';
 import claudeSystemPrompt from './claude-system-prompt.md?raw';
 import codexSystemPrompt from './codex-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
@@ -172,8 +172,9 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
         credentialMode: ctx.credentialMode,
         providerId: ctx.sessionProviderId,
         nativeAuth: getActiveCatalog().providers.find(p => p.id === ctx.sessionProviderId)?.auth.native,
+        // 独立 Claude 账号已停用,只有本机 Claude Code 登录算「连了订阅」。
         oauthConnected: () => getActiveCatalog().providers.find(p => p.id === ctx.sessionProviderId)?.auth.native === 'claude'
-          ? Boolean(readClaudeAccountOAuth(ctx.sessionProviderId!)?.accessToken) : hasClaudeAiOAuth(),
+          ? false : hasClaudeNativeLogin(),
       }),
       // 工具链限核 env(agent 资源占用治理):只对本机 spawn 注入 —— 值按本机
       // 核数算,远端机器的资源不归本设置管。设置关闭时为空对象,零影响。
@@ -251,6 +252,9 @@ function resolveSubagentModelForRoute(
 ): string | undefined {
   const saved = readSubagentModelSettings().claudeCode ?? undefined;
   if (!saved) return undefined;
+  // Claude 订阅会话由 CLI 用本机登录直连 Anthropic,子代理请求不经 proxy 按模型路由:
+  // 只有 Anthropic 一方模型能用,其它覆写(chatgpt/ / xai/ / 用户来源的裸 id)不注入。
+  if (credentialMode === 'oauth-bearer' && !isAnthropicWireModel(saved)) return undefined;
   const overrides = readModelDisableOverrides();
   const offering = getActiveCatalog().providers.filter((p) =>
     (p.models['claude-code'] ?? []).some((m) => m.id === saved),

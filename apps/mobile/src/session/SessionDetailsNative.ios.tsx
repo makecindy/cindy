@@ -1,3 +1,4 @@
+import { useNativeGlassButtonStyle } from "@/platform/chrome/nativeGlassButtonStyle.ios";
 import { Host } from "@expo/ui";
 import {
   BottomSheet,
@@ -174,6 +175,7 @@ export function SessionDetailsNativeHeading({
   backLabel,
   onBack,
 }: Pick<SessionDetailsNativeProps, 'title' | 'backLabel' | 'onBack'>) {
+  const glassStyle = useNativeGlassButtonStyle({ shape: 'circle' });
   return (
     <HStack
       modifiers={[
@@ -192,7 +194,7 @@ export function SessionDetailsNativeHeading({
           onPress={onBack}
           modifiers={[
             labelStyle('iconOnly'),
-            buttonStyle('glass'),
+            ...glassStyle,
             frame({ width: 44, height: 44 }),
           ]}
         />

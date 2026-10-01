@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, RotateCcw } from 'lucide-react';
@@ -242,20 +243,16 @@ export function FontFamilyPicker({
                     'focus:border-[var(--settings-input-border-focus)]',
                   )}
                 />
-                <button
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  compact
                   type="button"
                   onClick={() => handleSelect(customPreview)}
                   disabled={!customPreview}
-                  className={cn(
-                    'h-9 shrink-0 rounded-xl px-3 text-13 font-medium',
-                    'border border-[var(--settings-input-border)]',
-                    'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                    'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-                    'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-[var(--settings-input-bg)]',
-                  )}
                 >
                   {t('settings.appearance.font.applyCustom')}
-                </button>
+                </Button>
               </div>
             </div>
           </div>

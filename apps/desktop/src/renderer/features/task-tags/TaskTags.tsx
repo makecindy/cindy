@@ -18,6 +18,7 @@ import {
 } from '@cindy/maker-shared';
 import type { Session } from '@/lib/ccAgent.types';
 import { isRemoteSessionWriteBlocked } from '@/features/cc-agent/lib/remoteSessionWriteGuard';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 const buttonBase = 'rounded-full px-3 py-1.5 text-sm disabled:opacity-40';
 const button = `${buttonBase} enabled:hover:bg-[var(--surface-hover)]`;
@@ -108,7 +109,7 @@ export function TaskTagMenuSection({ session, onMore }: { session: Session; onMo
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const blocked = isRemoteSessionWriteBlocked(session);
+  const blocked = isSharedTaskPeer(session.deviceLinkDeviceId ?? '') || isRemoteSessionWriteBlocked(session);
   useEffect(() => {
     selectionGeneration.current++;
     setSelected(session.tags ?? []);
@@ -254,7 +255,7 @@ export function TaskTagMenuSection({ session, onMore }: { session: Session; onMo
       {error && (
         <p className="max-w-64 text-xs text-[var(--text-secondary)]" role="status">
           {t(`taskTags.${error}`)}
-          {error === 'loadFailed' && (
+          {(error === 'loadFailed' || error === 'remoteBusy') && (
             <button
               type="button"
               className={button}
@@ -516,6 +517,7 @@ export function TaskTagEditor({ session, onClose }: { session: Session; onClose:
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[200] bg-[var(--overlay-modal)]" />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
           onDragStart={(e) => e.stopPropagation()}
@@ -900,7 +902,7 @@ export function TaskTagEditor({ session, onClose }: { session: Session; onClose:
               role="alert"
             >
               {t(`taskTags.${blocked ? 'offline' : error}`)}
-              {!blocked && error === 'loadFailed' && (
+              {!blocked && (error === 'loadFailed' || error === 'remoteBusy') && (
                 <button
                   type="button"
                   className={button}

@@ -43,6 +43,8 @@ vi.mock('../useFileChipContextMenu', () => ({
   useFileChipContextMenu: mocks.useFileChipContextMenu,
 }));
 
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import type { Session } from '@/lib/ccAgent.types';
 import { SidebarHostSessionProvider } from '@/features/right-sidebar/lib/sidebarHostSession';
 import { TurnChangesCard } from '../TurnChangesCard';
 import type { TurnChangeSetSummary } from '../../../../shared/turnChangeSet';
@@ -257,6 +259,26 @@ describe('TurnChangesCard file actions', () => {
     expect(screen.queryByText(/\+0/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'chat.turnChanges.review' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'chat.turnChanges.undoAria' })).toBeNull();
+  });
+
+  it('reconciles a lost remote undo response without replaying the write or touching local files', async () => {
+    const sessionId = 'remote-restore-card';
+    const remoteSummary = { ...CHANGE_SET, sessionId, workspaceState: 'undone' };
+    const invoke = vi.fn()
+      .mockRejectedValueOnce(new Error('request timed out'))
+      .mockResolvedValueOnce({ ok: true, result: [remoteSummary] });
+    Object.assign(window.electronAPI, { deviceLink: { invoke } });
+    remoteProjectsStore.setDeviceSessions('card-host', 'Host', [{ id: sessionId } as Session]);
+    render(<TurnChangesCard sessionId={sessionId} changeSet={{ ...CHANGE_SET, sessionId }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'chat.turnChanges.undoAria' }));
+    await screen.findByRole('button', { name: 'chat.turnChanges.reapplyAria' });
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('chat.turnChanges.undoSuccess');
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(invoke.mock.calls).toEqual([
+      ['card-host', 'maker:turn-change-set:apply', [sessionId, CHANGE_SET.id, 'undo']],
+      ['card-host', 'git-review:remote-op', [{ op: 'turn-list', payload: { sessionId } }]],
+    ]);
+    expect(mocks.applyTurnChangeSet).not.toHaveBeenCalled();
   });
 
   it('does not offer undo for a non-reversible patch', () => {

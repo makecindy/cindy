@@ -32,6 +32,10 @@
     "expand": "Expand",
     "automationOriginNamed": "Sent by automation task “{{name}}”",
     "automationOrigin": "Sent by an automation task",
+    "sessionOriginNamed": "Sent by session “{{name}}”",
+    "botOriginNamed": "Sent by teammate “{{name}}”",
+    "sessionOrigin": "Sent by another session",
+    "openSessionOrigin": "Opens the source session",
     "modelMismatch": "This turn was answered by {{actual}} instead of the selected {{selected}} (temporary server-side downgrade)",
     "copyStateCopying": "Copying",
     "copyStateCopied": "Copied",
@@ -63,6 +67,9 @@
     "subagentTyped": "Subagent · {{type}}",
     "subagent": "Subagent",
     "workedDuration": "Worked {{duration}}",
+    "durationSeconds": "{{seconds}}s",
+    "durationMinutes": "{{minutes}}m",
+    "durationMinutesSeconds": "{{minutes}}m {{seconds}}s",
     "subagentSummary": "Subagent summary",
     "agentSwitchLabel": "Switched from {{from}} to {{to}}",
     "agentSwitchViewHandoff": "{{label}}, view handoff",
@@ -86,7 +93,6 @@
     "retryFetch": "Retry Fetch",
     "openMedia": "Open Media",
     "readCurrentRemoteFile": "Read current remote file",
-    "reading": "Reading",
     "retryFilePreview": "Retry File Preview",
     "readCurrentFile": "Read Current File",
     "currentFilePreview": "Current file preview",
@@ -119,17 +125,17 @@
     "mediaSize": "Size: {{size}}",
     "mediaExpiresAt": "Expires at: {{time}}",
     "mediaErrorLine": "Error: {{message}}",
-    "mediaDeviceLinkHint": "The mobile app will request the remote device to upload the media via device-link before opening it.",
+    "mediaDeviceLinkHint": "Before opening, your phone asks the remote device to upload this media.",
     "controlDelete": "Delete message",
-    "controlRewind": "Rewind to here",
-    "controlFork": "Fork session",
+    "controlRewind": "Back to here",
+    "controlFork": "Start new session from here",
     "markdownDocAriaLabel": "Message body",
     "toolOutputTitle": "{{label}} output",
     "toolInputTitle": "{{label}} input",
     "viewToolInput": "View full input",
     "loadingToolInput": "Loading full input",
     "retryToolInput": "Couldn't load input. Retry",
-    "toolResultCompacted": "Full tool output was released (original size {{size}})",
+    "toolResultCompacted": "Full tool output was trimmed (original size {{size}})",
     "mermaidEmpty": "Empty Mermaid diagram.",
     "diffEditCount": "{{n}} edits"
   },
@@ -155,7 +161,13 @@
     "loadFailed": "Image failed to load",
     "retryLoadImage": "Retry loading image",
     "retry": "Retry",
-    "closeImage": "Close image"
+    "closeImage": "Close image",
+    "discardAnnotationTitle": "Discard annotation?",
+    "discardAnnotationBody": "Your unsaved strokes will be lost.",
+    "continueAnnotating": "Keep annotating",
+    "discardAnnotation": "Discard",
+    "annotateUnavailableTitle": "Can't annotate right now",
+    "annotateImageUnavailable": "Annotate image (unavailable)"
   },
   "queue": {
     "continueSystemInstruction": "Continue the unfinished task (system instruction)",
@@ -249,12 +261,13 @@
     },
     "row": {
       "syntheticEditDisabled": "System instruction messages can't be edited or sent as interjections.",
+      "autoSentEditDisabled": "Automatically sent messages can't be edited or sent as interjections.",
       "first": "This is already the first item in the queue.",
       "last": "This is already the last item in the queue.",
       "steering": "Sending interjection",
       "orcaTitle": "Collaboration queue {{index}}",
       "title": "Queue {{index}}",
-      "orcaReadOnly": "Collaboration messages are orchestrated on the desktop and are read-only on mobile.",
+      "orcaEditDisabled": "Collaboration messages can't be edited or sent as interjections.",
       "busy": "Queue changes are syncing. Try again when syncing finishes.",
       "steeringDisabled": "The interjection is being sent to the current turn. Wait for the desktop response before changing it.",
       "editLocked": "This queued message is being edited. Try again when editing finishes.",
@@ -307,7 +320,7 @@
     "inlineMediaData": "Inline {{kind}} data",
     "mediaActionsAvailable": "The desktop app offers follow-up actions for this media.",
     "availableActions": "Available actions: {{actions}}",
-    "mediaActionsDesktopOnly": "Mobile V1 only displays these actions and does not trigger them remotely yet. Return to the desktop app to select one.",
+    "mediaActionsDesktopOnly": "For now, these actions can only be viewed on your phone. Use them on your computer.",
     "moreEdits": "…{{count}} more edits"
   },
   "quote": {
@@ -317,5 +330,10 @@
     "remove": "Remove quote",
     "closePreview": "Close quote preview",
     "menuLabel": "Add to chat"
+  },
+  "learning": {
+    "memory": "Remembered: {{title}}",
+    "skillCreated": "Created skill: {{title}}",
+    "skillUpdated": "Updated skill: {{title}}"
   }
 }

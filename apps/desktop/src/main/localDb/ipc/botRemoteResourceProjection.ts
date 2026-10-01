@@ -81,6 +81,7 @@ function resourceRef(id: string) {
 function sourceRevision(source: BotRemoteResourceSource): string {
   return [
     source.currentVersion,
+    source.invitation?.stage ?? '',
     source.updatedAt,
     source.lastMessageAt ?? 0,
     source.lastReplyAt ?? 0,
@@ -147,17 +148,8 @@ export function visibleBotRemoteResourceSources(
 }
 
 export function botRemoteResourceFromSource(source: BotRemoteResourceSource): RemoteResource {
-  const item = botRemoteCollectionItemFromSource(source);
-  return {
-    ...item,
-    ...(source.description
-      ? {
-          blocks: [{
-            id: 'about',
-            primitive: 'markdown',
-            fallbackMarkdown: source.description,
-          }],
-        }
-      : {}),
-  };
+  const blocks: NonNullable<RemoteResource['blocks']> = [];
+  if (source.description) blocks.push({ id: 'about', primitive: 'markdown', fallbackMarkdown: source.description });
+  if (source.invitation) blocks.push({ id: 'invitation', primitive: 'status', fallbackMarkdown: '', data: { stage: source.invitation.stage } });
+  return { ...botRemoteCollectionItemFromSource(source), ...(blocks.length ? { blocks } : {}) };
 }

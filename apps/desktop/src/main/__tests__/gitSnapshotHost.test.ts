@@ -169,6 +169,7 @@ describe('createGitSnapshotCoordinator', () => {
     } satisfies ShadowSavepointResult);
     const coordinator = createGitSnapshotCoordinator(maker, {
       readAutoSnapshotEnabled: vi.fn(() => enabled),
+      readAutoInitProjectGit: () => true,
       detectRepoRoot: vi.fn().mockResolvedValue(null),
       initializeProjectGit,
       createShadowSavepoint,
@@ -185,7 +186,7 @@ describe('createGitSnapshotCoordinator', () => {
         workingDir: '/workspace/project',
         remoteHostId: undefined,
       }),
-      { autoSnapshotEnabled: true },
+      { autoSnapshotEnabled: true, autoInitProjectGit: true },
     );
     expect(createShadowSavepoint).toHaveBeenCalledWith(
       '/workspace/project',
@@ -201,6 +202,7 @@ describe('createGitSnapshotCoordinator', () => {
     const createShadowSavepoint = vi.fn();
 
     await createGitSnapshotCoordinator(maker, {
+      readAutoSnapshotEnabled: () => false,
       createShadowSavepoint,
       logger,
     }).onTurnEnd('s1');

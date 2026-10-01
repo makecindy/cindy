@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * FileBrowserBody — file-browser plugin 的 TabBody 实现。
  *
@@ -822,13 +823,9 @@ function TreeLoadErrorPlaceholder({
         )}
       </span>
       {kind === 'load-failed' && (
-        <button
-          type="button"
-          onClick={onRetry}
-          className="rounded-md px-2 py-1 text-12 text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
-        >
+        <Button variant="secondary" size="xs" compact tone="quiet" type="button" onClick={onRetry}>
           {t('ccAgent.workdirBrowse.treeAction.refresh')}
-        </button>
+        </Button>
       )}
     </div>
   );

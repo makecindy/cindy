@@ -71,6 +71,11 @@ xcrun stapler validate /path/to/Cindy.app
 
 重点确认 Helper 与主 App 的 `TeamIdentifier` 一致，且 Helper 带有 Hardened Runtime。
 
+Xcode 27 的路径兼容与分能力登记见 [Xcode 27 兼容验证](ios-simulator-xcode27-compatibility.md)。
+`27.0 / 27A266a` + iOS `27.0 / 24A434` + Darwin `27.0.0` / arm64 已验证
+Sidecar/H.264 与屏幕寻址的 Native HID（单指、双指、取消、崩溃恢复）。这不等于最终
+Developer ID 签名包的 native release gate 已通过；发布 gate 保持严格，不能跳过输入断言。
+
 ## Helper 更新时
 
 Helper 发生任何代码变化后，必须重新执行完整的 Cindy.app 打包、签名和公证。不要替换已签名包

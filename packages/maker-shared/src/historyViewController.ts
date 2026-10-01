@@ -271,13 +271,14 @@ export class HistoryViewController<T extends HistoryMessageSource> {
         if (item.type === 'messages') {
           const found = item.messages.find((row) => row.clientId === clientId);
           if (found) return found;
-        } else if (!tried.has(item.key) && targetMs >= item.summary.startedAtMs && targetMs <= item.summary.endedAtMs) {
-          tried.add(item.key);
-          const summary = item.summary;
+        }
+        const summary = item.type === 'work' ? item.summary : item.deferred;
+        if (summary && !tried.has(summary.key) && targetMs >= summary.startedAtMs && targetMs <= summary.endedAtMs) {
+          tried.add(summary.key);
           const current = () => this.active && generation === this.generation
             && historyWorkSummaries(this.state.items).some((value) => value.key === summary.key && value.revision === summary.revision
               && value.firstMessageId === summary.firstMessageId && value.lastMessageId === summary.lastMessageId);
-          const cached = this.state.details.get(item.key);
+          const cached = this.state.details.get(summary.key);
           let messages = cached?.complete && cached.revision === summary.revision ? [...cached.messages] : [];
           if (!messages.length && this.networkAvailable) {
             // Search reads the bounded range without changing user expansion memory
@@ -294,7 +295,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
             }
             if (!current()) return null;
             const details = new Map(this.state.details);
-            details.set(item.key, { messages, revision: summary.revision, lastMessageId: summary.lastMessageId,
+            details.set(summary.key, { messages, revision: summary.revision, lastMessageId: summary.lastMessageId,
               loading: false, complete: true, error: null });
             this.publish({ details });
           }

@@ -31,6 +31,9 @@ const OS_ENV_KEYS = new Set([
   'tmp',
   'tmpdir',
   'systemroot',
+  // ConPTY does not restore SystemDrive as child_process does. MSBuild needs it
+  // to resolve CommonApplicationData; without it FileTracker fails with MSB4018.
+  'systemdrive',
   'windir',
   'comspec',
   'pathext',

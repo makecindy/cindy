@@ -2,7 +2,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { detectSensitivePath } from '../security/sensitivePath';
-import { gitExec, GitExecError } from '../worktree/gitExec';
+import { GitExecError } from '../worktree/gitExec';
+import { isolatedGitExec } from './isolatedGitExec';
 
 const DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MAX_CONTENT_SCAN_BYTES = DEFAULT_MAX_FILE_BYTES;
@@ -157,7 +158,7 @@ async function readStatusEntries(
   repoPath: string,
 ): Promise<{ entries: SnapshotStatusEntry[]; truncated: boolean }> {
   try {
-    const { stdout } = await gitExec(
+    const { stdout } = await isolatedGitExec(
       ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
       repoPath,
     );

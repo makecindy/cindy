@@ -7,8 +7,6 @@ import {
   accessibilityIdentifier,
   accessibilityLabel,
   buttonStyle,
-  buttonBorderShape,
-  controlSize,
   contentShape,
   disabled,
   frame,
@@ -16,14 +14,14 @@ import {
 } from "@expo/ui/swift-ui/modifiers";
 import { StyleSheet, View } from "react-native";
 import { useTheme } from "@/theme";
-import { useLiquidGlassAvailable } from "@/session/useLiquidGlassAvailable";
+import { useNativeGlassButtonStyle } from "@/platform/chrome/nativeGlassButtonStyle.ios";
 import type { RemoteDesktopActionButtonProps } from "./RemoteDesktopActionButton";
 
 export function RemoteDesktopActionButton(
   props: RemoteDesktopActionButtonProps,
 ) {
   const { mode, colors } = useTheme();
-  const liquidGlass = useLiquidGlassAvailable();
+  const glassStyle = useNativeGlassButtonStyle();
   const state = { pressed: false };
   const style = StyleSheet.flatten(
     typeof props.style === "function" ? props.style(state) : props.style,
@@ -48,9 +46,7 @@ export function RemoteDesktopActionButton(
             if (!props.disabled) props.onPress();
           }}
           modifiers={[
-            buttonStyle(liquidGlass ? "glass" : "bordered"),
-            buttonBorderShape("capsule"),
-            controlSize("large"),
+            ...glassStyle,
             frame({ maxWidth: Infinity, minHeight: 44 }),
             disabled(Boolean(props.disabled)),
             accessibilityIdentifier(props.testID ?? ""),

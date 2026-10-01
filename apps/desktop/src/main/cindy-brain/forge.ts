@@ -11,7 +11,7 @@
  *   调用方(mcp-integrations 接线)处理,本文件不碰 UI。
  *
  * 安全边界:agent 能写意识源码(它本来就有文件工具),但打包与装入都必须过
- * 同一套清单/真实包校验；安装动作本身不另设能力确认弹窗。
+ * 同一套清单/真实包校验；首装与权限变多的更新还要用户在任务里确认(ghostInstallConsent.ts)。
  */
 
 import fs from 'node:fs';
@@ -1563,12 +1563,15 @@ export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 读透相关章(动手前至少读完"沙箱红线"与"打包与测试"两章) → 在工作目录写源码文件 →
 ghost_forge_pack 校验并生成 .cindy 产物；需要发布时改用 publish intent 取得一次性票据。**
 
-**安装与更新契约**：用户导入本地 \`.cindy\`、点击市场安装，或插件命中
-服务端 \`defaultInstall\`，都是明确的安装依据；
-Cindy 校验真实包后直接安装并启用，不再追加整张能力确认弹窗。唯一的窄确认是：企业作者
+**安装与更新契约**：用户导入本地 \`.cindy\`、点击市场安装、明确要求 Agent 安装，或插件命中
+服务端 \`defaultInstall\`，都是明确的安装依据。Cindy 校验真实包后，首次安装会先列出插件声明的
+全部权限请用户确认（Agent 发起的安装在任务里弹确认卡，不论任务权限档），确认后安装并启用；
+更新只在新版本比已装版本权限变多时请用户确认，权限没变多的更新直接完成。服务端
+\`defaultInstall\` 下发的插件不弹确认。另有一道窄确认：企业作者
 用 \`ghost_forge_install\` 安装声明了 \`oidc-token\` 的包时，需核对 id 与注入域名。市场安装会绑定所选来源，
-此后的新版本由 Cindy 静默更新并保留当前启用状态；本地 \`.cindy\` 不自动猜测更新来源，
-需要用户再次导入新版包。当前组织的默认插件可能在严格核对组织、前缀、批准、退订与来源后，
+此后权限没变多的新版本由 Cindy 静默更新并保留当前启用状态；权限变多的新版本会暂停自动更新，
+等用户在插件页确认，在此之前旧版本照常可用。所以发布新版时不要顺手扩大权限，确需新增的在更新
+说明里讲清楚。本地 \`.cindy\` 不自动猜测更新来源，需要用户再次导入新版包。当前组织的默认插件可能在严格核对组织、前缀、批准、退订与来源后，
 接管同 id 的普通本地导入；明确通过 \`ghost_forge_install\` 安装或更新的作者自测包会被保护，
 不会被这条自动接管路径覆盖。插件自主 Host 能力仍必须完整声明，插件详情会如实展示，Host 运行时按声明
 强制守门；市场下载包若超出该版本市场清单声明的能力，会作为包内容不一致被拒绝。
@@ -1704,7 +1707,7 @@ my-ghost/
   // 声明 false 逐个关闭。当前一批:maximize(撑满内容区)、detach(在独立
   // 窗口中打开)、minimize(最小化面板;恢复入口由用户偏好决定为浮动气泡或
   // 左侧栏)。标题条本体恒由主机绘制、
-  // 关不掉;未知键拒装;position:"tab" 时声明本字段拒装
+  // 关不掉;未知键保留但不生效;position:"tab" 时声明本字段拒装
   // 一级主视图是独立能力，见 §4.20。使用时直接声明：
   // "mainView": { "title": "工作台", "icon": "puzzle", "html": "main-view.html" }
   "settingsHtml": "settings.html",  // 可选:设置页「自定义设置区」自绘界面(见 §4.8;声明了用户填的凭证时仍必填,用于长期管理/替换/清除;调用前缺失时主机也会在统一 Setup 卡内联收单,见 §4.7)
@@ -2504,6 +2507,16 @@ const r = await cindy.send({
 - 同步返回,没有异步单;每插件在途上限与媒体代办共用;详情页会单列一行
   「可把文字送去算成向量」并写明单次条数上限。
 
+## 4.0.3a 只读 Agent 模型目录
+
+设置页、panel、mainView 和电子脑均可 GET 同源 \`/agent-models\`（不接受参数）。
+返回 \`{ok:true,models:[{id,name,agent,providerId,providerName,efforts,defaultEffort,visible}]}\`。
+visible 跟随当前账号模型选择器；建议默认显示可见项，隐藏项由用户展开。旧 Host 缺此字段时兼容原列表。
+每项为独立的模型×框架×来源；空 efforts 与 null defaultEffort 表示未声明，不得猜测。
+只包含本机已连接且可用于新任务的模型，不代表远程 SSH 目录。读取不调用模型、
+不触发凭证认领或上游发现，不返回凭证、账号 identity 或 endpoint；不需要新增 manifest 权限。
+旧 Host 可能返回 404，插件应明确提示升级；503 时提供重试。运行前再次核验选定来源。
+
 ## 4.0.4 媒体模型配置与调用边界
 
 媒体上层能力由插件定义，Cindy Core 只提供两项低级能力：
@@ -3088,7 +3101,10 @@ PUT/DELETE 一律 405(派生身份不可配置)。
 两种 token 都只在 Main 的 networkSlot 内存中进入请求头,插件沙箱、settings 页面、
 Renderer、Agent、KV 和日志都拿不到。设置页 GET \`/secrets\` 对这条 key 额外返回
 \`hostSource:"gh-cli"\` 与 \`hostAvailable:boolean\`,其中 \`saved/tail\` 仍只描述备用
-PAT；页面可据此展示“已检测到 gh，可直接使用”，但不能读取 gh 的账号或 token。
+PAT。支持宿主管理连接入口时还返回可选的 \`hostManagedSetup:true\`：此时宿主统一
+展示账号状态、安装与登录入口，settingsHtml 不再重复渲染这些内容，只保留备用 PAT
+配置（可折叠到“其他连接方式”）。字段缺失或为 false 时保留旧版设置页的连接提示，
+可根据 \`hostAvailable\` 展示“已检测到 gh，可直接使用”；不能读取 gh 的账号或 token。
 此来源的注入形态固定为 \`api.github.com\` 的
 \`Authorization: Bearer {value}\`,不允许 exchange,也不要放进 \`setup.requires\`。
 
@@ -3586,7 +3602,10 @@ const st = await cindy.library({ op: 'status' });
 // 只读能力查询:资格审与 op 合法性之后、会话创建之前返回;不打开库、不弹窗
 const caps = await cindy.library({ op: 'capabilities' });
 // caps = { ok:true, op:'capabilities',
-//          capabilities:{ version:1, operations:['clipboardWrite','saveAs'] } }
+//          capabilities:{ version:1,
+//            operations:['clipboardWrite','saveAs','staging.begin',...],
+//            staging:{ version:1, maxTaskBytes, maxTotalBytes,
+//                      maxConcurrentWrites, maxChunkBytes, reserveBytes } } }
 // operations 只表示宿主实现了这些 op,不等于此刻有窗口 / 已授权 / 库可用
 
 // 文件操作(全 Family;写入原子化,大文件走分块流)
@@ -3633,6 +3652,18 @@ await cindy.library({ op: 'db.migrate', dbPath: 'canvas.sqlite', targetVersion: 
           { toVersion: 2, sql: ['CREATE TABLE v2 (a TEXT)'] }] });
 await cindy.library({ op: 'db.backup', dbPath: 'library.sqlite' });  // 宿主命名空间
 await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_check
+
+// 后台暂存(staging.*):独立于可迁移 Library 根,不是第二媒体库,不返回 imageRef。
+const up = await cindy.library({
+  op: 'staging.begin', taskId, sourceRevision, totalBytes, sha256, mime, recovery,
+});
+await cindy.library({ op: 'staging.chunk', stagingId: up.stagingId, seq: 1, content: b64, encoding: 'base64' });
+const receipt = await cindy.library({ op: 'staging.commit', stagingId: up.stagingId });
+// receipt.durable === true 才可当跨退出原件。release 带当前 Library ACK 的 bytes(不是 begin 的 totalBytes),且画布已保存后才调用。
+await cindy.library({
+  op: 'staging.release', stagingId: up.stagingId, path, sha256, bytes,
+  libraryIdentity, libraryGeneration,
+});
 \`\`\`
 
 关键语义(全部由宿主强制):
@@ -3649,6 +3680,7 @@ await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_ch
   open/status 失败),非法请求=\`INVALID_REQUEST\`(含非法/越界 dbPath 与未知 op),
   取消=\`CANCELLED\`;成功 open/status 的 \`state:'unavailable'\` 仍用结果体 reason
   (如 disk-missing),不是失败 reason 枚举;查询/传输层本地分类 \`TIMEOUT\` / \`TRANSPORT_ERROR\`;
+- **staging.***:后台暂存,不是媒体库、不弹新 UI。\`staging.read\` 未传 length 默认 16MiB 分片;负数/NaN offset/length 是 \`PATH_INVALID\`。release 必须带当前 Library ACK 的 \`bytes\`(不是 begin 的 \`totalBytes\`),且只在画布保存后调用。父目录 fsync 失败不得 \`durable:true\`。
 - **capabilities**:先查 \`{ op:'capabilities' }\`。仅 \`version===1\` 且
   \`operations\` 为**全部字符串**的数组才有效;额外字段忽略,未知 operation 忽略,
   已知项保留;有效 v1 清单缺少某项才是 unsupported。缺字段、错类型(含数组内混入
@@ -3663,6 +3695,8 @@ await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_ch
   确认后先拷到目标旁临时文件再替换,失败不破坏已有文件;
 - **clipboardWrite**:只收 \`encoding:'base64'\` 的 PNG 字节,写系统剪贴板位图,
   成功回 \`{ ok:true, bytes }\`。不是 saveAs,也不在文件夹中显示作品。
+  PNG 字节上限 20MB(20,000,000 字节,按解码后字节计),超限回 \`TOO_LARGE\`;
+  旧版宿主上限为 16MiB,同样回 \`TOO_LARGE\`,插件应提示用户更新或改用下载。
   空字节 / 非法 encoding / 非 PNG / 超限一律结构化失败,永不 \`ok:true\`。
   同插件 3 秒内连发 \`RATE_LIMITED\`;无主壳窗 / 宿主不能写剪贴板 \`UNSUPPORTED\`;
   账号切换后旧会话不得继续写(\`LIBRARY_UNAVAILABLE\`)。
@@ -3866,6 +3900,60 @@ const r = await cindy.agent.requestSchedule({
 什么时候**不该**用它:一次性的、当场就要结果的事,用快问快答(§4.0.2)或派活取件
 (§4.11.1)。这个加档是给"长期定期刷新"用的,每条任务都会反复产生模型费用。
 
+### 4.11.3 普通任务接口（实验性）
+
+声明 \`"agent": { "tasks": true }\` 后，逻辑页可使用 \`cindy.tasks\`。它是独立权限，
+旧 \`errand\` 声明不自动取得该权限；用户仍可在侧边栏查看和接手这些任务。
+安装时已明确展示并确认的任务能力不重复询问；否则首次使用时通过现有宿主权限界面确认并记录独立批准。旧版保存的未知字段不会自动授权。
+用户拒绝或确认界面不可用时返回 \`PERMISSION_DENIED\`，不影响插件其它功能；不得自动循环重试确认。
+面板通过既有逻辑页通道调用，不获得新的 preload 或内部 IPC 权限。
+
+先调用 \`capabilities()\` 获取实际支持操作。当前仅支持本插件创建的本机普通任务：
+\`create\`、\`get\`、\`list\`、\`send\`、\`getRun\`、\`listRuns\`、\`readMessages\`、\`cancel\`。
+可对自有任务调用 \`startTeam({taskId})\` 启用 Orca 主任务，并用 \`getTeam({taskId})\` 读取实际协同状态。协调主任务需经用户授权 Auto，Worker 自动沿用 Auto。
+这些任务及其 Worker 不提供 \`cindy_helper\` 的账号级历史或跨任务控制能力，\`cindy_memory.session_search\` 也拒绝历史检索；协调使用独立 Orca 工具，结果由插件通过 \`readMessages/getTeam\` 读取。旧 errand/workspace 不因来源标记受到限制；明确卸载撤销归属后，调用方已无正在执行的输入或已接受新真人输入时，保留的用户任务恢复普通 helper 与历史检索能力；仍执行旧插件输入时继续受限，自动回报和插件输入重试不构成真人接管。这不恢复插件控制权，也不保证停止已接受执行，不构成通用执行沙箱。
+在首次派发前调用 \`setTeamPlan({taskId,plan:{concurrency,items}})\`，每项包含\`label, workingDir, route\`。计划冻结后不可改写。
+计划不授予目录权限。Worker 仅可使用宿主任务目录及解析后仍在其中的子目录、插件 AI 配置目录或用户亲选的确切目录；Library 绑定不自动变成 Agent 工作根。宿主在登记和创建时均复核。
+这描述准入检查，不是持续的 OS 目录隔离保证。首版用于可信本地工作区；同权限进程在检查后恶意置换目录对象仍可能改变实际 cwd，不提供此类对抗性沙箱。
+
+暂不支持选择现有任务、远程/伙伴任务、任意更新配置、归档、队列暂停或事件订阅。
+旧 \`agent.errand\` 接口不变。
+
+\`\`\`js
+// requestWriteAccess({taskId, mode: 'auto'}) 请求宿主原生确认，不能替用户确认。
+// 拒绝或失败后，同一账号代际/安装修订/任务在当前宿主进程不再自动弹窗（更换 mode 也不重置）。
+// 用户可从本机任务权限菜单“重新确认插件写权限”恢复原请求；插件不能清除拒绝记录。
+// 省略 mode 保留 acceptEdits；Auto 插件主任务的 Worker 使用 Auto，不改全局权限。
+
+const task = await cindy.tasks.create({ requestKey: 'experiment-1-create', title: 'My evaluation' });
+const run = await cindy.tasks.send({ taskId: task.taskId, expectedRevision: task.revision,
+  requestKey: 'experiment-1-send', text: 'Read the project and report your findings.' });
+const status = await cindy.tasks.getRun({ runId: run.runId });
+const page = await cindy.tasks.readMessages({ taskId: task.taskId, limit: 50 });
+// 保存 nextCursor；下一页传 after，不以最后一条 assistant 推断 run 已完成。
+\`\`\`
+
+SDK 成功返回 data，失败抛出带 code 的错误。原始管子响应为 \`{ok:true,data}\` 或
+\`{ok:false,error:{code,message,retryable}}\`。不要将请求键换掉来绕过不确定的派发结果。
+create/send 的 requestKey 持久去重；同键不同内容拒绝。删除后的记录不自动重建。
+请求键及 taskId/runId 需要由插件保存。取消仅作用于该输入，不能停止用户后来的执行。
+
+省略 route 时在接收时解析用户给本插件的 AI 配置；可显式传
+\`{agentKind:'codex',providerId:'...',model:'...',effort:'high',fastMode:false}\`。
+来源/模型/强度必须当前可用，派发前再次核对，不自动改用其它账号。
+工作目录由宿主分配，或沿用用户已在插件设置中选择的目录；不接受任意路径或权限覆盖。
+权限沿用 AI 代办配置，默认只读，禁止 bypassPermissions。
+create 可传 \`isolatedWorkspace:true\`，使用宿主为该任务生成的独立空目录，忽略插件的项目目录偏好。
+返回 workingDir 仅属于本插件创建的任务，可交给插件 Node 进程放入候选项目；不接受插件自报任意目录。
+任务视图同时返回 permissionMode，插件在只读时应明确提示，不能暗中升级权限。
+
+run 的 acceptedConfig 是接收配置，execution 是观测到的原生 instance/generation，
+不冒充完整实际用量/重试清单。outputMessageId 来自产品终态，不是文字猜测。
+没有足够证据的重启/恢复窗口返回 reconciling，不能当 completed、failed 或零分；
+不要自动重发可能已经产生副作用的输入。费用目前 unavailable，绝不以耗时推算。
+实验性接口尚未提供全部恢复路径的最终对账和事件补拉，因此暂不用于无人值守正式评测。
+
+
 ## 4.12 随包 Node 工作进程与 stdio MCP(node 能力)
 
 插件需要随包代码、CLI、JS 依赖、可复用 worker 状态或 stdio MCP 时，使用顶层
@@ -3915,12 +4003,40 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
 \`\`\`js
 const response = await cindy.node.request({
   method: 'taptap/connect',
+  callId: msg.callId, // tool-call 内透传
+  cancelWithCall: true, // 显式启用授权卡和随调用结束的生命周期
   params: { projectId: 'demo' },
   timeoutMs: 30000 // 可选 1000–120000，缺省 30000
 });
 if (!response.ok) throw new Error(response.message);
 const result = response.result;
 \`\`\`
+
+当前工具触发的登录等前台请求应同时传入 \`cancelWithCall: true\` 和主机下发的
+\`callId\`。显式启用后，主机只接受当前插件的在途调用；取消、超时或交卷后，该
+Node 请求及其子进程一并结束，晚到的授权或子进程启动会被拒绝。只传旧 \`callId\`
+或不启用开关都保持既有独立 RPC 生命周期，不自动弹授权卡、不回收后台进程；
+设置页等无 tool-call 的入口不能伪造或复用调用编号。
+
+#### 下载公开大文件与进度
+
+声明 node 和 network.hosts 后可用 cindy.downloads.start({id,url,sha256,bytes})；
+只接受声明的 HTTPS 主机（每次重定向复核），不发送 Cookie、凭证或自定义请求头。
+SHA-256 和精确字节数必填，单文件最多 8 GiB。下载从获得队列槽位起最多 2 小时（含重试，不计排队），不改变 Node 调用期限。返回 {ok:true,token,bytes,sha256,fromCache}，
+没有宿主路径。取消用 cindy.downloads.cancel({id})。
+订阅 onHostMessage 的 download-progress 事件：data 含 id、phase、loaded、total、speedBps；
+phase 为 queued/downloading/verifying/retrying/completed/failed/cancelled，retrying 另含 attempt、delayMs。
+无 loaded/total 时显示不确定进度，下载成功不等于解包成功。
+
+将 token 放入 cindy.node.request 的 downloadTokens，例如 {archive: token}；params 必须是对象且
+不能自带 downloads。Host 校验同账号、同插件、批准身份与文件身份后，仅向 Node 注入
+params.downloads.archive。Node 在本次 RPC 结束前读取或复制文件，不得把宿主路径回传面板或写进日志。
+旧请求不带 downloadTokens 时保持原有 params 语义。旧宿主无 downloads 时提示升级。
+
+下载队列与宿主更新隔离，传输逐块写盘并支持校验、重试与续传。每账号所有插件的缓存
+合计最多 16 GiB（含在途预留及每项 64 KiB 管理空间）；不淘汰正在下载或被 Node RPC 借用的文件，满额且无可回收项时失败。
+缓存可被回收，重启后 token 失效，重新 start 可复用经校验的文件。卸载插件回收其下载缓存；
+停用、账号切换或批准身份改变会拒绝旧凭据，不增加用户授权步骤。
 
 #### Node Worker 的持久化凭证绑定
 
@@ -3957,8 +4073,17 @@ const authorizationCode = request.cindy.secrets.mail_code;
 
 - \`secretBindings\` 最多 4 条，每条 \`methods\` 1–16 个；省略 \`entry\`
   只绑定主入口，不能借同名方法把凭证送去其它入口；
-- 未保存凭证时宿主在请求进入 Worker 前返回 \`PERMISSION_DENIED\`，设置页可用
-  \`GET /secrets\` 的 saved 状态引导用户；
+- 在途工具调用显式携带 \`cancelWithCall: true\` 和 \`callId\` 时，缺少本次方法/入口声明的手动凭证会先显示既有保密输入卡，
+  远程任务复用签名加密输入桥；用户提交后才进入 Worker。显式登录或更换 Token 可带
+  \`promptSecrets: true\`（要求上述显式生命周期开关），即使已保存也重新显示卡片；取消不清除原凭证。
+  没有在途调用或旧 Host 不支持此接线时仍返回 \`PERMISSION_DENIED\`，不会回退到聊天收取
+  Token。设置页继续使用 \`/secrets\`，不要把输入放入业务 RPC 或 BroadcastChannel；
+  完成本次卡片提交后，Host 在 Worker 私有 \`request.cindy.secretInputCompleted\` 标记
+  \`true\`。要求本次人工填写的登录方法必须检查该标记；旧 Host 缺标记时拒绝执行，不能
+  因其忽略新请求字段而静默复用旧 Token；标记不能由插件 main.js 自报；
+- 若手动凭证只用于登录方法，可用 \`setup: { requires: [] }\` 保留既有 CLI 登录及其它工具，
+  由具体绑定方法触发卡片。此配置就绪仅表示凭证已保存；插件还需执行最小只读权限验证。
+  这个增量只涉及插件→本机 Host 的 Node 请求；远程卡片和输入协议不增加字段；
 - 宿主不会直接把明文交给 \`main.js\`、Agent 参数或写入宿主日志；但 Worker
   收到明文后可以主动回传、落盘或写日志，浏览器侧代码和 Agent 也可能因此间接
   获得它。插件详情的能力清单会逐条披露此风险，只安装可信来源插件；
@@ -4100,6 +4225,59 @@ const maker = require('@taptap/maker'); // 之后它的自启动全部走了正�
 - stdio 由宿主纯字节中继(base64 帧,不参与 JSON-RPC 协议、不受逐行检查),
   但**只适合文本/协议流**,别拿它传大文件;
 - 级联生死:worker 退出/被停/插件停用,子进程一并收掉,不留孤儿。
+
+### 4.12.5 随包 CLI 的登录授权卡片
+
+优先调用通用 \`globalThis.__CINDY_NODE__.bindAuthorization()\`。在**当前 JSON-RPC 请求处理函数内**
+同步捕获返回的 authorize 函数，再交给 CLI 输出/浏览器启动回调。调用方必须以
+\`cancelWithCall: true\` 显式启用；它只绑定这一次仍在途的 \`callId\`，不允许后台启动或复用。可传入的请求为：
+
+\`\`\`ts
+type AuthorizationRequest =
+  | { kind: 'device'; url: string; userCode?: string; expiresAt?: number }
+  | { kind: 'browser'; url: string; expiresAt?: number }
+  | { kind: 'loopback'; url: string; callbackUrl: string; state: string };
+// device/browser 只表示页面已打开；之后原 CLI 继续轮询、保存、校验。
+// loopback 远程回 {kind:'callback', state, code} 或 {kind:'callback', state, error}；
+// 本机回 {kind:'opened'}，原 CLI 自有 localhost listener 接受浏览器回调。
+const authorize = globalThis.__CINDY_NODE__?.bindAuthorization();
+if (!authorize) throw new Error('Authorization cards unavailable');
+const result = await authorize({ kind: 'device', url: verificationUri,
+  userCode, expiresAt: Date.now() + expiresInSeconds * 1000 });
+// 由现有 provider SDK/CLI 完成后续操作；RPC 成功必须晚于实际领取/保存/校验。
+\`\`\`
+
+\`browser\` 用于上游提供 HTTPS 确认页的扫码或浏览器确认，不传二维码图片、Cookie、
+账号密码或任意 CLI 命令。\`device\` 的 userCode 原样保留（1–32 位字母/数字/空格/连字符），
+不把私有 device_code 当用户码。expiresAt 是绝对毫秒时间且不能延长宿主五分钟上限。
+目标必须命中已安装插件的 OAuth origin / network hosts；GitHub/TapTap 继续用已审查的精确规则。
+
+\`loopback\` 只支持原 CLI 的 Authorization Code + PKCE S256：url 内唯一 state、redirect_uri、
+response_type=code、client_id、code_challenge 与 code_challenge_method=S256 必须完整；
+callbackUrl 必须与 redirect_uri 精确相等，且为 localhost、127.0.0.1 或 [::1] 的显式非特权
+端口 HTTP URL。不能改写上游登记的 redirect、降低 PKCE 或抢占别人端口。verifier 留在源 CLI；
+远程 callback 只经 bootstrap 私有 Promise 交给这一次可信 Node 调用，用原 provider SDK
+交换，不经 stdout/main.js/Agent。既有 CLI 若仅有固定监听器，需要在其受审查适配器内消费
+此私有结果；Host 不代发任意 HTTP。不要把 callback code 放到 argv、日志或 RPC 结果。
+
+普通 API Key/PAT 不走这个 Node 接口：沿用 \`network.secrets\` / \`node.secretBindings\`
+声明，由 Host 原密码卡收集，远程端支持时经签名输入桥直接写对应 vault key。插件不读取输入，
+不要求用户把密钥发给模型。保存只证明配置已落地，上游权限由实际业务调用核验。
+
+兼容入口继续保留：
+
+当第三方 CLI 使用「浏览器授权、发起端轮询」时，Node worker 可在**当前请求处理函数内**
+捕获 \`globalThis.__CINDY_NODE__.bindDeviceAuthorization()\` 返回的函数，再在 CLI 输出回调
+里调用 \`await authorize(httpsUrl)\`。同一请求只接受一个链接。Node 请求必须带来自当前
+\`tool-call\` 的 \`callId\`，并显式设置 \`cancelWithCall: true\`；宿主反查插件、任务和 owner，插件不能自选任务。无绑定时返回
+undefined；不支持时明确报错，远程流程不能回退到在执行设备开浏览器或把链接交给模型。
+
+宿主创建含真实授权域名的卡片，用户点击后由当前设备的可信 Host 打开链接。远程链接只走既有
+加密授权事务；这个 Promise 只代表浏览器已打开，**不代表登录完成**。CLI 仍在原设备轮询，
+凭据由原 CLI 保存；Node RPC 只有在真实领取/保存和检查完成后才返回成功。取消卡片/任务、
+断开控制端或事务到期会取消该 Node RPC 及其绑定子进程。不要把 URL、轮询码或 token 放进
+stdout 的 RPC 结果、通知、模型回复或错误；业务状态返回固定摘要。此卡片不改变 Host 的
+network setup/readiness，不能拿 CLI 的登录结果冒充宿主凭据配置已完成。
 
 ## 4.13 会话上下文(sessionContext 能力)
 
@@ -4488,7 +4666,7 @@ Cindy 统一归类、随机选择与排序，同批每个场景和每个插件�
   也长在这里)。你的 panel.html 只画标题条以下的部分,**不要自己再画一条
   标题栏**。不想要某颗系统按钮时在身份卡声明
   \`"systemButtons": { "maximize": false, "detach": false, "minimize": false }\`
-  逐个关闭(缺省全开;标题条本体关不掉;未知键拒装;\`position:"tab"\` 由插件页
+  逐个关闭(缺省全开;标题条本体关不掉;未知键保留但不生效;\`position:"tab"\` 由插件页
   自绘头,没有这套标准头,声明本字段拒装);
 - 与电子脑同源,用 \`BroadcastChannel('<自定名>')\` 通信(电子脑发,面板收);
 - 取自己的媒体:\`cindy-ghost://<id>/media/<指纹><后缀>\`(主机查账验归属,别人的图 404);
@@ -4601,8 +4779,10 @@ Cindy 统一归类、随机选择与排序，同批每个场景和每个插件�
    若返回 \`SOURCE_IS_INSTALLED_PLUGIN\`,不要重试或换大小写、软链接、junction 绕过,
    按上一步迁出源码后再打包;未获会话权限时也可能返回 \`SOURCE_OUTSIDE_WORKDIR\`;
 3. 用户明确要求当前 Agent 安装或更新这份源码时，调用
-   \`ghost_forge_install({ dir: '<绝对路径>' })\`。它会重新校验并打包当前源码，再把这次
-   产生的确切包直接安装；首次安装会启用，同 id 已安装时原位更新并保留启用状态、配置、
+   \`ghost_forge_install({ dir: '<绝对路径>' })\`。它会重新校验并打包当前源码，再安装这次
+   产生的确切包：首次安装、以及权限比已装版本变多的更新，会先在任务里弹确认卡列出权限，
+   用户允许后才落位；用户拒绝返回 \`MUTATION_CANCELLED\`，不要重试，除非用户再次要求。
+   首次安装会启用，同 id 已安装时原位更新并保留启用状态、配置、
    数据与面板位置，同版本也可覆盖。不要因为 scaffold 或 pack 成功就自动调用本工具。
    企业身份下若清单声明 \`source:"oidc-token"\`，提交安装前会展示插件名、id 与精确请求
    域名，并要求用户手输相同 id；取消不会安装。个人与企业身份下的明确 Forge 安装都会标记为
@@ -4663,20 +4843,28 @@ Cindy 统一归类、随机选择与排序，同批每个场景和每个插件�
 - 其余要求(目录命名、审核流程等)以该仓根部的 \`CONTRIBUTING.md\` 为准,提交前
   在仓内跑一遍 \`node --test .tests/\` 自查。
 
-## 9. 常见拒装原因速查
+## 9. 兼容性与常见拒装原因
+
+插件开发不应受当前客户端能力注册进度限制。未知顶层能力、对象扩展字段、能力动作
+与订阅事件保留为声明，不因此阻断发布或安装，也不因此获得执行权限。
+插件必须检查所需接口是否存在并处理不支持响应：可选功能局部降级，必要能力缺失时
+提示升级，不影响其它可用功能；权限拒绝、账号失效和网络错误不能当作不支持绕过。
+\`minCindyVersion\` 是兼容声明与分发依据，不是运行时能力探测；手动安装、旧版
+或其它分发渠道仍可能让不适配客户端安装插件，不能省略上述兼容处理。
+旧客户端已有拒装逻辑无法追改；整体协议格式变化仍受 schemaVersion 校验。
 
 - \`id\` 不合法(大写/下划线/超长)· 声明了 command 但没有 tools · command 与已装意识撞名
   · **未声明 command**:不拒装,但插件页"使用"按钮禁用,用户无法通过插件页一键启用
     或用 $command 点名;AI 工具调用不受影响(见 §2 说明)
 - \`tools\` 为空 · panel 详单缺少实际形态(既没有 html，也不是有效的 tab/停靠配置)
-- mainView.html 文件缺失/路径不安全、icon 不在系统图标白名单，或 mainView 含未知字段
+- mainView.html 文件缺失/路径不安全、icon 不在系统图标白名单
 - settingsHtml 路径不合法/文件不在包里 · settingsHeight 越界(160–800)或没配 settingsHtml 单独声明
-- panel.systemButtons 格式错(不是对象、未知键、值非布尔,或 position:"tab" 时声明——插件页内面板没有标准头)
+- panel.systemButtons 格式错(不是对象、已知键的值非布尔,或 position:"tab" 时声明——插件页内面板没有标准头)
 - keywords(已废弃字段,旧包兼容保留,新意识别写)有单字词 · kind 写了但不是 "chip"(可省略) · schemaVersion 不是 3 · 缺 minCindyVersion
-- cindy 详单格式错(未知类目/动作、空数组)
+- cindy 详单格式错(已知类目的动作不是合法标识、空数组或重复动作)
 - agent 详单格式错(background / errand / schedule 存在但不是 true；基础点击触发请写 \`agent: {}\`)
 - node 详单格式错(entry 不是包内 CommonJS .js/.cjs、protocol 不在 json-rpc-stdio / mcp-stdio、
-  写了 command/args/shell/env、resident 又写 idleTimeoutSeconds)
+  resident 又写 idleTimeoutSeconds)；未知 command/args/shell/env 只保留，不传给进程启动器
 - id 用了 \`cindy-\` / \`filo-\` / \`xd-\` 前缀(官方保留,正式版用户通道拒装;给自己的意识换个前缀)
 - network 详单格式错(hosts 缺失/裸 TLD/IP/带端口/通配不在最左、secret 缺 inject、
   inject.format 没有 {value} 占位、inject.header 用了 Host/Cookie 等协议关键头、

@@ -42,6 +42,7 @@ import {
   type NewSessionCreationParams,
 } from '@/session/newSessionCreation';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { takeOrcaStartFailure } from '@/session/orcaTeam';
 import { sessionFromCreateResult, type NewSessionDraft } from '@/session/newSession';
 import {
   __testing as recoveryTesting,
@@ -922,5 +923,83 @@ describe('newSessionCreation pipeline', () => {
       ...record,
       phase: 'session-create-started',
     }]);
+  });
+  it('hands the persisted first message to the outbox without issuing a competing enqueue', async () => {
+    const maker = makeMaker();
+    const params = makeParams('durable-first', maker, { firstMessageClientId: 'persisted-first-id', planModeArm: true });
+    const handoff = vi.fn(async () => undefined);
+    params.transport.handoffFirstMessage = handoff;
+    startNewSessionCreation(params);
+    await flushPipeline();
+    expect(handoff).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'persisted-first-id', text: DRAFT.firstMessage }));
+    expect(maker.input.enqueue).not.toHaveBeenCalled();
+    expect(maker.setPlanMode).not.toHaveBeenCalled();
+    expect(getNewSessionCreationTask('durable-first')).toBeNull();
+    expect(remoteSessionStore.getSessions().find((session) => session.id === 'durable-first')?.pendingLocalCreation).toBe(false);
+  });
+  it('keeps the creation task recoverable when saving the first-message handoff fails', async () => {
+    const maker = makeMaker(); const params = makeParams('durable-first-failed', maker, { firstMessageClientId: 'saved-id' });
+    params.transport.handoffFirstMessage = async () => { throw new Error('disk full'); };
+    startNewSessionCreation(params); await flushPipeline();
+    expect(maker.input.enqueue).not.toHaveBeenCalled();
+    expect(getNewSessionCreationTask('durable-first-failed')).toMatchObject({ status: 'enqueue-failed', firstMessageClientId: 'saved-id' });
+  });
+
+  describe('collaboration on create', () => {
+    const orcaEnable = { workerAgent: 'codex' as const, role: 'developer', label: 'developer', workerPermissionMode: 'auto' as const };
+    function withOrca(maker: MakerMock, enable: ReturnType<typeof vi.fn>) {
+      return Object.assign(maker, {
+        getCapabilities: vi.fn(async () => ({ supportsOrcaWorkerPermissionMode: true })),
+        orca: { enable, listWorkers: vi.fn(async () => []) },
+      });
+    }
+
+    it('brings the collaboration draft back with the draft when a failed create returns to editing', async () => {
+      const maker = withOrca(makeMaker({
+        createSession: vi.fn(async () => { throw new Error('INVALID_PARAMS: cannot create session'); }),
+      }), vi.fn());
+      const collabDraft = {
+        role: 'reviewer', agent: 'codex' as const, model: null, permissionMode: 'auto' as const, initialTask: 'check tests',
+      };
+      startNewSessionCreation(makeParams('orca-edit', maker, { orcaEnable, collabDraft }));
+      await flushPipeline();
+      expect(getNewSessionCreationTask('orca-edit')?.status).toBe('create-failed');
+      const prepared = await prepareNewSessionCreationForEdit('orca-edit');
+      stashNewSessionDraftForEdit(prepared!);
+      expect(drainStashedNewSessionDraft()?.collabDraft).toEqual(collabDraft);
+    });
+
+    it('starts collaboration after createSession and before the first message is queued', async () => {
+      const enable = vi.fn(async () => ({ workerSessionId: 'worker-1' }));
+      const maker = withOrca(makeMaker(), enable);
+      startNewSessionCreation(makeParams('orca-ok', maker, { orcaEnable }));
+      await flushPipeline();
+      expect(enable).toHaveBeenCalledWith('orca-ok', orcaEnable);
+      expect(enable.mock.invocationCallOrder[0]).toBeGreaterThan(maker.createSession.mock.invocationCallOrder[0]!);
+      expect(enable.mock.invocationCallOrder[0]).toBeLessThan(maker.input.enqueue.mock.invocationCallOrder[0]!);
+      expect(remoteSessionStore.getSessions().find((session) => session.id === 'orca-ok')?.orcaRole).toBe('lead');
+      expect(takeOrcaStartFailure('orca-ok')).toBeNull();
+    });
+
+    it('continues as a single task and hands the reason to the session page when collaboration fails', async () => {
+      const enable = vi.fn(async () => { throw new Error('[PRECONDITION_FAILED] disabled'); });
+      const maker = withOrca(makeMaker(), enable);
+      startNewSessionCreation(makeParams('orca-fail', maker, { orcaEnable }));
+      await flushPipeline();
+      expect(maker.input.enqueue).toHaveBeenCalledTimes(1);
+      expect(getNewSessionCreationTask('orca-fail')).toBeNull();
+      expect(takeOrcaStartFailure('orca-fail')).toBeTruthy();
+    });
+
+    it('does not start collaboration twice when the authoritative row is already a Lead', async () => {
+      const enable = vi.fn(async () => ({}));
+      const maker = withOrca(makeMaker({
+        getSession: vi.fn(async () => ({ ...sessionFromCreateResult({ sessionId: 'orca-lead' }, DRAFT), orcaRole: 'lead' })),
+      }), enable);
+      startNewSessionCreation(makeParams('orca-lead', maker, { orcaEnable }));
+      await flushPipeline();
+      expect(enable).not.toHaveBeenCalled();
+      expect(maker.input.enqueue).toHaveBeenCalledTimes(1);
+    });
   });
 });

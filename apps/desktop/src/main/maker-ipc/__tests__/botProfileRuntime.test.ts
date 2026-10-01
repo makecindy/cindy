@@ -112,7 +112,8 @@ describe('Bot Profile runtime prompt', () => {
     expect(prompt).toContain('Respect the user’s memory switch');
     expect(prompt).toContain('without waiting for a request to remember');
     expect(prompt).toContain('One verified reusable success is enough');
-    expect(prompt).toContain('not an extra learning model or background review worker');
+    expect(prompt).toContain('the host also reviews the completed reply for missed learning');
+    expect(prompt).toContain('Do not launch a separate review task yourself');
     expect(prompt).toContain('never for a one-off conclusion');
   });
 

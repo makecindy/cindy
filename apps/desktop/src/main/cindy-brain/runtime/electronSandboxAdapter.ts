@@ -9,6 +9,7 @@ import { createLogger } from '../../logger.js';
 import {
   GHOST_SCHEME,
   type GhostAppContextResult,
+  type GhostAgentModelsResult,
   type GhostMediaModelsResult,
   type GhostMediaModelType,
   type InstalledGhost,
@@ -149,6 +150,13 @@ export function setGhostMediaModelsProvider(
   provider: (ghostId: string, type: GhostMediaModelType) => Promise<GhostMediaModelsResult>,
 ): void {
   ghostMediaModelsProvider = provider;
+}
+
+let ghostAgentModelsProvider: ((ghostId: string) => Promise<GhostAgentModelsResult>) | null = null;
+export function setGhostAgentModelsProvider(
+  provider: (ghostId: string) => Promise<GhostAgentModelsResult>,
+): void {
+  ghostAgentModelsProvider = provider;
 }
 
 /**
@@ -362,6 +370,26 @@ function registerGhostProtocol(
             'Cache-Control': 'no-cache',
           },
         });
+      }
+      if (url.pathname === '/agent-models') {
+        const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+        if (request.method !== 'GET') return new Response(null, { status: 405, headers });
+        if (url.search) return new Response(null, { status: 400, headers });
+        if (!ghostAgentModelsProvider) return new Response(null, { status: 503, headers });
+        try {
+          const result = await ghostAgentModelsProvider(ghostId);
+          if (!isGhostProtocolOwnerActive(owner)) return new Response(null, { status: 403, headers });
+          return new Response(JSON.stringify(result), {
+            status: result.ok ? 200 : result.errorCode === 'PERMISSION_DENIED' ? 403 : 503,
+            headers,
+          });
+        } catch {
+          if (!isGhostProtocolOwnerActive(owner)) return new Response(null, { status: 403, headers });
+          return new Response(
+            JSON.stringify({ ok: false, errorCode: 'NOT_AVAILABLE', message: 'Model catalog unavailable' }),
+            { status: 503, headers },
+          );
+        }
       }
       // /media-models?type=image|video:插件自己的设置页 / 面板读取当前客户端可执行
       // 模型及 Gateway modalities。兼容判定由 Host provider 完成；端点仍不发起生成，

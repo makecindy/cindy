@@ -70,6 +70,12 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 
 ## 3. 花名册（roster）
 
+普通任务可调用 `connect_account({kind:"plugin", id:ghost_id})`，由 Host 复用配置卡等待连接，
+不必先触发插件业务调用。等待受当前任务取消、插件可见性及原配置卡版本校验约束。
+伙伴继续使用原持久授权卡与配置策略；Host 账号入口仍只用于伙伴。显式 `reauthorize`
+只呈现已声明的 OAuth、Secret 或连接配置动作，不删除现存账号。没有 Host 配置动作的插件应使用其
+设置页或手册中的登录工具；空的配置就绪状态不能作为平台账号已登录的证据。
+
 ### 3.1 内容与口径
 
 - 每条 = `{id, name, command, recall}`；`recall = whenToUse ?? description`。
@@ -228,3 +234,11 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
   `--append-system-prompt`）；Pi 的 host 侧装配在
   `apps/desktop/src/main/maker-host/pi-host.ts`（buildPiAgent /
   composePiSystemPrompt）
+
+### 任务内授权指引
+
+Desktop 的 Claude/Codex/Pi Host 追加同一静态授权指引，复用现有发现及市场安装工具，
+不改安装权限或来源策略。已有登录态时，用户明确要求更新授权仍调用 `reauthorize:true`；
+私密值只填原卡片，不进入工具参数或对话。先等待 Host 完成，再以最小只读调用验证平台权限。
+提示词保持原 system 前缀，无设备 ID、凭据、时间戳或动态账号状态；详见
+[远程授权契约](remote-plugin-oauth.md) 的兼容性与缓存影响。

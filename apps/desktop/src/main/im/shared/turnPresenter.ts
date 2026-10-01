@@ -311,6 +311,8 @@ export interface TurnPresenterOptions {
   progressBodyMode?: ProgressBodyMode;
   /** 纯呈现策略(节流/长度上限/惰性占位); 省略 = DEFAULT_PRESENTER_POLICY(两侧同值)。 */
   policy?: PresenterPolicy;
+  /** 渠道 id。个人微信不能建议切到完全访问。 */
+  channel?: string;
 }
 
 export interface TurnPresenter {
@@ -709,7 +711,7 @@ export function createTurnPresenter(options: TurnPresenterOptions): TurnPresente
       return pushThinkingStep(activity, ev.data);
     },
     applyRetryNotice(ev: AgentEvent): boolean {
-      const notice = turnRetryNotice(ev.data);
+      const notice = turnRetryNotice(ev.data, { channel: options.channel });
       if (notice === null) return false;
       return setActivityNotice(activity, notice);
     },

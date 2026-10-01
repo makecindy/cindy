@@ -17,7 +17,7 @@ const compiled = ts.transpileModule(`const apply = ${expression}`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
-it.each(['effort', 'fast', 'engine', 'draft'])('restores %s before propagating persistence failure', async mode => {
+it.each(['effort', 'fast', 'engine', 'draft', 'draft-configure'])('restores %s before propagating persistence failure', async mode => {
   const before = { agent: 'codex', engine: 'codex', wireModelId: 'old', effort: 'low', fast: false };
   const target = { ...before, effort: 'high', fast: true, agent: 'pi', wireModelId: 'new' };
   let state = { ...before };
@@ -30,12 +30,13 @@ it.each(['effort', 'fast', 'engine', 'draft'])('restores %s before propagating p
     state = { ...before };
     return true;
   });
-  const apply = new Function('isLiveRow', 'inSession', 'runCrossEngineSwitch', 'sessionEngineFilter', 'runLive', 'onSelect',
+  const apply = new Function('isLiveRow', 'inSession', 'runCrossEngineSwitch', 'sessionEngineFilter', 'runLive', 'onSelect', 'onConfigure',
     `${compiled}; return apply;`)(
-    () => true, mode !== 'draft',
+    () => true, !mode.startsWith('draft'),
     async (args: any) => { state = { ...target }; return args.onApplied(); },
     { onCrossEngineSelect: restoreSelection },
     async () => { state = { ...target }; return true; }, restoreSelection,
+    mode === 'draft-configure' ? restoreSelection : undefined,
   );
   const failure = new Error('remote persistence rejected');
   const favorite = { ...before };

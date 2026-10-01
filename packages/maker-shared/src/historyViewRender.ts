@@ -1,4 +1,4 @@
-import { historyViewLeaves, type HistoryMessageSource, type HistoryWorkSummary, type DeferredHistoryWork } from './historyView.js';
+import { historyViewLeaves, historyWorkSummaries, type HistoryFileArtifact, type HistoryMessageSource, type HistoryWorkSummary, type DeferredHistoryWork } from './historyView.js';
 import type { HistoryViewController, HistoryViewSnapshot } from './historyViewController.js';
 import { liveContentWithHistoryOrder } from './historyViewHandoff.js';
 
@@ -7,12 +7,14 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
   view: HistoryViewController<T>;
   snapshot: HistoryViewSnapshot<T>;
   liveMessages: readonly T[];
-  build(messages: readonly T[], streaming: boolean): TItem[];
+  build(messages: readonly T[], streaming: boolean, artifacts?: readonly HistoryFileArtifact[]): TItem[];
   streaming: boolean;
   isLive?(message: T): boolean;
   /** Already displayed assistant identities in observation order, awaiting history. */
   pendingHandoff?: ReadonlySet<string>;
   isLocalUser?(message: T): boolean;
+  /** Ephemeral UI rows that never enter persisted history; retain their local position. */
+  isLocalMessage?(message: T): boolean;
   structure: {
     placeholder(summary: HistoryWorkSummary): T;
     children(item: TItem): readonly TItem[] | undefined;
@@ -38,6 +40,21 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
         rows.push(current ? liveContentWithHistoryOrder(current, row) : row);
         seen.add(row.clientId);
         endMs = Math.max(endMs, Date.parse(row.createdAt));
+      }
+      if (item.deferred) {
+        references.set(item.deferred.anchorClientId ?? item.key, item.deferred);
+        const summary = item.deferred;
+        const cached = snapshot.details.get(summary.key)?.messages ?? [];
+        const matches = (row: T, id: string) => row.id === id
+          || (id.startsWith('history-live:') && row.clientId === id.slice('history-live:'.length));
+        const first = cached.findIndex((row) => matches(row, summary.firstMessageId));
+        const last = cached.findIndex((row) => matches(row, summary.lastMessageId));
+        const body = first < 0 ? [] : cached.slice(first, last < first ? undefined : last + 1);
+        for (const row of body) {
+          if (!sourceIds.has(row.clientId) && !seen.has(row.clientId)) {
+            rows.push(row); seen.add(row.clientId);
+          }
+        }
       }
       continue;
     }
@@ -81,12 +98,12 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     isPendingHandoff(source) && !seen.has(source.clientId)
       ? pendingTail[pendingIndex++] : source);
   for (const row of orderedLiveMessages) {
-    if (isLive(row) && !seen.has(row.clientId) && (row.role === 'assistant' || row.role === 'user')
+    if (isLive(row) && !seen.has(row.clientId)
       && (Date.parse(row.createdAt) >= endMs
         || isPendingHandoff(row))) rows.push(row);
   }
-  // Local pending/blocked user bubbles belong to the current UI store, not
-  // persisted history. Anchor them to the same reordered slots used above,
+  // Local pending/blocked user bubbles and ephemeral UI rows belong to the
+  // current UI store, not persisted history. Anchor them to the reordered slots,
   // without trusting device clocks or changing their order relative to each other.
   const renderedIds = new Set(rows.map((row) => row.clientId));
   let beforeClientId: string | undefined;
@@ -94,7 +111,7 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     const row = orderedLiveMessages[index];
     if (renderedIds.has(row.clientId)) {
       beforeClientId = row.clientId;
-    } else if (row.role === 'user' && options.isLocalUser?.(row)) {
+    } else if ((row.role === 'user' && options.isLocalUser?.(row)) || options.isLocalMessage?.(row)) {
       const before = beforeClientId === undefined ? -1 : rows.findIndex((item) => item.clientId === beforeClientId);
       rows.splice(before < 0 ? rows.length : before, 0, row);
       renderedIds.add(row.clientId);
@@ -105,13 +122,19 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     const children = structure.children(item);
     if (!children) return item;
     const refs = new Map<string, HistoryWorkSummary>();
+    for (const id of structure.sourceIds(item)) {
+      const summary = references.get(id);
+      if (summary) refs.set(summary.key, summary);
+    }
     const next: TItem[] = [];
     for (const child of children) {
       if (structure.children(child)) { next.push(bind(child)); continue; }
       const ids = structure.sourceIds(child);
       for (const id of ids) {
         const summary = references.get(id);
-        if (summary) refs.set(summary.key, summary);
+        // A platform that only shows a subagent summary has no child-detail
+        // surface. Its enclosing work group must not fetch those hidden bodies.
+        if (summary && !summary.parentToolUseId) refs.set(summary.key, summary);
       }
       if (!ids.some((id) => placeholders.has(id))) next.push(child);
     }
@@ -128,6 +151,7 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     };
     return structure.rebuild(item, next, {
       owner: view, key: summaries.map((summary) => summary.key).join('|'), expanded,
+      revision: summaries.map((summary) => summary.revision).join('|'),
       previewComplete: summaries.every((summary) => summary.preview?.firstMessageId === summary.firstMessageId),
       loading: states.some((state) => state?.loading), failed: states.some((state) => !!state?.error),
       setVisible,
@@ -136,5 +160,5 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
         summary.preview && view.getSnapshot().expanded.has(summary.preview.key) ? summary.preview : summary); },
     });
   };
-  return options.build(rows, options.streaming).map(bind);
+  return options.build(rows, options.streaming, historyWorkSummaries(snapshot.items).flatMap((summary) => summary.artifacts ?? [])).map(bind);
 }

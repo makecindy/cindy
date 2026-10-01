@@ -20,6 +20,7 @@ import {
   iconSize,
   iconStroke,
   fontWeight,
+  lineHeight,
   radius,
   spacing,
   typeScale,
@@ -154,6 +155,7 @@ export function RemoteDesktopPanel({
   topInset: number;
   toolbarOnLeft?: boolean;
   toolbarActionCount?: number;
+  railAnchor?: { top: number; right: number };
   title: string;
   caption: string;
   onClose(): void;
@@ -246,6 +248,7 @@ const makeStyles = (colors: ThemeColors) =>
     label: {
       color: colors.textPrimary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       textAlign: "center",
     },
     selected: { backgroundColor: colors.surfaceChip },
@@ -278,9 +281,10 @@ const makeStyles = (colors: ThemeColors) =>
     title: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.semibold,
     },
-    caption: { color: colors.textTertiary, fontSize: typeScale.caption },
+    caption: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
     close: {
       width: 44,
       height: 44,

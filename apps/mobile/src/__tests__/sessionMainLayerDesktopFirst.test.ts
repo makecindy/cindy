@@ -30,7 +30,8 @@ describe('mobile session main layer desktop-first noise budget', () => {
     expect(syncingSource).not.toContain('setTimeout');
     expect(rendererSource).toContain('ListEmptyComponent={syncingWhileEmpty');
     expect(rendererSource).toContain('<SyncingMessages />');
-    expect(routeSource).toContain('syncingWhileEmpty={syncingWhileEmpty}');
+    // Also syncing while a window of only hidden rows pages back (hiddenHistoryChase).
+    expect(routeSource).toContain('syncingWhileEmpty={syncingWhileEmpty || chasingHiddenHistory}');
   });
 
   it('keeps the unsynced session state focused on the current action', () => {
@@ -44,7 +45,15 @@ describe('mobile session main layer desktop-first noise budget', () => {
 
     // banner 渲染条件(useShowConnectionBanner):请求级 / transport hold error、可分类连接问题、
     // 目标设备熔断 open(电脑端未响应)立即显示;普通弱网断线经防闪窗口后也显示,不再彻底静默。
-    expect(routeSource).toContain('{showConnectionBanner || showCachedHistoryNotice ? (');
+    // Confirmed shared-task revocation has its own state, not a retry banner.
+    expect(routeSource).toContain('{!isSharedTaskAccessRevoked && (showConnectionBanner || showCachedHistoryNotice) ? (');
+    const revokedStart = source.indexOf('{isSharedTaskAccessRevoked ? (');
+    expect(revokedStart).toBeGreaterThan(-1);
+    const revokedEnd = source.indexOf("sessionOperationLayout.composerSlot === 'missing-session'", revokedStart);
+    expect(revokedEnd).toBeGreaterThan(revokedStart);
+    expect(source.slice(revokedStart, revokedEnd)).toContain('paddingTop: topOverlayHeight + spacing.lg');
+    expect(source.slice(revokedStart, revokedEnd)).toContain('<SharedTaskEndedState');
+    expect(source.slice(revokedStart, revokedEnd)).toContain("router.replace('/devices')");
     expect(routeSource).toContain('cachedOnly={showCachedHistoryNotice}');
     expect(source.replace(/\r\n/g, '\n'))
       .toContain('useShowConnectionBanner(\n    status,\n    bannerError,');
@@ -76,29 +85,23 @@ describe('mobile session main layer desktop-first noise budget', () => {
     expect(source).not.toContain('collaborationBanner');
   });
 
-  it('lets Lead sessions compose messages while gating write-orchestration on the write read-only reason', () => {
+  it('lets collaboration sessions operate like regular tasks on mobile', () => {
     // Windows checkout 使用 CRLF；源码契约中的多行 LF 片段必须先统一行尾再比较。
     const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8')
       .replace(/\r\n/g, '\n');
 
-    // composer 能力(buildSessionOperationLayout)与 header 徽标走 composer-only reason(Lead=可发消息)。
-    expect(source).toContain('const composerReadOnlyReason = useMemo(');
-    expect(source).toContain('sessionCollaborationComposerReadOnlyReason(currentSession)');
-    // 「会话参数未就绪」的两条理由(缓存种入 / 新建在途)**不再**进这个通道:它会把整个
-    // 输入框换成只读卡片,而它们只表示还不能 enqueue。composer 保持可用,发送改走 outbox
-    // 排队(见 optimisticSessionComposer.test.ts),这两条理由只留给队列行操作。
-    expect(source).toContain('      readOnlyReason: composerReadOnlyReason,\n');
+    // 协同任务(Lead / Worker)不再有只读通道:输入框、队列、确认、设置、fork/rewind 与普通任务一致。
+    expect(source).not.toContain('collaborationReadOnlyReason');
+    expect(source).not.toContain('composerReadOnlyReason');
+    expect(source).not.toContain("composerSlot === 'read-only'");
+    // 「会话参数未就绪」的两条理由(缓存种入 / 新建在途)只留给队列行操作,不锁输入框。
     expect(source).toContain('const queueAvailabilityReason = cacheSeededReason\n    ?? pendingCreationReason');
-    expect(source).toContain('const queueInlineReadOnlyReason = collaborationReadOnlyReason ?? queueAvailabilityReason');
-    expect(source).toContain('const errorRecoveryReadOnlyReason = composerReadOnlyReason ?? queueAvailabilityReason');
-    expect(source).toContain('readOnlyReason={composerReadOnlyReason}');
-    // header notice:协作会话(可聊天的 Lead)显示协作标签而非"只读模式"。
+    expect(source).toContain('readOnlyReason={queueAvailabilityReason}');
+    // header notice:协同任务显示协同标签。
     expect(source).toContain('const collaborationLabel = sessionCollaborationLabel(session);');
     expect(source).toContain('if (collaborationLabel) return collaborationLabel;');
-    // 写编排(设置/队列/fork-rewind/interaction)仍用写 read-only reason,不被放开。
-    expect(source).toContain('readOnlyReason={collaborationReadOnlyReason}');
-    expect(source).toContain('onForkMessage={collaborationReadOnlyReason ? undefined : forkAtMessage}');
-    expect(source).toContain('onPreviewRewind={collaborationReadOnlyReason ? undefined : previewRewindAtMessage}');
+    expect(source).toContain('onForkMessage={isSharedTaskPeer(deviceId) ? undefined : forkAtMessage}');
+    expect(source).toContain('onPreviewRewind={isSharedTaskPeer(deviceId) ? undefined : previewRewindAtMessage}');
   });
 
   it('resyncs sessions from connection recovery or target availability, not every presence tick', () => {

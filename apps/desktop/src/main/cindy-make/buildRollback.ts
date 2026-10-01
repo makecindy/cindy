@@ -4,6 +4,20 @@ import { CINDY_PERSONAL_BRANCH } from './sourcePaths.js';
 
 type IsPublishedCommit = (commit: string) => boolean;
 
+/** Shared by failed generation and retrying a confirmed cancellation after restart. */
+export async function rollbackUnbuiltHistory(
+  store: CindyMakeHistoryStore,
+  source: string,
+  git: ContentGit,
+  isPublishedCommit: IsPublishedCommit,
+): Promise<void> {
+  const rollback = historyBuildRollback(store, source, isPublishedCommit);
+  await rollback.recoverRollback(git);
+  const commit = (await git(['rev-parse', 'HEAD'], source)).trim();
+  const tree = await snapshotContent(git, source);
+  await rollback.prepareRollback({ commit, tree }, git)();
+}
+
 /** Restore only an unchanged, unpublished build candidate; never discard user edits. */
 export async function restoreBuildSource(
   git: ContentGit,

@@ -10,7 +10,7 @@ import { resolveRemoteText } from '@cindy/device-link';
 import { Text } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { radius, spacing, typeScale, fontWeight } from '@/theme/tokens';
+import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import type { useSessionResourceCards } from './useSessionResourceCards';
 
 /** Native presentation of bounded host resource primitives; action ids stay opaque. */
@@ -76,6 +76,23 @@ export function SessionResourceCards({
               </Text>
             ) : null}
             <View style={styles.actions}>
+              {resource.links
+                .filter(
+                  (link) =>
+                    link.rel !== 'conversation' &&
+                    link.label &&
+                    link.target.kind === 'session',
+                )
+                .map((link) => (
+                  <MainWindowActionButton
+                    key={link.rel}
+                    action={{
+                      label: resolveRemoteText(link.label!, i18n.language),
+                      disabled: !state.fresh,
+                      onPress: () => state.openLink(resource, link),
+                    }}
+                  />
+                ))}
               {resource.actions?.map((action) => (
                 <MainWindowActionButton
                   key={action.id}
@@ -122,8 +139,9 @@ const makeStyles = (colors: ThemeColors) =>
       flex: 1,
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
-    body: { color: colors.textSecondary, fontSize: typeScale.footnote },
+    body: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
     actions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   });

@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import { act, createElement, useSyncExternalStore } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createComposerDraftSource, useComposerVoiceDraftWriter, type ComposerDraftSource } from '@/session/composerDraftSource';
 import { textComposerDocument } from '@/session/composerDocument';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
-afterEach(() => { act(() => root?.unmount()); root = undefined; });
+beforeEach(() => { vi.useFakeTimers(); });
+afterEach(() => { act(() => root?.unmount()); root = undefined; vi.useRealTimers(); });
 
 it('typing and streamed dictation update subscribers without rendering the task or message list', () => {
   const source = createComposerDraftSource(textComposerDocument(''));
@@ -27,12 +28,65 @@ it('typing and streamed dictation update subscribers without rendering the task 
   act(() => root!.render(createElement(Task)));
   const before = { ...counts };
   for (let index = 1; index <= 100; index++) {
-    act(() => source.setDocument(textComposerDocument('听写内容'.repeat(index))));
+    act(() => {
+      source.setDocument(textComposerDocument('听写内容'.repeat(index)));
+      vi.advanceTimersToNextFrame();
+    });
   }
   expect(counts.task).toBe(before.task);
   expect(counts.messages).toBe(before.messages);
   expect(counts.input).toBe(before.input + 100);
   expect(container.textContent).toBe('听写内容'.repeat(100));
+});
+
+it('coalesces a burst of native edits while send snapshots always contain the latest rich draft', () => {
+  const source = createComposerDraftSource(textComposerDocument(''));
+  const container = document.createElement('div');
+  const render = vi.fn();
+  function Input() {
+    const snapshot = useSyncExternalStore(source.subscribe, source.getSnapshot);
+    render(snapshot);
+    return createElement('span', null, snapshot.draft);
+  }
+  root = createRoot(container);
+  act(() => root!.render(createElement(Input)));
+  render.mockClear();
+  act(() => {
+    for (let index = 1; index <= 200; index++) {
+      source.setDocument(textComposerDocument('input'.repeat(index)));
+      expect(source.getSnapshot().draft).toBe('input'.repeat(index));
+    }
+  });
+  expect(render).not.toHaveBeenCalled();
+  act(() => vi.advanceTimersToNextFrame());
+  expect(render).toHaveBeenCalledTimes(1);
+  expect(container.textContent).toBe('input'.repeat(200));
+  const sent = source.getSnapshot();
+  act(() => {
+    source.setDocument(textComposerDocument(''));
+    vi.advanceTimersToNextFrame();
+  });
+  expect(sent.draft).toBe('input'.repeat(200));
+  expect(container.textContent).toBe('');
+});
+
+it('does not notify a replaced subscription again or retain work after the editor leaves', () => {
+  const source = createComposerDraftSource(textComposerDocument(''));
+  const replacement = vi.fn();
+  let unsubscribe = () => {};
+  const first = vi.fn(() => { unsubscribe(); unsubscribe = source.subscribe(replacement); });
+  unsubscribe = source.subscribe(first);
+  source.setDocument(textComposerDocument('draft'));
+  vi.advanceTimersToNextFrame();
+  expect(first).toHaveBeenCalledTimes(1);
+  expect(replacement).not.toHaveBeenCalled();
+  expect(source.getSnapshot().draft).toBe('draft');
+  source.setDocument(textComposerDocument('latest'));
+  unsubscribe();
+  expect(vi.getTimerCount()).toBe(0);
+  vi.advanceTimersToNextFrame();
+  expect(replacement).not.toHaveBeenCalled();
+  expect(source.getSnapshot().draft).toBe('latest');
 });
 
 it('task switches detach old drafts and clearing the editor preserves the send snapshot', () => {

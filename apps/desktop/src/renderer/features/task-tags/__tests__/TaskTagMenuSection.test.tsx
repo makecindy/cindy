@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { TaskTagEditor, TaskTagMenuSection } from '../TaskTags';
 import { TASK_TAG_COLORS } from '@cindy/maker-shared';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 import { emitTaskTagCatalog, resetTaskTagCatalogCache } from '../taskTagEvents';
 import type { Session } from '@/lib/ccAgent.types';
 
@@ -30,6 +31,18 @@ vi.mock('react-i18next', () => ({
 afterEach(() => {
   cleanup();
   resetTaskTagCatalogCache();
+});
+it('keeps guest labels visible but disabled without requesting the host catalog', () => {
+  const invoke = vi.fn();
+  const onMore = vi.fn();
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { deviceLink: { invoke } } });
+  render(<TaskTagMenuSection session={{ id: 'guest-task', deviceLinkDeviceId: sharedTaskHostPeer('share', 'host'), tags: [] } as unknown as Session} onMore={onMore} />);
+  expect(screen.getByText('Labels')).toBeTruthy();
+  const more = screen.getByRole('button', { name: 'More labels' });
+  expect((more as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(more);
+  expect(onMore).not.toHaveBeenCalled();
+  expect(invoke).not.toHaveBeenCalled();
 });
 it('treats 工作 to Work as an explicit rename, but not an unchanged save', async () => {
   const tag = { id: 'preset:work', name: 'Work', color: 'blue', favoriteOrder: null, revision: 1 };

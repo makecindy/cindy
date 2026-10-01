@@ -5,10 +5,12 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
+import { PausableSubscriptions } from './pausableSubscriptions';
 import {
   MAKER_EVENT_BATCH_CHANNEL,
   SESSION_ACTIVITY_CHANNEL,
@@ -816,7 +818,7 @@ function deleteSessionLiveActivity(sessionId: string): boolean {
 }
 
 function sessionById(sessionId: string): RemoteSession | undefined {
-  return mergedSessions.find((session) => session.id === sessionId);
+  return mergedSessionById.get(sessionId);
 }
 
 function retentionForSession(sessionId: string): SessionRetentionKind {
@@ -1241,6 +1243,28 @@ function applyMessageWriteRetention(sessionId: string): void {
 }
 
 let mergedSessions: RemoteSession[] = [];
+// Retention and live-row anchoring run for every message write. Looking up each
+// cached window in the full list makes bulk hydration approach cubic work.
+const mergedSessionById = new Map<string, RemoteSession>();
+// List-only projection. Detail consumers keep reading mergedSessions, including
+// live usage. Usage pushes must not rebuild Home's grouping/localization tree.
+let homeSessions: RemoteSession[] = [];
+const SESSION_USAGE_FIELDS = new Set(['totalMoney', 'totalCostUsd', 'totalTokenUsage']);
+
+function reconcileHomeSessions(): void {
+  const previous = new Map(homeSessions.map((session) => [session.id, session]));
+  const next = mergedSessions.map((session) => {
+    const projected = { ...session };
+    delete projected.totalMoney;
+    delete projected.totalCostUsd;
+    delete projected.totalTokenUsage;
+    const old = previous.get(session.id);
+    return old && remoteSessionEqual(old, projected) ? old : projected;
+  });
+  if (sameElementRefs(homeSessions, next)) return;
+  homeSessions = next;
+  bumpHomeStatusVersion();
+}
 let messageVersion = 0;
 let storeVersion = 0;
 // A single remote snapshot often updates both the session shard and its
@@ -1258,7 +1282,7 @@ type LiveRowCreatedAtAnchor = {
 
 function liveRowCreatedAtAnchor(sessionId: string): LiveRowCreatedAtAnchor {
   const pendingHostAnchorIds = pendingHostAnchorLiveAssistantClientIds.get(sessionId);
-  const session = mergedSessions.find((item) => item.id === sessionId);
+  const session = sessionById(sessionId);
   const authoritativeMessages = (messages.get(sessionId) ?? []).filter((message) => {
     const isPendingHostAnchor = pendingHostAnchorIds?.has(message.id) === true
       || pendingHostAnchorIds?.has(message.clientId) === true;
@@ -1287,12 +1311,12 @@ function liveRowCreatedAtAnchor(sessionId: string): LiveRowCreatedAtAnchor {
 }
 
 function latestUserSendAt(sessionId: string): string | undefined {
-  return mergedSessions.find((item) => item.id === sessionId)?.userSendAt ?? undefined;
+  return sessionById(sessionId)?.userSendAt ?? undefined;
 }
 
 function authoritativeSessionDeviceId(sessionId: string): string | undefined {
   if (!deviceList) return undefined;
-  const session = mergedSessions.find((item) => item.id === sessionId);
+  const session = sessionById(sessionId);
   const canonicalDeviceId = session?.canonicalDeviceId;
   if (canonicalDeviceId && deviceList.some((device) => device.deviceId === canonicalDeviceId)) {
     return canonicalDeviceId;
@@ -1501,6 +1525,9 @@ function recomputeSessions(): void {
   // 数组级同样调和:全部元素引用与序都未变时保留旧数组引用——useRemoteSessions 的
   // useSyncExternalStore 快照经 Object.is 即可短路,消费屏对无关 emit 零重渲染。
   mergedSessions = sameElementRefs(mergedSessions, next) ? mergedSessions : next;
+  mergedSessionById.clear();
+  for (const session of mergedSessions) mergedSessionById.set(session.id, session);
+  reconcileHomeSessions();
   let liveRowsReanchored = false;
   for (const session of mergedSessions) {
     bindPendingHostAnchorSendAt(session.id, session.userSendAt);
@@ -3339,6 +3366,20 @@ export const remoteSessionStore = {
       );
       if (remoteSessionEqual(shard.sessions[idx], patched)) return;
       shard.sessions = shard.sessions.map((s) => (s.id === sessionId ? patched : s));
+      if (Object.keys(patch).every((key) => SESSION_USAGE_FIELDS.has(key))) {
+        // Usage cannot change routing, retention, previews, grouping or unread.
+        // Preserve the canonical shard winner and notify detail selectors only.
+        if (sessionDeviceIndex.get(sessionId) === deviceId) {
+          mergedSessions = mergedSessions.map((session) => {
+            if (session.id !== sessionId) return session;
+            const updated = { ...session, ...patch };
+            mergedSessionById.set(sessionId, updated);
+            return updated;
+          });
+        }
+        emit();
+        return;
+      }
       shouldReseedAfterPatch = wasPinned && unpinned;
     }
     recomputeSessions();
@@ -4069,26 +4110,36 @@ export const remoteSessionStore = {
 
   setActiveSessionSnapshots(
     deviceId: string,
-    list: readonly unknown[],
+    response: unknown,
     activityEpochAtFetchStart = makerActivityEpoch,
   ): void {
-    // `maker:list-active` returns only currently active sessions. Absence is not
-    // an idle assertion: the request can have started before a turn and complete
-    // after a live delta, or a stale reconnect response can race a newer push.
-    // Only explicit boolean states in the snapshot may change a session's run
-    // state; terminal maker/activity events remain the idle authority.
-    const snapshotStates = new Map<string, boolean>();
+    // Only the opted-in v2 envelope asserts a complete runtime list. Legacy
+    // arrays can come from old hosts, where absence must retain its old meaning.
+    const completeResponse = isRecord(response) && response.format === 'active-sessions-v2'
+      && Array.isArray(response.sessions) ? response : null;
+    const list: readonly unknown[] = completeResponse
+      ? completeResponse.sessions as unknown[]
+      : (Array.isArray(response) ? response : []);
+    const snapshotStates = new Map<string, {
+      running: boolean;
+      activityPhase: string | null;
+      activityAttention: unknown;
+    }>();
     for (const item of list) {
       if (!isRecord(item)) continue;
       const sessionId = readString(item, 'sessionId');
       if (sessionId && typeof item.isTurnRunning === 'boolean') {
         const indexedDeviceId = sessionDeviceIndex.get(sessionId);
         if (indexedDeviceId && indexedDeviceId !== deviceId) continue;
-        snapshotStates.set(sessionId, item.isTurnRunning);
+        snapshotStates.set(sessionId, {
+          running: item.isTurnRunning,
+          activityPhase: readString(item, 'activityPhase'),
+          activityAttention: item.activityAttention,
+        });
       }
     }
     let changed = false;
-    for (const [sessionId, running] of snapshotStates) {
+    for (const [sessionId, { running, activityPhase, activityAttention }] of snapshotStates) {
       if (!running) {
         changed = flushAndFinalizeRemoteStreamingMessages(sessionId) || changed;
         changed = writeMakerTurnRunning(sessionId, false) || changed;
@@ -4096,6 +4147,25 @@ export const remoteSessionStore = {
       const current = readSessionRunStatus(sessionId);
       const hasNewerMakerActivity = (sessionMakerActivityEpochs.get(sessionId) ?? 0)
         > activityEpochAtFetchStart;
+      // A fresh host snapshot can repair a missed activity clear while the phone was
+      // backgrounded. Old hosts omit these optional fields, so keep their push-only path.
+      if (!hasNewerMakerActivity && typeof activityAttention === 'boolean'
+        && (isRemoteSessionLiveActivityPhase(activityPhase) || activityPhase === 'idle')) {
+        if (activityPhase === 'running' || activityPhase === 'needs-interaction'
+          || (activityAttention && activityPhase !== 'idle')) {
+          const previous = sessionLiveActivity.get(sessionId);
+          changed = writeSessionLiveActivity(sessionId, {
+            sessionId,
+            phase: activityPhase,
+            compactDetail: previous?.phase === activityPhase ? previous.compactDetail : '',
+            workingPhase: previous?.phase === activityPhase ? previous.workingPhase : undefined,
+            interactionKind: previous?.phase === activityPhase ? previous.interactionKind : undefined,
+            attention: activityAttention,
+          }) || changed;
+        } else {
+          changed = deleteSessionLiveActivity(sessionId) || changed;
+        }
+      }
       const next = clearLiveGenerationOnWideRunStart(current, {
         ...current,
         isRunning: running,
@@ -4104,6 +4174,25 @@ export const remoteSessionStore = {
         startedAt: running ? (current.startedAt ?? Date.now()) : null,
       });
       changed = writeSessionRunStatus(sessionId, next) || changed;
+    }
+    if (completeResponse) {
+      for (const [sessionId, indexedDeviceId] of sessionDeviceIndex) {
+        if (indexedDeviceId !== deviceId || snapshotStates.has(sessionId)
+          || (sessionMakerActivityEpochs.get(sessionId) ?? 0) > activityEpochAtFetchStart) continue;
+        // A runtime absent from a complete host snapshot has ended. Do not
+        // discard a newer live push that arrived while this read was in flight.
+        changed = flushAndFinalizeRemoteStreamingMessages(sessionId) || changed;
+        changed = writeMakerTurnRunning(sessionId, false) || changed;
+        changed = deleteSessionLiveActivity(sessionId) || changed;
+        const current = readSessionRunStatus(sessionId);
+        changed = writeSessionRunStatus(sessionId, {
+          ...current,
+          isRunning: false,
+          reconnectAttempt: null,
+          sideTaskRunning: false,
+          startedAt: null,
+        }) || changed;
+      }
     }
     if (changed) emit();
   },
@@ -4506,6 +4595,7 @@ export const remoteSessionStore = {
     const sessionId = readString(payload, 'sessionId');
     const phase = readString(payload, 'phase');
     if (!sessionId || !isRemoteSessionLiveActivityPhase(phase)) return;
+    markSessionMakerActivity(sessionId);
     const compactDetail = typeof payload.compactDetail === 'string' ? payload.compactDetail : '';
     let changed = false;
     if (phase === 'running' || phase === 'needs-interaction') {
@@ -4513,6 +4603,7 @@ export const remoteSessionStore = {
         sessionId,
         phase,
         compactDetail,
+        workingPhase: readString(payload, 'workingPhase') ?? undefined,
         interactionKind: readString(payload, 'interactionKind') ?? undefined,
         attention: payload.attention === true,
       };
@@ -5033,6 +5124,11 @@ export const remoteSessionStore = {
     reseedHandlers.clear();
     pendingTitlePreview.clear();
     mergedSessions = [];
+    mergedSessionById.clear();
+    if (homeSessions.length > 0) {
+      homeSessions = [];
+      bumpHomeStatusVersion();
+    }
     deviceList = null;
     bumpMessageVersion();
     emit();
@@ -5066,6 +5162,10 @@ export const remoteSessionStore = {
 
   getSessions(): RemoteSession[] {
     return mergedSessions;
+  },
+
+  getHomeSessions(): RemoteSession[] {
+    return homeSessions;
   },
 
   getMessages(sessionId: string): RemoteMessage[] {
@@ -5627,8 +5727,7 @@ function readNumber(value: unknown, key: string): number | null {
   return typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
 }
 
-const RemoteSessionStoreSubscriptionEnabledContext = createContext(true);
-const INACTIVE_REMOTE_SESSION_STORE_SUBSCRIBE = () => () => undefined;
+const RemoteSessionStoreSubscriptionContext = createContext<PausableSubscriptions | null>(null);
 
 /**
  * Keep a mounted route's remote-session projection stable while it is covered by another screen.
@@ -5643,9 +5742,16 @@ export function RemoteSessionStoreSubscriptionGate({
   children: ReactNode;
   enabled: boolean;
 }) {
+  const gateRef = useRef<PausableSubscriptions | null>(null);
+  if (!gateRef.current) gateRef.current = new PausableSubscriptions(enabled);
+  const gate = gateRef.current;
+  useLayoutEffect(() => {
+    gate.setEnabled(enabled);
+    return () => gate.setEnabled(false);
+  }, [gate, enabled]);
   return createElement(
-    RemoteSessionStoreSubscriptionEnabledContext.Provider,
-    { value: enabled },
+    RemoteSessionStoreSubscriptionContext.Provider,
+    { value: gate },
     children,
   );
 }
@@ -5655,25 +5761,36 @@ function usePausableRemoteSessionStoreSnapshot<T>(
   getSnapshot: () => T,
   subscribe: (cb: () => void) => () => void = remoteSessionStore.subscribe,
 ): T {
-  const enabled = useContext(RemoteSessionStoreSubscriptionEnabledContext);
+  const gate = useContext(RemoteSessionStoreSubscriptionContext);
   const frozenSnapshotRef = useRef<{ identity: unknown; value: T } | null>(null);
   const readSnapshot = useCallback(() => {
     const frozen = frozenSnapshotRef.current;
-    if (enabled || frozen === null || !Object.is(frozen.identity, identity)) {
+    if (!gate || gate.enabled || frozen === null || !Object.is(frozen.identity, identity)) {
       const next = { identity, value: getSnapshot() };
       frozenSnapshotRef.current = next;
       return next.value;
     }
     return frozen.value;
-  }, [enabled, getSnapshot, identity]);
+  }, [gate, getSnapshot, identity]);
+  const subscribeWhileActive = useCallback(
+    (notify: () => void) => gate ? gate.subscribe(subscribe, notify) : subscribe(notify),
+    [gate, subscribe],
+  );
   return useSyncExternalStore(
-    enabled ? subscribe : INACTIVE_REMOTE_SESSION_STORE_SUBSCRIBE,
+    subscribeWhileActive,
     readSnapshot,
   );
 }
 
 export function useRemoteSessions(): RemoteSession[] {
   return usePausableRemoteSessionStoreSnapshot('sessions', remoteSessionStore.getSessions);
+}
+
+/** Home rows/actions do not consume usage; session details must use useRemoteSessions. */
+export function useRemoteHomeSessions(): RemoteSession[] {
+  return usePausableRemoteSessionStoreSnapshot(
+    'home-sessions', remoteSessionStore.getHomeSessions, remoteSessionStore.subscribeHomeStatus,
+  );
 }
 
 /** Device identity can change without changing any session's reconciled reference. */

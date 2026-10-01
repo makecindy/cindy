@@ -11,6 +11,7 @@ import { observeDesktopStartupResult } from '../devStartupStatus.js';
 import { defaultPtySpawn } from '../terminal/ptyFactory.js';
 import { makeTestEnvironment } from './testRunner.js';
 import { getMakeRuntimeSourceIdentity } from './runtimeVersion.js';
+import { cleanupPersonalVersions } from './personalVersionCleanup.js';
 import { versionEntryArguments } from './versionLaunchArguments.js';
 import {
   getCindyVersionLockScope,
@@ -771,4 +772,6 @@ export async function markCindyVersionReady(): Promise<void> {
     const pending = path.join(versionsRoot(request!.profile.userData), 'pending.json');
     if (readVersionJson<{ id: string }>(pending)?.id === request!.id) fs.unlinkSync(pending);
   });
+  // Retire older applications; cleanup keeps the helper's bundle until it exits.
+  await cleanupPersonalVersions(request.profile.userData);
 }

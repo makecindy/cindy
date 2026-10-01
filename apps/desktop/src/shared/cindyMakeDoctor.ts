@@ -64,7 +64,14 @@ export interface CindyMakeTaskPreparation {
   sessionId: string;
   originSessionId?: string;
   phase:
-    'waiting' | 'environment' | 'source' | 'workspace' | 'dependencies' | 'starting' | 'completed';
+    | 'waiting'
+    | 'environment'
+    | 'source'
+    | 'updatingSource'
+    | 'workspace'
+    | 'dependencies'
+    | 'starting'
+    | 'completed';
   dependencies?: MakeDependencyProgress;
   /** Settings projection; preparation completion is not production completion. */
   sessionStatus?: 'active' | 'archived' | 'deleted';
@@ -137,6 +144,8 @@ export interface CindyMakeGlobalState {
   source?: MakeSourceStatus;
   reports?: Record<string, MakeDoctorReport>;
   tasks?: Record<string, MakeDoctorReport>;
+  /** Live build owners only; absent after the job (including stop cleanup) settles. */
+  personalBuildSessionIds?: string[];
   /** Current-owner cleanup jobs, keyed by session ID; independent of Settings lifetime. */
   taskActions?: Record<string, CindyMakeTaskActionState>;
 }

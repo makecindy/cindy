@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { localizedModelName, localizedBrandName, matchesModelName } from '@/lib/modelDisplayNames';
 import { modelManagementState } from './modelManagementState';
 /**
@@ -72,10 +73,10 @@ import {
 import { LocalPackagingTag } from './LocalPackagingTag';
 import { ModelAdvancedDrawer } from './ModelAdvancedDrawer';
 import {
-  compareModelNames,
   groupModelsForManagement,
   MANAGEMENT_KIND_ORDER,
   modelBrand,
+  sortModelsForManagement,
   type ManagementKind,
   type ManagementView,
 } from './modelManagementPresentation';
@@ -400,6 +401,18 @@ function rowModelIds(row: UnionModelRow): string[] {
 function rowCategory(row: UnionModelRow): ModelCategory {
   const rep = row.byAgent[row.avail[0]];
   return rep ? classifyModel(rep) : 'ungrouped';
+}
+
+/** 沉底分区与分组同口径排序:sortOrder 取自每行代表条目。 */
+function sortRowsForManagement(rows: readonly UnionModelRow[]): UnionModelRow[] {
+  return sortModelsForManagement(
+    rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      sortOrder: row.byAgent[row.avail[0]]?.sortOrder,
+      row,
+    })),
+  ).map(({ row }) => row);
 }
 
 export function managementKindsOfRow(row: UnionModelRow, userProvider: boolean): ManagementKind[] {
@@ -776,8 +789,8 @@ export function UnifiedModelList({
         brand: g.brand,
         rows: g.models.map((m) => repByRow.get(m.id)).filter((r): r is UnionModelRow => !!r),
       })),
-      hiddenRows: [...hidden].sort(compareModelNames),
-      disabledRows: [...disabled].sort(compareModelNames),
+      hiddenRows: sortRowsForManagement(hidden),
+      disabledRows: sortRowsForManagement(disabled),
     };
     // visibilityVersion:沉底判定读 modelVisibilityPrefs,开关一拨行要立刻迁移。
   }, [
@@ -1094,13 +1107,10 @@ export function UnifiedModelList({
             {unionRows.length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className="flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-                  >
+                  <Button variant="secondary" size="sm" compact type="button" className="shrink-0">
                     {t('settings.providers.models.manage.menu')}
                     <ChevronDown size={12} aria-hidden />
-                  </button>
+                  </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuLabel>
@@ -1345,15 +1355,17 @@ export function UnifiedModelList({
                       </span>
                     </button>
                     {!hasLockedDisabledRow && (
-                      <button
+                      <Button
+                        variant="secondary"
+                        size="xxs"
+                        compact
+                        tone="quiet"
                         type="button"
                         disabled={!selectionAvailable}
                         onClick={resetDisableOverrides}
-                        className="rounded-lg px-1.5 py-0.5 text-11 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                        style={{ color: 'var(--text-tertiary)' }}
                       >
                         {t('settings.providers.models.enableAllModels')}
-                      </button>
+                      </Button>
                     )}
                   </div>
                   {!collapsed &&
@@ -1400,28 +1412,30 @@ export function UnifiedModelList({
                             </span>
                           )}
                           {!paymentRequired && (
-                            <button
+                            <Button
+                              variant="secondary"
+                              size="xs"
+                              compact
                               type="button"
                               disabled={!selectionAvailable}
                               onClick={() => setRowDisabled(row, false)}
-                              className="ml-auto flex h-6 shrink-0 items-center rounded-full border px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                              style={{
-                                borderColor: 'var(--settings-btn-secondary-border)',
-                                color: 'var(--settings-btn-secondary-text)',
-                              }}
+                              className="ml-auto shrink-0"
                             >
                               {t('settings.providers.models.enableModel')}
-                            </button>
+                            </Button>
                           )}
                           {provider.id === MANAGED_OLLAMA_PROVIDER_ID && (
-                            <button
+                            <Button
+                              variant="secondary"
+                              size="xs"
+                              tone="danger"
+                              compact
                               type="button"
                               onClick={() => void deleteInstalledModel(row)}
-                              className="flex h-6 shrink-0 items-center rounded-full px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                              style={{ color: 'var(--error-fg)' }}
+                              className="shrink-0"
                             >
                               {t('settings.providers.local.deleteModel')}
-                            </button>
+                            </Button>
                           )}
                         </div>
                       );

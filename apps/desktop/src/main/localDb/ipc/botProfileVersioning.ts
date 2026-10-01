@@ -1,4 +1,4 @@
-import { normalizeBotModelChain } from '../../../shared/botModelChain.js';
+import { normalizeBotModelChain, readBotTaskModelOverride } from '../../../shared/botModelChain.js';
 import { reconcileBotCapabilityList } from '../../../shared/botCapabilitySelection.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 
@@ -67,6 +67,9 @@ export function normalizeBotProfileModelChain(
   value: Record<string, unknown>,
 ): Record<string, unknown> {
   const next = { ...value };
+  if (Object.prototype.hasOwnProperty.call(next, 'taskModelOverride')) {
+    next.taskModelOverride = readBotTaskModelOverride(next.taskModelOverride);
+  }
   if (Object.prototype.hasOwnProperty.call(next, 'modelChain')) {
     const chain = normalizeBotModelChain(next.modelChain);
     if (chain.length === 0 && next.modelChainOverride !== null && next.modelOverride !== null) {

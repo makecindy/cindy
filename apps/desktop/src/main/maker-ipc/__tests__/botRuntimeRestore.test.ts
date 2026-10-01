@@ -66,6 +66,25 @@ describe('botRuntimeRestore', () => {
     );
   });
 
+  it('still restores delegations when direct messages fail, and retries only the failed stage', async () => {
+    const h = harness();
+    h.setIdentity({ userId: 'owner-a', clientEpoch: 1 });
+    h.services.directMessages.restore.mockRejectedValueOnce(new Error('thread index conflict'));
+
+    await expect(h.coordinator.restoreCurrentOwner()).resolves.toBe(false);
+    expect(h.calls).toEqual(['delegation']);
+    expect(h.log.warn).toHaveBeenCalledWith('Bot direct messages restore failed', expect.anything());
+
+    await expect(h.coordinator.restoreCurrentOwner()).resolves.toBe(true);
+    expect(h.calls).toEqual(['delegation', 'messages']);
+    expect(h.services.delegation.restore).toHaveBeenCalledOnce();
+
+    // A new client generation restores every stage again.
+    h.setIdentity({ userId: 'owner-b', clientEpoch: 2 });
+    await expect(h.coordinator.restoreCurrentOwner()).resolves.toBe(true);
+    expect(h.calls).toEqual(['delegation', 'messages', 'messages', 'delegation']);
+  });
+
   it('stops the pass when the DbClient generation changes mid-restore', async () => {
     const h = harness();
     h.setIdentity({ userId: 'owner-a', clientEpoch: 1 });

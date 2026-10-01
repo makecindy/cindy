@@ -6,6 +6,7 @@ import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { useFeishuBot, type FeishuBotService, type FeishuBotStatus } from '@/hooks/useFeishuBot';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { savedCredentialsNoteKey, shouldShowSavedCredentialsCard } from './feishuBotPresentation';
@@ -18,7 +19,6 @@ const APP_LAUNCHER_URL: Record<FeishuBotService, string> = {
   lark: 'https://open.larksuite.com/page/launcher?from=backend_oneclick',
 };
 const FEISHU_SERVICES = ['feishu', 'lark'] as const;
-const FEISHU_ONLY = ['feishu'] as const;
 
 const statusKey: Record<FeishuBotStatus, string> = {
   idle: 'settings.feishuBot.status.needsConfig',
@@ -57,11 +57,13 @@ function maskTail(value: string): string {
 export function FeishuBotSection({
   expanded,
   onToggle,
-  showLark,
+  preferredService,
+  searchActivation,
 }: {
   expanded: boolean;
   onToggle: () => void;
-  showLark: boolean;
+  preferredService?: FeishuBotService | null;
+  searchActivation?: number;
 }) {
   const {
     service,
@@ -73,6 +75,7 @@ export function FeishuBotSection({
     status,
     errorMessage,
     hasSavedCreds,
+    hasLoadedState,
     ownerOpenId,
     validationError,
     isSaving,
@@ -88,20 +91,12 @@ export function FeishuBotSection({
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
 
-  const showSavedCredentialsCard = shouldShowSavedCredentialsCard(hasSavedCreds);
-  // 已保存的 Lark 凭证仍允许查看和清除，身份限制只影响新的配置入口。
-  const configurableService = showLark || hasSavedCreds ? service : 'feishu';
-  const canSave =
-    service === configurableService &&
-    appId.trim().length > 0 &&
-    appSecret.trim().length > 0 &&
-    !isSaving;
-
   useEffect(() => {
-    if (!showLark && !hasSavedCreds && service === 'lark') {
-      setService('feishu');
-    }
-  }, [hasSavedCreds, service, setService, showLark]);
+    if (hasLoadedState && !hasSavedCreds && preferredService) setService(preferredService);
+  }, [hasLoadedState, hasSavedCreds, preferredService, searchActivation, setService]);
+
+  const showSavedCredentialsCard = shouldShowSavedCredentialsCard(hasSavedCreds);
+  const canSave = appId.trim().length > 0 && appSecret.trim().length > 0 && !isSaving;
 
   const handleClearClick = useCallback(async () => {
     const confirmed = await confirm({
@@ -115,8 +110,8 @@ export function FeishuBotSection({
   }, [confirm, clear, t]);
 
   const openLauncher = useCallback(() => {
-    window.electronAPI.openExternal?.(APP_LAUNCHER_URL[configurableService]);
-  }, [configurableService]);
+    window.electronAPI.openExternal?.(APP_LAUNCHER_URL[service]);
+  }, [service]);
 
   return (
     <ImChannelSettingsCard
@@ -168,9 +163,8 @@ export function FeishuBotSection({
         />
       ) : (
         <ManualConfig
-          service={configurableService}
+          service={service}
           setService={setService}
-          showLark={showLark}
           appId={appId}
           setAppId={setAppId}
           appSecret={appSecret}
@@ -295,20 +289,18 @@ function SavedCredentialsCard(props: {
         </div>
       </div>
       <div className="flex gap-2 pt-1">
-        <button
+        <Button
+          variant="secondary"
+          size="lg"
+          loading={props.isClearing}
           type="button"
           onClick={props.onClear}
           disabled={props.isClearing}
-          className={cn(
-            'flex h-[36px] flex-1 items-center justify-center gap-1.5 rounded-full',
-            'border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
-            'text-12 font-medium text-[var(--settings-btn-secondary-text)]',
-            props.isClearing && 'cursor-not-allowed opacity-40',
-          )}
+          className="flex-1"
         >
-          {props.isClearing ? <Spinner size={13} /> : <Trash2 size={13} />}
+          <Trash2 size={13} />
           {t('settings.feishuBot.connected.clear')}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -317,7 +309,6 @@ function SavedCredentialsCard(props: {
 function ManualConfig(props: {
   service: FeishuBotService;
   setService: (service: FeishuBotService) => void;
-  showLark: boolean;
   appId: string;
   setAppId: (v: string) => void;
   appSecret: string;
@@ -345,7 +336,7 @@ function ManualConfig(props: {
           aria-label={t('settings.feishuBot.serviceAria')}
           value={props.service}
           onValueChange={props.setService}
-          options={(props.showLark ? FEISHU_SERVICES : FEISHU_ONLY).map((service) => ({
+          options={FEISHU_SERVICES.map((service) => ({
             value: service,
             label: t(`settings.feishuBot.services.${service}`),
           }))}
@@ -443,21 +434,17 @@ function ManualConfig(props: {
         </div>
       </div>
 
-      <button
+      <Button
+        variant="cta"
+        size="lg"
+        loading={props.isSaving}
         type="button"
         onClick={props.onSave}
         disabled={!props.canSave}
-        className={cn(
-          'flex h-[42px] w-full items-center justify-center gap-1.5 rounded-full',
-          'bg-[var(--settings-btn-primary-bg)] border border-[var(--settings-btn-primary-border)]',
-          'text-13 font-medium text-[var(--settings-btn-primary-text)]',
-          'transition-colors hover:bg-[var(--settings-btn-primary-hover-bg)]',
-          !props.canSave && 'cursor-not-allowed opacity-40',
-        )}
+        className="w-full"
       >
-        {props.isSaving ? <Spinner size={14} /> : null}
         {t('settings.feishuBot.bind')}
-      </button>
+      </Button>
     </div>
   );
 }

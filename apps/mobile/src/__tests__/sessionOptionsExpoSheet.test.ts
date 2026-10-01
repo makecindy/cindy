@@ -74,6 +74,7 @@ vi.mock('@expo/ui/swift-ui/modifiers', () => ({
       'listRowInsets',
       'listRowBackground',
       'presentationDetents',
+      'interactiveDismissDisabled',
       'scrollContentBackground',
     ].map((name) => [name, (params: unknown) => ({ modifier: name, params })]),
   ),

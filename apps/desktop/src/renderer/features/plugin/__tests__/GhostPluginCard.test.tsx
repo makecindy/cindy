@@ -401,7 +401,7 @@ describe('GhostPluginCard', () => {
     ).toBe(true);
   });
 
-  it('replaces the update pill with a spinner while this card is pending', () => {
+  it('keeps the update label accessible while the shared button shows loading feedback', () => {
     render(
       <GhostPluginCard
         item={commandPlugin}
@@ -419,7 +419,8 @@ describe('GhostPluginCard', () => {
     });
     expect(update.getAttribute('aria-busy')).toBe('true');
     expect(update.querySelector('.animate-spinner')).toBeTruthy();
-    expect(update.textContent).toBe('');
+    expect(update.querySelector('.opacity-0')?.textContent).toContain('settings.ghosts.page.updateTo');
+    expect((update as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('sends a tool-only plugin to manage and renders no primary button', () => {
@@ -738,7 +739,8 @@ describe('MarketPluginCard', () => {
     });
     expect(install.getAttribute('aria-busy')).toBe('true');
     expect(install.querySelector('.animate-spinner')).toBeTruthy();
-    expect(install.textContent).toBe('');
+    expect(install.querySelector('.opacity-0')?.textContent).toBe('settings.ghosts.market.install');
+    expect((install as HTMLButtonElement).disabled).toBe(true);
   });
 });
 

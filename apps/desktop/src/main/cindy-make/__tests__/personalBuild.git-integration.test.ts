@@ -3,6 +3,13 @@ import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs
 import os from 'node:os';
 import path from 'node:path';
 import { expect, it, vi } from 'vitest';
+import { brandExecutableName } from '@cindy/maker-shared/brand-identity';
+import {
+  personalVersionId,
+  readPersonalVersion,
+  runnableBundlePaths,
+  versionDirectory,
+} from '../versionStore';
 import {
   buildCindyPersonal,
   personalArtifactPath,
@@ -238,6 +245,115 @@ it('rolls back failed generations, preserves concurrent edits and keeps successf
     );
     expect(await h.git(['status', '--porcelain'])).toBe('');
     expect(await h.git(['merge-base', '--is-ancestor', h.task.commit, 'cindy-personal'])).toBe('');
+  } finally {
+    await rm(h.userData, { recursive: true, force: true });
+  }
+}, 90_000);
+
+it('builds the latest cindy-personal HEAD after acquiring the project lock, even from an old completion', async () => {
+  const h = await fixture();
+  try {
+    const first = await h.run();
+    let latest = '';
+    h.packageCommand.mockImplementationOnce(async (...args) => {
+      expect(await h.git(['rev-parse', 'HEAD'], args[2])).toBe(latest);
+      expect(await readFile(path.join(args[2], 'latest.txt'), 'utf8')).toBe(
+        'newer personal change',
+      );
+      await h.pack(args[0], args[1], args[2]);
+    });
+    const next = await buildCindyPersonal(
+      { mode: 'personal', userData: h.userData, completionId: h.task.completionId },
+      process.execPath,
+      h.env,
+      'global',
+      h.signal,
+      async () => {},
+      () => {},
+      async (run) => {
+        // Another completed modification can arrive while this build waits for the source lock.
+        await writeFile(path.join(h.source, 'latest.txt'), 'newer personal change');
+        await h.git(['add', 'latest.txt']);
+        await h.git(['commit', '-s', '-m', 'another personal change']);
+        latest = await h.git(['rev-parse', 'cindy-personal']);
+        return run();
+      },
+      { pnpm: h.pnpm, packageCommand: h.packageCommand },
+    );
+    expect(latest).not.toBe(first.commit);
+    expect(next.commit).toBe(latest);
+    expect(next.tree).toBe(await h.git(['rev-parse', 'cindy-personal^{tree}']));
+    expect(await h.git(['rev-parse', 'HEAD'], h.workingDir)).toBe(h.task.commit);
+    expect(await h.git(['status', '--porcelain'])).toBe('');
+  } finally {
+    await rm(h.userData, { recursive: true, force: true });
+  }
+}, 90_000);
+
+it('replaces the single personal application only after a successful build and retains it on later failure', async () => {
+  const h = await fixture();
+  try {
+    await writeFile(
+      path.join(h.source, '.gitignore'),
+      'apps/desktop/release/\napps/desktop/out/\n',
+    );
+    const appName = brandExecutableName('global');
+    h.packageCommand.mockImplementation(async (...args) => {
+      await h.pack(args[0], args[1], args[2]);
+      const packaged = path.join(
+        h.source,
+        'apps',
+        'desktop',
+        'out',
+        `${appName}-${process.platform}-${process.arch}`,
+      );
+      const bundle =
+        process.platform === 'darwin' ? path.join(packaged, appName + '.app') : packaged;
+      const { executable, resources } = runnableBundlePaths(bundle, appName);
+      await mkdir(path.dirname(executable), { recursive: true });
+      await mkdir(path.join(resources, 'drizzle'), { recursive: true });
+      await writeFile(executable, 'fixture executable');
+      await writeFile(path.join(resources, 'app.asar'), 'fixture application');
+      await writeFile(path.join(resources, 'drizzle', '0000_base.sql'), 'SELECT 1;');
+      await writeFile(
+        path.join(resources, 'cindy-version-protocol.json'),
+        JSON.stringify({ version: 1 }),
+      );
+      await writeFile(
+        path.join(resources, 'cindy-source.json'),
+        JSON.stringify({
+          sourceCommit: await h.git(['rev-parse', 'HEAD']),
+          builtAt: '2026-09-22T12:00:00+08:00',
+        }),
+      );
+    });
+    const run = () =>
+      buildCindyPersonal(
+        { ...h.task, profile: { userData: h.userData, appName, region: 'global', passive: false } },
+        process.execPath,
+        h.env,
+        'global',
+        h.signal,
+        async () => {},
+        () => {},
+        async (operation) => operation(),
+        { pnpm: h.pnpm, packageCommand: h.packageCommand },
+      );
+    const first = await run();
+    expect(personalVersionId(h.userData)).toBe(first.versionId);
+    h.packageCommand.mockRejectedValueOnce(new Error('packaging failed'));
+    await expect(run()).rejects.toThrow('packaging failed');
+    expect(personalVersionId(h.userData)).toBe(first.versionId);
+    expect(readPersonalVersion(h.userData, first.versionId!).commit).toBe(first.commit);
+    const second = await run();
+    expect(second.versionId).not.toBe(first.versionId);
+    expect(personalVersionId(h.userData)).toBe(second.versionId);
+    expect(readPersonalVersion(h.userData, second.versionId!).commit).toBe(
+      await h.git(['rev-parse', 'cindy-personal']),
+    );
+    await expect(
+      access(path.join(versionDirectory(h.userData, first.versionId!), 'runtime')),
+    ).rejects.toThrow();
   } finally {
     await rm(h.userData, { recursive: true, force: true });
   }

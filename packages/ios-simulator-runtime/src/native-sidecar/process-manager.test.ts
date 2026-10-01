@@ -135,6 +135,40 @@ function input() {
 }
 
 describe("IOSSimulatorNativeSidecarProcessManager", () => {
+  it("rejects changing only the bound Xcode path on start or recovery", async () => {
+    const channel = new FakeChannel();
+    const manager = new IOSSimulatorNativeSidecarProcessManager({
+      binaryPath: "/private/fake/ios-simulator-sidecar",
+      createChannel: () => channel,
+    });
+    const start = {
+      ...input(),
+      runtime: {
+        runtimeIdentifier: "runtime",
+        runtimeBuildVersion: "build",
+        xcodeBuild: "Xcode 27",
+        architecture: "arm64" as const,
+        developerDirectory: "/Applications/Xcode A.app/Contents/Developer",
+      },
+    };
+    await manager.start(start);
+    const changed = {
+      ...start,
+      runtime: {
+        ...start.runtime,
+        developerDirectory: "/Applications/Xcode B.app/Contents/Developer",
+      },
+    };
+    await expect(manager.start(changed)).rejects.toMatchObject({
+      code: "HANDSHAKE_FAILED",
+    });
+    await expect(manager.recover(changed)).rejects.toMatchObject({
+      code: "HANDSHAKE_FAILED",
+    });
+    expect(channel.restart).not.toHaveBeenCalled();
+    await manager.stop(start.instanceId);
+  });
+
   it("forwards updater force-exit aborts to every live channel", async () => {
     const channel = new FakeChannel();
     const manager = new IOSSimulatorNativeSidecarProcessManager({

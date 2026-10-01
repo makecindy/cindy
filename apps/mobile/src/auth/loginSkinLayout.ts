@@ -1,6 +1,6 @@
 /**
  * loginSkinLayout —— 移动端登录皮肤 750 坐标 stage 布局引擎 + 面板内几何常量 +
- * 42s 倒计时纯函数(PR4a,implementation-plan Step 5 WHAT1/WHAT3;**纯数据/纯函数,
+ * 60s 倒计时纯函数(PR4a,implementation-plan Step 5 WHAT1/WHAT3;**纯数据/纯函数,
  * 零 react-native**,node vitest 可直接 import 校验)。
  *
  * 参数权威链(照抄,禁止目测):
@@ -9,7 +9,7 @@
  *    347:2884 / 358:434 实测 inner 几何)与 stage 解析(designHeight clamp [600,1800]);
  *  - 面板内组件几何 = figma-component-spec §4/§5.1,与桌面
  *    apps/desktop/src/renderer/components/login/loginDesignTokens.ts 同源对齐;
- *  - 倒计时 = implementation-plan Step 3a 契约(v5 冻结显示数学,42s 双端拍板)。
+ *  - 倒计时 = DESIGN §16.4(60s 与服务端冷却一致,保留绝对 deadline 显示数学)。
  */
 
 /** 750 设计稿坐标系下的绝对几何框(单位:设计 px)。 */
@@ -190,7 +190,7 @@ export function resolveLoginStage(
       demo resolveMobileStage()/ipadPortrait()/ipadLandscape() 仲裁,纯函数零 RN) ── */
 
 /** 登录 surface 构图模式(§3.6 条4 断点三分支)。 */
-export type LoginSurfaceMode = 'phone' | 'pad-portrait' | 'pad-landscape';
+export type LoginSurfaceMode = 'phone' | 'pad-portrait' | 'pad-landscape' | 'compact-wide';
 
 /** 横屏左右构图断点(§3.6 条4:landscape ∧ w≥1000pt ∧ h≥690pt;dp/pt 归一)。 */
 export const PAD_LANDSCAPE_MIN_WIDTH = 1000;
@@ -216,6 +216,7 @@ export function resolveLoginSurfaceMode(
   ) {
     return 'pad-landscape';
   }
+  if (landscape && viewportWidth >= 560) return 'compact-wide';
   if (!landscape && viewportWidth >= PAD_PORTRAIT_MIN_WIDTH) return 'pad-portrait';
   return 'phone';
 }
@@ -359,6 +360,40 @@ export function resolveLoginSurface(
   }
   if (mode === 'pad-landscape') {
     return padSurface(mode, LOGIN_PAD_LANDSCAPE_STAGE, viewportWidth, viewportHeight);
+  }
+  if (mode === 'compact-wide') {
+    if (viewportWidth < 760 || viewportHeight < 480) {
+      // Short landscape keeps readable controls; overflow belongs to the form's scroll view.
+      const groupScale = Math.min(0.58, (viewportWidth - 192) / 680);
+      const groupWidth = 680 * groupScale;
+      const brandWidth = Math.min(200, viewportWidth - groupWidth - 48);
+      const heroHeight = brandWidth * 579 / 481.430176;
+      const brandTop = Math.max(16, (viewportHeight - heroHeight - 76) / 2);
+      return {
+        ...padSurface('pad-landscape', LOGIN_PAD_LANDSCAPE_STAGE, viewportWidth, viewportHeight),
+        mode, scale: 1, offsetX: 0, offsetY: 0,
+        stageWidth: viewportWidth, stageHeight: viewportHeight,
+        cindy: { x: 16, y: brandTop, w: brandWidth, h: heroHeight },
+        word: { x: 16, y: brandTop + heroHeight - 8, w: brandWidth, h: brandWidth / 2.93 },
+        slogan: { x: 16, y: brandTop + heroHeight + brandWidth / 2.93, w: brandWidth, h: brandWidth * 97.2 / 339.16 },
+        loginX: viewportWidth - groupWidth - 16,
+        loginY: Math.max(16, (viewportHeight - 622 * groupScale) / 2),
+        loginGroupScale: groupScale,
+        spinner: { x: 16 + brandWidth / 2 - 12, y: Math.min(viewportHeight - 32, brandTop + heroHeight + 60), size: 24 },
+      };
+    }
+    // Preserve control sizes on medium, short windows instead of magnifying the phone artwork.
+    const base = padSurface('pad-landscape', LOGIN_PAD_LANDSCAPE_STAGE, viewportWidth, viewportHeight);
+    const scale = Math.min(viewportWidth / 1180, viewportHeight / 820);
+    const groupScale = Math.min(0.58, (viewportWidth / 2 - 24) / 680, (viewportHeight - 120) / 622);
+    const offsetX = (viewportWidth - 1180 * scale) / 2;
+    const offsetY = (viewportHeight - 820 * scale) / 2;
+    return { ...base, mode, scale, offsetX, offsetY,
+      loginGroupScale: groupScale / scale,
+      loginX: (viewportWidth * 0.75 - 340 * groupScale - offsetX) / scale,
+      loginY: (Math.max(108, (viewportHeight - 622 * groupScale) / 2) - offsetY) / scale,
+      word: { ...base.word, y: (32 - offsetY) / scale },
+    };
   }
   const stage = resolveLoginStage(viewportWidth, viewportHeight);
   // designHeight 的上下限只约束登录构图。横屏时它可能高于可见视口，
@@ -602,11 +637,17 @@ export function resolveDeletionBubbleFrame(
   if (surface.mode === 'phone') {
     const width = phone.width * scale;
     return {
-      left: clampLeft((surface.viewportWidth - width) / 2, width),
+      left: clampLeft(surface.offsetX + phone.x * scale, width),
       top: safeTop,
       width,
       scale,
     };
+  }
+  if (surface.mode === 'compact-wide') {
+    const groupScale = surface.scale * surface.loginGroupScale;
+    const width = 680 * groupScale;
+    return { left: clampLeft(surface.offsetX + surface.loginX * scale, width),
+      top: Math.max(safeTop, 8), width, scale: width / padLandscape.width };
   }
   if (surface.mode === 'pad-landscape') {
     const width = padLandscape.width * scale;
@@ -636,10 +677,10 @@ export function resolveDeletionBubbleFrame(
 /** disabled 态文字不透明度(figma §4.3 disable 态文字 80%)。 */
 export const LOGIN_DISABLED_TEXT_OPACITY = 0.8;
 
-/* ── 42s 倒计时纯函数(implementation-plan Step 3a 契约,v5 冻结显示数学) ── */
+/* ── 60s 倒计时纯函数(implementation-plan Step 3a 契约,v5 冻结显示数学) ── */
 
-/** 双端拍板 42s(figma §4.7 `42 秒后可重新发送` 247:1614)。 */
-export const RESEND_COUNTDOWN_SECONDS = 42;
+/** 双端 60s,与 auth-server 单目标发送冷却一致(DESIGN §16.4)。 */
+export const RESEND_COUNTDOWN_SECONDS = 60;
 /** tick 周期 1000ms(每 tick 重算,非递减计数)。 */
 export const RESEND_COUNTDOWN_TICK_MS = 1000;
 
@@ -648,7 +689,7 @@ export function createResendDeadline(now: number): number {
   return now + RESEND_COUNTDOWN_SECONDS * 1000;
 }
 
-/** 显示数学(v5 冻结):remaining = max(0, ceil((deadline - now)/1000));首帧显示 42。 */
+/** 显示数学(v5 冻结):remaining = max(0, ceil((deadline - now)/1000));首帧显示 60。 */
 export function resendCountdownRemaining(deadline: number, now: number): number {
   return Math.max(0, Math.ceil((deadline - now) / 1000));
 }

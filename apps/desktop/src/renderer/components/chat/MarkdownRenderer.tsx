@@ -12,6 +12,7 @@
  */
 
 import { Tip } from '@/components/ui/tooltip';
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { CHAT_CODE_CLASS, CHAT_CODE_SURFACE_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
@@ -1066,7 +1067,7 @@ function FileTargetChip({
           'bg-[var(--msg-md-inline-code-bg)]',
           // 刻意**不**钉 text-,与 INLINE_CODE_CLASS 一样让文字色继承上下文
           // (对齐 GitHub:`.markdown-body code` 不定义 color)。这样可点 chip 与
-          // 不可点行内 code 在任何上下文里都同色,差别只剩那条下划线;原先钉
+          // 不可点行内 code 在任何上下文里都同色;文件类型由装饰图标表达。原先钉
           // --msg-assistant-text 在助手气泡里与继承值相同,但在引用块等压暗/变色
           // 上下文里会分叉。
           // 常显下划线 = 唯一的可点信号(不是 hover 才出现)。
@@ -1076,6 +1077,9 @@ function FileTargetChip({
           'cursor-pointer hover:bg-[var(--cmd-palette-item-hover)]',
         )}
       >
+        {localKind !== 'directory' && (
+          <FileTypeIcon name={resolvedAbsPath} size={14} className="mr-1 inline-block align-[-0.125em]" />
+        )}
         {children}
       </code>
       {imagePreviewSrc ? (
@@ -1156,6 +1160,9 @@ function ResolvedLocalLink({
         onContextMenu={ctxMenu.onContextMenu}
         {...anchorProps}
       >
+        {localKind !== 'directory' && nodeToText(children).trim() && (
+          <FileTypeIcon name={resolvedAbsPath} size={14} className="mr-1 inline-block align-[-0.125em]" />
+        )}
         {children}
       </a>
       {ctxMenu.menu}

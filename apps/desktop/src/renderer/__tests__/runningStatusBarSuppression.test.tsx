@@ -109,7 +109,9 @@ it.each([false, true])('reconnect hides stale speed and pinned history, then wai
   // Recovery must not redisplay the pre-interruption 46.5 tok/s.
   rerender(<RunningStatusBar {...measured} />);
   expect(screen.getByText('Generating...')).toBeTruthy();
-  expect(trigger()?.textContent).toContain('chat.runningStatus.waitingSample');
+  expect(trigger()).not.toBeNull();
+  expect(trigger()?.textContent).not.toContain('chat.runningStatus.waitingSample');
+  expect(trigger()?.textContent).not.toContain('chat.runningStatus.tokenRate');
   expect(screen.queryByRole('dialog')).toBeNull();
   rerender(<RunningStatusBar {...measured} outputTokens={515} generationDurationMs={11000} />);
   expect(trigger()?.textContent).toContain('chat.runningStatus.tokenRate');

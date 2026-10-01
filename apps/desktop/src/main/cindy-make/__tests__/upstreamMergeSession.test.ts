@@ -198,6 +198,48 @@ describe('dedicated upstream merge session', () => {
       }),
     );
   });
+  it('does not resend an interrupted task even when its first message was not persisted', async () => {
+    h.reads.push([row], []);
+    expect(
+      await ensureUpstreamMergeSession(
+        userData,
+        { ...state, sessionId: row.id, status: 'failed', error: 'interrupted' },
+        undefined,
+        vi.fn(),
+        () => true,
+      ),
+    ).toBe(row.id);
+    expect(h.insert).not.toHaveBeenCalled();
+    expect(h.dispatch).not.toHaveBeenCalled();
+  });
+  it('dispatches later conflict steps once each in the retained task, preserving the legacy first key', async () => {
+    const plan = {
+      action: 'revert' as const,
+      runId: 'feature-run',
+      taskSessionId: 'feature-task',
+      taskTree: 'c'.repeat(40),
+      steps: [],
+      nextStep: 0,
+      awaitingResolution: true,
+    };
+    for (const nextStep of [0, 1]) {
+      const next = { ...state, sessionId: row.id, feature: { ...plan, nextStep } };
+      h.reads.push([row], []);
+      await ensureUpstreamMergeSession(userData, next, { agentKind: 'codex' }, vi.fn(), () => true);
+      expect(h.dispatch).toHaveBeenLastCalledWith(
+        row.id,
+        expect.any(String),
+        expect.objectContaining({ id: row.id }),
+        expect.any(Function),
+        `cindy-make-merge-first-${state.id}${nextStep === 0 ? '' : '-step-1'}`,
+      );
+      h.reads.push([row], [{ id: 'persisted-step-message' }]);
+      await ensureUpstreamMergeSession(userData, next, { agentKind: 'codex' }, vi.fn(), () => true);
+      expect(h.dispatch).toHaveBeenCalledTimes(nextStep + 1);
+    }
+    expect(h.insert).not.toHaveBeenCalled();
+    expect(h.emit).not.toHaveBeenCalled();
+  });
   it('never sends into an account switched during creation', async () => {
     h.insert.mockImplementation(async () => {
       h.current = false;
