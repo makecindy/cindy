@@ -121,6 +121,8 @@ interface ListDirArgs extends RemoteRoutedArgs {
   hideMetaFiles?: boolean;
   /** Doc mode: only `.md` files + dirs that contain `.md` descendants. */
   docMode?: boolean;
+  /** 用户开关「显示被忽略的目录」——列出依赖 / 构建产物 / 缓存目录。默认 false。 */
+  showIgnoredDirs?: boolean;
 }
 
 interface ReadFileArgs extends RemoteRoutedArgs {
@@ -153,6 +155,8 @@ interface StatArgs extends RemoteRoutedArgs {
 interface WatchArgs extends RemoteRoutedArgs {
   workdir: string;
   hideMetaFiles?: boolean;
+  /** 与 listDir 同源:开关变了要带新 matcher 重建 watcher。 */
+  showIgnoredDirs?: boolean;
 }
 
 /**
@@ -592,6 +596,7 @@ export function registerFileBrowserIpc(): void {
           hideMetaFiles: args.hideMetaFiles ?? true,
           docMode: args.docMode,
           includeIgnored: args.includeIgnored,
+          showIgnoredDirs: args.showIgnoredDirs === true,
         });
         return entries;
       } catch (err) {
@@ -599,12 +604,15 @@ export function registerFileBrowserIpc(): void {
         throwRemoteFsIpcError(err);
       }
     }
+    // includeIgnored 是完全绕过展示过滤（手机 HTML 快照枚举用）；showIgnoredDirs
+    // 只放行可放行层（依赖 / 构建产物 / 缓存），VCS / OS 垃圾仍隐藏。前者优先。
     const matcher =
       args.includeIgnored === true
         ? null
         : await loadIgnoreMatcher(args.workdir, {
             hideMetaFiles: args.hideMetaFiles ?? true,
             honorVcsIgnore: false,
+            showIgnoredDirs: args.showIgnoredDirs === true,
           });
     return listDir(args.workdir, args.relPath ?? '', matcher, {
       docMode: args.includeIgnored === true ? false : args.docMode,
@@ -788,7 +796,7 @@ export function registerFileBrowserIpc(): void {
           window,
           args.remoteHostId,
           args.workdir,
-          { hideMetaFiles: args.hideMetaFiles ?? true },
+          { hideMetaFiles: args.hideMetaFiles ?? true, showIgnoredDirs: args.showIgnoredDirs === true },
           (fsEvent) => {
             if (window.isDestroyed()) return;
             window.webContents.send(FILE_BROWSER_PUSH.EVENT, fsEvent);
@@ -802,7 +810,7 @@ export function registerFileBrowserIpc(): void {
     await watcherManager.start(
       window,
       args.workdir,
-      { hideMetaFiles: args.hideMetaFiles ?? true },
+      { hideMetaFiles: args.hideMetaFiles ?? true, showIgnoredDirs: args.showIgnoredDirs === true },
       (fsEvent: FileTreeEvent) => {
         if (window.isDestroyed()) return;
         window.webContents.send(FILE_BROWSER_PUSH.EVENT, fsEvent);

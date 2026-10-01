@@ -20,10 +20,15 @@ const h = vi.hoisted(() => ({
   matcherIgnores: vi.fn((_rel: string, _isDir: boolean) => false),
 }));
 
-vi.mock('@cindy/file-browser-core', () => ({
-  XDT_TMP_SUFFIX: '.xdt-tmp',
-  loadIgnoreMatcher: vi.fn(async () => ({ ignores: h.matcherIgnores })),
-}));
+vi.mock('@cindy/file-browser-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/file-browser-core')>();
+  return {
+    XDT_TMP_SUFFIX: actual.XDT_TMP_SUFFIX,
+    // 预过滤名单的真名单(单源),loadIgnoreMatcher 太真(要读盘)才被替换。
+    WATCH_ALWAYS_IGNORE: actual.WATCH_ALWAYS_IGNORE,
+    loadIgnoreMatcher: vi.fn(async () => ({ ignores: h.matcherIgnores })),
+  };
+});
 
 import { WatcherManager, type WatcherSubscribeFn } from '../watcher';
 import type { WatchedFsEvent } from '../../watcher-host/protocol';
@@ -152,6 +157,106 @@ describe('WatcherManager stop 宽限期', () => {
     await manager.start(win, 'D:/repo', { hideMetaFiles: false }, vi.fn());
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(subscribeFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('showIgnoredDirs 变化同样触发重建,相同则复用', async () => {
+    const { manager, subscribeFn, unsubscribe } = setup();
+    const win = makeWindow();
+    await manager.start(win, 'D:/repo', { showIgnoredDirs: false }, vi.fn());
+    // 同值重复 start:仍在宽限内,直接复用不重建。
+    await manager.start(win, 'D:/repo', { showIgnoredDirs: false }, vi.fn());
+    expect(subscribeFn).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await manager.start(win, 'D:/repo', { showIgnoredDirs: true }, vi.fn());
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(subscribeFn).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * 预过滤名单的「时机」回归:parcel 的 ignore 只在 subscribe 那一刻生效一次。
+   * node_modules / Library 经常在会话开始后才出现(npm install / Unity 导入),
+   * 当时不存在就漏掉 → 开关打开后这些目录被 matcher 放行,内部每个生成路径都
+   * 变成一条事件推过 watcher-host + IPC。ALWAYS 名单必须无条件注册。
+   */
+  it('ALWAYS 目录当前不存在也进 ignore 名单(开关打开时)', async () => {
+    const { manager, calls } = setup();
+    const workdir = path.join(path.sep, 'no-such-workdir-reveal');
+    await manager.start(makeWindow(), workdir, { showIgnoredDirs: true }, vi.fn());
+    expect(calls[0].ignore).toEqual(
+      expect.arrayContaining([
+        '**/[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS]/*',
+        '**/[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS]/**/*',
+        '**/[lL][iI][bB][rR][aA][rR][yY]/*',
+        '**/[lL][iI][bB][rR][aA][rR][yY]/**/*',
+        '**/.[gG][iI][tT]/*',
+        '**/.[gG][iI][tT]/**/*',
+      ]),
+    );
+    // 开关打开时 REVEALABLE 不预过滤 —— 它们本来就该推事件。
+    expect(calls[0].ignore).not.toContain('**/[dD][iI][sS][tT]/*');
+  });
+
+  it('开关关闭时同样无条件带上 ALWAYS(目录稍后才出现也不漏)', async () => {
+    const { manager, calls } = setup();
+    const workdir = path.join(path.sep, 'no-such-workdir-hidden');
+    await manager.start(makeWindow(), workdir, { showIgnoredDirs: false }, vi.fn());
+    expect(calls[0].ignore).toEqual(
+      expect.arrayContaining([
+        '**/[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS]/*',
+        '**/[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS]/**/*',
+        '**/[lL][iI][bB][rR][aA][rR][yY]/*',
+        '**/[lL][iI][bB][rR][aA][rR][yY]/**/*',
+        '**/[dD][iI][sS][tT]/*',
+        '**/[dD][iI][sS][tT]/**/*',
+      ]),
+    );
+  });
+
+  /**
+   * 预过滤名单的形态回归：两个约束必须同时成立。
+   *  1. 层级：必须发 glob，不能发根级绝对路径 —— @parcel/watcher 对非 glob 项
+   *     走 `ignorePaths` 前缀比较，`nested/node_modules/x` 不是
+   *     `/workdir/node_modules` 的后代，monorepo / 嵌套 Unity 工程整目录漏过去。
+   *  2. 自身：`**\/<name>/**` 会把**目录自身**的事件也吞掉（探针实测 2.5.6/win32：
+   *     mkdir node_modules 一条事件都没有），开关打开时新建 / 删除 / 改名都看不到。
+   *     拆成一级内容与深层内容两条形态（目录自身不匹配）后，事件保留、
+   *     两级内容仍都忽略。
+   */
+  it('预过滤用 glob 覆盖任意层级,且不吞目录自身事件', async () => {
+    const { manager, calls } = setup();
+    await manager.start(makeWindow(), 'D:/repo', { showIgnoredDirs: false }, vi.fn());
+    expect(calls[0].ignore).toContain('**/[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS]/*');
+    expect(calls[0].ignore).toContain('**/[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS]/**/*');
+    expect(calls[0].ignore).toContain('**/[lL][iI][bB][rR][aA][rR][yY]/*');
+    expect(calls[0].ignore).toContain('**/[lL][iI][bB][rR][aA][rR][yY]/**/*');
+    // 旧形态（吞目录自身事件）不得回潮。
+    expect(calls[0].ignore).not.toContain('**/node_modules/**');
+    expect(calls[0].ignore).not.toContain(path.join('D:/repo', 'node_modules'));
+  });
+
+  /**
+   * 评审 P1（PR #4398 轮八）：parcel 的 ignore glob 走 picomatch 默认选项
+   * （`@parcel/watcher/wrapper.js` 只传 `dot` / `windows`，**无 nocase**），而
+   * matcher 用的 `ignore` 包默认 `ignorecase=true` —— 大小写不敏感卷上
+   * `NODE_MODULES` / `Library` 与名单同名，matcher 判忽略、预过滤却匹配不到：
+   * 开关打开时这些目录被 matcher 放行，整棵依赖树的事件都会推过 watcher-host + IPC。
+   * 名字段必须折叠大小写（字符类），区分大小写的原名形态不得回潮。
+   */
+  it('预过滤 glob 折叠大小写:变体目录名同样命中', async () => {
+    const { manager, calls } = setup();
+    await manager.start(makeWindow(), 'D:/repo', { showIgnoredDirs: true }, vi.fn());
+    const ignore = calls[0].ignore;
+    for (const name of [
+      '[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS]',
+      '[lL][iI][bB][rR][aA][rR][yY]',
+    ]) {
+      expect(ignore).toContain(`**/${name}/*`);
+      expect(ignore).toContain(`**/${name}/**/*`);
+    }
+    // 区分大小写的原名形态不得回潮（大小写不敏感卷上会漏掉变体目录）。
+    expect(ignore).not.toContain('**/node_modules/*');
+    expect(ignore).not.toContain('**/Library/*');
   });
 
   it('不同 window 同 workdir 互不干扰(key 维度 window×workdir)', async () => {

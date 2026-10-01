@@ -162,10 +162,20 @@ export interface ListAllFilesWalkArgs {
  * 无 ripgrep 的纯 JS fallback:递归 readdir + 与文件树同一个 ignore matcher。
  *
  * 与 rg 版的语义差异(有意为之、确定可解释):过滤走 loadIgnoreMatcher(根
- * .gitignore / .p4ignore + BUILTIN_IGNORE),即**清单 = 用户在文件树里能看到的
- * 文件全集**;rg 版额外理解嵌套 .gitignore / .rgignore,并且不吃 BUILTIN_IGNORE。
- * 用途场景(远端裸机器没有 rg 时的文件名筛选)里"和树一致"比"和 rg 一致"更符合
- * 直觉。性能:纯 JS 串行遍历比 rg 慢一个量级,但被 cap 上限兜底,中型项目 <1s。
+ * .gitignore / .p4ignore + BUILTIN_IGNORE 的**默认层**,即
+ * BUILTIN_IGNORE_REVEALABLE 仍然隐藏);rg 版额外理解嵌套 .gitignore /
+ * .rgignore,也不吃 BUILTIN_IGNORE。用途场景(远端裸机器没有 rg 时的文件名
+ * 筛选)里"接近文件树默认口径"比"和 rg 一致"更符合直觉。性能:纯 JS 串行遍历比
+ * rg 慢一个量级,但被 cap 上限兜底,中型项目 <1s。
+ *
+ * 这里**不接**「显示被忽略的目录」(showIgnoredDirs):该开关只作用于**浏览面**
+ * (文件树),文件名筛选与内容搜索一直按 ignore 规则工作 —— rg 那一路吃
+ * .gitignore / .ignore / .rgignore,这条 fallback 吃根 .gitignore +
+ * BUILTIN_IGNORE 默认层。两条路都无法跟这个开关一致(rg 侧没有办法"只放行构建
+ * 产物"而保留用户自己的 gitignore 规则),而**只让 fallback 跟随**会让同一份筛选
+ * 在装没装 rg 的机器上给出不同结果 —— 那比"树里看得见、筛选找不到"更难解释。
+ * 所以开关打开后树里出现 build / dist、而这份清单不含它们,是有意的语义差异
+ * (决策测试见 listAllFilesWalk.test.ts);要改就得两个后端一起改。
  *
  * symlink:目录/文件符号链接一律跳过(rg --files 默认同样不 follow symlink,
  * 也避免链接环)。不可读目录(权限/竞态删除)静默跳过,不 fail 整个清单。
