@@ -29,6 +29,24 @@ function target(id: number, delivered = true) {
 }
 
 describe('GhostInstallConsentWindowBridge', () => {
+  it.each(['allow', 'deny', 'close', 'account'] as const)('does not queue duplicate task capability prompts across %s', async outcome => {
+    const bridge = new GhostInstallConsentWindowBridge();
+    const window = target(7);
+    const request = {...REQUEST, purpose: 'task-capability' as const};
+    const first = bridge.request(window.target, request);
+    const duplicates = await Promise.all(Array.from({length: 20}, () => bridge.request(window.target, request)));
+    expect(duplicates).toEqual(Array(20).fill(false));
+    expect(window.sent).toHaveLength(1);
+    if (outcome === 'close') bridge.cancelRequester(7);
+    else if (outcome === 'account') bridge.cancelAll();
+    else bridge.resolve(7, window.sent[0]!.requestId, outcome === 'allow');
+    expect(await first).toBe(outcome === 'allow');
+    expect(bridge.pendingCount).toBe(0);
+    const next = bridge.request(window.target, request);
+    expect(window.sent).toHaveLength(2);
+    bridge.resolve(7, window.sent[1]!.requestId, false);
+    expect(await next).toBe(false);
+  });
   it('only accepts the answer from the window that started the install', async () => {
     const bridge = new GhostInstallConsentWindowBridge();
     const window = target(7);

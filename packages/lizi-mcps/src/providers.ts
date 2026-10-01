@@ -325,6 +325,8 @@ export function createLiziMcpProviders(
         name: 'cindy_slack',
         instance: createSlackMcpGatewayServer({
           getBridge: opts.slackHook!.getBridge,
+          withAccountDataAccess: opts.slackHook!.withAccountDataAccess,
+          getSessionContext: () => resolveLiziMcpSessionContext(ctx),
           // 大结果落盘的钳制根: 绑定当前会话工作目录(空 = 只截断不落盘)
           ...(ctx.workingDir ? { workingDir: ctx.workingDir } : {}),
           ...(opts.slackHook!.logger !== undefined ? { logger: opts.slackHook!.logger } : {}),
@@ -336,8 +338,7 @@ export function createLiziMcpProviders(
   if (opts.scheduler && selected(enabled, 'cindy_scheduler')) {
     providers.push({
       name: 'cindy_scheduler',
-      // 第一版无门控：cc / codex 任何 session 都能用 schedule_* 工具。
-      // 与 IPC 层 maker.schedule.* 同源（renderer 也是任何窗口都能调）。
+      // Host 可按实时任务来源限制账号调度数据；独立 Renderer IPC 保持原路径。
       // 绑定 ctx 仅为 schedule_silence_current_run / schedule_notify_current_run 服务：
       // 它们据 sessionId 反查本会话当前 in-flight run,免去 agent 传 runId
       // (杜绝传参漂移 + caller-ownership)。
@@ -466,6 +467,7 @@ export function createLiziMcpProviders(
         name: 'cindy_memory',
         instance: createCindyMemoryMcpServer({
           getManager: opts.memory!.getManager,
+          withAccountDataAccess: opts.memory!.withAccountDataAccess,
           workdir: ctx.workingDir,
           getSessionContext: () => resolveLiziMcpSessionContext(ctx),
           beginWrite: opts.memory!.beginWrite,
@@ -483,10 +485,10 @@ export function createLiziMcpProviders(
       // token); Codex host 长生命周期下运行期关闭由 withContacts 的
       // CONTACTS_NOT_READY 工具级拦截兜底。
       ...(opts.contacts.isEnabled ? { isEnabled: () => opts.contacts!.isEnabled!() } : {}),
-      toClaudeSdkConfig: () => ({
+      toClaudeSdkConfig: (ctx) => ({
         type: 'sdk',
         name: 'cindy_contacts',
-        instance: createCindyContactsMcpServer(opts.contacts!),
+        instance: createCindyContactsMcpServer({ ...opts.contacts!, getSessionContext: () => resolveLiziMcpSessionContext(ctx) }),
       }),
     });
   }

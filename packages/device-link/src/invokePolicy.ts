@@ -1,6 +1,32 @@
 import { INVOKE_TIMEOUT_OVERRIDES_MS } from './allowlist.js';
-import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
+import {
+  TASK_MIGRATION_CHANNEL,
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
+  TASK_MIGRATION_RECEIVE_TIMEOUT_MS,
+} from './taskMigration.js';
 import type { InvokePayload } from './protocol.js';
+
+/** These reads may wait behind current-task work. Not a retry or authorization policy.
+ * sessions:list also serves initial loading and recovery probes, so it stays foreground.
+ */
+const BACKGROUND_INVOKE_CHANNELS = new Set([
+  'git-context:pr-refs:list',
+  'git-context:pr-status',
+  'maker:schedule:list-sidebar-index-runs',
+  'maker:usage:device-rows',
+]);
+
+export function isBackgroundInvoke(channel: string): boolean {
+  return BACKGROUND_INVOKE_CHANNELS.has(channel);
+}
+
+/** Control traffic must not wait behind business operations to maintain a link/lease. */
+export function bypassInvokeScheduling(payload: InvokePayload): boolean {
+  if (payload.channel === 'device-link:subscribe' || payload.channel === 'device-link:unsubscribe') return true;
+  const request = payload.args?.[0];
+  return payload.channel === 'device-link:remote-desktop:v1' && !!request &&
+    typeof request === 'object' && 'op' in request && request.op === 'heartbeat';
+}
 
 /**
  * mobile 侧 invoke 超时解析(优先级:mobile 精确表 → schedule 前缀规则 →
@@ -81,6 +107,16 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
 
 export const MOBILE_SCHEDULE_CHANNEL_TIMEOUT_MS = 40_000;
 
+/**
+ * Every action-specific desktop budget `resolveRemoteInvokeTimeoutMs` can return beyond
+ * INVOKE_TIMEOUT_OVERRIDES_MS. Hosts size their global orphan/outbox ceilings from both,
+ * so a host never gives up before the controller stops waiting.
+ */
+export const ACTION_INVOKE_TIMEOUTS_MS: readonly number[] = [
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
+  TASK_MIGRATION_RECEIVE_TIMEOUT_MS,
+];
+
 export function resolveRemoteInvokeTimeoutMs(
   channel: string,
   args?: unknown[],
@@ -88,8 +124,11 @@ export function resolveRemoteInvokeTimeoutMs(
 ): number | undefined {
   if (channel === TASK_MIGRATION_CHANNEL) {
     const request = args?.[0];
-    return request && typeof request === 'object' && 'action' in request && request.action === 'receive'
-      ? 30 * 60_000 : 30_000;
+    const action = request && typeof request === 'object' && 'action' in request ? request.action : undefined;
+    if (action === 'receive') return TASK_MIGRATION_RECEIVE_TIMEOUT_MS;
+    // Read-only inventory of a large project (dependencies included) can legitimately exceed 30s.
+    if (action === 'estimate') return TASK_MIGRATION_ESTIMATE_TIMEOUT_MS;
+    return 30_000;
   }
   if (platform === 'desktop') return INVOKE_TIMEOUT_OVERRIDES_MS[channel];
   // Renewals must settle before the 12s lease, independently of slow media offers.

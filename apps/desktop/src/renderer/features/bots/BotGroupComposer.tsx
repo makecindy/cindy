@@ -39,7 +39,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Tip } from '@/components/ui/tooltip';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
-import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
+import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import type { UseAttachmentsReturn } from '@/hooks/useAttachments';
 import { isAnnotationBurnInError, materializeAnnotatedAttachmentsForSend } from '@/lib/annotationBurnIn';
 import type { AttachedFile } from '@/lib/fileTypes';
@@ -557,7 +557,7 @@ export function BotGroupComposer({
                   side="top"
                   align="start"
                   sideOffset={8}
-                  className={cn(MENU_CONTENT_CLASS, 'w-72')}
+                  className="w-72"
                   onCloseAutoFocus={(event) => {
                     if (!focusInputOnMenuCloseRef.current) return;
                     focusInputOnMenuCloseRef.current = false;

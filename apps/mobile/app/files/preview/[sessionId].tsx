@@ -790,7 +790,7 @@ function FilePreviewPage({
   }
   const avKind = avKindFor(item.relPath);
   if (avKind) {
-    return <AvPreviewPage active={active} exportToUrl={exportToUrl} item={item} kind={avKind} onDownload={onDownload} workdir={workdir} />;
+    return <AvPreviewPage active={active} exportToUrl={exportToUrl} item={item} kind={avKind} onDownload={onDownload} visible={visible} workdir={workdir} />;
   }
   if (item.thumb === 'doc') {
     return (
@@ -817,13 +817,14 @@ function FilePreviewPage({
   return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.unsupportedType')} />;
 }
 
-/** 音视频页:导出→presign→复用消息同款播放器(切后台/换页自动暂停)。 */
+/** 音视频页:导出→presign→复用消息同款播放器(切后台/翻页失活自动暂停,回到本页不自动续播)。 */
 function AvPreviewPage({
   active,
   exportToUrl,
   item,
   kind,
   onDownload,
+  visible,
   workdir,
 }: {
   active: boolean;
@@ -831,6 +832,8 @@ function AvPreviewPage({
   item: FileBrowserGridItem;
   kind: 'video' | 'audio';
   onDownload(): void;
+  /** 是否真正可见的当前页:失活(翻页/压栈)时暂停播放,见 RemoteMediaPlayerWebView。 */
+  visible: boolean;
   workdir: string;
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -887,6 +890,7 @@ function AvPreviewPage({
         testID="filePreview.avPlayer"
         title={item.name}
         url={url}
+        visible={visible}
       />
     </View>
   );
@@ -1576,7 +1580,8 @@ const makeStyles = (colors: ThemeColors) => {
     imageFull: { height: '100%', width: '100%' },
     imageStateWrap: { alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.xl },
     avPage: { flex: 1, justifyContent: 'center', padding: spacing.lg },
-    avPlayer: { width: '100%' },
+    // The player's WebView fills its wrapper (flex: 1); a width-only wrapper collapses it to 0 pt.
+    avPlayer: { flex: 1, width: '100%' },
     imageUpgradeHint: {
       bottom: spacing.md,
       color: colors.textTertiary,

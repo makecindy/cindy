@@ -160,6 +160,7 @@ describe('device-link shared contract', () => {
     expect(isTransientRemoteError(Object.assign(new Error('buffer is full'), { code: 'BACKPRESSURE' }))).toBe(true);
     expect(isTransientRemoteError(Object.assign(new Error('target offline'), { code: 'DEVICE_OFFLINE' }))).toBe(true);
     expect(isTransientRemoteError('[DEVICE_LINK_TIMEOUT] no result')).toBe(true);
+    expect(isTransientRemoteError('[DEVICE_LINK_BUSY] queue full')).toBe(true);
     // HTTP 层弱网错误(超时 / 离线 / RN 原生 fetch 原文)同属瞬时,必须可重试
     expect(isTransientRemoteError(Object.assign(new Error('请求超时，请稍后重试'), { code: 'REQUEST_TIMEOUT' }))).toBe(true);
     expect(isTransientRemoteError(Object.assign(new Error('网络连接不可用'), { code: 'NETWORK_UNAVAILABLE' }))).toBe(true);

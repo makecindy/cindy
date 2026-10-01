@@ -45,7 +45,8 @@
       "MIGRATION_TARGET_MODEL_UNAVAILABLE": "目标电脑没有可用于此任务引擎的模型，请先在目标电脑连接供应商。",
       "MIGRATION_UNSUPPORTED": "请将两台电脑更新至支持任务复制的版本。",
       "MIGRATION_TASK_QUEUED": "此任务有排队中的消息，请先完成或移除这些消息再复制。",
-      "MIGRATION_SOURCE_CHANGED": "准备期间源任务发生变化，请重试复制。"
+      "MIGRATION_SOURCE_CHANGED": "准备期间源任务发生变化，请重试复制。",
+      "MIGRATION_TIMEOUT": "任务所在电脑响应超时，请稍后重试。"
     },
     "successTitle": "复制成功",
     "successDescription": "已复制到{{name}}。",
@@ -60,7 +61,9 @@
     "estimating": "正在统计文件数量和大小…",
     "fileSummary": "项目文件：{{count}} 个，共 {{size}}",
     "estimateNote": "复制前估算，含隐藏文件；不含另行复制的 Git 历史、任务对话及附件。文件变化可能影响最终大小。",
-    "estimateFailed": "无法统计文件。请检查任务所在电脑的连接和版本，然后关闭重试。"
+    "estimateFailed": "无法统计文件。请检查任务所在电脑的连接和版本，然后关闭重试。",
+    "estimateTimeout": "统计超时：项目文件过多，任务所在电脑未能在时限内完成统计。可以改为复制文件更少的项目。",
+    "estimateTooManyFiles": "项目文件超过 {{limit, number}} 个，无法复制。请改为复制文件更少的项目。"
   },
   "sharedTask": {
     "selfJoin": "这是你发起的共享任务，无需加入。请从“我发起的”打开",
@@ -334,6 +337,7 @@
     "credentialRequired": "请完成 Mac 密码验证。如果无法验证，请更新两台电脑上的 Cindy。"
   },
   "ipcError": {
+    "DEVICE_LINK_BUSY": "远端繁忙，请稍后重试。",
     "INVALID_PARAMS": "参数无效，请检查后重试。",
     "PRECONDITION_FAILED": "当前状态下无法执行此操作，请稍后重试。",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "模型未切换：无法确认当前任务已使用的上下文。请保留当前模型，或新建任务后再选择",
@@ -5489,6 +5493,9 @@
         "agentUserActionDetail": "每次点击只允许启动一次，并且只能使用这张卡所属的任务。",
         "agentBackground": "可在后台自动让 Agent 开始新一轮工作",
         "agentBackgroundDetail": "不需要当次点击，但只能使用你曾为这个插件建立过关联的任务，可能产生模型费用。",
+        "agentTasksRequest": "确认任务权限",
+        "agentTasks": "可创建和管理本插件的 Cindy 任务",
+        "agentTasksDetail": "可发送消息、读取结果和停止本插件的执行，任务对你可见。沿用插件的 AI 配置，可能产生模型费用；不授予其他任务的访问权。",
         "agentErrand": "可把任务交给 Cindy Agent 代办并取回结果",
         "agentErrandDetail": "这些代办会在这个插件的专属任务里进行，你随时可以在侧边栏看到并叫停；默认只能读不能改，要放开需你在插件配置里亲手调整，可能产生模型费用。",
         "agentSchedule": "可以请你新建自动化",
@@ -9055,6 +9062,7 @@
         "openSettings": "去设置"
       },
       "permissionSwitchFailed": "权限模式切换失败，已保留原设置",
+      "retryPluginWriteAccess": "重新确认插件写权限",
       "fullAccessConfirmation": {
         "title": "开启 Full access？",
         "description": "Full access 会关闭工作区沙箱并跳过常规审批，Cindy 无需询问即可：",
@@ -10109,6 +10117,7 @@
       "daemonNotReady": "{{manager}} 升级完成，但远端 daemon 暂未启动 — 请手动重新发送消息"
     },
     "remoteError": {
+      "DEVICE_LINK_BUSY": "远端繁忙，请稍后重试。",
       "REMOTE_DAEMON_CLOSED": "远端连接中断了，可能正在更新。这一轮已经结束，请重新发送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远端任务无法访问本地文件/图片附件。请直接粘贴内容。",
       "AUTO_REVIEW_UNAVAILABLE": "自动审批暂时无法给出判断，需要审批的操作已改为由你确认。想少被打断，可以把任务切到「完全访问」，但风险更高。",
@@ -10494,6 +10503,7 @@
       "projects": "项目",
       "newProject": "新建项目",
       "createProjectFailed": "新建项目失败",
+      "selectFolderFailed": "选择目录失败，请重试",
       "projectsToggleExpand": "展开所有项目任务",
       "projectsToggleCollapse": "收起所有项目任务",
       "filterAria": "侧边栏显示设置（状态：{{status}}，Harness：{{vendor}}，最近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，项目：{{projects}}）",
@@ -14221,6 +14231,7 @@
     }
   },
   "taskTags": {
+    "remoteBusy": "远端繁忙，请稍后重试。",
     "loadFailed": "标签加载失败，请重试。",
     "retry": "重试",
     "editLabel": "编辑“{{name}}”",
@@ -14277,5 +14288,15 @@
   "pluginDeviceAuthorization": {
     "title": "授权插件登录",
     "description": "在这台设备打开 {{host}}，为执行此任务的插件授权。凭据保存在发起授权的设备上。"
+  },
+  "pluginTaskWriteAccess": {
+    "autoTitle": "启用 Auto 自动审批",
+    "autoMessage": "允许“{{name}}”使用 Auto 自动审批？",
+    "autoDetail": "主任务和 Worker 的操作将交由 Cindy 自动审批。审批要求人工确认或拒绝时仍会暂停；这不是完全访问。此选择保存到插件 AI 设置，不改变其他任务的全局权限。",
+    "title": "允许插件的 AI 修改文件？",
+    "message": "允许“{{name}}”的 AI 修改文件并继续？",
+    "detail": "将此插件的 AI 权限设为“允许修改”，后续任务沿用此选择。独立作答目录不是系统沙箱；命令仍遵循 Cindy 的权限检查。你可以随时在插件 AI 设置中改回只读。",
+    "allow": "允许并继续",
+    "cancel": "暂不允许"
   }
 }

@@ -22,6 +22,7 @@ export function RemoteMediaPlayerWebView({
   testID,
   title,
   url,
+  visible = true,
 }: {
   kind: MobileMediaPlayerKind;
   mimeType?: string;
@@ -30,6 +31,8 @@ export function RemoteMediaPlayerWebView({
   testID?: string;
   title?: string;
   url: string;
+  /** 所在页是否为当前可见页:失活(翻页/压栈)时暂停播放,回到本页不自动续播。缺省 true(消息卡片等无翻页场景)。 */
+  visible?: boolean;
 }) {
   const { colors } = useTheme();
   const webViewRef = useRef<ComponentRef<typeof WebView>>(null);
@@ -57,6 +60,14 @@ export function RemoteMediaPlayerWebView({
     pausePlayback();
     webViewRef.current?.stopLoading();
   }, [pausePlayback]);
+
+  // 失活即暂停(review P1):预览 pager 用 windowSize={3} 保留相邻页,相邻页的
+  // active 仍为 true,不把可见性接进播放器的话,用户滑走后上一页的媒体还在后台
+  // 继续播。判定在纯生命周期模块(行为级用例在 mediaPlayerWebView.test.ts),
+  // 这里只发 pause 命令;回到本页不自动续播,播放权交还用户。
+  useEffect(() => {
+    if (lifecycleRef.current.onVisibilityChange(visible)) pausePlayback();
+  }, [pausePlayback, visible]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', state => {

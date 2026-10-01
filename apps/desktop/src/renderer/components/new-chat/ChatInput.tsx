@@ -165,6 +165,7 @@ import {
 } from './sourceSwitch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PermissionSelector } from './PermissionSelector';
+import { PluginWriteAccessRecovery } from './PluginWriteAccessRecovery';
 import { ExtraDirsButton, type CollaborationMenuConfig } from './ExtraDirsButton';
 import { expandHostCapabilityInvocation } from '../../cindy-brain/hostCapabilityInvocation';
 import {
@@ -294,10 +295,10 @@ import {
   useComposerSendShortcutPreference,
 } from '@/hooks/useComposerSendShortcutPreference';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
+import { usePromptRecommendationPrediction } from '@/hooks/usePromptRecommendationPrediction';
+import { predictPromptUntilDisabled } from '@/lib/predictPromptUntilDisabled';
 import {
-  beginPromptRecommendationPrediction,
   dismissPromptRecommendation,
-  resolvePromptRecommendationPrediction,
   usePromptRecommendation,
 } from '@/lib/promptRecommendationStore';
 import { createLogger } from '@/lib/logger';
@@ -308,7 +309,10 @@ import {
   shouldRefreshComposerRender,
   type ComposerRenderSnapshot,
 } from './composerRenderGate';
-import { shouldShowComposerPromptRecommendation } from './composerPromptRecommendation';
+import {
+  isComposerReadyForPromptRecommendation,
+  shouldShowComposerPromptRecommendation,
+} from './composerPromptRecommendation';
 import { createComposerFrameScheduler } from './composerFrameScheduler';
 import {
   serializeEditorContent,
@@ -1213,7 +1217,7 @@ export function ChatInput({
   const promptPreviewInputGuardRef = useRef<() => boolean>(() => false);
   const acceptPromptRecommendationRef = useRef<() => boolean>(() => false);
   // session 切换时 ChatInput/Editor 会复用；推荐资格必须等目标草稿完成水合后再判断。
-  const [composerHydrationGeneration, setComposerHydrationGeneration] = useState(0);
+  const [, setComposerHydrationGeneration] = useState(0);
   // 完整输入框空判断:不仅检查 ProseMirror 文档是否为空,还检查附件、浏览器评论和语音稿。
   // 避免在用户放好了附件/评论/语音稿但正文为空时,仍发起付费的 predictNextPrompt 调用。
   const voiceDraftTextRef = useRef('');
@@ -1351,90 +1355,7 @@ export function ChatInput({
     }
   }, [recommendationEnabled, sessionId]);
 
-  // messages 是可选 prop。只把「是否已有历史」放进 deps，避免流式 delta 让预测 effect
-  // 每个 token 都重跑；真正素材仍由 main 从 DB 读取，renderer payload 不作为信任来源。
-  const messagesRef = useRef(messages ?? []);
-  messagesRef.current = messages ?? [];
   const hasPredictionMessages = (messages?.length ?? 0) > 0;
-  useEffect(() => {
-    if (!sessionId || recommendation?.phase !== 'candidate') return;
-    if (!recommendationEnabled) {
-      dismissPromptRecommendation(sessionId, recommendation.revision);
-      return;
-    }
-    // deviceLinkDeviceId=undefined 是归属尚未解析的暂态，先保留 candidate；
-    // 远程推荐通过被控端 maker 隧道生成，避免在控制端读取不到会话素材。
-    if (deviceLinkDeviceId === undefined || runtimeAgentKind == null || !hasPredictionMessages) {
-      return;
-    }
-    if (remoteHostId || disabled) {
-      dismissPromptRecommendation(sessionId, recommendation.revision);
-      return;
-    }
-    const ed = editorRef.current;
-    if (!ed || ed.isDestroyed) return;
-    // ChatInput/Editor 在 session 间复用。目标 storageKey 的草稿尚未水合时，editor 里仍是
-    // 上一 session 的正文；此时判非空会误删目标 session candidate。等水合代次推进后重试。
-    if (
-      !hasHydratedRef.current ||
-      storageKeyForDraftRef.current !== storageKey ||
-      isRestoringRef.current
-    ) {
-      return;
-    }
-    // candidate 首次进入前台时已有草稿/附件/评论/语音稿，沿用旧逻辑：不发付费调用。
-    if (!composerFullyEmptyRef.current()) {
-      dismissPromptRecommendation(sessionId, recommendation.revision);
-      return;
-    }
-
-    const requestSeq = beginPromptRecommendationPrediction(sessionId, recommendation.revision);
-    if (requestSeq == null) return;
-    const requestSessionId = sessionId;
-    const requestRevision = recommendation.revision;
-    const requestTurnGen = turnGenRef.current;
-    const contextMsgs = messagesRef.current.slice(-20).map((message) => ({
-      role: message.role,
-      content: message.content,
-    }));
-
-    makerApiForSticky(requestSessionId)
-      .predictNextPrompt({
-        sessionId: requestSessionId,
-        agentKind: runtimeAgentKind,
-        messages: contextMsgs,
-        workingDir: workingDirRef.current ?? undefined,
-        turnGen: requestTurnGen,
-        completionRevision: requestRevision,
-      })
-      .then((result) => {
-        // 结果按原 session + completion revision 落入 Store；即使用户已切到其它
-        // session，也只更新原 session，切回时再展示，不污染当前输入框。
-        resolvePromptRecommendationPrediction(
-          requestSessionId,
-          requestRevision,
-          requestSeq,
-          result?.prompt ?? null,
-        );
-      })
-      .catch(() => {
-        resolvePromptRecommendationPrediction(requestSessionId, requestRevision, requestSeq, null);
-        // 预测失败静默处理:不显示推荐,也不回落任何默认文案。
-      });
-  }, [
-    composerHydrationGeneration,
-    deviceLinkDeviceId,
-    disabled,
-    hasPredictionMessages,
-    recommendation?.phase,
-    recommendation?.revision,
-    recommendationEnabled,
-    remoteHostId,
-    runtimeAgentKind,
-    sessionId,
-    storageKey,
-  ]);
-
   // F-QUEUE-DEFER: when the queue panel is expanded, esc collapses it
   // BEFORE falling through to the existing stop / history shortcuts. That
   // way the user's mental model stays consistent: esc = "back out of the
@@ -3211,30 +3132,6 @@ export function ChatInput({
   useEffect(() => {
     editor?.setEditable(!composerTypingLocked);
   }, [composerTypingLocked, editor]);
-
-  // 附件/浏览器评论/语音/锁定保持原有「失效」语义（不同于普通文字输入的暂时隐藏）。
-  // 同步清 ref，避免稳定闭包里的 Tab 在 React 重渲染前填入已隐藏推荐。
-  useEffect(() => {
-    const activeRecommendation = recommendationRef.current;
-    if (
-      sessionId &&
-      activeRecommendation &&
-      (attachments.length > 0 ||
-        browserComments.length > 0 ||
-        composerMutationLocked ||
-        (voiceBusyOnCurrentComposer && voiceInput.draftText.trim().length > 0))
-    ) {
-      showRecommendationRef.current = false;
-      dismissPromptRecommendation(sessionId, activeRecommendation.revision);
-    }
-  }, [
-    attachments.length,
-    browserComments.length,
-    composerMutationLocked,
-    sessionId,
-    voiceBusyOnCurrentComposer,
-    voiceInput.draftText,
-  ]);
 
   const captureSendFocusForRestore = useComposerSendFocusRestore(editor, composerTypingLocked);
   const { settings: voiceInputSettings } = useVoiceInputSettings();
@@ -8327,19 +8224,8 @@ export function ChatInput({
             // 控制端纯镜像:运行时隧道 setPermissionMode,被控端持久化后广播回流更新分片。
             await makerApiFor(sessionId).setPermissionMode(sessionId, newMode);
           } else {
-            // runtime-first:运行时成功后才持久化，避免 UI/DB 先显示已切换而实际 agent 仍是旧档。
+            // Host 串行完成运行时、持久化和失败恢复，界面只等待最终结果。
             await window.electronAPI.maker.setPermissionMode(sessionId, newMode);
-            try {
-              await sessionService.update(sessionId, { permissionMode: newMode });
-            } catch (persistError) {
-              // DB 写入失败时尽力恢复运行时，保持用户看到的旧设置与实际行为一致。
-              try {
-                await window.electronAPI.maker.setPermissionMode(sessionId, previousMode);
-              } catch (rollbackError) {
-                log.warn('permission runtime rollback failed:', rollbackError);
-              }
-              throw persistError;
-            }
           }
         }
         // SSoT: notify parent so it refreshes `session.permissionMode` → props update.
@@ -8380,20 +8266,45 @@ export function ChatInput({
   renderSnapshotRef.current = composerRenderSnapshot(trigger, hasMessage);
   const hasComposerPayload = hasMessage || hasAttachments || browserComments.length > 0;
   const hasVoiceDraftText = voiceBusyOnCurrentComposer && voiceInput.draftText.trim().length > 0;
-  // 推荐 overlay 的可见判据:开关开启 + 有推荐词 + 输入框空 + 无附件/浏览器评论/语音草稿 + 输入框未锁定。
-  // composerMutationLocked 涵盖 disabled、sendDispatchInFlight、当前输入框所属语音及远程只读/锁定状态。
-  const showRecommendationOverlay = shouldShowComposerPromptRecommendation({
+  const recommendationComposerState = {
     enabled: recommendationEnabled,
     hydrated:
       hasHydratedRef.current &&
       storageKeyForDraftRef.current === storageKey &&
       !isRestoringRef.current,
-    prompt: recommendedPrompt,
     hasMessage,
     hasAttachments,
     hasBrowserComments: browserComments.length > 0,
     hasVoiceDraftText,
     mutationLocked: composerMutationLocked,
+  };
+  const recommendationComposerReady = isComposerReadyForPromptRecommendation(recommendationComposerState);
+  usePromptRecommendationPrediction({
+    sessionId,
+    recommendation,
+    canPredict:
+      recommendationComposerReady && !!editor && !editor.isDestroyed &&
+      deviceLinkDeviceId !== undefined && runtimeAgentKind != null &&
+      hasPredictionMessages && !remoteHostId,
+    predict: async (revision) => {
+      if (!sessionId || runtimeAgentKind == null) return null;
+      // 素材仍由 Main 从 DB 读取；远程任务经 sticky 路由交给被控电脑。
+      const result = await predictPromptUntilDisabled(makerApiForSticky(sessionId), {
+        sessionId,
+        agentKind: runtimeAgentKind,
+        messages: (messages ?? []).slice(-20).map(({ role, content }) => ({ role, content })),
+        workingDir: workingDirRef.current ?? undefined,
+        turnGen: turnGenRef.current,
+        completionRevision: revision,
+      });
+      return result?.prompt ?? null;
+    },
+  });
+  // 推荐 overlay 的可见判据:开关开启 + 有推荐词 + 输入框空 + 无附件/浏览器评论/语音草稿 + 输入框未锁定。
+  // composerMutationLocked 涵盖 disabled、sendDispatchInFlight、当前输入框所属语音及远程只读/锁定状态。
+  const showRecommendationOverlay = shouldShowComposerPromptRecommendation({
+    ...recommendationComposerState,
+    prompt: recommendedPrompt,
   });
   // handleKeyDown 的稳定闭包只按真实可见性接受 Tab，避免隐藏推荐被误填入。
   showRecommendationRef.current = showRecommendationOverlay;
@@ -9108,6 +9019,7 @@ export function ChatInput({
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
                 <PermissionSelector
+                  footer={sessionId && !getSessionDeviceId(sessionId) && !deviceLinkDeviceId && !sharedGuest ? <PluginWriteAccessRecovery key={sessionId} sessionId={sessionId} onGranted={onPermissionModeDidChange} /> : undefined}
                   permissionMode={activePermissionMode}
                   onPermissionModeChange={handlePermissionModeChange}
                   vendorKey={vendorKey}

@@ -743,7 +743,7 @@ export function TaskTagsPanel({
           {t('taskTags.title')}
         </Text>
         <Text
-          accessibilityRole={reason === 'loadFailed' ? 'alert' : 'text'}
+          accessibilityRole={reason === 'loadFailed' || reason === 'remoteBusy' ? 'alert' : 'text'}
           style={{
             color: colors.textSecondary,
             fontSize: typeScale.caption,
@@ -937,6 +937,10 @@ export function TaskTagsPanel({
         <View ref={viewportRef} collapsable={false}>
           <ScrollView
             ref={listRef}
+            // This list is rendered inside the Android native action-sheet
+            // ScrollView; opt into Android's nested-scroll contract on both
+            // sides so tag scrolling remains usable at either edge.
+            nestedScrollEnabled
             scrollEnabled={!draggedId}
             scrollEventThrottle={16}
             onScroll={(event) => {
@@ -1350,7 +1354,7 @@ export function TaskTagsPanel({
           {t(`taskTags.${blocked ? 'offline' : error}`)}
         </Text>
       )}
-      {!blocked && error === 'loadFailed' && (
+      {!blocked && (error === 'loadFailed' || error === 'remoteBusy') && (
         <Pressable
           accessibilityRole="button"
           disabled={busy}

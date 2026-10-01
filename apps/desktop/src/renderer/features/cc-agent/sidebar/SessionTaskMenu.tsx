@@ -35,13 +35,7 @@ import {
   type TaskMoveDestination,
 } from './TaskMoveSubmenu';
 import { TaskMigrationDialog } from './TaskMigrationDialog';
-import {
-  MENU_CONTENT_CLASS,
-  MENU_ITEM_CLASS,
-  MENU_ROW_CLASS,
-  MENU_SEPARATOR_CLASS,
-  MENU_SUB_CONTENT_CLASS,
-} from './menuStyles';
+import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 
 interface Props {
   session: Session;
@@ -212,7 +206,7 @@ function ActiveSessionTaskMenu({
       {t(`ccAgent.sidebar.sessionMenu.${key}`)}
     </DropdownMenuItem>
   );
-  const separator = <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />;
+  const separator = <DropdownMenuSeparator />;
   return (
     <div
       className="contents"
@@ -223,7 +217,7 @@ function ActiveSessionTaskMenu({
       <DropdownMenuContent
         align="start"
         sideOffset={sideOffset}
-        className={`${MENU_CONTENT_CLASS} min-w-32 overflow-hidden`}
+        className="min-w-32 overflow-hidden"
         onClick={(event) => event.stopPropagation()}
         onCloseAutoFocus={(event) => {
           if (dialog) event.preventDefault();
@@ -253,7 +247,7 @@ function ActiveSessionTaskMenu({
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent
                 sideOffset={4}
-                className={`${MENU_SUB_CONTENT_CLASS} min-w-40`}
+                className="min-w-40"
               >
                 <DropdownMenuItem
                   className={MENU_ITEM_CLASS}

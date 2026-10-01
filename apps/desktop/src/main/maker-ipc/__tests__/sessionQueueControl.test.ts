@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import { createSessionQueueControlService } from '../sessionQueueControl.js';
@@ -51,7 +53,31 @@ describe('session queue control service', () => {
       'session-1',
       item.clientId,
       expect.objectContaining({ text: 'after', persistedContent: 'after' }),
+      item,
     );
+  });
+
+  it.each(['update', 'cancel'])('preserves a same-id replacement across authority await for %s', async action => {
+    let item = queued();
+    const replacement = queued(); replacement.text = 'new user message';
+    const inputCoordinator = {
+      hasQueuedItemWhere: (_id: string, predicate: (entry: AgentInputQueuedMessage) => boolean) => predicate(item),
+      replaceQueuedMessage: vi.fn((_id, _clientId, next) => { item = next; return true; }),
+      remove: vi.fn(),
+    };
+    const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+    const start = source.indexOf('    removeQueuedMessage:', source.indexOf('  const orcaTeamService ='));
+    const adapter = source.slice(start, source.indexOf('    mergeQueuedMessages:', start));
+    const mutations = new Function('inputCoordinator', ts.transpileModule(`return ({${adapter}});`, {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText)(inputCoordinator);
+    const service = createSessionQueueControlService({
+      getSnapshot: async () => ({pendingQueue:[item], consumingClientIds:[]}), ...mutations,
+    });
+    const params = {sessionId:'session',queuedMessageId:item.clientId,authorize:()=>({ok:true as const}),beforeMutation:async()=>{item=replacement;}};
+    const result = action === 'cancel' ? await service.cancel(params) : await service.update({...params,message:'overwrite',rebuild:(entry,message)=>({...entry,text:message})});
+    expect(result.ok).toBe(false);
+    expect(item).toBe(replacement);
+    expect(inputCoordinator.replaceQueuedMessage).not.toHaveBeenCalled();
+    expect(inputCoordinator.remove).not.toHaveBeenCalled();
   });
 
   it('rejects consuming and unauthorized rows before mutation', async () => {
