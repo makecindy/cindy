@@ -4,6 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAttachmentPayload } from '@/session/messagePayload';
 import { svgAttachmentForDisplay } from '@/session/messageAttachments';
+import { collectMobileMessageGalleryImages, lightboxImagesForPayload } from '@/session/messageGallery';
+import type { MobileMessageRenderItem } from '@/session/messageRenderModel';
 import {
   ImageLightbox,
   type ImageLightboxProps,
@@ -34,9 +36,6 @@ vi.mock("expo-router", () => ({
 vi.mock("react-i18next", async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({ t: (key: string) => key }),
-}));
-vi.mock("@/session/remoteMedia", () => ({
-  isDesktopLocalMediaUrl: (uri: string) => uri.startsWith("cindy-media:"),
 }));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => runtime.insets,
@@ -223,6 +222,52 @@ function mount(overrides: Partial<ImageLightboxProps> = {}) {
   render();
   return { props, render };
 }
+
+describe('Markdown gallery prefetch boundaries', () => {
+  it('does not fetch a titled outside-workdir image when a neighboring image is opened', async () => {
+    const items = [{
+      type: 'message', key: 'm1',
+      message: {
+        key: 'm1', kind: 'assistant', role: 'assistant', align: 'agent', label: 'assistant',
+        source: { clientId: 'm1', role: 'assistant', content: '', createdAt: '2026-10-01T00:00:00Z' },
+        body: '![ok](https://example.invalid/ok.png)\n\n![private](xdt-file://open?path=%2Fprivate%2Fphoto.png "title")',
+      },
+    }] as MobileMessageRenderItem[];
+    const gallery = collectMobileMessageGalleryImages(items, '/repo');
+    const images = lightboxImagesForPayload(gallery, gallery[0].payload);
+    const resolver = vi.fn(async () => ({
+      url: 'file:///download.png', previewable: true, ossKey: 'download.png',
+      mimeType: 'image/png', size: 1, expiresAt: '2099-01-01T00:00:00Z',
+    }));
+    await act(async () => { mount({ images, initialUrl: images[0].url, onResolveRemoteMedia: resolver }); });
+    expect(resolver).not.toHaveBeenCalled();
+    expect(images.map((image) => image.url)).toEqual(['https://example.invalid/ok.png']);
+  });
+
+  it('prefetches an inside-workdir neighbor with the Host realpath constraint', async () => {
+    const items = [{
+      type: 'message', key: 'm1',
+      message: {
+        key: 'm1', kind: 'assistant', role: 'assistant', align: 'agent', label: 'assistant',
+        source: { clientId: 'm1', role: 'assistant', content: '', createdAt: '2026-10-01T00:00:00Z' },
+        body: '![ok](https://example.invalid/ok.png)\n\n![local](xdt-file://open?path=%2Frepo%2Fphoto.png&baseDir=%2F "title")',
+      },
+    }] as MobileMessageRenderItem[];
+    const gallery = collectMobileMessageGalleryImages(items, '/repo');
+    const images = lightboxImagesForPayload(gallery, gallery[0].payload);
+    const resolver = vi.fn(async (_media: { url: string }) => ({
+      url: 'file:///download.png', previewable: true, ossKey: 'download.png',
+      mimeType: 'image/png', size: 1, expiresAt: '2099-01-01T00:00:00Z',
+    }));
+    await act(async () => { mount({ images, initialUrl: images[0].url, onResolveRemoteMedia: resolver }); });
+    expect(images).toHaveLength(2);
+    expect(resolver).toHaveBeenCalledTimes(2);
+    for (const [media] of resolver.mock.calls) {
+      expect(new URL(media.url).searchParams.get('path')).toBe('/repo/photo.png');
+      expect(new URL(media.url).searchParams.getAll('baseDir')).toEqual(['/repo']);
+    }
+  });
+});
 
 describe('SVG images in the shared lightbox', () => {
   it.each([

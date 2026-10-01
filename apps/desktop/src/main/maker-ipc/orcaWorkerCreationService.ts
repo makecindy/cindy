@@ -203,14 +203,20 @@ export interface OrcaWorkerCreateInTeamParams extends OrcaWorkerCreateParams {
   workerPermissionMode: OrcaWorkerPermissionMode;
 }
 
+export type OrcaWorkerCreationPlanValidator = (
+  params: OrcaWorkerCreateInTeamParams,
+  resolvedWorkingDir?: string,
+  resolvedRoute?: { model: string; providerId: string | null; effort: string | null; fastMode: boolean },
+  assertCurrent?: () => Promise<void>,
+) => Promise<number | null | undefined>;
+
 /** creation service 的 I/O 边界；register.ts 负责把 DB、Maker 与 broadcast 注入进来。 */
 export interface OrcaWorkerCreationDeps {
   getActiveTeamByLead(leadSessionId: string): Promise<OrcaTeamSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerListSnapshot[]>;
   isActiveWorkerStatus(status: OrcaWorkerStatus): boolean;
-  validateCreationPlan?(params: OrcaWorkerCreateInTeamParams, resolvedWorkingDir?: string,
-    resolvedRoute?: { model: string; providerId: string | null; effort: string | null; fastMode: boolean },
-    assertCurrent?: () => Promise<void>): Promise<number | null | undefined>;
+  withLeadSendLock?<T>(leadSessionId: string, operation: () => Promise<T>): Promise<T>;
+  validateCreationPlan?: OrcaWorkerCreationPlanValidator;
   readCollaborationSettings(): { workerSoftLimit: number; workerHardLimit: number };
   getLeadSessionRow(leadSessionId: string): Promise<OrcaLeadSessionSnapshot | null>;
   getWorkerDefaults(agent: AgentKind): OrcaWorkerDefaultsSnapshot;
@@ -624,7 +630,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     const label = normalizeOrcaWorkerLabel(params.label);
     if (!label.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: label.message };
     params = { ...params, label: label.value };
-    const validatePlan = async (workingDir?: string, route?: Parameters<NonNullable<OrcaWorkerCreationDeps['validateCreationPlan']>>[2]) => {
+    const validatePlan = async (workingDir?: string, route?: Parameters<OrcaWorkerCreationPlanValidator>[2]) => {
       await assertCurrent?.();
       // Host validation runs the captured source check before its final synchronous
       // directory grant check. No trailing await may stale that grant observation.
@@ -1001,13 +1007,23 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       | { ok: true; occupiedSlotsBefore: number }
       | { ok: false; errorCode: 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'WORKER_LIMIT_HARD_EXCEEDED' };
     try {
-      reservation = await deps.reserveWorkerCreation({
-        reservationId: workerId,
-        teamId: params.teamId,
-        label: label.value,
-        hardLimit: settings.workerHardLimit,
-        leaseMs: ORCA_WORKER_CREATION_RESERVATION_LEASE_MS,
-      });
+      const admit = async () => {
+        // Preparation may await providers or remote state. Re-read the plan at
+        // the final admission boundary shared with plan registration and input.
+        const latestLimit = await validatePlan(workingDir, resolved);
+        settings.workerHardLimit = deps.readCollaborationSettings().workerHardLimit;
+        if (latestLimit != null) settings.workerHardLimit = Math.min(settings.workerHardLimit, latestLimit);
+        return deps.reserveWorkerCreation({
+          reservationId: workerId,
+          teamId: params.teamId,
+          label: label.value,
+          hardLimit: settings.workerHardLimit,
+          leaseMs: ORCA_WORKER_CREATION_RESERVATION_LEASE_MS,
+        });
+      };
+      reservation = deps.withLeadSendLock
+        ? await deps.withLeadSendLock(params.leadSessionId, admit)
+        : await admit();
     } catch (err) {
       return toInternalFailure(err);
     }
@@ -1094,13 +1110,13 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       }
 
       try {
-        await validatePlan(workingDir, resolved);
-      } catch (err) {
-        await cleanupBootstrappedWorkerSession(workerSession.id);
-        return toInternalFailure(err);
-      }
-
-      try {
+        // Bootstrap and lease renewal both await external work. Reuse the same
+        // admission validator before recording a Worker that lifecycle can dispatch.
+        const finalPlanLimit = await validatePlan(workingDir, resolved);
+        if (finalPlanLimit != null && reservation.occupiedSlotsBefore >= finalPlanLimit) {
+          await cleanupBootstrappedWorkerSession(workerSession.id);
+          return { ok: false, errorCode: 'WORKER_LIMIT_HARD_EXCEEDED', message: 'Registered plan concurrency reached' };
+        }
         await deps.addOrUpdateWorker({
           id: workerId,
           teamId: params.teamId,

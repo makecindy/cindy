@@ -98,8 +98,10 @@ const D_GHOST_CALL = [
 ].join("\n");
 
 const D_MEDIA = [
-  "Cindy Core 的低级媒体接口，供当前 Agent 执行插件提供的上层能力；插件负责场景语义和可选 UI，Core 负责模型调用与媒体交付。",
-  "常规链路是 Agent 先调用插件工具，读取插件返回的普通 JSON，再自行调用本工具；不存在 mediaIntent 等保留结果格式，Host 也不会自动把插件结果转成本工具调用。",
+  "交付已有图片与生成新媒体的 Core 接口。用户只需说「把截图发给我」「让我在手机上看这张图」等自然语言；由 Agent 根据已有文件和上下文完成交付，不要求用户提供工具名、action、协议或 hash。",
+  "发送已有截图或本地图片：直接调用本工具的 import_image，path 使用实际文件路径。此动作无需生成模型或插件，不要走生成新图片流程。Host 按当前任务文件权限读取、统一入库并登记引用，成功后才返回 xdt_image_urls。",
+  "查看图片供自己分析不等于把图片发给用户；用户要求查看成果时，应在回复中展示可交付图片，不能仅说「已发送」或只给本机路径。用户反馈打不开时，根据工具结果检查或重新导入已知原文件，不要反复发送同一失效地址；原文件不在上下文中时才询问文件来源。不得自行拼接 hash、冒用其它沙盒地址或把导入成功说成手机已经下载。",
+  "生成新图片或视频时，插件负责场景语义和可选 UI，Core 负责模型调用与媒体交付。Agent 先调用插件工具，读取插件返回的普通 JSON，再自行调用本工具；不存在 mediaIntent 等保留结果格式，Host 也不会自动把插件结果转成本工具调用。",
   "如果插件需要消费最终结果，Agent 可在本工具成功后再调用插件声明的普通工具，并通过 ghost_call.attachments 显式交接；这不是生成请求的必经步骤。",
   "模型存在性来自当前账号的 Model Access model group；list_models 只投影同时满足 Gateway modalities、Guide operation 与当前客户端协议支持度的可执行模型。",
   "媒体生成必须由当前 Agent 通过本工具发起；插件面板和插件沙箱代码不得直接提交生成请求。",
@@ -556,7 +558,8 @@ const MEDIA_CAPABILITIES = new Set<CindyMediaCapability>([
 export async function handleMedia(
   deps: CindyGhostsMcpDeps,
   input: {
-    action: "list_models" | "resolve_local_path" | "prepare" | "request" | "poll";
+    action: "list_models" | "resolve_local_path" | "import_image" | "prepare" | "request" | "poll";
+    path?: string;
     capability?: CindyMediaCapability;
     url?: string;
     provider_id?: string;
@@ -588,6 +591,9 @@ export async function handleMedia(
         action: "list_models",
         ...(input.capability ? { capability: input.capability } : {}),
       });
+    } else if (input.action === "import_image") {
+      if (!input.path?.trim()) return textResult({ ok: false, errorCode: "INVALID_INPUT", message: "import_image 必须提供 path。" }, true);
+      result = await deps.callMedia({ action: "import_image", path: input.path });
     } else if (input.action === "resolve_local_path") {
       if (!input.url) {
         return textResult(
@@ -1337,8 +1343,9 @@ export function createCindyGhostsMcpServer(
     D_MEDIA,
     {
       action: z
-        .enum(["list_models", "resolve_local_path", "prepare", "request", "poll"])
+        .enum(["list_models", "resolve_local_path", "import_image", "prepare", "request", "poll"])
         .describe("要执行的媒体调用阶段"),
+      path: z.string().max(32768).optional().describe("import_image 时必填；实际存在的图片路径，相对路径按当前任务工作目录解析"),
       capability: z
         .enum([
           "image.generate",

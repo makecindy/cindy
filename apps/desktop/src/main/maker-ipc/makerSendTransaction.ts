@@ -51,7 +51,7 @@ import {
 } from './extraDirsValidator.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 import type { CindyLearnInvocationGrant } from '../learn-host/invocationGrant.js';
-import { currentAutoReviewResourceIntent, readAutoReviewUserText, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, currentAutoReviewResourceIntent, readAutoReviewUserText, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
 
 type CreateOpts = MakerSessionCreateOpts;
 
@@ -232,6 +232,7 @@ export function revokeTrustedDesktopQueuedOrigin(item: AgentInputQueuedMessage):
 }
 
 type MakerSendOptions = {
+  readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
   retryUserClientId?: string;
   toolsDisabled?: boolean;
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
@@ -1325,6 +1326,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         return restoreAutoReviewUserIntent(history);
       } : undefined;
       if (resolveScheduledIntent) restoredAutoReviewIntent = undefined;
+      if (!resolveScheduledIntent && restoredAutoReviewIntent === undefined && so[AUTO_REVIEW_DELEGATED_CONTINUATION]
+        && (!mainOwnedSendContext || mainOwnedSendContext.origin.kind === 'desktop')) {
+        const history = await deps.readAutoReviewHistory?.(sessionId) ?? [];
+        restoredAutoReviewIntent = restoreAutoReviewUserIntent(history);
+      }
       if (!resolveScheduledIntent && restoredAutoReviewIntent === undefined && isOrdinaryUserTurn && trustedUserText !== undefined
         && (!mainOwnedSendContext || mainOwnedSendContext.origin.kind === 'desktop')) {
         let history: AutoReviewHistoryMessage[] = [];
@@ -1459,6 +1465,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ...(retryTranscriptUserEntryId ? { retryTranscriptUserEntryId } : {}),
           ...(resolveScheduledIntent ? { resolveAutoReviewUserIntent: resolveScheduledIntent } : {}),
           [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent,
+          ...(so[AUTO_REVIEW_DELEGATED_CONTINUATION] ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const } : {}),
           ...(so[INHERITED_CAPABILITY_SELECTION] !== undefined
             ? { [INHERITED_CAPABILITY_SELECTION]: so[INHERITED_CAPABILITY_SELECTION] }
             : {}),
@@ -1545,6 +1552,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                         uuid: so.messageUuid,
                         ...(so.origin?.kind === 'scheduler'
                           ? { autoReviewUserText: { kind: 'scheduled-continuation' } }
+                          : so[AUTO_REVIEW_DELEGATED_CONTINUATION]
+                            ? { autoReviewUserText: { kind: 'delegated-continuation' } }
                           : trustedUserText !== undefined ? { autoReviewUserText: trustedUserText } : {}),
                         sdkSessionId: persistUserMessage.sdkSessionId,
                         ...(persistUserMessage.delivery

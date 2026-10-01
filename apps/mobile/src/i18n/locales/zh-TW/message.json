@@ -148,6 +148,8 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "sourceMissing": "原始圖片已不在這台電腦上，請重新匯入原始檔案。",
+    "deviceOffline": "電腦尚未連線，請恢復連線後重試。",
     "cancelAnnotation": "取消標註",
     "cancel": "取消",
     "undoLastStroke": "撤銷上一筆",

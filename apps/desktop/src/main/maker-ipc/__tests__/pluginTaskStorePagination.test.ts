@@ -3,6 +3,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { expect, it } from 'vitest';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { createPluginTaskStore } from '../pluginTaskStore.js';
+import { createPluginTaskService } from '../pluginTaskService.js';
 
 it.each(['absent', 'raw session', 'revoked', 'changed revision', 'other plugin', 'send'] as const)(
   'rolls back only its uncreated receipt in SQLite: %s', async state => {
@@ -40,7 +41,15 @@ it('durably revokes only create ownership while retaining plans, run results and
     add.run('broken','p','create','','broken-key','hash','{bad');
     add.run('run','p','send','task','send-key','hash','{"status":"completed"}');
     add.run('other','q','create','','other-key','hash','{}');
+    const route={agentKind:'codex' as const,providerId:'test',model:'test',effort:'high',fastMode:false};
+    const unused=async():Promise<never>=>{throw Error('unexpected dispatch/control');};
+    const service=createPluginTaskService({store,assertCurrent(){},assertAuthorized(){},
+      readSession:async taskId=>({taskId,title:'kept',revision:1,status:'active',resolvedConfig:route,permissionMode:'plan'}),
+      readPermissionMode:()=> 'plan',resolveRoute:unused,createSession:unused,dispatch:unused,inspect:unused,cancel:unused,
+    });
+    expect((await service.list('p')).items.map(row=>row.taskId)).toEqual(['task']);
     await store.revokePlugin('p');
+    expect((await service.list('p')).items).toEqual([]);
     const restarted=createPluginTaskStore(db);
     const row=await restarted.find('p','create','','original');
     expect(row).toMatchObject({id:'task',requestKey:'original',revision:1});

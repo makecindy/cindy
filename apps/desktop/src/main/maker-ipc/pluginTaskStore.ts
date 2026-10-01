@@ -1,4 +1,5 @@
-import { and, asc, eq, gt, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, or, getTableColumns, sql } from 'drizzle-orm';
+import { PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../shared/pluginTasks.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { pluginTaskRequests, sessions } from '../localDb/schema.js';
 import type { PluginTaskStore } from './pluginTaskService.js';
@@ -8,7 +9,15 @@ import { PluginTaskError } from './pluginTaskService.js';
 export function createPluginTaskStore(db: DbClient): PluginTaskStore {
   const table = pluginTaskRequests;
   return {
-    get: async (id) => (await db.drizzle.select().from(table).where(eq(table.id, id)).limit(1))[0],
+    get: async (id) => {
+      // Do not transfer oversized legacy payloads to Main for each Auto action.
+      const [row] = await db.drizzle.select({ ...getTableColumns(table),
+        payload: sql<string>`CASE WHEN length(${table.payload}) <= ${PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS} THEN ${table.payload} ELSE NULL END`,
+      }).from(table).where(eq(table.id, id)).limit(1);
+      if (row && (typeof row.payload !== 'string' || row.payload.length > PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS))
+        throw new PluginTaskError('INVALID_REQUEST', 'Task receipt exceeds the supported size');
+      return row;
+    },
     find: async (pluginId, operation, targetId, requestKey) =>
       (
         await db.drizzle
@@ -36,7 +45,12 @@ export function createPluginTaskStore(db: DbClient): PluginTaskStore {
         .from(table).where(and(scope, eq(table.id, after))).limit(1) : [];
       if (after && !cursor) throw new PluginTaskError('INVALID_REQUEST', 'Invalid task cursor');
       return db.drizzle
-        .select()
+        .select({
+          ...getTableColumns(table),
+          // Keep valid creation plans inside SQLite. Project only revocation
+          // (including malformed receipts), never the potentially large plan.
+          payload: operation === 'create' ? sql<string>`CASE WHEN json_valid(${table.payload}) THEN CASE WHEN json_type(${table.payload}) = 'object' AND coalesce(json_type(${table.payload}, '$.ownershipRevoked'), 'null') != 'true' THEN '' ELSE '{"ownershipRevoked":true}' END ELSE '{"ownershipRevoked":true}' END` : table.payload,
+        })
         .from(table)
         .where(
           and(

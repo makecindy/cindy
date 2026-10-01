@@ -148,6 +148,8 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "sourceMissing": "The source image is missing on this computer. Import the original file again.",
+    "deviceOffline": "The computer is disconnected. Reconnect and try again.",
     "cancelAnnotation": "Cancel annotation",
     "cancel": "Cancel",
     "undoLastStroke": "Undo last stroke",

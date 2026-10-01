@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect, it, vi } from 'vitest';
 import ts from 'typescript';
-import { PluginTaskError } from '../pluginTaskService.js';
+import { PluginTaskError, readPluginTaskPlanReceipt } from '../pluginTaskService.js';
 import type { PluginTaskRoute } from '../../../shared/pluginTasks.js';
 import { resolvePluginWorkerDirectory } from '../pluginWorkerDirectory.js';
 
@@ -151,7 +151,7 @@ it.each(['pending', 'empty', 'incomplete', 'error'])('restores Lead input before
   const epoch = { client: { drizzle: { select: () => query } } };
   const workspace = vi.fn(async () => ({ ok: true, workers: [] }));
   const run = handler('getTeam', 'create', {
-    PluginTaskError, getCurrentDbClientSnapshot: () => epoch, service: { get: async () => ({}) },
+    PluginTaskError, readPluginTaskPlanReceipt, getCurrentDbClientSnapshot: () => epoch, service: { get: async () => ({}) },
     getOrcaWorkspaceInfoReadOnly: workspace, createOrcaDiagnosticsDeps: () => ({}),
     maker: { getSession: () => undefined }, sessions: {}, eq: vi.fn(),
     createPluginTaskStore: () => ({ get: async () => ({ payload: '{}' }) }),

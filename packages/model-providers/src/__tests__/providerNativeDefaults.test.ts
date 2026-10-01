@@ -99,27 +99,38 @@ describe('supplier import follows Gateway native model defaults', () => {
     expect(provider.models.codex![0].defaultEnabled).toBe(nativeApi === 'openai-responses');
   });
 
-  it('all presets leave unknown or mismatched fixed engines off, while preserving Pi adapters', () => {
+  function auditProvider(preset: NonNullable<typeof options.presets>[number]) {
+    return buildUserProvider({ id: `${preset.id}-audit`, name: preset.name, runtimes: Object.fromEntries(
+      Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
+        ...runtime, catalogPresetId: preset.id,
+        models: runtime.models.map(({ defaultEnabled: _selection, ...model }) => model),
+      }]),
+    ) }, options);
+  }
+
+  // Each supplier gets its own test budget and failure report as the catalog grows.
+  it.each(options.presets!)('$id leaves mismatched fixed engines off and preserves Pi adapters', preset => {
+    const provider = auditProvider(preset);
     let checked = 0;
-    for (const preset of options.presets!) {
-      const provider = buildUserProvider({ id: `${preset.id}-audit`, name: preset.name, runtimes: Object.fromEntries(
-        Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
-          ...runtime, catalogPresetId: preset.id,
-          models: runtime.models.map(({ defaultEnabled: _selection, ...model }) => model),
-        }]),
-      ) }, options);
-      for (const agent of agents) for (const model of provider.models[agent] ?? []) {
-        if (model.mode && !['chat', 'responses'].includes(model.mode)) continue;
-        const message = `${preset.id}/${agent}/${model.id}`;
-        if (agent === 'pi') expect(model.defaultEnabled, message).toBe(true);
-        else if (model.defaultEnabled) {
-          const api = agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
-          expect(model.nativeApi, message).toBe(api);
-          expect([api, ...(agent === 'codex' ? ['azure-openai-responses'] : [])], message).toContain(model.api);
-        }
-        checked++;
+    for (const agent of agents) for (const model of provider.models[agent] ?? []) {
+      if (model.mode && !['chat', 'responses'].includes(model.mode)) continue;
+      checked++;
+      const message = `${preset.id}/${agent}/${model.id}`;
+      if (agent === 'pi') expect(model.defaultEnabled, message).toBe(true);
+      else if (model.defaultEnabled) {
+        const api = agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
+        expect(model.nativeApi, message).toBe(api);
+        expect([api, ...(agent === 'codex' ? ['azure-openai-responses'] : [])], message).toContain(model.api);
       }
     }
-    expect(checked).toBeGreaterThan(4000);
+    expect(checked).toBe(agents.reduce((total, agent) => total + (preset.runtimes[agent]?.models.length ?? 0), 0));
+  });
+
+  // Each supplier case above verifies that every input model was actually audited.
+  it('audits more than 4000 conversational models across all presets', () => {
+    const count = options.presets!.reduce((total, preset) => total + agents.reduce(
+      (subtotal, agent) => subtotal + (preset.runtimes[agent]?.models.length ?? 0), 0,
+    ), 0);
+    expect(count).toBeGreaterThan(4000);
   });
 });

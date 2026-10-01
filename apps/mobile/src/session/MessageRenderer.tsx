@@ -204,6 +204,7 @@ import {
 } from '@/session/filePreview';
 import {
   groupMobileMarkdownSelectableBlocks,
+  mobileMarkdownManagedImagePreviewUrl,
   isMobileMarkdownImageDirectUrl,
   mobileMarkdownImageAltChipText,
   mobileMarkdownImageTitle,
@@ -310,6 +311,7 @@ import {
 } from '@/session/messagePresentation';
 import {
   formatRemoteMediaSize,
+  mediaLoadFailureKey,
   isDesktopLocalMediaUrl,
   isDirectPreviewableMediaUrl,
   type MobileResolvedRemoteMedia,
@@ -408,6 +410,7 @@ const MESSAGE_LIST_VIEWABILITY_CONFIG_ID = 'message-heavy-content';
 // Heavy Markdown blocks inherit the visibility of their outer list cell. Nested
 // work/sub-agent cards should not create a second visibility window of their own.
 const MessageHeavyContentVisibilityContext = createContext(true);
+const MarkdownRemoteMediaContext = createContext<ResolveRemoteMediaFn | undefined>(undefined);
 
 /** 分享模式吸顶 check 与行内 check 共用 44px 触达高度。 */
 const SHARE_STICKY_CHECK_HEIGHT = 44;
@@ -2751,6 +2754,7 @@ export function MessageRenderer({
     // chat-text-quote:Provider 恒挂载(值可为 null),避免启用态翻转时整棵消息树
     // 因 Provider 增删而重挂;value 稳定(useMemo),不触发订阅方重渲。
     <SelectionQuoteContext.Provider value={selectionQuoteContextValue}>
+    <MarkdownRemoteMediaContext.Provider value={onResolveRemoteMedia}>
     <View
       style={styles.messageFrame}
       onTouchStart={handleHistoryTouchStart}
@@ -2889,6 +2893,7 @@ export function MessageRenderer({
         />
       )}
     </View>
+    </MarkdownRemoteMediaContext.Provider>
     </SelectionQuoteContext.Provider>
   );
 }
@@ -5408,6 +5413,7 @@ function MarkdownBody({
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const chatFilePathContext = useContext(ChatFilePathContext);
+  const resolveMarkdownMedia = useContext(MarkdownRemoteMediaContext);
   // iOS UITextView 在 stretch/百分比宽度下会偶发只量出部分高度,LegendList 按这次
   // 偏矮的 onLayout 裁切 agent 回复;点分享会换上确定宽度的容器从而完整显示。
   // 外层始终 stretch 测可用宽,内层再钉像素宽:测宽不能钉在自己身上,否则旋转/
@@ -5445,15 +5451,25 @@ function MarkdownBody({
     });
   }, [markdownParse]);
   const blocks = markdownParse.result.blocks;
-  // Android 的 selectable Text 内嵌 View(直连内联图)行为未定义,含这类 inline 的块不开选中。
+  const managedImagePreviewUrl = useCallback((url: string) => resolveMarkdownMedia
+    ? mobileMarkdownManagedImagePreviewUrl(
+      url, chatFilePathContext?.workdir, markdownImageCacheKey,
+      chatFilePathContext?.remoteHostId, chatFilePathContext?.sessionId,
+    ) : null, [chatFilePathContext, markdownImageCacheKey, resolveMarkdownMedia]);
+  const imageRendersPreview = useCallback((inline: Extract<MobileMarkdownInline, { type: 'image' }>) => (
+    isMobileMarkdownImageDirectUrl(inline.url) || managedImagePreviewUrl(inline.url) !== null
+  ), [managedImagePreviewUrl]);
+  // 图片预览内嵌 View，不能放进 Android selectable Text 或 iOS UITextView。
   const inlinesSelectable = useCallback((inlines: readonly MobileMarkdownInline[]) => (
     selectable === true
-    && !inlines.some((inline) => inline.type === 'image' && isMobileMarkdownImageDirectUrl(inline.url))
-  ), [selectable]);
+    && !inlines.some((inline) => inline.type === 'image' && imageRendersPreview(inline))
+  ), [imageRendersPreview, selectable]);
   // 正文 Markdown 图片(![](url) / 安全 <img>)点击后走既有媒体 payload 查看器,与附件图片同一条链路。
   const openMarkdownImage = useCallback((url: string, alt?: string) => {
     if (!onOpenPayload) return;
-    const resolvedUrl = mobileMarkdownImageUrlForWorkdir(
+    // Match the scoped preview/gallery URL; outside-workdir chips remain
+    // explicitly openable through the existing single-image fallback.
+    const resolvedUrl = managedImagePreviewUrl(url) ?? mobileMarkdownImageUrlForWorkdir(
       url,
       chatFilePathContext?.workdir,
       markdownImageCacheKey,
@@ -5472,6 +5488,7 @@ function MarkdownBody({
     chatFilePathContext?.sessionId,
     chatFilePathContext?.workdir,
     markdownImageCacheKey,
+    managedImagePreviewUrl,
     onOpenPayload,
   ]);
   const openMarkdownMedia = useMemo(() => onOpenPayload
@@ -5479,6 +5496,24 @@ function MarkdownBody({
       onOpenPayload(buildMediaPayload({ kind, url, title, previewable: false }, title));
     }
     : undefined, [onOpenPayload]);
+  const renderManagedImage = useCallback((inline: Extract<MobileMarkdownInline, { type: 'image' }>) => {
+    const url = managedImagePreviewUrl(inline.url);
+    if (!url) return null;
+    const size = mobileMarkdownInlineImageSize(inline);
+    const label = mobileMarkdownImageTitle(url, inline.alt);
+    return (
+      <View style={size}>
+        <MediaPreview
+          key={url}
+          layout={{ ...layout, imagePreviewWidth: size.width, imagePreviewHeight: size.height }}
+          media={{ kind: 'image', url, title: label, previewable: false }}
+          label={label}
+          onOpen={onOpenPayload ? () => openMarkdownImage(inline.url, inline.alt) : undefined}
+          onResolveRemoteMedia={resolveMarkdownMedia}
+        />
+      </View>
+    );
+  }, [layout, managedImagePreviewUrl, onOpenPayload, openMarkdownImage, resolveMarkdownMedia]);
   // Preserve the inline renderer while streaming or unrelated task metadata
   // changes; referenced task title changes still refresh every affected chip.
   const remoteSessions = useRemoteSessions();
@@ -5503,6 +5538,7 @@ function MarkdownBody({
         baseStyle,
         keyPrefix,
         onOpenImage: openMarkdownImage,
+        renderManagedImage,
         onOpenMedia: openMarkdownMedia,
         onOpenSessionLink,
         sessionReferenceDetails,
@@ -5513,12 +5549,13 @@ function MarkdownBody({
     ),
     // renderInline also reads translated fallback labels. Invalidate completed
     // memoized text blocks when useTranslation refreshes its bound translator.
-    [onOpenSessionLink, openMarkdownImage, openMarkdownMedia, sessionLinkTitles, sessionReferenceDetails, streaming, styles, t],
+    [onOpenSessionLink, openMarkdownImage, openMarkdownMedia, renderManagedImage, sessionLinkTitles, sessionReferenceDetails, streaming, styles, t],
   );
-  const textRunGroupingOptions = Platform.OS === 'android'
-    ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS
-    : undefined;
-  // 连续纯文本块合并为 text_run(跨段选择),代码块/表格/mermaid/含直连图块保持独立。
+  const textRunGroupingOptions = useMemo(() => ({
+    ...(Platform.OS === 'android' ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS : {}),
+    imageRendersPreview,
+  }), [imageRendersPreview]);
+  // 连续纯文本块合并为 text_run，图片预览保持独立。
   // Android selectable Text 在超长原生文本视图里会偶发高度/滚动协商异常,长 run 分块
   // 后仍保留块内跨段选择,同时避免单个 LegendList item 内出现巨型 selectable Text。
   const groups = useMemo(
@@ -6031,6 +6068,7 @@ function renderInline(
     /** text_run 合并树里多个块共父,key 需要块级前缀防冲突。 */
     keyPrefix?: string;
     onOpenImage?: (url: string, alt?: string) => void;
+    renderManagedImage?: (inline: Extract<MobileMarkdownInline, { type: 'image' }>) => ReactNode;
     onOpenMedia?: (url: string, title: string, kind: 'video') => void;
     onOpenPayload?: (payload: MessagePayload) => void;
     onOpenSessionLink?: (url: string) => void;
@@ -6166,11 +6204,14 @@ function renderInline(
         </SpanText>
       );
     case 'image': {
+      const managedPreview = ctx.renderManagedImage?.(inline);
+      if (managedPreview) {
+        return <Text key={spanKey(`image:${index}:${inline.url}`)} testID="message.markdownManagedImage">{managedPreview}</Text>;
+      }
       // openImage 由上层可选注入 → 缺席时 chip 不可点,下划线也必须跟着不加
       // (clickableInlineStyle 保证两者同源)。
       const openImageChip = openImage ? () => openImage(inline.url, inline.alt) : undefined;
-      // xdt 系非直连图:RN Image 无法直接加载内部 scheme,渲染可点 chip,
-      // 点开后由 ImageLightbox 经 remote-media resolver 取图。
+      // 缺少路径上下文时保留文字入口；合法受管图由上面的 MediaPreview 取件。
       if (!isMobileMarkdownImageDirectUrl(inline.url)) {
         const imageChipText = inline.alt
           ? mobileMarkdownImageAltChipText(inline.alt)
@@ -6544,8 +6585,8 @@ function MediaPreview({
       .then((resolved) => {
         if (!cancelled && !signal?.aborted) setResolveState({ status: 'ready', media: resolved });
       })
-      .catch(() => {
-        if (!cancelled && !signal?.aborted) setResolveState({ status: 'error' });
+      .catch((error: unknown) => {
+        if (!cancelled && !signal?.aborted) setResolveState({ status: 'error', error });
       });
     return () => {
       cancelled = true;
@@ -6566,7 +6607,7 @@ function MediaPreview({
   const phase = mediaThumbnailPhase(media, resolveState, !!onResolveRemoteMedia);
   const { t } = useTranslation();
   const fallbackDetail = phase.kind === 'fallback' && phase.reason === 'error'
-    ? t('message.lightbox.loadFailed') : preview.detail;
+    ? t(mediaLoadFailureKey(resolveState.status === 'error' ? resolveState.error : undefined)) : preview.detail;
   const thumbUri = phase.kind === 'direct' ? media.url : phase.kind === 'resolved' ? phase.uri : null;
 
   const handleImageError = useCallback(() => {

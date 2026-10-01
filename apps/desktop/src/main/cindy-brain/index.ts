@@ -1728,6 +1728,13 @@ export function setPluginTaskHandler(handler: PluginTaskHandler | null): void { 
 let pluginTaskUninstaller: ((pluginId: string, remove: () => Promise<void>) => Promise<void>) | null = null;
 export function setPluginTaskUninstaller(handler: typeof pluginTaskUninstaller): void { pluginTaskUninstaller = handler; }
 
+/** Approval revision participates in Auto decision cache identity (including reinstall/update). */
+export function pluginTaskAuthorizationRevision(id: string): string | null {
+  const ghost = findAvailableGhost(id);
+  return ghost?.enabled && ghost.manifest.agent?.tasks && ghost.approval.state === 'approved'
+    ? ghost.approval.revision : null;
+}
+
 export function isPluginTaskAuthorized(id: string): boolean {
   const ghost = findAvailableGhost(id);
   return hasPluginTaskApproval(ghost);

@@ -1147,6 +1147,14 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
 });
 
 describe("cindy · media MCP 边界", () => {
+  it("imports existing screenshots without requiring a model or plugin", async () => {
+    const callMedia = vi.fn(async () => ({ ok: true, xdt_image_urls: ['cindy-media://blobs/image.png'] }));
+    const deps = fakeDeps({ callMedia });
+    expect(parsePayload(await handleMedia(deps, { action: 'import_image' }))).toMatchObject({ errorCode: 'INVALID_INPUT' });
+    expect(callMedia).not.toHaveBeenCalled();
+    expect(parsePayload(await handleMedia(deps, { action: 'import_image', path: 'screenshots/actual.png' }))).toMatchObject({ ok: true });
+    expect(callMedia).toHaveBeenCalledWith({ action: 'import_image', path: 'screenshots/actual.png' });
+  });
   it("把 snake_case 输入转换为 Host 稳定类型", async () => {
     const callMedia = vi.fn(async () => ({ ok: true, status: "prepared" }));
     const result = await handleMedia(fakeDeps({ callMedia }), {

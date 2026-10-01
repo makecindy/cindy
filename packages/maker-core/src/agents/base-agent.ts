@@ -1964,6 +1964,9 @@ export const AUTO_REVIEW_SOURCE_CONTENT = Symbol('cindy.auto-review-source-conte
 /** Host-restored user authorization for this send; never accepted from wire options. */
 export const AUTO_REVIEW_USER_INTENT = Symbol('cindy.auto-review-user-intent');
 
+/** Main-attested continuation: retain initialized live intent, including an explicit empty reset. */
+export const AUTO_REVIEW_DELEGATED_CONTINUATION = Symbol('autoReviewDelegatedContinuation');
+
 /** Main-only selection from the original input for a retained-history continuation. */
 export const INHERITED_CAPABILITY_SELECTION = Symbol('cindy.inherited-capability-selection');
 
@@ -1991,6 +1994,7 @@ export interface MainOwnedSendContext {
 export interface SendOptions {
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
   readonly [AUTO_REVIEW_USER_INTENT]?: AutoReviewUserIntent;
+  readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
   readonly [INHERITED_CAPABILITY_SELECTION]?: string;
   /** Exact Skill selected by a Host authorization check for this send. */
   readonly [PINNED_SKILL_INVOCATION]?: PinnedSkillInvocation;

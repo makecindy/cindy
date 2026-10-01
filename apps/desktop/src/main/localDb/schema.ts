@@ -1024,6 +1024,19 @@ export const migrationMeta = sqliteTable('migration_meta', {
   value: text('value'),
 });
 
+/** Host-only bounded authority projections; transcript mutations invalidate their revision. */
+export const autoReviewProjections = sqliteTable('auto_review_projections', {
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  leadId: text('lead_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull().default(0),
+  projectedRevision: integer('projected_revision').notNull().default(-1),
+  version: integer('version').notNull().default(1),
+  payload: text('payload'),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.sessionId, t.leadId] }),
+  byLead: index('auto_review_projections_lead_idx').on(t.leadId),
+}));
+
 /**
  * schema-drift-detection (#37)：每条已 apply 的 migration 的指纹记录。
  *

@@ -10,6 +10,7 @@
     ".": "./src/index.ts",
     "./agent-capabilities": "./src/agentCapabilities.ts",
     "./agent-input-projection": "./src/agentInputProjection.ts",
+    "./auto-review-intent": "./src/autoReviewIntent.ts",
     "./agent-task": "./src/agentTask.ts",
     "./branding": "./src/branding.ts",
     "./brand-identity": "./src/brandIdentity.ts",

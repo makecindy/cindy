@@ -12,6 +12,7 @@ import { Session } from './session.js';
 import {
   MAIN_OWNED_SEND_CONTEXT,
   AUTO_REVIEW_USER_INTENT,
+  AUTO_REVIEW_DELEGATED_CONTINUATION,
   type AgentSessionHandle,
   type SendOptions,
   type TurnContinuationState,
@@ -147,6 +148,14 @@ function createControllableHandle(opts?: {
 }
 
 describe('dispatch authorization refresh', () => {
+  it('passes the protected continuation marker through acceptance to the harness', async () => {
+    const h = createControllableHandle();
+    const session = makeSession(h.handle);
+    await session.send('Lead continuation', { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true, [AUTO_REVIEW_USER_INTENT]: 'persisted fallback' });
+    expect(h.lastSendOptions()?.[AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(true);
+    await session.close();
+  });
+
   it('reads authorization after accepted preparation and overrides an earlier snapshot', async () => {
     const h = createControllableHandle();
     const session = makeSession(h.handle);

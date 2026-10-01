@@ -210,6 +210,13 @@ link-accept 双向声明，不改 relay）。Desktop 控制端在本机没有订
 受信 renderer 开放。不改 relay、帧限制或服务器权限，服务端无需改动。实现见
 `apps/desktop/src/main/usage/usageDeviceRows.ts` 与 `peerUsageSync.ts`。
 
+## 图片交付与缺失源文件
+
+媒体取件沿用既有 `MEDIA_FETCH_FAILED` 错误包；源图片不存在时，Host 在消息中附加
+`[MEDIA_SOURCE_MISSING]` 稳定标记，不回传本机路径。新版 Mobile 据此提示重新导入，
+旧版继续按通用加载失败处理；新版连接旧 Host 时也保留通用失败回退。不改变 relay、
+取件权限、缓存键或重试范围，不需要服务端同步上线。
+
 ## 图片标注区域说明
 
 `maker:input:enqueue` / `maker:input:steer` / `maker:input:update-content` 的队列附件

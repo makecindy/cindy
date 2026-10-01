@@ -33,6 +33,7 @@ import {
   AUTO_REVIEW_UNAVAILABLE_METADATA_KEY,
   AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
   type AutoReviewDelegate,
+  type AutoReviewRequest,
 } from '../shared/auto-review-decision.js';
 
 type AgentEvent = Omit<CoreAgentEvent, 'data'> & { data: any };
@@ -17102,6 +17103,67 @@ describe('CodexAgent MCP thread context hooks', () => {
     await fullHandle.close();
   });
 
+  describe.each(['mcp', 'dynamic'] as const)('delegated trusted MCP %s', (kind) => {
+    it.each((['auto', 'acceptEdits', 'ask'] as const).flatMap(permissionMode =>
+      (['ordinary', 'allow', 'block', 'ask', 'revoked', 'unavailable', 'late-revoke', 'late-scope', 'confirmed'] as const)
+        .map(scenario => ({ permissionMode, scenario }))))('keeps live authorization before the Host shortcut: $permissionMode/$scenario', async ({ permissionMode, scenario }) => {
+      let active = scenario !== 'revoked' && scenario !== 'confirmed';
+      let revision = 'scope-1';
+      let preparations = 0;
+      const reviewer = Object.assign(vi.fn(async (_request: AutoReviewRequest) => {
+        if (scenario === 'late-revoke') active = false;
+        if (scenario === 'late-scope') revision = 'scope-2';
+        return { verdict: scenario === 'block' ? 'block' as const : scenario === 'ask' ? 'ask' as const : 'allow' as const };
+      }), { prepareRequest: vi.fn(async (request: AutoReviewRequest): Promise<AutoReviewRequest> => {
+        if (++preparations === 2 && permissionMode !== 'auto') {
+          if (scenario === 'late-revoke') active = false;
+          if (scenario === 'late-scope') revision = 'scope-2';
+        }
+        if (scenario === 'unavailable') throw new Error('Host storage unavailable');
+        if (scenario === 'ordinary') return request;
+        // Prove a previously ordinary shortcut cannot cross a late Host change.
+        if (permissionMode !== 'auto' && preparations === 1 && scenario.startsWith('late-')) return request;
+        return active ? { ...request, delegatedTask: { source: 'approved-plugin', pluginId: 'eval', role: 'worker',
+          task: 'Run the approved evaluation only', workingDir: '/repo', authorizationRevision: revision } }
+          : { ...request, authorizationError: 'Plugin authorization revoked' };
+      }) });
+      const callTool = vi.fn(async () => ({ contentItems: [], success: true }));
+      const agent = new CodexAgent(createDeps({}, {
+        reviewAutoPermissionAction: reviewer,
+        getMcpToolApprovalPolicy: () => 'auto-approve',
+        codexHostDynamicToolProvider: {
+          listTools: () => [{ type: 'function' as const, name: 'cindy_scheduler__call_tool', description: 'Scheduler', inputSchema: { type: 'object' }, deferLoading: false }],
+          callTool,
+        },
+      }));
+      const host = installFakeHost(agent, (method) => method === Method.TurnStart ? { turn: { id: 'delegated-turn' } } : undefined);
+      const handle = await agent.startSession({ sessionId: `delegated-mcp-${kind}-${scenario}`, model: 'gpt-5.5', providerId: 'openai', workingDir: '/repo', permissionMode });
+      try {
+        const resolver = vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: scenario === 'confirmed' ? 'allow' : 'deny' }));
+        handle.setInteractionResolver(resolver);
+        await handle.send({ type: 'user', content: 'Run this evaluation; do not create schedules.' });
+        const h = host.getThreadHandlers();
+        if (!h?.mcpServerElicitation || !h.dynamicToolCall) throw new Error('missing MCP handlers');
+        h.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'delegated-turn' } });
+        const input = { name: 'schedule_create', args: { prompt: 'outside task scope' } };
+        const result = kind === 'mcp'
+          ? await h.mcpServerElicitation({ threadId: 'start-thread-id', turnId: 'delegated-turn', serverName: 'cindy_scheduler', mode: 'form', message: 'Allow tool call', requestedSchema: {},
+            _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'call_tool', tool_params: input } })
+          : await h.dynamicToolCall({ threadId: 'start-thread-id', turnId: 'delegated-turn', callId: 'delegated-call', namespace: null, tool: 'cindy_scheduler__call_tool', arguments: input }, { requestId: 'delegated-dynamic' });
+        const allowed = scenario === 'ordinary' || (permissionMode === 'auto' ? scenario === 'allow' : scenario === 'confirmed');
+        expect(result).toMatchObject(kind === 'mcp' ? { action: allowed ? 'accept' : 'decline' } : { success: allowed });
+        expect(callTool).toHaveBeenCalledTimes(kind === 'dynamic' && allowed ? 1 : 0);
+        expect(reviewer.prepareRequest).toHaveBeenCalled();
+        expect(reviewer).toHaveBeenCalledTimes(permissionMode !== 'auto' || ['ordinary', 'revoked', 'unavailable', 'confirmed'].includes(scenario) ? 0 : 1);
+        expect(resolver).toHaveBeenCalledTimes((permissionMode === 'auto' ? ['ask', 'unavailable'].includes(scenario) : scenario !== 'ordinary') ? 1 : 0);
+        if (reviewer.mock.calls.length) {
+          expect(reviewer.mock.calls[0]![0].delegatedTask?.pluginId).toBe('eval');
+          expect(JSON.stringify(reviewer.mock.calls[0]![0].action)).toContain('schedule_create');
+        }
+      } finally { await handle.close(); }
+    });
+  });
+
   it.each(['command', 'file', 'mcp', 'permissions', 'dynamic'] as const)('revalidates cancelled Auto waits across %s approval callbacks', async (kind) => {
     for (const lifecycle of ['abort', 'graceful-stop', 'close', 'completed', 'failed', 'superseded', 'child-completed', 'child-root-stopped', 'child-root-completed', 'same-turn-started'] as const) {
       for (const verdict of ['allow', 'ask'] as const) {
@@ -30810,6 +30872,29 @@ describe('CodexAgent plan mode', () => {
     expect(implParams.input).toEqual([
       { type: 'text', text: 'Implement the plan. Follow this revised plan:\n\n1. do X\n2. do Z (revised)' },
     ]);
+    await handle.close();
+  });
+
+  it('keeps rejected plan restrictions in the implementation reviewer', async () => {
+    const review = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'allow' }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review }));
+    const host = installTurnHost(agent);
+    const handle = await startPlanSession(agent, host, 'session-plan-rejection-intent');
+    await handle.setPermissionMode!('auto');
+    let response = 0;
+    handle.setInteractionResolver(async () => response++ === 0
+      ? { kind: 'plan_review', behavior: 'deny', reason: 'Do not publish.' }
+      : { kind: 'plan_review', behavior: 'allow' });
+    await handle.send({ type: 'user', content: 'Fix parser.' });
+    runPlanTurn(host, 'turn-1', 'draft');
+    await vi.waitFor(() => expect(turnStartCalls(host)).toHaveLength(2));
+    runPlanTurn(host, 'turn-2', 'Run tests.');
+    await vi.waitFor(() => expect(turnStartCalls(host)).toHaveLength(3));
+    const handlers = host.getThreadHandlers();
+    await handlers!.commandExecutionApproval!({ threadId: 'start-thread-id', turnId: 'turn-3', itemId: 'test', command: 'npm test', cwd: '/repo' });
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ userIntent: {
+      earlierUserMessages: ['Fix parser.', 'Do not publish.'], currentUserMessage: 'Approved plan:\nRun tests.',
+    } }));
     await handle.close();
   });
 

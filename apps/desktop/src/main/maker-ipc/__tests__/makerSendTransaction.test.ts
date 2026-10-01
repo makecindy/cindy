@@ -15,6 +15,7 @@ import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-i
 import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import { describe, expect, it, vi } from 'vitest';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../autoReviewUserIntent.js';
 import {
   createMakerSendTransaction,
   restoreTrustedDesktopQueuedOrigin,
@@ -2514,6 +2515,23 @@ describe('session-agent-switch handoff injection', () => {
     expect(appendAutoReviewUserIntent('Send the old image.', 'decorated', opts)).toBe('修改这张图片。');
   });
 
+  it.each([false, true])('restores queued delegated history without a new human message (unavailable=%s)', async unavailable => {
+    const {deps,session}=createDeps({readAutoReviewHistory:async()=>{
+      if(unavailable) throw new Error('unavailable');
+      return [{clientId:'human',role:'user',content:{text:'Do not deploy'},agentMeta:{delivery:'turn',autoReviewUserText:'Do not deploy'}}];
+    }});
+    const pending = createMakerSendTransaction(deps).sendToAgentAccepted('session-1','Deploy now',undefined,{
+      [AUTO_REVIEW_SOURCE_CONTENT]:'',[AUTO_REVIEW_DELEGATED_CONTINUATION]:true,
+    });
+    if (unavailable) {
+      await expect(pending).rejects.toThrow('unavailable');
+      expect(session.send).not.toHaveBeenCalled();
+    } else {
+      await pending;
+      expect(vi.mocked(session.send).mock.calls[0]![1]![AUTO_REVIEW_USER_INTENT]).toBe('Do not deploy');
+    }
+  });
+
   it.each([false, true])('restores scheduled intent from owner history, not the prompt (unavailable=%s)', async (unavailable) => {
     const { deps, session } = createDeps({ readAutoReviewHistory: vi.fn(async () => {
       if (unavailable) throw new Error('history unavailable');
@@ -2583,6 +2601,18 @@ describe('session-agent-switch handoff injection', () => {
       earlierUserMessages: ['修复伙伴未读状态，不要部署。'],
       currentUserMessage: '修吧。',
     });
+  });
+
+  it('persists empty plugin authorship rather than promoting plugin instructions', async () => {
+    const { deps } = createDeps();
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Plugin instructions', undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: '',
+      persistUserMessage: { clientId: 'plugin-input', content: 'Plugin instructions', delivery: 'turn' },
+    });
+    expect(deps.createDbMessage).toHaveBeenCalledWith('session-1', expect.objectContaining({
+      clientId: 'plugin-input',
+      agentMeta: expect.objectContaining({ autoReviewUserText: '', delivery: 'turn' }),
+    }), undefined);
   });
 
   it.each(['Earlier authorization; do not deploy.', ''])('preserves restored intent for wire-only recovery: %s', async (intent) => {
