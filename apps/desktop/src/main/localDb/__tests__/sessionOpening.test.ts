@@ -18,7 +18,7 @@ beforeEach(() => {
   setSessionOpeningModelAdmission(async request => {
     const route = resolveSessionExecutionSelection({ selection: request,
       availableAgents: ['codex'], availableModels: [{ id: 'model', efforts: [] }], hasCindyAiApiKey: false,
-      providerRouting: { availability: { codex: [{ id: 'connected', name: 'Connected', models: ['model'] }] },
+      providerRouting: { availability: { 'claude-code': [], pi: [], codex: [{ id: 'connected', name: 'Connected', models: ['model'] }] },
         resolveDefaultProviderIdForModel: () => 'connected' } });
     return { ...request, model: route.model, providerId: route.providerId, effort: route.effort ?? '' };
   });

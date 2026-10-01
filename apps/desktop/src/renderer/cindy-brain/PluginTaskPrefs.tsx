@@ -83,8 +83,8 @@ export function PluginTaskPrefs({
     .some(value => value !== undefined);
   const shownProvider = config.providerId ?? draft.lastByVendor[vendor]?.providerId ?? null;
   const shownModel = config.model ?? draft.lastByVendor[vendor].model;
-  const shownEffort = (config.effort ??
-    draft.lastByVendor[vendor]?.effort ??
+  const routeEffort = customized ? config.effort : draft.lastByVendor[vendor]?.effort;
+  const shownEffort = (routeEffort ??
     getEffortForModel(shownModel) ??
     'high') as Effort;
   const shownFast = config.fastMode ?? getFastModeForModel(shownModel);
@@ -179,7 +179,8 @@ export function PluginTaskPrefs({
             return save({ ...config, agentKind: vendor, providerId: shownProvider ?? undefined, model: shownModel, effort, fastMode: shownFast });
           }}
           onFastModeChange={(enabled) =>
-            save({ ...config, agentKind: vendor, providerId: shownProvider ?? undefined, model: shownModel, effort: shownEffort, fastMode: enabled })
+            save({ ...config, agentKind: vendor, providerId: shownProvider ?? undefined, model: shownModel,
+              effort: TASK_EFFORTS.has(routeEffort ?? '') ? routeEffort : undefined, fastMode: enabled })
           }
           onProviderChange={(providerId, modelId, reconciledEffort, reconciledFast) =>
             save({

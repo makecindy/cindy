@@ -10706,10 +10706,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const current = await sessionControlService.getSessionRuntime({ targetSessionId: taskId });
         if (!current.ok) throw new PluginTaskError('TASK_NOT_FOUND', current.message);
         await assertUnchanged();
+        const targetAgent = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
+        const pendingAgent = current.runtime.pendingMutation?.profile.agentKind;
+        const selectHarness = current.runtime.effectiveProfile.agentKind !== targetAgent
+          || (pendingAgent !== undefined && pendingAgent !== targetAgent);
         const result = await sessionControlService.setSessionRuntime({ targetSessionId: taskId,
           expectedGeneration: current.runtime.runtimeGeneration,
-          patch: { ...(current.runtime.effectiveProfile.agentKind !== (route.agentKind === 'cc' ? 'claude-code' : route.agentKind)
-              ? { harness: route.agentKind === 'cc' ? 'claude-code' as const : route.agentKind } : {}),
+          patch: { ...(selectHarness ? { harness: targetAgent } : {}),
             model: route.model, providerId: route.providerId, effort: (route.effort || null) as Effort | null,
             fastMode: route.fastMode } });
         if (!result.ok) throw new PluginTaskError(result.errorCode, result.message);

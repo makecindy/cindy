@@ -11,9 +11,12 @@ vi.mock('@/state/newMakerDraft', () => ({
   getEffortForModel: () => undefined, getFastModeForModel: () => false,
 }));
 vi.mock('@/components/new-chat/ModelSelector', () => ({ ModelSelector: (props: any) => (
+  <>
   <button disabled={props.disabled} data-testid="model" onClick={() => props.onUnifiedSelect({ engine: 'codex', providerId: 'openai', modelId: 'chosen', effort: 'high', fast: false })}>
     {props.vendorKey}/{props.currentProviderId}/{props.modelId}
   </button>
+  <button data-testid="fast" onClick={() => props.onFastModeChange(true)}>Fast</button>
+  </>
 ) }));
 vi.mock('@/components/new-chat/PermissionSelector', () => ({ PermissionSelector: (props: any) => (
   <button disabled={props.disabled} data-testid="permission" data-legacy-label={props.fallbackModeLabel}
@@ -26,6 +29,12 @@ beforeEach(() => {
   (window as any).electronAPI = { ghosts: { errandPrefsSync: () => ({ config: state.config }), setErrandConfig: state.save } };
 });
 afterEach(cleanup);
+it.each([undefined, 'medium'])('changing Fast preserves only the configured effort (%s), never the display fallback', async effort => {
+  state.config = {agentKind:'codex',providerId:'openai',model:'configured-model',effort};
+  render(<PluginTaskPrefs ghostId="plugin" />);
+  fireEvent.click(screen.getByTestId('fast'));
+  await waitFor(() => expect(state.save).toHaveBeenCalledWith('plugin', {...state.config, fastMode:true}));
+});
 it('previews the complete current panel route and uses ordinary task permissions independently', () => {
   render(<PluginTaskPrefs ghostId="plugin" />);
   expect(screen.getByTestId('model').textContent).toBe('codex/openai/gpt-6-astra');

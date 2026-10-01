@@ -22,6 +22,26 @@ function handler(kind: string, next: string, deps: Record<string, unknown>) {
   return compile(`return async function(pluginId,request){switch(request.kind){${branch}}}`, deps);
 }
 
+it.each([
+  {pending:'claude-code', target:'codex', harness:'codex'},
+  {pending:undefined, target:'cc', harness:'claude-code'},
+  {pending:undefined, target:'codex', harness:undefined},
+])('routes an explicit model choice through the correct runtime controller: %j', async ({pending,target,harness}) => {
+  const start = source.indexOf('      setModel: async (taskId, route, assertUnchanged) =>');
+  const property = source.slice(start, source.indexOf('      assertTeamPlanUnstarted:',start)).trim().replace(/,$/, '');
+  const set = vi.fn(async () => ({ok:true,status:'applied'}));
+  const apply = compile(`return ({${property}}).setModel;`, {PluginTaskError,sessionControlService:{
+    getSessionRuntime:async()=>({ok:true,runtime:{runtimeGeneration:7,effectiveProfile:{agentKind:'codex'},pendingMutation:pending ? {profile:{agentKind:pending}} : null}}),
+    setSessionRuntime:set,
+  }});
+  const assertCurrent=vi.fn();
+  await apply('task',{agentKind:target,providerId:'chosen',model:'chosen-model',effort:'medium',fastMode:false},assertCurrent);
+  expect(assertCurrent).toHaveBeenCalledOnce();
+  expect(set).toHaveBeenCalledWith({targetSessionId:'task',expectedGeneration:7,patch:{
+    ...(harness ? {harness} : {}),providerId:'chosen',model:'chosen-model',effort:'medium',fastMode:false,
+  }});
+});
+
 it.each(['auto', 'acceptEdits'])('exposes independent Plan Mode alongside stored %s permission', async permissionMode => {
   const start = source.indexOf('      readSession: async taskId =>');
   const property = source.slice(start, source.indexOf('      dispatch:', start)).trim().replace(/,$/, '');
