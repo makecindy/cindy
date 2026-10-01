@@ -4948,8 +4948,6 @@ interface ElectronAPI {
           workspaceKind: import('@/lib/ccAgent.types').WorkspaceKind;
           sidebarBucket: 'project' | 'dialogue';
           projectDir: string | null;
-          /** projectDir 下有 `.git`;旧主进程不给时视为未知。 */
-          isGitRepo?: boolean;
         }>;
         rejected: {
           codex: number;

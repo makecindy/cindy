@@ -42,6 +42,7 @@ const sessions = (...items: WorkbenchExternalCandidate[]) => vi.fn(async () => (
 
 const BRIEF = {
   docs: [`${PROJECT}/README.md`, `${PROJECT}/DESIGN.md`],
+  recent: [],
   git: { branch: 'main', changes: 2, commits: [], branches: [], remote: 'org/tapmon-art', remotes: ['org/tapmon-art', 'me/tapmon-art'] },
   github: { repo: 'me/tapmon-art', pullRequests: [], issues: [] },
 };

@@ -1,10 +1,10 @@
 /**
  * 伙伴工作台:主进程与渲染层共用的数据形状与纯推导。
  *
- * 工作台上的每一格都是一件任务(自动化也是任务的一种)。格子的状态只从宿主已有的
- * 真实信号推导——运行中、等待交互、上一轮出错或被打断、后台任务状态、自动化的启停
- * 与运行——不经过模型,也不另存一份状态。主进程(伙伴读取工作台的工具)和渲染层
- * (右侧栏的任务格)共用这里的同一套规则,两边说法一致。
+ * 工作台上的每一条都是一件事:Cindy 任务、本机外部会话、PR / issue / 建议或自动化。状态只从
+ * 宿主已有的真实信号推导——运行中、等待交互、上一轮出错或被打断、后台任务状态、自动化的启停
+ * 与运行——不经过模型,也不另存一份状态。主进程(伙伴读取工作台的工具)和渲染层(右侧栏的
+ * 任务列表)共用这里的同一套规则(状态推导、标题清洗、条目 id、参考校验、摘要),两边说法一致。
  */
 import { normalizeWorkingDirForGrouping, normalizeWorkingDirForStorage } from './workingDir';
 
@@ -301,41 +301,6 @@ export function deriveWorkbenchAutomationState(signals: WorkbenchAutomationSigna
   if (signals.queued) return 'queued';
   if (!signals.enabled) return 'stopped';
   return 'automation';
-}
-
-/** 汇总行与工具摘要的展示顺序;只列非零项。 */
-export const WORKBENCH_STATE_ORDER: readonly WorkbenchTaskState[] = [
-  'running',
-  'waiting',
-  'queued',
-  'stopped',
-  'automation',
-  'done',
-];
-
-export function countWorkbenchStates(
-  states: Iterable<WorkbenchTaskState>,
-): Record<WorkbenchTaskState, number> {
-  const counts: Record<WorkbenchTaskState, number> = {
-    running: 0,
-    waiting: 0,
-    queued: 0,
-    stopped: 0,
-    automation: 0,
-    done: 0,
-  };
-  for (const state of states) counts[state] += 1;
-  return counts;
-}
-
-/**
- * 任务格的排列:需要主人看一眼或还在推进的(在做 / 等你 / 排队 / 停着)在前,
- * 其次是自动化,做完的在最后;同一档内由调用方按最近活动倒序。
- */
-export function workbenchStateRank(state: WorkbenchTaskState): number {
-  if (state === 'automation') return 1;
-  if (state === 'done') return 2;
-  return 0;
 }
 
 /**

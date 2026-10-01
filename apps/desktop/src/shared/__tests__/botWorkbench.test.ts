@@ -8,13 +8,11 @@ import {
   validateWorkbenchRef,
   externalWorkbenchTaskId,
   parseWorkbenchTaskId,
-  countWorkbenchStates,
   deriveWorkbenchAutomationState,
   deriveWorkbenchSessionState,
   findWorkbenchProject,
   importedSessionOrigin,
   isWorkbenchTaskSource,
-  workbenchStateRank,
 } from '../botWorkbench';
 
 describe('deriveWorkbenchSessionState', () => {
@@ -89,10 +87,7 @@ describe('helpers', () => {
     }
   });
 
-  it('counts, ranks and bounds summaries', () => {
-    expect(countWorkbenchStates(['running', 'done', 'done'])).toMatchObject({ running: 1, done: 2, waiting: 0 });
-    expect(workbenchStateRank('stopped')).toBeLessThan(workbenchStateRank('automation'));
-    expect(workbenchStateRank('automation')).toBeLessThan(workbenchStateRank('done'));
+  it('bounds summaries', () => {
     expect(boundWorkbenchSummary('  a\n\nb  ')).toBe('a b');
     expect(boundWorkbenchSummary('')).toBeNull();
     expect(boundWorkbenchSummary('x'.repeat(500))).toHaveLength(160);

@@ -29,7 +29,11 @@ import {
 } from '../appSessionState.js';
 import { routineTools } from '../routines/service.js';
 import { normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
-import { WORKBENCH_RECENT_WINDOW_MS, type WorkbenchDelegationStatus } from '../../shared/botWorkbench.js';
+import {
+  isCaseInsensitivePlatform,
+  WORKBENCH_RECENT_WINDOW_MS,
+  type WorkbenchDelegationStatus,
+} from '../../shared/botWorkbench.js';
 import {
   broadcastBotWorkbenchChanged,
   deleteBotWorkbenchJudgment,
@@ -269,7 +273,7 @@ async function listExternalCandidates(projectDirs: readonly string[]) {
       codexAccountOwner: codexAccountOwnerDir(),
     }),
     projectDirs,
-    caseInsensitive: process.platform === 'win32',
+    caseInsensitive: isCaseInsensitivePlatform(process.platform),
     since: now - WORKBENCH_RECENT_WINDOW_MS,
     now,
   });
@@ -361,7 +365,7 @@ export type BotWorkbenchSendDeps = Pick<BotWorkbenchAccessDeps, 'sendToSession' 
 /**
  * 按调用时的账号作用域组装一次工具服务:作用域在调用期间切换则中止,不做投递。
  */
-export function createDesktopBotWorkbenchAccess(send: BotWorkbenchSendDeps): BotWorkbenchAccess {
+function createDesktopBotWorkbenchAccess(send: BotWorkbenchSendDeps): BotWorkbenchAccess {
   const scopeKey = activeOwnerScopeKey();
   const userDataDir = ownerScopedUserDataPath();
   return createBotWorkbenchAccess({
@@ -394,7 +398,7 @@ export function createDesktopBotWorkbenchAccess(send: BotWorkbenchSendDeps): Bot
     listSchedules: listProjectSchedules,
     sendToSession: send.sendToSession,
     stopSessionTurn: send.stopSessionTurn,
-    caseInsensitive: process.platform === 'win32',
+    caseInsensitive: isCaseInsensitivePlatform(process.platform),
     isOwnerScopeCurrent: () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === scopeKey,
   });
 }

@@ -8,8 +8,8 @@
  *    Codex 的可导入候选与项目里的自动化;
  *  - 已接手项目的任务列表:项目里最近 30 天的 Cindy 任务一律列出(含主人自己开的,不管伙伴判断过没有);
  *    本机外部会话与伙伴从项目素材里写下的 PR / issue / 建议只在伙伴判为「没做完 / 聊过没下文」时列出;
- *    另有伙伴自己开的后台任务与自动化;状态用 `shared/botWorkbench.ts`
- *    与主进程同一套规则推导。没有判断也没有运行信号的候选不显示。
+ *    另有伙伴自己开的后台任务与自动化;状态用 `shared/botWorkbench.ts` 与主进程同一套规则推导,
+ *    再由 `groupWorkbenchTiles` 分成 等你 / 在做 / 待做 / 做完 四组。
  */
 import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activity';
 

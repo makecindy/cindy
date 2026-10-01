@@ -7789,6 +7789,7 @@
   "bots": {
     "workbench": {
       "title": "Workbench",
+      "open": "Open workbench",
       "emptyTitle": "Give {{name}} a project",
       "emptyDescription": "Hand the work already on your computer to {{name}}. It first looks over the project's docs, recent commits and PRs, and past sessions, picks out what's unfinished or worth doing, and asks which one to continue.",
       "scanning": "Looking for projects on this computer…",
