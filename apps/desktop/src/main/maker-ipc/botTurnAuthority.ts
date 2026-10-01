@@ -220,6 +220,13 @@ const TARGETED_TOOLS = new Map<string, { read: boolean }>([
   ['cancel_session_queued_message', { read: false }],
 ]);
 
+/** 批量整理任务的工具：从参数里取出全部目标任务，按同样的目标规则判定。 */
+const TARGETED_BATCH_TOOLS = new Map<string, (args: unknown) => unknown[] | null>([
+  ['rename_sessions', (args) => arrayArg(args, 'changes')?.map((change) => stringArg(change, 'session_id')) ?? null],
+  ['archive_sessions', (args) => arrayArg(args, 'session_ids')],
+  ['unarchive_sessions', (args) => arrayArg(args, 'session_ids')],
+]);
+
 /** 自动化里只读或只作用于本次运行的工具；其余（新建 / 改 / 删 / 暂停 / 立即跑）只在主人本人那一轮。 */
 const SCHEDULER_READ_TOOLS = new Set(['schedule_list', 'schedule_get', 'schedule_list_runs']);
 const SCHEDULER_CURRENT_RUN_TOOLS = new Set(['schedule_notify_current_run', 'schedule_silence_current_run']);
@@ -228,6 +235,12 @@ function stringArg(args: unknown, key: string): string | null {
   if (!args || typeof args !== 'object') return null;
   const value = (args as Record<string, unknown>)[key];
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function arrayArg(args: unknown, key: string): unknown[] | null {
+  if (!args || typeof args !== 'object') return null;
+  const value = (args as Record<string, unknown>)[key];
+  return Array.isArray(value) ? value : null;
 }
 
 export function decideBotToolCall(
@@ -257,6 +270,16 @@ export function decideBotToolCall(
     return { kind: 'targets', sessionIds: [sessionId], scope: authority === 'arranged' ? 'own-or-handed' : 'own' };
   }
 
+  const batchTargets = TARGETED_BATCH_TOOLS.get(tool);
+  if (batchTargets) {
+    const ids = batchTargets(args);
+    const sessionIds = ids?.map((id) => (typeof id === 'string' ? id.trim() : '')) ?? [];
+    if (sessionIds.length === 0 || sessionIds.some((id) => !id)) {
+      return { kind: 'deny', errorCode: 'INVALID_ARGS', message: '缺少目标任务的 session id。' };
+    }
+    return { kind: 'targets', sessionIds: [...new Set(sessionIds)], scope: authority === 'arranged' ? 'own-or-handed' : 'own' };
+  }
+
   if (tool === 'send_to_session') {
     const target = stringArg(args, 'target_session_id');
     // 新建任务只在主人本人那一轮；其余档用 start_session_task 开自己的后台任务。
@@ -264,7 +287,7 @@ export function decideBotToolCall(
     return { kind: 'targets', sessionIds: [target], scope: authority === 'arranged' ? 'own-or-handed' : 'own' };
   }
 
-  // 其余一律只在主人本人那一轮：归档 / 改名 / 标签 / 项目改名移除与移动任务 / 改应用默认模型 /
+  // 其余一律只在主人本人那一轮：标签 / 项目改名移除与移动任务 / 改应用默认模型 /
   // 接手或移除项目 / 反馈 / 技能发布与学习 / 应用更新，以及将来新增、这里还没登记的工具。
   return OWNER_TURN_REQUIRED;
 }

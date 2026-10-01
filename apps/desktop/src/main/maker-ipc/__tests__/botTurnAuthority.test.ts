@@ -46,8 +46,7 @@ describe('decideBotToolCall', () => {
   });
 
   it.each<[string, BotTurnAuthority]>([
-    ['archive_sessions', 'arranged'],
-    ['rename_sessions', 'arranged'],
+    ['add_task_tags', 'arranged'],
     ['set_app_default_model', 'arranged'],
     ['add_workbench_project', 'arranged'],
     ['remove_workbench_project', 'arranged'],
@@ -74,6 +73,18 @@ describe('decideBotToolCall', () => {
     expect(decideBotToolCall('cindy_helper', 'steer_session', args, 'other'))
       .toEqual({ kind: 'targets', sessionIds: ['task-1'], scope: 'own' });
     expect(decideBotToolCall('cindy_helper', 'stop_session_turn', {}, 'other'))
+      .toMatchObject({ kind: 'deny', errorCode: 'INVALID_ARGS' });
+  });
+
+  it('checks every target of rename and archive batches by tier', () => {
+    expect(decideBotToolCall('cindy_helper', 'rename_sessions', {
+      changes: [{ session_id: 'a', title: 'x' }, { session_id: 'b', title: 'y' }, { session_id: 'a', title: 'z' }],
+    }, 'arranged')).toEqual({ kind: 'targets', sessionIds: ['a', 'b'], scope: 'own-or-handed' });
+    expect(decideBotToolCall('cindy_helper', 'archive_sessions', { session_ids: ['a'] }, 'other'))
+      .toEqual({ kind: 'targets', sessionIds: ['a'], scope: 'own' });
+    expect(decideBotToolCall('cindy_helper', 'unarchive_sessions', { session_ids: [] }, 'other'))
+      .toMatchObject({ kind: 'deny', errorCode: 'INVALID_ARGS' });
+    expect(decideBotToolCall('cindy_helper', 'rename_sessions', { changes: [{ title: 'x' }] }, 'arranged'))
       .toMatchObject({ kind: 'deny', errorCode: 'INVALID_ARGS' });
   });
 
@@ -221,12 +232,22 @@ describe('createBotToolCallAuthorizer', () => {
   it('judges a non-main Bot session at the lowest tier even if the owner typed', async () => {
     expect(await resolveBotCallerAuthority(db, 'bot-lane', () => OWNER_INPUT))
       .toEqual({ kind: 'bot', botId: 'bot-1', main: false, authority: 'other' });
-    expect(await authorizer(OWNER_INPUT)(call('archive_sessions', {}, 'bot-lane')))
+    expect(await authorizer(OWNER_INPUT)(call('set_app_default_model', {}, 'bot-lane')))
       .toMatchObject({ ok: false, errorCode: 'OWNER_TURN_REQUIRED' });
+    expect(await authorizer(OWNER_INPUT)(call('archive_sessions', { session_ids: ['owner-task'] }, 'bot-lane')))
+      .toMatchObject({ ok: false, errorCode: 'TASK_OUT_OF_SCOPE' });
+  });
+
+  it('lets a non-owner turn archive only tasks the Bot owns', async () => {
+    delegation('d1', 'bot-main', 'child-1');
+    const auth = authorizer(input('bot-delegation-completion:missing'));
+    expect(await auth(call('archive_sessions', { session_ids: ['child-1'] }))).toEqual({ ok: true });
+    expect(await auth(call('archive_sessions', { session_ids: ['child-1', 'owner-task'] })))
+      .toMatchObject({ ok: false, errorCode: 'TASK_OUT_OF_SCOPE' });
   });
 
   it('keeps remote Bots on their old helper behavior, judging only local automations by turn', async () => {
-    expect(await authorizer(input('bot-dm:1'))(call('archive_sessions', {}, 'bot-remote'))).toEqual({ ok: true });
+    expect(await authorizer(input('bot-dm:1'))(call('set_app_default_model', {}, 'bot-remote'))).toEqual({ ok: true });
     expect(await authorizer(OWNER_INPUT)(call('schedule_create', {}, 'bot-remote', 'cindy_scheduler'))).toEqual({ ok: true });
     expect(await authorizer(input('bot-dm:1'))(call('schedule_create', {}, 'bot-remote', 'cindy_scheduler')))
       .toMatchObject({ ok: false, errorCode: 'OWNER_TURN_REQUIRED' });

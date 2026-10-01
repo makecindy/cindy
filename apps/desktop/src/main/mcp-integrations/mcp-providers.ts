@@ -196,21 +196,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     },
   };
 
-  const withAccountDataAccess = async <T>(sessionId: string | undefined, operation: (assertCurrent: () => Promise<void>) => Promise<T>): Promise<T> => {
-    const dbClient = tryGetDbClient();
-    if (!dbClient || !sessionId) throw new Error('Account data caller unavailable');
-    const assertAccess = async () => {
-      if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) throw new Error('Account changed');
-      if (await resolveHelperSurface(dbClient, sessionId, getSessionInputProvenance) === 'restricted')
-        throw new Error('Account data is unavailable for plugin-managed tasks');
-      if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) throw new Error('Account changed');
-    };
-    await assertAccess();
-    const result = await operation(assertAccess);
-    await assertAccess();
-    return result;
-  };
-
   // 伙伴主任务的每次调用按「这一轮是谁触发的」判定（maker-ipc/botTurnAuthority.ts）。
   const authorizeBotToolCall = createBotToolCallAuthorizer({
     getDb: () => (isAppSessionBoundaryPending() ? null : tryGetDbClient()),
@@ -224,6 +209,21 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     if (!dbClient || !callerSessionId || isAppSessionBoundaryPending()) return false;
     const caller = await resolveBotCallerAuthority(dbClient, callerSessionId, getSessionInputProvenance);
     return caller.kind === 'bot' && caller.main && caller.authority !== 'other';
+  };
+
+  const withAccountDataAccess = async <T>(sessionId: string | undefined, operation: (assertCurrent: () => Promise<void>) => Promise<T>): Promise<T> => {
+    const dbClient = tryGetDbClient();
+    if (!dbClient || !sessionId) throw new Error('Account data caller unavailable');
+    const assertAccess = async () => {
+      if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) throw new Error('Account changed');
+      if (await resolveHelperSurface(dbClient, sessionId, getSessionInputProvenance) === 'restricted')
+        throw new Error('Account data is unavailable for plugin-managed tasks');
+      if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) throw new Error('Account changed');
+    };
+    await assertAccess();
+    const result = await operation(assertAccess);
+    await assertAccess();
+    return result;
   };
 
   const providers = createLiziMcpProviders({
@@ -603,6 +603,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           };
         }
       },
+      // 伙伴主任务的每次调用按本轮来源判定;放在 resolveSurface 之前,与工具面分类各自独立。
+      authorizeCall: authorizeBotToolCall,
       resolveSurface: async ({ sessionId }) => {
         const dbClient = tryGetDbClient();
         if (!dbClient || isAppSessionBoundaryPending()) return 'restricted';
@@ -610,7 +612,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) return 'restricted';
         return surface;
       },
-      authorizeCall: authorizeBotToolCall,
       sessionQueue: {
         listSessionQueue: wrap((service, sessionId: string) => service.listSessionQueue(sessionId)),
         listSessionQueuedCounts: wrap((service, sessionIds: string[]) =>

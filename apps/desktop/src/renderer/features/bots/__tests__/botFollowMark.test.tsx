@@ -21,8 +21,12 @@ vi.mock('../botStore', () => ({
   ensureBotProfilesLoaded: vi.fn(async () => h.profiles),
 }));
 
-import { BotFollowMark } from '../BotFollowMark';
+import { BotFollowMark, useSessionFollowers } from '../BotFollowMark';
 import { __testing } from '../botFollowScopes';
+
+function Row({ session: value }: { session: Session }) {
+  return <BotFollowMark followers={useSessionFollowers(value)} />;
+}
 
 const bot = (id: string, name: string, patch: Record<string, unknown> = {}) => ({
   id, name, avatar: '', avatarColor: 'blue', enabled: true, status: 'active', hiddenAt: null, ...patch,
@@ -52,7 +56,7 @@ afterEach(() => {
 describe('BotFollowMark', () => {
   it('marks a task inside a handed-over project with its Bot, loading the scopes once for all rows', async () => {
     await act(async () => {
-      render(<><BotFollowMark session={session()} /><BotFollowMark session={session({ id: 's2' })} /></>);
+      render(<><Row session={session()} /><Row session={session({ id: 's2' })} /></>);
     });
     const marks = screen.getAllByTestId('bot-follow-mark');
     expect(marks).toHaveLength(2);
@@ -63,21 +67,21 @@ describe('BotFollowMark', () => {
   it('stays empty outside the project, for Bot-owned or remote tasks, and for hidden Bots', async () => {
     await act(async () => {
       render(<>
-        <BotFollowMark session={session({ workingDir: '/Users/me/repo-old' })} />
-        <BotFollowMark session={session({ source: 'bot' })} />
-        <BotFollowMark session={session({ remoteHostId: 'ssh-1' })} />
+        <Row session={session({ workingDir: '/Users/me/repo-old' })} />
+        <Row session={session({ source: 'bot' })} />
+        <Row session={session({ remoteHostId: 'ssh-1' })} />
       </>);
     });
     expect(screen.queryByTestId('bot-follow-mark')).toBeNull();
 
     cleanup();
     h.profiles = [bot('bot-1', 'Dash', { hiddenAt: 1 })];
-    await act(async () => { render(<BotFollowMark session={session()} />); });
+    await act(async () => { render(<Row session={session()} />); });
     expect(screen.queryByTestId('bot-follow-mark')).toBeNull();
   });
 
   it('reloads when a workbench changes', async () => {
-    await act(async () => { render(<BotFollowMark session={session()} />); });
+    await act(async () => { render(<Row session={session()} />); });
     followScopes.mockResolvedValueOnce([
       { botId: 'bot-1', directories: ['/Users/me/repo'] },
       { botId: 'bot-2', directories: ['/Users/me'] },
