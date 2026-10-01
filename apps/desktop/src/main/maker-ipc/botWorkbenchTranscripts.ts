@@ -341,9 +341,12 @@ async function statFile(source: WorkbenchExternalSource, file: string, id: strin
   return stat?.isFile() ? { source, file, id, mtimeMs: stat.mtimeMs, size: stat.size } : null;
 }
 
-/** Claude Code 的项目存储名:路径里的分隔符与非字母数字都换成 `-`(两种写法都试)。 */
+/**
+ * Claude Code 的项目存储名:路径分隔符(含 Windows 的 `\\`)与盘符冒号换成 `-`,另一种写法把所有
+ * 非字母数字都换成 `-`(与 CLI 的转码一致),两种都试。
+ */
 export function claudeStorageNames(projectDir: string): string[] {
-  return [...new Set([projectDir.replace(/[/:]/g, '-'), projectDir.replace(/[^A-Za-z0-9]/g, '-')])];
+  return [...new Set([projectDir.replace(/[\\/:]/g, '-'), projectDir.replace(/[^A-Za-z0-9]/g, '-')])];
 }
 
 const CODEX_ROLLOUT_ID = /rollout-.*?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;

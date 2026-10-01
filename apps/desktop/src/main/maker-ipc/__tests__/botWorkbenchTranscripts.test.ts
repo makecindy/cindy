@@ -97,6 +97,7 @@ describe('transcript helpers', () => {
 
   it('derives Claude storage names and recent Codex day folders', () => {
     expect(claudeStorageNames('/Users/me/Code/my.app')).toEqual(['-Users-me-Code-my.app', '-Users-me-Code-my-app']);
+    expect(claudeStorageNames('C:\\Users\\me\\app')).toEqual(['C--Users-me-app']);
     const days = recentCodexDayDirs('/c/sessions', new Date(2026, 9, 1, 12).getTime(), 2);
     expect(days).toEqual([
       path.join('/c/sessions', '2026', '10', '01'),

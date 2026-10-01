@@ -35,12 +35,12 @@ export interface WorkbenchSessionRoots {
   pi: string[];
 }
 
-function unique(paths: Array<string | null | undefined>): string[] {
+function unique(p: path.PlatformPath, paths: Array<string | null | undefined>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of paths) {
     if (!raw) continue;
-    const resolved = path.resolve(raw);
+    const resolved = p.resolve(raw);
     if (seen.has(resolved)) continue;
     seen.add(resolved);
     out.push(resolved);
@@ -49,36 +49,38 @@ function unique(paths: Array<string | null | undefined>): string[] {
 }
 
 export function workbenchSessionRoots(input: WorkbenchSessionRootsInput): WorkbenchSessionRoots {
-  const profileDirs = unique([
+  // 按目标平台拼路径,而不是按运行测试的宿主:同一份输入在任何机器上得到同样的结果。
+  const p = input.platform === 'win32' ? path.win32 : path.posix;
+  const profileDirs = unique(p, [
     input.userDataDir,
-    ...(input.appDataDir ? CINDY_PROFILE_DIR_NAMES.map((name) => path.join(input.appDataDir!, name)) : []),
+    ...(input.appDataDir ? CINDY_PROFILE_DIR_NAMES.map((name) => p.join(input.appDataDir!, name)) : []),
   ]);
 
-  const claude = unique([
-    input.env.CLAUDE_CONFIG_DIR ? path.join(input.env.CLAUDE_CONFIG_DIR, 'projects') : null,
-    path.join(input.homeDir, '.claude', 'projects'),
+  const claude = unique(p, [
+    input.env.CLAUDE_CONFIG_DIR ? p.join(input.env.CLAUDE_CONFIG_DIR, 'projects') : null,
+    p.join(input.homeDir, '.claude', 'projects'),
   ]);
 
-  const codexHomes = unique([
+  const codexHomes = unique(p, [
     input.env.CODEX_HOME,
-    path.join(input.homeDir, '.codex'),
+    p.join(input.homeDir, '.codex'),
     ...(input.platform === 'darwin'
       ? [
-          path.join(input.homeDir, 'Library', 'Application Support', 'Codex', 'codex-home'),
-          path.join(input.homeDir, 'Library', 'Application Support', 'Codex'),
+          p.join(input.homeDir, 'Library', 'Application Support', 'Codex', 'codex-home'),
+          p.join(input.homeDir, 'Library', 'Application Support', 'Codex'),
         ]
       : input.platform === 'win32'
         ? input.env.APPDATA
-          ? [path.join(input.env.APPDATA, 'Codex', 'codex-home'), path.join(input.env.APPDATA, 'Codex')]
+          ? [p.join(input.env.APPDATA, 'Codex', 'codex-home'), p.join(input.env.APPDATA, 'Codex')]
           : []
-        : [path.join(input.homeDir, '.config', 'codex')]),
-    ...profileDirs.map((dir) => path.join(dir, 'codex-home')),
+        : [p.join(input.homeDir, '.config', 'codex')]),
+    ...profileDirs.map((dir) => p.join(dir, 'codex-home')),
   ]);
-  const codex = unique(codexHomes.flatMap((home) => [path.join(home, 'sessions'), path.join(home, 'archived_sessions')]));
+  const codex = unique(p, codexHomes.flatMap((home) => [p.join(home, 'sessions'), p.join(home, 'archived_sessions')]));
 
   const owner = input.codexAccountOwner && /^[0-9a-f]{64}$/.test(input.codexAccountOwner) ? input.codexAccountOwner : null;
-  const codexAccounts = owner ? unique(profileDirs.map((dir) => path.join(dir, 'codex-accounts', owner))) : [];
+  const codexAccounts = owner ? unique(p, profileDirs.map((dir) => p.join(dir, 'codex-accounts', owner))) : [];
 
-  const pi = unique(profileDirs.map((dir) => path.join(dir, 'pi-agent-home', 'sessions')));
+  const pi = unique(p, profileDirs.map((dir) => p.join(dir, 'pi-agent-home', 'sessions')));
   return { claude, codex, codexAccounts, pi };
 }
