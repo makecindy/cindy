@@ -4926,6 +4926,8 @@ interface ElectronAPI {
           workspaceKind: import('@/lib/ccAgent.types').WorkspaceKind;
           sidebarBucket: 'project' | 'dialogue';
           projectDir: string | null;
+          /** projectDir 下有 `.git`;旧主进程不给时视为未知。 */
+          isGitRepo?: boolean;
         }>;
         rejected: {
           codex: number;
@@ -4933,6 +4935,10 @@ interface ElectronAPI {
           existing: number;
         };
         currentProjectDirs: string[];
+        /** 候选与本机已有项目里是 git 仓库的目录。 */
+        gitRepoDirs?: string[];
+        /** 主目录、应用数据目录、系统临时目录(伙伴工作台过滤非项目目录用)。 */
+        pathHints?: { homeDir: string | null; userDataDir: string | null; tempDirs: string[] };
       }>;
       importSelected: (
         items: Array<{ source: 'codex' | 'claude'; id: string }>,

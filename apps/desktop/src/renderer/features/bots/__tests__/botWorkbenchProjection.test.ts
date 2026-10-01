@@ -5,7 +5,11 @@ import {
   buildWorkbenchProjectOptions,
   buildWorkbenchTiles,
   collectBotHiddenSessionIds,
+  isNonProjectDir,
+  looksGeneratedDirName,
   pickImportCandidates,
+  tierWorkbenchProjectOptions,
+  type WorkbenchProjectOption,
   type WorkbenchDelegationInput,
 } from '../botWorkbenchProjection';
 
@@ -222,5 +226,108 @@ describe('import candidates and hidden sessions', () => {
   it('collects every Bot-linked session from the profile projection', () => {
     expect(collectBotHiddenSessionIds([{ sessions: [{ id: 'a' }, { id: 'b' }] }, { sessions: [{ id: 'c' }] }]))
       .toEqual(new Set(['a', 'b', 'c']));
+  });
+});
+
+describe('project picker filtering and tiers', () => {
+  const NOW = Date.UTC(2026, 9, 1);
+  const DAY = 24 * 60 * 60 * 1000;
+  const hints = {
+    homeDir: '/Users/me',
+    userDataDir: '/Users/me/Library/Application Support/Cindy Dev',
+    tempDirs: ['/var/folders/ab/T'],
+  };
+  const option = (dir: string, patch: Partial<WorkbenchProjectOption> = {}): WorkbenchProjectOption => ({
+    dir,
+    name: dir.split('/').pop() ?? dir,
+    taskCount: 0,
+    automationCount: 0,
+    claudeCount: 0,
+    codexCount: 0,
+    latestActivityMs: NOW - DAY,
+    isGitRepo: false,
+    ...patch,
+  });
+
+  it('drops the home folder, Cindy data, Bot workspaces and temp / tool caches', () => {
+    for (const dir of [
+      '/Users/me',
+      '/Users/me/Library/Application Support/Cindy Dev/owner/bots/b1/workspace',
+      '/tmp/scratch',
+      '/private/tmp/x',
+      '/var/folders/ab/T/cli_aae4',
+      '/Users/me/Library/Caches/foo',
+      '/Users/me/.cache/x',
+      '/Users/me/.codex/sessions',
+      '/Users/me/.claude/projects/x',
+      '/Users/me/.cindy',
+      '/Users/me/.cursor/worktrees/a',
+    ]) {
+      expect(isNonProjectDir(dir, hints, false), dir).toBe(true);
+    }
+    expect(isNonProjectDir('/Users/me/Code/cindy', hints, false)).toBe(false);
+    // Without host hints the common home shapes are still recognized.
+    expect(isNonProjectDir('/Users/someone', null, false)).toBe(true);
+    expect(isNonProjectDir('/Users/someone/.codex/x', null, false)).toBe(true);
+    expect(isNonProjectDir('C:/Users/me', null, true)).toBe(true);
+  });
+
+  it('recognizes generated directory names but not ordinary ones', () => {
+    for (const name of [
+      '6a7a8ec7-7e91-440b-9c1d-2f3e4a5b6c7d',
+      '1a34b5b6-0000-4000-8000-000000000000',
+      'cli_aae4722842785d27',
+      'telegram-8678037594',
+      'a1b2c3d4e5f60718',
+    ]) {
+      expect(looksGeneratedDirName(name), name).toBe(true);
+    }
+    for (const name of ['cindy', 'filoai-frontend', 'photos-gps', '3-codex', 'sprint-12', 'tapmon-art']) {
+      expect(looksGeneratedDirName(name), name).toBe(false);
+    }
+  });
+
+  it('puts git repos, Cindy projects and busy folders first, folds the rest', () => {
+    const { primary, folded } = tierWorkbenchProjectOptions(
+      [
+        option('/Users/me/Code/cindy', { isGitRepo: true, latestActivityMs: NOW - 1 }),
+        option('/Users/me/Code/filoai-frontend', { codexCount: 3, latestActivityMs: NOW - 2 }),
+        option('/Users/me/Code/notes', { taskCount: 1 }),
+        option('/Users/me', { taskCount: 9 }),
+        option('/Users/me/Library/Application Support/Cindy Dev/o/bots/b/workspace', { taskCount: 4 }),
+        option('/Users/me/tmp/6a7a8ec7-7e91-440b-9c1d-2f3e4a5b6c7d', { taskCount: 5, isGitRepo: true }),
+        option('/Users/me/Code/photos-gps', { claudeCount: 1, latestActivityMs: NOW - 30 * DAY }),
+        option('/Users/me/Code/3-codex', { codexCount: 1 }),
+      ],
+      { hints, caseInsensitive: false, now: NOW },
+    );
+    expect(primary.map((item) => item.name)).toEqual(['cindy', 'filoai-frontend', 'notes']);
+    expect(folded.map((item) => item.name)).toEqual([
+      '3-codex',
+      '6a7a8ec7-7e91-440b-9c1d-2f3e4a5b6c7d',
+      'photos-gps',
+    ]);
+  });
+
+  it('shows at most five first-tier rows and folds the overflow by recency', () => {
+    const options = Array.from({ length: 7 }, (_, index) =>
+      option(`/Users/me/Code/p${index}`, { isGitRepo: true, latestActivityMs: NOW - index * DAY }),
+    );
+    const { primary, folded } = tierWorkbenchProjectOptions(options, { hints, caseInsensitive: false, now: NOW });
+    expect(primary.map((item) => item.name)).toEqual(['p0', 'p1', 'p2', 'p3', 'p4']);
+    expect(folded.map((item) => item.name)).toEqual(['p5', 'p6']);
+  });
+
+  it('marks git repositories reported by the host scan', () => {
+    const [cindy] = buildWorkbenchProjectOptions({
+      sessions: [session('c1', { workingDir: CINDY })],
+      hiddenIds: new Set(),
+      schedules: [],
+      candidates: [],
+      gitRepoDirs: [CINDY],
+      localPlatform: 'darwin',
+      caseInsensitive: false,
+    });
+    expect(cindy).toMatchObject({ name: 'cindy', isGitRepo: true });
   });
 });

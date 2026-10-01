@@ -38,7 +38,9 @@ import {
   buildWorkbenchTiles,
   collectBotHiddenSessionIds,
   pickImportCandidates,
+  tierWorkbenchProjectOptions,
   type ExternalSessionCandidate,
+  type WorkbenchPathHints,
   type WorkbenchProjectOption,
   type WorkbenchRoutineInput,
   type WorkbenchTile,
@@ -402,7 +404,12 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
 
 type ScanState =
   | { kind: 'loading' }
-  | { kind: 'ready'; candidates: ExternalSessionCandidate[] }
+  | {
+      kind: 'ready';
+      candidates: ExternalSessionCandidate[];
+      gitRepoDirs: string[];
+      pathHints: WorkbenchPathHints | null;
+    }
   | { kind: 'failed' };
 
 type ProjectOptionsInput = Parameters<typeof buildWorkbenchProjectOptions>[0];
@@ -434,13 +441,14 @@ function ProjectPicker({
   const [scan, setScan] = useState<ScanState>({ kind: 'loading' });
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showFolded, setShowFolded] = useState(false);
   const [now] = useState(() => Date.now());
 
   // 本机 Claude Code / Codex 的候选只在打开空状态时扫描一次(主进程带缓存与并发去重),不轮询。
   useEffect(() => {
     const api = window.electronAPI?.localDb?.sessionImport;
     if (!api) {
-      setScan({ kind: 'ready', candidates: [] });
+      setScan({ kind: 'ready', candidates: [], gitRepoDirs: [], pathHints: null });
       return;
     }
     let alive = true;
@@ -460,6 +468,8 @@ function ProjectPicker({
               updatedAt: item.updatedAt,
               archived: item.archived,
             })),
+          gitRepoDirs: result.gitRepoDirs ?? [],
+          pathHints: result.pathHints ?? null,
         });
       })
       .catch(() => {
@@ -471,6 +481,8 @@ function ProjectPicker({
   }, []);
 
   const candidates = useMemo(() => (scan.kind === 'ready' ? scan.candidates : []), [scan]);
+  const gitRepoDirs = useMemo(() => (scan.kind === 'ready' ? scan.gitRepoDirs : []), [scan]);
+  const pathHints = scan.kind === 'ready' ? scan.pathHints : null;
   const options = useMemo(
     () =>
       buildWorkbenchProjectOptions({
@@ -478,12 +490,20 @@ function ProjectPicker({
         hiddenIds,
         schedules,
         candidates,
+        gitRepoDirs,
         localPlatform: platform,
         caseInsensitive,
         excludeDirs,
       }),
-    [sessions, hiddenIds, schedules, candidates, platform, caseInsensitive, excludeDirs],
+    [sessions, hiddenIds, schedules, candidates, gitRepoDirs, platform, caseInsensitive, excludeDirs],
   );
+  // 不像用户项目的目录直接不列;像临时目录、只有零星会话的折叠到「还有 N 个」里。
+  const tiers = useMemo(
+    () => tierWorkbenchProjectOptions(options, { hints: pathHints, caseInsensitive, now }),
+    [options, pathHints, caseInsensitive, now],
+  );
+  const visible = showFolded ? [...tiers.primary, ...tiers.folded] : tiers.primary;
+  const listed = tiers.primary.length + tiers.folded.length;
   const chosen = options.find((option) => option.dir === selected) ?? null;
 
   const handOver = useCallback(
@@ -576,7 +596,7 @@ function ProjectPicker({
         role="radiogroup"
         aria-label={t('bots.workbench.emptyTitle', { name: botName })}
       >
-        {options.map((option) => (
+        {visible.map((option) => (
           <button
             key={option.dir}
             type="button"
@@ -605,13 +625,28 @@ function ProjectPicker({
             </span>
           </button>
         ))}
-        {scan.kind === 'loading' && options.length === 0 ? (
+        {tiers.folded.length > 0 ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            tone="quiet"
+            compact
+            className="-ml-3 self-start"
+            aria-expanded={showFolded}
+            onClick={() => setShowFolded((value) => !value)}
+          >
+            {showFolded
+              ? t('bots.workbench.hideMoreProjects')
+              : t('bots.workbench.moreProjects', { count: tiers.folded.length })}
+          </Button>
+        ) : null}
+        {scan.kind === 'loading' && listed === 0 ? (
           <div className="flex items-center gap-2 py-2 text-12 text-[var(--text-tertiary)]">
             <Spinner size={14} aria-hidden />
             {t('bots.workbench.scanning')}
           </div>
         ) : null}
-        {scan.kind !== 'loading' && options.length === 0 ? (
+        {scan.kind !== 'loading' && listed === 0 ? (
           <p className="text-12 leading-[18px] text-[var(--text-tertiary)]">
             {t('bots.workbench.noProjects', { name: botName })}
           </p>
@@ -665,7 +700,9 @@ function grantText(option: WorkbenchProjectOption, botName: string, language: st
   const claude = Math.min(option.claudeCount, WORKBENCH_IMPORT_LIMIT);
   const codex = Math.min(option.codexCount, Math.max(0, WORKBENCH_IMPORT_LIMIT - claude));
   const items = [
-    option.taskCount > 0 ? t('bots.workbench.grantTasks', { count: option.taskCount }) : '',
+    option.taskCount > 0
+      ? t(claude + codex > 0 ? 'bots.workbench.grantCindy' : 'bots.workbench.grantTasks', { count: option.taskCount })
+      : '',
     claude > 0 ? t('bots.workbench.grantClaude', { count: claude }) : '',
     codex > 0 ? t('bots.workbench.grantCodex', { count: codex }) : '',
     option.automationCount > 0 ? t('bots.workbench.grantAutomations', { count: option.automationCount }) : '',

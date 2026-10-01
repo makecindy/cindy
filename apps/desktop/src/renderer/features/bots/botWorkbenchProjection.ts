@@ -175,6 +175,8 @@ export interface WorkbenchProjectOption {
   claudeCount: number;
   codexCount: number;
   latestActivityMs: number;
+  /** 目录下有 `.git`(主进程扫描时 stat 得出;未知时为 false)。 */
+  isGitRepo: boolean;
 }
 
 /**
@@ -186,6 +188,8 @@ export function buildWorkbenchProjectOptions(input: {
   hiddenIds: ReadonlySet<string>;
   schedules: readonly WorkbenchScheduleInput[];
   candidates: readonly ExternalSessionCandidate[];
+  /** 主进程扫描给出的 git 仓库目录。 */
+  gitRepoDirs?: readonly string[];
   localPlatform: string;
   caseInsensitive: boolean;
   excludeDirs?: readonly string[];
@@ -210,6 +214,7 @@ export function buildWorkbenchProjectOptions(input: {
       claudeCount: 0,
       codexCount: 0,
       latestActivityMs: toMs(project.latestActivityAt),
+      isGitRepo: false,
     });
   }
   const ensure = (dir: string, key: string) => {
@@ -223,6 +228,7 @@ export function buildWorkbenchProjectOptions(input: {
         claudeCount: 0,
         codexCount: 0,
         latestActivityMs: 0,
+        isGitRepo: false,
       };
       byKey.set(key, option);
     }
@@ -244,6 +250,11 @@ export function buildWorkbenchProjectOptions(input: {
     if (candidate.source === 'claude') option.claudeCount += 1;
     else option.codexCount += 1;
     option.latestActivityMs = Math.max(option.latestActivityMs, toMs(candidate.updatedAt));
+  }
+  for (const dir of input.gitRepoDirs ?? []) {
+    const key = workbenchProjectKey(dir, input.caseInsensitive);
+    const option = key ? byKey.get(key) : undefined;
+    if (option) option.isGitRepo = true;
   }
   const excluded = new Set(
     (input.excludeDirs ?? [])
@@ -404,4 +415,116 @@ export function buildWorkbenchTiles(input: {
   return tiles.sort(
     (a, b) => workbenchStateRank(a.state) - workbenchStateRank(b.state) || b.lastActiveMs - a.lastActiveMs,
   );
+}
+
+// ─── 空状态项目清单的过滤与分档 ─────────────────────────────────────
+
+/** 主进程给的本机路径(主目录、应用数据目录、系统临时目录);拿不到时为 null。 */
+export interface WorkbenchPathHints {
+  homeDir: string | null;
+  userDataDir: string | null;
+  tempDirs: readonly string[];
+}
+
+/** 主目录下的工具 / 缓存目录:这些目录里的会话不是用户的项目。 */
+const HOME_TOOL_DIRS = [
+  'Library/Caches',
+  'Library/Application Support/Cindy',
+  '.cache',
+  '.codex',
+  '.claude',
+  '.cindy',
+  '.cursor',
+  '.npm',
+  '.Trash',
+];
+const SYSTEM_TEMP_DIRS = ['/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp', '/var/folders', '/private/var/folders'];
+/** 主进程路径没送到时的兜底:按常见主目录形态识别。 */
+const HOME_DIR_PATTERN = /^(?:\/Users\/[^/]+|\/home\/[^/]+|[a-z]:\/users\/[^/]+)$/i;
+
+function isSameOrUnder(dir: string, root: string): boolean {
+  return dir === root || dir.startsWith(`${root.endsWith('/') ? root.slice(0, -1) : root}/`);
+}
+
+/** 主目录本身、Cindy 的应用数据目录(含各伙伴 Home 的 workspace)、系统与工具的临时 / 缓存目录。 */
+export function isNonProjectDir(
+  dir: string,
+  hints: WorkbenchPathHints | null,
+  caseInsensitive: boolean,
+): boolean {
+  const key = workbenchProjectKey(dir, caseInsensitive);
+  if (!key) return true;
+  const norm = (value: string | null | undefined) => workbenchProjectKey(value, caseInsensitive);
+  const homes = new Set<string>();
+  const hintedHome = norm(hints?.homeDir);
+  if (hintedHome) homes.add(hintedHome);
+  const inferredHome = /^(\/Users\/[^/]+|\/home\/[^/]+|[a-z]:\/users\/[^/]+)(?:\/|$)/i.exec(key)?.[1];
+  if (inferredHome) homes.add(inferredHome);
+  if (hintedHome === key || HOME_DIR_PATTERN.test(key)) return true;
+  const roots: string[] = [...SYSTEM_TEMP_DIRS.map((root) => norm(root) ?? root)];
+  for (const temp of hints?.tempDirs ?? []) {
+    const value = norm(temp);
+    if (value) roots.push(value);
+  }
+  const userData = norm(hints?.userDataDir);
+  if (userData) roots.push(userData);
+  for (const home of homes) {
+    for (const sub of HOME_TOOL_DIRS) {
+      const value = norm(`${home}/${sub}`);
+      if (value) roots.push(value);
+    }
+  }
+  return roots.some((root) => isSameOrUnder(key, root));
+}
+
+/**
+ * 目录名像自动生成的 id:UUID、长十六进制串、`cli_<hex>`、`<word>-<长数字>`,
+ * 或者名字大部分是十六进制与连字符且夹着数字。
+ */
+export function looksGeneratedDirName(name: string): boolean {
+  const base = name.trim().toLowerCase();
+  if (!base) return false;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-/.test(base)) return true;
+  if (/^[0-9a-f]{12,}$/.test(base)) return true;
+  if (/^[a-z]+_[0-9a-f]{8,}$/.test(base)) return true;
+  if (/^[a-z]+-\d{6,}$/.test(base)) return true;
+  const hexish = [...base].filter((char) => /[0-9a-f-]/.test(char)).length;
+  const digits = [...base].filter((char) => /\d/.test(char)).length;
+  return base.length >= 10 && digits >= 3 && hexish / base.length >= 0.8;
+}
+
+export const WORKBENCH_PRIMARY_PROJECTS = 5;
+const STALE_SINGLE_SESSION_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * 项目清单分档(纯函数,确定性):
+ * 1. 直接不列:`isNonProjectDir`;
+ * 2. 折叠:名字像生成的 id;只有 1 个会话且 14 天没动;
+ * 3. 第一档:git 仓库、Cindy 里已有任务或自动化、会话总数 ≥ 3;
+ * 4. 其余折叠。第一档按最近活动倒序最多 5 行,多出的并入折叠;折叠同样按最近活动倒序。
+ */
+export function tierWorkbenchProjectOptions(
+  options: readonly WorkbenchProjectOption[],
+  input: { hints: WorkbenchPathHints | null; caseInsensitive: boolean; now: number; maxPrimary?: number },
+): { primary: WorkbenchProjectOption[]; folded: WorkbenchProjectOption[] } {
+  const byRecency = (a: WorkbenchProjectOption, b: WorkbenchProjectOption) =>
+    b.latestActivityMs - a.latestActivityMs || a.name.localeCompare(b.name);
+  const primary: WorkbenchProjectOption[] = [];
+  const folded: WorkbenchProjectOption[] = [];
+  for (const option of options) {
+    if (isNonProjectDir(option.dir, input.hints, input.caseInsensitive)) continue;
+    const total = option.taskCount + option.claudeCount + option.codexCount;
+    const name = option.dir.split(/[\\/]/).filter(Boolean).pop() ?? option.name;
+    const staleSingle = total <= 1 && input.now - option.latestActivityMs > STALE_SINGLE_SESSION_MS;
+    if (looksGeneratedDirName(name) || staleSingle) {
+      folded.push(option);
+    } else if (option.isGitRepo || option.taskCount > 0 || option.automationCount > 0 || total >= 3) {
+      primary.push(option);
+    } else {
+      folded.push(option);
+    }
+  }
+  primary.sort(byRecency);
+  const max = input.maxPrimary ?? WORKBENCH_PRIMARY_PROJECTS;
+  return { primary: primary.slice(0, max), folded: [...primary.slice(max), ...folded].sort(byRecency) };
 }

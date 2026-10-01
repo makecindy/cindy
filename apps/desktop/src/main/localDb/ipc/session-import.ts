@@ -5,7 +5,7 @@
  * explicitly selects sessions and confirms import in Settings.
  */
 
-import { ipcMain } from 'electron';
+import { app, ipcMain } from 'electron';
 
 import { getCurrentDbClientUserId, getDbClient } from '../client/current.js';
 import { createLogger } from '../../logger.js';
@@ -19,6 +19,11 @@ import {
   scanExternalClaudeCodeSessions,
 } from '../../maker-host/claude-local-sessions.js';
 import { dialogueWorkspaceRoots } from '../dialogueWorkspace.js';
+import {
+  createGitRepoProbe,
+  readSessionImportPathHints,
+  type SessionImportPathHints,
+} from './sessionImportDirFacts.js';
 import {
   normalizeWorkingDirForGrouping,
   normalizeWorkingDirForStorage,
@@ -40,6 +45,8 @@ interface ImportCandidate {
   workspaceKind: 'project' | 'dialogue';
   sidebarBucket: SidebarBucket;
   projectDir: string | null;
+  /** projectDir 下有 `.git`(伙伴工作台用来给项目清单分档)。 */
+  isGitRepo: boolean;
 }
 
 interface SessionImportScanResult {
@@ -54,6 +61,10 @@ interface SessionImportScanResult {
     existing: number;
   };
   currentProjectDirs: string[];
+  /** 候选与本机已有项目里是 git 仓库的目录(只 stat `.git`,按目录缓存)。 */
+  gitRepoDirs: string[];
+  /** 主目录、应用数据目录、系统临时目录:伙伴工作台不把它们当成用户项目。 */
+  pathHints: SessionImportPathHints;
 }
 
 interface SessionImportRequest {
@@ -69,6 +80,7 @@ interface CodexProjectLinkRequest {
 }
 
 const SESSION_IMPORT_SCAN_CACHE_TTL_MS = 30_000;
+const probeGitRepoDirs = createGitRepoProbe();
 
 let cachedSessionImportScan: { scope: string; result: SessionImportScanResult; expiresAt: number } | null = null;
 let inFlightSessionImportScan: {
@@ -214,6 +226,7 @@ async function runSessionImportScan(): Promise<SessionImportScanResult> {
         workspaceKind: item.workspaceKind,
         sidebarBucket: item.workspaceKind,
         projectDir: item.workspaceKind === 'project' ? projectDir : null,
+        isGitRepo: false,
       }];
     }),
     ...claude.candidates.flatMap((item): ImportCandidate[] => {
@@ -244,9 +257,18 @@ async function runSessionImportScan(): Promise<SessionImportScanResult> {
         workspaceKind: 'project',
         sidebarBucket: 'project',
         projectDir,
+        isGitRepo: false,
       }];
     }),
   ].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+
+  const gitRepoDirs = await probeGitRepoDirs([
+    ...currentProjectDirs,
+    ...candidates.flatMap((item) => (item.projectDir ? [item.projectDir] : [])),
+  ]);
+  const gitRepoSet = new Set(gitRepoDirs);
+  for (const item of candidates) item.isGitRepo = item.projectDir ? gitRepoSet.has(item.projectDir) : false;
+  const pathHints = await readSessionImportPathHints(safeUserDataDir());
 
   log.info('session import scan complete', {
     codexHomes: codex.homes.length,
@@ -270,7 +292,17 @@ async function runSessionImportScan(): Promise<SessionImportScanResult> {
       existing: existingCount,
     },
     currentProjectDirs: [...currentProjectDirs].sort(),
+    gitRepoDirs,
+    pathHints,
   };
+}
+
+function safeUserDataDir(): string | null {
+  try {
+    return normalizeWorkingDirForStorage(app.getPath('userData'));
+  } catch {
+    return null;
+  }
 }
 
 function invalidateSessionImportScanCache(): void {
