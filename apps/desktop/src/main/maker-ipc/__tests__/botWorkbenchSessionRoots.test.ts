@@ -64,4 +64,26 @@ describe('workbenchSessionRoots', () => {
     const bare = workbenchSessionRoots({ homeDir: 'C:/Users/me', appDataDir: null, userDataDir: null, platform: 'win32', env: {} });
     expect(bare.codex).toHaveLength(2);
   });
+
+  it('adds the current account codex-accounts folder of every profile, and nothing for other or missing owners', () => {
+    const owner = 'a'.repeat(64);
+    const roots = workbenchSessionRoots({
+      homeDir: '/Users/me',
+      appDataDir: SUPPORT,
+      userDataDir: `${SUPPORT}/CindyGlobal-dev2-bot-workbench`,
+      platform: 'darwin',
+      env: {},
+      codexAccountOwner: owner,
+    });
+    expect(roots.codexAccounts).toEqual([
+      `${SUPPORT}/CindyGlobal-dev2-bot-workbench/codex-accounts/${owner}`,
+      `${SUPPORT}/Cindy/codex-accounts/${owner}`,
+      `${SUPPORT}/CindyGlobal/codex-accounts/${owner}`,
+      `${SUPPORT}/CindyDev/codex-accounts/${owner}`,
+      `${SUPPORT}/xdt-maker/codex-accounts/${owner}`,
+    ]);
+    const base = { homeDir: '/Users/me', appDataDir: SUPPORT, userDataDir: null, platform: 'darwin', env: {} };
+    expect(workbenchSessionRoots(base).codexAccounts).toEqual([]);
+    expect(workbenchSessionRoots({ ...base, codexAccountOwner: '../../etc' }).codexAccounts).toEqual([]);
+  });
 });

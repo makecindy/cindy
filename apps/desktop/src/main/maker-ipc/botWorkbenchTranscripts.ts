@@ -388,8 +388,16 @@ async function collectTranscriptFiles(
     }
   }
 
+  // Codex:多账号目录下每个供应商子目录是一个 home,先展开。
+  const accountRoots: string[] = [];
+  for (const accounts of roots.codexAccounts) {
+    for (const provider of await readdirSafe(accounts)) {
+      if (!provider.isDirectory()) continue;
+      accountRoots.push(path.join(accounts, provider.name, 'sessions'), path.join(accounts, provider.name, 'archived_sessions'));
+    }
+  }
   // Codex:sessions/ 只进最近的日期子目录;archived_sessions/ 按文件名日期预筛。
-  for (const root of roots.codex) {
+  for (const root of [...roots.codex, ...accountRoots]) {
     const isArchive = path.basename(root) === 'archived_sessions';
     const dirs = isArchive ? [root] : recentCodexDayDirs(root, now, windowDays);
     for (const dir of dirs) {

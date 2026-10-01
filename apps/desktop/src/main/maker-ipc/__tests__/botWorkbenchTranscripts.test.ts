@@ -139,6 +139,16 @@ describe('listExternalSessionsForProjects', () => {
     ].join('\n'));
     await writeFile(path.join(today, `rollout-2026-10-01T11-35-19-${other}.jsonl`), meta(path.join(root, 'elsewhere')));
 
+    // 多账号登录的 Codex home:codex-accounts/<账号>/<供应商>/sessions/YYYY/MM/DD。
+    const accountsRoot = path.join(root, 'codex-accounts', 'a'.repeat(64));
+    const accountDay = recentCodexDayDirs(path.join(accountsRoot, 'openai-1', 'sessions'), now, 0)[0]!;
+    await mkdir(accountDay, { recursive: true });
+    const accountId = '01a0f587-e669-7900-a224-363dcb19f572';
+    await writeFile(path.join(accountDay, `rollout-2026-10-01T11-35-19-${accountId}.jsonl`), [
+      meta(project),
+      JSON.stringify({ type: 'msg', payload: { role: 'user', text: '账号会话' } }),
+    ].join('\n'));
+
     await mkdir(piRoot, { recursive: true });
     await writeFile(path.join(piRoot, '2026-10-01T00-00-00_p1.jsonl'), [
       JSON.stringify({ type: 'session', id: 'p1', cwd: project }),
@@ -147,14 +157,15 @@ describe('listExternalSessionsForProjects', () => {
 
     inCindyRows = [{ sdkSessionId: 'c-imported', agentKind: 'cc' }];
     const result = await listExternalSessionsForProjects({
-      roots: { claude: [claudeRoot], codex: [codexRoot, path.join(root, 'missing')], pi: [piRoot] },
+      roots: { claude: [claudeRoot], codex: [codexRoot, path.join(root, 'missing')], codexAccounts: [accountsRoot], pi: [piRoot] },
       projectDirs: [project],
       caseInsensitive: false,
       since: now - 30 * DAY,
       now,
     });
     const byKey = new Map(result.sessions.map((item) => [`${item.source}:${item.id}`, item]));
-    expect([...byKey.keys()].sort()).toEqual(['claude:c-new', `codex:${uuid}`, 'pi:p1']);
+    expect([...byKey.keys()].sort()).toEqual(['claude:c-new', `codex:${uuid}`, `codex:${accountId}`, 'pi:p1']);
+    expect(byKey.get(`codex:${accountId}`)!.digest).toMatchObject({ purpose: '账号会话' });
     expect(result.olderCount).toBe(1);
     expect(result.overflowCount).toBe(0);
     expect(byKey.get('claude:c-new')!.digest).toMatchObject({ purpose: '把图标导出来' });
@@ -163,7 +174,7 @@ describe('listExternalSessionsForProjects', () => {
     expect(byKey.get('pi:p1')).toMatchObject({ title: '写文档', cwd: project });
 
     const capped = await listExternalSessionsForProjects({
-      roots: { claude: [claudeRoot], codex: [codexRoot], pi: [piRoot] },
+      roots: { claude: [claudeRoot], codex: [codexRoot], codexAccounts: [accountsRoot], pi: [piRoot] },
       projectDirs: [project],
       caseInsensitive: false,
       since: now - 30 * DAY,
@@ -171,7 +182,7 @@ describe('listExternalSessionsForProjects', () => {
       max: 1,
     });
     expect(capped.sessions).toHaveLength(1);
-    expect(capped.overflowCount).toBe(2);
+    expect(capped.overflowCount).toBe(3);
     inCindyRows = [];
   });
 });

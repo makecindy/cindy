@@ -257,6 +257,8 @@ function appPath(name: 'appData' | 'userData'): string | null {
  */
 async function listExternalCandidates(projectDirs: readonly string[]) {
   const now = Date.now();
+  // 与 `codexAccountHome` 同一个派生;按需加载,不把账号登录模块带进任务 IPC。
+  const { codexAccountOwnerDir } = await import('../maker-host/codex-account-auth.js');
   return listExternalSessionsForProjects({
     roots: workbenchSessionRoots({
       homeDir: os.homedir(),
@@ -264,6 +266,7 @@ async function listExternalCandidates(projectDirs: readonly string[]) {
       userDataDir: appPath('userData'),
       platform: process.platform,
       env: { CODEX_HOME: process.env.CODEX_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR, APPDATA: process.env.APPDATA },
+      codexAccountOwner: codexAccountOwnerDir(),
     }),
     projectDirs,
     caseInsensitive: process.platform === 'win32',
