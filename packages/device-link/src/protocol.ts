@@ -7,6 +7,7 @@
 import {
   MAX_FRAME_BYTES,
   NOTIFY_BODY_MAX_LENGTH,
+  NOTIFY_AVATAR_JPEG_MAX_LENGTH,
   NOTIFY_COLLAPSE_ID_MAX_LENGTH,
   NOTIFY_DEEP_LINK_MAX_LENGTH,
   NOTIFY_TITLE_MAX_LENGTH,
@@ -19,6 +20,7 @@ import {
   type HelloPayload,
   type NotifyCategory,
   type NotifyPayload,
+  type NotifySender,
   type PresenceSetPayload,
   type PresenceSnapshot,
   type RelayErrorCode,
@@ -32,6 +34,7 @@ export type { SharedTaskPeer } from './sharedTaskPeer.js';
 export {
   MAX_FRAME_BYTES,
   NOTIFY_BODY_MAX_LENGTH,
+  NOTIFY_AVATAR_JPEG_MAX_LENGTH,
   NOTIFY_COLLAPSE_ID_MAX_LENGTH,
   NOTIFY_DEEP_LINK_MAX_LENGTH,
   NOTIFY_TITLE_MAX_LENGTH,
@@ -46,6 +49,7 @@ export type {
   HelloPayload,
   NotifyCategory,
   NotifyPayload,
+  NotifySender,
   PresenceSetPayload,
   PresenceSnapshot,
   RelayErrorCode,

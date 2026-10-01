@@ -900,13 +900,23 @@ describe('device-link controller handlers', () => {
     );
   });
 
-  it('invoke:本地传输背压 → DEVICE_LINK_NOT_CONNECTED', async () => {
+  it('invoke:本地传输背压 → DEVICE_LINK_BUSY', async () => {
     const deps = makeDeps({
       invoke: vi.fn().mockRejectedValue(new DeviceLinkError('BACKPRESSURE', 'buffer full')),
     });
     await expect(handleInvoke(deps, 'dev-2', 'maker:send', [])).rejects.toThrowError(
-      /\[DEVICE_LINK_NOT_CONNECTED\]/,
+      /\[DEVICE_LINK_BUSY\]/,
     );
+  });
+
+  it('invoke: remote admission backpressure remains busy rather than disconnected', async () => {
+    const deps = makeDeps({
+      invoke: vi.fn().mockResolvedValue({
+        ok: false, error: { code: 'BACKPRESSURE', message: 'remote invoke execution queue is full' },
+      }),
+    });
+    await expect(handleInvoke(deps, 'dev-2', 'local-db:task-tags:execute', []))
+      .rejects.toMatchObject({ code: 'DEVICE_LINK_BUSY' });
   });
 
   it('invoke: a second peer reset stops retrying and becomes a disconnected IPC error', async () => {
@@ -1062,7 +1072,7 @@ describe('device-link controller handlers', () => {
     });
     await handleSubscribe(deps, 'dev-2', ['sessions'], 1);
     await expect(handleUnsubscribe(deps, 'dev-2', ['sessions'], 1)).rejects.toThrowError(
-      /\[DEVICE_LINK_NOT_CONNECTED\]/,
+      /\[DEVICE_LINK_BUSY\]/,
     );
     await expect(handleUnsubscribe(deps, 'dev-2', ['sessions'], 1)).resolves.toEqual({ ok: true });
     expect(deps.unsubscribe).toHaveBeenCalledTimes(2);

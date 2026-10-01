@@ -5,12 +5,14 @@ import { useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 /** Compact invitation form; the management page stays mounted behind it. */
-export function SharedTaskAdmissionDialog({ title, onClose, children }: {
-  title: string; onClose(): void; children: ReactNode;
+export function SharedTaskAdmissionDialog({ title, onClose, onShow, children }: {
+  title: string; onClose(): void; onShow?(): void; children: ReactNode;
 }) {
   const styles = useThemedStyles(makeStyles);
-  return <Modal transparent visible animationType="fade" onRequestClose={onClose}>
-    <KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+  return <Modal transparent visible animationType="fade" onRequestClose={onClose} onShow={onShow}>
+    {/* Android Modal already resizes for the IME. A second height adjustment
+        creates a layout loop while the invitation input is focused. */}
+    <KeyboardAvoidingView style={styles.backdrop} enabled={Platform.OS === 'ios'} behavior="padding">
       <View style={styles.card} accessibilityViewIsModal testID="sharedTask.admissionDialog">
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content} bounces={false}>
           <Text style={styles.title} accessibilityRole="header">{title}</Text>

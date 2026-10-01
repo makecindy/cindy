@@ -57,10 +57,24 @@ describe('remote resource discovery', () => {
       { deviceId: 'mac-2', name: 'Laptop', canOpen: false, state: 'access_revoked' },
       { deviceId: 'mac-3', name: 'Disabled', canOpen: false, state: 'remote_disabled' },
     ], previous);
-    expect(selected).toEqual([targets[0]]);
+    expect(selected).toEqual([{ ...targets[0], offline: true }]);
     const invoke = vi.fn(async () => { throw new Error('offline'); }) as RemoteInvoke;
     const collections = await discoverRemoteHomeCollections(invoke, selected, 'en', previous);
     expect(collections[0]?.targets).toEqual([targets[0]]);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('refreshes an offline cached host when it comes online and removes an empty manifest', async () => {
+    const previous = [{ id: 'teammates', title: 'Teammates', resourceKind: 'bot', placement: 'home-scope', targets }];
+    const selected = remoteResourceDiscoveryTargets([
+      { deviceId: 'mac-1', name: 'Studio', canOpen: true, state: 'online' },
+      { deviceId: 'mac-2', name: 'Laptop', canOpen: false, state: 'offline' },
+    ], previous);
+    const invoke = vi.fn(async () => ({ protocolVersion: 1, collections: [] })) as RemoteInvoke;
+    const collections = await discoverRemoteHomeCollections(invoke, selected, 'en', previous);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith('mac-1', 'maker:remote-resources:manifest', expect.any(Array));
+    expect(collections).toEqual([{ ...previous[0], iconName: undefined, targets: [targets[1]] }]);
   });
 
   it('advertises only primitives implemented by the current mobile shell', () => {

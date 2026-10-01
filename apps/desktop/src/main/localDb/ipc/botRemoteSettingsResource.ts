@@ -1,4 +1,4 @@
-import { normalizeBotModelChain } from '../../../shared/botModelChain.js';
+import { normalizeBotModelChain, readBotTaskModelOverride, type BotModelRoute } from '../../../shared/botModelChain.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { RemoteActionDescriptor, RemoteActionInvokeRequest, RemoteActionInvokeResponse, RemoteLocalizedText, RemoteResource } from '@cindy/device-link';
 import type { getBotRemoteSettingsSource } from './bots.js';
@@ -29,6 +29,8 @@ const copy = {
   identity: text('Personality', '性格', '性格', '性格', '성격'),
   models: text('Models', '模型', '模型', 'モデル', '모델'),
   followsDefault: text('Follow app default', '跟随应用默认', '跟隨應用預設', 'アプリのデフォルトに従う', '앱 기본값 사용'),
+  taskModel: text('Task Model', '任务模型', '任務模型', 'セッション用モデル', '세션 모델'),
+  taskFollowsPrimary: text('Inherit Primary Model', '继承主模型', '繼承主模型', 'メインモデルを継承', '기본 모델 상속'),
   memory: text('Memory', '记忆', '記憶', '記憶', '기억'),
   memoryEnabled: text('Remember Things About Me', '记住与我有关的事', '記住與我有關的事', '私に関することを覚える', '나에 관한 내용 기억하기'),
   userContext: text('What You Know About Me', '关于我的记忆', '關於我的記憶', '私についての記憶', '나에 관한 기억'),
@@ -125,7 +127,12 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
       form('profile', [{ id: 'name', kind: 'text', label: copy.name, required: true }, { id: 'description', kind: 'multiline', label: copy.description }, { id: 'identity', kind: 'multiline', label: copy.identity }], { name: source.name, description: source.description, identity: settings.identity }),
       form('memory', [{ id: 'memory', kind: 'toggle', label: copy.memoryEnabled }, { id: 'userContext', kind: 'multiline', label: copy.userContext }], { memory: settings.memory, userContext: settings.userContext }),
       form('permissions', [{ id: 'permissions', kind: 'select', label: copy.permissions, options: ['ask', 'auto', 'trusted'].map(value => ({ value, label: copy[value as 'ask' | 'auto' | 'trusted'] })) }], { permissions: settings.permissions }),
-      form('models', [{ id: 'followsDefault', label: copy.followsDefault, kind: 'toggle' }, { id: 'modelChain', label: copy.models, kind: 'multiline' }], { followsDefault: settings.followsDefault, modelChain: JSON.stringify(settings.modelChain) }),
+      form('models', [{ id: 'followsDefault', label: copy.followsDefault, kind: 'toggle' }, { id: 'modelChain', label: copy.models, kind: 'multiline' },
+        { id: 'taskFollowsPrimary', label: copy.taskFollowsPrimary, kind: 'toggle' },
+        { id: 'taskModel', label: copy.taskModel, kind: 'multiline' }],
+        { followsDefault: settings.followsDefault, modelChain: JSON.stringify(settings.modelChain),
+          taskFollowsPrimary: !settings.taskModelOverride,
+          taskModel: JSON.stringify(settings.taskModelOverride ? [settings.taskModelOverride] : settings.modelChain.slice(0, 1)) }),
       { id: 'connections', primitive: 'markdown', fallbackMarkdown: [...settings.skills, ...settings.connections, ...settings.toolsets].join('\n') },
     ];
     // A failed shelf read must not turn into an empty shelf or prevent profile recovery.
@@ -188,7 +195,7 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
     };
     await guard();
     const input = request.input ?? {};
-    const allowed: readonly string[] = { models: ['followsDefault', 'modelChain'], profile: ['name', 'description', 'identity'], memory: ['memory', 'userContext'], permissions: ['permissions'], restart: [], resume: [], delete: ['confirmName'] }[grant.operation];
+    const allowed: readonly string[] = { models: ['followsDefault', 'modelChain', 'taskFollowsPrimary', 'taskModel'], profile: ['name', 'description', 'identity'], memory: ['memory', 'userContext'], permissions: ['permissions'], restart: [], resume: [], delete: ['confirmName'] }[grant.operation];
     if (Object.keys(input).some(key => !allowed.includes(key))) throwIpcError('INVALID_PARAMS', 'Unknown teammate field');
     const string = (key: string, max = 12_000) => {
       const value = input[key];
@@ -219,7 +226,28 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
         chain = normalizeBotModelChain(value);
         if (!Array.isArray(value) || !chain.length || chain.length !== value.length || value.some(route => !['claude', 'codex', 'pi'].includes(route?.harness))) throwIpcError('INVALID_PARAMS', 'Invalid model chain');
       }
-      patch = { capabilities: { modelChainOverride: followsDefault ? null : chain, modelOverride: null } };
+      const capabilities: Record<string, unknown> = {};
+      // Old clients only send primary fields. Absence must preserve the task override.
+      if ('followsDefault' in input || 'modelChain' in input) {
+        capabilities.modelChainOverride = followsDefault ? null : chain;
+        capabilities.modelOverride = null;
+      }
+      if ('taskFollowsPrimary' in input || 'taskModel' in input) {
+        if ('taskFollowsPrimary' in input && typeof input.taskFollowsPrimary !== 'boolean')
+          throwIpcError('INVALID_PARAMS', 'Invalid task model preference');
+        const inherits = input.taskFollowsPrimary ?? !settings.taskModelOverride;
+        let route: BotModelRoute | null = settings.taskModelOverride ?? chain[0] ?? null;
+        if (!inherits && 'taskModel' in input) {
+          try {
+            const value = JSON.parse(string('taskModel'));
+            if (!Array.isArray(value) || value.length !== 1) throw new Error('Invalid task model');
+            route = readBotTaskModelOverride(value[0]);
+          } catch { throwIpcError('INVALID_PARAMS', 'Invalid task model'); }
+        }
+        if (!inherits && !route) throwIpcError('INVALID_PARAMS', 'Task model required');
+        capabilities.taskModelOverride = inherits ? null : route;
+      }
+      patch = { capabilities };
     }
     if (patch && !Object.keys(patch).length) throwIpcError('INVALID_PARAMS', 'No changed teammate fields');
     if (grant.operation === 'permissions') {

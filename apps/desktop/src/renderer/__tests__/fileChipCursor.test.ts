@@ -21,6 +21,11 @@ const userMessage = readFileSync(
   'utf8',
 );
 
+const userAttachmentChip = readFileSync(
+  resolve(__dirname, '..', 'components', 'chat', 'UserAttachmentChip.tsx'),
+  'utf8',
+);
+
 const toolCallCard = readFileSync(
   resolve(__dirname, '..', 'components', 'chat', 'ToolCallCard.tsx'),
   'utf8',
@@ -36,10 +41,12 @@ describe('File chip cursor — points, not zooms (symptom #2)', () => {
     // 附件 chip 的 <button> 现在封装在 UserAttachmentChip 组件里(右键菜单分流
     // 需要 hook,不能内联在 map 里)。从组件定义处起截到它的 </button>,断言 chip
     // class 含 `cursor-pointer` 且未回退 `cursor-zoom-in`。
-    const chipBlockStart = userMessage.indexOf('function UserAttachmentChip');
+    // 组件本体在 UserAttachmentChip.tsx(伙伴群聊时间线同样复用),UserMessage 只引用它。
+    expect(userMessage).toContain("import { UserAttachmentChip } from './UserAttachmentChip';");
+    const chipBlockStart = userAttachmentChip.indexOf('function UserAttachmentChip');
     expect(chipBlockStart).toBeGreaterThan(-1);
-    const chipBlockEnd = userMessage.indexOf('</button>', chipBlockStart);
-    const chipBlock = userMessage.slice(chipBlockStart, chipBlockEnd);
+    const chipBlockEnd = userAttachmentChip.indexOf('</button>', chipBlockStart);
+    const chipBlock = userAttachmentChip.slice(chipBlockStart, chipBlockEnd);
     expect(chipBlock).toMatch(/cursor-pointer/);
     expect(chipBlock).not.toMatch(/cursor-zoom-in/);
   });

@@ -466,8 +466,8 @@ const GENERATED_DEFAULTS = {
     "dark": "var(--text-tertiary-hsl)"
   },
   "login-bg-base": {
-    "light": "#EDEDED",
-    "dark": "#1F1F1E"
+    "light": "#F2F2ED",
+    "dark": "#181818"
   },
   "login-panel-border": {
     "light": "#D4D4D4",
@@ -2422,7 +2422,10 @@ registerColor('welcome-text', GENERATED_DEFAULTS["welcome-text"], 'Stone #737373
 // (= PR #104 白底机制在 cindy-light 下的实际渲染值)。2026-07-20 的
 // 「消费 var(--surface)」改判作废——var(--surface) 随主题,cindy-dark 下取
 // #2A2828,登录页背景变深且与 slogan #2A2828 同色隐形(沙盒手测 MT-1/2/5)。
-registerColor('login-bg-base', GENERATED_DEFAULTS["login-bg-base"], 'Login — 画布底(亮色 #EDEDED / 暗色 #1F1F1E,figma 532:585 暗色帧实测;纯平,红渐变两层随 PR#104 拍板撤除,暗色沿用纯平口径)');
+// 2026-10-01 对齐 CINDY 皮肤页底:#2571 把 cindy-light/cindy-dark 的 surface 改为
+// #F2F2ED / #181818 时登录链路按豁免族未跟进,登录前后背景色不一致;本 token 同步为
+// 这两个值,仍写固定值而非 var(--surface),扩展主题照旧不染色登录页。
+registerColor('login-bg-base', GENERATED_DEFAULTS["login-bg-base"], 'Login — 画布底(亮色 #F2F2ED / 暗色 #181818,与 CINDY 皮肤页底 surface 同值、固定不随扩展主题;纯平,红渐变两层随 PR#104 拍板撤除,暗色沿用纯平口径)');
 // 两层品牌红渐变(379:518 径向 / 379:520 线性,代码复现非资产)。图层 opacity
 // 已合入色标 alpha(6%/5%)。CSS 取值为 figma 参数的最近似翻译;PR1 落码时以
 // wave4 帧(368:1375)截图对照为准,允许微调本 token 值,名称与语义冻结。

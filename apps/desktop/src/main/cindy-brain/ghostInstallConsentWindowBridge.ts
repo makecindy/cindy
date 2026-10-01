@@ -23,6 +23,7 @@ export interface GhostInstallConsentWindowTarget {
 
 interface PendingConsent {
   target: GhostInstallConsentWindowTarget;
+  taskCapabilityPluginId?: string;
   resolve: (confirmed: boolean) => void;
   timeoutId: ReturnType<typeof setTimeout>;
 }
@@ -36,13 +37,19 @@ export class GhostInstallConsentWindowBridge {
     target: GhostInstallConsentWindowTarget,
     request: Omit<GhostInstallConsentRequest, 'requestId'>,
   ): Promise<boolean> {
+    const taskCapabilityPluginId = request.purpose === 'task-capability' ? request.facts.ghostId : undefined;
+    // Reuse the existing pending-dialog owner. Concurrent capability attempts
+    // fail closed instead of queuing more prompts or sharing another call's grant.
+    if (taskCapabilityPluginId && [...this.pending.values()].some(
+      pending => pending.taskCapabilityPluginId === taskCapabilityPluginId,
+    )) return Promise.resolve(false);
     const requestId = randomUUID();
     return new Promise<boolean>((resolve, reject) => {
       const timeoutId = setTimeout(
         () => this.settle(requestId, false),
         this.deps.timeoutMs ?? HOST_CONFIRM_TIMEOUT_MS,
       );
-      this.pending.set(requestId, { target, resolve, timeoutId });
+      this.pending.set(requestId, { target, resolve, timeoutId, taskCapabilityPluginId });
       let delivered = false;
       try {
         delivered = target.send({ ...request, requestId });

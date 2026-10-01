@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 import { fingerprint } from './files.js';
-import { encodeEnvironment, decodeEnvironment } from './environmentJson.js';
+import { encodeEnvironment, decodeEnvironment, decodeEnvironmentDiscovery, projectEnvironmentDiscovery } from './environmentJson.js';
 import { CompanionImportError, type ImportedMcpServer } from './types.js';
 
 /** Never returned over IPC, included in profile JSON, or passed to a language model. */
@@ -13,9 +13,14 @@ export interface CompanionEnvironment {
   env: Record<string, string>;
   mcp: ImportedMcpServer[];
   credentials: Array<{ id: string; format: string; value: unknown }>;
+  /** Source script assets. Legacy imports may also contain memory attachments; execution filters by the scripts/ namespace. */
   files?: Record<string, string>;
+  /** Captured script execute bits, keyed like files; absent legacy flags remain non-executable. */
+  fileExecutables?: Record<string, boolean>;
+  /** Non-media memory originals (including empty markers); never execution assets. Media originals live in the media ledger. */
+  memoryFiles?: Record<string, string>;
   /** Originals behind redacted skill projections; only materialized for authorized host commands. */
-  skillFiles?: Record<string, Array<{ name: string; bytes: string; executable: boolean }>>;
+  skillFiles?: Record<string, Array<{ name: string; bytes: string; executable: boolean; interpreterLink?: string }>>;
   /** Original selected documents; model-readable profile/memory copies redact known credentials. */
   documents?: Record<string, string>;
   /** Redaction only: known values embedded in selected originals, never injected into processes. */
@@ -24,7 +29,7 @@ export interface CompanionEnvironment {
   /** Selected content only; encrypted restart checkpoint, removed after successful completion. */
   pendingImport?: { selection: import('@cindy/maker-shared/companion-import').CompanionImportSelection; snapshotJson: string };
   /** Only selected automation definitions; may contain source URLs/tokens, so remain encrypted. */
-  automations?: Record<string, { kind: 'hermes' | 'openclaw'; original: Record<string, unknown>; sourceRoot: string; sourceId?: string;
+  automations?: Record<string, { kind: 'hermes' | 'openclaw'; original: Record<string, unknown>; sourceRoot: string; sourceWorkspace?: string; sourceId?: string;
     /** Missing or pending means source ownership has not been safely handed over. */
     handover?: 'pending' | 'ready';
     issues?: string[]; deliveries?: import('./types.js').ImportedDelivery[]; completed?: number; lastRun?: string;
@@ -37,7 +42,16 @@ export interface CompanionSecretIo {
   has?(key: string): boolean;
   read(key: string, assertOwner?: () => void): string | null | Promise<string | null>;
   write(key: string, value: string, assertOwner?: () => void): boolean | Promise<boolean>;
+  /** Idempotent: a missing key is a successful removal, matching the account vault. */
   remove(key: string): boolean;
+  removeResources?(botId: string, assertOwner: () => void): Promise<void>;
+}
+
+export interface CompanionDiscoveryEnvironment {
+  env: CompanionEnvironment['env'];
+  mcp: CompanionEnvironment['mcp'];
+  identity: string;
+  pendingImport: boolean;
 }
 
 function bindingPath(userData: string, botId: string): string {
@@ -45,6 +59,8 @@ function bindingPath(userData: string, botId: string): string {
   return path.join(userData, 'bots', botId, 'environment.json');
 }
 export const companionEnvironmentKey = (botId: string): string => `bot_environment_${fingerprint(botId)}`;
+// Same account-scoped encrypted namespace; separate from the authoritative, backwards-compatible archive.
+export const companionDiscoveryKey = (botId: string): string => `bot_environment_${fingerprint(['discovery', botId])}`;
 function removalPath(userData: string, botId: string): string {
   bindingPath(userData, botId); // Apply the same host-owned ID validation.
   return path.join(userData, 'companion-import-cleanups', `${botId}.json`);
@@ -54,27 +70,82 @@ function removalPath(userData: string, botId: string): string {
 export function createCompanionEnvironmentStore(io: CompanionSecretIo) {
   const queues = new Map<string, Promise<unknown>>();
   const writes = new Map<string, Set<Promise<void>>>();
+  const discoveryQueue = new Map<string, Promise<unknown>>();
+  const serializeDiscovery = async <T>(key: string, run: () => Promise<T>): Promise<T> => {
+    const task = (discoveryQueue.get(key) ?? Promise.resolve()).catch(() => {}).then(run);
+    discoveryQueue.set(key, task);
+    try { return await task; } finally { if (discoveryQueue.get(key) === task) discoveryQueue.delete(key); }
+  };
+  const saveDiscovery = async (botId: string, revision: unknown, environment: CompanionDiscoveryEnvironment, assertOwner: () => void) => {
+    const { text } = await encodeEnvironment({ version: 1, revision: revision ?? null, environment }, assertOwner);
+    assertOwner();
+    if (!await io.write(companionDiscoveryKey(botId), text, assertOwner) || await io.read(companionDiscoveryKey(botId), assertOwner) !== text)
+      throw new CompanionImportError('CREDENTIAL_STORAGE_FAILED');
+    assertOwner();
+  };
   const store = {
     async write(userData: string, botId: string, value: CompanionEnvironment, assertOwner: () => void): Promise<void> {
       const key = `${userData}:${botId}`;
-      const task = (async () => {
+      const task = serializeDiscovery(key, async () => {
         const file = bindingPath(userData, botId);
         assertOwner();
         await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
         assertOwner();
         const { text: encoded, revision } = await encodeEnvironment(value, assertOwner);
         assertOwner();
+        // Invalidate before touching the archive: a crash or failed write cannot retain stale connections.
+        if (!io.remove(companionDiscoveryKey(botId))) throw new CompanionImportError('CREDENTIAL_STORAGE_FAILED');
         if (!await io.write(companionEnvironmentKey(botId), encoded, assertOwner) || await io.read(companionEnvironmentKey(botId), assertOwner) !== encoded)
           throw new CompanionImportError('CREDENTIAL_STORAGE_FAILED');
         assertOwner();
+        await saveDiscovery(botId, revision, projectEnvironmentDiscovery(value), assertOwner);
         // Names are untrusted too: a connection or variable identifier can contain
         // a credential. This existence binding has no consumer for original names.
-        const manifest = JSON.stringify({ version: 1, variables: Object.keys(value.env).map(name => fingerprint(name)), connections: value.mcp.map(server => fingerprint(server.name)), revision });
+        const manifest = JSON.stringify({ version: 1, variables: Object.keys(value.env).map(name => fingerprint(name)), connections: value.mcp.map(server => fingerprint(server.name)), revision,
+          importRequestId: value.pendingImport?.selection.requestId ?? null });
         atomicWriteFileSync(file, manifest);
-      })();
+      });
       const pending = writes.get(key) ?? new Set<Promise<void>>();
       pending.add(task); writes.set(key, pending);
       try { await task; } finally { pending.delete(task); if (!pending.size) writes.delete(key); }
+    },
+    /** Persisted discovery survives restarts; missing/legacy artifacts rebuild once under the writer lock. */
+    async readDiscovery(userData: string, botId: string, assertOwner: () => void): Promise<CompanionDiscoveryEnvironment | undefined> {
+      return serializeDiscovery(`${userData}:${botId}`, async () => {
+        assertOwner();
+        const binding = readAtomicFileSync(bindingPath(userData, botId));
+        if (binding === null) return undefined;
+        const revision: unknown = JSON.parse(binding).revision ?? null;
+        let cached: string | null = null;
+        try { cached = await io.read(companionDiscoveryKey(botId), assertOwner); }
+        catch { assertOwner(); /* A damaged ciphertext is also a rebuildable derived artifact. */ }
+        assertOwner();
+        if (cached !== null) {
+          try {
+            const data = await decodeEnvironment<{ version: number; revision: unknown; environment: CompanionDiscoveryEnvironment }>(cached, assertOwner);
+            if (data.version === 1 && data.revision === revision && data.environment?.env && Array.isArray(data.environment.mcp)
+              && /^[a-f0-9]{64}$/.test(data.environment.identity) && typeof data.environment.pendingImport === 'boolean') return data.environment;
+          } catch { assertOwner(); /* Rebuild a damaged derived artifact from the unchanged archive. */ }
+        }
+        const encoded = await io.read(companionEnvironmentKey(botId), assertOwner);
+        assertOwner();
+        if (encoded === null) throw new CompanionImportError('CREDENTIAL_STORAGE_UNAVAILABLE');
+        let environment: CompanionDiscoveryEnvironment;
+        try { environment = await decodeEnvironmentDiscovery(encoded, assertOwner); }
+        catch { assertOwner(); throw new CompanionImportError('CREDENTIAL_STORAGE_INVALID'); }
+        await saveDiscovery(botId, revision, environment, assertOwner);
+        return environment;
+      });
+    },
+    /** Opaque request binding only. Undefined means a legacy manifest needs one-time migration. */
+    readImportRequestId(userData: string, botId: string, assertOwner: () => void): string | null | undefined {
+      assertOwner();
+      const text = readAtomicFileSync(bindingPath(userData, botId));
+      if (text === null) return null;
+      const id: unknown = JSON.parse(text).importRequestId;
+      if (id !== undefined && id !== null && (typeof id !== 'string' || !/^[A-Za-z0-9_-]{16,100}$/.test(id)))
+        throw new CompanionImportError('CREDENTIAL_STORAGE_INVALID');
+      return id as string | null | undefined;
     },
     async read(userData: string, botId: string, assertOwner: () => void): Promise<CompanionEnvironment | undefined> {
       assertOwner();
@@ -92,6 +163,7 @@ export function createCompanionEnvironmentStore(io: CompanionSecretIo) {
       return result;
     },
     remove(botId: string): void {
+      if (!io.remove(companionDiscoveryKey(botId))) throw new CompanionImportError('CREDENTIAL_STORAGE_FAILED');
       if (!io.remove(companionEnvironmentKey(botId))) throw new CompanionImportError('CREDENTIAL_STORAGE_FAILED');
     },
     /** Non-secret intent survives a crash between the DB commit and vault cleanup. */
@@ -101,7 +173,8 @@ export function createCompanionEnvironmentStore(io: CompanionSecretIo) {
       // A failed manifest write can leave a vault-only checkpoint. Preserve its
       // cleanup path, while ordinary companions require no staging filesystem.
       const key = companionEnvironmentKey(botId);
-      if (readAtomicFileSync(bindingPath(userData, botId)) === null && !(io.has ? io.has(key) : await io.read(key) !== null)) return;
+      if (readAtomicFileSync(bindingPath(userData, botId)) === null && !(io.has ? io.has(key) : await io.read(key) !== null)
+        && !(io.has ? io.has(companionDiscoveryKey(botId)) : await io.read(companionDiscoveryKey(botId)) !== null)) return;
       assertOwner();
       await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
       assertOwner();
@@ -117,6 +190,9 @@ export function createCompanionEnvironmentStore(io: CompanionSecretIo) {
       const key = `${userData}:${botId}`;
       await queues.get(key)?.catch(() => {});
       await Promise.allSettled([...(writes.get(key) ?? [])]);
+      await discoveryQueue.get(key)?.catch(() => {});
+      assertOwner();
+      await io.removeResources?.(botId, assertOwner);
       assertOwner();
       store.remove(botId);
       assertOwner();

@@ -3018,7 +3018,7 @@ export function NewMakerDraftRoute() {
             handleWorkingDirChange(path);
           } catch (err) {
             log.warn('[new-maker] restore selected project failed', err);
-            toast.error(t('ccAgent.sidebar.createProjectFailed'));
+            toast.error(t('ccAgent.sidebar.selectFolderFailed'));
           } finally {
             markSendInFlight(false);
           }

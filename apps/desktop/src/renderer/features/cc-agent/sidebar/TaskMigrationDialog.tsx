@@ -2,10 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import type { TaskMigrationRequest, TaskMigrationView } from '@cindy/device-link';
+import {
+  TASK_MIGRATION_MAX_FILES,
+  type TaskMigrationRequest,
+  type TaskMigrationView,
+} from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
 import type { TaskMoveDestination } from './TaskMoveSubmenu';
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import { Select } from '@/components/ui/select';
 import { FormField } from '@/components/ui/form-field';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
@@ -37,7 +42,7 @@ export function TaskMigrationDialog({
   const [pollError, setPollError] = useState('');
   const [self, setSelf] = useState('');
   const [estimate, setEstimate] = useState<TaskMigrationView['estimate']>();
-  const [estimateError, setEstimateError] = useState(false);
+  const [estimateError, setEstimateError] = useState('');
   const pending = useRef(false);
   const observingCopy = useRef(!destination);
   const previousCopy = useRef<string | undefined>(undefined);
@@ -204,7 +209,7 @@ export function TaskMigrationDialog({
     if (!confirming) return;
     let disposed = false;
     setEstimate(undefined);
-    setEstimateError(false);
+    setEstimateError('');
     void request({ action: 'caps' })
       .then(async (caps) => {
         if (!caps.copyEstimate) throw new Error('Estimate unavailable');
@@ -221,8 +226,8 @@ export function TaskMigrationDialog({
           throw new Error('Invalid estimate');
         if (!disposed && current()) setEstimate(result.estimate);
       })
-      .catch(() => {
-        if (!disposed && current()) setEstimateError(true);
+      .catch((e: unknown) => {
+        if (!disposed && current()) setEstimateError(errorCode(e));
       });
     return () => {
       disposed = true;
@@ -238,9 +243,21 @@ export function TaskMigrationDialog({
           ? destination.deviceName
           : t('taskMigration.selectedComputer')));
   const closeCancels = started && !status?.running;
+  const cancelling = copying && !!status?.cancelling;
+  const cancelRequested = useRef(false);
+  const cancelCopy = () => {
+    cancelRequested.current = true;
+    void act({ action: 'cancel', sessionId: session.id });
+  };
+  useEffect(() => {
+    // The running copy unwinds asynchronously; close once it has fully stopped.
+    if (cancelRequested.current && status?.stage === 'cancelled' && !status.running) onDismiss();
+  }, [status?.stage, status?.running]);
   const dismiss = () => {
-    if (pending.current || copying) return;
-    if (closeCancels) void act({ action: 'cancel', sessionId: session.id }, true);
+    if (pending.current) return;
+    // Closing never stops a running copy; the source task header reopens this view.
+    if (copying) onDismiss();
+    else if (closeCancels) void act({ action: 'cancel', sessionId: session.id }, true);
     else onDismiss();
   };
   const progress = status?.progress;
@@ -253,6 +270,19 @@ export function TaskMigrationDialog({
     if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
     return `${(Math.max(0, value) / 1024).toFixed(1)} KB`;
   };
+  const estimateText =
+    estimateError === 'MIGRATION_TIMEOUT'
+      ? t('taskMigration.estimateTimeout')
+      : estimateError === 'MIGRATION_TOO_MANY_FILES'
+        ? t('taskMigration.estimateTooManyFiles', { limit: TASK_MIGRATION_MAX_FILES })
+        : estimateError
+          ? t('taskMigration.estimateFailed')
+          : estimate
+            ? t('taskMigration.fileSummary', {
+                count: estimate.fileCount,
+                size: bytes(estimate.bytes),
+              })
+            : t('taskMigration.estimating');
   const errorKey =
     failure && t(`taskMigration.errors.${failure}`, { defaultValue: t('taskMigration.failed') });
   return (
@@ -272,6 +302,8 @@ export function TaskMigrationDialog({
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
+          // 按 DESIGN.md 关闭规则:点遮罩不关闭,只能用取消按钮或 Esc。
+          onPointerDownOutside={(event) => event.preventDefault()}
         >
           <Dialog.Title className="text-lg font-medium text-[var(--confirm-title)]">
             {t(
@@ -355,14 +387,7 @@ export function TaskMigrationDialog({
                 role="status"
                 className={estimateError ? 'text-[var(--error-fg)]' : 'text-[var(--confirm-title)]'}
               >
-                {estimateError
-                  ? t('taskMigration.estimateFailed')
-                  : estimate
-                    ? t('taskMigration.fileSummary', {
-                        count: estimate.fileCount,
-                        size: bytes(estimate.bytes),
-                      })
-                    : t('taskMigration.estimating')}
+                {estimateText}
               </p>
               {estimate && (
                 <p className="mt-2 text-[var(--confirm-desc)]">{t('taskMigration.estimateNote')}</p>
@@ -371,21 +396,36 @@ export function TaskMigrationDialog({
           )}
           {copying && (
             <div className="mt-4 space-y-2">
-              <p className="text-sm text-[var(--confirm-title)]" role="status">
+              <p
+                className="flex items-center gap-2 text-sm text-[var(--confirm-title)]"
+                role="status"
+              >
+                <Spinner size={14} className="shrink-0 text-[var(--confirm-desc)]" />
                 {t(
-                  progress?.phase === 'finishing'
-                    ? 'taskMigration.finishing'
-                    : `taskMigration.stages.${status?.stage ?? 'preparing'}`,
+                  cancelling
+                    ? 'taskMigration.cancelling'
+                    : progress?.phase === 'finishing'
+                      ? 'taskMigration.finishing'
+                      : `taskMigration.stages.${status?.stage ?? 'preparing'}`,
                   { name: computerName },
                 )}
               </p>
-              <progress
-                className="w-full accent-[var(--confirm-title)]"
+              <div
+                role="progressbar"
                 aria-label={t('taskMigration.copyingTitle', { name: computerName })}
-                max={100}
-                value={percent}
-              />
-              {progress?.phase === 'sending' && (
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={percent}
+                className="h-1.5 overflow-hidden rounded-full bg-[var(--surface-chip)]"
+              >
+                {percent !== undefined && (
+                  <div
+                    className="h-full rounded-full bg-[var(--accent-cta-bg)] transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)]"
+                    style={{ width: `${percent}%` }}
+                  />
+                )}
+              </div>
+              {progress?.phase === 'sending' && !cancelling && (
                 <p className="text-sm tabular-nums text-[var(--confirm-desc)]">
                   {t('taskMigration.transferProgress', {
                     sent: bytes(progress.sentBytes),
@@ -402,7 +442,18 @@ export function TaskMigrationDialog({
             </p>
           )}
           <div className="mt-4 flex flex-wrap justify-end gap-2">
-            {!copying && (
+            {copying ? (
+              <>
+                {status?.cancellable && (
+                  <Button variant="secondary" disabled={busy} onClick={cancelCopy}>
+                    {t('taskMigration.cancelCopy')}
+                  </Button>
+                )}
+                <Button variant="secondary" disabled={busy} onClick={dismiss}>
+                  {t('taskMigration.runInBackground')}
+                </Button>
+              </>
+            ) : (
               <Button variant="secondary" disabled={busy} onClick={dismiss}>
                 {t(confirming ? 'taskMigration.cancel' : 'taskMigration.close')}
               </Button>

@@ -321,9 +321,7 @@ function BotsSidebarContent() {
           </>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem
-          className="text-[var(--text-danger)] focus:text-[var(--text-danger)]"
-          onSelect={() => setDeleteTarget(bot)}
+        <DropdownMenuItem variant="danger" onSelect={() => setDeleteTarget(bot)}
         >
           <Trash2 size={14} className="mr-2" />
           {t('bots.lifecycle.delete')}

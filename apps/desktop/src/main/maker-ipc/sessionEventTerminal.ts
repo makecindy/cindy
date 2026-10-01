@@ -1,3 +1,6 @@
+import { reviewTeammateLearning } from './botLearningReview.js';
+import { botLearningTracker } from './botLearningTracker.js';
+import { learningTurnIdentity } from './botLearningFeedback.js';
 import type { BotDelegationService } from './botDelegationService.js';
 import type { BotGroupChatService } from './botGroupChatService.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
@@ -51,6 +54,7 @@ import {
   type ProductTurnFailureOwner,
 } from './productTurnFailureOwner.js';
 export interface FinishSessionTerminalEventDeps {
+  readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string) => void;
   readonly onSuccessfulProductTurn?: (
     sessionId: string,
     owner?: ProductTurnFailureOwner,
@@ -205,8 +209,12 @@ export function finishSessionTerminalEvent(
           session.id,
           turnBoundaryAssistantPersistId,
           nativeForkAnchor ? { nativeForkAnchor } : undefined,
+          ...(prepared.botTaskResultInputIds?.length ? [prepared.botTaskResultInputIds] : []),
         );
       }
+    }
+    if (!isContinuationBoundary) {
+      botLearningTracker.seal(session.id, learningTurnIdentity(session, event.sessionTurnGeneration), turnBoundaryAssistantPersistId);
     }
     // error 行在 flushOrphanToolResults 之后入队,保证 orphan tool_result 排在
     // error 行之前(历史时间线:tool 输出 → 错误卡,而非错误卡插到 tool 输出之前)。
@@ -498,6 +506,11 @@ export function finishSessionTerminalEvent(
       !deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) &&
       !deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id)
     ) {
+      if (turnBoundaryAssistantPersistId && !session.remoteHostId) {
+        const replyId = turnBoundaryAssistantPersistId;
+        void reviewTeammateLearning(session.id, replyId).catch(() =>
+          deps.log.warn('Teammate learning review did not complete'));
+      }
       const callback = deps.onSuccessfulProductTurn;
       if (callback && terminalOwner) {
         void callback(session.id, terminalOwner).catch(() =>
@@ -524,6 +537,18 @@ export function finishSessionTerminalEvent(
       // gateway persistence, overflow surface, or auto-resume abandonment).
       const unsuccessfulBoundary =
         isTerminalTurnErrorEvent(event) || !isSuccessfulAssistantReplyDoneData(event.data);
+      if (typeof event.sessionTurnGeneration === 'number' && !recoveryOwnsUnsuccessfulBoundary && !autoResumeSuppressesPersist) {
+        const nativeStatus = (event.data as { status?: unknown } | null)?.status;
+        const outcome = !isTerminalTurnErrorEvent(event)
+          && (nativeStatus === 'cancelled' || nativeStatus === 'interrupted')
+          ? nativeStatus : unsuccessfulBoundary ? 'failed' : 'completed';
+        // Settle the precise native outcome before generic unsuccessful-turn
+        // bookkeeping can enqueue its fallback failure for the same execution.
+        deps.onPluginTaskTerminal?.(session.id, {
+          instanceId: event.sessionInstanceId ?? session.instanceId,
+          generation: event.sessionTurnGeneration,
+        }, outcome, turnAssistantPersistId ?? undefined);
+      }
       if (
         unsuccessfulBoundary &&
         !recoveryOwnsUnsuccessfulBoundary &&

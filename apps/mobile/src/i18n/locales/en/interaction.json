@@ -20,7 +20,13 @@
     "allowOnceAccessibility": "Allow permission request once",
     "allowOnceConfirm": "Confirm allow once",
     "highRisk": "High risk",
-    "autoReviewUnavailable": "Automatic review could not finish. Confirm whether to allow this action."
+    "autoReviewUnavailable": "Automatic review could not finish. Confirm whether to allow this action.",
+    "fullAccessConfirm": {
+      "title": "Enable Full access?",
+      "description": "Full access disables the workspace sandbox and skips routine approvals. {{appName}} can modify files outside the workspace and run network commands without asking; built-in high-risk operations will still require confirmation.",
+      "confirm": "Enable Full access",
+      "cancel": "Keep current permissions"
+    }
   },
   "planMode": {
     "label": "Plan mode",

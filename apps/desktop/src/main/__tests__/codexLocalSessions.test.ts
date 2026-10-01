@@ -35,6 +35,9 @@ import {
   parseCodexRolloutMessageLine,
   scanExternalCodexSessions,
   prepareExternalCodexSessionForResume,
+  readCodexThreadStorageForArchive,
+  dumpCodexThreadStateRows,
+  classifyCodexHistoryOversized,
 } from '../maker-host/codex-local-sessions';
 import { clearCurrentDbClient, setCurrentDbClient } from '../localDb/client/current';
 import type { DbClient } from '../localDb/client/DbClient';
@@ -86,6 +89,8 @@ function createLocalDb(): Database.Database {
       feishu_bot_app_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
       extra_dirs TEXT NOT NULL DEFAULT '[]',
+      writable_dirs TEXT NOT NULL DEFAULT '[]',
+      remote_host_id TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -281,6 +286,138 @@ afterEach(() => {
 });
 
 describe('Codex local session import', () => {
+  it('locates archive storage in the known state DB after sqlite_home changes', () => {
+    const dbPath = createStateDb(externalHome);
+    const newHome = path.join(rootDir, 'new-state');
+    const newDbPath = createStateDb(newHome);
+    const rolloutPath = path.join(externalHome, 'sessions', `rollout-2026-05-13-${threadId}.jsonl`);
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    fs.writeFileSync(rolloutPath, '');
+    insertThread(dbPath, threadId, rolloutPath, { updatedAt: 1_000 });
+    const config = `sqlite_home = ${JSON.stringify(newHome)}\n`;
+    fs.writeFileSync(path.join(externalHome, 'config.toml'), config);
+    const before = [fs.readFileSync(dbPath), fs.readFileSync(newDbPath)];
+
+    expect(readCodexThreadStorageForArchive(threadId)).toEqual({
+      historyHome: externalHome, sqliteHome: fs.realpathSync(externalHome), rolloutPath,
+    });
+    expect([fs.readFileSync(dbPath), fs.readFileSync(newDbPath)]).toEqual(before);
+    expect(fs.readFileSync(path.join(externalHome, 'config.toml'), 'utf8')).toBe(config);
+  });
+
+  it.each(['absolute', 'relative'])('locates archive storage with a separate %s sqlite_home', kind => {
+    const sqliteHome = path.join(rootDir, 'separate-state');
+    const dbPath = createStateDb(sqliteHome);
+    const rolloutPath = path.join(externalHome, 'sessions', `rollout-2026-05-13-${threadId}.jsonl`);
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    const content = JSON.stringify({ type: 'session_meta', timestamp: '2026-05-13T00:00:00.000Z',
+      payload: { id: threadId, timestamp: '2026-05-13T00:00:00.000Z', cwd: '/project', source: 'cli' } }) + '\n';
+    fs.writeFileSync(rolloutPath, content);
+    insertThread(dbPath, threadId, rolloutPath, { updatedAt: 1_000 });
+    const config = `sqlite_home = ${JSON.stringify(kind === 'absolute' ? sqliteHome : '../separate-state')}\n`;
+    fs.writeFileSync(path.join(externalHome, 'config.toml'), config);
+    const before = fs.readFileSync(dbPath);
+
+    const storage = readCodexThreadStorageForArchive(threadId)!;
+    expect(fs.realpathSync(storage.historyHome)).toBe(fs.realpathSync(externalHome));
+    expect(fs.realpathSync(storage.sqliteHome)).toBe(fs.realpathSync(sqliteHome));
+    expect(fs.readFileSync(storage.rolloutPath, 'utf8')).toBe(content);
+    expect(fs.readFileSync(dbPath)).toEqual(before);
+    expect(fs.readFileSync(path.join(externalHome, 'config.toml'), 'utf8')).toBe(config);
+    expect(currentTestDb().prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({ n: 0 });
+  });
+
+  it.each(['sessions', 'archived_sessions'])('locates current-home archive storage in %s without a location record', directory => {
+    const home = path.join(targetUserData, 'codex-home');
+    const dbPath = createStateDb(home);
+    const rolloutPath = path.join(home, directory, `rollout-2026-05-13-${threadId}.jsonl`);
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    fs.writeFileSync(rolloutPath, '');
+    insertThread(dbPath, threadId, rolloutPath, { updatedAt: 1_000 });
+    const before = fs.readFileSync(dbPath);
+
+    expect(readCodexThreadStorageForArchive(threadId)).toEqual({
+      historyHome: home, sqliteHome: home, rolloutPath,
+    });
+    expect(fs.readFileSync(dbPath)).toEqual(before);
+    expect(currentTestDb().prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({ n: 0 });
+    expect(fs.readFileSync(rolloutPath, 'utf8')).toBe('');
+  });
+
+  it('locates archive storage without importing or copying history', () => {
+    const dbPath = createStateDb(externalHome);
+    const rolloutPath = path.join(externalHome, 'sessions', `rollout-2026-05-13-${threadId}.jsonl`);
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    fs.writeFileSync(rolloutPath, '');
+    insertThread(dbPath, threadId, rolloutPath, { updatedAt: 1_000 });
+    const before = fs.readFileSync(dbPath);
+
+    expect(readCodexThreadStorageForArchive(threadId)).toEqual({
+      historyHome: externalHome, sqliteHome: fs.realpathSync(externalHome), rolloutPath,
+    });
+    expect(fs.readFileSync(dbPath)).toEqual(before);
+    expect(currentTestDb().prepare('SELECT COUNT(*) AS n FROM sessions').get()).toEqual({ n: 0 });
+    expect(fs.readFileSync(rolloutPath, 'utf8')).toBe('');
+  });
+
+  it('dumps multi-account thread state only from its indexed storage', async () => {
+    // 多账号线程存放在 codex-accounts/<owner>/<账号>/,desktop 与外部 HOME 都找不到它。
+    const accountHome = path.join(targetUserData, 'codex-accounts', 'owner', 'openai-a');
+    const dbPath = createStateDb(accountHome);
+    const rolloutPath = path.join(accountHome, 'sessions', `rollout-2026-09-16-${threadId}.jsonl`);
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    fs.writeFileSync(rolloutPath, '{"type":"session_meta"}\n');
+    insertThread(dbPath, threadId, rolloutPath, { updatedAt: 1_000 });
+
+    const legacy = await dumpCodexThreadStateRows(threadId);
+    expect(legacy.threads).toEqual([]);
+    expect(legacy.rolloutPath).toBeNull();
+
+    const indexed = await dumpCodexThreadStateRows(threadId, { sqliteHome: accountHome, rolloutPath });
+    expect(indexed.threads.map((row) => row.id)).toEqual([threadId]);
+    expect(indexed.rolloutPath).toBe(rolloutPath);
+
+    fs.rmSync(rolloutPath);
+    const missing = await dumpCodexThreadStateRows(threadId, { sqliteHome: accountHome, rolloutPath });
+    expect(missing.rolloutPath).toBeNull();
+  });
+
+  it('treats an unreadable indexed state DB as incomplete, but a rollout-only home as valid', async () => {
+    const accountHome = path.join(targetUserData, 'codex-accounts', 'owner', 'openai-b');
+    const rolloutPath = path.join(accountHome, 'sessions', `rollout-2026-09-16-${threadId}.jsonl`);
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    fs.writeFileSync(rolloutPath, '{"type":"session_meta"}\n');
+
+    // 纯 rollout 的存储(没有状态库)是合法的空 state。
+    const rolloutOnly = await dumpCodexThreadStateRows(threadId, { sqliteHome: accountHome, rolloutPath });
+    expect(rolloutOnly.threads).toEqual([]);
+    expect(rolloutOnly.rolloutPath).toBe(rolloutPath);
+
+    // 状态库损坏:不能当成空 state 带着 rollout 判完整。
+    fs.writeFileSync(path.join(accountHome, 'state_5.sqlite'), 'not a sqlite database');
+    const corrupt = await dumpCodexThreadStateRows(threadId, { sqliteHome: accountHome, rolloutPath });
+    expect(corrupt.rolloutPath).toBeNull();
+
+    // 记录的状态目录不存在同样按读不出处理。
+    const missingHome = await dumpCodexThreadStateRows(threadId, {
+      sqliteHome: path.join(accountHome, 'gone'),
+      rolloutPath,
+    });
+    expect(missingHome.rolloutPath).toBeNull();
+  });
+
+  it('classifies multi-account history size only from its indexed rollout', async () => {
+    const accountHome = path.join(targetUserData, 'codex-accounts', 'owner', 'openai-a');
+    const rolloutPath = path.join(accountHome, 'sessions', `rollout-2026-09-16-${threadId}.jsonl`);
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    fs.writeFileSync(rolloutPath, `${rolloutLine(threadId, 'user', 'hi', '2026-09-16T00:00:00.000Z')}\n`);
+
+    expect(await classifyCodexHistoryOversized(threadId)).toBe('unknown');
+    expect(await classifyCodexHistoryOversized(threadId, { rolloutPath })).toBe('healthy');
+    fs.rmSync(rolloutPath);
+    expect(await classifyCodexHistoryOversized(threadId, { rolloutPath })).toBe('unknown');
+  });
+
   it('defensively removes complete IDE context from Codex user messages', () => {
     const ideContext = '<ide_opened_file>The user opened /tmp/a.ts in the IDE.</ide_opened_file>';
     const cleaned = parseCodexRolloutMessageLine(
@@ -711,6 +848,25 @@ describe('Codex local session import', () => {
       title: 'Local Rename',
       workspaceKind: 'dialogue',
       updatedAt: 2000000,
+    });
+  });
+
+  it('keeps Cindy archive and directory scope when a newer native index still says active', async () => {
+    const dbPath = createStateDb(externalHome);
+    const rolloutPath = path.join(externalHome, 'sessions', `rollout-${threadId}.jsonl`);
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    fs.writeFileSync(rolloutPath, '');
+    insertThread(dbPath, threadId, rolloutPath, { updatedAt: 2000 });
+    insertImportedCodexSession(currentTestDb(), `codex-${threadId}`, threadId);
+    currentTestDb().prepare(`UPDATE sessions SET status='archived', working_dir='/moved-project',
+      extra_dirs='["/reference"]', writable_dirs='["/output"]'`).run();
+    const scan = await scanExternalCodexSessions();
+    expect(scan.candidates).toEqual([expect.objectContaining({
+      archived: true, cwd: '/moved-project', extraDirs: ['/reference'], writableDirs: ['/output'],
+    })]);
+    await importExternalCodexSessions([threadId]);
+    expect(currentTestDb().prepare('SELECT status, working_dir, extra_dirs, writable_dirs FROM sessions').get()).toEqual({
+      status: 'archived', working_dir: '/moved-project', extra_dirs: '["/reference"]', writable_dirs: '["/output"]',
     });
   });
 

@@ -30,14 +30,24 @@ vi.mock('react-native', () => ({
     });
     return createElement('div', {}, children);
   },
-  Pressable: ({ children, onPress, disabled }: any) =>
+  Pressable: ({ children, onPress, disabled, testID }: any) =>
     createElement(
       'button',
-      { onClick: onPress, disabled },
+      { onClick: onPress, disabled, 'data-testid': testID },
       typeof children === 'function' ? children({ pressed: false }) : children,
     ),
   StyleSheet: { create: (v: any) => v, hairlineWidth: 1 },
+  ActivityIndicator: () => createElement('i', { 'data-testid': 'spinner' }),
+  Animated: {
+    Value: class { setValue() {} stopAnimation() {} interpolate() { return 0; } },
+    View: ({ children, testID }: any) => createElement('div', { 'data-testid': testID }, children),
+    timing: () => ({ start() {}, stop() {} }),
+    sequence: () => ({ start() {}, stop() {} }),
+    loop: () => ({ start() {}, stop() {} }),
+  },
+  Easing: { inOut: () => () => 0, ease: () => 0, bezier: () => () => 0 },
 }));
+vi.mock('@/utils/useGuardedPush', () => ({ useGuardedPush: () => h.push }));
 vi.mock('expo-router', () => ({
   useFocusEffect: (cb: () => void) => useEffect(cb, [cb]),
   useLocalSearchParams: () => ({ deviceId: 'home' }),
@@ -50,7 +60,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
 vi.mock('@/components/AppText', () => ({
   Text: ({ children }: any) => createElement('span', {}, children),
 }));
-vi.mock('@/theme', () => ({
+vi.mock('@/theme', async () => ({
+  ...await vi.importActual<typeof import('@/theme/tokens')>('@/theme/tokens'),
   useThemedStyles: () => ({ note: {} }),
   useTheme: () => ({ colors: {} }),
 }));
@@ -65,6 +76,10 @@ vi.mock('lucide-react-native', () => ({
   GitPullRequestDraft: () => null,
   Megaphone: () => null,
   TriangleAlert: () => null,
+  Layers: () => null,
+  CircleAlert: () => null,
+  CircleCheck: () => null,
+  ChevronDown: () => null,
 }));
 vi.mock('@/auth/AuthContext', () => ({
   useAuth: () => ({ accountGeneration: h.accountGeneration, user: { id: 'owner' } }),
@@ -90,6 +105,7 @@ vi.mock('@/device-link/DeviceLinkContext', () => ({
     };
   },
 }));
+vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
 import { _clearRemotePathVerdictCache } from '@/session/remotePathVerdict';
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
@@ -141,9 +157,11 @@ afterEach(async () => {
   node.remove();
   vi.useRealTimers();
 });
-it('survives recycled layout events when measuring equal-width task actions', async () => {
+const openEntry = () => node.querySelector<HTMLButtonElement>('[data-testid="companion.taskCard.open"]');
+it('opens the task from the whole card and keeps stop as a small action while it runs', async () => {
   await render();
-  expect(node.textContent).toContain('devices.companions.openTask');
+  expect(openEntry()?.disabled).toBe(false);
+  expect(node.textContent).not.toContain('devices.companions.openTask');
   expect(node.textContent).toContain('devices.companions.stopTask');
 });
 
@@ -158,7 +176,7 @@ it('keeps the task card when the host omits delegations or sends a broken status
   });
   await render();
   expect(node.textContent).toContain('devices.companions.status.unknown');
-  expect(node.textContent).toContain('devices.companions.openTask');
+  expect(openEntry()?.disabled).toBe(false);
 });
 
 it('isolates a broken private-chat card so the session can keep rendering', async () => {
@@ -178,7 +196,7 @@ it('reads, opens and stops the task on its source computer, then disables stop o
   expect(h.invoke).toHaveBeenCalledWith('home', 'maker:bot-delegations:list', ['parent']);
   const button = (label: string) =>
     [...node.querySelectorAll('button')].find((b) => b.textContent === label)!;
-  await act(async () => button('devices.companions.openTask').click());
+  await act(async () => openEntry()!.click());
   expect(h.push).toHaveBeenCalledWith({
     pathname: '/sessions/[sessionId]',
     params: { deviceId: 'home', sessionId: 'child' },
@@ -539,9 +557,12 @@ it('opens a stable completed result inline and routes its artifact to the child 
     } },
   } as NormalizedRemoteMessage;
   await act(async () => root.render(createElement(CompanionMessageCard, { message: resultMessage })));
-  expect(node.textContent).not.toContain('Second execution result');
-  await act(async () => node.querySelector('button')!.click());
+  // Collapsed: a short preview only; the files come with the full result.
+  const fileButton = () => [...node.querySelectorAll('button')].find(button => button.textContent === 'result.pdf');
   expect(node.textContent).toContain('Second execution result');
+  expect(fileButton()).toBeUndefined();
+  await act(async () => node.querySelector<HTMLButtonElement>('[data-testid="companion.taskResult.toggle"]')!.click());
+  expect(fileButton()).toBeDefined();
   const file = [...node.querySelectorAll('button')].find(button => button.textContent === 'result.pdf')!;
   await act(async () => file.click());
   expect(h.push).toHaveBeenCalledWith({ pathname: '/files/preview/[sessionId]', params: { sessionId: 'child', deviceId: 'home', absPath: '/reports/result.pdf' } });

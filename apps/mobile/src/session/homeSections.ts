@@ -1,4 +1,5 @@
 import { i18n } from '@/i18n';
+import { compareSessionListStrings } from '@cindy/maker-shared/session-list';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from './mobileHome';
 import {
   activityMsFromIso,
@@ -263,7 +264,7 @@ function sortSessionItems(
     return items.slice().sort((a, b) => compareSessionItemsByPriority(a, b, ctx));
   }
   return items.slice().sort((a, b) =>
-    b.lastActivityAt.localeCompare(a.lastActivityAt) || a.session.id.localeCompare(b.session.id));
+    compareSessionListStrings(b.lastActivityAt, a.lastActivityAt) || compareSessionListStrings(a.session.id, b.session.id));
 }
 
 function sortHomeRows(rows: HomeRow[], options: HomeSectionOptions): HomeRow[] {
@@ -278,7 +279,7 @@ function sortHomeRows(rows: HomeRow[], options: HomeSectionOptions): HomeRow[] {
     projects.sort((a, b) =>
       (rank.get(a.project.key) ?? Number.MAX_SAFE_INTEGER)
       - (rank.get(b.project.key) ?? Number.MAX_SAFE_INTEGER)
-      || a.key.localeCompare(b.key));
+      || compareSessionListStrings(a.key, b.key));
     return [...projects, ...sortHomeRowsByTaskSort(rest, options)];
   }
   return sortHomeRowsByTaskSort(rows, options);
@@ -290,7 +291,7 @@ function sortHomeRowsByTaskSort(rows: HomeRow[], options: HomeSectionOptions): H
     return rows.slice().sort((a, b) =>
       homeRowPriorityRank(a, ctx) - homeRowPriorityRank(b, ctx)
       || homeRowPriorityRecencyMs(b, ctx) - homeRowPriorityRecencyMs(a, ctx)
-      || a.key.localeCompare(b.key));
+      || compareSessionListStrings(a.key, b.key));
   }
   return rows.slice().sort(compareHomeRowsByActivityDesc);
 }
@@ -303,11 +304,11 @@ function compareSessionItemsByPriority(
   return sessionPriorityRank(a.session.id, ctx) - sessionPriorityRank(b.session.id, ctx)
     || sessionPriorityRecencyMs(b.session.id, activityMsFromIso(b.lastActivityAt), ctx)
       - sessionPriorityRecencyMs(a.session.id, activityMsFromIso(a.lastActivityAt), ctx)
-    || a.session.id.localeCompare(b.session.id);
+    || compareSessionListStrings(a.session.id, b.session.id);
 }
 
 function compareHomeRowsByActivityDesc(a: HomeRow, b: HomeRow): number {
-  return homeRowActivity(b).localeCompare(homeRowActivity(a)) || a.key.localeCompare(b.key);
+  return compareSessionListStrings(homeRowActivity(b), homeRowActivity(a)) || compareSessionListStrings(a.key, b.key);
 }
 
 function homeRowActivity(row: HomeRow): string {

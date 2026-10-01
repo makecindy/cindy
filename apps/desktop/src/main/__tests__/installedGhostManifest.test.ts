@@ -248,3 +248,8 @@ describe('installed ghost manifest compatibility', () => {
     ).not.toHaveProperty('errand');
   });
 });
+
+it.each(['future', { future: true }, null, false])('preserves installed unknown tasks %j alongside legacy manual metadata', (tasks) => {
+  const result = parseInstalledGhostManifest({...manifest(),slots:['tool','agent'],agent:{tasks},manual:'old metadata'});
+  expect(result).toMatchObject({ok:true,legacyManualIgnored:true,manifest:{agent:{tasks}}});
+});

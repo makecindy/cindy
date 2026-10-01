@@ -23,7 +23,7 @@ export function projectImportedSkill(files: readonly ImportFile[], slug: string,
     const bytes = Buffer.from(redacted, encoding);
     return { ...file, bytes: bigEndian ? bytes.swap16() : bytes };
   });
-  if (!changed) return { files: projected };
+  if (!changed) return { files: projected, ...(files.some(file => file.interpreterLink) ? { originals: files.map(file => ({ ...file, bytes: file.bytes.toString('base64') })) } : {}) };
   const guidance = `\n\nImported credentials are masked in these readable files. Execute this skill's commands with companion_connections.run_command, using the original resources at "$CINDY_IMPORTED_SKILLS/${slug}" (Windows cmd: "%CINDY_IMPORTED_SKILLS%\\${slug}") instead of this readable skill directory. Preserve relative resource paths within that directory. Write generated outputs to the current companion workspace.\n`;
   return {
     files: projected.map(file => {

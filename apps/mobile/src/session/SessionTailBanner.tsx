@@ -13,6 +13,7 @@ import { AgentErrorDetails } from './AgentErrorDetails';
 import { Pressable, StyleSheet } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { View } from 'react-native';
 import type { SessionTailBannerState } from '@/session/sessionTailBannerModel';
 import { fontWeight, lineHeight, useThemedStyles, type ThemeColors } from '@/theme';
@@ -125,6 +126,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   pillCta: { backgroundColor: colors.cta },
   pillText: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   pillTextCta: { color: colors.ctaText },
-  pressed: { opacity: 0.7 },
+  pressed: mobileInteractionStyles.pressed,
   disabled: { opacity: 0.5 },
 });

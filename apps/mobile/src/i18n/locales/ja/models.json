@@ -47,6 +47,10 @@
     "cancel": "現在のモデルを維持",
     "confirm": "切り替えて続行"
   },
+  "switchOutcome": {
+    "applied": "モデルプロバイダーの切り替えが有効になりました。",
+    "failed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。"
+  },
   "agentSwitch": {
     "browseAccessibility": "{{agent}} のモデルを表示",
     "confirmTitle": "{{agent}} に切り替えますか?",
@@ -65,7 +69,7 @@
     "restoreRecommended": "推奨設定に戻す",
     "saveFailed": "保存できませんでした。再試行してください。",
     "configure": "設定",
-    "syncFailed": "お気に入りを同期できません。選択画面を開き直してください。接続先の更新が必要な場合があります。",
+    "syncFailed": "お気に入りを同期できません。選択画面を開き直してください。リモートのパソコンの Cindy を更新する必要がある場合があります。",
     "timeUnit": {
       "day": "日",
       "hour": "時間",

@@ -1,5 +1,7 @@
 import type { SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import {
@@ -738,7 +740,32 @@ describe('Orca lead/worker dispatcher', () => {
         origin: { kind: 'orca', senderLabel: 'Lead', displayText: 'Replace current task' },
       }),
       expect.any(Function),
+      undefined,
     );
+  });
+
+  it.each([false, true])('checks authority after production queue restore before interrupt reservation: revoked=%s', async revoked => {
+    let restored = false;
+    const stop = vi.fn();
+    const inputCoordinator = {
+      ensureQueueRestored: async () => { restored = true; },
+      isQueueRestored: () => restored,
+      reserveNextInput: vi.fn((_id, _item, opts) => { opts.onReserved(); return { reserved: true }; }),
+    };
+    const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+    const start = source.indexOf('    reserveNextQueuedMessage: async');
+    const adapter = source.slice(start, source.indexOf('    sendToSessionInternal,', start));
+    const reserveNextQueuedMessage = new Function('inputCoordinator', ts.transpileModule(`return ({${adapter}}).reserveNextQueuedMessage;`, {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText)(inputCoordinator);
+    const h = createHarness({ reserveNextQueuedMessage });
+    const result = await h.dispatcher.reserveNextOrcaInterAgentMessage({
+      targetSessionId: 'target-session', rawContent: 'replacement', source: 'lead', senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'restore-check' }, onReserved: stop,
+      beforeReserve: async () => { if (restored && revoked) throw new Error('revoked during restore'); },
+    });
+    expect(restored).toBe(true);
+    expect(result.ok).toBe(!revoked);
+    expect(inputCoordinator.reserveNextInput).toHaveBeenCalledTimes(revoked ? 0 : 1);
+    expect(stop).toHaveBeenCalledTimes(revoked ? 0 : 1);
   });
 
   it('discards the accepted callback when priority reservation throws', async () => {

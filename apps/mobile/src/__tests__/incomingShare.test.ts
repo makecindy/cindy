@@ -124,7 +124,7 @@ describe('incoming Share Extension payloads', () => {
     });
   });
 
-  it('falls back to a decoded URI basename and rejects unsupported attachment types', () => {
+  it('falls back to a decoded URI basename and accepts any attachment type', () => {
     const result = selectIncomingShareUploadCandidates([
       payload({
         contentUri: 'file:///shared/My%20Notes.md',
@@ -146,8 +146,12 @@ describe('incoming Share Extension payloads', () => {
       name: 'My Notes.md',
       size: 0,
       mimeType: 'text/markdown',
-    }]);
-    expect(result.rejectedUris).toEqual(['file:///shared/archive.zip']);
+    }, expect.objectContaining({
+      kind: 'file',
+      uri: 'file:///shared/archive.zip',
+      name: 'archive.zip',
+    })]);
+    expect(result.rejectedUris).toEqual([]);
   });
 
   it('keeps a batch until the matching consumer acknowledges it exactly once', () => {

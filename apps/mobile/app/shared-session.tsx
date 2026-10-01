@@ -16,7 +16,7 @@ import { sharedTaskErrorKey } from '@/device-link/sharedTaskCompatibility';
 import { isSharedTaskGone } from '@/device-link/sharedTaskAccessWatch';
 import { markDeviceAccessRevoked } from '@/device-link/accessRevoked';
 import { Text, TextInput } from '@/components/AppText';
-import { MainWindowActionButton, MainWindowRowButton } from '@/components/MobilePrimitives';
+import { MainWindowActionButton, MainWindowEmptyState, MainWindowRowButton } from '@/components/MobilePrimitives';
 import { SharedTaskAction, SharedTaskScreen } from '@/session/SharedTaskScreen';
 import { useSharedTaskConfirmation } from '@/session/useSharedTaskConfirmation';
 import { SharedTaskEndedState } from '@/session/SharedTaskEndedState';
@@ -365,11 +365,10 @@ export default function SharedSessionScreen() {
       </View>}
       {!!notice && !manualOpen && <Text accessibilityRole="alert" style={styles.noticeText}>{notice}</Text>}
       {!!loadError && <View><Text accessibilityRole="alert" style={styles.noticeText}>{loadError}</Text><SharedTaskAction action={{ label: t('sharedTask.retryAction'), disabled: busy, onPress: () => void run(async current => { await load(current); if (current()) setLoadError(''); }, false) }} /></View>}
-      {management && !guestId ? managementView : !guestId && tab === 'owned' ? owned.length === 0 ? <View style={styles.empty}>
-        <View style={styles.largeIcon}><Check size={iconSize.md} color={colors.textPrimary} /></View>
-        <Text style={styles.emptyTitle}>{t('sharedTask.ownedEmptyTitle')}</Text><Text style={styles.emptyCopy}>{t('sharedTask.ownedEmptyHint')}</Text>
+      {management && !guestId ? managementView : !guestId && tab === 'owned' ? owned.length === 0 ? <MainWindowEmptyState centered style={styles.ownedEmpty}
+        testID="sharedTask.ownedEmpty" title={t('sharedTask.ownedEmptyTitle')} copy={t('sharedTask.ownedEmptyHint')}>
         {hostContext && <SharedTaskAction action={{ label: t('sharedTask.shareCurrent'), onPress: () => setTab('current') }} />}
-      </View> : <>
+      </MainWindowEmptyState> : <>
         <Text style={styles.intro}>{t('sharedTask.ownedIntro', { count: owned.length })}</Text>
         {owned.map((item) => <View key={item.sharedTaskId} style={styles.taskRow}><Users size={iconSize.md} color={colors.textTertiary} /><View style={styles.grow}><Text style={styles.taskTitle}>{item.title}</Text><Text style={styles.metadata}>{deviceName(item.hostDeviceId)}{guestCounts[item.sharedTaskId] !== undefined ? ' · ' + t('sharedTask.guestCount', { count: guestCounts[item.sharedTaskId] }) : ''}</Text></View>
           {item.sessionId === sessionId && item.hostDeviceId === deviceId ? <SharedTaskAction compact action={{ label: t('sharedTask.manage'), onPress: () => setTab('current') }} /> : <SharedTaskAction compact action={{ label: t('sharedTask.enterTask'), disabled: busy, onPress: () => void run(current => openTask(item.sharedTaskId, current), false) }} />}
@@ -445,9 +444,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   managementDangerZone: { borderTopWidth: StyleSheet.hairlineWidth, borderColor: colors.border, marginTop: spacing.xxl, paddingTop: spacing.xl },
   managementDangerDescription: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, marginTop: spacing.xs },
   managementDangerButton: { minHeight: 44, marginTop: spacing.lg, backgroundColor: colors.surface },
-  intro: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, marginBottom: spacing.lg },
+  intro: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, marginBottom: spacing.lg },
   small: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
-  smallMuted: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  smallMuted: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   taskTitle: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   metadata: { color: colors.textTertiary, fontSize: typeScale.micro, lineHeight: lineHeight.micro },
   caption: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, marginBottom: spacing.sm },
@@ -469,9 +468,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   peopleTitle: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, marginTop: spacing.lg, marginBottom: spacing.xs },
   avatar: { width: 28, height: 28, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, backgroundColor: colors.surfaceChip, alignItems: 'center', justifyContent: 'center' },
   empty: { alignItems: 'center', paddingVertical: spacing.xl, paddingHorizontal: spacing.xs },
+  ownedEmpty: { padding: spacing.xl, gap: spacing.md },
   largeIcon: { width: 44, height: 44, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.lg },
   emptyTitle: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium, textAlign: 'center' },
-  emptyCopy: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center', maxWidth: 280, marginTop: spacing.sm, marginBottom: spacing.lg },
+  emptyCopy: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center', maxWidth: 280, marginTop: spacing.sm, marginBottom: spacing.lg },
   rule: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginVertical: spacing.lg },
   footer: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
 });

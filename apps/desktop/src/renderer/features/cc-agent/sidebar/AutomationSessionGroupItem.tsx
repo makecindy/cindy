@@ -29,7 +29,7 @@ import { formatSidebarFutureTime, formatSidebarTime } from '../lib/formatSidebar
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { hasSessionSelectionModifier, SessionItem } from './SessionItem';
 import type { SessionClickHandler } from './SessionItem';
-import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS, MENU_SEPARATOR_CLASS } from './menuStyles';
+import { MENU_ITEM_CLASS } from './menuStyles';
 import {
   useSessionAttentionUrgency,
   useSessionsAttentionUrgencyIdSet,
@@ -776,7 +776,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                           align="end"
                           sideOffset={2}
                           onClick={(event) => event.stopPropagation()}
-                          className={cn(MENU_CONTENT_CLASS, 'min-w-36 overflow-hidden')}
+                          className="min-w-36 overflow-hidden"
                         >
                           <MountedMenuContent>
                             {() => (
@@ -805,14 +805,15 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                                       : t('ccAgent.sidebar.automationGroup.menu.pause')}
                                   </DropdownMenuItem>
                                 )}
-                                <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+                                <DropdownMenuSeparator />
                                 <DropdownMenuItem
                                   onSelect={() => onScheduleAction(group, 'delete')}
                                   disabled={
                                     group.scheduleSource === 'project' &&
                                     (!group.workingDir || !group.projectConfigId)
                                   }
-                                  className={cn(MENU_ITEM_CLASS, 'text-[hsl(var(--destructive))]')}
+                                  variant="danger"
+                                  className={MENU_ITEM_CLASS}
                                 >
                                   {t('ccAgent.sidebar.automationGroup.menu.delete')}
                                 </DropdownMenuItem>

@@ -1,3 +1,4 @@
+import { observeBotLearningTurn } from './botLearningFeedback.js';
 import { projectQuietScheduledOutput } from '../scheduler-host/silent-output.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 import { prepareSessionEvent, type PrepareSessionEventDeps } from './sessionEventPreparation.js';
@@ -48,6 +49,7 @@ export function handleSessionEvent(
     // Project the already-redacted event independently; never copy raw fields back into it.
     prepared.broadcastEvent = projectQuietScheduledOutput(prepared.broadcastEvent) ?? prepared.broadcastEvent;
   }
+  if (event.type === 'tool_use' && event.turnScope !== 'background') observeBotLearningTurn(session, event.sessionTurnGeneration);
   const stream = persistSessionStreamEvent(deps, session, prepared);
   const delivery = deliverSessionEvent(deps, session, prepared, stream);
   const terminal = finishSessionTerminalEvent(deps, session, prepared, delivery);

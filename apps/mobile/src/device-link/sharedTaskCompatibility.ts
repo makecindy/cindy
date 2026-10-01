@@ -5,6 +5,7 @@ export function sharedTaskErrorKey(error: unknown, context: 'join' | 'operation'
     const message = error instanceof Error ? error.message : '';
     code = /^(?:Error invoking remote method '[^']+': Error: )?\[([A-Z0-9_]+)\]/.exec(message)?.[1];
   }
+  if (code === 'SHARED_TASK_SELF_JOIN') return 'sharedTask.selfJoin';
   if (code === 'NOT_FOUND') return context === 'join' ? 'sharedTask.invitationUnavailable' : 'sharedTask.unavailable';
   if (code === 'PERMISSION_DENIED') return context === 'join' ? 'sharedTask.invitationRenew' : 'sharedTask.permissionDenied';
   if (code === 'ACCESS_REVOKED' || code === 'DEVICE_LINK_ACCESS_REVOKED') return 'sharedTask.unavailable';

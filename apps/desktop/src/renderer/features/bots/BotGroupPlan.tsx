@@ -25,7 +25,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { Tip } from '@/components/ui/tooltip';
-import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS, MENU_SEPARATOR_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
+import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
@@ -178,7 +178,7 @@ function EditableStepRow({
           <StepRowContent plan={plan} step={step} index={index} identity={identity} muted={false} />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className={cn(MENU_CONTENT_CLASS, 'w-56')}>
+      <DropdownMenuContent align="start" className="w-56">
         <DropdownMenuLabel className="px-2 pb-1 pt-1.5 text-12 font-normal text-[var(--text-tertiary)]">
           {t('bots.groupChat.plan.stepMenuTitle')}
         </DropdownMenuLabel>
@@ -200,10 +200,11 @@ function EditableStepRow({
         })}
         {allowRemove ? (
           <>
-            <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+            <DropdownMenuSeparator />
             <DropdownMenuItem
               disabled={lastStep}
-              className={cn(MENU_ITEM_CLASS, 'text-[var(--text-danger)] focus:text-[var(--text-danger)]')}
+              variant="danger"
+              className={MENU_ITEM_CLASS}
               onSelect={() => onEdit(step, 'remove')}
             >
               <span className="min-w-0 flex-1 truncate">{t('bots.groupChat.plan.removeStep')}</span>

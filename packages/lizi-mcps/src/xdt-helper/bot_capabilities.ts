@@ -115,7 +115,7 @@ export function registerBotCapabilityTools(
 ): void {
   if (deps.callbacks.models) registry.register({
     name: 'get_app_default_model', category: 'bots',
-    description: '读取当前用户在应用中选择的默认模型，以及已连接、已启用且引擎可用的型号。修改默认模型前先读此表；不要猜型号或启用用户关闭的型号。伙伴显式配置的模型链可能与此默认值不同。',
+    description: '读取当前用户在应用中选择的默认模型，以及已连接、已启用且引擎可用的型号。修改默认模型或为 start_session_task 单独选模前先读此表；查询不会更改设置。将 available 中的 id 用于 model_selection，它同时绑定型号、来源账号与引擎；不要猜型号或启用用户关闭的型号。伙伴显式配置的模型链可能与此默认值不同。',
     inputShape: {},
     handler: async () => {
       const callerSessionId = deps.getSessionContext().sessionId;

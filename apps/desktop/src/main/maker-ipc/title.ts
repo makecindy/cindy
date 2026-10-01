@@ -14,6 +14,7 @@
  */
 
 import { ipcMain } from 'electron';
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { eq } from 'drizzle-orm';
 
@@ -49,7 +50,11 @@ import {
   type SessionAutoTitleResult,
 } from './sessionAutoTitle.js';
 import { generatePromptPrediction } from './promptPrediction.js';
-import { wasPromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
+import {
+  notePromptPredictionSessionCancelled,
+  wasPromptPredictionSessionCancelled,
+  wasPromptPredictionSessionStopped,
+} from './promptPredictionStopLedger.js';
 
 const log = createLogger('maker-ipc/title');
 
@@ -356,7 +361,9 @@ interface PredictPromptRequest {
   turnGen: number;
   completionRevision: number;
   cacheOnly?: boolean;
+  cancel?: false;
 }
+type CancelPromptRequest = { sessionId: string; completionRevision: number; cancel: true };
 
 interface PromptPredictionCacheEntry {
   revision: number;
@@ -367,16 +374,25 @@ interface PromptPredictionCacheEntry {
 /** 每个 session 只保留最新完成轮的一笔 Promise/结果，进程重启自然清空。 */
 const _promptPredictionCache = new Map<string, PromptPredictionCacheEntry>();
 
-function parsePredictPromptRequest(raw: unknown): PredictPromptRequest {
+function parsePredictPromptRequest(raw: unknown): PredictPromptRequest | CancelPromptRequest {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throwIpcError('INVALID_PARAMS', 'predict-prompt request must be a non-null object');
   }
-  const { sessionId, agentKind, turnGen, completionRevision, cacheOnly } = raw as Record<string, unknown>;
+  const { sessionId, agentKind, turnGen, completionRevision, cacheOnly, cancel } = raw as Record<string, unknown>;
   if (cacheOnly !== undefined && typeof cacheOnly !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'cacheOnly must be a boolean');
   }
+  if (cancel !== undefined && typeof cancel !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'cancel must be a boolean');
+  }
   if (typeof sessionId !== 'string' || !sessionId || sessionId.length > SESSION_ID_MAX) {
     throwIpcError('INVALID_PARAMS', 'invalid or missing sessionId for predict-prompt');
+  }
+  if (cancel === true) {
+    if (typeof completionRevision !== 'number' || !Number.isSafeInteger(completionRevision) || completionRevision <= 0) {
+      throwIpcError('INVALID_PARAMS', 'invalid completionRevision for cancellation');
+    }
+    return { sessionId, completionRevision, cancel: true };
   }
   if (!TITLE_AGENT_KINDS.includes(agentKind as AgentKind)) {
     throwIpcError('INVALID_PARAMS', `invalid agentKind for predict-prompt: ${String(agentKind)}`);
@@ -404,6 +420,7 @@ function parsePredictPromptRequest(raw: unknown): PredictPromptRequest {
     turnGen,
     completionRevision,
     cacheOnly,
+    cancel: false,
   };
 }
 
@@ -422,6 +439,7 @@ async function predictPromptForCompletedRevision(
   options: RegisterMakerTitleIpcOptions,
 ): Promise<string | null> {
   const { sessionId, agentKind, completionRevision } = request;
+  if (wasPromptPredictionSessionCancelled(sessionId, completionRevision, activeOwnerScopeKey())) return null;
   // 防御纵深：身份、来源、完成轮次都以 DB 为准。activeTurnStartedAt 不早于完成
   // revision 表示下一轮已经启动（含同毫秒），即使命中缓存也不能返回上一轮推荐。
   const [sessionRow] = await getDbClient()
@@ -462,6 +480,7 @@ async function predictPromptForCompletedRevision(
   }
 
   const cached = _promptPredictionCache.get(sessionId);
+  if (wasPromptPredictionSessionCancelled(sessionId, completionRevision, activeOwnerScopeKey())) return null;
   if (cached?.revision === completionRevision) {
     // workingDir 会进入模型 prompt；同轮改过目录后不能复用旧目录上下文的结果。
     if (cached.workingDir !== (sessionRow.workingDir ?? null)) return null;
@@ -645,6 +664,10 @@ export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}
       assertTitleIpcCaller(event);
       const parsed = parsePredictPromptRequest(request);
       try {
+        if (parsed.cancel) {
+          notePromptPredictionSessionCancelled(parsed.sessionId, parsed.completionRevision, activeOwnerScopeKey());
+          return { prompt: null };
+        }
         return {
           prompt: await predictPromptForCompletedRevision(parsed, options),
         };

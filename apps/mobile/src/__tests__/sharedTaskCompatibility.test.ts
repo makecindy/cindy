@@ -5,6 +5,22 @@ import { sharedTaskErrorKey } from '../device-link/sharedTaskCompatibility';
 describe('shared-task compatibility errors', () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it.each([
+    ['SHARED_TASK_SELF_JOIN', 'sharedTask.selfJoin'],
+    ['CONFLICT', 'sharedTask.retry'],
+  ])('maps HTTP 409 %s by code without guessing from its message', async (code, key) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { code, message: 'Use existing same-account device control' },
+    }), { status: 409, headers: { 'content-type': 'application/json' } })));
+    const error = await apiFetchRaw('/api/device-link/shared-tasks/join', {
+      baseUrl: 'https://relay.example.invalid', method: 'POST',
+      body: { invitation: 'a'.repeat(43), displayName: 'Owner' },
+    }).catch((error: unknown) => error);
+    expect(error).toMatchObject({ code, status: 409 });
+    expect(sharedTaskErrorKey(error, 'join')).toBe(key);
+    expect(sharedTaskErrorKey(Object.assign(new Error(`[${code}] rejected`), { code: 'IPC_ERROR' }), 'join')).toBe(key);
+  });
+
   it('explains native network failures from the shared-task HTTP request', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Network request failed')));
     const error = await apiFetchRaw('/api/device-link/shared-tasks/join', {

@@ -47,6 +47,10 @@
     "cancel": "Keep this model",
     "confirm": "Switch and continue"
   },
+  "switchOutcome": {
+    "applied": "Model provider switch is now in effect.",
+    "failed": "Model provider switch failed. Choose the model again."
+  },
   "agentSwitch": {
     "browseAccessibility": "Browse {{agent}} models",
     "confirmTitle": "Switch to {{agent}}?",

@@ -1661,33 +1661,8 @@ function computeMerged(): Catalog {
                 ? null
                 : (clampEffortToSupported(intent, model.efforts) as Effort | null)
               : model.defaultEffort;
-          // Product working defaults are distinct from the provider's advertised capacity.
-          // Apply to each built-in GPT route, including subscription and discount aliases.
-          // Never enlarge smaller models or overwrite BYOM / explicit preference overrides.
-          const conservativeGptDefault =
-            (!isCustomRoutedProvider(provider) || !!provider.auth.native) &&
-            ['openai', 'xd'].includes(metadataProviderId) &&
-            /^(?:(?:codex|openai|chatgpt)\/)?gpt-/.test(model.id) &&
-            model.contextWindow > 272_000 &&
-            model.userModelConfig?.contextWindow === undefined &&
-            !(
-              (agent === 'codex' || agent === 'claude-code' || agent === 'pi') &&
-              hasLocalContextWindowOverride(
-                localOverrides,
-                provider.id,
-                metadataProviderId === 'openai' ? model.id.replace(/^chatgpt\//, '') : model.id,
-                agent,
-                metadataProviderId,
-              )
-            );
           return {
             ...model,
-            ...(conservativeGptDefault
-              ? {
-                  contextWindow: 272_000,
-                  contextWindowMax: model.contextWindowMax ?? model.contextWindow,
-                }
-              : {}),
             defaultEffort,
             ...(nativeApi !== undefined ? { nativeApi } : {}),
           };
@@ -1761,29 +1736,6 @@ function computeMerged(): Catalog {
                 agent === 'pi' ? model.reasoningDefaultEffort : undefined,
               ),
             );
-          }
-          if (
-            (!isCustomRoutedProvider(provider) || !!provider.auth.native) &&
-            ['openai', 'xd'].includes(metadataProviderId) &&
-            /^(?:(?:codex|openai|chatgpt)\/)?gpt-/.test(next.id) &&
-            next.contextWindow > 272_000 &&
-            next.userModelConfig?.contextWindow === undefined &&
-            !(
-              (agent === 'codex' || agent === 'claude-code' || agent === 'pi') &&
-              hasLocalContextWindowOverride(
-                localOverrides,
-                provider.id,
-                next.id.replace(/^chatgpt\//, ''),
-                agent,
-                metadataProviderId,
-              )
-            )
-          ) {
-            next = {
-              ...next,
-              contextWindowMax: Math.max(next.contextWindowMax ?? 0, next.contextWindow),
-              contextWindow: 272_000,
-            };
           }
           const identity =
             findModelRegistryRoute(
@@ -1923,6 +1875,39 @@ function computeMerged(): Catalog {
       }),
     ])) };
   });
+  // One working-default projection after discovery, Registry, custom/organization
+  // connections and local additions. Never persist it as discovery or a user edit.
+  providers = providers.map(provider => ({
+    ...provider,
+    models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [
+      agent, models?.map(model => {
+        if (!(model.contextWindow > 272_000) ||
+            (model.mode && model.mode !== 'chat' && model.mode !== 'responses')) return model;
+        const metadataProviderId = providerCatalogId(provider);
+        const rootId = metadataProviderId === 'openai'
+          ? model.id.replace(/^chatgpt\//, '') : model.id;
+        const identity = findModelRegistryRoute(
+          b.modelRegistry, metadataProviderId, rootId,
+          agent === 'pi' ? undefined : agent as RootAgentKind,
+        )?.entry.modelRef ?? findBaseModel(b.modelRegistry, rootId)?.id;
+        // Known public identities take precedence, including other vendors using
+        // GPT-like aliases. Only unresolved GPT/Codex/o-series IDs fall back to
+        // family names before the next catalog release; protocol alone never
+        // identifies a vendor, and arbitrary private namespaces remain excluded.
+        const openAiModel = identity !== undefined
+          ? identity.startsWith('openai/')
+          : /^(?:(?:codex|openai|chatgpt)\/)?(?:gpt-|codex-|o\d+(?:[.-]|$))/.test(model.id);
+        if (!openAiModel || model.userModelConfig?.contextWindow !== undefined ||
+            (identity && localOverrides.baseModels?.[identity]?.contextWindow !== undefined) ||
+            hasLocalContextWindowOverride(localOverrides, provider.id, rootId,
+              agent as AgentKind, metadataProviderId) ||
+            (rootId !== model.id && hasLocalContextWindowOverride(localOverrides,
+              provider.id, model.id, agent as AgentKind, metadataProviderId))) return model;
+        return { ...model, contextWindow: 272_000,
+          contextWindowMax: model.contextWindowMax ?? model.contextWindow };
+      }),
+    ])),
+  }));
   return { ...b, modelRegistry, providers };
 }
 

@@ -1323,10 +1323,7 @@ interface ElectronAPI {
     ) => () => void;
     /** Main 已结算(超时、取消或账号切换)某次确认，窗口应收起对应确认框。 */
     onInstallConsentDismissed: (callback: (payload: { requestId: string }) => void) => () => void;
-    resolveInstallConsent: (
-      requestId: string,
-      confirmed: boolean,
-    ) => Promise<{ handled: boolean }>;
+    resolveInstallConsent: (requestId: string, confirmed: boolean) => Promise<{ handled: boolean }>;
     /** Plugin 快捷行最近使用顺序(最新在前,首帧同步读取避免排序跳变)。 */
     recentUsageSync: () => { ids: string[] };
     /** 成功发送一次 Plugin 指令后记录最近使用。 */
@@ -1428,6 +1425,7 @@ interface ElectronAPI {
     ) => Promise<{ status: 'saved'; savedPath: string } | { status: 'canceled' }>;
     /** 启用/停用(停用 = 面板休眠,布局位置保留)。 */
     setEnabled: (id: string, enabled: boolean) => Promise<{ ok: true }>;
+    requestTaskApproval: (id: string) => Promise<{ granted: boolean }>;
     /** 目录级禁用清单(插件页项目范围视图;sendSync 切换同帧渲染)。 */
     workdirPrefsSync: (workdir: string) => { disabled: string[] };
     /** 写/清一条目录级例外(disabled=false 即清除,回到跟随全局)。 */
@@ -4362,6 +4360,11 @@ interface ElectronAPI {
 
   // ── session-git-pr-context: 会话分支感知 + PR 关联状态 ──
   gitContext: {
+    githubSetupStatus: () => Promise<import('../shared/githubSetup').GithubSetupState>;
+    githubConnection: () => Promise<import('../shared/githubSetup').GithubConnectionState>;
+    startGithubSetup: () => Promise<import('../shared/githubSetup').GithubSetupState>;
+    cancelGithubSetup: () => Promise<import('../shared/githubSetup').GithubSetupState>;
+    onGithubConnected: (cb: () => void) => () => void;
     get: (workdir: string) => Promise<import('@/lib/gitContext.types').GitContextSnapshot>;
     getForSession: (input: {
       sessionId: string;
@@ -4780,6 +4783,7 @@ interface ElectronAPI {
         session: import('@/lib/ccAgent.types').Session;
       }>;
       history: (botId: string) => Promise<unknown[]>;
+      listSkills: (botId: string) => Promise<import('../shared/botSkill').BotSkillSummary[]>;
       memory: {
         list: (
           botId: string,
@@ -5010,8 +5014,23 @@ interface ElectronAPI {
       resetCollaborationSettings: () => Promise<unknown>;
     };
     messages: {
-      historyView: (sessionId: string, opts?: { before?: string | null; lazyDetails?: boolean }) => Promise<import('@cindy/maker-shared/message-window').HistoryViewPage<import('@/lib/ccAgent.types').Message>>;
-      workDetails: (sessionId: string, ref: import('@cindy/maker-shared/message-window').HistoryWorkReference, opts?: { after?: string | null }) => Promise<import('@cindy/maker-shared/message-window').HistoryDetailPage<import('@/lib/ccAgent.types').Message>>;
+      historyView: (
+        sessionId: string,
+        opts?: { before?: string | null; lazyDetails?: boolean },
+      ) => Promise<
+        import('@cindy/maker-shared/message-window').HistoryViewPage<
+          import('@/lib/ccAgent.types').Message
+        >
+      >;
+      workDetails: (
+        sessionId: string,
+        ref: import('@cindy/maker-shared/message-window').HistoryWorkReference,
+        opts?: { after?: string | null },
+      ) => Promise<
+        import('@cindy/maker-shared/message-window').HistoryDetailPage<
+          import('@/lib/ccAgent.types').Message
+        >
+      >;
       list: (
         sessionId: string,
         opts?: { limit?: number; before?: string; beforeTs?: number },
@@ -5369,6 +5388,14 @@ interface ElectronAPI {
       options?: CustomProviderUpdateOptions,
     ) => Promise<CustomProviderUpdateResult>;
     localModelStatus: () => Promise<import('../shared/localModelRuntime').LocalRuntimeStatus>;
+    llamaCppEnsure: () => Promise<void>;
+    llamaCppStatus: () => Promise<import('../shared/llamaCpp').LlamaCppSnapshot>;
+    llamaCppInstall: () => Promise<void>;
+    llamaCppFiles: (repo: string) => Promise<import('../shared/llamaCpp').LlamaCppFile[]>;
+    llamaCppDownload: (input: import('../shared/llamaCpp').LlamaCppDownloadInput) => Promise<void>;
+    llamaCppStart: () => Promise<void>;
+    llamaCppStop: () => Promise<void>;
+    llamaCppCancel: (action?: 'cancel' | 'pause' | 'resume') => Promise<void>;
     localModelStart: () => Promise<import('../shared/localModelRuntime').LocalRuntimeStatus>;
     localModelList: () => Promise<{
       status: import('../shared/localModelRuntime').LocalRuntimeStatus;
@@ -6100,10 +6127,18 @@ interface ElectronAPI {
       decision: Record<string, unknown>,
     ) => Promise<{ accepted: boolean }>;
 
-    assistPluginOauth: (request: import('../shared/pluginOauth').LocalPluginOauthRequest) => Promise<{ accepted: boolean }>;
-    submitRemotePluginSecret: (request: import('../shared/pluginOauth').LocalPluginSecretRequest) => Promise<{ accepted: boolean }>;
-    submitRemotePluginConnection: (request: import('../shared/pluginOauth').LocalPluginConnectionRequest) => Promise<{ accepted: boolean }>;
-    pluginOauthDeviceCode: (request: import('../shared/pluginOauthDeviceCode').PluginOauthDeviceCodeRequest) => Promise<import('../shared/pluginOauthDeviceCode').PluginOauthDeviceCodeView | null>;
+    assistPluginOauth: (
+      request: import('../shared/pluginOauth').LocalPluginOauthRequest,
+    ) => Promise<{ accepted: boolean }>;
+    submitRemotePluginSecret: (
+      request: import('../shared/pluginOauth').LocalPluginSecretRequest,
+    ) => Promise<{ accepted: boolean }>;
+    submitRemotePluginConnection: (
+      request: import('../shared/pluginOauth').LocalPluginConnectionRequest,
+    ) => Promise<{ accepted: boolean }>;
+    pluginOauthDeviceCode: (
+      request: import('../shared/pluginOauthDeviceCode').PluginOauthDeviceCodeRequest,
+    ) => Promise<import('../shared/pluginOauthDeviceCode').PluginOauthDeviceCodeView | null>;
 
     /** Submit one inline plugin Secret through the local trusted-frame-only IPC. */
     submitPluginSetupInline: (request: {
@@ -6168,6 +6203,8 @@ interface ElectronAPI {
     // effort/mode 透传 string —— 合法值由 maker capabilities 决定, vite-env 不重复枚举
     setEffort: (sessionId: string, effort: string) => Promise<void>;
     setPermissionMode: (sessionId: string, mode: string) => Promise<void>;
+    getPluginWriteAccessRecovery: (sessionId: string) => Promise<{available: boolean}>;
+    retryPluginWriteAccess: (sessionId: string) => Promise<{granted: boolean; mode?: 'acceptEdits' | 'auto'}>;
     setFastMode: (sessionId: string, enabled: boolean) => Promise<void>;
     setThinkingEnabled: (sessionId: string, enabled: boolean) => Promise<void>;
     /** 计划模式一级开关(与 permissionMode 正交); DB 持久化由调用方另调 sessionService.update({ planModeEnabled }) */
@@ -6472,6 +6509,9 @@ interface ElectronAPI {
     onSessionCredentialSwitchApplied: (
       cb: (payload: { sessionId: string; model: string; providerId: string | null }) => void,
     ) => () => void;
+    onSessionCredentialSwitchFailed: (
+      cb: (payload: { sessionId: string; reason: 'apply-failed' | 'rollback-failed' }) => void,
+    ) => () => void;
 
     /** cc 默认路由会话的生效计费路由(proxy 按请求观察);null = 会话尚未发过请求 */
     claudeSessionRouteGet: (sessionId: string) => Promise<'gateway' | 'subscription' | null>;
@@ -6493,7 +6533,9 @@ interface ElectronAPI {
     /** 取消对应登录尝试。 */
     claudeOAuthCancel: (loginKey?: string) => Promise<{ authorized: boolean }>;
     /** 启动 xAI 浏览器或设备码 OAuth 登录；成功写 safeStorage。 */
-    xaiOAuthLogin: (method?: 'browser' | 'device') => Promise<{ ok: boolean; authorized: boolean; reason?: string }>;
+    xaiOAuthLogin: (
+      method?: 'browser' | 'device',
+    ) => Promise<{ ok: boolean; authorized: boolean; reason?: string }>;
     /** 登出 xAI(清本机 safeStorage 的 xai 凭证) */
     xaiOAuthLogout: (ownerScope?: {
       dataOwnerId: string | null;
@@ -6555,6 +6597,11 @@ interface ElectronAPI {
       workingDir?: string;
       turnGen: number;
       completionRevision: number;
+      cancel?: false;
+    } | {
+      sessionId: string;
+      completionRevision: number;
+      cancel: true;
     }) => Promise<{ prompt: string | null }>;
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,
@@ -6651,7 +6698,9 @@ interface ElectronAPI {
 
     piKernel: {
       getState: (check?: boolean) => Promise<import('../shared/piKernel').PiKernelState>;
-      install: (request: import('../shared/piKernel').PiKernelInstallRequest) => Promise<import('../shared/piKernel').PiKernelState>;
+      install: (
+        request: import('../shared/piKernel').PiKernelInstallRequest,
+      ) => Promise<import('../shared/piKernel').PiKernelState>;
     };
 
     /* ── Agent 联合状态 (binary + auth, 取代老 codex.binary.getStatus) ── */
@@ -7324,24 +7373,7 @@ interface SkillhubPublishParams {
   changelog?: string;
 }
 
-type SkillhubPublishErrorCode =
-  | 'NAME_TAKEN'
-  | 'INVALID_DEPT'
-  | 'INVALID_NAME'
-  | 'CATEGORY_REQUIRED'
-  | 'MANIFEST_INVALID'
-  | 'VERSION_RACE'
-  | 'CHECKSUM_MISMATCH'
-  | 'NOT_AUTHOR'
-  | 'PACK_FAILED'
-  | 'OSS_PUT_FAILED'
-  | 'OSS_PUT_EXPIRED'
-  | 'OSS_OBJECT_NOT_FOUND'
-  | 'API_KEY_MISSING'
-  | 'CANCELLED'
-  | 'SKILL_HUB_READ_ONLY'
-  | 'INVALID_VISIBILITY'
-  | 'INTERNAL';
+type SkillhubPublishErrorCode = import('../shared/skillhubPublishErrors').SkillhubPublishErrorCode;
 
 type SkillhubPublishProgressEvent = (
   | { phase: 'packing' }

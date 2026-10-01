@@ -187,6 +187,24 @@ describe('createOrcaWorkerResumeScheduler', () => {
     expect(resume).toHaveBeenCalledTimes(2);
   });
 
+  it('forwards the authority check guard into the resume implementation', async () => {
+    const assertCurrent = vi.fn(async () => undefined);
+    const resume = vi.fn(
+      async (_target: unknown, _isCancelled: () => boolean, _assertCurrent?: () => Promise<void>) =>
+        true,
+    );
+    const scheduler = createOrcaWorkerResumeScheduler({
+      resume,
+      withSessionLock: (_sessionId, task) => task(),
+    });
+
+    scheduler.requestInBackground({ sessionId: 'worker-1' }, () => undefined, { assertCurrent });
+
+    await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(1));
+    expect(resume.mock.calls[0]?.[2]).toBe(assertCurrent);
+    expect(scheduler.pendingCount()).toBe(0);
+  });
+
   it('ignores cancel for sessions without an in-flight resume', () => {
     const scheduler = createOrcaWorkerResumeScheduler({
       resume: async () => true,

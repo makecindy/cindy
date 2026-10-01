@@ -1,3 +1,4 @@
+import { remoteCompanionImportApi, compactCompanionImportSelection, companionImportSubmissions } from '@cindy/maker-shared/companion-import';
 import fsSync, { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,17 +8,22 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Routine, RoutineInput } from '@cindy/maker-scheduler';
 import { companionEnvironmentKey, createCompanionEnvironmentStore } from '../environment.js';
-import { fingerprint } from '../files.js';
+import { deserializeImportSnapshotAsync, fingerprint } from '../files.js';
+import { createMessage } from '../../localDb/ipc/messages.js';
+import { t } from '../../i18n.js';
 import { createBotProfile, getBotRemoteResourceSource } from '../../localDb/ipc/bots.js';
 import type { ImportSnapshot } from '../types.js';
 import { CompanionImportError } from '../types.js';
 import { previewImportRedactions } from '../environmentSelection.js';
 import { redactEnvironmentValues } from '../process.js';
+import { DEFAULT_MEMORY_CONFIG, MemoryStorage, type MakerMemoryStore } from '@cindy/maker-core';
+import { BOT_MEMORY_BODY_MAX_BYTES } from '../../../shared/botMemory.js';
+import { createBotMemoryService } from '../../maker-ipc/botMemoryService.js';
 
 const h = vi.hoisted(() => ({ root: '', botId: '', created: false, verified: false, sourceEnabled: true, failReadyWrite: false, boundary: false,
   snapshot: null as unknown as ImportSnapshot, store: null as unknown as ReturnType<typeof createCompanionEnvironmentStore>,
   routines: [] as Routine[], pause: vi.fn(), lifecycle: vi.fn(), sourceEnvironment: {} as Record<string, string>,
-  writeProfile: vi.fn(), importDocument: vi.fn(), readName: vi.fn(), secretValues: new Map<string, string>(),
+  profile: { config: {} } as Record<string, unknown>, importMedia: vi.fn(), writeProfile: vi.fn(), importDocument: vi.fn(), readName: vi.fn(), secretValues: new Map<string, string>(),
 }));
 vi.mock('electron', () => ({ app: { getPath: () => h.root } }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => h.root, ownerScopedUserDataPath: () => h.root, getActiveAppSession: () => ({ dataOwnerId: 'fixture-owner' }), isAppSessionBoundaryPending: () => h.boundary }));
@@ -28,7 +34,7 @@ vi.mock('../../localDb/ipc/bots.js', () => ({
   getBotMemoryService: () => ({ importDocument: h.importDocument }), reconcileBotProfileFolder: async () => {},
 }));
 vi.mock('../../localDb/ipc/botAvatarSelection.js', () => ({ validateBotAvatarBuffer: vi.fn(), decodeBotAvatarImage: vi.fn() }));
-vi.mock('../../maker-ipc/botProfileFolder.js', () => ({ BOT_PROFILE_TEXT_MAX_BYTES: 100000, readBotProfileFolder: async () => ({ config: {} }), writeBotProfileFolder: h.writeProfile,
+vi.mock('../../maker-ipc/botProfileFolder.js', () => ({ BOT_PROFILE_TEXT_MAX_BYTES: 100000, readBotProfileFolder: async () => h.profile, writeBotProfileFolder: h.writeProfile,
   ensureBotWorkspaceDir: async () => { const directory = path.join(h.root, 'bots', h.botId, 'workspace'); await fs.mkdir(directory, { recursive: true }); return directory; },
 }));
 vi.mock('@cindy/mcps', () => ({ resolveLiziMcpSessionContext: () => ({ sessionId: 'chat' }) }));
@@ -37,14 +43,17 @@ vi.mock('../openclawCron.js', () => ({ readOpenClawCronDatabase: vi.fn() }));
 vi.mock('../verification.js', () => ({ verifyImportedAutomation: vi.fn(async () => ({ verified: h.verified, reason: 'AUTOMATION_DATA_READ_FAILED' })) }));
 vi.mock('../takeover.js', () => ({ changeSourceAutomationState: async (_source: unknown, _item: unknown, enabled: boolean, _readers: unknown, _owner: unknown, _resume: boolean, env: Record<string, string>) => { h.pause(enabled); h.sourceEnabled = enabled; h.sourceEnvironment = env; } }));
 vi.mock('../runtime.js', () => ({ recoverCompanionEnvironmentRemovals: vi.fn(async () => {}),
+  readCompanionSessionScope: async () => ({ owner: h.root, botId: h.botId, userData: h.root, assertOwner() { if (h.boundary) throw new Error('OWNER_CHANGED'); } }),
   readCompanionSessionEnvironment: async () => ({ identity: h.root, botId: h.botId, userData: h.root, assertOwner() {}, environment: await h.store.read(h.root, h.botId, () => {}) }),
   companionEnvironmentStore: {
   read: (...args: Parameters<typeof h.store.read>) => h.store.read(...args),
+  readImportRequestId: (...args: Parameters<typeof h.store.readImportRequestId>) => h.store.readImportRequestId(...args),
   write: (...args: Parameters<typeof h.store.write>) => h.store.write(...args),
   update: (...args: Parameters<typeof h.store.update>) => h.store.update(...args),
   stageRemoval: (...args: Parameters<typeof h.store.stageRemoval>) => h.store.stageRemoval(...args),
   finishRemoval: (...args: Parameters<typeof h.store.finishRemoval>) => h.store.finishRemoval(...args),
 } }));
+vi.mock('../memoryMedia.js', () => ({ importMemoryMedia: h.importMedia }));
 vi.mock('../../localDb/ipc/messages.js', () => ({ createMessage: vi.fn() }));
 vi.mock('../../routines/service.js', () => ({
   updateBotRoutineLifecycle: h.lifecycle,
@@ -62,13 +71,14 @@ vi.mock('../../routines/service.js', () => ({
     h.routines = h.routines.map(row => row.id === id ? { ...row, ...input, revision: row.revision + 1 } : row);
   } }),
 }));
-import { listCompanionImportSources, previewCompanionImport, startCompanionImport, getCompanionImportResult, recoverCompanionImports, prepareCompanionImportDeletion, cancelCompanionImportsForDeletion, ensureImportedAutomationReady } from '../host.js';
+import { submitRemoteCompanionImport, readRemoteCompanionImport, listCompanionImportSources, previewCompanionImport, startCompanionImport, getCompanionImportResult, getCompanionImportSetupStatus, recoverCompanionImports, prepareCompanionImportDeletion, cancelCompanionImportsForDeletion, ensureImportedAutomationReady } from '../host.js';
 import { withBotProfileLocks } from '../../maker-ipc/botProfileLock.js';
 import { assertImportedAutomationReady, prepareImportedAutomation } from '../automationRuntime.js';
 import { decodeBotAvatarImage } from '../../localDb/ipc/botAvatarSelection.js';
 import { createCompanionConnectionsProvider } from '../connectionProvider.js';
 import { createImportSourceReader, discoverImportSources, inspectImportSource } from '../sources.js';
 import { verifyImportedAutomation } from '../verification.js';
+import { indexAutomationDependencies, normalizeAutomation } from '../sourceAutomations.js';
 
 beforeEach(async () => {
   h.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-host-test-'));
@@ -79,11 +89,13 @@ beforeEach(async () => {
   vi.mocked(verifyImportedAutomation).mockClear();
   vi.mocked(getBotRemoteResourceSource).mockReset().mockImplementation(async () => { if (!h.created) throw new Error('[NOT_FOUND]'); return { canonicalSessionId: 'chat' } as never; });
   vi.mocked(createBotProfile).mockReset().mockImplementation(async input => { h.created = true; h.botId = (input as { id: string }).id; return {} as never; });
-  h.writeProfile.mockReset().mockResolvedValue(undefined); h.importDocument.mockReset().mockResolvedValue(undefined);
+  vi.mocked(createMessage).mockReset();
+  h.profile = { config: {} }; h.importMedia.mockReset().mockResolvedValue('cindy-media://blobs/fixture.png');
+  h.writeProfile.mockReset().mockImplementation(async (_root, _bot, patch) => { h.profile = { ...h.profile, ...patch }; }); h.importDocument.mockReset().mockResolvedValue(undefined);
   vi.mocked(decodeBotAvatarImage).mockReset();
   vi.mocked(discoverImportSources).mockReset().mockImplementation(async () => [h.snapshot.source]);
   vi.mocked(inspectImportSource).mockReset().mockImplementation(async () => h.snapshot);
-  vi.mocked(createImportSourceReader).mockReset().mockImplementation(() => ({ readName: h.readName }) as never);
+  vi.mocked(createImportSourceReader).mockReset().mockImplementation(() => ({ readName: h.readName, readRedactions: async () => previewImportRedactions(h.snapshot.items) }) as never);
   h.readName.mockReset().mockImplementation(async source => redactEnvironmentValues(source.name, previewImportRedactions(h.snapshot.items)));
   const values = h.secretValues; values.clear();
   h.store = createCompanionEnvironmentStore({ read: key => values.get(key) ?? null, write: (key, value) => {
@@ -96,6 +108,74 @@ beforeEach(async () => {
   }] };
 });
 afterEach(async () => { vi.restoreAllMocks(); await fs.rm(h.root, { recursive: true, force: true }); });
+
+it('compiles credential matching once for a large preview and preserves all entries', async () => {
+  const secret = (index: number) => `fixture-compiled-secret-${index.toString().padStart(5, '0')}`;
+  h.snapshot.items = [
+    ...Array.from({ length: 2_000 }, (_, index) => ({
+      view: { id: `env-${index}`, category: 'connections' as const, selected: true, name: `Account ${index}` },
+      env: { [`TOKEN_${index}`]: secret(index) },
+    })),
+    ...Array.from({ length: 10_000 }, (_, index) => ({
+      view: { id: `skill-${index}`, category: 'skills' as const, selected: true,
+        name: `Skill ${index} ${secret(index % 2_000)}`, description: `Ordinary description ${secret(1_999)}` },
+    })),
+  ];
+  const [source] = await listCompanionImportSources('fixture');
+  let compilations = 0;
+  const NativeRegExp = RegExp;
+  vi.stubGlobal('RegExp', new Proxy(NativeRegExp, {
+    construct(target, args) {
+      if (String(args[0]).includes('fixture-compiled-secret-')) {
+        compilations += 1;
+        // Fail before the regression can allocate thousands of large matchers.
+        if (compilations > 1) throw new Error('Repeated preview credential matcher compilation');
+      }
+      return Reflect.construct(target, args);
+    },
+  }));
+  try {
+    const preview = await previewCompanionImport(source!.id, 'fixture');
+    expect(compilations).toBe(1);
+    expect(preview.entries).toHaveLength(12_000);
+    for (const entry of preview.entries.slice(2_000)) {
+      expect(entry.name).toMatch(/^Skill \d+ \[preview_credential_\d+\]$/);
+      expect(entry.description).toMatch(/^Ordinary description \[preview_credential_\d+\]$/);
+    }
+    expect(h.snapshot.items[2_000]!.view.name).toBe(`Skill 0 ${secret(0)}`);
+  } finally { vi.unstubAllGlobals(); }
+}, 10_000);
+
+it('bounds actual receipt writes with long entry names while retaining retryable failures', async () => {
+  const count = 1_000;
+  h.snapshot.items = Array.from({ length: count }, (_, index) => ({
+    view: { id: `memory-${index}`, name: `${'长名称'.repeat(60)}-${index}`, category: 'memory', selected: true }, text: `Original ${index}`,
+  }));
+  h.importDocument.mockImplementation(async (_bot, id) => { if (id === 'memory-999') throw Object.assign(new Error('full'), { code: 'ENOSPC' }); });
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'receipt-byte-budget-fixture', previewId: preview.id, name: 'Ada', entryIds: h.snapshot.items.map(item => item.view.id), takeover: false, deferSetup: true };
+  const receiptPath = path.join(h.root, 'companion-imports', `${selection.requestId}.json`);
+  let writtenBytes = 0;
+  const write = fsSync.writeFileSync;
+  vi.spyOn(fsSync, 'writeFileSync').mockImplementation((file, data, options) => {
+    if (String(file).startsWith(`${receiptPath}.`) && typeof data === 'string') writtenBytes += Buffer.byteLength(data);
+    return write(file, data, options);
+  });
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  const saved = JSON.parse(await fs.readFile(receiptPath, 'utf8'));
+  expect(writtenBytes).toBeGreaterThan(0);
+  expect(writtenBytes).toBeLessThan((await fs.stat(receiptPath)).size * 12);
+  expect(Object.keys(saved.entryNames)).toHaveLength(count);
+  expect(result?.savedEntryIds).toHaveLength(count - 1);
+  expect(result?.checks.find(check => check.entryId === 'memory-999')).toMatchObject({ status: 'needs-attention', message: 'IMPORT_DISK_FULL' });
+  expect((await h.store.read(h.root, accepted.botId, () => {}))?.pendingImport).toBeDefined();
+  h.importDocument.mockResolvedValue(undefined);
+  await startCompanionImport(selection, 'after-restart');
+  const retried = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(retried?.status).toBe('complete'); expect(retried?.savedEntryIds).toHaveLength(count);
+}, 10_000);
 
 it('rejects a simultaneous normalized-name conflict, removes only the loser checkpoint, and accepts a renamed request', async () => {
   h.snapshot.items = [{ view: { id: 'env', name: 'Key', category: 'connections', selected: true }, env: { API_KEY: 'fixture-private-key' } }];
@@ -134,7 +214,7 @@ it('rejects a simultaneous normalized-name conflict, removes only the loser chec
   expect(await h.store.read(h.root, botId, () => {})).toBeUndefined();
   const winner = selections[1 - rejectedIndex]!;
   await vi.waitFor(async () => expect((await getCompanionImportResult(winner.requestId))?.status).toBe('complete'));
-  expect(h.secretValues.size).toBe(1);
+  expect(h.secretValues.size).toBe(2);
   const receiptText = await fs.readFile(path.join(h.root, 'companion-imports', `${rejected.requestId}.json`), 'utf8');
   expect(receiptText).not.toContain('fixture-private-key');
   expect(JSON.parse(receiptText).creationRejected).toBe('IMPORT_NAME_EXISTS');
@@ -143,7 +223,7 @@ it('rejects a simultaneous normalized-name conflict, removes only the loser chec
   await startCompanionImport({ ...rejected, name: 'Grace', requestId: 'name-race-renamed-request' }, 'fixture');
   await vi.waitFor(async () => expect((await getCompanionImportResult('name-race-renamed-request'))?.status).toBe('complete'));
   expect(profiles.size).toBe(2);
-  expect(h.secretValues.size).toBe(2);
+  expect(h.secretValues.size).toBe(4);
   expect(h.pause).not.toHaveBeenCalled();
 });
 
@@ -154,7 +234,7 @@ it('recovers rejected creation cleanup after a storage failure without retrying 
   const preview = await previewCompanionImport(source!.id, 'fixture');
   const selection = { requestId: 'name-rejection-recovery', previewId: preview.id, name: 'Ada', entryIds: ['task'], takeover: true };
   await expect(startCompanionImport(selection, 'fixture')).rejects.toThrow('CREDENTIAL_STORAGE_FAILED');
-  expect(h.secretValues.size).toBe(1);
+  expect(h.secretValues.size).toBe(2);
   await recoverCompanionImports();
   expect(h.secretValues.size).toBe(0);
   expect(finish).toHaveBeenCalledTimes(2);
@@ -175,7 +255,7 @@ it('retains a committed profile and credentials when a create conflict acknowled
   await startCompanionImport(selection, 'fixture');
   await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
   expect(h.created).toBe(true);
-  expect(h.secretValues.size).toBe(1);
+  expect(h.secretValues.size).toBe(2);
   expect(await h.store.read(h.root, h.botId, () => {})).toBeDefined();
 });
 
@@ -356,7 +436,8 @@ it.each(['hermes', 'openclaw'] as const)('masks %s names from real source files 
 });
 
 it.each([false, true])('redacts all known credentials from profile/memory copies while importing only selected connections (deselected: %s)', async deselected => {
-  const secrets = ['fake-env-key', 'fake-local-key', 'fake-header-token', 'fake/url+key', 'fake-access-token', 'fake-refresh-token', '123:fake-telegram-token'];
+  const basic = `Basic ${Buffer.from('alice:fixture-mcp-basic:password').toString('base64')}`;
+  const secrets = ['fake-env-key', 'fake-local-key', 'fake-header-token', 'fake/url+key', 'fake-access-token', 'fake-refresh-token', '123:fake-telegram-token', 'fixture-cookie-session', 'fixture-cookie/second', 'alice:fixture-mcp-basic:password', 'fixture-mcp-basic:password'];
   const text = `简短一点，带点幽默。status en us true 3000\n${secrets.join('\n')}\nfake-unselected-key`;
   const documents: ImportSnapshot['items'] = [
     { view: { id: 'soul', name: 'SOUL.md', category: 'personality', selected: true }, role: 'identity', text },
@@ -367,7 +448,7 @@ it.each([false, true])('redacts all known credentials from profile/memory copies
   ];
   h.snapshot.items = [...documents,
     { view: { id: 'env', name: 'env', category: 'connections', selected: true }, env: { DATA_TOKEN: secrets[0]!, LANG: 'en', REGION: 'us', DEBUG: 'true', PORT: '3000' } },
-    { view: { id: 'mcp', name: 'Data', category: 'connections', selected: true }, mcp: { name: 'Data', url: 'https://example.invalid/mcp?token=fake%2Furl%2Bkey', env: { KEY: secrets[1]!, REFERENCED: '${DATA_TOKEN}' }, headers: { Authorization: `Bearer ${secrets[2]}` } } },
+    { view: { id: 'mcp', name: 'Data', category: 'connections', selected: true }, mcp: { name: 'Data', url: 'https://example.invalid/mcp?token=fake%2Furl%2Bkey', env: { KEY: secrets[1]!, REFERENCED: '${DATA_TOKEN}' }, headers: { Authorization: `Bearer ${secrets[2]}`, 'Proxy-Authorization': basic, Cookie: 'session=fixture-cookie-session; another="fixture-cookie%2Fsecond"' } } },
     { view: { id: 'oauth', name: 'Auth', category: 'connections', selected: true }, credential: { format: 'native-auth', value: { value: { access_token: secrets[4], nested: { refreshToken: secrets[5] } } } } },
     { view: { id: 'telegram', name: 'Telegram', category: 'connections', selected: true }, credential: { format: 'telegram', value: { token: secrets[6], account: 'default' } } },
     { view: { id: 'excluded', name: 'Excluded', category: 'connections', selected: false }, env: { EXCLUDED: 'fake-unselected-key', UNUSED_ONLY: 'fake-absent-from-selected-content' } },
@@ -392,6 +473,8 @@ it.each([false, true])('redacts all known credentials from profile/memory copies
     expect(stored.env.DATA_TOKEN).toBe(secrets[0]);
     expect(stored.mcp[0]?.env?.REFERENCED).toBe(secrets[0]);
     expect(stored.mcp[0]?.headers?.Authorization).toBe(`Bearer ${secrets[2]}`);
+    expect(stored.mcp[0]?.headers?.['Proxy-Authorization']).toBe(basic);
+    expect(stored.mcp[0]?.headers?.Cookie).toBe('session=fixture-cookie-session; another="fixture-cookie%2Fsecond"');
   }
   expect(stored.env).not.toHaveProperty('EXCLUDED');
   expect(JSON.stringify(stored)).not.toContain('fake-absent-from-selected-content');
@@ -399,6 +482,58 @@ it.each([false, true])('redacts all known credentials from profile/memory copies
   await vi.waitFor(async () => {
     expect((await h.store.read(h.root, result.botId, () => {}))?.pendingImport).toBeUndefined();
   });
+});
+
+it.each([false, true])('publishes command env/argv/stdin credentials safely (command selected: %s)', async selected => {
+  const secret = 'fixture-command-json-token';
+  const nested = 'fixture-command-json-nested';
+  const literalSecrets = ['fixture-argv-token', 'fixture-stdin-token', 'fixture-plain-token', 'fixture-header-token', 'fixture-form argv', 'fixture-form%20argv', 'fixture-form/env', 'fixture-form%2Fenv', 'fixture-curl-password', 'fixture-custom-header-key', 'fixture-command-cookie', 'alice:fixture-basic:password', 'fixture-basic:password'];
+  const urlSecrets = ['fixture-hook-token', 'fixture-fragment token', 'fixture-fragment%20token',
+    'fixture-raw token', 'fixture-raw%20token', 'fixture-raw-query', 'fixture-raw-fragment',
+    'fixture-inherited token', 'fixture-inherited%20token', 'fixture-inherited-query'];
+  const inheritedEnv = { WEBHOOK_URL: 'https://host/hooks/fixture-inherited%20token?token=fixture-inherited-query',
+    DISPLAY_MODE: 'true', RETRY_COUNT: '7' };
+  const config = JSON.stringify({ token: secret, credentials: [{ key: nested }],
+    services: [{ endpoint: 'https://host/hooks/fixture-hook-token#access_token=fixture-fragment%20token' }],
+    unused: { password: 'fixture-unused-command-secret' }, city: 'Paris', count: 7 });
+  const text = `Keep node --mode -e, Paris and 7. ${secret} ${nested} ${urlSecrets.join(' ')} ${literalSecrets.join(' ')}`;
+  const skill = `---\nname: report\ndescription: ${text}\n---\n${text}\n`;
+  const original = { enabled: false, payload: { kind: 'command', argv: ['curl', '-u', 'alice:fixture-curl-password', '--config=' + JSON.stringify({ token: literalSecrets[0], city: 'Paris' }), '--token=' + literalSecrets[2], '-H', 'Authorization: Bearer ' + literalSecrets[3], '--proxy-header', 'Proxy-Authorization: Basic ' + Buffer.from('alice:fixture-basic:password').toString('base64'), '-H', 'X-API-Key: fixture-custom-header-key', '-HCookie: session=fixture-command-cookie', '--data', 'access_token=fixture-form%20argv&city=Paris'], input: JSON.stringify({ credentials: [{ privateKeyPem: literalSecrets[1] }], count: 7 }), env: { CONFIG: config, FORM: 'password=fixture-form%2Fenv&days=7', WEBHOOK_URL: 'https://host/hooks/fixture-raw%20token?token=fixture-raw-query#access_token=fixture-raw-fragment' } } };
+  h.sourceEnabled = false;
+  h.snapshot.items = [
+    { view: { id: 'source-env', name: '.env', category: 'connections', selected: true }, env: inheritedEnv },
+    { view: { id: 'task', name: text, category: 'automations', selected, enabled: false }, automation: { sourceId: 'task', fingerprint: 'fixture', original,
+      input: { name: text, prompt: text, enabled: false, triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] } } },
+    { view: { id: 'memory', name: text, category: 'memory', selected: true }, text },
+    { view: { id: 'skill', name: 'report', description: text, category: 'skills', selected: true }, filesComplete: true,
+      files: [{ name: 'SKILL.md', bytes: Buffer.from(skill), executable: false }] },
+  ];
+  const [source] = await listCompanionImportSources('fixture');
+  const remote = await readRemoteCompanionImport(`preview:${source!.id}`, 'fixture', false);
+  for (const value of [secret, nested, ...urlSecrets, ...literalSecrets]) expect(JSON.stringify(remote)).not.toContain(value);
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const requestId = 'fixture-json-command-publication';
+  const result = await startCompanionImport({ requestId, previewId: preview.id, name: 'Ada',
+    entryIds: ['source-env', 'memory', 'skill', ...(selected ? ['task'] : [])], takeover: false }, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.saved).toBe(true));
+  const published = await fs.readFile(path.join(h.root, 'bots', result.botId, 'skills/report/SKILL.md'), 'utf8');
+  const receiptText = await fs.readFile(path.join(h.root, 'companion-imports', `${requestId}.json`), 'utf8');
+  const output = JSON.stringify([published, h.importDocument.mock.calls, h.routines, receiptText]);
+  for (const value of [secret, nested, ...urlSecrets, ...literalSecrets]) expect(output).not.toContain(value);
+  expect(published).toContain('Keep node --mode -e, Paris and 7.');
+  const stored = (await h.store.read(h.root, result.botId, () => {}))!;
+  expect(stored.env).toEqual(inheritedEnv);
+  expect(stored.documents?.memory).toBe(text);
+  const savedSkill = stored.skillFiles?.report?.find(file => file.name === 'SKILL.md');
+  expect(Buffer.from(savedSkill!.bytes, 'base64').toString()).toBe(skill);
+  if (selected) {
+    expect(stored.sourceAutomations?.[0]?.original).toEqual(original);
+    expect(h.routines).toHaveLength(1);
+    expect(h.routines[0]?.enabled).toBe(false);
+  } else {
+    expect(h.routines).toHaveLength(0);
+    expect(JSON.stringify(stored)).not.toContain('fixture-unused-command-secret');
+  }
 });
 
 it('persists redacted routine fields and retains identical publication masks across a handover retry after restart', async () => {
@@ -711,8 +846,8 @@ it('keeps the source paused and execution deferred when the ready marker write f
 }, 10000);
 
 
-it.each(['count', 'entrypoint', 'projected-entrypoint', 'captured-entrypoint'])('rejects skill %s limits before storing a checkpoint or creating a companion, then accepts a corrected selection', async mode => {
-  const count = mode === 'count' ? 101 : 1;
+it.each(['count', 'entrypoint', 'projected-entrypoint', 'captured-entrypoint'])('imports skill %s beyond the old authoring and count quotas', async mode => {
+  const count = mode === 'count' ? 142 : 1;
   h.snapshot.items = Array.from({ length: count }, (_, index) => ({
     view: { id: `skill-${index}`, category: 'skills' as const, name: `skill-${index}`, selected: true }, filesComplete: true,
     files: [{ name: 'SKILL.md', bytes: Buffer.alloc(mode === 'entrypoint' ? 65537 : mode === 'projected-entrypoint' ? 65536 : 10, 'a'), executable: false }],
@@ -729,18 +864,17 @@ it.each(['count', 'entrypoint', 'projected-entrypoint', 'captured-entrypoint'])(
   const [source] = await listCompanionImportSources('fixture');
   const preview = await previewCompanionImport(source!.id, 'fixture');
   const selection = { requestId: `fixture-skill-limit-${mode}`, previewId: preview.id, name: 'Ada', entryIds: h.snapshot.items.map(item => item.view.id), takeover: false };
-  await expect(startCompanionImport(selection, 'fixture')).rejects.toThrow('INVALID_SELECTION');
-  expect(createBotProfile).not.toHaveBeenCalled();
-  expect(h.secretValues.size).toBe(0);
-  expect(await getCompanionImportResult(selection.requestId)).toBeUndefined();
-  await expect(fs.access(path.join(h.root, 'companion-imports'))).rejects.toThrow();
-  // The same preview remains editable; existing INVALID_SELECTION handling clears intent.
-  const entryIds = mode === 'count' ? ['skill-0'] : [];
-  await startCompanionImport({ ...selection, requestId: `${selection.requestId}-retry`, entryIds }, 'fixture');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(`${selection.requestId}-retry`))?.status).toBe('complete'));
+  const accepted = await startCompanionImport(selection, 'fixture');
+  // Acceptance can precede the 142 real filesystem writes. Join the existing
+  // profile transaction instead of racing vi.waitFor's one-second deadline.
+  const result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result?.status).toBe('complete');
+  expect(result?.savedEntryIds).toEqual(expect.arrayContaining(selection.entryIds));
+  expect(await fs.readdir(path.join(h.root, 'bots', accepted.botId, 'skills'))).toHaveLength(count);
+  expect(createBotProfile).toHaveBeenCalledOnce();
 });
 
-it.each(['oversized', 'symlink'])('rejects a lazily selected %s resource before a receipt, then imports after deselection', async mode => {
+it.each(['oversized', 'symlink'])('retains a failed %s skill for retry while saving the companion and healthy content', async mode => {
   const directory = path.join(h.root, 'source-skill');
   await fs.mkdir(directory);
   if (mode === 'oversized') {
@@ -756,12 +890,15 @@ it.each(['oversized', 'symlink'])('rejects a lazily selected %s resource before 
   const [source] = await listCompanionImportSources('fixture');
   const preview = await previewCompanionImport(source!.id, 'fixture');
   const selection = { requestId: `fixture-capture-${mode}`, previewId: preview.id, name: 'Ada', entryIds: ['skill'], takeover: false };
-  await expect(startCompanionImport(selection, 'fixture')).rejects.toThrow(mode === 'oversized' ? 'SOURCE_FILE_TOO_LARGE' : 'SOURCE_LINK_OUTSIDE_FOLDER');
-  expect(createBotProfile).not.toHaveBeenCalled(); expect(h.secretValues.size).toBe(0);
-  expect(await getCompanionImportResult(selection.requestId)).toBeUndefined();
-  await expect(fs.access(path.join(h.root, 'companion-imports'))).rejects.toThrow();
-  await startCompanionImport({ ...selection, requestId: `${selection.requestId}-retry`, entryIds: [] }, 'fixture');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(`${selection.requestId}-retry`))?.status).toBe('complete'));
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.saved).toBe(true));
+  expect(createBotProfile).toHaveBeenCalled();
+  expect((await getCompanionImportResult(selection.requestId))?.checks).toContainEqual({ entryId: 'skill', status: 'needs-attention', message: mode === 'oversized' ? 'SOURCE_FILE_TOO_LARGE' : 'SOURCE_LINK_OUTSIDE_FOLDER' });
+  expect(h.secretValues.size).toBeGreaterThan(0);
+  // A corrected resource can finish under the same request; no second companion is needed.
+  await fs.rm(path.join(directory, mode === 'oversized' ? 'resource.bin' : 'linked'), { recursive: true });
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
 });
 
 it('replaces previous previews for the same controller and keeps the latest usable', async () => {
@@ -820,7 +957,7 @@ it.each(['readback', 'binding'] as const)('cleans an unbound first checkpoint af
   });
   const result = await startCompanionImport(selection, 'fixture');
   expect(result.status).toBe('needs-attention');
-  expect(h.created).toBe(false); expect(values.size).toBe(1);
+  expect(h.created).toBe(false); expect(values.size).toBe(failure === 'binding' ? 2 : 1);
   await expect(fs.access(bindingFile)).rejects.toThrow();
   bindingFailure?.mockRestore();
   // A new vault instance and the startup receipt scan must find and remove it,
@@ -830,13 +967,841 @@ it.each(['readback', 'binding'] as const)('cleans an unbound first checkpoint af
   // A committed profile or an uncertain lookup must never lose its vault key.
   vi.mocked(getBotRemoteResourceSource).mockResolvedValueOnce({ canonicalSessionId: 'chat' } as never);
   await recoverCompanionImports();
-  expect(values.size).toBe(1); expect(remove).not.toHaveBeenCalled();
+  expect(values.size).toBe(failure === 'binding' ? 2 : 1); expect(remove).not.toHaveBeenCalled();
   vi.mocked(getBotRemoteResourceSource).mockRejectedValueOnce(new Error('fixture database unavailable'));
   await recoverCompanionImports();
-  expect(values.size).toBe(1); expect(remove).not.toHaveBeenCalled();
+  expect(values.size).toBe(failure === 'binding' ? 2 : 1); expect(remove).not.toHaveBeenCalled();
   await recoverCompanionImports();
-  expect(values.size).toBe(1);
+  expect(values.size).toBe(failure === 'binding' ? 2 : 1);
   await recoverCompanionImports();
-  expect(values.size).toBe(0); expect(remove).toHaveBeenCalledTimes(2);
+  expect(values.size).toBe(0); expect(remove).toHaveBeenCalledTimes(3);
+  expect(h.created).toBe(false);
+});
+
+it('adopts Cindy settings only for explicitly selected items and still requires takeover verification', async () => {
+  const { useCindyImportSettings, continueCompanionImport } = await import('../host.js');
+  h.snapshot.items = [{ view: { id: 'task', name: 'Report', category: 'automations', selected: true, enabled: true, issues: ['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'AUTOMATION_MODEL_NEEDS_MAPPING', 'AUTOMATION_CONTEXT_NEEDS_MAPPING'] },
+    automation: { sourceId: 'source-task', fingerprint: 'fixture', original: {}, input: { name: 'Report', prompt: 'Read data', enabled: false, triggers: [{ id: 'time', kind: 'interval', intervalMs: 60000 }] } } }];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-cindy-settings', previewId: preview.id, name: 'Ada', entryIds: ['task'], takeover: true, deferSetup: true };
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.saved).toBe(true));
+  const result = (await getCompanionImportResult(selection.requestId))!;
+  await expect(useCindyImportSettings(result.botId, h.root, ['unknown'], () => {})).rejects.toThrow('INVALID_SELECTION');
+  await useCindyImportSettings(result.botId, h.root, ['task'], () => {});
+  await continueCompanionImport(result.botId, h.root, () => {});
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.checks).toContainEqual({ entryId: 'task', status: 'needs-attention', message: 'AUTOMATION_CONTEXT_NEEDS_MAPPING' }));
+});
+
+it('refreshes masks and encrypted originals when a previously failed credential-bearing resource is repaired', async () => {
+  const directory = path.join(h.root, 'source-skill');
+  const outside = path.join(h.root, 'outside');
+  await fs.mkdir(directory); await fs.mkdir(outside); await fs.writeFile(path.join(outside, 'read.txt'), 'outside');
+  await fs.symlink(outside, path.join(directory, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
+  const secret = 'fixture-unselected-resource-secret';
+  h.snapshot.items = [
+    { view: { id: 'skill', name: 'report', category: 'skills', selected: true }, sourceDirectory: directory, files: [{ name: 'SKILL.md', bytes: Buffer.from('# Report'), executable: false }], filesComplete: false, envDependencies: { names: [], entries: [] } },
+    { view: { id: 'unselected', name: 'PRIVATE', category: 'connections', selected: false }, env: { PRIVATE: secret } },
+  ];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-repaired-private-skill', previewId: preview.id, name: 'Ada', entryIds: ['skill'], takeover: false, deferSetup: true };
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.saved).toBe(true));
+  await fs.rm(path.join(directory, 'escape'), { recursive: true });
+  await fs.writeFile(path.join(directory, 'read.txt'), `Token ${secret}`);
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
+  const result = (await getCompanionImportResult(selection.requestId))!;
+  expect(await fs.readFile(path.join(h.root, 'bots', result.botId, 'skills/report/read.txt'), 'utf8')).not.toContain(secret);
+  const environment = (await h.store.read(h.root, result.botId, () => {}))!;
+  expect(environment.env).toEqual({});
+  const original = environment.skillFiles?.report?.find(file => file.name === 'read.txt');
+  expect(Buffer.from(original!.bytes, 'base64').toString()).toContain(secret);
+  expect(Object.values(environment.contentRedactions ?? {})).toContain(secret);
+});
+
+it('transfers a 10,000-entry preview in bounded, immutable chunks and preserves selection indexes', async () => {
+  h.snapshot.items = Array.from({ length: 10_000 }, (_, index) => ({ view: { id: `skill-${index}`, name: `技能 ${index} ` + 'long name '.repeat(20), description: '説明😀'.repeat(60), category: 'skills' as const, selected: true } }));
+  let reads = 0;
+  let continuation = '';
+  const api = remoteCompanionImportApi(async id => {
+    const data = await readRemoteCompanionImport(id, 'phone', true);
+    const response = { blocks: [{ primitive: 'companion-import', data }] };
+    expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThan(2 * 1024 * 1024 - 4096);
+    reads++;
+    if (id.startsWith('chunk:')) continuation = id;
+    return response;
+  }, async () => {});
+  const [source] = await api.sources();
+  const preview = await api.preview(source!.id);
+  expect(preview.entries).toEqual(h.snapshot.items.map(item => item.view));
+  expect(reads).toBeGreaterThan(2);
+  expect(inspectImportSource).toHaveBeenCalledOnce();
+  expect(compactCompanionImportSelection(preview, preview.entries.filter((_, index) => index !== 500).map(entry => entry.id)))
+    .toEqual({ entryIds: [], entryRanges: [[0, 499], [501, 9999]] });
+  const again = await readRemoteCompanionImport(continuation, 'phone', true);
+  expect(await readRemoteCompanionImport(continuation, 'phone', true)).toEqual(again);
+  await expect(readRemoteCompanionImport(continuation, 'other-phone', true)).rejects.toThrow('PREVIEW_EXPIRED');
+  h.boundary = true;
+  await expect(readRemoteCompanionImport(continuation, 'phone', true)).rejects.toThrow('OWNER_CHANGED');
+  h.boundary = false;
+  const [legacySource] = await listCompanionImportSources('old-phone');
+  await expect(readRemoteCompanionImport(`preview:${legacySource!.id}`, 'old-phone', false)).rejects.toThrow('IMPORT_CLIENT_UPGRADE_REQUIRED');
+  expect(h.created).toBe(false);
+  expect(h.snapshot.items).toHaveLength(10_000);
+  expect(await readRemoteCompanionImport(continuation, 'phone', true)).toEqual(again);
+});
+
+it.each(['directory', undefined] as const)('retries a repaired memory directory with its original request, including legacy kind=%s', async kind => {
+  const storage = new MemoryStorage(path.join(h.root, 'real-memory'), DEFAULT_MEMORY_CONFIG);
+  await storage.init(h.root);
+  const memory = createBotMemoryService({ getStore: async () => storage as unknown as MakerMemoryStore, readBot: async () => ({ canonicalSessionId: null }), requestRefresh: async () => {} });
+  let releaseMemoryWrite!: () => void;
+  const memoryWrite = new Promise<void>(resolve => { releaseMemoryWrite = resolve; });
+  h.importDocument.mockImplementation(memory.importDocument).mockImplementationOnce(async (...args: Parameters<typeof memory.importDocument>) => {
+    await memoryWrite;
+    await memory.importDocument(...args);
+  });
+  const brokenId = `memory-${fingerprint('broken').slice(0, 20)}`;
+  const directory = path.join(h.root, 'memory', 'broken');
+  const memoryRoot = path.join(h.root, 'memory');
+  await fs.mkdir(memoryRoot);
+  h.snapshot.items = [
+    { view: { id: 'healthy', name: 'healthy.md', category: 'memory', selected: true }, text: 'Healthy' },
+    { view: { id: brokenId, name: 'broken', category: 'memory', selected: true }, captureIssue: 'IMPORT_ITEM_FAILED', sourceFile: { root: memoryRoot, file: directory, ...(kind ? { kind } : {}) } },
+  ];
+  const [source] = await listCompanionImportSources('phone');
+  const preview = await previewCompanionImport(source!.id, 'phone');
+  const selection = { previewId: preview.id, requestId: 'retry-memory-directory', name: 'Ada', entryIds: ['healthy', brokenId], takeover: false, deferSetup: true };
+  const first = await startCompanionImport(selection, 'phone');
+  // Force acceptance to happen before the real memory write finishes. The API
+  // deliberately returns running here, independently of filesystem speed.
+  try { expect(first.status).toBe('running'); } finally { releaseMemoryWrite(); }
+  const failed = await withBotProfileLocks([first.botId], () => getCompanionImportResult(selection.requestId));
+  expect(failed?.status).toBe('needs-attention');
+  expect(h.importDocument).toHaveBeenCalledTimes(1);
+  await fs.mkdir(path.join(directory, 'nested'), { recursive: true });
+  await fs.writeFile(path.join(directory, 'nested', 'note.md'), 'Recovered note');
+  await fs.writeFile(path.join(directory, 'USER.md'), 'User preferences');
+  await fs.writeFile(path.join(directory, 'ignored.txt'), 'Recovered TXT archive');
+  await startCompanionImport(selection, 'reconnected-phone');
+  const result = await withBotProfileLocks([first.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result).toMatchObject({ status: 'complete', botId: first.botId, savedEntryIds: ['healthy', brokenId] });
+  expect(h.importDocument).toHaveBeenCalledTimes(4);
+  expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^memory-[a-f0-9]{32}$/), 'broken/nested/note.md', 'Recovered note', 'reference');
+  expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^memory-[a-f0-9]{32}$/), 'broken/USER.md', 'User preferences', 'user');
+  expect((await storage.list()).map(record => [record.frontmatter.type, record.body.trim()])).toEqual(expect.arrayContaining([
+    ['reference', 'Recovered TXT archive'], ['reference', 'Healthy'], ['reference', 'Recovered note'], ['user', 'User preferences'],
+  ]));
+  const environment = await h.store.read(h.root, first.botId, () => {});
+  expect(Object.values(environment!.documents!)).toEqual(expect.arrayContaining(['Healthy', 'Recovered note', 'User preferences']));
+  await startCompanionImport(selection, 'phone');
+  expect(h.importDocument).toHaveBeenCalledTimes(4);
+  expect(await storage.list()).toHaveLength(4);
+});
+
+it.each([false, true])('publishes completion after deferred setup without duplicate notices (legacy setup: %s)', async legacySetup => {
+  const requestId = 'fixture-setup-to-ready';
+  const rows = new Map<string, string>();
+  if (legacySetup) rows.set(`chat:companion-import:${requestId}`, t('bots.import.chatSetup'));
+  // Match createMessage's persisted (sessionId, clientId) uniqueness contract.
+  vi.mocked(createMessage).mockImplementation(async (sessionId, body) => {
+    const key = `${sessionId}:${body.clientId}`;
+    if (typeof body.content !== 'string') throw new Error('Expected a text import notice');
+    if (!rows.has(key)) rows.set(key, body.content);
+    return {} as never;
+  });
+  const { continueCompanionImport } = await import('../host.js');
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId, previewId: preview.id, name: 'Ada', entryIds: ['task'], takeover: true, deferSetup: true };
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.status).toBe('needs-attention'));
+  await vi.waitFor(() => expect(rows.size).toBe(1));
+  const result = (await getCompanionImportResult(requestId))!;
+  // An unsuccessful setup retry must not spam another setup notice.
+  await continueCompanionImport(result.botId, h.root, () => {});
+  await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.status).toBe('needs-attention'));
+  expect(rows.size).toBe(1);
+  h.verified = true;
+  await continueCompanionImport(result.botId, h.root, () => {});
+  await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.status).toBe('complete'));
+  await vi.waitFor(() => expect(rows.size).toBe(2));
+  expect([...rows.values()]).toEqual([t('bots.import.chatSetup'), t('bots.import.chatReady')]);
+  expect([...rows.keys()]).toEqual([`chat:companion-import:${requestId}`, `chat:companion-import:${requestId}:ready`]);
+  await startCompanionImport(selection, 'fixture');
+  expect(rows.size).toBe(2);
+  expect(h.pause).toHaveBeenCalledTimes(1);
+});
+
+it.each([false, true])('keeps the original deferred setup choice across retries and checkpoints (legacy receipt: %s)', async legacy => {
+  const { continueCompanionImport } = await import('../host.js');
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-identity-setup', previewId: preview.id, name: 'Ada', entryIds: ['task'], takeover: true, deferSetup: true };
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('needs-attention'));
+  const result = (await getCompanionImportResult(selection.requestId))!;
+  const receiptFile = path.join(h.root, 'companion-imports', `${selection.requestId}.json`);
+  if (legacy) {
+    const receipt = JSON.parse(await fs.readFile(receiptFile, 'utf8'));
+    delete receipt.deferSetup;
+    receipt.selectionHash = fingerprint([selection.name, undefined, selection.entryIds, selection.takeover, h.snapshot.source.kind, h.snapshot.source.agentId, h.snapshot.source.root]);
+    receipt.result.checks = [];
+    await fs.writeFile(receiptFile, JSON.stringify(receipt));
+  }
+  const saved = await fs.readFile(receiptFile, 'utf8');
+  h.verified = true;
+  await expect(startCompanionImport({ ...selection, deferSetup: false }, 'fixture')).rejects.toThrow('REQUEST_ALREADY_USED');
+  expect(await fs.readFile(receiptFile, 'utf8')).toBe(saved);
+  expect(h.pause).not.toHaveBeenCalled();
+  // A reconnected controller uses the checkpoint even after losing preview access.
+  await expect(startCompanionImport({ ...selection, deferSetup: false }, 'reconnected')).rejects.toThrow('REQUEST_ALREADY_USED');
+  await continueCompanionImport(result.botId, h.root, () => {});
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
+  expect(h.pause).toHaveBeenCalledOnce();
+  expect(JSON.parse(await fs.readFile(receiptFile, 'utf8')).deferSetup).toBe(true);
+});
+
+it.each(['hermes', 'openclaw'] as const)('restores disabled %s skill metadata and private settings after an unreadable manifest is repaired', async kind => {
+  const actual = await vi.importActual<typeof import('../sources.js')>('../sources.js');
+  // The repaired manifest supplies a new mask during validateItems, after the
+  // initial redactor was created; the source-wide scan need not know that mask.
+  vi.mocked(createImportSourceReader).mockImplementation((...args) => ({ ...actual.createImportSourceReader(...args), readRedactions: async () => ({}) }));
+  h.snapshot.source.kind = kind;
+  const secret = 'fixture-repaired-skill-secret';
+  const config = { skills: { disabled: ['report'], entries: { 'report-auth': { enabled: false, apiKey: secret, env: { REPORT_REGION: 'fixture' } } } } };
+  await fs.writeFile(h.snapshot.source.configFile, JSON.stringify(config));
+  const directory = path.join(h.root, 'skills', 'folder-name');
+  await fs.mkdir(directory, { recursive: true });
+  const manifest = path.join(directory, 'SKILL.md');
+  await fs.writeFile(manifest, '');
+  await fs.truncate(manifest, 16 * 1024 * 1024 + 1);
+  const { discoverImportSkills } = await import('../skills.js');
+  const { createImportBudget } = await import('../files.js');
+  h.snapshot.items = await discoverImportSkills(h.snapshot.source, config, h.root, {}, createImportBudget());
+  expect(h.snapshot.items[0]?.captureIssue).toBe('SOURCE_FILE_TOO_LARGE');
+  const entryId = h.snapshot.items[0]!.view.id;
+  h.snapshot.items.push({ view: { id: 'role', name: 'USER.md', category: 'memory', selected: true }, text: `Private value ${secret}`, role: 'user' });
+  h.importDocument.mockRejectedValue(new Error('fixture write failure'));
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-repair-manifest', previewId: preview.id, name: 'Ada', entryIds: [entryId, 'role'], takeover: false, deferSetup: true };
+  await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('needs-attention'));
+  const first = (await getCompanionImportResult(selection.requestId))!;
+  await fs.writeFile(manifest, `---\nname: report\ndescription: Recovered report ${secret}\nmetadata:\n  openclaw:\n    skillKey: report-auth\n    primaryEnv: REPORT_TOKEN\n---\n# Report\nPrivate value ${secret}`);
+  h.importDocument.mockResolvedValue(undefined);
+  await startCompanionImport(selection, 'reconnected');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
+  const result = (await getCompanionImportResult(selection.requestId))!;
+  expect(result).toMatchObject({ botId: first.botId, savedEntryIds: [entryId, 'role'] });
+  expect(h.importDocument.mock.lastCall?.[3]).toMatch(/^Private value \[[^\]]+\]$/);
+  expect(h.profile.userContextSource).toMatch(/^Private value \[[^\]]+\]$/);
+  const environment = (await h.store.read(h.root, first.botId, () => {}))!;
+  expect(environment.env).toMatchObject({ REPORT_TOKEN: secret, REPORT_REGION: 'fixture' });
+  const readable = await fs.readFile(path.join(h.root, 'bots', first.botId, 'disabled-skills', 'report', 'SKILL.md'), 'utf8');
+  expect(readable).toContain('name: report');
+  expect(readable).not.toContain(secret);
+  await expect(fs.stat(path.join(h.root, 'bots', first.botId, 'skills', 'report'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(JSON.stringify(result)).not.toContain(secret);
+  const receipt = JSON.parse(await fs.readFile(path.join(h.root, 'companion-imports', `${selection.requestId}.json`), 'utf8'));
+  expect(JSON.stringify(receipt.entryNames)).not.toContain(secret);
+});
+
+it.each(['short-legacy-document', `memory-${'a'.repeat(20)}-${'b'.repeat(20)}`])('resumes saved recovered documents with stable storage IDs across lost acknowledgements: %s', async originalId => {
+  const storage = new MemoryStorage(path.join(h.root, 'real-memory'), DEFAULT_MEMORY_CONFIG);
+  await storage.init(h.root);
+  const memory = createBotMemoryService({ getStore: async () => storage as unknown as MakerMemoryStore, readBot: async () => ({ canonicalSessionId: null }), requestRefresh: async () => {} });
+  h.importDocument.mockImplementation(memory.importDocument).mockImplementationOnce(async (...args: Parameters<typeof memory.importDocument>) => {
+    await memory.importDocument(...args);
+    throw new Error('fixture lost acknowledgement');
+  });
+  h.snapshot.items = [{ view: { id: 'memory-original-entry', name: 'Recovered subtree', category: 'memory', selected: true },
+    documents: [{ id: originalId, name: 'subtree/note.md', text: 'Recovered content' }] }];
+  const [source] = await listCompanionImportSources('phone');
+  const preview = await previewCompanionImport(source!.id, 'phone');
+  const selection = { previewId: preview.id, requestId: 'fixture-recovered-docs', name: 'Ada', entryIds: ['memory-original-entry'], takeover: false, deferSetup: true };
+  await startCompanionImport(selection, 'phone');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('needs-attention'));
+  const result = (await getCompanionImportResult(selection.requestId))!;
+  // Simulate the old durable checkpoint, without an available source tree.
+  await h.store.update(h.root, result.botId, () => {}, environment => {
+    const snapshot = JSON.parse(environment.pendingImport!.snapshotJson);
+    snapshot.items[0].documents[0].id = originalId;
+    environment.pendingImport!.snapshotJson = JSON.stringify(snapshot);
+  });
+  const firstFiles = (await storage.list()).map(record => record.filename);
+  expect(firstFiles).toHaveLength(1);
+  await startCompanionImport(selection, 'reconnected');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
+  expect((await storage.list()).map(record => record.filename)).toEqual(firstFiles);
+  const ids = h.importDocument.mock.calls.map(call => call[1] as string);
+  expect(ids[0]).toBe(ids[1]);
+  expect(ids.every(id => id.length <= 40)).toBe(true);
+  if (originalId.length <= 40) expect(ids[0]).toBe(originalId);
+});
+
+it('publishes a partial-save notice with the failed filename and safe reason, then a distinct completion notice', async () => {
+  h.snapshot.items = [{ view: { id: 'memory-doc', name: 'long-document.md', category: 'memory', selected: true }, text: 'Source text' }];
+  h.importDocument.mockRejectedValueOnce(Object.assign(new Error('private filesystem path'), { code: 'ENOSPC', importProgress: { saved: 1, total: 3 } }));
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-partial-notice', previewId: preview.id, name: 'Ada', entryIds: ['memory-doc'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const first = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(first).toMatchObject({ saved: true, status: 'needs-attention', savedEntryIds: [] });
+  const notice = vi.mocked(createMessage).mock.calls.at(-1)![1];
+  expect(notice.content).toContain(t('bots.import.chatPartial'));
+  expect(notice.content).toContain('long-document.md');
+  expect(notice.content).toContain(t('bots.import.diskFull'));
+  expect(notice.content).not.toContain('private filesystem path');
+  await startCompanionImport(selection, 'fixture');
+  const completed = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(completed?.status).toBe('complete');
+  expect(vi.mocked(createMessage).mock.calls.at(-1)![1]).toMatchObject({ clientId: `companion-import:${selection.requestId}:ready`, content: t('bots.import.chatReady') });
+});
+
+it.each([0, 1])('counts earlier recovered documents when a later document fails after %s chunks', async failedAfter => {
+  const storage = new MemoryStorage(path.join(h.root, 'real-memory'), DEFAULT_MEMORY_CONFIG);
+  await storage.init(h.root);
+  const write = storage.write.bind(storage);
+  let fail = true;
+  vi.spyOn(storage, 'write').mockImplementation(async input => {
+    if (fail && input.name === `import_second_${failedAfter}`) throw Object.assign(new Error('private disk path'), { code: 'ENOSPC' });
+    return write(input);
+  });
+  const memory = createBotMemoryService({ getStore: async () => storage as unknown as MakerMemoryStore,
+    readBot: async () => ({ canonicalSessionId: null }), requestRefresh: async () => {} });
+  h.importDocument.mockImplementation(memory.importDocument);
+  h.snapshot.items = [{ view: { id: 'memory-directory', name: 'Recovered directory', category: 'memory', selected: true }, documents: [
+    { id: 'first', name: 'first.md', text: 'a'.repeat(BOT_MEMORY_BODY_MAX_BYTES + 1) },
+    { id: 'second', name: 'second.md', text: 'b'.repeat(BOT_MEMORY_BODY_MAX_BYTES + 1) },
+    { id: 'third', name: 'third.md', text: 'Still to save' },
+  ] }];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-directory-progress', previewId: preview.id, name: 'Ada', entryIds: ['memory-directory'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const first = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(first?.checks).toContainEqual({ entryId: 'memory-directory', status: 'needs-attention', message: 'IMPORT_DISK_FULL', progress: { saved: 3 + failedAfter, total: 5 } });
+  expect(await storage.list()).toHaveLength(3 + failedAfter);
+  fail = false;
+  await startCompanionImport(selection, 'reconnected');
+  const completed = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(completed).toMatchObject({ status: 'complete', savedEntryIds: ['memory-directory'] });
+  expect(await storage.list()).toHaveLength(5);
+});
+
+it('keeps oversized profile text as original Unicode while preserving the entire source in memory', async () => {
+  const text = 'Source instructions\n' + '😀原文'.repeat(20_000);
+  h.snapshot.items = [{ view: { id: 'instructions', name: 'AGENTS.md', category: 'personality', selected: true }, role: 'instructions', text }];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-original-profile', previewId: preview.id, name: 'Ada', entryIds: ['instructions'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result?.status).toBe('complete');
+  const profile = h.writeProfile.mock.calls.at(-1)![2].systemPromptOverride as string;
+  expect(text.startsWith(profile)).toBe(true);
+  expect(Buffer.byteLength(profile, 'utf8')).toBeLessThanOrEqual(100_000);
+  expect(Buffer.byteLength(profile, 'utf8')).toBeGreaterThan(99_996);
+  expect(profile).not.toContain('�');
+  expect(h.importDocument).toHaveBeenCalledWith(accepted.botId, 'instructions', 'AGENTS.md', text, 'reference');
+  expect((await h.store.read(h.root, accepted.botId, () => {}))?.documents?.instructions).toBe(text);
+});
+
+
+it('retries legacy text and empty memory assets without passing them to the media importer', async () => {
+  h.snapshot.items = [
+    { view: { id: 'old-json', name: 'state.json', category: 'memory', selected: true }, asset: { name: 'memory/state.json', bytes: Buffer.from('{"cursor":7}\n') } },
+    { view: { id: 'old-marker', name: '.report.sent', category: 'memory', selected: true }, asset: { name: 'memory/.report.sent', bytes: Buffer.alloc(0) } },
+  ];
+  const [source] = await listCompanionImportSources('phone');
+  const preview = await previewCompanionImport(source!.id, 'phone');
+  const selection = { previewId: preview.id, requestId: 'legacy-memory-assets', name: 'Ada', entryIds: ['old-json', 'old-marker'], takeover: false, deferSetup: true };
+  const first = await startCompanionImport(selection, 'phone');
+  const result = await withBotProfileLocks([first.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result).toMatchObject({ status: 'complete', savedEntryIds: ['old-json', 'old-marker'] });
+  expect(h.importDocument).toHaveBeenCalledOnce();
+  expect(h.importDocument).toHaveBeenCalledWith(first.botId, expect.stringMatching(/^memory-[a-f0-9]{32}$/), 'memory/state.json', '{"cursor":7}\n', 'reference');
+  const environment = await h.store.read(h.root, first.botId, () => {});
+  expect(environment?.memoryFiles).toEqual({ 'memory/state.json': Buffer.from('{"cursor":7}\n').toString('base64'), 'memory/.report.sent': '' });
+  expect(environment?.files).toEqual({});
+  await startCompanionImport(selection, 'phone');
+  expect(h.importDocument).toHaveBeenCalledOnce();
+});
+
+it('receives sparse selection chunks idempotently and starts only after the complete authorized selection', async () => {
+  h.snapshot.items = Array.from({ length: 10_000 }, (_, index) => ({ view: { id: `memory-${index}`, name: `Note ${index}`, category: 'memory' as const, selected: index % 2 === 0 }, text: 'Original' }));
+  const [source] = await listCompanionImportSources('phone');
+  const preview = await previewCompanionImport(source!.id, 'phone');
+  const chosen = preview.entries.filter(entry => entry.selected).map(entry => entry.id);
+  const selection = { previewId: preview.id, requestId: 'sparse-selection-fixture', name: 'Ada', takeover: false, deferSetup: true, ...compactCompanionImportSelection(preview, chosen) };
+  const parts = [...companionImportSubmissions(selection, preview.selectionChunks)];
+  expect(parts.length).toBeGreaterThan(2);
+  await expect(submitRemoteCompanionImport(parts[1]!, 'other-phone')).rejects.toThrow('PREVIEW_EXPIRED');
+  expect(await submitRemoteCompanionImport(parts[0]!, 'phone')).toBeUndefined();
+  expect(await submitRemoteCompanionImport(parts[0]!, 'phone')).toBeUndefined();
+  expect(createBotProfile).not.toHaveBeenCalled();
+  if (!('selectionChunk' in parts[0]!)) throw Error('expected chunks');
+  await expect(submitRemoteCompanionImport({ selectionChunk: { ...parts[0]!.selectionChunk, text: 'x'.repeat(parts[0]!.selectionChunk.text.length) } }, 'phone')).rejects.toThrow('REQUEST_ALREADY_USED');
+  h.boundary = true;
+  await expect(submitRemoteCompanionImport(parts[1]!, 'phone')).rejects.toThrow('OWNER_CHANGED');
+  h.boundary = false;
+  let accepted;
+  for (const part of parts) accepted = await submitRemoteCompanionImport(part, 'phone');
+  const result = await withBotProfileLocks([accepted!.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result?.savedEntryIds).toEqual(chosen);
+  expect(h.importDocument).toHaveBeenCalledTimes(chosen.length);
+  for (const part of parts) await submitRemoteCompanionImport(part, 'phone');
+  await withBotProfileLocks([accepted!.botId], () => getCompanionImportResult(selection.requestId));
+  expect(createBotProfile).toHaveBeenCalledTimes(1);
+  expect(h.importDocument).toHaveBeenCalledTimes(chosen.length);
+});
+
+it('archives unsupported automation definitions and blocks both management and runtime execution', async () => {
+  const original = { id: 'native', schedule: { kind: 'source-specific' }, payload: { kind: 'heartbeat' }, delivery: { channel: 'missing-channel', to: 'original-recipient' } };
+  h.snapshot.source.kind = 'openclaw';
+  const item = normalizeAutomation(h.snapshot.source, original, indexAutomationDependencies([]), 'UTC');
+  h.snapshot.items = [item];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'unsupported-original-task', previewId: preview.id, name: 'Ada', entryIds: [item.view.id], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result).toMatchObject({ savedEntryIds: [item.view.id], status: 'needs-attention' });
+  const env = await h.store.read(h.root, accepted.botId, () => {});
+  expect(env?.sourceAutomations?.[0]?.original).toEqual(original);
+  const routine = h.routines[0]!;
+  expect(routine).toMatchObject({ enabled: false, triggers: [] });
+  expect(env?.automations?.[routine.id]?.original).toEqual(original);
+  await expect(assertImportedAutomationReady(h.root, accepted.botId, routine.id, () => {})).rejects.toThrow('AUTOMATION_TRIGGER_NEEDS_ADAPTER');
+  await expect(prepareImportedAutomation(h.root, routine, 'run', new AbortController().signal, () => {})).rejects.toThrow('AUTOMATION_TRIGGER_NEEDS_ADAPTER');
+  expect(h.pause).not.toHaveBeenCalled();
+  expect(verifyImportedAutomation).not.toHaveBeenCalled();
+  await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(h.routines).toHaveLength(1);
+});
+
+it('keeps a whitespace-edited partial memory retry pending instead of reporting it copied', async () => {
+  const directory = path.join(h.root, 'real-memory');
+  const storage = new MemoryStorage(directory, DEFAULT_MEMORY_CONFIG);
+  await storage.init(h.root);
+  const memory = createBotMemoryService({ getStore: async () => storage as unknown as MakerMemoryStore, readBot: async () => ({ canonicalSessionId: null }), requestRefresh: async () => {} });
+  h.importDocument.mockImplementation(memory.importDocument);
+  const text = '  ' + 'x'.repeat(BOT_MEMORY_BODY_MAX_BYTES) + '\nLast paragraph';
+  h.snapshot.items = [{ view: { id: 'memory', name: 'Original', category: 'memory', selected: true }, text }];
+  const write = storage.write.bind(storage);
+  const failure = vi.spyOn(storage, 'write').mockImplementation(async opts => {
+    if (opts.name.endsWith('_1')) throw Object.assign(new Error('fixture disk full'), { code: 'ENOSPC' });
+    return write(opts);
+  });
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'whitespace-memory-retry', previewId: preview.id, name: 'Ada', entryIds: ['memory'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const first = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(first?.checks).toContainEqual({ entryId: 'memory', status: 'needs-attention', message: 'IMPORT_DISK_FULL', progress: { saved: 1, total: 2 } });
+  failure.mockRestore();
+  const file = path.join(directory, 'reference_import_memory_0.md');
+  await fs.appendFile(file, '\n  ');
+  const edited = await fs.readFile(file, 'utf8');
+  await startCompanionImport(selection, 'fixture');
+  const retried = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(retried?.status).toBe('needs-attention');
+  expect(retried?.checks).toContainEqual({ entryId: 'memory', status: 'needs-attention', message: 'MEMORY_CHANGED', progress: { saved: 0, total: 2 } });
+  expect(retried?.savedEntryIds ?? []).not.toContain('memory');
+  expect(await fs.readFile(file, 'utf8')).toBe(edited);
+  expect((await h.store.read(h.root, accepted.botId, () => {}))?.pendingImport).toBeDefined();
+});
+
+it('continues healthy recovered documents when a sibling attachment fails', async () => {
+  h.importMedia.mockRejectedValueOnce(Object.assign(new Error('media failed'), { code: 'ENOSPC' }));
+  h.snapshot.items = [{ view: { id: 'mixed', name: 'Recovered', category: 'memory', selected: true },
+    documents: [{ id: 'healthy', name: 'healthy.md', text: 'Keep this note' }],
+    files: [{ name: 'image.png', bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), executable: false }] }];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'mixed-directory-retry', previewId: preview.id, name: 'Ada', entryIds: ['mixed'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const first = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(h.importDocument).toHaveBeenCalledWith(accepted.botId, 'healthy', 'healthy.md', 'Keep this note', 'reference');
+  expect(first?.checks).toContainEqual({ entryId: 'mixed', status: 'needs-attention', message: 'IMPORT_DISK_FULL', progress: { saved: 1, total: 2 } });
+  const pending = await h.store.read(h.root, accepted.botId, () => {});
+  expect(pending?.files).toEqual({});
+  expect(pending?.memoryFiles).toEqual({});
+  const checkpoint = await deserializeImportSnapshotAsync(pending!.pendingImport!.snapshotJson, () => {});
+  const original = h.snapshot.items[0]!.files![0]!;
+  expect(checkpoint.items[0]!.files![0]!.bytes).toEqual(original.bytes);
+  // An old failed import may already have mixed attachment bytes into files.
+  await h.store.update(h.root, accepted.botId, () => {}, env => { env.files = { [original.name]: original.bytes.toString('base64') }; });
+  await startCompanionImport(selection, 'fixture');
+  const result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result?.savedEntryIds).toContain('mixed');
+  const completed = await h.store.read(h.root, accepted.botId, () => {});
+  expect(completed?.files).toEqual({});
+  expect(completed?.pendingImport).toBeUndefined();
+  expect(h.importMedia).toHaveBeenLastCalledWith(accepted.botId, 'chat', original.bytes, expect.any(Function));
+});
+
+it('applies healthy recovered role text even while an attachment keeps failing', async () => {
+  const directory = path.join(h.root, 'memories', 'broken');
+  const brokenId = `memory-${fingerprint('memories/broken').slice(0, 20)}`;
+  h.snapshot.items = [{ view: { id: brokenId, name: 'broken', category: 'memory', selected: true },
+    sourceFile: { root: path.dirname(directory), file: directory, kind: 'directory' }, captureIssue: 'IMPORT_PERMISSION_DENIED' }];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'mixed-repaired-role-fixture', previewId: preview.id, name: 'Ada', entryIds: [brokenId], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, 'USER.md'), 'Healthy user preferences');
+  await fs.writeFile(path.join(directory, 'bad.bin'), Buffer.from([0, 255, 0, 255]));
+  await fs.mkdir(path.join(directory, 'later'));
+  await fs.writeFile(path.join(directory, 'later/USER.md'), 'Later user preferences');
+  let failRole = true; let failEarlierRole = false;
+  h.importDocument.mockImplementation(async (_bot, _id, name) => {
+    if ((failRole && name.endsWith('later/USER.md')) || (failEarlierRole && !name.endsWith('later/USER.md'))) throw Object.assign(new Error('full'), { code: 'ENOSPC' });
+  });
+  h.importMedia.mockRejectedValue(Object.assign(new Error('unsupported'), { code: 'SOURCE_MEMORY_ATTACHMENT_UNSUPPORTED' }));
+  await startCompanionImport(selection, 'fixture');
+  let result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(h.profile.userContextSource).toBe('Healthy user preferences');
+  expect(result?.status).toBe('needs-attention');
+  expect(result?.savedEntryIds ?? []).not.toContain(brokenId);
+  expect(result?.checks.find(check => check.entryId === brokenId)?.progress).toEqual({ saved: 1, total: 3 });
+  const stored = (await h.store.read(h.root, accepted.botId, () => {}))!;
+  expect(Object.values(stored.documents ?? {})).toContain('Healthy user preferences');
+  expect(stored.pendingImport).toBeDefined();
+  expect(Object.values(stored.documents ?? {})).not.toContain('Later user preferences');
+  failRole = false; failEarlierRole = true;
+  await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(h.profile.userContextSource).toContain('Healthy user preferences');
+  expect(h.profile.userContextSource).toContain('Later user preferences');
+  failEarlierRole = false;
+  // A later retry of the bad attachment must preserve edits to the applied profile.
+  h.profile.userContextSource = 'User edited preferences';
+  await startCompanionImport(selection, 'fixture');
+  result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(h.profile.userContextSource).toBe('User edited preferences');
+  expect(result?.status).toBe('needs-attention');
+});
+
+it.each([['file', true], ['directory', true], ['file', false], ['directory', false]] as const)('keeps both memory root prefixes when repairing %s entries (legacy=%s)', async (kind, legacy) => {
+  const name = kind === 'directory' ? 'broken' : 'state.lock';
+  h.snapshot.items = ['memories', 'memory'].map(prefix => ({
+    view: { id: `memory-${fingerprint(`${prefix}/${name}`).slice(0, 20)}`, name, category: 'memory', selected: true },
+    sourceFile: { root: path.join(h.root, prefix), file: path.join(h.root, prefix, name), kind, ...(legacy ? {} : { logicalPrefix: prefix }) }, captureIssue: 'IMPORT_PERMISSION_DENIED',
+  }));
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: `memory-prefix-${kind}-fixture`, previewId: preview.id, name: 'Ada', entryIds: h.snapshot.items.map(item => item.view.id), takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  const suffix = kind === 'directory' ? 'broken/state.lock' : 'state.lock';
+  const originals = { [`memories/${suffix}`]: Buffer.alloc(0), [`memory/${suffix}`]: Buffer.from('  \n') };
+  for (const [name, bytes] of Object.entries(originals)) {
+    await fs.mkdir(path.dirname(path.join(h.root, name)), { recursive: true });
+    await fs.writeFile(path.join(h.root, name), bytes);
+  }
+  await startCompanionImport(selection, 'after-restart');
+  const result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result?.status).toBe('complete');
+  expect((await h.store.read(h.root, accepted.botId, () => {}))?.memoryFiles)
+    .toEqual(Object.fromEntries(Object.entries(originals).map(([name, bytes]) => [name, bytes.toString('base64')])));
+});
+
+it('recovers the user role of an individually failed memory USER.md', async () => {
+  const file = path.join(h.root, 'memories/USER.md');
+  const id = `memory-${fingerprint('memories/USER.md').slice(0, 20)}`;
+  h.snapshot.items = [{ view: { id, name: 'USER.md', category: 'memory', selected: true },
+    sourceFile: { root: path.dirname(file), file, kind: 'file', logicalPrefix: 'memories' }, captureIssue: 'IMPORT_PERMISSION_DENIED' }];
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'memory-user-role-recovery', previewId: preview.id, name: 'Ada', entryIds: [id], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, 'User preferences');
+  await startCompanionImport(selection, 'after-restart');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(h.profile.userContextSource).toBe('User preferences');
+  expect(h.importDocument).toHaveBeenCalledWith(accepted.botId, id, 'USER.md', 'User preferences', 'user');
+});
+
+it('retains managed media by ledger reference without copying its bytes into execution assets', async () => {
+  const image = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const script = Buffer.from('print("fixture")');
+  h.snapshot.items = [
+    { view: { id: 'image', name: 'image.png', category: 'memory', selected: true }, asset: { name: 'memory/image.png', bytes: image } },
+    { view: { id: 'script', name: 'report.py', category: 'connections', selected: true }, asset: { name: 'scripts/report.py', bytes: script } },
+  ];
+  const [source] = await listCompanionImportSources('fixture'); const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'media-ledger-only-fixture', previewId: preview.id, name: 'Ada', entryIds: ['image', 'script'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const result = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(result?.status).toBe('complete');
+  expect(h.importMedia).toHaveBeenCalledWith(accepted.botId, 'chat', image, expect.any(Function));
+  expect(h.importDocument).toHaveBeenCalledWith(accepted.botId, expect.any(String), 'memory/image.png', '![memory/image.png](cindy-media://blobs/fixture.png)', 'reference');
+  const environment = await h.store.read(h.root, accepted.botId, () => {});
+  expect(environment?.files).toEqual({ 'scripts/report.py': script.toString('base64') });
+  expect(environment?.memoryFiles).toEqual({});
+  expect(environment?.pendingImport).toBeUndefined();
+  expect(JSON.stringify(environment)).not.toContain(image.toString('base64'));
+});
+
+it.each([false, true])('preserves script executable flags in the archive and checkpoint (retry: %s)', async retry => {
+  h.snapshot.items = [
+    { view: { id: 'helper', name: 'helper', category: 'connections', selected: true },
+      asset: { name: 'scripts/helper', bytes: Buffer.from('#!/bin/sh\nprintf fixture'), executable: true } },
+    { view: { id: 'data', name: 'data.txt', category: 'connections', selected: true },
+      asset: { name: 'scripts/data.txt', bytes: Buffer.from('data'), executable: false } },
+    { view: { id: 'legacy', name: 'legacy.py', category: 'connections', selected: true },
+      asset: { name: 'scripts/legacy.py', bytes: Buffer.from('print("fixture")') } },
+    { view: { id: 'memory', name: 'note', category: 'memory', selected: true }, text: 'Original note' },
+  ];
+  if (retry) h.importDocument.mockRejectedValueOnce(Object.assign(new Error('full'), { code: 'ENOSPC' }));
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: `script-executable-${retry}`, previewId: preview.id, name: 'Ada',
+    entryIds: ['helper', 'data', 'legacy', 'memory'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  const expected = { 'scripts/helper': true, 'scripts/data.txt': false, 'scripts/legacy.py': false };
+  let stored = (await h.store.read(h.root, accepted.botId, () => {}))!;
+  expect(stored.fileExecutables).toEqual(expected);
+  const bytes = stored.files;
+  if (retry) {
+    const checkpoint = await deserializeImportSnapshotAsync(stored.pendingImport!.snapshotJson, () => {});
+    expect(checkpoint.items.find(item => item.view.id === 'helper')?.asset?.executable).toBe(true);
+    await startCompanionImport(selection, 'after-restart');
+    const completed = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+    expect(completed?.status).toBe('complete');
+    stored = (await h.store.read(h.root, accepted.botId, () => {}))!;
+    expect(stored.fileExecutables).toEqual(expected);
+    expect(stored.files).toEqual(bytes);
+  }
+  expect(stored.pendingImport).toBeUndefined();
+});
+
+it('cleans a completed checkpoint after a crash without replaying import work', async () => {
+  h.snapshot.items = [{ view: { id: 'memory', name: 'note', category: 'memory', selected: true }, text: 'Original' }];
+  const [source] = await listCompanionImportSources('fixture'); const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'completed-checkpoint-recovery', previewId: preview.id, name: 'Ada', entryIds: ['memory'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  await h.store.update(h.root, accepted.botId, () => {}, env => { env.pendingImport = { selection, snapshotJson: 'old encrypted source snapshot' }; });
+  const receiptPath = path.join(h.root, 'companion-imports', `${selection.requestId}.json`);
+  const receipt = JSON.parse(await fs.readFile(receiptPath, 'utf8')); delete receipt.checkpointCleared;
+  await fs.writeFile(receiptPath, JSON.stringify(receipt));
+  h.importDocument.mockClear();
+  await recoverCompanionImports();
+  expect((await h.store.read(h.root, accepted.botId, () => {}))?.pendingImport).toBeUndefined();
+  expect(h.importDocument).not.toHaveBeenCalled();
+});
+
+it.each((['identity', 'user', 'instructions'] as const).flatMap(role => [0, 1].map(failedAfter => ({ role, failedAfter }))))
+('projects only fully saved $role documents after failure at chunk $failedAfter', async ({ role, failedAfter }) => {
+  const storage = new MemoryStorage(path.join(h.root, 'real-memory'), DEFAULT_MEMORY_CONFIG);
+  await storage.init(h.root);
+  const write = storage.write.bind(storage);
+  let fail = true;
+  vi.spyOn(storage, 'write').mockImplementation(async input => {
+    if (fail && input.name === `import_failed_${failedAfter}`) throw Object.assign(new Error('fixture full'), { code: 'ENOSPC' });
+    return write(input);
+  });
+  const memory = createBotMemoryService({ getStore: async () => storage as unknown as MakerMemoryStore,
+    readBot: async () => ({ canonicalSessionId: null }), requestRefresh: async () => {} });
+  h.importDocument.mockImplementation(memory.importDocument);
+  const healthy = 'Saved original'; const failed = 'Not yet complete ' + 'x'.repeat(BOT_MEMORY_BODY_MAX_BYTES);
+  h.snapshot.items = [healthy, failed].map((text, index) => ({
+    view: { id: index ? 'failed' : 'healthy', name: index ? 'Failed.md' : 'Healthy.md', category: 'personality', selected: true }, role, text,
+  }));
+  const [source] = await listCompanionImportSources('fixture'); const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: `first-role-${role}-${failedAfter}`, previewId: preview.id, name: 'Ada', entryIds: ['healthy', 'failed'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const first = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  const field = { identity: 'identitySource', user: 'userContextSource', instructions: 'systemPromptOverride' }[role];
+  expect(h.profile[field]).toBe(healthy);
+  expect(first?.savedEntryIds).toEqual(['healthy']);
+  expect(first?.checks).toContainEqual({ entryId: 'failed', status: 'needs-attention', message: 'IMPORT_DISK_FULL', progress: { saved: failedAfter, total: 2 } });
+  expect(await storage.list()).toHaveLength(1 + failedAfter);
+  const stored = (await h.store.read(h.root, accepted.botId, () => {}))!;
+  expect(stored.documents).toEqual({ healthy });
+  const checkpoint = await deserializeImportSnapshotAsync(stored.pendingImport!.snapshotJson, () => {});
+  expect(checkpoint.items.find(item => item.view.id === 'failed')?.text).toBe(failed);
+  // Retrying a failed original cannot treat its text as an already-applied baseline.
+  h.profile[field] = 'User edited profile'; fail = false;
+  await startCompanionImport(selection, 'reconnected');
+  const conflict = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(h.profile[field]).toBe('User edited profile');
+  expect(conflict?.checks.find(check => check.entryId === 'failed')?.message).toBe('PROFILE_CHANGED');
+  expect((await h.store.read(h.root, accepted.botId, () => {}))?.documents).toEqual({ healthy });
+  h.profile[field] = healthy;
+  await startCompanionImport(selection, 'reconnected');
+  const complete = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(complete?.status).toBe('complete');
+  expect(complete?.savedEntryIds).toEqual(['healthy', 'failed']);
+  expect(String(h.profile[field])).toContain(`${healthy}\n\nNot yet complete`);
+  expect((await h.store.read(h.root, accepted.botId, () => {}))?.documents).toEqual({ healthy, failed });
+  expect(await storage.list()).toHaveLength(3);
+});
+
+it('projects healthy role siblings on the first save even when their item is incomplete', async () => {
+  const documents = [{ id: 'good-role', name: 'USER.md', text: 'Saved user', role: 'user' as const },
+    { id: 'bad-role', name: 'later/USER.md', text: 'Pending user', role: 'user' as const }];
+  h.snapshot.items = [{ view: { id: 'mixed-role', name: 'Mixed', category: 'memory', selected: true }, documents,
+    files: [{ name: 'bad.bin', bytes: Buffer.from([0, 255, 0, 255]), executable: false }] }];
+  h.importDocument.mockImplementation(async (_bot, id) => { if (id === 'bad-role') throw Object.assign(new Error('full'), { code: 'ENOSPC' }); });
+  h.importMedia.mockRejectedValue(Object.assign(new Error('unsupported'), { code: 'SOURCE_MEMORY_ATTACHMENT_UNSUPPORTED' }));
+  const [source] = await listCompanionImportSources('fixture'); const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'first-mixed-role-fixture', previewId: preview.id, name: 'Ada', entryIds: ['mixed-role'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  const first = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(first?.savedEntryIds).toEqual([]);
+  expect(h.profile.userContextSource).toBe('Saved user');
+  const stored = (await h.store.read(h.root, accepted.botId, () => {}))!;
+  expect(stored.documents).toEqual({ 'good-role': 'Saved user' });
+  expect((await deserializeImportSnapshotAsync(stored.pendingImport!.snapshotJson, () => {})).items[0]?.documents).toEqual(documents);
+  h.importDocument.mockResolvedValue(undefined);
+  await startCompanionImport(selection, 'reconnected');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(h.profile.userContextSource).toBe('Saved user\n\nPending user');
+});
+
+it('recovers saved role documents when the first profile write fails after copies commit', async () => {
+  h.snapshot.items = [{ view: { id: 'identity', name: 'SOUL.md', category: 'personality', selected: true }, role: 'identity', text: 'Saved identity' }];
+  h.writeProfile.mockRejectedValueOnce(Object.assign(new Error('profile full'), { code: 'ENOSPC' }));
+  const [source] = await listCompanionImportSources('fixture'); const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'role-before-environment-fixture', previewId: preview.id, name: 'Ada', entryIds: ['identity'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('needs-attention'));
+  const receipt = JSON.parse(await fs.readFile(path.join(h.root, 'companion-imports', `${selection.requestId}.json`), 'utf8'));
+  expect(receipt.copied).toEqual(['identity']);
+  expect(receipt.environmentSaved).not.toBe(true);
+  expect(h.profile.identitySource).toBeUndefined();
+  h.importDocument.mockClear();
+  await startCompanionImport(selection, 'reconnected');
+  const complete = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(complete?.status).toBe('complete');
+  expect(h.importDocument).not.toHaveBeenCalled();
+  expect(h.profile.identitySource).toBe('Saved identity');
+  expect((await h.store.read(h.root, accepted.botId, () => {}))?.documents).toEqual({ identity: 'Saved identity' });
+});
+
+it.each(['identity', 'user', 'instructions'] as const)('reapplies a repaired %s source to the profile, while preserving user edits', async role => {
+  const file = path.join(h.root, 'repaired.md');
+  h.snapshot.items = [{ view: { id: 'role-source', name: 'source.md', category: 'personality', selected: true }, role,
+    sourceFile: { root: h.root, file, kind: 'file' }, captureIssue: 'IMPORT_PERMISSION_DENIED' }];
+  const [source] = await listCompanionImportSources('fixture'); const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: `repaired-role-${role}-fixture`, previewId: preview.id, name: 'Ada', entryIds: ['role-source'], takeover: false, deferSetup: true };
+  const accepted = await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  const field = { identity: 'identitySource', user: 'userContextSource', instructions: 'systemPromptOverride' }[role];
+  h.profile[field] = 'User edit';
+  await fs.writeFile(file, 'Repaired original');
+  await startCompanionImport(selection, 'fixture');
+  const conflict = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(conflict?.savedEntryIds).not.toContain('role-source');
+  expect(h.profile[field]).toBe('User edit');
+  h.profile[field] = '';
+  await startCompanionImport(selection, 'fixture');
+  const saved = await withBotProfileLocks([accepted.botId], () => getCompanionImportResult(selection.requestId));
+  expect(saved?.savedEntryIds).toContain('role-source');
+  expect(h.profile[field]).toBe('Repaired original');
+});
+
+it.each([false, true])('pages setup without vault reads after one-time legacy metadata upgrade: %s', async legacy => {
+  const secret = 'fixture-private-setup-name';
+  const task = h.snapshot.items[0]!;
+  h.snapshot.items = Array.from({ length: 23 }, (_, index) => ({ ...structuredClone(task),
+    view: { ...task.view, id: `job-${index}`, name: `Report ${index} ${secret}` },
+    automation: { ...structuredClone(task.automation!), sourceId: `job-${index}` },
+  }));
+  h.snapshot.items[22]!.view.name = `Report 22 ${'x'.repeat(178)}${secret}`;
+  h.snapshot.items.push({ view: { id: 'env', name: 'API_KEY', category: 'connections', selected: true }, env: { API_KEY: secret } });
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const requestId = 'fixture-setup-paging-12345';
+  const result = await startCompanionImport({ requestId, previewId: preview.id, name: 'Ada',
+    entryIds: h.snapshot.items.map(item => item.view.id), takeover: true, deferSetup: true }, 'fixture');
+  await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.status).toBe('needs-attention'));
+  const receiptFile = path.join(h.root, 'companion-imports', `${requestId}.json`);
+  const bindingFile = path.join(h.root, 'bots', result.botId, 'environment.json');
+  const originalCheckpoint = (await h.store.read(h.root, result.botId, () => {}))!.pendingImport!.snapshotJson;
+  if (legacy) {
+    const receipt = JSON.parse(await fs.readFile(receiptFile, 'utf8')); delete receipt.entryNames;
+    await fs.writeFile(receiptFile, JSON.stringify(receipt));
+    const binding = JSON.parse(await fs.readFile(bindingFile, 'utf8')); delete binding.importRequestId;
+    await fs.writeFile(bindingFile, JSON.stringify(binding));
+    const migrated = await getCompanionImportSetupStatus(result.botId, h.root, () => {}, 0);
+    expect(migrated).toMatchObject({ total: 23, nextOffset: 20 });
+    expect((await h.store.read(h.root, result.botId, () => {}))!.pendingImport!.snapshotJson).toBe(originalCheckpoint);
+  }
+  const publicReceipt = await fs.readFile(receiptFile, 'utf8');
+  expect(publicReceipt).not.toContain(secret);
+  expect(publicReceipt).not.toContain(secret.slice(0, 10));
+  expect(JSON.parse(publicReceipt).entryNames['job-22'].length).toBeLessThanOrEqual(200);
+  // Even a locked/unavailable vault must not be opened merely to paginate names.
+  const vaultRead = vi.spyOn(h.store, 'read').mockRejectedValue(new Error('status must not open vault'));
+  const config = createCompanionConnectionsProvider().toClaudeSdkConfig!({} as never) as { instance: McpServer };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'fixture', version: '1' });
+  await config.instance.connect(serverTransport); await client.connect(clientTransport);
+  try {
+    for (const offset of [0, 20, 0]) {
+      const response = await client.callTool({ name: 'import_setup', arguments: { operation: 'status', offset } });
+      expect(response.isError).not.toBe(true);
+      const text = (response.content as Array<{ text: string }>)[0]!.text;
+      expect(text).not.toContain(secret);
+      const page = JSON.parse(text);
+      expect(page.total).toBe(23);
+      expect(page.items).toHaveLength(offset === 0 ? 20 : 3);
+      expect(page.items[0].name).toContain(`Report ${offset} `);
+    }
+    expect(vaultRead).not.toHaveBeenCalled();
+    h.boundary = true;
+    await expect(client.callTool({ name: 'import_setup', arguments: { operation: 'status' } })).rejects.toThrow('OWNER_CHANGED');
+  } finally { h.boundary = false; vaultRead.mockRestore(); await client.close(); await config.instance.close(); }
+  const receipt = JSON.parse(await fs.readFile(receiptFile, 'utf8')); receipt.result.botId = 'another-bot';
+  await fs.writeFile(receiptFile, JSON.stringify(receipt));
+  await expect(getCompanionImportSetupStatus(result.botId, h.root, () => {}, 0)).rejects.toThrow('INVALID_COMPANION');
+});
+
+it.each(['short', 'unicode', 'escaped'] as const)('checks serialized bytes for legacy %s previews without truncating entries', async kind => {
+  const name = kind === 'unicode' ? '漢'.repeat(600_000) : kind === 'escaped' ? '\u0000'.repeat(300_000) : 'short';
+  h.snapshot.items = [{ view: { id: 'skill', name, category: 'skills', selected: true } }];
+  const [source] = await listCompanionImportSources('old-phone');
+  const read = readRemoteCompanionImport(`preview:${source!.id}`, 'old-phone', false);
+  if (kind === 'short') {
+    const data = await read;
+    expect(data).not.toHaveProperty('chunk');
+    expect(data.preview).toMatchObject({ entries: h.snapshot.items.map(item => item.view) });
+  } else {
+    await expect(read).rejects.toThrow('IMPORT_CLIENT_UPGRADE_REQUIRED');
+    expect(h.created).toBe(false);
+  }
+});
+
+it('bounds legacy source lists and saved results while preserving the chunk-capable path', async () => {
+  h.readName.mockResolvedValue('漢'.repeat(600_000));
+  await expect(readRemoteCompanionImport('sources', 'old-phone', false)).rejects.toThrow('IMPORT_CLIENT_UPGRADE_REQUIRED');
+  const requestId = 'fixture-legacy-large-result';
+  const result = { requestId, botId: 'bot', status: 'needs-attention', saved: true,
+    checks: Array.from({ length: 25_000 }, (_, index) => ({ entryId: `entry-${index}`, status: 'needs-attention', message: 'IMPORT_ITEM_FAILED' })) };
+  await fs.mkdir(path.join(h.root, 'companion-imports'), { recursive: true });
+  await fs.writeFile(path.join(h.root, 'companion-imports', `${requestId}.json`), JSON.stringify({
+    result, companionCreated: true, checkpointSaved: true, handoverMarkers: true,
+  }));
+  await expect(readRemoteCompanionImport(`result:${requestId}`, 'old-phone', false)).rejects.toThrow('IMPORT_CLIENT_UPGRADE_REQUIRED');
+  const api = remoteCompanionImportApi(async id => ({ blocks: [{ primitive: 'companion-import',
+    data: await readRemoteCompanionImport(id, 'new-phone', true) }] }), async () => {});
+  expect((await api.sources())[0]?.name).toBe('漢'.repeat(600_000));
+  expect(await api.status(requestId)).toEqual(result);
   expect(h.created).toBe(false);
 });

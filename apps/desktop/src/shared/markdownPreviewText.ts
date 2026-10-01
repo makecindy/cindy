@@ -1,45 +1,62 @@
-import { Lexer, type Token, type Tokens } from 'marked';
+import type { Nodes } from 'mdast';
+import remarkGfm from 'remark-gfm';
+import remarkParse from 'remark-parse';
+import { unified } from 'unified';
 
 import { htmlImgToImageNode } from './htmlImage';
 
-/** Extract display text without generating HTML or counting link destinations. */
-export function markdownPreviewText(markdown: string): string {
-  return previewTokens(Lexer.lex(markdown, { gfm: true }))
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+const previewParser = unified().use(remarkParse).use(remarkGfm);
 
-function previewTokens(tokens: Token[]): string {
-  return tokens
-    .map((token): string => {
-      switch (token.type) {
-        case 'space':
-        case 'br':
-        case 'hr':
-        case 'def':
-          return ' ';
-        case 'html':
-          return `${htmlImgToImageNode({ type: 'html', value: token.text })?.alt ?? ''} `;
-        case 'list':
-          return `${token.items.map((item: Tokens.ListItem) => previewTokens(item.tokens)).join(' ')} `;
-        case 'table':
-          return (
-            [token.header, ...token.rows]
-              .map((row: { tokens: Token[] }[]) =>
-                row.map((cell) => previewTokens(cell.tokens)).join(' '),
-              )
-              .join(' ') + ' '
-          );
-        case 'heading':
-        case 'paragraph':
-        case 'blockquote':
-          return `${previewTokens(token.tokens ?? [])} `;
-        case 'code':
-          return `${token.text} `;
-        default:
-          if ('tokens' in token && token.tokens) return previewTokens(token.tokens);
-          return 'text' in token ? token.text : '';
-      }
-    })
-    .join('');
+/** Extract readable text without HTML output or link destinations. */
+export function markdownPreviewText(
+  markdown: string,
+  options: { includeImageAlt?: boolean } = {},
+): string {
+  // Marked's link regex can backtrack for minutes on short bracketed code spans.
+  // These previews run on Main after DB replies, so use the existing remark parser.
+  const stack: Array<Nodes | string> = [previewParser.parse(markdown)];
+  const parts: string[] = [];
+  const includeImageAlt = options.includeImageAlt !== false;
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (typeof node === 'string') {
+      parts.push(node);
+      continue;
+    }
+    switch (node.type) {
+      case 'text':
+      case 'inlineCode':
+        parts.push(node.value);
+        break;
+      case 'code':
+        parts.push(' ', node.value, ' ');
+        break;
+      case 'image':
+      case 'imageReference':
+        if (includeImageAlt) parts.push(node.alt ?? '');
+        break;
+      case 'html':
+        if (includeImageAlt) parts.push(htmlImgToImageNode(node)?.alt ?? '', ' ');
+        break;
+      case 'definition':
+        break;
+      case 'break':
+      case 'thematicBreak':
+        parts.push(' ');
+        break;
+      default:
+        if ('children' in node) {
+          const block = node.type !== 'emphasis' && node.type !== 'strong'
+            && node.type !== 'delete' && node.type !== 'link' && node.type !== 'linkReference';
+          if (block) {
+            parts.push(' ');
+            stack.push(' ');
+          }
+          for (let index = node.children.length - 1; index >= 0; index--) {
+            stack.push(node.children[index]);
+          }
+        }
+    }
+  }
+  return parts.join('').replace(/\s+/gu, ' ').trim();
 }

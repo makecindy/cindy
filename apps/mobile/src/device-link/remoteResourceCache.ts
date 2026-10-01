@@ -8,6 +8,8 @@ const empty = (): Snapshot => ({ home: [], items: {}, read: {} });
 let epoch = 0;
 const writes = new Map<string, Promise<void>>();
 const snapshots = new Map<string, Snapshot>();
+// Users whose last disk write failed; the next update retries it even when unchanged.
+const unsaved = new Set<string>();
 const listeners = new Set<() => void>();
 let revision = 0;
 export const subscribeRemoteResourceCache = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; };
@@ -59,13 +61,19 @@ async function update(userId: string, change: (snapshot: Snapshot) => void): Pro
   const next = previous.then(async () => {
     const snapshot = await readRemoteResourceSnapshot(userId);
     if (expected !== epoch) return;
+    const before = JSON.stringify(snapshot);
     change(snapshot);
     const cleaned = normalize(snapshot);
-    snapshots.set(userId, cleaned); emit();
     const raw = JSON.stringify(cleaned);
+    snapshots.set(userId, cleaned);
+    // An unchanged cache must stay silent: subscribers re-render on every emit, and an
+    // open companion chat re-acknowledges its read position on render (a JS render loop).
+    if (raw === before && !unsaved.has(userId)) return;
+    if (raw !== before) emit();
     if (raw.length > MAX_CHARS) return;
-    await AsyncStorage.setItem(PREFIX + userId, raw).catch(() => undefined);
-    if (expected !== epoch) await AsyncStorage.removeItem(PREFIX + userId).catch(() => undefined);
+    const saved = await AsyncStorage.setItem(PREFIX + userId, raw).then(() => true, () => false);
+    if (expected !== epoch) { await AsyncStorage.removeItem(PREFIX + userId).catch(() => undefined); return; }
+    if (saved) unsaved.delete(userId); else unsaved.add(userId);
   });
   writes.set(userId, next);
   await next.finally(() => { if (writes.get(userId) === next) writes.delete(userId); });
@@ -100,7 +108,7 @@ export function cachedBotItem(userId: string, collectionId: string, deviceId: st
     && item.ref.kind === 'bot' && item.ref.id === botId)?.item ?? null;
 }
 export async function clearRemoteResourceCache(): Promise<void> {
-  epoch += 1; snapshots.clear(); emit();
+  epoch += 1; snapshots.clear(); unsaved.clear(); emit();
   await Promise.allSettled([...writes.values()]);
   const keys = await AsyncStorage.getAllKeys().catch(() => []);
   await AsyncStorage.multiRemove(keys.filter((key) => key.startsWith(PREFIX))).catch(() => undefined);

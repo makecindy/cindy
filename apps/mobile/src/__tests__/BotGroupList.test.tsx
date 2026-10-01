@@ -33,16 +33,22 @@ vi.mock('react-i18next', async (importOriginal) => ({
     i18n: { language: 'zh-CN' },
   }),
 }));
-vi.mock('lucide-react-native', () => ({ Plus: () => null, Sparkles: ({ testID }: any) => el('i', { 'data-testid': testID }), Check: () => null, Users: () => null }));
-vi.mock('@/theme', () => ({ useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }), fontWeight: {}, iconStroke: {} }));
+vi.mock('lucide-react-native', () => ({ Plus: () => null, Check: () => null, Users: () => null }));
+vi.mock('@/theme', async () => {
+  const tokens = await import('@/theme/tokens');
+  return { ...tokens, useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }) };
+});
+vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'owner' }, accountGeneration: 1 }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke, openLink: h.openLink }) }));
 vi.mock('@/utils/useMinuteNow', () => ({ useMinuteNow: () => 0 }));
 vi.mock('@/session/sessionList', () => ({ formatRemoteSessionSidebarTime: () => '9:41' }));
+vi.mock('@/session/SessionRightSpinner', () => ({ SessionRightSpinner: ({ testID }: any) => el('i', { 'data-testid': testID }) }));
 vi.mock('@/components/AppText', () => ({
   Text: ({ children, testID }: any) => el('span', { 'data-testid': testID }, children),
   TextInput: ({ testID, ...props }: any) => { h.inputs[testID] = props; return el('input', { 'data-testid': testID, value: props.value ?? '', readOnly: true }); },
 }));
+vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: (props: any) => el('button', { 'data-testid': props.testID, onClick: props.onPress }, props.label) }));
 vi.mock('@/components/MobilePrimitives', () => ({
   MainWindowActionButton: ({ action }: any) => el('button', { 'data-testid': action.testID, disabled: action.disabled || action.busy, onClick: action.onPress }, action.label),
   MainWindowRowButton: ({ children, onPress, testID }: any) => el('button', { 'data-testid': testID, onClick: onPress }, children),
@@ -63,15 +69,21 @@ vi.mock('@/session/CompanionSheet', () => ({
     return visible ? el('div', { 'data-testid': testID }, children) : null;
   },
 }));
+vi.mock('@/session/HomeHeaderGlassButton', () => ({
+  HomeHeaderGlassButton: ({ onPress, testID, accessibilityLabel }: any) => el('button', { 'data-testid': testID, 'aria-label': accessibilityLabel, onClick: onPress }),
+}));
+vi.mock('@/session/CompanionProfileSheet', () => ({ CompanionCreateSheet: () => null }));
 vi.mock('@/session/BotGroupAvatars', () => ({
   BOT_GROUP_ROW_AVATAR_SIZE: 32,
   BotGroupAvatar: () => null,
-  BotGroupDuoAvatar: ({ members }: any) => el('span', { 'data-testid': 'duo' }, members.map((member: any) => member.name).join('+')),
+  BotGroupDuoAvatar: ({ members, working }: any) => el('span', { 'data-testid': 'duo', 'data-working': String(!!working) }, members.map((member: any) => member.name).join('+')),
   useBotGroupIdentities: () => (botId: string, fallbackName = '') => ({ botId, name: fallbackName || botId }),
 }));
 vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: () => h.teammates }));
+vi.mock('@/session/useTeammateRoster', () => ({ TEAMMATE_COLLECTION_ID: 'teammates' }));
 
-import { BotGroupSection } from '@/session/BotGroupList';
+import { BotGroupListRow } from '@/session/BotGroupList';
+import { TeammateCreateButton } from '@/session/TeammateCreateButton';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -84,6 +96,8 @@ const row = (deviceId: string, id: string, display: Record<string, unknown>): Ho
 });
 const teammate = (id: string, title: string) => ({ key: `mac:${id}`, host: { deviceId: 'mac', deviceName: 'Mac' },
   item: { ref: { collectionId: 'teammates', kind: 'bot', id }, revision: '1', display: { title }, links: [] } });
+const mac = { deviceId: 'mac', deviceName: 'Mac' };
+const pc = { deviceId: 'pc', deviceName: 'PC' };
 
 let root: Root;
 let node: HTMLDivElement;
@@ -93,18 +107,6 @@ async function click(id: string) {
   if (!target) throw new Error(`missing ${id}`);
   await act(async () => { target.click(); });
 }
-const props = (overrides: Record<string, unknown> = {}) => ({
-  items: [row('mac', 'g-old', { timestamp: 1, preview: '**阿布**：写好了' }), row('pc', 'g-new', { timestamp: 5, generation: { phase: 'processing', startedAt: null }, preview: { fallback: 'Mimi is splitting the work…', translations: { 'zh-CN': '咪咪正在安排…' } } })],
-  query: '',
-  isOnline: () => true,
-  createTargets: [{ deviceId: 'mac', deviceName: 'Mac' }],
-  onOpen: vi.fn(), onOpenCreated: vi.fn(),
-  ...overrides,
-});
-async function render(value = props()) {
-  await act(async () => root.render(el(BotGroupSection, value as any)));
-  return value;
-}
 
 beforeEach(() => {
   vi.clearAllMocks(); h.inputs = {}; h.nativeMenu = true;
@@ -113,42 +115,59 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); });
 
-describe('group section', () => {
-  it('lists groups newest first with member avatars, localized previews and a running mark', async () => {
-    const value = await render();
-    const rows = [...node.querySelectorAll('[data-testid^="botGroups.item."]')];
-    expect(rows.map((entry) => entry.getAttribute('data-testid'))).toEqual(['botGroups.item.pc.g-new', 'botGroups.item.mac.g-old']);
-    expect(rows[0]!.textContent).toContain('咪咪正在安排…');
-    expect(rows[1]!.textContent).toContain('阿布：写好了');
-    expect(rows[1]!.textContent).not.toContain('**');
-    expect(rows[0]!.querySelector('[data-testid="botGroups.running"]')).not.toBeNull();
-    expect(rows[1]!.querySelector('[data-testid="botGroups.running"]')).toBeNull();
-    expect(byId('duo')?.textContent).toBe('咪咪+阿布');
+describe('group row', () => {
+  const groups = [
+    row('pc', 'g-new', { timestamp: 5, generation: { phase: 'processing', startedAt: null }, preview: { fallback: 'Mimi is splitting the work…', translations: { 'zh-CN': '咪咪正在安排…' } } }),
+    row('mac', 'g-old', { timestamp: 1, preview: '**阿布**：写好了' }),
+  ];
+  async function render(isOnline: (host: { deviceId: string }) => boolean = () => true) {
+    const onPress = vi.fn();
+    await act(async () => root.render(el('div', null, groups.map((group, index) =>
+      el(BotGroupListRow, { key: group.key, row: group, online: isOnline(group.host), last: index === groups.length - 1, onPress: () => onPress(group) })))));
+    return onPress;
+  }
+
+  it('shows member avatars, the host’s localized preview without Markdown, and a working state in the time slot', async () => {
+    const onPress = await render();
+    const fresh = byId('botGroups.item.pc.g-new')!;
+    const done = byId('botGroups.item.mac.g-old')!;
+    expect(fresh.textContent).toContain('咪咪正在安排…');
+    expect(done.textContent).toContain('阿布：写好了');
+    expect(done.textContent).not.toContain('**');
+    expect(fresh.querySelector('[data-testid="companion.row.working"]')).not.toBeNull();
+    expect(fresh.querySelector('[data-testid="duo"]')?.getAttribute('data-working')).toBe('true');
+    expect(done.querySelector('[data-testid="companion.row.working"]')).toBeNull();
+    expect(done.textContent).toContain('9:41');
+    expect(done.querySelector('[data-testid="duo"]')?.textContent).toBe('咪咪+阿布');
     await click('botGroups.item.mac.g-old');
-    expect(value.onOpen).toHaveBeenCalledWith(value.items[0]);
+    expect(onPress).toHaveBeenCalledWith(groups[1]);
   });
 
-  it('disables groups whose computer is offline and hides the running mark there', async () => {
-    await render(props({ isOnline: (host: { deviceId: string }) => host.deviceId === 'mac' }));
-    expect(byId('botGroups.item.pc.g-new')?.disabled).toBe(true);
-    expect(byId('botGroups.item.pc.g-new')?.textContent).toContain('devices.resources.hostOffline');
-    expect(byId('botGroups.running')).toBeNull();
-  });
-
-  it('filters by the teammate search and shows an empty hint', async () => {
-    await render(props({ query: '阿布' }));
-    expect(node.querySelectorAll('[data-testid^="botGroups.item."]')).toHaveLength(2);
-    await render(props({ query: '没有的' }));
-    expect(byId('botGroups.section')).toBeNull();
-    await render(props({ items: [] }));
-    expect(byId('botGroups.empty')?.textContent).toBe('groupChat.list.empty');
+  it('disables a group whose computer is offline, says so in the preview, and stops the working state', async () => {
+    await render((host) => host.deviceId === 'mac');
+    const offline = byId('botGroups.item.pc.g-new')!;
+    expect(offline.disabled).toBe(true);
+    expect(offline.textContent).toContain('devices.resources.hostOffline');
+    expect(offline.querySelector('[data-testid="companion.row.working"]')).toBeNull();
+    expect(offline.querySelector('[data-testid="duo"]')?.getAttribute('data-working')).toBe('false');
   });
 });
 
-describe('create a group', () => {
-  it('creates on the only computer with 2–6 teammates in list order, then opens it after the sheet closes', async () => {
-    const value = await render();
-    await click('botGroups.create');
+describe('create from the teammate page + menu', () => {
+  async function render(groupTargets = [mac], nativeMenu = true) {
+    h.nativeMenu = nativeMenu;
+    const onGroupCreated = vi.fn();
+    await act(async () => root.render(el(TeammateCreateButton, {
+      targets: [mac], groupTargets, preferredDeviceId: 'pc', onCreated: vi.fn(), onGroupCreated,
+    })));
+    return onGroupCreated;
+  }
+
+  it('offers 新建伙伴 and 新建群聊, creates with 2–6 teammates in list order, then opens it after the sheet closes', async () => {
+    const onGroupCreated = await render();
+    const titles = [...node.querySelectorAll('[data-testid^="teammates.createMenu.action."]')].map((entry) => entry.textContent);
+    expect(titles).toEqual(['devices.companions.createTeammate', 'groupChat.create.title']);
+    await click('teammates.createMenu.action.group:mac');
     expect(byId('botGroup.create')).not.toBeNull();
     await click('botGroup.create.submit');
     expect(node.textContent).toContain('groupChat.create.nameRequired');
@@ -167,12 +186,12 @@ describe('create a group', () => {
     expect(request[1]).toBe('maker:remote-resources:invoke');
     expect(request[2][0]).toMatchObject({ collectionId: 'bot-groups', actionId: 'create', input: { name: '官网', botIds: ['mimi', 'abu'] } });
     expect(byId('botGroup.create')).toBeNull();
-    expect(value.onOpenCreated).toHaveBeenCalledWith({ deviceId: 'mac', deviceName: 'Mac' }, 'g9');
+    expect(onGroupCreated).toHaveBeenCalledWith(mac, 'g9');
   });
 
   it('shows the host’s reason when it refuses', async () => {
     await render();
-    await click('botGroups.create');
+    await click('teammates.createMenu.action.group:mac');
     await act(async () => { h.inputs['botGroup.create.name'].onChangeText('官网'); });
     await click('botGroup.create.member.abu');
     await click('botGroup.create.member.mimi');
@@ -181,29 +200,29 @@ describe('create a group', () => {
     expect(byId('botGroup.create.error')?.textContent).toBe('groupChat.errors.memberUnavailable');
   });
 
-  it('asks which computer hosts the group when several support it', async () => {
-    const value = await render(props({ createTargets: [{ deviceId: 'mac', deviceName: 'Mac' }, { deviceId: 'pc', deviceName: 'PC' }], preferredDeviceId: 'pc' }));
-    const options = [...node.querySelectorAll('[data-testid^="botGroups.createMenu.action."]')].map((entry) => entry.textContent);
-    expect(options).toEqual(['PC', 'Mac']);
-    await click('botGroups.createMenu.action.pc');
+  it('asks which computer hosts the group when several support it, remembered computer first', async () => {
+    const onGroupCreated = await render([mac, pc]);
+    const hosts = [...node.querySelectorAll('[data-testid^="teammates.createMenu.action.group:"]')].map((entry) => entry.textContent);
+    expect(hosts).toEqual(['PC', 'Mac']);
+    await click('teammates.createMenu.action.group:pc');
     expect(node.textContent).toContain('groupChat.create.computerNote(deviceName=PC)');
-    expect(value.onOpenCreated).not.toHaveBeenCalled();
+    expect(onGroupCreated).not.toHaveBeenCalled();
   });
 
   it('falls back to a sheet of the same choices where the platform has no anchored menu', async () => {
-    h.nativeMenu = false;
-    await render(props({ createTargets: [{ deviceId: 'mac', deviceName: 'Mac' }, { deviceId: 'pc', deviceName: 'PC' }] }));
-    expect(byId('botGroups.createMenu.sheet')).toBeNull();
-    await click('botGroups.create');
-    expect(byId('botGroups.createMenu.sheet')).not.toBeNull();
-    await click('botGroups.createMenu.option.pc');
+    await render([mac, pc], false);
+    expect(byId('teammates.createChooser')).toBeNull();
+    await click('teammates.create');
+    expect(byId('teammates.createChooser')).not.toBeNull();
+    await click('teammates.createChooser.group.pc');
     // The create sheet opens only after the chooser has closed.
-    expect(byId('botGroups.createMenu.sheet')).toBeNull();
+    expect(byId('teammates.createChooser')).toBeNull();
     expect(node.textContent).toContain('groupChat.create.computerNote(deviceName=PC)');
   });
 
-  it('cannot create while no computer that supports groups is online', async () => {
-    await render(props({ createTargets: [] }));
-    expect(byId('botGroups.create')?.disabled).toBe(true);
+  it('keeps the single-purpose teammate button when no computer supports group chats', async () => {
+    await render([]);
+    expect(byId('teammates.createMenu')).toBeNull();
+    expect(byId('teammates.create')).not.toBeNull();
   });
 });

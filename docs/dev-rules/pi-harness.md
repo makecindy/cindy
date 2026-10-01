@@ -94,10 +94,14 @@ Pi 任务时冻结，并写入该任务 `settings.json` 的 `compaction.reserveT
 模型容量用于 Pi 原生请求长度裁剪，不能随小预算缩到 1K；工作预算只调整原生压缩阈值，
 并作为已应用预算进入 Cindy 的用量快照。
 大窗切小窗先由 Desktop 的统一目标窗口事务按目标窗口 90% 固定压力线评估（独立于 Pi
-日常自动压缩百分比），命中时换干净原生窗口；未命中时 Pi 重写 settings 后调用
-`switch_session`，必须重新 `set_model` 并用 `get_state` 校验
-provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建 runtime。校验完成前
-子代理 route 保持 pending，失败则终止该 live 任务。Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
+日常自动压缩百分比），命中时复用既有上下文接续事务；未命中时保留当前原生会话，使用
+`set_compaction_reserve_tokens` 原地更新压缩保留量，再用原生 `set_model` 与 `get_state`
+确认 provider／model／contextWindow。同 ID 模型的目录资料或工作预算改变也属于这条路径。
+普通切模不得用 `switch_session` 或扩展 `/reload` 重读压缩配置：两者会重建会话或扩展状态，
+不能当成无损配置刷新。忙时选择必须在回合结束后走同一切换与容量事务，不能由延后服务
+直接关闭 Pi。原生校验完成前，子代理 route 保持 pending；确认并持久化目标路由后才放行
+排队消息。
+Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
 打穿本地 proxy 与 MCP bridge)。
@@ -122,6 +126,26 @@ SSH 不套用本机限核值。沿用现有默认值与 override 存储，不新
 `transport`、`retry.maxRetries=6`（provider 级保持 0）与 `compaction.reserveTokens`；
 未配置 Pi 百分比且未缩小工作预算时不写 `reserveTokens`，沿用 Pi 默认 16384；
 显式小预算仍以默认 90% 计算触发阈值。
+
+### 运行中的模型目录与凭据更新
+
+模型目录更新沿用 Cindy 的统一目录和 Pi 的原生 provider 配置，不能另建一份模型权威表。
+先预览目标资料和容量，再在现有串行切换边界应用配置；Pi 的 `refresh_models` 只刷新目录，
+即使 provider/model ID 未变也须通过 `set_model` 应用新 descriptor。刷新响应中的
+`aborted` 或 provider errors 表示未完整成功，不能仅凭 RPC `success: true` 继续。
+
+新增原生适配器使用 Pi 公开的 `unregisterProvider`／`registerProvider` 与模型目录刷新，
+不重建用户扩展。模型凭据仅通过宿主发起、绑定本次运行实例和随机 nonce 的私有交接进入
+Pi 内存，不进入 prompt、聊天历史、日志或明文配置文件。交接同时维护 bash 凭据剥离名单、
+后续子代理的启动配置和来源专用授权；已运行子代理仍保留其独立身份。私有命令的 prompt
+响应不等于配置成功，必须收到对应 nonce 的完成回执。来源一致性检查不可因热切而删除。
+
+`refresh_models` 与 `set_compaction_reserve_tokens` 需要配套 Pi 原生 RPC 支持；当前
+`tools/pi/latest.json` 的版本 pin 不代表这两项接口已经发布。旧 Pi 缺少本次操作所需接口时，
+在改变当前模型前明确反馈，不自动降级为会话重载。开发、单测或本地补丁通过不等于托管
+runtime 已升级；发布须分别核验 Pi 接口、Cindy 接入与实际 runtime 版本。
+接口补丁、重启边界和隔离验证见
+[`../research/pi-native-model-refresh.md`](../research/pi-native-model-refresh.md)。
 
 
 Skill 停用适配同时保存物理身份与管理页已扫描的词法发现入口；启动前只采用仍指向该

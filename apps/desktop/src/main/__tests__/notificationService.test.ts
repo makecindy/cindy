@@ -478,11 +478,12 @@ describe('notificationService — channels 分发', () => {
     initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
     readSessionNotificationPreview.mockImplementation(async (_id, includeReply = true) => ({
       teammateName: 'Cindy', teammateBotId: 'bot-1', eventId: 'turn:100:200',
+      teammateAvatar: { kind: 'preset', value: 'cindy' },
       ...(includeReply ? { reply: { clientId: 'final-2', text: 'Done' } } : {}),
     }));
     await invokeHandler({ sessionId: 's1', title: 'Cindy', kind: 'done', channels: { desktop: false, feishu: false, mobile: true } });
     await flushAsync();
-    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', teammateBotId: 'bot-1' }));
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', teammateBotId: 'bot-1', teammateAvatar: { kind: 'preset', value: 'cindy' } }));
   });
 
   it('routes a teammate approval push to the teammate chat without changing its title or fallback', async () => {

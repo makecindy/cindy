@@ -542,6 +542,14 @@ export const MAKER_INVOKE = {
   /** 在 Cindy 数据目录安装官方 Ollama 运行时。renderer 只传 consent=true，不传 URL。 */
   LOCAL_MODEL_INSTALL: 'maker:local-model:install',
   LOCAL_MODEL_INSTALL_ABORT: 'maker:local-model:install-abort',
+  LLAMACPP_ENSURE: 'maker:llamacpp:ensure',
+  LLAMACPP_STATUS: 'maker:llamacpp:status',
+  LLAMACPP_INSTALL: 'maker:llamacpp:install',
+  LLAMACPP_FILES: 'maker:llamacpp:files',
+  LLAMACPP_DOWNLOAD: 'maker:llamacpp:download',
+  LLAMACPP_START: 'maker:llamacpp:start',
+  LLAMACPP_STOP: 'maker:llamacpp:stop',
+  LLAMACPP_CANCEL: 'maker:llamacpp:cancel',
   PROVIDER_IMPORT_PREVIEW: 'maker:provider:import:preview',
   PROVIDER_IMPORT_CONFIRM: 'maker:provider:import:confirm',
   PROVIDER_IMPORT_CANCEL: 'maker:provider:import:cancel',
@@ -918,6 +926,8 @@ export const MAKER_PUSH = {
    * 会话内轻提示。
    */
   SESSION_CREDENTIAL_SWITCH_APPLIED: 'maker:session-credential-switch-applied',
+  /** A deferred Pi model switch failed; the previous route remains authoritative. */
+  SESSION_CREDENTIAL_SWITCH_FAILED: 'maker:session-credential-switch-failed',
   /** cc 默认路由会话的生效计费路由变化 (payload: { sessionId, route })。 */
   CLAUDE_SESSION_ROUTE_CHANGED: 'maker:claude-session-route-changed',
   /**

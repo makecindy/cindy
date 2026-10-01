@@ -5,13 +5,60 @@ import path from 'node:path';
 import { createImportSourceReader, discoverImportSources, inspectImportSource } from '../sources.js';
 import { transferCompanion, validateImportSelection, type TransferDeps } from '../transfer.js';
 import { resolveImportReferences, selectedImportEnvironment } from '../environmentSelection.js';
+import { discoverImportSkills, readImportSkillTree } from '../skills.js';
 import { createImportBudget } from '../files.js';
+import { indexAutomationDependencies, normalizeAutomation } from '../sourceAutomations.js';
+import type { ImportItem, ImportSource } from '../types.js';
 
 let home: string;
 beforeEach(async () => { home = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-source-test-')); });
 afterEach(async () => { vi.restoreAllMocks(); await fs.rm(home, { recursive: true, force: true }); });
 async function write(name: string, text: string) { const file = path.join(home, name); await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, text); }
 const deps = () => ({ home, env: {}, readCronDatabase: vi.fn(async () => []) });
+
+it.each(['hermes', 'openclaw'] as const)('previews 20,000 %s jobs with complete shared dependencies', async kind => {
+  await write(`.${kind}/${kind === 'hermes' ? 'config.yaml' : 'openclaw.json'}`, JSON.stringify({
+    mcpServers: { data: { url: 'https://example.invalid/mcp' } },
+  }));
+  await write(`.${kind}/.env`, 'API_TOKEN=fixture-token');
+  const jobs = Array.from({ length: 20_000 }, (_, index) => ({ id: `job-${index}`, agentId: 'main',
+    prompt: 'Use data with API_TOKEN', payload: { kind: 'agentTurn', message: 'Use data with API_TOKEN' },
+    schedule: { kind: 'interval', minutes: 5 }, enabled: index % 2 === 0 }));
+  await write(`.${kind}/cron/jobs.json`, JSON.stringify({ jobs }));
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const snapshot = await inspectImportSource(source!, reader);
+  const tasks = snapshot.items.filter(item => item.automation);
+  const connection = snapshot.items.find(item => item.mcp?.name === 'data')!;
+  const environment = snapshot.items.find(item => item.env?.API_TOKEN)!;
+  expect(tasks).toHaveLength(jobs.length);
+  expect(new Set(tasks.map(item => item.view.id)).size).toBe(jobs.length);
+  expect(tasks.every((item, index) => item.view.enabled === jobs[index]!.enabled
+    && item.view.dependsOn?.includes(connection.view.id) && item.view.dependsOn?.includes(environment.view.id)
+    && item.automation?.input?.enabled === false)).toBe(true);
+  expect(tasks.map(item => item.automation!.original)).toEqual(jobs);
+});
+
+it('indexes aliases and script subtrees while preserving dependency order and inherited policies', () => {
+  const source: ImportSource = { kind: 'hermes', root: home, workspace: home, configFile: path.join(home, 'config.yaml'), agentId: 'main', name: 'Ada' };
+  const view = (id: string, category: ImportItem['view']['category'] = 'connections') => ({ id, name: id, category, selected: true });
+  const items: ImportItem[] = [
+    { view: view('mcp'), mcp: { name: 'bridge', url: 'https://example.invalid/mcp' } },
+    { view: { ...view('skill', 'skills'), name: 'Display name' }, sourceAlias: 'alias', sourceDirectory: path.join(home, 'folder'),
+      files: [{ name: 'SKILL.md', bytes: Buffer.from('bridge SKILL_TOKEN'), executable: false }, { name: 'image.png', bytes: Buffer.from('UNUSED_TOKEN'), executable: false }] },
+    { view: view('main'), asset: { name: 'scripts/reports/run.py', bytes: Buffer.from('SCRIPT_TOKEN') } },
+    { view: view('data'), asset: { name: 'scripts/reports/data/check.py', bytes: Buffer.from('bridge') } },
+    { view: view('unrelated'), asset: { name: 'scripts/reports-other/other.py', bytes: Buffer.from('UNUSED_TOKEN') } },
+    { view: view('env'), env: { SKILL_TOKEN: 'a', SCRIPT_TOKEN: 'b', UNUSED_TOKEN: 'c' } },
+    { view: view('tools'), credential: { format: 'source-tools', value: {} } },
+    { view: view('model'), credential: { format: 'source-model', value: {} } },
+  ];
+  const dependencies = indexAutomationDependencies(items);
+  const item = normalizeAutomation(source, { id: 'report', skills: ['folder', 'alias'], script: 'reports/run.py', monitor_script: 'reports/data/check.py', schedule: { kind: 'interval', minutes: 5 } }, dependencies, 'UTC');
+  expect(item.view.dependsOn).toEqual(['mcp', 'skill', 'main', 'data']);
+  expect(item.envDependencies?.names).toEqual(['SKILL_TOKEN', 'SCRIPT_TOKEN']);
+  expect(item.view.issues).toEqual(['SOURCE_TOOL_POLICY_NEEDS_MAPPING', 'AUTOMATION_MODEL_NEEDS_MAPPING']);
+  expect(normalizeAutomation(source, { id: 'missing', script: 'reports/missing.py' }, dependencies, 'UTC').view.issues).toContain('AUTOMATION_SCRIPT_MISSING');
+});
 
 it.each([
   { kind: 'hermes', config: { model: 'source-model' }, blocked: true },
@@ -45,7 +92,7 @@ it.each([
   }
 });
 
-it('shares one byte budget across referenced skill trees without truncating a snapshot', async () => {
+it('retains an over-budget skill for retry without dropping healthy siblings', async () => {
   await write('.hermes/config.yaml', 'name: Ada\n');
   for (const name of ['first', 'second']) {
     await write(`.hermes/skills/${name}/SKILL.md`, `---\nname: ${name}\n---\nRead data.txt`);
@@ -54,11 +101,13 @@ it('shares one byte budget across referenced skill trees without truncating a sn
   const jobs = (skills: string[]) => JSON.stringify([{ id: 'read', skills, prompt: 'Read resources', schedule: { kind: 'interval', minutes: 5 } }]);
   await write('.hermes/cron/jobs.json', jobs(['first']));
   const reader = deps(); const [source] = await discoverImportSources(reader);
-  const snapshot = await inspectImportSource(source!, reader, createImportBudget(3000));
+  const snapshot = await inspectImportSource(source!, reader, createImportBudget(6000));
   expect(snapshot.items.find(item => item.view.name === 'first')?.files?.find(file => file.name === 'data.txt')?.bytes.length).toBe(2048);
   expect(snapshot.items.find(item => item.view.name === 'second')?.files).toHaveLength(1);
   await write('.hermes/cron/jobs.json', jobs(['first', 'second']));
-  await expect(inspectImportSource(source!, reader, createImportBudget(3000))).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+  const partial = await inspectImportSource(source!, reader, createImportBudget(6000));
+  expect(partial.items.find(item => item.view.name === 'second')?.captureIssue).toBe('SOURCE_SNAPSHOT_TOO_LARGE');
+  expect(partial.items.find(item => item.view.name === 'first')?.files).toHaveLength(2);
 });
 
 it('counts configuration includes and memory against the same source budget', async () => {
@@ -66,7 +115,8 @@ it('counts configuration includes and memory against the same source budget', as
   await write('.openclaw/extra.json', JSON.stringify({ name: 'x'.repeat(1000) }));
   await write('.openclaw/workspace/MEMORY.md', 'x'.repeat(1000));
   const reader = deps(); const [source] = await discoverImportSources(reader);
-  await expect(inspectImportSource(source!, reader, createImportBudget(1500))).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+  const partial = await inspectImportSource(source!, reader, createImportBudget(2100));
+  expect(partial.items.find(item => item.view.name === 'MEMORY.md')?.captureIssue).toBe('SOURCE_SNAPSHOT_TOO_LARGE');
 });
 
 it.each([123, '', ' ', 'invalid\0path'])('rejects malformed stdio cwd %j before import', async cwd => {
@@ -152,7 +202,7 @@ describe('installed agent imports', () => {
     expect(JSON.stringify(mcp)).not.toContain('fake-selected-secret');
     expect(JSON.stringify(telegram)).not.toContain('12345:fake-telegram-token');
   });
-  it('preserves personality and memory, defaults to used skills and resolves environment without shell evaluation', async () => {
+  it('preserves personality and memory, defaults to all skills and resolves environment without shell evaluation', async () => {
     await write('.hermes/config.yaml', 'name: Ada\n');
     await write('.hermes/SOUL.md', 'Calm, direct, and patient.');
     await write('.hermes/memories/USER.md', 'Prefers concise answers.');
@@ -167,7 +217,7 @@ describe('installed agent imports', () => {
     expect(result.items.find(item => item.role === 'identity')?.text).toBe('Calm, direct, and patient.');
     expect(result.items.find(item => item.role === 'user')?.text).toContain('concise');
     expect(result.items.find(item => item.view.name === 'report')?.view.selected).toBe(true);
-    expect(result.items.find(item => item.view.name === 'unused')?.view.selected).toBe(false);
+    expect(result.items.find(item => item.view.name === 'unused')?.view.selected).toBe(true);
     expect(result.items.find(item => item.env?.LITERAL)?.env?.LITERAL).toBe('$(never-run)');
     expect(JSON.stringify(result.items.map(item => item.view))).not.toContain('not-a-real-secret');
     const automation = result.items.find(item => item.automation)!;
@@ -214,7 +264,7 @@ it('imports Hermes context without turning unrelated repository instructions int
   expect((await inspectImportSource(source!, reader)).items.find(item => item.role === 'instructions')?.text).toBe('Speak gently and briefly.');
 });
 
-it('selects entry and monitor subtrees, including sibling code, resources and their environment dependencies', async () => {
+it('preserves every script while tracking only actual entry and monitor dependencies', async () => {
   await write('.hermes/config.yaml', 'name: Ada\n');
   await write('.hermes/.env', 'DATA_URL=https://example.invalid\nDATA_TOKEN=fixture-token');
   await write('.hermes/scripts/reports/daily.sh', '. ./helper.sh');
@@ -230,9 +280,9 @@ it('selects entry and monitor subtrees, including sibling code, resources and th
   expect(automation.view.issues).toBeUndefined();
   const files = snapshot.items.filter(item => item.asset);
   expect(files.filter(item => item.view.selected).map(item => item.asset!.name).sort()).toEqual([
-    'scripts/monitor/check.sh', 'scripts/monitor/data/value.txt', 'scripts/reports/daily.sh', 'scripts/reports/data/template.txt', 'scripts/reports/helper.sh',
-  ]);
-  expect(automation.view.dependsOn?.toSorted()).toEqual(snapshot.items.filter(item => item.view.selected && (item.asset || item.env)).map(item => item.view.id).sort());
+    'scripts/monitor/check.sh', 'scripts/monitor/data/value.txt', 'scripts/reports/daily.sh', 'scripts/reports/data/template.txt', 'scripts/reports/helper.sh', 'scripts/reports-unused/other.sh',
+  ].sort());
+  expect(automation.view.dependsOn?.toSorted()).toEqual(snapshot.items.filter(item => item.view.selected && (item.asset || item.env) && !item.asset?.name.includes('reports-unused')).map(item => item.view.id).sort());
   // A surviving sibling must not hide a missing entrypoint.
   await fs.unlink(path.join(home, '.hermes/scripts/reports/daily.sh'));
   expect((await inspectImportSource(source!, reader)).items.find(item => item.automation)?.view.issues).toContain('AUTOMATION_SCRIPT_MISSING');
@@ -344,7 +394,7 @@ it('shares discovery config/include reads with name masking and charges all Herm
     await write(`.hermes/profiles/${id}/.env`, `API_KEY=${'z'.repeat(80)}\n`);
   }
   const reader = deps();
-  const metadata = createImportSourceReader(reader, createImportBudget(400));
+  const metadata = createImportSourceReader(reader, createImportBudget(2350));
   const opened = vi.spyOn(fs, 'open');
   const sources = await discoverImportSources(reader, metadata);
   expect(sources).toHaveLength(3);
@@ -366,4 +416,348 @@ it('still rejects cycles across concurrent include branches with the shared pars
   await write('.hermes/a.yaml', '$include: b.yaml');
   await write('.hermes/b.yaml', '$include: a.yaml');
   await expect(discoverImportSources(deps())).rejects.toThrow('SOURCE_CONFIG_INCLUDE_CYCLE');
+});
+
+it('discovers 142 grouped Hermes skills and all memory documents, excluding archives and skill support folders', async () => {
+  await write('.hermes/config.yaml', 'skills:\n  external_dirs: [../extra-skills]\n  disabled: [skill-1]\nheartbeat:\n  enabled: true\n');
+  for (let i = 0; i < 142; i++) {
+    await write(`.hermes/skills/group-${i % 13}/skill-${i}/SKILL.md`, `---\nname: skill-${i}\n---\nInstructions ${i}`);
+  }
+  for (let i = 0; i < 2100; i++) await write(`.hermes/memories/note-${i}.md`, `Memory ${i}`);
+  await write('.hermes/skills/.archive/old/SKILL.md', 'archived');
+  await write('.hermes/skills/group-0/skill-0/references/example/SKILL.md', 'example');
+  await write('extra-skills/category/extra/SKILL.md', '---\nname: extra\n---\nExtra');
+  await write('extra-skills/duplicate/SKILL.md', '---\nname: skill-0\n---\nShadow');
+  await write('.hermes/cron/jobs.json', JSON.stringify([{ id: 'heartbeat-job', name: 'heartbeat-main', prompt: 'Check', schedule: { kind: 'interval', minutes: 5 } }]));
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const snapshot = await inspectImportSource(source!, reader);
+  const skills = snapshot.items.filter(item => item.view.category === 'skills');
+  expect(skills).toHaveLength(143);
+  expect(skills.every(item => item.view.selected)).toBe(true);
+  expect(skills.find(item => item.view.name === 'skill-1')?.view.enabled).toBe(false);
+  expect(snapshot.items.filter(item => item.view.category === 'memory')).toHaveLength(2100);
+  expect(snapshot.items.filter(item => item.automation).map(item => item.view.name)).toEqual(['heartbeat-main']);
+  expect(validateImportSelection({ requestId: 'large-hermes-import', previewId: 'p', name: 'Ada', entryIds: snapshot.items.map(item => item.view.id), takeover: false }, snapshot)).toHaveLength(snapshot.items.length);
+});
+
+it('uses OpenClaw declared names, skillKey, grouped roots and plugin sources in native precedence order', async () => {
+  await write('.openclaw/openclaw.json', JSON.stringify({ skills: { load: { extraDirs: ['../extra-skills'] }, entries: { 'auth-key': { enabled: false, env: { SERVICE_TOKEN: 'fixture-token' } } } }, plugins: { load: { paths: ['../my-plugin'] } } }));
+  await write('.openclaw/workspace/skills/category/renamed/SKILL.md', '---\nname: report\nmetadata:\n  openclaw:\n    skillKey: auth-key\n---\nWorkspace');
+  await write('.openclaw/skills/report/SKILL.md', '---\nname: report\n---\nShadow');
+  await write('.openclaw/workspace/.agents/skills/project/SKILL.md', '# Project');
+  await write('.agents/skills/personal/SKILL.md', '# Personal');
+  await write('extra-skills/extra/SKILL.md', '# Extra');
+  await write('my-plugin/openclaw.plugin.json', JSON.stringify({ id: 'sample', skills: ['skills'] }));
+  await write('my-plugin/skills/example/SKILL.md', '# Plugin');
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const snapshot = await inspectImportSource(source!, reader);
+  const skills = snapshot.items.filter(item => item.view.category === 'skills');
+  expect(skills.map(item => item.view.name)).toEqual(['report', 'project', 'personal', 'extra', 'example']);
+  expect(skills[0]?.view).toMatchObject({ selected: true, enabled: false });
+  expect(skills[0]?.files?.[0]?.bytes.toString()).toContain('Workspace');
+  expect(snapshot.items.find(item => item.env?.SERVICE_TOKEN)?.view.selected).toBe(true);
+});
+
+it.for([
+  { kind: 'hermes', folder: '.hermes/skills' },
+  { kind: 'openclaw', folder: '.openclaw/skills' },
+  { kind: 'openclaw', folder: '.agents/skills' },
+] as const)('preserves native $folder directory links but bounds their resource subtree', async ({ kind, folder }, ctx) => {
+  await write(`.${kind}/${kind === 'hermes' ? 'config.yaml' : 'openclaw.json'}`, '{}');
+  await write('shared/report/SKILL.md', '---\nname: report\n---\nRead report');
+  await write('shared/report/scripts/report.py', '# Skill resource');
+  await write('shared/report/.env', 'REPORT_MODE=fixture');
+  await write('private/account.txt', 'Unrelated fixture');
+  await fs.mkdir(path.join(home, folder), { recursive: true });
+  try { await fs.symlink(path.join(home, 'shared/report'), path.join(home, folder, 'report'), 'junction'); }
+  catch (error) { if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) { ctx.skip(); return; } throw error; }
+  await fs.symlink(path.join(home, folder), path.join(home, folder, 'loop'), 'junction');
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const snapshot = await inspectImportSource(source!, reader);
+  const skills = snapshot.items.filter(item => item.view.category === 'skills');
+  expect(skills).toHaveLength(1);
+  const directory = skills[0]!.sourceDirectory!;
+  expect(directory).toBe(await fs.realpath(path.join(home, 'shared/report')));
+  const resources = await readImportSkillTree(directory);
+  expect(resources.map(file => file.name).sort()).toEqual(['.env', 'SKILL.md', 'scripts/report.py']);
+  expect(resources.find(file => file.name === '.env')?.bytes.toString()).toBe('REPORT_MODE=fixture');
+  // Trust in this Skill's canonical root does not grant its resources a second
+  // escape into an unrelated directory, even when the Skill itself was linked.
+  await fs.symlink(path.join(home, 'private'), path.join(directory, 'outside'), 'junction');
+  await expect(readImportSkillTree(directory)).rejects.toThrow('SOURCE_LINK_OUTSIDE_FOLDER');
+});
+
+it.for(['workspace/skills', 'workspace/.agents/skills', '../extra-skills'])(
+  'requires native allowed targets for OpenClaw %s directory links', async (folder, ctx) => {
+    await write('.openclaw/openclaw.json', '{}');
+    await write('shared/report/SKILL.md', '---\nname: report\n---\nRead report');
+    const sourceRoot = path.join(home, '.openclaw');
+    const directory = path.resolve(sourceRoot, folder);
+    await fs.mkdir(directory, { recursive: true });
+    try { await fs.symlink(path.join(home, 'shared/report'), path.join(directory, 'report'), 'junction'); }
+    catch (error) { if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) { ctx.skip(); return; } throw error; }
+    const [source] = await discoverImportSources(deps());
+    const inspect = (allowed: string[]) => discoverImportSkills(source!, {
+      skills: { load: { extraDirs: ['../extra-skills'], allowSymlinkTargets: allowed } },
+    }, home, {}, createImportBudget());
+    expect(await inspect([])).toEqual([]);
+    expect(await inspect(['../unrelated'])).toEqual([]);
+    const allowed = await inspect(['../shared']);
+    expect(allowed.map(item => item.view.name)).toEqual(['report']);
+    expect(allowed[0]?.sourceDirectory).toBe(await fs.realpath(path.join(home, 'shared/report')));
+  },
+);
+
+it('retains unmapped skill authentication privately without deselecting the skill', async () => {
+  const secret = 'fixture-skill-key-without-env';
+  await write('.openclaw/openclaw.json', JSON.stringify({ skills: { entries: { report: { apiKey: secret } } } }));
+  await write('.openclaw/workspace/skills/report/SKILL.md', '---\nname: report\n---\nReport');
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const snapshot = await inspectImportSource(source!, reader);
+  const skill = snapshot.items.find(item => item.view.category === 'skills')!;
+  expect(skill.view).toMatchObject({ selected: true, issues: ['MISSING_ENVIRONMENT_REFERENCE'] });
+  expect(skill.credential).toEqual({ format: 'source-skill-auth', value: { apiKey: secret } });
+  expect(JSON.stringify(skill.view)).not.toContain(secret);
+});
+
+it.each(['hermes', 'openclaw'] as const)('records a failed %s memory subtree separately from a failed document', async kind => {
+  await write(`.${kind}/${kind === 'hermes' ? 'config.yaml' : 'openclaw.json'}`, '{}');
+  const folder = kind === 'hermes' ? '.hermes/memories' : '.openclaw/workspace/memory';
+  await write(`${folder}/healthy.md`, 'Keep healthy');
+  await write(`${folder}/broken/note.md`, 'Repair directory');
+  await write(`${folder}/bad.md`, 'Repair file');
+  const open = fs.opendir.bind(fs);
+  vi.spyOn(fs, 'opendir').mockImplementation(((...args: Parameters<typeof fs.opendir>) => {
+    if (String(args[0]).endsWith(`${path.sep}broken`)) return Promise.reject(Object.assign(new Error('denied'), { code: 'EACCES' }));
+    return open(...args);
+  }) as typeof fs.opendir);
+  const read = fs.open.bind(fs);
+  vi.spyOn(fs, 'open').mockImplementation(((...args: Parameters<typeof fs.open>) => {
+    if (String(args[0]).endsWith(`${path.sep}bad.md`)) return Promise.reject(Object.assign(new Error('denied'), { code: 'EACCES' }));
+    return read(...args);
+  }) as typeof fs.open);
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const snapshot = await inspectImportSource(source!, reader);
+  expect(snapshot.items.find(item => item.view.name === 'broken')?.sourceFile).toMatchObject({ root: path.join(home, folder), file: path.join(home, folder, 'broken'), kind: 'directory', logicalPrefix: kind === 'hermes' ? 'memories' : 'memory' });
+  expect(snapshot.items.find(item => item.view.name === 'bad.md')?.sourceFile?.kind).toBe('file');
+  expect(snapshot.items.find(item => item.view.name === 'healthy.md')?.text).toBe('Keep healthy');
+});
+
+it.each(['package.json', 'openclaw.plugin.json'])('bounds %s before allocating or parsing during skill discovery', async filename => {
+  const directory = filename === 'package.json' ? 'bin/node_modules/openclaw' : 'plugin';
+  const manifest = path.join(home, directory, filename);
+  await write(`${directory}/${filename}`, '{}');
+  await fs.truncate(manifest, 16 * 1024 * 1024 + 1);
+  const source = { kind: 'openclaw' as const, agentId: 'main', name: 'Ada', root: path.join(home, '.openclaw'), workspace: path.join(home, '.openclaw/workspace'), configFile: path.join(home, '.openclaw/openclaw.json') };
+  const config = { plugins: { load: { paths: [path.join(home, 'plugin')] } } };
+  const env = { PATH: path.join(home, 'bin') };
+  const allocate = vi.spyOn(Buffer, 'alloc');
+  const parse = vi.spyOn(JSON, 'parse');
+  await expect(discoverImportSkills(source, config, home, env, createImportBudget())).rejects.toThrow('SOURCE_FILE_TOO_LARGE');
+  expect(allocate).not.toHaveBeenCalled();
+  expect(parse).not.toHaveBeenCalled();
+  allocate.mockRestore(); parse.mockRestore();
+  await write(`${directory}/${filename}`, JSON.stringify(filename === 'package.json' ? { name: 'openclaw' } : { id: 'plugin', skills: ['skills'] }));
+  await write(`${directory}/skills/report/SKILL.md`, '# Report');
+  const skills = await discoverImportSkills(source, config, home, env, createImportBudget());
+  expect(skills.map(item => item.view.name)).toEqual(['report']);
+});
+
+it('charges installed-package and plugin manifests to the same source budget before parsing the next one', async () => {
+  await write('bin/node_modules/openclaw/package.json', JSON.stringify({ name: 'openclaw', padding: 'x'.repeat(600) }));
+  await write('plugin/openclaw.plugin.json', JSON.stringify({ id: 'plugin', skills: ['skills'], padding: 'x'.repeat(600) }));
+  const source = { kind: 'openclaw' as const, agentId: 'main', name: 'Ada', root: path.join(home, '.openclaw'), workspace: path.join(home, '.openclaw/workspace'), configFile: path.join(home, '.openclaw/openclaw.json') };
+  const parse = vi.spyOn(JSON, 'parse');
+  await expect(discoverImportSkills(source, { plugins: { load: { paths: [path.join(home, 'plugin')] } } }, home,
+    { PATH: path.join(home, 'bin') }, createImportBudget(1500))).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+  expect(parse).toHaveBeenCalledTimes(1);
+});
+
+it('preserves native manifest file symlinks while charging their contents', async ctx => {
+  await write('shared/plugin.json', JSON.stringify({ id: 'plugin', skills: ['skills'] }));
+  await write('plugin/skills/report/SKILL.md', '# Report');
+  // Probe the actual filesystem capability, including Windows runners with
+  // symlink support. Unsupported local permissions must not skip other cases.
+  try { await fs.symlink(path.join(home, 'shared/plugin.json'), path.join(home, 'plugin/openclaw.plugin.json'), 'file'); }
+  catch (error) {
+    if (['EPERM', 'EACCES', 'ENOTSUP', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) { ctx.skip(); return; }
+    throw error;
+  }
+  const source = { kind: 'openclaw' as const, agentId: 'main', name: 'Ada', root: path.join(home, '.openclaw'), workspace: path.join(home, '.openclaw/workspace'), configFile: path.join(home, '.openclaw/openclaw.json') };
+  const config = { plugins: { load: { paths: [path.join(home, 'plugin')] } } };
+  expect((await discoverImportSkills(source, config, home, {}, createImportBudget())).map(item => item.view.name)).toEqual(['report']);
+  await expect(discoverImportSkills(source, config, home, {}, createImportBudget(10))).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+});
+
+it.each(['workspace', 'extraDirs', 'plugin', 'hermes'])('bounds empty %s directories during enumeration and closes the stream on budget failure', async location => {
+  const root = path.join(home, location === 'hermes' ? '.hermes' : '.openclaw');
+  const workspace = path.join(root, 'workspace');
+  const directory = location === 'workspace' ? path.join(workspace, 'skills') : location === 'plugin' ? path.join(root, 'extensions') : location === 'extraDirs' ? path.join(home, 'extras') : path.join(root, 'skills');
+  for (let index = 0; index < 40; index++) await fs.mkdir(path.join(directory, `empty-${index}`), { recursive: true });
+  const source = { kind: location === 'hermes' ? 'hermes' as const : 'openclaw' as const, agentId: 'main', name: 'Ada', root, workspace, configFile: path.join(root, 'config.json') };
+  const budget = createImportBudget(1500);
+  const reserve = vi.spyOn(budget, 'reserve');
+  const open = vi.spyOn(fs, 'opendir');
+  const readdir = vi.spyOn(fs, 'readdir');
+  await expect(discoverImportSkills(source, location === 'extraDirs' ? { skills: { load: { extraDirs: [directory] } } } : {}, home, {}, budget)).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+  expect(readdir).not.toHaveBeenCalled();
+  expect(reserve.mock.calls.length).toBeLessThan(40);
+  const opened = open.mock.results.filter((_, index) => String(open.mock.calls[index]![0]) === directory);
+  expect(opened).toHaveLength(1);
+  const handle = await opened[0]!.value;
+  await expect(handle.read()).rejects.toMatchObject({ code: 'ERR_DIR_CLOSED' });
+});
+
+it('bounds native venv enumeration even when entries are not interpreter aliases', async () => {
+  const directory = path.join(home, '.venv', process.platform === 'win32' ? 'Scripts' : 'bin');
+  await fs.mkdir(directory, { recursive: true });
+  await write('.venv/pyvenv.cfg', `home = ${home}\n`);
+  for (let index = 0; index < 40; index++) await fs.writeFile(path.join(directory, `ordinary-${index}`), '');
+  const budget = createImportBudget(1500);
+  const reserve = vi.spyOn(budget, 'reserve');
+  const open = vi.spyOn(fs, 'opendir');
+  const readdir = vi.spyOn(fs, 'readdir');
+  await expect(readImportSkillTree(home, undefined, budget)).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');
+  expect(readdir).not.toHaveBeenCalled();
+  expect(reserve.mock.calls.length).toBeLessThan(40);
+  const opened = open.mock.results.filter((_, index) => String(open.mock.calls[index]![0]) === directory);
+  expect(opened).toHaveLength(1);
+  await expect((await opened[0]!.value).read()).rejects.toMatchObject({ code: 'ERR_DIR_CLOSED' });
+});
+
+it('preserves sorted skill-name precedence after streaming directory entries', async () => {
+  await write('.hermes/skills/z-last/SKILL.md', '---\nname: report\n---\nLast');
+  await write('.hermes/skills/a-first/SKILL.md', '---\nname: report\n---\nFirst');
+  const root = path.join(home, '.hermes');
+  const items = await discoverImportSkills({ kind: 'hermes', agentId: 'main', name: 'Ada', root, workspace: root, configFile: path.join(root, 'config.yaml') }, {}, home, {}, createImportBudget());
+  expect(items).toHaveLength(1);
+  expect(items[0]!.sourceAlias).toBe('a-first');
+  expect(items[0]!.files![0]!.bytes.toString()).toContain('First');
+});
+
+it('does not synchronously sort a whole 100,000-entry Skill root before visiting children', async () => {
+  const root = path.join(home, '.hermes'); const directory = path.join(root, 'skills');
+  await fs.mkdir(directory, { recursive: true });
+  const opendir = fs.opendir.bind(fs);
+  let closed = false; let visited = 0; let previous = '';
+  vi.spyOn(fs, 'opendir').mockImplementation(async (...args) => {
+    if (String(args[0]) !== directory) return opendir(...args);
+    return { async *[Symbol.asyncIterator]() {
+      try {
+        for (let index = 99_999; index >= 0; index--) yield {
+          name: `skill-${String(index).padStart(6, '0')}`,
+          isDirectory: () => false, isSymbolicLink: () => true,
+        };
+      } finally { closed = true; }
+    } } as Awaited<ReturnType<typeof fs.opendir>>;
+  });
+  const stat = fs.stat.bind(fs);
+  vi.spyOn(fs, 'stat').mockImplementation(async (...args) => {
+    if (path.dirname(String(args[0])) !== directory) return stat(...args);
+    const name = path.basename(String(args[0]));
+    expect(previous.localeCompare(name)).toBeLessThan(0);
+    previous = name; visited++;
+    throw Object.assign(new Error('fixture dangling link'), { code: 'ENOENT' });
+  });
+  const sort = Array.prototype.sort;
+  vi.spyOn(Array.prototype, 'sort').mockImplementation(function(this: unknown[], compare) {
+    if (this.length > 8192) throw new Error('Unbounded synchronous directory sort');
+    return sort.call(this, compare);
+  });
+  const items = await discoverImportSkills({ kind: 'hermes', agentId: 'main', name: 'Ada', root, workspace: root,
+    configFile: path.join(root, 'config.yaml') }, {}, home, {}, createImportBudget());
+  expect(items).toEqual([]);
+  expect(visited).toBe(100_000);
+  expect(closed).toBe(true);
+}, 30_000);
+
+it.each(['hermes', 'openclaw'] as const)('discovers %s custom archives, hidden TXT corpus and attachments without conflating roots', async kind => {
+  await write(`.${kind}/${kind === 'hermes' ? 'config.yaml' : 'openclaw.json'}`, '{}');
+  const workspace = `.${kind}/${kind === 'hermes' ? '' : 'workspace/'}`;
+  await write(`${workspace}memory/semantic/knowledge/note.md`, 'Custom archive');
+  await write(`${workspace}memory/.dreams/session-corpus/session.txt`, 'Full transcript');
+  await write(`${workspace}memory/picture.png`, '\0fixture image bytes');
+  if (kind === 'hermes') await write('.hermes/memories/note.md', 'Built-in memory');
+  else await write(`${workspace}DREAMS.md`, 'Dreams document');
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const snapshot = await inspectImportSource(source!, reader);
+  const memory = snapshot.items.filter(item => item.view.category === 'memory');
+  expect(memory.map(item => item.text)).toContain('Custom archive');
+  expect(memory.map(item => item.text)).toContain('Full transcript');
+  expect(memory.find(item => item.asset)?.asset?.bytes.toString()).toBe('\0fixture image bytes');
+  expect(memory.map(item => item.text)).toContain(kind === 'hermes' ? 'Built-in memory' : 'Dreams document');
+  expect(new Set(memory.map(item => item.view.id)).size).toBe(memory.length);
+});
+
+
+it.each(['hermes', 'openclaw'] as const)('imports %s textual state and backups without treating empty markers as attachments', async kind => {
+  await write(`.${kind}/${kind === 'hermes' ? 'config.yaml' : 'openclaw.json'}`, '{}');
+  const folder = `.${kind}/${kind === 'hermes' ? 'memories' : 'workspace/memory'}`;
+  const documents = { 'state.json': '{"lastRun":"fixture"}\n', 'MEMORY.md.bak-20260101': '# Old note\n', 'extensionless': 'A note\n', 'terminal.txt': 'A log with \u0015 control bytes\n' };
+  for (const [name, text] of Object.entries(documents)) await write(`${folder}/${name}`, text);
+  for (const name of ['.morning-report.sent', 'MEMORY.md.lock', 'empty.md']) await write(`${folder}/${name}`, '');
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const memory = (await inspectImportSource(source!, reader)).items.filter(item => item.view.category === 'memory');
+  expect(memory.filter(item => item.text).map(item => [item.view.name, item.text]).sort()).toEqual(Object.entries(documents).sort());
+  expect(memory.filter(item => item.asset)).toHaveLength(3);
+  expect(memory.filter(item => item.asset).every(item => item.asset!.bytes.length === 0)).toBe(true);
+  expect(memory.every(item => !item.captureIssue)).toBe(true);
+});
+
+it('preserves native commands, heartbeat jobs and their instruction document', async () => {
+  await write('.openclaw/openclaw.json', JSON.stringify({ agents: { defaults: { model: 'source-model' } }, tools: { profile: 'restricted' } }));
+  await write('.openclaw/workspace/HEARTBEAT.md', 'Check the original checklist');
+  const command = { kind: 'command', argv: ['node', 'report.js', 'argument with spaces'], cwd: home, timeoutSeconds: 90, noOutputTimeoutSeconds: 10, outputMaxBytes: 4096 };
+  await write('.openclaw/cron/jobs.json', JSON.stringify({ jobs: [
+    { id: 'command', name: 'Command report', payload: command, schedule: { kind: 'every', everyMs: 60000 } },
+    { id: 'native-heartbeat', payload: { kind: 'heartbeat' }, schedule: { kind: 'every', everyMs: 60000 } },
+    { id: 'ordinary-heartbeat', name: 'heartbeat-main', payload: { kind: 'agentTurn', message: 'A normal reminder' }, schedule: { kind: 'every', everyMs: 60000 } },
+  ] }));
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const inspected = await inspectImportSource(source!, reader);
+  expect(inspected.items.find(item => item.view.name === 'HEARTBEAT.md')?.text).toBe('Check the original checklist');
+  const tasks = inspected.items.filter(item => item.automation);
+  expect(tasks).toHaveLength(3);
+  expect(tasks[0]?.automation?.input).toMatchObject({ name: 'Command report', enabled: false });
+  expect(tasks[0]?.automation?.original.payload).toEqual(command);
+  expect(tasks[0]?.view.issues).toBeUndefined();
+  expect(tasks[1]?.automation?.input).toMatchObject({ enabled: false, triggers: [{ kind: 'interval', intervalMs: 60000 }] });
+  expect(tasks[1]?.automation?.original.payload).toEqual({ kind: 'heartbeat' });
+  expect(tasks[1]?.view.issues).toContain('AUTOMATION_CONTEXT_NEEDS_MAPPING');
+  expect(tasks[2]?.view.name).toBe('heartbeat-main');
+});
+
+for (const kind of ['hermes', 'openclaw'] as const) it(`imports ${kind} memory links only from its declared document vault`, async ctx => {
+  const vault = path.join(home, 'vault');
+  await write(`.${kind}/${kind === 'hermes' ? 'config.yaml' : 'openclaw.json'}`, '{}');
+  await write(`.${kind}/.env`, `OBSIDIAN_VAULT_PATH=${vault}`);
+  await write('vault/data/state.json', '{"cursor":7}');
+  await write('private/auth.json', 'fixture-private-credential');
+  const folder = path.join(home, `.${kind}/${kind === 'hermes' ? 'memories' : 'workspace/memory'}`);
+  await fs.mkdir(folder, { recursive: true });
+  try { await fs.symlink(path.join(vault, 'data/state.json'), path.join(folder, 'state.json'), 'file'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'EPERM') { ctx.skip(); return; } throw error; }
+  await fs.symlink(path.join(home, 'private/auth.json'), path.join(folder, 'credentials.json'), 'file');
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const snapshot = await inspectImportSource(source!, reader);
+  const memory = snapshot.items.filter(item => item.view.category === 'memory');
+  expect(memory.find(item => item.view.name === 'state.json')?.text).toBe('{"cursor":7}');
+  expect(memory.find(item => item.view.name === 'credentials.json')).toMatchObject({ captureIssue: 'SOURCE_LINK_OUTSIDE_FOLDER' });
+  expect(JSON.stringify(snapshot)).not.toContain('fixture-private-credential');
+  await fs.unlink(path.join(home, `.${kind}/.env`));
+  const withoutDeclaration = await inspectImportSource(source!, { ...reader, env: { ...reader.env, OBSIDIAN_VAULT_PATH: vault } });
+  expect(withoutDeclaration.items.find(item => item.view.name === 'state.json')).toMatchObject({ captureIssue: 'SOURCE_LINK_OUTSIDE_FOLDER' });
+});
+
+it('keeps distinct source records even when unsupported jobs lack usable identities', async () => {
+  await write('.hermes/config.yaml', '{}');
+  await write('.hermes/cron/jobs.json', JSON.stringify([
+    { name: ' ', prompt: ' ', schedule: { kind: 'unknown' } },
+    { name: ' ', prompt: ' ', schedule: { kind: 'unknown' } },
+  ]));
+  const reader = deps(); const [source] = await discoverImportSources(reader);
+  const tasks = (await inspectImportSource(source!, reader)).items.filter(item => item.automation);
+  expect(tasks).toHaveLength(2);
+  expect(new Set(tasks.map(item => item.view.id)).size).toBe(2);
+  expect(tasks.every(item => item.automation?.input?.enabled === false)).toBe(true);
 });

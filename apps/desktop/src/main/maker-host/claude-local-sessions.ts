@@ -7,6 +7,7 @@
  * continues to consume the existing Session/Message contracts.
  */
 
+import { projectNativeSessionMetadata, type NativeSessionScope } from './native-session-metadata.js';
 import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import { createReadStream } from 'node:fs';
@@ -105,7 +106,7 @@ export interface ClaudeCodeExternalImportResult {
   updated: number;
 }
 
-export interface ClaudeCodeExternalSessionCandidate {
+export interface ClaudeCodeExternalSessionCandidate extends NativeSessionScope {
   source: 'claude';
   id: string;
   title: string;
@@ -155,7 +156,7 @@ export async function scanExternalClaudeCodeSessions(
       });
     }
   }
-  return { roots, candidates, rejectedCount };
+  return { roots, candidates: await projectNativeSessionMetadata('cc', candidates), rejectedCount };
 }
 
 /** Import the selected external Claude Code sessions into xdt-maker's session table. */
@@ -570,8 +571,8 @@ async function upsertLocalSession(summary: ClaudeCodeSessionSummary): Promise<'i
       -- 令牌统计会停留在首次导入的旧快照,与当前源会话不一致;updated_at 同时
       -- 收敛回源值,后续同步不再被删除时刻挡住。非删除行为完全不变。
       title = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.title ELSE sessions.title END,
-      working_dir = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.working_dir ELSE sessions.working_dir END,
-      workspace_kind = excluded.workspace_kind,
+      working_dir = CASE WHEN sessions.status = 'archived' THEN sessions.working_dir WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.working_dir ELSE sessions.working_dir END,
+      workspace_kind = CASE WHEN sessions.status = 'archived' THEN sessions.workspace_kind ELSE excluded.workspace_kind END,
       model = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.model ELSE sessions.model END,
       permission_mode = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.permission_mode ELSE sessions.permission_mode END,
       sdk_session_id = excluded.sdk_session_id,

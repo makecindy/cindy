@@ -10,7 +10,7 @@ import {
   StyleSheet,
   View,
 } from 'react-native';
-import { ChevronRight } from 'lucide-react-native';
+import { ChevronRight, RefreshCw } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import {
@@ -21,8 +21,9 @@ import { Text } from '@/components/AppText';
 import { useTeammateNavigation } from '@/session/useTeammateNavigation';
 import { TeammateList } from '@/session/TeammateList';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
-import { MainWindowEmptyState, StatusDot } from '@/components/MobilePrimitives';
-import { SimpleStackHeader, simpleScreenSafeAreaEdges } from '@/platform/chrome';
+import { MainWindowActionButton, MainWindowEmptyState, RemoteListSyncingPlaceholder, StatusDot } from '@/components/MobilePrimitives';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
+import { SimpleStackHeader, simpleScrollInsetProps, simpleScrollScreenSafeAreaEdges } from '@/platform/chrome';
 import { useAuth } from '@/auth/AuthContext';
 import {
   type HostedRemoteCollectionItem,
@@ -93,11 +94,12 @@ function RemoteCollectionScreenContent() {
 
   return (
     <SafeAreaView
-      edges={simpleScreenSafeAreaEdges()}
+      edges={simpleScrollScreenSafeAreaEdges()}
       style={styles.safeArea}
       testID="remoteResources.screen"
     >
       <SimpleStackHeader
+        scrollEdge
         backTestID="remoteResources.backButton"
         onBack={() => goBackGuarded(router)}
         subtitle={collectionId === 'teammates' ? undefined : targets.length > 1 ? t('devices.resources.hostCount', { count: targets.length }) : targets[0]?.deviceName}
@@ -108,17 +110,38 @@ function RemoteCollectionScreenContent() {
         items={items} loading={loading} refreshing={refreshing} error={error}
         connectionState={connectionState}
         isOnline={isOnline}
-        onRefresh={() => void load(true)} onSelect={openItem} /> : loading && items.length === 0 ? (
+        onRefresh={() => void load(true)} onSelect={openItem} scrollInsetProps={simpleScrollInsetProps} /> : loading && items.length === 0 ? (
         <View style={styles.center}>
-          <ActivityIndicator color={colors.textSecondary} />
-          <Text style={styles.muted}>{t('devices.resources.loading')}</Text>
+          <RemoteListSyncingPlaceholder testID="remoteResources.loading" />
         </View>
       ) : (
         <FlatList
+          {...simpleScrollInsetProps}
           contentContainerStyle={items.length === 0 ? styles.emptyContent : styles.listContent}
           data={items}
           keyExtractor={(item) => item.key}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} tintColor={colors.textSecondary} />}
+          ListHeaderComponent={error && items.length > 0 ? (
+            // 已有内容时加载失败:列表保持可读,顶部行内提示 + 重试(与伙伴列表同一呈现)。
+            <View style={styles.noticeRow}>
+              <Text accessibilityRole="alert" style={styles.noticeText} testID="remoteResources.error">
+                {t('devices.resources.stale')}
+              </Text>
+              <Pressable
+                accessibilityLabel={t('devices.resources.retry')}
+                accessibilityRole="button"
+                accessibilityState={{ busy: refreshing || undefined, disabled: refreshing }}
+                disabled={refreshing}
+                onPress={() => void load(true)}
+                style={({ pressed }) => [styles.retry, pressed && styles.pressed]}
+                testID="remoteResources.refresh"
+              >
+                {refreshing
+                  ? <ActivityIndicator color={colors.textSecondary} />
+                  : <RefreshCw color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />}
+              </Pressable>
+            </View>
+          ) : null}
           renderItem={({ item: hosted }) => {
             const display = hosted.item.display;
             const titleText = resolveRemoteText(display.title, i18n.language);
@@ -163,11 +186,31 @@ function RemoteCollectionScreenContent() {
             );
           }}
           ListEmptyComponent={(
-            <MainWindowEmptyState
-              copy={error ?? t('devices.resources.emptyCopy')}
-              testID={error ? 'remoteResources.error' : 'remoteResources.empty'}
-              title={error ? t('devices.resources.loadFailed') : t('devices.resources.emptyTitle')}
-            />
+            error ? (
+              // 无内容时加载失败:错误态而非空态,附重试。
+              <MainWindowEmptyState
+                centered
+                copy={error}
+                style={styles.emptyState}
+                testID="remoteResources.error"
+                title={t('devices.resources.loadFailed')}
+              >
+                <MainWindowActionButton
+                  action={{
+                    busy: refreshing,
+                    label: t('devices.resources.retry'),
+                    onPress: () => void load(true),
+                    testID: 'remoteResources.retry',
+                  }}
+                />
+              </MainWindowEmptyState>
+            ) : (
+              <MainWindowEmptyState
+                copy={t('devices.resources.emptyCopy')}
+                testID="remoteResources.empty"
+                title={t('devices.resources.emptyTitle')}
+              />
+            )
           )}
         />
       )}
@@ -178,7 +221,10 @@ function RemoteCollectionScreenContent() {
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   safeArea: { backgroundColor: colors.surface, flex: 1 },
   center: { alignItems: 'center', flex: 1, gap: spacing.sm, justifyContent: 'center' },
-  muted: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  emptyState: { gap: spacing.md, padding: spacing.xl },
+  noticeRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
+  noticeText: { color: colors.errorText, flex: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  retry: { alignItems: 'center', justifyContent: 'center', minHeight: 44, minWidth: 44 },
   listContent: { gap: spacing.sm, padding: spacing.md },
   emptyContent: { flexGrow: 1, justifyContent: 'center', padding: spacing.xl },
   row: {
@@ -193,7 +239,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
-  pressed: { opacity: 0.72 },
+  pressed: mobileInteractionStyles.pressed,
   unread: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: colors.statusAwaiting },
   connectionDot: { position: 'absolute', bottom: 0, right: 0 },
   avatar: {

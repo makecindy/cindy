@@ -44,6 +44,7 @@ import {
   type LinkClosePayload,
   type Envelope,
   type PushPayload,
+  type NotifySender,
   DeviceLinkError,
   resolveRemoteInvokeTimeoutMs,
 } from '@cindy/device-link';
@@ -1759,29 +1760,27 @@ export async function remoteInvoke(
       throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
     }
   };
+  const preSend = (): void => {
+    assertRemoteControlTargetEnabled(deviceId);
+    assertLinkNotClosedSinceStart();
+    options?.preSend?.();
+  };
   const invoke = async (): Promise<InvokeResultPayload> => {
     // 熔断门禁(外层 guardInvoke)在连接等待之前:open 态快速失败,不消耗 1.5s 等待。
     await ensureOnlineForRequest();
     // fail-closed 边界不得跨 await 失效:等待期间用户可能已关闭该设备控制(复验
     // 授权),或显式 CLOSE_LINK(复验取消代次)(review P1 ×2)。
-    assertRemoteControlTargetEnabled(deviceId);
-    assertLinkNotClosedSinceStart();
-    options?.preSend?.();
+    preSend();
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
     if (!parseSharedTaskPeer(deviceId)) {
       const accelerated = await tryPeerInvoke(deviceId, channel, args, (peer, nextChannel, nextArgs) => {
-        assertLinkNotClosedSinceStart();
-        return remoteInvoke(peer, nextChannel, nextArgs, { preSend: () => {
-          assertLinkNotClosedSinceStart();
-          options?.preSend?.();
-        } });
+        preSend();
+        return remoteInvoke(peer, nextChannel, nextArgs, { preSend });
       });
-      assertRemoteControlTargetEnabled(deviceId);
-      assertLinkNotClosedSinceStart();
-      options?.preSend?.();
+      preSend();
       if (accelerated) return accelerated;
     }
-    return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'));
+    return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { preSend });
   };
   const run = (): Promise<InvokeResultPayload> =>
     invokeWithClosedLinkRecovery(
@@ -1918,6 +1917,7 @@ export function sendMobileSessionNotify(payload: {
   eventId?: string;
   /** 伙伴主任务的 Bot id；让手机按伙伴聊天打开通知。 */
   teammateBotId?: string;
+  teammateAvatar?: NotifySender['avatar'];
   /**
    * 发起时捕获的 getMobileNotifyGeneration()。调用路径里有 await(取正文/等
    * 其它通道)时必传:与当前代次不一致说明期间发生过登出/失去持有权,任务
@@ -1951,6 +1951,7 @@ export function sendMobileSessionNotify(payload: {
       fallbackBody: payload.fallbackBody ?? getSessionNotificationBody(payload.kind),
       detail: payload.detail,
       ...(payload.teammateBotId ? { teammateBotId: payload.teammateBotId } : {}),
+      ...(payload.teammateAvatar ? { teammateAvatar: payload.teammateAvatar } : {}),
     }),
   );
   if (sent) {

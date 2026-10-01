@@ -149,6 +149,7 @@ function renderedClientIds(sessionId: string): string[] {
     view, snapshot, liveMessages: live, streaming: false,
     isLive: (row) => row.isStreaming === true,
     pendingHandoff: handoff.reconcile(snapshot, live).pending,
+    isLocalMessage: (row) => row.isLocalSystemCard === true,
     isLocalUser: (row) => row.role === 'user'
       && (row.isPendingPersist === true || !!row.blockedByGhost || !!row.localSendPrecedingClientIds),
     build: (rows) => rows.map((row) => row.clientId),
@@ -189,6 +190,42 @@ afterEach(() => {
   delete (globalThis as { window?: unknown }).window;
   vi.clearAllMocks();
   dataOwnerTesting.reset();
+});
+
+describe('local history view keeps command cards', () => {
+  it('shows help immediately and retains its position through history refresh and later messages', async () => {
+    const s = sid();
+    await openSession(s);
+    const helpId = makerChatStore.insertSystemCard(s, 'help', {
+      commands: [{ name: 'help', source: 'desktop' }],
+    })!;
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', helpId]);
+    await getRemoteHistoryView(s)!.refresh();
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', helpId]);
+
+    await makerChatStore.sendMessage(s, 'next question', 'claude', '', 'default', WD);
+    const item = enqueue.mock.calls[0][1];
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', helpId, item.clientId]);
+    persistQueued(s, item, new Date(Date.now() + 1000).toISOString());
+    await getRemoteHistoryView(s)!.refresh();
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', helpId, item.clientId]);
+    expect(rowsBySession.get(s)!.some((row) => row.clientId === helpId)).toBe(false);
+    makerChatStore.purgeSession(s);
+  });
+
+  it('keeps consecutive local command cards and does not revive them after the session is purged', async () => {
+    const s = sid();
+    await openSession(s);
+    const cards = (['help', 'cost', 'pwd', 'status', 'cmd'] as const)
+      .map((kind) => makerChatStore.insertSystemCard(s, kind)!);
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', ...cards]);
+    await getRemoteHistoryView(s)!.refresh();
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer', ...cards]);
+    makerChatStore.purgeSession(s);
+    await openSession(s);
+    expect(renderedClientIds(s)).toEqual(['old-user', 'old-answer']);
+    makerChatStore.purgeSession(s);
+  });
 });
 
 describe('local history view keeps user rows through the DB echo', () => {

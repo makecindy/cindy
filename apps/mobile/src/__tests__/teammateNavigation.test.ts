@@ -8,7 +8,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
 } }));
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { __testing, normalizeHomeNavigationPreferences, readHomeNavigationPreferences, saveHomeNavigationPreferences } from '@/session/homeViewPreferenceStore';
-import { findLastTeammate, homeDismissCount, orderedTeammates, teammateIdentity, teammateResourceRoute } from '@/session/teammateNavigation';
+import { homeDismissCount, orderedTeammates, teammateIdentity, teammateResourceRoute } from '@/session/teammateNavigation';
 import { StackRouter, StackActions } from 'expo-router/build/react-navigation/routers/StackRouter';
 const row = (deviceId = 'mac', id = 'writer', title = 'Writer', timestamp = 100): HostedRemoteCollectionItem => ({
   key: `${deviceId}:${id}`, host: { deviceId, deviceName: deviceId },
@@ -70,12 +70,6 @@ describe('teammate identity navigation', () => {
     expect(teammateResourceRoute(row(), 'en')).toEqual({ pathname: '/sessions/[sessionId]', params: {
       resourceCollectionId: 'teammates', resourceId: 'writer', resourceKind: 'bot', deviceId: 'mac', deviceName: 'mac', sessionId: 'obsolete-session',
     } });
-  });
-  it('never substitutes Cindy or another same-named host for a deleted or missing remembered teammate', () => {
-    const last = teammateIdentity(row());
-    expect(findLastTeammate(last, [row('other'), row('mac', 'cindy', 'Cindy')])).toBeNull();
-    expect(findLastTeammate(null, [row('mac', 'cindy', 'Cindy')])).toBeNull();
-    expect(findLastTeammate(last, [row()])).toEqual(row());
   });
   it('keeps equal names from separate hosts, filters names, and sorts by real activity', () => {
     const first = row('mac', 'writer', 'Writer', 100);

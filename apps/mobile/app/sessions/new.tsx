@@ -5,10 +5,15 @@ import { buildOutboxItem, createOutboxClientId } from '@/session/sessionOutbox';
 import type { DurableOutboxRecord } from '@/session/durableOutbox';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { takeRefinementContextTail } from '@cindy/voice-input-core';
-import { Stack, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useIsFocused, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { NewTaskSelectionSheet } from '@/session/NewTaskSelectionSheet';
 import { resolveWorkspacePickerFrame, type WorkspacePickerFrame } from '@/session/workspacePickerPlacement';
 import { simpleScreenSafeAreaEdges } from '@/platform/chrome/SimpleStackHeader';
+import { readComposerEntry, useComposerDock } from '@/session/composerMorph';
+import { useComposerPillOpen } from '@/session/useComposerPillOpen';
+import { DockKeyboardBottomSpacer } from '@/session/ComposerDockKeyboardFollow';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
+import { composerGeometry } from '@/session/composerGeometry';
 import Constants from 'expo-constants';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { formatMobileBuildLabel, normalizeBuildInfo } from '@/config/buildInfo';
@@ -260,6 +265,7 @@ import {
   resolveMobileComposerVoiceButtonPlacement,
 } from '@/session/MobileComposerInputRow';
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
+import { VoicePillWidthFrame } from '@/session/voicePillWidthMotion';
 import { useMobileVoiceProcessingIndicator } from '@/session/useMobileVoiceProcessingIndicator';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { ComposerKeyboardAvoidingView } from '@/session/ComposerKeyboardAvoidingView';
@@ -454,6 +460,7 @@ export default function NewRemoteSessionScreen() {
     workingDir?: string;
     deviceExplicit?: string;
     visualFocusComposer?: string;
+    composerMorph?: string;
     visualDraft?: string;
     suggestion?: string;
     recoverySessionId?: string;
@@ -462,9 +469,23 @@ export default function NewRemoteSessionScreen() {
   const routeDeviceName = String(params.deviceName ?? routeDeviceId);
   const initialWorkingDir = readRouteString(params.workingDir);
   const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteString(params.visualFocusComposer) === '1';
+  // The home action lands in the compact pill; only a user's tap opens the card and keyboard.
+  const [entryMorph] = useState(() => readComposerEntry(readRouteString(params.composerMorph) ?? undefined));
+  const navigation = useNavigation();
+  // The morph stood in for the push; leaving should still slide back normally.
+  // Switch only after the entry transition: changing it on mount would make the
+  // push itself slide in under the morph overlay.
+  useEffect(() => {
+    if (!entryMorph) return;
+    const restore = () => navigation.setOptions({ animation: 'default' });
+    const unsubscribe = navigation.addListener('transitionEnd' as never, restore);
+    const fallback = setTimeout(restore, 1600);
+    return () => { unsubscribe(); clearTimeout(fallback); };
+  }, [entryMorph, navigation]);
+  const composerDock = useComposerDock();
   const visualInitialDraft = MOBILE_VISUAL_MOCK_ENABLED ? readRouteString(params.visualDraft) : null;
   const router = useRouter();
-  const nativeSelectionSheet = Platform.OS === 'ios';
+  const nativeSelectionSheet = Platform.OS === 'ios' || Platform.OS === 'android';
   const auth = useAuth();
   const outboxOwner = useSyncExternalStore(subscribeMobileAuthOwner, getMobileAuthOwner, getMobileAuthOwner);
   const {
@@ -880,7 +901,7 @@ export default function NewRemoteSessionScreen() {
         count: MOBILE_MAX_ATTACHMENTS,
       }));
     } else if (selection.rejectedUris.length > 0) {
-      setAttachmentError(i18n.t('composer.upload.fileTypeUnsupported'));
+      setAttachmentError(i18n.t('composer.upload.noFileRead'));
     } else {
       setAttachmentError(null);
     }
@@ -931,6 +952,7 @@ export default function NewRemoteSessionScreen() {
   const userTouchedDeviceRef = useRef(false);
   const userTouchedWorkspaceRef = useRef(false);
   const firstMessageInputRef = useRef<NativeTextInput>(null);
+  const composerPillOpen = useComposerPillOpen(composerDock.enabled, () => firstMessageInputRef.current?.focus());
   const voiceDraftScrollRef = useRef<ScrollView>(null);
   const voiceRecordingActiveRef = useRef(false);
   const voicePermissionRequestInFlightRef = useRef(false);
@@ -948,7 +970,7 @@ export default function NewRemoteSessionScreen() {
   const voiceDictionaryLearningTrackerRef = useRef<MobileVoiceDictionaryLearningTracker | null>(null);
   const creatingRef = useRef(false);
   const [firstMessageInputContentHeight, setFirstMessageInputContentHeight] = useState(MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT);
-  const [firstMessageInputFocused, setFirstMessageInputFocused] = useState(false);
+  const [firstMessageInputFocused, setFirstMessageInputFocused] = useState(visualFocusComposer);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
   const voiceDraftCaretRef = useRef<View>(null);
   const voiceDraftMeasuredBlockRef = useRef<View>(null);
@@ -1714,7 +1736,7 @@ export default function NewRemoteSessionScreen() {
     armed: composerVoiceHoldArmed,
     draftText: draft.firstMessage,
   });
-  const composerCardActive = firstMessageInputFocused
+  const composerCardActive = firstMessageInputFocused || composerPillOpen.opening
     || modelSheetOpen
     || permissionSheetOpen
     || voiceStartPending
@@ -3860,48 +3882,51 @@ export default function NewRemoteSessionScreen() {
   ) : null;
 
   const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (
-    <Pressable
-      accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.new.voiceInput')}
-      accessibilityRole="button"
-      accessibilityState={{ busy: voiceIsProcessing || undefined, disabled: creating || undefined }}
-      disabled={creating || voiceIsProcessing}
-      hitSlop={10}
-      onPress={() => {
-        if (voiceStartedOnPressInRef.current) {
-          // 本次按下已在 pressIn 起录:松手不当作「再点一下停止」。
+    <VoicePillWidthFrame hitSlop={10} width={voiceRecordingTimer.pillWidth}>
+      <Pressable
+        accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.new.voiceInput')}
+        accessibilityRole="button"
+        accessibilityState={{ busy: voiceIsProcessing || undefined, disabled: creating || undefined }}
+        disabled={creating || voiceIsProcessing}
+        hitSlop={10}
+        onPress={() => {
+          if (voiceStartedOnPressInRef.current) {
+            // 本次按下已在 pressIn 起录:松手不当作「再点一下停止」。
+            voiceStartedOnPressInRef.current = false;
+            return;
+          }
+          toggleVoiceRecording();
+        }}
+        onPressIn={handleVoiceButtonPressIn}
+        onTouchCancel={() => {
+          // 手势被系统/滚动打断:撤销这次按下误触发的录音(与会话页同语义,
+          // 正常松手不触发;cancelVoiceForDeviceSwitch 会作废在途启动并释放音频)。
+          if (!voiceStartedOnPressInRef.current) return;
           voiceStartedOnPressInRef.current = false;
-          return;
-        }
-        toggleVoiceRecording();
-      }}
-      onPressIn={handleVoiceButtonPressIn}
-      onTouchCancel={() => {
-        // 手势被系统/滚动打断:撤销这次按下误触发的录音(与会话页同语义,
-        // 正常松手不触发;cancelVoiceForDeviceSwitch 会作废在途启动并释放音频)。
-        if (!voiceStartedOnPressInRef.current) return;
-        voiceStartedOnPressInRef.current = false;
-        cancelVoiceForDeviceSwitch();
-      }}
-      style={({ pressed }) => [
-        styles.composerIconButton,
-        buttonStyle,
-        // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening。
-        voiceRecordingTimer.label !== null && styles.composerIconButtonActive,
-        voiceRecordingTimer.label !== null && { width: voiceRecordingTimer.pillWidth },
-        (creating || (voiceIsProcessing && !voiceProcessingIndicator.stopping)) && styles.disabled,
-        pressed && styles.pressed,
-      ]}
-      testID="newSession.voiceButton"
-    >
-      {voiceProcessingIndicator.showProcessing ? (
-        <ActivityIndicator color={colors.textSecondary} size="small" />
-      ) : voiceRecordingTimer.label !== null ? (
-        // 录音中:胶囊展开为脉冲红点 + 计时(对齐桌面/会话页),点胶囊任意位置停止。
-        <VoiceRecordingPillContent label={voiceRecordingTimer.label} testID="newSession.voiceRecordingPill" />
-      ) : (
-        <Mic color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-      )}
-    </Pressable>
+          cancelVoiceForDeviceSwitch();
+        }}
+        style={({ pressed }) => [
+          styles.composerIconButton,
+          buttonStyle,
+          // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening。
+          voiceRecordingTimer.label !== null && styles.composerIconButtonActive,
+          // 宽度由外框 VoicePillWidthFrame 驱动(录音胶囊展开 / 收回的过渡),按钮撑满外框。
+          styles.voicePillFill,
+          (creating || (voiceIsProcessing && !voiceProcessingIndicator.stopping)) && styles.disabled,
+          pressed && styles.pressed,
+        ]}
+        testID="newSession.voiceButton"
+      >
+        {voiceProcessingIndicator.showProcessing ? (
+          <ActivityIndicator color={colors.textSecondary} size="small" />
+        ) : voiceRecordingTimer.label !== null ? (
+          // 录音中:胶囊展开为脉冲红点 + 计时(对齐桌面/会话页),点胶囊任意位置停止。
+          <VoiceRecordingPillContent label={voiceRecordingTimer.label} testID="newSession.voiceRecordingPill" />
+        ) : (
+          <Mic color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+        )}
+      </Pressable>
+    </VoicePillWidthFrame>
   );
 
   // 切 agent:跟随该 agent 的最近会话 → 否则该 agent 列表最上面 → 否则内置默认(见 pickAgentDefaultRuntime),
@@ -5638,7 +5663,7 @@ export default function NewRemoteSessionScreen() {
   ]);
 
   return (
-    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="newSession.screen">
+    <SafeAreaView edges={composerDock.enabled ? ['left', 'right'] : simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="newSession.screen">
       {Platform.OS === 'ios' ? (
         <>
           <Stack.Screen options={{ headerShown: true, headerBackVisible: false, headerShadowVisible: false, title: '', headerStyle: { backgroundColor: colors.surface }, headerTintColor: colors.textPrimary }} />
@@ -5650,12 +5675,14 @@ export default function NewRemoteSessionScreen() {
       <ComposerKeyboardAvoidingView
         keyboard={keyboardState}
         bottomInset={safeAreaInsets.bottom}
+        // The dock spacer below follows the keyboard frame by frame instead.
+        enabled={!composerDock.enabled}
         behavior={keyboardAvoidingBehaviorForPlatform(
           Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web',
         )}
         style={styles.keyboard}
       >
-        <View style={styles.screen}>
+        <View style={[styles.screen, composerDock.enabled && { paddingHorizontal: composerGeometry.horizontalInset }]}>
           {Platform.OS !== 'ios' || buildLabel || creating ? <View style={styles.topBar}>
             {Platform.OS !== 'ios' ? <ScreenBackButton
               hitSlop={12}
@@ -5670,7 +5697,7 @@ export default function NewRemoteSessionScreen() {
           </View> : null}
 
           <View ref={workspacePickerHostRef} collapsable={false} onLayout={measureWorkspacePicker} style={{ flex: 1 }}>
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.bottomCluster}
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={[styles.bottomCluster, composerDock.enabled && { paddingBottom: 0 }]}
             onScrollBeginDrag={() => setWorkspacePickerOpen(false)}
             keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             <View style={styles.selectorStack}>
@@ -6107,6 +6134,10 @@ export default function NewRemoteSessionScreen() {
                   accessibilityLabel={t('session.new.firstMessagePlaceholder')}
                   accessoryAbove={attachments.length > 0 || pendingUploads.length > 0 || pastePlaceholderCount > 0 ? renderComposerAttachmentTray() : null}
                   autoFocus={visualFocusComposer}
+                  entryTransitionId={entryMorph?.id}
+                  collapsedHeight={composerDock.enabled ? composerDock.pillHeight : undefined}
+                  onCollapsedPress={composerPillOpen.onCollapsedPress}
+                  expandToken={composerPillOpen.expandToken}
                   cardActive={composerCardActive}
                   caretHidden={voiceIsListening}
                   cursorColor={colors.inputCaret}
@@ -6200,6 +6231,9 @@ export default function NewRemoteSessionScreen() {
               </View>
             </View>
           </ScrollView>
+          {composerDock.enabled ? (
+            <DockKeyboardBottomSpacer restingBottom={composerDock.restingBottom} keyboardGap={composerDock.keyboardGap} />
+          ) : null}
           {/* Keep the floating panel inside its native touch bounds on Android. */}
           {!nativeSelectionSheet && workspacePickerOpen && workspacePickerFrame ? (
             <View style={[styles.workspacePickerPanel, workspacePickerFrame]} testID="newSession.workspacePickerPanel">
@@ -6455,6 +6489,7 @@ export default function NewRemoteSessionScreen() {
       /> : null}
       <SheetModal
         backdropTestID="newSession.worktreeBranchSheet.backdrop"
+        nativePresentation
         onBackdropPress={() => setWorktreeBranchSheetOpen(false)}
         onRequestClose={() => setWorktreeBranchSheetOpen(false)}
         visible={worktreeBranchSheetVisible}
@@ -6940,9 +6975,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.caption,
     marginTop: 1,
   },
+  // 成句说明:§3「说明、提示」档 13/18 · textSecondary。
   workspaceEmptyText: {
-    color: colors.textTertiary,
-    fontSize: typeScale.caption,
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
@@ -7252,6 +7288,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
   },
+  // 语音按钮撑满 VoicePillWidthFrame,宽度由外框的过渡驱动;裁剪保证展开初段
+  // 红点 + 计时尚未装下时不会溢出盖住左邻控件。
+  voicePillFill: { overflow: 'hidden', width: '100%' },
   composerIconButton: {
     alignItems: 'center',
     backgroundColor: colors.sheetActionSurface,
@@ -7385,6 +7424,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderColor: colors.border,
   },
   sendButtonPressed: { opacity: 0.86 },
-  pressed: { opacity: 0.65 },
+  pressed: mobileInteractionStyles.pressed,
   disabled: { opacity: 0.44 },
 });

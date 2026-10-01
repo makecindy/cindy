@@ -61,11 +61,11 @@ function detail(overrides: Partial<BotGroupDetail> = {}): BotGroupDetail {
     messages: [
       {
         id: 'm1', sequence: 1, kind: 'message', authorKind: 'user', authorBotId: null, authorName: '',
-        content: '做个页面', mentions: { all: false, botIds: [] }, noticeCode: null, planId: null, files: [], createdAt: 10,
+        content: '做个页面', mentions: { all: false, botIds: [] }, noticeCode: null, planId: null, files: [], attachments: [], createdAt: 10,
       },
       {
         id: 'm2', sequence: 2, kind: 'message', authorKind: 'bot', authorBotId: 'abu', authorName: '阿布',
-        content: '写好了', mentions: { all: false, botIds: [] }, noticeCode: null, planId: 'p1', files: ['index.html'], createdAt: 50,
+        content: '写好了', mentions: { all: false, botIds: [] }, noticeCode: null, planId: 'p1', files: ['index.html'], attachments: [], createdAt: 50,
       },
     ],
     hasMoreBefore: false,
@@ -169,7 +169,7 @@ describe('bot group remote resources', () => {
     });
     expect(service.sendMessage).toHaveBeenCalledWith({
       groupId: 'g1', text: '安排一下', mentions: { all: false, botIds: [] }, clientId: 'c1', division: true,
-    });
+    }, { controllerDeviceId: 'phone-1' });
     expect(send.effects).toEqual([{ kind: 'refresh-resource', ref: ref('g1') }]);
 
     await remoteResourceRegistry.invoke(context, {
@@ -208,6 +208,42 @@ describe('bot group remote resources', () => {
       client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'stop', resourceRef: ref('g1'),
     })).rejects.toMatchObject({ code: 'NOT_FOUND' });
     expect(service.stopRound).not.toHaveBeenCalled();
+  });
+
+  it('passes a phone’s attachments on with the phone that sent them', async () => {
+    const attachments = [{ id: 'a1', name: 'photo.jpg', path: 'cindy-peer-attach://x', category: 'image', mimeType: 'image/jpeg' }];
+    await remoteResourceRegistry.invoke(context, {
+      client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'send', resourceRef: ref('g1'),
+      input: { text: '', mentions: { all: false, botIds: [] }, clientId: 'c2', attachments },
+    });
+    expect(service.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ groupId: 'g1', text: '', clientId: 'c2', attachments }),
+      { controllerDeviceId: 'phone-1' },
+    );
+  });
+
+  it('shows attachments without host paths, and names them for older phones', async () => {
+    const withAttachments = detail({
+      messages: [{
+        id: 'm1', sequence: 1, kind: 'message', authorKind: 'user', authorBotId: null, authorName: '', content: '',
+        mentions: { all: false, botIds: [] }, noticeCode: null, planId: null, files: [], createdAt: 10,
+        attachments: [
+          { id: 'a1', name: 'photo.png', category: 'image', mimeType: 'image/png', size: 3, url: `cindy-media://blobs/${'a'.repeat(64)}.png`, path: null },
+          { id: 'a2', name: '需求.pdf', category: 'pdf', mimeType: 'application/pdf', size: 4, url: null, path: '/Users/me/Desktop/需求.pdf' },
+        ],
+      }],
+    });
+    service.getGroup.mockResolvedValue({ ok: true, group: withAttachments });
+    const rich = await remoteResourceRegistry.get(context, { client: client([BOT_GROUP_CHAT_PRIMITIVE]), ref: ref('g1') });
+    const data = rich.blocks![0]!.data as ReturnType<typeof botGroupRemoteChatData>;
+    expect(data.supportsAttachments).toBe(true);
+    expect(data.messages[0]!.attachments.map((attachment) => [attachment.name, attachment.url, attachment.path])).toEqual([
+      ['photo.png', `cindy-media://blobs/${'a'.repeat(64)}.png`, null],
+      ['需求.pdf', null, null],
+    ]);
+    expect(JSON.stringify(rich)).not.toContain('/Users/me');
+    const plain = await remoteResourceRegistry.get(context, { client: client(), ref: ref('g1') });
+    expect(plain.blocks?.[0]?.fallbackMarkdown).toContain('📎 photo.png 📎 需求.pdf');
   });
 
   it('writes nothing once the computer has switched accounts during the checks', async () => {

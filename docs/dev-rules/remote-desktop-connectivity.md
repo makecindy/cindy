@@ -331,6 +331,26 @@ of starting OSS. Cooldown has no background polling and does not stop another
 device's connection. Local diagnostics record selected direct/relay path, transport
 protocol, RTT, setup time, bytes, transfer time, throughput and fallback stage;
 candidate addresses, paths and payloads are not added to these metrics.
+The ICE configuration diagnostic counts TURN URLs by client transport (UDP, TCP, TLS)
+without hosts or credentials.
+Transfers that outlast one second also sample the runtime `stats` once per second on
+both ends (Desktop main log `device-link:filePeer`, Mobile opt-in Debug log): candidate
+kinds and relay protocol, gathered candidate / relay-transport / pair-state counts,
+selected-pair/transport byte and packet counters, bitrate
+estimates, data-channel `bufferedAmount`, and application progress — receiver
+arrived/written bytes, bridge write latency and idle time; sender reads and time spent
+waiting for credit. After EOF the sender keeps sampling until the channel buffer drains
+(at most 30 seconds). Comparing the two ends separates slow network delivery, relay
+loss and receiver-side write stalls. Sampling uses a separate probe that neither renews
+the idle deadline nor closes the connection when it times out
+([filePeer.ts](../../apps/desktop/src/main/device-link/filePeer.ts), tests in
+[filePeer.test.ts](../../apps/desktop/src/main/device-link/__tests__/filePeer.test.ts)).
+A probe that times out only skips its sample — monitoring continues while the transfer
+runs — and transfer chunks never refresh its five-second budget. Even without samples
+the drain phase stays bounded at 30 seconds, and a new transfer on the connection
+supersedes the previous file's drain accounting because `bufferedAmount` covers the
+whole channel.
+Engines expose different stats subsets; missing metrics are omitted, not reported as 0.
 
 Optional `caps.attachments` enables controller-to-host byte staging for Desktop and
 Mobile, complementing the existing host-to-controller download path. Staging failure

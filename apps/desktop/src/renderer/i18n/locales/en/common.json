@@ -45,12 +45,17 @@
       "MIGRATION_TARGET_MODEL_UNAVAILABLE": "The destination has no available model for this task’s engine. Connect a provider there first.",
       "MIGRATION_UNSUPPORTED": "Update both computers to a version that supports task copy.",
       "MIGRATION_TASK_QUEUED": "This task has queued messages. Finish or remove them before copying it.",
-      "MIGRATION_SOURCE_CHANGED": "The source task changed during preparation. Retry the copy."
+      "MIGRATION_SOURCE_CHANGED": "The source task changed during preparation. Retry the copy.",
+      "MIGRATION_TIMEOUT": "The source computer did not respond in time. Try again later.",
+      "MIGRATION_CANNOT_CANCEL": "The target computer has started creating the task. The copy can no longer be cancelled."
     },
     "successTitle": "Copy successful",
     "successDescription": "Copied to {{name}}.",
     "copyingTitle": "Copying to {{name}}",
-    "keepOpen": "Copying to {{name}}. Please wait until it finishes.",
+    "keepOpen": "Copying to {{name}}. Closing this window won't stop the copy; check progress at the top of the original task.",
+    "runInBackground": "Continue in background",
+    "cancelCopy": "Cancel copy",
+    "cancelling": "Cancelling. Stops after the current file finishes sending…",
     "failureTitle": "Copy failed",
     "failureDescription": "Close this window and start a new copy from the task menu.",
     "finishing": "{{name}} is receiving, checking and creating the task…",
@@ -60,9 +65,12 @@
     "estimating": "Counting files and calculating size…",
     "fileSummary": "Project files: {{count}}, totaling {{size}}",
     "estimateNote": "Pre-copy estimate including hidden files. Git history, conversation and attachments are copied separately and excluded from this size. Files may change before copying.",
-    "estimateFailed": "Could not count files. Check the source computer’s connection and version, then close and try again."
+    "estimateFailed": "Could not count files. Check the source computer’s connection and version, then close and try again.",
+    "estimateTimeout": "Counting timed out: the project has too many files for the source computer to finish in time. Try copying a project with fewer files.",
+    "estimateTooManyFiles": "The project has more than {{limit, number}} files and cannot be copied. Copy a project with fewer files instead."
   },
   "sharedTask": {
+    "selfJoin": "You started this shared task, so you don’t need to join. Open it from “Shared by Me”.",
     "manageSharing": "Manage Sharing",
     "manageMembers": "Manage Members…",
     "cancelSharing": "Stop Sharing",
@@ -333,6 +341,7 @@
     "credentialRequired": "Complete Mac password verification. If unavailable, update Cindy on both computers."
   },
   "ipcError": {
+    "DEVICE_LINK_BUSY": "The remote computer is busy. Please try again shortly.",
     "INVALID_PARAMS": "Invalid input. Please check and try again.",
     "PRECONDITION_FAILED": "This action is unavailable in the current state. Please try again.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Model not switched: Cindy can’t verify how much context this task uses. Keep the current model or start a new task.",
@@ -1286,7 +1295,7 @@
         "chatAttachmentsClearFailed": "Could not clean up the message attachment cache. Try again.",
         "dbSlimmingBackupDirectoryDialogTitle": "Choose database cleanup backup folder",
         "dbSlimmingLabel": "Database cleanup",
-        "dbSlimmingDescription": "Scan history in soft-deleted and archived tasks not updated for the selected period, with an option to include active tasks. After confirmation, Cindy restarts and compacts the database before opening it. Files and generated media on disk are not deleted.",
+        "dbSlimmingDescription": "Scan history in soft-deleted and archived tasks not updated for the selected period, with an option to include unarchived tasks. After confirmation, Cindy restarts and compacts the database before opening it. Files and generated media on disk are not deleted.",
         "dbSlimmingScanButton": "Scan database",
         "dbSlimmingScanLoading": "Scanning the database…",
         "dbSlimmingScanResultTitle": "Database scan results",
@@ -1296,12 +1305,12 @@
         "dbSlimmingArchiveAgeOption1": "1 month",
         "dbSlimmingArchiveAgeOption3": "3 months",
         "dbSlimmingArchiveAgeOption6": "6 months",
-        "dbSlimmingIncludeActiveLabel": "Clean Active Tasks",
-        "dbSlimmingIncludeActiveDescription": "Also clean active tasks older than the selected period and remove them from the task list",
-        "dbSlimmingIncludeActiveConfirmTitle": "Include active tasks in database cleanup?",
-        "dbSlimmingIncludeActiveConfirmDescription": "An active task may still be running even when it is older than the selected period. Cleanup does not wait for it to stop, and messages it adds after the scan may also be removed. When enabled, active, archived, and soft-deleted tasks not updated for the selected period will be cleaned. History will be removed from eligible active tasks and their Agent context will be reset; ordinary task entries will also be removed from the list, while teammates’ main tasks remain. A database backup can restore task and message data; without one, that data cannot be restored either. Records used to review or undo file changes from those messages are not included in the database backup and cannot be restored.",
-        "dbSlimmingIncludeActiveConfirmButton": "Include active tasks",
-        "dbSlimmingIncludeActiveCancelButton": "Keep active tasks",
+        "dbSlimmingIncludeActiveLabel": "Clean Unarchived Tasks",
+        "dbSlimmingIncludeActiveDescription": "Also clean unarchived tasks older than the selected period and remove them from the task list",
+        "dbSlimmingIncludeActiveConfirmTitle": "Include unarchived tasks in database cleanup?",
+        "dbSlimmingIncludeActiveConfirmDescription": "An unarchived task may still be running even when it is older than the selected period. Cleanup does not wait for it to stop, and messages it adds after the scan may also be removed. When enabled, unarchived, archived, and soft-deleted tasks not updated for the selected period will be cleaned. History will be removed from eligible unarchived tasks and their Agent context will be reset; ordinary task entries will also be removed from the list, while teammates’ main tasks remain. A database backup can restore task and message data; without one, that data cannot be restored either. Records used to review or undo file changes from those messages are not included in the database backup and cannot be restored.",
+        "dbSlimmingIncludeActiveConfirmButton": "Include unarchived tasks",
+        "dbSlimmingIncludeActiveCancelButton": "Keep unarchived tasks",
         "dbSlimmingBackupLabel": "Back up database before cleanup",
         "dbSlimmingBackupDefaultLocation": "Database folder (keeps only the latest cleanup backup)",
         "dbSlimmingUseDefaultDirectoryButton": "Use default folder",
@@ -1312,7 +1321,7 @@
         "dbSlimmingBackupMissing": "The latest cleanup backup could not be found.",
         "dbSlimmingBackupOpenFailed": "Could not open the cleanup backup location. Try again.",
         "dbSlimmingReportTasks": "Will clean {{deleted}} soft-deleted tasks and {{archived}} archived tasks",
-        "dbSlimmingReportTasksWithActive": "Will clean {{active}} active tasks, {{deleted}} soft-deleted tasks, and {{archived}} archived tasks",
+        "dbSlimmingReportTasksWithActive": "Will clean {{active}} unarchived tasks, {{deleted}} soft-deleted tasks, and {{archived}} archived tasks",
         "dbSlimmingReportMessages": "Estimated message content to clean: {{count}} messages (about {{size}})",
         "dbSlimmingReportSpace": "Database: {{database}}; temporary space needed: at least {{temporary}}; available: {{free}}",
         "dbSlimmingSpaceUnknown": "unknown",
@@ -1836,6 +1845,45 @@
       }
     },
     "providers": {
+      "llamacpp": {
+        "ownedElsewhere": "The model service is running in another Cindy instance. Download models or change context there, or stop its service first.",
+        "primaryPick": "Primary pick · try this first",
+        "recommendReason": "Start with {{name}}, the shared catalog’s capability pick selected for this computer.",
+        "recommendCaveat": "This GGUF build still needs local speed and peak-memory testing; download size is not runtime memory use.",
+        "candidates": "Models to Try",
+        "trialNote": "These models are available to try; performance and memory use are not yet verified.",
+        "downloadModel": "Download {{name}}",
+        "title": "llama.cpp",
+        "subtitle": "Install, download models, and run locally",
+        "description": "Choose a model below to download and run locally.",
+        "install": "Install llama.cpp",
+        "start": "Start and Connect",
+        "restart": "Restart and Refresh Models",
+        "stop": "Stop Service",
+        "cancel": "Cancel Operation",
+        "repository": "Hugging Face Repository",
+        "findFiles": "Find Model Files",
+        "file": "GGUF File",
+        "shards": "For split models, Cindy downloads all parts. The size above is for the selected part. Text models are supported; vision projectors are not downloaded.",
+        "download": "Download Model",
+        "models": "Downloaded Models",
+        "empty": "Choose a model above or enter a Hugging Face repository to download your first model.",
+        "unsupported": "Automatic installation is unavailable on this platform. Use a manually configured llama.cpp connection.",
+        "failed": "The operation could not finish. Check your network and available disk space, then retry.",
+        "invalid": "Enter a repository as owner/model-GGUF and select a GGUF file.",
+        "progress": {
+          "install": "Installing llama.cpp…",
+          "download": "Downloading model…",
+          "start": "Starting llama.cpp…"
+        },
+        "installAndConnect": "Install and Connect",
+        "installDescription": "Cindy will install llama.cpp. Download a model, and the service starts automatically when you use it.",
+        "manualConnect": "Connect an Existing Service",
+        "manageRuntime": "Manage Service",
+        "restartHint": "After downloading models or changing context, use Manage Service to restart and apply the changes. Restarting interrupts ongoing generation.",
+        "applyModels": "Use Downloaded Models",
+        "startOnUse": "Starts when needed"
+      },
       "catalogRecovery": {
         "pending": "Model settings are not ready yet. Wait a moment, then reload the models.",
         "legacy": "Previous model settings are temporarily unavailable. Close other Cindy instances, then reload the models.",
@@ -2294,6 +2342,7 @@
           "defaultEffortHint": "The initial effort for new tasks. You can still adjust it within a task.",
           "contextLimit": "Context limit",
           "contextLimitHint": "Applies to all available engines for this model. Edit in whole K (1 K = 1,000 tokens); untouched values retain their precision. Saved changes apply to subsequent runs without interrupting a response. Actual capacity remains subject to the model service’s limits.",
+          "contextLimitLocalMillionHint": "Native 256K (262,144 tokens), with optional expansion to 1M (1,000,000). If the service is running, restart it under Manage Service to apply changes; if stopped, they apply on next use. Longer inputs need more memory and take longer to process.",
           "contextLimitAria": "Context limit (thousands of tokens)",
           "contextLimitRoute": "Current {{tokens}} tokens · 1 K = 1,000 tokens",
           "contextLimitOverWindow": "Above the provider’s declared window; requests may fail.",
@@ -2524,7 +2573,8 @@
           "apple-mlx": "This Mac is a good fit for the official MLX build.",
           "generic-27b": "This computer is a good fit for the official Q4 build.",
           "compact": "For this computer’s memory, start with a lighter model.",
-          "unknown": "Start with a model that’s easier to run."
+          "unknown": "Start with a model that’s easier to run.",
+          "high-memory": "With this much memory, prioritize the stronger model; local speed and peak memory still need testing."
         },
         "searchPlaceholder": "Search models",
         "noSearchResults": "No matching models",
@@ -2615,7 +2665,9 @@
         "deleteModelConfirm": "Delete",
         "deleteModelDone": "Deleted {{name}}",
         "deleteModelFailed": "Couldn’t delete the model. Make sure Ollama is running, then try again.",
-        "noRecommendation": "No recommendation with sufficient evidence fits this computer yet. You can choose a candidate below."
+        "noRecommendation": "No recommendation with sufficient evidence fits this computer yet. You can choose a candidate below.",
+        "lighterAlternative": "Lighter alternative",
+        "recommendedInstalled": "Recommended models are already on this computer."
       },
       "xdSignin": {
         "badge": "Recommended",
@@ -2672,7 +2724,7 @@
         "pending": "Preparing credentials",
         "unavailable": "Temporarily unavailable"
       },
-      "claudeAccountRetired": "Separate Claude accounts are no longer supported. Use \"Sign in with Claude Code\" to connect your Claude subscription; you can delete this account."
+      "claudeAccountRetired": "Cindy no longer supports signing in to your subscription through this legacy Claude connection. Your Claude account and subscription are unaffected. Use “Sign in with Claude Code” to connect."
     },
     "experimental": {
       "title": "Experimental",
@@ -5446,6 +5498,9 @@
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",
         "agentBackgroundDetail": "Does not require a click each time, but can only use sessions you previously connected to this plugin. Model charges may apply.",
+        "agentTasksRequest": "Review task permission",
+        "agentTasks": "Can create and manage its own Cindy tasks",
+        "agentTasksDetail": "Can send messages, read results and stop its own executions. Tasks remain visible to you. Uses this plugin’s AI settings and may incur model charges; does not grant access to other tasks.",
         "agentErrand": "Can hand tasks to the Cindy Agent and collect the result",
         "agentErrandDetail": "Tasks run in this plugin's dedicated session, always visible in the sidebar and stoppable at any time. Read-only by default; raising the level requires your change in the plugin settings. Model charges may apply.",
         "agentSchedule": "Can ask you to create an automation",
@@ -7825,6 +7880,10 @@
     },
     "model": {
       "description": "Choose the models this teammate uses.",
+      "primary": "Primary Model",
+      "task": "Task Model",
+      "inheritPrimary": "Inherit Primary Model",
+      "inheritingPrimary": "Inherits the primary model for new background tasks",
       "restoreDefault": "Restore default model"
     },
     "modelChain": {
@@ -8054,7 +8113,10 @@
         "placeholderDivision": "Describe what to get done. The organizer will split the work first…",
         "placeholderPlanProposed": "To change who does what, just say so…",
         "placeholderPlanWaiting": "Want {{name}} to change something? Just say so…",
-        "placeholderPlanRunning": "What you say goes to {{name}}, who’s working on it…"
+        "placeholderPlanRunning": "What you say goes to {{name}}, who’s working on it…",
+        "tooManyAttachments": "Too many attachments. The limit is {{max}} per message.",
+        "attachmentsFailed": "Attachments not sent. Check that the files still exist, or remove them and try again.",
+        "folderNotSupported": "Folders can’t be attached. Choose the files inside instead."
       },
       "timeline": {
         "loadEarlier": "Show Earlier Messages",
@@ -8266,13 +8328,13 @@
       "automations": "Automations",
       "paused": "Keep paused",
       "itemAttention": "Needs attention",
-      "takeover": "Take over automations after verification",
+      "takeover": "Check and take over automations after import",
       "takeoverNote": "Source tasks pause only after their data connections are verified. Unselected dependencies keep the source task running.",
       "submit": "Import",
       "back": "Back",
       "open": "Open teammate",
       "running": "Importing and checking connections…",
-      "complete": "Import complete",
+      "complete": "Import saved",
       "attention": "Some items need attention. See the details below.",
       "error": "Import could not finish. Retry with the same selection.",
       "keptAtSource": "Takeover is not complete",
@@ -8287,7 +8349,36 @@
       "credentialFailed": "Credentials could not be saved securely.",
       "scriptMissing": "A required script is missing.",
       "sourceCommand": "The original Agent command is unavailable.",
-      "readFailed": "The required data query has not been verified."
+      "readFailed": "The required data query has not been verified.",
+      "search": "Search",
+      "selectAll": "Select all",
+      "previous": "Previous",
+      "next": "Next",
+      "chatSetup": "Your imported information is saved. We can start talking. Some items still need a login or a check; we can finish those whenever you are ready. Source automations stay unchanged until takeover.",
+      "chatReady": "Your information has been imported. We can start talking.",
+      "partial": "Some content was not fully imported",
+      "details": "View import details",
+      "partlySaved": "Partially saved",
+      "savedNeedsSetup": "Saved; setup or activation remains",
+      "notSaved": "Not saved",
+      "databaseDriver": "The database driver could not load. Update or repair Cindy, then retry.",
+      "databaseUnavailable": "The source database could not be read. Original data is unchanged; retry after repair.",
+      "fileTooLarge": "A file or this import exceeds the read limit. Content was not truncated.",
+      "memoryMetadata": "The memory summary or title exceeds storage requirements.",
+      "memoryWrite": "Memory writing or integrity verification failed. You can retry.",
+      "memoryChanged": "The saved memory was changed and has not been overwritten.",
+      "attachmentUnsupported": "This attachment format is not supported yet. The original remains at the source.",
+      "diskFull": "Disk space is insufficient. Free space, then retry.",
+      "permissionDenied": "Permission to read or save this item is missing. Fix permissions, then retry.",
+      "setupDeferred": "Continue sign-in and verification in the teammate chat.",
+      "automationInvalid": "The automation definition could not be converted; it was not created.",
+      "itemFailed": "This item is unfinished. Retry or view import details.",
+      "chatPartial": "Your teammate is created, but some content was not fully saved. The items below still need attention; other content and chat remain available."
+    },
+    "learning": {
+      "memory": "Remembered: {{title}}",
+      "skillCreated": "Created skill: {{title}}",
+      "skillUpdated": "Updated skill: {{title}}"
     }
   },
   "common": {
@@ -8977,6 +9068,7 @@
         "openSettings": "Open Settings"
       },
       "permissionSwitchFailed": "Permission mode change failed; the previous setting was kept",
+      "retryPluginWriteAccess": "Confirm plugin write permission again",
       "fullAccessConfirmation": {
         "title": "Enable Full access?",
         "description": "Full access disables the workspace sandbox and skips routine approvals. Cindy can then do the following without asking:",
@@ -9004,6 +9096,7 @@
       "credentialSwitchDeferred": "Model provider switched — it takes effect after the current task finishes.",
       "effortRuntimeDirty": "Reasoning effort is still updating. Wait a moment, then send again.",
       "credentialSwitchApplied": "Model provider switch is now in effect.",
+      "credentialSwitchFailed": "Model provider switch failed. Choose the model again.",
       "modelSwitchContextGuard": {
         "title": "This model can't fit the current conversation",
         "warnToast": "This conversation already uses {{used}} — about {{pct}}% of the new model's {{total}} capacity",
@@ -9751,6 +9844,29 @@
       }
     },
     "systemCard": {
+      "help": {
+        "title": "Available Commands",
+        "builtInCommands": "Built-in Commands",
+        "projectCommands": "Project Commands",
+        "empty": "No commands available."
+      },
+      "cost": {
+        "title": "Session Cost",
+        "tokensUsed": "Tokens Used (This Turn)"
+      },
+      "pwd": {
+        "title": "Working Directory",
+        "notSet": "(not set)"
+      },
+      "status": {
+        "title": "Session Status",
+        "agent": "Agent",
+        "model": "Model",
+        "effort": "Effort",
+        "permissionMode": "Permission Mode",
+        "running": "Running",
+        "idle": "Idle"
+      },
       "context": {
         "title": "Context Usage",
         "loading": "Loading…",
@@ -10011,6 +10127,7 @@
       "daemonNotReady": "{{manager}} upgraded, but the remote daemon hasn't started yet — please resend your message manually"
     },
     "remoteError": {
+      "DEVICE_LINK_BUSY": "The remote computer is busy. Please try again shortly.",
       "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
       "AUTO_REVIEW_UNAVAILABLE": "Auto-review could not reach a decision, so actions that need review now need your confirmation. Switch this task to Full access if you would rather not be interrupted. That mode is higher risk.",
@@ -10392,6 +10509,7 @@
       "projects": "Projects",
       "newProject": "New project",
       "createProjectFailed": "Failed to create project",
+      "selectFolderFailed": "Could not select folder. Try again.",
       "projectsToggleExpand": "Expand all project sessions",
       "projectsToggleCollapse": "Collapse all project sessions",
       "filterAria": "Sidebar settings (Status: {{status}}, Harness: {{vendor}}, Last activity: {{lastActivity}}, Group by: {{groupBy}}, Sort by: {{sortBy}}, Projects: {{projects}})",
@@ -10751,14 +10869,89 @@
         "clickToOpen": "Click to open the PR in your browser",
         "guidance": {
           "login": {
-            "hint": "Click to have the agent sign you in",
-            "aria": "PR #{{number}} status unavailable: have the agent sign in to GitHub",
-            "prompt": "Please sign me in to the GitHub CLI: run `gh auth login -h github.com -w`, tell me the one-time device code and URL it shows, and after I authorize in the browser, confirm with `gh auth status` that the login succeeded."
+            "hint": "Click to connect GitHub",
+            "aria": "PR #{{number}} status unavailable: connect GitHub"
           },
           "install": {
-            "hint": "Click to have the agent install it and sign you in",
-            "aria": "PR #{{number}} status unavailable: have the agent install and sign in to GitHub CLI",
-            "prompt": "Please install the GitHub CLI (gh; `brew install gh` on macOS, `winget install GitHub.cli` on Windows), then run `gh auth login -h github.com -w` to sign in, tell me the one-time device code and URL it shows, and after I authorize in the browser, confirm with `gh auth status` that the login succeeded."
+            "hint": "Click to connect GitHub",
+            "aria": "PR #{{number}} status unavailable: connect GitHub"
+          }
+        },
+        "setup": {
+          "install": "Install and continue",
+          "connect": "Sign in to GitHub",
+          "cancel": "Cancel",
+          "retry": "Try again",
+          "done": "Done",
+          "openBrowser": "Open GitHub to authorize",
+          "deviceCode": "Device code",
+          "copyCode": "Copy code",
+          "copied": "Copied",
+          "copyFailed": "Could not copy. Select and copy the code manually.",
+          "openFailed": "Could not open your browser. Open github.com/login/device manually.",
+          "stages": {
+            "install": {
+              "title": "Install GitHub CLI",
+              "description": "Install GitHub CLI to connect your GitHub account."
+            },
+            "login": {
+              "title": "Connect GitHub",
+              "description": "Connect your GitHub account. GitHub CLI will be installed if needed."
+            },
+            "checking": {
+              "title": "Checking connection…",
+              "description": "Checking your GitHub sign-in."
+            },
+            "downloading": {
+              "title": "Downloading GitHub CLI…",
+              "description": "Installation will start when the download finishes."
+            },
+            "installing": {
+              "title": "Installing GitHub CLI…",
+              "description": "Download complete."
+            },
+            "preparing": {
+              "title": "Preparing sign-in…",
+              "description": "Getting a one-time device code."
+            },
+            "authorizing": {
+              "title": "Sign in to GitHub",
+              "description": "Copy this code, then enter it on GitHub to authorize."
+            },
+            "connected": {
+              "title": "GitHub connected",
+              "description": "You can close this window and continue."
+            },
+            "cancelled": {
+              "title": "Connection cancelled",
+              "description": "You can try again whenever you are ready."
+            },
+            "unavailable": {
+              "title": "Progress unavailable",
+              "description": "Could not read the current progress. Try again."
+            },
+            "error": {
+              "title": "Connection not completed"
+            }
+          },
+          "errors": {
+            "unsupported": "This operating system or processor is not supported yet.",
+            "install": "Installation failed. Check your connection and available disk space, then try again.",
+            "login": "Sign-in failed or was denied. Try again to get a new code.",
+            "timeout": "The code expired. Try again to get a new code."
+          },
+          "account": {
+            "checking": "Checking GitHub connection…",
+            "connected": "Connected · @{{login}}",
+            "missing": "Connect GitHub to get started.",
+            "auth": "Authorization has expired. Sign in again or replace the fallback token below.",
+            "network": "Could not reach GitHub. Check your network and retry.",
+            "forbidden": "GitHub could not verify this connection. Check permissions or rate limits, then retry.",
+            "gh-cli": "Using this computer’s GitHub login",
+            "token": "Using fallback token",
+            "recheck": "Check connection",
+            "summary": "Manage GitHub repositories, issues, pull requests, and Actions.",
+            "otherMethods": "Other connection methods"
           }
         },
         "unresolved": "Unresolved review threads: {{count}}"
@@ -12270,7 +12463,8 @@
         "rename": "Rename",
         "fix": "Fix",
         "republish": "Re-publish",
-        "abandonPending": "Stop waiting"
+        "abandonPending": "Stop waiting",
+        "editPublication": "Edit Publication Details"
       },
       "API_KEY_MISSING": {
         "title": "API key not configured",
@@ -12294,15 +12488,15 @@
       },
       "OSS_PUT_FAILED": {
         "title": "Upload failed",
-        "message": "Network error, please retry"
+        "message": "The upload service could not receive the file. Check your connection and retry uploading. If it continues, start a new publication."
       },
       "OSS_PUT_EXPIRED": {
         "title": "Upload link expired",
         "message": "Upload link expired, please re-publish"
       },
       "VERSION_RACE": {
-        "title": "Version conflict",
-        "message": "Auto-retry failed, please retry later"
+        "title": "Version Already Taken",
+        "message": "This version is already published or being processed. Choose an unused version number and publish again."
       },
       "CHECKSUM_MISMATCH": {
         "title": "Checksum failed",
@@ -12314,15 +12508,15 @@
       },
       "PACK_FAILED": {
         "title": "Packaging failed",
-        "message": "The skill package was not created. Please retry."
+        "message": "Check that the local Skill files are readable, remove unnecessary large files, and publish again."
       },
       "OSS_OBJECT_NOT_FOUND": {
         "title": "Uploaded file lost",
         "message": "Server cannot find the uploaded file, please retry"
       },
       "MANIFEST_INVALID": {
-        "title": "Invalid SKILL.md format",
-        "message": "SKILL.md must start with YAML frontmatter and include name and description fields"
+        "title": "Invalid Skill Package",
+        "message": "Check SKILL.md and the package files using the reason below, then fix them and publish again."
       },
       "CANCELLED": {
         "title": "Cancelled",
@@ -12337,12 +12531,56 @@
         "message": "Choose a visibility supported by the current publishing identity"
       },
       "INTERNAL": {
-        "title": "Server error",
-        "message": "Publish failed, please retry later"
+        "title": "Publication Incomplete",
+        "message": "An unexpected error occurred. Retry later, or contact support if it continues."
       },
       "UNKNOWN": {
         "title": "Unknown error",
         "message": "Publish failed ({{code}}), please retry"
+      },
+      "SKILL_DELETED": {
+        "title": "Skill Name Reserved After Deletion",
+        "message": "A Skill with this name was deleted, but its name is still reserved. Rename your Skill and publish again."
+      },
+      "SKILL_UNPUBLISHED": {
+        "title": "Skill Unpublished",
+        "message": "The Skill was unpublished during upload, stopping this publication. Check its publication status and publish again."
+      },
+      "AUTH_REQUIRED": {
+        "title": "Sign-In Required",
+        "message": "You are signed out or your sign-in has expired. Sign in and publish again."
+      },
+      "PERMISSION_DENIED": {
+        "title": "No Permission to Publish",
+        "message": "Switch to an authorized publishing identity, or ask the Skill author or organization administrator to check your access."
+      },
+      "INVALID_PARAMS": {
+        "title": "Invalid Publication Details",
+        "message": "Update the publication details using the reason below, then publish again."
+      },
+      "SKILL_FILE_TOO_LARGE": {
+        "title": "Skill Package Exceeds Limits",
+        "message": "Limits: 32 MiB compressed, 50 MiB unpacked, 2 MiB for SKILL.md, and 2000 archive entries. Reduce the package and publish again."
+      },
+      "NETWORK_ERROR": {
+        "title": "Cannot Connect to Publishing Service",
+        "message": "Check your network connection and retry publishing."
+      },
+      "RATE_LIMITED": {
+        "title": "Too Many Publish Requests",
+        "message": "Wait a moment and retry publishing."
+      },
+      "SERVICE_UNAVAILABLE": {
+        "title": "Publishing Service Unavailable",
+        "message": "Retry publishing later. Contact support if the problem continues."
+      },
+      "PUBLISH_BUSY": {
+        "title": "Another Skill Is Being Published",
+        "message": "Wait for the current publication to finish before publishing this Skill."
+      },
+      "REQUEST_REJECTED": {
+        "title": "Publication Request Rejected",
+        "message": "Check the publication details and publish again. If it keeps failing, contact support."
       }
     },
     "scanResult": {
@@ -14003,6 +14241,7 @@
     }
   },
   "taskTags": {
+    "remoteBusy": "The remote computer is busy. Please try again shortly.",
     "loadFailed": "Could not load tags. Try again.",
     "retry": "Retry",
     "editLabel": "Edit “{{name}}”",
@@ -14059,5 +14298,16 @@
   "pluginDeviceAuthorization": {
     "title": "Authorize Plugin Login",
     "description": "Open {{host}} on this device to authorize the plugin running this task. Its credentials stay on the originating device."
+  },
+  "pluginTaskWriteAccess": {
+    "autoTitle": "Enable Auto approval",
+    "autoMessage": "Allow “{{name}}” to use Auto approval?",
+    "autoDetail": "Cindy will review coordinator and Worker actions automatically. Actions requiring confirmation or denied actions still pause. This is not Full access. The choice is saved in plugin AI settings without changing global permissions for other tasks.",
+
+    "title": "Allow this plugin’s AI to edit files?",
+    "message": "Allow the AI in “{{name}}” to edit files and continue?",
+    "detail": "This sets the plugin’s AI permission to Allow edits for future tasks too. A separate working directory is not a system sandbox; commands still follow Cindy permission checks. You can switch back to read-only in the plugin’s AI settings.",
+    "allow": "Allow and continue",
+    "cancel": "Not now"
   }
 }

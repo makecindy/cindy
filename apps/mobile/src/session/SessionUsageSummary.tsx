@@ -23,6 +23,23 @@ import {
   formatSessionUsageMoney,
   sessionUsageAmounts,
 } from "./sessionUsagePresentation";
+import { formatModelShortLabel } from "./messageActions";
+
+/**
+ * 用量卡上的模型名:优先调用方从模型目录解析出的展示名;目录里找不到时把原始 id
+ * 去掉路由前缀(如 `anthropic/`)再走与降级提示行同口径的短标签;都不行才回退原始 id。
+ */
+export function sessionUsageModelLabel(
+  model: string | null | undefined,
+  modelLabel?: string | null,
+): string {
+  const explicit = modelLabel?.trim();
+  if (explicit) return explicit;
+  const raw = model?.trim() ?? "";
+  if (!raw) return "";
+  const withoutRoutePrefix = raw.replace(/^[a-z0-9][a-z0-9.-]*\//i, "");
+  return formatModelShortLabel(withoutRoutePrefix) || raw;
+}
 
 export function SessionUsageSummary({
   session,
@@ -32,6 +49,7 @@ export function SessionUsageSummary({
   detail = false,
   translucent = false,
   providerName,
+  modelLabel,
 }: {
   session: RemoteSession;
   usage: ReturnType<typeof useSessionMenuUsage>;
@@ -40,6 +58,8 @@ export function SessionUsageSummary({
   detail?: boolean;
   translucent?: boolean;
   providerName?: string;
+  /** 模型目录里的用户可读展示名;缺席时按 sessionUsageModelLabel 兜底。 */
+  modelLabel?: string | null;
 }) {
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
@@ -107,7 +127,7 @@ export function SessionUsageSummary({
     <>
       <View style={styles.heading}>
         <Text style={styles.source} numberOfLines={2}>
-          {session.model}{sourceLabel ? ` · ${sourceLabel}` : ""}
+          {sessionUsageModelLabel(session.model, modelLabel)}{sourceLabel ? ` · ${sourceLabel}` : ""}
           {account?.plan && !account.accountOnly ? ` · ${account.plan}` : ""}
         </Text>
       </View>
@@ -268,10 +288,12 @@ const makeStyles = (colors: ThemeColors) =>
       fontWeight: fontWeight.medium,
       flexShrink: 1,
     },
+    // 成句说明:§3「说明、提示」档 13/18 · 400 · textSecondary。
     note: {
-      color: colors.textTertiary,
-      fontSize: typeScale.micro,
-      lineHeight: lineHeight.micro,
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
     },
     metrics: {
       borderTopWidth: StyleSheet.hairlineWidth,

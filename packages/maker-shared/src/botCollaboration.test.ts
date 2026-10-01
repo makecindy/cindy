@@ -47,3 +47,16 @@ describe('result receipt title compatibility', () => {
     expect(readBotCollaborationMeta({ ...receipt, result: { ...receipt.result, title: 42 } })).toBeNull();
   });
 });
+
+it('validates exact completion identities and deduplicates frozen attachments', async () => {
+  const { taskResultClientIdForInput, readBotTaskResults } = await import('./botCollaboration');
+  expect(taskResultClientIdForInput('bot-delegation-completion:job')).toBe('bot-delegation-result:job:1');
+  expect(taskResultClientIdForInput('bot-delegation-completion:job:2')).toBe('bot-delegation-result:job:2');
+  for (const value of ['human', 'bot-delegation-completion:job:0', 'bot-delegation-completion:job:2:other'])
+    expect(taskResultClientIdForInput(value)).toBeNull();
+  expect(readBotTaskResults([{}, null])).toEqual([]);
+  const card = { v: 1, role: 'delegation-result', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Cindy',
+    toBotId: null, toBotName: 'Cindy', parentSessionId: 'parent', childSessionId: 'child', objective: 'Report',
+    result: { runSequence: 1, status: 'completed', text: 'Saved', artifacts: [] } };
+  expect(readBotTaskResults([card, {}, card])).toEqual([card]);
+});

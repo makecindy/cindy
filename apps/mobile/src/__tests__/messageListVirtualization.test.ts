@@ -283,7 +283,24 @@ describe('mobile message list container', () => {
     expect(bubbleSource).toContain('useRecyclingState<{');
     expect(bubbleSource).toContain('useRecyclingState<string | null>(null)');
     expect(source).toContain('const [contentWidth, setContentWidth] = useRecyclingState(0);');
-    expect(source).toContain('const [resolveState, setResolveState] = useRecyclingState<MediaThumbnailResolveState>');
+    // 普通列表仍默认使用回收态；只有群聊的普通 ScrollView 注入 React 状态。
+    // 同时守住逐层传递，避免嵌套缩略图漏接后恢复原来的群聊崩溃。
+    for (const component of ['AttachmentStrip', 'MediaPreview', 'PendingAttachmentImage']) {
+      const componentStart = source.indexOf(`function ${component}(`);
+      const propsEnd = source.indexOf('}: {', componentStart);
+      expect(componentStart).toBeGreaterThan(-1);
+      expect(propsEnd).toBeGreaterThan(componentStart);
+      expect(source.slice(componentStart, propsEnd)).toContain('usePreviewState = useRecyclingState');
+    }
+    expect(source).toContain('const [resolveState, setResolveState] = usePreviewState<MediaThumbnailResolveState>');
+    expect(source).toContain('const [failedLocalUris, setFailedLocalUris] = usePreviewState<readonly string[]>([]);');
+    expect(source.match(/const \[intrinsicSize, setIntrinsicSize\] = usePreviewState</g)).toHaveLength(2);
+    expect(source.match(/usePreviewState=\{usePreviewState\}/g)).toHaveLength(2);
+    expect(source).not.toContain('usePreviewState={useState}');
+    const groupSource = readFileSync(
+      resolve(process.cwd(), 'src/session/BotGroupMessageAttachments.tsx'), 'utf8',
+    );
+    expect(groupSource).toContain('usePreviewState={useState}');
     expect(source).toContain('const [recycledLocalExpanded, setRecycledLocalExpanded] = useRecyclingState(defaultExpanded);');
     expect(expandedStateSource).toContain('blockId ? store.subscribe(listener) : () => {}');
   });

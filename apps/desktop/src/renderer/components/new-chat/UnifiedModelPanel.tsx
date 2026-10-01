@@ -28,7 +28,7 @@ import { ModelConfigFlyout, type ModelConfigFlyoutState } from './ModelConfigFly
 import type { ModelMemoryAccessors } from './ModelSelector';
 import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 import { UnifiedModelRail } from './UnifiedModelRail';
-import { useUnifiedRowActions } from './useUnifiedRowActions';
+import { useUnifiedRowActions, withOptimisticConfig } from './useUnifiedRowActions';
 import { UnifiedModelRow } from './UnifiedModelRow';
 import { ModelSourceUsageProvider } from './ModelSourceDetails';
 import type { ProviderUsageScope } from './useProviderWeeklyQuota';
@@ -767,6 +767,7 @@ export function UnifiedModelPanel({
     removeFavorite,
     selectRow,
     pending: actionPending,
+    optimistic: optimisticConfig,
     runExternal,
   } = useUnifiedRowActions({
     favoriteStore: deviceId ? remoteFavorites.store : undefined,
@@ -1073,7 +1074,11 @@ export function UnifiedModelPanel({
                   <span className="truncate">{sectionLabel(section)}</span>
                 </div>
                 {section.rows.map((row) => {
-                  const config = configOf(row.entry, row.favorite);
+                  const config = withOptimisticConfig(
+                    row.anchor,
+                    configOf(row.entry, row.favorite),
+                    optimisticConfig,
+                  );
                   const key = anchorKey(row.anchor);
                   const priceDisplay = priceDisplayOf(row.entry, config);
                   return (
@@ -1195,7 +1200,12 @@ export function UnifiedModelPanel({
         >
           {(() => {
             const target = flyTarget;
-            const config = configOf(target.entry, target.favorite);
+            // 深度 / Fast 写入在途时显示目标值,松手即停在新档(见 withOptimisticConfig)。
+            const config = withOptimisticConfig(
+              target.anchor,
+              configOf(target.entry, target.favorite),
+              optimisticConfig,
+            );
             const state: ModelConfigFlyoutState = target.favorite
               ? 'favorite'
               : config.customized

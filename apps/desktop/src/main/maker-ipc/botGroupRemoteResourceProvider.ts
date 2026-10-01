@@ -167,22 +167,28 @@ export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem
   };
 }
 
-/** Host paths stay on the computer; the phone gets the folder name only. */
+/** Host paths stay on the computer; the phone gets the folder name and attachment names only. */
 export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteChatData {
   return {
     ...detail,
     projectDir: null,
     projectDirName: detail.projectDir ? path.basename(detail.projectDir) : null,
     plans: detail.plans.map((plan) => ({ ...plan, workDir: null })),
+    messages: detail.messages.map((message) => (message.attachments.length > 0
+      ? { ...message, attachments: message.attachments.map((attachment) => ({ ...attachment, path: null })) }
+      : message)),
+    supportsAttachments: true,
   };
 }
 
 function fallbackMarkdown(detail: BotGroupDetail): string {
   const lines = detail.messages
-    .filter((message) => message.kind === 'message' && message.content.trim())
+    .filter((message) => message.kind === 'message' && (message.content.trim() || message.attachments.length > 0))
     .slice(-FALLBACK_MESSAGES)
     .map((message) => {
-      const text = message.content.replace(/\s+/g, ' ').trim();
+      // Older phones cannot show attachments; they still see what was attached.
+      const attached = message.attachments.map((attachment) => `📎 ${attachment.name}`).join(' ');
+      const text = [message.content.replace(/\s+/g, ' ').trim(), attached].filter(Boolean).join(' ');
       const clipped = Array.from(text).length > FALLBACK_MESSAGE_CHARS
         ? `${Array.from(text).slice(0, FALLBACK_MESSAGE_CHARS - 1).join('')}…`
         : text;
@@ -298,7 +304,7 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
       return resource;
     },
 
-    async invoke(_context, request): Promise<RemoteActionInvokeResponse> {
+    async invoke(context, request): Promise<RemoteActionInvokeResponse> {
       // Checks read the current account's data; a switch before the write must not let them
       // authorize a change to the next account.
       const scope = captureDataOwnerBroadcastScope();
@@ -344,7 +350,8 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
             mentions: input.mentions,
             clientId: input.clientId,
             division: input.division === true,
-          });
+            ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
+          }, { controllerDeviceId: context.controllerDeviceId });
           break;
         case 'continue':
           result = await current.continueRound(groupId);

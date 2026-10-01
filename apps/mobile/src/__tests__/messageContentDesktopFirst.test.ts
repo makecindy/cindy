@@ -1,11 +1,17 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 describe('mobile message content desktop-first surface', () => {
   it('uses desktop-matching file icons instead of text badges for file chips', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-    const desktopSource = readFileSync(resolve(process.cwd(), '../../apps/desktop/src/renderer/components/chat/UserMessage.tsx'), 'utf8');
+    // The desktop user-message file chip lives in UserAttachmentChip.tsx (shared with group chat).
+    const desktopChat = resolve(process.cwd(), '../../apps/desktop/src/renderer/components/chat');
+    const desktopSource = ['UserMessage.tsx', 'UserAttachmentChip.tsx']
+      .map((file) => resolve(desktopChat, file))
+      .filter((file) => existsSync(file))
+      .map((file) => readFileSync(file, 'utf8'))
+      .join('\n');
     const layoutSource = readFileSync(resolve(process.cwd(), 'src/session/messageContentLayout.ts'), 'utf8');
     const fileChipStart = source.indexOf('function FileChip');
     const fileChipEnd = source.indexOf('function DiffPreview', fileChipStart);

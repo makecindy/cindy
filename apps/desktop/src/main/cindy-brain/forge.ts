@@ -3101,7 +3101,10 @@ PUT/DELETE 一律 405(派生身份不可配置)。
 两种 token 都只在 Main 的 networkSlot 内存中进入请求头,插件沙箱、settings 页面、
 Renderer、Agent、KV 和日志都拿不到。设置页 GET \`/secrets\` 对这条 key 额外返回
 \`hostSource:"gh-cli"\` 与 \`hostAvailable:boolean\`,其中 \`saved/tail\` 仍只描述备用
-PAT；页面可据此展示“已检测到 gh，可直接使用”，但不能读取 gh 的账号或 token。
+PAT。支持宿主管理连接入口时还返回可选的 \`hostManagedSetup:true\`：此时宿主统一
+展示账号状态、安装与登录入口，settingsHtml 不再重复渲染这些内容，只保留备用 PAT
+配置（可折叠到“其他连接方式”）。字段缺失或为 false 时保留旧版设置页的连接提示，
+可根据 \`hostAvailable\` 展示“已检测到 gh，可直接使用”；不能读取 gh 的账号或 token。
 此来源的注入形态固定为 \`api.github.com\` 的
 \`Authorization: Bearer {value}\`,不允许 exchange,也不要放进 \`setup.requires\`。
 
@@ -3897,6 +3900,60 @@ const r = await cindy.agent.requestSchedule({
 什么时候**不该**用它:一次性的、当场就要结果的事,用快问快答(§4.0.2)或派活取件
 (§4.11.1)。这个加档是给"长期定期刷新"用的,每条任务都会反复产生模型费用。
 
+### 4.11.3 普通任务接口（实验性）
+
+声明 \`"agent": { "tasks": true }\` 后，逻辑页可使用 \`cindy.tasks\`。它是独立权限，
+旧 \`errand\` 声明不自动取得该权限；用户仍可在侧边栏查看和接手这些任务。
+安装时已明确展示并确认的任务能力不重复询问；否则首次使用时通过现有宿主权限界面确认并记录独立批准。旧版保存的未知字段不会自动授权。
+用户拒绝或确认界面不可用时返回 \`PERMISSION_DENIED\`，不影响插件其它功能；不得自动循环重试确认。
+面板通过既有逻辑页通道调用，不获得新的 preload 或内部 IPC 权限。
+
+先调用 \`capabilities()\` 获取实际支持操作。当前仅支持本插件创建的本机普通任务：
+\`create\`、\`get\`、\`list\`、\`send\`、\`getRun\`、\`listRuns\`、\`readMessages\`、\`cancel\`。
+可对自有任务调用 \`startTeam({taskId})\` 启用 Orca 主任务，并用 \`getTeam({taskId})\` 读取实际协同状态。协调主任务需经用户授权 Auto，Worker 自动沿用 Auto。
+这些任务及其 Worker 不提供 \`cindy_helper\` 的账号级历史或跨任务控制能力，\`cindy_memory.session_search\` 也拒绝历史检索；协调使用独立 Orca 工具，结果由插件通过 \`readMessages/getTeam\` 读取。旧 errand/workspace 不因来源标记受到限制；明确卸载撤销归属后，调用方已无正在执行的输入或已接受新真人输入时，保留的用户任务恢复普通 helper 与历史检索能力；仍执行旧插件输入时继续受限，自动回报和插件输入重试不构成真人接管。这不恢复插件控制权，也不保证停止已接受执行，不构成通用执行沙箱。
+在首次派发前调用 \`setTeamPlan({taskId,plan:{concurrency,items}})\`，每项包含\`label, workingDir, route\`。计划冻结后不可改写。
+计划不授予目录权限。Worker 仅可使用宿主任务目录及解析后仍在其中的子目录、插件 AI 配置目录或用户亲选的确切目录；Library 绑定不自动变成 Agent 工作根。宿主在登记和创建时均复核。
+这描述准入检查，不是持续的 OS 目录隔离保证。首版用于可信本地工作区；同权限进程在检查后恶意置换目录对象仍可能改变实际 cwd，不提供此类对抗性沙箱。
+
+暂不支持选择现有任务、远程/伙伴任务、任意更新配置、归档、队列暂停或事件订阅。
+旧 \`agent.errand\` 接口不变。
+
+\`\`\`js
+// requestWriteAccess({taskId, mode: 'auto'}) 请求宿主原生确认，不能替用户确认。
+// 拒绝或失败后，同一账号代际/安装修订/任务在当前宿主进程不再自动弹窗（更换 mode 也不重置）。
+// 用户可从本机任务权限菜单“重新确认插件写权限”恢复原请求；插件不能清除拒绝记录。
+// 省略 mode 保留 acceptEdits；Auto 插件主任务的 Worker 使用 Auto，不改全局权限。
+
+const task = await cindy.tasks.create({ requestKey: 'experiment-1-create', title: 'My evaluation' });
+const run = await cindy.tasks.send({ taskId: task.taskId, expectedRevision: task.revision,
+  requestKey: 'experiment-1-send', text: 'Read the project and report your findings.' });
+const status = await cindy.tasks.getRun({ runId: run.runId });
+const page = await cindy.tasks.readMessages({ taskId: task.taskId, limit: 50 });
+// 保存 nextCursor；下一页传 after，不以最后一条 assistant 推断 run 已完成。
+\`\`\`
+
+SDK 成功返回 data，失败抛出带 code 的错误。原始管子响应为 \`{ok:true,data}\` 或
+\`{ok:false,error:{code,message,retryable}}\`。不要将请求键换掉来绕过不确定的派发结果。
+create/send 的 requestKey 持久去重；同键不同内容拒绝。删除后的记录不自动重建。
+请求键及 taskId/runId 需要由插件保存。取消仅作用于该输入，不能停止用户后来的执行。
+
+省略 route 时在接收时解析用户给本插件的 AI 配置；可显式传
+\`{agentKind:'codex',providerId:'...',model:'...',effort:'high',fastMode:false}\`。
+来源/模型/强度必须当前可用，派发前再次核对，不自动改用其它账号。
+工作目录由宿主分配，或沿用用户已在插件设置中选择的目录；不接受任意路径或权限覆盖。
+权限沿用 AI 代办配置，默认只读，禁止 bypassPermissions。
+create 可传 \`isolatedWorkspace:true\`，使用宿主为该任务生成的独立空目录，忽略插件的项目目录偏好。
+返回 workingDir 仅属于本插件创建的任务，可交给插件 Node 进程放入候选项目；不接受插件自报任意目录。
+任务视图同时返回 permissionMode，插件在只读时应明确提示，不能暗中升级权限。
+
+run 的 acceptedConfig 是接收配置，execution 是观测到的原生 instance/generation，
+不冒充完整实际用量/重试清单。outputMessageId 来自产品终态，不是文字猜测。
+没有足够证据的重启/恢复窗口返回 reconciling，不能当 completed、failed 或零分；
+不要自动重发可能已经产生副作用的输入。费用目前 unavailable，绝不以耗时推算。
+实验性接口尚未提供全部恢复路径的最终对账和事件补拉，因此暂不用于无人值守正式评测。
+
+
 ## 4.12 随包 Node 工作进程与 stdio MCP(node 能力)
 
 插件需要随包代码、CLI、JS 依赖、可复用 worker 状态或 stdio MCP 时，使用顶层
@@ -3960,6 +4017,26 @@ const result = response.result;
 Node 请求及其子进程一并结束，晚到的授权或子进程启动会被拒绝。只传旧 \`callId\`
 或不启用开关都保持既有独立 RPC 生命周期，不自动弹授权卡、不回收后台进程；
 设置页等无 tool-call 的入口不能伪造或复用调用编号。
+
+#### 下载公开大文件与进度
+
+声明 node 和 network.hosts 后可用 cindy.downloads.start({id,url,sha256,bytes})；
+只接受声明的 HTTPS 主机（每次重定向复核），不发送 Cookie、凭证或自定义请求头。
+SHA-256 和精确字节数必填，单文件最多 8 GiB。下载从获得队列槽位起最多 2 小时（含重试，不计排队），不改变 Node 调用期限。返回 {ok:true,token,bytes,sha256,fromCache}，
+没有宿主路径。取消用 cindy.downloads.cancel({id})。
+订阅 onHostMessage 的 download-progress 事件：data 含 id、phase、loaded、total、speedBps；
+phase 为 queued/downloading/verifying/retrying/completed/failed/cancelled，retrying 另含 attempt、delayMs。
+无 loaded/total 时显示不确定进度，下载成功不等于解包成功。
+
+将 token 放入 cindy.node.request 的 downloadTokens，例如 {archive: token}；params 必须是对象且
+不能自带 downloads。Host 校验同账号、同插件、批准身份与文件身份后，仅向 Node 注入
+params.downloads.archive。Node 在本次 RPC 结束前读取或复制文件，不得把宿主路径回传面板或写进日志。
+旧请求不带 downloadTokens 时保持原有 params 语义。旧宿主无 downloads 时提示升级。
+
+下载队列与宿主更新隔离，传输逐块写盘并支持校验、重试与续传。每账号所有插件的缓存
+合计最多 16 GiB（含在途预留及每项 64 KiB 管理空间）；不淘汰正在下载或被 Node RPC 借用的文件，满额且无可回收项时失败。
+缓存可被回收，重启后 token 失效，重新 start 可复用经校验的文件。卸载插件回收其下载缓存；
+停用、账号切换或批准身份改变会拒绝旧凭据，不增加用户授权步骤。
 
 #### Node Worker 的持久化凭证绑定
 

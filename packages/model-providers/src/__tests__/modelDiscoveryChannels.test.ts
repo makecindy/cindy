@@ -69,6 +69,19 @@ describe('shared provider discovery', () => {
     }
   });
 
+  it('retains maximum-only account capacity below the public working default', () => {
+    const models = mergeDiscoveredRuntimeModels([], parseModelsListResponse({ data: [{
+      id: 'gpt-6-astra', max_context_window: 872000,
+    }] })!);
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+        [agent]: { baseUrl: 'https://relay.example/v1', models },
+      } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      expect(provider.models[agent]?.[0]).toMatchObject({ contextWindow: 872000, contextWindowMax: 872000 });
+      expect(provider.models[agent]?.[0].discoveredMetadata).toEqual({ contextWindowMax: 872000 });
+    }
+  });
+
   it('uses maximum-only discovery as an unverified working fallback without saving it as a report', () => {
     const discovered = parseModelsListResponse({ data: [{ id: 'private-model', max_context_window: 64000 }] })!;
     const models = mergeDiscoveredRuntimeModels([], discovered);

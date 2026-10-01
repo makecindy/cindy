@@ -5300,6 +5300,23 @@ describe('任务消息内存治理', () => {
     expect(remoteSessionStore.getSessionRetention('bound')).toBe('regular');
   });
 
+  it('keeps retention lookup current across patch, shard replacement, removal and ID reuse', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { source: 'scheduler' });
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { totalCostUsd: 5 });
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('schedule');
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { source: 'scheduler' });
+    remoteSessionStore.removeDevice('dev-1');
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+    remoteSessionStore.setDeviceSessions('dev-2', 'PC', [session('s1', { source: 'scheduler' })]);
+    remoteSessionStore.clear();
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+    remoteSessionStore.setDeviceSessions('dev-2', 'PC', [session('s1')]);
+    expect(remoteSessionStore.getSessionRetention('s1')).toBe('regular');
+  });
+
   it('旧详情代际的读取在 blur→refocus 后不能覆盖新窗口', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1', { source: 'scheduler' })]);
     const first = remoteSessionStore.enterSessionMessageDetail('s1');

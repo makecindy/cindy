@@ -1,6 +1,6 @@
 import { useCompanionGenerationCopy } from './useCompanionGenerationCopy';
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { isCompactingWorkingStatus, readWorkingPhase } from '@cindy/maker-shared';
 import { useAuth } from '@/auth/AuthContext';
@@ -12,7 +12,9 @@ import {
   remoteResourceCacheRevision,
   subscribeRemoteResourceCache,
 } from '@/device-link/remoteResourceCache';
-import { spacing, typeScale, lineHeight, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { spacing, typeScale, lineHeight, useThemedStyles, type ThemeColors } from '@/theme';
+import { CompanionPresenceRing } from './CompanionPresenceRing';
+import { ThinkingDots } from './ThinkingDots';
 import { remoteSessionStore, type RemoteSessionRunStatus } from './remoteSessionStore';
 import { companionWorkingPhase } from './companionWorkingPhase';
 import { WorkingStatusText } from './WorkingStatusText';
@@ -71,21 +73,23 @@ export function useCompanionWorkingLabel({ sessionId, deviceId, botId, active, m
 /** Desktop BotAvatar `xs`: the composer status line stays compact on a phone. */
 export const COMPANION_STATUS_AVATAR_SIZE = 20;
 
-/** Composer-owned live status (Desktop BotWorkingStatus): avatar, spinner and paced copy. */
+/**
+ * Composer-owned live status (Desktop BotWorkingStatus): the avatar breathes in Heart Orange (the
+ * list's running ring), three dots wave where the system spinner used to be, and the copy is paced.
+ */
 export function CompanionWorkingStatus({ label, avatar }: { label: string | null; avatar?: ReactNode }) {
-  const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   // Terminal events unmount immediately; cadence only applies while the lifecycle is active.
   if (!label) return null;
   return <View style={styles.row} accessibilityLiveRegion="polite" testID="companion.workingStatus">
-    {avatar ? <View style={styles.avatar}>{avatar}</View> : null}
-    <ActivityIndicator size="small" color={colors.textTertiary} />
+    {avatar ? <View style={styles.avatar}>{avatar}<CompanionPresenceRing active width={1.5} /></View> : null}
+    <ThinkingDots />
     <WorkingStatusText text={label} style={styles.text} />
   </View>;
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 32, paddingHorizontal: spacing.xs },
-  avatar: { flexShrink: 0 },
+  avatar: { flexShrink: 0, width: COMPANION_STATUS_AVATAR_SIZE, height: COMPANION_STATUS_AVATAR_SIZE },
   text: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
 });

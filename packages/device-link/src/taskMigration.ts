@@ -1,6 +1,10 @@
 /** Same-account independent task copy. File bytes use existing peer attachments / OSS, never relay frames. */
 export const TASK_MIGRATION_CHANNEL = "maker:task-copy";
 export const TASK_MIGRATION_LOCAL_CHANNEL = "task-copy:request";
+/** `estimate` stops early with MIGRATION_TOO_MANY_FILES above this many project files. */
+export const TASK_MIGRATION_MAX_FILES = 500_000;
+export const TASK_MIGRATION_ESTIMATE_TIMEOUT_MS = 3 * 60_000;
+export const TASK_MIGRATION_RECEIVE_TIMEOUT_MS = 30 * 60_000;
 export interface MigrationFileRef {
   ref: string;
   size: number;
@@ -67,6 +71,10 @@ export interface TaskMigrationView {
   estimate?: { fileCount: number; bytes: number };
   copyEstimate?: true;
   running?: boolean;
+  /** A running copy accepts `cancel` (source staging only). Absent on older hosts. */
+  cancellable?: true;
+  /** `cancel` was accepted; the running copy is unwinding. Absent on older hosts. */
+  cancelling?: true;
   /** Optional live source-side upload telemetry; absent on older hosts. Never persisted. */
   progress?: {
     phase: "sending" | "finishing";

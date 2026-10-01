@@ -101,6 +101,7 @@ import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
 import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
 import { cleanupSessionRuntimeForTerminalStatus } from '../sessionRuntimeCleanup.js';
+import { requestSessionArchiveSync } from '../sessionArchiveSync.js';
 import { cindyMakeManager } from '../../cindy-make/manager.js';
 import { recycleCindyMakeTask } from '../../cindy-make/taskManagement.js';
 import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
@@ -610,6 +611,7 @@ function notifyGhostSessionStatusChange(
   status: unknown,
   workingDir?: string | null,
 ): void {
+  if (status === 'active' || status === 'archived') requestSessionArchiveSync();
   if (status !== 'archived') return;
   void import('../../cindy-brain/index.js')
     .then((m) =>

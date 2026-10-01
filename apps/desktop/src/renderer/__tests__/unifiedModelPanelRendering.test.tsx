@@ -17,6 +17,9 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+/** 统一面板发起的深度写入带上「面板已串行」标记(见 ModelSelector 的 onEffortChangeLive)。 */
+const FROM_PANEL = { serializedByPanel: true };
+
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
@@ -1144,7 +1147,7 @@ describe('统一面板 · 会话内形态', () => {
         key: 'ArrowRight',
       });
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
   });
 });
 
@@ -1241,7 +1244,7 @@ describe('统一面板 · 恢复推荐应用到 live 配置', () => {
     });
     expect(onCrossEngineSelect).not.toHaveBeenCalled();
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     expect(onFastModeChange).toHaveBeenCalledWith(false);
   });
 
@@ -1604,7 +1607,7 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
     });
     // 默认引擎(codex)== 会话引擎 → 无损,不该弹跨引擎确认。
     expect(onCrossEngineSelect).not.toHaveBeenCalled();
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     expect(onFastModeChange).toHaveBeenCalledWith(false);
     expect(listModelFavorites()).toHaveLength(0);
   });
@@ -1709,7 +1712,7 @@ describe('统一面板 · 同引擎实时写入成功才清存储', () => {
     await act(async () => {
       fireEvent.click(within(flyout).getByText('恢复推荐'));
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     // 深度没写成 → 整件事放弃:不该留下用户从没选过的「旧档 + 无 Fast」。
     expect(onFastModeChange).not.toHaveBeenCalled();
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
@@ -1783,7 +1786,7 @@ describe('统一面板 · 同引擎实时写入成功才清存储', () => {
     await act(async () => {
       fireEvent.click(favoriteStar());
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     // 收藏是用户手存的东西,不可逆:回落配置没落成就绝不能把记录删了。
     expect(listModelFavorites()).toHaveLength(1);
     expect(listModelFavorites()[0]?.uid).toBe(uid);
@@ -1826,7 +1829,7 @@ describe('统一面板 · 两笔实时写入要么都落要么回滚', () => {
       fireEvent.click(within(flyout).getByText('恢复推荐'));
     });
     // 第一笔写推荐档 high,第二笔关 Fast 失败 → 第一笔按进入前的实时深度 low 回滚。
-    expect(onEffortChange.mock.calls).toEqual([['high'], ['low']]);
+    expect(onEffortChange.mock.calls).toEqual([['high', FROM_PANEL], ['low', FROM_PANEL]]);
     expect(onFastModeChange).toHaveBeenCalledWith(false);
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
   });
@@ -1853,7 +1856,7 @@ describe('统一面板 · 两笔实时写入要么都落要么回滚', () => {
     await act(async () => {
       fireEvent.click(within(flyout).getByText('恢复推荐'));
     });
-    expect(onEffortChange.mock.calls).toEqual([['high'], ['low']]);
+    expect(onEffortChange.mock.calls).toEqual([['high', FROM_PANEL], ['low', FROM_PANEL]]);
     // 回滚失败不改变结论:这次「恢复推荐」没成功,override / 记忆一律原样留着。
     expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
   });
@@ -1878,7 +1881,7 @@ describe('统一面板 · 两笔实时写入要么都落要么回滚', () => {
     await waitFor(() => {
       expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
     });
-    expect(onEffortChange.mock.calls).toEqual([['high']]);
+    expect(onEffortChange.mock.calls).toEqual([['high', FROM_PANEL]]);
   });
 });
 
@@ -1928,7 +1931,7 @@ describe('统一面板 · 改模型行的实时配置后收藏不再选中', () 
         key: 'ArrowRight',
       });
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     await waitFor(() => {
       expect(onUnifiedSelect).toHaveBeenCalledWith({
         providerId: 'xd',
@@ -2227,7 +2230,7 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
         key: 'ArrowRight',
       });
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     await waitFor(() => {
       expect(listModelFavorites()[0]?.effort).toBe('high');
     });
@@ -2375,7 +2378,7 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
         key: 'ArrowRight',
       });
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     expect(listModelFavorites()[0]?.effort).toBe('low');
   });
 
@@ -3179,7 +3182,7 @@ describe('统一面板 · 实测回归', () => {
     await act(async () => {
       fireEvent.keyDown(slider, { key: 'ArrowRight' });
     });
-    expect(onEffortChange).toHaveBeenCalledWith('high');
+    expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     // 关键回归点:改完档,浮层与列表都不许消失。
     expect(screen.queryByTestId('unified-model-config-flyout')).not.toBeNull();
     expect(screen.getByRole('listbox')).toBeTruthy();
@@ -3729,18 +3732,18 @@ describe('统一选择器 · 旧偏好与配置变更回归', () => {
     });
   });
 
-  it('编辑收藏的异步 Fast 写入期间，不能再改深度或删除收藏', async () => {
+  it('编辑收藏的异步 Fast 写入期间，改深度与删除收藏排队，落定后按顺序执行', async () => {
     const uid = addModelFavorite({
       providerId: 'xd',
       modelId: 'gpt-5.5',
       agent: 'codex',
       effort: 'low',
     });
-    let finish!: (value: boolean) => void;
+    const fastWrites: Array<(value: boolean) => void> = [];
     const onFastModeChange = vi.fn(
       () =>
         new Promise<boolean>((resolve) => {
-          finish = resolve;
+          fastWrites.push(resolve);
         }),
     );
     const onEffortChange = vi.fn();
@@ -3765,13 +3768,17 @@ describe('统一选择器 · 旧偏好与配置变更回归', () => {
       });
       fireEvent.click(within(favorite).getByRole('button', { name: '取消收藏' }));
     });
+    // 同一时刻只提交一笔:Fast 写入在途时,深度与删除都还没发出。
     expect(onFastModeChange).toHaveBeenCalledTimes(1);
     expect(onEffortChange).not.toHaveBeenCalled();
     expect(listModelFavorites()).toHaveLength(1);
     await act(async () => {
-      finish(true);
+      fastWrites[0]?.(true);
     });
-    expect(listModelFavorites()[0]?.fast).toBe(true);
+    // Fast 落定、收藏副本写入后,才按点击顺序提交排队的深度,最后执行删除;
+    // 全程没有第二笔并发写入。
+    await waitFor(() => expect(listModelFavorites()).toHaveLength(0));
+    expect(onFastModeChange).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -3913,7 +3920,7 @@ describe('统一面板 · 推理滑杆一次拖动只写最终档', () => {
     });
     if (eventType === 'pointerup') {
       expect(onEffortChange).toHaveBeenCalledTimes(1);
-      expect(onEffortChange).toHaveBeenCalledWith('high');
+      expect(onEffortChange).toHaveBeenCalledWith('high', FROM_PANEL);
     } else expect(onEffortChange).not.toHaveBeenCalled();
   });
 });

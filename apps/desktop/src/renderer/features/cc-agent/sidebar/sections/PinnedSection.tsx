@@ -44,7 +44,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useSidebarCardMode, type SidebarViewMode } from '@/hooks/useSidebarCardMode';
-import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from '../menuStyles';
+import { MENU_ITEM_CLASS } from '../menuStyles';
 import { SectionCollapse } from '../SectionCollapse';
 import { CardMasonry } from '../CardMasonry';
 import { SessionItem } from '../SessionItem';
@@ -106,12 +106,7 @@ function ViewStyleMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
-      <DropdownMenuContent
-        side="bottom"
-        align="end"
-        sideOffset={4}
-        className={cn(MENU_CONTENT_CLASS, 'min-w-[128px]')}
-      >
+      <DropdownMenuContent side="bottom" align="end" sideOffset={4} className="min-w-[128px]">
         {OPTIONS.map((opt) => (
           <DropdownMenuItem
             key={opt.value}

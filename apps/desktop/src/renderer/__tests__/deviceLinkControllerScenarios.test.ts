@@ -408,6 +408,43 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
     makerChatStore.purgeSession(s);
   });
 
+  it.each([false, true])('reconciles an external queue departure without a local pending bubble (persisted=%s)', async (persisted) => {
+    const s = sid();
+    host.enableHistoryView();
+    host.seedSession(s);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    makerChatStore.enterView(s);
+    makerChatStore.ensureInitialMessages(s);
+    await flush(); await flush();
+    const queued = {
+      clientId: 'scheduled-input', text: 'Check the PR', persistedContent: 'Check the PR',
+      chatMessage: { clientId: 'scheduled-input', role: 'user', content: 'Check the PR', createdAt: '2026-09-17T00:00:00Z' },
+    };
+    host.push('maker:input:projection', { ...emptyProjection(s), pendingQueue: [queued] });
+    expect(makerChatStore.getSnapshot(s).pendingQueue).toHaveLength(1);
+    // The queue may be cancelled or its DB push may be lost. Neither proves a
+    // local send; only authoritative history may introduce the scheduled row.
+    const origin = { kind: 'scheduler' as const, scheduleId: 'schedule', scheduleName: 'PR check', runId: 'run' };
+    if (persisted) host.hostMessage(s, {
+      ...dbMessage(s, 'scheduled-db', 'Check the PR', '2026-09-17T00:00:00Z', 'user'),
+      clientId: queued.clientId, agentMeta: { origin },
+    }, { lossy: true });
+    host.push('maker:input:projection', emptyProjection(s));
+    expect(makerChatStore.getSnapshot(s).messages).toEqual([]);
+    await flush(); await flush();
+    const rows = makerChatStore.getSnapshot(s).messages;
+    if (!persisted) {
+      expect(rows).toEqual([]);
+      makerChatStore.purgeSession(s);
+      return;
+    }
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ automationOrigin: origin });
+    expect(rows[0].isPendingPersist).toBeUndefined();
+    expect(rows[0].localSendPrecedingClientIds).toBeUndefined();
+    makerChatStore.purgeSession(s);
+  });
+
   it('reserves a queued send whose DB echo beats the dispatch projection', async () => {
     const s = sid();
     host.enableHistoryView();

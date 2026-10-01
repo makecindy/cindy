@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { syncCodexArchiveState } from '../archive-state.js';
 import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AppServerHost } from './host.js';
@@ -146,6 +147,39 @@ async function fixture(archivedParent = false, testRefresh = false, revokedRefre
 }
 
 describe.skipIf(!binaryPath)('real Codex history/account isolation contract', () => {
+  it('archives and restores native history without changing cwd or losing content', async () => {
+    const f = await fixture();
+    const native = f.host(f.historyHome);
+    const started = await native.request<{ thread: { id: string; path: string } }>('thread/start', {
+      cwd: f.root, model: 'gpt-6-astra', approvalPolicy: 'never', sandbox: 'read-only',
+    });
+    const thread = started.thread;
+    const completed = new Promise<void>(resolve => {
+      native.subscribeThread(thread.id, { turnCompleted: () => resolve() });
+    });
+    await native.request('turn/start', { threadId: thread.id, input: [{ type: 'text', text: 'archive fixture' }] });
+    await completed;
+    await native.unsubscribeThread(thread.id);
+    const contents = await fs.readFile(thread.path, 'utf8');
+    const request: Parameters<typeof syncCodexArchiveState>[0] = (method, params) => native.request(method, params);
+    const archived = await syncCodexArchiveState(request, thread.id, true, () => {});
+    expect(archived.split(path.sep)).toContain('archived_sessions');
+    await expect(fs.stat(thread.path)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(archived, 'utf8')).toBe(contents);
+    const archivedList = await native.request<{ data: Array<{ id: string }> }>('thread/list', { archived: true, limit: 100 });
+    expect(archivedList.data.map(item => item.id)).toContain(thread.id);
+    expect(await syncCodexArchiveState(request, thread.id, true, () => {})).toBe(archived);
+    const restored = await syncCodexArchiveState(request, thread.id, false, () => {});
+    expect(restored.split(path.sep)).toContain('sessions');
+    expect(await fs.readFile(restored, 'utf8')).toBe(contents);
+    const activeList = await native.request<{ data: Array<{ id: string }> }>('thread/list', { archived: false, limit: 100 });
+    expect(activeList.data.map(item => item.id)).toContain(thread.id);
+    await expect(f.resume(native, { id: thread.id, file: restored })).resolves.toMatchObject({
+      thread: { id: thread.id, cwd: f.root },
+    });
+    await f.assertOriginals();
+  }, 30_000);
+
   it('reproduces the old split-home defect with a complete source rollout still on disk', async () => {
     const f = await fixture();
     const original = f.host(f.historyHome);

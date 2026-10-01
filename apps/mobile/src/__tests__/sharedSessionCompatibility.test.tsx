@@ -46,7 +46,7 @@ vi.mock('@/components/MobilePrimitives', () => ({
   MainWindowRowButton: () => null,
   MainWindowOptionButton: ({ label }: { label: string }) => createElement('button', null, label),
 }));
-vi.mock('@/platform/chrome/SimpleStackHeader', () => ({ SimpleStackHeader: () => null, simpleScreenSafeAreaEdges: () => [] }));
+vi.mock('@/platform/chrome/SimpleStackHeader', () => ({ SimpleStackHeader: () => null, simpleScreenSafeAreaEdges: () => [], simpleScrollInsetProps: {}, simpleScrollScreenSafeAreaEdges: () => [] }));
 vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
 let host: HTMLDivElement;
 let root: Root;

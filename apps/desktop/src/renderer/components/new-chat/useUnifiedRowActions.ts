@@ -163,8 +163,46 @@ export interface UnifiedRowActionsOptions {
   onBeforeRemoveFavorite: (anchor: UnifiedAnchor) => void;
 }
 
+/** 在途写入的目标值:只覆盖发起那一行(按锚点)的深度或 Fast。 */
+export interface UnifiedOptimisticConfig {
+  anchorKey: string;
+  effort?: Effort;
+  fast?: boolean;
+}
+
+/**
+ * 把在途目标值叠到该行的解析配置上(只作用于发起写入的那一行)。
+ * 「已自定义」按与选中行 live 覆盖相同的口径补算,恢复推荐入口随之即时出现。
+ */
+export function withOptimisticConfig(
+  anchor: UnifiedAnchor,
+  config: UnifiedRowConfig,
+  optimistic: UnifiedOptimisticConfig | null,
+): UnifiedRowConfig {
+  if (!optimistic || optimistic.anchorKey !== anchorKey(anchor)) return config;
+  const effort =
+    optimistic.effort !== undefined && config.efforts.includes(optimistic.effort)
+      ? optimistic.effort
+      : config.effort;
+  const fast = optimistic.fast !== undefined && config.fastCapable ? optimistic.fast : config.fast;
+  if (effort === config.effort && fast === config.fast) return config;
+  const defaultEffort = config.capability?.defaultEffort;
+  return {
+    ...config,
+    effort,
+    fast,
+    customized:
+      config.customized ||
+      fast ||
+      (effort !== null && defaultEffort != null && effort !== defaultEffort),
+  };
+}
+
 export interface UnifiedRowActions {
+  /** 异步写入已持续超过 PENDING_VISIBLE_DELAY_MS,控件应显示为不可操作。 */
   pending: boolean;
+  /** 在途的深度 / Fast 目标值;渲染该锚点的行配置时覆盖上去。 */
+  optimistic: UnifiedOptimisticConfig | null;
   runExternal: (action: () => ActionResult) => ActionResult;
   applyEngine: (
     anchor: UnifiedAnchor,
@@ -202,41 +240,129 @@ export interface UnifiedRowActions {
   ) => ActionResult;
 }
 
+/**
+ * 非深度 / Fast 的异步写入超过这个时长才把控件显示为不可操作。本机写入通常几十毫秒就
+ * 落地,立即置灰只会造成一闪;这段时间里的点击不会被丢掉,而是排队(见 exclusive)。
+ */
+export const PENDING_VISIBLE_DELAY_MS = 400;
+
+type ActionName =
+  | 'runExternal'
+  | 'applyEngine'
+  | 'applyEffort'
+  | 'applyFast'
+  | 'resetToRecommended'
+  | 'addFavorite'
+  | 'removeFavorite'
+  | 'selectRow';
+
 export function useUnifiedRowActions(options: UnifiedRowActionsOptions): UnifiedRowActions {
-  // 同一个面板一次只提交一份配置。ref 同步挡住连点，pending 让控件显示不可操作；
-  // 锁覆盖确认、写入、回滚和收藏收尾，避免后发请求先完成再被旧回执覆盖。
+  // 同一个面板一次只提交一份配置,避免后发请求先完成再被旧回执覆盖;锁覆盖确认、写入、
+  // 回滚和收藏收尾。在途时控件看上去可点就一定接得住:新的点击进队列,不静默丢弃 ——
+  // 深度 / Fast 按「行 + 维度」各留最新一笔,其余动作只留最新一个,按先后顺序依次提交。
   const busy = useRef(false);
   const mounted = useRef(true);
   const [pending, setPending] = useState(false);
+  // 深度 / Fast 写入在途(含排队)时,目标值先画在那一行上:滑杆松手即停在新档,
+  // 不回弹到旧值再等回执。整条写入链空闲(或失败)即清除,之后以真实状态为准。
+  const [optimistic, setOptimistic] = useState<UnifiedOptimisticConfig | null>(null);
+  const queue = useRef(new Map<string, { name: ActionName; args: unknown[] }>());
+  // 排队的只是参数:上一笔落定后等一次渲染再提交,走最新一次渲染的动作,拿到上一笔
+  // 刚写入的实时值,而不是点击那一刻闭包里的旧值。
+  const latestRuns = useRef<Partial<Record<ActionName, (args: unknown[]) => ActionResult>>>({});
+  const [drainSignal, setDrainSignal] = useState(0);
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
     };
   }, []);
-  const exclusive =
-    <A extends unknown[]>(action: (...args: A) => ActionResult) =>
-    (...args: A): ActionResult => {
-      if (busy.current || options.interactionDisabled) return false;
+  const mergeOptimistic = (adjustment: UnifiedOptimisticConfig) =>
+    setOptimistic((current) =>
+      current?.anchorKey === adjustment.anchorKey ? { ...current, ...adjustment } : adjustment,
+    );
+  /** 写入链空闲:清掉排队残留的目标值显示,交回真实状态。 */
+  const settleIdle = () => {
+    busy.current = false;
+    setOptimistic(null);
+  };
+  /** 依次提交排队项,直到遇到一笔异步写入(它落定后会再次触发)或队列清空。 */
+  const drainQueue = () => {
+    for (;;) {
+      const [key] = queue.current.keys();
+      if (key === undefined) return settleIdle();
+      const next = queue.current.get(key)!;
+      queue.current.delete(key);
+      busy.current = false;
+      latestRuns.current[next.name]?.(next.args);
+      if (busy.current) return;
+    }
+  };
+  useEffect(() => {
+    if (drainSignal > 0) drainQueue();
+    // drainQueue 每次渲染都是新函数,但只在落定信号变化时执行一次。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drainSignal]);
+  const exclusive = <A extends unknown[]>(
+    name: ActionName,
+    action: (...args: A) => ActionResult,
+    adjustmentOf?: (...args: A) => UnifiedOptimisticConfig,
+  ) => {
+    const run = (...args: A): ActionResult => {
+      if (options.interactionDisabled) {
+        queue.current.clear();
+        return false;
+      }
       busy.current = true;
+      const target = adjustmentOf?.(...args) ?? null;
       try {
         const result = action(...args);
-        if (result && typeof result === 'object' && 'then' in result) {
-          setPending(true);
-          return Promise.resolve(result)
-            .catch(() => false)
-            .finally(() => {
-              busy.current = false;
-              if (mounted.current) setPending(false);
-            });
+        if (!(result && typeof result === 'object' && 'then' in result)) {
+          busy.current = false;
+          return result;
         }
-        busy.current = false;
-        return result;
+        if (target) mergeOptimistic(target);
+        const pendingTimer = target
+          ? null
+          : setTimeout(() => {
+              if (mounted.current) setPending(true);
+            }, PENDING_VISIBLE_DELAY_MS);
+        return Promise.resolve(result)
+          .catch(() => false as const)
+          .then((outcome) => {
+            if (pendingTimer !== null) clearTimeout(pendingTimer);
+            // 这笔没写成时丢掉排队项:调用方已提示失败,不在失败后悄悄接着改。
+            if (outcome === false || !mounted.current) queue.current.clear();
+            if (!mounted.current) {
+              busy.current = false;
+              return outcome;
+            }
+            setPending(false);
+            // 有排队项时锁不放开(新点击继续进队列,不插到前面),等下一次渲染后提交。
+            if (queue.current.size > 0) setDrainSignal((signal) => signal + 1);
+            else settleIdle();
+            return outcome;
+          });
       } catch {
         busy.current = false;
         return false;
       }
     };
+    latestRuns.current[name] = (queued) => run(...(queued as A));
+    return (...args: A): ActionResult => {
+      if (options.interactionDisabled) return false;
+      if (!busy.current) return run(...args);
+      const target = adjustmentOf?.(...args);
+      const key = target
+        ? `${target.effort !== undefined ? 'effort' : 'fast'}:${target.anchorKey}`
+        : 'other';
+      // 先删再插:被替换的项移到队尾,排队顺序始终等于最后一次点击的先后。
+      queue.current.delete(key);
+      queue.current.set(key, { name, args });
+      if (target) mergeOptimistic(target);
+      return undefined;
+    };
+  };
   const {
     interactionDisabled,
     isLiveRow,
@@ -402,7 +528,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
      */
     favoriteUid: string | null;
     onApplied: () => void | Promise<void>;
-  }): Promise<void> => {
+  }): Promise<void | false> => {
     if (!sessionEngineFilter) return Promise.resolve();
     return runLive(() =>
       (sessionEngineFilter.onCrossEngineConfigure ?? sessionEngineFilter.onCrossEngineSelect)({
@@ -417,11 +543,11 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       (applied) => {
         // 只有明确的 false 表示「没切」(见 UnifiedModelPanelProps.onCrossEngineSelect);
         // 返回 void 的调用方视为已切。
-        if (applied === false) return;
+        if (applied === false) return false;
         return args.onApplied();
       },
       // 事务抛错(切换失败)同样按「没应用」处理。
-      () => {},
+      () => false as const,
     );
   };
 
@@ -497,9 +623,10 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       }
     };
     if (args.live && isLiveRow(args.entry, args.config)) {
-      return args.live().then((applied) => {
+      return args.live().then(async (applied) => {
         if (applied) return commitOrRestore(async () => { await args.rollback?.(); });
-        if (args.rollback) return args.rollback();
+        await args.rollback?.();
+        return false;
       });
     }
     const wireModelId = args.target.wireModelId ?? args.anchor.modelId;
@@ -532,8 +659,9 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         favoriteUid: args.uid,
         rowModelId: args.anchor.modelId,
       }),
-    ).then((applied) => {
-      if (applied) return commitOrRestore(() => (onConfigure ?? onSelect)(
+    ).then((applied): ActionResult => {
+      if (!applied) return false;
+      return commitOrRestore(() => (onConfigure ?? onSelect)(
         args.anchor.providerId, args.config.wireModelId ?? args.anchor.modelId,
         args.config.effort ?? '', {
           engine: args.config.engine, fast: args.config.fast,
@@ -650,7 +778,8 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
             rowModelId: anchor.modelId,
           }),
         ).then((applied) => {
-          if (applied) setModelEngineOverride(anchor.providerId, anchor.modelId, engine);
+          if (!applied) return false;
+          setModelEngineOverride(anchor.providerId, anchor.modelId, engine);
         });
       }
       return;
@@ -688,7 +817,8 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       // (见 clearFavoriteAnchorForLiveRow 的头注)。顺序与本文件其它入口一致:先应用、后落状态。
       if (selectedFavoriteUid && onSelectedFavoriteAnchorClear) {
         return runLive(() => onEffortChangeLive(effort)).then((applied) => {
-          if (applied) return clearFavoriteAnchorForLiveRow(anchor, { ...config, effort });
+          if (!applied) return false;
+          return clearFavoriteAnchorForLiveRow(anchor, { ...config, effort });
         });
       }
       // 选中行的深度是会话实时状态,交给调用方持久化(与旧版 handleEditEffort 同语义)。
@@ -736,7 +866,8 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       // 同 applyEffort:改的是**普通模型行**的实时 Fast,而当前选中的是一条收藏 → 写成功后清锚点。
       if (selectedFavoriteUid && onSelectedFavoriteAnchorClear) {
         return runLive(() => onFastModeChangeLive(enabled)).then((applied) => {
-          if (applied) return clearFavoriteAnchorForLiveRow(anchor, { ...config, fast: enabled });
+          if (!applied) return false;
+          return clearFavoriteAnchorForLiveRow(anchor, { ...config, fast: enabled });
         });
       }
       // 选中行的 Fast 必须等调用方持久化成功后再由上层同步草稿;这里绝不预写 modelMemory
@@ -837,7 +968,8 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
           effort: defaultEffort,
         }),
       ).then((applied) => {
-        if (applied) resetStoredConfig();
+        if (!applied) return false;
+        resetStoredConfig();
       });
     }
 
@@ -851,7 +983,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       // 反过来先清后写,一旦远程 setEffort / setFastMode 失败,override 与记忆已经没了、
       // 任务还在旧配置上跑 —— 面板显示的推荐态与事实分家,且没有可回滚的原值。
       return applyDefaultsLive(defaultEffort).then((applied) => {
-        if (!applied) return;
+        if (!applied) return false;
         resetStoredConfig();
         return clearFavoriteAnchorForLiveRow(anchor, {
           ...config,
@@ -939,8 +1071,9 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
           wireModelId,
           effort: fallback.effort,
         }),
-      ).then((applied) => {
-        if (applied) return commit();
+      ).then((applied): ActionResult => {
+        if (!applied) return false;
+        return commit();
       });
     }
     // 会话内回落:默认引擎 ≠ 正在跑的引擎,或正挂着待发送意图,都走切换事务。
@@ -962,8 +1095,9 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     }
     // 会话 + 默认引擎 == 正在跑的引擎,且没有待发送意图:无损,两个 live 回调把深度 / Fast 复位。
     // 与跨引擎分支同一条顺序:**live 真写成了才**删记录。
-    return applyDefaultsLive(fallback.effort).then((applied) => {
-      if (applied) return commit();
+    return applyDefaultsLive(fallback.effort).then((applied): ActionResult => {
+      if (!applied) return false;
+      return commit();
     });
   };
 
@@ -1011,13 +1145,20 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
 
   return {
     pending,
-    runExternal: exclusive((action: () => ActionResult) => action()),
-    applyEngine: exclusive(applyEngine),
-    applyEffort: exclusive(applyEffort),
-    applyFast: exclusive(applyFast),
-    resetToRecommended: exclusive(resetToRecommended),
-    addFavorite: exclusive(addFavorite),
-    removeFavorite: exclusive(removeFavorite),
-    selectRow: exclusive(selectRow),
+    optimistic,
+    runExternal: exclusive('runExternal', (action: () => ActionResult) => action()),
+    applyEngine: exclusive('applyEngine', applyEngine),
+    applyEffort: exclusive('applyEffort', applyEffort, (anchor, _entry, _config, effort) => ({
+      anchorKey: anchorKey(anchor),
+      effort,
+    })),
+    applyFast: exclusive('applyFast', applyFast, (anchor, _entry, _config, enabled) => ({
+      anchorKey: anchorKey(anchor),
+      fast: enabled,
+    })),
+    resetToRecommended: exclusive('resetToRecommended', resetToRecommended),
+    addFavorite: exclusive('addFavorite', addFavorite),
+    removeFavorite: exclusive('removeFavorite', removeFavorite),
+    selectRow: exclusive('selectRow', selectRow),
   };
 }

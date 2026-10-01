@@ -1,3 +1,6 @@
+import { CompanionLearningFooter } from './CompanionLearningFooter';
+import { CompanionTaskResultCard } from './CompanionTaskResultCard';
+import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { AgentErrorDetails } from './AgentErrorDetails';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { CompanionMessageActions } from './CompanionMessageActions';
@@ -14,9 +17,10 @@ import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { sharedTaskAuthorName } from '@cindy/maker-shared';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime } from '@cindy/maker-shared/botTimeline';
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
+import { CompanionEntering } from '@/session/CompanionEntering';
 import { mobileDebugEnabled, mobileDebugLog } from '@/debug/mobileDebugLog';
 import { errorText, resolvedUrlKind } from '@/debug/fileDiagnostics';
-import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Image as ExpoImage } from 'expo-image';
 import {
@@ -268,7 +272,6 @@ import {
 } from '@/session/messageContentLayout';
 import { buildMobileReadableViewportLayout } from '@/session/responsiveViewportLayout';
 import {
-  formatDuration,
   type MobileAgentTaskItem,
   type MobileMessageItem,
   type MobileMessageRenderItem,
@@ -393,6 +396,7 @@ import type { RemoteTextFilePreviewResult } from '@/device-link/mobileMakerTrans
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { iconSize, iconStroke, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { i18n } from '@/i18n';
+import { formatLocalizedDuration } from '@/session/sessionDurationFormat';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { mobileToolRowWording } from '@/i18n/toolWording';
 
@@ -627,6 +631,7 @@ const COMPANION_AVATAR_GAP = 10;
 interface MessageActions {
   companion?: boolean;
   onCompanionReadThrough?: (at: number) => void;
+  onOpenCompanionSettings?: (page: 'memory' | 'capabilities') => void;
   companionWorkingLabel?: string | null;
   /** Teammate portrait beside its replies (Desktop withAssistantAvatar). */
   companionAvatar?: ReactNode;
@@ -690,6 +695,7 @@ interface MessageActions {
 export function MessageRenderer({
   companion = false,
   companionWorkingLabel,
+  onOpenCompanionSettings,
   companionAvatar,
   companionPluginInvocations,
   showPluginInvocations = true,
@@ -745,6 +751,7 @@ export function MessageRenderer({
   devRecycleItems = false,
 }: {
   companion?: boolean;
+  onOpenCompanionSettings?: (page: 'memory' | 'capabilities') => void;
   companionWorkingLabel?: string | null;
   companionAvatar?: ReactNode;
   companionPluginInvocations?: ReadonlyMap<string, PluginInvocation[]>;
@@ -1695,6 +1702,7 @@ export function MessageRenderer({
   const actions: MessageActions & { firstUserMessageClientId?: string } = useMemo(() => ({
     companion,
     companionWorkingLabel,
+  onOpenCompanionSettings,
     companionAvatar,
     companionTimeGroups,
     companionPluginWork,
@@ -1732,6 +1740,7 @@ export function MessageRenderer({
   }), [
     companion,
     companionWorkingLabel,
+  onOpenCompanionSettings,
     companionAvatar,
     companionTimeGroups,
     companionPluginWork,
@@ -3020,13 +3029,20 @@ const RenderItemView = memo(function RenderItemView({
   }
   const groupTimestamp = actions.companion && item.type === 'message'
     ? actions.companionTimeGroups?.get(item.key) : undefined;
-  // Desktop keeps the persistent task card on the replies' column with an invisible avatar.
+  // K1: every companion card (task, result, teammate-message pill) hangs on the replies' column,
+  // left-aligned with the reply text behind an invisible avatar.
   const alignWithReplies = !!actions.companionAvatar && actions.companion && item.type === 'message'
-    && item.message.companion?.kind === 'task' && item.message.companion.meta.role === 'delegation-request';
+    && !!item.message.companion;
+  const aligned = alignWithReplies ? <View style={styles.companionAvatarInset}>{node}</View> : node;
+  // Companion chats: a new message or finished reply eases in once (M4 / M5); everything else stays still.
+  const entering = actions.companion && item.type === 'message' && !item.message.systemCardType
+    && (item.message.kind === 'user' || item.message.kind === 'assistant')
+    ? <CompanionEntering key={item.key} id={item.key} createdAt={item.message.createdAt} kind={item.message.kind === 'user' ? 'send' : 'reply'}>{aligned}</CompanionEntering>
+    : aligned;
   return (
     <View style={focused ? styles.focusedItem : undefined} testID={focused ? 'message.focusedItem' : undefined}>
       {groupTimestamp !== undefined ? <CompanionTimeGroupStamp timestamp={groupTimestamp} /> : null}
-      {alignWithReplies ? <View style={styles.companionAvatarInset}>{node}</View> : node}
+      {entering}
     </View>
   );
 });
@@ -3780,6 +3796,16 @@ function MessageBubble({
       ) : null}
       {attachmentStripNode}
       {hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0) ? bubble : null}
+      {actions.companion && item.message.kind === 'assistant' && item.message.body.trim() ? (
+        <CompanionLearningFooter receipts={item.message.source.agentMeta?.botLearning}
+          onOpenSettings={actions.onOpenCompanionSettings} />
+      ) : null}
+      {actions.companion && item.message.kind === 'assistant' && item.message.turnCompleted === true
+        && item.message.body.trim() ? readBotTaskResults(item.message.source.agentMeta?.botTaskResults).map(meta => (
+          <CompanionTaskResultCard key={botTaskResultKey(meta)} meta={meta} attached
+            deviceId={actions.remoteDeviceId ?? ''} parentSessionId={item.message.source.sessionId}
+            renderMarkdown={text => <CompanionCardMarkdown text={text} actions={actions} />} />
+        )) : null}
       {item.message.rawError ? <AgentErrorDetails key={item.message.key} message={item.message.rawError} /> : null}
       {item.message.kind === 'assistant' && item.message.modelMismatch ? (
         // 模型降级提示(对齐桌面 AssistantMessage):所选模型本轮被上游静默替换,
@@ -3991,9 +4017,9 @@ function ThinkingCard({
   const title = item.redacted
     ? t('message.renderer.thinkingHidden')
     : item.durationMs !== undefined
-      ? t('message.renderer.thinkingDone', { duration: formatDuration(item.durationMs) })
+      ? t('message.renderer.thinkingDone', { duration: formatLocalizedDuration(item.durationMs) })
       : elapsedMs !== null
-        ? t('message.renderer.thinkingActive', { elapsed: formatDuration(elapsedMs) })
+        ? t('message.renderer.thinkingActive', { elapsed: formatLocalizedDuration(elapsedMs) })
         : t('message.renderer.thinkingProcess');
   return (
     <FoldablePanel
@@ -4421,7 +4447,7 @@ function buildAgentTaskMeta(model: AgentTaskCardModel): string[] {
   const parts: string[] = [AGENT_TASK_PROVIDER_LABEL[model.provider], agentTaskStatusLabel(model.status)];
   if (typeof model.totalTokens === 'number') parts.push(`${formatCompactTokens(model.totalTokens)} tokens`);
   if (typeof model.toolUses === 'number') parts.push(i18n.t('message.renderer.toolUseCount', { n: model.toolUses }));
-  if (typeof model.durationMs === 'number') parts.push(formatDuration(model.durationMs));
+  if (typeof model.durationMs === 'number') parts.push(formatLocalizedDuration(model.durationMs));
   return parts;
 }
 
@@ -4453,8 +4479,7 @@ function AgentTaskCard({
       toolName: item.toolCall?.label,
       toolInput: readAgentTaskToolInput(item.toolCall),
       update: item.update,
-      // 重连后 live update 为空：结构化终态优先，存量历史再由配对结果兜底 completed。
-      // summary 仍来自 secondaryBody，与 desktop 对齐。
+      // 重连后 live update 为空：协议级子任务错误结果必须恢复为 failed。
       result: item.toolCall?.secondaryBody,
       persistedStatus: item.toolCall?.agentTaskStatus,
     }),
@@ -4642,7 +4667,7 @@ function WorkGroupElapsed({ sinceIso }: { sinceIso: string | undefined }) {
   const elapsedMs = useLiveElapsedMs(true, sinceIso);
   return elapsedMs === null
     ? null
-    : <Text style={styles.workGroupElapsed}>{formatDuration(elapsedMs)}</Text>;
+    : <Text style={styles.workGroupElapsed}>{formatLocalizedDuration(elapsedMs)}</Text>;
 }
 
 const WorkToolActivityRow = memo(function WorkToolActivityRow({
@@ -4763,7 +4788,7 @@ function SubagentCard({
     ? t('message.renderer.subagentTyped', { type: item.header.subagentType })
     : t('message.renderer.subagent');
   const statusText = item.status === 'completed' && item.durationMs !== undefined
-      ? t('message.renderer.workedDuration', { duration: formatDuration(item.durationMs) })
+      ? t('message.renderer.workedDuration', { duration: formatLocalizedDuration(item.durationMs) })
       : agentTaskStatusLabel(item.status);
   const subtitle = [item.header.description, statusText].filter(Boolean).join(' · ');
   return (
@@ -6235,7 +6260,12 @@ function MarkdownSessionLinkSpan({
   );
 }
 
-function AttachmentStrip({
+/** The caller selects this once for the strip's lifetime: recycled rows use list state,
+ * while ordinary ScrollView children use React state. Keep the choice fixed while mounted. */
+type MediaPreviewStateHook = <T>(initial: T | (() => T)) => readonly [T, Dispatch<SetStateAction<T>>];
+
+/** 用户消息的附件条(图片缩略图 + 文件 chip);群聊时间线复用同一实现。 */
+export function AttachmentStrip({
   attachments,
   messageKey,
   clientId,
@@ -6244,6 +6274,7 @@ function AttachmentStrip({
   layout,
   onOpen,
   onResolveRemoteMedia,
+  usePreviewState = useRecyclingState,
 }: {
   attachments: readonly NormalizedAttachment[];
   messageKey: string;
@@ -6253,6 +6284,7 @@ function AttachmentStrip({
   layout: MessageContentLayout;
   onOpen?: (payload: MessagePayload) => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
+  usePreviewState?: MediaPreviewStateHook;
 }) {
   const styles = useThemedStyles(makeStyles);
   // 订阅本地缩略兜底版本:hydrate / 新注册落盘后,已渲染的 cindy-oss-attach:// 气泡
@@ -6279,6 +6311,7 @@ function AttachmentStrip({
           onOpen={onOpen ? () => onOpen(buildAttachmentPayload(applySentAttachmentThumbOverlay(item))) : undefined}
           onResolveRemoteMedia={onResolveRemoteMedia}
           variant="attachment"
+          usePreviewState={usePreviewState}
         />
       ))}
       {fileAttachments.length > 0 ? (
@@ -6402,12 +6435,13 @@ const ATTACHMENT_INTRINSIC_CACHE_MAX = 500;
 
 // 相册候选仍可能是 ph://，必须由 expo-image 加载；只复用正式附件的布局，
 // 不把本地相册地址声明为 RN Image / 远端查看器可直接预览的媒体。
-function PendingAttachmentImage({ layout, uri, sourceUri = uri, onError, onSize }: {
+function PendingAttachmentImage({ layout, uri, sourceUri = uri, onError, onSize, usePreviewState = useRecyclingState }: {
   layout: MessageContentLayout; uri: string; sourceUri?: string; onError?: () => void;
   onSize?: (size: AttachmentImageIntrinsicSize) => void;
+  usePreviewState?: MediaPreviewStateHook;
 }) {
   const styles = useThemedStyles(makeStyles);
-  const [intrinsicSize, setIntrinsicSize] = useRecyclingState<AttachmentImageIntrinsicSize | null>(
+  const [intrinsicSize, setIntrinsicSize] = usePreviewState<AttachmentImageIntrinsicSize | null>(
     () => attachmentIntrinsicSizeCache.get(sourceUri) ?? attachmentIntrinsicSizeCache.get(uri) ?? null,
   );
   // The upload copy and materialized reference describe the same pixels. Carry their measured frame.
@@ -6464,6 +6498,7 @@ function MediaPreview({
   variant = 'card',
   presentationOnly = false,
   localPreview,
+  usePreviewState = useRecyclingState,
 }: {
   layout: MessageContentLayout;
   media: NormalizedToolMedia;
@@ -6473,6 +6508,7 @@ function MediaPreview({
   variant?: 'card' | 'attachment';
   presentationOnly?: boolean;
   localPreview?: SentMessageImagePreview;
+  usePreviewState?: MediaPreviewStateHook;
 }) {
   const styles = useThemedStyles(makeStyles);
   const preview = summarizeMessagePayloadPreview(buildMediaPayload(media, label));
@@ -6480,15 +6516,15 @@ function MediaPreview({
     ? getSentAttachmentThumbUri(localPreview?.sourceRef ?? media.url)
     : null;
   const localCandidate = localPreview?.uri ?? durableUri;
-  const [failedLocalUris, setFailedLocalUris] = useRecyclingState<readonly string[]>([]);
+  const [failedLocalUris, setFailedLocalUris] = usePreviewState<readonly string[]>([]);
   // Keep the sent source when a durable copy appears later; switch only after an actual load error.
   const localUri = [localCandidate, durableUri].find((uri) => uri && !failedLocalUris.includes(uri)) ?? null;
   const autoResolve = !localUri && shouldAutoResolveMediaThumbnail(media, !!onResolveRemoteMedia);
-  const [resolveState, setResolveState] = useRecyclingState<MediaThumbnailResolveState>({ status: 'idle' });
+  const [resolveState, setResolveState] = usePreviewState<MediaThumbnailResolveState>({ status: 'idle' });
   // attachment 变体的原图尺寸。初值走模块级缓存:FlatList 虚拟化会反复
   // unmount/remount 本组件,不缓存的话每次划回都重新 getSize、重演一次
   // 占位帧 → 真图尺寸的切换(规则 7 的跳变)。
-  const [intrinsicSize, setIntrinsicSize] = useRecyclingState<AttachmentImageIntrinsicSize | null>(
+  const [intrinsicSize, setIntrinsicSize] = usePreviewState<AttachmentImageIntrinsicSize | null>(
     () => attachmentIntrinsicSizeCache.get(localPreview?.uri ?? media.url)
       ?? attachmentIntrinsicSizeCache.get(localCandidate ?? media.url) ?? null,
   );
@@ -6564,6 +6600,7 @@ function MediaPreview({
         style={styles.attachmentImageWrap} testID="message.mediaPreviewButton">
         <PendingAttachmentImage key={localPreview?.uri ?? localUri} layout={layout}
           uri={localUri} sourceUri={localPreview?.uri ?? localUri}
+          usePreviewState={usePreviewState}
           onSize={setIntrinsicSize}
           onError={() => setFailedLocalUris((failed) => failed.includes(localUri) ? failed : [...failed, localUri])} />
       </MessageContentOpenButton>
@@ -7480,12 +7517,10 @@ function DiffPayloadBody({
           {canPreview ? (
             <PayloadActionButton
               accessibilityLabel={t('message.renderer.readCurrentRemoteFile')}
-              disabled={previewState.status === 'loading'}
-              label={previewState.status === 'loading'
-                ? t('message.renderer.reading')
-                : previewState.status === 'unavailable'
-                  ? t('message.renderer.retryFilePreview')
-                  : t('message.renderer.readCurrentFile')}
+              busy={previewState.status === 'loading'}
+              label={previewState.status === 'unavailable'
+                ? t('message.renderer.retryFilePreview')
+                : t('message.renderer.readCurrentFile')}
               layout={layout}
               onPress={openFilePreview}
               testID="message.diffFilePreviewLoadButton"
@@ -7708,14 +7743,14 @@ function FilePayloadBody({
         </Text>
         <PayloadPathActions layout={layout} path={sourcePath}>
           {onResolveRemoteMedia && isDesktopLocalMediaUrl(sourcePath) ? <PayloadActionButton
-            accessibilityLabel={t('files.browser.exportShare')} label={t(exporting ? 'files.browser.exporting' : 'files.browser.exportShare')}
-            layout={layout} disabled={exporting} onPress={() => { void exportFile(); }} testID="message.fileExportButton" /> : null}
+            accessibilityLabel={t('files.browser.exportShare')} label={t('files.browser.exportShare')}
+            layout={layout} busy={exporting} onPress={() => { void exportFile(); }} testID="message.fileExportButton" /> : null}
 
           {canPreview && previewState.status !== 'ready' ? (
             <PayloadActionButton
               accessibilityLabel={t('message.renderer.loadRemoteTextPreview')}
-              disabled={previewState.status === 'loading'}
-              label={previewState.status === 'loading' ? t('message.renderer.loading') : previewState.status === 'unavailable' ? t('message.renderer.retryPreview') : t('message.renderer.loadPreview')}
+              busy={previewState.status === 'loading'}
+              label={previewState.status === 'unavailable' ? t('message.renderer.retryPreview') : t('message.renderer.loadPreview')}
               layout={layout}
               onPress={loadPreview}
               testID="message.filePreviewLoadButton"
@@ -7852,8 +7887,8 @@ function PayloadPathActions({
         {canCopy ? (
           <PayloadActionButton
             accessibilityLabel={t('message.renderer.copyRemoteFilePath')}
-            disabled={copyState === 'copying'}
-            label={copyState === 'copying' ? t('message.renderer.copyStateCopying') : t('message.renderer.copyPath')}
+            busy={copyState === 'copying'}
+            label={t('message.renderer.copyPath')}
             layout={layout}
             onPress={copyPath}
             testID="message.copyFilePathButton"
@@ -7872,6 +7907,7 @@ function PayloadPathActions({
 
 function PayloadActionButton({
   accessibilityLabel,
+  busy = false,
   disabled = false,
   label,
   layout,
@@ -7879,6 +7915,8 @@ function PayloadActionButton({
   testID,
 }: {
   accessibilityLabel?: string;
+  /** 进行中:按钮只转圈、不显示文字(宽高由 minWidth/minHeight 保持不跳)。 */
+  busy?: boolean;
   disabled?: boolean;
   label: string;
   layout: PayloadBodyLayout;
@@ -7886,13 +7924,15 @@ function PayloadActionButton({
   testID?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
+  const interactionDisabled = disabled || busy;
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityRole="button"
-      accessibilityState={{ disabled }}
-      disabled={disabled}
-      onPress={disabled ? undefined : onPress}
+      accessibilityState={{ busy: busy || undefined, disabled: interactionDisabled }}
+      disabled={interactionDisabled}
+      onPress={interactionDisabled ? undefined : onPress}
       style={({ pressed }) => [
         styles.payloadOpenButton,
         {
@@ -7900,11 +7940,15 @@ function PayloadActionButton({
           minWidth: layout.actionButtonMinWidth,
         },
         pressed && styles.pressed,
-        disabled && styles.disabled,
+        disabled && !busy && styles.disabled,
       ]}
       testID={testID}
     >
-      <Text style={styles.payloadOpenButtonText}>{label}</Text>
+      {busy ? (
+        <ActivityIndicator color={colors.textSecondary} size="small" />
+      ) : (
+        <Text style={styles.payloadOpenButtonText}>{label}</Text>
+      )}
     </Pressable>
   );
 }
@@ -8655,11 +8699,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.micro,
     fontWeight: fontWeight.medium,
   },
+  // 分隔点:纯语义三级色,不再叠透明度「做淡」(§3 硬规则 1)。
   agentSwitchDot: {
     color: colors.textTertiary,
     fontSize: typeScale.micro,
     lineHeight: lineHeight.micro,
-    opacity: 0.5,
   },
   agentSwitchModel: {
     color: colors.textSecondary,
@@ -9218,7 +9262,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingVertical: spacing.md,
   },
   payloadHeaderText: { flex: 1, minWidth: 0 },
-  payloadTitle: { color: colors.textPrimary, fontSize: typeScale.title, fontWeight: fontWeight.medium, lineHeight: lineHeight.title },
+  // 面板大标题:§3 20/25 · 600。
+  payloadTitle: { color: colors.textPrimary, fontSize: typeScale.title, fontWeight: fontWeight.semibold, lineHeight: lineHeight.title },
   payloadGalleryCount: {
     color: colors.textSecondary,
     fontSize: typeScale.caption,

@@ -26,6 +26,7 @@ import {
   TRANSPORT_RETRY_PASS_BUDGET,
   encodeReliableFrames,
   makeTransportSkipPayload,
+  isTransportSkipPayload,
   parseTransportAck,
   parseTransportPayload,
 } from '../transport.js';
@@ -123,6 +124,145 @@ function makeHarness(opts?: {
 }
 
 const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe('outbound invoke admission', () => {
+  it('shares 12/4 across ordinary and shared-task destinations while preserving wire scope', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000 } });
+    const calls: Promise<unknown>[] = [];
+    const peers = ['desktop', sharedTaskHostPeer('task-a', 'desktop'), sharedTaskHostPeer('task-b', 'desktop')];
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(1); h.current().ack([SHARED_TASK_RELAY_CAPABILITY]);
+      for (let i = 0; i < 6; i++) calls.push(h.client.invoke(peers[i % 3], {
+        channel: 'git-context:pr-refs:list', args: [i],
+      }).catch(e => e));
+      for (let i = 0; i < 10; i++) calls.push(h.client.invoke(peers[i % 3], {
+        channel: 'maker:send', args: [i],
+      }).catch(e => e));
+      const sent = () => h.current().sent.filter(e => e.kind === 'invoke' && e.dst === 'desktop');
+      expect(sent()).toHaveLength(12);
+      expect(sent().filter(e => (e.payload as { channel: string }).channel === 'git-context:pr-refs:list')).toHaveLength(4);
+      expect(sent().slice(0, 3).map(e => e.sharedTask?.sharedTaskId)).toEqual([undefined, 'task-a', 'task-b']);
+      calls.push(h.client.invoke(sharedTaskHostPeer('task-c', 'other'), { channel: 'maker:send', args: [] }).catch(e => e));
+      expect(h.current().sent.filter(e => e.kind === 'invoke' && e.dst === 'other')).toHaveLength(1);
+      // A normal-stream response releases shared capacity; the next task keeps its scoped route.
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'desktop', id: sent()[4].id,
+        payload: { ok: true, result: null } });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sent()).toHaveLength(13);
+      expect(sent().at(-1)).toMatchObject({ dst: 'desktop', sharedTask: { sharedTaskId: 'task-b', target: { role: 'host' } },
+        payload: { channel: 'maker:send', args: [8] } });
+    } finally {
+      h.client.stop(); await Promise.all(calls); vi.useRealTimers();
+    }
+  });
+
+  it('rechecks a queued write before dispatch and releases its slot when the caller cancels', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000 } });
+    const calls: Promise<unknown>[] = [];
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(1); h.current().ack();
+      for (let i = 0; i < 12; i++) calls.push(h.client.invoke('a', {
+        channel: 'maker:send', args: [i],
+      }).catch(e => e));
+      let current = true;
+      const cancelled = new Error('owner changed while queued');
+      const preSend = vi.fn(() => { if (!current) throw cancelled; });
+      const stale = h.client.invoke('a', { channel: 'maker:send', args: ['stale'] }, undefined, { preSend }).catch(e => e);
+      calls.push(stale);
+      calls.push(h.client.invoke('a', { channel: 'maker:send', args: ['fresh'] }).catch(e => e));
+      const sent = () => h.current().sent.filter(e => e.kind === 'invoke');
+      expect(sent()).toHaveLength(12);
+      expect(preSend).not.toHaveBeenCalled();
+      current = false;
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'a', id: sent()[0].id,
+        payload: { ok: true, result: null } });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await stale).toBe(cancelled);
+      expect(preSend).toHaveBeenCalledTimes(1);
+      expect(sent()).toHaveLength(13);
+      expect(sent().at(-1)?.payload).toMatchObject({ channel: 'maker:send', args: ['fresh'] });
+      expect(sent().some(e => (e.payload as { args: unknown[] }).args[0] === 'stale')).toBe(false);
+    } finally {
+      h.client.stop(); await Promise.all(calls); vi.useRealTimers();
+    }
+  });
+
+  it.each(['maker:send', 'device-link:subscribe'])(
+    'honors the send guard for immediately admitted %s calls', async (channel) => {
+      const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+      try {
+        h.client.start(); await tick(); h.current().ack();
+        const cancelled = new Error('cancelled');
+        await expect(h.client.invoke('a', { channel, args: [] }, undefined, {
+          preSend: () => { throw cancelled; },
+        })).rejects.toBe(cancelled);
+        expect(h.current().sent.filter(e => e.kind === 'invoke')).toHaveLength(0);
+      } finally { h.client.stop(); }
+    },
+  );
+
+  it('sends initial session lists and recovery probes while all background slots are occupied', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000 } });
+    const calls: Promise<unknown>[] = [];
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(1); h.current().ack();
+      for (let i = 0; i < 5; i++) calls.push(h.client.invoke('a', {
+        channel: 'git-context:pr-refs:list', args: [`session-${i}`],
+      }).catch(e => e));
+      const sent = () => h.current().sent.filter(e => e.kind === 'invoke');
+      expect(sent()).toHaveLength(4);
+      for (const args of [[30, 'active'], [1, 'all', { includePinned: false }]]) calls.push(h.client.invoke('a', {
+        channel: 'local-db:sessions:list', args,
+      }, 12_000).catch(e => e));
+      const lists = sent().filter(e => (e.payload as { channel: string }).channel === 'local-db:sessions:list');
+      expect(lists).toHaveLength(2);
+      expect(sent()).toHaveLength(6);
+      for (const request of lists) h.current().push({
+        v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'a', id: request.id,
+        payload: { ok: true, result: [] },
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(Promise.all(calls.slice(5))).resolves.toEqual([
+        { ok: true, result: [] }, { ok: true, result: [] },
+      ]);
+      // Releasing foreground slots must not let the fifth background request exceed its quota.
+      expect(sent()).toHaveLength(6);
+    } finally {
+      h.client.stop(); await Promise.all(calls); vi.useRealTimers();
+    }
+  });
+
+  it('batches PR refreshes, admits interactive work and keeps control traffic and other peers moving', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000 } });
+    const calls: Promise<unknown>[] = [];
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(1); h.current().ack();
+      for (let i = 0; i < 30; i++) calls.push(h.client.invoke('a', {
+        channel: 'git-context:pr-refs:list', args: [`session-${i}`],
+      }).catch(e => e));
+      for (let i = 0; i < 10; i++) calls.push(h.client.invoke('a', {
+        channel: 'local-db:task-tags:execute', args: [{ action: 'get', sessionIds: [`session-${i}`] }],
+      }).catch(e => e));
+      const sent = () => h.current().sent.filter(e => e.kind === 'invoke');
+      expect(sent()).toHaveLength(12);
+      expect(sent().filter(e => (e.payload as { channel: string }).channel === 'git-context:pr-refs:list')).toHaveLength(4);
+      calls.push(h.client.invoke('a', { channel: 'device-link:subscribe', args: [] }).catch(e => e));
+      calls.push(h.client.invoke('b', { channel: 'local-db:task-tags:execute', args: [] }).catch(e => e));
+      expect(sent()).toHaveLength(14);
+      const first = sent()[0];
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'a', id: first.id, payload: { ok: true, result: [] } });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sent()).toHaveLength(15);
+      expect(sent().at(-1)?.payload).toMatchObject({ channel: 'local-db:task-tags:execute' });
+    } finally {
+      h.client.stop(); await Promise.all(calls); vi.useRealTimers();
+    }
+  });
+});
 
 describe('verified outbound stream notification', () => {
   it('notifies before business delivery and keeps two peers independent across restart', async () => {
@@ -1446,6 +1586,47 @@ describe('DeviceLinkClient', () => {
       await result;
       expect(debug).toHaveBeenCalledWith(expect.stringContaining('firstWriteWaitMs=0 afterFirstWriteMs=1500'));
     } finally { h.client.stop(); clock.mockRestore(); wall.mockRestore(); }
+  });
+
+  it.each([
+    [1, 60_000, 0], [8, 60_000, 0],
+    [1, 0, 60_000], [8, 0, 60_000],
+    [1, 60_000, -60_000], [8, 60_000, -60_000],
+  ])('expires a suspended request before replay with retry limit %i (monotonic %i ms, wall %i ms) without resetting another peer', async (transportMaxRetryAttempts, monotonicAdvance, wallAdvance) => {
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 30_000, transportMaxRetryAttempts } });
+    let now = 100;
+    const clock = vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => now);
+    let wallNow = Date.now();
+    const wallClock = vi.spyOn(Date, 'now').mockImplementation(() => wallNow);
+    try {
+      h.client.start(); await tick(); h.current().ack();
+      await establishInboundReliableLink(h, 'suspended-stream');
+      await establishInboundReliableLink(h, 'healthy-stream', 1, 'dev-c');
+      const result = h.client.invoke('dev-b', { channel: 'device-link:unsubscribe', args: ['sessions'] });
+      const outcome = result.catch((error: DeviceLinkError) => error.code);
+      const request = h.current().sent.filter(e => e.kind === 'invoke' && e.dst === 'dev-b').at(-1)!;
+      const healthy = h.client.invoke('dev-c', { channel: 'local-db:sessions:list', args: [] }, 120_000)
+        .catch((error: unknown) => error);
+      const healthyRequest = h.current().sent.filter(e => e.kind === 'invoke' && e.dst === 'dev-c').at(-1)!;
+      const reset = vi.fn();
+      h.client.onPeerTransportReset(reset);
+      const before = h.current().sent.length;
+      // Model suspension without firing any timeout callback. Link recovery wins the callback race.
+      now += monotonicAdvance;
+      wallNow += wallAdvance;
+      await establishInboundReliableLink(h, 'resumed-stream');
+      const replay = h.current().sent.slice(before).filter(e => e.id === request.id);
+      expect(replay.length).toBeGreaterThan(0);
+      expect(replay.every(e => isTransportSkipPayload(JSON.parse(parseTransportPayload(e.payload)!.data)))).toBe(true);
+      expect(await outcome).toBe('INVOKE_TIMEOUT');
+      encodeReliableFrames({ v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'dev-c', id: healthyRequest.id,
+        payload: { ok: true, result: ['healthy'] },
+      }, 'healthy-stream', 1).forEach(frame => h.current().push(frame));
+      await expect(healthy).resolves.toMatchObject({ result: ['healthy'] });
+      expect(reset).not.toHaveBeenCalled();
+      expect(h.sockets).toHaveLength(1);
+      expect(h.current().closed).toBeNull();
+    } finally { h.client.stop(); clock.mockRestore(); wallClock.mockRestore(); }
   });
 
   it('bounds recovery stage logs, measures with monotonic time and records a fresh outbound handshake', async () => {
@@ -7005,7 +7186,11 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
 
   it('admits an atomic maximum-size reply after draining without pacing a fast empty socket', async () => {
     vi.useFakeTimers();
-    const h = makeHarness({ timing: { pingIntervalMs: 600_000 } });
+    const debug = vi.fn();
+    const h = makeHarness({ timing: { pingIntervalMs: 600_000 },
+      logger: { debug, info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
+    let now = 100;
+    const clock = vi.spyOn(h.client as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => now);
     try {
       h.client.start();
       await vi.advanceTimersByTimeAsync(0);
@@ -7019,11 +7204,13 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
       h.client.sendInvokeResult('a', 'max-reply', { ok: true, result: 'x'.repeat(4 * 1024 * 1024 - 1024) });
       expect(socket.sent).toHaveLength(0);
       socket.bufferedAmount = 0;
+      now += 300;
       await vi.advanceTimersByTimeAsync(250);
       const large = socket.sent.filter((env) => env.id === 'max-reply');
       expect(large.length).toBeGreaterThan(1);
       const last = parseTransportPayload(large.at(-1)!.payload)!;
       expect(large.length).toBe(last.meta.segment!.total);
+      expect(debug).toHaveBeenCalledWith(expect.stringContaining('lastBlockedBy=socket socketBufferedBytes=0'));
       socket.push({ v: 1, kind: 'push', src: 'a', payload: {
         channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
         payload: { streamId: last.meta.streamId, ackSeq: last.meta.seq },
@@ -7035,7 +7222,7 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
       for (let i = 0; i < 10; i++) h.client.sendInvokeResult('a', `fast-${i}`, { ok: true, result: 'ok' });
       expect(socket.sent.length - before).toBe(10);
       expect(socket.closed).toBeNull();
-    } finally { h.client.stop(); vi.useRealTimers(); }
+    } finally { h.client.stop(); clock.mockRestore(); vi.useRealTimers(); }
   });
 
   it('paces all reliable sends after 1013 without starving another peer or control ACKs', async () => {
@@ -9154,8 +9341,9 @@ describe('confirmed duplicate-open gap repair', () => {
         await pump(); await p;
       };
       await open(phone); await open(healthy);
-      for (let i = 0; i < 10; i++) relay.dropNext((sender, env) => sender === 'desktop' && env.dst === 'phone' && env.kind === 'invoke-result');
-      const old = Promise.all(Array.from({ length: 10 }, () => phone.invoke('desktop', { channel: 'maker:provider:list', args: [] }, 60000).catch(e => e)));
+      // Twelve requests are sent; two remain locally queued and must be cancelled on reconnect.
+      for (let i = 0; i < 12; i++) relay.dropNext((sender, env) => sender === 'desktop' && env.dst === 'phone' && env.kind === 'invoke-result');
+      const old = Promise.all(Array.from({ length: 14 }, () => phone.invoke('desktop', { channel: 'maker:provider:list', args: [] }, 60000).catch(e => e)));
       await pump(); await vi.advanceTimersByTimeAsync(1000);
       phone.restartConnection('phone-only-reconnect');
       await vi.advanceTimersByTimeAsync(1); await pump(); await open(phone);
@@ -9167,7 +9355,12 @@ describe('confirmed duplicate-open gap repair', () => {
       expect(host.isLinkReady('healthy')).toBe(true);
       expect(sockets.mock.calls.filter(x => x[0] === 'desktop')).toHaveLength(1);
       expect(sockets.mock.calls.filter(x => x[0] === 'healthy')).toHaveLength(1);
-      expect(await old).toEqual(Array.from({ length: 10 }, () => ({ ok: true, result: 'x'.repeat(100000) })));
+      const oldResults = await old;
+      expect(oldResults.slice(0, 12)).toEqual(Array.from({ length: 12 }, () => ({ ok: true, result: 'x'.repeat(100000) })));
+      for (const result of oldResults.slice(12)) {
+        expect(result).toMatchObject({ code: 'NOT_CONNECTED' });
+        expect(result.inFlight).not.toBe(true);
+      }
     } finally { off(); for (const c of [host, phone, healthy]) c.stop(); sockets.mockRestore(); vi.useRealTimers(); }
   });
 

@@ -29,7 +29,7 @@
     "openMicPermission": "マイクの権限設定を開く",
     "maxAttachments": "添付は最大 {{max}} 件までです。",
     "voiceStopRecording": "録音を停止",
-    "capabilitiesUnsupported": "リモート機能の形式に対応していません"
+    "capabilitiesUnsupported": "パソコンからコマンドとリソースの一覧を読み込めませんでした。パソコンの Cindy を更新してから再試行してください"
   },
   "presentation": {
     "collaboration": {
@@ -207,7 +207,7 @@
     "shareUnsupported": "このバージョンはまだ共有に対応していません。最新版に更新してから再試行してください。",
     "downloadFailed": "ダウンロードに失敗しました",
     "voiceNoRemoteDevice": "リモートデバイスがないため、音声入力を開始できません。",
-    "voiceSenderNotReady": "メッセージ送信機能が初期化されていません。",
+    "voiceSenderNotReady": "メッセージを送信できません。一度戻ってから、セッションを開き直してください。",
     "voiceStopAndSend": "音声入力を終了して送信",
     "sendMessage": "リモートメッセージを送信",
     "voiceStartInput": "音声入力を開始",
@@ -327,7 +327,7 @@
     "selectDir": "ディレクトリ {{name}} を選択",
     "select": "選択",
     "noModelSelected": "モデル未選択",
-    "assignedDialogueDir": "パソコンが割り当てた会話ディレクトリ",
+    "assignedDialogueDir": "パソコンが自動で割り当てる作業ディレクトリ",
     "extraDirsSuffix": "+{{num}} 追加ディレクトリ",
     "noProjectPath": "プロジェクトパス未選択",
     "dialogueWorkspace": "会話ワークスペース",
@@ -358,7 +358,7 @@
     "worktreeNotGitRepo": "現在のディレクトリは git リポジトリではありません",
     "worktreeAlreadyInWorktree": "すでに worktree 内です。ネストは禁止です",
     "worktreeDetectFailed": "ディレクトリ環境を確認できません。後でディレクトリを選び直してもう一度お試しください",
-    "worktreeUnsupported": "このデスクトップでは worktree を安全に作成できません。続行するには worktree をオフにするか、デスクトップアプリを更新してください。",
+    "worktreeUnsupported": "パソコンの Cindy では worktree を安全に作成できません。続行するには worktree をオフにするか、パソコンの Cindy を更新してください。",
     "worktreeCreateFailed": "worktree の作成に失敗しました：{{message}}",
     "worktreeRecoveryStateFailed": "worktree の復旧状態を保存できませんでした。もう一度お試しください。",
     "worktreeCleanupPending": "前回の worktree はまだクリーンアップ待ちです。デバイスを再接続してから再試行してください。"
@@ -449,7 +449,6 @@
     "contextLabel": "コンテキスト",
     "accountLimits": "アカウントの上限",
     "quotaExhaustedResettable": "現在のクォータを使い切りました。リセットするとすぐに 1 回消費され、取り消せません。",
-    "resetting": "リセット中…",
     "resetCodexUsage": "Codex の使用量をリセット",
     "quotaExhaustedNoCredit": "現在のクォータを使い切りましたが、利用できるリセット回数がありません。",
     "openDir": "ディレクトリを開く",
@@ -467,7 +466,8 @@
     "noSubDirs": "このディレクトリには開けるサブディレクトリがありません。",
     "dirLimitNotice": "最初の 30 件のディレクトリのみ表示しています。より具体的なディレクトリを開いて選択を続けてください。",
     "confirmRename": "名前の変更を確定",
-    "confirm": "確定",
+    "renameSubmit": "名前を変更",
+    "confirm": "名前を変更",
     "cancelRename": "名前の変更をキャンセル",
     "backToMenu": "セッションメニューに戻る"
   },
@@ -493,8 +493,8 @@
     "toolUseLoopDetectedConsecutiveWithCount": "モデルが同じツール呼び出しを {{count}} 回繰り返したため、無限ループを防ぐためこのターンを停止しました。新しいメッセージを送信して続行できます。",
     "toolUseLoopDetectedPingPongWithCount": "モデルがツール呼び出しの間を行き来するループを続けたため、このターンで {{count}} 回の呼び出しを検出した時点で停止しました。新しいメッセージを送信して続行できます。",
     "toolUseLoopDetectedRotationWithCount": "モデルが複数のツール呼び出しを順番に繰り返したため、このターンで {{count}} 回の呼び出しを検出した時点で停止しました。新しいメッセージを送信して続行できます。",
-    "codexThreadLost": "Codex の認証モードが切り替わったため、このセッションは続行できません —— 新しいセッションを作成すると反映されます。",
-    "encryptedContentInvalid": "プロバイダーの変更により暗号化が利用できなくなったため、このセッションは元のプロバイダーでのみ使用できます。パソコン側で対応してください（Fork してプロトコルの暗号化コンテンツを破棄すれば、新しいセッションで続行できます）。"
+    "codexThreadLost": "Codex の認証モードが切り替わったため、このセッションは続行できません。新しいセッションを作成してください。",
+    "encryptedContentInvalid": "プロバイダーの変更により暗号化が利用できなくなったため、このセッションは元のプロバイダーでのみ使用できます。パソコン側で対応してください（「ここから新しいセッションを始める」でプロトコルの暗号化コンテンツを破棄すれば、新しいセッションで続行できます）。"
   },
   "row": {
     "moreOptions": "その他のオプション",
@@ -511,6 +511,8 @@
     "authGateHint": "{{agent}} はこのパソコンに接続済みのモデルプロバイダーがないため、送信は失敗します。パソコンの {{appName}} で「設定 → モデルプロバイダー」を設定してください。"
   },
   "outbox": {
+    "deleteConfirmTitle": "このメッセージを削除しますか？",
+    "deleteConfirmBody": "このメッセージは送信されていません。削除すると元に戻せません。",
     "legacyPlanRecovery": "このパソコンではプランモードで保存済みメッセージを復元できません。プランモードをオフにするか、パソコンの Cindy を更新して再試行してください。",
     "creationRecoveryRequired": "先頭のメッセージを削除する前に、セッションの作成を再試行してください。このメッセージには後続メッセージの復元に必要な情報が保存されています。",
     "confirmationRequired": "このコンピューターではメッセージの受信を確認できません。履歴を確認するか、Cindy を更新してから再試行してください。",
@@ -522,15 +524,16 @@
   "remoteError": {
     "REMOTE_DAEMON_CLOSED": "リモート接続が切れました。更新中の可能性があります。このターンは終了したので、もう一度送信してください。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "リモートセッションではローカルのファイル/画像の添付にアクセスできません。内容を直接貼り付けてください。",
-    "AUTO_REVIEW_UNAVAILABLE": "自動レビューが判断できませんでした。レビューが必要な操作は、ご自身で確認する形に切り替わりました。中断を減らしたい場合は、このタスクを「フルアクセス」に切り替えてください。リスクはより高くなります。",
-    "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自動レビューが判断できませんでした。レビューが必要な操作は、ご自身で確認する形に切り替わりました。個人 WeChat ではフルアクセスを使えません。この操作を直接確認してください。",
-    "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自動レビューを完了できず、確認も完了しませんでした。これはユーザーによる拒否ではありません。",
+    "AUTO_REVIEW_UNAVAILABLE": "自動承認が判断できませんでした。承認が必要な操作は、ご自身で確認する形に切り替わりました。中断を減らしたい場合は、このセッションを「フルアクセス」に切り替えてください。リスクはより高くなります。",
+    "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自動承認が判断できませんでした。承認が必要な操作は、ご自身で確認する形に切り替わりました。個人 WeChat ではフルアクセスを使えません。この操作を直接確認してください。",
+    "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自動承認を完了できず、確認も完了しませんでした。これはユーザーによる拒否ではありません。",
     "REMOTE_COMPAT_MODE_UNSUPPORTED": "リモートのタスクでは、このパソコン側の互換経路を使えません。Cindy AI に切り替えるか、このパソコン上のタスクで続けてください。",
-    "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません(サインイン後に自動発行されます)。しばらくしてから再試行してください。続く場合は 設定 → モデルプロバイダー で Cindy AI の接続状態を確認してください。",
+    "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません（サインイン後に自動発行されます）。しばらくしてから再試行してください。続く場合は「設定 → モデルプロバイダー」で Cindy AI の接続状態を確認してください。",
     "REMOTE_LOCAL_ONLY_PROVIDER": "このモデルプロバイダーはローカル専用サービス（Ollama など）で、SSH リモートタスクからはアクセスできません。Cindy AI ゲートウェイに切り替えるか、リモートホストから到達可能なプロバイダーを選んでください。",
     "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
+    "DEVICE_LINK_BUSY": "接続先のコンピュータが混み合っています。しばらくしてから再試行してください。",
     "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。",
-    "MCP_APPROVAL_AUTO_BLOCKED": "このツール呼び出しは自動審査でブロックされました。手動で拒否された記録はありません。",
+    "MCP_APPROVAL_AUTO_BLOCKED": "このツール呼び出しは自動承認でブロックされました。手動で拒否された記録はありません。",
     "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "権限の確認がタイムアウトし、有効な確認結果を受信できませんでした。タイムアウトだけでは、ボタンをクリックしたかどうかは判断できません。",
     "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "権限の確認を完了できませんでした。手動で拒否された記録はありません。",
     "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "このモデルはパソコン側でのリクエスト転送が必要ですが、今のリモート接続では転送できません。Cindy AI に切り替えるか、このパソコン上のタスクで使ってください。",
@@ -570,7 +573,6 @@
     "workerCountSummary_other": "Worker {{count}} 件 · 実行中 {{running}}",
     "loading": "Worker を読み込み中…",
     "noWorkers": "Worker はまだありません",
-    "focused": "フォーカス",
     "manageGroup": "管理",
     "hardLimitHint": "上限 {{limit}} 件に達しました · Worker をアーカイブすると作成できます",
     "softLimitHint": "目安の {{limit}} 件を超えています · Worker が多いとメモリ使用量が増えます",

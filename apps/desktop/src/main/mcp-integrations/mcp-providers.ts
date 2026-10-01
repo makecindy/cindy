@@ -1,6 +1,6 @@
 import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
-import { classifyHelperSurface } from './helperSurface.js';
+import { resolveHelperSurface } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { listProjects, renameProject, removeProject } from './projectManagement.js';
@@ -52,6 +52,7 @@ import {
   tryGetBotDirectMessageService,
   tryGetOrcaCollabService,
   isSessionInTurn,
+  getSessionInputProvenance,
 } from '../maker-ipc/register.js';
 import { createBotProfile } from '../localDb/ipc/bots.js';
 import { submitGithubIssueForSession } from '../github-issue/index.js';
@@ -90,6 +91,7 @@ import {
 } from './remoteChatHistory.js';
 import { botSessionLinks, sessions } from '../localDb/schema.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
+import { botLearningTracker } from '../maker-ipc/botLearningTracker.js';
 import { getLearnController } from '../learn-host/index.js';
 import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
@@ -164,6 +166,21 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       }
     };
   }
+
+  const withAccountDataAccess = async <T>(sessionId: string | undefined, operation: (assertCurrent: () => Promise<void>) => Promise<T>): Promise<T> => {
+    const dbClient = tryGetDbClient();
+    if (!dbClient || !sessionId) throw new Error('Account data caller unavailable');
+    const assertAccess = async () => {
+      if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) throw new Error('Account changed');
+      if (await resolveHelperSurface(dbClient, sessionId, getSessionInputProvenance) === 'restricted')
+        throw new Error('Account data is unavailable for plugin-managed tasks');
+      if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) throw new Error('Account changed');
+    };
+    await assertAccess();
+    const result = await operation(assertAccess);
+    await assertAccess();
+    return result;
+  };
 
   const providers = createLiziMcpProviders({
     // 先传完整内置列表；按会话启停由下面的 isEnabled 包装处理。
@@ -280,10 +297,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // 注册表取用(静态 import ipc.ts 会与 maker-host 闭环, 见 slackToolBridge
     // 模块头); 未注册 = null, provider isEnabled fail-closed。
     slackHook: {
+      withAccountDataAccess,
       getBridge: () => getSlackToolBridge(),
       logger: createLogger('mcp/cindy_slack'),
     },
     scheduler: {
+      withAccountDataAccess,
       getScheduler: () => getScheduler(),
       // 前置检查脚本统一安装服务:落盘路径/协议/自测与 UI「AI 生成」共用同一实现
       // (hook-script-generator)。lazy import:该链上有 electron app 依赖,且 maker
@@ -349,13 +368,36 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       logger: createLogger('mcp/cindy_ssh'),
     },
     memory: {
+      withAccountDataAccess,
       getManager: deps.getMakerMemoryManager,
-      searchSessions: searchSessionsFn,
+      beginWrite: (context) => {
+        const saved = botLearningTracker.capture(context?.memoryScopeKey?.startsWith('bot:') ? context.sessionId ?? '' : '');
+        return receipt => saved({ ...receipt, kind: 'memory' });
+      },
+      searchSessions: async (query, opts = {}) => {
+        const dbClient = tryGetDbClient();
+        if (!dbClient || isAppSessionBoundaryPending() || !opts.callerSessionId)
+          throw new Error('Task history caller unavailable');
+        // session_search bypasses cindy_helper, so share its ownership predicate.
+        if (await resolveHelperSurface(dbClient, opts.callerSessionId, getSessionInputProvenance) === 'restricted')
+          throw new Error('Task history search is unavailable for plugin-managed tasks');
+        if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient())
+          throw new Error('Task history caller unavailable');
+        const hits = await searchSessionsFn(query, opts);
+        if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient())
+          throw new Error('Task history caller unavailable');
+        if (await resolveHelperSurface(dbClient, opts.callerSessionId, getSessionInputProvenance) === 'restricted')
+          throw new Error('Task history search is unavailable for plugin-managed tasks');
+        if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient())
+          throw new Error('Task history caller unavailable');
+        return hits;
+      },
       logger: createLogger('mcp/cindy_memory'),
     },
     // 智能通讯录: 全局单库 manager 懒加载单例; 开关现读 settings store —
     // 每次 session start 时 provider isEnabled 评估, 关着时 server 整个不注册。
     contacts: {
+      withAccountDataAccess,
       getManager: getDesktopContactsManager,
       isEnabled: () => readContactsSettings().enabled,
       // 系统通讯录读取仅 macOS 注入(JXA); 缺省时 contacts_import_system 工具不注册。
@@ -509,14 +551,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       },
       resolveSurface: async ({ sessionId }) => {
         const dbClient = tryGetDbClient();
-        if (!dbClient) return 'restricted';
-        const [row] = await dbClient.drizzle
-          .select({ source: sessions.source, botId: botSessionLinks.botId })
-          .from(sessions)
-          .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
-          .where(eq(sessions.id, sessionId))
-          .limit(1);
-        return classifyHelperSurface(row?.source, Boolean(row?.botId));
+        if (!dbClient || isAppSessionBoundaryPending()) return 'restricted';
+        const surface = await resolveHelperSurface(dbClient, sessionId, getSessionInputProvenance);
+        if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) return 'restricted';
+        return surface;
       },
       sessionQueue: {
         listSessionQueue: wrap((service, sessionId: string) => service.listSessionQueue(sessionId)),
@@ -800,7 +838,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
       botCapabilities: deps.botCapabilities,
       botSkills: {
-        save: (params) => saveBotSkillForSession(params),
+        save: async (params) => {
+          const saved = botLearningTracker.capture(params.callerSessionId);
+          const result = await saveBotSkillForSession(params);
+          if (result.ok) saved({ kind: 'skill', key: result.skill.slug, title: result.skill.name,
+            action: result.created ? 'created' : 'updated' });
+          return result;
+        },
         list: (params) => listBotSkillsForSession(params),
       },
       skillhub: createSkillhubAgentTools({

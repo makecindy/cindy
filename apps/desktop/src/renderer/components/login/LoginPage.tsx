@@ -374,7 +374,7 @@ export function LoginPage({
   const [ssoVerificationCode, setSsoVerificationCode] = useState('');
   const [bindingContact, setBindingContact] = useState('');
   const [bindingCode, setBindingCode] = useState('');
-  // 42s 重发倒计时(Step 3a):起算=request-code 成功返回,离开验证码步清理
+  // 60s 重发倒计时(Step 3a):起算=request-code 成功返回,离开验证码步清理
   const { remaining: resendRemaining, arm: armResendCountdown } = useResendCountdown(
     loginState?.step === 'verification-code',
   );
@@ -457,7 +457,7 @@ export function LoginPage({
     setIdentifierFormatError(null);
   }, [loginState?.step]);
 
-  // 进入 verification-code 即起算 42s(含 AuthContext 自动发码、手机号提交)。
+  // 进入 verification-code 即起算 60s(含 AuthContext 自动发码、手机号提交)。
   // 只认运行中的 step 沿,不认首帧注入(harness 直接挂验证码页仍保持可点重发)。
   // 已在验证码页的重发成功仍走 dispatchRequestCode 的 arm。
   const previousLoginStepRef = useRef(loginState?.step);
@@ -974,7 +974,7 @@ export function LoginPage({
     );
   };
 
-  /* ── verification-code(42s 重发倒计时 = 绝对 deadline 模型,双端同契约) ── */
+  /* ── verification-code(60s 重发倒计时 = 绝对 deadline 模型,双端同契约) ── */
   const renderVerification = () => {
     if (loginState?.step !== 'verification-code') return null;
     const submit = (event: FormEvent) => {

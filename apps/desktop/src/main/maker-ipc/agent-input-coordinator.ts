@@ -1,6 +1,7 @@
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
+import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 /**
  * AgentInputCoordinator — main 侧排队输入事务协调器。
  *
@@ -585,6 +586,8 @@ export interface AgentInputCoordinatorDeps {
 interface ActiveTurn {
   /** Retained after steering receipt cleanup until this turn ends. */
   latestSteeringClientId?: string;
+  /** Display provenance only; never changes input scheduling or execution. */
+  replyInputClientIds?: string[];
   item: AgentInputQueuedMessage | null;
   delivery: AgentInputDelivery;
   messageUuid: string;
@@ -1096,6 +1099,29 @@ export class AgentInputCoordinator {
       && vendorGeneration !== active.vendorTurnGeneration) return null;
     // A human steering a private reply takes ownership of the resulting output.
     return active.latestSteeringClientId ?? active.item?.clientId ?? null;
+  }
+
+  /** Authority follows the active input, never pending steering or cumulative reply attribution. */
+  getAcceptedInputProvenance(sessionId: string): {
+    clientId: string; autoResume?: boolean; retrySourceClientId?: string; authoredText?: string; originKind?: string;
+  } | null {
+    const active = this.states.get(sessionId)?.activeTurn;
+    const item = active?.item;
+    // Native tools may arrive before sendToAgent returns its dispatch acknowledgement.
+    if (!item) return null;
+    return { clientId: item.clientId, autoResume: item.autoResume, authoredText: item.autoReviewUserText,
+      originKind: item.origin?.kind,
+      retrySourceClientId: item.retrySourceClientId ?? item.supersedesUserClientId };
+  }
+
+  /** Inputs consumed by this native turn, excluding queued work and stale generations. */
+  getActiveInputClientIds(sessionId: string, vendorGeneration?: number): string[] {
+    const active = this.states.get(sessionId)?.activeTurn;
+    if (!active || (vendorGeneration !== undefined && active.vendorTurnGeneration !== null
+      && vendorGeneration !== active.vendorTurnGeneration)) return [];
+    const item = active.item;
+    return [...new Set([...(active.replyInputClientIds ?? []),
+      item?.clientId, item?.retrySourceClientId, item?.supersedesUserClientId].filter((id): id is string => !!id))];
   }
 
   getProjection(sessionId: string): AgentInputProjection {
@@ -2432,6 +2458,9 @@ export class AgentInputCoordinator {
       steerVendorTurnGeneration !== null &&
       this.deps.getTurnGeneration?.(sessionId) === steerVendorTurnGeneration;
     accepted.activeTurn = {
+      // Only accepted steering participates. Pending/rejected delivery cannot claim an unrelated final.
+      replyInputClientIds: sameVendorTurn
+        ? this.getActiveInputClientIds(sessionId, steerVendorTurnGeneration ?? undefined) : undefined,
       item,
       delivery: 'steer',
       messageUuid,
@@ -4697,6 +4726,18 @@ export class AgentInputCoordinator {
         return;
       }
       if (!active.persisted) {
+        if (head.origin?.kind === 'scheduler' && err instanceof SchedulerQueuedPreparationError) {
+          // The scheduler already settled this run as failed. Do not restore its
+          // prompt without the one-shot route/window preparation it required.
+          latest.activeTurn = null;
+          this.clearCredentialSwitchWait(latest);
+          this.notifyRejectedUserTurn(sessionId, head);
+          this.deps.onDiscardedQueuedMessage?.(sessionId, head);
+          this.emit(sessionId);
+          this.scheduleDrain(sessionId, 'scheduler-preparation-failed');
+          this.deps.onQueueEmptied?.(sessionId);
+          return;
+        }
         if (isSessionRunningError(err)) {
           this.deferQueueHeadAfterSessionRunning(
             sessionId,

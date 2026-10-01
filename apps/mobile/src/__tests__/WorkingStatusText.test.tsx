@@ -13,6 +13,7 @@ vi.mock('react-native', () => {
     value: number;
     constructor(value: number) { this.value = value; }
     setValue(value: number) { this.value = value; h.opacity.push(value); }
+    interpolate() { return this; }
     stopAnimation() {
       // Native stop reports an unfinished animation to its completion callback.
       for (const fade of h.fades.splice(0)) fade.finish(false);

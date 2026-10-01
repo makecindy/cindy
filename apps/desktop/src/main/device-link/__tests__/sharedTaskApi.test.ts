@@ -50,6 +50,15 @@ describe('sharedTask Main HTTP adapter', () => {
       });
       await expect(sharedTaskApi.create('session', 'Task')).rejects.toThrow('[' + code + '] Shared task limit reached');
     });
+  it('preserves the self-join code through redaction and Electron serialization', async () => {
+    http.mockImplementation(async (_path, options) => {
+      expect(options.allowedRedactedErrorCodes).toContain('SHARED_TASK_SELF_JOIN');
+      throw Object.assign(new Error('private invitation details'), { code: 'SHARED_TASK_SELF_JOIN' });
+    });
+    await expect(sharedTaskApi.join('x'.repeat(43), 'Owner')).rejects.toThrow(
+      '[SHARED_TASK_SELF_JOIN] Shared task request rejected',
+    );
+  });
   it('closes across a pending logout with fixed old credentials and no auth side effects', async () => {
     state.boundary = true;
     const close = captureSharedTaskBoundaryClose('owner', 'global')!;

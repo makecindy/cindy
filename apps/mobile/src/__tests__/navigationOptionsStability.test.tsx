@@ -53,4 +53,15 @@ describe('navigation option stability', () => {
     );
     expect(seenScreenOptions.at(-1)).not.toBe(initialOptions);
   });
+
+  it('keeps the login screen status-bar options memoized by its only visual input', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { resolve } = await import('node:path');
+    const source = await readFile(resolve(process.cwd(), 'app/(auth)/login.tsx'), 'utf8');
+
+    expect(source).toContain("const loginStatusBarOptions = useMemo(() => ({");
+    expect(source).toContain("statusBarStyle: stageTheme === 'dark' ? 'light' : 'dark',");
+    expect(source).toContain("} as const), [stageTheme]);");
+    expect(source).toContain('<Stack.Screen options={loginStatusBarOptions} />');
+  });
 });

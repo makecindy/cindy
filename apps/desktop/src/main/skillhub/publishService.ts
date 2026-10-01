@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { net } from 'electron';
 import { ServerApiError } from '../serverApiClient';
+import { publishErrorDetail, serverPublishErrorCode, type SkillhubPublishErrorCode } from '../../shared/skillhubPublishErrors';
 import { skillhubApiFetch } from './hubApi';
 import { computeFolderHash } from './folderHash';
 import { writeSnapshot } from './snapshot';
@@ -51,24 +52,7 @@ export interface PublishParams {
   changelog?: string;
 }
 
-export type PublishErrorCode =
-  | 'NAME_TAKEN'
-  | 'INVALID_DEPT'
-  | 'INVALID_NAME'
-  | 'VERSION_RACE'
-  | 'CHECKSUM_MISMATCH'
-  | 'NOT_AUTHOR'
-  | 'PACK_FAILED'
-  | 'OSS_PUT_FAILED'
-  | 'OSS_PUT_EXPIRED'
-  | 'OSS_OBJECT_NOT_FOUND'
-  | 'API_KEY_MISSING'
-  | 'CATEGORY_REQUIRED'
-  | 'MANIFEST_INVALID'
-  | 'CANCELLED'
-  | 'SKILL_HUB_READ_ONLY'
-  | 'INVALID_VISIBILITY'
-  | 'INTERNAL';
+export type PublishErrorCode = SkillhubPublishErrorCode;
 
 export type PublishProgressEvent =
   | { phase: 'packing' }
@@ -133,21 +117,14 @@ async function updateSkillMdVersion(absolutePath: string, version: string): Prom
 // ── errorCode 映射 ────────────────────────────────────────────────────────────
 
 function serverErrorToCode(err: unknown): PublishErrorCode {
-  if (err instanceof ServerApiError) {
-    const code = err.code;
-    if (code === 'NAME_TAKEN') return 'NAME_TAKEN';
-    if (code === 'INVALID_DEPT') return 'INVALID_DEPT';
-    if (code === 'INVALID_NAME') return 'INVALID_NAME';
-    if (code === 'VERSION_RACE') return 'VERSION_RACE';
-    if (code === 'CHECKSUM_MISMATCH') return 'CHECKSUM_MISMATCH';
-    if (code === 'NOT_AUTHOR') return 'NOT_AUTHOR';
-    if (code === 'INVALID_VISIBILITY') return 'INVALID_VISIBILITY';
-    if (code === 'OSS_OBJECT_NOT_FOUND') return 'OSS_OBJECT_NOT_FOUND';
-    if (err.message.includes('manifest') || err.message.includes('frontmatter'))
-      return 'MANIFEST_INVALID';
-    return 'INTERNAL';
-  }
-  return 'INTERNAL';
+  return err instanceof ServerApiError
+    ? serverPublishErrorCode(err.code, err.message, err.statusCode)
+    : 'INTERNAL';
+}
+
+function publicServerErrorMessage(err: unknown, code: PublishErrorCode): string {
+  if (!(err instanceof ServerApiError) || /^HTTP_\d+$/.test(err.code)) return '';
+  return publishErrorDetail(code, err.message);
 }
 
 function unhandledPublishErrorToCode(err: unknown): PublishErrorCode {
@@ -267,11 +244,11 @@ export class SkillPublishService {
         {
           phase: 'failed',
           name: params.name,
-          errorCode: 'CANCELLED',
-          message: 'SkillHub publish requires sign-in',
+          errorCode: 'AUTH_REQUIRED',
+          message: '请登录后再发布 Skill',
         },
       );
-      return { success: false, errorCode: 'CANCELLED' };
+      return { success: false, errorCode: 'AUTH_REQUIRED' };
     }
     if (
       params.isFirstPublish
@@ -283,9 +260,8 @@ export class SkillPublishService {
           phase: 'failed',
           name: params.name,
           errorCode: 'INVALID_VISIBILITY',
-          message: identityPolicy.ownerType === 'organization'
-            ? 'Organization skills only support public or organization visibility'
-            : 'Personal skills only support public or private visibility',
+          // Local policy rejection uses the renderer's localized recovery copy.
+          message: '',
         },
       );
       return { success: false, errorCode: 'INVALID_VISIBILITY' };
@@ -307,11 +283,11 @@ export class SkillPublishService {
         {
           phase: 'failed',
           name: params.name,
-          errorCode: 'INTERNAL',
-          message: '已有发布任务进行中',
+          errorCode: 'PUBLISH_BUSY',
+          message: '已有发布任务进行中，请等待当前发布结束后重试',
         },
       );
-      return { success: false, errorCode: 'INTERNAL' };
+      return { success: false, errorCode: 'PUBLISH_BUSY' };
     }
 
     const abortController = new AbortController();
@@ -427,15 +403,16 @@ export class SkillPublishService {
               return { success: false, errorCode: 'CANCELLED' };
             }
             const code = serverErrorToCode(err);
+            const message = publicServerErrorMessage(err, code);
             emitProgress(
               {
                 phase: 'failed',
                 name: params.name,
                 errorCode: code,
-                message: err instanceof Error ? err.message : String(err),
+                message,
               },
             );
-            return { success: false, errorCode: code };
+            return { success: false, errorCode: code, error: message };
           }
         }
 
@@ -627,15 +604,16 @@ export class SkillPublishService {
             }
           }
           const code = serverErrorToCode(err);
+          const message = publicServerErrorMessage(err, code);
           emitProgress(
             {
               phase: 'failed',
               name: params.name,
               errorCode: code,
-              message: err instanceof Error ? err.message : String(err),
+              message,
             },
           );
-          return { success: false, errorCode: code };
+          return { success: false, errorCode: code, error: message };
         }
       }
     } catch (err) {

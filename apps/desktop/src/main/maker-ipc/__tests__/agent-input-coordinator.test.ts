@@ -1,6 +1,7 @@
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+import { runSchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js';
 import {
   createPiTranslateContext, disposePiTranslateContext, translatePiEvent,
 } from '../../../../../../packages/maker-core/src/agents/pi/translator.js';
@@ -443,6 +444,7 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       closeWorkerSessionIfIdle: async () => true,
       hasPendingWorkerInput: async () => false,
       hasSendToSessionLock: () => false,
+      withSessionSendLock: async (_sessionId, action) => action(),
       archiveWorkerSession: async () => {},
       getManualInterrupt: () => manualInterrupt.current,
       clearManualInterrupt: () => {
@@ -1423,6 +1425,97 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.enqueue(sid, makeItem('q-live', 'live'));
 
     expect(h.coordinator.getQueueInspectionIfRestored(sid)).toBeUndefined();
+  });
+
+  it('keeps reply provenance on consumed inputs, excluding queued work and clearing at the boundary', async () => {
+    const h = createHarness();
+    const sid = 'task-result-attribution';
+    h.sendToAgent.mockImplementationOnce(async () => {
+      h.setRunning(true);
+      return sendSuccess();
+    });
+    h.coordinator.enqueue(sid, makeItem('bot-delegation-completion:first', 'First result'));
+    await flush();
+    h.coordinator.enqueue(sid, makeItem('bot-delegation-completion:queued', 'Queued result'));
+    expect(h.coordinator.getActiveInputClientIds(sid)).toEqual(['bot-delegation-completion:first']);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    expect(h.coordinator.getActiveInputClientIds(sid)).toEqual([]);
+  });
+
+  it('retains multiple same-turn completion inputs through a human steer and excludes rejected steering', async () => {
+    const h = createHarness();
+    const sid = 'task-result-steer-attribution';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    h.coordinator.enqueue(sid, makeItem('bot-delegation-completion:a', 'Result A'));
+    await flush();
+    await h.coordinator.steer(sid, makeItem('bot-delegation-completion:b', 'Result B'));
+    await h.coordinator.steer(sid, makeItem('human', 'Include priorities'));
+    expect(h.coordinator.getActiveInputClientIds(sid)).toEqual(['bot-delegation-completion:a', 'bot-delegation-completion:b', 'human']);
+    expect(h.coordinator.getActiveInputClientIds(sid, 999)).toEqual([]);
+    h.steerToAgent.mockRejectedValueOnce(new Error('failed before delivery'));
+    await h.coordinator.steer(sid, makeItem('bot-delegation-completion:rejected', 'Result C'));
+    expect(h.coordinator.getActiveInputClientIds(sid)).not.toContain('bot-delegation-completion:rejected');
+  });
+
+  it('does not attribute a completion while its steer acceptance is still pending', async () => {
+    const h = createHarness();
+    const sid = 'pending-result-attribution';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    h.coordinator.enqueue(sid, makeItem('human', 'Current question'));
+    await flush();
+    let reject!: (error: Error) => void;
+    h.steerToAgent.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    const steering = h.coordinator.steer(sid, makeItem('bot-delegation-completion:pending', 'Result'));
+    await flush();
+    expect(h.coordinator.getActiveInputClientIds(sid)).toEqual(['human']);
+    reject(new Error('not consumed'));
+    await steering;
+    expect(h.coordinator.getActiveInputClientIds(sid)).not.toContain('bot-delegation-completion:pending');
+  });
+
+  it('retains plugin provenance while native dispatch acknowledgement is pending', async () => {
+    const h = createHarness(), sid = 'plugin-pending-dispatch-ack';
+    let acknowledge!: () => void;
+    h.sendToAgent.mockImplementationOnce(async () => {
+      h.setRunning(true);
+      await new Promise<void>(resolve => { acknowledge = resolve; });
+      return sendSuccess();
+    });
+    h.coordinator.enqueue(sid, makeItem('plugin-task:run', 'Evaluate'));
+    await flush();
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+    acknowledge(); await flush();
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+  });
+
+  it('keeps a Worker Lead directive distinct from accepted human input', async () => {
+    const h = createHarness(), sid = 'worker-input-origin';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    h.coordinator.enqueue(sid, { ...makeItem('directive', 'Evaluate'), origin: { kind: 'orca', senderLabel: 'Lead' } });
+    await flush();
+    expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({ clientId: 'directive', originKind: 'orca' });
+    await h.coordinator.steer(sid, { ...makeItem('human', 'New direction'), autoReviewUserText: 'New direction' });
+    expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({ clientId: 'human', authoredText: 'New direction', originKind: undefined });
+  });
+
+  it('keeps accepted plugin authority through pending and rejected human steering', async () => {
+    const h = createHarness(), sid = 'accepted-plugin-authority';
+    h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
+    h.coordinator.enqueue(sid, makeItem('plugin-task:run', 'Evaluate'));
+    await flush();
+    let reject!: (error: Error) => void;
+    h.steerToAgent.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    const steering = h.coordinator.steer(sid, makeItem('human-pending', 'New direction'));
+    await flush();
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+    reject(new Error('not accepted')); await steering;
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('plugin-task:run');
+    await h.coordinator.steer(sid, makeItem('human-accepted', 'New direction'));
+    expect(h.coordinator.getActiveInputClientIds(sid)).toContain('plugin-task:run');
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.clientId).toBe('human-accepted');
+    h.setRunning(false); h.coordinator.onTurnEvent(sid, 'done');
+    expect(h.coordinator.getAcceptedInputProvenance(sid)).toBeNull();
   });
 
   it('silently keeps a queue head when dispatch races with an already running turn', async () => {
@@ -4098,6 +4191,42 @@ describe('AgentInputCoordinator send transaction', () => {
 
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'next' });
+  });
+
+  it('discards a scheduled prompt after preparation fails and lets the next message run', async () => {
+    const h = createHarness();
+    const sid = 'scheduler-preparation-failed';
+    const error = new Error('target window cannot be prepared');
+    const onPreparationFailed = vi.fn();
+    const onPreparing = vi.fn(async () => { throw error; });
+    const preparations = new Map([['scheduled', { onPreparing, onPreparationFailed }]]);
+    const dispatched: string[] = [];
+    h.sendToAgent.mockImplementation(async (sessionId, _message, _create, opts) => {
+      const clientId = opts.persistUserMessage?.clientId;
+      await runSchedulerQueuedPreparation(clientId, preparations, () => {});
+      await persistQueuedUserMessage(sessionId, opts);
+      dispatched.push(clientId!);
+      return sendSuccess();
+    });
+    h.coordinator.enqueue(sid, makeItem('scheduled', 'scheduled work', {
+      origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'Check' },
+    }));
+    h.coordinator.enqueue(sid, makeItem('following', 'user message'));
+    await vi.waitFor(() => expect(dispatched).toEqual(['following']));
+
+    expect(onPreparationFailed).toHaveBeenCalledExactlyOnceWith(error);
+    expect(onPreparing).toHaveBeenCalledOnce();
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledExactlyOnceWith(
+      sid, expect.objectContaining({ clientId: 'scheduled' }),
+    );
+    expect(h.coordinator.hasQueuedItemWhere(sid, item => item.clientId === 'scheduled',
+      { includeRecovery: true })).toBe(false);
+    expect(latestProjection(h.projections).recovery).toBeNull();
+    expect(dispatched).toEqual(['following']);
+    expect(mocks.createMessage).toHaveBeenCalledTimes(1);
+    h.coordinator.retryLastError(sid);
+    await flush();
+    expect(dispatched).toEqual(['following']);
   });
 
   it('rolls back every pre-accept send failure to the queue head and retries by typed recovery', async () => {

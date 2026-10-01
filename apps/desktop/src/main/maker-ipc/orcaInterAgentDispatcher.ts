@@ -54,6 +54,7 @@ export interface DispatchOrcaInterAgentMessageParams {
   workerId?: string;
   /** Synchronous reserve boundary hook; must return before drain is scheduled. */
   onReserved?: () => void;
+  beforeReserve?: () => Promise<void>;
   onAccepted?: () => void | Promise<void>;
   onAcceptedRollback?: () => void | Promise<void>;
   onAcceptedCommit?: () => void | Promise<void>;
@@ -156,6 +157,7 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     sessionId: string,
     item: AgentInputQueuedMessage,
     onReserved?: () => void,
+    beforeReserve?: () => Promise<void>,
   ) => Promise<boolean>;
   sendToSessionInternal: (
     params: OrcaInterAgentSendToSessionInternalParams,
@@ -580,6 +582,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         params.targetSessionId,
         queued,
         params.onReserved,
+        params.beforeReserve,
       );
     } catch (err) {
       if (!callbackAlreadyRegistered) {

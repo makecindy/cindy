@@ -545,7 +545,7 @@ describe('sendToSession ordering', () => {
     );
     const directSendSwitchBlock = extractBetween(
       source,
-      'pendingAgentSwitchApplyHolder = async (sessionId, signal, selection) =>',
+      'pendingAgentSwitchApplyHolder = async (',
       'ipcMain.handle(MAKER_INVOKE.MARK_ORCA_ROLE',
     );
 
@@ -780,18 +780,16 @@ describe('sendToSession ordering', () => {
     expect(serviceDepsBlock).toContain('resumeWorkerSession: async (target) => {');
     expect(serviceDepsBlock).toContain('await orcaWorkerResumeScheduler.request(target);');
     // focus 切换是纯 UI 操作：resume 只能后台调度，不能在 IPC / MCP handler 里同步 await
-    // 冷启动（首次切 dormant worker 的 ~5s 卡顿回归点）。
-    expect(switchFocusIpcBlock).toContain(
-      'orcaWorkerResumeScheduler.requestInBackground(target, (err) => {',
-    );
+    // 冷启动（首次切 dormant worker 的 ~5s 卡顿回归点）。MCP 路径仍透传 assertCurrent，
+    // 权威校验在后台预热内部继续生效。
+    expect(switchFocusIpcBlock).toContain('orcaWorkerResumeScheduler.requestInBackground(target,');
     expect(switchFocusIpcBlock).not.toContain('await resumeOrcaWorkerSessionIfMissing(target)');
-    expect(switchFocusMcpBlock).toContain(
-      'orcaWorkerResumeScheduler.requestInBackground(target, (err) => {',
-    );
-    expect(switchFocusMcpBlock).not.toContain('await resumeOrcaWorkerSessionIfMissing(target)');
+    expect(switchFocusMcpBlock).toContain('orcaWorkerResumeScheduler.requestInBackground(');
+    expect(switchFocusMcpBlock).toContain('{ assertCurrent },');
+    expect(switchFocusMcpBlock).not.toContain('await resumeOrcaWorkerSessionIfMissing(target');
     // 关闭协同 / 归档 / 显式 idle 与冷启动交错时，唤醒必须可取消，并在 bootstrap
     // 返回后关掉刚拉起的 session（review P1：不得把已归档 worker 留在运行态）。
-    expect(resumeBranch).toContain('if (resumeOpts?.isCancelled?.()) return false;');
+    expect(resumeBranch).toContain('if (isCancelled?.()) return false;');
     expect(resumeBranch).toContain('await maker.closeSession(resumedSession.id).catch((err) => {');
     expect(serviceDepsBlock).toContain(
       'cancelWorkerResume: (sessionId) => orcaWorkerResumeScheduler.cancel(sessionId),',

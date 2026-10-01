@@ -1,3 +1,6 @@
+import { BotLearningFooter } from '@/features/bots/BotLearningFooter';
+import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
+import { botTaskResultKey, type BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 /**
  * AssistantMessage
  * ---------------------------------------------------------------------------
@@ -193,6 +196,8 @@ interface AssistantMessageProps {
   showActionBar?: boolean;
   /** 伙伴对话使用常显、无费用、无 Fork 的轻量消息操作栏。 */
   simplifiedBotConversation?: boolean;
+  botLearning?: unknown;
+  botTaskResults?: BotCollaborationMeta[];
   /** Per-turn 费用 (USD) — 仅该轮最后一条 assistant 有值, action bar 时间旁显示。 */
   turnMoney?: RegionalMoney;
   turnCostUsd?: number;
@@ -229,6 +234,8 @@ export const AssistantMessage = memo(function AssistantMessage({
   sessionRunning,
   showActionBar = false,
   simplifiedBotConversation = false,
+  botTaskResults,
+  botLearning,
   turnMoney,
   turnCostUsd,
   turnCostIsEstimate,
@@ -400,6 +407,13 @@ export const AssistantMessage = memo(function AssistantMessage({
           </div>
         )}
       </div>
+      {simplifiedBotConversation && !isStreaming && content.trim() && <BotLearningFooter receipts={botLearning} />}
+      {simplifiedBotConversation && !isStreaming && botTaskResults?.length ? (
+        <div className="w-full max-w-[440px] min-w-0 space-y-2" data-bot-task-results>
+          {botTaskResults.map(card => <BotSessionTaskResultCard key={botTaskResultKey(card)}
+            data={{ ...card }} sessionId={currentSessionId} attached />)}
+        </div>
+      ) : null}
       {/* Streaming → bar not mounted at all (V1.2 验收 "流式期间不挂载");
           非 turn 收尾正文(showActionBar=false)同样不挂,消息流保持紧凑 */}
       {!isStreaming && showActionBar && (

@@ -1,5 +1,12 @@
 import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
+import type { CompanionEnvironment, CompanionDiscoveryEnvironment } from './environment.js';
+
+/** Only live connection inputs belong in discovery, never original files or retry archives. */
+export function projectEnvironmentDiscovery(value: CompanionEnvironment): CompanionDiscoveryEnvironment {
+  return { env: value.env, mcp: value.mcp, pendingImport: !!value.pendingImport,
+    identity: createHash('sha256').update(JSON.stringify([value.env, value.mcp, value.credentials])).digest('hex') };
+}
 
 const LARGE_JSON = 256 * 1024;
 function isLarge(value: unknown): boolean {
@@ -21,7 +28,12 @@ const { parentPort } = require('node:worker_threads');
 const { createHash } = require('node:crypto');
 parentPort.once('message', ({ operation, value }) => {
   try {
-    const result = operation === 'decode' ? JSON.parse(value) : (() => {
+    const result = operation === 'discovery' ? (() => {
+      const data = JSON.parse(value);
+      if (data.version !== 1 || !data.env || !Array.isArray(data.mcp) || !Array.isArray(data.credentials)) throw new Error();
+      return { env: data.env, mcp: data.mcp, pendingImport: !!data.pendingImport,
+        identity: createHash('sha256').update(JSON.stringify([data.env, data.mcp, data.credentials])).digest('hex') };
+    })() : operation === 'decode' ? JSON.parse(value) : (() => {
       const text = JSON.stringify(value);
       return { text, revision: createHash('sha256').update(text).digest('hex') };
     })();
@@ -29,7 +41,7 @@ parentPort.once('message', ({ operation, value }) => {
   } catch { parentPort.postMessage({ failed: true }); }
 });`;
 
-async function convert<T>(operation: 'encode' | 'decode', value: unknown, assertOwner: () => void): Promise<T> {
+async function convert<T>(operation: 'encode' | 'decode' | 'discovery', value: unknown, assertOwner: () => void): Promise<T> {
   assertOwner();
   const worker = new Worker(JSON_WORKER, { eval: true });
   let fence: ReturnType<typeof setInterval> | undefined;
@@ -57,4 +69,13 @@ export async function encodeEnvironment(value: unknown, assertOwner: () => void)
 export async function decodeEnvironment<T>(value: string, assertOwner: () => void): Promise<T> {
   assertOwner();
   return value.length > LARGE_JSON ? convert<T>('decode', value, assertOwner) : JSON.parse(value) as T;
+}
+
+/** Legacy recovery parses the archive in a worker but clones only connection metadata back to Main. */
+export async function decodeEnvironmentDiscovery(value: string, assertOwner: () => void): Promise<CompanionDiscoveryEnvironment> {
+  assertOwner();
+  if (value.length > LARGE_JSON) return convert('discovery', value, assertOwner);
+  const data = JSON.parse(value) as CompanionEnvironment;
+  if (data.version !== 1 || !data.env || !Array.isArray(data.mcp) || !Array.isArray(data.credentials)) throw new Error('CREDENTIAL_STORAGE_INVALID');
+  return projectEnvironmentDiscovery(data);
 }

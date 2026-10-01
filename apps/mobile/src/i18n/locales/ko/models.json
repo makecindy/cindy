@@ -47,6 +47,10 @@
     "cancel": "현재 모델 유지",
     "confirm": "전환하고 계속"
   },
+  "switchOutcome": {
+    "applied": "모델 제공자 전환이 적용되었습니다.",
+    "failed": "모델 제공자 전환에 실패했습니다. 모델을 다시 선택해 주세요."
+  },
   "agentSwitch": {
     "browseAccessibility": "{{agent}} 모델 보기",
     "confirmTitle": "{{agent}}(으)로 전환할까요?",

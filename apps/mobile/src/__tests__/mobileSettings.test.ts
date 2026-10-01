@@ -201,66 +201,65 @@ describe('mobile settings overview', () => {
     expect(relayStatusTone('stopped')).toBe('off');
   });
 
-  it('lets users rename this phone through the authoritative device-link device name', () => {
-    const source = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
-    const inFlightQueueIndex = source.indexOf('if (selfDeviceNameWriteInFlightRef.current) {');
-    const sameNameNoopIndex = source.indexOf('if (name === deviceName.trim()) {');
+  it('lets users rename this phone on a real stack page with an explicit save (back discards)', () => {
+    const settings = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
+    const directory = readTextLf(resolve(process.cwd(), 'src/session/settingsDeviceDirectory.ts'), 'utf8');
+    const editor = readTextLf(resolve(process.cwd(), 'app/settings/device-name.tsx'), 'utf8');
 
-    expect(source).toContain('const [selfDeviceName, setSelfDeviceName]');
-    expect(source).toContain("auth.apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices'");
-    expect(source).toContain('const self = res.devices.find((device) => device.deviceId === auth.deviceId);');
-    expect(source).toContain('testID="settings.selfDeviceNameRow"');
-    expect(source).toContain('function RenameSelfDeviceScreen');
-    expect(source).toContain('testID="settings.renameSelfDevice.screen"');
-    expect(source).toContain('backTestID="settings.renameSelfDevice.backButton"');
-    expect(source).toContain('testID="settings.renameSelfDevice.input"');
-    expect(source).toContain('testID="settings.renameSelfDevice.clear"');
-    expect(source).toContain("body: { name: null }");
-    expect(source).toContain('setSelfDeviceName(res.name);');
-    expect(source).toContain('updateSelfDeviceNameDraft(res.name);');
-    expect(source).not.toContain('updateSelfDeviceNameDraft(systemDeviceName);');
-    expect(source).not.toContain('setSelfDeviceName(systemDeviceName);');
-    expect(source).toContain("title={t('settings.deviceNameEditor.screenTitle')}");
-    expect(source).toContain('const selfDeviceNameWriteInFlightRef = useRef(false);');
-    expect(source).toContain('const selfDeviceNameQueuedWriteRef = useRef<SelfDeviceNameQueuedWrite | null>(null);');
-    expect(source).toContain("selfDeviceNameQueuedWriteRef.current = { kind: 'rename', name, options };");
-    expect(source).toContain("selfDeviceNameQueuedWriteRef.current = { kind: 'reset' };");
-    expect(source).toContain("selfDeviceNameQueuedWriteRef.current?.kind === 'reset'");
-    expect(source).toContain('selfDeviceNameRunQueuedWriteRef.current();');
-    expect(source).toContain('const timer = setTimeout(() => {');
-    expect(source).toContain('if (selfDeviceNameSaving) return;');
-    expect(source).toContain('void saveSelfDeviceNameDraft(name);');
-    expect(source).toContain('setSelfDeviceNameMessage(null);\n    setSelfDeviceNameDraft(value);');
-    expect(source).not.toContain('if (!selfDeviceNameSaving) setSelfDeviceNameMessage(null);');
-    expect(source).toContain('if (name.length === 0) {');
-    expect(source).toContain('updateSelfDeviceNameDraft(deviceName);');
-    expect(source).toContain('setSelfDeviceNameEditing(false);');
-    expect(source).toContain('`/api/device-link/devices/${encodeURIComponent(auth.deviceId)}`');
-    expect(source).toContain("method: 'PATCH'");
-    expect(source).toContain('body: { name }');
-    expect(inFlightQueueIndex).toBeGreaterThan(-1);
-    expect(sameNameNoopIndex).toBeGreaterThan(-1);
-    expect(inFlightQueueIndex).toBeLessThan(sameNameNoopIndex);
-    expect(source).not.toContain('settings.renameSelfDevice.save');
-    expect(source).not.toContain('settings.renameSelfDevice.done');
-    expect(source).not.toContain('clearManualName');
+    // 设置页只负责入口:子页是独立路由,系统返回只退回设置。
+    expect(settings).toContain('testID="settings.selfDeviceNameRow"');
+    expect(settings).toContain("push('/settings/device-name')");
+    expect(settings).not.toContain('function RenameSelfDeviceScreen');
+    expect(settings).not.toContain('selfDeviceNameEditing');
+    // 名称正本仍是 device-link 设备清单。
+    expect(directory).toContain("auth.apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices'");
+    expect(directory).toContain('const self = res.devices.find((device) => device.deviceId === selfDeviceId);');
+    expect(directory).toContain('export function publishSavedSelfDeviceName');
+    // 共享名称按「账号代次 + deviceId」隔离:同一台手机换账号不串名。
+    expect(directory).toContain('return `${accountGeneration}:${deviceId}`;');
+    // 读取发起后若已有新保存,旧快照不覆盖刚存的名称。
+    expect(directory).toContain('if (selfDeviceNameWrites === writesAtStart) publish(');
+
+    expect(editor).toContain('testID="settings.renameSelfDevice.screen"');
+    expect(editor).toContain('backTestID="settings.renameSelfDevice.backButton"');
+    expect(editor).toContain('testID="settings.renameSelfDevice.input"');
+    expect(editor).toContain('testID="settings.renameSelfDevice.clear"');
+    expect(editor).toContain("testID: 'settings.renameSelfDevice.save'");
+    expect(editor).toContain("testID: 'settings.renameSelfDevice.reset'");
+    expect(editor).toContain("title={t('settings.deviceNameEditor.screenTitle')}");
+    expect(editor).toContain('`/api/device-link/devices/${encodeURIComponent(deviceId)}`');
+    expect(editor).toContain("method: 'PATCH'");
+    expect(editor).toContain("body: kind === 'reset' ? { name: null } : { name: trimmedDraft }");
+    expect(editor).toContain('publishSavedSelfDeviceName(selfDeviceNameKey(accountGeneration, deviceId), res.name);');
+    // 保存按钮只在有改动且非空时可用;离开时不再静默保存,有改动先确认放弃。
+    expect(editor).toContain('const canSave = dirty && trimmedDraft.length > 0 && !saving;');
+    // 写入进行中不能离开(已发出的 PATCH 撤不回,「放弃」名不副实)。
+    expect(editor).toContain('usePreventRemove(saving || (dirty && !leaveAfterSave)');
+    expect(editor).toContain('if (saving) return;');
+    expect(editor).toContain("t('settings.deviceNameEditor.discardTitle')");
+    expect(editor).not.toContain('setTimeout(() => {');
+    expect(editor).not.toContain('acceptClosedDraft');
+    expect(editor).not.toContain('clearManualName');
   });
 
-  it('hydrates the voice dictionary after the async desktop list arrives', () => {
-    const source = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
+  it('hydrates the voice dictionary page after the async desktop list arrives', () => {
+    const settings = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
+    const source = readTextLf(resolve(process.cwd(), 'app/settings/voice-dictionary.tsx'), 'utf8');
     const dictionaryEffectIndex = source.indexOf(
-      'if (!dictionaryScreenOpen || desktopDevices.length === 0) return;',
+      'if (desktopDevices.length === 0) return;',
     );
-    const dictionaryOpenIndex = source.indexOf('const openVoiceDictionary = useCallback(() => {');
     const hydrateIndex = source.indexOf(
       'Promise.all(desktopDevices.map((host) => hydrateMobileVoiceDictionary(host.deviceId)))',
       dictionaryEffectIndex,
     );
 
+    expect(settings).toContain("push('/settings/voice-dictionary')");
+    expect(settings).not.toContain('function VoiceDictionaryScreen');
+    expect(source).toContain('testID="settings.voiceDictionary.screen"');
+    expect(source).toContain('backTestID="settings.voiceDictionary.backButton"');
     expect(dictionaryEffectIndex).toBeGreaterThan(-1);
-    expect(dictionaryOpenIndex).toBeGreaterThan(-1);
     expect(hydrateIndex).toBeGreaterThan(dictionaryEffectIndex);
-    expect(source).toContain('[desktopDevices, dictionaryScreenOpen, refreshVoiceDictionary]');
+    expect(source).toContain('[desktopDevices, refreshVoiceDictionary]');
     expect(source).toContain('[desktopDevices, invoke]');
     expect(source).not.toContain('[desktopDevices, deviceLink]');
     expect(source).toContain('subscribeMobileVoiceDictionaryCache(() => {');
@@ -319,15 +318,17 @@ describe('mobile settings overview', () => {
     expect(source).toContain("'settings.version.testFlightCheckingAccessibility'");
     expect(source).toContain("testID=\"settings.testFlightUpdateHint\"");
     expect(source).toContain("{t('settings.version.testFlightUpdateManaged')}");
-    expect(source).toContain("{t('settings.version.bundleVersion', { version: appVersion })}");
+    // 版本卡片面向用户:「版本 x.y.z」+ 更新方式说明;热更版本等技术细节在调试分组。
+    expect(source).toContain("{t('settings.version.appVersion', { version: appVersion })}");
+    expect(source).toContain('testID="settings.updateMethod"');
+    expect(source).toContain("tone: 'secondary',");
     expect(source).toContain('const showBetaBadge = betaReady && betaEnabled;');
     expect(source).toContain('testID="settings.betaChannelBadge"');
     expect(source).toContain("{t('settings.betaChannel.badge')}");
     expect(source).toContain('backgroundColor: colors.betaChannelBadgeBackground');
     expect(source).toContain('color: colors.betaChannelBadgeForeground');
-    expect(source).toContain(
-      "testID=\"settings.otaVersion\">{t('settings.version.otaVersion', { version: otaVersion })}",
-    );
+    expect(source).toContain("label={t('settings.updateInfo.otaVersion')}");
+    expect(source).toContain('testID="settings.otaVersion"');
     expect(source).toContain(
       "testID=\"settings.desktopVersion\">{t('settings.version.pairedDesktopVersion', { version: DESKTOP_PACKAGE_VERSION })}",
     );

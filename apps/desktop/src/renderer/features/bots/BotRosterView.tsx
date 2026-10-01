@@ -63,7 +63,7 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
   const title = t(importing ? 'bots.import.title' : 'bots.guided.title');
   const content = (
     <>
-      <div className="mb-8 flex items-center justify-between gap-4">
+      <div className="mb-8 flex shrink-0 items-center justify-between gap-4">
         {inline ? (
           <h1 className="text-20 font-medium">{title}</h1>
         ) : (
@@ -115,13 +115,13 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
   );
   if (inline)
     return (
-      <main className="flex h-full items-center justify-center bg-[var(--surface)] px-6 text-[var(--text-primary)]"><div className="w-full max-w-lg">{content}</div></main>
+      <main className="flex h-full items-center justify-center bg-[var(--surface)] px-6 text-[var(--text-primary)]"><div className={importing ? "flex max-h-[90vh] w-full max-w-lg flex-col" : "w-full max-w-lg"}>{content}</div></main>
     );
   return (
     <Dialog.Root open onOpenChange={open => { if (!open && !creating) close(); }}><Dialog.Portal>
     <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
     <Dialog.Content aria-describedby={undefined} onPointerDownOutside={(event) => event.preventDefault()} onCloseAutoFocus={event => { if (restoreFocus) { event.preventDefault(); restoreFocus(); } }}
-      className="fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-[calc(100vw-32px)] max-w-[520px] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-6 text-[var(--text-primary)] outline-none sm:p-8">
+      className={`fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-[calc(100vw-32px)] max-w-[520px] -translate-x-1/2 -translate-y-1/2 ${importing ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'} rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-6 text-[var(--text-primary)] outline-none sm:p-8`}>
       {content}
     </Dialog.Content>
   </Dialog.Portal></Dialog.Root>

@@ -107,7 +107,7 @@ export class CodexThreadLocations {
   }
 }
 
-function historyHomeForRollout(rollout: string): string {
+export function historyHomeForRollout(rollout: string): string {
   for (let dir = path.dirname(rollout); path.dirname(dir) !== dir; dir = path.dirname(dir)) {
     if (['sessions', 'archived_sessions'].includes(path.basename(dir))) return path.dirname(dir);
   }

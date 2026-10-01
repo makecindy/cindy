@@ -1,4 +1,5 @@
 {
+  "selfJoin": "這是你發起的共享任務，無需加入。請從「我發起的」開啟",
   "waitingHost": "等待房主處理，你可以繼續傳送訊息。",
   "join": "加入共享任務",
   "joinHint": "貼上邀請連結，進入同一個共享任務。",
@@ -39,7 +40,7 @@
   "joined": "已加入共享任務",
   "joinedBody": "你可以查看加入前的訊息、工具結果和附件，也可以向同一個 Agent 傳送訊息。",
   "enterTask": "進入任務",
-  "inviteBoxTitle": "將邀請連結傳給你的夥伴",
+  "inviteBoxTitle": "把邀請連結傳給要一起協作的人",
   "roleGuest": "訪客",
   "removeShort": "移除",
   "removeNamedTitle": "移除{{name}}？",

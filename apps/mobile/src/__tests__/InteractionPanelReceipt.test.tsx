@@ -12,6 +12,7 @@ import { forwardNavigationLock } from '@/utils/navigationLock';
 
 const { resolveInteraction, invoke, push } = vi.hoisted(() => ({ resolveInteraction: vi.fn(), invoke: vi.fn(), push: vi.fn() }));
 const { routeParams } = vi.hoisted(() => ({ routeParams: {} as { deviceId?: string; sessionId?: string } }));
+const { textLayouts } = vi.hoisted(() => ({ textLayouts: new Map<string, (event: { nativeEvent: { lines: unknown[] } }) => void>() }));
 vi.mock('expo-router', async () => {
   const { useEffect } = await import('react');
   return { useLocalSearchParams: () => routeParams, useRouter: () => ({ push }),
@@ -28,7 +29,12 @@ vi.mock('react-native', async () => {
   const view = (tag: string) => ({ children, onPress, disabled, testID }: {
     children?: ReactNode; onPress?: () => void; disabled?: boolean; testID?: string;
   }) => createElement(tag, { onClick: onPress, disabled, 'data-testid': testID }, children);
-  return { View: view('div'), Text: view('span'), Pressable: view('button'),
+  // Text keeps its onTextLayout so a test can report how many lines a label took.
+  const Text = ({ children, onTextLayout }: { children?: ReactNode; onTextLayout?: (event: { nativeEvent: { lines: unknown[] } }) => void }) => {
+    if (onTextLayout) textLayouts.set(String(children), onTextLayout);
+    return createElement('span', null, children);
+  };
+  return { View: view('div'), Text, Pressable: view('button'),
     ScrollView: view('div'), Image: () => null,
     useWindowDimensions: () => ({ width: 390, height: 844 }),
     StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 } };
@@ -59,9 +65,9 @@ let root: Root;
 let host: HTMLDivElement;
 const requestId = 'codex:test:0';
 const onError = vi.fn();
-function Harness({ companion = false }: { companion?: boolean }) {
+function Harness({ companion = false, deviceId = 'd1' }: { companion?: boolean; deviceId?: string }) {
   const interactions = useSessionPendingInteractions('s1');
-  return <InteractionPanel companion={companion} deviceId="d1" sessionId="s1" interactions={interactions} onError={onError} />;
+  return <InteractionPanel companion={companion} deviceId={deviceId} sessionId="s1" interactions={interactions} onError={onError} />;
 }
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -87,6 +93,44 @@ async function type(id: string, value: string) {
     input.dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
+
+it.each(['permission', 'ask_user_question', 'plan_review'])('lets a shared guest submit %s through its decision button', async (kind) => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind, requestId, toolName: 'Read', input: { path: '/tmp/test.txt' },
+    questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }], plan: 'Read the file.',
+  } }]);
+  await act(async () => root.render(<Harness deviceId={sharedTaskHostPeer('shared', 'd1')} />));
+  expect(host.querySelector('[data-testid="interaction.readOnlyCard"]')).toBeNull();
+  resolveInteraction.mockResolvedValueOnce({ accepted: true });
+  if (kind === 'ask_user_question') {
+    await click('interaction.ask.option.1');
+    await click('interaction.ask.submitButton');
+  }
+  else await click(kind === 'permission' ? 'interaction.permission.allowOnceButton' : 'interaction.plan.approveButton');
+  expect(resolveInteraction).toHaveBeenCalledWith(requestId, expect.objectContaining(
+    kind === 'ask_user_question' ? { kind, answers: { 'Continue?': 'Yes' } } : { kind, behavior: 'allow' },
+  ));
+});
+
+it('submits the host-provided Codex session approval from the shared guest always-allow button', async () => {
+  const suggestions = [{ type: 'codexSessionApproval', destination: 'session' }];
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'permission', requestId, toolName: 'Shell', input: { command: 'git status' }, suggestions,
+  } }]);
+  await act(async () => root.render(<Harness deviceId={sharedTaskHostPeer('shared', 'd1')} />));
+  resolveInteraction.mockResolvedValueOnce({ accepted: true });
+  await click('interaction.permission.alwaysAllowButton');
+  expect(resolveInteraction).toHaveBeenCalledExactlyOnceWith(requestId, {
+    kind: 'permission', behavior: 'allow', permissionUpdates: suggestions,
+  });
+});
+
+it.each(['plugin_setup', 'issue_confirm', 'ghost_grant_confirm', 'rename_sessions_confirm'])('keeps shared guest %s confirmation read-only', async (kind) => {
+  remoteSessionStore.setPendingInteractions('s1', [{ request: { kind, requestId } }]);
+  await act(async () => root.render(<Harness deviceId={sharedTaskHostPeer('shared', 'd1')} />));
+  expect(host.querySelector('[data-testid="interaction.readOnlyCard"]')).not.toBeNull();
+  expect(resolveInteraction).not.toHaveBeenCalled();
+});
 
 it('keeps multiple selections and the free answer when moving back, remounting, and retrying', async () => {
   remoteSessionStore.setPendingInteractions('s1', [{ request: {
@@ -230,6 +274,35 @@ it.each(['allowOnce', 'deny'])('companion permission preserves complete evidence
   resolveInteraction.mockResolvedValueOnce({ accepted: true });
   await act(async () => host.querySelector<HTMLButtonElement>(`[data-testid="interaction.permission.${action}Button"]`)!.click());
   expect(host.querySelector('[data-testid="interaction.permission.card"]')).toBeNull();
+});
+
+it('companion permission shows the whole input when no single field leads, never the 500-character preview', async () => {
+  const tail = 'unique-tail-' + 'y'.repeat(40);
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'permission', requestId: 'permission-mcp', toolName: 'mcp__notes__append',
+    input: { body: 'z'.repeat(600), target: tail },
+  } }]);
+  await act(async () => root.render(<Harness companion />));
+  expect(host.textContent).toContain(tail);
+});
+
+it('stacks teammate card buttons one per row once any label would wrap at equal width', async () => {
+  textLayouts.clear();
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'permission', requestId: 'p-wrap', toolName: 'Read', input: { path: '/tmp/qa.txt' },
+    suggestions: [{ destination: 'session', rules: [{ toolName: 'Read' }] }],
+  } }]);
+  await act(async () => root.render(<Harness companion />));
+  const stacked = () => host.querySelector('[data-testid="interaction.actions.stacked"]');
+  await act(async () => textLayouts.get('interaction.permission.deny')!({ nativeEvent: { lines: [{}] } }));
+  expect(stacked()).toBeNull();
+  // A long label (English 「Always allow this session」 on a narrow card) takes two lines.
+  await act(async () => textLayouts.get('interaction.permission.alwaysAllow')!({ nativeEvent: { lines: [{}, {}] } }));
+  expect(stacked()).not.toBeNull();
+  // Ordinary task cards keep their own layout.
+  textLayouts.clear();
+  await act(async () => root.render(<Harness />));
+  expect(textLayouts.size).toBe(0);
 });
 
 it('preserves session-only persistent permission and the high-risk confirmation step', async () => {

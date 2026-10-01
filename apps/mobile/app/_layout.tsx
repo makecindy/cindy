@@ -1,4 +1,5 @@
 import { recentTaskKey } from '@/session/recentTasks';
+import { readComposerEntry } from '@/session/composerMorph';
 import { RecentMessageHistoriesProvider } from '@/session/RecentMessageHistories';
 import { ResidentHomeListProvider } from '@/session/ResidentHomeList';
 import { AndroidUpdateSheet } from '@/update/AndroidUpdateSheet';
@@ -192,6 +193,11 @@ function NavigationGate() {
             headerBackVisible: false,
             headerStyle: { backgroundColor: 'transparent' },
           }} />
+          {/* 新建页只在圆钮形变仍可交接时关掉推入动画（形变本身就是入场）；
+              交接记录已过期就照常推入，页面进入后再恢复普通返回动画。 */}
+          <Stack.Screen name="sessions/new" options={({ route }) => ({
+            animation: readComposerEntry((route.params as { composerMorph?: string } | undefined)?.composerMorph) ? 'none' : 'default',
+          })} />
           {/* 设置从左侧抽屉进入:接着抽屉方向从左边推出,不要默认从右边盖上来。 */}
           <Stack.Screen name="settings" options={{ animation: 'slide_from_left' }} />
           <Stack.Screen

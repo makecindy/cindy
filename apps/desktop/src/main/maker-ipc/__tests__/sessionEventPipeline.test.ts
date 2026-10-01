@@ -31,6 +31,10 @@ vi.mock('../../maker-host/model-discovery/xai.js', () => ({
   discardXaiModelsDiskCache: vi.fn(async () => {}),
 }));
 
+vi.mock('../../local-model-runtime/preflight.js', () => ({
+  ensureManagedOllamaReadyForSession: effects.fn('ensureManagedOllamaReadyForSession'),
+}));
+
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
@@ -242,6 +246,7 @@ function harness() {
   });
   const activity = new SessionTurnActivityTracker();
   const deps = {
+    onPluginTaskTerminal: vi.fn(),
     onSuccessfulProductTurn: vi.fn(async () => {}),
     onUnsuccessfulProductTurn: vi.fn(async () => {}),
     log,
@@ -297,6 +302,7 @@ function harness() {
     silentStopTurnLeaseGate: { turnLeaseIdForEvent: vi.fn(() => 'instance:1') },
     agentInputCoordinatorHolder: {
       getActiveInputClientId: vi.fn((): string | null => null),
+      getActiveInputClientIds: vi.fn((): string[] => []),
       getQueueControlSnapshot: vi.fn(() => ({ pendingQueue: [] as unknown[] })),
       onTurnEvent: vi.fn(),
       noteSuppressedTerminalError: vi.fn(),
@@ -491,6 +497,24 @@ describe('production Session event pipeline', () => {
       await h.dispose();
     },
   );
+  it.each(['completed', 'failed', 'cancelled', 'interrupted'])(
+    'preserves the plugin terminal %s before generic failure bookkeeping', async status => {
+      const h = harness();
+      h.emit(event('done', { status }, {
+        sessionInstanceId: h.session.instanceId, sessionTurnGeneration: 0,
+      }));
+      await microtasks();
+      expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledWith('task', {
+        instanceId: h.session.instanceId, generation: 0,
+      }, status, undefined);
+      if (status !== 'completed') {
+        expect(h.deps.onPluginTaskTerminal.mock.invocationCallOrder[0]).toBeLessThan(
+          h.deps.onUnsuccessfulProductTurn.mock.invocationCallOrder[0],
+        );
+      }
+      await h.dispose();
+    },
+  );
   it.each([
     ['zh-CN', 'Pi 扩展未能完成刷新。请重启 Cindy 后再使用 Pi。'],
     ['zh-TW', 'Pi 擴充功能未能完成重新整理。請重新啟動 Cindy 後再使用 Pi。'],
@@ -511,7 +535,7 @@ describe('production Session event pipeline', () => {
     effects.fn('onAssistantTextEvent').mockClear();
     effects.fn('broadcast').mockClear();
     h.emit(receipt);
-    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', { ...data, text }, null);
+    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', { ...data, text }, null, undefined);
     expect(effects.fn('broadcast')).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
       sessionId: 'task', event: { ...receipt, data: { ...data, text } },
     }));
@@ -541,7 +565,7 @@ describe('production Session event pipeline', () => {
     const h = harness();
     const data = { isFinal: true, text: 'partial: restart-cindy-to-refresh-packages' };
     h.emit(event('text', data, { source: 'pi' }));
-    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', data, null);
+    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', data, null, undefined);
     await h.dispose();
   });
 
@@ -936,6 +960,31 @@ describe('provider turn observer on real Session.send', () => {
       },
     };
   }
+  it('awaits llama.cpp readiness on an existing task before dispatch and propagates startup failure', async () => {
+    const h = harness();
+    const gate = deferred();
+    effects.fn('getSessionProvider').mockReturnValue('cindy-local-llamacpp');
+    const ready = effects.fn('ensureManagedOllamaReadyForSession').mockImplementation(() => gate.promise);
+    const dispose = installSessionTurnObserver(observerDeps(), h.session);
+    try {
+      const sending = h.session.send('continue existing task');
+      await vi.waitFor(() => expect(ready).toHaveBeenCalledOnce());
+      expect(h.handle.send).not.toHaveBeenCalled();
+      gate.resolve();
+      await sending;
+      expect(ready).toHaveBeenCalledWith({ providerId: 'cindy-local-llamacpp', onlyIfStopped: true });
+      expect(h.handle.send).toHaveBeenCalledOnce();
+      h.emit(event('done', {}));
+      ready.mockRejectedValue(new Error('NOT_INSTALLED'));
+      await expect(h.session.send('next turn')).rejects.toThrow('NOT_INSTALLED');
+      expect(h.handle.send).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+      dispose();
+      await h.dispose();
+    }
+  });
+
   it('holds the send reservation while waiting for the local project boundary', async () => {
     const harnessState = harness();
     const gate = deferred();
@@ -996,6 +1045,7 @@ describe('provider turn observer on real Session.send', () => {
   it('does not apply the local project boundary to a remote session', async () => {
     const harnessState = harness();
     Object.defineProperty(harnessState.session, 'remoteHostId', { value: 'ssh-host' });
+    effects.fn('getSessionProvider').mockReturnValue('cindy-local-llamacpp');
     const beforeLocalProviderStart = vi.fn(async () => {});
     const dispose = installSessionTurnObserver(
       { ...observerDeps(), beforeLocalProviderStart }, harnessState.session,
@@ -1003,6 +1053,7 @@ describe('provider turn observer on real Session.send', () => {
     try {
       await harnessState.session.send('test');
       expect(beforeLocalProviderStart).not.toHaveBeenCalled();
+      expect(effects.fn('ensureManagedOllamaReadyForSession')).not.toHaveBeenCalled();
       expect(harnessState.handle.send).toHaveBeenCalledOnce();
     } finally {
       dispose();
@@ -1581,4 +1632,16 @@ describe('Bot adapters in the shared event pipeline', () => {
     }));
     expect(h.deps.attemptBotCompactRuntimeRefresh).toHaveBeenCalledWith(h.session, 'event:done');
   });
+});
+
+it('captures task completion inputs before queue advancement and binds only a successful final', async () => {
+  const h = harness();
+  h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['bot-delegation-completion:a', 'human']);
+  h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['bot-delegation-completion:next']);
+  });
+  effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('summary');
+  h.emit(event('done', { status: 'completed', result: 'Summary' }));
+  expect(effects.fn('markAssistantTurnCompleted')).toHaveBeenCalledWith('task', 'summary', undefined, ['bot-delegation-completion:a']);
+  await h.dispose();
 });

@@ -205,6 +205,7 @@ export interface GhostCardNeeds {
 export interface GhostAgentNeeds {
   background?: boolean;
   errand?: boolean;
+  tasks?: boolean;
   /**
    * schedule = 「可以请你新建自动化任务」(2026-08-04)。
    *
@@ -1600,6 +1601,8 @@ export function isGhostInstallApprovalToken(value: unknown): value is string {
 
 /** 已装入主机的插件(批准清单 + 安装位置 + 启用态)。 */
 export interface InstalledGhost {
+  /** Host receipt fact, not a manifest declaration. Missing means tasks need confirmation. */
+  taskCapabilityApproved?: true;
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id>)。 */
   dir: string;
@@ -1971,6 +1974,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         labelKey: 'agentErrand',
         detailKey: 'agentErrandDetail',
       });
+    }
+    if (manifest.agent?.tasks === true) {
+      items.unshift({ key: 'agent:tasks', kind: 'agent', labelKey: 'agentTasks', detailKey: 'agentTasksDetail' });
     }
     // 「可以请你新建自动化任务」:独立 key 单列一档。理由同 badge/errand ——
     // diffGhostPermissionItems 按 key + detail 比对,若并进任何既有 key,已装插件
@@ -3752,6 +3758,15 @@ export function resolveGhostManifestLocale(
  * 顶层字段原样保留但不解释、不展示、不授权。任何已知字段不合格都给出 reason。
  */
 export function validateGhostManifest(value: unknown): ManifestValidation {
+  return validateGhostManifestInput(value, false);
+}
+
+/** Installed snapshots retain historical unknown tasks data without granting it. */
+export function validateInstalledGhostManifest(value: unknown): ManifestValidation {
+  return validateGhostManifestInput(value, true);
+}
+
+function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boolean): ManifestValidation {
   const preparation = prepareGhostManifestForValidation(value);
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
@@ -4310,20 +4325,24 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     if (agentRaw.errand !== undefined && typeof agentRaw.errand !== 'boolean') {
       return { ok: false, reason: 'agent.errand 必须是布尔值' };
     }
+    if (!preserveHistoricalTasks && agentRaw.tasks !== undefined && typeof agentRaw.tasks !== 'boolean') {
+      return { ok: false, reason: 'agent.tasks must be boolean' };
+    }
     if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
       return { ok: false, reason: 'agent.schedule 必须是布尔值' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule'])).length === 0) {
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true 三项加档；仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true 四项加档；仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule']),
+      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
+      ...(agentRaw.tasks === true ? { tasks: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
     };
   }
@@ -5987,7 +6006,7 @@ export function validateNormalizedGhostManifest(raw: unknown): ManifestValidatio
   // after a rollback. Still accept normalized snapshots produced by affected dev
   // builds and passed between current Host code paths.
   const authorInput = isPlainObject(raw) ? withLegacyAuthorSlots(raw) : raw;
-  const authorResult = validateGhostManifest(authorInput);
+  const authorResult = validateInstalledGhostManifest(authorInput);
   if (authorResult.ok || !isPlainObject(raw) || raw.setup === undefined) return authorResult;
   if (!isPlainObject(raw.setup) || !Array.isArray(raw.setup.requires)) {
     return { ok: false, reason: '标准化清单 setup 必须是带 requires 数组的对象' };
@@ -6019,7 +6038,7 @@ export function validateNormalizedGhostManifest(raw: unknown): ManifestValidatio
     requires.push({ anyOf });
   }
 
-  return validateGhostManifest({ ...withLegacyAuthorSlots(raw), setup: { requires } });
+  return validateInstalledGhostManifest({ ...withLegacyAuthorSlots(raw), setup: { requires } });
 }
 
 /** 把无 slots 的 v2 运行时投影还原成旧客户端能读取的作者清单。 */
@@ -6362,9 +6381,36 @@ export type GhostPipeAgentErrandResult =
  */
 export const GHOST_NODE_REQUEST_MAX_TOTAL_MS = 15 * 60_000;
 
+/** Public artifact download; results deliberately exclude host filesystem paths. */
+export type GhostPipeDownloadRequest =
+  | { type: 'download-request'; kind: 'start'; id: string; url: string; sha256: string; bytes: number }
+  | { type: 'download-request'; kind: 'cancel'; id: string };
+
+export type GhostPipeDownloadResult =
+  | { ok: true; token: string; bytes: number; sha256: string; fromCache: boolean }
+  | { ok: true }
+  | { ok: false; message: string };
+
+export interface GhostPipeDownloadProgress {
+  type: 'event';
+  name: 'download-progress';
+  data: {
+    id: string;
+    phase: 'queued' | 'downloading' | 'verifying' | 'retrying' | 'completed' | 'failed' | 'cancelled';
+    loaded?: number;
+    total?: number | null;
+    speedBps?: number;
+    attempt?: number;
+    delayMs?: number;
+    fromCache?: boolean;
+  };
+}
+
 /** 上行:main.js 通过主机中继调用随包 Node 工作进程。 */
 export interface GhostPipeNodeRequest {
   type: 'node-request';
+  /** Host resolves same-plugin download receipts into params.downloads for this RPC only. */
+  downloadTokens?: Record<string, string>;
   /** OAuth 注入的本插件账号 id；缺省使用对应 OAuth 槽的默认账号。 */
   authAccount?: string;
   /** Live tool-call identity; only cancelWithCall opts in to the new lifecycle. */
@@ -7925,6 +7971,7 @@ export type GhostMessageHookData = { sessionId: string; text: string; model?: st
  * GhostPipeEventVerdict,不回视为放行。
  */
 export type GhostPipeEventPush =
+  | GhostPipeDownloadProgress
   | {
       type: 'event';
       name: GhostDidEventName;
