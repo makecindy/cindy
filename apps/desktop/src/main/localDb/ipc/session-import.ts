@@ -34,7 +34,7 @@ const log = createLogger('session-import');
 type ImportSource = 'codex' | 'claude';
 type SidebarBucket = 'project' | 'dialogue';
 
-interface ImportCandidate {
+export interface ImportCandidate {
   key: string;
   source: ImportSource;
   id: string;
@@ -49,7 +49,7 @@ interface ImportCandidate {
   isGitRepo: boolean;
 }
 
-interface SessionImportScanResult {
+export interface SessionImportScanResult {
   sources: {
     codexHomes: string[];
     claudeRoots: string[];
@@ -93,46 +93,9 @@ let sessionImportScanCacheVersion = 0;
 export function registerSessionImportIpc(): void {
   invalidateSessionImportScanCache();
 
-  ipcMain.handle('local-db:session-import:scan', async (_e, request?: SessionImportScanRequest): Promise<SessionImportScanResult> => {
-    const force = request?.force === true;
-    const cacheScope = currentSessionImportScanCacheScope();
-    if (
-      !force &&
-      cachedSessionImportScan &&
-      cachedSessionImportScan.scope === cacheScope &&
-      cachedSessionImportScan.expiresAt > Date.now()
-    ) {
-      return cachedSessionImportScan.result;
-    }
-    if (
-      inFlightSessionImportScan &&
-      inFlightSessionImportScan.scope === cacheScope &&
-      (!force || inFlightSessionImportScan.force)
-    ) {
-      return inFlightSessionImportScan.promise;
-    }
-
-    const scanCacheVersion = ++sessionImportScanCacheVersion;
-    const scanPromise = runSessionImportScan()
-      .then((result) => {
-        if (scanCacheVersion === sessionImportScanCacheVersion) {
-          cachedSessionImportScan = {
-            scope: cacheScope,
-            result,
-            expiresAt: Date.now() + SESSION_IMPORT_SCAN_CACHE_TTL_MS,
-          };
-        }
-        return result;
-      })
-      .finally(() => {
-        if (inFlightSessionImportScan?.promise === scanPromise) {
-          inFlightSessionImportScan = null;
-        }
-      });
-
-    inFlightSessionImportScan = { scope: cacheScope, force, promise: scanPromise };
-    return scanPromise;
-  });
+  ipcMain.handle('local-db:session-import:scan', async (_e, request?: SessionImportScanRequest): Promise<SessionImportScanResult> =>
+    getSessionImportScan({ force: request?.force === true }),
+  );
 
   ipcMain.handle('local-db:session-import:import', async (_e, request: SessionImportRequest) => {
     const selected = normalizeImportRequest(request);
@@ -187,6 +150,51 @@ export function registerSessionImportIpc(): void {
       scanned: result.scanned,
     };
   });
+}
+
+/**
+ * 带缓存与并发去重的只读扫描。设置页导入与伙伴工作台(读候选、不导入)共用这一份,
+ * 30 秒内重复调用不重扫。
+ */
+export async function getSessionImportScan(options: { force?: boolean } = {}): Promise<SessionImportScanResult> {
+  const force = options.force === true;
+  const cacheScope = currentSessionImportScanCacheScope();
+  if (
+    !force &&
+    cachedSessionImportScan &&
+    cachedSessionImportScan.scope === cacheScope &&
+    cachedSessionImportScan.expiresAt > Date.now()
+  ) {
+    return cachedSessionImportScan.result;
+  }
+  if (
+    inFlightSessionImportScan &&
+    inFlightSessionImportScan.scope === cacheScope &&
+    (!force || inFlightSessionImportScan.force)
+  ) {
+    return inFlightSessionImportScan.promise;
+  }
+
+  const scanCacheVersion = ++sessionImportScanCacheVersion;
+  const scanPromise = runSessionImportScan()
+    .then((result) => {
+      if (scanCacheVersion === sessionImportScanCacheVersion) {
+        cachedSessionImportScan = {
+          scope: cacheScope,
+          result,
+          expiresAt: Date.now() + SESSION_IMPORT_SCAN_CACHE_TTL_MS,
+        };
+      }
+      return result;
+    })
+    .finally(() => {
+      if (inFlightSessionImportScan?.promise === scanPromise) {
+        inFlightSessionImportScan = null;
+      }
+    });
+
+  inFlightSessionImportScan = { scope: cacheScope, force, promise: scanPromise };
+  return scanPromise;
 }
 
 async function runSessionImportScan(): Promise<SessionImportScanResult> {
@@ -305,7 +313,7 @@ function safeUserDataDir(): string | null {
   }
 }
 
-function invalidateSessionImportScanCache(): void {
+export function invalidateSessionImportScanCache(): void {
   sessionImportScanCacheVersion += 1;
   cachedSessionImportScan = null;
   inFlightSessionImportScan = null;

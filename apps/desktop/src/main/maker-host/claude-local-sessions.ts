@@ -373,6 +373,12 @@ async function collectClaudeSessionFiles(root: string): Promise<string[]> {
   return files.sort((a, b) => b.mtime - a.mtime).map((x) => x.file);
 }
 
+/** 只读定位一份本机 Claude Code 转录文件(伙伴工作台读尾部用);不写库、不导入。 */
+export async function findExternalClaudeCodeSessionFile(sdkSessionId: string): Promise<string | null> {
+  if (!isLikelySessionId(sdkSessionId)) return null;
+  return findClaudeSessionFileById(sdkSessionId);
+}
+
 async function findClaudeSessionFileById(sdkSessionId: string): Promise<string | null> {
   const roots = await discoverClaudeProjectsRoots();
   const filename = `${sdkSessionId}.jsonl`;

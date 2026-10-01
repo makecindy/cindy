@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   boundWorkbenchSummary,
+  cleanWorkbenchTitle,
+  externalWorkbenchTaskId,
+  parseWorkbenchTaskId,
   countWorkbenchStates,
   deriveWorkbenchAutomationState,
   deriveWorkbenchSessionState,
@@ -90,5 +93,35 @@ describe('helpers', () => {
     expect(boundWorkbenchSummary('  a\n\nb  ')).toBe('a b');
     expect(boundWorkbenchSummary('')).toBeNull();
     expect(boundWorkbenchSummary('x'.repeat(500))).toHaveLength(160);
+  });
+});
+
+describe('cleanWorkbenchTitle', () => {
+  it('drops instruction blocks, markdown and noise, keeping the first readable line', () => {
+    expect(
+      cleanWorkbenchTitle('<system-reminder>\nYou are operating in a git worktree…\n</system-reminder>\n\n## 把 **图标** 导出来\n第二行'),
+    ).toBe('把 图标 导出来');
+    expect(cleanWorkbenchTitle('看看 https://github.com/makecindy/cindy/pull/5292 的 review')).toBe(
+      '看看 github.com/…/pull/5292 的 review',
+    );
+    expect(cleanWorkbenchTitle('[PR](https://github.com/a/b) `fix_icons`')).toBe('PR fix_icons');
+    expect(cleanWorkbenchTitle('- 列表里的一项')).toBe('列表里的一项');
+  });
+
+  it('bounds to 60 characters and falls back when nothing is left', () => {
+    expect(cleanWorkbenchTitle('字'.repeat(80))).toHaveLength(60);
+    expect(cleanWorkbenchTitle('<command-name>/clear</command-name>', '未命名任务')).toBe('未命名任务');
+    expect(cleanWorkbenchTitle('   \n  ', '未命名任务')).toBe('未命名任务');
+    expect(cleanWorkbenchTitle(null, '未命名任务')).toBe('未命名任务');
+  });
+});
+
+describe('parseWorkbenchTaskId', () => {
+  it('distinguishes Cindy tasks from local Claude Code / Codex sessions', () => {
+    expect(parseWorkbenchTaskId('claude-abc')).toEqual({ kind: 'session', sessionId: 'claude-abc' });
+    expect(parseWorkbenchTaskId('claude:abc')).toEqual({ kind: 'external', source: 'claude', externalId: 'abc' });
+    expect(parseWorkbenchTaskId('codex:019a-77')).toEqual({ kind: 'external', source: 'codex', externalId: '019a-77' });
+    expect(parseWorkbenchTaskId(' ')).toBeNull();
+    expect(externalWorkbenchTaskId('codex', 't1')).toBe('codex:t1');
   });
 });

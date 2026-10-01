@@ -838,6 +838,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 确定性校验;投递与停止复用 send_to_session / stop_session_turn 的同一条宿主路径。
       botWorkbench: {
         get: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.get(params)),
+        read: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.read(params)),
+        set: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.set(params)),
         continueTask: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.continueTask(params)),
         stopTask: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.stopTask(params)),
       },

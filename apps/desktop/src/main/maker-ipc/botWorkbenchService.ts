@@ -1,8 +1,9 @@
 /**
- * 伙伴工作台的存储:主人交给伙伴的项目目录,记在伙伴自己的家
- * `<ownerRoot>/bots/<botId>/workbench.json` 的 `directories` 里。
+ * 伙伴工作台的存储,记在伙伴自己的家 `<ownerRoot>/bots/<botId>/workbench.json`:
+ * - `directories`:主人交给伙伴的项目目录(授权范围);
+ * - `tasks`:伙伴读过候选任务后写下的判断(人话标题、没做完 / 聊过没下文 / 做完、下一步)。
  *
- * 工作台上的任务格不落盘:它们是宿主从已有任务、后台任务和自动化现算出来的投影
+ * 任务格的运行状态不落盘:它们是宿主从已有任务、后台任务和自动化现算出来的投影
  * (见 `shared/botWorkbench.ts`)。旧版本在同一个文件里存过伙伴写的卡片
  * (`cards` / `updatedAt`),读取时直接忽略,下次写入时不再带上,不报错。
  */
@@ -13,8 +14,12 @@ import { BrowserWindow } from 'electron';
 
 import {
   BOT_WORKBENCH_MAX_DIRECTORIES,
+  WORKBENCH_JUDGMENT_NEXT_MAX,
+  WORKBENCH_JUDGMENT_TITLE_MAX,
+  WORKBENCH_MAX_JUDGMENTS,
   type BotWorkbench,
   type BotWorkbenchDirectory,
+  type WorkbenchTaskJudgment,
 } from '../../shared/botWorkbench.js';
 import { botProfileDir } from './botProfileFolder.js';
 import { MAKER_PUSH } from './channels.js';
@@ -30,6 +35,60 @@ interface StoredDirectory {
 
 interface StoredWorkbench {
   directories: StoredDirectory[];
+  tasks: Record<string, WorkbenchTaskJudgment>;
+}
+
+const VERDICTS = new Set(['unfinished', 'idea', 'done']);
+
+function boundedText(value: unknown, max: number): string | null {
+  if (typeof value !== 'string') return null;
+  const text = value.replace(/\s+/g, ' ').trim();
+  return text ? text.slice(0, max) : null;
+}
+
+function normalizeJudgment(raw: unknown): WorkbenchTaskJudgment | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const entry = raw as Record<string, unknown>;
+  const title = boundedText(entry.title, WORKBENCH_JUDGMENT_TITLE_MAX);
+  if (!title || typeof entry.verdict !== 'string' || !VERDICTS.has(entry.verdict)) return null;
+  if (typeof entry.project !== 'string' || !path.isAbsolute(entry.project)) return null;
+  return {
+    title,
+    verdict: entry.verdict as WorkbenchTaskJudgment['verdict'],
+    next: boundedText(entry.next, WORKBENCH_JUDGMENT_NEXT_MAX),
+    project: entry.project,
+    updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : new Date(0).toISOString(),
+  };
+}
+
+/**
+ * 判断上限 200 条:超出时先淘汰最旧的 done,再淘汰最旧的其它判断。
+ */
+export function boundJudgments(
+  tasks: Record<string, WorkbenchTaskJudgment>,
+  max = WORKBENCH_MAX_JUDGMENTS,
+): Record<string, WorkbenchTaskJudgment> {
+  const entries = Object.entries(tasks);
+  if (entries.length <= max) return tasks;
+  const byAge = (a: [string, WorkbenchTaskJudgment], b: [string, WorkbenchTaskJudgment]) =>
+    Date.parse(a[1].updatedAt) - Date.parse(b[1].updatedAt) || a[0].localeCompare(b[0]);
+  const evictOrder = [
+    ...entries.filter(([, value]) => value.verdict === 'done').sort(byAge),
+    ...entries.filter(([, value]) => value.verdict !== 'done').sort(byAge),
+  ];
+  const drop = new Set(evictOrder.slice(0, entries.length - max).map(([key]) => key));
+  return Object.fromEntries(entries.filter(([key]) => !drop.has(key)));
+}
+
+function normalizeTasks(raw: unknown): Record<string, WorkbenchTaskJudgment> {
+  const out: Record<string, WorkbenchTaskJudgment> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!key || key.length > 256) continue;
+    const judgment = normalizeJudgment(value);
+    if (judgment) out[key] = judgment;
+  }
+  return boundJudgments(out);
 }
 
 function normalizeDirectories(raw: unknown): StoredDirectory[] {
@@ -49,7 +108,8 @@ function normalizeDirectories(raw: unknown): StoredDirectory[] {
 /** 读盘后的有界规整:丢掉畸形条目与旧版卡片字段,不信任磁盘上的任何字段。 */
 export function normalizeWorkbench(raw: unknown): StoredWorkbench | null {
   if (!raw || typeof raw !== 'object') return null;
-  return { directories: normalizeDirectories((raw as { directories?: unknown }).directories) };
+  const record = raw as { directories?: unknown; tasks?: unknown };
+  return { directories: normalizeDirectories(record.directories), tasks: normalizeTasks(record.tasks) };
 }
 
 function workbenchPath(userDataDir: string, botId: string): string {
@@ -57,7 +117,7 @@ function workbenchPath(userDataDir: string, botId: string): string {
 }
 
 async function readStored(userDataDir: string, botId: string): Promise<StoredWorkbench> {
-  const empty: StoredWorkbench = { directories: [] };
+  const empty: StoredWorkbench = { directories: [], tasks: {} };
   try {
     const raw = await fs.readFile(workbenchPath(userDataDir, botId), 'utf8');
     return normalizeWorkbench(JSON.parse(raw)) ?? empty;
@@ -73,7 +133,11 @@ async function writeStored(userDataDir: string, botId: string, stored: StoredWor
   const target = workbenchPath(userDataDir, botId);
   await fs.mkdir(path.dirname(target), { recursive: true });
   const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(temp, `${JSON.stringify({ directories: stored.directories }, null, 2)}\n`, 'utf8');
+  await fs.writeFile(
+    temp,
+    `${JSON.stringify({ directories: stored.directories, tasks: stored.tasks }, null, 2)}\n`,
+    'utf8',
+  );
   await fs.rename(temp, target);
 }
 
@@ -111,7 +175,51 @@ async function describeDirectory(dir: StoredDirectory): Promise<BotWorkbenchDire
 
 export async function readBotWorkbench(userDataDir: string, botId: string): Promise<BotWorkbench> {
   const stored = await readStored(userDataDir, botId);
-  return { directories: await Promise.all(stored.directories.map(describeDirectory)) };
+  return {
+    directories: await Promise.all(stored.directories.map(describeDirectory)),
+    tasks: stored.tasks,
+  };
+}
+
+/** 工具读取用:已接手项目与判断,不做文件系统探测。 */
+export async function readBotWorkbenchState(
+  userDataDir: string,
+  botId: string,
+): Promise<{ directories: string[]; tasks: Record<string, WorkbenchTaskJudgment> }> {
+  const stored = await readStored(userDataDir, botId);
+  return { directories: stored.directories.map((dir) => dir.path), tasks: stored.tasks };
+}
+
+/** 整条替换一件任务的判断(上限与淘汰见 `boundJudgments`)。 */
+export async function setBotWorkbenchJudgment(
+  userDataDir: string,
+  botId: string,
+  taskId: string,
+  judgment: Omit<WorkbenchTaskJudgment, 'updatedAt'>,
+  now: Date = new Date(),
+): Promise<WorkbenchTaskJudgment> {
+  const saved: WorkbenchTaskJudgment = { ...judgment, updatedAt: now.toISOString() };
+  const normalized = normalizeJudgment(saved);
+  if (!normalized) throw new Error('Invalid workbench judgment');
+  return mutate(userDataDir, botId, (stored) => ({
+    next: { ...stored, tasks: boundJudgments({ ...stored.tasks, [taskId]: normalized }) },
+    result: normalized,
+  }));
+}
+
+/** 外部会话导入成 Cindy 任务后,把判断改挂到新的 session id。 */
+export async function rekeyBotWorkbenchJudgment(
+  userDataDir: string,
+  botId: string,
+  fromTaskId: string,
+  toTaskId: string,
+): Promise<void> {
+  await mutate(userDataDir, botId, (stored) => {
+    const judgment = stored.tasks[fromTaskId];
+    if (!judgment || fromTaskId === toTaskId) return { next: stored, result: undefined };
+    const { [fromTaskId]: _moved, ...rest } = stored.tasks;
+    return { next: { ...stored, tasks: { ...rest, [toTaskId]: judgment } }, result: undefined };
+  });
 }
 
 /** 只要路径的已接手项目列表(授权校验用,不做文件系统探测)。 */
@@ -139,14 +247,14 @@ export async function addBotWorkbenchDirectory(
       return { next: stored, result: { ok: false, errorCode: 'TOO_MANY' } };
     }
     // 最近交代的项目排最前。
-    const next = { directories: [{ path: resolved, addedAt: now.toISOString() }, ...rest] };
+    const next = { ...stored, directories: [{ path: resolved, addedAt: now.toISOString() }, ...rest] };
     return { next, result: { ok: true } };
   });
 }
 
 export async function removeBotWorkbenchDirectory(userDataDir: string, botId: string, dirPath: string): Promise<void> {
   await mutate(userDataDir, botId, (stored) => ({
-    next: { directories: stored.directories.filter((dir) => dir.path !== dirPath) },
+    next: { ...stored, directories: stored.directories.filter((dir) => dir.path !== dirPath) },
     result: undefined,
   }));
 }

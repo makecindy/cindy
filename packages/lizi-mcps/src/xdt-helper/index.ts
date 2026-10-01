@@ -148,10 +148,13 @@ export {
   type BotWorkbenchSnapshotWire,
   type BotWorkbenchToolDeps,
   type WorkbenchAutomationWire,
+  type WorkbenchJudgmentWire,
   type WorkbenchProjectWire,
   type WorkbenchStopStatusWire,
   type WorkbenchTaskStateWire,
   type WorkbenchTaskWire,
+  type WorkbenchTranscriptWire,
+  type WorkbenchVerdictWire,
 } from './bot_workbench.js';
 export {
   registerCreateTeammateTool,

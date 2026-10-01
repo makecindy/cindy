@@ -9,10 +9,14 @@ vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] } }));
 import { botProfileDir } from '../botProfileFolder.js';
 import {
   addBotWorkbenchDirectory,
+  boundJudgments,
   normalizeWorkbench,
   readBotWorkbench,
   readBotWorkbenchDirectoryPaths,
+  readBotWorkbenchState,
+  rekeyBotWorkbenchJudgment,
   removeBotWorkbenchDirectory,
+  setBotWorkbenchJudgment,
 } from '../botWorkbenchService.js';
 
 let root: string | null = null;
@@ -64,10 +68,10 @@ describe('bot workbench storage', () => {
 
   it('reads an empty workbench when a Bot has none yet or the file is corrupt', async () => {
     root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
-    expect(await readBotWorkbench(root, 'bot-1')).toEqual({ directories: [] });
+    expect(await readBotWorkbench(root, 'bot-1')).toEqual({ directories: [], tasks: {} });
     await mkdir(botProfileDir(root, 'bot-1'), { recursive: true });
     await writeFile(path.join(botProfileDir(root, 'bot-1'), 'workbench.json'), '{not json', 'utf8');
-    expect(await readBotWorkbench(root, 'bot-1')).toEqual({ directories: [] });
+    expect(await readBotWorkbench(root, 'bot-1')).toEqual({ directories: [], tasks: {} });
   });
 
   it('ignores cards written by the earlier draft and drops them on the next write', async () => {
@@ -84,10 +88,12 @@ describe('bot workbench storage', () => {
 
     expect(await readBotWorkbench(root, 'bot-1')).toEqual({
       directories: [{ path: project, name: 'Filo', addedAt: '2026-09-30T00:00:00.000Z', exists: true }],
+      tasks: {},
     });
     await removeBotWorkbenchDirectory(root, 'bot-1', path.join(root, 'nothing'));
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
       directories: [{ path: project, addedAt: '2026-09-30T00:00:00.000Z' }],
+      tasks: {},
     });
   });
 
@@ -103,5 +109,77 @@ describe('bot workbench storage', () => {
     });
     expect(normalized?.directories).toHaveLength(6);
     expect(normalized?.directories[0]).toEqual({ path: '/a', addedAt: new Date(0).toISOString() });
+  });
+});
+
+describe('bot workbench judgments', () => {
+  const judgment = (verdict: 'unfinished' | 'idea' | 'done', updatedAt: string) => ({
+    title: '导出图标',
+    verdict,
+    next: verdict === 'done' ? null : '补 xxhdpi',
+    project: '/w/art',
+    updatedAt,
+  });
+
+  it('stores, replaces and re-keys a judgment next to the handed-over projects', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
+    const project = path.join(root, 'art');
+    await mkdir(project);
+    await addBotWorkbenchDirectory(root, 'bot-1', project);
+    await setBotWorkbenchJudgment(root, 'bot-1', 'claude:abc', {
+      title: '导出图标',
+      verdict: 'unfinished',
+      next: '补 xxhdpi',
+      project,
+    }, new Date('2026-10-01T01:00:00.000Z'));
+    await setBotWorkbenchJudgment(root, 'bot-1', 'claude:abc', {
+      title: '导出 Android 图标',
+      verdict: 'idea',
+      next: '先问要不要做 xxxhdpi',
+      project,
+    }, new Date('2026-10-01T02:00:00.000Z'));
+    expect((await readBotWorkbenchState(root, 'bot-1')).tasks).toEqual({
+      'claude:abc': {
+        title: '导出 Android 图标',
+        verdict: 'idea',
+        next: '先问要不要做 xxxhdpi',
+        project,
+        updatedAt: '2026-10-01T02:00:00.000Z',
+      },
+    });
+    await rekeyBotWorkbenchJudgment(root, 'bot-1', 'claude:abc', 'claude-abc');
+    const state = await readBotWorkbenchState(root, 'bot-1');
+    expect(Object.keys(state.tasks)).toEqual(['claude-abc']);
+    expect(state.directories).toEqual([project]);
+    // Removing a project keeps the judgments; the projection hides them by project.
+    await removeBotWorkbenchDirectory(root, 'bot-1', project);
+    expect(Object.keys((await readBotWorkbenchState(root, 'bot-1')).tasks)).toEqual(['claude-abc']);
+  });
+
+  it('keeps at most the limit, evicting the oldest done judgments first', () => {
+    const tasks = {
+      a: judgment('done', '2026-10-01T00:00:01.000Z'),
+      b: judgment('unfinished', '2026-10-01T00:00:00.000Z'),
+      c: judgment('done', '2026-10-01T00:00:02.000Z'),
+      d: judgment('idea', '2026-10-01T00:00:03.000Z'),
+    };
+    expect(Object.keys(boundJudgments(tasks, 3)).sort()).toEqual(['b', 'c', 'd']);
+    expect(Object.keys(boundJudgments(tasks, 2)).sort()).toEqual(['b', 'd']);
+    expect(Object.keys(boundJudgments(tasks, 1))).toEqual(['d']);
+  });
+
+  it('drops malformed judgments when reading', () => {
+    const normalized = normalizeWorkbench({
+      tasks: {
+        ok: judgment('idea', '2026-10-01T00:00:00.000Z'),
+        badVerdict: { ...judgment('idea', 'x'), verdict: 'maybe' },
+        noTitle: { ...judgment('idea', 'x'), title: '' },
+        relativeProject: { ...judgment('idea', 'x'), project: 'art' },
+        long: { ...judgment('unfinished', 'x'), title: 'x'.repeat(80), next: 'y'.repeat(300) },
+      },
+    });
+    expect(Object.keys(normalized?.tasks ?? {})).toEqual(['ok', 'long']);
+    expect(normalized?.tasks.long.title).toHaveLength(40);
+    expect(normalized?.tasks.long.next).toHaveLength(120);
   });
 });

@@ -2,17 +2,25 @@
  * 伙伴工作台工具的宿主实现:把 `botWorkbenchAccess.ts` 的纯逻辑接到真实数据源上。
  *
  * - 伙伴身份从调用方 session 反查(只认本机、在用的伙伴主任务);
- * - 已接手项目读自伙伴家的 `workbench.json`;
+ * - 已接手项目与伙伴的判断读写伙伴家的 `workbench.json`;
  * - 任务、后台任务、活动快照、例行任务与自动化都读宿主已有的权威来源,不另存状态;
+ * - 本机 Claude Code / Codex 会话复用导入扫描(只读、带缓存),读转录只读文件尾部;
+ *   只有伙伴继续某一件时才经设置页同一条单条导入路径导入它;
  * - 继续 / 停止复用宿主已有的发消息与优雅停止路径(与 send_to_session、
  *   stop_session_turn 同一条链路),由调用方注入。
  */
 import { promises as fs } from 'node:fs';
 
-import { and, desc, eq, isNotNull, isNull, like, or, inArray } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNotNull, isNull, like, ne, or } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current.js';
-import { botDelegations, botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
+import { botDelegations, botProfiles, botSessionLinks, messages, sessions } from '../localDb/schema.js';
+import {
+  getSessionImportScan,
+  invalidateSessionImportScanCache,
+} from '../localDb/ipc/session-import.js';
+import { importExternalClaudeCodeSessions } from '../maker-host/claude-local-sessions.js';
+import { importExternalCodexSessions } from '../maker-host/codex-local-sessions.js';
 import {
   activeOwnerScopeKey,
   isAppSessionBoundaryPending,
@@ -22,13 +30,20 @@ import { routineTools } from '../routines/service.js';
 import { getSchedulerIfInitialized } from '../scheduler-host/index.js';
 import { normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
 import type { WorkbenchDelegationStatus } from '../../shared/botWorkbench.js';
-import { readBotWorkbenchDirectoryPaths } from './botWorkbenchService.js';
+import {
+  broadcastBotWorkbenchChanged,
+  readBotWorkbenchState,
+  rekeyBotWorkbenchJudgment,
+  setBotWorkbenchJudgment,
+} from './botWorkbenchService.js';
+import { readExternalTranscript, readSessionTranscript } from './botWorkbenchTranscripts.js';
 import { readCanonicalSessionActivity } from './sessionActivityProjection.js';
 import {
   createBotWorkbenchAccess,
   type BotWorkbenchAccess,
   type BotWorkbenchAccessDeps,
   type WorkbenchCallerResult,
+  type WorkbenchExternalCandidate,
   type WorkbenchTargetFacts,
 } from './botWorkbenchAccess.js';
 
@@ -134,9 +149,23 @@ async function listWorkbenchProjectTasks(
     .orderBy(desc(sessions.updatedAt))
     .limit(500);
   const hidden = new Set((await hiddenIds).map((row) => row.id));
-  return rows
+  const kept = rows
     .filter((row) => !hidden.has(row.id))
-    .filter((row) => row.userSendAt != null || row.listPreview != null || alwaysInclude.has(row.id))
+    .filter((row) => row.userSendAt != null || row.listPreview != null || alwaysInclude.has(row.id));
+  const messageCounts = new Map<string, number>();
+  if (kept.length > 0) {
+    const counted = await db
+      .select({ sessionId: messages.sessionId, total: count() })
+      .from(messages)
+      .where(and(
+        inArray(messages.sessionId, kept.slice(0, 200).map((row) => row.id)),
+        isNull(messages.rewindAt),
+        inArray(messages.role, ['user', 'assistant']),
+      ))
+      .groupBy(messages.sessionId);
+    for (const row of counted) messageCounts.set(row.sessionId, Number(row.total));
+  }
+  return kept
     .map((row) => ({
       id: row.id,
       title: row.title,
@@ -144,6 +173,7 @@ async function listWorkbenchProjectTasks(
       agentKind: row.agentKind ?? null,
       summary: row.listPreview ?? null,
       lastActiveAt: row.userSendAt ?? row.updatedAt ?? null,
+      messageCount: messageCounts.get(row.id) ?? null,
     }))
     .sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0));
 }
@@ -204,6 +234,57 @@ async function listProjectSchedules() {
   }));
 }
 
+/** 本机还没导入的 Claude Code / Codex 会话:复用设置页导入扫描(只读、30 秒缓存)。 */
+async function listExternalCandidates(): Promise<WorkbenchExternalCandidate[]> {
+  const scan = await getSessionImportScan();
+  return scan.candidates.map((item) => ({
+    source: item.source,
+    id: item.id,
+    title: item.title,
+    cwd: item.cwd,
+    workspaceKind: item.workspaceKind,
+    updatedAt: Date.parse(item.updatedAt) || 0,
+    archived: item.archived,
+  }));
+}
+
+async function findImportedSession(source: 'claude' | 'codex', externalId: string): Promise<string | null> {
+  const [row] = await getDbClient()
+    .drizzle.select({ id: sessions.id })
+    .from(sessions)
+    .where(and(
+      eq(sessions.sdkSessionId, externalId),
+      eq(sessions.agentKind, source === 'claude' ? 'cc' : 'codex'),
+      ne(sessions.status, 'deleted'),
+    ))
+    .orderBy(desc(sessions.updatedAt))
+    .limit(1);
+  return row?.id ?? null;
+}
+
+/** 只导入这一条外部会话(设置页同一条导入路径),返回它在 Cindy 里的任务 id。 */
+async function importExternalSession(
+  source: 'claude' | 'codex',
+  externalId: string,
+): Promise<{ ok: true; sessionId: string } | { ok: false; errorCode: string; message: string }> {
+  try {
+    if (source === 'claude') await importExternalClaudeCodeSessions([externalId]);
+    else await importExternalCodexSessions([externalId]);
+  } catch (error) {
+    return {
+      ok: false,
+      errorCode: 'IMPORT_FAILED',
+      message: `没能把这条本机会话接过来:${error instanceof Error ? error.message : String(error)}`,
+    };
+  } finally {
+    invalidateSessionImportScanCache();
+  }
+  const sessionId = await findImportedSession(source, externalId);
+  return sessionId
+    ? { ok: true, sessionId }
+    : { ok: false, errorCode: 'IMPORT_FAILED', message: '没能把这条本机会话接过来,请让主人稍后重试' };
+}
+
 export type BotWorkbenchSendDeps = Pick<BotWorkbenchAccessDeps, 'sendToSession' | 'stopSessionTurn'>;
 
 /**
@@ -214,7 +295,7 @@ export function createDesktopBotWorkbenchAccess(send: BotWorkbenchSendDeps): Bot
   const userDataDir = ownerScopedUserDataPath();
   return createBotWorkbenchAccess({
     resolveCaller: resolveWorkbenchCaller,
-    readProjectDirs: (botId) => readBotWorkbenchDirectoryPaths(userDataDir, botId),
+    readState: (botId) => readBotWorkbenchState(userDataDir, botId),
     projectExists: async (dir) => {
       try {
         return (await fs.stat(dir)).isDirectory();
@@ -224,6 +305,14 @@ export function createDesktopBotWorkbenchAccess(send: BotWorkbenchSendDeps): Bot
     },
     readTarget: readWorkbenchTarget,
     listProjectTasks: listWorkbenchProjectTasks,
+    listExternalCandidates,
+    findImportedSession,
+    importExternal: importExternalSession,
+    readSessionTranscript,
+    readExternalTranscript,
+    saveJudgment: (botId, taskId, judgment) => setBotWorkbenchJudgment(userDataDir, botId, taskId, judgment),
+    rekeyJudgment: (botId, from, to) => rekeyBotWorkbenchJudgment(userDataDir, botId, from, to),
+    notifyChanged: broadcastBotWorkbenchChanged,
     listDelegations: listBotDelegationChildren,
     readActivityPhase: async (sessionId) => (await readCanonicalSessionActivity(sessionId)).phase,
     listRoutines: listBotRoutines,
@@ -250,4 +339,14 @@ export async function runBotWorkbenchTool<T>(
   } catch (error) {
     return { ok: false, errorCode: 'INTERNAL', message: error instanceof Error ? error.message : String(error) };
   }
+}
+
+const NO_SEND: BotWorkbenchSendDeps = {
+  sendToSession: async () => ({ ok: false, errorCode: 'UNSUPPORTED', message: 'read only' }),
+  stopSessionTurn: async () => ({ ok: false, errorCode: 'UNSUPPORTED', message: 'read only' }),
+};
+
+/** 工作台详情视图(主人自己的界面)读取一件任务的最近内容;范围同样限于已接手项目。 */
+export async function readBotWorkbenchTaskForOwner(botId: string, taskId: string) {
+  return runBotWorkbenchTool(NO_SEND, (access) => access.readForOwner({ botId, taskId }));
 }

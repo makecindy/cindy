@@ -66,6 +66,7 @@ import {
   readBotWorkbench,
   removeBotWorkbenchDirectory,
 } from '../../maker-ipc/botWorkbenchService.js';
+import { readBotWorkbenchTaskForOwner } from '../../maker-ipc/botWorkbenchTools.js';
 import {
   NEW_BOT_DEFAULT_PI_EFFORT,
   NEW_BOT_DEFAULT_PI_MODEL,
@@ -2108,6 +2109,17 @@ export function registerBotIpc(): void {
     const result = await addBotWorkbenchDirectory(owner.userDataDir, botId, dirPath);
     owner.assertCurrent();
     if (result.ok) broadcastBotWorkbenchChanged(botId);
+    return result;
+  });
+  // 工作台详情视图:只读一件任务的最近内容(有界)。范围限于该伙伴已接手的项目,
+  // 外部会话只读转录尾部,不写库、不导入。
+  ipcMain.handle('local-db:bots:workbench:read-task', async (event, rawBotId: unknown, rawTaskId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const botId = readText(rawBotId, 'botId', 128, true);
+    const taskId = readText(rawTaskId, 'taskId', 256, true);
+    const owner = captureBotOperationOwner();
+    const result = await readBotWorkbenchTaskForOwner(botId, taskId);
+    owner.assertCurrent();
     return result;
   });
   ipcMain.handle('local-db:bots:workbench:remove-directory', async (event, rawBotId: unknown, rawPath: unknown) => {

@@ -19,8 +19,114 @@ export interface BotWorkbenchDirectory {
   exists: boolean;
 }
 
+/**
+ * 伙伴对一件候选任务的理解:读过之后写下的人话标题、判断与下一步。
+ * - unfinished:没做完、可以接着做;
+ * - idea:聊过但没下文,建议往下做;
+ * - done:做完了,或与项目无关。工作台不显示。
+ */
+export type WorkbenchVerdict = 'unfinished' | 'idea' | 'done';
+
+export interface WorkbenchTaskJudgment {
+  title: string;
+  verdict: WorkbenchVerdict;
+  /** 一句「下一步」;done 可为空。 */
+  next: string | null;
+  /** 写判断时这件任务所在的已接手项目目录(移除项目后据此隐藏)。 */
+  project: string;
+  updatedAt: string;
+}
+
 export interface BotWorkbench {
   directories: BotWorkbenchDirectory[];
+  /** 按 task_id 记录的伙伴判断。 */
+  tasks: Record<string, WorkbenchTaskJudgment>;
+}
+
+/** 一件任务最近内容的只读摘录(工具与详情视图共用)。 */
+export interface WorkbenchTranscriptItem {
+  role: 'user' | 'assistant';
+  text: string;
+  at: number;
+}
+
+export interface WorkbenchTranscript {
+  items: WorkbenchTranscriptItem[];
+  truncated: boolean;
+}
+
+export const WORKBENCH_JUDGMENT_TITLE_MAX = 40;
+export const WORKBENCH_JUDGMENT_NEXT_MAX = 120;
+export const WORKBENCH_MAX_JUDGMENTS = 200;
+
+/**
+ * 工作台任务 id:Cindy 任务就是 session id;还没导入的本机外部会话带来源前缀,
+ * `claude:<sdkSessionId>` / `codex:<threadId>`。
+ */
+export type WorkbenchTaskRef =
+  | { kind: 'session'; sessionId: string }
+  | { kind: 'external'; source: 'claude' | 'codex'; externalId: string };
+
+export function parseWorkbenchTaskId(taskId: string): WorkbenchTaskRef | null {
+  const id = taskId.trim();
+  if (!id || id.length > 256) return null;
+  const match = /^(claude|codex):(.+)$/.exec(id);
+  if (match) return { kind: 'external', source: match[1] as 'claude' | 'codex', externalId: match[2] };
+  return { kind: 'session', sessionId: id };
+}
+
+export function externalWorkbenchTaskId(source: 'claude' | 'codex', externalId: string): string {
+  return `${source}:${externalId}`;
+}
+
+function shortenUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    const segments = url.pathname.split('/').filter(Boolean);
+    const host = url.host.replace(/^www\./, '');
+    if (segments.length === 0) return host;
+    if (segments.length <= 2) return `${host}/${segments.join('/')}`;
+    return `${host}/…/${segments.slice(-2).join('/')}`;
+  } catch {
+    return raw;
+  }
+}
+
+/** 去掉尖括号指令块(如 `<system-reminder>…</system-reminder>`)与残留标签。 */
+export function stripInstructionBlocks(text: string): string {
+  let out = text;
+  for (let pass = 0; pass < 4; pass += 1) {
+    const next = out.replace(/<([A-Za-z][\w-]*)(?:\s[^<>]*)?>[\s\S]*?<\/\1>/g, ' ');
+    if (next === out) break;
+    out = next;
+  }
+  return out.replace(/<\/?[A-Za-z][\w-]*(?:\s[^<>]*)?\/?>/g, ' ');
+}
+
+export const WORKBENCH_TITLE_MAX = 60;
+
+/**
+ * 把一件任务的原始标题(常常是第一条消息原文)整理成能读的一行:去掉指令块、
+ * Markdown 标记与多余空白,URL 只留域名与路径末段,取第一行截到 60 字。
+ * 清洗后为空时返回 `fallback`。
+ */
+export function cleanWorkbenchTitle(raw: string | null | undefined, fallback = ''): string {
+  if (typeof raw !== 'string') return fallback;
+  let text = stripInstructionBlocks(raw);
+  text = text.replace(/\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g, (_all, label: string, url: string) => label.trim() || url);
+  text = text.replace(/https?:\/\/[^\s<>()\]]+/g, (url) => shortenUrl(url));
+  const line = text
+    .split(/\r?\n/)
+    .map((row) =>
+      row
+        .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/, '')
+        .replace(/`+|\*\*|__|~~/g, '')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    )
+    .find(Boolean);
+  if (!line) return fallback;
+  return line.length > WORKBENCH_TITLE_MAX ? `${line.slice(0, WORKBENCH_TITLE_MAX - 1)}…` : line;
 }
 
 /** 一格任务的状态。`automation` 表示一条正常待命的自动化(下次运行 / 上次结果)。 */

@@ -6,7 +6,9 @@
  * 输出两样东西:
  *  - 空状态的项目清单:复用任务列表的项目分组(`groupSessions`),合并本机 Claude Code /
  *    Codex 的可导入候选与项目里的自动化;
- *  - 已接手项目的任务格:每格的状态用 `shared/botWorkbench.ts` 与主进程同一套规则推导。
+ *  - 已接手项目的任务格:只显示伙伴读过后判为「没做完 / 聊过没下文」的,以及本来就有运行信号的
+ *    (在做 / 等你 / 排队)、伙伴自己开的后台任务与自动化;状态用 `shared/botWorkbench.ts`
+ *    与主进程同一套规则推导。没有判断也没有运行信号的候选不显示。
  */
 import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activity';
 
@@ -14,14 +16,17 @@ import type { Session } from '@/lib/ccAgent.types';
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
 import {
   boundWorkbenchSummary,
+  cleanWorkbenchTitle,
   deriveWorkbenchAutomationState,
   deriveWorkbenchSessionState,
   findWorkbenchProject,
   importedSessionOrigin,
+  externalWorkbenchTaskId,
   isWorkbenchTaskSource,
+  parseWorkbenchTaskId,
   workbenchProjectKey,
-  workbenchStateRank,
   type WorkbenchDelegationStatus,
+  type WorkbenchTaskJudgment,
   type WorkbenchTaskOrigin,
   type WorkbenchTaskState,
 } from '../../../shared/botWorkbench';
@@ -95,16 +100,39 @@ export type WorkbenchTileLine =
   | { kind: 'never-run' }
   | { kind: 'none' };
 
+/** 伙伴判为值得接着做的两类;done 不上工作台。 */
+export type WorkbenchShownVerdict = 'unfinished' | 'idea';
+
 export type WorkbenchTile =
   | {
       type: 'session';
       key: string;
+      /** Cindy 任务 id(也是工作台 task_id)。 */
       id: string;
+      /** 伙伴写的人话标题;没有时为清洗过的原始标题(可能为空,界面用「未命名任务」)。 */
       title: string;
       state: WorkbenchTaskState;
       origin: WorkbenchTaskOrigin;
+      verdict: WorkbenchShownVerdict | null;
+      /** 伙伴写的下一步。 */
+      next: string | null;
       /** 在做时用来显示用时。 */
       startedAtMs: number | null;
+      lastActiveMs: number;
+      line: WorkbenchTileLine;
+    }
+  | {
+      /** 还没接过来的本机 Claude Code / Codex 会话,只因伙伴的判断而出现。 */
+      type: 'external';
+      key: string;
+      /** 工作台 task_id:`claude:<id>` / `codex:<id>`。 */
+      id: string;
+      title: string;
+      state: WorkbenchTaskState;
+      origin: 'claude-code' | 'codex';
+      verdict: WorkbenchShownVerdict;
+      next: string | null;
+      startedAtMs: null;
       lastActiveMs: number;
       line: WorkbenchTileLine;
     }
@@ -267,19 +295,48 @@ export function buildWorkbenchProjectOptions(input: {
     .sort((a, b) => b.latestActivityMs - a.latestActivityMs || a.name.localeCompare(b.name));
 }
 
-/** 选中的项目下,还没导入的 Claude Code / Codex 候选;按最近更新倒序,最多 `limit` 条。 */
-export function pickImportCandidates(
-  candidates: readonly ExternalSessionCandidate[],
-  projectDir: string,
-  caseInsensitive: boolean,
-  limit: number,
-): { picked: ExternalSessionCandidate[]; total: number } {
-  const key = workbenchProjectKey(projectDir, caseInsensitive);
-  const matching = candidates
-    .filter((candidate) => !candidate.archived && candidate.projectDir)
-    .filter((candidate) => workbenchProjectKey(candidate.projectDir, caseInsensitive) === key)
-    .sort((a, b) => toMs(b.updatedAt) - toMs(a.updatedAt));
-  return { picked: matching.slice(0, limit), total: matching.length };
+function shownVerdict(judgment: WorkbenchTaskJudgment | undefined): WorkbenchShownVerdict | null {
+  return judgment && judgment.verdict !== 'done' ? judgment.verdict : null;
+}
+
+/**
+ * 任务格排列:在做 / 等你 / 排队在前,其次没做完、聊过没下文,再是自动化,
+ * 最后是伙伴自己开的、已收尾的后台任务;同一档按最近活动倒序。
+ */
+export function workbenchTileRank(tile: Pick<WorkbenchTile, 'state' | 'type'> & { verdict?: WorkbenchShownVerdict | null }): number {
+  if (tile.state === 'running' || tile.state === 'waiting' || tile.state === 'queued') return 0;
+  if (tile.verdict === 'unfinished') return 1;
+  if (tile.verdict === 'idea') return 2;
+  if (tile.type === 'schedule' || tile.type === 'routine') return 3;
+  return 4;
+}
+
+/**
+ * 项目里还没被伙伴判断过的候选数(Cindy 任务 + 还没接过来的本机会话)。
+ * 汇总行据此显示「正在了解…」。
+ */
+export function countUnjudgedCandidates(input: {
+  sessions: readonly Session[];
+  hiddenIds: ReadonlySet<string>;
+  projectDirs: readonly string[];
+  caseInsensitive: boolean;
+  candidates: readonly ExternalSessionCandidate[];
+  judgments: Readonly<Record<string, WorkbenchTaskJudgment>>;
+  delegationChildIds?: ReadonlySet<string>;
+}): number {
+  let unjudged = 0;
+  for (const session of input.sessions) {
+    if (input.delegationChildIds?.has(session.id)) continue;
+    if (!isWorkbenchCandidateSession(session, input.hiddenIds)) continue;
+    if (!findWorkbenchProject(session.workingDir, input.projectDirs, input.caseInsensitive)) continue;
+    if (!input.judgments[session.id]) unjudged += 1;
+  }
+  for (const candidate of input.candidates) {
+    if (candidate.archived || !candidate.projectDir) continue;
+    if (!findWorkbenchProject(candidate.projectDir, input.projectDirs, input.caseInsensitive)) continue;
+    if (!input.judgments[externalWorkbenchTaskId(candidate.source, candidate.id)]) unjudged += 1;
+  }
+  return unjudged;
 }
 
 function sessionLine(
@@ -306,8 +363,9 @@ function sessionLine(
 }
 
 /**
- * 已接手项目的任务格:项目里的普通任务、伙伴开的后台任务(含排队)、项目里的自动化、
- * 伙伴自己的例行任务(含导入来的自动化)。排列见 `workbenchStateRank`。
+ * 已接手项目的任务格:伙伴判为没做完 / 聊过没下文的任务(Cindy 任务与本机会话)、
+ * 有运行信号(在做 / 等你 / 排队)的 Cindy 任务、伙伴开的后台任务、项目里的自动化、
+ * 伙伴自己的例行任务(含导入来的自动化)。排列见 `workbenchTileRank`。
  */
 export function buildWorkbenchTiles(input: {
   sessions: readonly Session[];
@@ -319,7 +377,11 @@ export function buildWorkbenchTiles(input: {
   erroredIds: ReadonlySet<string>;
   schedules: readonly WorkbenchScheduleInput[];
   routines: readonly WorkbenchRoutineInput[];
+  judgments?: Readonly<Record<string, WorkbenchTaskJudgment>>;
+  /** 渲染层扫描到的本机会话,只用来补最近活动时间。 */
+  candidates?: readonly ExternalSessionCandidate[];
 }): WorkbenchTile[] {
+  const judgments = input.judgments ?? {};
   const delegationByChild = new Map<string, WorkbenchDelegationInput>();
   for (const delegation of [...input.delegations].sort((a, b) => b.createdAt - a.createdAt)) {
     if (delegation.childSessionId && !delegationByChild.has(delegation.childSessionId)) {
@@ -341,18 +403,51 @@ export function buildWorkbenchTiles(input: {
       errored: input.erroredIds.has(session.id),
       delegationStatus: delegation?.status ?? null,
     });
+    const judgment = judgments[session.id];
+    const verdict = shownVerdict(judgment);
+    const live = state === 'running' || state === 'waiting' || state === 'queued';
+    // 接手 = 理解:没有运行信号、也没被伙伴判为值得继续的任务不上工作台。
+    if (!live && !delegation && !verdict) continue;
     tiles.push({
       type: 'session',
       key: `session:${session.id}`,
       id: session.id,
-      title: session.title,
+      title: judgment?.title ?? cleanWorkbenchTitle(session.title),
       state,
       origin: delegation ? 'delegated' : (importedSessionOrigin(session.id, session.agentKind) ?? 'existing'),
+      verdict,
+      next: verdict ? judgment!.next : null,
       startedAtMs: state === 'running'
         ? (activity?.startedAtMs ?? delegation?.acceptedAt ?? null)
         : null,
       lastActiveMs: Math.max(toMs(session.userSendAt), toMs(session.updatedAt), delegation?.updatedAt ?? 0),
       line: sessionLine(state, session, activity, delegation, interrupted),
+    });
+  }
+
+  const candidateUpdatedAt = new Map(
+    (input.candidates ?? []).map((candidate) => [
+      externalWorkbenchTaskId(candidate.source, candidate.id),
+      toMs(candidate.updatedAt),
+    ]),
+  );
+  for (const [taskId, judgment] of Object.entries(judgments)) {
+    const ref = parseWorkbenchTaskId(taskId);
+    const verdict = shownVerdict(judgment);
+    if (!ref || ref.kind !== 'external' || !verdict) continue;
+    if (!findWorkbenchProject(judgment.project, input.projectDirs, input.caseInsensitive)) continue;
+    tiles.push({
+      type: 'external',
+      key: `external:${taskId}`,
+      id: taskId,
+      title: judgment.title,
+      state: 'done',
+      origin: ref.source === 'claude' ? 'claude-code' : 'codex',
+      verdict,
+      next: judgment.next,
+      startedAtMs: null,
+      lastActiveMs: candidateUpdatedAt.get(taskId) ?? toMs(judgment.updatedAt),
+      line: { kind: 'none' },
     });
   }
 
@@ -412,9 +507,7 @@ export function buildWorkbenchTiles(input: {
     });
   }
 
-  return tiles.sort(
-    (a, b) => workbenchStateRank(a.state) - workbenchStateRank(b.state) || b.lastActiveMs - a.lastActiveMs,
-  );
+  return tiles.sort((a, b) => workbenchTileRank(a) - workbenchTileRank(b) || b.lastActiveMs - a.lastActiveMs);
 }
 
 // ─── 空状态项目清单的过滤与分档 ─────────────────────────────────────

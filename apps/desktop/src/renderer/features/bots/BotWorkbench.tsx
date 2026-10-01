@@ -1,11 +1,25 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { CircleCheck, CirclePause, Clock3, Folder, FolderOpen, Plus, X } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowUp,
+  CircleCheck,
+  CirclePause,
+  Clock3,
+  Folder,
+  FolderOpen,
+  Lightbulb,
+  Plus,
+  Square,
+  SquareArrowOutUpRight,
+  X,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import type { Routine, RoutineRun } from '@cindy/maker-scheduler';
 
 import { Button } from '@/components/ui/button';
 import { FileTypeTile } from '@/components/ui/file-type-tile';
+import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { collectCachedGeneratedFiles } from '@/components/chat/generatedFilesProjection';
@@ -29,6 +43,7 @@ import {
   isCaseInsensitivePlatform,
   type BotWorkbench as BotWorkbenchData,
   type WorkbenchTaskState,
+  type WorkbenchTranscript,
 } from '../../../shared/botWorkbench';
 import { useBotDelegations } from './botDelegationLive';
 import { isBotPrimaryGeneratedFile } from './botGeneratedArtifacts';
@@ -37,7 +52,7 @@ import {
   buildWorkbenchProjectOptions,
   buildWorkbenchTiles,
   collectBotHiddenSessionIds,
-  pickImportCandidates,
+  countUnjudgedCandidates,
   tierWorkbenchProjectOptions,
   type ExternalSessionCandidate,
   type WorkbenchPathHints,
@@ -49,17 +64,16 @@ import {
 /**
  * 伙伴工作台(右侧栏的一个标签,只对本机伙伴主任务提供)。
  *
- * - 没接手项目时:从已有项目里选一个 →「交给<伙伴>」,两次点击完成接手;
- * - 接手后:项目胶囊、一行汇总、两列等高的任务格、最近产出。
- * 任务格全部由宿主投影(见 botWorkbenchProjection),不经过模型;格子唯一的操作是
- * 打开对应任务 / 自动化。
+ * - 没接手项目时:从已有项目里选一个 →「交给<伙伴>」,两次点击完成接手。接手 = 理解:
+ *   只记下目录、告诉伙伴一声,不批量导入;伙伴随后读候选、写判断,格子随之出现。
+ * - 接手后:项目胶囊、一行汇总(伙伴还在读时显示「正在了解…」)、两列等高的任务格、最近产出。
+ *   只显示伙伴判为没做完 / 聊过没下文的,以及本来就在跑 / 等你 / 排队的任务与自动化。
+ * - 点任务格在本标签内打开详情:伙伴的判断、最近内容、补一句让伙伴接着做。
  */
 
 /** 默认展示几格;「全部 N」展开其余。 */
 const DEFAULT_TILE_COUNT = 6;
 const MAX_OUTPUTS = 4;
-/** 接手时一次最多导入几件本机 Claude Code / Codex 任务(按最近更新)。 */
-export const WORKBENCH_IMPORT_LIMIT = 20;
 
 type ChatStore = typeof import('@/lib/makerChatStore').makerChatStore;
 type ChatSnapshot = ReturnType<ChatStore['getSnapshot']>;
@@ -181,12 +195,14 @@ function useBotRoutines(botId: string): WorkbenchRoutineInput[] {
   return routines;
 }
 
-function useWorkbenchDirectories(botId: string): BotWorkbenchData | null {
+const EMPTY_WORKBENCH: BotWorkbenchData = { directories: [], tasks: {} };
+
+function useWorkbenchData(botId: string): BotWorkbenchData | null {
   const [data, setData] = useState<BotWorkbenchData | null>(null);
   useEffect(() => {
     const api = window.electronAPI?.localDb?.bots?.workbench;
     if (!api) {
-      setData({ directories: [] });
+      setData(EMPTY_WORKBENCH);
       return;
     }
     let alive = true;
@@ -195,16 +211,21 @@ function useWorkbenchDirectories(botId: string): BotWorkbenchData | null {
       void api
         .get(botId)
         .then((next) => {
-          if (alive && isDataOwnerGenerationCurrent(owner)) setData(next ?? { directories: [] });
+          if (alive && isDataOwnerGenerationCurrent(owner)) {
+            setData(next ? { directories: next.directories ?? [], tasks: next.tasks ?? {} } : EMPTY_WORKBENCH);
+          }
         })
         .catch(() => {
-          if (alive) setData((previous) => previous ?? { directories: [] });
+          if (alive) setData((previous) => previous ?? EMPTY_WORKBENCH);
         });
     };
     setData(null);
     load();
     const off = window.electronAPI?.maker?.onBotWorkbenchChanged?.((payload) => {
-      if (payload.botId === botId) load();
+      if (payload.botId !== botId) return;
+      load();
+      // 伙伴继续一条本机会话时会先把它导入;刷新任务列表,让新任务出现在格子里。
+      emitRefresh();
     });
     return () => {
       alive = false;
@@ -214,12 +235,58 @@ function useWorkbenchDirectories(botId: string): BotWorkbenchData | null {
   return data;
 }
 
+type ScanResult = Awaited<ReturnType<NonNullable<typeof window.electronAPI.localDb.sessionImport>['scan']>>;
+
+function toExternalCandidates(result: ScanResult): ExternalSessionCandidate[] {
+  return result.candidates
+    .filter((item) => item.workspaceKind === 'project')
+    .map((item) => ({
+      source: item.source,
+      id: item.id,
+      projectDir: item.projectDir,
+      updatedAt: item.updatedAt,
+      archived: item.archived,
+    }));
+}
+
+/** 本机 Claude Code / Codex 候选:只读扫描一次(主进程 30 秒缓存与并发去重),不轮询,不导入。 */
+function useExternalCandidates(enabled: boolean): ExternalSessionCandidate[] {
+  const [candidates, setCandidates] = useState<ExternalSessionCandidate[]>([]);
+  useEffect(() => {
+    const api = window.electronAPI?.localDb?.sessionImport;
+    if (!enabled || !api) return;
+    let alive = true;
+    const owner = getDataOwnerGeneration();
+    void api
+      .scan()
+      .then((result) => {
+        if (alive && isDataOwnerGenerationCurrent(owner)) setCandidates(toExternalCandidates(result));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [enabled]);
+  return candidates;
+}
+
+/** 以主人身份往伙伴主任务发一句话(交接、详情里的「补一句」都走这里)。 */
+async function sendAsOwner(sessionId: string, text: string): Promise<boolean> {
+  const owner = getDataOwnerGeneration();
+  const [chatStore, row] = await Promise.all([
+    import('@/lib/makerChatStore').then((module) => module.makerChatStore),
+    sessionService.get(sessionId),
+  ]);
+  if (!isDataOwnerGenerationCurrent(owner) || !row.workingDir) return false;
+  return chatStore.sendMessage(sessionId, text, row.model, row.effort, row.permissionMode, row.workingDir);
+}
+
 export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: string }) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const profiles = useBotProfiles();
   const botName = profiles.find((profile) => profile.id === botId)?.name ?? '';
-  const workbench = useWorkbenchDirectories(botId);
+  const workbench = useWorkbenchData(botId);
   const { sessions } = useCCSessions({ includeArchived: 'active' });
   const delegations = useBotDelegations(sessionId);
   const activityMap = useAgentIslandActivityMap();
@@ -236,7 +303,9 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
   }, []);
 
   const directories = useMemo(() => workbench?.directories ?? [], [workbench]);
+  const judgments = useMemo(() => workbench?.tasks ?? {}, [workbench]);
   const projectDirs = useMemo(() => directories.map((dir) => dir.path), [directories]);
+  const candidates = useExternalCandidates(directories.length > 0);
   const hiddenIds = useMemo(() => collectBotHiddenSessionIds(profiles), [profiles]);
   const erroredIds = useMemo(
     () => new Set([...attentionKinds].filter(([, kind]) => kind === 'error').map(([id]) => id)),
@@ -255,9 +324,42 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
         erroredIds,
         schedules: schedules ?? [],
         routines,
+        judgments,
+        candidates,
       }),
-    [sessions, hiddenIds, projectDirs, caseInsensitive, delegations, activityMap, erroredIds, schedules, routines],
+    [
+      sessions,
+      hiddenIds,
+      projectDirs,
+      caseInsensitive,
+      delegations,
+      activityMap,
+      erroredIds,
+      schedules,
+      routines,
+      judgments,
+      candidates,
+    ],
   );
+
+  // 伙伴正在读这些项目:还有候选没写判断,且伙伴主任务正在跑。
+  const unjudged = useMemo(
+    () =>
+      countUnjudgedCandidates({
+        sessions,
+        hiddenIds,
+        projectDirs,
+        caseInsensitive,
+        candidates,
+        judgments,
+        delegationChildIds: new Set(delegations.flatMap((item) => (item.childSessionId ? [item.childSessionId] : []))),
+      }),
+    [sessions, hiddenIds, projectDirs, caseInsensitive, candidates, judgments, delegations],
+  );
+  const understanding = unjudged > 0 && activityMap.get(sessionId)?.phase === 'running';
+  // 打开详情时记下那一格;之后格子状态变了(甚至因为做完而不再上工作台)详情仍留在原处。
+  const [detailOpened, setDetailOpened] = useState<WorkbenchTile | null>(null);
+  const detailTile = detailOpened ? (tiles.find((tile) => tile.key === detailOpened.key) ?? detailOpened) : null;
 
   const [adding, setAdding] = useState(false);
   const picking = workbench !== null && (directories.length === 0 || adding);
@@ -265,15 +367,16 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
 
   const openTile = useCallback(
     (tile: WorkbenchTile) => {
-      if (tile.type === 'session') {
-        void resolveSessionRoute(tile.id).then((target) => navigate(target));
+      if (tile.type === 'session' || tile.type === 'external') {
+        // 任务在本标签内打开详情,不换路由、不跳任务页。
+        setDetailOpened(tile);
       } else if (tile.type === 'schedule') {
-        navigate(scheduleFocusPath(tile.id));
+        if (!inSidebarWindow) navigate(scheduleFocusPath(tile.id));
       } else {
         void openRoutinesTab(sessionId, botId);
       }
     },
-    [botId, navigate, sessionId],
+    [botId, inSidebarWindow, navigate, sessionId],
   );
 
   const [chatWorkingDir, setChatWorkingDir] = useState<string | null>(null);
@@ -329,6 +432,23 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
 
   const routineTiles = tiles.filter((tile) => tile.type === 'routine');
 
+  if (detailTile && (detailTile.type === 'session' || detailTile.type === 'external')) {
+    return (
+      <TaskDetail
+        botId={botId}
+        botName={botName}
+        botSessionId={sessionId}
+        tile={detailTile}
+        now={now}
+        canNavigate={!inSidebarWindow}
+        onBack={() => setDetailOpened(null)}
+      />
+    );
+  }
+
+  // 最近交给伙伴的项目排在最前,正在了解的通常就是它。
+  const understandingProject = understanding ? (directories[0]?.name ?? '') : '';
+
   return (
     <div className="h-full min-h-0 overflow-y-auto overflow-x-hidden bg-[var(--surface)]">
       {picking ? (
@@ -351,7 +471,10 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
             directories={directories}
             onAdd={directories.length < BOT_WORKBENCH_MAX_DIRECTORIES ? () => setAdding(true) : undefined}
           />
-          <Summary tiles={tiles} />
+          <Summary
+            tiles={tiles}
+            understanding={understanding ? { name: botName, project: understandingProject } : null}
+          />
         </>
       )}
 
@@ -361,7 +484,7 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
           tiles={picking ? routineTiles : tiles}
           now={now}
           language={i18n.language}
-          onOpen={inSidebarWindow ? undefined : openTile}
+          onOpen={openTile}
         />
       ) : null}
 
@@ -513,22 +636,7 @@ function ProjectPicker({
       setBusy(true);
       const owner = getDataOwnerGeneration();
       try {
-        // 1. 先把这个目录下还没导入的 Claude Code / Codex 任务接进来(与设置页同一条导入路径)。
-        const { picked } = pickImportCandidates(candidates, dir, caseInsensitive, WORKBENCH_IMPORT_LIMIT);
-        let notImported = 0;
-        if (picked.length > 0) {
-          try {
-            const result = await window.electronAPI.localDb.sessionImport.importSelected(
-              picked.map((item) => ({ source: item.source, id: item.id })),
-            );
-            notImported = Math.max(0, picked.length - (result.inserted + result.updated));
-            emitRefresh();
-          } catch {
-            notImported = picked.length;
-          }
-        }
-        if (!isDataOwnerGenerationCurrent(owner)) return;
-        // 2. 记下这个项目:这一次点击就是主人对该项目任务的授权。
+        // 1. 记下这个项目:这一次点击就是主人对该项目任务的授权。不导入任何会话。
         const added = await api.addDirectory(botId, dir).catch(() => null);
         if (!added?.ok) {
           toast.error(
@@ -538,24 +646,10 @@ function ProjectPicker({
           );
           return;
         }
-        if (notImported > 0) toast.warning(t('bots.workbench.importFailed', { count: notImported }));
         onHandedOver();
-        // 3. 以主人身份告诉伙伴一声;怎么接手写在伙伴的工具说明里,用户可见的消息只说人话。
-        const [chatStore, row] = await Promise.all([
-          import('@/lib/makerChatStore').then((module) => module.makerChatStore),
-          sessionService.get(sessionId),
-        ]);
         if (!isDataOwnerGenerationCurrent(owner)) return;
-        const sent = row.workingDir
-          ? await chatStore.sendMessage(
-              sessionId,
-              t('bots.workbench.handoverMessage', { project: name }),
-              row.model,
-              row.effort,
-              row.permissionMode,
-              row.workingDir,
-            )
-          : false;
+        // 2. 以主人身份告诉伙伴一声;怎么接手写在伙伴的工具说明里,用户可见的消息只说人话。
+        const sent = await sendAsOwner(sessionId, t('bots.workbench.handoverMessage', { project: name }));
         if (!sent) toast.error(t('bots.workbench.sendFailed', { name: botName }));
       } catch {
         toast.error(t('bots.workbench.sendFailed', { name: botName }));
@@ -563,7 +657,7 @@ function ProjectPicker({
         setBusy(false);
       }
     },
-    [botId, botName, busy, candidates, caseInsensitive, onHandedOver, sessionId, t],
+    [botId, botName, busy, onHandedOver, sessionId, t],
   );
 
   const pickFolder = useCallback(async () => {
@@ -697,8 +791,8 @@ function projectCounts(option: WorkbenchProjectOption, t: Translate): string {
 }
 
 function grantText(option: WorkbenchProjectOption, botName: string, language: string, t: Translate): string {
-  const claude = Math.min(option.claudeCount, WORKBENCH_IMPORT_LIMIT);
-  const codex = Math.min(option.codexCount, Math.max(0, WORKBENCH_IMPORT_LIMIT - claude));
+  const claude = option.claudeCount;
+  const codex = option.codexCount;
   const items = [
     option.taskCount > 0
       ? t(claude + codex > 0 ? 'bots.workbench.grantCindy' : 'bots.workbench.grantTasks', { count: option.taskCount })
@@ -708,10 +802,7 @@ function grantText(option: WorkbenchProjectOption, botName: string, language: st
     option.automationCount > 0 ? t('bots.workbench.grantAutomations', { count: option.automationCount }) : '',
   ].filter(Boolean);
   const scope = items.length > 0 ? listFormat(items, language) : t('bots.workbench.grantEverything');
-  const base = t('bots.workbench.grant', { name: botName, project: option.name, scope });
-  return option.claudeCount + option.codexCount > WORKBENCH_IMPORT_LIMIT
-    ? `${base} ${t('bots.workbench.grantImportLimit', { count: WORKBENCH_IMPORT_LIMIT })}`
-    : base;
+  return t('bots.workbench.grant', { name: botName, project: option.name, scope });
 }
 
 // ─── 已接手:项目胶囊 + 汇总 ─────────────────────────────────────────
@@ -778,23 +869,45 @@ function ProjectCapsules({
   );
 }
 
-function Summary({ tiles }: { tiles: readonly WorkbenchTile[] }) {
+function Summary({
+  tiles,
+  understanding,
+}: {
+  tiles: readonly WorkbenchTile[];
+  understanding: { name: string; project: string } | null;
+}) {
   const { t } = useTranslation();
-  const sessions = tiles.filter((tile) => tile.type === 'session');
-  const automations = tiles.length - sessions.length;
-  const count = (state: WorkbenchTaskState) => sessions.filter((tile) => tile.state === state).length;
+  if (understanding) {
+    return (
+      <p className="flex items-center gap-1.5 truncate px-5 pb-4 pt-2.5 text-13 leading-5 text-[var(--text-secondary)]">
+        <Spinner size={12} aria-hidden className="shrink-0" />
+        <span className="truncate">{t('bots.workbench.understanding', understanding)}</span>
+      </p>
+    );
+  }
+  const live = (state: WorkbenchTaskState) => tiles.filter((tile) => tile.state === state).length;
+  const verdict = (value: 'unfinished' | 'idea') =>
+    tiles.filter((tile) => 'verdict' in tile && tile.verdict === value && workbenchTileLiveRank(tile) > 0).length;
+  const automations = tiles.filter((tile) => tile.type === 'schedule' || tile.type === 'routine').length;
   const parts = [
-    t('bots.workbench.summaryTasks', { count: sessions.length }),
-    ...(['running', 'waiting', 'queued', 'stopped'] as const)
-      .filter((state) => count(state) > 0)
-      .map((state) => t(`bots.workbench.summary.${state}`, { count: count(state) })),
+    ...(['running', 'waiting', 'queued'] as const)
+      .filter((state) => live(state) > 0)
+      .map((state) => t(`bots.workbench.summary.${state}`, { count: live(state) })),
+    ...(['unfinished', 'idea'] as const)
+      .filter((value) => verdict(value) > 0)
+      .map((value) => t(`bots.workbench.summary.${value}`, { count: verdict(value) })),
     ...(automations > 0 ? [t('bots.workbench.summaryAutomations', { count: automations })] : []),
   ];
   return (
     <p className="truncate px-5 pb-4 pt-2.5 text-13 leading-5 tabular-nums text-[var(--text-secondary)]">
-      {parts.join(' · ')}
+      {parts.length > 0 ? parts.join(' · ') : t('bots.workbench.summaryEmpty')}
     </p>
   );
+}
+
+/** 在做 / 等你 / 排队的格子返回 0,其余 1;汇总里没做完 / 聊过没下文只数没在跑的。 */
+function workbenchTileLiveRank(tile: WorkbenchTile): number {
+  return tile.state === 'running' || tile.state === 'waiting' || tile.state === 'queued' ? 0 : 1;
 }
 
 // ─── 任务格 ─────────────────────────────────────────────────────────
@@ -843,8 +956,18 @@ function TaskSection({
   );
 }
 
-function StateIcon({ state }: { state: WorkbenchTaskState }) {
+function StateIcon({ state, verdict }: { state: WorkbenchTaskState; verdict?: 'unfinished' | 'idea' | null }) {
   const { t } = useTranslation();
+  const live = state === 'running' || state === 'waiting' || state === 'queued';
+  if (!live && verdict) {
+    // 没做完沿用「停着」的图标;聊过没下文用小灯泡。
+    const VerdictIcon = verdict === 'idea' ? Lightbulb : CirclePause;
+    return (
+      <span role="img" aria-label={t(`bots.workbench.verdict.${verdict}`)} className="flex size-3 shrink-0 items-center justify-center">
+        <VerdictIcon size={13} strokeWidth={1.8} aria-hidden className="text-[var(--text-tertiary)]" />
+      </span>
+    );
+  }
   const label = t(`bots.workbench.state.${state}`);
   if (state === 'running') {
     return (
@@ -905,17 +1028,23 @@ function routineCycle(triggers: WorkbenchRoutineInput['triggers'], t: Translate,
   return null;
 }
 
+function originLabel(origin: string, t: Translate): string {
+  const key =
+    origin === 'delegated' ? 'delegated' : origin === 'claude-code' ? 'claudeCode' : origin === 'codex' ? 'codex' : 'existing';
+  return t(`bots.workbench.kind.${key}`);
+}
+
 function tileKind(tile: WorkbenchTile, t: Translate, language: string): string {
-  if (tile.type === 'session') {
-    const key =
-      tile.origin === 'delegated'
-        ? 'delegated'
-        : tile.origin === 'claude-code'
-          ? 'claudeCode'
-          : tile.origin === 'codex'
-            ? 'codex'
-            : 'existing';
-    return t(`bots.workbench.kind.${key}`);
+  if (tile.type === 'session' || tile.type === 'external') {
+    const live = tile.state === 'running' || tile.state === 'waiting' || tile.state === 'queued';
+    if (tile.verdict && !live) {
+      // 「没做完 · 来自 Claude Code」;Cindy 里的原有任务只写判断。
+      const verdict = t(`bots.workbench.verdict.${tile.verdict}`);
+      return tile.origin === 'claude-code' || tile.origin === 'codex' || tile.origin === 'delegated'
+        ? `${verdict} · ${originLabel(tile.origin, t)}`
+        : verdict;
+    }
+    return originLabel(tile.origin, t);
   }
   const cycle =
     tile.type === 'schedule' ? scheduleCycle(tile.schedule, t, language) : routineCycle(tile.triggers, t, language);
@@ -923,6 +1052,9 @@ function tileKind(tile: WorkbenchTile, t: Translate, language: string): string {
 }
 
 function tileLine(tile: WorkbenchTile, t: Translate, now: number): string {
+  // 伙伴写的下一步优先;在跑的任务仍显示当前动作。
+  const live = tile.state === 'running' || tile.state === 'waiting' || tile.state === 'queued';
+  if ('next' in tile && tile.next && !live) return tile.next;
   const line = tile.line;
   switch (line.kind) {
     case 'action':
@@ -969,26 +1101,28 @@ function TaskTile({
   onOpen?: (tile: WorkbenchTile) => void;
 }) {
   const { t } = useTranslation();
+  const title = tile.title || t('bots.workbench.untitled');
+  const judged = 'verdict' in tile && tile.verdict !== null;
   const time =
     tile.state === 'running' && tile.startedAtMs
       ? elapsed(tile.startedAtMs, now)
-      : tile.state === 'done'
+      : tile.state === 'done' || judged
         ? relativeTime(tile.lastActiveMs, language, now)
         : null;
   const content = (
     <>
       <span className="flex h-[18px] items-center gap-1.5 text-12 leading-[18px] text-[var(--text-tertiary)]">
-        <StateIcon state={tile.state} />
+        <StateIcon state={tile.state} verdict={'verdict' in tile ? tile.verdict : null} />
         <span className="min-w-0 flex-1 truncate">{tileKind(tile, t, language)}</span>
         {time ? <span className="shrink-0 tabular-nums">{time}</span> : null}
       </span>
       <span
         className={cn(
           'mt-1 line-clamp-2 h-10 text-14 font-medium leading-5 [overflow-wrap:anywhere]',
-          tile.state === 'done' ? 'text-[var(--text-secondary)]' : 'text-[var(--text-primary)]',
+          tile.state === 'done' && !judged ? 'text-[var(--text-secondary)]' : 'text-[var(--text-primary)]',
         )}
       >
-        {tile.title}
+        {title}
       </span>
       <span
         className={cn(
@@ -1011,7 +1145,7 @@ function TaskTile({
     <button
       type="button"
       onClick={() => onOpen(tile)}
-      aria-label={t('bots.workbench.openTask', { title: tile.title, state: t(`bots.workbench.state.${tile.state}`) })}
+      aria-label={t('bots.workbench.openTask', { title, state: tileKind(tile, t, language) })}
       className={cn(
         frame,
         'outline-none transition-colors hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
@@ -1019,5 +1153,231 @@ function TaskTile({
     >
       {content}
     </button>
+  );
+}
+
+// ─── 详情:在工作台标签内看一件任务 ───────────────────────────────────
+
+type DetailTile = Extract<WorkbenchTile, { type: 'session' | 'external' }>;
+
+type TranscriptState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; transcript: WorkbenchTranscript }
+  | { kind: 'failed' };
+
+/**
+ * 详情视图:不换路由、不跳任务页。伙伴的判断在上,最近内容(同一份有界只读摘录)在中,
+ * 底部「补一句」以主人身份发给伙伴,由伙伴决定怎么继续——不绕过伙伴直接投给任务。
+ */
+function TaskDetail({
+  botId,
+  botName,
+  botSessionId,
+  tile,
+  now,
+  canNavigate,
+  onBack,
+}: {
+  botId: string;
+  botName: string;
+  botSessionId: string;
+  tile: DetailTile;
+  now: number;
+  canNavigate: boolean;
+  onBack: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
+  const [transcript, setTranscript] = useState<TranscriptState>({ kind: 'loading' });
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const title = tile.title || t('bots.workbench.untitled');
+  const live = tile.state === 'running' || tile.state === 'waiting' || tile.state === 'queued';
+  const statusText = live || !tile.verdict ? t(`bots.workbench.state.${tile.state}`) : t(`bots.workbench.verdict.${tile.verdict}`);
+  // 运行中的任务内容在变:状态变化时重读一次,不轮询。
+  const reloadKey = `${tile.id}:${tile.state}:${tile.lastActiveMs}`;
+
+  useEffect(() => {
+    const api = window.electronAPI?.localDb?.bots?.workbench;
+    if (!api?.readTask) {
+      setTranscript({ kind: 'failed' });
+      return;
+    }
+    let alive = true;
+    const owner = getDataOwnerGeneration();
+    setTranscript((previous) => (previous.kind === 'ready' ? previous : { kind: 'loading' }));
+    void api
+      .readTask(botId, tile.id)
+      .then((result) => {
+        if (!alive || !isDataOwnerGenerationCurrent(owner)) return;
+        setTranscript(result.ok ? { kind: 'ready', transcript: result.transcript } : { kind: 'failed' });
+      })
+      .catch(() => {
+        if (alive) setTranscript({ kind: 'failed' });
+      });
+    return () => {
+      alive = false;
+    };
+    // reloadKey 已涵盖 tile.id。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [botId, reloadKey]);
+
+  const send = useCallback(async () => {
+    const text = draft.trim();
+    if (!text || sending) return;
+    setSending(true);
+    try {
+      const sent = await sendAsOwner(botSessionId, t('bots.workbench.continueMessage', { title, text }));
+      if (sent) {
+        setDraft('');
+        toast.success(t('bots.workbench.detail.sent', { name: botName }));
+      } else {
+        toast.error(t('bots.workbench.sendFailed', { name: botName }));
+      }
+    } catch {
+      toast.error(t('bots.workbench.sendFailed', { name: botName }));
+    } finally {
+      setSending(false);
+    }
+  }, [botName, botSessionId, draft, sending, t, title]);
+
+  const stop = useCallback(() => {
+    if (tile.type !== 'session') return;
+    void import('@/lib/makerChatStore').then((module) => module.makerChatStore.stopSession(tile.id));
+  }, [tile]);
+
+  const openInTasks = useCallback(() => {
+    if (tile.type !== 'session') return;
+    void resolveSessionRoute(tile.id).then((target) => navigate(target));
+  }, [navigate, tile]);
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-[var(--surface)]">
+      <div className="flex h-[52px] shrink-0 items-center gap-1 pl-2 pr-2.5">
+        <Tip text={t('bots.workbench.detail.back')}>
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label={t('bots.workbench.detail.back')}
+            className={cn(ICON_BUTTON_CLASS, 'size-8 text-[var(--text-secondary)]')}
+          >
+            <ArrowLeft size={16} aria-hidden />
+          </button>
+        </Tip>
+        <h3 className="min-w-0 flex-1 truncate text-15 font-medium leading-[22px] text-[var(--text-primary)]">{title}</h3>
+        {tile.type === 'session' && tile.state === 'running' ? (
+          <Tip text={t('bots.workbench.detail.stop')}>
+            <button
+              type="button"
+              onClick={stop}
+              aria-label={t('bots.workbench.detail.stop')}
+              className={cn(ICON_BUTTON_CLASS, 'size-8 text-[var(--text-secondary)]')}
+            >
+              <Square size={12} fill="currentColor" aria-hidden />
+            </button>
+          </Tip>
+        ) : null}
+        {tile.type === 'session' && canNavigate ? (
+          <Tip text={t('bots.workbench.detail.openInTasks')}>
+            <button
+              type="button"
+              onClick={openInTasks}
+              aria-label={t('bots.workbench.detail.openInTasks')}
+              className={cn(ICON_BUTTON_CLASS, 'size-8 text-[var(--text-secondary)]')}
+            >
+              <SquareArrowOutUpRight size={14} aria-hidden />
+            </button>
+          </Tip>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 items-center gap-2 px-5 pb-3 text-12 leading-[18px] text-[var(--text-tertiary)]">
+        <StateIcon state={tile.state} verdict={tile.verdict} />
+        <span className="text-[var(--text-secondary)]">
+          {statusText}
+          {tile.state === 'running' && tile.startedAtMs ? ` ${elapsed(tile.startedAtMs, now)}` : ''}
+        </span>
+        <span aria-hidden>·</span>
+        <span className="min-w-0 truncate">{originLabel(tile.origin, t)}</span>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto border-t border-[var(--border-default)] px-5 py-4">
+        {tile.verdict && tile.next ? (
+          <section className="mb-4 rounded-xl border border-[var(--border-default)] px-3.5 py-3">
+            <p className="text-12 leading-[18px] text-[var(--text-tertiary)]">
+              {t('bots.workbench.detail.judgment', { name: botName })}
+            </p>
+            <p className="mt-1 text-13 leading-5 text-[var(--text-primary)]">{tile.next}</p>
+          </section>
+        ) : null}
+        {transcript.kind === 'loading' ? (
+          <div className="flex justify-center py-6">
+            <Spinner size={16} className="text-[var(--text-tertiary)]" role="status" aria-label={t('ccAgent.common.loading')} />
+          </div>
+        ) : transcript.kind === 'failed' ? (
+          <p className="text-12 leading-[18px] text-[var(--text-tertiary)]">{t('bots.workbench.detail.loadFailed')}</p>
+        ) : transcript.transcript.items.length === 0 ? (
+          <p className="text-12 leading-[18px] text-[var(--text-tertiary)]">{t('bots.workbench.detail.empty')}</p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {transcript.transcript.truncated ? (
+              <p className="text-center text-11 text-[var(--text-tertiary)]">{t('bots.workbench.detail.truncated')}</p>
+            ) : null}
+            {transcript.transcript.items.map((item, index) =>
+              item.role === 'user' ? (
+                <div
+                  key={`${item.at}-${index}`}
+                  className="max-w-[90%] self-end whitespace-pre-wrap break-words rounded-xl border border-[var(--msg-user-border)] bg-[var(--msg-user-bg)] px-3.5 py-2.5 text-13 leading-5 text-[var(--text-primary)] [overflow-wrap:anywhere]"
+                >
+                  {item.text}
+                </div>
+              ) : (
+                <div
+                  key={`${item.at}-${index}`}
+                  className="whitespace-pre-wrap break-words text-13 leading-[22px] text-[var(--text-primary)] [overflow-wrap:anywhere]"
+                >
+                  {item.text}
+                </div>
+              ),
+            )}
+            <p className="text-11 text-[var(--text-tertiary)]">
+              {relativeTime(transcript.transcript.items.at(-1)?.at ?? 0, i18n.language, now)}
+            </p>
+          </div>
+        )}
+      </div>
+      <form
+        className="flex shrink-0 items-center gap-2 px-3 pb-3 pt-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void send();
+        }}
+      >
+        <Input
+          value={draft}
+          onChange={setDraft}
+          size="md"
+          className="min-w-0 flex-1"
+          placeholder={t('bots.workbench.detail.placeholder', { name: botName })}
+          ariaLabel={t('bots.workbench.detail.placeholder', { name: botName })}
+          disabled={sending}
+          onKeyDown={(event) => {
+            // 输入法组字时回车只确认候选,不发送。
+            if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault();
+          }}
+        />
+        <Tip text={t('bots.workbench.detail.send')}>
+          <button
+            type="submit"
+            disabled={sending || !draft.trim()}
+            aria-label={t('bots.workbench.detail.send')}
+            className={cn(
+              ICON_BUTTON_CLASS,
+              'size-8 border border-[var(--border-default)] text-[var(--text-secondary)] disabled:opacity-50',
+            )}
+          >
+            {sending ? <Spinner size={12} aria-hidden /> : <ArrowUp size={14} aria-hidden />}
+          </button>
+        </Tip>
+      </form>
+    </div>
   );
 }

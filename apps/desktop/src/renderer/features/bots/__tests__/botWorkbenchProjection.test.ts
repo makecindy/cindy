@@ -7,7 +7,7 @@ import {
   collectBotHiddenSessionIds,
   isNonProjectDir,
   looksGeneratedDirName,
-  pickImportCandidates,
+  countUnjudgedCandidates,
   tierWorkbenchProjectOptions,
   type WorkbenchProjectOption,
   type WorkbenchDelegationInput,
@@ -76,18 +76,13 @@ describe('buildWorkbenchTiles', () => {
       sessions: [
         session('running'),
         session('asking'),
-        session('interrupted', { activeTurnStartedAt: 10, interruptedTurnStartedAt: 10, lastTurnEndedAt: 5 }),
-        session('errored'),
-        session('idle', { preview: '12 条意见，3 条要改' }),
         session('bg-queued', { userSendAt: null }),
-        session('claude-imported', { agentKind: 'cc' }),
       ],
       delegations: [delegation('bg-queued', 'queued')],
       activity: new Map([
         ['running', { phase: 'running', startedAtMs: 500, currentActionSummary: '导出 xhdpi 尺寸' }],
         ['asking', { phase: 'needs-interaction' }],
       ]),
-      erroredIds: new Set(['errored']),
     });
     const byId = new Map(tiles.map((tile) => [tile.id, tile]));
     expect(byId.get('running')).toMatchObject({
@@ -96,19 +91,71 @@ describe('buildWorkbenchTiles', () => {
       line: { kind: 'action', text: '导出 xhdpi 尺寸' },
     });
     expect(byId.get('asking')).toMatchObject({ state: 'waiting', line: { kind: 'waiting' } });
-    expect(byId.get('interrupted')).toMatchObject({ state: 'stopped', line: { kind: 'interrupted' } });
-    expect(byId.get('errored')).toMatchObject({ state: 'stopped', line: { kind: 'errored' } });
-    expect(byId.get('idle')).toMatchObject({ state: 'done', line: { kind: 'summary', text: '12 条意见，3 条要改' } });
     expect(byId.get('bg-queued')).toMatchObject({ state: 'queued', origin: 'delegated' });
-    expect(byId.get('claude-imported')).toMatchObject({ origin: 'claude-code' });
-    // Live / attention tiles come before finished ones.
-    expect(tiles.at(-1)?.state).toBe('done');
+  });
+
+  it('only shows unfinished / not-followed-up judgments plus tasks with live signals', () => {
+    const judgment = (verdict: 'unfinished' | 'idea' | 'done', title: string, project = ART) => ({
+      title,
+      verdict,
+      next: verdict === 'done' ? null : `${title}的下一步`,
+      project,
+      updatedAt: '2026-10-01T00:00:00.000Z',
+    });
+    const tiles = buildWorkbenchTiles({
+      ...base,
+      sessions: [
+        session('running', { title: '<system-reminder>x</system-reminder>导出图标' }),
+        session('unjudged-idle', { preview: '12 条意见' }),
+        session('unjudged-errored'),
+        session('judged-unfinished', { title: '原始标题' }),
+        session('judged-done'),
+        session('claude-imported', { agentKind: 'cc' }),
+      ],
+      activity: new Map([['running', { phase: 'running' }]]),
+      erroredIds: new Set(['unjudged-errored']),
+      judgments: {
+        'judged-unfinished': judgment('unfinished', '补描边'),
+        'judged-done': judgment('done', '整理意见'),
+        'claude-imported': judgment('idea', '换图标风格'),
+        'claude:ext-1': judgment('unfinished', '压缩原画'),
+        'codex:ext-2': judgment('idea', '加自动导出'),
+        'codex:ext-done': judgment('done', '问答'),
+        'codex:ext-elsewhere': judgment('unfinished', '别的项目', CINDY),
+      },
+      candidates: [{ source: 'claude', id: 'ext-1', projectDir: ART, updatedAt: '2026-10-01T05:00:00.000Z', archived: false }],
+    });
+    const byId = new Map(tiles.map((tile) => [tile.id, tile]));
+    expect([...byId.keys()].sort()).toEqual(
+      ['claude-imported', 'claude:ext-1', 'codex:ext-2', 'judged-unfinished', 'running'].sort(),
+    );
+    expect(byId.get('running')).toMatchObject({ title: '导出图标', verdict: null });
+    expect(byId.get('judged-unfinished')).toMatchObject({ title: '补描边', verdict: 'unfinished', next: '补描边的下一步' });
+    expect(byId.get('claude-imported')).toMatchObject({ verdict: 'idea', origin: 'claude-code' });
+    expect(byId.get('claude:ext-1')).toMatchObject({
+      type: 'external',
+      origin: 'claude-code',
+      verdict: 'unfinished',
+      lastActiveMs: Date.parse('2026-10-01T05:00:00.000Z'),
+    });
+    expect(byId.get('codex:ext-2')).toMatchObject({ type: 'external', origin: 'codex', verdict: 'idea' });
+    // Live first, then unfinished, then ideas.
+    expect(tiles.map((tile) => ('verdict' in tile ? tile.verdict : null))).toEqual([
+      null,
+      'unfinished',
+      'unfinished',
+      'idea',
+      'idea',
+    ]);
   });
 
   it('keeps Bot hidden sessions, other projects, drafts, remote, archived and non-task sources out', () => {
+    const live = (id: string) => [id, { phase: 'running' }] as const;
+    const ids = ['kept', 'bot-main', 'bot-source', 'elsewhere', 'draft', 'remote', 'device', 'archived', 'automation-run', 'worker'];
     const tiles = buildWorkbenchTiles({
       ...base,
       hiddenIds: new Set(['bot-main']),
+      activity: new Map(ids.map(live)),
       sessions: [
         session('kept'),
         session('bot-main'),
@@ -123,6 +170,27 @@ describe('buildWorkbenchTiles', () => {
       ],
     });
     expect(tiles.map((tile) => tile.id)).toEqual(['kept']);
+  });
+
+  it('counts candidates the Bot has not judged yet', () => {
+    expect(
+      countUnjudgedCandidates({
+        sessions: [session('a'), session('b'), session('bg'), session('elsewhere', { workingDir: CINDY })],
+        hiddenIds: new Set(),
+        projectDirs: [ART],
+        caseInsensitive: false,
+        candidates: [
+          { source: 'claude', id: 'x', projectDir: ART, updatedAt: '2026-10-01T00:00:00.000Z', archived: false },
+          { source: 'codex', id: 'y', projectDir: ART, updatedAt: '2026-10-01T00:00:00.000Z', archived: false },
+          { source: 'codex', id: 'z', projectDir: ART, updatedAt: '2026-10-01T00:00:00.000Z', archived: true },
+        ],
+        judgments: {
+          a: { title: 'a', verdict: 'done', next: null, project: ART, updatedAt: 'x' },
+          'claude:x': { title: 'x', verdict: 'idea', next: 'n', project: ART, updatedAt: 'x' },
+        },
+        delegationChildIds: new Set(['bg']),
+      }),
+    ).toBe(2);
   });
 
   it('includes project automations and the Bot own routines, disabled ones as stopped', () => {
@@ -204,25 +272,7 @@ describe('buildWorkbenchProjectOptions', () => {
   });
 });
 
-describe('import candidates and hidden sessions', () => {
-  it('picks the most recent unarchived candidates of the chosen project, bounded', () => {
-    const candidates = Array.from({ length: 5 }, (_, index) => ({
-      source: 'claude' as const,
-      id: `c${index}`,
-      projectDir: ART,
-      updatedAt: new Date(Date.UTC(2026, 8, index + 1)).toISOString(),
-      archived: index === 4,
-    }));
-    const result = pickImportCandidates(
-      [...candidates, { source: 'codex', id: 'other', projectDir: CINDY, updatedAt: '2026-10-01T00:00:00.000Z', archived: false }],
-      ART,
-      false,
-      2,
-    );
-    expect(result.total).toBe(4);
-    expect(result.picked.map((item) => item.id)).toEqual(['c3', 'c2']);
-  });
-
+describe('hidden sessions', () => {
   it('collects every Bot-linked session from the profile projection', () => {
     expect(collectBotHiddenSessionIds([{ sessions: [{ id: 'a' }, { id: 'b' }] }, { sessions: [{ id: 'c' }] }]))
       .toEqual(new Set(['a', 'b', 'c']));
