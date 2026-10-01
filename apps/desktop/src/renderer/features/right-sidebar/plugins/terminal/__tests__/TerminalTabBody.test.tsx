@@ -165,6 +165,28 @@ describe('TerminalTabBody remote ownership', () => {
     ));
   });
 
+  it('creates the local PTY after device-link ownership resolves from unknown to local', async () => {
+    const unresolvedContext = makeContext({ deviceLinkDeviceId: undefined });
+    const state = { created: false, exited: null, title: '', shellId: '', shellDisplayName: '' };
+    const view = render(<TerminalTabBody state={state} ctx={unresolvedContext} active />);
+
+    expect(screen.getByText('rightSidebar.terminal.remoteUnavailableTitle')).toBeTruthy();
+    expect(window.electronAPI.terminal.create).not.toHaveBeenCalled();
+
+    view.rerender(
+      <TerminalTabBody
+        state={state}
+        ctx={{ ...unresolvedContext, deviceLinkDeviceId: null }}
+        active
+      />,
+    );
+
+    await waitFor(() => expect(window.electronAPI.terminal.create).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'terminal-1', cwd: '/workspace' }),
+    ));
+    expect(screen.queryByText('rightSidebar.terminal.remoteUnavailableTitle')).toBeNull();
+  });
+
   it.each([
     ['an SSH session', { remoteHostId: 'ssh-host-1', deviceLinkDeviceId: null }],
     ['a device-link session', { remoteHostId: null, deviceLinkDeviceId: 'device-1' }],
