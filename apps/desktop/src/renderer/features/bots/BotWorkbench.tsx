@@ -3,11 +3,15 @@ import {
   ArrowLeft,
   ArrowUp,
   CircleCheck,
+  CircleDot,
   CirclePause,
   Clock3,
+  FileText,
   Folder,
   FolderOpen,
+  GitPullRequest,
   Lightbulb,
+  Link2,
   Plus,
   Square,
   SquareArrowOutUpRight,
@@ -41,6 +45,7 @@ import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import {
   BOT_WORKBENCH_MAX_DIRECTORIES,
   isCaseInsensitivePlatform,
+  validateWorkbenchRef,
   type BotWorkbench as BotWorkbenchData,
   type WorkbenchTaskState,
   type WorkbenchTranscript,
@@ -235,38 +240,30 @@ function useWorkbenchData(botId: string): BotWorkbenchData | null {
   return data;
 }
 
-type ScanResult = Awaited<ReturnType<NonNullable<typeof window.electronAPI.localDb.sessionImport>['scan']>>;
-
-function toExternalCandidates(result: ScanResult): ExternalSessionCandidate[] {
-  return result.candidates
-    .filter((item) => item.workspaceKind === 'project')
-    .map((item) => ({
-      source: item.source,
-      id: item.id,
-      projectDir: item.projectDir,
-      updatedAt: item.updatedAt,
-      archived: item.archived,
-    }));
-}
-
-/** 本机 Claude Code / Codex 候选:只读扫描一次(主进程 30 秒缓存与并发去重),不轮询,不导入。 */
-function useExternalCandidates(enabled: boolean): ExternalSessionCandidate[] {
+/**
+ * 已接手项目里近期的本机 Claude Code / Codex / Pi 会话(与伙伴工具同一份发现:按项目过滤、只看
+ * 最近 30 天、只读头部找目录)。项目变化时读一次,不轮询,不导入。
+ */
+function useExternalCandidates(botId: string, projectKey: string): ExternalSessionCandidate[] {
   const [candidates, setCandidates] = useState<ExternalSessionCandidate[]>([]);
   useEffect(() => {
-    const api = window.electronAPI?.localDb?.sessionImport;
-    if (!enabled || !api) return;
+    const api = window.electronAPI?.localDb?.bots?.workbench;
+    if (!projectKey || !api?.candidates) {
+      setCandidates([]);
+      return;
+    }
     let alive = true;
     const owner = getDataOwnerGeneration();
     void api
-      .scan()
+      .candidates(botId)
       .then((result) => {
-        if (alive && isDataOwnerGenerationCurrent(owner)) setCandidates(toExternalCandidates(result));
+        if (alive && isDataOwnerGenerationCurrent(owner) && result.ok) setCandidates(result.candidates);
       })
       .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [enabled]);
+  }, [botId, projectKey]);
   return candidates;
 }
 
@@ -305,7 +302,7 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
   const directories = useMemo(() => workbench?.directories ?? [], [workbench]);
   const judgments = useMemo(() => workbench?.tasks ?? {}, [workbench]);
   const projectDirs = useMemo(() => directories.map((dir) => dir.path), [directories]);
-  const candidates = useExternalCandidates(directories.length > 0);
+  const candidates = useExternalCandidates(botId, projectDirs.join('\n'));
   const hiddenIds = useMemo(() => collectBotHiddenSessionIds(profiles), [profiles]);
   const erroredIds = useMemo(
     () => new Set([...attentionKinds].filter(([, kind]) => kind === 'error').map(([id]) => id)),
@@ -367,7 +364,7 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
 
   const openTile = useCallback(
     (tile: WorkbenchTile) => {
-      if (tile.type === 'session' || tile.type === 'external') {
+      if (tile.type === 'session' || tile.type === 'external' || tile.type === 'item') {
         // 任务在本标签内打开详情,不换路由、不跳任务页。
         setDetailOpened(tile);
       } else if (tile.type === 'schedule') {
@@ -432,7 +429,7 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
 
   const routineTiles = tiles.filter((tile) => tile.type === 'routine');
 
-  if (detailTile && (detailTile.type === 'session' || detailTile.type === 'external')) {
+  if (detailTile && (detailTile.type === 'session' || detailTile.type === 'external' || detailTile.type === 'item')) {
     return (
       <TaskDetail
         botId={botId}
@@ -441,6 +438,8 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
         tile={detailTile}
         now={now}
         canNavigate={!inSidebarWindow}
+        projectDirs={projectDirs}
+        caseInsensitive={caseInsensitive}
         onBack={() => setDetailOpened(null)}
       />
     );
@@ -1030,19 +1029,41 @@ function routineCycle(triggers: WorkbenchRoutineInput['triggers'], t: Translate,
 
 function originLabel(origin: string, t: Translate): string {
   const key =
-    origin === 'delegated' ? 'delegated' : origin === 'claude-code' ? 'claudeCode' : origin === 'codex' ? 'codex' : 'existing';
+    origin === 'delegated'
+      ? 'delegated'
+      : origin === 'claude-code'
+        ? 'claudeCode'
+        : origin === 'codex' || origin === 'pi'
+          ? origin
+          : 'existing';
   return t(`bots.workbench.kind.${key}`);
 }
 
+type ItemTile = Extract<WorkbenchTile, { type: 'item' }>;
+
+/** 「PR #5292」「Issue #5026」「建议」。 */
+function itemLabel(tile: ItemTile, t: Translate): string {
+  if (tile.itemKind === 'idea') return t('bots.workbench.kind.idea');
+  return t(`bots.workbench.kind.${tile.itemKind}`, { number: tile.number });
+}
+
+function ItemIcon({ tile }: { tile: ItemTile }) {
+  const Icon = tile.itemKind === 'pr' ? GitPullRequest : tile.itemKind === 'issue' ? CircleDot : Lightbulb;
+  return (
+    <span aria-hidden className="flex size-3 shrink-0 items-center justify-center">
+      <Icon size={13} strokeWidth={1.8} className="text-[var(--text-tertiary)]" />
+    </span>
+  );
+}
+
 function tileKind(tile: WorkbenchTile, t: Translate, language: string): string {
+  if (tile.type === 'item') return `${t(`bots.workbench.verdict.${tile.verdict}`)} · ${itemLabel(tile, t)}`;
   if (tile.type === 'session' || tile.type === 'external') {
     const live = tile.state === 'running' || tile.state === 'waiting' || tile.state === 'queued';
     if (tile.verdict && !live) {
       // 「没做完 · 来自 Claude Code」;Cindy 里的原有任务只写判断。
       const verdict = t(`bots.workbench.verdict.${tile.verdict}`);
-      return tile.origin === 'claude-code' || tile.origin === 'codex' || tile.origin === 'delegated'
-        ? `${verdict} · ${originLabel(tile.origin, t)}`
-        : verdict;
+      return tile.origin !== 'existing' ? `${verdict} · ${originLabel(tile.origin, t)}` : verdict;
     }
     return originLabel(tile.origin, t);
   }
@@ -1112,7 +1133,11 @@ function TaskTile({
   const content = (
     <>
       <span className="flex h-[18px] items-center gap-1.5 text-12 leading-[18px] text-[var(--text-tertiary)]">
-        <StateIcon state={tile.state} verdict={'verdict' in tile ? tile.verdict : null} />
+        {tile.type === 'item' ? (
+          <ItemIcon tile={tile} />
+        ) : (
+          <StateIcon state={tile.state} verdict={'verdict' in tile ? tile.verdict : null} />
+        )}
         <span className="min-w-0 flex-1 truncate">{tileKind(tile, t, language)}</span>
         {time ? <span className="shrink-0 tabular-nums">{time}</span> : null}
       </span>
@@ -1158,7 +1183,7 @@ function TaskTile({
 
 // ─── 详情:在工作台标签内看一件任务 ───────────────────────────────────
 
-type DetailTile = Extract<WorkbenchTile, { type: 'session' | 'external' }>;
+type DetailTile = Extract<WorkbenchTile, { type: 'session' | 'external' | 'item' }>;
 
 type TranscriptState =
   | { kind: 'loading' }
@@ -1176,6 +1201,8 @@ function TaskDetail({
   tile,
   now,
   canNavigate,
+  projectDirs,
+  caseInsensitive,
   onBack,
 }: {
   botId: string;
@@ -1184,6 +1211,8 @@ function TaskDetail({
   tile: DetailTile;
   now: number;
   canNavigate: boolean;
+  projectDirs: readonly string[];
+  caseInsensitive: boolean;
   onBack: () => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -1195,9 +1224,11 @@ function TaskDetail({
   const live = tile.state === 'running' || tile.state === 'waiting' || tile.state === 'queued';
   const statusText = live || !tile.verdict ? t(`bots.workbench.state.${tile.state}`) : t(`bots.workbench.verdict.${tile.verdict}`);
   // 运行中的任务内容在变:状态变化时重读一次,不轮询。
-  const reloadKey = `${tile.id}:${tile.state}:${tile.lastActiveMs}`;
+  const reloadKey = `${tile.type}:${tile.id}:${tile.state}:${tile.lastActiveMs}`;
 
   useEffect(() => {
+    // PR / issue / 建议没有对话记录,只显示判断与参考。
+    if (tile.type === 'item') return;
     const api = window.electronAPI?.localDb?.bots?.workbench;
     if (!api?.readTask) {
       setTranscript({ kind: 'failed' });
@@ -1218,8 +1249,7 @@ function TaskDetail({
     return () => {
       alive = false;
     };
-    // reloadKey 已涵盖 tile.id。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // reloadKey 已涵盖 tile.id 与 tile.type。
   }, [botId, reloadKey]);
 
   const send = useCallback(async () => {
@@ -1245,6 +1275,19 @@ function TaskDetail({
     if (tile.type !== 'session') return;
     void import('@/lib/makerChatStore').then((module) => module.makerChatStore.stopSession(tile.id));
   }, [tile]);
+
+  // 参考只在点击时打开:https 交给系统浏览器,路径必须仍落在已接手的项目里。
+  const reference = tile.type === 'item' && tile.ref ? tile.ref : null;
+  const openReference = useCallback(() => {
+    if (!reference) return;
+    if (/^https:\/\//i.test(reference)) {
+      void window.electronAPI.openExternal?.(reference);
+      return;
+    }
+    const checked = validateWorkbenchRef(reference, projectDirs, caseInsensitive);
+    if (checked.ok) void window.electronAPI.openPath?.(checked.ref);
+    else toast.error(t('bots.workbench.detail.refBlocked'));
+  }, [caseInsensitive, projectDirs, reference, t]);
 
   const openInTasks = useCallback(() => {
     if (tile.type !== 'session') return;
@@ -1291,13 +1334,13 @@ function TaskDetail({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-2 px-5 pb-3 text-12 leading-[18px] text-[var(--text-tertiary)]">
-        <StateIcon state={tile.state} verdict={tile.verdict} />
+        {tile.type === 'item' ? <ItemIcon tile={tile} /> : <StateIcon state={tile.state} verdict={tile.verdict} />}
         <span className="text-[var(--text-secondary)]">
           {statusText}
           {tile.state === 'running' && tile.startedAtMs ? ` ${elapsed(tile.startedAtMs, now)}` : ''}
         </span>
         <span aria-hidden>·</span>
-        <span className="min-w-0 truncate">{originLabel(tile.origin, t)}</span>
+        <span className="min-w-0 truncate">{tile.type === 'item' ? itemLabel(tile, t) : originLabel(tile.origin, t)}</span>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto border-t border-[var(--border-default)] px-5 py-4">
         {tile.verdict && tile.next ? (
@@ -1308,7 +1351,27 @@ function TaskDetail({
             <p className="mt-1 text-13 leading-5 text-[var(--text-primary)]">{tile.next}</p>
           </section>
         ) : null}
-        {transcript.kind === 'loading' ? (
+        {tile.type === 'item' ? (
+          reference ? (
+            <button
+              type="button"
+              onClick={openReference}
+              className="flex w-full min-w-0 items-center gap-2 rounded-xl border border-[var(--border-default)] px-3.5 py-2.5 text-left outline-none transition-colors hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            >
+              {/^https:\/\//i.test(reference) ? (
+                <Link2 size={14} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
+              ) : (
+                <FileText size={14} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
+              )}
+              <span className="min-w-0 flex-1">
+                <span className="block text-12 leading-[18px] text-[var(--text-tertiary)]">{t('bots.workbench.detail.ref')}</span>
+                <span className="block truncate text-13 leading-5 text-[var(--text-primary)]">{reference}</span>
+              </span>
+            </button>
+          ) : (
+            <p className="text-12 leading-[18px] text-[var(--text-tertiary)]">{t('bots.workbench.detail.noRef')}</p>
+          )
+        ) : transcript.kind === 'loading' ? (
           <div className="flex justify-center py-6">
             <Spinner size={16} className="text-[var(--text-tertiary)]" role="status" aria-label={t('ccAgent.common.loading')} />
           </div>

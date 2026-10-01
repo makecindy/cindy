@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   boundWorkbenchSummary,
+  buildWorkbenchDigest,
+  canonicalWorkbenchTaskId,
   cleanWorkbenchTitle,
+  validateWorkbenchRef,
   externalWorkbenchTaskId,
   parseWorkbenchTaskId,
   countWorkbenchStates,
@@ -123,5 +126,70 @@ describe('parseWorkbenchTaskId', () => {
     expect(parseWorkbenchTaskId('codex:019a-77')).toEqual({ kind: 'external', source: 'codex', externalId: '019a-77' });
     expect(parseWorkbenchTaskId(' ')).toBeNull();
     expect(externalWorkbenchTaskId('codex', 't1')).toBe('codex:t1');
+  });
+});
+
+describe('workbench entry ids', () => {
+  it('parses session, Pi, PR, issue and idea ids and keeps a canonical form', () => {
+    expect(parseWorkbenchTaskId('session:abc')).toEqual({ kind: 'session', sessionId: 'abc' });
+    expect(parseWorkbenchTaskId('pi:p-1')).toEqual({ kind: 'external', source: 'pi', externalId: 'p-1' });
+    expect(parseWorkbenchTaskId('pr:makecindy/cindy#5292')).toEqual({
+      kind: 'github', type: 'pr', owner: 'makecindy', repo: 'cindy', number: 5292,
+    });
+    expect(parseWorkbenchTaskId('issue:me/repo.js#7')).toMatchObject({ kind: 'github', type: 'issue', repo: 'repo.js' });
+    expect(parseWorkbenchTaskId('idea:dark-icons')).toEqual({ kind: 'idea', slug: 'dark-icons' });
+    for (const id of ['pr:cindy#1', 'pr:a/b#x', 'issue:a b/c#1', 'idea:ab', 'idea:Dark', `idea:${'a'.repeat(41)}`]) {
+      expect(parseWorkbenchTaskId(id)).toBeNull();
+    }
+    expect(canonicalWorkbenchTaskId(parseWorkbenchTaskId('session:abc')!)).toBe('abc');
+    expect(canonicalWorkbenchTaskId(parseWorkbenchTaskId('pr:a/b#3')!)).toBe('pr:a/b#3');
+  });
+});
+
+describe('validateWorkbenchRef', () => {
+  const projects = ['/Users/me/Code/app'];
+  it('accepts https links and paths inside a handed-over project', () => {
+    expect(validateWorkbenchRef('https://github.com/a/b/pull/1', projects, false)).toEqual({
+      ok: true, ref: 'https://github.com/a/b/pull/1',
+    });
+    expect(validateWorkbenchRef('/Users/me/Code/app/docs/DESIGN.md', projects, false)).toEqual({
+      ok: true, ref: '/Users/me/Code/app/docs/DESIGN.md',
+    });
+    expect(validateWorkbenchRef('/users/me/code/APP/README.md', projects, true)).toMatchObject({ ok: true });
+  });
+  it.each([
+    'http://example.com',
+    'javascript:alert(1)',
+    'file:///etc/passwd',
+    'https://user:pw@example.com',
+    '/etc/passwd',
+    '/Users/me/Code/app-old/x.md',
+    '/Users/me/Code/app/../secret',
+    'docs/DESIGN.md',
+    '',
+  ])('rejects %s', (ref) => {
+    expect(validateWorkbenchRef(ref, projects, false)).toEqual({ ok: false });
+  });
+});
+
+describe('buildWorkbenchDigest', () => {
+  it('takes the first user message as purpose and the last three messages, both bounded', () => {
+    const head = [
+      { role: 'assistant' as const, text: 'hi', at: 1 },
+      { role: 'user' as const, text: `<system-reminder>x</system-reminder>  把图标   导出来 ${'a'.repeat(400)}`, at: 2 },
+    ];
+    const tail = [
+      { role: 'user' as const, text: 'one', at: 3 },
+      { role: 'assistant' as const, text: 'two', at: 4 },
+      { role: 'assistant' as const, text: '<system-reminder>only</system-reminder>', at: 5 },
+      { role: 'user' as const, text: 'three', at: 6 },
+      { role: 'assistant' as const, text: 'b'.repeat(500), at: 7 },
+    ];
+    const digest = buildWorkbenchDigest(head, tail);
+    expect(digest.purpose!.startsWith('把图标 导出来')).toBe(true);
+    expect(digest.purpose!.length).toBeLessThanOrEqual(200);
+    expect(digest.recent.map((item) => item.text.slice(0, 5))).toEqual(['two', 'three', 'bbbbb']);
+    expect(digest.recent[2]!.text.length).toBeLessThanOrEqual(300);
+    expect(buildWorkbenchDigest([], [])).toEqual({ purpose: null, recent: [] });
   });
 });

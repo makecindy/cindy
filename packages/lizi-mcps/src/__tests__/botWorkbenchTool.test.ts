@@ -10,7 +10,7 @@ function parse(result: { content: Array<{ type: string; text?: string }> }) {
 }
 
 const snapshot = {
-  projects: [{ name: 'tapmon-art', path: '/w/tapmon-art', exists: true }],
+  projects: [{ name: 'tapmon-art', path: '/w/tapmon-art', exists: true, brief: null }],
   tasks: [
     {
       taskId: 'claude:abc',
@@ -20,16 +20,18 @@ const snapshot = {
       project: 'tapmon-art',
       state: null,
       kind: 'existing' as const,
-      summary: null,
       lastActiveAt: '2026-10-01T00:00:00.000Z',
       messageCount: null,
+      digest: { purpose: '导出 Android 图标', recent: [] },
       judgment: null,
     },
   ],
+  items: [],
   automations: [],
   counts: { unfinished: 0, idea: 0, done: 0, unjudged: 1 },
   truncated: false,
   totalTasks: 1,
+  olderCount: 0,
 };
 
 function setup(sessionId: string | null = 'bot-session') {
@@ -44,6 +46,11 @@ function setup(sessionId: string | null = 'bot-session') {
       ok: true as const,
       taskId,
       judgment: { title, verdict, next: next ?? null, updatedAt: '2026-10-01T00:00:00.000Z' },
+    })),
+    setMany: vi.fn(async ({ items }: { items: Array<{ taskId: string }> }) => ({
+      ok: true as const,
+      saved: items.length,
+      results: items.map((item) => ({ taskId: item.taskId, ok: true as const })),
     })),
     continueTask: vi.fn(async ({ taskId }: { taskId: string }) => ({
       ok: true as const,
@@ -104,6 +111,46 @@ describe('bot workbench tools', () => {
     });
   });
 
+  it('writes a batch of judgments with optional refs in one call', async () => {
+    const { reg, callbacks } = setup();
+    const result = parse(await reg.call('set_workbench_tasks', {
+      items: [
+        { task_id: 'claude:abc', title: '导出图标', verdict: 'unfinished', next: '补 xxhdpi' },
+        { task_id: 'pr:makecindy/cindy#5292', title: '工作台 PR', verdict: 'unfinished', next: '处理 review', ref: 'https://github.com/makecindy/cindy/pull/5292' },
+        { task_id: 'idea:dark-icons', title: '暗色图标', verdict: 'idea', next: '按 DESIGN.md 补一套', ref: '/w/tapmon-art/DESIGN.md', project: '/w/tapmon-art' },
+      ],
+    }));
+    expect(result).toMatchObject({ ok: true, saved: 3 });
+    expect(callbacks.setMany).toHaveBeenCalledWith({
+      callerSessionId: 'bot-session',
+      items: [
+        { taskId: 'claude:abc', title: '导出图标', verdict: 'unfinished', next: '补 xxhdpi' },
+        { taskId: 'pr:makecindy/cindy#5292', title: '工作台 PR', verdict: 'unfinished', next: '处理 review', ref: 'https://github.com/makecindy/cindy/pull/5292' },
+        { taskId: 'idea:dark-icons', title: '暗色图标', verdict: 'idea', next: '按 DESIGN.md 补一套', ref: '/w/tapmon-art/DESIGN.md', project: '/w/tapmon-art' },
+      ],
+    });
+  });
+
+  it('caps the batch at 30 items before reaching the host', async () => {
+    const { reg, callbacks } = setup();
+    const items = Array.from({ length: 31 }, (_, index) => ({ task_id: `t-${index}`, title: 't', verdict: 'done' }));
+    expect(parse(await reg.call('set_workbench_tasks', { items })).ok).toBe(false);
+    expect(parse(await reg.call('set_workbench_tasks', { items: [] })).ok).toBe(false);
+    expect(callbacks.setMany).not.toHaveBeenCalled();
+  });
+
+  it('reports a background task started for a non-session entry', async () => {
+    const { reg, callbacks } = setup();
+    vi.mocked(callbacks.continueTask).mockResolvedValueOnce({
+      ok: true,
+      taskId: 'child-1',
+      delivery: 'started',
+      startedFrom: 'idea:dark-icons',
+    });
+    expect(parse(await reg.call('continue_workbench_task', { task_id: 'idea:dark-icons', message: '开始做' })))
+      .toMatchObject({ ok: true, task_id: 'child-1', started_from: 'idea:dark-icons' });
+  });
+
   it('rejects judgments outside the schema before reaching the host', async () => {
     const { reg, callbacks } = setup();
     expect(parse(await reg.call('set_workbench_task', { task_id: 't', title: 'x'.repeat(41), verdict: 'done' })).ok).toBe(false);
@@ -141,7 +188,7 @@ describe('bot workbench tools', () => {
   it('no longer offers the card-writing tool', () => {
     const { reg } = setup();
     expect(reg.has('update_workbench')).toBe(false);
-    for (const name of ['get_workbench', 'read_workbench_task', 'set_workbench_task', 'continue_workbench_task', 'stop_workbench_task']) {
+    for (const name of ['get_workbench', 'read_workbench_task', 'set_workbench_task', 'set_workbench_tasks', 'continue_workbench_task', 'stop_workbench_task']) {
       expect(reg.has(name)).toBe(true);
     }
   });

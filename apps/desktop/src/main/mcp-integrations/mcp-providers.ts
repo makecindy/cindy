@@ -184,6 +184,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         ? { ok: true as const, status: result.status }
         : { ok: false as const, errorCode: result.errorCode, message: result.message };
     }),
+    startBackgroundTask: async ({ callerSessionId, workingDir, title, objective }) => {
+      const svc = tryGetBotDelegationService();
+      if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Session task service not initialized' };
+      const result = await svc.startSessionTask({ callerSessionId, objective, title, workingDir });
+      return result.ok
+        ? { ok: true as const, sessionId: result.childSessionId }
+        : { ok: false as const, errorCode: result.errorCode, message: result.message };
+    },
   };
 
   const providers = createLiziMcpProviders({
@@ -840,6 +848,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         get: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.get(params)),
         read: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.read(params)),
         set: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.set(params)),
+        setMany: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.setMany(params)),
         continueTask: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.continueTask(params)),
         stopTask: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.stopTask(params)),
       },

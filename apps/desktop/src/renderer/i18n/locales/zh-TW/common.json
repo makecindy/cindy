@@ -7788,7 +7788,7 @@
     "workbench": {
       "title": "工作台",
       "emptyTitle": "交給{{name}}一個專案",
-      "emptyDescription": "把電腦裡已有的工作交給{{name}}接著做。它會先讀一遍專案裡的任務，挑出沒做完和聊過沒下文的，再問你接著做哪件。",
+      "emptyDescription": "把電腦裡已有的工作交給{{name}}接著做。它會先看一遍專案的文件、最近的提交和 PR、做過的任務，挑出沒做完和值得做的，再問你接著做哪件。",
       "scanning": "正在尋找電腦上的專案…",
       "noProjects": "還沒找到有任務的專案，可以選一個資料夾交給{{name}}。",
       "pickFolder": "選其他資料夾",
@@ -7843,7 +7843,10 @@
         "judgment": "{{name}}的判斷",
         "empty": "還沒有可顯示的內容。",
         "loadFailed": "讀不到這件任務的記錄。",
-        "truncated": "只顯示最近的內容"
+        "truncated": "只顯示最近的內容",
+        "ref": "參考",
+        "noRef": "沒有附參考連結。",
+        "refBlocked": "這個路徑不在交給夥伴的專案裡，沒有開啟。"
       },
       "showAll": "全部 {{count}}",
       "showLess": "收起",
@@ -7863,6 +7866,10 @@
         "delegated": "你交代的",
         "claudeCode": "來自 Claude Code",
         "codex": "來自 Codex",
+        "pi": "來自 Pi",
+        "pr": "PR #{{number}}",
+        "issue": "Issue #{{number}}",
+        "idea": "建議",
         "automation": "自動化 · {{cycle}}",
         "automationPlain": "自動化"
       },

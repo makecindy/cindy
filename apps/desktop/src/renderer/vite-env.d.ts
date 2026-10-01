@@ -4796,6 +4796,21 @@ interface ElectronAPI {
           | { ok: true; taskId: string; transcript: import('../shared/botWorkbench').WorkbenchTranscript }
           | { ok: false; errorCode: string; message: string }
         >;
+        candidates: (
+          botId: string,
+        ) => Promise<
+          | {
+              ok: true;
+              candidates: Array<{
+                source: 'claude' | 'codex' | 'pi';
+                id: string;
+                projectDir: string | null;
+                updatedAt: string;
+                archived: boolean;
+              }>;
+            }
+          | { ok: false; errorCode: string; message: string }
+        >;
       };
       listSkills: (botId: string) => Promise<import('../shared/botSkill').BotSkillSummary[]>;
       memory: {

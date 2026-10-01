@@ -66,7 +66,10 @@ import {
   readBotWorkbench,
   removeBotWorkbenchDirectory,
 } from '../../maker-ipc/botWorkbenchService.js';
-import { readBotWorkbenchTaskForOwner } from '../../maker-ipc/botWorkbenchTools.js';
+import {
+  listBotWorkbenchCandidatesForOwner,
+  readBotWorkbenchTaskForOwner,
+} from '../../maker-ipc/botWorkbenchTools.js';
 import {
   NEW_BOT_DEFAULT_PI_EFFORT,
   NEW_BOT_DEFAULT_PI_MODEL,
@@ -2119,6 +2122,15 @@ export function registerBotIpc(): void {
     const taskId = readText(rawTaskId, 'taskId', 256, true);
     const owner = captureBotOperationOwner();
     const result = await readBotWorkbenchTaskForOwner(botId, taskId);
+    owner.assertCurrent();
+    return result;
+  });
+  // 工作台:已接手项目里近期本机会话的 id 与最近活动(只读、按项目过滤、只看近期)。
+  ipcMain.handle('local-db:bots:workbench:candidates', async (event, rawBotId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const botId = readText(rawBotId, 'botId', 128, true);
+    const owner = captureBotOperationOwner();
+    const result = await listBotWorkbenchCandidatesForOwner(botId);
     owner.assertCurrent();
     return result;
   });

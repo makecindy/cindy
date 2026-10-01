@@ -7790,7 +7790,7 @@
     "workbench": {
       "title": "Workbench",
       "emptyTitle": "Give {{name}} a project",
-      "emptyDescription": "Hand the work already on your computer to {{name}}. It reads the project's sessions first, picks out what's unfinished or was discussed but never followed up, and asks which one to continue.",
+      "emptyDescription": "Hand the work already on your computer to {{name}}. It first looks over the project's docs, recent commits and PRs, and past sessions, picks out what's unfinished or worth doing, and asks which one to continue.",
       "scanning": "Looking for projects on this computer…",
       "noProjects": "No projects with sessions yet. Pick a folder to hand to {{name}}.",
       "pickFolder": "Choose another folder",
@@ -7856,7 +7856,10 @@
         "judgment": "{{name}}'s take",
         "empty": "Nothing to show yet.",
         "loadFailed": "Couldn't read this session.",
-        "truncated": "Showing the most recent part only"
+        "truncated": "Showing the most recent part only",
+        "ref": "Reference",
+        "noRef": "No reference attached.",
+        "refBlocked": "This path is outside the handed-over projects, so it wasn't opened."
       },
       "showAll": "All {{count}}",
       "showLess": "Show less",
@@ -7876,6 +7879,10 @@
         "delegated": "You asked",
         "claudeCode": "From Claude Code",
         "codex": "From Codex",
+        "pi": "From Pi",
+        "pr": "PR #{{number}}",
+        "issue": "Issue #{{number}}",
+        "idea": "Suggestion",
         "automation": "Automation · {{cycle}}",
         "automationPlain": "Automation"
       },

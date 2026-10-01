@@ -149,6 +149,41 @@ describe('buildWorkbenchTiles', () => {
     ]);
   });
 
+  it('shows Pi sessions and PR / issue / idea entries the Bot wrote down, labelled by kind', () => {
+    const judgment = (verdict: 'unfinished' | 'idea' | 'done', title: string, extra: Record<string, unknown> = {}) => ({
+      title,
+      verdict,
+      next: verdict === 'done' ? null : `${title}的下一步`,
+      project: ART,
+      updatedAt: '2026-10-01T00:00:00.000Z',
+      ...extra,
+    });
+    const tiles = buildWorkbenchTiles({
+      ...base,
+      sessions: [],
+      judgments: {
+        'pi:p1': judgment('unfinished', '写文档'),
+        'pr:me/art#12': judgment('unfinished', '图标 PR', { ref: 'https://github.com/me/art/pull/12' }),
+        'issue:me/art#7': judgment('idea', '暗色图标'),
+        'idea:dark-icons': judgment('idea', '补一套暗色', { ref: `${ART}/DESIGN.md` }),
+        'idea:done-one': judgment('done', '已做完'),
+        'idea:elsewhere': judgment('idea', '别的项目', { project: CINDY }),
+      },
+    });
+    const byId = new Map(tiles.map((tile) => [tile.id, tile]));
+    expect([...byId.keys()].sort()).toEqual(['idea:dark-icons', 'issue:me/art#7', 'pi:p1', 'pr:me/art#12']);
+    expect(byId.get('pi:p1')).toMatchObject({ type: 'external', origin: 'pi', verdict: 'unfinished' });
+    expect(byId.get('pr:me/art#12')).toMatchObject({
+      type: 'item',
+      itemKind: 'pr',
+      number: 12,
+      ref: 'https://github.com/me/art/pull/12',
+      project: ART,
+    });
+    expect(byId.get('issue:me/art#7')).toMatchObject({ type: 'item', itemKind: 'issue', number: 7, ref: null });
+    expect(byId.get('idea:dark-icons')).toMatchObject({ type: 'item', itemKind: 'idea', number: null, ref: `${ART}/DESIGN.md` });
+  });
+
   it('keeps Bot hidden sessions, other projects, drafts, remote, archived and non-task sources out', () => {
     const live = (id: string) => [id, { phase: 'running' }] as const;
     const ids = ['kept', 'bot-main', 'bot-source', 'elsewhere', 'draft', 'remote', 'device', 'archived', 'automation-run', 'worker'];

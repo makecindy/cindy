@@ -17,6 +17,7 @@ import {
   WORKBENCH_JUDGMENT_NEXT_MAX,
   WORKBENCH_JUDGMENT_TITLE_MAX,
   WORKBENCH_MAX_JUDGMENTS,
+  WORKBENCH_REF_MAX,
   type BotWorkbench,
   type BotWorkbenchDirectory,
   type WorkbenchTaskJudgment,
@@ -57,6 +58,7 @@ function normalizeJudgment(raw: unknown): WorkbenchTaskJudgment | null {
     verdict: entry.verdict as WorkbenchTaskJudgment['verdict'],
     next: boundedText(entry.next, WORKBENCH_JUDGMENT_NEXT_MAX),
     project: entry.project,
+    ...(typeof entry.ref === 'string' && entry.ref.trim() ? { ref: entry.ref.trim().slice(0, WORKBENCH_REF_MAX) } : {}),
     updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : new Date(0).toISOString(),
   };
 }
@@ -207,6 +209,16 @@ export async function setBotWorkbenchJudgment(
   }));
 }
 
+/** 条目转成伙伴的后台任务后删掉它的判断(之后它就是普通的「你交代的」格子)。 */
+export async function deleteBotWorkbenchJudgment(userDataDir: string, botId: string, taskId: string): Promise<void> {
+  await mutate(userDataDir, botId, (stored) => {
+    if (!stored.tasks[taskId]) return { next: stored, result: undefined };
+    const rest = { ...stored.tasks };
+    delete rest[taskId];
+    return { next: { ...stored, tasks: rest }, result: undefined };
+  });
+}
+
 /** 外部会话导入成 Cindy 任务后,把判断改挂到新的 session id。 */
 export async function rekeyBotWorkbenchJudgment(
   userDataDir: string,
@@ -217,7 +229,8 @@ export async function rekeyBotWorkbenchJudgment(
   await mutate(userDataDir, botId, (stored) => {
     const judgment = stored.tasks[fromTaskId];
     if (!judgment || fromTaskId === toTaskId) return { next: stored, result: undefined };
-    const { [fromTaskId]: _moved, ...rest } = stored.tasks;
+    const rest = { ...stored.tasks };
+    delete rest[fromTaskId];
     return { next: { ...stored, tasks: { ...rest, [toTaskId]: judgment } }, result: undefined };
   });
 }

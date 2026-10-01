@@ -4,21 +4,22 @@
  * - 伙伴身份从调用方 session 反查(只认本机、在用的伙伴主任务);
  * - 已接手项目与伙伴的判断读写伙伴家的 `workbench.json`;
  * - 任务、后台任务、活动快照、例行任务与自动化都读宿主已有的权威来源,不另存状态;
- * - 本机 Claude Code / Codex 会话复用导入扫描(只读、带缓存),读转录只读文件尾部;
- *   只有伙伴继续某一件时才经设置页同一条单条导入路径导入它;
+ * - 本机 Claude Code / Codex / Pi 会话按固定的转录目录发现(`botWorkbenchSessionRoots.ts`),只看近期、
+ *   只读头尾;只有伙伴继续某一件时才经设置页同一条单条导入路径导入它(Pi 与导入不了的改开后台任务);
+ * - 项目素材 brief(文档路径、git、GitHub PR / issue)宿主现算、有界、带缓存;
  * - 继续 / 停止复用宿主已有的发消息与优雅停止路径(与 send_to_session、
  *   stop_session_turn 同一条链路),由调用方注入。
  */
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
+
+import { app } from 'electron';
 
 import { and, count, desc, eq, inArray, isNotNull, isNull, like, ne, or } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current.js';
 import { botDelegations, botProfiles, botSessionLinks, messages, sessions } from '../localDb/schema.js';
-import {
-  getSessionImportScan,
-  invalidateSessionImportScanCache,
-} from '../localDb/ipc/session-import.js';
+import { invalidateSessionImportScanCache } from '../localDb/ipc/session-import.js';
 import { importExternalClaudeCodeSessions } from '../maker-host/claude-local-sessions.js';
 import { importExternalCodexSessions } from '../maker-host/codex-local-sessions.js';
 import {
@@ -27,23 +28,29 @@ import {
   ownerScopedUserDataPath,
 } from '../appSessionState.js';
 import { routineTools } from '../routines/service.js';
-import { getSchedulerIfInitialized } from '../scheduler-host/index.js';
 import { normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
-import type { WorkbenchDelegationStatus } from '../../shared/botWorkbench.js';
+import { WORKBENCH_RECENT_WINDOW_MS, type WorkbenchDelegationStatus } from '../../shared/botWorkbench.js';
 import {
   broadcastBotWorkbenchChanged,
+  deleteBotWorkbenchJudgment,
   readBotWorkbenchState,
   rekeyBotWorkbenchJudgment,
   setBotWorkbenchJudgment,
 } from './botWorkbenchService.js';
-import { readExternalTranscript, readSessionTranscript } from './botWorkbenchTranscripts.js';
+import {
+  listExternalSessionsForProjects,
+  readExternalTranscriptFile,
+  readSessionDigest,
+  readSessionTranscript,
+} from './botWorkbenchTranscripts.js';
+import { workbenchSessionRoots } from './botWorkbenchSessionRoots.js';
+import { createBriefCache, type WorkbenchBriefGithubItem } from './botWorkbenchBrief.js';
 import { readCanonicalSessionActivity } from './sessionActivityProjection.js';
 import {
   createBotWorkbenchAccess,
   type BotWorkbenchAccess,
   type BotWorkbenchAccessDeps,
   type WorkbenchCallerResult,
-  type WorkbenchExternalCandidate,
   type WorkbenchTargetFacts,
 } from './botWorkbenchAccess.js';
 
@@ -220,6 +227,8 @@ async function listBotRoutines(botId: string) {
 }
 
 async function listProjectSchedules() {
+  // 调度器入口牵连通知等主进程模块,按需加载,避免任务 IPC 一引用本模块就把它们带进来。
+  const { getSchedulerIfInitialized } = await import('../scheduler-host/index.js');
   const scheduler = getSchedulerIfInitialized();
   if (!scheduler) return [];
   const schedules = await scheduler.list();
@@ -234,27 +243,85 @@ async function listProjectSchedules() {
   }));
 }
 
-/** 本机还没导入的 Claude Code / Codex 会话:复用设置页导入扫描(只读、30 秒缓存)。 */
-async function listExternalCandidates(): Promise<WorkbenchExternalCandidate[]> {
-  const scan = await getSessionImportScan();
-  return scan.candidates.map((item) => ({
-    source: item.source,
-    id: item.id,
-    title: item.title,
-    cwd: item.cwd,
-    workspaceKind: item.workspaceKind,
-    updatedAt: Date.parse(item.updatedAt) || 0,
-    archived: item.archived,
-  }));
+function appPath(name: 'appData' | 'userData'): string | null {
+  try {
+    return app.getPath(name);
+  } catch {
+    return null;
+  }
 }
 
-async function findImportedSession(source: 'claude' | 'codex', externalId: string): Promise<string | null> {
+/**
+ * 已接手项目里近期的本机 Claude Code / Codex / Pi 会话。根目录见 `workbenchSessionRoots`
+ * (含其它 Cindy profile 的 codex-home 与 pi-agent-home),按 cwd 过滤,只读近期转录的头尾。
+ */
+async function listExternalCandidates(projectDirs: readonly string[]) {
+  const now = Date.now();
+  return listExternalSessionsForProjects({
+    roots: workbenchSessionRoots({
+      homeDir: os.homedir(),
+      appDataDir: appPath('appData'),
+      userDataDir: appPath('userData'),
+      platform: process.platform,
+      env: { CODEX_HOME: process.env.CODEX_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR, APPDATA: process.env.APPDATA },
+    }),
+    projectDirs,
+    caseInsensitive: process.platform === 'win32',
+    since: now - WORKBENCH_RECENT_WINDOW_MS,
+    now,
+  });
+}
+
+const GIT_TIMEOUT_MS = 3_000;
+const GITHUB_TIMEOUT_MS = 8_000;
+
+/** 项目素材:git 命令限时、gh 登录 token 复用,拿不到就缺项。按项目缓存 60 秒。 */
+// git / GitHub 依赖按需加载:只有伙伴真的读工作台时才用到,不拖累引用本模块的其它入口。
+const readBrief = createBriefCache({
+  git: async (cwd, args) => {
+    try {
+      const { runGit } = await import('../git-review/gitRunner.js');
+      return (await runGit(args, { cwd, timeoutMs: GIT_TIMEOUT_MS, maxStdoutBytes: 512 * 1024 })).stdout;
+    } catch {
+      return null;
+    }
+  },
+  searchGithub: async (query, limit) => {
+    const [{ getSharedGhCliTokenSource }, { GithubClient }, { outboundFetch }] = await Promise.all([
+      import('../git-context/ghCliTokenSource.js'),
+      import('@cindy/github-client'),
+      import('../maker-host/outbound-fetch.js'),
+    ]);
+    const token = await getSharedGhCliTokenSource().readToken();
+    if (!token) return null;
+    const client = new GithubClient({ token, fetchImpl: outboundFetch });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      client.searchIssuesAndPRs({ q: query, sort: 'updated', order: 'desc', per_page: limit }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('github timeout')), GITHUB_TIMEOUT_MS);
+      }),
+    ]).finally(() => clearTimeout(timer));
+    return result.items.slice(0, limit).map((item): WorkbenchBriefGithubItem => ({
+      number: item.number,
+      title: item.title.slice(0, 200),
+      state: item.state,
+      updatedAt: item.updated_at,
+      url: item.html_url,
+    }));
+  },
+  now: () => Date.now(),
+});
+
+const AGENT_KIND = { claude: 'cc', codex: 'codex', pi: 'pi' } as const;
+
+async function findImportedSession(source: 'claude' | 'codex' | 'pi', externalId: string): Promise<string | null> {
   const [row] = await getDbClient()
     .drizzle.select({ id: sessions.id })
     .from(sessions)
     .where(and(
       eq(sessions.sdkSessionId, externalId),
-      eq(sessions.agentKind, source === 'claude' ? 'cc' : 'codex'),
+      eq(sessions.agentKind, AGENT_KIND[source]),
       ne(sessions.status, 'deleted'),
     ))
     .orderBy(desc(sessions.updatedAt))
@@ -285,7 +352,8 @@ async function importExternalSession(
     : { ok: false, errorCode: 'IMPORT_FAILED', message: '没能把这条本机会话接过来,请让主人稍后重试' };
 }
 
-export type BotWorkbenchSendDeps = Pick<BotWorkbenchAccessDeps, 'sendToSession' | 'stopSessionTurn'>;
+/** 投递、停止与开后台任务由调用方注入(与 send_to_session、stop_session_turn、start_session_task 同一条宿主路径)。 */
+export type BotWorkbenchSendDeps = Pick<BotWorkbenchAccessDeps, 'sendToSession' | 'stopSessionTurn' | 'startBackgroundTask'>;
 
 /**
  * 按调用时的账号作用域组装一次工具服务:作用域在调用期间切换则中止,不做投递。
@@ -308,8 +376,12 @@ export function createDesktopBotWorkbenchAccess(send: BotWorkbenchSendDeps): Bot
     listExternalCandidates,
     findImportedSession,
     importExternal: importExternalSession,
+    startBackgroundTask: send.startBackgroundTask,
+    readSessionDigest,
+    readBrief,
     readSessionTranscript,
-    readExternalTranscript,
+    readExternalTranscript: (candidate) => readExternalTranscriptFile(candidate.source, candidate.id, candidate.file),
+    deleteJudgment: (botId, taskId) => deleteBotWorkbenchJudgment(userDataDir, botId, taskId),
     saveJudgment: (botId, taskId, judgment) => setBotWorkbenchJudgment(userDataDir, botId, taskId, judgment),
     rekeyJudgment: (botId, from, to) => rekeyBotWorkbenchJudgment(userDataDir, botId, from, to),
     notifyChanged: broadcastBotWorkbenchChanged,
@@ -344,9 +416,15 @@ export async function runBotWorkbenchTool<T>(
 const NO_SEND: BotWorkbenchSendDeps = {
   sendToSession: async () => ({ ok: false, errorCode: 'UNSUPPORTED', message: 'read only' }),
   stopSessionTurn: async () => ({ ok: false, errorCode: 'UNSUPPORTED', message: 'read only' }),
+  startBackgroundTask: async () => ({ ok: false, errorCode: 'UNSUPPORTED', message: 'read only' }),
 };
 
 /** 工作台详情视图(主人自己的界面)读取一件任务的最近内容;范围同样限于已接手项目。 */
 export async function readBotWorkbenchTaskForOwner(botId: string, taskId: string) {
   return runBotWorkbenchTool(NO_SEND, (access) => access.readForOwner({ botId, taskId }));
+}
+
+/** 工作台用:已接手项目里近期本机会话的 id 与最近活动。 */
+export async function listBotWorkbenchCandidatesForOwner(botId: string) {
+  return runBotWorkbenchTool(NO_SEND, (access) => access.listCandidatesForOwner({ botId }));
 }

@@ -423,12 +423,6 @@ export async function importExternalCodexSessions(threadIds: string[]): Promise<
   return out;
 }
 
-/** 只读定位一个本机外部 Codex thread 的 rollout 文件(伙伴工作台读尾部用);不写库、不导入。 */
-export function findExternalCodexRolloutFile(threadId: string): string | null {
-  if (!isLikelyThreadId(threadId)) return null;
-  return findExternalThreadById(threadId)?.rolloutPath ?? null;
-}
-
 /** Locate existing history without adopting, copying or reconstructing it. */
 export function readCodexThreadStorageForArchive(threadId: string): {
   historyHome: string; sqliteHome: string; rolloutPath: string;

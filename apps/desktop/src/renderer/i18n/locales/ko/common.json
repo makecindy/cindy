@@ -7788,7 +7788,7 @@
     "workbench": {
       "title": "작업대",
       "emptyTitle": "{{name}}에게 프로젝트 맡기기",
-      "emptyDescription": "컴퓨터에 있는 작업을 {{name}}에게 넘겨 이어서 하게 합니다. 먼저 프로젝트의 세션을 읽고, 끝나지 않았거나 이야기만 하고 멈춘 것을 골라낸 뒤 무엇을 이어서 할지 물어봅니다.",
+      "emptyDescription": "컴퓨터에 있는 작업을 {{name}}에게 넘겨 이어서 하게 합니다. 먼저 프로젝트의 문서, 최근 커밋과 PR, 지난 세션을 살펴보고, 끝나지 않았거나 해 볼 만한 것을 골라낸 뒤 무엇을 이어서 할지 물어봅니다.",
       "scanning": "컴퓨터에서 프로젝트를 찾는 중…",
       "noProjects": "세션이 있는 프로젝트가 아직 없습니다. 폴더를 골라 {{name}}에게 맡길 수 있습니다.",
       "pickFolder": "다른 폴더 선택",
@@ -7843,7 +7843,10 @@
         "judgment": "{{name}}의 판단",
         "empty": "아직 표시할 내용이 없습니다.",
         "loadFailed": "이 세션의 기록을 읽을 수 없습니다.",
-        "truncated": "최근 내용만 표시합니다"
+        "truncated": "최근 내용만 표시합니다",
+        "ref": "참고",
+        "noRef": "첨부된 참고 링크가 없습니다.",
+        "refBlocked": "맡긴 프로젝트 밖의 경로라서 열지 않았습니다."
       },
       "showAll": "전체 {{count}}",
       "showLess": "접기",
@@ -7863,6 +7866,10 @@
         "delegated": "요청한 일",
         "claudeCode": "Claude Code에서",
         "codex": "Codex에서",
+        "pi": "Pi에서",
+        "pr": "PR #{{number}}",
+        "issue": "Issue #{{number}}",
+        "idea": "제안",
         "automation": "자동화 · {{cycle}}",
         "automationPlain": "자동화"
       },

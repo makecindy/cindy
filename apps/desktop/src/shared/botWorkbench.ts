@@ -6,7 +6,7 @@
  * 与运行——不经过模型,也不另存一份状态。主进程(伙伴读取工作台的工具)和渲染层
  * (右侧栏的任务格)共用这里的同一套规则,两边说法一致。
  */
-import { normalizeWorkingDirForGrouping } from './workingDir';
+import { normalizeWorkingDirForGrouping, normalizeWorkingDirForStorage } from './workingDir';
 
 /** 主人最多交给一个伙伴几个项目;与存储层的上限同源。 */
 export const BOT_WORKBENCH_MAX_DIRECTORIES = 6;
@@ -34,8 +34,12 @@ export interface WorkbenchTaskJudgment {
   next: string | null;
   /** 写判断时这件任务所在的已接手项目目录(移除项目后据此隐藏)。 */
   project: string;
+  /** 可选的参考:https 链接,或已接手项目内的文件路径。 */
+  ref?: string | null;
   updatedAt: string;
 }
+
+export const WORKBENCH_REF_MAX = 2_000;
 
 export interface BotWorkbench {
   directories: BotWorkbenchDirectory[];
@@ -55,6 +59,46 @@ export interface WorkbenchTranscript {
   truncated: boolean;
 }
 
+/** 一件会话候选的摘要:起始目的 + 最后几条,宿主预先算好,伙伴先凭它判断。 */
+export interface WorkbenchDigest {
+  /** 第一条用户消息,清洗后 ≤ 200 字。 */
+  purpose: string | null;
+  /** 最后 2–3 条用户 / 助手文字,各 ≤ 300 字,按时间正序。 */
+  recent: Array<{ role: 'user' | 'assistant'; text: string }>;
+}
+
+export const WORKBENCH_DIGEST_PURPOSE_MAX = 200;
+export const WORKBENCH_DIGEST_RECENT_MAX = 300;
+export const WORKBENCH_DIGEST_RECENT_COUNT = 3;
+
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function flatten(text: string): string {
+  return stripInstructionBlocks(text).replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * 由按时间正序的消息算摘要。`head` 是从开头读到的一段(取第一条用户消息),
+ * `tail` 是从结尾读到的一段(取最后几条);两段可以重叠或相同。
+ */
+export function buildWorkbenchDigest(
+  head: readonly WorkbenchTranscriptItem[],
+  tail: readonly WorkbenchTranscriptItem[],
+): WorkbenchDigest {
+  const firstUser = head.map((item) => (item.role === 'user' ? flatten(item.text) : '')).find(Boolean) ?? null;
+  const recent: WorkbenchDigest['recent'] = [];
+  for (let index = tail.length - 1; index >= 0 && recent.length < WORKBENCH_DIGEST_RECENT_COUNT; index -= 1) {
+    const text = flatten(tail[index].text);
+    if (text) recent.unshift({ role: tail[index].role, text: clip(text, WORKBENCH_DIGEST_RECENT_MAX) });
+  }
+  return { purpose: firstUser ? clip(firstUser, WORKBENCH_DIGEST_PURPOSE_MAX) : null, recent };
+}
+
+/** 只看近期:最近 30 天内活动过的候选才读摘要。 */
+export const WORKBENCH_RECENT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
 export const WORKBENCH_JUDGMENT_TITLE_MAX = 40;
 export const WORKBENCH_JUDGMENT_NEXT_MAX = 120;
 export const WORKBENCH_MAX_JUDGMENTS = 200;
@@ -65,17 +109,75 @@ export const WORKBENCH_MAX_JUDGMENTS = 200;
  */
 export type WorkbenchTaskRef =
   | { kind: 'session'; sessionId: string }
-  | { kind: 'external'; source: 'claude' | 'codex'; externalId: string };
+  | { kind: 'external'; source: 'claude' | 'codex' | 'pi'; externalId: string }
+  | { kind: 'github'; type: 'pr' | 'issue'; owner: string; repo: string; number: number }
+  | { kind: 'idea'; slug: string };
 
+const GITHUB_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})$/;
+
+/**
+ * 工作台条目 id:`session:<id>`(或直接 session id)、`claude:<id>`、`codex:<id>`、`pi:<id>`、
+ * `pr:<owner>/<repo>#<n>`、`issue:<owner>/<repo>#<n>`、`idea:<slug>`(slug 为 3–40 位小写字母、
+ * 数字与连字符)。格式不对返回 null。
+ */
 export function parseWorkbenchTaskId(taskId: string): WorkbenchTaskRef | null {
   const id = taskId.trim();
   if (!id || id.length > 256) return null;
-  const match = /^(claude|codex):(.+)$/.exec(id);
-  if (match) return { kind: 'external', source: match[1] as 'claude' | 'codex', externalId: match[2] };
-  return { kind: 'session', sessionId: id };
+  const external = /^(claude|codex|pi):(.+)$/.exec(id);
+  if (external) return { kind: 'external', source: external[1] as 'claude' | 'codex' | 'pi', externalId: external[2] };
+  const github = /^(pr|issue):([^/\s]+)\/([^#\s]+)#(\d{1,9})$/.exec(id);
+  if (github) {
+    if (!GITHUB_NAME.test(github[2]) || !GITHUB_NAME.test(github[3])) return null;
+    return { kind: 'github', type: github[1] as 'pr' | 'issue', owner: github[2], repo: github[3], number: Number(github[4]) };
+  }
+  if (/^(pr|issue):/.test(id)) return null;
+  const idea = /^idea:(.*)$/.exec(id);
+  if (idea) return /^[a-z0-9-]{3,40}$/.test(idea[1]) ? { kind: 'idea', slug: idea[1] } : null;
+  const session = /^session:(.+)$/.exec(id);
+  return { kind: 'session', sessionId: session ? session[1] : id };
 }
 
-export function externalWorkbenchTaskId(source: 'claude' | 'codex', externalId: string): string {
+/** 判断存储与界面里用的规范 id:Cindy 任务用裸 session id,其它原样。 */
+export function canonicalWorkbenchTaskId(ref: WorkbenchTaskRef): string {
+  if (ref.kind === 'session') return ref.sessionId;
+  if (ref.kind === 'external') return `${ref.source}:${ref.externalId}`;
+  if (ref.kind === 'github') return `${ref.type}:${ref.owner}/${ref.repo}#${ref.number}`;
+  return `idea:${ref.slug}`;
+}
+
+/**
+ * 参考校验:只接受 https 链接,或落在某个已接手项目目录内的绝对路径(不允许 `..` 越界)。
+ * 通过时返回规整后的值。
+ */
+export function validateWorkbenchRef(
+  ref: string,
+  projectDirs: readonly string[],
+  caseInsensitive: boolean,
+): { ok: true; ref: string } | { ok: false } {
+  const value = ref.trim();
+  if (!value || value.length > WORKBENCH_REF_MAX) return { ok: false };
+  if (/^https:\/\//i.test(value)) {
+    try {
+      const url = new URL(value);
+      return url.protocol === 'https:' && !url.username && !url.password ? { ok: true, ref: url.toString() } : { ok: false };
+    } catch {
+      return { ok: false };
+    }
+  }
+  const normalized = normalizeWorkingDirForStorage(value);
+  if (!normalized || !/^(\/|[A-Za-z]:\/)/.test(normalized)) return { ok: false };
+  if (normalized.split('/').some((segment) => segment === '..' || segment === '.')) return { ok: false };
+  const key = caseInsensitive ? normalized.toLowerCase() : normalized;
+  const inside = projectDirs.some((dir) => {
+    const root = normalizeWorkingDirForStorage(dir);
+    if (!root) return false;
+    const rootKey = caseInsensitive ? root.toLowerCase() : root;
+    return key === rootKey || key.startsWith(`${rootKey.endsWith('/') ? rootKey.slice(0, -1) : rootKey}/`);
+  });
+  return inside ? { ok: true, ref: normalized } : { ok: false };
+}
+
+export function externalWorkbenchTaskId(source: 'claude' | 'codex' | 'pi', externalId: string): string {
   return `${source}:${externalId}`;
 }
 
@@ -132,8 +234,8 @@ export function cleanWorkbenchTitle(raw: string | null | undefined, fallback = '
 /** 一格任务的状态。`automation` 表示一条正常待命的自动化(下次运行 / 上次结果)。 */
 export type WorkbenchTaskState = 'running' | 'waiting' | 'queued' | 'stopped' | 'automation' | 'done';
 
-/** 一格任务从哪里来:原有任务、伙伴替主人开的后台任务、从本机其他工具导入的任务。 */
-export type WorkbenchTaskOrigin = 'existing' | 'delegated' | 'claude-code' | 'codex';
+/** 一格任务从哪里来:原有任务、伙伴替主人开的后台任务、本机其他工具 / 其它 Cindy 里的会话。 */
+export type WorkbenchTaskOrigin = 'existing' | 'delegated' | 'claude-code' | 'codex' | 'pi';
 
 export type WorkbenchDelegationStatus =
   | 'queued'

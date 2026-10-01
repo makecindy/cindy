@@ -31,12 +31,20 @@ function external(patch: Partial<WorkbenchExternalCandidate> = {}): WorkbenchExt
     id: 'abc',
     title: '<system-reminder>ignore</system-reminder>把图标导出来',
     cwd: PROJECT,
-    workspaceKind: 'project',
     updatedAt: 10,
-    archived: false,
+    file: '/home/.claude/projects/-Users-me-Code-tapmon-art/abc.jsonl',
+    digest: { purpose: '把图标导出来', recent: [{ role: 'assistant', text: '还差 xxhdpi' }] },
     ...patch,
   };
 }
+
+const sessions = (...items: WorkbenchExternalCandidate[]) => vi.fn(async () => ({ sessions: items, olderCount: 0 }));
+
+const BRIEF = {
+  docs: [`${PROJECT}/README.md`, `${PROJECT}/DESIGN.md`],
+  git: { branch: 'main', changes: 2, commits: [], branches: [], remote: 'org/tapmon-art', remotes: ['org/tapmon-art', 'me/tapmon-art'] },
+  github: { repo: 'me/tapmon-art', pullRequests: [], issues: [] },
+};
 
 const transcript = { items: [{ role: 'user' as const, text: '导出图标', at: 1 }], truncated: false };
 
@@ -46,9 +54,12 @@ function setup(overrides: Partial<BotWorkbenchAccessDeps> = {}) {
     readState: vi.fn(async () => ({ directories: [PROJECT], tasks: {} })),
     readTarget: vi.fn(async () => target()),
     listProjectTasks: vi.fn(async () => []),
-    listExternalCandidates: vi.fn(async () => [external()]),
+    listExternalCandidates: sessions(external()),
     findImportedSession: vi.fn(async () => null),
     importExternal: vi.fn(async () => ({ ok: true as const, sessionId: 'claude-abc' })),
+    startBackgroundTask: vi.fn(async () => ({ ok: true as const, sessionId: 'child-1' })),
+    readSessionDigest: vi.fn(async () => ({ purpose: '导出图标', recent: [] })),
+    readBrief: vi.fn(async () => BRIEF),
     listDelegations: vi.fn(async () => new Map()),
     readActivityPhase: vi.fn(async () => null),
     listRoutines: vi.fn(async () => []),
@@ -57,6 +68,7 @@ function setup(overrides: Partial<BotWorkbenchAccessDeps> = {}) {
     readExternalTranscript: vi.fn(async () => transcript),
     saveJudgment: vi.fn(async (_botId, _taskId, judgment) => ({ ...judgment, updatedAt: '2026-10-01T00:00:00.000Z' })),
     rekeyJudgment: vi.fn(async () => undefined),
+    deleteJudgment: vi.fn(async () => undefined),
     notifyChanged: vi.fn(),
     sendToSession: vi.fn(async () => ({ ok: true as const, wakeKind: 'queued', queuedMessageId: 'q-1' })),
     stopSessionTurn: vi.fn(async () => ({ ok: true as const, status: 'requested' as const })),
@@ -100,13 +112,9 @@ describe('authorizeWorkbenchTarget', () => {
 });
 
 describe('authorizeExternalCandidate', () => {
-  it('only accepts unarchived project sessions whose cwd is inside a handed-over project', () => {
+  it('only accepts sessions whose cwd is inside a handed-over project', () => {
     expect(authorizeExternalCandidate(external(), [PROJECT], false)).toEqual({ ok: true, projectDir: PROJECT });
     expect(authorizeExternalCandidate(null, [PROJECT], false)).toMatchObject({ errorCode: 'TASK_NOT_FOUND' });
-    expect(authorizeExternalCandidate(external({ archived: true }), [PROJECT], false)).toMatchObject({ errorCode: 'TASK_ARCHIVED' });
-    expect(authorizeExternalCandidate(external({ workspaceKind: 'dialogue' }), [PROJECT], false)).toMatchObject({
-      errorCode: 'TASK_NOT_SUPPORTED',
-    });
     expect(authorizeExternalCandidate(external({ cwd: '/Users/me/Code/other' }), [PROJECT], false)).toMatchObject({
       errorCode: 'TASK_OUTSIDE_WORKBENCH',
     });
@@ -118,12 +126,12 @@ describe('workbench read / set', () => {
     const { deps, access } = setup();
     await expect(access.read({ callerSessionId: 'bot-main', taskId: 'claude:abc' }))
       .resolves.toEqual({ ok: true, taskId: 'claude:abc', transcript });
-    expect(deps.readExternalTranscript).toHaveBeenCalledWith('claude', 'abc');
+    expect(deps.readExternalTranscript).toHaveBeenCalledWith(expect.objectContaining({ source: 'claude', id: 'abc' }));
     expect(deps.importExternal).not.toHaveBeenCalled();
   });
 
   it('refuses to read an external session whose cwd is outside the handed-over projects', async () => {
-    const { deps, access } = setup({ listExternalCandidates: vi.fn(async () => [external({ cwd: '/elsewhere' })]) });
+    const { deps, access } = setup({ listExternalCandidates: sessions(external({ cwd: '/elsewhere' })) });
     await expect(access.read({ callerSessionId: 'bot-main', taskId: 'claude:abc' }))
       .resolves.toMatchObject({ ok: false, errorCode: 'TASK_OUTSIDE_WORKBENCH' });
     expect(deps.readExternalTranscript).not.toHaveBeenCalled();
@@ -131,7 +139,7 @@ describe('workbench read / set', () => {
 
   it('treats an already imported external id as the Cindy task it became', async () => {
     const { deps, access } = setup({
-      listExternalCandidates: vi.fn(async () => []),
+      listExternalCandidates: sessions(),
       findImportedSession: vi.fn(async () => 'claude-abc'),
     });
     await expect(access.read({ callerSessionId: 'bot-main', taskId: 'claude:abc' }))
@@ -155,8 +163,88 @@ describe('workbench read / set', () => {
       verdict: 'unfinished',
       next: '把 xxhdpi 补完',
       project: PROJECT,
+      ref: null,
     });
     expect(deps.notifyChanged).toHaveBeenCalledWith('bot-1');
+  });
+
+  it('records PR, issue and idea entries against the project they belong to', async () => {
+    const { deps, access } = setup({ readState: vi.fn(async () => ({ directories: [PROJECT, '/Users/me/Code/other'], tasks: {} })) });
+    await expect(access.set({
+      callerSessionId: 'bot-main',
+      taskId: 'pr:me/tapmon-art#12',
+      title: '图标 PR',
+      verdict: 'unfinished',
+      next: '处理 review',
+      ref: 'https://github.com/me/tapmon-art/pull/12',
+    })).resolves.toMatchObject({ ok: true, taskId: 'pr:me/tapmon-art#12' });
+    expect(deps.saveJudgment).toHaveBeenLastCalledWith('bot-1', 'pr:me/tapmon-art#12', expect.objectContaining({
+      project: PROJECT,
+      ref: 'https://github.com/me/tapmon-art/pull/12',
+    }));
+    await expect(access.set({
+      callerSessionId: 'bot-main',
+      taskId: 'idea:dark-icons',
+      title: '暗色图标',
+      verdict: 'idea',
+      next: '按 DESIGN.md 补一套',
+      ref: `${PROJECT}/DESIGN.md`,
+      project: 'tapmon-art',
+    })).resolves.toMatchObject({ ok: true, taskId: 'idea:dark-icons' });
+    expect(deps.saveJudgment).toHaveBeenLastCalledWith('bot-1', 'idea:dark-icons', expect.objectContaining({
+      project: PROJECT,
+      ref: `${PROJECT}/DESIGN.md`,
+    }));
+  });
+
+  it.each([
+    ['a repo that is not a handed-over project', { taskId: 'pr:someone/else#1' }, 'TASK_OUTSIDE_WORKBENCH'],
+    ['a malformed idea slug', { taskId: 'idea:X' }, 'TASK_NOT_FOUND'],
+    ['an http link', { taskId: 'idea:dark-icons', ref: 'http://example.com' }, 'INVALID_REF'],
+    ['a path outside the project', { taskId: 'idea:dark-icons', ref: '/etc/passwd' }, 'INVALID_REF'],
+    ['a path escaping the project', { taskId: 'idea:dark-icons', ref: `${PROJECT}/../secret` }, 'INVALID_REF'],
+    ['a link with credentials', { taskId: 'idea:dark-icons', ref: 'https://u:p@example.com' }, 'INVALID_REF'],
+  ])('rejects %s', async (_label, patch, errorCode) => {
+    const { deps, access } = setup();
+    await expect(access.set({ callerSessionId: 'bot-main', title: 't', verdict: 'idea', next: 'n', ...patch }))
+      .resolves.toMatchObject({ ok: false, errorCode });
+    expect(deps.saveJudgment).not.toHaveBeenCalled();
+  });
+
+  it('asks which project an idea belongs to when several are handed over', async () => {
+    const { access } = setup({ readState: vi.fn(async () => ({ directories: [PROJECT, '/Users/me/Code/other'], tasks: {} })) });
+    await expect(access.set({ callerSessionId: 'bot-main', taskId: 'idea:dark-icons', title: 't', verdict: 'idea', next: 'n' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'PROJECT_REQUIRED' });
+  });
+
+  it('writes a batch item by item, reports each result and notifies once', async () => {
+    const { deps, access } = setup();
+    const result = await access.setMany({
+      callerSessionId: 'bot-main',
+      items: [
+        { taskId: 'claude:abc', title: '导出图标', verdict: 'unfinished', next: '补 xxhdpi' },
+        { taskId: 'idea:x', title: '坏 slug', verdict: 'idea', next: 'n' },
+        { taskId: 'task-1', title: '整理意见', verdict: 'done' },
+      ],
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      saved: 2,
+      results: [
+        { taskId: 'claude:abc', ok: true },
+        { taskId: 'idea:x', ok: false, errorCode: 'TASK_NOT_FOUND' },
+        { taskId: 'task-1', ok: true },
+      ],
+    });
+    expect(deps.notifyChanged).toHaveBeenCalledTimes(1);
+    expect(deps.listExternalCandidates).toHaveBeenCalledTimes(1);
+  });
+
+  it('caps a batch at 30 items', async () => {
+    const { deps, access } = setup();
+    const items = Array.from({ length: 31 }, (_, index) => ({ taskId: `t-${index}`, title: 't', verdict: 'done' }));
+    await expect(access.setMany({ callerSessionId: 'bot-main', items })).resolves.toMatchObject({ errorCode: 'INVALID_ARGS' });
+    expect(deps.saveJudgment).not.toHaveBeenCalled();
   });
 
   it.each<[Record<string, string>, string]>([
@@ -202,15 +290,61 @@ describe('workbench continue / stop', () => {
     expect(deps.sendToSession).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'claude-abc' }));
   });
 
-  it('reports a failed import without sending', async () => {
+  it('falls back to a background task with the session digest when the import fails', async () => {
     const { deps, access } = setup({
-      listExternalCandidates: vi.fn(async () => [external({ source: 'codex' })]),
+      listExternalCandidates: sessions(external({ source: 'codex' })),
       importExternal: vi.fn(async () => ({ ok: false as const, errorCode: 'IMPORT_FAILED', message: 'nope' })),
     });
     await expect(access.continueTask({ callerSessionId: 'bot-main', taskId: 'codex:abc', message: 'go' }))
-      .resolves.toMatchObject({ ok: false, errorCode: 'IMPORT_FAILED' });
+      .resolves.toMatchObject({ ok: true, taskId: 'child-1', startedFrom: 'codex:abc' });
     expect(deps.sendToSession).not.toHaveBeenCalled();
     expect(deps.rekeyJudgment).not.toHaveBeenCalled();
+    const call = vi.mocked(deps.startBackgroundTask).mock.calls[0]![0];
+    expect(call).toMatchObject({ callerSessionId: 'bot-main', workingDir: PROJECT });
+    expect(call.objective).toContain('go');
+    expect(call.objective).toContain('起始目的:把图标导出来');
+    expect(call.objective).toContain('还差 xxhdpi');
+  });
+
+  it('continues a Pi session as a background task, never importing it', async () => {
+    const { deps, access } = setup({ listExternalCandidates: sessions(external({ source: 'pi', id: 'p1' })) });
+    await expect(access.continueTask({ callerSessionId: 'bot-main', taskId: 'pi:p1', message: '接着做' }))
+      .resolves.toMatchObject({ ok: true, taskId: 'child-1', startedFrom: 'pi:p1' });
+    expect(deps.importExternal).not.toHaveBeenCalled();
+  });
+
+  it('continues a PR or idea entry as a project background task and drops the entry', async () => {
+    const judgment = {
+      title: '暗色图标',
+      verdict: 'idea' as const,
+      next: '按 DESIGN.md 补一套',
+      project: PROJECT,
+      ref: `${PROJECT}/DESIGN.md`,
+      updatedAt: '2026-10-01T00:00:00.000Z',
+    };
+    const { deps, access } = setup({
+      readState: vi.fn(async () => ({ directories: [PROJECT], tasks: { 'idea:dark-icons': judgment } })),
+    });
+    await expect(access.continueTask({ callerSessionId: 'bot-main', taskId: 'idea:dark-icons', message: '开始做' }))
+      .resolves.toEqual({ ok: true, taskId: 'child-1', delivery: 'started', startedFrom: 'idea:dark-icons' });
+    const call = vi.mocked(deps.startBackgroundTask).mock.calls[0]![0];
+    expect(call).toMatchObject({ workingDir: PROJECT, title: '暗色图标' });
+    expect(call.objective).toContain(`参考:${PROJECT}/DESIGN.md`);
+    expect(deps.deleteJudgment).toHaveBeenCalledWith('bot-1', 'idea:dark-icons');
+    expect(deps.notifyChanged).toHaveBeenCalledWith('bot-1');
+  });
+
+  it('refuses to continue an entry that was never written down', async () => {
+    const { deps, access } = setup();
+    await expect(access.continueTask({ callerSessionId: 'bot-main', taskId: 'pr:me/tapmon-art#3', message: 'go' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'TASK_NOT_FOUND' });
+    expect(deps.startBackgroundTask).not.toHaveBeenCalled();
+  });
+
+  it('does not read a transcript for PR, issue or idea entries', async () => {
+    const { access } = setup();
+    await expect(access.read({ callerSessionId: 'bot-main', taskId: 'issue:me/tapmon-art#4' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'TASK_NOT_READABLE' });
   });
 
   it('stops the current turn through the existing graceful stop path, but not an un-imported session', async () => {
@@ -282,7 +416,7 @@ describe('workbench detail reads for the owner', () => {
   it('reads through the same project boundary as the tools', async () => {
     const { access } = setup();
     await expect(access.readForOwner({ botId: 'bot-1', taskId: 'claude:abc' })).resolves.toMatchObject({ ok: true });
-    const outside = setup({ listExternalCandidates: vi.fn(async () => [external({ cwd: '/elsewhere' })]) });
+    const outside = setup({ listExternalCandidates: sessions(external({ cwd: '/elsewhere' })) });
     await expect(outside.access.readForOwner({ botId: 'bot-1', taskId: 'claude:abc' }))
       .resolves.toMatchObject({ ok: false, errorCode: 'TASK_OUTSIDE_WORKBENCH' });
     expect(outside.deps.readExternalTranscript).not.toHaveBeenCalled();
@@ -293,8 +427,11 @@ describe('workbench detail reads for the owner', () => {
 });
 
 describe('workbench snapshot', () => {
-  it('merges Cindy tasks and un-imported local sessions as candidates, newest first, with judgments', async () => {
+  it('merges Cindy tasks and local sessions as candidates, newest first, with judgments, digests and briefs', async () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const NOW = 100 * DAY;
     const { access } = setup({
+      now: () => NOW,
       readState: vi.fn(async () => ({
         directories: [PROJECT],
         tasks: {
@@ -309,15 +446,18 @@ describe('workbench snapshot', () => {
       })),
       listDelegations: vi.fn(async () => new Map([['delegated-1', 'queued' as const]])),
       listProjectTasks: vi.fn(async () => [
-        { id: 'running', title: '**导出** 图标', workingDir: PROJECT, agentKind: 'cc', summary: null, lastActiveAt: 40, messageCount: 12 },
-        { id: 'delegated-1', title: '过一遍导出目录', workingDir: PROJECT, agentKind: 'pi', summary: null, lastActiveAt: 5 },
-        { id: 'elsewhere', title: '别的项目', workingDir: '/other', agentKind: 'cc', summary: null, lastActiveAt: 99 },
+        { id: 'running', title: '**导出** 图标', workingDir: PROJECT, agentKind: 'cc', summary: null, lastActiveAt: NOW - 1, messageCount: 12 },
+        { id: 'delegated-1', title: '过一遍导出目录', workingDir: PROJECT, agentKind: 'pi', summary: null, lastActiveAt: NOW - 40 * DAY },
+        { id: 'stale', title: '很久以前', workingDir: PROJECT, agentKind: 'cc', summary: null, lastActiveAt: NOW - 31 * DAY },
+        { id: 'elsewhere', title: '别的项目', workingDir: '/other', agentKind: 'cc', summary: null, lastActiveAt: NOW },
       ]),
-      listExternalCandidates: vi.fn(async () => [
-        external({ updatedAt: 20 }),
-        external({ source: 'codex', id: 'old', title: '', updatedAt: 1, archived: true }),
-        external({ source: 'codex', id: 'far', cwd: '/other', updatedAt: 30 }),
-      ]),
+      listExternalCandidates: vi.fn(async () => ({
+        sessions: [
+          external({ updatedAt: NOW - 2 }),
+          external({ source: 'codex', id: 'far', cwd: '/other', updatedAt: NOW }),
+        ],
+        olderCount: 4,
+      })),
       readActivityPhase: vi.fn(async (id: string) => (id === 'running' ? 'running' : null)),
       listSchedules: vi.fn(async () => [
         { id: 's-1', name: '检查 PR', status: 'active', workspaceKind: 'project', workingDir: PROJECT, nextFireAt: 0 },
@@ -336,9 +476,20 @@ describe('workbench snapshot', () => {
       imported: false,
       judgment: { verdict: 'unfinished', next: '补 xxhdpi' },
     });
+    expect(result.workbench.tasks[1]!.digest).toMatchObject({ purpose: '把图标导出来' });
+    expect(result.workbench.tasks[0]!.digest).toMatchObject({ purpose: '导出图标' });
     expect(result.workbench.counts).toEqual({ unfinished: 1, idea: 0, done: 0, unjudged: 1 });
     expect(result.workbench.automations.map((item) => item.id)).toEqual(['s-1']);
     expect(result.workbench.totalTasks).toBe(3);
+    // 30 天前的 Cindy 任务只计数(伙伴自己的后台任务除外),加上外部来源报来的 4 条。
+    expect(result.workbench.olderCount).toBe(5);
+    expect(result.workbench.projects[0]).toMatchObject({ path: PROJECT, brief: { docs: [`${PROJECT}/README.md`, `${PROJECT}/DESIGN.md`] } });
+  });
+
+  it('keeps going without a brief when building it fails', async () => {
+    const { access } = setup({ readBrief: vi.fn(async () => { throw new Error('git missing'); }) });
+    const result = await access.get({ callerSessionId: 'bot-main' });
+    expect(result).toMatchObject({ ok: true, workbench: { projects: [{ path: PROJECT, brief: null }] } });
   });
 
   it('still lists the Bot own routines before any project is handed over', async () => {

@@ -6,8 +6,8 @@
  * 输出两样东西:
  *  - 空状态的项目清单:复用任务列表的项目分组(`groupSessions`),合并本机 Claude Code /
  *    Codex 的可导入候选与项目里的自动化;
- *  - 已接手项目的任务格:只显示伙伴读过后判为「没做完 / 聊过没下文」的,以及本来就有运行信号的
- *    (在做 / 等你 / 排队)、伙伴自己开的后台任务与自动化;状态用 `shared/botWorkbench.ts`
+ *  - 已接手项目的任务格:只显示伙伴读过后判为「没做完 / 聊过没下文」的(会话,以及伙伴从项目素材里
+ *    写下的 PR / issue / 建议),本来就有运行信号的(在做 / 等你 / 排队)、伙伴自己开的后台任务与自动化;状态用 `shared/botWorkbench.ts`
  *    与主进程同一套规则推导。没有判断也没有运行信号的候选不显示。
  */
 import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activity';
@@ -76,7 +76,7 @@ export interface WorkbenchRoutineInput {
 }
 
 export interface ExternalSessionCandidate {
-  source: 'claude' | 'codex';
+  source: 'claude' | 'codex' | 'pi';
   id: string;
   projectDir: string | null;
   updatedAt: string;
@@ -122,16 +122,37 @@ export type WorkbenchTile =
       line: WorkbenchTileLine;
     }
   | {
-      /** 还没接过来的本机 Claude Code / Codex 会话,只因伙伴的判断而出现。 */
+      /** 还没接过来的本机 Claude Code / Codex / Pi 会话,只因伙伴的判断而出现。 */
       type: 'external';
       key: string;
-      /** 工作台 task_id:`claude:<id>` / `codex:<id>`。 */
+      /** 工作台 task_id:`claude:<id>` / `codex:<id>` / `pi:<id>`。 */
       id: string;
       title: string;
       state: WorkbenchTaskState;
-      origin: 'claude-code' | 'codex';
+      origin: 'claude-code' | 'codex' | 'pi';
       verdict: WorkbenchShownVerdict;
       next: string | null;
+      startedAtMs: null;
+      lastActiveMs: number;
+      line: WorkbenchTileLine;
+    }
+  | {
+      /** 伙伴从项目素材里写下的 PR / issue / 建议,只因伙伴的判断而出现。 */
+      type: 'item';
+      key: string;
+      /** 工作台 task_id:`pr:<owner>/<repo>#<n>` / `issue:…` / `idea:<slug>`。 */
+      id: string;
+      itemKind: 'pr' | 'issue' | 'idea';
+      /** PR / issue 编号;建议为 null。 */
+      number: number | null;
+      title: string;
+      state: WorkbenchTaskState;
+      verdict: WorkbenchShownVerdict;
+      next: string | null;
+      /** 伙伴给的参考:https 链接或项目内路径。 */
+      ref: string | null;
+      /** 条目所属的项目目录(用来限定打开路径)。 */
+      project: string;
       startedAtMs: null;
       lastActiveMs: number;
       line: WorkbenchTileLine;
@@ -276,7 +297,8 @@ export function buildWorkbenchProjectOptions(input: {
     if (!key) continue;
     const option = ensure(candidate.projectDir, key);
     if (candidate.source === 'claude') option.claudeCount += 1;
-    else option.codexCount += 1;
+    else if (candidate.source === 'codex') option.codexCount += 1;
+    else continue;
     option.latestActivityMs = Math.max(option.latestActivityMs, toMs(candidate.updatedAt));
   }
   for (const dir of input.gitRepoDirs ?? []) {
@@ -434,15 +456,36 @@ export function buildWorkbenchTiles(input: {
   for (const [taskId, judgment] of Object.entries(judgments)) {
     const ref = parseWorkbenchTaskId(taskId);
     const verdict = shownVerdict(judgment);
-    if (!ref || ref.kind !== 'external' || !verdict) continue;
-    if (!findWorkbenchProject(judgment.project, input.projectDirs, input.caseInsensitive)) continue;
+    if (!ref || !verdict) continue;
+    const project = findWorkbenchProject(judgment.project, input.projectDirs, input.caseInsensitive);
+    if (!project) continue;
+    if (ref.kind === 'github' || ref.kind === 'idea') {
+      tiles.push({
+        type: 'item',
+        key: `item:${taskId}`,
+        id: taskId,
+        itemKind: ref.kind === 'idea' ? 'idea' : ref.type,
+        number: ref.kind === 'github' ? ref.number : null,
+        title: judgment.title,
+        state: 'done',
+        verdict,
+        next: judgment.next,
+        ref: judgment.ref ?? null,
+        project,
+        startedAtMs: null,
+        lastActiveMs: toMs(judgment.updatedAt),
+        line: { kind: 'none' },
+      });
+      continue;
+    }
+    if (ref.kind !== 'external') continue;
     tiles.push({
       type: 'external',
       key: `external:${taskId}`,
       id: taskId,
       title: judgment.title,
       state: 'done',
-      origin: ref.source === 'claude' ? 'claude-code' : 'codex',
+      origin: ref.source === 'claude' ? 'claude-code' : ref.source,
       verdict,
       next: judgment.next,
       startedAtMs: null,

@@ -7788,7 +7788,7 @@
     "workbench": {
       "title": "工作台",
       "emptyTitle": "交给{{name}}一个项目",
-      "emptyDescription": "把电脑里已有的活交给{{name}}接着做。它会先读一遍项目里的任务，挑出没做完和聊过没下文的，再问你接着做哪件。",
+      "emptyDescription": "把电脑里已有的活交给{{name}}接着做。它会先看一遍项目的文档、最近的提交和 PR、做过的任务，挑出没做完和值得做的，再问你接着做哪件。",
       "scanning": "正在查找电脑上的项目…",
       "noProjects": "还没找到有任务的项目，可以选一个文件夹交给{{name}}。",
       "pickFolder": "选其他文件夹",
@@ -7843,7 +7843,10 @@
         "judgment": "{{name}}的判断",
         "empty": "还没有可显示的内容。",
         "loadFailed": "读不到这件任务的记录。",
-        "truncated": "只显示最近的内容"
+        "truncated": "只显示最近的内容",
+        "ref": "参考",
+        "noRef": "没有附参考链接。",
+        "refBlocked": "这个路径不在交给伙伴的项目里，没有打开。"
       },
       "showAll": "全部 {{count}}",
       "showLess": "收起",
@@ -7863,6 +7866,10 @@
         "delegated": "你交代的",
         "claudeCode": "来自 Claude Code",
         "codex": "来自 Codex",
+        "pi": "来自 Pi",
+        "pr": "PR #{{number}}",
+        "issue": "Issue #{{number}}",
+        "idea": "建议",
         "automation": "自动化 · {{cycle}}",
         "automationPlain": "自动化"
       },
