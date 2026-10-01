@@ -36,6 +36,7 @@ interface UserActionGrant {
   ghostId: string;
   sessionId: string;
   expiresAt: number;
+  surface: 'card' | 'panel';
 }
 
 export interface GhostAgentTurnRunRequest {
@@ -124,10 +125,14 @@ export class GhostAgentSlot {
   }
 
   /**
-   * 为一次已由宿主验证的真实卡片点击签发通行票。
+   * 为一次已由宿主验证的真实卡片或面板点击签发通行票。
    * 没有会话归属或插件未申请 agent 槽时不签发。
    */
-  issueUserActionToken(ghostId: string, sessionId: string | null): string | null {
+  issueUserActionToken(
+    ghostId: string,
+    sessionId: string | null,
+    surface: 'card' | 'panel' = 'card',
+  ): string | null {
     if (!sessionId) return null;
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost?.enabled || !ghost.manifest.agent) return null;
@@ -144,17 +149,22 @@ export class GhostAgentSlot {
       ghostId,
       sessionId,
       expiresAt: this.now() + TOKEN_TTL_MS,
+      surface,
     });
-    let sessions = this.associatedSessions.get(ghostId);
-    if (!sessions) {
-      sessions = new Set<string>();
-      this.associatedSessions.set(ghostId, sessions);
+    // 只有存量卡片点击建立 agent.background 会话关联。面板票据每次
+    // 都经 Host 确认，不得把单次同意升级为后续无确认的后台访问。
+    if (surface === 'card') {
+      let sessions = this.associatedSessions.get(ghostId);
+      if (!sessions) {
+        sessions = new Set<string>();
+        this.associatedSessions.set(ghostId, sessions);
+      }
+      if (sessions.size >= MAX_SESSIONS_PER_GHOST) {
+        const oldest = sessions.values().next().value as string | undefined;
+        if (oldest) sessions.delete(oldest);
+      }
+      sessions.add(sessionId);
     }
-    if (sessions.size >= MAX_SESSIONS_PER_GHOST) {
-      const oldest = sessions.values().next().value as string | undefined;
-      if (oldest) sessions.delete(oldest);
-    }
-    sessions.add(sessionId);
     return token;
   }
 
@@ -238,6 +248,7 @@ export class GhostAgentSlot {
     }
 
     let sourceSessionId: string;
+    let userActionSurface: UserActionGrant['surface'] | null = null;
     if (trigger === 'user-action') {
       if (typeof payload.userActionToken !== 'string' || payload.userActionToken.length > 128) {
         return {
@@ -249,6 +260,7 @@ export class GhostAgentSlot {
       const grant = this.peekGrant(payload.userActionToken, ghostId);
       if (!grant.ok) return grant.result;
       sourceSessionId = grant.grant.sessionId;
+      userActionSurface = grant.grant.surface;
     } else {
       if (ghost.manifest.agent?.background !== true) {
         return {
@@ -309,6 +321,7 @@ export class GhostAgentSlot {
         promptTemplate: payload.promptTemplate,
         userMessage,
         eventJson,
+        ...(userActionSurface === 'panel' ? { surface: 'panel' } : {}),
       },
     });
 
@@ -330,6 +343,7 @@ export class GhostAgentSlot {
         targetSessionId: result.sessionId,
         mode,
         trigger,
+        ...(userActionSurface === 'panel' ? { surface: 'panel' } : {}),
         disposition: result.disposition,
       });
       this.maybeRevealSession(trigger, mode as GhostAgentRunMode, result.sessionId);

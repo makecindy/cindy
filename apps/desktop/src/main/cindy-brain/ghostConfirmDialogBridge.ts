@@ -43,7 +43,7 @@ export interface GhostConfirmDialogBridgeDeps {
    * 把确认框投给**一个**窗口。返回 false = 没有可投的窗口(桥据此 reject,
    * 槽回 UNAVAILABLE,而不是谎报用户拒绝)。
    */
-  sendToWindow(payload: GhostConfirmPush): boolean;
+  sendToWindow(payload: GhostConfirmPush, targetWebContentsId?: number): boolean;
   /** 兜底超时;缺省 GHOST_CONFIRM_TIMEOUT_MS。测试注小值。 */
   timeoutMs?: number;
   now?(): number;
@@ -65,10 +65,13 @@ export class GhostConfirmDialogBridge {
    * 弹一个确认框并等答案。没有可投窗口时 reject(区别于「用户拒绝」)。
    * 其余一切异常路径都 resolve(false)。
    */
-  request(params: Omit<GhostConfirmPush, 'requestId'>): Promise<boolean> {
+  request(
+    params: Omit<GhostConfirmPush, 'requestId'> & { targetWebContentsId?: number },
+  ): Promise<boolean> {
     const requestId = randomUUID();
     return new Promise<boolean>((resolve, reject) => {
-      const delivered = this.deps.sendToWindow({ requestId, ...params });
+      const { targetWebContentsId, ...push } = params;
+      const delivered = this.deps.sendToWindow({ requestId, ...push }, targetWebContentsId);
       if (!delivered) {
         reject(new Error('没有可挂靠的宿主窗口'));
         return;
