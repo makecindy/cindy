@@ -183,7 +183,8 @@ async function listWorkbenchProjectTasks(
       workingDir: row.workingDir ?? null,
       agentKind: row.agentKind ?? null,
       summary: row.listPreview ?? null,
-      lastActiveAt: row.userSendAt ?? row.updatedAt ?? null,
+      // 与渲染层同一口径:主人发消息与任务本身的最近更新取较晚的那个。
+      lastActiveAt: Math.max(row.userSendAt ?? 0, row.updatedAt ?? 0) || null,
       messageCount: messageCounts.get(row.id) ?? null,
     }))
     .sort((a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0));

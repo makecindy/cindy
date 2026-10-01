@@ -55,13 +55,20 @@ describe('deriveWorkbenchAutomationState', () => {
 });
 
 describe('project membership', () => {
-  it('matches the same project, its managed worktrees, and nothing else', () => {
+  it('matches the project, its subdirectories and managed worktrees, but not a sibling with the same prefix', () => {
     const dirs = ['/Users/me/Code/cindy'];
     expect(findWorkbenchProject('/Users/me/Code/cindy/', dirs, false)).toBe('/Users/me/Code/cindy');
     expect(findWorkbenchProject('/Users/me/Code/cindy/.cindy-worktrees/fix', dirs, false)).toBe('/Users/me/Code/cindy');
+    expect(findWorkbenchProject('/Users/me/Code/cindy/apps/desktop', dirs, false)).toBe('/Users/me/Code/cindy');
     expect(findWorkbenchProject('/Users/me/Code/cindy-old', dirs, false)).toBeNull();
-    expect(findWorkbenchProject('/Users/me/Code/cindy/apps', dirs, false)).toBeNull();
+    expect(findWorkbenchProject('/Users/me/Code', dirs, false)).toBeNull();
     expect(findWorkbenchProject(null, dirs, false)).toBeNull();
+  });
+
+  it('picks the deepest handed-over project when projects are nested', () => {
+    const dirs = ['/Users/me/Code/cindy', '/Users/me/Code/cindy/apps/mobile'];
+    expect(findWorkbenchProject('/Users/me/Code/cindy/apps/mobile/src', dirs, false)).toBe('/Users/me/Code/cindy/apps/mobile');
+    expect(findWorkbenchProject('/Users/me/Code/cindy/apps/desktop', dirs, false)).toBe('/Users/me/Code/cindy');
   });
 
   it('folds case for Windows paths only when asked', () => {

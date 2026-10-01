@@ -403,6 +403,29 @@ describe('workbench continue / stop', () => {
     expect(deps.sendToSession).not.toHaveBeenCalled();
   });
 
+  it('re-checks the grant right before acting, so a project removed mid-call is not touched', async () => {
+    const { deps, access } = setup();
+    vi.mocked(deps.readState)
+      .mockResolvedValueOnce({ directories: [PROJECT], tasks: {} })
+      .mockResolvedValue({ directories: [], tasks: {} });
+    await expect(access.continueTask({ callerSessionId: 'bot-main', taskId: 'task-1', message: 'hi' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'TASK_OUTSIDE_WORKBENCH' });
+    expect(deps.sendToSession).not.toHaveBeenCalled();
+
+    vi.mocked(deps.readState)
+      .mockResolvedValueOnce({ directories: [PROJECT], tasks: {} })
+      .mockResolvedValue({ directories: [], tasks: {} });
+    await expect(access.stopTask({ callerSessionId: 'bot-main', taskId: 'task-1' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'TASK_OUTSIDE_WORKBENCH' });
+    expect(deps.stopSessionTurn).not.toHaveBeenCalled();
+
+    vi.mocked(deps.readState)
+      .mockResolvedValueOnce({ directories: [PROJECT], tasks: {} })
+      .mockResolvedValue({ directories: [], tasks: {} });
+    await expect(access.read({ callerSessionId: 'bot-main', taskId: 'task-1' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'TASK_OUTSIDE_WORKBENCH' });
+  });
+
   it('rejects empty or oversized messages', async () => {
     const { deps, access } = setup();
     await expect(access.continueTask({ callerSessionId: 'bot-main', taskId: 'task-1', message: '  ' }))

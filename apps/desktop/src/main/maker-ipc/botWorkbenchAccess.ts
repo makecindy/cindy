@@ -343,6 +343,18 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
     return { ok: true as const, botId: caller.botId, workbench, target };
   };
 
+  /**
+   * 主人可能在这次调用进行中收回了项目:在返回内容或做任何投递 / 停止之前再读一次
+   * 已接手的项目,确认目标所在项目仍在。
+   */
+  const stillGranted = async (botId: string, projectDir: string): Promise<Failure | null> => {
+    const { directories } = await deps.readState(botId);
+    if (!directories.includes(projectDir)) {
+      return { ok: false, errorCode: 'TASK_OUTSIDE_WORKBENCH', message: '主人已收回这个项目' };
+    }
+    return scopeCurrent() ? null : scopeChanged;
+  };
+
   const readTranscript = async (target: ResolvedTarget): Promise<WorkbenchTranscript | Failure | null> => {
     if (target.kind === 'session') return deps.readSessionTranscript(target.sessionId);
     if (target.kind === 'external') return deps.readExternalTranscript(target.candidate);
@@ -424,6 +436,8 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
       for (const item of digest?.recent ?? []) background.push(`${item.role === 'user' ? '用户' : '助手'}:${item.text}`);
     }
     const objective = [title, message, ...background].join('\n\n').slice(0, 8_000);
+    const revoked = await stillGranted(botId, target.projectDir);
+    if (revoked) return revoked;
     const started = await deps.startBackgroundTask({ callerSessionId, workingDir: target.projectDir, title, objective });
     if (!started.ok) return started;
     if (judgment) await deps.deleteJudgment(botId, target.taskId);
@@ -609,6 +623,8 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
       const transcript = await readTranscript(allowed.target);
       if (!transcript) return { ok: false as const, errorCode: 'TRANSCRIPT_UNAVAILABLE', message: '读不到这条会话的记录' };
       if ('ok' in transcript) return transcript;
+      const revoked = await stillGranted(allowed.botId, allowed.target.projectDir);
+      if (revoked) return revoked;
       return { ok: true as const, taskId: allowed.target.taskId, transcript };
     },
 
@@ -667,6 +683,8 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
       }
       let sessionId: string;
       let imported = false;
+      const revokedBefore = await stillGranted(allowed.botId, target.projectDir);
+      if (revokedBefore) return revokedBefore;
       if (target.kind === 'external') {
         // 主人点头的这一件才导入:只导入这一条,判断改挂到新的任务上。Pi 会话没有导入路径,
         // Claude Code / Codex 导入不了时(例如转录在另一个 Cindy profile 里),改为在项目里开一条
@@ -687,6 +705,8 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
       } else {
         sessionId = target.sessionId;
       }
+      const revoked = await stillGranted(allowed.botId, target.projectDir);
+      if (revoked) return revoked;
       const sent = await deps.sendToSession({
         targetSessionId: sessionId,
         message,
@@ -708,6 +728,8 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
       if (allowed.target.kind !== 'session') {
         return { ok: false as const, errorCode: 'TASK_NOT_RUNNING', message: '这件事还没在 Cindy 里跑,没有可停的' };
       }
+      const revoked = await stillGranted(allowed.botId, allowed.target.projectDir);
+      if (revoked) return revoked;
       const stopped = await deps.stopSessionTurn({ targetSessionId: allowed.target.sessionId });
       if (!stopped.ok) return stopped;
       return { ok: true as const, taskId: allowed.target.sessionId, status: stopped.status };

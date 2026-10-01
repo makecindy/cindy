@@ -316,7 +316,11 @@ export function workbenchProjectKey(
   return caseInsensitive ? normalized.toLowerCase() : normalized;
 }
 
-/** 找出这个工作目录属于哪个已接手的项目;不属于任何一个时返回 null。 */
+/**
+ * 找出这个工作目录属于哪个已接手的项目:项目目录本身或它下面的任一子目录都算,按目录
+ * 边界比较(`/repo` 不包含 `/repo-old`);同时交了嵌套的项目时取最深的那个。
+ * 不属于任何一个时返回 null。
+ */
 export function findWorkbenchProject(
   workingDir: string | null | undefined,
   projectDirs: readonly string[],
@@ -324,7 +328,15 @@ export function findWorkbenchProject(
 ): string | null {
   const key = workbenchProjectKey(workingDir, caseInsensitive);
   if (!key) return null;
-  return projectDirs.find((dir) => workbenchProjectKey(dir, caseInsensitive) === key) ?? null;
+  let best: { dir: string; length: number } | null = null;
+  for (const dir of projectDirs) {
+    const root = workbenchProjectKey(dir, caseInsensitive);
+    if (!root) continue;
+    const prefix = root.endsWith('/') ? root : `${root}/`;
+    if (key !== root && !key.startsWith(prefix)) continue;
+    if (!best || root.length > best.length) best = { dir, length: root.length };
+  }
+  return best?.dir ?? null;
 }
 
 /** Windows 本机路径不区分大小写;与 `projectKeyComparisonKey` 的口径一致。 */
