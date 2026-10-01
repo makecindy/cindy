@@ -7787,7 +7787,6 @@
   "bots": {
     "workbench": {
       "title": "작업대",
-      "open": "워크벤치 열기",
       "emptyTitle": "{{name}}에게 프로젝트 맡기기",
       "emptyDescription": "컴퓨터에 있는 작업을 {{name}}에게 넘겨 이어서 하게 합니다. 먼저 프로젝트의 문서, 최근 커밋과 PR, 지난 세션을 살펴보고, 끝나지 않았거나 해 볼 만한 것을 골라낸 뒤 무엇을 이어서 할지 물어봅니다.",
       "scanning": "컴퓨터에서 프로젝트를 찾는 중…",
@@ -7861,6 +7860,7 @@
         "message": "「{{title}}」 이어서 진행해 줘",
         "aria": "「{{title}}」 진행하기"
       },
+      "olderCount_other": "이전 {{count}}개",
       "kind": {
         "existing": "기존 세션",
         "delegated": "요청한 일",

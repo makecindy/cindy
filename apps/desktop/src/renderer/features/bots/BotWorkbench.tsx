@@ -1050,7 +1050,7 @@ function TaskGroups({
         const heading = (
           <>
             <span>{label}</span>
-            <span className="font-normal tabular-nums text-[var(--text-tertiary)]">{group.tiles.length}</span>
+            <span className="font-normal tabular-nums text-[var(--text-tertiary)]">{group.total}</span>
           </>
         );
         const followUp = onFollowUp && workbenchGroupHasFollowUp(group.key) ? onFollowUp : undefined;
@@ -1089,6 +1089,11 @@ function TaskGroups({
                     onFollowUp={followUp}
                   />
                 ))}
+                {group.hiddenCount > 0 ? (
+                  <li className="px-3.5 pt-1 text-12 leading-[18px] text-[var(--text-tertiary)]">
+                    {t('bots.workbench.olderCount', { count: group.hiddenCount })}
+                  </li>
+                ) : null}
               </ul>
             ) : null}
           </section>

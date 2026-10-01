@@ -246,7 +246,8 @@ export function registerBotWorkbenchTools(
     category: 'bots',
     description:
       '读取你的工作台:主人交给你的项目,每个项目的素材(brief:文档路径、git 分支与最近 14 天提交、我打开的 PR 与 issue),'
-      + '项目里最近 30 天的候选会话(Cindy 任务,以及本机 Claude Code / Codex / Pi 会话,最多 30 条,更早的只给 olderCount),你写过的 PR / issue / 建议条目,你的例行任务与项目里的自动化。'
+      + '项目里最近 30 天的会话(项目里的 Cindy 任务——包括主人自己开的——不管你判断过没有都在,最多 30 条;再补本机 Claude Code / Codex / Pi 会话,合计最多 40 条;更早的只给 olderCount),你写过的 PR / issue / 建议条目,你的例行任务与项目里的自动化。'
+      + '主人提到这个项目、让你跟进或问进展时,先看工作台;主人自己在项目里开的任务也在里面,它们属于你知道的项目事务,不需要主人逐个告诉你。'
       + '每条会话带 digest:起始目的与最后几条对话,足够大多数判断,不用逐个读全文。'
       + '接手的做法:主人把项目交给你时,先调用它;根据 brief 与 digest 一次性用 set_workbench_tasks 批量写下判断;只有拿不准的几件才 read_workbench_task。'
       + '项目文档(如 DESIGN.md)、最近的 PR 与 issue 同样是素材:值得做的写成 pr:<owner>/<repo>#<n>、issue:<owner>/<repo>#<n> 或 idea:<slug> 条目,带上 ref。'

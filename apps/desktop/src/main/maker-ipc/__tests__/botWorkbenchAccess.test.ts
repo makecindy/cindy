@@ -486,6 +486,34 @@ describe('workbench snapshot', () => {
     expect(result.workbench.projects[0]).toMatchObject({ path: PROJECT, brief: { docs: [`${PROJECT}/README.md`, `${PROJECT}/DESIGN.md`] } });
   });
 
+  it('always carries the project Cindy tasks (owner-opened, unjudged) ahead of local sessions', async () => {
+    const NOW = 100 * 24 * 60 * 60 * 1000;
+    const { access } = setup({
+      now: () => NOW,
+      listProjectTasks: vi.fn(async () =>
+        Array.from({ length: 35 }, (_, index) => ({
+          id: `own-${index}`,
+          title: `主人的任务 ${index}`,
+          workingDir: PROJECT,
+          agentKind: 'cc',
+          summary: null,
+          lastActiveAt: NOW - 1_000 - index,
+        })),
+      ),
+      listExternalCandidates: vi.fn(async () => ({
+        sessions: Array.from({ length: 20 }, (_, index) => external({ id: `ext-${index}`, updatedAt: NOW - index })),
+        olderCount: 0,
+      })),
+    });
+    const result = await access.get({ callerSessionId: 'bot-main' });
+    if (!result.ok) throw new Error('expected ok');
+    const ids = result.workbench.tasks.map((task) => task.taskId);
+    expect(ids.filter((id) => id.startsWith('own-'))).toHaveLength(30);
+    expect(ids.filter((id) => id.startsWith('claude:'))).toHaveLength(10);
+    expect(result.workbench.tasks.find((task) => task.taskId === 'own-0')).toMatchObject({ judgment: null, imported: true });
+    expect(result.workbench).toMatchObject({ truncated: true, totalTasks: 55 });
+  });
+
   it('keeps going without a brief when building it fails', async () => {
     const { access } = setup({ readBrief: vi.fn(async () => { throw new Error('git missing'); }) });
     const result = await access.get({ callerSessionId: 'bot-main' });

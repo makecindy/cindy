@@ -6,8 +6,9 @@
  * 输出两样东西:
  *  - 空状态的项目清单:复用任务列表的项目分组(`groupSessions`),合并本机 Claude Code /
  *    Codex 的可导入候选与项目里的自动化;
- *  - 已接手项目的任务格:只显示伙伴读过后判为「没做完 / 聊过没下文」的(会话,以及伙伴从项目素材里
- *    写下的 PR / issue / 建议),本来就有运行信号的(在做 / 等你 / 排队)、伙伴自己开的后台任务与自动化;状态用 `shared/botWorkbench.ts`
+ *  - 已接手项目的任务列表:项目里最近 30 天的 Cindy 任务一律列出(含主人自己开的,不管伙伴判断过没有);
+ *    本机外部会话与伙伴从项目素材里写下的 PR / issue / 建议只在伙伴判为「没做完 / 聊过没下文」时列出;
+ *    另有伙伴自己开的后台任务与自动化;状态用 `shared/botWorkbench.ts`
  *    与主进程同一套规则推导。没有判断也没有运行信号的候选不显示。
  */
 import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activity';
@@ -21,6 +22,7 @@ import {
   deriveWorkbenchSessionState,
   findWorkbenchProject,
   importedSessionOrigin,
+  WORKBENCH_RECENT_WINDOW_MS,
   externalWorkbenchTaskId,
   isWorkbenchTaskSource,
   parseWorkbenchTaskId,
@@ -385,9 +387,9 @@ function sessionLine(
 }
 
 /**
- * 已接手项目的任务格:伙伴判为没做完 / 聊过没下文的任务(Cindy 任务与本机会话)、
- * 有运行信号(在做 / 等你 / 排队)的 Cindy 任务、伙伴开的后台任务、项目里的自动化、
- * 伙伴自己的例行任务(含导入来的自动化)。排列见 `workbenchTileRank`。
+ * 已接手项目的条目:项目里最近 30 天的 Cindy 任务(含主人自己开的,不论有无判断)、伙伴开的后台任务、
+ * 伙伴判为没做完 / 聊过没下文的本机外部会话与 PR / issue / 建议、项目里的自动化、伙伴自己的例行任务
+ * (含导入来的自动化)。排列见 `workbenchTileRank`,分组见 `groupWorkbenchTiles`。
  */
 export function buildWorkbenchTiles(input: {
   sessions: readonly Session[];
@@ -402,7 +404,10 @@ export function buildWorkbenchTiles(input: {
   judgments?: Readonly<Record<string, WorkbenchTaskJudgment>>;
   /** 渲染层扫描到的本机会话,只用来补最近活动时间。 */
   candidates?: readonly ExternalSessionCandidate[];
+  /** 当前时间;只列最近 30 天活动过的 Cindy 任务(伙伴的后台任务不限)。 */
+  now?: number;
 }): WorkbenchTile[] {
+  const since = (input.now ?? Date.now()) - WORKBENCH_RECENT_WINDOW_MS;
   const judgments = input.judgments ?? {};
   const delegationByChild = new Map<string, WorkbenchDelegationInput>();
   for (const delegation of [...input.delegations].sort((a, b) => b.createdAt - a.createdAt)) {
@@ -428,8 +433,10 @@ export function buildWorkbenchTiles(input: {
     const judgment = judgments[session.id];
     const verdict = shownVerdict(judgment);
     const live = state === 'running' || state === 'waiting' || state === 'queued';
-    // 接手 = 理解:没有运行信号、也没被伙伴判为值得继续的任务不上工作台。
-    if (!live && !delegation && !verdict) continue;
+    const lastActiveMs = Math.max(toMs(session.userSendAt), toMs(session.updatedAt), delegation?.updatedAt ?? 0);
+    // 项目里的 Cindy 任务(含主人自己开的)一律上工作台,不管伙伴判断过没有——它们是伙伴随时知道的
+    // 项目事务;只看最近 30 天,在跑 / 等你 / 排队的与伙伴的后台任务不受此限。
+    if (!live && !delegation && lastActiveMs < since) continue;
     tiles.push({
       type: 'session',
       key: `session:${session.id}`,
@@ -442,7 +449,7 @@ export function buildWorkbenchTiles(input: {
       startedAtMs: state === 'running'
         ? (activity?.startedAtMs ?? delegation?.acceptedAt ?? null)
         : null,
-      lastActiveMs: Math.max(toMs(session.userSendAt), toMs(session.updatedAt), delegation?.updatedAt ?? 0),
+      lastActiveMs,
       line: sessionLine(state, session, activity, delegation, interrupted),
     });
   }
@@ -586,10 +593,18 @@ export function workbenchGroupHasFollowUp(key: WorkbenchGroupKey): boolean {
 
 export interface WorkbenchTileGroup {
   key: WorkbenchGroupKey;
+  /** 要列出的条目(做完一组最多 30 条)。 */
   tiles: WorkbenchTile[];
+  /** 这一组的总数(标题旁显示)。 */
+  total: number;
+  /** 更早、没有列出的条数,显示成一行「更早的 N 个」。 */
+  hiddenCount: number;
   /** 做完一组默认折叠,只在标题旁显示数量。 */
   defaultCollapsed: boolean;
 }
+
+/** 做完一组最多列出的条数。 */
+export const WORKBENCH_DONE_MAX = 30;
 
 /** 按固定顺序分组,组内保持输入顺序(`buildWorkbenchTiles` 已按最近活动排好);空组不出。 */
 export function groupWorkbenchTiles(tiles: readonly WorkbenchTile[]): WorkbenchTileGroup[] {
@@ -597,8 +612,16 @@ export function groupWorkbenchTiles(tiles: readonly WorkbenchTile[]): WorkbenchT
   for (const tile of tiles) buckets.get(workbenchTileGroup(tile))!.push(tile);
   return WORKBENCH_GROUP_ORDER.flatMap((key) => {
     const grouped = buckets.get(key)!;
-    if (key === 'done') grouped.sort((a, b) => b.lastActiveMs - a.lastActiveMs);
-    return grouped.length > 0 ? [{ key, tiles: grouped, defaultCollapsed: key === 'done' }] : [];
+    if (grouped.length === 0) return [];
+    if (key !== 'done') return [{ key, tiles: grouped, total: grouped.length, hiddenCount: 0, defaultCollapsed: false }];
+    grouped.sort((a, b) => b.lastActiveMs - a.lastActiveMs);
+    return [{
+      key,
+      tiles: grouped.slice(0, WORKBENCH_DONE_MAX),
+      total: grouped.length,
+      hiddenCount: Math.max(0, grouped.length - WORKBENCH_DONE_MAX),
+      defaultCollapsed: true,
+    }];
   });
 }
 

@@ -70,6 +70,7 @@ const base = {
   erroredIds: new Set<string>(),
   schedules: [],
   routines: [],
+  now: Date.parse('2026-10-02T00:00:00.000Z'),
 };
 
 describe('buildWorkbenchTiles', () => {
@@ -97,7 +98,7 @@ describe('buildWorkbenchTiles', () => {
     expect(byId.get('bg-queued')).toMatchObject({ state: 'queued', origin: 'delegated' });
   });
 
-  it('only shows unfinished / not-followed-up judgments plus tasks with live signals', () => {
+  it('lists every recent Cindy task, but external sessions only when judged worth continuing', () => {
     const judgment = (verdict: 'unfinished' | 'idea' | 'done', title: string, project = ART) => ({
       title,
       verdict,
@@ -129,9 +130,21 @@ describe('buildWorkbenchTiles', () => {
       candidates: [{ source: 'claude', id: 'ext-1', projectDir: ART, updatedAt: '2026-10-01T05:00:00.000Z', archived: false }],
     });
     const byId = new Map(tiles.map((tile) => [tile.id, tile]));
+    // Cindy 任务(含主人自己开的空闲任务、判为 done 的)都在;外部会话只留判为值得继续的。
     expect([...byId.keys()].sort()).toEqual(
-      ['claude-imported', 'claude:ext-1', 'codex:ext-2', 'judged-unfinished', 'running'].sort(),
+      [
+        'claude-imported',
+        'claude:ext-1',
+        'codex:ext-2',
+        'judged-done',
+        'judged-unfinished',
+        'running',
+        'unjudged-errored',
+        'unjudged-idle',
+      ].sort(),
     );
+    expect(byId.has('codex:ext-done')).toBe(false);
+    expect(byId.has('codex:ext-elsewhere')).toBe(false);
     expect(byId.get('running')).toMatchObject({ title: '导出图标', verdict: null });
     expect(byId.get('judged-unfinished')).toMatchObject({ title: '补描边', verdict: 'unfinished', next: '补描边的下一步' });
     expect(byId.get('claude-imported')).toMatchObject({ verdict: 'idea', origin: 'claude-code' });
@@ -142,13 +155,19 @@ describe('buildWorkbenchTiles', () => {
       lastActiveMs: Date.parse('2026-10-01T05:00:00.000Z'),
     });
     expect(byId.get('codex:ext-2')).toMatchObject({ type: 'external', origin: 'codex', verdict: 'idea' });
-    // Live first, then unfinished, then ideas.
-    expect(tiles.map((tile) => ('verdict' in tile ? tile.verdict : null))).toEqual([
+    // Live first, then unfinished, then ideas, then the rest.
+    expect(tiles.slice(0, 5).map((tile) => ('verdict' in tile ? tile.verdict : null))).toEqual([
       null,
       'unfinished',
       'unfinished',
       'idea',
       'idea',
+    ]);
+    expect(groupWorkbenchTiles(tiles).map((group) => [group.key, group.tiles.map((tile) => tile.id).sort()])).toEqual([
+      ['waiting', ['unjudged-errored']],
+      ['running', ['running']],
+      ['todo', ['claude-imported', 'claude:ext-1', 'codex:ext-2', 'judged-unfinished'].sort()],
+      ['done', ['judged-done', 'unjudged-idle']],
     ]);
   });
 
@@ -185,6 +204,23 @@ describe('buildWorkbenchTiles', () => {
     });
     expect(byId.get('issue:me/art#7')).toMatchObject({ type: 'item', itemKind: 'issue', number: 7, ref: null });
     expect(byId.get('idea:dark-icons')).toMatchObject({ type: 'item', itemKind: 'idea', number: null, ref: `${ART}/DESIGN.md` });
+  });
+
+  it('shows a task the owner just opened in the project, and drops ones idle for over 30 days', () => {
+    const now = Date.parse('2026-10-02T00:00:00.000Z');
+    const tiles = buildWorkbenchTiles({
+      ...base,
+      now,
+      sessions: [
+        session('just-opened', { userSendAt: '2026-10-01T23:59:00.000Z', updatedAt: '2026-10-01T23:59:00.000Z' }),
+        session('stale', { userSendAt: '2026-08-20T00:00:00.000Z', updatedAt: '2026-08-20T00:00:00.000Z' }),
+        session('stale-bg', { userSendAt: '2026-08-20T00:00:00.000Z', updatedAt: '2026-08-20T00:00:00.000Z' }),
+      ],
+      delegations: [{ ...delegation('stale-bg', 'completed'), updatedAt: 1 }],
+      candidates: [{ source: 'codex', id: 'unjudged', projectDir: ART, updatedAt: '2026-10-01T00:00:00.000Z', archived: false }],
+    });
+    expect(tiles.map((tile) => tile.id).sort()).toEqual(['just-opened', 'stale-bg']);
+    expect(workbenchTileGroup(tiles.find((tile) => tile.id === 'just-opened')!)).toBe('done');
   });
 
   it('keeps Bot hidden sessions, other projects, drafts, remote, archived and non-task sources out', () => {
@@ -341,6 +377,24 @@ describe('groupWorkbenchTiles', () => {
       ['done', true],
     ]);
     expect(groups.find((group) => group.key === 'done')!.tiles).toHaveLength(3);
+  });
+
+  it('lists at most 30 done entries and reports the older ones as a count', () => {
+    const now = Date.parse('2026-10-02T00:00:00.000Z');
+    const tiles = buildWorkbenchTiles({
+      ...base,
+      now,
+      sessions: Array.from({ length: 33 }, (_, index) =>
+        session(`t-${index}`, {
+          updatedAt: new Date(now - (index + 1) * 60_000).toISOString(),
+          userSendAt: new Date(now - (index + 1) * 60_000).toISOString(),
+        }),
+      ),
+    });
+    const done = groupWorkbenchTiles(tiles).find((group) => group.key === 'done')!;
+    expect(done).toMatchObject({ total: 33, hiddenCount: 3, defaultCollapsed: true });
+    expect(done.tiles).toHaveLength(30);
+    expect(done.tiles[0]!.id).toBe('t-0');
   });
 
   it('offers 跟进 only on to-do and waiting entries', () => {

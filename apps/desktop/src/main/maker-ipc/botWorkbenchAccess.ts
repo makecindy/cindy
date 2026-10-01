@@ -46,7 +46,12 @@ import type { WorkbenchProjectBrief } from './botWorkbenchBrief.js';
 type Failure = { ok: false; errorCode: string; message: string };
 
 /** 工具一次最多带回的会话候选数;多出来的只报总数。 */
-export const WORKBENCH_TOOL_MAX_TASKS = 30;
+export const WORKBENCH_TOOL_MAX_TASKS = 40;
+/**
+ * 其中项目里的 Cindy 任务(含主人自己开的)优先占的条数:它们属于伙伴随时知道的项目事务,
+ * 不受判断影响;剩下的名额给本机外部会话。
+ */
+export const WORKBENCH_TOOL_MAX_CINDY_TASKS = 30;
 export const WORKBENCH_TOOL_MAX_MESSAGE_CHARS = 4_000;
 export const WORKBENCH_TOOL_MAX_BATCH = 30;
 const UNTITLED = '未命名任务';
@@ -489,7 +494,11 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
         });
       }
       all.sort((a, b) => b.lastActiveMs - a.lastActiveMs);
-      const shown = all.slice(0, WORKBENCH_TOOL_MAX_TASKS);
+      const cindy = all.filter((candidate) => candidate.row).slice(0, WORKBENCH_TOOL_MAX_CINDY_TASKS);
+      const external = all
+        .filter((candidate) => !candidate.row)
+        .slice(0, WORKBENCH_TOOL_MAX_TASKS - cindy.length);
+      const shown = [...cindy, ...external].sort((a, b) => b.lastActiveMs - a.lastActiveMs);
       const tasks = await Promise.all(
         shown.map(async (candidate) => {
           const delegationStatus = candidate.row ? (delegations.get(candidate.row.id) ?? null) : null;
