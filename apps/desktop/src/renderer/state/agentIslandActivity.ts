@@ -79,6 +79,26 @@ function ensureSubscribed(): void {
   }
 }
 
+/** Start mirroring before a non-React reader needs the latest snapshot. */
+export function ensureAgentIslandActivitySubscribed(): void {
+  ensureSubscribed();
+}
+
+/**
+ * Whether Main still keeps this session running after its turn ended.
+ *
+ * Agent Island defers an Orca Lead's completion while Workers still owe it
+ * reports, so the Lead stays `running` here. A paused input queue also holds the
+ * island completion; it keeps its existing renderer completion and is excluded.
+ */
+export function isSessionCompletionHeldByAgentIsland(
+  sessionId: string,
+  hasPausedQueue: boolean,
+): boolean {
+  if (hasPausedQueue) return false;
+  return activityMap.get(sessionId)?.phase === 'running';
+}
+
 function subscribe(cb: () => void): () => void {
   ensureSubscribed();
   listeners.add(cb);

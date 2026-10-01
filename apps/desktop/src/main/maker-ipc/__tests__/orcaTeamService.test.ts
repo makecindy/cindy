@@ -1165,6 +1165,86 @@ describe('OrcaTeamService', () => {
     ]);
   });
 
+  it('keeps the lead report outstanding until every worker report is delivered', async () => {
+    const onLeadWorkerReportsSettled = vi.fn();
+    const { service, setWorkers } = createDeps({ onLeadWorkerReportsSettled });
+    setWorkers([
+      createWorker(),
+      createWorker({ id: 'worker-2', sessionId: 'worker-session-2', label: 'review' }),
+    ]);
+
+    expect(service.hasPendingWorkerReports('lead-1')).toBe(false);
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '实现',
+    });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-2',
+      message: '复核',
+    });
+    expect(service.hasPendingWorkerReports('lead-1')).toBe(true);
+
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '实现完成',
+    });
+    expect(service.hasPendingWorkerReports('lead-1')).toBe(true);
+    expect(onLeadWorkerReportsSettled).not.toHaveBeenCalled();
+
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-2',
+      status: 'done',
+      finalText: '复核完成',
+    });
+    expect(service.hasPendingWorkerReports('lead-1')).toBe(false);
+    expect(onLeadWorkerReportsSettled).toHaveBeenCalledTimes(1);
+    expect(onLeadWorkerReportsSettled).toHaveBeenCalledWith('lead-1');
+  });
+
+  it('keeps the lead report outstanding while delivery is rejected', async () => {
+    const onLeadWorkerReportsSettled = vi.fn();
+    const sendAutoBridgeToLead = vi.fn(async () => ({ accepted: false }));
+    const { service } = createDeps({ onLeadWorkerReportsSettled, sendAutoBridgeToLead });
+
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '分析 issue',
+    });
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '结果',
+    });
+
+    expect(service.hasPendingWorkerReports('lead-1')).toBe(true);
+    expect(onLeadWorkerReportsSettled).not.toHaveBeenCalled();
+  });
+
+  it('settles the lead report when a manual stop discards it', async () => {
+    const onLeadWorkerReportsSettled = vi.fn();
+    const { deps, service, setManualInterrupt } = createDeps({ onLeadWorkerReportsSettled });
+
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '分析 issue',
+    });
+    setManualInterrupt('input_stop');
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '被停下',
+    });
+
+    expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+    expect(service.hasPendingWorkerReports('lead-1')).toBe(false);
+    expect(onLeadWorkerReportsSettled).toHaveBeenCalledWith('lead-1');
+  });
+
   it('does not auto-bridge when there is no worker link', async () => {
     const leadMessages: string[] = [];
     const { deps, service } = createDeps({

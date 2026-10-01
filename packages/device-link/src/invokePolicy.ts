@@ -2,6 +2,28 @@ import { INVOKE_TIMEOUT_OVERRIDES_MS } from './allowlist.js';
 import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
 import type { InvokePayload } from './protocol.js';
 
+/** These reads may wait behind current-task work. Not a retry or authorization policy.
+ * sessions:list also serves initial loading and recovery probes, so it stays foreground.
+ */
+const BACKGROUND_INVOKE_CHANNELS = new Set([
+  'git-context:pr-refs:list',
+  'git-context:pr-status',
+  'maker:schedule:list-sidebar-index-runs',
+  'maker:usage:device-rows',
+]);
+
+export function isBackgroundInvoke(channel: string): boolean {
+  return BACKGROUND_INVOKE_CHANNELS.has(channel);
+}
+
+/** Control traffic must not wait behind business operations to maintain a link/lease. */
+export function bypassInvokeScheduling(payload: InvokePayload): boolean {
+  if (payload.channel === 'device-link:subscribe' || payload.channel === 'device-link:unsubscribe') return true;
+  const request = payload.args?.[0];
+  return payload.channel === 'device-link:remote-desktop:v1' && !!request &&
+    typeof request === 'object' && 'op' in request && request.op === 'heartbeat';
+}
+
 /**
  * mobile 侧 invoke 超时解析(优先级:mobile 精确表 → schedule 前缀规则 →
  * 协议契约表 → undefined = client 默认 15s)。

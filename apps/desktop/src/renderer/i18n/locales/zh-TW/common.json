@@ -334,6 +334,7 @@
     "credentialRequired": "請完成 Mac 密碼驗證。如果無法驗證，請更新兩台電腦上的 Cindy。"
   },
   "ipcError": {
+    "DEVICE_LINK_BUSY": "遠端忙碌中，請稍後再試。",
     "INVALID_PARAMS": "引數無效，請檢查後重試。",
     "PRECONDITION_FAILED": "目前狀態下無法執行此操作，請稍後再試。",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "模型未切換：無法確認目前任務已使用的上下文。請保留目前模型，或新增任務後再選擇",
@@ -10110,6 +10111,7 @@
       "daemonNotReady": "{{manager}} 升級完成，但遠端 daemon 暫未啟動 — 請手動重新傳送訊息"
     },
     "remoteError": {
+      "DEVICE_LINK_BUSY": "遠端忙碌中，請稍後再試。",
       "REMOTE_DAEMON_CLOSED": "遠端連線中斷了，可能正在更新。這一輪已經結束，請重新傳送。",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端任務無法訪問本地檔案/圖片附件。請直接貼上內容。",
       "AUTO_REVIEW_UNAVAILABLE": "自動審批暫時無法給出判斷，需要審批的操作已改為由你確認。想少被打斷，可以把任務切到「完全訪問」，但風險更高。",
@@ -14210,6 +14212,7 @@
     }
   },
   "taskTags": {
+    "remoteBusy": "遠端忙碌中，請稍後再試。",
     "loadFailed": "標籤載入失敗，請重試。",
     "retry": "重試",
     "editLabel": "編輯「{{name}}」",

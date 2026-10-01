@@ -16,6 +16,10 @@ describe('mobile Orca collaboration wiring', () => {
     expect(source).toContain('onWorkerLongPress={collab.showWorkerActions}');
     expect(source).toContain('onWorkerPress={collab.openWorker}');
     expect(read('src/session/ContextSheetCollabView.tsx')).toContain('onLongPress={() => onWorkerLongPress(worker)}');
+    // 「焦点」只是电脑端协同面板的展开状态,手机上不展示:协同面板既不读 focused 字段,也不引用焦点文案。
+    const collabView = read('src/session/ContextSheetCollabView.tsx');
+    expect(collabView).not.toMatch(/\.focused\b/);
+    expect(collabView).not.toContain('session.collab.focused');
   });
 
   it('keeps the Worker model picker separate from the task model', () => {

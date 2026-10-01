@@ -250,6 +250,8 @@ export interface OrcaTeamServiceDeps {
   /** 归档后清理手动中断跟踪，避免 stale mark 影响后续同 id 恢复。 */
   forgetWorkerSession?(sessionId: string): void;
   broadcastOrcaWorkerChanged(leadSessionId: string): void;
+  /** The Lead's last outstanding worker report was delivered or discarded. */
+  onLeadWorkerReportsSettled?(leadSessionId: string): void;
   dispatchWorkerMessage(params: {
     targetSessionId: string;
     message: string;
@@ -367,6 +369,8 @@ export interface OrcaTeamService {
   }): Promise<MergeWorkerQueuedMessagesResult>;
   captureWorkerText(sessionId: string, text: string, opts?: { isFinal?: boolean }): void;
   clearAutoBridgeState(sessionId: string): void;
+  /** True while an accepted worker task still owes this Lead its report. */
+  hasPendingWorkerReports(leadSessionId: string): boolean;
   handleWorkerTurnStarted(sessionId: string): Promise<void>;
   captureWorkerTerminalTurn(sessionId: string): WorkerTerminalTurnCapture;
   handleWorkerTerminalTurn(params: WorkerTerminalTurnParams): Promise<void>;
@@ -502,8 +506,31 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     return state;
   }
 
-  function clearRuntimeState(sessionId: string): void {
+  function hasPendingWorkerReports(leadSessionId: string): boolean {
+    for (const state of autoBridge.values()) {
+      if (state.leadSessionId === leadSessionId) return true;
+    }
+    return false;
+  }
+
+  /** Every pending-report removal goes through here so the Lead's completion can settle. */
+  function deletePendingReport(sessionId: string): void {
+    const removed = autoBridge.get(sessionId);
+    if (!removed) return;
     autoBridge.delete(sessionId);
+    if (hasPendingWorkerReports(removed.leadSessionId)) return;
+    try {
+      deps.onLeadWorkerReportsSettled?.(removed.leadSessionId);
+    } catch (err) {
+      deps.log.warn('orca lead report settle listener failed', {
+        leadSessionId: removed.leadSessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  function clearRuntimeState(sessionId: string): void {
+    deletePendingReport(sessionId);
     deps.clearManualInterrupt(sessionId);
     const provisional = provisionalDispatches.get(sessionId);
     if (provisional) {
@@ -521,7 +548,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     if (previous) {
       autoBridge.set(sessionId, previous);
     } else {
-      autoBridge.delete(sessionId);
+      deletePendingReport(sessionId);
     }
     return true;
   }
@@ -570,7 +597,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const latest = autoBridge.get(sessionId);
       if (latest !== state || latest.version !== version) return 'skipped';
       if (result.accepted) {
-        autoBridge.delete(sessionId);
+        deletePendingReport(sessionId);
         return 'accepted';
       }
       latest.inFlight = false;
@@ -1509,6 +1536,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     clearAutoBridgeState(sessionId) {
       clearRuntimeState(sessionId);
     },
+    hasPendingWorkerReports,
     captureWorkerTerminalTurn(sessionId) {
       return {
         sessionId,

@@ -277,7 +277,7 @@ export const SPLASH_PANEL = {
  * wave4 组 = PR0a;组件色组 = PR1 按 token-decision-table §3 注册。
  */
 export const LOGIN_COLORS = {
-  /** 白底体系底色(固定 #EDEDED 与主题解耦,用户拍板 2026-07-22;login-bg-base) */
+  /** 画布底色(亮 #F2F2ED / 暗 #181818,与 CINDY 皮肤页底同值、与扩展主题解耦;login-bg-base) */
   bgBase: 'var(--login-bg-base)',
   gradientRadial: 'var(--login-bg-gradient-radial)',
   gradientLinear: 'var(--login-bg-gradient-linear)',

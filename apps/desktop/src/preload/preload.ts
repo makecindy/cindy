@@ -7458,6 +7458,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       workingDir?: string;
       turnGen: number;
       completionRevision: number;
+      cancel?: false;
+    } | {
+      sessionId: string;
+      completionRevision: number;
+      cancel: true;
     }): Promise<{ prompt: string | null }> => ipcRenderer.invoke('maker:predict-prompt', request),
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,

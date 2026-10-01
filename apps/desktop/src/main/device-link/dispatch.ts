@@ -782,6 +782,7 @@ interface CachedRemoteInvokeResult {
 const completedRemoteInvokeResults = new Map<string, CachedRemoteInvokeResult>();
 let completedRemoteInvokeResultBytes = 0;
 interface InFlightRemoteInvoke {
+  channel?: string;
   promise: Promise<InvokeResultPayload>;
   bytes: number;
   fingerprint: string;
@@ -2642,6 +2643,30 @@ async function handleInvoke(
       > REMOTE_INVOKE_IN_FLIGHT_BYTES
   );
   if (controllerAtLimit || globalAtLimit) {
+    const channels: Record<string, number> = {};
+    let executing = 0;
+    let pendingResults = 0;
+    const countChannel = (channel?: string) => {
+      const name = channel && REMOTE_INVOKE_ALLOWLIST.has(channel) ? channel : 'unknown';
+      channels[name] = (channels[name] ?? 0) + 1;
+    };
+    for (const [key, entry] of inFlightRemoteInvokeResults) {
+      if (!key.startsWith(`${src}\u0000`)) continue;
+      executing++;
+      countChannel(entry.channel);
+    }
+    for (const entry of remoteInvokeResultOutbox.values()) {
+      if (entry.src !== src) continue;
+      pendingResults++;
+      countChannel(entry.channel);
+    }
+    log.debug('remote invoke admission busy', {
+      from: shortId(src), controllerAtLimit, globalAtLimit, executing, pendingResults,
+      controllerBytes: controllerAdmission.bytes,
+      globalExecuting: inFlightRemoteInvokeResults.size,
+      globalPendingResults: remoteInvokeResultOutbox.size,
+      channels: Object.fromEntries(Object.entries(channels).sort((a, b) => b[1] - a[1]).slice(0, 8)),
+    });
     const result: InvokeResultPayload = {
       ok: false,
       error: {
@@ -2665,6 +2690,7 @@ async function handleInvoke(
 
   if (joiningExisting && existingListing) {
     const waiterEntry = {
+      channel: payload?.channel,
       promise: existingListing.promise,
       bytes: invokeBytes,
       fingerprint,
@@ -2723,6 +2749,7 @@ async function handleInvoke(
     payload?.channel,
   ).finally(releaseBusyLease);
   const inFlightEntry = {
+    channel: payload?.channel,
     promise: resultPromise,
     bytes: invokeBytes,
     fingerprint,

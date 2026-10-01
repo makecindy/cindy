@@ -23,6 +23,8 @@ import {
 } from "lucide-react-native";
 import {
   Pressable,
+  FlatList,
+  Platform,
   StyleSheet,
   View,
   useWindowDimensions,
@@ -214,6 +216,23 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   const [page, setPage] = useState<Page>(null);
   const [effortExpanded, setEffortExpanded] = useState(false);
   const searchRef = useRef<RNTextInput>(null);
+  const modelListRef = useRef<FlatList>(null);
+  const modelItems = useMemo(
+    () =>
+      p.groups.flatMap((group) => [
+        { kind: "header" as const, key: `header:${group.key}`, group },
+        ...group.rows.map((row, index) => ({
+          kind: "model" as const,
+          key: `${group.key}:${row.key}`,
+          row,
+          separator: index > 0,
+        })),
+      ]),
+    [p.groups],
+  );
+  useEffect(() => {
+    modelListRef.current?.scrollToOffset({ offset: 0, animated: false });
+  }, [p.query, p.filter]);
   // 与 iOS 同口径:重新打开或切换设置对象都回到主页。
   useEffect(() => {
     setPage(null);
@@ -642,24 +661,25 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     );
   };
 
-  const listPage = (
-    <>
-      {p.groups.map((group) => (
-        <Group
-          key={group.key}
-          testID={`${p.testID}.group.${group.key}`}
-          title={group.title}
-        >
-          {group.rows.map(modelRow)}
-        </Group>
-      ))}
-      {!p.groups.length ? (
-        <Text style={styles.empty} testID={`${p.testID}.empty`}>
-          {p.loading ? t("models.picker.loadingDefault") : p.emptyHint}
-        </Text>
-      ) : null}
-    </>
-  );
+  const listPage =
+    Platform.OS === "android" ? null : (
+      <>
+        {p.groups.map((group) => (
+          <Group
+            key={group.key}
+            testID={`${p.testID}.group.${group.key}`}
+            title={group.title}
+          >
+            {group.rows.map(modelRow)}
+          </Group>
+        ))}
+        {!p.groups.length ? (
+          <Text style={styles.empty} testID={`${p.testID}.empty`}>
+            {p.loading ? t("models.picker.loadingDefault") : p.emptyHint}
+          </Text>
+        ) : null}
+      </>
+    );
 
   return (
     <SheetModal
@@ -686,6 +706,51 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         snap={snap}
         testID={p.testID}
         title={title}
+        renderScrollContent={
+          Platform.OS === "android" && !page && !options
+            ? (scrollProps) => (
+                <FlatList
+                  {...scrollProps}
+                  ref={modelListRef}
+                  data={modelItems}
+                  keyExtractor={(item) => item.key}
+                  initialNumToRender={8}
+                  maxToRenderPerBatch={4}
+                  windowSize={3}
+                  removeClippedSubviews={false}
+                  ListHeaderComponent={
+                    p.error ? <Text style={styles.error}>{p.error}</Text> : null
+                  }
+                  ListEmptyComponent={
+                    <Text style={styles.empty} testID={`${p.testID}.empty`}>
+                      {p.loading
+                        ? t("models.picker.loadingDefault")
+                        : p.emptyHint}
+                    </Text>
+                  }
+                  renderItem={({ item }) =>
+                    item.kind === "header" ? (
+                      <View
+                        style={styles.group}
+                        testID={`${p.testID}.group.${item.group.key}`}
+                      >
+                        <Text style={styles.groupLabel}>
+                          {item.group.title}
+                        </Text>
+                      </View>
+                    ) : (
+                      <View>
+                        {item.separator ? (
+                          <View style={styles.separator} />
+                        ) : null}
+                        {modelRow(item.row)}
+                      </View>
+                    )
+                  }
+                />
+              )
+            : undefined
+        }
       >
         {p.error ? <Text style={styles.error}>{p.error}</Text> : null}
         {page === "sources"

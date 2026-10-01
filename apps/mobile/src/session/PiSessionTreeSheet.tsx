@@ -143,7 +143,7 @@ export function PiSessionTreeSheet({
   };
 
   return (
-    <SheetModal visible={visible} onBackdropPress={onClose} onRequestClose={onClose}>
+    <SheetModal nativePresentation visible={visible} onBackdropPress={onClose} onRequestClose={onClose}>
       <SheetSurface
         bottomInset={insets.bottom}
         heights={heights}

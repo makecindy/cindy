@@ -466,3 +466,17 @@ it.each(['rejected', 'lost-ack', 'accepted'])(
     }
   },
 );
+it('ignores clicks outside and only closes through Cancel or Escape', async () => {
+  mount();
+  await screen.findByRole('option', { name: 'B' });
+  const dialog = screen.getByRole('dialog');
+  // Dialog defers dismissal until the click following a primary pointer press.
+  fireEvent.pointerDown(document.body, { button: 0, pointerType: 'mouse' });
+  fireEvent.pointerUp(document.body, { button: 0, pointerType: 'mouse' });
+  fireEvent.click(document.body);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  expect(state.dismiss).not.toHaveBeenCalled();
+  fireEvent.keyDown(dialog, { key: 'Escape' });
+  await waitFor(() => expect(state.dismiss).toHaveBeenCalledOnce());
+});

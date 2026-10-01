@@ -334,6 +334,7 @@
     "credentialRequired": "Mac 암호를 확인하세요. 확인할 수 없으면 두 컴퓨터에서 Cindy를 업데이트하세요."
   },
   "ipcError": {
+    "DEVICE_LINK_BUSY": "원격 컴퓨터가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
     "INVALID_PARAMS": "매개변수가 잘못되었습니다. 확인 후 다시 시도하세요.",
     "PRECONDITION_FAILED": "현재 상태에서는 이 작업을 수행할 수 없습니다. 잠시 후 다시 시도하세요.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "모델이 전환되지 않았습니다. 현재 작업에서 사용한 컨텍스트 양을 확인할 수 없습니다. 현재 모델을 유지하거나 새 작업을 만드세요.",
@@ -10111,6 +10112,7 @@
       "daemonNotReady": "{{manager}} 업그레이드가 완료되었지만 원격 daemon이 아직 시작되지 않았습니다 — 메시지를 수동으로 다시 전송하세요"
     },
     "remoteError": {
+      "DEVICE_LINK_BUSY": "원격 컴퓨터가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
       "REMOTE_DAEMON_CLOSED": "원격 연결이 끊겼습니다. 업데이트 중일 수 있습니다. 이번 차례는 끝났으니 다시 보내 주세요.",
       "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "원격 세션에서는 로컬 파일/이미지 첨부에 접근할 수 없습니다. 내용을 직접 붙여넣으세요.",
       "AUTO_REVIEW_UNAVAILABLE": "자동 리뷰가 판단을 내리지 못했습니다. 검토가 필요한 작업은 직접 확인하도록 바뀌었습니다. 중단을 줄이려면 이 작업을 전체 접근으로 전환하세요. 위험도는 더 높습니다.",
@@ -14210,6 +14212,7 @@
     }
   },
   "taskTags": {
+    "remoteBusy": "원격 컴퓨터가 사용 중입니다. 잠시 후 다시 시도해 주세요.",
     "loadFailed": "태그를 불러오지 못했습니다. 다시 시도해 주세요.",
     "retry": "다시 시도",
     "editLabel": "“{{name}}” 편집",

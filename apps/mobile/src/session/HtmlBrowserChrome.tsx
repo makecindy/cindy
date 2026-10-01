@@ -191,6 +191,7 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps) {
         )}
       </View>
       <SheetModal
+        nativePresentation
         visible={menuOpen}
         onBackdropPress={close}
         onRequestClose={close}
