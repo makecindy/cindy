@@ -7787,6 +7787,7 @@
   "bots": {
     "workbench": {
       "title": "工作台",
+      "open": "打開工作台",
       "emptyTitle": "交給{{name}}一個專案",
       "emptyDescription": "把電腦裡已有的工作交給{{name}}接著做。它會先看一遍專案的文件、最近的提交和 PR、做過的任務，挑出沒做完和值得做的，再問你接著做哪件。",
       "scanning": "正在尋找電腦上的專案…",
