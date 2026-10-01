@@ -41,6 +41,9 @@ describe('decideBotToolCall', () => {
     ['continue_workbench_task', 'arranged'],
     ['create_project', 'arranged'],
     ['routine_save', 'arranged'],
+    ['create_teammate', 'arranged'],
+    ['set_teammate_capability', 'arranged'],
+    ['find_teammate_capabilities', 'other'],
   ])('allows %s in a %s turn', (tool, authority) => {
     expect(decideBotToolCall('cindy_helper', tool, {}, authority)).toEqual({ kind: 'allow' });
   });
@@ -56,6 +59,11 @@ describe('decideBotToolCall', () => {
     ['continue_workbench_task', 'other'],
     ['routine_save', 'other'],
     ['create_project', 'other'],
+    ['create_teammate', 'other'],
+    ['update_teammate_profile', 'other'],
+    ['set_teammate_capability', 'other'],
+    ['update_bot_profile', 'other'],
+    ['set_bot_capability', 'other'],
   ])('keeps %s for the owner in a %s turn', (tool, authority) => {
     expect(decideBotToolCall('cindy_helper', tool, {}, authority)).toMatchObject({
       kind: 'deny',
@@ -74,6 +82,9 @@ describe('decideBotToolCall', () => {
       .toEqual({ kind: 'targets', sessionIds: ['task-1'], scope: 'own' });
     expect(decideBotToolCall('cindy_helper', 'stop_session_turn', {}, 'other'))
       .toMatchObject({ kind: 'deny', errorCode: 'INVALID_ARGS' });
+    // Omitted session_id means the caller's own current task.
+    expect(decideBotToolCall('cindy_helper', 'get_session_runtime', {}, 'other')).toEqual({ kind: 'allow' });
+    expect(decideBotToolCall('cindy_helper', 'set_session_runtime', { effort: 'high' }, 'other')).toEqual({ kind: 'allow' });
   });
 
   it('checks every target of rename and archive batches by tier', () => {

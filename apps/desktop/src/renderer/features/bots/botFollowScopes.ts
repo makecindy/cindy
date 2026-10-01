@@ -37,9 +37,17 @@ function emit(): void {
   for (const listener of listeners) listener();
 }
 
-function load(): void {
+/** 读取失败(例如刚启动时本机数据还没就绪)时有限次退避重试,不让标记一直缺失。 */
+const RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000];
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function load(attempt = 0): void {
   const api = window.electronAPI?.localDb?.bots?.workbench?.followScopes;
   if (!api) return;
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
   const seq = ++loadSeq;
   const loadOwner = getDataOwnerGeneration();
   void api()
@@ -52,7 +60,15 @@ function load(): void {
       }
       emit();
     })
-    .catch((error: unknown) => log.warn('Bot follow scopes load failed', error));
+    .catch((error: unknown) => {
+      log.warn('Bot follow scopes load failed', error);
+      const delay = RETRY_DELAYS_MS[attempt];
+      if (seq !== loadSeq || delay === undefined) return;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        if (seq === loadSeq && isDataOwnerGenerationCurrent(loadOwner)) load(attempt + 1);
+      }, delay);
+    });
 }
 
 /** 换账号时清空并重读;快照读取里只重置,不同步发 IPC。 */
@@ -124,6 +140,8 @@ export function useSessionFollowers(session: Session): BotProfile[] {
 
 export const __testing = {
   reset(): void {
+    if (retryTimer) clearTimeout(retryTimer);
+    retryTimer = null;
     scopes = EMPTY;
     owner = getDataOwnerGeneration();
     requested = false;

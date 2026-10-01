@@ -54,6 +54,7 @@ import {
   readSessionTranscript,
 } from './botWorkbenchTranscripts.js';
 import { workbenchSessionRoots } from './botWorkbenchSessionRoots.js';
+import { checkHandoverDirectory } from './botWorkbenchHandover.js';
 import { createBriefCache, type WorkbenchBriefGithubItem } from './botWorkbenchBrief.js';
 import { readCanonicalSessionActivity } from './sessionActivityProjection.js';
 import {
@@ -455,37 +456,6 @@ export async function listBotWorkbenchCandidatesForOwner(botId: string) {
 
 type ProjectFailure = { ok: false; errorCode: string; message: string };
 
-function samePath(a: string, b: string): boolean {
-  return isCaseInsensitivePlatform(process.platform) ? a.toLowerCase() === b.toLowerCase() : a === b;
-}
-
-function isInside(child: string, root: string): boolean {
-  const relative = path.relative(root, child);
-  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-/**
- * 伙伴记下的项目目录:绝对路径(允许 `~/` 开头)、真实存在的目录;不收磁盘根目录、主目录,
- * 也不收 Cindy 自己的数据目录——交出去的是项目,不是整台电脑。
- */
-async function checkHandoverDirectory(raw: string): Promise<{ ok: true; path: string } | ProjectFailure> {
-  const trimmed = raw.trim();
-  const expanded = trimmed === '~' || trimmed.startsWith('~/') ? path.join(os.homedir(), trimmed.slice(1)) : trimmed;
-  const invalid = (message: string): ProjectFailure => ({ ok: false, errorCode: 'INVALID_PROJECT_PATH', message });
-  if (!path.isAbsolute(expanded)) return invalid('请给项目目录的绝对路径');
-  const resolved = path.resolve(expanded);
-  if (path.parse(resolved).root === resolved || samePath(resolved, path.resolve(os.homedir()))) {
-    return invalid('不能把整个磁盘或主目录交给伙伴,请给具体的项目目录');
-  }
-  if (isInside(resolved, path.resolve(app.getPath('userData')))) return invalid('这是 Cindy 自己的数据目录,不是项目');
-  try {
-    if (!(await fs.stat(resolved)).isDirectory()) return { ok: false, errorCode: 'NOT_A_DIRECTORY', message: '这不是一个目录' };
-  } catch {
-    return { ok: false, errorCode: 'NOT_A_DIRECTORY', message: '找不到这个目录' };
-  }
-  return { ok: true, path: resolved };
-}
-
 async function runProjectChange<T>(run: () => Promise<T | ProjectFailure>): Promise<T | ProjectFailure> {
   if (isAppSessionBoundaryPending()) {
     return { ok: false, errorCode: 'OWNER_SCOPE_CHANGED', message: '账号正在切换,请稍后重试' };
@@ -507,7 +477,11 @@ export function addBotWorkbenchProjectForCaller(params: { callerSessionId: strin
     const userDataDir = ownerScopedUserDataPath();
     const caller = await resolveWorkbenchCaller(params.callerSessionId);
     if (!caller.ok) return caller;
-    const checked = await checkHandoverDirectory(params.path);
+    const checked = await checkHandoverDirectory(params.path, {
+      homeDir: os.homedir(),
+      userDataDir: app.getPath('userData'),
+      caseInsensitive: isCaseInsensitivePlatform(process.platform),
+    });
     if (!checked.ok) return checked;
     if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scopeKey) {
       return { ok: false as const, errorCode: 'OWNER_SCOPE_CHANGED', message: '账号已切换,请重试' };

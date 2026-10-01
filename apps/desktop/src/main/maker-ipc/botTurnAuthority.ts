@@ -150,7 +150,7 @@ const OWNER_TURN_REQUIRED = {
   message: '这一步只能在主人本人发话的那一轮里做；这一轮来自群聊、其他伙伴、自动化或后台任务回报。先告诉主人，等主人自己说了再做。',
 } as const satisfies BotToolDecision;
 
-/** 任何来源都能用：自省、登录、伙伴管理自己的后台任务 / 消息 / 资料 / 技能 / 例行任务的只读部分。 */
+/** 任何来源都能用：自省、登录、伙伴管理自己的后台任务与消息、沉淀技能，读取自己的资料、能力与例行任务。 */
 const ANY_TURN_TOOLS = new Set([
   'get_capabilities',
   'get_current_session_id',
@@ -169,16 +169,11 @@ const ANY_TURN_TOOLS = new Set([
   'save_teammate_skill',
   'list_teammate_skills',
   'get_teammate_state',
-  'update_teammate_profile',
   'find_teammate_capabilities',
-  'set_teammate_capability',
   // 旧名别名（bot_capabilities.ts），行为同上。
   'get_bot_state',
-  'update_bot_profile',
   'find_bot_capabilities',
-  'set_bot_capability',
   'get_app_default_model',
-  'create_teammate',
   'routine_list',
   'routine_sources',
   'routine_history',
@@ -207,15 +202,24 @@ const OWNER_OR_ARRANGED_TOOLS = new Set([
   'routine_delete',
   'routine_run_now',
   'schedule_set_pre_run_hook',
+  // 新建伙伴、改自己的资料与能力会持久生效，下一轮起变成伙伴本身的一部分，不能由别的来源引出。
+  'create_teammate',
+  'update_teammate_profile',
+  'set_teammate_capability',
+  'update_bot_profile',
+  'set_bot_capability',
 ]);
 
-/** 按目标任务判定的会话控制工具：值 = 是否只读。 */
-const TARGETED_TOOLS = new Map<string, { read: boolean }>([
-  ['get_session_runtime', { read: true }],
+/**
+ * 按目标任务判定的会话控制工具。`read` = 只读；`currentByDefault` = 省略 session_id 时作用于
+ * 调用方自己的当前任务（伙伴自己的任务，任何档都可以）。
+ */
+const TARGETED_TOOLS = new Map<string, { read: boolean; currentByDefault?: boolean }>([
+  ['get_session_runtime', { read: true, currentByDefault: true }],
   ['list_session_queue', { read: true }],
   ['steer_session', { read: false }],
   ['stop_session_turn', { read: false }],
-  ['set_session_runtime', { read: false }],
+  ['set_session_runtime', { read: false, currentByDefault: true }],
   ['update_session_queued_message', { read: false }],
   ['cancel_session_queued_message', { read: false }],
 ]);
@@ -265,7 +269,11 @@ export function decideBotToolCall(
   const targeted = TARGETED_TOOLS.get(tool);
   if (targeted) {
     const sessionId = stringArg(args, 'session_id');
-    if (!sessionId) return { kind: 'deny', errorCode: 'INVALID_ARGS', message: '缺少 session_id。' };
+    if (!sessionId) {
+      return targeted.currentByDefault
+        ? { kind: 'allow' }
+        : { kind: 'deny', errorCode: 'INVALID_ARGS', message: '缺少 session_id。' };
+    }
     if (authority === 'arranged' && targeted.read) return { kind: 'allow' };
     return { kind: 'targets', sessionIds: [sessionId], scope: authority === 'arranged' ? 'own-or-handed' : 'own' };
   }

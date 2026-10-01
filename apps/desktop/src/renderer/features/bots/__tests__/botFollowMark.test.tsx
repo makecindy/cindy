@@ -80,6 +80,20 @@ describe('BotFollowMark', () => {
     expect(screen.queryByTestId('bot-follow-mark')).toBeNull();
   });
 
+  it('retries a failed first load instead of leaving the marker missing', async () => {
+    vi.useFakeTimers();
+    try {
+      followScopes.mockRejectedValueOnce(new Error('host not ready'));
+      await act(async () => { render(<Row session={session()} />); });
+      expect(screen.queryByTestId('bot-follow-mark')).toBeNull();
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(screen.getByTestId('bot-follow-mark')).toBeTruthy();
+      expect(followScopes).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reloads when a workbench changes', async () => {
     await act(async () => { render(<Row session={session()} />); });
     followScopes.mockResolvedValueOnce([
