@@ -2661,7 +2661,15 @@ export class PiAgent extends BaseAgent {
         });
       }
     }
-    const startupWorkingContextWindow = this.deps.resolveModelContextLimit?.(authProviderId, opts.model) ?? undefined;
+    // 任务级工作上下文预算（tokens）：host 已按目录上限与模型级上限收敛。
+    // 优先于模型级上限/目录默认；变化时 host 直接触发重建，热切路径也带新值。
+    let sessionContextWindowBudget: number | null =
+      typeof opts.contextWindowBudget === 'number' && Number.isSafeInteger(opts.contextWindowBudget)
+      && opts.contextWindowBudget > 0
+        ? opts.contextWindowBudget
+        : null;
+    const startupWorkingContextWindow = sessionContextWindowBudget
+      ?? this.deps.resolveModelContextLimit?.(authProviderId, opts.model) ?? undefined;
     const nativeModel = nativeProviders.find((provider) => provider.id === initialProvider)?.models
       .find((model) => (model.wireId ?? model.id) === initialWireModel);
     const startupContextWindow = Math.max(
@@ -6517,8 +6525,13 @@ export class PiAgent extends BaseAgent {
     };
     const switchModel = async (
       model: string,
-      setOpts?: { providerId?: string | null; effort?: Effort },
+      setOpts?: { providerId?: string | null; effort?: Effort; contextWindowBudget?: number | null },
     ): Promise<void> => {
+      const requestedContextWindowBudget = setOpts?.contextWindowBudget;
+      // 任务级预算变化必须走完整重写 + switch_session 重载，不能命中同路由 no-op。
+      if (requestedContextWindowBudget !== undefined) {
+        sessionContextWindowBudget = requestedContextWindowBudget ?? null;
+      }
       const requestedProviderId = setOpts && Object.hasOwn(setOpts, 'providerId')
         ? setOpts.providerId
         : undefined;
@@ -6541,9 +6554,16 @@ export class PiAgent extends BaseAgent {
         return settings.compaction?.reserveTokens ?? 16_384;
       };
       const currentReserve = projectedReserve(ctx.contextWindow, ctx.workingContextWindow);
+      // 目标工作窗口：任务级预算优先于模型级上限（与运行期创建、startupWorkingContextWindow
+      // 同一口径）。预演漏掉预算 ⇒ 预算变更时算不出 reserve 差异 ⇒ 既不实时改 reserve，
+      // 也不判定需要重建：预算就静默失效（档位卡仍显示预算值，Pi 压缩阈值仍是满窗）。
+      const nextWorkingContextWindow =
+        sessionContextWindowBudget
+        ?? this.deps.resolveModelContextLimit?.(effectiveProviderId, model)
+        ?? undefined;
       const nextProjectedReserve = projectedReserve(
         preview.targetContextWindow ?? ctx.contextWindow,
-        this.deps.resolveModelContextLimit?.(effectiveProviderId, model) ?? undefined);
+        nextWorkingContextWindow);
       if (currentReserve !== nextProjectedReserve) {
         const reserveProbe = await proc.request({
           type: 'set_compaction_reserve_tokens', reserveTokens: currentReserve,
@@ -7422,11 +7442,14 @@ export class PiAgent extends BaseAgent {
         const contextSource = (id: string | null | undefined) =>
           id == null || id === 'xd' || id === PI_PROVIDER_ID ? PI_PROVIDER_ID : id;
         if (model !== mutableModel || contextSource(provider) !== contextSource(mutableProviderId)) return false;
-        const window = deps.resolveModelContextLimit?.(provider, model);
+        const window = sessionContextWindowBudget ?? deps.resolveModelContextLimit?.(provider, model);
         return (window ?? undefined) !== ctx.workingContextWindow;
       },
 
-      async setModel(model: string, setOpts?: { providerId?: string | null; effort?: Effort }): Promise<void> {
+      async setModel(
+        model: string,
+        setOpts?: { providerId?: string | null; effort?: Effort; contextWindowBudget?: number | null },
+      ): Promise<void> {
         if (reviewMode) return;
         // 会话级串行闸:整段"写待切换快照 → set_model RPC → 落定/回滚"必须是一个临界区。
         // 并发或连点切换(本地 + 远程控制端同时切)若交错,A 写 pending、B 写 pending、A 落定 B 的

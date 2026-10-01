@@ -181,7 +181,7 @@ import {
   resolveModelDefaultContextWindow,
 } from './catalog-to-descriptors.js';
 import { readModelContextLimit } from './model-context-limit-store.js';
-import { resolveDesktopModelContextProviderId } from './model-context-settings.js';
+import { resolveDesktopModelContextProviderId, readStoredSessionContextWindowBudget, resolveConfiguredContextWindow, applySessionContextWindowBudgetToCreateOpts } from './model-context-settings.js';
 import {
   prepareCodexCustomContextCatalog,
 } from './codex-custom-context-catalog.js';
@@ -2638,6 +2638,13 @@ export function getMaker(): Maker {
           }
           // 所有创建路径共用的派发边界,opts.providerId 此刻已是本次启动的终值。
           freezeSessionProviderAtStart(sessionId, opts.providerId);
+          // 任务级工作上下文预算：调用方显式带值时同样按目录上限与模型级上限重新收敛；
+          // 未带则读本任务已保存的档位。口径见 applySessionContextWindowBudgetToCreateOpts
+          // （worker 唤醒等其它启动入口也走它，避免只在钩子这条路上生效）。
+          await applySessionContextWindowBudgetToCreateOpts(
+            sessionId, opts as Parameters<typeof applySessionContextWindowBudgetToCreateOpts>[1],
+            getActiveCatalog(),
+          );
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
           if (opts.agentKind === 'pi' && opts.thinkingEnabled === undefined) {
             const thinkingEnabled = getThinkingEnabledFromMemory(
