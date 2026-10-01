@@ -7848,6 +7848,7 @@
         "truncated": "Showing the most recent part only",
         "ref": "Reference",
         "noRef": "No reference attached.",
+        "openPr": "Open PR #{{number}} on GitHub",
         "refBlocked": "This path is outside the handed-over projects, so it wasn't opened."
       },
       "openTask": "Open “{{title}}” ({{state}})",

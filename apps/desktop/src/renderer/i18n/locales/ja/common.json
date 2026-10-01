@@ -7836,6 +7836,7 @@
         "truncated": "最近の内容のみ表示しています",
         "ref": "参考",
         "noRef": "参考リンクはありません。",
+        "openPr": "GitHub で PR #{{number}} を開く",
         "refBlocked": "このパスは任せたプロジェクトの外にあるため開きませんでした。"
       },
       "openTask": "「{{title}}」を開く（{{state}}）",

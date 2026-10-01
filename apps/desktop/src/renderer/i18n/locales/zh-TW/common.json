@@ -7836,6 +7836,7 @@
         "truncated": "只顯示最近的內容",
         "ref": "參考",
         "noRef": "沒有附參考連結。",
+        "openPr": "在 GitHub 開啟 PR #{{number}}",
         "refBlocked": "這個路徑不在交給夥伴的專案裡，沒有開啟。"
       },
       "openTask": "開啟「{{title}}」（{{state}}）",

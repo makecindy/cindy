@@ -34,8 +34,10 @@ export interface WorkbenchBriefGithubItemWire {
 
 /** 宿主现算的项目素材:有界、只看近期、带缓存。 */
 export interface WorkbenchProjectBriefWire {
-  /** 顶层与 docs/ 下的 Markdown 路径(只给路径,要看再用文件工具读)。 */
+  /** 顶层与 docs/ 下两级以内的 Markdown 路径,重要的在前(只给路径,要看再用文件工具读)。 */
   docs: string[];
+  /** 不是 git 仓库时最近 14 天改过的文件(最多 20 个)。 */
+  recent: Array<{ path: string; modifiedAt: string }>;
   git: {
     branch: string | null;
     changes: number | null;
@@ -249,7 +251,9 @@ export function registerBotWorkbenchTools(
       + '项目里最近 30 天的会话(项目里的 Cindy 任务——包括主人自己开的——不管你判断过没有都在,最多 30 条;再补本机 Claude Code / Codex / Pi 会话,合计最多 40 条;更早的只给 olderCount),你写过的 PR / issue / 建议条目,你的例行任务与项目里的自动化。'
       + '主人提到这个项目、让你跟进或问进展时,先看工作台;主人自己在项目里开的任务也在里面,它们属于你知道的项目事务,不需要主人逐个告诉你。'
       + '每条会话带 digest:起始目的与最后几条对话,足够大多数判断,不用逐个读全文。'
-      + '接手的做法:主人把项目交给你时,先调用它;根据 brief 与 digest 一次性用 set_workbench_tasks 批量写下判断;只有拿不准的几件才 read_workbench_task。'
+      + '接手的做法:主人把项目交给你时,先调用它;再用你自己的文件工具读 brief.docs 里最前面的一两份(README / DESIGN / AGENTS 之类),弄清项目是做什么的、在往哪走;'
+      + '然后看最近的提交(不是 git 仓库时看 brief.recent)和会话 digest,一次性用 set_workbench_tasks 批量写下判断;只有拿不准的几件才 read_workbench_task。'
+      + '判断与下一步要体现你对项目的理解(它在项目里处于什么位置、和哪份文档或哪次提交有关),不要只复述会话。'
       + '项目文档(如 DESIGN.md)、最近的 PR 与 issue 同样是素材:值得做的写成 pr:<owner>/<repo>#<n>、issue:<owner>/<repo>#<n> 或 idea:<slug> 条目,带上 ref。'
       + '判断标准:最后一条是没被执行的要求、报错中断、明确留下的待办 → unfinished;讨论过方案或想法但之后没人动 → idea;已交付、纯问答、与项目无关 → done。'
       + '写完后在聊天里用几句话告诉主人:没做完的几件各一句下一步,值得做的几件各一句建议,问主人要接着做哪件。不要自作主张开始做;只有主人点头的那件才 continue_workbench_task。'

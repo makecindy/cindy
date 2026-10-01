@@ -7836,6 +7836,7 @@
         "truncated": "최근 내용만 표시합니다",
         "ref": "참고",
         "noRef": "첨부된 참고 링크가 없습니다.",
+        "openPr": "GitHub에서 PR #{{number}} 열기",
         "refBlocked": "맡긴 프로젝트 밖의 경로라서 열지 않았습니다."
       },
       "openTask": "‘{{title}}’ 열기({{state}})",

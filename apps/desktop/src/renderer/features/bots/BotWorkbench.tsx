@@ -19,6 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { prStatusKey, sessionPrUrl } from '@cindy/maker-shared';
 import { useNavigate } from 'react-router-dom';
 import type { Routine, RoutineRun } from '@cindy/maker-scheduler';
 
@@ -29,6 +30,10 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { collectCachedGeneratedFiles } from '@/components/chat/generatedFilesProjection';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { usePrActions, usePrRefsForSession, usePrStatuses } from '@/contexts/PrRefsContext';
+import { useElementVisible } from '@/cindy-brain/ghostUnreadStore';
+import type { PrStatusKind } from '@/lib/gitContext.types';
+import { PR_STATUS_COLOR, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { useSessionAttentionKinds } from '@/lib/sessionAttentionStore';
@@ -46,6 +51,7 @@ import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import {
   BOT_WORKBENCH_MAX_DIRECTORIES,
   isCaseInsensitivePlatform,
+  parseWorkbenchTaskId,
   validateWorkbenchRef,
   type BotWorkbench as BotWorkbenchData,
   type WorkbenchTaskState,
@@ -946,6 +952,70 @@ function tileNote(tile: WorkbenchTile, group: WorkbenchGroupKey, t: Translate, l
   return null;
 }
 
+type TilePr = { number: number; kind: PrStatusKind | null; url: string };
+
+/**
+ * 条目关联的 PR 与状态:
+ * - Cindy 任务:任务里出现过的 PR 引用(取最近一条),状态与刷新复用 PrRefsContext——条目可见时
+ *   `registerPrConsumer`,跟侧栏 / 顶栏同一套周期与聚焦刷新,不另起轮询;
+ * - `pr:` 条目:可见时用同一个 `gitContext.getPrStatuses` 查一次(main 侧 60 秒缓存与去重);
+ *   拿不到(没有 gh 登录等)就只显示编号。
+ */
+function useTilePr(tile: WorkbenchTile, visible: boolean): TilePr | null {
+  const sessionId = tile.type === 'session' ? tile.id : '';
+  const { registerPrConsumer } = usePrActions();
+  const refs = usePrRefsForSession(sessionId);
+  const { statuses, successfulStatuses } = usePrStatuses(sessionId);
+  useEffect(() => {
+    if (!visible || !sessionId) return;
+    return registerPrConsumer(sessionId);
+  }, [visible, sessionId, registerPrConsumer]);
+
+  const github = tile.type === 'item' && tile.itemKind === 'pr' ? parseWorkbenchTaskId(tile.id) : null;
+  const itemRef = github?.kind === 'github' ? github : null;
+  const [itemKind, setItemKind] = useState<PrStatusKind | null>(null);
+  useEffect(() => {
+    if (!visible || !itemRef) return;
+    let alive = true;
+    void window.electronAPI?.gitContext
+      ?.getPrStatuses([{ owner: itemRef.owner, repo: itemRef.repo, prNumber: itemRef.number }])
+      .then((results) => {
+        const result = results?.[0];
+        if (alive && result?.ok) setItemKind(result.status);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // itemRef 由 tile.id 决定。
+  }, [visible, tile.id]);
+
+  if (itemRef) {
+    return { number: itemRef.number, kind: itemKind, url: sessionPrUrl({ owner: itemRef.owner, repo: itemRef.repo, prNumber: itemRef.number }) };
+  }
+  if (refs.length === 0) return null;
+  const latest = refs.reduce((best, ref) => (ref.lastSeenAt > best.lastSeenAt ? ref : best));
+  const key = prStatusKey(latest);
+  const result = statuses.get(key);
+  const confirmed = result?.ok ? result : successfulStatuses.get(key);
+  return { number: latest.prNumber, kind: confirmed?.ok ? confirmed.status : null, url: sessionPrUrl(latest) };
+}
+
+/** 小的 PR 状态标:图标 + 「#5292 · 已合并」,颜色与侧栏 / 顶栏同一套 PR_STATUS_*。 */
+function PrTag({ pr }: { pr: TilePr }) {
+  const { t } = useTranslation();
+  const Icon = pr.kind ? PR_STATUS_ICON[pr.kind] : GitPullRequest;
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 text-12 leading-5 text-[var(--text-tertiary)]">
+      <Icon size={12} aria-hidden style={{ color: pr.kind ? PR_STATUS_COLOR[pr.kind] : 'var(--text-tertiary)' }} />
+      <span className="tabular-nums">
+        #{pr.number}
+        {pr.kind ? ` · ${t(`ccAgent.gitContext.pr.status.${pr.kind}`)}` : ''}
+      </span>
+    </span>
+  );
+}
+
 function TaskRow({
   tile,
   group,
@@ -969,8 +1039,12 @@ function TaskRow({
   const waiting = group === 'waiting' ? waitingText(tile, t) : null;
   const note = tileNote(tile, group, t, language, now);
   const second = waiting ? (note ? `${waiting} · ${note}` : waiting) : note;
+  const { ref: observe, visible } = useElementVisible();
+  const pr = useTilePr(tile, visible);
   return (
-    <li className="group flex min-w-0 items-start rounded-xl bg-[var(--surface-elevated)] transition-colors hover:bg-[var(--surface-hover)]">
+    <li
+      ref={observe}
+      className="group flex min-w-0 items-start rounded-xl bg-[var(--surface-elevated)] transition-colors hover:bg-[var(--surface-hover)]">
       <button
         type="button"
         onClick={() => onOpen(tile)}
@@ -983,12 +1057,13 @@ function TaskRow({
         <span className="line-clamp-3 text-14 font-medium leading-5 text-[var(--text-primary)] [overflow-wrap:anywhere]">
           {title}
         </span>
-        {second ? (
+        {second || pr ? (
           <span className="mt-1.5 flex min-w-0 items-start gap-1.5 text-13 leading-5 text-[var(--text-secondary)]">
             {waiting ? (
               <span aria-hidden className="mt-[7px] size-1.5 shrink-0 rounded-full bg-[var(--card-status-awaiting)]" />
             ) : null}
-            <span className="line-clamp-2 min-w-0 [overflow-wrap:anywhere]">{second}</span>
+            {second ? <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]">{second}</span> : null}
+            {pr ? <PrTag pr={pr} /> : null}
           </span>
         ) : null}
       </button>
@@ -1291,7 +1366,9 @@ function TaskDetail({
   }, [tile]);
 
   // 参考只在点击时打开:https 交给系统浏览器,路径必须仍落在已接手的项目里。
-  const reference = tile.type === 'item' && tile.ref ? tile.ref : null;
+  // 详情打开期间同样登记为 PR 消费者(可见即刷新)。参考就是这个 PR 链接时不重复列。
+  const pr = useTilePr(tile, true);
+  const reference = tile.type === 'item' && tile.ref && tile.ref !== pr?.url ? tile.ref : null;
   const openReference = useCallback(() => {
     if (!reference) return;
     if (/^https:\/\//i.test(reference)) {
@@ -1365,8 +1442,21 @@ function TaskDetail({
             <p className="mt-1 text-13 leading-5 text-[var(--text-primary)]">{tile.next}</p>
           </section>
         ) : null}
+        {pr ? (
+          <button
+            type="button"
+            onClick={() => void window.electronAPI.openExternal?.(pr.url)}
+            aria-label={t('bots.workbench.detail.openPr', { number: pr.number })}
+            className="mb-3 flex w-full min-w-0 items-center gap-2 rounded-xl border border-[var(--border-default)] px-3.5 py-2.5 text-left outline-none transition-colors hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          >
+            <span className="min-w-0 flex-1">
+              <PrTag pr={pr} />
+            </span>
+            <SquareArrowOutUpRight size={13} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
+          </button>
+        ) : null}
         {tile.type === 'item' ? (
-          reference ? (
+          reference || pr ? (reference ? (
             <button
               type="button"
               onClick={openReference}
@@ -1382,7 +1472,7 @@ function TaskDetail({
                 <span className="block truncate text-13 leading-5 text-[var(--text-primary)]">{reference}</span>
               </span>
             </button>
-          ) : (
+          ) : null) : (
             <p className="text-12 leading-[18px] text-[var(--text-tertiary)]">{t('bots.workbench.detail.noRef')}</p>
           )
         ) : transcript.kind === 'loading' ? (

@@ -14,17 +14,25 @@ afterEach(async () => {
 
 async function project() {
   root = await mkdtemp(path.join(os.tmpdir(), 'wb-brief-'));
+  await mkdir(path.join(root, 'node_modules', 'pkg'), { recursive: true });
+  await writeFile(path.join(root, 'node_modules', 'pkg', 'index.js'), '');
   await mkdir(path.join(root, 'docs', 'deep'), { recursive: true });
   await writeFile(path.join(root, 'notes.md'), '');
   await writeFile(path.join(root, 'DESIGN.md'), '');
   await writeFile(path.join(root, 'README.md'), '');
   await writeFile(path.join(root, 'docs', 'guide.md'), '');
+  await mkdir(path.join(root, 'docs', 'product-rules'), { recursive: true });
+  await mkdir(path.join(root, 'docs', 'dev-rules', 'deep'), { recursive: true });
+  await writeFile(path.join(root, 'docs', 'product-rules', 'core.md'), '');
+  await writeFile(path.join(root, 'docs', 'dev-rules', 'deep', 'setup.md'), '');
+  await writeFile(path.join(root, 'docs', 'design-rules-DESIGN.md'), '');
   await mkdir(path.join(root, 'src'), { recursive: true });
   await writeFile(path.join(root, 'src', 'ignored.md'), '');
   return root;
 }
 
 function gitDeps(overrides: Partial<WorkbenchBriefDeps> = {}): WorkbenchBriefDeps {
+  // 「最近」以真实时间为准:临时文件的 mtime 就是现在。
   const outputs: Record<string, string> = {
     'rev-parse --is-inside-work-tree': 'true\n',
     'rev-parse --abbrev-ref HEAD': 'main\n',
@@ -46,7 +54,7 @@ function gitDeps(overrides: Partial<WorkbenchBriefDeps> = {}): WorkbenchBriefDep
       updatedAt: '2026-09-30T00:00:00Z',
       url: 'https://github.com/me/app/x',
     }]),
-    now: () => Date.parse('2026-10-01T00:00:00Z'),
+    now: () => Date.now(),
     ...overrides,
   };
 }
@@ -63,14 +71,18 @@ describe('parseGithubRemote', () => {
 describe('buildProjectBrief', () => {
   it('lists top-level and docs Markdown paths with key docs first, plus recent git and GitHub items', async () => {
     const dir = await project();
-    const deps = gitDeps();
+    const deps = gitDeps({ now: () => Date.parse('2026-10-01T00:00:00Z') });
     const brief = await buildProjectBrief(dir, deps);
     expect(brief.docs.map((file) => path.relative(dir, file))).toEqual([
       'DESIGN.md',
       'README.md',
+      path.join('docs', 'product-rules', 'core.md'),
+      path.join('docs', 'dev-rules', 'deep', 'setup.md'),
       'notes.md',
+      path.join('docs', 'design-rules-DESIGN.md'),
       path.join('docs', 'guide.md'),
     ]);
+    expect(brief.recent).toEqual([]);
     expect(brief.git).toMatchObject({
       branch: 'main',
       changes: 2,
@@ -95,9 +107,12 @@ describe('buildProjectBrief', () => {
       .toEqual({ unavailable: 'error' });
     const plain = await buildProjectBrief(dir, gitDeps({ git: vi.fn(async () => null) }));
     expect(plain).toMatchObject({ git: null, github: { unavailable: 'not-github' } });
-    expect(plain.docs.length).toBe(4);
+    expect(plain.docs.length).toBe(7);
+    // 不是 git 仓库:给最近 14 天改过的文件,跳过 node_modules 与隐藏目录。
+    expect(plain.recent.map((file) => path.relative(dir, file.path)).sort()).toContain(path.join('src', 'ignored.md'));
+    expect(plain.recent.length).toBeLessThanOrEqual(20);
     const missing = await buildProjectBrief(path.join(dir, 'nope'), gitDeps({ git: vi.fn(async () => null) }));
-    expect(missing).toEqual({ docs: [], git: null, github: { unavailable: 'not-github' } });
+    expect(missing).toEqual({ docs: [], recent: [], git: null, github: { unavailable: 'not-github' } });
   });
 });
 
