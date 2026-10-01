@@ -7176,7 +7176,9 @@
       "processKilled": "プロセスが強制終了されました (シグナル {{signal}})",
       "restart": "再起動",
       "shellNotFound": "シェルが見つかりません: {{detail}}",
-      "spawnFailed": "ターミナルを起動できません: {{detail}}"
+      "spawnFailed": "ターミナルを起動できません: {{detail}}",
+      "remoteUnavailableTitle": "リモートセッションでは利用できません",
+      "remoteUnavailableDescription": "ターミナルは現在、このデバイスでローカル実行されるセッションでのみ利用できます。"
     },
     "review": {
       "turn": {

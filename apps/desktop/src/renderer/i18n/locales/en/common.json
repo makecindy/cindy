@@ -7178,7 +7178,9 @@
       "processKilled": "Process killed (signal {{signal}})",
       "restart": "Restart",
       "shellNotFound": "Shell not found: {{detail}}",
-      "spawnFailed": "Failed to start terminal: {{detail}}"
+      "spawnFailed": "Failed to start terminal: {{detail}}",
+      "remoteUnavailableTitle": "Unavailable for remote sessions",
+      "remoteUnavailableDescription": "Terminal is currently available only for sessions running on this device."
     },
     "review": {
       "turn": {

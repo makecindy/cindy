@@ -7176,7 +7176,9 @@
       "processKilled": "进程已终止（信号 {{signal}}）",
       "restart": "重启",
       "shellNotFound": "未找到可用 shell：{{detail}}",
-      "spawnFailed": "无法启动终端：{{detail}}"
+      "spawnFailed": "无法启动终端：{{detail}}",
+      "remoteUnavailableTitle": "远程任务暂不可用",
+      "remoteUnavailableDescription": "终端目前仅适用于在此设备上运行的本机任务。"
     },
     "review": {
       "turn": {

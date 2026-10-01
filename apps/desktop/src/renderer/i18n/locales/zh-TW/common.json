@@ -7176,7 +7176,9 @@
       "processKilled": "處理程序已終止（訊號 {{signal}}）",
       "restart": "重啟",
       "shellNotFound": "未找到可用 shell：{{detail}}",
-      "spawnFailed": "無法啟動終端：{{detail}}"
+      "spawnFailed": "無法啟動終端：{{detail}}",
+      "remoteUnavailableTitle": "遠端任務暫不可用",
+      "remoteUnavailableDescription": "終端目前僅適用於在此裝置上執行的本機任務。"
     },
     "review": {
       "turn": {
