@@ -35,7 +35,9 @@ export interface WorkbenchSessionRoots {
   pi: string[];
 }
 
-function unique(p: path.PlatformPath, paths: Array<string | null | undefined>): string[] {
+type PathApi = typeof path.posix;
+
+function unique(p: PathApi, paths: Array<string | null | undefined>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of paths) {
