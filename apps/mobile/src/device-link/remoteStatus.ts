@@ -189,6 +189,3 @@ export function describeRemoteComposerBlockingError(error: string | null): strin
   return localizedStableRemoteError(error);
 }
 
-export function shouldLatchOutboxHoldForSyncError(error: string): boolean {
-  return isAutoRecoveringRemoteError(error) || describeRemoteComposerBlockingError(error) !== null;
-}

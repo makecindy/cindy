@@ -175,13 +175,16 @@ export function createDurableOutbox(storage: OutboxStorage, reconcileDraft?: (
           // One corrupt row must not fail the whole ledger. On Android that threw
           // during every session's draft hydration, and send() returns immediately
           // while composerDraftHydrated stays false. Leave the bytes in place.
-          let record: DurableOutboxRecord;
+          let record: unknown;
           try {
-            record = JSON.parse(raw) as DurableOutboxRecord;
+            record = JSON.parse(raw);
           } catch {
             continue;
           }
-          if (!isLoadableOutboxRecord(record, owner, key)) continue;
+          if (!isLoadableOutboxRecord(record, owner, key)) {
+            console.warn('[outbox] skipped unreadable ledger row', key);
+            continue;
+          }
           loaded.push(record);
         }
         assertOwner(owner, epoch);
@@ -218,23 +221,25 @@ export function createDurableOutbox(storage: OutboxStorage, reconcileDraft?: (
 }
 
 function isLoadableOutboxRecord(
-  record: DurableOutboxRecord,
+  record: unknown,
   owner: string,
   key: string,
-): boolean {
-  return record.version === 1
-    && record.accountId === owner
-    && !!record.deviceId
-    && !!record.item?.sessionId
-    && !!record.item.clientId
-    && keyFor(record) === key
-    && Array.isArray(record.uploads)
-    && (record.cleanupOutcome === undefined
-      || record.cleanupOutcome === 'accepted'
-      || record.cleanupOutcome === 'cancelled')
-    && ["queued", "sending", "confirming", "host-owned", "failed"].includes(record.state)
-    && Number.isFinite(record.createdAt)
-    && Array.isArray(record.item.attachmentSlots);
+): record is DurableOutboxRecord {
+  if (!record || typeof record !== 'object') return false;
+  const row = record as DurableOutboxRecord;
+  return row.version === 1
+    && row.accountId === owner
+    && !!row.deviceId
+    && !!row.item?.sessionId
+    && !!row.item.clientId
+    && keyFor(row) === key
+    && Array.isArray(row.uploads)
+    && (row.cleanupOutcome === undefined
+      || row.cleanupOutcome === 'accepted'
+      || row.cleanupOutcome === 'cancelled')
+    && ["queued", "sending", "confirming", "host-owned", "failed"].includes(row.state)
+    && Number.isFinite(row.createdAt)
+    && Array.isArray(row.item.attachmentSlots);
 }
 
 export type DurableOutboxStore = ReturnType<typeof createDurableOutbox>;

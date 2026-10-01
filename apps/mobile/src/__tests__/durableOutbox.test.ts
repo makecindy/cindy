@@ -310,6 +310,17 @@ describe("durable mobile outbox ownership", () => {
     expect(storage.data.get(key)).toBe('{broken');
     expect(store.getSnapshot().map((r) => r.item.clientId)).toEqual(['id-2']);
   });
+
+  it('skips a JSON null ledger row instead of failing activation', async () => {
+    const storage = disk();
+    const key = 'cindy.mobile.outbox.v1.alice/mac-a/session-a/id-1';
+    storage.data.set(key, 'null');
+    const store = createDurableOutbox(storage);
+    await store.activate('alice');
+    await store.add(message('id-2'));
+    expect(storage.data.get(key)).toBe('null');
+    expect(store.getSnapshot().map((r) => r.item.clientId)).toEqual(['id-2']);
+  });
   it('does not let an old activation failure invalidate the new account loading', async () => {
     const storage = disk();
     const pending = deferred<readonly string[]>();
