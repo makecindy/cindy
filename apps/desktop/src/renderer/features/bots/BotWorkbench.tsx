@@ -342,19 +342,10 @@ export function BotWorkbench({ botId, sessionId }: { botId: string; sessionId: s
     ],
   );
 
-  // 伙伴正在读这些项目:还有候选没写判断,且伙伴主任务正在跑。
+  // 伙伴正在读这些项目:还有本机外部会话没写判断,且伙伴主任务正在跑。
   const unjudged = useMemo(
-    () =>
-      countUnjudgedCandidates({
-        sessions,
-        hiddenIds,
-        projectDirs,
-        caseInsensitive,
-        candidates,
-        judgments,
-        delegationChildIds: new Set(delegations.flatMap((item) => (item.childSessionId ? [item.childSessionId] : []))),
-      }),
-    [sessions, hiddenIds, projectDirs, caseInsensitive, candidates, judgments, delegations],
+    () => countUnjudgedCandidates({ projectDirs, caseInsensitive, candidates, judgments }),
+    [projectDirs, caseInsensitive, candidates, judgments],
   );
   const understanding = unjudged > 0 && activityMap.get(sessionId)?.phase === 'running';
   // 打开详情时记下那一格;之后格子状态变了(甚至因为做完而不再上工作台)详情仍留在原处。

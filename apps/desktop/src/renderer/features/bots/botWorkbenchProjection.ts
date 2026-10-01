@@ -336,25 +336,17 @@ export function workbenchTileRank(tile: Pick<WorkbenchTile, 'state' | 'type'> & 
 }
 
 /**
- * 项目里还没被伙伴判断过的候选数(Cindy 任务 + 还没接过来的本机会话)。
- * 汇总行据此显示「正在了解…」。
+ * 项目里还没被伙伴判断过的本机外部会话数(还没接过来的 Claude Code / Codex / Pi)。
+ * 汇总行据此显示「正在了解…」。Cindy 自己的任务不计:它们本来就在工作台上,
+ * 主人新开一件任务不等于伙伴"还在读"。
  */
 export function countUnjudgedCandidates(input: {
-  sessions: readonly Session[];
-  hiddenIds: ReadonlySet<string>;
   projectDirs: readonly string[];
   caseInsensitive: boolean;
   candidates: readonly ExternalSessionCandidate[];
   judgments: Readonly<Record<string, WorkbenchTaskJudgment>>;
-  delegationChildIds?: ReadonlySet<string>;
 }): number {
   let unjudged = 0;
-  for (const session of input.sessions) {
-    if (input.delegationChildIds?.has(session.id)) continue;
-    if (!isWorkbenchCandidateSession(session, input.hiddenIds)) continue;
-    if (!findWorkbenchProject(session.workingDir, input.projectDirs, input.caseInsensitive)) continue;
-    if (!input.judgments[session.id]) unjudged += 1;
-  }
   for (const candidate of input.candidates) {
     if (candidate.archived || !candidate.projectDir) continue;
     if (!findWorkbenchProject(candidate.projectDir, input.projectDirs, input.caseInsensitive)) continue;
@@ -610,7 +602,7 @@ export const WORKBENCH_DONE_MAX = 30;
 export function groupWorkbenchTiles(tiles: readonly WorkbenchTile[]): WorkbenchTileGroup[] {
   const buckets = new Map<WorkbenchGroupKey, WorkbenchTile[]>(WORKBENCH_GROUP_ORDER.map((key) => [key, []]));
   for (const tile of tiles) buckets.get(workbenchTileGroup(tile))!.push(tile);
-  return WORKBENCH_GROUP_ORDER.flatMap((key) => {
+  return WORKBENCH_GROUP_ORDER.flatMap((key): WorkbenchTileGroup[] => {
     const grouped = buckets.get(key)!;
     if (grouped.length === 0) return [];
     if (key !== 'done') return [{ key, tiles: grouped, total: grouped.length, hiddenCount: 0, defaultCollapsed: false }];

@@ -246,11 +246,9 @@ describe('buildWorkbenchTiles', () => {
     expect(tiles.map((tile) => tile.id)).toEqual(['kept']);
   });
 
-  it('counts candidates the Bot has not judged yet', () => {
+  it('counts only external candidates the Bot has not judged yet, never Cindy tasks', () => {
     expect(
       countUnjudgedCandidates({
-        sessions: [session('a'), session('b'), session('bg'), session('elsewhere', { workingDir: CINDY })],
-        hiddenIds: new Set(),
         projectDirs: [ART],
         caseInsensitive: false,
         candidates: [
@@ -262,9 +260,8 @@ describe('buildWorkbenchTiles', () => {
           a: { title: 'a', verdict: 'done', next: null, project: ART, updatedAt: 'x' },
           'claude:x': { title: 'x', verdict: 'idea', next: 'n', project: ART, updatedAt: 'x' },
         },
-        delegationChildIds: new Set(['bg']),
       }),
-    ).toBe(2);
+    ).toBe(1);
   });
 
   it('includes project automations and the Bot own routines, disabled ones as stopped', () => {
