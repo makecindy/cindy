@@ -3677,6 +3677,8 @@ ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
 export default async function cindyBridge(pi: any) {
   installTextOnlyTurnPolicy(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi);
+  const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined
+    : JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'settings.json'), 'utf8'));
   pi.registerCommand('cindy-native-provider-refresh', {
     description: 'Cindy internal native provider refresh',
     handler: async (args: string, ctx: any) => {
@@ -3684,14 +3686,24 @@ export default async function cindyBridge(pi: any) {
       if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) return;
       let code: 'INVALID_PAYLOAD' | 'APPLY_FAILED' | undefined;
       let mutationStarted = false;
+      let runtimeSettings;
       try {
         const raw = await ctx.ui.input('cindy:provider-refresh', JSON.stringify({ nonce }));
-        const snapshot = parseCindyProviderRefreshSnapshot(raw, nonce);
-        if (!snapshot) {
+        let inspect = false;
+        try { const request = JSON.parse(raw); inspect = request?.nonce === nonce && request?.operation === 'inspect'; }
+        catch { /* The normal snapshot parser rejects invalid JSON. */ }
+        const snapshot = inspect ? undefined : parseCindyProviderRefreshSnapshot(raw, nonce);
+        if (!inspect && !snapshot) {
           code = 'INVALID_PAYLOAD';
-        } else {
+        } else if (snapshot) {
           mutationStarted = true;
           await nativeProviderAdapters.refresh(snapshot, ctx, SECRET_ENV_NAMES);
+        }
+        if (!code) {
+          // getSettings returns a copy. Never reach into Pi's private session or
+          // pretend a settings.json rewrite changed the live SettingsManager.
+          const settings = typeof pi.getSettings === 'function' ? pi.getSettings() : initialNativeSettings;
+          runtimeSettings = { version: piCodingAgent.VERSION, compaction: settings.compaction ?? {} };
         }
       } catch {
         code = mutationStarted ? 'APPLY_FAILED' : 'INVALID_PAYLOAD';
@@ -3700,7 +3712,7 @@ export default async function cindyBridge(pi: any) {
       // explicit, nonce-bound receipt before accepting a refreshed catalog.
       try {
         await ctx.ui.input('cindy:provider-refresh-ack', JSON.stringify(
-          code ? { nonce, ok: false, code } : { nonce, ok: true },
+          code ? { nonce, ok: false, code } : { nonce, ok: true, runtimeSettings },
         ));
       } catch { /* A missing receipt forces the host to retire this process. */ }
     },
