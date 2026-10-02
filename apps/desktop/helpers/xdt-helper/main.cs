@@ -16,8 +16,7 @@ class Program
         if (args.Length < 1) return;
         Process.Start(new ProcessStartInfo
         {
-            FileName = "cmd.exe",
-            Arguments = "/c \"" + args[0] + "\"",
+            FileName = args[0],
             CreateNoWindow = true,
             UseShellExecute = false,
             WindowStyle = ProcessWindowStyle.Hidden,

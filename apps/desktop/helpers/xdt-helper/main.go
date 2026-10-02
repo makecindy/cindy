@@ -21,7 +21,7 @@ func main() {
 	if len(os.Args) < 2 {
 		os.Exit(1)
 	}
-	cmd := exec.Command("cmd.exe", "/c", os.Args[1])
+	cmd := exec.Command(os.Args[1])
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
 	}
