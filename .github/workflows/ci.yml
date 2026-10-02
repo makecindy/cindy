@@ -57,6 +57,11 @@ jobs:
       - name: Run test runner self-tests
         run: pnpm test:runner
 
+      # Source-contract guards are intentionally outside the unit workspace tier.
+      # Run them once here so stale architecture/security assertions block verify.
+      - name: Run guard tests
+        run: pnpm test:guard
+
       # No private service checkout or secrets: exercise production clients over real
       # loopback WebSockets with bounded fault injection. Failure blocks verify.
       - name: Run Device Link connection integration tests
