@@ -1886,9 +1886,10 @@ describe('Bot canonical Session lifecycle', () => {
   });
 
   it.each([
-    { versioned: false, selected: true, mode: 'allowlist', expectedMcp: ['docs'], expectedTools: ['browser'] },
+    { versioned: false, selected: true, mode: 'inherit', expectedMcp: ['docs', 'mail'], expectedTools: ['browser', 'contacts'] },
     { versioned: false, selected: false, mode: 'inherit', expectedMcp: ['docs', 'mail'], expectedTools: ['browser', 'contacts'] },
     { versioned: true, selected: false, mode: 'allowlist', expectedMcp: [], expectedTools: [] },
+    { versioned: true, selected: true, mode: 'allowlist', expectedMcp: ['docs'], expectedTools: ['browser'] },
   ])('keeps stored capability selections consistent in settings and runtime: %j', async (entry) => {
     const row = h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1')
       .get('bot-1') as { capabilities_json: string };

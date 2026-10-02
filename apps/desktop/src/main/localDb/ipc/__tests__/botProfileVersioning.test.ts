@@ -134,21 +134,23 @@ describe('independent task model configuration', () => {
 
 
 describe('shared tools migration', () => {
-  it.each(['ask', 'auto', 'trusted'])('opens only empty legacy lists without changing %s permissions', (permissions) => {
+  it.each(['ask', 'auto', 'trusted'])('opens legacy lists without changing %s permissions', (permissions) => {
     const previous = { permissions, toolsetMode: 'allowlist', toolsets: [], mcpMode: 'allowlist', mcpServers: ['imported'], memory: false };
     const next = mergeBotProfileCapabilities({ previous, hasSkills: false });
-    expect(next).toMatchObject({ toolCapabilityVersion: 1, toolsetMode: 'inherit', mcpMode: 'allowlist', permissions, memory: false, mcpServers: ['imported'] });
+    expect(next).toMatchObject({ toolCapabilityVersion: 1, toolsetMode: 'inherit', mcpMode: 'inherit', permissions, memory: false, mcpServers: ['imported'] });
     expect(mergeBotProfileCapabilities({ previous: next, hasSkills: false })).toEqual(next);
   });
 
   it.each([
-    [{ toolsetMode: 'allowlist', toolsets: ['browser'], mcpMode: 'allowlist', mcpServers: [] }, 'allowlist', 'inherit'],
-    [{ toolsetMode: 'allowlist', toolsets: ['docs'], mcpMode: 'allowlist', mcpServers: ['private'] }, 'allowlist', 'allowlist'],
-    [{ toolsets: ['docs'], mcpServers: ['private'] }, 'allowlist', 'allowlist'],
+    [{ toolsetMode: 'allowlist', toolsets: ['browser'], mcpMode: 'allowlist', mcpServers: [] }, 'inherit', 'inherit'],
+    [{ toolsetMode: 'allowlist', toolsets: ['docs'], mcpMode: 'allowlist', mcpServers: ['private'] }, 'inherit', 'inherit'],
+    [{ toolsets: ['docs'], mcpServers: ['private'] }, 'inherit', 'inherit'],
     [{ toolsetMode: 'inherit', toolsets: ['docs'], mcpMode: 'inherit', mcpServers: ['private'] }, 'inherit', 'inherit'],
     [{ tools: ['files', 'browser', 'mcp'] }, 'inherit', 'inherit'],
+    [{ mcpMode: 'allowlist', mcpServers: ['companion_connections'] }, 'inherit', 'inherit'],
     [{ toolCapabilityVersion: 1, toolsetMode: 'allowlist', toolsets: [], mcpMode: 'allowlist', mcpServers: [] }, 'allowlist', 'allowlist'],
-  ] as const)('preserves stored choices independently: %j', (previous, toolsetMode, mcpMode) => {
+    [{ toolCapabilityVersion: 1, toolsetMode: 'allowlist', toolsets: ['docs'], mcpMode: 'allowlist', mcpServers: ['private'] }, 'allowlist', 'allowlist'],
+  ] as const)('migrates legacy lists and preserves versioned choices: %j', (previous, toolsetMode, mcpMode) => {
     const next = mergeBotProfileCapabilities({ previous, hasSkills: false });
     expect(next).toEqual({ ...previous, toolCapabilityVersion: 1, toolsetMode, mcpMode });
     expect(mergeBotProfileCapabilities({ previous: next, hasSkills: false })).toEqual(next);
