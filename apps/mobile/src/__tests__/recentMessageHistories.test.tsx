@@ -162,6 +162,7 @@ describe('resident five-task message lists outside route lifetimes', () => {
     const nodes = container.querySelectorAll('button');
     expect(nodes[0]?.dataset.task).toBe('a');
     expect(nodes[1]?.dataset.drawer).toBe('true');
+    expect(nodes[1]?.closest('[data-layout]')?.getAttribute('data-layout')).toContain('"zIndex":40');
     await show(null);
     expect(container.querySelector('[data-drawer]')).toBeNull();
     expect(container.querySelector('[data-task="a"]')).not.toBeNull();
