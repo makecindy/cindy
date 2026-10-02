@@ -16,8 +16,10 @@ const knobs = vi.hoisted(() => ({
   compactHold: null as null | Promise<void>,
   rpcCalls: [] as Array<Record<string, unknown>>,
   switchSessionSuccess: true,
-  reserveSuccess: true,
-  reserveUnknown: false,
+  bridgeAckSuccess: true,
+  runtimeVersion: '1.0.0',
+  nativeSettings: null as null | { compaction?: Record<string, unknown> },
+  configHome: '',
   autoCompactionSuccess: true,
   runtimeProvider: "cindy",
   runtimeModel: "m",
@@ -35,9 +37,12 @@ const knobs = vi.hoisted(() => ({
 vi.mock("../transport.js", () => ({
   createPiStdioTransport: (opts: {
     args?: string[];
+    env?: Record<string, string>;
     onProcessSpawned?: (pid: number) => void | (() => void);
   }) => {
     knobs.spawnArgs = opts.args ?? [];
+    knobs.configHome = opts.env?.PI_CODING_AGENT_DIR ?? '';
+    knobs.nativeSettings = JSON.parse(readFileSync(path.join(knobs.configHome, 'settings.json'), 'utf8'));
     opts.onProcessSpawned?.(1234);
     return {
       writeLine: async () => {},
@@ -66,6 +71,25 @@ vi.mock("../rpc-client.js", () => ({
       error?: string;
     }> {
       knobs.rpcCalls.push(cmd);
+      if (cmd.type === 'get_commands') return { success: true, data: { commands: [
+        { name: 'cindy-native-provider-refresh', source: 'extension' },
+      ] } };
+      if (cmd.type === 'prompt' && typeof cmd.message === 'string' && cmd.message.startsWith('/cindy-native-provider-refresh ')) {
+        const nonce = cmd.message.split(' ')[1];
+        knobs.onEvent?.({ type: 'extension_ui_request', method: 'input',
+          title: 'cindy:provider-refresh-ack', id: 'refresh-ack', placeholder: JSON.stringify({
+            nonce, ok: knobs.bridgeAckSuccess, code: knobs.bridgeAckSuccess ? undefined : 'APPLY_FAILED',
+            runtimeSettings: { version: knobs.runtimeVersion, compaction: knobs.nativeSettings?.compaction ?? {} },
+          }) });
+        return { success: true, data: {} };
+      }
+      if (cmd.type === 'get_available_models') {
+        const config = JSON.parse(readFileSync(path.join(knobs.configHome, 'models.json'), 'utf8')) as {
+          providers: Record<string, { models?: Array<{ id: string }> }>;
+        };
+        return { success: true, data: { models: Object.entries(config.providers).flatMap(
+          ([provider, spec]) => (spec.models ?? []).map(model => ({ provider, id: model.id }))) } };
+      }
       if (cmd.type === "get_session_stats" && knobs.contextTokens !== null) {
         return { success: true, data: { contextUsage: {
           tokens: knobs.contextTokens, contextWindow: knobs.runtimeContextWindow,
@@ -95,10 +119,7 @@ vi.mock("../rpc-client.js", () => ({
           : { success: false, error: "runtime rejected" };
       }
       if (cmd.type === "set_compaction_reserve_tokens") {
-        if (knobs.reserveUnknown) return { success: false, error: "Unknown command: set_compaction_reserve_tokens" };
-        return knobs.reserveSuccess
-          ? { success: true, data: { reserveTokens: cmd.reserveTokens ?? 16_384 } }
-          : { success: false, error: "reserve rejected" };
+        return { success: false, error: "Unknown command: set_compaction_reserve_tokens" };
       }
       if (cmd.type === "set_model") {
         knobs.runtimeProvider = String(cmd.provider);
@@ -188,8 +209,9 @@ describe("PiAgent native auto-compaction ownership", () => {
     knobs.compactHold = null;
     knobs.rpcCalls = [];
     knobs.switchSessionSuccess = true;
-    knobs.reserveSuccess = true;
-    knobs.reserveUnknown = false;
+    knobs.bridgeAckSuccess = true;
+    knobs.runtimeVersion = '1.0.0';
+    knobs.nativeSettings = null;
     knobs.autoCompactionSuccess = true;
     knobs.runtimeProvider = "cindy";
     knobs.runtimeModel = "m";
@@ -232,7 +254,7 @@ describe("PiAgent native auto-compaction ownership", () => {
     } finally { await handle.close(); }
   });
 
-  it('clears a startup narrow budget with the effective native default reserve', async () => {
+  it('requests a fresh native runtime to clear a startup narrow budget', async () => {
     let budget: number | null = 1_000;
     const deps = buildDeps();
     deps.runtimeConfig = { ...deps.runtimeConfig, piAutoCompactThresholdPct: undefined };
@@ -242,15 +264,14 @@ describe("PiAgent native auto-compaction ownership", () => {
     });
     budget = null;
     knobs.rpcCalls = [];
-    await handle.setModel!('m', { providerId: 'xd' });
-    expect(knobs.rpcCalls).toContainEqual({
-      type: 'set_compaction_reserve_tokens', reserveTokens: 16_384,
-    });
-    expect(readLatestPiSettings().compaction).toBeUndefined();
+    expect(await handle.previewModelSwitch?.('m', { providerId: 'xd' })).toMatchObject({ action: 'rebuild' });
+    await expect(handle.setModel!('m', { providerId: 'xd' })).rejects.toThrow(/load the changed native compaction/);
+    expect(knobs.rpcCalls.some(call => call.type === 'set_model')).toBe(false);
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(199_100);
     await handle.close();
   });
 
-  it('applies a new narrow budget when the previous route had no budget', async () => {
+  it('requires native settings reload for a new narrow budget without partially changing the route', async () => {
     let budget: number | null = null;
     const deps = buildDeps();
     deps.runtimeConfig = { ...deps.runtimeConfig, piAutoCompactThresholdPct: undefined };
@@ -258,15 +279,13 @@ describe("PiAgent native auto-compaction ownership", () => {
     const handle = await new PiAgent(deps).startSession({
       sessionId: 'add-budget', workingDir: cwd, model: 'm', providerId: 'xd',
     });
-    expect(readLatestPiSettings().compaction).toBeUndefined();
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBeUndefined();
     budget = 1_000;
     knobs.rpcCalls = [];
-    await handle.setModel!('m', { providerId: 'xd' });
-    expect(knobs.rpcCalls).toContainEqual({
-      type: 'set_compaction_reserve_tokens', reserveTokens: 199_100,
-    });
-    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(199_100);
-    expect(handle.getUsageSnapshot().contextWindow).toBe(1_000);
+    expect(await handle.previewModelSwitch?.('m', { providerId: 'xd' })).toMatchObject({ action: 'rebuild' });
+    await expect(handle.setModel!('m', { providerId: 'xd' })).rejects.toThrow(/load the changed native compaction/);
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBeUndefined();
+    expect(handle.getUsageSnapshot().contextWindow).toBe(200_000);
     await handle.close();
   });
 
@@ -666,14 +685,17 @@ describe("PiAgent native auto-compaction ownership", () => {
     expect(setModelIndexes).toHaveLength(1);
     expect(switchIndex).toBe(-1);
     expect(verifyIndex).toBeGreaterThan(setModelIndexes[0]!);
-    expect(knobs.rpcCalls.some((call) => call.type === "set_compaction_reserve_tokens")).toBe(true);
+    expect(knobs.rpcCalls.some((call) => call.type === "set_compaction_reserve_tokens")).toBe(false);
+    expect(knobs.nativeSettings?.compaction?.modelOverrides).toMatchObject({
+      'cindy/m': { reserveTokens: 50_000 }, 'cindy/n': { reserveTokens: 25_000 },
+    });
     expect(knobs.runtimeProvider).toBe("cindy");
     expect(knobs.runtimeModel).toBe("n");
     expect(handle.getUsageSnapshot().contextWindow).toBe(100_000);
     await handle.close();
   });
 
-  it("recomputes reserve tokens from the final verified runtime window", async () => {
+  it("rejects an unexpected runtime window rather than claiming an unapplied reserve", async () => {
     const deps = buildDeps();
     deps.runtimeConfig = {
       ...deps.runtimeConfig,
@@ -690,13 +712,12 @@ describe("PiAgent native auto-compaction ownership", () => {
     knobs.targetRuntimeContextWindow = 1_000_000;
     knobs.setModelReportsContextWindow = false;
     knobs.rpcCalls = [];
-    await handle.setModel!("n");
-
-    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(100_000);
+    await expect(handle.setModel!("n")).rejects.toThrow(/PI_CATALOG_RELOAD_UNCONFIRMED/);
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(20_000);
     expect(knobs.rpcCalls.filter((call) => call.type === "switch_session")).toHaveLength(0);
     expect(knobs.rpcCalls.filter((call) => call.type === "set_model")).toHaveLength(1);
     expect(knobs.rpcCalls.filter((call) => call.type === "get_state")).toHaveLength(1);
-    expect(handle.getUsageSnapshot().contextWindow).toBe(1_000_000);
+    expect(knobs.closeCalls).toBe(1);
     await handle.close();
   });
 
@@ -721,25 +742,24 @@ describe("PiAgent native auto-compaction ownership", () => {
 
     knobs.setModelReportsContextWindow = false;
     knobs.rpcCalls = [];
-    await handle.setModel!("n");
-
-    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(10_000);
+    await expect(handle.setModel!("n")).rejects.toThrow(/PI_CATALOG_RELOAD_UNCONFIRMED/);
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(20_000);
     expect(knobs.rpcCalls.filter((call) => call.type === "switch_session")).toHaveLength(0);
     expect(knobs.rpcCalls.filter((call) => call.type === "set_model")).toHaveLength(1);
     expect(knobs.rpcCalls.filter((call) => call.type === "get_state")).toHaveLength(1);
-    expect(handle.getUsageSnapshot().contextWindow).toBe(100_000);
+    expect(knobs.closeCalls).toBe(1);
     await handle.close();
   });
 
-  it("uses the confirmed runtime window for native reserve", async () => {
+  it("does not fake a live native reserve change after a window mismatch", async () => {
     const handle = await start();
     knobs.targetRuntimeContextWindow = 1_000_000;
     knobs.setModelReportsContextWindow = false;
     knobs.verifiedContextWindows = [1_000_000];
 
-    await handle.setModel!("n");
-    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(250_000);
-    expect(knobs.closeCalls).toBe(0);
+    await expect(handle.setModel!("n")).rejects.toThrow(/PI_CATALOG_RELOAD_UNCONFIRMED/);
+    expect(readLatestPiSettings().compaction?.reserveTokens).toBe(50_000);
+    expect(knobs.closeCalls).toBe(1);
     await handle.close();
   });
 
@@ -836,7 +856,7 @@ describe("PiAgent native auto-compaction ownership", () => {
         renameSync(a, `${a}-moved`);
         symlinkSync(b, a, process.platform === "win32" ? "junction" : "dir");
       }
-      knobs.targetRuntimeContextWindow = 1_000_000;
+      knobs.targetRuntimeContextWindow = 100_000;
       knobs.setModelReportsContextWindow = false;
       knobs.rpcCalls = [];
       await handle.setModel!("n");
@@ -851,16 +871,16 @@ describe("PiAgent native auto-compaction ownership", () => {
     } finally { await handle.close(); }
   });
 
-  it("rejects before switching when the native reserve setter fails", async () => {
+  it("rejects before switching when the native settings inspection fails", async () => {
     const handle = await start();
-    knobs.reserveSuccess = false;
-    await expect(handle.setModel!("n")).rejects.toThrow(/did not confirm the current compaction reserve/);
+    knobs.bridgeAckSuccess = false;
+    await expect(handle.setModel!("n")).rejects.toThrow(/could not read the live Pi compaction settings/);
     expect(knobs.rpcCalls.filter((call) => call.type === "set_model")).toHaveLength(0);
     expect(knobs.closeCalls).toBe(0);
     await handle.close();
   });
 
-  it("keeps the old Pi route untouched when a catalog refresh also needs an unsupported reserve setter", async () => {
+  it("keeps an older official Pi route untouched when a new reserve requires reloading settings", async () => {
     let addNative = false;
     const deps = buildDeps();
     deps.resolvePiNativeProviders = async () => ({
@@ -872,10 +892,11 @@ describe("PiAgent native auto-compaction ownership", () => {
       sessionId: "old-pi-no-partial-refresh", workingDir: cwd, model: "m", providerId: "xd",
     });
     addNative = true;
-    knobs.reserveUnknown = true;
+    knobs.runtimeVersion = '0.85.1';
     knobs.rpcCalls = [];
-    await expect(handle.setModel!("n", { providerId: "xd" })).rejects.toThrow(/does not support live compaction/);
-    expect(knobs.rpcCalls.map((call) => call.type)).toEqual(["set_compaction_reserve_tokens"]);
+    expect(await handle.previewModelSwitch?.('n', { providerId: 'xd' })).toMatchObject({ action: 'rebuild' });
+    await expect(handle.setModel!("n", { providerId: "xd" })).rejects.toThrow(/load the changed native compaction/);
+    expect(knobs.rpcCalls.some(call => call.type === 'set_model' || call.type === 'refresh_models' || call.type === 'set_compaction_reserve_tokens')).toBe(false);
     expect(knobs.closeCalls).toBe(0);
     expect(handle.model).toBe("m");
     await handle.close();
