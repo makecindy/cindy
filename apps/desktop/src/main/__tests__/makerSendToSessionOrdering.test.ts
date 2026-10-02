@@ -207,6 +207,11 @@ describe('sendToSession ordering', () => {
       'sendWorkerReadyPlaceholder: async',
       '    rollbackCreatedWorker:',
     );
+    const workerReadySendBlock = extractBetween(
+      workerReadyPlaceholderBlock,
+      'const sendResult = await workerSession.send(',
+      '\n      );',
+    );
     const sendToSessionBlock = extractSendToSessionSource();
     const queuedCreateOptsBlock = extractBetween(
       source,
@@ -217,10 +222,11 @@ describe('sendToSession ordering', () => {
     expect(createWorkerReadyBlock).toContain(
       "session.send({ type: 'user', content: ORCA_WORKER_READY_MESSAGE }, { planMode: false })",
     );
-    expect(workerReadyPlaceholderBlock).toContain('planMode: false,');
-    expect(workerReadyPlaceholderBlock).toContain('throwOnStartFailure: true,');
-    expect(workerReadyPlaceholderBlock).toContain('onAccepted: async () => {');
-    expect(workerReadyPlaceholderBlock).toContain('await assertCurrent?.();');
+    expect(workerReadySendBlock).toContain("{ type: 'user', content: ORCA_WORKER_READY_MESSAGE },");
+    expect(workerReadySendBlock).toContain('planMode: false,');
+    expect(workerReadySendBlock).toContain('throwOnStartFailure: true,');
+    expect(workerReadySendBlock).toContain('onAccepted: async () => {');
+    expect(workerReadySendBlock).toContain('await assertCurrent?.();');
     expect(sendToSessionBlock).toContain('planMode: false,');
     expect(queuedCreateOptsBlock).toContain('inheritTargetPlanMode = false,');
     expect(queuedCreateOptsBlock).toContain('planMode: inheritTargetPlanMode ? !!row.planModeEnabled : false,');
