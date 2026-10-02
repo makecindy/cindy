@@ -15,7 +15,9 @@ export function createTaskToolCallAuthorizer(deps: {
     const [task] = await db.drizzle.select({ status: sessions.status }).from(sessions)
       .where(eq(sessions.id, sessionId)).limit(1);
     if (!deps.isScopeCurrent(db)) return { ok: false, errorCode: 'OWNER_SCOPE_CHANGED', message: '账号正在切换，请重试。' };
-    if (!task || task.status !== 'active') return { ok: false, errorCode: 'TASK_NOT_ACTIVE', message: '调用任务已结束或不存在。' };
+    // Archive changes list visibility; an already-running turn may still finish.
+    if (!task || (task.status !== 'active' && task.status !== 'archived'))
+      return { ok: false, errorCode: 'TASK_UNAVAILABLE', message: '调用任务已删除或不存在。' };
     return { ok: true };
   };
 }

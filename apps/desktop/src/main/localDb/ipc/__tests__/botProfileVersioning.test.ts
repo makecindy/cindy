@@ -134,10 +134,23 @@ describe('independent task model configuration', () => {
 
 
 describe('shared tools migration', () => {
-  it.each(['ask', 'auto', 'trusted'])('opens legacy mount lists without changing %s permissions', (permissions) => {
+  it.each(['ask', 'auto', 'trusted'])('opens only empty legacy lists without changing %s permissions', (permissions) => {
     const previous = { permissions, toolsetMode: 'allowlist', toolsets: [], mcpMode: 'allowlist', mcpServers: ['imported'], memory: false };
     const next = mergeBotProfileCapabilities({ previous, hasSkills: false });
-    expect(next).toMatchObject({ toolCapabilityVersion: 1, toolsetMode: 'inherit', mcpMode: 'inherit', permissions, memory: false, mcpServers: ['imported'] });
+    expect(next).toMatchObject({ toolCapabilityVersion: 1, toolsetMode: 'inherit', mcpMode: 'allowlist', permissions, memory: false, mcpServers: ['imported'] });
+    expect(mergeBotProfileCapabilities({ previous: next, hasSkills: false })).toEqual(next);
+  });
+
+  it.each([
+    [{ toolsetMode: 'allowlist', toolsets: ['browser'], mcpMode: 'allowlist', mcpServers: [] }, 'allowlist', 'inherit'],
+    [{ toolsetMode: 'allowlist', toolsets: ['docs'], mcpMode: 'allowlist', mcpServers: ['private'] }, 'allowlist', 'allowlist'],
+    [{ toolsets: ['docs'], mcpServers: ['private'] }, 'allowlist', 'allowlist'],
+    [{ toolsetMode: 'inherit', toolsets: ['docs'], mcpMode: 'inherit', mcpServers: ['private'] }, 'inherit', 'inherit'],
+    [{ tools: ['files', 'browser', 'mcp'] }, 'inherit', 'inherit'],
+    [{ toolCapabilityVersion: 1, toolsetMode: 'allowlist', toolsets: [], mcpMode: 'allowlist', mcpServers: [] }, 'allowlist', 'allowlist'],
+  ] as const)('preserves stored choices independently: %j', (previous, toolsetMode, mcpMode) => {
+    const next = mergeBotProfileCapabilities({ previous, hasSkills: false });
+    expect(next).toEqual({ ...previous, toolCapabilityVersion: 1, toolsetMode, mcpMode });
     expect(mergeBotProfileCapabilities({ previous: next, hasSkills: false })).toEqual(next);
   });
 

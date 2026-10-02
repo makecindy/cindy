@@ -10,7 +10,7 @@ describe('shared task tool admission', () => {
   let current: boolean;
   beforeEach(() => {
     sqlite = new Database(':memory:');
-    sqlite.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT, source TEXT); INSERT INTO sessions VALUES ('companion','active','bot'),('ordinary','active','desktop'),('old','archived','bot');");
+    sqlite.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT, source TEXT); INSERT INTO sessions VALUES ('companion','active','bot'),('ordinary','active','desktop'),('automation','active','scheduler'),('hook','active','hook');");
     db = { drizzle: drizzle(sqlite) } as unknown as Pick<DbClient, 'drizzle'>;
     current = true;
   });
@@ -24,9 +24,19 @@ describe('shared task tool admission', () => {
     for (const sessionId of ['ordinary', 'companion']) for (const [server, tool] of commands)
       expect(await authorize({ sessionId, server, tool, args: {} })).toEqual({ ok: true });
   });
-  it('retains missing/ended caller and account-change checks', async () => {
+  it.each(['companion', 'ordinary', 'automation', 'hook'])('allows the next tool call after archiving %s, but rejects deletion', async (sessionId) => {
     const authorize = createTaskToolCallAuthorizer({ getDb: () => db, isScopeCurrent: () => current });
-    for (const sessionId of [undefined, 'missing', 'old'])
+    for (const status of ['active', 'archived', 'deleted']) {
+      sqlite.prepare('UPDATE sessions SET status = ? WHERE id = ?').run(status, sessionId);
+      for (const [server, tool] of commands) {
+        expect(await authorize({ sessionId, server, tool, args: {} })).toMatchObject(status === 'deleted'
+          ? { ok: false, errorCode: 'TASK_UNAVAILABLE' } : { ok: true });
+      }
+    }
+  });
+  it('retains missing caller and account-change checks', async () => {
+    const authorize = createTaskToolCallAuthorizer({ getDb: () => db, isScopeCurrent: () => current });
+    for (const sessionId of [undefined, 'missing'])
       expect((await authorize({ sessionId, server: 'cindy_helper', tool: 'list_sessions', args: {} })).ok).toBe(false);
     current = false;
     expect(await authorize({ sessionId: 'companion', server: 'cindy_helper', tool: 'list_sessions', args: {} }))

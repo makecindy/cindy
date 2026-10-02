@@ -1885,6 +1885,41 @@ describe('Bot canonical Session lifecycle', () => {
     });
   });
 
+  it.each([
+    { versioned: false, selected: true, mode: 'allowlist', expectedMcp: ['docs'], expectedTools: ['browser'] },
+    { versioned: false, selected: false, mode: 'inherit', expectedMcp: ['docs', 'mail'], expectedTools: ['browser', 'contacts'] },
+    { versioned: true, selected: false, mode: 'allowlist', expectedMcp: [], expectedTools: [] },
+  ])('keeps stored capability selections consistent in settings and runtime: %j', async (entry) => {
+    const row = h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1')
+      .get('bot-1') as { capabilities_json: string };
+    const config = { ...JSON.parse(row.capabilities_json),
+      toolsetMode: 'allowlist', toolsets: entry.selected ? ['browser'] : [],
+      mcpMode: 'allowlist', mcpServers: entry.selected ? ['docs'] : [],
+    };
+    if (entry.versioned) config.toolCapabilityVersion = 1;
+    else delete config.toolCapabilityVersion;
+    h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ? AND version = 1')
+      .run(JSON.stringify(config), 'bot-1');
+    const loaded = await invoke('local-db:bots:get', 'bot-1');
+    expect(loaded.capabilities).toMatchObject({ toolsetMode: entry.mode, mcpMode: entry.mode });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const opts: MakerSessionCreateOpts = {
+      id: created.session.id, agentKind: 'pi', workingDir: created.session.workingDir,
+      workspaceKind: 'dialogue', model: 'grok-4.5', permissionMode: 'ask',
+    };
+    await hydrateBotProfileRuntime(opts, {
+      listSkills: async () => [],
+      listMcpServers: async () => ['docs', 'mail'].map(name => ({ name, source: 'custom', available: true })),
+      listToolsets: async () => ['browser', 'contacts'].map(id => ({ id, name: id, available: true })),
+    });
+    expect(opts.botRuntimeProfile).toMatchObject({
+      mcpPolicy: { mode: 'allowlist', configured: entry.expectedMcp },
+      toolsetPolicy: { mode: 'allowlist', configured: entry.expectedTools },
+    });
+  });
+
   it('refreshes canonical Skill resources in place when their fingerprint changes', async () => {
     await invoke('local-db:bots:update', {
       id: 'bot-1',

@@ -12,10 +12,9 @@ export function reconcileBotCapabilityList(previous: string[], local: string[], 
 }
 
 /**
- * Old profiles stored opt-in mount lists, including generated empty allowlists.
- * The shared-capability release makes all existing companions follow Cindy.
- * Keep the old references (including imported connections), but only a choice
- * saved under this contract may restrict the inherited tools again.
+ * Old profiles stored generated empty allowlists as well as user selections.
+ * Upgrade only empty legacy selections; preserve nonempty restrictions and
+ * explicit inheritance. Versioned profiles also preserve deliberate empty lists.
  */
 export function normalizeBotToolCapabilities(config: Record<string, unknown>): Record<string, unknown> & {
   toolCapabilityVersion: 1; toolsetMode: 'inherit' | 'allowlist'; mcpMode: 'inherit' | 'allowlist';
@@ -25,5 +24,17 @@ export function normalizeBotToolCapabilities(config: Record<string, unknown>): R
     toolsetMode: config.toolsetMode === 'allowlist' ? 'allowlist' : 'inherit',
     mcpMode: config.mcpMode === 'allowlist' ? 'allowlist' : 'inherit',
   };
-  return { ...config, toolCapabilityVersion: 1, toolsetMode: 'inherit', mcpMode: 'inherit' };
+  const strings = (value: unknown): string[] => Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map(item => item.trim())
+    : [];
+  const toolsets = strings(config.toolsets ?? config.tools);
+  // Profiles predating selection modes used these names as display placeholders.
+  // An explicit allowlist containing only browser is still a real selection.
+  const hasToolSelection = toolsets.length > 0 && (config.toolsetMode === 'allowlist'
+    || !toolsets.every(id => ['files', 'browser', 'mcp'].includes(id)));
+  return {
+    ...config, toolCapabilityVersion: 1,
+    toolsetMode: config.toolsetMode !== 'inherit' && hasToolSelection ? 'allowlist' : 'inherit',
+    mcpMode: config.mcpMode !== 'inherit' && strings(config.mcpServers).length > 0 ? 'allowlist' : 'inherit',
+  };
 }
