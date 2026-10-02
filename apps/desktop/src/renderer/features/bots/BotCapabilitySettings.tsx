@@ -240,6 +240,9 @@ export function BotCapabilitySettings({
           for (const id of selected[kind])
             if (!rows.some((item) => item.id === id)) rows.push({ id, name: id, available: false });
           const mode = kind === 'mcp' ? capabilities.mcpMode : kind === 'toolset' ? capabilities.toolsetMode : 'allowlist';
+          // Inheritance can only become an explicit selection from a complete
+          // catalog of this kind. Missing/refreshing entries must not drop tools.
+          const canEdit = mode !== 'inherit' || entries[kind] !== undefined;
           const selectedIds = mode === 'inherit'
             ? [...new Set([...selected[kind], ...rows.filter((item) => item.available).map((item) => item.id)])]
             : selected[kind];
@@ -261,9 +264,9 @@ export function BotCapabilitySettings({
                       type="checkbox"
                       className="accent-[var(--text-primary)]"
                       checked={item.personal ? item.available : selectedIds.includes(item.id)}
-                      disabled={item.personal || (!item.available && !selectedIds.includes(item.id))}
+                      disabled={!canEdit || item.personal || (!item.available && !selectedIds.includes(item.id))}
                       onChange={(event) =>
-                        onChange(
+                        canEdit && onChange(
                           kind,
                           event.target.checked
                             ? [...selectedIds, item.id]
