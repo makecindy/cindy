@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  owner: {},
   readPermissionMode: vi.fn(),
   updatePermissionMode: vi.fn(),
 }));
+vi.mock('../../../session-controller/localHost.js', () => ({ localSessionHost: {
+  deviceId: () => 'test-device', owner: () => mocks.owner, execution: () => null,
+} }));
 
 vi.mock('../sessionRepo', () => ({
   readPermissionMode: mocks.readPermissionMode,

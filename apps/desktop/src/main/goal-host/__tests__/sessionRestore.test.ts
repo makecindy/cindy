@@ -31,8 +31,9 @@ function baseDeps(overrides: Partial<RestoreGoalSessionDeps> = {}): RestoreGoalS
     maker: {
       getSession: vi.fn(),
       getSessionMeta: vi.fn().mockResolvedValue(META),
-      createSession: vi.fn().mockResolvedValue(fakeSession()),
-    },
+      },
+     ensureRuntime: vi.fn().mockResolvedValue(fakeSession()),
+
     warn: vi.fn(),
     getSessionRow: vi.fn().mockResolvedValue({ providerId: 'provider-1' }),
     hydrateProvider: vi.fn(),
@@ -54,7 +55,7 @@ describe('Goal dormant session restore', () => {
         return true;
       }),
     });
-    vi.mocked(deps.maker.createSession).mockImplementation(async (opts) => {
+    vi.mocked(deps.ensureRuntime).mockImplementation(async (opts) => {
       order.push('create');
       expect(opts.vendorOptions).toMatchObject({ orcaRole: 'lead' });
       expect(opts.userPrompt).toBe('orca lead instructions');
@@ -83,13 +84,14 @@ describe('Goal dormant session restore', () => {
       maker: {
         getSession: vi.fn().mockReturnValue(poisoned),
         getSessionMeta: vi.fn().mockResolvedValue(META),
-        createSession: vi.fn().mockResolvedValue(replacement),
-      },
+        },
+       ensureRuntime: vi.fn().mockResolvedValue(replacement),
+
     });
 
     await expect(restoreSessionForGoal('session-1', deps)).resolves.toBe(replacement);
 
-    expect(deps.maker.createSession).toHaveBeenCalledOnce();
+    expect(deps.ensureRuntime).toHaveBeenCalledOnce();
     expect(deps.wireSession).toHaveBeenCalledWith(replacement);
   });
 
@@ -98,14 +100,15 @@ describe('Goal dormant session restore', () => {
       maker: {
         getSession: vi.fn(),
         getSessionMeta: vi.fn().mockResolvedValue({ ...META, agentKind: 'pi' }),
-        createSession: vi.fn().mockResolvedValue(fakeSession()),
-      },
+        },
+       ensureRuntime: vi.fn().mockResolvedValue(fakeSession()),
+
       getSessionRow: vi.fn().mockResolvedValue({ providerId: null }),
     });
 
     await restoreSessionForGoal('session-1', deps);
 
-    expect(deps.maker.createSession).toHaveBeenCalledWith(
+    expect(deps.ensureRuntime).toHaveBeenCalledWith(
       expect.objectContaining({ agentKind: 'pi', providerId: null }),
     );
     expect(deps.hydrateProvider).toHaveBeenCalledWith('session-1', null);
@@ -118,8 +121,9 @@ describe('Goal dormant session restore', () => {
       maker: {
         getSession: vi.fn(),
         getSessionMeta: vi.fn().mockResolvedValue(META),
-        createSession: vi.fn().mockRejectedValue(new Error('start failed')),
-      },
+        },
+       ensureRuntime: vi.fn().mockRejectedValue(new Error('start failed')),
+
       markOrcaHydrated,
       warn,
     });

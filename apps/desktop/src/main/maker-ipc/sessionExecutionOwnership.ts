@@ -1,8 +1,5 @@
-/** Shared by callers of ordinary Sessions; never grants caller authorization. */
-export interface SessionExecutionIdentity {
-  instanceId: string;
-  generation: number;
-}
+import type { SessionExecutionIdentity } from '@cindy/maker-shared/session-controller';
+export type { SessionExecutionIdentity } from '@cindy/maker-shared/session-controller';
 
 export function isSameSessionExecution(
   current: SessionExecutionIdentity | null | undefined,

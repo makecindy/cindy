@@ -1499,6 +1499,15 @@ export class AgentInputCoordinator {
     return !this.deps.loadQueueSnapshot || this.restoredQueueSessions.has(sessionId);
   }
 
+  /** Read-only lifecycle facts. Inspection must not create state or start restoration. */
+  getQueueObservation(sessionId: string): { paused: boolean; restoring: boolean } {
+    const state = this.states.get(sessionId);
+    return {
+      paused: state?.queuePaused === true || state?.queueInteractionLocks.includes('execution-pause') === true,
+      restoring: this.queueRestorePromises.has(sessionId),
+    };
+  }
+
   /**
    * 队列是否处于暂停态(用户 Stop / 崩溃恢复暂停)。暂停队列的 getDrainableHead
    * 恒返 null,只有用户显式输入(resumeRestorePausedQueue)或点「继续」才解除 ——

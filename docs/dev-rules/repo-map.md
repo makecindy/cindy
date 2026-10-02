@@ -60,6 +60,13 @@
 | `project-context`                                         | agent 维护的项目知识层（commit 驱动的 markdown CLI）                                                                                                                  | desktop（maker-ipc）                                                               |
 | `voice-input-core`                                        | 语音输入核心：供应商无关的听写状态机与润色守卫                                                                                                                        | desktop + mobile                                                                   |
 
+## Session 控制入口
+
+`apps/desktop/src/main/session-controller/` 组合现有 Session 创建、管理、队列、运行配置、
+历史与观察业务；共享契约在 `packages/maker-shared/src/sessionController.ts`。
+新增 UI、工具、伙伴、插件或内部 Agent 的 Session 操作前，先读
+[Session 控制层与迁移验收](session-controller.md)。原生实现端口及依赖检查见同文档。
+
 ## 校验下载与工具安装
 
 Desktop 发行资产统一走 `main/downloader/index.ts`；通用工具安装位于

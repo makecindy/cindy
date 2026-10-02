@@ -1,3 +1,7 @@
+import { createHostSessionOperation } from '../../session-controller/hostOperation.js';
+import { createNativeSessionController } from '../../session-controller/nativeRuntime.js';
+import { captureInternalSessionCaller } from '../../session-controller/internalCaller.js';
+import { localSessionHost } from '../../session-controller/localHost.js';
 /** Cindy Bots 的 main-side 权威数据边界。
  *
  * Bot profile 与 Session 归属只在这里写入 SQLite；renderer 只读取投影，
@@ -1588,7 +1592,9 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     if (canonical) {
       const maker = getMakerIfReady();
       const live = maker?.getSession(canonical.sessionId);
-      try { await live?.setPermissionMode(canonical.mode as 'ask' | 'auto' | 'bypassPermissions'); }
+      try { await createHostSessionOperation(localSessionHost, { source: 'companion', operation: 'changePermission', sessionIds: [canonical.sessionId], assertCurrent: owner.assertCurrent })(async () => {
+        if (live) await live.setPermissionMode(canonical.mode as 'ask' | 'auto' | 'bypassPermissions');
+      }); }
       catch (error) {
         // A failed hot switch cannot leave the old, more permissive runtime alive.
         owner.assertCurrent();
@@ -2003,9 +2009,10 @@ export function registerBotIpc(): void {
           });
         }
       }
-      await getMakerIfReady()
-        ?.closeSession(archivedCanonicalSessionId)
-        .catch(() => undefined);
+      const runtimeMaker = getMakerIfReady();
+      const archivedRuntime = runtimeMaker?.getSession(archivedCanonicalSessionId);
+      if (runtimeMaker && archivedRuntime) await createNativeSessionController(runtimeMaker, localSessionHost).closeOwnedRuntime(
+        captureInternalSessionCaller(localSessionHost, { source: 'companion', sessionIds: [archivedCanonicalSessionId], operations: ['closeRuntime'] }), archivedRuntime).catch(() => undefined);
       // The Profile workspace survives recovery of a missing/deleted task.
     }
     const [canonical] = await db

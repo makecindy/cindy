@@ -9,6 +9,7 @@
  */
 
 import { PUSH_FORWARD_ALLOWLIST } from '@cindy/device-link';
+import { publishSessionSignal } from '../session-controller/signals.js';
 import {
   activeOwnerScopeKey,
   getActiveDataOwnerPushStamp,
@@ -86,6 +87,7 @@ export function tapWindowBroadcast(
   payload: unknown,
   ownerStamp?: DataOwnerPushStamp,
 ): void {
+  publishSessionSignal(channel, payload);
   if (listener === null) return;
   if (!PUSH_FORWARD_ALLOWLIST.has(channel)) return;
   // `undefined` is a valid captured value during bootstrap/tests.  Preserve

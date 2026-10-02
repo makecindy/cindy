@@ -1,3 +1,7 @@
+import { createNativeSessionController } from '../../session-controller/nativeRuntime.js';
+import { captureInternalSessionCaller } from '../../session-controller/internalCaller.js';
+import { localSessionHost } from '../../session-controller/localHost.js';
+import { SessionAdmissionError } from '../../session-controller/controller.js';
 import { createLocalImSource, type ImContextSnapshot } from '../../../shared/imMessageSource';
 /**
  * main/im/shared/turnRunner.ts
@@ -597,6 +601,17 @@ export function createTurnRunner(
 ): ImTurnRunner {
   const { im, output, ui, channel } = adapter;
   const pendingOwner = Symbol('im-runner-pending');
+  // The channel instance belongs to the account that created it. Route resolution,
+  // IM identity checks, native turn policy and channel receipts stay in this runner.
+  const controllerOwner = localSessionHost.owner();
+  const sessionPolicy = (sessionId: string) => captureInternalSessionCaller(localSessionHost, {
+    source: 'host', sessionIds: [sessionId], operations: ['ensureRuntime', 'send', 'abortTurn', 'closeRuntime'],
+    assertCurrent: () => {
+      if (controllerOwner !== localSessionHost.owner()) throw new SessionAdmissionError('OWNER_SCOPE_CHANGED', '渠道账号已变化。');
+    },
+  });
+  const nativeControl = () => createNativeSessionController(getMaker(), localSessionHost);
+
   const cardExpirations = new Set<{ done: Promise<void>; cancel(): void }>();
   const richIm = output.kind === 'rich-card' ? output.im : null;
 
@@ -1297,7 +1312,7 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'aborted' };
       }
 
-      const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
+      const sendResult = await nativeControl().send(sessionPolicy(rowId), state.makerSession, outgoingMessage as typeof item.userMessage, {
         planMode: false,
         // The channel adapter and routing state live in Main. A symbol-keyed
         // context survives the in-process Session → Agent handoff but cannot be
@@ -1592,7 +1607,7 @@ export function createTurnRunner(
       hydrateSessionProvider(sessionId, row.providerId ?? null);
       if (row.effort) setSessionEffort(sessionId, row.effort);
       setSessionFastMode(sessionId, !!row.fastMode);
-      current = await maker.createSession({
+      current = await nativeControl().ensureRuntime(sessionPolicy(sessionId), {
         id: sessionId,
         agentKind,
         workingDir: row.workingDir,
@@ -1819,7 +1834,7 @@ export function createTurnRunner(
     // "总结当前状态" 就变成总结空会话, agent 输出短促/无内容; 用户看到渠道卡片
     // 停在 "灵感正在路上..." 然后秒收 finalize, 像是没回应 (Bug 2)。
     // 非接管路径 (渠道默认 session) 也带上, 进程重启后能继续之前的会话。
-    const makerSession = await maker.createSession({
+    const makerSession = await nativeControl().ensureRuntime(sessionPolicy(row.id), {
       id: row.id,
       agentKind: row.agentKind,
       workingDir: row.workingDir,
@@ -3695,7 +3710,7 @@ export function createTurnRunner(
       settleDetachDrain(state, 'cancelled');
       if (hasImTurnInFlight) {
         aborts.push(
-          state.makerSession.abort().catch((err) => {
+          nativeControl().ownedView(sessionPolicy(state.makerSession.id), state.makerSession, () => true).abort().catch((err) => {
             const msg = err instanceof Error ? err.message : String(err);
             log.warn(`disposeAllSessions abort failed (non-fatal): ${msg}`);
           }),
@@ -3797,7 +3812,7 @@ export function createTurnRunner(
       if (!active || !matches(active)) return { stopped: removed.length > 0, droppedQueued: removed.length };
       noteSilentStopSessionReset(state.makerSession.id);
       active.terminalKind = 'aborted';
-      await current?.abort();
+      if (current) await nativeControl().abortOwnedRuntime(sessionPolicy(current.id), current);
       return { stopped: true, droppedQueued: removed.length };
     }
     const running =
@@ -3813,7 +3828,7 @@ export function createTurnRunner(
     // 重置后守卫判 superseded → settle('skip') → 挂起 turn 经现有订阅按 done 收口。
     noteSilentStopSessionReset(state.makerSession.id);
     if (state.queue[0]) state.queue[0].terminalKind = 'aborted';
-    await current?.abort();
+    if (current) await nativeControl().abortOwnedRuntime(sessionPolicy(current.id), current);
     log.info(
       `!stop aborted turn for session=...${state.makerSession.id.slice(-8)} droppedQueued=${droppedQueued}`,
     );
@@ -3832,7 +3847,8 @@ export function createTurnRunner(
     cleanupSessionState(state);
     settleDetachDrain(state, 'cancelled');
     try {
-      await getMaker().getSession(sessionId)?.close();
+      const runtime = getMaker().getSession(sessionId);
+      if (runtime) await nativeControl().closeOwnedHandle(sessionPolicy(sessionId), runtime);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`disposeOneSession close failed (non-fatal): ${msg}`);

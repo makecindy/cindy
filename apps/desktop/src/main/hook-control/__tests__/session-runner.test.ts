@@ -22,6 +22,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { AgentEvent, Effort, PermissionMode, PermissionModeState } from '@cindy/maker-core';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
+vi.mock('../../session-controller/localHost.js', () => ({ localSessionHost: {} }));
+
 const h = vi.hoisted(() => {
   /** 跨模块调用顺序记录: 'touch:<id>' / 'created:<id>' */
   const calls: string[] = [];
@@ -248,9 +250,16 @@ function makePermissionModeFake() {
 }
 
 /** fake maker: createSession 返回"send 即接受、随后立刻 done"的会话。 */
+const nativeSessions = new Map<string, Session>();
+function registerFakeRuntime<T extends { id: string }>(runtime: T) {
+  const live = Object.assign(runtime, { instanceId: 'test-instance', getTurnGeneration: () => 0 });
+  nativeSessions.set(live.id, live as unknown as Session);
+  return live;
+}
 function makeFakeSession(id: string) {
   const permission = makePermissionModeFake();
-  return {
+  const runtime = {
+    instanceId: 'test-instance', getTurnGeneration: () => 0,
     id,
     workDir: 'D:/repo',
     get permissionModeState() {
@@ -295,6 +304,7 @@ function makeFakeSession(id: string) {
       },
     ),
   };
+  return registerFakeRuntime(runtime);
 }
 
 const fakeMaker = {
@@ -306,7 +316,7 @@ const fakeMaker = {
     agentKind: 'claude-code' as const,
     permissionMode: undefined as 'ask' | 'bypassPermissions' | undefined,
   })),
-  getSession: vi.fn(),
+  getSession: vi.fn((id: string) => nativeSessions.get(id)),
   closeSession: vi.fn(async () => undefined),
   getCapabilities: vi.fn(() => ({
     availableModels: [],
@@ -333,6 +343,7 @@ import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 
 const log = { info: vi.fn(), warn: vi.fn() };
+const sessionHost = { deviceId: () => 'test-device', owner: () => globalThis, execution: () => null };
 
 /** 喂给 agent 的文本 = 用户原话 + 渠道说明(教模型用 xdt-file 回传文件)。 */
 const HELLO_WITH_NOTE = `hello\n\n${SLACK_HOOK_PROMPT_NOTE}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`;
@@ -389,6 +400,8 @@ function baseReq(
 }
 
 beforeEach(() => {
+  nativeSessions.clear();
+  fakeMaker.getSession.mockImplementation(id => nativeSessions.get(id));
   vi.clearAllMocks();
   h.calls.length = 0;
   h.eventCbs.clear();
@@ -435,7 +448,7 @@ describe('hook session 精确接管边界', () => {
     fakeMaker.getSession.mockReturnValue(session);
     const onRuntimeRecovery = vi.fn(async () => true);
     try {
-      const result = createMakerHookSessionRunner({ log }).run(baseReq({ onRuntimeRecovery,
+      const result = createMakerHookSessionRunner({ log, sessionHost }).run(baseReq({ onRuntimeRecovery,
         workingDir: 'D:/repo', laneKind: 'group', source: { im: 'telegram' } }));
       await vi.waitFor(() => expect(handle.send).toHaveBeenCalledOnce());
       await session.closeAfterCurrentTurn({ failureEvent: () => ({ type: 'text', data: {
@@ -443,7 +456,7 @@ describe('hook session 精确接管边界', () => {
       } }) });
       terminal();
       await expect(result).resolves.toMatchObject({ status: 'ok', finalText: 'saved result' });
-      if (replaced) fakeMaker.getSession.mockReturnValue(makeFakeSession(session.id));
+      if (replaced) fakeMaker.getSession.mockReturnValue(makeFakeSession(session.id) as unknown as Session);
       failClose();
       await vi.waitFor(() => expect(session.getStatus()).toBe('error'));
       expect(onRuntimeRecovery).toHaveBeenCalledTimes(replaced ? 0 : 1);
@@ -459,14 +472,14 @@ describe('hook session 精确接管边界', () => {
   it('inspect 的数据库读取失败向上抛出, 不伪装成不存在', async () => {
     const { getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
     vi.mocked(getSessionRowSnapshotStrict).mockRejectedValueOnce(new Error('database unavailable'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
 
     await expect(runner.inspect('session-under-test')).rejects.toThrow('database unavailable');
   });
 
   it('inspect 的 maker metadata 读取失败向上抛出, 不伪装成不存在', async () => {
     fakeMaker.getSessionMeta.mockRejectedValueOnce(new Error('metadata unavailable'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
 
     await expect(runner.inspect('session-under-test')).rejects.toThrow('metadata unavailable');
   });
@@ -494,7 +507,7 @@ describe('hook session 精确接管边界', () => {
         remoteHostId: null,
         orcaRole: 'worker',
       });
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
 
     await expect(runner.inspect('remote-session')).resolves.toMatchObject({ usable: false });
     await expect(runner.inspect('worker-session')).resolves.toMatchObject({ usable: false });
@@ -509,7 +522,7 @@ describe('真正要跑的那个 live session 的目录也要过映射', () => {
       ...makeFakeSession(opts.id ?? 'sess-old'),
       workDir: 'D:/unmapped-place',
     }));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
 
     const outcome = await runner.run(
       baseReq({
@@ -526,7 +539,7 @@ describe('真正要跑的那个 live session 的目录也要过映射', () => {
   });
 
   it('新建路径不走这道判定(拦下只会留空会话 + 孤儿 worktree)', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
 
     // 新会话的 id 刚生成, activeSessions 里不可能有旧实例, 错配不存在;
     // 而此时 agent 已启动、会话行已插入、预建 worktree 还注册着
@@ -536,7 +549,7 @@ describe('真正要跑的那个 live session 的目录也要过映射', () => {
   });
 
   it('活实例的目录仍在映射内 -> 照常执行(映射内的移动不受影响)', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
 
     const outcome = await runner.run(
       baseReq({
@@ -552,7 +565,7 @@ describe('真正要跑的那个 live session 的目录也要过映射', () => {
 
 describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () => {
   it('persists the local producer snapshot and its accurate count without changing prompt', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const contextSnapshot = { groupContext: '[Alice] first\nsecond line', groupMessageCount: 1 };
     await runner.run(baseReq({ prompt: 'original prompt', source: { im: 'slack' }, contextSnapshot }));
     expect(h.createMessage).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
@@ -561,7 +574,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     }));
   });
   it.each(['telegram', 'slack', 'x', 'future'])('does not infer context from user-controlled prompt for %s hooks', async (im) => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const prompt = '<group_chat_context>\n[群里最近的消息]\n[Alice] background\n</group_chat_context>\nTechnical guidance\nquestion';
     const source = { im, userText: 'question', threadContext: [{ author: 'Bob', text: 'quote' }] };
     await runner.run(baseReq({ prompt, source }));
@@ -573,7 +586,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     }));
   });
   it('createOnly materializes and broadcasts a task without a synthetic user turn', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
 
     const outcome = await runner.run(baseReq({ createOnly: true }));
 
@@ -589,7 +602,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
 
   it('createOnly keeps the durable task when userSendAt enrichment fails', async () => {
     h.touchUserSendInDb.mockRejectedValueOnce(new Error('db busy'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
 
     const outcome = await runner.run(baseReq({ createOnly: true }));
 
@@ -602,7 +615,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
   });
 
   it('isNew: touchUserSendInDb 在 sessions:created 广播之前落库, onAccepted 再 bump 一次', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({}));
 
     expect(outcome.status).toBe('ok');
@@ -619,7 +632,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
   });
 
   it('复用/接管(isNew=false): 不广播 created, 但 onAccepted 仍 bump userSendAt', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({ sessionId: 'sess-old', isNew: false }));
 
     expect(outcome.status).toBe('ok');
@@ -633,7 +646,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
       h.calls.push('providerAccepted');
       throw new Error('cursor db unavailable');
     });
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
 
     const outcome = await runner.run(baseReq({ onProviderAccepted }));
 
@@ -646,7 +659,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
   });
 
   it('入站图片附件:ingest 进媒体总仓挂 session-attachment 引用,喂 agent 用 blob 绝对路径,落库用 cindy-media url', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(
       baseReq({
         attachments: [
@@ -697,7 +710,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
 
   it('入站图片 ingest 失败:文本照发并明确告知用户附件未完整处理', async () => {
     cindyMock.ingestMedia.mockRejectedValueOnce(new Error('db not ready'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(
       baseReq({
         attachments: [
@@ -720,7 +733,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
   });
 
   it('入站音视频经媒体总仓落盘，不写 feature-specific 附件缓存', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(
       baseReq({
         attachments: [
@@ -767,7 +780,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
   });
 
   it('不受支持的媒体格式明确失败，不降级写入 feature-specific 附件缓存', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(
       baseReq({
         attachments: [
@@ -793,7 +806,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
   });
 
   it('渠道说明与渠道标记:喂 agent 带 xdt-file 说明,落库保持原话,createSession 带 slack-hook 标', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({}));
     expect(outcome.status).toBe('ok');
 
@@ -815,7 +828,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
   });
 
   it('官方 Telegram 新会话保留 provider 标记并把包命令留给 Desktop 确认', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(
       baseReq({
         source: { im: 'telegram', channelName: 'Release topic', userText: 'hello' },
@@ -846,7 +859,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     ['telegram', { kind: 'hook', source: 'telegram' }],
     ['x', { kind: 'hook', source: 'x' }],
   ] as const)('线程来源 %s 使用 source.userText 作为确定性命令原文', async (im, expectedOrigin) => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const rawCommand = 'pi install npm:context-mode';
     const decoratedPrompt = [
       '<thread_context>',
@@ -871,7 +884,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
   });
 
   it('旧服务端缺少 source.userText 时才回退 prompt', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({ source: { im: 'x' } }));
     expect(outcome.status).toBe('ok');
     const session = await fakeMaker.createSession.mock.results[0].value;
@@ -898,7 +911,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
         agentMeta: null,
       },
     ]);
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(
       baseReq({
         replacementOfSessionId: 'sess-old',
@@ -923,7 +936,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
 
   it('旧任务未落库时用进程内原始 prompt 交接；读库报错也不阻断重试', async () => {
     h.listMessagesForAgentHandoff.mockRejectedValueOnce(new Error('database unavailable'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(
       baseReq({
         replacementOfSessionId: 'sess-old',
@@ -944,7 +957,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
   });
 
   it('旧任务没有可读历史或进程内 prompt 时仍按当前 dispatch 正常执行', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(
       baseReq({
         replacementOfSessionId: 'sess-old',
@@ -966,7 +979,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     vi.mocked(getSessionRowSnapshotStrict).mockResolvedValueOnce({
       status: 'active',
     } as never);
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(
       baseReq({
         replacementOfSessionId: 'sess-old',
@@ -1000,7 +1013,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
         agentMeta: null,
       },
     ]);
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(
       baseReq({
         replacementOfSessionId: 'sess-old',
@@ -1019,7 +1032,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
   });
 
   it('非 Slack 渠道的 replacement 不注入旧任务历史', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(
       baseReq({
         replacementOfSessionId: 'sess-old',
@@ -1038,7 +1051,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
 
   it('pending handoff 只注入 agent wire 内容, accepted 后消费', async () => {
     h.peekPendingHandoff.mockResolvedValueOnce('HANDOFF');
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({}));
 
     expect(outcome.status).toBe('ok');
@@ -1054,7 +1067,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
   });
 
   it('复用/接管(isNew=false):createSession 不带 vendorOptions,不给可能的桌面会话打 Slack 标', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({ sessionId: 'sess-old', isNew: false }));
     expect(outcome.status).toBe('ok');
 
@@ -1078,7 +1091,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
       },
     );
     fakeMaker.createSession.mockResolvedValueOnce(session);
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
 
     await expect(
       runner.run(baseReq({ sessionId: 'sess-old', isNew: false })),
@@ -1093,7 +1106,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     h.touchUserSendInDb.mockImplementationOnce(async () => {
       throw new Error('db busy');
     });
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({}));
 
     expect(outcome.status).toBe('ok');
@@ -1124,7 +1137,7 @@ describe('进度快照(turn.progress 链路)', () => {
         }
       };
     }
-    return {
+    return registerFakeRuntime({
       ...permission,
       get permissionModeState() {
         return permission.permissionModeState;
@@ -1179,7 +1192,7 @@ describe('进度快照(turn.progress 链路)', () => {
           return {};
         },
       ),
-    };
+    });
   }
 
   async function flush(times = 30): Promise<void> {
@@ -1192,7 +1205,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({}));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1223,7 +1236,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({}));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1247,7 +1260,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-thinking'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const pending = runner.run(baseReq({}));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1283,7 +1296,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const immediate = runner.run(baseReq({}));
       await flush();
       let cb = h.eventCbs.get('sess-new')!;
@@ -1329,7 +1342,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-stop', continuation),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const pending = runner.run(baseReq({}));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1358,7 +1371,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-active', continuation),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const pending = runner.run(baseReq({}));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1387,7 +1400,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-unclaimed', unrelatedClaim),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const pending = runner.run(baseReq({}));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1409,7 +1422,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({}));
       let settled = false;
       void p.then(() => {
@@ -1436,7 +1449,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({}));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1465,7 +1478,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({}));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1505,7 +1518,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({}));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1539,7 +1552,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({}));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1563,7 +1576,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({ source: { im: 'x' } }));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1598,7 +1611,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({ source: { im: 'x' } }));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1628,7 +1641,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({ source: { im: 'x' } }));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1656,7 +1669,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({ source: { im: 'x' } }));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1701,7 +1714,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({ source: { im: 'x' } }));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1736,7 +1749,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({ source: { im: 'x' } }));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1765,7 +1778,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({ source: { im: 'x' } }));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1788,7 +1801,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({}));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1812,7 +1825,7 @@ describe('进度快照(turn.progress 链路)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({}));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -1834,7 +1847,7 @@ describe('进度快照(turn.progress 链路)', () => {
         makeManualSession(opts.id ?? 'sess-x'),
       );
       const emitted: string[] = [];
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(
         baseReq({
           source: { im: 'telegram', userText: 'hi' },
@@ -1872,7 +1885,7 @@ describe('进度快照(turn.progress 链路)', () => {
     // 'ask'、给复用会话每轮临时切档, 并挂破坏性操作强确认 —— 用户在设置里选的
     // 完全访问在群里静默失效。官方 bot 的群聊定位是引导用户装自己的个人 bot,
     // 不承担「群里多人共用一个 bot」的权限模型(那套在个人 bot 里另有设计)。
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(
       baseReq({
         source: { im: 'telegram', userText: 'hi' },
@@ -1903,7 +1916,7 @@ describe('进度快照(turn.progress 链路)', () => {
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeManualSession(opts.id ?? 'sess-x'),
     );
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const p = runner.run(baseReq({ source: { im: 'telegram', userText: 'hi' }, laneKind: 'group' }));
     await flush();
 
@@ -1922,7 +1935,7 @@ describe('进度快照(turn.progress 链路)', () => {
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeManualSession(opts.id ?? 'sess-x'),
     );
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const p = runner.run(baseReq({ source: { im: 'telegram', userText: 'hi' }, laneKind: 'dm' }));
     await flush();
     const session = await fakeMaker.createSession.mock.results[0].value;
@@ -1933,7 +1946,7 @@ describe('进度快照(turn.progress 链路)', () => {
 
   it('Telegram 群复用会话不再临时切换权限档', async () => {
     const session = makeFakeSession('sess-old');
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(
       baseReq({
         isNew: false,
@@ -1955,7 +1968,7 @@ describe('进度快照(turn.progress 链路)', () => {
         makeManualSession(opts.id ?? 'sess-x'),
       );
       const emitted: string[] = [];
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({ onProgress: (t: string) => emitted.push(t) }));
       await flush(); // 走到 send 完成、事件监听已挂
 
@@ -2031,7 +2044,7 @@ describe('进度快照(turn.progress 链路)', () => {
         makeManualSession(opts.id ?? 'sess-x'),
       );
       const emitted: string[] = [];
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(
         baseReq({
           source: { im: 'telegram', userText: 'hi' },
@@ -2086,7 +2099,7 @@ describe('进度快照(turn.progress 链路)', () => {
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeManualSession(opts.id ?? 'sess-x'),
     );
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const p = runner.run(baseReq({}));
     await new Promise((r) => setTimeout(r, 0));
     const cb = h.eventCbs.get('sess-new')!;
@@ -2099,7 +2112,7 @@ describe('进度快照(turn.progress 链路)', () => {
 
 describe('上游过载自动重试期间的渠道进度(零产出窗口)', () => {
   function makeManualSession(id: string) {
-    return {
+    return registerFakeRuntime({
       ...makePermissionModeFake(),
       id,
       workDir: 'D:/repo',
@@ -2131,7 +2144,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
           return {};
         },
       ),
-    };
+    });
   }
 
   async function flush(times = 30): Promise<void> {
@@ -2150,7 +2163,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
       const emitted: string[] = [];
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({ onProgress: (t: string) => emitted.push(t) }));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -2211,7 +2224,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
       const emitted: string[] = [];
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(
         baseReq({
           source: { im: 'telegram', userText: 'hello' },
@@ -2262,7 +2275,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
         makeManualSession(opts.id ?? 'sess-x'),
       );
       const emitted: string[] = [];
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(baseReq({ onProgress: (t: string) => emitted.push(t) }));
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
@@ -2286,7 +2299,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeManualSession(opts.id ?? 'sess-x'),
     );
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const p = runner.run(baseReq({}));
     await new Promise((r) => setTimeout(r, 0));
     const cb = h.eventCbs.get('sess-new')!;
@@ -2313,7 +2326,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeManualSession(opts.id ?? 'sess-x'),
     );
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const pending = runner.run(baseReq({ source: { im: 'telegram', userText: 'hello' } }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     const emit = h.eventCbs.get('sess-new')!;
@@ -2333,7 +2346,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeManualSession(opts.id ?? 'sess-x'),
     );
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const p = runner.run(baseReq({ source: { im: 'telegram', userText: 'hello' } }));
     await new Promise((r) => setTimeout(r, 0));
     const cb = h.eventCbs.get('sess-new')!;
@@ -2357,7 +2370,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeManualSession(opts.id ?? 'sess-x'),
     );
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const p = runner.run(baseReq({}));
     await new Promise((r) => setTimeout(r, 0));
     const cb = h.eventCbs.get('sess-new')!;
@@ -2371,7 +2384,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
 describe('交互卡链路(interaction listener 覆盖)', () => {
   /** 带 setInteractionListener 的 fake session(不自动 done)。 */
   function makeInteractiveSession(id: string) {
-    return {
+    return registerFakeRuntime({
       ...makePermissionModeFake(),
       id,
       workDir: 'D:/repo',
@@ -2410,7 +2423,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
           return {};
         },
       ),
-    };
+    });
   }
 
   it('等授权期间过程区挂一行状态, 决策回流后摘掉', async () => {
@@ -2421,7 +2434,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
       );
       const emitted: string[] = [];
       const cards: Array<{ interactionId: string }> = [];
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(
         baseReq({
           onProgress: (t: string) => emitted.push(t),
@@ -2492,7 +2505,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
           makeInteractiveSession(opts.id ?? 'sess-x'),
         );
         const emitted: string[] = [];
-        const runner = createMakerHookSessionRunner({ log });
+        const runner = createMakerHookSessionRunner({ log, sessionHost });
         const p = runner.run(
           baseReq({
             onProgress: (t: string) => emitted.push(t),
@@ -2520,7 +2533,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
         makeInteractiveSession(opts.id ?? 'sess-x'),
       );
       const emitted: string[] = [];
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(
         baseReq({
           onProgress: (t: string) => emitted.push(t),
@@ -2586,7 +2599,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
         makeInteractiveSession(opts.id ?? 'sess-x'),
       );
       const emitted: string[] = [];
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const p = runner.run(
         baseReq({
           onProgress: (t: string) => emitted.push(t),
@@ -2646,7 +2659,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
         makeInteractiveSession(opts.id ?? 'sess-x'),
       );
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const pendingRun = runner.run(
         baseReq({
           onProgress: () => {},
@@ -2699,7 +2712,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
     const cards: Array<{ interactionId: string; title: string; buttons: Array<{ id: string }> }> =
       [];
     const cancels: Array<{ interactionId: string; reason: string }> = [];
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const p = runner.run(
       baseReq({
         onInteraction: (card: {
@@ -2750,7 +2763,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
     );
     const cards: Array<{ interactionId: string; kind: string; buttons: Array<{ id: string }> }> =
       [];
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const p = runner.run(
       baseReq({
         onInteraction: (card: {
@@ -2787,7 +2800,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
       makeInteractiveSession(opts.id ?? 'sess-x'),
     );
     const cancels: Array<{ interactionId: string; reason: string }> = [];
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const p = runner.run(
       baseReq({
         onInteraction: () => undefined,
@@ -2819,7 +2832,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
       makeInteractiveSession(opts.id ?? 'sess-x'),
     );
     const cancels: Array<{ interactionId: string; reason: string }> = [];
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const p = runner.run(
       baseReq({
         onInteraction: () => undefined,
@@ -2848,7 +2861,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
 describe('permissionMode 落 createSession', () => {
   it('新建: 用 defaults 合成的权限档建会话', async () => {
     h.resolvedConfig.permissionMode = 'ask';
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({}));
     expect(outcome.status).toBe('ok');
     expect(fakeMaker.createSession).toHaveBeenCalledWith(
@@ -2864,7 +2877,7 @@ describe('permissionMode 落 createSession', () => {
       agentKind: 'claude-code' as const,
       permissionMode: 'ask' as const,
     }));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     // options 带 bypass 也不覆盖 meta 的 ask
     const outcome = await runner.run(
       baseReq({ sessionId: 'sess-old', isNew: false, permissionMode: 'bypassPermissions' }),
@@ -2876,7 +2889,7 @@ describe('permissionMode 落 createSession', () => {
   });
 
   it('chat 伪目录新建: workspaceKind=dialogue 透传给 createSession', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({ workspaceKind: 'dialogue' as const }));
     expect(outcome.status).toBe('ok');
     expect(fakeMaker.createSession).toHaveBeenCalledWith(
@@ -2890,7 +2903,7 @@ describe('permissionMode 落 createSession', () => {
   });
 
   it('复用/接管: meta 未记录权限档时按历史默认 bypass', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({ sessionId: 'sess-old', isNew: false }));
     expect(outcome.status).toBe('ok');
     expect(fakeMaker.createSession).toHaveBeenCalledWith(
@@ -2903,7 +2916,7 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
   it('新建: 草稿默认来源经校验后传 createSession + 注入运行时 store + 广播前落库', async () => {
     h.resolvedConfig.providerId = 'xd';
     h.listProviders.mockResolvedValueOnce([connectedProvider('xd', [catalogModel('test-model')])]);
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({}));
 
     expect(outcome.status).toBe('ok');
@@ -2921,7 +2934,7 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
   it('新建: 显式来源失效时不把同名模型交给另一个已连接账号', async () => {
     h.resolvedConfig.providerId = 'gone-provider';
     h.listProviders.mockResolvedValueOnce([connectedProvider('xd', [catalogModel('test-model')])]);
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     await expect(runner.run(baseReq({}))).rejects.toThrow('selected provider "gone-provider"');
     expect(fakeMaker.createSession).not.toHaveBeenCalled();
     expect(h.setSessionProvider).not.toHaveBeenCalled();
@@ -2940,7 +2953,7 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
     h.listProviders.mockResolvedValueOnce([
       connectedProvider('openai', [catalogModel('chatgpt/gpt-5.6-sol', 'GPT-5.6')]),
     ]);
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({}));
 
     expect(outcome.status).toBe('ok');
@@ -2966,7 +2979,7 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
       },
     });
     h.listProviders.mockResolvedValueOnce([connectedProvider('xd', [catalogModel('test-model')])]);
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(
       baseReq({ source: { im: 'telegram', userText: 'hello' } }),
     );
@@ -2976,7 +2989,7 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
   });
 
   it('新建: 当前无任何已连接来源时保持无 providerId(no-break)', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({}));
 
     expect(outcome.status).toBe('ok');
@@ -2996,7 +3009,7 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
       workspaceKind: 'project',
       providerId: 'xd',
     });
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({ sessionId: 'sess-old', isNew: false }));
 
     expect(outcome.status).toBe('ok');
@@ -3023,7 +3036,7 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
       workspaceKind: 'project',
       providerId: null,
     });
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({ sessionId: 'sess-old', isNew: false }));
 
     expect(outcome.status).toBe('ok');
@@ -3080,7 +3093,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
           h.statusCbs.delete(id);
         };
       },
-    };
+    } as unknown as Session;
   }
 
   function watchReq(overrides?: Partial<Record<string, unknown>>) {
@@ -3147,7 +3160,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     // 兜底而非常规路径。放弃是安全方向, 且 dispatcher 收到 onAbandon 会还记账 ——
     // 不需要在这里等任何窗口(等待发生在"意图 -> dispatch"那一段, 由 dispatch 信号收口)。
     fakeMaker.getSession.mockReturnValue(undefined);
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const { req, events } = watchReq();
     const cancel = runner.watchContinuation!(req as never);
     expect(events).toEqual(['abandon']);
@@ -3159,7 +3172,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     // 旧目录被移出映射、新目录仍在时, 只查记账就会放行 —— 续跑的输出与文件会从一个
     // 已撤销的目录回流到渠道。run() 早已有这道校验(PR #733), 续跑路径必须同款。
     fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const { req, events } = watchReq();
     const cancel = runner.watchContinuation!({
       ...(req as Record<string, unknown>),
@@ -3173,7 +3186,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     // 归属已由 clientId 在 dispatch 前确认(见 uiContinuationSignal), 所以不必再等
     // 首个事件来判断"这一轮是不是目标轮" —— 那套等待恰恰是误认的来源。
     fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const { req, events, ends } = watchReq();
     runner.watchContinuation!(req as never);
     expect(events).toEqual(['claim']);
@@ -3196,7 +3209,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     // 「先回一句 → 思考 → 终答 只剩最后一条」的修订对续跑轮自动生效。抽取若
     // 退回旧的"isFinal 整体替换", 这个用例会立刻红 —— 它就是防漂移的锁。
     fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const { req, ends } = watchReq();
     runner.watchContinuation!(req as never);
 
@@ -3221,7 +3234,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
 
   it('Pi message_end 全文替换流式尾部，不重复拼接多文本块', async () => {
     fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const { req, ends } = watchReq();
     runner.watchContinuation!(req as never);
 
@@ -3241,7 +3254,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
 
   it.each(['output-limit', 'turn-failed'])('continuation failure retains output-limit body only (%s)', async (reason) => {
     fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const { req, ends } = watchReq({ source: { im: 'telegram' } });
     const cancel = runner.watchContinuation!(req as never);
     const emit = h.eventCbs.get('sess-live')!;
@@ -3259,7 +3272,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
 
   it('续跑轮自己失败 -> onEnd(error) 带错误信息', async () => {
     fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const { req, events, ends } = watchReq();
     runner.watchContinuation!(req as never);
     const cb = h.eventCbs.get('sess-live')!;
@@ -3272,7 +3285,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
 
   it('认领之后被撤销 -> 必须收口(否则渠道消息停在假的进行中)', async () => {
     fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const { req, events, ends } = watchReq();
     const cancel = runner.watchContinuation!(req as never);
     h.eventCbs.get('sess-live')!({ type: 'text', data: { text: 'x', isFinal: false } });
@@ -3292,7 +3305,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     // 认领现在是立即的, 所以撤销必然发生在认领之后: 渠道那条消息已经被改成"进行中",
     // 静默退场会把它永久留在假的进行中 —— 必须发一条终态帧收口。
     fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const { req, events, ends } = watchReq();
     const cancel = runner.watchContinuation!(req as never);
     expect(events).toEqual(['claim']);
@@ -3309,7 +3322,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     vi.useFakeTimers();
     try {
       fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const { req, events } = watchReq();
       runner.watchContinuation!(req as never);
       expect(events).toEqual(['claim']);
@@ -3334,7 +3347,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     vi.useFakeTimers();
     try {
       fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const { req, events } = watchReq();
       runner.watchContinuation!(req as never);
 
@@ -3366,7 +3379,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     vi.useFakeTimers();
     try {
       fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
-      const runner = createMakerHookSessionRunner({ log });
+      const runner = createMakerHookSessionRunner({ log, sessionHost });
       const { req, events } = watchReq();
       runner.watchContinuation!(req as never);
 
@@ -3385,7 +3398,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     // 渠道请求结束不了、同 session 后续消息持续排队、finalizeInteractions 也跑不到
     // (PR #1272 review 指出)。判据是**状态**不是时间, 所以不会误杀合法静默。
     fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const { req, events, ends } = watchReq();
     runner.watchContinuation!(req as never);
     expect(events).toEqual(['claim']);
@@ -3401,7 +3414,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     // abort 往返期间会短暂进 aborting 再回 active(见 maker-core Session.abort),
     // 那不是会话死亡。只认 closed / error, 否则一次用户 Stop 的往返就会误收口。
     fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const { req, events } = watchReq();
     runner.watchContinuation!(req as never);
 
@@ -3420,7 +3433,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     // fan out 终态 error, 观察器对终态 error 本来就收口, execute() 于是能走到
     // running.delete() —— 与控制连接是否还在无关。
     fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const { req, events, ends } = watchReq();
     runner.watchContinuation!(req as never);
     expect(events).toEqual(['claim']);
@@ -3442,7 +3455,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
 
 describe('hook turn change-set anchor', () => {
   it('uses the durable accepted user message client id', async () => {
-    const runner = createMakerHookSessionRunner({ log });
+    const runner = createMakerHookSessionRunner({ log, sessionHost });
     const outcome = await runner.run(baseReq({}));
 
     expect(outcome.status).toBe('ok');

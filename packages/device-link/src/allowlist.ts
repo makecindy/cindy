@@ -424,6 +424,10 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 本机查必空)。后台任务面板挂载水合用。老被控端无此 channel → CHANNEL_NOT_ALLOWED
   // → 控制端降级空表(面板退化为事件流 + 消息扫描两源)。
   'maker:session-background-tasks:list',
+  // Exact task control executes only on the owning host. Shared-task guests
+  // retain their separate narrower allowlist; an old host may reject this channel.
+  'maker:agent-task:stop',
+  'maker:session-control:v1',
   'maker:session-background-activity',
   // Durable PI Subagent truth and process handles live on the data-owning device.
   // Reads and exact controls must execute there; the controller must never fall
@@ -644,6 +648,9 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   REMOTE_RESOURCE_CHANGED_CHANNEL,
   'maker:status-changed',
   'maker:input:projection',
+  // Optional Session controller invalidations. Older peers ignore this channel;
+  // reconnect still reads the existing authoritative snapshots.
+  'maker:session-control:changed',
   'maker:interaction-request',
   'maker:interaction-dismissed',
   // Claude Auto classifier 故障后降级到 ask;payload 带 sessionId,控制端显示同款提示。

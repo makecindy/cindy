@@ -1,4 +1,5 @@
 import type { AgentKind, Effort } from '@cindy/maker-core';
+import type { SessionRuntimeSelection } from '@cindy/maker-shared/session-controller';
 import type { Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import {
   connectedProvidersForAgent,
@@ -9,13 +10,7 @@ import {
 
 export type SessionRuntimeMutationSource = 'agent' | 'fallback';
 
-export interface SessionRuntimeProfile {
-  agentKind: AgentKind;
-  model: string;
-  providerId: string | null;
-  effort: Effort | null;
-  fastMode: boolean;
-}
+export type SessionRuntimeProfile = SessionRuntimeSelection;
 
 export interface PendingSessionRuntimeMutation {
   generation: number;

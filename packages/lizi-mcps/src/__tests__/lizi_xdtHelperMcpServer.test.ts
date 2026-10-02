@@ -18,6 +18,29 @@ function parsePayload(result: unknown): Record<string, unknown> {
 }
 
 describe("cindy_helper MCP server", () => {
+  it('captures the host caller before awaiting surface resolution', async () => {
+    let generation = 1, captured = 0;
+    const stop = vi.fn(async () => captured === generation ? { ok: true as const, status: 'requested' as const }
+      : { ok: false as const, errorCode: 'NOT_FOUND' as const, message: 'source changed' });
+    const runInHostContext = vi.fn(async (input, operation) => {
+      expect(input).toMatchObject({ sessionId: 'caller', sessionInstanceId: 'native-instance' });
+      captured = generation;
+      return operation();
+    });
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => { generation++; return 'default'; }, runInHostContext,
+      sessionControl: { stopSessionTurn: stop, updateQueuedMessage: vi.fn(), cancelQueuedMessage: vi.fn(),
+        steerSession: vi.fn(), getSessionRuntime: vi.fn(), setSessionRuntime: vi.fn() },
+    }, { agentKind: 'pi', workingDir: '/repo', sessionId: 'caller', sessionInstanceId: 'native-instance' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'caller-fence-test', version: '0.0.0' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const result = await client.callTool({ name: 'call_tool', arguments: { name: 'stop_session_turn', args: { session_id: TARGET_SESSION_ID } } });
+      expect(parsePayload(result).ok).toBe(false);
+      expect(runInHostContext).toHaveBeenCalledOnce(); expect(captured).toBe(generation - 1);
+    } finally { await client.close(); await server.close(); }
+  });
   it('offers update checks without installation only to a live local task', async () => {
     let context = {
       agentKind: 'codex' as const, workingDir: '/repo', sessionId: 'local-task',

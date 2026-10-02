@@ -1,3 +1,5 @@
+vi.mock('original-fs', async () => { const fs = await import('node:fs'); return { ...fs, default: fs }; });
+vi.mock('../../../session-controller/localHost.js', () => { const owner = {}; return { localSessionHost: { deviceId: () => 'test-device', owner: () => owner, execution: () => null } }; });
 /**
  * cardActionHandler — 飞书群卡片认不出「自己发在哪条话题」时的 fail-closed。
  *

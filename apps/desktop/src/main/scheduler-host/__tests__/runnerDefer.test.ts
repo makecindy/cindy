@@ -53,6 +53,7 @@ function createSessionHarness(sendImpl: SendImpl) {
   });
   const send = vi.fn<SendImpl>(sendImpl);
   const session = {
+    instanceId: 'test-instance', getTurnGeneration: () => 0,
     id: 'heartbeat-session',
     agentKind: 'codex',
     model: 'gpt-5.4',
@@ -137,7 +138,8 @@ function createRunnerHarness(session: Session, options: RunnerHarnessOptions = {
     getSessionMeta: vi.fn(async () => ({ sdkSessionId: 'sdk-1', workDir: 'F:\\X', model: 'gpt-5.4' })),
     isSessionAlive: vi.fn(() => options.sessionAlive ?? true),
   } as unknown as Maker;
-  const runner = new MakerScheduleRunner({ maker, getDb: () => ({}) as never, notifier, logger });
+  const runner = new MakerScheduleRunner({
+    sessionHost: { deviceId: () => 'test-device', owner: () => globalThis, execution: () => null }, maker, getDb: () => ({}) as never, notifier, logger });
   return { runner, logger, notifier, maker };
 }
 

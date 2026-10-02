@@ -678,6 +678,12 @@ vi.mock('../../logger.js', () => ({
   createLogger: () => mocks.logger,
 }));
 
+// Queue transactions do not initialize Electron or a user's runtime configuration.
+// Keep the real credential error classifier; isolate only its upstream config import.
+vi.mock('../../maker-host/runtime-configs.js', () => ({
+  claudeUpstreamEndpoint: () => 'https://example.invalid',
+}));
+
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -13115,4 +13121,20 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     );
     expect(h.onResumableTurnError, '落库失败就没有可续跑的目标,不该消耗额度').not.toHaveBeenCalled();
   });
+});
+
+it('observes cold and restoring queues without waking or allocating cold state', async () => {
+  const h = createHarness();
+  const pending = deferred<AgentInputQueuedMessage[]>();
+  const load = vi.fn(() => pending.promise);
+  h.setLoadQueueSnapshot(load);
+  expect(h.coordinator.getQueueObservation('cold-observation')).toEqual({ paused: false, restoring: false });
+  // null is the cold SQLite fallback; undefined would mean inspection created live state.
+  expect(h.coordinator.getQueueInspectionIfRestored('cold-observation')).toBeNull();
+  expect(load).not.toHaveBeenCalled();
+  const restoring = h.coordinator.ensureQueueRestored('cold-observation');
+  expect(h.coordinator.getQueueObservation('cold-observation').restoring).toBe(true);
+  pending.resolve([]); await restoring;
+  expect(h.coordinator.getQueueObservation('cold-observation').restoring).toBe(false);
+  expect(h.sendToAgent).not.toHaveBeenCalled();
 });

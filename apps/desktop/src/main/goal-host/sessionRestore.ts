@@ -11,7 +11,6 @@ import type { SessionLike } from './types.js';
 interface GoalSessionRestoreMaker {
   getSession(sessionId: string): SessionLike | undefined;
   getSessionMeta(sessionId: string): Promise<SessionMeta | null>;
-  createSession(opts: MakerSessionCreateOpts): Promise<Session>;
 }
 
 interface GoalSessionRow {
@@ -21,6 +20,7 @@ interface GoalSessionRow {
 /** Injectable seams keep the dormant-session restore ordering deterministic in tests. */
 export interface RestoreGoalSessionDeps {
   maker: GoalSessionRestoreMaker;
+  ensureRuntime(opts: MakerSessionCreateOpts): Promise<Session>;
   warn(message: string, meta: Record<string, unknown>): void;
   getSessionRow?: (sessionId: string) => Promise<GoalSessionRow | null>;
   hydrateProvider?: (sessionId: string, providerId: string | null) => void;
@@ -70,7 +70,7 @@ export async function restoreSessionForGoal(
     await (deps.prepareOrcaStart ?? preparePersistedOrcaSessionStart)(sessionId, opts);
     (deps.hydrateProvider ?? hydrateSessionProvider)(sessionId, row?.providerId ?? null);
 
-    const session = await deps.maker.createSession(opts);
+    const session = await deps.ensureRuntime(opts);
     (deps.markOrcaHydrated ?? markOrcaMcpHydratedIfNeeded)(session.id, opts);
     (deps.wireSession ?? wireSessionToIpc)(session);
     return session;

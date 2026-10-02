@@ -39,6 +39,8 @@ interface UserActionGrant {
 }
 
 export interface GhostAgentTurnRunRequest {
+  /** Host-only continuation of the consumed click/background authorization. */
+  assertCurrent(): void;
   ghostId: string;
   ghostVersion: string;
   sourceSessionId: string;
@@ -313,8 +315,21 @@ export class GhostAgentSlot {
     });
 
     this.inFlightGhosts.add(ghostId);
+    const association = this.associatedSessions.get(ghostId);
+    const agentDeclaration = JSON.stringify(ghost.manifest.agent);
+    const version = ghost.manifest.version;
+    const assertCurrent = () => {
+      const current = this.deps.getGhost(ghostId);
+      if (!current?.enabled || current.manifest.version !== version
+        || JSON.stringify(current.manifest.agent) !== agentDeclaration
+        || this.associatedSessions.get(ghostId) !== association
+        || !association?.has(sourceSessionId)) {
+        throw new Error('Plugin Agent authorization changed');
+      }
+    };
     try {
       const result = await this.runner({
+        assertCurrent,
         ghostId,
         ghostVersion: ghost.manifest.version,
         sourceSessionId,

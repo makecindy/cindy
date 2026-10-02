@@ -1,3 +1,4 @@
+vi.mock('../../../session-controller/localHost.js', () => { const owner = {}; return { localSessionHost: { deviceId: () => 'test-device', owner: () => owner, execution: () => null } }; });
 /**
  * cardActionHandler — control:session-pick 重复接管替换流程(thread 模型)。
  *
@@ -233,8 +234,10 @@ beforeEach(() => {
   mocks.updatePermissionMode.mockResolvedValue(undefined);
   mocks.applyRuntimeSetModelChange.mockResolvedValue({ status: 'applied' });
   mocks.applyPiImModelSelectionUnderLock.mockResolvedValue({ status: 'applied' });
+  const createdRuntime = { id: 'sess-new', getTurnGeneration: () => 1 };
   mocks.getMaker.mockReturnValue({
-    createSession: vi.fn(async () => ({ id: 'sess-new' })),
+    getSession: (id: string) => id === 'sess-new' ? createdRuntime : undefined,
+    createSession: vi.fn(async () => createdRuntime),
     closeSession: mocks.closeSession,
     getCapabilities: vi.fn(() => ({
       permissionModes: [{ id: 'ask' }, { id: 'auto' }, { id: 'bypassPermissions' }],

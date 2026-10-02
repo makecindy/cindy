@@ -95,6 +95,7 @@ function createRunner(getSessionMeta: Maker['getSessionMeta']) {
     closeSession: vi.fn(async () => undefined),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
+    sessionHost: { deviceId: () => 'test-device', owner: () => globalThis, execution: () => null },
     maker,
     getDb: () => ({}) as never,
     notifier,

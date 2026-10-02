@@ -1,3 +1,7 @@
+import { createNativeSessionController } from '../session-controller/nativeRuntime.js';
+import { localSessionHost } from '../session-controller/localHost.js';
+import { SessionAdmissionError, type SessionControllerDeps } from '../session-controller/controller.js';
+import type { SessionCallerPolicy } from '../session-controller/callerContext.js';
 /**
  * hook-control/session-runner.ts
  * ---------------------------------------------------------------------------
@@ -474,6 +478,7 @@ async function collectOutboundForFinalText(
 }
 
 export function createMakerHookSessionRunner(deps: {
+  sessionHost?: SessionControllerDeps;
   log: { info(msg: string): void; warn(msg: string): void };
 }): HookSessionRunner {
   const { log } = deps;
@@ -501,6 +506,25 @@ export function createMakerHookSessionRunner(deps: {
     async run(req) {
       const startedAt = Date.now();
       const maker = getMaker();
+      const host = deps.sessionHost ?? localSessionHost;
+      const owner = host.owner();
+      const control = createNativeSessionController(maker, host, desktopSessionStorage);
+      const caller: SessionCallerPolicy = {
+        source: 'hook',
+        assertCurrent: () => {
+          if (!owner || host.owner() !== owner) throw new SessionAdmissionError('OWNER_SCOPE_CHANGED', 'Hook Session owner changed');
+        },
+        authorize: async admission => {
+          if (!['createRecord', 'ensureRuntime', 'send'].includes(admission.operation)
+            || admission.targets.some(target => target.sessionId !== req.sessionId)) {
+            throw new SessionAdmissionError('NOT_AUTHORIZED', 'Hook Session target changed');
+          }
+          const runtime = maker.getSession(req.sessionId);
+          if (!req.isNew && runtime && req.isDirAuthorized && !req.isDirAuthorized(runtime.workDir)) {
+            throw new SessionAdmissionError('NOT_AUTHORIZED', 'Hook Session directory is no longer authorized');
+          }
+        },
+      };
 
       // 新建: 按「偏好 > 草稿默认」合成; 复用/接管: session meta 权威, 下方覆盖
       const resolved = req.isNew
@@ -661,7 +685,7 @@ export function createMakerHookSessionRunner(deps: {
           // into a slow websocket RPC and can leave server/client state split
           // if the response times out. The first real message cold-opens this
           // same row through the ordinary reuse path.
-          await desktopSessionStorage.create({
+          await control.createRecord(caller, {
             id: req.sessionId,
             agentKind: effectiveAgentKind,
             workDir: workingDir,
@@ -701,7 +725,7 @@ export function createMakerHookSessionRunner(deps: {
       }
       try {
         await prepareUnhealthySessionForSend(req.sessionId);
-        session = await maker.createSession(createOpts);
+        session = await control.ensureRuntime(caller, createOpts);
       } catch (err) {
         // session 未建成: 若有预建 worktree 则回收(同 maker-ipc/register.ts
         // 的 shouldRecycleHandoffWorktreeOnFailure 判据), 防孤儿泄漏
@@ -1163,7 +1187,7 @@ export function createMakerHookSessionRunner(deps: {
           ? (prependNoteToWireUserMessage(withHandoff, planReconcileNote) as UserMessage)
           : withHandoff;
         const trustedChannelOrigin = mainOwnedChannelOrigin(req.source?.im);
-        const sendResult = await session.send(outgoingMessage, {
+        const sendResult = await control.send(caller, session, outgoingMessage, {
           origin,
           planMode: false,
           ...(trustedChannelOrigin

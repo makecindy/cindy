@@ -1437,6 +1437,35 @@ describe('Maker session close events', () => {
 });
 
 describe('Maker before-start lifecycle hook', () => {
+  it('rejects revoked admission after preparation without starting a provider', async () => {
+    let allowed = true;
+    const startSession = vi.fn(async () => createHandle({ id: 'thread-1' }));
+    const storage = createStorage();
+    const maker = new Maker({ agents: { codex: createAgent(startSession) }, storage, logger: createLogger(),
+      lifecycleHooks: {
+        onBeforeStart: async () => { allowed = false; },
+        validateStart: () => { if (!allowed) throw new Error('revoked'); },
+      },
+    });
+    await expect(maker.createSession({ id: 'task', agentKind: 'codex', workingDir: '/repo', model: 'm' })).rejects.toThrow('revoked');
+    expect(startSession).not.toHaveBeenCalled();
+    expect(await storage.get('task')).toBeNull();
+  });
+
+  it('cleans up an unpublished handle when admission is revoked during startup', async () => {
+    let allowed = true;
+    const handle = createHandle({ id: 'thread-1' });
+    const close = vi.spyOn(handle, 'close');
+    const storage = createStorage();
+    const maker = new Maker({
+      agents: { codex: createAgent(vi.fn(async () => { allowed = false; return handle; })) }, storage, logger: createLogger(),
+      lifecycleHooks: { validateStart: () => { if (!allowed) throw new Error('revoked'); } },
+    });
+    await expect(maker.createSession({ id: 'task', agentKind: 'codex', workingDir: '/repo', model: 'm' })).rejects.toThrow('revoked');
+    expect(close).toHaveBeenCalledOnce();
+    expect(await storage.get('task')).toBeNull();
+    expect(maker.getSession('task')).toBeUndefined();
+  });
   it('awaits host preparation before starting the agent', async () => {
     const order: string[] = [];
     const onBeforeStart = vi.fn(async () => {

@@ -233,6 +233,7 @@ describe('Session turn stall watchdog', () => {
       const data = terminal!.data as { isTerminal?: boolean; reason?: string };
       expect(data.isTerminal).toBe(true);
       expect(data.reason).toBe('turn_no_event_timeout');
+      expect(session.getWatchdogObservation()).toMatchObject({ terminalReason: 'turn_no_event_timeout', suspendGapObserved: false });
       expect(stub.abort).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
@@ -752,6 +753,7 @@ describe('Session turn stall watchdog', () => {
       await session.send('go');
       // 合盖睡 8 小时:壁钟前进,但定时器没有按比例推进
       vi.setSystemTime(Date.now() + 8 * 3_600_000);
+      expect(session.getWatchdogObservation().suspendGapObserved).toBe(true);
       await vi.advanceTimersByTimeAsync(STALL_MS);
 
       expect(seen.some((ev) => ev.type === 'error')).toBe(false);

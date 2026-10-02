@@ -108,6 +108,9 @@ jobs:
           XDT_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}
         run: pnpm --filter desktop db:validate
 
+      - name: Check Session controller boundaries
+        run: pnpm check:session-controller
+
       - name: Run scheduler architecture guard
         run: pnpm ci:scheduler-guard
 

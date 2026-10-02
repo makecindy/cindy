@@ -15,6 +15,9 @@ import type { SharedTaskPeerCapture } from './sharedTaskDispatch.js';
 export interface DeviceLinkInvokeContext {
   controllerDeviceId: string;
   channel: string;
+  /** Target-host fence captured before asynchronous admission, never read from wire args. */
+  assertCurrent?: () => void;
+  revalidate?: () => Promise<void>;
   /** Host-verified sharedTask identity and revocation fence; never populated from wire args. */
   sharedTask?: SharedTaskPeerCapture;
   /** Shared only within this invoke; an admitted native mutation must finish or roll back. */

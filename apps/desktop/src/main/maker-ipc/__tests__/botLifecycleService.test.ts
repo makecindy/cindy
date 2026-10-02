@@ -1,3 +1,7 @@
+vi.mock('../../session-controller/localHost.js', () => {
+  const owner = {};
+  return { localSessionHost: { deviceId: () => 'test-device', owner: () => owner, execution: () => null } };
+});
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -123,7 +127,8 @@ describe('Bot lifecycle coordinator', () => {
 
   function service(hooks: Partial<import('../botLifecycleService.js').BotLifecycleServiceDeps> = {}) {
     return createBotLifecycleService({
-      maker: { closeSession } as unknown as Maker,
+      maker: { closeSession, getSession: (() => { const runtimes = new Map<string, unknown>();
+        return (id: string) => { if (!runtimes.has(id)) runtimes.set(id, { id, instanceId: id, getTurnGeneration: () => 1 }); return runtimes.get(id); }; })() } as unknown as Maker,
       getDelegationService: () => ({ cancelDelegationsForBot } as never),
       deleteProfileAndDetachSessions,
       now: () => 10,

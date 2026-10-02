@@ -1,3 +1,7 @@
+import { publishSessionSignal } from './session-controller/signals.js';
+import { sessionRecords } from './session-controller/records.js';
+import { createHostSessionOperation } from './session-controller/hostOperation.js';
+import { localSessionHost } from './session-controller/localHost.js';
 import { prepareImportedAutomation, finishImportedAutomation } from './bot-import/automationRuntime.js';
 import { ensureImportedAutomationReady, recoverCompanionImports } from './bot-import/host.js';
 import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
@@ -41,7 +45,6 @@ import {
 } from './worktree/recycleMaintenance';
 import { requestWorktreeRecycle } from './worktree/managedRecycle';
 import {
-  patchSessionMetaInDb,
   recycleSessionWorktreeForStatusChange,
 } from './localDb/ipc/sessions';
 import { tryGetDbClient } from './localDb/client/current';
@@ -2600,6 +2603,7 @@ registerGhostIpc();
 registerPluginMarketIpc();
 registerPluginPublisherIpc();
 setAppSessionCommitBoundaryHook(() => {
+  publishSessionSignal('device-link:session-controller:owner-changed', {});
   // 进行中的 Claude Code 登录属于旧 owner:结束 CLI 子进程,不让它在新 owner 下完成。
   cancelClaudeCliLogin();
   clearAllSessionAttention();
@@ -7688,7 +7692,7 @@ const registerIpcHandlers = () => {
     isAlive: (id) => getMakerIfReady()?.isSessionAlive(id),
     isRunning: (id) => getMakerIfReady()?.getSession(id)?.isTurnRunning() ?? false,
     isWorkspaceBusy: (workingDir) => cindyMakeTestController.isUsingWorkspace(workingDir),
-    setStatus: patchSessionMetaInDb,
+    setStatus: (id, patch) => createHostSessionOperation(localSessionHost, { source: 'host', operation: 'updateMetadata', sessionIds: [id] })(() => sessionRecords.patchMetadata(id, patch)),
     recycle: recycleSessionWorktreeForStatusChange,
   });
   configureCindyMakeTestRuntime(

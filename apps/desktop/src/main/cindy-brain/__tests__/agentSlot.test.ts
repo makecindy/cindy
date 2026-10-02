@@ -107,6 +107,21 @@ describe('agentSlot · 清单与模板守门', () => {
 });
 
 describe('agentSlot · 真人点击一次性票', () => {
+  it('已消费的点击授权在等待期间撤销后不能继续，也不能被同名插件重新启用恢复', async () => {
+    let validate!: () => void;
+    const runner: GhostAgentTurnRunner = async request => {
+      validate = request.assertCurrent;
+      validate();
+      return { ok: true, sessionId: request.sourceSessionId, disposition: 'active' };
+    };
+    const slot = makeSlot({ runner });
+    const token = slot.issueUserActionToken('alpha', 'session-1')!;
+    await slot.handleRequest('alpha', userRequest(token));
+    slot.clearGhost('alpha');
+    slot.issueUserActionToken('alpha', 'session-1');
+    expect(validate).toThrow('authorization changed');
+  });
+
   it('票据绑定插件，别的插件不能使用', async () => {
     const runner = acceptedRunner();
     const slot = makeSlot({ ghosts: [fakeGhost('alpha'), fakeGhost('beta')], runner });

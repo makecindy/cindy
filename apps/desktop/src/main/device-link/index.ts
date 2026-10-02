@@ -1,3 +1,5 @@
+import { publishSessionSignal } from '../session-controller/signals.js';
+import { SESSION_ATTEST_CHANNEL, sessionAttestations, type SessionAttestationFrame } from '../session-controller/attestation.js';
 /**
  * device-link host —— 跨设备远程控制的 main 进程接线层。
  *
@@ -989,6 +991,33 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
     if (env.kind !== 'push') return;
     const p = env.payload as PushPayload;
+    if (p?.channel === SESSION_ATTEST_CHANNEL) {
+      const peer = env.src;
+      if (parseSharedTaskPeer(peer)) return;
+      const frame = p.payload as Partial<SessionAttestationFrame> | null;
+      if (frame?.kind === 'answer') { sessionAttestations.answer(peer, frame); return; }
+      if (frame?.kind !== 'challenge' || typeof frame.challenge !== 'string' || frame.challenge.length > 128
+        || typeof frame.token !== 'string' || frame.token.length > 128
+        || typeof frame.digest !== 'string' || frame.digest.length > 128) return;
+      const { challenge, token, digest } = frame;
+      const currentClient = client;
+      const realm = authRealmReconnectGeneration;
+      const assertConnection = () => {
+        if (!currentClient || currentClient !== client || realm !== authRealmReconnectGeneration) throw new Error('Session attestation connection changed');
+      };
+      void import('../session-controller/remoteTickets.js').then(async ({ remoteSessionTickets }) => {
+        try {
+          const principal = await remoteSessionTickets.attest(peer, token, digest);
+          sendSessionAttestationFrame(peer, { kind: 'answer', challenge, principal }, () => {
+            assertConnection(); remoteSessionTickets.assertCurrent(peer, token, digest);
+          });
+        } catch {
+          // No caller identity or task content is returned on failure.
+          sendSessionAttestationFrame(peer, { kind: 'answer', challenge, principal: null }, assertConnection);
+        }
+      }).catch(() => { /* A lost return frame expires the exact request. */ });
+      return;
+    }
     const sourceEpoch = sharedHostStreams.get(env.src)?.epoch;
     // 词典同步帧在 main 侧消费,不转给 renderer —— 它不是远程视图事件,
     // renderer 也不该看到别的设备的同步状态。
@@ -1741,6 +1770,16 @@ export function getSelfDeviceId(): string | null {
 /** 控制端:对目标设备远程 invoke 一个 allowlist 内的 channel。
  *  被控端自身持有执行预算的 channel(desktop-cmd:run)按协议契约放宽隧道超时,
  *  避免与被控端执行超时对撞(见 INVOKE_TIMEOUT_OVERRIDES_MS)。 */
+export function sendSessionAttestationFrame(deviceId: string, frame: SessionAttestationFrame, assertCurrent: () => void): void {
+  assertCurrent();
+  assertNotStandby();
+  if (!client || client.getStatus() !== 'online' || parseSharedTaskPeer(deviceId)) {
+    throw new Error('Session attestation transport unavailable');
+  }
+  // Return traffic only. Never open/reconnect a control link for a challenge.
+  client.sendPush(deviceId, SESSION_ATTEST_CHANNEL, frame);
+}
+
 export async function remoteInvoke(
   deviceId: string,
   channel: string,
@@ -1988,6 +2027,12 @@ export function sendMobileBotGroupNotify(payload: {
 }
 
 export function broadcast(channel: string, payload: unknown): void {
+  if (channel === DEVICE_LINK_PUSH.REMOTE_PUSH && payload && typeof payload === 'object') {
+    const remote = payload as { deviceId?: string; channel?: string; payload?: unknown };
+    if (remote.deviceId && remote.channel) publishSessionSignal(remote.channel, remote.payload, remote.deviceId);
+  } else if (channel !== DEVICE_LINK_PUSH.REMOTE_PUSH) {
+    publishSessionSignal(channel, payload);
+  }
   const ownerStamp = getActiveDataOwnerPushStamp();
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;

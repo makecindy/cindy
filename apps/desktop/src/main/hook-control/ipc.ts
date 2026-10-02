@@ -51,7 +51,11 @@ import {
   type HookPrefsChannel,
 } from './workspacePrefsStore.js';
 import { createWorkspacePrefsMirror } from './workspacePrefsMirror.js';
-import { patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
+import { sessionRecords } from '../session-controller/records.js';
+import { createHostSessionOperation } from '../session-controller/hostOperation.js';
+import { createNativeSessionController } from '../session-controller/nativeRuntime.js';
+import { captureInternalSessionCaller } from '../session-controller/internalCaller.js';
+import { localSessionHost } from '../session-controller/localHost.js';
 import {
   dialogueWorkspaceRootDir,
   dialogueWorkspaceRoots,
@@ -534,12 +538,14 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
             error: error instanceof Error ? error.message : String(error),
           });
         }
-        await session.abort();
+        await createNativeSessionController(getMaker(), localSessionHost).abortOwnedRuntime(
+          captureInternalSessionCaller(localSessionHost, { source: 'hook', sessionIds: [sessionId], operations: ['abortTurn'] }), session);
       },
       // session.archive 的归档出口: 与 device-link 远程归档同一条
       // patchSessionMetaInDb 路径(落库 + sessions:patched 广播, sidebar 即时移出)
       archiveSessionRow: async (sessionId) => {
-        await patchSessionMetaInDb(sessionId, { status: 'archived' });
+        await createHostSessionOperation(localSessionHost, { source: 'hook', operation: 'setRecordStatus', sessionIds: [sessionId] })(
+          () => sessionRecords.setRecordStatus(sessionId, 'archived'));
       },
       // 交互卡按钮回流的配对出口(interaction.decision -> 挂起决策 resolve)
       resolveInteraction: resolveHookInteraction,

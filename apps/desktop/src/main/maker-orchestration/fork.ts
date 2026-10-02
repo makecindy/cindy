@@ -1,3 +1,4 @@
+import { revalidateSessionOperation } from '../session-controller/operationContext.js';
 /**
  * fork-session：消息级 fork 业务函数。
  *
@@ -936,6 +937,7 @@ export async function forkSessionAtMessage(
     (usesTailTurnFork || assistantUuid)
   ) {
     const agentKind = dbToMakerAgentKind(forkSource.agentKind);
+    await revalidateSessionOperation();
     const forkResult = await getMaker()
       .forkSdkSession(agentKind, {
         sourceSdkSessionId: forkSource.sdkSessionId,
@@ -995,6 +997,7 @@ export async function forkSessionAtMessage(
     ? []
     : collectClaudeToolParentUuids(sourceMessages, claudeAnchorIndex);
   try {
+    await revalidateSessionOperation();
     await getDbClient().tx('fork.session', {
       sourceSessionId,
       sourceClearedAt: source.clearedAt,
@@ -1160,6 +1163,7 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   const newTitle = source.title.startsWith(STRIP_FORK_TITLE_PREFIX)
     ? source.title
     : `${STRIP_FORK_TITLE_PREFIX} ${source.title}`;
+  await revalidateSessionOperation();
   const { newSdkSessionId, uuidMap } = await getMaker()
     .forkSdkSession('codex', {
       sourceSdkSessionId: source.sdkSessionId,
@@ -1187,6 +1191,7 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   const recoveryMarker = newSdkSessionId === null ? buildCodexForkRecoveryMarker({
     source, rows: sourceMessages, newMessageIds, sessionId: newSessionId, now,
   }) : undefined;
+  await revalidateSessionOperation();
   await getDbClient().tx('fork.session', {
     sourceSessionId,
     sourceClearedAt: source.clearedAt,

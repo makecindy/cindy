@@ -1,4 +1,7 @@
-import { openSession } from '../sessionOpening.js';
+import { sessionRecords } from '../../session-controller/records.js';
+import { withUiSessionCaller } from '../../session-controller/uiCaller.js';
+import { revalidateSessionOperation } from '../../session-controller/operationContext.js';
+import { createSessionRecord } from '../../session-controller/opening.js';
 /**
  * chat-data-localization F5：Sessions IPC handlers（C6）。
  *
@@ -1436,7 +1439,7 @@ export function registerSessionIpc(
         );
       }
     }
-    const { row: insertRow } = await openSession({ id, now,
+    const { row: insertRow } = await withUiSessionCaller(event, () => createSessionRecord({ id, now,
       body: { ...createBody, workspaceKind, workingDir },
     }, async (prepared, assertCurrent) => {
       const resource = !prepared.remoteHostId && prepared.workingDir
@@ -1444,7 +1447,7 @@ export function registerSessionIpc(
       const insert = async () => { assertCurrent(); await db.insert(sessions).values(prepared); };
       if (resource) await withWorktreeMutation([resource], insert);
       else await insert();
-    });
+    }));
     const [row] = await db.select().from(sessions).where(eq(sessions.id, id));
     if (!row) throwIpcError('NOT_FOUND', 'Session 创建后查询失败');
     // recent-workdirs: 项目目录走 sidebar 分组,要进"最近"列表;dialogue 目录是
@@ -1722,7 +1725,7 @@ export function registerSessionIpc(
   ipcMain.handle('local-db:sessions:update', async (_e, id: unknown, patch: unknown) => {
     const sid = requireString(id, 'id');
     const p = requireObject(patch, 'patch');
-    return updateSessionInDb(sid, p, opts);
+    return withUiSessionCaller(_e, () => sessionRecords.updateRecordForUi(sid, p, opts));
   });
 
   // 窄口径会话元数据编辑(status / title / pinnedAt)。专为 device-link 控制端**远程**
@@ -1733,10 +1736,10 @@ export function registerSessionIpc(
   ipcMain.handle('local-db:sessions:patch-meta', async (_e, id: unknown, patch: unknown) => {
     const sid = requireString(id, 'id');
     const p = requireObject(patch, 'patch');
-    const updated = await patchSessionMetaInDb(
+    const updated = await withUiSessionCaller(_e, () => sessionRecords.patchMetadata(
       sid,
       p as Parameters<typeof patchSessionMetaInDb>[1],
-    );
+    ));
     return updated;
   });
 
@@ -1803,6 +1806,7 @@ export async function updateSessionInDb(
   // 工作目录切换必须和发送/懒启动共用同一把路由锁。否则发送可能在
   // 读取旧目录后、写入新目录前重建 runtime，随后仍在旧目录执行。
   const update = async () => {
+    await revalidateSessionOperation();
     if (moveGuard) {
       moveGuard.assertCurrent();
       await moveGuard.beforeUpdate();
@@ -2141,6 +2145,7 @@ export async function patchSessionMetaInDb(
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId);
   const updated = await withStatusWriteLock(db, sessionId, patch.status, async () => {
+    await revalidateSessionOperation();
     if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
     const terminal = patch.status === 'archived' || patch.status === 'deleted';
     if (terminal) {
@@ -2296,6 +2301,7 @@ export async function renameSessionTitlesInDb(
     });
   }
 
+  await revalidateSessionOperation();
   if (dryRun) return preview;
 
   // 批量改名(MCP 工具)同样是"人给的名字",自动起名不得再覆盖;与上面两条出口
@@ -2357,6 +2363,7 @@ export async function setSessionsStatusInDb(
     }
     const physicalResources = await Promise.all([...new Set(resources)].map(physicalWorktreeKey));
     return withWorktreeMutation(resources, async () => {
+      await revalidateSessionOperation();
       if (status === 'archived') {
         for (const id of sessionIds) await requestWorktreeRecycle(id, perSession.get(id));
       }

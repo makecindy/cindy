@@ -33,8 +33,8 @@ vi.mock('../../cindy-brain/index.js', () => ({
   getGhostCardService: () => ({ registerCall: registerCallMock, finalizeCall: finalizeCallMock }),
 }));
 
-vi.mock('../../maker-ipc/register.js', () => ({
-  tryGetOrcaCollabService: () => ({ sendToSession: sendToSessionMock }),
+vi.mock('../../session-controller/sessionService.js', () => ({
+  tryGetSessionService: () => ({ sendToSession: sendToSessionMock }),
 }));
 
 function schedule(overrides: Partial<Schedule> = {}): Schedule {

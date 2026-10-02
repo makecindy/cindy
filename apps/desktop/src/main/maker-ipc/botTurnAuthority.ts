@@ -224,6 +224,7 @@ const ANY_TURN_TOOLS = new Set([
   // 历史读取：前两档不限范围，最低档由历史范围只给伙伴自己的记录（见 mcp-providers）。
   'list_workdirs',
   'list_sessions',
+  'list_active_sessions',
   'get_chat_history',
   'search_chat_history',
 ]);
@@ -251,6 +252,9 @@ const OWNER_OR_ARRANGED_TOOLS = new Set([
  * 调用方自己的当前任务（伙伴自己的任务，任何档都可以）。
  */
 const TARGETED_TOOLS = new Map<string, { read: boolean; currentByDefault?: boolean }>([
+  ['get_session_capabilities', { read: true, currentByDefault: true }],
+  ['inspect_session', { read: true, currentByDefault: true }],
+  ['diagnose_session', { read: true, currentByDefault: true }],
   ['get_session_runtime', { read: true, currentByDefault: true }],
   ['list_session_queue', { read: true }],
   ['steer_session', { read: false }],

@@ -1,4 +1,5 @@
 import { createLogger } from '../logger.js';
+import { revalidateSessionOperation } from '../session-controller/operationContext.js';
 
 const log = createLogger('maker-ipc:send-to-session-lock');
 
@@ -79,6 +80,7 @@ export async function withSessionRestartLock<T>(
   try {
     release = await acquireSendToSessionLock(sessionId, restart.token);
     restart.acquired = true;
+    await revalidateSessionOperation();
     return await task();
   } finally {
     restarts.delete(sessionId);
@@ -205,6 +207,7 @@ export async function withSendToSessionLock<T>(
 ): Promise<T> {
   const release = await acquireSendToSessionLock(sessionId, undefined, getStage);
   try {
+    await revalidateSessionOperation();
     return await task();
   } finally {
     release();

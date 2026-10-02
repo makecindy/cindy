@@ -51,6 +51,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../logger', () => ({ createLogger: () => mocks.logger }));
+vi.mock('../../../session-controller/localHost.js', () => {
+  const owner = {};
+  return { localSessionHost: { deviceId: () => 'test-device', owner: () => owner, execution: () => null } };
+});
+
 vi.mock('../../../maker-host', () => ({ getMaker: mocks.getMaker }));
 vi.mock('../../../maker-host/createDesktopProviderService', () => ({
   getDesktopProviderService: () => ({ listProviders: mocks.listProviders }),
@@ -127,6 +132,7 @@ function makeSessionHarness(sessionId: string): SessionHarness {
   );
   const session = {
     id: sessionId,
+    getTurnGeneration: () => 1,
     agentKind: 'claude-code',
     abort: vi.fn(async () => undefined),
     send,
