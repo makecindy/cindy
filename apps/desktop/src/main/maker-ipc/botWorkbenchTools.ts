@@ -7,11 +7,14 @@
  * - 本机 Claude Code / Codex / Pi 会话按固定的转录目录发现(`botWorkbenchSessionRoots.ts`),只看近期、
  *   只读头尾;只有伙伴继续某一件时才经设置页同一条单条导入路径导入它(Pi 与导入不了的改开后台任务);
  * - 项目素材 brief(文档路径、git、GitHub PR / issue)宿主现算、有界、带缓存;
- * - 继续 / 停止复用宿主已有的发消息与优雅停止路径(与 send_to_session、
- *   stop_session_turn 同一条链路),由调用方注入。
+ * - 继续复用宿主已有的发消息路径(与 send_to_session 同一条链路),由调用方注入;停止走通用的
+ *   stop_session_turn,不再有工作台专属的停止工具;
+ * - 主人本人那一轮可以让伙伴记下 / 移除一个已接手项目(add_workbench_project /
+ *   remove_workbench_project),与工作台里「交给伙伴」写同一份记录。
  */
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 
 import { app } from 'electron';
 
@@ -35,9 +38,12 @@ import {
   type WorkbenchDelegationStatus,
 } from '../../shared/botWorkbench.js';
 import {
+  addBotWorkbenchDirectory,
   broadcastBotWorkbenchChanged,
   deleteBotWorkbenchJudgment,
+  readBotWorkbenchDirectoryPaths,
   readBotWorkbenchState,
+  removeBotWorkbenchDirectory,
   rekeyBotWorkbenchJudgment,
   setBotWorkbenchJudgment,
 } from './botWorkbenchService.js';
@@ -48,9 +54,11 @@ import {
   readSessionTranscript,
 } from './botWorkbenchTranscripts.js';
 import { workbenchSessionRoots } from './botWorkbenchSessionRoots.js';
+import { checkHandoverDirectory, findHandedProject } from './botWorkbenchHandover.js';
 import { createBriefCache, type WorkbenchBriefGithubItem } from './botWorkbenchBrief.js';
 import { readCanonicalSessionActivity } from './sessionActivityProjection.js';
 import {
+  authorizeWorkbenchTarget,
   createBotWorkbenchAccess,
   type BotWorkbenchAccess,
   type BotWorkbenchAccessDeps,
@@ -86,6 +94,17 @@ async function resolveWorkbenchCaller(callerSessionId: string): Promise<Workbenc
     return { ok: false, errorCode: 'REMOTE_WORKBENCH_UNAVAILABLE', message: '远端伙伴暂不支持工作台' };
   }
   return { ok: true, botId: row.botId };
+}
+
+/**
+ * 这件任务在不在主人交给该伙伴的项目里——与工作台继续同一判据。伙伴用通用会话工具
+ * 处理「主人事先安排」的一轮时，靠它决定能不能动这件任务（见 botTurnAuthority.ts）。
+ */
+export async function isWorkbenchProjectSession(botId: string, sessionId: string): Promise<boolean> {
+  const { directories } = await readBotWorkbenchState(ownerScopedUserDataPath(), botId);
+  if (directories.length === 0) return false;
+  const target = await readWorkbenchTarget(sessionId);
+  return authorizeWorkbenchTarget(target, directories, isCaseInsensitivePlatform(process.platform)).ok;
 }
 
 async function readWorkbenchTarget(taskId: string): Promise<WorkbenchTargetFacts | null> {
@@ -361,7 +380,7 @@ async function importExternalSession(
 }
 
 /** 投递、停止与开后台任务由调用方注入(与 send_to_session、stop_session_turn、start_session_task 同一条宿主路径)。 */
-export type BotWorkbenchSendDeps = Pick<BotWorkbenchAccessDeps, 'sendToSession' | 'stopSessionTurn' | 'startBackgroundTask'>;
+export type BotWorkbenchSendDeps = Pick<BotWorkbenchAccessDeps, 'sendToSession' | 'startBackgroundTask'>;
 
 /**
  * 按调用时的账号作用域组装一次工具服务:作用域在调用期间切换则中止,不做投递。
@@ -398,7 +417,6 @@ function createDesktopBotWorkbenchAccess(send: BotWorkbenchSendDeps): BotWorkben
     listRoutines: listBotRoutines,
     listSchedules: listProjectSchedules,
     sendToSession: send.sendToSession,
-    stopSessionTurn: send.stopSessionTurn,
     caseInsensitive: isCaseInsensitivePlatform(process.platform),
     isOwnerScopeCurrent: () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === scopeKey,
   });
@@ -423,7 +441,6 @@ export async function runBotWorkbenchTool<T>(
 
 const NO_SEND: BotWorkbenchSendDeps = {
   sendToSession: async () => ({ ok: false, errorCode: 'UNSUPPORTED', message: 'read only' }),
-  stopSessionTurn: async () => ({ ok: false, errorCode: 'UNSUPPORTED', message: 'read only' }),
   startBackgroundTask: async () => ({ ok: false, errorCode: 'UNSUPPORTED', message: 'read only' }),
 };
 
@@ -435,4 +452,82 @@ export async function readBotWorkbenchTaskForOwner(botId: string, taskId: string
 /** 工作台用:已接手项目里近期本机会话的 id 与最近活动。 */
 export async function listBotWorkbenchCandidatesForOwner(botId: string) {
   return runBotWorkbenchTool(NO_SEND, (access) => access.listCandidatesForOwner({ botId }));
+}
+
+type ProjectFailure = { ok: false; errorCode: string; message: string };
+
+async function runProjectChange<T>(run: () => Promise<T | ProjectFailure>): Promise<T | ProjectFailure> {
+  if (isAppSessionBoundaryPending()) {
+    return { ok: false, errorCode: 'OWNER_SCOPE_CHANGED', message: '账号正在切换,请稍后重试' };
+  }
+  try {
+    return await run();
+  } catch (error) {
+    return { ok: false, errorCode: 'INTERNAL', message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * 伙伴按主人的话记下一个已接手项目。只认本机、在用的伙伴主任务;「只有主人本人那一轮能用」
+ * 由工具调用前的按轮判定保证(botTurnAuthority.ts 未列名的工具默认只放行主人本人那一轮)。
+ */
+export function addBotWorkbenchProjectForCaller(params: { callerSessionId: string; path: string }) {
+  return runProjectChange(async () => {
+    const scopeKey = activeOwnerScopeKey();
+    const userDataDir = ownerScopedUserDataPath();
+    const caller = await resolveWorkbenchCaller(params.callerSessionId);
+    if (!caller.ok) return caller;
+    const checked = await checkHandoverDirectory(params.path, {
+      homeDir: os.homedir(),
+      userDataDir: app.getPath('userData'),
+      caseInsensitive: isCaseInsensitivePlatform(process.platform),
+    });
+    if (!checked.ok) return checked;
+    if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scopeKey) {
+      return { ok: false as const, errorCode: 'OWNER_SCOPE_CHANGED', message: '账号已切换,请重试' };
+    }
+    const added = await addBotWorkbenchDirectory(userDataDir, caller.botId, checked.path);
+    if (!added.ok) {
+      return {
+        ok: false as const,
+        errorCode: added.errorCode,
+        message: added.errorCode === 'TOO_MANY' ? '交给这个伙伴的项目已经太多了,先移除一些再加' : '这不是一个目录',
+      };
+    }
+    broadcastBotWorkbenchChanged(caller.botId);
+    const projectCount = (await readBotWorkbenchDirectoryPaths(userDataDir, caller.botId)).length;
+    return {
+      ok: true as const,
+      project: { name: path.basename(checked.path) || checked.path, path: checked.path },
+      projectCount,
+    };
+  });
+}
+
+/** 伙伴按主人的话移除一个已接手项目;项目里的任务、文件与伙伴写过的判断都不动。 */
+export function removeBotWorkbenchProjectForCaller(params: { callerSessionId: string; path: string }) {
+  return runProjectChange(async () => {
+    const scopeKey = activeOwnerScopeKey();
+    const userDataDir = ownerScopedUserDataPath();
+    const caller = await resolveWorkbenchCaller(params.callerSessionId);
+    if (!caller.ok) return caller;
+    const before = await readBotWorkbenchDirectoryPaths(userDataDir, caller.botId);
+    const matched = await findHandedProject(params.path, before, {
+      homeDir: os.homedir(),
+      caseInsensitive: process.platform === 'darwin' || isCaseInsensitivePlatform(process.platform),
+    });
+    if (!matched) {
+      return {
+        ok: false as const,
+        errorCode: 'PROJECT_NOT_IN_WORKBENCH',
+        message: `工作台里没有这个项目,没有移除任何东西。现在交给你的项目:${before.join('、') || '(无)'}`,
+      };
+    }
+    if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scopeKey) {
+      return { ok: false as const, errorCode: 'OWNER_SCOPE_CHANGED', message: '账号已切换,请重试' };
+    }
+    await removeBotWorkbenchDirectory(userDataDir, caller.botId, matched);
+    broadcastBotWorkbenchChanged(caller.botId);
+    return { ok: true as const, path: matched, removed: true };
+  });
 }

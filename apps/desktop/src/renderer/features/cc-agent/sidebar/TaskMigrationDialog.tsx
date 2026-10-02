@@ -275,16 +275,25 @@ export function TaskMigrationDialog({
       ? t('taskMigration.estimateTimeout')
       : estimateError === 'MIGRATION_TOO_MANY_FILES'
         ? t('taskMigration.estimateTooManyFiles', { limit: TASK_MIGRATION_MAX_FILES })
-        : estimateError
+        : estimateError === 'MIGRATION_FAILED'
           ? t('taskMigration.estimateFailed')
-          : estimate
-            ? t('taskMigration.fileSummary', {
-                count: estimate.fileCount,
-                size: bytes(estimate.bytes),
+          : estimateError
+            ? // The source refused for a stated reason (e.g. queued input); never blame the connection.
+              t(`taskMigration.errors.${estimateError}`, {
+                defaultValue: t('taskMigration.estimateFailedWithCode', { code: estimateError }),
               })
-            : t('taskMigration.estimating');
+            : estimate
+              ? t('taskMigration.fileSummary', {
+                  count: estimate.fileCount,
+                  size: bytes(estimate.bytes),
+                })
+              : t('taskMigration.estimating');
   const errorKey =
-    failure && t(`taskMigration.errors.${failure}`, { defaultValue: t('taskMigration.failed') });
+    failure &&
+    t(`taskMigration.errors.${failure}`, {
+      // The code is the only lead once the dialog closes; keep it visible for unmapped errors.
+      defaultValue: t('taskMigration.failed', { code: failure }),
+    });
   return (
     <Dialog.Root
       open
@@ -326,6 +335,29 @@ export function TaskMigrationDialog({
                   ? t('taskMigration.failureDescription')
                   : t('taskMigration.description', { name: computerName })}
           </Dialog.Description>
+          {complete && status?.skipped && (
+            <div className="mt-3 text-sm text-[var(--confirm-desc)]">
+              <p>{t('taskMigration.skippedTitle', { count: status.skipped.total })}</p>
+              <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
+                {status.skipped.entries.map((entry) => (
+                  <li key={entry.path} className="break-all">
+                    <span className="text-[var(--confirm-title)]">{entry.path}</span>
+                    {' · '}
+                    {t(`taskMigration.skippedReasons.${entry.code}`, {
+                      defaultValue: entry.code,
+                    })}
+                  </li>
+                ))}
+              </ul>
+              {status.skipped.total > status.skipped.entries.length && (
+                <p className="mt-1">
+                  {t('taskMigration.skippedMore', {
+                    count: status.skipped.total - status.skipped.entries.length,
+                  })}
+                </p>
+              )}
+            </div>
+          )}
           {confirming && (
             <p className="mt-2 text-sm text-[var(--confirm-desc)]">
               {t('taskMigration.bindingsNotice')}
@@ -439,6 +471,20 @@ export function TaskMigrationDialog({
           {failure && (
             <p className="mt-3 text-sm text-[var(--error-fg)]" role="alert">
               {errorKey}
+              {/* The path belongs to the source's recorded error, never to a local action error. */}
+              {failure === status?.error && status.errorPath && (
+                <span className="mt-1 block break-all">
+                  {t('taskMigration.errorPath', { path: status.errorPath })}
+                </span>
+              )}
+              {failure === status?.error && status.errorSize && (
+                <span className="mt-1 block">
+                  {t('taskMigration.errorSize', {
+                    needed: bytes(status.errorSize.needed),
+                    limit: bytes(status.errorSize.limit),
+                  })}
+                </span>
+              )}
             </p>
           )}
           <div className="mt-4 flex flex-wrap justify-end gap-2">

@@ -6,6 +6,18 @@
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
     {
+      "id": "wallpaper",
+      "status": "proposed",
+      "en": "Wallpaper",
+      "translations": {
+        "zh-CN": "壁纸",
+        "zh-TW": "桌布",
+        "ja": "壁紙",
+        "ko": "배경화면"
+      },
+      "note": "Desktop appearance setting for an in-app visual background layer."
+    },
+    {
       "id": "shared-session",
       "status": "proposed",
       "en": "Shared Session",

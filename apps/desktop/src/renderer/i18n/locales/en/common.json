@@ -23,7 +23,9 @@
     "close": "Close",
     "cancel": "Cancel",
     "start": "Copy task",
-    "failed": "Copy did not finish. Check both computers before copying again.",
+    "failed": "Copy did not finish. Check both computers before copying again. ({{code}})",
+    "errorPath": "File: {{path}}",
+    "errorSize": "Needs about {{needed}}; the limit is about {{limit}}.",
     "stages": {
       "preparing": "Preparing a snapshot…",
       "transferring": "Transferring and checking files…",
@@ -36,7 +38,7 @@
       "MIGRATION_TASK_RUNNING": "Stop the task before copying it.",
       "MIGRATION_SHARED_DIRECTORY_BUSY": "Another task is using this directory. Stop it before retrying.",
       "MIGRATION_TASK_UNSUPPORTED": "This task's type or current state does not support copying to another computer.",
-      "MIGRATION_NO_MEMORY": "Not enough available memory to process the complete task history. Free up memory and retry.",
+      "MIGRATION_NO_MEMORY": "The task history is too large for a copy to process.",
       "MIGRATION_INCOMPLETE_CONTEXT": "The complete task history is unavailable. Copy stopped to avoid losing context.",
       "MIGRATION_EXTERNAL_LINK": "The project contains links outside this directory or unsupported link chains. Source files are unchanged.",
       "MIGRATION_REQUIRES_REPOSITORY_ROOT": "For Git projects, the task directory must be the repository root.",
@@ -47,10 +49,28 @@
       "MIGRATION_TASK_QUEUED": "This task has queued messages. Finish or remove them before copying it.",
       "MIGRATION_SOURCE_CHANGED": "The source task changed during preparation. Retry the copy.",
       "MIGRATION_TIMEOUT": "The source computer did not respond in time. Try again later.",
-      "MIGRATION_CANNOT_CANCEL": "The target computer has started creating the task. The copy can no longer be cancelled."
+      "MIGRATION_CANNOT_CANCEL": "The target computer has started creating the task. The copy can no longer be cancelled.",
+      "MIGRATION_WORKSPACE_CHANGED": "The project's Git commit or staged changes changed while packing. Try copying again later.",
+      "MIGRATION_TEAM_CHANGED": "The members of this collaboration task changed. Start the copy again.",
+      "MIGRATION_NONPORTABLE_PATH": "The project contains file names that other systems cannot use. Source files are unchanged.",
+      "MIGRATION_PATH_COLLISION": "The project contains file names that differ only in letter case. Source files are unchanged.",
+      "MIGRATION_NOT_CONNECTED": "This computer is not connected. Make sure you are signed in and remote control is on, then try again.",
+      "MIGRATION_TASK_BUSY": "This task is already being copied or is in use by another operation. Try again later."
     },
     "successTitle": "Copy successful",
     "successDescription": "Copied to {{name}}.",
+    "skippedTitle_one": "{{count}} file or folder was not copied. Everything else was copied in full:",
+    "skippedTitle_other": "{{count}} files or folders were not copied. Everything else was copied in full:",
+    "skippedMore_one": "{{count}} more not listed.",
+    "skippedMore_other": "{{count}} more not listed.",
+    "completeWithSkipped_one": "Copied, {{count}} item skipped",
+    "completeWithSkipped_other": "Copied, {{count}} items skipped",
+    "skippedReasons": {
+      "MIGRATION_EXTERNAL_LINK": "Link points outside the project folder",
+      "MIGRATION_NONPORTABLE_PATH": "Name is not usable on other systems",
+      "MIGRATION_PATH_COLLISION": "Differs from another file only in letter case",
+      "MIGRATION_UNSUPPORTED_ENTRY": "Special file (such as a socket or pipe) that cannot be copied"
+    },
     "copyingTitle": "Copying to {{name}}",
     "keepOpen": "Copying to {{name}}. Closing this window won't stop the copy; check progress at the top of the original task.",
     "runInBackground": "Continue in background",
@@ -66,6 +86,7 @@
     "fileSummary": "Project files: {{count}}, totaling {{size}}",
     "estimateNote": "Pre-copy estimate including hidden files. Git history, conversation and attachments are copied separately and excluded from this size. Files may change before copying.",
     "estimateFailed": "Could not count files. Check the source computer’s connection and version, then close and try again.",
+    "estimateFailedWithCode": "Could not count files. Check the source computer’s connection and version, then close and try again. ({{code}})",
     "estimateTimeout": "Counting timed out: the project has too many files for the source computer to finish in time. Try copying a project with fewer files.",
     "estimateTooManyFiles": "The project has more than {{limit, number}} files and cannot be copied. Copy a project with fewer files instead."
   },
@@ -875,6 +896,33 @@
         "aria": "Choose the plugin panel restore entry",
         "bubble": "Floating bubble",
         "sidebar": "Sidebar"
+      },
+      "wallpaper": {
+        "title": "Wallpaper",
+        "description": "Choose a Cindy scene or your own image for the whole app, independently of the theme.",
+        "reset": "Reset",
+        "aria": "Wallpaper selection",
+        "nonePreview": "None",
+        "options": {
+          "none": "None",
+          "cindy-window": "Cindy · Window Companion",
+          "cindy-studio": "Cindy · Future Atelier",
+          "cindy-dream": "Cindy · Dream Voyage",
+          "custom": "Custom wallpaper"
+        },
+        "overlayLabel": "Overlay",
+        "overlayAria": "Wallpaper overlay strength",
+        "motionLabel": "Display",
+        "motionHint": "Still by default. Motion pauses when hidden and follows your reduced-motion preference.",
+        "motionStatic": "Static",
+        "motionDynamic": "Dynamic",
+        "customChoose": "Choose image",
+        "customReplace": "Replace image",
+        "customRemove": "Remove image",
+        "customBusy": "Working…",
+        "customHint": "PNG, JPEG or WebP, up to 20 MB. Stored on this device, displayed as a still image.",
+        "customInvalid": "Choose a valid PNG, JPEG or WebP image (up to 20 MB and 40 megapixels).",
+        "customFailed": "Could not save the wallpaper. Please try again."
       },
       "layout": {
         "label": "Panel layout",
@@ -7892,6 +7940,7 @@
         "message": "Follow up on “{{title}}”",
         "aria": "Follow up on “{{title}}”"
       },
+      "followingMark": "Looked after by {{names}}",
       "olderCount_one": "{{count}} older",
       "olderCount_other": "{{count}} older",
       "kind": {

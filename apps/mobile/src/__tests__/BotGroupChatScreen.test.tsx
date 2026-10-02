@@ -20,6 +20,8 @@ const h = vi.hoisted(() => ({
   local: null as any,
   discarded: [] as any[],
   deleted: [] as string[],
+  keyboardAvoidingView: null as any,
+  platform: { OS: 'ios' },
 }));
 
 vi.mock('react-native', () => {
@@ -30,13 +32,16 @@ vi.mock('react-native', () => {
       h.scroll = props;
       useImperativeHandle(ref, () => ({ scrollToEnd: h.scrollToEnd }));
       return el('div', { 'data-testid': props.testID }, children);
-    }, KeyboardAvoidingView: box('div'),
+    }, KeyboardAvoidingView: ({ children, ...props }: any) => {
+      h.keyboardAvoidingView = props;
+      return el('div', null, children);
+    },
     Pressable: ({ children, onPress, disabled, testID, accessibilityLabel }: any) => el('button',
       { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress },
       typeof children === 'function' ? children({ pressed: false }) : children),
     ActivityIndicator: () => el('i', { 'data-testid': 'spinner' }),
     StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
-    Platform: { OS: 'ios', select: (value: any) => value.ios },
+    Platform: { get OS() { return h.platform.OS; }, select: (value: any) => value[h.platform.OS] },
     Alert: { alert: h.alert },
     useWindowDimensions: () => ({ width: 390, height: 844 }),
     AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
@@ -253,6 +258,7 @@ async function render(data: BotGroupRemoteChatData | null = group(), kind: 'read
 beforeEach(() => {
   vi.clearAllMocks();
   h.uuid = 0; h.inputs = {}; h.teammates = { rows: [], loading: false, failed: false };
+  h.platform.OS = 'ios'; h.keyboardAvoidingView = null;
   h.chat = { reload: vi.fn(), act: vi.fn(async () => ({ effects: [] })), online: true };
   h.discarded = []; h.deleted = [];
   h.local = {
@@ -267,6 +273,12 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 
 describe('group timeline', () => {
+  it('uses the shared Android keyboard avoidance behavior for the group composer', async () => {
+    h.platform.OS = 'android';
+    await render();
+    expect(h.keyboardAvoidingView).toMatchObject({ enabled: true, behavior: 'height' });
+  });
+
   it('waits for measured tail positioning before acknowledging replies, including new snapshots', async () => {
     vi.useFakeTimers();
     await render();

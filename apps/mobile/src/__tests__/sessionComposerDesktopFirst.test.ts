@@ -262,7 +262,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('composerRuntimePillTextRisky');
     expect(source).toContain('color: colors.statusAccent');
     expect(source).not.toContain("import { BlurView } from 'expo-blur';");
-    expect(source).toContain("import { BlurBackdrop } from '@/session/BlurBackdrop';");
+    expect(source).toContain("import { BlurBackdrop, FLOATING_CHROME_BLUR_INTENSITY } from '@/session/BlurBackdrop';");
     expect(source).toContain('<SessionHeaderNativeBlur height=');
     expect(source).toMatch(/<SessionHeaderNativeTitle\s+title=\{sharedTaskEnded \? t\('sharedTask.ended'\) : title\}/);
     expect(source).toContain('<SessionHeaderNativeActions');

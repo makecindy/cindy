@@ -2206,8 +2206,10 @@ export interface AgentSessionHandle {
   /** Canonical physical Skill identities frozen at native runtime startup. */
   readonly disabledSkillPaths?: readonly string[];
   getCodexContextWindowInfo?(): Promise<CodexContextWindowInfo | null>;
-  /** SDK 内部 sessionId，session.started 后会回填 */
+  /** Native session identity safe for resume; may retain an unaccepted fork's source. */
   readonly id: string;
+  /** Transient native request identity; hosts must not persist it as a resume id. */
+  readonly requestSessionId?: string;
   readonly agentKind: AgentKind;
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */

@@ -101,6 +101,33 @@ export function accountUsageRows(
         : {}),
     });
   }
+  const credits = account.credits;
+  if (credits) {
+    const parts = [
+      credits.balance === null
+        ? null
+        : t("session.menu.usage.creditsRemaining", {
+            credits: credits.balance.toLocaleString(locale, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            }),
+          }),
+      credits.status === null
+        ? null
+        : t(
+            {
+              unlimited: "session.menu.usage.creditsUnlimited",
+              depleted: "session.menu.usage.creditsDepleted",
+              available: "session.menu.usage.creditsAvailable",
+            }[credits.status],
+          ),
+    ].filter((part): part is string => part !== null);
+    rows.push({
+      label: t("session.menu.usage.credits"),
+      value: parts.join(" · "),
+      warning: credits.status === "depleted",
+    });
+  }
   for (const amount of account.amounts) {
     const money: RemoteMoney = {
       amount: amount.amount,

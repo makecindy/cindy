@@ -37,7 +37,7 @@ interface CodexMicroGuardServiceOptions {
 }
 
 const log = desktopMakerLogger.child('codex-micro-guard');
-const DEFAULT_SETTINGS: CodexMicroGuardSettings = { enabled: false };
+const DEFAULT_SETTINGS: CodexMicroGuardSettings = { enabled: true };
 const MAX_SETTINGS_BYTES = 8 * 1024;
 const HEARTBEAT_INTERVAL_MS = 5_000;
 
@@ -59,6 +59,8 @@ export class CodexMicroGuardService {
   private lastEmittedState: string | null = null;
   private readonly listProcesses: () => Promise<CodexMicroGuardProcess[]>;
   private restartProcesses: CodexMicroGuardProcess[] = [];
+  /** A legacy opt-out was detected but could not be saved; report off until a toggle. */
+  private legacyOptOutPending = false;
 
   constructor(options: CodexMicroGuardServiceOptions = {}) {
     this.platform = options.platform ?? process.platform;
@@ -107,6 +109,7 @@ export class CodexMicroGuardService {
       if (this.disposed) throw new Error('Codex Micro guard service is disposed');
       if (enabled) await this.enable();
       else await this.disable({ persistSetting: true });
+      this.legacyOptOutPending = false;
     });
     return this.snapshot();
   }
@@ -156,7 +159,8 @@ export class CodexMicroGuardService {
 
   private async initializeInternal(): Promise<void> {
     if (this.platform !== 'darwin') return;
-    const enabled = this.settingsStore.read().enabled;
+    this.legacyOptOutPending = !this.preserveLegacyOptOut();
+    const enabled = !this.legacyOptOutPending && this.settingsStore.read().enabled;
     try {
       if (enabled) {
         await this.manager.enable(this.hookContents);
@@ -178,6 +182,35 @@ export class CodexMicroGuardService {
       log.warn('Codex Micro guard initialization failed');
     }
     this.emitIfChanged();
+  }
+
+  /**
+   * Default-off releases stored nothing when the user turned protection off,
+   * because off matched the old default. Their leftover hook (without the
+   * default-on marker) identifies that opt-out, so keep it off once. The
+   * marker then records the migration, so a later restore-defaults follows
+   * the new default instead of re-running it.
+   *
+   * Returns false while a detected opt-out is not yet persisted: protection
+   * stays off and the marker is not written, so the next launch retries.
+   */
+  private preserveLegacyOptOut(): boolean {
+    if (!this.store.hasLegacyHook()) return true;
+    try {
+      if (!this.settingsStore.readState().isCustomized) {
+        this.settingsStore.writePatch({ enabled: false });
+      }
+    } catch {
+      log.warn('Codex Micro guard legacy opt-out could not be saved; protection stays off');
+      return false;
+    }
+    try {
+      this.store.markDefaultOn();
+    } catch {
+      // The saved override already decides this launch; the next one retries the marker.
+      log.warn('Codex Micro guard legacy opt-out marker could not be written');
+    }
+    return true;
   }
 
   private async enable(): Promise<void> {
@@ -292,7 +325,7 @@ export class CodexMicroGuardService {
     if (this.platform !== 'darwin') {
       return { supported: false, enabled: false, status: 'unsupported' };
     }
-    const enabled = this.settingsStore.read().enabled;
+    const enabled = !this.legacyOptOutPending && this.settingsStore.read().enabled;
     let status: CodexMicroGuardState['status'];
     if (this.recoveryRequired) status = 'recovery-required';
     else if (this.failed) status = 'error';

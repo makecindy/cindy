@@ -5,11 +5,13 @@ import { runRecoveryArchiveTask } from '../worktree/recoveryArchiveWorkerClient'
 import type { FileEvidence, WorktreeRecoveryArchive } from '../worktree/recoveryArchiveIO';
 import {
   captureWorktreeContent,
-  worktreeContentBaselineMatches,
+  worktreeStagedContentMatches,
+  WorktreeChangedDuringSnapshotError,
 } from '../worktree/contentSnapshot';
 import { gitExec, GitExecError } from '../worktree/gitExec';
 import { assertDiskCapacity } from './resources';
 import { MANAGED_WORKTREE_DIR_NAMES } from '../../shared/managedWorktreePaths';
+import { selectPortableEntries, type SkippedEntry } from './portableEntries';
 
 const ESTIMATE_CONCURRENCY = 32;
 const STAT_BATCH = 64;
@@ -69,65 +71,22 @@ export interface PortableWorkspace {
   git?: { head: string; headRef: string | null; indexTree: string; ref: string };
 }
 
-/** Portable names only. In particular, links must never lead extraction outside its new root. */
-export function validateWorkspaceEntries(files: Record<string, FileEvidence>): void {
-  const folded = new Set<string>();
-
-  for (const [name, entry] of Object.entries(files)) {
-    const parts = name.split('/');
-    if (
-      !name ||
-      name.length > 4096 ||
-      name.includes('\\') ||
-      parts.some(
-        (part) =>
-          !part ||
-          part === '.' ||
-          part === '..' ||
-          part.toLowerCase() === '.git' ||
-          /[\x00-\x1f:*?"<>|]/.test(part) ||
-          /[ .]$/.test(part) ||
-          /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(part),
-      )
-    ) {
-      throw new Error('MIGRATION_NONPORTABLE_PATH');
-    }
-    const key = name.normalize('NFC').toLowerCase();
-    if (folded.has(key)) throw new Error('MIGRATION_PATH_COLLISION');
-    folded.add(key);
-    if (
-      !entry ||
-      !['file', 'directory', 'link'].includes(entry.kind) ||
-      !Number.isInteger(entry.mode) ||
-      entry.mode < 0 ||
-      entry.mode > 0o777 ||
-      typeof entry.hash !== 'string'
-    )
-      throw new Error('MIGRATION_INVALID_MANIFEST');
-    if (entry.kind === 'file' && !/^[a-f0-9]{64}$/.test(entry.hash))
-      throw new Error('MIGRATION_INVALID_MANIFEST');
-    if (entry.kind === 'directory' && entry.hash !== '')
-      throw new Error('MIGRATION_INVALID_MANIFEST');
-    if (entry.kind === 'link') {
-      if (
-        !entry.hash ||
-        entry.hash.includes('\\') ||
-        path.posix.isAbsolute(entry.hash) ||
-        /^[a-z]:/i.test(entry.hash)
-      )
-        throw new Error('MIGRATION_EXTERNAL_LINK');
-      const target = path.posix.normalize(path.posix.join(path.posix.dirname(name), entry.hash));
-      if (target === '..' || target.startsWith('../') || target.split('/').includes('.git'))
-        throw new Error('MIGRATION_EXTERNAL_LINK');
-      // Do not accept a link chain or a directory-link ancestor during extraction.
-      const targetEntry = files[target];
-      if (!targetEntry || targetEntry.kind === 'link') throw new Error('MIGRATION_EXTERNAL_LINK');
-    }
-    for (let i = 1; i < parts.length; i++) {
-      if (files[parts.slice(0, i).join('/')]?.kind !== 'directory')
-        throw new Error('MIGRATION_INVALID_MANIFEST');
-    }
+/** A project entry that blocks the copy; the path tells the user what to rename or remove. */
+export class MigrationPathError extends Error {
+  constructor(
+    readonly code: string,
+    /** Project-relative, `/`-separated. */
+    readonly relPath: string,
+  ) {
+    super(`${code}: ${relPath}`);
   }
+}
+
+/** Target-side guard: a received manifest must already be portable (the source leaves the rest
+ * behind). Links may chain or dangle, but must never resolve outside the new root. */
+export function validateWorkspaceEntries(files: Record<string, FileEvidence>): void {
+  const [first] = selectPortableEntries(files, [], '/').skipped;
+  if (first) throw new MigrationPathError(first.code, first.path);
 }
 
 /** No checkout, reset, stash, or source deletion. Existing recovery code preserves ignored bytes too;
@@ -136,7 +95,7 @@ export async function snapshotWorkspace(
   root: string,
   directory: string,
   id: string,
-): Promise<PortableWorkspace> {
+): Promise<PortableWorkspace & { skipped: SkippedEntry[] }> {
   if ((await fs.lstat(root)).isSymbolicLink()) root = await fs.realpath(root);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   let git: PortableWorkspace['git'];
@@ -152,7 +111,14 @@ export async function snapshotWorkspace(
       throw new Error('MIGRATION_SUBMODULE_UNSUPPORTED');
     const ref = `refs/cindy/migration/${id}`;
     try {
-      baseline = await captureWorktreeContent(root, ref);
+      // A copy only needs the captured content; another task's `git status` must not fail it.
+      baseline = await captureWorktreeContent(root, ref, { stagedContentOnly: true }).catch(
+        (error: unknown) => {
+          if (error instanceof WorktreeChangedDuringSnapshotError)
+            throw new Error('MIGRATION_WORKSPACE_CHANGED');
+          throw error;
+        },
+      );
       git = {
         head: baseline.head,
         headRef: baseline.headRef ?? null,
@@ -175,7 +141,7 @@ export async function snapshotWorkspace(
   const key = randomBytes(32);
   try {
     const space = await fs.statfs(directory);
-    const archive = await runRecoveryArchiveTask({
+    const { skipped = [], ...archive } = await runRecoveryArchiveTask({
       operation: 'create',
       root,
       directory,
@@ -185,6 +151,7 @@ export async function snapshotWorkspace(
       iv: randomBytes(12),
       maxBytes: Math.floor((space.bavail * space.bsize) / 1.1),
       excludePaths: await managedWorktreeExclusions(root),
+      portable: true,
     });
     archive.files = Object.fromEntries(
       Object.entries(archive.files).map(([name, entry]) => [name.split(path.sep).join('/'), entry]),
@@ -195,7 +162,7 @@ export async function snapshotWorkspace(
       if (entry.kind === 'file') unpackedBytes += (await fs.lstat(path.join(root, name))).size;
     }
     if (!Number.isSafeInteger(unpackedBytes)) throw new Error('MIGRATION_INVALID_MANIFEST');
-    if (baseline && !(await worktreeContentBaselineMatches(root, baseline)))
+    if (baseline && !(await worktreeStagedContentMatches(root, baseline)))
       throw new Error('MIGRATION_WORKSPACE_CHANGED');
     return {
       version: 1,
@@ -203,6 +170,7 @@ export async function snapshotWorkspace(
       key: key.toString('base64'),
       unpackedBytes,
       ...(git ? { git } : {}),
+      skipped: skipped as SkippedEntry[],
     };
   } catch (error) {
     if (error instanceof Error && error.message.includes('MIGRATION_FILE_TOO_LARGE'))
@@ -260,6 +228,7 @@ export async function restoreWorkspace(
       keep: false,
       key: new Uint8Array(key),
       maxBytes: snapshot.unpackedBytes,
+      exactCopy: true,
     });
   } finally {
     key.fill(0);
@@ -326,7 +295,8 @@ export async function estimateWorkspace(
         // Count as each file is recognised, before any per-file work beyond the cap.
         if (++result.fileCount > maxFiles) throw new Error('MIGRATION_TOO_MANY_FILES');
         files.push(file);
-      } else throw new Error('MIGRATION_NONPORTABLE_PATH');
+      }
+      // Sockets, FIFOs and devices are left behind by the copy, so they are not counted.
     }
     for (let index = 0; index < files.length; index += STAT_BATCH) {
       check();

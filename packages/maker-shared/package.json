@@ -79,6 +79,7 @@
     "./work-activity-projection": "./src/workActivityProjection.ts",
     "./worktree-paths": "./src/worktreePaths.ts",
     "./codex-usage-buckets": "./src/codexUsageBuckets.ts",
+    "./subscription-usage": "./src/subscriptionUsage.ts",
     "./bot-learning": "./src/botLearning.ts",
     "./botCollaboration": "./src/botCollaboration.ts",
     "./botDirectMessage": "./src/botDirectMessage.ts",

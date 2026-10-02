@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] } }));
 
+import { BOT_WORKBENCH_MAX_DIRECTORIES } from '../../../shared/botWorkbench.js';
 import { botProfileDir } from '../botProfileFolder.js';
 import {
   addBotWorkbenchDirectory,
@@ -50,13 +51,13 @@ describe('bot workbench storage', () => {
     expect(await readBotWorkbenchDirectoryPaths(root, 'bot-2')).toEqual([]);
   });
 
-  it('rejects missing folders and more than six projects', async () => {
+  it('rejects missing folders and only stops at the sanity bound, well past six projects', async () => {
     root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
     expect(await addBotWorkbenchDirectory(root, 'bot-1', path.join(root, 'missing'))).toEqual({
       ok: false,
       errorCode: 'NOT_A_DIRECTORY',
     });
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < BOT_WORKBENCH_MAX_DIRECTORIES; index += 1) {
       const dir = path.join(root, `p${index}`);
       await mkdir(dir);
       expect(await addBotWorkbenchDirectory(root, 'bot-1', dir)).toEqual({ ok: true });
@@ -104,10 +105,10 @@ describe('bot workbench storage', () => {
         { path: 'relative/path' },
         { path: '/a', addedAt: 7 },
         { path: '/a' },
-        ...Array.from({ length: 8 }, (_, index) => ({ path: `/p${index}`, addedAt: 'x' })),
+        ...Array.from({ length: BOT_WORKBENCH_MAX_DIRECTORIES + 5 }, (_, index) => ({ path: `/p${index}`, addedAt: 'x' })),
       ],
     });
-    expect(normalized?.directories).toHaveLength(6);
+    expect(normalized?.directories).toHaveLength(BOT_WORKBENCH_MAX_DIRECTORIES);
     expect(normalized?.directories[0]).toEqual({ path: '/a', addedAt: new Date(0).toISOString() });
   });
 });
@@ -181,5 +182,56 @@ describe('bot workbench judgments', () => {
     expect(Object.keys(normalized?.tasks ?? {})).toEqual(['ok', 'long']);
     expect(normalized?.tasks.long.title).toHaveLength(40);
     expect(normalized?.tasks.long.next).toHaveLength(120);
+  });
+});
+
+describe('bot workbench write-chain failure hygiene', () => {
+  it('absorbs the cleanup promise rejection when a write fails and keeps the chain usable', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
+    const proj = path.join(root, 'proj');
+    await mkdir(proj);
+    await addBotWorkbenchDirectory(root, 'bot-1', proj, new Date('2026-10-01T01:00:00.000Z'));
+
+    // 把 workbench.json 换成目录 → 下一次 mutate 的 rename 失败。
+    const file = path.join(botProfileDir(root, 'bot-1'), 'workbench.json');
+    await rm(file);
+    await mkdir(file);
+
+    const rejections: unknown[] = [];
+    const onUnhandled = (reason: unknown) => rejections.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      // 第二次添加走同一条写链:run 本身按预期 reject(调用方拿到失败)。
+      await expect(
+        addBotWorkbenchDirectory(root, 'bot-1', proj, new Date('2026-10-01T02:00:00.000Z')),
+      ).rejects.toThrow();
+      await new Promise((resolve) => setImmediate(resolve));
+      // finally 派生的 cleanup promise 不得产生进程级 unhandledRejection。
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+
+    // 写链未被失败污染:恢复文件后同一 bot 的下一次写入正常。
+    await rm(file, { recursive: true });
+    expect(await addBotWorkbenchDirectory(root, 'bot-1', proj, new Date('2026-10-01T03:00:00.000Z'))).toEqual({ ok: true });
+    const state = await readBotWorkbenchState(root, 'bot-1');
+    expect(state.directories[0]).toBe(path.resolve(proj));
+  });
+});
+
+describe('bot workbench directory removal normalization', () => {
+  it('removes a handed-over project addressed by an equivalent, differently-spelled path', async () => {
+    // 回归:add 存 path.resolve 后的路径, remove 曾按原始串比较 —— 尾分隔符、
+    // ./、../ 等等价写法会静默漏删, 广播后 UI 里项目仍在。
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
+    const proj = path.join(root, 'proj');
+    const nested = path.join(proj, 'inner');
+    await mkdir(nested, { recursive: true });
+    await addBotWorkbenchDirectory(root, 'bot-1', proj, new Date('2026-10-01T01:00:00.000Z'));
+
+    // 等价写法:inner/.. 投影回 proj, 再补一个尾分隔符。
+    await removeBotWorkbenchDirectory(root, 'bot-1', `${nested}${path.sep}..${path.sep}`);
+    expect((await readBotWorkbenchState(root, 'bot-1')).directories).toEqual([]);
   });
 });

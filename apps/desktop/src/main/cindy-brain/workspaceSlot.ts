@@ -65,7 +65,7 @@ export interface WorkspaceSlotDeps {
    * 弹系统级选文件夹窗口;返回所选绝对路径,取消返回 null。
    * 找不到可挂靠的 Cindy 窗口时应 reject(失败关闭,不弹无主对话框)。
    */
-  showDirectoryDialog(params: { ghostName: string; purpose: string | null }): Promise<string | null>;
+  showDirectoryDialog(params: { ghostName: string; purpose: string | null; ghostId: string; mobilePageId?: string }): Promise<string | null>;
   /** 在途 ghost_call 反查(cardService.inFlightCallInfoOf):查无/过期返回 null。 */
   resolveCallContext(callId: string): { ghostId: string; sessionId: string | null; sessionInstanceId?: string } | null;
   /** 会话目录快照(localDb);查无会话返回 null。 */
@@ -118,7 +118,7 @@ export class GhostWorkspaceSlot {
     this.sessionService = service;
   }
 
-  async handleRequest(ghostId: string, payload: unknown): Promise<GhostPipeWorkspaceResult> {
+  async handleRequest(ghostId: string, payload: unknown, shouldContinue?: () => boolean): Promise<GhostPipeWorkspaceResult> {
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost?.enabled || ghost.manifest.workspace !== true) {
       return fail('PERMISSION_DENIED', '插件未申请工作区会话权限(workspace),或当前未启用');
@@ -127,6 +127,7 @@ export class GhostWorkspaceSlot {
       return fail('INVALID_REQUEST', 'workspace-request 载荷必须是对象');
     }
     const request = payload as Record<string, unknown>;
+    if (request.mobilePageId !== undefined && (typeof request.mobilePageId !== 'string' || request.mobilePageId.length > 128)) return fail('INVALID_REQUEST', 'Invalid mobile page context');
     if (request.kind !== 'ensure-session') {
       return fail('INVALID_REQUEST', 'kind 目前只支持 "ensure-session"');
     }
@@ -161,7 +162,7 @@ export class GhostWorkspaceSlot {
     // ── 目录授权 ────────────────────────────────────────────────────────
     let dirAbs: string;
     let sourceSessionId: string | undefined;
-    let callIsCurrent: (() => boolean) | undefined;
+    let callIsCurrent: (() => boolean) | undefined = shouldContinue;
     if (request.mode === 'pick') {
       this.consentInFlight = true;
       let picked: string | null;
@@ -169,6 +170,8 @@ export class GhostWorkspaceSlot {
         picked = await this.deps.showDirectoryDialog({
           ghostName: ghost.manifest.name,
           purpose: title,
+          ghostId,
+          ...(typeof request.mobilePageId === 'string' ? { mobilePageId: request.mobilePageId } : {}),
         });
       } catch (error) {
         this.deps.log?.warn('ghost workspace pick dialog failed', {
@@ -179,6 +182,7 @@ export class GhostWorkspaceSlot {
       } finally {
         this.consentInFlight = false;
       }
+      if (shouldContinue && !shouldContinue()) return fail('CANCELLED', 'The originating page has closed.');
       if (picked === null) {
         return fail('CANCELLED', '用户取消了选择');
       }
@@ -210,7 +214,7 @@ export class GhostWorkspaceSlot {
         return fail('PERMISSION_DENIED', 'The originating task cannot authorize this workspace operation.');
       }
       callIsCurrent = () => {
-        if (authorization && !authorization()) return false;
+        if ((shouldContinue && !shouldContinue()) || (authorization && !authorization())) return false;
         const current = this.deps.resolveCallContext(request.callId as string);
         return current?.ghostId === ctx.ghostId && current?.sessionId === ctx.sessionId
           && current?.sessionInstanceId === ctx.sessionInstanceId;

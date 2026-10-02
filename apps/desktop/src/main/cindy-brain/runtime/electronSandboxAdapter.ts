@@ -1,5 +1,6 @@
 import { BrowserWindow, session, webContents, type CustomScheme } from 'electron';
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import { Readable } from 'node:stream';
 import path from 'node:path';
@@ -25,6 +26,7 @@ import {
   listGhostGallery as listGhostGalleryFromLedger,
 } from '../../cindy-media/ledger.js';
 import type { SandboxHandle, SandboxHostAdapter } from './GhostRuntime.js';
+import { mobilePageRelayScript, type MobileRelayOperation } from './mobilePageRelay.js';
 
 /**
  * Electron 沙箱宿主(docs/dev-rules/plugin-security-and-authoring.md):
@@ -106,6 +108,80 @@ export function sendToGhostLogic(ghostId: string, payload: unknown): boolean {
     }
   }
   return false;
+}
+
+/** The remote page uses the same owner partition and running logic as desktop. */
+export async function invokeGhostMobileRelay(ghostId: string, operation: MobileRelayOperation): Promise<unknown> {
+  const partition = ownerScopedGhostPartition(ghostId, getActiveAppSession());
+  if (!partition) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+  const ownerSession = session.fromPartition(partition);
+  for (const [id, plugin] of logicWebContentsToGhost) {
+    if (plugin !== ghostId) continue;
+    const wc = webContents.fromId(id);
+    if (wc && !wc.isDestroyed() && wc.session === ownerSession) {
+      return wc.executeJavaScript(mobilePageRelayScript(operation));
+    }
+  }
+  throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+}
+
+export async function fetchGhostMobilePage(ghost: InstalledGhost, pathname: string, method: string, body?: string, offset = 0, expectedRevision?: string) {
+  const partition = ownerScopedGhostPartition(ghost.manifest.id, getActiveAppSession());
+  if (!partition) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+  // Read only the requested immutable blob chunk. The desktop protocol buffers
+  // the whole file, which would repeat that work for every remote video chunk.
+  if (pathname.startsWith('/media/')) {
+    const match = /^\/media\/([a-f0-9]{64})(\.[a-z0-9]+)$/.exec(pathname);
+    const missing = { status: 404, mime: 'application/octet-stream', base64: '' };
+    if (!match || method !== 'GET' || !Number.isSafeInteger(offset) || offset < 0) return missing;
+    if (!(await ghostCanReadMedia(match[1], ghost.manifest.id))) return missing;
+    let resolved: { absPath: string; mimeType: string };
+    try { resolved = resolveBlobHashRef(match[1], match[2]); } catch { return missing; }
+    const handle = await fs.open(resolved.absPath, nodeFs.constants.O_RDONLY | nodeFs.constants.O_NOFOLLOW);
+    try {
+      const stat = await handle.stat();
+      if (!stat.isFile() || offset > stat.size) return missing;
+      const data = Buffer.alloc(Math.min(49_152, stat.size - offset));
+      const { bytesRead } = await handle.read(data, 0, data.length, offset);
+      if (bytesRead !== data.length) throw new Error('PLUGIN_MEDIA_CHANGED');
+      return { status: 200, mime: resolved.mimeType, base64: data.toString('base64'), revision: match[1],
+        ...(offset + bytesRead < stat.size ? { nextOffset: offset + bytesRead } : {}),
+      };
+    } finally { await handle.close(); }
+  }
+  ensureGhostProtocolRegistered(ghost);
+  const file = /^\/(?:library|media)\//.test(pathname);
+  const response = await session.fromPartition(partition).fetch(`${GHOST_SCHEME}://${ghost.manifest.id}${pathname}`, { method, body,
+    ...(file && offset ? { headers: { Range: `bytes=${offset}-` } } : {}),
+  });
+  const revision = response.headers.get('etag') ?? undefined;
+  if (pathname.startsWith('/library/') && offset > 0 && (!expectedRevision || revision !== expectedRevision)) {
+    await response.body?.cancel(); throw new Error('PLUGIN_LIBRARY_CHANGED');
+  }
+  // These JSON endpoints have bounded existing contracts; never expose an unbounded file here.
+  const reader = response.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  if (reader) {
+    try {
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) break;
+        if (file) {
+          const chunk = part.value.subarray(0, 49_152 - total); chunks.push(chunk); total += chunk.length;
+          if (total >= 49_152) break;
+        } else {
+          total += part.value.length;
+          if (total > 1_048_576) throw new Error('PLUGIN_RESPONSE_TOO_LARGE');
+          chunks.push(part.value);
+        }
+      }
+    } finally { await reader.cancel(); }
+  }
+  const remaining = Number(response.headers.get('content-length'));
+  return { status: response.status === 206 ? 200 : response.status, mime: response.headers.get('content-type') ?? 'application/json', base64: Buffer.concat(chunks).toString('base64'), ...(revision ? { revision } : {}),
+    ...(file && remaining > total ? { nextOffset: offset + total } : {}),
+  };
 }
 
 // 管子桥 preload 的产物路径(与 main bundle 同目录,forge VitePlugin 出的
@@ -608,6 +684,7 @@ async function serveGhostLibraryFile(ghostId: string, relPath: string, rangeHead
     const st = await fs.stat(absPath);
     if (!st.isFile()) return new Response(null, { status: 404 });
     const total = st.size;
+    headers.ETag = `"${createHash('sha256').update(JSON.stringify([st.dev, st.ino, st.size, st.mtimeMs, st.ctimeMs])).digest('hex')}"`;
     if (rangeHeader !== null && rangeHeader !== undefined && rangeHeader !== '') {
       const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
       // 非单段(多段/后缀拼接/非法)按不支持处理:满足 prefix 的回 416,

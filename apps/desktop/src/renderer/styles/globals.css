@@ -2085,6 +2085,7 @@ mark.doc-search-mark [class] {
 [data-theme='cindy-dark'] .h-screen.bg-content-area {
   background: transparent;
 }
+
 /* 模式1 侧栏(light):半透底,壁纸模糊由原生 vibrancy sidebar 材质提供。
    红渐变覆盖层已拆除(用户裁决 2026-07-18:Figma 该两块渐变矩形按装饰废稿处理,不实现);
    CSS backdrop-filter 已撤(A/B 实证:blur 会把透明窗背衬黑箱)。 */
@@ -2258,4 +2259,83 @@ mark.doc-search-mark [class] {
   .ghost-bubble:hover .ghost-bubble-face {
     animation: none;
   }
+}
+
+/* Opt-in whole-window wallpaper. Page surfaces share one fixed canvas;
+   elevated controls and external web content keep their readable surfaces. */
+html[data-wallpaper-active='true'] body {
+  isolation: isolate;
+  background: var(--surface);
+}
+html[data-wallpaper-active='true'] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: var(--surface);
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent),
+    color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent)
+  ), var(--app-wallpaper-image);
+  background-size: auto, cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+html[data-wallpaper-active='true'] :is(
+  .bg-content-area,
+  .app-wallpaper-surface,
+  main[class~='bg-[var(--surface)]'],
+  [class~='bg-[var(--panel-bg)]'],
+  [class~='bg-[var(--settings-bg)]']
+) {
+  background-color: transparent;
+}
+html[data-wallpaper-active='true'] aside.bg-sidebar:not([data-sidebar-peek-drawer]) {
+  background: transparent;
+}
+/* Fixed attachment uses the same viewport coordinates as the canvas. The
+   footer masks scrolled messages without introducing a differently tinted slab. */
+html[data-wallpaper-active='true'] :is(.wallpaper-composer-zone, .wallpaper-composer-fade) {
+  background-color: var(--surface);
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent),
+    color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent)
+  ), var(--app-wallpaper-image);
+  background-size: auto, cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+html[data-wallpaper-active='true'] .wallpaper-composer-fade {
+  mask-image: linear-gradient(transparent, currentColor);
+}
+
+/* Opt-in scene motion shares one decoder behind every pane. Its veil matches
+   the still canvas exactly; no animated paint properties or per-frame JS. */
+.app-wallpaper-video {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  transition: opacity var(--motion-base) var(--motion-ease-move);
+}
+.app-wallpaper-video video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.app-wallpaper-video::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent);
+}
+/* Fade the message layer itself, so the moving scene remains continuous behind
+   the composer. Repainting a static copy there would create a visible seam. */
+html[data-wallpaper-motion='dynamic'] .wallpaper-message-viewport [data-scroll-container] {
+  mask-image: linear-gradient(to bottom, black calc(100% - var(--wallpaper-composer-height)), transparent calc(100% - var(--wallpaper-composer-height) + 32px));
+}
+html[data-wallpaper-motion='dynamic'] :is(.wallpaper-composer-zone, .wallpaper-composer-fade) {
+  background: transparent;
 }

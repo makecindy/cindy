@@ -843,6 +843,117 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
+  it("gives a local Bot main task the ordinary surface and judges every call with the host", async () => {
+    const stopSessionTurn = vi.fn(async () => ({ ok: true as const, status: "requested" as const }));
+    const messageAgent = vi.fn(async () => ({
+      ok: true as const,
+      targetBotId: "bot-b",
+      targetBotName: "Dash Bot",
+      targetSessionId: "bot-b-main",
+      wakeKind: "queued" as const,
+    }));
+    const authorizeCall = vi.fn(async ({ tool }: { tool: string }) => (tool === "stop_session_turn"
+      ? { ok: false as const, errorCode: "TASK_OUT_OF_SCOPE", message: "not yours" }
+      : { ok: true as const }));
+    const server = createXdtHelperMcpServer(
+      {
+        resolveSurface: async () => "bot-main",
+        authorizeCall,
+        sessionControl: {
+          updateQueuedMessage: vi.fn(),
+          cancelQueuedMessage: vi.fn(),
+          steerSession: vi.fn(),
+          stopSessionTurn,
+          getSessionRuntime: vi.fn(),
+          setSessionRuntime: vi.fn(),
+        },
+        botMessaging: { messageAgent },
+      },
+      { agentKind: "pi", workingDir: "/bot", sessionId: "bot-a-main" },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "bot-main-surface", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const overview = parsePayload(await client.callTool({ name: "list_tools", arguments: {} }));
+      const categories = (overview.categories as Array<{ name: string }>).map((category) => category.name);
+      expect(categories).toEqual(expect.arrayContaining(["control", "bots"]));
+
+      expect(parsePayload(await client.callTool({
+        name: "call_tool",
+        arguments: { name: "stop_session_turn", args: { session_id: TARGET_SESSION_ID } },
+      }))).toMatchObject({ ok: false, errorCode: "TASK_OUT_OF_SCOPE" });
+      expect(stopSessionTurn).not.toHaveBeenCalled();
+      expect(authorizeCall).toHaveBeenCalledWith({
+        sessionId: "bot-a-main",
+        server: "cindy_helper",
+        tool: "stop_session_turn",
+        args: { session_id: TARGET_SESSION_ID },
+      });
+
+      expect(parsePayload(await client.callTool({
+        name: "call_tool",
+        arguments: { name: "send_to_agent", args: { target_id: "bot-b", message: "hello" } },
+      }))).toMatchObject({ ok: true });
+      expect(messageAgent).toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("fails closed when the host authorizer throws", async () => {
+    const messageAgent = vi.fn();
+    const server = createXdtHelperMcpServer(
+      {
+        resolveSurface: async () => "bot-main",
+        authorizeCall: async () => { throw new Error("db gone"); },
+        botMessaging: { messageAgent },
+      },
+      { agentKind: "pi", workingDir: "/bot", sessionId: "bot-a-main" },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "bot-main-authorizer-throws", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      expect(parsePayload(await client.callTool({
+        name: "call_tool",
+        arguments: { name: "send_to_agent", args: { target_id: "bot-b", message: "hello" } },
+      }))).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
+      expect(messageAgent).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("keeps a remote Bot main task and other Bot sessions on the unchanged narrow, ungated surface", async () => {
+    const authorizeCall = vi.fn(async () => ({ ok: true as const }));
+    const createProject = vi.fn(async () => ({ ok: true as const, workingDir: "/repo" }));
+    for (const context of [
+      { agentKind: "codex" as const, workingDir: "/repo", sessionId: "bot-remote", remoteHostId: "ssh-host" },
+      { agentKind: "pi" as const, workingDir: "/repo", sessionId: "bot-lane" },
+    ]) {
+      const server = createXdtHelperMcpServer(
+        { resolveSurface: async () => (context.remoteHostId ? "bot-main" : "bot"), authorizeCall, createProject },
+        context,
+      );
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "bot-narrow-surface", version: "0.0.0" });
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      try {
+        const overview = parsePayload(await client.callTool({ name: "list_tools", arguments: {} }));
+        const categories = (overview.categories as Array<{ name: string }>).map((category) => category.name);
+        expect(categories).not.toContain("history");
+        expect(categories).not.toContain("handoff");
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    }
+    expect(authorizeCall).not.toHaveBeenCalled();
+  });
+
   it("does not offer local project tools to a remote Bot", async () => {
     const createProject = vi.fn(async () => ({ ok: true as const, workingDir: "/repo" }));
     const server = createXdtHelperMcpServer(
@@ -960,6 +1071,34 @@ describe("direct Bot MCP tools", () => {
       expect(remoteDiscovered.find((tool) => tool.name === "find_teammate_capabilities")?.description).not.toMatch(
         /ghost_list|ghost_info|ghost_call/,
       );
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it.each(["claude-code", "codex"] as const)("judges direct Bot tools of a local Bot main task on %s", async (agentKind) => {
+    const messageAgent = vi.fn();
+    const authorizeCall = vi.fn(async () => ({ ok: false as const, errorCode: "OWNER_TURN_REQUIRED", message: "owner only" }));
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => "bot-main",
+      authorizeCall,
+      botMessaging: { messageAgent },
+    }, {
+      agentKind,
+      workingDir: "",
+      getSessionContext: () => ({ agentKind, workingDir: "/bot", sessionId: "bot-main" }),
+    });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "direct-bot-gate", version: "0.0.0" });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      expect(parsePayload(await client.callTool({
+        name: "send_to_agent",
+        arguments: { target_id: "bot-b", message: "hello" },
+      }))).toMatchObject({ ok: false, errorCode: "OWNER_TURN_REQUIRED" });
+      expect(authorizeCall).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "bot-main", tool: "send_to_agent" }));
+      expect(messageAgent).not.toHaveBeenCalled();
     } finally {
       await client.close();
       await server.close();

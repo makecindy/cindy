@@ -4,6 +4,7 @@ import {
   authorizeExternalCandidate,
   authorizeWorkbenchTarget,
   createBotWorkbenchAccess,
+  WORKBENCH_BRIEF_PROJECTS_MAX,
   type BotWorkbenchAccessDeps,
   type WorkbenchExternalCandidate,
   type WorkbenchTargetFacts,
@@ -72,7 +73,6 @@ function setup(overrides: Partial<BotWorkbenchAccessDeps> = {}) {
     deleteJudgment: vi.fn(async () => undefined),
     notifyChanged: vi.fn(),
     sendToSession: vi.fn(async () => ({ ok: true as const, wakeKind: 'queued', queuedMessageId: 'q-1' })),
-    stopSessionTurn: vi.fn(async () => ({ ok: true as const, status: 'requested' as const })),
     caseInsensitive: false,
     ...overrides,
   };
@@ -348,15 +348,6 @@ describe('workbench continue / stop', () => {
       .resolves.toMatchObject({ ok: false, errorCode: 'TASK_NOT_READABLE' });
   });
 
-  it('stops the current turn through the existing graceful stop path, but not an un-imported session', async () => {
-    const { deps, access } = setup();
-    await expect(access.stopTask({ callerSessionId: 'bot-main', taskId: 'task-1' }))
-      .resolves.toEqual({ ok: true, taskId: 'task-1', status: 'requested' });
-    expect(deps.stopSessionTurn).toHaveBeenCalledWith({ targetSessionId: 'task-1' });
-    await expect(access.stopTask({ callerSessionId: 'bot-main', taskId: 'claude:abc' }))
-      .resolves.toMatchObject({ ok: false, errorCode: 'TASK_NOT_RUNNING' });
-  });
-
   it('refuses a caller that is not a Bot main task and never touches the target', async () => {
     const { deps, access } = setup({
       resolveCaller: vi.fn(async () => ({
@@ -367,7 +358,6 @@ describe('workbench continue / stop', () => {
     });
     for (const call of [
       () => access.continueTask({ callerSessionId: 'group-lane', taskId: 'task-1', message: 'hi' }),
-      () => access.stopTask({ callerSessionId: 'group-lane', taskId: 'task-1' }),
       () => access.read({ callerSessionId: 'group-lane', taskId: 'task-1' }),
       () => access.set({ callerSessionId: 'group-lane', taskId: 'task-1', title: 't', verdict: 'done' }),
     ]) {
@@ -383,16 +373,13 @@ describe('workbench continue / stop', () => {
     ['a Bot hidden session', target({ botLinked: true }), 'TASK_NOT_ACCESSIBLE'],
     ['a remote task', target({ remoteHostId: 'ssh-1' }), 'TASK_REMOTE'],
     ['an archived task', target({ status: 'archived' }), 'TASK_ARCHIVED'],
-  ])('denies %s without reading, sending or stopping', async (_label, facts, errorCode) => {
+  ])('denies %s without reading or sending', async (_label, facts, errorCode) => {
     const { deps, access } = setup({ readTarget: vi.fn(async () => facts) });
     await expect(access.continueTask({ callerSessionId: 'bot-main', taskId: 'task-1', message: 'hi' }))
-      .resolves.toMatchObject({ ok: false, errorCode });
-    await expect(access.stopTask({ callerSessionId: 'bot-main', taskId: 'task-1' }))
       .resolves.toMatchObject({ ok: false, errorCode });
     await expect(access.read({ callerSessionId: 'bot-main', taskId: 'task-1' }))
       .resolves.toMatchObject({ ok: false, errorCode });
     expect(deps.sendToSession).not.toHaveBeenCalled();
-    expect(deps.stopSessionTurn).not.toHaveBeenCalled();
     expect(deps.readSessionTranscript).not.toHaveBeenCalled();
   });
 
@@ -411,13 +398,6 @@ describe('workbench continue / stop', () => {
     await expect(access.continueTask({ callerSessionId: 'bot-main', taskId: 'task-1', message: 'hi' }))
       .resolves.toMatchObject({ ok: false, errorCode: 'TASK_OUTSIDE_WORKBENCH' });
     expect(deps.sendToSession).not.toHaveBeenCalled();
-
-    vi.mocked(deps.readState)
-      .mockResolvedValueOnce({ directories: [PROJECT], tasks: {} })
-      .mockResolvedValue({ directories: [], tasks: {} });
-    await expect(access.stopTask({ callerSessionId: 'bot-main', taskId: 'task-1' }))
-      .resolves.toMatchObject({ ok: false, errorCode: 'TASK_OUTSIDE_WORKBENCH' });
-    expect(deps.stopSessionTurn).not.toHaveBeenCalled();
 
     vi.mocked(deps.readState)
       .mockResolvedValueOnce({ directories: [PROJECT], tasks: {} })
@@ -542,6 +522,17 @@ describe('workbench snapshot', () => {
     const { access } = setup({ readBrief: vi.fn(async () => { throw new Error('git missing'); }) });
     const result = await access.get({ callerSessionId: 'bot-main' });
     expect(result).toMatchObject({ ok: true, workbench: { projects: [{ path: PROJECT, brief: null }] } });
+  });
+
+  it('lists every handed-over project but only builds briefs for the most recent few', async () => {
+    const dirs = Array.from({ length: WORKBENCH_BRIEF_PROJECTS_MAX + 4 }, (_, index) => `/Users/me/Code/p${index}`);
+    const { deps, access } = setup({ readState: vi.fn(async () => ({ directories: dirs, tasks: {} })) });
+    const result = await access.get({ callerSessionId: 'bot-main' });
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.workbench.projects).toHaveLength(dirs.length);
+    expect(deps.readBrief).toHaveBeenCalledTimes(WORKBENCH_BRIEF_PROJECTS_MAX);
+    expect(result.workbench.projects[0]!.brief).not.toBeNull();
+    expect(result.workbench.projects[WORKBENCH_BRIEF_PROJECTS_MAX]!.brief).toBeNull();
   });
 
   it('still lists the Bot own routines before any project is handed over', async () => {

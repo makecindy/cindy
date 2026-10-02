@@ -23,7 +23,9 @@
     "close": "關閉",
     "cancel": "取消",
     "start": "複製任務",
-    "failed": "複製未完成，請檢查兩台電腦後重新複製。",
+    "failed": "複製未完成，請檢查兩台電腦後重新複製。（{{code}}）",
+    "errorPath": "問題檔案：{{path}}",
+    "errorSize": "需要約 {{needed}}，上限約 {{limit}}。",
     "stages": {
       "preparing": "正在準備快照…",
       "transferring": "正在傳輸並驗證檔案…",
@@ -36,7 +38,7 @@
       "MIGRATION_TASK_RUNNING": "請先停止任務再複製。",
       "MIGRATION_SHARED_DIRECTORY_BUSY": "其他任務正在使用此目錄，請停止後重試。",
       "MIGRATION_TASK_UNSUPPORTED": "此任務的類型或目前狀態尚不支援跨電腦複製。",
-      "MIGRATION_NO_MEMORY": "可用記憶體不足以處理完整任務歷史，請釋放記憶體後重試。",
+      "MIGRATION_NO_MEMORY": "任務歷史太大，超出了複製時能處理的上限。",
       "MIGRATION_INCOMPLETE_CONTEXT": "無法取得完整任務歷史，已停止複製以免遺失上下文。",
       "MIGRATION_EXTERNAL_LINK": "專案包含指向目錄外部的連結或尚不支援的連結鏈，來源檔案未變更。",
       "MIGRATION_REQUIRES_REPOSITORY_ROOT": "Git 專案的任務目錄必須是儲存庫根目錄。",
@@ -47,10 +49,28 @@
       "MIGRATION_TASK_QUEUED": "此任務有排隊中的訊息，請先完成或移除這些訊息再複製。",
       "MIGRATION_SOURCE_CHANGED": "準備期間來源任務發生變更，請重試複製。",
       "MIGRATION_TIMEOUT": "任務所在電腦回應逾時，請稍後重試。",
-      "MIGRATION_CANNOT_CANCEL": "目標電腦已開始建立任務，無法再取消。"
+      "MIGRATION_CANNOT_CANCEL": "目標電腦已開始建立任務，無法再取消。",
+      "MIGRATION_WORKSPACE_CHANGED": "打包期間專案的 Git 提交或已暫存內容發生變更，請稍後重試複製。",
+      "MIGRATION_TEAM_CHANGED": "協同任務的成員發生變更，請重新發起複製。",
+      "MIGRATION_NONPORTABLE_PATH": "專案包含其他系統無法使用的檔案名稱，來源檔案未變更。",
+      "MIGRATION_PATH_COLLISION": "專案包含僅大小寫不同的同名檔案，來源檔案未變更。",
+      "MIGRATION_NOT_CONNECTED": "這台電腦尚未連線，請確認已登入並開啟遠端控制後重試。",
+      "MIGRATION_TASK_BUSY": "此任務正在複製或被其他操作佔用，請稍後重試。"
     },
     "successTitle": "複製成功",
     "successDescription": "已複製到{{name}}。",
+    "skippedTitle_one": "以下 {{count}} 個檔案或資料夾未複製，其餘內容已完整複製：",
+    "skippedTitle_other": "以下 {{count}} 個檔案或資料夾未複製，其餘內容已完整複製：",
+    "skippedMore_one": "另有 {{count}} 項未列出。",
+    "skippedMore_other": "另有 {{count}} 項未列出。",
+    "completeWithSkipped_one": "複製成功，{{count}} 項未複製",
+    "completeWithSkipped_other": "複製成功，{{count}} 項未複製",
+    "skippedReasons": {
+      "MIGRATION_EXTERNAL_LINK": "連結指向專案目錄外部",
+      "MIGRATION_NONPORTABLE_PATH": "檔案名稱在其他系統上無法使用",
+      "MIGRATION_PATH_COLLISION": "與另一個檔案僅大小寫不同",
+      "MIGRATION_UNSUPPORTED_ENTRY": "特殊檔案（如通訊端、管道），無法複製"
+    },
     "copyingTitle": "正在複製到{{name}}",
     "keepOpen": "正在複製到{{name}}。關閉視窗不會中斷複製，可在原任務頂部查看進度。",
     "runInBackground": "背景繼續",
@@ -66,6 +86,7 @@
     "fileSummary": "專案檔案：{{count}} 個，共 {{size}}",
     "estimateNote": "複製前估算，含隱藏檔案；不含另行複製的 Git 歷史、任務對話及附件。檔案變化可能影響最終大小。",
     "estimateFailed": "無法統計檔案。請檢查任務所在電腦的連線和版本，然後關閉重試。",
+    "estimateFailedWithCode": "無法統計檔案。請檢查任務所在電腦的連線和版本，然後關閉重試。（{{code}}）",
     "estimateTimeout": "統計逾時：專案檔案過多，任務所在電腦未能在時限內完成統計。可以改為複製檔案較少的專案。",
     "estimateTooManyFiles": "專案檔案超過 {{limit, number}} 個，無法複製。請改為複製檔案較少的專案。"
   },
@@ -875,6 +896,33 @@
         "aria": "選擇插件面板恢復入口",
         "bubble": "浮動氣泡",
         "sidebar": "側邊欄"
+      },
+      "wallpaper": {
+        "title": "桌布",
+        "description": "為整個應用程式選擇 Cindy 場景或自己的圖片，主題保持獨立。",
+        "reset": "恢復預設",
+        "aria": "桌布選擇",
+        "nonePreview": "無",
+        "options": {
+          "none": "無",
+          "cindy-window": "Cindy · 窗邊陪伴",
+          "cindy-studio": "Cindy · 未來工作室",
+          "cindy-dream": "Cindy · 夢境漫遊",
+          "custom": "自訂桌布"
+        },
+        "overlayLabel": "遮罩",
+        "overlayAria": "桌布遮罩強度",
+        "motionLabel": "展示方式",
+        "motionHint": "預設靜態；動態在視窗隱藏時暫停，並遵循系統減少動態效果設定。",
+        "motionStatic": "靜態",
+        "motionDynamic": "動態",
+        "customChoose": "選擇圖片",
+        "customReplace": "替換圖片",
+        "customRemove": "移除圖片",
+        "customBusy": "處理中…",
+        "customHint": "PNG、JPEG、WebP，最大 20 MB。僅儲存在此裝置，靜態顯示。",
+        "customInvalid": "請選擇有效的 PNG、JPEG 或 WebP 圖片（不超過 20 MB、4000 萬像素）。",
+        "customFailed": "無法儲存桌布，請重試。"
       },
       "layout": {
         "label": "面板佈局",
@@ -7880,6 +7928,7 @@
         "message": "跟進「{{title}}」",
         "aria": "跟進「{{title}}」"
       },
+      "followingMark": "{{names}}在跟進這個專案",
       "olderCount_other": "更早的 {{count}} 個",
       "kind": {
         "existing": "原有任務",

@@ -71,6 +71,7 @@ final class RemoteDesktopVideoView: ExpoView, AVPictureInPictureControllerDelega
   }
   private var pool: CVPixelBufferPool?
   private var poolSize = CGSize.zero
+  private let presentationCropper = RemoteDesktopPresentationCropper()
   private var backgroundGeneration = 0
   private var backgroundObserver: NSObjectProtocol?
   private var foregroundObserver: NSObjectProtocol?
@@ -83,8 +84,8 @@ final class RemoteDesktopVideoView: ExpoView, AVPictureInPictureControllerDelega
     isUserInteractionEnabled = false
     display.videoGravity = .resizeAspect
     presentationDisplay.videoGravity = .resizeAspect
-    // AVKit keeps a stable viewport-sized projection of the same decoded frame.
-    // The inline layer remains free to follow the viewer's pan/zoom rectangle.
+    // AVKit keeps a viewport-sized projection of the same decoded frame, limited
+    // to the region visible inline; the inline layer follows the pan/zoom rectangle.
     addSubview(videoSurface)
     canvas.backgroundColor = (backgroundColor ?? .systemBackground).cgColor
     layer.addSublayer(canvas)
@@ -334,32 +335,46 @@ final class RemoteDesktopVideoView: ExpoView, AVPictureInPictureControllerDelega
     backdropTime = 0
     latestFrame = nil
     pool = nil
+    presentationCropper.reset()
   }
-  @discardableResult private func render(_ frame: RTCVideoFrame, liveFrame: Bool = false) -> Bool {
-    guard let buffer = pixelBuffer(frame) else { return false }
+  private func sampleBuffer(_ buffer: CVPixelBuffer) -> CMSampleBuffer? {
     var format: CMVideoFormatDescription?
     guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: buffer, formatDescriptionOut: &format) == noErr,
-          let format else { return false }
+          let format else { return nil }
     var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()), decodeTimeStamp: .invalid)
     var sample: CMSampleBuffer?
     guard CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: buffer, formatDescription: format, sampleTiming: &timing, sampleBufferOut: &sample) == noErr,
-          let sample else { return false }
+          let sample else { return nil }
     // Live remote desktop has no seekable timeline; display every decoded frame
     // immediately rather than accumulating latency behind presentation timestamps.
     if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true) {
       let entry = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
       CFDictionarySetValue(entry, Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(), Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
     }
+    return sample
+  }
+  /// The system projection follows the inline zoom: when the viewer is zoomed
+  /// in, PiP receives only the desktop region that was visible on screen.
+  private func presentationSample(_ buffer: CVPixelBuffer, inline sample: CMSampleBuffer) -> CMSampleBuffer {
+    guard pip != nil,
+          let region = RemoteDesktopPresentationCrop.visibleRegion(viewport: display.frame, bounds: bounds),
+          let cropped = presentationCropper.crop(buffer, region: region),
+          let projected = sampleBuffer(cropped) else { return sample }
+    return projected
+  }
+  @discardableResult private func render(_ frame: RTCVideoFrame, liveFrame: Bool = false) -> Bool {
+    guard let buffer = pixelBuffer(frame), let sample = sampleBuffer(buffer) else { return false }
     if presentationDisplay.status == .failed {
       playbackReady = false
       presentationDisplay.flush()
     }
     let projected = presentationDisplay.isReadyForMoreMediaData
     if projected {
-      presentationDisplay.enqueue(sample)
+      presentationDisplay.enqueue(presentationSample(buffer, inline: sample))
       if liveFrame { playbackReady = true; renderedFrames += 1 }
     }
-    // The second renderer shares the sample buffer; no second decode or copy.
+    // The inline renderer shares the decoded sample buffer; no second decode or
+    // copy. Only a zoomed system projection copies its visible region.
     // Only the system projection consumes frames while inline is not visible.
     let needsInline = inlineVisible && UIApplication.shared.applicationState == .active
     var renderedInline = false

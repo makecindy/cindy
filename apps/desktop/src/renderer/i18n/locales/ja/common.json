@@ -23,7 +23,9 @@
     "close": "閉じる",
     "cancel": "キャンセル",
     "start": "タスクをコピー",
-    "failed": "コピーが完了しませんでした。両方のコンピューターを確認してから再度コピーしてください。",
+    "failed": "コピーが完了しませんでした。両方のコンピューターを確認してから再度コピーしてください。（{{code}}）",
+    "errorPath": "該当ファイル：{{path}}",
+    "errorSize": "必要量 約 {{needed}}、上限 約 {{limit}}。",
     "stages": {
       "preparing": "スナップショットを準備中…",
       "transferring": "ファイルを転送・検証中…",
@@ -36,7 +38,7 @@
       "MIGRATION_TASK_RUNNING": "コピーする前にタスクを停止してください。",
       "MIGRATION_SHARED_DIRECTORY_BUSY": "別のタスクがこのフォルダーを使用しています。停止してから再試行してください。",
       "MIGRATION_TASK_UNSUPPORTED": "このタスクの種類または現在の状態では、別のコンピューターにコピーできません。",
-      "MIGRATION_NO_MEMORY": "タスク履歴全体を処理するためのメモリが不足しています。メモリを解放して再試行してください。",
+      "MIGRATION_NO_MEMORY": "タスク履歴が大きすぎて、コピー時に処理できる上限を超えています。",
       "MIGRATION_INCOMPLETE_CONTEXT": "タスク履歴が不完全なため、コピーを停止しました。",
       "MIGRATION_EXTERNAL_LINK": "フォルダー外へのリンク、または未対応のリンクチェーンがあります。元のファイルは変更されていません。",
       "MIGRATION_REQUIRES_REPOSITORY_ROOT": "Git プロジェクトでは、タスクのフォルダーがリポジトリのルートである必要があります。",
@@ -47,10 +49,28 @@
       "MIGRATION_TASK_QUEUED": "このタスクには待機中のメッセージがあります。処理または削除してからコピーしてください。",
       "MIGRATION_SOURCE_CHANGED": "準備中に元のタスクが変更されました。コピーを再試行してください。",
       "MIGRATION_TIMEOUT": "コピー元のコンピューターが時間内に応答しませんでした。しばらくしてから再試行してください。",
-      "MIGRATION_CANNOT_CANCEL": "移行先のコンピューターでタスクの作成が始まったため、キャンセルできません。"
+      "MIGRATION_CANNOT_CANCEL": "移行先のコンピューターでタスクの作成が始まったため、キャンセルできません。",
+      "MIGRATION_WORKSPACE_CHANGED": "パッケージ作成中にプロジェクトの Git コミットまたはステージ済みの内容が変更されました。しばらくしてからコピーを再試行してください。",
+      "MIGRATION_TEAM_CHANGED": "協同タスクのメンバーが変更されました。コピーをやり直してください。",
+      "MIGRATION_NONPORTABLE_PATH": "ほかのシステムで使用できないファイル名が含まれています。元のファイルは変更されていません。",
+      "MIGRATION_PATH_COLLISION": "大文字と小文字だけが異なる同名ファイルが含まれています。元のファイルは変更されていません。",
+      "MIGRATION_NOT_CONNECTED": "このコンピューターは接続されていません。ログインしてリモート操作がオンになっていることを確認してから再試行してください。",
+      "MIGRATION_TASK_BUSY": "このタスクはコピー中か、別の操作で使用中です。しばらくしてから再試行してください。"
     },
     "successTitle": "コピー完了",
     "successDescription": "{{name}}にコピーしました。",
+    "skippedTitle_one": "次の {{count}} 件のファイルまたはフォルダーはコピーされませんでした。その他はすべてコピーしました：",
+    "skippedTitle_other": "次の {{count}} 件のファイルまたはフォルダーはコピーされませんでした。その他はすべてコピーしました：",
+    "skippedMore_one": "ほか {{count}} 件は表示していません。",
+    "skippedMore_other": "ほか {{count}} 件は表示していません。",
+    "completeWithSkipped_one": "コピー完了（{{count}} 件はコピーされず）",
+    "completeWithSkipped_other": "コピー完了（{{count}} 件はコピーされず）",
+    "skippedReasons": {
+      "MIGRATION_EXTERNAL_LINK": "プロジェクトフォルダー外を指すリンク",
+      "MIGRATION_NONPORTABLE_PATH": "ほかのシステムで使用できない名前",
+      "MIGRATION_PATH_COLLISION": "別のファイルと大文字・小文字だけが異なる",
+      "MIGRATION_UNSUPPORTED_ENTRY": "コピーできない特殊ファイル（ソケット、パイプなど）"
+    },
     "copyingTitle": "{{name}}にコピー中",
     "keepOpen": "{{name}}にコピーしています。このウィンドウを閉じてもコピーは続行され、元のタスク上部で進捗を確認できます。",
     "runInBackground": "バックグラウンドで続行",
@@ -66,6 +86,7 @@
     "fileSummary": "プロジェクトファイル：{{count}} 個、合計 {{size}}",
     "estimateNote": "隠しファイルを含むコピー前の推定値です。別途コピーする Git 履歴、タスクの会話と添付ファイルは含みません。ファイルの変更により最終サイズは変わります。",
     "estimateFailed": "集計できませんでした。コピー元の接続とバージョンを確認し、閉じて再試行してください。",
+    "estimateFailedWithCode": "集計できませんでした。コピー元の接続とバージョンを確認し、閉じて再試行してください。（{{code}}）",
     "estimateTimeout": "集計がタイムアウトしました。プロジェクトのファイルが多すぎるため、コピー元が時間内に集計を完了できませんでした。ファイル数の少ないプロジェクトをコピーしてください。",
     "estimateTooManyFiles": "プロジェクトのファイルが {{limit, number}} 個を超えているため、コピーできません。ファイル数の少ないプロジェクトをコピーしてください。"
   },
@@ -875,6 +896,33 @@
         "aria": "プラグインパネルの復元場所を選択",
         "bubble": "フローティングバブル",
         "sidebar": "サイドバー"
+      },
+      "wallpaper": {
+        "title": "壁紙",
+        "description": "アプリ全体に Cindy の壁紙や自分の画像を設定できます。テーマは独立して選べます。",
+        "reset": "デフォルトに戻す",
+        "aria": "壁紙の選択",
+        "nonePreview": "なし",
+        "options": {
+          "none": "なし",
+          "cindy-window": "Cindy · 窓辺のひととき",
+          "cindy-studio": "Cindy · 未来のアトリエ",
+          "cindy-dream": "Cindy · 夢の旅",
+          "custom": "カスタム壁紙"
+        },
+        "overlayLabel": "オーバーレイ",
+        "overlayAria": "壁紙オーバーレイの強さ",
+        "motionLabel": "表示方法",
+        "motionHint": "初期設定は静止画です。非表示時は停止し、システムの視差効果を減らす設定に従います。",
+        "motionStatic": "静止画",
+        "motionDynamic": "動画",
+        "customChoose": "画像を選択",
+        "customReplace": "画像を変更",
+        "customRemove": "画像を削除",
+        "customBusy": "処理中…",
+        "customHint": "PNG・JPEG・WebP、最大 20 MB。この端末にのみ保存し、静止画として表示します。",
+        "customInvalid": "有効な PNG・JPEG・WebP 画像を選択してください（最大 20 MB・4000 万画素）。",
+        "customFailed": "壁紙を保存できませんでした。もう一度お試しください。"
       },
       "layout": {
         "label": "パネルレイアウト",
@@ -7880,6 +7928,7 @@
         "message": "「{{title}}」を進めて",
         "aria": "「{{title}}」を進める"
       },
+      "followingMark": "このプロジェクトの担当: {{names}}",
       "olderCount_other": "さらに前の {{count}} 件",
       "kind": {
         "existing": "既存のセッション",

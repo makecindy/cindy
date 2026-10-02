@@ -16,10 +16,16 @@ import { broadcastSessionPatched } from './sessions';
 
 const log = createLogger('taskTags');
 export const TASK_TAG_CHANNEL = 'local-db:task-tags:execute';
-/** All surfaces share validation, transactions and owner-scoped task patches. */
+/**
+ * All surfaces share validation, transactions and owner-scoped task patches.
+ * `trustedBotOwnerTurn`: the caller is a Bot main task on its owner's own turn
+ * (decided by the host, maker-ipc/botTurnAuthority.ts); Bot sessions themselves
+ * still cannot be tagged.
+ */
 export async function executeTaskTags(
   request: TaskTagRequest,
   callerSessionId?: string,
+  options: { trustedBotOwnerTurn?: boolean } = {},
 ): Promise<TaskTagResult> {
   const scope = captureDataOwnerBroadcastScope();
   const assertCurrent = () => {
@@ -44,6 +50,7 @@ export async function executeTaskTags(
     ...request,
     newId: preset?.id ?? randomUUID(),
     callerSessionId,
+    ...(callerSessionId && options.trustedBotOwnerTurn ? { callerIsTrustedBot: true } : {}),
   });
   assertCurrent();
   if (['create', 'update', 'delete', 'attach', 'detach'].includes(request.action)) {

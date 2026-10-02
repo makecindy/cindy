@@ -88,7 +88,12 @@ returning inline refreshes that state after the PiP stop completes. A cached old
 frame alone does not make a reconnecting receiver ready for PiP.
 Keep the AVKit sample-buffer projection at the native viewport's bounds, separate
 from the inline layer's fitted/panned/zoomed rectangle. Both renderers share one
-decoded sample buffer; their readiness must not block each other. Only the system
+decoded sample buffer; their readiness must not block each other. When the viewer
+is zoomed in, only the projection's frame content follows the zoom: it receives
+the desktop region visible inline, copied from the decoded NV12 frame
+(`RemoteDesktopPresentationCrop`). The projection layer's geometry stays fixed, so
+PiP keeps the browsing zoom without moving the source; a fitted, unzoomed view
+passes the frame through unchanged. Only the system
 projection receives frames while inline is hidden or the app is inactive. Restore
 replays the latest frame into the inline renderer before completing the visible
 source handoff. In physical-device A/B testing, a fitted or transformed source
@@ -133,6 +138,9 @@ apps for several minutes, PiP close/restore, network loss, zoom/keyboard geometr
 and Light/Dark on a physical phone. Unit tests and simulator builds do not establish
 background PiP acceptance. Roll out the Desktop signaling-loss fix with the native
 phone build; older Desktop hosts may still stop media when signaling disconnects.
+
+Run `node apps/mobile/scripts/test-remote-desktop-presentation-crop.mjs` on macOS
+to check the PiP zoom region geometry, 4:2:0 alignment and NV12 row copies.
 
 Run `node apps/mobile/scripts/test-remote-desktop-receiver.mjs` on macOS to
 compile and execute the production receiver against test-only UIKit/WebRTC doubles.

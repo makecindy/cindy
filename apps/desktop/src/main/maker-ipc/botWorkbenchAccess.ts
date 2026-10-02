@@ -1,9 +1,10 @@
 /**
  * 伙伴工作台的权限边界与工具服务(纯逻辑,依赖全部注入,便于单测)。
  *
- * 产品裁决(2026-10-01):伙伴可以查看、继续、停止「主人明确交给它的项目」里的任务。
- * 授权来自主人在工作台里点「交给伙伴」的那一次,范围只限记在该伙伴
- * `workbench.json` 里的项目,主人随时可以移除;其它任务仍不可触达。
+ * 产品裁决(2026-10-01):伙伴可以查看、继续「主人明确交给它的项目」里的任务。
+ * 授权来自主人「交给伙伴」的那一次(工作台里点选,或主人本人那一轮让伙伴记下),范围只限记在
+ * 该伙伴 `workbench.json` 里的项目,主人随时可以移除。停止、插话等动作走通用会话工具,
+ * 由宿主按「这一轮是谁触发的」逐次判定(见 botTurnAuthority.ts)。
  *
  * 接手 = 理解,不是搬运:项目是目录。宿主先给每个项目一份有界的素材(文档清单、近期提交与
  * 分支、我的 PR / issue)和近期会话的摘要(起始目的 + 最后几条),伙伴凭这些一次性写下判断
@@ -211,12 +212,6 @@ export interface BotWorkbenchAccessDeps {
     message: string;
     dispatcherSessionId: string;
   }): Promise<{ ok: true; wakeKind: string; queuedMessageId?: string } | Failure>;
-  stopSessionTurn(params: {
-    targetSessionId: string;
-  }): Promise<
-    | { ok: true; status: 'no-active-turn' | 'waiting-for-safe-point' | 'requested' | 'unconfirmed' }
-    | Failure
-  >;
   caseInsensitive: boolean;
   now?(): number;
   /** 账号切换守卫:返回 false 时中止,不做任何写入或投递。 */
@@ -228,6 +223,12 @@ function projectName(dir: string): string {
 }
 
 const scopeChanged: Failure = { ok: false, errorCode: 'OWNER_SCOPE_CHANGED', message: '账号已切换,请重试' };
+
+/**
+ * 项目数不再有产品上限,素材(brief:git、GitHub、文档清单)只给最近交代的前几个项目现算,
+ * 其余项目 brief 为 null,伙伴需要时用自己的文件工具看。防止一次 get_workbench 拉几十个仓库。
+ */
+export const WORKBENCH_BRIEF_PROJECTS_MAX = 8;
 
 type ResolvedTarget =
   | { ok: true; kind: 'session'; taskId: string; sessionId: string; projectDir: string }
@@ -461,7 +462,9 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
         deps.listRoutines(caller.botId),
         projectDirs.length ? deps.listSchedules() : Promise.resolve([]),
         Promise.all(projectDirs.map((dir) => deps.projectExists?.(dir) ?? Promise.resolve(true))),
-        Promise.all(projectDirs.map((dir) => deps.readBrief(dir).catch(() => null))),
+        Promise.all(projectDirs.map((dir, index) => (index < WORKBENCH_BRIEF_PROJECTS_MAX
+          ? deps.readBrief(dir).catch(() => null)
+          : Promise.resolve(null)))),
       ]);
       type Candidate = {
         taskId: string;
@@ -720,19 +723,6 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
         ...(sent.queuedMessageId ? { queuedMessageId: sent.queuedMessageId } : {}),
         ...(imported ? { importedFrom: target.taskId } : {}),
       };
-    },
-
-    async stopTask(params: { callerSessionId: string; taskId: string }) {
-      const allowed = await authorize(params.callerSessionId, params.taskId);
-      if (!allowed.ok) return allowed;
-      if (allowed.target.kind !== 'session') {
-        return { ok: false as const, errorCode: 'TASK_NOT_RUNNING', message: '这件事还没在 Cindy 里跑,没有可停的' };
-      }
-      const revoked = await stillGranted(allowed.botId, allowed.target.projectDir);
-      if (revoked) return revoked;
-      const stopped = await deps.stopSessionTurn({ targetSessionId: allowed.target.sessionId });
-      if (!stopped.ok) return stopped;
-      return { ok: true as const, taskId: allowed.target.sessionId, status: stopped.status };
     },
 
     /**

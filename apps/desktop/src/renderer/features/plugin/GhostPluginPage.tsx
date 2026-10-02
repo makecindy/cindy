@@ -1624,7 +1624,7 @@ export function GhostPluginPage({
         <main
           ref={pluginCatalogListRef}
           className={cn(
-            'min-h-0 w-full min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]',
+            'app-wallpaper-surface min-h-0 w-full min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]',
             embedded ? 'bg-transparent' : 'bg-[var(--surface)]',
           )}
           onScroll={onPluginCatalogScroll}

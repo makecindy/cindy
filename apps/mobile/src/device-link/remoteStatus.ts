@@ -174,7 +174,18 @@ function localizedStableRemoteError(error: string): string | null {
  * 只有确定性远端错误才锁 composer；断线、弱网、超时与熔断由本地 outbox 接住，
  * 恢复后自动派发。返回 null 表示 composer 可以继续收消息。
  */
+const COMPOSER_BLOCKING_MARKERS = [
+  'ACCESS_REVOKED',
+  'REMOTE_DISABLED',
+  'CHANNEL_NOT_ALLOWED',
+  'VERSION_MISMATCH',
+] as const;
+
 export function describeRemoteComposerBlockingError(error: string | null): string | null {
   if (!error || isAutoRecoveringRemoteError(error)) return null;
-  return describeRemoteError(error);
+  const agentAuth = describeAgentAuthError(error);
+  if (agentAuth) return agentAuth;
+  if (!COMPOSER_BLOCKING_MARKERS.some((marker) => error.includes(marker))) return null;
+  return localizedStableRemoteError(error);
 }
+

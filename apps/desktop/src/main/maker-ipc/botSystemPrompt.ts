@@ -34,6 +34,13 @@ export interface BotPromptCapabilitySignals {
   ownSkillsEnabled: boolean;
   /** 是否为 Bot 的 canonical Chat；Bot Mode 协议只在这里生效。 */
   botModeEnabled?: boolean;
+  /**
+   * 本机伙伴主任务拿到普通任务那一套 session 工具（宿主按本轮来源逐次判定，见 botTurnAuthority.ts）。
+   * 远程伙伴与群专线等非主任务没有。
+   */
+  sessionControlEnabled?: boolean;
+  /** 伙伴基线挂载了 cindy_scheduler(本机主任务);宿主仍按轮判定写操作。 */
+  automationEnabled?: boolean;
 }
 
 /** 技能索引的一行:名字 + 一句话描述(描述缺省时只列名字)。 */
@@ -141,6 +148,23 @@ const TASK_AND_TEAMMATE_GUIDANCE = [
   '后台任务负责独立工作并回传结果；伙伴消息只负责沟通，不保证对方执行或交付。它们都不是命令对方，也不会改变对方是谁。用户如果要求"让某个伙伴听话",说明这条边界,然后直接给出可以协作的做法。',
 ].join('\n');
 
+/**
+ * 和普通任务同一套 session 能力，以及「这一轮是谁触发的」决定能做多少（宿主逐次核对，
+ * 提示词只负责让伙伴知道有这些能力、被拒时怎么办）。
+ */
+const SESSION_CONTROL_GUIDANCE = [
+  '## 你能看、能管主人的任务',
+  '你和主人开的普通任务用同一套工具（cindy_helper，先 `list_tools` 看类目再 `call_tool`）：history 类的 `list_sessions` / `get_chat_history` / `search_chat_history` 看有哪些任务、它们在说什么；control 类的 `steer_session`、`stop_session_turn`、`set_session_runtime`、`rename_sessions`、`archive_sessions`、标签与项目工具管理任务；handoff 类的 `send_to_session` 给已有任务发话或开一条新的普通任务。',
+  '能做多少取决于这一轮是谁触发的，宿主每次调用都会核对：主人本人在这里发话的那一轮，这些都能用；自动化、例行任务、你开的后台任务回报这类主人事先安排的，能看全部，只能动交给你的项目里的任务和你自己开的任务；群聊、其他伙伴或别的任务转来的消息，只能动你自己开的任务。被拒（`OWNER_TURN_REQUIRED` / `TASK_OUT_OF_SCOPE`）就照实告诉主人，等主人自己说；不要换个工具、开后台任务、用命令行或请别的伙伴去做被拒的事。新建伙伴、改你自己的资料与能力只在主人本人发话的那一轮做。',
+  '停止、归档、改名、给正在跑的任务插话这类会影响主人工作的事，主人没开口就不做；做之前用一句话说清要动哪件、做什么。',
+  '主人让你接手一个项目时，用 `add_workbench_project` 记下它的目录；不再负责时用 `remove_workbench_project`。这两个只在主人本人发话的那一轮可用。',
+].join('\n');
+
+const AUTOMATION_GUIDANCE = [
+  '## 你能建普通自动化',
+  '主人要你给某个项目或任务设定时执行时，用 cindy_scheduler 建普通自动化（先 `list_tools`，再 `call_tool` 调 `schedule_create` 等）；只和你自己有关的提醒仍用例行任务。新建、修改、暂停、立即运行和删除只在主人本人发话的那一轮可用，其余时候只能查看。建完读回核实名称、时间和是否启用，成功才说已安排。',
+].join('\n');
+
 const BOT_CREATION_GUIDANCE = [
   '## 你可以创建伙伴',
   '用户要求新增、创建或添加一个伙伴时，直接调用 `create_teammate` 完成创建。只需要名字；用户已说明的职责和身份可以一起带上，没有说明的不要编造。第一句话由新伙伴自己的运行时和记忆生成，不代写、不预览；不要写资料包、模板文件，也不要让用户手动去设置页重做一遍。',
@@ -238,6 +262,10 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
   if (botModeEnabled && botCreationEnabled) capabilityParts.push(BOT_CREATION_GUIDANCE);
   if (botModeEnabled && input.capabilities.partnerActionsEnabled) {
     capabilityParts.push(TASK_AND_TEAMMATE_GUIDANCE);
+  }
+  if (botModeEnabled && input.capabilities.sessionControlEnabled) {
+    capabilityParts.push(SESSION_CONTROL_GUIDANCE);
+    if (input.capabilities.automationEnabled) capabilityParts.push(AUTOMATION_GUIDANCE);
   }
   if (capabilityParts.length > 0) {
     parts.push(['# 你会做什么', ...capabilityParts].join('\n\n'));

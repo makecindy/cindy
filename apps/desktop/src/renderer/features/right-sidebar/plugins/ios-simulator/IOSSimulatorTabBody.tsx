@@ -2019,7 +2019,7 @@ export function IOSSimulatorTabBody({
     <div
       ref={panelViewportRef}
       data-testid="ios-simulator-panel-viewport"
-      className="h-full overflow-y-auto bg-[var(--surface)] text-[var(--text-primary)]"
+      className="app-wallpaper-surface h-full overflow-y-auto bg-[var(--surface)] text-[var(--text-primary)]"
       aria-busy={busy || refreshing || requestingAccess}
     >
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4">

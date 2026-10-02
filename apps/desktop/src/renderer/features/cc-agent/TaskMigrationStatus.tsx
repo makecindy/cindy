@@ -54,7 +54,9 @@ export function TaskMigrationStatus({ session }: { session: Session }) {
         className="max-w-64 truncate [-webkit-app-region:no-drag]"
         onClick={() => setOpen(true)}
       >
-        {t(`taskMigration.stages.${status.stage}`)}
+        {status.stage === 'complete' && status.skipped
+          ? t('taskMigration.completeWithSkipped', { count: status.skipped.total })
+          : t(`taskMigration.stages.${status.stage}`)}
       </Button>
       {open && <TaskMigrationDialog session={session} onDismiss={() => setOpen(false)} />}
     </>

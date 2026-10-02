@@ -155,7 +155,6 @@ export {
   type WorkbenchJudgmentWire,
   type WorkbenchProjectBriefWire,
   type WorkbenchProjectWire,
-  type WorkbenchStopStatusWire,
   type WorkbenchTaskStateWire,
   type WorkbenchTaskWire,
   type WorkbenchTranscriptWire,

@@ -23,7 +23,9 @@
     "close": "关闭",
     "cancel": "取消",
     "start": "复制任务",
-    "failed": "复制未完成，请检查两台电脑后重新复制。",
+    "failed": "复制未完成，请检查两台电脑后重新复制。（{{code}}）",
+    "errorPath": "问题文件：{{path}}",
+    "errorSize": "需要约 {{needed}}，上限约 {{limit}}。",
     "stages": {
       "preparing": "正在准备快照…",
       "transferring": "正在传输并校验文件…",
@@ -36,7 +38,7 @@
       "MIGRATION_TASK_RUNNING": "请先停止任务再复制。",
       "MIGRATION_SHARED_DIRECTORY_BUSY": "其他任务正在使用此目录，请停止后重试。",
       "MIGRATION_TASK_UNSUPPORTED": "此任务的类型或当前状态暂不支持跨电脑复制。",
-      "MIGRATION_NO_MEMORY": "可用内存不足以处理完整任务历史，请释放内存后重试。",
+      "MIGRATION_NO_MEMORY": "任务历史太大，超出了复制时能处理的上限。",
       "MIGRATION_INCOMPLETE_CONTEXT": "无法取得完整任务历史，已停止复制以免丢失上下文。",
       "MIGRATION_EXTERNAL_LINK": "项目包含指向目录外部的链接或暂不支持的链接链，源文件未改动。",
       "MIGRATION_REQUIRES_REPOSITORY_ROOT": "Git 项目的任务目录必须是仓库根目录。",
@@ -47,10 +49,28 @@
       "MIGRATION_TASK_QUEUED": "此任务有排队中的消息，请先完成或移除这些消息再复制。",
       "MIGRATION_SOURCE_CHANGED": "准备期间源任务发生变化，请重试复制。",
       "MIGRATION_TIMEOUT": "任务所在电脑响应超时，请稍后重试。",
-      "MIGRATION_CANNOT_CANCEL": "目标电脑已开始创建任务，无法再取消。"
+      "MIGRATION_CANNOT_CANCEL": "目标电脑已开始创建任务，无法再取消。",
+      "MIGRATION_WORKSPACE_CHANGED": "打包期间项目的 Git 提交或已暂存内容发生变化，请稍后重试复制。",
+      "MIGRATION_TEAM_CHANGED": "协同任务的成员发生变化，请重新发起复制。",
+      "MIGRATION_NONPORTABLE_PATH": "项目包含其他系统无法使用的文件名，源文件未改动。",
+      "MIGRATION_PATH_COLLISION": "项目包含仅大小写不同的同名文件，源文件未改动。",
+      "MIGRATION_NOT_CONNECTED": "这台电脑尚未连接，请确认已登录并开启远程控制后重试。",
+      "MIGRATION_TASK_BUSY": "此任务正在复制或被其他操作占用，请稍后重试。"
     },
     "successTitle": "复制成功",
     "successDescription": "已复制到{{name}}。",
+    "skippedTitle_one": "以下 {{count}} 个文件或文件夹没有复制，其余内容已完整复制：",
+    "skippedTitle_other": "以下 {{count}} 个文件或文件夹没有复制，其余内容已完整复制：",
+    "skippedMore_one": "另有 {{count}} 项未列出。",
+    "skippedMore_other": "另有 {{count}} 项未列出。",
+    "completeWithSkipped_one": "复制成功，{{count}} 项未复制",
+    "completeWithSkipped_other": "复制成功，{{count}} 项未复制",
+    "skippedReasons": {
+      "MIGRATION_EXTERNAL_LINK": "链接指向项目目录外部",
+      "MIGRATION_NONPORTABLE_PATH": "文件名在其他系统上无法使用",
+      "MIGRATION_PATH_COLLISION": "与另一个文件仅大小写不同",
+      "MIGRATION_UNSUPPORTED_ENTRY": "特殊文件（如套接字、管道），无法复制"
+    },
     "copyingTitle": "正在复制到{{name}}",
     "keepOpen": "正在复制到{{name}}。关闭窗口不会中断复制，可在原任务顶部查看进度。",
     "runInBackground": "后台继续",
@@ -66,6 +86,7 @@
     "fileSummary": "项目文件：{{count}} 个，共 {{size}}",
     "estimateNote": "复制前估算，含隐藏文件；不含另行复制的 Git 历史、任务对话及附件。文件变化可能影响最终大小。",
     "estimateFailed": "无法统计文件。请检查任务所在电脑的连接和版本，然后关闭重试。",
+    "estimateFailedWithCode": "无法统计文件。请检查任务所在电脑的连接和版本，然后关闭重试。（{{code}}）",
     "estimateTimeout": "统计超时：项目文件过多，任务所在电脑未能在时限内完成统计。可以改为复制文件更少的项目。",
     "estimateTooManyFiles": "项目文件超过 {{limit, number}} 个，无法复制。请改为复制文件更少的项目。"
   },
@@ -875,6 +896,33 @@
         "aria": "选择插件面板恢复入口",
         "bubble": "浮动气泡",
         "sidebar": "侧边栏"
+      },
+      "wallpaper": {
+        "title": "壁纸",
+        "description": "为整个应用选择 Cindy 场景或自己的图片，主题保持独立。",
+        "reset": "恢复默认",
+        "aria": "壁纸选择",
+        "nonePreview": "无",
+        "options": {
+          "none": "无",
+          "cindy-window": "Cindy · 窗边陪伴",
+          "cindy-studio": "Cindy · 未来工作室",
+          "cindy-dream": "Cindy · 梦境漫游",
+          "custom": "自定义壁纸"
+        },
+        "overlayLabel": "遮罩",
+        "overlayAria": "壁纸遮罩强度",
+        "motionLabel": "展示方式",
+        "motionHint": "默认静态；动态在窗口隐藏时暂停，并遵循系统减少动效设置。",
+        "motionStatic": "静态",
+        "motionDynamic": "动态",
+        "customChoose": "选择图片",
+        "customReplace": "替换图片",
+        "customRemove": "移除图片",
+        "customBusy": "处理中…",
+        "customHint": "PNG、JPEG、WebP，最大 20 MB。仅保存在此设备，静态展示。",
+        "customInvalid": "请选择有效的 PNG、JPEG 或 WebP 图片（不超过 20 MB、4000 万像素）。",
+        "customFailed": "未能保存壁纸，请重试。"
       },
       "layout": {
         "label": "面板布局",
@@ -7880,6 +7928,7 @@
         "message": "跟进「{{title}}」",
         "aria": "跟进「{{title}}」"
       },
+      "followingMark": "{{names}}在跟进这个项目",
       "olderCount_other": "更早的 {{count}} 个",
       "kind": {
         "existing": "原有任务",

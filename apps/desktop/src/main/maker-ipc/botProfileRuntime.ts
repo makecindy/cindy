@@ -24,6 +24,7 @@ import {
 import { clearBotAttention, noteBotAttention } from './botAttentionService.js';
 import { createLogger } from '../logger.js';
 import { PROVIDER_NAME_TO_PLUGIN_ID } from '../maker-host/plugins/builtin-plugins.js';
+import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
@@ -774,9 +775,16 @@ export async function hydrateBotProfileRuntime(
     toolsetMode === 'inherit' ? [...resolvedToolsets] : [...configuredToolsets];
   // 工具集与内置 MCP 共用宿主映射；已选择的能力必须同轮进入 MCP allowlist。
   // 显式挂载 docs 时提示词会承诺文档能力，其他工具集同样需要真正挂载。
-  // 开头记录的那类事故:「提示词说有,运行时够不到」。
+  // 开头记录的那类事故:「提示词说有,运行时够不到」。伙伴基线工具集（如 scheduler）
+  // 不经用户选择也挂载，同样要写进 allowlist，否则插件挂上了 MCP 却够不到。
+  const mountedToolsets = new Set([
+    ...resolvedToolsets,
+    ...toolsetCatalog
+      .filter((item) => BOT_BASELINE_PLUGIN_IDS.has(item.id) && item.available !== false)
+      .map((item) => item.id),
+  ]);
   for (const [serverName, toolsetId] of Object.entries(PROVIDER_NAME_TO_PLUGIN_ID)) {
-    if (toolsetId === 'collab' || !resolvedToolsets.includes(toolsetId) || runtimeConfiguredMcpServers.includes(serverName)) continue;
+    if (toolsetId === 'collab' || !mountedToolsets.has(toolsetId) || runtimeConfiguredMcpServers.includes(serverName)) continue;
     if (mcpCatalog.some((item) => item.name === serverName && item.available !== false)) {
       runtimeConfiguredMcpServers.push(serverName);
     }
@@ -808,6 +816,11 @@ export async function hydrateBotProfileRuntime(
     // index must not hide the instructions for learning the first reusable method.
     ownSkillsEnabled: row.role === 'canonical' && helperAvailable && !opts.remoteHostId,
     botModeEnabled: row.role === 'canonical',
+    // Same condition as the `bot-main` helper surface (mcp-integrations/helperSurface.ts).
+    sessionControlEnabled: row.role === 'canonical' && helperAvailable && !opts.remoteHostId,
+    // scheduler 是伙伴基线工具(maker-host/plugins/types.ts),与挂载 allowlist 同一份目录判定。
+    automationEnabled: row.role === 'canonical' && !opts.remoteHostId
+      && toolsetCatalog.some((item) => item.id === 'scheduler' && item.available !== false),
   };
   /*
     伙伴的家。读失败一律当"没有" —— 一次读不动不该让整个伙伴起不来,只是这一轮

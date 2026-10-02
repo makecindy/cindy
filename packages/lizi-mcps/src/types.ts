@@ -232,6 +232,8 @@ export interface RoutineToolService {
  */
 export interface SchedulerMcpDeps {
   withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
+  /** Live per-call check (Bot main tasks may change automations only on their owner's own turn). */
+  authorizeCall?: import('./tool-call-authority.js').ToolCallAuthorizer;
   getScheduler(): import('@cindy/maker-scheduler').Scheduler;
   /**
    * 前置检查脚本(preRunHook)统一安装服务(host 注入,desktop 实现为

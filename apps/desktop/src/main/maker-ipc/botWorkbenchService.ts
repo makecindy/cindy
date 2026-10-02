@@ -159,9 +159,12 @@ function mutate<T>(
       return result;
     });
   writeChains.set(key, run);
+  // finally 派生的 promise 会继承 run 的 rejection 且无人接住 —— 磁盘错误/
+  // 写入中途 bot home 被删时升级为进程级 unhandledRejection。cleanup 照跑,
+  // rejection 在此吸收(调用方已拿到原始 run 的失败)。
   void run.finally(() => {
     if (writeChains.get(key) === run) writeChains.delete(key);
-  });
+  }).catch(() => undefined);
   return run;
 }
 
@@ -266,8 +269,12 @@ export async function addBotWorkbenchDirectory(
 }
 
 export async function removeBotWorkbenchDirectory(userDataDir: string, botId: string, dirPath: string): Promise<void> {
+  // 与 add 同口径归一:add 存的是 path.resolve 后的路径, remove 若按原始串比较,
+  // 等价但写法不同的路径(尾分隔符、./、../ 段)会静默漏删, 且广播后 UI 里项目
+  // 仍在。resolve 后比较。
+  const resolved = path.resolve(dirPath);
   await mutate(userDataDir, botId, (stored) => ({
-    next: { ...stored, directories: stored.directories.filter((dir) => dir.path !== dirPath) },
+    next: { ...stored, directories: stored.directories.filter((dir) => dir.path !== resolved) },
     result: undefined,
   }));
 }

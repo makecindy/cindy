@@ -162,6 +162,34 @@ it('loads the completed task from the target computer before navigation and dism
   expect(state.merge).toHaveBeenCalledWith('B', 'B', [{ id: 'migrated', status: 'active' }]);
 });
 
+it('lists what a finished copy left behind, with the count of unlisted entries', async () => {
+  state.request.mockImplementation(async (device: string | null, command: { action: string }) => ({
+    supported: true,
+    deviceId: device ?? 'local',
+    ...(command.action === 'status'
+      ? {
+          stage: 'complete',
+          running: false,
+          targetDeviceId: 'B',
+          targetSessionId: 'migrated',
+          skipped: {
+            total: 3,
+            entries: [
+              { path: 'Pods/out.h', code: 'MIGRATION_EXTERNAL_LINK' },
+              { path: 'dev.sock', code: 'MIGRATION_UNSUPPORTED_ENTRY' },
+            ],
+          },
+        }
+      : {}),
+  }));
+  mount();
+  await screen.findByText('taskMigration.skippedTitle');
+  expect(screen.getByText('Pods/out.h')).toBeTruthy();
+  expect(screen.getByText('dev.sock')).toBeTruthy();
+  expect(screen.getByText('taskMigration.skippedMore')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'taskMigration.openTarget' })).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
+});
 it('confirms the project selected in the menu without asking for a second selection', async () => {
   render(
     <MemoryRouter>
@@ -403,6 +431,8 @@ it.each([
   ['[PRECONDITION_FAILED] MIGRATION_TIMEOUT', 'taskMigration.estimateTimeout'],
   ['[PRECONDITION_FAILED] MIGRATION_TOO_MANY_FILES', 'taskMigration.estimateTooManyFiles'],
   ['[PRECONDITION_FAILED] MIGRATION_FAILED', 'taskMigration.estimateFailed'],
+  // A refusal with its own reason must not be reported as a connection/version problem.
+  ['[PRECONDITION_FAILED] MIGRATION_TASK_QUEUED', 'taskMigration.errors.MIGRATION_TASK_QUEUED'],
 ])('explains why inventory failed (%s) and keeps Copy disabled', async (message, text) => {
   const original = state.request.getMockImplementation()!;
   state.request.mockImplementation((device, command) =>

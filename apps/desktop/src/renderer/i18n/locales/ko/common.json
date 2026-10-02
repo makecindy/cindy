@@ -23,7 +23,9 @@
     "close": "닫기",
     "cancel": "취소",
     "start": "작업 복사",
-    "failed": "복사가 완료되지 않았습니다. 두 컴퓨터를 확인한 후 다시 복사하세요.",
+    "failed": "복사가 완료되지 않았습니다. 두 컴퓨터를 확인한 후 다시 복사하세요. ({{code}})",
+    "errorPath": "문제 파일: {{path}}",
+    "errorSize": "필요한 용량 약 {{needed}}, 한도 약 {{limit}}.",
     "stages": {
       "preparing": "스냅샷 준비 중…",
       "transferring": "파일 전송 및 검증 중…",
@@ -36,7 +38,7 @@
       "MIGRATION_TASK_RUNNING": "복사하기 전에 작업을 중지하세요.",
       "MIGRATION_SHARED_DIRECTORY_BUSY": "다른 작업이 이 폴더를 사용 중입니다. 중지한 후 다시 시도하세요.",
       "MIGRATION_TASK_UNSUPPORTED": "이 작업의 유형 또는 현재 상태에서는 다른 컴퓨터로 복사할 수 없습니다.",
-      "MIGRATION_NO_MEMORY": "전체 작업 기록을 처리할 메모리가 부족합니다. 메모리를 확보한 후 다시 시도하세요.",
+      "MIGRATION_NO_MEMORY": "작업 기록이 너무 커서 복사할 때 처리할 수 있는 한도를 넘었습니다.",
       "MIGRATION_INCOMPLETE_CONTEXT": "전체 작업 기록을 가져올 수 없어 복사을 중지했습니다.",
       "MIGRATION_EXTERNAL_LINK": "폴더 외부 링크 또는 지원되지 않는 링크 체인이 있습니다. 원본 파일은 변경되지 않았습니다.",
       "MIGRATION_REQUIRES_REPOSITORY_ROOT": "Git 프로젝트의 작업 폴더는 저장소 루트여야 합니다.",
@@ -47,10 +49,28 @@
       "MIGRATION_TASK_QUEUED": "이 작업에 대기 중인 메시지가 있습니다. 처리하거나 삭제한 후 복사하세요.",
       "MIGRATION_SOURCE_CHANGED": "준비 중 원본 작업이 변경되었습니다. 복사를 다시 시도하세요.",
       "MIGRATION_TIMEOUT": "원본 컴퓨터가 제한 시간 내에 응답하지 않았습니다. 잠시 후 다시 시도하세요.",
-      "MIGRATION_CANNOT_CANCEL": "대상 컴퓨터에서 작업 생성이 시작되어 더 이상 취소할 수 없습니다."
+      "MIGRATION_CANNOT_CANCEL": "대상 컴퓨터에서 작업 생성이 시작되어 더 이상 취소할 수 없습니다.",
+      "MIGRATION_WORKSPACE_CHANGED": "패키징 중 프로젝트의 Git 커밋 또는 스테이징된 내용이 변경되었습니다. 잠시 후 다시 복사하세요.",
+      "MIGRATION_TEAM_CHANGED": "협업 작업의 구성원이 변경되었습니다. 복사를 다시 시작하세요.",
+      "MIGRATION_NONPORTABLE_PATH": "다른 시스템에서 사용할 수 없는 파일 이름이 있습니다. 원본 파일은 변경되지 않았습니다.",
+      "MIGRATION_PATH_COLLISION": "대소문자만 다른 같은 이름의 파일이 있습니다. 원본 파일은 변경되지 않았습니다.",
+      "MIGRATION_NOT_CONNECTED": "이 컴퓨터가 연결되어 있지 않습니다. 로그인되어 있고 원격 제어가 켜져 있는지 확인한 후 다시 시도하세요.",
+      "MIGRATION_TASK_BUSY": "이 작업은 이미 복사 중이거나 다른 작업에서 사용 중입니다. 잠시 후 다시 시도하세요."
     },
     "successTitle": "복사 완료",
     "successDescription": "{{name}}에 복사했습니다.",
+    "skippedTitle_one": "다음 {{count}}개 파일 또는 폴더는 복사되지 않았습니다. 나머지는 모두 복사했습니다:",
+    "skippedTitle_other": "다음 {{count}}개 파일 또는 폴더는 복사되지 않았습니다. 나머지는 모두 복사했습니다:",
+    "skippedMore_one": "{{count}}개 항목은 표시되지 않았습니다.",
+    "skippedMore_other": "{{count}}개 항목은 표시되지 않았습니다.",
+    "completeWithSkipped_one": "복사 완료, {{count}}개 항목 제외",
+    "completeWithSkipped_other": "복사 완료, {{count}}개 항목 제외",
+    "skippedReasons": {
+      "MIGRATION_EXTERNAL_LINK": "프로젝트 폴더 외부를 가리키는 링크",
+      "MIGRATION_NONPORTABLE_PATH": "다른 시스템에서 사용할 수 없는 이름",
+      "MIGRATION_PATH_COLLISION": "다른 파일과 대소문자만 다름",
+      "MIGRATION_UNSUPPORTED_ENTRY": "복사할 수 없는 특수 파일(소켓, 파이프 등)"
+    },
     "copyingTitle": "{{name}}로 복사 중",
     "keepOpen": "{{name}}로 복사 중입니다. 창을 닫아도 복사는 계속되며, 원본 작업 상단에서 진행 상황을 확인할 수 있습니다.",
     "runInBackground": "백그라운드에서 계속",
@@ -66,6 +86,7 @@
     "fileSummary": "프로젝트 파일: {{count}}개, 총 {{size}}",
     "estimateNote": "숨김 파일을 포함한 복사 전 예상치입니다. 별도로 복사하는 Git 기록, 작업 대화 및 첨부 파일은 제외됩니다. 파일 변경에 따라 최종 크기가 달라질 수 있습니다.",
     "estimateFailed": "파일을 집계하지 못했습니다. 원본 컴퓨터의 연결과 버전을 확인한 후 닫고 다시 시도하세요.",
+    "estimateFailedWithCode": "파일을 집계하지 못했습니다. 원본 컴퓨터의 연결과 버전을 확인한 후 닫고 다시 시도하세요. ({{code}})",
     "estimateTimeout": "집계 시간이 초과되었습니다. 프로젝트 파일이 너무 많아 원본 컴퓨터가 제한 시간 내에 집계하지 못했습니다. 파일이 더 적은 프로젝트를 복사해 보세요.",
     "estimateTooManyFiles": "프로젝트 파일이 {{limit, number}}개를 넘어 복사할 수 없습니다. 파일이 더 적은 프로젝트를 복사하세요."
   },
@@ -875,6 +896,33 @@
         "aria": "플러그인 패널 복원 위치 선택",
         "bubble": "플로팅 버블",
         "sidebar": "사이드바"
+      },
+      "wallpaper": {
+        "title": "배경화면",
+        "description": "앱 전체에 Cindy 배경이나 내 이미지를 적용하세요. 테마는 별도로 선택할 수 있습니다.",
+        "reset": "기본값으로 복원",
+        "aria": "배경화면 선택",
+        "nonePreview": "없음",
+        "options": {
+          "none": "없음",
+          "cindy-window": "Cindy · 창가의 휴식",
+          "cindy-studio": "Cindy · 미래의 아틀리에",
+          "cindy-dream": "Cindy · 꿈속 여행",
+          "custom": "사용자 지정 배경화면"
+        },
+        "overlayLabel": "오버레이",
+        "overlayAria": "배경화면 오버레이 강도",
+        "motionLabel": "표시 방식",
+        "motionHint": "기본값은 정적입니다. 창이 숨겨지면 일시 정지하며 시스템의 동작 줄이기 설정을 따릅니다.",
+        "motionStatic": "정적",
+        "motionDynamic": "동적",
+        "customChoose": "이미지 선택",
+        "customReplace": "이미지 교체",
+        "customRemove": "이미지 제거",
+        "customBusy": "처리 중…",
+        "customHint": "PNG, JPEG, WebP, 최대 20 MB. 이 기기에만 저장되며 정지 이미지로 표시됩니다.",
+        "customInvalid": "올바른 PNG, JPEG 또는 WebP 이미지를 선택하세요(최대 20 MB, 4천만 화소).",
+        "customFailed": "배경화면을 저장하지 못했습니다. 다시 시도하세요."
       },
       "layout": {
         "label": "패널 레이아웃",
@@ -7880,6 +7928,7 @@
         "message": "「{{title}}」 이어서 진행해 줘",
         "aria": "「{{title}}」 진행하기"
       },
+      "followingMark": "이 프로젝트 담당: {{names}}",
       "olderCount_other": "이전 {{count}}개",
       "kind": {
         "existing": "기존 세션",

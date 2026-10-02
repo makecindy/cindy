@@ -7,7 +7,8 @@ import { errorPayload, okPayload } from './_payload.js';
 /**
  * 伙伴工作台:主人把本机项目交给伙伴后,伙伴先读懂项目里的任务,再按主人的意思继续。
  *
- * 权限只来自主人在工作台里的那次「交给伙伴」:宿主从 callerSessionId 反查伙伴
+ * 权限只来自主人的那次「交给伙伴」(工作台里点选,或主人本人那一轮让伙伴用 add_workbench_project
+ * 记下):宿主从 callerSessionId 反查伙伴
  * (只认本机、在用的伙伴主任务),目标必须落在该伙伴已接手的项目里——Cindy 任务要是
  * 普通本机任务、未归档删除、不是任何伙伴自己的隐藏任务;本机 Claude Code / Codex / Pi 会话的
  * 工作目录要在已接手项目内;PR / issue 要属于已接手项目的 GitHub 远端;参考链接只认 https
@@ -139,12 +140,6 @@ export interface WorkbenchTranscriptWire {
   truncated: boolean;
 }
 
-export type WorkbenchStopStatusWire =
-  | 'no-active-turn'
-  | 'waiting-for-safe-point'
-  | 'requested'
-  | 'unconfirmed';
-
 export interface BotWorkbenchCallbacks {
   get(params: { callerSessionId: string }): Promise<ControlResult<{ workbench: BotWorkbenchSnapshotWire }, string>>;
   read(params: {
@@ -182,10 +177,16 @@ export interface BotWorkbenchCallbacks {
       string
     >
   >;
-  stopTask(params: {
+  /** 主人在这一轮亲口交代时,把一个本机项目目录交给伙伴(与工作台里「交给伙伴」同一份记录)。 */
+  addProject(params: {
     callerSessionId: string;
-    taskId: string;
-  }): Promise<ControlResult<{ taskId: string; status: WorkbenchStopStatusWire }, string>>;
+    path: string;
+  }): Promise<ControlResult<{ project: { name: string; path: string }; projectCount: number }, string>>;
+  /** 主人让伙伴别再管某个项目时,从工作台移除它;项目里的任务与文件都不动。 */
+  removeProject(params: {
+    callerSessionId: string;
+    path: string;
+  }): Promise<ControlResult<{ path: string; removed: boolean }, string>>;
 }
 
 export interface BotWorkbenchToolDeps {
@@ -247,7 +248,7 @@ export function registerBotWorkbenchTools(
     name: 'get_workbench',
     category: 'bots',
     description:
-      '读取你的工作台:主人交给你的项目,每个项目的素材(brief:文档路径、git 分支与最近 14 天提交、我打开的 PR 与 issue),'
+      '读取你的工作台:主人交给你的项目,每个项目的素材(brief:文档路径、git 分支与最近 14 天提交、我打开的 PR 与 issue;项目很多时只有最近交代的前 8 个带 brief,其余为 null,需要时用文件工具自己看),'
       + '项目里最近 30 天的会话(项目里的 Cindy 任务——包括主人自己开的——不管你判断过没有都在,最多 30 条;再补本机 Claude Code / Codex / Pi 会话,合计最多 40 条;更早的只给 olderCount),你写过的 PR / issue / 建议条目,你的例行任务与项目里的自动化。'
       + '主人提到这个项目、让你跟进或问进展时,先看工作台;主人自己在项目里开的任务也在里面,它们属于你知道的项目事务,不需要主人逐个告诉你。'
       + '每条会话带 digest:起始目的与最后几条对话,足够大多数判断,不用逐个读全文。'
@@ -370,19 +371,41 @@ export function registerBotWorkbenchTools(
   });
 
   registry.register({
-    name: 'stop_workbench_task',
+    name: 'add_workbench_project',
     category: 'bots',
     description:
-      '请求停止工作台上一件任务的当前一轮(优雅停止)。不删除任务,之后仍可用 continue_workbench_task 接着做。'
-      + '只在主人要求,或任务明显走偏、在做重复无用的事时使用。status=requested / waiting-for-safe-point / unconfirmed 表示已请求但引擎可能还没停稳,不要说成已停止。'
-      + '你自己开的后台任务用 stop_session_task。',
-    inputShape: { task_id: TASK_ID },
-    handler: async ({ task_id }) => {
+      '把主人这台电脑上的一个项目目录交给你跟进,工作台立刻多出这个项目;之后它就在你的负责范围里,主人事先安排的那几轮也能处理它里面的任务。'
+      + '只在主人本人这一轮明确说要交给你(例如「这个项目以后你盯着」「把 ~/code/foo 交给你」)时用;不要因为聊到某个项目就自己加。'
+      + 'path 填绝对路径;主人只说了项目名时先用 list_projects 找到它的路径。不能交整个磁盘根目录或主目录。'
+      + '加完先 get_workbench 接手,再用几句话告诉主人你看到了什么。',
+    inputShape: {
+      path: z.string().min(1).max(4096).describe('项目目录的绝对路径'),
+    },
+    handler: async ({ path }) => {
       const sessionId = callerSessionId();
       if (!sessionId) return missingSession();
-      const result = await deps.callbacks.stopTask({ callerSessionId: sessionId, taskId: task_id });
+      const result = await deps.callbacks.addProject({ callerSessionId: sessionId, path });
       return result.ok
-        ? okPayload({ task_id: result.taskId, status: result.status })
+        ? okPayload({ project: result.project, project_count: result.projectCount })
+        : errorPayload(result.errorCode, result.message);
+    },
+  });
+
+  registry.register({
+    name: 'remove_workbench_project',
+    category: 'bots',
+    description:
+      '主人本人这一轮说不用你再管某个项目时,把它从你的工作台移除。项目里的任务、文件和你写过的判断都不会被删,只是不再归你跟进。'
+      + 'path 用 get_workbench 里该项目的 path（也可以写 ~/ 开头）。工作台里没有这个项目时返回 PROJECT_NOT_IN_WORKBENCH，什么都没移除，照实告诉主人。',
+    inputShape: {
+      path: z.string().min(1).max(4096).describe('要移除的项目路径'),
+    },
+    handler: async ({ path }) => {
+      const sessionId = callerSessionId();
+      if (!sessionId) return missingSession();
+      const result = await deps.callbacks.removeProject({ callerSessionId: sessionId, path });
+      return result.ok
+        ? okPayload({ path: result.path, removed: result.removed })
         : errorPayload(result.errorCode, result.message);
     },
   });

@@ -762,6 +762,69 @@ export function pickAgentDefaultRuntime(args: {
 }
 
 /**
+ * 「恢复上次选过的 agent」是否仍待落定:有记忆的 agent、模型尚未落定,且当前设备就是恢复
+ * 目标(没有偏好设备 = 不限设备)。
+ */
+export function isStoredAgentRestorePending(input: {
+  storedAgentKind: NewSessionAgentKind | null | undefined;
+  appliedStoredAgentKind: NewSessionAgentKind | null;
+  expectedDeviceId: string;
+  selectedDeviceId: string;
+}): boolean {
+  if (!input.storedAgentKind) return false;
+  if (input.appliedStoredAgentKind === input.storedAgentKind) return false;
+  return !input.expectedDeviceId || input.selectedDeviceId === input.expectedDeviceId;
+}
+
+/** 上次 agent 的恢复进度:agent = 已恢复 agent 与权限、模型仍是占位;done = 模型也已落定。 */
+export interface StoredAgentRestoreState {
+  agentKind: NewSessionAgentKind;
+  phase: 'agent' | 'done';
+}
+
+/**
+ * 恢复上次 agent 的下一步。不变量:agent 不依赖任何数据,偏好一到就恢复;只有模型要等
+ * 目录或该 agent 的最近任务(canResolveStoredAgentRuntime),且只补一次。
+ * - 'full':数据已够,agent + 权限 + 模型一次恢复;
+ * - 'agent':数据未到,先恢复 agent + 权限,模型用占位——否则目录一直拉不到时草稿停在
+ *   别的 agent,创建会建错 agent 并把它存成新偏好;
+ * - 'model':agent 已恢复、数据刚到,只补 model / effort / providerId,不动 agent 与权限;
+ * - null:已落定,或 agent 已恢复但数据仍未到。
+ */
+export function nextStoredAgentRestoreStep(input: {
+  storedAgentKind: NewSessionAgentKind;
+  restored: StoredAgentRestoreState | null;
+  modelReady: boolean;
+}): 'full' | 'agent' | 'model' | null {
+  const restored = input.restored?.agentKind === input.storedAgentKind ? input.restored : null;
+  if (restored?.phase === 'done') return null;
+  if (restored?.phase === 'agent') return input.modelReady ? 'model' : null;
+  return input.modelReady ? 'full' : 'agent';
+}
+
+/**
+ * 恢复上次的 agent 时,是否已有足够数据选模型(pickAgentDefaultRuntime 的输入):
+ * 供应商目录已就绪 / 被控端明确不支持目录,或该设备上已有这个 agent 的最近任务。
+ * 两者都没有时 pickAgentDefaultRuntime 只能落到内置兜底模型(Claude 为 Sonnet 4.6),
+ * 这时只先恢复 agent(见 nextStoredAgentRestoreStep),模型等数据到了再补。
+ * 不能用 `loading === false` 代替:useDeviceProviders 的 loading 初值就是 false,拉取失败后也是。
+ */
+export function canResolveStoredAgentRuntime(input: {
+  agentKind: NewSessionAgentKind;
+  sessions: readonly RemoteSession[];
+  deviceId: string;
+  catalogReady: boolean;
+  providersUnsupported: boolean;
+}): boolean {
+  if (!input.deviceId) return true;
+  if (input.catalogReady || input.providersUnsupported) return true;
+  return pickMostRecentSessionRuntime(input.sessions, {
+    deviceId: input.deviceId,
+    agentKind: input.agentKind,
+  }) !== null;
+}
+
+/**
  * 新建对话「自动默认运行配置」effect 的决策核心(纯函数,从 new.tsx 那个 effect 内联逻辑抽出,便于单测)。
  * 返回 null = 本次不动 draft(已手动选过 / 无 selectedDevice / 该设备已应用过 / modelRows 未就绪且无 recent);
  * 返回 { patch, appliedDeviceId } = 调用方 setDraft(prev => ({ ...prev, ...patch })) 并记录 appliedDeviceId。

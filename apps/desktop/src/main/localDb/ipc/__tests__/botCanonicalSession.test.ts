@@ -2698,6 +2698,18 @@ describe('Bot canonical Session lifecycle', () => {
     expect(opts.botRuntimeProfile?.mcpPolicy.configured).toContain(server);
   });
 
+  it('mounts the baseline scheduler MCP for a local Bot without the toolset being selected', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+    const opts: MakerSessionCreateOpts = { id: created.session.id, agentKind: 'claude-code', workingDir: created.session.workingDir, workspaceKind: 'dialogue', model: 'test-model', permissionMode: 'auto' };
+    await hydrateBotProfileRuntime(opts, {
+      listMcpServers: async () => [{ name: 'cindy_scheduler', source: 'builtin', available: true }],
+      listToolsets: async () => [{ id: 'scheduler', name: 'Scheduler', essential: true, available: true }],
+    });
+    expect(opts.botRuntimeProfile?.mcpPolicy.configured).toContain('cindy_scheduler');
+    expect(opts.botProfileContextPrompt).toContain('你能建普通自动化');
+    expect(opts.botProfileContextPrompt).toContain('你能看、能管主人的任务');
+  });
+
   it('refreshes canonical MCP generations and Toolset versions in place', async () => {
     await invoke('local-db:bots:update', {
       id: 'bot-1',

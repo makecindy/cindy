@@ -166,6 +166,17 @@ describe('task labels transactions', () => {
     db.exec("INSERT INTO bot_session_links VALUES('a')");
     expect(() => run({ action: 'list', callerSessionId: 'a' })).toThrow('NOT_FOUND');
   });
+  it('accepts a trusted Bot caller only from an active canonical Bot main task', () => {
+    db.exec(
+      "ALTER TABLE bot_session_links ADD COLUMN role TEXT; ALTER TABLE bot_session_links ADD COLUMN archived_at INTEGER;"
+      + " INSERT INTO sessions(id,source) VALUES('bot-main','bot'),('bot-lane','bot');"
+      + " INSERT INTO bot_session_links(session_id,role) VALUES('bot-main','canonical'),('bot-lane','group');",
+    );
+    expect(() => run({ action: 'list', callerSessionId: 'bot-main' })).toThrow('NOT_FOUND');
+    expect(run({ action: 'list', callerSessionId: 'bot-main', callerIsTrustedBot: true }).tags.length).toBeGreaterThan(0);
+    expect(() => run({ action: 'list', callerSessionId: 'bot-lane', callerIsTrustedBot: true })).toThrow('NOT_FOUND');
+    expect(() => run({ action: 'list', callerSessionId: 'a', callerIsTrustedBot: true })).toThrow('NOT_FOUND');
+  });
   it('persists order across edits and projects it onto task associations', () => {
     const expectedOrder = run({ action: 'list' }).tags.map((t) => t.id);
     const tagIds = [...expectedOrder].reverse();

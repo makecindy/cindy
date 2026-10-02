@@ -45,7 +45,7 @@ import { createLogger } from '../logger.js';
 import { checkAppUpdateForAgent } from '../updateService.js';
 import { getScheduler } from '../scheduler-host/index.js';
 import { stabilizeHookCommand } from '../scheduler-host/hook-script-generator.js';
-import { searchSessionsFn } from '../maker-host/session-search.js';
+import { searchSessionsWithBotScope } from '../maker-host/session-search.js';
 import { readLspModeSettings } from '../maker-host/lsp-mode-store.js';
 import {
   tryGetBotDelegationService,
@@ -71,7 +71,14 @@ import {
   listBotSkillsForSession,
   saveBotSkillForSession,
 } from '../maker-ipc/botSkillService.js';
-import { runBotWorkbenchTool, type BotWorkbenchSendDeps } from '../maker-ipc/botWorkbenchTools.js';
+import {
+  addBotWorkbenchProjectForCaller,
+  isWorkbenchProjectSession,
+  removeBotWorkbenchProjectForCaller,
+  runBotWorkbenchTool,
+  type BotWorkbenchSendDeps,
+} from '../maker-ipc/botWorkbenchTools.js';
+import { createBotToolCallAuthorizer, resolveBotCallerAuthority } from '../maker-ipc/botToolCallAuthorizer.js';
 import {
   patchSessionMetaInDb,
   renameSessionTitlesInDb,
@@ -179,12 +186,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           }
         : { ok: false as const, errorCode: result.errorCode, message: result.message };
     }),
-    stopSessionTurn: wrap(async (svc, params) => {
-      const result = await svc.stopSessionTurn(params);
-      return result.ok
-        ? { ok: true as const, status: result.status }
-        : { ok: false as const, errorCode: result.errorCode, message: result.message };
-    }),
     startBackgroundTask: async ({ callerSessionId, workingDir, title, objective }) => {
       const svc = tryGetBotDelegationService();
       if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Session task service not initialized' };
@@ -193,6 +194,21 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         ? { ok: true as const, sessionId: result.childSessionId }
         : { ok: false as const, errorCode: result.errorCode, message: result.message };
     },
+  };
+
+  // 伙伴主任务的每次调用按「这一轮是谁触发的」判定（maker-ipc/botTurnAuthority.ts）。
+  const authorizeBotToolCall = createBotToolCallAuthorizer({
+    getDb: () => (isAppSessionBoundaryPending() ? null : tryGetDbClient()),
+    readExecution: (sessionId) => getSessionInputProvenance(sessionId),
+    isWorkbenchProjectSession,
+    isScopeCurrent: (db) => !isAppSessionBoundaryPending() && db === tryGetDbClient(),
+  });
+  /** 伙伴主任务在主人本人或主人事先安排的那一轮里可以读全部历史；其余伙伴调用仍只读自己的记录。 */
+  const botReadsAccountHistory = async (callerSessionId: string | undefined): Promise<boolean> => {
+    const dbClient = tryGetDbClient();
+    if (!dbClient || !callerSessionId || isAppSessionBoundaryPending()) return false;
+    const caller = await resolveBotCallerAuthority(dbClient, callerSessionId, getSessionInputProvenance);
+    return caller.kind === 'bot' && caller.main && caller.authority !== 'other';
   };
 
   const withAccountDataAccess = async <T>(sessionId: string | undefined, operation: (assertCurrent: () => Promise<void>) => Promise<T>): Promise<T> => {
@@ -331,6 +347,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     },
     scheduler: {
       withAccountDataAccess,
+      authorizeCall: authorizeBotToolCall,
       getScheduler: () => getScheduler(),
       // 前置检查脚本统一安装服务:落盘路径/协议/自测与 UI「AI 生成」共用同一实现
       // (hook-script-generator)。lazy import:该链上有 electron app 依赖,且 maker
@@ -411,7 +428,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           throw new Error('Task history search is unavailable for plugin-managed tasks');
         if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient())
           throw new Error('Task history caller unavailable');
-        const hits = await searchSessionsFn(query, opts);
+        const hits = await searchSessionsWithBotScope(query, opts, {
+          botAccountWide: await botReadsAccountHistory(opts.callerSessionId),
+        });
         if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient())
           throw new Error('Task history caller unavailable');
         if (await resolveHelperSurface(dbClient, opts.callerSessionId, getSessionInputProvenance) === 'restricted')
@@ -485,7 +504,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       sessionTags: async (callerSessionId, request) => {
-        const result = await executeTaskTags(request, callerSessionId);
+        // 伙伴主任务只在主人本人那一轮能管标签（调用入口已按轮次放行，这里再核一次）；
+        // 伙伴自己的会话仍不出现在标签里。
+        const dbClient = tryGetDbClient();
+        const caller = dbClient && callerSessionId && !isAppSessionBoundaryPending()
+          ? await resolveBotCallerAuthority(dbClient, callerSessionId, getSessionInputProvenance)
+          : null;
+        const ownerTurnBot = caller?.kind === 'bot' && caller.main && caller.authority === 'owner';
+        const result = await executeTaskTags(request, callerSessionId, { trustedBotOwnerTurn: ownerTurnBot });
         return ['update', 'delete'].includes(request.action) ? { ...result, sessions: [] } : result;
       },
       createProject,
@@ -577,6 +603,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           };
         }
       },
+      // 伙伴主任务的每次调用按本轮来源判定;放在 resolveSurface 之前,与工具面分类各自独立。
+      authorizeCall: authorizeBotToolCall,
       resolveSurface: async ({ sessionId }) => {
         const dbClient = tryGetDbClient();
         if (!dbClient || isAppSessionBoundaryPending()) return 'restricted';
@@ -875,15 +903,17 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
         list: (params) => listBotSkillsForSession(params),
       },
-      // 工作台:伙伴继续 / 停止主人交给它的项目里的任务。授权在 botWorkbenchAccess 里逐次
-      // 确定性校验;投递与停止复用 send_to_session / stop_session_turn 的同一条宿主路径。
+      // 工作台:伙伴继续主人交给它的项目里的任务,或按主人本人的话记下 / 移除项目。授权在
+      // botWorkbenchAccess 里逐次确定性校验;投递复用 send_to_session 的同一条宿主路径。
+      // 停止走通用的 stop_session_turn。
       botWorkbench: {
         get: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.get(params)),
         read: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.read(params)),
         set: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.set(params)),
         setMany: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.setMany(params)),
         continueTask: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.continueTask(params)),
-        stopTask: (params) => runBotWorkbenchTool(workbenchSend, (access) => access.stopTask(params)),
+        addProject: (params) => addBotWorkbenchProjectForCaller(params),
+        removeProject: (params) => removeBotWorkbenchProjectForCaller(params),
       },
       skillhub: createSkillhubAgentTools({
         isCurrentSession: (context) => !!context.sessionId
@@ -893,6 +923,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       history: {
         resolveSessionScope: async ({ callerSessionId, callerMemoryScopeKey }) => {
           try {
+            if (await botReadsAccountHistory(callerSessionId)) return { ok: true, sessionIds: null };
             const sessionIds = await resolveBotHistorySessionIds(
               callerSessionId,
               callerMemoryScopeKey,

@@ -225,7 +225,7 @@ beforeEach(() => {
   mocks.listAgentSkills.mockReset().mockResolvedValue({ success: true, skills: [{ name: 'release-check' }] });
   mocks.listToolsets.mockReset().mockResolvedValue([
     { id: 'docs', name: 'Documents', effectiveEnabled: true, available: true },
-    { id: 'scheduler', name: 'Scheduler', effectiveEnabled: true, available: true },
+    { id: 'browser', name: 'Browser', effectiveEnabled: true, available: true },
     { id: 'contacts', name: 'Contacts', effectiveEnabled: true, available: false },
   ]);
   mocks.listCustomMcpServers.mockReset();
@@ -1008,13 +1008,13 @@ describe('same-Bot capability updates while editing settings', () => {
     const view = renderSettings({ capabilities: capabilities({ toolsetMode: 'allowlist' }) });
     await openCapabilities();
     fireEvent.change(screen.getByLabelText('bots.nameLabel'), { target: { value: 'Local name' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Scheduler' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Browser' }));
     view.rerender(<BotSettings bot={bot({ currentVersion: 2, capabilities: capabilities({ toolsetMode: 'allowlist', toolsets: ['docs'] }) })} onBack={view.onBack} onOpenSession={view.onOpenSession} />);
     expect((screen.getByLabelText('bots.nameLabel') as HTMLInputElement).value).toBe('Local name');
     expect((screen.getByRole('checkbox', { name: 'Documents' }) as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByRole('checkbox', { name: 'Scheduler' }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('checkbox', { name: 'Browser' }) as HTMLInputElement).checked).toBe(true);
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', { name: 'Local name', capabilities: { toolsets: ['docs', 'scheduler'] }, capabilityBaseline: { toolsets: ['docs'] } });
+    expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', { name: 'Local name', capabilities: { toolsets: ['docs', 'browser'] }, capabilityBaseline: { toolsets: ['docs'] } });
   });
 
   it('explains a rename that collides with another teammate instead of a generic save failure', async () => {
