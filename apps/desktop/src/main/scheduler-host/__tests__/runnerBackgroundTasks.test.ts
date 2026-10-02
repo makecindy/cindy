@@ -92,7 +92,6 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
     'awaiting' | 'active' | 'cancelled'
   >();
   const session = {
-    instanceId: 'test-instance', getTurnGeneration: () => 0,
     id: 'scheduler-session',
     agentKind: 'claude-code',
     stablePlanModeState: { enabled: true, generation: 0 },
@@ -187,13 +186,12 @@ function createRunnerHarness(session: Session, overrides: Partial<ConstructorPar
   const logger: Logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
   const maker = {
     createSession: vi.fn(async () => session),
-    getSession: vi.fn(() => session),
+    getSession: vi.fn(() => undefined),
     getSessionMeta: vi.fn(async () => null),
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
-    sessionHost: { deviceId: () => 'test-device', owner: () => globalThis, execution: () => null },
     maker,
     getDb: () => ({}) as never,
     notifier,
@@ -334,7 +332,7 @@ describe('MakerScheduleRunner background subagent task tracking', () => {
     expect(notifier.notify).not.toHaveBeenCalled();
     // The same routine can run after the new permissions have settled; no failed run is emitted.
     Object.assign(h.session, { stablePermissionModeState: { mode: 'ask', generation: 1 } });
-    vi.mocked(maker.getSession).mockReturnValue(h.session);
+    vi.mocked(maker.getSession).mockReturnValue(undefined);
     mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: true });
     const retry = runner.fire(baseSchedule({ source: 'bot', targetSessionId: 'bot-session' }), createFireContext());
     await vi.waitFor(() => expect(h.session.send).toHaveBeenCalled());

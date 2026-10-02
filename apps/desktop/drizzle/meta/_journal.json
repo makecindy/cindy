@@ -862,13 +862,6 @@
       "when": 1790618518784,
       "tag": "0122_auto_review_projections",
       "breakpoints": true
-    },
-    {
-      "idx": 123,
-      "version": "6",
-      "when": 1790920635642,
-      "tag": "0123_session_control_requests",
-      "breakpoints": true
     }
   ]
 }

@@ -6,8 +6,7 @@ import type { Schedule, ScriptCapability } from '@cindy/maker-scheduler';
 import type { GhostToolCallResult } from '../../shared/ghost.js';
 import { getGhostCardService, getGhostPipeDispatcher } from '../cindy-brain/index.js';
 import { validateFsRelPath } from '../cindy-brain/fsSlot.js';
-import { tryGetSessionService } from '../session-controller/sessionService.js';
-import { withSessionCaller } from '../session-controller/callerContext.js';
+import { tryGetOrcaCollabService } from '../maker-ipc/register.js';
 import type { ScriptCapabilityBroker, ScriptCapabilityCall } from './script-runner';
 // model 兜底与 runner 同源(2026-06 曾因多份拷贝不同步导致 UI 显示与实跑模型不一致)
 import { defaultModelFor } from './model-defaults.js';
@@ -354,7 +353,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           'use_worktree',
           'working_dir',
         ]);
-        const service = tryGetSessionService();
+        const service = tryGetOrcaCollabService();
         if (!service) fail('HOST_NOT_READY', 'session dispatch service is not ready');
         const schedule = context.schedule;
         const requestedTarget = typeof params.target_session_id === 'string'
@@ -373,15 +372,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           || dynamicDefaultRoute?.model
           || defaultModelFor(schedule.agentKind);
         if (!model) fail('PRECONDITION_FAILED', 'Pi has no connected model source');
-        const result = await withSessionCaller({
-          source: 'scheduler',
-          authorize: async () => {
-            requireCapability(granted, 'sessions.dispatch');
-            if (schedule.targetSessionId && requestedTarget && requestedTarget !== schedule.targetSessionId) {
-              fail('INVALID_ARGS', 'bound scripts can only dispatch to their target session');
-            }
-          },
-        }, () => service.sendToSession({
+        const result = await service.sendToSession({
           targetSessionId: schedule.targetSessionId ?? requestedTarget,
           message: requireString(params, 'message'),
           title: typeof params.title === 'string' ? params.title : undefined,
@@ -396,7 +387,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
             workspaceKind: 'project',
             permissionMode: 'bypassPermissions',
           },
-        }));
+        });
         if (!result.ok) fail(result.errorCode, result.message);
         return {
           target_session_id: result.targetSessionId,

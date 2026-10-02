@@ -1,7 +1,3 @@
-import { createNativeSessionController } from '../session-controller/nativeRuntime.js';
-import { captureInternalSessionCaller } from '../session-controller/internalCaller.js';
-import { SessionAdmissionError } from '../session-controller/controller.js';
-import { localSessionHost } from '../session-controller/localHost.js';
 import { randomUUID } from 'node:crypto';
 
 import { app, BrowserWindow, ipcMain } from 'electron';
@@ -145,20 +141,12 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
   };
 
   const closeBotSessions = async (botId: string): Promise<{ count: number; warnings: string[] }> => {
-    const owner = localSessionHost.owner();
     const links = await getDbClient()
       .drizzle.select({ sessionId: botSessionLinks.sessionId })
       .from(botSessionLinks)
       .where(eq(botSessionLinks.botId, botId));
     const ids = [...new Set(links.map((row) => row.sessionId))];
-    const control = createNativeSessionController(deps.maker, localSessionHost);
-    const settled = await Promise.allSettled(ids.map(async sessionId => {
-      const runtime = deps.maker.getSession(sessionId);
-      if (!runtime) return;
-      const policy = captureInternalSessionCaller(localSessionHost, { source: 'companion', sessionIds: [sessionId], operations: ['closeRuntime'],
-        assertCurrent: () => { if (owner !== localSessionHost.owner()) throw new SessionAdmissionError('OWNER_SCOPE_CHANGED', '伙伴账号已变化'); } });
-      await control.closeOwnedRuntime(policy, runtime);
-    }));
+    const settled = await Promise.allSettled(ids.map((sessionId) => deps.maker.closeSession(sessionId)));
     const warnings = settled.flatMap((result, index) =>
       result.status === 'rejected'
         ? [`SESSION_CLOSE_FAILED:${ids[index]}:${String(result.reason)}`]

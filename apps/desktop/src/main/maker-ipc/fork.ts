@@ -13,11 +13,9 @@
  */
 
 import { ipcMain } from 'electron';
-import { createSessionIpcAdapter } from '../session-controller/ipcAdapter.js';
-import { localSessionHost } from '../session-controller/localHost.js';
 
 import { createLogger } from '../logger.js';
-import { sessionHistory } from '../session-controller/history.js';
+import { forkSessionAtMessage, forkSessionStripEncrypted } from '../maker-orchestration/fork.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 
@@ -34,8 +32,7 @@ function broadcastSessionCreated(sessionId: string): void {
 }
 
 export function registerMakerForkIpc(): void {
-  const sessionIpc = createSessionIpcAdapter(ipcMain, { ...localSessionHost, interactionSessionId: () => undefined });
-  sessionIpc.handle(
+  ipcMain.handle(
     MAKER_INVOKE.FORK,
     async (
       _event: Electron.IpcMainInvokeEvent,
@@ -45,7 +42,7 @@ export function registerMakerForkIpc(): void {
       const sid = requireString(sourceSessionId, 'sourceSessionId');
       const mid = requireString(messageClientId, 'messageClientId');
       try {
-        const session = await sessionHistory.fork(sid, mid);
+        const session = await forkSessionAtMessage(sid, mid);
         broadcastSessionCreated(session.id);
         return session;
       } catch (err) {
@@ -79,12 +76,12 @@ export function registerMakerForkIpc(): void {
     },
   );
 
-  sessionIpc.handle(
+  ipcMain.handle(
     MAKER_INVOKE.FORK_STRIP_ENCRYPTED,
     async (_event: Electron.IpcMainInvokeEvent, sourceSessionId: unknown) => {
       const sid = requireString(sourceSessionId, 'sourceSessionId');
       try {
-        const session = await sessionHistory.forkStripEncrypted(sid);
+        const session = await forkSessionStripEncrypted(sid);
         broadcastSessionCreated(session.id);
         return session;
       } catch (err) {

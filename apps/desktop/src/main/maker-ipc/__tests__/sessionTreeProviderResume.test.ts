@@ -44,7 +44,7 @@ describe('Pi session-tree lazy resume provider route', () => {
   it('preserves the persisted providerId null/undefined distinction', () => {
     const lazyResume = sourceBetween(
       'async function getOrResumeSessionTreeSession',
-      'async function inspectSessionHistory(',
+      'ipcMain.handle(MAKER_INVOKE.GET_SESSION_TREE',
     );
 
     expect(lazyResume).toContain('providerId: row.providerId,');
@@ -54,7 +54,7 @@ describe('Pi session-tree lazy resume provider route', () => {
   it('guards non-active (archived/deleted) sessions against lazy resume (round 40-w3 MEDIUM)', () => {
     const lazyResume = sourceBetween(
       'async function getOrResumeSessionTreeSession',
-      'async function inspectSessionHistory(',
+      'ipcMain.handle(MAKER_INVOKE.GET_SESSION_TREE',
     );
 
     // lazy resume 的 DB 查询必须带出 status, 且在 bootstrap 前拒绝非 active。

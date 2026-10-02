@@ -1,6 +1,3 @@
-import { createHostSessionOperation } from '../../session-controller/hostOperation.js';
-import { localSessionHost } from '../../session-controller/localHost.js';
-import { revalidateSessionOperation } from '../../session-controller/operationContext.js';
 /**
  * main/im/shared/sessionRepo.ts
  * ---------------------------------------------------------------------------
@@ -249,7 +246,7 @@ export function createImSessionRepo(
     return rows[0] ?? null;
   }
 
-  const ports: ImSessionRepo = {
+  return {
     sessionIdFor: (botContextId, userId, scopeKey) =>
       ns.sessionIdFor(botContextId, userId, scopeKey),
     getDefaultEffortFor: defaultEffortFor,
@@ -304,7 +301,6 @@ export function createImSessionRepo(
             await retireDeletedPiSubagentState(row.id);
           }
           const now = Date.now();
-          await revalidateSessionOperation();
           await db
             .update(sessions)
             .set({
@@ -323,7 +319,6 @@ export function createImSessionRepo(
           //
           // 判据仍走 correctedWorkspaceKind 的 CASE(SQL 里现算), 不把 JS 算出来的值
           // 写回去: 读和写之间行可能已被 `/project` 改过。
-          await revalidateSessionOperation();
           await db
             .update(sessions)
             .set({ ...correctedWorkspaceKind(botContextId), updatedAt: Date.now() })
@@ -421,7 +416,6 @@ export function createImSessionRepo(
           await retireDeletedPiSubagentState(row.id);
         }
         const isFreshInsert = priorRows.length === 0;
-        await revalidateSessionOperation();
         await db
           .insert(sessions)
           .values({
@@ -500,7 +494,6 @@ export function createImSessionRepo(
         try {
           const resolved = await ns.resolveSessionTitle(userId, scopeKey);
           if (resolved) {
-            await revalidateSessionOperation();
             await db
               .update(sessions)
               .set({ title: resolved })
@@ -544,7 +537,6 @@ export function createImSessionRepo(
           if (typeof imBotContextId !== 'string' || typeof imUserId !== 'string') {
             throw new Error(`${ns.source} fresh-task routing markers are invalid`);
           }
-          await revalidateSessionOperation();
           const result = await client.tx('im.rotateSession', {
             previousSessionId: previous?.id ?? null,
             detachBinding: detachBinding
@@ -595,14 +587,6 @@ export function createImSessionRepo(
       });
     },
   };
-  return { ...ports,
-    // The repository owns the authenticated channel-to-session mapping. Keeping
-    // these transactions here preserves deterministic revival and /new rotation.
-    createSession: (...args) => createHostSessionOperation(localSessionHost, { source: 'host', operation: 'createRecord', sessionIds: [] })(() => ports.createSession(...args)),
-    createFreshSession: (...args) => createHostSessionOperation(localSessionHost, { source: 'host', operation: 'createRecord', sessionIds: [] })(() => ports.createFreshSession!(...args)),
-    findActiveSession: (...args) => createHostSessionOperation(localSessionHost, { source: 'host', operation: 'setRecordStatus', sessionIds: [] })(() => ports.findActiveSession(...args)),
-  };
-
 }
 
 function rowFromDefaults(
@@ -639,19 +623,14 @@ function defaultRouteRecordFor(row: ImSessionRow): string | null {
 // ── sessionId 维度的更新操作(渠道无关, 无需工厂) ─────────────────────────────
 
 /** Bump userSendAt so sidebar (if ever surfaced) sorts IM sessions correctly. */
-async function touchUserSentPort(sessionId: string): Promise<void> {
+export async function touchUserSent(sessionId: string): Promise<void> {
   const db = getDbClient().drizzle;
   const now = Date.now();
-  await revalidateSessionOperation();
   await db
     .update(sessions)
     .set({ userSendAt: now, updatedAt: now })
     .where(eq(sessions.id, sessionId));
 }
-
-export const touchUserSent = (...args: Parameters<typeof touchUserSentPort>): ReturnType<typeof touchUserSentPort> =>
-  createHostSessionOperation(localSessionHost, { source: 'host', operation: 'updateMetadata', sessionIds: [args[0]] })(
-    () => touchUserSentPort(...args));
 
 /**
  * Legacy single-row channel `/new` semantic: clear the conversation context
@@ -662,9 +641,8 @@ export const touchUserSent = (...args: Parameters<typeof touchUserSentPort>): Re
  * responsible for disposing the in-process maker session (so the stale
  * conversation isn't reused) and removing it from sessionStates.
  */
-async function clearContextPort(sessionId: string): Promise<void> {
+export async function clearContext(sessionId: string): Promise<void> {
   const db = getDbClient().drizzle;
-  await revalidateSessionOperation();
   await db
     .update(sessions)
     .set({
@@ -677,10 +655,6 @@ async function clearContextPort(sessionId: string): Promise<void> {
     .where(eq(sessions.id, sessionId));
 }
 
-export const clearContext = (...args: Parameters<typeof clearContextPort>): ReturnType<typeof clearContextPort> =>
-  createHostSessionOperation(localSessionHost, { source: 'host', operation: 'clearInputs', sessionIds: [args[0]] })(
-    () => clearContextPort(...args));
-
 /**
  * 存量单行渠道的 `/new` 语义:保留同一个 IM 会话行,但按当前渠道的 IM 默认
  * 重新开始一条新对话。Telegram 走 createFreshSession, 不调用这里。
@@ -689,7 +663,7 @@ export const clearContext = (...args: Parameters<typeof clearContextPort>): Retu
  * 用户把飞书默认从 Claude Code 改成 Codex 后,在飞书里执行 `/new` 会按 Codex 开始，
  * 不影响 Discord 的下一条新会话。
  */
-async function resetSessionToDefaultsPort(
+export async function resetSessionToDefaults(
   sessionId: string,
   config: ImOrchestratorConfig,
   prepared?: ImSessionRow,
@@ -699,7 +673,6 @@ async function resetSessionToDefaultsPort(
     prepared ??
     rowFromDefaults(sessionId, '', await resolveImSessionDefaults(config, undefined, channel));
   const db = getDbClient().drizzle;
-  await revalidateSessionOperation();
   await db
     .update(sessions)
     .set({
@@ -724,10 +697,6 @@ async function resetSessionToDefaultsPort(
   setSessionProvider(sessionId, defaults.providerId);
 }
 
-export const resetSessionToDefaults = (...args: Parameters<typeof resetSessionToDefaultsPort>): ReturnType<typeof resetSessionToDefaultsPort> =>
-  createHostSessionOperation(localSessionHost, { source: 'host', operation: 'selectRuntime', sessionIds: [args[0]] })(
-    () => resetSessionToDefaultsPort(...args));
-
 /**
  * `/project` 语义: 把该 IM 会话行切到指定工作目录并重开上下文(sdkSessionId
  * 归零)。模型/权限/供应商等设置保留 — 换目录不该顺手改路由。workspaceKind
@@ -735,13 +704,12 @@ export const resetSessionToDefaults = (...args: Parameters<typeof resetSessionTo
  * 'dialogue'。广播 created 让 sidebar 重拉 — 行会跨分组移动, patched 增量
  * 覆盖不了归组变化。
  */
-async function switchSessionWorkingDirPort(
+export async function switchSessionWorkingDir(
   sessionId: string,
   workingDir: string,
   workspaceKind: 'project' | 'dialogue',
 ): Promise<void> {
   const db = getDbClient().drizzle;
-  await revalidateSessionOperation();
   await db
     .update(sessions)
     .set({
@@ -756,10 +724,6 @@ async function switchSessionWorkingDirPort(
     .where(eq(sessions.id, sessionId));
   broadcastSessionCreated(sessionId);
 }
-
-export const switchSessionWorkingDir = (...args: Parameters<typeof switchSessionWorkingDirPort>): ReturnType<typeof switchSessionWorkingDirPort> =>
-  createHostSessionOperation(localSessionHost, { source: 'host', operation: 'updateMetadata', sessionIds: [args[0]] })(
-    () => switchSessionWorkingDirPort(...args));
 
 /** 读取 `/model` 修改前的持久化路由快照，用于失败时恢复运行态。 */
 export async function readModelRouteSnapshot(
@@ -796,14 +760,13 @@ export async function readModelRouteSnapshot(
  * 只写路由列 —— 「脱离跟随」墓碑由调用方在**选择真正落地后**写(PR #5155 review P2):
  * 本函数也被失败回滚复用, 在这里立碑会让失败的选择永久脱离默认跟随。
  */
-async function updateModelEffortPort(
+export async function updateModelEffort(
   sessionId: string,
   model: string,
   effort: Effort,
   providerId?: string | null,
 ): Promise<void> {
   const db = getDbClient().drizzle;
-  await revalidateSessionOperation();
   await db
     .update(sessions)
     .set({
@@ -815,23 +778,14 @@ async function updateModelEffortPort(
     .where(eq(sessions.id, sessionId));
 }
 
-export const updateModelEffort = (...args: Parameters<typeof updateModelEffortPort>): ReturnType<typeof updateModelEffortPort> =>
-  createHostSessionOperation(localSessionHost, { source: 'host', operation: 'selectRuntime', sessionIds: [args[0]] })(
-    () => updateModelEffortPort(...args));
-
 /** Update permissionMode column (for /permission picker). */
-async function updatePermissionModePort(sessionId: string, mode: PermissionMode): Promise<void> {
+export async function updatePermissionMode(sessionId: string, mode: PermissionMode): Promise<void> {
   const db = getDbClient().drizzle;
-  await revalidateSessionOperation();
   await db
     .update(sessions)
     .set({ permissionMode: mode, updatedAt: Date.now() })
     .where(eq(sessions.id, sessionId));
 }
-
-export const updatePermissionMode = (...args: Parameters<typeof updatePermissionModePort>): ReturnType<typeof updatePermissionModePort> =>
-  createHostSessionOperation(localSessionHost, { source: 'host', operation: 'changePermission', sessionIds: [args[0]] })(
-    () => updatePermissionModePort(...args));
 
 /** 读取 /permission 切换前的持久化权限；非法历史值按 ask 处理。 */
 export async function readPermissionMode(sessionId: string): Promise<PermissionMode | null> {

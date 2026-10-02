@@ -1,7 +1,3 @@
-vi.mock('../../../session-controller/localHost.js', () => {
-  const owner = {};
-  return { localSessionHost: { deviceId: () => 'test-device', owner: () => owner, execution: () => null } };
-});
 /**
  * 回归:IM 渠道 repo.createSession 建行后必须广播 `local-db:sessions:created`
  * (本机窗口 + device-link tap)。漏广播时 Slack / 飞书消息自动建的会话不会

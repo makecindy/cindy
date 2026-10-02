@@ -17,9 +17,6 @@ const h = vi.hoisted(() => ({
   enterLock: vi.fn(),
   beforeCommit: vi.fn(),
 }));
-vi.mock('../../session-controller/localHost.js', () => ({ localSessionHost: {
-  deviceId: () => 'test-device', owner: () => h.owner, execution: () => null,
-} }));
 vi.mock('../../localDb/dialogueWorkspace.js', () => ({
   dialogueWorkspaceRootDir: () => h.dialogueRoot,
   dialogueWorkspaceRoots: () => [h.dialogueRoot],

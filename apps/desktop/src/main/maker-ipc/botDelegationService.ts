@@ -1,7 +1,4 @@
-import { createSessionRecord } from '../session-controller/opening.js';
-import { withBoundSessionCaller } from '../session-controller/boundCaller.js';
-import { withSessionCaller } from '../session-controller/callerContext.js';
-import { SessionAdmissionError } from '../session-controller/controller.js';
+import { openSession } from '../localDb/sessionOpening.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
 import { existsSync, statSync } from 'node:fs';
 import type { AgentInputCoordinator } from './agent-input-coordinator.js';
@@ -418,27 +415,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   };
   const taskOperations = new Map<string, Promise<unknown>>();
   const withTaskOperation = async <T>(id: string, run: () => Promise<T>): Promise<T> => {
-    const owner = getDbClient();
     const previous = taskOperations.get(id) ?? Promise.resolve();
-    const operation = previous.catch(() => undefined).then(() => withSessionCaller({
-      source: 'companion',
-      assertCurrent: () => {
-        if (getDbClient() !== owner) throw new SessionAdmissionError('OWNER_SCOPE_CHANGED', 'Companion task owner changed');
-      },
-      authorize: async admission => {
-        // The delegation service has already checked the initiating caller.
-        // Keep its exact durable parent/child binding live through later waits.
-        const [row] = await owner.drizzle.select({ parent: botDelegations.parentSessionId, child: botDelegations.childSessionId })
-          .from(botDelegations).where(eq(botDelegations.id, id)).limit(1);
-        const allowed = new Set(['send', 'steer', 'requestStop', 'abortTurn', 'closeRuntime',
-          'inspect', 'diagnose', 'inspectQueue', 'editOwnedInput', 'withdrawOwnedInput',
-          'inspectRuntime', 'selectRuntime', 'pauseQueue', 'resumeQueue', 'resolveInteraction']);
-        if (!allowed.has(admission.operation) || !row || admission.targets.length === 0
-          || admission.targets.some(target => target.sessionId !== row.parent && target.sessionId !== row.child)) {
-          throw new SessionAdmissionError('NOT_AUTHORIZED', 'Session is outside the current delegation');
-        }
-      },
-    }, run));
+    const operation = previous.catch(() => undefined).then(run);
     taskOperations.set(id, operation);
     try { return await operation; }
     finally { if (taskOperations.get(id) === operation) taskOperations.delete(id); }
@@ -2159,14 +2137,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const createdAt = input.plan.createdAt;
     const { source: taskSource, ...sessionBody } = input.session;
     try {
-      await withBoundSessionCaller({
-        source: 'companion', operation: 'createRecord', sessionIds: [],
-        assertCurrent: () => {},
-        authorize: async () => {
-          const current = await resolveCaller(input.callerSessionId);
-          if (!current || current.botId !== input.caller.botId) throw new Error('CALLER_PERMISSION_UNAVAILABLE');
-        },
-      }, () => createSessionRecord({ id: childSessionId, now: createdAt, source: taskSource,
+      await openSession({ id: childSessionId, now: createdAt, source: taskSource,
         body: { ...sessionBody, workspaceKind: input.session.workspaceKind ?? 'dialogue' },
         finalize: () => {
           // Read stable authority after asynchronous preparation, with no await before
@@ -2240,7 +2211,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           },
         });
         creationCommitted = true;
-      }));
+      });
       // The worktree store and workingDir already own the binding. A failed
       // display snapshot must not strand the committed task before dispatch.
       if (input.useWorktree) await setWorktreePathInDb(childSessionId, input.session.workingDir);

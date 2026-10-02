@@ -1,7 +1,3 @@
-vi.mock('../../../session-controller/localHost.js', () => {
-  const owner = {};
-  return { localSessionHost: { deviceId: () => 'test-device', owner: () => owner, execution: () => null } };
-});
 /**
  * 回归 #748:飞书/Slack 等 IM 渠道用确定性 session id(同一 bot×用户永远同一行),
  * 该行被桌面端归档/删除(软删,行仍在库里)后,用户从 IM 侧继续发消息曾走

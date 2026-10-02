@@ -16,7 +16,6 @@ import type {
   SubagentTurnDeletionWindow,
 } from '../localDb/ipc/messages.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { revalidateSessionOperation } from '../session-controller/operationContext.js';
 
 interface ContextSourceMessage extends HandoffSourceMessage {
   clientId: string;
@@ -108,7 +107,6 @@ export async function performMessageDeletion(
   }
 
   return deps.withCloseSuppressed(sessionId, async () => {
-    await revalidateSessionOperation();
     // 上面的读取和真正 close 之间仍可能有 dispatch 抢先；提交前再查一次，
     // 绝不在运行中的 turn 继续落输出时挖消息/切上下文。
     const currentLive = deps.getLiveSession(sessionId);
@@ -142,7 +140,6 @@ export async function performMessageDeletion(
       reason: 'message-deletion',
     });
 
-    await revalidateSessionOperation();
     const committed = await deps.commitDeletion(
       sessionId,
       target.deletedClientIds,
@@ -169,10 +166,8 @@ export async function performMessageDeletion(
 export function registerMakerMessageDeleteHandler(
   registry: IpcHandlerRegistry,
   deps: MessageDeleteHandlerDeps,
-): (params: { sessionId: string; clientId: string }) => ReturnType<typeof performMessageDeletion> {
-  const execute = (params: { sessionId: unknown; clientId: unknown }) => performMessageDeletion(deps, params);
+): void {
   registry.handle(MAKER_INVOKE.DELETE_MESSAGE, (_event, sessionId, clientId) =>
-    execute({ sessionId, clientId }),
+    performMessageDeletion(deps, { sessionId, clientId }),
   );
-  return execute;
 }

@@ -72,7 +72,6 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
   const listeners: Array<(event: AgentEvent) => void> = [];
   const vendorOptions: Record<string, unknown> = {};
   const session = {
-    instanceId: 'test-instance', getTurnGeneration: () => 0,
     id: 'scheduler-session',
     agentKind: 'codex',
     stablePermissionModeState: { mode: 'default' },
@@ -147,13 +146,12 @@ function createRunnerHarness(
   const logger: Logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
   const maker = {
     createSession: vi.fn(async () => session),
-    getSession: vi.fn(() => session),
+    getSession: vi.fn(() => undefined),
     getSessionMeta: vi.fn(async () => null),
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
-    sessionHost: { deviceId: () => 'test-device', owner: () => globalThis, execution: () => null },
     maker,
     getDb: () => ({}) as never,
     notifier,

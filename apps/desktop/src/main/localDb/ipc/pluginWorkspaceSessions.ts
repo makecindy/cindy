@@ -1,5 +1,4 @@
-import { createSessionRecord } from '../../session-controller/opening.js';
-import { withBoundSessionCaller } from '../../session-controller/boundCaller.js';
+import { openSession } from '../sessionOpening.js';
 /**
  * pluginWorkspaceSessions —— workspace 槽的会话判重与创建(main 侧服务)。
  *
@@ -92,12 +91,10 @@ export async function createPluginDraftSession(params: {
   const workingDir = normalizeWorkingDirForStorage(params.dirAbs) ?? undefined;
   let insertRow;
   try {
-    ({ row: insertRow } = await withBoundSessionCaller({ source: 'plugin', operation: 'createRecord', sessionIds: [],
-      assertCurrent: () => { if (params.shouldContinue && !params.shouldContinue()) throw new Error('SESSION_OPEN_CANCELLED'); },
-    }, () => createSessionRecord({ id, now, source: 'plugin',
+    ({ row: insertRow } = await openSession({ id, now, source: 'plugin',
       body: { ...params.defaults, workingDir, workspaceKind: 'project', ...(params.title ? { title: params.title } : {}) },
       assertCurrent: () => { if (params.shouldContinue && !params.shouldContinue()) throw new Error('SESSION_OPEN_CANCELLED'); },
-    })));
+    }));
   } catch (error) {
     if (error instanceof Error && error.message === 'SESSION_OPEN_CANCELLED') return null;
     throw error;
@@ -160,16 +157,14 @@ export async function createPluginTaskSession(params: {
     ? (normalizeWorkingDirForStorage(params.workingDir) ?? undefined)
     : undefined;
   const workspaceKind = projectDir ? ('project' as const) : ('dialogue' as const);
-  const { row: insertRow } = await withBoundSessionCaller({ source: 'plugin', operation: 'createRecord', sessionIds: [],
-    assertCurrent: () => { if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed'); },
-  }, () => createSessionRecord({ id, now, source: 'plugin',
+  const { row: insertRow } = await openSession({ id, now, source: 'plugin',
     body: { workingDir: projectDir, workspaceKind, permissionMode: params.permissionMode,
       agentKind: params.agentKind, model: params.model, effort: params.effort,
       fastMode: params.fastMode, providerId: params.providerId,
       ...(params.title ? { title: params.title } : {}) },
     assertCurrent: () => { if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed'); },
     onPersistenceStarted: params.onPersistenceStarted,
-  }));
+  });
   if (params.shouldContinue && !params.shouldContinue()) throw new Error('Plugin task owner changed');
   if (projectDir && insertRow.workingDir) {
     // 项目目录是用户在插件详情页亲手选的,进"最近项目"合理;dialogue 目录

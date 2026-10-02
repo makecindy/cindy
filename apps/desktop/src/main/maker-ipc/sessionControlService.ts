@@ -5,7 +5,6 @@ import type {
   SessionTurnControlSnapshot,
 } from '@cindy/maker-core';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
-import type { SessionExecutionIdentity } from '@cindy/maker-shared/session-controller';
 
 import type {
   PendingSessionRuntimeMutation,
@@ -17,7 +16,6 @@ import {
   type AgentInputQueuedMessage,
 } from '../../shared/agentInputQueue.js';
 import { createSessionQueueControlService } from './sessionQueueControl.js';
-import { revalidateSessionOperation } from '../session-controller/operationContext.js';
 
 type Failure<Code extends string> = { ok: false; errorCode: Code; message: string };
 
@@ -42,7 +40,7 @@ export type SessionStopResult =
       turnGeneration?: number;
       reason?: string;
     }
-  | Failure<'NOT_FOUND' | 'UNSUPPORTED_CAPABILITY' | 'CONFLICT'>;
+  | Failure<'NOT_FOUND' | 'UNSUPPORTED_CAPABILITY'>;
 
 export interface SessionRuntimeDetails extends SessionActivitySnapshot {
   runtimeGeneration: number;
@@ -67,7 +65,6 @@ export type SessionRuntimeSetResult =
   | Failure<'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE'>;
 
 export interface SessionControlLiveSession {
-  instanceId?: string;
   agentKind: AgentKind;
   capabilities: { sameTurnSteer: { supported: boolean } };
   isTurnRunning(): boolean;
@@ -149,7 +146,6 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         message: params.message,
         authorize: (item) => authorizeSessionQueueItem(item, params.callerSessionId),
         rebuild: rebuildSessionQueueItem,
-        beforeMutation: revalidateSessionOperation,
       });
     },
 
@@ -164,7 +160,6 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
         authorize: (item) => authorizeSessionQueueItem(item, params.callerSessionId),
-        beforeMutation: revalidateSessionOperation,
       });
     },
 
@@ -210,7 +205,6 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         ...params,
         queuedMessageId,
       });
-      await revalidateSessionOperation();
       const current = deps.getLiveSession(params.targetSessionId);
       if (
         current !== live ||
@@ -244,15 +238,10 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       return { ok: true, queuedMessageId };
     },
 
-    async stopSessionTurn(params: { targetSessionId: string; expectedExecution?: SessionExecutionIdentity | null }): Promise<SessionStopResult> {
+    async stopSessionTurn(params: { targetSessionId: string }): Promise<SessionStopResult> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
-      await revalidateSessionOperation();
       const live = deps.getLiveSession(params.targetSessionId);
-      if (params.expectedExecution !== undefined && (params.expectedExecution === null ? live !== null
-        : !live || live.instanceId !== params.expectedExecution.instanceId || live.getTurnGeneration() !== params.expectedExecution.generation)) {
-        return { ok: false, errorCode: 'CONFLICT', message: 'Session execution changed before stop was applied' };
-      }
       if (!live) return { ok: true, status: 'no-active-turn' };
       const result = await live.requestGracefulStop();
       if (result.status === 'unsupported') {

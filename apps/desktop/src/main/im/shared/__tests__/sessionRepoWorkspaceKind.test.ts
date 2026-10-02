@@ -1,7 +1,3 @@
-vi.mock('../../../session-controller/localHost.js', () => {
-  const owner = {};
-  return { localSessionHost: { deviceId: () => 'test-device', owner: () => owner, execution: () => null } };
-});
 /**
  * sessionRepoWorkspaceKind.test.ts
  * ---------------------------------------------------------------------------

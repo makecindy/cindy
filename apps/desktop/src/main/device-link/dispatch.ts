@@ -1,5 +1,4 @@
 import { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
-import { SESSION_CONTROL_CHANNEL } from '../session-controller/router.js';
 import type { TaskTagRequest } from '@cindy/maker-shared';
 import {
   FILE_PEER_CHANNEL,
@@ -3991,16 +3990,6 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
   try {
     const args = payload.args ?? [];
     const invocationOwner = broadcastTap.captureDataOwnerBroadcastScope();
-    const invocationLinkEpoch = remoteInvokeLinkEpoch.get(src) ?? 0;
-    const invocationSharedTask = getDeviceLinkInvokeContext()?.sharedTask;
-    const assertInvocationCurrent = () => {
-      if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
-      if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invocationLinkEpoch
-        || isControllerRevoked(src)
-        || (invocationSharedTask ? !invocationSharedTask.isCurrent() : !readDeviceLinkSettings().remoteControlEnabled)) {
-        throw new Error('[ACCESS_REVOKED] Remote control is no longer allowed');
-      }
-    };
     const historyView = (payload.channel === 'local-db:messages:view' || payload.channel === 'local-db:messages:view-intent')
       && typeof args[0] === 'string' ? subscriptions.prepareHistoryView(src, args[0]) : undefined;
     if (hasRemoteBotSessionLookup()) await timing.measure('authorizeBefore', () => assertRemoteBotInvocationAllowed(args, payload.channel));
@@ -4011,12 +4000,6 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       {
         controllerDeviceId: src,
         channel: payload.channel,
-        assertCurrent: assertInvocationCurrent,
-        revalidate: async () => {
-          assertInvocationCurrent();
-          if (hasRemoteBotSessionLookup()) await assertRemoteBotInvocationAllowed(args, payload.channel);
-          assertInvocationCurrent();
-        },
         sharedTask: getDeviceLinkInvokeContext()?.sharedTask,
         sharedTaskSetting: getDeviceLinkInvokeContext()?.sharedTaskSetting,
         // 平台按 server 盖章的 src 查本机 presence 登记表,不采信控制端自报的任何
@@ -4042,7 +4025,6 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
               })()
             : payload.channel === TASK_TAG_CHANNEL
             ? executeTaskTags(args[0] as TaskTagRequest)
-            : payload.channel === SESSION_CONTROL_CHANNEL ? import('../session-controller/remoteEndpoint.js').then(m => m.receiveSessionControl(args[0]))
             : dispatchLocalInvoke(
         payload.channel,
         payload.channel === 'maker:provider:list' ? [] : args,

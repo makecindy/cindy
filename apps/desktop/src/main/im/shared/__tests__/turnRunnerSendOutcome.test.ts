@@ -88,11 +88,6 @@ vi.mock('../../../logger', () => ({
   createLogger: () => mocks.logger,
 }));
 
-vi.mock('../../../session-controller/localHost.js', () => {
-  const owner = {};
-  return { localSessionHost: { deviceId: () => 'test-device', owner: () => owner, execution: () => null } };
-});
-
 vi.mock('../../../maker-host', () => ({
   getMaker: mocks.getMaker,
 }));
@@ -244,7 +239,6 @@ function createSessionHarness(
     id: sessionId,
     // group history 租约按 (sessionId, instanceId) 绑定 — harness 固定实例号。
     instanceId: 'instance-1',
-    getTurnGeneration: () => 1,
     agentKind: 'claude-code',
     capabilities: options.capabilities ?? ({} as Capabilities),
     send,
@@ -351,7 +345,6 @@ function createMakerHarness(session: Session) {
   return {
     getSession: vi.fn(() => session),
     createSession: vi.fn(async () => session),
-    closeSession: vi.fn(async () => session.close()),
     on: vi.fn((listener: (event: MakerEvent) => void) => {
       makerEventListeners.push(listener);
       return () => {
@@ -1471,7 +1464,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       async () => {
         throw new TurnPermissionPolicyUnsupportedError('pi', 'bypassPermissions');
       },
-      'feishu-session',
+      'telegram-guest-full-access',
       {
         capabilities: {
           turnPermissionPolicy: {
@@ -1524,7 +1517,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       async () => {
         throw new TurnPermissionPolicyUnsupportedError('claude-code', 'bypassPermissions');
       },
-      'feishu-session',
+      'feishu-session-2',
       {
         capabilities: {
           turnPermissionPolicy: {
@@ -3307,7 +3300,6 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
     const h = setupSession(async () => ({ accepted: true }));
 
-    Object.assign(h.session, { id: 'feishu_cli_test_bot_ou_user' });
     await runDefaultTurn();
 
     expect(h.send).toHaveBeenCalledTimes(1);

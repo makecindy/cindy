@@ -1,4 +1,3 @@
-import { revalidateSessionOperation } from '../session-controller/operationContext.js';
 import { listCindyManagedSkills, prepareCindyCodexSkills } from './managed-skills.js';
 import { createCompanionImportProvider } from '../bot-import/importProvider.js';
 import { createCompanionConnectionsProvider } from '../bot-import/connectionProvider.js';
@@ -945,16 +944,6 @@ export function getMaker(): Maker {
       pluginRegistry,
       resolveIOSSimulatorAccess,
       invokeRemote: remoteInvoke,
-      captureSessionControlCaller: (sessionId: string | undefined, instanceId: string | undefined) => {
-        const source = sessionId ? _maker?.getSession(sessionId) : undefined;
-        const generation = source?.getTurnGeneration();
-        return () => {
-          if (!source || !instanceId || source.instanceId !== instanceId || _maker?.getSession(source.id) !== source
-            || source.getTurnGeneration() !== generation || isAppSessionBoundaryPending()) {
-            throw Object.assign(new Error('调用任务的执行实例或轮次已变化。'), { code: 'NOT_AUTHORIZED' });
-          }
-        };
-      },
       isCurrentLocalSessionInstance: (
         sessionId: string,
         sessionInstanceId: string | undefined,
@@ -2642,7 +2631,6 @@ export function getMaker(): Maker {
       // Desktop-specific session 生命周期副作用钩子。maker-core 不知道文件系统细节，
       // 启动前的 Skill 共享与关闭后的清理都由 desktop host 注入。
       lifecycleHooks: {
-        validateStart: () => revalidateSessionOperation(),
         prepareStartOptions: async (sessionId, opts) => {
           pendingBotRuntimeSnapshots.delete(sessionId);
           const providerReady = await ensureCurrentAccountProviderReadiness();

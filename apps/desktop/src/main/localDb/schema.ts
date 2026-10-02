@@ -2311,14 +2311,3 @@ export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
   uniqueIndex('plugin_task_request_key').on(table.pluginId, table.operation, table.targetId, table.requestKey),
   index('plugin_task_target').on(table.targetId, table.pluginId),
 ]);
-
-/** Transport retry reservations, not Session state. Tombstones intentionally
- * survive task deletion so a late retry cannot recreate or redispatch work. */
-export const sessionControlRequests = sqliteTable('session_control_requests', {
-  key: text('key').primaryKey(),
-  fingerprint: text('fingerprint').notNull(),
-  sessionId: text('session_id').notNull(),
-  inputId: text('input_id'),
-  receipt: text('receipt'),
-  createdAt: integer('created_at').notNull(),
-});

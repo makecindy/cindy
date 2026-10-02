@@ -1159,30 +1159,6 @@ export class Session {
     }
   }
 
-  /** Read-only view of the existing watchdog, including its interaction/sleep exemptions. */
-  getWatchdogObservation() {
-    return {
-      state: this.turnStallDiagnosticState,
-      timeoutMs: this.turnStallMs,
-      remainingMs: this.turnStallRemainingMs,
-      pendingInteractions: this.pendingInteractions,
-      terminalErrorDraining: this.terminalErrorDrainGeneration !== null,
-      recovering: this.status === 'aborting' || this.terminalErrorDrainGeneration === this.turnGeneration,
-      terminalReason: this.getObservedCurrentTurnTerminal().reason ?? null,
-      // Sample the same slice/gap rule as the watchdog; do not count sleep as stall.
-      suspendGapObserved: this.turnStallTimer !== null && Date.now() - this.turnStallSliceStartedAt
-        > Math.min(this.turnStallRemainingMs, TURN_STALL_SLICE_MS) + TURN_STALL_SUSPEND_GAP_MS,
-    };
-  }
-
-  supportsGracefulStop(): boolean {
-    return typeof this.handle.requestGracefulStop === 'function';
-  }
-
-  supportsBackgroundTaskStop(): boolean {
-    return typeof this.handle.stopBackgroundTask === 'function';
-  }
-
   getTurnControlSnapshot(): SessionTurnControlSnapshot {
     const control = this.turnControlState;
     if (!control) {

@@ -1,8 +1,3 @@
-import { createNativeSessionController } from '../session-controller/nativeRuntime.js';
-import { localSessionHost } from '../session-controller/localHost.js';
-import { SessionAdmissionError, type SessionControllerDeps } from '../session-controller/controller.js';
-import type { SessionCallerPolicy } from '../session-controller/callerContext.js';
-import type { SessionOperation } from '@cindy/maker-shared/session-controller';
 import { beginQuietScheduledOutput, hidesScheduledTranscript } from './silent-output.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
 import {
@@ -259,8 +254,6 @@ export interface SchedulerQueueDeps {
 }
 
 export interface MakerScheduleRunnerDeps {
-  /** Host identity injection; production uses the current account/database epoch. */
-  sessionHost?: SessionControllerDeps;
   maker: Maker;
   getDb: () => SchedulerDrizzleDb;
   notifier: Notifier;
@@ -407,32 +400,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
    */
   private readonly schedulerRunContextOwners = new Map<string, SchedulerRunContextOwner>();
 
-  private readonly sessionHost: SessionControllerDeps;
-  private readonly sessionController: ReturnType<typeof createNativeSessionController>;
-  constructor(private readonly deps: MakerScheduleRunnerDeps) {
-    this.sessionHost = deps.sessionHost ?? localSessionHost;
-    this.sessionController = createNativeSessionController(deps.maker, this.sessionHost);
-  }
-
-  private sessionCaller(operation: SessionOperation, sessionId: string, holder: EphemeralSessionHolder): SessionCallerPolicy {
-    const assertCurrent = () => {
-      holder.assertControlCurrent();
-      if (operation !== 'closeRuntime') holder.assertDispatchCurrent();
-    };
-    return { source: 'scheduler', assertCurrent, authorize: async admission => {
-      assertCurrent();
-      if (admission.operation !== operation || admission.targets.some(target => target.sessionId !== sessionId)) {
-        throw new SessionAdmissionError('NOT_AUTHORIZED', 'Schedule target changed');
-      }
-    } };
-  }
-
-  private async ensureSessionRuntime(opts: Parameters<Maker['createSession']>[0], holder: EphemeralSessionHolder): Promise<Session> {
-    if (!opts.id) throw new SessionAdmissionError('INVALID_ARGS', 'Scheduled Session identity is required');
-    const runtime = await this.sessionController.ensureRuntime(this.sessionCaller('ensureRuntime', opts.id, holder), opts);
-    holder.runtime = runtime;
-    return runtime;
-  }
+  constructor(private readonly deps: MakerScheduleRunnerDeps) {}
 
   /** scheduler-host/index.ts 在 startScheduler 内调一次，让 runner 反向 pause schedule */
   attachScheduler(scheduler: Scheduler): void {
@@ -600,16 +568,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
    * 事件流进行中不能关;这里在 run 终态(done/error 已收)之后关,不冲突。
    */
   async fire(schedule: Schedule, ctx: FireContext): Promise<FireResult> {
-    const owner = this.sessionHost.owner();
-    const holder: EphemeralSessionHolder = {
-      assertControlCurrent: () => {
-        if (!owner || this.sessionHost.owner() !== owner) throw new SessionAdmissionError('OWNER_SCOPE_CHANGED', 'Schedule owner changed');
-      },
-      assertDispatchCurrent: () => {
-        throwIfFireAborted(ctx.signal, 'agent turn dispatch');
-        if (ctx.canDispatch && !ctx.canDispatch()) throw new RoutineDispatchDeferredError('Routine dispatch authority changed');
-      },
-    };
+    const holder: EphemeralSessionHolder = {};
     const closeQuietOutput = hidesScheduledTranscript(schedule)
       ? beginQuietScheduledOutput(schedule.id, ctx.runId)
       : undefined;
@@ -628,7 +587,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         (holder.closeOnAbort || !isSessionInTurn(holder.sessionId))
       ) {
         try {
-          if (holder.runtime) await this.sessionController.closeOwnedRuntime(this.sessionCaller('closeRuntime', holder.sessionId, holder), holder.runtime);
+          await this.deps.maker.closeSession(holder.sessionId);
         } catch (err) {
           this.deps.logger.warn?.('[runner] ephemeral session close failed (non-fatal)', {
             sessionId: holder.sessionId,
@@ -1343,7 +1302,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     };
     let session: Awaited<ReturnType<Maker['createSession']>>;
     try {
-      session = await this.ensureSessionRuntime(createSessionOpts, holder);
+      session = await this.deps.maker.createSession(createSessionOpts);
     } catch (err) {
       if (err instanceof CredentialModeSwitchBusyError) {
         // fresh Codex 也共用本地 credential mode，撞上其它本地 Codex turn 时按撞忙处理。
@@ -1396,15 +1355,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // the transaction's persisted native checkpoint before this fire sends.
           if (this.deps.maker.getSession(session.id) !== session) {
             const latest = await this.deps.maker.getSessionMeta(session.id);
-            session = await this.ensureSessionRuntime({
+            session = await this.deps.maker.createSession({
               ...createSessionOpts,
               model,
               providerId: reusedPiRouteProviderId,
               resumeSessionId: latest?.sdkSessionId ?? undefined,
-            }, holder);
+            });
           }
         } else {
-          await this.sessionController.setModel(this.sessionCaller('selectRuntime', session.id, holder), session, model);
+          await session.setModel(model);
         }
       } catch (err) {
         if (reusedLiveSession) modelSwitchApplied = false;
@@ -1465,7 +1424,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     let effortSwitchApplied = true;
     if (heartbeatEffortChanged) {
       try {
-        await this.sessionController.setEffort(this.sessionCaller('selectRuntime', session.id, holder), session, runtimeReconciledEffort as Effort);
+        await session.setEffort(runtimeReconciledEffort as Effort);
       } catch (err) {
         // setEffort 失败时是否跳过落库,取决于它是不是本次「唯一生效通道」:
         //  · 复用会话:createSession 忽略 opts,setEffort 是唯一通道;
@@ -1650,12 +1609,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
         if (applied.status !== 'applied') throw new Error('Scheduled Pi model selection was deferred');
         if (this.deps.maker.getSession(session.id) !== session) {
           const latest = await this.deps.maker.getSessionMeta(session.id);
-          session = await this.ensureSessionRuntime({
+          session = await this.deps.maker.createSession({
             ...createSessionOpts,
             model: runtimeModel,
             providerId: verdict.providerId,
             resumeSessionId: latest?.sdkSessionId ?? undefined,
-          }, holder);
+          });
         }
         setSessionProvider(session.id, verdict.providerId);
       }
@@ -1799,7 +1758,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         ctx.signal.removeEventListener('abort', onAbort);
         return this.deferFire(schedule, session.id, 'routine-dispatch-invalidated');
       }
-      const sendResult = await this.sessionController.send(this.sessionCaller('send', session.id, holder), session, outgoingMessage as never, {
+      const sendResult = await session.send(outgoingMessage as never, {
         origin,
         ...(schedule.targetSessionId || schedule.source === 'bot'
           ? {
@@ -2381,7 +2340,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // (PR #972 review P2)。凭证形态需要切换的场景无法热切；当前路由仍一致时
         // 跳过并留日志，thread/store 已错配时 fail-closed。
         try {
-          await this.applyQueuedHeartbeatRouting(schedule, live, routingBaseline, holder, preparedPiRoute);
+          await this.applyQueuedHeartbeatRouting(schedule, live, routingBaseline, preparedPiRoute);
         } catch (err) {
           if (
             err instanceof QueuedRouteDisabledError ||
@@ -2757,7 +2716,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
       resolvedSelection?: ScheduledModelSelection;
       providerId: string | null;
     },
-    holder: EphemeralSessionHolder,
     preparedPiRoute: { model: string; providerId: string | null } | null = null,
   ): Promise<void> {
     const explicitModel = schedule.model?.trim() ? schedule.model : undefined;
@@ -2913,9 +2871,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
     if (live.agentKind !== 'pi' && (modelChanged || mustSyncPiNativeRoute)) {
       try {
         if (mustSyncPiNativeRoute) {
-          await this.sessionController.setModel(this.sessionCaller('selectRuntime', live.id, holder), live, targetModel, { providerId: nextProviderId });
+          await live.setModel(targetModel, { providerId: nextProviderId });
         } else {
-          await this.sessionController.setModel(this.sessionCaller('selectRuntime', live.id, holder), live, targetModel);
+          await live.setModel(targetModel);
         }
       } catch (err) {
         modelApplied = false;
@@ -2983,7 +2941,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     let effortApplied = true;
     if (effortChanged) {
       try {
-        await this.sessionController.setEffort(this.sessionCaller('selectRuntime', live.id, holder), live, reconciledEffort as Effort);
+        await live.setEffort(reconciledEffort as Effort);
       } catch (err) {
         effortApplied = false;
         if (resolvedSelection)
@@ -2998,7 +2956,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     }
     if (resolvedSelection && live.agentKind === 'codex') {
       try {
-        await this.sessionController.setFastMode(this.sessionCaller('selectRuntime', live.id, holder), live, resolvedSelection.fastMode);
+        await live.setFastMode(resolvedSelection.fastMode);
       } catch (err) {
         throw new QueuedRouteDisabledError('Scheduled Fast selection could not be applied', {
           cause: err,
@@ -3580,9 +3538,6 @@ function throwIfFireAborted(signal: AbortSignal, stage: FireAbortStage): void {
  * 用 per-call 对象而非实例字段:并发 fire(多任务同 tick 触发)互不串扰。
  */
 interface EphemeralSessionHolder {
-  runtime?: Session;
-  assertControlCurrent(): void;
-  assertDispatchCurrent(): void;
   preRunHookOutput?: string;
   sessionId?: string;
   headlessGhostSetupTurn?: HeadlessGhostSetupTurnGuard;

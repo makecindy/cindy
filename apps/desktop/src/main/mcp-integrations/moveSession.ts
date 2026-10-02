@@ -1,9 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import type { XdtHelperMcpDeps } from '@cindy/mcps';
 import { sessions, orcaTeams, orcaWorkers, botSessionLinks } from '../localDb/schema.js';
-import { sessionRecords } from '../session-controller/records.js';
-import { createHostSessionOperation } from '../session-controller/hostOperation.js';
-import { localSessionHost } from '../session-controller/localHost.js';
+import { updateSessionInDb } from '../localDb/ipc/sessions.js';
 import { bindingStore } from '../im/binding.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
@@ -113,11 +111,11 @@ async function moveSessionProject(
       targetDir === null
         ? { workspaceKind: 'dialogue' }
         : { workspaceKind: 'project', workingDir: targetDir };
-    const updated = await createHostSessionOperation(localSessionHost, { source: 'host', operation: 'updateMetadata', sessionIds: [sessionId], assertCurrent })(() => sessionRecords.updateRecordForUi(sessionId, patch, undefined, {
+    const updated = await updateSessionInDb(sessionId, patch, undefined, {
       assertCurrent,
       beforeUpdate: assertMoveAllowed,
       beforeWrite: assertMoveAllowed,
-    }));
+    });
     return {
       ok: true,
       sessionId: updated.id,

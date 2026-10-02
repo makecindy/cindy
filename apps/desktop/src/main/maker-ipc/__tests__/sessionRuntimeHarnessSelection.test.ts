@@ -1,4 +1,3 @@
-vi.mock('../../maker-host/model-route-guard-live.js', () => ({ shouldApplyExclusiveProviderRerouteLive: async () => false }));
 import { describe, expect, it, vi } from 'vitest';
 import { nextBotModelRoute } from '../../../shared/botModelChain';
 import { createBotSessionTaskRouteBridge } from '../botSessionTaskRouteBridge';

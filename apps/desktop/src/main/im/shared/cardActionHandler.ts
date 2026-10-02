@@ -1,7 +1,3 @@
-import { createHostSessionOperation } from '../../session-controller/hostOperation.js';
-import { createNativeSessionController } from '../../session-controller/nativeRuntime.js';
-import { captureInternalSessionCaller } from '../../session-controller/internalCaller.js';
-import { localSessionHost } from '../../session-controller/localHost.js';
 /**
  * main/im/shared/cardActionHandler.ts
  * ---------------------------------------------------------------------------
@@ -337,8 +333,7 @@ export function createCardActionHandler(
       }
     };
 
-    const select = createHostSessionOperation(localSessionHost, { source: 'host', operation: 'selectRuntime', sessionIds: [sessionId] });
-    const failureReason = await select(() => withSendToSessionLock(sessionId, async () => {
+    const failureReason = await withSendToSessionLock(sessionId, async () => {
       let previousRoute: Awaited<ReturnType<typeof readModelRouteSnapshot>> = null;
       try {
         previousRoute = await readModelRouteSnapshot(sessionId);
@@ -487,7 +482,7 @@ export function createCardActionHandler(
       // 才取消旧 intent，失败回滚时仍保留它供下一次发送重试。
       cancelPendingAgentSwitchForSession(sessionId);
       return null;
-    }));
+    });
 
     if (failureReason !== null) {
       await patchModelPickFailed(failureReason);
@@ -948,7 +943,6 @@ export function createCardActionHandler(
   }
 
   async function handleControlNewSession(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
-    const createPolicy = captureInternalSessionCaller(localSessionHost, { source: 'host', sessionIds: [], operations: ['ensureRuntime'] });
     // Terminal: 在指定 workingDir 下用 desktop 默认参数新建一个 session,
     // 然后 attach binding 把后续渠道消息路由到这个新 session。
     // session 创建参数:
@@ -1035,11 +1029,7 @@ export function createCardActionHandler(
     };
     const closeCreatedSessionAfterSetupFailure = async (sessionId: string): Promise<void> => {
       try {
-        createPolicy.assertCurrent?.();
-        const maker = getMaker();
-        const runtime = maker.getSession(sessionId);
-        if (runtime) await createNativeSessionController(maker, localSessionHost).closeOwnedRuntime(
-          captureInternalSessionCaller(localSessionHost, { source: 'host', sessionIds: [sessionId], operations: ['closeRuntime'], assertCurrent: createPolicy.assertCurrent }), runtime);
+        await getMaker().closeSession(sessionId);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`control:new cleanup created session failed: ${msg}`);
@@ -1063,7 +1053,7 @@ export function createCardActionHandler(
       let created: string | null = null;
       let createErr: string | null = null;
       try {
-        const newSession = await createNativeSessionController(getMaker(), localSessionHost).ensureRuntime(createPolicy, {
+        const newSession = await getMaker().createSession({
           agentKind: 'claude-code',
           workingDir,
           model: requireRouteModel(),
@@ -1145,7 +1135,7 @@ export function createCardActionHandler(
       // 生成正式 title 'FBot · {gen}' (对齐 desktop makerChatStore 的 generateTitle
       // 逻辑)。这里不立刻用 displayName 跑 oneshot — 用户名作为 seed 没有任何
       // 对话上下文意义。
-      const newSession = await createNativeSessionController(getMaker(), localSessionHost).ensureRuntime(createPolicy, {
+      const newSession = await getMaker().createSession({
         agentKind: 'claude-code',
         workingDir,
         model: requireRouteModel(),

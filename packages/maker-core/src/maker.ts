@@ -84,10 +84,6 @@ export interface SessionStartFailureContext {
 }
 
 export interface SessionLifecycleHooks {
-  /** Host admission recheck after asynchronous preparation, before native startup
-   * and metadata persistence. Unlike notification hooks, rejection is fatal and
-   * uses the existing unpublished-startup cleanup. Does not restart live Sessions. */
-  validateStart?: (sessionId: string, options: CreateSessionOptions) => void | Promise<void>;
   /**
    * Agent 启动前补齐 start options。该步骤属于正确启动的前置条件，失败会阻断创建。
    * 允许直接修改 options；Maker 会把同一个对象传给 agent 和成功钩子。
@@ -706,7 +702,6 @@ export class Maker {
     let handle: AgentSessionHandle;
     let agentStartAttempted = false;
     try {
-      if (this.lifecycleHooks.validateStart) await this.lifecycleHooks.validateStart(id, startOpts);
       if (opts.agentKind === 'codex' && isClaimableCodexThreadId(startOpts.resumeSessionId)) {
         codexThreadClaim = this.claimCodexThread({
           sessionId: id,
@@ -826,7 +821,6 @@ export class Maker {
     let updatedSdkSessionId = false;
     try {
       existingRowBeforePersistence = opts.id ? await this.storage.get(opts.id) : null;
-      if (this.lifecycleHooks.validateStart) await this.lifecycleHooks.validateStart(id, startOpts);
       if (existingRowBeforePersistence) {
         updatedSdkSessionId = handle.id !== '<pending>'
           && existingRowBeforePersistence.sdkSessionId !== handle.id;
@@ -1335,8 +1329,8 @@ export class Maker {
   }
 
   /** 获取某 agent 的能力声明（用于 UI 在创建 session 前就能查能力） */
-  getCapabilities(agentKind: AgentKind, remoteHostId?: string | null) {
-    return capabilitiesForSession(agentKind, this.requireAgent(agentKind).capabilities, remoteHostId);
+  getCapabilities(agentKind: AgentKind) {
+    return this.requireAgent(agentKind).capabilities;
   }
 
   /** 列出已注册的 agent kind */

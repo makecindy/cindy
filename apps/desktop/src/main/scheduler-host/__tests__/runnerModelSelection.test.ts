@@ -121,7 +121,6 @@ function createSessionHarness(): FakeSessionHarness {
   );
   const setEffort = vi.fn(async () => undefined);
   const session = {
-    instanceId: 'test-instance', getTurnGeneration: () => 0,
     id: 'scheduler-session',
     agentKind: 'claude-code',
     model: 'claude-sonnet-4-6',
@@ -281,7 +280,6 @@ function createRunnerHarness(
   } as unknown as Maker;
   const notifier: Notifier = { notify: vi.fn(async () => undefined) };
   const runner = new MakerScheduleRunner({
-    sessionHost: { deviceId: () => 'test-device', owner: () => globalThis, execution: () => null },
     maker,
     getDb: () => ({}) as never,
     notifier,

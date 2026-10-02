@@ -17,20 +17,14 @@
  */
 
 /** deviceId → topic → 持有该订阅的窗口集合。 */
-/** Symbols identify Main subscribers without impersonating a WebContents ID. */
-const registry = new Map<string, Map<string, Set<number | symbol>>>();
-
-/** A cleared/revoked subscription must not be revived by a late Main resync. */
-export function hasSubscriptionReference(reference: number | symbol, deviceId: string, topic: string): boolean {
-  return registry.get(deviceId)?.get(topic)?.has(reference) === true;
-}
+const registry = new Map<string, Map<string, Set<number>>>();
 
 /**
  * 记录一个窗口对 (deviceId, topics) 的订阅意图。返回需要向 relay 转发的 topics ——
  * subscribe 幂等,**恒为传入的全部 topics**(去重),调用方据此转发 remoteSubscribe。
  */
 export function recordSubscribe(
-  windowId: number | symbol,
+  windowId: number,
   deviceId: string,
   topics: readonly string[],
 ): string[] {
@@ -58,7 +52,7 @@ export function recordSubscribe(
  * 语义,对被控端无害)。
  */
 export function recordUnsubscribe(
-  windowId: number | symbol,
+  windowId: number,
   deviceId: string,
   topics: readonly string[],
 ): string[] {

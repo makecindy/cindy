@@ -15,15 +15,6 @@ const mocks = vi.hoisted(() => ({
   listVisibleSubagentObservationIdentities: vi.fn(),
 }));
 
-vi.mock('../../session-controller/localHost.js', () => ({
-  localSessionHost: { deviceId: () => 'device', owner: () => mocks.ownerScope, execution: () => null },
-}));
-vi.mock('../../session-controller/uiCaller.js', async () => {
-  const { withSessionCaller } = await import('../../session-controller/callerContext.js');
-  return { withUiSessionCaller: (_event: unknown, run: () => Promise<unknown>) =>
-    withSessionCaller({ source: 'ui', authorize: async () => {} }, run) };
-});
-
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, handler: (...args: unknown[]) => unknown) => {

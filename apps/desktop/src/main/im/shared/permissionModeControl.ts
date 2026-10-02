@@ -1,5 +1,3 @@
-import { createHostSessionOperation } from '../../session-controller/hostOperation.js';
-import { localSessionHost } from '../../session-controller/localHost.js';
 import type { PermissionMode, PermissionModeDescriptor } from '@cindy/maker-core';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import { getCurrentDbClientSnapshot } from '../../localDb/client/current.js';
@@ -54,7 +52,7 @@ export async function changeSessionPermissionMode(args: {
   const assertCurrent = () => {
     if (snapshot !== getCurrentDbClientSnapshot()) throw new Error('Account changed during permission update');
   };
-  return createHostSessionOperation(localSessionHost, { source: 'host', operation: 'changePermission', sessionIds: [args.sessionId], assertCurrent })(() => withSessionPermissionChange(args.sessionId, async () => {
+  return withSessionPermissionChange(args.sessionId, async () => {
     assertCurrent();
     const previousMode = await args.readPreviousMode();
     assertCurrent();
@@ -99,7 +97,7 @@ export async function changeSessionPermissionMode(args: {
       label: descriptor.displayName,
       live: Boolean(live),
     };
-  }));
+  });
 }
 
 export function resolvePermissionMode(

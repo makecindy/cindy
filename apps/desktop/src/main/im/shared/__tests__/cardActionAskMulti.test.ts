@@ -1,4 +1,3 @@
-vi.mock('../../../session-controller/localHost.js', () => { const owner = {}; return { localSessionHost: { deviceId: () => 'test-device', owner: () => owner, execution: () => null } }; });
 /**
  * cardActionHandler — ask 多题/多选打勾卡(ask:multi / ask:multi-submit)。
  *

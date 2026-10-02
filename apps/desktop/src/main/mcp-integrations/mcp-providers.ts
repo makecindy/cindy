@@ -10,10 +10,6 @@ import { routineTools } from '../routines/service.js';
 import { join as pathJoin } from 'node:path';
 import { and, eq } from 'drizzle-orm';
 
-import { tryGetSessionService } from '../session-controller/sessionService.js';
-import { withSessionCaller, requireSessionCaller } from '../session-controller/callerContext.js';
-import { sessionToolPolicy } from '../session-controller/toolPolicy.js';
-import { SessionAdmissionError } from '../session-controller/controller.js';
 import {
   createLiziMcpProviders,
   resolveLiziMcpSessionContext,
@@ -62,6 +58,7 @@ import { createBotProfile } from '../localDb/ipc/bots.js';
 import { submitGithubIssueForSession } from '../github-issue/index.js';
 import {
   listWorkdirsForHistory,
+  listSessionsForHistory,
   getMessagesForHistory,
 } from '../localDb/chatHistoryReader.js';
 import {
@@ -82,7 +79,11 @@ import {
   type BotWorkbenchSendDeps,
 } from '../maker-ipc/botWorkbenchTools.js';
 import { createBotToolCallAuthorizer, resolveBotCallerAuthority } from '../maker-ipc/botToolCallAuthorizer.js';
-import { sessionRecords } from '../session-controller/records.js';
+import {
+  patchSessionMetaInDb,
+  renameSessionTitlesInDb,
+  setSessionsStatusInDb,
+} from '../localDb/ipc/sessions.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
 import { getDesktopContactsManager } from '../maker-host/maker-contacts-host.js';
@@ -127,8 +128,6 @@ export interface DesktopMcpProvidersDeps {
   /** Agent 发起插件安装时向该任务投宿主权限确认卡；缺失时安装 fail closed。 */
   requestHostPermission?: CindyGhostsHostDeps['requestHostPermission'];
   /** Reject stale, remote, or already-closed Session tool contexts. */
-  /** Captures the exact caller before any asynchronous tool admission. */
-  captureSessionControlCaller?: (sessionId: string | undefined, instanceId: string | undefined) => () => void;
   isCurrentLocalSessionInstance?: (
     sessionId: string,
     sessionInstanceId: string | undefined,
@@ -170,29 +169,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       try { return await fn(s, ...args); }
       catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        const errorCode = err instanceof SessionAdmissionError ? err.code
-          : isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL';
-        return { ok: false, errorCode, message } as R;
-      }
-    };
-  }
-
-  function wrapSession<Args extends unknown[], R>(fn: (svc: NonNullable<ReturnType<typeof tryGetSessionService>>, ...args: Args) => Promise<R>): (...args: Args) => Promise<R> {
-    return async (...args) => {
-      const s = tryGetSessionService();
-      if (!s) return { ok: false, errorCode: 'HOST_NOT_READY' as const, message: 'Session controller not initialized' } as R;
-      try { return await fn(s, ...args); }
-      catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const errorCode = err instanceof SessionAdmissionError ? err.code
-          : isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL';
+        const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL';
         return { ok: false, errorCode, message } as R;
       }
     };
   }
 
   const workbenchSend: BotWorkbenchSendDeps = {
-    sendToSession: wrapSession(async (svc, { targetSessionId, message, dispatcherSessionId }) => {
+    sendToSession: wrap(async (svc, { targetSessionId, message, dispatcherSessionId }) => {
       const result = await svc.sendToSession({ targetSessionId, message, dispatcherSessionId });
       return result.ok
         ? {
@@ -621,16 +605,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       },
       // 伙伴主任务的每次调用按本轮来源判定;放在 resolveSurface 之前,与工具面分类各自独立。
       authorizeCall: authorizeBotToolCall,
-      runInHostContext: (input, operation) => {
-        const owner = tryGetDbClient();
-        const assertExecution = deps.captureSessionControlCaller?.(input.sessionId, input.sessionInstanceId);
-        return withSessionCaller(sessionToolPolicy(input, authorizeBotToolCall, () => {
-          assertExecution?.();
-          if (!owner || isAppSessionBoundaryPending() || owner !== tryGetDbClient()) {
-            throw new SessionAdmissionError('OWNER_SCOPE_CHANGED', 'Session owner changed');
-          }
-        }), operation);
-      },
       resolveSurface: async ({ sessionId }) => {
         const dbClient = tryGetDbClient();
         if (!dbClient || isAppSessionBoundaryPending()) return 'restricted';
@@ -639,105 +613,24 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         return surface;
       },
       sessionQueue: {
-        listSessionQueue: wrapSession((service, sessionId: string) => service.listSessionQueue(sessionId)),
-        listSessionQueuedCounts: wrapSession((service, sessionIds: string[]) =>
+        listSessionQueue: wrap((service, sessionId: string) => service.listSessionQueue(sessionId)),
+        listSessionQueuedCounts: wrap((service, sessionIds: string[]) =>
           service.listSessionQueuedCounts(sessionIds)),
       },
       sessionControl: {
-        listSessionDevices: async context => {
-          const sourcePolicy = requireSessionCaller();
-          sourcePolicy.assertCurrent?.();
-          const { getMakerIfReady } = await import('../maker-host/index.js');
-          const runtime = context.sessionId ? getMakerIfReady()?.getSession(context.sessionId) : undefined;
-          const generation = runtime?.getTurnGeneration();
-          const owner = tryGetDbClient();
-          const assertCurrent = () => {
-            sourcePolicy.assertCurrent?.();
-            if (!owner || owner !== tryGetDbClient() || isAppSessionBoundaryPending()
-              || !context.sessionId || !context.sessionInstanceId || runtime?.instanceId !== context.sessionInstanceId
-              || !runtime || getMakerIfReady()?.getSession(context.sessionId) !== runtime
-              || runtime.getTurnGeneration() !== generation) {
-              throw new SessionAdmissionError('OWNER_SCOPE_CHANGED', '调用任务已变化。');
-            }
-          };
-          assertCurrent();
-          const [{ handleListDevices, defaultDeps }, { localSessionHost }] = await Promise.all([
-            import('../device-link/ipc.js'), import('../session-controller/localHost.js'),
-          ]);
-          const devices = await handleListDevices(defaultDeps());
-          sourcePolicy.assertCurrent?.();
-          const decision = await authorizeBotToolCall({ sessionId: context.sessionId, server: 'cindy_helper', tool: 'list_session_devices', args: {} });
-          assertCurrent();
-          if (!decision.ok) throw new SessionAdmissionError('NOT_AUTHORIZED', decision.message);
-          return { localDeviceId: localSessionHost.deviceId(), ...devices };
-        },
-        controlSession: async (value, context) => {
-          const sourcePolicy = requireSessionCaller();
-          sourcePolicy.assertCurrent?.();
-          const [{ parseSessionControlRequest }, { createSessionRouter }, { executeSessionCommand }, { getMakerIfReady }, { remoteInvoke }, { localSessionHost }] = await Promise.all([
-            import('../session-controller/requestSchema.js'), import('../session-controller/router.js'),
-            import('../session-controller/commands.js'), import('../maker-host/index.js'),
-            import('../device-link/index.js'), import('../session-controller/localHost.js'),
-          ]);
-          const request = parseSessionControlRequest(value);
-          const { assertModelSessionOperationAllowed } = await import('../session-controller/modelAccess.js');
-          assertModelSessionOperationAllowed(request.command.operation, request);
-          const owner = tryGetDbClient();
-          const sourceId = context.sessionId;
-          const runtime = sourceId ? getMakerIfReady()?.getSession(sourceId) : undefined;
-          const generation = runtime?.getTurnGeneration();
-          const assertCurrent = () => {
-            sourcePolicy.assertCurrent?.();
-            if (!owner || owner !== tryGetDbClient() || isAppSessionBoundaryPending()) throw new SessionAdmissionError('OWNER_SCOPE_CHANGED', '调用账号已变化。');
-            if (!sourceId || !runtime || runtime.instanceId !== context.sessionInstanceId
-              || getMakerIfReady()?.getSession(sourceId) !== runtime || runtime.getTurnGeneration() !== generation) {
-              throw new SessionAdmissionError('NOT_AUTHORIZED', '调用任务的执行轮次已变化。');
-            }
-          };
-          const authorize = async () => {
-            assertCurrent();
-            const decision = await authorizeBotToolCall({ sessionId: sourceId, server: 'cindy_helper', tool: 'control_session', args: { request } });
-            assertCurrent();
-            if (!decision.ok) throw new SessionAdmissionError('NOT_AUTHORIZED', decision.message);
-          };
-          const router = createSessionRouter({ deviceId: localSessionHost.deviceId, remoteInvoke,
-            local: next => withSessionCaller({ source: 'session', assertCurrent,
-              authorize: async admission => {
-                assertModelSessionOperationAllowed(admission.operation, next);
-                await authorize();
-                if (next.target && admission.targets.some(target => target.sessionId !== next.target!.sessionId)) {
-                  throw new SessionAdmissionError('NOT_AUTHORIZED', '操作目标超出本次请求范围。');
-                }
-              },
-            }, () => executeSessionCommand(next, sourceId!)),
-          });
-          return router(request, { assertCurrent, authorizeRemote: async () => {
-            await authorize();
-            const caller = await resolveBotCallerAuthority(owner!, sourceId!, getSessionInputProvenance);
-            assertCurrent();
-            if (caller.kind !== 'not-bot' && (caller.kind !== 'bot' || !caller.main || caller.authority !== 'owner')) {
-              throw new SessionAdmissionError('NOT_AUTHORIZED', '本轮未获授权控制另一台设备的任务。');
-            }
-            return { sourceSessionId: sourceId!, callerKey: sourceId!, authority: caller.kind === 'not-bot' ? 'ordinary-session' : 'owner-turn' };
-          } });
-        },
-        inspectSession: wrapSession(async (service, id: string) => ({ ok: true as const, snapshot: await service.inspectSession(id) })),
-        listActiveSessions: wrapSession(async service => ({ ok: true as const, sessions: await service.listActiveSessions() })),
-        sessionCapabilities: wrapSession(async (service, id: string) => ({ ok: true as const, capabilities: await service.sessionCapabilities(id) })),
-        diagnoseSession: wrapSession(async (service, id: string) => ({ ok: true as const, diagnosis: await service.diagnoseSession(id) })),
-        updateQueuedMessage: wrapSession((service, params) => service.updateSessionQueuedMessage(params)),
-        cancelQueuedMessage: wrapSession((service, params) => service.cancelSessionQueuedMessage(params)),
-        steerSession: wrapSession((service, params) => service.steerSession(params)),
-        stopSessionTurn: wrapSession((service, params) => service.stopSessionTurn(params)),
-        getSessionRuntime: wrapSession((service, params) => service.getSessionRuntime(params)),
-        setSessionRuntime: wrapSession((service, params) => service.setSessionRuntime(params)),
+        updateQueuedMessage: wrap((service, params) => service.updateSessionQueuedMessage(params)),
+        cancelQueuedMessage: wrap((service, params) => service.cancelSessionQueuedMessage(params)),
+        steerSession: wrap((service, params) => service.steerSession(params)),
+        stopSessionTurn: wrap((service, params) => service.stopSessionTurn(params)),
+        getSessionRuntime: wrap((service, params) => service.getSessionRuntime(params)),
+        setSessionRuntime: wrap((service, params) => service.setSessionRuntime(params)),
       },
       setCurrentSessionTitle: async ({ sessionId, title }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
         }
         try {
-          const updated = await sessionRecords.patchMetadata(sessionId, { title });
+          const updated = await patchSessionMetaInDb(sessionId, { title });
           return { ok: true, sessionId: updated.id, title: updated.title ?? title };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -752,7 +645,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
         }
         try {
-          const renamed = await sessionRecords.rename(changes, dryRun);
+          const renamed = await renameSessionTitlesInDb(changes, dryRun);
           return { ok: true, changes: renamed };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -772,7 +665,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
         }
         try {
-          const changed = await sessionRecords.setStatus(sessionIds, status);
+          const changed = await setSessionsStatusInDb(sessionIds, status);
           return { ok: true, changed };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -796,9 +689,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         effort,
         fast,
       }) => {
-        const svc = tryGetSessionService();
+        const svc = tryGetOrcaCollabService();
         if (!svc) {
-          return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Session controller not initialized' };
+          return { ok: false, errorCode: 'HOST_NOT_READY', message: 'orca collab service not initialized' };
         }
         try {
           const hasExecutionOverrides =
@@ -1047,7 +940,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
         },
         listSessions: async (args) => {
-          try { const page = await sessionRecords.list(args); return { ok: true, page }; }
+          try { const page = await listSessionsForHistory(args); return { ok: true, page }; }
           catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
         },
         getMessages: async (args) => {

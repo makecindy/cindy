@@ -122,7 +122,6 @@
     "i18n:glossary-doc": "node scripts/generate-glossary-doc.mjs",
     "check:brand-terminology": "node scripts/brand-terminology-guard.mjs",
     "check:endpoints": "node scripts/check-endpoint-literals.mjs",
-    "check:session-controller": "node scripts/session-controller-boundaries.mjs",
     "check:dev-docs": "node --test scripts/__tests__/dev-docs-contract.test.mjs",
     "check:dco": "node scripts/check-dco.mjs",
     "dco:install-hook": "node scripts/install-dco-hook.mjs",

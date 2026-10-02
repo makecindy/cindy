@@ -1,6 +1,3 @@
-import { createNativeSessionController } from '../session-controller/nativeRuntime.js';
-import { captureInternalSessionCaller } from '../session-controller/internalCaller.js';
-import { localSessionHost } from '../session-controller/localHost.js';
 /**
  * goal-host 单例 + 启停 —— 镜像 scheduler-host/index.ts。
  *
@@ -47,30 +44,16 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
   if (_controller) return _controller;
   const logger = createLogger('goal-host');
   const storage = new GoalStorage(deps.getDb);
-  const control = createNativeSessionController(deps.maker, localSessionHost);
-  const owner = localSessionHost.owner(), generation = _teardownGeneration;
-  const caller = (id: string) => captureInternalSessionCaller(localSessionHost, { source: 'host', sessionIds: [id], inheritOperation: false,
-    operations: ['ensureRuntime', 'send', 'abortTurn'], assertCurrent: () => {
-      if (owner !== localSessionHost.owner() || generation !== _teardownGeneration) throw new Error('Goal host was reset');
-    } });
-  const sessionView = (id: string): SessionLike | undefined => {
-    const runtime = deps.maker.getSession(id);
-    return runtime ? control.ownedView(caller(id), runtime, () => generation !== _teardownGeneration || owner !== localSessionHost.owner()) : undefined;
-  };
   const controller = new GoalController({
     storage,
-    getSession: sessionView,
+    getSession: (id): SessionLike | undefined => deps.maker.getSession(id),
     // 确保会话活着:已活直接返回;未活按存档 SessionMeta resume(spawn agent),
     // 仿 scheduler 心跳。修"开了对话没发消息 → goal 发不出第一轮"的根因。
-    ensureSession: async (id): Promise<SessionLike | undefined> => {
-      const policy = caller(id);
-      const restored = await restoreSessionForGoal(id, {
-        maker: deps.maker, ensureRuntime: opts => control.ensureRuntime(policy, opts),
+    ensureSession: (id): Promise<SessionLike | undefined> =>
+      restoreSessionForGoal(id, {
+        maker: deps.maker,
         warn: (message, meta) => logger.warn(message, meta),
-      });
-      policy.assertCurrent?.();
-      return restored ? sessionView(id) : undefined;
-    },
+      }),
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
     isSessionInTurn,
     stopActiveGoalTurn: stopActiveGoalTurnForClear,

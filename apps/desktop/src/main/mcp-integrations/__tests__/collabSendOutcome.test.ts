@@ -38,10 +38,6 @@ vi.mock('../../maker-ipc/register.js', () => ({
   isSessionInTurn: () => false,
 }));
 
-vi.mock('../../session-controller/sessionService.js', () => ({
-  tryGetSessionService: () => mockState.collabService,
-}));
-
 vi.mock('@cindy/mcps', () => ({
   setSessionPathAuthorizer: vi.fn(),
   createLiziMcpProviders: vi.fn((config: Record<string, unknown>) => {

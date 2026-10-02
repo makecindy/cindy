@@ -143,10 +143,10 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'local-db:subagent-runs:detail',
       'local-db:subagent-runs:transcript',
       'maker:pi-subagent:control',
-      'maker:agent-task:stop',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
     }
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:agent-task:stop')).toBe(false);
   });
 
   it('放行会话级完整对等补充(fork-strip / context-usage / 窄口径 patch-meta / Magic 重命名)', () => {

@@ -6,7 +6,6 @@ import { ensureDialogueWorkspaceDir } from './dialogueWorkspace.js';
 import { ensureProjectGitInitialized } from '../git-snapshot/projectGitBootstrap.js';
 import { readGitSafetySettings } from '../maker-host/git-safety-settings-store.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
-import { revalidateSessionOperation, assertSessionOperationCurrent } from '../session-controller/operationContext.js';
 
 export type SessionOpenBody = NonNullable<Parameters<typeof sessionCreateToRow>[1]>;
 export type OpenedSessionRow = ReturnType<typeof sessionCreateToRow> & { model: string };
@@ -32,12 +31,9 @@ export async function openSession<T = void>(input: {
   /** Sample effective authority after async preparation, directly before committing. */
   finalize?: () => Pick<SessionOpenBody, 'permissionMode' | 'parentSessionId'>;
   onPersistenceStarted?: () => void;
-  /** Host-owned resource validation after model/Git preparation, before INSERT. */
-  validateResources?: () => Promise<void>;
 }, commit?: (row: OpenedSessionRow, assertCurrent: () => void) => Promise<T>): Promise<{ row: OpenedSessionRow; value: T }> {
   const owner = getCurrentDbClientSnapshot();
   const assertCurrent = () => {
-    assertSessionOperationCurrent();
     if (!owner || getCurrentDbClientSnapshot() !== owner) throw new Error('账号已变化，请重新新建任务');
     input.assertCurrent?.();
   };
@@ -48,7 +44,6 @@ export async function openSession<T = void>(input: {
   if (!admitModel) throw new Error('任务模型服务尚未就绪，请稍后重试');
   // Remote model admission belongs to the execution host. Preserve the existing remote path.
   const selected = input.body.remoteHostId ? input.body : await admitModel({ ...input.body });
-  await revalidateSessionOperation();
   assertCurrent();
   const workspaceKind = selected.workspaceKind ?? 'project';
   const explicitDir = normalizeWorkingDirForStorage(selected.workingDir) ?? undefined;
@@ -59,9 +54,6 @@ export async function openSession<T = void>(input: {
   await ensureProjectGitInitialized({ workingDir, workspaceKind, remoteHostId: prepared.remoteHostId ?? null,
     sessionId: id, autoSnapshotEnabled: safety.autoSnapshotEnabled,
     autoInitProjectGit: safety.autoInitProjectGit, source: 'session-open' });
-  await revalidateSessionOperation();
-  assertCurrent();
-  await input.validateResources?.();
   assertCurrent();
   const mapped = sessionCreateToRow(id, { ...prepared, ...input.finalize?.() }, now);
   if (!mapped.model) throw new Error('任务模型不可用，请重新选择');

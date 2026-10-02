@@ -1,6 +1,3 @@
-import { createNativeSessionController } from '../session-controller/nativeRuntime.js';
-import { captureInternalSessionCaller } from '../session-controller/internalCaller.js';
-import { localSessionHost } from '../session-controller/localHost.js';
 /**
  * learn-host 单例 + 启停 —— 镜像 goal-host/index.ts。
  *
@@ -88,18 +85,10 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
   if (_controller) return _controller;
   const logger = createLogger('learn-host');
   const store = new LearnRunStore();
-  const control = createNativeSessionController(deps.maker, localSessionHost);
-  const owner = localSessionHost.owner();
-  const caller = (id: string) => captureInternalSessionCaller(localSessionHost, { source: 'host', sessionIds: [id], inheritOperation: false,
-    operations: ['ensureRuntime', 'send', 'abortTurn'], assertCurrent: () => {
-      if (owner !== localSessionHost.owner() || _controller !== controller) throw new Error('Learn host was reset');
-    } });
   let startupReady: Promise<void> = Promise.resolve();
 
   const controller = new LearnController({
     createSession: async (opts): Promise<LearnSessionLike> => {
-      const policy = caller(opts.id);
-      policy.assertCurrent?.();
       // 蒸馏用什么模型由用户决定:继承触发会话的 agentKind/model/effort
       // (用户在输入框发 /learn 前可随意切模型)。无触发会话(理论上仅
       // 编程调用)才落到保守兜底。
@@ -158,13 +147,12 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
       if (!routeModel) {
         throw new Error('learn session has no enabled chat model (all models disabled in settings)');
       }
-      policy.assertCurrent?.();
       if (route.providerId) setSessionProvider(opts.id, route.providerId);
       // 换了模型时 effort 用 reconcile 结果(继承档可能超出兜底模型支持集);未换则
       // 保持继承档。route.effort 缺席 = 条目无 effort 概念,不携带交给 agent 默认。
       const routeEffort =
         routeModel === desiredModel ? originMeta?.effort : (route.effort as Effort | undefined);
-      const session = await control.ensureRuntime(policy, {
+      const session = await deps.maker.createSession({
         id: opts.id,
         agentKind,
         workingDir: opts.workingDir,
@@ -184,7 +172,7 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
       });
       // 不 wire → 蒸馏过程在 UI 一片空白(scheduler runner.ts 同款教训);幂等。
       wireSessionToIpc(session);
-      return control.ownedView(policy, session, () => _controller !== controller || owner !== localSessionHost.owner());
+      return session;
     },
     isTerminalErrorEvent: (ev) => isTerminalAgentErrorEvent(ev as Parameters<typeof isTerminalAgentErrorEvent>[0]),
     beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
@@ -321,7 +309,7 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
   // 解绑函数留存:切账号 reset 后旧 controller 不再收事件,否则每次登录都会
   // 多挂一个监听器、把 watcher 重挂到已 dispose 的旧实例上(Codex review)。
   _offMakerEvents = deps.maker.on((event) => {
-    if (event.type === 'session:created') controller.notifySessionAlive(control.ownedView(caller(event.session.id), event.session, () => _controller !== controller || owner !== localSessionHost.owner()));
+    if (event.type === 'session:created') controller.notifySessionAlive(event.session);
   });
   logger.info('[learn-host] started');
   // resume 异步收口 + sweep 孤儿 staging;失败非致命。

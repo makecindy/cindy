@@ -2,15 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createIpcError } from '../../../shared/ipc-errors';
 import { MAKER_INVOKE } from '../channels';
-import { registerStopAgentTaskHandler as registerHandler } from '../stopAgentTaskHandler';
+import { registerStopAgentTaskHandler } from '../stopAgentTaskHandler';
 import { IpcHarness } from './helpers/ipcHarness';
-
-import { createStopBackgroundTask, type StopBackgroundTaskDeps } from '../../session-controller/backgroundTasks.js';
-
-function registerStopAgentTaskHandler(harness: IpcHarness, deps: StopBackgroundTaskDeps) {
-  const stop = createStopBackgroundTask(deps);
-  registerHandler(harness, { stopBackgroundTask: (_event, id, taskId) => stop(id, taskId) });
-}
 
 describe('stop agent task IPC handler', () => {
   it('validates sessionId and taskId before touching the session', async () => {

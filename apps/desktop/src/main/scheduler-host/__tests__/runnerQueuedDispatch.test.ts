@@ -179,7 +179,6 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
     Object.assign(vendorOptions, patch);
   });
   const session = {
-    instanceId: 'test-instance', getTurnGeneration: () => 0,
     id: SESSION_ID,
     agentKind: 'claude-code',
     model: 'claude-opus-4-6',
@@ -427,7 +426,6 @@ function createRunnerHarness(
     getCapabilities: vi.fn((_agent: string) => ({ availableModels: opts.availableModels ?? [] })),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
-    sessionHost: { deviceId: () => 'test-device', owner: () => globalThis, execution: () => null },
     maker,
     getDb: () => ({}) as never,
     notifier,

@@ -90,9 +90,7 @@
     "./botTimeline": "./src/botTimeline.ts",
     "./remote-desktop-viewer": "./src/remote-desktop/viewerRuntime.js",
     "./remote-desktop-mobile": "./src/remote-desktop/mobileHtml.ts",
-    "./remote-desktop-scripts": "./src/remote-desktop/viewerScripts.ts",
-    "./session-controller": "./src/sessionController.ts",
-    "./session-controller-schema": "./src/sessionControllerSchema.ts"
+    "./remote-desktop-scripts": "./src/remote-desktop/viewerScripts.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",
@@ -111,8 +109,5 @@
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.0.0",
     "vitest": "^3.2.4"
-  },
-  "dependencies": {
-    "zod": "4.3.6"
   }
 }

@@ -1,8 +1,6 @@
-import { sessionControlRequestSchema } from '@cindy/maker-shared/session-controller-schema';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import type { AgentKind, Effort } from '@cindy/maker-core';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
-import type { SessionCapability, SessionRuntimeSelection, SessionControllerSnapshot, SessionDiagnosis } from '@cindy/maker-shared/session-controller';
 import { z } from 'zod';
 
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
@@ -23,9 +21,15 @@ export type SessionSteerErrorCode =
   | 'INPUT_LOCKED'
   | 'DELIVERY_FAILED';
 
-export type SessionStopErrorCode = 'NOT_FOUND' | 'UNSUPPORTED_CAPABILITY' | 'CONFLICT';
+export type SessionStopErrorCode = 'NOT_FOUND' | 'UNSUPPORTED_CAPABILITY';
 
-export type SessionRuntimeProfile = SessionRuntimeSelection;
+export interface SessionRuntimeProfile {
+  agentKind: AgentKind;
+  model: string;
+  providerId: string | null;
+  effort: Effort | null;
+  fastMode: boolean;
+}
 
 export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
   runtimeGeneration?: number;
@@ -40,12 +44,6 @@ export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
 }
 
 export interface SessionControlDeps {
-  listSessionDevices?(context: LiziMcpSessionContext): Promise<unknown>;
-  controlSession?(request: unknown, context: LiziMcpSessionContext): Promise<unknown>;
-  listActiveSessions?(): Promise<ControlResult<{ sessions: SessionControllerSnapshot[] }, 'NOT_FOUND'>>;
-  sessionCapabilities?(sessionId: string): Promise<ControlResult<{ capabilities: SessionCapability[] }, 'NOT_FOUND'>>;
-  inspectSession?(sessionId: string): Promise<ControlResult<{ snapshot: SessionControllerSnapshot }, 'NOT_FOUND'>>;
-  diagnoseSession?(sessionId: string): Promise<ControlResult<{ diagnosis: SessionDiagnosis }, 'NOT_FOUND'>>;
   getSessionContext: () => LiziMcpSessionContext;
   updateQueuedMessage(params: {
     callerSessionId: string;
@@ -100,65 +98,6 @@ export interface SessionControlDeps {
       'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE'
     >
   >;
-}
-
-export function registerSessionObservationTools(registry: XdtHelperToolRegistry, deps: SessionControlDeps): void {
-  if (deps.listSessionDevices) registry.register({
-    name: 'list_session_devices', category: 'control',
-    description: '列出本机和设备互联目录中的 Cindy 设备，供任务控制选择 deviceId。在线或已连接不等于已经获得任务权限；执行时目标端仍会复核。',
-    inputShape: {}, handler: async () => okPayload({ devices: await deps.listSessionDevices!(deps.getSessionContext()) }),
-  });
-  if (deps.controlSession) registry.register({
-    name: 'control_session', category: 'control',
-    description: '通过目标 Cindy 设备统一管理任务；操作和参数见 request schema。先读取 capabilities，设备在线不代表获得所有操作权限。listRecords/listActive/createRecord 不填 target，其余填写 {deviceId,sessionId}。createRecord 只建记录，ensureRuntime 才恢复运行实例；send 的受理或入队不表示完成。创建和发送重试复用原 businessKey，超时须对账。文件和目录必须属于目标设备及其 SSH 命名空间。权限批准等用户操作仍走已有宿主入口。跨设备伙伴只允许主人亲自发起的当前轮次，不自动授予其它项目权限。',
-    inputShape: { request: sessionControlRequestSchema },
-    handler: async ({ request }) => {
-      const result = await deps.controlSession!(request, deps.getSessionContext()) as import('@cindy/maker-shared/session-controller').SessionControllerResult<unknown>;
-      return result.ok ? okPayload({ result }) : errorPayload(result.errorCode, result.message, { requestId: result.requestId, idempotencyKey: result.idempotencyKey });
-    },
-  });
-  if (deps.listActiveSessions) registry.register({
-    name: 'list_active_sessions', category: 'control',
-    description: '列出已授权且当前仍有运行实例的任务。currentTurnActive 区分正在执行与已加载空闲；历史记录的 running 标记不会进入本列表。',
-    inputShape: {},
-    handler: async () => {
-      const result = await deps.listActiveSessions!();
-      return result.ok ? okPayload({ sessions: result.sessions }) : mapControlFailure(result);
-    },
-  });
-  if (deps.sessionCapabilities) registry.register({
-    name: 'get_session_capabilities', category: 'control',
-    description: '读取目标任务当前允许的控制操作。能力同时受调用权限、设备版本和实际运行引擎限制。',
-    inputShape: { session_id: z.string().min(1).optional().describe('目标任务，省略时读取当前任务。') },
-    handler: async ({ session_id }) => {
-      const id = session_id ?? requireCallerSession(deps);
-      if (!id) return errorPayload('NO_SESSION_CONTEXT', '请指定目标任务。');
-      const result = await deps.sessionCapabilities!(id);
-      return result.ok ? okPayload({ capabilities: result.capabilities }) : mapControlFailure(result);
-    },
-  });
-  if (deps.inspectSession) registry.register({
-    name: 'inspect_session', category: 'control',
-    description: '读取任务的持久状态、当前运行实例、轮次、队列、交互和模型选择。freshness=stale 表示读取期间状态发生变化，不能据此确认当前仍在运行。只读，不启动任务。',
-    inputShape: { session_id: z.string().min(1).optional().describe('目标任务，省略时读取当前任务。') },
-    handler: async ({ session_id }) => {
-      const id = session_id ?? requireCallerSession(deps);
-      if (!id) return errorPayload('NO_SESSION_CONTEXT', '请指定目标任务。');
-      const result = await deps.inspectSession!(id);
-      return result.ok ? okPayload({ ...result.snapshot }) : mapControlFailure(result);
-    },
-  });
-  if (deps.diagnoseSession) registry.register({
-    name: 'diagnose_session', category: 'control',
-    description: '只读检查任务是否等待用户、队列暂停、模型切换待落地、恢复中或宿主不可达，并读取现有 watchdog。availableControls 仅是当前可用操作，不会自动继续、停止或重启任务。',
-    inputShape: { session_id: z.string().min(1).optional().describe('目标任务，省略时读取当前任务。') },
-    handler: async ({ session_id }) => {
-      const id = session_id ?? requireCallerSession(deps);
-      if (!id) return errorPayload('NO_SESSION_CONTEXT', '请指定目标任务。');
-      const result = await deps.diagnoseSession!(id);
-      return result.ok ? okPayload({ ...result.diagnosis }) : mapControlFailure(result);
-    },
-  });
 }
 
 function requireCallerSession(deps: SessionControlDeps): string | null {

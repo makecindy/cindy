@@ -56,8 +56,6 @@ export function parseAgentInputToolLoopDetails(value: unknown): AgentInputToolLo
 export type AgentInputFileCategory = 'image' | 'pdf' | 'text' | 'office' | 'file';
 
 export interface AgentInputSerializedFile {
-  /** Optional host receipt; restored queues recheck this exact resource version. */
-  sessionResource?: import('@cindy/maker-shared/session-controller').SessionResourceRef;
   id: string;
   name: string;
   path: string;
