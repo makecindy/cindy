@@ -666,6 +666,14 @@ describe("Pi provider-aware model routing", () => {
   });
 
   it("routes host subscriptions through PI native providers and wire model ids", async () => {
+    captured.requestHandler = async (command) => ({ success: true, data:
+      command.type === 'get_available_models' ? { models: [
+        { provider: 'anthropic', id: 'claude-opus-5', contextWindow: 200_000 },
+        { provider: 'xai', id: 'grok-4.5', contextWindow: 200_000 },
+        { provider: 'xai', id: 'grok-4.6', contextWindow: 200_000 },
+      ] } : command.type === 'get_state'
+        ? { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } : {},
+    });
     const authProviderIds: Array<string | null | undefined> = [];
     let resolveProxyProviderId: (() => string | null) | undefined;
     const proxyRegistrations: Array<{
@@ -2261,7 +2269,9 @@ describe("Pi provider-aware model routing", () => {
               },
             },
           }
-        : { success: true, data: {} };
+        : command.type === 'get_available_models'
+          ? { success: true, data: { models: [{ provider: 'xai', id: 'grok-4.5', contextWindow: 500_000 }] } }
+          : { success: true, data: {} };
     const agent = new PiAgent({
       auth: {
         getState: async () => ({
@@ -3798,6 +3808,55 @@ describe("Pi provider-aware model routing", () => {
     spawnPiSubagentRunner: testSubagentRunnerHost,
     resolvePiGatewayModelApi: () => "anthropic-messages",
     resolvePiNativeProviders,
+  });
+
+  it.each([
+    { label: 'different live window', window: 400_000, action: 'rebuild' },
+    { label: 'matching live window', window: 128_000, action: 'hot' },
+    { label: 'missing live window', window: undefined, action: 'rebuild' },
+    { label: 'failed live catalog read', window: null, action: 'rebuild' },
+  ] as const)('checks an inherited model before switching: $label', async ({ window, action }) => {
+    const deps = byomDeps(async () => ({ providers: [
+      { id: 'native-a', name: 'Current', baseUrl: 'http://a.test', api: 'openai-completions',
+        models: [{ id: 'local-model', contextWindow: 200_000 }] },
+      { id: 'pi-native', sourceProviderId: 'native-account', name: 'Inherited', baseUrl: 'http://b.test',
+        inheritModels: true, modelIdAliases: { 'catalog-alias': 'catalog-model' },
+        models: [{ id: 'catalog-model', wireId: 'wire-model' }] },
+    ], env: {} }));
+    deps.runtimeConfig = { ...deps.runtimeConfig, piAutoCompactThresholdPct: 75 };
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_available_models') return window === null
+        ? { success: false, error: 'catalog unavailable' }
+        : { success: true, data: { models: [
+          { provider: 'unrelated', id: 'wire-model', contextWindow: 128_000 },
+          { provider: 'pi-native', id: 'wire-model', contextWindow: window },
+        ] } };
+      return { success: true, data: command.type === 'get_state'
+        ? { sessionFile: '/mock/s.jsonl', model: { contextWindow: captured.runtimeProvider === 'pi-native' ? window : 200_000 } }
+        : {} };
+    };
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'inherited-window', workingDir: cwd, model: 'local-model', providerId: 'native-a',
+    });
+    const config = captured.env.PI_CODING_AGENT_DIR!;
+    const before = ['models.json', 'settings.json'].map(file => readFileSync(path.join(config, file), 'utf8'));
+    captured.requests.length = 0;
+    const preview = await handle.previewModelSwitch?.('catalog-alias', { providerId: 'native-account' });
+    expect(preview).toMatchObject({ action, targetContextWindow: window ?? null, windowVerified: false });
+    expect(captured.requests).toContainEqual({ type: 'get_available_models' });
+    if (action === 'rebuild') {
+      await expect(handle.setModel!('catalog-alias', { providerId: 'native-account' })).rejects.toThrow(/before selecting/);
+      expect(captured.requests.some(request => request.type === 'set_model')).toBe(false);
+      expect(['models.json', 'settings.json'].map(file => readFileSync(path.join(config, file), 'utf8'))).toEqual(before);
+      expect(captured.closes).toBe(0);
+      expect(handle.model).toBe('local-model');
+    } else {
+      await handle.setModel!('catalog-alias', { providerId: 'native-account' });
+      expect(captured.runtimeProvider).toBe('pi-native');
+      expect(captured.runtimeModel).toBe('wire-model');
+      expect(captured.closes).toBe(0);
+    }
+    await handle.close();
   });
 
   it('refreshes a managed adapter when the same model ID gets a new descriptor', async () => {

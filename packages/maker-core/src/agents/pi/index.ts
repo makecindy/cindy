@@ -2100,8 +2100,8 @@ export class PiAgent extends BaseAgent {
    *     每会话随机目录(run-tmp/<hex>),只读会话文件会让「重启后新会话」拿不到
    *     用户配置;稳定根文件才是跨启动生效的逃生门(对齐原生 pi 的
    *     ~/.pi/agent/settings.json 位置语义,Cindy 自身从不写它)。
-   * 远端 fileOps 无 readFile,保持原覆写行为(远端 configHome 全托管,且本机
-   * shell 路径对远端主机无意义)。
+   * 远端 configHome 全托管,不透传本机 shell 配置；未提供新预算表时通过
+   * fileOps.readFile 保留远端既有 modelOverrides,读取/解析失败交给调用方处理。
    */
   private async buildSettingsJsonPreservingUserKeys(
     settingsJsonPath: string,
@@ -6243,6 +6243,7 @@ export class PiAgent extends BaseAgent {
         : requestedProviderId;
       const gateway = !sourceId || sourceId === 'xd' || sourceId === PI_PROVIDER_ID;
       let nativeModel: PiNativeModelSpec | undefined;
+      let inheritsNativeWindow = false;
       if (!gateway) {
         let native = latestProviders.find((entry) => (entry.sourceProviderId ?? entry.id) === sourceId);
         if (sameRoute) {
@@ -6277,6 +6278,8 @@ export class PiAgent extends BaseAgent {
           return { action: 'unavailable', targetContextWindow: null, windowVerified: false,
             reason: `Pi provider '${sourceId}' does not offer model '${model}'` };
         }
+        inheritsNativeWindow = native.inheritModels === true && nativeModel.api === undefined
+          && nativeModel.catalogAddition !== true && nativeModel.contextWindow === undefined;
       }
       const gatewaySpec = gateway
         ? this.deps.resolvePiGatewayModelSpec?.(sourceId, model, { remote })
@@ -6288,10 +6291,32 @@ export class PiAgent extends BaseAgent {
       const knownDescriptor = this.deps.resolvePiRuntimeModelDescriptor
         ? this.deps.resolvePiRuntimeModelDescriptor(sourceId, model)
         : this.capabilities.availableModels.find((candidate) => candidate.id === model);
-      const configuredWindow = nativeModel ? nativeModel.contextWindow ?? 128_000
+      const workingWindow = this.deps.resolveModelContextLimit?.(sourceId, model) ?? 0;
+      let configuredWindow = nativeModel ? nativeModel.contextWindow ?? 128_000
         : knownDescriptor?.contextWindow ?? (sameRoute && gateway ? retainedLiveGatewayModel?.contextWindow : undefined);
-      const targetContextWindow = configuredWindow ? Math.max(configuredWindow,
-        this.deps.resolveModelContextLimit?.(sourceId, model) ?? 0) : null;
+      if (inheritsNativeWindow) {
+        // 128K is only a default for models Cindy materializes. An inherited
+        // entry uses either our explicit model override or Pi's live catalog.
+        configuredWindow = workingWindow > 0 ? workingWindow : undefined;
+        if (!configuredWindow) {
+          try {
+            const available = await proc.request({ type: 'get_available_models' });
+            const entries = (available.data as { models?: Array<{ provider?: string; id?: string; contextWindow?: number }> } | undefined)?.models;
+            const provider = latestProviders.find((entry) => (entry.sourceProviderId ?? entry.id) === sourceId)?.id;
+            const wireId = nativeModel?.wireId ?? nativeModel?.id;
+            const actualWindow = available.success
+              ? entries?.find((entry) => entry.provider === provider && entry.id === wireId)?.contextWindow : undefined;
+            if (typeof actualWindow === 'number' && Number.isSafeInteger(actualWindow) && actualWindow > 0) {
+              configuredWindow = actualWindow;
+            }
+          } catch { /* No mutation: leave window resolution to the existing recovery path. */ }
+          if (!configuredWindow) {
+            return { action: 'rebuild', targetContextWindow: null, windowVerified: false,
+              reason: 'Pi must resolve the inherited model window before selecting this model' };
+          }
+        }
+      }
+      const targetContextWindow = configuredWindow ? Math.max(configuredWindow, workingWindow) : null;
       // A refresh may change any provider block, so all credentials it references
       // must be synchronised with the running Pi process before it is published.
       // The private refresh bridge owns this update; this preview never handles a key.
