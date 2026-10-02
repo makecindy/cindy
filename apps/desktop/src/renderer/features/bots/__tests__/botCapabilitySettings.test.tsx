@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BotProfile } from '../botStore';
 
@@ -64,4 +64,30 @@ describe('controlled capability page lifetime', () => {
     view.rerender(<BotCapabilitySettings {...props} expanded />);
     await waitFor(() => expect(h.list).toHaveBeenCalledTimes(2));
   });
+});
+
+
+it('shows inherited tools as selected and preserves the others when one is explicitly removed', async () => {
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+    localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: { listSkills: async () => [] } },
+    maker: { onMcpChanged: () => h.offMcp, listCustomMcpServers: h.list,
+      listAgentSkills: async () => ({ success: true, skills: [] }),
+      plugins: { list: async () => [
+        { id: 'docs', name: 'Documents', available: true },
+        { id: 'collab', name: 'Orca', available: true },
+      ] },
+    },
+  } });
+  const onChange = vi.fn();
+  const view = render(<BotCapabilitySettings expanded
+    bot={{ id: 'bot-1', canonicalSessionId: 's1' } as BotProfile}
+    capabilities={{ modelChain: [], modelChainOverride: null, mcpServers: [], toolsets: [],
+      toolsetMode: 'inherit', mcpMode: 'inherit' } as unknown as BotProfile['capabilities']}
+    skills={[]} onChange={onChange} />);
+  await waitFor(() => expect(view.getByText('Documents')).toBeTruthy());
+  const checkbox = (name: string) => view.getByText(name).closest('label')!.querySelector('input')!;
+  expect(checkbox('Documents').checked).toBe(true);
+  expect(checkbox('Orca').checked).toBe(true);
+  fireEvent.click(checkbox('Documents'));
+  expect(onChange).toHaveBeenCalledWith('toolset', ['collab']);
 });

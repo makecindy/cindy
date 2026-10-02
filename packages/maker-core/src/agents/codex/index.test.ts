@@ -6665,12 +6665,12 @@ describe('CodexAgent.startSession developerInstructions', () => {
       config?: Record<string, unknown>;
     };
     expect(params.config).toMatchObject({
-      'features.multi_agent': false,
-      'features.multi_agent_v2': false,
-      'agents.enabled': false,
       'memories.generate_memories': false,
       'memories.use_memories': false,
     });
+    expect(params.config?.['features.multi_agent']).not.toBe(false);
+    expect(params.config?.['features.multi_agent_v2']).not.toBe(false);
+    expect(params.config?.['agents.enabled']).not.toBe(false);
     expect(params.developerInstructions).toContain('BOT SOUL');
     expect(params.developerInstructions).toContain('BOT HOME CONTEXT');
     expect(params.developerInstructions).not.toContain('GLOBAL CINDY HOST PROMPT');

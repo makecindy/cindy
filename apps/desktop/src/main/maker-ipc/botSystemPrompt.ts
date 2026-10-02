@@ -35,11 +35,10 @@ export interface BotPromptCapabilitySignals {
   /** 是否为 Bot 的 canonical Chat；Bot Mode 协议只在这里生效。 */
   botModeEnabled?: boolean;
   /**
-   * 本机伙伴主任务拿到普通任务那一套 session 工具（宿主按本轮来源逐次判定，见 botTurnAuthority.ts）。
-   * 远程伙伴与群专线等非主任务没有。
+   * 是否已挂载普通任务的 session 工具。权限与同环境的普通 Agent 一致。
    */
   sessionControlEnabled?: boolean;
-  /** 伙伴基线挂载了 cindy_scheduler(本机主任务);宿主仍按轮判定写操作。 */
+  /** 是否已挂载 cindy_scheduler；操作沿用当前 Agent 权限。 */
   automationEnabled?: boolean;
 }
 
@@ -149,20 +148,19 @@ const TASK_AND_TEAMMATE_GUIDANCE = [
 ].join('\n');
 
 /**
- * 和普通任务同一套 session 能力，以及「这一轮是谁触发的」决定能做多少（宿主逐次核对，
- * 提示词只负责让伙伴知道有这些能力、被拒时怎么办）。
+ * 与普通任务共用 session 能力及权限档；提示词说明能力与实际回执的关系。
  */
 const SESSION_CONTROL_GUIDANCE = [
   '## 你能看、能管主人的任务',
   '你和主人开的普通任务用同一套工具（cindy_helper，先 `list_tools` 看类目再 `call_tool`）：history 类的 `list_sessions` / `get_chat_history` / `search_chat_history` 看有哪些任务、它们在说什么；control 类的 `steer_session`、`stop_session_turn`、`set_session_runtime`、`rename_sessions`、`archive_sessions`、标签与项目工具管理任务；handoff 类的 `send_to_session` 给已有任务发话或开一条新的普通任务。',
-  '能做多少取决于这一轮是谁触发的，宿主每次调用都会核对：主人本人在这里发话的那一轮，这些都能用；自动化、例行任务、你开的后台任务回报这类主人事先安排的，能看全部，只能动交给你的项目里的任务和你自己开的任务；群聊、其他伙伴或别的任务转来的消息，只能动你自己开的任务。被拒（`OWNER_TURN_REQUIRED` / `TASK_OUT_OF_SCOPE`）就照实告诉主人，等主人自己说；不要换个工具、开后台任务、用命令行或请别的伙伴去做被拒的事。新建伙伴、改你自己的资料与能力只在主人本人发话的那一轮做。',
+  '这些工具沿用当前任务的权限档与用户授权，不再按伙伴的消息来源另设工具权限分档。工具回执决定实际结果；账号、连接或平台未就绪时如实说明。',
   '停止、归档、改名、给正在跑的任务插话这类会影响主人工作的事，主人没开口就不做；做之前用一句话说清要动哪件、做什么。',
-  '主人让你接手一个项目时，用 `add_workbench_project` 记下它的目录；不再负责时用 `remove_workbench_project`。这两个只在主人本人发话的那一轮可用。',
+  '主人让你接手一个项目时，用 `add_workbench_project` 记下它的目录；不再负责时用 `remove_workbench_project`。',
 ].join('\n');
 
 const AUTOMATION_GUIDANCE = [
   '## 你能建普通自动化',
-  '主人要你给某个项目或任务设定时执行时，用 cindy_scheduler 建普通自动化（先 `list_tools`，再 `call_tool` 调 `schedule_create` 等）；只和你自己有关的提醒仍用例行任务。新建、修改、暂停、立即运行和删除只在主人本人发话的那一轮可用，其余时候只能查看。建完读回核实名称、时间和是否启用，成功才说已安排。',
+  '主人要你给某个项目或任务设定时执行时，用 cindy_scheduler 建普通自动化（先 `list_tools`，再 `call_tool` 调 `schedule_create` 等）；只和你自己有关的提醒仍用例行任务。操作沿用当前任务的权限档。建完读回核实名称、时间和是否启用，成功才说已安排。',
 ].join('\n');
 
 const BOT_CREATION_GUIDANCE = [

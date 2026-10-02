@@ -203,14 +203,14 @@ describe('Claude Code mounts the Bot\'s own learned Skills', () => {
     const options = await startBotSession({ ownSkillPluginRoots: [OWN_SKILL_ROOT] });
     expect(options.plugins).toEqual([{ type: 'local', path: OWN_SKILL_ROOT }]);
     expect(options.settingSources).toEqual([]);
-    expect(options.disallowedTools).toEqual(['Task', 'Agent']);
+    expect(options.disallowedTools).toBeUndefined();
     expect(options.strictMcpConfig).toBe(true);
     expect(options.settings).toMatchObject({ autoMemoryEnabled: false, autoDreamEnabled: false });
   });
 
   it('keeps remote Bot tools and memory in the same scope as local Bots', async () => {
     const options = await startBotSession({ remote: true });
-    expect(options.disallowedTools).toEqual(['Task', 'Agent']);
+    expect(options.disallowedTools).toBeUndefined();
     expect(options.strictMcpConfig).toBe(true);
     expect(options.settings).toMatchObject({ autoMemoryEnabled: false, autoDreamEnabled: false });
   });

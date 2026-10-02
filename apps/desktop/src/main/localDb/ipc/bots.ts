@@ -44,6 +44,7 @@ import {
   writeBotModelChainSettings,
 } from '../../maker-host/bot-model-chain-settings-store.js';
 import { extractMessagePreview, sessionCreateToRow, sessionToCamel } from '../mapper.js';
+import { normalizeBotToolCapabilities } from '../../../shared/botCapabilitySelection.js';
 import {
   botProfileContentChanged,
   botProfileModelSelectionChanged,
@@ -886,11 +887,11 @@ async function readProfile(
       skillsExcluded: Array.isArray(config.skillsExcluded)
         ? config.skillsExcluded.filter((item): item is string => typeof item === 'string')
         : [],
-      toolsetMode: 'allowlist',
+      toolsetMode: normalizeBotToolCapabilities(config).toolsetMode,
       toolsets: Array.isArray(config.toolsets)
         ? config.toolsets.filter((item): item is string => typeof item === 'string')
         : [],
-      mcpMode: 'allowlist',
+      mcpMode: normalizeBotToolCapabilities(config).mcpMode,
       mcpServers: Array.isArray(config.mcpServers)
         ? config.mcpServers.filter((item): item is string => typeof item === 'string')
         : [],
@@ -1184,9 +1185,10 @@ async function defaultNewBotCapabilities(): Promise<Record<string, unknown>> {
     modelChainOverride: null,
     skillMode: 'allowlist',
     skillsExcluded: [],
-    toolsetMode: 'allowlist',
+    toolCapabilityVersion: 1,
+    toolsetMode: 'inherit',
     toolsets: [],
-    mcpMode: 'allowlist',
+    mcpMode: 'inherit',
     mcpServers: [],
     memory: true,
     permissions: 'auto',
@@ -1336,10 +1338,13 @@ export async function createBotProfile(raw: unknown) {
   }
   const persistedCapabilities = normalizeBotModelCapabilitiesOrThrow({
     permissions: 'auto',
+    toolsetMode: 'inherit',
+    mcpMode: 'inherit',
     ...(hasRequestedCapabilities ? {} : await defaultNewBotCapabilities()),
     ...requestedCapabilities,
+    toolCapabilityVersion: 1,
     skills,
-    ...(draftEntry ? { skillMode: 'allowlist', mcpMode: 'allowlist', mcpServers: draftEntry.draft.mcpRefs, toolsetMode: 'allowlist', toolsets: draftEntry.draft.toolsetRefs } : {}),
+    ...(draftEntry ? { skillMode: 'allowlist', mcpMode: 'inherit', mcpServers: draftEntry.draft.mcpRefs, toolsetMode: 'inherit', toolsets: draftEntry.draft.toolsetRefs } : {}),
     userContextSource,
     ...(gender ? { gender } : {}),
   });

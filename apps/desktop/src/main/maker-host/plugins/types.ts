@@ -67,16 +67,8 @@ export const ESSENTIAL_PLUGIN_IDS: ReadonlySet<string> = new Set([
   'lsp',
 ]);
 
-/**
- * Built-ins every Bot needs; ordinary Cindy Sessions keep all essentials.
- * `scheduler`: a Bot main task can create ordinary automations on its owner's
- * own turn (calls are judged per turn, maker-ipc/botTurnAuthority.ts).
- */
-export const BOT_BASELINE_PLUGIN_IDS: ReadonlySet<string> = new Set([
-  'memory',
-  'xdt_helper',
-  'scheduler',
-]);
+/** Companions share the ordinary task's infrastructure; no separate permission tier. */
+export const BOT_BASELINE_PLUGIN_IDS = ESSENTIAL_PLUGIN_IDS;
 
 export function resolveBotAllowedBuiltinPluginIds(
   catalog: readonly { id: string; available?: boolean }[],

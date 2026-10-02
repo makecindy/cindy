@@ -24,6 +24,7 @@ import {
 import { clearBotAttention, noteBotAttention } from './botAttentionService.js';
 import { createLogger } from '../logger.js';
 import { PROVIDER_NAME_TO_PLUGIN_ID } from '../maker-host/plugins/builtin-plugins.js';
+import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
 import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
@@ -427,9 +428,7 @@ export function resolveBotMcpReferences(input: {
       .map((item) => item.name),
   );
   if (input.mode === 'inherit') {
-    // "Follow Cindy" means available for progressive discovery, not eagerly
-    // mounting every custom server into every Bot context.
-    return { resolved: [], unavailable: [] };
+    return { resolved: input.catalog.filter((item) => item.available !== false).map((item) => item.name), unavailable: [] };
   }
   return {
     resolved: input.configured.filter((name) => available.has(name)),
@@ -446,19 +445,17 @@ export function resolveBotToolsetReferences(input: {
   unavailable: string[];
   disabled: string[];
 } {
-  // Host essentials (for example scheduler) are not necessarily Bot baseline
-  // tools. An explicit per-Bot selection must remain mountable.
-  const configurable = input.catalog.filter((item) => !item.essential || input.configured.includes(item.id));
+  // Essential infrastructure is shared with ordinary tasks; optional selections
+  // only control the remaining entries.
+  const configurable = input.catalog;
   const available = new Set(
     configurable.filter((item) => item.available !== false).map((item) => item.id),
   );
   if (input.mode === 'inherit') {
     return {
-      // Essential Bot runtime tools are mounted separately. Optional Cindy
-      // toolsets stay discoverable but do not flood the Bot by default.
-      resolved: [],
+      resolved: [...available],
       unavailable: [],
-      disabled: configurable.map((item) => item.id),
+      disabled: [],
     };
   }
   const resolved = input.configured.filter((id) => available.has(id));
@@ -466,7 +463,7 @@ export function resolveBotToolsetReferences(input: {
   return {
     resolved,
     unavailable: input.configured.filter((id) => !available.has(id)),
-    disabled: configurable.filter((item) => !resolvedSet.has(item.id)).map((item) => item.id),
+    disabled: configurable.filter((item) => !item.essential && !resolvedSet.has(item.id)).map((item) => item.id),
   };
 }
 
@@ -514,7 +511,7 @@ export async function hydrateBotProfileRuntime(
     )
     .limit(1);
   if (!version) return null;
-  const config = parseObject(version.capabilitiesJson);
+  const config = normalizeBotToolCapabilities(parseObject(version.capabilitiesJson));
   const configuredSkills = Array.isArray(config.skills)
     ? config.skills.filter((item): item is string => typeof item === 'string')
     : [];
@@ -731,9 +728,7 @@ export async function hydrateBotProfileRuntime(
       resolvedMcpServers = resolvedMcp.resolved;
       unavailableMcpServers = resolvedMcp.unavailable;
     } catch {
-      mcpCatalog = [];
-      resolvedMcpServers = [];
-      unavailableMcpServers = mcpMode === 'allowlist' ? configuredMcpServers : [];
+      throw new Error('无法读取伙伴的 MCP 能力目录，请重试；不会以空能力列表启动。');
     }
   } else if (mcpMode === 'allowlist') {
     unavailableMcpServers = configuredMcpServers;
@@ -763,10 +758,7 @@ export async function hydrateBotProfileRuntime(
       unavailableToolsets = resolvedToolsetsResult.unavailable;
       disabledToolsets = resolvedToolsetsResult.disabled;
     } catch {
-      toolsetCatalog = [];
-      resolvedToolsets = [];
-      unavailableToolsets = toolsetMode === 'allowlist' ? configuredToolsets : [];
-      disabledToolsets = [];
+      throw new Error('无法读取伙伴的工具能力目录，请重试；不会以空能力列表启动。');
     }
   } else if (toolsetMode === 'allowlist') {
     unavailableToolsets = configuredToolsets;
@@ -784,7 +776,7 @@ export async function hydrateBotProfileRuntime(
       .map((item) => item.id),
   ]);
   for (const [serverName, toolsetId] of Object.entries(PROVIDER_NAME_TO_PLUGIN_ID)) {
-    if (toolsetId === 'collab' || !mountedToolsets.has(toolsetId) || runtimeConfiguredMcpServers.includes(serverName)) continue;
+    if (!mountedToolsets.has(toolsetId) || runtimeConfiguredMcpServers.includes(serverName)) continue;
     if (mcpCatalog.some((item) => item.name === serverName && item.available !== false)) {
       runtimeConfiguredMcpServers.push(serverName);
     }
@@ -816,11 +808,10 @@ export async function hydrateBotProfileRuntime(
     // index must not hide the instructions for learning the first reusable method.
     ownSkillsEnabled: row.role === 'canonical' && helperAvailable && !opts.remoteHostId,
     botModeEnabled: row.role === 'canonical',
-    // Same condition as the `bot-main` helper surface (mcp-integrations/helperSurface.ts).
-    sessionControlEnabled: row.role === 'canonical' && helperAvailable && !opts.remoteHostId,
+    // Match the ordinary helper surface on this engine and transport.
+    sessionControlEnabled: helperAvailable && (!opts.remoteHostId || opts.agentKind === 'pi'),
     // scheduler 是伙伴基线工具(maker-host/plugins/types.ts),与挂载 allowlist 同一份目录判定。
-    automationEnabled: row.role === 'canonical' && !opts.remoteHostId
-      && toolsetCatalog.some((item) => item.id === 'scheduler' && item.available !== false),
+    automationEnabled: toolsetCatalog.some((item) => item.id === 'scheduler' && item.available !== false),
   };
   /*
     伙伴的家。读失败一律当"没有" —— 一次读不动不该让整个伙伴起不来,只是这一轮

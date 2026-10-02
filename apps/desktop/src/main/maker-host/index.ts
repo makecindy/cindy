@@ -1,3 +1,4 @@
+import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY, type AgentCapabilityQuery } from './agentCapabilityCatalog.js';
 import { listCindyManagedSkills, prepareCindyCodexSkills } from './managed-skills.js';
 import { createCompanionImportProvider } from '../bot-import/importProvider.js';
 import { createCompanionConnectionsProvider } from '../bot-import/connectionProvider.js';
@@ -39,6 +40,7 @@ import path from 'node:path';
 
 import {
   Maker,
+  isBotMcpServerAllowed,
   ClaudeCodeAgent,
   CodexAgent,
   configureDefaultImageResizer,
@@ -285,7 +287,7 @@ import {
   setCodexEnvironmentShutdownHook,
   unregisterCodexMcpThreadContext,
 } from '../mcp-integrations/codexEnvironment.js';
-import type { CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.js';
+import { REMOTE_ALLOWED_SERVER_NAMES, type CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.js';
 import { setRemoteMcpBridgeTokenRotatedHook } from '../mcp-integrations/remoteMcpBridgeToken.js';
 import type { BotToolsetContext } from '../../shared/botRemoteCapabilities.js';
 import { isBotToolsetProviderAvailable } from './botToolsetAvailability.js';
@@ -780,7 +782,7 @@ function getLspPool(): LspServerPool {
 
 /** Same Desktop provider instances used by the runtimes, evaluated for this Bot. */
 export function isBotToolsetAvailable(input: BotToolsetContext & { toolsetId: string }): boolean {
-  return isBotToolsetProviderAvailable(_mcpProviders.codex ?? [], input);
+  return isBotToolsetProviderAvailable(_mcpProviders[input.agentKind] ?? [], input);
 }
 
 /** Shared by Bot tools, settings and hydration; never infer registration from raw DB rows. */
@@ -932,6 +934,36 @@ export function getMaker(): Maker {
     };
 
     const makerMemoryProviderDeps = {
+      runtimeCapabilities: async (context: import('@cindy/mcps').LiziMcpSessionContext, query: AgentCapabilityQuery) => {
+        const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;
+        if (!session || (context.sessionInstanceId && session.instanceId !== context.sessionInstanceId))
+          return { ok: false, errorCode: 'CALLER_UNAVAILABLE' };
+        const agentKind = context.agentKind;
+        if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi')
+          return { ok: false, errorCode: 'UNKNOWN_AGENT' };
+        const catalog = await listBotRuntimeMcpServers({ agentKind, remoteHostId: context.remoteHostId });
+        const providers = (_mcpProviders[agentKind] ?? []).map((provider) => ({
+          ...provider,
+          capability: provider.capability ?? {
+            title: provider.name, description: '',
+            source: catalog.find((entry) => entry.name === provider.name)?.source ?? 'custom',
+          },
+        }));
+        const result = await readAgentCapabilityCatalog(providers,
+          { ...context, agentKind, getSessionContext: undefined }, query,
+          (provider) => {
+            const entry = catalog.find((item) => item.name === provider.name);
+            const remoteBridgeMissing = context.remoteHostId && agentKind !== 'pi'
+              && entry?.source === 'builtin' && !REMOTE_ALLOWED_SERVER_NAMES.has(provider.name);
+            return entry?.available === false || remoteBridgeMissing
+              ? 'transport-unavailable-for-current-runtime' : null;
+          });
+        if (_maker?.getSession(session.id) !== session) return { ok: false, errorCode: 'CALLER_UNAVAILABLE' };
+        return { ...result, permission: session.stablePermissionModeState,
+          hostCapabilities: Object.fromEntries(Object.entries(session.capabilities)
+            .filter(([, value]) => value && typeof value === 'object' && 'supported' in value)),
+          hostCapabilitiesNote: '宿主支持的交互能力，不等于有同名 Agent 工具。Cindy 应用安装更新和重启须通过内置更新界面；check_app_update 仅检查更新。' };
+      },
       botCapabilities: createDesktopBotCapabilityService(),
       createMediaDownloadContext: (sessionId: string, sessionInstanceId: string) => {
         const session = _maker?.getSession(sessionId);
@@ -2714,6 +2746,9 @@ export function getMaker(): Maker {
             [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: disabledPluginIds,
             ...(botRuntimeSnapshot
               ? {
+                  [RUNTIME_MCP_NAMES_KEY]: (_mcpProviders[createOpts.agentKind] ?? [])
+                    .filter((provider) => isBotMcpServerAllowed(createOpts.botRuntimeProfile?.mcpPolicy, provider.name))
+                    .map((provider) => provider.name),
                   [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [
                     ...resolveBotAllowedBuiltinPluginIds(
                       createOpts.botRuntimeProfile?.toolsetPolicy.catalog ?? [],

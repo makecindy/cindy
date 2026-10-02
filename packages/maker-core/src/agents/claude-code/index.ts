@@ -3541,7 +3541,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // options (cc-mgr.ts:106), 所以 extraOptions 是任意 SDK 字段的统一透传出口。
           extraOptions: {
             includePartialMessages: true,
-            ...(opts.botRuntimeProfile ? { disallowedTools: ['Task', 'Agent'], strictMcpConfig: true } : {}),
+            ...(opts.botRuntimeProfile ? { strictMcpConfig: true } : {}),
             ...thinkingOpts,
             ...(currentSdkEffort ? { effort: currentSdkEffort } : {}),
             // settings 对象跟本地分支同源 — 不透传则远端 SDK 拿不到
@@ -4127,8 +4127,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           // permissionMode=auto 时再调用远程安全分类器。动态聚合入口不在列表中。
           ...(claudeAllowedTools ? { allowedTools: [...claudeAllowedTools] } : {}),
           canUseTool,
-          // Bot work is delegated through tracked Cindy Session tasks.
-          ...(opts.botRuntimeProfile ? { disallowedTools: ['Task', 'Agent'], strictMcpConfig: true } : {}),
+          // Bot MCP selection is explicit; native delegation remains available.
+          ...(opts.botRuntimeProfile ? { strictMcpConfig: true } : {}),
           settingSources: reviewMode || !!opts.botRuntimeProfile
             ? []
             : ['user', 'project', 'local'],

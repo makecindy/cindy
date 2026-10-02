@@ -228,16 +228,13 @@ export async function getPiExtraSpawnConfig(
       // It has no plugin id on purpose — empty ghost_list, not a missing server.
       // Frozen Bot allowlists therefore must not treat it as an unknown host provider.
       if (server.name === 'cindy') return true;
-      // A frozen Bot runtime may use explicitly configured custom MCPs, but it
-      // must not inherit miscellaneous host providers merely because the shared
-      // Pi bridge knows about them. Unknown providers absent from the Bot's
-      // custom catalog are therefore hidden from discovery and execution.
+      // Use the exact frozen capability snapshot for every provider, including
+      // shared host providers without an optional toolset id.
       if (allowedPluginIds) {
         const policy = sessionCtx?.botMcpPolicy;
         const entry = policy?.catalog.find((item) => item.name === server.name);
-        if (!entry || entry.source !== 'custom' || entry.available === false) return false;
-        // `inherit` is a legacy storage value for Bots, not ambient access.
-        // External MCPs are always exact grants at the execution boundary.
+        if (!entry || entry.available === false) return false;
+        // Inheritance was resolved at session preparation, keeping this turn stable.
         return policy?.configured.includes(server.name) === true;
       }
       return true;

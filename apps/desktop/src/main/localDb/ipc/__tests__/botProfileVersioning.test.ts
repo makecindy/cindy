@@ -41,6 +41,7 @@ describe('Bot Profile versioning', () => {
     ).toEqual({
       model: 'new-model',
       memory: false,
+      toolCapabilityVersion: 1, toolsetMode: 'inherit', mcpMode: 'inherit',
       skills: ['new-skill', 'second-skill'],
     });
   });
@@ -128,5 +129,25 @@ describe('independent task model configuration', () => {
   });
   it.each([{ ...route, harness: 'unknown' }, { ...route, model: '' }, { ...route, fastMode: 'true' }])('rejects incomplete task routes: %j', taskModelOverride => {
     expect(() => normalizeBotProfileModelChain({ taskModelOverride })).toThrow();
+  });
+});
+
+
+describe('shared tools migration', () => {
+  it.each(['ask', 'auto', 'trusted'])('opens legacy mount lists without changing %s permissions', (permissions) => {
+    const previous = { permissions, toolsetMode: 'allowlist', toolsets: [], mcpMode: 'allowlist', mcpServers: ['imported'], memory: false };
+    const next = mergeBotProfileCapabilities({ previous, hasSkills: false });
+    expect(next).toMatchObject({ toolCapabilityVersion: 1, toolsetMode: 'inherit', mcpMode: 'inherit', permissions, memory: false, mcpServers: ['imported'] });
+    expect(mergeBotProfileCapabilities({ previous: next, hasSkills: false })).toEqual(next);
+  });
+
+  it('persists an explicit selection after migration and preserves concurrent selections', () => {
+    const next = mergeBotProfileCapabilities({
+      previous: { toolCapabilityVersion: 1, toolsetMode: 'inherit', toolsets: [] },
+      capabilities: { toolsetMode: 'allowlist', toolsets: ['docs'] },
+      capabilityBaseline: { toolsets: [] }, hasSkills: false,
+    });
+    expect(mergeBotProfileCapabilities({ previous: next, hasSkills: false }))
+      .toMatchObject({ toolsetMode: 'allowlist', toolsets: ['docs'], mcpMode: 'inherit' });
   });
 });

@@ -18,6 +18,23 @@ function parsePayload(result: unknown): Record<string, unknown> {
 }
 
 describe("cindy_helper MCP server", () => {
+  it.each(['default', 'bot-main'] as const)('exposes runtime declarations through the same helper tool for %s', async (surface) => {
+    const runtimeCapabilities = vi.fn(async () => ({ ok: true, capabilities: [{ server: 'fixture' }] }));
+    const server = createXdtHelperMcpServer({ resolveSurface: async () => surface, runtimeCapabilities }, {
+      agentKind: 'pi', workingDir: '/repo', sessionId: 'current-task',
+    });
+    const client = new Client({ name: 'catalog-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const result = parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_capabilities', args: { scope: 'runtime', server: 'fixture', category: 'files' },
+      } }));
+      expect(result).toMatchObject({ ok: true, capabilities: [{ server: 'fixture' }] });
+      expect(runtimeCapabilities).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'current-task', agentKind: 'pi' }), { server: 'fixture', category: 'files' });
+    } finally { await client.close(); await server.close(); }
+  });
+
   it('offers update checks without installation only to a live local task', async () => {
     let context = {
       agentKind: 'codex' as const, workingDir: '/repo', sessionId: 'local-task',
@@ -117,7 +134,7 @@ describe("cindy_helper MCP server", () => {
     await Promise.all([server.connect(st), client.connect(ct)]);
     try {
       const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
-      expect(overview.categories).toEqual([{ name: 'auth', tool_count: 3 }]);
+      expect(overview.categories).toEqual([{ name: 'cindy', tool_count: 2 }, { name: 'auth', tool_count: 3 }]);
       const result = parsePayload(await client.callTool({
         name: 'call_tool', arguments: { name: 'start_grok_device_login', args: {} },
       }));
@@ -763,69 +780,22 @@ describe("cindy_helper MCP server", () => {
       const overview = parsePayload(
         await client.callTool({ name: "list_tools", arguments: {} }),
       );
-      expect(overview.categories).toEqual([
-        { name: "cindy", tool_count: 2 },
-        { name: "control", tool_count: 2 },
-        { name: "bots", tool_count: 1 },
-      ]);
-
-      // Project/session management is now part of the Bot surface.
-      const projectRegistration = parsePayload(
-        await client.callTool({
-          name: "call_tool",
-          arguments: { name: "create_project", args: { working_dir: "/repo" } },
-        }),
-      );
-      expect(projectRegistration).toMatchObject({ ok: true, working_dir: "/repo" });
-      expect(createProject).toHaveBeenCalled();
-
-      const controlTools = parsePayload(
-        await client.callTool({ name: "list_tools", arguments: { category: "control" } }),
-      );
-      const controlNames = (controlTools.tools as Array<{ name: string; description: string }>); 
-      expect(controlNames.map((tool) => tool.name)).toEqual(["create_project", "move_session"]);
-      expect(controlNames.find((tool) => tool.name === "create_project")?.description).toContain(
-        "start_session_task",
-      );
-      expect(controlNames.find((tool) => tool.name === "create_project")?.description).not.toContain(
-        "send_to_session",
-      );
-      expect(controlNames.find((tool) => tool.name === "move_session")?.description).not.toContain(
-        "list_sessions",
-      );
-      expect(controlNames.find((tool) => tool.name === "move_session")?.description).toContain(
-        "cannot look up another task by title",
-      );
-      for (const name of ["stop_session_turn", "list_session_queue"]) {
-        expect(
-          parsePayload(await client.callTool({ name: "call_tool", arguments: { name, args: {} } })),
-        ).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
-      }
-      expect(stopSessionTurn).not.toHaveBeenCalled();
-      expect(listSessionQueue).not.toHaveBeenCalled();
-
-      const forbiddenCategory = parsePayload(
-        await client.callTool({ name: "list_tools", arguments: { category: "handoff" } }),
-      );
-      expect(forbiddenCategory).toMatchObject({
-        ok: false,
-        errorCode: "CAPABILITY_NOT_AVAILABLE",
-      });
-
-      const forbiddenCall = parsePayload(
-        await client.callTool({
-          name: "call_tool",
-          arguments: {
-            name: "send_to_session",
-            args: { target_session_id: TARGET_SESSION_ID, message: "Do work" },
-          },
-        }),
-      );
-      expect(forbiddenCall).toMatchObject({
-        ok: false,
-        errorCode: "CAPABILITY_NOT_AVAILABLE",
-      });
-      expect(sendToSession).not.toHaveBeenCalled();
+      expect(overview.categories).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'cindy' }),
+        expect.objectContaining({ name: 'control' }),
+        expect.objectContaining({ name: 'history' }),
+        expect.objectContaining({ name: 'handoff' }),
+        expect.objectContaining({ name: 'bots' }),
+      ]));
+      const controlTools = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'control' } }));
+      const controlNames = controlTools.tools as Array<{ name: string; description: string }>;
+      expect(controlNames.map((tool) => tool.name)).toEqual(expect.arrayContaining(['create_project', 'move_session', 'stop_session_turn']));
+      expect(controlNames.find((tool) => tool.name === 'move_session')?.description).toContain('list_sessions');
+      const handedOff = parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+        name: 'send_to_session', args: { target_session_id: TARGET_SESSION_ID, message: 'Do work' },
+      } }));
+      expect(handedOff).toMatchObject({ ok: true });
+      expect(sendToSession).toHaveBeenCalled();
 
       const botTools = parsePayload(
         await client.callTool({ name: "list_tools", arguments: { category: "bots" } }),
@@ -927,7 +897,7 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
-  it("keeps a remote Bot main task and other Bot sessions on the unchanged narrow, ungated surface", async () => {
+  it("gives remote and secondary companion tasks the ordinary surface for their transport", async () => {
     const authorizeCall = vi.fn(async () => ({ ok: true as const }));
     const createProject = vi.fn(async () => ({ ok: true as const, workingDir: "/repo" }));
     for (const context of [
@@ -944,8 +914,12 @@ describe("cindy_helper MCP server", () => {
       try {
         const overview = parsePayload(await client.callTool({ name: "list_tools", arguments: {} }));
         const categories = (overview.categories as Array<{ name: string }>).map((category) => category.name);
-        expect(categories).not.toContain("history");
-        expect(categories).not.toContain("handoff");
+        if (context.remoteHostId) {
+          expect(categories).not.toContain("history");
+        } else {
+          expect(categories).toContain("cindy");
+          expect(categories).toContain("control");
+        }
       } finally {
         await client.close();
         await server.close();
