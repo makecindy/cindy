@@ -61,6 +61,7 @@ export function AppBadgeAttentionSync() {
     allSessions,
     runningSessionIds,
   );
+  // 远程会话只提供目录 ID 做去重，不计入角标（见 countAppAttention）。
   const count = countAppAttention({
     sessions: allSessions,
     localSchedules,
