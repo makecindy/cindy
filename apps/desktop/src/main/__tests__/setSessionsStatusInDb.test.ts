@@ -25,8 +25,6 @@ const h = vi.hoisted(() => ({
     task(),
   ) as SessionRouteLockMock,
   isSessionStillRemovable: vi.fn(),
-  cancelSessionOperations: vi.fn(),
-  cleanupRemovedSession: vi.fn(),
   runtimeCleanup: vi.fn(),
   closeSharedTask: vi.fn(),
   removeSessionRefs: vi.fn(),
@@ -96,8 +94,6 @@ vi.mock('../worktree/sessionRemovalRecycle.js', () => ({
 }));
 import {
   recycleSessionWorktreeForStatusChange,
-  setSessionRemovalCancelOperations,
-  setSessionRemovalCleanup,
   setSessionWorktreeRecycle,
   setSessionRuntimeCleanup,
   setSessionsStatusInDb,
@@ -111,8 +107,6 @@ beforeEach(() => {
   h.closeSession.mockResolvedValue(undefined);
   h.isSessionAlive.mockReturnValue(false);
   h.isSessionStillRemovable.mockResolvedValue(true);
-  h.cancelSessionOperations.mockResolvedValue(undefined);
-  h.cleanupRemovedSession.mockResolvedValue(undefined);
   h.removeSessionRefs.mockResolvedValue(0);
   h.hasRegisteredWorktreeForSession.mockReturnValue(true);
   h.recycleWorktreeForRemovedSession.mockResolvedValue(undefined);
@@ -124,8 +118,6 @@ beforeEach(() => {
   Object.assign(h.drizzle, {
     select: () => ({ from: () => ({ where: () => ({ limit: h.readBindings }) }) }),
   });
-  setSessionRemovalCancelOperations(h.cancelSessionOperations);
-  setSessionRemovalCleanup(h.cleanupRemovedSession);
   setSessionWorktreeRecycle(h.requestRecycle);
   setSessionRuntimeCleanup(h.runtimeCleanup);
   setSessionRouteLockImplementation(h.withSendToSessionLock);
@@ -134,8 +126,6 @@ beforeEach(() => {
 afterEach(async () => {
   // Finish queued cleanup before removing its hooks or resetting the next test's mocks.
   await queueSessionWorktreeRecycle(async () => {});
-  setSessionRemovalCancelOperations(null);
-  setSessionRemovalCleanup(null);
   setSessionWorktreeRecycle(null);
   setSessionRuntimeCleanup(null);
   setSessionRouteLockImplementation(null);
@@ -485,7 +475,6 @@ describe('setSessionsStatusInDb', () => {
     // before acquiring a second lock because the task is no longer removable.
     expect(h.withSendToSessionLock).toHaveBeenCalledTimes(1);
     expect(h.withSendToSessionLock).toHaveBeenCalledWith('s1', expect.any(Function));
-    expect(h.cancelSessionOperations).not.toHaveBeenCalled();
     expect(h.closeSession).not.toHaveBeenCalled();
     expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();
   });
@@ -507,8 +496,7 @@ describe('setSessionsStatusInDb', () => {
     });
 
     expect(h.withSendToSessionLock).toHaveBeenCalledWith('s1', expect.any(Function));
-    expect(h.isSessionStillRemovable).toHaveBeenCalledTimes(5);
-    expect(h.cancelSessionOperations).toHaveBeenCalledWith('s1');
+    expect(h.isSessionStillRemovable).toHaveBeenCalledTimes(3);
     expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith(
       's1',
       expect.objectContaining({
@@ -630,19 +618,11 @@ describe('recycleSessionWorktreeForStatusChange', () => {
     await recycleSessionWorktreeForStatusChange('s1', 'archived');
 
     expect(h.withSendToSessionLock).toHaveBeenCalledWith('s1', expect.any(Function));
-    expect(h.cancelSessionOperations).toHaveBeenCalledWith('s1');
-    expect(h.cleanupRemovedSession).toHaveBeenCalledWith('s1');
     expect(h.closeSession).toHaveBeenCalledWith('s1');
   });
 
   it('awaits the shared close and worktree recycle chain for deleted sessions', async () => {
     const order: string[] = [];
-    h.cancelSessionOperations.mockImplementationOnce(async () => {
-      order.push('cancel');
-    });
-    h.cleanupRemovedSession.mockImplementationOnce(async () => {
-      order.push('cleanup');
-    });
     h.removeSessionRefs.mockImplementationOnce(async () => {
       order.push('remove-media-refs');
       return 1;
@@ -654,9 +634,7 @@ describe('recycleSessionWorktreeForStatusChange', () => {
     await recycleSessionWorktreeForStatusChange('s1', 'deleted');
 
     expect(h.withSendToSessionLock).toHaveBeenCalledWith('s1', expect.any(Function));
-    expect(h.isSessionStillRemovable).toHaveBeenCalledTimes(5);
-    expect(h.cancelSessionOperations).toHaveBeenCalledWith('s1');
-    expect(h.cleanupRemovedSession).toHaveBeenCalledWith('s1');
+    expect(h.isSessionStillRemovable).toHaveBeenCalledTimes(3);
     expect(h.closeSession).toHaveBeenCalledWith('s1');
     expect(h.removeSessionRefs).toHaveBeenCalledWith('s1', h.drizzle);
     expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith(
@@ -669,7 +647,7 @@ describe('recycleSessionWorktreeForStatusChange', () => {
       }),
     );
     expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', { sessionId: 's1' });
-    expect(order).toEqual(['cancel', 'cleanup', 'remove-media-refs', 'recycle-worktree']);
+    expect(order).toEqual(['remove-media-refs', 'recycle-worktree']);
   });
 
   it('keeps media and worktree deletion inside the task route lock', async () => {
@@ -805,30 +783,6 @@ describe('recycleSessionWorktreeForStatusChange', () => {
     });
   });
 
-  it('fails closed before closing or recycling when Host cleanup is not configured', async () => {
-    setSessionRemovalCancelOperations(null);
-
-    await recycleSessionWorktreeForStatusChange('s1', 'deleted');
-
-    expect(h.isSessionStillRemovable).not.toHaveBeenCalled();
-    expect(h.closeSession).not.toHaveBeenCalled();
-    expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();
-    expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', expect.anything());
-  });
-
-  it('does not remove media or recycle the worktree when Simulator cleanup fails', async () => {
-    h.cleanupRemovedSession.mockRejectedValueOnce(new Error('simulator is still shutting down'));
-
-    await recycleSessionWorktreeForStatusChange('s1', 'deleted');
-
-    expect(h.cancelSessionOperations).toHaveBeenCalledWith('s1');
-    expect(h.cleanupRemovedSession).toHaveBeenCalledWith('s1');
-    expect(h.closeSession).not.toHaveBeenCalled();
-    expect(h.removeSessionRefs).not.toHaveBeenCalled();
-    expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();
-    expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', expect.anything());
-  });
-
   it('does not dynamically import the Simulator Host from the recycle path', () => {
     const source = fs.readFileSync(new URL('../localDb/ipc/sessions.ts', import.meta.url), 'utf8');
     expect(source).not.toContain("import('../../mcp-integrations/ios-simulator.js')");
@@ -843,8 +797,6 @@ describe('recycleSessionWorktreeForStatusChange', () => {
     });
 
     expect(h.isSessionStillRemovable).not.toHaveBeenCalled();
-    expect(h.cancelSessionOperations).not.toHaveBeenCalled();
-    expect(h.cleanupRemovedSession).not.toHaveBeenCalled();
     expect(h.removeSessionRefs).not.toHaveBeenCalled();
     expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();
   });
@@ -859,8 +811,6 @@ describe('recycleSessionWorktreeForStatusChange', () => {
       mediaDb: h.drizzle as never,
     });
 
-    expect(h.cancelSessionOperations).toHaveBeenCalledWith('shared-session-id');
-    expect(h.cleanupRemovedSession).toHaveBeenCalledWith('shared-session-id');
     expect(h.closeSession).toHaveBeenCalledWith('shared-session-id');
     expect(h.removeSessionRefs).not.toHaveBeenCalled();
     expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();

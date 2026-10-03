@@ -62,7 +62,7 @@ import {
   type CodexModelBackfillCoordinator,
 } from './codex-model-backfill.js';
 import { createOrcaWorkerBridgeMcpProvider, type OrcaBridgeMcpDeps } from '@cindy/orca-workflow';
-import { LspServerPool, type IOSSimulatorMcpCallContext } from '@cindy/mcps';
+import { LspServerPool } from '@cindy/mcps';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { listCustomMcpRuntimeGenerations } from './custom-mcp-store.js';
 
@@ -124,7 +124,6 @@ import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/ind
 import {
   ownerScopedUserDataPath,
 } from '../appSessionState.js';
-import { getIOSSimulatorPluginAccessDecision } from '../cindy-brain/index.js';
 import {
   desktopClaudeAuthAdapter,
   desktopCodexAuthAdapter,
@@ -255,9 +254,7 @@ import {
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { getGhostRosterPrompt } from '../mcp-integrations/ghost.js';
 import { invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.js';
-import { getIOSSimulatorMcpDeps } from '../mcp-integrations/ios-simulator.js';
 import { readContactsSettings } from './contacts-settings-store.js';
-import { createIOSSimulatorCodexDynamicToolProvider } from './ios-simulator-codex-dynamic-tools.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../turn-change-set/store.js';
 
 /**
@@ -366,7 +363,6 @@ import { broadcastOrcaWorkerChanged } from './orcaWorkerBroadcast.js';
 import {
   getDesktopClaudeReadOnlyAllowedTools,
   getDesktopMcpToolApprovalPolicy,
-  getDesktopMcpToolApprovalPresentation,
 } from './mcp-tool-approval-policy.js';
 import { mapCodexAppServerModelsToCatalog } from './codex-model-discovery.js';
 import { prepareSharedProjectSkillLinks } from './shared-global-skills.js';
@@ -928,13 +924,6 @@ export function getMaker(): Maker {
     // 和项目 .claude/settings.json, mtime-based 缓存, 只在 session start 时同步检查。
     const pluginRegistry = createPluginRegistry();
 
-    const resolveIOSSimulatorAccess = (context?: IOSSimulatorMcpCallContext) => {
-      const workingDir = context?.workingDir?.trim() ? context.workingDir : null;
-      // Product access is the installed plugin (enable + workdir disable).
-      // Leftover Tools-page `builtinTools['ios-simulator']` must not gate runtime.
-      return getIOSSimulatorPluginAccessDecision(workingDir);
-    };
-
     const makerMemoryProviderDeps = {
       runtimeCapabilities: async (context: import('@cindy/mcps').LiziMcpSessionContext, query: AgentCapabilityQuery) => {
         const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;
@@ -976,7 +965,6 @@ export function getMaker(): Maker {
       getMakerMemoryManager: () => makerMemoryManager,
       lspPool: getLspPool(),
       pluginRegistry,
-      resolveIOSSimulatorAccess,
       invokeRemote: remoteInvoke,
       historyRemote: createHistoryRemoteDeps({
         listDevices: () => handleListDevices(deviceDirectoryDeps()),
@@ -1270,7 +1258,6 @@ export function getMaker(): Maker {
       // 行时, Claude 只剩上面那份静态只读白名单, 可信第一方 server 的 call_tool
       // (浏览器自动化等高频入口)会逐次弹窗, 与 Codex 侧的静默执行行为分叉。
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
-      getMcpToolApprovalPresentation: getDesktopMcpToolApprovalPresentation,
       resolveClaudeSubagentModelAccess: resolveDesktopClaudeSubagentModelAccess,
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CLAUDE_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 cc 列表注入
@@ -1607,9 +1594,6 @@ export function getMaker(): Maker {
         });
       },
       makerMemory: makerMemoryManager,
-      codexHostDynamicToolProvider: createIOSSimulatorCodexDynamicToolProvider({
-        deps: getIOSSimulatorMcpDeps({ resolveAccess: resolveIOSSimulatorAccess }),
-      }),
       // 通讯录 prompt 段有效状态(codex 版): 在 claude 的判定链之上再与「实际应用
       // 到 running app-server 的 spawn 快照」对齐 —— 开关切换后失效失败(busy,
       // contacts-ipc 折成 codexMcpRefreshed:false)时 stale 桥里没有新工具面,
@@ -2098,7 +2082,6 @@ export function getMaker(): Maker {
       // 未知或高风险 action 逐次弹卡且禁止“本会话允许”。
       // 详见 AgentDeps.getMcpToolApprovalPolicy。
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
-      getMcpToolApprovalPresentation: getDesktopMcpToolApprovalPresentation,
       // 远端 Codex (P2): 给 session 标 remoteHostId 的, CodexAgent 通过这个钩子拿
       // 远端 transport — SSH 连接已有 ConnectionPool (remote-ssh feature 起的) 管,
       // 这里包一层把 RemoteHost + SshDaemonTransport 装起来。

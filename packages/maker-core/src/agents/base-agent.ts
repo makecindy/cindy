@@ -63,9 +63,6 @@ import type { McpProvider } from '../interfaces/mcp-provider.js';
 import type { MakerMemoryManager } from '../memory/manager.js';
 import type {
   CodexModelListItem,
-  DynamicToolCallParams,
-  DynamicToolCallResponse,
-  DynamicToolSpec,
   ReasoningEffort,
 } from './codex/app-server/protocol.js';
 import type {
@@ -122,27 +119,6 @@ export interface CodexMcpThreadContextArgs {
   vendorOptions: Record<string, unknown>;
 }
 
-export interface CodexHostDynamicToolContext {
-  sessionId?: string;
-  workingDir: string;
-  remoteHostId?: string;
-  model: string;
-  providerId?: string | null;
-  vendorOptions: Record<string, unknown>;
-}
-
-/**
- * Host-owned dynamic tools that must remain directly callable even when the
- * Codex runtime defers ordinary MCP tool discovery.
- */
-export interface CodexHostDynamicToolProvider {
-  listTools(context: CodexHostDynamicToolContext): readonly DynamicToolSpec[];
-  callTool(
-    params: DynamicToolCallParams,
-    context: CodexHostDynamicToolContext,
-  ): Promise<DynamicToolCallResponse | undefined>;
-}
-
 /** Metadata Codex attaches to an MCP tool approval elicitation. */
 export interface McpToolApprovalContext {
   serverName: string;
@@ -156,12 +132,6 @@ export type McpToolApprovalPolicy =
   | 'auto-approve'
   | 'prompt'
   | 'prompt-each-time';
-
-/** Host-owned copy for an MCP permission request that needs a specific risk disclosure. */
-export interface McpToolApprovalPresentation {
-  title?: string;
-  description?: string;
-}
 
 /** Pi 内 MCP client 的 server 描述；remote 存在时直接访问外部 Streamable HTTP MCP。 */
 export interface PiMcpServerRef {
@@ -1305,39 +1275,6 @@ export interface AgentDeps {
    * Missing or failed classifiers cannot grant a trusted shortcut.
    */
   getMcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
-
-  /**
-   * Optional host-owned title and description for an MCP approval card.
-   *
-   * This stays separate from the policy mode: a call can remain
-   * `prompt-each-time` while the Host explains a risk the generic MCP client
-   * cannot infer from the outer `call_tool` envelope.
-   */
-  getMcpToolApprovalPresentation?: (
-    context: McpToolApprovalContext,
-  ) => McpToolApprovalPresentation | undefined;
-
-  /**
-   * Codex-only deterministic tool activation for narrow host capabilities.
-   * Definitions are frozen at thread creation and restored handlers are gated
-   * against the same session-start snapshot.
-   */
-  codexHostDynamicToolProvider?: CodexHostDynamicToolProvider;
-
-  /**
-   * Host-owned shell command policy applied before Codex command approval.
-   * Returning `deny` is an unconditional product guard and therefore wins over
-   * the user's broad Full access permission mode. Returning undefined leaves
-   * the normal Codex approval flow unchanged.
-   *
-   * Product-specific command parsing belongs in the host; maker-core only
-   * carries the decision across the app-server boundary.
-   */
-  getShellCommandPolicy?: (context: {
-    agentKind: 'codex';
-    command: string;
-    cwd?: string;
-  }) => { decision: 'deny'; reason: string } | undefined;
 
   /**
    * Codex 专用钩子：resume / fork 外部本地 thread 前由 host 准备底层 session state。

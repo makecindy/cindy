@@ -18,8 +18,6 @@ import { getCurrentDbClientUserId, tryGetDbClient } from '../client/current';
 import {
   registerSessionIpc,
   type RegisterSessionIpcOpts,
-  setSessionRemovalCancelOperations,
-  setSessionRemovalCleanup,
   setSessionWorktreeRecycle,
 } from './sessions';
 import { registerMessageIpc } from './messages';
@@ -90,16 +88,10 @@ export interface RegisterLocalDbIpcOpts {
   discardStaleOwner?: (userId: string) => void | Promise<void>;
   /** ensureReady 打开/创建目标库前执行；失败时阻断，避免跳过认领后创建空库。 */
   beforeEnsureReady?: (userId: string) => void | Promise<void>;
-  /** Stop Host-owned session operations before an archived/deleted worktree is recycled. */
-  cancelSessionOperations?: (sessionId: string) => Promise<void>;
-  /** Release Host-owned runtime and ownership after task removal is revalidated. */
-  cleanupRemovedSession?: (sessionId: string) => Promise<void>;
   /** Record worktree recycle intent before a terminal session status is persisted. */
   requestWorktreeRecycle?: (sessionId: string, resources?: readonly string[]) => Promise<void>;
   /** Close a moved local Pi/Codex runtime after revalidating that its turn is idle. */
   closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
-  /** Reconcile persisted Host-owned task runtimes once the owner DB is readable. */
-  reconcilePersistedSessionRuntimes?: () => Promise<void>;
   /** Serialize startup tombstone cleanup with task restore/start/send operations. */
   withSessionLock?: <T>(sessionId: string, task: () => Promise<T>) => Promise<T>;
   /**
@@ -122,8 +114,6 @@ export interface RegisterLocalDbIpcOpts {
 }
 
 export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
-  setSessionRemovalCancelOperations(opts.cancelSessionOperations ?? null);
-  setSessionRemovalCleanup(opts.cleanupRemovedSession ?? null);
   setSessionWorktreeRecycle(opts.requestWorktreeRecycle ?? null);
   setSessionRouteLockImplementation(opts.withSessionLock ?? null);
   const runEnsureReady = createOwnerEnsureCoordinator({
@@ -148,25 +138,12 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
       await recoverActiveTeammateInvitations();
       if (!isReadyOwnerCurrent()) return;
       startMediaRefCompensationReconcile(userId, client, isReadyOwnerCurrent);
-
-      const cancelSessionOperations = opts.cancelSessionOperations;
-      const cleanupRemovedSession = opts.cleanupRemovedSession;
       const withSessionLock = opts.withSessionLock;
       const db = client.drizzle;
       void (async () => {
         if (!isReadyOwnerCurrent()) return;
-        try {
-          await opts.reconcilePersistedSessionRuntimes?.();
-        } catch (error) {
-          log.warn('persisted task runtime reconcile failed', {
-            userId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
         if (
           !isReadyOwnerCurrent() ||
-          !cancelSessionOperations ||
-          !cleanupRemovedSession ||
           !withSessionLock
         ) {
           return;
@@ -175,10 +152,6 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
           db,
           isOwnerCurrent: isReadyOwnerCurrent,
           withSessionLock,
-          quiesceSession: async (sessionId) => {
-            await cancelSessionOperations(sessionId);
-            await cleanupRemovedSession(sessionId);
-          },
         });
       })().catch((error) => {
         log.warn('deleted task media reconcile failed', {

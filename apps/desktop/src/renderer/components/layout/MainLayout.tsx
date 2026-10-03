@@ -677,6 +677,14 @@ export function MainLayout() {
     },
     [navigate, navigateToSession, openShareImport],
   );
+  useEffect(
+    () =>
+      window.electronAPI.ghosts.onRetirementOpen((id) => {
+        navigate(`/plugins?retired=${encodeURIComponent(id)}`);
+      }),
+    [navigate],
+  );
+
   useEffect(() => {
     const unsubscribe = window.electronAPI.onDeepLinkNavigate((payload) => {
       if (payload.type !== 'provider-import' && payload.type !== 'shared-task-join') {

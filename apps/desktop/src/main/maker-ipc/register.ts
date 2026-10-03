@@ -193,7 +193,6 @@ import {
   getGhostManager,
   getGhostPipeDispatcher,
   getGhostSetupAssessment,
-  getIOSSimulatorPluginAccessDecision,
   isGhostAvailableForActiveSession,
 } from '../cindy-brain/index.js';
 import {
@@ -700,8 +699,6 @@ import {
   resolveSessionReferences,
 } from './sessionReferenceResolver.js';
 import { registerAndroidAutomationHandlers } from './androidHandlers.js';
-import { registerIOSSimulatorHandlers } from './iosSimulatorHandlers.js';
-import { cancelIOSSimulatorSessionOperations } from '../mcp-integrations/ios-simulator.js';
 import { MAKER_INVOKE, MAKER_PUSH, MAKER_SEND } from './channels.js';
 import type { CollabDispatchOutcome } from './collabSendOutcome.js';
 import {
@@ -11800,7 +11797,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     for (const w of activeWorkers) {
       await assertCurrent?.();
       orcaTeamService.clearAutoBridgeState(w.sessionId);
-      await cancelIOSSimulatorSessionOperations(w.sessionId);
       await assertCurrent?.();
       const sess = maker.getSession(w.sessionId);
       if (sess) {
@@ -12005,7 +12001,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     markWorkerIdleIfStatus,
     restoreWorkerDoneIfIdle,
-    cancelWorkerSessionOperations: cancelIOSSimulatorSessionOperations,
     closeWorkerSession: async (sessionId, beforeClose) => {
       const sess = maker.getSession(sessionId);
       await beforeClose?.();
@@ -12486,14 +12481,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
     },
     rollbackCreatedWorker: async ({ workerId, workerSessionId }) => {
-      await cancelIOSSimulatorSessionOperations(workerSessionId);
       const workerSession = maker.getSession(workerSessionId);
       if (workerSession) {
         await maker.closeSession(workerSessionId).catch(() => undefined);
       }
       forgetKnownOrcaWorkerSession(workerSessionId);
       await archiveSingleWorkerSession(workerSessionId).catch(() => undefined);
-      await cancelIOSSimulatorSessionOperations(workerSessionId);
       await removeWorker(workerId);
     },
     broadcastSessionCreated,
@@ -20141,17 +20134,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // ── Android automation (Settings →「电脑使用」) ──────────────────────────
   registerAndroidAutomationHandlers(createElectronIpcHandlerRegistry());
-
-  // ── iOS Simulator pane / Agent discovery ────────────────────────────────
-  registerIOSSimulatorHandlers(createElectronIpcHandlerRegistry(), {
-    getPluginAccess: getIOSSimulatorPluginAccessDecision,
-    getSessionContext: async (sessionId) => {
-      const liveSession = maker.getSession(sessionId);
-      if (liveSession) return { workingDir: liveSession.workDir };
-      const snapshot = await getSessionRowSnapshotStrict(sessionId);
-      return snapshot ? { workingDir: snapshot.workingDir } : null;
-    },
-  });
 
   // ── Browser automation (Settings →「电脑使用」) ───────────────────────────
   // Probe local browser detection. Drives the detection status + download

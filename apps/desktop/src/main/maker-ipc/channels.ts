@@ -1,4 +1,4 @@
-import { IOS_SIMULATOR_ROUTE_STATUS_CHANNEL } from '../../shared/iosSimulatorIpc.js';
+
 
 /**
  * maker:* IPC channel 名常量。统一收口，禁止 hardcode 字符串。
@@ -693,21 +693,6 @@ export const MAKER_INVOKE = {
   ANDROID_SET_DEFAULT_DEVICE: 'maker:android:set-default-device',
   ANDROID_SET_ADB_PATH: 'maker:android:set-adb-path',
   ANDROID_PREPARE_ADB: 'maker:android:prepare-adb',
-  // iOS Simulator presentation preference. Owner-scoped and independent from task grants.
-  IOS_SIMULATOR_GET_PREFERENCES: 'maker:ios-simulator:get-preferences',
-  IOS_SIMULATOR_SET_AUTO_OPEN_EMBEDDED_PANEL: 'maker:ios-simulator:set-auto-open-embedded-panel',
-  // iOS Simulator pane and Agent discovery. Session id is required and checked in main.
-  IOS_SIMULATOR_REQUEST_ACCESS: 'maker:ios-simulator:request-access',
-  IOS_SIMULATOR_STATUS: 'maker:ios-simulator:status',
-  IOS_SIMULATOR_CALL: 'maker:ios-simulator:call',
-  IOS_SIMULATOR_SET_AGENT_CONTROL: 'maker:ios-simulator:set-agent-control',
-  IOS_SIMULATOR_SET_MUTATION_CONTROL: 'maker:ios-simulator:set-mutation-control',
-  IOS_SIMULATOR_SET_VIEWER_VISIBILITY: 'maker:ios-simulator:set-viewer-visibility',
-  IOS_SIMULATOR_RETRY_NATIVE_ROUTE: 'maker:ios-simulator:retry-native-route',
-  IOS_SIMULATOR_LATEST_FRAME: 'maker:ios-simulator:latest-frame',
-  IOS_SIMULATOR_COPY_SCREENSHOT: 'maker:ios-simulator:copy-screenshot',
-  IOS_SIMULATOR_SET_STREAM_PROFILE: 'maker:ios-simulator:set-stream-profile',
-  IOS_SIMULATOR_LIVE_TOUCH: 'maker:ios-simulator:live-touch',
   // Local desktop computer-use driver detection for Settings →「电脑使用」
   COMPUTER_STATUS: 'maker:computer:status',
   // Read-only Composer `@` candidates: current-task browser tabs + OS windows.
@@ -1021,10 +1006,6 @@ export const MAKER_PUSH = {
   RSB_WINDOW_COMMAND: 'maker:rsb-window:command',
   /** 子窗口合并回主窗口前交接不可持久化 session 的 tab 快照，只发主窗口。 */
   RSB_WINDOW_TAB_HANDOFF: 'maker:rsb-window:tab-handoff',
-  /** Main-owned H.264 access unit pushed without Renderer polling. */
-  IOS_SIMULATOR_H264_FRAME: 'maker:ios-simulator:h264-frame',
-  /** Main-owned public route selection/status for the iOS Simulator viewer. */
-  IOS_SIMULATOR_ROUTE_STATUS: IOS_SIMULATOR_ROUTE_STATUS_CHANNEL,
   /**
    * 插件面板独立窗口状态广播(全量 GhostPanelWindowsState)——发所有窗口
    * (主窗布局过滤 + 各子窗口自身都消费)。

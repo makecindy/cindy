@@ -247,28 +247,6 @@ import type {
   DesktopLoginAction,
   DesktopLoginActionResult,
 } from '../shared/authIpc';
-import type {
-  IOSSimulatorAccessRequest,
-  IOSSimulatorAccessRequestResult,
-  IOSSimulatorCopyScreenshotRequest,
-  IOSSimulatorCopyScreenshotResult,
-  IOSSimulatorPreferences,
-  IOSSimulatorSessionStatus,
-  IOSSimulatorAgentControlRequest,
-  IOSSimulatorFocusRequest,
-  IOSSimulatorH264FramePush,
-  IOSSimulatorRouteStatusPush,
-  IOSSimulatorLiveTouchRequest,
-  IOSSimulatorMutationControlRequest,
-  IOSSimulatorRetryNativeRouteRequest,
-  IOSSimulatorStatusRequest,
-  IOSSimulatorToolRequest,
-  IOSSimulatorToolResponse,
-  IOSSimulatorViewerRouteRequest,
-  IOSSimulatorViewerVisibilityRequest,
-  IOSSimulatorStreamProfileRequest,
-} from '../shared/iosSimulatorIpc';
-import { IOS_SIMULATOR_ROUTE_STATUS_CHANNEL } from '../shared/iosSimulatorIpc';
 import { BILLING_INVOKE, type BillingRendererApi } from '../shared/billing';
 import {
   REMOTE_PRECREATED_WORKTREE_LEDGER_CHANNELS,
@@ -684,6 +662,7 @@ const fanOutAppShortcutsChanged = createIpcFanOut('app-shortcuts:changed');
 const fanOutLayoutChanged = createIpcFanOut('layout:changed');
 // 意识仓库变化广播 (install/uninstall 后 main 推全量已装清单,多窗口热更新;
 // 见 main/cindy-brain/index.ts)。
+const fanOutRetirementOpen = createIpcFanOut('ghosts:retirement-open');
 const fanOutGhostsChanged = createIpcFanOut('ghosts:changed');
 const fanOutPluginPublisherProgress = createIpcFanOut('plugin-publisher:progress');
 const fanOutPluginPublisherConfirm = createIpcFanOut('plugin-publisher:confirm');
@@ -793,9 +772,6 @@ const fanOutMakerSessionCredentialSwitchFailed = createIpcFanOut(
   'maker:session-credential-switch-failed',
 );
 const fanOutMakerClaudeSessionRouteChanged = createIpcFanOut('maker:claude-session-route-changed');
-const fanOutIOSSimulatorFocusRequest = createIpcFanOut('maker:ios-simulator:focus-request');
-const fanOutIOSSimulatorH264Frame = createIpcFanOut('maker:ios-simulator:h264-frame');
-const fanOutIOSSimulatorRouteStatus = createIpcFanOut(IOS_SIMULATOR_ROUTE_STATUS_CHANNEL);
 // 会话后台活动翻转广播(payload = { sessionId, active }):turn 已结束但 CC 子进程仍在调模型。
 const fanOutMakerSessionBackgroundActivityChanged = createIpcFanOut(
   'maker:session-background-activity-changed',
@@ -1376,6 +1352,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       id: string,
     ): Promise<{ status: 'saved'; savedPath: string } | { status: 'canceled' }> =>
       ipcRenderer.invoke('ghosts:export', id),
+    openRetirement: (id: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('ghosts:open-retirement', id),
+    onRetirementOpen: (callback: (id: string) => void): (() => void) =>
+      fanOutRetirementOpen((id: unknown) => { if (typeof id === 'string') callback(id); }),
+    acknowledgeRetirement: (id: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('ghosts:acknowledge-retirement', id),
     setEnabled: (id: string, enabled: boolean): Promise<{ ok: true }> =>
       ipcRenderer.invoke('ghosts:set-enabled', id, enabled),
     requestTaskApproval: (id: string): Promise<{ granted: boolean }> =>
@@ -7866,56 +7848,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:android:set-adb-path', { adbPathOverride }),
       prepareAdb: (): Promise<AndroidAdbPreparationState> =>
         ipcRenderer.invoke('maker:android:prepare-adb'),
-    },
-    iosSimulator: {
-      getPreferences: (): Promise<IOSSimulatorPreferences> =>
-        ipcRenderer.invoke('maker:ios-simulator:get-preferences'),
-      setAutoOpenEmbeddedPanel: (enabled: boolean): Promise<IOSSimulatorPreferences> =>
-        ipcRenderer.invoke('maker:ios-simulator:set-auto-open-embedded-panel', { enabled }),
-      requestAccess: (
-        request: IOSSimulatorAccessRequest,
-      ): Promise<IOSSimulatorAccessRequestResult> =>
-        ipcRenderer.invoke('maker:ios-simulator:request-access', request),
-      status: (request: IOSSimulatorStatusRequest): Promise<IOSSimulatorSessionStatus> =>
-        ipcRenderer.invoke('maker:ios-simulator:status', request),
-      call: (request: IOSSimulatorToolRequest): Promise<IOSSimulatorToolResponse> =>
-        ipcRenderer.invoke('maker:ios-simulator:call', request),
-      setAgentControl: (
-        request: IOSSimulatorAgentControlRequest,
-      ): Promise<IOSSimulatorToolResponse> =>
-        ipcRenderer.invoke('maker:ios-simulator:set-agent-control', request),
-      setMutationControl: (
-        request: IOSSimulatorMutationControlRequest,
-      ): Promise<IOSSimulatorToolResponse> =>
-        ipcRenderer.invoke('maker:ios-simulator:set-mutation-control', request),
-      setViewerVisibility: (
-        request: IOSSimulatorViewerVisibilityRequest,
-      ): Promise<IOSSimulatorToolResponse> =>
-        ipcRenderer.invoke('maker:ios-simulator:set-viewer-visibility', request),
-      retryNativeRoute: (
-        request: IOSSimulatorRetryNativeRouteRequest,
-      ): Promise<IOSSimulatorToolResponse> =>
-        ipcRenderer.invoke('maker:ios-simulator:retry-native-route', request),
-      latestFrame: (request: IOSSimulatorViewerRouteRequest): Promise<IOSSimulatorToolResponse> =>
-        ipcRenderer.invoke('maker:ios-simulator:latest-frame', request),
-      copyScreenshot: (
-        request: IOSSimulatorCopyScreenshotRequest,
-      ): Promise<IOSSimulatorCopyScreenshotResult> =>
-        ipcRenderer.invoke('maker:ios-simulator:copy-screenshot', request),
-      setStreamProfile: (
-        request: IOSSimulatorStreamProfileRequest,
-      ): Promise<IOSSimulatorToolResponse> =>
-        ipcRenderer.invoke('maker:ios-simulator:set-stream-profile', request),
-      liveTouch: (request: IOSSimulatorLiveTouchRequest): Promise<IOSSimulatorToolResponse> =>
-        ipcRenderer.invoke('maker:ios-simulator:live-touch', request),
-      onH264Frame: (callback: (payload: IOSSimulatorH264FramePush) => void) =>
-        fanOutIOSSimulatorH264Frame((payload) => callback(payload as IOSSimulatorH264FramePush)),
-      onRouteStatus: (callback: (payload: IOSSimulatorRouteStatusPush) => void) =>
-        fanOutIOSSimulatorRouteStatus((payload) =>
-          callback(payload as IOSSimulatorRouteStatusPush),
-        ),
-      onFocusRequest: (callback: (request: IOSSimulatorFocusRequest) => void) =>
-        fanOutIOSSimulatorFocusRequest((request) => callback(request as IOSSimulatorFocusRequest)),
     },
     computer: {
       status: (options?: ComputerDriverStatusOptions): Promise<ComputerDriverStatus> =>

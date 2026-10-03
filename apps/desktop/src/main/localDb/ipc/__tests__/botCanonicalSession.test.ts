@@ -572,6 +572,33 @@ describe('Bot global model restore IPC', () => {
 });
 
 describe('Bot canonical Session lifecycle', () => {
+  it.each(['inherit', 'allowlist'])('omits retired toolsets from the %s companion settings and discovery', async (mode) => {
+    const row = h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1')
+      .get('bot-1') as { capabilities_json: string };
+    const config = { ...JSON.parse(row.capabilities_json), toolCapabilityVersion: 1,
+      toolsetMode: mode, toolsets: ['ios-simulator', 'docs', 'missing-tool'], permissions: 'ask' };
+    h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ? AND version = 1')
+      .run(JSON.stringify(config), 'bot-1');
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const profile = await invoke('local-db:bots:get', 'bot-1');
+    expect(profile.capabilities).toMatchObject({ toolsetMode: mode, toolsets: ['docs', 'missing-tool'], permissions: 'ask' });
+    const remote = await (await import('../bots')).getBotRemoteSettingsSource('bot-1');
+    expect(remote).toMatchObject({ toolsets: ['docs', 'missing-tool'], permissions: 'ask' });
+    const result = await createBotCapabilityService(capabilityDeps).list({
+      callerSessionId: created.session.id, kind: 'toolset',
+    });
+    expect(result.ok).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('ios-simulator');
+    expect(result).toMatchObject({ capabilities: expect.arrayContaining([
+      expect.objectContaining({ id: 'missing-tool', available: false, joined: true }),
+    ]) });
+    // Reading the upgraded projection must not rewrite historical profile versions.
+    expect(JSON.parse((h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1')
+      .get('bot-1') as { capabilities_json: string }).capabilities_json)).toEqual(config);
+  });
+
 
   it.each(['../bot', 'Bot', 'a:b', 'con', 'aux', 'lpt1'])('rejects nonportable new companion ID %s before persistence', async (id) => {
     await expect(invoke('local-db:bots:create', { id, name: 'Unsafe ID' })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });

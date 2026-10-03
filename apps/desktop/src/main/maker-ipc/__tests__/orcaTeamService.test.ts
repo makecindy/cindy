@@ -115,7 +115,8 @@ describe('model Orca cleanup authority', () => {
       deps.listWorkersByLead = vi.fn(async id => { const result = await list(id); if (phase === 'lookup') allowed = false; return result; });
       const mark = deps.markWorkerIdle;
       deps.markWorkerIdle = vi.fn(async id => { await mark(id); if (phase === 'after-write') allowed = false; });
-      deps.cancelWorkerSessionOperations = vi.fn(async () => { if (phase === 'after-write') allowed = false; });
+      const forget = deps.forgetWorkerSession;
+      deps.forgetWorkerSession = vi.fn(id => { forget?.(id); if (phase === 'after-write') allowed = false; });
       const focus = vi.fn(async () => { if (phase === 'after-write') allowed = false; });
       const resume = vi.fn(async () => undefined);
       const api = compile({
@@ -143,9 +144,8 @@ describe('model Orca cleanup authority', () => {
         getSessionOrcaRole: async () => { if (phase === 'lookup') allowed = false; return 'lead'; },
         listWorkersByLead: async () => { if (phase === 'lookup') allowed = false; return [createWorker()]; },
         maker: { getSession: () => ({ isTurnRunning: () => false, setVendorOptions: vi.fn() }), closeSession: close },
-        orcaTeamService: { clearAutoBridgeState: vi.fn() },
-        cancelIOSSimulatorSessionOperations: async () => { if (phase === 'before-close') allowed = false; },
-        setSessionOrcaRole: vi.fn(), knownNonOrcaSessionIds: new Set(),
+        orcaTeamService: { clearAutoBridgeState: vi.fn(() => { if (phase === 'before-close') allowed = false; }) },
+                setSessionOrcaRole: vi.fn(), knownNonOrcaSessionIds: new Set(),
         reconcileInactiveTeamWorkersForLead: vi.fn(async () => { if (phase === 'before-close') allowed = false; return ['worker-session-1']; }),
         recycleSessionWorktreeForStatusChange: vi.fn(), captureSessionRecycleScope: vi.fn(),
         cleanupPendingInteractionsForSession: vi.fn(), forgetKnownOrcaWorkerSession: vi.fn(),
@@ -289,9 +289,6 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
           : item,
       );
       return true;
-    }),
-    cancelWorkerSessionOperations: vi.fn(async (sessionId) => {
-      calls.push(`cancelWorkerSessionOperations:${sessionId}`);
     }),
     closeWorkerSession: vi.fn(async (sessionId) => {
       calls.push(`closeWorkerSession:${sessionId}`);
@@ -2628,10 +2625,8 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([
-      'cancelWorkerSessionOperations:worker-session-1',
       'closeWorkerSession:worker-session-1',
       'archiveWorkerSession:worker-session-1',
-      'cancelWorkerSessionOperations:worker-session-1',
       'updateWorkerStatus:done',
       'broadcastOrcaWorkerChanged',
     ]);
@@ -2653,10 +2648,8 @@ describe('OrcaTeamService', () => {
 
     expect(deps.updateWorkerStatus).toHaveBeenCalledWith('worker-1', 'done');
     expect(calls).toEqual([
-      'cancelWorkerSessionOperations:worker-session-1',
       'closeWorkerSession:worker-session-1',
       'archiveWorkerSession:worker-session-1',
-      'cancelWorkerSessionOperations:worker-session-1',
       'updateWorkerStatus:done',
       'broadcastOrcaWorkerChanged',
     ]);
@@ -2752,10 +2745,8 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([
-      'cancelWorkerSessionOperations:worker-session-1',
       'closeWorkerSession:worker-session-1',
       'archiveWorkerSession:worker-session-1',
-      'cancelWorkerSessionOperations:worker-session-1',
       'updateWorkerStatus:done',
       'broadcastOrcaWorkerChanged',
     ]);
@@ -3184,7 +3175,7 @@ describe('OrcaTeamService worker queued message control', () => {
   });
 });
 
-it('idle-only archive preserves queued input',async()=>{const {deps,service,setWorker}=createDeps();setWorker(createWorker({status:'done'}));vi.mocked(deps.hasPendingWorkerInput).mockResolvedValue(true);expect((await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true})).ok).toBe(false);expect(deps.cancelWorkerSessionOperations).not.toHaveBeenCalled();expect(deps.archiveWorkerSession).not.toHaveBeenCalled();});
+it('idle-only archive preserves queued input',async()=>{const {deps,service,setWorker}=createDeps();setWorker(createWorker({status:'done'}));vi.mocked(deps.hasPendingWorkerInput).mockResolvedValue(true);expect((await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true})).ok).toBe(false);expect(deps.archiveWorkerSession).not.toHaveBeenCalled();});
 it('idle-only archive preserves active runtime',async()=>{const {deps,service,setWorker}=createDeps();setWorker(createWorker({status:'done'}));vi.mocked(deps.closeWorkerSessionIfIdle!).mockResolvedValue(false);expect((await service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true})).ok).toBe(false);expect(deps.archiveWorkerSession).not.toHaveBeenCalled();});
 
 it('idle-only archive rechecks the execution stamp after waiting for the send fence',async()=>{
@@ -3193,7 +3184,7 @@ it('idle-only archive rechecks the execution stamp after waiting for the send fe
  deps.withSessionSendLock=async (_id,operation)=>{current=false;return operation();};
  const beforeArchive=async()=>{if(!current)throw new Error('stale completion');};
  await expect(service.archiveWorker({callerLeadSessionId:'lead-1',workerId:'worker-1',onlyIfIdle:true,beforeArchive})).rejects.toThrow('stale completion');
- expect(deps.archiveWorkerSession).not.toHaveBeenCalled();expect(deps.cancelWorkerSessionOperations).not.toHaveBeenCalled();
+ expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
 });
 
 it('release refuses an occupied send fence without waiting for it',async()=>{

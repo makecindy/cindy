@@ -37,17 +37,7 @@ describe('ChatInput Ghost snapshot contract', () => {
     );
   });
 
-  it('revalidates Host capability chips as enabled and local at send time', () => {
-    expect(source).toContain(
-      'const eligibleGhosts = filterGhostsForWorkdir(',
-    );
-    expect(source).toMatch(
-      /installedGhostsRef\.current,\s*workingDirRef\.current/,
-    );
-    expect(source).toContain("hostCapabilityForGhost(ghost);");
-  });
-
-  it('does not consume Host capability text as a local plan-mode command', () => {
+  it('uses serialized text for the local plan-mode command', () => {
     expect(source).toMatch(
       /isPlanModeComposerCommandText\(\s*editorText,?/,
     );

@@ -31,35 +31,6 @@ type VoiceInputConnectionTestResult =
 type DesktopLoginAction = import('../shared/authIpc').DesktopLoginAction;
 type DesktopLoginActionResult = import('../shared/authIpc').DesktopLoginActionResult;
 type UtilityTextFailure = import('../shared/utilityTextResult').UtilityTextFailure;
-type IOSSimulatorSessionStatus = import('../shared/iosSimulatorIpc').IOSSimulatorSessionStatus;
-type IOSSimulatorAccessRequest = import('../shared/iosSimulatorIpc').IOSSimulatorAccessRequest;
-type IOSSimulatorAccessRequestResult =
-  import('../shared/iosSimulatorIpc').IOSSimulatorAccessRequestResult;
-type IOSSimulatorCopyScreenshotRequest =
-  import('../shared/iosSimulatorIpc').IOSSimulatorCopyScreenshotRequest;
-type IOSSimulatorCopyScreenshotResult =
-  import('../shared/iosSimulatorIpc').IOSSimulatorCopyScreenshotResult;
-type IOSSimulatorPreferences = import('../shared/iosSimulatorIpc').IOSSimulatorPreferences;
-type IOSSimulatorStatusRequest = import('../shared/iosSimulatorIpc').IOSSimulatorStatusRequest;
-type IOSSimulatorToolRequest = import('../shared/iosSimulatorIpc').IOSSimulatorToolRequest;
-type IOSSimulatorToolResponse = import('../shared/iosSimulatorIpc').IOSSimulatorToolResponse;
-type IOSSimulatorAgentControlRequest =
-  import('../shared/iosSimulatorIpc').IOSSimulatorAgentControlRequest;
-type IOSSimulatorFocusRequest = import('../shared/iosSimulatorIpc').IOSSimulatorFocusRequest;
-type IOSSimulatorH264FramePush = import('../shared/iosSimulatorIpc').IOSSimulatorH264FramePush;
-type IOSSimulatorRouteStatusPush = import('../shared/iosSimulatorIpc').IOSSimulatorRouteStatusPush;
-type IOSSimulatorLiveTouchRequest =
-  import('../shared/iosSimulatorIpc').IOSSimulatorLiveTouchRequest;
-type IOSSimulatorMutationControlRequest =
-  import('../shared/iosSimulatorIpc').IOSSimulatorMutationControlRequest;
-type IOSSimulatorViewerRouteRequest =
-  import('../shared/iosSimulatorIpc').IOSSimulatorViewerRouteRequest;
-type IOSSimulatorViewerVisibilityRequest =
-  import('../shared/iosSimulatorIpc').IOSSimulatorViewerVisibilityRequest;
-type IOSSimulatorRetryNativeRouteRequest =
-  import('../shared/iosSimulatorIpc').IOSSimulatorRetryNativeRouteRequest;
-type IOSSimulatorStreamProfileRequest =
-  import('../shared/iosSimulatorIpc').IOSSimulatorStreamProfileRequest;
 type ProviderRoutingPayload = import('@cindy/model-providers').Provider['routing'];
 type MakerSessionTreeSnapshot = import('@cindy/maker-core').SessionTreeSnapshot;
 type BrowserBackendHealth = import('../shared/browserBackend').BrowserBackendHealth;
@@ -1428,6 +1399,9 @@ interface ElectronAPI {
       id: string,
     ) => Promise<{ status: 'saved'; savedPath: string } | { status: 'canceled' }>;
     /** 启用/停用(停用 = 面板休眠,布局位置保留)。 */
+    openRetirement: (id: string) => Promise<{ ok: true }>;
+    onRetirementOpen: (callback: (id: string) => void) => () => void;
+    acknowledgeRetirement: (id: string) => Promise<{ ok: true }>;
     setEnabled: (id: string, enabled: boolean) => Promise<{ ok: true }>;
     requestTaskApproval: (id: string) => Promise<{ granted: boolean }>;
     /** 目录级禁用清单(插件页项目范围视图;sendSync 切换同帧渲染)。 */
@@ -7051,38 +7025,6 @@ interface ElectronAPI {
       ) => Promise<AndroidAutomationConfigState>;
       setAdbPath: (adbPathOverride: string | null) => Promise<AndroidAutomationConfigState>;
       prepareAdb: () => Promise<AndroidAdbPreparationState>;
-    };
-    iosSimulator: {
-      getPreferences: () => Promise<IOSSimulatorPreferences>;
-      setAutoOpenEmbeddedPanel: (enabled: boolean) => Promise<IOSSimulatorPreferences>;
-      requestAccess: (
-        request: IOSSimulatorAccessRequest,
-      ) => Promise<IOSSimulatorAccessRequestResult>;
-      status: (request: IOSSimulatorStatusRequest) => Promise<IOSSimulatorSessionStatus>;
-      call: (request: IOSSimulatorToolRequest) => Promise<IOSSimulatorToolResponse>;
-      setAgentControl: (
-        request: IOSSimulatorAgentControlRequest,
-      ) => Promise<IOSSimulatorToolResponse>;
-      setMutationControl: (
-        request: IOSSimulatorMutationControlRequest,
-      ) => Promise<IOSSimulatorToolResponse>;
-      setViewerVisibility: (
-        request: IOSSimulatorViewerVisibilityRequest,
-      ) => Promise<IOSSimulatorToolResponse>;
-      retryNativeRoute: (
-        request: IOSSimulatorRetryNativeRouteRequest,
-      ) => Promise<IOSSimulatorToolResponse>;
-      latestFrame: (request: IOSSimulatorViewerRouteRequest) => Promise<IOSSimulatorToolResponse>;
-      copyScreenshot: (
-        request: IOSSimulatorCopyScreenshotRequest,
-      ) => Promise<IOSSimulatorCopyScreenshotResult>;
-      setStreamProfile: (
-        request: IOSSimulatorStreamProfileRequest,
-      ) => Promise<IOSSimulatorToolResponse>;
-      liveTouch: (request: IOSSimulatorLiveTouchRequest) => Promise<IOSSimulatorToolResponse>;
-      onH264Frame: (callback: (payload: IOSSimulatorH264FramePush) => void) => () => void;
-      onRouteStatus: (callback: (payload: IOSSimulatorRouteStatusPush) => void) => () => void;
-      onFocusRequest: (callback: (request: IOSSimulatorFocusRequest) => void) => () => void;
     };
     computer: {
       status: (options?: ComputerDriverStatusOptions) => Promise<ComputerDriverStatus>;

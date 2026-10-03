@@ -146,9 +146,9 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
 | Skill 卸载清理回执 | `app.getPath('userData')/skillhub/uninstall-cleanups/<token>.json`，记录操作 owner、旧文件/注册/偏好身份与完成阶段；跨窗口和重启保留，当前 owner 重试完成后删除，不作为授权凭据 |
 | 跨 profile 的 Cindy 内置 Skill 副本 | `app.getPath('appData')/Cindy/shared-system-skills`，只保存随应用发布、可由 bundle 重建的官方 Skill；Global、China、dev 与 isolated profile 共用稳定物理路径，更新和共享发现链接必须持有下述互斥锁 |
 | 跨 profile 的共享 Skill 文件互斥 | `app.getPath('appData')/Cindy/shared-skill-mutation-locks`，仅存文件锁及未完成操作的 token/名称哈希，保证正式版/dev/isolated 共用；短期锁复用既有崩溃回收，持久屏障必须等对应清理完成后删除，读取损坏只阻止相关名称 |
-| 跨 profile 的 worktree 借用租约 | `app.getPath('appData')/Cindy/shared-worktree-runtime-leases`，模拟器工程借用时在原 profile 租约之外发布共享副本；回收器同时读取两处，源目录 I/O 结束后显式释放，释放失败由现有 `.release` 回执重试；不能因进程退出就移除保护 |
-| 旧版 worktree 回收器兼容锁 | 验证 linked worktree 的 Git 元数据与反向链接后，在源目录外的 `<commonGitDir>/worktrees/<id>/locked` 创建 Git 标准锁，避免构建中的 `git clean` 删除保护；旧版删除/池化复用已识别此锁。不覆盖用户锁，仅当最后一个共享借用结束且自建文件身份和内容仍匹配时删除。清理失败在共享租约 `.release` 中保留路径及原文件身份，由现有维护重试；旧回执仍按原身份清理 `.worktree-keep` |
-| 跨 profile 的 worktree 回收日志位置 | `app.getPath('appData')/Cindy/shared-worktree-recycle-journals`，按日志目录哈希登记原 profile 日志位置，启动日志监听和写入回收记录前原子发布；借用方只读目标资源的原始日志，不复制恢复状态、不代替 owner 执行恢复。索引跨重启保留，原日志不存在时不产生回收意图 |
+| 旧跨 profile 的 worktree 借用租约 | `app.getPath('appData')/Cindy/shared-worktree-runtime-leases`，内置模拟器下线后不再创建共享租约；回收器仍读取旧证据并重试已有 `.release` 回执，不能因进程退出就移除保护。普通 Agent 的当前 profile 租约照常创建与释放 |
+| 旧版 worktree 回收器兼容锁 | 不再创建新的跨 profile Git 锁；保留旧回执对 `<commonGitDir>/worktrees/<id>/locked` 及更早 `.worktree-keep` 的清理。仅当最后一个共享借用结束且自建文件身份和内容仍匹配时删除，不覆盖用户锁；失败沿用 `.release` 重试 |
+| 跨 profile 的 worktree 回收日志位置 | `app.getPath('appData')/Cindy/shared-worktree-recycle-journals`，仍按日志目录哈希发布原 profile 日志位置，兼容可能同时运行的旧客户端；新客户端不再读取其他 profile 的日志来借用工程。不复制恢复状态、不代替 owner 执行恢复 |
 | 用户明确导出的文件 | 用户选择或任务明确指定的目标路径 |
 
 - 内置 Skill 的官方身份只授予当前 manifest 已提交且指纹匹配的 bundle：`.active` 必须是
