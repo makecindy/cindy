@@ -15,7 +15,7 @@
  *      (script-runner.ts 明确 'script execution does not support worktrees or bound
  *      sessions'、sessionId 落空串),所以前三个内存探针全都看不到它
  *   5. 后台 Bash 任务 —— run_in_background 的 Bash(dev server、长跑脚本)。它**不调模型**,
- *      所以永远点不亮来源 2 的 loopback 信号(useBackgroundBashTasks.ts 的头注释明写这一点);
+ *      所以永远点不亮来源 2 的 loopback 信号(useBackgroundSessionTasks.ts 的头注释明写这一点);
  *      也不折算 makerChatStore 的 running,所以来源 1 同样看不到。快照来源是每个 live session
  *      的 listBackgroundTasks()
  *   6. Cindy slot 的在途代办 —— 异步(mode:'submit' 的视频生成,`void runExec()` 脱链跑)与

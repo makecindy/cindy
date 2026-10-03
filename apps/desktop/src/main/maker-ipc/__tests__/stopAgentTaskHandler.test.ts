@@ -123,6 +123,26 @@ describe('stop agent task IPC handler', () => {
     ).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
   });
 
+  it('keeps the PI "still running after SIGKILL" verdict in the IPC error message', async () => {
+    // host 只在这一种情形让 stop 失败(SIGKILL 之后仍未确认退出)。这条 message 是
+    // 渲染层唯一能看到的信号:压成笼统 INTERNAL 就没有「停止未确认」提示了。
+    const harness = new IpcHarness();
+    registerStopAgentTaskHandler(harness, {
+      getLiveSession: vi.fn(() => ({
+        stopBackgroundTask: vi.fn().mockRejectedValue(
+          new Error('PI background command call-1 is still running after SIGKILL.'),
+        ),
+      })),
+    });
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.STOP_AGENT_TASK, 'session-1', 'call-1'),
+    ).rejects.toMatchObject({
+      code: 'INTERNAL',
+      message: expect.stringContaining('still running after SIGKILL'),
+    });
+  });
+
   it('maps other failures to INTERNAL', async () => {
     const harness = new IpcHarness();
     registerStopAgentTaskHandler(harness, {
