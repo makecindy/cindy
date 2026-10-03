@@ -64,7 +64,7 @@ export function filterSlashCommands(
 ): ComposerSlashCommand[] {
   const q = query.trim().toLowerCase();
   const filtered = q
-    ? commands.filter((command) => command.name.toLowerCase().startsWith(q))
+    ? commands.filter((command) => command.name.toLowerCase().includes(q))
     : [...commands];
   return filtered.slice(0, Math.max(0, limit));
 }
