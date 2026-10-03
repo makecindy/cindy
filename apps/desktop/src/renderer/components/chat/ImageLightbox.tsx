@@ -93,7 +93,7 @@ import {
 } from '@cindy/maker-shared/image-annotation';
 import { AnnotationStrokesSvg, type AnnotationDraftPathRefs } from './AnnotationStrokesSvg';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { getDraft, saveDraft } from '@/lib/composerDraftStore';
+import { appendAttachmentToDraft } from '@/lib/composerDraftStore';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1378,17 +1378,7 @@ function ImageLightboxContent({
       ) {
         attached = { ...attached, baseAnnotated: true };
       }
-      const existing = getDraft(chatSessionId);
-      saveDraft(
-        chatSessionId,
-        {
-          text: existing?.text ?? null,
-          attachments: [...(existing?.attachments ?? []), attached],
-          quotes: existing?.quotes ?? [],
-          browserComments: existing?.browserComments ?? [],
-        },
-        { preserveRemoteOptimisticRecovery: true },
-      );
+      appendAttachmentToDraft(chatSessionId, attached);
       toast.success(t('chat.media.sentToChat'));
       afterSave();
     } catch (err) {
