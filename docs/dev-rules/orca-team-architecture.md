@@ -321,6 +321,9 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 3. **idle worker 恢复必须保留 extraDirs（状态：不变量）**<br>
    idle worker 被 `switch_focus` 或 `send_to_worker` 唤醒时，要从 DB 读取 `extra_dirs` 并带回 `bootstrapSession`，否则恢复后的 worker 会丢附加目录上下文。实现指针：`register.ts` 的 idle worker resume helper。
 
+3a. **focus 切换不等待 worker 冷启动（状态：不变量）**<br>
+   `switch_focus` 是纯 UI focus 操作：`setWorkerFocus` 成功并广播 `ORCA_WORKER_CHANGED` 后必须立即返回，不得同步 `await` 冷会话的 resume / `bootstrapSession`（Pi 冷启实测 2~3s，会阻塞面板切换）。idle worker 的 runtime 预热转后台，并与发送/派活路径共享同一套 per-session 去重 + `sendToSession` 锁：并发 focus / 派活只 bootstrap 一次；发送先取得锁完成懒恢复时，后台 resume 在锁内重查 live 并跳过；预热失败只告警，不改变 `switch_focus` 结果。worker 历史来自 DB，展示不需要 live runtime。后台预热必须可取消：关闭协同 / 归档 / 显式 idle 在释放 runtime 前先取消未落地的唤醒；冷启动前与 `bootstrapSession` 返回后都要复核会话仍为 active，失效则关掉刚拉起的 runtime，不得把已归档 worker 留在运行态。实现指针：`register.ts` 的 `resumeOrcaWorkerSessionIfMissing` / `disableOrcaInternal` / `orcaWorkerResumeScheduler.ts`、`orcaTeamService.ts` 的 `cancelWorkerResume`。
+
 4. **worker 状态变更必须广播给 renderer（状态：不变量）**
    创建 worker、`enableOrca` 创建首个 worker、任意真实 worker turn 开始后的 running、idle、archive、terminal done/error 都必须广播 `ORCA_WORKER_CHANGED`。worker DB `status` 跟随真实 turn 生命周期：Lead 派活或用户直接对话 worker 时，只有真实 turn 开始才置 `running`，**产品** terminal 才置 `done/error`（auto-resume 仍 pending/deferred 的 vendor 终态不是产品终态，见消息派发与 auto-bridge 5a）；`switch_focus` / resume / restore 只能恢复可访问性，不能凭空置 `running`。实现指针：`orcaLifecycleService.ts` 的 `createWorker` / `enableTeam`、`orcaWorkerCreationService.ts` 的 `createWorkerInTeam`、`orcaTeamService.ts` 的 `dispatchWorkerTask` / `handleWorkerTurnStarted` / `handleWorkerTerminalTurn`、`register.ts` 的 status event adapter、`useWorkers.ts` 的 `useWorkers`。
 

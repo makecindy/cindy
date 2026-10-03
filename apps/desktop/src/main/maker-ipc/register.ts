@@ -567,6 +567,7 @@ import {
   ORCA_IDLE_RELEASE_STATUSES,
   type OrcaIdleReleaseWatcher,
 } from './orcaIdleReleaseWatcher.js';
+import { createOrcaWorkerResumeScheduler } from './orcaWorkerResumeScheduler.js';
 import {
   ackSessionTurnEndedDurable,
   hasAssistantProgressAfterMessage,
@@ -7513,14 +7514,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   // switchFocus 和 sendToWorker 都可能唤醒 idle worker；统一走这里才能保留 extraDirs。
-  async function resumeOrcaWorkerSessionIfMissing(target: {
-    id: string;
-    teamId: string;
-    leadSessionId: string;
-    sessionId: string;
-  }, assertCurrent?: () => Promise<void>): Promise<boolean> {
+  // assertCurrent：插件能力权威校验，冷启动前 / bootstrap 后各一次。
+  // isCancelled：关闭协同 / 归档 / 显式 idle 会取消尚未落地的唤醒；冷启动前与
+  // bootstrap 返回后都要检查，已经拉起的 runtime 要自己关掉（review P1）。
+  async function resumeOrcaWorkerSessionIfMissing(
+    target: {
+      id: string;
+      teamId: string;
+      leadSessionId: string;
+      sessionId: string;
+    },
+    assertCurrent?: () => Promise<void>,
+    isCancelled?: () => boolean,
+  ): Promise<boolean> {
     const live = maker.getSession(target.sessionId);
     if (live) return false;
+    if (isCancelled?.()) return false;
 
     const db = getDbClient().drizzle;
     const [row] = await db
@@ -7529,6 +7538,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       .where(eq(sessions.id, target.sessionId))
       .limit(1);
     if (!row) return false;
+    // 归档 / 删除后的 worker 不允许被唤醒：关闭协同与 archive 可能和后台预热交错。
+    if (row.status !== 'active') return false;
+    if (isCancelled?.()) return false;
 
     const workerVendorOptions = {
       orcaRole: 'worker' as const,
@@ -7561,11 +7573,82 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await assertCurrent?.();
     await ensureRemoteReadyForSessionStart({ createOpts: opts });
     await assertCurrent?.();
+    if (isCancelled?.()) return false;
     const { session: resumedSession } = await bootstrapSession(opts);
-    await assertCurrent?.();
+    // bootstrap 之后 runtime 已经存在：从这里开始的任何失败（授权失效 / 账号切换 /
+    // 关闭协同 / 归档 / 显式 idle）都必须先关掉刚拉起的 session 再返回或抛错，
+    // 否则已归档 worker 会留在运行态（review P1 + Security）。
+    const closeResumedSession = async (reason: string) => {
+      await maker.closeSession(resumedSession.id).catch((err) => {
+        log.warn('orcaWorkerResume: close resumed session failed', {
+          sessionId: resumedSession.id,
+          reason,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
+    };
+    try {
+      await assertCurrent?.();
+    } catch (err) {
+      await closeResumedSession('assert-current-after-bootstrap');
+      throw err;
+    }
+    if (isCancelled?.() || !(await isOrcaWorkerSessionResumable(target.sessionId))) {
+      await closeResumedSession('resume-invalid-after-bootstrap');
+      return false;
+    }
     await markOrcaRoleIfNeeded(resumedSession.id, 'worker');
     return true;
   }
+
+  /** 唤醒后的会话仍必须是 active；读不到状态按不可唤醒处理（fail-closed）。 */
+  async function isOrcaWorkerSessionResumable(sessionId: string): Promise<boolean> {
+    try {
+      const [row] = await getDbClient()
+        .drizzle.select({ status: sessions.status })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      return row?.status === 'active';
+    } catch (err) {
+      log.warn('orcaWorkerResume: read session status failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
+  // focus 切换是纯 UI 操作,不再同步等待冷启动(2026-09 实报: 首次切到 dormant worker
+  // 要等 ~5s)。resume 仍要发生,但转后台并走共享调度器: per-session 去重 + 与发送路径
+  // 共用 sendToSession 锁,避免并发双 bootstrap(实现与不变量见 orcaWorkerResumeScheduler.ts)。
+  const orcaWorkerResumeScheduler = createOrcaWorkerResumeScheduler({
+    resume: async (
+      target: {
+        id: string;
+        teamId: string;
+        leadSessionId: string;
+        sessionId: string;
+      },
+      isCancelled,
+      assertCurrent,
+    ) => {
+      const didResume = await resumeOrcaWorkerSessionIfMissing(
+        target,
+        assertCurrent,
+        isCancelled,
+      );
+      if (didResume) {
+        log.info('orcaWorkerResume: resumed idle worker (session only, no status change)', {
+          workerId: target.id,
+          sessionId: target.sessionId,
+        });
+      }
+      return didResume;
+    },
+    withSessionLock: (sessionId, task) =>
+      withSendToSessionLock(sessionId, task, () => 'orca-worker-resume'),
+  });
 
   // sessionId → remoteHostId 的进程内缓存 reader(lazy resume 路径每次 send 都
   // 经过 ensureRemoteReadyForSessionStart;实现与缓存语义见 localDb/ipc/sessions.ts,
@@ -11762,6 +11845,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
     const workers = await listWorkersByLead(leadSessionId);
     const activeWorkers = workers.filter((w) => w.teamId === team.id);
+    // 先取消尚未落地的后台预热：关闭流程不等待 sendToSession 锁，若不取消，等锁中或
+    // 冷启动中的 resume 会在归档之后把 worker 重新拉活（review P1）。
+    for (const w of workers) {
+      orcaWorkerResumeScheduler.cancel(w.sessionId);
+    }
     for (const w of activeWorkers) {
       await assertCurrent?.();
       orcaTeamService.clearAutoBridgeState(w.sessionId);
@@ -11897,23 +11985,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // focused 切换: clear 旧 + set 新, 原子化 (review F4)
     await setWorkerFocus(target.teamId, target.id);
 
-    // idle worker → resume session (so it's ready for tasks), but don't set status
-    // to 'running' — that only happens when actual work is dispatched via sendToWorker.
+    // idle worker → 后台预热 runtime(发送/派活时需要),但 focus 切换不等待冷启动:
+    // worker 历史来自 DB,切换立即生效;resume 失败只告警,不影响 focus 结果。
     if (target.status === 'idle') {
-      try {
-        const didResume = await resumeOrcaWorkerSessionIfMissing(target);
-        if (didResume) {
-          log.info('switchFocus: resumed idle worker (session only, no status change)', {
-            workerId: target.id,
-            sessionId: target.sessionId,
-          });
-        }
-      } catch (err) {
+      orcaWorkerResumeScheduler.requestInBackground(target, (err) => {
         log.warn('switchFocus: resume failed', {
           workerId: target.id,
+          sessionId: target.sessionId,
           err: err instanceof Error ? err.message : String(err),
         });
-      }
+      });
     }
 
     broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, {
@@ -11957,8 +12038,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listWorkersByLead,
     getLiveSession: (sessionId) => maker.getSession(sessionId) ?? null,
     resumeWorkerSession: async (target) => {
-      await resumeOrcaWorkerSessionIfMissing(target);
+      // 与 focus 后台预热共享同一套去重/锁:派活不会和切换触发两次 bootstrap。
+      await orcaWorkerResumeScheduler.request(target);
     },
+    // 归档 / 显式 idle 会释放 runtime；先取消未落地的后台预热，避免释放后被重新拉起。
+    cancelWorkerResume: (sessionId) => orcaWorkerResumeScheduler.cancel(sessionId),
     updateWorkerStatus,
     markWorkerIdle: async (workerId) => {
       const now = Date.now();
@@ -13685,13 +13769,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await assertCurrent();
         await setWorkerFocus(target.teamId, target.id);
 
-        // Resume closed session so it's ready to receive tasks, but DON'T change
-        // worker status — status only transitions to 'running' when actual work is
-        // dispatched (sendToWorker). Setting 'running' here without a task causes
-        // the icon to flash indefinitely (no turn → turn-done never fires).
+        // Resume a closed session in the background so it's ready to receive tasks,
+        // but DON'T change worker status — status only transitions to 'running' when
+        // actual work is dispatched (sendToWorker). Setting 'running' here without a
+        // task causes the icon to flash indefinitely (no turn → turn-done never fires).
+        // Focus must not wait for the cold boot: the transcript is DB-backed, and the
+        // send path lazily resumes through the same deduped scheduler. The authority
+        // check stays on the synchronous path (a revoked authority fails the whole
+        // switch, as before) and is re-checked inside the background resume.
         if (target.status === 'idle') {
           await assertCurrent();
-          await resumeOrcaWorkerSessionIfMissing(target, assertCurrent);
+          orcaWorkerResumeScheduler.requestInBackground(
+            target,
+            (err) => {
+              log.warn('switchFocus: resume failed', {
+                workerId: target.id,
+                sessionId: target.sessionId,
+                err: err instanceof Error ? err.message : String(err),
+              });
+            },
+            { assertCurrent },
+          );
         }
         broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });
         return { ok: true, workerId: target.id };

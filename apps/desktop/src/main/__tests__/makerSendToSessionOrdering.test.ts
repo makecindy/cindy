@@ -778,9 +778,45 @@ describe('sendToSession ordering', () => {
     );
     expectOrder(resumeBranch, '...directoryGrantsForRuntime(storedExtraDirs),', 'await bootstrapSession(opts);');
     expect(serviceDepsBlock).toContain('resumeWorkerSession: async (target) => {');
-    expect(serviceDepsBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
-    expect(switchFocusIpcBlock).toContain('const didResume = await resumeOrcaWorkerSessionIfMissing(target);');
-    expect(switchFocusMcpBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
+    expect(serviceDepsBlock).toContain('await orcaWorkerResumeScheduler.request(target);');
+    // focus 切换是纯 UI 操作：resume 只能后台调度，不能在 IPC / MCP handler 里同步 await
+    // 冷启动（首次切 dormant worker 的 ~5s 卡顿回归点）。MCP 路径仍透传 assertCurrent，
+    // 权威校验在后台预热内部继续生效。
+    expect(switchFocusIpcBlock).toContain('orcaWorkerResumeScheduler.requestInBackground(target,');
+    expect(switchFocusIpcBlock).not.toContain('await resumeOrcaWorkerSessionIfMissing(target)');
+    expect(switchFocusMcpBlock).toContain('orcaWorkerResumeScheduler.requestInBackground(');
+    expect(switchFocusMcpBlock).toContain('{ assertCurrent },');
+    expect(switchFocusMcpBlock).not.toContain('await resumeOrcaWorkerSessionIfMissing(target');
+    // 关闭协同 / 归档 / 显式 idle 与冷启动交错时，唤醒必须可取消，并在 bootstrap
+    // 返回后关掉刚拉起的 session（review P1：不得把已归档 worker 留在运行态）。
+    expect(resumeBranch).toContain('if (isCancelled?.()) return false;');
+    expect(resumeBranch).toContain('await maker.closeSession(resumedSession.id).catch((err) => {');
+    // bootstrap 之后 runtime 已存在，授权复核失败也必须先清理再抛（Security review）。
+    expect(resumeBranch).toContain("await closeResumedSession('assert-current-after-bootstrap');");
+    expect(resumeBranch).toContain('throw err;');
+    expectOrder(
+      resumeBranch,
+      'const { session: resumedSession } = await bootstrapSession(opts);',
+      "await closeResumedSession('assert-current-after-bootstrap');",
+    );
+    expectOrder(
+      resumeBranch,
+      "await closeResumedSession('assert-current-after-bootstrap');",
+      'await markOrcaRoleIfNeeded(resumedSession.id,',
+    );
+    expect(serviceDepsBlock).toContain(
+      'cancelWorkerResume: (sessionId) => orcaWorkerResumeScheduler.cancel(sessionId),',
+    );
+  });
+
+  it('cancels pending worker resumes before releasing runtimes', () => {
+    const disableOrcaBlock = extractBetween(
+      source,
+      'async function disableOrcaInternal',
+      'ipcMain.handle(MAKER_INVOKE.SESSION_DISABLE_ORCA',
+    );
+    expect(disableOrcaBlock).toContain('orcaWorkerResumeScheduler.cancel(w.sessionId);');
+    expect(orcaTeamServiceSource).toContain('deps.cancelWorkerResume?.(worker.sessionId);');
   });
 
   it('keeps IPC and MCP createWorker delegated to the shared lifecycle service', () => {

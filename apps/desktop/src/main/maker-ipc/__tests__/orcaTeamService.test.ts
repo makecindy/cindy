@@ -118,10 +118,24 @@ describe('model Orca cleanup authority', () => {
       deps.cancelWorkerSessionOperations = vi.fn(async () => { if (phase === 'after-write') allowed = false; });
       const focus = vi.fn(async () => { if (phase === 'after-write') allowed = false; });
       const resume = vi.fn(async () => undefined);
+      // switch_focus 的冷启预热现在走共享调度器（MCP 与 renderer 两条路径一致）：
+      // 权威校验留在同步路径（撤销则整个 switchFocus 失败，与上游一致），调度器
+      // 只负责不阻塞。这里同步触发 resume 保持断言确定性，错误交给 onError。
+      const orcaWorkerResumeScheduler = {
+        requestInBackground: (
+          _target: unknown,
+          onError: (error: unknown) => void,
+          opts?: { assertCurrent?: () => Promise<void> },
+        ) => {
+          void opts?.assertCurrent?.().catch(onError);
+          void resume().catch(onError);
+        },
+      };
       const api = compile({
         captureOrcaPluginAuthority: async () => { await assertCurrent(); return { assertCurrent }; },
         orcaTeamService: service, listWorkersByLead: deps.listWorkersByLead, findFocusTargetWorker,
         setWorkerFocus: focus, resumeOrcaWorkerSessionIfMissing: resume,
+        orcaWorkerResumeScheduler, log: { warn: vi.fn() },
         broadcastToAllWindows: vi.fn(), MAKER_PUSH: { ORCA_WORKER_CHANGED: 'changed' },
       });
       const result = await api[action]({ callerLeadSessionId: 'lead-1', leadSessionId: 'lead-1', workerId: 'worker-1', workerIdOrLabel: 'worker-1' });
@@ -150,6 +164,8 @@ describe('model Orca cleanup authority', () => {
         recycleSessionWorktreeForStatusChange: vi.fn(), captureSessionRecycleScope: vi.fn(),
         cleanupPendingInteractionsForSession: vi.fn(), forgetKnownOrcaWorkerSession: vi.fn(),
         markTeamEnded: vi.fn(), markWorkersStatusByTeam: vi.fn(), archiveWorkersByTeam: archive,
+        // 关闭协同会先取消未落地的后台预热（review P1）。
+        orcaWorkerResumeScheduler: { cancel: vi.fn() },
         broadcastToAllWindows: vi.fn(), MAKER_PUSH: { ORCA_WORKER_CHANGED: 'changed' }, log: { info: vi.fn(), warn: vi.fn() },
       };
       const api = compile(bindings, `${disable}\nreturn { api: {${callbacks}}, disableOrcaInternal };`);
