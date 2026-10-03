@@ -114,8 +114,7 @@ describe('ghostPluginViewModel', () => {
         tabPanel: false,
         hasMainView: false,
         mainViewTitle: null,
-        hostCapability: null,
-      },
+            },
       {
         id: 'lizi-mivo',
         name: 'Lizi Mivo',
@@ -128,8 +127,7 @@ describe('ghostPluginViewModel', () => {
         tabPanel: false,
         hasMainView: false,
         mainViewTitle: null,
-        hostCapability: null,
-      },
+            },
       {
         id: 'slack',
         name: 'Cindy Slack',
@@ -142,8 +140,7 @@ describe('ghostPluginViewModel', () => {
         tabPanel: false,
         hasMainView: false,
         mainViewTitle: null,
-        hostCapability: null,
-      },
+            },
     ] satisfies GhostPluginListItem[];
 
     const searched = filterGhostPluginItems(items, 'miv');
@@ -233,25 +230,8 @@ describe('ghostPluginViewModel', () => {
       name: 'XD Mivo',
       enabled: true,
       canUse: true,
-      hostCapability: null,
-      version: '1.5.10',
+          version: '1.5.10',
     });
-  });
-
-  it('projects the iOS Simulator declaration as an explicit Host capability action', () => {
-    const item = toGhostPluginListItem(
-      installed({
-        manifest: manifest({
-          command: undefined,
-          iosSimulator: true,
-          tools: undefined,
-          network: undefined,
-        }),
-      }),
-    );
-
-    expect(item.hostCapability).toBe('ios-simulator');
-    expect(ghostPrimaryAction(item)).toBe('capability');
   });
 
   it('projects main-view metadata without overriding the existing panel action', () => {

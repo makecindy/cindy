@@ -2244,29 +2244,6 @@ export class ClaudeCodeAgent extends BaseAgent {
       return 'prompt-each-time';
     };
 
-    const mcpApprovalPresentation = (
-      toolName: string,
-      input: unknown,
-    ) => {
-      const presenter = this.deps.getMcpToolApprovalPresentation;
-      if (!presenter) return undefined;
-      const target = resolveMcpToolTarget(toolName, registeredMcpServerNames);
-      if (!target) return undefined;
-      try {
-        return presenter({
-          serverName: target.serverName,
-          toolName: target.toolName,
-          toolParams: input,
-        });
-      } catch (error) {
-        log.error('MCP approval presentation threw -> vendor copy', {
-          serverName: target.serverName,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return undefined;
-      }
-    };
-
     // canUseTool dispatcher —— 三路分支(参考 agentManager.ts:1054-1162):
     //  1. AskUserQuestion: 模型问问题, 转 ask_user_question kind, decision.answers 拼回 updatedInput
     //  2. ExitPlanMode:   plan 模式提交计划, 转 plan_review kind, decision.editedPlan 覆盖 plan
@@ -2413,14 +2390,13 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 3a. MCP 工具过 host 审批策略(本地与远端会话共用 classifyMcpApprovalPolicy)。
       const turnPolicyForcePrompt = forceTurnConfirmation(toolName, input);
       const mcpApprovalPolicy = classifyMcpApprovalPolicy(toolName, input);
-      const hostApprovalPresentation = mcpApprovalPresentation(toolName, input);
       let forcePrompt = mutablePermissionMode !== 'auto' && turnPolicyForcePrompt;
       let unavailableHandoff = false;
       let reviewedWritePath: string | null | undefined;
       let executionInput = input;
       const normalizedAction = normalizeBuiltinToolForAutoReview(toolName, input);
       const builtinReviewAction = normalizedAction.kind === 'other'
-        ? toolAutoReviewAction(toolName, input, hostApprovalPresentation?.description)
+        ? toolAutoReviewAction(toolName, input)
         : normalizedAction;
       const directorySensitivePermission = builtinReviewAction?.kind === 'read'
         || builtinReviewAction?.kind === 'file-write';
@@ -2456,7 +2432,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           executionInput = bindClaudeFileWriteTarget(toolName, input, reviewedWritePath);
         }
         const autoDecision = await reviewAutoAction(
-          turnPolicyForcePrompt ? toolAutoReviewAction(toolName, input, hostApprovalPresentation?.description, action) : action,
+          turnPolicyForcePrompt ? toolAutoReviewAction(toolName, input, undefined, action) : action,
           workspaceRoots,
           writableRoots,
           opts.remoteHostId ? 'linux' : process.platform,
@@ -2509,9 +2485,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         toolUseId: options.toolUseID,
         toolName,
         input: executionInput as Record<string, unknown>,
-        title: hostApprovalPresentation?.title ?? options.title,
+        title: options.title,
         displayName: options.displayName,
-        description: hostApprovalPresentation?.description ?? options.description,
+        description: options.description,
         // prompt-each-time 的语义是"每次都要人过目", 因此不把会话级 suggestion 交给
         // UI —— 否则用户点一次"总是允许"就把逐次确认的高风险 action 永久放行了。
         suggestions: forcePrompt
@@ -3728,17 +3704,13 @@ export class ClaudeCodeAgent extends BaseAgent {
             // 远端会话走同一份 host MCP 策略 —— 否则 SSH 会话里可信 server 又要逐次
             // 弹窗, prompt-each-time 的"禁止持久化授权"保护也整套缺失。
             const remoteMcpPolicy = classifyMcpApprovalPolicy(remoteToolName, params.input ?? {});
-            const remoteHostApprovalPresentation = mcpApprovalPresentation(
-              remoteToolName,
-              params.input ?? {},
-            );
             let remoteForcePrompt = mutablePermissionMode !== 'auto' && remoteTurnPolicyForcePrompt;
             let remoteUnavailableHandoff = false;
             const reviewPermissionMode = mutablePermissionMode;
             if (reviewPermissionMode === 'auto' || (remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt)) {
               const normalizedAction = normalizeBuiltinToolForAutoReview(remoteToolName, params.input ?? {});
               const action = normalizedAction.kind === 'other'
-                ? toolAutoReviewAction(remoteToolName, params.input ?? {}, remoteHostApprovalPresentation?.description)
+                ? toolAutoReviewAction(remoteToolName, params.input ?? {})
                 : normalizedAction;
               if (action.kind === 'exec') action.destructivePathResolution = 'unavailable';
               // The controller cannot prove a path on the SSH filesystem. Mark
@@ -3746,7 +3718,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               // from a lexical prefix alone.
               if (action.kind === 'file-write') action.resolvedPath = null;
               const autoDecision = await reviewAutoAction(
-                remoteTurnPolicyForcePrompt ? toolAutoReviewAction(remoteToolName, params.input ?? {}, remoteHostApprovalPresentation?.description, action) : action,
+                remoteTurnPolicyForcePrompt ? toolAutoReviewAction(remoteToolName, params.input ?? {}, undefined, action) : action,
                 [opts.workingDir].filter(
                   (d): d is string => typeof d === 'string' && d.length > 0,
                 ),
@@ -3792,9 +3764,9 @@ export class ClaudeCodeAgent extends BaseAgent {
               toolUseId: params.requestId,
               toolName: params.toolName ?? 'unknown',
               input: params.input ?? {},
-              title: remoteHostApprovalPresentation?.title ?? params.title,
+              title: params.title,
               displayName: params.displayName,
-              description: remoteHostApprovalPresentation?.description ?? params.description,
+              description: params.description,
               suggestions: remoteForcePrompt
                 ? undefined
                 : this.normalizeSessionPermissionSuggestions(params.suggestions),

@@ -1,11 +1,32 @@
 import { describe, expect, it, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { createLiziMcpProviders } from '@cindy/mcps';
 import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY } from '../agentCapabilityCatalog';
 
 const context = { agentKind: 'pi' as const, workingDir: '/repo', sessionId: 'task' };
 
 describe('shared runtime capability discovery', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)('does not advertise the retired simulator in the %s provider catalog', async (agentKind) => {
+    const providers = createLiziMcpProviders({
+      android: {} as never, browser: {} as never, computer: {} as never,
+      feishuBot: {} as never, wechatBot: {} as never, slackHook: {} as never,
+      scheduler: {} as never, ssh: {} as never, memory: {} as never,
+      contacts: {} as never, docs: {} as never, xdtHelper: {} as never,
+      orca: {} as never, lsp: {} as never,
+    });
+    const runtime = { ...context, agentKind };
+    const result = await readAgentCapabilityCatalog(providers, runtime, {});
+    expect(JSON.stringify(result)).not.toMatch(/ios.?simulator/i);
+    expect(result).toMatchObject({ capabilities: expect.arrayContaining([
+      expect.objectContaining({ server: 'cindy_android' }),
+      expect.objectContaining({ server: 'cindy_browser' }),
+      expect.objectContaining({ server: 'cindy_contacts' }),
+    ]) });
+    expect(await readAgentCapabilityCatalog(providers, runtime, { server: 'cindy_ios_simulator' }))
+      .toMatchObject({ ok: false, errorCode: 'UNKNOWN_CAPABILITY' });
+  });
+
   it('uses registrations, includes future providers and does not construct servers for the index', async () => {
     const factory = vi.fn();
     const result = await readAgentCapabilityCatalog([

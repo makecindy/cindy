@@ -1,3 +1,4 @@
+import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useNavigationAttention } from '@/lib/navigationAttentionStore';
 import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
 /**
@@ -73,7 +74,8 @@ export function SidebarTopNav({
   const { search, allKnownProjects, openSignal } = useConversationSearchContext();
   // 任一插件有未读 → 入口行尾一颗**静态**绿点(聚合入口按 AttentionDot 规范不呼吸,
   // 呼吸留给单条卡片;见 AttentionDot 头部的形态规范)。
-  const hasGhostUnread = useAnyGhostUnread();
+  const hasRetirementUnread = useInstalledGhosts().some(ghost => ghost.retirement?.unread);
+  const hasGhostUnread = useAnyGhostUnread() || hasRetirementUnread;
 
   // 通用新建继承当前任务的电脑，由草稿页集中迁移；同机保留已选项目。
   const handleNew = () => {
@@ -127,7 +129,7 @@ export function SidebarTopNav({
         )}
       />
       <span className="leading-none">{t('sidebar.tabs.plugins')}</span>
-      {hasGhostUnread && <AttentionDot size={6} className="ml-auto mr-0.5" />}
+      {hasGhostUnread && <AttentionDot size={6} tone={hasRetirementUnread ? "awaiting" : "done"} className="ml-auto mr-0.5" />}
     </button>
   ) : null;
   // `activeKey` is intentionally sticky for the other navigation rows, but this

@@ -166,7 +166,7 @@ describe('ChatInput session switch focus contract', () => {
     );
   });
 
-  it('reuses composer entry paths for Plugin commands and Host capabilities', () => {
+  it('reuses composer entry paths for Plugin commands', () => {
     const capabilitySelectionBlock = extractBetween(
       chatInputSource,
       'const insertAtResource = useCallback(',
@@ -174,7 +174,6 @@ describe('ChatInput session switch focus contract', () => {
     );
 
     expect(pluginPageSource).toContain('pendingGhostId: ghost.manifest.id');
-    expect(pluginPageSource).toContain('pendingHostCapabilityGhostId: ghost.manifest.id');
     expect(pluginPageSource.match(/focusAtEnd: true/g)).toHaveLength(1);
     expect(
       chatInputSource.match(/placeGhostAtComposerStart\(editor, ghost, installedGhosts\)/g),
@@ -185,18 +184,12 @@ describe('ChatInput session switch focus contract', () => {
       ),
     ).toHaveLength(1);
     expect(chatInputSource).toContain('pendingGhostId: undefined');
-    expect(chatInputSource).toContain('pendingHostCapabilityGhostId: undefined');
-    expect(
-      chatInputSource.match(
-        /placeHostCapabilityAtComposerStart\(editor, ghost, installedGhosts\)/g,
-      ),
-    ).toHaveLength(1);
+
     expect(capabilitySelectionBlock).toContain("selectedItem.type === 'plugin-command'");
 expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
     expect(capabilitySelectionBlock).toContain(
       'placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current);',
     );
-    expect(capabilitySelectionBlock).toContain('placeHostCapabilityAtComposerStart(editor, ghost, installedGhostsRef.current);');
     expect(capabilitySelectionBlock).toContain('closeAtPanel();');
     expect(capabilitySelectionBlock).not.toContain('focusIOSSimulatorPanel');
     expect(chatInputSource).toContain('focusComposerEndNextFrame(editor);');

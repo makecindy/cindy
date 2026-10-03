@@ -167,12 +167,9 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PermissionSelector } from './PermissionSelector';
 import { PluginWriteAccessRecovery } from './PluginWriteAccessRecovery';
 import { ExtraDirsButton, type CollaborationMenuConfig } from './ExtraDirsButton';
-import { expandHostCapabilityInvocation } from '../../cindy-brain/hostCapabilityInvocation';
 import {
   focusComposerEndNextFrame,
-  hostCapabilityForGhost,
   placeGhostAtComposerStart,
-  placeHostCapabilityAtComposerStart,
 } from './ghostComposerPlacement';
 import { NewGoalDialog } from './NewGoalDialog';
 import { PlanModeIndicator } from './PlanModeIndicator';
@@ -320,11 +317,9 @@ import {
   type SerializedComposerContent,
 } from './composerContentSerialization';
 import {
-  composerDocumentContainsHostCapabilityChip,
   composerDocumentContainsList,
   normalizeComposerDocumentJSON,
   plainTextToComposerDocument,
-  stripHostCapabilityChips,
 } from '@/lib/composerListDocument';
 import { useAgentCapabilities, type AgentKind } from '@/hooks/useAgentCapabilities';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
@@ -1564,24 +1559,10 @@ export function ChatInput({
   remoteHostIdRef.current = remoteHostId;
   const deviceLinkDeviceIdRef = useRef<string | null | undefined>(deviceLinkDeviceId);
   deviceLinkDeviceIdRef.current = deviceLinkDeviceId;
-  // Host capability 芯片只在「已确认本机」的 composer 里有效:SSH(remoteHostId)或
-  // device-link 远程会话若恢复本地草稿里序列化的芯片,发送路径会因
-  // TARGET_UNAVAILABLE 中断、逼用户手动删芯片。这里把「归一化 + 已确认远程剥芯片」
-  // 收口成一个入口,供草稿恢复路径统一复用。
-  // 三态:deviceLinkDeviceId = string(远程) / null(本机) / undefined(归属未解析)。
-  // 冷打开/重载时首帧归属尚未回流(undefined),不能当远程把已存本机草稿的芯片剥掉
-  // —— 只在「已确认远程」(SSH remoteHostId 或 deviceLinkDeviceId 为 string)时剥离,
-  // 未解析(undefined)时延后决定、保留芯片;随后本机(null)自然保留,若解析成远程则由
-  // 发送路径的 hostCapabilityGhost 谓词 fail-closed 兜底。
+  // Every restored draft drops retired capability atoms while preserving its content.
   const normalizeRestoredComposerDraft = (
     draftText: JSONContent | null | undefined,
-  ): JSONContent | null => {
-    if (!draftText) return null;
-    const normalized = normalizeComposerDocumentJSON(draftText);
-    const isConfirmedRemote =
-      !!remoteHostIdRef.current || typeof deviceLinkDeviceIdRef.current === 'string';
-    return isConfirmedRemote ? stripHostCapabilityChips(normalized) : normalized;
-  };
+  ): JSONContent | null => draftText ? normalizeComposerDocumentJSON(draftText) : null;
   const tRef = useRef(t);
   tRef.current = t;
   // 长文本粘贴 chip 的点击编辑目标。保存时用 nodePos + originalText 双重校验，
@@ -2741,9 +2722,6 @@ export function ChatInput({
             quotes: existing?.quotes ?? [],
             browserComments: existing?.browserComments ?? [],
             ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
-            ...(existing?.pendingHostCapabilityGhostId
-              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
-              : {}),
             ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
           },
           { silent: true },
@@ -2953,8 +2931,9 @@ export function ChatInput({
     () =>
       installedGhosts.filter(
         (ghost) =>
-          ghost.manifest.id !== 'cindy-mivo' ||
-          !installedGhosts.some((candidate) => candidate.manifest.id === 'xd-mivo'),
+          !ghost.retirement &&
+          (ghost.manifest.id !== 'cindy-mivo' ||
+            !installedGhosts.some((candidate) => candidate.manifest.id === 'xd-mivo')),
       ),
     [installedGhosts],
   );
@@ -2978,19 +2957,16 @@ export function ChatInput({
     if (deviceLinkDeviceId !== null) return [];
     return pluginsForMenu.map((ghost) => {
       const hasCommand = !!ghost.manifest.command;
-      const hostCapability = remoteHostId ? null : hostCapabilityForGhost(ghost);
-      const hasComposerEntry = hasCommand || hostCapability !== null;
+      const hasComposerEntry = hasCommand;
       const selectable = pluginAvailableIds.has(ghost.manifest.id) && hasComposerEntry;
-      const entryKey = ghost.manifest.command ?? hostCapability ?? '';
+      const entryKey = ghost.manifest.command ?? '';
       return {
         item: {
           type: 'plugin-command' as const,
           name: ghost.manifest.name,
           relPath:
             ghost.manifest.command ??
-            (hostCapability
-              ? `cindy://host-capability/${hostCapability}`
-              : `cindy://plugin/${ghost.manifest.id}`),
+            `cindy://plugin/${ghost.manifest.id}`,
           pluginId: ghost.manifest.id,
           ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
           sourceLabel: entryKey,
@@ -3085,9 +3061,6 @@ export function ChatInput({
             quotes: existing?.quotes ?? [],
             browserComments: existing?.browserComments ?? [],
             ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
-            ...(existing?.pendingHostCapabilityGhostId
-              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
-              : {}),
             ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
           },
           { silent: true },
@@ -3908,9 +3881,6 @@ export function ChatInput({
             quotes: existing?.quotes ?? [],
             browserComments: existing?.browserComments ?? [],
             ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
-            ...(existing?.pendingHostCapabilityGhostId
-              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
-              : {}),
             ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
           },
           { silent: latestStorageKeyRef.current !== sourceKey },
@@ -3987,27 +3957,6 @@ export function ChatInput({
     });
   }, [editor, storageKey]);
 
-  // device-link 归属解析成「已确认远程」后补剥 Host capability 芯片。草稿恢复
-  // 效果依赖 [editor, storageKey],归属从 undefined(未解析)→ 远程 string 时不会
-  // 重跑,而 normalizeRestoredComposerDraft 在未解析阶段保留了芯片(不能把已存本机
-  // 草稿的芯片当远程剥掉);这里监听归属转译,一旦确认远程就把当前编辑器内容里残留
-  // 的 Host 芯片剥掉,避免发送路径被 TARGET_UNAVAILABLE 拦截、逼用户手动删芯片。
-  const prevConfirmedRemoteRef = useRef<boolean>(false);
-  useEffect(() => {
-    const isConfirmedRemote = !!remoteHostId || typeof deviceLinkDeviceId === 'string';
-    const becameRemote = isConfirmedRemote && !prevConfirmedRemoteRef.current;
-    prevConfirmedRemoteRef.current = isConfirmedRemote;
-    if (!becameRemote || !editor) return;
-    const doc = editor.getJSON();
-    if (!composerDocumentContainsHostCapabilityChip(doc)) return;
-    isRestoringRef.current = true;
-    try {
-      editor.commands.setContent(stripHostCapabilityChips(doc));
-    } finally {
-      isRestoringRef.current = false;
-    }
-  }, [editor, remoteHostId, deviceLinkDeviceId]);
-
   // Plugin page routed entry: wait until the editor has hydrated its existing
   // draft, then reuse the exact same insertion/focus path as the in-composer
   // `$` / `+` selectors. This preserves body text and replaces an existing
@@ -4032,42 +3981,6 @@ export function ChatInput({
         { silent: true },
       );
       placeGhostAtComposerStart(editor, ghost, installedGhosts);
-      return;
-    }
-
-    if (draft.pendingHostCapabilityGhostId) {
-      const ghost = ghostsForCommand.find(
-        (candidate) => candidate.manifest.id === draft.pendingHostCapabilityGhostId,
-      );
-      // 远程/未解析归属不恢复 Host capability 芯片(与 `+` 菜单和发送路径的
-      // fail-closed 同口径):SSH(remoteHostId)或 device-link(deviceLinkDeviceId
-      // !== null,含未解析)会话若恢复芯片,发送时会被 TARGET_UNAVAILABLE 拦截,
-      // 阻塞用户发送正文。仅已确认本机(deviceLinkDeviceId === null 且无
-      // remoteHostId)才恢复,否则静默丢弃芯片意图。
-      const dlDeviceId = deviceLinkDeviceIdRef.current;
-      const canPlaceHostCapability = !remoteHostIdRef.current && dlDeviceId === null;
-      // 归属未解析(deviceLinkDeviceId === undefined)且非 SSH 时延后决定:不清除
-      // pendingHostCapabilityGhostId,等归属解析后 effect 重跑。若此时清除,
-      // 后续解析成本机也无法恢复芯片,Host 插件(如 iOS Simulator)的"使用"
-      // handoff 会静默丢失。
-      // SSH(remoteHostId 已解析)时:即使 dlDeviceId === undefined,SSH 会话
-      // 永远无法放置 Host capability 芯片,直接清除 pendingHostCapabilityGhostId,
-      // 避免残留芯片在后续依赖变化时延迟插入已失效的能力。
-      if (dlDeviceId === undefined && !remoteHostIdRef.current) {
-        return;
-      }
-      saveComposerDraft(
-        storageKey,
-        {
-          ...draft,
-          pendingHostCapabilityGhostId: undefined,
-          focusAtEnd: false,
-        },
-        { silent: true },
-      );
-      if (ghost && canPlaceHostCapability) {
-        placeHostCapabilityAtComposerStart(editor, ghost, installedGhosts);
-      }
       return;
     }
 
@@ -4117,9 +4030,6 @@ export function ChatInput({
             quotes: existing?.quotes ?? [],
             browserComments: next,
             ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
-            ...(existing?.pendingHostCapabilityGhostId
-              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
-              : {}),
             ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
           },
           { silent: true },
@@ -5015,11 +4925,6 @@ export function ChatInput({
 
         if (ghost.manifest.command) {
           placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current);
-        } else {
-          const hostCap = hostCapabilityForGhost(ghost);
-          if (hostCap) {
-            placeHostCapabilityAtComposerStart(editor, ghost, installedGhostsRef.current);
-          }
         }
 
         closeAtPanel();
@@ -5267,7 +5172,6 @@ export function ChatInput({
           agentReferences: serializedAgentReferences,
           pastedTextRanges,
           slashCommandRanges,
-          hostCapability,
         } = serializedContent;
         let agentReferences = serializedAgentReferences;
         const sourceDraftExtras =
@@ -5292,7 +5196,6 @@ export function ChatInput({
           ? commentsBeforeOptimisticClear
           : sourceOwnedExtras.comments;
         if (
-          !hostCapability &&
           classifyCindyMakeCommand(editorText, slashCommandsReady ? mergedCommands : null).kind !== 'none'
         ) {
           const isMakeSourceCurrent = () =>
@@ -5371,7 +5274,6 @@ export function ChatInput({
           }
         }
         if (
-          !hostCapability &&
           isPlanModeComposerCommandText(
             editorText,
             planModeEntry !== undefined,
@@ -5428,9 +5330,7 @@ export function ChatInput({
         // (截图在下方并入 filesToSend,与文本块里的 "attached as a labeled image"
         // caption 对应)。
         const text = formatBrowserCommentsForSend(commentsForSend, editorText);
-        // Allow send if there is text, attachments, or a host-capability chip
-        // (host-capability chips carry routing metadata but no visible text).
-        if (!text && attachmentsForSend.length === 0 && !hostCapability) return;
+        if (!text && attachmentsForSend.length === 0) return;
 
         // device-link 模型清单未结算或真实读取失败时禁止发送。模型选择器会同步显示
         // loading / error；这里兜住快捷键、语音等间接派发入口，避免旧快照继续路由。
@@ -5517,40 +5417,8 @@ export function ChatInput({
           workingDirRef.current,
         );
         const ghostCommandWord = parseGhostCommandWord(text);
-        // Host-capability 芯片同样计入最近插件使用(与 $command 路径对齐)：
-        // 从 eligibleGhosts 解析出仍有效(启用 + workdir + manifest 一致 + 非远程会话)
-        // 的 host 插件对象交给 usedGhost，使发送后 markUsed 能更新该插件的最近使用排序。
-        const hostCapabilityGhost =
-          hostCapability !== undefined && !remoteHostId && deviceLinkDeviceId === null
-            ? eligibleGhosts.find(
-                (g) =>
-                  g.manifest.id === hostCapability.ghostId &&
-                  g.enabled &&
-                  hostCapabilityForGhost(g) === hostCapability.capability,
-              )
-            : undefined;
-        const usedGhost = ghostCommandWord
-          ? findGhostByCommand(eligibleGhosts, ghostCommandWord)
-          : (hostCapabilityGhost ?? null);
-        const textToSend = expandGhostCommand(text, eligibleGhosts);
-        // 发送前校验 host-capability 插件仍处于启用且 workdir 可用的状态。
-        // 若用户在插入芯片后停用/卸载了该插件，芯片内序列化的 ghostId/capability
-        // 已失时效，不应再展开 Host 路由指令（fail-closed）。
-        // 额外收口(remote session + manifest 一致性)：
-        //   - SSH(remoteHostId)/device-link(deviceLinkDeviceId) 远程会话不展开控制端 Host 路由；
-        //     deviceLinkDeviceId 仅 null（已确认本机）放行，undefined（所有权未解析）fail-closed；
-        //   - 插件更新后芯片保留旧 capability 时，manifest 当前声明必须仍匹配才放行。
-        const isHostCapabilityValid = hostCapabilityGhost !== undefined;
-        // 校验失败(插件停用/卸载/超 workdir/远程会话)时不静默退化为普通文本发送:
-        // 芯片承载的是用户选择的能力路由意图,退化发送会丢失 Host 路由,仅芯片消息还会
-        // 以空文本派发,静默丢弃用户意图。直接提示并拦截,让用户修复插件状态后重发。
-        if (hostCapability && !isHostCapabilityValid) {
-          toast.warning(t('newChat.pluginSetup.error.TARGET_UNAVAILABLE'));
-          return;
-        }
-        const routedText = hostCapability
-          ? expandHostCapabilityInvocation(textToSend, hostCapability, hostCapability.name)
-          : textToSend;
+        const usedGhost = ghostCommandWord ? findGhostByCommand(eligibleGhosts, ghostCommandWord) : null;
+        const routedText = expandGhostCommand(text, eligibleGhosts);
         const sendSnapshot = captureComposerSendSnapshot(
           editor.getJSON(),
           latestAttachmentsRef.current,

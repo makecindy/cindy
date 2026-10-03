@@ -45,7 +45,6 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
   });
 
   it('fully cleans Host-owned worker runtimes after normal team archival', () => {
-    expect(registerSource).toContain('await cancelIOSSimulatorSessionOperations(w.sessionId)');
     const archiveIndex = registerSource.indexOf(
       'const archivedWorkerSessionIds = await archiveWorkersByTeam(team.id, assertCurrent)',
     );

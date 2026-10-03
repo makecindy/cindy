@@ -282,7 +282,7 @@ async function runStableAbabLoop(
         assistantToolUse(
           id,
           isA
-            ? 'grep -R "getShellCommandPolicy" packages apps'
+            ? 'grep -R "getMcpToolApprovalPolicy" packages apps'
             : 'grep -R "shell-command-policy" packages apps',
           sidechain?.parentToolUseId,
           sidechain?.model,

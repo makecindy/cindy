@@ -78,7 +78,6 @@ import {
 import { linuxPasswordStoreRelaunchArgs } from './linuxPasswordStore';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion';
 import { disposeAndroidAdb } from './mcp-integrations/android';
-import { abortIOSSimulatorOperationsForExit } from './mcp-integrations/ios-simulator-exit';
 import { getGhostNodeRuntimeBroker } from './cindy-brain/index';
 import { cleanOldUpdateFiles } from './updateArtifacts';
 import {
@@ -1584,9 +1583,6 @@ function forceQuit(): void {
   // 绕过 onQuit 链意味着 disposeAndroidAdb 不会被自动调用——显式 fire-and-forget
   // 收掉自带 adb server,避免它锁住安装目录阻碍 updater 替换文件。
   disposeAndroidAdb();
-  // build_app uses detached process groups, so parent exit does not reliably
-  // reap xcodebuild. Abort synchronously before process.exit bypasses Host dispose.
-  abortIOSSimulatorOperationsForExit();
   // Residual window only, and now a millisecond-scale one: `executeRelaunch`
   // reclaimed this runtime's runners and then confirmed the agent home was
   // still quiet, refusing to get here otherwise. What is left is the gap

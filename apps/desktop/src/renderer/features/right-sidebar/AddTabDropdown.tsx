@@ -15,16 +15,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import {
-  Bot,
-  FileDiff,
-  FolderTree,
-  Globe,
-  ListTodo,
-  Smartphone,
-  Terminal,
-  Wrench,
-} from 'lucide-react';
+import { Bot, FileDiff, FolderTree, Globe, ListTodo, Terminal, Wrench } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useBotProfiles } from '@/features/bots/botStore';
@@ -42,7 +33,6 @@ const BOT_SECONDARY_KINDS = new Set<TabKindId>([
   'subagents',
   'background-tasks',
   'terminal',
-  'ios-simulator',
 ]);
 
 interface AddTabDropdownProps {
@@ -61,7 +51,6 @@ interface AddTabDropdownProps {
    */
   existingKinds?: ReadonlySet<TabKindId>;
   /** Host viewer is a public surface only while the product plugin is enabled. */
-  iosSimulatorAvailable?: boolean;
   /** Pi is the only harness with the complete Subagents detail contract. */
   subagentsAvailable?: boolean;
 }
@@ -107,13 +96,6 @@ const MENU_ITEMS: TabKindMenuMeta[] = [
     enabled: true,
   },
   {
-    kind: 'ios-simulator',
-    labelKey: 'rightSidebar.tabs.kinds.iosSimulator',
-    icon: Smartphone,
-    order: 25,
-    enabled: true,
-  },
-  {
     kind: 'terminal',
     labelKey: 'rightSidebar.tabs.kinds.terminal',
     icon: Terminal,
@@ -136,7 +118,6 @@ export function AddTabDropdown({
   onClose,
   onSelect,
   existingKinds,
-  iosSimulatorAvailable = false,
   subagentsAvailable = false,
 }: AddTabDropdownProps) {
   const { t } = useTranslation();
@@ -238,7 +219,6 @@ export function AddTabDropdown({
   }, [anchorRef, onClose]);
 
   const visibleItems = MENU_ITEMS.filter((item) => {
-    if (item.kind === 'ios-simulator' && !iosSimulatorAvailable) return false;
     if (item.kind === 'subagents' && !subagentsAvailable) return false;
     if (isBotSession && BOT_SECONDARY_KINDS.has(item.kind)) return false;
     return true;

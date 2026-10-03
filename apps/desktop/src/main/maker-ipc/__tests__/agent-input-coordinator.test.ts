@@ -444,7 +444,6 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       },
       markWorkerIdleIfStatus: async () => false,
       restoreWorkerDoneIfIdle: async () => false,
-      cancelWorkerSessionOperations: async () => {},
       closeWorkerSession: async () => {},
       closeWorkerSessionIfIdle: async () => true,
       hasPendingWorkerInput: async () => false,

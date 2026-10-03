@@ -8610,23 +8610,6 @@ export class PiAgent extends BaseAgent {
         }
       })();
       const mcpTarget = resolveMcpToolTarget(toolName, registeredMcpServerNames);
-      const hostApprovalPresentation = (() => {
-        const presenter = this.deps.getMcpToolApprovalPresentation;
-        if (!presenter || !mcpTarget) return undefined;
-        try {
-          return presenter({
-            serverName: mcpTarget.serverName,
-            toolName: mcpTarget.toolName,
-            toolParams: input,
-          });
-        } catch (err) {
-          this.deps.logger.error('MCP approval presentation threw -> generic copy', {
-            serverName: mcpTarget.serverName,
-            message: err instanceof Error ? err.message : String(err),
-          });
-          return undefined;
-        }
-      })();
       /**
        * 向用户要一次表态。`decided` 区分「用户明确表态」与「压根拿不到决策」(无 resolver /
        * resolver 抛错 / kind 不匹配) —— 调用方对后者才允许按 Full access 语义放行,
@@ -8672,12 +8655,6 @@ export class PiAgent extends BaseAgent {
             toolUseId: id,
             toolName,
             input,
-            ...(hostApprovalPresentation?.title
-              ? { title: hostApprovalPresentation.title }
-              : {}),
-            ...(hostApprovalPresentation?.description
-              ? { description: hostApprovalPresentation.description }
-              : {}),
           };
           Promise.resolve().then(() => resolver(
             opts.unavailableHandoff
@@ -8806,7 +8783,7 @@ export class PiAgent extends BaseAgent {
         }
         try {
           const action = mcpTarget || toolName === 'cindy_pi_extension' || toolName === 'cindy_pi_command'
-            ? toolAutoReviewAction(toolName, input, hostApprovalPresentation?.description)
+            ? toolAutoReviewAction(toolName, input)
             : constrainPiDestructivePathResolution(
             normalizePiToolForAutoReview({
               toolName,
@@ -8823,7 +8800,7 @@ export class PiAgent extends BaseAgent {
             action.resolvedWritableRoots = resolvedWritableRoots;
           }
           const decision = await reviewAutoAction(turnPolicyForcePrompt
-            ? toolAutoReviewAction(toolName, input, hostApprovalPresentation?.description, action)
+            ? toolAutoReviewAction(toolName, input, undefined, action)
             : action, hostAutoApprove, permissionMode !== 'auto');
           // 权限热切换:reviewAutoAction 是 async 的,期间用户可能改档。按**最新**档位收口,
           // 不能用进入审查前捕获的旧 auto 档直接放行(Pi 明确支持热切换,codex review P1):
