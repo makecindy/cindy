@@ -52,18 +52,15 @@ export function beginUsageSummaryRequest(
 export function settleUsageSummarySuccess(
   previous: SkillUsagePanelState,
   entryId: string,
-  result: { refreshing: boolean; summary: SkillUsageSummary },
+  result: { refreshing: boolean; hasSnapshot: boolean; summary: SkillUsageSummary },
 ): SkillUsagePanelState {
-  const keepPreviousSummary =
-    previous.entryId === entryId &&
-    previous.summary !== null &&
-    result.refreshing &&
-    result.summary.totalUseCount === 0;
   return {
     entryId,
     loading: result.refreshing,
     error: null,
-    summary: keepPreviousSummary ? previous.summary : result.summary,
+    summary: result.hasSnapshot
+      ? result.summary
+      : previous.entryId === entryId ? previous.summary : null,
   };
 }
 

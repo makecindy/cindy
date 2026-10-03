@@ -30,6 +30,7 @@ import type { AgentKind, Session, WorkspaceKind } from '@/lib/ccAgent.types';
 import * as sessionService from '@/lib/sessionService';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 
 interface UseCCSessionsOptions {
   /** Session status filter — F-PJ-10 V0.5.1。默认 'active'。 */
@@ -167,17 +168,22 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       providerId?: string | null;
       source?: 'cindy-make';
     }): Promise<Session | null> => {
+      const owner = getDataOwnerGeneration();
       try {
         const newSession = await sessionService.create({
           permissionMode: 'auto',
           fastMode: false,
           ...opts,
         });
+        // 任务可能已为此前的账号创建，仍保留在该账号下；
+        // 但不得将其响应写入新账号的缓存或调用方 UI。
+        if (!isDataOwnerGenerationCurrent(owner)) return null;
         // 本地 prepend：新建必然是 active 且 _count.messages=0，
         // projectGrouping 自动把它落到"未分类区"。省掉一次全量 IPC。
         sessionsStore.prependCreated(newSession);
         return newSession;
       } catch (err) {
+        if (!isDataOwnerGenerationCurrent(owner)) return null;
         setError(err instanceof Error ? err : new Error(String(err)));
         return null;
       }

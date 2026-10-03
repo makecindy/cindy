@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => {
   });
   return {
     list: vi.fn(),
+    create: vi.fn(),
     emitSessionSpend(payload: SpendPayload, ownerStamp?: OwnerStamp): void {
       spendListener?.(payload, ownerStamp);
     },
@@ -33,7 +34,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('@/lib/sessionService', () => ({
   list: mocks.list,
-  create: vi.fn(),
+  create: mocks.create,
 }));
 
 import { useCCSessions } from '@/hooks/useCCSessions';
@@ -46,12 +47,15 @@ import { sessionsStore } from '@/lib/sessionsStore';
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
+  reject: (error: Error) => void;
 } {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
     resolve = nextResolve;
+    reject = nextReject;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function session(id: string, partial: Partial<Session> = {}): Session {
@@ -61,6 +65,7 @@ function session(id: string, partial: Partial<Session> = {}): Session {
 describe('sessionsStore account boundaries', () => {
   beforeEach(() => {
     mocks.list.mockReset();
+    mocks.create.mockReset();
     sessionsStore.reset();
   });
 
@@ -108,6 +113,62 @@ describe('sessionsStore account boundaries', () => {
       expect(view.result.current.sessions.map(({ id }) => id)).toEqual(['new-account']);
     });
     expect(view.result.current.isLoading).toBe(false);
+  });
+
+  it('does not prepend or return a task created for the previous owner after switching accounts', async () => {
+    setDataOwnerGeneration('owner-a', 1);
+    mocks.list.mockResolvedValue([session('owner-a-task')]);
+    await sessionsStore.ensureByFilter('active');
+    const createRequest = deferred<Session>();
+    mocks.create.mockReturnValue(createRequest.promise);
+    const view = renderHook(() => useCCSessions());
+    const created = view.result.current.createSession({ agentKind: 'pi' });
+    mocks.list.mockResolvedValue([session('owner-b-task')]);
+    await act(async () => {
+      setDataOwnerGeneration('owner-b', 2);
+      sessionsStore.reset();
+      await sessionsStore.ensureByFilter('active');
+    });
+    let result: Session | null | undefined;
+    await act(async () => {
+      createRequest.resolve(session('created-for-a'));
+      result = await created;
+    });
+    expect(result).toBeNull();
+    expect(view.result.current.sessions.map(({ id }) => id)).toEqual(['owner-b-task']);
+    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['owner-b-task']);
+    expect(view.result.current.error).toBeNull();
+  });
+
+  it('discards a create failure from an invalidated owner generation', async () => {
+    setDataOwnerGeneration('owner-a', 1);
+    mocks.list.mockResolvedValue([]);
+    await sessionsStore.ensureByFilter('active');
+    const createRequest = deferred<Session>();
+    mocks.create.mockReturnValue(createRequest.promise);
+    const view = renderHook(() => useCCSessions());
+    const created = view.result.current.createSession();
+    setDataOwnerGeneration('owner-a', 2);
+    let result: Session | null | undefined;
+    await act(async () => {
+      createRequest.reject(new Error('old generation failure'));
+      result = await created;
+    });
+    expect(result).toBeNull();
+    expect(view.result.current.error).toBeNull();
+  });
+
+  it('keeps ordinary create success and failure behavior for the current owner', async () => {
+    setDataOwnerGeneration('owner-a', 1);
+    mocks.list.mockResolvedValue([]);
+    await sessionsStore.ensureByFilter('active');
+    const view = renderHook(() => useCCSessions());
+    const fresh = session('created-for-a');
+    mocks.create.mockResolvedValueOnce(fresh).mockRejectedValueOnce(new Error('current failure'));
+    await act(async () => { expect(await view.result.current.createSession()).toBe(fresh); });
+    expect(view.result.current.sessions.map(({ id }) => id)).toEqual(['created-for-a']);
+    await act(async () => { expect(await view.result.current.createSession()).toBeNull(); });
+    expect(view.result.current.error?.message).toBe('current failure');
   });
 
   it.each(['active', 'all'] as const)(

@@ -1855,6 +1855,8 @@ export const skillUsageExposures = sqliteTable(
         'claude_skill_file_read',
         'codex_skill_injection',
         'codex_skill_file_read',
+        'pi_skill_injection',
+        'pi_skill_file_read',
       ],
     }).notNull(),
     toolUseId: text('tool_use_id'),

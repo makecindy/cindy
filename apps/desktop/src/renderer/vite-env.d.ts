@@ -13,6 +13,7 @@ interface ImportMeta {
 }
 
 type BotToolsetContext = import('../shared/botRemoteCapabilities').BotToolsetContext;
+type SkillUsageRefreshStatus = import('../shared/skillUsageRefresh').SkillUsageRefreshStatus;
 type AgentProxyPrefPayload = import('../shared/agentProxyConfig').SshHostAgentProxyPref;
 type AgentProxyTunnelStatePayload = import('../shared/agentProxyConfig').AgentProxyTunnelState;
 type ModelAccessStatusPayload = import('../shared/modelAccess').ModelAccessStatus;
@@ -3534,7 +3535,7 @@ interface ElectronAPI {
       name: string;
       mdPath?: string;
     }) => Promise<
-      | { success: true; summary: SkillUsageSummary; refreshing: boolean }
+      | { success: true; summary: SkillUsageSummary; refreshing: boolean; refreshStatus: SkillUsageRefreshStatus }
       | { success: false; error: string }
     >;
     onUsageAnalyticsRefreshed: (callback: () => void) => () => void;
@@ -3542,7 +3543,7 @@ interface ElectronAPI {
       name: string;
       mdPath?: string;
     }) => Promise<
-      { success: true; context: SkillUsageDiagnosisContext } | { success: false; error: string }
+      { success: true; context: SkillUsageDiagnosisContext; refreshStatus: SkillUsageRefreshStatus } | { success: false; error: string }
     >;
     getMyDepts: () => Promise<{
       success: boolean;
@@ -7229,6 +7230,7 @@ interface SkillUsageSourceBreakdown {
 interface SkillUsageAgentBreakdown {
   claude: number;
   codex: number;
+  pi: number;
 }
 
 interface SkillUsageReadObservation {

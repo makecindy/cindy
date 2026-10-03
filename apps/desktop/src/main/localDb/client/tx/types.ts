@@ -1301,7 +1301,7 @@ export type SkillUsageApplyMutationArgs =
       }>;
     }
   | { kind: 'deleteBefore'; analyzerVersion: string; recentSince: number }
-  | { kind: 'promote'; analyzerVersion: string };
+  | { kind: 'prepareCache'; analyzerVersion: string };
 
 export type DbTxArgsByName = {
   'authorization.readProjection': { sessionId: string; leadId: string };

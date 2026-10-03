@@ -17,7 +17,7 @@ function summary(skillName: string, totalUseCount: number): SkillUsageSummary {
     unversionedUseCount: 0,
     documentVersionCoverageRate: null,
     latestSeenAt: null,
-    agentBreakdown: { claude: 0, codex: totalUseCount },
+    agentBreakdown: { claude: 0, codex: totalUseCount, pi: 0 },
     sourceBreakdown: { strongActive: 0, semiActive: 0, passive: totalUseCount },
     readObservation: {
       fileReadCount: 0,
@@ -87,7 +87,7 @@ describe('skill usage summary state', () => {
     });
   });
 
-  it('keeps the previous same-entry summary when a refreshing result is still empty', () => {
+  it('keeps the previous same-entry summary while no replacement snapshot is available', () => {
     const oldSummary = summary('skill-a', 7);
     const previous: SkillUsagePanelState = {
       entryId: 'skill-a',
@@ -98,11 +98,30 @@ describe('skill usage summary state', () => {
 
     const next = settleUsageSummarySuccess(previous, 'skill-a', {
       refreshing: true,
+      hasSnapshot: false,
       summary: summary('skill-a', 0),
     });
 
     expect(next.summary).toBe(oldSummary);
     expect(next.loading).toBe(true);
+  });
+
+  it.each([true, false])('does not turn a missing snapshot into zero usage while refreshing is %s', (refreshing) => {
+    const previous = beginUsageSummaryRequest({ entryId: null, loading: false, error: null, summary: null }, 'skill-a');
+    const next = settleUsageSummarySuccess(previous, 'skill-a', {
+      refreshing, hasSnapshot: false, summary: summary('skill-a', 0),
+    });
+
+    expect(next.summary).toBeNull();
+    expect(next.loading).toBe(refreshing);
+  });
+
+  it('accepts a genuine zero snapshot even while refreshing', () => {
+    const next = settleUsageSummarySuccess({ entryId: 'skill-a', loading: true, error: null, summary: summary('skill-a', 7) }, 'skill-a', {
+      refreshing: true, hasSnapshot: true, summary: summary('skill-a', 0),
+    });
+
+    expect(next.summary?.totalUseCount).toBe(0);
   });
 
   it('keeps the previous same-entry summary when a background refresh fails', () => {

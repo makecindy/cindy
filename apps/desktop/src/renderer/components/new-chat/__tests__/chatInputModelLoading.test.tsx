@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useState, type ComponentProps, type ReactNode } from 'react';
@@ -6,16 +8,23 @@ import type { Editor } from '@tiptap/react';
 import type { ProviderView } from '@cindy/model-providers';
 import { sshNativeCodexProvider, sshModel } from '@/features/cc-agent/__tests__/sshModelFixtures';
 import { ChatInput } from '../ChatInput';
+import { ImageLightbox } from '@/components/chat/ImageLightbox';
+import { useAttachments } from '@/hooks/useAttachments';
 import * as providerMemory from '@/state/providerModelMemory';
 import * as draftMemory from '@/state/newMakerDraft';
+import { getDraft as getComposerDraft, saveDraft as saveComposerDraft, clearDraft as clearComposerDraft, plainTextToTiptapDoc } from '@/lib/composerDraftStore';
 
 const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor: null as Editor | null, listening: false, stop: vi.fn().mockResolvedValue(undefined),
   setModel: vi.fn(), selectModel: undefined as undefined | ((id: string) => Promise<void | boolean>), remoteProviders: [] as ProviderView[],
   remoteStatus: 'ready' as 'ready' | 'loading' | 'error',
+  resolvePanelMedia: vi.fn(), cacheMediaForSession: vi.fn(),
 }));
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
-vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: h.confirm }) }));
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({
+  useConfirmDialog: () => ({ confirm: h.confirm }),
+  useOptionalConfirmDialog: () => ({ confirm: h.confirm }),
+}));
 vi.mock('@/components/sidebar/SortableList', () => ({
   SortableList: ({
     items,
@@ -72,6 +81,8 @@ const noOp = () => {};
 // External host services are inert; the editor, composer state, and send dispatch run unchanged.
 const api: any = new Proxy({}, { get: (_obj, key) => {
   if (key === 'setModel') return h.setModel;
+  if (key === 'resolvePanelMedia') return h.resolvePanelMedia;
+  if (key === 'cacheMediaForSession') return h.cacheMediaForSession;
   if (key === 'listSync') return () => ({ ghosts: [] });
   if (key === 'getDataSnapshot') return () => { throw new Error('test bridge unavailable'); };
   if (key === 'setGlobalShortcut') return () => Promise.resolve({ ok: true });
@@ -88,7 +99,7 @@ const attachments: ComponentProps<typeof ChatInput>['attachmentState'] = {
   removeFile: noOp, updateFile: noOp, discardFiles: noOp, clearFiles: noOp, restoreFiles: (files) => [...files],
 };
 beforeEach(() => { h.listening = false; h.stop.mockClear(); window.electronAPI = api; vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
-afterEach(() => { cleanup(); h.remoteProviders = []; h.remoteStatus = 'ready'; h.setModel.mockReset(); h.confirm.mockReset(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); h.remoteProviders = []; h.remoteStatus = 'ready'; h.setModel.mockReset(); h.confirm.mockReset(); h.resolvePanelMedia.mockReset(); h.cacheMediaForSession.mockReset(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const props = {
   sessionId: 'loading-test', initialWorkingDir: '/workspace', runtimeAgentKind: 'codex' as const,
@@ -358,3 +369,69 @@ it.each([320, 480, 800])('preserves the model slot across hydration (width=%s)',
   await act(async () => {});
   expect(onSend).not.toHaveBeenCalled();
 });
+
+
+function AttachmentSendHarness({
+  sessionId,
+  onSend,
+}: Pick<ComponentProps<typeof ChatInput>, 'sessionId' | 'onSend'>) {
+  const attachmentState = useAttachments(sessionId);
+  return <ChatInput {...props} sessionId={sessionId}
+    attachmentState={attachmentState} initialModel="gpt-6-astra" initialProviderId="openai"
+    initialEffort="medium" onSend={onSend} />;
+}
+
+it.each(['plugin-image', 'plugin-video', 'lightbox-image'] as const)(
+  'preserves the draft through %s attachment handover and sends its text and attachment',
+  async (entry) => {
+    const sessionId = `attachment-${entry}`;
+    const text = plainTextToTiptapDoc('Review this example');
+    const cachedImageUrl = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const videoPath = join(tmpdir(), 'cindy-test-plugin-example.mp4');
+    saveComposerDraft(sessionId, { text, attachments: [] });
+    h.cacheMediaForSession.mockResolvedValue({
+      name: 'example.png', ext: '.png', size: 12, mimeType: 'image/png', url: cachedImageUrl,
+    });
+    h.resolvePanelMedia.mockResolvedValue(entry === 'plugin-video'
+      ? { kind: 'video', name: 'example.mp4', absPath: videoPath, ext: '.mp4', size: 12, mimeType: 'video/mp4' }
+      : { kind: 'image', url: 'cindy-ghost://example/media/image.png' });
+    const onSend = vi.fn().mockResolvedValue(true);
+    const view = render(<AttachmentSendHarness sessionId={sessionId} onSend={onSend} />);
+    await waitFor(() => expect(view.container.querySelector('[contenteditable]')).not.toBeNull());
+    // JSDOM 没有文本范围的几何信息；聚焦仍经过真实编辑器。
+    vi.spyOn(h.editor!.view, 'coordsAtPos').mockReturnValue({ left: 0, right: 0, top: 0, bottom: 0 });
+
+    if (entry === 'lightbox-image') {
+      const lightbox = render(<ImageLightbox src={cachedImageUrl} sessionId={sessionId} onClose={vi.fn()} />);
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'chat.media.sendToChat' }));
+      });
+      lightbox.unmount();
+    } else {
+      const uri = `cindy-ghost://example/media/${entry === 'plugin-video' ? 'video.mp4' : 'image.png'}`;
+      await act(async () => {
+        fireEvent.drop(view.container.querySelector('[data-split-group-composer-drop-target]')!, {
+          dataTransfer: {
+            types: ['text/uri-list'], files: [], items: [],
+            getData: (type: string) => type === 'text/uri-list' ? uri : '',
+          },
+        });
+      });
+      expect(h.resolvePanelMedia).toHaveBeenCalledWith(uri);
+    }
+
+    await waitFor(() => expect(getComposerDraft(sessionId)?.attachments).toHaveLength(1));
+    expect(getComposerDraft(sessionId)?.text).toEqual(text);
+    expect(getComposerDraft(sessionId)?.attachments[0]).toMatchObject(entry === 'plugin-video'
+      ? { category: 'file', path: videoPath }
+      : { category: 'image', url: cachedImageUrl });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.send' }));
+    });
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(onSend.mock.calls[0][0]).toContain('Review this example');
+    expect(onSend.mock.calls[0][4]).toHaveLength(1);
+    view.unmount();
+    clearComposerDraft(sessionId);
+  },
+);
