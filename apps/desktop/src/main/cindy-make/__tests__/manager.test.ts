@@ -23,6 +23,26 @@ describe('CindyMakeManager', () => {
     current = false;
     expect(manager.getState().upstreamMerge).toMatchObject({ sessionId: undefined, ownedByAnotherAccount: true, hasWorkspace: true });
   });
+  it('keeps a fork sync reading the checkout from being cleared without blocking builds', async () => {
+    const manager = new CindyMakeManager();
+    let release!: () => void;
+    const reading = manager.withSourceReader(
+      '/managed',
+      () => new Promise<void>((resolve) => (release = resolve)),
+    );
+    const run = vi.fn();
+    const clear = () =>
+      manager.prepareSource({ root: '/managed', clearOnly: true, signal: new AbortController().signal,
+        cancelled: vi.fn(), onProgress: vi.fn(), toStatus: vi.fn(), run,
+      });
+    await expect(clear()).rejects.toMatchObject({ code: 'busy' });
+    expect(run).not.toHaveBeenCalled();
+    // Builds only need the project queue, which the network phase does not hold.
+    manager.claimPersonalBuild()();
+    release();
+    await reading;
+    await expect(manager.withSourceReader('/managed', async () => 'done')).resolves.toBe('done');
+  });
   it('blocks source preparation and reset while an unresolved merge workspace is retained', async () => {
     const manager = new CindyMakeManager();
     manager.setUpstreamMerge({ id: 'merge', ref: 'main', upstreamCommit: 'a'.repeat(40), status: 'failed', hasWorkspace: true });

@@ -634,7 +634,8 @@ async function readCindyMakeHistory(
         !operation &&
         !taskBuilding &&
         test?.status !== 'starting' &&
-        ['unintegrated', 'changed', 'reverted'].includes(integration),
+        // An undone change is restored only by its own Restore action, never by a batch build.
+        ['unintegrated', 'changed'].includes(integration),
       canHide: !targetBusy && !['starting', 'ready'].includes(test?.status ?? ''),
     });
   }

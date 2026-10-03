@@ -98,6 +98,8 @@ export class CindyMakeManager {
   private readonly sourceJobs = new Map<string, SharedSourceJob>();
   private readonly projectJobs = new Map<string, Promise<unknown>>();
   private readonly projectUsers = new Map<string, number>();
+  /** Fork synchronization reading the checkout outside the project queue (network phases). */
+  private readonly sourceReaders = new Map<string, number>();
   private personalBuild: { sessionIds: string[]; isCurrent: () => boolean } | undefined;
   private manualSourceSync = false;
   private readonly reports = new Map<
@@ -145,6 +147,7 @@ export class CindyMakeManager {
   private projectInUse(root: string): boolean {
     return (
       (this.projectUsers.get(root) ?? 0) > 0 ||
+      (this.sourceReaders.get(root) ?? 0) > 0 ||
       this.isProjectBusy(root) ||
       this.hasPendingUpstreamMerge()
     );
@@ -167,6 +170,17 @@ export class CindyMakeManager {
     return !!this.personalBuild;
   }
 
+  /** Nothing else may move `cindy-personal`: no build, manual sync, open merge or source job. */
+  /** `ownManualSync`: the caller runs inside the manual source sync that holds the reservation. */
+  isSourceSettled(root: string, ownManualSync = false): boolean {
+    return (
+      !this.personalBuild &&
+      (ownManualSync || !this.manualSourceSync) &&
+      !this.hasPendingUpstreamMerge() &&
+      !this.sourceJobs.has(root)
+    );
+  }
+
   /** Reserve a manual source update before its first asynchronous step. */
   claimManualSourceSync(): () => void {
     if (this.personalBuild || this.manualSourceSync)
@@ -177,6 +191,30 @@ export class CindyMakeManager {
       this.manualSourceSync = false;
       this.notify();
     };
+  }
+
+  isManualSourceSyncRunning(): boolean {
+    return this.manualSourceSync;
+  }
+
+  /** Resolves once no Sync or manual source update holds the source. */
+  whenManualSourceSyncIdle(signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    if (!this.manualSourceSync) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      let unsubscribe = () => {};
+      const abort = () => {
+        unsubscribe();
+        reject(signal.reason);
+      };
+      unsubscribe = this.subscribe(() => {
+        if (this.manualSourceSync) return;
+        unsubscribe();
+        signal.removeEventListener('abort', abort);
+        resolve();
+      });
+      signal.addEventListener('abort', abort, { once: true });
+    });
   }
 
   /** Both entry points reserve synchronously, before any asynchronous build work. */
@@ -211,6 +249,33 @@ export class CindyMakeManager {
     this.states.upstreamMerge = state;
     this.mergeSessionCurrent = isCurrent;
     this.notify();
+  }
+
+  setPersonalRemote(state: CindyMakeGlobalState['personalRemote']): void {
+    this.states.personalRemote = state;
+    this.notify();
+  }
+
+  setPersonalSync(state: CindyMakeGlobalState['personalSync']): void {
+    this.states.personalSync = state;
+    this.notify();
+  }
+
+  /**
+   * Keep the checkout from being cleared while Git reads it outside the project queue.
+   * Unlike withProjectUse this does not block personal builds, which only need the queue.
+   */
+  async withSourceReader<T>(root: string, run: () => Promise<T>): Promise<T> {
+    if (this.sourceJobs.get(root)?.clearOnly)
+      throw Object.assign(new Error('project is being cleared'), { code: 'busy' });
+    this.sourceReaders.set(root, (this.sourceReaders.get(root) ?? 0) + 1);
+    try {
+      return await run();
+    } finally {
+      const readers = (this.sourceReaders.get(root) ?? 1) - 1;
+      if (readers === 0) this.sourceReaders.delete(root);
+      else this.sourceReaders.set(root, readers);
+    }
   }
 
   async withProjectUse<T>(root: string, run: () => Promise<T>): Promise<T> {

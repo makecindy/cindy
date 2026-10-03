@@ -82,6 +82,177 @@ function harness(initial?: SavedUpstreamMerge, actualWorkspace = !!initial?.stat
     },
   };
 }
+describe('combining with the personal version on GitHub', () => {
+  const remote = { commit: 'd'.repeat(40), base: 'e'.repeat(40) };
+
+  it('keeps a conflict for the explicit resolve decision, then resolves it in a task', async () => {
+    const h = harness();
+    h.deps.prepareCombine = vi.fn(async (state) => {
+      h.setWorkspace(true);
+      return { ...state, strategy: 'combine' as const, status: 'conflict' as const, hasWorkspace: true };
+    });
+    const result = await h.controller.combine(remote);
+    expect(h.deps.prepareCombine).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'merging',
+        ref: 'github',
+        upstreamCommit: remote.commit,
+        remote: { base: remote.base, commit: remote.commit },
+      }),
+      expect.any(Function),
+      expect.any(Function),
+    );
+    expect(result).toMatchObject({ status: 'conflict', remote: { base: remote.base } });
+    expect(result?.sessionId).toBeUndefined();
+    // Like a manual official update, no resolver is created without the user's decision.
+    expect(h.deps.session).not.toHaveBeenCalled();
+    // A retained candidate blocks other source operations until it is resolved or cancelled.
+    await expect(h.controller.combine(remote)).rejects.toMatchObject({ code: 'busy' });
+    await expect(h.controller.update()).resolves.toMatchObject({ status: 'conflict' });
+    const resolved = await h.controller.resolve(undefined, result!.id);
+    expect(resolved).toMatchObject({ status: 'resolving', sessionId: 'merge-session' });
+    expect(h.saved()?.state.remote).toEqual({ base: remote.base, commit: remote.commit });
+  });
+
+  it('opens the resolution task right away when Sync asked for it', async () => {
+    const h = harness();
+    h.deps.prepareCombine = vi.fn(async (state) => {
+      h.setWorkspace(true);
+      return { ...state, strategy: 'combine' as const, status: 'conflict' as const, hasWorkspace: true };
+    });
+    await expect(h.controller.combine(remote, { agentKind: 'codex' }, true)).resolves.toMatchObject(
+      { status: 'resolving', sessionId: 'merge-session' },
+    );
+    expect(h.deps.session).toHaveBeenCalledWith(
+      expect.anything(),
+      { agentKind: 'codex' },
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
+  it('updates to a pinned official version and resolves its conflict when Sync asked for it', async () => {
+    const h = harness();
+    h.deps.prepare = vi.fn(async (state) => {
+      h.setWorkspace(true);
+      return { ...state, strategy: 'rebase' as const, status: 'conflict' as const, hasWorkspace: true };
+    });
+    const target = { ref: 'v1.2.3', commit: 'f'.repeat(40) };
+    await expect(
+      h.controller.update({ agentKind: 'codex' }, undefined, { target, autoResolve: true }),
+    ).resolves.toMatchObject({ status: 'resolving', ref: 'v1.2.3', upstreamCommit: target.commit });
+    expect(h.deps.latest).not.toHaveBeenCalled();
+  });
+
+  it('adopts a combine without conflicts and cleans up its candidate', async () => {
+    const h = harness();
+    h.deps.prepareCombine = vi.fn(async (state) => {
+      h.setWorkspace(true);
+      return {
+        ...state,
+        strategy: 'combine' as const,
+        status: 'merged' as const,
+        hasWorkspace: true,
+        commit: 'c'.repeat(40),
+        tree: 'f'.repeat(40),
+      };
+    });
+    await expect(h.controller.combine(remote)).resolves.toMatchObject({
+      status: 'merged',
+      hasWorkspace: false,
+    });
+    expect(h.deps.cleanup).toHaveBeenCalledOnce();
+  });
+
+  it('abandons a Sync conflict whose resolver is open, adopting nothing', async () => {
+    const h = harness();
+    h.deps.prepareCombine = vi.fn(async (state) => {
+      h.setWorkspace(true);
+      return { ...state, strategy: 'combine' as const, status: 'conflict' as const, hasWorkspace: true };
+    });
+    const started = await h.controller.combine(remote, { agentKind: 'codex' }, true);
+    expect(started).toMatchObject({ status: 'resolving', sessionId: 'merge-session', taskOwned: true });
+    // A cancel without a resolver decision is refused; Abandon stops the resolver first.
+    await expect(h.controller.cancel(started!.id)).rejects.toMatchObject({ code: 'busy' });
+    await expect(h.controller.abandon(started!.id)).resolves.toMatchObject({
+      status: 'cancelled',
+      hasWorkspace: false,
+    });
+    expect(h.deps.discard).toHaveBeenCalledOnce();
+    expect(h.deps.apply).not.toHaveBeenCalled();
+  });
+
+  it('refuses to abandon while a result is being checked, and never half-owns an operation', async () => {
+    const checking = harness();
+    checking.deps.prepareCombine = vi.fn(async (state) => {
+      checking.setWorkspace(true);
+      return { ...state, strategy: 'combine' as const, status: 'conflict' as const, hasWorkspace: true };
+    });
+    const started = await checking.controller.combine(remote, undefined, true);
+    let adopt!: (state: CindyMakeMergeState) => void;
+    checking.deps.apply = vi.fn(
+      () => new Promise<CindyMakeMergeState>((resolve) => (adopt = resolve)),
+    );
+    const finishing = checking.controller.finish('merge-session');
+    await vi.waitFor(() => expect(checking.deps.apply).toHaveBeenCalled());
+    await expect(checking.controller.abandon(started!.id)).rejects.toMatchObject({ code: 'busy' });
+    expect(checking.deps.discard).not.toHaveBeenCalled();
+    adopt({ ...started!, status: 'merged', commit: 'c'.repeat(40), tree: 'f'.repeat(40) });
+    await finishing;
+
+    // Created while signed out: no owner can stop its resolver; nothing is persisted.
+    const ownerless = harness({
+      state: { ...candidate, status: 'failed', error: 'cancelFailed', cancellationRequested: true },
+    });
+    const writes = vi.mocked(ownerless.deps.write).mock.calls.length;
+    await expect(ownerless.controller.abandon(candidate.id)).rejects.toMatchObject({
+      code: 'busy',
+    });
+    expect(vi.mocked(ownerless.deps.write).mock.calls.length).toBe(writes);
+  });
+
+  it('stores a finished combine like an official update so older clients can read it', async () => {
+    const h = harness();
+    h.deps.prepareCombine = vi.fn(async (state) => ({
+      ...state,
+      strategy: 'combine' as const,
+      status: 'merged' as const,
+      hasWorkspace: false,
+      commit: 'c'.repeat(40),
+      tree: 'f'.repeat(40),
+    }));
+    await h.controller.combine(remote);
+    expect(h.saved()?.state).toMatchObject({
+      status: 'merged',
+      strategy: 'rebase',
+      remote: { base: remote.base, commit: remote.commit },
+    });
+  });
+
+  it('restores a saved combine and rejects one with an invalid base', () => {
+    const saved = {
+      sessionOwner: 'alice',
+      state: { ...candidate, strategy: 'combine' as const, remote: { base: 'e'.repeat(40) } },
+    };
+    expect(parseSavedUpstreamMerge(JSON.stringify(saved), '/user-data').state.remote).toEqual({
+      base: 'e'.repeat(40),
+    });
+    expect(() =>
+      parseSavedUpstreamMerge(
+        JSON.stringify({ ...saved, state: { ...saved.state, remote: { base: '../x' } } }),
+        '/user-data',
+      ),
+    ).toThrow();
+    // A combine always names the GitHub side; without it the state is not trusted.
+    expect(() =>
+      parseSavedUpstreamMerge(
+        JSON.stringify({ ...saved, state: { ...saved.state, remote: undefined } }),
+        '/user-data',
+      ),
+    ).toThrow();
+  });
+});
+
 describe('upstream merge lifecycle', () => {
   it('automatically resolves a task-owned source conflict and waits for adoption and cleanup', async () => {
     const h = harness();
@@ -1023,6 +1194,147 @@ describe('upstream merge lifecycle', () => {
     h.deps.apply = vi.fn(async (state) => ({ ...state, status: 'merged' }));
     await h.controller.finish('task');
     expect(h.saved()?.state.status).toBe('merged');
+  });
+  it('asks the resolver once to put lost changes back, then leaves the decision to the user', async () => {
+    const h = harness({
+      state: { ...candidate, strategy: 'rebase', sessionId: 'task', status: 'resolving' },
+      sessionOwner: 'alice',
+    });
+    const missing = { count: 1, commits: ['f'.repeat(40)] };
+    h.deps.remind = vi.fn(async () => {});
+    h.deps.apply = vi.fn(async () => {
+      throw Object.assign(mergeError('checksFailed'), { missing });
+    });
+    h.controller.prepareTurn('task')();
+    await h.controller.finish('task');
+    expect(h.deps.remind).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ missing, reminded: true }),
+      expect.any(Function),
+    );
+    expect(h.saved()?.state).toMatchObject({ status: 'resolving', missing, reminded: true });
+
+    // The reminded turn still loses it: the user decides between using it and Abandon.
+    h.controller.prepareTurn('task')();
+    await h.controller.finish('task');
+    expect(h.deps.remind).toHaveBeenCalledOnce();
+    expect(h.saved()?.state).toMatchObject({ status: 'failed', error: 'checksFailed', missing });
+
+    h.deps.apply = vi.fn(async (state) => ({ ...state, status: 'merged' as const }));
+    await expect(h.controller.acceptMissing(candidate.id)).resolves.toMatchObject({
+      status: 'merged',
+    });
+    expect(h.deps.apply).toHaveBeenCalledWith(
+      expect.objectContaining({ id: candidate.id }),
+      expect.any(Function),
+      expect.any(Function),
+      { acceptMissing: true },
+    );
+  });
+  it('accepts a lost change only for its owner, its own operation and an idle resolver', async () => {
+    const failed: SavedUpstreamMerge = {
+      state: {
+        ...candidate,
+        strategy: 'rebase',
+        sessionId: 'task',
+        status: 'failed',
+        error: 'checksFailed',
+        missing: { count: 1, commits: [] },
+      },
+      sessionOwner: 'alice',
+    };
+    const other = harness(failed);
+    other.setOwner('bob');
+    await expect(other.controller.acceptMissing(candidate.id)).rejects.toMatchObject({
+      code: 'busy',
+    });
+    const running = harness(failed);
+    running.deps.running = () => true;
+    await expect(running.controller.acceptMissing(candidate.id)).rejects.toMatchObject({
+      code: 'busy',
+    });
+    const stale = harness(failed);
+    await expect(stale.controller.acceptMissing('other')).rejects.toMatchObject({ code: 'busy' });
+    const checked = harness({ ...failed, state: { ...failed.state, missing: undefined } });
+    await expect(checked.controller.acceptMissing(candidate.id)).rejects.toMatchObject({
+      code: 'busy',
+    });
+    expect(other.deps.apply).not.toHaveBeenCalled();
+    expect(running.deps.apply).not.toHaveBeenCalled();
+  });
+  it('Sync reopens a resolver whose task is gone, keeping the candidate’s work', async () => {
+    const h = harness({
+      state: {
+        ...candidate,
+        strategy: 'rebase',
+        sessionId: 'removed-task',
+        status: 'failed',
+        error: 'unavailable',
+      },
+      sessionOwner: 'alice',
+    });
+    h.deps.session = vi.fn(async (_state, _options, bind) => {
+      bind('new-task');
+      return 'new-task';
+    });
+    await expect(h.controller.resumeForSync({ agentKind: 'codex' })).resolves.toMatchObject({
+      status: 'resolving',
+      sessionId: 'new-task',
+    });
+    expect(h.deps.apply).not.toHaveBeenCalled();
+    // The same candidate: nothing was prepared again.
+    expect(h.deps.prepare).not.toHaveBeenCalled();
+  });
+  it('Sync finishes an Abandon that could not finish before anything else', async () => {
+    const h = harness({
+      state: {
+        ...candidate,
+        strategy: 'rebase',
+        taskOwned: true,
+        status: 'failed',
+        error: 'cancelFailed',
+        cancellationRequested: true,
+      },
+      sessionOwner: 'alice',
+    });
+    await expect(h.controller.resumeForSync()).resolves.toMatchObject({
+      status: 'cancelled',
+      hasWorkspace: false,
+    });
+    expect(h.deps.discard).toHaveBeenCalledOnce();
+  });
+  it('Sync’s update reports busy instead of another operation’s result', async () => {
+    const h = harness();
+    let release!: () => void;
+    h.deps.prepare = vi.fn(
+      (state) =>
+        new Promise<CindyMakeMergeState>((resolve) => {
+          release = () => resolve({ ...state, status: 'merged' });
+        }),
+    );
+    const first = h.controller.update(undefined, undefined, { autoResolve: true });
+    await vi.waitFor(() => expect(h.deps.prepare).toHaveBeenCalled());
+    const second = h.controller.update(undefined, undefined, { autoResolve: true });
+    release();
+    await expect(first).resolves.toMatchObject({ status: 'merged' });
+    await expect(second).rejects.toMatchObject({ code: 'busy' });
+  });
+  it('waits for the user’s answer when the resolver stops with conflicts left', async () => {
+    const h = harness({
+      state: { ...candidate, strategy: 'rebase', sessionId: 'task', status: 'resolving' },
+      sessionOwner: 'alice',
+    });
+    h.deps.apply = vi.fn(async (state) => ({
+      ...state,
+      status: 'conflict' as const,
+      needsInput: true,
+    }));
+    h.controller.prepareTurn('task')();
+    await h.controller.finish('task');
+    expect(h.saved()?.state).toMatchObject({ status: 'conflict', needsInput: true });
+    // The user's answer is the next turn.
+    h.controller.prepareTurn('task')();
+    expect(h.saved()?.state.status).toBe('resolving');
+    expect(h.saved()?.state.needsInput).toBeUndefined();
   });
   it('waits for a terminal session to become idle before applying the candidate', async () => {
     const h = harness({

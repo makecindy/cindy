@@ -110,6 +110,30 @@
       "note": "Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一份日常数据，与使用独立数据的隔离测试版区分。"
     },
     {
+      "id": "cindy-make-storage-location",
+      "status": "proposed",
+      "en": "Saved in",
+      "translations": {
+        "zh-CN": "保存位置",
+        "zh-TW": "儲存位置",
+        "ja": "保存先",
+        "ko": "저장 위치"
+      },
+      "note": "Cindy Make 版本控制概览中的一行，说明个人版保存在哪里：只在这台电脑，或用户自己 GitHub 上官方仓库的公开副本（fork）。面向普通用户不写 fork，写「你的 GitHub」。"
+    },
+    {
+      "id": "cindy-make-contribution",
+      "status": "proposed",
+      "en": "Submit to Cindy",
+      "translations": {
+        "zh-CN": "提交给官方",
+        "zh-TW": "提交給官方",
+        "ja": "公式に提出",
+        "ko": "공식에 제출"
+      },
+      "note": "把 Cindy Make 的一项修改整理成 Pull Request 提交到官方仓库。面向普通用户写「提交给官方」，对话框说明里才出现 Pull Request；状态写「等待审核 / 已被官方采纳 / 官方未采纳」，不写 open / merged / closed。"
+    },
+    {
       "id": "task-tag",
       "status": "proposed",
       "en": "Tag",

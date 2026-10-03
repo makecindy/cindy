@@ -50,8 +50,14 @@ export async function readSourceRevisions(
     '--verify',
     'refs/cindy-make/personal-upstream^{commit}',
   ]);
+  // The recorded base must be the personal tip's ancestor: an interrupted move can
+  // leave "old tip + new base", and no later step may trust that wrong base.
+  const recordedIsBase =
+    recordedUpstream !== undefined &&
+    personalCommit !== '' &&
+    (await readCommit(['merge-base', recordedUpstream, personalCommit])) === recordedUpstream;
   const baseCommit =
-    recordedUpstream ??
+    (recordedIsBase ? recordedUpstream : undefined) ??
     (upstreamCommit ? await readCommit(['merge-base', personalCommit, upstreamCommit]) : undefined);
   const mainCommit = await readCommit(['rev-parse', '--verify', 'refs/heads/main^{commit}']);
   const mainRemoteCommit = await readCommit([

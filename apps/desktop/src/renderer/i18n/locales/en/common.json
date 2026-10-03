@@ -13968,7 +13968,8 @@
         "included": "Included in the running version",
         "notIncluded": "Not in the running version",
         "unknown": "Inclusion in the running version is unverified"
-      }
+      },
+      "failedContinue": "Couldn’t check whether the official project already has a similar change. You can continue anyway."
     },
     "title": "Cindy Make",
     "stepEnvironment": "1 · Prepare environment",
@@ -14365,7 +14366,8 @@
       "rounds_one": "{{count}} editing round",
       "rounds_other": "{{count}} editing rounds",
       "files_one": "{{count}} file changed",
-      "files_other": "{{count}} files changed"
+      "files_other": "{{count}} files changed",
+      "generatePersonal": "Generate personal version"
     },
     "merge": {
       "getLatest": "Sync latest source",
@@ -14408,7 +14410,266 @@
         "interrupted": "The operation was interrupted. Your changes are kept; please retry.",
         "startFailed": "Could not open the resolution task. Please retry.",
         "cancelFailed": "Could not cancel this update. Please retry. Your personal source has been kept."
+      },
+      "combine": {
+        "taskTitle": "Combine changes from two computers",
+        "status": {
+          "fetching": "Preparing to combine…",
+          "merging": "Combining both sides’ changes…",
+          "conflict": "Both sides changed the same place and need attention",
+          "resolving": "Resolving conflicts",
+          "checking": "Checking the combined result…",
+          "merged": "Both sides’ changes are combined",
+          "failed": "Combining didn't finish",
+          "cancelled": "Combining cancelled. Neither personal version changed."
+        },
+        "conflictConfirm": {
+          "title": "Both computers changed the same place",
+          "description": "Confirming creates a separate task where the Agent combines both sides' changes and keeps both sides' features. If both can't be kept, you're asked first. Cancelling abandons this combine and leaves both personal versions unchanged.",
+          "confirm": "Confirm and resolve",
+          "cancel": "Cancel combining"
+        }
       }
+    },
+    "storage": {
+      "title": "Saved in",
+      "github": "Your GitHub · {{repository}}",
+      "localOnly": "Only on this computer",
+      "localOnlyHint": "Connect GitHub to use this personal version on your other computers and to submit changes to Cindy. A personal version kept only on this computer can't be recovered after you switch computers or reinstall.",
+      "localChosenHint": "You chose to keep it on this computer only. A personal version kept only on this computer can't be recovered after you switch computers or reinstall.",
+      "disconnectedHint": "This computer isn't connected to GitHub yet. Connect it to sync.",
+      "unavailableHint": "Can't confirm your GitHub connection right now.",
+      "actionFailed": "That didn't finish. Please try again.",
+      "running": {
+        "save": "Saving to your GitHub",
+        "sync": "Syncing to your GitHub",
+        "disconnect": "Stopping sync"
+      },
+      "step": {
+        "waiting": "Waiting for other source operations to finish",
+        "preparing": "Tidying up the changes on this computer",
+        "fork": "Creating your copy on GitHub",
+        "connecting": "Connecting to your GitHub",
+        "retrieving": "Retrieving changes from another computer",
+        "uploading": "Uploading your personal version"
+      },
+      "status": {
+        "synced": "Synced",
+        "pendingBuild": "Syncs after you generate the personal version",
+        "retrieved": "Changes from another computer retrieved; generate the personal version to use them",
+        "pending": "Not synced to GitHub yet",
+        "remoteAhead": "GitHub has new changes from another computer",
+        "diverged": "GitHub and this computer both have new changes that can't be combined automatically yet",
+        "account": "The connected GitHub account ({{login}}) doesn't own this repository. Sync is paused.",
+        "needsMerge": "GitHub and this computer both have new changes to combine",
+        "buildFirst": "Generate first, then Sync"
+      },
+      "errors": {
+        "github": "Your GitHub connection is no longer valid. Reconnect GitHub.",
+        "account": "The connected GitHub account doesn't match where this is saved. Sync is paused.",
+        "forkConflict": "Couldn't create Cindy's copy on your GitHub: a repository with that name isn't a copy of the official repository, and Cindy left it untouched.",
+        "forkUnavailable": "Your copy on GitHub isn't ready yet. Try again later.",
+        "network": "Can't reach GitHub. Check your network and try again.",
+        "workflowScope": "Your GitHub authorization can't upload workflow files. Reconnect GitHub and try again.",
+        "source": "The personal version source isn't available right now. Prepare the source first.",
+        "gitOutdated": "Git on this computer is too old. Update Git from Environment, then try again.",
+        "interrupted": "The last operation was interrupted and didn't continue automatically.",
+        "failed": "Sync didn't finish. Please try again.",
+        "forkMissing": "The GitHub repository that stores your personal version can’t be found; it may have been deleted. You can save it to your GitHub again.",
+        "forkArchived": "The GitHub repository that stores your personal version is archived, so GitHub accepts no uploads. Unarchive it on GitHub, then Sync again."
+      },
+      "card": {
+        "title": "Save your personal version to your GitHub?",
+        "intro": "You're connected to GitHub as {{login}}. After saving:",
+        "otherComputers": "Your other computers using the same GitHub account can use this personal version",
+        "contribute": "You can submit your changes to Cindy later",
+        "autoSync": "It syncs automatically from then on",
+        "public": "It's saved to Cindy's copy under your GitHub account (usually {{repository}}), a public copy of the official repository: everyone on GitHub can see your changes.",
+        "unchanged": "The personal version, Make history and work in progress on this computer stay as they are.",
+        "existingTitle": "Your GitHub already has a personal version",
+        "existingIntro": "{{repository}} on account {{login}} holds a personal version saved from another computer. After saving, this computer uses it too and stays in sync.",
+        "existingKeeps": "If this computer has no changes of its own yet, it uses the personal version from GitHub directly; changes already on this computer are never overwritten.",
+        "prepareFirst": "The personal version source is prepared first, which takes a few minutes."
+      },
+      "actions": {
+        "connect": "Connect GitHub",
+        "reconnect": "Reconnect GitHub",
+        "save": "Save to GitHub",
+        "keepLocal": "Keep on this computer",
+        "syncNow": "Sync now",
+        "retry": "Retry",
+        "recheck": "Check again",
+        "view": "View on GitHub",
+        "stop": "Stop syncing",
+        "useExisting": "Use on this computer",
+        "saveAgain": "Save to GitHub again",
+        "keepSeparate": "No, keep a separate one on this computer"
+      },
+      "stopConfirm": {
+        "title": "Stop syncing to GitHub?",
+        "description": "This computer will stop uploading the personal version. The repository on your GitHub and the personal version on this computer both stay, and you can turn sync back on later.",
+        "confirm": "Stop syncing",
+        "cancel": "Cancel"
+      },
+      "needsMergeHint": "Sync above combines both sides' changes and keeps both sides' features. If both changed the same place, a task resolves it automatically.",
+      "buildFirstHint": "Both computers have new changes, and this computer’s aren’t generated yet. Generate your personal version, then press Sync to combine both."
+    },
+    "contribution": {
+      "action": "Submit to Cindy",
+      "update": "Update submission",
+      "resubmit": "Submit again",
+      "view": "View on GitHub",
+      "submitted": "Submitted to Cindy as #{{number}}",
+      "state": {
+        "submitted": "Submitted to Cindy as #{{number}}",
+        "open": "Submitted to Cindy as #{{number}} · Waiting for review",
+        "merged": "Accepted by Cindy · #{{number}}",
+        "closed": "Not accepted by Cindy · #{{number}}"
+      },
+      "dialog": {
+        "title": "Submit to Cindy",
+        "description": "Turn this change into a pull request on the official Cindy repository for the maintainers to review.",
+        "loading": "Preparing this change…",
+        "existing": "You already submitted this change (#{{number}}). Submitting again updates it.",
+        "reopen": "The earlier submission #{{number}} was closed. Submitting again opens a new one.",
+        "prTitle": "Title",
+        "prTitleHint": "Start with a type such as feat: or fix:",
+        "body": "Description",
+        "bodyHint": "Prefilled from the official template. Edit it as you like.",
+        "author": "Signed by",
+        "name": "Name",
+        "email": "Email",
+        "nameRequired": "Enter your name",
+        "emailRequired": "Enter a valid email address",
+        "authorHint": "Shown publicly on GitHub as the author and sign-off of this change.",
+        "files": "Includes {{count}} files",
+        "files_one": "Includes {{count}} file",
+        "files_other": "Includes {{count}} files",
+        "onlyThis": "Only this change is included. Your other personal changes stay out.",
+        "public": "Submitted from your GitHub repository {{repository}} and visible to everyone.",
+        "uiNote": "This change touches the interface. After submitting, add screenshots on GitHub and name the design guidelines it follows.",
+        "dco": "I am submitting this change myself and sign the Developer Certificate of Origin (DCO) as {{name}} <{{email}}>.",
+        "submit": "Submit",
+        "update": "Update submission",
+        "cancel": "Cancel",
+        "close": "Close"
+      },
+      "errors": {
+        "notBound": "To submit to the official project, first save your personal version to your GitHub under “Saved in” above.",
+        "github": "Your GitHub connection is no longer valid. Reconnect GitHub in Settings and try again.",
+        "account": "The connected GitHub account isn't the one your personal version is saved to. Switch back and try again.",
+        "unavailable": "This change's content is no longer on this computer, so it can't be submitted.",
+        "conflict": "This change touches the same place as the latest official code, so it can’t be turned into a submission with only this change. Make the change again on your latest personal version, then submit it.",
+        "empty": "The latest official code already includes this change. There is nothing to submit.",
+        "invalid": "Check the title, name and email. The title must be a single line.",
+        "network": "Can't reach GitHub. Check your network and try again.",
+        "workflowScope": "This change edits GitHub workflow files, which your GitHub authorization can't upload. Reconnect GitHub and try again.",
+        "failed": "The submission didn't finish. Please try again later."
+      }
+    },
+    "summary": {
+      "personal": "Personal version",
+      "latestLabel": "Latest official",
+      "official": "Official {{version}}",
+      "officialUnknown": "Official version",
+      "development": "Official in-progress version",
+      "withChanges": "{{version}} + {{count}} of your changes",
+      "withChanges_one": "{{version}} + {{count}} of your changes",
+      "withChanges_other": "{{version}} + {{count}} of your changes",
+      "withOwnChanges": "{{version}} + your changes",
+      "noChanges": "{{version}}, no changes of yours yet",
+      "latest": {
+        "release": "Release {{version}}",
+        "beta": "Beta {{version}}",
+        "dev": "Latest official code on GitHub",
+        "unavailable": "Can't check right now",
+        "unknown": "Not checked yet"
+      },
+      "included": {
+        "upToDate": "Included in your personal version",
+        "updateAvailable": "Not in your personal version yet",
+        "unverified": "Can't confirm whether your personal version includes it"
+      },
+      "technical": "Technical details (for developers)"
+    },
+    "sync": {
+      "action": "Sync",
+      "hint": "Update your personal version to the official version. When it is saved to GitHub, this also brings in changes from your other computers and uploads the result. Conflicts are handled automatically in a task.",
+      "buildingHint": "Your personal version is being generated. Sync after it finishes or stops.",
+      "step": {
+        "resuming": "Continuing the last sync…",
+        "github": "Bringing in changes from your other computers…",
+        "combine": "Combining both sides’ changes…",
+        "official": "Updating to the official version…",
+        "upload": "Uploading to your GitHub…"
+      },
+      "done": "Synced to official {{ref}}",
+      "doneDevelopment": "Synced to the latest official code",
+      "held": "Official {{ref}} is out, but it changes the data format: switch to the original, update Cindy, then Sync to include it.",
+      "errors": {
+        "busy": "Another operation is in progress. Sync again shortly.",
+        "source": "The personal version source isn't ready or just changed. Sync again shortly.",
+        "github": "Something went wrong with GitHub. Check the connection under “Saved in” below, then Sync again.",
+        "network": "Can't reach the network. Check it, then Sync again.",
+        "diverged": "The personal version on GitHub and this computer's are based on unrelated official versions and can't be combined automatically yet.",
+        "unavailable": "Can't look up the official version right now. Sync again shortly.",
+        "cancelled": "Abandoned this combine. Neither your personal version nor the one on GitHub changed.",
+        "failed": "Sync didn't finish. Please try again.",
+        "changed": "Another computer uploaded new changes during Sync. Sync again to bring them in.",
+        "featurePending": "A change in your change history is being added or undone. Sync again when it is done.",
+        "gitOutdated": "Git on this computer is too old to sync with GitHub. Update Git to 2.36 or later.",
+        "forkMissing": "The GitHub repository that stores your personal version can’t be found; it may have been deleted. Save it to GitHub again under “Saved in” below.",
+        "forkArchived": "The GitHub repository that stores your personal version is archived, so GitHub accepts no uploads. Unarchive it on GitHub, then Sync again."
+      },
+      "doneCurrent": "Synced",
+      "ahead": "Your personal version is on a newer official version than this computer's Cindy (from another computer). If switching says the versions are incompatible, switch to the original and update Cindy first.",
+      "abandon": {
+        "action": "Abandon this combine",
+        "title": "Abandon resolving this conflict?",
+        "description": "The conflict task stops and its intermediate result is deleted. Your personal version stays as it was, and so does the version saved on GitHub. You can Sync again later.",
+        "confirm": "Abandon",
+        "cancel": "Keep working"
+      },
+      "uploadAfterBuild": "This computer's changes upload to your GitHub automatically after you generate the personal version.",
+      "waiting": {
+        "working": {
+          "combine": "Both computers changed the same place. A task is combining them, and Sync continues by itself when it is done.",
+          "official": "The official update and your changes touched the same place. A task is handling it, and Sync continues by itself when it is done."
+        },
+        "input": "The task handling the conflict is waiting for your answer. Open it to reply.",
+        "interrupted": {
+          "task": "Cindy closed while the conflict was being handled. Open the task and say “continue” to pick it up, or abandon it.",
+          "start": "The last Sync was interrupted. Abandon it, then press Sync again."
+        },
+        "missing": "Changes of yours missing from the result: {{count}}. Ask the task to put them back, or use the result anyway if you don’t need them.",
+        "stale": "Your personal version changed while this was being handled, so the result is out of date. Abandon it and Sync again.",
+        "failed": "This combine didn’t finish. Open the task to see why, or abandon it and Sync again.",
+        "abandoning": "Abandoning this combine…",
+        "paused": "The task handling this combine is gone. Press “Continue” to open a new task for it; the work done so far is kept.",
+        "otherAccount": "This combine was started while another account was signed in. Switch back to that account to continue or abandon it."
+      },
+      "waitingHint": "Finish or abandon the combine in progress first.",
+      "accept": {
+        "action": "Use anyway",
+        "title": "Use this result anyway?",
+        "description": "The {{count}} changes missing from it won’t be in your personal version. The original versions on both sides are kept as backups.",
+        "confirm": "Use anyway",
+        "cancel": "Not now"
+      },
+      "buildFirst": "This computer has changes that aren’t generated yet. Generate your personal version first; Sync can then bring in the other computer’s changes.",
+      "needsGenerate": "Your personal version has new changes. Generate it to use them on this computer.",
+      "keep": {
+        "hint": "When the two sides’ changes can’t be combined, keep one side; the other is backed up.",
+        "github": "Keep the GitHub version",
+        "local": "Keep this computer’s version",
+        "githubTitle": "Keep the personal version on GitHub?",
+        "githubDescription": "This computer switches to the personal version on GitHub (from another computer). This computer’s current personal version is backed up, and the changes in your change history can be added back later.",
+        "localTitle": "Keep this computer’s personal version?",
+        "localDescription": "The personal version on GitHub is replaced by this computer’s. A backup branch is kept in your GitHub repository first, so the other computer’s changes can be recovered from it.",
+        "cancel": "Not now"
+      },
+      "resume": "Continue",
+      "generateFirst": "Your personal version has changes that aren’t generated yet. Generate it first, then Sync to official {{ref}}."
     }
   },
   "taskTags": {

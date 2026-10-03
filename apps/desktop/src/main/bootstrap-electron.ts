@@ -15,6 +15,12 @@ import {
   refreshUpstreamMergeProjection,
 } from './cindy-make/upstreamMergeRuntime.js';
 import {
+  configurePersonalRemote,
+  actPersonalRemote,
+  actCindyMakeContribution,
+} from './cindy-make/personalRemoteRuntime.js';
+import { configurePersonalSync, actPersonalSync } from './cindy-make/personalSyncRuntime.js';
+import {
   configureMakeHistory,
   getCindyMakeHistory,
   actCindyMakeHistory,
@@ -7657,6 +7663,35 @@ const registerIpcHandlers = () => {
   ipcMain.handle('app:cindy-make-merge', async (event, input: unknown) => {
     assertTrustedAppRendererEvent(event);
     return actUpstreamMerge(input);
+  });
+  // Local Settings only: binding this machine's GitHub fork has no device-link grant.
+  // A failure here must not prevent the remaining IPC handlers from registering.
+  try {
+    configurePersonalRemote();
+  } catch (error) {
+    createLogger('cindy-make').warn('personal remote unavailable', {
+      error: error instanceof Error ? error.name : 'unknown',
+    });
+  }
+  ipcMain.handle('app:cindy-make-personal-remote', async (event, action: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return actPersonalRemote(action);
+  });
+  // One Sync for every personal version; local Settings only, no device-link grant.
+  try {
+    configurePersonalSync();
+  } catch (error) {
+    createLogger('cindy-make').warn('personal sync unavailable', {
+      error: error instanceof Error ? error.name : 'unknown',
+    });
+  }
+  ipcMain.handle('app:cindy-make-sync', async (event, request: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return actPersonalSync(request);
+  });
+  ipcMain.handle('app:cindy-make-contribution', async (event, request: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return actCindyMakeContribution(request);
   });
   ipcMain.handle('app:get-cindy-make-source-status', async (event) => {
     assertTrustedAppRendererEvent(event);

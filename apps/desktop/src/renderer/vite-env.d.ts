@@ -3046,6 +3046,29 @@ interface ElectronAPI {
   cindyMakeMerge: (
     input: import('../shared/cindyMakeMerge').CindyMakeMergeRequest,
   ) => Promise<import('../shared/cindyMakeMerge').CindyMakeMergeState | undefined>;
+  /** Settings → Cindy Make: bind the personal version to the user's GitHub fork. */
+  cindyMakePersonalRemote: (
+    action: import('../shared/cindyMakePersonalRemote').CindyMakePersonalRemoteAction,
+  ) => Promise<import('../shared/cindyMakePersonalRemote').CindyMakePersonalRemoteState>;
+  /** The single Sync of the personal version: GitHub steps run only when shared there. */
+  cindyMakeSync?: (
+    request: import('../shared/cindyMakeSync').CindyMakeSyncRequest,
+  ) => Promise<import('../shared/cindyMakeSync').CindyMakeSyncState>;
+  /** Submit one Cindy Make change to the official repository as a pull request. */
+  cindyMakeContribution: {
+    (request: { action: 'status' }): Promise<
+      import('../shared/cindyMakeContribution').CindyMakeContributionView[]
+    >;
+    (request: { action: 'draft'; runId: string }): Promise<
+      import('../shared/cindyMakeContribution').CindyMakeContributionDraft
+    >;
+    (
+      request: Extract<
+        import('../shared/cindyMakeContribution').CindyMakeContributionRequest,
+        { action: 'submit' }
+      >,
+    ): Promise<import('../shared/cindyMakeContribution').CindyMakeContributionView>;
+  };
   getCindyMakeSettings: () => Promise<import('../shared/cindyMakeSettings').CindyMakeSettings>;
   setCindyMakeSyncLatestBeforeBuild: (
     enabled: boolean,

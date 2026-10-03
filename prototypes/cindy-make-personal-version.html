@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cindy Make 个人版 · 设置页设计稿</title>
+<style>
+:root{--surface:#f8f8f6;--card:#fff;--board:#d7d7d4;--text:#262626;--text2:#737373;--text3:#a3a3a3;--chip:#e5e5e5;--success:#177C3C;--update:#92400e;--error:#dc2626;--cta-bg:#000;--cta-fg:#fff;--hover:#f0f0ee;--focus:#417CDD;--scrim:rgba(0,0,0,.32)}
+[data-theme=dark]{--surface:#1f1f1e;--card:#2c2c2a;--board:#3c3c3a;--text:#d4d4d4;--text2:#a3a3a3;--text3:#737373;--chip:#3c3c3a;--success:#2AAE5B;--update:#FBBF24;--error:#f87171;--cta-bg:#fff;--cta-fg:#000;--hover:#353533;--scrim:rgba(0,0,0,.55)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface);color:var(--text);font:14px/1.5 Inter,system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.proto{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--board);padding:8px 12px}
+.proto .line{display:flex;gap:6px;overflow-x:auto;align-items:center;padding-bottom:2px;scrollbar-width:none}
+.proto .hint{font-size:12px;color:var(--text3);margin:0 0 6px}
+.seg{flex:none;border:1px solid var(--board);background:var(--card);border-radius:999px;height:28px;padding:0 12px;font-size:12px;cursor:pointer;white-space:nowrap}
+.seg[aria-pressed=true]{background:var(--chip);border-color:var(--chip);font-weight:500}
+main{max-width:760px;margin:0 auto;padding:20px 16px 72px}
+h1{font-size:18px;font-weight:500;margin:0;display:flex;align-items:center;gap:8px}
+.badge{font-size:11px;font-weight:500;border:1px solid var(--board);border-radius:999px;padding:0 7px;color:var(--text2)}
+.tabs{display:flex;gap:20px;border-bottom:1px solid var(--board);margin:14px 0 16px}
+.tab{padding:8px 0;font-size:13px;color:var(--text2);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.on{color:var(--text);border-color:var(--text);font-weight:500}
+.card{background:var(--card);border:1px solid var(--board);border-radius:12px;margin-bottom:14px}
+.banner{padding:16px;display:flex;gap:12px;align-items:flex-start}
+.banner>svg{width:20px;height:20px;margin-top:1px}
+.banner h2{font-size:15px;font-weight:500;margin:0 0 2px}
+.banner p{margin:4px 0 0;color:var(--text2);font-size:13px}
+.banner ul{margin:6px 0 0;padding-left:18px;color:var(--text2);font-size:13px}
+.note{margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--surface);font-size:12px;color:var(--text2)}
+.acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.btn{height:32px;padding:0 18px;border-radius:999px;font-weight:500;font-size:13px;border:1px solid var(--board);background:var(--card);cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.btn.sm{height:28px;padding:0 12px;font-size:12px}
+.btn.primary{background:var(--chip);border-color:var(--chip)}
+.btn.cta{background:var(--cta-bg);color:var(--cta-fg);border-color:var(--cta-bg)}
+.btn.quiet{border-color:transparent;background:transparent;color:var(--text2);padding:0 8px}
+.btn.danger{color:var(--error)}
+.btn:hover{background:var(--hover)}.btn.cta:hover{opacity:.88;background:var(--cta-bg)}.btn.quiet:hover{color:var(--text)}
+.btn[disabled]{opacity:.6;pointer-events:none}
+.row{display:flex;gap:12px;padding:13px 16px;border-top:1px solid var(--board);align-items:center}
+.row:first-child{border-top:0}
+.k{width:72px;flex:none;color:var(--text2);font-size:13px}
+.v{flex:1;min-width:0}
+.v .main{font-weight:500;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center}
+.v .sub{font-size:12px;color:var(--text2);margin-top:2px}
+.tag{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:400;color:var(--text2)}
+.tag svg{width:14px;height:14px}
+.ok{color:var(--success)}.up{color:var(--update)}.err{color:var(--error)}
+.formula{font-weight:500}.formula .plus{color:var(--text3);margin:0 4px;font-weight:400}
+.sec-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px 6px}
+.sec-head h3{margin:0;font-size:14px;font-weight:500}
+.chips{display:flex;gap:6px;overflow-x:auto;padding:4px 16px 10px;scrollbar-width:none}
+.chip{flex:none;height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--board);background:transparent;font-size:12px;color:var(--text2);cursor:pointer}
+.chip[aria-pressed=true]{background:var(--chip);border-color:var(--chip);color:var(--text);font-weight:500}
+.item{padding:12px 16px;border-top:1px solid var(--board)}
+.item .t{display:flex;gap:8px;align-items:baseline;justify-content:space-between}
+.item .title{font-weight:500}
+.item .meta{font-size:12px;color:var(--text2);margin-top:2px;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:center}
+.item .meta svg{width:13px;height:13px}
+.item .ia{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.item.system .title{font-weight:400;color:var(--text2)}
+.state{flex:none;font-size:12px;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.state svg{width:13px;height:13px}
+.files{margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--surface);font-size:12px;color:var(--text2)}
+.files code{font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--text);display:block}
+.empty{padding:18px 16px 20px;color:var(--text2);font-size:13px}
+details.tech{border:1px solid var(--board);border-radius:12px;background:var(--card)}
+details.tech summary{padding:12px 16px;cursor:pointer;color:var(--text2);font-size:13px;list-style:none;display:flex;align-items:center;gap:6px}
+details.tech summary::-webkit-details-marker{display:none}
+details.tech[open] summary svg{transform:rotate(90deg)}
+.tech dl{margin:0;padding:0 16px 14px;display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;font-size:12px}
+.tech dt{color:var(--text2)}.tech dd{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all}
+.steps{margin:10px 0 0;padding:0;list-style:none;font-size:13px}
+.steps li{display:flex;gap:8px;align-items:center;padding:3px 0;color:var(--text3)}
+.steps li.done{color:var(--text2)}.steps li.now{color:var(--text);font-weight:500}
+.steps li svg{width:14px;height:14px}
+.log{margin-top:6px;font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.scrim{position:fixed;inset:0;background:var(--scrim);display:none;align-items:center;justify-content:center;padding:16px;z-index:20}
+.scrim.on{display:flex}
+.dialog{background:var(--card);border:1px solid var(--board);border-radius:12px;width:100%;max-width:520px;max-height:90vh;overflow:auto;padding:18px}
+.dialog h2{font-size:16px;font-weight:500;margin:0 0 4px}
+.dialog p{color:var(--text2);font-size:13px;margin:6px 0}
+.dialog label.f{display:block;font-size:12px;color:var(--text2);margin:12px 0 4px}
+.dialog input[type=text],.dialog textarea{width:100%;border:1px solid var(--board);border-radius:8px;background:var(--card);color:var(--text);font:13px/1.5 inherit;padding:8px 10px}
+.dialog textarea{min-height:120px;resize:vertical}
+.check{display:flex;gap:8px;align-items:flex-start;font-size:13px;margin-top:12px}
+.check input{margin-top:3px}
+.dialog .acts{justify-content:flex-end}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--card);border:1px solid var(--board);border-radius:999px;padding:8px 16px;font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.12);display:none;z-index:30;max-width:calc(100% - 32px)}
+.toast.on{display:block}
+@media (max-width:540px){.row{flex-wrap:wrap}.k{width:100%}.row .btn{margin-left:0}}
+</style>
+</head>
+<body>
+<div class="proto" aria-label="设计稿控制">
+  <p class="hint">设计稿：点下面切换场景（这一栏不是产品界面）</p>
+  <div class="line" id="scenarios"></div>
+</div>
+
+<main>
+  <h1>Cindy Make <span class="badge">Beta</span></h1>
+  <div class="tabs" role="tablist"><span class="tab on">版本控制</span><span class="tab">环境准备</span></div>
+  <section class="card" id="banner" aria-live="polite"></section>
+  <section class="card" id="overview"></section>
+  <section class="card" id="changes"></section>
+  <details class="tech" id="tech"></details>
+</main>
+
+<div class="scrim" id="scrim"><div class="dialog" role="dialog" aria-modal="true" id="dialog"></div></div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const I = {
+  check:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>',
+  down:'<svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>',
+  dot:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>',
+  cloud:'<svg viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>',
+  laptop:'<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg>',
+  pr:'<svg viewBox="0 0 24 24"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/></svg>',
+  warn:'<svg viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
+  load:'<svg viewBox="0 0 24 24" class="spin"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>',
+  circle:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>',
+  undo:'<svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>',
+  plus:'<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  chev:'<svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>',
+  sparkle:'<svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>',
+};
+
+const baseChanges = () => ([
+  {id:1,title:'给任务列表加上颜色标记',date:'今天',where:'this',status:'making'},
+  {id:2,title:'侧栏任务标题显示完整日期',date:'9月28日',where:'this',status:'active',files:['apps/desktop/…/SidebarTaskRow.tsx','apps/desktop/…/formatDate.ts','i18n: zh-CN / en']},
+  {id:3,title:'深色模式下代码块背景更柔和',date:'9月26日',where:'other',status:'active',pr:'review',files:['apps/desktop/…/codeBlock.css']},
+  {id:4,title:'输入框用 Ctrl+Enter 换行',date:'9月25日',where:'this',status:'removed',files:['apps/desktop/…/ChatInput.tsx']},
+  {id:5,title:'默认字号改成 15px',date:'9月24日',where:'this',status:'upstreamed',pr:'merged',files:['apps/desktop/…/appearance.ts']},
+  {id:6,system:true,title:'官方更新到 v1.4.2，你的修改已自动保留',date:'9月23日'},
+  {id:7,title:'设置页加上快捷键说明',date:'9月20日',where:'this',status:'active',files:['apps/desktop/…/ShortcutsSection.tsx']},
+]);
+
+let S = {};
+const scenarios = {
+  first:{label:'首次使用',github:false,hasPersonal:false,banner:'first'},
+  newdevice:{label:'新电脑（GitHub 上已有）',github:true,hasPersonal:false,banner:'newdevice'},
+  local:{label:'最新 · 只在本机',github:false,hasPersonal:true,banner:'ok'},
+  synced:{label:'最新 · 已同步 GitHub',github:true,hasPersonal:true,banner:'ok'},
+  migrate:{label:'刚连接 GitHub',github:true,bound:false,hasPersonal:true,banner:'migrate'},
+  pending:{label:'有变化待生效',github:true,hasPersonal:true,banner:'pending',mutate:c=>{c.find(x=>x.id===4).status='pending-add';c.find(x=>x.id===7).status='pending-remove';c.splice(1,0,{id:8,title:'任务完成时播放提示音',date:'今天',where:'other',status:'pending-add',files:['apps/desktop/…/notifySound.ts']});}},
+  building:{label:'正在生成',github:true,hasPersonal:true,banner:'building'},
+  official:{label:'官方发布新版本',github:true,hasPersonal:true,banner:'official'},
+  conflict:{label:'官方更新有冲突',github:true,hasPersonal:true,banner:'conflict'},
+};
+const extra = [{id:'theme',label:'切换明暗'}];
+
+function load(key){
+  const sc = scenarios[key];
+  S = {key, github:sc.github, bound:sc.bound!==false && sc.github, hasPersonal:sc.hasPersonal, banner:sc.banner, using:'personal', filter:'all', open:{}};
+  S.changes = sc.hasPersonal ? baseChanges() : [];
+  sc.mutate && sc.mutate(S.changes);
+  render();
+}
+
+const pendingCount = () => S.changes.filter(c=>c.status==='pending-add'||c.status==='pending-remove').length;
+const activeCount = () => S.changes.filter(c=>c.status==='active'||c.status==='pending-remove').length;
+
+function renderScenarios(){
+  document.getElementById('scenarios').innerHTML =
+    Object.entries(scenarios).map(([k,v])=>`<button class="seg" aria-pressed="${S.key===k}" onclick="load('${k}')">${v.label}</button>`).join('') +
+    `<button class="seg" onclick="toggleTheme()">切换明暗</button>`;
+}
+
+function banner(){
+  const b = S.banner, n = pendingCount();
+  if (b==='first') return `<div class="banner">${I.sparkle}<div><h2>做一个属于你的 Cindy</h2>
+    <p>告诉 Cindy 你想改什么，它会在官方最新版本上帮你改好，生成一个只属于你的「个人版」。原版一直保留，随时可以切回去。</p>
+    <ul><li>每一项修改都有记录，随时可以撤销</li><li>官方发布新版本时，你的修改会自动带过去</li><li>连接 GitHub 后，还能在别的电脑上用，也能把好的修改提交给官方</li></ul>
+    <div class="acts"><button class="btn cta" onclick="toast('打开「创建个人版」对话框：写下你想改什么')">创建个人版</button></div></div></div>`;
+  if (b==='newdevice') return `<div class="banner">${I.cloud}<div><h2>你的 GitHub 上已经有个人版</h2>
+    <p>来自账号 <b>lizi</b>：官方 v1.4.2 + 你的 3 项修改。可以直接在这台电脑上使用，不用重新做。</p>
+    <div class="note">Cindy 会下载个人版并在这台电脑上生成一次（约 15 分钟，期间可以正常使用），完成后提示你切换。</div>
+    <div class="acts"><button class="btn cta" onclick="toast('开始：下载个人版 → 准备环境 → 生成')">在这台电脑使用</button><button class="btn quiet" onclick="toast('打开「创建个人版」对话框')">重新做一个</button></div></div></div>`;
+  if (b==='ok') return `<div class="banner"><span class="ok">${I.check}</span><div><h2>个人版是最新的</h2>
+    <p>包含官方 v1.4.2 的全部内容，以及你的 ${activeCount()} 项修改。${S.github?'已同步到你的 GitHub。':''}</p></div></div>`;
+  if (b==='pending') return `<div class="banner"><span class="up">${I.dot}</span><div><h2>有 ${n} 项变化还没生效</h2>
+    <p>生成个人版后才会用上${summaryPending()}。大约需要 15 分钟，期间可以正常使用。</p>
+    <div class="acts"><button class="btn cta" onclick="S.banner='building';render()">生成个人版</button></div></div></div>`;
+  if (b==='building') return `<div class="banner">${I.load}<div style="flex:1;min-width:0"><h2>正在生成个人版</h2>
+    <p>离开这个页面也会继续。完成后会提示你重启使用。</p>
+    <ol class="steps"><li class="done">${I.check}加入你的修改</li><li class="now">${I.load}检查修改能正常运行（约 8 分钟）</li><li>${I.circle}打包</li><li>${I.circle}保存并同步到 GitHub</li></ol>
+    <div class="log">正在运行自动测试 · 已通过 312 项</div>
+    <div class="acts"><button class="btn" onclick="confirmStop()">停止</button></div></div></div>`;
+  if (b==='done') return `<div class="banner"><span class="ok">${I.check}</span><div><h2>新的个人版已准备好</h2>
+    <p>重启后使用。账号、设置和任务都会保留。${S.github?'已同步到你的 GitHub，其他电脑也能取到。':''}</p>
+    <div class="acts"><button class="btn cta" onclick="S.banner='ok';S.changes.forEach(c=>{if(c.status==='pending-add')c.status='active';if(c.status==='pending-remove')c.status='removed'});render();toast('（演示）已重启到新的个人版')">重启使用</button><button class="btn quiet" onclick="S.banner='ok';render()">稍后</button></div></div></div>`;
+  if (b==='official') return `<div class="banner"><span class="up">${I.down}</span><div><h2>官方发布了 v1.4.3</h2>
+    <p>更新后，个人版会包含官方的新内容，你的 ${activeCount()} 项修改都会保留。Cindy 先在后台准备好新的个人版（约 15 分钟，期间照常使用），准备好后重启一次即可。</p>
+    <div class="note">为了让原版和个人版能继续用同一份数据，重启时原版也会一起更新到 v1.4.3。</div>
+    <div class="acts"><button class="btn cta" onclick="S.banner='building';render()">更新个人版</button><button class="btn quiet" onclick="toast('打开 v1.4.3 更新说明')">看看更新了什么</button></div></div></div>`;
+  if (b==='conflict') return `<div class="banner"><span class="up">${I.warn}</span><div><h2>官方更新和你的 1 项修改改到了同一处</h2>
+    <p>Cindy 正在自动处理「侧栏任务标题显示完整日期」，处理完会自动继续更新到 v1.4.3。你现在用的个人版不受影响。</p>
+    <div class="acts"><button class="btn" onclick="toast('打开冲突处理任务')">查看处理进度</button><button class="btn quiet" onclick="toast('确认后停止本次更新，个人版保持 v1.4.2')">停止更新</button></div></div></div>`;
+  if (b==='migrate') return `<div class="banner">${I.cloud}<div><h2>把个人版保存到你的 GitHub？</h2>
+    <p>你已连接 GitHub 账号 <b>lizi</b>。保存后：</p>
+    <ul><li>用同一个 GitHub 账号的其他电脑，可以直接使用这个个人版</li><li>可以把你的修改提交给 Cindy 官方</li><li>之后每次生成成功都会自动同步，不用再管</li></ul>
+    <div class="note">会保存到 <b>lizi/cindy</b>，它是官方仓库的公开副本：<b>你的修改和修改标题在 GitHub 上所有人可见</b>。这台电脑上的个人版、修改记录和正在进行的制作都不会改变。</div>
+    <div class="acts"><button class="btn cta" onclick="migrate()">保存到 GitHub</button><button class="btn" onclick="S.github=true;S.bound=false;S.declined=true;S.banner='ok';render();toast('好的，只留在这台电脑。以后可以在下面「保存位置」里改')">只留在这台电脑</button><button class="btn quiet" onclick="S.banner='ok';render()">以后再说</button></div></div></div>`;
+  if (b==='migrating') return `<div class="banner">${I.load}<div><h2>正在保存到你的 GitHub</h2>
+    <ol class="steps"><li class="done">${I.check}整理这台电脑上的修改</li><li class="now">${I.load}创建 lizi/cindy</li><li>${I.circle}上传个人版</li></ol>
+    <p>不影响你继续使用。网络中断也没关系，下次会接着做。</p></div></div>`;
+  return '';
+}
+function summaryPending(){
+  const add = S.changes.filter(c=>c.status==='pending-add'), rm = S.changes.filter(c=>c.status==='pending-remove');
+  const other = add.filter(c=>c.where==='other').length;
+  const parts=[]; if(add.length-other) parts.push(`新加入 ${add.length-other} 项`); if(other) parts.push(`另一台电脑的 ${other} 项`); if(rm.length) parts.push(`撤销 ${rm.length} 项`);
+  return parts.length?`（${parts.join('、')}）`:'';
+}
+
+function overview(){
+  if (!S.hasPersonal) return `<div class="row"><div class="k">正在使用</div><div class="v"><div class="main">原版 · v1.4.2 正式版</div><div class="sub">官方发布的 Cindy</div></div></div>` + storageRow();
+  const base = S.banner==='official'||S.banner==='conflict' ? 'v1.4.2' : 'v1.4.2';
+  const latestRow = (S.banner==='official'||S.banner==='conflict')
+    ? `<div class="main">v1.4.3 正式版 <span class="tag up">${I.down}个人版还没包含</span></div><div class="sub">9月30日发布</div>`
+    : `<div class="main">v1.4.2 正式版 <span class="tag ok">${I.check}个人版已包含</span></div><div class="sub">9月23日发布 · 刚刚检查过</div>`;
+  const n = pendingCount();
+  const using = S.using==='personal'
+    ? `<div class="main">个人版</div><div class="sub">原版也保留在这台电脑上，切换会重启，账号、设置和任务都保留</div></div><button class="btn sm" onclick="S.using='original';render();toast('（演示）重启到原版')">切换到原版</button>`
+    : `<div class="main">原版</div><div class="sub">官方发布的 Cindy</div></div><button class="btn sm" onclick="S.using='personal';render();toast('（演示）重启到个人版')">切换到个人版</button>`;
+  return `<div class="row"><div class="k">正在使用</div><div class="v">${using}</div>
+  <div class="row"><div class="k">个人版</div><div class="v"><div class="main"><span class="formula">官方 ${base}<span class="plus">+</span>你的 ${activeCount()} 项修改</span>
+      ${n?`<span class="tag up">${I.dot}${n} 项变化待生效</span>`:S.banner==='building'?`<span class="tag">${I.load}正在生成</span>`:`<span class="tag ok">${I.check}已生效</span>`}</div>
+    <div class="sub">上次生成：9月28日 · 在这台电脑</div></div></div>
+  <div class="row"><div class="k">官方最新</div><div class="v">${latestRow}</div></div>` + storageRow();
+}
+function storageRow(){
+  if (!S.hasPersonal && S.github && S.bound) return `<div class="row"><div class="k">保存位置</div><div class="v"><div class="main">你的 GitHub · lizi/cindy</div><div class="sub">上面有你在其他电脑上做的个人版</div></div></div>`;
+  if (S.github && S.bound) return `<div class="row"><div class="k">保存位置</div><div class="v"><div class="main">你的 GitHub · lizi/cindy
+      ${S.banner==='pending'?`<span class="tag ok">${I.check}已取回另一台电脑的修改</span>`:S.banner==='building'?`<span class="tag">生成完成后自动同步</span>`:`<span class="tag ok">${I.check}已同步</span>`}</div>
+    <div class="sub">在其他电脑上用同一个 GitHub 账号登录，打开 Cindy Make 就能使用这个个人版</div></div>
+    <button class="btn sm quiet" onclick="storageMenu()">管理</button></div>`;
+  const declined = S.github && !S.bound;
+  return `<div class="row"><div class="k">保存位置</div><div class="v"><div class="main">只在这台电脑</div>
+    <div class="sub">${declined?'你选择了只留在这台电脑。':'连接 GitHub 后，可以在其他电脑上使用这个个人版，也能把修改提交给官方。'}换电脑或重装系统后，只存在本机的个人版无法找回。</div></div>
+    <button class="btn sm" onclick="${declined?"S.banner='migrate';render()":'connect()'}">${declined?'保存到 GitHub':'连接 GitHub'}</button></div>`;
+}
+
+const STATUS = {
+  making:['制作中',I.load,''],
+  active:['已生效',I.check,'ok'],
+  'pending-add':['待生效',I.dot,'up'],
+  'pending-remove':['已撤销 · 待生效',I.dot,'up'],
+  removed:['已撤销',I.undo,''],
+  upstreamed:['官方已采纳',I.check,'ok'],
+};
+const PR = {review:['官方审核中',''],changes:['官方请你修改','up'],merged:['已包含在官方 v1.4.2','ok']};
+const FILTERS = [['all','全部'],['active','已生效'],['pending','待生效'],['removed','已撤销'],['pr','已提交给官方']];
+function match(c){
+  if (S.filter==='all') return true;
+  if (c.system) return false;
+  if (S.filter==='active') return c.status==='active';
+  if (S.filter==='pending') return c.status==='pending-add'||c.status==='pending-remove';
+  if (S.filter==='removed') return c.status==='removed';
+  if (S.filter==='pr') return !!c.pr;
+}
+function changes(){
+  const head = `<div class="sec-head"><h3>修改记录</h3>${S.hasPersonal?`<button class="btn sm" onclick="toast('打开「新增修改」对话框：写下你想改什么')">${I.plus}新增修改</button>`:''}</div>`;
+  if (!S.hasPersonal) return head + `<div class="empty">还没有修改。创建个人版后，你让 Cindy 做的每一项修改都会记在这里，可以查看、撤销，也可以提交给官方。</div>`;
+  const chips = `<div class="chips">${FILTERS.map(([k,l])=>`<button class="chip" aria-pressed="${S.filter===k}" onclick="S.filter='${k}';render()">${l}</button>`).join('')}</div>`;
+  const list = S.changes.filter(match).map(item).join('') || `<div class="empty">没有符合条件的修改。</div>`;
+  return head + chips + list;
+}
+function item(c){
+  if (c.system) return `<div class="item system"><div class="t"><span class="title">${c.title}</span></div><div class="meta">${c.date} · 自动记录</div></div>`;
+  const [label,icon,cls] = STATUS[c.status];
+  const where = c.where==='this'?`${I.laptop}这台电脑`:`${I.cloud}在另一台电脑上制作`;
+  const pr = c.pr&&c.status!=='upstreamed'?`<span class="tag ${PR[c.pr][1]}">${I.pr}${PR[c.pr][0]}</span>`:'';
+  const acts = [];
+  if (c.status==='making') acts.push(`<button class="btn sm" onclick="toast('打开这个制作任务')">打开任务</button>`);
+  if (c.status==='active'||c.status==='pending-add') acts.push(`<button class="btn sm" onclick="undo(${c.id})">撤销</button>`);
+  if (c.status==='removed'||c.status==='pending-remove') acts.push(`<button class="btn sm" onclick="redo(${c.id})">恢复</button>`);
+  if ((c.status==='active')&&!c.pr) acts.push(`<button class="btn sm" onclick="openPr(${c.id})">${I.pr}提交给官方</button>`);
+  if (c.pr==='review') acts.push(`<button class="btn sm quiet" onclick="toast('在 GitHub 打开这条提交')">在 GitHub 查看</button>`);
+  if (c.files) acts.push(`<button class="btn sm quiet" onclick="S.open[${c.id}]=!S.open[${c.id}];render()">${S.open[c.id]?'收起':'改了什么'}</button>`);
+  const note = c.status==='upstreamed'?`<div class="meta">官方已经采纳这项修改，个人版改用官方的版本，不再单独保留。</div>`:'';
+  const files = S.open[c.id]&&c.files?`<div class="files">改动了 ${c.files.length} 个文件<code>${c.files.join('<br>')}</code></div>`:'';
+  return `<div class="item"><div class="t"><span class="title">${c.title}</span><span class="state ${cls}">${icon}${label}</span></div>
+    <div class="meta"><span>${c.date}</span><span style="display:inline-flex;gap:4px;align-items:center">${where}</span>${pr}</div>${note}${files}
+    ${acts.length?`<div class="ia">${acts.join('')}</div>`:''}</div>`;
+}
+
+function tech(){
+  return `<summary>${I.chev}技术详情（给开发者）</summary><dl>
+    <dt>个人版分支</dt><dd>cindy-personal · 3f2a9c1d8e04</dd>
+    <dt>官方基线</dt><dd>v1.4.2 · 8b71d0e5a2c9</dd>
+    ${S.github&&S.bound?'<dt>GitHub 仓库</dt><dd>github.com/lizi/cindy</dd>':''}
+    <dt>源码目录</dt><dd>C:\\Users\\lizi\\AppData\\Roaming\\Cindy\\cindy-make\\source</dd>
+  </dl><div style="padding:0 16px 14px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm">打开源码目录</button><button class="btn sm danger">清理源码</button></div>`;
+}
+
+function render(){
+  renderScenarios();
+  const bn = banner();
+  document.getElementById('banner').style.display = bn?'':'none';
+  document.getElementById('banner').innerHTML = bn;
+  document.getElementById('overview').innerHTML = overview();
+  document.getElementById('changes').innerHTML = changes();
+  const t = document.getElementById('tech'); const open = t.open; t.innerHTML = tech(); t.open = open;
+}
+
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('on');clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove('on'),2600);}
+function dialog(html){document.getElementById('dialog').innerHTML=html;document.getElementById('scrim').classList.add('on');}
+function closeDialog(){document.getElementById('scrim').classList.remove('on');}
+document.getElementById('scrim').addEventListener('click',e=>{if(e.target.id==='scrim')closeDialog()});
+function refreshBanner(){ if(['ok','pending','done'].includes(S.banner)) S.banner = pendingCount()?'pending':'ok'; }
+function undo(id){
+  const c=S.changes.find(x=>x.id===id);
+  dialog(`<h2>撤销「${c.title}」？</h2><p>撤销后，重新生成个人版时就不再包含这项修改。你的其他修改不受影响，之后随时可以恢复。</p>
+  <div class="acts"><button class="btn" onclick="closeDialog()">取消</button><button class="btn primary" onclick="doUndo(${id})">撤销</button></div>`);
+}
+function doUndo(id){const c=S.changes.find(x=>x.id===id);c.status=c.status==='pending-add'?'removed':'pending-remove';closeDialog();refreshBanner();render();toast('已撤销，生成个人版后生效');}
+function redo(id){const c=S.changes.find(x=>x.id===id);c.status=c.status==='pending-remove'?'active':'pending-add';refreshBanner();render();toast('已恢复，生成个人版后生效');}
+function openPr(id){
+  const c=S.changes.find(x=>x.id===id);
+  if(!(S.github&&S.bound)){
+    dialog(`<h2>提交给官方需要 GitHub</h2><p>修改会以你的 GitHub 账号提交给 Cindy 官方审核。连接后，个人版也会保存到你的 GitHub，其他电脑可以直接使用。</p>
+    <div class="acts"><button class="btn" onclick="closeDialog()">取消</button><button class="btn cta" onclick="closeDialog();${S.github?"S.banner='migrate';render()":'connect()'}">${S.github?'保存到 GitHub':'连接 GitHub'}</button></div>`);return;
+  }
+  dialog(`<h2>把这项修改提交给 Cindy 官方</h2>
+  <p>官方维护者审核后，可能采纳、请你修改或不采纳。采纳后会出现在之后的官方版本里，所有人都能用上。</p>
+  <label class="f" for="prt">标题</label><input type="text" id="prt" value="${c.title}">
+  <label class="f" for="prd">说明（Cindy 已根据制作过程写好，可以修改）</label>
+  <textarea id="prd">想解决的问题：${c.title}。
+
+改了什么：${(c.files||[]).length} 个文件，只包含这一项修改。
+
+怎么验证的：生成个人版时已通过自动测试和类型检查，并在隔离测试版里试用过。
+
+由 Cindy Make 制作。</textarea>
+  <div class="note">提交前 Cindy 会把这项修改单独放到官方最新代码上再检查一遍（约 10 分钟），不会带上你的其他修改。提交后在 GitHub 上公开可见。</div>
+  <label class="check"><input type="checkbox" id="dco" onchange="document.getElementById('prgo').disabled=!this.checked">我确认有权提交这项修改，并同意用我的 GitHub 账号（lizi）署名提交。</label>
+  <div class="acts"><button class="btn" onclick="closeDialog()">取消</button><button class="btn cta" id="prgo" disabled onclick="submitPr(${id})">提交给官方</button></div>`);
+}
+function submitPr(id){S.changes.find(x=>x.id===id).pr='review';closeDialog();render();toast('已提交。官方的审核结果会显示在这条记录上');}
+function connect(){
+  dialog(`<h2>连接 GitHub</h2><p>Cindy 会打开 GitHub 授权页，按页面提示输入验证码即可，不需要安装任何东西。</p>
+  <p>还没有 GitHub 账号？可以在 github.com 免费注册一个。</p>
+  <div class="acts"><button class="btn" onclick="closeDialog()">取消</button><button class="btn cta" onclick="closeDialog();S.github=true;S.bound=false;S.banner=S.hasPersonal?'migrate':'first';render();toast('（演示）已连接 GitHub 账号 lizi')">继续</button></div>`);
+}
+function migrate(){S.banner='migrating';render();setTimeout(()=>{S.bound=true;S.banner='ok';render();toast('已保存到 lizi/cindy，之后会自动同步');},1800);}
+function confirmStop(){
+  dialog(`<h2>停止生成个人版？</h2><p>这次加入的变化会退回到「待生效」，你现在用的个人版不变。之后可以再次生成。</p>
+  <div class="acts"><button class="btn" onclick="closeDialog()">继续生成</button><button class="btn primary" onclick="closeDialog();S.banner=pendingCount()?'pending':'ok';render();toast('已停止')">停止</button></div>`);
+}
+function storageMenu(){
+  dialog(`<h2>保存位置</h2><p>个人版保存在你的 GitHub（lizi/cindy），每次生成成功后自动同步。</p>
+  <div class="acts" style="justify-content:flex-start"><button class="btn sm" onclick="toast('在 GitHub 打开 lizi/cindy')">在 GitHub 查看</button><button class="btn sm" onclick="toast('（演示）立即同步')">立即同步</button><button class="btn sm danger" onclick="closeDialog();S.bound=false;render();toast('已停止同步。GitHub 上的仓库和这台电脑的个人版都保留')">停止同步</button></div>
+  <div class="acts"><button class="btn" onclick="closeDialog()">关闭</button></div>`);
+}
+function toggleTheme(){const h=document.documentElement;h.dataset.theme=h.dataset.theme==='dark'?'light':'dark';}
+// Demo: building finishes after a few seconds.
+setInterval(()=>{ if(S.banner==='building'){ S._b=(S._b||0)+1; if(S._b>3){S._b=0;S.banner='done';render();} } else S._b=0; },1500);
+load('synced');
+</script>
+</body>
+</html>

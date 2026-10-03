@@ -20,7 +20,10 @@ import { runSourcePnpm } from '../sourcePnpm.js';
 import type { DoctorProbeResult } from '../doctor.js';
 
 vi.mock('../sourceGit.js', () => ({ runSourceGit: vi.fn() }));
-vi.mock('../sourcePnpm.js', () => ({ runSourcePnpm: vi.fn(async () => undefined) }));
+vi.mock('../sourcePnpm.js', async (load) => ({
+  ...(await load<typeof import('../sourcePnpm.js')>()),
+  runSourcePnpm: vi.fn(async () => undefined),
+}));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return { ...actual, writeFile: vi.fn(actual.writeFile) };
@@ -167,11 +170,15 @@ describe('Source and dependency preparation', () => {
       expect(checkout?.[2]).toBe(sourcePath);
       expect(gitCalls.some(([, args]) => args[0] === 'reset')).toBe(false);
       expect(runSourcePnpm).toHaveBeenCalledExactlyOnceWith(
+        // No `CINDY_*`/`XDT_*` generalization either: those prefixes carry real
+        // product secrets (`XDT_ELEVENLABS_API_KEY`), and a content `.npmrc`
+        // would expand them into a request to a host it chooses.
         {
-          CINDY_TEST_GIT: selectedGit,
-          CINDY_TEST_NODE: path.join(root, source === 'system' ? 'system' : 'tools', 'node'),
-          CINDY_TEST_PNPM: path.join(root, source === 'system' ? 'system' : 'tools', 'pnpm'),
-          CINDY_TEST_PYTHON: undefined,
+          npm_config_userconfig: os.devNull,
+          npm_config_globalconfig: os.devNull,
+          COREPACK_ENV_FILE: '0',
+          COREPACK_ENABLE_PROJECT_SPEC: '0',
+          COREPACK_ENABLE_UNSAFE_CUSTOM_URLS: '0',
         },
         [
           'fetch',
@@ -179,8 +186,10 @@ describe('Source and dependency preparation', () => {
           '--prefer-offline',
           '--prod=false',
           '--ignore-scripts',
+          '--ignore-pnpmfile',
           '--config.node-linker=isolated',
           '--config.enable-modules-dir=false',
+          '--config.strict-ssl=true',
         ],
         sourcePath,
         expect.any(AbortSignal),

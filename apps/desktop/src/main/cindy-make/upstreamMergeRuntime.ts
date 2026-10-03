@@ -11,24 +11,37 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { createLogger } from '../logger.js';
 import { CINDY_PERSONAL_BRANCH, makeSourceRoot, makeSourceCheckoutPath } from './sourcePaths.js';
-import { snapshotContent } from './sourceContent.js';
+import { PERSONAL_UPSTREAM_REF, snapshotContent } from './sourceContent.js';
 import { rollbackUnbuiltHistory } from './buildRollback.js';
 import { hasPublishedPersonalVersionCommit } from './versionStore.js';
 import {
   createMakeToolchainEnvironment,
   resolveMakeToolEnvironment,
 } from './toolchainEnvironment.js';
-import { readCurrentCindySourceStatus } from './sourcePreparation.js';
+import { readCurrentCindySourceStatus, recordCindySourceRef } from './sourcePreparation.js';
 import { createLatestSourceVersionReader, sourceChannel } from './latestSourceVersion.js';
 import { runSourceGit } from './sourceGit.js';
+import { describeOriginalVersion } from './versionStartup.js';
+import {
+  MIGRATIONS_PATH,
+  notBehindBase,
+  pickSyncTarget,
+  type SyncTarget,
+} from './syncTarget.js';
 import { cindyMakeManager } from './manager.js';
 import { validateCindyMakeTaskStart } from './taskRuntime.js';
+import { journalMergeProvenance } from './personalRemoteRuntime.js';
 import { cleanupCompletedMakeMergeTask } from './taskManagement.js';
-import { ensureUpstreamMergeSession, assertUpstreamMergeSession } from './upstreamMergeSession.js';
+import {
+  ensureUpstreamMergeSession,
+  assertUpstreamMergeSession,
+  remindUpstreamMergeSession,
+} from './upstreamMergeSession.js';
 import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
 import { UpstreamMergeController, parseSavedUpstreamMerge } from './upstreamMergeController.js';
 import {
   prepareUpstreamMerge,
+  preparePersonalCombine,
   applyUpstreamMerge,
   verifyMergeWorktree,
   mergeWorktree,
@@ -42,9 +55,23 @@ import {
 } from './upstreamMerge.js';
 
 const log = createLogger('cindy-make');
+const OFFICIAL_URL = 'https://github.com/makecindy/cindy.git';
 let controller: UpstreamMergeController | undefined;
+let syncTarget: (() => Promise<SyncTarget>) | undefined;
 let unavailable = false;
-const ownerKey = () => captureDataOwnerBroadcastScope().ownerScopeKey ?? '';
+/**
+ * The account a retained operation belongs to. Signing in again as the same account
+ * advances the session generation but keeps its operations; async staleness is still
+ * checked with the full owner scope.
+ */
+const stableOwner = (key: string | undefined) => {
+  // `<mode>:<owner>:<generation>`; an already stable `<mode>:<owner>` is kept as it is.
+  const parts = key?.split(':') ?? [];
+  return parts.length >= 3 && /^\d+$/.test(parts.at(-1)!)
+    ? parts.slice(0, -1).join(':')
+    : (key ?? '');
+};
+const ownerKey = () => stableOwner(captureDataOwnerBroadcastScope().ownerScopeKey);
 
 function recordAppliedMerge(state: CindyMakeMergeState, isCurrent: () => boolean): void {
   if (
@@ -142,16 +169,86 @@ export function configureUpstreamMerge(isRunning: (id: string) => boolean): void
         signal,
       );
   };
+  // Settings names the official version the personal version is on now.
+  const recordOfficialRef = async (state: CindyMakeMergeState) => {
+    if (state.status === 'merged' && !state.feature && !state.remote && state.ref)
+      await recordCindySourceRef(root, state.ref).catch(() => undefined);
+    return state;
+  };
   const refresh = async () => {
     const env = await createMakeToolchainEnvironment(userData);
     await cindyMakeManager.refreshSourceStatus(() => readCurrentCindySourceStatus(root, env));
+  };
+  // The newest official release this computer's original Cindy can switch with.
+  syncTarget = async () => {
+    const env = await createMakeToolchainEnvironment(userData);
+    const source = await readCurrentCindySourceStatus(root, env);
+    const fallbackChannel = !app.isPackaged
+      ? 'dev'
+      : /-beta(?:\.|$)/i.test(app.getVersion())
+        ? 'beta'
+        : 'release';
+    const channel = sourceChannel(source, fallbackChannel);
+    // An explicit update gets a fresh pin rather than the Settings display cache.
+    const { latestVersion } = await createLatestSourceVersionReader((url, init) =>
+      net.fetch(url, init),
+    )(source, channel);
+    if (latestVersion?.status !== 'ready') throw mergeError('unavailable');
+    const command = await git();
+    const checkout = makeSourceCheckoutPath(userData);
+    const exitsZero = (args: string[]) =>
+      command(args, checkout).then(
+        () => true,
+        (error) => {
+          if ((error as { exitCode?: number }).exitCode === 1) return false;
+          throw error;
+        },
+      );
+    let original: ReturnType<typeof describeOriginalVersion> | undefined;
+    try {
+      original = describeOriginalVersion();
+    } catch {
+      // Unknown original: keep following the latest release.
+    }
+    return pickSyncTarget({
+      latest: latestVersion,
+      original,
+      tagCommit: async (tag) => {
+        const lines = (
+          await command(
+            ['ls-remote', '--tags', OFFICIAL_URL, `refs/tags/${tag}`, `refs/tags/${tag}^{}`],
+            checkout,
+          )
+        )
+          .split(/\r?\n/)
+          .map((line) => line.trim().split(/\s+/));
+        // An annotated tag points at its tag object; the peeled line names the commit.
+        return (
+          lines.find(([, ref]) => ref === `refs/tags/${tag}^{}`)?.[0] ??
+          lines.find(([, ref]) => ref === `refs/tags/${tag}`)?.[0]
+        );
+      },
+      fetch: async (commits) => {
+        await command(
+          ['fetch', '--no-tags', '--no-write-fetch-head', '--no-auto-maintenance', OFFICIAL_URL, ...commits],
+          checkout,
+        );
+      },
+      sameMigrations: (from, to) => exitsZero(['diff', '--quiet', from, to, '--', MIGRATIONS_PATH]),
+      isAncestor: (ancestor, descendant) =>
+        exitsZero(['merge-base', '--is-ancestor', ancestor, descendant]),
+    });
   };
   try {
     controller = new UpstreamMergeController({
       read: () => {
         const raw = readAtomicFileSync(stateFile);
         if (raw === null) return;
-        const saved = parseSavedUpstreamMerge(raw, userData);
+        const parsed = parseSavedUpstreamMerge(raw, userData);
+        // Records written before owners were per account carry the session generation.
+        const saved = parsed.sessionOwner
+          ? { ...parsed, sessionOwner: stableOwner(parsed.sessionOwner) }
+          : parsed;
         savedOwner = saved.sessionOwner;
         return saved;
       },
@@ -170,30 +267,57 @@ export function configureUpstreamMerge(isRunning: (id: string) => boolean): void
             return run();
           }),
         ),
+      // Task preparation and builds follow the same compatible official version as Sync,
+      // and never move the personal version to an older official version than it is on.
       latest: async () => {
-        const env = await createMakeToolchainEnvironment(userData);
-        const source = await readCurrentCindySourceStatus(root, env);
-        const fallbackChannel = !app.isPackaged
-          ? 'dev'
-          : /-beta(?:\.|$)/i.test(app.getVersion())
-            ? 'beta'
-            : 'release';
-        const channel = sourceChannel(source, fallbackChannel);
-        // An explicit update gets a fresh pin rather than the Settings display cache.
-        const { latestVersion } = await createLatestSourceVersionReader((url, init) =>
-          net.fetch(url, init),
-        )(source, channel);
-        if (latestVersion?.status !== 'ready') throw mergeError('unavailable');
-        return latestVersion;
+        const { ref, commit } = await syncTarget!();
+        const command = await git();
+        const checkout = makeSourceCheckoutPath(userData);
+        const isAncestor = (ancestor: string, descendant: string) =>
+          command(['merge-base', '--is-ancestor', ancestor, descendant], checkout).then(
+            () => true,
+            (error) => {
+              if ((error as { exitCode?: number }).exitCode === 1) return false;
+              throw error;
+            },
+          );
+        const base = (
+          await command(
+            ['rev-parse', '--verify', '--quiet', `${PERSONAL_UPSTREAM_REF}^{commit}`],
+            checkout,
+          ).catch(() => '')
+        ).trim();
+        // The recorded base is trusted only as the personal tip's ancestor: an
+        // interrupted move can leave "old tip + new base", and clamping to the
+        // shared history of the two recovers the base that tip really sits on.
+        const tip = (
+          await command(
+            ['rev-parse', '--verify', '--quiet', 'refs/heads/cindy-personal^{commit}'],
+            checkout,
+          ).catch(() => '')
+        ).trim();
+        const clamped =
+          !base || !tip || (await isAncestor(base, tip))
+            ? base
+            : (await command(['merge-base', tip, base], checkout).catch(() => '')).trim();
+        return notBehindBase({ ref, commit }, clamped, isAncestor);
       },
       prepare: async (state, publish, isCurrent) =>
-        prepareUpstreamMerge(userData, state, await git(), publish, isCurrent),
+        recordOfficialRef(
+          await prepareUpstreamMerge(userData, state, await git(), publish, isCurrent, {
+            journal: journalMergeProvenance,
+          }),
+        ),
+      prepareCombine: async (state, publish, isCurrent) =>
+        preparePersonalCombine(userData, state, await git(), publish, isCurrent, {
+          journal: journalMergeProvenance,
+        }),
       prepareFeature: async (state, plan, publish, isCurrent) => {
         if (!isCurrent() || isRunning(plan.taskSessionId)) throw mergeError('busy');
         return prepareFeatureMerge(userData, state, plan, await git(), publish, isCurrent);
       },
       applied: async (state, isCurrent) => recordAppliedMerge(state, isCurrent),
-      apply: async (state, isCurrent, publish) => {
+      apply: async (state, isCurrent, publish, options) => {
         if (state.feature && (!state.sessionId || state.commit))
           return applyFeatureMerge(userData, state, await git(), isCurrent, publish);
         if (!state.sessionId) throw mergeError('unavailable');
@@ -202,9 +326,17 @@ export function configureUpstreamMerge(isRunning: (id: string) => boolean): void
           await assertUpstreamMergeSession(userData, state);
           return state.feature
             ? applyFeatureMerge(userData, state, await git(), isCurrent, publish)
-            : applyUpstreamMerge(userData, state, await git(), isCurrent);
+            : recordOfficialRef(
+                await applyUpstreamMerge(userData, state, await git(), isCurrent, {
+                  ...options,
+                  // Durable content-trust facts before the source moves to the
+                  // rewritten result (see `journalMergeProvenance`).
+                  journal: journalMergeProvenance,
+                }),
+              );
         });
       },
+      remind: (state, isCurrent) => remindUpstreamMergeSession(state, isCurrent),
       session: async (state, options, bind, isCurrent) => {
         if (!ownerKey()) throw mergeError('unavailable');
         await verifyMergeWorktree(userData, state, await git());
@@ -342,6 +474,65 @@ export async function actUpstreamMerge(raw: unknown): Promise<CindyMakeMergeStat
   } finally {
     releaseManualSync?.();
   }
+}
+
+/** The official version Sync moves the personal version to (see `pickSyncTarget`). */
+export async function resolveSyncTarget(): Promise<SyncTarget> {
+  if (!syncTarget) throw mergeError('unavailable');
+  return syncTarget();
+}
+
+/** Sync's official update: pinned to the version it showed, resolving conflicts in a task. */
+export async function updateForSync(
+  target: { ref: string; commit: string },
+  options?: CindyMakeTaskOptions,
+): Promise<CindyMakeMergeState | undefined> {
+  if (!controller || unavailable) throw mergeError('unavailable');
+  return controller.update(options, undefined, { target, autoResolve: true });
+}
+
+/** Sync's combine with the GitHub version, resolving conflicts in a task. */
+export async function combineForSync(
+  remote: { commit: string; base: string },
+  options?: CindyMakeTaskOptions,
+): Promise<CindyMakeMergeState | undefined> {
+  if (!controller || unavailable) throw mergeError('unavailable');
+  return controller.combine(remote, options, true);
+}
+
+/** Sync's "use it anyway" for a result that does not carry every personal change. */
+export async function acceptForSync(
+  operationId: string,
+): Promise<CindyMakeMergeState | undefined> {
+  if (!controller || unavailable) throw mergeError('unavailable');
+  return controller.acceptMissing(operationId);
+}
+
+/** A candidate waits for its task or a decision; the personal version stays as it is meanwhile. */
+export function hasRetainedSourceOperation(): boolean {
+  const state = controller && !unavailable ? controller.status() : undefined;
+  return !!state?.hasWorkspace && state.status !== 'merged';
+}
+
+/** The retained source operation, if any (Sync shows and continues it). */
+export function sourceOperation(): CindyMakeMergeState | undefined {
+  return controller && !unavailable ? controller.status() : undefined;
+}
+
+/** A retained source operation Sync must finish first: open its task if it has none yet. */
+export async function resumeForSync(
+  options?: CindyMakeTaskOptions,
+): Promise<CindyMakeMergeState | undefined> {
+  if (!controller || unavailable) throw mergeError('unavailable');
+  return controller.resumeForSync(options);
+}
+
+/** Sync's Abandon: stop the conflict task and discard the candidate; nothing is adopted. */
+export async function abandonForSync(
+  operationId: string,
+): Promise<CindyMakeMergeState | undefined> {
+  if (!controller || unavailable) throw mergeError('unavailable');
+  return controller.abandon(operationId);
 }
 
 /** Only Main passes verified task facts here; renderer requests go through history admission. */

@@ -29,10 +29,16 @@ describe('Cindy Make settings store', () => {
     });
   });
 
-  it('persists explicit on and off choices until reset', () => {
-    expect(writeCindyMakeSyncLatestBeforeBuild(true)).toEqual({
-      syncLatestBeforeBuild: true,
+  it('reads a stored ON from an older version as off: builds never move the source', () => {
+    expect(__testing.normalize({ syncLatestBeforeBuild: true })).toEqual({
+      syncLatestBeforeBuild: false,
     });
+    expect(writeCindyMakeSyncLatestBeforeBuild(true)).toEqual({
+      syncLatestBeforeBuild: false,
+    });
+  });
+
+  it('persists explicit choices until reset', () => {
     expect(writeCindyMakeSyncLatestBeforeBuild(false)).toEqual({
       syncLatestBeforeBuild: false,
     });

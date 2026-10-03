@@ -9,9 +9,11 @@ import {
 } from './toolchainEnvironment.js';
 import type { MakeSourceGitProgress, MakeSourceStatus } from '../../shared/cindyMakeDoctor.js';
 import { runSourceGit } from './sourceGit.js';
-import { runSourcePnpm } from './sourcePnpm.js';
+import { runSourcePnpm, unverifiedPnpmEnv } from './sourcePnpm.js';
+import { assertPnpmConfigContained } from './pnpmWriteRoots.js';
 import { readSourceRevisions, type SourceRevisions } from './sourceRevisions.js';
 import { CINDY_PERSONAL_BRANCH } from './sourcePaths.js';
+import { PERSONAL_UPSTREAM_REF } from './sourceContent.js';
 import { checkMakeToolVersion, untilAborted } from './doctor.js';
 export const CINDY_SOURCE_REPOSITORY = 'https://github.com/makecindy/cindy.git';
 export { makeSourceRoot, makeSourceCheckoutPath } from './sourcePaths.js';
@@ -39,6 +41,17 @@ async function persistSourceStatus(root: string, status: MakeSourceStatus): Prom
   } catch {
     // Status is auxiliary UI state; a failed write must not block source preparation.
   }
+}
+
+/**
+ * An official update was adopted: the personal version is now on this official ref,
+ * so Settings names it (and resolves its commit) instead of the ref it was created from.
+ */
+export async function recordCindySourceRef(root: string, ref: string): Promise<void> {
+  if (!/^(?:main|v\d[0-9A-Za-z.+-]{0,63})$/.test(ref)) return;
+  const status = await readCindySourceStatus(root);
+  if (status.status !== 'ready' || status.ref === ref) return;
+  await persistSourceStatus(root, { ...status, ref });
 }
 
 /** Read the last managed checkout summary without invoking Git or exposing arbitrary paths. */
@@ -617,6 +630,13 @@ async function prepareCindySourceInternal(
     );
     if (!hasPersonal.trim()) {
       await git(env, ['branch', CINDY_PERSONAL_BRANCH, upstreamCommit], sourcePath, signal);
+      // Sync, combine and upload all read the official base of the personal version here.
+      await git(
+        env,
+        ['update-ref', PERSONAL_UPSTREAM_REF, upstreamCommit.trim(), ''],
+        sourcePath,
+        signal,
+      ).catch(() => undefined);
     }
     await emitProgress({
       status: 'preparing',
@@ -637,22 +657,40 @@ async function prepareCindySourceInternal(
       phase: 'caching',
     });
     const processEnvironment = await resolveMakeToolEnvironment(env, ['node', 'pnpm'], signal);
+    // Cache warming never executes content-controlled configuration: refused
+    // settings (`configDependencies` runs code, path keys redirect writes) or a
+    // config symlink skip the warming entirely — the install paths run their own
+    // full check (see `pnpmWriteRoots`), and a skipped warm costs only downloads.
+    // When it does run, it sees the same credential-free environment as an
+    // unverified install (see `unverifiedPnpmEnv`): a content `.npmrc` must not
+    // expand an inherited `${NPM_TOKEN}` into a credential sent to its registry.
+    const warmable = await assertPnpmConfigContained(sourcePath).then(
+      () => true,
+      () => false,
+    );
     // Settings and preflight warm the same pnpm store. Check the current lockfile
     // and cache each time, filling changed or evicted packages without trusting a
     // stale ready marker. The personal baseline needs no installed dependencies.
-    await runSourcePnpm(
-      processEnvironment,
+    if (warmable)
+      await runSourcePnpm(
+      unverifiedPnpmEnv(processEnvironment),
       [
         'fetch',
         '--frozen-lockfile',
         '--prefer-offline',
         '--prod=false',
         '--ignore-scripts',
+        // Pure cache warming from the lockfile: no content-controlled hook runs here
+        // either. Unverified synced content must not get code execution out of the
+        // silent preparation; worktree installs of verified content still honour
+        // the repository's own `.pnpmfile.cjs`.
+        '--ignore-pnpmfile',
         // The hoisted linker imports packages even with modules disabled. Override
         // only this command; worktree installs keep the repository's linker and
         // run the required lifecycle scripts as usual.
         '--config.node-linker=isolated',
         '--config.enable-modules-dir=false',
+        '--config.strict-ssl=true',
       ],
       sourcePath,
       signal,

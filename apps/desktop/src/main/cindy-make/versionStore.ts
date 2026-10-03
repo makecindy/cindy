@@ -191,6 +191,20 @@ export function hasPublishedPersonalVersionCommit(profile: string, commit: strin
     }
   });
 }
+/** Commits a generated personal version was published from; one of them vouches for its content. */
+export function publishedPersonalVersionCommits(profile: string): string[] {
+  const root = path.join(versionsRoot(profile), 'versions');
+  if (!fs.existsSync(root)) return [];
+  assertVersionDirectory(profile, root);
+  return fs.readdirSync(root).flatMap((id) => {
+    if (!VERSION_ID.test(id) || !fs.existsSync(path.join(root, id, 'version.json'))) return [];
+    try {
+      return [readPersonalVersionRecord(profile, id).commit];
+    } catch {
+      return [];
+    }
+  });
+}
 export function migrationIdentity(directory: string): string {
   return createHash('sha256')
     .update(JSON.stringify(createMigrationRuntimeManifest(directory).migrations))

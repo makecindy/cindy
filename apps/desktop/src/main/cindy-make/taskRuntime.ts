@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { normalizeDbAgentKind, dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { and, desc, eq, gt, isNull, like, or } from 'drizzle-orm';
 import { app } from 'electron';
+import { syncPersonalRemoteBeforeTask } from './personalRemoteRuntime.js';
 import { cindyMakeManager } from './manager.js';
 import {
   createMakeToolchainEnvironment,
@@ -12,6 +13,7 @@ import { prepareCindyMakeEnvironment } from './prepare.js';
 import { untilAborted } from './doctor.js';
 import { prepareCindySource, readCurrentCindySourceStatus } from './sourcePreparation.js';
 import { createCindyMakeWorktree, installCindyMakeWorktree } from './taskWorkspace.js';
+import { installScriptsTrust, remoteContentScriptsUnverified } from './installScriptsTrust.js';
 import { CINDY_MAKE_RUN_ID_PATTERN, makeSourceRoot, makeTaskWorktreePath } from './sourcePaths.js';
 import { makeToolRoot } from './toolInstaller.js';
 import { getDbClient } from '../localDb/client/current.js';
@@ -539,8 +541,34 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
       // The task worktree must branch from the latest verified personal source.
       // Keep the visible task shell while this runs so conflicts and Stop remain recoverable.
       phase('updatingSource', publish);
-      const { syncSourceBeforeCindyMakeTask } = await import('./upstreamMergeRuntime.js');
-      await syncSourceBeforeCindyMakeTask(signal, taskOptions);
+      const { syncSourceBeforeCindyMakeTask, hasRetainedSourceOperation } = await import(
+        './upstreamMergeRuntime.js'
+      );
+      for (let attempt = 0; ; attempt += 1) {
+        // A Sync in progress finishes first; the task then starts from its result.
+        await cindyMakeManager.whenManualSourceSyncIdle(signal);
+        checkPreparationCurrent();
+        // A conflict still waiting in its task leaves the personal version as it is: the new
+        // task starts from it instead of waiting for (or failing on) that conflict.
+        if (hasRetainedSourceOperation()) break;
+        try {
+          // Changes saved from another computer come first, so the official update replays them too.
+          await untilAborted(syncPersonalRemoteBeforeTask(), signal);
+          checkPreparationCurrent();
+          await syncSourceBeforeCindyMakeTask(signal, taskOptions);
+          break;
+        } catch (error) {
+          // A Sync that started meanwhile owns the source: wait for it, then decide again.
+          if (
+            attempt < 2 &&
+            !signal.aborted &&
+            (error as { code?: string })?.code === 'busy' &&
+            cindyMakeManager.isManualSourceSyncRunning()
+          )
+            continue;
+          throw error;
+        }
+      }
       checkPreparationCurrent();
       signal.throwIfAborted();
       source = await readCurrentCindySourceStatus(root, env);
@@ -563,6 +591,16 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
             signal.throwIfAborted();
             report = { ...report, source: { status: 'ready', ...workspace } };
             phase('dependencies', publish);
+            // Content taken over from the user's fork before this computer generated
+            // a personal version from it never has its lifecycle scripts run here:
+            // task creation must not execute code a collaborator pushed. Anything
+            // unclear counts as unverified (see `remoteContentScriptsUnverified`).
+            const ignoreScripts = await remoteContentScriptsUnverified(
+              workspace.baseCommit,
+              installScriptsTrust(userData, processEnvironment, signal),
+            ).catch(() => true);
+            if (ignoreScripts)
+              log.info('task install skips lifecycle scripts on unverified synced content');
             await installCindyMakeWorktree(
               userData,
               workspace,
@@ -575,6 +613,7 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
                   publish(report);
                 }
               },
+              { ignoreScripts },
             );
           },
           signal,

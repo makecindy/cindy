@@ -13940,7 +13940,8 @@
         "included": "目前執行版本已包含",
         "notIncluded": "目前執行版本未包含",
         "unknown": "是否包含尚未確認"
-      }
+      },
+      "failedContinue": "沒能查到官方是否已有類似修改，可以直接繼續製作。"
     },
     "title": "Cindy Make",
     "stepEnvironment": "1 · 準備環境",
@@ -14335,7 +14336,8 @@
         "installerReady": "安裝程式已就緒"
       },
       "rounds_other": "{{count}} 輪修改",
-      "files_other": "改動 {{count}} 個檔案"
+      "files_other": "改動 {{count}} 個檔案",
+      "generatePersonal": "產生個人版"
     },
     "merge": {
       "getLatest": "同步最新原始碼",
@@ -14378,7 +14380,264 @@
         "interrupted": "操作已中斷，改動已保留，請重試。",
         "startFailed": "無法開啟處理任務，請重試。",
         "cancelFailed": "未能取消本次更新，請重試。個人版原始碼已保留。"
+      },
+      "combine": {
+        "taskTitle": "合併兩台電腦的修改",
+        "status": {
+          "fetching": "正在準備合併…",
+          "merging": "正在合併兩邊的修改…",
+          "conflict": "兩邊改到了同一處，需要處理",
+          "resolving": "正在處理衝突",
+          "checking": "正在檢查合併結果…",
+          "merged": "兩邊的修改已合併",
+          "failed": "合併沒有完成",
+          "cancelled": "已取消合併，兩邊的個人版都沒有變化"
+        },
+        "conflictConfirm": {
+          "title": "兩台電腦改到了同一處",
+          "description": "確認後會建立獨立任務，由 Agent 把兩邊的修改合在一起，兩邊的功能都會保留；無法同時保留時會先問你。取消將放棄本次合併，兩邊的個人版都不變。",
+          "confirm": "確認並處理",
+          "cancel": "取消合併"
+        }
       }
+    },
+    "storage": {
+      "title": "儲存位置",
+      "github": "你的 GitHub · {{repository}}",
+      "localOnly": "只在這台電腦",
+      "localOnlyHint": "連接 GitHub 後，可以在其他電腦上使用這個個人版，也能把修改提交給官方。換電腦或重裝系統後，只存在本機的個人版無法找回。",
+      "localChosenHint": "你選擇了只留在這台電腦。換電腦或重裝系統後，只存在本機的個人版無法找回。",
+      "disconnectedHint": "這台電腦還沒有連接 GitHub，連接後才能同步。",
+      "unavailableHint": "暫時無法確認 GitHub 連線。",
+      "actionFailed": "操作沒有完成，請重試。",
+      "running": {
+        "save": "正在儲存到你的 GitHub",
+        "sync": "正在同步到你的 GitHub",
+        "disconnect": "正在停止同步"
+      },
+      "step": {
+        "waiting": "等待其他工程操作完成",
+        "preparing": "整理這台電腦上的修改",
+        "fork": "在你的 GitHub 上建立副本",
+        "connecting": "連接你的 GitHub",
+        "retrieving": "取回另一台電腦的修改",
+        "uploading": "上傳個人版"
+      },
+      "status": {
+        "synced": "已同步",
+        "pendingBuild": "產生個人版後同步",
+        "retrieved": "已取回另一台電腦的修改，產生個人版後可用",
+        "pending": "還沒同步到 GitHub",
+        "remoteAhead": "GitHub 上有另一台電腦的新修改",
+        "diverged": "GitHub 和這台電腦各有新的修改，暫時沒辦法自動合在一起",
+        "account": "目前連接的 GitHub 帳號（{{login}}）不是這個儲存庫的擁有者，已暫停同步。",
+        "needsMerge": "GitHub 和這台電腦各有新修改，需要合併",
+        "buildFirst": "先產生個人版，再同步"
+      },
+      "errors": {
+        "github": "GitHub 連線已失效，請重新連接 GitHub。",
+        "account": "目前連接的 GitHub 帳號與儲存位置不一致，已暫停同步。",
+        "forkConflict": "沒能在你的 GitHub 上建立 Cindy 的副本：同名儲存庫不是官方儲存庫的副本，Cindy 沒有改動它。",
+        "forkUnavailable": "GitHub 上的副本遲遲沒有準備好，請稍後重試。",
+        "network": "連不上 GitHub，請檢查網路後重試。",
+        "workflowScope": "目前的 GitHub 授權缺少上傳工作流程檔案的權限，請重新連接 GitHub 後重試。",
+        "source": "個人版原始碼暫時無法使用，請先準備好原始碼再試。",
+        "gitOutdated": "這台電腦的 Git 版本太舊，請在「環境準備」裡更新 Git 後重試。",
+        "interrupted": "上次操作被中斷，沒有自動繼續。",
+        "failed": "同步沒有完成，請重試。",
+        "forkMissing": "在 GitHub 上找不到儲存個人版的儲存庫，它可能被刪除了。可以重新儲存到你的 GitHub。",
+        "forkArchived": "儲存個人版的 GitHub 儲存庫已封存，GitHub 不再接受上傳。在 GitHub 上取消封存後再同步。"
+      },
+      "card": {
+        "title": "把個人版儲存到你的 GitHub？",
+        "intro": "你已連接 GitHub 帳號 {{login}}。儲存後：",
+        "otherComputers": "使用同一個 GitHub 帳號的其他電腦，可以使用這個個人版",
+        "contribute": "以後可以把你的修改提交給 Cindy 官方",
+        "autoSync": "之後會自動同步，不用再管",
+        "public": "會儲存到你 GitHub 帳號下的 Cindy 副本（通常是 {{repository}}），它是官方儲存庫的公開副本：你的修改在 GitHub 上所有人都看得到。",
+        "unchanged": "這台電腦上的個人版、製作歷史和正在進行的製作都不會改變。",
+        "existingTitle": "你的 GitHub 上已經有個人版",
+        "existingIntro": "帳號 {{login}} 的 {{repository}} 裡有在其他電腦上儲存的個人版。儲存後，這台電腦也使用它，之後自動同步。",
+        "existingKeeps": "如果這台電腦還沒有自己的修改，會直接使用 GitHub 上的個人版；這台電腦已有的修改不會被覆蓋。",
+        "prepareFirst": "會先準備個人版原始碼，需要幾分鐘。"
+      },
+      "actions": {
+        "connect": "連接 GitHub",
+        "reconnect": "重新連接 GitHub",
+        "save": "儲存到 GitHub",
+        "keepLocal": "只留在這台電腦",
+        "syncNow": "立即同步",
+        "retry": "重試",
+        "recheck": "重新檢查",
+        "view": "在 GitHub 查看",
+        "stop": "停止同步",
+        "useExisting": "在這台電腦使用",
+        "saveAgain": "重新儲存到 GitHub",
+        "keepSeparate": "不用，這台電腦單獨做一個"
+      },
+      "stopConfirm": {
+        "title": "停止同步到 GitHub？",
+        "description": "這台電腦之後不再上傳個人版。你 GitHub 上的儲存庫和這台電腦上的個人版都會保留，之後可以重新開啟。",
+        "confirm": "停止同步",
+        "cancel": "取消"
+      },
+      "needsMergeHint": "點上方「同步」合併兩邊的修改，兩邊的功能都會保留；改到同一處時會自動開任務處理。",
+      "buildFirstHint": "兩台電腦都有新修改，這台電腦的還沒產生。先產生個人版，再點「同步」就能把兩邊合在一起。"
+    },
+    "contribution": {
+      "action": "提交給官方",
+      "update": "更新提交",
+      "resubmit": "重新提交",
+      "view": "在 GitHub 查看",
+      "submitted": "已提交給官方 #{{number}}",
+      "state": {
+        "submitted": "已提交給官方 #{{number}}",
+        "open": "已提交給官方 #{{number}} · 等待審核",
+        "merged": "已被官方採納 #{{number}}",
+        "closed": "官方未採納 #{{number}}"
+      },
+      "dialog": {
+        "title": "提交給官方",
+        "description": "把這項修改整理成一個 Pull Request，提交到 Cindy 官方儲存庫，由維護者審核。",
+        "loading": "正在整理這項修改…",
+        "existing": "這項修改已經提交過（#{{number}}），再次提交會更新它。",
+        "reopen": "這項修改上次提交的 #{{number}} 已關閉，再次提交會新開一個。",
+        "prTitle": "標題",
+        "prTitleHint": "建議以 feat、fix 等英文類型加英文冒號開頭",
+        "body": "說明",
+        "bodyHint": "已按官方的提交範本預填，可以直接修改。",
+        "author": "署名",
+        "name": "名字",
+        "email": "電子郵件",
+        "nameRequired": "請填寫名字",
+        "emailRequired": "請填寫有效的電子郵件",
+        "authorHint": "會作為修改的作者和簽名，公開顯示在 GitHub 上。",
+        "files": "包含 {{count}} 個檔案",
+        "onlyThis": "只包含這一項修改，你個人版裡的其他修改不會帶上。",
+        "public": "從你的 GitHub 儲存庫 {{repository}} 發起，所有人都看得到。",
+        "uiNote": "這項修改涉及介面。提交後請在 GitHub 上補充截圖，並寫明依據的設計規範。",
+        "dco": "我確認這項修改由我提交，同意以 {{name}} <{{email}}> 簽署開發者原創聲明（DCO）。",
+        "submit": "提交",
+        "update": "更新提交",
+        "cancel": "取消",
+        "close": "關閉",
+        "files_other": "包含 {{count}} 個檔案"
+      },
+      "errors": {
+        "notBound": "要提交給官方，先在本頁上方「儲存位置」把個人版儲存到你的 GitHub。",
+        "github": "GitHub 連線已失效，請在設定裡重新連接 GitHub 後再試。",
+        "account": "目前連接的 GitHub 帳號和儲存個人版的帳號不一致，請換回原來的帳號再試。",
+        "unavailable": "這台電腦上已經找不到這項修改的內容，無法提交。",
+        "conflict": "這項修改和官方最新的程式碼改到了同一處，沒辦法自動整理成只含這項修改的提交。可以在最新的個人版上重新製作這項修改，再提交給官方。",
+        "empty": "官方最新的程式碼已經包含這項修改，不需要再提交。",
+        "invalid": "請檢查標題、名字和電子郵件是否填寫正確。標題只能寫一行。",
+        "network": "連不上 GitHub，請檢查網路後重試。",
+        "workflowScope": "這項修改改動了 GitHub 工作流程檔案，目前的 GitHub 授權不能上傳。請重新連接 GitHub 後再試。",
+        "failed": "沒有提交成功，請稍後重試。"
+      }
+    },
+    "summary": {
+      "personal": "個人版",
+      "latestLabel": "官方最新",
+      "official": "官方 {{version}}",
+      "officialUnknown": "官方版本",
+      "development": "官方開發中的版本",
+      "withChanges": "{{version}} ＋ 你的 {{count}} 項修改",
+      "withOwnChanges": "{{version}} ＋ 你的修改",
+      "noChanges": "{{version}}，還沒有你的修改",
+      "latest": {
+        "release": "正式版 {{version}}",
+        "beta": "beta 版 {{version}}",
+        "dev": "GitHub 上的官方最新程式碼",
+        "unavailable": "暫時查不到",
+        "unknown": "還沒查詢"
+      },
+      "included": {
+        "upToDate": "個人版已包含",
+        "updateAvailable": "個人版還沒包含",
+        "unverified": "還不能確認個人版是否已包含"
+      },
+      "technical": "技術詳情（給開發者）",
+      "withChanges_other": "{{version}} ＋ 你的 {{count}} 項修改"
+    },
+    "sync": {
+      "action": "同步",
+      "hint": "把個人版更新到官方版本；儲存到 GitHub 時還會取回其他電腦的修改並上傳。有衝突會自動開任務處理。",
+      "buildingHint": "個人版正在產生，完成或停止後才能同步。",
+      "step": {
+        "resuming": "正在繼續上次沒完成的同步…",
+        "github": "正在取回其他電腦的修改…",
+        "combine": "正在合併兩邊的修改…",
+        "official": "正在更新到官方版本…",
+        "upload": "正在上傳到你的 GitHub…"
+      },
+      "done": "已同步到官方 {{ref}}",
+      "doneDevelopment": "已同步到官方最新程式碼",
+      "held": "官方 {{ref}} 已發布，但它更新了資料格式：先切換到原版並更新 Cindy，再同步即可包含。",
+      "errors": {
+        "busy": "其他操作正在進行，請稍後再同步。",
+        "source": "個人版原始碼還沒準備好，或剛剛有了變化，請稍後再同步。",
+        "github": "連接 GitHub 時出錯，請在下方「儲存位置」檢查連線後再同步。",
+        "network": "連不上網路，請檢查後再同步。",
+        "diverged": "GitHub 上的個人版和這台電腦基於互不相關的官方版本，暫時沒辦法自動合併。",
+        "unavailable": "暫時查不到官方版本資訊，請稍後再同步。",
+        "cancelled": "已放棄這次合併，個人版和 GitHub 上的版本都沒有變化。",
+        "failed": "同步沒有完成，請重試。",
+        "changed": "同步期間另一台電腦又上傳了新修改，再點一次「同步」即可取回。",
+        "featurePending": "修改記錄裡有一項修改正在加入或撤銷，處理完後再同步。",
+        "gitOutdated": "這台電腦的 Git 版本太舊，沒辦法和 GitHub 同步。請把 Git 更新到 2.36 或更新的版本。",
+        "forkMissing": "找不到儲存個人版的 GitHub 儲存庫，它可能被刪除了。可以在下方「儲存位置」重新儲存到 GitHub。",
+        "forkArchived": "儲存個人版的 GitHub 儲存庫已封存，GitHub 不再接受上傳。在 GitHub 上取消封存後再同步。"
+      },
+      "doneCurrent": "已同步",
+      "ahead": "個人版已在比這台電腦的 Cindy 更新的官方版本上（來自另一台電腦）。如果切換時提示版本不相容，請先切換到原版並更新 Cindy。",
+      "abandon": {
+        "action": "放棄這次合併",
+        "title": "放棄處理這個衝突？",
+        "description": "處理任務會停止，中間結果會刪除。個人版保持原樣，儲存在 GitHub 上的版本也不會變，之後可以再同步。",
+        "confirm": "放棄",
+        "cancel": "繼續處理"
+      },
+      "uploadAfterBuild": "這台電腦的修改會在產生個人版後自動上傳到你的 GitHub。",
+      "waiting": {
+        "working": {
+          "combine": "兩台電腦改到了同一處，正在一個任務裡合併，處理完會自動繼續同步。",
+          "official": "官方更新和你的修改改到了同一處，正在一個任務裡處理，處理完會自動繼續同步。"
+        },
+        "input": "處理衝突的任務在等你回答，打開任務看看。",
+        "interrupted": {
+          "task": "處理衝突時 Cindy 被關閉了。打開任務說一句「繼續」就能接著處理，也可以放棄。",
+          "start": "上次同步被中斷了。放棄後再點一次「同步」即可。"
+        },
+        "missing": "合併結果裡少了 {{count}} 項你的修改。可以在任務裡讓它補回，或者確認不需要後仍然使用這個結果。",
+        "stale": "處理期間個人版又有了變化，這次合併已經過時，請放棄後重新同步。",
+        "failed": "這次合併沒能完成。可以打開任務看看，或者放棄後重新同步。",
+        "abandoning": "正在放棄這次合併…",
+        "paused": "這次合併的處理任務不在了。點「繼續處理」開一個新任務接著做，已經做好的部分會保留。",
+        "otherAccount": "這次合併是用另一個帳號登入時開始的，切回那個帳號後才能繼續或放棄。"
+      },
+      "waitingHint": "先處理完正在進行的合併，或者放棄它。",
+      "accept": {
+        "action": "仍然使用",
+        "title": "仍然使用這個合併結果？",
+        "description": "結果裡沒有的 {{count}} 項修改不會出現在個人版裡。兩邊原來的版本都留有備份。",
+        "confirm": "仍然使用",
+        "cancel": "再想想"
+      },
+      "buildFirst": "這台電腦有還沒產生的修改。先產生個人版，再同步就能取回另一台電腦的修改。",
+      "needsGenerate": "個人版有了新的變化，產生後才會在這台電腦上用上。",
+      "keep": {
+        "hint": "兩邊的修改合不到一起時，可以選一邊為準；另一邊會留有備份。",
+        "github": "以 GitHub 上的為準",
+        "local": "以這台電腦的為準",
+        "githubTitle": "以 GitHub 上的個人版為準？",
+        "githubDescription": "這台電腦會改用 GitHub 上的個人版（來自另一台電腦）。這台電腦現在的個人版會留有備份，修改記錄裡的修改之後還可以重新加入。",
+        "localTitle": "以這台電腦的個人版為準？",
+        "localDescription": "GitHub 上的個人版會被這台電腦的取代。取代前會在你的 GitHub 儲存庫裡留一個備份分支，另一台電腦的修改可以從那裡找回。",
+        "cancel": "再想想"
+      },
+      "resume": "繼續處理",
+      "generateFirst": "個人版裡有還沒產生的修改。先產生個人版，再同步到官方 {{ref}}。"
     }
   },
   "taskTags": {

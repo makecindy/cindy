@@ -211,6 +211,10 @@ Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 a
 
 用户通过 /cindy-make 显式开启的本机定制流程。输入区承接准备与每轮完成选择；修改时使用普通输入框。完成后可继续修改、启动隔离测试或生成个人版，版本切换由原生客户端处理。Doctor 自身只检查。
 
+### Submit to Cindy
+
+把 Cindy Make 的一项修改整理成 Pull Request 提交到官方仓库。面向普通用户写「提交给官方」，对话框说明里才出现 Pull Request；状态写「等待审核 / 已被官方采纳 / 官方未采纳」，不写 open / merged / closed。
+
 ### Make history
 
 Cindy Make 设置中保留全部制作、修改轮次与合入记录的列表；结束制作及清理工作目录后仍可回看。
@@ -218,6 +222,10 @@ Cindy Make 设置中保留全部制作、修改轮次与合入记录的列表；
 ### Add back to personal version
 
 重新应用之前明确撤销的制作改动，区别于把尚未合入的新修改首次加入个人源码。
+
+### Saved in
+
+Cindy Make 版本控制概览中的一行，说明个人版保存在哪里：只在这台电脑，或用户自己 GitHub 上官方仓库的公开副本（fork）。面向普通用户不写 fork，写「你的 GitHub」。
 
 ### Remove from personal version
 

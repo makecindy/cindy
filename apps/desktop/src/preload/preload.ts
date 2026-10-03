@@ -3949,6 +3949,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     input: import('../shared/cindyMakeMerge').CindyMakeMergeRequest,
   ): Promise<import('../shared/cindyMakeMerge').CindyMakeMergeState | undefined> =>
     ipcRenderer.invoke('app:cindy-make-merge', input),
+  cindyMakePersonalRemote: (
+    action: import('../shared/cindyMakePersonalRemote').CindyMakePersonalRemoteAction,
+  ): Promise<import('../shared/cindyMakePersonalRemote').CindyMakePersonalRemoteState> =>
+    ipcRenderer.invoke('app:cindy-make-personal-remote', action),
+  cindyMakeContribution: (
+    request: import('../shared/cindyMakeContribution').CindyMakeContributionRequest,
+  ): Promise<unknown> => ipcRenderer.invoke('app:cindy-make-contribution', request),
+  cindyMakeSync: (
+    request: import('../shared/cindyMakeSync').CindyMakeSyncRequest,
+  ): Promise<import('../shared/cindyMakeSync').CindyMakeSyncState> =>
+    ipcRenderer.invoke('app:cindy-make-sync', request),
   getCindyMakeSettings: (): Promise<import('../shared/cindyMakeSettings').CindyMakeSettings> =>
     ipcRenderer.invoke('app:get-cindy-make-settings'),
   setCindyMakeSyncLatestBeforeBuild: (

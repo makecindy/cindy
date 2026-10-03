@@ -44,6 +44,55 @@ export async function restoreBuildSource(
     throw new Error('Personal source recovery incomplete');
 }
 
+/**
+ * Walk back from `head` over the consecutive integrations that no saved version
+ * contains. These are exactly the receipts a failed generation would undo.
+ */
+function unbuiltHistoryEntries(
+  records: ReturnType<CindyMakeHistoryStore['list']>,
+  head: { commit: string; tree: string },
+  isPublishedCommit: IsPublishedCommit,
+): MakeBuildRollbackEntry[] {
+  const entries: MakeBuildRollbackEntry[] = [];
+  let current = head;
+  while (true) {
+    if (
+      isPublishedCommit(current.commit) ||
+      records.some((record) => record.versions.some((version) => version.commit === current.commit))
+    )
+      break;
+    const record = records
+      .sort((a, b) => (b.receipts.at(-1)?.at ?? 0) - (a.receipts.at(-1)?.at ?? 0))
+      .find((record) => {
+        const receipt = record.receipts.at(-1);
+        return receipt?.commit === current.commit && receipt.tree === current.tree;
+      });
+    if (
+      !record ||
+      record.versions.some((version) => version.operationId === record.receipts.at(-1)?.id)
+    )
+      break;
+    const receipt = record.receipts.pop()!;
+    const previous = record.receipts.at(-1);
+    entries.push({
+      runId: record.runId,
+      receipt,
+      previousTaskTree: previous?.action !== 'revert' ? previous?.taskTree : undefined,
+    });
+    current = { commit: receipt.baselineCommit, tree: receipt.beforeTree };
+  }
+  return entries;
+}
+
+/** A personal version with such integrations is still provisional and must not be shared. */
+export function hasUnbuiltHistory(
+  store: CindyMakeHistoryStore,
+  head: { commit: string; tree: string },
+  isPublishedCommit: IsPublishedCommit,
+): boolean {
+  return unbuiltHistoryEntries(store.list(), head, isPublishedCommit).length > 0;
+}
+
 /** Build cleanup owns only the consecutive integrations not present in a saved version. */
 export function historyBuildRollback(
   store: CindyMakeHistoryStore,
@@ -87,37 +136,7 @@ export function historyBuildRollback(
   return {
     recoverRollback: recover,
     prepareRollback: (head: { commit: string; tree: string }, git: ContentGit) => {
-      const records = store.list();
-      const entries: MakeBuildRollbackEntry[] = [];
-      let current = head;
-      while (true) {
-        if (
-          isPublishedCommit(current.commit) ||
-          records.some((record) =>
-            record.versions.some((version) => version.commit === current.commit),
-          )
-        )
-          break;
-        const record = records
-          .sort((a, b) => (b.receipts.at(-1)?.at ?? 0) - (a.receipts.at(-1)?.at ?? 0))
-          .find((record) => {
-            const receipt = record.receipts.at(-1);
-            return receipt?.commit === current.commit && receipt.tree === current.tree;
-          });
-        if (
-          !record ||
-          record.versions.some((version) => version.operationId === record.receipts.at(-1)?.id)
-        )
-          break;
-        const receipt = record.receipts.pop()!;
-        const previous = record.receipts.at(-1);
-        entries.push({
-          runId: record.runId,
-          receipt,
-          previousTaskTree: previous?.action !== 'revert' ? previous?.taskTree : undefined,
-        });
-        current = { commit: receipt.baselineCommit, tree: receipt.beforeTree };
-      }
+      const entries = unbuiltHistoryEntries(store.list(), head, isPublishedCommit);
       return async () => {
         if (!entries.length) return;
         store.saveBuildRollback(entries);
