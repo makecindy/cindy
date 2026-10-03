@@ -365,7 +365,8 @@ describe('turnRunner thread = session 路由(slack threadScoped)', () => {
     expect(mocks.slackIm.sendMarkdownText).toHaveBeenCalledWith(
       'U1',
       expect.stringContaining('排队'),
-      { threadTs: '100.1' },
+      // issue #1558: 排队提示点名挂回排队那条消息本身, 不借用在途 turn 的目标
+      { threadTs: '100.1', replyToMessageId: 'C1|100.1' },
     );
     expect(harnesses.get('slack_T1_U1_100_1')!.send).toHaveBeenCalledTimes(1);
   });
