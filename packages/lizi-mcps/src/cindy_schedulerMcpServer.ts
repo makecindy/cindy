@@ -32,6 +32,7 @@ import {
   registerScheduleListRunsTool,
   registerScheduleListTool,
   registerScheduleNotifyCurrentRunTool,
+  registerScheduleFailCurrentRunTool,
   registerSchedulePauseTool,
   registerScheduleResumeTool,
   registerScheduleRunNowTool,
@@ -210,6 +211,7 @@ export function createSchedulerMcpServer(
   registerScheduleRunNowTool(registry, deps);
   registerScheduleSilenceCurrentRunTool(registry, deps, getSessionContext);
   registerScheduleNotifyCurrentRunTool(registry, deps, getSessionContext);
+  registerScheduleFailCurrentRunTool(registry, deps, getSessionContext);
   registerScheduleDeleteTool(registry, deps, getSessionContext);
 
   registerListToolsEntry(server, registry, deps.withAccountDataAccess, getSessionContext);

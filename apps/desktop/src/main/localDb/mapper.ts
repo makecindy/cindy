@@ -898,6 +898,7 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
     finishedAt: row.finishedAt ?? undefined,
     status: row.status as RunStatus,
     errorMsg: row.errorMsg ?? undefined,
+    failureCode: row.failureCode ?? undefined,
     costUsd: row.costUsd,
     estimatedValueUsd: row.estimatedValueUsd,
     costMoney,
@@ -920,6 +921,7 @@ export function scheduleRunCreateToRow(r: ScheduleRun): ScheduleRunInsert {
     finishedAt: r.finishedAt ?? null,
     status: r.status,
     errorMsg: r.errorMsg ?? null,
+    failureCode: r.failureCode ?? null,
     costUsd: r.costUsd ?? 0,
     estimatedValueUsd: r.estimatedValueUsd ?? 0,
     costAmount: r.costMoney?.amount ?? 0,
@@ -950,6 +952,7 @@ export function scheduleRunPatchToRow(patch: Partial<ScheduleRun>): Partial<Sche
   if (hasKey(patch, 'finishedAt')) out.finishedAt = patch.finishedAt ?? null;
   if (hasKey(patch, 'status')) out.status = patch.status as ScheduleRunInsert['status'];
   if (hasKey(patch, 'errorMsg')) out.errorMsg = patch.errorMsg ?? null;
+  if (hasKey(patch, 'failureCode')) out.failureCode = patch.failureCode ?? null;
   if (hasKey(patch, 'costUsd')) out.costUsd = patch.costUsd ?? 0;
   if (hasKey(patch, 'estimatedValueUsd')) {
     out.estimatedValueUsd = patch.estimatedValueUsd ?? 0;

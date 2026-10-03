@@ -290,6 +290,8 @@ export interface ScheduleRun {
   finishedAt?: number;
   status: RunStatus;
   errorMsg?: string;
+  /** Agent-reported business failure code, separate from the original runtime error. */
+  failureCode?: string;
   /** 本次 run 产生的真实 API 账单费用。 */
   costUsd?: number;
   /** 本次 run 的订阅 token 估算价值，不计入真实账单。 */

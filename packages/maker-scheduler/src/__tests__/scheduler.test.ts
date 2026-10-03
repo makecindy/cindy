@@ -1902,6 +1902,49 @@ describe('Scheduler', () => {
     ]);
   });
 
+  it('agent business failure makes its own run failed and preserves the pre-run result', async () => {
+    const hook: NonNullable<ScheduleRun['preRunHookResult']> = {
+      status: 'passed', decision: 'run', exitCode: 0, durationMs: 3,
+      stdout: 'ready', stderr: '', stdoutTruncated: false, stderrTruncated: false,
+      timedOut: false, aborted: false,
+    };
+    h = makeHarness({
+      runnerImpl: async (_schedule, ctx) => {
+        await ctx.onPreRunHookCompleted?.(hook);
+        ctx.onTurnActive?.('sess-owner');
+        expect(h.scheduler.reportFailureForSession('sess-other', { code: 'INVALID_BOARD', message: 'wrong generation' })).toBe(false);
+        expect(h.scheduler.reportFailureForSession('sess-owner', { code: 'INVALID_BOARD', message: 'wrong generation' })).toBe(true);
+        expect(h.scheduler.getReportedFailure(ctx.runId)).toEqual({ code: 'INVALID_BOARD', message: 'wrong generation' });
+        return { sessionId: 'sess-owner', resultText: 'FAIL' };
+      },
+    });
+    const schedule = await h.scheduler.create({ ...baseInput, silentWhenIdle: true });
+    const { runId } = await h.scheduler.runNow(schedule.id);
+    const run = (await h.scheduler.listRuns(schedule.id))[0];
+    expect(run).toMatchObject({ id: runId, status: 'failed', failureCode: 'INVALID_BOARD', errorMsg: 'INVALID_BOARD: wrong generation', preRunHookResult: hook });
+    expect(run.readAt).toBeUndefined();
+    expect(h.scheduler.getReportedFailure(runId)).toBeUndefined();
+    expect(h.scheduler.reportFailureForSession('sess-owner', { code: 'LATE', message: 'after turn' })).toBe(false);
+  });
+
+  it('business report retains a later runtime error in the cron run', async () => {
+    h = makeHarness({
+      runnerImpl: async (_schedule, ctx) => {
+        ctx.onTurnActive?.('sess-cron');
+        expect(h.scheduler.reportFailureForSession('sess-cron', { code: 'ASSERT_FAILED', message: 'bad board' })).toBe(true);
+        throw new Error('agent transport failed');
+      },
+    });
+    const schedule = await h.scheduler.create({ ...baseInput });
+    h.clock.setTo(Date.UTC(2026, 0, 1, 0, 1, 5));
+    await h.scheduler.tick();
+    const run = (await h.scheduler.listRuns(schedule.id))[0];
+    expect(run.status).toBe('failed');
+    expect(run.failureCode).toBe('ASSERT_FAILED');
+    expect(run.errorMsg).toContain('ASSERT_FAILED: bad board');
+    expect(run.errorMsg).toContain('agent transport failed');
+  });
+
   it('failed run ignores silence mark (fail-safe: 异常保持未读)', async () => {
     h = makeHarness({
       runnerImpl: async (_s, ctx) => {
