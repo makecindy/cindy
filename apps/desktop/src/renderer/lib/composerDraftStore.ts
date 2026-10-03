@@ -809,6 +809,20 @@ export function appendQuoteToDraft(sessionId: string, quote: ChatQuote): void {
   );
 }
 
+/** 追加附件时保留最新草稿的其余字段，并通知输入框刷新。 */
+export function appendAttachmentToDraft(sessionId: string, attachment: AttachedFile): void {
+  const existing = getDraft(sessionId);
+  saveDraft(
+    sessionId,
+    {
+      ...existing,
+      text: existing?.text ?? null,
+      attachments: [...(existing?.attachments ?? []), attachment],
+    },
+    { preserveRemoteOptimisticRecovery: true },
+  );
+}
+
 /**
  * browser-comment-chip:向会话草稿追加一条页面评论(非 silent——挂载中的
  * ChatInput 经 subscribeDraft 立即刷新评论胶囊)。web-browser 插件的
