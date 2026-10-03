@@ -26,7 +26,7 @@ describe('chat-only group runtime', () => {
       readMemoryIndex: vi.fn(async () => 'PRIVATE_MEMORY'),
       listOwnSkills: vi.fn(), readProfileFolder: vi.fn(), listTeammates: vi.fn(), listToolsets: vi.fn(),
       listSkills: vi.fn(async () => [{ name: 'private-skill', path: '/private/SKILL.md', enabled: true }]),
-      listMcpServers: vi.fn(async () => [{ name: 'private-mcp', available: true }]),
+      listMcpServers: vi.fn(async () => [{ name: 'private-mcp', source: 'custom' as const, available: true }]),
     };
     const opts = { id: 'test', agentKind: 'pi', workingDir: '/isolated/group', model: 'test', extraDirs: ['/private'], writableDirs: ['/private'], makerMemoryIndexSnapshot: 'STALE_MEMORY' } as MakerSessionCreateOpts;
     const snapshot = await hydrateBotProfileRuntime(opts, deps, { persistSnapshot: false });
