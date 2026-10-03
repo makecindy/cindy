@@ -126,10 +126,20 @@ export class RemoteFileBrowserManager {
     hostId: string,
     method: M,
     params: FsRpcMethods[M]['params'],
+    options?: {
+      /**
+       * Runs after the client is connected (probe / install / handshake done) and right
+       * before the frame is handed to the channel. Callers that carry private payloads use
+       * it to re-check live authorization at the true send boundary; a rejection means the
+       * frame is never sent.
+       */
+      beforeSend?: () => Promise<void>;
+    },
   ): Promise<FsRpcMethods[M]['result']> {
     const generation = this.currentEndpointGeneration(hostId);
     const client = await this.getClient(hostId, generation);
     this.assertCurrentEndpointGeneration(hostId, generation);
+    if (options?.beforeSend) await options.beforeSend();
     try {
       const result = await client.request(method, params);
       this.assertCurrentEndpointGeneration(hostId, generation);
