@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { WorktreeRuntimeLease } from '../../worktree/runtimeLeases';
+import { physicalWorktreeKey } from '../../worktree/resourceLock';
 
 /** Seed persisted old-client evidence; production no longer creates shared leases or Git locks. */
 export async function seedLegacySharedRuntimeLease(
@@ -20,7 +21,7 @@ export async function seedLegacySharedRuntimeLease(
     identity: `${identity.dev}:${identity.ino}:${identity.birthtimeMs}`,
   };
   const file = path.join(directory, `${process.pid}-${randomUUID().replaceAll('-', '').repeat(2)}.json`);
-  const physicalPath = await fs.realpath(worktree);
+  const physicalPath = await physicalWorktreeKey(worktree);
   await fs.writeFile(file, JSON.stringify({ version: 1, pid: process.pid, path: physicalPath, keepSentinel }));
   return { file, physicalPath, keepSentinel };
 }
