@@ -343,13 +343,12 @@ export function GhostPluginDetailView({
                 <DropdownMenuContent
                   align="end"
                   sideOffset={8}
-                  className="w-56 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-[var(--text-primary)] shadow-[var(--shadow-menu)]"
+                  className="w-56 p-1.5"
                 >
                   {localUpdateAvailable ? (
                     <DropdownMenuItem
                       onSelect={onUpdateFromFile}
                       disabled={updateBusy}
-                      className="h-10 rounded-lg px-3 text-13 focus:bg-[var(--surface-hover-soft)]"
                     >
                       {t('settings.ghosts.detail.updateFromFile')}
                     </DropdownMenuItem>
@@ -357,18 +356,19 @@ export function GhostPluginDetailView({
                   {onExport ? (
                     <DropdownMenuItem
                       onSelect={onExport}
-                      className="h-10 gap-2.5 rounded-lg px-3 text-13 focus:bg-[var(--surface-hover-soft)]"
+                      className="gap-2.5"
                     >
                       <Download size={15} aria-hidden="true" />
                       {t('settings.ghosts.detail.exportPackage')}
                     </DropdownMenuItem>
                   ) : null}
                   {hasAdditionalActions ? (
-                    <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
+                    <DropdownMenuSeparator />
                   ) : null}
                   <DropdownMenuItem
                     onSelect={onUninstall}
-                    className="h-10 gap-2.5 rounded-lg px-3 text-13 text-[var(--error-fg)] focus:bg-[var(--error-bg)] focus:text-[var(--error-fg-strong)]"
+                    variant="danger"
+                    className="gap-2.5"
                   >
                     <Trash2 size={15} aria-hidden="true" />
                     {t('settings.ghosts.uninstall')}

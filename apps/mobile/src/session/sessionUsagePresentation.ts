@@ -11,14 +11,19 @@ import { quotaCountdown } from "./mobileModelRowPresentation";
 /**
  * Time left until a quota resets, used as the window label like the desktop status
  * chip ("7 hours": one unit, rounded up). Null once the reset time has passed.
+ * A known windowMinutes caps it so a just-reset weekly window never reads "8 days".
  */
 export function formatQuotaResetCountdown(
   resetsAt: number,
   now: number,
   t: TFunction,
+  windowMinutes?: number | null,
 ): string | null {
-  return quotaCountdown(resetsAt, now, (unit) =>
-    t(`models.unified.timeUnit.${unit}`),
+  return quotaCountdown(
+    resetsAt,
+    now,
+    (unit) => t(`models.unified.timeUnit.${unit}`),
+    windowMinutes,
   );
 }
 
@@ -90,7 +95,13 @@ export function accountUsageRows(
     const countdown =
       window.resetsAt === null
         ? null
-        : formatQuotaResetCountdown(window.resetsAt, now, t);
+        : formatQuotaResetCountdown(
+            window.resetsAt,
+            now,
+            t,
+            // xAI resetsAt may fall back to a non-weekly period end; only its label is weekly.
+            account.source === "xai" ? null : window.minutes,
+          );
     const label =
       countdown ??
       (window.minutes === 10080

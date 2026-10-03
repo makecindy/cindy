@@ -520,8 +520,8 @@ export function SessionMenuSheet({
       modelId: session.model,
       nowMs: now,
     });
-    return summarizeAccountRateLimits(scoped, now, mobilePresentationLocalizer, (resetsAt) =>
-      formatQuotaResetCountdown(resetsAt, now, t),
+    return summarizeAccountRateLimits(scoped, now, mobilePresentationLocalizer, (resetsAt, windowMinutes) =>
+      formatQuotaResetCountdown(resetsAt, now, t, windowMinutes),
     );
     // visible / quotaStaleTick / countdownTick 进依赖: 重开、到点失效与倒计时推进都按当前时间重算。
   }, [accountUsage, i18nInstance.language, quotaBucketTables, session.model, visible, quotaStaleTick, countdownTick, t]);

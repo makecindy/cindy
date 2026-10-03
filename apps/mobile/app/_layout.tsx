@@ -168,8 +168,8 @@ function NavigationGate() {
         />
       ) : null}
       <RemoteDesktopHost>
-        <ResidentHomeListProvider key={auth.accountGeneration}>
-        <RecentMessageHistoriesProvider>
+        <RecentMessageHistoriesProvider key={auth.accountGeneration}>
+        <ResidentHomeListProvider>
         <Stack
           key={auth.accountGeneration}
           screenOptions={{
@@ -206,8 +206,8 @@ function NavigationGate() {
             options={{ animation: 'fade', gestureEnabled: false }}
           />
         </Stack>
-        </RecentMessageHistoriesProvider>
         </ResidentHomeListProvider>
+        </RecentMessageHistoriesProvider>
       </RemoteDesktopHost>
       {auth.initialized && auth.isAuthenticated && !splashActive && <ClipboardSharedTaskPrompt accountName={auth.user?.name} />}
     </NavigationThemeProvider>

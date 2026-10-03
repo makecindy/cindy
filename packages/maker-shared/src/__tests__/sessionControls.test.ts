@@ -164,6 +164,9 @@ describe('summarizeAccountRateLimits', () => {
       { label: '2小时', value: '剩余 60% · 已用 40%' },
       { label: '周', value: '剩余 90% · 已用 10%' },
     ]);
+    // The window length reaches the label so a countdown can cap at it.
+    expect(resetLabel).toHaveBeenCalledWith(resetsAt, 300);
+    expect(resetLabel).toHaveBeenCalledWith(resetsAt + 1, 10080);
   });
 
   it('omits windows whose reset has passed when labelling by countdown', () => {

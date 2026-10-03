@@ -111,7 +111,7 @@ describe("task menu usage presentation", () => {
       updatedAt: now,
       amounts: [],
       windows: [
-        { id: "a", minutes: 300, remainingPercent: 94, resetsAt: at(6.5 * 3_600_000) },
+        { id: "a", minutes: 300, remainingPercent: 94, resetsAt: at(4.5 * 3_600_000) },
         { id: "b", minutes: 10080, remainingPercent: 29, resetsAt: at(2.2 * 86_400_000) },
         { id: "m", minutes: 10080, modelLabel: "Opus", remainingPercent: 8, resetsAt: at(2.2 * 86_400_000) },
         { id: "c", minutes: 300, remainingPercent: 50, resetsAt: at(90_000) },
@@ -121,7 +121,7 @@ describe("task menu usage presentation", () => {
     };
     const rows = accountUsageRows(account, i18n.t, "zh-CN", now);
     expect(rows.map(({ label, value }) => [label, value])).toEqual([
-      ["7小时", "剩余 94%"],
+      ["5小时", "剩余 94%"],
       ["3天", "剩余 29%"],
       ["Opus · 3天", "剩余 8%"],
       ["2分钟", "剩余 50%"],
@@ -130,5 +130,21 @@ describe("task menu usage presentation", () => {
     ]);
     expect(rows.every((row) => row.detail === undefined)).toBe(true);
     expect(formatQuotaResetCountdown(at(45_000), now, i18n.t)).toBe("45秒");
+  });
+  it("caps a just-reset window at its length, but never xAI's possibly non-weekly reset", () => {
+    const now = 1_000_000_000_000;
+    const at = (ms: number) => (now + ms) / 1000;
+    const window = (resetsAt: number) => ({ id: "w", minutes: 10080, remainingPercent: 100, resetsAt });
+    const account = (source: SessionMenuAccountUsage["source"], resetsAt: number): SessionMenuAccountUsage => ({
+      source,
+      plan: null,
+      updatedAt: now,
+      amounts: [],
+      windows: [window(resetsAt)],
+    });
+    // resetsAt lands 30s past now + 7 days (server rounding / clock skew).
+    expect(accountUsageRows(account("claude", at(7 * 86_400_000 + 30_000)), i18n.t, "zh-CN", now)[0].label).toBe("7天");
+    expect(accountUsageRows(account("xai", at(25 * 86_400_000)), i18n.t, "zh-CN", now)[0].label).toBe("25天");
+    expect(formatQuotaResetCountdown(at(7 * 86_400_000 + 30_000), now, i18n.t, 10080)).toBe("7天");
   });
 });

@@ -691,12 +691,7 @@ export function WorkdirBrowseSidebar({
             <DropdownMenuContent
               align="start"
               sideOffset={4}
-              className={cn(
-                'rounded-xl p-0.5 overflow-hidden min-w-[180px] max-w-[260px]',
-                'bg-[var(--cmd-palette-bg)]',
-                'border border-[var(--cmd-palette-border)]',
-                'shadow-[var(--shadow-menu)]',
-              )}
+              className="min-w-[180px] max-w-[260px]"
             >
               {switchProjects.map((project) => {
                 const active = project.projectKey === projectKey;
@@ -704,10 +699,9 @@ export function WorkdirBrowseSidebar({
                   <DropdownMenuItem
                     key={project.projectKey}
                     onSelect={() => handleSwitchProject(project)}
-                    className="h-8 px-2.5 rounded-md text-13 text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                   >
                     <span className="min-w-0 flex-1 truncate">{project.displayName}</span>
-                    <span className="ml-2 shrink-0 text-11 text-[var(--cmd-palette-item-meta)]">
+                    <span className="ml-2 shrink-0 text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                       {t('ccAgent.workdirBrowse.activeSessionCount', {
                         count: project.activeSessionCount,
                       })}

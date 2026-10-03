@@ -53,6 +53,8 @@ vi.mock('react-i18next', () => ({
         'todaySpend.codex.daysWindow': '{{days}}天',
         'todaySpend.xai.windowSegment': '{{label}} 剩余 {{remaining}}',
         'todaySpend.xai.weekWindow': '周限',
+        'todaySpend.unit.day': '天',
+        'todaySpend.unit.hour': '小时',
         'todaySpend.sessionCostLabel': '本任务 {{cost}}',
         'todaySpend.dailyLimitLabel': '今日 {{spend}}/{{limit}}',
         'todaySpend.monthlyLimitLabel': '本月 {{spend}}/{{limit}}',
@@ -327,6 +329,53 @@ describe('TodaySpendChip device-link remote sessions', () => {
     expect(container.textContent).toContain('5h 剩余 88%');
     expect(container.textContent).toContain('7天 剩余 66%');
     expect(mocks.remoteCodexDeviceIds).toContain('device-abc');
+  });
+
+  it('窗口刚重置时倒计时以窗口长度封顶,不显示「8天」', () => {
+    // resetsAt 比 now + 窗口长度晚 30 秒(服务端取整 / 时钟偏差)
+    const nowSec = Date.now() / 1000;
+    const bucket = {
+      source: 'codex-app-server',
+      limitId: 'codex',
+      primary: { usedPercent: 10, windowMinutes: 300, resetsAt: nowSec + 5 * 3600 + 30 },
+      secondary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: nowSec + 7 * 86400 + 30 },
+    };
+    mocks.remoteCodexPayload = { ...bucket, appServerBuckets: { codex: bucket }, webSnapshot: null };
+
+    const { container } = render(
+      <TodaySpendChip
+        vendorKey="codex"
+        providerId="openai"
+        modelId="gpt-5.6-sol"
+        sessionId="session-remote-codex-reset"
+        deviceLinkDeviceId="device-abc"
+      />,
+    );
+
+    expect(container.textContent).toContain('5小时 剩余 90%');
+    expect(container.textContent).toContain('7天 剩余 80%');
+    expect(container.textContent).not.toContain('8天');
+  });
+
+  it('xai 重置时间可能是非周账期,倒计时不按 7 天封顶', () => {
+    mocks.remoteXaiSnapshot = {
+      planLabel: 'SuperGrok',
+      creditUsagePercent: 25,
+      resetsAt: Date.now() / 1000 + 25 * 86400,
+      updatedAt: Date.now(),
+    };
+
+    const { container } = render(
+      <TodaySpendChip
+        vendorKey="cc"
+        providerId="xai"
+        modelId="grok-4.6"
+        sessionId="session-remote-xai-period"
+        deviceLinkDeviceId="device-abc"
+      />,
+    );
+
+    expect(container.textContent).toContain('25天 剩余 75%');
   });
 
   it('远程 codex 折扣模型(codex/)按网关形态渲染,不显示订阅窗口', () => {

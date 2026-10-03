@@ -1,6 +1,6 @@
 import { modelNeedsReselection } from './modelReselection';
 import { mobileProviderAccountTitle } from "./mobileModelRowPresentation";
-import { mobileCostMarks, quotaCountdown } from "./mobileModelRowPresentation";
+import { mobileCostMarks } from "./mobileModelRowPresentation";
 import { formatQuotaResetCountdown } from "./sessionUsagePresentation";
 import { useMobileModelQuotas } from "./useMobileModelQuotas";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -129,8 +129,6 @@ export function UnifiedModelPickerSheet(
   p: ModelPickerSheetProps & { unified: UnifiedMobilePickerOptions },
 ) {
   const { t } = useTranslation();
-  const countdown = (reset: number, now: number) =>
-    quotaCountdown(reset, now, (unit) => t(`models.unified.timeUnit.${unit}`));
   const { quotas, now } = useMobileModelQuotas(
     p.unified.scope,
     p.visible,
@@ -316,7 +314,14 @@ export function UnifiedModelPickerSheet(
           : null;
         return modelQuota
           ? [
-              modelQuota.resetsAt ? countdown(modelQuota.resetsAt, now) : null,
+              modelQuota.resetsAt
+                ? formatQuotaResetCountdown(
+                    modelQuota.resetsAt,
+                    now,
+                    t,
+                    modelQuota.windowMinutes,
+                  )
+                : null,
               `${modelQuota.remaining}%`,
             ]
               .filter(Boolean)
@@ -613,7 +618,12 @@ export function UnifiedModelPickerSheet(
                     remaining: quotas[provider.id]!.remaining!,
                     label: [
                       (quotas[provider.id]!.resetsAt
-                        ? formatQuotaResetCountdown(quotas[provider.id]!.resetsAt!, now, t)
+                        ? formatQuotaResetCountdown(
+                            quotas[provider.id]!.resetsAt!,
+                            now,
+                            t,
+                            quotas[provider.id]!.windowMinutes ?? null,
+                          )
                         : null) ?? t("session.menu.usage.week"),
                       t("session.menu.usage.remaining", {
                         percent: quotas[provider.id]!.remaining,

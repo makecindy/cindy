@@ -573,7 +573,7 @@ export function BotGroupComposer({
                     }}
                   >
                     <Paperclip size={16} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
-                    <span className="min-w-0 truncate text-13 font-medium text-[var(--text-primary)]">
+                    <span className="min-w-0 truncate">
                       {t('extraDirs.addFiles')}
                     </span>
                   </DropdownMenuItem>
@@ -587,10 +587,10 @@ export function BotGroupComposer({
                   >
                     <Users size={16} aria-hidden className="mt-0.5 shrink-0 text-[var(--text-secondary)]" />
                     <span className="flex min-w-0 flex-col gap-0.5">
-                      <span className="text-13 font-medium text-[var(--text-primary)]">
+                      <span>
                         {t('bots.groupChat.composer.division')}
                       </span>
-                      <span className="text-12 leading-normal text-[var(--text-tertiary)]">
+                      <span className="text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                         {t(
                           divisionBlocked
                             ? 'bots.groupChat.composer.divisionBusy'

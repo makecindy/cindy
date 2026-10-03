@@ -134,8 +134,9 @@ export function summarizeAccountRateLimits(
   /**
    * Label a window by its reset (e.g. a countdown) instead of its duration; null keeps
    * the duration label. Without it, rows name the window and append the reset time.
+   * windowMinutes lets a countdown cap at the window length.
    */
-  resetLabel?: (resetsAt: number) => string | null,
+  resetLabel?: (resetsAt: number, windowMinutes: number | null) => string | null,
 ): {
   rows: Array<{ label: string; value: string }>;
 } | null {
@@ -169,7 +170,9 @@ export function summarizeAccountRateLimits(
     // belongs to the previous period until a new snapshot arrives.
     if (resetLabel && resetsAt !== null && resetsAt > 0 && resetsAt * 1000 <= nowMs) continue;
     const countdownLabel =
-      resetLabel && resetsAt !== null && resetsAt > 0 ? resetLabel(resetsAt) : null;
+      resetLabel && resetsAt !== null && resetsAt > 0
+        ? resetLabel(resetsAt, readNumber(window.windowMinutes))
+        : null;
     if (!resetLabel) {
       const resetText = formatRateLimitResetAt(resetsAt, nowMs, localizer);
       if (resetText) {

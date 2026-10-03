@@ -2199,11 +2199,11 @@ function GhostPluginActions({
       <DropdownMenuContent
         align="end"
         sideOffset={8}
-        className="w-max min-w-52 max-w-[calc(100vw-2rem)] rounded-[12px] border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-[var(--text-primary)] shadow-[var(--shadow-menu)]"
+        className="w-max min-w-52 max-w-[calc(100vw-2rem)] p-1.5"
       >
         <DropdownMenuItem
           onSelect={onCreateWithCindy}
-          className="h-10 gap-3 whitespace-nowrap rounded-lg px-3 text-13 focus:bg-[var(--surface-hover-soft)] focus:text-[var(--text-primary)]"
+          className="gap-3 whitespace-nowrap"
         >
           <Sparkles
             size={16}
@@ -2213,10 +2213,10 @@ function GhostPluginActions({
           />
           {t('settings.ghosts.page.createWithCindy')}
         </DropdownMenuItem>
-        <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={onInstall}
-          className="h-10 gap-3 whitespace-nowrap rounded-lg px-3 text-13 focus:bg-[var(--surface-hover-soft)] focus:text-[var(--text-primary)]"
+          className="gap-3 whitespace-nowrap"
         >
           <Upload
             size={16}
@@ -2226,10 +2226,10 @@ function GhostPluginActions({
           />
           {t('settings.ghosts.install')}
         </DropdownMenuItem>
-        <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={onAddMarketplace}
-          className="h-10 gap-3 whitespace-nowrap rounded-lg px-3 text-13 focus:bg-[var(--surface-hover-soft)] focus:text-[var(--text-primary)]"
+          className="gap-3 whitespace-nowrap"
         >
           <Store
             size={16}

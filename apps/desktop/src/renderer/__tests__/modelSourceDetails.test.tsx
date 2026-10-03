@@ -296,6 +296,44 @@ describe('model source second line', () => {
       'claude · Max · 剩余 5% · 2天 · 剩余 20%',
     );
   });
+  it('caps countdowns at the window length right after a reset, except xAI', () => {
+    // resetsAt 比 now + 窗口长度晚 30 秒(服务端取整 / 时钟偏差),不得向上取整成多一天/一小时
+    reads.accounts['account-a'] = {
+      ...snapshot(0),
+      rateLimits: {
+        // 5h 窗口更紧张,来源行显示它
+        primary: { usedPercent: 50, windowMinutes: 300, resetsAt: now / 1000 + 5 * 3600 + 30 },
+        secondary: { usedPercent: 0, windowMinutes: 10080, resetsAt: now / 1000 + 7 * 86400 + 30 },
+      },
+    };
+    reads.claudeSnapshot = {
+      subscriptionType: 'max',
+      fiveHour: { utilization: 0, resetsAt: now / 1000 + 5 * 3600 + 30 },
+      sevenDay: { utilization: 0, resetsAt: now / 1000 + 7 * 86400 + 30 },
+    };
+    // xAI resetsAt 可能来自非周窗口 / 月度账期,原样显示
+    reads.xaiSnapshot = {
+      planLabel: 'SuperGrok',
+      creditUsagePercent: 0,
+      resetsAt: now / 1000 + 25 * 86400,
+      updatedAt: now,
+    };
+    render(
+      <ModelSourceUsageProvider
+        providers={[provider('account-a'), provider('claude', 'claude'), provider('xai', 'xai')]}
+        scope={local}
+      >
+        {details()}
+        {details('claude', 'claude-opus-5')}
+        {details('xai', 'grok-4')}
+      </ModelSourceUsageProvider>,
+    );
+    expect(screen.getByText(quotaText('5小时 50%'))).toBeTruthy();
+    // Claude 两窗口同为 0% 已用,后一个(周限)胜出
+    expect(screen.getByText(quotaText('7天 100%'))).toBeTruthy();
+    expect(screen.getByText(quotaText('25天 100%'))).toBeTruthy();
+    expect(screen.queryByText(/8天|6小时/)).toBeNull();
+  });
   it('shows current xAI weekly quota and hides stale values', () => {
     reads.xaiSnapshot = {
       planLabel: 'SuperGrok',
