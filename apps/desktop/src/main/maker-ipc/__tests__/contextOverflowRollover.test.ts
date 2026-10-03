@@ -330,6 +330,9 @@ describe('createContextOverflowRollover', () => {
       setPendingHandoff: vi.fn(),
       readPendingHandoffGeneration: vi.fn(() => 3),
       replayUserMessage: vi.fn(async () => ({ accepted: true })),
+      readPiNativeCompatOverride: vi.fn((): Record<string, unknown> | undefined => undefined),
+      recordPiNativeCompatOverride: vi.fn(async () => true),
+      hasExternalRecoveryOwner: vi.fn(() => false),
       onRebuilt: vi.fn(),
       withCloseSuppressed: async <T>(_sessionId: string, fn: () => Promise<T>) => fn(),
       log: { info: vi.fn(), warn: vi.fn() },
@@ -941,6 +944,242 @@ describe('createContextOverflowRollover', () => {
     ).resolves.toBe(false);
     expect(deps.commitRebuild).toHaveBeenCalled();
     expect(deps.onRebuilt).not.toHaveBeenCalled();
+  });
+
+  describe('pi provider compat self-heal', () => {
+    const rejection =
+      '400: {"param":"prompt_cache_retention","type":"invalid_request_error","message":'
+      + '"Error from provider (Console Go): Upstream request failed: [invalid_request_error] '
+      + 'prompt_cache_retention is not supported by this endpoint; use prompt_cache_options"}';
+
+    function makePiDeps(source: OverflowSourceMessage[]) {
+      const deps = makeDeps(source);
+      deps.getSessionRow.mockResolvedValue({
+        status: 'active',
+        source: 'desktop',
+        agentKind: 'pi',
+        remoteHostId: null,
+        clearedAt: null,
+        sdkSessionId: '/tmp/glm.jsonl',
+        contextTokens: 0,
+        contextWindow: 1_000_000,
+        model: 'glm-5.3-flash',
+        providerId: 'opencode-go',
+      });
+      return deps;
+    }
+
+    it('learns the per-model compat fix once and replays the failed turn', async () => {
+      const deps = makePiDeps([
+        msg('user', '继续修这个 bug', 'u1', 1),
+        msg('assistant', '改完了，正在跑测试', 'a1', 2),
+        msg('user', '再跑一遍', 'u2', 3),
+      ]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', { reason: 'unsupported-request-option', message: rejection }),
+      ).resolves.toBe(true);
+
+      expect(deps.recordPiNativeCompatOverride).toHaveBeenCalledWith(
+        'opencode-go',
+        'glm-5.3-flash',
+        { supportsLongCacheRetention: false },
+      );
+      expect(deps.closeSession).toHaveBeenCalledWith('s1');
+      // 重建用的 models.json 已去掉被拒收字段，重放同一轮用户消息即重试。
+      expect(deps.replayUserMessage).toHaveBeenCalledWith(
+        's1',
+        '再跑一遍',
+        undefined,
+        expect.objectContaining({
+          continueFromHistory: true,
+          sourceUserContent: '再跑一遍',
+          sourceUserClientId: 'u2',
+        }),
+      );
+      expect(deps.onRebuilt).toHaveBeenCalledWith('s1');
+      // 不发布 context-overflow 式的手递手重建文案。
+      expect(deps.commitRebuild).not.toHaveBeenCalled();
+      expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    });
+
+    it('leaves non-target 400s to the normal error surface', async () => {
+      const deps = makePiDeps([msg('user', '继续', 'u1', 1)]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', {
+          message: '400: {"type":"invalid_request_error","message":"prompt_cache_retention conflicts with prompt_cache_options"}',
+        }),
+      ).resolves.toBe(false);
+      expect(deps.recordPiNativeCompatOverride).not.toHaveBeenCalled();
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('does not retry a provider/model that already learned the fix', async () => {
+      const deps = makePiDeps([msg('user', '再跑一遍', 'u2', 1)]);
+      deps.readPiNativeCompatOverride.mockReturnValue({ supportsLongCacheRetention: false });
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', { reason: 'unsupported-request-option', message: rejection }),
+      ).resolves.toBe(false);
+      expect(deps.recordPiNativeCompatOverride).not.toHaveBeenCalled();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+      expect(deps.onRebuilt).not.toHaveBeenCalled();
+    });
+
+    it('learns the fix but does not replay when the plan cannot replay', async () => {
+      // 零产出守卫（无用户消息/已有副作用）不阻止学习：关掉旧 runtime 并把修正落盘，
+      // 下一次发送重建时就生效。
+      const deps = makePiDeps([
+        msg('assistant', '已经改了文件', 'a1', 1),
+        msg('error', { reason: 'unsupported-request-option', message: rejection }, 'e1', 2),
+      ]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', { reason: 'unsupported-request-option', message: rejection }),
+      ).resolves.toBe(false);
+      expect(deps.recordPiNativeCompatOverride).toHaveBeenCalledWith(
+        'opencode-go',
+        'glm-5.3-flash',
+        { supportsLongCacheRetention: false },
+      );
+      expect(deps.closeSession).toHaveBeenCalledWith('s1');
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('learns the fix but leaves replay to an external dispatcher turn', async () => {
+      // Orca/scheduler 派单轮次：正文经 wire 投影可能退化，且 owner 有自己的重试语义，
+      // 不能代它重放（会双跑或空转）；仍要学习并关掉旧 runtime。
+      const dispatched = { ...msg('user', '{"orcaSource":"lead","content":"do it"}', 'u1', 1),
+        agentMeta: { origin: { kind: 'orca' } } };
+      const deps = makePiDeps([dispatched]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', { reason: 'unsupported-request-option', message: rejection }),
+      ).resolves.toBe(false);
+      expect(deps.recordPiNativeCompatOverride).toHaveBeenCalledWith(
+        'opencode-go',
+        'glm-5.3-flash',
+        { supportsLongCacheRetention: false },
+      );
+      expect(deps.closeSession).toHaveBeenCalledWith('s1');
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+      expect(deps.onRebuilt).not.toHaveBeenCalled();
+      // 闩锁必须在 close 之后才置，否则中途失败会永久停在旧 runtime 上。
+      expect(deps.closeSession.mock.invocationCallOrder[0]).toBeLessThan(
+        deps.recordPiNativeCompatOverride.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('learns the fix but leaves replay to a headless/bound owner', async () => {
+      const deps = makePiDeps([msg('user', '继续', 'u1', 1)]);
+      deps.hasExternalRecoveryOwner.mockReturnValue(true);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', { reason: 'unsupported-request-option', message: rejection }),
+      ).resolves.toBe(false);
+      expect(deps.recordPiNativeCompatOverride).toHaveBeenCalledOnce();
+      expect(deps.closeSession).toHaveBeenCalledWith('s1');
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('does not replay when the learned override never reached disk', async () => {
+      // 存储返回 false（键不合法/磁盘失败）时不能重放：闩锁永远为假，会无限重试同一个 400。
+      const deps = makePiDeps([msg('user', '再跑一遍', 'u2', 1)]);
+      deps.recordPiNativeCompatOverride.mockResolvedValue(false);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', { reason: 'unsupported-request-option', message: rejection }),
+      ).resolves.toBe(false);
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+      expect(deps.onRebuilt).not.toHaveBeenCalled();
+    });
+
+    it('does not replay when persisting the learned override throws', async () => {
+      const deps = makePiDeps([msg('user', '再跑一遍', 'u2', 1)]);
+      deps.recordPiNativeCompatOverride.mockRejectedValue(new Error('disk full'));
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', { reason: 'unsupported-request-option', message: rejection }),
+      ).resolves.toBe(false);
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('drops a repeated terminal error after the self-heal already replayed the turn', async () => {
+      const deps = makePiDeps([msg('user', '再跑一遍', 'u2', 1)]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+      await expect(
+        rollover.tryRecover(
+          's1',
+          { reason: 'unsupported-request-option', message: rejection },
+          { instanceId: 'inst-1', generation: 1 },
+        ),
+      ).resolves.toBe(true);
+      expect(deps.replayUserMessage).toHaveBeenCalledTimes(1);
+
+      // 同一轮重复终态 error（此时历史里已有重放产出的 assistant）：直接丢弃，
+      // 不再 surface —— 否则已自动续跑的任务里会挂一张 400 错误卡。
+      deps.listMessages.mockResolvedValue([
+        msg('user', '再跑一遍', 'u2', 1),
+        msg('assistant', '已经回复过了', 'a1', 2),
+      ]);
+      rollover.claim('s1');
+      await expect(
+        rollover.tryRecover(
+          's1',
+          { reason: 'unsupported-request-option', message: rejection },
+          { instanceId: 'inst-1', generation: 1 },
+        ),
+      ).resolves.toBe(true);
+      expect(deps.replayUserMessage).toHaveBeenCalledTimes(1);
+      expect(deps.onRebuilt).toHaveBeenCalledTimes(1);
+    });
+
+    it('surfaces a same-signature failure from the replayed turn (new turn identity)', async () => {
+      // 重放产生的新一轮失败必须如实上报：不能因为 clientId 相同就被当成旧终态的重复投递。
+      const deps = makePiDeps([msg('user', '再跑一遍', 'u2', 1)]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+      await expect(
+        rollover.tryRecover(
+          's1',
+          { reason: 'unsupported-request-option', message: rejection },
+          { instanceId: 'inst-1', generation: 1 },
+        ),
+      ).resolves.toBe(true);
+
+      deps.listMessages.mockResolvedValue([
+        msg('user', '再跑一遍', 'u2', 1),
+        msg('assistant', '重放又失败了', 'a1', 2),
+      ]);
+      rollover.claim('s1');
+      await expect(
+        rollover.tryRecover(
+          's1',
+          { reason: 'unsupported-request-option', message: rejection },
+          { instanceId: 'inst-2', generation: 2 },
+        ),
+      ).resolves.toBe(false);
+      expect(deps.replayUserMessage).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('rebuilds scheduler/IM turns without generic replay so the owner retries', async () => {
