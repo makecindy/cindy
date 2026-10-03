@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { listRunningClaudeBashTasks } from '@/hooks/useBackgroundBashTasks';
+import { listRunningBashTasks } from '@/hooks/useBackgroundBashTasks';
 import type { AgentTaskUpdate } from '@/lib/makerChatStore';
 
 function toMap(updates: AgentTaskUpdate[]): ReadonlyMap<string, AgentTaskUpdate> {
@@ -13,9 +13,9 @@ function toMap(updates: AgentTaskUpdate[]): ReadonlyMap<string, AgentTaskUpdate>
   return map;
 }
 
-describe('listRunningClaudeBashTasks', () => {
+describe('listRunningBashTasks', () => {
   it('lists only running claude-code local_bash tasks, deduped across alias keys', () => {
-    const tasks = listRunningClaudeBashTasks(
+    const tasks = listRunningBashTasks(
       toMap([
         {
           provider: 'claude-code',
@@ -36,8 +36,24 @@ describe('listRunningClaudeBashTasks', () => {
     expect(tasks).toEqual([{ taskId: 'b1', title: 'pnpm test:unit' }]);
   });
 
+  it('远程镜像口径:includePiTasks 放开 PI 后台命令,仍排除 codex', () => {
+    const map = toMap([
+      { provider: 'pi', taskId: 'p1', status: 'running', taskType: 'local_bash', title: 'pi bg' },
+      // codex 连被控端也没有 stopTask 通道 → 两端口径一致地不列(假入口)。
+      { provider: 'codex', taskId: 'c1', status: 'running', taskType: 'local_bash' },
+      // 终态照旧不进列表
+      { provider: 'pi', taskId: 'p2', status: 'completed', taskType: 'local_bash' },
+    ]);
+
+    expect(listRunningBashTasks(map, { includePiTasks: true })).toEqual([
+      { taskId: 'p1', title: 'pi bg' },
+    ]);
+    // 默认(本机会话)口径不变:PI 后台命令本地没有 stopTask 通道
+    expect(listRunningBashTasks(map)).toEqual([]);
+  });
+
   it('returns an empty list for empty or missing maps', () => {
-    expect(listRunningClaudeBashTasks(undefined)).toEqual([]);
-    expect(listRunningClaudeBashTasks(new Map())).toEqual([]);
+    expect(listRunningBashTasks(undefined)).toEqual([]);
+    expect(listRunningBashTasks(new Map())).toEqual([]);
   });
 });

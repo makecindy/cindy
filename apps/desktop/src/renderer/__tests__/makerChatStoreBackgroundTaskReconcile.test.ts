@@ -129,6 +129,38 @@ describe('seedBackgroundTaskSnapshots stale running 对账', () => {
     }
   });
 
+  it('PI 后台命令(provider=pi + local_bash)同样可被权威快照收口;pi_subagent 不收', () => {
+    const sid = `rec-pi-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      // 被控端自 #4700 起在 listBackgroundTasks 里报 PI 后台命令 —— 控制端拿到的
+      // 权威快照缺它 = 已被控端收口。若不支持，PI 行会永久误报 running。
+      applyTask(sid, {
+        provider: 'pi',
+        taskId: 't-pi-bash',
+        status: 'running',
+        taskType: 'local_bash',
+      });
+      // durable run 可能活得比父进程久，快照缺席不等于已停 → 刻意不收。
+      applyTask(sid, {
+        provider: 'pi',
+        taskId: 't-pi-subagent',
+        status: 'running',
+        taskType: 'pi_subagent',
+      });
+
+      makerChatStore.seedBackgroundTaskSnapshots(sid, [], {
+        // 调用方（远程会话）会把 hook 运行集里的 PI 命令并入候选集。
+        staleRunningCandidates: new Set(['t-pi-bash', 't-pi-subagent']),
+      });
+
+      const tasks = makerChatStore.getSnapshot(sid).taskUpdates;
+      expect(tasks?.get('t-pi-bash')?.status).toBe('stopped');
+      expect(tasks?.get('t-pi-subagent')?.status).toBe('running');
+    } finally {
+      makerChatStore.purgeSession(sid);
+    }
+  });
+
   it('快照命中(taskId 或 toolUseId 别名)的候选条目保持 running', () => {
     const sid = `rec2-${Math.random().toString(36).slice(2, 8)}`;
     try {

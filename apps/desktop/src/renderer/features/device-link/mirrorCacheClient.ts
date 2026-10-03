@@ -528,4 +528,6 @@ export function clearMirrorCacheAccountState(): void {
 export const __testing = {
   writeSessionListNow,
   clearMirrorCacheAccountState,
+  /** 测试用:手工登记某会话的 owner token(真实路径由受保护镜像读记入)。 */
+  rememberOwnerTokenForTest: rememberOwnerToken,
 };

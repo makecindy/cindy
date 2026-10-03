@@ -3,7 +3,11 @@
 /**
  * useBackgroundBashTasks 快照水合接线:候选集在发起 IPC 前捕获并透传给
  * seedBackgroundTaskSnapshots(stale running 对账);空快照 + 空候选不打扰
- * store;远程镜像会话整条链路关闭。
+ * store。
+ *
+ * device-link 远程镜像会话同样拉快照 —— 路由交给 listSessionBackgroundTasksFor
+ * (它按粘滞归属决定本机 IPC 还是隧道;路由本身在 makerTransportStopRouting 覆盖),
+ * 本 hook 只负责「远程也不关闭运行集信号」+「粘滞远程只 seed 不对账」。
  */
 
 import { renderHook, waitFor } from '@testing-library/react';
@@ -23,10 +27,21 @@ vi.mock('@/lib/makerChatStore', () => ({
   },
 }));
 
+const transport = vi.hoisted(() => ({
+  readSessionBackgroundTasks: vi.fn(),
+  listSessionBackgroundTasksFor: vi.fn(),
+  stopAgentTaskFor: vi.fn(),
+  canStopAgentTask: vi.fn(() => true),
+}));
+
 vi.mock('@/lib/makerTransport', () => ({
   isRemoteSession: (sessionId: string) => sessionId.startsWith('remote-'),
   isRemoteSessionSticky: (sessionId: string) =>
     sessionId.startsWith('remote-') || mocks.stickyRemoteIds.has(sessionId),
+  readSessionBackgroundTasks: transport.readSessionBackgroundTasks,
+  listSessionBackgroundTasksFor: transport.listSessionBackgroundTasksFor,
+  stopAgentTaskFor: transport.stopAgentTaskFor,
+  canStopAgentTask: transport.canStopAgentTask,
 }));
 
 import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
@@ -38,6 +53,17 @@ describe('useBackgroundBashTasks 快照水合 + 对账接线', () => {
     // clearAllMocks 不清 mockReturnValue,显式回位空候选集,避免用例间串状态。
     mocks.captureRunningClaudeTaskIds.mockReturnValue(new Set<string>());
     listTasks = vi.fn(async () => ({ tasks: [] }));
+    transport.readSessionBackgroundTasks.mockImplementation(async (sid: string) => {
+      // 路由在**发起时**就定了(与真实实现同构):source 必须在 await 之前取,
+      // 否则测试会掩盖「请求在飞期间归属才水合」的真实现象。
+      const source =
+        sid.startsWith('remote-') || mocks.stickyRemoteIds.has(sid) ? 'remote' : 'local';
+      return { ...(await listTasks(sid)), source };
+    });
+    transport.listSessionBackgroundTasksFor.mockImplementation(async (sid: string) => {
+      const { tasks, pendingContinuations } = await transport.readSessionBackgroundTasks(sid);
+      return pendingContinuations === undefined ? { tasks } : { tasks, pendingContinuations };
+    });
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       maker: { listSessionBackgroundTasks: listTasks },
     };
@@ -46,7 +72,28 @@ describe('useBackgroundBashTasks 快照水合 + 对账接线', () => {
   afterEach(() => {
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
     mocks.stickyRemoteIds.clear();
+    transport.canStopAgentTask.mockReturnValue(true);
     vi.clearAllMocks();
+  });
+
+  it('不能停的会话(共享任务访客 / 归属不可解析)不列运行集:状态栏不出现假入口', async () => {
+    transport.canStopAgentTask.mockReturnValue(false);
+    const updates = new Map([
+      [
+        't1',
+        {
+          provider: 'claude-code' as const,
+          taskId: 't1',
+          status: 'running' as const,
+          taskType: 'local_bash' as const,
+        },
+      ],
+    ]);
+    const { result } = renderHook(() => useBackgroundBashTasks('shared-1', updates, true));
+    await Promise.resolve();
+    // 状态栏的「后台任务运行中 / 全部停止」是动作入口:点不动就不列(与聊天卡、
+    // 面板行同口径),否则只能反复显示「停止未确认」。
+    expect(result.current.tasks).toEqual([]);
   });
 
   it('候选集在发起 IPC 前捕获,空快照 + 非空候选仍触发 seed(对账信号)', async () => {
@@ -72,11 +119,29 @@ describe('useBackgroundBashTasks 快照水合 + 对账接线', () => {
     expect(mocks.seedBackgroundTaskSnapshots).not.toHaveBeenCalled();
   });
 
-  it('远程镜像会话:不拉快照也不对账', async () => {
+  it('远程镜像会话:权威快照可收口 stale running(含 hook 运行集里的 PI 命令)', async () => {
+    mocks.captureRunningClaudeTaskIds.mockReturnValue(new Set(['t-claude']));
     renderHook(() => useBackgroundBashTasks('remote-s3', new Map(), true));
+    await waitFor(() =>
+      expect(transport.readSessionBackgroundTasks).toHaveBeenCalledWith('remote-s3'),
+    );
+    // 权威远程空快照 + 非空候选 → 必须收口:否则被控端已停而镜像终态丢包时,
+    // 控制端会永久保留 running 并反复提供「全部停止」(greptile P1)。
+    await waitFor(() =>
+      expect(mocks.seedBackgroundTaskSnapshots).toHaveBeenCalledWith('remote-s3', [], {
+        staleRunningCandidates: new Set(['t-claude']),
+      }),
+    );
+  });
+
+  it('远程降级空表(source=null)不可当权威:只 seed 不收口', async () => {
+    mocks.captureRunningClaudeTaskIds.mockReturnValue(new Set(['t-mirror']));
+    transport.readSessionBackgroundTasks.mockResolvedValueOnce({ tasks: [], source: null });
+    renderHook(() => useBackgroundBashTasks('remote-s6', new Map(), true));
+    await waitFor(() => expect(transport.readSessionBackgroundTasks).toHaveBeenCalled());
     await Promise.resolve();
-    expect(listTasks).not.toHaveBeenCalled();
-    expect(mocks.captureRunningClaudeTaskIds).not.toHaveBeenCalled();
+    // 老被控端无 channel / 隧道失败与「确实没有任务」不可区分 → 不得收口。
+    expect(mocks.seedBackgroundTaskSnapshots).not.toHaveBeenCalled();
   });
 
   it('在飞窗口:响应落地前会话被识别为远程 → 整体丢弃本机快照,不收口', async () => {
@@ -101,24 +166,28 @@ describe('useBackgroundBashTasks 快照水合 + 对账接线', () => {
     expect(mocks.seedBackgroundTaskSnapshots).not.toHaveBeenCalled();
   });
 
-  it('重连窗口(非粘滞误判本机、粘滞仍认远程):只 seed 不对账,空快照不收口', async () => {
+  it('重连窗口(非粘滞误判本机、粘滞仍认远程):归属不符的整体丢弃,归属一致才收口', async () => {
     const sid = 's4-blip';
     mocks.stickyRemoteIds.add(sid);
     mocks.captureRunningClaudeTaskIds.mockReturnValue(new Set(['t-mirror-running']));
 
+    // 本机来源(路由在发起时按旧归属定的)对远程会话无意义 → 整体丢弃
+    transport.readSessionBackgroundTasks.mockResolvedValueOnce({ tasks: [], source: 'local' });
     renderHook(() => useBackgroundBashTasks(sid, new Map(), true));
-    await waitFor(() => expect(listTasks).toHaveBeenCalledWith(sid));
-
-    // 粘滞命中远程:候选集不捕获;本机空快照下 seed 不被调用(不得收口镜像任务)
-    expect(mocks.captureRunningClaudeTaskIds).not.toHaveBeenCalled();
-    expect(mocks.seedBackgroundTaskSnapshots).not.toHaveBeenCalled();
-
-    // 快照非空(理论分支:本机撞 id)同样整体丢弃 —— 本机来源快照对远程会话
-    // 无意义,响应侧粘滞复查统一拦截,不 seed。
-    listTasks.mockResolvedValueOnce({ tasks: [{ taskId: 't-new' }] });
-    renderHook(() => useBackgroundBashTasks(sid, new Map(), false));
-    await waitFor(() => expect(listTasks).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(transport.readSessionBackgroundTasks).toHaveBeenCalled());
     await Promise.resolve();
     expect(mocks.seedBackgroundTaskSnapshots).not.toHaveBeenCalled();
+
+    // 归属一致的远程快照:非空照旧 seed(把被控端运行中的任务带回控制端)
+    listTasks.mockResolvedValueOnce({ tasks: [{ taskId: 't-new' }] });
+    renderHook(() => useBackgroundBashTasks(sid, new Map(), false));
+    await waitFor(() => expect(transport.readSessionBackgroundTasks).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(mocks.seedBackgroundTaskSnapshots).toHaveBeenCalledWith(
+        sid,
+        [{ taskId: 't-new' }],
+        { staleRunningCandidates: new Set(['t-mirror-running']) },
+      ),
+    );
   });
 });

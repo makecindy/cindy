@@ -27,6 +27,9 @@ vi.mock('@/lib/makerTransport', () => ({
   getWorkflowProgressFor: vi.fn(async () => null),
   isRemoteSessionSticky: () => remoteState.value,
   readBackgroundTaskOutputTailFor: readTailMock,
+  // 卡片渲染时就会问「这次运行能不能停」，mock 缺这个导出会直接抛
+  // No "canStopAgentTask" export is defined（与 AgentTaskCard.test.ts 同一口径）。
+  canStopAgentTask: () => false,
 }));
 
 vi.mock('@/features/right-sidebar/lib/openBackgroundTasksTab', () => ({
