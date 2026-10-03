@@ -314,6 +314,28 @@ describe('portable plugin results', () => {
       }
     }
   });
+  it('does not let bare path globs and double slashes mask later deliveries', () => {
+    // 回归:prose/工具输出里的裸 `/*`(路径通配)与 `//`(双斜杠路径)曾被当成
+    // 块/行注释;未闭合的 `/*` 把余下全文遮蔽, 同一文本里后续的文件投递
+    // 全部丢失。注释起始现在要求前一个字符是非词字符(与 scheme 守卫同款)。
+    const url = 'xdt-file:///tmp/report.pdf';
+    for (const text of [
+      'Archived /tmp/* into xdt-file:///tmp/backup.zip',
+      'See https://cindy.app/*new* and open xdt-file:///tmp/report.pdf',
+      'Moved /tmp//cache away; open xdt-file:///tmp/report.pdf',
+      'Archived /tmp/releases-/* into xdt-file:///tmp/backup.zip',
+      '归档 文件/* 到 xdt-file:///tmp/backup.zip',
+    ]) {
+      const expected = text.includes('backup.zip')
+        ? [{ url: 'xdt-file:///tmp/backup.zip', title: 'backup.zip' }]
+        : [{ url, title: 'report.pdf' }];
+      expect(files(text)).toEqual(expected);
+      expect(files(JSON.stringify({ note: text }))).toEqual(expected);
+    }
+    // 真注释仍遮蔽:行注释与括号后的块注释里的引用不投递。
+    expect(files('const enabled = true; // fixture: xdt-file:///tmp/example.pdf')).toEqual([]);
+    expect(files('done); /* see xdt-file:///tmp/example.pdf */')).toEqual([]);
+  });
   it.each(['&&', '||', '??'])('ignores logical-expression source literals after %s', (operator) => {
     const url = 'xdt-file:///tmp/logical.pdf';
     for (const quote of ["'", '"', String.fromCharCode(96)]) {
