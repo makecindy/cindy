@@ -8243,6 +8243,7 @@
       "limitReached": "今回の会話は上限に達し、双方がそれぞれのメインタスクに戻りました"
     },
     "groupChat": {
+      "migrationPending": "過去の履歴の一部をアップロード中です。自動的に再試行します。このチャットは引き続き利用できます。",
       "memberSeparator": "、",
       "memberCount_one": "仲間 {{count}} 人",
       "memberCount_other": "仲間 {{count}} 人",

@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const fixture = vi.hoisted(() => ({ packaged: true, exists: vi.fn(), config: '', handle: vi.fn(), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[] }));
-vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token' }));
+const fixture = vi.hoisted(() => ({ download: vi.fn(), packaged: true, urls: [] as string[], wsUrls: [] as string[], exists: vi.fn(), config: '', handle: vi.fn(), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[] }));
+vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: vi.fn(async () => true) }));
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
+vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
+vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
+vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
 vi.mock('electron', () => ({ app: { get isPackaged() { return fixture.packaged; }, getPath: () => '/isolated' } }));
 vi.mock('node:fs', () => ({ existsSync: fixture.exists, readFileSync: () => fixture.config || '{"baseUrl":"https://example.com","token":"test"}' }));
 vi.mock('../botGroupChatService.js', () => ({ readPersistedReplyText: vi.fn() }));
@@ -11,6 +15,7 @@ vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzl
 vi.mock('node:http', async () => {
   const { EventEmitter } = await import('node:events');
   return { request: (url: string, options: { method: string }, callback: (response: unknown) => void) => {
+    fixture.urls.push(String(url));
     const req = Object.assign(new EventEmitter(), {
       end: (data?: string) => {
         void Promise.resolve().then(() => fixture.handle(new URL(url).pathname.slice(3) + new URL(url).search, options.method, data ? JSON.parse(data) : undefined))
@@ -26,38 +31,49 @@ vi.mock('node:http', async () => {
     return req;
   } };
 });
+vi.mock('node:https', async () => ({ request: (await import('node:http')).request }));
 vi.mock('ws', async () => {
   const { EventEmitter } = await import('node:events');
   return { default: class extends EventEmitter {
     static OPEN = 1; readyState = 0; send = vi.fn();
-    constructor() { super(); fixture.sockets.push(this as unknown as import('ws').WebSocket); }
+    constructor(url: URL) { super(); fixture.wsUrls.push(String(url)); fixture.sockets.push(this as unknown as import('ws').WebSocket); }
     close() { this.emit('close'); }
   } };
 });
-import { withChatServerDev } from '../chatServerDev.js';
+import { withChatServer } from '../chatServer.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
 
-describe('Chat Server local integration isolation', () => {
+describe('Chat Server production connection', () => {
   afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
-  const local = {} as BotGroupChatService;
+  const local = { dispose: vi.fn() } as unknown as BotGroupChatService;
   const deps = {} as BotGroupChatServiceDeps;
-  it('does not read fixture files in a packaged application', () => {
-    fixture.packaged = true; vi.stubEnv('XDT_ISOLATED', '1');
-    expect(withChatServerDev(local, deps)).toBe(local);
+  it('enables the installed application without reading a fixture', async () => {
+    fixture.packaged = true;
+    const service = withChatServer(local, deps);
+    expect(await service.chatServer!.status()).toEqual({ enabled: true, connected: false });
     expect(fixture.exists).not.toHaveBeenCalled();
+    service.dispose();
   });
-  it('does not read fixture files for a shared DEV profile', () => {
+  it('enables an unpackaged application from the same endpoint manifest', async () => {
     fixture.packaged = false; vi.stubEnv('XDT_ISOLATED', '0');
-    expect(withChatServerDev(local, deps)).toBe(local);
-    expect(fixture.exists).not.toHaveBeenCalled();
+    const service = withChatServer(local, deps);
+    expect((await service.chatServer!.status()).enabled).toBe(true);
+    service.dispose();
   });
-  it('keeps normal group behavior when the isolated profile has no fixture', () => {
-    fixture.packaged = false; vi.stubEnv('XDT_ISOLATED', '1'); fixture.exists.mockReturnValue(false);
-    expect(withChatServerDev(local, deps)).toBe(local);
+  it('uses HTTPS and WSS in packaged mode without the DEV fixture', async () => {
+    vi.useFakeTimers(); fixture.packaged = true; fixture.profiles = []; fixture.urls = []; fixture.wsUrls = [];
+    fixture.handle.mockImplementation(route => ({ body: route === '/me' ? { actor: { id: 'self' } } : [] }));
+    const service = withChatServer({ ...local, listGroups: async () => ({ ok: true, groups: [] }) }, deps);
+    try {
+      expect((await service.listGroups()).ok).toBe(true);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(fixture.urls.every(url => url.startsWith('https://chat.cindy.app/v1/'))).toBe(true);
+      expect(fixture.wsUrls).toEqual(['wss://chat.cindy.app/v1/ws']);
+    } finally { service.dispose(); vi.useRealTimers(); }
   });
-  it('refuses a fixture that targets an external server before network or runtime work', () => {
+  it('refuses a fixture that targets an external server', () => {
     fixture.packaged = false; vi.stubEnv('XDT_ISOLATED', '1'); fixture.exists.mockReturnValue(true);
-    expect(() => withChatServerDev(local, deps)).toThrow();
+    expect(() => withChatServer(local, deps)).toThrow();
   });
 });
 
@@ -81,7 +97,7 @@ describe('Chat Server result delivery and refresh', () => {
       return { body: { execution: next } };
     }
     if (route.endsWith('/snapshot')) return { body: { room: room(route.split('/')[2]), members: [], messages: [], cursor: '1' } };
-    if (route.includes('/messages?') || route.endsWith('/executions')) return { body: [] };
+    if (route.includes('/messages?') || route.endsWith('/executions') || route.includes('/plans')) return { body: [] };
     return { body: {} };
   }
   beforeEach(() => {
@@ -95,17 +111,62 @@ describe('Chat Server result delivery and refresh', () => {
       dispatch: vi.fn(async (input: Parameters<BotGroupChatServiceDeps['dispatch']>[0]) => { await input.onAccepted?.(); return { ok: true }; }),
       onChanged: vi.fn(),
     } as unknown as BotGroupChatServiceDeps;
-    service = withChatServerDev({ settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
   async function start() {
-    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null }];
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
     await vi.advanceTimersByTimeAsync(2000);
     expect(deps.dispatch).toHaveBeenCalledOnce();
   }
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
 
+  it('keeps server plan steps in a grant-specific chat-only lane without opening a project', async () => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    const planId = '70000000-0000-4000-8000-000000000001';
+    const plan = { id: planId, revision: 1, source_message_id: execution.source_message_id, request_text: 'Discuss the draft',
+      organizer_id: botId, creator_id: selfId, status: 'running', current_step: 0,
+      steps: [{ position: 0, botId, botName: 'Bot', task: 'Discuss', status: 'running' }], created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    deps.workDir = { prepare: vi.fn(), snapshot: vi.fn(), changedFiles: vi.fn(), trashGroupFolder: vi.fn() };
+    fixture.handle.mockImplementation(route => {
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, plan_id: planId, plan_step: 0 }; claimed = true; return { body: { execution: next } }; }
+      if (route.includes('/plans')) return { body: [plan] };
+      if (route.endsWith(`/messages/${execution.source_message_id}`)) return { body: { id: execution.source_message_id, seq: '1', authorId: selfId, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Discuss the draft' }], deleted: false, threadRootId: null } };
+      return response(route);
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ chatAccess: { mode: 'chat', revision: 1 }, plan: { planId, workDir: '', sessionId: undefined } }));
+    expect(deps.workDir.prepare).not.toHaveBeenCalled();
+    expect(deps.dispatch).toHaveBeenCalledWith(expect.objectContaining({ toolsDisabled: true, message: expect.stringContaining('Discuss the draft') }));
+  });
+  it('projects hidden paused local companions with their real local identity and never claims work for them', async () => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', status: 'paused', hiddenAt: 1 }];
+    fixture.handle.mockImplementation(route => route.endsWith('/snapshot') ? { body: { ...response(route).body,
+      members: [{ id: botId, kind: 'bot', name: 'Bot', state: 'joined', role: 'member', ownerActorId: selfId, ownerName: 'Me' }] } } : response(route));
+    const result = await service.getGroup(roomId);
+    expect(result.ok && result.group.members[0]).toMatchObject({ botId: 'local-bot', status: 'paused', isOwned: true });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fixture.handle.mock.calls.some(([route]) => route === '/executions/claim')).toBe(false);
+  });
+  it('returns text immediately while one attachment hangs or fails, then retries it independently', async () => {
+    const mediaId = '60000000-0000-4000-8000-000000000001';
+    const message = { id: execution.source_message_id, seq: '1', authorId: selfId, author: { kind: 'human', name: 'Me' },
+      content: [{ type: 'text', text: 'Readable text' }, { type: 'media', mediaId, caption: 'report.pdf' }], createdAt: new Date().toISOString(), deleted: false, threadRootId: null };
+    let reject!: (error: Error) => void;
+    fixture.download.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    fixture.handle.mockImplementation(route => route.includes('/messages?') ? { body: [message] } : response(route));
+    const result = await service.getGroup(roomId);
+    expect(result.ok && result.group.messages[0].content).toContain('Readable text');
+    reject(new Error('OBJECT_STORE_UNAVAILABLE')); await vi.advanceTimersByTimeAsync(0);
+    expect((await service.getGroup(roomId)).ok).toBe(true);
+    expect(fixture.download).toHaveBeenCalledOnce();
+    fixture.download.mockResolvedValue({ id: mediaId, name: 'report.pdf', category: 'file', path: '/test/report.pdf', url: null });
+    await vi.advanceTimersByTimeAsync(30000);
+    await service.getGroup(roomId); await vi.advanceTimersByTimeAsync(0);
+    const recovered = await service.getGroup(roomId);
+    expect(recovered.ok && recovered.group.messages[0].attachments[0].name).toBe('report.pdf');
+  });
   it('refreshes a reset room and resumes realtime from the authorized snapshot cursor', async () => {
     await service.getGroup(roomId);
     await vi.advanceTimersByTimeAsync(2000);
@@ -223,5 +284,6 @@ describe('Chat Server result delivery and refresh', () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.groups.map(g => g.id)).toEqual([roomId]);
     expect(fixture.handle).toHaveBeenCalledWith(`/conversations?limit=100&after=${firstPage[99].id}`, 'GET', undefined);
+    expect(fixture.handle.mock.calls.some(([route]) => route.includes('/messages?'))).toBe(false);
   });
 });

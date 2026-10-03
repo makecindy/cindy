@@ -667,6 +667,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
           loadRef.current();
         }}
       />}
+      {group.migrationPending && <p role="status" className="px-4 py-2 text-13 text-[var(--text-secondary)]">{t('bots.groupChat.migrationPending')}</p>}
       {group.serverBacked && threadRootId && <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} onClose={() => setThreadRootId(null)} />}
       {/* Whole-page drop hint, as over a task's chat area; the card repeats it. */}
       {dragOver ? (
@@ -823,6 +824,7 @@ function BotGroupTimelineItem({
                 <MarkdownRenderer workingDir="" content={message.content} allowPrivilegedLinks={false} />
               </div>
             ) : null}
+            <BotGroupUserAttachments attachments={message.attachments} />
             <BotGroupHandoffFiles files={message.files} workDir={plan?.workDir ?? null} />
             {actions}
           </>

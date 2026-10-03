@@ -8256,6 +8256,7 @@
       "limitReached": "This teammate conversation reached its limit; both teammates returned to their main tasks"
     },
     "groupChat": {
+      "migrationPending": "Some earlier history is still uploading. It will retry automatically; this chat remains available.",
       "memberSeparator": ", ",
       "memberCount_one": "{{count}} teammate",
       "memberCount_other": "{{count}} teammates",

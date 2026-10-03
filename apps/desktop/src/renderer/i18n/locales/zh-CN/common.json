@@ -8243,6 +8243,7 @@
       "limitReached": "本轮伙伴对话已到上限，双方已回到各自的主任务"
     },
     "groupChat": {
+      "migrationPending": "部分旧记录尚未上传完成，将自动重试。当前群聊可继续使用。",
       "memberSeparator": "、",
       "memberCount_one": "{{count}} 位伙伴",
       "memberCount_other": "{{count}} 位伙伴",
