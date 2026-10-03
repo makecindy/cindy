@@ -128,3 +128,9 @@ export function companionArtifactRows(value: unknown, botId: string): Array<{ id
 export function profileFormDirty(panel: ProfilePanel | undefined, values: ProfileValues): boolean {
   return !!panel?.action?.fields?.some(field => (values[field.id] ?? '') !== (panel.values[field.id] ?? ''));
 }
+
+/** Required host fields must be complete before autosave or navigation may submit the draft. */
+export function profileFormValid(panel: ProfilePanel | undefined, values: ProfileValues): boolean {
+  return !!panel?.action && (panel.action.fields ?? []).every(field => !field.required
+    || (field.kind === 'toggle' ? typeof values[field.id] === 'boolean' : typeof values[field.id] === 'string' && values[field.id].trim().length > 0));
+}
