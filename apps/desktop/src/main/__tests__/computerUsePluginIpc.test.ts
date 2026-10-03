@@ -328,13 +328,16 @@ describe('computer use platform copy invariants', () => {
       'utf-8',
     );
     expect(sectionSource).toContain("nextStatus.permissionState?.platform === 'macos'");
+    const statusBoundary = sectionSource.indexOf('{computerStatus === null ? (');
     const macPermissionBlockStart = sectionSource.indexOf(
       "{window.electronAPI.platform === 'darwin' ? (",
+      statusBoundary,
     );
     const permissionTitle = sectionSource.indexOf(
       "t('settings.computerUse.directControl.permissions.title')",
       macPermissionBlockStart,
     );
+    expect(statusBoundary).toBeGreaterThanOrEqual(0);
     expect(macPermissionBlockStart).toBeGreaterThanOrEqual(0);
     expect(permissionTitle).toBeGreaterThan(macPermissionBlockStart);
 
