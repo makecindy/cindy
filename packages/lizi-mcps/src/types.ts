@@ -231,6 +231,16 @@ export interface RoutineToolService {
  * @cindy/maker-scheduler still has zero runtime deps per Phase 1).
  */
 export interface SchedulerMcpDeps {
+  /** Official hook bridge; fetched per call so logout/owner changes revoke access. */
+  telegramDelivery?: { getBridge(): {
+    status(): unknown;
+    receipt(idempotencyKey: string): unknown;
+    send(input: {
+      idempotencyKey: string;
+      target: { bindingId: string; principalId: string; principalName: string | null; externalKey: string; botId: string; botName: string | null };
+      text: string; tier: 'html' | 'plain'; sourceSha256: string; presentationSha256: string;
+    }): Promise<unknown>;
+  } | null };
   withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
   /** Live per-call check (Bot main tasks may change automations only on their owner's own turn). */
   authorizeCall?: import('./tool-call-authority.js').ToolCallAuthorizer;

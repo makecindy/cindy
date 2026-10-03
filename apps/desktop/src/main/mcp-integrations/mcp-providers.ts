@@ -1,3 +1,4 @@
+import { getTelegramDeliveryBridge } from '../hook-control/telegramDelivery.js';
 import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
 import { resolveHelperSurface } from './helperSurface.js';
@@ -343,6 +344,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       logger: createLogger('mcp/cindy_slack'),
     },
     scheduler: {
+      telegramDelivery: { getBridge: getTelegramDeliveryBridge },
       withAccountDataAccess,
       authorizeCall: authorizeTaskToolCall,
       getScheduler: () => getScheduler(),
