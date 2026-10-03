@@ -316,7 +316,7 @@ export async function ensureBotGroupLaneSession(input: {
   const client = getDbClient();
   const db = client.drizzle;
   const routeKey = input.plan
-    ? botGroupPlanRouteKey(input.groupId, input.plan.planId)
+    ? input.chatAccess ? `${chatGroupLaneRouteKey(input.groupId, input.chatAccess)}:plan:${input.plan.planId}` : botGroupPlanRouteKey(input.groupId, input.plan.planId)
     : input.chatAccess ? chatGroupLaneRouteKey(input.groupId, input.chatAccess) : botGroupLaneRouteKey(input.groupId);
   const [existing] = await db
     .select({ sessionId: botSessionLinks.sessionId })
@@ -348,12 +348,10 @@ export async function ensureBotGroupLaneSession(input: {
   const config = parseJson(profileVersion.capabilitiesJson);
   const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
-  const workspaceKind = input.plan ? ('project' as const) : ('dialogue' as const);
-  const workingDir = input.plan
-    ? input.plan.workDir
-    : input.chatAccess?.mode === 'chat'
-      ? path.join(owner.userDataDir, 'chat-workspaces', createHash('sha256').update(routeKey + ':' + input.botId).digest('hex'))
-      : await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
+  const workspaceKind = input.plan && input.chatAccess?.mode !== 'chat' ? ('project' as const) : ('dialogue' as const);
+  const workingDir = input.chatAccess?.mode === 'chat'
+    ? path.join(owner.userDataDir, 'chat-workspaces', createHash('sha256').update(routeKey + ':' + input.botId).digest('hex'))
+    : input.plan ? input.plan.workDir : await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
   if (input.chatAccess?.mode === 'chat') await fs.mkdir(workingDir, { recursive: true });
   const now = Date.now();
   const sessionId = resolveBusinessSessionId(input.plan?.sessionId);

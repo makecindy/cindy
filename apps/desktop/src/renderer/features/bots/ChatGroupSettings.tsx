@@ -84,6 +84,25 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
       }).catch(() => { if (isDataOwnerGenerationCurrent(owner)) setError(t(chatErrorKey('REQUEST_FAILED'))); });
     }
   }, [t]);
+  async function updateWorkSettings(input: { organizerBotId?: string; projectDir?: string | null }) {
+    if (busyRef.current) return;
+    busyRef.current = true; setBusy(true); setError('');
+    const generation = getDataOwnerGeneration();
+    try {
+      const result = await window.electronAPI.maker.updateBotGroup({ groupId: group.id, ...input });
+      if (!isDataOwnerGenerationCurrent(generation)) return;
+      if (!result.ok) setError(t('bots.groupChat.settings.projectDirSaveFailed'));
+      else refreshBotGroups();
+    } catch { if (isDataOwnerGenerationCurrent(generation)) setError(t(chatErrorKey('REQUEST_FAILED'))); }
+    finally { busyRef.current = false; setBusy(false); }
+  }
+  async function chooseProjectDir() {
+    const generation = getDataOwnerGeneration();
+    try {
+      const result = await window.electronAPI.dialog.showOpenDirectory(group.projectDir ? { defaultPath: group.projectDir } : undefined);
+      if (result.success && result.path && isDataOwnerGenerationCurrent(generation)) await updateWorkSettings({ projectDir: result.path });
+    } catch { if (isDataOwnerGenerationCurrent(generation)) setError(t('bots.groupChat.settings.projectDirSaveFailed')); }
+  }
   const addable = bots.filter(b => !group.members.some(m => m.actorId === b.actorId));
   return <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
     <div className="space-y-6 p-5">
@@ -106,6 +125,18 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
           onValueChange={value => { editGroup(); setSpeakingMode(value as typeof speakingMode); }} />}</FormField>
         {manager && <Button type="submit" size="sm" variant="secondary" disabled={busy || !name.trim()}>{t(key('save'))}</Button>}
       </form>
+      <section className="space-y-3 border-t border-[var(--border-default)] pt-5">
+        <FormField label={t('bots.groupChat.organizer')} hint={t('bots.groupChat.settings.organizerNote')}>{props =>
+          <Select {...props} label={t('bots.groupChat.organizer')} value={group.organizerBotId ?? ''}
+            disabled={!manager || busy} options={companions.filter(m => m.status === 'active').map(m => ({ value: m.botId, label: m.name }))}
+            onValueChange={organizerBotId => void updateWorkSettings({ organizerBotId })} />}</FormField>
+        <FormField label={t('bots.groupChat.settings.projectDir')} hint={t('bots.groupChat.settings.projectDirNote')}>{() =>
+          <div className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-13 text-[var(--text-secondary)]" title={group.projectDir ?? undefined}>{group.projectDir ?? t('bots.groupChat.settings.projectDirNone')}</span>
+            {group.projectDir && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void updateWorkSettings({ projectDir: null })}>{t('bots.groupChat.settings.projectDirClear')}</Button>}
+            <Button size="sm" variant="secondary" disabled={busy} onClick={() => void chooseProjectDir()}>{t('bots.groupChat.settings.projectDirChoose')}</Button>
+          </div>}</FormField>
+      </section>
       <section className="space-y-3 border-t border-[var(--border-default)] pt-5">
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-14 font-medium text-[var(--text-primary)]">{t(key('myProfile'))}</h3>

@@ -205,6 +205,7 @@ export interface BotGroupRoundView {
 export interface BotGroupSummary {
   serverBacked?: boolean;
   archived?: boolean;
+  migrationPending?: boolean;
   canInvite?: boolean;
   selfActorId?: string;
   topic?: string;
@@ -403,7 +404,7 @@ export function chatGroupLaneRouteKey(groupId: string, access: ChatLaneAccess): 
   return `group:${groupId}:access:${access.mode}:${access.revision}`;
 }
 export function isChatOnlyGroupLane(routeKey: string | null | undefined): boolean {
-  return /^group:[^:]+:access:chat:[1-9][0-9]*$/.test(routeKey ?? '');
+  return /^group:[^:]+:access:chat:[1-9][0-9]*(?::plan:[^:]+)?$/.test(routeKey ?? '');
 }
 
 export function botGroupLaneRouteKey(groupId: string): string {
@@ -421,7 +422,7 @@ export function botGroupPlanRouteKeyPrefix(groupId: string): string {
 
 /** Plan id of a 分工 Session route key, or null for lanes and other routes. */
 export function parseBotGroupPlanRouteKey(routeKey: string | null | undefined): { groupId: string; planId: string } | null {
-  const match = typeof routeKey === 'string' ? /^group:([^:]+):plan:([^:]+)$/.exec(routeKey) : null;
+  const match = typeof routeKey === 'string' ? /^group:([^:]+)(?::access:(?:owner|tools|chat):[1-9][0-9]*)?:plan:([^:]+)$/.exec(routeKey) : null;
   return match ? { groupId: match[1]!, planId: match[2]! } : null;
 }
 

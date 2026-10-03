@@ -7,17 +7,19 @@ vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzl
   return q;
 } } }) }));
 import { hydrateBotProfileRuntime } from '../botProfileRuntime';
-import { chatGroupLaneRouteKey } from '../../../shared/botGroupChat';
+import { chatGroupLaneRouteKey, parseBotGroupPlanRouteKey } from '../../../shared/botGroupChat';
 import type { MakerSessionCreateOpts } from '../sessionRequest';
 
 it('keeps different group grants in distinct model histories', () => {
   const keys = ['owner', 'chat', 'tools'].flatMap(mode => [1, 2].map(revision => chatGroupLaneRouteKey('group', { mode: mode as 'owner' | 'chat' | 'tools', revision })));
   expect(new Set(keys).size).toBe(6);
+  for (const key of keys) expect(parseBotGroupPlanRouteKey(`${key}:plan:arrangement`)).toEqual({ groupId: 'group', planId: 'arrangement' });
+  expect(parseBotGroupPlanRouteKey('group:group:plan:legacy')).toEqual({ groupId: 'group', planId: 'legacy' });
 });
 describe('chat-only group runtime', () => {
-  it('does not load owner memory, SOUL, user profile, home or learned skills', async () => {
+  it.each(['group:test:access:chat:2', 'group:test:access:chat:2:plan:one'])('keeps %s free of owner memory, SOUL, home and learned skills', async routeKey => {
     state.rows = [
-      [{ botId: 'bot', role: 'group', routeKey: 'group:test:access:chat:2', profileVersion: 1 }],
+      [{ botId: 'bot', role: 'group', routeKey, profileVersion: 1 }],
       [{ displayName: 'Companion', description: 'Public assistant' }],
       [{ identitySource: 'PRIVATE_SOUL', capabilitiesJson: JSON.stringify({ memory: true, userContextSource: 'PRIVATE_USER', skills: ['private-skill'], mcpMode: 'inherit', toolsetMode: 'inherit' }) }],
       [],

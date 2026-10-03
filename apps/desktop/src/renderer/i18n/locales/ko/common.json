@@ -8243,6 +8243,7 @@
       "limitReached": "이번 동료 간 대화가 한도에 도달해 양쪽 모두 각자의 기본 작업으로 돌아갔습니다"
     },
     "groupChat": {
+      "migrationPending": "이전 기록 일부가 아직 업로드되지 않았습니다. 자동으로 다시 시도하며 채팅은 계속 사용할 수 있습니다.",
       "memberSeparator": ", ",
       "memberCount_one": "동료 {{count}}명",
       "memberCount_other": "동료 {{count}}명",

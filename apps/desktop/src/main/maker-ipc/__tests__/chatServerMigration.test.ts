@@ -60,7 +60,7 @@ describe('local groups upgrade', () => {
     let receipt: { roomId: string; sequence: number } | null = null;
     f.deps.receipts = { read: () => receipt, save: (_id, value) => { receipt = value; } };
     await migrateLocalGroups(f.deps);
-    expect(receipt).toEqual({ roomId, sequence: 135 });
+    expect(receipt).toEqual({ roomId, sequence: 135, version: 2 });
     f.deps.api = vi.fn(async () => { throw new Error('CONVERSATION_NOT_FOUND'); });
     expect((await migrateLocalGroups(f.deps)).get(groupId)).toBe(roomId);
     expect(f.deps.api).not.toHaveBeenCalled();
@@ -97,6 +97,18 @@ describe('local groups upgrade', () => {
     vi.mocked(f.deps.api).mockClear();
     await migrateLocalGroups(f.deps);
     expect(vi.mocked(f.deps.api).mock.calls.filter(([route]) => route.endsWith('/import'))).toHaveLength(0);
+  });
+  it('keeps a failed group resumable while importing the next group', async () => {
+    const f = fixture();
+    const groups = await f.deps.groups();
+    f.deps.groups = async () => [groups[0], { ...groups[0], id: '10000000-0000-4000-8000-000000000003' }];
+    f.deps.attachments = vi.fn().mockRejectedValueOnce(new Error('MEDIA_UPLOAD_FAILED')).mockResolvedValue([]);
+    f.deps.onError = vi.fn(); f.deps.onRoom = vi.fn();
+    const result = await migrateLocalGroups(f.deps);
+    expect(f.deps.onError).toHaveBeenCalledWith(groupId, expect.any(Error));
+    expect(result.size).toBe(2);
+    expect(f.committed.size).toBe(135);
+    expect(f.deps.onRoom).toHaveBeenCalledWith(groupId, roomId);
   });
   it('keeps the source unmodified and does not finish when an attachment cannot be uploaded', async () => {
     const f = fixture(), source = JSON.stringify(f.rows);
