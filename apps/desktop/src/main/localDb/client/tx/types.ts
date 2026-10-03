@@ -1371,7 +1371,7 @@ export type SkillUsageApplyMutationArgs =
       }>;
     }
   | { kind: 'deleteBefore'; analyzerVersion: string; recentSince: number }
-  | { kind: 'promote'; analyzerVersion: string };
+  | { kind: 'prepareCache'; analyzerVersion: string };
 
 export interface MediaSpendArgs {
   providerName?: string;

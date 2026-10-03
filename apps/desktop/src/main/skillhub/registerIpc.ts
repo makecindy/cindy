@@ -4,7 +4,7 @@ import { remoteResourceRegistry } from '../device-link/remoteResourceRegistry';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
 import { tapWindowBroadcast, getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap';
 import fs from 'node:fs';
-import { t } from '../i18n.js';
+import { getResolvedMainLocale, t } from '../i18n.js';
 import { throwIpcError } from '../utils/ipcValidate';
 import { isCindyLearnSkillEnabledForListing, setCindySkillEnabled } from './activationPreferences';
 import { isLocalSkillTargetCurrent, isPluginManagedSkillPath, type LocalSkillTarget } from './localSkillTarget';
@@ -977,6 +977,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     'skillhub:get-usage-diagnosis-context',
     async (event, { name, mdPath }: { name: string; mdPath?: string }) => {
       try {
+        const locale = getResolvedMainLocale();
         const currentSkillContent = mdPath
           ? await readScannedSkillRawContent(event, mdPath)
           : null;
@@ -986,6 +987,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
             skillName: name,
             currentSkillContent,
             skillPath: mdPath ?? null,
+            locale,
             client: snapshot.client,
           });
           assertUsageDbSnapshotCurrent(snapshot);

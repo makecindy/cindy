@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, realpath, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DbClient } from '../../localDb/client/DbClient';
+import { prepareSkillUsageCache } from '../usageStore';
 
 const currentDbClientMocks = vi.hoisted(() => ({
   getDbClient: vi.fn(),
@@ -16,7 +17,7 @@ vi.mock('../../localDb/client/current', () => ({
   getCurrentDbClientSnapshot: currentDbClientMocks.getCurrentDbClientSnapshot,
 }));
 
-import { discoverTranscriptSources, refreshLocalSkillUsageAnalytics } from '../usageIndexer';
+import { discoverTranscriptSources, getLocalSkillUsageDiagnosisContext, getLocalSkillUsageRefreshStatus, getLocalSkillUsageSummary, refreshLocalSkillUsageAnalytics } from '../usageIndexer';
 
 const codexThreadId = '019ed672-e5d3-70b0-a160-8bb7e8f3a0b1';
 const desktopCodexThreadId = '019ed672-e5d3-70b0-a160-8bb7e8f3a0b2';
@@ -132,7 +133,9 @@ function insertUsageExposure(
   rawFilePath: string,
   options: { analyzerVersion?: string; seenAt?: number; sourceMtimeMs?: number } = {},
 ): void {
-  const analyzerVersion = options.analyzerVersion ?? '6';
+  const analyzerVersion = options.analyzerVersion ?? '7';
+  db.prepare("INSERT OR IGNORE INTO migration_meta (key, value) VALUES ('skill_usage_analyzer_version', ?)").run(analyzerVersion);
+  db.prepare("INSERT OR IGNORE INTO migration_meta (key, value) VALUES ('skill_usage_last_success_at', '1')").run();
   db.prepare(`
     INSERT INTO skill_usage_sources (
       raw_file_path, analyzer_version, agent_kind, session_id, sdk_session_id,
@@ -165,6 +168,211 @@ describe('discoverTranscriptSources', () => {
       tempRoots.map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })),
     );
     tempRoots = [];
+  });
+
+  it('keeps one stable observation and replaces its evidence path after a native Codex log is archived', async () => {
+    const root = await makeTempRoot();
+    const homeDir = path.join(root, 'home');
+    const codexHome = path.join(homeDir, '.codex');
+    const original = await writeJsonl(path.join(codexHome, 'sessions', 'arbitrary-name.jsonl'));
+    const archive = path.join(codexHome, 'archived_sessions', 'renamed.jsonl');
+    await writeFile(original, [
+      codexLine({ type: 'session_meta', payload: { id: codexThreadId } }),
+      codexLine({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text',
+        text: codexSkillInjection('word-doc', path.join(root, 'word-doc'), skillDocument('word-doc', 'Rules.')),
+      }] } }),
+    ].join('\n'));
+    const db = createUsageDb();
+    const options = { homeDir, userDataDir: path.join(root, 'user-data'), appDataDir: path.join(root, 'app-data'), env: {}, nowMs };
+    try {
+      await refreshLocalSkillUsageAnalytics(db, options);
+      const first = db.prepare('SELECT id FROM skill_usage_exposures').pluck().get();
+      expect(first).toBeTypeOf('string');
+      await mkdir(path.dirname(archive), { recursive: true });
+      await rename(original, archive);
+      await refreshLocalSkillUsageAnalytics(db, options);
+      expect(db.prepare('SELECT id, raw_file_path AS rawFilePath, session_id AS sessionId FROM skill_usage_exposures').all())
+        .toEqual([{ id: first, rawFilePath: archive, sessionId: `codex-${codexThreadId}` }]);
+      expect(db.prepare('SELECT raw_file_path FROM skill_usage_sources').all()).toEqual([{ raw_file_path: archive }]);
+      expect(getLocalSkillUsageRefreshStatus(db)).toMatchObject({ phase: 'complete', incomplete: false, hasSnapshot: true, missingCount: 0 });
+    } finally { db.close(); }
+  });
+
+  it('marks confirmed missing cached files without blocking the analyzer rebuild', async () => {
+    const root = await makeTempRoot();
+    const missing = path.join(root, 'missing.jsonl');
+    const db = createUsageDb();
+    insertUsageExposure(db, missing, { analyzerVersion: '7' });
+    try {
+      await refreshLocalSkillUsageAnalytics(db, {
+        homeDir: path.join(root, 'home'), userDataDir: path.join(root, 'user-data'),
+        appDataDir: path.join(root, 'app-data'), env: {}, nowMs,
+      });
+      expect(db.prepare('SELECT status FROM skill_usage_sources WHERE raw_file_path = ?').pluck().get(missing)).toBe('missing');
+      expect(db.prepare("SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'").pluck().get()).toBe('7');
+      expect(getLocalSkillUsageRefreshStatus(db)).toMatchObject({ phase: 'complete', missingCount: 1, hasSnapshot: true });
+    } finally { db.close(); }
+  });
+
+  it.each([false, true])('keeps the newest native log across repeated refreshes (older duplicate corrupt=%s)', async (corruptOlder) => {
+    const root = await makeTempRoot();
+    const homeDir = path.join(root, 'home');
+    const codexHome = path.join(homeDir, '.codex');
+    const current = await writeJsonl(path.join(codexHome, 'sessions', 'current.jsonl'));
+    const older = await writeJsonl(path.join(codexHome, 'archived_sessions', 'older.jsonl'));
+    for (const [file, skillName, mtimeMs] of [[current, 'word-doc', nowMs], [older, 'stale-skill', nowMs - 1_000]] as const) {
+      await writeFile(file, [
+        codexLine({ type: 'session_meta', payload: { id: codexThreadId } }),
+        codexLine({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text',
+          text: codexSkillInjection(skillName, path.join(root, skillName), skillDocument(skillName, 'Rules.')),
+        }] } }),
+      ].join('\n') + (corruptOlder && file === older ? '\n{"type":' : ''));
+      await utimes(file, new Date(mtimeMs), new Date(mtimeMs));
+    }
+    const db = createUsageDb();
+    const options = { homeDir, userDataDir: path.join(root, 'user-data'), appDataDir: path.join(root, 'app-data'), env: {}, nowMs };
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await refreshLocalSkillUsageAnalytics(db, options);
+        expect(db.prepare('SELECT raw_file_path AS rawFilePath, skill_name AS skillName FROM skill_usage_exposures').all())
+          .toEqual([{ rawFilePath: current, skillName: 'word-doc' }]);
+        expect(getLocalSkillUsageRefreshStatus(db)).toMatchObject({ phase: 'complete', incomplete: false });
+      }
+    } finally { db.close(); }
+  });
+
+  it.each([
+    ['read', true], ['parse', true], ['stat', true],
+    ['read', false], ['parse', false], ['stat', false],
+  ] as const)('preserves valid duplicate-log evidence on %s failure (existing snapshot=%s) and retries the same path', async (failure, hasSnapshot) => {
+    const root = await makeTempRoot();
+    const homeDir = path.join(root, 'home');
+    const current = await writeJsonl(path.join(homeDir, '.codex', 'sessions', 'current.jsonl'));
+    const older = await writeJsonl(path.join(homeDir, '.codex', 'archived_sessions', 'older.jsonl'));
+    const header = codexLine({ type: 'session_meta', payload: { id: codexThreadId } });
+    const skill = (skillName: string) => codexLine({ type: 'response_item', payload: {
+      type: 'message', role: 'user', content: [{ type: 'input_text',
+        text: codexSkillInjection(skillName, path.join(root, skillName), skillDocument(skillName, 'Rules.')),
+      }],
+    } });
+    const currentText = [header, skill('old-skill'), skill('latest-skill')].join('\n');
+    await writeFile(current, currentText);
+    await writeFile(older, [header, skill('old-skill')].join('\n'));
+    await utimes(current, new Date(nowMs - 1_000), new Date(nowMs - 1_000));
+    await utimes(older, new Date(nowMs - 2_000), new Date(nowMs - 2_000));
+    const db = createUsageDb();
+    const options = { homeDir, userDataDir: path.join(root, 'user-data'), appDataDir: path.join(root, 'app-data'), env: {}, nowMs };
+    const readEvidence = () => db.prepare('SELECT skill_name AS skillName, raw_file_path AS rawFilePath FROM skill_usage_exposures ORDER BY skill_name').all();
+    try {
+      if (hasSnapshot) await refreshLocalSkillUsageAnalytics(db, options);
+      const before = readEvidence();
+      const lastSuccessAt = getLocalSkillUsageRefreshStatus(db).lastSuccessAt;
+      if (hasSnapshot) expect(before).toEqual([
+        { skillName: 'latest-skill', rawFilePath: current }, { skillName: 'old-skill', rawFilePath: current },
+      ]);
+      await writeFile(current, currentText + (failure === 'parse' ? '\n{"type":' : '\n{}'));
+      await utimes(current, new Date(nowMs), new Date(nowMs));
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await refreshLocalSkillUsageAnalytics(db, {
+          ...options,
+          readTranscriptFile: async (file) => {
+            if (failure === 'read' && file === current) throw Object.assign(new Error('locked'), { code: 'EACCES' });
+            return readFile(file, 'utf-8');
+          },
+          statSource: async (file) => {
+            if (failure === 'stat' && file === current) throw Object.assign(new Error('locked'), { code: 'EACCES' });
+            const info = await stat(file);
+            return { mtimeMs: Math.round(info.mtimeMs), sizeBytes: info.size };
+          },
+        });
+        expect(readEvidence()).toEqual(hasSnapshot ? before : [{ skillName: 'old-skill', rawFilePath: older }]);
+        expect(getLocalSkillUsageRefreshStatus(db)).toMatchObject({ phase: 'incomplete', hasSnapshot, lastSuccessAt });
+      }
+
+      await writeFile(current, [currentText, skill('recovered-skill')].join('\n'));
+      await utimes(current, new Date(nowMs), new Date(nowMs));
+      await refreshLocalSkillUsageAnalytics(db, options);
+      expect(readEvidence()).toEqual([
+        { skillName: 'latest-skill', rawFilePath: current }, { skillName: 'old-skill', rawFilePath: current },
+        { skillName: 'recovered-skill', rawFilePath: current },
+      ]);
+      expect(getLocalSkillUsageRefreshStatus(db)).toMatchObject({ phase: 'complete', hasSnapshot: true, incomplete: false });
+    } finally { db.close(); }
+  });
+
+  it('preserves the prior snapshot and marks the scan incomplete on transient cached-file IO failure', async () => {
+    const root = await makeTempRoot();
+    const db = createUsageDb();
+    const rawFilePath = path.join(root, 'temporarily-locked.jsonl');
+    insertUsageExposure(db, rawFilePath, { analyzerVersion: '7' });
+    try {
+      await refreshLocalSkillUsageAnalytics(db, {
+        homeDir: path.join(root, 'home'), userDataDir: path.join(root, 'user-data'),
+        appDataDir: path.join(root, 'app-data'), env: {}, nowMs,
+        statSource: async () => { throw Object.assign(new Error('locked'), { code: 'EACCES' }); },
+      });
+      expect(db.prepare('SELECT status FROM skill_usage_sources').pluck().get()).toBe('ok');
+      expect(db.prepare("SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'").pluck().get()).toBe('7');
+      expect(getLocalSkillUsageRefreshStatus(db)).toMatchObject({ phase: 'incomplete', incomplete: true, missingCount: 0, hasSnapshot: true });
+    } finally { db.close(); }
+  });
+
+  it('preserves the old snapshot when a JSONL tail is incomplete and retries it after the writer finishes', async () => {
+    const root = await makeTempRoot();
+    const homeDir = path.join(root, 'home');
+    const rawFilePath = await writeJsonl(path.join(homeDir, '.codex', 'sessions', 'growing.jsonl'));
+    const db = createUsageDb();
+    insertUsageExposure(db, rawFilePath, { analyzerVersion: '7' });
+    const options = { homeDir, userDataDir: path.join(root, 'user-data'), appDataDir: path.join(root, 'app-data'), env: {}, nowMs };
+    try {
+      await refreshLocalSkillUsageAnalytics(db, { ...options, readTranscriptFile: async () => '{}\n{"type":' });
+      expect(db.prepare('SELECT analyzer_version FROM skill_usage_exposures').pluck().get()).toBe('7');
+      expect(getLocalSkillUsageRefreshStatus(db)).toMatchObject({ phase: 'incomplete', hasSnapshot: true, error: 'transcript_parse_failed: line 2' });
+      await refreshLocalSkillUsageAnalytics(db, { ...options, readTranscriptFile: async () => '\uFEFF{}\n{"type":"message"}\n' });
+      expect(getLocalSkillUsageRefreshStatus(db)).toMatchObject({ phase: 'complete', incomplete: false, hasSnapshot: true, error: null });
+      expect(db.prepare("SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'").pluck().get()).toBe('7');
+    } finally { db.close(); }
+  });
+
+  it('initializes the single cache once for concurrent readers and never returns obsolete observations', async () => {
+    const root = await makeTempRoot();
+    const db = createUsageDb();
+    const oldPath = path.join(root, 'old.jsonl');
+    const homeDir = path.join(root, 'home');
+    await writeJsonl(path.join(homeDir, '.codex', 'sessions', 'current.jsonl'));
+    insertUsageExposure(db, oldPath, { analyzerVersion: '6', seenAt: Date.now() });
+    let releaseInitialization!: () => void;
+    const initializationGate = new Promise<void>((resolve) => { releaseInitialization = resolve; });
+    const tx = vi.fn(async (_name: string, args: { kind: string; analyzerVersion: string }) => {
+      if (args.kind === 'prepareCache') {
+        await initializationGate;
+        prepareSkillUsageCache(db, args.analyzerVersion);
+      }
+    });
+    const client = {
+      query: async (sql: string, params: unknown[] = []) => db.prepare(sql).all(...params),
+      queryOne: async (sql: string, params: unknown[] = []) => db.prepare(sql).get(...params),
+      exec: async (sql: string, params: unknown[] = []) => db.prepare(sql).run(...params),
+      tx,
+    } as unknown as DbClient;
+    try {
+      // 所有读取共享这次受控后台扫描，避免测试访问真实用户的 Agent home。
+      const refresh = refreshLocalSkillUsageAnalytics(client, {
+        homeDir, userDataDir: path.join(root, 'user-data'), appDataDir: path.join(root, 'app-data'), env: {},
+        readTranscriptFile: async () => { throw new Error('temporarily unavailable'); },
+      });
+      const summaryResult = getLocalSkillUsageSummary({ skillName: 'word-doc', client });
+      const diagnosisResult = getLocalSkillUsageDiagnosisContext({ skillName: 'word-doc', client });
+      releaseInitialization();
+      const [summary, diagnosis] = await Promise.all([summaryResult, diagnosisResult]);
+      await refresh;
+      expect(summary.summary.totalUseCount).toBe(0);
+      expect(diagnosis.context.evidence).toEqual([]);
+      expect(summary.refreshStatus.hasSnapshot).toBe(false);
+      expect(diagnosis.refreshStatus.hasSnapshot).toBe(false);
+      expect(tx.mock.calls.filter(([, args]) => args.kind === 'prepareCache')).toHaveLength(1);
+      expect(getLocalSkillUsageRefreshStatus(client)).toMatchObject({ phase: 'incomplete', hasSnapshot: false, lastSuccessAt: null });
+    } finally { db.close(); }
   });
 
   it('coalesces refreshes per database without reusing another owner refresh', async () => {
@@ -202,7 +410,7 @@ describe('discoverTranscriptSources', () => {
     insertUsageExposure(db, firstPath, { sourceMtimeMs: 100 });
     insertUsageExposure(db, secondPath, { sourceMtimeMs: 200 });
     db.prepare(
-      "INSERT INTO migration_meta (key, value) VALUES ('skill_usage_analyzer_version', '6')",
+      "INSERT OR REPLACE INTO migration_meta (key, value) VALUES ('skill_usage_analyzer_version', '7')",
     ).run();
 
     const query = vi.fn(async (sql: string, params: unknown[] = []) => (
@@ -283,7 +491,7 @@ describe('discoverTranscriptSources', () => {
         },
       });
 
-      expect(client.tx).not.toHaveBeenCalled();
+      expect(client.tx).toHaveBeenCalledExactlyOnceWith('skillUsage.applyMutation', { kind: 'prepareCache', analyzerVersion: '7' });
     } finally {
       db.close();
     }
@@ -453,7 +661,7 @@ describe('discoverTranscriptSources', () => {
         raw_file_path, analyzer_version, agent_kind, session_id, sdk_session_id,
         mtime_ms, size_bytes, last_scanned_at, status, error
       )
-      VALUES (?, '5', 'codex', 'codex-old-mtime', 'old-mtime', 1, 1, 1, 'ok', NULL)
+      VALUES (?, '7', 'codex', 'codex-old-mtime', 'old-mtime', 1, 1, 1, 'ok', NULL)
     `).run(rawFilePath);
     db.prepare(`
       INSERT INTO skill_usage_exposures (
@@ -464,13 +672,13 @@ describe('discoverTranscriptSources', () => {
         command_failure_count
       )
       VALUES (
-        '5:old-mtime', '5', ?, 1, 'codex-old-mtime', 'old-mtime', 'codex',
+        '7:old-mtime', '7', ?, 1, 'codex-old-mtime', 'old-mtime', 'codex',
         'word-doc', NULL, 'doc-old', 'doc-old', 'transcript_file_read',
         'codex_skill_file_read', NULL, ?,
         0, 0, 0, 0, 0
       )
     `).run(rawFilePath, nowMs - dayMs);
-    db.prepare("INSERT INTO migration_meta (key, value) VALUES ('skill_usage_analyzer_version', '5')").run();
+    db.prepare("INSERT OR REPLACE INTO migration_meta (key, value) VALUES ('skill_usage_analyzer_version', '7')").run();
 
     try {
       await refreshLocalSkillUsageAnalytics(db, {
@@ -489,8 +697,8 @@ describe('discoverTranscriptSources', () => {
       const activeVersion = db.prepare(`
         SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'
       `).pluck().get();
-      expect(row).toEqual({ analyzerVersion: '6', skillName: 'word-doc' });
-      expect(activeVersion).toBe('6');
+      expect(row).toEqual({ analyzerVersion: '7', skillName: 'word-doc' });
+      expect(activeVersion).toBe('7');
     } finally {
       db.close();
     }
@@ -601,7 +809,7 @@ describe('discoverTranscriptSources', () => {
       nowMs,
     );
     const db = createUsageDb();
-    insertUsageExposure(db, rawFilePath, { analyzerVersion: '6', sourceMtimeMs: 1 });
+    insertUsageExposure(db, rawFilePath, { analyzerVersion: '7', sourceMtimeMs: 1 });
 
     try {
       await refreshLocalSkillUsageAnalytics(db, {
@@ -623,7 +831,7 @@ describe('discoverTranscriptSources', () => {
     }
   });
 
-  it('pins the active analyzer version before a failed rebuild when no active-version metadata exists', async () => {
+  it('discards obsolete cached statistics even when the first rebuild cannot read a transcript', async () => {
     const root = await makeTempRoot();
     const homeDir = path.join(root, 'home');
     const userDataDir = path.join(root, 'userData');
@@ -634,7 +842,7 @@ describe('discoverTranscriptSources', () => {
       nowMs,
     );
     const db = createUsageDb();
-    insertUsageExposure(db, rawFilePath, { analyzerVersion: '5', sourceMtimeMs: 1 });
+    insertUsageExposure(db, rawFilePath, { analyzerVersion: '6', sourceMtimeMs: 1 });
 
     try {
       await refreshLocalSkillUsageAnalytics(db, {
@@ -652,27 +860,27 @@ describe('discoverTranscriptSources', () => {
       const activeVersion = db.prepare(`
         SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'
       `).pluck().get();
-      expect(activeVersion).toBe('5');
+      expect(activeVersion).toBe('7');
+      expect(db.prepare('SELECT COUNT(*) FROM skill_usage_exposures').pluck().get()).toBe(0);
+      expect(db.prepare("SELECT value FROM migration_meta WHERE key = 'skill_usage_last_success_at'").get()).toBeUndefined();
+      expect(getLocalSkillUsageRefreshStatus(db)).toMatchObject({ phase: 'incomplete', hasSnapshot: false, lastSuccessAt: null });
     } finally {
       db.close();
     }
   });
 
-  it('does not pin a partial current analyzer version when active-version metadata is missing', async () => {
+  it('does not treat partial observations from an unfinished first scan as a completed snapshot', async () => {
     const root = await makeTempRoot();
     const homeDir = path.join(root, 'home');
     const userDataDir = path.join(root, 'userData');
     const appDataDir = path.join(root, 'roaming');
     const codexHome = path.join(homeDir, '.codex');
     const db = createUsageDb();
-    insertUsageExposure(db, path.join(codexHome, 'sessions', 'old-active.jsonl'), {
-      analyzerVersion: '5',
-      seenAt: nowMs - dayMs,
-    });
     insertUsageExposure(db, path.join(codexHome, 'sessions', 'partial-current.jsonl'), {
-      analyzerVersion: '6',
+      analyzerVersion: '7',
       seenAt: nowMs,
     });
+    db.prepare("DELETE FROM migration_meta WHERE key = 'skill_usage_last_success_at'").run();
 
     try {
       await refreshLocalSkillUsageAnalytics(db, {
@@ -682,18 +890,17 @@ describe('discoverTranscriptSources', () => {
         platform: 'win32',
         env: { CODEX_HOME: codexHome },
         nowMs,
+        statSource: async () => { throw new Error('temporarily unavailable'); },
       });
 
-      const activeVersion = db.prepare(`
-        SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'
-      `).pluck().get();
-      expect(activeVersion).toBe('5');
+      expect(db.prepare('SELECT COUNT(*) FROM skill_usage_exposures').pluck().get()).toBe(1);
+      expect(getLocalSkillUsageRefreshStatus(db)).toMatchObject({ phase: 'incomplete', hasSnapshot: false, lastSuccessAt: null });
     } finally {
       db.close();
     }
   });
 
-  it('drains all recent dirty records across refresh batches before promoting analyzer version', async () => {
+  it('drains all recent dirty records across refresh batches before recording a successful refresh', async () => {
     const root = await makeTempRoot();
     const homeDir = path.join(root, 'home');
     const userDataDir = path.join(root, 'userData');
@@ -709,7 +916,6 @@ describe('discoverTranscriptSources', () => {
       if (index === 0) oldestFile = real;
     }
     insertUsageExposure(db, oldestFile);
-    db.prepare("INSERT INTO migration_meta (key, value) VALUES ('skill_usage_analyzer_version', '5')").run();
 
     let readCallCount = 0;
     try {
@@ -738,13 +944,14 @@ describe('discoverTranscriptSources', () => {
       `).pluck().get();
       expect(readCallCount).toBe(3);
       expect(row.count).toBe(0);
-      expect(activeVersion).toBe('6');
+      expect(activeVersion).toBe('7');
+      expect(getLocalSkillUsageRefreshStatus(db)).toMatchObject({ phase: 'complete', scanned: 3, total: 3, hasSnapshot: true });
     } finally {
       db.close();
     }
   });
 
-  it('does not promote analyzer version when transcript discovery hits the file cap', async () => {
+  it('does not record a complete snapshot when transcript discovery hits the file cap', async () => {
     const root = await makeTempRoot();
     const homeDir = path.join(root, 'home');
     const userDataDir = path.join(root, 'userData');
@@ -754,8 +961,7 @@ describe('discoverTranscriptSources', () => {
     const firstFile = await writeJsonl(path.join(sessionsDir, 'rollout-0000.jsonl'));
     await writeJsonl(path.join(sessionsDir, 'rollout-0001.jsonl'));
     const db = createUsageDb();
-    insertUsageExposure(db, firstFile, { analyzerVersion: '5' });
-    db.prepare("INSERT INTO migration_meta (key, value) VALUES ('skill_usage_analyzer_version', '5')").run();
+    insertUsageExposure(db, firstFile, { analyzerVersion: '6' });
 
     let readCallCount = 0;
     try {
@@ -775,14 +981,84 @@ describe('discoverTranscriptSources', () => {
       });
 
       const row = db.prepare(`
-        SELECT COUNT(*) AS count FROM skill_usage_exposures WHERE analyzer_version = '5'
+        SELECT COUNT(*) AS count FROM skill_usage_exposures WHERE analyzer_version = '6'
       `).get() as { count: number };
       const activeVersion = db.prepare(`
         SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'
       `).pluck().get();
       expect(readCallCount).toBeGreaterThan(0);
-      expect(row.count).toBe(1);
-      expect(activeVersion).toBe('5');
+      expect(row.count).toBe(0);
+      expect(activeVersion).toBe('7');
+      expect(getLocalSkillUsageRefreshStatus(db)).toMatchObject({ phase: 'incomplete', incomplete: true, hasSnapshot: false, lastSuccessAt: null });
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('native Pi transcript indexing', () => {
+  afterEach(async () => {
+    await Promise.all(tempRoots.map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })));
+    tempRoots = [];
+  });
+
+  it('discovers persistent default, configured and Desktop sessions without scanning run-tmp', async () => {
+    const root = await makeTempRoot();
+    const homeDir = path.join(root, 'home');
+    const userDataDir = path.join(root, 'user-data');
+    const configuredHome = path.join(root, 'configured-pi');
+    const defaultFile = await writeJsonl(path.join(homeDir, '.pi', 'agent', 'sessions', 'project-a', 'same-name.jsonl'));
+    const desktopFile = await writeJsonl(path.join(userDataDir, 'pi-agent-home', 'sessions', 'same-name.jsonl'));
+    const configuredFile = await writeJsonl(path.join(configuredHome, 'sessions', 'project-b', 'same-name.jsonl'));
+    const subagentFile = await writeJsonl(path.join(userDataDir, 'pi-agent-home', 'runtime', 'pi-subagent-runs', 'parent', 'run', 'sessions', 'child.jsonl'));
+    await writeJsonl(path.join(userDataDir, 'pi-agent-home', 'runtime', 'pi-subagent-runs', 'parent', 'run', 'run-tmp', 'sessions', 'ignored.jsonl'));
+    await writeJsonl(path.join(userDataDir, 'pi-agent-home', 'run-tmp', 'runtime', 'sessions', 'ignored.jsonl'));
+    const options = { homeDir, userDataDir, appDataDir: path.join(root, 'app-data'), nowMs, env: { PI_CODING_AGENT_DIR: configuredHome } };
+    const sources = await discoverTranscriptSources(options);
+    expect(sources.map(source => source.rawFilePath).sort()).toEqual([defaultFile, desktopFile, configuredFile, subagentFile].sort());
+    for (const source of sources) {
+      expect(source.agentKind).toBe('pi');
+      expect(source.sdkSessionId).toBe(source.rawFilePath);
+    }
+    expect(new Set(sources.map(source => source.sessionId)).size).toBe(4);
+    const repeated = await discoverTranscriptSources(options);
+    expect(repeated.map(source => source.sessionId)).toEqual(sources.map(source => source.sessionId));
+    const aliased = await discoverTranscriptSources({ ...options, env: { PI_CODING_AGENT_DIR: '~/.pi/agent' } });
+    expect(aliased.map(source => source.rawFilePath).sort()).toEqual([defaultFile, desktopFile, subagentFile].sort());
+  });
+
+  it('rebuilds native Pi observations and keeps their identity when the resume path changes', async () => {
+    const root = await makeTempRoot();
+    const homeDir = path.join(root, 'home');
+    const userDataDir = path.join(root, 'user-data');
+    const rawFilePath = await writeJsonl(path.join(userDataDir, 'pi-agent-home', 'sessions', 'native.jsonl'));
+    const document = skillDocument('word-doc', 'Observed Pi skill rules.');
+    const timestamp = '2026-06-20T01:00:00.000Z';
+    await writeFile(rawFilePath, [
+      JSON.stringify({ type: 'session', version: 3, id: 'native-id', cwd: root }),
+      JSON.stringify({ type: 'message', id: 'user', parentId: null, timestamp, message: { role: 'user', content: 'Use the skill.' } }),
+      JSON.stringify({ type: 'message', id: 'call', parentId: 'user', timestamp, message: { role: 'assistant', content: [
+        { type: 'toolCall', id: 'read-id', name: 'read', arguments: { path: path.join(root, 'word-doc', 'SKILL.md') } },
+      ] } }),
+      JSON.stringify({ type: 'message', id: 'result', parentId: 'call', timestamp, message: {
+        role: 'toolResult', toolCallId: 'read-id', content: [{ type: 'text', text: document }], isError: false,
+      } }),
+    ].join('\n'), 'utf-8');
+    const db = createUsageDb();
+    db.prepare("INSERT OR REPLACE INTO migration_meta (key, value) VALUES ('skill_usage_analyzer_version', '6')").run();
+    try {
+      await refreshLocalSkillUsageAnalytics(db, { homeDir, userDataDir, appDataDir: path.join(root, 'app-data'), env: {}, nowMs });
+      expect(db.prepare(`SELECT analyzer_version AS version, agent_kind AS agentKind, raw_file_path AS rawFilePath,
+        sdk_session_id AS sdkSessionId, raw_line_no AS lineNo, source FROM skill_usage_exposures`).get()).toEqual({
+        version: '7', agentKind: 'pi', rawFilePath, sdkSessionId: rawFilePath, lineNo: 4, source: 'pi_skill_file_read',
+      });
+      expect(db.prepare("SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'").pluck().get()).toBe('7');
+      const observationId = db.prepare('SELECT id FROM skill_usage_exposures').pluck().get();
+      const relocated = path.join(path.dirname(rawFilePath), 'renamed.jsonl');
+      await rename(rawFilePath, relocated);
+      await refreshLocalSkillUsageAnalytics(db, { homeDir, userDataDir, appDataDir: path.join(root, 'app-data'), env: {}, nowMs });
+      expect(db.prepare('SELECT id, session_id AS sessionId, sdk_session_id AS sdkSessionId FROM skill_usage_exposures').all())
+        .toEqual([{ id: observationId, sessionId: 'pi-native-id', sdkSessionId: relocated }]);
     } finally {
       db.close();
     }
