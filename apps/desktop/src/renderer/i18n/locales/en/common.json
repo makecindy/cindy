@@ -4050,6 +4050,38 @@
         "lsp": {
           "name": "LSP",
           "description": "TypeScript LSP queries (Beta — gated by Settings → Experimental → LSP Mode)"
+        },
+        "android": {
+          "name": "Android automation",
+          "description": "View and operate Android devices connected to this computer."
+        },
+        "ios-simulator": {
+          "name": "iOS Simulator",
+          "description": "Install, run and inspect apps in an iOS Simulator."
+        },
+        "browser": {
+          "name": "Browser",
+          "description": "Browse, read, capture and interact with web pages."
+        },
+        "computer": {
+          "name": "Computer control",
+          "description": "View and operate local apps, windows, mouse and keyboard."
+        },
+        "wechat": {
+          "name": "Personal WeChat",
+          "description": "Send messages to known WeChat contacts."
+        },
+        "slack": {
+          "name": "Slack",
+          "description": "Search, read and send messages using the connected Slack account."
+        },
+        "ssh": {
+          "name": "SSH commands",
+          "description": "Run commands on remote computers through configured SSH connections."
+        },
+        "contacts": {
+          "name": "Smart Contacts",
+          "description": "Find and manage contact profiles and interaction history."
         }
       }
     },
@@ -8015,11 +8047,13 @@
     "nameLabel": "What Should We Call Them?",
     "close": "Close",
     "list": {
+      "createMenu": "Create",
+      "createTeammate": "New teammate",
       "startChat": "Start the conversation",
       "typing": "Typing…",
       "unread": "{{count}} unread messages",
-      "search": "Search teammates",
-      "searchPlaceholder": "Search teammates…",
+      "search": "Search teammates or group chats",
+      "searchPlaceholder": "Search teammates or group chats…",
       "showHidden": "Show hidden teammates",
       "hideHidden": "Collapse hidden teammates",
       "hidden": "Hidden ({{count}})",
@@ -8393,6 +8427,85 @@
       },
       "files": {
         "openFailed": "Couldn’t open the file. It may have been moved or deleted."
+      },
+      "server": {
+        "reply": "Reply",
+        "replies": "Replies",
+        "replyCount": "{{count}} replies",
+        "replyPlaceholder": "Reply to this message; use @ to mention a companion…",
+        "sendReply": "Send reply",
+        "addReaction": "Add reaction",
+        "reactionCount": "{{emoji}} · {{count}} reactions",
+        "invite": "Invite to group",
+        "join": "Join group",
+        "inviteDescription": "This single-use link expires in 24 hours. Accepting joins the group and gives access to its chat history.",
+        "joinDescription": "Paste an invitation link to preview the group before joining.",
+        "inviteLink": "Invitation link",
+        "pasteLink": "Paste invitation link…",
+        "invitedBy": "Invited by {{name}}",
+        "copyLink": "Copy invitation link",
+        "copied": "Invitation link copied",
+        "createLink": "Create invitation link",
+        "accept": "Accept and join",
+        "previewInvite": "Preview invitation",
+        "invalidInvite": "This invitation is invalid, used or expired. Request a new link.",
+        "notAllowed": "This account does not have permission. Check your account or contact the group owner.",
+        "loginRequired": "Sign in to your account and try again.",
+        "requestFailed": "The chat service is unavailable. Please try again shortly.",
+        "copyFailed": "Could not copy. Select the link and copy it manually.",
+        "createDescription": "Choose companions, or create the group first and invite people to join.",
+        "settings": {
+          "name": "Group name",
+          "topic": "Topic",
+          "description": "Description",
+          "save": "Save",
+          "myProfile": "My profile",
+          "editProfile": "Edit name and photo",
+          "nickname": "My name in this group",
+          "nicknameHint": "Only shown here. Leave empty to use your profile name.",
+          "members": "Members · {{count}}",
+          "owner": "Owner",
+          "admin": "Admin",
+          "member": "Member",
+          "guest": "Guest",
+          "companionOf": "{{name}}’s companion",
+          "guestAccess": "Access for other members",
+          "toolsHint": "Members may use this companion’s existing tools and private information. Results are visible to everyone. Existing approval rules still apply. Revoking stops active requests, but cannot undo completed actions.",
+          "chatHint": "Uses group messages only. No owner memory, private information or tools.",
+          "none": "Owner only",
+          "chat": "Group conversation only",
+          "tools": "Owner authorized tools and information",
+          "ownerOnly": "Only this companion’s owner can change this grant.",
+          "authorizeTitle": "Allow this group to use {{name}}’s tools and information?",
+          "makeAdmin": "Make admin",
+          "removeAdmin": "Remove admin role",
+          "transfer": "Transfer ownership",
+          "transferTitle": "Transfer ownership to {{name}}?",
+          "transferHint": "They will become the owner and you will become an admin. Companions can also own groups.",
+          "remove": "Remove from group",
+          "removeTitle": "Remove {{name}} from this group?",
+          "removeHint": "They will lose access to messages. Their companions will also leave.",
+          "addCompanion": "Invite my companion",
+          "leave": "Leave group",
+          "leaveHint": "You and your companions will leave. Transfer ownership first if you own the group.",
+          "archive": "Archive group",
+          "archiveHint": "Keep history, stop new messages and companion activity.",
+          "confirm": "Confirm",
+          "lastOwner": "Transfer ownership to another member before leaving or removing the current owner.",
+          "conflict": "Someone updated this group. Refresh and try again.",
+          "replyMode": "Without a mention",
+          "speakingMode": "Speaking order",
+          "all": "All companions may reply",
+          "mentioned": "Only when mentioned",
+          "auto": "Together",
+          "sequential": "One at a time",
+          "unarchive": "Unarchive group",
+          "unarchiveHint": "Resume messages and companion activity.",
+          "archived": "This group is archived. History is still available.",
+          "noneHint": "Only the companion’s owner can ask it to respond in this group.",
+          "companionPermissions": "Companion permissions",
+          "configureCapabilities": "Tools and access settings"
+        }
       }
     },
     "joined": {
@@ -8444,7 +8557,16 @@
       "mcp": "MCP",
       "toolset": "Built-in tools",
       "unavailable": "Unavailable",
-      "empty": "No matching capabilities"
+      "empty": "No matching capabilities",
+      "accessHint": "Choose the built-in tools, MCP servers and skills this companion may use. Changes apply to its next request, including authorized group requests.",
+      "inheritedHint": "Currently follows tools enabled on this computer. Turning off an item switches this list to an explicit selection.",
+      "selectedHint": "Only selected items in this list are allowed for this companion.",
+      "personalHint": "A skill learned by this companion, loaded with its profile.",
+      "unavailableHint": "Unavailable on this computer or execution target. Configure its connection or system access first.",
+      "configure": "Open configuration",
+      "empty_toolset": "No built-in tools are available on this execution target.",
+      "empty_mcp": "No custom MCP servers have been added.",
+      "empty_skill": "No skills are available to select."
     },
     "guided": {
       "title": "Create a teammate",
@@ -14474,7 +14596,6 @@
     "autoTitle": "Enable Auto approval",
     "autoMessage": "Allow “{{name}}” to use Auto approval?",
     "autoDetail": "Cindy will review coordinator and Worker actions automatically. Actions requiring confirmation or denied actions still pause. This is not Full access. The choice is saved in plugin AI settings without changing global permissions for other tasks.",
-
     "title": "Allow this plugin’s AI to edit files?",
     "message": "Allow the AI in “{{name}}” to edit files and continue?",
     "detail": "This sets the plugin’s AI permission to Allow edits for future tasks too. A separate working directory is not a system sandbox; commands still follow Cindy permission checks. You can switch back to read-only in the plugin’s AI settings.",

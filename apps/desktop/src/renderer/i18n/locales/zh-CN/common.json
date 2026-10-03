@@ -4049,6 +4049,38 @@
         "lsp": {
           "name": "LSP",
           "description": "TypeScript LSP 查询（Beta —— 由「设置 → 实验性 → LSP 模式」控制）"
+        },
+        "android": {
+          "name": "Android 自动化",
+          "description": "查看、点击和操作连接到本机的 Android 设备。"
+        },
+        "ios-simulator": {
+          "name": "iOS 模拟器",
+          "description": "在 iOS 模拟器中安装、运行和检查应用。"
+        },
+        "browser": {
+          "name": "浏览器",
+          "description": "浏览网页、读取页面、截图和操作网页。"
+        },
+        "computer": {
+          "name": "电脑控制",
+          "description": "查看和操作本机应用、窗口、鼠标与键盘。"
+        },
+        "wechat": {
+          "name": "个人微信",
+          "description": "向已知的微信联系人发送消息。"
+        },
+        "slack": {
+          "name": "Slack",
+          "description": "使用已连接的 Slack 账号搜索、读取和发送消息。"
+        },
+        "ssh": {
+          "name": "SSH 远程命令",
+          "description": "通过本机配置的 SSH 连接在远程电脑上执行命令。"
+        },
+        "contacts": {
+          "name": "智能通讯录",
+          "description": "查询、整理联系人资料与交往记录。"
         }
       }
     },
@@ -8002,11 +8034,13 @@
     "nameLabel": "怎么称呼",
     "close": "关闭",
     "list": {
+      "createMenu": "新建",
+      "createTeammate": "新建伙伴",
       "startChat": "开始对话",
       "typing": "正在输入…",
       "unread": "{{count}} 条未读消息",
-      "search": "搜索伙伴",
-      "searchPlaceholder": "搜索伙伴…",
+      "search": "搜索伙伴或群聊",
+      "searchPlaceholder": "搜索伙伴或群聊…",
       "showHidden": "显示隐藏的伙伴",
       "hideHidden": "收起隐藏的伙伴",
       "hidden": "已隐藏（{{count}}）",
@@ -8380,6 +8414,85 @@
       },
       "files": {
         "openFailed": "文件没能打开，可能已被移动或删除"
+      },
+      "server": {
+        "reply": "回复",
+        "replies": "回复",
+        "replyCount": "{{count}} 条回复",
+        "replyPlaceholder": "回复这条消息，可用 @ 点名伙伴…",
+        "sendReply": "发送回复",
+        "addReaction": "添加表情回应",
+        "reactionCount": "{{emoji}} · {{count}} 人回应",
+        "invite": "邀请加入群聊",
+        "join": "加入群聊",
+        "inviteDescription": "链接 24 小时内有效，只能使用一次。对方接受后会成为群成员，可阅读群聊记录。",
+        "joinDescription": "粘贴邀请链接，查看群聊后再确认加入。",
+        "inviteLink": "邀请链接",
+        "pasteLink": "粘贴邀请链接…",
+        "invitedBy": "{{name}} 邀请你加入",
+        "copyLink": "复制邀请链接",
+        "copied": "邀请链接已复制",
+        "createLink": "生成邀请链接",
+        "accept": "接受并加入",
+        "previewInvite": "查看邀请",
+        "invalidInvite": "邀请无效、已使用或已过期，请获取新的邀请链接。",
+        "notAllowed": "当前账号没有权限，请检查账号或联系群主。",
+        "loginRequired": "请先登录当前账号，再重试。",
+        "requestFailed": "聊天服务暂时无法连接，请稍后重试。",
+        "copyFailed": "复制失败，请选中链接手动复制。",
+        "createDescription": "伙伴可以选，也可以先建群，再邀请朋友加入。",
+        "settings": {
+          "name": "群名称",
+          "topic": "群主题",
+          "description": "群简介",
+          "save": "保存",
+          "myProfile": "我的资料",
+          "editProfile": "修改昵称与头像",
+          "nickname": "我在本群的昵称",
+          "nicknameHint": "仅在本群显示；留空使用个人昵称。",
+          "members": "成员 · {{count}}",
+          "owner": "群主",
+          "admin": "管理员",
+          "member": "成员",
+          "guest": "访客",
+          "companionOf": "{{name}} 的伙伴",
+          "guestAccess": "其他成员使用权限",
+          "toolsHint": "本群成员可以使用伙伴已有的工具与私人资料，结果对全群可见。原有操作审批仍有效；撤回会停止进行中的请求，已执行的操作无法撤销。",
+          "chatHint": "默认只使用群内消息，不读取主人记忆、私人资料或调用工具。",
+          "none": "仅主人可使用",
+          "chat": "仅群内交流",
+          "tools": "主人已授权工具与资料",
+          "ownerOnly": "只有伙伴的主人可以修改此授权。",
+          "authorizeTitle": "授权本群使用 {{name}} 的工具与资料？",
+          "makeAdmin": "设为管理员",
+          "removeAdmin": "取消管理员",
+          "transfer": "转让群主",
+          "transferTitle": "将群主转让给 {{name}}？",
+          "transferHint": "对方成为群主，你将成为管理员。伙伴也可以担任群主。",
+          "remove": "移出群",
+          "removeTitle": "将 {{name}} 移出群？",
+          "removeHint": "该成员将无法继续查看或发消息；如果是伙伴的主人，其伙伴也会退出。",
+          "addCompanion": "邀请我的伙伴",
+          "leave": "退出群",
+          "leaveHint": "你和你带来的伙伴将退出群。群主需要先转让身份。",
+          "archive": "归档群",
+          "archiveHint": "归档后保留聊天记录，停止新消息和伙伴执行。",
+          "confirm": "确认",
+          "lastOwner": "请先将群主转让给其他成员，再退出或移除当前群主。",
+          "conflict": "群设置已被其他成员更新，请刷新后重试。",
+          "replyMode": "没有 @ 时",
+          "speakingMode": "发言方式",
+          "all": "伙伴都可接话",
+          "mentioned": "仅被 @ 时接话",
+          "auto": "同时发言",
+          "sequential": "依次发言",
+          "unarchive": "取消归档",
+          "unarchiveHint": "恢复新消息和伙伴执行。",
+          "archived": "本群已归档，可继续查看历史记录。",
+          "noneHint": "本群只有伙伴的主人可以让伙伴回应。",
+          "companionPermissions": "伙伴权限",
+          "configureCapabilities": "工具与授权设置"
+        }
       }
     },
     "joined": {
@@ -8431,7 +8544,16 @@
       "mcp": "MCP",
       "toolset": "内置工具",
       "unavailable": "不可用",
-      "empty": "没有匹配的能力"
+      "empty": "没有匹配的能力",
+      "accessHint": "逐项选择伙伴可使用的内置工具、MCP 与技能。更改从下一次请求生效，也适用于已授权的群内请求。",
+      "inheritedHint": "当前跟随本机已开启的工具。关闭任意一项后，此列表只使用你选择的项目。",
+      "selectedHint": "此列表中，伙伴只使用已选中的项目。",
+      "personalHint": "伙伴自己学到的技能，随伙伴自动加载。",
+      "unavailableHint": "本机或当前执行环境暂不可用，请先配置连接或系统授权。",
+      "configure": "前往配置",
+      "empty_toolset": "当前执行环境没有可用的内置工具。",
+      "empty_mcp": "尚未添加自定义 MCP 服务。",
+      "empty_skill": "暂无可选的技能。"
     },
     "guided": {
       "title": "创建伙伴",

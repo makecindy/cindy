@@ -5316,6 +5316,7 @@ interface ElectronAPI {
         ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
       ) => void,
     ) => () => void;
+    chatServer: import('../shared/botGroupChat').ChatServerApi;
     listBotGroups: () => Promise<import('../shared/botGroupChat').BotGroupListResult>;
     getBotGroup: (
       groupId: string,

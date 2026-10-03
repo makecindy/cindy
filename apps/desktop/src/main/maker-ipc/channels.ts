@@ -791,6 +791,16 @@ export const MAKER_INVOKE = {
   /** Read one hidden Bot-to-Bot conversation after a timeline trace is opened. */
   BOT_DIRECT_MESSAGE_THREAD_GET: 'maker:bot-direct-message-thread:get',
   /** 伙伴群聊：列表、详情、创建、修改、成员、删除、发言、继续讨论与停止。 */
+  CHAT_SERVER_MANAGE: 'maker:chat-server:manage',
+  CHAT_SERVER_OWNEDBOTS: 'maker:chat-server:ownedBots',
+  CHAT_SERVER_REFRESHPROFILE: 'maker:chat-server:refreshProfile',
+  CHAT_SERVER_STATUS: 'maker:chat-server:status',
+  CHAT_SERVER_THREAD: 'maker:chat-server:thread',
+  CHAT_SERVER_REPLY: 'maker:chat-server:reply',
+  CHAT_SERVER_REACT: 'maker:chat-server:react',
+  CHAT_SERVER_CREATEINVITE: 'maker:chat-server:createInvite',
+  CHAT_SERVER_PREVIEWINVITE: 'maker:chat-server:previewInvite',
+  CHAT_SERVER_ACCEPTINVITE: 'maker:chat-server:acceptInvite',
   BOT_GROUP_LIST: 'maker:bot-group:list',
   BOT_GROUP_GET: 'maker:bot-group:get',
   BOT_GROUP_CREATE: 'maker:bot-group:create',

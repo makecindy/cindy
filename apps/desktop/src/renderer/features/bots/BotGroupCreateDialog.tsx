@@ -5,7 +5,7 @@
  * 填了一半的表单），Esc 与底部「取消」关闭，打开时聚焦群名称。成员数与群名长度由
  * main 最终校验，这里先挡住明显不成立的提交并把焦点送到第一个出错的字段。
  */
-import { useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -43,6 +43,13 @@ export function BotGroupCreateDialog({
   const bots = useBotProfiles();
   const candidates = useMemo(() => pickableBots(bots), [bots]);
   const selectableCount = candidates.filter(isSelectable).length;
+  const [serverBacked, setServerBacked] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    void botGroupApi()?.chatServer?.status().then(s => { if (!disposed) setServerBacked(s.enabled); }).catch(() => undefined);
+    return () => { disposed = true; };
+  }, []);
+  const minMembers = serverBacked ? 0 : BOT_GROUP_MIN_MEMBERS;
   const [name, setName] = useState('');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [nameError, setNameError] = useState(false);
@@ -75,7 +82,7 @@ export function BotGroupCreateDialog({
     const trimmed = name.trim();
     const nameInvalid = trimmed.length === 0;
     const membersInvalid =
-      orderedSelection.length < BOT_GROUP_MIN_MEMBERS ||
+      orderedSelection.length < minMembers ||
       orderedSelection.length > BOT_GROUP_MAX_MEMBERS;
     setNameError(nameInvalid);
     setMembersError(membersInvalid);
@@ -111,7 +118,7 @@ export function BotGroupCreateDialog({
   };
 
   const membersHint =
-    selectableCount < BOT_GROUP_MIN_MEMBERS
+    selectableCount < minMembers
       ? t('bots.groupChat.create.notEnoughBots', { min: BOT_GROUP_MIN_MEMBERS })
       : undefined;
 
@@ -136,7 +143,7 @@ export function BotGroupCreateDialog({
               {t('bots.groupChat.create.title')}
             </Dialog.Title>
             <Dialog.Description className="mt-1 text-13 leading-normal text-[var(--confirm-desc)]">
-              {t('bots.groupChat.create.description')}
+              {t(serverBacked ? 'bots.groupChat.server.createDescription' : 'bots.groupChat.create.description')}
             </Dialog.Description>
 
             <div className="mt-4 flex min-h-0 flex-col gap-4 overflow-y-auto">

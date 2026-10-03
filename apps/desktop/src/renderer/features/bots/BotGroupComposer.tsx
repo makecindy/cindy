@@ -233,7 +233,7 @@ export function BotGroupComposer({
         : { text: trimmed, clientId: crypto.randomUUID(), division, attachments: signature };
     attemptRef.current = attempt;
     const mentions = resolveBotGroupMentions(trimmed, {
-      members: members.map((member) => ({ botId: member.botId, name: member.name })),
+      members,
       allLabels: [allLabel],
       tracked,
     });

@@ -4049,6 +4049,38 @@
         "lsp": {
           "name": "LSP",
           "description": "TypeScript LSP 查詢（Beta —— 由「設定 → 實驗性 → LSP 模式」控制）"
+        },
+        "android": {
+          "name": "Android 自動化",
+          "description": "檢視、點擊和操作連接到本機的 Android 裝置。"
+        },
+        "ios-simulator": {
+          "name": "iOS 模擬器",
+          "description": "在 iOS 模擬器中安裝、執行和檢查應用程式。"
+        },
+        "browser": {
+          "name": "瀏覽器",
+          "description": "瀏覽網頁、讀取頁面、擷取畫面和操作網頁。"
+        },
+        "computer": {
+          "name": "電腦控制",
+          "description": "檢視和操作本機應用程式、視窗、滑鼠與鍵盤。"
+        },
+        "wechat": {
+          "name": "個人微信",
+          "description": "向已知的微信聯絡人傳送訊息。"
+        },
+        "slack": {
+          "name": "Slack",
+          "description": "使用已連接的 Slack 帳號搜尋、讀取和傳送訊息。"
+        },
+        "ssh": {
+          "name": "SSH 遠端命令",
+          "description": "透過本機設定的 SSH 連線在遠端電腦上執行命令。"
+        },
+        "contacts": {
+          "name": "智慧通訊錄",
+          "description": "查詢、整理聯絡人資料與往來記錄。"
         }
       }
     },
@@ -8002,11 +8034,13 @@
     "nameLabel": "怎麼稱呼",
     "close": "關閉",
     "list": {
+      "createMenu": "新增",
+      "createTeammate": "新增夥伴",
       "startChat": "開始對話",
       "typing": "正在輸入…",
       "unread": "{{count}} 則未讀訊息",
-      "search": "搜尋夥伴",
-      "searchPlaceholder": "搜尋夥伴…",
+      "search": "搜尋夥伴或群聊",
+      "searchPlaceholder": "搜尋夥伴或群聊…",
       "showHidden": "顯示隱藏的夥伴",
       "hideHidden": "收起隱藏的夥伴",
       "hidden": "已隱藏（{{count}}）",
@@ -8380,6 +8414,85 @@
       },
       "files": {
         "openFailed": "檔案沒能開啟，可能已被移動或刪除"
+      },
+      "server": {
+        "reply": "回覆",
+        "replies": "回覆",
+        "replyCount": "{{count}} 則回覆",
+        "replyPlaceholder": "回覆這則訊息，可用 @ 點名夥伴…",
+        "sendReply": "傳送回覆",
+        "addReaction": "新增表情回應",
+        "reactionCount": "{{emoji}} · {{count}} 人回應",
+        "invite": "邀請加入群組聊天",
+        "join": "加入群組聊天",
+        "inviteDescription": "連結在 24 小時內有效，只能使用一次。對方接受後會成為群組成員，可閱讀聊天記錄。",
+        "joinDescription": "貼上邀請連結，查看群組後再確認加入。",
+        "inviteLink": "邀請連結",
+        "pasteLink": "貼上邀請連結…",
+        "invitedBy": "{{name}} 邀請你加入",
+        "copyLink": "複製邀請連結",
+        "copied": "已複製邀請連結",
+        "createLink": "產生邀請連結",
+        "accept": "接受並加入",
+        "previewInvite": "查看邀請",
+        "invalidInvite": "邀請無效、已使用或已過期，請取得新的邀請連結。",
+        "notAllowed": "目前帳號沒有權限，請檢查帳號或聯絡群主。",
+        "loginRequired": "請先登入目前帳號，再重試。",
+        "requestFailed": "暫時無法連線至聊天服務，請稍後重試。",
+        "copyFailed": "複製失敗，請選取連結手動複製。",
+        "createDescription": "可以選擇夥伴，也可以先建立群組，再邀請朋友加入。",
+        "settings": {
+          "name": "群組名稱",
+          "topic": "群組主題",
+          "description": "群組簡介",
+          "save": "儲存",
+          "myProfile": "我的資料",
+          "editProfile": "修改暱稱與頭像",
+          "nickname": "我在本群的暱稱",
+          "nicknameHint": "僅在本群顯示；留空使用個人暱稱。",
+          "members": "成員 · {{count}}",
+          "owner": "群主",
+          "admin": "管理員",
+          "member": "成員",
+          "guest": "訪客",
+          "companionOf": "{{name}} 的夥伴",
+          "guestAccess": "其他成員使用權限",
+          "toolsHint": "本群成員可使用夥伴現有的工具與私人資料，結果對全群可見。原有操作核准仍有效；撤回會停止進行中的請求，已執行的操作無法撤銷。",
+          "chatHint": "預設僅使用群內訊息，不讀取主人的記憶、私人資料或呼叫工具。",
+          "none": "僅主人可使用",
+          "chat": "僅群內交流",
+          "tools": "主人已授權工具與資料",
+          "ownerOnly": "只有夥伴的主人可以修改此授權。",
+          "authorizeTitle": "授權本群使用 {{name}} 的工具與資料？",
+          "makeAdmin": "設為管理員",
+          "removeAdmin": "取消管理員",
+          "transfer": "轉讓群主",
+          "transferTitle": "將群主轉讓給 {{name}}？",
+          "transferHint": "對方成為群主，你將成為管理員。夥伴也可以擔任群主。",
+          "remove": "移出群組",
+          "removeTitle": "將 {{name}} 移出群組？",
+          "removeHint": "該成員將無法繼續查看或傳送訊息；其夥伴也會退出。",
+          "addCompanion": "邀請我的夥伴",
+          "leave": "退出群組",
+          "leaveHint": "你和你帶來的夥伴將退出群組。群主需要先轉讓身分。",
+          "archive": "封存群組",
+          "archiveHint": "封存後保留聊天記錄，停止新訊息和夥伴執行。",
+          "confirm": "確認",
+          "lastOwner": "請先將群主轉讓給其他成員，再退出或移除目前的群主。",
+          "conflict": "群組設定已更新，請重新整理後再試。",
+          "replyMode": "沒有 @ 時",
+          "speakingMode": "發言方式",
+          "all": "夥伴都可接話",
+          "mentioned": "僅被 @ 時接話",
+          "auto": "同時發言",
+          "sequential": "依序發言",
+          "unarchive": "取消封存",
+          "unarchiveHint": "恢復新訊息與夥伴執行。",
+          "archived": "本群已封存，可繼續查看歷史記錄。",
+          "noneHint": "本群只有夥伴的主人可以讓夥伴回應。",
+          "companionPermissions": "夥伴權限",
+          "configureCapabilities": "工具與授權設定"
+        }
       }
     },
     "joined": {
@@ -8431,7 +8544,16 @@
       "mcp": "MCP",
       "toolset": "內建工具",
       "unavailable": "無法使用",
-      "empty": "沒有符合的能力"
+      "empty": "沒有符合的能力",
+      "accessHint": "逐項選擇夥伴可使用的內建工具、MCP 與技能。變更從下一次請求生效，也適用於已授權的群內請求。",
+      "inheritedHint": "目前跟隨本機已開啟的工具。關閉任意一項後，此清單只使用你選擇的項目。",
+      "selectedHint": "此清單中，夥伴只使用已選取的項目。",
+      "personalHint": "夥伴自己學到的技能，隨夥伴自動載入。",
+      "unavailableHint": "本機或目前執行環境暫不可用，請先設定連線或系統授權。",
+      "configure": "前往設定",
+      "empty_toolset": "目前執行環境沒有可用的內建工具。",
+      "empty_mcp": "尚未新增自訂 MCP 服務。",
+      "empty_skill": "暫無可選的技能。"
     },
     "guided": {
       "title": "建立夥伴",

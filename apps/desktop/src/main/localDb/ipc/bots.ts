@@ -7,7 +7,8 @@ import { listBotSkillsForBot } from '../../maker-ipc/botSkillService.js';
 import { provisionDefaultBot } from '../../maker-ipc/botDefaultProvisioning.js';
 import { BOT_TEMPLATE_PRESET_AVATARS, CINDY_DEFAULT_IDENTITY } from '../../../shared/botTemplatePreset.js';
 import fs from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import path from 'node:path';
+import { randomUUID, createHash } from 'node:crypto';
 
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import type { OpenDialogOptions } from 'electron';
@@ -102,7 +103,7 @@ import { BOT_DELEGATION_CLIENT_ID } from '../../../shared/botCollaboration.js';
 
 import { generateBotCreationDraft, readBotCreationDraft, generateBotCreationAvatar } from '../../maker-ipc/botCreationDraft.js';
 import { botInvitationProgress, type BotInvitationProgress } from '../../../shared/botInvitation.js';
-import { botGroupLaneRouteKey, botGroupPlanRouteKey } from '../../../shared/botGroupChat.js';
+import { botGroupLaneRouteKey, botGroupPlanRouteKey, chatGroupLaneRouteKey, type ChatLaneAccess } from '../../../shared/botGroupChat.js';
 import { queueBotInvitation as enqueueBotInvitation } from '../../maker-ipc/botInvitation.js';
 import { getMakerIfReady, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 import type { BotCapabilityUpdate } from '../../maker-ipc/botCapabilityService.js';
@@ -308,6 +309,7 @@ export async function ensureBotGroupLaneSession(input: {
   botId: string;
   groupId: string;
   title: string;
+  chatAccess?: ChatLaneAccess;
   plan?: { planId: string; workDir: string; sessionId?: string };
 }): Promise<EnsureBotGroupLaneResult> {
   const owner = captureBotOperationOwner();
@@ -315,7 +317,7 @@ export async function ensureBotGroupLaneSession(input: {
   const db = client.drizzle;
   const routeKey = input.plan
     ? botGroupPlanRouteKey(input.groupId, input.plan.planId)
-    : botGroupLaneRouteKey(input.groupId);
+    : input.chatAccess ? chatGroupLaneRouteKey(input.groupId, input.chatAccess) : botGroupLaneRouteKey(input.groupId);
   const [existing] = await db
     .select({ sessionId: botSessionLinks.sessionId })
     .from(botSessionLinks)
@@ -349,7 +351,10 @@ export async function ensureBotGroupLaneSession(input: {
   const workspaceKind = input.plan ? ('project' as const) : ('dialogue' as const);
   const workingDir = input.plan
     ? input.plan.workDir
-    : await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
+    : input.chatAccess?.mode === 'chat'
+      ? path.join(owner.userDataDir, 'chat-workspaces', createHash('sha256').update(routeKey + ':' + input.botId).digest('hex'))
+      : await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
+  if (input.chatAccess?.mode === 'chat') await fs.mkdir(workingDir, { recursive: true });
   const now = Date.now();
   const sessionId = resolveBusinessSessionId(input.plan?.sessionId);
   const row = {

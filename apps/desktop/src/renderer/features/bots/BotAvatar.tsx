@@ -138,7 +138,7 @@ export function botAvatarInitial(name: string | null | undefined): string {
 
 export interface BotAvatarProps {
   /** Bot-shaped source; only these three fields are read. */
-  bot: { deviceId?: string; name: string; avatar?: string | null; avatarColor?: string | null };
+  bot: { avatarUrl?: string | null; deviceId?: string; name: string; avatar?: string | null; avatarColor?: string | null };
   size?: BotAvatarSize;
   className?: string;
 }
@@ -146,7 +146,8 @@ export interface BotAvatarProps {
 export function BotAvatar({ bot, size = 'md', className }: BotAvatarProps) {
   const emoji = (bot.avatar ?? '').trim();
   const bundledArtwork = BUNDLED_AVATAR_BY_SENTINEL[emoji.toLowerCase()] ?? null;
-  const artwork = bundledArtwork ?? (isManagedBotAvatarUrl(emoji) ? rewriteToRemoteMediaOrigin(emoji, bot.deviceId ? { kind: 'device', deviceId: bot.deviceId } : undefined) : null);
+  const publicArtwork = bot.avatarUrl?.startsWith('https://') ? bot.avatarUrl : null;
+  const artwork = publicArtwork ?? bundledArtwork ?? (isManagedBotAvatarUrl(emoji) ? rewriteToRemoteMediaOrigin(emoji, bot.deviceId ? { kind: 'device', deviceId: bot.deviceId } : undefined) : null);
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [artwork]);
   const visibleArtwork = imageFailed ? null : artwork;
@@ -169,6 +170,7 @@ export function BotAvatar({ bot, size = 'md', className }: BotAvatarProps) {
     >
       {visibleArtwork ? (
         <img
+          referrerPolicy="no-referrer"
           src={visibleArtwork}
           alt=""
           draggable={false}
