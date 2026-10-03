@@ -22,6 +22,10 @@ import {
   type TaskMigrationView,
 } from '@cindy/device-link';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current';
+import { dialogueWorkspaceDayKey } from '../localDb/dialogueWorkspace';
+import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs';
+import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings';
+import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast';
 import { withSessionRouteLocks } from '../localDb/sessionRouteLock';
 import { getActiveTeamByLead } from '../localDb/orcaTeamStore';
@@ -230,6 +234,7 @@ function view(scope: Scope, record: MigrationRecord | null): TaskMigrationView {
 interface SourceSession {
   id: string;
   workingDir: string;
+  workspaceKind: string;
   remoteHostId: string | null;
   status: string;
   source: string;
@@ -243,7 +248,7 @@ async function assertSource(
   worker = false,
 ): Promise<SourceSession> {
   const row = await scope.db.queryOne<SourceSession>(
-    'SELECT id, working_dir AS workingDir, remote_host_id AS remoteHostId, status, source, orca_role AS orcaRole, agent_kind AS agentKind, updated_at AS updatedAt FROM sessions WHERE id = ?',
+    'SELECT id, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, status, source, orca_role AS orcaRole, agent_kind AS agentKind, updated_at AS updatedAt FROM sessions WHERE id = ?',
     [sessionId],
   );
   scope.assertCurrent();
@@ -306,6 +311,119 @@ interface WorkspaceBundle extends PortableWorkspace {
    * transcript ref they stand for, `file` the staged name in the outgoing directory.
    */
   transcripts?: Array<{ path: string; file: string; bytes: number }>;
+  /**
+   * Where a copy lands when no target project is chosen: the dialogue workspace, or a new project
+   * at the source folder's path under the home directory. Older sources omit it.
+   */
+  destination?: { kind: 'dialogue' } | { kind: 'project'; path: string[] };
+}
+function copyDestination(lead: SourceSession): NonNullable<WorkspaceBundle['destination']> {
+  if (lead.workspaceKind === 'dialogue') return { kind: 'dialogue' };
+  // A task in a worktree belongs to the project the sidebar groups it under.
+  const project = collapseWorktreeDirForGrouping(lead.workingDir);
+  const relative = path.relative(app.getPath('home'), project);
+  const segments = relative ? relative.split(path.sep) : [];
+  return {
+    kind: 'project',
+    path:
+      segments.length && segments[0] !== '..' && !path.isAbsolute(relative)
+        ? segments
+        : [path.basename(project)],
+  };
+}
+const folderName = (name: unknown): name is string =>
+  typeof name === 'string' &&
+  name.length > 0 &&
+  name.length <= 255 &&
+  name !== '.' &&
+  name !== '..' &&
+  !/[\\/\0]/.test(name) &&
+  (process.platform !== 'win32' || !/[<>:"|?*\x00-\x1f]|[. ]$/.test(name));
+interface Placement {
+  parent: string;
+  name: string;
+  project?: true;
+  /** Makes `parent` usable; rejects when this place cannot hold the copy. */
+  prepare(): Promise<unknown>;
+}
+/**
+ * Places a copy may land, in order. A chosen project or the dialogue workspace is the only place.
+ * A new project mirrors the source path under home, then tries the source folder name alone,
+ * then an app-managed folder, which is also where copies from older sources land.
+ */
+function placements(
+  scope: Scope,
+  request: { id: string; targetProject: string | null },
+  destination: WorkspaceBundle['destination'],
+): Placement[] {
+  const managedName = `cindy-${request.id.slice(0, 8)}-${randomUUID()}`;
+  if (request.targetProject)
+    return [{ parent: request.targetProject, name: managedName, prepare: async () => {} }];
+  if (destination?.kind === 'dialogue') {
+    const { directory, isCustomized } = readDialogueWorkspaceSettings();
+    const parent = path.join(directory, dialogueWorkspaceDayKey(Date.now()));
+    return [
+      {
+        parent,
+        name: request.id,
+        // A custom root is never recreated: an unmounted volume may leave a writable mount point.
+        prepare: () =>
+          fs
+            .mkdir(parent, { recursive: !isCustomized })
+            .catch(async (error: NodeJS.ErrnoException) => {
+              if (error.code !== 'EEXIST' || !(await fs.stat(parent)).isDirectory()) throw error;
+            }),
+      },
+    ];
+  }
+  const managed = path.join(scope.root, 'projects');
+  const fallback: Placement = {
+    parent: managed,
+    name: managedName,
+    prepare: () => fs.mkdir(managed, { recursive: true, mode: 0o700 }),
+  };
+  if (destination?.kind !== 'project' || !Array.isArray(destination.path)) return [fallback];
+  const segments = destination.path;
+  return [
+    ...[segments.length <= 32 ? segments : [], segments.slice(-1)]
+      .filter((candidate) => candidate.length && candidate.every(folderName))
+      .map((candidate): Placement => {
+        const parent = path.join(app.getPath('home'), ...candidate.slice(0, -1));
+        return {
+          parent,
+          name: candidate[candidate.length - 1],
+          project: true,
+          prepare: () => fs.mkdir(parent, { recursive: true }),
+        };
+      }),
+    fallback,
+  ];
+}
+/**
+ * Creates the copy folder at the first place that accepts it. `mkdir` is the reservation: an
+ * existing entry is never reused (`name`, then `name 2`…), so concurrent copies cannot share one.
+ * Any other failure, such as a parent that is a file or a name the file system rejects, moves on.
+ */
+async function createWorkingDir(places: Placement[]): Promise<{ dir: string; place: Placement }> {
+  let failure: unknown = new Error('MIGRATION_TARGET_UNKNOWN');
+  for (const place of places) {
+    try {
+      await place.prepare();
+      // Each EEXIST is another existing entry, so numbering ends within the folder's entries.
+      for (let n = 1; ; n++) {
+        const dir = path.join(place.parent, n === 1 ? place.name : `${place.name} ${n}`);
+        try {
+          await fs.mkdir(dir);
+          return { dir, place };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+      }
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw failure;
 }
 const workspaces = (workspace: WorkspaceBundle) => [
   workspace,
@@ -451,6 +569,7 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
         throw new Error('MIGRATION_SOURCE_CHANGED');
       const workspace: WorkspaceBundle = {
         ...snapshots[0],
+        destination: copyDestination(members[0]),
         ...(result.externalTranscripts?.length
           ? {
               transcripts: result.externalTranscripts.map(({ path: ref, file, bytes }) => ({
@@ -607,6 +726,8 @@ async function preflight(
 async function checkTargetResources(
   scope: Scope,
   targetProject: string | null,
+  /** Where the files land; null before the target knows (the receive step checks it again). */
+  destination: string | null,
   resources: MigrationResources,
 ) {
   if (targetProject && !(await projects(scope)).includes(targetProject))
@@ -615,10 +736,15 @@ async function checkTargetResources(
   await fs.mkdir(scope.root, { recursive: true });
   await assertDiskCapacity([
     { path: scope.root, bytes: resources.transferBytes * 2 + resources.contextBytes * 2 },
-    {
-      path: targetProject ?? scope.root,
-      bytes: resources.unpackedBytes + resources.repositoryBytes * 3 + resources.entries * 4096,
-    },
+    ...(destination
+      ? [
+          {
+            path: destination,
+            bytes:
+              resources.unpackedBytes + resources.repositoryBytes * 3 + resources.entries * 4096,
+          },
+        ]
+      : []),
     {
       path: app.getPath('temp'),
       bytes: Math.min(resources.transferBytes, FILE_PEER_MAX_BYTES) * 2,
@@ -884,43 +1010,15 @@ async function receive(
           );
           if (row?.workingDir !== worker.workingDir) throw new Error('MIGRATION_ID_CONFLICT');
         }
-        record = { ...record, stage: 'active' } as IncomingMigration;
-        scope.save(record);
-        for (const id of [record.sessionId, ...(record.workers ?? []).map((w) => w.sessionId)])
-          emitSessionCreated(id);
-        return view(scope, record);
+        return activate(scope, record);
       }
       const knownProjects = await projects(scope);
       if (request.targetProject && !knownProjects.includes(request.targetProject))
         throw new Error('MIGRATION_TARGET_UNKNOWN');
-      const parent = request.targetProject ?? path.join(scope.root, 'projects');
-      if (request.targetProject) {
-        if (!(await fs.stat(parent)).isDirectory()) throw new Error('MIGRATION_TARGET_UNKNOWN');
-      } else await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+      if (request.targetProject && !(await fs.stat(request.targetProject)).isDirectory())
+        throw new Error('MIGRATION_TARGET_UNKNOWN');
       scope.assertCurrent();
-      // Each failed attempt owns only its new directory. It never replaces a user's existing folder.
-      const workingDir = path.join(parent, `cindy-${request.id.slice(0, 8)}-${randomUUID()}`);
-      const retainedWorkingDirs = record
-        ? [
-            ...new Set([
-              ...(record.retainedWorkingDirs ?? []),
-              record.workingDir,
-              ...(record.workers ?? []).map((worker) => worker.workingDir),
-            ]),
-          ]
-        : [];
-      record = {
-        kind: 'incoming',
-        id: request.id,
-        sessionId: request.id,
-        sourceDeviceId: peer,
-        sourceSessionId: request.sourceSessionId,
-        stage: 'receiving',
-        workingDir,
-        ...(retainedWorkingDirs.length ? { retainedWorkingDirs } : {}),
-      };
-      scope.save(record);
-      await fs.mkdir(workingDir);
+      const previous = record;
       try {
         await fs.mkdir(directory, { recursive: true, mode: 0o700 });
         assertMemoryCapacity(request.files.manifest.size);
@@ -989,7 +1087,47 @@ async function receive(
           )
         )
           throw new Error('MIGRATION_INVALID_MANIFEST');
-        await checkTargetResources(scope, request.targetProject, {
+        // Each failed attempt owns only its new directory. It never replaces a user's existing folder.
+        // The record names a folder only after this copy created it, so a retry may reuse its own
+        // still-empty folder rather than leaving `name 2` behind. (A process exit between creating
+        // and recording leaves at most one empty folder.)
+        const places = placements(scope, request, workspace.destination);
+        const own = previous
+          ? places.find((place) => place.parent === path.dirname(previous.workingDir))
+          : undefined;
+        const reused =
+          own &&
+          previous &&
+          (await fs.readdir(previous.workingDir).then(
+            (entries) => entries.length === 0,
+            () => false,
+          ))
+            ? { dir: previous.workingDir, place: own }
+            : null;
+        const { dir: workingDir, place } = reused ?? (await createWorkingDir(places));
+        scope.assertCurrent();
+        const retainedWorkingDirs = previous
+          ? [
+              ...new Set([
+                ...(previous.retainedWorkingDirs ?? []),
+                previous.workingDir,
+                ...(previous.workers ?? []).map((worker) => worker.workingDir),
+              ]),
+            ].filter((dir) => dir !== workingDir)
+          : [];
+        record = {
+          kind: 'incoming',
+          id: request.id,
+          sessionId: request.id,
+          sourceDeviceId: peer,
+          sourceSessionId: request.sourceSessionId,
+          stage: 'receiving',
+          workingDir,
+          ...(place.project ? { newProject: true } : {}),
+          ...(retainedWorkingDirs.length ? { retainedWorkingDirs } : {}),
+        };
+        scope.save(record);
+        await checkTargetResources(scope, request.targetProject, path.dirname(workingDir), {
           ...(transcriptFiles.length
             ? { transcriptBytes: transcriptFiles.reduce((sum, file) => sum + file.size, 0) }
             : {}),
@@ -1010,16 +1148,19 @@ async function receive(
           ),
         });
         const targetDirs = [workingDir];
+        // Worker folders stay app-managed unless the user chose a project for the copy.
+        const workerParent = request.targetProject ?? path.join(scope.root, 'projects');
+        if (snapshots.length > 1) await fs.mkdir(workerParent, { recursive: true, mode: 0o700 });
         for (let index = 1; index < snapshots.length; index++) {
-          const target = path.join(parent, `cindy-${request.id.slice(0, 8)}-${randomUUID()}`);
+          const dir = path.join(workerParent, `cindy-${request.id.slice(0, 8)}-${randomUUID()}`);
           // Persist intent before allocation: even a process exit cannot orphan a directory.
           record = {
             ...record,
-            retainedWorkingDirs: [...(record.retainedWorkingDirs ?? []), target],
+            retainedWorkingDirs: [...(record.retainedWorkingDirs ?? []), dir],
           };
           scope.save(record);
-          await fs.mkdir(target);
-          targetDirs.push(target);
+          await fs.mkdir(dir);
+          targetDirs.push(dir);
         }
         record = {
           ...record,
@@ -1126,13 +1267,21 @@ async function receive(
         await fs.rm(directory, { recursive: true, force: true });
       }
       scope.assertCurrent();
-      record = { ...record, stage: 'active' } as IncomingMigration;
-      scope.save(record);
-      for (const id of [record.sessionId, ...(record.workers ?? []).map((w) => w.sessionId)])
-        emitSessionCreated(id);
-      return view(scope, record);
+      return activate(scope, record);
     },
   );
+}
+/** Publishes an imported copy, including one adopted after its acknowledgement was lost. */
+async function activate(scope: Scope, record: IncomingMigration) {
+  // A new project joins the recent projects, like a task started in a chosen folder.
+  if (record.newProject)
+    await upsertRecentWorkdir(record.workingDir, Date.now(), undefined, scope.db);
+  scope.assertCurrent();
+  const active: IncomingMigration = { ...record, stage: 'active' };
+  scope.save(active);
+  for (const id of [active.sessionId, ...(active.workers ?? []).map((w) => w.sessionId)])
+    emitSessionCreated(id);
+  return view(scope, active);
 }
 
 export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationView> {
@@ -1182,9 +1331,13 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
     return { ...view(scope, null), estimate };
   }
   if (request.action === 'preflight') {
-    await checkTargetResources(scope, request.targetProject, request.resources).catch(
-      logTargetFailure('preflight', null),
-    );
+    await checkTargetResources(
+      scope,
+      request.targetProject,
+      // Without a chosen project the landing folder depends on the task the manifest describes.
+      request.targetProject,
+      request.resources,
+    ).catch(logTargetFailure('preflight', null));
     return view(scope, null);
   }
   if (request.action === 'caps') {

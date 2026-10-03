@@ -117,6 +117,8 @@ import {
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { remoteInvoke } from '../device-link/index.js';
+import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
+import { createHistoryRemoteDeps } from '../mcp-integrations/historyDevices.js';
 import { WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
 import {
@@ -183,7 +185,7 @@ import {
   resolveModelDefaultContextWindow,
 } from './catalog-to-descriptors.js';
 import { readModelContextLimit } from './model-context-limit-store.js';
-import { resolveDesktopModelContextProviderId } from './model-context-settings.js';
+import { resolveDesktopModelContextProviderId, resolveDesktopModelEfforts } from './model-context-settings.js';
 import {
   prepareCodexCustomContextCatalog,
 } from './codex-custom-context-catalog.js';
@@ -964,6 +966,18 @@ export function getMaker(): Maker {
       lspPool: getLspPool(),
       pluginRegistry,
       invokeRemote: remoteInvoke,
+      historyRemote: createHistoryRemoteDeps({
+        listDevices: () => handleListDevices(deviceDirectoryDeps()),
+        invoke: remoteInvoke,
+        captureAccess: () => {
+          const owner = captureDataOwnerBroadcastScope();
+          const assertCurrent = () => {
+            if (!isDataOwnerBroadcastScopeCurrent(owner)) throw new Error('History owner changed');
+          };
+          assertCurrent();
+          return assertCurrent;
+        },
+      }),
       isCurrentLocalSessionInstance: (
         sessionId: string,
         sessionInstanceId: string | undefined,
@@ -1261,6 +1275,8 @@ export function getMaker(): Maker {
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'claude-code',
           resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId), modelId),
+      resolveModelEfforts: (providerId, modelId) =>
+        resolveDesktopModelEfforts(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId),
       // SDK PreToolUse / PostToolUse 等 in-process hook 注入点。host 自己定义 hook
       // 实现 (./claude-hooks/*.ts), maker-core 不感知具体逻辑。
       //

@@ -582,3 +582,42 @@ it('ignores clicks outside and only closes through Cancel or Escape', async () =
   fireEvent.keyDown(dialog, { key: 'Escape' });
   await waitFor(() => expect(state.dismiss).toHaveBeenCalledOnce());
 });
+// The dialog paints the confirmation surface; the default Button palette has almost
+// no contrast on it, so every footer action must use the confirmation palette.
+it.each([
+  ['confirming', undefined, ['taskMigration.start'], ['taskMigration.cancel']],
+  [
+    'copying',
+    { stage: 'transferring', running: true, cancellable: true },
+    [],
+    ['taskMigration.cancelCopy', 'taskMigration.runInBackground'],
+  ],
+  [
+    'complete',
+    { stage: 'complete', running: false, targetDeviceId: 'B', targetSessionId: 'migrated' },
+    ['taskMigration.openTarget'],
+    ['taskMigration.close'],
+  ],
+])(
+  'paints %s footer actions with the confirmation palette',
+  async (_stage, status, primary, secondary) => {
+    if (status)
+      state.request.mockImplementation(
+        async (device: string | null, command: { action: string }) =>
+          command.action === 'status'
+            ? status
+            : { supported: true, deviceId: device ?? 'local', projects: [] },
+      );
+    mount();
+    for (const name of primary) {
+      const button = await screen.findByRole('button', { name });
+      expect(button.className).toContain('[--button-face-bg:var(--confirm-btn-primary-bg)]');
+    }
+    for (const name of secondary) {
+      const button = await screen.findByRole('button', { name });
+      expect(button.className).toContain(
+        '[--button-face-border:var(--confirm-btn-secondary-border)]',
+      );
+    }
+  },
+);

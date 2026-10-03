@@ -70,15 +70,15 @@ describe('mobile message list container', () => {
     expect(source).not.toContain('visibleMessageKeys');
     expect(source).toContain("const MESSAGE_LIST_VIEWABILITY_CONFIG_ID = 'message-heavy-content';");
     expect(source).toContain('id: MESSAGE_LIST_VIEWABILITY_CONFIG_ID');
-    expect(source).toContain('useViewability<MobileMessageRenderItem>(');
-    expect(source).toContain('MESSAGE_LIST_VIEWABILITY_CONFIG_ID,');
-    expect(source).toContain('const [isViewable, setIsViewable] = useRecyclingState(false);');
-    expect(source).toContain('if (token.key !== itemKeyRef.current) return;');
+    expect(source).toContain('useMessageListItemVisible(item.key)');
+    expect(source).toContain('useMemo(() => new MessageListVisibility(), [scrollResetKey])');
+    expect(source).toContain('messageListVisibility.update(info.viewableItems)');
     expect(source).toContain('maxTextRunInlineFragments: ANDROID_SELECTABLE_TEXT_RUN_MAX_INLINE_FRAGMENTS');
     expect(listSource).not.toContain('onFirstVisibleItemChanged');
     // Companion receipts observe visible rows through a ref, without broadcasting cell visibility.
-    // Ordinary tasks retain cell-local viewability and have no list-level receipt observer.
-    expect(listSource).toContain('onViewableItemsChanged={companion ? handleCompanionViewableItems : undefined}');
+    // Both modes publish visibility, but only companion chats acknowledge read receipts.
+    expect(listSource).toContain('onViewableItemsChanged={handleViewableItemsChanged}');
+    expect(source).toContain('if (companion) handleCompanionViewableItems(info)');
     // 上滑加载:LegendList 近顶阈值触发自动预取(替代手搓的滚动 metric 判定)。
     expect(listSource).toContain('onStartReached={handleStartReached}');
     // 自动预取必须是电平判定(shouldAutoLoadEarlier + 多时机重评估),不许退回只吃 onStartReached

@@ -45,9 +45,11 @@ describe('dynamic wallpaper lifecycle', () => {
     expect(ensureVideo).not.toHaveBeenCalled();
   });
   it('shows only decoded frames, pauses with the shared hidden gate, and releases on static', async () => {
+    vi.useFakeTimers();
     state.cdn = false;
     const { rerender } = render(<WallpaperVideo wallpaperId="cindy-window" motion="dynamic" />);
     const video = document.querySelector('video')!;
+    video.parentElement!.style.transitionDuration = '200ms';
     expect(video.muted && video.loop).toBe(true);
     expect(document.documentElement.dataset.wallpaperMotion).toBeUndefined();
     fireEvent.playing(video);
@@ -57,7 +59,12 @@ describe('dynamic wallpaper lifecycle', () => {
     await act(async () => document.documentElement.removeAttribute(HIDDEN_ANIMATION_ATTR));
     expect(video.play).toHaveBeenCalledTimes(2);
     rerender(<WallpaperVideo wallpaperId="cindy-window" motion="static" />);
-    await waitFor(() => expect(document.querySelector('video')).toBeNull());
+    expect(document.querySelector('video')).toBe(video);
+    expect(video.getAttribute('src')).not.toBeNull();
+    // DOM removal precedes passive decoder cleanup. Flush the exit timer and
+    // React effects together instead of racing waitFor's DOM-only observation.
+    await act(async () => { vi.advanceTimersByTime(200); });
+    expect(document.querySelector('video')).toBeNull();
     expect(video.getAttribute('src')).toBeNull();
     expect(video.load).toHaveBeenCalled();
     expect(document.documentElement.dataset.wallpaperMotion).toBeUndefined();

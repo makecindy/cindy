@@ -1,12 +1,24 @@
 import {
   isDesktopInput,
+  isRemoteDesktopChannelId,
   parseDesktopIceCandidates,
+  parseRemoteDesktopChannelRequest,
+  REMOTE_DESKTOP_CHANNEL_MAX_BYTES,
   REMOTE_DESKTOP_ICE_SERVERS,
   REMOTE_DESKTOP_NETWORK,
   type RemoteDesktopIceCandidate,
   type DesktopInput,
   type RemoteDesktopCursor,
+  type RemoteDesktopChannelReply,
+  type RemoteDesktopChannelRequestMessage,
 } from '@cindy/device-link';
+
+/** The id of a well-formed channel request envelope, whatever its payload. */
+function channelRequestId(message: unknown): string | null {
+  if (!message || typeof message !== 'object') return null;
+  const value = message as { type?: unknown; id?: unknown };
+  return value.type === 'request' && isRemoteDesktopChannelId(value.id) ? value.id : null;
+}
 import { DESKTOP_AUDIO_RETRY_MS, type DesktopCaptureApi } from '../../../shared/remoteDesktop';
 import {
   desktopVideoFramerate,
@@ -374,6 +386,7 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
             }, 50);
           }
           let pending = 0;
+          let requests = 0;
           let challenge = '';
           heartbeat = setInterval(() => {
             // Keep one outstanding challenge until its reply arrives. The host
@@ -389,14 +402,67 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
               void api.viewHeartbeat(lease).catch(() => {});
               return;
             }
-            if (typeof data !== 'string' || data.length > 32_768 || pending >= 8) {
+            if (typeof data !== 'string' || data.length > 32_768) {
               stop();
               void api.stop().catch(() => {});
               return;
             }
             try {
               const message = JSON.parse(data) as { sequence: number; events: DesktopInput[] };
+              // Control requests share the channel so they keep their order with input.
+              const id = channelRequestId(message);
+              if (id) {
+                const send = (reply: RemoteDesktopChannelReply) => {
+                  if (current !== generation || channel.readyState !== 'open') return;
+                  let data = JSON.stringify(reply);
+                  if (data.length > REMOTE_DESKTOP_CHANNEL_MAX_BYTES)
+                    data = JSON.stringify({
+                      type: 'reply',
+                      id,
+                      ok: false,
+                      error: 'DESKTOP_REPLY_TOO_LARGE',
+                    } satisfies RemoteDesktopChannelReply);
+                  channel.send(data);
+                };
+                let request: RemoteDesktopChannelRequestMessage | null = null;
+                try {
+                  request = parseRemoteDesktopChannelRequest(message);
+                } catch {}
+                // A newer viewer may move more operations here; refusing one
+                // lets it fall back to the relay instead of losing the session.
+                if (!request || !api.request) {
+                  send({ type: 'reply', id, ok: false, error: 'DESKTOP_CHANNEL_UNSUPPORTED' });
+                  return;
+                }
+                // Requests have their own bound so they never end the input session.
+                if (requests >= 8) {
+                  send({ type: 'reply', id, ok: false, error: 'DESKTOP_CHANNEL_BUSY' });
+                  return;
+                }
+                requests++;
+                void api
+                  .request(lease, request.request)
+                  .then(
+                    (result): RemoteDesktopChannelReply =>
+                      result.ok
+                        ? { type: 'reply', id: request.id, ok: true, result: result.result }
+                        : { type: 'reply', id: request.id, ok: false, error: result.error },
+                    (): RemoteDesktopChannelReply => ({
+                      type: 'reply',
+                      id: request.id,
+                      ok: false,
+                      error: 'DESKTOP_REQUEST_FAILED',
+                    }),
+                  )
+                  .then(send)
+                  .finally(() => {
+                    requests--;
+                  });
+                return;
+              }
+              // Only input batches count toward the input overflow bound.
               if (
+                pending >= 8 ||
                 !Number.isSafeInteger(message.sequence) ||
                 !Array.isArray(message.events) ||
                 message.events.length > 64 ||

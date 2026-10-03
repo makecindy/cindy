@@ -50,6 +50,7 @@ import {
   registerUnarchiveSessionsTool,
   registerSendToSessionTool,
   registerListWorkdirsTool,
+  registerHistoryDevicesTool,
   registerListSessionsTool,
   registerListSessionQueueTool,
   registerUpdateSessionQueuedMessageTool,
@@ -905,6 +906,7 @@ export function createXdtHelperMcpServer(
       history: deps.history,
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
     };
+    registerHistoryDevicesTool(registry, historyDeps);
     registerListWorkdirsTool(registry, historyDeps);
     registerListSessionsTool(registry, {
       ...historyDeps,

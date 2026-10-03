@@ -1,4 +1,7 @@
 import { PluginCardActions } from '@/plugins/PluginCardActions';
+import { RichContentContext } from './richContentContext';
+import { RichContentRuntime } from './richContentRuntime';
+import { MessageListVisibility, MessageListVisibilityContext, useMessageListItemVisible } from './messageListVisibility';
 import { CompanionLearningFooter } from './CompanionLearningFooter';
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
 import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
@@ -80,11 +83,9 @@ import { UITextView } from 'react-native-uitextview';
 import {
   LegendList,
   useRecyclingState,
-  useViewability,
   type LegendListMetrics,
   type OnViewableItemsChangedInfo,
   type LegendListRef,
-  type ViewToken as LegendListViewToken,
 } from '@legendapp/list/react-native';
 import { tokenizeCode, type CodeTokenKind } from '@/session/codeHighlight';
 import { buildComposerTouchLayout } from '@/session/composerTouchLayout';
@@ -809,6 +810,12 @@ export function MessageRenderer({
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const historyActive = useMessageHistoryActive();
+  const { accountGeneration } = useAuth();
+  const richContent = useMemo(() => Platform.OS === 'android' ? new RichContentRuntime() : null,
+    [scrollResetKey, remoteDeviceId, accountGeneration]);
+  useEffect(() => () => richContent?.clear(), [richContent]);
+  // Match LegendList's key: a new list must never inherit old visibility.
+  const messageListVisibility = useMemo(() => new MessageListVisibility(), [scrollResetKey]);
   const historyPositioning = useMessageHistoryPositioning();
   const historyPositioningRef = useRef(historyPositioning);
   historyPositioningRef.current = historyPositioning;
@@ -1035,6 +1042,10 @@ export function MessageRenderer({
     visibleCompanionReplyKeysRef.current = new Set(viewableItems.filter(item => item.isViewable).map(item => item.key));
     acknowledgeCompanionReadRef.current();
   }, []);
+  const handleViewableItemsChanged = useCallback((info: OnViewableItemsChangedInfo<MobileMessageRenderItem>) => {
+    messageListVisibility.update(info.viewableItems);
+    if (companion) handleCompanionViewableItems(info);
+  }, [messageListVisibility, companion, handleCompanionViewableItems]);
   useEffect(() => {
     if (!companion || !onCompanionReadThrough) return;
     const frame = requestAnimationFrame(acknowledgeCompanionRead);
@@ -2160,6 +2171,7 @@ export function MessageRenderer({
     event: NativeSyntheticEvent<NativeScrollEvent>,
     isFinalDragSample = false,
   ) => {
+    richContent?.onScroll();
     if (!historyPositioningRef.current) return;
     // Cancellation releases ownership immediately. Only endDrag may still consume its final
     // sample; an ordinary layout/MVCP scroll cannot use the retained origin as user intent.
@@ -2281,6 +2293,7 @@ export function MessageRenderer({
     bottomOverlayHeight,
     handoffHistoryPrependToUser,
     scheduleStickyShareCheck,
+    richContent,
   ]);
 
   const handleHistoryTouchStart = useCallback((event: GestureResponderEvent) => {
@@ -2345,6 +2358,7 @@ export function MessageRenderer({
   // 程序化 scrollToEnd 不会触发,故不会误置);同时记录拖动起点 offset,供
   // shouldUnpinMobileFollowOnDrag 判「相对起点累计上移」。
   const handleScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    richContent?.onScroll();
     reopeningAnchorRef.current = null;
     const nativeMetrics = {
       contentHeight: event.nativeEvent.contentSize.height,
@@ -2365,7 +2379,7 @@ export function MessageRenderer({
     // 翻完 refs 立即补一次电平评估:列表已顶死时(Android 无 bounce 尤甚)这次拖动不产生
     // offset 变化,不会有 onScroll / onStartReached,ref 写入也不驱动 effect——没有这一刀,
     // 「失败后停在顶部再拖一下重试」的信号会整体丢失(review P2)。
-  }, [attemptAutoLoadEarlier, clearProgrammaticScroll, handoffHistoryPrependToUser]);
+  }, [attemptAutoLoadEarlier, clearProgrammaticScroll, handoffHistoryPrependToUser, richContent]);
 
   // 原生 endDrag 自带最终位置，不依赖最后一帧 onScroll 的投递顺序。
   // 先结算本次拖动再清理起点，避免把后续 MVCP 布局校正误判成用户上翻。
@@ -2705,6 +2719,8 @@ export function MessageRenderer({
     // chat-text-quote:Provider 恒挂载(值可为 null),避免启用态翻转时整棵消息树
     // 因 Provider 增删而重挂;value 稳定(useMemo),不触发订阅方重渲。
     <SelectionQuoteContext.Provider value={selectionQuoteContextValue}>
+    <RichContentContext.Provider value={richContent}>
+    <MessageListVisibilityContext.Provider value={messageListVisibility}>
     <MarkdownRemoteMediaContext.Provider value={onResolveRemoteMedia}>
     <View
       style={styles.messageFrame}
@@ -2777,7 +2793,7 @@ export function MessageRenderer({
         style={styles.messageList}
         testID={testID ?? 'message.list'}
         viewabilityConfig={viewabilityConfigRef.current}
-        onViewableItemsChanged={companion ? handleCompanionViewableItems : undefined}
+        onViewableItemsChanged={handleViewableItemsChanged}
       />
       </Animated.View>
       {shareSelectionActive && stickyShareClientId ? (
@@ -2834,6 +2850,8 @@ export function MessageRenderer({
       )}
     </View>
     </MarkdownRemoteMediaContext.Provider>
+    </MessageListVisibilityContext.Provider>
+    </RichContentContext.Provider>
     </SelectionQuoteContext.Provider>
   );
 }
@@ -3001,17 +3019,7 @@ const RenderListItemView = memo(function RenderListItemView({
   actions: MessageActions & { firstUserMessageClientId?: string };
   focused: boolean;
 }) {
-  const [isViewable, setIsViewable] = useRecyclingState(false);
-  const itemKeyRef = useRef(item.key);
-  itemKeyRef.current = item.key;
-  const handleViewabilityChange = useCallback((token: LegendListViewToken<MobileMessageRenderItem>) => {
-    if (token.key !== itemKeyRef.current) return;
-    setIsViewable((previous) => previous === token.isViewable ? previous : token.isViewable);
-  }, [setIsViewable]);
-  useViewability<MobileMessageRenderItem>(
-    handleViewabilityChange,
-    MESSAGE_LIST_VIEWABILITY_CONFIG_ID,
-  );
+  const isViewable = useMessageListItemVisible(item.key);
   const heavyContentVisible = focused || isViewable;
   return (
     <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible}>
@@ -5283,6 +5291,7 @@ const ViewabilityGatedMermaidDiagram = memo(function ViewabilityGatedMermaidDiag
   return (
     <MermaidDiagramWebView
       active={heavyContentVisible}
+      cachePreview
       source={source}
       testID={testID}
     />

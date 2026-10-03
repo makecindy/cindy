@@ -161,6 +161,12 @@ export interface RemoteDesktopCapabilities {
   /** Can temporarily lay out the desktop at the viewer's requested dimensions. */
   viewerDisplay?: boolean;
   viewerDisplayRestore?: boolean;
+  /**
+   * Small control requests may also arrive over the media peer's `input-v1`
+   * data channel (see {@link isRemoteDesktopChannelRequest}). Viewers must not
+   * send them otherwise: older hosts end the session on unknown channel data.
+   */
+  channelRequests?: boolean;
   backgroundViewing?: boolean;
   cursorOverlay?: boolean;
   clipboardText?: boolean;
@@ -443,4 +449,87 @@ export function parseRemoteDesktopRequest(
     };
   }
   throw new Error("INVALID_REQUEST");
+}
+
+/**
+ * Control requests the viewer may send over the media data channel instead of
+ * the device-link relay. They are small, lease-scoped and keep their ordering
+ * with input. Lease setup, signalling, frames, credentials, display changes
+ * (which restart the channel) and large listings stay on the relay.
+ */
+export const REMOTE_DESKTOP_CHANNEL_OPS: ReadonlySet<string> = new Set([
+  "control",
+  "presentation",
+  "hostMute",
+  "privacyScreen",
+  "windowAction",
+  "displayModes",
+  "clipboardSync",
+  "clipboardVersion",
+]);
+export const REMOTE_DESKTOP_CHANNEL_MAX_ID_CHARS = 64;
+/** Fits one SCTP message on every shipped receiver. */
+export const REMOTE_DESKTOP_CHANNEL_MAX_BYTES = 32_768;
+export const REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS = 8_000;
+
+export function isRemoteDesktopChannelRequest(
+  request: RemoteDesktopRequest,
+): boolean {
+  return (
+    REMOTE_DESKTOP_CHANNEL_OPS.has(request.op) &&
+    !(request.op === "windowAction" && request.action === "list")
+  );
+}
+
+/** Viewer to host, over `input-v1`. */
+export interface RemoteDesktopChannelRequestMessage {
+  type: "request";
+  id: string;
+  request: RemoteDesktopRequest;
+}
+/** Host to viewer, over `input-v1`. `error` is a stable code. */
+export type RemoteDesktopChannelReply =
+  | { type: "reply"; id: string; ok: true; result: unknown }
+  | { type: "reply"; id: string; ok: false; error: string };
+
+export function isRemoteDesktopChannelId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= REMOTE_DESKTOP_CHANNEL_MAX_ID_CHARS &&
+    /^[A-Za-z0-9_-]+$/.test(value)
+  );
+}
+
+/** Parses an incoming channel request; null when it is not one. */
+export function parseRemoteDesktopChannelRequest(
+  value: unknown,
+): RemoteDesktopChannelRequestMessage | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (v.type !== "request" || !isRemoteDesktopChannelId(v.id)) return null;
+  const request = parseRemoteDesktopRequest(v.request);
+  if (!isRemoteDesktopChannelRequest(request))
+    throw new Error("INVALID_REQUEST");
+  return { type: "request", id: v.id, request };
+}
+
+/** Parses a channel reply; null when it is not one. */
+export function parseRemoteDesktopChannelReply(
+  value: unknown,
+): RemoteDesktopChannelReply | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (v.type !== "reply" || !isRemoteDesktopChannelId(v.id)) return null;
+  if (v.ok === true)
+    return { type: "reply", id: v.id, ok: true, result: v.result };
+  return {
+    type: "reply",
+    id: v.id,
+    ok: false,
+    error:
+      typeof v.error === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(v.error)
+        ? v.error
+        : "DESKTOP_REQUEST_FAILED",
+  };
 }

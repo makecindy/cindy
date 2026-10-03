@@ -86,7 +86,12 @@ function setup() {
   let command!: (value: any) => void;
   const reply = vi.fn(async () => {});
   const api = {
+    request: vi.fn(async (_lease: string, _request: unknown): Promise<any> => ({
+      ok: true,
+      result: { ok: true },
+    })),
     stop: vi.fn(async () => {}),
+    input: vi.fn(async (_lease: string, _sequence: number, _events: unknown[]) => {}),
     nativeAudio: vi.fn(async () => new Uint8Array(0)),
     onCommand: (callback: typeof command) => {
       command = callback;
@@ -442,4 +447,100 @@ it('keeps retrying locally after replaceTrack rejects without dropping the video
   await vi.advanceTimersByTimeAsync(DESKTOP_AUDIO_RETRY_MS[1]);
   expect(h.peers[0].audio.sender.replaceTrack).toHaveBeenLastCalledWith(recovered.sound);
   expect(h.peers[0].close).not.toHaveBeenCalled();
+});
+
+it('answers control requests on the input channel without risking the session', async () => {
+  const h = setup();
+  h.offer(false);
+  await flush();
+  const [peer] = h.peers as any[];
+  const channel: any = {
+    label: 'input-v1',
+    readyState: 'open',
+    bufferedAmount: 0,
+    send: vi.fn(),
+    close: vi.fn(),
+  };
+  peer.ondatachannel({ channel });
+  const replies = () =>
+    channel.send.mock.calls
+      .map(([data]: [string]) => JSON.parse(data))
+      .filter((message: any) => message.type === 'reply');
+  const ask = async (id: string, request: unknown) => {
+    channel.onmessage({ data: JSON.stringify({ type: 'request', id, request }) });
+    await flush();
+  };
+  await ask('mute', { op: 'hostMute', lease: 'lease', enabled: true });
+  expect(h.api.request).toHaveBeenCalledWith('lease', {
+    op: 'hostMute',
+    lease: 'lease',
+    enabled: true,
+  });
+  expect(replies().at(-1)).toEqual({ type: 'reply', id: 'mute', ok: true, result: { ok: true } });
+  h.api.request.mockResolvedValueOnce({ ok: false, error: 'DESKTOP_VIEW_ONLY' });
+  await ask('control', { op: 'control', lease: 'lease', enabled: true });
+  expect(replies().at(-1)).toEqual({
+    type: 'reply',
+    id: 'control',
+    ok: false,
+    error: 'DESKTOP_VIEW_ONLY',
+  });
+  // Operations outside the channel set are refused, not fatal: the viewer
+  // falls back to the relay and the session continues.
+  h.api.request.mockClear();
+  await ask('start', { op: 'start', displayId: '1' });
+  await ask('list', { op: 'windowAction', lease: 'lease', action: 'list' });
+  expect(h.api.request).not.toHaveBeenCalled();
+  expect(
+    replies()
+      .slice(-2)
+      .map((reply: any) => reply.error),
+  ).toEqual(['DESKTOP_CHANNEL_UNSUPPORTED', 'DESKTOP_CHANNEL_UNSUPPORTED']);
+  // A result too large for one channel message is reported, never truncated.
+  h.api.request.mockResolvedValueOnce({ ok: true, result: 'x'.repeat(40_000) });
+  await ask('modes', { op: 'displayModes', lease: 'lease' });
+  expect(replies().at(-1)).toMatchObject({ id: 'modes', error: 'DESKTOP_REPLY_TOO_LARGE' });
+  // Requests have their own bound; overflow is refused, not a session stop.
+  h.api.request.mockImplementation(() => new Promise(() => {}));
+  for (let i = 0; i < 9; i++) await ask(`slow-${i}`, { op: 'clipboardVersion', lease: 'lease' });
+  expect(replies().at(-1)).toMatchObject({ id: 'slow-8', error: 'DESKTOP_CHANNEL_BUSY' });
+  expect(h.api.stop).not.toHaveBeenCalled();
+  expect(peer.close).not.toHaveBeenCalled();
+  expect(channel.close).not.toHaveBeenCalled();
+});
+
+it('answers control requests while input batches fill their own bound', async () => {
+  const h = setup();
+  h.offer(false);
+  await flush();
+  const [peer] = h.peers as any[];
+  const channel: any = {
+    label: 'input-v1',
+    readyState: 'open',
+    bufferedAmount: 0,
+    send: vi.fn(),
+    close: vi.fn(),
+  };
+  peer.ondatachannel({ channel });
+  h.api.input.mockImplementation(() => new Promise(() => {}));
+  const batch = (sequence: number) =>
+    channel.onmessage({ data: JSON.stringify({ sequence, events: [] }) });
+  for (let sequence = 1; sequence <= 8; sequence++) batch(sequence);
+  channel.onmessage({
+    data: JSON.stringify({
+      type: 'request',
+      id: 'mute',
+      request: { op: 'hostMute', lease: 'lease', enabled: true },
+    }),
+  });
+  await flush();
+  expect(JSON.parse(channel.send.mock.calls.at(-1)[0])).toEqual({
+    type: 'reply',
+    id: 'mute',
+    ok: true,
+    result: { ok: true },
+  });
+  expect(h.api.stop).not.toHaveBeenCalled();
+  batch(9);
+  expect(h.api.stop).toHaveBeenCalled();
 });

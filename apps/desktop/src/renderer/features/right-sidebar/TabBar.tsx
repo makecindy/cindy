@@ -483,12 +483,6 @@ export function TabStrip({
         <DropdownMenuContent
           align="start"
           sideOffset={2}
-          className={cn(
-            'rounded-xl p-0.5 overflow-hidden',
-            'bg-[var(--cmd-palette-bg)]',
-            'border border-[var(--cmd-palette-border)]',
-            'shadow-[var(--shadow-menu)]',
-          )}
         >
           {contextMenu && (
             <>
@@ -498,7 +492,6 @@ export function TabStrip({
                   closeContextMenu();
                   onClose(id);
                 }}
-                className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
               >
                 {t('rightSidebar.tabs.contextMenu.close')}
               </DropdownMenuItem>
@@ -510,7 +503,6 @@ export function TabStrip({
                   closeContextMenu();
                   onCloseOthers?.(id);
                 }}
-                className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)] data-[disabled]:opacity-50"
               >
                 {t('rightSidebar.tabs.contextMenu.closeOthers')}
               </DropdownMenuItem>
@@ -519,7 +511,6 @@ export function TabStrip({
                   closeContextMenu();
                   onCloseAll?.();
                 }}
-                className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
               >
                 {t('rightSidebar.tabs.contextMenu.closeAll')}
               </DropdownMenuItem>

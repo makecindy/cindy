@@ -218,8 +218,13 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       </div>
 
       {/* Description */}
+      {autoReviewUnavailable && permission.sourceDescription && (
+        <p className="mt-1.5 whitespace-pre-wrap break-words text-13 font-normal text-[var(--status-bar-meta)]">
+          {permission.sourceDescription}
+        </p>
+      )}
       {promptDescription && (
-        <p className="mt-1.5 text-13 font-normal leading-tight text-[var(--status-bar-meta)]">
+        <p className="mt-1.5 whitespace-pre-wrap break-words text-13 font-normal leading-tight text-[var(--status-bar-meta)]">
           {promptDescription}
         </p>
       )}

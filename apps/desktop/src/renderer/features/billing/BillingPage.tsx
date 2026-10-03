@@ -1429,12 +1429,11 @@ function SubscriptionOverviewCard({
               <DropdownMenuContent
                 align="end"
                 sideOffset={8}
-                className="w-[var(--radix-dropdown-menu-trigger-width)] rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-[var(--text-primary)] shadow-none"
+                className="w-[var(--radix-dropdown-menu-trigger-width)] p-1.5"
               >
                 <DropdownMenuItem
                   onSelect={showPlanChangeEntry ? onChangePlan : onPurchase}
                   disabled={actionDisabled}
-                  className="h-9 rounded-lg px-3 text-12 focus:bg-[var(--surface-hover)] focus:text-[var(--text-primary)]"
                 >
                   {showPlanChangeEntry
                     ? t('billing.settings.subscriptionCard.changeAction')
@@ -1444,7 +1443,7 @@ function SubscriptionOverviewCard({
                   <DropdownMenuItem
                     onSelect={onOpenPortal}
                     disabled={actionDisabled}
-                    className="h-9 gap-2 rounded-lg px-3 text-12 focus:bg-[var(--surface-hover)] focus:text-[var(--text-primary)]"
+                    className="gap-2"
                   >
                     <ExternalLink size={14} aria-hidden="true" />
                     {t('billing.settings.subscriptionCard.portalAction')}
@@ -1453,11 +1452,11 @@ function SubscriptionOverviewCard({
                 {!facts.cancelAtPeriodEnd &&
                   SUBSCRIPTION_CANCELLABLE_STATUSES.includes(facts.status) && (
                     <>
-                      <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
+                      <DropdownMenuSeparator />
                       <DropdownMenuItem
                         onSelect={onCancelSubscription}
                         disabled={actionDisabled}
-                        className="h-9 rounded-lg px-3 text-12 text-[var(--error-fg)] focus:bg-[var(--error-bg)] focus:text-[var(--error-fg)]"
+                        variant="danger"
                       >
                         {canceling ? (
                           <Spinner size={13} />
@@ -1469,11 +1468,10 @@ function SubscriptionOverviewCard({
                   )}
                 {facts.cancelAtPeriodEnd && facts.resumable && (
                   <>
-                    <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
+                    <DropdownMenuSeparator />
                     <DropdownMenuItem
                       onSelect={onResumeSubscription}
                       disabled={actionDisabled}
-                      className="h-9 rounded-lg px-3 text-12 focus:bg-[var(--surface-hover)] focus:text-[var(--text-primary)]"
                     >
                       {resuming ? (
                         <Spinner size={13} />

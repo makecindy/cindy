@@ -708,6 +708,7 @@ export interface AgentStatus {
 
 /** F-PERM-2: Pending permission request data stored per-session. */
 export interface PendingPermission {
+  sourceDescription?: string;
   requestId: string;
   toolName: string;
   input: Record<string, unknown>;
@@ -2576,7 +2577,7 @@ export interface SessionChatState {
    * 会话在窗口真正完整后不再每次搜索都白打一轮 around + list。
    *
    * 只由**把窗口清空、从最新重新拉起**的路径清回空:reloadMessages(rewind / origin
-   * 漂移重载)、clearSessionAfterGuard(/clear)、_demoteIdleSessions(空闲降级)、
+   * 漂移重载)、clearSessionAfterGuard(/clear)、_softEvictIdleSessions(超预算软淘汰)、
    * _purgeSession(整条移除,重建后回到默认空)。
    *
    * 反过来,这几处**刻意不清**(都在 #676 review 里逐条确认过):
@@ -3570,7 +3571,7 @@ function _evictLruIfNeeded(): void {
   while (sessions.size > MAX_CACHED_SESSIONS) {
     const candidate = _accessOrder.find((id) => {
       const s = sessions.get(id);
-      // 与 _trimMessagesIfNeeded / _demoteIdleSessions 对齐:绝不回收仍被 mounted view
+      // 与 _trimMessagesIfNeeded / _softEvictIdleSessions 对齐:绝不回收仍被 mounted view
       // 看着的 session(多窗/分屏副屏钉的 idle 会话),否则 _purgeSession 删 listeners
       // 会把活 view 打成 stale/blank。
       // 后台 subagent 空窗(hasBackgroundAgentWork)同样算 in-flight,
@@ -3890,15 +3891,14 @@ const WARM_READING_MAX_CHARACTERS = 32 * 1024 * 1024;
 function _trimMessagesIfNeeded(): void {
   const retained = new Set<string>();
   let characters = 0;
-  const now = Date.now();
   // Reverse before sorting so equal timestamps also prefer the latest leave.
   const recent = [..._lastViewedAt.entries()].reverse().sort((a, b) => b[1] - a[1]);
-  for (const [id, lastViewed] of recent) {
+  for (const [id] of recent) {
     if (retained.size >= WARM_READING_WINDOWS) break;
     const state = sessions.get(id);
     const scroll = readSessionScroll(id);
     if (!state?.historyLoaded || _activeViewSessions.has(id) || _isSessionBusy(id, state) ||
-      now - lastViewed >= DEMOTE_IDLE_MS || scroll?.isNearBottom !== false ||
+      scroll?.isNearBottom !== false ||
       state.messages.length <= TRIM_THRESHOLD || state.messages.length > WARM_READING_MAX_MESSAGES) continue;
     const anchor = scroll.messageClientId ?? scroll.restoreClientId;
     if (!anchor || !state.messages.some((message) => message.clientId === anchor)) continue;
@@ -3959,19 +3959,27 @@ function _trimSessionMessages(sessionId: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// MEM-OPT-2: Soft eviction — demote idle sessions by clearing their messages
-// after DEMOTE_IDLE_MS. Re-entering a demoted session triggers
-// ensureInitialMessages to reload from DB.
+// MEM-OPT-2: Soft eviction by total size. A left session keeps its window until
+// the combined cached messages exceed the budget; then the least recently left
+// idle windows are cleared whole. Re-entering one reloads it through
+// ensureInitialMessages. Time alone no longer clears a window: users usually
+// return after several minutes, often after the task has finished.
 // ---------------------------------------------------------------------------
 
-const DEMOTE_IDLE_MS = 5 * 60_000;
-const DEMOTE_CHECK_INTERVAL_MS = 30_000;
+// About 20 trimmed windows; real windows are far below the text budget, so the
+// LRU cap (MAX_CACHED_SESSIONS) normally binds first.
+const SOFT_EVICTION_DEFAULT_BUDGET = { messages: 4000, characters: 32 * 1024 * 1024 };
+let softEvictionBudget = SOFT_EVICTION_DEFAULT_BUDGET;
+const SOFT_EVICTION_CHECK_INTERVAL_MS = 30_000;
+// Remote wake-task updates are outside reconcile; clearing an idle window is
+// their only self-heal for a lost terminal event (see hasBackgroundAgentWork).
+const REMOTE_TASK_SELF_HEAL_IDLE_MS = 5 * 60_000;
 
 const _lastViewedAt = new Map<string, number>();
-let _demoteTimerHandle: ReturnType<typeof setInterval> | null = null;
+let _softEvictionTimerHandle: ReturnType<typeof setInterval> | null = null;
 
 // MEM-OPT-2 active-view set: 哪些 session 当前被 mounted view 看着。
-// Demote / trim 跳过 set 内的 session。Set 取代了原 _activeViewSessionId 单例，
+// 软淘汰 / trim 跳过 set 内的 session。Set 取代了原 _activeViewSessionId 单例，
 // 因为 Orca 双栏会同时挂 lead + worker 两个 view，单例下后挂的会把先挂的
 // 误判成 idle 触发 demote 清空 messages。
 //
@@ -4054,11 +4062,16 @@ function enterView(sessionId: string): () => void {
   view?.setActive(true);
   _activeViewSessions.set(sessionId, (_activeViewSessions.get(sessionId) ?? 0) + 1);
   _lastViewedAt.delete(sessionId);
-  _ensureDemoteTimer();
+  _ensureSoftEvictionTimer();
   if (resumingHistory) {
     // A repair push may have arrived after leaveView, when refresh is inactive.
     // Reuse the normal resume read to hand off unchanged streaming rows too.
-    void reconcileRemoteMessages(sessionId, { force: true, repair: true, freshHistory: false }).then(() => {
+    void reconcileRemoteMessages(sessionId, {
+      force: true,
+      repair: true,
+      freshHistory: false,
+      activationRead: true,
+    }).then(() => {
       if (!view.getSnapshot().error) scheduleIdlePlanDiscoveryIfNeeded(sessionId);
     }).catch(() => undefined);
   } else scheduleIdlePlanDiscoveryIfNeeded(sessionId);
@@ -4175,53 +4188,130 @@ function leaveView(sessionId: string): void {
     }));
   }
   _trimMessagesIfNeeded();
+  _softEvictIdleSessions();
 }
 
-function _demoteIdleSessions(): void {
+function _isSoftEvictionCandidate(sessionId: string, state: SessionChatState): boolean {
+  return (
+    _lastViewedAt.has(sessionId) &&
+    !_activeViewSessions.has(sessionId) &&
+    !_isSessionBusy(sessionId, state) &&
+    state.pendingQueue.length === 0 &&
+    state.messages.length > 0 &&
+    // Unconfirmed local rows have no persisted copy to reload.
+    !state.messages.some((message) => message.isPendingPersist === true)
+  );
+}
+
+function _needsRemoteTaskSelfHeal(sessionId: string, state: SessionChatState, now: number): boolean {
+  // Same gate order as hasBackgroundAgentWork, which exempts exactly these sessions.
+  if (state.pendingTaskWake === 0 && !hasRunningWakeTask(state)) return false;
+  if (!isRemoteSessionSticky(sessionId) && !state.remoteHostId) return false;
+  return now - (_lastViewedAt.get(sessionId) ?? now) >= REMOTE_TASK_SELF_HEAL_IDLE_MS;
+}
+
+// Message objects are immutable (every update replaces the row), so each size
+// is computed once. Count every string field, not just `content`: tool_use rows
+// keep the full input (a whole file for Write) in toolInput, plan_review rows
+// keep the plan in planReviewPlan, and new payload fields must not escape.
+const _messageCharacterEstimates = new WeakMap<ChatMessage, number>();
+
+// Walk with an explicit stack and a visited set: tool inputs are arbitrary
+// nested objects, so neither a depth cut-off nor recursion is safe here.
+function _valueCharacters(root: unknown): number {
+  let size = 0;
+  const seen = new Set<object>();
+  const pending: unknown[] = [root];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value === 'string') size += value.length;
+    else if (value && typeof value === 'object' && !seen.has(value)) {
+      seen.add(value);
+      for (const item of Array.isArray(value) ? value : Object.values(value)) pending.push(item);
+    }
+  }
+  return size;
+}
+
+function _messageCharacters(message: ChatMessage): number {
+  let size = _messageCharacterEstimates.get(message);
+  if (size === undefined) {
+    size = _valueCharacters(message);
+    _messageCharacterEstimates.set(message, size);
+  }
+  return size;
+}
+
+function _softEvictIdleSessions(): void {
   const now = Date.now();
-  const toDemote: string[] = [];
+  let messageCount = 0;
+  let characters = 0;
+  type Candidate = { sessionId: string; lastViewed: number; messages: number; characters: number };
+  const candidates: Candidate[] = [];
+  const selfHeal: Candidate[] = [];
   for (const [sessionId, state] of sessions) {
-    if (_activeViewSessions.has(sessionId)) continue;
-    if (_isSessionBusy(sessionId, state)) continue;
-    if (state.pendingQueue.length > 0) continue;
-    if (state.messages.length === 0) continue;
-    const lastViewed = _lastViewedAt.get(sessionId);
-    if (lastViewed === undefined) continue;
-    if (now - lastViewed < DEMOTE_IDLE_MS) continue;
-    toDemote.push(sessionId);
+    let size = 0;
+    for (const message of state.messages) size += _messageCharacters(message);
+    messageCount += state.messages.length;
+    characters += size;
+    if (!_isSoftEvictionCandidate(sessionId, state)) continue;
+    const candidate = {
+      sessionId,
+      lastViewed: _lastViewedAt.get(sessionId) ?? now,
+      messages: state.messages.length,
+      characters: size,
+    };
+    if (_needsRemoteTaskSelfHeal(sessionId, state, now)) selfHeal.push(candidate);
+    else candidates.push(candidate);
   }
-  for (const sessionId of toDemote) {
-    // 与 reloadMessages / clear / edit-last / grouped-delete / trim 同一规矩:清空窗口
-    // 等于代际重置,必须 bump epoch 作废 in-flight 的翻页 / 跳转补齐,并由本次重置释放
-    // 分页锁。漏 bump 的后果是 in-flight 那一页按 demote 前的游标提交,把一段脱离上下文
-    // 的旧历史 merge 进空切片(或重开后的新切片),最近的消息反而缺席(#676 review)。
-    cancelIdlePlanDiscovery(sessionId);
-    // Discard the view with its message slice. Resetting an active prefetch would
-    // start another read and immediately repopulate the cache being evicted.
-    releaseRemoteHistoryView(sessionId);
-    invalidateMessageHistoryWindow(sessionId);
-    setState(sessionId, (s) => ({
-      ...s,
-      messages: [],
-      taskUpdates: new Map(),
-      historyLoaded: false,
-      oldestMessageId: null,
-      hasMoreMessages: true,
-      isLoadingMore: false,
-      historyWindowIslands: EMPTY_WINDOW_ISLANDS,
-    }));
+  for (const candidate of selfHeal) {
+    _softEvictSession(candidate.sessionId);
+    messageCount -= candidate.messages;
+    characters -= candidate.characters;
+  }
+  const withinBudget = () =>
+    messageCount <= softEvictionBudget.messages && characters <= softEvictionBudget.characters;
+  if (withinBudget()) return;
+  candidates.sort((a, b) => a.lastViewed - b.lastViewed);
+  for (const candidate of candidates) {
+    if (withinBudget()) break;
+    _softEvictSession(candidate.sessionId);
+    messageCount -= candidate.messages;
+    characters -= candidate.characters;
   }
 }
 
-function _ensureDemoteTimer(): void {
-  if (_demoteTimerHandle) return;
-  _demoteTimerHandle = setInterval(_demoteIdleSessions, DEMOTE_CHECK_INTERVAL_MS);
+function _softEvictSession(sessionId: string): void {
+  // 与 reloadMessages / clear / edit-last / grouped-delete / trim 同一规矩:清空窗口
+  // 等于代际重置,必须 bump epoch 作废 in-flight 的翻页 / 跳转补齐,并由本次重置释放
+  // 分页锁。漏 bump 的后果是 in-flight 那一页按清空前的游标提交,把一段脱离上下文
+  // 的旧历史 merge 进空切片(或重开后的新切片),最近的消息反而缺席(#676 review)。
+  cancelIdlePlanDiscovery(sessionId);
+  // Discard the view with its message slice. Resetting an active prefetch would
+  // start another read and immediately repopulate the cache being evicted.
+  releaseRemoteHistoryView(sessionId);
+  invalidateMessageHistoryWindow(sessionId);
+  setState(sessionId, (s) => ({
+    ...s,
+    messages: [],
+    taskUpdates: new Map(),
+    historyLoaded: false,
+    oldestMessageId: null,
+    hasMoreMessages: true,
+    isLoadingMore: false,
+    historyWindowIslands: EMPTY_WINDOW_ISLANDS,
+  }));
 }
 
-function _stopDemoteTimer(): void {
-  if (_demoteTimerHandle) {
-    clearInterval(_demoteTimerHandle);
-    _demoteTimerHandle = null;
+function _ensureSoftEvictionTimer(): void {
+  if (_softEvictionTimerHandle) return;
+  _softEvictionTimerHandle = setInterval(_softEvictIdleSessions, SOFT_EVICTION_CHECK_INTERVAL_MS);
+}
+
+function _stopSoftEvictionTimer(): void {
+  if (_softEvictionTimerHandle) {
+    clearInterval(_softEvictionTimerHandle);
+    _softEvictionTimerHandle = null;
   }
 }
 
@@ -6362,6 +6452,7 @@ export function handleStreamEvent(
 
     case 'permission_request': {
       const data = event.data as {
+        sourceDescription?: string;
         requestId: string;
         toolName: string;
         input: Record<string, unknown>;
@@ -6380,6 +6471,7 @@ export function handleStreamEvent(
           title: data.title,
           displayName: data.displayName,
           description: data.description,
+          sourceDescription: data.sourceDescription,
           suggestions: data.suggestions,
           autoReviewUnavailable: data.autoReviewUnavailable === true,
           ...(state.pendingPermission?.requestId === data.requestId
@@ -8231,6 +8323,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         description: typeof request.description === 'string' ? request.description : undefined,
         suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
         autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
+        sourceDescription: typeof metadata?.imSourceDescription === 'string' ? metadata.imSourceDescription : undefined,
       };
       setState(sessionId, (s) =>
         handleStreamEvent(s, { sessionId, type: 'permission_request', data }),
@@ -9395,7 +9488,7 @@ function __teardownGlobalListeners(): void {
   for (const unsub of ipcUnsubscribers) unsub();
   ipcUnsubscribers.length = 0;
   globalListenersInitialized = false;
-  _stopDemoteTimer();
+  _stopSoftEvictionTimer();
   clearTextDeltaFlushTimer();
   pendingTextDeltaBatches.clear();
   for (const timer of backgroundTaskReconcileTimers.values()) clearTimeout(timer);
@@ -10950,7 +11043,7 @@ function runAgentDispatchProjectionOperation(
  * 会话消息切片的代际号:整体重置切片的路径递增——reloadMessages(rewind / origin
  * 漂移重载)、clearSessionAfterGuard(/clear)、_purgeSession(删除 / 归档 / LRU 驱逐)、
  * dropMessagesFromClientId(edit-last 截断)、removeMessagesByClientIds(分组删除)、
- * _trimMessagesIfNeeded(超长裁剪)、_demoteIdleSessions(空闲降级)、
+ * _trimMessagesIfNeeded(超长裁剪)、_softEvictIdleSessions(超预算软淘汰)、
  * reconcileRemoteMessages 的权威重建分支(远程对账翻满上限仍未接回已知区段)。
  * 判据只有一条:**这次改动是否换掉了窗口整体或 oldestMessageId** —— 换了就必须 bump,
  * 并由这条路径自己释放分页锁(被作废的请求分辨不出锁属于哪一代,不会代清)。
@@ -11349,11 +11442,11 @@ function ensureInitialMessages(sessionId: string): void {
   }
   requestInputProjection(sessionId);
   // Prefetch and other non-mounted callers still create a cache entry. Give
-  // that entry the same bounded lifetime as a viewed session so a cancelled
-  // navigation cannot leave messages permanently exempt from soft eviction.
+  // it a leave time like a viewed session so a cancelled navigation cannot
+  // leave messages permanently exempt from soft eviction.
   if (!_activeViewSessions.has(sessionId)) {
     _lastViewedAt.set(sessionId, Date.now());
-    _ensureDemoteTimer();
+    _ensureSoftEvictionTimer();
   }
   if (state.historyLoaded) return;
   if (_historyFetchInFlight.has(sessionId)) return;
@@ -12159,6 +12252,7 @@ type HistoryViewForceFlight = {
     force?: boolean;
     repair?: boolean;
     freshHistory?: boolean;
+    activationRead?: boolean;
     preserveClientIds?: ReadonlySet<string>;
   };
 };
@@ -12169,6 +12263,11 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
   force?: boolean;
   repair?: boolean;
   freshHistory?: boolean;
+  /**
+   * The caller just reactivated the view, which already started a post-signal
+   * read in the current generation. Join it instead of queueing a second read.
+   */
+  activationRead?: boolean;
   preserveClientIds?: ReadonlySet<string>;
 }): Promise<boolean> {
   const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
@@ -12193,7 +12292,7 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
       // Read receipts also need a post-signal page: joining a pre-existing read
       // cannot certify this sync generation. Preserve the view and expansion.
       return Promise.all([
-        view.refresh(false, true),
+        view.refresh(false, !opts?.activationRead),
         reconcilePendingInteractions(sessionId),
       ]).then(async () => {
         if (getRemoteHistoryView(sessionId) !== view || !view.isActive()) return false;
@@ -17604,6 +17703,9 @@ export const makerChatStore = {
   __activeViewTest: {
     getActiveSessionIds: () => [..._activeViewSessions.keys()],
     getLastViewedAt: (sessionId: string) => _lastViewedAt.get(sessionId),
+    setSoftEvictionBudget: (budget: { messages: number; characters: number } | null) => {
+      softEvictionBudget = budget ?? SOFT_EVICTION_DEFAULT_BUDGET;
+    },
   },
 };
 

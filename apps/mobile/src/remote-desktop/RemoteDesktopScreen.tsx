@@ -68,6 +68,9 @@ import {
   type RemoteDesktopRequest,
   type RemoteDesktopVideoSettings,
   type RemoteDesktopDisplayMode,
+  isRemoteDesktopChannelRequest,
+  parseRemoteDesktopChannelReply,
+  REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
 } from "@cindy/device-link";
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
 import { BACKGROUND_TRANSITION_TIMEOUT_MS } from "@/device-link/backgroundConnection";
@@ -130,6 +133,11 @@ import {
 } from "./RemoteDesktopChrome";
 
 type Mode = "pointer" | "touch" | "pan";
+/** How a data-channel request ended; "relay" means it was never executed. */
+type ChannelOutcome =
+  | { kind: "result"; value: unknown }
+  | { kind: "relay" }
+  | { kind: "error"; code: string };
 const MODIFIERS = ["ControlLeft", "ShiftLeft", "AltLeft", "MetaLeft"];
 const KEY_PAGES = [
   [
@@ -537,12 +545,85 @@ export function RemoteDesktopSession({
     keyboardFocusRequest,
     send,
   ]);
-  const request = useCallback(
-    <T,>(message: RemoteDesktopRequest, preSend?: () => void) =>
-      linkRef.current.invoke<T>(deviceId, REMOTE_DESKTOP_CHANNEL, [message], {
-        preSend,
+  // Small control requests ride the media data channel when the host supports
+  // it: a direct peer avoids the relay round trip and keeps their order with
+  // input. Anything the channel did not take uses the relay; once sent, the
+  // outcome belongs to the channel and is never replayed over the relay.
+  const channelRequests = useRef(
+    new Map<
+      string,
+      {
+        op: RemoteDesktopRequest["op"];
+        settle(outcome: ChannelOutcome): void;
+      }
+    >(),
+  );
+  const channelRequestId = useRef(0);
+  // Requests ride the media peer. Once it is gone their outcome is unknown, so
+  // settle them now instead of waiting out the timeout or replaying on the relay.
+  const abandonChannelRequests = useCallback(() => {
+    for (const pending of [...channelRequests.current.values()])
+      pending.settle({ kind: "error", code: "INVOKE_TIMEOUT" });
+  }, []);
+  const sendOverChannel = useCallback(
+    (message: RemoteDesktopRequest & { lease: string }, preSend?: () => void) =>
+      new Promise<ChannelOutcome>((resolve) => {
+        preSend?.();
+        const id = `${Date.now().toString(36)}-${++channelRequestId.current}`;
+        const timer = setTimeout(
+          () => settle({ kind: "error", code: "INVOKE_TIMEOUT" }),
+          REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
+        );
+        const settle = (outcome: ChannelOutcome) => {
+          if (channelRequests.current.get(id)?.settle !== settle) return;
+          channelRequests.current.delete(id);
+          clearTimeout(timer);
+          resolve(outcome);
+        };
+        channelRequests.current.set(id, { op: message.op, settle });
+        const viaWebView = () => {
+          // The viewer answers with channelRequestState / channelReply.
+          send({ type: "channelRequest", id, request: message });
+        };
+        // iOS media runs in the native receiver; it owns the channel there.
+        const native = NativeRemoteDesktopView ? nativeViewer.current : null;
+        if (!native?.sendRequest) {
+          viaWebView();
+          return;
+        }
+        void native
+          .sendRequest({ epoch: message.lease, id, request: message })
+          .catch(() => false)
+          .then((sent) => {
+            if (!sent && channelRequests.current.has(id)) viaWebView();
+          });
       }),
-    [deviceId],
+    [send],
+  );
+  const request = useCallback(
+    async <T,>(message: RemoteDesktopRequest, preSend?: () => void) => {
+      const relay = () =>
+        linkRef.current.invoke<T>(deviceId, REMOTE_DESKTOP_CHANNEL, [message], {
+          preSend,
+        });
+      const lease = active.current;
+      const hostCaps = capsRef.current;
+      if (
+        !lease ||
+        !streaming.current ||
+        hostCaps?.deviceId !== deviceId ||
+        hostCaps.value.channelRequests !== true ||
+        !("lease" in message) ||
+        message.lease !== lease.lease ||
+        !isRemoteDesktopChannelRequest(message)
+      )
+        return relay();
+      const outcome = await sendOverChannel(message, preSend);
+      if (outcome.kind === "result") return outcome.value as T;
+      if (outcome.kind === "relay") return relay();
+      throw Object.assign(new Error(outcome.code), { code: outcome.code });
+    },
+    [deviceId, sendOverChannel],
   );
   const viewerSession = useMemo(
     () => ({ current: new RemoteDesktopViewerSession(request) }),
@@ -724,6 +805,7 @@ export function RemoteDesktopSession({
       finishBackgroundTransition.current?.();
       finishBackgroundTransition.current = null;
       const previous = active.current;
+      abandonChannelRequests();
       setExitLockPending(Boolean(previous && exiting && exitLock.current));
       active.current = null;
       pendingVideoSettings.current = null;
@@ -1625,6 +1707,32 @@ export function RemoteDesktopSession({
           );
         }
         break;
+      case "channelRequestState":
+        // The WebView channel could not take it: nothing ran, use the relay.
+        if (typeof message.id === "string" && message.sent !== true)
+          channelRequests.current.get(message.id)?.settle({ kind: "relay" });
+        break;
+      case "channelReply": {
+        const reply = parseRemoteDesktopChannelReply({
+          ...message,
+          type: "reply",
+        });
+        const pending = reply && channelRequests.current.get(reply.id);
+        if (!reply || !pending) break;
+        if (reply.ok) pending.settle({ kind: "result", value: reply.result });
+        else
+          pending.settle(
+            // Refused before running, or a read-only result that did not fit.
+            reply.error === "DESKTOP_CHANNEL_UNSUPPORTED" ||
+              reply.error === "DESKTOP_CHANNEL_BUSY" ||
+              (reply.error === "DESKTOP_REPLY_TOO_LARGE" &&
+                (pending.op === "displayModes" ||
+                  pending.op === "clipboardVersion"))
+              ? { kind: "relay" }
+              : { kind: "error", code: reply.error },
+          );
+        break;
+      }
       case "viewportSize":
         if (
           typeof message.width === "number" &&
@@ -1903,6 +2011,7 @@ export function RemoteDesktopSession({
         setCanPip(false);
         setSettingBusy(false);
         streaming.current = false;
+        abandonChannelRequests();
         receiveWindow.current = {
           since: Date.now(),
           bytes: 0,
@@ -2098,6 +2207,7 @@ export function RemoteDesktopSession({
       setVideoSettings(latest);
       pendingVideoSettings.current = null;
       streaming.current = false;
+      abandonChannelRequests();
       setCanPip(false);
       send({ type: "videoSettings", audio: settings.audio });
     } catch {
@@ -2442,6 +2552,7 @@ export function RemoteDesktopSession({
       );
       setLease({ ...next });
       streaming.current = false;
+      abandonChannelRequests();
       setCanPip(false);
       send({
         type: "videoSettings",

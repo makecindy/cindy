@@ -281,6 +281,10 @@ final class RemoteDesktopVideoView: ExpoView, AVPictureInPictureControllerDelega
     guard !presenting, message["epoch"] as? String == configuration?["epoch"] as? String else { return false }
     return receiver?.sendInput(message) == true
   }
+  func sendRequest(_ message: [String: Any]) -> Bool {
+    guard !presenting, message["epoch"] as? String == configuration?["epoch"] as? String else { return false }
+    return receiver?.sendRequest(message) == true
+  }
   private func emit(_ value: [String: Any]) {
     guard let data = try? JSONSerialization.data(withJSONObject: value),
           let json = String(data: data, encoding: .utf8) else { return }

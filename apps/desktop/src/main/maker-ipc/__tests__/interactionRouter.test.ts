@@ -44,7 +44,7 @@ function makeSession() {
 describe('session interaction router', () => {
   it('routes Host download permissions through the active channel without replacing the listener', async () => {
     const host = makeSession();
-    const desktop = vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'deny' }));
+    const desktop = vi.fn<InteractionHandler>((_request, shared) => shared!.result);
     const remote = vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'allow' }));
     installDesktopInteractionHandler(host.session, desktop);
     const lease = beginInteractionRoute(host.session, {
@@ -55,7 +55,7 @@ describe('session interaction router', () => {
       await expect(requestHostInteraction(host.session, permission('download-1'), new AbortController().signal))
         .resolves.toMatchObject({ behavior: 'allow' });
       expect(remote).toHaveBeenCalledOnce();
-      expect(desktop).not.toHaveBeenCalled();
+      expect(desktop).toHaveBeenCalledOnce();
       expect(host.setInteractionListener).toHaveBeenCalledOnce();
     } finally { lease.release(); }
   });
@@ -90,7 +90,7 @@ describe('session interaction router', () => {
 
   it('routes only the admitted turn to its channel surface', async () => {
     const harness = makeSession();
-    const desktop = vi.fn(async (): Promise<InteractionDecision> => ({
+    const desktop = vi.fn<InteractionHandler>(async (_request, shared) => shared ? shared.result : ({
       kind: 'permission',
       behavior: 'deny',
       reason: 'desktop',
@@ -119,7 +119,7 @@ describe('session interaction router', () => {
       reason: 'desktop',
     });
     expect(channel).toHaveBeenCalledTimes(1);
-    expect(desktop).toHaveBeenCalledTimes(1);
+    expect(desktop).toHaveBeenCalledTimes(2);
     expect(harness.setInteractionListener).toHaveBeenCalledTimes(1);
   });
 

@@ -843,7 +843,11 @@ describe('统一面板 · 会话内形态', () => {
   });
 
   it('跨引擎警示行不参与撑宽(w-0 min-w-full)', async () => {
-    renderPanel({ sessionEngineFilter, currentProviderId: 'xd', modelId: 'gpt-5.5' });
+    renderPanel({
+      sessionEngineFilter: { ...sessionEngineFilter, pendingTarget: 'claude-code' },
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+    });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '全部' }));
     });
@@ -856,16 +860,25 @@ describe('统一面板 · 会话内形态', () => {
     expect(warning.className).toContain('min-w-full');
   });
 
-  it('显式切到「全部」后出现有损警示,且能看到跨引擎模型', async () => {
+  it('「全部」视图未切换 Harness 时不显示有损警示,且能看到跨引擎模型', async () => {
     renderPanel({ sessionEngineFilter, currentProviderId: 'xd', modelId: 'gpt-5.5' });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '全部' }));
     });
     const list = screen.getByRole('listbox');
-    expect(list.querySelector('[data-cross-engine-warning]')?.textContent).toContain(
-      '切换引擎会重建上下文',
-    );
+    expect(list.querySelector('[data-cross-engine-warning]')).toBeNull();
     expect(within(list).getByText('Opus 5')).toBeTruthy();
+  });
+
+  it('已登记跨 Harness 切换时显示有损警示', () => {
+    renderPanel({
+      sessionEngineFilter: { ...sessionEngineFilter, pendingTarget: 'claude-code' },
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+    });
+    expect(
+      screen.getByRole('listbox').querySelector('[data-cross-engine-warning]')?.textContent,
+    ).toContain('切换引擎会重建上下文');
   });
 
   it('选中跨引擎行走 onCrossEngineSelect,不走普通 onSelect', async () => {

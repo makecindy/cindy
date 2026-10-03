@@ -571,10 +571,7 @@ export function MessageActionBar({
         onCloseAutoFocus={(event) => {
           if (menuInteractionFromPointerRef.current) event.preventDefault();
         }}
-        className={cn(
-          'min-w-[184px] rounded-xl border border-[var(--cmd-palette-border)]',
-          'bg-[var(--cmd-palette-bg)] p-1 text-[var(--cmd-palette-item-text)] shadow-none',
-        )}
+        className="min-w-[184px]"
       >
         {addToChatInMenu && (
           <DropdownMenuItem
@@ -616,7 +613,7 @@ export function MessageActionBar({
         {onDelete && (
           <>
             {(addToChatInMenu || copyLinkText || canRewind) && (
-              <DropdownMenuSeparator className="my-1 h-px bg-[var(--cmd-palette-border)]" />
+              <DropdownMenuSeparator />
             )}
             <DropdownMenuItem
               disabled={deleting}

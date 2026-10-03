@@ -57,6 +57,7 @@ import { TELEGRAM_PERSONAL_CAPABILITIES } from './presentationCapabilities.js';
 import {
   EXPRESSIVE_DONE_POOL,
   EXPRESSIVE_ERROR_POOL,
+  PROCESSING_REACTION_POOL,
   pickExpressiveReaction,
 } from './reactionPool.js';
 import { startTelegramStreaming } from './streamingText.js';
@@ -955,8 +956,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (behavior.emojiReactions === 'off') return null;
       if (this.ambientTriggerIds.has(messageId)) return null; // ambient 全静默
       let effective = emoji;
-      if (behavior.emojiReactions === 'expressive') {
-        // 终态用变体池(生动档); ack(👀)保持稳重不随机。
+      if (emoji === '👨‍💻') {
+        // 每次开始处理选择一次，不随进度反复切换；排队 👀 保持固定。
+        effective = pickExpressiveReaction(PROCESSING_REACTION_POOL);
+      } else if (behavior.emojiReactions === 'expressive') {
+        // 终态变体仍只在生动档启用。
         if (emoji === '👍') {
           effective = pickExpressiveReaction(EXPRESSIVE_DONE_POOL);
         } else if (emoji === '👎') {
@@ -970,7 +974,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           chat_id: chatId,
           message_id: Number(nativeId),
           reaction: [{ type: 'emoji', emoji: value }],
-          // 终态表情放大动画; 过程 ack(👀)保持安静。
+          // 终态表情放大动画；排队与处理中保持安静。
           ...(isBig ? { is_big: true } : {}),
         });
       try {
@@ -992,16 +996,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   async removeMessageReaction(messageId: string): Promise<void> {
     const api = this.api;
     if (!api) return;
-    try {
-      const { chatId, messageId: nativeId } = decodeMessageId(messageId);
-      await api.call('setMessageReaction', {
-        chat_id: chatId,
-        message_id: Number(nativeId),
-        reaction: [],
-      });
-    } catch {
-      /* cleanup is best-effort */
-    }
+    const { chatId, messageId: nativeId } = decodeMessageId(messageId);
+    await api.call('setMessageReaction', {
+      chat_id: chatId,
+      message_id: Number(nativeId),
+      reaction: [],
+    });
   }
 
   getStatus(): IMStatus {

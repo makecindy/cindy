@@ -1913,6 +1913,18 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           const message = JSON.parse(e.data);
           if (message.type === "cursor") receiveCursor(message.cursor);
           if (
+            message.type === "reply" &&
+            typeof message.id === "string" &&
+            message.id.length <= 64
+          )
+            post({
+              type: "channelReply",
+              id: message.id,
+              ok: message.ok === true,
+              result: message.result,
+              error: typeof message.error === "string" ? message.error : null,
+            });
+          if (
             (video.webkitPresentationMode === "picture-in-picture" ||
               document.pictureInPictureElement === video) &&
             message.type === "viewPing" &&
@@ -2038,6 +2050,35 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       return;
     }
     switch (message.type) {
+      // A small control request routed over the live data channel. The host
+      // only receives it after advertising support; otherwise the parent uses
+      // the relay. `sent` tells the parent whether the channel took it.
+      case "channelRequest": {
+        const id =
+          typeof message.id === "string" && message.id.length <= 64
+            ? message.id
+            : null;
+        if (!id) break;
+        let sent = false;
+        try {
+          const data = JSON.stringify({
+            type: "request",
+            id,
+            request: message.request,
+          });
+          if (
+            pc?.connectionState === "connected" &&
+            dc?.readyState === "open" &&
+            dc.bufferedAmount < 16384 &&
+            data.length <= 32768
+          ) {
+            dc.send(data);
+            sent = true;
+          }
+        } catch {}
+        post({ type: "channelRequestState", id, sent });
+        break;
+      }
       case "measureViewport":
         post({
           type: "viewportSize",

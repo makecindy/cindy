@@ -21,6 +21,7 @@ const api: DesktopCaptureApi = {
   reply: (id, result) => ipcRenderer.invoke(DESKTOP_LOCAL.REPLY, id, result),
   input: (lease, sequence, events) =>
     ipcRenderer.invoke(DESKTOP_LOCAL.INPUT, lease, sequence, events),
+  request: (lease, request) => ipcRenderer.invoke(DESKTOP_LOCAL.CHANNEL_REQUEST, lease, request),
   viewHeartbeat: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.VIEW_HEARTBEAT, lease),
   nativeFrame: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.NATIVE_FRAME, lease),
   nativeAudio: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.NATIVE_AUDIO, lease),

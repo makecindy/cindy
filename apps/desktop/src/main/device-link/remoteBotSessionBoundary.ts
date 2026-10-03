@@ -1,3 +1,5 @@
+import { DL_HISTORY_QUERY_CHANNEL } from '@cindy/device-link';
+
 export type RemoteBotSessionAccess = 'ordinary' | 'visible' | 'hidden' | 'missing';
 type Lookup = (sessionId: string, kind?: 'session' | 'bot') => Promise<RemoteBotSessionAccess>;
 export type RemoteBotSessionBatchLookup = (ids: readonly string[], kind: 'session' | 'bot') => Promise<ReadonlyMap<string, RemoteBotSessionAccess>>;
@@ -24,6 +26,16 @@ function sessionIds(value: unknown): string[] {
 
 /** Resolve channel-specific Bot IDs before checking generic Session references. */
 export async function assertRemoteBotInvocationAllowed(args: unknown[], channel = ''): Promise<void> {
+  if (channel === DL_HISTORY_QUERY_CHANNEL) {
+    if (!lookup) throw new Error('[HOST_NOT_READY] History visibility is not ready');
+    const ids = record(record(args[0])?.args)?.session_ids;
+    if (ids !== undefined && (!Array.isArray(ids) || ids.length > 50 || ids.some((id) => typeof id !== 'string' || !id || id.length > 512))) {
+      throw new Error('[INVALID_PARAMS] Invalid history session IDs');
+    }
+    // The source query applies visibility before ranking/pagination. Looking up
+    // requested IDs here would distinguish hidden sessions from missing ones.
+    return;
+  }
   if (channel === 'maker:review:start') {
     const id = record(args[0])?.sourceSessionId;
     if (typeof id !== 'string' || !id.trim() || id.length > 512) {
@@ -95,6 +107,47 @@ export async function assertRemoteBotInvocationAllowed(args: unknown[], channel 
 }
 
 export async function projectRemoteSessionResult(channel: string, value: unknown): Promise<unknown> {
+  if (channel === DL_HISTORY_QUERY_CHANNEL) {
+    if (!lookup) throw new Error('[HOST_NOT_READY] History visibility is not ready');
+    // Rechecked on normal, cached and queued delivery by the existing dispatch path.
+    const row = record(value);
+    if (!row || row.ok !== true) return value;
+    const listing = Array.isArray(row.sessions);
+    if (!listing && !Array.isArray(row.hits)) throw new Error('[INVALID_PARAMS] Invalid history result');
+    const entries = (listing ? row.sessions : row.hits) as unknown[];
+    const ids = [...new Set(entries.flatMap((item) => {
+      const entry = record(item);
+      return [listing ? entry?.id : entry?.sessionId, ...(listing ? [entry?.parentSessionId] : [])]
+        .filter((id): id is string => typeof id === 'string');
+    }))];
+    const access = new Map<string, RemoteBotSessionAccess>();
+    if (batchLookup) {
+      for (const [id, status] of await batchLookup(ids, 'session')) access.set(id, status);
+    } else {
+      for (const id of ids) access.set(id, await lookup(id, 'session'));
+    }
+    const visible = (id: unknown) => typeof id === 'string'
+      && (access.get(id) === 'ordinary' || access.get(id) === 'visible');
+    // The page and its foreign references share one fresh, source-owned lookup.
+    // Missing or hidden page members invalidate pagination; optional parents
+    // are simply omitted, including on cached/queued delivery after a hide.
+    if (entries.some((item) => !visible(listing ? record(item)?.id : record(item)?.sessionId))) {
+      throw new Error('[NOT_FOUND] History page is no longer available');
+    }
+    if (Array.isArray(row.sessions)) {
+      const sessions = row.sessions.map((item) => {
+        const { parentSessionId, ...session } = record(item)!;
+        return visible(parentSessionId) ? { ...session, parentSessionId } : session;
+      });
+      return { ...row, sessions };
+    }
+    const allowed = new Set(entries.map((hit) => record(hit)?.sessionId));
+    return { ...row,
+      sessions: Object.fromEntries(Object.entries(record(row.sessions) ?? {}).filter(([id]) => allowed.has(id))),
+      // Hidden results must not reveal their content, metadata or candidate count.
+      pool_size: undefined,
+    };
+  }
   if (!lookup || ![
       'local-db:task-tags:execute',
       'local-db:sessions:get', 'local-db:sessions:get-many', 'local-db:sessions:list', 'maker:list-active', 'local-db:sessions:interrupted-pending', 'local-db:bots:get', 'local-db:bots:list', 'maker:remote-resources:get', 'maker:remote-resources:list'].includes(channel)) return value;

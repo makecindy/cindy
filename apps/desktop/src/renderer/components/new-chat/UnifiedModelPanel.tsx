@@ -142,7 +142,7 @@ export interface UnifiedModelPanelProps {
   /**
    * **会话内形态**(规格 §1.6)。传了它 = 这是一个已经在跑的会话:
    *   - 默认展示全部，已有任务把当前模型和同引擎模型提升到「推荐」;
-   *   - 在「全部 / 供应商」视图时，列表顶部显示有损切换警示;
+   *   - 已登记跨 Harness 切换(`pendingTarget`)时，列表顶部显示有损切换警示;
    *   - 「全部」里选中一行若生效引擎 ≠ 当前引擎,走 `onCrossEngineSelect`(调用方执行
    *     performAgentSwitch 那条既有事务链路),而不是普通的 onSelect。
    *
@@ -1028,8 +1028,8 @@ export function UnifiedModelPanel({
               <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
             </>
           )}
-          {/* 离开同引擎视图后提示切换风险；真正切换仍经过确认事务。 */}
-          {sessionEngineFilter && effectiveRail.kind !== 'engine' && (
+          {/* 只在已登记跨 Harness 切换时提示有损;浏览「全部」或同 Harness 换模型不提示。 */}
+          {sessionEngineFilter?.pendingTarget && (
             <div
               role="note"
               data-cross-engine-warning

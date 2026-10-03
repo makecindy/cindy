@@ -32,6 +32,7 @@ import type { ImSlashHandlers } from './slashCommands';
 import { looksLikeSlashCommand } from './slashCommands';
 import type { ImTurnRunner } from './turnRunner';
 import type { ImChannelAdapter } from './types';
+import { describeInteractionSource } from './interactionSource';
 
 /**
  * `!stop` 控制指令 — 半角/全角感叹号、大小写不敏感(issue #867)。
@@ -383,6 +384,7 @@ export function createMessageHandler(
         botContextId: event.contextId,
         userId: event.senderId,
         userMessageId: event.messageId,
+        sourceDescription: describeInteractionSource(event),
         text: event.text,
         // 受保护群的触发消息照常起 turn, 但不进会话存档(渠道侧已挡住群历史池,
         // 这里挡住第二条路径)。

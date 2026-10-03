@@ -1700,11 +1700,7 @@ export function ComputerUseSection({
               </DropdownMenuTrigger>
               <DropdownMenuContent
                 align="end"
-                className={cn(
-                  'min-w-[260px] max-w-[360px]',
-                  'border border-[var(--settings-input-border)]',
-                  'bg-[var(--settings-theme-card-bg)] text-[var(--settings-section-title)]',
-                )}
+                className="min-w-[260px] max-w-[360px]"
               >
                 <DropdownMenuItem
                   onClick={() => void handleSelectAndroidDevice(ANDROID_AUTO_DEVICE_VALUE)}
@@ -1715,10 +1711,10 @@ export function ComputerUseSection({
                     className={cn('mt-0.5 shrink-0', !configuredDefaultAndroidDevice ? 'opacity-100' : 'opacity-0')}
                   />
                   <div className="flex min-w-0 flex-col gap-0.5">
-                    <span className="truncate text-13 font-medium">
+                    <span className="truncate">
                       {t('settings.computerUse.android.device.auto')}
                     </span>
-                    <span className="truncate text-11 text-[var(--settings-section-desc)]">
+                    <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                       {t('settings.computerUse.android.device.autoHint')}
                     </span>
                   </div>
@@ -1730,10 +1726,10 @@ export function ComputerUseSection({
                   >
                     <Check size={14} className="mt-0.5 shrink-0 opacity-100" />
                     <div className="flex min-w-0 flex-col gap-0.5">
-                      <span className="truncate text-13 font-medium">
+                      <span className="truncate">
                         {configuredDefaultAndroidDevice}
                       </span>
-                      <span className="truncate text-11 text-[var(--settings-section-desc)]">
+                      <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                         {t('settings.computerUse.android.device.unavailable')}
                       </span>
                     </div>
@@ -1759,10 +1755,10 @@ export function ComputerUseSection({
                           className={cn('mt-0.5 shrink-0', selected ? 'opacity-100' : 'opacity-0')}
                         />
                         <div className="flex min-w-0 flex-col gap-0.5">
-                          <span className="truncate text-13 font-medium">
+                          <span className="truncate">
                             {androidDeviceLabel(device)}
                           </span>
-                          <span className="truncate text-11 text-[var(--settings-section-desc)]">
+                          <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                             {ready
                               ? t('settings.computerUse.android.device.ready')
                               : t('settings.computerUse.android.device.state', { state: device.state })}

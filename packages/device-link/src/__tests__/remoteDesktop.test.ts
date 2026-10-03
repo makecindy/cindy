@@ -5,6 +5,9 @@ import {
   REMOTE_DESKTOP_CHANNEL,
   isDesktopPermission,
   remoteDesktopVideoSettingsWire,
+  isRemoteDesktopChannelRequest,
+  parseRemoteDesktopChannelRequest,
+  parseRemoteDesktopChannelReply,
 } from "../remoteDesktop";
 import { REMOTE_INVOKE_ALLOWLIST, PUSH_FORWARD_ALLOWLIST } from "../allowlist";
 describe("remote desktop wire boundary", () => {
@@ -143,5 +146,102 @@ describe("remote desktop wire boundary", () => {
     ])("rejects invalid settings %j", (settings) => {
       expect(() => offer(settings)).toThrow("INVALID_REQUEST");
     });
+  });
+});
+
+describe("remote desktop channel requests", () => {
+  it("allows only small lease-scoped control operations", () => {
+    const allowed = [
+      { op: "control", lease: "l", enabled: true },
+      { op: "presentation", lease: "l", enabled: false },
+      { op: "hostMute", lease: "l", enabled: true },
+      { op: "privacyScreen", lease: "l", enabled: true },
+      { op: "windowAction", lease: "l", action: "desktop" },
+      { op: "displayModes", lease: "l" },
+      { op: "clipboardSync", lease: "l", enabled: true },
+      { op: "clipboardVersion", lease: "l" },
+    ] as const;
+    for (const request of allowed)
+      expect(isRemoteDesktopChannelRequest(request as never)).toBe(true);
+    for (const request of [
+      { op: "capabilities" },
+      { op: "start", displayId: "1" },
+      { op: "heartbeat", lease: "l" },
+      { op: "offer", lease: "l", sdp: "x" },
+      { op: "frame", lease: "l" },
+      { op: "stop", lease: "l" },
+      { op: "resolution", lease: "l", modeId: "1" },
+      { op: "viewerDisplay", lease: "l", width: 900, height: 1600 },
+      { op: "windowAction", lease: "l", action: "list" },
+      { op: "clipboard", lease: "l", action: "copy" },
+    ])
+      expect(isRemoteDesktopChannelRequest(request as never)).toBe(false);
+  });
+
+  it("parses request envelopes with a bounded id and a validated payload", () => {
+    const request = { op: "hostMute", lease: "l", enabled: true };
+    expect(
+      parseRemoteDesktopChannelRequest({ type: "request", id: "a-1", request }),
+    ).toEqual({ type: "request", id: "a-1", request });
+    expect(parseRemoteDesktopChannelRequest({ sequence: 1, events: [] })).toBe(
+      null,
+    );
+    for (const id of ["", "a".repeat(65), "has space", 7])
+      expect(
+        parseRemoteDesktopChannelRequest({ type: "request", id, request }),
+      ).toBe(null);
+    expect(() =>
+      parseRemoteDesktopChannelRequest({
+        type: "request",
+        id: "a",
+        request: { op: "start", displayId: "1" },
+      }),
+    ).toThrow("INVALID_REQUEST");
+    expect(() =>
+      parseRemoteDesktopChannelRequest({
+        type: "request",
+        id: "a",
+        request: { op: "hostMute", lease: "l", enabled: "yes" },
+      }),
+    ).toThrow();
+  });
+
+  it("parses replies and reduces unknown errors to a stable code", () => {
+    expect(
+      parseRemoteDesktopChannelReply({
+        type: "reply",
+        id: "a",
+        ok: true,
+        result: { controlling: true },
+      }),
+    ).toEqual({
+      type: "reply",
+      id: "a",
+      ok: true,
+      result: { controlling: true },
+    });
+    expect(
+      parseRemoteDesktopChannelReply({
+        type: "reply",
+        id: "a",
+        ok: false,
+        error: "DESKTOP_VIEW_ONLY",
+      }),
+    ).toEqual({
+      type: "reply",
+      id: "a",
+      ok: false,
+      error: "DESKTOP_VIEW_ONLY",
+    });
+    for (const error of [undefined, "free text", "x".repeat(80), 3])
+      expect(
+        parseRemoteDesktopChannelReply({
+          type: "reply",
+          id: "a",
+          ok: false,
+          error,
+        }),
+      ).toMatchObject({ ok: false, error: "DESKTOP_REQUEST_FAILED" });
+    expect(parseRemoteDesktopChannelReply({ type: "cursor" })).toBe(null);
   });
 });

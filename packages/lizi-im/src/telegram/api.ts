@@ -110,6 +110,8 @@ export interface TgMessageEntity {
   type: string;
   offset: number;
   length: number;
+  /** 仅 `text_mention`: 被提及的用户(按 id 认人, 不依赖 username)。 */
+  user?: TgUser;
 }
 
 export interface TgMessage {

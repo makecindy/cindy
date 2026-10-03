@@ -61,6 +61,7 @@
       "./plugins/with-third-party-notices",
       "./plugins/with-google-signin-modular-headers",
       "./plugins/with-wechat-opensdk-modulemap",
+      "./plugins/with-async-storage-db-size",
       [
         "expo-build-properties",
         {

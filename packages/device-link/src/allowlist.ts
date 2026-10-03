@@ -51,6 +51,8 @@ export const DL_UNSUBSCRIBE_CHANNEL = 'device-link:unsubscribe';
  * 不出被控端。老被控端响应无此字段 → 控制端按无终态降级。
  */
 export const DL_HISTORY_MESSAGES_CHANNEL = 'local-db:history:messages';
+/** Same-account, linked, read-only history discovery/search. No shared-task or unlinked access. */
+export const DL_HISTORY_QUERY_CHANNEL = 'local-db:history:query';
 
 /**
  * 会话引用消费能力探针。控制端在发送含引用快照的队列消息前必须先调用；
@@ -281,6 +283,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // projection.
   'local-db:conversations:search',
   DL_HISTORY_MESSAGES_CHANNEL,
+  DL_HISTORY_QUERY_CHANNEL,
   'local-db:messages:list',
   // Read-only visible history and recoverable work ranges; same session authorization as list.
   'local-db:messages:view',

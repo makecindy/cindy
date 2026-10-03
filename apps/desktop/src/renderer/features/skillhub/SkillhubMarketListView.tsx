@@ -263,13 +263,12 @@ function SkillhubMarketListViewInner() {
             <DropdownMenuContent
               align="start"
               sideOffset={4}
-              className="w-32 overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 shadow-[var(--shadow-menu)]"
+              className="w-32"
             >
               {SORT_OPTIONS.map((option) => (
                 <DropdownMenuItem
                   key={option.value}
                   onSelect={() => setSortBy(option.value)}
-                  className="h-8 rounded-md px-3 text-sm text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   {t(option.labelKey)}
                 </DropdownMenuItem>
@@ -294,12 +293,12 @@ function SkillhubMarketListViewInner() {
               <DropdownMenuContent
                 align="start"
                 sideOffset={4}
-                className="w-44 overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 shadow-[var(--shadow-menu)]"
+                className="w-44"
                 style={{ maxWidth: '200px' }}
               >
                 <DropdownMenuItem
                   onSelect={() => setCategoryFilter(CATEGORY_ALL)}
-                  className="flex h-8 items-center justify-between gap-2 rounded-md px-3 text-sm text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="justify-between gap-2"
                 >
                   <span className="truncate">{t('skillhub.market.categoryAll')}</span>
                 </DropdownMenuItem>
@@ -307,7 +306,7 @@ function SkillhubMarketListViewInner() {
                   <DropdownMenuItem
                     key={category.slug}
                     onSelect={() => setCategoryFilter(category.slug as CategoryFilter)}
-                    className="flex h-8 items-center justify-between gap-2 rounded-md px-3 text-sm text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                    className="justify-between gap-2"
                   >
                     <span className="truncate">{category.name}</span>
                   </DropdownMenuItem>
