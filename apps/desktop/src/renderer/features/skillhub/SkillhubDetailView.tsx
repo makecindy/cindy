@@ -36,14 +36,21 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { useCCSessions } from '@/hooks/useCCSessions';
+import { useAvailableAgents } from '@/hooks/useAvailableAgents';
+import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
+import { useProviders } from '@/hooks/useProviders';
+import { AgentSelect } from '@/components/new-chat/AgentSelect';
+import { SELECTABLE_VENDORS, isSelectableVendor, type SelectableVendor } from '@/lib/agentVendors';
 import { plainTextToTiptapDoc, saveDraft as saveComposerDraft } from '@/lib/composerDraftStore';
 import { createLogger } from '@/lib/logger';
 import { buildFence, detectRenderable } from '@/lib/textPreview';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
-import { getDataOwnerGeneration, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
 import { cn } from '@/lib/utils';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
+import { getProviderModelEffort, getProviderModelFast } from '@/state/providerModelMemory';
+import { resolveSkillUsageDiagnosisSessionPrefs, selectDiagnosisAgent } from './lib/skillUsageDiagnosisSessionPrefs';
 import { useMetaColumnResize } from './hooks/useMetaColumnResize';
 import { invalidateHash, useSkillFolderHash } from './hooks/useSkillFolderHash';
 import { useSkillPublishComparison } from './hooks/useSkillPublishComparison';
@@ -272,7 +279,6 @@ interface SkillUsagePanelProps {
   loading: boolean;
   error: string | null;
   diagnoseLoading: boolean;
-  diagnoseDisabled: boolean;
   todayKey: string;
   onDiagnose: () => void;
 }
@@ -282,7 +288,6 @@ function SkillUsagePanel({
   loading,
   error,
   diagnoseLoading,
-  diagnoseDisabled,
   todayKey,
   onDiagnose,
 }: SkillUsagePanelProps) {
@@ -437,7 +442,7 @@ function SkillUsagePanel({
   const trendLast7UseCount = trendRows.slice(-7).reduce((total, point) => total + point.useCount, 0);
   const trendPeakUseCount = trendRows.reduce((max, point) => Math.max(max, point.useCount), 0);
   const trendChartHeight = 48;
-  const canDiagnose = !error && !!summary && summary.totalUseCount > 0;
+  const canDiagnose = !summary || summary.totalUseCount > 0;
 
   return (
     <section className="flex flex-col gap-3 border-t border-[var(--cmd-palette-border)] pt-4">
@@ -448,15 +453,16 @@ function SkillUsagePanel({
         {loading && <Spinner size={13} className="text-[var(--settings-theme-icon)]" />}
       </div>
 
-      {error ? (
+      {error && (
         <p className="text-xs leading-relaxed text-[var(--cmd-palette-item-meta)]">
           {t('skillhub.detail.usageFailed', { message: error })}
         </p>
-      ) : loading && !summary ? (
+      )}
+      {!summary ? !error && (
         <p className="text-xs leading-relaxed text-[var(--cmd-palette-item-meta)]">
-          {t('skillhub.detail.usageLoading')}
+          {t(loading ? 'skillhub.detail.usageLoading' : 'skillhub.detail.usageDiagnosisRefreshFailed')}
         </p>
-      ) : !summary || summary.totalUseCount === 0 ? (
+      ) : summary.totalUseCount === 0 ? (
         <p className="text-xs leading-relaxed text-[var(--cmd-palette-item-meta)]">
           {t('skillhub.detail.usageEmpty')}
         </p>
@@ -525,26 +531,6 @@ function SkillUsagePanel({
               </SkillUsageFactRow>
             )}
           </dl>
-
-          {canDiagnose && (
-            <Button
-              variant="cta"
-              size="md"
-              compact
-              loading={diagnoseLoading}
-              type="button"
-              onClick={onDiagnose}
-              disabled={diagnoseDisabled || diagnoseLoading}
-              className="w-full"
-            >
-              {diagnoseLoading ? <Spinner size={13} /> : <Search size={13} className="shrink-0" />}
-              <span className="truncate">
-                {diagnoseLoading
-                  ? t('skillhub.detail.usageDiagnosisStarting')
-                  : t('skillhub.detail.usageDiagnose')}
-              </span>
-            </Button>
-          )}
 
           <div className="flex flex-col gap-2 rounded-xl border border-[var(--cmd-palette-border)] px-3 py-2.5">
             <p className="text-xs font-medium text-[var(--msg-assistant-text)]">
@@ -631,6 +617,25 @@ function SkillUsagePanel({
             )}
           </div>
         </div>
+      )}
+      {canDiagnose && (
+        <Button
+          variant="cta"
+          size="md"
+          compact
+          loading={diagnoseLoading}
+          type="button"
+          onClick={onDiagnose}
+          disabled={diagnoseLoading}
+          className="w-full"
+        >
+          {diagnoseLoading ? <Spinner size={13} /> : <Search size={13} className="shrink-0" />}
+          <span className="truncate">
+            {diagnoseLoading
+              ? t('skillhub.detail.usageDiagnosisStarting')
+              : t('skillhub.detail.usageDiagnose')}
+          </span>
+        </Button>
       )}
     </section>
   );
@@ -748,25 +753,43 @@ function SkillUsageMetric({ label, value, align = 'left' }: { label: string; val
   );
 }
 
-type DiagnosisAgentKind = 'cc' | 'codex';
-
 interface DiagnosisAgentPickerDialogProps {
   open: boolean;
   loading: boolean;
+  agentKind: SelectableVendor;
+  hiddenVendors: readonly SelectableVendor[];
+  createDisabled: boolean;
+  cancelDisabled?: boolean;
+  configurationError?: string | null;
+  retrying?: boolean;
+  onRetry?: () => void;
+  progress?: string | null;
+  snapshotNotice?: string | null;
   onOpenChange: (open: boolean) => void;
-  onSelect: (agentKind: DiagnosisAgentKind) => void;
+  onAgentChange: (agentKind: SelectableVendor) => void;
+  onCreate: () => void;
 }
 
-function DiagnosisAgentPickerDialog({
+export function DiagnosisAgentPickerDialog({
   open,
   loading,
+  agentKind,
+  hiddenVendors,
+  createDisabled,
+  cancelDisabled = loading,
+  configurationError,
+  retrying,
+  onRetry,
+  progress,
+  snapshotNotice,
   onOpenChange,
-  onSelect,
+  onAgentChange,
+  onCreate,
 }: DiagnosisAgentPickerDialogProps) {
   const { t } = useTranslation();
 
   return (
-    <Dialog.Root open={open} onOpenChange={(nextOpen) => { if (!loading) onOpenChange(nextOpen); }}>
+    <Dialog.Root open={open} onOpenChange={(nextOpen) => { if (!cancelDisabled) onOpenChange(nextOpen); }}>
       <Dialog.Portal>
         <Dialog.Overlay
           className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]"
@@ -774,51 +797,72 @@ function DiagnosisAgentPickerDialog({
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => { if (cancelDisabled) event.preventDefault(); }}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] w-full max-w-[420px] -translate-x-1/2 -translate-y-1/2',
-            'rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-5',
-            'shadow-[var(--confirm-shadow)]',
+            'fixed inset-0 z-[10000] m-auto h-fit w-[calc(100vw-32px)] max-w-[460px]',
+            'rounded-xl bg-[var(--confirm-bg)] p-4 shadow-[var(--confirm-shadow)]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         >
-          <Dialog.Title className="text-base font-semibold text-[var(--msg-assistant-text)]">
+          <Dialog.Title className="text-lg font-semibold text-[var(--confirm-title)]">
             {t('skillhub.detail.usageDiagnosisAgentTitle')}
           </Dialog.Title>
-          <Dialog.Description className="mt-2 text-sm leading-relaxed text-[var(--cmd-palette-item-meta)]">
+          <Dialog.Description className="mt-2 text-sm leading-relaxed text-[var(--confirm-desc)]">
             {t('skillhub.detail.usageDiagnosisAgentDescription')}
           </Dialog.Description>
           {loading && (
             <div
               role="status"
-              className="mt-3 flex items-center gap-2 text-xs text-[var(--cmd-palette-item-meta)]"
+              className="mt-3 flex items-center gap-2 text-xs text-[var(--confirm-desc)]"
             >
               <Spinner size={13} />
-              <span>{t('skillhub.detail.usageDiagnosisStarting')}</span>
+              <span>{progress ?? t('skillhub.detail.usageDiagnosisStarting')}</span>
+            </div>
+          )}
+          {snapshotNotice && (
+            <p className="mt-3 text-xs leading-relaxed text-[var(--confirm-desc)]">{snapshotNotice}</p>
+          )}
+          {configurationError && (
+            <div role="alert" className="mt-3 flex items-center justify-between gap-3 text-xs leading-relaxed text-[var(--confirm-desc)]">
+              <span>{configurationError}</span>
+              <Button variant="secondary" palette="confirmation" size="sm" type="button"
+                loading={retrying} disabled={loading} onClick={onRetry}>
+                {t('skillhub.detail.usageDiagnosisRetry')}
+              </Button>
             </div>
           )}
 
-          <div className="mt-5 grid grid-cols-2 gap-3">
-            <DiagnosisAgentOption
-              icon={Bot}
-              title={t('skillhub.detail.usageDiagnosisClaude')}
-              disabled={loading}
-              onClick={() => onSelect('cc')}
-            />
-            <DiagnosisAgentOption
-              icon={SquareTerminal}
-              title={t('skillhub.detail.usageDiagnosisCodex')}
-              disabled={loading}
-              onClick={() => onSelect('codex')}
+          <div className="mt-4 space-y-2">
+            <div className="text-sm font-medium text-[var(--confirm-title)]">{t('newChat.agentSelect.label')}</div>
+            <AgentSelect
+              value={agentKind}
+              onChange={(vendor) => { if (isSelectableVendor(vendor)) onAgentChange(vendor); }}
+              disabled={loading || hiddenVendors.length === SELECTABLE_VENDORS.length}
+              hiddenVendors={hiddenVendors}
+              triggerVariant="field"
+              useMorphPopover={false}
+              overlayContentClassName="z-[10001]"
             />
           </div>
 
-          <div className="mt-5 flex justify-end">
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <Button
+              variant="primary"
+              palette="confirmation"
+              size="lg"
+              type="button"
+              loading={loading}
+              disabled={createDisabled}
+              onClick={onCreate}
+            >
+              {t('skillhub.detail.usageDiagnosisCreate')}
+            </Button>
             <Button
               variant="secondary"
-              size="md"
-              compact
+              palette="confirmation"
+              size="lg"
               type="button"
-              disabled={loading}
+              disabled={cancelDisabled}
               onClick={() => onOpenChange(false)}
             >
               {t('skillhub.detail.usageDiagnosisCancel')}
@@ -827,37 +871,6 @@ function DiagnosisAgentPickerDialog({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
-  );
-}
-
-function DiagnosisAgentOption({
-  icon: Icon,
-  title,
-  disabled,
-  onClick,
-}: {
-  icon: LucideIcon;
-  title: string;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        'flex min-h-[84px] flex-col items-start justify-between gap-2 rounded-xl border p-3 text-left',
-        'border-[var(--cmd-palette-border)] bg-[var(--surface-elevated)]',
-        'hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-        'disabled:cursor-not-allowed disabled:opacity-60',
-      )}
-    >
-      <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--settings-btn-secondary-bg)] text-[var(--msg-assistant-text)]">
-        <Icon size={16} />
-      </span>
-      <span className="text-sm font-medium text-[var(--msg-assistant-text)]">{title}</span>
-    </button>
   );
 }
 
@@ -989,7 +1002,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
   renderNavigation?: (beforeLeave: () => Promise<boolean>, disabled: boolean) => ReactNode;
   onUninstalled?: () => void;
 } = {}) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { user } = useAuth();
   const identityPolicy = useSkillhubIdentityPolicy(user);
   const params = useParams();
@@ -1481,7 +1494,57 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
 
   const [usageRefreshNonce, setUsageRefreshNonce] = useState(0);
   const [diagnosisStarting, setDiagnosisStarting] = useState(false);
+  const [diagnosisCreatingSession, setDiagnosisCreatingSession] = useState(false);
+  const [diagnosisProgress, setDiagnosisProgress] = useState<string | null>(null);
+  const [diagnosisRetrying, setDiagnosisRetrying] = useState(false);
+  const [usageRefreshStatus, setUsageRefreshStatus] = useState<{ entryId: string; status: SkillUsageRefreshStatus } | null>(null);
   const [diagnosisAgentPickerOpen, setDiagnosisAgentPickerOpen] = useState(false);
+  const [diagnosisAgent, setDiagnosisAgent] = useState<SelectableVendor>('cc');
+  const diagnosisInFlight = useRef(false);
+  const diagnosisRequestId = useRef(0);
+  const diagnosisMounted = useRef(true);
+  useEffect(() => {
+    diagnosisMounted.current = true;
+    return () => { diagnosisMounted.current = false; };
+  }, []);
+  const diagnosisTargetKey = entry?.kind === 'skill'
+    ? [entry.id, entry.mdPath, entry.absolutePath].join('\0') : null;
+  const diagnosisTarget = useRef({ key: diagnosisTargetKey, revision: 0 });
+  if (diagnosisTarget.current.key !== diagnosisTargetKey) {
+    diagnosisTarget.current = { key: diagnosisTargetKey, revision: diagnosisTarget.current.revision + 1 };
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 查看中的 Skill 或账号发生变化时，必须关闭此前目标的选择器。
+  useEffect(() => {
+    diagnosisRequestId.current += 1;
+    diagnosisInFlight.current = false;
+    setDiagnosisAgentPickerOpen(false);
+    setDiagnosisStarting(false);
+    setDiagnosisCreatingSession(false);
+    setDiagnosisProgress(null);
+    setUsageRefreshStatus(null);
+  }, [diagnosisTargetKey, user?.id]);
+  const { availableVendors: diagnosisAvailableVendors, loaded: diagnosisAgentsLoaded } = useAvailableAgents();
+  const selectedDiagnosisAgent = selectDiagnosisAgent(diagnosisAgent, diagnosisAvailableVendors, diagnosisAgentsLoaded);
+  const diagnosisHiddenVendors = useMemo(() => diagnosisAgentsLoaded
+    ? SELECTABLE_VENDORS.filter((vendor) => !diagnosisAvailableVendors.has(vendor)) : [],
+  [diagnosisAgentsLoaded, diagnosisAvailableVendors]);
+  const diagnosisRuntimeAgent = selectedDiagnosisAgent === 'cc' ? 'claude-code' : selectedDiagnosisAgent;
+  const { capabilities: diagnosisCapabilities, loading: diagnosisCapabilitiesLoading,
+    error: diagnosisCapabilitiesError } = useAgentCapabilities(diagnosisRuntimeAgent);
+  const { providers: diagnosisProviders, loading: diagnosisProvidersLoading,
+    loadFailed: diagnosisProvidersFailed, refetch: refetchDiagnosisProviders } = useProviders();
+  const diagnosisConfigurationError = diagnosisCapabilitiesError || diagnosisProvidersFailed
+    ? t('skillhub.detail.usageDiagnosisConfigFailed') : null;
+  const diagnosisCreateDisabled = diagnosisStarting || !selectedDiagnosisAgent ||
+    diagnosisCapabilitiesLoading || !diagnosisCapabilities || diagnosisProvidersLoading || diagnosisRetrying;
+  const diagnosisSnapshot = usageRefreshStatus?.entryId === entry?.id ? usageRefreshStatus?.status : null;
+  const diagnosisSnapshotNotice = diagnosisSnapshot && (diagnosisSnapshot.incomplete ||
+    diagnosisSnapshot.missingCount > 0 || diagnosisSnapshot.phase === 'discovering' || diagnosisSnapshot.phase === 'indexing')
+    ? t('skillhub.detail.usageDiagnosisSnapshotNotice', {
+      time: diagnosisSnapshot.lastSuccessAt
+        ? new Date(diagnosisSnapshot.lastSuccessAt).toLocaleString(i18n.resolvedLanguage ?? i18n.language)
+        : t('skillhub.detail.usageDiagnosisSnapshotTimeUnknown'),
+    }) : null;
   const [usageState, setUsageState] = useState<SkillUsagePanelState>({
     entryId: null,
     loading: false,
@@ -1513,9 +1576,11 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
       .then((res) => {
         if (cancelled) return;
         if (res.success) {
+          setUsageRefreshStatus({ entryId, status: res.refreshStatus });
           setUsageState((previous) =>
             settleUsageSummarySuccess(previous, entryId, {
               refreshing: res.refreshing,
+              hasSnapshot: res.refreshStatus.hasSnapshot,
               summary: res.summary,
             })
           );
@@ -1540,33 +1605,95 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
   }, [usageEntryId]);
 
   const openDiagnosisAgentPicker = useCallback(() => {
-    if (entry?.kind !== 'skill' || diagnosisStarting) return;
+    if (entry?.kind !== 'skill' || diagnosisInFlight.current) return;
+    setDiagnosisAgent(selectDiagnosisAgent(getDraft().vendor, diagnosisAvailableVendors, diagnosisAgentsLoaded) ?? 'cc');
     setDiagnosisAgentPickerOpen(true);
-  }, [diagnosisStarting, entry?.kind]);
+  }, [entry?.kind, diagnosisAvailableVendors, diagnosisAgentsLoaded]);
 
-  const handleCreateDiagnosisSession = useCallback(async (agentKind: DiagnosisAgentKind) => {
-    if (entry?.kind !== 'skill' || diagnosisStarting) return;
-    setDiagnosisStarting(true);
+  const closeDiagnosisAgentPicker = useCallback((open: boolean) => {
+    if (!open && !diagnosisCreatingSession) {
+      diagnosisRequestId.current += 1;
+      diagnosisInFlight.current = false;
+      setDiagnosisStarting(false);
+      setDiagnosisProgress(null);
+    }
+    setDiagnosisAgentPickerOpen(open);
+  }, [diagnosisCreatingSession]);
+
+  const retryDiagnosisConfiguration = useCallback(async () => {
+    setDiagnosisRetrying(true);
     try {
-      const res = await window.electronAPI.skillhub.getUsageDiagnosisContext({
-        name: entry.name,
-        mdPath: entry.mdPath,
+      await refetchDiagnosisProviders();
+    } catch {
+      if (diagnosisMounted.current) toast.error(t('skillhub.detail.usageDiagnosisConfigFailed'));
+    } finally {
+      if (diagnosisMounted.current) setDiagnosisRetrying(false);
+    }
+  }, [refetchDiagnosisProviders, t]);
+
+  const handleCreateDiagnosisSession = useCallback(async () => {
+    if (entry?.kind !== 'skill' || diagnosisInFlight.current || diagnosisCreateDisabled || !selectedDiagnosisAgent) return;
+    diagnosisInFlight.current = true;
+    const requestId = ++diagnosisRequestId.current;
+    setDiagnosisStarting(true);
+    setDiagnosisProgress(t('skillhub.detail.usageDiagnosisDiscovering'));
+    const owner = getDataOwnerGeneration();
+    const targetRevision = diagnosisTarget.current.revision;
+    const target = { name: entry.name, mdPath: entry.mdPath, workingDir: entry.absolutePath };
+    const isCurrent = () => diagnosisMounted.current && isDataOwnerGenerationCurrent(owner) &&
+      diagnosisTarget.current.revision === targetRevision && diagnosisRequestId.current === requestId;
+    try {
+      // 在任一 IPC 等待前，冻结所选本地引擎的常规任务配置。
+      const draft = getDraft();
+      const sessionPrefs = resolveSkillUsageDiagnosisSessionPrefs({
+        agentKind: selectedDiagnosisAgent,
+        prefs: draft.lastByVendor[selectedDiagnosisAgent],
+        modelChosenByUser: draft.modelChosenByVendor[selectedDiagnosisAgent] === true,
+        providers: diagnosisProviders,
+        providersLoading: diagnosisProvidersLoading,
+        capabilities: diagnosisCapabilities,
+        effortForModel: getProviderModelEffort,
+        fastForModel: getProviderModelFast,
+        legacyFastForModel: getFastModeForModel,
       });
+      const readContext = () => window.electronAPI.skillhub.getUsageDiagnosisContext({
+        name: target.name,
+        mdPath: target.mdPath,
+      });
+      let res = await readContext();
+      if (!isCurrent()) return;
+      // 无快照时等待首轮索引；取消仅结束此入口的等待，共享后台刷新继续完成。
+      while (res.success && !res.refreshStatus.hasSnapshot &&
+        (res.refreshStatus.phase === 'discovering' || res.refreshStatus.phase === 'indexing')) {
+        setDiagnosisProgress(res.refreshStatus.phase === 'indexing'
+          ? t('skillhub.detail.usageDiagnosisIndexing', { count: res.refreshStatus.scanned, total: res.refreshStatus.total })
+          : t('skillhub.detail.usageDiagnosisDiscovering'));
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+        if (!isCurrent()) return;
+        res = await readContext();
+        if (!isCurrent()) return;
+      }
       if (!res.success) {
         toast.error(t('skillhub.detail.usageDiagnosisFailed', { message: res.error }));
         return;
       }
+      if (!res.refreshStatus.hasSnapshot) {
+        toast.error(t('skillhub.detail.usageDiagnosisRefreshFailed'));
+        return;
+      }
+      if (res.context.summary.totalUseCount === 0) {
+        toast.error(t('skillhub.detail.usageEmpty'));
+        return;
+      }
 
-      const prefs = getDraft().lastByVendor[agentKind];
+      setDiagnosisCreatingSession(true);
+      setDiagnosisProgress(null);
       const newSession = await createSession({
-        agentKind,
-        workingDir: entry.absolutePath,
+        ...sessionPrefs,
+        workingDir: target.workingDir,
         workspaceKind: 'project',
-        model: prefs.model,
-        effort: prefs.effort,
-        permissionMode: prefs.permissionMode,
-        fastMode: getFastModeForModel(prefs.model),
       });
+      if (!isCurrent()) return;
       if (!newSession) {
         toast.error(t('skillhub.detail.usageDiagnosisCreateSessionFailed'));
         return;
@@ -1579,12 +1706,21 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
       setDiagnosisAgentPickerOpen(false);
       navigate(`/cc-agent/${newSession.id}`);
     } catch (err) {
+      if (!isCurrent()) return;
       const message = err instanceof Error ? err.message : String(err);
       toast.error(t('skillhub.detail.usageDiagnosisFailed', { message }));
     } finally {
-      setDiagnosisStarting(false);
+      if (diagnosisRequestId.current === requestId) {
+        diagnosisInFlight.current = false;
+        if (diagnosisMounted.current) {
+          setDiagnosisStarting(false);
+          setDiagnosisCreatingSession(false);
+          setDiagnosisProgress(null);
+        }
+      }
     }
-  }, [createSession, diagnosisStarting, entry, navigate, t]);
+  }, [createSession, diagnosisCreateDisabled, selectedDiagnosisAgent, diagnosisProviders,
+    diagnosisProvidersLoading, diagnosisCapabilities, entry, navigate, t]);
 
   // Leave-guard wrapper for switching the viewing file. Used by the FILES
   // tree row clicks. If editing with unsaved changes, prompt; otherwise
@@ -2313,10 +2449,9 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
             </section>
             <SkillUsagePanel
               summary={usageState.entryId === entry.id ? usageState.summary : null}
-              loading={usageState.entryId === entry.id && usageState.loading}
+              loading={usageState.entryId !== entry.id || usageState.loading}
               error={usageState.entryId === entry.id ? usageState.error : null}
               diagnoseLoading={diagnosisStarting}
-              diagnoseDisabled={usageState.entryId !== entry.id || usageState.loading}
               todayKey={usageTodayKey}
               onDiagnose={openDiagnosisAgentPicker}
             />
@@ -2504,8 +2639,18 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
       <DiagnosisAgentPickerDialog
         open={diagnosisAgentPickerOpen}
         loading={diagnosisStarting}
-        onOpenChange={setDiagnosisAgentPickerOpen}
-        onSelect={(agentKind) => { void handleCreateDiagnosisSession(agentKind); }}
+        agentKind={selectedDiagnosisAgent ?? diagnosisAgent}
+        hiddenVendors={diagnosisHiddenVendors}
+        createDisabled={diagnosisCreateDisabled}
+        cancelDisabled={diagnosisCreatingSession}
+        configurationError={diagnosisConfigurationError}
+        retrying={diagnosisRetrying}
+        onRetry={() => { void retryDiagnosisConfiguration(); }}
+        progress={diagnosisProgress}
+        snapshotNotice={diagnosisSnapshotNotice}
+        onOpenChange={closeDiagnosisAgentPicker}
+        onAgentChange={setDiagnosisAgent}
+        onCreate={() => { void handleCreateDiagnosisSession(); }}
       />
 
       <ScanResultDialog
