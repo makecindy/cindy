@@ -1,6 +1,6 @@
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { localizedModelName } from '@/lib/modelDisplayNames';
-import { Lock, SlidersHorizontal, Star, Zap } from 'lucide-react';
+import { Check, Lock, SlidersHorizontal, Star, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 
@@ -8,6 +8,7 @@ import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
+import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
 import { providerAccountLabel } from '@/lib/providerDisplayName';
 import type { Effort } from '@/lib/userPreferences.types';
 
@@ -110,6 +111,9 @@ export function UnifiedModelRow({
     'aria-keyshortcuts': paymentRequired ? undefined : 'ArrowLeft',
     tabIndex: interactionDisabled ? -1 : 0,
     'data-model-selected': selected ? ('true' as const) : undefined,
+    // Shared menu row: the panel's glide highlight, chosen row = check, config open = open.
+    ...menuRowAttrs(),
+    'data-state': active ? 'open' : selected ? 'checked' : undefined,
     'data-unified-anchor': anchorKey(anchor),
     onContextMenu: (event: ReactMouseEvent<HTMLDivElement>) => {
       if (interactionDisabled || paymentRequired) return;
@@ -217,9 +221,10 @@ export function UnifiedModelRow({
     <div
       {...rowRootProps}
       className={cn(
-        '[&+[data-unified-anchor]]:mt-1 group/row flex w-full cursor-pointer flex-col rounded-lg px-3 py-2 transition-colors duration-100',
-        'hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-        (selected || active) && 'bg-[var(--model-item-hover)]',
+        // DESIGN §4 Composer dropdown rows: shared row text and motion; the list's glide
+        // highlight marks the pointer / keyboard-focused row and the row whose config is open.
+        COMPOSER_MENU_ROW,
+        '[&+[data-unified-anchor]]:mt-1 group/row flex w-full cursor-pointer flex-col px-3 py-2',
         (interactionDisabled || paymentRequired) && 'cursor-not-allowed opacity-50',
       )}
     >
@@ -243,7 +248,7 @@ export function UnifiedModelRow({
           // 字号/字重**不跟设计稿的 13.5px/normal**,按旧选择器恢复(text-14 + medium):
           // Chris 2026-08-13 实测裁决 —— 名字变小去粗后与描述行难以区分。
           title={displayName}
-          className="min-w-0 truncate text-14 font-medium leading-5 text-[var(--model-item-text)]"
+          className="min-w-0 truncate font-medium leading-5"
         >
           {displayName}
         </span>
@@ -269,7 +274,7 @@ export function UnifiedModelRow({
             title={tripleTitle}
             data-unified-triple
             // 颜色恒定,不随「已自定义」提亮(Chris 2026-08-16 裁决,所有行一致)。
-            className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-12 text-[var(--text-tertiary)]"
+            className="flex max-w-[118px] shrink-0 items-center gap-1 truncate text-12 font-normal text-[var(--text-tertiary)]"
           >
             <engineOption.Mark size={12} className="shrink-0" />
             {configurationEnabled && config.effort && (
@@ -287,8 +292,14 @@ export function UnifiedModelRow({
           {paymentRequiredUnlock}
           {paymentRequiredBadge}
         </span>
-        {/* 行尾不放 ✅(Chris 2026-08-13 裁决:选中已有整行底色,再加勾是重复信号,
-            还平白吃掉一列宽度);选中态语义由 aria-selected 承载。 */}
+        {/* 选中标记:悬停 / 键盘改为整面板一块滑动高亮后,选中行不再有静态底色,改用勾
+            (与权限 / + / 引擎菜单一致;2026-08-13「已有底色不加勾」随底色撤销而失效)。
+            未选中也占位,列宽不随选中变化,宽度 sizer 量到的就是终宽。 */}
+        <Check
+          size={15}
+          aria-hidden="true"
+          className={cn('shrink-0 text-[var(--model-item-check)]', !selected && 'invisible')}
+        />
       </div>
       {sourceLabel && entry.providerId !== 'xd' ? (
         <ModelSourceDetails
@@ -307,7 +318,7 @@ export function UnifiedModelRow({
         // 与名字的区分靠名字的 14px/medium,不靠把描述压淡)。
         <div
           title={description}
-          className="min-w-0 max-w-[30ch] truncate pl-[26px] pt-px text-12 leading-[1.4] text-[var(--text-secondary)]"
+          className="min-w-0 max-w-[30ch] truncate pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
         >
           {description}
         </div>

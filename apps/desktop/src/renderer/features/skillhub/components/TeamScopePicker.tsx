@@ -1,8 +1,16 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import * as Popover from '@radix-ui/react-popover';
-import { Check, ChevronDown } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 
 import type { TeamOption } from '../lib/marketDetailViewModel';
@@ -17,59 +25,41 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** 下拉面板里的分组标题(部门 / 团队) */
-function GroupLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="px-2.5 pb-1 pt-2 text-10 text-[var(--text-tertiary)]">
-      {children}
-    </div>
-  );
-}
-
-/** 下拉面板里的单个可选项 */
-function OptionRow({
+/** 「谁可以使用」里的一项:勾选切换,菜单保持打开以便连续多选。 */
+function AudienceRow({
   name,
-  selected,
-  locked,
+  checked,
   lockedTag,
   disabled,
   onToggle,
 }: {
   name: string;
-  selected: boolean;
-  /** 锁定项:始终选中且不可取消(发布团队天然可见) */
-  locked?: boolean;
+  checked: boolean;
+  /** 锁定项(发布团队天然可见):始终勾选、不可取消,行尾标注 */
   lockedTag?: string;
   disabled?: boolean;
-  onToggle: () => void;
+  onToggle?: () => void;
 }) {
   return (
-    <button
-      type="button"
-      disabled={disabled || locked}
-      onClick={onToggle}
-      className={cn(
-        'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm',
-        'text-[var(--msg-assistant-text)] transition-colors',
-        !disabled && !locked && 'hover:bg-[var(--surface-hover)]',
-        disabled && 'cursor-not-allowed opacity-60',
-        locked && 'cursor-default opacity-80',
-      )}
+    <DropdownMenuCheckboxItem
+      checked={checked}
+      disabled={disabled || lockedTag !== undefined}
+      onCheckedChange={onToggle}
+      onSelect={(event) => event.preventDefault()}
     >
-      <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-        {selected && <Check size={14} strokeWidth={2.25} />}
-      </span>
       <span className="min-w-0 truncate">{name}</span>
-      {locked && lockedTag && (
-        <span className="ml-auto shrink-0 text-10 text-[var(--text-tertiary)]">{lockedTag}</span>
+      {lockedTag && (
+        <span className="ml-auto shrink-0 pl-4 text-12 font-normal text-[var(--cmd-palette-item-meta)]">
+          {lockedTag}
+        </span>
       )}
-    </button>
+    </DropdownMenuCheckboxItem>
   );
 }
 
 /**
  * 分组下拉框(发布团队=单选、谁可以使用=多选共用同一外观)。
- * 面板走 Radix Popover Portal,浮在 Dialog 之上,不会被弹窗的
+ * 共享 DropdownMenu 面板 portal 到 body,浮在 Dialog 之上,不会被弹窗的
  * overflow / 圆角裁切(之前手写 absolute 面板会"漏"到弹窗外)。
  */
 function ScopeDropdown({
@@ -82,13 +72,12 @@ function ScopeDropdown({
   summary: string | null;
   placeholder: string;
   disabled?: boolean;
-  /** 面板内容,拿到 close 回调(单选场景选完即关) */
-  children: (close: () => void) => React.ReactNode;
+  children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger asChild>
+    <DropdownMenu open={open} onOpenChange={setOpen} modal={false}>
+      <DropdownMenuTrigger asChild>
         <button
           type="button"
           disabled={disabled}
@@ -109,23 +98,16 @@ function ScopeDropdown({
             className={cn('shrink-0 text-[var(--settings-section-desc)] transition-transform', open && 'rotate-180')}
           />
         </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          side="bottom"
-          align="start"
-          sideOffset={4}
-          onOpenAutoFocus={(e) => e.preventDefault()}
-          className={cn(
-            'z-[10010] max-h-52 w-[var(--radix-popover-trigger-width)] overflow-y-auto rounded-xl border p-1',
-            'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
-            '[box-shadow:var(--cmd-palette-shadow)]',
-          )}
-        >
-          {children(() => setOpen(false))}
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        side="bottom"
+        align="start"
+        // Above the publish Dialog; as wide as the trigger; long lists scroll.
+        className="z-[10010] max-h-52 w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto"
+      >
+        {children}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -212,42 +194,32 @@ export function PublisherPicker({
             placeholder={t('skillhub.publishDialog.publisherTeamPlaceholder')}
             disabled={disabled}
           >
-            {(close) => (
-              <>
-                {deptIds.length > 0 && (
-                  <>
-                    <GroupLabel>{t('skillhub.publishDialog.extraDeptGroup')}</GroupLabel>
-                    {deptIds.map((id, index) => (
-                      <OptionRow
-                        key={`dept-${id}`}
-                        name={deptNames[index] ?? id}
-                        selected={ownerTeamSlug === id}
-                        onToggle={() => {
-                          onChange({ mode: 'team', ownerTeamSlug: id });
-                          close();
-                        }}
-                      />
-                    ))}
-                  </>
-                )}
-                {teams.length > 0 && (
-                  <>
-                    <GroupLabel>{t('skillhub.publishDialog.extraTeamGroup')}</GroupLabel>
-                    {teams.map((team) => (
-                      <OptionRow
-                        key={`team-${team.slug}`}
-                        name={team.name}
-                        selected={ownerTeamSlug === team.slug}
-                        onToggle={() => {
-                          onChange({ mode: 'team', ownerTeamSlug: team.slug });
-                          close();
-                        }}
-                      />
-                    ))}
-                  </>
-                )}
-              </>
-            )}
+            {/* 单选:选中即关闭。 */}
+            <DropdownMenuRadioGroup
+              value={ownerTeamSlug}
+              onValueChange={(slug) => onChange({ mode: 'team', ownerTeamSlug: slug })}
+            >
+              {deptIds.length > 0 && (
+                <>
+                  <DropdownMenuLabel>{t('skillhub.publishDialog.extraDeptGroup')}</DropdownMenuLabel>
+                  {deptIds.map((id, index) => (
+                    <DropdownMenuRadioItem key={`dept-${id}`} value={id}>
+                      <span className="min-w-0 truncate">{deptNames[index] ?? id}</span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </>
+              )}
+              {teams.length > 0 && (
+                <>
+                  <DropdownMenuLabel>{t('skillhub.publishDialog.extraTeamGroup')}</DropdownMenuLabel>
+                  {teams.map((team) => (
+                    <DropdownMenuRadioItem key={`team-${team.slug}`} value={team.slug}>
+                      <span className="min-w-0 truncate">{team.name}</span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </>
+              )}
+            </DropdownMenuRadioGroup>
           </ScopeDropdown>
           <p className="px-0.5 text-xs text-[var(--cmd-palette-item-meta)]">
             {t('skillhub.publishDialog.publisherTeamNote')}
@@ -292,6 +264,7 @@ export function AudiencePicker({
   const visibleDepts = deptIds.filter((id) => id !== lockedOwnerSlug);
   const visibleTeams = teams.filter((team) => team.slug !== lockedOwnerSlug);
   const lockedDeptIndex = lockedOwnerSlug ? deptIds.indexOf(lockedOwnerSlug) : -1;
+  const ownerTag = t('skillhub.publishDialog.audienceOwnerTag');
   const lockedName = lockedOwnerSlug
     ? (lockedDeptIndex >= 0
       ? (deptNames[lockedDeptIndex] ?? lockedOwnerSlug)
@@ -318,7 +291,7 @@ export function AudiencePicker({
 
   // 触发按钮上的摘要:发布团队 + 已选部门/团队名,空时显示 placeholder
   const summaryNames = [
-    ...(lockedName ? [`${lockedName}（${t('skillhub.publishDialog.audienceOwnerTag')}）`] : []),
+    ...(lockedName ? [`${lockedName}（${ownerTag}）`] : []),
     ...visibleDepts
       .filter((id) => value.visibleDeptIds.includes(id))
       .map((id) => deptNames[deptIds.indexOf(id)] ?? id),
@@ -337,54 +310,38 @@ export function AudiencePicker({
         placeholder={t('skillhub.publishDialog.audiencePlaceholder')}
         disabled={disabled}
       >
-        {() => (
+        {(lockedName || visibleDepts.length > 0) && (
           <>
-            {(lockedName || visibleDepts.length > 0) && (
-              <>
-                <GroupLabel>{t('skillhub.publishDialog.extraDeptGroup')}</GroupLabel>
-                {lockedName && lockedDeptIndex >= 0 && (
-                  <OptionRow
-                    name={lockedName}
-                    selected
-                    locked
-                    lockedTag={t('skillhub.publishDialog.audienceOwnerTag')}
-                    onToggle={() => {}}
-                  />
-                )}
-                {visibleDepts.map((id) => (
-                  <OptionRow
-                    key={`dept-${id}`}
-                    name={deptNames[deptIds.indexOf(id)] ?? id}
-                    selected={value.visibleDeptIds.includes(id)}
-                    disabled={disabled}
-                    onToggle={() => toggleDept(id)}
-                  />
-                ))}
-              </>
+            <DropdownMenuLabel>{t('skillhub.publishDialog.extraDeptGroup')}</DropdownMenuLabel>
+            {lockedName && lockedDeptIndex >= 0 && (
+              <AudienceRow name={lockedName} checked lockedTag={ownerTag} />
             )}
-            {((lockedName && lockedDeptIndex < 0) || visibleTeams.length > 0) && (
-              <>
-                <GroupLabel>{t('skillhub.publishDialog.extraTeamGroup')}</GroupLabel>
-                {lockedName && lockedDeptIndex < 0 && (
-                  <OptionRow
-                    name={lockedName}
-                    selected
-                    locked
-                    lockedTag={t('skillhub.publishDialog.audienceOwnerTag')}
-                    onToggle={() => {}}
-                  />
-                )}
-                {visibleTeams.map((team) => (
-                  <OptionRow
-                    key={`team-${team.slug}`}
-                    name={team.name}
-                    selected={value.sharedTeamSlugs.includes(team.slug)}
-                    disabled={disabled}
-                    onToggle={() => toggleTeam(team.slug)}
-                  />
-                ))}
-              </>
+            {visibleDepts.map((id) => (
+              <AudienceRow
+                key={`dept-${id}`}
+                name={deptNames[deptIds.indexOf(id)] ?? id}
+                checked={value.visibleDeptIds.includes(id)}
+                disabled={disabled}
+                onToggle={() => toggleDept(id)}
+              />
+            ))}
+          </>
+        )}
+        {((lockedName && lockedDeptIndex < 0) || visibleTeams.length > 0) && (
+          <>
+            <DropdownMenuLabel>{t('skillhub.publishDialog.extraTeamGroup')}</DropdownMenuLabel>
+            {lockedName && lockedDeptIndex < 0 && (
+              <AudienceRow name={lockedName} checked lockedTag={ownerTag} />
             )}
+            {visibleTeams.map((team) => (
+              <AudienceRow
+                key={`team-${team.slug}`}
+                name={team.name}
+                checked={value.sharedTeamSlugs.includes(team.slug)}
+                disabled={disabled}
+                onToggle={() => toggleTeam(team.slug)}
+              />
+            ))}
           </>
         )}
       </ScopeDropdown>

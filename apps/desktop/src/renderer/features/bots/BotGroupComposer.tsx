@@ -38,6 +38,15 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tip } from '@/components/ui/tooltip';
+import { currentSelectedOption } from '@/components/ui/dropdown-menu-highlight';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  useMenuPanel,
+  withMenuLabels,
+} from '@/components/ui/menu-row';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import type { UseAttachmentsReturn } from '@/hooks/useAttachments';
@@ -137,6 +146,15 @@ export function BotGroupComposer({
   const [menuOpen, setMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // @ list: glide highlight on the aria-selected option; arrow keys stay in the textarea.
+  const mentionListRef = useMenuPanel<HTMLDivElement>(undefined, {
+    lockWidth: false,
+    options: {
+      current: currentSelectedOption,
+      currentAttributes: ['aria-selected'],
+      keyboardSource: document,
+    },
+  });
   const textRef = useRef(text);
   textRef.current = text;
   const attachmentsRef = useRef(attachmentState.attachments);
@@ -382,11 +400,16 @@ export function BotGroupComposer({
         ) : null}
         {popoverOpen ? (
           <div
+            ref={mentionListRef}
             id={listboxId}
             role="listbox"
             aria-label={t('bots.groupChat.mention.label')}
-            className="absolute bottom-full left-0 z-20 mb-2 flex w-64 max-w-full flex-col gap-0.5 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5"
+            {...menuPanelAttrs}
+            // Shared menu panel (DESIGN §4): Board border and menu surface; no shadow, per the
+            // zero-shadow Bot surfaces (botDesignContract.test.ts).
+            className="absolute bottom-full left-0 z-20 mb-2 flex w-64 max-w-full flex-col gap-0.5 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1.5"
           >
+            <MenuHighlightLayer />
             {options.map((option, index) => (
               <div
                 key={option.kind === 'all' ? 'all' : option.member.botId}
@@ -397,10 +420,8 @@ export function BotGroupComposer({
                 onMouseDown={(event) => event.preventDefault()}
                 onMouseEnter={() => setHighlight(index)}
                 onClick={() => choose(option)}
-                className={cn(
-                  'flex cursor-pointer select-none items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-13 text-[var(--text-primary)]',
-                  index === activeIndex && 'bg-[var(--model-item-hover)]',
-                )}
+                {...menuRowAttrs()}
+                className={cn(COMPOSER_MENU_ROW, 'flex cursor-pointer items-center gap-2.5 px-2.5 py-1.5')}
               >
                 {option.kind === 'all' ? (
                   <span
@@ -412,9 +433,9 @@ export function BotGroupComposer({
                 ) : (
                   <BotAvatar bot={option.member} size="xs" className="h-6 w-6 text-12" />
                 )}
-                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                {withMenuLabels(<span className="min-w-0 flex-1 truncate">{option.label}</span>)}
                 {option.kind === 'all' ? (
-                  <span className="shrink-0 text-12 text-[var(--text-tertiary)]">
+                  <span className="shrink-0 text-12 font-normal leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                     {t('bots.groupChat.mention.allHint')}
                   </span>
                 ) : null}

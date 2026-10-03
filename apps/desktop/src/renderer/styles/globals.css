@@ -2140,6 +2140,31 @@ mark.doc-search-mark [class] {
   -webkit-backdrop-filter: none;
 }
 
+/* MorphPopover 菜单面板(输入框的模型 / 权限 / + 菜单)终态与共享下拉菜单同一材质:面板底色
+   经内联 background-color 从 chip 底色形变过去,所以用变量承接上面两条规则的取值 ——
+   其它主题 = --cmd-palette-bg,Cindy 主题 = 毛玻璃底 + blur 6px,Windows 一律实色、无模糊。 */
+:root {
+  --menu-panel-surface: var(--cmd-palette-bg);
+}
+[data-theme='cindy-light'],
+[data-theme='cindy-dark'] {
+  --menu-panel-surface: var(--surface-translucent-overlay);
+}
+[data-platform='win32'][data-theme='cindy-light'],
+[data-platform='win32'][data-theme='cindy-dark'] {
+  --menu-panel-surface: var(--cmd-palette-bg);
+}
+[data-theme='cindy-light'] [data-menu-surface],
+[data-theme='cindy-dark'] [data-menu-surface] {
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+[data-platform='win32'][data-theme='cindy-light'] [data-menu-surface],
+[data-platform='win32'][data-theme='cindy-dark'] [data-menu-surface] {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 /* 共享下拉菜单行(components/ui/dropdown-menu.tsx,DESIGN §4):行内 Lucide 图标平时线宽 1.5,
    高亮 / 勾选 / 展开时回到 2。只动默认线宽(stroke-width="2")的图标:显式传了其他 strokeWidth 的
    不命中;显式传 2 的由组件标上 data-menu-icon-stroke(行内直接子元素与普通标签内可识别)。 */
