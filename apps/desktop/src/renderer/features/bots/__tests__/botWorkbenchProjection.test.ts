@@ -570,3 +570,53 @@ describe('project picker filtering and tiers', () => {
     expect(cindy).toMatchObject({ name: 'cindy', isGitRepo: true });
   });
 });
+
+describe('buildWorkbenchTiles 导入会话与外部判断去重', () => {
+  it('an imported session suppresses its external twin tile and adopts the external judgment', () => {
+    // 回归:同一会话经设置页导入成 Cindy 任务(claude-<sdkId>)后, 伙伴早前写在
+    // claude:<sdkId> 下的判断仍以外部 tile 出现 —— 同一件事在列表里出现两次。
+    // 现在:外部 tile 被抑制, 判断(标题/结论/next)归属到 session tile。
+    const judgment = {
+      title: '压缩原画',
+      verdict: 'unfinished' as const,
+      next: '压到 512px',
+      project: ART,
+      updatedAt: '2026-10-01T00:00:00.000Z',
+    };
+    const tiles = buildWorkbenchTiles({
+      ...base,
+      sessions: [session('claude-ext-9', { agentKind: 'cc', title: '导入后的任务' })],
+      judgments: {
+        'claude:ext-9': judgment,
+        // 未导入的外部会话照常出外部 tile。
+        'codex:ext-2': { ...judgment, title: '加自动导出', verdict: 'idea' },
+      },
+    });
+    const byId = new Map(tiles.map((tile) => [tile.id, tile]));
+    expect([...byId.keys()].sort()).toEqual(['claude-ext-9', 'codex:ext-2']);
+    expect(byId.get('claude-ext-9')?.type).toBe('session');
+    const merged = byId.get('claude-ext-9');
+    if (merged?.type !== 'session') throw new Error('expected a session tile');
+    expect(merged.title).toBe('压缩原画');
+    expect(merged.verdict).toBe('unfinished');
+    expect(merged.next).toBe('压到 512px');
+  });
+
+  it('keeps the external tile when the imported twin is filtered out of the list', () => {
+    // 导入的会话若因 30 天窗口且不在跑而被过滤, 外部 tile 是该事务的唯一呈现 —— 不得抑制。
+    const judgment = {
+      title: '压缩原画',
+      verdict: 'unfinished' as const,
+      next: null,
+      project: ART,
+      updatedAt: '2026-10-01T00:00:00.000Z',
+    };
+    const old = '2026-08-01T00:00:00.000Z';
+    const tiles = buildWorkbenchTiles({
+      ...base,
+      sessions: [session('claude-ext-9', { agentKind: 'cc', updatedAt: old, userSendAt: old })],
+      judgments: { 'claude:ext-9': judgment },
+    });
+    expect(tiles.map((tile) => tile.id)).toEqual(['claude:ext-9']);
+  });
+});

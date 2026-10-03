@@ -409,6 +409,11 @@ export function buildWorkbenchTiles(input: {
   }
   const delegationChildIds = new Set(delegationByChild.keys());
   const tiles: WorkbenchTile[] = [];
+  // 已按 Cindy 任务展示的导入会话, 其外部键(claude:<sdkId> / codex:<threadId>)。
+  // 同一会话被设置页导入成 Cindy 任务后, 伙伴早前写下的外部判断仍以外部 tile
+  // 出现 —— 同一件事在列表里出现两次; 只在对应 session tile 真正展示时抑制
+  // 外部 tile(若 session 因 30 天窗口等被过滤, 外部 tile 仍是唯一呈现, 不抑制)。
+  const importedExternalTaskIds = new Set<string>();
 
   for (const session of input.sessions) {
     if (!isWorkbenchCandidateSession(session, input.hiddenIds, delegationChildIds)) continue;
@@ -422,13 +427,25 @@ export function buildWorkbenchTiles(input: {
       errored: input.erroredIds.has(session.id),
       delegationStatus: delegation?.status ?? null,
     });
-    const judgment = judgments[session.id];
+    // 导入会话(claude-<sdkId> / codex-<threadId>)在列表里已有 Cindy 任务 tile;
+    // 记下对应的外部键供外部 tile 去重, 并把伙伴写在外部键下的判断(标题/结论/
+    // 下一步)认领到 session tile —— 否则去重后判断信息会随外部 tile 一起消失。
+    const importedOrigin = importedSessionOrigin(session.id, session.agentKind);
+    const importedExternalKey = importedOrigin === 'claude-code'
+      ? `claude:${session.id.slice('claude-'.length)}`
+      : importedOrigin === 'codex'
+        ? `codex:${session.id.slice('codex-'.length)}`
+        : null;
+    const judgment = judgments[session.id] ?? (importedExternalKey ? judgments[importedExternalKey] : undefined);
     const verdict = shownVerdict(judgment);
     const live = state === 'running' || state === 'waiting' || state === 'queued';
     const lastActiveMs = Math.max(toMs(session.userSendAt), toMs(session.updatedAt), delegation?.updatedAt ?? 0);
     // 项目里的 Cindy 任务(含主人自己开的)一律上工作台,不管伙伴判断过没有——它们是伙伴随时知道的
     // 项目事务;只看最近 30 天,在跑 / 等你 / 排队的与伙伴的后台任务不受此限。
     if (!live && !delegation && lastActiveMs < since) continue;
+    // 仅在 session tile 真正展示时才抑制其外部孪生 —— 被窗口过滤的导入会话,
+    // 外部 tile 是该事务的唯一呈现。
+    if (importedExternalKey) importedExternalTaskIds.add(importedExternalKey);
     tiles.push({
       type: 'session',
       key: `session:${session.id}`,
@@ -478,6 +495,7 @@ export function buildWorkbenchTiles(input: {
       continue;
     }
     if (ref.kind !== 'external') continue;
+    if (importedExternalTaskIds.has(taskId)) continue;
     tiles.push({
       type: 'external',
       key: `external:${taskId}`,
