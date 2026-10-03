@@ -77,3 +77,24 @@ it.each([false, true])('retries terminal persistence without rerunning and respe
     expect(execute).toHaveBeenCalledOnce();
   } finally { await engine.stop(); }
 });
+
+it('preserves the saved interval anchor when an edit omits it', async () => {
+  // 回归:writeRoutine 的"旧客户端省略可选字段保留已存选择"合并只对顶层可选
+  // 字段生效 —— triggers 数组整体替换, 未回显 anchorMs 的编辑(旧宿主/MCP 侧重
+  // 建 triggers)会把导入例程的相位锚点静默丢掉, 下次触发退化为"编辑时间+间隔"。
+  const now = 1000; let seq = 0; let state: RoutineState | null = null;
+  const execute = vi.fn(async () => ({ resultText: 'tick' }));
+  const deps = { load: async () => structuredClone(state), save: async (value: RoutineState) => { state = structuredClone(value); }, execute, id: () => `id-${++seq}`, now: () => now, changed() {}, onError(error: unknown) { throw error; } };
+  const engine = new RoutineEngine(deps); await engine.start();
+  const created = await engine.put('bot', { name: 'Ticker', prompt: 'Report', enabled: true, triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000, anchorMs: 10000 }] });
+  expect(created.triggers[0]).toMatchObject({ anchorMs: 10000 });
+
+  // 编辑:只改 prompt,triggers 未回显 anchorMs(同 id)。
+  const edited = await engine.put('bot', { name: 'Ticker', prompt: 'New report', enabled: true, triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] }, created.id);
+  expect(edited.triggers[0]).toMatchObject({ anchorMs: 10000 });
+
+  // 换 id 的触发器不继承旧锚点(显式重建相位)。
+  const rebuilt = await engine.put('bot', { name: 'Ticker', prompt: 'New report', enabled: true, triggers: [{ id: 'fresh', kind: 'interval', intervalMs: 60000 }] }, created.id);
+  expect(rebuilt.triggers[0].anchorMs).toBeUndefined();
+  await engine.stop();
+});
