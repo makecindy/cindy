@@ -43,6 +43,7 @@ export const APP_SHORTCUT_IDS = [
   'search-in-project',
   'save-file',
   'open-terminal',
+  'capture-region',
   'zoom-in',
   'zoom-out',
   'zoom-reset',
@@ -164,6 +165,18 @@ export const APP_SHORTCUT_DEFINITIONS: ReadonlyArray<AppShortcutDefinition> = [
     descriptionKey: 'settings.shortcuts.items.cycle-permission-mode.description',
     rebindable: true,
     getDefaultCombos: () => [combo('Tab', { shift: true })],
+  },
+  // 区域截图: 拉框截取屏幕区域, 复制到剪贴板并进入当前会话输入框(darwin 走
+  // 系统 screencapture -i, win/linux 走 desktopCapturer + 自绘选区覆盖层)。
+  // 无默认键(产品决定): 跨平台找不到真正安全的默认组合(Win+Shift+S 系统
+  // 保留、Ctrl+Alt+字母 与欧洲布局 AltGr 输入冲突等), 用户在设置页自行绑定。
+  {
+    id: 'capture-region',
+    scope: 'app',
+    labelKey: 'settings.shortcuts.items.capture-region.label',
+    descriptionKey: 'settings.shortcuts.items.capture-region.description',
+    rebindable: true,
+    getDefaultCombos: () => [],
   },
   // ⌘W / Ctrl+W 是系统级惯例键 (keyboardReserved 保留组合), 不开放改绑与设置页
   // 展示。行为按焦点分派: 焦点在右侧栏内 → 关激活 tab; 否则 mac 关(隐藏)当前
