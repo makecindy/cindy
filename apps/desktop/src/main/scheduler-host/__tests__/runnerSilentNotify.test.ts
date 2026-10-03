@@ -289,6 +289,100 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     expect(JSON.stringify(notifier.notify.mock.calls)).not.toContain('Retracted partial');
   });
 
+  // #5277: the empty-final rule must be shape independent. An empty
+  // authoritative final only retracts an unsealed streamed partial; a sealed
+  // full-text item already lives in the transcript and is never replayed.
+  const commentary = { text: 'Checking the PR.', isFinal: true, isFullText: true, phase: 'commentary' };
+  const assistantRows = () =>
+    mocks.createMessage.mock.calls.filter(([, body]) => body.role === 'assistant');
+
+  it.each(['', '  '])('does not replay commentary after two empty authoritative finals (#5277 A1, %j)', async (secondEmpty) => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced: true });
+    const pending = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    h.emit({ type: 'text', source: 'codex', data: commentary });
+    h.emit({ type: 'text', source: 'codex', data: { text: '', isFinal: true, isFullText: true, phase: 'final_answer' } });
+    h.emit({ type: 'text', source: 'codex', data: { text: secondEmpty, isFinal: true, isFullText: true, phase: 'final_answer' } });
+    h.emit({ type: 'done', data: { result: 'Checking the PR.' } });
+    await expect(pending).resolves.toMatchObject({ resultText: 'Checking the PR.' });
+    expect(assistantRows()).toHaveLength(0);
+  });
+
+  it.each([
+    ['without phase', { text: '', isFinal: true, isFullText: true }],
+    ['as an empty commentary', { text: '', isFinal: true, isFullText: true, phase: 'commentary' }],
+  ])('does not replay commentary after an empty authoritative final %s (#5277 A2)', async (_label, emptyFinal) => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced: true });
+    const pending = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    h.emit({ type: 'text', source: 'codex', data: commentary });
+    h.emit({ type: 'text', source: 'codex', data: emptyFinal });
+    h.emit({ type: 'done', data: { result: 'Checking the PR.' } });
+    await expect(pending).resolves.toMatchObject({ resultText: 'Checking the PR.' });
+    expect(assistantRows()).toHaveLength(0);
+  });
+
+  it('does not replay commentary when an empty commentary precedes the empty final answer (#5277 real-device shape)', async () => {
+    // Real rollout: 「我先看一下。」→ `<|eos|>` → `:codex-file-citation{}`; the last two
+    // are cleaned to empty text and done falls back to the first item.
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced: true });
+    const pending = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    h.emit({ type: 'text', source: 'codex', data: commentary });
+    h.emit({ type: 'text', source: 'codex', data: { text: '', isFinal: true, isFullText: true, phase: 'commentary' } });
+    h.emit({ type: 'text', source: 'codex', data: { text: '', isFinal: true, isFullText: true, phase: 'final_answer' } });
+    h.emit({ type: 'done', data: { result: 'Checking the PR.' } });
+    await expect(pending).resolves.toMatchObject({ resultText: 'Checking the PR.' });
+    expect(assistantRows()).toHaveLength(0);
+  });
+
+  it('does not replay a streamed answer that follows an empty final when done carries the canonical text (#5277 B2)', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced: true });
+    const pending = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    h.emit({ type: 'text', source: 'codex', data: commentary });
+    h.emit({ type: 'text', source: 'codex', data: { text: '', isFinal: true, isFullText: true, phase: 'final_answer' } });
+    h.emit({ type: 'text', source: 'codex', data: { text: 'The PR looks ', isFinal: false, phase: 'final_answer' } });
+    h.emit({ type: 'text', source: 'codex', data: { text: 'fine.', isFinal: false, phase: 'final_answer' } });
+    h.emit({ type: 'done', data: { result: 'The PR looks fine.' } });
+    await expect(pending).resolves.toMatchObject({ resultText: 'The PR looks fine.' });
+    expect(assistantRows()).toHaveLength(0);
+  });
+
+  it('keeps a Claude Code fallback tail in the same message after a block final (#5282 review)', async () => {
+    // claude-code emits each text block as isFinal without isFullText, then
+    // handleResult pushes the UI-missed tail as a delta of the same message and
+    // done carries the whole assistant text. The tail must extend the block.
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced: true });
+    const pending = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    h.emit({ type: 'text', source: 'claude-code', data: { text: 'The PR looks', isFinal: true } });
+    h.emit({ type: 'text', source: 'claude-code', data: { text: ' fine.', isFinal: false } });
+    h.emit({ type: 'done', data: { result: 'The PR looks fine.' } });
+    await expect(pending).resolves.toMatchObject({ resultText: 'The PR looks fine.' });
+    expect(assistantRows()).toHaveLength(0);
+  });
+
+  it('still writes the canonical answer when the stream after an empty final was retracted again (#5277)', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced: true });
+    const pending = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    h.emit({ type: 'text', source: 'codex', data: commentary });
+    h.emit({ type: 'text', source: 'codex', data: { text: '', isFinal: true, isFullText: true, phase: 'final_answer' } });
+    h.emit({ type: 'text', source: 'codex', data: { text: 'Retracted partial', isFinal: false, phase: 'final_answer' } });
+    h.emit({ type: 'text', source: 'codex', data: { text: '', isFinal: true, isFullText: true, phase: 'final_answer' } });
+    h.emit({ type: 'done', data: { result: 'The PR looks fine.' } });
+    await expect(pending).resolves.toMatchObject({ resultText: 'The PR looks fine.' });
+    expect(assistantRows()).toHaveLength(1);
+    expect(assistantRows()[0]![1]).toMatchObject({ content: 'The PR looks fine.' });
+  });
+
   it.each(
     [true, false].flatMap((silenced) =>
       ['result', 'finalText'].map((field) => ({ silenced, field })),
