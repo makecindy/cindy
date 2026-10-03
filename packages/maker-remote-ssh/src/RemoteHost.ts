@@ -17,11 +17,13 @@
 
 import { EventEmitter } from 'node:events';
 import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { Client, type ConnectConfig, type ClientChannel, type TcpConnectionDetails } from 'ssh2';
 
 import type { HostConfig, HostSnapshot, RemoteStatus } from './types.js';
-import { resolveAuth } from './credentials.js';
+import { resolveAuth, type AgentAuthOutcome, type ResolvedAuth } from './credentials.js';
 import { type HostKeyStore, hostKeyFingerprint, hostKeyId, decideHostKey } from './hostKeys.js';
 
 export interface RemoteHostDeps {
@@ -226,27 +228,151 @@ export function isAuthFailure(msg: string): boolean {
 }
 
 /**
- * Build a one-line user-facing message for an auth failure. Subtitle in
- * the host row + toast both show this verbatim — keep it under ~120 chars
- * so it doesn't ellipsize. CLI command text stays English (shell commands
- * are English) but a future improvement could split this into structured
- * fields for full i18n.
+ * Render an identity path for a user-facing error without leaking the raw
+ * absolute path: `~/.ssh/x` when it lives under the home directory, otherwise
+ * just the basename. Never touches the file, never guesses a `.pub` sibling.
  */
-export function authFailureHint(cfg: HostConfig): string {
-  const portArg = cfg.port && cfg.port !== 22 ? `-p ${cfg.port} ` : '';
+export function describeIdentityPath(identityPath: string, homeDir: string = os.homedir()): string {
+  const trimmed = identityPath.trim();
+  if (!trimmed) return '';
+  if (trimmed === '~' || trimmed.startsWith('~/') || trimmed.startsWith('~\\')) return trimmed;
+  const home = homeDir.trim();
+  if (home) {
+    const rel = path.relative(home, trimmed);
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+      return `~/${rel.split(path.sep).join('/')}`;
+    }
+  }
+  return path.basename(trimmed);
+}
+
+/**
+ * Identity files the attempt was actually limited to. Prefer the resolved
+ * auth's list (single source of truth); without it, mirror `resolveAuth`:
+ * ssh_config IdentityFile entries only count when they produced
+ * `allowedAgentFingerprints`, otherwise only the explicit Cindy pin does.
+ */
+function pinnedIdentityFilesFor(cfg: HostConfig, explicit?: readonly string[]): string[] {
+  if (explicit) return [...explicit];
   if (cfg.authMethod === 'agent') {
-    const pinned = !!cfg.identityFile
+    if ((cfg.sshAuthentication?.allowedAgentFingerprints?.length ?? 0) > 0) {
+      return [...(cfg.sshAuthentication?.configuredIdentityFiles ?? [])];
+    }
+    return cfg.identityFile ? [cfg.identityFile] : [];
+  }
+  return cfg.identityFile ? [cfg.identityFile] : [];
+}
+
+/**
+ * Render the identity set: de-duplicate by raw path (two different files may
+ * share a basename), then disambiguate colliding labels with the parent
+ * directory name so nothing configured is silently dropped.
+ */
+function describeIdentityFiles(files: readonly string[], homeDir?: string): string {
+  const raws: string[] = [];
+  for (const raw of files) {
+    const trimmed = typeof raw === 'string' ? raw.trim() : '';
+    if (trimmed && !raws.includes(trimmed)) raws.push(trimmed);
+  }
+  const labels = raws.map((raw) => describeIdentityPath(raw, homeDir));
+  return labels
+    .map((label, index) => {
+      if (labels.indexOf(label) === labels.lastIndexOf(label)) return label;
+      const parent = path.basename(path.dirname(raws[index]!));
+      return parent && parent !== '.' ? `${parent}/${label}` : label;
+    })
+    .filter((label) => label.length > 0)
+    .join(', ');
+}
+
+export interface AuthFailureHintOptions {
+  /**
+   * Underlying failure text from ssh2 (e.g. "All configured authentication
+   * methods failed"). Appended as a short summary so the visible error keeps
+   * the real reason instead of only a template (#4201). Never contains key
+   * material; callers must not pass passphrases or agent sockets here.
+   */
+  cause?: string;
+  /** Identity files the attempt was limited to (from `ResolvedAuth`). */
+  pinnedIdentityFiles?: readonly string[];
+  /**
+   * What the filtered agent actually did (`ResolvedAuth.readAgentAuthOutcome`).
+   * `offeredCount === 0` = nothing was offered (key not loaded);
+   * `signFailureCount > 0` = the agent could not sign (local problem);
+   * `offeredCount > 0 && signedCount > 0` with no sign failure = the remote
+   * rejected a signed attempt. Anything else is unknown → neutral wording.
+   */
+  agentOutcome?: AgentAuthOutcome | null;
+  /** Test seam for home-directory abbreviation. */
+  homeDir?: string;
+}
+
+/**
+ * Build a one-line user-facing message for an auth failure. Subtitle in
+ * the host row + toast both show this verbatim. CLI command text stays
+ * English (shell commands are English) but a future improvement could split
+ * this into structured fields for full i18n.
+ *
+ * #4201: the message is chosen by auth *shape*, but it must not assert a
+ * cause it cannot see. For `agent` + pinned identities we name the identity
+ * set the attempt was actually limited to (a wrong cached IdentityFile is the
+ * common cause) and only claim "nothing was loaded" / "the remote rejected
+ * the offered keys" when the FilteredAgent recorded that fact; otherwise the
+ * wording stays neutral. Every variant keeps a phrase `isAuthFailure()`
+ * recognizes (see the invariant test).
+ */
+export function authFailureHint(cfg: HostConfig, options: AuthFailureHintOptions = {}): string {
+  const portArg = cfg.port && cfg.port !== 22 ? `-p ${cfg.port} ` : '';
+  const who = `${cfg.user}@${cfg.hostname}`;
+  const withCause = (text: string): string => {
+    const cause = options.cause?.trim();
+    if (!cause || text.toLowerCase().includes(cause.toLowerCase())) return text;
+    return `${text} (ssh: ${cause})`;
+  };
+  const pinnedFiles = pinnedIdentityFilesFor(cfg, options.pinnedIdentityFiles);
+  const identities = describeIdentityFiles(pinnedFiles, options.homeDir);
+  if (cfg.authMethod === 'agent') {
+    const pinned = pinnedFiles.length > 0
       || (cfg.sshAuthentication?.allowedAgentFingerprints?.length ?? 0) > 0;
     if (pinned) {
-      return 'SSH agent has no key the remote accepts from the configured identity set. '
-        + 'Load the matching private key with `ssh-add`, then try again.';
+      const identitySet = identities ? ` (IdentityFile: ${identities})` : '';
+      const outcome = options.agentOutcome;
+      if (outcome?.offeredCount === 0) {
+        return withCause(
+          `Authentication failed for ${who}: none of the configured identities${identitySet} is currently loaded in ssh-agent, so no key was offered. `
+            + 'Load it with `ssh-add`, or re-add this host with the identity that is loaded.',
+        );
+      }
+      if (outcome && outcome.signFailureCount > 0) {
+        return withCause(
+          `Authentication failed for ${who}: ssh-agent could not sign with the configured identity${identitySet} (agent locked, hardware-key confirmation refused, or signer error). `
+            + 'Unlock the agent or retry the key confirmation, then try again.',
+        );
+      }
+      if (outcome && (outcome.offeredCount ?? 0) > 0 && outcome.signedCount > 0) {
+        // A signature proves the remote saw that key; it does not prove every
+        // enumerated key was tried (MaxAuthTries can end the session early).
+        const everyKeyTried = outcome.signedCount >= (outcome.offeredCount ?? 0);
+        const rejected = everyKeyTried
+          ? `the remote rejected every key ssh-agent offered from the configured identity set${identitySet}`
+          : `the remote rejected the key(s) ssh-agent offered from the configured identity set${identitySet} before every identity was tried`;
+        return withCause(
+          `Authentication failed for ${who}: ${rejected}. `
+            + 'Verify that identity\'s public key is installed on the remote, or re-add this host with the right identity.',
+        );
+      }
+      return withCause(
+        `Authentication failed for ${who} with the configured identity set${identitySet}. `
+          + 'Verify that identity\'s public key is installed on the remote, re-add this host with the right identity, or load the matching key with `ssh-add` if it is not in the agent.',
+      );
     }
-    return `SSH agent has no key the remote accepts. Run \`ssh-copy-id ${portArg}${cfg.user}@${cfg.hostname}\` from your terminal to install your pubkey, or re-add this host with "Identity file" auth.`;
+    return withCause(`SSH agent has no key the remote accepts. Run \`ssh-copy-id ${portArg}${who}\` from your terminal to install your pubkey, or re-add this host with "Identity file" auth.`);
   }
   if (cfg.authMethod === 'key') {
-    return `The configured identity file was rejected by the remote. Verify it is the right key for ${cfg.user}@${cfg.hostname}, or run \`ssh-copy-id ${portArg}-i <public-key-file> ${cfg.user}@${cfg.hostname}\` with its matching public key.`;
+    const which = identities ? `The configured identity file (${identities})` : 'The configured identity file';
+    return withCause(`${which} was rejected by the remote. Verify it is the right key for ${who}, or run \`ssh-copy-id ${portArg}-i <public-key-file> ${who}\` with its matching public key.`);
   }
-  return `Authentication failed connecting as ${cfg.user}@${cfg.hostname}.`;
+  return withCause(`Authentication failed connecting as ${who}.`);
 }
 
 function wrapChannel(channel: ClientChannel): ExecStreamHandle {
@@ -1197,7 +1323,7 @@ export class RemoteHost {
     this.hostKeyError = null;
     this.lastAuthError = null;
 
-    let auth;
+    let auth: ResolvedAuth;
     try {
       auth = await resolveAuth(attemptConfig);
     } catch (err) {
@@ -1296,7 +1422,11 @@ export class RemoteHost {
         this.lastError = this.hostKeyError
           ? this.hostKeyError
           : isAuthFailure(err.message)
-            ? authFailureHint(attemptConfig)
+            ? authFailureHint(attemptConfig, {
+                cause: err.message,
+                pinnedIdentityFiles: auth.pinnedIdentityFiles,
+                agentOutcome: auth.readAgentAuthOutcome?.() ?? null,
+              })
             : err.message;
         this.client = null;
         this.setStatus('failed');
