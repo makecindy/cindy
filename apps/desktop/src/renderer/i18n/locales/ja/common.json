@@ -16102,7 +16102,7 @@
       "usageDiagnosisDiscovering": "使用記録を検索中…",
       "usageDiagnosisIndexing": "使用記録を読み込み中: {{count}} / {{total}}",
       "usageDiagnosisRefreshFailed": "使用記録を準備できませんでした。再試行してください。",
-      "usageDiagnosisSnapshotNotice": "前回の更新完了: {{time}}。未更新または欠落している記録は診断で明示します。",
+      "usageDiagnosisSnapshotNotice": "使用記録が一部そろっていない可能性があります。診断には現在見つかっている記録を使います。前回の更新完了: {{time}}。",
       "usageDiagnosisSnapshotTimeUnknown": "不明",
       "usageCurrentCount": "現行版 30 日間",
       "usageTotalCount": "直近 30 日",

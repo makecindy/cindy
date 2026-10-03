@@ -16307,7 +16307,7 @@
       "usageDiagnosisDiscovering": "A procurar registos de utilização…",
       "usageDiagnosisIndexing": "A ler registos de utilização: {{count}} / {{total}}",
       "usageDiagnosisRefreshFailed": "Não foi possível preparar os registos de utilização. Tente novamente.",
-      "usageDiagnosisSnapshotNotice": "Última atualização completa: {{time}}. O diagnóstico assinalará registos desatualizados ou em falta.",
+      "usageDiagnosisSnapshotNotice": "Os registos de utilização podem estar incompletos. O diagnóstico usará os registos encontrados até agora. Última atualização completa: {{time}}.",
       "usageDiagnosisSnapshotTimeUnknown": "Desconhecida",
       "usageDiagnosisPrompt": {
         "freshnessHeading": "Atualidade das evidências:",

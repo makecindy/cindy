@@ -53,7 +53,7 @@ export function renderSkillUsageDiagnosisPrompt(params: {
       text.freshnessBoundary,
       JSON.stringify({
         refreshing: params.refreshStatus.phase === 'discovering' || params.refreshStatus.phase === 'indexing',
-        incomplete: params.refreshStatus.incomplete,
+        incomplete: params.refreshStatus.phase !== 'complete' || params.refreshStatus.incomplete,
         lastSuccessfulRefresh: params.refreshStatus.lastSuccessAt
           ? new Date(params.refreshStatus.lastSuccessAt).toISOString() : null,
         missingTranscriptCount: params.refreshStatus.missingCount,

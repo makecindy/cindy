@@ -16169,7 +16169,7 @@
       "usageDiagnosisDiscovering": "Finding usage records…",
       "usageDiagnosisIndexing": "Reading usage records: {{count}} / {{total}}",
       "usageDiagnosisRefreshFailed": "Usage records could not be prepared. Please retry.",
-      "usageDiagnosisSnapshotNotice": "Last complete update: {{time}}. The diagnosis will identify outdated or missing records.",
+      "usageDiagnosisSnapshotNotice": "Usage records may be incomplete. The diagnosis will use the records found so far. Last complete update: {{time}}.",
       "usageDiagnosisSnapshotTimeUnknown": "Unknown",
       "usageCurrentCount": "Current version, 30 days",
       "usageTotalCount": "Last 30 days",

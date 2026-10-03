@@ -16158,7 +16158,7 @@
       "usageDiagnosisDiscovering": "Nutzungsdaten werden gesucht…",
       "usageDiagnosisIndexing": "Nutzungsdaten werden gelesen: {{count}} / {{total}}",
       "usageDiagnosisRefreshFailed": "Die Nutzungsdaten konnten nicht vorbereitet werden. Bitte erneut versuchen.",
-      "usageDiagnosisSnapshotNotice": "Letzte vollständige Aktualisierung: {{time}}. Die Diagnose weist auf veraltete oder fehlende Daten hin.",
+      "usageDiagnosisSnapshotNotice": "Die Nutzungsdaten sind möglicherweise unvollständig. Die Diagnose verwendet die bisher gefundenen Einträge. Letzte vollständige Aktualisierung: {{time}}.",
       "usageDiagnosisSnapshotTimeUnknown": "Unbekannt",
       "usageDiagnosisPrompt": {
         "freshnessHeading": "Aktualität der Belege:",

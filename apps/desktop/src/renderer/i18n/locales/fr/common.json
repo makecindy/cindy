@@ -16307,7 +16307,7 @@
       "usageDiagnosisDiscovering": "Recherche des données d’utilisation…",
       "usageDiagnosisIndexing": "Lecture des données d’utilisation : {{count}} / {{total}}",
       "usageDiagnosisRefreshFailed": "Impossible de préparer les données d’utilisation. Réessayez.",
-      "usageDiagnosisSnapshotNotice": "Dernière mise à jour complète : {{time}}. Le diagnostic signalera les données anciennes ou manquantes.",
+      "usageDiagnosisSnapshotNotice": "Les données d’utilisation peuvent être incomplètes. Le diagnostic s’appuiera sur les données trouvées jusqu’ici. Dernière mise à jour complète : {{time}}.",
       "usageDiagnosisSnapshotTimeUnknown": "Inconnue",
       "usageDiagnosisPrompt": {
         "freshnessHeading": "Actualité des preuves :",

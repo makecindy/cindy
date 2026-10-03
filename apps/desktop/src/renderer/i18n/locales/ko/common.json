@@ -16102,7 +16102,7 @@
       "usageDiagnosisDiscovering": "사용 기록 찾는 중…",
       "usageDiagnosisIndexing": "사용 기록 읽는 중: {{count}} / {{total}}",
       "usageDiagnosisRefreshFailed": "사용 기록을 준비할 수 없습니다. 다시 시도하세요.",
-      "usageDiagnosisSnapshotNotice": "마지막 업데이트 완료: {{time}}. 업데이트되지 않았거나 누락된 기록은 진단에서 명시합니다.",
+      "usageDiagnosisSnapshotNotice": "사용 기록이 불완전할 수 있습니다. 지금까지 찾은 기록으로 진단합니다. 마지막 업데이트 완료: {{time}}.",
       "usageDiagnosisSnapshotTimeUnknown": "알 수 없음",
       "usageCurrentCount": "현재 버전 30일",
       "usageTotalCount": "최근 30일",

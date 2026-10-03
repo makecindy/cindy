@@ -16091,7 +16091,7 @@
       "usageDiagnosisDiscovering": "正寻用录…",
       "usageDiagnosisIndexing": "正阅用录：{{count}} / {{total}}",
       "usageDiagnosisRefreshFailed": "未能备齐用录，请复试",
-      "usageDiagnosisSnapshotNotice": "上次备齐之时：{{time}}。诊察将明示陈旧或阙失之录",
+      "usageDiagnosisSnapshotNotice": "用录或有阙失。诊察据今所得之录。上次备齐之时：{{time}}",
       "usageDiagnosisSnapshotTimeUnknown": "未详",
       "usageDiagnosisPrompt": {
         "freshnessHeading": "证据更新状态：",

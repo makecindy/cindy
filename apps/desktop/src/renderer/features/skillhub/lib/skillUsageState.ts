@@ -1,3 +1,5 @@
+import type { SkillUsageRefreshStatus } from '../../../../shared/skillUsageRefresh';
+
 export interface SkillUsagePanelState {
   entryId: string | null;
   loading: boolean;
@@ -34,7 +36,7 @@ export function beginUsageSummaryRequest(
   previous: SkillUsagePanelState,
   entryId: string,
 ): SkillUsagePanelState {
-  if (previous.entryId === entryId && previous.summary) {
+  if (previous.entryId === entryId && previous.summary && previous.summary.totalUseCount > 0) {
     return {
       ...previous,
       loading: true,
@@ -50,20 +52,16 @@ export function beginUsageSummaryRequest(
 }
 
 export function settleUsageSummarySuccess(
-  previous: SkillUsagePanelState,
   entryId: string,
-  result: { refreshing: boolean; summary: SkillUsageSummary },
+  result: { refreshing: boolean; phase: SkillUsageRefreshStatus['phase']; summary: SkillUsageSummary },
 ): SkillUsagePanelState {
-  const keepPreviousSummary =
-    previous.entryId === entryId &&
-    previous.summary !== null &&
-    result.refreshing &&
-    result.summary.totalUseCount === 0;
   return {
     entryId,
     loading: result.refreshing,
     error: null,
-    summary: keepPreviousSummary ? previous.summary : result.summary,
+    summary: result.summary.totalUseCount > 0 || result.phase === 'complete'
+      ? result.summary
+      : null,
   };
 }
 

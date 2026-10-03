@@ -16307,7 +16307,7 @@
       "usageDiagnosisDiscovering": "Buscando registros de uso…",
       "usageDiagnosisIndexing": "Lendo registros de uso: {{count}} / {{total}}",
       "usageDiagnosisRefreshFailed": "Não foi possível preparar os registros de uso. Tente novamente.",
-      "usageDiagnosisSnapshotNotice": "Última atualização completa: {{time}}. O diagnóstico assinalará registros desatualizados ou ausentes.",
+      "usageDiagnosisSnapshotNotice": "Os registros de uso podem estar incompletos. O diagnóstico usará os registros encontrados até agora. Última atualização completa: {{time}}.",
       "usageDiagnosisSnapshotTimeUnknown": "Desconhecida",
       "usageDiagnosisPrompt": {
         "freshnessHeading": "Atualidade das evidências:",

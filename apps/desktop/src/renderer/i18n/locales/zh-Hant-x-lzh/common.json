@@ -16091,7 +16091,7 @@
       "usageDiagnosisDiscovering": "正尋用錄…",
       "usageDiagnosisIndexing": "正閱用錄：{{count}} / {{total}}",
       "usageDiagnosisRefreshFailed": "未能備齊用錄，請復試",
-      "usageDiagnosisSnapshotNotice": "上次備齊之時：{{time}}。診察將明示陳舊或闕失之錄",
+      "usageDiagnosisSnapshotNotice": "用錄或有闕失。診察據今所得之錄。上次備齊之時：{{time}}",
       "usageDiagnosisSnapshotTimeUnknown": "未詳",
       "usageDiagnosisPrompt": {
         "freshnessHeading": "證據更新狀態：",

@@ -16102,7 +16102,7 @@
       "usageDiagnosisDiscovering": "正在尋找使用記錄…",
       "usageDiagnosisIndexing": "正在讀取使用記錄：{{count}} / {{total}}",
       "usageDiagnosisRefreshFailed": "無法準備使用記錄，請重試。",
-      "usageDiagnosisSnapshotNotice": "上次完整更新：{{time}}。診斷會註明未更新或缺失的記錄。",
+      "usageDiagnosisSnapshotNotice": "使用記錄可能不完整。診斷會使用目前找到的記錄。上次完整更新：{{time}}。",
       "usageDiagnosisSnapshotTimeUnknown": "未知",
       "usageCurrentCount": "當前版本 30 天",
       "usageTotalCount": "近 30 天使用",

@@ -55,4 +55,15 @@ describe('Skill usage diagnosis prompt', () => {
     expect(prompt).toContain('2023-11-14T22:13:20.000Z');
     expect(prompt).toContain('Do not interpret missing or outdated evidence as no usage');
   });
+
+  it('marks records from a scan still in progress as incomplete', () => {
+    const prompt = renderSkillUsageDiagnosisPrompt({
+      ...params,
+      refreshStatus: { phase: 'indexing', scanned: 1, total: 3, lastSuccessAt: null,
+        incomplete: false, missingCount: 0, error: null, hasSnapshot: false },
+    });
+    expect(prompt).toContain('"refreshing": true');
+    expect(prompt).toContain('"incomplete": true');
+    expect(prompt).toContain(JSON.stringify(rawFilePath));
+  });
 });
