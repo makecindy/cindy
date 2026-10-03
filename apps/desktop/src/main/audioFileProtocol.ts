@@ -120,12 +120,15 @@ export function parseRangeHeader(
     end = totalSize - 1;
   } else if (startStr !== '') {
     start = parseInt(startStr, 10);
-    end = endStr === '' ? totalSize - 1 : parseInt(endStr, 10);
+    const requestedEnd = endStr === '' ? totalSize - 1 : parseInt(endStr, 10);
+    // A satisfiable byte-range remains valid when its requested end extends
+    // past the representation; serve through the final available byte.
+    end = Math.min(requestedEnd, totalSize - 1);
     if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
   } else {
     return null;
   }
-  if (start > end || start >= totalSize || end >= totalSize) {
+  if (start > end || start >= totalSize) {
     return { kind: 'unsatisfiable' };
   }
   return { kind: 'range', start, end };
