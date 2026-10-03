@@ -53,6 +53,7 @@ function renderChrome(
     canGoForward?: boolean;
     commentActive?: boolean;
     onReload?: () => void;
+    onHardReload?: () => void;
     onStop?: () => void;
   } = {},
 ) {
@@ -69,6 +70,7 @@ function renderChrome(
       canGoForward: extra.canGoForward ?? false,
       onNavigate,
       onReload: extra.onReload ?? vi.fn(),
+      onHardReload: extra.onHardReload ?? vi.fn(),
       onStop: extra.onStop ?? vi.fn(),
       onGoBack: vi.fn(),
       onGoForward: vi.fn(),
@@ -85,6 +87,24 @@ function renderChrome(
 }
 
 describe('BrowserChrome', () => {
+  it('offers a distinct hard reload action while normal reload keeps its meaning', () => {
+    const onReload = vi.fn();
+    const onHardReload = vi.fn();
+    renderChrome('http://localhost:3000/', { onReload, onHardReload });
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.hardReload' }));
+    expect(onHardReload).toHaveBeenCalledOnce();
+    expect(onReload).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.reload' }));
+    expect(onReload).toHaveBeenCalledOnce();
+  });
+
+  it('disables hard reload for an empty tab', () => {
+    const onHardReload = vi.fn();
+    renderChrome('about:blank', { onHardReload });
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.hardReload' }));
+    expect(onHardReload).not.toHaveBeenCalled();
+  });
+
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();

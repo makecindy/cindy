@@ -47,6 +47,7 @@ vi.mock('../../security/trustedAppRenderer', () => ({
 
 import {
   RSB_NATIVE_POPUP_CLAIM_CHANNEL,
+  RSB_NATIVE_POPUP_COMMAND_CHANNEL,
   RSB_NATIVE_POPUP_CLOSE_CHANNEL,
   RSB_NATIVE_POPUP_SET_BOUNDS_CHANNEL,
 } from '../../../shared/rsbNativePopup';
@@ -76,6 +77,8 @@ function makeContents(id: number) {
     canGoForward: () => boolean;
     isCurrentlyAudible: () => boolean;
     getZoomFactor: () => number;
+    reload: ReturnType<typeof vi.fn>;
+    reloadIgnoringCache: ReturnType<typeof vi.fn>;
   };
   contents.id = id;
   contents.destroyed = false;
@@ -94,6 +97,8 @@ function makeContents(id: number) {
   contents.canGoForward = () => false;
   contents.isCurrentlyAudible = () => false;
   contents.getZoomFactor = () => 1;
+  contents.reload = vi.fn();
+  contents.reloadIgnoringCache = vi.fn();
   return contents;
 }
 
@@ -138,6 +143,22 @@ describe('main-owned RSB native popup surfaces', () => {
   afterEach(() => {
     _resetRsbNativePopupSurfacesForTests();
     vi.useRealTimers();
+  });
+
+  it.each([undefined, false, true])('reloads only the owned popup (ignoreCache=%s)', (ignoreCache) => {
+    const host = makeContents(1);
+    const popup = makeContents(42);
+    electronMocks.windows.set(host, makeWindow());
+    const surfaceId = createRsbNativePopupSurface(host as never, popup as never);
+    const command = electronMocks.handlers.get(RSB_NATIVE_POPUP_COMMAND_CHANNEL)!;
+    command({ sender: host }, { surfaceId, command: 'reload', ignoreCache });
+    expect(popup.reload).toHaveBeenCalledTimes(ignoreCache ? 0 : 1);
+    expect(popup.reloadIgnoringCache).toHaveBeenCalledTimes(ignoreCache ? 1 : 0);
+    expect(() => command({ sender: makeContents(2) }, { surfaceId, command: 'reload', ignoreCache: true })).toThrow();
+    expect(() => command({ sender: host }, { surfaceId, command: 'reload', ignoreCache: 'true' })).toThrow();
+    expect(popup.reloadIgnoringCache).toHaveBeenCalledTimes(ignoreCache ? 1 : 0);
+    popup.close();
+    expect(() => command({ sender: host }, { surfaceId, command: 'reload', ignoreCache: true })).toThrow();
   });
 
   it('adopts the exact popup WebContents, claims it, and applies renderer bounds', async () => {
