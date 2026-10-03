@@ -433,16 +433,17 @@ describe('auth login-flow reset', () => {
     const completeBody = source.slice(completeStart, completeEnd);
     const vaultTransaction = completeBody.indexOf('await commitDesktopLoginSessions(');
     const durableSession = completeBody.indexOf('writePersistedAuthSessionOrThrow(');
-    const ownerCommit = completeBody.indexOf('await withCloudOwnerCommit({');
+    const runtimePublish = completeBody.indexOf('await publishRuntimeSession(true);');
     expect(vaultTransaction).toBeGreaterThan(-1);
     expect(durableSession).toBeGreaterThan(vaultTransaction);
     expect(durableSession).toBeGreaterThan(-1);
-    expect(ownerCommit).toBeGreaterThan(durableSession);
+    expect(completeBody).toContain('await withCloudOwnerCommit({');
+    expect(runtimePublish).toBeGreaterThan(durableSession);
     expect(completeBody.indexOf('restorePersistedAuthSessionIfCurrent(')).toBeGreaterThan(
-      ownerCommit,
+      runtimePublish,
     );
-    expect(completeBody.indexOf('rollback: () => {')).toBeGreaterThan(ownerCommit);
-    expect(completeBody.slice(ownerCommit)).not.toContain(
+    expect(completeBody.indexOf('rollback: () => {')).toBeGreaterThan(runtimePublish);
+    expect(completeBody.slice(runtimePublish)).not.toContain(
       'writePersistedAuthSession(outcome.refreshToken',
     );
   });
@@ -713,7 +714,7 @@ describe('auth login-flow reset', () => {
     const logoutEnd = source.indexOf('\n}\n\n/**\n * Called on system resume', logoutStart);
     const logoutBody = source.slice(logoutStart, logoutEnd);
     const tombstoneCommit = logoutBody.indexOf('await mutateAuthAccountVault(');
-    const ownerTeardown = logoutBody.indexOf('await withAccountFreeOwnerCommit({');
+    const ownerTeardown = logoutBody.indexOf('await withAccountFreeOwnerCommit({', tombstoneCommit);
     expect(tombstoneCommit).toBeGreaterThan(-1);
     expect(logoutBody).toContain('savedVaultWasUnreadable');
     expect(logoutBody).toContain('await persistLogoutTombstoneOnly(currentIdentity.accountKey);');
@@ -1000,7 +1001,7 @@ describe('auth login-flow reset', () => {
     const helperStart = source.indexOf('async function expireRuntimeAuth(');
     const helperEnd = source.indexOf('\n}\n\n// ── Public API', helperStart);
     const helperBody = source.slice(helperStart, helperEnd);
-    expect(helperBody).toContain('clearAuth({ notify: false,');
+    expect(helperBody).toContain('clearAuth({');
     expect(helperBody).toContain('await withAccountFreeOwnerCommit({');
     expect(helperBody).toContain('authAlreadyCleared: true');
     expect(helperBody).toContain('notifySessionExpired(reason);');

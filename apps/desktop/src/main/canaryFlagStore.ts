@@ -35,6 +35,13 @@ const log = createLogger('canaryFlagStore');
 
 const FLAG_FILE = 'canary-flag.json';
 
+// A credential-store failure can leave another saved account's flag on disk
+// while the user explicitly starts a process-only session. Keep that session
+// on the neutral stable channel without overwriting the saved account's flag.
+// The override intentionally survives an in-process logout and disappears on
+// process exit; a later durable login clears it before syncing its own flag.
+let processOverride: boolean | null = null;
+
 function getFlagPath(): string {
   return path.join(app.getPath('userData'), FLAG_FILE);
 }
@@ -44,6 +51,7 @@ function getFlagPath(): string {
  * Any I/O error or malformed payload → false (fail-safe to stable channel).
  */
 export function read(): boolean {
+  if (processOverride !== null) return processOverride;
   try {
     const raw = fs.readFileSync(getFlagPath(), 'utf-8');
     const parsed = JSON.parse(raw) as { canary?: unknown };
@@ -51,6 +59,11 @@ export function read(): boolean {
   } catch {
     return false;
   }
+}
+
+/** Override reads for this process without changing the persisted account flag. */
+export function setProcessOverride(value: boolean | null): void {
+  processOverride = value;
 }
 
 export function write(): void {
