@@ -11500,6 +11500,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getSessionRowSnapshot,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     shouldQueueNewTurn: (sessionId): boolean => inputCoordinator.shouldQueueNewTurn(sessionId),
+    steerInterAgentReport: (sessionId, item, expectedTurn) =>
+      inputCoordinator.steerInterAgentReport(sessionId, item, expectedTurn),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
     withSendToSessionLock,
     prepareUnhealthySession: (sessionId) =>

@@ -1140,6 +1140,70 @@ function createHarness(opts?: {
   };
 }
 
+describe('automatic inter-agent report steering', () => {
+  const sid = 'lead-report';
+  function expected(h: ReturnType<typeof createHarness>) {
+    return { session: h.getTurnSessionIdentity(), turnGeneration: 0 };
+  }
+  it('joins a running turn even though ordinary new turns must queue', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    expect(h.coordinator.shouldQueueNewTurn(sid)).toBe(true);
+    const item = makeItem('report', 'worker result');
+    expect(await h.coordinator.steerInterAgentReport(sid, item, expected(h))).toBe('steered');
+    expect(h.steerToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.hasPendingQueueItem(sid, 'report')).toBe(false);
+  });
+  it.each(['queue', 'pause', 'edit', 'compact', 'interaction', 'credential', 'generation', 'identity', 'idle', 'restore'])
+    ('does not bypass the %s boundary', async boundary => {
+      const h = createHarness();
+      h.setRunning(true);
+      const turn = expected(h);
+      await h.coordinator.ensureQueueRestored(sid);
+      if (boundary === 'queue') h.coordinator.enqueue(sid, makeItem('human', 'user instruction'));
+      if (boundary === 'pause') h.coordinator.setExecutionPaused(sid, true);
+      if (boundary === 'edit') h.coordinator.setEditLock(sid, 'editing', true);
+      if (boundary === 'compact') await h.coordinator.compact(sid, makeItem('compact', '').createOpts);
+      if (boundary === 'interaction') h.setPendingInteraction(true);
+      if (boundary === 'credential') h.setHasPendingCredentialSwitch(() => true);
+      if (boundary === 'generation') h.setTurnGeneration(1);
+      if (boundary === 'identity') h.setTurnSessionIdentity({ instanceId: 'replacement' });
+      if (boundary === 'idle') h.setRunning(false);
+      if (boundary === 'restore') {
+        // A different session has not successfully restored its authoritative queue.
+        h.setLoadQueueSnapshot(async () => { throw new Error('queue unavailable'); });
+      }
+      expect(await h.coordinator.steerInterAgentReport(boundary === 'restore' ? 'unrestored' : sid,
+        makeItem('report', 'result'), turn)).toBe('not-attempted');
+      expect(h.steerToAgent).not.toHaveBeenCalled();
+    });
+  it('retains one paused report after an uncertain ACK, including when the turn ends', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    h.setRunning(true);
+    h.steerToAgent.mockImplementationOnce(async () => {
+      h.setRunning(false);
+      throw new Error('Codex turn/steer did not acknowledge within 10000ms');
+    });
+    expect(await h.coordinator.steerInterAgentReport(sid, makeItem('report', 'result'), expected(h))).toBe('queued');
+    const queue = h.coordinator.getQueueControlSnapshot(sid).pendingQueue;
+    expect(queue.map(item => item.clientId)).toEqual(['report']);
+    expect(h.coordinator.isQueuePaused(sid)).toBe(true);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+  it('reports screened rejection without reviving blocked content as ordinary input', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    h.setScreenUserMessage(async () => ({ action: 'block', ghostId: 'guard', ghostName: 'guard', reason: 'blocked' }));
+    expect(await h.coordinator.steerInterAgentReport(sid, makeItem('report', 'result'), expected(h))).toBe('rejected');
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.hasPendingQueueItem(sid, 'report')).toBe(false);
+  });
+});
+
 function latestSnapshotClientIds(
   persistQueueSnapshot: ReturnType<typeof createHarness>['persistQueueSnapshot'],
 ): string[] {

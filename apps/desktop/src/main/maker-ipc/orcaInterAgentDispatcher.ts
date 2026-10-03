@@ -71,6 +71,9 @@ interface PersistedUserMessageSession {
   id: string;
   agentKind?: AgentKind;
   isTurnRunning?: () => boolean;
+  getTurnGeneration?: () => number;
+  capabilities?: { sameTurnSteer: { supported: boolean } };
+  remoteHostId?: string | null;
   send: (
     message: UserMessage,
     opts?: SessionSendOptions,
@@ -142,6 +145,12 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   getSessionMeta: (sessionId: string) => Promise<TSessionMeta | null>;
   getSessionRowSnapshot: (sessionId: string) => Promise<OrcaInterAgentSessionRowSnapshot | null>;
   getLiveSession: (sessionId: string) => PersistedUserMessageSession | null | undefined;
+  /** Uses the input coordinator's queue guards and preserves uncertain-delivery ownership. */
+  steerInterAgentReport?: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    expectedTurn: { session: object; turnGeneration: number },
+  ) => Promise<'steered' | 'queued' | 'not-attempted' | 'rejected'>;
   shouldQueueNewTurn: (sessionId: string) => boolean;
   hasSendToSessionLock: (sessionId: string) => boolean;
   /**
@@ -416,6 +425,71 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         ...dispatchReceipt,
       };
     };
+
+    const liveTurn = deps.getLiveSession(params.targetSessionId);
+    if (
+      params.source === 'worker' && deps.steerInterAgentReport &&
+      !deps.hasSendToSessionLock(params.targetSessionId) &&
+      liveTurn?.isTurnRunning?.() === true &&
+      liveTurn.capabilities?.sameTurnSteer.supported &&
+      liveTurn.getTurnGeneration && !liveTurn.remoteHostId
+    ) {
+      const expectedTurn = { session: liveTurn, turnGeneration: liveTurn.getTurnGeneration() };
+      const trySteer = async (): Promise<DispatchOrcaInterAgentMessageResult | null> => {
+        // Async item preparation and lock acquisition can cross a turn replacement.
+        const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
+        const item = buildQueuedOrcaInterAgentMessage({
+          clientId, agentMessageText, persistedContent, origin: await resolveOrigin(), createOpts,
+        });
+        if (
+          deps.getLiveSession(params.targetSessionId) !== liveTurn ||
+          !liveTurn.isTurnRunning?.() ||
+          liveTurn.getTurnGeneration?.() !== expectedTurn.turnGeneration
+        ) return null;
+        const outcome = await deps.steerInterAgentReport!(params.targetSessionId, item, expectedTurn);
+        if (outcome === 'not-attempted') return null;
+        if (outcome === 'rejected') {
+          return failureResult({
+            ...createHostSendFailure('SEND_FAILED', 'Worker report steering was rejected'),
+            source: params.meta.source, context: params.meta.context,
+          });
+        }
+        if (outcome === 'queued') {
+          // The coordinator already owns this exact clientId. Enqueuing again, or
+          // returning failure and inviting auto-bridge, would duplicate the report.
+          if (params.onAccepted) registerQueuedOrcaInterAgentAcceptedCallback(
+            clientId, params.onAccepted, params.onAcceptedRollback, params.onAcceptedCommit,
+          );
+          return { ok: true, mode: 'queued', clientId,
+            dispatchOutcome: makeQueuedDispatchOutcome(params.meta.source), ...dispatchReceipt };
+        }
+        // Steering is irreversible once the provider accepts. Callback failure must
+        // never convert that receipt into a retryable send failure.
+        try {
+          await runAcceptedCallback(runAccepted, params.targetSessionId, clientId, log);
+          await runAcceptedCallback(params.onAcceptedCommit, params.targetSessionId, clientId, log);
+        } catch (err) {
+          log.warn('accepted worker report callback failed after steering', {
+            targetSessionId: params.targetSessionId, clientId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+        return { ok: true, mode: 'dispatched', clientId,
+          dispatchOutcome: { kind: 'session-dispatch', source: params.meta.source, dispatched: true },
+          ...dispatchReceipt };
+      };
+      try {
+        const steered = deps.withSendToSessionLock
+          ? await deps.withSendToSessionLock(params.targetSessionId, trySteer)
+          : await trySteer();
+        if (steered) return steered;
+      } catch (err) {
+        return failureResult({
+          ...createHostSendFailure('SEND_FAILED', err instanceof Error ? err.message : String(err)),
+          source: params.meta.source, context: params.meta.context,
+        });
+      }
+    }
 
     const shouldQueue = deps.shouldQueueNewTurn(params.targetSessionId)
       || deps.hasSendToSessionLock(params.targetSessionId)
