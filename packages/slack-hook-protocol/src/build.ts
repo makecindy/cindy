@@ -125,8 +125,14 @@ export function makePong(): HookPongMessage {
 }
 
 /**
- * dispatch 构造器: workspace / sessionId / options 给出显式默认,
+ * dispatch 构造器: workspace / sessionId 给出显式默认,
  * 让"普通派发"调用点只需 requestId + externalKey + workspace + prompt。
+ *
+ * 默认值在 spread **之后**兜(与 makeTurnReopen 同契约): `Partial` 允许调用方
+ * 把可选定位字段显式写成 undefined(如 `sessionId: maybeId` 而 maybeId 为
+ * undefined), 默认值若放在 spread 前会被覆盖成 undefined、JSON 序列化把键
+ * 整个删掉, 收帧端 validateDispatch 按"必须为 string 或 null"拒收整帧。
+ * 两个字段都不接受 undefined 语义, 用 `??` 收敛掉。
  */
 export function makeTaskDispatch(
   input: Pick<TaskDispatchPayload, 'requestId' | 'externalKey' | 'prompt'> &
@@ -135,9 +141,9 @@ export function makeTaskDispatch(
     >,
 ): HookTaskDispatchMessage {
   return envelope('task.dispatch', {
-    workspace: null,
-    sessionId: null,
     ...input,
+    workspace: input.workspace ?? null,
+    sessionId: input.sessionId ?? null,
   });
 }
 
