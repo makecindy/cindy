@@ -27,6 +27,13 @@ import {
 } from '../remoteResources.js';
 
 describe('REMOTE_INVOKE_ALLOWLIST', () => {
+  it('allows task-scoped Codex follow-up preferences but never remote global writes', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:codex-follow-up:get')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:codex-follow-up:set-session')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:codex-follow-up:set-global')).toBe(false);
+    expect(REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS.has('maker:codex-follow-up:set-session')).toBe(true);
+  });
+
   it('allows Review start to run on the data-owning Desktop', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:review:start')).toBe(true);
   });

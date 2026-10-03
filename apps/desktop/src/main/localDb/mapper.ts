@@ -254,6 +254,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     contextWindow: row.contextWindow,
     fastMode: !!row.fastMode,
     planModeEnabled: !!row.planModeEnabled,
+    codexFollowUpMode: row.codexFollowUpMode ?? null,
     clearedAt: msToIso(row.clearedAt),
     pinnedAt: msToIso(row.pinnedAt),
     userSendAt: msToIso(row.userSendAt),

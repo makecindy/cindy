@@ -191,6 +191,7 @@ export interface RemoteSerializedAttachment {
 }
 
 export interface QueuedRemoteMessage {
+  composerDelivery?: 'auto';
   durableDelivery?: true;
   clientId: string;
   text: string;
@@ -249,6 +250,7 @@ export interface QueuedRemoteMessage {
 export type ContinuationInFlightProjectionCapability = 'unknown' | 'legacy' | 'supported';
 
 export interface InputProjection {
+  composerAutoDelivery?: true;
   sessionId: string;
   pendingQueue: QueuedRemoteMessage[];
   steeringQueueClientIds: string[];

@@ -888,3 +888,24 @@ describe("app-owned delivery and reconciliation", () => {
     ).toEqual(["first", "follow-up"]);
   });
 });
+
+
+describe('Codex follow-up capability negotiation', () => {
+  it.each([false, true])('ordinary sends negotiate composerAutoDelivery=%s', async (capable) => {
+    const { store, runner, deps } = await setup();
+    deps.projection.mockResolvedValue({ ...projection(), ...(capable ? { composerAutoDelivery: true as const } : {}) });
+    await store.add(message());
+    await runner.run();
+    expect(deps.enqueue).toHaveBeenCalledOnce();
+    expect(deps.enqueue.mock.calls[0]?.[0].prepared?.composerDelivery).toBe(capable ? 'auto' : undefined);
+  });
+  it('does not reinterpret an already prepared legacy send during retry', async () => {
+    const { store, runner, deps } = await setup();
+    deps.projection.mockResolvedValue({ ...projection(), composerAutoDelivery: true });
+    await store.add({ ...message(), prepared: { clientId: 'id-1', text: 'legacy' } as QueuedRemoteMessage });
+    await runner.run();
+    expect(deps.enqueue).toHaveBeenCalledOnce();
+    expect(deps.enqueue.mock.calls[0]?.[0].prepared?.composerDelivery).toBeUndefined();
+    expect(deps.prepare).not.toHaveBeenCalled();
+  });
+});

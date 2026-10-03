@@ -14573,5 +14573,15 @@
     "autoTitle": "啟用 Auto 自動審批",
     "autoMessage": "允許「{{name}}」使用 Auto 自動審批？",
     "autoDetail": "主任務與 Worker 的操作將交由 Cindy 自動審批。需要人工確認或遭拒時仍會暫停；這不是完全存取。此選擇儲存到插件 AI 設定，不變更其他任務的全域權限。"
+  },
+  "codexFollowUp": {
+    "globalLabel": "Codex 跟進訊息",
+    "globalHint": "Codex 工作期間，新訊息的預設處理方式。僅影響一般 Codex 任務。",
+    "taskLabel": "對話跟進方式",
+    "taskHint": "對話過程中的後續訊息加入排隊，或引導目前對話",
+    "queue": "排隊",
+    "steer": "引導",
+    "inherit": "跟隨全域：{{mode}}",
+    "saveFailed": "儲存失敗，請重試。"
   }
 }

@@ -21,6 +21,18 @@
       "note": "Desktop appearance setting for an in-app visual background layer."
     },
     {
+      "id": "codex-steer",
+      "status": "proposed",
+      "en": "Steer",
+      "translations": {
+        "zh-CN": "引导",
+        "zh-TW": "引導",
+        "ja": "誘導",
+        "ko": "안내"
+      },
+      "note": "Codex 跟进消息设置中的同轮追加方式。现有插话操作保持名称与行为不变，不代表停止后发送。"
+    },
+    {
       "id": "shared-session",
       "status": "proposed",
       "en": "Shared Session",

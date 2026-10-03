@@ -15,6 +15,7 @@ import { shouldShowFailedScheduleNotice } from '@cindy/maker-shared/schedule-mod
  * F-FP-5:   workingDir read-only display
  */
 
+import { CodexFollowUpControl } from '@/components/new-chat/CodexFollowUpControl';
 import { useCodexContextWindow } from '@/hooks/useCodexContextWindow';
 import {
   Profiler,
@@ -5651,7 +5652,7 @@ export function CCAgentSessionView({
               {!botChatIdentity ? (
                 <div
                   className={cn(
-                    'mt-1.5 flex w-full items-center justify-between gap-3 px-1',
+                    'mt-1.5 flex w-full flex-wrap items-center justify-between gap-3 px-1',
                     !session?.workingDir && !worktreeCreation && 'invisible',
                   )}
                 >
@@ -5731,7 +5732,11 @@ export function CCAgentSessionView({
                   )}
 
                   {/* Right: Context capacity indicator */}
-                  <div className="flex shrink-0 items-center gap-3">
+                  <div className="flex flex-wrap items-center justify-end gap-3">
+                    {normalizeDbAgentKind(displayAgentKind) === 'codex' &&
+                      !session?.orcaRole && session?.source === 'desktop' && (
+                        <CodexFollowUpControl sessionId={sessionId} />
+                      )}
                     {session?.usedProjectContext && (
                       <Tip text={t('ccAgent.layout.projectContextLoaded')} side="top">
                         <Brain

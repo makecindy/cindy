@@ -107,6 +107,8 @@ export const sessions = sqliteTable(
      * 历史 permission_mode='plan' 的行由对应 migration 转换为此列=true + 'ask'。
      */
     planModeEnabled: integer('plan_mode_enabled', { mode: 'boolean' }).notNull().default(false),
+    /** null inherits the executor's global Codex follow-up preference. */
+    codexFollowUpMode: text('codex_follow_up_mode', { enum: ['queue', 'steer'] }),
     clearedAt: integer('cleared_at'), // unix ms
     pinnedAt: integer('pinned_at'), // unix ms
     /**

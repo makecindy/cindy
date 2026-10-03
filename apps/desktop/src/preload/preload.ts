@@ -7350,6 +7350,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       fanOutMakerInteractionDismissed.__reset();
     },
 
+    codexFollowUp: {
+      onChanged: (callback: () => void): (() => void) => {
+        const listener = () => callback();
+        ipcRenderer.on('maker:codex-follow-up:changed', listener);
+        return () => ipcRenderer.removeListener('maker:codex-follow-up:changed', listener);
+      },
+      get: (sessionId?: string): Promise<import('../shared/codexFollowUp').CodexFollowUpState> => ipcRenderer.invoke('maker:codex-follow-up:get', sessionId),
+      setGlobal: (mode: import('../shared/codexFollowUp').CodexFollowUpMode | null): Promise<import('../shared/codexFollowUp').CodexFollowUpState> => ipcRenderer.invoke('maker:codex-follow-up:set-global', mode),
+      setSession: (sessionId: string, mode: import('../shared/codexFollowUp').CodexFollowUpMode | null): Promise<import('../shared/codexFollowUp').CodexFollowUpState> => ipcRenderer.invoke('maker:codex-follow-up:set-session', sessionId, mode),
+    },
     input: {
       getProjection: (
         sessionId: string,
@@ -7358,7 +7368,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       enqueue: (
         sessionId: string,
         item: import('../shared/agentInputQueue').AgentInputQueuedMessage,
-        opts?: { sendAtMs?: number; expectedClearBoundaryMs?: number | null },
+        opts?: { sendAtMs?: number; expectedClearBoundaryMs?: number | null; composerDelivery?: 'auto' | 'queue' },
       ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
         ipcRenderer.invoke('maker:input:enqueue', sessionId, item, opts),
       compact: (

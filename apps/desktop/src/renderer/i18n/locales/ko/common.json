@@ -14573,5 +14573,15 @@
     "autoTitle": "Auto 자동 승인 사용",
     "autoMessage": "“{{name}}”에 Auto 자동 승인을 허용할까요?",
     "autoDetail": "Cindy가 주 작업과 Worker 동작을 자동 심사합니다. 확인이 필요하거나 거부된 동작은 일시 중지됩니다. 전체 접근 권한이 아니며 다른 작업의 전역 권한은 변경하지 않습니다."
+  },
+  "codexFollowUp": {
+    "globalLabel": "Codex 후속 메시지",
+    "globalHint": "Codex 작업 중 후속 메시지의 기본 전달 방식입니다. 일반 Codex 작업에만 적용됩니다.",
+    "taskLabel": "후속 메시지 전달",
+    "taskHint": "후속 메시지를 대기열에 넣거나 현재 대화에 추가합니다.",
+    "queue": "대기열",
+    "steer": "안내",
+    "inherit": "전체 설정: {{mode}}",
+    "saveFailed": "저장하지 못했습니다. 다시 시도하세요."
   }
 }

@@ -5,6 +5,7 @@ export default {
   id: 'personalization-details',
   order: 31,
   entries: [
+    { id: 'codexFollowUp.globalLabel', fallbackTargetId: 'settings-composer', tab: 'general', targetId: 'settings-composer', titleKey: 'codexFollowUp.globalLabel', sectionKey: 'settings.sections.composer', descriptionKey: 'codexFollowUp.globalHint', aliases: ['Codex', 'steer', '排队', '引导', '跟进消息'] },
     { id: 'settings.composer.sendShortcut.label', fallbackTargetId: 'settings-composer', tab: 'general', targetId: 'settings-composer', titleKey: 'settings.composer.sendShortcut.label', sectionKey: 'settings.sections.composer', descriptionKey: 'settings.composer.sendShortcut.hint', aliases: ['send shortcut', 'enter to send', '发送快捷键'] },
     { id: 'settings.memory.maker.label', fallbackTargetId: 'settings-search-target-personalization-memory', tab: 'personalization', targetId: 'settings-search-target-personalization-memory', titleKey: 'settings.memory.maker.label', sectionKey: 'settings.sections.memory', descriptionKey: 'settings.memory.maker.description', aliases: ['maker memory', '记忆'] },
     { id: 'settings.memory.agents.claude-code.label', fallbackTargetId: 'settings-search-target-personalization-memory', tab: 'personalization', targetId: 'settings-search-target-personalization-memory', titleKey: 'settings.memory.agents.claude-code.label', sectionKey: 'settings.sections.memory' },

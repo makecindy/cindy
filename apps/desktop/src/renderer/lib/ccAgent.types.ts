@@ -324,6 +324,7 @@ export interface Session {
    * 计划批准后 agent 自动退出并经 plan_mode_changed → sessions:patched 回流为 false。
    * 老 payload(device-link 老被控端)可能缺失 → 消费方按 false 兜底。
    */
+  codexFollowUpMode?: 'queue' | 'steer' | null;
   planModeEnabled?: boolean;
   clearedAt: string | null; // ISO 8601 — messages before this timestamp are hidden
   pinnedAt: string | null;  // ISO 8601 — when pinned, null = not pinned

@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `codex_follow_up_mode` text;

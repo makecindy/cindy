@@ -841,6 +841,7 @@ export function createSessionRemoteHostIdReader(): (sessionId: string) => Promis
 }
 
 export interface SessionRowSnapshot {
+  source?: string;
   status: string;
   /** Bound schedule cold resumes preserve the owner's permission choice. */
   permissionMode?: string | null;
@@ -865,6 +866,7 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
   const [row] = await db
     .select({
       status: sessions.status,
+      source: sessions.source,
       permissionMode: sessions.permissionMode,
       planModeEnabled: sessions.planModeEnabled,
       title: sessions.title,
