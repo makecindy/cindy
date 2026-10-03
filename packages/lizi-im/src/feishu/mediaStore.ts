@@ -186,11 +186,38 @@ function writeToLegacyDir(
   };
 }
 
-/** Drain a Node `Readable` into a Buffer. */
-export async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
+/**
+ * Drain a Node `Readable` into a Buffer.
+ *
+ * `maxBytes` 提供增量上限(钉钉 readBodyLimited 同语义):超限立刻销毁流并抛
+ * `ATTACHMENT_OVERSIZE`,调用方据此把附件归为 oversize —— 否则超大附件会先整只
+ * 进内存(Electron main 的内存峰值与文件一样大)再被 30MB 检查拒掉。
+ */
+export const ATTACHMENT_OVERSIZE_CODE = 'ATTACHMENT_OVERSIZE';
+
+export async function streamToBuffer(
+  stream: NodeJS.ReadableStream,
+  maxBytes?: number,
+): Promise<Buffer> {
   const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  let total = 0;
+  try {
+    for await (const chunk of stream) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buf.byteLength;
+      if (maxBytes !== undefined && total > maxBytes) {
+        const err = new Error(`stream exceeds ${maxBytes} bytes`) as Error & { code?: string };
+        err.code = ATTACHMENT_OVERSIZE_CODE;
+        throw err;
+      }
+      chunks.push(buf);
+    }
+  } catch (err) {
+    // 超限/读失败时尽力停掉上游,避免它继续往已放弃的下载里推数据。
+    // 不带 error 参数 destroy:迭代已抛出,此时若再 emit 'error' 而流上没有
+    // 监听者,Node 会把它升级为 uncaught exception。
+    (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.();
+    throw err;
   }
   return Buffer.concat(chunks);
 }

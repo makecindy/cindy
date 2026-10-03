@@ -17,6 +17,7 @@ import type { Readable } from 'node:stream';
 import type { IMAttachment } from '../types.js';
 import { getLog } from './moduleScope.js';
 import {
+  ATTACHMENT_OVERSIZE_CODE,
   getOrDownload,
   mimeFromHeaders,
   streamToBuffer,
@@ -50,6 +51,16 @@ export async function downloadAttachments(
       if ('attachment' in one) attachments.push(one.attachment);
       else unsupported.push(one.unsupported);
     } catch (err) {
+      // 下载中途触顶增量上限:归 oversize(与下载完成后才发现超限同一口径),
+      // 而不是 download_failed —— 语义是"文件太大不受支持",重试无意义。
+      if ((err as { code?: string })?.code === ATTACHMENT_OVERSIZE_CODE) {
+        const name = ref.kind === 'file' ? ref.fileName : '图片';
+        unsupported.push({
+          type: 'oversize',
+          label: `${name} 超过 30MB（已提前中断下载）`,
+        });
+        continue;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       const label =
         ref.kind === 'file'
@@ -133,7 +144,8 @@ async function fetchMessageResource(
     headers?: Record<string, unknown>;
   };
 
-  const buffer = await streamToBuffer(res.getReadableStream());
+  // 增量上限:超限立刻断流,不让超大附件整只进内存/落盘后才被拒。
+  const buffer = await streamToBuffer(res.getReadableStream(), MAX_FILE_SIZE);
   const mimeType = mimeFromHeaders(res.headers);
   return { buffer, mimeType };
 }
