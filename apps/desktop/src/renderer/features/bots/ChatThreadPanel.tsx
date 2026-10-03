@@ -101,7 +101,7 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
           <Dialog.Close className={iconClass} aria-label={t('bots.close')}><X size={17} /></Dialog.Close>
         </header>
         <div ref={contentRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
-          {root && <ThreadMessage shareScope={shareScope} sharing={sharing} group={group} message={group.messages.find(m => m.id === root.id) ?? root} onChanged={() => void loadRef.current()} />}
+          {root && <ThreadMessage shareScope={shareScope} sharing={sharing} group={group} message={root} onChanged={() => void loadRef.current()} />}
           <div className="border-t border-[var(--border-default)] pt-3 text-12 text-[var(--text-tertiary)]">{t(key('replies'))}</div>
           {hasMore && <Button variant="secondary" size="sm" onClick={() => void loadRef.current(replies[0]?.sequence)}>{t('bots.groupChat.timeline.loadEarlier')}</Button>}
           {replies.map(message => <ThreadMessage key={message.id} shareScope={shareScope} sharing={sharing} group={group} message={message} onChanged={() => void loadRef.current()} />)}

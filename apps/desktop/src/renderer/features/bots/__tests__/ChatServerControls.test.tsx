@@ -87,6 +87,18 @@ describe('chat interaction controls', () => {
     expect(mocks.react).toHaveBeenCalledWith({ groupId: 'room', messageId: 'root', emoji: '👍', present: false });
   });
 
+  it('uses the refreshed Thread root reaction state while the main timeline remains stale', async () => {
+    mocks.thread.mockResolvedValueOnce({ ok: true, root: message, replies: [], hasMore: false })
+      .mockResolvedValue({ ok: true, root: { ...message, reactions: [{ emoji: '👍', count: 1, me: false }] }, replies: [], hasMore: false });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    const reaction = await screen.findByRole('button', { name: k('reactionCount') });
+    expect(reaction.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(reaction);
+    await waitFor(() => expect(screen.getByRole('button', { name: k('reactionCount') }).getAttribute('aria-pressed')).toBe('false'));
+    expect(screen.getByRole('button', { name: k('reactionCount') }).textContent).toContain('1');
+    expect(group.messages[0].reactions?.[0].me).toBe(true);
+  });
+
   it('shows invitation preview first; only explicit acceptance joins', async () => {
     const joined = vi.fn();
     render(<StrictMode><ChatJoinButton onJoined={joined} /></StrictMode>);

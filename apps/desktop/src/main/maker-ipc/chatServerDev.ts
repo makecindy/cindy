@@ -45,7 +45,14 @@ interface Execution {
   id: string; conversation_id: string; source_message_id: string; bot_id: string;
   context_seq: string; epoch: number; status: string; access_mode: 'owner' | 'chat' | 'tools'; access_revision: number;
 }
-interface Running { execution: Execution; sessionId: string; clientId: string; accepted: boolean; started: number }
+interface Running {
+  execution: Execution; sessionId: string; clientId: string; accepted: boolean; started: number;
+  settlement?: { terminal: BotGroupLaneTerminal; payload?: Record<string, unknown>; retryAt: number };
+  delivery?: Promise<void>;
+}
+class ChatResponseError extends Error {
+  constructor(code: string, readonly status: number) { super(code); }
+}
 const id = z.string().uuid();
 const groupInput = z.object({ name: z.string().trim().min(1).max(40), botIds: z.array(z.string().min(1)).max(6) });
 const failure = (message: string): BotGroupFailure => ({ ok: false, errorCode: 'HOST_NOT_READY', message });
@@ -133,7 +140,7 @@ function createChatServerDev(local: BotGroupChatService, deps: BotGroupChatServi
           try {
             if (!current()) throw new Error('OWNER_CHANGED');
             const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            if ((res.statusCode ?? 500) >= 400) throw new Error(value.error?.code ?? 'REQUEST_FAILED');
+            if ((res.statusCode ?? 500) >= 400) throw new ChatResponseError(value.error?.code ?? 'REQUEST_FAILED', res.statusCode ?? 500);
             resolve(value);
           } catch (error) { reject(error); }
         });
@@ -277,9 +284,42 @@ function createChatServerDev(local: BotGroupChatService, deps: BotGroupChatServi
   }
   async function updateExecution(run: Running, action: string, extra: Record<string, unknown> = {}) {
     return api(`/conversations/${run.execution.conversation_id}/executions/${run.execution.id}`, 'POST', {
-      operationId: `dev:${run.execution.id}:${run.execution.epoch}:${action}`,
+      // Each heartbeat must extend the lease rather than replay a cached receipt.
+      // Terminal retries keep their operation ID and immutable result body.
+      operationId: action === 'heartbeat' ? randomUUID() : `dev:${run.execution.id}:${run.execution.epoch}:${action}`,
       executorId, epoch: run.execution.epoch, action, ...extra,
     }, run.execution.bot_id);
+  }
+  function deliverSettlement(run: Running): Promise<void> {
+    if (run.delivery) return run.delivery;
+    const pending = run.settlement;
+    if (!pending || !current() || running.get(run.execution.bot_id) !== run || Date.now() < pending.retryAt) return Promise.resolve();
+    run.delivery = (async () => {
+      try {
+        if (!pending.payload) {
+          const terminal = pending.terminal;
+          let text = terminal.resultText;
+          if (!text.trim() && terminal.resultMessageClientId) text = (await readPersistedReplyText(terminal.sessionId, terminal.resultMessageClientId)) ?? '';
+          pending.payload = terminal.outcome === 'error' ? { detail: 'Local Agent failed' }
+            : { ...(isBotGroupNoReplyText(text) ? {} : { content: [{ type: 'text', text: text.slice(0, 16000) }] }), continueDiscussion: false };
+        }
+        if (!current() || running.get(run.execution.bot_id) !== run) return;
+        await updateExecution(run, pending.terminal.outcome === 'error' ? 'fail' : 'complete', pending.payload);
+      } catch (error) {
+        // Keep the result during transport/temporary service failures. A definitive
+        // rejection (including revoked/expired leases) must never rerun the Agent
+        // or post the private result under a new execution identity.
+        if (!(error instanceof ChatResponseError) || error.status >= 500 || [408, 429].includes(error.status)) {
+          pending.retryAt = Date.now() + 15000;
+          return;
+        }
+      } finally { run.delivery = undefined; }
+      if (running.get(run.execution.bot_id) === run) {
+        running.delete(run.execution.bot_id);
+        changed(run.execution.conversation_id);
+      }
+    })();
+    return run.delivery;
   }
   async function runExecution(execution: Execution) {
     const bot = localBot(execution.bot_id);
@@ -340,6 +380,7 @@ function createChatServerDev(local: BotGroupChatService, deps: BotGroupChatServi
     if (!current() || polling) return;
     polling = true;
     void (async () => {
+      for (const run of running.values()) if (run.settlement) void deliverSettlement(run);
       await register();
       if (!socket) connect();
       for (const actor of actors.filter(a => a.kind === 'bot' && localBot(a.id))) {
@@ -351,6 +392,7 @@ function createChatServerDev(local: BotGroupChatService, deps: BotGroupChatServi
   }, 2000);
   const checking = new Set<Running>();
   async function checkLease(run: Running) {
+    if (run.settlement) { await deliverSettlement(run); return; }
     if (checking.has(run) || running.get(run.execution.bot_id) !== run) return;
     checking.add(run);
     try {
@@ -358,7 +400,9 @@ function createChatServerDev(local: BotGroupChatService, deps: BotGroupChatServi
       await updateExecution(run, timedOut ? 'fail' : 'heartbeat', timedOut ? { detail: 'Runtime timeout' } : {});
       if (timedOut) throw new Error('TIMEOUT');
     } catch {
-      if (running.get(run.execution.bot_id) === run) {
+      // An in-flight heartbeat must not discard a result that became ready while
+      // it was awaiting its response; retry the terminal operation for its receipt.
+      if (!run.settlement && running.get(run.execution.bot_id) === run) {
         running.delete(run.execution.bot_id);
         if (run.sessionId) await deps.abortLane(run.sessionId).catch(() => undefined);
         changed(run.execution.conversation_id);
@@ -390,7 +434,11 @@ function createChatServerDev(local: BotGroupChatService, deps: BotGroupChatServi
   const operationId = z.string().min(8).max(160).regex(/^[a-zA-Z0-9_.:-]+$/);
   const chatServer: ChatServerApi = {
     ownedBots: () => result(async () => { await register(); return { bots: actors.filter(a => a.kind === 'bot' && localBot(a.id)).map(a => ({ actorId: a.id, name: a.name })) }; }),
-    refreshProfile: () => result(async () => { await api('/profile/refresh', 'POST'); profileRefreshedAt = Date.now(); changed(''); return {}; }),
+    refreshProfile: () => result(async () => {
+      await api('/profile/refresh', 'POST'); profileRefreshedAt = Date.now();
+      for (const roomId of rooms) changed(roomId);
+      changed(''); return {};
+    }),
     manage: input => result(async () => {
       const target = id.parse(input.groupId);
       const actorAction = z.object({ actorId: id });
@@ -449,8 +497,14 @@ function createChatServerDev(local: BotGroupChatService, deps: BotGroupChatServi
     chatServer,
     listGroups: () => safe(async () => {
       await register();
-      const all = await api<Room[]>('/conversations?limit=100');
-      return { ok: true as const, groups: await Promise.all(all.filter(r => (r as Room & { state: string }).state === 'joined').map(r => detail(r.id))) };
+      const groups: BotGroupDetail[] = [];
+      let after: string | undefined;
+      do {
+        const page = await api<Array<Room & { state: string }>>(`/conversations?limit=100${after ? `&after=${after}` : ''}`);
+        groups.push(...await Promise.all(page.filter(r => r.state === 'joined').map(r => detail(r.id))));
+        after = page.length === 100 ? page.at(-1)!.id : undefined;
+      } while (after);
+      return { ok: true as const, groups };
     }),
     getGroup: (roomId, options) => safe(async () => ({ ok: true as const, group: await detail(id.parse(roomId), options) })),
     createGroup: input => safe(async () => {
@@ -496,13 +550,8 @@ function createChatServerDev(local: BotGroupChatService, deps: BotGroupChatServi
       const run = [...running.values()].find(r => r.sessionId === terminal.sessionId);
       if (!run) return local.settleLaneTurn(terminal);
       if (terminal.activeInputClientId ? terminal.activeInputClientId !== run.clientId : !run.accepted) return false;
-      try {
-        let text = terminal.resultText;
-        if (!text.trim() && terminal.resultMessageClientId) text = (await readPersistedReplyText(terminal.sessionId, terminal.resultMessageClientId)) ?? '';
-        await updateExecution(run, terminal.outcome === 'error' ? 'fail' : 'complete', terminal.outcome === 'error'
-          ? { detail: 'Local Agent failed' }
-          : { ...(isBotGroupNoReplyText(text) ? {} : { content: [{ type: 'text', text: text.slice(0, 16000) }] }), continueDiscussion: false });
-      } finally { running.delete(run.execution.bot_id); changed(run.execution.conversation_id); }
+      run.settlement ??= { terminal: { ...terminal }, retryAt: 0 };
+      await deliverSettlement(run);
       return true;
     },
     setMembers: unsupported, deleteGroup: unsupported, continueRound: unsupported,
