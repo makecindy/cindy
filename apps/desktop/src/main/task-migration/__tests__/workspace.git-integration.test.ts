@@ -130,6 +130,13 @@ describe('cross-machine project snapshots', () => {
     expect(await fs.readFile(path.join(target, 'Fw', 'Headers', 'x.h'), 'utf8')).toBe('x');
     expect(await fs.readFile(path.join(target, 'via'), 'utf8')).toBe('x');
     expect(await fs.readlink(path.join(target, 'Pods', 'gen.h'))).toBe('../build/generated/gen.h');
+    // Windows 按创建时的显式 type 固定链接的 file/dir 形态(默认 'file',
+    // 不看目标是否存在):指向目录的链接必须以 'dir' 创建, 否则 Windows 拒绝
+    // 穿透, 上面两行 readFile 在 win32 上会直接失败。stat().isDirectory()
+    // 断言把"链接可当目录穿透"钉在所有平台上。
+    expect((await fs.stat(path.join(target, 'Fw', 'Versions', 'Current'))).isDirectory()).toBe(true);
+    expect((await fs.stat(path.join(target, 'Fw', 'Headers'))).isDirectory()).toBe(true);
+    expect((await fs.stat(path.join(target, 'alias'))).isDirectory()).toBe(true);
   });
   // symlink-platform-skip: Windows cannot create a FIFO or a directory name ending in a space.
   it.skipIf(process.platform === 'win32')(
