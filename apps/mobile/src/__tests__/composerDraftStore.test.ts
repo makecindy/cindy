@@ -315,3 +315,20 @@ describe('composerDraftStore', () => {
     expect(store.get(key)).toBe('new draft');
   });
 });
+
+describe('composerDraftStore 损坏草稿分类', () => {
+  it('unparseable draft JSON throws COMPOSER_DRAFT_INVALID, not a bare SyntaxError', async () => {
+    // 回归:reconcile 的 JSON.parse 曾不设防,损坏行以 SyntaxError 逃出 ——
+    // #5306 的错误分类器把它当"存储层失败"解锁输入框, 而 outbox 记录里的
+    // draftHandoff 永久卡住(每次挂载重跑重败、无任何诊断)。与
+    // readComposerDocumentDraft 的容错口径对齐:损坏 = 交接无效。
+    const { __testing, reconcileCommittedComposerDraft } = await import('@/session/composerDraftStore');
+    const { textComposerDocument, emptyComposerDocument } = await import('@/session/composerDocument');
+    const before = textComposerDocument('sent');
+    store.set(__testing.documentStorageKeyForSession('s1'), '{not json');
+    store.set(__testing.storageKeyForSession('s1'), 'sent');
+    await expect(
+      reconcileCommittedComposerDraft('s1', { before, after: emptyComposerDocument() }, () => {}),
+    ).rejects.toThrow('COMPOSER_DRAFT_INVALID');
+  });
+});
