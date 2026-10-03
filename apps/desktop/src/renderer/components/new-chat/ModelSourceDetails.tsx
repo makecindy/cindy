@@ -168,9 +168,16 @@ export function ModelSourceDetails({
           : [countdown, t('quotaCard.remainingPercent', { percent: remaining })]
               .filter(Boolean)
               .join(' · '),
-        used: expired ? 0 : window.usedPercent,
+        // Expired windows rank below every live one, even a live window at 0% used.
+        used: expired ? -1 : window.usedPercent,
       };
     });
+  // The row only has room for one window: show the tightest live one (later window wins
+  // ties); the title keeps every window.
+  const tightest = parts.reduce<(typeof parts)[number] | undefined>(
+    (best, part) => (!best || part.used >= best.used ? part : best),
+    undefined,
+  );
   const source = [label, plan].filter(Boolean).join(' · ');
   return (
     <div
@@ -179,38 +186,31 @@ export function ModelSourceDetails({
       className="flex w-0 min-w-full items-center gap-1 whitespace-nowrap pl-[26px] pt-px text-12 leading-[1.4] text-[var(--text-secondary)]"
     >
       <span className="min-w-0 truncate">{source}</span>
-      {parts.length > 0 && (
+      {tightest && (
         <span aria-hidden className="shrink-0">
           ·
         </span>
       )}
-      {parts.length > 0 && (
+      {tightest && (
         <span className="min-w-0 max-w-[70%] truncate tabular-nums">
-          <span className="inline-flex items-center gap-1">
-            {parts.map((part, index) => (
-              <span key={index} className="inline-flex items-center gap-1">
-                {index > 0 && <span aria-hidden>/</span>}
-                <span>
-                  {part.countdown}
-                  {part.percentage !== null && (
-                    <>
-                      {' '}
-                      <span
-                        className={
-                          part.used >= 90
-                            ? 'text-[var(--quota-bar-crit)]'
-                            : part.used > 70
-                              ? 'text-[var(--quota-bar-warn)]'
-                              : undefined
-                        }
-                      >
-                        {part.percentage}
-                      </span>
-                    </>
-                  )}
+          <span>
+            {tightest.countdown}
+            {tightest.percentage !== null && (
+              <>
+                {' '}
+                <span
+                  className={
+                    tightest.used >= 90
+                      ? 'text-[var(--quota-bar-crit)]'
+                      : tightest.used > 70
+                        ? 'text-[var(--quota-bar-warn)]'
+                        : undefined
+                  }
+                >
+                  {tightest.percentage}
                 </span>
-              </span>
-            ))}
+              </>
+            )}
           </span>
         </span>
       )}

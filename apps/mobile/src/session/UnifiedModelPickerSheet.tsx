@@ -1,6 +1,7 @@
 import { modelNeedsReselection } from './modelReselection';
 import { mobileProviderAccountTitle } from "./mobileModelRowPresentation";
 import { mobileCostMarks, quotaCountdown } from "./mobileModelRowPresentation";
+import { formatQuotaResetCountdown } from "./sessionUsagePresentation";
 import { useMobileModelQuotas } from "./useMobileModelQuotas";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as ExpoCrypto from "expo-crypto";
@@ -611,21 +612,13 @@ export function UnifiedModelPickerSheet(
                 ? {
                     remaining: quotas[provider.id]!.remaining!,
                     label: [
-                      t("session.menu.usage.week"),
+                      (quotas[provider.id]!.resetsAt
+                        ? formatQuotaResetCountdown(quotas[provider.id]!.resetsAt!, now, t)
+                        : null) ?? t("session.menu.usage.week"),
                       t("session.menu.usage.remaining", {
                         percent: quotas[provider.id]!.remaining,
                       }),
-                      quotas[provider.id]!.resetsAt
-                        ? t("session.menu.usage.resets", {
-                            time: countdown(
-                              quotas[provider.id]!.resetsAt!,
-                              now,
-                            ),
-                          })
-                        : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · "),
+                    ].join(" · "),
                   }
                 : undefined,
             providerMark: {

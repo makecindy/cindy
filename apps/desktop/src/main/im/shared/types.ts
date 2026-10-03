@@ -151,11 +151,14 @@ export interface ImChannelAdapter {
   config: ImOrchestratorConfig;
   ui: ImUiTextPack;
   sessions: ImSessionNamespace;
-  /** "已收到" ack 的 emoji(feishu: emoji_type 枚举名;slack: emoji 名)。 */
+  /** 处理中表情的基础款（Feishu 使用原生 emoji_type 名）。 */
   processingEmoji: string;
+  /** 用原消息表情表示排队，不另发排队提示；缺省保留文字提示。 */
+  queuedEmoji?: string;
+  /** 没有可撤销状态反馈的渠道静默排队，避免永久残留提示。 */
+  silentQueue?: boolean;
   /**
-   * turn 终态时把 ack 表情替换成结果表情(官方 Telegram bot 习惯:
-   * 成功 👍 / 失败 👎)。返回 null = 该终态不放表情(按默认撤掉 ack);
+   * turn 终态时可将状态替换为错误表情。返回 null = 该终态不放表情(撤掉 ack);
    * 缺省 = 全部按默认撤掉。仅真正跑过的 turn 生效, pre-dispatch 失败不放。
    */
   terminalReactionEmoji?(kind: 'done' | 'aborted' | 'error'): string | null;

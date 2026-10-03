@@ -417,7 +417,6 @@
       "hours": "{{count}} 小时",
       "minutes": "{{count}} 分钟",
       "remaining": "剩余 {{percent}}%",
-      "resets": "{{time}} 重置",
       "awaitingRefresh": "等待刷新",
       "balance": "可用余额",
       "cycle": "本周期已用",

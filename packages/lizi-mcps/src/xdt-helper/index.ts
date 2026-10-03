@@ -100,6 +100,8 @@ export {
   type ModelDescriptor,
 } from './list_available_models.js';
 // history tools (split out from xdt-helper but kept exports here)
+export { registerHistoryDevicesTool, historyPayload } from './_history_devices.js';
+export type { HistoryRemoteDeps, HistoryDevice, HistoryQueryTool } from './_history_devices.js';
 export {
   registerListWorkdirsTool,
   type ListWorkdirsToolDeps,

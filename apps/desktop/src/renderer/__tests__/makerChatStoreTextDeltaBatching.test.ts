@@ -3612,6 +3612,22 @@ describe('makerChatStore text delta batching', () => {
     expect(messages.filter((m) => m.role === 'user' && m.content === 'accepted')).toHaveLength(1);
   });
 
+  it('soft eviction skips a left window that still holds an unconfirmed local bubble', async () => {
+    input.enqueue.mockImplementationOnce(async (sessionId: string) => projection(sessionId));
+    makerChatStore.sendMessage(SESSION_ID, 'unconfirmed', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR);
+    await flushPromises();
+    makerChatStore.enterView(SESSION_ID)();
+    try {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget({ messages: 0, characters: 0 });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+        expect.objectContaining({ content: 'unconfirmed', isPendingPersist: true }),
+      ]);
+    } finally {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget(null);
+    }
+  });
+
   it('shows a device-link busy send before remote preflight and enqueue settle', async () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {

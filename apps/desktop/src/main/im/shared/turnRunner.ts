@@ -1179,6 +1179,9 @@ export function createTurnRunner(
     // 过程区耗时基准取真实派发时刻 — TurnState 创建时可能还要在 sendQueue 里
     // 等上一轮跑完, 排队等待不该计入"第 N 步 · 耗时"显示
     item.turn.presenter.activity.startedAt = Date.now();
+    if (item.notified && adapter.queuedEmoji) {
+      replaceAckReaction(item.turn, adapter.processingEmoji);
+    }
     state.queue.push(item.turn);
     log.info(
       `enqueued turn for session=${rowId.slice(-8)} queueDepth=${state.queue.length} pendingSends=${state.sendQueue.length}`,
@@ -1671,12 +1674,18 @@ export function createTurnRunner(
     }, DISPATCH_RETRY_MS);
   }
 
-  /** 入队提示 — 每条消息只发一次(竞态 requeue 不重复提示)。失败 swallow。 */
+  /** 入队反馈：表情跟随排队状态，文字提示每条消息只发一次。 */
   async function notifyQueuedPosition(
     userId: string,
     item: QueuedSend,
     position: number,
   ): Promise<void> {
+    if (adapter.silentQueue) return;
+    if (adapter.queuedEmoji) {
+      item.notified = true;
+      replaceAckReaction(item.turn, adapter.queuedEmoji);
+      return;
+    }
     if (item.notified) return;
     item.notified = true;
     try {
@@ -2251,6 +2260,31 @@ export function createTurnRunner(
     } catch {
       return null;
     }
+  }
+
+  /** 复用 ack 句柄串接状态切换，迟到的表情仍由现有终态清理接管。 */
+  function replaceAckReaction(turn: TurnState, emoji: string): void {
+    const messageId = turn.userMessageId;
+    if (!messageId) return;
+    const previous = turn.ackReactionIdPromise;
+    const next = Promise.resolve(previous)
+      .catch(() => null)
+      .then(async (reactionId) => {
+        // 已被下一次状态切换或收口接管：把现有 token 交给接管者清理。
+        if (turn.ackReactionIdPromise !== next) return reactionId;
+        try {
+          if (reactionId) await im.removeMessageReaction?.(messageId, reactionId);
+        } catch {
+          return reactionId;
+        }
+        if (turn.ackReactionIdPromise !== next) return null;
+        try {
+          return (await im.reactToMessage?.(messageId, emoji)) ?? null;
+        } catch {
+          return null;
+        }
+      });
+    turn.ackReactionIdPromise = next;
   }
 
   /**

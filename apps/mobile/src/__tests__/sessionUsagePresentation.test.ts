@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { i18n } from "@/i18n";
 import {
   accountUsageRows,
+  formatQuotaResetCountdown,
   formatSessionUsageMoney,
   sessionUsageAmounts,
 } from "@/session/sessionUsagePresentation";
@@ -72,7 +73,7 @@ describe("task menu usage presentation", () => {
       updatedAt: 1000,
       amounts: [],
       windows: [
-        { id: "a", minutes: 180, remainingPercent: 8, resetsAt: 2000 },
+        { id: "a", minutes: 180, remainingPercent: 8, resetsAt: null },
         { id: "b", minutes: 10080, remainingPercent: 0, resetsAt: 1 },
       ],
     };
@@ -100,5 +101,34 @@ describe("task menu usage presentation", () => {
     };
     const rows = accountUsageRows(account, i18n.t, "zh-CN");
     expect(rows[1]).toEqual({ label: "Credits", value, warning });
+  });
+  it("labels each quota by the time left until it resets, like the desktop status chip", () => {
+    const now = 1_000_000_000_000;
+    const at = (ms: number) => (now + ms) / 1000;
+    const account: SessionMenuAccountUsage = {
+      source: "claude",
+      plan: null,
+      updatedAt: now,
+      amounts: [],
+      windows: [
+        { id: "a", minutes: 300, remainingPercent: 94, resetsAt: at(6.5 * 3_600_000) },
+        { id: "b", minutes: 10080, remainingPercent: 29, resetsAt: at(2.2 * 86_400_000) },
+        { id: "m", minutes: 10080, modelLabel: "Opus", remainingPercent: 8, resetsAt: at(2.2 * 86_400_000) },
+        { id: "c", minutes: 300, remainingPercent: 50, resetsAt: at(90_000) },
+        { id: "d", minutes: 300, remainingPercent: 50, resetsAt: at(-1_000) },
+        { id: "e", minutes: 10080, remainingPercent: 50, resetsAt: null },
+      ],
+    };
+    const rows = accountUsageRows(account, i18n.t, "zh-CN", now);
+    expect(rows.map(({ label, value }) => [label, value])).toEqual([
+      ["7小时", "剩余 94%"],
+      ["3天", "剩余 29%"],
+      ["Opus · 3天", "剩余 8%"],
+      ["2分钟", "剩余 50%"],
+      ["5 小时", "等待刷新"],
+      ["本周", "剩余 50%"],
+    ]);
+    expect(rows.every((row) => row.detail === undefined)).toBe(true);
+    expect(formatQuotaResetCountdown(at(45_000), now, i18n.t)).toBe("45秒");
   });
 });

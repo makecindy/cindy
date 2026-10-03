@@ -33,6 +33,10 @@ export interface TaskMoveDestination {
   project: string | null;
 }
 
+/** Without a chosen project, a chat copy stays a chat and a project copy becomes a new project. */
+export const copyDefaultLabelKey = (session: Pick<Session, 'workspaceKind'>) =>
+  session.workspaceKind === 'dialogue' ? 'taskMigration.dialogue' : 'taskMigration.newProject';
+
 /** Same source-host business operation for recent projects, dialogue, and the folder picker. */
 export async function moveRemoteTaskProject(session: Session, workingDir: string | null) {
   const device = session.deviceLinkDeviceId;
@@ -207,6 +211,7 @@ export function TaskMoveSubmenu({
                     key={device.deviceId}
                     device={device}
                     team={session.orcaRole === 'lead'}
+                    defaultLabelKey={copyDefaultLabelKey(session)}
                     onSelect={onMigration}
                   />
                 ))
@@ -226,10 +231,12 @@ export function TaskMoveSubmenu({
 function DeviceProjects({
   device,
   team,
+  defaultLabelKey,
   onSelect,
 }: {
   device: DeviceLinkDeviceView;
   team: boolean;
+  defaultLabelKey: string;
   onSelect(value: TaskMoveDestination): void;
 }) {
   const { t } = useTranslation();
@@ -306,7 +313,7 @@ function DeviceProjects({
         ) : projects ? (
           <>
             <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => choose(null)}>
-              {t('taskMigration.defaultFolder')}
+              {t(defaultLabelKey)}
             </DropdownMenuItem>
             <SessionProjectMoveSubmenu
               heading={t('taskMigration.project')}

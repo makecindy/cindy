@@ -117,6 +117,8 @@ import {
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { remoteInvoke } from '../device-link/index.js';
+import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
+import { createHistoryRemoteDeps } from '../mcp-integrations/historyDevices.js';
 import { WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
 import {
@@ -976,6 +978,18 @@ export function getMaker(): Maker {
       pluginRegistry,
       resolveIOSSimulatorAccess,
       invokeRemote: remoteInvoke,
+      historyRemote: createHistoryRemoteDeps({
+        listDevices: () => handleListDevices(deviceDirectoryDeps()),
+        invoke: remoteInvoke,
+        captureAccess: () => {
+          const owner = captureDataOwnerBroadcastScope();
+          const assertCurrent = () => {
+            if (!isDataOwnerBroadcastScopeCurrent(owner)) throw new Error('History owner changed');
+          };
+          assertCurrent();
+          return assertCurrent;
+        },
+      }),
       isCurrentLocalSessionInstance: (
         sessionId: string,
         sessionInstanceId: string | undefined,

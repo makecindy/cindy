@@ -186,9 +186,9 @@ describe('feishu ImChannelAdapter characterization', () => {
     });
   });
 
-  it('默认 title 为 [飞书·DM] {openId 后 6 位}; ack emoji 为 SMUG', () => {
+  it('默认 title 为 [飞书·DM] {openId 后 6 位}; ack emoji 为 Typing', () => {
     expect(adapter.sessions.defaultTitle('ou_1234567890')).toBe('[飞书·DM] 567890');
-    expect(adapter.processingEmoji).toBe('SMUG');
+    expect(adapter.processingEmoji).toBe('Typing');
   });
 
   it('会话落「对话」分组(workspaceKind=dialogue) + oneshot 起名前缀 [飞书·DM]', () => {

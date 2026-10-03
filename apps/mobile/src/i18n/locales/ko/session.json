@@ -417,7 +417,6 @@
       "hours": "{{count}}시간",
       "minutes": "{{count}}분",
       "remaining": "{{percent}}% 남음",
-      "resets": "{{time}}에 초기화",
       "awaitingRefresh": "새로고침 대기 중",
       "balance": "사용 가능한 잔액",
       "cycle": "이번 주기 사용액",

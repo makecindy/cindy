@@ -16,6 +16,7 @@
  */
 
 import { BaseIM } from '../BaseIM.js';
+import { processingReaction } from '../processingReactions.js';
 import type { ChannelIM } from '../channelIM.js';
 import type {
   IMHost,
@@ -784,7 +785,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
    * reasonable default.
    */
   reactToMessage(messageId: string, emojiType: string): Promise<string | null> {
-    return outbound.addReaction(messageId, emojiType);
+    return outbound.addReaction(messageId, processingReaction(emojiType));
   }
 
   /**

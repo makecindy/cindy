@@ -51,6 +51,7 @@ export function buildWecomAdapter(
       }),
     },
     processingEmoji: '',
+    silentQueue: true,
     buildVendorOptions: (userId) => ({
       source: 'wecom',
       wecomConversationId: userId,

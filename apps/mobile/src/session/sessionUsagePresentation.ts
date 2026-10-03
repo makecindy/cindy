@@ -6,6 +6,21 @@ import {
   type RemoteMoney,
 } from "./remoteMoney";
 import type { RemoteSession } from "./types";
+import { quotaCountdown } from "./mobileModelRowPresentation";
+
+/**
+ * Time left until a quota resets, used as the window label like the desktop status
+ * chip ("7 hours": one unit, rounded up). Null once the reset time has passed.
+ */
+export function formatQuotaResetCountdown(
+  resetsAt: number,
+  now: number,
+  t: TFunction,
+): string | null {
+  return quotaCountdown(resetsAt, now, (unit) =>
+    t(`models.unified.timeUnit.${unit}`),
+  );
+}
 
 export function formatSessionUsageMoney(money: RemoteMoney): string {
   const symbol = remoteMoneySymbol(money.currency);
@@ -70,14 +85,21 @@ export function accountUsageRows(
   if (!account) return [];
   const rows: AccountUsageRow[] = [];
   for (const window of account.windows) {
+    // The countdown replaces the window name; without one (unknown or elapsed
+    // reset) the row falls back to naming the window.
+    const countdown =
+      window.resetsAt === null
+        ? null
+        : formatQuotaResetCountdown(window.resetsAt, now, t);
     const label =
-      window.minutes === 10080
+      countdown ??
+      (window.minutes === 10080
         ? t("session.menu.usage.week")
         : window.minutes && window.minutes % 60 === 0
           ? t("session.menu.usage.hours", { count: window.minutes / 60 })
           : window.minutes
             ? t("session.menu.usage.minutes", { count: window.minutes })
-            : t("session.menu.usage.quota");
+            : t("session.menu.usage.quota"));
     const expired = window.resetsAt !== null && window.resetsAt * 1000 <= now;
     rows.push({
       label: window.modelLabel ? `${window.modelLabel} · ${label}` : label,
@@ -87,18 +109,6 @@ export function accountUsageRows(
             percent: Math.round(window.remainingPercent),
           }),
       warning: !expired && window.remainingPercent <= 10,
-      ...(window.resetsAt !== null
-        ? {
-            detail: t("session.menu.usage.resets", {
-              time: new Date(window.resetsAt * 1000).toLocaleString(locale, {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-              }),
-            }),
-          }
-        : {}),
     });
   }
   const credits = account.credits;

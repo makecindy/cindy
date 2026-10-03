@@ -421,7 +421,6 @@
       "hours": "{{count}} 小時",
       "minutes": "{{count}} 分鐘",
       "remaining": "剩餘 {{percent}}%",
-      "resets": "{{time}} 重設",
       "awaitingRefresh": "等待重新整理",
       "balance": "可用餘額",
       "cycle": "本週期已用",

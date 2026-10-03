@@ -240,7 +240,10 @@ import { GhostConnectionManager } from './ghostConnections.js';
 import { getResolvedMainLocale, t } from '../i18n.js';
 import { getDeepLinkMainWindow } from '../deepLink.js';
 import { reconcileGhostSkillLinks, removeGhostSkillLinksForRoots, ghostSkillPluginRoot } from './skillSlot.js';
-import { assertGhostSkillProjectionStableOwner } from '../authBoundaryQuarantine.js';
+import {
+  assertGhostSkillProjectionStableOwner,
+  withSharedSkillRootsLock,
+} from '../authBoundaryQuarantine.js';
 import { type GhostOwnerScope } from './ghostOwnerScope.js';
 import {
   assertTrustedAppRendererEvent,
@@ -1136,8 +1139,10 @@ export async function suspendAllGhosts(): Promise<void> {
   resetNodeRuntimeBrokerForAccountBoundary();
   brainRootCache = null;
   const roots = listGhostOwnerProjectionRoots();
-  const skillCleanup = await removeGhostSkillLinksForRoots(roots, undefined,
-    roots.map((root) => path.join(ghostSkillPluginRoot(root), 'skills')));
+  // Legacy links live in the shared home roots; serialize with other Cindy processes.
+  const skillCleanup = await withSharedSkillRootsLock(() =>
+    removeGhostSkillLinksForRoots(roots, undefined,
+      roots.map((root) => path.join(ghostSkillPluginRoot(root), 'skills'))));
   for (const warning of skillCleanup.warnings) {
     log.warn('ghost owner skill cleanup warning', { warning });
   }

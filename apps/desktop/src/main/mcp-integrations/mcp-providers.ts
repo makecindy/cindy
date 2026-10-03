@@ -121,6 +121,7 @@ export interface DesktopMcpProvidersDeps {
   ) => IOSSimulatorMcpAccessDecision;
   /** Device-link transport stays host-injected so provider tests do not load Electron runtime services. */
   invokeRemote: ChatHistoryReaderDeps['invokeRemote'];
+  historyRemote?: import('@cindy/mcps').HistoryRemoteDeps;
   /** 插件文件交接只认活跃 Session 的实时权限；缺失时由 ghost.ts fail closed。 */
   getLiveSessionGrantState?: (
     sessionId: string,
@@ -911,6 +912,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         authorizePath: (request) => authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
       }),
       history: {
+        remote: deps.historyRemote,
         resolveSessionScope: async ({ callerSessionId, callerMemoryScopeKey }) => {
           try {
             if (await botReadsAccountHistory(callerSessionId)) return { ok: true, sessionIds: null };

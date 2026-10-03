@@ -421,7 +421,6 @@
       "hours": "{{count}} hours",
       "minutes": "{{count}} minutes",
       "remaining": "{{percent}}% remaining",
-      "resets": "Resets {{time}}",
       "awaitingRefresh": "Awaiting refresh",
       "balance": "Available balance",
       "cycle": "Used this cycle",
