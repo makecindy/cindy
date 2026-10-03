@@ -105,6 +105,10 @@ describe('Plugin Market IPC error boundary', () => {
     const syncEnd = registerSource.indexOf('\n}\n\n/**\n * Preserve stable IPC errors', syncStart);
     const syncBody = registerSource.slice(syncStart, syncEnd);
     expect(syncBody).toContain('const snapshot = await snapshotAndSignalRemovalNotice({');
+    expect(syncBody).toContain('void service().refreshCustomGitSourcesForBackground({');
+    expect(syncBody.indexOf('await snapshotAndSignalRemovalNotice({')).toBeLessThan(
+      syncBody.indexOf('void service().refreshCustomGitSourcesForBackground({'),
+    );
     expect(syncBody).toContain('onDefaultReconciliationOutcome: (outcome) => {');
     expect(syncBody).toContain("reconciliationOutcome ?? 'completed'");
     expect(syncBody).toContain('defaultMarketPluginSyncOutcome(');
