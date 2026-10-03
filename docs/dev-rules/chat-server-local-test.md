@@ -1,6 +1,10 @@
 # Chat Server 本地接入测试
 
-这是隔离工作区里的开发接线，不是生产客户端迁移开关。正式安装包、共享 DEV、未设置测试配置的隔离 DEV 保持现有群聊服务。
+正式客户端统一通过端点清单的 `chatApiBaseUrl` 连接聊天服务器，WebSocket 从同一地址派生。国内与国际清单连接同一生产聊天数据源，支持跨区邀请；不再按打包形态选择本地群聊。下文的 loopback 配置仅供显式隔离测试，正式安装包不会读取。
+
+已有账号的本地群先按稳定来源 ID 建立服务器群，按原消息顺序导入作者、时间、正文和附件。服务端保存导入水位；断线或重启从已提交位置继续，已提交记录不重复，导入不触发 Agent。成功后的群 ID/水位回执保存在账号目录 `chat-upgrades/<端点及账号摘要>/`，以后退出或转让群不再重新导入。旧本地数据保留为迁移源和 Agent 元数据，不作为另一套可发言群。服务不可用或附件不能上传时保留源数据并返回失败，不清空记录、不偷偷退回本地发送。
+
+上线顺序：先部署服务端和持久数据库/对象存储，验证 `https://chat.cindy.app/ready`、两区登录与 WebSocket，再把两个区域的 CDN `endpoint.json` 发布为本仓清单，最后发布客户端。仅修改随包 JSON 不等于在线 CDN 已发布。服务端部署登记与操作说明见 cindy-server 的 `docs/chat-server-production.md`。
 
 ## 两个 DEV 接入同一聊天服务
 
@@ -39,7 +43,7 @@ XDT_CDP_PORT=9239 pnpm restart:desktop:remote --region=global -- --isolated=chat
 
 ## 数据与执行边界
 
-现有群界面 → 受信 IPC → Main `chatServerDev.ts` → 本地 HTTP/WebSocket → PostgreSQL。账号令牌仅由 Main 从正常登录服务读取；不透传给 renderer，不写入测试配置。切换账号会废弃旧请求、连接及执行租约上下文，并重新注册当前账号的伙伴。
+现有群界面 → 受信 IPC → Main `chatServer.ts` → 清单配置的 HTTPS/WSS → PostgreSQL。账号令牌仅由 Main 从正常登录服务读取；不透传给 renderer，不写入测试配置。切换账号会废弃旧请求、连接及执行租约上下文，并重新注册当前账号的伙伴。
 
 人和 Bot 使用同一成员、消息、回复、回应及邀请合同。Bot 通过稳定本地 ID 注册；服务器分发执行请求，Main 复用现有群专线、权限同步、输入队列和终态回传。成员资格不授予另一账号的电脑或工具权限。
 

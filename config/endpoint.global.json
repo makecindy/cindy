@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "authApiBaseUrl": "https://auth.cindy.app",
+  "chatApiBaseUrl": "https://chat.cindy.app",
   "deviceLinkApiBaseUrl": "https://device-link.cindy.app",
   "oauthBrokerApiBaseUrl": "https://oauth-broker.cindy.app",
   "ossApiBaseUrl": "https://oss.cindy.app",

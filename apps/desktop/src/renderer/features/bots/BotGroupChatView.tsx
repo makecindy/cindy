@@ -823,6 +823,7 @@ function BotGroupTimelineItem({
                 <MarkdownRenderer workingDir="" content={message.content} allowPrivilegedLinks={false} />
               </div>
             ) : null}
+            <BotGroupUserAttachments attachments={message.attachments} />
             <BotGroupHandoffFiles files={message.files} workDir={plan?.workDir ?? null} />
             {actions}
           </>

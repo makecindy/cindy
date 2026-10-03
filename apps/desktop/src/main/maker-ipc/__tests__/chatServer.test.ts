@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const fixture = vi.hoisted(() => ({ packaged: true, exists: vi.fn(), config: '', handle: vi.fn(), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[] }));
-vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token' }));
+const fixture = vi.hoisted(() => ({ packaged: true, urls: [] as string[], wsUrls: [] as string[], exists: vi.fn(), config: '', handle: vi.fn(), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[] }));
+vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: vi.fn(async () => true) }));
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
+vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: vi.fn() }) }));
+vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
 vi.mock('electron', () => ({ app: { get isPackaged() { return fixture.packaged; }, getPath: () => '/isolated' } }));
 vi.mock('node:fs', () => ({ existsSync: fixture.exists, readFileSync: () => fixture.config || '{"baseUrl":"https://example.com","token":"test"}' }));
 vi.mock('../botGroupChatService.js', () => ({ readPersistedReplyText: vi.fn() }));
@@ -11,6 +14,7 @@ vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzl
 vi.mock('node:http', async () => {
   const { EventEmitter } = await import('node:events');
   return { request: (url: string, options: { method: string }, callback: (response: unknown) => void) => {
+    fixture.urls.push(String(url));
     const req = Object.assign(new EventEmitter(), {
       end: (data?: string) => {
         void Promise.resolve().then(() => fixture.handle(new URL(url).pathname.slice(3) + new URL(url).search, options.method, data ? JSON.parse(data) : undefined))
@@ -26,38 +30,49 @@ vi.mock('node:http', async () => {
     return req;
   } };
 });
+vi.mock('node:https', async () => ({ request: (await import('node:http')).request }));
 vi.mock('ws', async () => {
   const { EventEmitter } = await import('node:events');
   return { default: class extends EventEmitter {
     static OPEN = 1; readyState = 0; send = vi.fn();
-    constructor() { super(); fixture.sockets.push(this as unknown as import('ws').WebSocket); }
+    constructor(url: URL) { super(); fixture.wsUrls.push(String(url)); fixture.sockets.push(this as unknown as import('ws').WebSocket); }
     close() { this.emit('close'); }
   } };
 });
-import { withChatServerDev } from '../chatServerDev.js';
+import { withChatServer } from '../chatServer.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
 
-describe('Chat Server local integration isolation', () => {
+describe('Chat Server production connection', () => {
   afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
-  const local = {} as BotGroupChatService;
+  const local = { dispose: vi.fn() } as unknown as BotGroupChatService;
   const deps = {} as BotGroupChatServiceDeps;
-  it('does not read fixture files in a packaged application', () => {
-    fixture.packaged = true; vi.stubEnv('XDT_ISOLATED', '1');
-    expect(withChatServerDev(local, deps)).toBe(local);
+  it('enables the installed application without reading a fixture', async () => {
+    fixture.packaged = true;
+    const service = withChatServer(local, deps);
+    expect(await service.chatServer!.status()).toEqual({ enabled: true, connected: false });
     expect(fixture.exists).not.toHaveBeenCalled();
+    service.dispose();
   });
-  it('does not read fixture files for a shared DEV profile', () => {
+  it('enables an unpackaged application from the same endpoint manifest', async () => {
     fixture.packaged = false; vi.stubEnv('XDT_ISOLATED', '0');
-    expect(withChatServerDev(local, deps)).toBe(local);
-    expect(fixture.exists).not.toHaveBeenCalled();
+    const service = withChatServer(local, deps);
+    expect((await service.chatServer!.status()).enabled).toBe(true);
+    service.dispose();
   });
-  it('keeps normal group behavior when the isolated profile has no fixture', () => {
-    fixture.packaged = false; vi.stubEnv('XDT_ISOLATED', '1'); fixture.exists.mockReturnValue(false);
-    expect(withChatServerDev(local, deps)).toBe(local);
+  it('uses HTTPS and WSS in packaged mode without the DEV fixture', async () => {
+    vi.useFakeTimers(); fixture.packaged = true; fixture.profiles = []; fixture.urls = []; fixture.wsUrls = [];
+    fixture.handle.mockImplementation(route => ({ body: route === '/me' ? { actor: { id: 'self' } } : [] }));
+    const service = withChatServer({ ...local, listGroups: async () => ({ ok: true, groups: [] }) }, deps);
+    try {
+      expect((await service.listGroups()).ok).toBe(true);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(fixture.urls.every(url => url.startsWith('https://chat.cindy.app/v1/'))).toBe(true);
+      expect(fixture.wsUrls).toEqual(['wss://chat.cindy.app/v1/ws']);
+    } finally { service.dispose(); vi.useRealTimers(); }
   });
-  it('refuses a fixture that targets an external server before network or runtime work', () => {
+  it('refuses a fixture that targets an external server', () => {
     fixture.packaged = false; vi.stubEnv('XDT_ISOLATED', '1'); fixture.exists.mockReturnValue(true);
-    expect(() => withChatServerDev(local, deps)).toThrow();
+    expect(() => withChatServer(local, deps)).toThrow();
   });
 });
 
@@ -95,7 +110,7 @@ describe('Chat Server result delivery and refresh', () => {
       dispatch: vi.fn(async (input: Parameters<BotGroupChatServiceDeps['dispatch']>[0]) => { await input.onAccepted?.(); return { ok: true }; }),
       onChanged: vi.fn(),
     } as unknown as BotGroupChatServiceDeps;
-    service = withChatServerDev({ settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
   async function start() {
@@ -223,5 +238,6 @@ describe('Chat Server result delivery and refresh', () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.groups.map(g => g.id)).toEqual([roomId]);
     expect(fixture.handle).toHaveBeenCalledWith(`/conversations?limit=100&after=${firstPage[99].id}`, 'GET', undefined);
+    expect(fixture.handle.mock.calls.some(([route]) => route.includes('/messages?'))).toBe(false);
   });
 });

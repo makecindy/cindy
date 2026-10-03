@@ -74,6 +74,7 @@ export const CLIENT_ENDPOINT_KEYS = [
   // 不 bump schemaVersion:纯增可选字段,老清单缺失即 '',老客户端按未知字段忽略
   // (同 review / cdnBaseUrl 先例,理由见上方版本注释)。
   'authDesktopCallbackUrl',
+  'chatApiBaseUrl',
   'deviceLinkApiBaseUrl',
   'oauthBrokerApiBaseUrl',
   // oss-server(公开资产直传预签名,当前场景:头像上传)。
@@ -151,6 +152,7 @@ export const CLIENT_ENDPOINT_REVIEW_KEY = 'review';
 const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
   authApiBaseUrl: ['https:'],
   authDesktopCallbackUrl: ['https:'],
+  chatApiBaseUrl: ['https:'],
   deviceLinkApiBaseUrl: ['https:'],
   oauthBrokerApiBaseUrl: ['https:'],
   ossApiBaseUrl: ['https:'],

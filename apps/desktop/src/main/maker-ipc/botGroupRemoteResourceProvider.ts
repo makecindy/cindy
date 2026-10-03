@@ -215,10 +215,11 @@ async function remoteVisibility(botIds: readonly string[]): Promise<Map<string, 
   return new Map(rows.map((row) => [row.id, isBotVisibleRemotely(row)]));
 }
 
-/** A group reaches a phone only while every member is a remotely visible teammate. */
-async function visibleGroups<T extends Pick<BotGroupSummary, 'members'>>(groups: readonly T[]): Promise<T[]> {
-  const visibility = await remoteVisibility(groups.flatMap((group) => group.members.map((member) => member.botId)));
-  return groups.filter((group) => group.members.every((member) => visibility.get(member.botId) === true));
+/** Server membership authorizes human/foreign members; local Bot hiding still applies. */
+async function visibleGroups<T extends Pick<BotGroupSummary, 'members' | 'serverBacked'>>(groups: readonly T[]): Promise<T[]> {
+  const localMembers = (group: T) => group.members.filter(member => !group.serverBacked || (member.actorKind === 'bot' && member.isOwned));
+  const visibility = await remoteVisibility(groups.flatMap(group => localMembers(group).map(member => member.botId)));
+  return groups.filter(group => localMembers(group).every(member => (group.serverBacked && !visibility.has(member.botId)) || visibility.get(member.botId) === true));
 }
 
 /** The same rule for anything else that reaches a phone about a group, such as a step push. */

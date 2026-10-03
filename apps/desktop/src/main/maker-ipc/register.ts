@@ -480,7 +480,7 @@ import {
   type BotDirectMessageService,
 } from './botDirectMessageService.js';
 import { createBotGroupChatService, type BotGroupChatService, type BotGroupChatServiceDeps } from './botGroupChatService.js';
-import { withChatServerDev } from './chatServerDev.js';
+import { withChatServer } from './chatServer.js';
 import { createBotGroupPlanDecider } from './botGroupPlanDecider.js';
 import { botGroupMembersVisibleRemotely, registerBotGroupRemoteResourceProvider } from './botGroupRemoteResourceProvider.js';
 import { broadcastBotGroupRemoteResourceChanged } from './botGroupRemoteResourceInvalidation.js';
@@ -10266,7 +10266,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     log,
   };
-  botGroupChatServiceHolder = withChatServerDev(createBotGroupChatService(botGroupChatDeps), botGroupChatDeps);
+  botGroupChatServiceHolder = withChatServer(createBotGroupChatService(botGroupChatDeps), botGroupChatDeps);
   // Phones reach groups through the Remote Resource protocol (bot-group-chat.md §8).
   registerBotGroupRemoteResourceProvider(() => botGroupChatServiceHolder);
   botDelegationServiceHolder?.dispose();
