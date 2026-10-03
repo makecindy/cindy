@@ -84,7 +84,7 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
     if (!attempt.current || attempt.current.text !== text) attempt.current = { text, id: crypto.randomUUID() };
     try {
       const result = await api().reply({ groupId: group.id, rootId, text: attempt.current.text, clientId: attempt.current.id,
-        mentions: resolveBotGroupMentions(text, { members: group.members, allLabels: [t('bots.groupChat.mentions.all'), '所有人', 'all', 'everyone'] }) });
+        mentions: resolveBotGroupMentions(text, { members: group.members, allLabels: [t('bots.groupChat.mention.all'), '所有人', 'all', 'everyone'] }) });
       if (!isDataOwnerGenerationCurrent(owner)) return;
       if (!result.ok) { setError(t(chatErrorKey(result.errorCode))); return; }
       setText(''); attempt.current = null; void loadRef.current(); refreshBotGroups();
