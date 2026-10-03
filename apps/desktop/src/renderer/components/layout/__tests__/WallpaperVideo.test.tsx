@@ -57,8 +57,10 @@ describe('dynamic wallpaper lifecycle', () => {
     await act(async () => document.documentElement.removeAttribute(HIDDEN_ANIMATION_ATTR));
     expect(video.play).toHaveBeenCalledTimes(2);
     rerender(<WallpaperVideo wallpaperId="cindy-window" motion="static" />);
-    await waitFor(() => expect(document.querySelector('video')).toBeNull());
-    expect(video.getAttribute('src')).toBeNull();
+    await waitFor(() => {
+      expect(document.querySelector('video')).toBeNull();
+      expect(video.getAttribute('src')).toBeNull();
+    });
     expect(video.load).toHaveBeenCalled();
     expect(document.documentElement.dataset.wallpaperMotion).toBeUndefined();
   });
