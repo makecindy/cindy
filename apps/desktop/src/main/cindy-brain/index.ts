@@ -27,6 +27,7 @@ function notifyMobilePluginsChanged(): void {
   tapWindowBroadcast(REMOTE_RESOURCE_CHANGED_CHANNEL, { collectionId: PLUGIN_COLLECTION }, getSafeDataOwnerPushStamp());
 }
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror.js';
+import { clearSessionWindowFocus, noteSessionWindowFocus } from '../maker-host/session-window-focus.js';
 import { projectGhostAgentModels } from './ghostAgentModels.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { PluginDownloadSlot } from './downloadSlot.js';
@@ -2636,6 +2637,7 @@ const ghostSessionFocusByWebContents = new Map<number, string | null>();
 const ghostSessionFocusTrackedWebContents = new Set<number>();
 
 function noteGhostWindowSessionFocused(sender: WebContents, sessionId: string | null): void {
+  noteSessionWindowFocus(sender, sessionId);
   // Renderer route reports are not an authorization source. They may only
   // pause a stale active mutation grant when the window family moves away;
   // retained Viewer grants require Main/Host confirmation or focus to become
@@ -7335,6 +7337,7 @@ export function registerGhostIpc(): void {
       invalidateForgePackTicketsForOwner(getActiveAppSession());
       // 当前任务绑定属于窗口内的 owner 上下文，切账号/会员身份后不得沿用旧快照。
       ghostSessionFocusByWebContents.clear();
+      clearSessionWindowFocus();
       clearIOSSimulatorRendererAccess();
       if (!getAppCapabilities().canUseCindyAccountServices) suspendCindyAccountGhosts();
       // Even when provisioning itself is a no-op, the renderer and agent

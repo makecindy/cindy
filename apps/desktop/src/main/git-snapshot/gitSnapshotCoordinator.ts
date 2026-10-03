@@ -32,11 +32,11 @@ export interface GitSnapshotSessionContext {
 export interface GitSnapshotCoordinatorDeps {
   /** Global auto-snapshot switch; turn-start decisions are reused at matching turn end. */
   readAutoSnapshotEnabled: () => boolean;
-  /** Whether an empty local project may be initialized as Git during resolution. */
+  /** Whether a local project may be initialized as Git during turn start. */
   readAutoInitProjectGit?: () => boolean;
   /** Resolves a working directory to a Git repo root, or null for non-Git dirs. */
   detectRepoRoot: (workingDir: string) => Promise<string | null>;
-  /** Best-effort bootstrap for local empty project dirs that are not Git repos yet. */
+  /** Best-effort bootstrap for local project dirs that are not Git repos yet. */
   initializeProjectGit?: (
     sessionId: string,
     context: GitSnapshotSessionContext,
@@ -174,9 +174,6 @@ export class GitSnapshotCoordinator {
     const turnStart = this.shiftTurnStartRecord(sessionId);
     try {
       const autoSnapshotEnabled = turnStart?.autoSnapshotEnabled ?? this.deps.readAutoSnapshotEnabled();
-      const autoInitProjectGit = turnStart
-        ? turnStart.autoInitProjectGit
-        : this.deps.readAutoInitProjectGit?.() ?? autoSnapshotEnabled;
       if (!autoSnapshotEnabled) return;
       if (turnStart && !turnStart.repoRoot) {
         await turnStart.promise;
@@ -185,7 +182,8 @@ export class GitSnapshotCoordinator {
       const resolved = await this.resolveSession(
         sessionId,
         autoSnapshotEnabled,
-        autoInitProjectGit,
+        // Never ask for consent or create the initial HEAD after the agent has written.
+        false,
       );
       if (!resolved) return;
 

@@ -2807,6 +2807,14 @@
       }
     },
     "gitSafety": {
+      "nonEmptyPrompt": {
+        "title": "為此專案建立檔案還原點？",
+        "message": "此專案已有檔案，但沒有 Git 歷史記錄。",
+        "detail": "{{path}}\n\nCindy 會在本次任務修改檔案前初始化 Git，並為可納入的檔案建立還原點。現有檔案保持原位，並在專案中建立 `.git` 目錄。之後可在 Git 安全設定中關閉新的還原點；若刪除 `.git`，此專案的 Git 歷史也會一併刪除。安全過濾排除的檔案無法透過此還原點復原。跳過後，此專案沒有檔案還原點。拒絕後，此專案不會再次顯示提示，除非重設 Git 安全設定。",
+        "allow": "建立還原點",
+        "decline": "不為此專案建立",
+        "cancel": "取消"
+      },
       "title": "Git 安全",
       "autoSnapshotTitle": "檔案恢復點",
       "description": "選擇 Cindy 記錄隱藏檔案恢復點的範圍。這只影響檔案恢復成本，不影響對話回退。",
@@ -2814,7 +2822,7 @@
       "modes": {
         "off": "關閉",
         "existingGit": "僅已有 Git 專案",
-        "allProjects": "包括新的空專案"
+        "allProjects": "包括未啟用 Git 的專案"
       },
       "toggleAria": "檔案恢復點模式",
       "saveFailed": "儲存 Git 安全設定失敗"

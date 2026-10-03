@@ -21,7 +21,7 @@ Each **session** is a persistent chat thread driven by **one agent** (Claude Cod
 
 - **`/clear`** — clears the current session's conversation context in place (resets messages and state without creating or switching to a new session). The session itself stays in the sidebar; only its content is wiped.
 - **`/compact`** — ask the agent to summarize and compress earlier turns into a shorter context (Claude Code).
-- **Edit** — you can edit your **last** user message. Doing so **rewinds** the conversation: it drops that message and everything after it, then resends your edited message. In sessions with file-rewind support (local git working directories with savepoints), file changes are also rolled back. In sessions without savepoints (remote sessions, non-git directories, or Codex sessions that haven't created savepoints), only the conversation is rewound — filesystem changes remain.
+- **Edit** — you can edit your **last** user message. Doing so **rewinds** the conversation: it drops that message and everything after it, then resends your edited message. In sessions with file-rewind support (local Git working directories with savepoints), file changes are also rolled back. With Git Safety set to include projects without Git, a non-empty local project can gain file recovery after you confirm Git initialization before a turn; eligible files receive an initial savepoint. If no savepoint exists (for example, a remote session, a non-Git project you skipped, or a Codex session that has not created one), only the conversation is rewound — filesystem changes remain.
 
 **Switching between sessions:**
 
