@@ -32,10 +32,14 @@ function setup() {
   vi.useFakeTimers();
   const video = media(false);
   const nativeStop = vi.fn();
+  const hold = vi.fn();
+  const resume = vi.fn(() => true);
   vi.mocked(nativeCaptureStream).mockResolvedValue({
     stream: video,
     stop: nativeStop,
     clear: vi.fn(),
+    hold,
+    resume,
   } as any);
   const capture = vi.fn().mockRejectedValue(new Error('NotAllowedError'));
   vi.stubGlobal('navigator', { mediaDevices: { getDisplayMedia: capture } });
@@ -136,6 +140,10 @@ function setup() {
     api,
     video,
     nativeStop,
+    hold,
+    resume,
+    pause: (lease = 'lease') => command({ id: 'hold', op: 'display-hold', lease }),
+    swap: (lease = 'lease') => command({ id: 'swap', op: 'display-swap', lease }),
     peers,
     capture,
     reply,
@@ -543,4 +551,53 @@ it('answers control requests while input batches fill their own bound', async ()
   expect(h.api.stop).not.toHaveBeenCalled();
   batch(9);
   expect(h.api.stop).toHaveBeenCalled();
+});
+
+it('follows a display swap on the same peer without restarting capture', async () => {
+  const h = setup();
+  h.offer(false);
+  await flush();
+  const [peer] = h.peers;
+  h.pause('other-lease');
+  h.swap('other-lease');
+  expect(h.hold).not.toHaveBeenCalled();
+  expect(h.resume).not.toHaveBeenCalled();
+  expect(h.reply).toHaveBeenLastCalledWith('swap', false);
+  h.pause();
+  expect(h.hold).toHaveBeenCalledOnce();
+  h.swap();
+  await flush();
+  expect(h.resume).toHaveBeenCalledOnce();
+  expect(h.reply).toHaveBeenLastCalledWith('swap', true);
+  expect(h.peers).toHaveLength(1);
+  expect(peer.close).not.toHaveBeenCalled();
+  expect(h.nativeStop).not.toHaveBeenCalled();
+  expect(h.api.stop).not.toHaveBeenCalled();
+});
+
+it('reports a browser-captured stream as not kept, so the video is rebuilt', async () => {
+  const h = setup();
+  // No cursor overlay: the browser capture succeeds and native is never used.
+  h.capture.mockResolvedValueOnce(media(false));
+  const nativeStarts = vi.mocked(nativeCaptureStream).mock.calls.length;
+  h.offer(false, false);
+  await flush();
+  expect(h.reply).toHaveBeenCalledWith('offer', 'answer');
+  expect(vi.mocked(nativeCaptureStream).mock.calls).toHaveLength(nativeStarts);
+  h.pause();
+  h.swap();
+  await flush();
+  expect(h.hold).not.toHaveBeenCalled();
+  expect(h.reply).toHaveBeenLastCalledWith('swap', false);
+});
+
+it('reports a native stream that already ended as not kept', async () => {
+  const h = setup();
+  h.offer(false);
+  await flush();
+  h.resume.mockReturnValueOnce(false);
+  h.pause();
+  h.swap();
+  await flush();
+  expect(h.reply).toHaveBeenLastCalledWith('swap', false);
 });
