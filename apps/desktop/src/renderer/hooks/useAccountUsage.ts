@@ -34,6 +34,7 @@ import {
   isCodexBucketStale,
   matchCodexBucketForModel,
   nextCodexBucketStaleAtMs,
+  reserveModelIdForModel,
 } from '@cindy/maker-shared/codex-usage-buckets';
 
 export {
@@ -42,6 +43,7 @@ export {
   isCodexBucketStale,
   matchCodexBucketForModel,
   nextCodexBucketStaleAtMs,
+  reserveModelIdForModel,
 };
 
 export interface RateLimitWindow {
