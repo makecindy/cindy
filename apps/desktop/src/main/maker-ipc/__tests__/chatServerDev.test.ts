@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const fixture = vi.hoisted(() => ({ packaged: true, exists: vi.fn(), config: '', handle: vi.fn(), profiles: [] as unknown[] }));
+const fixture = vi.hoisted(() => ({ packaged: true, exists: vi.fn(), config: '', handle: vi.fn(), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[] }));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token' }));
 vi.mock('electron', () => ({ app: { get isPackaged() { return fixture.packaged; }, getPath: () => '/isolated' } }));
 vi.mock('node:fs', () => ({ existsSync: fixture.exists, readFileSync: () => fixture.config || '{"baseUrl":"https://example.com","token":"test"}' }));
@@ -28,7 +28,11 @@ vi.mock('node:http', async () => {
 });
 vi.mock('ws', async () => {
   const { EventEmitter } = await import('node:events');
-  return { default: class extends EventEmitter { static OPEN = 1; readyState = 0; send() {} close() { this.emit('close'); } } };
+  return { default: class extends EventEmitter {
+    static OPEN = 1; readyState = 0; send = vi.fn();
+    constructor() { super(); fixture.sockets.push(this as unknown as import('ws').WebSocket); }
+    close() { this.emit('close'); }
+  } };
 });
 import { withChatServerDev } from '../chatServerDev.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
@@ -83,7 +87,7 @@ describe('Chat Server result delivery and refresh', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
     vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
-    fixture.packaged = false; fixture.exists.mockReturnValue(true); fixture.profiles = []; claimed = false;
+    fixture.packaged = false; fixture.exists.mockReturnValue(true); fixture.profiles = []; fixture.sockets = []; claimed = false;
     fixture.config = '{"baseUrl":"http://127.0.0.1:3018","auth":"cindy"}';
     vi.stubEnv('XDT_ISOLATED', '1');
     fixture.handle.mockImplementation(response);
@@ -101,6 +105,25 @@ describe('Chat Server result delivery and refresh', () => {
   }
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
+
+  it('refreshes a reset room and resumes realtime from the authorized snapshot cursor', async () => {
+    await service.getGroup(roomId);
+    await vi.advanceTimersByTimeAsync(2000);
+    const socket = fixture.sockets[0];
+    Object.defineProperty(socket, 'readyState', { value: 1 });
+    socket.emit('message', JSON.stringify({ type: 'ready' }));
+    fixture.handle.mockImplementation(route => route.endsWith('/snapshot')
+      ? { body: { ...response(route).body, cursor: '42' } } : response(route));
+    vi.mocked(socket.send).mockClear();
+    vi.mocked(deps.onChanged!).mockClear();
+    socket.emit('message', JSON.stringify({ type: 'scope_error', scope: `conversation:${roomId}`, error: { code: 'RESET_REQUIRED' } }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', scope: `conversation:${roomId}`, after: '42' }));
+    expect(deps.onChanged).toHaveBeenCalledWith(expect.objectContaining({ groupId: roomId }), undefined);
+    vi.mocked(socket.send).mockClear();
+    socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${roomId}`, cursor: '43', changes: [] }));
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'ack', scope: `conversation:${roomId}`, cursor: '43' }));
+  });
 
   it.each(['before-commit', 'after-commit'])('retries an identical result after a lost response (%s) without rerunning the Agent', async loss => {
     const committed = new Map<string, unknown>();

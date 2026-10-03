@@ -218,8 +218,16 @@ function createChatServerDev(local: BotGroupChatService, deps: BotGroupChatServi
           ws.send(JSON.stringify({ type: 'ack', scope: event.scope, cursor: event.cursor }));
         } else if (event.type === 'scope_error' && event.scope.startsWith('conversation:')) {
           const roomId = event.scope.slice(13);
-          rooms.delete(roomId);
-          changed(roomId);
+          if (event.error?.code === 'RESET_REQUIRED') {
+            void api<Snapshot>(`/conversations/${roomId}/snapshot`).then(value => {
+              if (!current() || socket !== ws || ws.readyState !== WebSocket.OPEN) return;
+              changed(roomId);
+              ws.send(JSON.stringify({ type: 'subscribe', scope: event.scope, after: value.cursor }));
+            }).catch(() => ws.close());
+          } else {
+            rooms.delete(roomId);
+            changed(roomId);
+          }
         }
       } catch { ws.close(); }
     });
