@@ -1,0 +1,321 @@
+{
+  "Day": {
+    "texts": [
+      "Claude",
+      "Max",
+      "100% 6d 23h",
+      "100% 5h 4h 59m",
+      "100% Fable",
+      "Codex",
+      "Pro",
+      "100% 6d 23h",
+      "Weekly",
+      "Extra resets: 3",
+      "Phone",
+      "Messaging",
+      "WebView Browser Tester",
+      "Camera"
+    ],
+    "root": "[39,272][1042,700]",
+    "rows": {
+      "provider_primary": [
+        [
+          81,
+          456,
+          498,
+          556
+        ],
+        [
+          582,
+          456,
+          1000,
+          556
+        ]
+      ],
+      "provider_secondary": [
+        [
+          81,
+          556,
+          498,
+          611
+        ],
+        [
+          582,
+          556,
+          1000,
+          611
+        ]
+      ],
+      "provider_tertiary": [
+        [
+          81,
+          611,
+          498,
+          658
+        ],
+        [
+          582,
+          611,
+          1000,
+          658
+        ]
+      ]
+    },
+    "source": "isolated fixture / actual Launcher AppWidget"
+  },
+  "Night": {
+    "texts": [
+      "Claude",
+      "Max",
+      "100% 6d 23h",
+      "100% 5h 4h 59m",
+      "100% Fable",
+      "Codex",
+      "Pro",
+      "100% 6d 23h",
+      "Weekly",
+      "Extra resets: 3",
+      "Phone",
+      "Messaging",
+      "WebView Browser Tester",
+      "Camera"
+    ],
+    "root": "[39,272][1042,700]",
+    "rows": {
+      "provider_primary": [
+        [
+          81,
+          456,
+          498,
+          556
+        ],
+        [
+          582,
+          456,
+          1000,
+          556
+        ]
+      ],
+      "provider_secondary": [
+        [
+          81,
+          556,
+          498,
+          611
+        ],
+        [
+          582,
+          556,
+          1000,
+          611
+        ]
+      ],
+      "provider_tertiary": [
+        [
+          81,
+          611,
+          498,
+          658
+        ],
+        [
+          582,
+          611,
+          1000,
+          658
+        ]
+      ]
+    },
+    "source": "isolated fixture / actual Launcher AppWidget"
+  },
+  "Long-Plan-Night": {
+    "texts": [
+      "Claude",
+      "Enterprise",
+      "100% 6d 23h",
+      "100% 5h 4h 59m",
+      "100% Fable",
+      "Grok",
+      "SuperGrok Heavy",
+      "100% 6d 23h",
+      "Weekly",
+      "Phone",
+      "Messaging",
+      "WebView Browser Tester",
+      "Camera"
+    ],
+    "root": "[39,272][1042,700]",
+    "rows": {
+      "provider_primary": [
+        [
+          81,
+          456,
+          498,
+          556
+        ],
+        [
+          582,
+          456,
+          1000,
+          556
+        ]
+      ],
+      "provider_secondary": [
+        [
+          81,
+          556,
+          498,
+          611
+        ],
+        [
+          582,
+          556,
+          1000,
+          611
+        ]
+      ],
+      "provider_tertiary": [
+        [
+          81,
+          611,
+          498,
+          658
+        ],
+        [
+          582,
+          611,
+          1000,
+          658
+        ]
+      ]
+    },
+    "source": "isolated fixture / actual Launcher AppWidget"
+  },
+  "Unknown-Night": {
+    "texts": [
+      "Claude",
+      "Max",
+      "— —",
+      "— 5h —",
+      "— Fable —",
+      "Codex",
+      "Pro",
+      "— —",
+      "Weekly",
+      "Extra resets: —",
+      "Phone",
+      "Messaging",
+      "WebView Browser Tester",
+      "Camera"
+    ],
+    "root": "[39,272][1042,700]",
+    "rows": {
+      "provider_primary": [
+        [
+          81,
+          456,
+          498,
+          556
+        ],
+        [
+          582,
+          456,
+          1000,
+          556
+        ]
+      ],
+      "provider_secondary": [
+        [
+          81,
+          556,
+          498,
+          611
+        ],
+        [
+          582,
+          556,
+          1000,
+          611
+        ]
+      ],
+      "provider_tertiary": [
+        [
+          81,
+          611,
+          498,
+          658
+        ],
+        [
+          582,
+          611,
+          1000,
+          658
+        ]
+      ]
+    },
+    "source": "isolated fixture / actual Launcher AppWidget"
+  },
+  "Zero-Night": {
+    "texts": [
+      "Claude",
+      "Max",
+      "0% 6d 23h",
+      "0% 5h 4h 59m",
+      "0% Fable",
+      "Codex",
+      "Pro",
+      "0% 6d 23h",
+      "Weekly",
+      "Extra resets: 0",
+      "Phone",
+      "Messaging",
+      "WebView Browser Tester",
+      "Camera"
+    ],
+    "root": "[39,272][1042,700]",
+    "rows": {
+      "provider_primary": [
+        [
+          81,
+          456,
+          498,
+          556
+        ],
+        [
+          582,
+          456,
+          1000,
+          556
+        ]
+      ],
+      "provider_secondary": [
+        [
+          81,
+          556,
+          498,
+          611
+        ],
+        [
+          582,
+          556,
+          1000,
+          611
+        ]
+      ],
+      "provider_tertiary": [
+        [
+          81,
+          611,
+          498,
+          658
+        ],
+        [
+          582,
+          611,
+          1000,
+          658
+        ]
+      ]
+    },
+    "source": "isolated fixture / actual Launcher AppWidget"
+  }
+}

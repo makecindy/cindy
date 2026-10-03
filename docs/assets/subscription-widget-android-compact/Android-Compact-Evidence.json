@@ -1,0 +1,380 @@
+{
+  "date": "2026-10-02T19:32:27.120042+08:00",
+  "baseHead": "25d443de351819700357a3b9522b29da8fcefcc9",
+  "sourceHashes": {
+    "apps/mobile/modules/cindy-quota-widget/android/src/main/java/expo/modules/cindyquotawidget/QuotaSnapshot.kt": "8f0bd6ff7867ac15fe3310475be44f73d91a3befd72ae5e35314a67fa94035bc",
+    "apps/mobile/modules/cindy-quota-widget/android/src/main/java/expo/modules/cindyquotawidget/QuotaWidgetMetrics.kt": "4c4083d25b8e141cf7475ab6c9f1b6d6db9918b34fc1fa059eb240bdabc98afc",
+    "apps/mobile/modules/cindy-quota-widget/android/src/main/java/expo/modules/cindyquotawidget/QuotaWidgetPresentation.kt": "c9ca0507d5b4b3f58ac577a18728ec3553adc0c8985165ed0657817df71611b7",
+    "apps/mobile/modules/cindy-quota-widget/android/src/main/java/expo/modules/cindyquotawidget/QuotaWidgetProvider.kt": "91e0541ad2bc33b4447dcc020be4a82b7b138a124aeffb969baa7fec62ef9d57",
+    "apps/mobile/modules/cindy-quota-widget/android/src/main/res/xml/cindy_quota_widget.xml": "4dde6ea24af15dd495261c24d805d86fc16d2421a30d4ded742f20dfb10fcaae",
+    "apps/mobile/modules/cindy-quota-widget/android/src/main/res/layout/cindy_quota_widget.xml": "32dce6a50eb5596a95560087b25f8e22dbb6f909da2fb3fc63066a0b721d59a6",
+    "apps/mobile/modules/cindy-quota-widget/android/src/main/res/layout/cindy_quota_provider.xml": "0101f5eab7dd81a13b67336199f388dbc4b8ac1ac65617179a1a209825e7d6b3"
+  },
+  "fixtureCopiesMatchProduction": true,
+  "screen": {
+    "pixels": [
+      1080,
+      2424
+    ],
+    "densityDpi": 420,
+    "fontScale": 1.0,
+    "overrides": false
+  },
+  "host": "com.android.launcher3",
+  "widget": "org.cindy.quota.validation / production RemoteViews fixture",
+  "fullApp": "com.xd.cindy / actual system picker add / unauthenticated empty state",
+  "oldOptionsDp": [
+    382.09525,
+    439.2381
+  ],
+  "defaultOptionsDp": [
+    382.09525,
+    288.7619
+  ],
+  "defaultCells": [
+    5,
+    2
+  ],
+  "minimumCells": [
+    3,
+    2
+  ],
+  "nativeMeasurements": {
+    "Day": {
+      "texts": [
+        "Claude",
+        "Max",
+        "100% 6d 23h",
+        "100% 5h 4h 59m",
+        "100% Fable",
+        "Codex",
+        "Pro",
+        "100% 6d 23h",
+        "Weekly",
+        "Extra resets: 3",
+        "Phone",
+        "Messaging",
+        "WebView Browser Tester",
+        "Camera"
+      ],
+      "root": "[39,272][1042,700]",
+      "rows": {
+        "provider_primary": [
+          [
+            81,
+            456,
+            498,
+            556
+          ],
+          [
+            582,
+            456,
+            1000,
+            556
+          ]
+        ],
+        "provider_secondary": [
+          [
+            81,
+            556,
+            498,
+            611
+          ],
+          [
+            582,
+            556,
+            1000,
+            611
+          ]
+        ],
+        "provider_tertiary": [
+          [
+            81,
+            611,
+            498,
+            658
+          ],
+          [
+            582,
+            611,
+            1000,
+            658
+          ]
+        ]
+      },
+      "source": "isolated fixture / actual Launcher AppWidget"
+    },
+    "Night": {
+      "texts": [
+        "Claude",
+        "Max",
+        "100% 6d 23h",
+        "100% 5h 4h 59m",
+        "100% Fable",
+        "Codex",
+        "Pro",
+        "100% 6d 23h",
+        "Weekly",
+        "Extra resets: 3",
+        "Phone",
+        "Messaging",
+        "WebView Browser Tester",
+        "Camera"
+      ],
+      "root": "[39,272][1042,700]",
+      "rows": {
+        "provider_primary": [
+          [
+            81,
+            456,
+            498,
+            556
+          ],
+          [
+            582,
+            456,
+            1000,
+            556
+          ]
+        ],
+        "provider_secondary": [
+          [
+            81,
+            556,
+            498,
+            611
+          ],
+          [
+            582,
+            556,
+            1000,
+            611
+          ]
+        ],
+        "provider_tertiary": [
+          [
+            81,
+            611,
+            498,
+            658
+          ],
+          [
+            582,
+            611,
+            1000,
+            658
+          ]
+        ]
+      },
+      "source": "isolated fixture / actual Launcher AppWidget"
+    },
+    "Long-Plan-Night": {
+      "texts": [
+        "Claude",
+        "Enterprise",
+        "100% 6d 23h",
+        "100% 5h 4h 59m",
+        "100% Fable",
+        "Grok",
+        "SuperGrok Heavy",
+        "100% 6d 23h",
+        "Weekly",
+        "Phone",
+        "Messaging",
+        "WebView Browser Tester",
+        "Camera"
+      ],
+      "root": "[39,272][1042,700]",
+      "rows": {
+        "provider_primary": [
+          [
+            81,
+            456,
+            498,
+            556
+          ],
+          [
+            582,
+            456,
+            1000,
+            556
+          ]
+        ],
+        "provider_secondary": [
+          [
+            81,
+            556,
+            498,
+            611
+          ],
+          [
+            582,
+            556,
+            1000,
+            611
+          ]
+        ],
+        "provider_tertiary": [
+          [
+            81,
+            611,
+            498,
+            658
+          ],
+          [
+            582,
+            611,
+            1000,
+            658
+          ]
+        ]
+      },
+      "source": "isolated fixture / actual Launcher AppWidget"
+    },
+    "Unknown-Night": {
+      "texts": [
+        "Claude",
+        "Max",
+        "— —",
+        "— 5h —",
+        "— Fable —",
+        "Codex",
+        "Pro",
+        "— —",
+        "Weekly",
+        "Extra resets: —",
+        "Phone",
+        "Messaging",
+        "WebView Browser Tester",
+        "Camera"
+      ],
+      "root": "[39,272][1042,700]",
+      "rows": {
+        "provider_primary": [
+          [
+            81,
+            456,
+            498,
+            556
+          ],
+          [
+            582,
+            456,
+            1000,
+            556
+          ]
+        ],
+        "provider_secondary": [
+          [
+            81,
+            556,
+            498,
+            611
+          ],
+          [
+            582,
+            556,
+            1000,
+            611
+          ]
+        ],
+        "provider_tertiary": [
+          [
+            81,
+            611,
+            498,
+            658
+          ],
+          [
+            582,
+            611,
+            1000,
+            658
+          ]
+        ]
+      },
+      "source": "isolated fixture / actual Launcher AppWidget"
+    },
+    "Zero-Night": {
+      "texts": [
+        "Claude",
+        "Max",
+        "0% 6d 23h",
+        "0% 5h 4h 59m",
+        "0% Fable",
+        "Codex",
+        "Pro",
+        "0% 6d 23h",
+        "Weekly",
+        "Extra resets: 0",
+        "Phone",
+        "Messaging",
+        "WebView Browser Tester",
+        "Camera"
+      ],
+      "root": "[39,272][1042,700]",
+      "rows": {
+        "provider_primary": [
+          [
+            81,
+            456,
+            498,
+            556
+          ],
+          [
+            582,
+            456,
+            1000,
+            556
+          ]
+        ],
+        "provider_secondary": [
+          [
+            81,
+            556,
+            498,
+            611
+          ],
+          [
+            582,
+            556,
+            1000,
+            611
+          ]
+        ],
+        "provider_tertiary": [
+          [
+            81,
+            611,
+            498,
+            658
+          ],
+          [
+            582,
+            611,
+            1000,
+            658
+          ]
+        ]
+      },
+      "source": "isolated fixture / actual Launcher AppWidget"
+    }
+  },
+  "checks": {
+    "androidJvm": 9,
+    "nativeDevice": 38,
+    "mobileNativePlugin": 10,
+    "mobileTypecheck": "PASS",
+    "appBuild": "BUILD SUCCESSFUL; 734 tasks, 42 executed, 692 up-to-date",
+    "devDocs": "9/10; pre-existing untracked research reference broken, excluded from commit (not from test)"
+  },
+  "screenshots": {
+    "Android-Compact-Day.png": "5a695a88c48a13b2a30d9f711df427215b25fce534e615fd0c46c24d8c08f844",
+    "Android-Compact-Night.png": "45fdf8d3af75593c1c54da9afb543fa2745aac8341dd48ad387d1f22949e3111",
+    "Android-Compact-Long-Plan-Night.png": "032513c1a8970423f9c692a24ae84a4785218ab5d468cc910266b6b23bda4fe5",
+    "Android-Compact-Minimum-Night.png": "8702ff0fb2d9066391621724c52ad264bcc023115d8fdcde755dcee13be529d7",
+    "Cindy-Default-Added.png": "81615eebb450e45095ad9cd51c256d2130d4edec202f5ccb132d453641c35e29",
+    "Android-Compact-Zero-Night.png": "28e669e426d6e09f9f53570889f418faebac804359266c11929b0a5e2f953e6e",
+    "Android-Compact-Unknown-Night.png": "3fc512cd4a401cf11d7303857a06c5c27641b1422387a51deca07e05b4c70359"
+  }
+}

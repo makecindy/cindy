@@ -6,6 +6,18 @@
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
     {
+      "id": "home-screen-widget",
+      "status": "proposed",
+      "en": "Widget",
+      "translations": {
+        "zh-CN": "小组件",
+        "zh-TW": "小工具",
+        "ja": "ウィジェット",
+        "ko": "위젯"
+      },
+      "note": "iOS 主屏幕与 Android 桌面承载的系统小组件；不指任务内卡片或插件面板。"
+    },
+    {
       "id": "wallpaper",
       "status": "proposed",
       "en": "Wallpaper",

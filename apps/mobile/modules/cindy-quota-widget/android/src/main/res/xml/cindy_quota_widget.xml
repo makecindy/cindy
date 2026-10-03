@@ -1,0 +1,10 @@
+<!-- API 31+ defaults to a wide two-row card. Resize constraints use the smaller
+     landscape cell height; they are not the content height. Pre-31 defaults must
+     still fit two 178dp columns and the 164dp information block. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+  android:minWidth="356dp" android:minHeight="164dp"
+  android:minResizeWidth="180dp" android:minResizeHeight="80dp"
+  android:targetCellWidth="5" android:targetCellHeight="2"
+  android:resizeMode="horizontal|vertical" android:updatePeriodMillis="1800000"
+  android:widgetCategory="home_screen" android:initialLayout="@layout/cindy_quota_widget"
+  android:description="@string/cindy_widget_description" />

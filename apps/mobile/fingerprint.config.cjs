@@ -53,6 +53,13 @@ module.exports = {
     }))
     .concat([
       {
+        // WidgetKit sources are copied by a config plugin into a separate target,
+        // outside the Expo module podspec glob. They must participate in cold updates.
+        type: "dir",
+        filePath: "modules/cindy-quota-widget/widget",
+        reasons: ["subscription WidgetKit extension sources"],
+      },
+      {
         type: "dir",
         filePath: "plugins/communication-notifications",
         reasons: ["notification service extension native source"],

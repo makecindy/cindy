@@ -319,6 +319,10 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   // Codex app-server 官方控制面:只读额度/reset 次数 + 人工确认后的单次 reset。
   // reset 使用 desktop 预签发、账号绑定的幂等 offer,手机不能自行指定 creditId。
   'maker:usage:codex-rate-limits',
+  // Existing read-only host channels, now consumed by the mobile Home Screen widget projection.
+  'maker:usage:account',
+  'maker:usage:claude-subscription',
+  'maker:usage:xai-subscription',
   'maker:usage:codex-rate-limit-reset',
   // 订阅账号余量快照(只读;Claude / SuperGrok)与 cc 默认路由会话的生效计费路由。
   // 老被控端 CHANNEL_NOT_ALLOWED → 任务菜单保留「暂未获取账号配额」。

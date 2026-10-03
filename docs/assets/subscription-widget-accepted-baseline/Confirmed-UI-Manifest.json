@@ -1,0 +1,28 @@
+{
+  "confirmedOn": "2026-10-02",
+  "scope": "User confirmed Extra resets UI only; no maintainer cold-update/design approval or publish authorization.",
+  "uiCommit": "905821cf55f3d8b887f72c8df92137591c5602b8",
+  "currentCodeHead": "779bf7134d8e94d2574721bc3178309c29dbd0a6",
+  "files": [
+    {
+      "path": "docs/assets/subscription-widget-extra-resets/Air-Extra-Resets-Day.png",
+      "sha256": "35a1ecdcf597b35661c18a1c5975a4c455f464bc49eb7a38841e4edacd5baf40"
+    },
+    {
+      "path": "docs/assets/subscription-widget-extra-resets/Air-Extra-Resets-Night.png",
+      "sha256": "d2af42826512e54a502dbbe8ae7c27c3a862f004a6753cdeb242ee6eb59a482b"
+    },
+    {
+      "path": "docs/assets/subscription-widget-extra-resets/18-Pro-Extra-Resets-Day.png",
+      "sha256": "9886d656a9b52cd32391c46d5e48ee602934f29d7043cb438f1c3e2360519249"
+    },
+    {
+      "path": "docs/assets/subscription-widget-extra-resets/18-Pro-Extra-Resets-Night.png",
+      "sha256": "dd8cc22321bb5bbdd28bf652a7eae61d3eb9f6ce63047760cd4f3859e48e0ea1"
+    },
+    {
+      "path": "docs/assets/subscription-widget-extra-resets/Extra-Resets-Native-Acceptance.html",
+      "sha256": "83bcab5cf918c132d3e4dddc363ce847f272510ae9c3b07516eb1c218d9408de"
+    }
+  ]
+}

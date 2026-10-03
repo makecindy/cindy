@@ -295,6 +295,10 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 
 用于任务筛选、搜索筛选，以及用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi 的公开全名，不使用 cc/cx/pi 等内部缩写。
 
+### Widget
+
+iOS 主屏幕与 Android 桌面承载的系统小组件；不指任务内卡片或插件面板。
+
 ### Hunyuan
 
 模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。

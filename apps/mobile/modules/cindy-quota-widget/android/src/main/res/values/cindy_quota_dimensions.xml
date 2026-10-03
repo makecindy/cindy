@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from Mobile tokens / settings translations. Do not edit. -->
+<resources>
+  <dimen name="cindy_widget_inset">16dp</dimen>
+  <dimen name="cindy_widget_ring">42dp</dimen>
+  <dimen name="cindy_widget_brand">12sp</dimen>
+  <dimen name="cindy_widget_detail">14sp</dimen>
+  <dimen name="cindy_widget_value">32sp</dimen>
+  <dimen name="cindy_widget_primary_height">38dp</dimen>
+  <dimen name="cindy_widget_secondary_height">21dp</dimen>
+  <dimen name="cindy_widget_tertiary_height">18dp</dimen>
+  <dimen name="cindy_widget_padding">12dp</dimen>
+  <dimen name="cindy_widget_radius">12dp</dimen>
+  <dimen name="cindy_widget_footnote">13sp</dimen>
+  <dimen name="cindy_widget_caption">12sp</dimen>
+  <dimen name="cindy_widget_micro">11sp</dimen>
+</resources>

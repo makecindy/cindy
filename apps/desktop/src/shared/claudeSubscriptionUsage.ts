@@ -173,9 +173,9 @@ export function parseClaudeOAuthUsageResponse(
   if (!fiveHour && !sevenDay && scoped.length === 0) return null;
 
   return {
-    fiveHour,
-    sevenDay,
-    scoped,
+    fiveHour: fiveHour ? { ...fiveHour, observedAt: now } : null,
+    sevenDay: sevenDay ? { ...sevenDay, observedAt: now } : null,
+    scoped: scoped.map(window => ({ ...window, observedAt: now })),
     extraUsage: parseExtraUsage(data.extra_usage),
     source: 'oauth-endpoint',
     updatedAt: now,
@@ -223,12 +223,14 @@ export function parseClaudeUnifiedRateLimitHeaders(
     fiveHour: fiveHourUtil === null
       ? null
       : {
+        observedAt: now,
         utilization: fiveHourUtil,
         resetsAt: parseHeaderEpochSeconds(headers[`${UNIFIED_HEADER_PREFIX}5h-reset`]),
       },
     sevenDay: sevenDayUtil === null
       ? null
       : {
+        observedAt: now,
         utilization: sevenDayUtil,
         resetsAt: parseHeaderEpochSeconds(headers[`${UNIFIED_HEADER_PREFIX}7d-reset`]),
       },
@@ -263,7 +265,7 @@ export function parseClaudeSdkRateLimitInfo(
   const resetsAt = rawResetsAt === null || rawResetsAt <= 0
     ? null
     : Math.floor(rawResetsAt > 1e12 ? rawResetsAt / 1000 : rawResetsAt);
-  const window = utilization === null ? null : { utilization, resetsAt };
+  const window = utilization === null ? null : { utilization, resetsAt, observedAt: now };
   const fiveHour = rateLimitType === 'five_hour' ? window : null;
   const sevenDay = rateLimitType === 'seven_day' ? window : null;
   if (!fiveHour && !sevenDay && !status) return null;
@@ -306,10 +308,13 @@ export function mergeClaudeSubscriptionUsageSnapshot(
   }
 
   if (incoming.source === 'unified-headers') {
+    const retained = <T extends ClaudeUsageWindow>(window: T | null | undefined): T | null | undefined =>
+      window ? { ...window, observedAt: window.observedAt ?? (prev.source === 'oauth-endpoint' ? prev.updatedAt ?? null : null) } : window;
     return {
       ...prev,
-      fiveHour: incoming.fiveHour ?? prev.fiveHour,
-      sevenDay: incoming.sevenDay ?? prev.sevenDay,
+      fiveHour: incoming.fiveHour ?? retained(prev.fiveHour),
+      sevenDay: incoming.sevenDay ?? retained(prev.sevenDay),
+      scoped: prev.scoped?.map(window => retained(window)!),
       rateLimitStatus: incoming.rateLimitStatus ?? prev.rateLimitStatus,
       representativeClaim: incoming.representativeClaim ?? prev.representativeClaim,
       updatedAt: incoming.updatedAt ?? prev.updatedAt,

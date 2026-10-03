@@ -1,0 +1,14 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+ <application android:theme="@android:style/Theme.Material.Light.NoActionBar" android:label="Quota Demo Test" android:allowBackup="false">
+  <meta-data android:name="cindy.quota.scheme" android:value="cindyquotatest" />
+  <activity android:name=".FixtureActivity" android:exported="true">
+   <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+   <intent-filter><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/><data android:scheme="cindyquotatest"/></intent-filter>
+  </activity>
+  <receiver android:name=".QuotaWidgetProvider" android:exported="false" android:label="Quota Demo Test">
+   <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter>
+   <meta-data android:name="android.appwidget.provider" android:resource="@xml/cindy_quota_widget" />
+  </receiver>
+ </application>
+ <instrumentation android:name="expo.modules.cindyquotawidget.ContractInstrumentation" android:targetPackage="org.cindy.quota.validation" android:label="Actual Android quota contract" />
+</manifest>

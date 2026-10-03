@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from Mobile tokens / settings translations. Do not edit. -->
+<resources>
+  <string name="cindy_widget_title" formatted="false">Subscription widgets</string>
+  <string name="cindy_widget_description" formatted="false">Keep the latest synced subscription quota on your Home Screen.</string>
+  <string name="cindy_widget_hint" formatted="false">Choose a computer. Cindy syncs its first connected account for each platform while this app is open. Widgets show saved snapshots, not live monitoring.</string>
+  <string name="cindy_widget_choose_device" formatted="false">Source computer</string>
+  <string name="cindy_widget_no_devices" formatted="false">No remote-enabled computers found. Connect a computer in Devices first.</string>
+  <string name="cindy_widget_refresh" formatted="false">Sync now</string>
+  <string name="cindy_widget_disable" formatted="false">Stop sharing with widgets</string>
+  <string name="cindy_widget_failed" formatted="false">Could not sync or save. Open Cindy and try again.</string>
+  <string name="cindy_widget_unsupported" formatted="false">Install a build with widget support to use Home Screen widgets.</string>
+  <string name="cindy_widget_empty" formatted="false">Open Cindy to set up and sync</string>
+  <string name="cindy_widget_unavailable" formatted="false">Unavailable</string>
+  <string name="cindy_widget_awaiting_refresh" formatted="false">Reset passed · update needed</string>
+  <string name="cindy_widget_stale" formatted="false">Out of date</string>
+  <string name="cindy_widget_offline" formatted="false">Offline snapshot</string>
+  <string name="cindy_widget_fresh" formatted="false">Synced</string>
+  <string name="cindy_widget_remaining" formatted="false">{{percent}}% remaining</string>
+  <string name="cindy_widget_resets" formatted="false">Resets</string>
+  <string name="cindy_widget_updated" formatted="false">Updated</string>
+  <string name="cindy_widget_unknown_time" formatted="false">Time unknown</string>
+  <string name="cindy_widget_primary" formatted="false">Primary window</string>
+  <string name="cindy_widget_secondary" formatted="false">Secondary window</string>
+  <string name="cindy_widget_five_hour" formatted="false">5 hours</string>
+  <string name="cindy_widget_seven_day" formatted="false">7 days</string>
+  <string name="cindy_widget_week" formatted="false">Weekly</string>
+  <string name="cindy_widget_minutes" formatted="false">{{count}} min</string>
+  <string name="cindy_widget_demo" formatted="false">Demo</string>
+  <string name="cindy_widget_add_hint" formatted="false">Add Claude Usage, Codex Usage or Grok Usage as a small widget. Subscription Usage shows the first two connected platforms side by side in a medium widget. Widget text is English.</string>
+  <string name="cindy_widget_add_hint_android" formatted="false">Add Cindy from your launcher’s widget picker. A wide widget shows two platforms side by side; narrower sizes stack them or show fewer platforms to fit. Resize the widget to show more. Widget text is in English.</string>
+  <string name="cindy_widget_account_hint" formatted="false">Accounts in computer order, one per platform. Manage their order and connections on the computer.</string>
+</resources>

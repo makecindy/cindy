@@ -1,0 +1,5 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": { "modules": ["CindyQuotaWidgetModule"] },
+  "android": { "modules": ["expo.modules.cindyquotawidget.CindyQuotaWidgetModule"] }
+}

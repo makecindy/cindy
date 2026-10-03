@@ -141,7 +141,12 @@ describe('dynamic wallpaper lifecycle', () => {
     fireEvent.playing(standard);
     state.tier = 'hd';
     rerender(<WallpaperVideo wallpaperId="cindy-window" motion="dynamic" />);
-    await waitFor(() => expect(document.querySelector('video')!.src).toContain('-hd.mp4'));
+    // A new DOM node can precede passive cleanup of the old decoder. Wait for
+    // both lifecycle obligations, not just the mutation observer's DOM signal.
+    await waitFor(() => {
+      expect(document.querySelector('video')!.src).toContain('-hd.mp4');
+      expect(standard.getAttribute('src')).toBeNull();
+    });
     const hd = document.querySelector('video')!;
     expect(hd.src).toContain('cindy-window-hd.mp4');
     expect(document.querySelectorAll('video')).toHaveLength(1);

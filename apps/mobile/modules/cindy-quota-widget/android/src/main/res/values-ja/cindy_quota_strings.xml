@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from Mobile tokens / settings translations. Do not edit. -->
+<resources>
+  <string name="cindy_widget_title" formatted="false">サブスクリプションのウィジェット</string>
+  <string name="cindy_widget_description" formatted="false">最後に同期したサブスクリプションの割当量をホーム画面に表示します。</string>
+  <string name="cindy_widget_hint" formatted="false">コンピューターを選択してください。アプリを開いている間、Cindy は各プラットフォームの最初の接続済みアカウントを同期します。表示は保存済みの情報で、リアルタイムではありません。</string>
+  <string name="cindy_widget_choose_device" formatted="false">取得元のコンピューター</string>
+  <string name="cindy_widget_no_devices" formatted="false">リモート接続できるコンピューターがありません。先にデバイス画面で接続してください。</string>
+  <string name="cindy_widget_refresh" formatted="false">今すぐ同期</string>
+  <string name="cindy_widget_disable" formatted="false">ウィジェットへの共有を停止</string>
+  <string name="cindy_widget_failed" formatted="false">同期または保存に失敗しました。Cindy を開いて再試行してください。</string>
+  <string name="cindy_widget_unsupported" formatted="false">ウィジェット対応版をインストールしてください。</string>
+  <string name="cindy_widget_empty" formatted="false">Cindy を開いて設定・同期</string>
+  <string name="cindy_widget_unavailable" formatted="false">利用不可</string>
+  <string name="cindy_widget_awaiting_refresh" formatted="false">リセット時刻を経過 · 更新が必要</string>
+  <string name="cindy_widget_stale" formatted="false">古い情報</string>
+  <string name="cindy_widget_offline" formatted="false">オフラインの情報</string>
+  <string name="cindy_widget_fresh" formatted="false">同期済み</string>
+  <string name="cindy_widget_remaining" formatted="false">残り {{percent}}%</string>
+  <string name="cindy_widget_resets" formatted="false">リセット</string>
+  <string name="cindy_widget_updated" formatted="false">更新</string>
+  <string name="cindy_widget_unknown_time" formatted="false">時刻不明</string>
+  <string name="cindy_widget_primary" formatted="false">主要枠</string>
+  <string name="cindy_widget_secondary" formatted="false">追加枠</string>
+  <string name="cindy_widget_five_hour" formatted="false">5 時間</string>
+  <string name="cindy_widget_seven_day" formatted="false">7 日</string>
+  <string name="cindy_widget_week" formatted="false">週間</string>
+  <string name="cindy_widget_minutes" formatted="false">{{count}} 分</string>
+  <string name="cindy_widget_demo" formatted="false">デモ</string>
+  <string name="cindy_widget_add_hint" formatted="false">小サイズでは Claude Usage、Codex Usage、Grok Usage を追加できます。中サイズの Subscription Usage は接続済みの最初の2つのサービスを並べて表示します。ウィジェット内は英語表示です。</string>
+  <string name="cindy_widget_add_hint_android" formatted="false">ホーム画面のウィジェット一覧から Cindy を追加します。横幅が広い場合は2つのプラットフォームを横に並べ、狭い場合は空きスペースに応じて縦に並べるか表示数を減らします。サイズを変更すると、より多くの情報を表示できます。ウィジェット内は英語表示です。</string>
+  <string name="cindy_widget_account_hint" formatted="false">コンピューター上の順序で各プラットフォームから 1 アカウントを使用します。接続と順序はコンピューターで管理してください。</string>
+</resources>

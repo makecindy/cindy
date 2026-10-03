@@ -11,6 +11,8 @@
 
 /** 单个用量窗口(5h / 周 / 分模型周)。utilization 一律 0-100 已用百分比。 */
 export interface ClaudeUsageWindow {
+  /** Source observation time of this window, not a sibling window update (epoch ms). */
+  observedAt?: number | null;
   utilization: number;
   /** Unix epoch 秒;缺失 = 未知。 */
   resetsAt?: number | null;

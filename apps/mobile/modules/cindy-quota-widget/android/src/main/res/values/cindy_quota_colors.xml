@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from Mobile tokens / settings translations. Do not edit. -->
+<resources>
+  <color name="cindy_widget_surface_elevated">#FFFFFC</color>
+  <color name="cindy_widget_text_primary">#0F0F0F</color>
+  <color name="cindy_widget_text_secondary">#4D4D4A</color>
+  <color name="cindy_widget_border">#CCCCC8</color>
+  <color name="cindy_widget_widget_surface">#FFFFF8</color>
+  <color name="cindy_widget_widget_primary">#1A1A1A</color>
+  <color name="cindy_widget_widget_secondary">#4D4D4A</color>
+  <color name="cindy_widget_quota_weekly">#DF0C27</color>
+  <color name="cindy_widget_quota_session">#315FA5</color>
+  <color name="cindy_widget_quota_scoped">#44443F</color>
+</resources>

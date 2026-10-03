@@ -879,6 +879,16 @@ export default function SettingsScreen() {
             />
           </SettingsGroup>
 
+          <SettingsGroup title={t('settings.quotaWidget.title')}>
+            <ActionInfoRow
+              label={t('settings.quotaWidget.description')}
+              accessibilityLabel={t('settings.quotaWidget.title')}
+              value=""
+              onPress={() => router.push('/subscription-widgets')}
+              testID="settings.subscriptionWidgets"
+            />
+          </SettingsGroup>
+
           {/* 显示模式:默认跟随系统,手动选择浅色 / 深色即持久化 override(恢复跟随系统 = 清除 override) */}
           <SettingsGroup title={t('settings.appearance.title')}>
             <NativePullDownMenu
