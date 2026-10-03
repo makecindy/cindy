@@ -10,6 +10,7 @@ export async function sendParts(
   file: string,
   maxPartBytes: number,
   send: (file: string) => Promise<MigrationFileRef>,
+  signal?: AbortSignal,
 ): Promise<MigrationFile> {
   const size = (await fs.stat(file)).size;
   if (!Number.isSafeInteger(maxPartBytes) || maxPartBytes < 1)
@@ -22,9 +23,11 @@ export async function sendParts(
       const length = Math.min(maxPartBytes, size - offset);
       await assertDiskCapacity([{ path: directory, bytes: length }]);
       const part = path.join(directory, 'part');
+      // Copying a part can take a while for multi-GB files; cancellation stops it too.
       await pipeline(
         createReadStream(file, { start: offset, end: offset + length - 1 }),
         createWriteStream(part, { flags: 'wx', mode: 0o600 }),
+        { signal },
       );
       const sent = await send(part);
       if (sent.size !== length) throw new Error('MIGRATION_WORKSPACE_CHANGED');

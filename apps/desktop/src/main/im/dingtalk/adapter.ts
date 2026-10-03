@@ -70,8 +70,8 @@ export function buildDingTalkAdapter(
     },
     processingEmoji: '',
     buildVendorOptions: (userId) => ({ dingtalkChatId: userId, source: 'dingtalk' }),
-    handleTextInteraction: (userId, request) =>
-      handleDingTalkTextInteraction(dingtalkIm, userId, request),
+    handleTextInteraction: (userId, request, options) =>
+      handleDingTalkTextInteraction(dingtalkIm, userId, request, options),
     // 对齐 Telegram / 飞书的边界：主人私聊完全遵循 session.permissionMode，
     // 因而可以显式选择 bypassPermissions（完全访问）；群聊携带成员可控上下文，
     // 无论谁 @ bot 都附加强确认策略，危险操作仍须主人在群里确认。

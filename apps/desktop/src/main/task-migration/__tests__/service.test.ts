@@ -29,6 +29,8 @@ const state = vi.hoisted(() => ({
   drain: vi.fn(),
   exported: vi.fn(),
   uploadedProgress: vi.fn(),
+  /** Models a long in-flight upload: it only ends when its signal aborts. */
+  stallUpload: undefined as undefined | (() => void),
   loseReply: '' as string,
   importsFail: false,
   siblingRunning: false,
@@ -142,7 +144,16 @@ vi.mock('../../device-link/filePeer', () => ({ tryUploadPeerAttachment: async ()
 vi.mock('../../device-link/mediaTransfer', () => ({
   MAX_MEDIA_BYTES: 2 * 1024 ** 3,
   removeRemote: (key: string) => state.remove(key),
-  uploadLocalFile: async (file: string, opts: { onProgress?: (bytes: number) => void }) => {
+  uploadLocalFile: async (
+    file: string,
+    opts: { onProgress?: (bytes: number) => void; signal?: AbortSignal },
+  ) => {
+    if (state.stallUpload) {
+      state.stallUpload();
+      await new Promise((_, reject) =>
+        opts.signal?.addEventListener('abort', () => reject(new Error('UPLOAD_CANCELLED'))),
+      );
+    }
     const bytes = await fs.readFile(file),
       key = `migration/${state.files.size}`;
     opts.onProgress?.(bytes.length);
@@ -313,6 +324,7 @@ describe('resumable cross-computer copy', () => {
     state.drain.mockReset();
     state.exported.mockClear();
     state.uploadedProgress.mockReset();
+    state.stallUpload = undefined;
     state.root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-migration-service-')),
     );
@@ -661,6 +673,29 @@ describe('resumable cross-computer copy', () => {
     ).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await fs.readFile(path.join(state.root, 'shared', 'draft'), 'utf8')).toBe('original');
     state.uploadedProgress.mockReset();
+    await start();
+    expect((await settled()).stage).toBe('complete');
+  });
+  it('cancelling stops the file in flight instead of waiting for it to finish', async () => {
+    let started!: () => void;
+    const uploading = new Promise<void>((resolve) => (started = resolve));
+    state.stallUpload = () => started();
+    expect((await start()).cancellable).toBe(true);
+    await uploading;
+    expect(await requestTaskMigration({ action: 'cancel', sessionId: 'fork' })).toMatchObject({
+      running: true,
+      cancelling: true,
+    });
+    // Without aborting the stalled upload this never settles.
+    const status = await settled();
+    expect(status.stage).toBe('cancelled');
+    expect(status.error).toBeUndefined();
+    expect(state.files.size).toBe(0);
+    expect(state.imports).not.toHaveBeenCalled();
+    await expect(
+      fs.stat(path.join(state.root, 'A', 'task-copies', 'outgoing', status.targetSessionId!)),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    state.stallUpload = undefined;
     await start();
     expect((await settled()).stage).toBe('complete');
   });

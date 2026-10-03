@@ -165,7 +165,7 @@ export function BotCapabilitySettings({
         }));
         if (toolsetResult.status === 'fulfilled')
           next.toolset = toolsetResult.value
-            .filter((item) => !['memory', 'xdt_helper', 'scheduler', 'collab'].includes(item.id))
+            .filter((item) => !['memory', 'xdt_helper', 'scheduler', 'lsp'].includes(item.id))
             .map((item) => ({
               id: item.id,
               name: item.name,
@@ -239,6 +239,13 @@ export function BotCapabilitySettings({
           const rows = [...(entries[kind] ?? [])];
           for (const id of selected[kind])
             if (!rows.some((item) => item.id === id)) rows.push({ id, name: id, available: false });
+          const mode = kind === 'mcp' ? capabilities.mcpMode : kind === 'toolset' ? capabilities.toolsetMode : 'allowlist';
+          // Inheritance can only become an explicit selection from a complete
+          // catalog of this kind. Missing/refreshing entries must not drop tools.
+          const canEdit = mode !== 'inherit' || entries[kind] !== undefined;
+          const selectedIds = mode === 'inherit'
+            ? [...new Set([...selected[kind], ...rows.filter((item) => item.available).map((item) => item.id)])]
+            : selected[kind];
           const matching = rows.filter((item) =>
             `${item.id} ${item.name}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
           );
@@ -256,14 +263,14 @@ export function BotCapabilitySettings({
                     <input
                       type="checkbox"
                       className="accent-[var(--text-primary)]"
-                      checked={item.personal ? item.available : selected[kind].includes(item.id)}
-                      disabled={item.personal || (!item.available && !selected[kind].includes(item.id))}
+                      checked={item.personal ? item.available : selectedIds.includes(item.id)}
+                      disabled={!canEdit || item.personal || (!item.available && !selectedIds.includes(item.id))}
                       onChange={(event) =>
-                        onChange(
+                        canEdit && onChange(
                           kind,
                           event.target.checked
-                            ? [...selected[kind], item.id]
-                            : selected[kind].filter((id) => id !== item.id),
+                            ? [...selectedIds, item.id]
+                            : selectedIds.filter((id) => id !== item.id),
                         )
                       }
                     />

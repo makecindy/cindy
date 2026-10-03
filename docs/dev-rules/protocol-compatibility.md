@@ -126,6 +126,40 @@ Mobile 未新增卡片入口。服务端无需改动。
 `omarchyMenu`；缺省保留旧工具栏，不向旧主机发送新动作。旧端的 `desktop` 语义不变。
 工作区切换作用于采集屏幕，菜单使用本机固定入口，所有操作沿用控制 lease 与撤权检查。
 
+## 远程桌面画质档位
+
+`offer.settings` 的画质由码率改为档位 `quality: "auto" | "saver" | "hd"`（自动／省流／高清）。
+控制端只表达意图，具体的码率上限、降级取舍（`auto`/`saver` 先降分辨率保帧数，`hd` 锁分辨率
+降帧数）、截屏分辨率与 JPEG 预算由被控端 `apps/desktop/src/shared/remoteDesktopQuality.ts`
+决定，调整数值无需两端同时发版。
+
+新控制端经 `remoteDesktopVideoSettingsWire` 同时发送档位与旧 `bitrate`（auto→0、saver→2M、
+hd→20M）：旧被控端只校验 `bitrate` 并忽略 `quality`，无需新增能力声明。新被控端优先读取
+已知档位；档位缺失或不认识时按旧 `bitrate` 换算（0→auto、2M→saver、8M／20M→hd），因此旧
+控制端与未来新增档位都能降级连接。两者都无效时仍返回 `INVALID_REQUEST`。此变更不改 relay、
+不新增 channel，服务端无需改动。
+
+被控端在应用控制端 offer 前，仅为带 `settings` 的请求给视频编解码追加 `x-google-start-bitrate` /
+`x-google-min-bitrate` / `x-google-max-bitrate`，避免近静止画面因发送量过低导致带宽估计塌到
+百 kbps 级、分辨率被锁在低档。这些是 libwebrtc 对发送端生效的本地提示，不改变协商出的编解码；
+不识别它们的控制端不受影响，旧控制端（无 `settings`）的 offer 原样使用。
+
+## 远程桌面控制请求走媒体数据通道
+
+被控端以可选能力 `channelRequests` 声明：媒体连接的 `input-v1` 数据通道还接受
+`{ type: "request", id, request }`，并以 `{ type: "reply", id, ok, result | error }` 回复。
+可走通道的请求限于 `REMOTE_DESKTOP_CHANNEL_OPS`（`control`、`presentation`、`hostMute`、
+`privacyScreen`、`windowAction`（不含 `list`）、`displayModes`、`clipboardSync`、
+`clipboardVersion`），单条不超过 32 KB，id 为 1–64 位 `[A-Za-z0-9_-]`。
+
+旧被控端收到不认识的通道数据会结束会话，因此控制端只在能力为真、视频已在播放、请求
+lease 与当前 lease 一致时才走通道，否则照旧走 relay。被控端主进程对通道请求做与 relay
+相同的发送方、lease 与撤权校验；不在白名单内或并发超限时回错误码而不结束会话，控制端
+改走 relay；回复超过上限时只有 `displayModes`、`clipboardVersion` 改走 relay。请求送达后
+其余失败不自动改走 relay 重试，超时按结果未知处理。
+旧控制端不发通道请求，新被控端行为不变。此扩展不修改 relay、服务端或 device-link 帧格式；
+iOS 原生接收器新增 `sendRequest`，属于冷更新。
+
 ## 手机首页会话活动快照
 
 ### 可见历史优先读取
@@ -247,6 +281,15 @@ OSS 保底仍受服务端 presign 单对象上限（`OSS_ATTACHMENT_MAX_BYTES`�
 直接放弃直连且不计入失败冷却，随后按 OSS 上限提示失败。旧控制端忽略新增字段，行为不变。
 文件读取（`open`）仍沿用 `FILE_PEER_MAX_BYTES`。不新增 channel、relay 类型或持久化 schema，
 服务端无需改动。
+
+直连附件上传的提速同样按能力协商：Desktop 主机的 `caps` 追加可选 `streamAttachments: true`，
+表示它接受同一附件最多 `PEER_ATTACHMENT_STREAM_WINDOW`（3）个写入块同时在途，并接受以
+RPC 二进制正文传来的块（`write` 不带 `data`，原始字节紧跟该请求的最后一个 JSON 分片发送，
+单块不超过 1 MiB；在途写入的等待按窗口放宽为 45 秒）。接收端仍按发送顺序逐块落盘、要求
+偏移连续，`finish` 照旧校验大小与 SHA-256。旧主机不声明该能力：发送端继续逐块等确认并用
+base64 `data` 字段，不向旧主机发送二进制帧（旧运行时收到会关闭连接）。旧发送端不读新字段，
+新主机继续接受 base64 块。Mobile 发送端暂沿用逐块方式。不新增 channel、relay 类型或持久化
+schema，服务端无需改动。
 
 ## 任务复制的外置会话记录与超限大小
 
@@ -608,3 +651,18 @@ Mobile 原生 fingerprint 输入，服务端无需改动。
 桌面能力页新增仅限可信本地 renderer 的 `local-db:bots:skills:list` 读取伙伴自有技能；
 远程端继续使用已有 `settings:<botId>/skills` 资源，不扩 IPC allowlist。
 SSH 继续沿用现有伙伴远端技能限制，不读取控制端本机资料；设备互联由执行宿主保存与复盘。
+
+## 远程模型目录按显示设置过滤
+
+`maker:provider:list` 在执行主机完成既有授权和账号快照读取后，先按同一快照中的
+`modelVisibilityOverrides` 与模型 `defaultEnabled` 过滤，再通过原有响应格式传输。
+判定复用共享 `isModelVisible`：用户显式开关优先，否则跟随目录默认；不限制已开启模型的
+数量、不修改用户偏好。聊天模型按 agent/provider/model 区分，媒体模型沿用主机的显示设置键。
+未开启模型的详情不再传给控制端；供应商结构、连接状态、顺序及开启模型的能力配置保留。
+投影中的既有 `modelVisibilityOverrides` 补齐有效开关布尔值（含默认关闭项），不回写偏好。
+Mobile 据此区分已关闭与已删除的旧选择：保留任务或草稿原模型身份，发送前提示重选，
+不自动替换模型、不清空草稿，也不为旧选择重新传输关闭模型的详情。
+
+这是执行主机的投影修复，旧 Mobile 和远控 Desktop 无需新增能力协商即可接收。
+不增加分页、客户端重组或重试，不提高传输大小上限；本机 Desktop 设置仍读取完整目录。
+“关闭后必须重选”的提示与发送前检查随 Mobile 更新；旧版控制端仍沿用各自既有选择处理。

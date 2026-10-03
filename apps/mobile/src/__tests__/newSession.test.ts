@@ -2867,3 +2867,23 @@ describe('new.tsx worktree 探测 effect 的离线起始态(#4046,源码契约)'
     }
   });
 });
+
+describe('closed saved model requires reselection', () => {
+  const selected = { model: 'closed', providerId: 'prov-closed' };
+  const visibilityOverrides = { 'codex:prov-closed:closed': false };
+  const rows = [modelRow('replacement', ['medium'], 'medium')];
+  const sessions = [remoteSession('saved', { ...selected, agentKind: 'codex', effort: 'high', deviceLinkDeviceId: 'devA' })];
+  it('preserves the hidden pair during catalog reconciliation and remembered-agent restoration', () => {
+    expect(resolveRecentModelAndProvider(rows, selected, 'codex', true, visibilityOverrides)).toEqual(selected);
+    expect(pickAgentDefaultRuntime({ agentKind: 'codex', sessions, modelRows: rows,
+      currentEffort: 'medium', catalogReady: true, visibilityOverrides })).toMatchObject({ ...selected, effort: 'high' });
+    expect(resolveNewSessionAutoDefault({ userTouched: false, appliedDeviceId: null, selectedDeviceId: 'devA',
+      sessions, modelRows: rows, rowsAgentKind: 'codex', catalogReady: true, visibilityOverrides,
+      currentEffort: 'medium' })?.patch).toMatchObject(selected);
+  });
+  it('carries fresh visibility with its rows through the submit guard', async () => {
+    const result = await resolveSubmitGuardCatalog({ cached: () => undefined, gen: () => 0,
+      fetch: async () => ({ providers: [], modelVisibilityOverrides: visibilityOverrides }), buildRows: () => rows });
+    expect(result).toMatchObject({ catalogKnown: true, rows, visibilityOverrides });
+  });
+});

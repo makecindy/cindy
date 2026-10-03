@@ -58,7 +58,13 @@ export function TaskMigrationStatus({ session }: { session: Session }) {
           ? t('taskMigration.completeWithSkipped', { count: status.skipped.total })
           : t(`taskMigration.stages.${status.stage}`)}
       </Button>
-      {open && <TaskMigrationDialog session={session} onDismiss={() => setOpen(false)} />}
+      {open && (
+        <TaskMigrationDialog
+          session={session}
+          initialStatus={status}
+          onDismiss={() => setOpen(false)}
+        />
+      )}
     </>
   );
 }

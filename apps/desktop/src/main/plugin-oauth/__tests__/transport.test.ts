@@ -1,4 +1,5 @@
 import { testOauthIdentityStore } from './fixtures.js';
+import { ephemeralCallbackPorts } from './ephemeralCallbackPorts.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,6 +24,19 @@ it('carries a real setup card through DeviceLinkClient/WebSocket, loopback and c
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-oauth-transport-'));
   onTestFinished(() => fs.rmSync(directory, { recursive: true, force: true }));
   const identityStore = testOauthIdentityStore(directory);
+  let callbackSockets: ReturnType<typeof ephemeralCallbackPorts> | undefined;
+  onTestFinished(async () => {
+    try {
+      await Promise.all([...(callbackSockets?.servers.values() ?? [])].map(server =>
+        new Promise<void>((resolve) => {
+          server.close(() => resolve());
+          server.closeAllConnections();
+        }),
+      ));
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
   const controllerScope = {
     realm: 'global' as const,
     deviceId: 'desktop',
@@ -96,6 +110,7 @@ it('carries a real setup card through DeviceLinkClient/WebSocket, loopback and c
   let verifier = '';
   let exchangeCount = 0;
   let transactionId = '';
+  let redirectUri = '';
   const account = new GhostOauthAccountManager({
     vault: {
       read: (g, k) => vault.get(`${g}/${k}`) ?? null,
@@ -113,6 +128,7 @@ it('carries a real setup card through DeviceLinkClient/WebSocket, loopback and c
     fetchImpl: async (_url, init) => {
       const body = new URLSearchParams(String(init?.body));
       expect(body.get('code')).toBe('synthetic-provider-code');
+      expect(body.get('redirect_uri')).toBe(redirectUri);
       verifier = body.get('code_verifier')!;
       expect(createHash('sha256').update(verifier).digest('base64url')).toBe(challenge);
       exchangeCount++;
@@ -158,6 +174,16 @@ it('carries a real setup card through DeviceLinkClient/WebSocket, loopback and c
     validateTarget: () => ({ ok: true }),
     getGhostIdentity: () => ({ id: 'test-plugin', name: 'Provider' }),
     executeAction: async () => {
+      const remote = getRemoteOauthContext()!;
+      const authorize = remote.authorize.bind(remote);
+      vi.spyOn(remote, 'authorize').mockImplementation((offer, signal) => {
+        redirectUri = offer.callbackUrl;
+        // These hosts represent separate machines. Allocate the controller's
+        // socket at bind time instead of racing to reclaim the cloud's released
+        // port, while retaining the original callback authority and redirect URI.
+        callbackSockets = ephemeralCallbackPorts(Number(new URL(offer.callbackUrl).port));
+        return authorize(offer, signal);
+      });
       const result = await account.connectAccount(
         'test-plugin',
         'account',
@@ -167,7 +193,7 @@ it('carries a real setup card through DeviceLinkClient/WebSocket, loopback and c
           clientId: 'synthetic-client',
           scopes: ['read'],
         },
-        { remote: getRemoteOauthContext() },
+        { remote },
       );
       return result.ok ? { ok: true } : { ok: false, errorCode: 'ACTION_FAILED' };
     },
@@ -247,9 +273,10 @@ it('carries a real setup card through DeviceLinkClient/WebSocket, loopback and c
           });
           expect(stolen.ok).toBe(false);
           const callback = new URL(url.searchParams.get('redirect_uri')!);
+          expect(callback.toString()).toBe(redirectUri);
           callback.searchParams.set('state', codeState);
           callback.searchParams.set('code', 'synthetic-provider-code');
-          const response = await fetch(callback);
+          const response = await callbackSockets!.fetch(callback.toString());
           callbackResponses.push(response.status);
           expect(await response.text()).toContain('callback received');
         },

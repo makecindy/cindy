@@ -23,10 +23,16 @@ export function TaskMigrationDialog({
   session,
   onDismiss,
   destination,
+  initialStatus,
 }: {
   session: Session;
   onDismiss(): void;
   destination?: TaskMoveDestination;
+  /**
+   * The caller's latest status when reopening an existing copy (no `destination`). Without it the
+   * dialog would show the start form until its first poll returns.
+   */
+  initialStatus?: TaskMigrationView | null;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -34,7 +40,9 @@ export function TaskMigrationDialog({
   const [target, setTarget] = useState(destination?.deviceId ?? '');
   const [projects, setProjects] = useState<string[]>([]);
   const [project, setProject] = useState(destination?.project ?? '');
-  const [status, setStatus] = useState<TaskMigrationView | null>(null);
+  const [status, setStatus] = useState<TaskMigrationView | null>(
+    destination ? null : (initialStatus ?? null),
+  );
   const [busy, setBusy] = useState(false);
   const [starting, setStarting] = useState(false);
   const [readyTarget, setReadyTarget] = useState('');

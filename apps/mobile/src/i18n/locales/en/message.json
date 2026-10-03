@@ -10,8 +10,6 @@
   },
   "renderer": {
     "moreActions": "More message actions",
-    "previousQuestionJump": "Jump to previous question: {{preview}}",
-    "noPreview": "No preview",
     "newMessagesToBottom": "New messages, jump to bottom",
     "jumpToBottom": "Jump to bottom",
     "openForkOrigin": "Open fork source message",

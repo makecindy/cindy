@@ -322,6 +322,33 @@ it('keeps transfer progress in the dialog until the target completes, including 
   expect(screen.getAllByRole('button')).toHaveLength(2);
 });
 
+it('reopening a running copy shows its progress at once, never the start form', async () => {
+  const running = {
+    supported: true,
+    deviceId: 'A',
+    stage: 'transferring',
+    running: true,
+    targetDeviceId: 'B',
+    progress: { phase: 'sending', sentBytes: 1, totalBytes: 2, bytesPerSecond: 1 },
+  } as const;
+  // The first poll is still in flight when the dialog opens.
+  state.request.mockImplementation(() => new Promise(() => {}));
+  render(
+    <MemoryRouter>
+      <TaskMigrationDialog session={source} initialStatus={running} onDismiss={state.dismiss} />
+    </MemoryRouter>,
+  );
+  expect(screen.getByText('taskMigration.copyingTitle')).toBeTruthy();
+  expect(screen.getByText('taskMigration.transferProgress')).toBeTruthy();
+  expect(screen.queryByText('taskMigration.title')).toBeNull();
+  expect(screen.queryByText('taskMigration.start')).toBeNull();
+  expect(screen.queryByText('taskMigration.bindingsNotice')).toBeNull();
+  expect(
+    state.request.mock.calls.some(
+      ([, command]) => (command as { action: string }).action === 'estimate',
+    ),
+  ).toBe(false);
+});
 it('cancels a running copy and closes once the source has stopped it', async () => {
   let snapshot: Record<string, unknown> = {
     stage: 'transferring',

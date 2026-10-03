@@ -109,6 +109,8 @@ import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInter
 import { observeHookTurn, type HookTurnObserver } from './turnObserver.js';
 import { bindRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
 import { beginGroupHistoryAccess } from '../im/shared/groupHistoryAccess.js';
+import { describeInteractionSource } from '../im/shared/interactionSource';
+import { groupLaneOf } from './groupWindow';
 
 import type {
   HookContinuationWatchRequest,
@@ -780,7 +782,7 @@ export function createMakerHookSessionRunner(deps: {
       // 前向引用: 交互回调只在 turn 跑起来之后才可能被调用, 那时 observer 已就位。
       // 用它给过程区挂「等待授权」, 不新增任何渠道消息。
       let activeObserver: HookTurnObserver | null = null;
-      const handleHookInteraction: InteractionHandler = async (ireq) => {
+      const handleHookInteraction: InteractionHandler = async (ireq, sharedPermission) => {
         if (req.onInteraction) {
           const sendCard = req.onInteraction;
           const sendCancel = req.onInteractionCancel;
@@ -806,7 +808,6 @@ export function createMakerHookSessionRunner(deps: {
             return { kind: 'ask_user_question', answers: {} };
           }
           ownInteractionIds.add(ireq.requestId);
-          sendCard({ interactionId: ireq.requestId, ...composed.card });
           // 等授权期间没有任何 agent 事件 —— 渠道那条进度消息会彻底静止, 而卡片
           // 可能根本不在这个会话里(Telegram 群里的授权卡改投宿主私聊)。挂一行状态,
           // 收口后摘掉; 全程只改已经在发的那条快照, 不新增群消息。
@@ -814,11 +815,14 @@ export function createMakerHookSessionRunner(deps: {
           activeObserver?.markInteractionBoundary();
           activeObserver?.setNotice(awaitingInteractionNotice(ireq.kind));
           try {
-            const decision = await registerHookInteraction({
+            const pendingDecision = registerHookInteraction({
+              sharedPermission,
               interactionId: ireq.requestId,
               composed,
               onFallback: (reason) => sendCancel?.(ireq.requestId, reason),
             });
+            sendCard({ interactionId: ireq.requestId, ...composed.card });
+            const decision = await pendingDecision;
             ownInteractionIds.delete(ireq.requestId);
             return decision;
           } finally {
@@ -1208,6 +1212,23 @@ export function createMakerHookSessionRunner(deps: {
                 turnId: randomUUID(),
                 origin: routeOrigin,
                 interactionSurface: req.onInteraction ? 'channel-card' : 'headless',
+                sourceDescription: describeInteractionSource({
+                  channelName: req.source?.im ?? req.origin.connectionName,
+                  chatId: req.source?.channelName ?? req.title ?? req.source?.im ?? 'IM',
+                  text: req.source?.userText ?? '',
+                  interactionSource: {
+                    senderName: req.source?.threadContext?.find((message) =>
+                      message.messageId === req.source?.triggerMessageId && !!message.messageId)?.author,
+                    ...(() => {
+                      const lane = groupLaneOf(req.origin.externalKey);
+                      const id = req.source?.triggerMessageId;
+                      return lane && /^-100\d+$/.test(lane.chatId) && id && /^\d+$/.test(id)
+                        ? { messageUrl: `https://t.me/c/${lane.chatId.slice(4)}/${id}`,
+                            ...(lane.threadId ? { threadName: lane.threadId } : {}) }
+                        : {};
+                    })(),
+                  },
+                }),
               },
               handle: handleHookInteraction,
               onCancel: (requestId) => {

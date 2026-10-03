@@ -75,11 +75,11 @@
     "keepOpen": "正在複製到{{name}}。關閉視窗不會中斷複製，可在原任務頂部查看進度。",
     "runInBackground": "背景繼續",
     "cancelCopy": "取消複製",
-    "cancelling": "正在取消，目前檔案傳送完後停止…",
+    "cancelling": "正在取消…",
     "failureTitle": "複製失敗",
     "failureDescription": "關閉後可從任務選單重新發起複製。",
     "finishing": "{{name}}正在接收、驗證並建立任務…",
-    "transferProgress": "上傳進度 {{sent}} / {{total}} · 平均 {{speed}}/s（尚未完成接收）",
+    "transferProgress": "已傳輸 {{sent}} / {{total}} · 平均 {{speed}}/s",
     "thisComputer": "本機",
     "selectedComputer": "所選電腦",
     "estimating": "正在統計檔案數量和大小…",
@@ -305,9 +305,9 @@
       "fps": "影格率",
       "quality": "畫質",
       "automatic": "自動",
-      "smooth": "流暢",
-      "balanced": "均衡",
-      "clear": "清晰",
+      "saver": "省流量",
+      "hd": "高清",
+      "qualityHint": "自動優先確保流暢，網路良好時盡量清晰；省流量會限制用量（最高 30 幀）；高清優先確保文字清晰，頻寬不足時會降低幀率。",
       "resolution": "電腦解析度",
       "clipboardFailed": "剪貼簿內容傳輸失敗，請檢查控制權限後重試。",
       "settingsFailed": "設定未能儲存，請重試。",
@@ -7224,7 +7224,9 @@
       "processKilled": "處理程序已終止（訊號 {{signal}}）",
       "restart": "重啟",
       "shellNotFound": "未找到可用 shell：{{detail}}",
-      "spawnFailed": "無法啟動終端：{{detail}}"
+      "spawnFailed": "無法啟動終端：{{detail}}",
+      "remoteUnavailableTitle": "遠端任務暫不可用",
+      "remoteUnavailableDescription": "終端目前僅適用於在此裝置上執行的本機任務。"
     },
     "review": {
       "turn": {

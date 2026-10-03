@@ -74,6 +74,7 @@ const fixture = vi.hoisted(() => ({
   pipEnabled: false,
   nativeReceive: vi.fn(async (_message: object) => {}),
   nativeInput: vi.fn(async (_message: object) => true),
+  nativeRequest: vi.fn(async (_message: object) => true),
   nativeMessage: null as
     null | ((event: { nativeEvent: { data: string } }) => void),
   nativeMenus: false,
@@ -346,6 +347,7 @@ vi.mock("../NativeRemoteDesktopView", async (importOriginal) => {
     useImperativeHandle(ref, () => ({
       receive: fixture.nativeReceive,
       sendInput: fixture.nativeInput,
+      sendRequest: fixture.nativeRequest,
     }));
     return createElement("div", {
       "data-native-inline": String(props.inlineVisible),
@@ -387,6 +389,7 @@ beforeEach(async () => {
   fixture.pipEnabled = false;
   fixture.nativeReceive.mockReset().mockResolvedValue(undefined);
   fixture.nativeInput.mockReset().mockResolvedValue(true);
+  fixture.nativeRequest.mockReset().mockResolvedValue(true);
   fixture.platform = "ios";
   fixture.safe = { top: 59, bottom: 34, left: 0, right: 0 };
   fixture.hostPlatform = "darwin";
@@ -1403,6 +1406,180 @@ describe("remote desktop controls", () => {
     );
   });
 
+  describe("control requests over the media channel", () => {
+    const withChannel = (enabled: boolean) => {
+      const original = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation(async (...args) => {
+        const result = await original(...args);
+        return args[2][0].op === "capabilities" && enabled
+          ? { ...(result as object), channelRequests: true }
+          : result;
+      });
+    };
+    const viewer = (message: object) =>
+      act(async () =>
+        fixture.message!({
+          nativeEvent: { data: JSON.stringify({ epoch: "lease", ...message }) },
+        }),
+      );
+    const live = async () => {
+      await connect();
+      await viewer({ type: "streaming" });
+      act(() => button("operations").click());
+      fixture.invoke.mockClear();
+      fixture.post.mockClear();
+    };
+    const relayedControl = () => requests().filter((r) => r.op === "control");
+    const channelRequest = () =>
+      sent().findLast((m) => m.type === "channelRequest");
+
+    it("sends control over the WebView channel and settles from its reply", async () => {
+      withChannel(true);
+      await live();
+      await act(async () => button("viewOnly").click());
+      expect(channelRequest()).toMatchObject({
+        request: { op: "control", lease: "lease", enabled: false },
+      });
+      expect(relayedControl()).toEqual([]);
+      await viewer({
+        type: "channelRequestState",
+        id: channelRequest().id,
+        sent: true,
+      });
+      await viewer({
+        type: "channelReply",
+        id: channelRequest().id,
+        ok: true,
+        result: { controlling: false },
+      });
+      expect(button("viewOnly").getAttribute("aria-selected")).toBe("true");
+      expect(relayedControl()).toEqual([]);
+    });
+
+    it.each([
+      [
+        "the channel cannot take it",
+        { type: "channelRequestState", sent: false },
+      ],
+      [
+        "the host refuses it before running",
+        {
+          type: "channelReply",
+          ok: false,
+          error: "DESKTOP_CHANNEL_UNSUPPORTED",
+        },
+      ],
+      [
+        "the host is busy",
+        { type: "channelReply", ok: false, error: "DESKTOP_CHANNEL_BUSY" },
+      ],
+    ])("uses the relay when %s", async (_name, answer) => {
+      withChannel(true);
+      await live();
+      await act(async () => button("viewOnly").click());
+      await viewer({ ...answer, id: channelRequest().id });
+      expect(relayedControl()).toEqual([
+        { op: "control", lease: "lease", enabled: false },
+      ]);
+    });
+
+    it("never replays a request the channel already took", async () => {
+      withChannel(true);
+      await live();
+      await act(async () => button("viewOnly").click());
+      await viewer({
+        type: "channelRequestState",
+        id: channelRequest().id,
+        sent: true,
+      });
+      await viewer({
+        type: "channelReply",
+        id: channelRequest().id,
+        ok: false,
+        error: "DESKTOP_VIEW_ONLY",
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(10_000));
+      expect(relayedControl()).toEqual([]);
+    });
+
+    it("settles a sent request when the media falls back, without replaying it", async () => {
+      withChannel(true);
+      await live();
+      await act(async () => button("viewOnly").click());
+      const first = channelRequest().id;
+      await viewer({ type: "channelRequestState", id: first, sent: true });
+      await viewer({ type: "fallback", reason: "failed" });
+      // The switch is free again right away and the next one uses the relay;
+      // the request the channel took is never sent twice.
+      await act(async () => button("viewOnly").click());
+      expect(relayedControl().filter((r) => r.enabled === false)).toHaveLength(
+        1,
+      );
+      expect(channelRequest().id).toBe(first);
+    });
+
+    it("keeps the relay for hosts without the capability or before video", async () => {
+      withChannel(false);
+      await live();
+      await act(async () => button("viewOnly").click());
+      expect(sent().some((m) => m.type === "channelRequest")).toBe(false);
+      expect(relayedControl()).toHaveLength(1);
+    });
+
+    it("prefers the native receiver on iOS and falls back to the WebView", async () => {
+      fixture.nativeMedia = true;
+      withChannel(true);
+      act(() => root.render(<RemoteDesktopScreen />));
+      await connect();
+      for (const type of ["iceConfig", "streaming"])
+        await act(async () =>
+          fixture.nativeMessage!({
+            nativeEvent: {
+              data: JSON.stringify({
+                type,
+                epoch: "lease",
+                attemptId: "native-1",
+              }),
+            },
+          }),
+        );
+      act(() => button("operations").click());
+      fixture.invoke.mockClear();
+      fixture.post.mockClear();
+      await act(async () => button("viewOnly").click());
+      const native = fixture.nativeRequest.mock.calls.at(-1)?.[0] as {
+        id: string;
+        epoch: string;
+        request: unknown;
+      };
+      expect(native).toMatchObject({
+        epoch: "lease",
+        request: { op: "control", lease: "lease", enabled: false },
+      });
+      expect(sent().some((m) => m.type === "channelRequest")).toBe(false);
+      await act(async () =>
+        fixture.nativeMessage!({
+          nativeEvent: {
+            data: JSON.stringify({
+              type: "channelReply",
+              epoch: "lease",
+              id: native.id,
+              ok: true,
+              result: { controlling: false },
+            }),
+          },
+        }),
+      );
+      expect(button("viewOnly").getAttribute("aria-selected")).toBe("true");
+      fixture.nativeRequest.mockResolvedValue(false);
+      await act(async () => button("viewOnly").click());
+      expect(channelRequest()).toMatchObject({
+        request: { op: "control", lease: "lease", enabled: true },
+      });
+      expect(relayedControl()).toEqual([]);
+    });
+  });
+
   it("uses native input transport with RPC fallback and rejects stale native streaming", async () => {
     fixture.nativeMedia = true;
     act(() => root.render(<RemoteDesktopScreen />));
@@ -1625,7 +1802,7 @@ describe("remote desktop controls", () => {
               supported: true,
               busy,
               modesSupported: false,
-              settings: { fps: 30, bitrate: 0, audio: false },
+              settings: { fps: 30, quality: "auto", audio: false },
               onChange,
               readModes: async () => [],
               onResolution: async () => {},
@@ -1672,7 +1849,7 @@ describe("remote desktop controls", () => {
               modesSupported: false,
               viewerDisplaySupported: supported,
               onFitDisplay,
-              settings: { fps: 30, bitrate: 0, audio: false },
+              settings: { fps: 30, quality: "auto", audio: false },
               onChange: vi.fn(),
               readModes: async () => [],
               onResolution: async () => {},
@@ -2014,8 +2191,7 @@ describe("remote desktop controls", () => {
       expect(changes()).toHaveLength(1);
       await select("quality", 1);
       await select("quality", 2);
-      await select("quality", 3);
-      expect(button("original").getAttribute("aria-selected")).toBe("true");
+      expect(button("hd").getAttribute("aria-selected")).toBe("true");
       expect(changes()).toHaveLength(1);
       expect(fixture.playback).not.toHaveBeenCalled();
       await message({ type: terminal });
@@ -2025,7 +2201,7 @@ describe("remote desktop controls", () => {
         requests()
           .filter((r) => r.op === "offer")
           .at(-1).settings,
-      ).toMatchObject({ fps: 60, bitrate: 20000000 });
+      ).toMatchObject({ fps: 60, quality: "hd", bitrate: 20000000 });
       await message({ type: "streaming" });
       expect(changes()).toHaveLength(2);
       await select("quality", 1);
@@ -2059,7 +2235,7 @@ describe("remote desktop controls", () => {
     await message({ type: "streaming" });
     act(() => button("operations").click());
     act(() => button("displaySettings").click());
-    await act(async () => button("original").click());
+    await act(async () => button("hd").click());
     await message({ type: "fallback" });
     expect(sent().filter((m) => m.type === "videoSettings")).toHaveLength(0);
     await act(async () => finish({ sdp: "answer" }));
@@ -2076,7 +2252,7 @@ describe("remote desktop controls", () => {
           '[data-testid="remoteDesktop.frameRateControl"] button',
         )[1]
         .click();
-      button("original").click();
+      button("hd").click();
     });
     expect(
       host
@@ -2085,7 +2261,7 @@ describe("remote desktop controls", () => {
         )[1]
         .getAttribute("aria-selected"),
     ).toBe("true");
-    expect(button("original").getAttribute("aria-selected")).toBe("true");
+    expect(button("hd").getAttribute("aria-selected")).toBe("true");
   });
   it("cancels the PiP timeout when queued quality changes exit PiP", async () => {
     fixture.systemAudio = true;
@@ -2110,7 +2286,7 @@ describe("remote desktop controls", () => {
     act(() => button("operations").click());
     await act(async () => button("smallWindow").click());
     act(() => button("displaySettings").click());
-    await act(async () => button("original").click());
+    await act(async () => button("hd").click());
     await act(async () => finish({}));
     expect(sent().filter((m) => m.type === "videoSettings")).toHaveLength(1);
     await message({ type: "streaming" });

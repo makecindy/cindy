@@ -20,6 +20,8 @@ import {
   REMOTE_DESKTOP_OFFER_BUDGET,
   REMOTE_DESKTOP_MAX_FRAME_BYTES,
   parseDesktopIceReply,
+  parseRemoteDesktopRequest,
+  isRemoteDesktopChannelRequest,
   type RemoteDesktopIceRequest,
   type RemoteDesktopIceReply,
   type RemoteDesktopLease,
@@ -29,6 +31,7 @@ import {
   DESKTOP_LOCAL,
   DESKTOP_AUDIO_RETRY_MS,
   type DesktopHostCommand,
+  type DesktopChannelResult,
   type DesktopHostReply,
 } from '../../shared/remoteDesktop';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
@@ -555,6 +558,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       systemAudio: supportsSystemAudio(),
       viewerDisplay,
       viewerDisplayRestore: viewerDisplay,
+      channelRequests: true,
       displayModes: process.platform === 'darwin' || Boolean(linuxDisplays?.length),
       enabled,
       canControl:
@@ -1131,5 +1135,41 @@ export function registerRemoteDesktopIpc(
         throwIpcError('PERMISSION_DENIED', 'Desktop input rejected');
       }
     },
+  );
+  ipcMain.handle(
+    DESKTOP_LOCAL.CHANNEL_REQUEST,
+    async (event, lease: unknown, value: unknown): Promise<DesktopChannelResult> => {
+      captureWindow.assertSender(event);
+      if (event.sender !== host || typeof lease !== 'string' || lease !== videoLease)
+        throwIpcError('PERMISSION_DENIED', 'Invalid desktop channel request');
+      // Same authority as the relay path: the peer owning this lease, with the
+      // settings and revocation checks of requestRemoteDesktop and the lease
+      // check of the controller. Only small control operations ride here.
+      try {
+        const request = parseRemoteDesktopRequest(value);
+        if (
+          !('lease' in request) ||
+          request.lease !== lease ||
+          !isRemoteDesktopChannelRequest(request)
+        )
+          throw new Error('INVALID_REQUEST');
+        const owner = remoteDesktop.state;
+        if (!owner || !remoteDesktop.hasLease(lease)) throw new Error('DESKTOP_LEASE_EXPIRED');
+        return { ok: true, result: await requestRemoteDesktop(owner.peer, request) };
+      } catch (error) {
+        // Business refusals are replies, not IPC failures: no error log per tap.
+        return { ok: false, error: desktopErrorCode(error) };
+      }
+    },
+  );
+}
+
+/** Stable code of a request failure; never forwards free-form messages. */
+function desktopErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  if (/^[A-Z][A-Z0-9_]{0,63}$/.test(message)) return message;
+  return (
+    message.match(/\b(?:DESKTOP|CREDENTIAL|REMOTE|ACCESS)_[A-Z_]{1,56}\b/)?.[0] ??
+    'DESKTOP_REQUEST_FAILED'
   );
 }

@@ -75,11 +75,11 @@
     "keepOpen": "{{name}}にコピーしています。このウィンドウを閉じてもコピーは続行され、元のタスク上部で進捗を確認できます。",
     "runInBackground": "バックグラウンドで続行",
     "cancelCopy": "コピーをキャンセル",
-    "cancelling": "キャンセルしています。現在のファイルの送信が終わると停止します…",
+    "cancelling": "キャンセルしています…",
     "failureTitle": "コピー失敗",
     "failureDescription": "閉じた後、タスクメニューから新しくコピーできます。",
     "finishing": "{{name}}で受信・検証し、タスクを作成中…",
-    "transferProgress": "アップロード {{sent}} / {{total}} · 平均 {{speed}}/s（受信は未完了）",
+    "transferProgress": "転送済み {{sent}} / {{total}} · 平均 {{speed}}/s",
     "thisComputer": "このコンピューター",
     "selectedComputer": "選択したコンピューター",
     "estimating": "ファイル数とサイズを計算中…",
@@ -305,9 +305,9 @@
       "fps": "フレームレート",
       "quality": "画質",
       "automatic": "自動",
-      "smooth": "スムーズ",
-      "balanced": "バランス",
-      "clear": "高画質",
+      "saver": "データ節約",
+      "hd": "高画質",
+      "qualityHint": "自動は滑らかさを優先し、通信に余裕があれば鮮明にします。データ節約は通信量を抑えます（最大 30 fps）。高画質は文字の鮮明さを優先し、帯域が足りないときはフレームレートを下げます。",
       "resolution": "コンピュータの解像度",
       "clipboardFailed": "クリップボードの内容を転送できませんでした。操作権限を確認して再試行してください。",
       "settingsFailed": "設定を保存できませんでした。再試行してください。",
@@ -7224,7 +7224,9 @@
       "processKilled": "プロセスが強制終了されました (シグナル {{signal}})",
       "restart": "再起動",
       "shellNotFound": "シェルが見つかりません: {{detail}}",
-      "spawnFailed": "ターミナルを起動できません: {{detail}}"
+      "spawnFailed": "ターミナルを起動できません: {{detail}}",
+      "remoteUnavailableTitle": "リモートセッションでは利用できません",
+      "remoteUnavailableDescription": "ターミナルは現在、このデバイスでローカル実行されるセッションでのみ利用できます。"
     },
     "review": {
       "turn": {

@@ -966,6 +966,12 @@ export interface CodexHttpMcpConfig {
 
 export interface LiziMcpProvider {
   name: string;
+  capability?: {
+    title: string;
+    description: string;
+    source: 'builtin' | 'plugin' | 'custom';
+    discovery?: { tool: string; args?: Record<string, unknown> };
+  };
   isEnabled?(context: LiziMcpSessionContext): boolean;
   toClaudeSdkConfig(context: LiziMcpSessionContext): unknown | null;
   /** Remote MCP config for Codex app-server; SDK instance providers use the host HTTP bridge instead. */

@@ -1,4 +1,5 @@
 import type { RemoteDesktopCursor, RemoteDesktopCursorFrame } from '@cindy/device-link';
+import { DESKTOP_MOTION, desktopFrameChange } from '../../../shared/remoteDesktopQuality';
 /** Converts the bounded native fallback frames into the existing WebRTC video
  * transport. Serial pulls/decode keep both IPC and image memory bounded.
  */
@@ -8,10 +9,34 @@ export async function nativeCaptureStream(
   failed: () => void,
   cursor: (value: RemoteDesktopCursor | null) => void = () => {},
   fps = 15,
+  onMotion?: (moving: boolean) => void,
 ): Promise<{ stream: MediaStream; stop(): void; clear(): void }> {
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d');
   if (!context) throw new Error('DESKTOP_VIDEO_UNAVAILABLE');
+  // A tiny thumbnail separates large changes (scrolling, video) from small
+  // localized activity (caret, pulsing button) at negligible cost.
+  const thumb = onMotion ? document.createElement('canvas') : null;
+  const thumbContext = thumb?.getContext('2d', { willReadFrequently: true });
+  if (thumb) thumb.width = 64;
+  if (thumb) thumb.height = 36;
+  let lastThumb: Uint8ClampedArray | null = null;
+  let lastMotion = 0;
+  let moving = true;
+  const observe = (bitmap: ImageBitmap) => {
+    if (!thumbContext || !onMotion) return;
+    thumbContext.drawImage(bitmap, 0, 0, 64, 36);
+    const next = thumbContext.getImageData(0, 0, 64, 36).data;
+    const now = performance.now();
+    if (!lastThumb || desktopFrameChange(lastThumb, next) > DESKTOP_MOTION.changedShare)
+      lastMotion = now;
+    lastThumb = next;
+    const nextMoving = now - lastMotion < DESKTOP_MOTION.stillAfterMs;
+    if (nextMoving !== moving) {
+      moving = nextMoving;
+      onMotion(moving);
+    }
+  };
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let epoch = 0;
@@ -33,6 +58,7 @@ export async function nativeCaptureStream(
         canvas.height = bitmap.height;
       }
       context.drawImage(bitmap, 0, 0);
+      observe(bitmap);
       // A fallback frame includes the pointer in its pixels. Clear the last
       // independent cursor so switching backends cannot leave two pointers.
       cursor(typeof frame === 'string' ? null : frame.cursor);

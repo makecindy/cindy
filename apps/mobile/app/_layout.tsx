@@ -51,6 +51,7 @@ import {
   useStartupSplash,
 } from '@/components/StartupSplashOverlay';
 import { registerDevCacheMenu } from '@/debug/devCacheMenu';
+import { migrateLegacySessionMessageCache } from '@/session/mobileSessionMessageCache';
 import { startJsStallWatchdog } from '@/debug/jsStallWatchdog';
 import { initMobileTapdb } from '@/analytics/mobileTapdb';
 import {
@@ -403,6 +404,11 @@ function RootLayout() {
   // Dev-only:注册开发者菜单的"清缓存 + reload"项(内部 __DEV__ gate,生产为 no-op)。
   useEffect(() => {
     registerDevCacheMenu();
+  }, []);
+  // 旧版写在 AsyncStorage 的消息缓存会把安卓 6 MiB 库占满、导致发送失败(#5403);
+  // 消息缓存已改存文件,启动时把剩余旧副本迁过去、腾出库空间。
+  useEffect(() => {
+    void migrateLegacySessionMessageCache().catch(() => undefined);
   }, []);
   // Dev-only:JS 停摆探测器,把 JS 线程忙死的时间边界钉进 Metro 日志流(内部 __DEV__ gate)。
   useEffect(() => startJsStallWatchdog(), []);

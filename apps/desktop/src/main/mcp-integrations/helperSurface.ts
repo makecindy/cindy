@@ -1,14 +1,8 @@
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { hasAcceptedUserTaskInput, type AcceptedTaskInput } from '../maker-ipc/pluginTaskInput.js';
 
-/**
- * Either legacy ownership signal is enough to keep a caller on the Bot surface.
- * Requiring both lets a partial Bot record fall through to the full default
- * surface, which includes Session control and history.
- *
- * A local, active Bot main task (`canonical` link on a `bot` source) is `bot-main`:
- * it sees the ordinary surface plus Bot tools, and the host judges every call by
- * who triggered the current turn (maker-ipc/botTurnAuthority.ts).
+/** Companion tasks add their profile tools to the ordinary transport's helper surface.
+ * Classification is a business-object distinction, not a separate permission tier.
  */
 export function classifyHelperSurface(
   source: string | null | undefined,

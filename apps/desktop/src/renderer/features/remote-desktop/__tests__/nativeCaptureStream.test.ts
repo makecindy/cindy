@@ -85,3 +85,35 @@ it('clears the independent cursor when falling back to frames with a baked point
   expect(cursor).toHaveBeenLastCalledWith(null);
   owner.stop();
 });
+it('reports still after a quiet second and moving again on a large change', async () => {
+  const h = setup();
+  let pixels = new Uint8ClampedArray(64 * 36 * 4);
+  h.canvas.getContext = () =>
+    ({
+      drawImage: h.drawImage,
+      clearRect: vi.fn(),
+      getImageData: () => ({ data: pixels }),
+    }) as never;
+  const onMotion = vi.fn();
+  const owner = await nativeCaptureStream(
+    async () => 'anBlZw==',
+    () => true,
+    vi.fn(),
+    undefined,
+    30,
+    onMotion,
+  );
+  await vi.advanceTimersByTimeAsync(900);
+  expect(onMotion).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(300);
+  expect(onMotion).toHaveBeenLastCalledWith(false);
+  // A single pixel (caret, pulsing button) is not motion.
+  pixels = pixels.slice();
+  pixels.set([255, 255, 255, 255], 400);
+  await vi.advanceTimersByTimeAsync(200);
+  expect(onMotion).toHaveBeenCalledTimes(1);
+  pixels = new Uint8ClampedArray(64 * 36 * 4).fill(200);
+  await vi.advanceTimersByTimeAsync(100);
+  expect(onMotion).toHaveBeenLastCalledWith(true);
+  owner.stop();
+});

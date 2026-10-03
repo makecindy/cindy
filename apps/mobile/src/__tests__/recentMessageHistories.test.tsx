@@ -47,7 +47,7 @@ vi.mock('react-native', () => ({
   },
 }));
 import { RecentMessageHistories, RecentMessageHistoriesProvider, MessageHistoryOverlay, useMessageHistoryActive, useMessageHistoryPositioning } from '@/session/RecentMessageHistories';
-import { ResidentHomeList, ResidentHomeListProvider } from '@/session/ResidentHomeList';
+import { ResidentHomeList, ResidentHomeListProvider, useResidentHomeList } from '@/session/ResidentHomeList';
 import { recentTaskKey, rememberRecentTask } from '@/session/recentTasks';
 const key = (id: string) => recentTaskKey({ deviceId: 'pc', sessionId: id });
 const remember = (id: string) => rememberRecentTask({ pathname: '/sessions/[sessionId]', params: { deviceId: 'pc', deviceName: 'PC', sessionId: id } });
@@ -66,6 +66,14 @@ describe('resident five-task message lists outside route lifetimes', () => {
       return () => { unmounts.push(id); };
     }, [id]);
     return <button data-task={id} data-active={active} data-positioning={positioning} onClick={() => setPosition(420)}>{text}:{position}</button>;
+  }
+  function DrawerHomeProbe() {
+    const resident = useResidentHomeList();
+    return <div data-drawer="true" data-resident-enabled={resident.enabled}>
+      {resident.enabled ? <ResidentHomeList focused top={0} left={0} right={0}>
+        <button data-drawer-task-list="true">Drawer tasks</button>
+      </ResidentHomeList> : <button data-inline-task-list="true">Inline tasks</button>}
+    </div>;
   }
   async function show(id: string | null, text = id ?? '', ready = true) {
     state.onTask = id !== null;
@@ -195,13 +203,15 @@ describe('resident five-task message lists outside route lifetimes', () => {
           <RecentMessageHistories activeKey={key('a')}>
             <History id="a" text="Messages" />
           </RecentMessageHistories>
-          <MessageHistoryOverlay><button data-drawer="true">Drawer</button></MessageHistoryOverlay>
+          <MessageHistoryOverlay><DrawerHomeProbe /></MessageHistoryOverlay>
         </ResidentHomeListProvider>
       </RecentMessageHistoriesProvider>,
     ));
     const residentHost = container.querySelector('[data-resident-host="true"]')!;
     const drawer = container.querySelector('[data-drawer="true"]')!;
-    expect(residentHost.querySelector('[data-resident-task-list="true"]')).not.toBeNull();
+    expect(drawer.getAttribute('data-resident-enabled')).toBe('true');
+    expect(container.querySelector('[data-inline-task-list="true"]')).toBeNull();
+    expect(residentHost.querySelector('[data-drawer-task-list="true"]')).not.toBeNull();
     expect(residentHost.contains(drawer)).toBe(false);
     expect(residentHost.compareDocumentPosition(drawer) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(drawer.closest('[data-layout]')?.getAttribute('data-layout')).toContain('"zIndex":40');

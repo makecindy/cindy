@@ -96,17 +96,6 @@ async function resolveWorkbenchCaller(callerSessionId: string): Promise<Workbenc
   return { ok: true, botId: row.botId };
 }
 
-/**
- * 这件任务在不在主人交给该伙伴的项目里——与工作台继续同一判据。伙伴用通用会话工具
- * 处理「主人事先安排」的一轮时，靠它决定能不能动这件任务（见 botTurnAuthority.ts）。
- */
-export async function isWorkbenchProjectSession(botId: string, sessionId: string): Promise<boolean> {
-  const { directories } = await readBotWorkbenchState(ownerScopedUserDataPath(), botId);
-  if (directories.length === 0) return false;
-  const target = await readWorkbenchTarget(sessionId);
-  return authorizeWorkbenchTarget(target, directories, isCaseInsensitivePlatform(process.platform)).ok;
-}
-
 async function readWorkbenchTarget(taskId: string): Promise<WorkbenchTargetFacts | null> {
   const db = getDbClient().drizzle;
   const [row] = await db
@@ -468,8 +457,7 @@ async function runProjectChange<T>(run: () => Promise<T | ProjectFailure>): Prom
 }
 
 /**
- * 伙伴按主人的话记下一个已接手项目。只认本机、在用的伙伴主任务;「只有主人本人那一轮能用」
- * 由工具调用前的按轮判定保证(botTurnAuthority.ts 未列名的工具默认只放行主人本人那一轮)。
+ * 伙伴记下一个已接手项目。工作台需要本机、在用的伙伴主任务；操作沿用当前 Agent 权限。
  */
 export function addBotWorkbenchProjectForCaller(params: { callerSessionId: string; path: string }) {
   return runProjectChange(async () => {

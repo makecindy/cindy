@@ -335,6 +335,19 @@ describe('TelegramIM', () => {
     expect(events[1]).toMatchObject({ senderId: 'g/-100200', text: '帮我看看这个' });
   });
 
+  it('纯 @bot 无正文仍召唤一轮: 事件带原文, 不以空文本交给业务层', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([groupMessage({ text: '', fromId: 222, messageId: 33, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toMatchObject({
+      senderId: 'g/-100200',
+      text: `@${BOT.username}`,
+      speaker: { id: '222', isOwner: false },
+    });
+  });
+
   it('受保护群的消息一个字都不落本地窗口, 但仍可照常触发一轮', async () => {
     // 「禁止保存内容」的群: 与官方 bot 服务端「has_protected_content 的消息
     // 不中继」同一条边界 —— 本地池是个人 bot 的记忆, 不能成为绕过它的通道。

@@ -42,6 +42,8 @@ const h = vi.hoisted(() => ({
   nativeFrame: vi.fn(async () => 'frame'),
   input: vi.fn(),
   viewHeartbeat: vi.fn(),
+  controllerState: null as null | { peer: string; controlling: boolean },
+  controllerRequest: vi.fn(async (..._args: any[]): Promise<unknown> => ({})),
   hostInput: vi.fn(),
   startInput: vi.fn(async () => {}),
   iceConfig: vi.fn(async (): Promise<any[]> => [
@@ -159,7 +161,10 @@ vi.mock('../controller', () => ({
     constructor(deps: any) {
       h.deps = deps;
     }
-    state = null;
+    get state() {
+      return h.controllerState;
+    }
+    request = h.controllerRequest;
     displayId = '1';
     changingDisplay = false;
     displayGeometryMatches = h.geometryMatches;
@@ -881,6 +886,63 @@ it('uses native Hyprland capture for video and relay without opening a portal pi
   expect(h.hyprlandStop).toHaveBeenCalled();
 });
 
+it('authorizes channel requests exactly like the relay and only for small control ops', async () => {
+  const settings = await import('../../device-link/settings-store');
+  const config = {
+    remoteDesktopEnabled: true,
+    remoteControlEnabled: true,
+    revokedControllers: [] as string[],
+  };
+  vi.spyOn(settings, 'readDeviceLinkSettings').mockImplementation(() => config as any);
+  const { screen } = await import('electron');
+  vi.spyOn(screen, 'getAllDisplays').mockReturnValue([
+    { id: 1, label: 'Main', size: { width: 1920, height: 1080 } },
+  ] as any);
+  expect((await h.deps.capabilities()).channelRequests).toBe(true);
+  const pending = offer();
+  h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
+  await flush();
+  h.handlers.get(DESKTOP_LOCAL.REPLY)(event(), h.owner.send.mock.calls[0][1].id, 'answer');
+  await pending;
+  h.controllerState = { peer: 'phone', controlling: true };
+  h.controllerRequest.mockResolvedValue({ controlling: true });
+  const channel = h.handlers.get(DESKTOP_LOCAL.CHANNEL_REQUEST);
+  const control = { op: 'control', lease: h.lease, enabled: true };
+  await expect(channel(event(), h.lease, control)).resolves.toEqual({
+    ok: true,
+    result: { controlling: true },
+  });
+  // The lease owner is the authority, never anything the viewer claims.
+  expect(h.controllerRequest).toHaveBeenLastCalledWith('phone', control);
+  h.controllerRequest.mockClear();
+  for (const [value, error] of [
+    [{ op: 'start', displayId: '1' }, 'INVALID_REQUEST'],
+    [{ op: 'offer', lease: h.lease, sdp: 'x' }, 'INVALID_REQUEST'],
+    [{ op: 'windowAction', lease: h.lease, action: 'list' }, 'INVALID_REQUEST'],
+    [{ ...control, lease: 'other' }, 'INVALID_REQUEST'],
+    [{ op: 'nope' }, 'INVALID_LEASE'],
+  ] as const)
+    await expect(channel(event(), h.lease, value)).resolves.toEqual({ ok: false, error });
+  config.revokedControllers = ['phone'];
+  await expect(channel(event(), h.lease, control)).resolves.toEqual({
+    ok: false,
+    error: 'DESKTOP_UNAVAILABLE',
+  });
+  expect(h.controllerRequest).not.toHaveBeenCalled();
+  config.revokedControllers = [];
+  h.controllerRequest.mockRejectedValueOnce(new Error('DESKTOP_VIEW_ONLY'));
+  await expect(channel(event(), h.lease, control)).resolves.toEqual({
+    ok: false,
+    error: 'DESKTOP_VIEW_ONLY',
+  });
+  // Wrong process or a stale lease is an authorization failure, not a reply.
+  await expect(channel(event({ mainFrame: {} }), h.lease, control)).rejects.toThrow(
+    'PERMISSION_DENIED',
+  );
+  await expect(channel(event(), 'other', control)).rejects.toThrow('PERMISSION_DENIED');
+  h.controllerState = null;
+});
+
 it('advertises native Wayland geometry to existing viewers without a 16:9 placeholder', async () => {
   h.wayland = h.hyprland = true;
   const settings = await import('../../device-link/settings-store');
@@ -1062,7 +1124,7 @@ it.each([true, false])(
     const pending = h.deps.offer(
       { lease: h.lease, display: { id: '1' } },
       'sdp',
-      { audio: true, fps: 30, bitrate: 0 },
+      { audio: true, fps: 30, quality: 'auto' },
       true,
       'attempt',
     );
@@ -1108,7 +1170,7 @@ it('revokes audio recovery with the lease and never grants it to an audio-off re
   const pending = h.deps.offer(
     { lease: h.lease, display: { id: '1' } },
     'sdp',
-    { audio: true, fps: 30, bitrate: 0 },
+    { audio: true, fps: 30, quality: 'auto' },
     true,
     'attempt',
   );

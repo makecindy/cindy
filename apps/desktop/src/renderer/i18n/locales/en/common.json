@@ -75,11 +75,11 @@
     "keepOpen": "Copying to {{name}}. Closing this window won't stop the copy; check progress at the top of the original task.",
     "runInBackground": "Continue in background",
     "cancelCopy": "Cancel copy",
-    "cancelling": "Cancelling. Stops after the current file finishes sending…",
+    "cancelling": "Cancelling…",
     "failureTitle": "Copy failed",
     "failureDescription": "Close this window and start a new copy from the task menu.",
     "finishing": "{{name}} is receiving, checking and creating the task…",
-    "transferProgress": "Upload progress {{sent}} / {{total}} · Average {{speed}}/s (reception not yet complete)",
+    "transferProgress": "Transferred {{sent}} / {{total}} · Average {{speed}}/s",
     "thisComputer": "this computer",
     "selectedComputer": "selected computer",
     "estimating": "Counting files and calculating size…",
@@ -305,9 +305,9 @@
       "fps": "Frame rate",
       "quality": "Video quality",
       "automatic": "Automatic",
-      "smooth": "Smooth",
-      "balanced": "Balanced",
-      "clear": "Clear",
+      "saver": "Data saver",
+      "hd": "HD",
+      "qualityHint": "Auto keeps motion smooth and sharpens when your network allows. Data saver limits usage (up to 30 fps). HD keeps text sharp and lowers the frame rate when bandwidth is short.",
       "resolution": "Computer resolution",
       "clipboardFailed": "Could not transfer clipboard content. Check control access and try again.",
       "settingsFailed": "Could not save this setting. Try again.",
@@ -7226,7 +7226,9 @@
       "processKilled": "Process killed (signal {{signal}})",
       "restart": "Restart",
       "shellNotFound": "Shell not found: {{detail}}",
-      "spawnFailed": "Failed to start terminal: {{detail}}"
+      "spawnFailed": "Failed to start terminal: {{detail}}",
+      "remoteUnavailableTitle": "Unavailable for remote sessions",
+      "remoteUnavailableDescription": "Terminal is currently available only for sessions running on this device."
     },
     "review": {
       "turn": {

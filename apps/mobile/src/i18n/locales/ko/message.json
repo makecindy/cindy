@@ -10,8 +10,6 @@
   },
   "renderer": {
     "moreActions": "추가 메시지 작업",
-    "previousQuestionJump": "이전 질문으로 이동: {{preview}}",
-    "noPreview": "미리보기 없음",
     "newMessagesToBottom": "새 메시지, 맨 아래로 이동",
     "jumpToBottom": "맨 아래로 이동",
     "openForkOrigin": "분기 원본 메시지 열기",

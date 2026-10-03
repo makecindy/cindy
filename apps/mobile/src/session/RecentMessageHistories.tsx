@@ -5,6 +5,7 @@ import { NavigationContext, NavigationRouteContext, useIsFocused } from 'expo-ro
 import { PaneViewportProvider, usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { getRecentTasks, recentTaskKey, subscribeRecentTasks } from './recentTasks';
 import { NativeHistoryHost, NativeHistorySlot, needsResidentHistoryUpgrade } from './NativeResidentHistory';
+import { useResidentHomeListContextBridge } from './ResidentHomeList';
 
 import { MessageHistoryActive, MessageHistoryPositioning } from './messageHistoryActivity';
 export { useMessageHistoryActive, useMessageHistoryPositioning } from './messageHistoryActivity';
@@ -164,6 +165,7 @@ const styles = StyleSheet.create({
 /** Route-owned drawers must be above the root-owned histories, not beneath them. */
 export function MessageHistoryOverlay({ children }: { children: ReactNode }) {
   const context = useContext(Context);
+  const residentChildren = useResidentHomeListContextBridge(children);
   if (!context) throw new Error('RecentMessageHistoriesProvider is missing');
   const { setOverlay } = context;
   const owner = useId();
@@ -173,9 +175,9 @@ export function MessageHistoryOverlay({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     if (NativeHistorySlot || needsResidentHistoryUpgrade) return;
     setOverlay(owner, focused ? <NavigationContext.Provider value={navigation}>
-      <NavigationRouteContext.Provider value={route}>{children}</NavigationRouteContext.Provider>
+      <NavigationRouteContext.Provider value={route}>{residentChildren}</NavigationRouteContext.Provider>
     </NavigationContext.Provider> : null);
-  }, [setOverlay, owner, focused, navigation, route, children]);
+  }, [setOverlay, owner, focused, navigation, route, residentChildren]);
   useLayoutEffect(() => () => setOverlay(owner, null), [setOverlay, owner]);
   return NativeHistorySlot || needsResidentHistoryUpgrade ? children : null;
 }

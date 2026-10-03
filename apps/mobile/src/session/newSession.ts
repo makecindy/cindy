@@ -1,3 +1,4 @@
+import { modelNeedsReselection } from './modelReselection';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
 import {
@@ -433,8 +434,11 @@ export function resolveRecentModelAndProvider(
   recent: { model: string; providerId: string | null },
   agentKind: NewSessionAgentKind,
   catalogReady: boolean,
+  visibilityOverrides?: Record<string, boolean> | null,
 ): { model: string; providerId: string | null } {
-  if (!catalogReady) return { model: recent.model, providerId: recent.providerId };
+  if (!catalogReady || modelNeedsReselection(visibilityOverrides, agentKind, recent.model, recent.providerId)) {
+    return { model: recent.model, providerId: recent.providerId };
+  }
   // providerId 为 null 分两种:①该会话本来就走被控端默认路由(合法来源);
   // ②历史版本遗留的「自定义供应商模型 + providerId=NULL」坏数据(#1898 典型
   // 现场)——目录就绪且 modelRows 存在同名模型行时补全为该行 provider,让自动
@@ -507,7 +511,7 @@ export async function resolveSubmitGuardCatalog(args: {
   fetch: () => Promise<DeviceProvidersPayload>;
   /** 把 payload 重建为守卫 rows(含 keepSelected 豁免)。 */
   buildRows: (payload: DeviceProvidersPayload) => readonly ProviderModelRow[];
-}): Promise<{ rows: readonly ProviderModelRow[]; catalogKnown: boolean; genAt: number }> {
+}): Promise<{ rows: readonly ProviderModelRow[]; catalogKnown: boolean; genAt: number; visibilityOverrides?: Record<string, boolean> }> {
   const { cached, gen, fetch, buildRows } = args;
   if (args.deferRefreshToCreation) {
     // 旧缓存可能缺少刚连接的来源，不能先把用户选择回退、再让 fresh 校验这个回退值。
@@ -525,10 +529,14 @@ export async function resolveSubmitGuardCatalog(args: {
       try {
         const fresh = await fetch();
         if (gen() !== genAt) continue; // 拉取期间换代 → join 新代
-        return { rows: buildRows(fresh), catalogKnown: true, genAt };
+        return { rows: buildRows(fresh), catalogKnown: true, genAt,
+          ...(fresh.modelVisibilityOverrides ? { visibilityOverrides: fresh.modelVisibilityOverrides } : {}),
+        };
       } catch {
         if (gen() !== genAt) continue;
-        return { rows: buildRows(hit), catalogKnown: true, genAt };
+        return { rows: buildRows(hit), catalogKnown: true, genAt,
+          ...(hit.modelVisibilityOverrides ? { visibilityOverrides: hit.modelVisibilityOverrides } : {}),
+        };
       }
     }
     if (genAt === 0) {
@@ -539,7 +547,9 @@ export async function resolveSubmitGuardCatalog(args: {
       try {
         const fresh = await fetch();
         if (gen() !== genAt) continue; // 拉取期间换代 → join 新代
-        return { rows: buildRows(fresh), catalogKnown: true, genAt };
+        return { rows: buildRows(fresh), catalogKnown: true, genAt,
+          ...(fresh.modelVisibilityOverrides ? { visibilityOverrides: fresh.modelVisibilityOverrides } : {}),
+        };
       } catch {
         if (gen() !== genAt) continue;
         return { rows: [], catalogKnown: false, genAt };
@@ -550,7 +560,9 @@ export async function resolveSubmitGuardCatalog(args: {
       // await 期间换代 → 旧 promise 返回值已过期(缓存层只拒绝回写、仍 resolve),
       // 弃用并 join 新代(下一轮循环重读缓存/新 inflight)。
       if (gen() !== genAt) continue;
-      return { rows: buildRows(fresh), catalogKnown: true, genAt };
+      return { rows: buildRows(fresh), catalogKnown: true, genAt,
+          ...(fresh.modelVisibilityOverrides ? { visibilityOverrides: fresh.modelVisibilityOverrides } : {}),
+        };
     } catch {
       if (gen() !== genAt) continue;
       return { rows: [], catalogKnown: false, genAt };
@@ -717,6 +729,7 @@ export function pickAgentDefaultRuntime(args: {
   deviceId?: string;
   /** 供应商目录是否已就绪(加载完成);未就绪时来源校验信任最近会话(见 validateModelProviderId)。 */
   catalogReady: boolean;
+  visibilityOverrides?: Record<string, boolean> | null;
 }): NewSessionRuntime {
   const { agentKind, sessions, modelRows, currentEffort, deviceId, catalogReady } = args;
   const recent = pickMostRecentSessionRuntime(sessions, { deviceId, agentKind });
@@ -731,6 +744,7 @@ export function pickAgentDefaultRuntime(args: {
       { model: recent.model, providerId: recent.providerId },
       agentKind,
       catalogReady,
+      args.visibilityOverrides,
     ));
   } else if (catalogReady && modelRows[0]) {
     // 首项分支只在目录就绪时取——切到未缓存设备瞬间旧设备目录会短暂残留
@@ -757,7 +771,7 @@ export function pickAgentDefaultRuntime(args: {
   const sectionModel = catalogReady ? findSectionModelRow(modelRows, model, providerId)?.model : undefined;
   const effort = sectionModel
     ? reconcileEffortForModel(sectionModel, baseEffort)
-    : catalogReady ? '' : baseEffort;
+    : catalogReady && !modelNeedsReselection(args.visibilityOverrides, agentKind, model, providerId) ? '' : baseEffort;
   return { agentKind, model, effort, providerId };
 }
 
@@ -849,6 +863,7 @@ export function resolveNewSessionAutoDefault(input: {
   rowsAgentKind: NewSessionAgentKind;
   /** 供应商目录是否已就绪;未就绪时来源校验信任最近会话(见 validateModelProviderId)。 */
   catalogReady: boolean;
+  visibilityOverrides?: Record<string, boolean> | null;
   /** Only an explicitly unsupported provider:list channel permits capabilities fallback. */
   providersUnsupported?: boolean;
   /** 仅在 provider-aware 列表不可用时传入,避免绕过被控端的模型可见性设置(上游 main 移植)。 */
@@ -879,6 +894,7 @@ export function resolveNewSessionAutoDefault(input: {
       { model: recent.model, providerId: recent.providerId },
       recent.agentKind,
       catalogReady && recent.agentKind === rowsAgentKind,
+      input.visibilityOverrides,
     );
     // 跨 agent 跟随时 modelRows 按当前 agent 构建,其档位表对目标 agent 无权威——
     // 命中同名模型行会把 recent.effort 错 reconcile 成当前 agent 的默认档(独立

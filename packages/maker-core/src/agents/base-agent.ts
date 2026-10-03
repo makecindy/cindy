@@ -997,6 +997,17 @@ export interface AgentDeps {
     modelId: string,
   ) => number | null;
 
+  /**
+   * Resolve the declared efforts of a concrete (provider, model) route, used to
+   * narrow an outgoing effort to what that route accepts. Return null for unknown
+   * or ambiguous routes. Same-ID models from different providers can declare
+   * different efforts, so do not use capabilities.availableModels for this.
+   */
+  resolveModelEfforts?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => readonly Effort[] | null;
+
   /** Local disk-auth policy, independent of the actual Provider credential mode. */
   resolveCodexLocalAuthPolicy?: (
     providerId: string | null | undefined,

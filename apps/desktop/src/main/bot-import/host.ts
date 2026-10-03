@@ -1,3 +1,4 @@
+import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
 import { companionImportReasonKey } from '@cindy/maker-shared/companion-import';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { t } from '../i18n.js';
@@ -586,7 +587,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
     }
     if (!baseline || Object.keys(patch).length) {
       await writeBotProfileFolder(scope.root, botId, {
-        config: baseline ? folder.config : { ...folder.config, mcpMode: 'allowlist', mcpServers: [...new Set([
+        config: baseline ? folder.config : { ...normalizeBotToolCapabilities(folder.config), mcpServers: [...new Set([
           ...(Array.isArray(folder.config.mcpServers) ? folder.config.mcpServers : []), 'companion_connections',
         ])] }, ...patch,
       }); scope.assert();

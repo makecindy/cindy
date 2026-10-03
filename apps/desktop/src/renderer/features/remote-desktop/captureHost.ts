@@ -1,13 +1,30 @@
 import {
   isDesktopInput,
+  isRemoteDesktopChannelId,
   parseDesktopIceCandidates,
+  parseRemoteDesktopChannelRequest,
+  REMOTE_DESKTOP_CHANNEL_MAX_BYTES,
   REMOTE_DESKTOP_ICE_SERVERS,
   REMOTE_DESKTOP_NETWORK,
   type RemoteDesktopIceCandidate,
   type DesktopInput,
   type RemoteDesktopCursor,
+  type RemoteDesktopChannelReply,
+  type RemoteDesktopChannelRequestMessage,
 } from '@cindy/device-link';
+
+/** The id of a well-formed channel request envelope, whatever its payload. */
+function channelRequestId(message: unknown): string | null {
+  if (!message || typeof message !== 'object') return null;
+  const value = message as { type?: unknown; id?: unknown };
+  return value.type === 'request' && isRemoteDesktopChannelId(value.id) ? value.id : null;
+}
 import { DESKTOP_AUDIO_RETRY_MS, type DesktopCaptureApi } from '../../../shared/remoteDesktop';
+import {
+  desktopVideoFramerate,
+  desktopVideoProfile,
+  withDesktopBitrateHints,
+} from '../../../shared/remoteDesktopQuality';
 import { nativeCaptureStream } from './nativeCaptureStream';
 import { PortalCaptureStream } from './portalCaptureStream';
 import { nativeAudioStream } from './nativeAudioStream';
@@ -155,11 +172,33 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
     void (async () => {
       try {
         let captureSettled: Promise<void> = Promise.resolve();
+        const profile = desktopVideoProfile(command.settings);
+        const fps = desktopVideoFramerate(command.settings);
+        // Native capture reports whether the screen is moving; tiers that stay
+        // sharp when still trade frame rate for resolution only while still.
+        let moving = true;
+        let videoSender: RTCRtpSender | null = null;
+        let preference = Promise.resolve();
+        const degradation = () => (moving ? profile.degradation : 'maintain-resolution');
+        const onMotion = (next: boolean) => {
+          moving = next;
+          preference = preference
+            .then(async () => {
+              const sender = videoSender;
+              if (!sender || current !== generation) return;
+              const parameters = sender.getParameters();
+              if (!parameters.encodings?.length) return;
+              if (parameters.degradationPreference === degradation()) return;
+              parameters.degradationPreference = degradation();
+              await sender.setParameters(parameters);
+            })
+            .catch(() => {});
+        };
         const capture = () =>
           navigator.mediaDevices.getDisplayMedia({
             audio: command.settings?.audio === true,
             video: {
-              frameRate: { ideal: command.settings?.fps ?? 30, max: command.settings?.fps ?? 30 },
+              frameRate: { ideal: fps, max: fps },
             },
           });
         const boundedCapture = async () => {
@@ -204,9 +243,8 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
             (value) => {
               if (current === generation) latestCursor = value;
             },
-            command.cursorOverlay || command.continuousNativeCapture
-              ? (command.settings?.fps ?? 30)
-              : 15,
+            command.cursorOverlay || command.continuousNativeCapture ? fps : 15,
+            command.settings && profile.sharpWhenStill ? onMotion : undefined,
           );
           if (current !== generation) {
             result.stop();
@@ -293,7 +331,9 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
             const replacement = await nativeStream();
             const sender = rtc.getSenders().find((item) => item.track?.kind === 'video');
             if (!sender || current !== generation) throw new Error('DESKTOP_VIDEO_STOPPED');
-            await sender.replaceTrack(replacement.getVideoTracks()[0]);
+            const video = replacement.getVideoTracks()[0];
+            if (video) video.contentHint = profile.contentHint;
+            await sender.replaceTrack(video);
             captured.getVideoTracks().forEach((track) => {
               track.onended = null;
               track.onmute = null;
@@ -346,6 +386,7 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
             }, 50);
           }
           let pending = 0;
+          let requests = 0;
           let challenge = '';
           heartbeat = setInterval(() => {
             // Keep one outstanding challenge until its reply arrives. The host
@@ -361,14 +402,67 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
               void api.viewHeartbeat(lease).catch(() => {});
               return;
             }
-            if (typeof data !== 'string' || data.length > 32_768 || pending >= 8) {
+            if (typeof data !== 'string' || data.length > 32_768) {
               stop();
               void api.stop().catch(() => {});
               return;
             }
             try {
               const message = JSON.parse(data) as { sequence: number; events: DesktopInput[] };
+              // Control requests share the channel so they keep their order with input.
+              const id = channelRequestId(message);
+              if (id) {
+                const send = (reply: RemoteDesktopChannelReply) => {
+                  if (current !== generation || channel.readyState !== 'open') return;
+                  let data = JSON.stringify(reply);
+                  if (data.length > REMOTE_DESKTOP_CHANNEL_MAX_BYTES)
+                    data = JSON.stringify({
+                      type: 'reply',
+                      id,
+                      ok: false,
+                      error: 'DESKTOP_REPLY_TOO_LARGE',
+                    } satisfies RemoteDesktopChannelReply);
+                  channel.send(data);
+                };
+                let request: RemoteDesktopChannelRequestMessage | null = null;
+                try {
+                  request = parseRemoteDesktopChannelRequest(message);
+                } catch {}
+                // A newer viewer may move more operations here; refusing one
+                // lets it fall back to the relay instead of losing the session.
+                if (!request || !api.request) {
+                  send({ type: 'reply', id, ok: false, error: 'DESKTOP_CHANNEL_UNSUPPORTED' });
+                  return;
+                }
+                // Requests have their own bound so they never end the input session.
+                if (requests >= 8) {
+                  send({ type: 'reply', id, ok: false, error: 'DESKTOP_CHANNEL_BUSY' });
+                  return;
+                }
+                requests++;
+                void api
+                  .request(lease, request.request)
+                  .then(
+                    (result): RemoteDesktopChannelReply =>
+                      result.ok
+                        ? { type: 'reply', id: request.id, ok: true, result: result.result }
+                        : { type: 'reply', id: request.id, ok: false, error: result.error },
+                    (): RemoteDesktopChannelReply => ({
+                      type: 'reply',
+                      id: request.id,
+                      ok: false,
+                      error: 'DESKTOP_REQUEST_FAILED',
+                    }),
+                  )
+                  .then(send)
+                  .finally(() => {
+                    requests--;
+                  });
+                return;
+              }
+              // Only input batches count toward the input overflow bound.
               if (
+                pending >= 8 ||
                 !Number.isSafeInteger(message.sequence) ||
                 !Array.isArray(message.events) ||
                 message.events.length > 64 ||
@@ -391,8 +485,17 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
             }
           };
         };
-        stream.getTracks().forEach((track) => rtc.addTrack(track, captured));
-        await rtc.setRemoteDescription({ type: 'offer', sdp: command.sdp });
+        stream.getTracks().forEach((track) => {
+          if (track.kind === 'video') track.contentHint = profile.contentHint;
+          rtc.addTrack(track, captured);
+        });
+        await rtc.setRemoteDescription({
+          type: 'offer',
+          sdp:
+            command.settings && command.sdp
+              ? withDesktopBitrateHints(command.sdp, profile)
+              : command.sdp,
+        });
         // Negotiate audio now even when permission is not ready. replaceTrack
         // can fill this sender later without interrupting video or the data channel.
         const audioTransceiver =
@@ -440,12 +543,13 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
           if (sender.track?.kind !== 'video' || !command.settings) continue;
           const parameters = sender.getParameters();
           if (!parameters.encodings?.length) continue;
-          // Let WebRTC's congestion controller trade resolution AND frame rate
-          // below the user's ceilings without renegotiating the capture lease.
-          parameters.degradationPreference = 'balanced';
+          // Below these ceilings WebRTC's congestion controller picks the rate;
+          // the tier decides whether resolution or frame rate gives way first.
+          parameters.degradationPreference = degradation();
+          videoSender = sender;
           for (const encoding of parameters.encodings) {
-            encoding.maxFramerate = command.settings.fps;
-            if (command.settings.bitrate) encoding.maxBitrate = command.settings.bitrate;
+            encoding.maxFramerate = fps;
+            encoding.maxBitrate = profile.maxBitrate;
           }
           await sender.setParameters(parameters);
         }

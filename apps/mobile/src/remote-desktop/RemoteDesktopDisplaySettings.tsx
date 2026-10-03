@@ -9,9 +9,11 @@ import {
 import SegmentedControl from "@expo/ui/community/segmented-control";
 import { Check, ChevronDown, Maximize, RotateCcw } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
-import type {
-  RemoteDesktopDisplayMode,
-  RemoteDesktopVideoSettings,
+import {
+  REMOTE_DESKTOP_VIDEO_QUALITIES,
+  type RemoteDesktopDisplayMode,
+  type RemoteDesktopVideoQuality,
+  type RemoteDesktopVideoSettings,
 } from "@cindy/device-link";
 import { Text } from "@/components/AppText";
 import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
@@ -29,6 +31,12 @@ import {
   lineHeight,
   useTheme,
 } from "@/theme";
+
+const QUALITY_LABELS = {
+  auto: "remoteDesktop.automatic",
+  saver: "remoteDesktop.saver",
+  hd: "remoteDesktop.hd",
+} as const satisfies Record<RemoteDesktopVideoQuality, string>;
 
 type Props = {
   video: {
@@ -161,7 +169,6 @@ export function RemoteDesktopDisplaySettings({
       </View>
     );
   const fpsValues = [30, 60] as const;
-  const qualityValues = [0, 2000000, 8000000, 20000000] as const;
   const current = modes.find((mode) => mode.current);
   const modeLabel = (mode: RemoteDesktopDisplayMode) =>
     `${mode.width} × ${mode.height}${mode.native === true ? ` · ${t("remoteDesktop.nativeResolution")}` : ""}`;
@@ -246,11 +253,12 @@ export function RemoteDesktopDisplaySettings({
         </Text>
         {segmented(
           "quality",
-          ["automatic", "clear", "highDefinition", "original"].map((key) =>
-            t(`remoteDesktop.${key}`),
+          REMOTE_DESKTOP_VIDEO_QUALITIES.map((quality) =>
+            t(QUALITY_LABELS[quality]),
           ),
-          qualityValues.indexOf(video.settings.bitrate),
-          (index) => video.onChange({ bitrate: qualityValues[index] }),
+          REMOTE_DESKTOP_VIDEO_QUALITIES.indexOf(video.settings.quality),
+          (index) =>
+            video.onChange({ quality: REMOTE_DESKTOP_VIDEO_QUALITIES[index] }),
         )}
         <Text style={hint}>{t("remoteDesktop.qualityHint")}</Text>
       </View>

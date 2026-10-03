@@ -6,6 +6,7 @@
     "dismissTitle": "關閉歷史失敗提示"
   },
   "common": {
+    "modelHiddenReselect": "{{model}} 已關閉，請選擇已開啟的模型後再傳送。",
     "cancel": "取消",
     "dismissRecommendation": "關閉推薦",
     "delete": "刪除",
@@ -199,6 +200,7 @@
     "retry": "重試",
     "firstMessageNotSent": "首條訊息沒有發出，內容已還原到輸入框。",
     "attachmentsNotCarriedBack": "有 {{count}} 個附件沒能一起帶回，需要重新新增。",
+    "localStorageFull": "Cindy 在手機上的本機儲存空間已滿，訊息沒能儲存，請稍後重試。",
     "commandWaitsForSession": "任務還在建立中，這個命令要等任務就緒後才能用，請稍後再發。",
     "locateMessageNotFound": "未找到要定位的訊息。",
     "shareNoLocalImage": "無法獲取本地圖片檔案",

@@ -6,6 +6,7 @@
     "dismissTitle": "关闭历史失败提示"
   },
   "common": {
+    "modelHiddenReselect": "{{model}} 已关闭，请选择已开启的模型后再发送。",
     "cancel": "取消",
     "dismissRecommendation": "关闭推荐",
     "delete": "删除",
@@ -195,6 +196,7 @@
     "retry": "重试",
     "firstMessageNotSent": "首条消息没有发出，内容已还原到输入框。",
     "attachmentsNotCarriedBack": "有 {{count}} 个附件没能一起带回，需要重新添加。",
+    "localStorageFull": "Cindy 在手机上的本地存储已满，消息没能保存，请稍后重试。",
     "commandWaitsForSession": "任务还在创建中，这个命令要等任务就绪后才能用，请稍后再发。",
     "locateMessageNotFound": "未找到要定位的消息。",
     "shareNoLocalImage": "无法获取本地图片文件",

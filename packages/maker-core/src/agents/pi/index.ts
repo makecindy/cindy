@@ -3155,13 +3155,9 @@ export class PiAgent extends BaseAgent {
     // the remote host while Cindy observes and controls an unrelated local
     // directory. Keep the capability absent until the wire protocol owns those
     // files remotely end-to-end.
-    // Bot sessions are a product persona, not a coding harness: the native
-    // subagent surface must stay invisible to them. Their tracked work goes
-    // through Cindy Session tasks instead.
     const localSubagentSupported = Boolean(
       !reviewMode
       && !remote
-      && !opts.botRuntimeProfile
       && this.deps.spawnPiSubagentRunner,
     );
     if (localSubagentSupported) {

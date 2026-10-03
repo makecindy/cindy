@@ -185,6 +185,18 @@ function cloudflareGatewayHeaders(
   };
 }
 
+/**
+ * Pi adapters read a missing level as "thinking off" (Z.AI sends `thinking.type=disabled`).
+ * Models whose catalog marks `off` unsupported reject that: GLM-5.3 answers 400/1210 (#5402).
+ * For those, a request without an effort uses the declared default instead.
+ */
+function nativeThinkingLevel(requested: unknown, row: ProviderModelRecord, model: Model<Api>): ThinkingLevel | undefined {
+  const efforts = row.efforts ?? [];
+  const effort = reconcileOutboundReasoningEffort(requested, efforts);
+  if (effort || !model.reasoning || model.thinkingLevelMap?.off !== null) return effort as ThinkingLevel | undefined;
+  return reconcileOutboundReasoningEffort(row.defaultEffort, efforts) as ThinkingLevel | undefined;
+}
+
 function nativeInvocationModel(options: PiProviderTransportOptions, modelId: string): Model<Api> {
   const row = options.row;
   const destination = options.upstream ?? row.upstream;
@@ -307,7 +319,7 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
         ['openai-responses', 'azure-openai-responses', 'openai-completions'].includes(model.api)
         ? { onPayload: (payload: unknown) => payload && typeof payload === 'object' && !Array.isArray(payload)
           ? { ...payload, service_tier: 'priority' } : payload } : {}),
-      reasoning: reconcileOutboundReasoningEffort(request.reasoning?.effort, options.row.efforts ?? []) as ThinkingLevel | undefined,
+      reasoning: nativeThinkingLevel(request.reasoning?.effort, options.row, model),
       maxTokens: typeof request.max_output_tokens === 'number' ? Math.min(request.max_output_tokens, model.maxTokens) : model.maxTokens,
     });
     const iterator = events[Symbol.asyncIterator]();

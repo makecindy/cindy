@@ -10,8 +10,6 @@
   },
   "renderer": {
     "moreActions": "更多訊息操作",
-    "previousQuestionJump": "跳到上一條提問：{{preview}}",
-    "noPreview": "無預覽",
     "newMessagesToBottom": "有新訊息，跳到底部",
     "jumpToBottom": "跳到底部",
     "openForkOrigin": "開啟分叉來源訊息",

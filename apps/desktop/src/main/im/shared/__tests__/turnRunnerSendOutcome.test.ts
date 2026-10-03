@@ -887,7 +887,12 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         kind: 'permission',
         behavior: 'allow',
       });
-      expect(handleTextInteraction).toHaveBeenCalledWith('ou_user', request, {
+      expect(handleTextInteraction).toHaveBeenCalledWith('ou_user', expect.objectContaining({
+        ...request,
+        description: expect.stringContaining('来源：'),
+        metadata: expect.objectContaining({ imSourceDescription: expect.stringContaining('来源：') }),
+      }), {
+        sharedPermission: expect.objectContaining({ decide: expect.any(Function) }),
         timeoutMs: 12_345,
       });
       expect(states).toEqual(['waiting', 'resolved']);

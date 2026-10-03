@@ -403,6 +403,52 @@ describe("remote desktop viewport", () => {
     expect(v.dataChannel.send).toHaveBeenCalledOnce();
     expect(v.messages.filter((m) => m.type === 'inputOverflow')).toHaveLength(1);
   });
+  it("carries control requests over the live data channel and relays the reply", () => {
+    const v = viewer(true);
+    v.send({ type: "init", epoch: "one", width: 1920, height: 1080 });
+    v.playVideo();
+    const request = { op: "hostMute", lease: "one", enabled: true };
+    v.send({ type: "channelRequest", id: "r1", request });
+    expect(JSON.parse(v.dataChannel.send.mock.calls.at(-1)![0])).toEqual({
+      type: "request",
+      id: "r1",
+      request,
+    });
+    expect(
+      v.messages.findLast((m) => m.type === "channelRequestState"),
+    ).toMatchObject({
+      id: "r1",
+      sent: true,
+      epoch: "one",
+    });
+    (v.dataChannel as any).onmessage({
+      data: JSON.stringify({
+        type: "reply",
+        id: "r1",
+        ok: true,
+        result: { ok: true },
+      }),
+    });
+    expect(v.messages.findLast((m) => m.type === "channelReply")).toMatchObject(
+      {
+        id: "r1",
+        ok: true,
+        result: { ok: true },
+        epoch: "one",
+      },
+    );
+    // A congested channel does not take it: the parent uses the relay instead.
+    v.dataChannel.bufferedAmount = 16384;
+    const sends = v.dataChannel.send.mock.calls.length;
+    v.send({ type: "channelRequest", id: "r2", request });
+    expect(v.dataChannel.send.mock.calls).toHaveLength(sends);
+    expect(
+      v.messages.findLast((m) => m.type === "channelRequestState"),
+    ).toMatchObject({
+      id: "r2",
+      sent: false,
+    });
+  });
   it('does not replay a batch through the relay if a data-channel send throws', () => {
     const v = viewer(true);
     v.send({ type: 'init', epoch: 'one', width: 1920, height: 1080 });
