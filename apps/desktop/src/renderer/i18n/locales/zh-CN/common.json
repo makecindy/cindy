@@ -8439,7 +8439,7 @@
         "invalidInvite": "邀请无效、已使用或已过期，请获取新的邀请链接。",
         "notAllowed": "当前账号没有权限，请检查账号或联系群主。",
         "loginRequired": "请先登录当前账号，再重试。",
-        "requestFailed": "聊天服务暂时无法连接，请稍后重试。",
+        "requestFailed": "群聊服务暂时无法连接，请稍后重试。",
         "copyFailed": "复制失败，请选中链接手动复制。",
         "createDescription": "伙伴可以选，也可以先建群，再邀请朋友加入。",
         "settings": {
@@ -8477,7 +8477,7 @@
           "leave": "退出群",
           "leaveHint": "你和你带来的伙伴将退出群。群主需要先转让身份。",
           "archive": "归档群",
-          "archiveHint": "归档后保留聊天记录，停止新消息和伙伴执行。",
+          "archiveHint": "归档后保留群聊记录，停止新消息和伙伴执行。",
           "confirm": "确认",
           "lastOwner": "请先将群主转让给其他成员，再退出或移除当前群主。",
           "conflict": "群设置已被其他成员更新，请刷新后重试。",
