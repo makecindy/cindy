@@ -332,6 +332,7 @@ export class Scheduler extends EventEmitter {
   // 被 silenceInflightRuns 标记为"本轮静默"的 runId。仅内存(进程重启丢失 →
   // 通知照发,fail-safe);fireOne/runNow 终态落库后清理对应条目。
   private readonly silencedRuns = new Set<string>();
+  private readonly reportedFailures = new Map<string, { code: string; message: string }>();
   // sessionId → 当前 in-flight runId 的反向映射。让 MCP 静默工具无需 agent 传 runId,
   // 直接按"是谁在调我"(调用方 session)定位本轮 run —— 把易漂移的 LLM 传参收回代码。
   //   sessionIdToRunId: sessionId → runId(正向,resolveInflightRunForSession 读)
@@ -548,6 +549,7 @@ export class Scheduler extends EventEmitter {
     // 第一次 begin 的不变量断言把它当悬挂登记抛错(codex review P1)。语义上也与
     // silenceRun 文档一致 —— 标记丢失的安全方向就是照常通知。
     this.silencedRuns.clear();
+    this.reportedFailures.clear();
     this.activeSchedules.clear();
     this.started = false;
     this.emitRuntimeState();
@@ -769,6 +771,7 @@ export class Scheduler extends EventEmitter {
     let sessionId: string | undefined;
     let resultText: string | undefined;
     let runError: string | undefined;
+    let reportedFailure: { code: string; message: string } | undefined;
     let deferred = false;
     let deferRetryMs: number | undefined;
     let skipped = false;
@@ -802,6 +805,7 @@ export class Scheduler extends EventEmitter {
       this.logger?.warn?.('schedule fire failed', { scheduleId: schedule.id, runId, error: runError });
     } finally {
       knownSessionId = this.resolveTerminalSessionId(runId, sessionId, schedule.targetSessionId);
+      reportedFailure = this.reportedFailures.get(runId);
       this.unregisterInflight(schedule.id, runId);
       this.updateInflightAttempt(runId, 'finalizing');
     }
@@ -890,14 +894,16 @@ export class Scheduler extends EventEmitter {
           ...(knownSessionId ? { sessionId: knownSessionId } : {}),
         });
         this.emitFailed(schedule.id, runId, 'aborted', knownSessionId);
-      } else if (runError !== undefined) {
+      } else if (runError !== undefined || reportedFailure) {
+        const errorMsg = this.describeReportedFailure(reportedFailure, runError);
         await this.storage.updateRun(runId, {
           status: 'failed',
           finishedAt,
-          errorMsg: runError,
+          errorMsg,
+          ...(reportedFailure ? { failureCode: reportedFailure.code } : {}),
           ...(knownSessionId ? { sessionId: knownSessionId } : {}),
         });
-        this.emitFailed(schedule.id, runId, runError, knownSessionId);
+        this.emitFailed(schedule.id, runId, errorMsg, knownSessionId);
       } else if (skipped) {
         // 前置检查拦截(preRunHook exit 2):run 记录保留为 'skipped'(与 deferred 的
         // "撤销不留痕"不同——跳过是本轮的最终结果,用户要能在历史里看到"这几轮是
@@ -1077,6 +1083,7 @@ export class Scheduler extends EventEmitter {
 
     let finishedAt = firedAt;
     let runError: string | undefined;
+    let reportedFailure: { code: string; message: string } | undefined;
     let runSessionId: string | undefined;
     let runResultText: string | undefined;
     let deferred = false;
@@ -1113,6 +1120,7 @@ export class Scheduler extends EventEmitter {
       runError = err instanceof Error ? err.message : String(err);
     } finally {
       knownSessionId = this.resolveTerminalSessionId(runId, runSessionId, schedule.targetSessionId);
+      reportedFailure = this.reportedFailures.get(runId);
       this.unregisterInflight(schedule.id, runId);
       this.updateInflightAttempt(runId, 'finalizing');
     }
@@ -1185,14 +1193,16 @@ export class Scheduler extends EventEmitter {
         ...(knownSessionId ? { sessionId: knownSessionId } : {}),
       });
       this.emitFailed(schedule.id, runId, 'aborted', knownSessionId);
-    } else if (runError !== undefined) {
+    } else if (runError !== undefined || reportedFailure) {
+      const errorMsg = this.describeReportedFailure(reportedFailure, runError);
       await this.storage.updateRun(runId, {
         status: 'failed',
         finishedAt,
-        errorMsg: runError,
+        errorMsg,
+        ...(reportedFailure ? { failureCode: reportedFailure.code } : {}),
         ...(knownSessionId ? { sessionId: knownSessionId } : {}),
       });
-      this.emitFailed(schedule.id, runId, runError, knownSessionId);
+      this.emitFailed(schedule.id, runId, errorMsg, knownSessionId);
     } else if (skipped) {
       // 前置检查拦截:语义同 fireOne 的 skipped 分支(run 保留为 'skipped'、生而
       // 已读、不通知)。手动触发被 hook 拦下同样留痕,让用户点"立即运行"后能看到
@@ -1732,6 +1742,30 @@ export class Scheduler extends EventEmitter {
     return true;
   }
 
+  /** Record a business failure for this session's accepted, in-flight turn only. */
+  reportFailureForSession(sessionId: string, report: { code: string; message: string }): boolean {
+    const runId = this.resolveInflightRunForSession(sessionId);
+    if (!runId || !this.inflightControllers.has(runId)) return false;
+    this.reportedFailures.set(runId, report);
+    this.silencedRuns.delete(runId);
+    return true;
+  }
+
+  getReportedFailure(runId: string): { code: string; message: string } | undefined {
+    return this.reportedFailures.get(runId);
+  }
+
+  private describeReportedFailure(
+    report: { code: string; message: string } | undefined,
+    runtimeError: string | undefined,
+  ): string {
+    if (!report) return runtimeError ?? 'unknown failure';
+    const businessError = `${report.code}: ${report.message}`;
+    return runtimeError && !runtimeError.startsWith(businessError)
+      ? `${businessError}; runtime error: ${runtimeError}`
+      : runtimeError ?? businessError;
+  }
+
   /**
    * 该 run 是否已被卡死守卫强制收口(runner 在投通知前查询)。
    *
@@ -2163,6 +2197,7 @@ export class Scheduler extends EventEmitter {
   /** 清理一次 fire 的 controller(fireOne/runNow 的 finally 调用,确保不泄漏)。 */
   private unregisterInflight(scheduleId: string, runId: string): void {
     this.inflightControllers.delete(runId);
+    this.reportedFailures.delete(runId);
     const set = this.inflightByschedule.get(scheduleId);
     if (set) {
       set.delete(runId);

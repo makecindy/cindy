@@ -1530,6 +1530,7 @@ export const scheduleRuns = sqliteTable(
       enum: ['running', 'success', 'failed', 'aborted', 'interrupted', 'skipped'],
     }).notNull(),
     errorMsg: text('error_msg'),
+    failureCode: text('failure_code'),
     /** 单次 run 的真实 API 账单费用；与订阅估值严格分栏。 */
     costUsd: real('cost_usd').notNull().default(0),
     /** 单次 run 的订阅 token 估算价值，不计入真实账单。 */

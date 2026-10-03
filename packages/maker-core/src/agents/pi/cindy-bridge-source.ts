@@ -2534,7 +2534,7 @@ const CINDY_DIRECT_BOT_TOOLS = new Set([
   CINDY_LIST_AGENTS_TOOL,
   CINDY_CREATE_TEAMMATE_TOOL,
   'routine_list', 'routine_save', 'routine_sources',
-  'routine_history', 'routine_delete', 'routine_run_now', 'schedule_notify_current_run', 'schedule_set_pre_run_hook',
+  'routine_history', 'routine_delete', 'routine_run_now', 'schedule_notify_current_run', 'schedule_fail_current_run', 'schedule_set_pre_run_hook',
 ]);
 
 interface ConnectedMcpTool {
@@ -3355,6 +3355,10 @@ class CindyMcpGateway {
     };
     const routineTools = [
       { name: 'schedule_notify_current_run', description: 'Request one final report from the current silent automation run when there is a new actionable result or an explicit reminder. No run ID needed.', properties: {}, required: [] },
+      { name: 'schedule_fail_current_run', description: 'Report a business failure for this session’s current automation run. No run ID accepted.', properties: {
+        code: { type: 'string', pattern: '^[A-Z][A-Z0-9_]{1,63}$' },
+        message: { type: 'string', minLength: 1, maxLength: 500 },
+      }, required: ['code', 'message'] },
       { name: 'schedule_set_pre_run_hook', description: 'Install and immediately test a Node ESM pre-run check using the existing host installer. exit 0 wakes the model, exit 2 skips it, other errors fail visibly. Attach returned command with routine_save.preRunHook. Only invoke when authorized to install and test the check.', properties: {
         script: { type: 'string', description: 'Node ESM source; output a concise change summary. Use CINDY_PRECHECK_OK only after a complete successful check.' },
         scheduleName: { type: 'string' },
