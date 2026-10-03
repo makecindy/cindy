@@ -22,6 +22,10 @@ describe('auth login-flow reset', () => {
     resolve(process.cwd(), 'src/main/hook-control/ipc.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
+  const bootstrapSource = readFileSync(
+    resolve(process.cwd(), 'src/main/bootstrap-electron.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
 
   it('clears renderer state, provider cache, and private tickets whenever auth is cleared', () => {
     const resetStart = source.indexOf('function resetLoginFlowState(): void {');
@@ -681,9 +685,9 @@ describe('auth login-flow reset', () => {
       refreshCommitStart,
     );
     const refreshCommitBody = source.slice(refreshCommitStart, refreshCommitEnd);
-    expect(refreshCommitBody).toContain("typeof vault.signedOutAt !== 'number'");
-    expect(refreshCommitBody).toContain('!loggedOutAccountKeySet(vault).has(key)');
-    expect(refreshCommitBody.indexOf('!loggedOutAccountKeySet(vault).has(key)')).toBeGreaterThan(
+    expect(refreshCommitBody).toContain("typeof vault.signedOutAt === 'number'");
+    expect(refreshCommitBody).toContain('loggedOutAccountKeySet(vault).has(key)');
+    expect(refreshCommitBody.indexOf('loggedOutAccountKeySet(vault).has(key)')).toBeGreaterThan(
       refreshCommitBody.indexOf('options.allowUnclaimedVault === true'),
     );
 
@@ -829,6 +833,7 @@ describe('auth login-flow reset', () => {
     expect(runtimePolicyGuard).toBeGreaterThan(-1);
     expect(runtimeRealmActivation).toBeGreaterThan(runtimePolicyGuard);
     expect(refreshBody).toContain('await commitDesktopRefreshCredentials(');
+    expect(refreshBody).toContain('allowUnclaimedVault: true');
     expect(refreshBody).toContain(
       "await expireRuntimeAuth(currentUser.id, 'replaced-elsewhere', {",
     );
@@ -941,8 +946,8 @@ describe('auth login-flow reset', () => {
     const helperBody = source.slice(helperStart, helperEnd);
     expect(helperBody).toContain('vault.activeAccountKey === key');
     expect(helperBody).toContain('options.validateBeforeWrite?.()');
-    expect(helperBody).toContain('canClaimUninitializedVault');
-    expect(helperBody).toContain('Object.keys(vault.resources).length === 0');
+    expect(helperBody).toContain('doesRuntimeRefreshOwnActiveSession');
+    expect(helperBody).toContain('vaultResourceCount: Object.keys(vault.resources).length');
     expect(helperBody).toContain('readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY)');
     expect(helperBody).toContain('markActive: stillOwnsActiveSession');
     expect(helperBody).toContain("if (commit === 'active') {");
@@ -978,7 +983,9 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).toContain('const authRealmChanged = refreshRealm !== activeAuthRealm;');
     expect(refreshBody).toContain('await commitDesktopRefreshCredentials(');
     expect(refreshBody).toContain('activeAuthRealm = refreshRealm;');
-    expect(refreshBody.match(/commitCloudAppSession\(currentUser.id, authRealmChanged\);/g)).toHaveLength(2);
+    expect(
+      refreshBody.match(/commitCloudAppSession\(currentUser.id, authRealmChanged\);/g),
+    ).toHaveLength(2);
     expect(refreshBody).toContain(
       'const membershipKindChanged = previousMembershipKind !== nextUser.membershipKind;',
     );
@@ -1000,9 +1007,28 @@ describe('auth login-flow reset', () => {
     const helperStart = source.indexOf('async function expireRuntimeAuth(');
     const helperEnd = source.indexOf('\n}\n\n// ── Public API', helperStart);
     const helperBody = source.slice(helperStart, helperEnd);
-    expect(helperBody).toContain('clearAuth({ notify: false,');
-    expect(helperBody).toContain('await withAccountFreeOwnerCommit({');
-    expect(helperBody).toContain('authAlreadyCleared: true');
+    expect(helperBody).toContain('await runGuardedRuntimeAuthExpiry({');
+    expect(helperBody).toContain('const expiryEpoch = authStateEpoch;');
+    expect(helperBody).toContain('validateBeforeWrite: assertExpiryStillCurrent');
+    expect(helperBody).toContain('isPersistedCredentialCurrent: () =>');
+    expect(helperBody).toContain('isPersistedRuntimeExpiryGenerationCurrent({');
+    expect(helperBody).toContain("if (outcome === 'superseded') return;");
+    expect(helperBody).toContain("outcome === 'stale-credential-after-teardown'");
+    expect(helperBody).toContain("outcome === 'retry-after-teardown'");
+    expect(helperBody).toContain('onTeardownStarted: markTeardownStarted');
+    expect(helperBody).toContain("reason: 'stale-runtime-expiry'");
+    expect(helperBody).toContain(
+      'failed to restore retained auth runtime after stale expiry teardown',
+    );
+    expect(helperBody).toContain('notifyRenderer();');
+    expect(helperBody).toContain('notifyAuthListeners();');
+    expect(helperBody).toContain('preservePersistedRefreshToken: true');
+    expect(helperBody).toContain('withAccountFreeOwnerCommit({');
+    expect(helperBody).toContain('validateBeforeCommit,');
+    expect(helperBody).toContain('markPassiveLocalSignOut: true');
+    expect(helperBody).toContain('onAuthCleared: markSelfCleared');
+    expect(helperBody).toContain('if (shouldClear) expiryClearedOnFailure = true;');
+    expect(helperBody).toContain('if (expiryCommitted || expiryClearedOnFailure) {');
     expect(helperBody).toContain('notifySessionExpired(reason);');
 
     const ownerCommitStart = source.indexOf('async function withAccountFreeOwnerCommit(');
@@ -1015,15 +1041,59 @@ describe('auth login-flow reset', () => {
     expect(ownerCommitBody).toContain('notifyRendererAuthBoundaryPending();');
     expect(ownerCommitBody).toContain('await accountSwitchTeardown');
     expect(ownerCommitBody).toContain('await authSessionTeardown(opts.reason);');
+    expect(ownerCommitBody.match(/opts\.validateBeforeCommit\(\)/g)).toHaveLength(3);
     expect(ownerCommitBody).toContain('notifyAuthListeners();');
+
+    const restoreStart = bootstrapSource.indexOf(
+      'async function restoreRetainedAuthAccountRuntime(',
+    );
+    const restoreEnd = bootstrapSource.indexOf(
+      '\n}\n\nauthManager.setStableOwnerPostCommitTask',
+      restoreStart,
+    );
+    const restoreBody = bootstrapSource.slice(restoreStart, restoreEnd);
+    expect(bootstrapSource).toContain(
+      'authManager.setAuthSessionRestore(restoreRetainedAuthAccountRuntime);',
+    );
+    expect(restoreBody).toContain('if (accountBoundaryAbortedMidTeardown === null) return;');
+    expect(restoreBody).toContain('const releaseBoundary = beginAppSessionBoundary();');
+    expect(restoreBody).toContain('await withGhostSkillProjectionOwnerCommit({');
+    expect(restoreBody).toContain('previousOwnerId: input.ownerId,');
+    expect(restoreBody).toContain('nextOwnerId: input.ownerId,');
+    expect(restoreBody).toContain(
+      'await teardownAuthAccountBoundary(`${input.reason}-complete-teardown`);',
+    );
+    expect(restoreBody).toContain('await ensureRegisteredLocalDbOwnerReady(input.ownerId);');
+    expect(restoreBody.indexOf('await teardownAuthAccountBoundary(')).toBeLessThan(
+      restoreBody.indexOf('await ensureRegisteredLocalDbOwnerReady(input.ownerId);'),
+    );
+    expect(restoreBody).toContain('await runBootstrapStableOwnerPostCommitTask({');
+    expect(restoreBody.indexOf('await withGhostSkillProjectionOwnerCommit({')).toBeLessThan(
+      restoreBody.indexOf('await runBootstrapStableOwnerPostCommitTask({'),
+    );
 
     const refreshStart = source.indexOf('export async function refresh(): Promise<boolean> {');
     const refreshEnd = source.indexOf('\n}\n\nexport async function logout()', refreshStart);
     const refreshBody = source.slice(refreshStart, refreshEnd);
     expect(refreshBody).toContain(
-      'await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code));',
+      'await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code), {',
     );
+    expect(refreshBody).toContain('rejectedRealm: refreshRealm');
+    expect(refreshBody).toContain('rejectedRefreshTokens: rejectedTokens');
     expect(refreshBody).not.toContain('clearAuth({ notify: false });');
+  });
+
+  it('compare-and-deletes only the rejected runtime credential generation', () => {
+    const helperStart = source.indexOf('async function removeRejectedRuntimeCredentials(');
+    const helperEnd = source.indexOf('\n}\n\nfunction bindResourcePairToSavedAccount', helperStart);
+    const helperBody = source.slice(helperStart, helperEnd);
+
+    expect(helperBody).toContain('removeRejectedRuntimeCredentialCopies({');
+    expect(helperBody).toContain('mutateVault: (operation) => mutateAuthAccountVault(operation)');
+    expect(helperBody).toContain('serializeSession: serializeAuthSessionRecord');
+    expect(helperBody).toContain('removeSafeIfUnchanged(AUTH_SESSION_KEY');
+    expect(helperBody).toContain('removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY');
+    expect(helperBody).not.toContain('removeSafe(AUTH_SESSION_KEY)');
   });
 
   it('reserves local namespaces before publishing a cloud owner', () => {
@@ -1162,7 +1232,9 @@ describe('auth login-flow reset', () => {
     const completeEnd = source.indexOf('\n}\n\nasync function acceptLoginOutcome', completeStart);
     const completeBody = source.slice(completeStart, completeEnd);
     const acceptedUser = completeBody.indexOf('currentUser = nextUser;');
-    const ownerCommit = completeBody.indexOf('commitCloudAppSession(currentUser.id, authRealmChanged);');
+    const ownerCommit = completeBody.indexOf(
+      'commitCloudAppSession(currentUser.id, authRealmChanged);',
+    );
     const clearPreviousFlag = completeBody.indexOf('canaryFlagStore.clear();', acceptedUser);
     expect(acceptedUser).toBeGreaterThan(-1);
     expect(clearPreviousFlag).toBeGreaterThan(acceptedUser);

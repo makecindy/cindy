@@ -147,9 +147,12 @@ describe('Plugin Market IPC error boundary', () => {
     expect(ghostPluginPageSource).toContain('onUpdateConsentHoldsChanged');
 
     const ownerTaskStart = bootstrapSource.indexOf(
-      'authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId }) => {',
+      'async function runBootstrapStableOwnerPostCommitTask({',
     );
-    const ownerTaskEnd = bootstrapSource.indexOf('\n});', ownerTaskStart);
+    const ownerTaskEnd = bootstrapSource.indexOf(
+      '\n}\n\n/**\n * Rebuild every owner-scoped runtime',
+      ownerTaskStart,
+    );
     const ownerTaskBody = bootstrapSource.slice(ownerTaskStart, ownerTaskEnd);
     expect(ownerTaskStart).toBeGreaterThan(-1);
     expect(ownerTaskBody).toContain(
