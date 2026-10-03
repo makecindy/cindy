@@ -3677,8 +3677,22 @@ ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
 export default async function cindyBridge(pi: any) {
   installTextOnlyTurnPolicy(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi);
-  const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined
-    : JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'settings.json'), 'utf8'));
+  // 本桥是 Cindy 全部控制层(权限门 / MCP 网关 / 子代理路由 / text-only 策略)的
+  // 载体。pinned Pi 0.85.1 的扩展上下文没有 getSettings, 这条同步读在每次会话
+  // 启动都会执行 —— settings.json 缺失 / 损坏 / PI_CODING_AGENT_DIR 未设时抛错
+  // 会炸掉整个桥, 而它的用途只是给 refresh 收据附带一个 compaction 快照。
+  // 容错降级为 undefined: handler 侧 ?? {} 回落 Pi 内建 16384 默认, 与
+  // resolvePiNativeReserve 对缺键的处理一致。
+  let initialNativeSettings: { compaction?: unknown } | undefined;
+  if (typeof pi.getSettings !== 'function') {
+    try {
+      initialNativeSettings = JSON.parse(
+        readFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'settings.json'), 'utf8'),
+      );
+    } catch {
+      initialNativeSettings = undefined;
+    }
+  }
   pi.registerCommand('cindy-native-provider-refresh', {
     description: 'Cindy internal native provider refresh',
     handler: async (args: string, ctx: any) => {
@@ -3703,7 +3717,7 @@ export default async function cindyBridge(pi: any) {
           // getSettings returns a copy. Never reach into Pi's private session or
           // pretend a settings.json rewrite changed the live SettingsManager.
           const settings = typeof pi.getSettings === 'function' ? pi.getSettings() : initialNativeSettings;
-          runtimeSettings = { version: piCodingAgent.VERSION, compaction: settings.compaction ?? {} };
+          runtimeSettings = { version: piCodingAgent.VERSION, compaction: settings?.compaction ?? {} };
         }
       } catch {
         code = mutationStarted ? 'APPLY_FAILED' : 'INVALID_PAYLOAD';
