@@ -334,6 +334,10 @@ function SkillUsagePanel({
           label={t('skillhub.detail.usageDiagnosisCodex')}
           value={t('skillhub.detail.usageCount', { count: breakdown.codex })}
         />
+        <SkillUsageTooltipCount
+          label={t('skillhub.detail.usageDiagnosisPi')}
+          value={t('skillhub.detail.usageCount', { count: breakdown.pi })}
+        />
       </div>
     </SkillUsageTooltipFrame>
   );
@@ -465,7 +469,7 @@ function SkillUsagePanel({
               tooltip={formatAgentBreakdownTooltip(
                 t('skillhub.detail.usageCurrentCount'),
                 t('skillhub.detail.usageCount', { count: summary.currentDocumentVersionUseCount }),
-                summary.currentDocumentVersion?.agentBreakdown ?? { claude: 0, codex: 0 },
+                summary.currentDocumentVersion?.agentBreakdown ?? { claude: 0, codex: 0, pi: 0 },
               )}
             />
             <SkillUsageStat

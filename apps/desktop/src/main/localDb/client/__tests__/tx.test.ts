@@ -3357,25 +3357,49 @@ describe('db worker tx handlers', () => {
 
       await client.tx('skillUsage.applyMutation', {
         kind: 'persist',
-        source: source('current.jsonl', '6', 1),
-        exposures: [exposure('first', 'current.jsonl', '6', 200)],
+        source: source('obsolete.jsonl', '6', 1),
+        exposures: [exposure('obsolete', 'obsolete.jsonl', '6', 200)],
+      });
+      await client.exec(`INSERT OR REPLACE INTO migration_meta (key, value) VALUES
+        ('skill_usage_analyzer_version', '6'), ('skill_usage_last_success_at', '123'), ('unrelated_test_key', 'keep')`);
+      await client.exec(`CREATE TRIGGER prevent_test_skill_usage_clear BEFORE DELETE ON skill_usage_sources
+        BEGIN SELECT RAISE(ABORT, 'blocked test reset'); END`);
+      await expect(client.tx('skillUsage.applyMutation', { kind: 'prepareCache', analyzerVersion: '7' })).rejects.toThrow('blocked test reset');
+      await expect(client.query('SELECT id FROM skill_usage_exposures')).resolves.toEqual([{ id: '6:obsolete' }]);
+      await expect(client.queryOne("SELECT value FROM migration_meta WHERE key = 'skill_usage_last_success_at'"))
+        .resolves.toEqual({ value: '123' });
+      await expect(client.queryOne("SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'"))
+        .resolves.toEqual({ value: '6' });
+      await client.exec('DROP TRIGGER prevent_test_skill_usage_clear');
+      await client.tx('skillUsage.applyMutation', { kind: 'prepareCache', analyzerVersion: '7' });
+      await expect(client.query('SELECT id FROM skill_usage_exposures')).resolves.toEqual([]);
+      await expect(client.query('SELECT raw_file_path FROM skill_usage_sources')).resolves.toEqual([]);
+      await expect(client.queryOne("SELECT value FROM migration_meta WHERE key = 'skill_usage_last_success_at'"))
+        .resolves.toBeUndefined();
+      await expect(client.queryOne("SELECT value FROM migration_meta WHERE key = 'unrelated_test_key'"))
+        .resolves.toEqual({ value: 'keep' });
+
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: source('current.jsonl', '7', 1),
+        exposures: [exposure('first', 'current.jsonl', '7', 200)],
       });
       await client.tx('skillUsage.applyMutation', {
         kind: 'persist',
-        source: source('current.jsonl', '6', 2),
-        exposures: [exposure('replacement', 'current.jsonl', '6', 201)],
+        source: source('current.jsonl', '7', 2),
+        exposures: [exposure('replacement', 'current.jsonl', '7', 201)],
       });
       await expect(client.query<{ id: string }>(
         'SELECT id FROM skill_usage_exposures WHERE raw_file_path = ?',
         ['current.jsonl'],
-      )).resolves.toEqual([{ id: '6:replacement' }]);
+      )).resolves.toEqual([{ id: '7:replacement' }]);
 
       await expect(client.tx('skillUsage.applyMutation', {
         kind: 'persist',
-        source: source('current.jsonl', '6', 999),
+        source: source('current.jsonl', '7', 999),
         exposures: [
-          exposure('duplicate', 'current.jsonl', '6', 300),
-          exposure('duplicate', 'current.jsonl', '6', 301),
+          exposure('duplicate', 'current.jsonl', '7', 300),
+          exposure('duplicate', 'current.jsonl', '7', 301),
         ],
       })).rejects.toThrow();
       await expect(client.queryOne(
@@ -3385,16 +3409,16 @@ describe('db worker tx handlers', () => {
       await expect(client.query<{ id: string }>(
         'SELECT id FROM skill_usage_exposures WHERE raw_file_path = ?',
         ['current.jsonl'],
-      )).resolves.toEqual([{ id: '6:replacement' }]);
+      )).resolves.toEqual([{ id: '7:replacement' }]);
 
       await client.tx('skillUsage.applyMutation', {
         kind: 'persist',
-        source: source('old.jsonl', '6', 10),
-        exposures: [exposure('old', 'old.jsonl', '6', 10)],
+        source: source('old.jsonl', '7', 10),
+        exposures: [exposure('old', 'old.jsonl', '7', 10)],
       });
       await client.tx('skillUsage.applyMutation', {
         kind: 'deleteBefore',
-        analyzerVersion: '6',
+        analyzerVersion: '7',
         recentSince: 100,
       });
       await expect(client.queryOne(
@@ -3402,18 +3426,23 @@ describe('db worker tx handlers', () => {
         ['old.jsonl'],
       )).resolves.toBeUndefined();
 
-      await client.tx('skillUsage.applyMutation', {
-        kind: 'persist',
-        source: source('previous.jsonl', '5', 200),
-        exposures: [exposure('previous', 'previous.jsonl', '5', 200)],
-      });
-      await client.tx('skillUsage.applyMutation', { kind: 'promote', analyzerVersion: '6' });
+      await client.tx('skillUsage.applyMutation', { kind: 'prepareCache', analyzerVersion: '7' });
       await expect(client.queryOne(
         "SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'",
-      )).resolves.toEqual({ value: '6' });
-      await expect(client.queryOne(
-        "SELECT id FROM skill_usage_exposures WHERE analyzer_version = '5'",
-      )).resolves.toBeUndefined();
+      )).resolves.toEqual({ value: '7' });
+      await expect(client.query('SELECT id FROM skill_usage_exposures')).resolves.toEqual([{ id: '7:replacement' }]);
+      await client.tx('skillUsage.applyMutation', {
+        kind: 'persist',
+        source: { ...source('archived.jsonl', '7', 3), sessionId: 'session-current.jsonl' },
+        exposures: [{ ...exposure('replacement', 'archived.jsonl', '7', 201), sessionId: 'session-current.jsonl' }],
+      });
+      await expect(client.query('SELECT id, raw_file_path FROM skill_usage_exposures')).resolves.toEqual([
+        { id: '7:replacement', raw_file_path: 'archived.jsonl' },
+      ]);
+      await expect(client.queryOne('SELECT raw_file_path FROM skill_usage_sources WHERE raw_file_path = ?', ['current.jsonl']))
+        .resolves.toBeUndefined();
+      await expect(client.queryOne("SELECT value FROM migration_meta WHERE key = 'skill_usage_last_success_at'"))
+        .resolves.toBeUndefined();
     }, { useInlineWorker });
   });
 

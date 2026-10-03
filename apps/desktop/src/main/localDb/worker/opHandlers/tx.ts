@@ -1312,7 +1312,7 @@ function skillUsageApplyMutation(db: Database.Database, args: unknown): void {
         error = NULL
     `);
     const deleteExposure = db.prepare(
-      'DELETE FROM skill_usage_exposures WHERE raw_file_path = ? AND analyzer_version = ?',
+      'DELETE FROM skill_usage_exposures WHERE analyzer_version = ? AND (raw_file_path = ? OR (agent_kind = ? AND session_id = ?))',
     );
     const insertExposure = db.prepare(`
       INSERT INTO skill_usage_exposures (
@@ -1333,7 +1333,11 @@ function skillUsageApplyMutation(db: Database.Database, args: unknown): void {
         source.sizeBytes,
         source.scannedAt,
       );
-      deleteExposure.run(source.rawFilePath, source.analyzerVersion);
+      deleteExposure.run(source.analyzerVersion, source.rawFilePath, source.agentKind, source.sessionId);
+      db.prepare(`DELETE FROM skill_usage_sources WHERE agent_kind = ? AND session_id = ?
+        AND raw_file_path <> ? AND analyzer_version = ?
+        AND NOT EXISTS (SELECT 1 FROM skill_usage_exposures e WHERE e.raw_file_path = skill_usage_sources.raw_file_path)
+      `).run(source.agentKind, source.sessionId, source.rawFilePath, source.analyzerVersion);
       for (const exposure of exposures) {
         insertExposure.run(
           `${source.analyzerVersion}:${exposure.id}`,
@@ -1378,15 +1382,19 @@ function skillUsageApplyMutation(db: Database.Database, args: unknown): void {
     return;
   }
 
-  if (kind === 'promote') {
+  if (kind === 'prepareCache') {
     const analyzerVersion = expectString(payload.analyzerVersion, 'analyzerVersion');
     db.transaction(() => {
+      const currentVersion = db.prepare("SELECT value FROM migration_meta WHERE key = 'skill_usage_analyzer_version'").pluck().get();
+      if (currentVersion === analyzerVersion) return;
+      db.prepare('DELETE FROM skill_usage_exposures').run();
+      db.prepare('DELETE FROM skill_usage_sources').run();
+      db.prepare("DELETE FROM migration_meta WHERE key = 'skill_usage_last_success_at'").run();
       db.prepare(`
         INSERT INTO migration_meta (key, value)
         VALUES ('skill_usage_analyzer_version', ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
       `).run(analyzerVersion);
-      db.prepare('DELETE FROM skill_usage_exposures WHERE analyzer_version <> ?').run(analyzerVersion);
     })();
     return;
   }
