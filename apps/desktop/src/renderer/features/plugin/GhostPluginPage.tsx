@@ -1522,18 +1522,24 @@ export function GhostPluginPage({
   useEffect(() => {
     const id = searchParams.get('retired');
     if (!id) return;
-    if (ghosts.some((ghost) => ghost.manifest.id === id && ghost.retirement)) setSelectedId(id);
+    if (ghosts.some((ghost) => ghost.manifest.id === id && ghost.retirement)) {
+      // The detached sidebar can navigate here while market details are still open/loading.
+      marketDetailRequestRef.current += 1;
+      setMarketDetail(null);
+      setSelectedId(id);
+    }
     const next = new URLSearchParams(searchParams);
     next.delete('retired');
     setSearchParams(next, { replace: true });
   }, [ghosts, searchParams, setSearchParams]);
 
   useEffect(() => {
-    if (!selectedGhost?.retirement?.unread) return;
+    // Market details render first; selecting a hidden notice does not make it read.
+    if (marketDetail || !selectedGhost?.retirement?.unread) return;
     void window.electronAPI.ghosts
       .acknowledgeRetirement(selectedGhost.manifest.id)
       .catch(() => toast.error(t('settings.ghosts.retirement.saveFailed')));
-  }, [selectedGhost?.manifest.id, selectedGhost?.retirement?.unread, t]);
+  }, [marketDetail, selectedGhost?.manifest.id, selectedGhost?.retirement?.unread, t]);
 
   const handleReplaceRetiredFeature = async () => {
     const descriptor =

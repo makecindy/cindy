@@ -16,7 +16,7 @@ function retiredTab(
   );
   if (!descriptor) return undefined;
   const source = availability.installedGhosts.find(
-    (ghost) => ghost.retirement?.id === descriptor.id && ghost.retirement.eligible,
+    (ghost) => ghost.retirement?.id === descriptor.id,
   );
   return source
     ? {

@@ -13,9 +13,12 @@ const affected = {
   retirement: { id: 'embedded-ios-simulator', eligible: true, unread: true },
 } as InstalledGhost;
 describe('sidebar availability', () => {
-  it('projects only affected users old tabs to a generic closable notice', () => {
+  it.each([true, false])('preserves an installed plugin old tab (migration eligible=%s)', (eligible) => {
     const visible = projectAvailableTabs(tabs, 'old', {
-      installedGhosts: [affected],
+      installedGhosts: [{
+        ...affected,
+        retirement: { ...affected.retirement!, eligible, unread: eligible },
+      }],
       subagentsAvailable: true,
     });
     expect(visible.activeTabId).toBe('old');
