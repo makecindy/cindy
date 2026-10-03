@@ -19,8 +19,29 @@ export interface MediaDownloadContext {
   confirm(input: { source: string; reasons: MediaDownloadReason[] }): Promise<boolean>;
 }
 
+export interface MediaDeliveryDiagnostic {
+  stage: 'dns' | 'connect' | 'http' | 'body' | 'storage' | 'validation' | 'ingest' | 'ledger' | 'policy';
+  hostname?: string;
+  httpStatus?: number;
+  networkCode?: string;
+}
+
+export function mediaNetworkErrorCode(error: unknown): string | undefined {
+  const queue: unknown[] = [error];
+  for (let visited = 0; visited < 8 && queue.length; visited++) {
+    const current = queue.shift();
+    if (!current || typeof current !== 'object') continue;
+    const candidate = current as { code?: unknown; cause?: unknown; errors?: unknown[] };
+    if (typeof candidate.code === 'string' && /^(?:E[A-Z0-9_]+|UND_ERR_[A-Z0-9_]+|ERR_[A-Z0-9_]+|CERT_[A-Z0-9_]+|UNABLE_TO_[A-Z0-9_]+|DEPTH_ZERO_[A-Z0-9_]+|SELF_SIGNED_[A-Z0-9_]+|XAI_CDN_DNS_UNAVAILABLE)$/.test(candidate.code) && candidate.code.length <= 64) return candidate.code;
+    if (candidate.cause) queue.push(candidate.cause);
+    if (Array.isArray(candidate.errors)) queue.push(...candidate.errors.slice(0, 3));
+  }
+  return undefined;
+}
+
 export class MediaDownloadError extends Error {
-  constructor(readonly code: string, message: string) {
+  constructor(readonly code: string, message: string, readonly diagnostic?: MediaDeliveryDiagnostic,
+    readonly retryable = code === 'MEDIA_DOWNLOAD_FAILED' || code === 'MEDIA_DOWNLOAD_URL_EXPIRED') {
     super(message);
     this.name = 'MediaDownloadError';
   }
@@ -40,6 +61,9 @@ export async function downloadMediaResult(input: {
   allowedHosts?: string[];
   context?: MediaDownloadContext;
   assertActive(): void;
+  /** 仅 Host Provider 可给出，工具参数不可声明此权限。 */
+  providerDownload?: 'xai-video';
+  maxBytes?: number;
 }): Promise<{ filePath: string; headerMime: string | null; dispose(): Promise<void> }> {
   let url = parseUrl(input.raw);
   const visitedRedirects = new Set([url.href]);
@@ -80,6 +104,10 @@ export async function downloadMediaResult(input: {
 
   for (;;) {
     assertActive();
+    if (input.providerDownload === 'xai-video' && (url.protocol !== 'https:' || url.username || url.password ||
+      url.port || !(url.hostname === 'x.ai' || url.hostname.endsWith('.x.ai')))) {
+      throw new MediaDownloadError('MEDIA_DOWNLOAD_BLOCKED', '视频来源返回了白名单外的下载地址，已保留原结果', { stage: 'policy', hostname: url.hostname }, false);
+    }
     const reasons: MediaDownloadReason[] = [];
     const knownHost = input.allowedHosts?.some((suffix) => {
       const host = suffix.toLowerCase();
@@ -94,7 +122,7 @@ export async function downloadMediaResult(input: {
 
     // The network budget excludes human decisions, but includes every DNS lookup,
     // response and retry. No body or dispatcher is held while showing a card.
-    if (remainingMs <= 0) throw new MediaDownloadError('MEDIA_DOWNLOAD_FAILED', '下载超时，客户端重试未能完成，原生成结果已保留');
+    if (remainingMs <= 0) throw new MediaDownloadError('MEDIA_DOWNLOAD_FAILED', '下载超时，客户端重试未能完成，原生成结果已保留', { stage: 'connect', hostname: url.hostname, networkCode: 'ETIMEDOUT' });
     const target = new URL(url);
     // URL credentials, when explicitly approved, belong only to this exact hop.
     let authorization: string | undefined;
@@ -124,8 +152,10 @@ export async function downloadMediaResult(input: {
     let retryError: MediaDownloadError | undefined;
     let tempDir: string | undefined;
     let result: { filePath: string; headerMime: string | null; dispose(): Promise<void> } | undefined;
+    let stage: MediaDeliveryDiagnostic['stage'] = 'connect';
+    let httpStatus: number | undefined;
     try {
-      const allowPrivateNetwork = approved.has(approvalKey('network'));
+      const allowPrivateNetwork = input.providerDownload === 'xai-video' ? false : approved.has(approvalKey('network'));
       const { response, release } = await guardedOutboundFetch(
         target.href,
         {
@@ -133,8 +163,10 @@ export async function downloadMediaResult(input: {
           ...(authorization ? { headers: { Authorization: authorization } } : {}),
         },
         assertActive,
-        { targetUrl: target.href, allowHttp: url.protocol === 'http:', allowPrivateNetwork },
+        { targetUrl: target.href, allowHttp: url.protocol === 'http:', allowPrivateNetwork,
+          ...(input.providerDownload ? { providerDownload: input.providerDownload } : {}) },
       );
+      stage = 'http'; httpStatus = response.status;
       resetIdleTimeout();
       try {
         assertActive();
@@ -146,22 +178,35 @@ export async function downloadMediaResult(input: {
           if (visitedRedirects.has(redirected.href)) {
             throw new MediaDownloadError('MEDIA_DOWNLOAD_REDIRECT_LOOP', '下载服务返回循环跳转，下载未能完成');
           }
+          if (input.providerDownload === 'xai-video' && visitedRedirects.size >= 2) {
+            throw new MediaDownloadError('MEDIA_DOWNLOAD_REDIRECT_LIMIT', '视频下载超出 Provider 的单次重定向范围，原结果仍保留', { stage: 'policy', hostname: url.hostname, httpStatus }, false);
+          }
           visitedRedirects.add(redirected.href);
           url = redirected;
         } else if (!response.ok) {
-          throw new MediaDownloadError([401, 403, 404, 410].includes(response.status) ? 'MEDIA_DOWNLOAD_URL_EXPIRED' : ([408, 425, 429].includes(response.status) || response.status >= 500) ? 'MEDIA_DOWNLOAD_FAILED' : 'MEDIA_DOWNLOAD_UNAVAILABLE', `下载服务暂不可用（HTTP ${response.status}），生成结果已保留`);
+          // 这些状态只是地址可能失效的线索；只允许刷新原任务，不宣称确定鉴权原因。
+          throw new MediaDownloadError([401, 403, 404, 410].includes(response.status) ? 'MEDIA_DOWNLOAD_URL_EXPIRED' : ([408, 425, 429].includes(response.status) || response.status >= 500) ? 'MEDIA_DOWNLOAD_FAILED' : 'MEDIA_DOWNLOAD_UNAVAILABLE', `下载服务暂不可用（HTTP ${response.status}），生成结果已保留`, { stage, hostname: url.hostname, httpStatus });
         } else {
+          if (input.maxBytes !== undefined && Number(response.headers.get('content-length')) > input.maxBytes) {
+            throw new MediaDownloadError('MEDIA_RESULT_TOO_LARGE', '视频结果超过允许大小，已保留原任务', { stage: 'validation', hostname: url.hostname, httpStatus }, false);
+          }
+          stage = 'storage';
           tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-media-download-'));
           const filePath = path.join(tempDir, 'result');
           const file = await fs.open(filePath, 'wx', 0o600);
           const reader = response.body?.getReader();
+          let bytesRead = 0;
           try {
             while (reader) {
+              stage = 'body';
               const { done, value } = await reader.read();
               if (done) break;
               assertActive();
               resetIdleTimeout();
+              bytesRead += value.byteLength;
+              if (input.maxBytes !== undefined && bytesRead > input.maxBytes) throw new MediaDownloadError('MEDIA_RESULT_TOO_LARGE', '视频结果超过允许大小，已保留原任务', { stage: 'validation', hostname: url.hostname, httpStatus }, false);
               // Await each write: network backpressure keeps memory bounded.
+              stage = 'storage';
               await file.writeFile(value);
             }
           } finally {
@@ -182,12 +227,26 @@ export async function downloadMediaResult(input: {
     } catch (error) {
       result = undefined;
       assertActive();
+      const networkCode = mediaNetworkErrorCode(error);
+      const storageFailure = stage === 'storage' || ['ENOSPC', 'EACCES', 'EPERM', 'EIO', 'EBADF'].includes(networkCode ?? '');
+      const diagnostic: MediaDeliveryDiagnostic = { stage: storageFailure ? 'storage' : networkCode === 'XAI_CDN_DNS_UNAVAILABLE' || networkCode === 'ENOTFOUND' || networkCode === 'EAI_AGAIN' ? 'dns' : stage,
+        hostname: url.hostname, ...(httpStatus !== undefined ? { httpStatus } : {}),
+        ...(networkCode ? { networkCode } : controller.signal.aborted ? { networkCode: 'ETIMEDOUT' } : {}) };
+      if (input.context?.signal?.aborted) throw new MediaDownloadError('MEDIA_DOWNLOAD_CANCELLED', '本次下载已取消，原结果仍保留', diagnostic, false);
+      if (networkCode && /^(?:ERR_TLS_CERT|CERT_|UNABLE_TO_(?:VERIFY|GET_ISSUER)|DEPTH_ZERO_|SELF_SIGNED_)/.test(networkCode)) {
+        throw new MediaDownloadError('MEDIA_DOWNLOAD_TLS_FAILED', '下载目标的 TLS 证书未通过校验，原结果仍保留', diagnostic, false);
+      }
+      if (error instanceof SsrFBlockedError && input.providerDownload === 'xai-video') {
+        throw new MediaDownloadError('MEDIA_DOWNLOAD_BLOCKED', '视频下载目标未通过网络安全校验，原结果仍保留', { stage: 'policy', hostname: url.hostname }, false);
+      }
       if (error instanceof SsrFBlockedError && !approved.has(approvalKey('network'))) {
         decisionNeeded = 'network';
       } else if (error instanceof MediaDownloadError && error.code !== 'MEDIA_DOWNLOAD_FAILED') {
         throw error;
       } else {
-        retryError = new MediaDownloadError('MEDIA_DOWNLOAD_FAILED', '客户端重试后仍未完成下载，原生成结果已保留');
+        if (storageFailure) throw new MediaDownloadError('MEDIA_STORAGE_UNAVAILABLE', '暂时无法保存下载内容，原结果仍保留', diagnostic, false);
+        retryError = error instanceof MediaDownloadError ? new MediaDownloadError(error.code, error.message, error.diagnostic ?? diagnostic, error.retryable)
+          : new MediaDownloadError('MEDIA_DOWNLOAD_FAILED', '客户端重试后仍未完成下载，原生成结果已保留', diagnostic);
       }
     } finally {
       clearTimeout(timeout);

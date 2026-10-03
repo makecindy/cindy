@@ -96,6 +96,7 @@ describe('Grok device authorization', () => {
       access_token: 'private-access',
       refresh_token: 'private-refresh',
     });
+    expect(persisted?.videoSessionId).toMatch(/^[0-9a-f]{48}$/);
     expect(requests[0]?.body.get('client_id')).toBeTruthy();
     expect(requests[1]?.body.get('grant_type')).toBe(
       'urn:ietf:params:oauth:grant-type:device_code',
