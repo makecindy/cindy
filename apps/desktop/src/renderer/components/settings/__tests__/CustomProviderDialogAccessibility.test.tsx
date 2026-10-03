@@ -1816,3 +1816,94 @@ it('saves OpenRouter OAuth connections that leave scopes empty for provider defa
     method: 'oauth', oauth: { scopes: '' },
   });
 });
+
+it('blocks a save that would silently drop a protocol picked on an unconfigured runtime', async () => {
+  // 只在未配置的 runtime 上选了协议、没填基础 URL：保存逻辑过去会整段跳过该 runtime，
+  // 按钮已高亮、保存返回成功、重开却回到默认协议。这类草稿必须报错拦下。
+  const user = userEvent.setup();
+  render(
+    <ProviderConnectionDialog
+      initial={{
+        id: 'command', name: 'command', auth: { method: 'apiKey' },
+        runtimes: { 'claude-code': {
+          baseUrl: 'https://api.commandcode.ai/provider/v1/',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex' }],
+        } },
+      }}
+      focusAgent="codex"
+      onSaved={vi.fn()}
+      onClose={vi.fn()}
+    />,
+  );
+  await waitForInitialDialogFocus();
+  const protocolPills = () =>
+    screen.getAllByRole('button').filter((b) => b.hasAttribute('aria-pressed'));
+  await user.click(protocolPills()[1]!); // OpenAI Chat
+  await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+
+  expect(customProviderMocks.updateCustomProvider).not.toHaveBeenCalled();
+  const error = document.querySelector('[id$="baseUrl-error"]');
+  expect(error?.textContent).toBe('settings.providers.custom.errors.baseUrlRequired');
+  expect(document.activeElement?.id).toBe(error?.id?.replace('-error', ''));
+});
+
+it('still saves when an unconfigured runtime keeps its default protocol', async () => {
+  const user = userEvent.setup();
+  render(
+    <ProviderConnectionDialog
+      initial={{
+        id: 'command', name: 'command', auth: { method: 'apiKey' },
+        runtimes: { 'claude-code': {
+          baseUrl: 'https://api.commandcode.ai/provider/v1/',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex' }],
+        } },
+      }}
+      focusAgent="claude-code"
+      onSaved={vi.fn()}
+      onClose={vi.fn()}
+    />,
+  );
+  await waitForInitialDialogFocus();
+  await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+
+  await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+  expect(Object.keys(customProviderMocks.updateCustomProvider.mock.calls[0][0].runtimes)).toEqual([
+    'claude-code',
+  ]);
+});
+
+it('still lets an endpoint-less runtime be removed by clearing its base URL', async () => {
+  // 清空baseUrl 是移除一个已配置 runtime 的方式。丢弃它的协议是用户意图，不能被上面的
+  // 守卫拦下——两者的分界是该 runtime 打开时有没有端点。
+  const user = userEvent.setup();
+  render(
+    <ProviderConnectionDialog
+      initial={{
+        id: 'two-runtime', name: 'Two runtime', auth: { method: 'apiKey' },
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://a.example.test/v1', models: [{ id: 'm', name: 'M' }],
+          },
+          codex: {
+            baseUrl: 'https://a.example.test/v2',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'm', name: 'M' }],
+          },
+        },
+      }}
+      focusAgent="codex"
+      onSaved={vi.fn()}
+      onClose={vi.fn()}
+    />,
+  );
+  await waitForInitialDialogFocus();
+  await user.clear(screen.getByLabelText('settings.providers.custom.fields.baseUrl'));
+  await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+
+  await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+  expect(Object.keys(customProviderMocks.updateCustomProvider.mock.calls[0][0].runtimes)).toEqual([
+    'claude-code',
+  ]);
+});

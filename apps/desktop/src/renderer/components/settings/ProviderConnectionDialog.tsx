@@ -260,6 +260,24 @@ function emptyRuntime(agent: DialogAgentKind): RuntimeFields {
   };
 }
 
+/**
+ * 这个 runtime 上是否存在「保存时会悄悄丢掉」的协议选择。
+ *
+ * 未填写 baseUrl 的 runtime 会被保存逻辑整段跳过（视为未配置）。对打开时就没有端点的
+ * runtime，跳过等于丢掉用户刚点选的协议——按钮已高亮、保存返回成功、重开却回到默认。
+ * 这种草稿必须报错拦下。
+ *
+ * 但清空 baseUrl 也是用户移除一个已配置 runtime 的方式；此时丢弃是用户的意图，不能拦。
+ * 两者的分界是打开时该 runtime 有没有端点。
+ */
+function runtimeHasUnsavedProtocolChoice(
+  agent: DialogAgentKind,
+  runtime: RuntimeFields,
+  hadConfiguredEndpoint: boolean,
+): boolean {
+  return !hadConfiguredEndpoint && runtime.wireProtocol !== defaultWireFor(agent);
+}
+
 function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, RuntimeFields> {
   const out: Record<DialogAgentKind, RuntimeFields> = {
     'claude-code': emptyRuntime('claude-code'),
@@ -1612,7 +1630,22 @@ export function ProviderConnectionDialog({
     const keys: RuntimeKeys = {};
     for (const a of VISIBLE_AGENTS) {
       const rf = rt[a];
-      if (!rf.baseUrl.trim()) continue; // 该 runtime 未配置
+      if (!rf.baseUrl.trim()) {
+        // 未配置的 runtime 整段跳过。但用户若已在这里选过协议，跳过即静默丢弃该选择；
+        // 要求补全基础 URL，让「改了协议却没保存上」变成一个看得见的错误。
+        if (
+          runtimeHasUnsavedProtocolChoice(
+            a,
+            rf,
+            Boolean(initial?.runtimes[a]?.baseUrl.trim()),
+          )
+        ) {
+          setActiveTab(a);
+          reportFieldError(`${a}:baseUrl`, t('settings.providers.custom.errors.baseUrlRequired'));
+          return;
+        }
+        continue; // 该 runtime 未配置
+      }
       try {
         const u = new URL(rf.baseUrl.trim());
         if (u.protocol !== 'http:' && u.protocol !== 'https:') {
