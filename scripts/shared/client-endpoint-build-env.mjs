@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertMobileManifestBuildEnv } from './mobile-manifest-build-guard.cjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const CLIENT_BUILD_REGIONS = Object.freeze(['cn', 'global', 'dev']);
@@ -160,5 +161,6 @@ export function mobileClientBundleProcessEnv({
   if (bundleEnv.EXPO_PUBLIC_CINDY_AUTH_REGION !== 'dev') {
     delete env.EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL;
   }
+  assertMobileManifestBuildEnv(env, bundleEnv);
   return env;
 }
