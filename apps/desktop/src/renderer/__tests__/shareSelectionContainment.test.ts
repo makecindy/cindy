@@ -31,11 +31,19 @@ describe('分享选择模式的消息布局隔离', () => {
     );
   });
 
-  it('常态消息仍保留 content-visibility 性能优化', () => {
+  it('#5406: 常态消息也保持真实布局，避免 Blink AX 遍历跳过布局的文本', () => {
     const rule = cssRuleBody('.msg-stream-items > *');
 
-    expect(rule).toContain('content-visibility: auto;');
-    expect(rule).toContain('contain-intrinsic-size: auto 240px;');
+    expect(rule).toContain('content-visibility: visible;');
+    expect(rule).toContain('contain-intrinsic-size: none;');
+    // Any later, more specific message-row rule must not restore the unsafe
+    // optimization (including ordinary assistant and nested Bot message rows).
+    globalsCss.walkRules((candidate) => {
+      if (!candidate.selector.includes('.msg-stream-items')) return;
+      candidate.walkDecls('content-visibility', (declaration) => {
+        expect(declaration.value).toBe('visible');
+      });
+    });
   });
 
   it.each([

@@ -2042,6 +2042,27 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   listen(video, "webkitpresentationmodechanged", reportPresentation);
   listen(video, "enterpictureinpicture", reportPresentation);
   listen(video, "leavepictureinpicture", reportPresentation);
+  function applyDisplayGeometry(message) {
+    if (
+      !Number.isInteger(message.width) ||
+      !Number.isInteger(message.height) ||
+      message.width < 320 ||
+      message.height < 320 ||
+      (message.restore !== true &&
+        (message.width > 2560 || message.height > 2560))
+    )
+      return;
+    release();
+    stopPanAnimation();
+    viewerSized = message.restore !== true;
+    zoom = 1;
+    desktopScale = null;
+    fx = fy = 0.5;
+    followRest = null;
+    dw = message.width;
+    dh = message.height;
+    render();
+  }
   function receive(event) {
     let message;
     try {
@@ -2112,28 +2133,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         }
         break;
       case "videoSettings":
-        if (
-          Number.isInteger(message.width) &&
-          Number.isInteger(message.height) &&
-          message.width >= 320 &&
-          message.height >= 320 &&
-          (message.restore === true ||
-            (message.width <= 2560 && message.height <= 2560))
-        ) {
-          release();
-          stopPanAnimation();
-          viewerSized = message.restore !== true;
-          zoom = 1;
-          desktopScale = null;
-          fx = fy = 0.5;
-          followRest = null;
-          dw = message.width;
-          dh = message.height;
-          render();
-        }
+        applyDisplayGeometry(message);
         video.muted = !message.audio;
         retries = 0;
         if (!config.nativeMedia) connect();
+        break;
+      // The host kept the stream across a display change: layout only.
+      case "displayGeometry":
+        applyDisplayGeometry(message);
         break;
       case "keyboard":
         showKeyboard(message.enabled === true);

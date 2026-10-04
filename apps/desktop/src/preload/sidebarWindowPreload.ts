@@ -1,3 +1,4 @@
+import { createAccessibilitySupportBridge } from './accessibilitySupport';
 import { invokeOpenPath } from './openPath';
 import { COPY_PNG_TO_CLIPBOARD_CHANNEL, type CopyPngToClipboardParams } from '../shared/pngClipboard';
 /**
@@ -74,6 +75,7 @@ const fanOutFullscreenChange = (cb: (isFullscreen: boolean) => void): (() => voi
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  accessibilitySupport: createAccessibilitySupportBridge(),
   onWindowHiddenChange: (cb: (hidden: boolean) => void): (() => void) => {
     const off = onPayload('window-hidden-change', cb);
     cb(windowHidden);

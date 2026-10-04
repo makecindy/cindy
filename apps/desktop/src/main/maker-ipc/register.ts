@@ -20349,11 +20349,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { cancelled: true };
   });
 
-  // 查询型:checkComputerDriverUpdate 内部已把所有失败兜成
-  // updateAvailable=false,正常不会走到 catch;保留兜底以防实现回归。
-  ipcMain.handle(MAKER_INVOKE.COMPUTER_CHECK_UPDATE, async () => {
+  // 查询型:失败通过 checkStatus 返回，保留已知版本供页面显示和重试。
+  ipcMain.handle(MAKER_INVOKE.COMPUTER_CHECK_UPDATE, async (_event, options?: { force?: boolean }) => {
     try {
-      return await checkComputerDriverUpdate();
+      return await checkComputerDriverUpdate(undefined, { force: options?.force === true });
     } catch (err) {
       throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
     }

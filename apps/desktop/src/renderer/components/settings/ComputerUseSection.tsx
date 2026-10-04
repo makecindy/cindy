@@ -162,7 +162,7 @@ interface ComputerUseSectionProps {
 export function ComputerUseSection({
   workingDir,
 }: ComputerUseSectionProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   // null = not loaded yet (blank, no flash). After load, all resolve.
   const [browserEnabled, setBrowserEnabled] = useState<boolean | null>(null);
   const [androidEnabled, setAndroidEnabled] = useState<boolean | null>(null);
@@ -173,8 +173,10 @@ export function ComputerUseSection({
   const [androidAdbPathDraft, setAndroidAdbPathDraft] = useState('');
   const [androidAdbPathEdited, setAndroidAdbPathEdited] = useState(false);
   const [computerStatus, setComputerStatus] = useState<ComputerDriverStatus | null>(null);
-  // 安静的 driver 更新入口:只在打开本设置面板时查一次,查不到 / 无更新都不渲染。
+  // Update results remain visible, including failures and cached check times.
   const [driverUpdate, setDriverUpdate] = useState<ComputerDriverUpdateCheck | null>(null);
+  const [driverCheckPending, setDriverCheckPending] = useState(false);
+  const [driverCheckFailed, setDriverCheckFailed] = useState(false);
   const [driverUpdatePending, setDriverUpdatePending] = useState(false);
   // main 侧采样广播的下载进度;null = 未开始/已结束(显示通用「更新中…」)。
   const [driverUpdateProgress, setDriverUpdateProgress] =
@@ -652,8 +654,6 @@ export function ComputerUseSection({
     }
   }, [browserBackendPending, browserBackendRecovering, t]);
 
-  // driver 已安装时安静地查一次是否有新版本。失败或无更新都不渲染任何 UI,
-  // 不弹 toast、不做启动检查、不后台轮询 —— 更新入口只是设置里的一个可选项。
   // 更新期间订阅 main 广播的下载进度;phase='done' 或组件卸载时清空。
   useEffect(() => {
     if (!driverUpdatePending) {
@@ -666,21 +666,93 @@ export function ComputerUseSection({
     return unsubscribe;
   }, [driverUpdatePending]);
 
+  const refreshDriverUpdateCheck = useCallback(async (force = false) => {
+    setDriverCheckPending(true);
+    setDriverCheckFailed(false);
+    try {
+      const result = await window.electronAPI.maker.computer.checkUpdate(force ? { force: true } : undefined);
+      if (!computerUseSectionMountedRef.current) return null;
+      setDriverUpdate(result);
+      // Older peers have no checkStatus. A missing latestVersion still means
+      // that a successful check cannot be established, never “up to date”.
+      setDriverCheckFailed(result.checkStatus === 'error' || !result.currentVersion || !result.latestVersion);
+      if (result.currentVersion) {
+        setComputerStatus((current) => current?.installed
+          ? { ...current, version: result.currentVersion }
+          : current);
+      }
+      return result;
+    } catch (err) {
+      log.warn('computer.checkUpdate failed', err);
+      if (computerUseSectionMountedRef.current) setDriverCheckFailed(true);
+      return null;
+    } finally {
+      if (computerUseSectionMountedRef.current) setDriverCheckPending(false);
+    }
+  }, []);
+
   // 等待 main 侧更新安装完成并刷新本地展示。更新的 in-flight 托管在 main:
   // 面板关闭它照常跑完;面板重开后本函数 join 同一个安装 Promise。
   // resume 路径传 joinOnly:若 main 侧安装在 IPC 到达前恰好完成,只读状态
   // 刷新,绝不误起一次新安装(用户没点按钮不该有安装发生)。
   const joinDriverUpdate = useCallback(async (joinOnly: boolean) => {
     try {
-      const result = await window.electronAPI.maker.computer.updateDriver(
-        joinOnly ? { joinOnly: true } : undefined,
-      );
-      let nextStatus = result.status;
-      if (nextStatus.installed && nextStatus.permissionState?.platform === 'macos') {
-        // A driver replacement may receive a new TCC identity. Re-probe the
-        // installed binary before allowing the capability to look usable.
-        nextStatus = await refreshComputerPermissionStatus('driver-update', { fresh: true });
+      let nextStatus: ComputerDriverStatus | null = null;
+      let updateSucceeded = false;
+      try {
+        const result = await window.electronAPI.maker.computer.updateDriver(
+          joinOnly ? { joinOnly: true } : undefined,
+        );
+        nextStatus = result.status;
+        updateSucceeded = true;
+      } catch (err) {
+        log.warn('computer driver update failed', err);
+        if (!computerUseSectionMountedRef.current) return;
+        toast.error(t('settings.computerUse.directControl.update.toast.failed'));
+        // A nonzero installer exit does not mean the old binary is still on disk.
+        try {
+          nextStatus = await window.electronAPI.maker.computer.status({ skipPermissionProbe: true });
+        } catch (refreshErr) {
+          log.warn('computer.status after failed update failed', refreshErr);
+        }
       }
+      if (!computerUseSectionMountedRef.current) return;
+      if (nextStatus) setComputerStatus(nextStatus);
+      // Publish the installed version and remove the old offer before probing
+      // permissions. A slow/failed permission probe must not retain old versions.
+      setDriverUpdate(null);
+      if (!nextStatus?.installed || !computerUseSectionMountedRef.current) return;
+      if (nextStatus.permissionState?.platform === 'macos') {
+        const previousPermissionState = nextStatus.permissionState;
+        try {
+          const permissions = await window.electronAPI.maker.computer.status({
+            forcePermissionProbe: true,
+            freshPermissionProbe: true,
+          });
+          // Keep the independently verified version if the permission status
+          // request could not even read the binary during daemon recovery.
+          nextStatus = {
+            ...permissions,
+            installed: true,
+            version: nextStatus.version,
+            executablePath: nextStatus.executablePath,
+          };
+        } catch (err) {
+          log.warn('computer permission check after update failed', err);
+          nextStatus = {
+            ...nextStatus,
+            permissions: undefined,
+            permissionState: {
+              ...previousPermissionState,
+              status: 'unknown',
+              accessibility: 'unknown',
+              screenRecording: 'unknown',
+              screenRecordingCapturable: 'unknown',
+            },
+          };
+        }
+      }
+      if (!computerUseSectionMountedRef.current) return;
       setComputerStatus(nextStatus);
       if (!isComputerPermissionReady(nextStatus)) {
         setComputerPermissionPending(false);
@@ -691,36 +763,27 @@ export function ComputerUseSection({
         }
         toast.warning(t('settings.computerUse.directControl.toast.permissionPending'));
       }
-      setDriverUpdate(null);
-      if (isComputerPermissionReady(nextStatus)) {
+      if (updateSucceeded && isComputerPermissionReady(nextStatus)) {
         toast.success(t('settings.computerUse.directControl.update.toast.success'));
       }
-    } catch (err) {
-      log.warn('computer driver update failed', err);
-      toast.error(t('settings.computerUse.directControl.update.toast.failed'));
-      // 预检发现缓存目标已失效时 main 已把 updateAvailable 置 false;同步清掉
-      // 渲染层残留入口,避免失败 toast 后按钮仍显示并可重复点。
-      try {
-        const latest = await window.electronAPI.maker.computer.checkUpdate();
-        setDriverUpdate(latest.updateAvailable ? latest : null);
-      } catch (refreshErr) {
-        log.warn('computer.checkUpdate after failed update failed', refreshErr);
-      }
     } finally {
-      setDriverUpdatePending(false);
+      if (computerUseSectionMountedRef.current) {
+        setDriverUpdatePending(false);
+        // Finish local permission recovery before starting the network check.
+        void refreshDriverUpdateCheck();
+      }
     }
-  }, [computerEnabled, refreshComputerPermissionStatus, t]);
+  }, [computerEnabled, refreshDriverUpdateCheck, t]);
 
   useEffect(() => {
     if (!computerStatus?.installed || driverUpdateCheckedRef.current) return;
     driverUpdateCheckedRef.current = true;
     let cancelled = false;
-    void window.electronAPI.maker.computer
-      .checkUpdate()
+    let settled = false;
+    void refreshDriverUpdateCheck()
       .then((result) => {
-        if (cancelled) return;
-        // main 有缓存时这里立即返回(第二次打开面板不等网络),后台自动刷新。
-        if (result.updateAvailable) setDriverUpdate(result);
+        settled = true;
+        if (cancelled || !result) return;
         if (result.updating) {
           // 上次面板关闭前发起的更新还在 main 侧跑:恢复「更新中」态并以
           // join-only 语义重挂结果(安装恰好已完成时只读状态,不起新安装)。
@@ -729,18 +792,22 @@ export function ComputerUseSection({
         }
       })
       .catch((err) => {
+        settled = true;
         log.warn('computer.checkUpdate failed', err);
       });
     return () => {
       cancelled = true;
+      // Loading the opt-in state can replace joinDriverUpdate before this
+      // request settles. Let the next effect consume the shared main check.
+      if (!settled) driverUpdateCheckedRef.current = false;
     };
-  }, [computerStatus?.installed, joinDriverUpdate]);
+  }, [computerStatus?.installed, joinDriverUpdate, refreshDriverUpdateCheck]);
 
   const handleUpdateDriver = useCallback(() => {
-    if (driverUpdatePending) return;
+    if (driverUpdatePending || driverCheckPending) return;
     setDriverUpdatePending(true);
     void joinDriverUpdate(false);
-  }, [driverUpdatePending, joinDriverUpdate]);
+  }, [driverUpdatePending, driverCheckPending, joinDriverUpdate]);
 
   const persistComputerEnabled = useCallback(async (next: boolean) => {
     const result = await window.electronAPI.maker.plugins.setEnabled(COMPUTER_PLUGIN_ID, next);
@@ -1428,7 +1495,7 @@ export function ComputerUseSection({
         {computerStatus === null ? (
           <div role="status" className="flex items-center gap-2 border-t border-[var(--settings-theme-card-border)] px-4 py-4 text-12 text-[var(--settings-section-desc)]">
             <Spinner size={12} />
-            {t('settings.computerUse.directControl.status.checking')}
+            {t('settings.computerUse.directControl.update.readingVersion')}
           </div>
         ) : (
           <>
@@ -1536,33 +1603,77 @@ export function ComputerUseSection({
                       </span>
                     </>
                   ) : null}
-                  {computerStatus.installed && driverUpdate?.latestVersion ? (
+                  {computerStatus.installed ? (
+                    <>
+                      {(!driverUpdate?.updateAvailable || driverCheckPending || driverUpdatePending || driverCheckFailed) ? (
+                        <>
+                          <span aria-hidden="true" className="text-11 text-[var(--settings-theme-card-border)]">·</span>
+                          <span role="status" className="text-11 text-[var(--settings-section-desc)]">
+                            {driverCheckPending
+                              ? t('settings.computerUse.directControl.update.checking')
+                              : driverUpdatePending
+                                ? driverUpdateProgress?.phase === 'installing'
+                                  ? t('settings.computerUse.directControl.update.installing')
+                                  : t('settings.computerUse.directControl.update.updating')
+                                : driverCheckFailed
+                                  ? t('settings.computerUse.directControl.update.checkFailed')
+                                  : driverUpdate
+                                    ? t('settings.computerUse.directControl.update.upToDate')
+                                    : t('settings.computerUse.directControl.update.notChecked')}
+                          </span>
+                        </>
+                      ) : null}
+                      {driverUpdate?.checkedAt && !driverUpdatePending ? (
+                        <span className="text-11 text-[var(--settings-section-desc)]">
+                          {t('settings.computerUse.directControl.update.lastChecked', {
+                            time: new Date(driverUpdate.checkedAt).toLocaleString(i18n?.language, {
+                              month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                            }),
+                          })}
+                        </span>
+                      ) : null}
+                    </>
+                  ) : null}
+                  {computerStatus.installed && driverUpdate?.updateAvailable && driverUpdate.latestVersion && !driverUpdatePending ? (
                     <>
                       <span aria-hidden="true" className="text-11 text-[var(--settings-theme-card-border)]">
                         ·
                       </span>
                       <span className="text-11 text-[var(--settings-section-desc)]">
-                        {driverUpdatePending
-                          ? driverUpdateProgress?.phase === 'installing'
-                            ? t('settings.computerUse.directControl.update.installing')
-                            : t('settings.computerUse.directControl.update.updating')
-                          : t('settings.computerUse.directControl.update.available', {
-                              version: driverUpdate.latestVersion,
-                            })}
+                        {t(driverCheckFailed
+                          ? 'settings.computerUse.directControl.update.previouslyAvailable'
+                          : 'settings.computerUse.directControl.update.available', {
+                          version: driverUpdate.latestVersion,
+                        })}
                       </span>
                       <Button
                         variant="secondary"
                         size="sm"
                         className="px-2.5"
-                        loading={driverUpdatePending}
                         type="button"
                         onClick={() => void handleUpdateDriver()}
-                        disabled={driverUpdatePending || computerInstallPending}
+                        disabled={driverCheckPending || computerInstallPending}
                       >
                         <Download size={12} className="shrink-0" />
                         {t('settings.computerUse.directControl.update.action')}
                       </Button>
                     </>
+                  ) : null}
+                  {computerStatus.installed ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="px-2.5"
+                      type="button"
+                      loading={driverCheckPending}
+                      disabled={driverCheckPending || driverUpdatePending || computerInstallPending}
+                      onClick={() => void refreshDriverUpdateCheck(true)}
+                    >
+                      <RefreshCw size={12} className="shrink-0" />
+                      {driverCheckFailed
+                        ? t('settings.computerUse.directControl.update.retry')
+                        : t('settings.computerUse.directControl.update.check')}
+                    </Button>
                   ) : null}
                 </div>
                 <button

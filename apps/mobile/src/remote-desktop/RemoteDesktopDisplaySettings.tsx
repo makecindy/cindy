@@ -50,7 +50,7 @@ type Props = {
     onFitDisplay?(): void;
     onChange(settings: Partial<RemoteDesktopVideoSettings>): void;
     readModes(): Promise<RemoteDesktopDisplayMode[]>;
-    onResolution(id: string): Promise<void>;
+    onResolution(mode: RemoteDesktopDisplayMode): Promise<void>;
   };
   connected: boolean;
   controlling: boolean;
@@ -177,7 +177,7 @@ export function RemoteDesktopDisplaySettings({
     if (!mode || mode.current || !controlling || video.busy || !connected)
       return;
     void video
-      .onResolution(id)
+      .onResolution(mode)
       .then(() => setExpanded(false))
       .catch(() => {});
   };

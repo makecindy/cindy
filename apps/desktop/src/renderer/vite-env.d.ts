@@ -425,6 +425,8 @@ interface ComputerDriverUpdateCheck {
   latestVersion: string | null;
   updateAvailable: boolean;
   updating: boolean;
+  checkStatus?: 'success' | 'error';
+  checkedAt?: number;
 }
 
 interface ComputerDriverUpdateProgress {
@@ -1222,6 +1224,7 @@ interface ElectronAPI {
   pageZoomIn: () => Promise<{ ok: true; zoomFactor: number }>;
   pageZoomOut: () => Promise<{ ok: true; zoomFactor: number }>;
   pageZoomReset: () => Promise<{ ok: true; zoomFactor: number }>;
+  accessibilitySupport: import('../shared/accessibilitySupport').AccessibilitySupportBridge;
   appearanceSettings: {
     importWallpaper: () => Promise<import('../shared/appearanceSettings').AppearanceSettings | null>;
     ensureWallpaperVideo?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
@@ -7103,7 +7106,7 @@ interface ElectronAPI {
       onPermissionGuideStatusChanged: (
         callback: (status: ComputerDriverStatus) => void,
       ) => () => void;
-      checkUpdate: () => Promise<ComputerDriverUpdateCheck>;
+      checkUpdate: (options?: { force?: boolean }) => Promise<ComputerDriverUpdateCheck>;
       updateDriver: (opts?: { joinOnly?: boolean }) => Promise<ComputerDriverInstallResult>;
       onUpdateProgress: (callback: (progress: ComputerDriverUpdateProgress) => void) => () => void;
     };

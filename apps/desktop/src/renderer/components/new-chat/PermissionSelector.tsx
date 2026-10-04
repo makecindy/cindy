@@ -11,6 +11,15 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import { currentFocusedRow } from '@/components/ui/dropdown-menu-highlight';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  useMenuPanel,
+  withMenuLabels,
+} from '@/components/ui/menu-row';
 import { MorphPopover } from '@/components/ui/morph-popover';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
@@ -122,6 +131,11 @@ export function PermissionSelector({
   const [open, setOpen] = useState(false);
   const [focusedOptionId, setFocusedOptionId] = useState<string | null>(null);
   const selectedOptionRef = useRef<HTMLButtonElement>(null);
+  // The panel's glide highlight follows keyboard focus; MorphPopover owns the width.
+  const listRef = useMenuPanel<HTMLDivElement>(undefined, {
+    lockWidth: false,
+    options: { current: currentFocusedRow },
+  });
   const agentKind = vendorKeyToAgentKind(vendorKey);
   // device-link:deviceId 非空 → 权限档从被控端读(本地会话 undefined,行为不变)。
   const { capabilities } = useAgentCapabilities(agentKind, deviceId);
@@ -260,9 +274,11 @@ export function PermissionSelector({
 
   const optionsList = (
       <div
+        ref={listRef}
         role="listbox"
         aria-label={t('newChat.permissionSelector.listAria')}
-        className="flex flex-col gap-0.5"
+        {...menuPanelAttrs}
+        className="relative flex flex-col gap-0.5"
         onKeyDown={(event) => {
           if (
             event.key !== 'ArrowDown' &&
@@ -301,6 +317,7 @@ export function PermissionSelector({
           nextOption.focus({ preventScroll: true });
         }}
       >
+        <MenuHighlightLayer />
         {options.map((option) => {
           const Icon = PERMISSION_ICONS[option.id] ?? Hand;
           const isSelected = effectiveMode === option.id;
@@ -332,42 +349,33 @@ export function PermissionSelector({
                 aria-selected={isSelected}
                 data-permission-mode={option.id}
                 tabIndex={(focusedOptionId ?? effectiveMode) === option.id ? 0 : -1}
+                {...menuRowAttrs({ checked: isSelected, disabled: Boolean(disabledReason) })}
                 className={cn(
-                  'flex w-full items-center gap-3 rounded-[8px] px-3 py-2',
-                  'transition-colors',
-                  'hover:bg-[var(--model-item-hover)]',
-                  // 选中底与 hover 统一到 --model-item-hover,和模型/+ 菜单一致(危险档的
-                  // 橙/蓝仍只染文字,不改底色);原 --perm-item-selected-bg 在 cindy 面板上隐形。
-                  isSelected && 'bg-[var(--model-item-hover)]',
+                  // Shared menu row (DESIGN §4 Composer dropdown rows): the panel's glide
+                  // highlight, no own hover / selected fill; the chosen row is the check
+                  // and 500, and danger tiers tint the text only.
+                  COMPOSER_MENU_ROW,
+                  'flex w-full items-center gap-3 px-3 py-2',
                   selectedTone === 'auto' && 'text-[var(--perm-auto-selected-text)]',
                   selectedTone === 'bypassPermissions' &&
                     'text-[var(--perm-bypass-selected-text)]',
-                  disabledReason && 'cursor-not-allowed opacity-45 hover:bg-transparent',
+                  disabledReason && 'cursor-not-allowed opacity-45',
                 )}
               >
-                <Icon
-                  size={17}
-                  className={cn(
-                    'shrink-0',
-                    selectedTone ? 'text-current' : 'text-[var(--model-item-text)]',
-                  )}
-                />
-                <span
-                  className={cn(
-                    'min-w-0 flex-1 truncate text-left text-14 font-medium',
-                    selectedTone ? 'text-current' : 'text-[var(--model-item-text)]',
-                  )}
-                >
-                  {label}
-                </span>
-                {isSelected && (
-                  <Check
-                    size={13}
-                    className={cn(
-                      'shrink-0',
-                      selectedTone ? 'text-current' : 'text-[var(--model-item-check)]',
+                {withMenuLabels(
+                  <>
+                    <Icon size={17} className="shrink-0" />
+                    <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+                    {isSelected && (
+                      <Check
+                        size={13}
+                        className={cn(
+                          'shrink-0',
+                          selectedTone ? 'text-current' : 'text-[var(--model-item-check)]',
+                        )}
+                      />
                     )}
-                  />
+                  </>,
                 )}
               </button>
             </Tip>

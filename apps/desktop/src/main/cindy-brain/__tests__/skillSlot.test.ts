@@ -162,8 +162,8 @@ describe('skillSlot · reconcileGhostSkillLinks', () => {
     await fs.promises.mkdir(claudeDir(), { recursive: true });
     const legacy = path.join(legacySharedDir(), 'my-ghost--foo');
     const fanout = path.join(claudeDir(), 'my-ghost--foo');
-    await fs.promises.symlink(target, legacy, 'dir');
-    await fs.promises.symlink(legacy, fanout, 'dir');
+    await fs.promises.symlink(target, legacy, process.platform === 'win32' ? 'junction' : 'dir');
+    await fs.promises.symlink(legacy, fanout, process.platform === 'win32' ? 'junction' : 'dir');
     const user = path.join(legacySharedDir(), 'user-skill');
     await fs.promises.mkdir(user);
     await fs.promises.writeFile(path.join(user, 'SKILL.md'), '# User skill');
@@ -179,9 +179,9 @@ describe('skillSlot · reconcileGhostSkillLinks', () => {
     await fs.promises.mkdir(legacySharedDir(), { recursive: true });
     await fs.promises.mkdir(claudeDir(), { recursive: true });
     const legacy = path.join(legacySharedDir(), 'my-ghost--foo');
-    await fs.promises.symlink(path.join(brainRoot, 'my-ghost', 'missing'), legacy, 'dir');
-    await fs.promises.symlink(legacy, path.join(claudeDir(), 'my-ghost--foo'), 'dir');
-    await fs.promises.symlink(path.join(workDir, 'user-missing'), path.join(claudeDir(), 'user-skill'), 'dir');
+    await fs.promises.symlink(path.join(brainRoot, 'my-ghost', 'missing'), legacy, process.platform === 'win32' ? 'junction' : 'dir');
+    await fs.promises.symlink(legacy, path.join(claudeDir(), 'my-ghost--foo'), process.platform === 'win32' ? 'junction' : 'dir');
+    await fs.promises.symlink(path.join(workDir, 'user-missing'), path.join(claudeDir(), 'user-skill'), process.platform === 'win32' ? 'junction' : 'dir');
     await removeGhostSkillLinksForRoots([brainRoot, approvalStateRoot], homeDir);
     expect(fs.readdirSync(legacySharedDir())).toEqual([]);
     expect(fs.readdirSync(claudeDir())).toEqual(['user-skill']);

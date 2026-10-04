@@ -162,12 +162,17 @@ export class RemoteDesktopViewerSession {
     return { controlling: lease.controlling };
   }
 
-  /** Keep the lease and input sequence, replacing only its display geometry. */
+  /**
+   * Keep the lease and input sequence, replacing only its display geometry.
+   * With `keepVideo`, a host advertising `liveDisplaySwitch` may also keep the
+   * current video stream; the result then carries `videoKept: true`.
+   */
   async fitDisplay(
     width: number,
     height: number,
     restore = false,
     modeId?: string,
+    keepVideo = false,
   ): Promise<RemoteDesktopLease> {
     const lease = this.active;
     if (!lease?.controlling) throw new Error("DESKTOP_VIEW_ONLY");
@@ -178,10 +183,26 @@ export class RemoteDesktopViewerSession {
     };
     const operation = this.request<RemoteDesktopLease>(
       modeId
-        ? { op: "resolution", lease: lease.lease, modeId, temporary: true }
+        ? {
+            op: "resolution",
+            lease: lease.lease,
+            modeId,
+            temporary: true,
+            ...(keepVideo ? { keepVideo: true } : {}),
+          }
         : restore
-          ? { op: "restoreViewerDisplay", lease: lease.lease }
-          : { op: "viewerDisplay", lease: lease.lease, width, height },
+          ? {
+              op: "restoreViewerDisplay",
+              lease: lease.lease,
+              ...(keepVideo ? { keepVideo: true } : {}),
+            }
+          : {
+              op: "viewerDisplay",
+              lease: lease.lease,
+              width,
+              height,
+              ...(keepVideo ? { keepVideo: true } : {}),
+            },
       check,
     );
     this.controlPending = operation;
@@ -219,7 +240,9 @@ export class RemoteDesktopViewerSession {
         throw new Error("INVALID_RESPONSE");
       lease.display = result.display;
       lease.controlling = false;
-      return lease;
+      return keepVideo && result.videoKept === true
+        ? { ...lease, videoKept: true }
+        : lease;
     } finally {
       if (this.controlPending === operation) this.controlPending = null;
     }
