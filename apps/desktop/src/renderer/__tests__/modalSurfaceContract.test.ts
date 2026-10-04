@@ -23,6 +23,17 @@ const SIDE_DRAWERS = new Set([
   'features/bots/ChatThreadPanel.tsx',
 ]);
 
+// 不经过 Radix、自己写遮罩和面板的弹窗:每个都必须同时挂着 modal-scrim 与 modal-panel,
+// 删掉其中一个(改回独立底色 / 圆角)就会报出来。新增手写弹窗时登记到这里。
+const HAND_BUILT_DIALOGS = new Set([
+  'components/chat/GhostCardHostPrompts.tsx',
+  'components/markdown/MermaidSourceEditor.tsx',
+  'components/settings/AddProviderWizard.tsx',
+  'components/settings/ProviderConnectionDialog.tsx',
+  'features/cc-agent/CreateWorkerPopover.tsx',
+  'features/right-sidebar/plugins/web-browser/BrowserTabBody.tsx',
+]);
+
 // 允许直接引用 --overlay-modal 的地方:变量注册,以及不是弹窗的面板内抽屉遮罩
 // (DiffPanelShell 点遮罩即收起,DESIGN §4 已登记)。
 const OVERLAY_TOKEN_ALLOWED = new Set(['components/diff-panel/DiffPanelShell.tsx']);
@@ -98,7 +109,8 @@ function stylesSurface(node: ts.JsxOpeningLikeElement, sourceFile: ts.SourceFile
 function offenders(path: string): string[] {
   const file = label(path);
   const source = readFileSync(path, 'utf8');
-  if (![...RADIX_DIALOGS].some((module) => source.includes(module))) return [];
+  const radix = [...RADIX_DIALOGS].some((module) => source.includes(module));
+  if (!radix && !/modal-(?:scrim|panel)/.test(source)) return [];
   const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const isOverlay = radixPart(sourceFile, 'Overlay');
   const isContent = radixPart(sourceFile, 'Content');
@@ -107,6 +119,14 @@ function offenders(path: string): string[] {
     if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
       const tag = node.tagName.getText(sourceFile);
       const at = `${file}:${sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1}`;
+      const own = classTokens(node, sourceFile) ?? [];
+      // 手写弹窗与任何挂了共享类的元素:同样不得再自带外观或动画。
+      if (!isOverlay(tag) && !isContent(tag) && (own.includes('modal-scrim') || own.includes('modal-panel'))) {
+        const override = own.includes('modal-scrim') ? SCRIM_OVERRIDE : PANEL_OVERRIDE;
+        const extra = own.filter((token) => override.test(bare(token)) || /^animate-/.test(bare(token)));
+        if (extra.length) found.push(`${at} 手写弹窗自带 ${extra.join(' ')}`);
+        if (stylesSurface(node, sourceFile)) found.push(`${at} 手写弹窗用内联样式改外观`);
+      }
       if (isOverlay(tag)) {
         const tokens = classTokens(node, sourceFile) ?? [];
         if (!tokens.includes('modal-scrim')) found.push(`${at} 遮罩缺少 modal-scrim`);
@@ -132,6 +152,14 @@ describe('modal surface contract', () => {
 
   it('every Radix dialog uses the shared scrim and panel', () => {
     expect(files.flatMap(offenders)).toEqual([]);
+  });
+
+  it('registered hand-built dialogs keep both shared classes', () => {
+    const missing = [...HAND_BUILT_DIALOGS].filter((file) => {
+      const source = readFileSync(resolve(RENDERER_ROOT, file), 'utf8');
+      return !source.includes('modal-scrim') || !source.includes('modal-panel');
+    });
+    expect(missing).toEqual([]);
   });
 
   it('hand-built scrims use .modal-scrim instead of the raw overlay token', () => {
