@@ -51,6 +51,7 @@ import {
   Check,
   CornerUpLeft,
   Layers,
+  ListTodo,
   Monitor,
   Sparkles,
   Square,
@@ -216,6 +217,7 @@ import {
 } from '@/lib/makerChatStore';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
+import { summarizeBackgroundTasks, type BackgroundTaskSummary } from './backgroundTaskSummary';
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import { BotSessionContentHeaderRegistration } from '@/features/bots/BotSessionContentHeader';
 import {
@@ -2142,6 +2144,13 @@ export function CCAgentSessionView({
   // proxy 活动信号覆盖不到 —— 从 taskUpdates 事件流折算,并在挂载/重载后用 main
   // 快照补回存量。与上面的 proxy 信号一起点亮状态栏后台模式。
   const backgroundBash = useBackgroundBashTasks(sessionId, taskUpdates, historyLoaded);
+  const backgroundTaskSummary = useMemo(
+    () =>
+      isRemoteSession || remoteDeviceId
+        ? null
+        : summarizeBackgroundTasks(taskUpdates),
+    [isRemoteSession, remoteDeviceId, taskUpdates],
+  );
   // 与运行态互斥(turn 一开跑 main 即广播熄灭,这里再加一道渲染守卫防瞬时竞态):
   // 只在「无 turn 在跑」时才把状态栏切到后台子任务模式。
   const backgroundTasksActive =
@@ -5086,6 +5095,10 @@ export function CCAgentSessionView({
                     backgroundActivity.active ? 0 : backgroundBash.tasks.length
                   }
                   backgroundStopping={backgroundActivity.stopping || backgroundBash.stopping}
+                  backgroundTaskSummary={backgroundTaskSummary}
+                  onOpenBackgroundTasks={() => {
+                    if (sessionId) void openBackgroundTasksTab(sessionId);
+                  }}
                   suppressContent={Boolean(pendingPlanReview)}
                   onStopBackgroundTasks={() => {
                     if (backgroundActivity.active) void backgroundActivity.stopAll();
@@ -5951,6 +5964,8 @@ function RunningStatusBar({
   workflowStatus,
   backgroundBashOnlyCount = 0,
   backgroundStopping = false,
+  backgroundTaskSummary = null,
+  onOpenBackgroundTasks,
   onStopBackgroundTasks,
   rightLeadingSlot = null,
   suppressContent = false,
@@ -5991,6 +6006,10 @@ function RunningStatusBar({
   backgroundBashOnlyCount?: number;
   /** 全停请求在飞(按钮禁用,防连点)。 */
   backgroundStopping?: boolean;
+  /** Durable progress shortcut for the task's Subagents and background commands. */
+  backgroundTaskSummary?: BackgroundTaskSummary | null;
+  /** Opens the existing background-task list; counts never introduce a parallel detail surface. */
+  onOpenBackgroundTasks?: () => void;
   /** 「全部停止」入口(关闭常驻 CC 子进程,会话可续)。 */
   onStopBackgroundTasks?: () => void;
   /** 独立于运行态淡出的右侧前置槽位；折叠后的被控呼吸灯固定在 token 统计左侧。 */
@@ -6170,10 +6189,22 @@ function RunningStatusBar({
         !sideTaskRunning &&
         !backgroundTasksRunning &&
         usageMeta.kind === 'rate'));
+  const showBackgroundTaskSummary =
+    Boolean(onOpenBackgroundTasks) &&
+    Boolean(
+      backgroundTaskSummary &&
+        (backgroundTaskSummary.subagents.total > 0 || backgroundTaskSummary.commands.total > 0),
+    );
   // A pinned panel keeps its anchor mounted through idle and subsequent turns.
   // 空闲后真正收起,不再给输入框上方留下固定空行。overlay 的 ResizeObserver 会在
   // DOM 尺寸变化后补齐 MessageStream 的 bottomPadding,因此不靠硬编码高度制造跳变。
-  if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned))) return null;
+  if (
+    !rightLeadingSlot &&
+    !showBackgroundTaskSummary &&
+    (suppressContent || (isHidden && !ratePanelPinned))
+  ) {
+    return null;
+  }
 
   // 两段式布局:左(运行状态) / 右(elapsed·tokens)。
   // - 左段 min-w-0(可收缩):status 并非短枚举 —— turn-start 文案带用户名(可含中文长句)、
@@ -6235,6 +6266,39 @@ function RunningStatusBar({
           走 LLM, 显示残留 token 计数会误导用户以为也耗了 token。 */}
       <div className="flex min-w-0 items-center justify-self-end gap-2">
         {rightLeadingSlot}
+        {showBackgroundTaskSummary && backgroundTaskSummary && (
+          <button
+            type="button"
+            onClick={onOpenBackgroundTasks}
+            className={cn(
+              'flex min-w-0 shrink items-center gap-1 rounded-full px-2 py-1 text-12 font-medium',
+              'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+            )}
+            title={t('chat.backgroundActivity.summaryTitle')}
+            aria-label={t('chat.backgroundActivity.summaryTitle')}
+          >
+            <ListTodo size={13} className="shrink-0" aria-hidden="true" />
+            <span className="truncate">
+              {[
+                backgroundTaskSummary.subagents.total > 0
+                  ? t('chat.backgroundActivity.subagentProgress', {
+                      completed: backgroundTaskSummary.subagents.completed,
+                      total: backgroundTaskSummary.subagents.total,
+                    })
+                  : null,
+                backgroundTaskSummary.commands.total > 0
+                  ? t('chat.backgroundActivity.commandProgress', {
+                      completed: backgroundTaskSummary.commands.completed,
+                      total: backgroundTaskSummary.commands.total,
+                    })
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </span>
+          </button>
+        )}
         {(!suppressContent && (!isHidden || ratePanelPinned)) && (
           <div
             data-running-status-meta="true"

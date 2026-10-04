@@ -60,6 +60,19 @@ vi.mock('../features/cc-agent/sidebar/SessionCard', () => ({ SessionCard: () => 
 vi.mock('../features/cc-agent/sidebar/AutomationSessionGroupItem', () => ({
   AutomationSessionGroupItem: () => null,
 }));
+// This suite owns the sidebar entry's open/close contract. The dialog itself has
+// dedicated component coverage; keeping that large lazy subtree out of this test
+// also makes the Suspense boundary deterministic under the Windows fork pool.
+vi.mock('@/components/cindy-make/CindyMakeCreateDialog', () => ({
+  CindyMakeCreateDialog: ({ onOpenChange }: { onOpenChange: (open: boolean) => void }) => (
+    <div role="dialog" aria-label="settings.cindyMake.create.title">
+      <textarea defaultValue="" />
+      <button type="button" onClick={() => onOpenChange(false)}>
+        settings.cindyMake.create.cancel
+      </button>
+    </div>
+  ),
+}));
 
 function props(groupDevice: boolean): ProjectsSectionProps {
   return {
