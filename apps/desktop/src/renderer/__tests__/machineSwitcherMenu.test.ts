@@ -88,7 +88,12 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(topNavSource).toContain(
       "const pinSearch = section === 'scrollable' && search.query.trim().length > 0",
     );
-    expect(topNavSource).toContain("pinSearch && 'sticky top-0 z-30 bg-[var(--cmd-palette-bg)]'");
+    // 断言前归一化行尾:Windows checkout 下源码可能是 CRLF。
+    const topNavSourceLf = topNavSource.replace(/\r\n/g, '\n');
+    expect(topNavSourceLf).toContain(
+      "const PINNED_SEARCH_CLASS =\n  'sticky top-0 z-30 bg-[var(--cmd-palette-bg)] pt-[4px] pb-[4px] -mt-[10px]'",
+    );
+    expect(topNavSourceLf).toContain('pinSearch && PINNED_SEARCH_CLASS');
     expect(topNavSource).toContain("if (section === 'scrollable')");
     expect(sidebarUpperSource).toContain('lastListScrollTopRef.current = el.scrollTop');
     expect(sidebarUpperSource).toContain(
