@@ -330,6 +330,7 @@ test("client CI runs Linux checks and complete unit shards in parallel behind st
 	assert.ok(checks, "client CI must define independent Linux verification checks");
 	assert.doesNotMatch(checks, /^    needs:/m);
 	assert.match(checks, /^        run: pnpm test:runner$/m);
+	assert.equal([...checks.matchAll(/^        run: pnpm test:guard$/gm)].length, 1);
 	assert.doesNotMatch(checks, /node scripts\/test-workspaces\.mjs --tier unit/);
 
 	const shards = workflowJob(workflow, "linux-unit-shards");
