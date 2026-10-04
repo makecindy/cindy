@@ -27,7 +27,7 @@ describe('checkHandoverDirectory', () => {
     expect(await checkHandoverDirectory(`${repo}/`, env)).toEqual({ ok: true, path: repo });
     expect(await checkHandoverDirectory('~/code/repo', env)).toEqual({ ok: true, path: repo });
     const link = path.join(root, 'repo-link');
-    await symlink(repo, link);
+    await symlink(repo, link, process.platform === 'win32' ? 'junction' : 'dir');
     expect(await checkHandoverDirectory(link, env)).toEqual({ ok: true, path: link });
   });
 
@@ -39,8 +39,8 @@ describe('checkHandoverDirectory', () => {
   });
 
   it('rejects the filesystem root, the home directory and Cindy data, also through a symlink', async () => {
-    await symlink(env.homeDir, path.join(root, 'home-link'));
-    await symlink(path.join(env.userDataDir, 'owners'), path.join(root, 'data-link'));
+    await symlink(env.homeDir, path.join(root, 'home-link'), process.platform === 'win32' ? 'junction' : 'dir');
+    await symlink(path.join(env.userDataDir, 'owners'), path.join(root, 'data-link'), process.platform === 'win32' ? 'junction' : 'dir');
     for (const target of [path.parse(root).root, env.homeDir, '~', path.join(root, 'home-link'),
       path.join(env.userDataDir, 'owners'), path.join(root, 'data-link')]) {
       expect(await checkHandoverDirectory(target, env)).toMatchObject({ ok: false, errorCode: 'INVALID_PROJECT_PATH' });
@@ -52,7 +52,7 @@ describe('findHandedProject', () => {
   it('finds the handed project through ~/, a trailing slash, case and symlinks, and nothing else', async () => {
     const repo = path.join(env.homeDir, 'code', 'repo');
     const link = path.join(root, 'repo-link');
-    await symlink(repo, link);
+    await symlink(repo, link, process.platform === 'win32' ? 'junction' : 'dir');
     const dirs = [repo];
     const opts = { homeDir: env.homeDir, caseInsensitive: true };
     expect(await findHandedProject('~/code/repo/', dirs, opts)).toBe(repo);

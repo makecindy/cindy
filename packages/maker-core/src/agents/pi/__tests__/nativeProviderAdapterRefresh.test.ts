@@ -91,6 +91,36 @@ describe('Cindy native provider refresh bridge', () => {
     expect(h.handlers.size).toBe(1);
   });
 
+  it.each([
+    ['missing', () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); }, {}],
+    ['configured', () => JSON.stringify({ compaction: { reserveTokens: 1234 } }), { compaction: { reserveTokens: 1234 } }],
+  ])('loads legacy runtime settings when the file is %s', (_label, read, expected) => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const start = source.indexOf('const initialNativeSettings =');
+    const end = source.indexOf("pi.registerCommand('cindy-native-provider-refresh'", start);
+    const code = source.slice(start, end) + ';globalThis.settings = initialNativeSettings;';
+    const sandbox: Record<string, unknown> = {
+      pi: {}, process: { env: { PI_CODING_AGENT_DIR: '/fixture' } },
+      path: { join: () => '/fixture/settings.json' }, readFileSync: read,
+    };
+    runInNewContext(code, sandbox);
+    expect(sandbox.settings).toEqual(expected);
+  });
+
+  it.each(['EACCES', 'invalid-json'])('does not hide %s while loading legacy settings', (kind) => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const start = source.indexOf('const initialNativeSettings =');
+    const end = source.indexOf("pi.registerCommand('cindy-native-provider-refresh'", start);
+    expect(() => runInNewContext(source.slice(start, end), {
+      pi: {}, process: { env: { PI_CODING_AGENT_DIR: '/fixture' } },
+      path: { join: () => '/fixture/settings.json' },
+      readFileSync: () => {
+        if (kind === 'EACCES') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        return '{';
+      },
+    })).toThrow();
+  });
+
   it('acknowledges success only after applying a valid staged snapshot', async () => {
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;
     const start = source.indexOf('const initialNativeSettings =');

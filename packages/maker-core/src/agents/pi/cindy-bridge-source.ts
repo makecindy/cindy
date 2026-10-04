@@ -3678,7 +3678,16 @@ export default async function cindyBridge(pi: any) {
   installTextOnlyTurnPolicy(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi);
   const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined
-    : JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'settings.json'), 'utf8'));
+    : (() => {
+      try {
+        return JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'settings.json'), 'utf8'));
+      } catch (error) {
+        // Durable child homes may have no settings file: Pi uses its defaults.
+        // Keep malformed/unreadable settings visible instead of hiding them.
+        if (error?.code === 'ENOENT') return {};
+        throw error;
+      }
+    })();
   pi.registerCommand('cindy-native-provider-refresh', {
     description: 'Cindy internal native provider refresh',
     handler: async (args: string, ctx: any) => {

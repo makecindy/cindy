@@ -123,10 +123,9 @@ function GoalEditor({
         </button>
       </AlertDialog.Trigger>
       <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
+        <AlertDialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <AlertDialog.Content
-          className="fixed left-1/2 top-1/2 z-[10001] flex w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 rounded-xl border p-4 shadow-[var(--confirm-shadow)]"
-          style={{ backgroundColor: 'var(--confirm-bg)', borderColor: 'var(--border-default)' }}
+          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 p-4"
           onOpenAutoFocus={(event) => {
             // 打开时焦点直接落在目标输入框。
             event.preventDefault();

@@ -3,8 +3,8 @@ import { Button } from '@/components/ui/button';
  * 添加插件市场对话框：添加表单（来源 / Git 引用 / 稀疏路径）+ 已添加市场的
  * 管理入口（新开 MarketplaceSourcesDialog，避免本对话框被列表撑长）。
  *
- * 视觉规格遵循 DESIGN.md §4 Dialog & Modal：overlay 用 --overlay-modal token，
- * 容器 12px radius + --confirm-bg + --confirm-shadow，表单对话框放宽到 460px；
+ * 视觉规格遵循 DESIGN.md §4 Dialog & Modal：遮罩与面板用共享的 modal-scrim / modal-panel，
+ * 表单对话框放宽到 460px；
  * 单行输入 pill、多行输入 8px 内层 radius，按钮全部 pill。
  */
 import { useCallback, useEffect, useState } from 'react';
@@ -176,20 +176,15 @@ export function AddMarketplaceDialog({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10000] bg-[var(--overlay-modal)]',
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10000]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'flex max-h-[85vh] w-full select-none flex-col rounded-xl p-4',
-            'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
-            'data-[state=open]:animate-confirm-content-in',
-            'data-[state=closed]:animate-confirm-content-out',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'flex max-h-[85vh] w-full select-none flex-col p-4',
           )}
           style={
             {

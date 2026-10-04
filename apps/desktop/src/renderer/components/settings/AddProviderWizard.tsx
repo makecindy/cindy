@@ -1456,14 +1456,10 @@ export function AddProviderWizard({
 
   return (
     <div
-      className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
+      className="modal-scrim fixed inset-0 z-[10000] flex items-center justify-center"
     >
       <div
-        className="flex max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border"
-        style={{
-          backgroundColor: 'var(--surface-elevated)',
-          borderColor: 'var(--border-default)',
-        }}
+        className="modal-panel flex max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden"
       >
         {/* 头部:标题居左 + 步骤指示居右,同一行(2026-07 定稿原型形态)。 */}
         <div className="flex items-center justify-between gap-4 px-4 pb-3 pt-4">

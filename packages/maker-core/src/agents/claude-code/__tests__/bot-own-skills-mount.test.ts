@@ -305,6 +305,12 @@ describe('Cindy managed skills use Claude session plugins', () => {
 
 
 describe('managed skill command collisions', () => {
+  async function isolatedWorkingDir(): Promise<string> {
+    const workingDir = await makeTempDir();
+    // Stop native ancestor discovery at this fixture rather than the user's home.
+    await fs.mkdir(path.join(workingDir, '.git'));
+    return workingDir;
+  }
   it('keeps user /learn and exposes Cindy under its full native name', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -315,7 +321,7 @@ describe('managed skill command collisions', () => {
     deps.getManagedSkills = async () => [{ kind: 'agent-skill', name: 'learn', source: 'skill',
       path: '/cindy/learn/SKILL.md', enabled: true, claudeCommandName: 'cindy:learn' }];
     const agent = new ClaudeCodeAgent(deps);
-    const result = await agent.listRuntimeSkills({ workingDir: await makeTempDir(), runtimeConfigDir: configDir });
+    const result = await agent.listRuntimeSkills({ workingDir: await isolatedWorkingDir(), runtimeConfigDir: configDir });
     expect(result.skills.map((skill) => skill.name)).toEqual(['cindy:learn', 'learn']);
     expect(result.skills[0]?.runtimeCommandName).toBe('cindy:learn');
     expect(result.skills[1]?.path).toBe(path.join(userSkill, 'SKILL.md'));
@@ -329,7 +335,7 @@ describe('managed skill command collisions', () => {
       kind: 'agent-skill', name: index ? 'demo' : 'learn', source: 'skill', enabled: true,
       path: `/${plugin}/SKILL.md`, claudeCommandName: `${plugin}:${index ? 'demo' : 'learn'}`,
     }));
-    const result = await new ClaudeCodeAgent(deps).listRuntimeSkills({ workingDir: await makeTempDir(), runtimeConfigDir: configDir });
+    const result = await new ClaudeCodeAgent(deps).listRuntimeSkills({ workingDir: await isolatedWorkingDir(), runtimeConfigDir: configDir });
     expect(result.skills.map((skill) => skill.name)).toEqual(['learn', 'cindy-plugin-a:demo', 'cindy-plugin-b:demo']);
   });
 });

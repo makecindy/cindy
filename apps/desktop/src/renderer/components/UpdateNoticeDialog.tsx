@@ -940,10 +940,7 @@ export function UpdateNoticeDialog({
       <AlertDialog.Portal>
         <AlertDialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10000]',
-            'bg-black/40 dark:bg-black/60',
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10000]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           // No scrim click-to-dismiss (DESIGN.md closing affordance): the
@@ -952,15 +949,11 @@ export function UpdateNoticeDialog({
 
         <AlertDialog.Content
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
             // 920px, not the previous 1240px: the body is a single ~800px
             // reading column now, so the extra width only produced dead margins
             // and made the full-width chrome visibly mismatch the narrow body.
-            'w-[920px] h-[838px] max-w-[95vw] max-h-[90vh] rounded-xl flex flex-col',
-            'bg-[var(--cmd-palette-bg)]',
-            'border border-[var(--cmd-palette-border)]',
-            'data-[state=open]:animate-confirm-content-in',
-            'data-[state=closed]:animate-confirm-content-out',
+            'w-[920px] h-[838px] max-w-[95vw] max-h-[90vh] flex flex-col',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >

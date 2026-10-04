@@ -125,7 +125,7 @@ export function BotGroupCreateDialog({
   return (
     <Dialog.Root open onOpenChange={(open) => !busyRef.current && onOpenChange(open)}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[70] bg-[var(--overlay-modal)]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[70]" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => {
@@ -136,7 +136,7 @@ export function BotGroupCreateDialog({
             event.preventDefault();
             nameInputRef.current?.focus();
           }}
-          className="fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(460px,calc(100vw-32px))] flex-col rounded-xl border border-[var(--border-default)] bg-[var(--confirm-bg)] p-4 outline-none"
+          className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(460px,calc(100vw-32px))] flex-col p-4 outline-none"
         >
           <form className="flex min-h-0 flex-col" onSubmit={(event) => void submit(event)} noValidate>
             <Dialog.Title className="text-18 font-medium text-[var(--confirm-title)]">
