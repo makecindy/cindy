@@ -2140,6 +2140,70 @@ mark.doc-search-mark [class] {
   -webkit-backdrop-filter: none;
 }
 
+/* 弹窗外框(DESIGN §4 Dialog & Modal):所有模态弹窗的遮罩与面板都用这两个类,不在调用处
+   另写颜色、模糊、圆角、底色、描边或阴影(modalSurfaceContract.test.ts 守护)。
+   - 遮罩:--overlay-modal 压暗 + 背后内容模糊 4px;Windows 不模糊 —— 透明窗口上的 CSS
+     backdrop-filter 可能渲染成黑块,集显 / 软件渲染有性能风险(§15.12,与菜单毛玻璃同口径)。
+   - 面板:12px 容器圆角、--confirm-bg 卡片底、1px Board 描边、与下拉菜单同一个登记浮层阴影 --shadow-menu。
+   - 出现 / 消失(DESIGN §14.4 heavy overlay,参照 Fluid Functionalism chat-message 的入场):
+     遮罩淡入;面板淡入 + 上浮 8px + 0.96→1,--motion-enter / --motion-ease-out。
+     消失只淡出、不倒放入场,--motion-exit / --motion-ease-in。Radix 弹窗按 data-state 走
+     入退场(Presence 等退场动画结束才卸载);手写弹窗没有 data-state,只有挂载时的入场。
+     用 left-1/2 top-1/2 + -translate-x/y-1/2 居中的面板,关键帧要带上 translate(-50%,-50%),
+     否则动画期间会盖掉 Tailwind 的居中位移、整块跳到左上。时长走 motion token,减弱动效时归零。
+   放在 components 层,宽度、定位、内边距等布局类照常由 Tailwind 工具类决定。 */
+@keyframes modal-scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes modal-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes modal-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+}
+@keyframes modal-panel-in-centered {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) translateY(8px) scale(0.96);
+  }
+  to {
+    transform: translate(-50%, -50%);
+  }
+}
+@layer components {
+  .modal-scrim {
+    background-color: var(--overlay-modal);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    animation: modal-scrim-in var(--motion-enter) var(--motion-ease-out);
+  }
+  .modal-panel.-translate-x-1\/2 {
+    animation-name: modal-panel-in-centered;
+  }
+  .modal-scrim[data-state='closed'],
+  .modal-panel[data-state='closed'] {
+    animation: modal-fade-out var(--motion-exit) var(--motion-ease-in) forwards;
+  }
+  [data-platform='win32'] .modal-scrim {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .modal-panel {
+    border-radius: 0.75rem;
+    border: 1px solid var(--border-default);
+    background-color: var(--confirm-bg);
+    box-shadow: var(--shadow-menu);
+    animation: modal-panel-in var(--motion-enter) var(--motion-ease-out);
+  }
+}
+
 /* 共享下拉菜单行(components/ui/dropdown-menu.tsx,DESIGN §4):行内 Lucide 图标平时线宽 1.5,
    高亮 / 勾选 / 展开时回到 2。只动默认线宽(stroke-width="2")的图标:显式传了其他 strokeWidth 的
    不命中;显式传 2 的由组件标上 data-menu-icon-stroke(行内直接子元素与普通标签内可识别)。 */

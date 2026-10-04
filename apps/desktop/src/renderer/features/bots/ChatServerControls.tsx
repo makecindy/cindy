@@ -109,10 +109,10 @@ function InviteDialog({ groupId, onClose, onJoined }: { groupId?: string; onClos
   }
   const title = t(key(groupId ? 'invite' : 'join'));
   return <Dialog.Root open onOpenChange={open => !busyRef.current && !open && onClose()}>
-    <Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-[70] bg-[var(--overlay-modal)]" />
+    <Dialog.Portal><Dialog.Overlay className="modal-scrim fixed inset-0 z-[70]" />
       <Dialog.Content onPointerDownOutside={e => e.preventDefault()}
         onEscapeKeyDown={e => { if (e.isComposing || e.keyCode === 229 || busyRef.current) e.preventDefault(); }}
-        className="fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(460px,calc(100vw-32px))] flex-col gap-4 rounded-xl border border-[var(--border-default)] bg-[var(--confirm-bg)] p-5 outline-none">
+        className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(460px,calc(100vw-32px))] flex-col gap-4 p-5 outline-none">
         <Dialog.Title className="text-18 font-medium text-[var(--confirm-title)]">{title}</Dialog.Title>
         <Dialog.Description className="text-13 leading-normal text-[var(--confirm-desc)]">{t(key(groupId ? 'inviteDescription' : 'joinDescription'))}</Dialog.Description>
         {(!groupId || link) && <Input aria-label={t(key('inviteLink'))} value={link} readOnly={!!groupId} disabled={busy}

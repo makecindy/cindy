@@ -320,11 +320,11 @@ export function TaskMigrationDialog({
     >
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]"
+          className="modal-scrim fixed inset-0 z-[10000]"
           onClick={(e) => e.stopPropagation()}
         />
         <Dialog.Content
-          className="fixed left-1/2 top-1/2 z-[10000] w-[calc(100%-32px)] max-w-[480px] -translate-x-1/2 -translate-y-1/2 rounded-xl bg-[var(--confirm-bg)] p-4 shadow-[var(--confirm-shadow)] [-webkit-app-region:no-drag]"
+          className="modal-panel fixed left-1/2 top-1/2 z-[10000] w-[calc(100%-32px)] max-w-[480px] -translate-x-1/2 -translate-y-1/2 p-4 [-webkit-app-region:no-drag]"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}

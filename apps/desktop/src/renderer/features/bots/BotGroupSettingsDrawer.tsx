@@ -70,7 +70,7 @@ export function BotGroupSettingsDrawer() {
     <Dialog.Root open={open} onOpenChange={(next) => !next && close()}>
       <Dialog.Portal>
         {/* Keep portaled controls inside the overlay’s React tree so its scroll lock allows them. */}
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]">
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-50">
           <Dialog.Content
             onPointerDownOutside={(event) => event.preventDefault()}
             aria-describedby={undefined}

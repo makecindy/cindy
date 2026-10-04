@@ -92,7 +92,7 @@ export function ChatThreadPanel({ group, rootId, onClose }: { group: BotGroupDet
     finally { sending.current = false; setBusy(false); }
   }
   return <Dialog.Root open onOpenChange={open => !open && onClose()}>
-    <Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]">
+    <Dialog.Portal><Dialog.Overlay className="modal-scrim fixed inset-0 z-50">
       <Dialog.Content aria-describedby={undefined} onPointerDownOutside={e => e.preventDefault()}
         onEscapeKeyDown={e => { if (e.isComposing || e.keyCode === 229) e.preventDefault(); }}
         className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-[var(--border-default)] bg-[var(--surface)] outline-none">
