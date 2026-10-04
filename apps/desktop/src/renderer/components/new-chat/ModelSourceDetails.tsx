@@ -201,7 +201,7 @@ export function ModelSourceDetails({
     <div
       data-model-source-details
       title={[source, ...parts.map((part) => part.title)].join(' · ')}
-      className="flex w-0 min-w-full items-center gap-1 whitespace-nowrap pl-[26px] pt-px text-12 leading-[1.4] text-[var(--text-secondary)]"
+      className="flex w-0 min-w-full items-center gap-1 whitespace-nowrap pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
     >
       <span className="min-w-0 truncate">{source}</span>
       {tightest && (

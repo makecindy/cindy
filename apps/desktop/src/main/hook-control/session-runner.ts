@@ -922,6 +922,7 @@ export function createMakerHookSessionRunner(deps: {
         kind: 'scheduler',
         scheduleId: `hook:${req.origin.connectionId}`,
         scheduleName: `Hook · ${req.origin.connectionName}`,
+        ...(req.source?.im ? { surface: 'im' as const } : {}),
       } as const;
 
       // 入站附件: 解码后图片/文件分流(server 2026-07 起全 MIME 转发) ->

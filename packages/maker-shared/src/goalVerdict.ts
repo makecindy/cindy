@@ -1,8 +1,8 @@
 /**
- * 显示层剥离 /goal 协议块。
+ * 显示层剥离 /goal 协议块(Desktop 与 Mobile 共用,两端必须一致)。
  *
- * /goal 协议要求模型在末尾吐一个结构化 JSON 块,main 用代码解析它驱动流程:
- *   - 每个执行轮:`{"goal_status":...}` 裁决块(verdict.ts 解析,驱动续跑/停)
+ * /goal 协议要求模型在末尾吐一个结构化 JSON 块,Desktop main 用代码解析它驱动流程:
+ *   - 每个执行轮:`{"goal_status":...}` 裁决块(goal-host/verdict.ts 解析,驱动续跑/停)
  *   - 历史版本可能残留的 `{"goal_setup":...}` 配置块
  * 这些块对用户都是噪声,显示时剥掉;**原文仍保留在 DB / transcript**(只动渲染,不动数据)。
  *

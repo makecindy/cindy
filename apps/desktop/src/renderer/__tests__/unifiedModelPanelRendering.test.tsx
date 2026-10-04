@@ -566,6 +566,9 @@ describe('统一模型选择器面板', () => {
     renderPanel({ followSession: { active: true, label: '跟随会话', onFollow } });
     const row = screen.getByText('跟随会话').closest('button') as HTMLElement;
     expect(row.getAttribute('aria-selected')).toBe('true');
+    // 模型菜单例外:选中行保留整行底色与勾。
+    expect(row.className).toContain('bg-sidebar-item-hover');
+    expect(row.querySelector('svg.lucide-check')).not.toBeNull();
     await act(async () => {
       fireEvent.click(row);
     });
@@ -606,6 +609,22 @@ describe('统一面板 · 会话内形态', () => {
     const list = screen.getByRole('listbox');
     expect(within(list).queryByRole('group', { name: '推荐' })).toBeNull();
     expect(list.querySelector('[data-group-provider="xd"]')).not.toBeNull();
+  });
+
+  it('选中的模型行保持整行底色、不加勾，名字保持 500(输入框菜单约定里模型面板的例外)', () => {
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'xd', modelId: 'gpt-5.5' });
+    const list = screen.getByRole('listbox');
+    const selected = list.querySelector<HTMLElement>('[data-model-selected="true"]');
+    expect(selected).not.toBeNull();
+    expect(selected!.className).toContain('bg-sidebar-item-hover');
+    // 滑动高亮已盖住悬停行,静态底色在那一刻让位,两层半透明不叠深。
+    expect(selected!.className).toContain('data-[menu-active]:bg-transparent');
+    expect(selected!.querySelector('svg.lucide-check')).toBeNull();
+    expect(selected!.querySelector('span[title].font-medium')).not.toBeNull();
+    const other = Array.from(list.querySelectorAll<HTMLElement>('[data-unified-anchor]')).find(
+      (row) => row !== selected,
+    );
+    expect(other?.className).not.toContain('bg-sidebar-item-hover');
   });
 
   it('收藏置顶但不选中，推荐当前值优先并移除下方空供应商组', () => {
@@ -822,6 +841,11 @@ describe('统一面板 · 会话内形态', () => {
     // 量的是**全量视图**:同引擎视图里看不到的 Opus 5 也在 sizer 里。
     expect(sizer?.textContent).toContain('Opus 5');
     expect(sizer?.textContent).toContain('GPT-5.5');
+    // 组头与真实组头同字号同字重,量出的宽度才可信。
+    const realLabel = container.querySelector('[role="listbox"] [role="group"] > div');
+    const sizerLabel = sizer?.querySelector(':scope > div > div');
+    expect(sizerLabel?.className).toContain('text-12 font-medium leading-[1.33]');
+    expect(realLabel?.className).toContain('text-12 font-medium leading-[1.33]');
     // 不可见、零高度、不进 listbox、不带选中标记(自动对齐永远不会挑中它)。
     expect(sizer?.getAttribute('aria-hidden')).toBe('true');
     expect(sizer?.className).toContain('invisible');

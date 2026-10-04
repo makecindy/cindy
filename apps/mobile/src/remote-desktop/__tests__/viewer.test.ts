@@ -264,6 +264,42 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
   };
 }
 
+describe("display change with a kept stream", () => {
+  it("only re-lays out the desktop without reconnecting media", () => {
+    const v = viewer(true);
+    v.send({ type: "init", epoch: "one", width: 1920, height: 1080 });
+    const negotiations = () =>
+      v.messages.filter((m) => m.type === "iceConfig").length;
+    const before = negotiations();
+    expect(before).toBe(1);
+    v.send({ type: "mouseButtons", topInset: 0, bottomInset: 100 });
+    v.send({ type: "displayGeometry", width: 800, height: 1000 });
+    expect(v.elements.video.style).toMatchObject({
+      width: "400px",
+      height: "500px",
+    });
+    expect(negotiations()).toBe(before);
+    // Invalid geometry is ignored rather than distorting the layout.
+    v.send({ type: "displayGeometry", width: 100, height: 1000 });
+    expect(v.elements.video.style).toMatchObject({ width: "400px" });
+  });
+
+  it("moves the native video frame to the new geometry", () => {
+    const v = viewer(true, true, true);
+    v.send({ type: "init", epoch: "native", width: 1920, height: 1080 });
+    const viewport = () =>
+      v.messages.findLast((m) => m.type === "nativeViewport") as unknown as {
+        width: number;
+        height: number;
+      };
+    const wide = viewport();
+    v.send({ type: "displayGeometry", width: 900, height: 1600 });
+    const tall = viewport();
+    expect(tall.width / tall.height).toBeCloseTo(900 / 1600, 2);
+    expect(wide.width / wide.height).toBeCloseTo(1920 / 1080, 2);
+  });
+});
+
 describe("native media overlay", () => {
   it("leaves RTC negotiation to native and shares the exact input geometry", () => {
     const v = viewer(true, true, true);

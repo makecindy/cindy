@@ -210,7 +210,7 @@ export function useSessionRunningStatus(
         // 把系统通知发出去。标记的清除只由 scheduler 事件驱动,见
         // silencedSessionDoneStore 的文件头注释。
         const isSilencedDone = !hasError && (isSessionDoneSilenced(sessionId)
-          || makerChatStore.wasLastStopPrivateReply(sessionId));
+          || makerChatStore.wasLastStopQuietCompletion(sessionId));
         // Scheduler 已按 schedule.notify 接管这次终态的桌面 / 飞书通知。这里只
         // 抑制 callback。成功绿点改认 schedule 未读,不再从这条 running→done 点
         // `done` attention;失败红点仍立即挂。debounce 落地还会再读一次标记,
@@ -286,7 +286,7 @@ export function useSessionRunningStatus(
               cur.hasPendingPluginSetup);
           // silenced 可能在 debounce 窗口内才到:转换当时没静默、进了 debounce,落地必须再读。
           if (!hasTerminalError && (isSessionDoneSilenced(sessionId)
-            || makerChatStore.wasLastStopPrivateReply(sessionId))) return;
+            || makerChatStore.wasLastStopQuietCompletion(sessionId))) return;
           const ownedNow = isSessionTerminalNotificationOwnedByScheduler(sessionId);
           if (
             !wasActiveAtCompletion &&

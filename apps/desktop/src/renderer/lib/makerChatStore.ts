@@ -2734,6 +2734,8 @@ export interface SessionChatState {
   lastStopWasSideTask: boolean;
   /** Successful automatic private replies remain in history without completion alerts. */
   lastStopWasPrivateReply?: boolean;
+  /** IM owns this turn's successful reply; do not duplicate its unread indicator. */
+  lastStopWasIm?: boolean;
   /** The last turn ran in a hidden Bot group lane; the group chat owns its alerts. */
   lastStopWasGroupLane?: boolean;
   /**
@@ -6208,6 +6210,9 @@ export function handleStreamEvent(
         pendingRemoteDesktopConfirmation: null,
         pendingRemoteDesktopConfirmationQueue: [],
         lastStopWasPrivateReply: (incomingMeta ?? state.lastAgentMeta)?.botPrivateReply === true,
+        // An originless terminal tail must retain the provenance from status.
+        // The next running transition resets this marker for a new App turn.
+        lastStopWasIm: event.turnOrigin ? event.turnOrigin.surface === 'im' : state.lastStopWasIm,
         lastStopWasGroupLane: (incomingMeta ?? state.lastAgentMeta)?.botGroupLane === true,
         // agent-meta: turn 结束清空，下一 turn 重新累积。
         lastAgentMeta: null,
@@ -7125,6 +7130,7 @@ function handleStatusUpdate(
     // 真实 turn 的起/止都把 side-task 标记复位(它只描述「最近一次 stop」)。
     lastStopWasSideTask: false,
     lastStopWasPrivateReply: update.isRunning ? false : state.lastStopWasPrivateReply,
+    lastStopWasIm: update.isRunning ? false : state.lastStopWasIm,
     lastStopWasGroupLane: update.isRunning ? false : state.lastStopWasGroupLane,
     // 唤醒桥接:仅在 wake turn 真正启动(isRunning:true)时消费一个计数,或 wake turn
     // 失败时消费——后者表现为 Done + !isRunning 且主 turn 已经结束
@@ -7215,6 +7221,7 @@ type MakerEventPayload = {
     agentMeta?: Record<string, unknown>;
     turnContinuationId?: number;
     turnScope?: 'turn' | 'background';
+    turnOrigin?: CCAgentStreamEvent['turnOrigin'];
   };
   persistId?: string;
   resolvedContent?: string;
@@ -7459,6 +7466,7 @@ function dispatchStreamEventPayload(
       ? { turnContinuationId: event.turnContinuationId }
       : {}),
     ...(event.turnScope !== undefined ? { turnScope: event.turnScope } : {}),
+    ...(event.turnOrigin !== undefined ? { turnOrigin: event.turnOrigin } : {}),
     persistId,
     resolvedContent,
   } as CCAgentStreamEvent;
@@ -7867,7 +7875,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       if (!isTurnContinuationBoundaryEvent(event) && !update.skipTurnReset && !update.isRunning) {
         supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
       }
-      setState(sessionId, (s) => handleStatusUpdate(s, update));
+      setState(sessionId, (s) => {
+        const next = handleStatusUpdate(s, update);
+        if (isTurnContinuationBoundaryEvent(event) || update.skipTurnReset || update.isRunning) return next;
+        return event.turnOrigin
+          ? { ...next, lastStopWasIm: event.turnOrigin.surface === 'im' }
+          : next;
+      });
       scheduleWakeBridgeReconciliation(sessionId);
       return;
     }
@@ -17369,8 +17383,10 @@ export const makerChatStore = {
   hasSessionTerminalError,
   hasSessionRecoveryPending,
   wasLastStopSideTask,
-  wasLastStopPrivateReply: (sessionId: string): boolean =>
-    sessions.get(sessionId)?.lastStopWasPrivateReply === true,
+  wasLastStopQuietCompletion: (sessionId: string): boolean => {
+    const state = sessions.get(sessionId);
+    return state?.lastStopWasPrivateReply === true || state?.lastStopWasIm === true;
+  },
   wasLastStopGroupLane: (sessionId: string): boolean =>
     sessions.get(sessionId)?.lastStopWasGroupLane === true,
   /** 输入框推荐后台完成配对用的 non-creating turn 起点。 */

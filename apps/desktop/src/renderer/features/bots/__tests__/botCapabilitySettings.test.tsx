@@ -9,7 +9,7 @@ const h = vi.hoisted(() => ({
   offMcp: vi.fn(),
   list: vi.fn(async () => ({ agentKind: 'pi', servers: [] })),
 }));
-vi.mock('../botPronounContext', () => ({ useBotTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('../botPronounContext', () => ({ useBotTranslation: () => ({ t: (key: string, opts?: { defaultValue?: string }) => opts?.defaultValue ?? key }) }));
 vi.mock('../botStore', () => ({
   getEffectiveBotModelChain: () => [],
   subscribeBotGlobalModel: () => () => {},
@@ -53,8 +53,8 @@ describe('controlled capability page lifetime', () => {
     const view = render(<BotCapabilitySettings {...props} expanded />);
     await waitFor(() => expect(h.list).toHaveBeenCalledOnce());
     await waitFor(() => expect(view.getByText('整理工作周报')).toBeTruthy());
-    const checkbox = view.getByText('整理工作周报').closest('label')!.querySelector('input')!;
-    expect(checkbox.checked).toBe(true);
+    const checkbox = view.getByRole('switch', { name: '整理工作周报' }) as HTMLButtonElement;
+    expect(checkbox.getAttribute('aria-checked') === 'true').toBe(true);
     expect(checkbox.disabled).toBe(true);
     view.rerender(<BotCapabilitySettings {...props} expanded={false} />);
     expect(h.offLocal).toHaveBeenCalledOnce();
@@ -85,9 +85,9 @@ it('shows inherited tools as selected and preserves the others when one is expli
       toolsetMode: 'inherit', mcpMode: 'inherit' } as unknown as BotProfile['capabilities']}
     skills={[]} onChange={onChange} />);
   await waitFor(() => expect(view.getByText('Documents')).toBeTruthy());
-  const checkbox = (name: string) => view.getByText(name).closest('label')!.querySelector('input')!;
-  expect(checkbox('Documents').checked).toBe(true);
-  expect(checkbox('Orca').checked).toBe(true);
+  const checkbox = (name: string) => view.getByRole('switch', { name }) as HTMLButtonElement;
+  expect(checkbox('Documents').getAttribute('aria-checked') === 'true').toBe(true);
+  expect(checkbox('Orca').getAttribute('aria-checked') === 'true').toBe(true);
   fireEvent.click(checkbox('Documents'));
   expect(onChange).toHaveBeenCalledWith('toolset', ['collab']);
 });
@@ -120,10 +120,10 @@ it.each(['mcp', 'toolset'] as const)('preserves inherited %s tools until its fai
       mcpServers: kind === 'mcp' ? ['saved'] : [], toolsets: kind === 'toolset' ? ['saved'] : [],
       toolsetMode: 'inherit', mcpMode: 'inherit' } as unknown as BotProfile['capabilities']}
     skills={[]} onChange={onChange} />);
-  const saved = () => view.getByRole('checkbox', { name: /saved/ }) as HTMLInputElement;
+  const saved = () => view.getByRole('switch', { name: /saved/ }) as HTMLInputElement;
   expect(saved().disabled).toBe(true);
   await waitFor(() => expect(view.getByRole('button', { name: 'bots.retry' })).toBeTruthy());
-  expect(saved().checked).toBe(true);
+  expect(saved().getAttribute('aria-checked') === 'true').toBe(true);
   expect(saved().disabled).toBe(true);
   fireEvent.click(saved());
   expect(onChange).not.toHaveBeenCalled();
@@ -131,9 +131,38 @@ it.each(['mcp', 'toolset'] as const)('preserves inherited %s tools until its fai
   recovered = true;
   fireEvent.click(view.getByRole('button', { name: 'bots.retry' }));
   await waitFor(() => expect(view.getByText('Other inherited capability')).toBeTruthy());
-  const loaded = view.getByRole('checkbox', { name: 'Saved capability' }) as HTMLInputElement;
+  const loaded = view.getByRole('switch', { name: 'Saved capability' }) as HTMLInputElement;
   expect(loaded.disabled).toBe(false);
-  expect((view.getByRole('checkbox', { name: 'Other inherited capability' }) as HTMLInputElement).checked).toBe(true);
+  expect((view.getByRole('switch', { name: 'Other inherited capability' }) as HTMLButtonElement).getAttribute('aria-checked') === 'true').toBe(true);
   fireEvent.click(loaded);
   expect(onChange).toHaveBeenCalledExactlyOnceWith(kind, ['inherited']);
+});
+
+it('keeps the full tool list visible and offers configuration for available and unavailable tools', async () => {
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+    localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: { listSkills: async () => [] } },
+    maker: { onMcpChanged: () => h.offMcp, listCustomMcpServers: h.list,
+      listAgentSkills: async () => ({ success: true, skills: [] }),
+      plugins: { list: async () => [
+        { id: 'browser', name: 'Browser', description: 'Read and operate web pages', available: true },
+        { id: 'computer', name: 'Computer', description: 'Use local apps', available: false },
+      ] },
+    },
+  } });
+  const onConfigure = vi.fn();
+  const view = render(<BotCapabilitySettings expanded onConfigure={onConfigure}
+    bot={{ id: 'bot-1', canonicalSessionId: 's1' } as BotProfile}
+    capabilities={{ modelChain: [], modelChainOverride: null, mcpServers: [], toolsets: [],
+      toolsetMode: 'inherit', mcpMode: 'inherit' } as unknown as BotProfile['capabilities']}
+    skills={[]} onChange={vi.fn()} />);
+  await waitFor(() => expect(view.getByRole('switch', { name: 'Browser' })).toBeTruthy());
+  const field = view.getByRole('switch', { name: 'Browser' }).closest('fieldset')!;
+  expect(field.querySelector('.overflow-y-auto')).toBeNull();
+  expect(field.textContent).toContain('Read and operate web pages');
+  const buttons = field.querySelectorAll<HTMLButtonElement>('button:not([role=switch])');
+  fireEvent.click(buttons[0]!); expect(onConfigure).toHaveBeenLastCalledWith('toolset', 'browser');
+  fireEvent.click(buttons[1]!); expect(onConfigure).toHaveBeenLastCalledWith('toolset', 'computer');
+  fireEvent.change(view.getByRole('textbox'), { target: { value: 'web pages' } });
+  expect(view.getByRole('switch', { name: 'Browser' })).toBeTruthy();
+  expect(view.queryByRole('switch', { name: 'Computer' })).toBeNull();
 });

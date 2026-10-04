@@ -49,6 +49,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { useEffectiveSelectedMachineId } from '@/features/device-link/useMachineSwitcher';
+import { useRemoteDevices } from '@/features/device-link/remoteProjectsStore';
 import { MACHINE_ALL } from '@/features/device-link/selectedMachineStore';
 import {
   projectOrderWriteLedger,
@@ -315,6 +316,12 @@ export function ProjectsSection({
   isCreateDialogueDisabled = false,
 }: ProjectsSectionProps) {
   const { t } = useTranslation();
+  const remoteDevices = useRemoteDevices();
+  // 分组索引会排除断线设备；已有缓存条目的段头仍需读取设备名，并跟随改名更新。
+  const cachedDeviceNames = useMemo(
+    () => new Map(remoteDevices.map((device) => [device.deviceId, device.deviceName])),
+    [remoteDevices],
+  );
   const localPlatform = window.electronAPI.platform;
   const projectComparisonKey = useCallback(
     (projectKey: string) => projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey,
@@ -1148,7 +1155,7 @@ export function ProjectsSection({
                   ? remoteDeviceIndex?.get(section.deviceId)
                   : undefined;
                 const name = section.deviceId
-                  ? (device?.name ?? section.deviceId)
+                  ? (device?.name ?? cachedDeviceNames.get(section.deviceId) ?? section.deviceId)
                   : t('ccAgent.sidebar.deviceGroup.local');
                 const online = section.deviceId ? (device?.online ?? false) : true;
                 const sectionCollapsed = collapsedDevices.has(key);

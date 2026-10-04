@@ -68,6 +68,8 @@
     "durationSeconds": "{{seconds}}초",
     "durationMinutes": "{{minutes}}분",
     "durationMinutesSeconds": "{{minutes}}분 {{seconds}}초",
+    "durationHoursMinutes": "{{hours}}시간 {{minutes}}분",
+    "durationDaysHoursMinutes": "{{days}}일 {{hours}}시간 {{minutes}}분",
     "subagentSummary": "하위 에이전트 요약",
     "agentSwitchLabel": "{{from}}에서 {{to}}(으)로 전환됨",
     "agentSwitchViewHandoff": "{{label}}, 인계 내용 보기",

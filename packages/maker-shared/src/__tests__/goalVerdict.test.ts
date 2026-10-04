@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { stripGoalVerdictBlock } from '@/lib/goalVerdict';
+import { stripGoalVerdictBlock } from '../goalVerdict';
 
 describe('stripGoalVerdictBlock', () => {
   it('strips a trailing fenced json verdict block', () => {

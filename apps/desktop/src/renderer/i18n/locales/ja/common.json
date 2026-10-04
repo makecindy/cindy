@@ -3965,6 +3965,15 @@
         "noProjectHint": "プロジェクトのセッションから「設定」を開くと、そのプロジェクトのコンピュータ直接操作を切り替えられます。",
         "update": {
           "available": "新しいバージョン v{{version}} が利用可能です。更新後、システム権限の再許可が必要になる場合があります。",
+          "previouslyAvailable": "前回の確認で v{{version}} が見つかりました。インストール前に利用可能か再確認します。",
+          "readingVersion": "バージョンを読み込み中…",
+          "checking": "更新を確認中…",
+          "upToDate": "最新バージョンです",
+          "checkFailed": "更新を確認できませんでした",
+          "lastChecked": "前回の確認: {{time}}",
+          "check": "更新を確認",
+          "retry": "再試行",
+          "notChecked": "未確認",
           "action": "更新",
           "updating": "更新中…",
           "downloadingPercent": "ダウンロード中 {{percent}}%（{{downloaded}}/{{total}} MB）…",
@@ -4050,6 +4059,38 @@
         "lsp": {
           "name": "LSP",
           "description": "TypeScript LSP クエリ(Beta — 「設定 → 実験的機能 → LSP モード」で制御)"
+        },
+        "android": {
+          "name": "Android 自動化",
+          "description": "接続された Android デバイスを表示・操作します。"
+        },
+        "ios-simulator": {
+          "name": "iOS シミュレータ",
+          "description": "iOS シミュレータでアプリをインストール、実行、検証します。"
+        },
+        "browser": {
+          "name": "ブラウザ",
+          "description": "Web ページを閲覧、読み取り、撮影、操作します。"
+        },
+        "computer": {
+          "name": "コンピュータ操作",
+          "description": "ローカルのアプリ、ウィンドウ、マウス、キーボードを操作します。"
+        },
+        "wechat": {
+          "name": "個人用 WeChat",
+          "description": "既知の WeChat 連絡先にメッセージを送信します。"
+        },
+        "slack": {
+          "name": "Slack",
+          "description": "接続済みの Slack アカウントでメッセージを検索、閲覧、送信します。"
+        },
+        "ssh": {
+          "name": "SSH コマンド",
+          "description": "設定済みの SSH 接続でリモートコンピュータ上のコマンドを実行します。"
+        },
+        "contacts": {
+          "name": "スマート連絡先",
+          "description": "連絡先のプロフィールや交流履歴を検索・管理します。"
         }
       }
     },
@@ -6704,6 +6745,8 @@
   "usageDetails": {
     "durationSeconds": "{{value}}秒",
     "durationMinutesSeconds": "{{minutes}}分 {{seconds}}秒",
+    "durationHoursMinutes": "{{hours}}時間{{minutes}}分",
+    "durationDaysHoursMinutes": "{{days}}日{{hours}}時間{{minutes}}分",
     "performanceLine": "速度 {{rate}} トークン/秒 · 時間 {{duration}}",
     "performanceRateLine": "速度 {{rate}} トークン/秒",
     "timeLine": "時間 {{duration}}",
@@ -7840,11 +7883,13 @@
     "nameLabel": "呼び名",
     "close": "閉じる",
     "list": {
+      "createMenu": "新規作成",
+      "createTeammate": "パートナーを作成",
       "startChat": "会話を始める",
       "typing": "入力中…",
       "unread": "{{count}} 件の未読メッセージ",
-      "search": "仲間を検索",
-      "searchPlaceholder": "仲間を検索…",
+      "search": "パートナーやグループチャットを検索",
+      "searchPlaceholder": "パートナーやグループチャットを検索…",
       "showHidden": "非表示の仲間を表示",
       "hideHidden": "非表示の仲間を閉じる",
       "hidden": "非表示（{{count}}）",
@@ -8029,7 +8074,8 @@
       "duration": {
         "seconds": "{{n}} 秒",
         "minutes": "{{n}} 分",
-        "hoursMinutes": "{{h}} 時間 {{m}} 分"
+        "hoursMinutes": "{{h}} 時間 {{m}} 分",
+        "daysHoursMinutes": "{{d}}日{{h}}時間{{m}}分"
       },
       "viewResult": "結果を見る",
       "noWrittenResult": "テキストの結果はありません。"
@@ -8046,6 +8092,7 @@
       "limitReached": "今回の会話は上限に達し、双方がそれぞれのメインタスクに戻りました"
     },
     "groupChat": {
+      "migrationPending": "過去の履歴の一部をアップロード中です。自動的に再試行します。このチャットは引き続き利用できます。",
       "memberSeparator": "、",
       "memberCount_one": "仲間 {{count}} 人",
       "memberCount_other": "仲間 {{count}} 人",
@@ -8218,6 +8265,85 @@
       },
       "files": {
         "openFailed": "ファイルを開けませんでした。移動または削除された可能性があります"
+      },
+      "server": {
+        "reply": "返信",
+        "replies": "返信",
+        "replyCount": "{{count}} 件の返信",
+        "replyPlaceholder": "このメッセージに返信。@ でパートナーを指定できます…",
+        "sendReply": "返信を送信",
+        "addReaction": "リアクションを追加",
+        "reactionCount": "{{emoji}} · {{count}} 件のリアクション",
+        "invite": "グループに招待",
+        "join": "グループに参加",
+        "inviteDescription": "リンクは 24 時間有効で、一度だけ使えます。承諾するとメンバーになり、チャット履歴を閲覧できます。",
+        "joinDescription": "招待リンクを貼り付けて、グループを確認してから参加してください。",
+        "inviteLink": "招待リンク",
+        "pasteLink": "招待リンクを貼り付け…",
+        "invitedBy": "{{name}} からの招待",
+        "copyLink": "招待リンクをコピー",
+        "copied": "招待リンクをコピーしました",
+        "createLink": "招待リンクを作成",
+        "accept": "承諾して参加",
+        "previewInvite": "招待を確認",
+        "invalidInvite": "招待が無効、使用済み、または期限切れです。新しいリンクを取得してください。",
+        "notAllowed": "このアカウントに権限がありません。アカウントを確認するか、グループ管理者に連絡してください。",
+        "loginRequired": "ログインしてから再試行してください。",
+        "requestFailed": "チャットサービスに接続できません。しばらくしてから再試行してください。",
+        "copyFailed": "コピーできませんでした。リンクを選択して手動でコピーしてください。",
+        "createDescription": "パートナーを選ぶか、先にグループを作成してから友達を招待できます。",
+        "settings": {
+          "name": "グループ名",
+          "topic": "トピック",
+          "description": "説明",
+          "save": "保存",
+          "myProfile": "自分のプロフィール",
+          "editProfile": "名前と画像を編集",
+          "nickname": "このグループでの名前",
+          "nicknameHint": "このグループだけに表示。空欄ならプロフィール名を使用します。",
+          "members": "メンバー · {{count}}",
+          "owner": "オーナー",
+          "admin": "管理者",
+          "member": "メンバー",
+          "guest": "ゲスト",
+          "companionOf": "{{name}} のパートナー",
+          "guestAccess": "他のメンバーの利用権限",
+          "toolsHint": "メンバーはパートナーの既存ツールと個人情報を利用できます。結果は全員に公開され、既存の承認ルールが適用されます。取り消すと実行中の要求は停止しますが、実行済みの操作は元に戻せません。",
+          "chatHint": "グループ内のメッセージのみを使用し、オーナーの記憶、個人情報、ツールは使用しません。",
+          "none": "オーナーのみ",
+          "chat": "グループ内の会話のみ",
+          "tools": "ツールと情報の利用を許可済み",
+          "ownerOnly": "この権限を変更できるのはパートナーのオーナーだけです。",
+          "authorizeTitle": "{{name}} のツールと情報の利用を許可しますか？",
+          "makeAdmin": "管理者にする",
+          "removeAdmin": "管理者を解除",
+          "transfer": "所有権を譲渡",
+          "transferTitle": "{{name}} に所有権を譲渡しますか？",
+          "transferHint": "相手がオーナーになり、あなたは管理者になります。パートナーもオーナーになれます。",
+          "remove": "グループから削除",
+          "removeTitle": "{{name}} をグループから削除しますか？",
+          "removeHint": "メッセージの閲覧と送信ができなくなります。そのメンバーのパートナーも退出します。",
+          "addCompanion": "自分のパートナーを招待",
+          "leave": "グループを退出",
+          "leaveHint": "あなたとあなたのパートナーが退出します。オーナーは先に所有権を譲渡してください。",
+          "archive": "グループをアーカイブ",
+          "archiveHint": "履歴を残し、新しいメッセージとパートナーの実行を停止します。",
+          "confirm": "確認",
+          "lastOwner": "退出またはオーナーを削除する前に、別のメンバーに所有権を譲渡してください。",
+          "conflict": "設定が更新されました。再読み込みしてお試しください。",
+          "replyMode": "メンションがない場合",
+          "speakingMode": "発言順",
+          "all": "全パートナーが返信可能",
+          "mentioned": "メンション時のみ",
+          "auto": "同時に発言",
+          "sequential": "順番に発言",
+          "unarchive": "アーカイブを解除",
+          "unarchiveHint": "メッセージとパートナーの実行を再開します。",
+          "archived": "アーカイブ済みです。履歴は引き続き閲覧できます。",
+          "noneHint": "このグループでは仲間の所有者だけが応答を依頼できます。",
+          "companionPermissions": "仲間の権限",
+          "configureCapabilities": "ツールと利用権限の設定"
+        }
       }
     },
     "joined": {
@@ -8269,7 +8395,16 @@
       "mcp": "MCP",
       "toolset": "組み込みツール",
       "unavailable": "利用不可",
-      "empty": "一致する機能はありません"
+      "empty": "一致する機能はありません",
+      "accessHint": "仲間が使える内蔵ツール、MCP、スキルを個別に選びます。変更は許可されたグループ内の依頼を含め、次の依頼から適用されます。",
+      "inheritedHint": "現在はこのコンピュータで有効なツールを使用します。項目をオフにすると、この一覧では選択した項目だけを使用します。",
+      "selectedHint": "この一覧では、仲間は選択した項目だけを使用できます。",
+      "personalHint": "この仲間が学んだスキルです。仲間のプロフィールと共に読み込まれます。",
+      "unavailableHint": "このコンピュータまたは実行環境では利用できません。接続やシステム権限を設定してください。",
+      "configure": "設定を開く",
+      "empty_toolset": "この実行環境には利用できる内蔵ツールがありません。",
+      "empty_mcp": "カスタム MCP サーバーはまだ追加されていません。",
+      "empty_skill": "選択できるスキルはありません。"
     },
     "guided": {
       "title": "パートナーを作成",
@@ -9349,6 +9484,10 @@
       "feedbackLabel": "フィードバック:",
       "noFeedback": "(フィードバックなし)",
       "cancelled": "キャンセル済み"
+    },
+    "thinking": {
+      "completed": "思考 {{duration}}",
+      "aborted": "思考 {{duration}}（中止）"
     },
     "workGroup": {
       "working": "作業中…",

@@ -117,8 +117,10 @@ function normalizeSkillMode(
   return Array.isArray(configuredSkills) && configuredSkills.length > 0 ? 'allowlist' : 'inherit';
 }
 
-function normalizeCapabilityMode(_value: unknown, _configured: unknown): 'inherit' | 'allowlist' {
-  return 'allowlist';
+function normalizeCapabilityMode(value: unknown): 'inherit' | 'allowlist' {
+  // Main already migrates legacy grants. Preserve its mode so the settings
+  // editor can distinguish inherited access from an explicit (even empty) list.
+  return value === 'allowlist' ? 'allowlist' : 'inherit';
 }
 
 function normalizeStringList(value: unknown): string[] {
@@ -663,9 +665,9 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
         resolvedModel.model ||
         normalizeBotModel(item.capabilities?.model, harness),
       modelOverride: rawCapabilities?.modelOverride === null ? null : modelOverride,
-      toolsetMode: normalizeCapabilityMode(rawCapabilities?.toolsetMode, toolsets),
+      toolsetMode: normalizeCapabilityMode(rawCapabilities?.toolsetMode),
       toolsets,
-      mcpMode: normalizeCapabilityMode(rawCapabilities?.mcpMode, rawCapabilities?.mcpServers),
+      mcpMode: normalizeCapabilityMode(rawCapabilities?.mcpMode),
       mcpServers: normalizeStringList(rawCapabilities?.mcpServers),
     },
     canonicalSessionId:

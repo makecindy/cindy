@@ -396,6 +396,8 @@ interface ComputerDriverUpdateCheck {
   latestVersion: string | null;
   updateAvailable: boolean;
   updating: boolean;
+  checkStatus?: 'success' | 'error';
+  checkedAt?: number;
 }
 
 interface ComputerDriverUpdateProgress {
@@ -698,6 +700,8 @@ interface CodexUsageSnapshot {
 
 interface CCAgentStreamEvent {
   sessionId: string;
+  /** Host-owned per-turn source, independent of the session's original channel. */
+  turnOrigin?: import('@cindy/maker-core').SendOrigin;
   type:
     | 'text'
     | 'tool_use'
@@ -5290,6 +5294,7 @@ interface ElectronAPI {
         ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
       ) => void,
     ) => () => void;
+    chatServer: import('../shared/botGroupChat').ChatServerApi;
     listBotGroups: () => Promise<import('../shared/botGroupChat').BotGroupListResult>;
     getBotGroup: (
       groupId: string,
@@ -7042,7 +7047,7 @@ interface ElectronAPI {
       onPermissionGuideStatusChanged: (
         callback: (status: ComputerDriverStatus) => void,
       ) => () => void;
-      checkUpdate: () => Promise<ComputerDriverUpdateCheck>;
+      checkUpdate: (options?: { force?: boolean }) => Promise<ComputerDriverUpdateCheck>;
       updateDriver: (opts?: { joinOnly?: boolean }) => Promise<ComputerDriverInstallResult>;
       onUpdateProgress: (callback: (progress: ComputerDriverUpdateProgress) => void) => () => void;
     };

@@ -1,5 +1,5 @@
 /**
- * 伙伴侧栏里的「群聊」分组：小节头（带新建按钮）+ 群行。
+ * 统一伙伴列表里的群聊行，和伙伴私聊共同按最新消息排序。
  *
  * 群行与伙伴行同一套 IM 行几何（见 __tests__/botsSidebarSpacing.test.ts）：左侧两位
  * 成员的叠放头像，第一行群名，第二行最近一条消息「作者：内容」。有伙伴正在发言时，
@@ -10,29 +10,24 @@
  * 某一步进行中写「分工 k/n · 谁 正在做」，两者同样用运行中标记；安排待开始、做完一步
  * 等继续或没做完时，第二行换成对应的提示，提醒用户回来看看。
  */
-import { useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { Plus, Sparkles, Users } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import type { AgentIslandSessionActivity } from '../../../shared/agentIsland';
 import type { BotGroupSummary } from '../../../shared/botGroupChat';
 import { BotGenerationLabel } from './BotGenerationLabel';
-import { BotGroupCreateDialog } from './BotGroupCreateDialog';
 import { BotGroupDuoAvatar } from './BotGroupAvatars';
 import { isBotGroupLaneSession } from './botGroupLane';
 import {
   botGroupPreviewLine,
   botGroupSidebarPlanPreview,
   isRunningBotGroupSidebarPreview,
-  sortBotGroups,
   type BotGroupSidebarPlanPreview,
 } from './botGroupPresentation';
-import { useBotGroupList } from './botGroupStore';
-import { isBotGroupUnread, subscribeBotReadState, getBotLastReadAtMap } from './botReadState';
+import { isBotGroupUnread } from './botReadState';
 import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
-const readRevision = () => JSON.stringify(getBotLastReadAtMap());
 import { formatBotListTimestamp } from './botListDisplay';
 import type { BotProfile } from './botStore';
 
@@ -51,24 +46,22 @@ function speakingLaneActivity(
     .find((activity) => activity?.phase === 'running' || activity?.phase === 'needs-interaction');
 }
 
-export function BotGroupSidebarSection({
+export function BotGroupSidebarRow({
+  group,
   bots,
   islandActivity,
   now,
-  selectedGroupId,
+  selected,
   onOpenGroup,
 }: {
+  group: BotGroupSummary;
   bots: readonly BotProfile[];
   islandActivity: ReadonlyMap<string, AgentIslandSessionActivity>;
   now: number;
-  selectedGroupId: string | undefined;
+  selected: boolean;
   onOpenGroup: (groupId: string) => void;
 }) {
   const { t } = useTranslation();
-  const { groups } = useBotGroupList();
-  useSyncExternalStore(subscribeBotReadState, readRevision, readRevision);
-  const sorted = useMemo(() => sortBotGroups(groups), [groups]);
-  const [createOpen, setCreateOpen] = useState(false);
 
   const previewText = (group: BotGroupSummary, plan: BotGroupSidebarPlanPreview | null): string => {
     if (plan?.kind === 'proposed') {
@@ -82,8 +75,8 @@ export function BotGroupSidebarSection({
     const last = group.lastMessage;
     if (!last) return t('bots.groupChat.sidebar.empty');
     const text = botGroupPreviewLine(last.preview);
-    if (last.authorKind === 'user') return t('bots.groupChat.sidebar.previewYou', { text });
-    if (last.authorKind === 'bot' && last.authorName.trim()) {
+    if (last.authorKind === 'user' && last.isSelf !== false) return t('bots.groupChat.sidebar.previewYou', { text });
+    if (last.authorName.trim()) {
       return t('bots.groupChat.sidebar.preview', { name: last.authorName.trim(), text });
     }
     return text;
@@ -155,79 +148,40 @@ export function BotGroupSidebarSection({
     );
   };
 
+  const mutedClass = selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]';
+  const timestamp = formatBotListTimestamp(
+    group.speakingBotIds.length > 0 ? now : group.lastMessage?.createdAt ?? group.updatedAt,
+    now,
+  );
   return (
-    <section className="mt-4" aria-labelledby="bot-group-sidebar-title">
-      {/* 小节头与「伙伴」小节同一套对齐:容器 12px + 行内 10px。 */}
-      <div className="flex items-center justify-between px-2.5 pb-2">
-        <div className="flex items-center gap-2 text-12 font-medium text-[var(--sidebar-list-muted)]">
-          <Users size={14} aria-hidden />
-          <span id="bot-group-sidebar-title">{t('bots.groupChat.sidebar.title')}</span>
-        </div>
-        <Tip text={t('bots.groupChat.create.title')}>
-          <button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--sidebar-list-muted)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--sidebar-nav-text)]"
-            aria-label={t('bots.groupChat.create.title')}
-          >
-            <Plus size={15} />
-          </button>
-        </Tip>
-      </div>
-      {sorted.length > 0 ? (
-        <div className="flex flex-col gap-1">
-          {sorted.map((group) => {
-            const selected = group.id === selectedGroupId;
-            const mutedClass = selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]';
-            const timestamp = formatBotListTimestamp(
-              group.speakingBotIds.length > 0 ? now : group.lastMessage?.createdAt ?? group.updatedAt,
-              now,
-            );
-            return (
-              <button
-                key={group.id}
-                type="button"
-                aria-current={selected ? 'page' : undefined}
-                onClick={() => onOpenGroup(group.id)}
-                className={cn(
-                  'group flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                  selected
-                    ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
-                    : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover',
-                )}
-              >
-                <BotGroupDuoAvatar members={group.members} selected={selected} />
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span className="min-w-0 truncate text-14 leading-5" title={group.name}>
-                    {group.name}
-                  </span>
-                  <span className="flex min-w-0 items-center gap-2">{renderSubtitle(group, mutedClass)}</span>
-                </span>
-                <span
-                  className={cn(
-                    'w-10 shrink-0 self-start pt-0.5 text-right text-11 tabular-nums',
-                    mutedClass,
-                  )}
-                >
-                  {timestamp}
-                  <NavigationCountBadge count={isBotGroupUnread(group) ? 1 : 0} label={t('sidebar.teammateUnreadCount', { count: 1 })} className="ml-auto mt-1 w-fit" />
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-      {createOpen ? (
-        <BotGroupCreateDialog
-          onOpenChange={(open) => {
-            if (!open) setCreateOpen(false);
-          }}
-          onCreated={(groupId) => {
-            setCreateOpen(false);
-            onOpenGroup(groupId);
-          }}
-        />
-      ) : null}
-    </section>
+    <button
+      key={group.id}
+      type="button"
+      aria-current={selected ? 'page' : undefined}
+      onClick={() => onOpenGroup(group.id)}
+      className={cn(
+        'group flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        selected
+          ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
+          : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover',
+      )}
+    >
+      <BotGroupDuoAvatar members={group.members} selected={selected} />
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="min-w-0 truncate text-14 leading-5" title={group.name}>
+          {group.name}
+        </span>
+        <span className="flex min-w-0 items-center gap-2">{renderSubtitle(group, mutedClass)}</span>
+      </span>
+      <span
+        className={cn(
+          'w-10 shrink-0 self-start pt-0.5 text-right text-11 tabular-nums',
+          mutedClass,
+        )}
+      >
+        {timestamp}
+        <NavigationCountBadge count={isBotGroupUnread(group) ? 1 : 0} label={t('sidebar.teammateUnreadCount', { count: 1 })} className="ml-auto mt-1 w-fit" />
+      </span>
+    </button>
   );
 }

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { RemoteViewerConnection } from '../connection';
-import { ClipboardSync, type RemoteDesktopRequest } from '@cindy/device-link';
+import {
+  ClipboardSync,
+  remoteDesktopVideoSettingsWire,
+  type RemoteDesktopRequest,
+} from '@cindy/device-link';
 import { DEFAULT_VIEWER_PREFERENCES } from '../../../shared/remoteDesktopViewer';
 
 function fixture() {
@@ -173,6 +177,27 @@ describe('standalone remote viewer authority', () => {
       code: 'DESKTOP_VIEW_ONLY',
     });
     expect(f.readClipboard).not.toHaveBeenCalled();
+  });
+  it('keeps the legacy bitrate on forwarded offers so older hosts accept video settings', async () => {
+    const f = fixture();
+    await f.connection.request(f.connection.generation, { op: 'start', displayId: 'screen' });
+    const generation = f.connection.generation;
+    f.connection.beginMedia(generation, '1');
+    f.request.mockImplementationOnce(async () => ({ sdp: 'answer' }));
+    await f.connection.request(
+      generation,
+      {
+        op: 'offer',
+        lease: 'lease-a',
+        sdp: 'offer',
+        settings: remoteDesktopVideoSettingsWire({ fps: 60, quality: 'hd', audio: false }),
+      },
+      '1',
+    );
+    expect(f.request.mock.calls.at(-1)?.[1]).toMatchObject({
+      op: 'offer',
+      settings: { fps: 60, quality: 'hd', audio: false, bitrate: 20_000_000 },
+    });
   });
   it('invalidates queued signaling after a newer media attempt without closing the lease', async () => {
     const f = fixture();

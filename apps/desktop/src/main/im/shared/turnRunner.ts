@@ -1311,6 +1311,8 @@ export function createTurnRunner(
 
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
+        // IM owns successful replies, including turns in an attached desktop task.
+        origin: { kind: 'user', surface: 'im' },
         // The channel adapter and routing state live in Main. A symbol-keyed
         // context survives the in-process Session → Agent handoff but cannot be
         // fabricated by Renderer/device-link structured-clone input.

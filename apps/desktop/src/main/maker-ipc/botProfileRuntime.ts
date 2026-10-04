@@ -1,3 +1,4 @@
+import { isChatOnlyGroupLane } from '../../shared/botGroupChat.js';
 import { buildTeammateGuide as buildBotCapabilityContextPrompt } from './teammateGuide.js';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { buildBotMemoryScopeKey } from '@cindy/maker-core';
@@ -486,6 +487,7 @@ export async function hydrateBotProfileRuntime(
     .select({
       botId: botSessionLinks.botId,
       role: botSessionLinks.role,
+      routeKey: botSessionLinks.routeKey,
       profileVersion: botSessionLinks.profileVersion,
     })
     .from(botSessionLinks)
@@ -511,7 +513,17 @@ export async function hydrateBotProfileRuntime(
     )
     .limit(1);
   if (!version) return null;
-  const config = normalizeBotToolCapabilities(parseObject(version.capabilitiesJson));
+  const chatOnly = row.role === 'group' && isChatOnlyGroupLane(row.routeKey);
+  const config = normalizeBotToolCapabilities(chatOnly ? {
+    toolCapabilityVersion: 1, memory: false, userContextSource: '', skills: [], skillMode: 'allowlist',
+    mcpServers: [], mcpMode: 'allowlist', toolsets: [], toolsetMode: 'allowlist',
+  } : parseObject(version.capabilitiesJson));
+  if (chatOnly) {
+    opts.extraDirs = [];
+    opts.writableDirs = [];
+    opts.makerMemoryIndexSnapshot = '';
+    opts.makerMemoryScopeKey = undefined;
+  }
   const configuredSkills = Array.isArray(config.skills)
     ? config.skills.filter((item): item is string => typeof item === 'string')
     : [];
@@ -695,7 +707,7 @@ export async function hydrateBotProfileRuntime(
   let ownSkillPluginRoots: string[] = [];
   // SSH remote 会话的 harness 跑在远端文件系统上,本机 userData 里的技能目录
   // 在那边不存在 —— 与其挂一串打不开的路径,不如这类会话直接不挂。
-  if (deps.listOwnSkills && !opts.remoteHostId) {
+  if (!chatOnly && deps.listOwnSkills && !opts.remoteHostId) {
     try {
       const own = await deps.listOwnSkills({ botId: row.botId });
       ownSkills = [...(own.baseline && row.role === 'canonical' ? [own.baseline.skill] : []), ...own.skills];
@@ -740,7 +752,7 @@ export async function hydrateBotProfileRuntime(
   let unavailableToolsets: string[] = [];
   let disabledToolsets: string[] = [];
   let runtimeToolsetMode: 'inherit' | 'allowlist' = toolsetMode;
-  if (deps.listToolsets) {
+  if (!chatOnly && deps.listToolsets) {
     runtimeToolsetMode = 'allowlist';
     try {
       toolsetCatalog = await deps.listToolsets({
@@ -781,14 +793,14 @@ export async function hydrateBotProfileRuntime(
       runtimeConfiguredMcpServers.push(serverName);
     }
   }
-  const identity = version.identitySource.trim();
+  const identity = chatOnly ? profile.description : version.identitySource.trim();
   opts.botProfilePrompt = buildBotProfilePrompt({
     displayName: profile.displayName,
     identitySource: identity,
     description: profile.description,
   });
-  const helperAvailable = !opts.remoteHostId || opts.agentKind === 'pi'
-    || toolsetCatalog.some((item) => item.id === 'xdt_helper' && item.available !== false);
+  const helperAvailable = !chatOnly && (!opts.remoteHostId || opts.agentKind === 'pi'
+    || toolsetCatalog.some((item) => item.id === 'xdt_helper' && item.available !== false));
   // Local sessions always mount the cindy gateway. Remote Claude/Codex do not
   // (REMOTE_ALLOWED_SERVER_NAMES). Remote Pi tunnels cindy via the MCP bridge.
   const cindyAvailable = !opts.remoteHostId || opts.agentKind === 'pi';
@@ -825,7 +837,7 @@ export async function hydrateBotProfileRuntime(
   } | null = null;
   // Local userData paths are meaningless on a remote harness. Do not promise or
   // mount a Home there until the host provisions an actual remote-owned path.
-  if (deps.readProfileFolder && !opts.remoteHostId) {
+  if (!chatOnly && deps.readProfileFolder && !opts.remoteHostId) {
     folderPrompt = await deps
       .readProfileFolder({ botId: row.botId })
       .catch(() => null);

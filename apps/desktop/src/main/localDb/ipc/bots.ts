@@ -7,6 +7,7 @@ import { listBotSkillsForBot } from '../../maker-ipc/botSkillService.js';
 import { provisionDefaultBot } from '../../maker-ipc/botDefaultProvisioning.js';
 import { BOT_TEMPLATE_PRESET_AVATARS, CINDY_DEFAULT_IDENTITY } from '../../../shared/botTemplatePreset.js';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
@@ -53,6 +54,7 @@ import {
 } from './botProfileVersioning.js';
 import {
   botProfileDir,
+  ensureBotChatOnlyWorkspaceDir,
   ensureBotWorkspaceDir,
   migrateBotProfileFolder,
   readBotProfileFolder,
@@ -102,7 +104,7 @@ import { BOT_DELEGATION_CLIENT_ID } from '../../../shared/botCollaboration.js';
 
 import { generateBotCreationDraft, readBotCreationDraft, generateBotCreationAvatar } from '../../maker-ipc/botCreationDraft.js';
 import { botInvitationProgress, type BotInvitationProgress } from '../../../shared/botInvitation.js';
-import { botGroupLaneRouteKey, botGroupPlanRouteKey } from '../../../shared/botGroupChat.js';
+import { botGroupLaneRouteKey, botGroupPlanRouteKey, chatGroupLaneRouteKey, type ChatLaneAccess } from '../../../shared/botGroupChat.js';
 import { queueBotInvitation as enqueueBotInvitation } from '../../maker-ipc/botInvitation.js';
 import { getMakerIfReady, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 import type { BotCapabilityUpdate } from '../../maker-ipc/botCapabilityService.js';
@@ -308,14 +310,15 @@ export async function ensureBotGroupLaneSession(input: {
   botId: string;
   groupId: string;
   title: string;
+  chatAccess?: ChatLaneAccess;
   plan?: { planId: string; workDir: string; sessionId?: string };
 }): Promise<EnsureBotGroupLaneResult> {
   const owner = captureBotOperationOwner();
   const client = getDbClient();
   const db = client.drizzle;
   const routeKey = input.plan
-    ? botGroupPlanRouteKey(input.groupId, input.plan.planId)
-    : botGroupLaneRouteKey(input.groupId);
+    ? input.chatAccess ? `${chatGroupLaneRouteKey(input.groupId, input.chatAccess)}:plan:${input.plan.planId}` : botGroupPlanRouteKey(input.groupId, input.plan.planId)
+    : input.chatAccess ? chatGroupLaneRouteKey(input.groupId, input.chatAccess) : botGroupLaneRouteKey(input.groupId);
   const [existing] = await db
     .select({ sessionId: botSessionLinks.sessionId })
     .from(botSessionLinks)
@@ -346,10 +349,10 @@ export async function ensureBotGroupLaneSession(input: {
   const config = parseJson(profileVersion.capabilitiesJson);
   const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
   if (!primaryRoute) return { ok: false, errorCode: 'NO_MODEL', message: '伙伴还没有可用模型' };
-  const workspaceKind = input.plan ? ('project' as const) : ('dialogue' as const);
-  const workingDir = input.plan
-    ? input.plan.workDir
-    : await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
+  const workspaceKind = input.plan && input.chatAccess?.mode !== 'chat' ? ('project' as const) : ('dialogue' as const);
+  const workingDir = input.chatAccess?.mode === 'chat'
+    ? await ensureBotChatOnlyWorkspaceDir(owner.userDataDir, input.botId, routeKey)
+    : input.plan ? input.plan.workDir : await ensureBotWorkspaceDir(owner.userDataDir, input.botId, app.getPath('userData'));
   const now = Date.now();
   const sessionId = resolveBusinessSessionId(input.plan?.sessionId);
   const row = {

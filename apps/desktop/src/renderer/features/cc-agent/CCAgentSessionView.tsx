@@ -1,3 +1,4 @@
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { shouldShowFailedScheduleNotice } from '@cindy/maker-shared/schedule-model';
 /**
@@ -6069,9 +6070,10 @@ function RunningStatusBar({
   // the icon answers "what is it doing right now".
   const isCompacting = typeof status === 'string' && status.toLowerCase().startsWith('compact');
 
-  const minutes = Math.floor(elapsed / 60);
-  const seconds = elapsed % 60;
-  const elapsedText = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+  const elapsedText = formatSessionDuration(elapsed * 1000, t, {
+    minimumSeconds: 0,
+    alwaysShowRemainder: true,
+  });
 
   // Cadenced shimmer(DESIGN.md §14.4):status-shimmer 已是一次性动画,这里在
   // 每次真实动静(状态文案变化 / token 计数推进)时通过 key 重挂载触发一次呼吸。

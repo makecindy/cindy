@@ -1778,12 +1778,43 @@ function workRunFallbackEnd<TMessage extends MessageRenderNormalizedMessage>(
   return latest;
 }
 
-export function formatDuration(ms: number): string {
-  const totalSec = Math.max(1, Math.round(ms / 1000));
+/** Promote long durations to hours/days, always retaining minutes (including zero). */
+export function formatDuration(
+  ms: number,
+  {
+    minimumSeconds = 1,
+    alwaysShowRemainder = false,
+    padRemainder = false,
+    formatLongDuration,
+  }: {
+    minimumSeconds?: number;
+    alwaysShowRemainder?: boolean;
+    padRemainder?: boolean;
+    formatLongDuration?: (parts: { days: number; hours: string; minutes: string }) => string;
+  } = {},
+): string {
+  const totalSec = Math.max(minimumSeconds, Math.round((Number.isFinite(ms) ? ms : 0) / 1000));
   if (totalSec < 60) return `${totalSec}s`;
+  const formatRemainder = (value: number) => padRemainder ? String(value).padStart(2, '0') : String(value);
+  if (totalSec >= 3_600) {
+    const days = Math.floor(totalSec / 86_400);
+    const hours = Math.floor((totalSec % 86_400) / 3_600);
+    const minutes = Math.floor((totalSec % 3_600) / 60);
+    if (formatLongDuration) {
+      return formatLongDuration({
+        days,
+        hours: days > 0 ? formatRemainder(hours) : String(hours),
+        minutes: formatRemainder(minutes),
+      });
+    }
+    return days > 0
+      ? `${days}d ${formatRemainder(hours)}h ${formatRemainder(minutes)}m`
+      : `${hours}h ${formatRemainder(minutes)}m`;
+  }
   const minutes = Math.floor(totalSec / 60);
   const seconds = totalSec % 60;
-  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+  if (seconds === 0 && !alwaysShowRemainder) return `${minutes}m`;
+  return `${minutes}m ${formatRemainder(seconds)}s`;
 }
 
 function itemTimestamp<

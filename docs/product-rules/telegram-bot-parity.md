@@ -37,6 +37,13 @@ Cindy 有两个 Telegram bot，用户看到的是同一个产品：
 
 ## 一、已同源
 
+官方与个人 bot 的 IM 轮次都通过 `SendOrigin.surface = 'im'` 标记成功回复的查看入口；
+App 完成未读与提醒统一由 `renderer/hooks/useSessionRunningStatus.ts` 和
+`main/agent-island/service.ts` 静默处理，后者也负责手机／远程状态。消息历史、错误、
+待确认提示及先前已有未读保留；同一任务由 App 发起的后续轮次恢复正常完成提醒。
+来源分别由 `hook-control/session-runner.ts` 与 `im/shared/turnRunner.ts` 在发送时标记，
+不改变两侧既有工具授权或 Telegram 消息呈现规则。
+
 > **这一节只放两侧真的跑同一份代码/同一份数据的东西。** 一旦列进来，维护者就会跳过
 > 双路核对——所以「个人侧独有」「官方侧独有」的能力不能放这里，哪怕它在共享目录下。
 >

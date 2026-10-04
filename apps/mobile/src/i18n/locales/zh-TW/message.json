@@ -68,6 +68,8 @@
     "durationSeconds": "{{seconds}} 秒",
     "durationMinutes": "{{minutes}} 分鐘",
     "durationMinutesSeconds": "{{minutes}} 分 {{seconds}} 秒",
+    "durationHoursMinutes": "{{hours}} 小時 {{minutes}} 分",
+    "durationDaysHoursMinutes": "{{days}} 天 {{hours}} 小時 {{minutes}} 分",
     "subagentSummary": "Subagent 小結",
     "agentSwitchLabel": "已從 {{from}} 切換到 {{to}}",
     "agentSwitchViewHandoff": "{{label}}，檢視交接內容",

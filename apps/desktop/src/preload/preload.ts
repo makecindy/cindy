@@ -994,6 +994,8 @@ interface ComputerDriverUpdateCheck {
   latestVersion: string | null;
   updateAvailable: boolean;
   updating: boolean;
+  checkStatus?: 'success' | 'error';
+  checkedAt?: number;
 }
 
 const appDisplayVersionInfo = ipcRenderer.sendSync('get-app-display-version-info') as {
@@ -5886,6 +5888,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<import('../shared/botDirectMessage').BotDirectMessageThreadResult> =>
       ipcRenderer.invoke('maker:bot-direct-message-thread:get', threadId, viewerBotId),
     onBotDirectMessageChanged: fanOutBotDirectMessageChanged,
+    chatServer: {
+      manage: (input: Parameters<import('../shared/botGroupChat').ChatServerApi['manage']>[0]): ReturnType<import('../shared/botGroupChat').ChatServerApi['manage']> =>
+        ipcRenderer.invoke('maker:chat-server:manage', input),
+      ownedBots: (): ReturnType<import('../shared/botGroupChat').ChatServerApi['ownedBots']> =>
+        ipcRenderer.invoke('maker:chat-server:ownedBots'),
+      refreshProfile: (): ReturnType<import('../shared/botGroupChat').ChatServerApi['refreshProfile']> =>
+        ipcRenderer.invoke('maker:chat-server:refreshProfile'),
+      status: (): ReturnType<import('../shared/botGroupChat').ChatServerApi['status']> =>
+        ipcRenderer.invoke('maker:chat-server:status'),
+      thread: (input: Parameters<import('../shared/botGroupChat').ChatServerApi['thread']>[0]): ReturnType<import('../shared/botGroupChat').ChatServerApi['thread']> =>
+        ipcRenderer.invoke('maker:chat-server:thread', input),
+      reply: (input: Parameters<import('../shared/botGroupChat').ChatServerApi['reply']>[0]): ReturnType<import('../shared/botGroupChat').ChatServerApi['reply']> =>
+        ipcRenderer.invoke('maker:chat-server:reply', input),
+      react: (input: Parameters<import('../shared/botGroupChat').ChatServerApi['react']>[0]): ReturnType<import('../shared/botGroupChat').ChatServerApi['react']> =>
+        ipcRenderer.invoke('maker:chat-server:react', input),
+      createInvite: (input: Parameters<import('../shared/botGroupChat').ChatServerApi['createInvite']>[0]): ReturnType<import('../shared/botGroupChat').ChatServerApi['createInvite']> =>
+        ipcRenderer.invoke('maker:chat-server:createInvite', input),
+      previewInvite: (input: Parameters<import('../shared/botGroupChat').ChatServerApi['previewInvite']>[0]): ReturnType<import('../shared/botGroupChat').ChatServerApi['previewInvite']> =>
+        ipcRenderer.invoke('maker:chat-server:previewInvite', input),
+      acceptInvite: (input: Parameters<import('../shared/botGroupChat').ChatServerApi['acceptInvite']>[0]): ReturnType<import('../shared/botGroupChat').ChatServerApi['acceptInvite']> =>
+        ipcRenderer.invoke('maker:chat-server:acceptInvite', input),
+    },
     listBotGroups: (): Promise<import('../shared/botGroupChat').BotGroupListResult> =>
       ipcRenderer.invoke('maker:bot-group:list'),
     getBotGroup: (
@@ -7877,8 +7901,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         fanOutComputerPermissionGuideStatusChanged((data: unknown) =>
           callback(data as ComputerDriverStatus),
         ),
-      checkUpdate: (): Promise<ComputerDriverUpdateCheck> =>
-        ipcRenderer.invoke('maker:computer:check-update'),
+      checkUpdate: (options?: { force?: boolean }): Promise<ComputerDriverUpdateCheck> =>
+        ipcRenderer.invoke('maker:computer:check-update', options),
       updateDriver: (opts?: { joinOnly?: boolean }): Promise<ComputerDriverInstallResult> =>
         ipcRenderer.invoke('maker:computer:update-driver', opts),
       onUpdateProgress: fanOutComputerDriverUpdateProgress,

@@ -156,6 +156,17 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
       }
       return;
     }
+    if (command.op === 'display-hold') {
+      if (command.lease === activeLease) native?.hold();
+      return;
+    }
+    if (command.op === 'display-swap') {
+      // Only a live native stream follows the new display; browser capture
+      // stays on the old one, so the main process rebuilds the video instead.
+      const kept = command.lease === activeLease && native?.resume() === true;
+      void api.reply(command.id, kept).catch(() => {});
+      return;
+    }
     stop();
     if (
       command.op !== 'offer' ||

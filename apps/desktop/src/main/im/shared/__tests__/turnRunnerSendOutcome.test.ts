@@ -607,6 +607,9 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect(streamingHandle.finalize).toHaveBeenCalledTimes(1);
     });
     expect(h.send).toHaveBeenCalledTimes(1);
+    expect(h.send).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      origin: { kind: 'user', surface: 'im' },
+    }));
     expect(mocks.persistUserMessage).toHaveBeenCalledTimes(1);
     expect(mocks.feishuIm.reactToMessage).toHaveBeenCalledTimes(1);
     expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledTimes(1);

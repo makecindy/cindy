@@ -31,7 +31,15 @@ export const DESKTOP_LOCAL = {
 export interface DesktopHostCommand {
   iceServers?: DesktopIceServer[];
   id: string;
-  op: 'offer' | 'stop' | 'capture-reset' | 'ice' | 'prepare' | 'frame';
+  op:
+    | 'offer'
+    | 'stop'
+    | 'capture-reset'
+    | 'display-hold'
+    | 'display-swap'
+    | 'ice'
+    | 'prepare'
+    | 'frame';
   /** Local-only: retain the system-selected Wayland stream for this lease. */
   portalCapture?: boolean;
   attemptId?: string;
@@ -56,6 +64,8 @@ export interface DesktopLocalState {
 }
 export type DesktopHostReply =
   | string
+  /** display-swap: true only when native capture kept a live stream. */
+  | boolean
   | RemoteDesktopIceReply
   | {
       error:

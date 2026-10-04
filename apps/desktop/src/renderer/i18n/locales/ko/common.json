@@ -3965,6 +3965,15 @@
         "noProjectHint": "프로젝트 세션에서 설정을 열면 해당 프로젝트의 컴퓨터 직접 제어를 전환할 수 있습니다.",
         "update": {
           "available": "새 버전 v{{version}}을(를) 사용할 수 있습니다. 업데이트 후 시스템 권한을 다시 허용해야 할 수 있습니다.",
+          "previouslyAvailable": "이전 확인에서 v{{version}}을(를) 찾았습니다. 설치 전에 사용 가능한지 다시 확인합니다.",
+          "readingVersion": "버전 확인 중…",
+          "checking": "업데이트 확인 중…",
+          "upToDate": "최신 버전입니다",
+          "checkFailed": "업데이트를 확인하지 못했습니다",
+          "lastChecked": "마지막 확인: {{time}}",
+          "check": "업데이트 확인",
+          "retry": "다시 시도",
+          "notChecked": "아직 확인하지 않음",
           "action": "업데이트",
           "updating": "업데이트 중…",
           "downloadingPercent": "다운로드 중 {{percent}}%({{downloaded}}/{{total}} MB)…",
@@ -4050,6 +4059,38 @@
         "lsp": {
           "name": "LSP",
           "description": "TypeScript LSP 쿼리 (Beta — 설정 → 실험실 → LSP 모드에서 제어)"
+        },
+        "android": {
+          "name": "Android 자동화",
+          "description": "이 컴퓨터에 연결된 Android 기기를 확인하고 조작합니다."
+        },
+        "ios-simulator": {
+          "name": "iOS 시뮬레이터",
+          "description": "iOS 시뮬레이터에서 앱을 설치, 실행 및 검사합니다."
+        },
+        "browser": {
+          "name": "브라우저",
+          "description": "웹 페이지를 탐색하고 읽고 캡처하며 조작합니다."
+        },
+        "computer": {
+          "name": "컴퓨터 제어",
+          "description": "로컬 앱, 창, 마우스와 키보드를 확인하고 조작합니다."
+        },
+        "wechat": {
+          "name": "개인 WeChat",
+          "description": "알고 있는 WeChat 연락처에 메시지를 보냅니다."
+        },
+        "slack": {
+          "name": "Slack",
+          "description": "연결된 Slack 계정으로 메시지를 검색하고 읽고 보냅니다."
+        },
+        "ssh": {
+          "name": "SSH 명령",
+          "description": "설정된 SSH 연결로 원격 컴퓨터에서 명령을 실행합니다."
+        },
+        "contacts": {
+          "name": "스마트 연락처",
+          "description": "연락처 프로필과 교류 기록을 검색하고 관리합니다."
         }
       }
     },
@@ -6704,6 +6745,8 @@
   "usageDetails": {
     "durationSeconds": "{{value}}초",
     "durationMinutesSeconds": "{{minutes}}분 {{seconds}}초",
+    "durationHoursMinutes": "{{hours}}시간 {{minutes}}분",
+    "durationDaysHoursMinutes": "{{days}}일 {{hours}}시간 {{minutes}}분",
     "performanceLine": "속도 {{rate}} 토큰/초 · 시간 {{duration}}",
     "performanceRateLine": "속도 {{rate}} 토큰/초",
     "timeLine": "시간 {{duration}}",
@@ -7840,11 +7883,13 @@
     "nameLabel": "어떻게 부를까요?",
     "close": "닫기",
     "list": {
+      "createMenu": "새로 만들기",
+      "createTeammate": "새 파트너",
       "startChat": "대화 시작하기",
       "typing": "입력 중…",
       "unread": "읽지 않은 메시지 {{count}}개",
-      "search": "동료 검색",
-      "searchPlaceholder": "동료 검색…",
+      "search": "파트너 또는 그룹 채팅 검색",
+      "searchPlaceholder": "파트너 또는 그룹 채팅 검색…",
       "showHidden": "숨긴 동료 표시",
       "hideHidden": "숨긴 동료 접기",
       "hidden": "숨김({{count}})",
@@ -8029,7 +8074,8 @@
       "duration": {
         "seconds": "{{n}}초",
         "minutes": "{{n}}분",
-        "hoursMinutes": "{{h}}시간 {{m}}분"
+        "hoursMinutes": "{{h}}시간 {{m}}분",
+        "daysHoursMinutes": "{{d}}일 {{h}}시간 {{m}}분"
       },
       "viewResult": "결과 보기",
       "noWrittenResult": "텍스트 결과가 없습니다."
@@ -8046,6 +8092,7 @@
       "limitReached": "이번 동료 간 대화가 한도에 도달해 양쪽 모두 각자의 기본 작업으로 돌아갔습니다"
     },
     "groupChat": {
+      "migrationPending": "이전 기록 일부가 아직 업로드되지 않았습니다. 자동으로 다시 시도하며 채팅은 계속 사용할 수 있습니다.",
       "memberSeparator": ", ",
       "memberCount_one": "동료 {{count}}명",
       "memberCount_other": "동료 {{count}}명",
@@ -8218,6 +8265,85 @@
       },
       "files": {
         "openFailed": "파일을 열지 못했습니다. 이동되었거나 삭제되었을 수 있습니다"
+      },
+      "server": {
+        "reply": "답글",
+        "replies": "답글",
+        "replyCount": "답글 {{count}}개",
+        "replyPlaceholder": "이 메시지에 답글을 쓰세요. @로 파트너를 멘션할 수 있어요…",
+        "sendReply": "답글 보내기",
+        "addReaction": "이모지 반응 추가",
+        "reactionCount": "{{emoji}} · 반응 {{count}}개",
+        "invite": "그룹에 초대",
+        "join": "그룹 참여",
+        "inviteDescription": "이 링크는 24시간 동안 한 번만 사용할 수 있습니다. 수락하면 그룹 구성원이 되어 대화 기록을 볼 수 있습니다.",
+        "joinDescription": "초대 링크를 붙여 넣고 그룹을 확인한 후 참여하세요.",
+        "inviteLink": "초대 링크",
+        "pasteLink": "초대 링크 붙여 넣기…",
+        "invitedBy": "{{name}}님의 초대",
+        "copyLink": "초대 링크 복사",
+        "copied": "초대 링크를 복사했습니다",
+        "createLink": "초대 링크 만들기",
+        "accept": "수락하고 참여",
+        "previewInvite": "초대 확인",
+        "invalidInvite": "유효하지 않거나 사용 또는 만료된 초대입니다. 새 링크를 받으세요.",
+        "notAllowed": "현재 계정에 권한이 없습니다. 계정을 확인하거나 그룹 소유자에게 문의하세요.",
+        "loginRequired": "현재 계정에 로그인한 후 다시 시도하세요.",
+        "requestFailed": "채팅 서비스에 연결할 수 없습니다. 잠시 후 다시 시도하세요.",
+        "copyFailed": "복사하지 못했습니다. 링크를 선택하여 직접 복사하세요.",
+        "createDescription": "파트너를 선택하거나 먼저 그룹을 만들고 친구를 초대할 수 있어요.",
+        "settings": {
+          "name": "그룹 이름",
+          "topic": "주제",
+          "description": "설명",
+          "save": "저장",
+          "myProfile": "내 프로필",
+          "editProfile": "이름과 사진 수정",
+          "nickname": "이 그룹에서의 이름",
+          "nicknameHint": "이 그룹에만 표시됩니다. 비워 두면 프로필 이름을 사용합니다.",
+          "members": "멤버 · {{count}}",
+          "owner": "그룹 소유자",
+          "admin": "관리자",
+          "member": "멤버",
+          "guest": "게스트",
+          "companionOf": "{{name}}의 파트너",
+          "guestAccess": "다른 멤버의 사용 권한",
+          "toolsHint": "멤버는 파트너의 기존 도구와 개인 정보를 사용할 수 있으며 결과는 모두에게 공개됩니다. 기존 승인 규칙은 유지됩니다. 권한 취소 시 진행 중인 요청은 중단되지만 완료된 작업은 되돌릴 수 없습니다.",
+          "chatHint": "그룹 메시지만 사용하며 소유자의 기억, 개인 정보, 도구는 사용하지 않습니다.",
+          "none": "소유자만 사용",
+          "chat": "그룹 내 대화만",
+          "tools": "도구와 정보 사용 승인됨",
+          "ownerOnly": "파트너 소유자만 이 권한을 변경할 수 있습니다.",
+          "authorizeTitle": "{{name}}의 도구와 정보 사용을 허용할까요?",
+          "makeAdmin": "관리자로 지정",
+          "removeAdmin": "관리자 해제",
+          "transfer": "소유권 이전",
+          "transferTitle": "{{name}}에게 소유권을 이전할까요?",
+          "transferHint": "상대가 소유자가 되고 본인은 관리자가 됩니다. 파트너도 소유자가 될 수 있습니다.",
+          "remove": "그룹에서 내보내기",
+          "removeTitle": "{{name}}을 그룹에서 내보낼까요?",
+          "removeHint": "메시지를 읽거나 보낼 수 없게 됩니다. 해당 멤버의 파트너도 나갑니다.",
+          "addCompanion": "내 파트너 초대",
+          "leave": "그룹 나가기",
+          "leaveHint": "본인과 자신의 파트너가 그룹을 나갑니다. 소유자는 먼저 소유권을 이전해야 합니다.",
+          "archive": "그룹 보관",
+          "archiveHint": "기록을 보존하고 새 메시지와 파트너 실행을 중단합니다.",
+          "confirm": "확인",
+          "lastOwner": "나가거나 소유자를 내보내기 전에 다른 멤버에게 소유권을 이전하세요.",
+          "conflict": "다른 멤버가 설정을 변경했습니다. 새로 고침 후 다시 시도하세요.",
+          "replyMode": "멘션이 없을 때",
+          "speakingMode": "발언 순서",
+          "all": "모든 파트너 응답 가능",
+          "mentioned": "멘션이 있을 때만",
+          "auto": "동시에 발언",
+          "sequential": "차례로 발언",
+          "unarchive": "그룹 보관 해제",
+          "unarchiveHint": "메시지와 파트너 실행을 재개합니다.",
+          "archived": "보관된 그룹입니다. 기록은 계속 볼 수 있습니다.",
+          "noneHint": "이 그룹에서는 동료의 소유자만 응답을 요청할 수 있습니다.",
+          "companionPermissions": "동료 권한",
+          "configureCapabilities": "도구 및 사용 권한 설정"
+        }
       }
     },
     "joined": {
@@ -8269,7 +8395,16 @@
       "mcp": "MCP",
       "toolset": "기본 제공 도구",
       "unavailable": "사용 불가",
-      "empty": "일치하는 기능이 없습니다"
+      "empty": "일치하는 기능이 없습니다",
+      "accessHint": "동료가 사용할 수 있는 내장 도구, MCP 및 스킬을 개별적으로 선택합니다. 변경은 허용된 그룹 요청을 포함해 다음 요청부터 적용됩니다.",
+      "inheritedHint": "현재 이 컴퓨터에서 활성화된 도구를 따릅니다. 항목을 끄면 이 목록에서는 선택한 항목만 사용합니다.",
+      "selectedHint": "이 목록에서는 선택한 항목만 사용할 수 있습니다.",
+      "personalHint": "이 동료가 학습한 스킬로 프로필과 함께 자동으로 불러옵니다.",
+      "unavailableHint": "이 컴퓨터 또는 실행 환경에서 사용할 수 없습니다. 연결이나 시스템 권한을 먼저 설정하세요.",
+      "configure": "설정 열기",
+      "empty_toolset": "이 실행 환경에 사용 가능한 내장 도구가 없습니다.",
+      "empty_mcp": "사용자 지정 MCP 서버가 아직 추가되지 않았습니다.",
+      "empty_skill": "선택할 수 있는 스킬이 없습니다."
     },
     "guided": {
       "title": "파트너 만들기",
@@ -9349,6 +9484,10 @@
       "feedbackLabel": "피드백:",
       "noFeedback": "(피드백 없음)",
       "cancelled": "취소됨"
+    },
+    "thinking": {
+      "completed": "생각 {{duration}}",
+      "aborted": "생각 {{duration}} (중단됨)"
     },
     "workGroup": {
       "working": "작업 중…",

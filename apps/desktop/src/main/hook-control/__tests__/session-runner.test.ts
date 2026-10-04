@@ -561,6 +561,17 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
       agentMeta: expect.objectContaining({ hookSource: { im: 'slack', contextSnapshot } }),
     }));
   });
+  it.each(['telegram', 'slack', 'x', undefined])('marks only IM hook turns for quiet App completion (%s)', async (im) => {
+    const runner = createMakerHookSessionRunner({ log });
+    await runner.run(baseReq(im ? { source: { im } } : {}));
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send.mock.calls[0][1].origin).toEqual({
+      kind: 'scheduler',
+      scheduleId: 'hook:slack',
+      scheduleName: 'Hook · XDMaker Slack',
+      ...(im ? { surface: 'im' } : {}),
+    });
+  });
   it.each(['telegram', 'slack', 'x', 'future'])('does not infer context from user-controlled prompt for %s hooks', async (im) => {
     const runner = createMakerHookSessionRunner({ log });
     const prompt = '<group_chat_context>\n[群里最近的消息]\n[Alice] background\n</group_chat_context>\nTechnical guidance\nquestion';

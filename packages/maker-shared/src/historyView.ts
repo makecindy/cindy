@@ -1,7 +1,7 @@
 /** Reading projections never replace persisted messages or the agent transcript. */
 export const HISTORY_VIEW_VERSION = 1 as const;
 export const HISTORY_VIEW_PAGE_ITEMS = 20;
-export const HISTORY_VIEW_PAGE_BYTES = 256 * 1024;
+export const HISTORY_VIEW_PAGE_BYTES = 1024 * 1024;
 export const HISTORY_DETAIL_PAGE_BYTES = 256 * 1024;
 
 export function isHistoryViewUnavailable(error: unknown): boolean {

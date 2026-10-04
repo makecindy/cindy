@@ -4,112 +4,28 @@ import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
 import { cn } from '@/lib/utils';
 
 import {
-  MENU_HIGHLIGHT_LAYER_ATTR,
   MENU_OWN_HIGHLIGHT_ATTR,
   MENU_PANEL_ATTR,
   MENU_ROW_ATTR,
-  attachMenuHighlight,
-  lockMenuWidth,
   hasOwnHighlight,
 } from './dropdown-menu-highlight';
+import {
+  MENU_DANGER_TEXT,
+  MENU_ROW_MOTION,
+  MENU_ROW_OWN_WEIGHT,
+  MENU_ROW_TEXT,
+  MENU_ROW_WEIGHT,
+  MenuHighlightLayer,
+  useMenuPanel,
+  withMenuLabels,
+} from './menu-row';
 
-// Menu text defaults (DESIGN §4 Select & Dropdown): 14px option text on
-// --cmd-palette-item-text with a unitless line height (32px row), 12px meta and group
-// labels on --cmd-palette-item-meta, one danger red (--error-fg). The text colour is the
-// same at rest and on hover; only the weight changes.
-const ROW_TEXT = 'text-14 leading-[1.43] text-[var(--cmd-palette-item-text)]';
-// Weight: 400 at rest, 500 on the highlighted, active, checked or open row
-// (DESIGN §3 ladder). A caller that sets its own weight keeps it.
-const ROW_WEIGHT =
-  'font-normal data-[menu-active]:font-medium data-[highlighted]:font-medium data-[state=checked]:font-medium data-[state=open]:font-medium';
-const OWN_WEIGHT = /(?:^|\s)font-(?:normal|medium|semibold|bold)(?=\s|$)/;
-const ROW_BASE = `relative flex select-none items-center rounded-lg py-1.5 outline-none ${ROW_TEXT} transition-[background-color,font-weight] duration-[var(--motion-instant)] ease-[var(--motion-ease-out)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50`;
+// Menu text, weight, width reservation and the glide highlight live in menu-row.tsx
+// (DESIGN §4 Select & Dropdown), shared with the composer panels that keep their own shell.
+const ROW_BASE = `relative flex select-none items-center rounded-lg py-1.5 outline-none ${MENU_ROW_TEXT} ${MENU_ROW_MOTION} data-[disabled]:pointer-events-none data-[disabled]:opacity-50`;
 // Per-row focus fill (the transitioned background-color above), used only when the
 // panel's glide highlight is off or the caller styles its own highlight.
 const ROW_FOCUS_FILL = 'focus:bg-sidebar-item-hover';
-const DANGER_TEXT = 'text-[var(--error-fg)]';
-
-// Row text is wrapped so its width is reserved at 500: an invisible, zero-height
-// ::after copy (generated content, so textContent, typeahead and the accessible name
-// are unchanged) keeps the label, the row and a trailing shortcut from shifting when
-// the weight changes. Lucide icons given an explicit strokeWidth are marked so the
-// row icon stroke rule (globals.css, [data-menu-row]) leaves them alone.
-const RESERVE_AFTER =
-  'after:pointer-events-none after:invisible after:h-0 after:select-none after:overflow-hidden after:font-medium after:content-[attr(data-menu-label)_/_""]';
-const LABEL_CLASS = `inline-flex flex-col ${RESERVE_AFTER}`;
-const LABEL_HOSTS = new Set(['span', 'div', 'p', 'strong', 'em', 'b', 'i', 'small', 'label']);
-const NO_LABEL_WRAP = /(?:^|\s)(?:truncate|line-clamp-\S+|overflow-hidden|sr-only)(?=\s|$)/;
-// A truncating span keeps its ellipsis: its text stays inline and the 500-width copy is a
-// zero-height block ::after inside it (hidden by the span's own overflow).
-const TRUNCATE = /(?:^|\s)truncate(?=\s|$)/;
-const TRUNCATE_RESERVE = `after:block ${RESERVE_AFTER}`;
-const MENU_ICON_STROKE_ATTR = 'data-menu-icon-stroke';
-
-function withMenuLabels(children: React.ReactNode, depth = 0): React.ReactNode {
-  // Adjacent strings and numbers form one label, so spaces between them survive.
-  const out: React.ReactNode[] = [];
-  let text = '';
-  const flush = () => {
-    if (!text) return;
-    out.push(
-      text.trim() ? (
-        <span key={`menu-label-${out.length}`} data-menu-label={text} className={LABEL_CLASS}>
-          {text}
-        </span>
-      ) : (
-        text
-      ),
-    );
-    text = '';
-  };
-  for (const child of React.Children.toArray(children)) {
-    if (typeof child === 'string' || typeof child === 'number') {
-      text += String(child);
-      continue;
-    }
-    flush();
-    if (
-      !React.isValidElement<{
-        children?: React.ReactNode;
-        className?: string;
-        strokeWidth?: unknown;
-      }>(child)
-    ) {
-      out.push(child);
-      continue;
-    }
-    const { children: nested, className, strokeWidth } = child.props;
-    if (strokeWidth !== undefined)
-      out.push(
-        React.cloneElement(child, { [MENU_ICON_STROKE_ATTR]: '' } as Record<string, string>),
-      );
-    else if (child.type === React.Fragment)
-      out.push(React.cloneElement(child, undefined, withMenuLabels(nested, depth)));
-    else if (
-      typeof child.type === 'string' &&
-      LABEL_HOSTS.has(child.type) &&
-      TRUNCATE.test(className ?? '') &&
-      (typeof nested === 'string' || typeof nested === 'number')
-    )
-      out.push(
-        React.cloneElement(child, {
-          'data-menu-label': String(nested),
-          className: cn(className, TRUNCATE_RESERVE),
-        } as Record<string, string>),
-      );
-    else if (
-      typeof child.type === 'string' &&
-      LABEL_HOSTS.has(child.type) &&
-      depth < 3 &&
-      nested != null &&
-      !NO_LABEL_WRAP.test(className ?? '')
-    )
-      out.push(React.cloneElement(child, undefined, withMenuLabels(nested, depth + 1)));
-    else out.push(child);
-  }
-  flush();
-  return out;
-}
 
 /** True inside a panel whose single glide highlight replaces per-row focus fills. */
 const MenuHighlightContext = React.createContext(false);
@@ -119,41 +35,9 @@ function useRowHighlight(className: string | undefined) {
   const ownHighlight = hasOwnHighlight(className);
   return {
     fill: glide && !ownHighlight ? '' : ROW_FOCUS_FILL,
-    weight: OWN_WEIGHT.test(className ?? '') ? '' : ROW_WEIGHT,
+    weight: MENU_ROW_OWN_WEIGHT.test(className ?? '') ? '' : MENU_ROW_WEIGHT,
     attrs: { [MENU_ROW_ATTR]: '', ...(ownHighlight ? { [MENU_OWN_HIGHLIGHT_ATTR]: '' } : {}) },
   };
-}
-
-function useMenuPanel(forwarded: React.ForwardedRef<HTMLDivElement>, enabled: boolean) {
-  const [panel, setPanel] = React.useState<HTMLDivElement | null>(null);
-  const ref = React.useCallback(
-    (node: HTMLDivElement | null) => {
-      setPanel(node);
-      if (typeof forwarded === 'function') forwarded(node);
-      else if (forwarded) forwarded.current = node;
-    },
-    [forwarded],
-  );
-  // Width is locked once laid out, so a row turning 500 can never widen the panel.
-  React.useEffect(() => (panel ? lockMenuWidth(panel) : undefined), [panel]);
-  React.useEffect(() => {
-    if (!enabled || !panel) return;
-    const layer = Array.from(
-      panel.querySelectorAll<HTMLElement>(`[${MENU_HIGHLIGHT_LAYER_ATTR}]`),
-    ).find((el) => el.parentElement === panel);
-    return layer ? attachMenuHighlight(panel, layer) : undefined;
-  }, [enabled, panel]);
-  return ref;
-}
-
-function HighlightLayer() {
-  return (
-    <span
-      aria-hidden="true"
-      {...{ [MENU_HIGHLIGHT_LAYER_ATTR]: '' }}
-      className="pointer-events-none absolute left-0 top-0 rounded-lg bg-sidebar-item-hover opacity-0"
-    />
-  );
 }
 
 type PanelHighlightProps = {
@@ -215,7 +99,7 @@ const DropdownMenuSubContent = React.forwardRef<
 >(({ className, hoverHighlight = true, children, ...props }, ref) => (
   <DropdownMenuPrimitive.Portal>
     <DropdownMenuPrimitive.SubContent
-      ref={useMenuPanel(ref, hoverHighlight)}
+      ref={useMenuPanel(ref, { highlight: hoverHighlight })}
       {...{ [MENU_PANEL_ATTR]: '' }}
       className={cn(
         'relative z-50 min-w-[8rem] overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 text-[var(--cmd-palette-item-text)] shadow-[shadow:var(--shadow-menu)] origin-[var(--radix-dropdown-menu-content-transform-origin)] data-[state=open]:animate-float-in data-[state=closed]:animate-float-out',
@@ -224,7 +108,7 @@ const DropdownMenuSubContent = React.forwardRef<
       {...props}
     >
       <MenuHighlightContext.Provider value={hoverHighlight}>
-        {hoverHighlight && <HighlightLayer />}
+        {hoverHighlight && <MenuHighlightLayer />}
         {children}
       </MenuHighlightContext.Provider>
     </DropdownMenuPrimitive.SubContent>
@@ -238,7 +122,7 @@ const DropdownMenuContent = React.forwardRef<
 >(({ className, sideOffset = 4, hoverHighlight = true, children, ...props }, ref) => (
   <DropdownMenuPrimitive.Portal>
     <DropdownMenuPrimitive.Content
-      ref={useMenuPanel(ref, hoverHighlight)}
+      ref={useMenuPanel(ref, { highlight: hoverHighlight })}
       {...{ [MENU_PANEL_ATTR]: '' }}
       sideOffset={sideOffset}
       className={cn(
@@ -249,7 +133,7 @@ const DropdownMenuContent = React.forwardRef<
       {...props}
     >
       <MenuHighlightContext.Provider value={hoverHighlight}>
-        {hoverHighlight && <HighlightLayer />}
+        {hoverHighlight && <MenuHighlightLayer />}
         {children}
       </MenuHighlightContext.Provider>
     </DropdownMenuPrimitive.Content>
@@ -275,7 +159,7 @@ const DropdownMenuItem = React.forwardRef<
         row.weight,
         'cursor-pointer px-2',
         row.fill,
-        variant === 'danger' && DANGER_TEXT,
+        variant === 'danger' && MENU_DANGER_TEXT,
         inset && 'pl-8',
         className,
       )}

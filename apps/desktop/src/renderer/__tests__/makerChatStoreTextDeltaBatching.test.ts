@@ -513,6 +513,29 @@ const flushPromises = async () => {
 };
 
 describe('makerChatStore text delta batching', () => {
+  it.each(['local', 'remote'])('retains IM completion provenance through %s ingress and resets it for App turns', (source) => {
+    if (source === 'remote') remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const emit = (event: unknown) => {
+      const payload = { sessionId: SESSION_ID, event };
+      if (source === 'remote') onRemotePush?.({ deviceId: 'device-1', channel: 'maker:event', payload });
+      else onEvent?.(payload);
+    };
+    const turnOrigin = { kind: 'user', surface: 'im' };
+    emit({ type: 'status', data: { isRunning: true }, turnOrigin });
+    emit({ type: 'status', data: { isRunning: false, status: 'Done' }, turnOrigin });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
+    emit({ type: 'done', data: {}, turnOrigin });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
+    emit({ type: 'done', data: {} });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
+    emit({ type: 'status', data: { isRunning: false } });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
+    emit({ type: 'status', data: { isRunning: true } });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(false);
+    emit({ type: 'done', data: {} });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(false);
+  });
+
   it('repairs remote text before new deltas and ignores a repair after durable takeover', () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     const send = (channel: string, payload: unknown, deviceId = 'device-1') => onRemotePush?.({ deviceId, channel, payload });

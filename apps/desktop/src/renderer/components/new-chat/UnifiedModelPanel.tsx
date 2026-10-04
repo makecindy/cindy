@@ -30,6 +30,15 @@ import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 import { UnifiedModelRail } from './UnifiedModelRail';
 import { useUnifiedRowActions, withOptimisticConfig } from './useUnifiedRowActions';
 import { UnifiedModelRow } from './UnifiedModelRow';
+import { currentFocusedRow } from '@/components/ui/dropdown-menu-highlight';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  useMenuPanel,
+  withMenuLabels,
+} from '@/components/ui/menu-row';
 import { ModelSourceUsageProvider } from './ModelSourceDetails';
 import type { ProviderUsageScope } from './useProviderWeeklyQuota';
 import {
@@ -325,7 +334,15 @@ export function UnifiedModelPanel({
   const [flyAnchorEl, setFlyAnchorEl] = useState<HTMLElement | null>(null);
   const [justFavorited, setJustFavorited] = useState<string | null>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  // Glide highlight on the pointer, the keyboard-focused row, or the row whose config is open.
+  const highlightListRef = useMenuPanel(listRef, {
+    lockWidth: false,
+    options: {
+      current: (rows) =>
+        currentFocusedRow(rows) ?? rows.find((r) => r.getAttribute('data-state') === 'open'),
+    },
+  });
   const favoriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 选中行对齐是程序化滚动,它触发的 scroll 事件不代表用户意图,不该收起浮层。
   const suppressScrollDismissRef = useRef(false);
@@ -974,10 +991,12 @@ export function UnifiedModelPanel({
 
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <div
-          ref={listRef}
+          ref={highlightListRef}
           role="listbox"
           aria-label={t('newChat.modelSelector.modelListAria')}
+          {...menuPanelAttrs}
           className={cn(
+            'relative',
             // 设计稿 .model-list:8px 内边距、行与行之间无额外间距(行自身 py 8 提供呼吸感)。
             // 底部加宽到 12px:滚到底时最后一行不贴着面板底边/footer(Chris 2026-08-13:
             // 「最底部稍微放宽一点高度」)。
@@ -1001,6 +1020,7 @@ export function UnifiedModelPanel({
             needsEnsureVisibleRef.current = false;
           }}
         >
+          <MenuHighlightLayer />
           {/* 「跟随会话」行(opt-in,仅 scheduler heartbeat):置于最顶,不属于任何分组。 */}
           {followSession && (
             <>
@@ -1011,21 +1031,21 @@ export function UnifiedModelPanel({
                 role="option"
                 aria-selected={followSession.active}
                 data-follow-session-row
+                {...menuRowAttrs({ checked: followSession.active, disabled: interactionDisabled })}
                 className={cn(
-                  'flex w-full items-center justify-between rounded-lg px-3 py-2 transition-colors',
-                  'hover:bg-[var(--model-item-hover)]',
-                  followSession.active && 'bg-[var(--model-item-hover)]',
+                  COMPOSER_MENU_ROW,
+                  'flex w-full items-center justify-between px-3 py-2',
+                  // Model menu exception (DESIGN §4): the chosen row keeps its fill and check.
+                  followSession.active && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
                   interactionDisabled && 'cursor-not-allowed opacity-50',
                 )}
               >
-                <span className="truncate text-13 font-medium text-[var(--model-item-text)]">
-                  {followSession.label}
-                </span>
+                {withMenuLabels(<span className="truncate">{followSession.label}</span>)}
                 {followSession.active && (
                   <Check size={15} className="ml-2 shrink-0 text-[var(--model-item-check)]" />
                 )}
               </button>
-              <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
+              <div className="mx-1 my-1 h-px bg-[var(--cmd-palette-border)]" />
             </>
           )}
           {/* 只在已登记跨 Harness 切换时提示有损;浏览「全部」或同 Harness 换模型不提示。 */}
@@ -1066,8 +1086,9 @@ export function UnifiedModelPanel({
                   {...(section.group?.type === 'provider'
                     ? { 'data-group-provider': section.group.providerId }
                     : {})}
+                  // Shared menu group label (DESIGN §4 Menu text): 12px / 500 meta.
                   className={cn(
-                    'flex items-center gap-1.5 px-2.5 text-11 text-[var(--text-tertiary)]',
+                    'flex items-center gap-1.5 px-2.5 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]',
                     'pb-1 pt-2',
                   )}
                 >
@@ -1148,7 +1169,7 @@ export function UnifiedModelPanel({
             {widthSizerSections.map((section) => (
               <div key={section.key}>
                 {/* 组头也要量:供应商名可能比它组里最长的行还宽。 */}
-                <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-11">
+                <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33]">
                   <span className="truncate">{sectionLabel(section)}</span>
                 </div>
                 {section.rows.map((row) => {

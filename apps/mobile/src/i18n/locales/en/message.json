@@ -68,6 +68,8 @@
     "durationSeconds": "{{seconds}}s",
     "durationMinutes": "{{minutes}}m",
     "durationMinutesSeconds": "{{minutes}}m {{seconds}}s",
+    "durationHoursMinutes": "{{hours}}h {{minutes}}m",
+    "durationDaysHoursMinutes": "{{days}}d {{hours}}h {{minutes}}m",
     "subagentSummary": "Subagent summary",
     "agentSwitchLabel": "Switched from {{from}} to {{to}}",
     "agentSwitchViewHandoff": "{{label}}, view handoff",

@@ -25,6 +25,16 @@ describe('SQLite history outline', () => {
     const result = withHistoryArtifacts({ id: '1', clientId: '1', role: 'tool_use', content, createdAt: '2026-09-25T00:00:00Z' });
     expect(result.historyArtifacts).toMatchObject([{ path: '/work/report.md', source: 'tool' }]);
   });
+  it('folds plain-text tool output while keeping artifact candidates and failures', () => {
+    const body = 'Checking original UI image catalogs: 55\n'.repeat(50000);
+    expect(outline('tool_result', body, null, true)).toBe('');
+    expect(outline('tool_result', `<tool_use_error>${body}`, null, true)).toBe('<tool_use_error>');
+    expect(outline('tool_result', 'saved cindy-media://blobs/a.png', null, true)).toBe('saved cindy-media://blobs/a.png');
+    expect(outline('tool_result', 'xdt-file:///work/report.pdf', null, true)).toBe('xdt-file:///work/report.pdf');
+    // Incidental mentions in long output must not keep the whole body.
+    expect(outline('tool_result', `const xdt_helper = 1;\n${body}`, null, true)).toBe('');
+    expect(outline('tool_result', `${body}see xdt-file:///work/report.pdf`, null, true)).toBe('');
+  });
   it('keeps visible prose, artifacts and malformed legacy bodies intact', () => {
     expect(outline('assistant', 'Final answer')).toBe('Final answer');
     expect(outline('assistant', 'Internal prose', { parentUuid: 'agent' })).toBe('');

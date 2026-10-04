@@ -124,6 +124,11 @@ import { RemoteDesktopWindows } from "./RemoteDesktopWindows";
 import { RemoteDesktopNetworkStatus } from "./RemoteDesktopNetworkStatus";
 import type { DesktopNetworkStats } from "./networkStats";
 import {
+  findRememberedMode,
+  readRememberedResolution,
+  rememberResolution,
+} from "./resolutionMemory";
+import {
   RemoteDesktopControls,
   RemoteDesktopDisconnect,
 } from "./RemoteDesktopControls";
@@ -256,6 +261,28 @@ export function RemoteDesktopSession({
   );
   const securityRef = useRef(security);
   securityRef.current = security;
+  // Display changes stop host input, so they wait for the unlock attempt.
+  const unlockAttempt = useRef<Promise<void>>(Promise.resolve());
+  // A remembered fitted size waiting for this lease's viewport measurement.
+  const rememberedFit = useRef<{ lease: string; edge: number } | null>(null);
+  // The computer's own system mode for a lease, read before this phone changes
+  // it. Choosing it again forgets the remembered resolution.
+  const hostMode = useRef<{ lease: string; modeId?: string } | null>(null);
+  const noteHostMode = (lease: string, modes: RemoteDesktopDisplayMode[]) => {
+    if (hostMode.current?.lease !== lease)
+      hostMode.current = {
+        lease,
+        modeId: modes.find((mode) => mode.current)?.id,
+      };
+  };
+  // Assigned each render below; `connect` runs it before the first video offer.
+  const applyRememberedDisplay = useRef(
+    async (
+      _lease: RemoteDesktopLease,
+      _caps: RemoteDesktopCapabilities,
+      _isCurrent: () => boolean,
+    ) => false,
+  );
   const [lockOnExit, setLockOnExit, lockOnExitLoaded] =
     useLockOnExitPreference(deviceId);
   const exitLock = useRef(false);
@@ -354,6 +381,10 @@ export function RemoteDesktopSession({
     height: number;
   } | null>(null);
   const [viewerViewport, setViewerViewport] = useState({ width: 0, height: 0 });
+  const viewerViewportRef = useRef(viewerViewport);
+  viewerViewportRef.current = viewerViewport;
+  const windowSizeRef = useRef(windowSize);
+  windowSizeRef.current = windowSize;
   const viewportGeneration = useRef(0);
   const matchesViewer = (
     display: { width: number; height: number },
@@ -631,31 +662,39 @@ export function RemoteDesktopSession({
   );
   const authRef = useRef(auth);
   authRef.current = auth;
+  const loadIceServers = (attemptId: string) =>
+    resolveDesktopIceServers(
+      () =>
+        authRef.current.apiFetch(REMOTE_DESKTOP_ICE_CONFIG_PATH, {
+          baseUrl: DEVICE_LINK_API_BASE_URL,
+          timeoutMs: REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
+          cache: "no-store",
+        }),
+      (result) =>
+        mobileDebugLog("info", "device-link", "remote desktop ICE config", {
+          revision: RTC_DIAGNOSTIC_REVISION,
+          attempt: attemptId.slice(0, 8),
+          ...result,
+        }),
+    );
+  // An ICE lookup started alongside a display change or a connection, so the
+  // next media attempt does not wait for the server after it. One-shot.
+  const icePrefetch = useRef<{
+    at: number;
+    servers: ReturnType<typeof resolveDesktopIceServers>;
+  } | null>(null);
   const viewerMedia = useMemo(
     () =>
       new RemoteDesktopViewerMedia({
         request,
         send,
-        loadIce: (attemptId) =>
-          resolveDesktopIceServers(
-            () =>
-              authRef.current.apiFetch(REMOTE_DESKTOP_ICE_CONFIG_PATH, {
-                baseUrl: DEVICE_LINK_API_BASE_URL,
-                timeoutMs: REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
-                cache: "no-store",
-              }),
-            (result) =>
-              mobileDebugLog(
-                "info",
-                "device-link",
-                "remote desktop ICE config",
-                {
-                  revision: RTC_DIAGNOSTIC_REVISION,
-                  attempt: attemptId.slice(0, 8),
-                  ...result,
-                },
-              ),
-          ),
+        loadIce: (attemptId) => {
+          const prefetched = icePrefetch.current;
+          icePrefetch.current = null;
+          return prefetched && Date.now() - prefetched.at < 30_000
+            ? prefetched.servers
+            : loadIceServers(attemptId);
+        },
         current: () => {
           const lease = active.current,
             caps = capsRef.current?.value;
@@ -806,6 +845,7 @@ export function RemoteDesktopSession({
       finishBackgroundTransition.current = null;
       const previous = active.current;
       abandonChannelRequests();
+      icePrefetch.current = null;
       setExitLockPending(Boolean(previous && exiting && exitLock.current));
       active.current = null;
       pendingVideoSettings.current = null;
@@ -1091,21 +1131,28 @@ export function RemoteDesktopSession({
                 const firstFrame = new Promise<boolean>((resolve) => {
                   unlockFrame.current = resolve;
                 });
-                void securityRef.current.maybeUnlock(async () => {
-                  if (
-                    !(await firstFrame) ||
-                    current !== generation.current ||
-                    !focusedRef.current ||
-                    !recovery.current.enabled
-                  )
-                    throw new Error("CREDENTIAL_CANCELLED");
-                });
+                unlockAttempt.current = securityRef.current.maybeUnlock(
+                  async () => {
+                    if (
+                      !(await firstFrame) ||
+                      current !== generation.current ||
+                      !focusedRef.current ||
+                      !recovery.current.enabled
+                    )
+                      throw new Error("CREDENTIAL_CANCELLED");
+                  },
+                );
               }
             },
           });
         const display = next.display;
         recovery.current.displayId = display.id;
         mark("capture-started");
+        // Overlaps control and the remembered display; video needs it next.
+        icePrefetch.current = {
+          at: Date.now(),
+          servers: loadIceServers("connect"),
+        };
         active.current = next;
         receiveWindow.current = {
           since: Date.now(),
@@ -1133,12 +1180,24 @@ export function RemoteDesktopSession({
           }
           if (current !== generation.current) return;
         }
+        // Switch to the remembered display before the viewer asks for video,
+        // so the first frame already has the chosen size.
+        if (
+          await applyRememberedDisplay.current(
+            next,
+            result,
+            () => current === generation.current && active.current === next,
+          )
+        ) {
+          if (current !== generation.current) return;
+          setLease({ ...next });
+        }
         send({
           type: "init",
           trickleIce: result.trickleIce === true,
           epoch: next.lease,
-          width: display.width,
-          height: display.height,
+          width: next.display.width,
+          height: next.display.height,
           fillHeight: landscape,
           audio:
             result.systemAudio &&
@@ -1737,8 +1796,32 @@ export function RemoteDesktopSession({
         if (
           typeof message.width === "number" &&
           typeof message.height === "number"
-        )
-          void fitViewerDisplay(message.width, message.height);
+        ) {
+          const pending = rememberedFit.current;
+          rememberedFit.current = null;
+          const base = viewerDisplaySize(message.width, message.height);
+          // Reapply the remembered fitted size at this phone's current ratio.
+          const remembered =
+            pending?.lease === current.lease && pending.edge && base
+              ? fittedDisplayModes(base, base).find(
+                  (mode) => Math.max(mode.width, mode.height) === pending.edge,
+                )
+              : undefined;
+          if (remembered) {
+            // An exact size skips the viewport bookkeeping of a plain fit;
+            // record this measurement so restore still recognizes the fit.
+            const viewport = { width: message.width, height: message.height };
+            setViewerViewport(viewport);
+            void fitViewerDisplay(
+              remembered.width,
+              remembered.height,
+              true,
+              undefined,
+              viewport,
+              true,
+            );
+          } else void fitViewerDisplay(message.width, message.height);
+        }
         break;
       case "reconnecting":
         if (message.attemptId === mediaAttempt.current)
@@ -2450,6 +2533,7 @@ export function RemoteDesktopSession({
       op: "displayModes",
       lease: current.lease,
     });
+    noteHostMode(current.lease, modes);
     // CoreGraphics modes keep their own orientation when Electron's display
     // geometry is rotated. Compare modes in the enumeration's coordinate space.
     const reference = modes.find((mode) => mode.current) ?? { width, height };
@@ -2457,35 +2541,24 @@ export function RemoteDesktopSession({
       matchesViewer(mode, reference.width, reference.height),
     );
   };
-  const changeResolution = async (modeId: string) => {
+  // The settings list was just read from the host; reusing its entry saves a
+  // round trip. The host still rejects a mode that no longer exists.
+  const changeResolution = async (mode: RemoteDesktopDisplayMode) => {
     const current = active.current;
     if (!current?.controlling || settingInFlight.current) return;
     if (
-      caps?.resolutionRestore ||
-      (caps?.viewerDisplay && caps.viewerDisplayRestore)
+      (caps?.resolutionRestore ||
+        (caps?.viewerDisplay && caps.viewerDisplayRestore)) &&
+      (caps?.resolutionRestore ||
+        [mode.width, mode.height].every((size) => size >= 320 && size <= 2560))
     ) {
-      try {
-        const modes = await readResolutionModes();
-        if (active.current !== current) return;
-        const mode = modes.find((item) => item.id === modeId);
-        if (!mode) throw new Error("DESKTOP_DISPLAY_MODE_MISSING");
-        if (
-          caps?.resolutionRestore ||
-          [mode.width, mode.height].every((size) => size >= 320 && size <= 2560)
-        ) {
-          await fitViewerDisplay(
-            mode.width,
-            mode.height,
-            true,
-            !fittedDisplay && caps?.resolutionRestore ? mode.id : undefined,
-          );
-          return;
-        }
-      } catch {
-        if (active.current === current)
-          setSettingNotice(t("remoteDesktop.settingFailed"));
-        return;
-      }
+      await fitViewerDisplay(
+        mode.width,
+        mode.height,
+        true,
+        !fittedDisplay && caps?.resolutionRestore ? mode.id : undefined,
+      );
+      return;
     }
     setSettingNotice(t("remoteDesktop.settingUnsupported"));
   };
@@ -2494,6 +2567,8 @@ export function RemoteDesktopSession({
     height: number,
     exactResolution = false,
     modeId?: string,
+    viewport?: { width: number; height: number },
+    remembered = false,
   ) => {
     const current = active.current;
     if (
@@ -2523,8 +2598,11 @@ export function RemoteDesktopSession({
     setSettingNotice(null);
     const sourceDisplayId = recovery.current.displayId || current.display.id;
     send({ type: "control", enabled: false });
+    // A host that can follow display changes keeps the running stream; only a
+    // response without `videoKept` falls back to rebuilding it.
+    const keepVideo = caps?.liveDisplaySwitch === true;
     try {
-      viewerMedia.reset();
+      if (!keepVideo) viewerMedia.reset();
       const restore = Boolean(
         !exactResolution &&
         fittedDisplay &&
@@ -2532,39 +2610,89 @@ export function RemoteDesktopSession({
         matchesViewer(fittedDisplay, width, height),
       );
       const requestGeneration = viewportGeneration.current;
-      const next = await viewerSession.current.fitDisplay(
+      if (!keepVideo)
+        icePrefetch.current = {
+          at: Date.now(),
+          servers: loadIceServers("display"),
+        };
+      const { videoKept, ...next } = await viewerSession.current.fitDisplay(
         size.width,
         size.height,
         restore,
         modeId,
+        keepVideo,
       );
       if (active.current !== current) return;
       // Reconnect the physical source display after the temporary mirror ends.
       recovery.current.displayId = sourceDisplayId;
+      // The next connection reapplies this choice; restoring or choosing the
+      // computer's own mode again forgets it.
+      const fittedTo =
+        viewport ??
+        (exactResolution ? viewerViewportRef.current : { width, height });
+      const ownMode =
+        hostMode.current?.lease === current.lease &&
+        hostMode.current.modeId === modeId;
+      void rememberResolution(
+        deviceId,
+        sourceDisplayId,
+        restore || (modeId && ownMode)
+          ? null
+          : modeId
+            ? { kind: "mode", modeId, width, height }
+            : fittedTo.width > 0 && fittedTo.height > 0
+              ? {
+                  // The requested size, not the host's logical one: a HiDPI
+                  // host may answer with a smaller mode of the same ratio,
+                  // which must not shrink the request on every reconnect.
+                  kind: "fit",
+                  width: size.width,
+                  height: size.height,
+                  viewport: { ...fittedTo },
+                  window: {
+                    width: Math.round(windowSizeRef.current.width),
+                    height: Math.round(windowSizeRef.current.height),
+                  },
+                }
+              : null,
+      );
       if (!exactResolution && viewportGeneration.current === requestGeneration)
         setViewerViewport({ width, height });
+      // Fitted sizes are offered around the plain fit of the viewport.
+      const fittedBase = viewport
+        ? viewerDisplaySize(viewport.width, viewport.height)
+        : null;
       setFittedDisplay((previous) =>
         modeId || restore
           ? null
-          : exactResolution && previous
-            ? previous
+          : exactResolution && (previous ?? fittedBase)
+            ? (previous ?? fittedBase)
             : { width: next.display.width, height: next.display.height },
       );
       setLease({ ...next });
-      streaming.current = false;
-      abandonChannelRequests();
-      setCanPip(false);
-      send({
-        type: "videoSettings",
+      const geometry = {
         width: next.display.width,
         height: next.display.height,
         restore: restore || Boolean(modeId),
-        audio: Boolean(caps?.systemAudio && videoSettingsRef.current.audio),
-      });
+      };
+      if (videoKept) send({ type: "displayGeometry", ...geometry });
+      else {
+        if (keepVideo) viewerMedia.reset();
+        streaming.current = false;
+        abandonChannelRequests();
+        setCanPip(false);
+        send({
+          type: "videoSettings",
+          ...geometry,
+          audio: Boolean(caps?.systemAudio && videoSettingsRef.current.audio),
+        });
+      }
       const control = await viewerSession.current.control(true);
       if (active.current === current)
         applyConfirmedControl(current, control.controlling);
     } catch (cause) {
+      // A reconnect must not retry a remembered choice that just failed.
+      if (remembered) rememberedDisplayGaveUp.current = true;
       if (active.current === current) {
         setSettingNotice(t("remoteDesktop.settingFailed"));
         if ((cause as { code?: string })?.code === "INVOKE_TIMEOUT")
@@ -2576,6 +2704,169 @@ export function RemoteDesktopSession({
       setSettingBusy(false);
     }
   };
+  // The host restores its own mode when a viewer leaves. Reapply this phone's
+  // last choice once per lease: before the first video offer when possible,
+  // otherwise after control and the first frame are ready.
+  const rememberedResolutionLease = useRef<string | null>(null);
+  // One early failure (for example a locked computer refusing the change)
+  // leaves later connections in this screen to the after-frame path.
+  const earlyDisplayFailed = useRef(false);
+  // A remembered change that failed once and rebuilt the connection is not
+  // retried in this screen, so a persistent failure cannot loop reconnects.
+  const rememberedDisplayGaveUp = useRef(false);
+  // The early change is optional: a failure keeps the connection going and the
+  // after-frame path retries. Once the display change was sent, the host ends
+  // the lease on any failure except a refusal before touching the display;
+  // a lost reply leaves the geometry unknown, as for a manual change.
+  const earlyDisplayFailureEndsConnection = (
+    cause: unknown,
+    displayChangeSent: boolean,
+  ) => {
+    const code = remoteDesktopErrorCode(cause);
+    if (code === "DESKTOP_LEASE_EXPIRED" || code === "DESKTOP_STOPPED")
+      return true;
+    return (
+      displayChangeSent &&
+      code !== "DESKTOP_VIEW_ONLY" &&
+      code !== "DESKTOP_DISPLAY_BUSY" &&
+      code !== "DESKTOP_INPUT_BUSY"
+    );
+  };
+  applyRememberedDisplay.current = async (current, hostCaps, isCurrent) => {
+    if (
+      earlyDisplayFailed.current ||
+      rememberedDisplayGaveUp.current ||
+      !hostCaps.canControl ||
+      !wantsControl.current
+    )
+      return false;
+    const remembered = await readRememberedResolution(
+      deviceId,
+      current.display.id,
+    );
+    if (!remembered || !isCurrent()) return false;
+    const fit = remembered.kind === "fit";
+    if (fit ? !hostCaps.viewerDisplay : !hostCaps.resolutionRestore)
+      return false;
+    // The viewer cannot measure its picture area before video, so reuse the
+    // fitted size only in the same app window. Rotation, folding, split view
+    // or a resize changes it; the after-frame path then measures this view.
+    if (
+      fit &&
+      (remembered.window?.width !== Math.round(windowSize.width) ||
+        remembered.window?.height !== Math.round(windowSize.height))
+    )
+      return false;
+    let displayChangeSent = false;
+    try {
+      let modeId: string | undefined;
+      if (!fit) {
+        const modes = await request<RemoteDesktopDisplayMode[]>({
+          op: "displayModes",
+          lease: current.lease,
+        });
+        if (!isCurrent()) return false;
+        noteHostMode(current.lease, modes);
+        const mode = findRememberedMode(modes, remembered);
+        if (!mode) return false;
+        rememberedResolutionLease.current = current.lease;
+        if (mode.current) return false;
+        modeId = mode.id;
+      }
+      const control = await viewerSession.current.control(true);
+      if (!isCurrent() || !control.controlling) return false;
+      displayChangeSent = true;
+      await viewerSession.current.fitDisplay(
+        remembered.width,
+        remembered.height,
+        false,
+        modeId,
+      );
+      if (!isCurrent()) return false;
+      rememberedResolutionLease.current = current.lease;
+      if (fit) {
+        // Same bookkeeping as fitting by hand, so restore is offered.
+        setFittedDisplay(
+          viewerDisplaySize(
+            remembered.viewport.width,
+            remembered.viewport.height,
+          ) ?? { width: current.display.width, height: current.display.height },
+        );
+        setViewerViewport(remembered.viewport);
+      }
+      return true;
+    } catch (cause) {
+      earlyDisplayFailed.current = true;
+      // Let the after-frame path reapply the choice for this lease.
+      if (rememberedResolutionLease.current === current.lease)
+        rememberedResolutionLease.current = null;
+      if (
+        isCurrent() &&
+        earlyDisplayFailureEndsConnection(cause, displayChangeSent)
+      ) {
+        rememberedDisplayGaveUp.current = true;
+        throw cause;
+      }
+      return false;
+    }
+  };
+  useEffect(() => {
+    const current = active.current;
+    if (
+      !current?.controlling ||
+      !controlReady ||
+      !frameReady ||
+      !(caps?.resolutionRestore || caps?.viewerDisplay) ||
+      fittedDisplay ||
+      rememberedDisplayGaveUp.current ||
+      rememberedResolutionLease.current === current.lease
+    )
+      return;
+    rememberedResolutionLease.current = current.lease;
+    const displayId = recovery.current.displayId || current.display.id;
+    const { id, width, height } = current.display;
+    // A display change the user made meanwhile wins over the remembered one.
+    const unchanged = () =>
+      active.current === current &&
+      current.display.id === id &&
+      current.display.width === width &&
+      current.display.height === height;
+    void (async () => {
+      const remembered = await readRememberedResolution(deviceId, displayId);
+      if (!remembered) return;
+      await unlockAttempt.current;
+      if (!unchanged()) return;
+      if (remembered.kind === "fit") {
+        // Same path as the button: measure this phone now, then fit.
+        if (!caps?.viewerDisplay) return;
+        rememberedFit.current = {
+          lease: current.lease,
+          edge: Math.max(remembered.width, remembered.height),
+        };
+        send({ type: "measureViewport" });
+        return;
+      }
+      if (!caps?.resolutionRestore) return;
+      const mode = findRememberedMode(await readResolutionModes(), remembered);
+      if (!mode || mode.current || !unchanged()) return;
+      await fitViewerDisplay(
+        mode.width,
+        mode.height,
+        true,
+        mode.id,
+        undefined,
+        true,
+      );
+    })().catch(() => {});
+  }, [
+    controlReady,
+    frameReady,
+    lease?.lease,
+    lease?.controlling,
+    caps?.resolutionRestore,
+    caps?.viewerDisplay,
+    fittedDisplay,
+  ]);
   const shortcut = (keys: string[]) =>
     send({
       type: "events",
