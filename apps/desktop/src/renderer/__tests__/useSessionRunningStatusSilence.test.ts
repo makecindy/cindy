@@ -18,6 +18,7 @@ import {
   addSessionAttention,
   clearSessionAttention,
   getSessionAttentionKind,
+  hasSessionAttention,
 } from '@/lib/sessionAttentionStore';
 
 const storeMock = vi.hoisted(() => ({
@@ -26,6 +27,7 @@ const storeMock = vi.hoisted(() => ({
   terminalErrorSessions: new Set<string>(),
   sideTaskStopSessions: new Set<string>(),
   privateReplySessions: new Set<string>(),
+  imSessions: new Set<string>(),
   groupLaneSessions: new Set<string>(),
   recoverySessions: new Set<string>(),
   heldByAgentIsland: new Set<string>(),
@@ -49,7 +51,8 @@ vi.mock('@/lib/makerChatStore', () => ({
     getRunningSnapshot: () => storeMock.snapshot,
     hasSessionTerminalError: (sessionId: string) => storeMock.terminalErrorSessions.has(sessionId),
     hasSessionRecoveryPending: (sessionId: string) => storeMock.recoverySessions.has(sessionId),
-    wasLastStopPrivateReply: (sessionId: string) => storeMock.privateReplySessions.has(sessionId),
+    wasLastStopQuietCompletion: (sessionId: string) =>
+      storeMock.privateReplySessions.has(sessionId) || storeMock.imSessions.has(sessionId),
     wasLastStopGroupLane: (sessionId: string) => storeMock.groupLaneSessions.has(sessionId),
     wasLastStopSideTask: (sessionId: string) => storeMock.sideTaskStopSessions.has(sessionId),
     hasPausedQueue: (sessionId: string) => storeMock.pausedQueueSessions.has(sessionId),
@@ -94,6 +97,7 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     storeMock.terminalErrorSessions.clear();
     storeMock.sideTaskStopSessions.clear();
     storeMock.privateReplySessions.clear();
+    storeMock.imSessions.clear();
     storeMock.recoverySessions.clear();
     storeMock.heldByAgentIsland.clear();
     storeMock.pausedQueueSessions.clear();
@@ -102,6 +106,33 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     vi.clearAllMocks();
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it.each(['before-stop', 'during-debounce', 'missing-snapshot'])('keeps IM completion quiet (%s), but alerts for the next App turn and errors', async (timing) => {
+    vi.useFakeTimers();
+    const onSessionDone = vi.fn();
+    const onSessionError = vi.fn();
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionDone, onSessionError }));
+    await emitSnapshot(new Map([['im', status(true)]]));
+    if (timing !== 'during-debounce') storeMock.imSessions.add('im');
+    await emitSnapshot(timing === 'missing-snapshot' ? new Map() : new Map([['im', status(false)]]));
+    storeMock.imSessions.add('im');
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(addSessionAttention).not.toHaveBeenCalled();
+    expect(onSessionDone).not.toHaveBeenCalled();
+
+    storeMock.imSessions.clear();
+    await emitSnapshot(new Map([['im', status(true)]]));
+    await emitSnapshot(new Map([['im', status(false)]]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(addSessionAttention).toHaveBeenCalledWith('im', 'done');
+    expect(onSessionDone).toHaveBeenCalledExactlyOnceWith('im');
+
+    await emitSnapshot(new Map([['im', status(true)]]));
+    storeMock.imSessions.add('im');
+    await emitSnapshot(new Map([['im', status(false, true)]]));
+    expect(addSessionAttention).toHaveBeenCalledWith('im', 'error');
+    expect(onSessionError).toHaveBeenCalledExactlyOnceWith('im');
   });
 
   it.each([false, true])('keeps recovery quiet until final success (missing stop snapshot: %s)', async (missing) => {
@@ -608,6 +639,34 @@ describe('useSessionRunningStatus silenced completion handling', () => {
 
     expect(vi.mocked(addSessionAttention)).toHaveBeenCalledWith('s-setup', 'awaiting');
     expect(onSessionNeedsReply).toHaveBeenCalledWith('s-setup');
+  });
+
+  it('clears awaiting attention when resolving a card immediately starts a continuation', async () => {
+    vi.mocked(getSessionAttentionKind).mockReturnValue('awaiting');
+    vi.mocked(hasSessionAttention).mockReturnValue(true);
+    renderHook(() => useSessionRunningStatus(undefined));
+
+    await emitSnapshot(new Map([['s-confirm', {
+      ...status(false),
+      hasPendingAskUser: true,
+    }]]));
+    vi.mocked(clearSessionAttention).mockClear();
+
+    // Resolving ask/plan can start its continuation in the same projection
+    // that removes the card. The awaiting badge must not survive that run.
+    await emitSnapshot(new Map([['s-confirm', status(true)]]));
+
+    expect(clearSessionAttention).toHaveBeenCalledExactlyOnceWith('s-confirm');
+
+    vi.mocked(getSessionAttentionKind).mockReturnValue('done');
+    await emitSnapshot(new Map([['s-confirm', {
+      ...status(true),
+      hasPendingPermission: true,
+    }]]));
+    vi.mocked(clearSessionAttention).mockClear();
+    await emitSnapshot(new Map([['s-confirm', status(true)]]));
+
+    expect(clearSessionAttention).not.toHaveBeenCalled();
   });
 
   it('clears an orphaned error badge when a new turn starts and the terminal error is gone', async () => {

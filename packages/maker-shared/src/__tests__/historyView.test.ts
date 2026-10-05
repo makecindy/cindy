@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { projectHistoryView } from '../historyViewProjection.js';
-import { isHistoryViewUnavailable, readHistoryWorkDetails, type HistoryMessageSource } from '../historyView.js';
+import { historyWorkSummaries, isHistoryViewUnavailable, readHistoryWorkDetails, type HistoryMessageSource } from '../historyView.js';
 
 function row(id: number, role: string, content: unknown): HistoryMessageSource {
   return { id: String(id), clientId: `c${id}`, role, content,
@@ -39,6 +39,22 @@ describe('history reading projection', () => {
     const projected = projectHistoryView(rows, false);
     const visible = projected.flatMap((item) => item.type === 'messages' ? item.messages : []);
     expect(visible.map((item) => item.id)).toEqual(['0', '2', '3', '4', '5', '6']);
+  });
+
+  it('keeps file artifacts on leaf summaries only, once per nesting level', () => {
+    const tool = (id: number, toolUseId: string, path: string): HistoryMessageSource[] => [
+      { ...row(id, 'tool_use', { toolName: 'Bash', toolUseId, input: { command: `echo > ${path}` } }), toolUseId,
+        historyArtifacts: [{ path, source: 'command', createdAt: row(id, '', '').createdAt, toolUseId }] },
+      { ...row(id + 1, 'tool_result', ''), toolUseId }];
+    const rows = [row(0, 'user', 'Work'), row(1, 'thinking', 'plan'), ...tool(2, 'a', '/work/a.txt'),
+      row(4, 'assistant', 'Halfway there'), row(5, 'thinking', 'more'), ...tool(6, 'b', '/work/b.txt'),
+      { ...row(8, 'assistant', 'Done'), agentMeta: { turnCompleted: true } }];
+    const projected = projectHistoryView(rows, false, true);
+    const outer = projected.find((item) => item.type === 'work' && item.children);
+    expect(outer?.type).toBe('work');
+    expect(outer?.type === 'work' && 'artifacts' in outer.summary).toBe(false);
+    expect(historyWorkSummaries(projected).flatMap((summary) => summary.artifacts ?? []).map((file) => file.path))
+      .toEqual(['/work/a.txt', '/work/b.txt']);
   });
 
   it('keeps sealed history completed when a new active tail arrives before its user row', () => {

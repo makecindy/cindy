@@ -2,7 +2,8 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
-import { PROVIDER_MODEL_CATALOG } from '@cindy/model-providers';
+import { PROVIDER_MODEL_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import { invocationModelRecord, NATIVE_BRIDGE_SESSION_HEADER } from '../pi-provider-transport.js';
 import { claudeProviderReasoningNamespace, createClaudeProviderBridge } from '../claude-provider-bridge.js';
 
 async function runBridge(
@@ -13,6 +14,7 @@ async function runBridge(
   extras: Partial<Parameters<typeof createClaudeProviderBridge>[0]> = {},
   effort = 'high',
   fast = false,
+  inboundHeaders: Record<string, string> = {},
 ) {
   const handler = createClaudeProviderBridge({
     url: `https://supplier.example/v1/${protocol === 'openai-chat' ? 'chat/completions' : 'responses'}`,
@@ -29,7 +31,7 @@ async function runBridge(
     req.on('data', chunk => chunks.push(chunk));
     req.on('end', () => {
       void handler.handle({ parsedBody: JSON.parse(Buffer.concat(chunks).toString()),
-        ctx: { reqId: 1, method: 'POST', url: req.url!, headers: {} }, res,
+        ctx: { reqId: 1, method: 'POST', url: req.url!, headers: inboundHeaders }, res,
         prefs: { reasoningEffort: effort, fast },
       }).catch(() => { res.statusCode = 500; res.end(); });
     });
@@ -175,4 +177,55 @@ it.each(['openai-chat', 'openai-responses'] as const)('sends Fast only when enab
       { supportsFastMode: supported }, 'high', fast);
     expect(body?.service_tier).toBe(supported && fast ? 'priority' : undefined);
   }
+});
+
+describe('OpenCode Go session identity through the native Claude bridge (#5325)', () => {
+  const upstream = 'https://opencode.ai/zen/go/v1';
+  function goRow() {
+    const provider = buildUserProvider({ id: 'opencode-go', name: 'OpenCode Go', runtimes: {
+      'claude-code': { baseUrl: upstream, wireProtocol: 'openai-chat', models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', reasoning: false, reasoningEfforts: [] }] },
+    } });
+    return invocationModelRecord(provider.models['claude-code']![0], upstream, 'openai-completions')!;
+  }
+  /** The SDK's final HTTP request is what the upstream validates, not the handler arguments. */
+  function goUpstream(seen: Headers[]) {
+    return async (_url: string, init?: RequestInit) => {
+      const headers = new Headers(init?.headers as HeadersInit);
+      seen.push(headers);
+      if (!headers.get('x-opencode-session')?.trim()) return new Response(JSON.stringify({ error: 'MissingSessionID' }), { status: 400, headers: { 'content-type': 'application/json' } });
+      return new Response(chatStream, { headers: { 'content-type': 'text/event-stream' } });
+    };
+  }
+
+  it('carries the inbound Claude Code session as a stable x-opencode-session on the SDK request', async () => {
+    const seen: Headers[] = [];
+    const row = goRow();
+    const runs = [] as Array<{ status: number; body: string }>;
+    for (const inbound of ['cc-session-a', 'cc-session-a', 'cc-session-b']) {
+      runs.push(await runBridge('openai-chat', true, chatStream, () => {}, {
+        model: row, nativeUpstream: upstream, providerId: 'opencode-go', efforts: [],
+        fetchImpl: goUpstream(seen) as typeof fetch,
+      }, 'high', false, { 'x-claude-code-session-id': inbound }));
+    }
+    expect(runs.map(run => run.status)).toEqual([200, 200, 200]);
+    expect(runs[0]!.body).toContain('Hello');
+    const values = seen.map(headers => headers.get('x-opencode-session'));
+    expect(values[0]).toMatch(/^[0-9a-f]{32}$/);
+    expect(values[1]).toBe(values[0]);
+    expect(values[2]).not.toBe(values[0]);
+    for (const headers of seen) {
+      expect(headers.get(NATIVE_BRIDGE_SESSION_HEADER)).toBeNull();
+      expect(headers.get('x-claude-code-session-id')).toBeNull();
+    }
+  });
+
+  it('does not leak the internal session carrier to a Responses pass-through upstream', async () => {
+    let sent: Headers | undefined;
+    const result = await runBridge('openai-responses', true, 'data: {"type":"response.completed","response":{"id":"r","status":"completed","output":[],"usage":{"input_tokens":0,"output_tokens":0}}}\n\n', (_url, init) => {
+      sent = new Headers(init?.headers as HeadersInit);
+    }, {}, 'high', false, { 'x-claude-code-session-id': 'cc-session-a' });
+    expect(result.status).toBe(200);
+    expect(sent?.get(NATIVE_BRIDGE_SESSION_HEADER)).toBeNull();
+    expect(sent?.get('x-opencode-session')).toBeNull();
+  });
 });

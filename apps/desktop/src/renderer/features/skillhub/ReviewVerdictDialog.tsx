@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
  *   WARN:  ZsNls (Light) / 4kwHH (Dark)
  *   BLOCK: VIuO3 (Light) / cRUum (Dark)
  *
- * 480px wide, cornerRadius 12, Card fill, Board border, backdrop bg-black/40.
+ * 480px wide; scrim and panel come from the shared modal-scrim / modal-panel.
  * All icons strictly grayscale per docs/design-rules/cindy-design-system.md / N12.
  */
 
@@ -126,17 +126,15 @@ export function ReviewVerdictDialog({
     <Dialog.Root open={open} modal>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]"
+          className="modal-scrim fixed inset-0 z-[10000]"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
           onPointerDownOutside={(e) => e.preventDefault()}
           onEscapeKeyDown={(e) => e.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'w-full max-w-[480px] rounded-xl overflow-hidden',
-            'border bg-[var(--cmd-palette-bg)]',
-            'border-[var(--cmd-palette-border)]',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'w-full max-w-[480px] overflow-hidden',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           aria-describedby={undefined}

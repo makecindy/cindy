@@ -212,3 +212,81 @@ it("keeps explicit system modes exact even with a virtual-display acknowledgemen
     "INVALID_RESPONSE",
   );
 });
+
+describe("live display switch", () => {
+  it("accepts keepVideo only as a boolean on the three display changes", () => {
+    for (const request of [
+      { op: "viewerDisplay", lease: "lease", width: 900, height: 1600 },
+      { op: "restoreViewerDisplay", lease: "lease" },
+      { op: "resolution", lease: "lease", modeId: "1", temporary: true },
+    ]) {
+      expect(
+        parseRemoteDesktopRequest({ ...request, keepVideo: true }),
+      ).toEqual({ ...request, keepVideo: true });
+      // false is the legacy behaviour and stays off the wire.
+      expect(
+        parseRemoteDesktopRequest({ ...request, keepVideo: false }),
+      ).toEqual(request);
+      expect(() =>
+        parseRemoteDesktopRequest({ ...request, keepVideo: "true" }),
+      ).toThrow("INVALID_REQUEST");
+    }
+    // Other operations never read it.
+    expect(
+      parseRemoteDesktopRequest({
+        op: "displayModes",
+        lease: "lease",
+        keepVideo: "ignored",
+      }),
+    ).toEqual({ op: "displayModes", lease: "lease" });
+  });
+
+  it("asks to keep video only when requested and reports only an acknowledged keep", async () => {
+    let kept = true;
+    const request = vi.fn(async (value) => {
+      if (value.op === "capabilities")
+        return { version: 1, enabled: true, displays: [{ id: "1" }] };
+      if (value.op === "start")
+        return {
+          lease: "lease",
+          display: { id: "1", width: 1920, height: 1080 },
+          controlling: false,
+        };
+      if (value.op === "control") return { controlling: value.enabled };
+      return {
+        lease: "lease",
+        display: { id: "1", width: 3840, height: 2160 },
+        controlling: false,
+        ...(kept ? { videoKept: true } : {}),
+      };
+    });
+    const session = new RemoteDesktopViewerSession(
+      request as DesktopViewerRequest,
+    );
+    await session.connect({ isCurrent: () => true });
+    await session.control(true);
+    const kept1 = await session.fitDisplay(3840, 2160, false, "4", true);
+    expect(request).toHaveBeenLastCalledWith(
+      {
+        op: "resolution",
+        lease: "lease",
+        modeId: "4",
+        temporary: true,
+        keepVideo: true,
+      },
+      expect.any(Function),
+    );
+    expect(kept1.videoKept).toBe(true);
+    // The shared lease itself never carries the per-change flag.
+    expect(session.lease?.videoKept).toBeUndefined();
+    await session.control(true);
+    // Not requested: an unexpected acknowledgement is not surfaced.
+    const legacy = await session.fitDisplay(3840, 2160, false, "4");
+    expect(request.mock.calls.at(-1)?.[0]).not.toHaveProperty("keepVideo");
+    expect(legacy.videoKept).toBeUndefined();
+    await session.control(true);
+    kept = false;
+    const torn = await session.fitDisplay(3840, 2160, false, "4", true);
+    expect(torn.videoKept).toBeUndefined();
+  });
+});

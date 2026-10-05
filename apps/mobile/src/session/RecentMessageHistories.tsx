@@ -5,6 +5,7 @@ import { NavigationContext, NavigationRouteContext, useIsFocused } from 'expo-ro
 import { PaneViewportProvider, usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { getRecentTasks, recentTaskKey, subscribeRecentTasks } from './recentTasks';
 import { NativeHistoryHost, NativeHistorySlot, needsResidentHistoryUpgrade } from './NativeResidentHistory';
+import { useResidentHomeListContextBridge } from './ResidentHomeList';
 
 import { MessageHistoryActive, MessageHistoryPositioning } from './messageHistoryActivity';
 export { useMessageHistoryActive, useMessageHistoryPositioning } from './messageHistoryActivity';
@@ -102,7 +103,7 @@ export function RecentMessageHistoriesProvider({ children }: { children: ReactNo
         </View>;
       })}
       {onTaskRoute ? [...overlays].map(([owner, content]) => <View key={owner}
-        pointerEvents="box-none" style={StyleSheet.absoluteFill}>{content}</View>) : null}
+        pointerEvents="box-none" style={styles.overlay}>{content}</View>) : null}
     </View>
   </Context.Provider>;
 }
@@ -153,11 +154,18 @@ export function RecentMessageHistories({ activeKey, children, topInset = 0, bott
       pointerEvents={interactive && ready ? 'auto' : 'none'} style={StyleSheet.absoluteFill} /> : null}
   </View>;
 }
-const styles = StyleSheet.create({ container: { flex: 1 }, clip: { position: 'absolute', overflow: 'hidden' } });
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  clip: { position: 'absolute', overflow: 'hidden' },
+  // Android confines a child's zIndex to its parent stacking context. Route
+  // drawers therefore need their root host above resident histories/chrome too.
+  overlay: { ...StyleSheet.absoluteFill, zIndex: 40 },
+});
 
 /** Route-owned drawers must be above the root-owned histories, not beneath them. */
 export function MessageHistoryOverlay({ children }: { children: ReactNode }) {
   const context = useContext(Context);
+  const residentChildren = useResidentHomeListContextBridge(children);
   if (!context) throw new Error('RecentMessageHistoriesProvider is missing');
   const { setOverlay } = context;
   const owner = useId();
@@ -167,9 +175,9 @@ export function MessageHistoryOverlay({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     if (NativeHistorySlot || needsResidentHistoryUpgrade) return;
     setOverlay(owner, focused ? <NavigationContext.Provider value={navigation}>
-      <NavigationRouteContext.Provider value={route}>{children}</NavigationRouteContext.Provider>
+      <NavigationRouteContext.Provider value={route}>{residentChildren}</NavigationRouteContext.Provider>
     </NavigationContext.Provider> : null);
-  }, [setOverlay, owner, focused, navigation, route, children]);
+  }, [setOverlay, owner, focused, navigation, route, residentChildren]);
   useLayoutEffect(() => () => setOverlay(owner, null), [setOverlay, owner]);
   return NativeHistorySlot || needsResidentHistoryUpgrade ? children : null;
 }

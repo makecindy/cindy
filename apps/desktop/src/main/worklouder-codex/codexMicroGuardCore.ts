@@ -25,7 +25,8 @@ const MAX_COMMAND_OUTPUT_BYTES = 16 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 2_000;
 const PRIVATE_FILE_MODE = 0o600;
 const PRIVATE_DIRECTORY_MODE = 0o700;
-const LEASE_NAME = /^lease-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/u;
+const LEASE_NAME =
+  /^lease-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/u;
 const LEASE_MAX_AGE_MS = 15_000;
 const LEASE_LOCK_NAME = '.lease-lock';
 
@@ -81,6 +82,8 @@ export class CodexMicroGuardStore {
   readonly heartbeatPath: string;
   readonly hookPath: string;
   readonly receiptPath: string;
+  /** Written by releases where protection defaults on; legacy migration then never reruns. */
+  readonly defaultOnPath: string;
 
   constructor(readonly supportPath: string) {
     this.statePath = path.join(supportPath, 'state.json');
@@ -88,6 +91,7 @@ export class CodexMicroGuardStore {
     this.heartbeatPath = path.join(supportPath, 'heartbeat');
     this.hookPath = path.join(supportPath, 'guard-hook.cjs');
     this.receiptPath = path.join(supportPath, 'receipt.json');
+    this.defaultOnPath = path.join(supportPath, 'default-on');
   }
 
   prepare(): void {
@@ -104,6 +108,16 @@ export class CodexMicroGuardStore {
     if (this.readPrivateFile('guard-hook.cjs') !== contents) {
       throw new Error('guard hook verification failed');
     }
+    this.markDefaultOn();
+  }
+
+  markDefaultOn(): void {
+    this.atomicWrite('default-on', '');
+  }
+
+  /** The hook outlives disabling; without the marker it came from a default-off release. */
+  hasLegacyHook(): boolean {
+    return fs.existsSync(this.hookPath) && !fs.existsSync(this.defaultOnPath);
   }
 
   readState(): CodexMicroGuardStateRecord | null {

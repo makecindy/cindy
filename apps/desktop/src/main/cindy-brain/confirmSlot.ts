@@ -54,6 +54,7 @@ export interface GhostConfirmShowParams {
   /** 净化后的次按钮文案;null = 用主机缺省文案。 */
   cancelText: string | null;
   danger: boolean;
+  mobilePageId?: string;
 }
 
 export interface ConfirmSlotDeps {
@@ -109,6 +110,9 @@ export class GhostConfirmSlot {
       return fail('INVALID_REQUEST', 'confirm-request 载荷必须是对象');
     }
     const request = payload as Record<string, unknown>;
+    if (request.mobilePageId !== undefined && (typeof request.mobilePageId !== 'string' || !/^[a-f0-9-]{36}$/.test(request.mobilePageId))) {
+      return fail('INVALID_REQUEST', 'mobilePageId 无效');
+    }
 
     if (typeof request.body !== 'string') {
       return fail('INVALID_REQUEST', 'body 必须是字符串(要问用户的话)');
@@ -161,6 +165,7 @@ export class GhostConfirmSlot {
         confirmText: confirmText.value,
         cancelText: cancelText.value,
         danger: request.danger === true,
+        ...(typeof request.mobilePageId === 'string' ? { mobilePageId: request.mobilePageId } : {}),
       });
     } catch (error) {
       this.deps.log?.warn('ghost confirm dialog failed', {

@@ -47,6 +47,7 @@ export function buildDiscordAdapter(
       }),
     },
     processingEmoji: PROCESSING_EMOJI,
+    queuedEmoji: '👀',
     buildVendorOptions: (userId) => ({ discordChatId: userId, source: 'discord' }),
   };
 }

@@ -9,6 +9,7 @@ import {
 } from 'node:crypto';
 import {
   PLUGIN_OAUTH_TTL_MS,
+  pluginOauthTranscript,
   oauthExact,
   oauthNonce,
   parsePluginOauthHello,
@@ -69,26 +70,7 @@ function transcript(
   target: OauthIdentityScope & { publicKey: string },
   peer: string,
 ): Buffer {
-  return Buffer.from(
-    JSON.stringify([
-      'cindy-plugin-oauth-authentication-v3',
-      target.realm,
-      target.membershipId,
-      target.deviceId,
-      peer,
-      target.publicKey,
-      reply.bootId,
-      hello.nonce,
-      hello.publicKey,
-      reply.publicKey,
-      reply.id,
-      reply.expiresAtMs,
-      hello.action.requestId,
-      hello.action.actionId,
-      hello.action.expectedRevision,
-      reply.ghostId,
-    ]),
-  );
+  return Buffer.from(pluginOauthTranscript(hello, reply, target, peer));
 }
 interface Connection {
   id: string;

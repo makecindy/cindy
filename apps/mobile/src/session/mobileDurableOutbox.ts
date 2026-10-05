@@ -6,8 +6,11 @@ import { outboxItemAttachments, type MobileOutboxItem } from "./sessionOutbox";
 import { discardMobileUploadedAttachment } from "./mobileAttachmentUpload";
 import type { RemoteSerializedAttachment } from "./types";
 import { reconcileCommittedComposerDraft } from './composerDraftStore';
+import { withAsyncStorageFullRecovery } from './asyncStorageFull';
+import { migrateLegacySessionMessageCache } from './mobileSessionMessageCache';
 
-export const mobileDurableOutbox = createDurableOutbox(AsyncStorage, async (record, guard) => {
+const outboxStorage = withAsyncStorageFullRecovery(AsyncStorage, migrateLegacySessionMessageCache);
+export const mobileDurableOutbox = createDurableOutbox(outboxStorage, async (record, guard) => {
   if (!record.draftHandoff) return;
   const owner = getMobileAuthOwner();
   const check = () => {

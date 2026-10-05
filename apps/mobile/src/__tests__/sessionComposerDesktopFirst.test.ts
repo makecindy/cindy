@@ -117,14 +117,14 @@ describe('mobile session composer desktop-first surface', () => {
     const inputEnd = sharedSource.indexOf('resizeGrabberTouch:', inputStart);
     const inputStyle = sharedSource.slice(inputStart, inputEnd);
     const composerStyleStart = source.indexOf('composer: {');
-    const composerStyleEnd = source.indexOf('composerScroll:', composerStyleStart);
+    const composerStyleEnd = source.indexOf('composerScrollFrame:', composerStyleStart);
     const composerStyle = source.slice(composerStyleStart, composerStyleEnd);
     const composerStatusCallIndex = source.indexOf('<ComposerActivityStatus');
     const composerViewStart = source.indexOf('testID="session.composer"');
-    const composerScrollEnd = source.indexOf('</ScrollView>', composerViewStart);
+    const composerScrollEnd = source.indexOf('</ComposerFrame>', composerViewStart);
     const composerViewSource = source.slice(composerViewStart, composerScrollEnd);
     const voiceStatusIndex = composerViewSource.indexOf('testID="session.voiceStatus"');
-    const composerScrollIndex = composerViewSource.indexOf('testID="session.composerScroll"');
+    const composerScrollIndex = composerViewSource.indexOf('bodyScrollTestID="session.composerScroll"');
     const voiceDraftTextStart = source.indexOf('onTextLayout={handleVoiceDraftTextLayout}');
     const voiceDraftTextEnd = source.indexOf('</Text>', voiceDraftTextStart);
     const voiceDraftTextSource = source.slice(voiceDraftTextStart, voiceDraftTextEnd);
@@ -159,7 +159,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('toolbar: renderComposerToolbar()');
     expect(source).toContain('trailing: renderComposerTrailingActions()');
     expect(source).toContain('gesture={composerResize.gesture}');
-    expect(source).toContain('<GestureDetector gesture={composerResize.scrollGesture}>');
+    expect(source).toContain('bodyScrollGesture={composerResize.scrollGesture}');
     expect(source).not.toContain('styles.composerCompactAttachmentSlot');
     expect(source).toContain('styles.composerCompactAttachmentHit');
     expect(source).not.toContain('styles.composerCompactAttachmentHitArea');
@@ -262,7 +262,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('composerRuntimePillTextRisky');
     expect(source).toContain('color: colors.statusAccent');
     expect(source).not.toContain("import { BlurView } from 'expo-blur';");
-    expect(source).toContain("import { BlurBackdrop } from '@/session/BlurBackdrop';");
+    expect(source).toContain("import { BlurBackdrop, FLOATING_CHROME_BLUR_INTENSITY } from '@/session/BlurBackdrop';");
     expect(source).toContain('<SessionHeaderNativeBlur height=');
     expect(source).toMatch(/<SessionHeaderNativeTitle\s+title=\{sharedTaskEnded \? t\('sharedTask.ended'\) : title\}/);
     expect(source).toContain('<SessionHeaderNativeActions');
@@ -367,7 +367,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const handleGrabberTouchActiveChange = useCallback((active: boolean) => {');
     expect(source).toContain('composerScrollViewRef.current?.setNativeProps({');
     expect(source).toContain('onGrabberTouchActiveChange: handleGrabberTouchActiveChange,');
-    expect(source).toContain('ref={composerScrollViewRef}');
+    expect(source).toContain('bodyScrollRef={composerScrollViewRef}');
     expect(source).not.toContain('const composerScrollEnabled = nativeShellLayout.composerScrollEnabled || voiceIsListening || composerInputScrollEnabled;');
     expect(source).toContain('onContentSizeChange={handleComposerInputContentSizeChange}');
     expect(source).not.toContain('voiceIsListening && { height: composerInputVisibleHeight }');

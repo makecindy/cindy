@@ -26,7 +26,7 @@ import { BOT_TASK_CARD_CLASS, BotTaskCardHeader } from './BotTaskCardHeader';
 
 /**
  * 「用时」是说给人听的，不是给日志看的：中文界面里 `8s` 和「用时」并排是两套语言。
- * 单位走 i18n，按秒 / 分 / 时+分显示。
+ * 单位走 i18n，按秒 / 分 / 时+分 / 天+时+分显示。
  */
 export function formatBotCollaborationDuration(
   t: (key: string, options?: Record<string, unknown>) => string,
@@ -37,6 +37,13 @@ export function formatBotCollaborationDuration(
   if (seconds < 60) return t('bots.collab.duration.seconds', { n: seconds });
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return t('bots.collab.duration.minutes', { n: minutes });
+  if (seconds >= 86_400) {
+    return t('bots.collab.duration.daysHoursMinutes', {
+      d: Math.floor(seconds / 86_400),
+      h: Math.floor((seconds % 86_400) / 3_600),
+      m: minutes % 60,
+    });
+  }
   return t('bots.collab.duration.hoursMinutes', {
     h: Math.floor(minutes / 60),
     m: minutes % 60,

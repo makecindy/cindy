@@ -24,6 +24,9 @@
  * - Danger rows get the same grey layer as every other row; only their text is red.
  * - Pointer, key, focus and scroll input is coalesced into one update per animation
  *   frame; rows and their clipping ancestors are cached until the panel's children change.
+ * - Panels that are not Radix menus (composer listboxes whose focus stays in the editor)
+ *   pass `MenuHighlightOptions`: which row is current, which attributes mark it, and where
+ *   their arrow keys are pressed. Without options the Radix behaviour above is unchanged.
  */
 
 export const MENU_ROW_ATTR = 'data-menu-row';
@@ -40,12 +43,41 @@ export function hasOwnHighlight(className: string | undefined): boolean {
   return !!className && OWN_HIGHLIGHT.test(className);
 }
 
+/** Row the keyboard points at, for panels whose current row is not Radix's highlighted item. */
+export interface MenuHighlightOptions {
+  /** Default: Radix's `data-highlighted` item, else an open SubTrigger. */
+  current?: (rows: readonly HTMLElement[]) => HTMLElement | null | undefined;
+  /** Row attributes whose changes re-read `current` (added to the Radix ones). */
+  currentAttributes?: readonly string[];
+  /** Key presses here also count as keyboard input (focus kept in an input outside the panel). */
+  keyboardSource?: EventTarget;
+}
+
+/** Marks the current row of a composer list (its arrow keys stay in the editor). */
+export const MENU_CURRENT_ROW_ATTR = 'data-menu-current';
+/** `current` for lists that mark their current row with `data-menu-current`. */
+export const currentMarkedRow: NonNullable<MenuHighlightOptions['current']> = (rows) =>
+  rows.find((r) => r.hasAttribute(MENU_CURRENT_ROW_ATTR));
+/** `current` for listboxes whose current option carries `aria-selected="true"`. */
+export const currentSelectedOption: NonNullable<MenuHighlightOptions['current']> = (rows) =>
+  rows.find((r) => r.getAttribute('aria-selected') === 'true');
+/** `current` for lists that move real focus between rows (only keyboard-visible focus counts). */
+export const currentFocusedRow: NonNullable<MenuHighlightOptions['current']> = (rows) => {
+  const focused = document.activeElement;
+  if (!(focused instanceof HTMLElement) || !focused.matches(':focus-visible')) return null;
+  return rows.find((r) => r === focused || r.contains(focused));
+};
+
 const MOVE =
   'transform var(--motion-instant) var(--motion-ease-out), opacity var(--motion-instant) var(--motion-ease-out)';
 const FADE_IN = 'opacity var(--motion-instant) var(--motion-ease-out)';
 const FADE_OUT = 'opacity var(--motion-instant) var(--motion-ease-in)';
 
-export function attachMenuHighlight(panel: HTMLElement, layer: HTMLElement): () => void {
+export function attachMenuHighlight(
+  panel: HTMLElement,
+  layer: HTMLElement,
+  options: MenuHighlightOptions = {},
+): () => void {
   let pointer: { x: number; y: number } | null = null;
   let input: 'pointer' | 'keyboard' = 'keyboard';
   let active: HTMLElement | null = null;
@@ -161,10 +193,11 @@ export function attachMenuHighlight(panel: HTMLElement, layer: HTMLElement): () 
     if (input === 'pointer' && pointer) target = nearest(pointer.x, pointer.y);
     else {
       const all = rows();
-      target =
-        all.find((r) => r.hasAttribute('data-highlighted')) ??
-        all.find((r) => r.getAttribute('data-state') === 'open') ??
-        null;
+      target = options.current
+        ? (options.current(all) ?? null)
+        : (all.find((r) => r.hasAttribute('data-highlighted')) ??
+          all.find((r) => r.getAttribute('data-state') === 'open') ??
+          null);
     }
     show(eligible(target) ? target : null);
   };
@@ -214,14 +247,18 @@ export function attachMenuHighlight(panel: HTMLElement, layer: HTMLElement): () 
     subtree: true,
     childList: true,
     attributes: true,
-    attributeFilter: ['data-highlighted', 'data-state', 'data-disabled'],
+    attributeFilter: ['data-highlighted', 'data-state', 'data-disabled', ...(options.currentAttributes ?? [])],
   });
   panel.addEventListener('pointermove', onMove);
   panel.addEventListener('pointerleave', onLeave);
   panel.addEventListener('keydown', onKey, true);
+  options.keyboardSource?.addEventListener('keydown', onKey, true);
   panel.addEventListener('focusin', schedule);
   // Capture: nested scroll containers do not bubble their scroll events.
   panel.addEventListener('scroll', onScroll, true);
+  // A list that names its current row (focus kept in the editor) shows it from the start,
+  // as its own row fill did; Radix menus have no highlighted item until the first input.
+  if (options.current) schedule();
   return () => {
     active?.removeAttribute(MENU_ACTIVE_ROW_ATTR);
     cancelAnimationFrame(frame);
@@ -229,6 +266,7 @@ export function attachMenuHighlight(panel: HTMLElement, layer: HTMLElement): () 
     panel.removeEventListener('pointermove', onMove);
     panel.removeEventListener('pointerleave', onLeave);
     panel.removeEventListener('keydown', onKey, true);
+    options.keyboardSource?.removeEventListener('keydown', onKey, true);
     panel.removeEventListener('focusin', schedule);
     panel.removeEventListener('scroll', onScroll, true);
   };

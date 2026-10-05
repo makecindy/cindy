@@ -15,10 +15,11 @@ import { useTranslation } from 'react-i18next';
 
 import { GHOST_CARD_ACTION_PROMPT_MAX_LEN } from '@/../shared/ghost';
 
-function BlockingScrim() {
+/** 吞掉卡片外的点击。锚定在卡片上的输入浮层保持透明;居中的确认框是模态弹窗,用统一遮罩(DESIGN §4)。 */
+function BlockingScrim({ modal = false }: { modal?: boolean }) {
   return (
     <div
-      className="fixed inset-0 z-40"
+      className={modal ? 'modal-scrim fixed inset-0 z-40' : 'fixed inset-0 z-40'}
       data-testid="ghost-card-scrim"
       onMouseDown={(e) => e.preventDefault()}
     />
@@ -129,18 +130,13 @@ export function GhostCardLinkConfirm({
   const { t } = useTranslation();
   return (
     <>
-      <BlockingScrim />
+      <BlockingScrim modal />
       <div
-        className="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border p-3.5"
+        className="modal-panel fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 p-3.5"
         role="alertdialog"
         aria-label={t('chat.ghostCall.linkConfirmTitle')}
         onKeyDown={(e) => {
           if (e.key === 'Escape') onCancel();
-        }}
-        style={{
-          backgroundColor: 'var(--surface-elevated)',
-          borderColor: 'var(--border-default)',
-          boxShadow: 'var(--shadow-menu)',
         }}
       >
         <div className="text-13 font-semibold" style={{ color: 'var(--text-primary)' }}>

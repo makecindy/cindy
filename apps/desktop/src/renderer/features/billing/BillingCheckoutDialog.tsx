@@ -127,13 +127,12 @@ export function BillingCheckoutDialog({
       onOpenChange={(open) => !open && state.phase !== 'CREATING' && onClose()}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10001] flex max-h-[calc(100dvh-40px)] w-[calc(100vw-40px)] max-w-[620px] flex-col',
-            '-translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl',
-            'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+            'modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[calc(100dvh-40px)] w-[calc(100vw-40px)] max-w-[620px] flex-col',
+            '-translate-x-1/2 -translate-y-1/2 overflow-hidden',
             'text-[var(--text-primary)] focus:outline-none',
           )}
           aria-describedby={undefined}

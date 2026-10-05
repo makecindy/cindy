@@ -57,9 +57,10 @@ describe('mobile session list drawer', () => {
     expect(text).toContain('.failOffsetY([-16, 16])');
     // 关闭动画期间 overlay 恒拦截,不放行点击穿透半透明 scrim(review #1328)。
     expect(text).toContain('pointerEvents="auto"');
-    // 临时面板使用主页的关闭入口，不再有重复主页底栏。
+    // 临时面板不再有重复主页底栏;左上角与常驻列一样是系统菜单,关闭走遮罩、左滑与系统返回。
     expect(text).not.toContain('sessionDrawer.home');
-    expect(text).toContain('onDismiss={persistent ? undefined : onClose}');
+    expect(text).not.toContain('onDismiss');
+    expect(text).toContain('newSessionInHeader={!persistent}');
   });
 
   it('uses the actual Home instead of maintaining a second list or data controller', () => {

@@ -41,6 +41,7 @@ import {
 } from './scheduler/index.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
 import { withAccountDataAccess, type AccountDataAccess } from './account-data-access.js';
+import { withToolCallAuthority, type ToolCallAuthorizer } from './tool-call-authority.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from './types.js';
 
 /**
@@ -147,6 +148,7 @@ function registerCallToolEntry(
   registry: SchedulerToolRegistry,
   access: AccountDataAccess | undefined,
   getSessionContext: () => LiziMcpSessionContext,
+  authorizeCall: ToolCallAuthorizer | undefined,
 ): void {
   server.tool(
     'call_tool',
@@ -157,7 +159,14 @@ function registerCallToolEntry(
         .describe('工具名，从 list_tools 获取（如 schedule_create / schedule_list）'),
       args: jsonObjectArg('工具参数（JSON 对象）。不确定 schema 时可先传 {} 触发错误反馈。'),
     },
-    async ({ name, args }) => withAccountDataAccess(access, getSessionContext().sessionId, () => registry.call(name, args)),
+    async ({ name, args }) => {
+      const sessionId = getSessionContext().sessionId;
+      return withToolCallAuthority(
+        authorizeCall,
+        { sessionId, server: 'cindy_scheduler', tool: name, args },
+        () => withAccountDataAccess(access, sessionId, () => registry.call(name, args)),
+      );
+    },
   );
 }
 
@@ -204,7 +213,7 @@ export function createSchedulerMcpServer(
   registerScheduleDeleteTool(registry, deps, getSessionContext);
 
   registerListToolsEntry(server, registry, deps.withAccountDataAccess, getSessionContext);
-  registerCallToolEntry(server, registry, deps.withAccountDataAccess, getSessionContext);
+  registerCallToolEntry(server, registry, deps.withAccountDataAccess, getSessionContext, deps.authorizeCall);
 
   return server;
 }

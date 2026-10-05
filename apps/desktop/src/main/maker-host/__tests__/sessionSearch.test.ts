@@ -10,7 +10,7 @@ vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: mocks.getDbClient,
 }));
 
-import { searchSessionsFn } from '../session-search.js';
+import { searchSessionsFn, searchSessionsWithBotScope } from '../session-search.js';
 
 describe('session_search Bot ownership boundary', () => {
   beforeEach(() => {
@@ -31,9 +31,19 @@ describe('session_search Bot ownership boundary', () => {
       'bot-session-a',
     ]);
     expect(mocks.query).toHaveBeenCalledWith(
-      expect.stringMatching(/FROM\s+bot_session_links scoped/),
-      [16_384, '"release"', 'bot-a', 10],
+      expect.stringMatching(/FROM\s+bot_session_links scoped[\s\S]*FROM\s+bot_delegations delegated/),
+      [16_384, '"release"', 'bot-a', 'bot-a', 10],
     );
+  });
+
+  it('lets the host widen a Bot main task to account history for owner or arranged turns', async () => {
+    mocks.queryOne.mockResolvedValue({ source: 'bot', botId: 'bot-a' });
+
+    await searchSessionsWithBotScope('release', { callerSessionId: 'bot-session-a' }, { botAccountWide: true });
+
+    const [sql, params] = mocks.query.mock.calls[0] as [string, unknown[]];
+    expect(sql).not.toContain('FROM bot_session_links scoped');
+    expect(params).toEqual([16_384, '"release"', 10]);
   });
 
   it('keeps a model-supplied session filter inside the same Bot scope', async () => {
@@ -46,7 +56,7 @@ describe('session_search Bot ownership boundary', () => {
 
     expect(mocks.query).toHaveBeenCalledWith(
       expect.stringMatching(/m\.session_id = \?[\s\S]*scoped\.bot_id = \?/),
-      [16_384, '"release"', 'foreign-session', 'bot-a', 10],
+      [16_384, '"release"', 'foreign-session', 'bot-a', 'bot-a', 10],
     );
   });
 

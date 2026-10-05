@@ -16,12 +16,13 @@
  * 里 running 归一为 idle(导入端没有正在跑的 turn)。
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { promises as fsp } from 'node:fs';
+import { createReadStream, promises as fsp } from 'node:fs';
 import path from 'node:path';
+import type { Readable } from 'node:stream';
 
 import JSZip from 'jszip';
-import { atomicWriteFileSync } from '../utils/atomicWriteFile';
 import { migrationNativeContext } from './migrationNativeContext';
+import { writeMigratedTranscript } from './migrationTranscriptWriter';
 import { isClaudeProjectKeyExact, sanitizeClaudeProjectKey } from '@cindy/maker-core';
 import { app } from 'electron';
 
@@ -281,6 +282,8 @@ export interface CommitShareImportRuntimeScope {
     workingDir: string;
     workers?: Array<{ sourceSessionId: string; sessionId: string; workingDir: string }>;
     agentPrefs?: Partial<Record<'cc' | 'codex' | 'pi', ShareImportDraftPrefs>>;
+    /** Transcript ref path → delivered file, for transcripts the exporter kept out of the zip. */
+    externalTranscripts?: ReadonlyMap<string, string>;
   };
   assertStillValid(): void;
   refCompensationScope: MediaRefCompensationScope;
@@ -501,6 +504,25 @@ export async function commitShareImport(
         : transcript,
     );
   }
+  const externalTranscripts: ReadonlyMap<string, string> =
+    runtimeScope.migration?.externalTranscripts ?? new Map();
+  // A delivered file must stand for a transcript this package references.
+  const referencedTranscriptPaths = new Set(
+    [bundledTranscripts, ...workerPlans.map((plan) => plan.bundledTranscripts ?? [])]
+      .flat()
+      .map((transcript) => transcript.path),
+  );
+  for (const transcriptPath of externalTranscripts.keys()) {
+    if (!referencedTranscriptPaths.has(transcriptPath))
+      throw new XdtshareError('SHARE_FILE_INVALID', 'MIGRATION_INVALID_MANIFEST');
+  }
+  /** A transcript's bytes: the file delivered beside the package, else its zip entry. */
+  const transcriptSource = (zipPath: string): (() => Readable) | null => {
+    const file = externalTranscripts.get(zipPath);
+    if (file) return () => createReadStream(file);
+    const entry = zip.file(zipPath);
+    return entry ? () => entry.nodeStream('nodebuffer') as unknown as Readable : null;
+  };
   const piSessionsRoot = path.resolve(
     opts.piSessionsRootOverride ??
       path.join(app.getPath('userData'), 'pi-agent-home', 'sessions', 'shared'),
@@ -511,7 +533,7 @@ export async function commitShareImport(
   const registerPiTargets = (bundled: BundledTranscript[]): void => {
     for (const transcript of bundled) {
       // 只有包内实际存在的转录才映射成可 resume 的本机绝对路径。
-      if (zip.file(transcript.path)) {
+      if (transcriptSource(transcript.path)) {
         piTranscriptTargets.set(
           transcript.sdkSessionId,
           path.join(piSessionsRoot, ...(runtimeScope.migration ? [runtimeScope.migration.sessionId] : []), transcript.sdkSessionId),
@@ -798,22 +820,37 @@ export async function commitShareImport(
         );
         await guarded(() => fsp.mkdir(claudeTargetDir, { recursive: true }).then(() => undefined));
         for (const t of restore.bundled) {
-          const file = zip.file(t.path);
-          if (!file) continue;
+          const source = transcriptSource(t.path);
+          if (!source) continue;
           const target = path.join(claudeTargetDir, `${t.sdkSessionId}.jsonl`);
+          if (migratedContext) {
+            // This handoff owns its new native ID; retries replace incomplete copies atomically.
+            // Streamed: a native transcript can exceed memory and V8's string limit.
+            await guarded(() =>
+              writeMigratedTranscript(
+                source(),
+                target,
+                { context: migratedContext, agent: 'cc' },
+                assertStillValid,
+              ),
+            );
+            journal.push(async () => {
+              await fsp.rm(target, { force: true });
+            });
+            transcriptsWritten += 1;
+            continue;
+          }
+          const file = zip.file(t.path)!;
           try {
             const transcriptBytes = Buffer.from(await guarded(() => file.async('nodebuffer')));
             assertStillValid();
-            if (migratedContext) {
-              // This handoff owns its new native ID; retries replace incomplete copies atomically.
-              atomicWriteFileSync(target, migratedContext.transcript(transcriptBytes, 'cc').toString('utf8'));
-            } else await fsp.writeFile(target, transcriptBytes, { flag: 'wx' });
+            await fsp.writeFile(target, transcriptBytes, { flag: 'wx' });
             journal.push(async () => {
               await fsp.rm(target, { force: true });
             });
             assertStillValid();
           } catch (err) {
-            if (migratedContext || (err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+            if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
             log.info('transcript already on disk, reusing', { sdkSessionId: t.sdkSessionId });
             assertStillValid();
           }
@@ -830,16 +867,24 @@ export async function commitShareImport(
       if (restore.agentKind !== 'pi') continue;
       for (const transcript of restore.bundled) {
         const target = piTranscriptTargets.get(transcript.sdkSessionId);
-        const file = zip.file(transcript.path);
-        if (!target || !file || piTargetsWritten.has(target)) continue;
+        const source = transcriptSource(transcript.path);
+        if (!target || !source || piTargetsWritten.has(target)) continue;
         piTargetsWritten.add(target);
-        await writeIfMissing(
-          target,
-          Buffer.from(await guarded(() => file.async('nodebuffer'))),
-          journal,
-          assertStillValid,
-          Boolean(migratedContext),
-        );
+        if (migratedContext) {
+          // Pi IDs are content hashes, so the bytes are copied unchanged; retries replace them.
+          await guarded(() => writeMigratedTranscript(source(), target, null, assertStillValid));
+          journal.push(async () => {
+            await fsp.rm(target, { force: true });
+          });
+        } else {
+          const file = zip.file(transcript.path)!;
+          await writeIfMissing(
+            target,
+            Buffer.from(await guarded(() => file.async('nodebuffer'))),
+            journal,
+            assertStillValid,
+          );
+        }
         transcriptsWritten += 1;
       }
     }
@@ -857,7 +902,19 @@ export async function commitShareImport(
           })
         : { threads: [], threadDynamicTools: [], threadSpawnEdges: [] };
       const rolloutRef = restore.bundled[0] ?? null;
-      const rolloutFile = rolloutRef ? zip.file(rolloutRef.path) : null;
+      const rolloutSource = rolloutRef ? transcriptSource(rolloutRef.path) : null;
+      // A migration streams the rollout (it can exceed memory and V8's string limit).
+      const writeRollout =
+        migratedContext && rolloutSource
+          ? (target: string) =>
+              writeMigratedTranscript(
+                rolloutSource(),
+                target,
+                { context: migratedContext, agent: 'codex' },
+                assertStillValid,
+              )
+          : undefined;
+      const rolloutFile = !migratedContext && rolloutRef ? zip.file(rolloutRef.path) : null;
       const rolloutBuffer = rolloutFile
         ? Buffer.from(await guarded(() => rolloutFile.async('nodebuffer')))
         : null;
@@ -866,7 +923,8 @@ export async function commitShareImport(
         threadId,
         migration: Boolean(migratedContext),
         stateRows: migratedContext ? migratedContext.stateRows(stateRows) : stateRows,
-        rolloutBuffer: migratedContext && rolloutBuffer ? migratedContext.transcript(rolloutBuffer, 'codex') : rolloutBuffer,
+        rolloutBuffer,
+        ...(writeRollout ? { writeRollout } : {}),
         rolloutFilename: rolloutRef
           ? path.posix.basename(rolloutRef.path).replace(
               /[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(?=\.jsonl$)/i,
@@ -1360,20 +1418,18 @@ async function writeIfMissing(
   buffer: Buffer,
   journal: Array<() => Promise<void>>,
   assertStillValid: () => void,
-  migration = false,
 ): Promise<void> {
   assertStillValid();
   await fsp.mkdir(path.dirname(target), { recursive: true });
   assertStillValid();
   try {
-    if (migration) atomicWriteFileSync(target, buffer.toString('utf8'));
-    else await fsp.writeFile(target, buffer, { flag: 'wx' });
+    await fsp.writeFile(target, buffer, { flag: 'wx' });
     journal.push(async () => {
       await fsp.rm(target, { force: true });
     });
     assertStillValid();
   } catch (err) {
-    if (migration || (err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     assertStillValid();
   }
 }

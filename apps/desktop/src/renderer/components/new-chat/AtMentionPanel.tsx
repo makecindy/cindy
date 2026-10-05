@@ -1,5 +1,14 @@
 import { pickFileIcon } from '@/components/ui/file-type-icon';
 import { Button } from '@/components/ui/button';
+import { MENU_CURRENT_ROW_ATTR, currentMarkedRow } from '@/components/ui/dropdown-menu-highlight';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  useMenuPanel,
+  withMenuLabels,
+} from '@/components/ui/menu-row';
 /**
  * Unified composer suggestion panel (command-palette F2 / F5, `@` + `+`).
  *
@@ -134,7 +143,16 @@ export function AtMentionPanel({
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
   const focusedRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  // Glide highlight on the focused index; arrow keys are pressed in the editor.
+  const highlightPanelRef = useMenuPanel(panelRef, {
+    lockWidth: false,
+    options: {
+      current: currentMarkedRow,
+      currentAttributes: [MENU_CURRENT_ROW_ATTR],
+      keyboardSource: document,
+    },
+  });
   const tooltipRef = useRef<HTMLDivElement>(null);
   const [panelScroll, setPanelScroll] = useState(0);
   const [tooltipMeasure, setTooltipMeasure] = useState<TooltipMeasure>({
@@ -289,33 +307,24 @@ export function AtMentionPanel({
         onMouseEnter={() => {
           if (!action.disabled) onFocusedIndexChange(idx);
         }}
+        // Shared menu row: the panel's glide highlight follows the focused index, a checked
+        // action is the check and 500; collaboration's orange tints the text only.
+        {...menuRowAttrs({ checked: action.checked === true, current: focused, disabled: action.disabled })}
         className={cn(
-          'flex w-full items-center gap-2',
-          'rounded-[8px] px-3 py-2',
-          'text-left outline-none transition-colors',
-          focused && 'bg-[var(--model-item-hover)]',
-          'hover:bg-[var(--model-item-hover)]',
-          emphasized && 'bg-[var(--model-item-hover)]',
+          COMPOSER_MENU_ROW,
+          'flex w-full items-center gap-2 px-3 py-2 text-left',
+          emphasized && 'text-[var(--warning-accent)]',
           action.disabled && 'cursor-not-allowed opacity-50',
         )}
       >
-        <Icon
-          size={14}
-          className={cn(
-            'shrink-0',
-            emphasized ? 'text-[var(--warning-accent)]' : 'text-[var(--model-item-text)]',
-          )}
-        />
-        <span
-          className={cn(
-            'min-w-0 flex-1 truncate text-13',
-            emphasized ? 'text-[var(--warning-accent)]' : 'text-[var(--model-item-text)]',
-          )}
-        >
-          {action.label}
-        </span>
-        {isCheckbox && action.checked && (
-          <Check size={13} className="ml-auto shrink-0 text-[var(--model-item-check)]" />
+        {withMenuLabels(
+          <>
+            <Icon size={14} className="shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{action.label}</span>
+            {isCheckbox && action.checked && (
+              <Check size={13} className="ml-auto shrink-0 text-[var(--model-item-check)]" />
+            )}
+          </>,
         )}
       </button>
     );
@@ -399,11 +408,11 @@ export function AtMentionPanel({
         onMouseEnter={() => {
           if (!disabled) onFocusedIndexChange(idx);
         }}
+        {...menuRowAttrs({ current: focused, disabled })}
         className={cn(
+          COMPOSER_MENU_ROW,
           'flex w-full items-center gap-2',
-          'h-[44px] px-[10px] rounded-[6px]',
-          'text-left outline-none transition-colors',
-          focused && 'bg-[var(--cmd-palette-item-hover)]',
+          'h-[44px] px-[10px] text-left',
           disabled && 'cursor-not-allowed opacity-45',
         )}
       >
@@ -417,18 +426,11 @@ export function AtMentionPanel({
         ) : (
           <Icon size={16} className="shrink-0 text-[var(--cmd-palette-item-icon)]" />
         )}
-        <span
-          className={cn(
-            'min-w-0 truncate text-14 font-medium',
-            'text-[var(--cmd-palette-item-text)]',
-          )}
-        >
-          {displayName}
-        </span>
+        {withMenuLabels(<span className="min-w-0 truncate">{displayName}</span>)}
         {disabled && entry.disabledReason ? (
           <span
             className={cn(
-              'shrink-0 text-12 truncate max-w-[240px]',
+              'shrink-0 text-12 font-normal truncate max-w-[240px]',
               'text-[var(--cmd-palette-item-meta)]',
               'ml-auto',
             )}
@@ -439,7 +441,7 @@ export function AtMentionPanel({
           <Tip text={meta} mono>
             <span
               className={cn(
-                'shrink-0 text-12 truncate max-w-[240px]',
+                'shrink-0 text-12 font-normal truncate max-w-[240px]',
                 'text-[var(--cmd-palette-item-meta)]',
                 'ml-auto',
               )}
@@ -470,9 +472,11 @@ export function AtMentionPanel({
       )}
     >
       <div
-        ref={panelRef}
+        ref={highlightPanelRef}
         onScroll={(e) => setPanelScroll(e.currentTarget.scrollTop)}
+        {...menuPanelAttrs}
         className={cn(
+          'relative',
           // embedded: fill the Morph shell. A nested w-[480px] is 2px wider
           // than the border-box panel and paints a horizontal scrollbar thumb
           // for ~2s via the global .is-scrolling auto-hide.
@@ -485,14 +489,16 @@ export function AtMentionPanel({
             'border-[var(--cmd-palette-border)]',
           ],
         )}
-        style={{ boxShadow: embedded ? undefined : 'var(--cmd-palette-shadow)', maxHeight }}
+        // Registered floating-layer shadow, as on the shared menus (DESIGN §4 / §6).
+        style={{ boxShadow: embedded ? undefined : 'var(--shadow-menu)', maxHeight }}
       >
+        <MenuHighlightLayer />
         {showLoadingSkeleton && (
           <div className="space-y-[4px] p-[4px]">
             {[0, 1, 2].map((i) => (
               <div
                 key={i}
-                className="h-[44px] rounded-[6px] bg-[var(--cmd-palette-item-hover)] opacity-40 animate-pulse"
+                className="h-[44px] rounded-lg bg-[var(--cmd-palette-item-hover)] opacity-40 animate-pulse"
               />
             ))}
           </div>
@@ -552,10 +558,8 @@ export function AtMentionPanel({
                         {referenceDirs.dirs.map((p) => (
                           <div
                             key={p}
-                            className={cn(
-                              'group flex h-[44px] items-center gap-2 rounded-[6px] px-[10px]',
-                              'hover:bg-[var(--cmd-palette-item-hover)]',
-                            )}
+                            {...menuRowAttrs()}
+                            className={cn(COMPOSER_MENU_ROW, 'group flex h-[44px] items-center gap-2 px-[10px]')}
                           >
                             <FolderPlus
                               size={16}
@@ -566,7 +570,7 @@ export function AtMentionPanel({
                               mono={!isLibraryExtraDirSlot(p)}
                               side="top"
                             >
-                              <span className="min-w-0 flex-1 truncate text-left text-14 text-[var(--cmd-palette-item-text)]">
+                              <span className="min-w-0 flex-1 truncate text-left">
                                 {extraDirDisplayLabel(p)}
                               </span>
                             </Tip>
@@ -607,17 +611,15 @@ export function AtMentionPanel({
                         {writableDirs.dirs.map((p) => (
                           <div
                             key={p}
-                            className={cn(
-                              'group flex h-[44px] items-center gap-2 rounded-[6px] px-[10px]',
-                              'hover:bg-[var(--cmd-palette-item-hover)]',
-                            )}
+                            {...menuRowAttrs()}
+                            className={cn(COMPOSER_MENU_ROW, 'group flex h-[44px] items-center gap-2 px-[10px]')}
                           >
                             <FolderPlus
                               size={16}
                               className="shrink-0 text-[var(--cmd-palette-item-icon)] opacity-60"
                             />
                             <Tip text={p} mono side="top">
-                              <span className="min-w-0 flex-1 truncate text-left text-14 text-[var(--cmd-palette-item-text)]">
+                              <span className="min-w-0 flex-1 truncate text-left">
                                 {extraDirBasename(p)}
                               </span>
                             </Tip>
@@ -681,10 +683,11 @@ export function AtMentionPanel({
                 onClick={() => {
                   onRetry();
                 }}
+                {...menuRowAttrs()}
                 className={cn(
-                  'flex w-full items-center gap-2 px-[10px] py-[8px] rounded-[6px] text-left',
+                  COMPOSER_MENU_ROW,
+                  'flex w-full items-center gap-2 px-[10px] py-[8px] text-left',
                   'text-12 text-[var(--destructive)]',
-                  'transition-colors hover:bg-[var(--cmd-palette-item-hover)]',
                 )}
               >
                 {t('newChat.atMention.scanFailed')} · {t('newChat.atMention.retry')}

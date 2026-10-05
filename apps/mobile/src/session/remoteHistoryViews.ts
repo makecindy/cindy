@@ -72,8 +72,11 @@ export function mountRemoteHistoryView(entry: Entry, reader: Reader, active: boo
     timer = setTimeout(persist, 1200);
   };
   const unsubscribe = entry.view.subscribe(onSnapshot);
-  // Retire an existing downgrade before activation can clear its error for a retry.
+  // Retire an existing downgrade (clearing its disk projection), then retry the
+  // projection once per entry: a refresh never leaves raw fallback on its own,
+  // and the Host may since have become able to serve this history.
   onSnapshot();
+  if (isHistoryViewUnavailable(entry.view.getSnapshot().error)) entry.view.reset();
   entry.view.setActive(active);
   void entry.view.restoreCachedView(() => readHistoryDisk(authority));
   return () => {

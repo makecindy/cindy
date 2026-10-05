@@ -34,12 +34,14 @@ vi.mock('../viewerController', () => ({
     close = () => this._api.close(1);
   },
 }));
+const fullscreen = vi.hoisted(() => ({ value: false }));
 vi.mock('@/hooks/useMacFullscreen', () => ({
-  useMacFullscreen: () => ({ isMac: true, isFullscreen: false }),
+  useMacFullscreen: () => ({ isMac: true, isFullscreen: fullscreen.value }),
 }));
 vi.mock('@/components/title-bar/WindowControls', () => ({ WindowControls: () => null }));
 
 afterEach(() => {
+  fullscreen.value = false;
   cleanup();
   vi.clearAllMocks();
 });
@@ -86,7 +88,7 @@ it('confirms toolbar and native exits, keeps cancellation connected, and discard
     displayId: '',
     transport: 'direct',
     latency: null,
-    settings: { fps: 30, bitrate: 0, audio: true },
+    settings: { fps: 30, quality: 'auto', audio: true },
     ready: true,
     preferences: {
       audio: true,
@@ -191,7 +193,7 @@ it('hides view-only controls and enables desktop actions only after control is c
     displayId: 'one',
     transport: 'direct',
     latency: null,
-    settings: { fps: 30, bitrate: 0, audio: false },
+    settings: { fps: 30, quality: 'auto', audio: false },
     caps: {
       version: 1,
       enabled: true,
@@ -324,7 +326,7 @@ it.each([
       displayId: 'one',
       transport,
       latency: null,
-      settings: { fps: 30, bitrate: 0, audio: false },
+      settings: { fps: 30, quality: 'auto', audio: false },
     }),
   );
   const toolbar = within(view.container.querySelector('header')!);
@@ -367,4 +369,35 @@ it('updates translated controls without ending or recreating the viewer connecti
   view.unmount();
   expect(lifecycle.disposed).toHaveBeenCalledOnce();
   expect(listeners.size).toBe(0);
+});
+
+it('reveals the fullscreen toolbar from the top edge and keeps it while macOS covers the edge', async () => {
+  fullscreen.value = true;
+  Object.assign(window, {
+    electronAPI: {
+      remoteDesktopViewer: {
+        onActive: () => () => {},
+        onLocale: () => () => {},
+        onCloseRequested: () => () => {},
+        state: async () => ({ generation: 1 }),
+        rendererReady: async () => {},
+        presentationReady: async () => {},
+        inputFocus: async () => {},
+        close: async () => {},
+      },
+    },
+  });
+  const { container } = render(<RemoteDesktopViewerWindow />);
+  await act(async () => {});
+  const toolbar = container.querySelector('.remote-viewer-toolbar')!;
+  Object.defineProperty(toolbar, 'offsetHeight', { value: 60 });
+  const move = (clientY: number) => fireEvent.pointerMove(window, { clientY });
+  expect(toolbar.hasAttribute('data-revealed')).toBe(false);
+  move(4);
+  expect(toolbar.getAttribute('data-revealed')).toBe('true');
+  // The pointer is still over the toolbar (or has left to the macOS menu bar).
+  move(70);
+  expect(toolbar.getAttribute('data-revealed')).toBe('true');
+  move(200);
+  expect(toolbar.hasAttribute('data-revealed')).toBe(false);
 });

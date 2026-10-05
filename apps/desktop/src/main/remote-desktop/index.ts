@@ -20,8 +20,11 @@ import {
   REMOTE_DESKTOP_OFFER_BUDGET,
   REMOTE_DESKTOP_MAX_FRAME_BYTES,
   parseDesktopIceReply,
+  parseRemoteDesktopRequest,
+  isRemoteDesktopChannelRequest,
   type RemoteDesktopIceRequest,
   type RemoteDesktopIceReply,
+  type RemoteDesktopDisplay,
   type RemoteDesktopLease,
   type RemoteDesktopVideoSettings,
 } from '@cindy/device-link';
@@ -29,6 +32,7 @@ import {
   DESKTOP_LOCAL,
   DESKTOP_AUDIO_RETRY_MS,
   type DesktopHostCommand,
+  type DesktopChannelResult,
   type DesktopHostReply,
 } from '../../shared/remoteDesktop';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
@@ -211,7 +215,7 @@ let preparingOffer = false;
 let videoAttempt: string | undefined;
 let pending: {
   id: string;
-  op: 'offer' | 'ice' | 'frame';
+  op: 'offer' | 'ice' | 'frame' | 'display-swap';
   resolve(result: DesktopHostReply): void;
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
@@ -220,7 +224,38 @@ let pending: {
 // failure: release control and keep the lease, capture and media running.
 const input = new DesktopInputHost(() => remoteDesktop.releaseControl());
 const clipboardCounter = new ClipboardCounter(resolveDesktopInputBinary);
+// A display change holds native capture instead of stopping it: frames pause
+// until the changed display is known, then the same stream follows it. The
+// capture page also pauses its no-frame timeout, since the change may be slow.
+let videoPaused = false;
+function pauseVideo(): boolean {
+  if (!videoLease || !nativeDisplay || !host || host.isDestroyed()) return false;
+  videoPaused = true;
+  host.send(DESKTOP_LOCAL.COMMAND, {
+    id: randomUUID(),
+    op: 'display-hold',
+    lease: videoLease,
+  } satisfies DesktopHostCommand);
+  return true;
+}
+/** True only when the capture page confirms a live native stream now follows `display`. */
+async function resumeVideo(display: RemoteDesktopDisplay): Promise<boolean> {
+  if (!videoPaused || !videoLease || !host || host.isDestroyed()) return false;
+  const lease = videoLease;
+  nativeDisplay = display.id;
+  // Helpers bind their capture geometry at start; the next frame restarts them.
+  nativeCapture.stop();
+  hyprlandCapture.stop();
+  videoPaused = false;
+  try {
+    const kept = await requestHost({ id: randomUUID(), op: 'display-swap', lease }, 2000);
+    return kept === true && videoLease === lease;
+  } catch {
+    return false;
+  }
+}
 function stopVideo(): void {
+  videoPaused = false;
   offerGeneration++;
   portalReady = null;
   portalGrant = false;
@@ -404,7 +439,7 @@ async function offer(
 
 /** One bounded command to the existing capture owner; never reset the shared device link. */
 function requestHost(
-  command: DesktopHostCommand & { op: 'offer' | 'ice' | 'frame' },
+  command: DesktopHostCommand & { op: 'offer' | 'ice' | 'frame' | 'display-swap' },
   timeoutMs: number,
 ): Promise<DesktopHostReply> {
   const currentHost = host;
@@ -555,6 +590,12 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       systemAudio: supportsSystemAudio(),
       viewerDisplay,
       viewerDisplayRestore: viewerDisplay,
+      channelRequests: true,
+      // Native canvas capture can follow a display change without a new offer.
+      liveDisplaySwitch:
+        process.platform === 'darwin' ||
+        (process.platform === 'win32' && windowsAvailable) ||
+        Boolean(enabled && nativeWayland()),
       displayModes: process.platform === 'darwin' || Boolean(linuxDisplays?.length),
       enabled,
       canControl:
@@ -733,6 +774,8 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
   },
   stopInput: () => input.stop(),
   releaseInput: () => input.release(),
+  pauseVideo,
+  resumeVideo,
   ...(process.platform === 'darwin' || supportsLinuxLock()
     ? {
         lockScreen: async (isCurrent: () => boolean, signal: AbortSignal) => {
@@ -889,6 +932,8 @@ export function registerRemoteDesktopIpc(
       !remoteDesktop.hasLease(lease)
     )
       throwIpcError('PERMISSION_DENIED', 'Invalid desktop capture lease');
+    // Frames from the previous display geometry must not reach the held stream.
+    if (videoPaused) return null;
     const generation = offerGeneration;
     const jpeg = await (
       nativeWayland()
@@ -1101,6 +1146,7 @@ export function registerRemoteDesktopIpc(
             /^[A-Za-z0-9+/]+={0,2}$/.test(sdp)))
       )
         request.resolve(sdp);
+      else if (request.op === 'display-swap' && typeof sdp === 'boolean') request.resolve(sdp);
       else if (request.op === 'ice') {
         const result = parseDesktopIceReply(sdp);
         if (result.attemptId !== videoAttempt) throw new Error('DESKTOP_VIDEO_STOPPED');
@@ -1131,5 +1177,41 @@ export function registerRemoteDesktopIpc(
         throwIpcError('PERMISSION_DENIED', 'Desktop input rejected');
       }
     },
+  );
+  ipcMain.handle(
+    DESKTOP_LOCAL.CHANNEL_REQUEST,
+    async (event, lease: unknown, value: unknown): Promise<DesktopChannelResult> => {
+      captureWindow.assertSender(event);
+      if (event.sender !== host || typeof lease !== 'string' || lease !== videoLease)
+        throwIpcError('PERMISSION_DENIED', 'Invalid desktop channel request');
+      // Same authority as the relay path: the peer owning this lease, with the
+      // settings and revocation checks of requestRemoteDesktop and the lease
+      // check of the controller. Only small control operations ride here.
+      try {
+        const request = parseRemoteDesktopRequest(value);
+        if (
+          !('lease' in request) ||
+          request.lease !== lease ||
+          !isRemoteDesktopChannelRequest(request)
+        )
+          throw new Error('INVALID_REQUEST');
+        const owner = remoteDesktop.state;
+        if (!owner || !remoteDesktop.hasLease(lease)) throw new Error('DESKTOP_LEASE_EXPIRED');
+        return { ok: true, result: await requestRemoteDesktop(owner.peer, request) };
+      } catch (error) {
+        // Business refusals are replies, not IPC failures: no error log per tap.
+        return { ok: false, error: desktopErrorCode(error) };
+      }
+    },
+  );
+}
+
+/** Stable code of a request failure; never forwards free-form messages. */
+function desktopErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  if (/^[A-Z][A-Z0-9_]{0,63}$/.test(message)) return message;
+  return (
+    message.match(/\b(?:DESKTOP|CREDENTIAL|REMOTE|ACCESS)_[A-Z_]{1,56}\b/)?.[0] ??
+    'DESKTOP_REQUEST_FAILED'
   );
 }

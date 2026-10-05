@@ -190,24 +190,14 @@ export function RewindPreviewDialog({
       <AlertDialog.Portal>
         <AlertDialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10000]',
-            'bg-[var(--overlay-modal)]',
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10000]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <AlertDialog.Content
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'w-[640px] rounded-xl p-5',
-            // Card 层（同 confirm dialog 用项目变量）
-            'bg-[var(--confirm-bg)]',
-            // Dark 模式 1px Board 描边（设计稿要求）
-            'shadow-[var(--shadow-menu)]',
-            'dark:border dark:border-[var(--confirm-btn-secondary-border)]',
-            'data-[state=open]:animate-confirm-content-in',
-            'data-[state=closed]:animate-confirm-content-out',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'w-[640px] p-5',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >

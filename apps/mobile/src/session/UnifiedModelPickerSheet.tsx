@@ -1,5 +1,7 @@
-import { mobileProviderAccountTitle } from './mobileModelRowPresentation';
-import { mobileCostMarks, quotaCountdown } from "./mobileModelRowPresentation";
+import { modelNeedsReselection } from './modelReselection';
+import { mobileProviderAccountTitle } from "./mobileModelRowPresentation";
+import { mobileCostMarks } from "./mobileModelRowPresentation";
+import { formatQuotaResetCountdown } from "./sessionUsagePresentation";
 import { useMobileModelQuotas } from "./useMobileModelQuotas";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as ExpoCrypto from "expo-crypto";
@@ -26,16 +28,23 @@ import { useSessionModelMirrorVersion } from "./sessionModelMirror";
 import { UnifiedModelPickerView } from "./UnifiedModelPickerView";
 import { budgetRowDisabled, presentPickerPrice } from "./modelPickerRows";
 import { mobileWeeklyQuota } from "./mobileModelRowPresentation";
+import { mobileAgentLabel } from "./sessionAgentSwitch";
 
 function createFavoriteUid(): string {
   const cryptoWithUuid = globalThis.crypto as Crypto | undefined;
-  if (typeof cryptoWithUuid?.randomUUID === "function") return cryptoWithUuid.randomUUID();
-  const expoWithUuid = ExpoCrypto as typeof ExpoCrypto & { randomUUID?: () => string };
-  if (typeof expoWithUuid.randomUUID === "function") return expoWithUuid.randomUUID();
+  if (typeof cryptoWithUuid?.randomUUID === "function")
+    return cryptoWithUuid.randomUUID();
+  const expoWithUuid = ExpoCrypto as typeof ExpoCrypto & {
+    randomUUID?: () => string;
+  };
+  if (typeof expoWithUuid.randomUUID === "function")
+    return expoWithUuid.randomUUID();
   const bytes = ExpoCrypto.getRandomBytes(16);
   bytes[6] = (bytes[6] & 0x0f) | 0x40;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const hex = Array.from(bytes, (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
@@ -101,6 +110,14 @@ export interface UnifiedMobilePickerViewProps {
     fastCapable: boolean;
     onChange(config: MobileModelConfiguration): void;
     favoritesDisabled: boolean;
+    isFavorite?: boolean;
+    canReset?: boolean;
+    configurationSummary?: string;
+    notice?: string | null;
+    editingFavorite?: boolean;
+    onEditFavorite?(): void;
+    onCancelEdit?(): void;
+    onSaveEdit?(): void;
     onFavorite(): void;
     onReset(): void;
     context: string;
@@ -112,7 +129,6 @@ export function UnifiedModelPickerSheet(
   p: ModelPickerSheetProps & { unified: UnifiedMobilePickerOptions },
 ) {
   const { t } = useTranslation();
-  const countdown = (reset: number, now: number) => quotaCountdown(reset, now, unit => t(`models.unified.timeUnit.${unit}`));
   const { quotas, now } = useMobileModelQuotas(
     p.unified.scope,
     p.visible,
@@ -127,18 +143,28 @@ export function UnifiedModelPickerSheet(
     providerId: string;
     modelId: string;
     uid?: string;
+    config?: MobileModelConfiguration;
   } | null>(null);
+  const [favoriteEdit, setFavoriteEdit] = useState<{
+    original: MobileModelFavorite;
+    config: MobileModelConfiguration;
+  } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [caps, setCaps] = useState<
     Partial<Record<AgentKind, MobileAgentCapabilities>>
   >({});
   const [busy, setBusy] = useState(false);
   const lock = useRef(false);
+  const opening = useRef(0);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (!p.visible) return;
+    opening.current += 1;
     setQuery("");
     setFilter("all");
     setTarget(null);
+    setFavoriteEdit(null);
+    setNotice(null);
     setError(null);
     let cancelled = false;
     setCaps({ [p.agentKind]: p.capabilities });
@@ -154,6 +180,7 @@ export function UnifiedModelPickerSheet(
         });
     return () => {
       cancelled = true;
+      opening.current += 1;
     };
   }, [p.visible, p.unified.scope]);
   const entries = useMemo(
@@ -194,23 +221,26 @@ export function UnifiedModelPickerSheet(
     effort: p.selectedEffort,
     fast: p.selectedFastMode,
   };
-  // The visible selection may be a pending next-message engine switch. Keep
-  // runtime truth separate, including its provider resolution and capabilities.
+  // The visible selection may belong to a pending next-message engine switch.
+  // Resolve the running configuration separately when editing its favorite.
   const current = p.unified.currentSelection;
-  const live: MobileModelConfiguration = current ? {
-    providerId: buildMobileModelSections({
-      providers: p.providers,
-      agentKind: current.agentKind,
-      selectedModelId: current.activeModelId,
-      selectedProviderId: current.selectedProviderId,
-      existingSessionRoute: p.existingSessionRoute,
-      visibilityOverrides: p.modelVisibilityOverrides,
-    }).activeSourceId ?? "",
-    modelId: current.activeModelId,
-    agent: current.agentKind,
-    effort: current.selectedEffort,
-    fast: current.selectedFastMode,
-  } : selection;
+  const live: MobileModelConfiguration = current
+    ? {
+        providerId:
+          buildMobileModelSections({
+            providers: p.providers,
+            agentKind: current.agentKind,
+            selectedModelId: current.activeModelId,
+            selectedProviderId: current.selectedProviderId,
+            existingSessionRoute: p.existingSessionRoute,
+            visibilityOverrides: p.modelVisibilityOverrides,
+          }).activeSourceId ?? "",
+        modelId: current.activeModelId,
+        agent: current.agentKind,
+        effort: current.selectedEffort,
+        fast: current.selectedFastMode,
+      }
+    : selection;
   const fastCapable = (agent: AgentKind) => caps[agent]?.hasFastMode === true;
   const describe = (
     entry: UnifiedModelEntry,
@@ -279,10 +309,19 @@ export function UnifiedModelPickerSheet(
       ),
       quotaLabel: (() => {
         const q = quotas[entry.providerId];
-        const modelQuota = q ? mobileWeeklyQuota(q.source, q.raw, now, entry.modelId) : null;
+        const modelQuota = q
+          ? mobileWeeklyQuota(q.source, q.raw, now, entry.modelId)
+          : null;
         return modelQuota
           ? [
-              modelQuota.resetsAt ? countdown(modelQuota.resetsAt, now) : null,
+              modelQuota.resetsAt
+                ? formatQuotaResetCountdown(
+                    modelQuota.resetsAt,
+                    now,
+                    t,
+                    modelQuota.windowMinutes,
+                  )
+                : null,
               `${modelQuota.remaining}%`,
             ]
               .filter(Boolean)
@@ -347,89 +386,179 @@ export function UnifiedModelPickerSheet(
           rows: group,
         });
     }
-  const row = target
-    ? target.uid
-      ? favorites.find((row) => row.favorite?.uid === target.uid)
-      : rows.find(
-          (row) =>
-            row.entry.providerId === target.providerId &&
-            row.entry.modelId === target.modelId,
-        )
+  const sourceRow = target
+    ? rows.find(
+        (row) =>
+          row.entry.providerId === target.providerId &&
+          row.entry.modelId === target.modelId,
+      )
     : undefined;
+  const originFavorite = target?.uid
+    ? prefs.value.favorites.find((item) => item.uid === target.uid)
+    : undefined;
+  // Opening a favorite copies its parameters into the detail view. Ordinary
+  // adjustments always edit model preferences, never the stored shortcut.
+  const row = sourceRow && {
+    ...sourceRow,
+    key: target?.uid ?? sourceRow.key,
+    config: favoriteEdit?.config ?? target?.config ?? sourceRow.config,
+    favorite: originFavorite,
+  };
+  // A source model can have several saved configurations. Match the complete
+  // configuration without applying capability fallbacks to the saved values.
+  const matchingFavorite =
+    row &&
+    prefs.value.favorites.find(
+      (item) =>
+        matchesEntry(row.entry, item.modelId) &&
+        sameConfiguration({ ...item, modelId: row.config.modelId }, row.config),
+    );
+  const recommendedConfig =
+    row &&
+    resolveMobileModelConfig(row.entry, {
+      pinned: p.existingSessionRoute ? p.agentKind : undefined,
+      fastCapable,
+    });
+  const resetAgents = row
+    ? [...new Set([row.config.agent, recommendedConfig!.agent])]
+    : [];
+  const canReset =
+    !!row &&
+    (!sameConfiguration(row.config, recommendedConfig!) ||
+      prefs.value.engines[modelKey(row.entry.providerId, row.entry.modelId)] !==
+        undefined ||
+      resetAgents.some((agent) => {
+        const capability = row.entry.capabilities[agent];
+        if (!capability) return false;
+        const effort = p.modelMemory?.getEffort(
+          agent,
+          row.entry.providerId,
+          capability.wireModelId,
+        );
+        const fast = p.modelMemory?.getFast(
+          agent,
+          row.entry.providerId,
+          capability.wireModelId,
+        );
+        // Session mirrors cannot delete remote preferences. Like Desktop, those
+        // accessors restore values; their default-valued echoes are not overrides.
+        return (
+          (effort !== undefined &&
+            (!!p.modelMemory?.clearEffort ||
+              effort !==
+                (capability.defaultEffort ?? capability.efforts[0] ?? ""))) ||
+          (fast !== undefined && (!!p.modelMemory?.clearFast || fast))
+        );
+      }));
   useEffect(() => {
-    if (target && !row) setTarget(null);
+    if (target && !row) {
+      setTarget(null);
+      setFavoriteEdit(null);
+    }
   }, [target, row]);
-  const transact = async (action: () => Promise<void>) => {
+  const transact = async (
+    action: (isCurrent: () => boolean) => Promise<void>,
+  ) => {
     if (lock.current || p.disabled || !prefs.ready) return;
     lock.current = true;
+    const generation = opening.current;
+    const isCurrent = () => generation === opening.current;
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
-      await action();
+      await action(isCurrent);
     } catch {
-      setError(t("models.unified.saveFailed"));
+      if (isCurrent()) setError(t("models.unified.saveFailed"));
     } finally {
+      // Keep writes serialized across close/reopen until persistence settles.
+      // No newer transaction can be unlocked by this completion.
       lock.current = false;
       setBusy(false);
     }
   };
   const select = (row: UnifiedMobileRow) => {
     if (row.disabled) return;
-    void transact(async () => {
-      if (await p.unified.onSelect(row.config)) p.onClose();
+    void transact(async (isCurrent) => {
+      if ((await p.unified.onSelect(row.config)) && isCurrent()) p.onClose();
     });
   };
   const change = (config: MobileModelConfiguration, reset = false) => {
     if (!row) return;
-    void transact(async () => {
-      const appliesLive =
-        row.selected || (!!row.favorite && sameConfiguration(row.config, live));
-      if (appliesLive && !(await p.unified.onSelect(config))) return;
+    if (favoriteEdit) {
+      if (!lock.current && !p.disabled)
+        setFavoriteEdit({ ...favoriteEdit, config });
+      return;
+    }
+    void transact(async (isCurrent) => {
+      const previousConfig =
+        row.favorite && sameConfiguration(row.config, live)
+          ? live
+          : row.selected
+            ? selection
+            : undefined;
+      if (previousConfig && !(await p.unified.onSelect(config))) return;
+      // Selection can await remote work or a confirmation. Do not begin another
+      // write for a panel that closed or changed its binding while waiting.
+      if (!isCurrent()) return;
       try {
-        if (row.favorite) {
-          await prefs.save({
-            ...prefs.value,
-            favorites: prefs.value.favorites.map((item) =>
-              item.uid === row.favorite!.uid
-                ? { ...config, modelId: item.modelId, uid: item.uid }
-                : item,
-            ),
-          });
+        const engines = { ...prefs.value.engines };
+        const key = modelKey(row.entry.providerId, row.entry.modelId);
+        if (reset) delete engines[key];
+        else engines[key] = config.agent;
+        await prefs.save({ ...prefs.value, engines });
+        if (reset) {
+          // Reset the model's overrides, including the previous engine's
+          // parameters. Other models and saved favorite copies stay intact.
+          for (const agent of resetAgents) {
+            const capability = row.entry.capabilities[agent];
+            if (!capability) continue;
+            const modelId = capability.wireModelId;
+            const effort =
+              capability.defaultEffort ?? capability.efforts[0] ?? "";
+            if (p.modelMemory?.clearEffort)
+              p.modelMemory.clearEffort(agent, config.providerId, modelId);
+            else if (effort)
+              p.modelMemory?.setEffort(
+                agent,
+                config.providerId,
+                modelId,
+                effort,
+              );
+            if (p.modelMemory?.clearFast)
+              p.modelMemory.clearFast(agent, config.providerId, modelId);
+            else
+              p.modelMemory?.setFast(agent, config.providerId, modelId, false);
+          }
         } else {
-          const engines = { ...prefs.value.engines };
-          const key = modelKey(row.entry.providerId, row.entry.modelId);
-          if (reset) delete engines[key];
-          else engines[key] = config.agent;
-          await prefs.save({ ...prefs.value, engines });
-          if (reset && p.modelMemory?.clearEffort)
-            p.modelMemory.clearEffort(
-              config.agent,
-              config.providerId,
-              config.modelId,
-            );
-          else if (config.effort)
+          if (config.effort)
             p.modelMemory?.setEffort(
               config.agent,
               config.providerId,
               config.modelId,
               config.effort,
             );
-          if (reset && p.modelMemory?.clearFast)
-            p.modelMemory.clearFast(
-              config.agent,
-              config.providerId,
-              config.modelId,
-            );
-          else
-            p.modelMemory?.setFast(
-              config.agent,
-              config.providerId,
-              config.modelId,
-              config.fast,
-            );
+          p.modelMemory?.setFast(
+            config.agent,
+            config.providerId,
+            config.modelId,
+            config.fast,
+          );
         }
+        if (!isCurrent()) return;
+        if (target?.config) setTarget({ ...target, config });
+        setNotice(
+          t(
+            reset
+              ? "models.unified.restoredHint"
+              : matchingFavorite
+                ? "models.unified.originalFavoriteKept"
+                : "models.unified.parametersSaved",
+          ),
+        );
       } catch (error) {
-        if (appliesLive) await p.unified.onSelect(row.selected ? selection : live);
+        if (previousConfig && isCurrent())
+          await p.unified.onSelect(previousConfig);
         throw error;
       }
     });
@@ -453,12 +582,19 @@ export function UnifiedModelPickerSheet(
       onBack={
         row
           ? () => {
-              setTarget(null);
+              if (lock.current) return;
+              if (favoriteEdit) setFavoriteEdit(null);
+              else setTarget(null);
               setError(null);
+              setNotice(null);
             }
           : undefined
       }
-      title={row?.entry.displayName ?? t("models.picker.title")}
+      title={
+        favoriteEdit
+          ? t("models.unified.editFavorite")
+          : (row?.entry.displayName ?? t("models.picker.title"))
+      }
       testID={p.testID ?? "modelSheet"}
       query={query}
       onQuery={setQuery}
@@ -466,7 +602,9 @@ export function UnifiedModelPickerSheet(
       onFilter={setFilter}
       filters={[
         { id: "all", label: t("models.unified.all") },
-        ...(prefs.favoritesReady ? [{ id: "favorites", label: t("models.unified.favorites") }] : []),
+        ...(prefs.favoritesReady
+          ? [{ id: "favorites", label: t("models.unified.favorites") }]
+          : []),
         ...p.providers
           .filter((provider) =>
             entries.some((e) => e.providerId === provider.id),
@@ -474,27 +612,25 @@ export function UnifiedModelPickerSheet(
           .map((provider) => ({
             id: provider.id,
             label: providerName(provider.id),
-            quota: quotas[provider.id]?.remaining !== undefined
-              ? {
-                  remaining: quotas[provider.id]!.remaining!,
-                  label: [
-                    t("session.menu.usage.week"),
-                    t("session.menu.usage.remaining", {
-                      percent: quotas[provider.id]!.remaining,
-                    }),
-                    quotas[provider.id]!.resetsAt
-                      ? t("session.menu.usage.resets", {
-                          time: countdown(
+            quota:
+              quotas[provider.id]?.remaining !== undefined
+                ? {
+                    remaining: quotas[provider.id]!.remaining!,
+                    label: [
+                      (quotas[provider.id]!.resetsAt
+                        ? formatQuotaResetCountdown(
                             quotas[provider.id]!.resetsAt!,
                             now,
-                          ),
-                        })
-                      : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · "),
-                }
-              : undefined,
+                            t,
+                            quotas[provider.id]!.windowMinutes ?? null,
+                          )
+                        : null) ?? t("session.menu.usage.week"),
+                      t("session.menu.usage.remaining", {
+                        percent: quotas[provider.id]!.remaining,
+                      }),
+                    ].join(" · "),
+                  }
+                : undefined,
             providerMark: {
               providerId: provider.id,
               name: provider.name,
@@ -505,17 +641,23 @@ export function UnifiedModelPickerSheet(
       ]}
       groups={groups}
       busy={busy || !!p.disabled || !prefs.ready}
-      error={error}
+      error={error ?? (p.providersReady && modelNeedsReselection(p.modelVisibilityOverrides, p.agentKind, p.activeModelId, p.selectedProviderId)
+        ? t('session.common.modelHiddenReselect', { model: p.activeModelId }) : null)}
       loading={!!p.loading}
       emptyHint={p.emptyHint ?? t("models.picker.noResults")}
       onSelect={select}
-      onOptions={(row) =>
+      onOptions={(row) => {
+        if (lock.current) return;
+        setFavoriteEdit(null);
+        setNotice(null);
+        setError(null);
         setTarget({
           providerId: row.entry.providerId,
           modelId: row.entry.modelId,
           uid: row.favorite?.uid,
-        })
-      }
+          config: row.favorite ? { ...row.config } : undefined,
+        });
+      }}
       options={
         row
           ? {
@@ -538,30 +680,94 @@ export function UnifiedModelPickerSheet(
                 .join(" · "),
               price: price ? `${price.title}\n${price.amountsLine}` : null,
               favoritesDisabled: !prefs.favoritesReady,
+              isFavorite: !!matchingFavorite,
+              canReset,
+              configurationSummary: [
+                mobileAgentLabel(row.config.agent),
+                row.config.effort
+                  ? t(`models.options.effortLevels.${row.config.effort}`, {
+                      defaultValue: row.config.effort,
+                    })
+                  : null,
+                row.config.fast ? "Fast" : null,
+              ]
+                .filter(Boolean)
+                .join(" · "),
+              notice,
+              editingFavorite: !!favoriteEdit,
+              onEditFavorite:
+                originFavorite && !favoriteEdit
+                  ? () => {
+                      if (lock.current || p.disabled) return;
+                      setFavoriteEdit({
+                        original: { ...originFavorite },
+                        config: resolveMobileModelConfig(row.entry, {
+                          favorite: originFavorite,
+                          fastCapable,
+                        }),
+                      });
+                      setNotice(null);
+                      setError(null);
+                    }
+                  : undefined,
+              onCancelEdit: () => {
+                if (lock.current) return;
+                setFavoriteEdit(null);
+                setError(null);
+                setNotice(null);
+              },
+              onSaveEdit: () => {
+                if (!favoriteEdit) return;
+                void transact(async (isCurrent) => {
+                  const original = prefs.value.favorites.find(
+                    (item) => item.uid === favoriteEdit.original.uid,
+                  );
+                  if (
+                    !original ||
+                    !sameConfiguration(original, favoriteEdit.original)
+                  ) {
+                    setError(t("models.unified.favoriteChanged"));
+                    return;
+                  }
+                  if (
+                    matchingFavorite &&
+                    matchingFavorite.uid !== original.uid
+                  ) {
+                    setError(t("models.unified.favoriteExists"));
+                    return;
+                  }
+                  const config = favoriteEdit.config;
+                  await prefs.save({
+                    ...prefs.value,
+                    favorites: prefs.value.favorites.map((item) =>
+                      item.uid === original.uid
+                        ? {
+                            ...config,
+                            modelId: row.entry.modelId,
+                            uid: item.uid,
+                          }
+                        : item,
+                    ),
+                  });
+                  if (!isCurrent()) return;
+                  setFavoriteEdit(null);
+                  if (target) setTarget({ ...target, config });
+                  setNotice(t("models.unified.favoriteUpdated"));
+                });
+              },
               onFavorite: () => {
-                if (!prefs.favoritesReady) return;
-                void transact(async () => {
-                  if (row.favorite) {
-                    if (sameConfiguration(row.config, live)) {
-                      const fallback = resolveMobileModelConfig(row.entry, {
-                        fastCapable,
-                      });
-                      if (!(await p.unified.onSelect(fallback))) return;
-                    }
-                    try {
-                      await prefs.save({
-                        ...prefs.value,
-                        favorites: prefs.value.favorites.filter(
-                          (item) => item.uid !== row.favorite!.uid,
-                        ),
-                      });
-                    } catch (error) {
-                      if (sameConfiguration(row.config, live))
-                        await p.unified.onSelect(live);
-                      throw error;
-                    }
-                    setTarget(null);
-                  } else
+                if (!prefs.favoritesReady || favoriteEdit) return;
+                void transact(async (isCurrent) => {
+                  if (matchingFavorite) {
+                    await prefs.save({
+                      ...prefs.value,
+                      favorites: prefs.value.favorites.filter(
+                        (item) => item.uid !== matchingFavorite.uid,
+                      ),
+                    });
+                    if (isCurrent())
+                      setNotice(t("models.unified.favoriteRemoved"));
+                  } else {
                     await prefs.save(
                       addModelFavorite(
                         prefs.value,
@@ -569,13 +775,12 @@ export function UnifiedModelPickerSheet(
                         createFavoriteUid(),
                       ),
                     );
+                    if (isCurrent())
+                      setNotice(t("models.unified.favoriteSaved"));
+                  }
                 });
               },
-              onReset: () =>
-                change(
-                  resolveMobileModelConfig(row.entry, { fastCapable }),
-                  true,
-                ),
+              onReset: () => change(recommendedConfig!, true),
             }
           : undefined
       }

@@ -115,7 +115,7 @@ describe('伙伴消息流收起内部工作过程', () => {
 
   it('伙伴消息操作栏常显，外显回复，并隐藏费用与 Fork', () => {
     expect(messageStream).toContain('simplifiedBotConversation={simplifiedBotConversation}');
-    expect(messageActionBar).toContain('const replyBtn = simplifiedBotConversation');
+    expect(messageActionBar).toContain('const replyBtn = (replyAction || (simplifiedBotConversation && onAddToChat))');
     expect(messageActionBar).toContain('const forkBtn = !simplifiedBotConversation');
     expect(messageActionBar).toContain('simplifiedBotConversation ? null : costText || tokensText');
     expect(messageActionBar).toContain('simplifiedBotConversation || visible || menuOpen');

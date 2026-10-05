@@ -1398,7 +1398,7 @@ describe('RightSidebarShell add-tab failure toast', () => {
         height: 24,
         toJSON: () => ({}),
       });
-      fireEvent.click(addButton);
+      fireEvent.pointerDown(addButton, { button: 0, ctrlKey: false });
       fireEvent.click(screen.getByRole('menuitem', { name: 'rightSidebar.tabs.kinds.terminal' }));
       await waitFor(() => expect(toastError).toHaveBeenCalledWith(expectedKey));
     } finally {
@@ -1423,7 +1423,7 @@ describe('RightSidebarShell add-tab failure toast', () => {
         height: 24,
         toJSON: () => ({}),
       });
-      fireEvent.click(addButton);
+      fireEvent.pointerDown(addButton, { button: 0, ctrlKey: false });
       fireEvent.click(screen.getByRole('menuitem', { name: 'rightSidebar.tabs.kinds.terminal' }));
       await waitFor(() => expect(toastError).toHaveBeenCalledWith('rightSidebar.tabs.addFailed'));
     } finally {

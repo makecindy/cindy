@@ -2,7 +2,7 @@ import { isPeerResetRetryableReadChannel, isBackgroundInvoke, bypassInvokeSchedu
 import { InvokeScheduler } from './invokeScheduler.js';
 import { encodeSharedTaskEnvelope, decodeSharedTaskEnvelope } from './sharedTaskEnvelope.js';
 import { isSharedTaskPeer } from './sharedTaskPeer.js';
-import { SHARED_TASK_RELAY_CAPABILITY } from '@cindy/device-link-protocol';
+import { ROUTED_KINDS, SHARED_TASK_RELAY_CAPABILITY } from '@cindy/device-link-protocol';
 import {
   requestSessionTagCatalog,
   decodeSessionTagCatalog,
@@ -523,6 +523,11 @@ interface PendingReliableMessage {
   sent: boolean;
   /** 入队时刻（monotonicNow 单调时钟）；push 帧按 TRANSPORT_PENDING_PUSH_MAX_AGE_MS 判定过期。 */
   enqueuedAt: number;
+  /**
+   * 本轮(attempts 归零后)首次真正写出的时刻(monotonicNow)。enqueuedAt 可能早于
+   * 发送(link 未就绪时排队),判断「对端有过 ACK 机会却没回」必须从首发算起。
+   */
+  firstSentAt?: number;
   /** Last observed gate, diagnostics only; never controls transport scheduling. */
   lastBlockedBy?: 'link' | 'receive-window' | 'recovery-ack' | 'relay-budget' | 'socket' | 'socket-budget' | 'pass-budget';
 }
@@ -702,6 +707,12 @@ export class DeviceLinkClient {
   private pongMisses = 0;
   /** 最近一次收到任何有效 relay 帧的时刻；避免把有业务流量的 socket 误判为僵死。 */
   private lastInboundAt = 0;
+  /**
+   * 最近一次收到任一对端经 relay 转发的隧道帧(含可靠 ACK)的时刻。与 lastInboundAt
+   * 分开:relay 自身的 pong / presence 只证明到 relay 的上行活着,证明不了转发方向。
+   * 仅供 isRelayWideReliableStall 判定「所有对端同时沉默」。
+   */
+  private lastPeerInboundAt = 0;
   private networkChangeTimer: ReturnType<typeof setTimeout> | null = null;
   private networkProbeTimer: ReturnType<typeof setTimeout> | null = null;
   private networkProbeStartedAt = 0;
@@ -2138,6 +2149,7 @@ export class DeviceLinkClient {
     }
     if (validForHeartbeat) {
       this.lastInboundAt = this.monotonicNow();
+      if (env.src && ROUTED_KINDS.has(env.kind)) this.lastPeerInboundAt = this.lastInboundAt;
       if (this.networkProbeTimer) {
         clearTimeout(this.networkProbeTimer);
         this.networkProbeTimer = null;
@@ -3152,6 +3164,7 @@ export class DeviceLinkClient {
         }
         pending.lastBlockedBy = undefined;
         pending.sent = true;
+        if (pending.attempts === 0) pending.firstSentAt = this.monotonicNow();
         pending.attempts++;
         pending.lastSentAt = Date.now();
         this.logRecoveryStage(pending.envelope.dst!, 'first-reliable-write', ` seq=${pending.seq} frames=${sent}`);
@@ -4478,6 +4491,15 @@ export class DeviceLinkClient {
       this.forceReconnectForReliableTimeout(dst, seq);
       return;
     }
+    if (this.isRelayWideReliableStall(dst, peer)) {
+      this.log.warn(
+        `reliable transport ACK timeout on multiple silent peers; relay connection looks stalled, forcing reconnect`
+        + ` ${this.describeReliableTimeout(dst, seq, peer)}`
+        + ` peerSilenceMs=${Math.round(this.monotonicNow() - this.lastPeerInboundAt)}`,
+      );
+      this.dropRelayConnection('reliable transport stalled on all peers');
+      return;
+    }
     this.log.warn(
       `reliable transport ACK timeout; resetting peer link (relay connection kept alive)`
       + ` ${this.describeReliableTimeout(dst, seq, peer)}`,
@@ -4588,11 +4610,57 @@ export class DeviceLinkClient {
       `reliable transport ACK timeout; forcing reconnect`
       + ` ${this.describeReliableTimeout(dst, seq, peer)}`,
     );
+    this.dropRelayConnection('reliable transport retry exhausted');
+  }
+
+  private dropRelayConnection(reason: string): void {
     const ws = this.ws;
     this.ws = null;
     this.connEpoch++;
     closeOrTerminate(ws);
-    this.handleDisconnect(1006, 'reliable transport retry exhausted');
+    this.handleDisconnect(1006, reason);
+  }
+
+  /**
+   * 单个 peer 停止 ACK 是该 peer 的故障(手机退后台休眠最常见),默认只复位该 peer。
+   * 但 relay 连接也可能进入「上行仍通、转发方向卡死」的半僵状态:pong 照常到达,
+   * heartbeat 判活,所有对端的帧与 ACK 却都到不了(2026-10-05 线上:桌面端对 5 个
+   * 对端在同一毫秒 ACK 超时,约 80s 后才自行恢复,期间手机持续显示「电脑端未响应」)。
+   * 此时逐个复位 peer 无济于事,故障在连接层,恢复动作也应在连接层。
+   *
+   * 重建连接会打断**每一个**已就绪 peer,所以必须每一个都拿得出卡死证据,判定刻意从严:
+   * - 自本 peer 队头首发以来,没有收到**任何**对端转发来的帧(含 ACK);
+   * - 其余每个已就绪 peer 都有队头,且同样首发后无任何对端入站、已经历过多轮重发;
+   * - 这样的其余 peer 至少一个(单 peer 时无从区分对端休眠与连接卡死)。
+   * 任一已就绪 peer 缺少证据(空闲无待确认帧,或正在正常 ACK)时,仍只复位本 peer:
+   * 两台手机同时休眠时,空闲但健康的第三个 peer 不会被连带断链。入站方向仍活动的
+   * 旧版(非可靠传输)控制端无从取证,同样按缺少证据处理。
+   */
+  private isRelayWideReliableStall(dst: string, peer: PeerTransportState): boolean {
+    // 与首发同一时刻到达的入站帧不可能是对它的应答,所以取 <=。
+    const silentSince = (head: PendingReliableMessage | undefined): boolean => (
+      head?.sent === true
+      && head.firstSentAt !== undefined
+      && this.lastPeerInboundAt <= head.firstSentAt
+    );
+    const ownHead = peer.pending.values().next().value as PendingReliableMessage | undefined;
+    if (!silentSince(ownHead)) return false;
+    const minAttempts = Math.min(3, this.timing.transportMaxRetryAttempts);
+    let stalledOthers = 0;
+    for (const [otherId, other] of this.peerTransport) {
+      if (otherId === dst) continue;
+      // 未协商可靠传输的旧控制端没有队头可供取证;只要其入站控制方向仍活动,
+      // 就视为缺少卡死证据,不得被整连接重建连带断开。
+      if (!other.reliable) {
+        if (other.linkAcceptedInbound) return false;
+        continue;
+      }
+      if (!this.isPeerSendReady(other)) continue;
+      const head = other.pending.values().next().value as PendingReliableMessage | undefined;
+      if (!silentSince(head) || head!.attempts < minAttempts) return false;
+      stalledOthers += 1;
+    }
+    return stalledOthers > 0;
   }
 
   /**

@@ -256,5 +256,5 @@ export const ui = {
   // owned by the streaming-card subsystem there, not duplicated in host.
 } satisfies ImUiTextPack;
 
-/** Feishu emoji_type for "I see this" reaction (most ack-friendly). */
-export const REACTION_PROCESSING = 'SMUG';
+/** Feishu native processing marker; the transport selects a work/thinking variant. */
+export const REACTION_PROCESSING = 'Typing';

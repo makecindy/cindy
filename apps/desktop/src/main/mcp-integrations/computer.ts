@@ -350,9 +350,8 @@ export interface ComputerDriverInstallResult {
 }
 
 /**
- * cua-driver 更新检查结果。查询型数据:任何一步失败(本地未装 / 网络不通 /
- * API 限流 / tag 解析不出)都静默落到 updateAvailable=false,renderer 直接
- * 不渲染更新入口,绝不打扰用户。
+ * cua-driver 更新检查结果。检查状态和已知可安装版本分别保留，网络失败
+ * 不能伪装成“已是最新”，也不能抹掉此前已发现的更新。
  * updating 表示 main 侧此刻有一个更新安装在跑(设置面板关闭不影响它),
  * renderer 重新打开面板时据此恢复「更新中」态并 join 完成时刻。
  */
@@ -361,6 +360,9 @@ export interface ComputerDriverUpdateCheck {
   latestVersion: string | null;
   updateAvailable: boolean;
   updating: boolean;
+  /** Optional on the wire for older desktop peers. */
+  checkStatus?: 'success' | 'error';
+  checkedAt?: number;
 }
 
 export interface ComputerDriverPermissionGrantResult {
@@ -2745,6 +2747,13 @@ export async function installComputerDriver(
   const res = await runInstallCommand(onSpawn, targetVersion);
   const status = await getComputerDriverStatus();
   if (res.exitCode !== 0 || !status.installed) {
+    logger.warn('cua-driver install did not complete cleanly', {
+      exitCode: res.exitCode,
+      signal: res.signal,
+      installed: status.installed,
+      installedVersion: status.version,
+      statusError: status.error,
+    });
     throw new ComputerDriverError(
       res.stderr.trim() || res.stdout.trim() || `cua-driver installer exited ${res.exitCode}`,
     );
@@ -2965,7 +2974,7 @@ let driverUpdateCheckInFlight: Promise<Omit<ComputerDriverUpdateCheck, 'updating
 let driverUpdateInstallInFlight: Promise<ComputerDriverInstallResult> | null = null;
 // 最新 release 的 asset 列表(name + size),供更新进度采样换算总字节数。
 let cachedDriverReleaseAssets: CuaDriverReleaseAsset[] = [];
-// 上次检查(成功或失败)完成时刻,SWR 后台刷新节流用。
+// 上次检查(成功或失败)完成时刻,自动检查节流用。
 let driverUpdateCheckLastFetchAt = 0;
 
 /** 测试隔离用:清空更新检查缓存与 in-flight 状态。 */
@@ -3073,7 +3082,7 @@ async function fetchDriverUpdateCheck(
     cachedDriverReleaseAssets = [];
     return { currentVersion, latestVersion: currentVersion, updateAvailable: false };
   } catch (err) {
-    logger.debug('cua-driver update check failed (silently ignored)', {
+    logger.debug('cua-driver update check failed', {
       message: err instanceof Error ? err.message : String(err),
     });
     return { currentVersion, latestVersion: null, updateAvailable: false };
@@ -3090,7 +3099,26 @@ function commitDriverUpdateCheck(
 ): void {
   if (result.latestVersion !== null || result.currentVersion === null || !cachedDriverUpdateCheck) {
     cachedDriverUpdateCheck = result;
+  } else {
+    cachedDriverUpdateCheck = {
+      ...cachedDriverUpdateCheck,
+      currentVersion: result.currentVersion,
+      updateAvailable: cachedDriverUpdateCheck.updateAvailable && cachedDriverUpdateCheck.latestVersion !== null
+        && compareSemver(result.currentVersion, cachedDriverUpdateCheck.latestVersion) < 0,
+      checkStatus: result.checkStatus,
+      checkedAt: result.checkedAt,
+    };
   }
+}
+
+function completedDriverUpdateCheck(
+  result: Omit<ComputerDriverUpdateCheck, 'updating'>,
+): Omit<ComputerDriverUpdateCheck, 'updating'> {
+  return {
+    ...result,
+    checkStatus: result.currentVersion && result.latestVersion ? 'success' : 'error',
+    checkedAt: Date.now(),
+  };
 }
 
 function startDriverUpdateCheck(fetchImpl: typeof fetch): Promise<Omit<ComputerDriverUpdateCheck, 'updating'>> {
@@ -3098,41 +3126,47 @@ function startDriverUpdateCheck(fetchImpl: typeof fetch): Promise<Omit<ComputerD
     const knownVerifiedTarget = cachedDriverUpdateCheck?.updateAvailable
       ? cachedDriverUpdateCheck.latestVersion
       : null;
-    driverUpdateCheckInFlight = fetchDriverUpdateCheck(fetchImpl, new Set(), knownVerifiedTarget)
+    const pending: Promise<Omit<ComputerDriverUpdateCheck, 'updating'>> = fetchDriverUpdateCheck(fetchImpl, new Set(), knownVerifiedTarget)
       .then((result) => {
-        commitDriverUpdateCheck(result);
-        return result;
+        const completed = completedDriverUpdateCheck(result);
+        // An installation can invalidate a check that started against the old binary.
+        if (driverUpdateCheckInFlight === pending) {
+          commitDriverUpdateCheck(completed);
+          return cachedDriverUpdateCheck!;
+        }
+        // Existing callers must also receive the post-install state, not only
+        // callers of a later check. Reuse the current check/cache when available.
+        return driverUpdateCheckInFlight ?? cachedDriverUpdateCheck ?? startDriverUpdateCheck(fetchImpl);
       })
       .finally(() => {
-        driverUpdateCheckInFlight = null;
-        driverUpdateCheckLastFetchAt = Date.now();
+        if (driverUpdateCheckInFlight === pending) {
+          driverUpdateCheckInFlight = null;
+          driverUpdateCheckLastFetchAt = Date.now();
+        }
       });
+    driverUpdateCheckInFlight = pending;
   }
   return driverUpdateCheckInFlight;
 }
 
 /**
- * 检查 cua-driver 是否有新版本。刻意保持"安静"语义:仅在用户打开设置页
- * 时由 renderer 触发,不做启动检查、不做后台轮询;任何失败都返回
- * updateAvailable=false 而不是抛错(查询型,失败时 renderer 静默隐藏入口)。
- *
- * 缓存语义(stale-while-revalidate):有缓存时立即返回缓存——用户第二次
- * 打开面板不必等网络往返;同时后台静默刷新,结果供下次读取。更新安装
- * 进行中不发起刷新(装完缓存会被清)。fetchImpl 可注入用于测试。
+ * 打开设置时自动检查，十分钟内复用结果；手动检查绕过节流。
+ * 到期后等待共享的检查 Promise，让当前页面收到新结果，无需轮询或重开。
+ * 安装期间只返回已有状态，避免对正在替换的二进制发起检查。
  */
 export async function checkComputerDriverUpdate(
   // 默认吃系统代理:api.github.com / raw.githubusercontent.com 都是境外端点。
   fetchImpl: typeof fetch = outboundFetch,
+  options?: { force?: boolean },
 ): Promise<ComputerDriverUpdateCheck> {
   const updating = driverUpdateInstallInFlight !== null;
   if (cachedDriverUpdateCheck) {
-    // 后台刷新节流:面板频繁开合时不重复打 GitHub API(未鉴权限额有限)。
+    // 自动检查节流:面板频繁开合时不重复打 GitHub API(未鉴权限额有限)。
     const refreshDue =
       Date.now() - driverUpdateCheckLastFetchAt >= UPDATE_CHECK_REFRESH_MIN_INTERVAL_MS;
-    if (!updating && refreshDue) {
-      void startDriverUpdateCheck(fetchImpl);
+    if (updating || (!options?.force && !refreshDue && !driverUpdateCheckInFlight)) {
+      return { ...cachedDriverUpdateCheck, updating };
     }
-    return { ...cachedDriverUpdateCheck, updating };
   }
   const result = await startDriverUpdateCheck(fetchImpl);
   return { ...result, updating: driverUpdateInstallInFlight !== null };
@@ -3158,7 +3192,7 @@ async function revalidateComputerDriverUpdateTarget(fetchImpl: typeof fetch): Pr
 
     const refreshed = await fetchDriverUpdateCheck(fetchImpl, new Set([cachedTarget]));
     // 已确认 cachedTarget 不可安装,即使 fallback 刷新失败也不能保留旧入口。
-    cachedDriverUpdateCheck = refreshed;
+    cachedDriverUpdateCheck = completedDriverUpdateCheck(refreshed);
     if (!refreshed.updateAvailable) cachedDriverReleaseAssets = [];
     return refreshed.updateAvailable ? refreshed.latestVersion : null;
   } finally {
@@ -3266,7 +3300,7 @@ function startInstallProgressSampler(
  * 执行 cua-driver 更新(复用官方安装脚本,装最新版覆盖旧版)。
  * in-flight 复用:更新过程托管在 main,设置面板关闭它照常跑完;面板重开
  * 后再调用本函数会 join 同一个安装 Promise,不会重复起安装进程。
- * 成功后清掉更新检查缓存(本地版本已变,旧结果作废)。
+ * 安装尝试结束后清掉更新检查缓存(报错时也可能已经替换了本地版本)。
  * onProgress 只在发起安装的那次调用被采纳(进度经 IPC 广播给所有窗口,
  * join 的调用方天然共享),结束时保证发一条 phase='done'。
  * opts.joinOnly:仅 join 既有安装,绝不起新安装——renderer 的 resume 路径
@@ -3290,18 +3324,24 @@ export async function updateComputerDriver(
       if (!targetVersion) {
         throw new ComputerDriverError('no verified installable cua-driver update is available');
       }
-      const result = await installComputerDriver((pid) => {
-        if (onProgress) stopSampler = startInstallProgressSampler(pid, onProgress);
-      }, targetVersion);
-      const installedVersion = extractDriverSemver(result.status.version);
-      if (!installedVersion || compareSemver(installedVersion, targetVersion) < 0) {
-        throw new ComputerDriverError(
-          `cua-driver update did not reach v${targetVersion} (installed: ${result.status.version ?? 'unknown'})`,
-        );
+      try {
+        const result = await installComputerDriver((pid) => {
+          if (onProgress) stopSampler = startInstallProgressSampler(pid, onProgress);
+        }, targetVersion);
+        const installedVersion = extractDriverSemver(result.status.version);
+        if (!installedVersion || compareSemver(installedVersion, targetVersion) < 0) {
+          throw new ComputerDriverError(
+            `cua-driver update did not reach v${targetVersion} (installed: ${result.status.version ?? 'unknown'})`,
+          );
+        }
+        return result;
+      } finally {
+        // Failed installers can still replace the binary. The next check must
+        // read it again, including when the settings panel was closed meanwhile.
+        cachedDriverUpdateCheck = null;
+        cachedDriverReleaseAssets = [];
+        driverUpdateCheckInFlight = null;
       }
-      cachedDriverUpdateCheck = null;
-      cachedDriverReleaseAssets = [];
-      return result;
     })().finally(() => {
       driverUpdateInstallInFlight = null;
       stopSampler();

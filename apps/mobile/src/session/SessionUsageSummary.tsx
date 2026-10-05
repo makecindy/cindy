@@ -18,6 +18,7 @@ import {
 } from "@/theme/tokens";
 import type { RemoteSession } from "./types";
 import type { useSessionMenuUsage } from "./useSessionMenuUsage";
+import { isSubscriptionUsageSource } from "./readSessionMenuAccountUsage";
 import {
   accountUsageRows,
   formatSessionUsageMoney,
@@ -116,8 +117,7 @@ export function SessionUsageSummary({
     amounts.mixed || (!amounts.total && account?.accountOnly)
       ? t("session.menu.usage.taskUsage")
       : amounts.total?.kind === "value-estimate" ||
-          (!amounts.total &&
-            (source === "chatgpt" || source === "claude" || source === "xai"))
+          (!amounts.total && isSubscriptionUsageSource(source))
         ? t("session.menu.usage.taskValue")
         : t("session.menu.usage.taskCost");
   const stale =

@@ -791,6 +791,16 @@ export const MAKER_INVOKE = {
   /** Read one hidden Bot-to-Bot conversation after a timeline trace is opened. */
   BOT_DIRECT_MESSAGE_THREAD_GET: 'maker:bot-direct-message-thread:get',
   /** 伙伴群聊：列表、详情、创建、修改、成员、删除、发言、继续讨论与停止。 */
+  CHAT_SERVER_MANAGE: 'maker:chat-server:manage',
+  CHAT_SERVER_OWNEDBOTS: 'maker:chat-server:ownedBots',
+  CHAT_SERVER_REFRESHPROFILE: 'maker:chat-server:refreshProfile',
+  CHAT_SERVER_STATUS: 'maker:chat-server:status',
+  CHAT_SERVER_THREAD: 'maker:chat-server:thread',
+  CHAT_SERVER_REPLY: 'maker:chat-server:reply',
+  CHAT_SERVER_REACT: 'maker:chat-server:react',
+  CHAT_SERVER_CREATEINVITE: 'maker:chat-server:createInvite',
+  CHAT_SERVER_PREVIEWINVITE: 'maker:chat-server:previewInvite',
+  CHAT_SERVER_ACCEPTINVITE: 'maker:chat-server:acceptInvite',
   BOT_GROUP_LIST: 'maker:bot-group:list',
   BOT_GROUP_GET: 'maker:bot-group:get',
   BOT_GROUP_CREATE: 'maker:bot-group:create',
@@ -961,6 +971,8 @@ export const MAKER_PUSH = {
   BOT_GROUP_CHANGED: 'maker:bot-group:changed',
   /** Bot 档案经主进程创建或更新后变化；renderer 收到后重拉伙伴列表。 */
   BOT_PROFILE_CHANGED: 'maker:bot-profile:changed',
+  /** 伙伴工作台已接手的项目变化(payload: { botId });renderer 收到后重读项目列表。 */
+  BOT_WORKBENCH_CHANGED: 'maker:bot-workbench:changed',
   BOT_LIFECYCLE_CHANGED: 'maker:bot-lifecycle:changed',
   /**
    * 被控端「当前 New Maker 草稿」全量变更广播。SYNC_NEW_MAKER_DRAFT 落 main 缓存后随即发,

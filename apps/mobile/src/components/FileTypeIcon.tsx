@@ -8,8 +8,9 @@ export function pickFileIcon(name: string, mimeType?: string) {
   return glyphs[FILE_VISUAL_GLYPHS[getFileVisualKind({ name, mimeType })]];
 }
 
-export function FileTypeIcon({ name = '', mimeType, size = iconSize.sm, color, ...props }: FileVisualInput & LucideProps) {
+/** Compact glyphs default to the regular stroke; large tiles pass their own absolute stroke. */
+export function FileTypeIcon({ name = '', mimeType, size = iconSize.sm, color, strokeWidth = iconStroke.regular, ...props }: FileVisualInput & LucideProps) {
   const { colors } = useTheme();
   const Icon = pickFileIcon(name, mimeType);
-  return <Icon size={size} color={color ?? colors.textSecondary} {...props} strokeWidth={iconStroke.regular} accessible={false} />;
+  return <Icon size={size} color={color ?? colors.textSecondary} strokeWidth={strokeWidth} {...props} accessible={false} />;
 }

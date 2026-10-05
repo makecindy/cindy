@@ -1,9 +1,12 @@
 import type { InstalledGhost } from '../../shared/ghost.js';
 import type { PluginTaskRequest, PluginTaskResult } from '../../shared/pluginTasks.js';
+import { isPluginTeamPlanWithinBudget } from '../../shared/pluginTasks.js';
 import { hasPluginTaskApproval } from './taskCapability.js';
 
 export const PLUGIN_TASK_OPERATIONS = [
   'capabilities',
+  'models',
+  'setModel',
   'requestWriteAccess',
   'startTeam',
   'getTeam',
@@ -27,7 +30,9 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
   if (!object(value) || value.type !== 'tasks-request') return false;
   const allowed: Record<string, string[]> = {
     capabilities: [],
-    create: ['requestKey', 'title', 'route', 'isolatedWorkspace'],
+    models: [],
+    setModel: ['taskId', 'expectedRevision', 'route'],
+    create: ['requestKey', 'title', 'route', 'isolatedWorkspace', 'callId'],
     list: ['after', 'limit'],
     get: ['taskId'],
     requestWriteAccess: ['taskId', 'mode'],
@@ -43,14 +48,17 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
   };
   if (typeof value.kind !== 'string' || !Object.hasOwn(allowed, value.kind)) return false;
   const kind = value.kind;
-  if (Object.keys(value).some((key) => !['type', 'kind', ...allowed[kind]].includes(key)))
+  if (value.mobilePageId !== undefined && (typeof value.mobilePageId !== 'string' || !/^[a-f0-9-]{36}$/.test(value.mobilePageId))) return false;
+  if (Object.keys(value).some((key) => !['type', 'kind', 'mobilePageId', ...allowed[kind]].includes(key)))
     return false;
   if (kind === 'requestWriteAccess' && value.mode !== undefined && !['acceptEdits', 'auto'].includes(String(value.mode))) return false;
   const requires = (key: string) => text(value[key], 128);
   if (['create', 'send', 'cancel'].includes(value.kind) && !requires('requestKey')) return false;
-  if (['get', 'send', 'listRuns', 'readMessages', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker'].includes(value.kind) && !requires('taskId'))
+  if (['get', 'setModel', 'send', 'listRuns', 'readMessages', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker'].includes(value.kind) && !requires('taskId'))
     return false;
   if (['getRun', 'cancel'].includes(value.kind) && !requires('runId')) return false;
+  if (kind === 'setModel' && (!object(value.route) || !Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0)) return false;
+  if (value.callId !== undefined && !text(value.callId, 128)) return false;
   if (value.isolatedWorkspace !== undefined && typeof value.isolatedWorkspace !== 'boolean') return false;
   if (value.kind === 'create' && !text(value.title, 100)) return false;
   if (
@@ -69,14 +77,17 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
   if (kind === 'releaseWorker' && (!requires('workerId') || !Number.isSafeInteger(value.completedAt) || (value.completedAt as number) <= 0)) return false;
   if (kind === 'setTeamPlan') {
     const p = value.plan;
-    if (!object(p) || Object.keys(p).some(k => !['concurrency','items'].includes(k)) ||
+    if (!isPluginTeamPlanWithinBudget(p)) return false;
+    if (!object(p) || Object.keys(p).some(k => !['concurrency','items','task'].includes(k)) ||
         (p.concurrency !== null && (!Number.isSafeInteger(p.concurrency) || (p.concurrency as number) < 1)) ||
         !Array.isArray(p.items) || !p.items.length || p.items.length > 1000) return false;
+    if (p.task !== undefined && !text(p.task, 8000)) return false;
     const labels = new Set<string>();
     for (const item of p.items) {
-      if (!object(item) || Object.keys(item).some(k => !['label','workingDir','route'].includes(k)) ||
+      if (!object(item) || Object.keys(item).some(k => !['label','workingDir','route','task'].includes(k)) ||
           !text(item.label,32) || !/^[a-z0-9][a-z0-9_-]*$/.test(String(item.label)) || labels.has(String(item.label)) || !text(item.workingDir,4096) ||
           !validPluginTaskRequest({type:'tasks-request',kind:'create',requestKey:'validate',title:'validate',route:item.route}) || !item.route) return false;
+      if (item.task !== undefined && !text(item.task, 8000)) return false;
       labels.add(String(item.label));
     }
   }
@@ -93,7 +104,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
       !['cc', 'codex', 'pi'].includes(String(r.agentKind)) ||
       !text(r.providerId, 128) ||
       !text(r.model, 256) ||
-      !text(r.effort, 32) ||
+      (typeof r.effort !== 'string' || r.effort.length > 32) ||
       typeof r.fastMode !== 'boolean'
     )
       return false;
@@ -134,6 +145,7 @@ export async function handlePluginTaskRequest(
         targets: ['own-plugin-local-session'],
         maxPageSize: 100,
         exactRoute: true,
+        sourceCallContext: true,
       },
     };
   if (!deps.handler) return error('HOST_NOT_READY', 'Task service is not ready', true);

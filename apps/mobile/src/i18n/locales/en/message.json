@@ -10,8 +10,6 @@
   },
   "renderer": {
     "moreActions": "More message actions",
-    "previousQuestionJump": "Jump to previous question: {{preview}}",
-    "noPreview": "No preview",
     "newMessagesToBottom": "New messages, jump to bottom",
     "jumpToBottom": "Jump to bottom",
     "openForkOrigin": "Open fork source message",
@@ -70,6 +68,8 @@
     "durationSeconds": "{{seconds}}s",
     "durationMinutes": "{{minutes}}m",
     "durationMinutesSeconds": "{{minutes}}m {{seconds}}s",
+    "durationHoursMinutes": "{{hours}}h {{minutes}}m",
+    "durationDaysHoursMinutes": "{{days}}d {{hours}}h {{minutes}}m",
     "subagentSummary": "Subagent summary",
     "agentSwitchLabel": "Switched from {{from}} to {{to}}",
     "agentSwitchViewHandoff": "{{label}}, view handoff",
@@ -148,6 +148,8 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "sourceMissing": "The source image is missing on this computer. Import the original file again.",
+    "deviceOffline": "The computer is disconnected. Reconnect and try again.",
     "cancelAnnotation": "Cancel annotation",
     "cancel": "Cancel",
     "undoLastStroke": "Undo last stroke",

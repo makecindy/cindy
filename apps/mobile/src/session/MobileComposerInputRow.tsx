@@ -3,6 +3,7 @@ import {
   Animated,
   Platform,
   Pressable,
+  ScrollView,
   Easing,
   StyleSheet,
   View,
@@ -16,7 +17,7 @@ import {
 import { TextInput } from '@/components/AppText';
 import Reanimated, { useAnimatedStyle, useSharedValue, type SharedValue } from 'react-native-reanimated';
 import { GestureDetector } from '@/platform/gestureHandler';
-import type { PanGesture } from 'react-native-gesture-handler';
+import type { NativeGesture, PanGesture } from 'react-native-gesture-handler';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Mic } from 'lucide-react-native';
@@ -107,6 +108,11 @@ export interface MobileComposerInputRowProps {
   collapseProgress?: SharedValue<number>;
   /** The enclosing scroll surface owns the native glass frame. */
   frameOutside?: boolean;
+  /** Scroll attachments/text independently; the toolbar remains outside this viewport. */
+  bodyScrollGesture?: NativeGesture;
+  bodyScrollRef?: Ref<ScrollView>;
+  bodyScrollEnabled?: boolean;
+  bodyScrollTestID?: string;
   caretHidden?: boolean;
   compact?: boolean;
   autoFocus?: TextInputProps['autoFocus'];
@@ -210,6 +216,10 @@ export function MobileComposerInputRow({
   autoFocus,
   cardActive,
   frameOutside,
+  bodyScrollGesture,
+  bodyScrollRef,
+  bodyScrollEnabled = true,
+  bodyScrollTestID,
   collapseProgress,
   caretHidden,
   compact,
@@ -317,32 +327,8 @@ export function MobileComposerInputRow({
       value={value}
     />
   );
-  return (
-    <ComposerFrame
-      entryTransitionId={entryTransitionId}
-      onEntryTransitionComplete={onEntryTransitionComplete}
-      expandToken={expandToken}
-      expanded={cardLayout}
-      unframed={frameOutside}
-      style={[
-        styles.row,
-        compact && styles.rowCompact,
-        geometricSingleLine && styles.rowCollapsedTouch,
-        geometricSingleLine && collapsedHeight != null && { minHeight: collapsedHeight },
-        concentricInset != null && {
-          paddingLeft: Math.max(0, concentricInset - (MOBILE_COMPOSER_MIN_TOUCH_TARGET - MOBILE_COMPOSER_CONTROL_SIZE) / 2),
-          paddingRight: concentricInset,
-        },
-        !geometricSingleLine && multilineShape && styles.rowMultiline,
-        cardLayout && styles.rowCard,
-        Platform.OS === 'ios' && cardLayout && styles.rowNativeCard,
-        // The native frame owns the contour; its child must not add a second corner.
-        nativeComposerFrameAvailable && { backgroundColor: 'transparent', borderWidth: 0, borderRadius: 0 },
-        rowStyle,
-      ]}
-      testID={testID}
-    >
-      {resizeHandle}
+  const inputBody = (
+    <>
       {cardLayout && accessoryAbove ? <ComposerFoldingSection progress={collapseProgress}>{accessoryAbove}</ComposerFoldingSection> : null}
       <View
         style={[
@@ -377,6 +363,50 @@ export function MobileComposerInputRow({
         </Reanimated.View>
         {cardLayout ? null : trailing}
       </View>
+    </>
+  );
+  return (
+    <ComposerFrame
+      entryTransitionId={entryTransitionId}
+      onEntryTransitionComplete={onEntryTransitionComplete}
+      expandToken={expandToken}
+      expanded={cardLayout}
+      unframed={frameOutside}
+      style={[
+        styles.row,
+        compact && styles.rowCompact,
+        geometricSingleLine && styles.rowCollapsedTouch,
+        geometricSingleLine && collapsedHeight != null && { minHeight: collapsedHeight },
+        concentricInset != null && {
+          paddingLeft: Math.max(0, concentricInset - (MOBILE_COMPOSER_MIN_TOUCH_TARGET - MOBILE_COMPOSER_CONTROL_SIZE) / 2),
+          paddingRight: concentricInset,
+        },
+        !geometricSingleLine && multilineShape && styles.rowMultiline,
+        cardLayout && styles.rowCard,
+        Platform.OS === 'ios' && cardLayout && styles.rowNativeCard,
+        // The native frame owns the contour; its child must not add a second corner.
+        nativeComposerFrameAvailable && { backgroundColor: 'transparent', borderWidth: 0, borderRadius: 0 },
+        rowStyle,
+      ]}
+      testID={testID}
+    >
+      {resizeHandle}
+      {bodyScrollGesture ? (
+        <GestureDetector gesture={bodyScrollGesture}>
+          <ScrollView
+            ref={bodyScrollRef}
+            style={styles.bodyScroll}
+            contentContainerStyle={styles.bodyScrollContent}
+            keyboardShouldPersistTaps="handled"
+            bounces={false}
+            scrollEnabled={cardLayout && bodyScrollEnabled}
+            showsVerticalScrollIndicator={cardLayout && bodyScrollEnabled}
+            testID={bodyScrollTestID ?? (testID ? `${testID}.bodyScroll` : undefined)}
+          >
+            {inputBody}
+          </ScrollView>
+        </GestureDetector>
+      ) : inputBody}
       {cardLayout && toolbar != null ? (
         <ComposerFoldingSection progress={collapseProgress}>
         <View
@@ -478,6 +508,7 @@ function ComposerFoldingSection({ progress, children }: { progress?: SharedValue
       height: measuredHeight.value > 0 ? measuredHeight.value * (1 - amount) : 'auto' as const,
       opacity: 1 - amount,
       overflow: 'hidden' as const,
+      flexShrink: 0,
     };
   });
   return <Reanimated.View style={style}>
@@ -648,6 +679,7 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     borderRadius: radius.pill,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'column',
+    flexShrink: 1,
     minHeight: 50,
     overflow: 'visible',
     paddingHorizontal: spacing.md,
@@ -711,6 +743,8 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     flexDirection: 'row',
     minWidth: 0,
   },
+  bodyScroll: { flexShrink: 1 },
+  bodyScrollContent: { flexGrow: 1 },
   toolbarRow: {
     alignItems: 'center',
     flexDirection: 'row',

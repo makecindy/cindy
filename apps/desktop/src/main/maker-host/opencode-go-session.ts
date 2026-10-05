@@ -4,11 +4,12 @@
  * OpenCode Go 自 2026-09-06 起强制要求每个请求携带稳定会话标识，缺失直接 400
  * `MissingSessionID`（上游文档 https://opencode.ai/docs/go/#where-can-i-use-it）。
  *
- * 会话路径不需要本模块：各客户端/桥自带的上游可识别头——Claude Code 的
- * `x-claude-code-session-id`、Codex 的 `session-id`、Pi 当前构建自己注入的
+ * 原生透传的会话路径不需要本模块：各客户端/桥自带的上游可识别头——Claude Code
+ * Messages 透传的 `x-claude-code-session-id`、Codex 的 `session-id`、Pi 当前构建自己注入的
  * `x-opencode-session`，以及 Codex chat bridge 的 thread-id → x-opencode-session
- * 映射（#4073 / #4075）。本模块只服务**从零构造请求头、没有上述任何原生会话头的
- * 直连路径**：辅助模型 one-shot、供应商「测试连接」探测、视觉桥。
+ * 映射（#4073 / #4075）。本模块服务**由 host 从零构造请求头的出口**：辅助模型 one-shot、
+ * 供应商「测试连接」探测、视觉桥，以及 Claude 本地供应商桥 → Pi SDK 原生适配器
+ * （`createPiProviderFetch`，它重建出站请求、不继承入站头；sessionId 由桥按请求传入，#5325）。
  *
  * 路由识别有三路信号：运行时供应商 id、目录预设身份（`catalogPresetId`，从预设创建后
  * 即使把地址改成自建转发、或复制连接得到新 id 也仍保留）、上游地址。三者任一命中即视为

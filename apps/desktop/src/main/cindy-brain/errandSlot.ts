@@ -45,6 +45,8 @@ const MAX_SETTLED_JOBS_PER_GHOST = 16;
 export type GhostErrandOrigin = 'user-action' | 'background';
 
 export interface GhostErrandRunRequest {
+  /** Host-resolved model context; never accepted from plugin payload. */
+  sourceSessionId?: string;
   ghostId: string;
   ghostVersion: string;
   /** 主机归因的来源；切任务只认 user-action。 */
@@ -94,6 +96,7 @@ export type GhostErrandRunner = (
 ) => Promise<GhostErrandRunOutcome>;
 
 export interface GhostErrandSlotDeps {
+  resolveSourceSessionId?(ghostId: string, callId: string): string | undefined;
   getGhost(id: string): InstalledGhost | null;
   runner?: GhostErrandRunner | null;
   /** 管子续命挂钩(同 cindySlot 契约;wait 模式的署名单在途期间续命)。 */
@@ -320,6 +323,7 @@ export class GhostErrandSlot {
           {
             ghostId,
             ghostVersion: ghost.manifest.version,
+            sourceSessionId: this.deps.resolveSourceSessionId?.(ghostId, callId),
             origin,
             message,
             ...(typeof payload.title === 'string' ? { title: payload.title.trim() } : {}),

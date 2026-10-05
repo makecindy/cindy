@@ -281,7 +281,7 @@ describe("durable mobile outbox ownership", () => {
     expect(storage.data.size).toBe(1);
     expect(deps.cleanup).not.toHaveBeenCalled();
   });
-  it.each(['keys', 'item', 'json'] as const)('retries failed %s loading through ready and add without losing persisted work', async (failure) => {
+  it.each(['keys', 'item'] as const)('retries failed %s loading through ready and add without losing persisted work', async (failure) => {
     const storage = disk();
     const seed = createDurableOutbox(storage);
     await seed.activate('alice');
@@ -290,7 +290,6 @@ describe("durable mobile outbox ownership", () => {
     const readItem = vi.spyOn(storage, 'getItem');
     if (failure === 'keys') readKeys.mockRejectedValueOnce(new Error('busy'));
     if (failure === 'item') readItem.mockRejectedValueOnce(new Error('busy'));
-    if (failure === 'json') readItem.mockResolvedValueOnce('{broken');
     const store = createDurableOutbox(storage);
     await expect(store.activate('alice')).rejects.toThrow();
     expect(store.getSnapshot()).toEqual([]);
@@ -300,16 +299,27 @@ describe("durable mobile outbox ownership", () => {
     expect(store.getSnapshot().map((r) => r.item.clientId)).toEqual(['id-1', 'id-2']);
     expect(readKeys).toHaveBeenCalledTimes(2);
   });
-  it('keeps corrupt storage intact across retries and does not allow add to overwrite it', async () => {
+  it('keeps a corrupt outbox row on disk without blocking the rest of the ledger', async () => {
     const storage = disk();
     const key = 'cindy.mobile.outbox.v1.alice/mac-a/session-a/id-1';
     storage.data.set(key, '{broken');
     const store = createDurableOutbox(storage);
-    await expect(store.activate('alice')).rejects.toThrow();
-    await expect(store.add(message())).rejects.toThrow();
-    await expect(store.ready()).rejects.toThrow();
+    await store.activate('alice');
+    await store.add(message('id-2'));
+    await store.ready();
     expect(storage.data.get(key)).toBe('{broken');
-    expect(store.getSnapshot()).toEqual([]);
+    expect(store.getSnapshot().map((r) => r.item.clientId)).toEqual(['id-2']);
+  });
+
+  it('skips a JSON null ledger row instead of failing activation', async () => {
+    const storage = disk();
+    const key = 'cindy.mobile.outbox.v1.alice/mac-a/session-a/id-1';
+    storage.data.set(key, 'null');
+    const store = createDurableOutbox(storage);
+    await store.activate('alice');
+    await store.add(message('id-2'));
+    expect(storage.data.get(key)).toBe('null');
+    expect(store.getSnapshot().map((r) => r.item.clientId)).toEqual(['id-2']);
   });
   it('does not let an old activation failure invalidate the new account loading', async () => {
     const storage = disk();
