@@ -1,3 +1,5 @@
+import type { TFunction } from 'i18next';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 /**
  * BackgroundTasksBody —— 「后台任务」tab 的内容区。
  *
@@ -53,6 +55,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { getSessionDeviceId, useRemoteDevices } from '@/features/device-link/remoteProjectsStore';
+import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import { makerChatStore, EMPTY_TASK_UPDATES } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate, ChatMessage } from '@/lib/makerChatStore';
 import {
@@ -167,15 +170,11 @@ function statusIcon(status: string): LucideIcon {
   return LoaderCircle;
 }
 
-/** 毫秒 → 紧凑时长文案(与 AgentTaskCard 同口径;该实现未导出,此处内联)。 */
-function formatDuration(ms: number | undefined): string | undefined {
+/** 与 AgentTaskCard 共用长耗时换算,保留亚秒精度。 */
+function formatDuration(ms: number | undefined, t?: TFunction): string | undefined {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
   if (ms < 1000) return `${ms}ms`;
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+  return formatSessionDuration(ms, t);
 }
 
 /** workflow 行副标题:workflow_agent 条目 done/error 计数 / 总数。 */
@@ -309,7 +308,7 @@ function TaskRow({
       }
     }
     const usage = item.update?.usage;
-    const duration = formatDuration(usage?.durationMs);
+    const duration = formatDuration(usage?.durationMs, t);
     if (duration) parts.push(duration);
     if (typeof usage?.totalTokens === 'number') {
       parts.push(
@@ -551,6 +550,11 @@ export function BackgroundTasksBody({
   // 本机会话恒 'local',零开销;断连翻转的那次重跑失败降级空表,无害。
   const remoteDevices = useRemoteDevices();
   const sessionDeviceId = sessionId ? getSessionDeviceId(sessionId) : undefined;
+  const subagentRunStatuses = useSubagentRunStatusIndex({
+    sessionId,
+    deviceId: sessionDeviceId,
+    enabled: visible,
+  });
   const deviceConnectivity = sessionDeviceId
     ? `${sessionDeviceId}:${
         remoteDevices.find((d) => d.deviceId === sessionDeviceId)?.connected ? '1' : '0'
@@ -603,8 +607,9 @@ export function BackgroundTasksBody({
         messages: inputs.messages as unknown as readonly Message[],
         taskUpdates: inputs.taskUpdates,
         isSessionStreaming: inputs.isStreaming,
+        subagentRunStatuses,
       }),
-    [inputs],
+    [inputs, subagentRunStatuses],
   );
 
   // 历史 workflow 行的终态修正:workflow 的 tool_result 是启动回执(失败也存在),

@@ -6,6 +6,7 @@ import {
   ensureDirectoryLink,
   isDirectory,
   isSameOrInside,
+  normalizeForCompare,
   realPathOrNull,
   removeManagedLink,
   type ManagedLinkStatus,
@@ -14,7 +15,7 @@ import {
 export const CODEX_LEGACY_CODEX_SKILLS_LINK_NAME = 'xdt-codex';
 export const CODEX_SHARED_AGENTS_SKILLS_LINK_NAME = 'xdt-agents';
 
-type SourceName = 'codex' | 'agents';
+type SourceName = 'codex' | 'agents' | `cindy-${string}`;
 type LinkStatus = ManagedLinkStatus;
 
 export interface CodexGlobalSkillSourceResult {
@@ -35,6 +36,28 @@ export interface CodexGlobalSkillsPrepareResult {
 
 interface PrepareOptions {
   homeDir?: string;
+  /** Owned storage roots, used only to recognize obsolete projections. */
+  managedRoots?: readonly string[];
+  managedSkills?: readonly { path?: string; claudeCommandName: string }[];
+}
+
+export function codexManagedSkillLinkName(command: string): `cindy-${string}` {
+  return `cindy-${encodeURIComponent(command)}`;
+}
+
+function isManagedSkillTarget(target: string, roots: readonly string[]): boolean {
+  const normalized = normalizeForCompare(target);
+  if (!roots.some((root) => isSameOrInside(normalized, normalizeForCompare(root)))) return false;
+  const segments = normalized.split(path.sep);
+  return (
+    segments.includes('shared-system-skills') ||
+    segments.some(
+      (segment, index) =>
+        (segment === 'ghost-install-state' &&
+          ['skill-snapshots', 'agent-skills'].includes(segments[index + 1] ?? '')) ||
+        (segment === 'managed-agent-skills' && segments[index + 1] === 'cindy'),
+    )
+  );
 }
 
 async function cleanupLegacyAggregate(codexHome: string): Promise<void> {
@@ -96,10 +119,50 @@ export async function prepareCodexGlobalSkillsLinks(
   const sourceDefs: Array<{ name: SourceName; source: string; link: string }> = [
     { name: 'codex', source: paths.legacyCodexSkillsDir, link: paths.legacyCodexSkillsLink },
     { name: 'agents', source: paths.sharedAgentsSkillsDir, link: paths.sharedAgentsSkillsLink },
+    ...(opts.managedSkills ?? []).flatMap((skill) =>
+      skill.path
+        ? [
+            {
+              name: codexManagedSkillLinkName(skill.claudeCommandName),
+              source: path.dirname(skill.path),
+              link: path.join(paths.skillsDir, codexManagedSkillLinkName(skill.claudeCommandName)),
+            },
+          ]
+        : [],
+    ),
   ];
+
+  // Never expose a whole projection directory: preserved conflicts in it are
+  // not approved skills. Retire old aggregates and obsolete individual links.
+  const desiredLinks = new Set(sourceDefs.map((source) => source.link));
+  const ownedRoots = [...(opts.managedRoots ?? [])];
+  for (const root of opts.managedRoots ?? []) {
+    const realRoot = await realPathOrNull(root);
+    if (realRoot) ownedRoots.push(realRoot);
+  }
+  const foreignLinks = new Set<string>();
+  for (const entry of await fsp.readdir(paths.skillsDir)) {
+    if (!entry.startsWith('cindy-')) continue;
+    const link = path.join(paths.skillsDir, entry);
+    if (!(await fsp.lstat(link)).isSymbolicLink()) continue;
+    const rawTarget = await fsp.readlink(link);
+    const target = path.resolve(paths.skillsDir, rawTarget);
+    if (!isManagedSkillTarget(target, ownedRoots)) {
+      foreignLinks.add(link);
+      continue;
+    }
+    if (!desiredLinks.has(link) && (await fsp.readlink(link)) === rawTarget) {
+      changed = (await removeManagedLink(link)) || changed;
+    }
+  }
 
   const sources: CodexGlobalSkillSourceResult[] = [];
   for (const sourceDef of sourceDefs) {
+    if (foreignLinks.has(sourceDef.link)) {
+      sources.push({ ...sourceDef, status: 'conflict', reason: 'foreign skill link is preserved' });
+      warnings.push(`cannot link Codex ${sourceDef.name} skills: foreign skill link is preserved`);
+      continue;
+    }
     if (!(await isDirectory(sourceDef.source))) {
       changed = (await removeManagedLink(sourceDef.link)) || changed;
       sources.push({ ...sourceDef, status: 'missing', reason: 'source directory does not exist' });
@@ -120,6 +183,17 @@ export async function prepareCodexGlobalSkillsLinks(
         `cannot link Codex ${sourceDef.name} skills from ${sourceDef.source}: ${result.reason ?? result.status}`,
       );
     }
+  }
+
+  // All callers share the same success contract: a verified managed Skill must
+  // have its current entry. User compatibility roots retain warning semantics.
+  const failedManagedSource = sources.find(
+    (source) => source.name.startsWith('cindy-') && !['linked', 'kept'].includes(source.status),
+  );
+  if (failedManagedSource) {
+    throw new Error(
+      `Cannot prepare Codex managed Skill ${failedManagedSource.name}: ${failedManagedSource.reason ?? failedManagedSource.status}`,
+    );
   }
 
   return {

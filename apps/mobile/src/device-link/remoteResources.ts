@@ -21,6 +21,7 @@ import {
   type RemoteActionDescriptor,
   type RemoteResourceBlock,
 } from '@cindy/device-link';
+import { BOT_GROUP_CHAT_PRIMITIVE } from '@cindy/maker-shared/botGroupChat';
 
 import { normalizeRemoteActions, normalizeRemoteBlocks } from './remoteResourceContent';
 import type { RemoteInvoke } from './mobileMakerTransport';
@@ -31,9 +32,39 @@ export const MOBILE_REMOTE_RESOURCE_PRIMITIVES = [
   'session-controls',
 ] as const;
 
+/**
+ * Primitives whose whole block data is kept for a dedicated screen that asked for them
+ * (`getRemoteResource(..., supportedPrimitives)`); ordinary resource views never get it.
+ * The screen still validates that data before using it.
+ */
+const RICH_REMOTE_RESOURCE_PRIMITIVES: readonly string[] = [
+  'form',
+  'routine-list',
+  'routine-detail',
+  BOT_GROUP_CHAT_PRIMITIVE,
+  'plugin-capabilities',
+  'plugin-card-actions',
+];
+
+/** Routines remain a desktop feature; other portable collections stay available. */
+export function isMobileRemoteCollectionSupported(collectionId: string): boolean {
+  return collectionId !== 'routines';
+}
+
+function assertMobileRemoteCollectionSupported(collectionId: string): void {
+  if (!isMobileRemoteCollectionSupported(collectionId)) {
+    throw new Error('Unsupported mobile resource collection');
+  }
+}
+
 export interface RemoteResourceHostTarget {
   deviceId: string;
   deviceName: string;
+}
+
+/** Availability applies to discovery only; offline entries retain their cached projection. */
+export interface RemoteResourceDiscoveryTarget extends RemoteResourceHostTarget {
+  offline?: boolean;
 }
 
 export interface RemoteHomeCollection {
@@ -49,11 +80,13 @@ export interface RemoteHomeCollection {
 export function remoteResourceDiscoveryTargets(
   devices: readonly { canOpen: boolean; state: string; deviceId: string; name: string }[],
   previous: readonly RemoteHomeCollection[],
-): RemoteResourceHostTarget[] {
+): RemoteResourceDiscoveryTarget[] {
   const known = new Set(previous.flatMap((collection) => collection.targets.map((host) => host.deviceId)));
   return devices
     .filter((device) => device.canOpen || (device.state === 'offline' && known.has(device.deviceId)))
-    .map((device) => ({ deviceId: device.deviceId, deviceName: device.name }));
+    .map((device) => ({ deviceId: device.deviceId, deviceName: device.name,
+      ...(!device.canOpen ? { offline: true } : {}),
+    }));
 }
 
 function clientDescriptor(locale?: string): RemoteResourceClientDescriptor {
@@ -119,7 +152,7 @@ function normalizeRemoteStatus(value: unknown): RemoteResourceStatus | null {
 function normalizeRemoteAvatar(value: unknown): RemoteResourceAvatar | null {
   const record = recordOf(value);
   const kind = boundedString(record?.kind, 64);
-  const avatarValue = boundedString(record?.value, 4_096, true);
+  const avatarValue = boundedString(record?.value, 256_000, true);
   const fallbackText = boundedString(record?.fallbackText, 64, true);
   if (!record || !kind || avatarValue === null || fallbackText === null) return null;
   const color = boundedString(record.color, 64);
@@ -157,6 +190,11 @@ function normalizeRemoteDisplay(value: unknown): RemoteResourceDisplay | null {
     ...(normalizeRemoteTimestamp(record.lastReplyAt) !== undefined ? { lastReplyAt: record.lastReplyAt as number } : {}),
     ...(avatar ? { avatar } : {}),
     ...(status ? { status } : {}),
+    ...(Array.isArray(record.badges) ? { badges: record.badges.slice(0, 8).flatMap(value => {
+      const badge = recordOf(value);
+      const accessibilityLabel = normalizeRemoteText(badge?.accessibilityLabel, 512);
+      return accessibilityLabel ? [{ accessibilityLabel, tone: boundedString(badge?.tone, 64) ?? 'neutral' }] : [];
+    }) } : {}),
   };
 }
 
@@ -205,7 +243,7 @@ function normalizeManifest(value: unknown): RemoteResourceManifestResponse | nul
   if (!record || !Array.isArray(record.collections)) return null;
   const collections = record.collections.flatMap((item) => {
     const descriptor = validDescriptor(item);
-    return descriptor ? [descriptor] : [];
+    return descriptor && isMobileRemoteCollectionSupported(descriptor.id) ? [descriptor] : [];
   });
   const protocolVersion = typeof record.protocolVersion === 'number'
     ? record.protocolVersion
@@ -245,41 +283,39 @@ export async function loadRemoteResourceManifest(
 
 /**
  * Merge the same host-advertised collection across computers. The mobile shell
- * only understands placement and portable display primitives, not module ids.
+ * uses placement and portable display primitives after applying mobile availability.
  */
 export async function discoverRemoteHomeCollections(
   invoke: RemoteInvoke,
-  targets: readonly RemoteResourceHostTarget[],
+  targets: readonly RemoteResourceDiscoveryTarget[],
   locale?: string,
   previous: readonly RemoteHomeCollection[] = [],
 ): Promise<RemoteHomeCollection[]> {
-  const settled = await Promise.allSettled(targets.map(async (target) => ({
+  const cachedManifest = (target: RemoteResourceHostTarget): RemoteResourceManifestResponse => ({
+    protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,
+    collections: previous.filter((collection) => collection.targets.some(
+      (candidate) => candidate.deviceId === target.deviceId,
+    )).map((collection) => ({
+      id: collection.id,
+      resourceKind: collection.resourceKind,
+      title: collection.title,
+      ...(collection.placement ? { placement: collection.placement } : {}),
+      ...(collection.iconName ? { icon: { name: collection.iconName, fallbackText: '' } } : {}),
+    })),
+  });
+  const settled = await Promise.allSettled(targets.map(async ({ offline, ...target }) => ({
     target,
-    manifest: await loadRemoteResourceManifest(invoke, target, locale),
+    manifest: offline ? cachedManifest(target) : await loadRemoteResourceManifest(invoke, target, locale),
   })));
   const discovered = settled.flatMap((result, index) => {
     if (result.status === 'fulfilled') {
       return result.value.manifest ? [result.value] : [];
     }
-    const target = targets[index];
-    if (!target) return [];
-    return previous.flatMap((collection) => collection.targets.some(
-      (candidate) => candidate.deviceId === target.deviceId,
-    ) ? [{
-      target,
-      manifest: {
-        protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,
-        collections: [{
-          id: collection.id,
-          resourceKind: collection.resourceKind,
-          title: collection.title,
-          ...(collection.placement ? { placement: collection.placement } : {}),
-          ...(collection.iconName
-            ? { icon: { name: collection.iconName, fallbackText: '' } }
-            : {}),
-        }],
-      },
-    }] : []);
+    const selected = targets[index];
+    if (!selected) return [];
+    const target = { deviceId: selected.deviceId, deviceName: selected.deviceName };
+    const manifest = cachedManifest(target);
+    return manifest.collections.length ? [{ target, manifest }] : [];
   });
   if (targets.length > 0 && discovered.length === 0) {
     const failure = settled.find((result) => result.status === 'rejected');
@@ -288,7 +324,7 @@ export async function discoverRemoteHomeCollections(
   const byId = new Map<string, RemoteHomeCollection>();
   for (const { target, manifest } of discovered) {
     for (const collection of manifest?.collections ?? []) {
-      if (collection.placement !== 'home-scope') continue;
+      if (collection.placement !== 'home-scope' || !isMobileRemoteCollectionSupported(collection.id)) continue;
       const existing = byId.get(collection.id);
       if (existing && existing.resourceKind === collection.resourceKind) {
         existing.targets.push(target);
@@ -319,6 +355,8 @@ export async function invokeRemoteResourceAction(
   },
   locale?: string,
 ): Promise<RemoteActionInvokeResponse> {
+  assertMobileRemoteCollectionSupported(request.collectionId);
+  if (request.resourceRef) assertMobileRemoteCollectionSupported(request.resourceRef.collectionId);
   return invoke<RemoteActionInvokeResponse>(target.deviceId, REMOTE_RESOURCE_INVOKE_CHANNEL, [{
     client: clientDescriptor(locale),
     ...request,
@@ -332,6 +370,7 @@ export async function getRemoteResource(
   locale?: string,
   supportedPrimitives: readonly string[] = [],
 ): Promise<RemoteResource> {
+  assertMobileRemoteCollectionSupported(ref.collectionId);
   const raw = await invoke<unknown>(target.deviceId, REMOTE_RESOURCE_GET_CHANNEL, [{
     client: { ...clientDescriptor(locale), primitives: [...MOBILE_REMOTE_RESOURCE_PRIMITIVES, ...supportedPrimitives] },
     ref,
@@ -342,7 +381,7 @@ export async function getRemoteResource(
   }
   const source = recordOf(raw);
   // Rich forms are consumed only by the dedicated editor, never ordinary resource views.
-  if (supportedPrimitives.some(primitive => ['form', 'routine-list', 'routine-detail'].includes(primitive))) return {
+  if (supportedPrimitives.some(primitive => RICH_REMOTE_RESOURCE_PRIMITIVES.includes(primitive))) return {
     ...normalized, actions: normalizeRemoteActions(source?.actions), blocks: normalizeRemoteBlocks(source?.blocks),
   };
   const actions: RemoteActionDescriptor[] = Array.isArray(source?.actions)
@@ -401,13 +440,16 @@ function normalizeRemoteCollectionItem(
         return normalized ? [normalized] : [];
       })
     : [];
-  return { ref, display, links, revision };
+  return { ref, display, links, revision,
+    ...(collectionId === 'plugins' ? { actions: normalizeRemoteActions(item.actions) } : {}),
+  };
 }
 
 export function normalizeRemoteCollectionItems(
   value: unknown,
   collectionId: string,
 ): RemoteCollectionItem[] {
+  if (!isMobileRemoteCollectionSupported(collectionId)) return [];
   const record = recordOf(value);
   if (!record || !Array.isArray(record.items)) return [];
   return record.items.slice(0, 200).flatMap((candidate) => {
@@ -440,6 +482,7 @@ export async function listRemoteCollection(
   collectionId: string,
   locale?: string,
 ): Promise<RemoteCollectionListResponse> {
+  assertMobileRemoteCollectionSupported(collectionId);
   return invoke<RemoteCollectionListResponse>(target.deviceId, REMOTE_RESOURCE_LIST_CHANNEL, [{
     client: clientDescriptor(locale),
     collectionId,

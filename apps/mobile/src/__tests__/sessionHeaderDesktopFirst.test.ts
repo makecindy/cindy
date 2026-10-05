@@ -23,6 +23,21 @@ describe('mobile session header desktop-first surface', () => {
     expect(native).toContain('flexShrink: 1');
   });
 
+  it('shows task tags right after the title in every header branch', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const titles = source.split('<SessionHeaderNativeTitle').slice(1)
+      .map((branch) => branch.slice(0, branch.indexOf('/>')));
+    // 竖屏原生标题栏与横屏／折叠屏系统标题栏都要带标签,不能只有一条分支显示。
+    expect(titles).toHaveLength(2);
+    for (const title of titles) {
+      expect(title).toContain('tags={isDeviceAccessRevoked ? undefined : currentSession?.tags}');
+      expect(title).toContain('onTagsPress={onOpenSettings}');
+    }
+    const native = readTextLf(resolve(process.cwd(), 'src/session/SessionHeaderNativeControls.ios.tsx'), 'utf8');
+    const titleRow = native.slice(native.indexOf('{label}'), native.indexOf('<QuietSyncIndicator'));
+    expect(titleRow).toContain('<TaskTagDots');
+  });
+
   it('releases the new-session handoff heavy topic when the session screen unmounts', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
 
@@ -62,15 +77,30 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('<View style={styles.safeArea} testID="session.screen">');
     expect(source).not.toContain('<SafeAreaView style={styles.safeArea} testID="session.screen">');
     expect(source).not.toContain("import { BlurView } from 'expo-blur';");
-    expect(source).toContain("import { BlurBackdrop } from '@/session/BlurBackdrop';");
+    expect(source).toContain("import { BlurBackdrop, FLOATING_CHROME_BLUR_INTENSITY } from '@/session/BlurBackdrop';");
     // iOS floats individual glass capsules over the message canvas.
     expect(source).not.toContain('<TranslucentBackdrop />');
     expect(source).not.toContain('colors.chatHeaderSurface');
     expect(source).toContain('safeArea: { flex: 1, backgroundColor: colors.surface }');
     const chromeStyle = source.slice(source.indexOf('  sessionChrome: {'), source.indexOf('  sessionChromeContent: {'));
-    expect(chromeStyle).toContain("backgroundColor: Platform.OS === 'ios' ? 'transparent' : colors.surface");
+    // Android 顶栏与首页顶栏同一底:半透明 surface + 模糊,并经根浮层盖在常驻消息层之上。
+    expect(chromeStyle).toContain("backgroundColor: 'transparent'");
+    expect(source).toContain('<BlurBackdrop intensity={50} overlayColor={colors.surfaceTranslucent} />');
+    expect(source).toContain('<SessionChromeLayer');
+    expect(source).toContain("topInset={Platform.OS === 'android' ? 0 : topOverlayHeight}");
+    // 输入区同理:安卓整块经根浮层盖在消息层上,外框高度取键盘避让容器的实测高度。
+    expect(source).toContain("const androidFrostedComposer = Platform.OS === 'android' && !companionChat;");
+    expect(source).toContain('bottomInset={androidFrostedComposer ? 0 : bottomOverlayHeight}');
+    expect(source).toContain('height={keyboardAreaHeight ?? windowDimensions.height}');
+    expect(source).toContain('<View onLayout={handleKeyboardAreaLayout} pointerEvents="none" style={StyleSheet.absoluteFill} />');
+    expect(source).toContain('testID="session.composerFrost"');
     expect(source).toContain('<View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
     expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: horizontalSystemHeader ? nativeHeaderHeight : insets.top + (paneLayout.persistent ? spacing.lg : 0) }, companionChat && { backgroundColor: colors.surface }]}>');
+    // 临时任务列表抽屉在树内,盖不住 iOS 系统栏:抽屉存续期间收起系统栏,内容区沿用打开前的顶栏高度。
+    expect(source).toContain(']), sessionListDrawerOverlayMounted);');
+    expect(source).toContain('systemBarHidden={sessionListDrawerOverlayMounted}');
+    // Stack.Toolbar 左右栏会强制 headerShown: true,收起期间整组不渲染。
+    expect(source).toContain('if (systemBarHidden) return <Stack.Screen options={{ headerShown: false }} />;');
     expect(chromeStyle).toContain("position: 'absolute'");
     // Let native glass press feedback extend beyond the 44pt iOS header.
     expect(chromeStyle).toContain("overflow: Platform.OS === 'ios' ? 'visible' : 'hidden'");

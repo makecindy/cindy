@@ -23,7 +23,7 @@ import {
 export type SessionMenuView = 'menu' | 'info';
 
 export interface SessionMenuChip {
-  id: 'pinned' | 'archived' | 'readonly' | 'collab';
+  id: 'pinned' | 'archived' | 'collab';
   label: string;
 }
 
@@ -46,14 +46,10 @@ export interface SessionMenuAction {
   testID: string;
 }
 
-export function buildSessionMenuHeader(
-  session: RemoteSession,
-  input: { readOnlyReason?: string | null },
-): SessionMenuHeaderModel {
+export function buildSessionMenuHeader(session: RemoteSession): SessionMenuHeaderModel {
   const chips: SessionMenuChip[] = [];
   if (session.pinnedAt) chips.push({ id: 'pinned', label: i18n.t('session.menu.chipPinned') });
   if (session.status === 'archived') chips.push({ id: 'archived', label: i18n.t('session.menu.chipArchived') });
-  if (input.readOnlyReason) chips.push({ id: 'readonly', label: i18n.t('session.menu.chipReadOnly') });
   const collabLabel = sessionCollaborationLabel(session);
   if (collabLabel) chips.push({ id: 'collab', label: collabLabel });
 

@@ -1,5 +1,3 @@
-import type { AttachedFile } from '@/lib/fileTypes';
-import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { HomeTaskSuggestion } from './pluginHomeSuggestions';
 
 export interface PluginSuggestionRequest {
@@ -7,11 +5,6 @@ export interface PluginSuggestionRequest {
   ownerId: string;
   targetKey: string;
   workingDir: string | null;
-  model: string;
-  effort: Effort;
-  permissionMode: PermissionMode;
-  providerId?: string | null;
-  files: AttachedFile[];
 }
 export interface PendingPluginSuggestion extends PluginSuggestionRequest {
   nonce: string;

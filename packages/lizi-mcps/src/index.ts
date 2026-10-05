@@ -10,6 +10,7 @@ export const VERSION = '0.0.0';
 
 export * from './types.js';
 export * from './providers.js';
+export type { ToolCallAuthorization, ToolCallAuthorizer } from './tool-call-authority.js';
 
 // feishu/ OpenAPI MCP 模块已于 2026-07-22 整体退役:能力早已迁入插件
 // xd-feishu(2026-07-16 摘壳),其直通面生成器 + vendored OpenAPI 数据源也已

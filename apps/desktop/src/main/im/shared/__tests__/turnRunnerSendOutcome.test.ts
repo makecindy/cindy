@@ -82,6 +82,7 @@ const mocks = vi.hoisted(() => ({
   generateAndPersistFbotTitle: vi.fn(),
   desktopSessionRows: vi.fn(),
   materializeLocalMarkdownImages: vi.fn(),
+  peekGoalInactiveNote: vi.fn(async (): Promise<string | null> => null),
 }));
 
 vi.mock('../../../logger', () => ({
@@ -117,6 +118,10 @@ vi.mock('../../../localDb/client/current', () => ({
 
 vi.mock('../../../localDb/schema', () => ({
   sessions: {},
+}));
+
+vi.mock('../../../goal-host/inactiveNote', () => ({
+  peekGoalInactiveNote: mocks.peekGoalInactiveNote,
 }));
 
 vi.mock('../../../imageCacheStore', () => ({
@@ -607,6 +612,9 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect(streamingHandle.finalize).toHaveBeenCalledTimes(1);
     });
     expect(h.send).toHaveBeenCalledTimes(1);
+    expect(h.send).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      origin: { kind: 'user', surface: 'im' },
+    }));
     expect(mocks.persistUserMessage).toHaveBeenCalledTimes(1);
     expect(mocks.feishuIm.reactToMessage).toHaveBeenCalledTimes(1);
     expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledTimes(1);
@@ -795,6 +803,25 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
   });
 
+  it('prepends the goal inactive note to the agent wire message only', async () => {
+    mocks.peekGoalInactiveNote.mockResolvedValueOnce('GOAL-NOTE');
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn(vi.fn(), { text: 'hello', agentText: 'hello' });
+
+    expect(mocks.peekGoalInactiveNote).toHaveBeenCalledTimes(1);
+    expect(h.send.mock.calls[0]?.[0]).toMatchObject({ content: 'GOAL-NOTE\n\nhello' });
+  });
+
+  it('sends unchanged when reading the goal inactive note fails', async () => {
+    mocks.peekGoalInactiveNote.mockRejectedValueOnce(new Error('db unavailable'));
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn(vi.fn(), { text: 'hello', agentText: 'hello' });
+
+    expect(h.send.mock.calls[0]?.[0]).toMatchObject({ content: 'hello' });
+  });
+
   it('marks only an accepted attached IM turn headless and releases it on done', async () => {
     const sendGate = deferred<SessionSendResult>();
     const h = setupAttachedSession(async () => sendGate.promise);
@@ -887,7 +914,12 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         kind: 'permission',
         behavior: 'allow',
       });
-      expect(handleTextInteraction).toHaveBeenCalledWith('ou_user', request, {
+      expect(handleTextInteraction).toHaveBeenCalledWith('ou_user', expect.objectContaining({
+        ...request,
+        description: expect.stringContaining('来源：'),
+        metadata: expect.objectContaining({ imSourceDescription: expect.stringContaining('来源：') }),
+      }), {
+        sharedPermission: expect.objectContaining({ decide: expect.any(Function) }),
         timeoutMs: 12_345,
       });
       expect(states).toEqual(['waiting', 'resolved']);
@@ -1278,7 +1310,9 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         turnPermissionPolicy,
       });
 
-      expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('feishu-session');
+      expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('feishu-session', {
+        channelOwned: true,
+      });
       expect(oldSession.send).not.toHaveBeenCalled();
       expect(switchedSession.send).toHaveBeenCalledWith(
         expect.anything(),
@@ -2355,6 +2389,185 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     );
   });
 
+  describe('queued message reactions', () => {
+    beforeEach(() => {
+      runner = createTurnRunner(
+        {
+          ...fakeAdapter,
+          processingEmoji: '👨‍💻',
+          queuedEmoji: '👀',
+          terminalReactionEmoji: (kind) => (kind === 'error' ? '👎' : null),
+        },
+        fakeRepo,
+        fakeCards,
+      );
+      mocks.feishuIm.reactToMessage.mockImplementation(async (_id: string, emoji: string) => emoji);
+    });
+
+    it('replaces waiting with processing then clears it without posting a queue notice or success reaction', async () => {
+      const h = setupSession(async () => ({ accepted: true }));
+      h.isTurnRunning.mockReturnValue(true);
+      await runDefaultTurn();
+      await waitForAssertion(() => {
+        expect(mocks.feishuIm.reactToMessage).toHaveBeenLastCalledWith('msg-user', '👀');
+      });
+      expect(h.send).not.toHaveBeenCalled();
+      expect(mocks.feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+
+      h.isTurnRunning.mockReturnValue(false);
+      h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() => {
+        expect(h.send).toHaveBeenCalledTimes(1);
+        expect(mocks.feishuIm.reactToMessage).toHaveBeenLastCalledWith('msg-user', '👨‍💻');
+      });
+      expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-user', '👀');
+
+      mocks.feishuIm.removeMessageReaction.mockClear();
+      h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() => {
+        expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-user', '👨‍💻');
+      });
+      expect(mocks.feishuIm.reactToMessage).not.toHaveBeenCalledWith('msg-user', '👍');
+    });
+
+    it.each(['done', 'stop'] as const)('retains a failed queue-reaction removal for %s cleanup', async terminal => {
+      const h = setupSession(async () => ({ accepted: true }));
+      h.isTurnRunning.mockReturnValue(true);
+      await runDefaultTurn();
+      await waitForAssertion(() => expect(mocks.feishuIm.reactToMessage).toHaveBeenLastCalledWith('msg-user', '👀'));
+      mocks.feishuIm.reactToMessage.mockClear();
+      mocks.feishuIm.removeMessageReaction.mockClear();
+      mocks.feishuIm.removeMessageReaction.mockRejectedValueOnce(new Error('delete failed'));
+      h.isTurnRunning.mockReturnValue(false);
+      h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() => {
+        expect(h.send).toHaveBeenCalledTimes(1);
+        expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-user', '👀');
+      });
+      expect(mocks.feishuIm.reactToMessage).not.toHaveBeenCalled();
+      if (terminal === 'stop') {
+        await getRunner().stopActiveTurn({ botContextId: 'cli_test_bot', userId: 'ou_user' });
+        expect(h.abort).toHaveBeenCalledTimes(1);
+      }
+      h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() => expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledTimes(2));
+      expect(mocks.feishuIm.removeMessageReaction).toHaveBeenLastCalledWith('msg-user', '👀');
+    });
+
+    it.each(['stop', 'dispose'] as const)(
+      'cleans a late waiting reaction on %s',
+      async (operation) => {
+        const waiting = deferred<string>();
+        mocks.feishuIm.reactToMessage.mockImplementation(async (_id: string, emoji: string) =>
+          emoji === '👀' ? waiting.promise : emoji,
+        );
+        const h = setupSession(async () => ({ accepted: true }));
+        h.isTurnRunning.mockReturnValue(true);
+        await runDefaultTurn();
+        await waitForAssertion(() => {
+          expect(mocks.feishuIm.reactToMessage).toHaveBeenCalledWith('msg-user', '👀');
+        });
+        const cleanup =
+          operation === 'stop'
+            ? getRunner().stopActiveTurn({ botContextId: 'cli_test_bot', userId: 'ou_user' })
+            : getRunner().disposeAllSessions();
+        await flushMicrotasks();
+        waiting.resolve('late-waiting');
+        await cleanup;
+        await waitForAssertion(() => {
+          expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith(
+            'msg-user',
+            'late-waiting',
+          );
+        });
+        expect(h.send).not.toHaveBeenCalled();
+        expect(mocks.feishuIm.reactToMessage).not.toHaveBeenCalledWith('msg-user', '👍');
+      },
+    );
+
+    it('does not restore waiting when the initial ack arrives after dispatch and completion', async () => {
+      const ack = deferred<string>();
+      mocks.feishuIm.reactToMessage.mockReturnValueOnce(ack.promise);
+      const h = setupSession(async () => ({ accepted: true }));
+      h.isTurnRunning.mockReturnValue(true);
+      const completed = vi.fn();
+      await runDefaultTurn(completed);
+      h.isTurnRunning.mockReturnValue(false);
+      h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() => expect(h.send).toHaveBeenCalledTimes(1));
+      h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() => expect(completed).toHaveBeenCalledTimes(1));
+      ack.resolve('👨‍💻');
+      await waitForAssertion(() => {
+        expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-user', '👨‍💻');
+      });
+      expect(mocks.feishuIm.reactToMessage).not.toHaveBeenCalledWith('msg-user', '👍');
+      expect(mocks.feishuIm.reactToMessage).not.toHaveBeenCalledWith('msg-user', '👀');
+    });
+
+    it('silently queues transports without retractable feedback and still dispatches later', async () => {
+      runner = createTurnRunner({ ...fakeAdapter, processingEmoji: '', silentQueue: true }, fakeRepo, fakeCards);
+      const h = setupSession(async () => ({ accepted: true }));
+      h.isTurnRunning.mockReturnValue(true);
+      await runDefaultTurn();
+      expect(h.send).not.toHaveBeenCalled();
+      expect(mocks.feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+      h.isTurnRunning.mockReturnValue(false);
+      h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() => expect(h.send).toHaveBeenCalledTimes(1));
+      expect(mocks.feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+    });
+
+    it('does not fall back to a permanent queue notice when the message id is unavailable', async () => {
+      const h = setupSession(async () => ({ accepted: true }));
+      h.isTurnRunning.mockReturnValue(true);
+      await runDefaultTurn(vi.fn(), { userMessageId: '' });
+      expect(h.send).not.toHaveBeenCalled();
+      expect(mocks.feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+    });
+
+    it('stays quiet when reactions are disabled or rejected', async () => {
+      mocks.feishuIm.reactToMessage.mockResolvedValue(null);
+      const h = setupSession(async () => ({ accepted: true }));
+      h.isTurnRunning.mockReturnValue(true);
+      await runDefaultTurn();
+      await waitForAssertion(() => {
+        expect(mocks.feishuIm.reactToMessage).toHaveBeenCalledWith('msg-user', '👀');
+      });
+      expect(mocks.feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+      h.isTurnRunning.mockReturnValue(false);
+      h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() => expect(h.send).toHaveBeenCalledTimes(1));
+      h.emit({ type: 'done', data: {} });
+    });
+
+    it('returns to waiting after a dispatch race and removes it on a later dispatch failure', async () => {
+      const busy = Object.assign(new Error('busy'), { code: 'SESSION_RUNNING' });
+      const h = setupSession(async () => ({ accepted: true }));
+      h.isTurnRunning.mockReturnValue(true);
+      h.send.mockRejectedValueOnce(busy).mockRejectedValueOnce(new Error('startup failed'));
+      const completed = vi.fn();
+      await runDefaultTurn(completed);
+      await waitForAssertion(() => {
+        expect(mocks.feishuIm.reactToMessage).toHaveBeenLastCalledWith('msg-user', '👀');
+      });
+      mocks.feishuIm.reactToMessage.mockClear();
+      h.isTurnRunning.mockReturnValue(false);
+      h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() => {
+        expect(h.send).toHaveBeenCalledTimes(1);
+        expect(mocks.feishuIm.reactToMessage).toHaveBeenLastCalledWith('msg-user', '👀');
+      });
+      expect(completed).not.toHaveBeenCalled();
+      h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() => expect(completed).toHaveBeenCalledTimes(1));
+      expect(h.send).toHaveBeenCalledTimes(2);
+      expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith('msg-user', '👀');
+      expect(mocks.feishuIm.reactToMessage).not.toHaveBeenCalledWith('msg-user', '👍');
+      expect(mocks.feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+    });
+  });
+
   it('queues a second message while the first turn is running and dispatches it after done', async () => {
     mocks.feishuIm.reactToMessage.mockImplementation(
       async (messageId: string) => `reaction-${messageId}`,
@@ -3119,6 +3332,150 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       }),
       { threadTs: undefined },
     );
+  });
+
+  const followRoute = {
+    agentKind: 'claude-code' as const,
+    model: 'claude-opus-4-8',
+    providerId: 'xd',
+    effort: 'xhigh',
+  };
+  const oldRouteRow = {
+    id: 'feishu-session',
+    agentKind: 'claude-code' as const,
+    workingDir: 'F:\\XDMaker',
+    model: 'claude-opus-4-8',
+    effort: 'xhigh' as const,
+    permissionMode: 'auto' as const,
+    fastMode: false,
+    sdkSessionId: null,
+    providerId: 'anthropic',
+  };
+  const followRouteRow = { ...oldRouteRow, providerId: 'xd' };
+  function mockFollowProviders() {
+    mocks.readXdGatewayApiKey.mockReturnValue('xd-gateway-key');
+    mocks.hasCustomProviderKey.mockReturnValue(false);
+    mocks.listProviders.mockResolvedValue([
+      {
+        id: 'xd',
+        name: 'XD',
+        source: 'builtin',
+        connected: true,
+        agents: ['claude-code'],
+        models: { 'claude-code': [{ id: 'claude-opus-4-8' }], codex: [] },
+        routing: {
+          'claude-code': { upstream: 'https://gateway.example', authStrategy: 'gateway-key' },
+        },
+      },
+      {
+        id: 'anthropic',
+        name: 'Anthropic',
+        source: 'builtin',
+        connected: false,
+        agents: ['claude-code'],
+        models: { 'claude-code': [{ id: 'claude-opus-4-8' }], codex: [] },
+        routing: {
+          'claude-code': { upstream: 'https://api.anthropic.com', authStrategy: 'oauth-passthrough' },
+        },
+      },
+    ]);
+  }
+  const followAuthMissingText = () =>
+    ui.agent.authMissing?.({
+      agentKind: 'claude-code',
+      model: 'claude-opus-4-8',
+      providerId: 'anthropic',
+      providerLabel: 'Anthropic',
+      missing: 'provider-disconnected',
+      attached: false,
+    });
+
+  it('re-checks auth on the actual route when the follow switch did not land before send', async () => {
+    // 授权检查只过了「将要切到」的新默认路由; 跟随切换失败被吞后这条消息会按旧路由
+    // 发送 —— 必须按实际路由补一次授权检查, 旧供应商断开时给出缺授权提示, 而不是进
+    // 发送流程运行时失败(PR #5155 review P2)。
+    mockFollowProviders();
+    mocks.findActiveSession.mockResolvedValue(oldRouteRow);
+    mocks.peekSessionById.mockResolvedValue(oldRouteRow);
+    const h = setupSession(async () => ({ accepted: true }));
+    const channelDefaultRoute = {
+      previewSwitchTarget: vi.fn(async () => followRoute),
+      syncBeforeWiring: vi.fn(async () => {}),
+    };
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, { channelDefaultRoute });
+
+    await localRunner.runAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-follow-switch-failed',
+      text: 'follow the new default',
+      attachments: [],
+    });
+
+    expect(channelDefaultRoute.previewSwitchTarget).toHaveBeenCalledWith('feishu-session');
+    expect(h.send).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', followAuthMissingText(), {
+      threadTs: undefined,
+    });
+  });
+
+  it('sends on the followed route without an extra auth rejection when the switch landed', async () => {
+    mockFollowProviders();
+    mocks.findActiveSession.mockResolvedValue(oldRouteRow);
+    mocks.peekSessionById.mockResolvedValue(followRouteRow);
+    const h = setupSession(async () => ({ accepted: true }));
+    const channelDefaultRoute = {
+      previewSwitchTarget: vi.fn(async () => followRoute),
+      syncBeforeWiring: vi.fn(async () => {}),
+    };
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, { channelDefaultRoute });
+
+    await localRunner.runAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-follow-switch-landed',
+      text: 'follow the new default',
+      attachments: [],
+    });
+
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(mocks.feishuIm.sendText).not.toHaveBeenCalledWith(
+      'ou_user',
+      followAuthMissingText(),
+      expect.anything(),
+    );
+  });
+
+  it('re-checks auth on the read-back route when a cold task cannot follow before wiring', async () => {
+    // 未接线的任务接线前先对齐跟随; 切换失败保持旧路由时, 读回的旧路由必须补授权
+    // 检查 —— 否则这条消息会带着只验过新路由的结果接线旧路由(PR #5155 review P2)。
+    mockFollowProviders();
+    mocks.findActiveSession.mockResolvedValue(oldRouteRow);
+    mocks.peekSessionById.mockResolvedValue(oldRouteRow);
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    mocks.getMaker.mockReturnValue({
+      ...createMakerHarness(h.session),
+      getSession: vi.fn(() => undefined),
+    });
+    const channelDefaultRoute = {
+      previewSwitchTarget: vi.fn(async () => followRoute),
+      syncBeforeWiring: vi.fn(async () => {}),
+    };
+    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, { channelDefaultRoute });
+
+    await localRunner.runAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-cold-follow-failed',
+      text: 'follow the new default',
+      attachments: [],
+    });
+
+    expect(channelDefaultRoute.syncBeforeWiring).toHaveBeenCalledWith('feishu-session');
+    expect(h.send).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledWith('ou_user', followAuthMissingText(), {
+      threadTs: undefined,
+    });
   });
 
   it('reuses the default route provider snapshot for new-session auth checks', async () => {
@@ -3906,4 +4263,227 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
     });
   });
 });
+  describe('channel default route follow', () => {
+    function coldMakerHarness(session: Session, order: string[]) {
+      let wired = false;
+      return {
+        getSession: vi.fn(() => (wired ? session : undefined)),
+        createSession: vi.fn(async () => {
+          order.push('wire');
+          wired = true;
+          return session;
+        }),
+        on: vi.fn((listener: (event: MakerEvent) => void) => {
+          makerEventListeners.push(listener);
+          return () => {
+            makerEventListeners = makerEventListeners.filter((candidate) => candidate !== listener);
+          };
+        }),
+      };
+    }
+
+    function providersWith(models: string[]) {
+      return [
+        {
+          id: 'xd',
+          name: 'XD',
+          source: 'builtin',
+          connected: true,
+          agents: ['claude-code', 'codex'],
+          models: { 'claude-code': models.map((id) => ({ id })), codex: [] },
+          routing: {
+            'claude-code': { upstream: 'https://gateway.example', authStrategy: 'gateway-key' },
+            codex: { upstream: 'https://gateway.example/v1', authStrategy: 'gateway-key' },
+          },
+        },
+      ];
+    }
+
+    it('follows the new default before wiring a cold channel task', async () => {
+      mocks.listProviders.mockResolvedValue(providersWith(['claude-opus-4-7', 'claude-opus-4-8']));
+      const order: string[] = [];
+      const h = createSessionHarness(async () => ({ accepted: true }), 'feishu-session');
+      const maker = coldMakerHarness(h.session, order);
+      mocks.getMaker.mockReturnValue(maker);
+      mocks.peekSessionById.mockResolvedValue({
+        id: 'feishu-session',
+        agentKind: 'claude-code',
+        workingDir: 'F:\\XDMaker',
+        model: 'claude-opus-4-8',
+        effort: 'high',
+        permissionMode: 'bypassPermissions',
+        fastMode: false,
+        sdkSessionId: null,
+        providerId: null,
+      });
+      let vendorOptionsDuringSync: Record<string, unknown> | undefined;
+      let localRunner!: ImTurnRunner;
+      const channelDefaultRoute = {
+        previewSwitchTarget: vi.fn(async () => ({
+          agentKind: 'claude-code' as const,
+          model: 'claude-opus-4-8',
+          providerId: null,
+          effort: 'high',
+        })),
+        syncBeforeWiring: vi.fn(async () => {
+          order.push('sync');
+          vendorOptionsDuringSync = localRunner.vendorOptionsForSession('feishu-session');
+        }),
+      };
+      const acquirePendingAgentSwitch = vi.fn(async () => vi.fn());
+      localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+        acquirePendingAgentSwitch,
+        channelDefaultRoute,
+      });
+      try {
+        await localRunner.runAgentTurn({
+          botContextId: 'cli_test_bot',
+          userId: 'ou_user',
+          userMessageId: 'msg-follow-cold',
+          text: 'hello',
+          attachments: [],
+        });
+
+        expect(channelDefaultRoute.previewSwitchTarget).toHaveBeenCalledWith('feishu-session');
+        expect(order).toEqual(['sync', 'wire']);
+        // 切换重建会话(若有)要能拿到渠道 vendorOptions, 否则 bot 专属工具会丢。
+        expect(vendorOptionsDuringSync).toEqual({ feishuChatId: 'ou_user', source: 'feishu' });
+        expect(maker.createSession).toHaveBeenCalledWith(
+          expect.objectContaining({ id: 'feishu-session', model: 'claude-opus-4-8', effort: 'high' }),
+        );
+        expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('feishu-session', {
+          channelOwned: true,
+        });
+        expect(localRunner.vendorOptionsForSession('feishu-session')).toEqual({
+          feishuChatId: 'ou_user',
+          source: 'feishu',
+        });
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+
+    it('wires the current route when no follow switch is due', async () => {
+      const order: string[] = [];
+      const h = createSessionHarness(async () => ({ accepted: true }), 'feishu-session');
+      const maker = coldMakerHarness(h.session, order);
+      mocks.getMaker.mockReturnValue(maker);
+      const channelDefaultRoute = {
+        previewSwitchTarget: vi.fn(async () => null),
+        syncBeforeWiring: vi.fn(async () => undefined),
+      };
+      const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+        acquirePendingAgentSwitch: vi.fn(async () => vi.fn()),
+        channelDefaultRoute,
+      });
+      try {
+        await localRunner.runAgentTurn({
+          botContextId: 'cli_test_bot',
+          userId: 'ou_user',
+          userMessageId: 'msg-follow-none',
+          text: 'hello',
+          attachments: [],
+        });
+
+        expect(channelDefaultRoute.syncBeforeWiring).not.toHaveBeenCalled();
+        expect(maker.createSession).toHaveBeenCalledWith(
+          expect.objectContaining({ id: 'feishu-session', model: 'claude-opus-4-7' }),
+        );
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+
+    it('checks auth against the followed route when the old default is unusable', async () => {
+      // 旧默认指向已断开的供应商; 新默认可用 —— 不能先被「缺授权」挡掉。
+      mocks.listProviders.mockResolvedValue(providersWith(['claude-opus-4-7', 'claude-opus-4-8']));
+      mocks.findActiveSession.mockResolvedValue({
+        id: 'feishu-session',
+        agentKind: 'claude-code',
+        workingDir: 'F:\\XDMaker',
+        model: 'claude-opus-4-7',
+        effort: 'xhigh',
+        permissionMode: 'bypassPermissions',
+        fastMode: false,
+        sdkSessionId: null,
+        providerId: 'disconnected-provider',
+      });
+      mocks.peekSessionById.mockResolvedValue({
+        id: 'feishu-session',
+        agentKind: 'claude-code',
+        workingDir: 'F:\\XDMaker',
+        model: 'claude-opus-4-8',
+        effort: 'high',
+        permissionMode: 'bypassPermissions',
+        fastMode: false,
+        sdkSessionId: null,
+        providerId: 'xd',
+      });
+      const order: string[] = [];
+      const h = createSessionHarness(async () => ({ accepted: true }), 'feishu-session');
+      const maker = coldMakerHarness(h.session, order);
+      mocks.getMaker.mockReturnValue(maker);
+      const channelDefaultRoute = {
+        previewSwitchTarget: vi.fn(async () => ({
+          agentKind: 'claude-code' as const,
+          model: 'claude-opus-4-8',
+          providerId: 'xd',
+          effort: 'high',
+        })),
+        syncBeforeWiring: vi.fn(async () => undefined),
+      };
+      const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+        acquirePendingAgentSwitch: vi.fn(async () => vi.fn()),
+        channelDefaultRoute,
+      });
+      try {
+        await localRunner.runAgentTurn({
+          botContextId: 'cli_test_bot',
+          userId: 'ou_user',
+          userMessageId: 'msg-follow-auth',
+          text: 'hello',
+          attachments: [],
+        });
+
+        expect(channelDefaultRoute.syncBeforeWiring).toHaveBeenCalledWith('feishu-session');
+        expect(maker.createSession).toHaveBeenCalledWith(
+          expect.objectContaining({ model: 'claude-opus-4-8', providerId: 'xd' }),
+        );
+        expect(h.send).toHaveBeenCalled();
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+
+    it('never follows channel defaults on a /ctr attached desktop task', async () => {
+      const h = setupAttachedSession(async () => ({ accepted: true }));
+      const channelDefaultRoute = {
+        previewSwitchTarget: vi.fn(async () => null),
+        syncBeforeWiring: vi.fn(async () => undefined),
+      };
+      const acquirePendingAgentSwitch = vi.fn(async () => vi.fn());
+      const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+        acquirePendingAgentSwitch,
+        channelDefaultRoute,
+      });
+      try {
+        await localRunner.runAgentTurn({
+          botContextId: 'cli_test_bot',
+          userId: 'ou_user',
+          userMessageId: 'msg-follow-attached',
+          text: 'hello',
+          attachments: [],
+        });
+
+        expect(h.send).toHaveBeenCalled();
+        expect(channelDefaultRoute.previewSwitchTarget).not.toHaveBeenCalled();
+        expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('desktop-attached-session', {
+          channelOwned: false,
+        });
+        expect(localRunner.vendorOptionsForSession('desktop-attached-session')).toBeUndefined();
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+  });
 });

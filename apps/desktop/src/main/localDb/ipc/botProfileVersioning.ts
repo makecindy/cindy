@@ -1,5 +1,5 @@
-import { normalizeBotModelChain } from '../../../shared/botModelChain.js';
-import { reconcileBotCapabilityList } from '../../../shared/botCapabilitySelection.js';
+import { normalizeBotModelChain, readBotTaskModelOverride } from '../../../shared/botModelChain.js';
+import { normalizeBotToolCapabilities, reconcileBotCapabilityList } from '../../../shared/botCapabilitySelection.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 
 export function botProfileContentChanged(input: {
@@ -27,9 +27,10 @@ export function mergeBotProfileCapabilities(input: {
   hasSkills: boolean;
   capabilityBaseline?: unknown;
 }): Record<string, unknown> {
+  const previous = normalizeBotToolCapabilities(input.previous);
   const next = input.capabilities
-    ? { ...input.previous, ...input.capabilities }
-    : { ...input.previous };
+    ? { ...previous, ...input.capabilities }
+    : { ...previous };
   if (input.hasSkills) {
     next.skills = Array.isArray(input.skills)
       ? input.skills
@@ -67,6 +68,9 @@ export function normalizeBotProfileModelChain(
   value: Record<string, unknown>,
 ): Record<string, unknown> {
   const next = { ...value };
+  if (Object.prototype.hasOwnProperty.call(next, 'taskModelOverride')) {
+    next.taskModelOverride = readBotTaskModelOverride(next.taskModelOverride);
+  }
   if (Object.prototype.hasOwnProperty.call(next, 'modelChain')) {
     const chain = normalizeBotModelChain(next.modelChain);
     if (chain.length === 0 && next.modelChainOverride !== null && next.modelOverride !== null) {

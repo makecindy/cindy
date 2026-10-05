@@ -147,16 +147,16 @@ export function AccountSwitcherDialog({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)] data-[state=open]:animate-confirm-overlay-in data-[state=closed]:animate-confirm-overlay-out"
+          className="modal-scrim fixed inset-0 z-[10000]"
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           ref={contentRef}
           tabIndex={-1}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] w-[420px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2',
-            'select-none rounded-xl bg-[var(--confirm-bg)] p-5 shadow-[var(--confirm-shadow)]',
-            'data-[state=open]:animate-confirm-content-in data-[state=closed]:animate-confirm-content-out',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] w-[420px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2',
+            'select-none p-5',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
           onOpenAutoFocus={(event) => {

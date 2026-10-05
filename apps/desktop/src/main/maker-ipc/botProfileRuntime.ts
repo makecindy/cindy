@@ -1,3 +1,4 @@
+import { isChatOnlyGroupLane } from '../../shared/botGroupChat.js';
 import { buildTeammateGuide as buildBotCapabilityContextPrompt } from './teammateGuide.js';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { buildBotMemoryScopeKey } from '@cindy/maker-core';
@@ -24,6 +25,8 @@ import {
 import { clearBotAttention, noteBotAttention } from './botAttentionService.js';
 import { createLogger } from '../logger.js';
 import { PROVIDER_NAME_TO_PLUGIN_ID } from '../maker-host/plugins/builtin-plugins.js';
+import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
+import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
@@ -426,9 +429,7 @@ export function resolveBotMcpReferences(input: {
       .map((item) => item.name),
   );
   if (input.mode === 'inherit') {
-    // "Follow Cindy" means available for progressive discovery, not eagerly
-    // mounting every custom server into every Bot context.
-    return { resolved: [], unavailable: [] };
+    return { resolved: input.catalog.filter((item) => item.available !== false).map((item) => item.name), unavailable: [] };
   }
   return {
     resolved: input.configured.filter((name) => available.has(name)),
@@ -445,19 +446,17 @@ export function resolveBotToolsetReferences(input: {
   unavailable: string[];
   disabled: string[];
 } {
-  // Host essentials (for example scheduler) are not necessarily Bot baseline
-  // tools. An explicit per-Bot selection must remain mountable.
-  const configurable = input.catalog.filter((item) => !item.essential || input.configured.includes(item.id));
+  // Essential infrastructure is shared with ordinary tasks; optional selections
+  // only control the remaining entries.
+  const configurable = input.catalog;
   const available = new Set(
     configurable.filter((item) => item.available !== false).map((item) => item.id),
   );
   if (input.mode === 'inherit') {
     return {
-      // Essential Bot runtime tools are mounted separately. Optional Cindy
-      // toolsets stay discoverable but do not flood the Bot by default.
-      resolved: [],
+      resolved: [...available],
       unavailable: [],
-      disabled: configurable.map((item) => item.id),
+      disabled: [],
     };
   }
   const resolved = input.configured.filter((id) => available.has(id));
@@ -465,7 +464,7 @@ export function resolveBotToolsetReferences(input: {
   return {
     resolved,
     unavailable: input.configured.filter((id) => !available.has(id)),
-    disabled: configurable.filter((item) => !resolvedSet.has(item.id)).map((item) => item.id),
+    disabled: configurable.filter((item) => !item.essential && !resolvedSet.has(item.id)).map((item) => item.id),
   };
 }
 
@@ -488,13 +487,15 @@ export async function hydrateBotProfileRuntime(
     .select({
       botId: botSessionLinks.botId,
       role: botSessionLinks.role,
+      routeKey: botSessionLinks.routeKey,
       profileVersion: botSessionLinks.profileVersion,
     })
     .from(botSessionLinks)
     .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
     .where(and(eq(botSessionLinks.sessionId, opts.id), eq(sessions.source, 'bot')))
     .limit(1);
-  if (!row || !['canonical', 'delegation'].includes(row.role)) return null;
+  // Group lanes are long-lived like the canonical Chat and share its Profile/Home.
+  if (!row || !['canonical', 'delegation', 'group'].includes(row.role)) return null;
   const [profile] = await db
     .select()
     .from(botProfiles)
@@ -512,7 +513,17 @@ export async function hydrateBotProfileRuntime(
     )
     .limit(1);
   if (!version) return null;
-  const config = parseObject(version.capabilitiesJson);
+  const chatOnly = row.role === 'group' && isChatOnlyGroupLane(row.routeKey);
+  const config = normalizeBotToolCapabilities(chatOnly ? {
+    toolCapabilityVersion: 1, memory: false, userContextSource: '', skills: [], skillMode: 'allowlist',
+    mcpServers: [], mcpMode: 'allowlist', toolsets: [], toolsetMode: 'allowlist',
+  } : parseObject(version.capabilitiesJson));
+  if (chatOnly) {
+    opts.extraDirs = [];
+    opts.writableDirs = [];
+    opts.makerMemoryIndexSnapshot = '';
+    opts.makerMemoryScopeKey = undefined;
+  }
   const configuredSkills = Array.isArray(config.skills)
     ? config.skills.filter((item): item is string => typeof item === 'string')
     : [];
@@ -696,7 +707,7 @@ export async function hydrateBotProfileRuntime(
   let ownSkillPluginRoots: string[] = [];
   // SSH remote 会话的 harness 跑在远端文件系统上,本机 userData 里的技能目录
   // 在那边不存在 —— 与其挂一串打不开的路径,不如这类会话直接不挂。
-  if (deps.listOwnSkills && !opts.remoteHostId) {
+  if (!chatOnly && deps.listOwnSkills && !opts.remoteHostId) {
     try {
       const own = await deps.listOwnSkills({ botId: row.botId });
       ownSkills = [...(own.baseline && row.role === 'canonical' ? [own.baseline.skill] : []), ...own.skills];
@@ -729,9 +740,7 @@ export async function hydrateBotProfileRuntime(
       resolvedMcpServers = resolvedMcp.resolved;
       unavailableMcpServers = resolvedMcp.unavailable;
     } catch {
-      mcpCatalog = [];
-      resolvedMcpServers = [];
-      unavailableMcpServers = mcpMode === 'allowlist' ? configuredMcpServers : [];
+      throw new Error('无法读取伙伴的 MCP 能力目录，请重试；不会以空能力列表启动。');
     }
   } else if (mcpMode === 'allowlist') {
     unavailableMcpServers = configuredMcpServers;
@@ -743,7 +752,7 @@ export async function hydrateBotProfileRuntime(
   let unavailableToolsets: string[] = [];
   let disabledToolsets: string[] = [];
   let runtimeToolsetMode: 'inherit' | 'allowlist' = toolsetMode;
-  if (deps.listToolsets) {
+  if (!chatOnly && deps.listToolsets) {
     runtimeToolsetMode = 'allowlist';
     try {
       toolsetCatalog = await deps.listToolsets({
@@ -761,10 +770,7 @@ export async function hydrateBotProfileRuntime(
       unavailableToolsets = resolvedToolsetsResult.unavailable;
       disabledToolsets = resolvedToolsetsResult.disabled;
     } catch {
-      toolsetCatalog = [];
-      resolvedToolsets = [];
-      unavailableToolsets = toolsetMode === 'allowlist' ? configuredToolsets : [];
-      disabledToolsets = [];
+      throw new Error('无法读取伙伴的工具能力目录，请重试；不会以空能力列表启动。');
     }
   } else if (toolsetMode === 'allowlist') {
     unavailableToolsets = configuredToolsets;
@@ -773,21 +779,28 @@ export async function hydrateBotProfileRuntime(
     toolsetMode === 'inherit' ? [...resolvedToolsets] : [...configuredToolsets];
   // 工具集与内置 MCP 共用宿主映射；已选择的能力必须同轮进入 MCP allowlist。
   // 显式挂载 docs 时提示词会承诺文档能力，其他工具集同样需要真正挂载。
-  // 开头记录的那类事故:「提示词说有,运行时够不到」。
+  // 开头记录的那类事故:「提示词说有,运行时够不到」。伙伴基线工具集（如 scheduler）
+  // 不经用户选择也挂载，同样要写进 allowlist，否则插件挂上了 MCP 却够不到。
+  const mountedToolsets = new Set([
+    ...resolvedToolsets,
+    ...toolsetCatalog
+      .filter((item) => BOT_BASELINE_PLUGIN_IDS.has(item.id) && item.available !== false)
+      .map((item) => item.id),
+  ]);
   for (const [serverName, toolsetId] of Object.entries(PROVIDER_NAME_TO_PLUGIN_ID)) {
-    if (toolsetId === 'collab' || !resolvedToolsets.includes(toolsetId) || runtimeConfiguredMcpServers.includes(serverName)) continue;
+    if (!mountedToolsets.has(toolsetId) || runtimeConfiguredMcpServers.includes(serverName)) continue;
     if (mcpCatalog.some((item) => item.name === serverName && item.available !== false)) {
       runtimeConfiguredMcpServers.push(serverName);
     }
   }
-  const identity = version.identitySource.trim();
+  const identity = chatOnly ? profile.description : version.identitySource.trim();
   opts.botProfilePrompt = buildBotProfilePrompt({
     displayName: profile.displayName,
     identitySource: identity,
     description: profile.description,
   });
-  const helperAvailable = !opts.remoteHostId || opts.agentKind === 'pi'
-    || toolsetCatalog.some((item) => item.id === 'xdt_helper' && item.available !== false);
+  const helperAvailable = !chatOnly && (!opts.remoteHostId || opts.agentKind === 'pi'
+    || toolsetCatalog.some((item) => item.id === 'xdt_helper' && item.available !== false));
   // Local sessions always mount the cindy gateway. Remote Claude/Codex do not
   // (REMOTE_ALLOWED_SERVER_NAMES). Remote Pi tunnels cindy via the MCP bridge.
   const cindyAvailable = !opts.remoteHostId || opts.agentKind === 'pi';
@@ -807,6 +820,10 @@ export async function hydrateBotProfileRuntime(
     // index must not hide the instructions for learning the first reusable method.
     ownSkillsEnabled: row.role === 'canonical' && helperAvailable && !opts.remoteHostId,
     botModeEnabled: row.role === 'canonical',
+    // Match the ordinary helper surface on this engine and transport.
+    sessionControlEnabled: helperAvailable && (!opts.remoteHostId || opts.agentKind === 'pi'),
+    // scheduler 是伙伴基线工具(maker-host/plugins/types.ts),与挂载 allowlist 同一份目录判定。
+    automationEnabled: toolsetCatalog.some((item) => item.id === 'scheduler' && item.available !== false),
   };
   /*
     伙伴的家。读失败一律当"没有" —— 一次读不动不该让整个伙伴起不来,只是这一轮
@@ -820,7 +837,7 @@ export async function hydrateBotProfileRuntime(
   } | null = null;
   // Local userData paths are meaningless on a remote harness. Do not promise or
   // mount a Home there until the host provisions an actual remote-owned path.
-  if (deps.readProfileFolder && !opts.remoteHostId) {
+  if (!chatOnly && deps.readProfileFolder && !opts.remoteHostId) {
     folderPrompt = await deps
       .readProfileFolder({ botId: row.botId })
       .catch(() => null);
@@ -1032,11 +1049,13 @@ export async function hydrateBotProfileRuntime(
           : JSON.stringify(previousResolved.runtimeEpoch ?? {}),
       )
     : null;
-  const runtimeEpochChanged = row.role === 'canonical' && previousSnapshot !== undefined
+  // Canonical Chats and group lanes follow Profile updates; delegation children stay frozen.
+  const followsProfile = row.role === 'canonical' || row.role === 'group';
+  const runtimeEpochChanged = followsProfile && previousSnapshot !== undefined
     ? previousSnapshot.profileVersion !== row.profileVersion
       || previousRuntimeEpoch?.sha256 !== runtimeEpochSha256
     : false;
-  if (previousSnapshot && row.role !== 'canonical') {
+  if (previousSnapshot && !followsProfile) {
     if (!previousResolved) {
       throw Object.assign(
         new Error('Bot runtime snapshot is invalid'),

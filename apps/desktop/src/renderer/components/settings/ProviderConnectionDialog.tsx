@@ -32,7 +32,6 @@ import {
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Tip } from '@/components/ui/tooltip';
@@ -528,7 +527,6 @@ export function ProviderConnectionDialog({
   const imageGenerationHelpPointerSuppressionFrameRef = useRef<number | null>(null);
   const imageGenerationHelpPointerSuppressionGenerationRef = useRef(0);
   const modelFetchInFlightRef = useRef(false);
-  const scrimRef = useRef<HTMLDivElement>(null);
   const dialogPanelRef = useRef<HTMLDivElement>(null);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
   // 原生 window listener 的生命周期不跟着每次 render 重绑；layout effect 只把
@@ -669,24 +667,6 @@ export function ProviderConnectionDialog({
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [dismissImageGenerationHelp, dismissTopmostLayer, showImageGenerationHelp]);
-
-  useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      if (event.target !== scrimRef.current) return;
-      if (!childLayerRef.current && !runtimeFillRef.current) return;
-
-      // This must run before Radix's document-capture outside-dismiss. The
-      // scrim gesture belongs to the dialog's current child layer; consuming
-      // it here prevents Radix from committing a closed popover before the
-      // form can settle that layer exactly once.
-      event.preventDefault();
-      event.stopPropagation();
-      dismissTopmostLayer();
-    };
-    window.addEventListener('pointerdown', onPointerDown, { capture: true });
-    return () => window.removeEventListener('pointerdown', onPointerDown, true);
-  }, [dismissTopmostLayer]);
 
   useEffect(() => {
     const returnFocusElement =
@@ -2012,18 +1992,8 @@ export function ProviderConnectionDialog({
 
   return (
     <div
-      ref={scrimRef}
       data-custom-provider-dialog-scrim="true"
-      className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
-      onPointerDown={(event) => {
-        // pointerdown 时先按当前层级结算，避免 Popover 的 outside-dismiss 在随后
-        // click 前把状态改成 closed，令同一次手势继续误关底层表单。
-        if (event.button === 0 && event.target === event.currentTarget && !saving && !runtimeFill) {
-          event.preventDefault();
-          event.stopPropagation();
-          dismissTopmostLayer();
-        }
-      }}
+      className="modal-scrim fixed inset-0 z-[10000] flex items-center justify-center"
       onKeyDown={(event) => {
         if (childLayer || runtimeFill || imageGenerationReloadConfirmation) return;
         if (event.key !== 'Tab') return;
@@ -2076,9 +2046,7 @@ export function ProviderConnectionDialog({
           }
         }}
         className={cn(
-          'flex max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col rounded-xl outline-none',
-          'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-          'shadow-[var(--shadow-menu)]',
+          'modal-panel flex max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col outline-none',
           '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-[var(--focus-ring)]',
         )}
       >
@@ -2853,9 +2821,10 @@ export function ProviderConnectionDialog({
           }}
         >
           <Dialog.Portal>
-            <Dialog.Overlay className="fixed inset-0 z-[10002] bg-[var(--overlay-modal)] data-[state=open]:animate-confirm-overlay-in data-[state=closed]:animate-confirm-overlay-out" />
+            <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10002]" />
             <Dialog.Content
               aria-describedby="custom-provider-image-generation-reload-description"
+              onPointerDownOutside={(event) => event.preventDefault()}
               onOpenAutoFocus={(event) => {
                 event.preventDefault();
                 document.getElementById('custom-provider-image-generation-reload-primary')?.focus();
@@ -2868,9 +2837,7 @@ export function ProviderConnectionDialog({
                 if (saving) event.preventDefault();
               }}
               className={cn(
-                'fixed inset-0 z-[10002] m-auto flex h-fit max-h-[85vh] w-[520px] max-w-[calc(100vw-2rem)] flex-col rounded-xl p-4 outline-none',
-                'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
-                'data-[state=open]:animate-confirm-content-layout-in data-[state=closed]:animate-confirm-content-layout-out',
+                'modal-panel fixed inset-0 z-[10002] m-auto flex h-fit max-h-[85vh] w-[520px] max-w-[calc(100vw-2rem)] flex-col p-4 outline-none',
               )}
             >
               <button
@@ -2954,19 +2921,6 @@ export function ModelPickerOverlay({
         (m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q),
       )
     : picker.models;
-  useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      const target = event.target;
-      if (target instanceof Node && contentRef.current?.contains(target)) return;
-      // Close only the picker and consume the gesture before it can reach the form beneath it.
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-    };
-    window.addEventListener('pointerdown', onPointerDown, { capture: true });
-    return () => window.removeEventListener('pointerdown', onPointerDown, true);
-  }, [onClose]);
   const toggle = (id: string) => {
     const next = new Set(picker.selected);
     if (next.has(id)) next.delete(id);
@@ -2986,14 +2940,14 @@ export function ModelPickerOverlay({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10001] bg-[var(--overlay-modal)]',
-            'data-[state=open]:animate-confirm-overlay-in data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10001]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
           ref={contentRef}
           aria-describedby="custom-provider-model-picker-description"
+          onPointerDownOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => {
             if (event.isComposing || event.keyCode === 229) event.preventDefault();
           }}
@@ -3010,11 +2964,8 @@ export function ModelPickerOverlay({
             returnFocusRef.current?.focus();
           }}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
-            'flex max-h-[72vh] w-[460px] max-w-[calc(100vw-2rem)] flex-col rounded-xl outline-none',
-            'border border-[var(--border-default)] bg-[var(--confirm-bg)]',
-            'shadow-[var(--confirm-shadow)]',
-            'data-[state=open]:animate-confirm-content-in data-[state=closed]:animate-confirm-content-out',
+            'modal-panel fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
+            'flex max-h-[72vh] w-[460px] max-w-[calc(100vw-2rem)] flex-col outline-none',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >

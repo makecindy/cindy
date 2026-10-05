@@ -10,8 +10,6 @@
   },
   "renderer": {
     "moreActions": "その他のメッセージ操作",
-    "previousQuestionJump": "前の質問へ移動：{{preview}}",
-    "noPreview": "プレビューなし",
     "newMessagesToBottom": "新着メッセージあり、最下部へ移動",
     "jumpToBottom": "最下部へ移動",
     "openForkOrigin": "分岐元メッセージを開く",
@@ -32,6 +30,10 @@
     "expand": "展開",
     "automationOriginNamed": "自動化タスク「{{name}}」から送信",
     "automationOrigin": "自動化タスクから送信",
+    "sessionOriginNamed": "セッション「{{name}}」から送信",
+    "botOriginNamed": "仲間「{{name}}」から送信",
+    "sessionOrigin": "別のセッションから送信",
+    "openSessionOrigin": "送信元のセッションを開きます",
     "modelMismatch": "今回は選択した {{selected}} ではなく {{actual}} が応答しました（サーバー側の一時的なダウングレード）",
     "copyStateCopying": "コピー中",
     "copyStateCopied": "コピーしました",
@@ -63,6 +65,11 @@
     "subagentTyped": "サブエージェント · {{type}}",
     "subagent": "サブエージェント",
     "workedDuration": "作業時間 {{duration}}",
+    "durationSeconds": "{{seconds}}秒",
+    "durationMinutes": "{{minutes}}分",
+    "durationMinutesSeconds": "{{minutes}}分{{seconds}}秒",
+    "durationHoursMinutes": "{{hours}}時間{{minutes}}分",
+    "durationDaysHoursMinutes": "{{days}}日{{hours}}時間{{minutes}}分",
     "subagentSummary": "サブエージェントの要約",
     "agentSwitchLabel": "{{from}} から {{to}} に切り替えました",
     "agentSwitchViewHandoff": "{{label}}、引き継ぎ内容を表示",
@@ -86,7 +93,6 @@
     "retryFetch": "取得を再試行",
     "openMedia": "メディアを開く",
     "readCurrentRemoteFile": "現在のリモートファイルを読み取り",
-    "reading": "読み取り中",
     "retryFilePreview": "ファイルプレビューを再試行",
     "readCurrentFile": "現在のファイルを読み取り",
     "currentFilePreview": "現在のファイルのプレビュー",
@@ -119,17 +125,17 @@
     "mediaSize": "サイズ: {{size}}",
     "mediaExpiresAt": "有効期限: {{time}}",
     "mediaErrorLine": "エラー: {{message}}",
-    "mediaDeviceLinkHint": "モバイルは device-link 経由でリモートデバイスにメディアのアップロードを要求してから開きます。",
+    "mediaDeviceLinkHint": "開く前に、スマートフォンからリモートデバイスにこのメディアのアップロードを依頼します。",
     "controlDelete": "メッセージを削除",
-    "controlRewind": "ここまで戻す",
-    "controlFork": "セッションを分岐",
+    "controlRewind": "ここまで戻る",
+    "controlFork": "ここから新しいセッションを始める",
     "markdownDocAriaLabel": "メッセージ本文",
     "toolOutputTitle": "{{label}} の出力",
     "toolInputTitle": "{{label}} の入力",
     "viewToolInput": "完全な入力を表示",
     "loadingToolInput": "完全な入力を読み込み中",
     "retryToolInput": "入力を読み込めませんでした。再試行",
-    "toolResultCompacted": "Full tool output was released (original size {{size}})",
+    "toolResultCompacted": "ツールの完全な出力は解放されました（元のサイズ：{{size}}）",
     "mermaidEmpty": "空の Mermaid 図。",
     "diffEditCount": "{{n}} 件の編集"
   },
@@ -142,6 +148,8 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "sourceMissing": "このコンピューターに元の画像がありません。元のファイルを再度インポートしてください。",
+    "deviceOffline": "コンピューターが未接続です。再接続してからお試しください。",
     "cancelAnnotation": "注釈をキャンセル",
     "cancel": "キャンセル",
     "undoLastStroke": "直前の描画を取り消す",
@@ -155,7 +163,13 @@
     "loadFailed": "画像の読み込みに失敗",
     "retryLoadImage": "画像の読み込みを再試行",
     "retry": "再試行",
-    "closeImage": "画像を閉じる"
+    "closeImage": "画像を閉じる",
+    "discardAnnotationTitle": "注釈を破棄しますか？",
+    "discardAnnotationBody": "保存されていない描画は失われます。",
+    "continueAnnotating": "注釈を続ける",
+    "discardAnnotation": "破棄",
+    "annotateUnavailableTitle": "現在は注釈できません",
+    "annotateImageUnavailable": "画像に注釈（現在利用不可）"
   },
   "queue": {
     "continueSystemInstruction": "未完了のタスクを続行(システム指令)",
@@ -249,12 +263,13 @@
     },
     "row": {
       "syntheticEditDisabled": "システム指令メッセージは編集や割り込み送信ができません。",
+      "autoSentEditDisabled": "自動送信されたメッセージは編集や割り込み送信ができません。",
       "first": "すでにキューの先頭です。",
       "last": "すでにキューの末尾です。",
       "steering": "割り込み送信中",
       "orcaTitle": "コラボレーションキュー {{index}}",
       "title": "キュー {{index}}",
-      "orcaReadOnly": "コラボレーションメッセージはデスクトップで編成され、モバイルでは読み取り専用です。",
+      "orcaEditDisabled": "コラボレーションメッセージは編集や割り込み送信ができません。",
       "busy": "キュー操作を同期中です。完了後にもう一度操作してください。",
       "steeringDisabled": "現在の turn に割り込みを送信中です。デスクトップから戻るまでお待ちください。",
       "editLocked": "このキューメッセージは編集中です。完了後に操作してください。",
@@ -307,7 +322,7 @@
     "inlineMediaData": "インライン{{kind}}データ",
     "mediaActionsAvailable": "デスクトップアプリでは、このメディアの追加操作を利用できます。",
     "availableActions": "利用可能な操作：{{actions}}",
-    "mediaActionsDesktopOnly": "モバイル版 V1 ではこれらの操作を表示するだけで、リモート実行はまだできません。デスクトップアプリに戻って選択してください。",
+    "mediaActionsDesktopOnly": "スマートフォンでは現在これらの操作を表示するだけです。パソコンで操作してください。",
     "moreEdits": "…ほか {{count}} 件の編集"
   },
   "quote": {
@@ -317,5 +332,10 @@
     "remove": "引用を削除",
     "closePreview": "引用プレビューを閉じる",
     "menuLabel": "チャットに追加"
+  },
+  "learning": {
+    "memory": "記憶しました：{{title}}",
+    "skillCreated": "スキルを作成：{{title}}",
+    "skillUpdated": "スキルを更新：{{title}}"
   }
 }

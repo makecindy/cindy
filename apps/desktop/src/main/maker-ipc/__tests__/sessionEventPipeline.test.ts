@@ -1,3 +1,4 @@
+import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js';
 import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
@@ -28,6 +29,10 @@ const effects = vi.hoisted(() => {
 // Account discovery persistence is outside this runtime/route fixture.
 vi.mock('../../maker-host/model-discovery/xai.js', () => ({
   discardXaiModelsDiskCache: vi.fn(async () => {}),
+}));
+
+vi.mock('../../local-model-runtime/preflight.js', () => ({
+  ensureManagedOllamaReadyForSession: effects.fn('ensureManagedOllamaReadyForSession'),
 }));
 
 vi.mock('../../logger.js', () => ({
@@ -241,6 +246,7 @@ function harness() {
   });
   const activity = new SessionTurnActivityTracker();
   const deps = {
+    onPluginTaskTerminal: vi.fn(),
     onSuccessfulProductTurn: vi.fn(async () => {}),
     onUnsuccessfulProductTurn: vi.fn(async () => {}),
     log,
@@ -296,6 +302,7 @@ function harness() {
     silentStopTurnLeaseGate: { turnLeaseIdForEvent: vi.fn(() => 'instance:1') },
     agentInputCoordinatorHolder: {
       getActiveInputClientId: vi.fn((): string | null => null),
+      getActiveInputClientIds: vi.fn((): string[] => []),
       getQueueControlSnapshot: vi.fn(() => ({ pendingQueue: [] as unknown[] })),
       onTurnEvent: vi.fn(),
       noteSuppressedTerminalError: vi.fn(),
@@ -392,6 +399,37 @@ function ordered(...names: string[]) {
 }
 
 describe('production Session event pipeline', () => {
+  it('suppresses scheduled content before persistence and delivery while preserving unrelated replies', async () => {
+    const h = harness();
+    const close = beginQuietScheduledOutput('check', 'check-run');
+    const origin = { kind: 'scheduler' as const, scheduleId: 'check', scheduleName: 'Check', runId: 'check-run' };
+    try {
+      h.emit(event('text', { text: 'I will check now', isFinal: false }, { turnOrigin: origin }));
+      h.emit(event('text', { text: 'No changes', isFinal: true }, { turnOrigin: origin }));
+      h.emit(event('text', { text: 'Standalone progress' }, { turnOrigin: origin, standaloneText: true }));
+      h.emit(event('tool_use', { id: 'tool', name: 'check', input: {} }, { turnOrigin: origin }));
+      expect(effects.fn('onAssistantTextEvent')).not.toHaveBeenCalled();
+      expect(effects.fn('onStandaloneTextEvent')).not.toHaveBeenCalled();
+      expect(h.deps.broadcastToAllWindows).not.toHaveBeenCalled();
+      h.emit(event('text', { text: 'Interactive reply', isFinal: true }));
+      expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+      expect(h.deps.broadcastToAllWindows).toHaveBeenCalled();
+    } finally { close(); await h.dispose(); }
+  });
+
+  it('keeps redacted terminal fields redacted for quiet scheduler output', async () => {
+    const h = harness();
+    const close = beginQuietScheduledOutput('check', 'redaction-run');
+    const origin = { kind: 'scheduler' as const, scheduleId: 'check', scheduleName: 'Check', runId: 'redaction-run' };
+    h.deps.redactEventForRenderer.mockImplementation(value => ({ ...value, data: { result: 'redacted result', metadata: 'safe' } }));
+    try {
+      h.emit(event('done', { result: 'No changes', metadata: 'private diagnostic' }, { turnOrigin: origin }));
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).not.toContain('private diagnostic');
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).not.toContain('redacted result');
+      expect(JSON.stringify(h.deps.broadcastToAllWindows.mock.calls)).toContain('safe');
+    } finally { close(); await h.dispose(); }
+  });
+
   it('delivers Pi notices as durable rows without entering model streaming or turn bookkeeping', async () => {
     const h = harness();
     h.deps.redactEventForRenderer.mockImplementation((value) => value);
@@ -459,6 +497,24 @@ describe('production Session event pipeline', () => {
       await h.dispose();
     },
   );
+  it.each(['completed', 'failed', 'cancelled', 'interrupted'])(
+    'preserves the plugin terminal %s before generic failure bookkeeping', async status => {
+      const h = harness();
+      h.emit(event('done', { status }, {
+        sessionInstanceId: h.session.instanceId, sessionTurnGeneration: 0,
+      }));
+      await microtasks();
+      expect(h.deps.onPluginTaskTerminal).toHaveBeenCalledWith('task', {
+        instanceId: h.session.instanceId, generation: 0,
+      }, status, undefined);
+      if (status !== 'completed') {
+        expect(h.deps.onPluginTaskTerminal.mock.invocationCallOrder[0]).toBeLessThan(
+          h.deps.onUnsuccessfulProductTurn.mock.invocationCallOrder[0],
+        );
+      }
+      await h.dispose();
+    },
+  );
   it.each([
     ['zh-CN', 'Pi 扩展未能完成刷新。请重启 Cindy 后再使用 Pi。'],
     ['zh-TW', 'Pi 擴充功能未能完成重新整理。請重新啟動 Cindy 後再使用 Pi。'],
@@ -479,7 +535,7 @@ describe('production Session event pipeline', () => {
     effects.fn('onAssistantTextEvent').mockClear();
     effects.fn('broadcast').mockClear();
     h.emit(receipt);
-    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', { ...data, text }, null);
+    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', { ...data, text }, null, undefined);
     expect(effects.fn('broadcast')).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
       sessionId: 'task', event: { ...receipt, data: { ...data, text } },
     }));
@@ -509,7 +565,7 @@ describe('production Session event pipeline', () => {
     const h = harness();
     const data = { isFinal: true, text: 'partial: restart-cindy-to-refresh-packages' };
     h.emit(event('text', data, { source: 'pi' }));
-    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', data, null);
+    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', data, null, undefined);
     await h.dispose();
   });
 
@@ -904,6 +960,31 @@ describe('provider turn observer on real Session.send', () => {
       },
     };
   }
+  it('awaits llama.cpp readiness on an existing task before dispatch and propagates startup failure', async () => {
+    const h = harness();
+    const gate = deferred();
+    effects.fn('getSessionProvider').mockReturnValue('cindy-local-llamacpp');
+    const ready = effects.fn('ensureManagedOllamaReadyForSession').mockImplementation(() => gate.promise);
+    const dispose = installSessionTurnObserver(observerDeps(), h.session);
+    try {
+      const sending = h.session.send('continue existing task');
+      await vi.waitFor(() => expect(ready).toHaveBeenCalledOnce());
+      expect(h.handle.send).not.toHaveBeenCalled();
+      gate.resolve();
+      await sending;
+      expect(ready).toHaveBeenCalledWith({ providerId: 'cindy-local-llamacpp', onlyIfStopped: true });
+      expect(h.handle.send).toHaveBeenCalledOnce();
+      h.emit(event('done', {}));
+      ready.mockRejectedValue(new Error('NOT_INSTALLED'));
+      await expect(h.session.send('next turn')).rejects.toThrow('NOT_INSTALLED');
+      expect(h.handle.send).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+      dispose();
+      await h.dispose();
+    }
+  });
+
   it('holds the send reservation while waiting for the local project boundary', async () => {
     const harnessState = harness();
     const gate = deferred();
@@ -964,6 +1045,7 @@ describe('provider turn observer on real Session.send', () => {
   it('does not apply the local project boundary to a remote session', async () => {
     const harnessState = harness();
     Object.defineProperty(harnessState.session, 'remoteHostId', { value: 'ssh-host' });
+    effects.fn('getSessionProvider').mockReturnValue('cindy-local-llamacpp');
     const beforeLocalProviderStart = vi.fn(async () => {});
     const dispose = installSessionTurnObserver(
       { ...observerDeps(), beforeLocalProviderStart }, harnessState.session,
@@ -971,6 +1053,7 @@ describe('provider turn observer on real Session.send', () => {
     try {
       await harnessState.session.send('test');
       expect(beforeLocalProviderStart).not.toHaveBeenCalled();
+      expect(effects.fn('ensureManagedOllamaReadyForSession')).not.toHaveBeenCalled();
       expect(harnessState.handle.send).toHaveBeenCalledOnce();
     } finally {
       dispose();
@@ -1519,6 +1602,23 @@ describe('Bot adapters in the shared event pipeline', () => {
     }));
   });
 
+  it('attributes group-lane turns as private and hands the terminal to the group chat', async () => {
+    const h = harness();
+    const settleLaneTurn = vi.fn(async () => true);
+    (h.deps as unknown as { botGroupChatServiceHolder: unknown }).botGroupChatServiceHolder = { settleLaneTurn };
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-group:g1:turn:bot-a');
+    h.emit(event('text', { text: '我来补充' }));
+    expect(h.deps.broadcastToAllWindows).toHaveBeenLastCalledWith('maker:event', expect.objectContaining({
+      event: expect.objectContaining({ agentMeta: expect.objectContaining({ botPrivateReply: true, botGroupLane: true }) }),
+    }));
+    h.emit(event('done', { result: '我来补充' }));
+    await microtasks();
+    expect(settleLaneTurn).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'task', activeInputClientId: 'bot-group:g1:turn:bot-a', outcome: 'done', resultText: '我来补充',
+    }));
+    await h.dispose();
+  });
+
   it('carries a pending follow-up into task settlement and remembers compact boundaries without rebuilding early', async () => {
     const h = harness();
     h.emit(event('compact_boundary'));
@@ -1532,4 +1632,16 @@ describe('Bot adapters in the shared event pipeline', () => {
     }));
     expect(h.deps.attemptBotCompactRuntimeRefresh).toHaveBeenCalledWith(h.session, 'event:done');
   });
+});
+
+it('captures task completion inputs before queue advancement and binds only a successful final', async () => {
+  const h = harness();
+  h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['bot-delegation-completion:a', 'human']);
+  h.deps.agentInputCoordinatorHolder.onTurnEvent.mockImplementation(() => {
+    h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['bot-delegation-completion:next']);
+  });
+  effects.fn('consumeLastTopLevelAssistantPersistId').mockReturnValueOnce('summary');
+  h.emit(event('done', { status: 'completed', result: 'Summary' }));
+  expect(effects.fn('markAssistantTurnCompleted')).toHaveBeenCalledWith('task', 'summary', undefined, ['bot-delegation-completion:a']);
+  await h.dispose();
 });

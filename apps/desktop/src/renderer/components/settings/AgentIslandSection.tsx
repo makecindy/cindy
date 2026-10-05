@@ -273,7 +273,7 @@ export function AgentIslandSection() {
 
       <SettingsCard className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+          <p id="settings-search-settings-agentIsland-enableLabel" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
             {t('settings.agentIsland.enableLabel')}
           </p>
           <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
@@ -292,7 +292,7 @@ export function AgentIslandSection() {
         <>
           <SettingsCard className="flex flex-col gap-3">
             <div className="flex min-w-0 flex-col gap-1">
-              <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+              <p id="settings-search-settings-agentIsland-displayLabel" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
                 {t('settings.agentIsland.displayLabel')}
               </p>
               <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
@@ -337,7 +337,7 @@ export function AgentIslandSection() {
 
           <SettingsCard className="flex flex-col gap-4">
             <div className="flex min-w-0 flex-col gap-1">
-              <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+              <p id="settings-search-settings-agentIsland-skinLabel" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
                 {t('settings.agentIsland.skinLabel')}
               </p>
               <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
@@ -362,7 +362,7 @@ export function AgentIslandSection() {
           <SettingsCard className="flex flex-col gap-3">
             <div className="flex items-center justify-between gap-3">
               <div className="flex min-w-0 flex-col gap-1">
-                <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+                <p id="settings-search-settings-agentIsland-soundLabel" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
                   {t('settings.agentIsland.soundLabel')}
                 </p>
                 <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">

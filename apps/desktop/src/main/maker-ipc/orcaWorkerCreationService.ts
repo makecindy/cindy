@@ -99,6 +99,8 @@ export function providerRouteRequiresExplicitSelection(
 
 /** 同一次 provider registry 快照派生出的可用性与默认模型路由，避免两次读取产生竞态。 */
 export interface OrcaWorkerProviderRoutingContext {
+  /** SSH catalogs own both admission and defaults; never mix controller capabilities. */
+  remoteCodexModels?: OrcaWorkerModelCapabilities[];
   availability: Record<AgentKind, OrcaWorkerProviderSnapshot[]>;
   resolveDefaultProviderIdForModel(agent: AgentKind, model: string): string | null;
 }
@@ -201,11 +203,20 @@ export interface OrcaWorkerCreateInTeamParams extends OrcaWorkerCreateParams {
   workerPermissionMode: OrcaWorkerPermissionMode;
 }
 
+export type OrcaWorkerCreationPlanValidator = (
+  params: OrcaWorkerCreateInTeamParams,
+  resolvedWorkingDir?: string,
+  resolvedRoute?: { model: string; providerId: string | null; effort: string | null; fastMode: boolean },
+  assertCurrent?: () => Promise<void>,
+) => Promise<number | null | undefined>;
+
 /** creation service 的 I/O 边界；register.ts 负责把 DB、Maker 与 broadcast 注入进来。 */
 export interface OrcaWorkerCreationDeps {
   getActiveTeamByLead(leadSessionId: string): Promise<OrcaTeamSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaWorkerListSnapshot[]>;
   isActiveWorkerStatus(status: OrcaWorkerStatus): boolean;
+  withLeadSendLock?<T>(leadSessionId: string, operation: () => Promise<T>): Promise<T>;
+  validateCreationPlan?: OrcaWorkerCreationPlanValidator;
   readCollaborationSettings(): { workerSoftLimit: number; workerHardLimit: number };
   getLeadSessionRow(leadSessionId: string): Promise<OrcaLeadSessionSnapshot | null>;
   getWorkerDefaults(agent: AgentKind): OrcaWorkerDefaultsSnapshot;
@@ -218,7 +229,7 @@ export interface OrcaWorkerCreationDeps {
    * availability 只保留已连接 provider 的最小视图；显式 model 的默认来源解析复用
    * model-providers 的 effectiveSourceIdForModel，避免在创建服务里复制供应商优先级。
    */
-  getProviderRoutingContext(): Promise<OrcaWorkerProviderRoutingContext>;
+  getProviderRoutingContext(agent?: AgentKind, remoteHostId?: string | null): Promise<OrcaWorkerProviderRoutingContext>;
   readClaudeApiKey(): string | null;
   reserveWorkerCreation(input: {
     reservationId: string;
@@ -269,8 +280,9 @@ export interface OrcaWorkerCreationDeps {
 
 /** Orca worker 创建服务，只负责创建既有 team 下的新 worker，不负责 team lifecycle。 */
 export interface OrcaWorkerCreationService {
-  createWorker(params: OrcaWorkerCreateParams): Promise<OrcaWorkerCreationResult>;
-  createWorkerInTeam(params: OrcaWorkerCreateInTeamParams): Promise<OrcaWorkerCreationResult>;
+  createWorker(params: OrcaWorkerCreateParams, assertCurrent?: () => Promise<void>): Promise<OrcaWorkerCreationResult>;
+  createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
+    onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult>;
 }
 
 function toInternalFailure(err: unknown): Extract<OrcaWorkerCreationResult, { ok: false }> {
@@ -593,7 +605,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     await deps.archiveWorkerSession(sessionId).catch(() => undefined);
   }
 
-  async function createWorker(params: OrcaWorkerCreateParams): Promise<OrcaWorkerCreationResult> {
+  async function createWorker(params: OrcaWorkerCreateParams, assertCurrent?: () => Promise<void>): Promise<OrcaWorkerCreationResult> {
     const team = await deps.getActiveTeamByLead(params.leadSessionId);
     if (!team) {
       return { ok: false, errorCode: 'NOT_FOUND', message: 'no active team for this lead' };
@@ -605,10 +617,11 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         params.workerPermissionMode === undefined
           ? deps.getWorkerPermissionMode()
           : resolveOrcaWorkerPermissionMode(params.workerPermissionMode),
-    });
+    }, assertCurrent);
   }
 
-  async function createWorkerInTeam(params: OrcaWorkerCreateInTeamParams): Promise<OrcaWorkerCreationResult> {
+  async function createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
+    onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult> {
     const role = normalizeRequiredText(params.role, 'role');
     if (!role.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: role.message };
     if (role.value.length > 32) {
@@ -616,13 +629,22 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     }
     const label = normalizeOrcaWorkerLabel(params.label);
     if (!label.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: label.message };
+    params = { ...params, label: label.value };
+    const validatePlan = async (workingDir?: string, route?: Parameters<OrcaWorkerCreationPlanValidator>[2]) => {
+      await assertCurrent?.();
+      // Host validation runs the captured source check before its final synchronous
+      // directory grant check. No trailing await may stale that grant observation.
+      return deps.validateCreationPlan?.(params, workingDir, route, assertCurrent);
+    };
 
     const existing = await deps.listWorkersByLead(params.leadSessionId);
     if (existing.some((worker) => worker.label?.toLowerCase() === label.value)) {
       return { ok: false, errorCode: 'DUPLICATE_LABEL', message: `label "${label.value}" already used in this team` };
     }
 
-    const settings = deps.readCollaborationSettings();
+    const planLimit = await validatePlan();
+    const settings = {...deps.readCollaborationSettings()};
+    if (planLimit != null) settings.workerHardLimit = Math.min(settings.workerHardLimit, planLimit);
     const activeCount = existing.filter((worker) => deps.isActiveWorkerStatus(worker.status)).length;
     if (activeCount >= settings.workerHardLimit) {
       return {
@@ -632,7 +654,10 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         limit: limitSnapshot(settings.workerHardLimit, activeCount),
       };
     }
-    const availableModels = deps.getAvailableModels(params.agent);
+    const lead = await deps.getLeadSessionRow(params.leadSessionId);
+    if (!lead) {
+      return { ok: false, errorCode: 'NOT_FOUND', message: `lead session ${params.leadSessionId} not found` };
+    }
     // 标准面板显式选定的来源(非空 string)直接生效,由下方精确 preflight 把关「已连接且
     // 提供该模型」;空串/null/undefined 一律按未显式处理(与 IPC 边界同口径,service 作为
     // 共用内核自防调用方漏归一)。
@@ -640,7 +665,8 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       typeof params.providerId === 'string' && params.providerId.trim().length > 0
         ? params.providerId.trim()
         : null;
-    const providerRouting = await deps.getProviderRoutingContext();
+    const providerRouting = await deps.getProviderRoutingContext(params.agent, lead.remoteHostId);
+    const availableModels = providerRouting.remoteCodexModels ?? deps.getAvailableModels(params.agent);
     const providerAvailability = providerRouting.availability;
     const agentProviders = providerAvailability[params.agent] ?? [];
     const explicitModelResolution = params.model !== undefined
@@ -680,11 +706,6 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       };
     }
 
-    const lead = await deps.getLeadSessionRow(params.leadSessionId);
-    if (!lead) {
-      return { ok: false, errorCode: 'NOT_FOUND', message: `lead session ${params.leadSessionId} not found` };
-    }
-
     let workingDir = lead.workingDir ?? '';
     if (params.workingDir !== undefined) {
       const requested = typeof params.workingDir === 'string' ? params.workingDir : '';
@@ -706,7 +727,10 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     // workingDir), ensureRemoteReadyForSessionStart 对 pi 已支持 silent install +
     // pi-manager 预上传, orca_worker_bridge 工具面经 SSH remote-forward 隧道注入。
     // 与 CC/Codex remote worker 同构;此闸会让 remote pi lead 完全无法使用 pi worker。
-    const defaults = deps.getWorkerDefaults(params.agent);
+    const defaults: OrcaWorkerDefaultsSnapshot = providerRouting.remoteCodexModels
+      ? { model: lead.agentKind === 'codex' && availableModels.some((model) => model.id === lead.model)
+          ? lead.model : availableModels[0]?.id, providerId: 'openai' }
+      : deps.getWorkerDefaults(params.agent);
     const workerDefaultProviderId =
       typeof defaults.providerId === 'string' && defaults.providerId.trim()
         ? defaults.providerId.trim()
@@ -983,13 +1007,23 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       | { ok: true; occupiedSlotsBefore: number }
       | { ok: false; errorCode: 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'WORKER_LIMIT_HARD_EXCEEDED' };
     try {
-      reservation = await deps.reserveWorkerCreation({
-        reservationId: workerId,
-        teamId: params.teamId,
-        label: label.value,
-        hardLimit: settings.workerHardLimit,
-        leaseMs: ORCA_WORKER_CREATION_RESERVATION_LEASE_MS,
-      });
+      const admit = async () => {
+        // Preparation may await providers or remote state. Re-read the plan at
+        // the final admission boundary shared with plan registration and input.
+        const latestLimit = await validatePlan(workingDir, resolved);
+        settings.workerHardLimit = deps.readCollaborationSettings().workerHardLimit;
+        if (latestLimit != null) settings.workerHardLimit = Math.min(settings.workerHardLimit, latestLimit);
+        return deps.reserveWorkerCreation({
+          reservationId: workerId,
+          teamId: params.teamId,
+          label: label.value,
+          hardLimit: settings.workerHardLimit,
+          leaseMs: ORCA_WORKER_CREATION_RESERVATION_LEASE_MS,
+        });
+      };
+      reservation = deps.withLeadSendLock
+        ? await deps.withLeadSendLock(params.leadSessionId, admit)
+        : await admit();
     } catch (err) {
       return toInternalFailure(err);
     }
@@ -1017,6 +1051,12 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     renewalTimer.unref?.();
 
     try {
+      // Registration may race the preflight. Once a reservation exists, a new
+      // plan cannot be registered; reread any plan that won before reservation.
+      const reservedPlanLimit = await validatePlan(workingDir, resolved);
+      if (reservedPlanLimit != null && reservation.occupiedSlotsBefore >= reservedPlanLimit) {
+        return { ok: false, errorCode: 'WORKER_LIMIT_HARD_EXCEEDED', message: 'Registered plan concurrency reached' };
+      }
       const workerSessionId = deps.createSessionId();
       const workerVendorOptions = {
         orcaRole: 'worker' as const,
@@ -1054,6 +1094,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         if (lead.remoteHostId && deps.ensureRemoteReadyForSessionStart) {
           await deps.ensureRemoteReadyForSessionStart({ createOpts: workerOpts });
         }
+        await assertCurrent?.();
         const bootstrapped = await deps.bootstrapSession(workerOpts);
         workerSession = bootstrapped.session;
       } catch (err) {
@@ -1069,6 +1110,13 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       }
 
       try {
+        // Bootstrap and lease renewal both await external work. Reuse the same
+        // admission validator before recording a Worker that lifecycle can dispatch.
+        const finalPlanLimit = await validatePlan(workingDir, resolved);
+        if (finalPlanLimit != null && reservation.occupiedSlotsBefore >= finalPlanLimit) {
+          await cleanupBootstrappedWorkerSession(workerSession.id);
+          return { ok: false, errorCode: 'WORKER_LIMIT_HARD_EXCEEDED', message: 'Registered plan concurrency reached' };
+        }
         await deps.addOrUpdateWorker({
           id: workerId,
           teamId: params.teamId,
@@ -1088,12 +1136,16 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
 
       try {
         await deps.markOrcaRoleIfNeeded(workerSession.id, 'worker');
+        await validatePlan(workingDir, resolved);
       } catch (err) {
         await cleanupBootstrappedWorkerSession(workerSession.id);
         await deps.removeWorker(workerId).catch(() => undefined);
         return toInternalFailure(err);
       }
 
+      // Carry the resolved spawn facts through lifecycle/accepted callbacks only;
+      // neither the function nor its closure is part of the public result.
+      onCreated?.(async () => { await validatePlan(workingDir, resolved); });
       return {
         ok: true,
         teamId: params.teamId,

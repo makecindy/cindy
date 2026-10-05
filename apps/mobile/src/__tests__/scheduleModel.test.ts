@@ -167,7 +167,8 @@ describe('schedule model', () => {
     const runs = [
       run({ id: 'running', status: 'running', readAt: undefined }),
       run({ id: 'failed', status: 'failed', errorMsg: 'boom', readAt: undefined }),
-      run({ id: 'read', status: 'success', readAt: NOW }),
+      // 这条已读成功发生在失败之前，不构成恢复。
+      run({ id: 'read', status: 'success', firedAt: NOW - 120_000, readAt: NOW }),
     ];
 
     expect(countUnreadRuns(runs, NOW)).toBe(1);

@@ -1,12 +1,13 @@
 import { useAdaptiveWindow, PaneViewportProvider, FloatingSheetContext } from '@/platform/AdaptiveWindowContext';
 import { modalLayout } from '@/platform/modalLayout';
+import { NativeBottomSheet } from './NativeBottomSheet';
 /**
  * SheetModal —— 底部 sheet 共用的 Modal 外壳(背板淡入淡出 + 面板自底部滑入滑出)。
  *
  * 动机:此前 5 个底部 sheet 都用 `<Modal animationType="slide">` 且压暗背板放在 Modal
  * 内容里,导致背板跟着面板一起从底部升起(视觉跳变,违反规则 7)。本组件把两层动画拆开:
- *   - 背板:absoluteFill,原地纯透明度淡入(150ms easeOut)/ 淡出(120ms easeIn),
- *     对齐 DeviceMenuModal 的 §14.4 ≤150ms 纯透明度过渡模式;
+ *   - 背板:absoluteFill,原地纯透明度淡入(motionDuration.enter)/ 淡出(motionDuration.exit),
+ *     按 §14.4 重浮层档位;减弱动态效果下直接到位;
  *   - 内容层:justifyContent flex-end,translateY 由同一 progress 驱动自底部滑入滑出,
  *     面板(SheetSurface 或 ad-hoc 面板)由调用方作为 children 放入。
  * 关闭动画播完才卸载 Modal(mounted 状态),避免面板/背板瞬间消失的空白帧。
@@ -31,9 +32,13 @@ import { BlurBackdrop } from '@/session/BlurBackdrop';
 import { GestureHandlerRootView } from '@/platform/gestureHandler';
 import { useMobileKeyboardState } from '@/session/useMobileKeyboardState';
 import { useModalFadeLifecycle } from '@/session/useModalFadeLifecycle';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { useThemedStyles, type ThemeColors } from '@/theme';
+import { motionDuration } from '@/theme/tokens';
 
 export interface SheetModalProps {
+  /** Single-level, unconditional dismissal only. Nested Back / unsaved draft veto keeps the compatibility shell. */
+  nativePresentation?: boolean;
   visible: boolean;
   /** Android 返回键 / iOS 关闭手势(调用方可做两段式:二级先回一级)。 */
   onRequestClose: () => void;
@@ -49,7 +54,17 @@ export interface SheetModalProps {
   children: ReactNode;
 }
 
-export function SheetModal({
+export function SheetModal(props: SheetModalProps) {
+  const geometry = useAdaptiveWindow();
+  const { floating } = modalLayout(geometry, 0);
+  // Floating/hinged layouts retain pane placement rather than a full-window dialog.
+  if (Platform.OS === 'android' && props.nativePresentation && !floating && geometry.regions.length === 0) {
+    return <NativeBottomSheet visible={props.visible} onClose={props.onBackdropPress} onClosed={props.onClosed}>{props.children}</NativeBottomSheet>;
+  }
+  return <CompatibleSheetModal {...props} />;
+}
+
+function CompatibleSheetModal({
   visible,
   onRequestClose,
   onBackdropPress,
@@ -69,9 +84,12 @@ export function SheetModal({
     || geometry.insets.left > 0 || geometry.insets.right > 0;
   const [contentHeight, setContentHeight] = useState(geometry.height);
   // 背板淡入 + 面板滑入共用一条 progress;关闭淡出/滑出播完后再卸载 Modal。
+  // sheet 是重浮层:入场 motionDuration.enter / 退场 exit(§14.4);减弱动态效果(含未查询到的
+  // 首帧)时长为 0,直接到位。
+  const reduceMotion = useReduceMotionEnabled();
   const { mounted, progress, onShowStartIn } = useModalFadeLifecycle(visible, {
-    inMs: 150,
-    outMs: 120,
+    inMs: reduceMotion === false ? motionDuration.enter : 0,
+    outMs: reduceMotion === false ? motionDuration.exit : 0,
     onClosed,
   });
 
@@ -122,6 +140,7 @@ export function SheetModal({
       </PaneViewportProvider>
     </Animated.View>
   );
+
 
   return (
     <Modal

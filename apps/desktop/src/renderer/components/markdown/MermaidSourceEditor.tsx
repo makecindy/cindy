@@ -176,22 +176,18 @@ function MermaidSourceEditor({
         isVisible ? 'opacity-100' : 'opacity-0',
       )}
     >
-      <div
-        className={cn('absolute inset-0', 'bg-[var(--overlay-modal)]')}
-        onClick={() => close(false)}
-      />
+      {/* The scrim does not dismiss: a stray click outside must not discard the
+          draft. Cancel and Escape remain the ways out (DESIGN §4 Dialog). */}
+      <div className="modal-scrim absolute inset-0" />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={t('ccAgent.workdirBrowse.mermaidEditor.title', '编辑 mermaid 源码')}
         className={cn(
-          'relative z-[61] flex flex-col',
+          'modal-panel relative z-[61] flex flex-col',
           'w-[min(880px,90vw)] h-[min(640px,80vh)]',
-          'rounded-[14px] overflow-hidden',
-          'bg-[var(--surface-elevated)] border border-[var(--border-default)]',
-          'shadow-[var(--shadow-menu)]',
+          'overflow-hidden',
         )}
-        onClick={(e) => e.stopPropagation()}
       >
         <div
           className={cn(

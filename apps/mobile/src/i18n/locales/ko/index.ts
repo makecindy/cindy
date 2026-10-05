@@ -1,3 +1,4 @@
+import plugins from './plugins.json';
 import taskTags from './taskTags.json';
 /**
  * 本 locale 的 catalog 组装:每个区域一个 JSON 文件、一个顶级 key,
@@ -13,6 +14,7 @@ import composer from './composer.json';
 import deviceLink from './deviceLink.json';
 import devices from './devices.json';
 import files from './files.json';
+import groupChat from './groupChat.json';
 import home from './home.json';
 import interaction from './interaction.json';
 import message from './message.json';
@@ -25,6 +27,7 @@ import startup from './startup.json';
 import update from './update.json';
 
 export default {
+  plugins,
   taskTags,
   remoteDesktop,
   apiErrors,
@@ -33,6 +36,7 @@ export default {
   deviceLink,
   devices,
   files,
+  groupChat,
   home,
   interaction,
   message,

@@ -17,6 +17,7 @@ import { useProviders } from '@/hooks/useProviders';
 import { useEffect, useState } from 'react';
 import { isCodexResumeNotReadyProjectionError } from '@cindy/maker-shared/agent-input-projection';
 import { isCindyGatewayProxyTokenInvalidError, isResponsesLiteParallelToolCallsError, parseAgentErrorCode, redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import { chatRemoteErrorGuidanceKey } from '@/lib/autoReviewUnavailableGuidance';
 import {
   AlertCircle,
   Check,
@@ -114,6 +115,8 @@ interface ErrorBannerProps {
    *  重试,如 codex 网络 retry-loop 透出)。网络类分支据此区分文案:「正在自动
    *  重试…」vs「服务暂时不可达,可点击重试」。历史尾部行恒为 false。 */
   isRecoverable?: boolean;
+  /** 当前任务来源。个人微信不能建议切到完全访问。 */
+  sessionSource?: string | null;
   style?: React.CSSProperties;
   className?: string;
 }
@@ -140,6 +143,7 @@ export function ErrorBanner({
   onForkStripEncrypted,
   forkStripEncryptedRunning = false,
   isRecoverable = false,
+  sessionSource,
   style,
   className,
 }: ErrorBannerProps) {
@@ -172,6 +176,13 @@ export function ErrorBanner({
   // 必须等其它本地 Codex 任务全部结束。main 侧用 CREDENTIAL_SWITCH_BUSY: 前缀编码
   // (makerSendTransaction),这里换成可操作文案;Retry 保留 —— 其它任务结束后重试即成功。
   const isCredentialSwitchBusy = error.startsWith('CREDENTIAL_SWITCH_BUSY:');
+  // Main 侧账号边界未稳定(换号中 / 状态待修复 / 边界锁被占)时的内部错误,原文对用户
+  // 无意义。锁被占与换号会在边界提交后自愈;状态待修复要等下一次账号提交(重启时冷启动
+  // 必然提交),所以文案同时给出「稍后重试」与「一直出现就重启」。原始错误仍可展开查看。
+  const isAccountBoundaryPending =
+    /Ghost skill projection (?:is not stable|is quarantined)|projection boundary lock is busy/.test(
+      error,
+    );
   // Codex 单例 app-server 切换鉴权模式(或服务重启)后,旧会话的 thread 随旧进程销毁,
   // 续聊会撞 codex 'thread not found'。把这个看不懂的协议错换成可操作的友好提示:
   // 新建会话即可在新模式下生效(重开本会话走 thread/resume 也可)。'thread not found'
@@ -294,7 +305,7 @@ export function ErrorBanner({
         ? t(errorReasonI18nKey)
         : undefined;
   const remoteErrorCode = parseAgentErrorCode(error)?.code;
-  const remoteErrorKey = remoteErrorCode ? `chat.remoteError.${remoteErrorCode}` : undefined;
+  const remoteErrorKey = chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource);
   const remoteGuidance = remoteErrorKey && i18n.exists(remoteErrorKey) ? t(remoteErrorKey) : undefined;
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   const isCodexUsageLimitError =
@@ -364,6 +375,8 @@ export function ErrorBanner({
     displayError = t('ipcError.PI_IMAGE_INPUT_UNSUPPORTED');
   } else if (isCredentialSwitchBusy) {
     displayError = t('chat.errorBanner.credentialSwitchBusy');
+  } else if (isAccountBoundaryPending) {
+    displayError = t('chat.errorBanner.accountBoundaryPending');
   } else if (isCodexAppServerForceRetired) {
     displayError = t('chat.errorBanner.codexAppServerRetired');
   } else if (isCodexThreadStale) {

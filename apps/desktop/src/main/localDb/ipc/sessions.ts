@@ -1,3 +1,4 @@
+import { openSession } from '../sessionOpening.js';
 /**
  * chat-data-localization F5：Sessions IPC handlers（C6）。
  *
@@ -61,8 +62,6 @@ import {
 } from '../mapper';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
 import { recomputePrRefsForSession } from '../../git-context/prRefsStore';
-import { ensureProjectGitInitialized } from '../../git-snapshot/projectGitBootstrap';
-import { readGitSafetySettings } from '../../maker-host/git-safety-settings-store';
 import * as imageCacheStore from '../../imageCacheStore';
 import { removeSessionRefsIfDeleted as removeDeletedSessionMediaRefs } from '../../cindy-media/ledger';
 import { removeWechatSessionAttachmentDir } from '../../im/wechat/mediaStaging';
@@ -101,6 +100,7 @@ import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
 import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
 import { cleanupSessionRuntimeForTerminalStatus } from '../sessionRuntimeCleanup.js';
+import { requestSessionArchiveSync } from '../sessionArchiveSync.js';
 import { cindyMakeManager } from '../../cindy-make/manager.js';
 import { recycleCindyMakeTask } from '../../cindy-make/taskManagement.js';
 import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
@@ -610,6 +610,7 @@ function notifyGhostSessionStatusChange(
   status: unknown,
   workingDir?: string | null,
 ): void {
+  if (status === 'active' || status === 'archived') requestSessionArchiveSync();
   if (status !== 'archived') return;
   void import('../../cindy-brain/index.js')
     .then((m) =>
@@ -1435,27 +1436,15 @@ export function registerSessionIpc(
         );
       }
     }
-    // body 透传 agentKind / orcaRole 给 mapper；非法值已由上方校验拦截，默认值由 mapper 兜底。
-    const insertRow = sessionCreateToRow(id, { ...createBody, workspaceKind, workingDir }, now);
-    const gitSafety = readGitSafetySettings();
-    await ensureProjectGitInitialized({
-      workingDir: insertRow.workingDir,
-      workspaceKind: insertRow.workspaceKind,
-      remoteHostId: insertRow.remoteHostId,
-      sessionId: id,
-      autoSnapshotEnabled: gitSafety.autoSnapshotEnabled,
-      autoInitProjectGit: gitSafety.autoInitProjectGit,
-      source: 'local-db:sessions:create',
+    const { row: insertRow } = await openSession({ id, now,
+      body: { ...createBody, workspaceKind, workingDir },
+    }, async (prepared, assertCurrent) => {
+      const resource = !prepared.remoteHostId && prepared.workingDir
+        ? managedWorktreeRoot(prepared.workingDir) : null;
+      const insert = async () => { assertCurrent(); await db.insert(sessions).values(prepared); };
+      if (resource) await withWorktreeMutation([resource], insert);
+      else await insert();
     });
-    const resource =
-      !insertRow.remoteHostId && insertRow.workingDir
-        ? managedWorktreeRoot(insertRow.workingDir)
-        : null;
-    const insert = async () => {
-      await db.insert(sessions).values(insertRow);
-    };
-    if (resource) await withWorktreeMutation([resource], insert);
-    else await insert();
     const [row] = await db.select().from(sessions).where(eq(sessions.id, id));
     if (!row) throwIpcError('NOT_FOUND', 'Session 创建后查询失败');
     // recent-workdirs: 项目目录走 sidebar 分组,要进"最近"列表;dialogue 目录是

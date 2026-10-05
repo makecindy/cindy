@@ -5,7 +5,7 @@
  * 由 data-state=open 表达展开态。
  */
 
-import type { ButtonHTMLAttributes } from 'react';
+import type { ReactNode, ButtonHTMLAttributes } from 'react';
 import type { LucideIcon } from 'lucide-react';
 
 import { Tip } from '@/components/ui/tooltip';
@@ -36,6 +36,7 @@ export interface SidebarIconButtonProps
   showDot?: boolean;
   /** 状态点语义色,默认 done(绿);有失败未读时传 'error'。 */
   dotTone?: DotTone;
+  badge?: ReactNode;
 }
 
 export function SidebarIconButton({
@@ -44,6 +45,7 @@ export function SidebarIconButton({
   active = false,
   showDot = false,
   dotTone = 'done',
+  badge,
   className,
   disabled,
   title,
@@ -56,6 +58,7 @@ export function SidebarIconButton({
       disabled={disabled}
       className={cn(
         BTN_BASE,
+        badge && 'relative',
         RAIL_GEOMETRY,
         active ? ACTIVE : IDLE,
         className,
@@ -64,6 +67,7 @@ export function SidebarIconButton({
       aria-hidden={disabled ? true : undefined}
     >
       <Icon size={18} />
+      {badge && <span className="absolute -right-1 -top-1">{badge}</span>}
       {showDot && <AttentionDot size={6} tone={dotTone} className="absolute right-1.5 top-1.5" />}
     </button>
   );

@@ -41,6 +41,7 @@ describe('Bot Profile versioning', () => {
     ).toEqual({
       model: 'new-model',
       memory: false,
+      toolCapabilityVersion: 1, toolsetMode: 'inherit', mcpMode: 'inherit',
       skills: ['new-skill', 'second-skill'],
     });
   });
@@ -113,4 +114,55 @@ it('distinguishes model selections from identity and capability-only refreshes',
   for (const patch of [{ harness: 'pi' }, { model: 'model-b' }, { providerId: 'xd' }, { effort: 'high' }, { fastMode: true }]) {
     expect(botProfileModelSelectionChanged(previous, { ...previous, modelChain: [{ ...route, ...patch }] })).toBe(true);
   }
+});
+
+
+describe('independent task model configuration', () => {
+  const route = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false };
+  it('preserves the complete route without changing the primary model or its selection revision', () => {
+    const before = { modelChainOverride: null, model: 'primary' };
+    const after = normalizeBotProfileModelChain({ ...before, taskModelOverride: route });
+    expect(after).toEqual({ ...before, taskModelOverride: route });
+    expect(botProfileModelSelectionChanged(before, after)).toBe(false);
+    expect(normalizeBotProfileModelChain({ ...after, taskModelOverride: null }).taskModelOverride).toBeNull();
+    expect(normalizeBotProfileModelChain(before)).toEqual(before);
+  });
+  it.each([{ ...route, harness: 'unknown' }, { ...route, model: '' }, { ...route, fastMode: 'true' }])('rejects incomplete task routes: %j', taskModelOverride => {
+    expect(() => normalizeBotProfileModelChain({ taskModelOverride })).toThrow();
+  });
+});
+
+
+describe('shared tools migration', () => {
+  it.each(['ask', 'auto', 'trusted'])('opens legacy lists without changing %s permissions', (permissions) => {
+    const previous = { permissions, toolsetMode: 'allowlist', toolsets: [], mcpMode: 'allowlist', mcpServers: ['imported'], memory: false };
+    const next = mergeBotProfileCapabilities({ previous, hasSkills: false });
+    expect(next).toMatchObject({ toolCapabilityVersion: 1, toolsetMode: 'inherit', mcpMode: 'inherit', permissions, memory: false, mcpServers: ['imported'] });
+    expect(mergeBotProfileCapabilities({ previous: next, hasSkills: false })).toEqual(next);
+  });
+
+  it.each([
+    [{ toolsetMode: 'allowlist', toolsets: ['browser'], mcpMode: 'allowlist', mcpServers: [] }, 'inherit', 'inherit'],
+    [{ toolsetMode: 'allowlist', toolsets: ['docs'], mcpMode: 'allowlist', mcpServers: ['private'] }, 'inherit', 'inherit'],
+    [{ toolsets: ['docs'], mcpServers: ['private'] }, 'inherit', 'inherit'],
+    [{ toolsetMode: 'inherit', toolsets: ['docs'], mcpMode: 'inherit', mcpServers: ['private'] }, 'inherit', 'inherit'],
+    [{ tools: ['files', 'browser', 'mcp'] }, 'inherit', 'inherit'],
+    [{ mcpMode: 'allowlist', mcpServers: ['companion_connections'] }, 'inherit', 'inherit'],
+    [{ toolCapabilityVersion: 1, toolsetMode: 'allowlist', toolsets: [], mcpMode: 'allowlist', mcpServers: [] }, 'allowlist', 'allowlist'],
+    [{ toolCapabilityVersion: 1, toolsetMode: 'allowlist', toolsets: ['docs'], mcpMode: 'allowlist', mcpServers: ['private'] }, 'allowlist', 'allowlist'],
+  ] as const)('migrates legacy lists and preserves versioned choices: %j', (previous, toolsetMode, mcpMode) => {
+    const next = mergeBotProfileCapabilities({ previous, hasSkills: false });
+    expect(next).toEqual({ ...previous, toolCapabilityVersion: 1, toolsetMode, mcpMode });
+    expect(mergeBotProfileCapabilities({ previous: next, hasSkills: false })).toEqual(next);
+  });
+
+  it('persists an explicit selection after migration and preserves concurrent selections', () => {
+    const next = mergeBotProfileCapabilities({
+      previous: { toolCapabilityVersion: 1, toolsetMode: 'inherit', toolsets: [] },
+      capabilities: { toolsetMode: 'allowlist', toolsets: ['docs'] },
+      capabilityBaseline: { toolsets: [] }, hasSkills: false,
+    });
+    expect(mergeBotProfileCapabilities({ previous: next, hasSkills: false }))
+      .toMatchObject({ toolsetMode: 'allowlist', toolsets: ['docs'], mcpMode: 'inherit' });
+  });
 });

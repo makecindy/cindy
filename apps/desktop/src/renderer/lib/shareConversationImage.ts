@@ -267,7 +267,10 @@ export async function inlineCloneImages(root: HTMLElement): Promise<void> {
         img.remove();
         return;
       }
-      if (!isImageBytesReachable(src)) {
+      // Bundled avatars use relative asset URLs. Read them like the bundled
+      // footer artwork; absolute/managed URLs retain the shared byte reader.
+      const relativeAsset = !/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(src);
+      if (!relativeAsset && !isImageBytesReachable(src)) {
         log.warn('share image: unreachable image source, dropping', {
           scheme: src.slice(0, 16),
         });
@@ -275,8 +278,11 @@ export async function inlineCloneImages(root: HTMLElement): Promise<void> {
         return;
       }
       try {
-        const { base64, mimeType } = await loadImageSourceBase64(src);
-        img.setAttribute('src', `data:${mimeType};base64,${base64}`);
+        if (relativeAsset) img.setAttribute('src', await sameOriginToDataUrl(src));
+        else {
+          const { base64, mimeType } = await loadImageSourceBase64(src);
+          img.setAttribute('src', `data:${mimeType};base64,${base64}`);
+        }
         img.setAttribute('loading', 'eager');
         img.removeAttribute('srcset');
       } catch (err) {
@@ -379,6 +385,7 @@ async function sameOriginToDataUrl(url: string): Promise<string> {
     throw new Error(`share image asset fetch failed (${response.status})`);
   }
   const blob = await response.blob();
+  if (!blob.type.startsWith('image/')) throw new Error('share image asset is not an image');
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);

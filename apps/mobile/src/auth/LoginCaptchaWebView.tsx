@@ -91,9 +91,9 @@ export function LoginCaptchaWebView({
           borderColor: login.panelBorder,
           borderRadius: radius.container,
           borderWidth: 1,
-          paddingBottom: 12,
-          paddingHorizontal: 16,
-          paddingTop: 16,
+          paddingBottom: spacing.md,
+          paddingHorizontal: spacing.lg,
+          paddingTop: spacing.lg,
           maxWidth: 340,
           width: '100%',
         }}
@@ -102,8 +102,8 @@ export function LoginCaptchaWebView({
           style={{
             color: login.titleText,
             fontSize: typeScale.body,
-            fontWeight: fontWeight.bold,
-            lineHeight: lineHeight.bodyRelaxed,
+            fontWeight: fontWeight.semibold,
+            lineHeight: lineHeight.body,
           }}
         >
           {loginText('captchaTitle')}
@@ -117,7 +117,7 @@ export function LoginCaptchaWebView({
               justifyContent: 'center',
             }}
           >
-            <Text style={{ color: login.loginError, fontSize: typeScale.footnote, textAlign: 'center' }}>
+            <Text style={{ color: login.loginError, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'center' }}>
               {loginText('captchaFailed')}
             </Text>
             {hasNativeLoginButtons ? <LoginNativeButton
@@ -136,14 +136,14 @@ export function LoginCaptchaWebView({
               }}
               testID="login.captcha.retry"
             >
-              <Text style={{ color: login.linkText, fontSize: typeScale.footnote }}>
+              <Text style={{ color: login.linkText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>
                 {loginText('captchaRetry')}
               </Text>
             </Pressable>
             )}
           </View>
         ) : (
-          <View style={{ alignSelf: 'stretch', height: 220, marginTop: 8 }}>
+          <View style={{ alignSelf: 'stretch', height: 220, marginTop: spacing.sm }}>
             <WebView
               key={generation}
               source={{ uri: themedUrl }}
@@ -202,7 +202,7 @@ export function LoginCaptchaWebView({
           }}
           testID="login.captcha.cancel"
         >
-          <Text style={{ color: login.secondaryText, fontSize: typeScale.footnote }}>
+          <Text style={{ color: login.secondaryText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>
             {loginText('captchaCancel')}
           </Text>
         </Pressable>

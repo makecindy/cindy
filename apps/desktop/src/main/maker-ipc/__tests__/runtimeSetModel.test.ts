@@ -2,6 +2,17 @@ import { rehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppre
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import { setCustomProviders } from '../../maker-host/active-catalog.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// The route helper reaches worktree preferences transitively. Keep this unit
+// test in Node without loading electron-store's native Electron entrypoint.
+vi.mock('electron-store', () => ({
+  default: class {
+    private readonly values = new Map<string, unknown>();
+    get(key: string): unknown { return this.values.get(key); }
+    set(key: string, value: unknown): void { this.values.set(key, value); }
+    delete(key: string): void { this.values.delete(key); }
+  },
+}));
 import { acceptSessionRuntimeMutation, getPendingSessionRuntimeMutation, clearSessionRuntimeControlState } from '../sessionRuntimeControl.js';
 import { createPendingAgentSwitchRegistry } from '../sessionAgentSwitchHandler.js';
 import { PendingCredentialSwitchService } from '../pendingCredentialSwitch.js';
@@ -402,6 +413,8 @@ describe('applyRuntimeSetModelChange', () => {
         remoteHostId: null,
         model: 'local-model',
         setModel,
+        previewModelSwitch: vi.fn(async () => ({ action: 'hot' as const,
+          targetContextWindow: 100_000, windowVerified: true })),
       }),
       listActiveSessions: () => [],
       closeSession: vi.fn(async () => {}),
@@ -715,7 +728,7 @@ describe('applyRuntimeSetModelChange', () => {
       codexAuthInjection: 'oauth-bearer',
     });
 
-    expect(result).toEqual({ status: 'applied' });
+    expect(result).toEqual({ status: 'applied', retiredRuntime: true });
     expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
     expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
@@ -752,7 +765,7 @@ describe('applyRuntimeSetModelChange', () => {
       providerId: 'deepseek',
     });
 
-    expect(result).toEqual({ status: 'applied' });
+    expect(result).toEqual({ status: 'applied', retiredRuntime: true });
     expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('deepseek');
@@ -958,7 +971,7 @@ describe('applyRuntimeSetModelChange', () => {
       registerPendingCredentialSwitch: vi.fn(),
     });
 
-    expect(result).toEqual({ status: 'applied' });
+    expect(result).toEqual({ status: 'applied', retiredRuntime: true });
     expect(closeSession).toHaveBeenCalledTimes(1);
     expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(getSessionProvider(sessionId)).toBe('xd');
@@ -1143,14 +1156,14 @@ describe('applyRuntimeSetModelChange', () => {
       wakeSessionInputQueue,
     });
 
-    expect(result).toEqual({ status: 'applied' });
+    expect(result).toEqual({ status: 'applied', retiredRuntime: true });
     // clear 必须不带唤醒(否则 drain 趁 close 窗口把队首派发到旧会话),
     // 唤醒在 close + 写路由完成之后。
     expect(order).toEqual(['clear-no-wake', 'close', 'wake']);
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
-  it('closes a stopped Pi runtime before publishing the new route and waking its queued first send', async () => {
+  it('retires only a Pi runtime whose preview proves a rebuild is required', async () => {
     const sessionId = rememberSession('runtime-set-model-pi-stop-switch');
     setSessionProvider(sessionId, 'openai');
     const order: string[] = [];
@@ -1171,6 +1184,8 @@ describe('applyRuntimeSetModelChange', () => {
         remoteHostId: null,
         model: 'chatgpt/gpt-5.5',
         setModel: vi.fn(async () => {}),
+        previewModelSwitch: vi.fn(async () => ({ action: 'rebuild' as const,
+          targetContextWindow: 100_000, windowVerified: false, reason: 'missing spawn input' })),
       }),
       listActiveSessions: () => [
         { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => false },
@@ -1187,7 +1202,7 @@ describe('applyRuntimeSetModelChange', () => {
         expect(opts).toEqual({ wake: false });
       }),
       wakeSessionInputQueue,
-    })).resolves.toEqual({ status: 'applied' });
+    })).resolves.toEqual({ status: 'applied', retiredRuntime: true });
 
     expect(order).toEqual(['close', 'route', 'wake']);
     expect(closeSession).toHaveBeenCalledOnce();
@@ -1206,6 +1221,8 @@ describe('applyRuntimeSetModelChange', () => {
         remoteHostId: null,
         model: 'chatgpt/gpt-5.5',
         setModel: vi.fn(async () => {}),
+        previewModelSwitch: vi.fn(async () => ({ action: 'rebuild' as const,
+          targetContextWindow: 100_000, windowVerified: false, reason: 'missing spawn input' })),
       }),
       listActiveSessions: () => [
         { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => false },
@@ -1235,7 +1252,7 @@ describe('applyRuntimeSetModelChange', () => {
     { fromProvider: 'xai', fromModel: 'grok-4.6', toProvider: 'xd', toModel: 'gpt-5.6-sol' },
     { fromProvider: 'xd', fromModel: 'gpt-5.6-sol', toProvider: 'xai', toModel: 'grok-4.6' },
   ] as const)(
-    'closes idle Pi before $fromProvider → $toProvider so the next send lazy-creates',
+    'hot-switches idle Pi from $fromProvider to $toProvider when the native preview allows it',
     async ({ fromProvider, fromModel, toProvider, toModel }) => {
       const sessionId = rememberSession(`runtime-set-model-pi-${fromProvider}-to-${toProvider}`);
       setSessionProvider(sessionId, fromProvider);
@@ -1249,6 +1266,8 @@ describe('applyRuntimeSetModelChange', () => {
           remoteHostId: null,
           model: fromModel,
           setModel,
+          previewModelSwitch: vi.fn(async () => ({ action: 'hot' as const,
+            targetContextWindow: 100_000, windowVerified: true })),
         }),
         listActiveSessions: () => [
           { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => false },
@@ -1265,8 +1284,8 @@ describe('applyRuntimeSetModelChange', () => {
         wakeSessionInputQueue: vi.fn(),
       })).resolves.toEqual({ status: 'applied' });
 
-      expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
-      expect(setModel).not.toHaveBeenCalled();
+      expect(closeSession).not.toHaveBeenCalled();
+      expect(setModel).toHaveBeenCalledWith(toModel, { providerId: toProvider });
       expect(getSessionProvider(sessionId)).toBe(toProvider);
     },
   );
@@ -1282,6 +1301,8 @@ describe('applyRuntimeSetModelChange', () => {
         remoteHostId: null,
         model: 'grok-4.6',
         setModel,
+        previewModelSwitch: vi.fn(async () => ({ action: 'hot' as const,
+          targetContextWindow: 100_000, windowVerified: true })),
       }),
       listActiveSessions: () => [
         { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => false },
@@ -1313,6 +1334,8 @@ describe('applyRuntimeSetModelChange', () => {
         remoteHostId: null,
         model: 'grok-4.6',
         setModel,
+        previewModelSwitch: vi.fn(async () => ({ action: 'hot' as const,
+          targetContextWindow: 100_000, windowVerified: true })),
       }),
       listActiveSessions: () => [
         { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => true },
@@ -1331,7 +1354,6 @@ describe('applyRuntimeSetModelChange', () => {
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
       model: 'gpt-5.6-sol',
       providerId: 'openai',
-      forceSessionRebuild: true,
     });
     expect(closeSession).not.toHaveBeenCalled();
     expect(setModel).not.toHaveBeenCalled();
@@ -1359,7 +1381,7 @@ describe('applyRuntimeSetModelChange', () => {
     expect(closeSession).not.toHaveBeenCalled();
     expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, { model: 'same-model', providerId: 'xd', forceSessionRebuild: true });
     busy = false;
-    await expect(applyRuntimeSetModelChange(input)).resolves.toEqual({ status: 'applied' });
+    await expect(applyRuntimeSetModelChange(input)).resolves.toEqual({ status: 'applied', retiredRuntime: true });
     expect(closeSession).toHaveBeenCalledExactlyOnceWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('xd');
@@ -1393,7 +1415,7 @@ describe('applyRuntimeSetModelChange', () => {
       providerId: 'xd',
       forceSessionRebuild: true,
       clearPendingCredentialSwitch: vi.fn(),
-    })).resolves.toEqual({ status: 'applied' });
+    })).resolves.toEqual({ status: 'applied', retiredRuntime: true });
 
     expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
     expect(setModel).not.toHaveBeenCalled();
@@ -1425,7 +1447,7 @@ describe('applyRuntimeSetModelChange', () => {
       model: 'gpt-5.6-sol',
       providerId: 'mygpt',
       clearPendingCredentialSwitch: vi.fn(),
-    })).resolves.toEqual({ status: 'applied' });
+    })).resolves.toEqual({ status: 'applied', retiredRuntime: true });
 
     expect(requiresModelSwitchRebuild).toHaveBeenCalledWith('gpt-5.6-sol', {
       providerId: 'mygpt',
@@ -1466,7 +1488,7 @@ describe('applyRuntimeSetModelChange', () => {
       providerId: 'mygpt',
       requiresCodexThreadRelink: true,
       relinkCodexThread,
-    })).resolves.toEqual({ status: 'applied', persistedRoute: true });
+    })).resolves.toEqual({ status: 'applied', persistedRoute: true, retiredRuntime: true });
 
     expect(order).toEqual(['close', 'relink']);
     expect(requiresModelSwitchRebuild).not.toHaveBeenCalled();
@@ -1573,6 +1595,20 @@ describe('applyRuntimeSetModelChange', () => {
 });
 
 describe('context configuration refresh across live routes', () => {
+  it('rejects a Pi catalog refresh without the host window transaction', async () => {
+    const id = rememberSession('pi-refresh-no-window-host');
+    const session = { id, agentKind: 'pi' as const, model: 'model',
+      setModel: vi.fn(), requiresModelSwitchRebuild: vi.fn(() => true),
+      previewModelSwitch: vi.fn(async () => ({ action: 'refresh' as const, targetContextWindow: 32_000, windowVerified: false })) };
+    const closeSession = vi.fn();
+    await expect(refreshActiveModelContextSettings({
+      runtime: { maker: { getSession: () => session, listActiveSessions: () => [session], closeSession } },
+      inferProviderId: () => 'xd', assertCurrent: () => {}, hasPendingSelection: () => false,
+      withSessionLock: withSendToSessionLock,
+    })).rejects.toThrow('model-window host transaction');
+    expect(session.setModel).not.toHaveBeenCalled();
+    expect(closeSession).not.toHaveBeenCalled();
+  });
   it.each([false, true])('refreshes an ambiguous implicit source only when its actual runtime budget changed (%s)', async (changed) => {
     const id = rememberSession('implicit-context-refresh');
     const closeSession = vi.fn();
@@ -1626,9 +1662,30 @@ describe('context configuration refresh across live routes', () => {
       runtime: { maker: { getSession: () => session, listActiveSessions: () => [session], closeSession }, registerPendingCredentialSwitch },
       inferProviderId: () => 'xd', assertCurrent: () => {}, hasPendingSelection: () => pending,
       withSessionLock: withSendToSessionLock,
+      applyPiRefresh: vi.fn(),
     });
     expect(closeSession).not.toHaveBeenCalled();
     expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
+  });
+
+  it('marks a busy Pi catalog refresh as automatic before its pending boundary', async () => {
+    const id = rememberSession('pi-busy-catalog-refresh');
+    const session = { id, agentKind: 'pi' as const, model: 'same-model',
+      setModel: vi.fn(),
+      isTurnRunning: () => true,
+      requiresModelSwitchRebuild: vi.fn(async () => true),
+      previewModelSwitch: vi.fn(async () => ({ action: 'refresh' as const, targetContextWindow: 32_000, windowVerified: false })),
+    };
+    const registerPendingCredentialSwitch = vi.fn();
+    await refreshActiveModelContextSettings({
+      runtime: { maker: { getSession: () => session, listActiveSessions: () => [session], closeSession: vi.fn() },
+        isSessionInTurn: () => true, registerPendingCredentialSwitch },
+      inferProviderId: () => 'xd', assertCurrent: () => {}, hasPendingSelection: () => false,
+      withSessionLock: withSendToSessionLock, applyPiRefresh: vi.fn(),
+    });
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledExactlyOnceWith(id, {
+      model: 'same-model', providerId: null, selectionSource: 'agent',
+    });
   });
 
   it.each(['explicit', 'default'] as const)('refreshes all three engines for a %s edit while preserving other routes and pending choices', async (kind) => {
@@ -1638,21 +1695,25 @@ describe('context configuration refresh across live routes', () => {
       setSessionProvider(id, id === 'other-route' ? 'other' : 'xd');
       return { id, agentKind: id === 'other-route' || id === 'pending' ? 'pi' as const : id,
         model: 'shared-model', setModel: vi.fn(async () => {}),
+        previewModelSwitch: vi.fn(async () => ({ action: (id === 'other-route' ? 'hot' : 'refresh') as 'hot' | 'refresh', targetContextWindow: 64_000, windowVerified: false })),
         requiresModelSwitchRebuild: vi.fn(() => id !== 'other-route'), isTurnRunning: () => false };
     });
     const closeSession = vi.fn(async (_sessionId: string) => {});
+    const applyPiRefresh = vi.fn(async () => {});
     await refreshActiveModelContextSettings({
       runtime: { maker: { getSession: (id) => sessions.find((s) => s.id === id), listActiveSessions: () => sessions, closeSession },
         getPendingCredentialSwitch: (id) => id === 'pending' ? { model: 'next-model', providerId: 'xd' } : undefined },
       ...(kind === 'explicit' ? { targets: sessions.slice(0, 3).map((s) => ({ agent: s.agentKind, providerId: 'xd', modelId: s.model })) } : {}),
       hasPendingSelection: () => false, withSessionLock: async (_id, run) => run(),
+      applyPiRefresh,
       inferProviderId: () => null, assertCurrent: () => {},
     });
-    expect(closeSession.mock.calls.map(([id]) => id)).toEqual(['claude-code', 'codex', 'pi']);
+    expect(closeSession.mock.calls.map(([id]) => id)).toEqual(['claude-code', 'codex']);
+    expect(applyPiRefresh).toHaveBeenCalledExactlyOnceWith('pi', 'shared-model', 'xd');
     expect(sessions[4]!.requiresModelSwitchRebuild).not.toHaveBeenCalled();
   });
 
-  it.each(['claude-code', 'codex', 'pi'] as const)('retains a failed %s catalog reload and continues later tasks', async (agentKind) => {
+  it.each(['claude-code', 'codex'] as const)('retains a failed %s catalog reload and continues later tasks', async (agentKind) => {
     const sessions = ['failed', 'later'].map(suffix => ({
       id: rememberSession(`catalog-${agentKind}-${suffix}`), agentKind, remoteHostId: 'ssh-host',
       model: 'model', setModel: vi.fn(), requiresModelSwitchRebuild: () => true,
@@ -1671,15 +1732,36 @@ describe('context configuration refresh across live routes', () => {
     });
   });
 
+  it('reports a failed Pi refresh and continues to the next task without retiring either runtime', async () => {
+    const sessions = ['failed', 'later'].map(suffix => ({
+      id: rememberSession(`catalog-pi-${suffix}`), agentKind: 'pi' as const,
+      model: 'model', setModel: vi.fn(), requiresModelSwitchRebuild: () => true,
+      previewModelSwitch: vi.fn(async () => ({ action: 'refresh' as const, targetContextWindow: 64_000, windowVerified: false })),
+    }));
+    const closeSession = vi.fn();
+    const applyPiRefresh = vi.fn(async (id: string) => {
+      if (id === sessions[0]!.id) throw new Error('native refresh failed');
+    });
+    await refreshActiveModelContextSettings({
+      runtime: { maker: { listActiveSessions: () => sessions, getSession: id => sessions.find(s => s.id === id), closeSession } },
+      applyPiRefresh, hasPendingSelection: () => false, withSessionLock: withSendToSessionLock,
+      inferProviderId: () => 'xd', assertCurrent: () => {},
+    });
+    expect(closeSession).not.toHaveBeenCalled();
+    expect(applyPiRefresh).toHaveBeenCalledTimes(2);
+  });
+
   it.each(['selection', 'account'] as const)('preserves a newer %s change while a catalog close fails', async (change) => {
     const id = rememberSession(`catalog-close-${change}`);
     let changed = false;
     const session = { id, agentKind: 'pi' as const, remoteHostId: 'ssh-host', model: 'model',
-      setModel: vi.fn(), requiresModelSwitchRebuild: () => true };
+      setModel: vi.fn(), requiresModelSwitchRebuild: () => true,
+      previewModelSwitch: vi.fn(async () => ({ action: 'refresh' as const, targetContextWindow: 64_000, windowVerified: false })) };
     const registerPendingCredentialSwitch = vi.fn();
     const run = refreshActiveModelContextSettings({
       runtime: { maker: { listActiveSessions: () => [session], getSession: () => session,
         closeSession: async () => { changed = true; throw new Error('close failed'); } }, registerPendingCredentialSwitch },
+      applyPiRefresh: async () => { changed = true; throw new Error('native refresh failed'); },
       hasPendingSelection: () => changed && change === 'selection', withSessionLock: withSendToSessionLock,
       inferProviderId: () => 'xd', assertCurrent: () => { if (changed && change === 'account') throw new Error('owner changed'); },
     });
@@ -1784,7 +1866,9 @@ describe('Pi native OpenAI account switching', () => {
     const setModel = vi.fn(async () => {});
     const closeSession = vi.fn(async () => {});
     const maker: RuntimeSetModelMaker = {
-      getSession: () => ({ agentKind: 'pi', remoteHostId: null, model: 'chatgpt/gpt-5.6-luna', setModel }),
+      getSession: () => ({ agentKind: 'pi', remoteHostId: null, model: 'chatgpt/gpt-5.6-luna', setModel,
+        previewModelSwitch: vi.fn(async () => ({ action: 'hot' as const,
+          targetContextWindow: 100_000, windowVerified: true })) }),
       listActiveSessions: () => [{ id: sessionId, agentKind: 'pi', isTurnRunning: () => false }], closeSession,
     };
     await applyRuntimeSetModelChange({ maker, sessionId, model: 'chatgpt/gpt-5.6-luna', providerId: to,
@@ -1807,7 +1891,9 @@ describe('Pi native OpenAI account switching', () => {
     const registerPendingCredentialSwitch = vi.fn();
     const result = await applyRuntimeSetModelChange({
       sessionId, model: 'chatgpt/gpt-5.6-luna', providerId: 'account-b', registerPendingCredentialSwitch,
-      maker: { getSession: () => ({ agentKind: 'pi', model: 'chatgpt/gpt-5.6-luna', setModel }),
+      maker: { getSession: () => ({ agentKind: 'pi', model: 'chatgpt/gpt-5.6-luna', setModel,
+        previewModelSwitch: vi.fn(async () => ({ action: 'hot' as const,
+          targetContextWindow: 100_000, windowVerified: true })) }),
         listActiveSessions: () => [{ id: sessionId, agentKind: 'pi', isTurnRunning: () => true }], closeSession },
     });
     expect(result.status).toBe('deferred');

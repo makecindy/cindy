@@ -192,7 +192,7 @@ it('orders quick copy/paste shortcuts and reports transfer failure without recon
   expect(current.clipboard).toHaveBeenCalledTimes(4);
 });
 
-it('drops queued clipboard work after control is released and ignores stale shortcut epochs', async () => {
+it('drops queued clipboard work after host control is lost and ignores stale shortcut epochs', async () => {
   const current = await fixture();
   present();
   const gate = deferred<void>();
@@ -203,8 +203,8 @@ it('drops queued clipboard work after control is released and ignores stale shor
   runtime.post?.({ type: 'clipboard', action: 'copy', epoch: 'lease' });
   runtime.post?.({ type: 'clipboard', action: 'paste', epoch: 'lease' });
   await vi.advanceTimersByTimeAsync(0);
-  await controller.setControl(false);
-  await controller.setControl(true);
+  current.heartbeat.mockResolvedValue({ controlling: false });
+  await vi.advanceTimersByTimeAsync(3000);
   gate.resolve();
   await vi.advanceTimersByTimeAsync(0);
   expect(current.clipboard).toHaveBeenCalledExactlyOnceWith(1, 'copy');
@@ -234,79 +234,111 @@ it.each([true, false])(
   },
 );
 
-it('pauses actions and input during release and does not send duplicate control requests', async () => {
-  const f = await fixture();
+it('does not present a usable desktop when the host refuses initial control', async () => {
+  const f = await fixture(Promise.resolve({ controlling: false }));
   present();
-  const gate = deferred<{ controlling: boolean }>();
-  f.control.mockImplementationOnce(() => gate.promise);
-  const pending = controller.setControl(false);
-  await controller.setControl(true);
-  expect(f.control).toHaveBeenCalledTimes(2); // Initial grant + one release.
-  expect(snapshot).toMatchObject({ controlling: false, controlPending: true });
-  expect(inputEnabled()).toBe(false);
+  expect(f.control).toHaveBeenCalledExactlyOnceWith(true);
+  expect(snapshot).toMatchObject({ ready: false, controlling: false, error: 'controlUnavailable' });
+});
+
+it('shows a reconnectable error when host input is busy during control acquisition', async () => {
+  const firstControl = Promise.reject(new Error('[PRECONDITION_FAILED] DESKTOP_INPUT_BUSY'));
+  const f = await fixture(firstControl);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(snapshot).toMatchObject({ ready: false, controlling: false, error: 'controlUnavailable' });
+  controller.retry();
+  await vi.advanceTimersByTimeAsync(0);
+  present();
+  expect(f.control).toHaveBeenCalledTimes(2);
+  expect(snapshot).toMatchObject({ ready: true, controlling: true, error: null });
+});
+
+it('stops input and viewing after input queue overflow', async () => {
+  await fixture();
+  present();
+  runtime.post?.({ type: 'inputOverflow', epoch: 'lease' });
+  expect(snapshot).toMatchObject({ controlling: false, ready: false, error: 'controlUnavailable' });
+  expect(runtime.receive).toHaveBeenCalledWith({ type: 'stop', preserveFrame: true });
   await expect(controller.clipboard('paste')).rejects.toThrow('DESKTOP_VIEW_ONLY');
-  runtime.receive.mockClear();
-  controller.keys(['MetaLeft', 'KeyD']);
-  expect(runtime.receive).not.toHaveBeenCalled();
-  gate.resolve({ controlling: false });
-  await pending;
-  expect(snapshot).toMatchObject({ controlling: false, controlPending: false });
-  expect(f.clipboard).not.toHaveBeenCalled();
 });
 
 it('ignores a pre-transition heartbeat without briefly disabling newly granted control', async () => {
-  const f = await fixture();
-  present();
-  await controller.setControl(false);
   const gate = deferred<{ controlling: boolean }>();
-  f.heartbeat.mockImplementationOnce(() => gate.promise);
+  const f = await fixture(gate.promise);
+  present();
+  f.heartbeat.mockResolvedValueOnce({ controlling: false });
   await vi.advanceTimersByTimeAsync(3000);
-  await controller.setControl(true);
-  gate.resolve({ controlling: false });
+  gate.resolve({ controlling: true });
   await vi.advanceTimersByTimeAsync(0);
   expect(snapshot.controlling).toBe(true);
   expect(inputEnabled()).toBe(true);
 });
 
-it('retains view-only after the host revokes control and the viewer reconnects', async () => {
+it('requires control again after the host revokes it and the viewer reconnects', async () => {
   const f = await fixture();
   present();
   f.heartbeat.mockResolvedValue({ controlling: false });
   await vi.advanceTimersByTimeAsync(3000);
   expect(snapshot.controlling).toBe(false);
-  expect(inputEnabled()).toBe(false);
+  expect(snapshot.ready).toBe(false);
+  expect(snapshot.error).toBe('controlUnavailable');
+  expect(runtime.receive).toHaveBeenCalledWith({ type: 'stop', preserveFrame: true });
   controller.retry();
   await vi.advanceTimersByTimeAsync(0);
   present();
-  expect(f.control).toHaveBeenCalledOnce();
-  expect(snapshot.controlling).toBe(false);
-  expect(inputEnabled()).toBe(false);
+  expect(f.control).toHaveBeenCalledTimes(2);
+  expect(snapshot.controlling).toBe(true);
+  expect(inputEnabled()).toBe(true);
 });
 
-it('does not re-enable input when a failed release is followed by another video frame', async () => {
+it('keeps confirmed control on an input timeout until the heartbeat settles it', async () => {
   const f = await fixture();
   present();
-  f.control.mockRejectedValueOnce(new Error('INVOKE_TIMEOUT'));
-  await controller.setControl(false);
+  const original = f.api.request;
+  vi.spyOn(f.api, 'request').mockImplementation(async (generation, request) => {
+    if (request.op === 'input') throw new Error('[PRECONDITION_FAILED] INVOKE_TIMEOUT');
+    return original(generation, request);
+  });
+  runtime.post?.({
+    type: 'input',
+    epoch: 'lease',
+    sequence: 1,
+    events: [{ kind: 'release' }],
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(snapshot).toMatchObject({ controlling: true, ready: true, error: null });
+  expect(inputEnabled()).toBe(true);
+});
+
+it('leaves the desktop when the host rejects an input batch', async () => {
+  const f = await fixture();
   present();
-  expect(snapshot).toMatchObject({ controlling: false, controlPending: false });
-  expect(inputEnabled()).toBe(false);
-  await vi.advanceTimersByTimeAsync(3000);
-  expect(f.control).toHaveBeenLastCalledWith(false);
-  expect(inputEnabled()).toBe(false);
+  const original = f.api.request;
+  vi.spyOn(f.api, 'request').mockImplementation(async (generation, request) => {
+    if (request.op === 'input') throw new Error('[PRECONDITION_FAILED] DESKTOP_VIEW_ONLY');
+    return original(generation, request);
+  });
+  runtime.post?.({
+    type: 'input',
+    epoch: 'lease',
+    sequence: 1,
+    events: [{ kind: 'release' }],
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(snapshot).toMatchObject({ ready: false, controlling: false, error: 'controlUnavailable' });
 });
 
 it('coalesces rapid quality changes and waits for the current negotiation to present', async () => {
   await fixture();
   present();
   runtime.receive.mockClear();
-  controller.settings({ bitrate: 2000000 });
-  controller.settings({ bitrate: 20000000 });
+  controller.settings({ quality: 'saver' });
+  controller.settings({ quality: 'hd' });
   await vi.advanceTimersByTimeAsync(0);
   expect(
     runtime.receive.mock.calls.filter(([message]) => message.type === 'videoSettings'),
   ).toHaveLength(1);
-  controller.settings({ bitrate: 8000000 });
+  controller.settings({ quality: 'auto' });
   await vi.advanceTimersByTimeAsync(0);
   expect(
     runtime.receive.mock.calls.filter(([message]) => message.type === 'videoSettings'),
@@ -315,7 +347,7 @@ it('coalesces rapid quality changes and waits for the current negotiation to pre
   expect(
     runtime.receive.mock.calls.filter(([message]) => message.type === 'videoSettings'),
   ).toHaveLength(2);
-  expect(snapshot.settings.bitrate).toBe(8000000);
+  expect(snapshot.settings.quality).toBe('auto');
 });
 
 it('expires stale bitrate and latency samples', async () => {
@@ -338,9 +370,9 @@ it('does not let a fallback screenshot interrupt a pending video-settings negoti
   await fixture();
   runtime.post?.({ type: 'framePresented', epoch: 'lease' });
   runtime.receive.mockClear();
-  controller.settings({ bitrate: 2000000 });
+  controller.settings({ quality: 'saver' });
   await vi.advanceTimersByTimeAsync(0);
-  controller.settings({ bitrate: 8000000 });
+  controller.settings({ quality: 'auto' });
   await vi.advanceTimersByTimeAsync(0);
   runtime.post?.({ type: 'framePresented', epoch: 'lease' });
   expect(

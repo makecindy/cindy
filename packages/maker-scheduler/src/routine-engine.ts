@@ -20,7 +20,7 @@ export interface RoutineRun {
   triggerIds: string[];
   events: Array<{ sourceId: string; event: RoutineEvent }>;
   status:
-    "queued" | "running" | "success" | "failed" | "interrupted" | "cancelled";
+    "queued" | "running" | "success" | "failed" | "interrupted" | "cancelled" | "skipped";
   createdAt: number;
   finishedAt?: number;
   error?: string;
@@ -53,6 +53,9 @@ export interface RoutineEngineDeps {
     error?: string;
     resultText?: string;
     deferred?: boolean;
+    skipped?: boolean;
+    /** Host-owned execution cap reached; persist disabling with this run's result. */
+    disableRoutine?: boolean;
   }>;
   id(): string;
   now(): number;
@@ -206,7 +209,7 @@ export class RoutineEngine {
   private async writeRoutine(botId: string, raw: RoutineInput, options: { id?: string; expectedRevision?: number; creationId?: string }): Promise<Routine> {
     const { expectedRevision, creationId } = options;
     const id = options.id ?? creationId;
-    const input = parseRoutineInput(raw);
+    const parsed = parseRoutineInput(raw);
     return this.change((state) => {
       if (this.blockedBots.has(botId)) throw new Error("The teammate is paused");
       if (id && this.removing.has(id)) throw new Error("Routine is being removed");
@@ -215,6 +218,14 @@ export class RoutineEngine {
             (routine) => routine.id === id && routine.botId === botId,
           )
         : undefined;
+      // Omitted optional fields from older clients preserve saved choices.
+      const input = parseRoutineInput({
+        ...existing,
+        ...parsed,
+        // Legacy saved definitions may omit this field and must stay quiet.
+        // A newly created, unclassified reminder must retain delivery.
+        ...(!existing && parsed.silentWhenIdle === undefined ? { silentWhenIdle: false } : {}),
+      });
       if (id && !existing && !creationId) throw new Error("Routine not found");
       if (creationId && state.routines.some(row => row.id === creationId && row.botId !== botId)) throw new Error("Routine creation ID already used");
       if (creationId && existing && JSON.stringify(parseRoutineInput(existing)) !== JSON.stringify(input)) throw new Error("Routine already created; refresh before editing");
@@ -247,6 +258,8 @@ export class RoutineEngine {
         const unchanged =
           existing?.enabled === routine.enabled &&
           JSON.stringify(oldTrigger) === JSON.stringify(trigger);
+        if (!unchanged && trigger.kind === 'once' && trigger.at <= now)
+          throw new Error('One-shot time has passed; choose a future time');
         const next = unchanged
           ? (previousNext[`${routine.id}:${trigger.id}`] ??
             nextRoutineTriggerAt(trigger, now))
@@ -421,6 +434,7 @@ export class RoutineEngine {
           this.enqueue(state, routine, [trigger.id]);
           const next = nextRoutineTriggerAt(trigger, now);
           if (next !== undefined) state.next[key] = next;
+          else delete state.next[key];
         }
       }
     });
@@ -554,12 +568,7 @@ export class RoutineEngine {
       return { routine: structuredClone(routine), run: structuredClone(run) };
     });
     if (!claimed || this.stopped) return;
-    let result: {
-      scheduleRunId?: string;
-      error?: string;
-      resultText?: string;
-      deferred?: boolean;
-    } = {};
+    let result: Awaited<ReturnType<RoutineEngineDeps['execute']>> = {};
     try {
       result = await this.deps.execute(
         claimed.routine,
@@ -598,14 +607,27 @@ export class RoutineEngine {
       }
       const completed = { ...result };
       delete completed.deferred;
+      delete completed.skipped;
+      delete completed.disableRoutine;
       Object.assign(run, completed, {
         status: aborted
           ? "cancelled"
           : result.error
             ? "failed"
-            : "success",
+            : result.skipped ? "skipped" : "success",
         finishedAt,
       });
+      if (result.disableRoutine && !aborted && !result.error) {
+        const routine = state.routines.find(row => row.id === run.routineId && row.revision === claimed.routine.revision);
+        // A late result must not overwrite a newer user edit or cancel itself.
+        if (routine) {
+          routine.enabled = false;
+          routine.revision += 1;
+          routine.updatedAt = finishedAt;
+          for (const key of Object.keys(state.next)) if (key.startsWith(`${routine.id}:`)) delete state.next[key];
+          this.cancelQueued(state, routine.id);
+        }
+      }
     };
     this.pendingSettlements.set(id, { routineId: claimed.routine.id, apply: settle });
     await this.change(settle);

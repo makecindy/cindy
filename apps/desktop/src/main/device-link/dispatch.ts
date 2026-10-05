@@ -2,10 +2,12 @@ import { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
 import type { TaskTagRequest } from '@cindy/maker-shared';
 import {
   FILE_PEER_CHANNEL,
+  TASK_MIGRATION_CHANNEL,
   encodeSessionTagCatalog,
   decodeSessionTagCatalog,
 } from '@cindy/device-link';
 import { requestFilePeer, stopFilePeers } from './filePeer';
+import { requestTaskMigration } from '../task-migration/service';
 import { normalizeProviderOrder } from "../../shared/providerOrder.js";
 /**
  * dispatch —— device-link 被控端隧道层。
@@ -34,6 +36,8 @@ import {
   canCoalesceRemoteListing,
   isCompletedInvokeRetryableReadChannel,
   INVOKE_TIMEOUT_OVERRIDES_MS,
+  ACTION_INVOKE_TIMEOUTS_MS,
+  resolveRemoteInvokeTimeoutMs,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   REMOTE_INVOKE_ALLOWLIST,
@@ -56,6 +60,7 @@ import {
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
   byteLength,
   DeviceLinkError,
   parseFsWatchTopic,
@@ -78,6 +83,7 @@ import {
   type ProviderLogoKind,
   type ProviderLogoRouting,
 } from '@cindy/model-providers/branding';
+import { isModelVisible } from '@cindy/model-providers/sections';
 import { app } from 'electron';
 import { remoteDesktop, requestRemoteDesktop } from '../remote-desktop';
 import { remoteCredentialHost } from '../remote-desktop/credentialHost';
@@ -98,6 +104,11 @@ import {
 } from './remoteBotSessionBoundary.js';
 import { getControllerPlatform } from './controllerPlatform';
 import { getDeviceLinkInvokeContext, runDeviceLinkInvokeContext } from './invoke-context';
+import {
+  redactInputProjectionForSharedGuest,
+  redactMessageRowForSharedGuest,
+  redactSharedGuestPush,
+} from './sharedTaskMessageOrigin';
 import { isSharedTaskPeer, SHARED_TASK_CAPABILITY } from '@cindy/device-link';
 import { captureSharedTaskPeer, captureSharedTaskPush, assertSharedTaskInvoke, sharedTaskMetadataTopic, sharedTaskAccessFailure } from './sharedTaskDispatch.js';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
@@ -506,19 +517,37 @@ function projectRoutingForDisplay(
  * availability marker so both current and independently-updated legacy Mobile clients keep the
  * published provider model shape.
  */
-function projectModelsForController(models: unknown): unknown {
+function projectModelsForController(
+  models: unknown,
+  providerId: string,
+  visibility: Record<string, boolean>,
+): unknown {
   if (!models || typeof models !== 'object' || Array.isArray(models)) return models;
   return Object.fromEntries(
-    Object.entries(models as Record<string, unknown>).map(([agent, value]) => {
-      if (!Array.isArray(value)) return [agent, value];
-      const projected = value.flatMap((model) => {
-        if (!model || typeof model !== 'object' || Array.isArray(model)) return [model];
-        const { availability, ...legacyModel } = model as Record<string, unknown>;
-        return availability === 'requires_payment' ? [] : [legacyModel];
-      });
-      return [agent, projected];
-    }),
+    Object.entries(models as Record<string, unknown>).map(([agent, value]) => [
+      agent, projectVisibleModelList(value, providerId, agent, visibility),
+    ]),
   );
+}
+
+/** Apply the same owner preferences as the picker before paying the transport cost. */
+function projectVisibleModelList(
+  value: unknown,
+  providerId: string,
+  agent: string,
+  visibility: Record<string, boolean>,
+): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.flatMap((model) => {
+    if (!model || typeof model !== 'object' || Array.isArray(model)) return [model];
+    const { availability, ...legacyModel } = model as Record<string, unknown>;
+    const visible = isModelVisible(
+      visibility[`${agent}:${providerId}:${legacyModel.id}`],
+      typeof legacyModel.defaultEnabled === 'boolean' ? legacyModel.defaultEnabled : undefined,
+    );
+    visibility[`${agent}:${providerId}:${legacyModel.id}`] = visible;
+    return availability === 'requires_payment' || !visible ? [] : [legacyModel];
+  });
 }
 
 /**
@@ -569,12 +598,25 @@ function projectInvokeResultForTunnel(
   const options = args[0];
   if (channel === 'maker:list-active' && options && typeof options === 'object'
     && !Array.isArray(options) && 'summary' in options && options.summary === true
-    && Array.isArray(result)) {
-    return result.map((item: unknown) => {
+    && (Array.isArray(result) || (
+      'snapshotVersion' in options && options.snapshotVersion === 2
+      && result && typeof result === 'object' && !Array.isArray(result)
+      && 'format' in result && result.format === 'active-sessions-v2'
+      && 'sessions' in result && Array.isArray(result.sessions)
+    ))) {
+    const complete = !Array.isArray(result);
+    const rows = complete ? (result as { sessions: unknown[] }).sessions : result;
+    const projected = rows.map((item: unknown) => {
       if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
       const row = item as Record<string, unknown>;
-      return { sessionId: row.sessionId, isTurnRunning: row.isTurnRunning };
+      return {
+        sessionId: row.sessionId,
+        isTurnRunning: row.isTurnRunning,
+        ...(typeof row.activityPhase === 'string' && typeof row.activityAttention === 'boolean'
+          ? { activityPhase: row.activityPhase, activityAttention: row.activityAttention } : {}),
+      };
     });
+    return complete ? { format: 'active-sessions-v2', sessions: projected } : projected;
   }
   if (channel === 'maker:schedule:list-sidebar-index-runs') {
     return capScheduleSidebarIndexForTunnel(result);
@@ -582,6 +624,14 @@ function projectInvokeResultForTunnel(
   if (channel !== 'maker:provider:list') return result;
   const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown; providerOrder?: unknown };
   if (!Array.isArray(r.providers)) return result;
+  const modelVisibilityOverrides = r.modelVisibilityOverrides
+    && typeof r.modelVisibilityOverrides === 'object'
+    && !Array.isArray(r.modelVisibilityOverrides)
+    ? Object.fromEntries(
+        Object.entries(r.modelVisibilityOverrides)
+          .filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'),
+      )
+    : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
     const logoKind = typeof p.id === 'string'
@@ -595,18 +645,18 @@ function projectInvokeResultForTunnel(
     ) {
       rest.logoKind = logoKind;
     }
-    rest.models = projectModelsForController(p.models);
+    const providerId = typeof p.id === 'string' ? p.id : '';
+    const visibility = modelVisibilityOverrides ?? {};
+    rest.models = projectModelsForController(p.models, providerId, visibility);
+    // Media uses the same preference key as the host visibility snapshot.
+    const mediaAgent = Array.isArray(p.agents) && typeof p.agents[0] === 'string'
+      ? p.agents[0] : 'claude-code';
+    for (const field of ['imageModels', 'videoModels', 'audioModels', 'embeddingModels'] as const) {
+      if (Array.isArray(p[field])) rest[field] = projectVisibleModelList(p[field], providerId, mediaAgent, visibility);
+    }
     rest.routing = projectRoutingForDisplay(p.routing);
     return rest;
   });
-  const modelVisibilityOverrides = r.modelVisibilityOverrides
-    && typeof r.modelVisibilityOverrides === 'object'
-    && !Array.isArray(r.modelVisibilityOverrides)
-    ? Object.fromEntries(
-        Object.entries(r.modelVisibilityOverrides)
-          .filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'),
-      )
-    : undefined;
   return {
     providers,
     ...(modelVisibilityOverrides !== undefined ? { modelVisibilityOverrides } : {}),
@@ -683,6 +733,8 @@ const BACKGROUND_REMOTE_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'maker:provider:list',
   'maker:git-safety:get',
   'maker:schedule:list-sidebar-index-runs',
+  // 用量历史跨设备合并:其它电脑周期性增量拉取本机全量用量行,属后台同步。
+  'maker:usage:device-rows',
 ]);
 /** Include pre/post authorization and cached delivery, not only the IPC handler. */
 function withRemoteDbAdmission<T>(channel: string | undefined, fn: () => T): T {
@@ -718,6 +770,7 @@ const DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS = 30_000;
 const REMOTE_INVOKE_MAX_CLIENT_WAIT_MS = Math.max(
   DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS,
   ...Object.values(INVOKE_TIMEOUT_OVERRIDES_MS),
+  ...ACTION_INVOKE_TIMEOUTS_MS,
 );
 /** 再保留一轮同等重连窗口后才放弃无人等待的回包(全局上限;逐条按 channel 收窄)。 */
 const REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS * 2;
@@ -729,10 +782,18 @@ const REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS 
  * 弱网时段最多占 outbox 两分钟纯属浪费配额;长任务 channel(60s 预算)自动保留
  * 更久。控制端可能配置更短的超时(mobile 15s),推断值只偏保守、不早丢。
  */
-function outboxEntryMaxAgeMs(channel: string | undefined): number {
-  const budgetMs =
-    (channel && INVOKE_TIMEOUT_OVERRIDES_MS[channel]) || DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS;
-  return Math.min(budgetMs * 2, REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS);
+function outboxEntryMaxAgeMs(channel: string | undefined, args?: unknown[]): number {
+  return Math.min(remoteInvokeClientBudgetMs(channel, args) * 2, REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS);
+}
+/**
+ * 控制端对这次调用的等待预算:与桌面控制端同一个 resolver(带 args),所以任务复制
+ * estimate/receive 这类按动作区分的预算在被控端的 orphan 与 outbox 两处同样生效。
+ */
+function remoteInvokeClientBudgetMs(channel: string | undefined, args?: unknown[]): number {
+  return (
+    (channel && resolveRemoteInvokeTimeoutMs(channel, args, 'desktop')) ||
+    DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS
+  );
 }
 /**
  * ipcMain handler 没有统一 AbortSignal，不能在 30s 客户端超时时假装取消副作用。
@@ -746,10 +807,8 @@ const REMOTE_INVOKE_ORPHAN_TIMEOUT_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS * 2;
  * 默认 30s handler 都会占满 controller 的 in-flight 配额整整 22 分钟,后续远程控制
  * 动作看起来卡住(BACKPRESSURE)。
  */
-function remoteInvokeOrphanTimeoutMs(channel: string | undefined): number {
-  const budgetMs =
-    (channel && INVOKE_TIMEOUT_OVERRIDES_MS[channel]) || DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS;
-  return Math.min(budgetMs * 2, REMOTE_INVOKE_ORPHAN_TIMEOUT_MS);
+function remoteInvokeOrphanTimeoutMs(channel: string | undefined, args?: unknown[]): number {
+  return Math.min(remoteInvokeClientBudgetMs(channel, args) * 2, REMOTE_INVOKE_ORPHAN_TIMEOUT_MS);
 }
 interface CachedRemoteInvokeResult {
   result: InvokeResultPayload;
@@ -759,6 +818,7 @@ interface CachedRemoteInvokeResult {
 const completedRemoteInvokeResults = new Map<string, CachedRemoteInvokeResult>();
 let completedRemoteInvokeResultBytes = 0;
 interface InFlightRemoteInvoke {
+  channel?: string;
   promise: Promise<InvokeResultPayload>;
   bytes: number;
   fingerprint: string;
@@ -1823,13 +1883,18 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   // on the same relay must still receive its unchanged payload.
   let mobilePayload: unknown;
   let mobilePayloadReady = false;
-  const payloadFor = (dst: string): unknown => {
+  const projectedPayloadFor = (dst: string): unknown => {
     if (!subscriptions.controllerSupports(dst, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1)) return remotePayload;
     if (!mobilePayloadReady) {
       mobilePayload = projectMobileToolPush(channel, remotePayload);
       mobilePayloadReady = true;
     }
     return mobilePayload;
+  };
+  // 共享任务访客只能看见本任务：新消息推送里的来源身份与 invoke 读取同口径脱敏。
+  const payloadFor = (dst: string): unknown => {
+    const projected = projectedPayloadFor(dst);
+    return isSharedTaskPeer(dst) ? redactSharedGuestPush(channel, projected) : projected;
   };
   const historySessionId = readPushSessionId(remotePayload);
   const deferred = historySessionId !== null && isDeferredHistoryPush(channel, remotePayload,
@@ -2456,16 +2521,18 @@ function handleLinkOpen(
   // 已在当前 link 上证明支持 topic 的客户端可能重复 open;不能重新装回兼容 wildcard。
   const capabilities = sanitizeControllerCapabilities(payload?.capabilities);
   const rememberedModernTopics = subscriptions.hasRememberedModernTopics(src);
+  // 后台链路:控制端声明本机未订阅任何 topic(如用量读取),同样不装 legacy '*'。
   const knownModernController =
     topicSubscriptionControllers.has(src)
-    || rememberedModernTopics;
+    || rememberedModernTopics
+    || capabilities.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1);
   // 先确认 link-accept 已经进入 socket/可靠层，再提交本地订阅状态。弱网背压下
   // accept 发送失败时不能留下“控制端未连上、被控端却显示已受控”的幽灵订阅。
   try {
     client.sendLinkAccept(src, requestId, {
       appVersion: app.getVersion(),
       allowlistHash: computeAllowlistHash(),
-      capabilities: [DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1],
+      capabilities: [DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
     });
   } catch (err) {
     // 背压等瞬时失败:短退避重试(见 LINK_ACCEPT_RETRY_DELAYS_MS 注释),
@@ -2612,6 +2679,30 @@ async function handleInvoke(
       > REMOTE_INVOKE_IN_FLIGHT_BYTES
   );
   if (controllerAtLimit || globalAtLimit) {
+    const channels: Record<string, number> = {};
+    let executing = 0;
+    let pendingResults = 0;
+    const countChannel = (channel?: string) => {
+      const name = channel && REMOTE_INVOKE_ALLOWLIST.has(channel) ? channel : 'unknown';
+      channels[name] = (channels[name] ?? 0) + 1;
+    };
+    for (const [key, entry] of inFlightRemoteInvokeResults) {
+      if (!key.startsWith(`${src}\u0000`)) continue;
+      executing++;
+      countChannel(entry.channel);
+    }
+    for (const entry of remoteInvokeResultOutbox.values()) {
+      if (entry.src !== src) continue;
+      pendingResults++;
+      countChannel(entry.channel);
+    }
+    log.debug('remote invoke admission busy', {
+      from: shortId(src), controllerAtLimit, globalAtLimit, executing, pendingResults,
+      controllerBytes: controllerAdmission.bytes,
+      globalExecuting: inFlightRemoteInvokeResults.size,
+      globalPendingResults: remoteInvokeResultOutbox.size,
+      channels: Object.fromEntries(Object.entries(channels).sort((a, b) => b[1] - a[1]).slice(0, 8)),
+    });
     const result: InvokeResultPayload = {
       ok: false,
       error: {
@@ -2635,6 +2726,7 @@ async function handleInvoke(
 
   if (joiningExisting && existingListing) {
     const waiterEntry = {
+      channel: payload?.channel,
       promise: existingListing.promise,
       bytes: invokeBytes,
       fingerprint,
@@ -2691,8 +2783,10 @@ async function handleInvoke(
     executionPromise,
     src,
     payload?.channel,
+    payload?.args,
   ).finally(releaseBusyLease);
   const inFlightEntry = {
+    channel: payload?.channel,
     promise: resultPromise,
     bytes: invokeBytes,
     fingerprint,
@@ -2747,9 +2841,10 @@ function settleRemoteInvokeWithOrphanDeadline(
   execution: Promise<InvokeResultPayload>,
   src: string,
   channel: string | undefined,
+  args?: unknown[],
 ): Promise<InvokeResultPayload> {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const orphanMs = remoteInvokeOrphanTimeoutMs(channel);
+  const orphanMs = remoteInvokeOrphanTimeoutMs(channel, args);
   const timeout = new Promise<InvokeResultPayload>((resolve) => {
     timer = setTimeout(() => {
       timer = null;
@@ -2911,14 +3006,27 @@ function normalizeInvokeResultForWire(result: InvokeResultPayload): InvokeResult
   };
 }
 
+/**
+ * @param sharedTaskGuest 结果发往共享任务访客：消息来源里指向房主其它任务 / 伙伴的身份
+ *   一并脱敏（见 sharedTaskMessageOrigin）。同账号控制端保留完整来源以便跳转。
+ */
 function sanitizeMessageInvokeResult(
   result: InvokeResultPayload,
   channel: string | undefined,
+  sharedTaskGuest = false,
 ): InvokeResultPayload {
+  const sanitizeRow = (record: Record<string, unknown>): Record<string, unknown> => {
+    const sanitized = sanitizeRemoteMessage(record);
+    return sharedTaskGuest ? redactMessageRowForSharedGuest(sanitized) : sanitized;
+  };
+  if (sharedTaskGuest && result.ok && channel === 'maker:input:get-projection') {
+    const projection = redactInputProjectionForSharedGuest(result.result);
+    return projection === result.result ? result : { ok: true, result: projection };
+  }
   if (result.ok && (channel === 'local-db:messages:view' || channel === 'local-db:messages:work-details')) {
     const page = result.result as { items?: Array<{ type: string; messages?: unknown[] }>; messages?: unknown[] };
     const sanitize = (message: unknown) => message && typeof message === 'object' && !Array.isArray(message)
-      ? sanitizeRemoteMessage(message as Record<string, unknown>) : message;
+      ? sanitizeRow(message as Record<string, unknown>) : message;
     return { ok: true, result: { ...page,
       ...(page.messages ? { messages: page.messages.map(sanitize) } : {}),
       ...(page.items ? { items: mapHistoryViewMessages(page.items as HistoryViewItem<HistoryMessageSource>[],
@@ -2930,7 +3038,7 @@ function sanitizeMessageInvokeResult(
   let changed = false;
   const sanitized = result.result.map((msg: unknown) => {
     if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return msg;
-    const out = sanitizeRemoteMessage(msg as Record<string, unknown>);
+    const out = sanitizeRow(msg as Record<string, unknown>);
     if (out !== msg) changed = true;
     return out;
   });
@@ -2995,7 +3103,11 @@ function sendInvokeResultSafe(
   fingerprint?: string,
 ): boolean {
   const key = `${src}\u0000${requestId}`;
-  const sanitized = sanitizeMessageInvokeResult(normalizeInvokeResultForWire(result), channel);
+  const sanitized = sanitizeMessageInvokeResult(
+    normalizeInvokeResultForWire(result),
+    channel,
+    isSharedTaskPeer(src),
+  );
   const normalized = sanitized.ok && channel === 'local-db:sessions:list'
     ? {
         ...sanitized,
@@ -3230,7 +3342,7 @@ function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
   const blockedPeers = new Set<string>();
   for (const [key, queued] of remoteInvokeResultOutbox) {
     if (onlySrc && queued.src !== onlySrc) continue;
-    if (now - queued.queuedAt >= outboxEntryMaxAgeMs(queued.channel)) {
+    if (now - queued.queuedAt >= outboxEntryMaxAgeMs(queued.channel, queued.args)) {
       log.warn(
         `dropping expired invoke-result outbox entry for ${queued.channel ?? '?'} ` +
         `to ${shortId(queued.src)} request=${shortId(queued.requestId)} queuedMs=${now - queued.queuedAt}`,
@@ -3713,8 +3825,21 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
   }
 
   if (payload.channel === FILE_PEER_CHANNEL) {
-    try { return { ok: true, result: await requestFilePeer(src, payload.args?.[0]) }; }
+    try { return { ok: true, result: await requestFilePeer(src, payload.args?.[0], (channel, args) => runInvoke(src, { channel, args })) }; }
     catch { return { ok: false, error: { code: 'IPC_ERROR', message: 'FILE_PEER_UNAVAILABLE' } }; }
+  }
+  if (payload.channel === TASK_MIGRATION_CHANNEL) {
+    try {
+      if (isSharedTaskPeer(src)) throw new Error('MIGRATION_ACCESS_REVOKED');
+      const result = await runDeviceLinkInvokeContext(
+        { controllerDeviceId: src, channel: payload.channel },
+        () => requestTaskMigration(payload.args?.[0]),
+      );
+      return { ok: true, result };
+    } catch (error) {
+      const code = /\bMIGRATION_[A-Z_]+\b/.exec(error instanceof Error ? error.message : '')?.[0] ?? 'MIGRATION_FAILED';
+      return { ok: false, error: { code: 'IPC_ERROR', message: code } };
+    }
   }
   if (payload.channel === PLUGIN_OAUTH_CHANNEL) {
     if (payload.args?.length !== 1) return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] Invalid OAuth transaction' } };
@@ -3722,7 +3847,7 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     catch { return { ok: false, error: { code: 'IPC_ERROR', message: '[PRECONDITION_FAILED] Remote authorization unavailable' } }; }
   }
   if (payload.channel === REMOTE_DESKTOP_CHANNEL) {
-    try { return { ok: true, result: await requestRemoteDesktop(src, payload.args?.[0]) }; }
+    try { return { ok: true, result: await timing.measure('handler', () => requestRemoteDesktop(src, payload.args?.[0])) }; }
     catch (error) { return { ok: false, error: { code: 'IPC_ERROR', message: error instanceof Error ? error.message : 'DESKTOP_UNAVAILABLE' } }; }
   }
 

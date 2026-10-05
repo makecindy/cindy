@@ -22,7 +22,7 @@ import { searchConversations } from '../conversationSearch.js';
 const conversationSearchSource = readFileSync(
   resolve(__dirname, '..', 'conversationSearch.ts'),
   'utf8',
-);
+).replace(/\r\n?/g, '\n');
 
 describe('conversationSearch source invariants', () => {
   it('includes visible AskUser cards in content search roles', () => {
@@ -95,6 +95,7 @@ function createSearchDb(): Database.Database {
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
+      context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
@@ -112,6 +113,7 @@ function createSearchDb(): Database.Database {
       feishu_bot_app_id TEXT,
       im_bot_context_id TEXT,
       im_user_id TEXT,
+      im_default_route TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
       codex_history_has_product_prompt INTEGER,
       codex_plan_json TEXT,

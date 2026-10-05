@@ -8,6 +8,8 @@ export interface NewTaskSelectionSheetProps {
   workingDir: string;
   path: string;
   parent: string | null;
+  /** Windows 被控端的盘符切换项;少于两个时为空,不显示。 */
+  drives: readonly { name: string; path: string; current: boolean }[];
   entries: readonly { name: string; path: string }[];
   loading: boolean;
   error: string | null;
@@ -23,7 +25,7 @@ export interface NewTaskSelectionSheetProps {
   onShowHidden(value: boolean): void;
 }
 
-// Android retains its existing selection and directory controls.
+// Native platforms resolve their platform-specific sheet; web retains inline controls.
 export function NewTaskSelectionSheet(_props: NewTaskSelectionSheetProps) {
   return null;
 }

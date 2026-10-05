@@ -75,9 +75,13 @@ export function groupWindowEntryOf(m: TgMessage): Omit<TelegramGroupWindowEntry,
 }
 
 /**
- * 群触发判定: @bot 提及(text/caption entities 内的 @username 精确匹配)、
- * 回复 bot 的消息、或 /cmd@botusername 指令。返回剔除@提及后的干净文本;
- * 未触发返回 null。
+ * 群触发判定: @bot 提及(text/caption entities 内的 @username 精确匹配, 或
+ * 按 user id 指向本 bot 的 text_mention)、回复 bot 的消息、或 /cmd@botusername
+ * 指令。返回剔除@提及后的干净文本; 未触发返回 null。
+ *
+ * 纯 @(剥完为空, 如只发一句 "@bot" 让它看上文)仍是召唤: 保留原文交给 agent,
+ * 与名字召唤、官方 bot「纯 @ 无正文回退原文」同口径 —— 返回空文本会在业务层
+ * 被当成空消息静默丢掉, 用户看到的就是「@ 了没反应」(2026-10-03 群内实测)。
  */
 export function detectGroupTrigger(
   m: TgMessage,
@@ -92,6 +96,13 @@ export function detectGroupTrigger(
   let mentioned = false;
   const strippedRanges: Array<{ start: number; end: number }> = [];
   for (const entity of entities ?? []) {
+    if (entity.type === 'text_mention') {
+      if (entity.user?.id === botId) {
+        mentioned = true;
+        strippedRanges.push({ start: entity.offset, end: entity.offset + entity.length });
+      }
+      continue;
+    }
     if (entity.type !== 'mention' && entity.type !== 'bot_command') continue;
     const value = entitySlice(sourceText, entity);
     if (entity.type === 'mention' && value.toLowerCase() === mentionToken) {
@@ -115,7 +126,9 @@ export function detectGroupTrigger(
 
   let text = stripRanges(sourceText, strippedRanges);
   text = text.replace(new RegExp(`(/[a-zA-Z0-9_]+)@${escapeRegExp(botUsername)}`, 'gi'), '$1');
-  return { text: text.replace(/[ \t]{2,}/g, ' ').trim() };
+  text = text.replace(/[ \t]{2,}/g, ' ').trim();
+  if (!text && mentioned) return { text: sourceText.trim() };
+  return { text };
 }
 
 /**
@@ -293,6 +306,12 @@ export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Pro
 
   return {
     channelName: 'telegram',
+    interactionSource: {
+      chatName: m.chat.title ?? (m.chat.type === 'private' ? displayNameOf(m.from) : chatId),
+      senderName: displayNameOf(m.from),
+      ...(laneThreadIdOf(m) ? { threadName: laneThreadIdOf(m) } : {}),
+      ...(chatId.startsWith('-100') ? { messageUrl: `https://t.me/c/${chatId.slice(4)}/${m.message_id}` } : {}),
+    },
     senderId: ctx.laneUserId ?? String(m.from?.id ?? ''),
     chatId,
     contextId: ctx.contextId,

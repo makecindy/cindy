@@ -1,6 +1,6 @@
 import { getPiExtensionUiCapability } from './extension-ui-capabilities.js';
 import { parsePiManagementArgs, parsePiManagementText } from './managed-command.js';
-import { snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths, extendDisabledSkillLaunchPaths, type DisabledSkillLaunchSnapshot } from '../shared/skill-activation.js';
+import { canonicalSkillPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths, extendDisabledSkillLaunchPaths, type DisabledSkillLaunchSnapshot } from '../shared/skill-activation.js';
 /**
  * PiAgent —— pi coding agent(earendil-works/pi)接入。
  *
@@ -67,6 +67,7 @@ import {
   BaseAgent,
   MAIN_OWNED_SEND_CONTEXT,
   PINNED_SKILL_INVOCATION,
+  PI_REQUEST_BODY_RECOVERY_EXHAUSTED,
   PiManagedPackageMutationCancelledError,
   PiManagedPackageMutationFailedError,
   projectPiPackageCommandDiagnostic,
@@ -85,6 +86,7 @@ import {
   type PiNativeModelSpec,
   type PiNativePackageEntry,
   type PiNativeProviderSpec,
+  type PiModelSwitchPreview,
   type PiSubagentRunnerLaunchRequest,
   type PiSubagentRunnerProcess,
   type SendOptions,
@@ -98,6 +100,7 @@ import {
   CINDY_PI_TEXT_ONLY_CLOSED_PREFIX,
   CINDY_BRIDGE_EXTENSION_SOURCE } from './cindy-bridge-source.js';
 import { nativeProviderAdapterAliases } from './native-provider-adapter-source.js';
+import { parsePiNativeRuntimeSettings, resolvePiNativeReserve, type PiNativeRuntimeSettings } from './native-runtime-settings.js';
 import {
   CINDY_SUBAGENT_ENV,
   CINDY_SUBAGENT_EXTENSION_FILENAME,
@@ -147,6 +150,7 @@ import {
   isSystemPermissionDenialReason,
   formatPermissionDenial,
   resolveAutoReviewDecision,
+  withAutoReviewContext,
   toolAutoReviewAction,
   type AutoReviewDecision,
 } from '../shared/auto-review-decision.js';
@@ -208,6 +212,7 @@ import {
   unavailablePiProjectResourceAssembly,
 } from './project-resource-assembly.js';
 import { applyPiBotSkillPolicy } from './bot-skill-policy.js';
+import { resolveAllowedManagedSkills, snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
 import {
   assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
@@ -232,6 +237,7 @@ import {
   activePiHistoryFromTree,
   findPiTreeEntry,
   normalizePiSessionTree,
+  piRetryBranch,
   piContextTokensFromTree,
   userDraftTextFromPiEntry,
 } from './session-tree.js';
@@ -1900,9 +1906,8 @@ export class PiAgent extends BaseAgent {
     return {
       switchModel: { supported: true },
       availableModels: [],
-      // Pi 的 ChatGPT 模型经 Desktop responses bridge 调用。Fast 状态由 host 按
-      // sessionId 注入 bridge prefs,再映射为 Codex `service_tier: priority`；实际
-      // 是否显示开关仍由目录里该 (provider, model, pi) 的 supportsFastMode 门控。
+      // ChatGPT 订阅由 Desktop bridge 注入 Fast；自定义直连由原生请求钩子读取
+      // 本运行时偏好，映射 service_tier: priority。两者均由该连接的能力声明门控。
       hasFastMode: true,
       effort: { supported: true },
       effortLevels: [
@@ -2095,8 +2100,8 @@ export class PiAgent extends BaseAgent {
    *     每会话随机目录(run-tmp/<hex>),只读会话文件会让「重启后新会话」拿不到
    *     用户配置;稳定根文件才是跨启动生效的逃生门(对齐原生 pi 的
    *     ~/.pi/agent/settings.json 位置语义,Cindy 自身从不写它)。
-   * 远端 fileOps 无 readFile,保持原覆写行为(远端 configHome 全托管,且本机
-   * shell 路径对远端主机无意义)。
+   * 远端 configHome 全托管,不透传本机 shell 配置；未提供新预算表时通过
+   * fileOps.readFile 保留远端既有 modelOverrides,读取/解析失败交给调用方处理。
    */
   private async buildSettingsJsonPreservingUserKeys(
     settingsJsonPath: string,
@@ -2107,15 +2112,31 @@ export class PiAgent extends BaseAgent {
       piCompactionPct?: number;
       packages?: readonly PiNativePackageEntry[];
       disabledSkills?: DisabledSkillLaunchSnapshot;
+      compactionModelOverrides?: Record<string, { reserveTokens: number }>;
     },
   ): Promise<string> {
-    const built = this.buildCurrentPiSettingsJson(
+    let built = this.buildCurrentPiSettingsJson(
       opts.contextWindow,
       opts.piCompactionPct,
       opts.packages,
       opts.workingContextWindow,
     );
-    if (opts.fileOps) return built;
+    if (opts.compactionModelOverrides) {
+      const settings = JSON.parse(built);
+      settings.compaction = { ...settings.compaction, modelOverrides: opts.compactionModelOverrides };
+      built = JSON.stringify(settings, null, 2) + '\n';
+    }
+    if (opts.fileOps) {
+      if (!opts.compactionModelOverrides) {
+        const current = JSON.parse(await opts.fileOps.readFile(settingsJsonPath, 1_000_000));
+        const settings = JSON.parse(built);
+        if (current.compaction?.modelOverrides) {
+          settings.compaction = { ...settings.compaction, modelOverrides: current.compaction.modelOverrides };
+        }
+        return JSON.stringify(settings, null, 2) + '\n';
+      }
+      return built;
+    }
     const readOrNull = async (file: string): Promise<string | null> => {
       try {
         return await fs.readFile(file, 'utf8');
@@ -2130,7 +2151,14 @@ export class PiAgent extends BaseAgent {
         ? Promise.resolve(null)
         : readOrNull(stableUserSettingsPath),
     ]);
-    const merged = mergePiUserSettingsPassthrough(built, sessionContent, stableContent);
+    const mergedSettings = JSON.parse(mergePiUserSettingsPassthrough(built, sessionContent, stableContent));
+    // Package/resource setup rewrites this private file after the model catalog.
+    // Keep the per-model budgets generated with that catalog.
+    if (!opts.compactionModelOverrides && sessionContent) {
+      const overrides = JSON.parse(sessionContent).compaction?.modelOverrides;
+      if (overrides) mergedSettings.compaction = { ...mergedSettings.compaction, modelOverrides: overrides };
+    }
+    const merged = JSON.stringify(mergedSettings, null, 2) + '\n';
     // Runtime rewrites use the startup bindings, never paths reconstructed from
     // settings.json: those paths can now point to a different physical Skill.
     if (opts.disabledSkills) {
@@ -2194,6 +2222,8 @@ export class PiAgent extends BaseAgent {
     gatewayApiByModel: Map<string, PiGatewayApi>;
     /** models.json + settings.json 内容 sha256 —— 远端 daemon 启动身份的一部分。 */
     modelsJsonHash: string;
+    /** Models alone, excluding the independently mutable compaction settings. */
+    modelConfigHash: string;
   }> {
     // 远端:baseUrl 用 host 注入的 upstream endpoint(remoteEndpoint,gateway key 同源),
     // 不用本地 loopback compat proxy(远端够不到)。订阅 OAuth 的 loopback 分流远端不可达,
@@ -2213,7 +2243,7 @@ export class PiAgent extends BaseAgent {
       }
       this.deps.logger.warn('pi: runtimeConfig.endpoint missing — models.json will have no usable provider');
     }
-    const publicModels = this.capabilities.availableModels;
+    const publicModels = this.deps.resolvePiRuntimeModels?.() ?? this.capabilities.availableModels;
     const runtimeModels =
       retainedRuntimeModel && !publicModels.some((m) => m.id === retainedRuntimeModel.id)
         ? [...publicModels, retainedRuntimeModel]
@@ -2380,9 +2410,23 @@ export class PiAgent extends BaseAgent {
     // isolated embedded runtime. Other PI providers ignore this transport knob.
     // Agent-level retries stay with Pi (provider maxRetries stays 0 — Pi docs:
     // SDK retries can swallow quota errors before the agent sees them).
+    const compactionModelOverrides: Record<string, { reserveTokens: number }> = {};
+    const addBudget = (provider: string, id: string, window: number, workingWindow?: number) => {
+      const settings = JSON.parse(buildPiSettingsJsonContent(window, opts.piCompactionPct, [], workingWindow));
+      compactionModelOverrides[`${provider}/${id}`] = { reserveTokens: settings.compaction?.reserveTokens ?? 16_384 };
+    };
+    for (const model of models) addBudget(PI_PROVIDER_ID, model.id, model.contextWindow,
+      this.deps.resolveModelContextLimit?.(gatewayProviderId ?? 'xd', model.id) ?? undefined);
+    for (const provider of nativeProviders) {
+      if (provider.id === PI_PROVIDER_ID) continue;
+      for (const model of provider.models) {
+        const workingWindow = this.deps.resolveModelContextLimit?.(provider.sourceProviderId ?? provider.id, model.id) ?? undefined;
+        addBudget(provider.id, model.wireId ?? model.id, Math.max(model.contextWindow ?? 128_000, workingWindow ?? 0), workingWindow);
+      }
+    }
     const settingsJsonContent = await this.buildSettingsJsonPreservingUserKeys(
       settingsJsonPath,
-      opts,
+      { ...opts, compactionModelOverrides },
     );
     // 远端 launch identity 必须覆盖进程启动才读的快照。只 hash models.json 时，
     // retry/transport/compaction 改写会落到旧 configHome，daemon 纯 attach。
@@ -2391,6 +2435,7 @@ export class PiAgent extends BaseAgent {
       .update('\n')
       .update(settingsJsonContent)
       .digest('hex');
+    const modelConfigHash = createHash('sha256').update(modelsJsonContent).digest('hex');
     if (!opts.preview) {
       // 诊断(排查 LAZY_CREATE_FAILED):远端写前留痕 —— 确认 writeModelsJson 是否
       // 执行、endpoint 是否有值、路径形态。
@@ -2423,6 +2468,7 @@ export class PiAgent extends BaseAgent {
       // 远端 daemon 启动身份:models.json + settings.json。BYOM/gateway 或 retry
       // 策略变更都必须杀旧进程，不能纯 attach 沿用内存里的旧快照。
       modelsJsonHash,
+      modelConfigHash,
     };
   }
 
@@ -2666,12 +2712,9 @@ export class PiAgent extends BaseAgent {
     // hostProxyForward 的 provider（当前为 xAI）仍通过 Desktop compat proxy：
     // SSH 只解决可达性，session token 继续提供逐会话鉴权，不能把 loopback 端口
     // 当作信任边界。
-    const remoteUsesHostProxy = remote && nativeProviders.some((provider) => provider.hostProxyForward);
-    const proxySessionToken = remoteUsesHostProxy
+    const proxySessionToken = remote
       ? stableRemoteProxySessionToken(opts.sessionId, this.deps.derivePiProxySessionToken)
-      : !remote
-        ? randomBytes(32).toString('base64url')
-        : undefined;
+      : randomBytes(32).toString('base64url');
 
     // A child may deliberately use a different provider from its parent (for
     // example a ChatGPT parent delegating to Grok). Freeze every model route
@@ -2815,7 +2858,7 @@ export class PiAgent extends BaseAgent {
         Boolean(gatewaySubagentProxyToken),
       );
     }
-    const subagentModelRoutes = Object.fromEntries(
+    let subagentModelRoutes = Object.fromEntries(
       [...subagentModelRouteCandidates].map(([id, candidates]) => [id, [...candidates.values()]]),
     );
     const startupEffort = reconcilePiStartupEffort(opts.effort, selectedRuntimeModel);
@@ -2828,32 +2871,34 @@ export class PiAgent extends BaseAgent {
       });
     }
 
-    // Pi 子进程只读取本次启动生成的 models.json。renderer 目录热更新后，不能把新出现的
-    // effort 直接发送给仍在运行的旧进程；否则 Pi 会把 thinkingLevelMap 中的 null 当作
-    // 关闭 reasoning。这里冻结每个可路由模型在该启动快照中的能力，setModel 成功后只
-    // 切换到同一快照里已有的目标模型能力。
-    const resolveStartupEffortSnapshot = (providerId: string, modelId: string): readonly Effort[] | undefined => {
+    // Gateway effort admission follows only descriptors actually applied to
+    // Pi's registry, never the renderer's newer catalog ahead of refresh ACK.
+    const appliedGatewayEfforts = new Map<string, readonly Effort[]>();
+    for (const model of this.deps.resolvePiRuntimeModels?.() ?? this.capabilities.availableModels) {
+      const gateway = this.deps.resolvePiGatewayModelDescriptor
+        ? this.deps.resolvePiGatewayModelDescriptor(authProviderId, model.id)
+        : model;
+      if (gateway) appliedGatewayEfforts.set(model.id, gateway.efforts);
+    }
+    if (initialProvider === PI_PROVIDER_ID && selectedRuntimeModel) {
+      appliedGatewayEfforts.set(selectedRuntimeModel.id, selectedRuntimeModel.efforts);
+    }
+    const resolveAppliedEffortSnapshot = (providerId: string, modelId: string): readonly Effort[] | undefined => {
       if (providerId !== PI_PROVIDER_ID) {
         return startupEffortsOfNativeModel(
           nativeProviderById.get(providerId)?.models.find((model) => model.id === resolveNativeModelId(providerId, modelId)),
         );
       }
-      const gatewayModel =
-        modelId === opts.model && selectedRuntimeModel
-          ? selectedRuntimeModel
-          : (this.deps.resolvePiGatewayModelDescriptor?.(authProviderId, modelId) ??
-            this.capabilities.availableModels.find((model) => model.id === modelId));
-      return gatewayModel?.efforts;
+      return appliedGatewayEfforts.get(modelId);
     };
-    const initialEffortSnapshot = resolveStartupEffortSnapshot(initialProvider, opts.model);
+    const initialEffortSnapshot = resolveAppliedEffortSnapshot(initialProvider, opts.model);
     const assertStartupEffortAllowed = (snapshot: readonly Effort[] | undefined, effort: Effort): void => {
       // efforts:[] 仍可能收到 resolveEffort 的 UI 占位值 low；它代表“不支持切换”，
       // 只需跳过 RPC。其它档位必须拒绝，避免热刷目录后的新 effort 绕过启动快照。
       if (!snapshot || (snapshot.length === 0 && effort === 'low')) return;
       if (snapshot.includes(effort)) return;
       throw new Error(
-        `pi set_thinking_level refused: effort '${effort}' is not available in this session's ` +
-          'startup model snapshot; restart the Pi session after changing provider capabilities.',
+        `pi set_thinking_level refused: effort '${effort}' is not in Pi's applied model catalog.`,
       );
     };
 
@@ -2871,7 +2916,7 @@ export class PiAgent extends BaseAgent {
         'pi',
         `pi not authenticated: ${authState.errorReason ?? 'no_key'}`);
     }
-    const authEnv = await this.deps.auth.getAuthEnv({
+    let authEnv = await this.deps.auth.getAuthEnv({
       credentialMode,
       providerId: authProviderId,
     });
@@ -3060,7 +3105,7 @@ export class PiAgent extends BaseAgent {
         `${stableSessionPathSegment(opts.sessionId)}-${preview.modelsJsonHash.slice(0, 16)}${globalContextHash ? `-${globalContextHash}` : ''}`,
       );
     }
-    const { gatewayImageInputByModel, gatewayApiByModel, modelsJsonHash } = await this.writeModelsJson(
+    const { gatewayImageInputByModel, gatewayApiByModel, modelsJsonHash, modelConfigHash } = await this.writeModelsJson(
       configHome,
       nativeProviders,
       retainedRuntimeModel,
@@ -3110,13 +3155,9 @@ export class PiAgent extends BaseAgent {
     // the remote host while Cindy observes and controls an unrelated local
     // directory. Keep the capability absent until the wire protocol owns those
     // files remotely end-to-end.
-    // Bot sessions are a product persona, not a coding harness: the native
-    // subagent surface must stay invisible to them. Their tracked work goes
-    // through Cindy Session tasks instead.
     const localSubagentSupported = Boolean(
       !reviewMode
       && !remote
-      && !opts.botRuntimeProfile
       && this.deps.spawnPiSubagentRunner,
     );
     if (localSubagentSupported) {
@@ -3231,6 +3272,17 @@ export class PiAgent extends BaseAgent {
       runtimeDir,
       `perm-${sid ?? `anon-${process.pid}-${Date.now()}`}-${runtimeInstanceId}${remote ? `-${permissionSnapshotHash}` : ''}.json`,
     );
+    const fastModels = nativeProviders.flatMap(provider => provider.models
+      .filter(model => model.supportsFastMode === true)
+      .map(model => ({ provider: provider.id, id: model.wireId ?? model.id })));
+    // Fast is host-owned state. The bridge reads it over RPC; no writable file
+    // (or replayable snapshot) can authorize a paid request tier.
+    let requestPrefsClosed = false;
+    let nativeFastEnabled = opts.getPriceVariant?.() === 'priority';
+    const updateRequestPrefs = (fast = opts.getPriceVariant ? opts.getPriceVariant() === 'priority' : nativeFastEnabled): void => {
+      if (requestPrefsClosed) throw new Error('Pi request preferences are closed');
+      nativeFastEnabled = fast;
+    };
     let activeToolsDisabled = false;
     let textOnlyPolicyReady = false;
     const textOnlyInput = (text: string): string => {
@@ -3254,6 +3306,7 @@ export class PiAgent extends BaseAgent {
     const cleanupRuntimeFiles = (): void => {
       if (runtimeFilesCleaned) return;
       runtimeFilesCleaned = true;
+      requestPrefsClosed = true;
       void rmPath(permissionFile);
       void rmPath(subagentRuntimeFile);
     };
@@ -3361,6 +3414,7 @@ export class PiAgent extends BaseAgent {
       return run;
     };
     await writePermissionFile(requestedPermissionSnapshot);
+    updateRequestPrefs();
 
     // 子代理运行期快照的写入:代际串行,最新意图胜出(理由同权限档 —— 并发/连续 setModel
     // 时无串行的 writeFile 可能让较早的模型写在较新的之后落盘,子代理就会读到过期模型)。
@@ -3733,44 +3787,83 @@ export class PiAgent extends BaseAgent {
         }
       : collectedProjectResources;
 
-    const args = [
-      '--mode',
-      'rpc',
-      // --no-approve remains the hard project-settings gate. Explicit --skill /
-      // --prompt-template / --extension pass original in-repo paths without
-      // trusting `.pi/settings.json` or auto-installing project packages.
-      '--no-approve',
-      ...(nativePackagePaths.length === 0 ? ['--no-extensions'] : []),
-      '--session-dir',
-      sessionDir,
-      '--provider',
-      initialProvider,
-      '--model',
-      initialWireModel,
-      ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
-      // Bot sessions must not absorb project/global AGENTS.md or CLAUDE.md from
-      // the cwd chain — their context is the Bot profile, not the workspace.
-      ...(opts.botRuntimeProfile ? ['--no-context-files'] : []),
-      ...(botSkillSelection.disableImplicitSkills ? ['--no-skills'] : []),
-      ...(appendSystemPrompt.length > 0 ? ['--append-system-prompt', appendSystemPrompt] : []),
-      '--extension',
-      bridgeExtensionPath,
-      ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
-      ...(!reviewMode && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
-      ...(loadProjectResourcesInPlace
-        ? piProjectResourceCliArgs(projectResourceCli)
-        : botSkillSelection.explicitSkillPaths.flatMap((skillPath) => ['--skill', skillPath])),
-    ];
+    // Own the entire managed-skill setup in the existing startup rollback:
+    // discovery and path checks can fail before any projection is created.
+    let managedSkillPaths: string[];
+    let managedSkillRoot: string | undefined;
+    let args: string[];
     try {
+      const managedSkillGrants = snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy);
+      const managedSkills = opts.remoteHostId || reviewMode ? [] : await this.deps.getManagedSkills?.() ?? [];
+      const managedDisabledPaths = snapshotDisabledSkillLaunch(opts.remoteHostId || reviewMode ? [] : this.deps.getDisabledSkillPaths?.() ?? []);
+      const managedSourceIdentities = new Set(managedSkills.flatMap((skill) =>
+        skill.path ? [canonicalSkillPath(skill.path)] : []));
+      const managedSourcePaths = new Set(managedSkills.flatMap((skill) => skill.path ? [path.resolve(skill.path)] : []));
+      managedSkillPaths = resolveAllowedManagedSkills(managedSkills, managedSkillGrants,
+        currentDisabledSkillLaunchPaths(managedDisabledPaths)).map((skill) => skill.path);
+      // The catalog path may alias a managed source. Apply the managed grant and
+      // activation checks once, including paths already selected by the Bot.
+      const additionalSkillPaths = [...new Map([
+        ...(loadProjectResourcesInPlace ? [] : botSkillSelection.explicitSkillPaths.filter((skillPath) =>
+          !managedSourcePaths.has(path.resolve(skillPath)) && !managedSourceIdentities.has(canonicalSkillPath(skillPath)))),
+      ].map((skillPath) => [canonicalSkillPath(skillPath), skillPath])).values()];
+
+      // One explicit directory also works with --no-skills. Keep its lifetime in
+      // the existing per-session configHome and link only already-authorized
+      // physical sources; argv size must not grow with installed plugin count.
+      const managedLaunchSkills = managedSkillPaths.filter((skillPath) => !projectResourceCli.skills
+        .some((existing) => canonicalSkillPath(existing) === canonicalSkillPath(skillPath)));
+      managedSkillRoot = managedLaunchSkills.length ? path.join(configHome, 'cindy-managed-skills') : undefined;
+
+      args = [
+        '--mode',
+        'rpc',
+        // --no-approve remains the hard project-settings gate. Explicit --skill /
+        // --prompt-template / --extension pass original in-repo paths without
+        // trusting `.pi/settings.json` or auto-installing project packages.
+        '--no-approve',
+        ...(nativePackagePaths.length === 0 ? ['--no-extensions'] : []),
+        '--session-dir',
+        sessionDir,
+        '--provider',
+        initialProvider,
+        '--model',
+        initialWireModel,
+        ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
+        // Bot sessions must not absorb project/global AGENTS.md or CLAUDE.md from
+        // the cwd chain — their context is the Bot profile, not the workspace.
+        ...(opts.botRuntimeProfile ? ['--no-context-files'] : []),
+        ...(botSkillSelection.disableImplicitSkills ? ['--no-skills'] : []),
+        ...additionalSkillPaths.filter((skillPath) => !projectResourceCli.skills
+          .some((existing) => canonicalSkillPath(existing) === canonicalSkillPath(skillPath)))
+          .flatMap((skillPath) => ['--skill', skillPath]),
+        ...(managedSkillRoot ? ['--skill', managedSkillRoot] : []),
+        ...(appendSystemPrompt.length > 0 ? ['--append-system-prompt', appendSystemPrompt] : []),
+        '--extension',
+        bridgeExtensionPath,
+        ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
+        ...(!reviewMode && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
+        ...(loadProjectResourcesInPlace
+          ? piProjectResourceCliArgs(projectResourceCli)
+          : []),
+      ];
+      if (managedSkillRoot) {
+        await fs.mkdir(managedSkillRoot);
+        for (const [index, skillPath] of managedLaunchSkills.entries()) {
+          // Preserve discovery order for same-name skills without long filenames.
+          await fs.symlink(path.dirname(skillPath), path.join(managedSkillRoot, String(index).padStart(12, '0')),
+            process.platform === 'win32' ? 'junction' : 'dir');
+        }
+      }
       assertPiSpawnArgvFitsPlatform(args);
     } catch (error) {
       try {
         disposeSessionCtx?.();
       } catch {
-        /* best-effort: cleanup failure must not mask argv budget failure */
+        /* best-effort: cleanup failure must not mask Skill setup / argv failure */
       }
       disposeSessionCtx = undefined;
-      cleanupConfigHome();
+      await cleanupConfigHome();
       cleanupRuntimeFiles();
       throw error;
     }
@@ -3778,6 +3871,7 @@ export class PiAgent extends BaseAgent {
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
     ctx.getPriceVariant = opts.getPriceVariant;
+    ctx.resolveUsagePriceVariant = opts.resolveUsagePriceVariant;
     ctx.workingContextWindow = startupWorkingContextWindow;
     const contextModeRoot = findContextModePackageRoot([
       ...nativePackageRoots,
@@ -3797,6 +3891,16 @@ export class PiAgent extends BaseAgent {
     // follow-up send)同口径。清空只认 turn 终态,由 send 预检覆盖为最新值。
     let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
     let mutableModel = opts.model;
+    let appliedModelConfigHash = modelConfigHash;
+    let pendingCurrentDescriptorRefresh = false;
+    let retainedLiveGatewayModel = initialProvider === PI_PROVIDER_ID ? selectedRuntimeModel : undefined;
+    const providerRefreshStages = new Map<string, {
+      nonce: string;
+      operation: 'inspect' | 'refresh';
+      env: Record<string, string>;
+      aliases: ReturnType<typeof nativeProviderAdapterAliases>;
+      acknowledge: (ok: boolean, code?: string, settings?: unknown) => void;
+    }>();
     let mutableWireModel = initialWireModel;
     // Pi RPC 实际选中的 provider。与用于宿主鉴权/审阅元数据的 mutableProviderId 分开：
     // null/订阅来源会归一到 cindy，setModel 未显式传来源时也必须跟随本次解析结果。
@@ -3805,6 +3909,7 @@ export class PiAgent extends BaseAgent {
     let activeEffortSnapshot = initialEffortSnapshot;
     let mutableEffort: Effort | null = startupEffort ?? null;
     let currentAutoReviewIntent: AutoReviewUserIntent = '';
+    let autoReviewIntentInitialized = false;
     const autoReviewActionContext = createAutoReviewActionContext();
     const autoReviewContext = () => activeTurnPermissionPolicy?.autoReviewContext
       ?? (activeTurnPermissionPolicy?.origin.kind === 'im'
@@ -3812,11 +3917,12 @@ export class PiAgent extends BaseAgent {
         : undefined);
     // Authorization belongs to the accepted input, not the foreground policy's lifetime.
     let currentAutoReviewAuthority: ReturnType<typeof autoReviewContext> | null;
-    const priorAutoReviewIntent = () => JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(autoReviewContext() ?? null) ? currentAutoReviewIntent : '';
+    const priorAutoReviewIntent = () => !autoReviewIntentInitialized ? undefined : JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(autoReviewContext() ?? null) ? currentAutoReviewIntent : '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
     const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }): void => {
       autoReviewActionContext.advance(typeof content !== 'string' && JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(source.authority ?? null));
       currentAutoReviewIntent = normalizeAutoReviewUserIntent(content);
+      autoReviewIntentInitialized = true;
       currentAutoReviewAuthority = source.authority && { ...source.authority };
       autoReviewDecisionCache.clear();
       // 每条新用户消息 = 新一轮,提示重新武装。ErrorBanner 那份只活到下一条非 error 事件
@@ -3913,7 +4019,7 @@ export class PiAgent extends BaseAgent {
     };
     const autoReviewUnavailableNotice = createAutoReviewUnavailableNotice(emitAutoReviewRuntimeNotice);
     const autoReviewConfirmUndeliveredNotice = createAutoReviewConfirmUndeliveredNotice(emitAutoReviewRuntimeNotice);
-    const reviewAutoAction = (action: ReviewableAction): Promise<AutoReviewDecision> => {
+    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false): Promise<AutoReviewDecision> => {
       // Directory grants become active only after their permission snapshot is
       // durable. While persistence is pending, neither the requested roots nor
       // the old runtime roots are a complete authorization view, so fail closed
@@ -3941,26 +4047,29 @@ export class PiAgent extends BaseAgent {
         writableRoots: [opts.workingDir, ...mutableWritableDirs],
         platform: opts.remoteHostId ? ('linux' as const) : process.platform,
       };
-      const cacheKey = JSON.stringify(request);
-      let pending = autoReviewDecisionCache.get(cacheKey);
-      if (!pending) {
-        pending = resolveAutoReviewDecision(request, this.deps.reviewAutoPermissionAction);
-        autoReviewDecisionCache.set(cacheKey, pending);
-      }
-      return pending.then<AutoReviewDecision>((decision) => (
-        autoReviewDecisionCache.get(cacheKey) !== pending
-          ? { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' }
-          : directoryGeneration === autoReviewDirectoryGeneration
-          && !directoryPermissionsPendingPersistence()
-          ? decision
-          : {
-              verdict: 'block',
-              reason: 'Directory permissions changed; retry with the current scope.',
-            }
-      )).then((decision) => {
-        if (autoReviewDecisionCache.get(cacheKey) === pending && directoryGeneration === autoReviewDirectoryGeneration) {
-          autoReviewActionContext.record(action, decision);
+      let cacheKey: string | undefined;
+      let pending: Promise<AutoReviewDecision> | undefined;
+      return withAutoReviewContext(request, this.deps.reviewAutoPermissionAction, (prepared) => {
+        if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)) {
+          return Promise.resolve({ verdict: 'block', reason: 'User instructions changed; retry against the current request.' });
         }
+        cacheKey = JSON.stringify([prepared, hostAutoApprove, hostShortcutOnly]);
+        pending = autoReviewDecisionCache.get(cacheKey);
+        if (!pending) {
+          pending = resolveAutoReviewDecision(prepared, this.deps.reviewAutoPermissionAction, hostAutoApprove, hostShortcutOnly);
+          autoReviewDecisionCache.set(cacheKey, pending);
+        }
+        return pending;
+      }, (decision) => {
+        if (!pending || !cacheKey) return decision;
+        if (request.userIntent !== currentAutoReviewIntent || request.authorizationContext !== (currentAutoReviewAuthority ?? undefined)
+            || autoReviewDecisionCache.get(cacheKey) !== pending) {
+          return { verdict: 'block', reason: 'User instructions changed; retry against the latest authorization.' };
+        }
+        if (directoryGeneration !== autoReviewDirectoryGeneration || directoryPermissionsPendingPersistence()) {
+          return { verdict: 'block', reason: 'Directory permissions changed; retry with the current scope.' };
+        }
+        autoReviewActionContext.record(action, decision);
         return decision;
       });
     };
@@ -4237,13 +4346,13 @@ export class PiAgent extends BaseAgent {
       // otherwise the entry is filed under the new generation and the retry gate
       // below never opens again.
       const offeredUnderGeneration = interactionResolverGeneration;
-      const offeredInAuto = permissionMode === 'auto';
+      let checkingAutomaticPermission = permissionMode === 'auto';
       const offeredWhileClosed = closed;
       const offeredAfterProcessExit = piProcessExited;
       // Detached runs outlive the root, but an Auto verdict must not straddle
       // its teardown. Reuse the durable unanswered path without stopping later
       // offers that begin under the already-detached lifecycle.
-      const autoReviewOfferExpired = (): boolean => offeredInAuto
+      const autoReviewOfferExpired = (): boolean => checkingAutomaticPermission
         && (closed !== offeredWhileClosed || piProcessExited !== offeredAfterProcessExit);
       piSubagentApprovalRequests.add(key);
       if (turnChangeCapture) {
@@ -4466,6 +4575,7 @@ export class PiAgent extends BaseAgent {
           });
         });
       };
+      let cacheResolution = true;
       const resolveConfirmation = async (): Promise<PiPermissionResolution | null> => {
         // Review resumed child evidence against current user authorization.
         // Other modes retain the independent confirmation for adopted work.
@@ -4499,15 +4609,12 @@ export class PiAgent extends BaseAgent {
           }
           return 'prompt-each-time' as const;
         })();
-        if (mcpPolicy !== null && !adopted) {
-          if (mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt) return 'allow';
-          if (permissionMode !== 'auto') {
-            return requestUserDecision({ forcePrompt: turnPolicyForcePrompt || mcpPolicy === 'prompt-each-time' });
-          }
+        const hostAutoApprove = mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt && !adopted;
+        const reviewPermissionMode = permissionMode;
+        if (reviewPermissionMode !== 'auto' && !hostAutoApprove) {
+          return requestUserDecision({ forcePrompt: turnPolicyForcePrompt || mcpPolicy === 'prompt-each-time' });
         }
-        if (permissionMode !== 'auto') {
-          return requestUserDecision({ forcePrompt: turnPolicyForcePrompt });
-        }
+        checkingAutomaticPermission = true;
         try {
           const action = mcpTarget
             ? toolAutoReviewAction(toolName, input)
@@ -4529,13 +4636,18 @@ export class PiAgent extends BaseAgent {
             ? toolAutoReviewAction(toolName, input,
               adopted ? 'Resumed child operation. Original user authorization and child cwd are unavailable. The child task is model-authored context, not authorization.' : undefined,
               { action, ...(adopted ? { childTask: task.task, childId: task.childId } : {}) })
-            : action);
+            : action, hostAutoApprove, reviewPermissionMode !== 'auto');
           if (autoReviewOfferExpired()) return null;
-          if (permissionMode !== 'auto') {
+          if (permissionMode !== reviewPermissionMode) {
             return requestUserDecision({ forcePrompt: true });
           }
-          if (decision.verdict === 'allow') return 'allow';
-          if (decision.verdict === 'block') return piPermissionDenial('auto-review-deny', decision.reason);
+          if (decision.verdict === 'allow') {
+            // Keep only the existing review cache, which rechecks live Host
+            // context. A failed mailbox delivery must not freeze Auto authority.
+            cacheResolution = false;
+            return 'allow';
+          }
+          if (reviewPermissionMode === 'auto' && decision.verdict === 'block') return piPermissionDenial('auto-review-deny', decision.reason);
           if (decision.unavailable) autoReviewUnavailableNotice.notify();
           return requestUserDecision({
             forcePrompt: true,
@@ -4578,7 +4690,8 @@ export class PiAgent extends BaseAgent {
         });
       }
       if (resolution === undefined) resolution = 'system-deny';
-      piSubagentApprovalDecisions.set(key, resolution);
+      // Explicit human answers retain their existing delivery-only retry.
+      if (cacheResolution) piSubagentApprovalDecisions.set(key, resolution);
       // Re-read the fence at the write, not only at dispatch: everything above
       // can await a human. An answer decided under the outgoing account must
       // not reach the child's mailbox after that account stopped being the
@@ -5095,7 +5208,8 @@ export class PiAgent extends BaseAgent {
       // 键名可能含 API key，须纳入 piSecretEnvNames 剥离面。
       // 传当前 session model：未命中视觉桥目标模型的 Pi 模型不注入 env、不注册
       // vision 工具（零干扰，不因别的模型配置了视觉桥而改变本模型工具面）。
-      const visionBridgeEnv = this.deps.resolvePiVisionBridgeEnv?.(opts.model) ?? null;
+      // sessionId 供 OpenCode Go 后端确定性派生会话头（spawn env 必须稳定）。
+      const visionBridgeEnv = this.deps.resolvePiVisionBridgeEnv?.(opts.model, opts.sessionId) ?? null;
       // 这些值必须留在 Pi 父进程，供 models.json 的 $ENV 请求期解析及 bridge
       // client 使用；cindy-bridge 用该**仅含变量名**的清单在 bash spawn 边界剥离
       // 真值，阻止 LLM shell 绕过工具审批直连 localhost proxy/MCP 或盗用 BYOM key。
@@ -5117,6 +5231,7 @@ export class PiAgent extends BaseAgent {
         // 扩展照旧现读快照,能力不受影响。
         CINDY_SUBAGENT_ENV.runtimeFile,
         CINDY_SUBAGENT_ENV.ownerId,
+        'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
         // 受管工具路径同属控制面：不得让获批 bash 改写/替换后影响后续自动放行的 grep/find。
         ...(managedRipgrepPath ? [PI_MANAGED_RG_PATH_ENV] : []),
       ]));
@@ -5128,6 +5243,8 @@ export class PiAgent extends BaseAgent {
       // 失败(fail-closed)直接传播 —— 用户显式开启代理却静默直连是安全语义缺陷
       // (R2 MCP BUG-2):隧道 arm 失败应让会话启动失败,而非绕过代理。
       const proxyEnv = remote && this.deps.getRemotePiAgentProxyEnv ? await this.deps.getRemotePiAgentProxyEnv(opts.remoteHostId!) : null;
+      const companionEnvironment = opts.botRuntimeProfile && !remote && opts.sessionId
+        ? await this.deps.resolveSessionEnvironment?.(opts.sessionId) : undefined;
       const spawnEnv: NodeJS.ProcessEnv = {
         ...(remote ? {} : process.env),
         ...(typeof this.deps.runtimeConfig.behaviorFlags === 'function'
@@ -5153,6 +5270,7 @@ export class PiAgent extends BaseAgent {
         PI_CODING_AGENT_DIR: configHome,
         [PI_BASH_PACKAGE_HOME_ENV]: bashPackageHome,
         CINDY_PI_PERMISSION_FILE: permissionFile,
+        ...(fastModels.length > 0 ? { CINDY_PI_FAST_MODELS: JSON.stringify(fastModels) } : {}),
         CINDY_PI_TURN_TOOL_POLICY: remote ? '' : runtimeInstanceId,
         ...(allowPiPackageManagement ? { [PI_PACKAGE_MANAGEMENT_ENV]: piPackageManagementToken } : {}),
         // 轮 40-w4-t12 HIGH-1:review-only 启动标记 —— 独立于权限文件(文件损坏/
@@ -5208,6 +5326,7 @@ export class PiAgent extends BaseAgent {
       mergeLoopbackNoProxy(spawnEnv);
       durableSpawnEnv = spawnEnv;
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
+      companionEnvironment?.assertCurrent?.();
       piSpawnStartedAt = Date.now();
       const { transport } = await this.createTransport(
         {
@@ -5245,10 +5364,32 @@ export class PiAgent extends BaseAgent {
             }
           }
           if (event.type === 'extension_ui_request') {
+            if (event.method === 'input' &&
+                (event.title === 'cindy:provider-refresh' || event.title === 'cindy:provider-refresh-ack')) {
+              const requestId = typeof event.id === 'string' ? event.id : '';
+              let payload: { nonce?: unknown; ok?: unknown; code?: unknown; runtimeSettings?: unknown } = {};
+              try { payload = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '{}'); }
+              catch { /* Invalid private command payload is rejected below. */ }
+              const stage = typeof payload.nonce === 'string' ? providerRefreshStages.get(payload.nonce) : undefined;
+              const valid = Boolean(requestId && stage && payload.nonce === stage.nonce &&
+                !closed && !piProcessExited && !proc.isClosed && !accountBoundaryTeardown);
+              if (event.title === 'cindy:provider-refresh') {
+                proc.send(valid
+                  ? { type: 'extension_ui_response', id: requestId,
+                    value: JSON.stringify({ nonce: stage!.nonce, operation: stage!.operation, env: stage!.env, aliases: stage!.aliases }) }
+                  : { type: 'extension_ui_response', id: requestId, cancelled: true });
+              } else {
+                if (valid) stage!.acknowledge(payload.ok === true, typeof payload.code === 'string' ? payload.code : undefined, payload.runtimeSettings);
+                proc.send({ type: 'extension_ui_response', id: requestId, cancelled: true });
+              }
+              return;
+            }
             this.handleExtensionUiRequest(event, proc, () => ({
               resolver: interactionResolver,
               permissionMode,
               currentModelIds: [mutableModel, mutableWireModel],
+              readNativeFast: (provider, model) => !requestPrefsClosed && nativeFastEnabled &&
+                fastModels.some(candidate => candidate.provider === provider && candidate.id === model),
               workspaceRoots: [opts.workingDir],
               readRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
               writableRoots: [opts.workingDir, ...mutableWritableDirs],
@@ -5630,6 +5771,8 @@ export class PiAgent extends BaseAgent {
         [
           ...managedPackageRoots,
           ...projectResourceCli.skills,
+          ...managedSkillPaths,
+          ...(managedSkillRoot ? [managedSkillRoot] : []),
           ...projectResourceCli.promptTemplates,
           ...projectResourceCli.extensions,
         ],
@@ -6004,25 +6147,6 @@ export class PiAgent extends BaseAgent {
      * setModel 的临界区正文。经 `setModelChain` 串行化后调用 —— 不要直接调它,
      * 并发进入会让 pending / 落定两次写交错。
      */
-    const nativeOffersModel = (providerId: string, modelId: string): boolean => {
-      const native = nativeProviderById.get(providerId);
-      if (!native) return false;
-      const nativeModel = resolveNativeModelId(providerId, modelId);
-      // inheritModels 里没有 api/catalogAddition 的行是 Pi 自带目录,不是缺失模型。
-      return native.models.some((candidate) => candidate.id === nativeModel);
-    };
-    const sameRecord = (
-      left?: Record<string, string>,
-      right?: Record<string, string>,
-    ): boolean => {
-      const a = left ?? {};
-      const b = right ?? {};
-      const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-      for (const key of keys) {
-        if (a[key] !== b[key]) return false;
-      }
-      return true;
-    };
     const terminateUnconfirmedCatalogReload = async (cause?: unknown): Promise<never> => {
       this.deps.logger.error(
         'pi: catalog state unconfirmed; terminating session',
@@ -6040,119 +6164,420 @@ export class PiAgent extends BaseAgent {
         '[PI_CATALOG_RELOAD_UNCONFIRMED] 模型目录重载未确认，已终止本任务。请重新打开任务后再切换模型。',
       );
     };
-    const restoreNativeCatalog = async (
-      previousProviders: PiNativeProviderSpec[],
-    ): Promise<void> => {
-      // 先写盘再改内存：写失败时磁盘仍是新目录，内存也保持新目录，避免分叉后再抛。
-      const written = await this.writeModelsJson(
-        configHome,
-        previousProviders,
-        retainedRuntimeModel,
-        authProviderId,
-        {
-          remote,
-          fileOps,
-          contextWindow: ctx.contextWindow || startupContextWindow,
-          workingContextWindow: ctx.workingContextWindow,
+    let liveRuntimeSettings: PiNativeRuntimeSettings | undefined;
+    const queryNativeRuntime = async (
+      operation: 'inspect' | 'refresh',
+      env: Record<string, string> = {},
+      aliases: ReturnType<typeof nativeProviderAdapterAliases> = [],
+    ): Promise<{ ok: boolean; code?: string }> => {
+      // Unknown extension commands become model prompts. Check ownership first.
+      const commands = await proc.request({ type: 'get_commands' });
+      const entries = (commands.data as { commands?: Array<{ name?: unknown; source?: unknown }> } | undefined)?.commands;
+      if (!commands.success || !entries?.some((entry) =>
+        entry.name === 'cindy-native-provider-refresh' && entry.source === 'extension')) {
+        throw new Error('Cindy native provider refresh extension is unavailable; reopen this task with the current Cindy version.');
+      }
+      const nonce = randomBytes(24).toString('base64url');
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const ack = new Promise<{ ok: boolean; code?: string; settings?: unknown }>((resolve) => {
+        providerRefreshStages.set(nonce, { nonce, operation, env, aliases,
+          acknowledge: (ok, code, settings) => resolve({ ok, code, settings }) });
+        timer = setTimeout(() => resolve({ ok: false, code: 'ACK_TIMEOUT' }), 10_000);
+      });
+      try {
+        const response = await proc.request({ type: 'prompt', message: `/cindy-native-provider-refresh ${nonce}` });
+        if (!response.success) return { ok: false, code: 'COMMAND_FAILED' };
+        const receipt = await ack;
+        if (!receipt.ok) return receipt;
+        const settings = parsePiNativeRuntimeSettings(receipt.settings);
+        if (!settings) return { ok: false, code: 'INVALID_SETTINGS' };
+        liveRuntimeSettings = settings;
+        return { ok: true };
+      } finally {
+        if (timer) clearTimeout(timer);
+        providerRefreshStages.delete(nonce);
+      }
+    };
+    const reserveForWindow = (window: number, source: string | null | undefined, model: string): number => {
+      const settings = JSON.parse(buildPiSettingsJsonContent(window, sessionPiAutoCompactPct, [],
+        this.deps.resolveModelContextLimit?.(source, model) ?? undefined));
+      return settings.compaction?.reserveTokens ?? 16_384;
+    };
+    const previewPiModelSwitch = async (
+      model: string,
+      target?: { providerId?: string | null },
+    ): Promise<PiModelSwitchPreview> => {
+      const requestedProviderId = target && Object.hasOwn(target, 'providerId')
+        ? target.providerId
+        : mutableProviderId;
+      const sameRoute = model === mutableModel && requestedProviderId === mutableProviderId;
+      let latestProviders = nativeProviders;
+      let latestEnv = nativeEnv;
+      if (this.deps.resolvePiNativeProviders) {
+        try {
+          const resolved = await this.deps.resolvePiNativeProviders({
+            workingDir: opts.workingDir,
+            remoteHostId: opts.remoteHostId,
+            providerId: requestedProviderId,
+            model,
+            resumeSessionId: sdkSessionId || opts.resumeSessionId,
+            purpose: 'preview',
+          });
+          if (resolved) {
+            latestProviders = resolved.providers;
+            latestEnv = resolved.env;
+          }
+        } catch (error) {
+          return {
+            action: 'unavailable', targetContextWindow: null, windowVerified: false,
+            reason: 'Pi provider catalog could not be read',
+          };
+        }
+      }
+      const sourceId = requestedProviderId === undefined
+        ? (model.startsWith('xai/') ? 'xai' : model.startsWith('chatgpt/') ? 'openai' : null)
+        : requestedProviderId;
+      const gateway = !sourceId || sourceId === 'xd' || sourceId === PI_PROVIDER_ID;
+      let nativeModel: PiNativeModelSpec | undefined;
+      let inheritsNativeWindow = false;
+      if (!gateway) {
+        let native = latestProviders.find((entry) => (entry.sourceProviderId ?? entry.id) === sourceId);
+        if (sameRoute) {
+          const running = nativeProviderForSource(sourceId);
+          const nextNativeId = native?.modelIdAliases?.[model] ?? model;
+          // A removed/retired model stays available to its current task. Never
+          // rewrite that task's active provider to a different endpoint merely
+          // because a new public catalog no longer advertises it.
+          if (running && (!native || !native.models.some((candidate) => candidate.id === nextNativeId))) {
+            latestProviders = [...latestProviders.filter((entry) =>
+              (entry.sourceProviderId ?? entry.id) !== sourceId), running];
+            // Keep the credential paired with the retained endpoint, without
+            // retaining credentials for other providers removed from the catalog.
+            if (running.apiKeyEnvVar && nativeEnv[running.apiKeyEnvVar] !== undefined) {
+              latestEnv = { ...latestEnv, [running.apiKeyEnvVar]: nativeEnv[running.apiKeyEnvVar] };
+            }
+            native = running;
+          }
+        }
+        if (!native) {
+          return { action: 'unavailable', targetContextWindow: null, windowVerified: false,
+            reason: `Pi provider '${sourceId}' is not available in the current catalog` };
+        }
+        const nativeId = native.modelIdAliases?.[model] ?? model;
+        nativeModel = native.models.find((candidate) => candidate.id === nativeId);
+        if (!nativeModel && sameRoute) {
+          const retained = nativeProviderForSource(sourceId);
+          nativeModel = retained?.models.find((candidate) =>
+            candidate.id === (retained.modelIdAliases?.[model] ?? model));
+        }
+        if (!nativeModel) {
+          return { action: 'unavailable', targetContextWindow: null, windowVerified: false,
+            reason: `Pi provider '${sourceId}' does not offer model '${model}'` };
+        }
+        inheritsNativeWindow = native.inheritModels === true && nativeModel.api === undefined
+          && nativeModel.catalogAddition !== true && nativeModel.contextWindow === undefined;
+      }
+      const gatewaySpec = gateway
+        ? this.deps.resolvePiGatewayModelSpec?.(sourceId, model, { remote })
+        : undefined;
+      if (gateway && gatewaySpec === null) {
+        return { action: 'unavailable', targetContextWindow: null, windowVerified: false,
+          reason: `No supported Gateway Pi API is available for model '${model}'` };
+      }
+      const knownDescriptor = this.deps.resolvePiRuntimeModelDescriptor
+        ? this.deps.resolvePiRuntimeModelDescriptor(sourceId, model)
+        : this.capabilities.availableModels.find((candidate) => candidate.id === model);
+      const workingWindow = this.deps.resolveModelContextLimit?.(sourceId, model) ?? 0;
+      let configuredWindow = nativeModel ? nativeModel.contextWindow ?? 128_000
+        : knownDescriptor?.contextWindow ?? (sameRoute && gateway ? retainedLiveGatewayModel?.contextWindow : undefined);
+      if (inheritsNativeWindow) {
+        // 128K is only a default for models Cindy materializes. An inherited
+        // entry uses either our explicit model override or Pi's live catalog.
+        configuredWindow = workingWindow > 0 ? workingWindow : undefined;
+        if (!configuredWindow) {
+          try {
+            const available = await proc.request({ type: 'get_available_models' });
+            const entries = (available.data as { models?: Array<{ provider?: string; id?: string; contextWindow?: number }> } | undefined)?.models;
+            const provider = latestProviders.find((entry) => (entry.sourceProviderId ?? entry.id) === sourceId)?.id;
+            const wireId = nativeModel?.wireId ?? nativeModel?.id;
+            const actualWindow = available.success
+              ? entries?.find((entry) => entry.provider === provider && entry.id === wireId)?.contextWindow : undefined;
+            if (typeof actualWindow === 'number' && Number.isSafeInteger(actualWindow) && actualWindow > 0) {
+              configuredWindow = actualWindow;
+            }
+          } catch { /* No mutation: leave window resolution to the existing recovery path. */ }
+          if (!configuredWindow) {
+            return { action: 'rebuild', targetContextWindow: null, windowVerified: false,
+              reason: 'Pi must resolve the inherited model window before selecting this model' };
+          }
+        }
+      }
+      const targetContextWindow = configuredWindow ? Math.max(configuredWindow, workingWindow) : null;
+      // A refresh may change any provider block, so all credentials it references
+      // must be synchronised with the running Pi process before it is published.
+      // The private refresh bridge owns this update; this preview never handles a key.
+      const projected = await this.writeModelsJson(
+        configHome, latestProviders,
+        gateway ? (knownDescriptor ?? (sameRoute ? retainedLiveGatewayModel : undefined)
+          ?? retainedRuntimeModel) : retainedLiveGatewayModel,
+        gateway ? requestedProviderId : authProviderId,
+        { remote, fileOps, preview: true,
+          contextWindow: targetContextWindow ?? ctx.contextWindow ?? startupContextWindow,
+          workingContextWindow: this.deps.resolveModelContextLimit?.(sourceId, model) ?? undefined,
           piCompactionPct: sessionPiAutoCompactPct,
-          packages: nativePackagePaths,
-          disabledSkills: disabledSkillLaunch,
-        },
+          packages: nativePackagePaths, disabledSkills: disabledSkillLaunch },
       );
-      nativeProviders = previousProviders;
+      if (gateway && !projected.gatewayApiByModel.has(model)) {
+        return { action: 'unavailable', targetContextWindow, windowVerified: false,
+          reason: `Gateway Pi model '${model}' has no runnable protocol` };
+      }
+      const configChanged = projected.modelConfigHash !== appliedModelConfigHash;
+      const envChanged = Object.keys({ ...nativeEnv, ...latestEnv }).some(
+        (key) => nativeEnv[key] !== latestEnv[key],
+      );
+      const adaptersChanged = JSON.stringify(nativeProviderAdapterAliases(nativeProviders))
+        !== JSON.stringify(nativeProviderAdapterAliases(latestProviders));
+      let gatewayCredentialChanged = false;
+      if (remote && gateway) {
+        try {
+          const latestAuth = await this.deps.auth.getAuthEnv({
+            credentialMode: 'gateway-key', providerId: requestedProviderId,
+          });
+          gatewayCredentialChanged = latestAuth[PI_API_KEY_ENV] !== authEnv[PI_API_KEY_ENV];
+        } catch {
+          return { action: 'unavailable', targetContextWindow, windowVerified: false,
+            reason: 'The current Gateway credential could not be read' };
+        }
+      }
+      const needsRefresh = configChanged || envChanged || adaptersChanged || gatewayCredentialChanged;
+      const inspected = await queryNativeRuntime('inspect');
+      if (!inspected.ok || !liveRuntimeSettings) {
+        return { action: 'unavailable', targetContextWindow, windowVerified: false,
+          reason: 'Cindy could not read the live Pi compaction settings' };
+      }
+      const targetProvider = gateway ? PI_PROVIDER_ID
+        : latestProviders.find((entry) => (entry.sourceProviderId ?? entry.id) === sourceId)?.id;
+      const targetModel = nativeModel?.wireId ?? nativeModel?.id ?? model;
+      if (targetContextWindow && targetProvider &&
+          resolvePiNativeReserve(liveRuntimeSettings, targetProvider, targetModel) !==
+            reserveForWindow(targetContextWindow, sourceId, model)) {
+        return { action: 'rebuild', targetContextWindow, windowVerified: false,
+          reason: 'Pi must load the changed native compaction settings before selecting this model' };
+      }
+      return {
+        action: needsRefresh ? 'refresh' : 'hot',
+        targetContextWindow,
+        windowVerified: sameRoute && !needsRefresh && targetContextWindow === ctx.contextWindow,
+      };
+    };
+    const refreshLiveCatalog = async (
+      model: string,
+      requestedProviderId: string | null | undefined,
+    ): Promise<void> => {
+      const live = await this.deps.resolvePiNativeProviders?.({
+        workingDir: opts.workingDir,
+        remoteHostId: opts.remoteHostId,
+        providerId: requestedProviderId,
+        model,
+        resumeSessionId: sdkSessionId || opts.resumeSessionId,
+        purpose: 'live-refresh',
+      });
+      let nextProviders = live?.providers ?? nativeProviders;
+      let nextEnv = live?.env ?? nativeEnv;
+      const sameRoute = model === mutableModel && requestedProviderId === mutableProviderId;
+      const sourceId = requestedProviderId === undefined
+        ? (model.startsWith('xai/') ? 'xai' : model.startsWith('chatgpt/') ? 'openai' : null)
+        : requestedProviderId;
+      if (sameRoute && sourceId && sourceId !== 'xd' && sourceId !== PI_PROVIDER_ID) {
+        const next = nextProviders.find((entry) => (entry.sourceProviderId ?? entry.id) === sourceId);
+        const running = nativeProviderForSource(sourceId);
+        if (running && (!next || !next.models.some((candidate) =>
+          candidate.id === (next.modelIdAliases?.[model] ?? model)))) {
+          nextProviders = [...nextProviders.filter((entry) =>
+            (entry.sourceProviderId ?? entry.id) !== sourceId), running];
+          if (running.apiKeyEnvVar && nativeEnv[running.apiKeyEnvVar] !== undefined) {
+            nextEnv = { ...nextEnv, [running.apiKeyEnvVar]: nativeEnv[running.apiKeyEnvVar] };
+          }
+        }
+      }
+      const nextDescriptor = this.deps.resolvePiRuntimeModelDescriptor
+        ? this.deps.resolvePiRuntimeModelDescriptor(sourceId, model)
+        : this.capabilities.availableModels.find((candidate) => candidate.id === model);
+      const nextGateway = !sourceId || sourceId === 'xd' || sourceId === PI_PROVIDER_ID;
+      const gatewayAuthEnv = remote && nextGateway
+        ? await this.deps.auth.getAuthEnv({ credentialMode: 'gateway-key', providerId: requestedProviderId })
+        : authEnv;
+      const nextAliases = nativeProviderAdapterAliases(nextProviders);
+      const mutableEnv = (value: Record<string, string>) => Object.fromEntries(
+        Object.entries(value).filter(([key]) => /^CINDY_PI_KEY_[A-Z0-9_]+$/.test(key)
+          || key === PI_API_KEY_ENV || key === PI_SESSION_TOKEN_ENV
+          || key === 'CINDY_PI_OPENAI_PROXY_KEY' || key === 'CINDY_PI_XAI_PROXY_API_KEY'));
+      const desiredEnv = mutableEnv({ ...nextEnv,
+        ...(gatewayAuthEnv[PI_API_KEY_ENV] ? { [PI_API_KEY_ENV]: gatewayAuthEnv[PI_API_KEY_ENV] } : {}),
+        ...(proxySessionToken ? { [PI_SESSION_TOKEN_ENV]: proxySessionToken } : {}),
+      });
+      // Preview has verified the Cindy-owned command and native settings.
+      // The extension uses Pi's public ModelRegistry.refresh; no custom Pi RPC.
+      const previousGatewayModel = retainedLiveGatewayModel;
+      const modelsPath = joinRemotePosixPath(configHome, 'models.json');
+      const settingsPath = joinRemotePosixPath(configHome, 'settings.json');
+      // Capture exact private bytes. Rebuilding from a live catalog would not be
+      // a rollback if the catalog changed after the session started.
+      const [oldModelsContent, oldSettingsContent] = await Promise.all([
+        fileOps ? fileOps.readFile(modelsPath, 8_000_000) : fs.readFile(modelsPath, 'utf8'),
+        fileOps ? fileOps.readFile(settingsPath, 1_000_000) : fs.readFile(settingsPath, 'utf8'),
+      ]);
+      if (fileOps) {
+        const [modelsHash, settingsHash] = await Promise.all([
+          fileOps.sha256File(modelsPath), fileOps.sha256File(settingsPath),
+        ]);
+        if (modelsHash !== createHash('sha256').update(oldModelsContent).digest('hex') ||
+            settingsHash !== createHash('sha256').update(oldSettingsContent).digest('hex')) {
+          throw new Error('Pi remote catalog backup was incomplete; live refresh was not started');
+        }
+      }
+      const restoreFilesOrTerminate = async (): Promise<void> => {
+        try {
+          if (fileOps) {
+            await fileOps.writeFile(modelsPath, oldModelsContent);
+            await fileOps.writeFile(settingsPath, oldSettingsContent);
+          } else {
+            await fs.writeFile(modelsPath, oldModelsContent, { mode: 0o600 });
+            await fs.writeFile(settingsPath, oldSettingsContent, { mode: 0o600 });
+          }
+        } catch (error) {
+          await terminateUnconfirmedCatalogReload(error);
+        }
+      };
+      let written: Awaited<ReturnType<PiAgent['writeModelsJson']>>;
+      try {
+        written = await this.writeModelsJson(
+          configHome, nextProviders,
+          nextGateway ? (nextDescriptor ?? retainedLiveGatewayModel ?? retainedRuntimeModel) : retainedLiveGatewayModel,
+          nextGateway ? requestedProviderId : authProviderId,
+          { remote, fileOps, contextWindow: nextDescriptor?.contextWindow ?? ctx.contextWindow,
+            workingContextWindow: this.deps.resolveModelContextLimit?.(sourceId, model) ?? undefined,
+            piCompactionPct: sessionPiAutoCompactPct, packages: nativePackagePaths,
+            disabledSkills: disabledSkillLaunch },
+        );
+      } catch (error) {
+        await restoreFilesOrTerminate();
+        throw error;
+      }
+      try {
+        const receipt = await queryNativeRuntime('refresh', desiredEnv, nextAliases);
+        if (!receipt.ok) {
+          if (receipt.code === 'INVALID_PAYLOAD') {
+            await restoreFilesOrTerminate();
+            throw new Error('Pi rejected the native provider refresh payload; the original route is unchanged.');
+          }
+          return await terminateUnconfirmedCatalogReload(receipt.code);
+        }
+      } catch (error) {
+        if (error instanceof Error && /rejected the native provider/.test(error.message)) throw error;
+        return await terminateUnconfirmedCatalogReload(error);
+      }
+      try {
+        const refreshed = await proc.request({ type: 'get_available_models' });
+        const result = refreshed.data as { models?: Array<{ provider?: string; id?: string }> } | undefined;
+        if (!refreshed.success) throw new Error('Pi did not expose the refreshed model catalog');
+        const desiredProvider = nextGateway ? PI_PROVIDER_ID : nextProviders.find(
+          (entry) => (entry.sourceProviderId ?? entry.id) === sourceId)?.id;
+        const desiredNative = nextProviders.find((entry) => entry.id === desiredProvider);
+        const desiredId = desiredNative?.models.find((candidate) =>
+          candidate.id === (desiredNative.modelIdAliases?.[model] ?? model))?.wireId
+          ?? desiredNative?.modelIdAliases?.[model] ?? model;
+        if (!desiredProvider || !result?.models?.some((candidate) =>
+          candidate.provider === desiredProvider && candidate.id === desiredId)) {
+          throw new Error('Pi refreshed the catalog but did not expose the selected provider/model');
+        }
+      } catch (error) {
+        // Pi may have partially replaced registry entries even on a negative
+        // response. A confirmed rollback would require another refresh+ACK;
+        // retiring is the only safe outcome for the live process.
+        await terminateUnconfirmedCatalogReload(error);
+      }
+      nativeProviders = nextProviders;
+      nativeEnv = nextEnv;
+      if (remote && nextGateway) authEnv = gatewayAuthEnv;
+      // Child processes are spawned by the Desktop host after this point. Their
+      // immutable startup env must match the parent Pi registry we just verified.
+      for (const key of Object.keys(durableSpawnEnv)) {
+        if (/^CINDY_PI_KEY_[A-Z0-9_]+$/.test(key)
+          || key === 'CINDY_PI_OPENAI_PROXY_KEY'
+          || key === 'CINDY_PI_XAI_PROXY_API_KEY'
+          || key === PI_API_KEY_ENV || key === PI_SESSION_TOKEN_ENV) {
+          delete durableSpawnEnv[key];
+        }
+      }
+      Object.assign(durableSpawnEnv, desiredEnv);
+      durableSpawnEnv.CINDY_PI_NATIVE_PROVIDER_ADAPTERS = JSON.stringify(nextAliases);
+      const currentSecretNames = JSON.parse(
+        durableSpawnEnv[PI_SECRET_ENV_NAMES_ENV] ?? '[]') as string[];
+      durableSpawnEnv[PI_SECRET_ENV_NAMES_ENV] = JSON.stringify(
+        [...new Set([...currentSecretNames, ...Object.keys(desiredEnv)])]);
+      if (subagentRoutingEnabled) {
+        for (const [id, candidates] of subagentModelRouteCandidates) {
+          for (const [routeKey, route] of candidates) {
+            if (route.provider !== PI_PROVIDER_ID || !written.gatewayApiByModel.has(id)) {
+              candidates.delete(routeKey);
+            }
+          }
+          if (candidates.size === 0) subagentModelRouteCandidates.delete(id);
+        }
+        for (const gatewayModelId of written.gatewayApiByModel.keys()) {
+          addSubagentModelRoute(gatewayModelId, PI_PROVIDER_ID, gatewayModelId,
+            gatewaySubagentProxyToken ? gatewaySubagentRouteKey : undefined,
+            Boolean(gatewaySubagentProxyToken));
+        }
+        for (const spec of nextProviders) {
+          if (spec.id === PI_PROVIDER_ID) continue;
+          const source = spec.sourceProviderId ?? spec.id;
+          const wasRegistered = subagentProxyTokens.has(source);
+          const token = proxyTokenForSubagentProvider(spec, source);
+          if (token && !wasRegistered && opts.sessionId && this.deps.registerPiProxySession) {
+            appendProxyDisposer(this.deps.registerPiProxySession(
+              opts.sessionId, token, () => source, { scope: 'subagent-route' }));
+          }
+          for (const candidate of spec.models) {
+            const wire = candidate.wireId ?? candidate.id;
+            addSubagentModelRoute(candidate.id, spec.id, wire, source, Boolean(token));
+            for (const [alias, mapped] of Object.entries(spec.modelIdAliases ?? {})) {
+              if (mapped === candidate.id) addSubagentModelRoute(alias, spec.id, wire, source, Boolean(token));
+            }
+            if (!candidate.id.includes('/')) {
+              const canonical = source === 'xai' ? `xai/${candidate.id}`
+                : source === 'openai' || candidate.api === 'openai-codex-responses'
+                  ? `chatgpt/${candidate.id}` : undefined;
+              addSubagentModelRoute(canonical, spec.id, wire, source, Boolean(token));
+            }
+          }
+        }
+        subagentModelRoutes = Object.fromEntries([...subagentModelRouteCandidates]
+          .map(([id, candidates]) => [id, [...candidates.values()]]));
+      }
       nativeProviderById.clear();
       nativeProviderBySourceId.clear();
-      for (const spec of previousProviders) {
+      for (const spec of nextProviders) {
         if (spec.id === PI_PROVIDER_ID) continue;
         nativeProviderById.set(spec.id, spec);
         nativeProviderBySourceId.set(spec.sourceProviderId ?? spec.id, spec);
       }
       gatewayApiByModel.clear();
       for (const [key, value] of written.gatewayApiByModel) gatewayApiByModel.set(key, value);
+      for (const gatewayModelId of written.gatewayApiByModel.keys()) {
+        const descriptor = this.deps.resolvePiGatewayModelDescriptor?.(requestedProviderId, gatewayModelId)
+          ?? this.deps.resolvePiRuntimeModels?.().find((candidate) => candidate.id === gatewayModelId)
+          ?? this.capabilities.availableModels.find((candidate) => candidate.id === gatewayModelId);
+        if (descriptor) appliedGatewayEfforts.set(gatewayModelId, descriptor.efforts);
+      }
       gatewayImageInputByModel.clear();
-      for (const [key, value] of written.gatewayImageInputByModel) {
-        gatewayImageInputByModel.set(key, value);
-      }
-    };
-    const restoreNativeCatalogOrTerminate = async (
-      previousProviders: PiNativeProviderSpec[],
-    ): Promise<void> => {
-      try {
-        await restoreNativeCatalog(previousProviders);
-      } catch (err) {
-        await terminateUnconfirmedCatalogReload(err);
-      }
-    };
-    const refreshLiveXaiCatalog = async (
-      modelId: string,
-      providerId?: string | null,
-    ): Promise<boolean> => {
-      if (!this.deps.resolvePiNativeProviders) return false;
-      try {
-        const live = await this.deps.resolvePiNativeProviders({
-          workingDir: opts.workingDir,
-          remoteHostId: opts.remoteHostId,
-          providerId,
-          model: modelId,
-          resumeSessionId: sdkSessionId || opts.resumeSessionId,
-        });
-        const sourceProviderId = providerId ?? 'xai';
-        const liveXai = live?.providers.find(
-          (provider) => (provider.sourceProviderId ?? provider.id) === sourceProviderId,
-        );
-        if (!live || !liveXai) return false;
-        // 远端 hostProxyForward 依赖启动时注入的 session token / 代理登记。
-        // 登录后才出现的 xAI 块带上隧道,请求会因没有 CINDY_PI_SESSION_TOKEN 失败。
-        if (liveXai.hostProxyForward && !proxySessionToken) return false;
-        const currentXai = nativeProviderForSource(sourceProviderId);
-        if (currentXai) {
-          if (currentXai.baseUrl !== liveXai.baseUrl) return false;
-          if (!sameRecord(currentXai.headers, liveXai.headers)) return false;
-          if (liveXai.hostProxyForward && !currentXai.hostProxyForward) return false;
-        }
-        const envKey = liveXai.apiKeyEnvVar;
-        if (envKey) {
-          if (!(envKey in nativeEnv)) return false;
-          if (live.env[envKey] !== undefined && live.env[envKey] !== nativeEnv[envKey]) {
-            return false;
-          }
-        }
-        nativeProviderById.set(liveXai.id, liveXai);
-        nativeProviderBySourceId.set(liveXai.sourceProviderId ?? liveXai.id, liveXai);
-        nativeProviders = [
-          ...nativeProviders.filter(
-            (provider) => (provider.sourceProviderId ?? provider.id) !== sourceProviderId,
-          ),
-          liveXai,
-        ];
-        const written = await this.writeModelsJson(
-          configHome,
-          nativeProviders,
-          retainedRuntimeModel,
-          authProviderId,
-          {
-            remote,
-            fileOps,
-            contextWindow: ctx.contextWindow || startupContextWindow,
-            workingContextWindow: ctx.workingContextWindow,
-            piCompactionPct: sessionPiAutoCompactPct,
-            packages: nativePackagePaths,
-            disabledSkills: disabledSkillLaunch,
-          },
-        );
-        gatewayApiByModel.clear();
-        for (const [key, value] of written.gatewayApiByModel) gatewayApiByModel.set(key, value);
-        gatewayImageInputByModel.clear();
-        for (const [key, value] of written.gatewayImageInputByModel) {
-          gatewayImageInputByModel.set(key, value);
-        }
-        return nativeOffersModel(liveXai.id, modelId);
-      } catch (err) {
-        this.deps.logger.warn('pi live xAI catalog refresh failed', {
-          message: err instanceof Error ? err.message : String(err),
-        });
-        return false;
-      }
+      for (const [key, value] of written.gatewayImageInputByModel) gatewayImageInputByModel.set(key, value);
+      appliedModelConfigHash = written.modelConfigHash;
+      // A full registry refresh can update the still-active A while a proposed
+      // switch to B later fails. Keep A pending until a confirmed set_model.
+      pendingCurrentDescriptorRefresh = true;
+      if (nextGateway) retainedLiveGatewayModel = nextDescriptor ?? previousGatewayModel;
     };
     const switchModel = async (
       model: string,
@@ -6162,143 +6587,29 @@ export class PiAgent extends BaseAgent {
         ? setOpts.providerId
         : undefined;
       assertRemotePiContextProfileAvailable(opts.remoteHostId, model, requestedProviderId);
-      // 心跳复用活进程会把当前 (provider, model) 再下发一次。
-      // spawn 能靠 custom model id 跑在 Pi 自带目录没有的 SuperGrok
-      // 路由上（grok-4.6）；重复 set_model 反而 fail-closed。
-      // 只对显式非 null 来源做 no-op：model-only 与 providerId=null
-      // （钉回网关）仍走 RPC。
-      const assertGatewayProtocolForModel = (
-        nextModel: string,
-        nextRequestedProviderId: string | null | undefined,
-      ): void => {
-        const nextProvider = resolveProviderForModel(nextModel, nextRequestedProviderId);
-        if (nextProvider !== PI_PROVIDER_ID) return;
-        const routeProviderId = nextRequestedProviderId !== undefined
-          ? nextRequestedProviderId
-          : mutableProviderId;
-        const resolverContext = { remote };
-        const resolvedSpec = this.deps.resolvePiGatewayModelSpec?.(
-          routeProviderId,
-          nextModel,
-          resolverContext,
-        );
-        const resolvedApi = resolvedSpec?.api ?? this.deps.resolvePiGatewayModelApi?.(
-          routeProviderId,
-          nextModel,
-          resolverContext,
-        );
-        if (
-          resolvedSpec === null ||
-          resolvedApi === null ||
-          (resolvedApi !== undefined && !isPiGatewayApi(resolvedApi))
-        ) {
-          throw new Error(
-            `No supported Gateway Pi API is available for model: ${nextModel}`,
-          );
-        }
-        if (resolvedApi === undefined) {
-          throw new Error(`Pi API is not configured for model: ${nextModel}`);
-        }
-        const desiredApi = resolvedApi;
-        const configuredApi = gatewayApiByModel.get(nextModel);
-        if (configuredApi && configuredApi !== desiredApi) {
-          throw new Error(
-            `pi: provider switch for model '${nextModel}' requires API '${desiredApi}', but this session ` +
-              `started with '${configuredApi}'; restart the Pi session to change provider API.`,
-          );
-        }
-      };
-      if (
-        model === mutableModel &&
-        requestedProviderId !== undefined &&
-        requestedProviderId !== null &&
-        Object.is(requestedProviderId, mutableProviderId)
-      ) {
-        if (setOpts?.effort) {
-          assertStartupEffortAllowed(activeEffortSnapshot, setOpts.effort);
-        }
-        assertGatewayProtocolForModel(model, requestedProviderId);
-        // 同路由不打 set_model，但仍要重试子代理快照：初始写失败或确认写失败
-        // 留下 pending 时，心跳复用活进程必须能把文件重建/清 pending，
-        // 否则扩展会一直 fail-closed。不带 pending，路由已确认。
-        const sameRouteProvider = resolveProviderForModel(model, requestedProviderId);
-        const sameRouteWire = resolveWireModel(sameRouteProvider, model);
-        if (!(await writeSubagentRuntimeFile({ model: sameRouteWire, provider: sameRouteProvider }))) {
-          deps.logger.warn('pi: same-route setModel could not refresh subagent snapshot', {
-            model,
-            provider: sameRouteProvider,
-          });
-        }
-        deps.logger.debug('pi: setModel no-op; already on requested route', {
-          model,
-          providerId: requestedProviderId,
-        });
-        return;
+      const effectiveProviderId = requestedProviderId === undefined ? mutableProviderId : requestedProviderId;
+      const preview = await previewPiModelSwitch(model, { providerId: effectiveProviderId });
+      if (preview.action === 'unavailable') throw new Error(preview.reason ?? 'Pi model route is unavailable');
+      if (preview.action === 'rebuild') {
+        throw new Error(preview.reason ?? 'Pi model route needs a new process startup input');
       }
-      // null = 钉回网关,绝不按模型名推断 xAI。只有 undefined(旧会话未持久化来源)
-      // 才允许 xai/ 前缀回退。`??` 会把 null 也吃掉,误进 live catalog 刷新。
-      const sourceHint = requestedProviderId === undefined
-        ? (model.startsWith('xai/') ? 'xai' : undefined)
-        : (requestedProviderId ?? undefined);
-      const liveProviderHint = sourceHint ? nativeProviderForSource(sourceHint) : undefined;
-      const needsXaiCatalogReload = (sourceHint === 'xai' || Boolean(liveProviderHint?.hostProxyForward))
-        && (!liveProviderHint || !nativeOffersModel(liveProviderHint.id, model));
-      if (needsXaiCatalogReload) {
-        const previousProviders = nativeProviders.slice();
-        const refreshed = await refreshLiveXaiCatalog(model, requestedProviderId);
-        if (refreshed && sdkSessionId) {
-          // Claude 热切先 applyFlagSettings 扩白名单;Pi 的 set_model 不重读 models.json,
-          // 但 switch_session 会 createRuntime → ModelConfig.load,等于无重启扩名单。
-          // success:false = 确定没重载,回滚安全。reject/超时 = 不知道 Pi 侧有没有吃到新
-          // models.json,回滚和放行都可能分叉,按未确认 set_model 一样终止会话。
-          let reloaded;
-          try {
-            reloaded = await proc.request({
-              type: 'switch_session',
-              sessionPath: sdkSessionId,
-            });
-          } catch (err) {
-            return await terminateUnconfirmedCatalogReload(err);
-          }
-          if (!reloaded.success) {
-            await restoreNativeCatalogOrTerminate(previousProviders);
-            throw new Error(
-              `pi: failed to reload models after catalog update: ${reloaded.error ?? 'unknown'}`,
-            );
-          }
-        } else if (!refreshed) {
-          await restoreNativeCatalogOrTerminate(previousProviders);
-        }
+      if (preview.action === 'refresh') await refreshLiveCatalog(model, effectiveProviderId);
+      // Never let a requested native source silently fall through to Cindy's
+      // gateway when a provider disappeared or a model was removed.
+      if (explicitByomUnresolvable(effectiveProviderId, model)) {
+        throw new Error(`pi: provider '${effectiveProviderId}' cannot serve model '${model}'`);
       }
-      // 显式选一个启动快照 nativeProviderById 里“无法服务该 model”的 BYOM provider 时 fail
-      // closed:要么该 provider 是会话启动后才新增的(不在快照),要么它虽在、但用户编辑
-      // 配置后从中删/改了这个 model。两种都会让 resolveProviderForModel 静默回落 cindy 网关;
-      // 若该 model id 也在网关目录里则 set_model “成功”、后续 prompt 发往网关而非用户选的
-      // 本地/自定义端点(codex review P1)。提示重启会话以刷新启动快照,而不是静默换目的地。
-      if (explicitByomUnresolvable(requestedProviderId, model)) {
-        throw new Error(
-          `pi: BYOM provider '${requestedProviderId}' cannot serve model '${model}' in this session's ` +
-            'startup provider set (provider not present, or it no longer offers this model); restart the ' +
-            'session to use it (refusing to fall back to the Cindy gateway).',
-        );
-      }
-      const provider = resolveProviderForModel(model, requestedProviderId);
+      const provider = resolveProviderForModel(model, effectiveProviderId);
       const wireModel = resolveWireModel(provider, model);
-      if (
-        requestedProviderId
-        && requestedProviderId !== PI_PROVIDER_ID
-        && requestedProviderId !== 'xd'
-        && provider === PI_PROVIDER_ID
-      ) {
-        throw new Error(
-          `pi: provider '${requestedProviderId}' cannot serve model '${model}' even after reloading the live catalog; ` +
-            'restart the Pi session if the provider was added after this task started.',
-        );
+      if (effectiveProviderId && effectiveProviderId !== PI_PROVIDER_ID &&
+          effectiveProviderId !== 'xd' && provider === PI_PROVIDER_ID) {
+        throw new Error(`pi: provider '${effectiveProviderId}' cannot serve model '${model}'`);
       }
-      assertGatewayProtocolForModel(model, requestedProviderId);
+      const routeUnchanged = model === mutableModel && provider === mutablePiProviderId &&
+        wireModel === mutableWireModel;
       // effort 能力校验必须排在写路由快照**之前**:它会抛错中止本次切换,而快照一旦落盘就
       // 指向了新 provider —— 那正是父子路由分叉的形状(upstream #1451 与本 PR 的合并点)。
-      const nextEffortSnapshot = resolveStartupEffortSnapshot(provider, model);
+      const nextEffortSnapshot = resolveAppliedEffortSnapshot(provider, model);
       if (setOpts?.effort) {
         assertStartupEffortAllowed(nextEffortSnapshot, setOpts.effort);
       }
@@ -6337,6 +6648,12 @@ export class PiAgent extends BaseAgent {
       // 所以这一步落的是**带 pending 标记的**新路由:内容已经就位(证明可写、内容可回滚),但
       // 扩展见到 `pending: true` 就拒绝派发。等待窗口里一个子进程都起不来,既不会用未确认的新
       // 路由、也不会用与父不一致的旧路由;确认后再清掉标记放行。
+      if (routeUnchanged && preview.action === 'hot' && !pendingCurrentDescriptorRefresh) {
+        if (!(await writeSubagentRuntimeFile({ model: wireModel, provider }))) {
+          deps.logger.warn('pi: same-route setModel could not refresh subagent snapshot', { model, provider });
+        }
+        return;
+      }
       const previousSnapshot = {
         model: mutableWireModel,
         provider: mutablePiProviderId,
@@ -6421,153 +6738,42 @@ export class PiAgent extends BaseAgent {
         }
         throw new Error(`pi set_model failed: ${resp.error ?? 'unknown'}`);
       }
-      // Keep the subagent snapshot pending until any settings reload has rebuilt and
-      // re-verified the Pi runtime. switch_session recreates AgentSession from the
-      // original CLI options, so clearing pending here would briefly allow children
-      // to use the target route while the parent may have fallen back to the old one.
+      // Confirm the materialized route and real window before releasing children.
+      try {
+        const verified = await proc.request({ type: 'get_state' });
+        const verifiedModel = (verified.data as {
+          model?: { provider?: unknown; id?: unknown; contextWindow?: unknown } | null;
+        } | undefined)?.model;
+        if (!verified.success || verifiedModel?.provider !== provider || verifiedModel.id !== wireModel ||
+            typeof verifiedModel.contextWindow !== 'number' ||
+            !Number.isSafeInteger(verifiedModel.contextWindow) || verifiedModel.contextWindow <= 0) {
+          throw new Error('Pi did not confirm the requested model and context window');
+        }
+        const verifiedWindow = verifiedModel.contextWindow;
+        const verifiedReserve = reserveForWindow(verifiedWindow, effectiveProviderId, model);
+        if (!liveRuntimeSettings || resolvePiNativeReserve(liveRuntimeSettings, provider, wireModel) !== verifiedReserve) {
+          throw new Error('Pi selected a model whose native compaction settings require a fresh runtime');
+        }
+        await this.writePiRuntimeSettings(configHome, {
+          fileOps, contextWindow: verifiedWindow,
+          workingContextWindow: this.deps.resolveModelContextLimit?.(effectiveProviderId, model) ?? undefined,
+          piCompactionPct: sessionPiAutoCompactPct, packages: nativePackagePaths,
+          disabledSkills: disabledSkillLaunch,
+        });
+        ctx.contextWindow = verifiedWindow;
+        ctx.workingContextWindow = this.deps.resolveModelContextLimit?.(effectiveProviderId, model) ?? undefined;
+      } catch (error) {
+        await terminateUnconfirmedCatalogReload(error);
+      }
       mutableModel = model;
+      pendingCurrentDescriptorRefresh = false;
       mutableWireModel = wireModel;
       mutablePiProviderId = provider;
       activeEffortSnapshot = nextEffortSnapshot;
-      if (setOpts && Object.hasOwn(setOpts, 'providerId')) {
-        mutableProviderId = setOpts.providerId;
-      } else if (provider !== PI_PROVIDER_ID) {
-        // 轮 40-w4-t13 MEDIUM:providerless 切模时实际路由变了 —— 宿主鉴权/审查
-        // 元数据必须跟随实际路由, 否则 reviewAutoAction 用旧 provider 做决策
-        // (AutoReviewRequest.providerId + 缓存键都错)。null/订阅来源已归一为
-        // cindy(PI_PROVIDER_ID), 不在此分支。
-        mutableProviderId = resolveSourceProvider(provider);
-      }
+      mutableProviderId = effectiveProviderId;
       autoReviewDecisionCache.clear();
-      // 换模型 / 换路由可能正好修掉了审阅器不可用的原因;换完又不可用值得再提醒一次。
       autoReviewUnavailableNotice.reset();
       autoReviewConfirmUndeliveredNotice.reset();
-      const data = (resp.data ?? {}) as { contextWindow?: number };
-      const setModelReportedWindow =
-        typeof data.contextWindow === 'number' && data.contextWindow > 0
-          ? data.contextWindow
-          : null;
-      const nextWindow =
-        setModelReportedWindow ??
-        this.deps.resolvePiRuntimeModelDescriptor?.(mutableProviderId ?? null, model)
-          ?.contextWindow ??
-        this.capabilities.availableModels.find((candidate) => candidate.id === model)
-          ?.contextWindow ??
-        ctx.contextWindow;
-      if (nextWindow > 0) ctx.contextWindow = nextWindow;
-      ctx.workingContextWindow = this.deps.resolveModelContextLimit?.(mutableProviderId, model) ?? undefined;
-      // Always reload and read get_state after set_model. The catalog and even the
-      // set_model response can disagree with the materialized runtime window; callers
-      // must not decide whether to destroy native context until this verification ends.
-      {
-        try {
-          if (!Number.isFinite(nextWindow) || nextWindow <= 0) {
-            throw new Error('pi: model switch returned no verifiable context window');
-          }
-          await this.writePiRuntimeSettings(configHome, {
-            fileOps,
-            contextWindow: nextWindow,
-            workingContextWindow: ctx.workingContextWindow,
-            piCompactionPct: sessionPiAutoCompactPct,
-            packages: nativePackagePaths,
-            disabledSkills: disabledSkillLaunch,
-          });
-          if (!sdkSessionId) {
-            throw new Error('pi: missing session path after model switch; cannot reload compaction settings');
-          }
-          const reloaded = await proc.request({
-            type: 'switch_session',
-            sessionPath: sdkSessionId,
-          });
-          if (!reloaded.success) {
-            throw new Error(
-              `pi: failed to reload settings after context window change: ${reloaded.error ?? 'unknown'}`,
-            );
-          }
-          // Pi rebuilds switch_session from the process' original --provider/--model
-          // options. Re-apply the requested route, then read it back before exposing
-          // the parent or its subagents as switched.
-          const reapplied = await proc.request({
-            type: 'set_model',
-            provider,
-            modelId: wireModel,
-          });
-          if (!reapplied.success) {
-            throw new Error(
-              `pi: failed to re-apply model after settings reload: ${reapplied.error ?? 'unknown'}`,
-            );
-          }
-          const verified = await proc.request({ type: 'get_state' });
-          if (!verified.success) {
-            throw new Error(
-              `pi: failed to verify model after settings reload: ${verified.error ?? 'unknown'}`,
-            );
-          }
-          const verifiedModel = (verified.data as {
-            model?: { provider?: unknown; id?: unknown; contextWindow?: unknown } | null;
-          } | undefined)?.model;
-          if (verifiedModel?.provider !== provider || verifiedModel.id !== wireModel) {
-            throw new Error(
-              `pi: settings reload restored an unexpected model (expected ${provider}/${wireModel}, ` +
-                `got ${String(verifiedModel?.provider)}/${String(verifiedModel?.id)})`,
-            );
-          }
-          const verifiedWindow = verifiedModel.contextWindow;
-          if (
-            typeof verifiedWindow !== 'number' ||
-            !Number.isFinite(verifiedWindow) ||
-            verifiedWindow <= 0
-          ) {
-            throw new Error('pi: settings reload returned an invalid context window');
-          }
-          if (verifiedWindow !== nextWindow) {
-            await this.writePiRuntimeSettings(configHome, {
-              fileOps,
-              contextWindow: verifiedWindow,
-              workingContextWindow: ctx.workingContextWindow,
-              piCompactionPct: sessionPiAutoCompactPct,
-              packages: nativePackagePaths,
-              disabledSkills: disabledSkillLaunch,
-            });
-            const recalibrated = await proc.request({ type: 'switch_session', sessionPath: sdkSessionId });
-            if (!recalibrated.success) {
-              throw new Error(`pi: failed to reload recalibrated settings: ${recalibrated.error ?? 'unknown'}`);
-            }
-            const recalibratedModel = await proc.request({ type: 'set_model', provider, modelId: wireModel });
-            if (!recalibratedModel.success) {
-              throw new Error(`pi: failed to re-apply model after settings recalibration: ${recalibratedModel.error ?? 'unknown'}`);
-            }
-            const reverified = await proc.request({ type: 'get_state' });
-            const reverifiedModel = (reverified.data as {
-              model?: { provider?: unknown; id?: unknown; contextWindow?: unknown } | null;
-            } | undefined)?.model;
-            if (
-              !reverified.success ||
-              reverifiedModel?.provider !== provider ||
-              reverifiedModel.id !== wireModel ||
-              reverifiedModel.contextWindow !== verifiedWindow
-            ) {
-              throw new Error('pi: recalibrated settings did not match the verified runtime window');
-            }
-          }
-          ctx.contextWindow = verifiedWindow;
-        } catch (err) {
-          this.deps.logger.error('pi: compaction settings reload unconfirmed after model switch', {
-            message: err instanceof Error ? err.message : String(err),
-          });
-          try {
-            await proc.close();
-          } catch (closeErr) {
-            this.deps.logger.warn(
-              'pi: session termination after compaction settings reload failure also failed',
-              { message: closeErr instanceof Error ? closeErr.message : String(closeErr) },
-            );
-          }
-          throw new Error(
-            'pi: 模型切换后未能重载压缩阈值，已终止本任务以免继续按旧 reserveTokens 压缩。请重新打开任务。',
-          );
-        }
-      }
       // The parent route and target-window settings are now confirmed. Clear the
       // pending marker last; failure keeps subagent delegation disabled but does
       // not misreport the parent switch itself.
@@ -6636,6 +6842,7 @@ export class PiAgent extends BaseAgent {
       async send(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
         rejectIfCancelled(sendOpts, 'send');
         await waitForSessionRpcIdle();
+        updateRequestPrefs();
         rejectIfCancelled(sendOpts, 'send');
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         // 本轮策略覆盖:无策略显式清 null,不继承上一轮渠道策略(§7.2.5);内部续跑
@@ -6706,6 +6913,48 @@ export class PiAgent extends BaseAgent {
           if (images.length > 0) command.images = images;
           // send 语义 = 排队开新 turn;pi streaming 中裸 prompt 会被拒,补 followUp。
           if (ctx.isStreaming) command.streamingBehavior = 'followUp';
+          if (sendOpts?.retryTranscriptUserEntryId && !ctx.isStreaming) {
+            await runExclusivePiRpc(async () => {
+              const before = await proc.request({ type: 'get_tree' });
+              if (!before.success) throw new TurnDispatchRejectedError('Pi retry history unavailable');
+              const branch = piRetryBranch(before.data, sendOpts.retryTranscriptUserEntryId!);
+              if (!branch) return;
+              rejectIfCancelled(sendOpts, 'send');
+              // Native navigation preserves the old failed branch in the append-only
+              // transcript. Only the active model context is replaced by this retry.
+              const payload = encodeURIComponent(JSON.stringify({ entryId: sendOpts.retryTranscriptUserEntryId }));
+              const switched = await proc.request({ type: 'prompt', message: `/cindy-branch-switch ${payload}` });
+              const after = await proc.request({ type: 'get_tree' });
+              if (!switched.success || !after.success || normalizePiSessionTree(after.data).leafId !== branch.parentId) {
+                throw new TurnDispatchRejectedError('Pi retry branch navigation was not confirmed');
+              }
+              rejectIfCancelled(sendOpts, 'send');
+              if (branch.requestTooLarge) {
+                // A user-requested retry after a byte-limit rejection gets one native
+                // compaction attempt. Never invent a provider byte/token threshold.
+                try {
+                  const result = await requestPiCompact();
+                  rejectIfCancelled(sendOpts, 'send');
+                  if (result.noop) {
+                    throw new Error('Pi cannot compact the request rejected with HTTP 413');
+                  }
+                } catch (error) {
+                  rejectIfCancelled(sendOpts, 'send');
+                  // The original failed response already proved a byte-limit
+                  // rejection. Any non-cancelled compaction failure leaves that
+                  // recovery incomplete, even if its own error is a timeout.
+                  if (!opts.remoteHostId) {
+                    nativeAutoCompactNeedsRollover = true;
+                    // A rejected send can close this runtime. Preserve the specific
+                    // recovery evidence in the durable error, not just this handle.
+                    throw new Error(`${PI_REQUEST_BODY_RECOVERY_EXHAUSTED}: ${String(error)}`);
+                  }
+                  throw error;
+                }
+              }
+              rejectIfCancelled(sendOpts, 'send');
+            });
+          }
           const userEntriesBefore = sendOpts?.onTranscriptUserEntry
             ? await readPiUserEntryIds()
             : null;
@@ -7154,6 +7403,10 @@ export class PiAgent extends BaseAgent {
         piSubagentApprovalDeferred.clear();
       },
 
+      previewModelSwitch(model, target) {
+        return previewPiModelSwitch(model, target);
+      },
+
       requiresModelSwitchRebuild(model, target) {
         // Same-route configuration changes need models.json to be reloaded too.
         // Ordinary route changes continue through Pi's existing switch_model path.
@@ -7179,6 +7432,11 @@ export class PiAgent extends BaseAgent {
           () => {},
         );
         return run;
+      },
+
+      async setFastMode(enabled: boolean): Promise<void> {
+        if (reviewMode) return;
+        updateRequestPrefs(enabled);
       },
 
       async setEffort(effort: Effort): Promise<void> {
@@ -7728,7 +7986,15 @@ export class PiAgent extends BaseAgent {
 
   /** SkillHub raw view; project items remain discovered until runtime truth says otherwise. */
   override async listCustomizations(opts: ListCustomizationsOptions): Promise<ListCustomizationsResult> {
-    return scanPiCustomizations(opts);
+    const result = await scanPiCustomizations(opts);
+    if (!opts.kinds || opts.kinds.includes('skill')) {
+      result.items.push(...(await this.deps.getManagedSkills?.() ?? []).filter((skill) => skill.path).map((skill) => ({
+        engine: 'pi' as const, kind: 'skill', scope: 'user', name: skill.name,
+        description: skill.description, absolutePath: path.dirname(skill.path!), mdPath: skill.path,
+        enabled: skill.enabled,
+      })));
+    }
+    return result;
   }
 
   /**
@@ -7751,6 +8017,8 @@ export class PiAgent extends BaseAgent {
     ]);
     const out: ListAgentSkillsResult = {
       skills: [
+        ...(await this.deps.getManagedSkills?.() ?? []).map(({ claudeCommandName: _command, ...skill }) =>
+          ({ ...skill, runtimeCommandName: `skill:${skill.name}` })),
         ...items
           .filter((it) => it.kind === 'skill' && it.enabled !== false)
           .map((it) => ({
@@ -7807,10 +8075,11 @@ export class PiAgent extends BaseAgent {
       resolver: InteractionResolver | null;
       permissionMode: 'ask' | 'auto' | 'bypassPermissions';
       currentModelIds: readonly string[];
+      readNativeFast?: (provider: string, model: string) => boolean;
       workspaceRoots: string[];
       readRoots: string[];
       writableRoots: string[];
-      reviewAutoAction: (action: ReviewableAction) => Promise<AutoReviewDecision>;
+      reviewAutoAction: (action: ReviewableAction, hostAutoApprove?: boolean, hostShortcutOnly?: boolean) => Promise<AutoReviewDecision>;
       recordUserClarification: (question: string, answer: string) => void;
       /** 审阅器不可用时的会话级一次性提示;去重与重置由会话侧持有(issue #1574)。 */
       notifyAutoReviewUnavailable: () => void;
@@ -7873,6 +8142,22 @@ export class PiAgent extends BaseAgent {
         message.slice(0, MAX_PI_EXTENSION_NOTIFICATION_LENGTH),
         event,
       );
+      return;
+    }
+
+    // Internal, read-only query over the existing stdio/SSH RPC response channel.
+    // Caller input selects an exact model; it can never supply or update Fast intent.
+    if (method === 'input' && event.title === 'cindy:request-preferences') {
+      const context = getPermissionCtx();
+      let fast = false;
+      try {
+        const requested = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '');
+        if (!context.isPermissionContextClosed() && !context.isAccountBoundaryTornDown() &&
+            typeof requested?.provider === 'string' && typeof requested?.model === 'string') {
+          fast = context.readNativeFast?.(requested.provider, requested.model) === true;
+        }
+      } catch { /* Invalid queries never enable a paid tier. */ }
+      proc.send({ type: 'extension_ui_response', id, value: JSON.stringify({ fast }) });
       return;
     }
 
@@ -8512,22 +8797,10 @@ export class PiAgent extends BaseAgent {
           }
           return 'prompt-each-time';
         })();
-        if (mcpPolicy !== null && (mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt || permissionMode !== 'auto')) {
-          // Pi 的权限门只有放行/拒绝两态,没有会话级持久化规则,因此 prompt 与
-          // prompt-each-time 在这里收敛成同一个动作:每次都问用户。本轮策略命中时
-          // auto-approve 也不放行 —— 渠道安全契约压过第一方 MCP 自动批准(§7.4)。
+        const hostAutoApprove = mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt;
+        if (permissionMode !== 'auto' && !hostAutoApprove) {
           sendPermissionResolution(
-            mcpPolicy === 'auto-approve' && !turnPolicyForcePrompt
-              ? 'allow'
-              : await requestUserConfirmation({
-                  forcePrompt: turnPolicyForcePrompt || mcpPolicy === 'prompt-each-time',
-                }),
-          );
-          return;
-        }
-        if (permissionMode !== 'auto') {
-          sendPermissionResolution(
-            await requestUserConfirmation({ forcePrompt: turnPolicyForcePrompt }),
+            await requestUserConfirmation({ forcePrompt: turnPolicyForcePrompt || mcpPolicy === 'prompt-each-time' }),
           );
           return;
         }
@@ -8551,7 +8824,7 @@ export class PiAgent extends BaseAgent {
           }
           const decision = await reviewAutoAction(turnPolicyForcePrompt
             ? toolAutoReviewAction(toolName, input, hostApprovalPresentation?.description, action)
-            : action);
+            : action, hostAutoApprove, permissionMode !== 'auto');
           // 权限热切换:reviewAutoAction 是 async 的,期间用户可能改档。按**最新**档位收口,
           // 不能用进入审查前捕获的旧 auto 档直接放行(Pi 明确支持热切换,codex review P1):
           //   - 已收紧到 ask(或其它非 auto/bypass)→ 破坏性调用即便 verdict=allow 也必须走
@@ -8563,13 +8836,13 @@ export class PiAgent extends BaseAgent {
             sendPermissionResolution(turnPolicyForcePrompt ? 'system-deny' : 'allow');
             return;
           }
-          if (modeAfterReview !== 'auto') {
+          if (modeAfterReview !== permissionMode) {
             // 审查期间用户主动收紧了档位 → 这一次必须拿到明确确认,等卡期间再放宽也不追认
             // (forcePrompt,与 CC 对 AI ask / 确定性红线的处理同口径)。
             sendPermissionResolution(await requestUserConfirmation({ forcePrompt: true }));
             return;
           }
-          if (decision.verdict === 'ask') {
+          if (decision.verdict === 'ask' || (permissionMode !== 'auto' && decision.verdict !== 'allow')) {
             // 审阅器故障降级来的 ask 提示一次:用户需要知道自己为何突然开始被问,
             // 否则 Auto 档看起来像坏了。模型判定的 ask 不提示(那是正常工作)。
             if (decision.unavailable) notifyAutoReviewUnavailable();

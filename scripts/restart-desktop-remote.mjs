@@ -462,6 +462,30 @@ function shellSingleQuote(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+// Terminal 的 `do script` 把命令当键盘输入送进新标签页的 tty;新窗口的 shell 还没接管
+// 输入时 tty 处于 canonical 模式,单行超过 MAX_CANON(1024 字节)会被截断,整条命令
+// 静默不执行(worktree 路径长、需清除的环境变量多时实测 ~1600 字节)。完整命令先写进
+// 临时脚本,Terminal 只收一条短的 source 命令;脚本第一行删掉自身,不留残留文件。
+export function writeDarwinTerminalLaunchScript(command, dir = os.tmpdir()) {
+  const scriptPath = path.join(dir, `cindy-desktop-dev-${randomBytes(6).toString('hex')}.sh`);
+  fs.writeFileSync(scriptPath, `rm -f -- ${shellSingleQuote(scriptPath)}\n${command}\n`, {
+    mode: 0o600,
+  });
+  return scriptPath;
+}
+
+export function darwinTerminalSourceCommand(scriptPath) {
+  return `. ${shellSingleQuote(scriptPath)}`;
+}
+
+export function prepareDarwinTerminalLaunch(command, dir = os.tmpdir()) {
+  const scriptPath = writeDarwinTerminalLaunchScript(command, dir);
+  return {
+    scriptPath,
+    args: osascriptLaunchDarwinTerminalArgs(darwinTerminalSourceCommand(scriptPath)),
+  };
+}
+
 function osascriptCloseDarwinTerminalTtyArgs(ttyPath) {
   return closeDarwinTerminalTtyScript
     .flatMap((line) => ['-e', line])
@@ -853,8 +877,16 @@ function darwinEnvPrefix() {
   return `export PATH=${shellSingleQuote([...new Set(preferredPathParts)].join(path.delimiter))}:"$PATH":${shellSingleQuote([...new Set(fallbackPathParts)].join(path.delimiter))}; `;
 }
 
-export function devEnvPrefix(env = process.env, platform = process.platform) {
-  const envEntries = [
+/**
+ * 启动器转发给 dev 进程的全部环境变量(含未设值项)。devEnvPrefix 只转发有值的项;
+ * macOS 走长驻的 Terminal.app 时,未设值项还必须由 darwinStaleDevEnvUnset 显式清掉 ——
+ * 否则 Terminal 进程里残留的更早一次启动的值(XDT_ISOLATED / XDT_USER_DATA_DIR /
+ * XDT_USER_DATA_DIR_EPOCH 等)会被 dev 进程继承,`--shared` / `--preserve-running`
+ * 预览悄悄落进别的 worktree 的沙箱,甚至用错钥匙串身份打开 profile。
+ * 不变量:Terminal 命令里这些变量的取值 == 本次启动器的取值。
+ */
+function devEnvEntries(env) {
+  return [
     // --region 经 CINDY_AUTH_REGION 注入 dev-remote-env / Forge / Vite，同一个值
     // 同时决定区域身份与 --endpoints-cdn 的自举 CDN 基址。
     ['CINDY_AUTH_REGION', env.CINDY_AUTH_REGION],
@@ -907,7 +939,19 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     ['XDT_DESKTOP_DEV_STARTUP_STATUS_FILE', env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE],
     // 插件存储启动边界的 dev 黑盒验收：仅显式临时结果路径时启用。
     ['XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE', env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE],
-  ].filter(([, value]) => value);
+  ];
+}
+
+/** macOS Terminal 命令前缀:清掉本次未设值、但可能残留在 Terminal 进程里的转发变量。 */
+export function darwinStaleDevEnvUnset(env = process.env) {
+  const keys = devEnvEntries(env)
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+  return keys.length > 0 ? `unset ${[...new Set(keys)].join(' ')}; ` : '';
+}
+
+export function devEnvPrefix(env = process.env, platform = process.platform) {
+  const envEntries = devEnvEntries(env).filter(([, value]) => value);
 
   if (platform === 'win32') {
     return envEntries
@@ -940,13 +984,28 @@ function launchInSystemTerminal(mode) {
   }
 
   if (process.platform === 'darwin') {
-    const command = `${darwinEnvPrefix()}cd ${shellSingleQuote(rootDir)} && ${devEnvPrefix()}${packageManagerCommand(mode)}; exitCode=$?; exit $exitCode`;
-    const child = spawn('osascript', osascriptLaunchDarwinTerminalArgs(command), {
+    const command = `${darwinEnvPrefix()}${darwinStaleDevEnvUnset()}cd ${shellSingleQuote(rootDir)} && ${devEnvPrefix()}${packageManagerCommand(mode)}; exitCode=$?; exit $exitCode`;
+    const { scriptPath, args } = prepareDarwinTerminalLaunch(command);
+    // osascript 在 do script 之前失败（自动化权限被拒、脚本错误）时临时脚本不会被 source，
+    // 首行自删不会发生；按失败退出尽力删除，避免留下含开发环境变量的文件。
+    const removeScript = () => {
+      try {
+        fs.rmSync(scriptPath, { force: true });
+      } catch {
+        // 尽力清理，失败不影响启动结果判断。
+      }
+    };
+    const child = spawn('osascript', args, {
       detached: true,
       stdio: 'ignore',
     });
+    child.on('error', removeScript);
+    child.on('exit', (code) => {
+      if (code !== 0) removeScript();
+    });
     child.unref();
     if (child.pid === undefined) {
+      removeScript();
       throw new Error('Failed to open Terminal.app');
     }
     console.log(`==> Opened desktop ${mode} dev in a new Terminal window.`);

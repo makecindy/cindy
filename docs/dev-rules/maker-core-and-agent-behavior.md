@@ -17,9 +17,12 @@ Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture
 `agents/shared/loop-guard.ts` 的 `ToolLoopGuard`，不能靠缩短无事件超时处理。
 Claude Code 在原有 per-sidechain 回调里检测所有模型；Pi / Codex 在 `Session` 中配对
 当前产品轮次的 `tool_use` 与 `tool_result_full`，不重复统计结果摘要、后台事件或旧轮次。
-Pi / Codex 的归一事件尚无可靠模型响应批次标识，因此不启用“参数各不相同、同类契约
-错误连续被拒”的重试计数规则，避免把单批并行失败当成多次重试；重复调用检测仍保留。
-Claude Code 沿用既有按批次计数的契约错误规则。
+三个引擎均关闭“参数各不相同、同类契约错误连续被拒三次即中断”的规则：同类错误
+不能证明模型没有在修正调用，Pi / Codex 也尚无可靠模型响应批次标识。运行时沿用
+`contractConsecutiveLimit: Number.POSITIVE_INFINITY` 关闭该计数阈值，不新增提醒或自动重试。
+完全相同的工具名、参数、输出连续四次仍会中断，短窗口轮转检测也保持不变；不同参数
+持续出现同类错误可能多重试几次，这是减少纠错误停的取舍。旧 `contract` 错误的展示
+和历史兼容保持不变。
 循环错误沿用 `tool_use_loop_detected` 和既有中断复核，Orca 消费普通终态链路；
 该 reason 不进入 interrupted-turn 自动续跑白名单，避免熔断后立即重复原循环。
 
@@ -96,10 +99,21 @@ Claude Code／Codex／Pi 的强制换窗线
 与 Pi 的日常默认值也设为 90%，对齐 Codex 口径，但用户已有显式 override 继续生效。命中
 `danger`／`overflow` 的本机会话先走同一套 `context_rebuild` bounded handoff，再落目标
 route，不能 resume 旧原生窗口。
-Codex 跨凭证时先按目标来源 resume 同一个原生线程，不因 `ordinal` / `history_base` 或来源
-变化而 fork、改写历史或交接。本地恢复与分叉必须同时固定该线程的原生历史根
+Codex 跨凭证优先保留同一个原生线程；仅当目标需要另一个 host、旧 host 仍持有原生 writer
+时，关闭该任务的业务 handle 后使用不剥离历史的原生 fork，并等待一次性 fork host 退出，
+再以任务 owner 与旧 SDK／路由版本为条件原子保存新 SDK thread 和目标路由。任务 ID 与
+消息历史不变，无关任务与 host 不退出；旧 writer 已释放则不 fork。`ordinal` /
+`history_base` 本身不能成为改写历史的理由。
+本地恢复与分叉必须同时固定该线程的原生历史根
 （`CODEX_HOME`，含 `sessions` / `archived_sessions`）和数据库根（`sqlite_home`）；
 仅固定 SQLite 不足以恢复分页祖先，原生按不可变 rollout ID 在历史根内查找祖先。
+归档状态以 Cindy 的 `sessions.status` 为准。Codex 经原生 `thread/archive` /
+`thread/unarchive` 同步历史位置与索引，成功后更新线程位置记录；禁止直接改原生 SQLite
+或搬动 rollout，也不能为归档触发历史复制／重建。启动时补齐存量状态，忙碌任务、离线
+SSH 或暂时失败留待重试；共享原生 ID 的活动任务优先，不关闭其他任务的进程。同步必须
+持有任务路由锁并验证当前 owner，使用原历史根与数据库根。Claude Code 与 Pi 当前没有
+原生归档接口，保持 Cindy 状态；历史扫描及重新导入不得覆盖 Cindy 的归档与归档任务的
+项目目录、额外目录及可写目录范围。手机远控复用宿主同一状态写入路径。
 凭证、代理路由和模型目录仍按本轮选中账号准备，不能把历史根写回全局账号配置。
 跨历史根的原生进程从启动参数要求 `cli_auth_credentials_store="ephemeral"`，清除继承的
 原生身份环境变量；OAuth 通过独立的 external-auth adapter 在进程内安装目标账号 token，
@@ -130,9 +144,23 @@ vitest run src/agents/codex/app-server/external-auth.native.test.ts`，覆盖分
 关闭任务时也清理这些实例里的同 thread 保活状态；不能只查共享代理而漏掉实际承载连接。
 分支优先使用已保存的原生 turn 锚点。Codex 0.153.4 起，旧消息或失败轮没有锚点时，
 先用 `thread/turns/list(itemsView: notLoaded)` 查询终态边界，再 `thread/fork(lastTurnId)`，
-不能对分页线程执行 rollback。界面软删重试不代表原生 turn 消失，有复制事件时间时据此
+不能对分页线程执行 rollback；0.156.0 起运行时已移除 `thread/rollback`，编辑重发与回退
+一律走同一边界 fork。界面软删重试不代表原生 turn 消失，有复制事件时间时据此
 定位，不按可见 user 行数猜边界；复制事件时间缺失、原生时间缺失或秒级精度无法确定顺序时明确失败，不截错
-历史。查询与 fork 使用同一隔离控制面 host，关闭其写入进程后才发布子线程身份。
+历史。回退目标是当前原生线程的第一轮时（目标之前没有属于该线程的 user 行：首条消息，或
+`/clear`、上下文重建、切换引擎新开线程后的第一轮）没有可 fork 的边界，由宿主标记
+`rewindsToNativeThreadStart`，Codex 按当前配置换一条空线程；归属沿用锚点的 agent_switch
+链，切回停泊线程时更早的片段仍算当前线程，判定不出就明确失败，不能把「找不到边界」
+当成第一轮。不可解析或没有 `fromSdkSessionId` 的 `agent_switch` 视为归属不定，同样
+不得标记 `rewindsToNativeThreadStart`。最近的 `context_rebuild` 截断更早历史，不能让
+重建前的 `agent_switch` 把归属设回当前线程。`targetCreatedAt <= sessions.clearedAt` 必须拒绝，
+不能把 `/clear` 之前的目标当成当前线程第一轮。`INPUT_CLEAR_SESSION` 不进
+`withSendToSessionLock`，因此判定时读到的 `clearedAt` 必须作为 `expectedClearedAt`
+传入 `rewind.commit`，并在 SDK 换空线程之前再核一次；代次已变则整单失败，不得软删
+`/clear` 之后的新消息。实现见 Desktop `maker-orchestration/rewind.ts` 与 maker-core
+`agents/codex/index.ts` 的 `commitRewindFiles`，回归见 `rewind.test.ts`、`fork.test.ts`、
+`rewindNativeBoundarySqlite.test.ts`、`tx.test.ts` 与 `index.test.ts`。
+查询与 fork 使用同一隔离控制面 host，关闭其写入进程后才发布子线程身份。
 HTTP 回退遇到缺失 `Content-Type` 的成功响应时，只允许从明文 SSE 前缀（可带注释心跳）
 确认事件流并补齐响应头；显式非 SSE 类型、HTML／JSON、空响应与只有心跳的正文不能放行。
 正在运行的 turn、SSH 远端缺少本地交接能力、或已有恢复动作在途时必须 fail closed，不能
@@ -233,6 +261,11 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
 - 打算用 prompt 解决某个问题前先自问：这件事用代码能不能做？能就用代码。
 - 把本应由代码保证的确定性逻辑（格式校验、字段抽取、流程跳转、是否调用某个工具等）
   交给模型自由发挥，会引入不可复现的行为漂移，属于本规则明确禁止的做法。
+- Cindy 的目标模式由 `goal-host` 统一管理续跑、预算与暂停／恢复。Codex 创建和恢复线程时
+  使用会话级 `features.goals=false`，避免模型另建原生目标，形成绕过宿主调度与来源标记的
+  第二套循环；不写用户的全局 Codex 配置。不能仅把无来源事件改判为目标事件，否则用户
+  插话和停止边界仍会失真。实现与回归见 `agents/codex/index.ts`、`index.test.ts`；
+  `goal-ownership.native.test.ts` 用隔离的原生运行时验证旧目标恢复后不再自行续跑。
 - **产品 turn 未结算不得结束。** provider `turn/completed` 可以立刻给 SDK turn 落墓碑并
   结算 usage；只有原子挂在该终态边界上的显式 continuation claim 才能挡住产品结束。
   Codex 提问／计划审阅尚待用户确认时同样保留产品边界：底层可继续独立工作并结束

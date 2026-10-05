@@ -36,6 +36,7 @@ import {
   buildHookCommandForScriptFile,
   canSubmitSessionBinding,
   isExplicitScheduleModelUnavailable,
+  missingRequiredTemplateParamLabel,
   needsBoundSessionGenerationRouteResolution,
   parsePreRunHookTimeoutMs,
   resolveScheduleGenerationProviderId,
@@ -523,13 +524,18 @@ export function ScheduleFormDialog({
     }
     let input = toInput();
     if (selectedTemplate && !promptDirty) {
+      const missingLabel = missingRequiredTemplateParamLabel(selectedTemplate, paramValues);
+      if (missingLabel) {
+        toast.warning(t('scheduler.editor.validation.templateParamRequired', { label: missingLabel }));
+        return;
+      }
       try {
         input = {
           ...input,
           prompt: applyTemplateParams(selectedTemplate.prompt ?? '', paramValues, selectedTemplate.parameters),
         };
-      } catch (e) {
-        toast.warning(e instanceof Error ? e.message : String(e));
+      } catch {
+        toast.warning(t('scheduler.editor.validation.templateApplyFailed'));
         return;
       }
     }
@@ -550,10 +556,7 @@ export function ScheduleFormDialog({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10000]',
-            'bg-neutral-900/40 dark:bg-neutral-950/60',
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10000]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
@@ -563,9 +566,8 @@ export function ScheduleFormDialog({
           onInteractOutside={(e) => e.preventDefault()}
           onEscapeKeyDown={(e) => submitting && e.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'flex max-h-[88vh] w-[760px] flex-col overflow-hidden rounded-xl',
-            'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'flex max-h-[88vh] w-[760px] flex-col overflow-hidden',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >

@@ -66,12 +66,6 @@ const profiles = {
       'visual-files-preview': [
         iosSyncBannerMask,
       ],
-      'visual-automations': [
-        iosSyncBannerMask,
-      ],
-      'visual-automations-form': [
-        iosSyncBannerMask,
-      ],
     },
   },
   'android-pixel-expo-go': {

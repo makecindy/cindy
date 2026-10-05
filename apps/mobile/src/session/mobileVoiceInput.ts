@@ -1,4 +1,4 @@
-import { apiFetchRaw } from '@/api/client';
+import { ApiError, apiFetchRaw } from '@/api/client';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { i18n } from '@/i18n';
 import {
@@ -49,6 +49,18 @@ export function mobileVoiceMicPermissionError(): string {
 }
 export function mobileVoiceRealtimeAudioUnavailableError(): string {
   return i18n.t('composer.voice.realtimeAudioUnavailable');
+}
+/**
+ * Structured account rate limit from managed voice-session allocation (same
+ * judgement as desktop). Every mobile ASR candidate shares that account quota,
+ * so switching providers or reconnecting cannot get past it.
+ */
+export function isMobileVoiceRateLimited(error: unknown): boolean {
+  return error instanceof ApiError && error.code === 'RATE_LIMITED' && error.status === 429;
+}
+/** Only a recognized account limit replaces the generic failure text. */
+export function mobileVoiceRateLimitMessage(error: unknown): string | undefined {
+  return isMobileVoiceRateLimited(error) ? i18n.t('composer.voice.rateLimited') : undefined;
 }
 
 export type MobileVoiceState = ComposerVoiceState;

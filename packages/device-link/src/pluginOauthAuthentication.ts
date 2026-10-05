@@ -127,3 +127,33 @@ export function parsePluginOauthHelloReply(
     throw new Error("OAUTH_BRIDGE_UNAVAILABLE");
   return v as unknown as PluginOauthHelloReply;
 }
+
+/** Canonical signed transcript shared by both native controllers and the execution Host. */
+export function pluginOauthTranscript(
+  hello: PluginOauthHello,
+  reply: Omit<PluginOauthHelloReply, "signature">,
+  target: Pick<
+    PluginOauthPeerIdentity,
+    "realm" | "membershipId" | "deviceId" | "publicKey"
+  >,
+  peer: string,
+): string {
+  return JSON.stringify([
+    "cindy-plugin-oauth-authentication-v3",
+    target.realm,
+    target.membershipId,
+    target.deviceId,
+    peer,
+    target.publicKey,
+    reply.bootId,
+    hello.nonce,
+    hello.publicKey,
+    reply.publicKey,
+    reply.id,
+    reply.expiresAtMs,
+    hello.action.requestId,
+    hello.action.actionId,
+    hello.action.expectedRevision,
+    reply.ghostId,
+  ]);
+}

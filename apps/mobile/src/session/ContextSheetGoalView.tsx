@@ -1,16 +1,18 @@
 /**
  * Context 面板的「目标模式」二级视图(对照设计稿 S3)。
  *
- * 两态:
- *  - 无 goal → 新建表单:目标文案 + 三项限制(留空 = 不限)+「开始目标」。
- *  - 有 goal → 状态视图:状态 chip + 目标文案 + 轮数/token 进度 + 暂停/继续/终止。
+ * 两态(交互与 ContextSheetGoalView.ios.tsx 同构,外观保持 Android RN 自绘):
+ *  - 无 goal → 新建表单:目标文案 +「高级设置」折叠(默认收起;展开后是说明 + 三项上限下拉,
+ *    NativePullDownMenu,包里没有 MenuView 时退回行内选项)+「开始目标」。
+ *  - 有 goal → 状态视图:状态分组标题 → 目标文案 → 轮数/token 进度 → 原因;
+ *    操作行竖排:暂停 / 继续 → 终止(危险色)。
  *
  * goal 状态机在被控端 GoalController 执行;这里只发隧道指令(maker:goal:*)并渲染
  * remoteSessionStore 镜像的状态投影。
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, ChevronRight } from 'lucide-react-native';
+import { Check, ChevronDown, ChevronRight, ChevronsUpDown } from 'lucide-react-native';
 import {
   ActivityIndicator,
   Pressable,
@@ -18,6 +20,8 @@ import {
   View,
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
+import { NativePullDownMenu, usesNativePullDownMenu } from '@/platform/chrome';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import type {
   MobileGoalLimitsInput,
   MobileGoalStatus,
@@ -156,11 +160,12 @@ export function ContextSheetGoalCreateForm({
         multiline
         onChangeText={setObjective}
         placeholder={t('interaction.contextSheet.goalPlaceholder')}
-        placeholderTextColor={colors.textTertiary}
+        placeholderTextColor={colors.textPlaceholder}
         style={styles.objectiveInput}
         testID="contextSheet.goalObjectiveInput"
         value={objective}
       />
+      {/* 与 iOS DisclosureGroup 同构:整行可点,标题在左、展开指示在右。 */}
       <Pressable
         accessibilityLabel={t('interaction.contextSheet.advancedSettings')}
         accessibilityRole="button"
@@ -169,10 +174,10 @@ export function ContextSheetGoalCreateForm({
         style={({ pressed }) => [styles.advancedToggle, pressed && styles.pressed]}
         testID="contextSheet.goalAdvancedToggle"
       >
-        {advancedOpen
-          ? <ChevronDown color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-          : <ChevronRight color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />}
         <Text style={styles.advancedToggleText}>{t('interaction.contextSheet.advancedSettings')}</Text>
+        {advancedOpen
+          ? <ChevronDown color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+          : <ChevronRight color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />}
       </Pressable>
       {advancedOpen ? (
         <>
@@ -206,7 +211,11 @@ export function ContextSheetGoalCreateForm({
           />
         </>
       ) : null}
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      {error ? (
+        <Text style={styles.errorText}>{error}</Text>
+      ) : disabled && disabledHint ? (
+        <Text style={styles.hintText} testID="contextSheet.goalDisabledHint">{disabledHint}</Text>
+      ) : null}
       <Pressable
         accessibilityHint={disabled ? disabledHint : undefined}
         accessibilityLabel={t('interaction.contextSheet.startGoal')}
@@ -260,26 +269,23 @@ function GoalStatusView({
   const reasonText = goalReasonText(goal.lastReason);
   return (
     <View testID={testID}>
-      <View style={styles.statusHeader}>
-        <View style={[styles.statusChip, goal.status === 'active' && styles.statusChipActive]}>
-          <Text style={[styles.statusChipText, goal.status === 'active' && styles.statusChipTextActive]}>
-            {goalStatusLabel(goal.status, goal.lastReason)}
-          </Text>
-        </View>
-        <Text style={styles.statusMeta}>
-          {t('interaction.contextSheet.goalMeta', { turns: turnsText, tokens: tokensText })}
-        </Text>
-      </View>
+      <Text style={styles.groupLabel} testID="contextSheet.goalStatusLabel">
+        {goalStatusLabel(goal.status, goal.lastReason)}
+      </Text>
       <Text style={styles.objectiveText} testID="contextSheet.goalObjectiveText">{goal.objective}</Text>
+      <Text style={styles.statusMeta}>
+        {t('interaction.contextSheet.goalMeta', { turns: turnsText, tokens: tokensText })}
+      </Text>
       {reasonText ? <Text style={styles.hintText}>{reasonText}</Text> : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
-      <View style={styles.actionRow}>
+      <View style={styles.actionGroup}>
         {canPause ? (
           <GoalActionButton busy={busy} label={t('interaction.contextSheet.pause')} onPress={onPauseGoal} testID="contextSheet.goalPauseButton" />
         ) : null}
         {canResume ? (
           <GoalActionButton busy={busy} label={t('interaction.contextSheet.resume')} onPress={onResumeGoal} testID="contextSheet.goalResumeButton" />
         ) : null}
+        {canPause || canResume ? <View style={styles.separator} /> : null}
         <GoalActionButton
           busy={busy}
           label={t('interaction.contextSheet.clearGoal')}
@@ -313,17 +319,18 @@ function GoalActionButton({
       accessibilityState={{ disabled: busy }}
       disabled={busy}
       onPress={onPress}
-      style={({ pressed }) => [styles.actionButton, pressed && styles.pressed, busy && styles.ctaButtonDisabled]}
+      style={({ pressed }) => [styles.actionRow, pressed && styles.pressed, busy && styles.ctaButtonDisabled]}
       testID={testID}
     >
-      <Text style={[styles.actionButtonText, textColor ? { color: textColor } : null]}>{label}</Text>
+      <Text style={[styles.actionRowText, textColor ? { color: textColor } : null]}>{label}</Text>
     </Pressable>
   );
 }
 
 /**
- * 单项上限的 pill 单选组(预设 + 「不限」)。手机端用 pill 组替代桌面的下拉——
- * bottom sheet 里嵌套下拉手感差;当前值不在预设里(历史自定义)时前置保留(对齐桌面)。
+ * 单项上限的下拉选择(预设 + 「不限」),与 iOS Picker(menu) 同构:整行显示「名称 … 当前值」,
+ * 点开是系统下拉菜单(NativePullDownMenu);包里没有 MenuView 时退回行内展开的单选行。
+ * 当前值不在预设里(历史自定义)时前置保留(对齐桌面)。
  */
 function LimitOptionsRow({
   label,
@@ -343,66 +350,82 @@ function LimitOptionsRow({
   testID?: string;
 }) {
   const styles = useThemedStyles(makeGoalStyles);
+  const { colors } = useTheme();
   const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const nativeMenu = usesNativePullDownMenu();
   const options = value != null && !presets.includes(value) ? [value, ...presets] : presets;
+  const unlimited = t('interaction.contextSheet.unlimited');
+  const currentLabel = value === null ? unlimited : format(value);
+  const choose = (id: string) => {
+    if (disabled) return;
+    if (id === 'unlimited') onSelect(null);
+    else {
+      const next = Number(id);
+      if (options.includes(next)) onSelect(next);
+    }
+    setExpanded(false);
+  };
+  const choices = [
+    ...options.map((option) => ({ id: String(option), title: format(option), selected: value === option })),
+    { id: 'unlimited', title: unlimited, selected: value === null },
+  ];
   return (
-    <View style={styles.limitOptionsRow} testID={testID}>
-      <Text style={styles.limitLabel}>{label}</Text>
-      <View style={styles.limitPillRow}>
-        {options.map((preset) => (
-          <LimitPill
-            disabled={disabled}
-            key={preset}
-            label={format(preset)}
-            onPress={() => onSelect(preset)}
-            selected={value === preset}
-          />
-        ))}
-        <LimitPill
+    <View testID={testID}>
+      <NativePullDownMenu
+        disabled={disabled}
+        actions={choices.map((choice) => ({
+          id: choice.id,
+          title: choice.title,
+          state: choice.selected ? 'on' : 'off',
+          disabled,
+        }))}
+        onAction={choose}
+        testID={`${testID}.menu`}
+      >
+        <Pressable
+          accessibilityLabel={`${label}, ${currentLabel}`}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: !!disabled, expanded: nativeMenu ? undefined : expanded }}
           disabled={disabled}
-          label={t('interaction.contextSheet.unlimited')}
-          onPress={() => onSelect(null)}
-          selected={value === null}
-        />
-      </View>
+          onPress={() => {
+            if (!nativeMenu) setExpanded((open) => !open);
+          }}
+          style={({ pressed }) => [styles.limitRow, disabled && styles.ctaButtonDisabled, pressed && styles.pressed]}
+          testID={`${testID}.trigger`}
+        >
+          <Text numberOfLines={1} style={styles.limitLabel}>{label}</Text>
+          <Text numberOfLines={1} style={styles.limitValue}>{currentLabel}</Text>
+          <ChevronsUpDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+        </Pressable>
+      </NativePullDownMenu>
+      {!nativeMenu && expanded
+        ? choices.map((choice) => (
+            <Pressable
+              accessibilityLabel={choice.title}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !!disabled, selected: choice.selected }}
+              disabled={disabled}
+              key={choice.id}
+              onPress={() => choose(choice.id)}
+              style={({ pressed }) => [styles.limitChoice, pressed && styles.pressed]}
+              testID={`${testID}.option.${choice.id}`}
+            >
+              <Text numberOfLines={1} style={styles.limitChoiceText}>{choice.title}</Text>
+              {choice.selected ? (
+                <Check color={colors.textPrimary} size={iconSize.md} strokeWidth={iconStroke.medium} />
+              ) : null}
+            </Pressable>
+          ))
+        : null}
     </View>
   );
 }
 
-function LimitPill({
-  label,
-  selected,
-  onPress,
-  disabled,
-}: {
-  label: string;
-  selected: boolean;
-  onPress: () => void;
-  disabled?: boolean;
-}) {
-  const styles = useThemedStyles(makeGoalStyles);
-  return (
-    <Pressable
-      accessibilityLabel={label}
-      accessibilityRole="button"
-      accessibilityState={{ disabled, selected }}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.limitPill,
-        selected && styles.limitPillSelected,
-        pressed && styles.pressed,
-      ]}
-    >
-      <Text style={[styles.limitPillText, selected && styles.limitPillTextSelected]}>{label}</Text>
-    </Pressable>
-  );
-}
-
-
+/** 与 iOS 同口径的进度数字:1.0M 写作 1M、千位用大写 K。 */
 function formatTokens(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
+  if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(1))}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`;
   return String(tokens);
 }
 
@@ -411,6 +434,8 @@ function makeGoalStyles(colors: ThemeColors) {
     groupLabel: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
+      fontWeight: fontWeight.semibold,
+      lineHeight: lineHeight.caption,
       paddingTop: spacing.lg,
     },
     objectiveInput: {
@@ -426,59 +451,66 @@ function makeGoalStyles(colors: ThemeColors) {
       padding: spacing.md + 2,
       textAlignVertical: 'top' as const,
     },
+    // 「高级设置」折叠行:整行 44pt 可点,标题在左、展开指示在右(对齐 iOS DisclosureGroup)。
     advancedToggle: {
       alignItems: 'center' as const,
       flexDirection: 'row' as const,
-      gap: spacing.xs,
-      paddingTop: spacing.lg,
+      gap: spacing.sm,
+      justifyContent: 'space-between' as const,
+      marginTop: spacing.md,
+      minHeight: 44,
     },
     advancedToggleText: {
-      color: colors.textSecondary,
-      fontSize: typeScale.footnote,
+      color: colors.textPrimary,
+      flex: 1,
+      fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
-    limitOptionsRow: {
-      paddingTop: spacing.lg,
+    limitRow: {
+      alignItems: 'center' as const,
+      flexDirection: 'row' as const,
+      gap: spacing.sm,
+      minHeight: 44,
     },
     limitLabel: {
       color: colors.textPrimary,
-      fontSize: typeScale.footnote,
+      flex: 1,
+      fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
-    limitPillRow: {
-      flexDirection: 'row' as const,
-      flexWrap: 'wrap' as const,
-      gap: spacing.sm,
-      paddingTop: spacing.sm,
+    limitValue: {
+      color: colors.textSecondary,
+      flexShrink: 1,
+      fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
+      fontWeight: fontWeight.regular,
     },
-    limitPill: {
+    limitChoice: {
       alignItems: 'center' as const,
-      backgroundColor: colors.surfaceChip,
-      borderRadius: radius.pill,
-      height: 30,
-      justifyContent: 'center' as const,
-      paddingHorizontal: spacing.md,
+      flexDirection: 'row' as const,
+      gap: spacing.sm,
+      minHeight: 44,
+      paddingLeft: spacing.lg,
     },
-    limitPillSelected: {
-      backgroundColor: colors.cta,
-    },
-    limitPillText: {
+    limitChoiceText: {
       color: colors.textPrimary,
-      fontSize: typeScale.footnote,
+      flex: 1,
+      fontSize: typeScale.bodySmall,
+      lineHeight: lineHeight.bodySmall,
       fontWeight: fontWeight.medium,
-    },
-    limitPillTextSelected: {
-      color: colors.ctaText,
     },
     hintText: {
-      color: colors.textTertiary,
+      color: colors.textSecondary,
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
-      paddingTop: spacing.md,
+      paddingTop: spacing.sm,
     },
     errorText: {
       color: colors.errorText,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       paddingTop: spacing.md,
     },
     ctaButton: {
@@ -495,60 +527,39 @@ function makeGoalStyles(colors: ThemeColors) {
     ctaLabel: {
       color: colors.ctaText,
       fontSize: typeScale.body,
-      fontWeight: fontWeight.semibold,
-    },
-    pressed: {
-      opacity: 0.7,
-    },
-    statusHeader: {
-      alignItems: 'center' as const,
-      flexDirection: 'row' as const,
-      gap: spacing.md,
-      paddingTop: spacing.lg,
-    },
-    statusChip: {
-      backgroundColor: colors.surfaceChip,
-      borderRadius: radius.pill,
-      paddingHorizontal: spacing.md,
-      paddingVertical: 4,
-    },
-    statusChipActive: {
-      backgroundColor: colors.cta,
-    },
-    statusChipText: {
-      color: colors.textPrimary,
-      fontSize: typeScale.caption,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
-    statusChipTextActive: {
-      color: colors.ctaText,
-    },
+    pressed: mobileInteractionStyles.pressed,
     statusMeta: {
-      color: colors.textTertiary,
-      fontSize: typeScale.caption,
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
+      paddingTop: spacing.xs,
     },
     objectiveText: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
       lineHeight: lineHeight.body,
-      paddingTop: spacing.md,
+      paddingTop: spacing.sm,
+    },
+    // 操作行竖排成一组(对齐 iOS 同一 Section 内的暂停/继续 → 终止),行间 hairline。
+    actionGroup: {
+      paddingTop: spacing.lg,
+    },
+    separator: {
+      backgroundColor: colors.border,
+      height: StyleSheet.hairlineWidth,
     },
     actionRow: {
-      flexDirection: 'row' as const,
-      gap: spacing.md,
-      paddingTop: spacing.xl,
-    },
-    actionButton: {
-      alignItems: 'center' as const,
-      backgroundColor: colors.surfaceChip,
-      borderRadius: radius.pill,
-      flex: 1,
-      height: 44,
       justifyContent: 'center' as const,
+      minHeight: 44,
     },
-    actionButtonText: {
+    actionRowText: {
       color: colors.textPrimary,
-      fontSize: typeScale.footnote,
+      fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
   };

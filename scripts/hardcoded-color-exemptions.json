@@ -247,7 +247,7 @@
  },
  {
   "glob": "apps/desktop/src/renderer/components/login/LoginBrandStage.tsx",
-  "reason": "注释文档化 --login-bg-base 双态值与白字版资产色(#EDEDED/#1F1F1E/#FBFBFB),无硬编码消费",
+  "reason": "注释文档化 --login-bg-base 双态值与白字版资产色(#F2F2ED/#181818/#FBFBFB),无硬编码消费",
   "owner": "login-dark"
  },
  {

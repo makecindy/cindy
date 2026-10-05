@@ -14,7 +14,6 @@ import { useTranslation } from 'react-i18next';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Spinner } from '@/components/ui/spinner';
-import { cn } from '@/lib/utils';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { isBatchFinished, type UpdateAllRow } from './lib/updateAllModel';
 
@@ -78,11 +77,12 @@ export function UpdateAllDialog({
     <Dialog.Root open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]"
+          className="modal-scrim fixed inset-0 z-[10000]"
           style={WINDOW_NO_DRAG_STYLE}
         />
         <Dialog.Content
-          className="fixed left-1/2 top-1/2 z-[10000] flex max-h-[70vh] w-[calc(100vw-48px)] max-w-[520px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-menu)] focus:outline-none"
+          onPointerDownOutside={(event) => event.preventDefault()}
+          className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[70vh] w-[calc(100vw-48px)] max-w-[520px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none"
           style={WINDOW_NO_DRAG_STYLE}
         >
           <div className="flex items-start gap-4 border-b-[0.5px] border-[var(--border-default)] px-6 py-5">

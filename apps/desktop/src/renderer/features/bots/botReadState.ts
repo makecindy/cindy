@@ -13,6 +13,8 @@
  *   - 读位只前进不后退(`markBotRead` 单调),避免乱序事件把已读退回未读。
  */
 
+import type { BotGroupSummary } from '../../../shared/botGroupChat';
+
 const STORAGE_KEY_PREFIX = 'cindy.bots.readState.v1';
 
 type ReadStateMap = Record<string, number>;
@@ -112,17 +114,25 @@ export function pruneBotReadState(botIds: readonly string[]): boolean {
   const next: ReadStateMap = {};
   let changed = false;
   for (const [botId, at] of Object.entries(current)) {
-    if (alive.has(botId)) next[botId] = at;
+    if (botId.startsWith('group:') || alive.has(botId)) next[botId] = at;
     else changed = true;
   }
   if (changed) writeStorage(next);
   return changed;
 }
 
+function onStorage(event: StorageEvent): void {
+  if (event.key !== null && event.key !== storageKey()) return;
+  cache = null;
+  for (const subscriber of subscribers) subscriber();
+}
+
 export function subscribeBotReadState(listener: () => void): () => void {
+  if (subscribers.size === 0) window.addEventListener('storage', onStorage);
   subscribers.add(listener);
   return () => {
     subscribers.delete(listener);
+    if (subscribers.size === 0) window.removeEventListener('storage', onStorage);
   };
 }
 
@@ -131,4 +141,32 @@ export function resetBotReadStateForTests(): void {
   activeOwnerId = null;
   cache = null;
   subscribers.clear();
+  window.removeEventListener('storage', onStorage);
+}
+
+/** Group replies use the same owner-scoped, monotonic local read positions. */
+export const botGroupReadKey = (groupId: string) => `group:${groupId}`;
+type GroupReadSummary = Pick<BotGroupSummary, 'id' | 'lastReplyAt'> & Partial<Pick<BotGroupSummary, 'lastMessage'>>;
+
+function latestGroupReplyAt(group: GroupReadSummary): number {
+  // Older hosts may omit lastReplyAt; other humans count just like companions.
+  const last = group.lastMessage;
+  return Math.max(group.lastReplyAt ?? 0,
+    last && (last.authorKind === 'bot' || last.isSelf === false) ? last.createdAt : 0);
+}
+
+export function isBotGroupUnread(group: GroupReadSummary): boolean {
+  const readAt = getBotLastReadAt(botGroupReadKey(group.id));
+  return readAt !== null && latestGroupReplyAt(group) > readAt;
+}
+export function seedBotGroupReadState(groups: readonly GroupReadSummary[]): void {
+  const current = readStorage();
+  const next = { ...current };
+  const alive = new Set(groups.map(group => botGroupReadKey(group.id)));
+  for (const key of Object.keys(next)) if (key.startsWith('group:') && !alive.has(key)) delete next[key];
+  for (const group of groups) {
+    const key = botGroupReadKey(group.id);
+    if (next[key] === undefined) next[key] = Math.max(1, latestGroupReplyAt(group));
+  }
+  if (JSON.stringify(next) !== JSON.stringify(current)) writeStorage(next);
 }

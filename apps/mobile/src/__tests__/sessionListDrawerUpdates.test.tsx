@@ -164,11 +164,12 @@ describe('shared Home drawer host', () => {
     expect(container.querySelector('[data-testid="sessionDrawer.home"]')).toBeNull();
     expect(container.querySelector('[data-testid="sessionDrawer.scrim"]')).toBeNull();
   });
-  it('uses the Home leading close action and has no home footer in the temporary panel', async () => {
+  it('keeps the Home menu in the temporary panel, puts New task in its header, and closes from the scrim', async () => {
     await act(async () => root.render(<SessionListDrawer {...props} />));
     expect(container.querySelector('[data-testid="sessionDrawer.home"]')).toBeNull();
-    expect(native.home?.onDismiss).toBe(props.onClose);
-    await act(async () => native.home?.onDismiss?.());
+    expect(native.home).not.toHaveProperty('onDismiss');
+    expect(native.home?.newSessionInHeader).toBe(true);
+    (container.querySelector('[data-testid="sessionDrawer.scrim"]') as HTMLElement).click();
     expect(props.onClose).toHaveBeenCalledOnce();
   });
   it('keeps Home mounted while changing task, width, or drawer presentation', async () => {

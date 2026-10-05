@@ -105,6 +105,9 @@ export function isRendererAccessibleSafeStorageKey(storageKey: string): boolean 
   return (
     !MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS.has(normalized)
     && !normalized.startsWith(CUSTOM_PROVIDER_HEADER_SECRET_PREFIX)
+    // Imported environments contain private credentials/checkpoints. All generic
+    // read/store/remove calls must leave this entire namespace to Main.
+    && !normalized.startsWith('bot_environment_')
   );
 }
 

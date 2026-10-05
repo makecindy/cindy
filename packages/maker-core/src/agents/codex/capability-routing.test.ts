@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
 import { describe, expect, it } from 'vitest';
 
 import type { CapabilityRoutingPolicy } from '../../types/capability-routing.js';
@@ -12,6 +16,36 @@ import {
 } from './capability-routing.js';
 
 describe('Bot Skill config', () => {
+  it('keeps physical grants frozen when a catalog alias is repointed before reload', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-bot-skill-grants-'));
+    try {
+      const old = path.join(root, 'approved');
+      const replacement = path.join(root, 'replacement');
+      const alias = path.join(root, 'discovery');
+      for (const dir of [old, replacement]) {
+        fs.mkdirSync(dir);
+        fs.writeFileSync(path.join(dir, 'SKILL.md'), '# fixture');
+      }
+      fs.symlinkSync(old, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      const policy = { mode: 'allowlist' as const, configured: ['learn'],
+        catalog: [{ name: 'learn', path: path.join(alias, 'SKILL.md') }] };
+      const grants = snapshotManagedSkillGrants(policy)!;
+      fs.unlinkSync(alias);
+      fs.symlinkSync(replacement, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      const paths = [old, replacement].map(dir => path.join(dir, 'SKILL.md'));
+      expect(buildCodexBotSkillConfigOverrides(policy, { grants,
+        skills: paths.map(source => ({ path: source, enabled: true })),
+      })['skills.config']).toEqual(expect.arrayContaining([
+        { path: paths[0], enabled: true }, { path: paths[1], enabled: false },
+        { path: policy.catalog[0]!.path, enabled: false },
+      ]));
+      // A scoped native discovery error wins over a previously granted path.
+      expect(buildCodexBotSkillConfigOverrides(policy, { grants,
+        skills: [{ path: paths[0]!, enabled: false }],
+      })['skills.config']).toEqual(expect.arrayContaining([{ path: paths[0], enabled: false }]));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('maps a Bot allowlist to native per-thread Codex Skill state', () => {
     expect(buildCodexBotSkillConfigOverrides({
       mode: 'allowlist',

@@ -61,7 +61,7 @@ describe('safe attachment routing', () => {
 
   it('wires the UserMessage attachment chip to save before the open/preview path', () => {
     const source = readFileSync(
-      resolve(__dirname, '..', 'components', 'chat', 'UserMessage.tsx'),
+      resolve(__dirname, '..', 'components', 'chat', 'UserAttachmentChip.tsx'),
       'utf8',
     );
     expect(source).toMatch(
@@ -72,7 +72,7 @@ describe('safe attachment routing', () => {
 
   it('gives the downgraded attachment chip a save-as-only context menu', () => {
     const source = readFileSync(
-      resolve(__dirname, '..', 'components', 'chat', 'UserMessage.tsx'),
+      resolve(__dirname, '..', 'components', 'chat', 'UserAttachmentChip.tsx'),
       'utf8',
     );
     // 右键分流:降级附件只弹「另存为…」单项菜单,普通附件走共享文件 chip 菜单。

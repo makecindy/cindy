@@ -316,6 +316,24 @@
         "xhigh": "enabled",
         "max": "enabled"
       },
+      "mimo-v2.6-pro": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      },
+      "mimo-v2.6-flash": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      },
       "glm-5": {
         "none": "disabled",
         "minimal": "disabled",
@@ -359,6 +377,8 @@
       "deepseek-v4-flash": true
     },
     "thinkingToggleModels": [
+      "mimo-v2.6-pro",
+      "mimo-v2.6-flash",
       "mimo-v2.5",
       "mimo-v2.5-pro",
       "glm-5",
@@ -557,6 +577,12 @@
     "adapter": "openai-chat",
     "authKind": "key",
     "modelWireDefaults": {
+      "deepseek-flash": {
+        "wire": "openai-responses",
+        "inbound": [
+          "responses"
+        ]
+      },
       "deepseek-v4-flash": {
         "wire": "openai-responses",
         "inbound": [
@@ -571,6 +597,9 @@
       }
     },
     "modelResponsesTerminalRepair": {
+      "deepseek-flash": {
+        "graceMs": 5000
+      },
       "deepseek-v4-flash": {
         "graceMs": 5000
       },
@@ -588,6 +617,13 @@
     "requiresAdjacentResponsesToolResults": true,
     "annotateEmptyToolOutputs": true,
     "modelReasoningEffortMap": {
+      "deepseek-flash": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      },
       "deepseek-v4-pro": {
         "low": "low",
         "medium": "high",
@@ -604,10 +640,12 @@
       }
     },
     "modelSupportsReasoningSummaries": {
+      "deepseek-flash": true,
       "deepseek-v4-pro": true,
       "deepseek-v4-flash": true
     },
     "preserveReasoningContentModels": [
+      "deepseek-flash",
       "deepseek-v4-pro",
       "deepseek-v4-flash"
     ]

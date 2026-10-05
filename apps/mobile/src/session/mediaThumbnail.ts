@@ -38,7 +38,7 @@ export type MediaThumbnailResolveState =
   | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'ready'; media: MobileResolvedRemoteMedia }
-  | { status: 'error' };
+  | { status: 'error'; error?: unknown };
 
 /** 是否应在 mount 时自动取件:仅 image、不可直接预览、桌面端媒体 URL、且有取件回调。 */
 export function shouldAutoResolveMediaThumbnail(

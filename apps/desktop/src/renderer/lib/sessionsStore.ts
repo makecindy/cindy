@@ -67,7 +67,26 @@ const DEFAULT_LIMIT = 1000;
 const startupPerfLog = createLogger('perf/startup');
 const initialFetchLogged = new Set<ListStatusFilter>();
 
-const cache = new Map<ListStatusFilter, Session[]>();
+/** sessionId → 标题的跨桶索引;任何桶写入都会失效,首次读取时惰性重建。 */
+let titleIndex: Map<string, string> | null = null;
+
+/** 桶缓存:每次写入顺带失效标题索引(不依赖各写入点是否随后 notify)。 */
+class SessionBucketCache extends Map<ListStatusFilter, Session[]> {
+  override set(filter: ListStatusFilter, sessions: Session[]): this {
+    titleIndex = null;
+    return super.set(filter, sessions);
+  }
+  override delete(filter: ListStatusFilter): boolean {
+    titleIndex = null;
+    return super.delete(filter);
+  }
+  override clear(): void {
+    titleIndex = null;
+    super.clear();
+  }
+}
+
+const cache = new SessionBucketCache();
 const inflight = new Map<ListStatusFilter, Promise<Session[]>>();
 /** 列表请求期间收到的 session 费用权威值及其本地事件版本。 */
 interface SessionSpendOverride {
@@ -640,6 +659,23 @@ export const sessionsStore = {
    * 要先确认标题仍是系统占位，别把用户手动改的名在 UI 上顶掉）。不触发拉取——
    * 拿不到就不做乐观更新，交给权威广播回填。
    */
+  /**
+   * 跨桶按 id 取当前标题(O(1),索引随每次桶写入失效后惰性重建)。
+   * 给消息来源标签这类「每条消息都订阅」的消费者用,避免每次变更都各自线性扫描。
+   */
+  getTitleById(id: string): string | null {
+    if (!id) return null;
+    if (!titleIndex) {
+      titleIndex = new Map();
+      for (const bucket of cache.values()) {
+        for (const session of bucket) {
+          if (session.title && !titleIndex.has(session.id)) titleIndex.set(session.id, session.title);
+        }
+      }
+    }
+    return titleIndex.get(id)?.trim() || null;
+  },
+
   findById(id: string): Session | null {
     if (!id) return null;
     for (const bucket of cache.values()) {

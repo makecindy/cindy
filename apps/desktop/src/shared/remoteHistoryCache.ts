@@ -47,6 +47,13 @@ function validSummary(value: unknown, depth: number): boolean {
       (key) => typeof value[key] === 'number' && Number.isFinite(value[key]),
     ) &&
     typeof value.isStreaming === 'boolean' &&
+    (value.parentToolUseId === undefined || typeof value.parentToolUseId === 'string') &&
+    (value.model === undefined || typeof value.model === 'string') &&
+    (value.artifacts === undefined || Array.isArray(value.artifacts) && value.artifacts.every((file) =>
+      record(file) && typeof file.path === 'string' && typeof file.createdAt === 'string'
+      && (file.source === 'tool' || file.source === 'command')
+      && (file.ready === undefined || typeof file.ready === 'boolean')
+      && (file.exclude === undefined || file.exclude === 'all' || file.exclude === 'command'))) &&
     (value.preview === undefined || validSummary(value.preview, depth + 1))
   );
 }
@@ -60,7 +67,7 @@ function validItems(value: unknown, depth = 0): boolean {
         record(item) &&
         typeof item.key === 'string' &&
         (item.type === 'messages'
-          ? validRows(item.messages)
+          ? validRows(item.messages) && (item.deferred === undefined || validSummary(item.deferred, depth))
           : item.type === 'work' &&
             validSummary(item.summary, depth) &&
             (item.children === undefined || validItems(item.children, depth + 1))),

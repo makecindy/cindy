@@ -1,3 +1,4 @@
+import { botGroupReadKey, isBotGroupUnread, seedBotGroupReadState } from '../botReadState';
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -78,6 +79,22 @@ describe('Bot read positions', () => {
     expect(getBotLastReadAt('bot-1')).toBe(5_000);
   });
 
+  it('keeps group watermarks on list refresh/restart, prunes deletion, and observes another window', () => {
+    setBotReadStateOwner('owner-1');
+    seedBotGroupReadState([{ id: 'g', lastReplyAt: 100 }]);
+    seedBotGroupReadState([{ id: 'g', lastReplyAt: 200 }]);
+    expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200 })).toBe(true);
+    resetBotReadStateForTests(); setBotReadStateOwner('owner-1');
+    expect(getBotLastReadAt(botGroupReadKey('g'))).toBe(100);
+    const listener = vi.fn(); const off = subscribeBotReadState(listener);
+    window.localStorage.setItem('cindy.bots.readState.v1.owner-1', JSON.stringify({ 'group:g': 200 }));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'cindy.bots.readState.v1.owner-1' }));
+    expect(listener).toHaveBeenCalledOnce();
+    expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200 })).toBe(false);
+    seedBotGroupReadState([]); expect(getBotLastReadAt(botGroupReadKey('g'))).toBeNull();
+    off();
+  });
+
   it('prunes read positions for Bots that no longer exist', () => {
     setBotReadStateOwner('owner-1');
     markBotRead('bot-1', 5_000);
@@ -86,6 +103,18 @@ describe('Bot read positions', () => {
     expect(pruneBotReadState(['bot-1'])).toBe(true);
     expect(getBotLastReadAtMap()).toEqual({ 'bot-1': 5_000 });
     expect(pruneBotReadState(['bot-1'])).toBe(false);
+  });
+
+  it('counts other humans as incoming, preserves pending replies behind self messages, and seeds old history quietly', () => {
+    const lastMessage = { authorKind: 'user' as const, isSelf: false, authorName: 'Chris', preview: 'Hello', createdAt: 100 };
+    seedBotGroupReadState([{ id: 'g', lastMessage }]);
+    expect(isBotGroupUnread({ id: 'g', lastMessage })).toBe(false);
+    const incoming = { id: 'g', lastMessage: { ...lastMessage, createdAt: 200 } };
+    expect(isBotGroupUnread(incoming)).toBe(true);
+    expect(isBotGroupUnread({ id: 'g', lastMessage: { ...lastMessage, isSelf: true, createdAt: 300 } })).toBe(false);
+    expect(isBotGroupUnread({ id: 'g', lastReplyAt: 200, lastMessage: { ...lastMessage, isSelf: true, createdAt: 300 } })).toBe(true);
+    markBotRead(botGroupReadKey('g'), 200);
+    expect(isBotGroupUnread(incoming)).toBe(false);
   });
 
   it('notifies subscribers only when the stored state actually changes', () => {

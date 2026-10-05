@@ -165,10 +165,14 @@ describe('统一 composer 建议入口', () => {
     expect(screen.getByText('Cindy Art')).toBeTruthy();
     const plan = screen.getByRole('menuitemcheckbox', { name: 'planMode.menuItem' });
     expect(plan.getAttribute('aria-checked')).toBe('true');
-    expect(plan.className).toContain('rounded-[8px]');
+    // Shared menu row (DESIGN §4 Composer dropdown rows): 8px inner tier, the panel's glide
+    // highlight instead of an own hover fill, and the checked row turns 500.
+    expect(plan.className).toContain('rounded-lg');
     expect(plan.className).toContain('px-3');
     expect(plan.className).toContain('py-2');
-    expect(plan.className).toContain('hover:bg-[var(--model-item-hover)]');
+    expect(plan.className).not.toContain('hover:bg-');
+    expect(plan.hasAttribute('data-menu-row')).toBe(true);
+    expect(plan.getAttribute('data-state')).toBe('checked');
     fireEvent.click(plan);
     expect(onPlanToggle).toHaveBeenCalledWith(false);
     expect(

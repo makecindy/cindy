@@ -238,10 +238,11 @@ export function SessionBranchTreeDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !switchingId && onOpenChange(next)}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <Dialog.Content
-          className="fixed left-1/2 top-1/2 z-[10001] flex max-h-[min(760px,calc(100vh-48px))] w-[min(620px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border shadow-[var(--confirm-shadow)]"
-          style={{ backgroundColor: 'var(--confirm-bg)', borderColor: 'var(--border-default)', WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          onPointerDownOutside={(event) => event.preventDefault()}
+          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[min(760px,calc(100vh-48px))] w-[min(620px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           <div className="flex items-start gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-default)' }}>
             <div className="min-w-0 flex-1">

@@ -36,6 +36,7 @@ import {
 
 import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
+import { LocalModelCatalogNotice } from '@/components/new-chat/LocalModelCatalogNotice';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import { codexRecoveryActionKey, codexRecoveryDescriptionKey } from '@/hooks/codexAuthRecovery';
 import { useApiKey } from '@/hooks/useApiKey';
@@ -86,6 +87,8 @@ import { QuotaHoverCard } from '../status/QuotaHoverCard';
 import { ProviderConnectionDialog } from './ProviderConnectionDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
 import { OllamaProviderDetail } from './OllamaProviderDetail';
+import { LlamaCppProviderDetail } from './LlamaCppProviderDetail';
+import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
 import {
   isLocalRuntimeBetaProviderId,
   MANAGED_LMSTUDIO_PROVIDER_ID,
@@ -1033,26 +1036,67 @@ function XaiHeader({
   const { confirm } = useConfirmDialog();
   const [busy, setBusy] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
+  const [deviceLogin, setDeviceLogin] = useState(false);
+  const [deviceCode, setDeviceCode] = useState<{
+    verificationUrl: string;
+    userCode: string;
+    expiresAt: number;
+  } | null>(null);
+  const loginAttempt = useRef(0);
+  useEffect(
+    () => () => {
+      loginAttempt.current += 1;
+    },
+    [],
+  );
   const connected = provider?.connected ?? false;
 
-  const handleLogin = useCallback(async () => {
-    setLoggingIn(true);
-    try {
-      const r = await window.electronAPI.maker.xaiOAuthLogin();
-      if (r.ok) {
-        toast.success(t('settings.connections.xai.toast.loggedIn'));
-        onChanged();
-      } else if (r.reason === 'login_cancelled') {
-        /* 用户取消,不弹错 */
-      } else {
-        toast.error(t('settings.connections.xai.toast.loginFailed'));
+  const handleLogin = useCallback(
+    async (method: 'browser' | 'device') => {
+      const attempt = ++loginAttempt.current;
+      setLoggingIn(true);
+      setDeviceLogin(method === 'device');
+      setDeviceCode(null);
+      const unsubscribe =
+        method === 'device'
+          ? window.electronAPI.maker.onProviderOAuthProgress((progress) => {
+              if (
+                attempt === loginAttempt.current &&
+                progress.phase === 'device-code' &&
+                progress.providerId === 'xai'
+              )
+                setDeviceCode({
+                  verificationUrl: progress.verificationUrl,
+                  userCode: progress.userCode,
+                  expiresAt: progress.expiresAt,
+                });
+            })
+          : undefined;
+      try {
+        const r = await window.electronAPI.maker.xaiOAuthLogin(method);
+        if (attempt !== loginAttempt.current) return;
+        if (r.ok) {
+          toast.success(t('settings.connections.xai.toast.loggedIn'));
+          onChanged();
+        } else if (r.reason === 'login_cancelled') {
+          /* 用户取消,不弹错 */
+        } else {
+          toast.error(t('settings.connections.xai.toast.loginFailed'));
+        }
+      } catch {
+        if (attempt === loginAttempt.current)
+          toast.error(t('settings.connections.xai.toast.loginFailed'));
+      } finally {
+        unsubscribe?.();
+        if (attempt === loginAttempt.current) {
+          setLoggingIn(false);
+          setDeviceLogin(false);
+          setDeviceCode(null);
+        }
       }
-    } catch {
-      toast.error(t('settings.connections.xai.toast.loginFailed'));
-    } finally {
-      setLoggingIn(false);
-    }
-  }, [onChanged, t]);
+    },
+    [onChanged, t],
+  );
 
   const handleLogout = useCallback(async () => {
     try {
@@ -1093,10 +1137,13 @@ function XaiHeader({
         ),
         onClick: () => {
           if (loggingIn) {
+            loginAttempt.current += 1;
             void window.electronAPI.maker.xaiOAuthCancel();
             setLoggingIn(false);
+            setDeviceLogin(false);
+            setDeviceCode(null);
           } else {
-            void handleLogin();
+            void handleLogin('browser');
           }
         },
       };
@@ -1104,6 +1151,17 @@ function XaiHeader({
   return (
     <DetailHeader
       children={children}
+      detail={
+        !connected && (!loggingIn || deviceLogin) ? (
+          deviceLogin ? (
+            <OAuthDeviceCodeCard deviceCode={deviceCode} />
+          ) : (
+            <Button variant="secondary" size="md" onClick={() => void handleLogin('device')}>
+              {t('settings.connections.xai.deviceLogin')}
+            </Button>
+          )
+        ) : undefined
+      }
       icon={<ProviderLogoMark providerId="xai" size={18} />}
       title={provider?.name ?? t('settings.providers.xai.title')}
       subtitle={providerSubtitleForDisplay(provider, t('settings.providers.xai.modelLabel'), {
@@ -1138,6 +1196,7 @@ function GenericOAuthHeader({
   const confirmProviderChange = useProviderChangeConfirmation();
   const [busy, setBusy] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
+  const [xaiDeviceLogin, setXaiDeviceLogin] = useState(false);
   const connected = provider.connected;
   const loginAttempt = useRef(0);
   useEffect(
@@ -1147,19 +1206,22 @@ function GenericOAuthHeader({
     [],
   );
   const deviceFlow = provider.auth.oauth?.flow === 'device-code';
+  const xaiDeviceFlow = provider.auth.native === 'xai';
   const { deviceCode, browserUrl, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } =
     useProviderOAuthDeviceCode(provider.id, {
-      observeProgress: deviceFlow || provider.auth.native === 'codex',
+      observeProgress: deviceFlow || xaiDeviceFlow || provider.auth.native === 'codex',
     });
 
-  const handleLogin = useCallback(async () => {
+  const handleLogin = useCallback(async (method: 'browser' | 'device' = 'browser') => {
     const attempt = ++loginAttempt.current;
     clearDeviceCode();
     setLoggingIn(true);
+    setXaiDeviceLogin(method === 'device');
     const ownedLogin = beginOwnedLogin();
     try {
       const r = await window.electronAPI.maker.providerOAuthLogin(provider.id, {
         ownerId: ownedLogin.ownerId,
+        ...(xaiDeviceFlow ? { method } : {}),
       });
       if (attempt !== loginAttempt.current) return;
       if (r.ok) {
@@ -1167,6 +1229,8 @@ function GenericOAuthHeader({
         onChanged();
       } else if (r.reason === 'login_cancelled') {
         /* 用户取消,不弹错 */
+      } else if (r.reason === 'claude_account_retired') {
+        toast.info(t('settings.providers.claudeAccountRetired'), { duration: 8000 });
       } else {
         toast.error(
           t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }),
@@ -1179,9 +1243,12 @@ function GenericOAuthHeader({
         );
     } finally {
       ownedLogin.finish();
-      if (attempt === loginAttempt.current) setLoggingIn(false);
+      if (attempt === loginAttempt.current) {
+        setLoggingIn(false);
+        setXaiDeviceLogin(false);
+      }
     }
-  }, [beginOwnedLogin, clearDeviceCode, onChanged, provider.id, provider.name, t]);
+  }, [beginOwnedLogin, clearDeviceCode, onChanged, provider.id, provider.name, t, xaiDeviceFlow]);
 
   const handleLogout = useCallback(async () => {
     try {
@@ -1237,6 +1304,7 @@ function GenericOAuthHeader({
               cancelOwnedLogin();
               clearDeviceCode();
               setLoggingIn(false);
+              setXaiDeviceLogin(false);
             } else {
               void handleLogin();
             }
@@ -1244,10 +1312,14 @@ function GenericOAuthHeader({
           disabled: busy,
         };
   const detail =
-    loggingIn && deviceFlow ? (
+    loggingIn && (deviceFlow || xaiDeviceLogin) ? (
       <OAuthDeviceCodeCard deviceCode={deviceCode} />
     ) : loggingIn && browserUrl ? (
       <OAuthBrowserLink url={browserUrl} />
+    ) : !connected && !loggingIn && xaiDeviceFlow ? (
+      <Button variant="secondary" size="md" onClick={() => void handleLogin('device')}>
+        {t('settings.connections.xai.deviceLogin')}
+      </Button>
     ) : undefined;
 
   return (
@@ -1784,7 +1856,42 @@ function XdGatewayHeader({
   );
 }
 
-function OllamaHeader({
+function isManagedLocalProvider(id: string): boolean {
+  return id === MANAGED_OLLAMA_PROVIDER_ID || id === MANAGED_LLAMACPP_PROVIDER_ID;
+}
+
+function useManagedLocalRuntimeLive(providerId: string): boolean | null {
+  const [localLive, setLocalLive] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!isManagedLocalProvider(providerId)) return;
+    let cancelled = false;
+    if (providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
+      let timer: ReturnType<typeof setTimeout>;
+      const read = async () => {
+        try {
+          const next = await window.electronAPI.maker.llamaCppStatus();
+          if (!cancelled) setLocalLive(next.running);
+        } catch { if (!cancelled) setLocalLive(false); }
+        if (!cancelled) timer = setTimeout(() => void read(), 2000);
+      };
+      void read();
+      return () => { cancelled = true; clearTimeout(timer); };
+    }
+    void window.electronAPI.maker.localModelStatus().then((next) => {
+      if (!cancelled) setLocalLive(next.kind === 'ready' || next.kind === 'pulling');
+    });
+    const off = window.electronAPI.maker.onLocalModelStatus((next) => {
+      setLocalLive(next.kind === 'ready' || next.kind === 'pulling');
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [providerId]);
+  return localLive;
+}
+
+function LocalRuntimeHeader({
   children,
   provider,
   onDelete,
@@ -1794,6 +1901,7 @@ function OllamaHeader({
   onDelete: () => void;
 }) {
   const { t } = useTranslation();
+  const localLive = useManagedLocalRuntimeLive(provider.id);
   return (
     <DetailHeader
       children={children}
@@ -1801,8 +1909,8 @@ function OllamaHeader({
       title={provider.name || t('settings.providers.local.title')}
       subtitle={t('settings.providers.local.subtitle')}
       status={{
-        kind: provider.connected ? 'connected' : 'neutral',
-        label: t('settings.providers.pill.disconnected'),
+        kind: localLive ? 'connected' : 'neutral',
+        label: t(provider.id === MANAGED_LLAMACPP_PROVIDER_ID ? 'settings.providers.llamacpp.startOnUse' : 'settings.providers.pill.disconnected'),
       }}
       provider={provider}
       badge={<BetaTag label={t('settings.providers.local.beta')} />}
@@ -1980,21 +2088,7 @@ function ListRow({
 }) {
   const { t } = useTranslation();
   const management = useProviderManagement(provider);
-  const [ollamaLive, setOllamaLive] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (provider.id !== MANAGED_OLLAMA_PROVIDER_ID) return;
-    let cancelled = false;
-    void window.electronAPI.maker.localModelStatus().then((next) => {
-      if (!cancelled) setOllamaLive(next.kind === 'ready' || next.kind === 'pulling');
-    });
-    const off = window.electronAPI.maker.onLocalModelStatus((next) => {
-      setOllamaLive(next.kind === 'ready' || next.kind === 'pulling');
-    });
-    return () => {
-      cancelled = true;
-      off();
-    };
-  }, [provider.id]);
+  const localLive = useManagedLocalRuntimeLive(provider.id);
   const modelCount = useMemo(
     () => (providerHasModels(provider) ? buildUnionRows(provider).length : null),
     [provider],
@@ -2085,8 +2179,8 @@ function ListRow({
             style={{
               backgroundColor: reconnectRequired
                 ? 'var(--remote-status-failed)'
-                : provider.id === MANAGED_OLLAMA_PROVIDER_ID
-                  ? ollamaLive
+                : isManagedLocalProvider(provider.id)
+                  ? localLive
                     ? 'var(--remote-status-ready)'
                     : 'var(--border-default)'
                   : provider.connected && !provider.suspended
@@ -2162,7 +2256,7 @@ export function ProvidersSection() {
   const { dataOwnerId } = useAuth();
   const { confirm } = useConfirmDialog();
   const confirmProviderChange = useProviderChangeConfirmation();
-  const { providers, providerOrder, ownerGeneration, loading, refetch } = useProviders();
+  const { providers, providerOrder, ownerGeneration, loading, error: catalogError, refetch } = useProviders();
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
   const codexAuth = useCodexAuth();
@@ -2293,6 +2387,7 @@ export function ProvidersSection() {
       if (
         p.source === 'user' &&
         (p.id === MANAGED_OLLAMA_PROVIDER_ID ||
+          p.id === MANAGED_LLAMACPP_PROVIDER_ID ||
           p.id === MANAGED_LMSTUDIO_PROVIDER_ID ||
           providerHasModels(p) ||
           (p.auth.method === 'oauth' && (!!p.auth.oauth || !!p.auth.native)))
@@ -2707,9 +2802,9 @@ export function ProvidersSection() {
         />
       );
     }
-    if (p.id === MANAGED_OLLAMA_PROVIDER_ID) {
+    if (isManagedLocalProvider(p.id)) {
       return (
-        <OllamaHeader children={children} provider={p} onDelete={() => void handleDeleteOllama()} />
+        <LocalRuntimeHeader children={children} provider={p} onDelete={() => void (p.id === MANAGED_OLLAMA_PROVIDER_ID ? handleDeleteOllama() : handleDelete(p))} />
       );
     }
     return (
@@ -2744,6 +2839,7 @@ export function ProvidersSection() {
           猜多了下方空一条(叠上外层 pb-32 就是那 128px),猜少了则溢出。设置页右栏本身
           已是 h-full min-h-0 的 flex 列(providers 与 import / ghosts 同属内部滚动一档),
           所以这里 flex-1 就是真实可用高度。min-h-0 允许小窗口收缩,左右栏各自内部滚动。 */}
+      {catalogError && <LocalModelCatalogNotice failure={catalogError} onRetry={refetch} />}
       {!loading && (
         <div
           className="flex min-h-0 flex-1 overflow-hidden rounded-xl border"
@@ -2823,7 +2919,7 @@ export function ProvidersSection() {
                 </>
               )}
             </div>
-            <div
+            <div id="settings-search-settings-providers-addProvider"
               className="border-t p-2"
               style={{ borderColor: 'var(--settings-theme-card-border)' }}
             >
@@ -2953,10 +3049,10 @@ export function ProvidersSection() {
                       isCustomRoutedProvider(effectiveSelected) ||
                       (isBuiltinRefreshableProviderId(effectiveSelected.id) &&
                         !effectiveSelected.modelDiscoveryFailure) ||
-                      effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID) && (
+                      isManagedLocalProvider(effectiveSelected.id)) && (
                       <>
                         {(providerHasModels(effectiveSelected) ||
-                          effectiveSelected.id !== MANAGED_OLLAMA_PROVIDER_ID) && (
+                          !isManagedLocalProvider(effectiveSelected.id)) && (
                           <div
                             className="border-t"
                             style={{ borderColor: 'var(--settings-theme-card-border)' }}
@@ -2980,7 +3076,7 @@ export function ProvidersSection() {
                               ? t(
                                   `settings.providers.detail.discoveryFailed.${effectiveSelected.modelDiscoveryFailure.kind}`,
                                 )
-                              : effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID
+                              : isManagedLocalProvider(effectiveSelected.id)
                                 ? t('settings.providers.local.emptyInstalled')
                                 : t(
                                     effectiveSelected.connected
@@ -2988,8 +3084,8 @@ export function ProvidersSection() {
                                       : 'settings.providers.detail.emptyModels',
                                   )
                           }
-                          compactWhenEmpty={effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID}
-                          compact={effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID}
+                          compactWhenEmpty={isManagedLocalProvider(effectiveSelected.id)}
+                          compact={isManagedLocalProvider(effectiveSelected.id)}
                           {...(isBuiltinRefreshableProviderId(effectiveSelected.id)
                             ? {
                                 onRefresh: () => void handleRefreshBuiltinModels(effectiveSelected),
@@ -2997,7 +3093,7 @@ export function ProvidersSection() {
                                 refreshDisabled: refreshingProviderId !== null,
                                 refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria'),
                               }
-                            : effectiveSelected.source === 'user'
+                            : effectiveSelected.source === 'user' && effectiveSelected.id !== MANAGED_LLAMACPP_PROVIDER_ID
                               ? {
                                   onRefresh: () => void handleRefreshModels(effectiveSelected),
                                   refreshing: refreshingProviderId === effectiveSelected.id,
@@ -3010,7 +3106,7 @@ export function ProvidersSection() {
                   {!effectiveSelected.suspended &&
                     !providerHasModels(effectiveSelected) &&
                     !isCustomRoutedProvider(effectiveSelected) &&
-                    effectiveSelected.id !== MANAGED_OLLAMA_PROVIDER_ID &&
+                    !isManagedLocalProvider(effectiveSelected.id) &&
                     (Boolean(effectiveSelected.modelDiscoveryFailure) ||
                       !isBuiltinRefreshableProviderId(effectiveSelected.id)) && (
                       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center text-13">
@@ -3045,6 +3141,9 @@ export function ProvidersSection() {
                     )}
                   {effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID && (
                     <OllamaProviderDetail onChanged={refetch} />
+                  )}
+                  {effectiveSelected.id === MANAGED_LLAMACPP_PROVIDER_ID && (
+                    <LlamaCppProviderDetail onChanged={refetch} />
                   )}
                 </>,
               )

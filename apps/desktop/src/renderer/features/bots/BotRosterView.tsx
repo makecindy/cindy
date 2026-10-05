@@ -1,3 +1,5 @@
+import { useAuth } from '@/contexts/AuthContext';
+import { BotImportForm } from './BotImportForm';
 import { Button } from '@/components/ui/button';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useRef, useState } from 'react';
@@ -18,8 +20,10 @@ interface BotRosterViewProps {
 /** A name creates a usable profile; identity and working habits develop in its own chat. */
 export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false }: BotRosterViewProps = {}) {
   const { t } = useTranslation();
+  const { dataOwnerId } = useAuth();
   const navigate = useNavigate();
   const bots = useBotProfiles();
+  const [importing, setImporting] = useState(false);
   const [name, setName] = useState('');
   const [portrait, setPortrait] = useState<string>();
   const [initialPortrait] = useState(() => Math.floor(Math.random() * BOT_PORTRAIT_COUNT));
@@ -56,10 +60,10 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
       if (alive.current) setCreating(false);
     }
   };
-  const title = t('bots.guided.title');
+  const title = t(importing ? 'bots.import.title' : 'bots.guided.title');
   const content = (
     <>
-      <div className="mb-8 flex items-center justify-between gap-4">
+      <div className="mb-8 flex shrink-0 items-center justify-between gap-4">
         {inline ? (
           <h1 className="text-20 font-medium">{title}</h1>
         ) : (
@@ -78,7 +82,7 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
           </Button>
         )}
     </div>
-    <form onSubmit={event => { event.preventDefault(); void create(); }}>
+    {importing ? <BotImportForm key={dataOwnerId} onBusy={setCreating} onBack={() => setImporting(false)} onCreated={botId => { const bot = bots.find(bot => bot.id === botId); if (onCreated && bot) onCreated(bot); else navigate(`/bots/${botId}`); onClose?.(); }} /> : <form onSubmit={event => { event.preventDefault(); void create(); }}>
       <div className="flex items-center gap-5">
         <BotPortraitPicker value={portrait} disabled={creating} onChange={setPortrait} />
         <label className="min-w-0 flex-1 text-13 text-[var(--text-secondary)]">
@@ -93,7 +97,8 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
         {error === t('bots.guided.modelRequired') && (
           <button type="button" className="mt-3 h-9 rounded-full px-4 text-13 hover:bg-[var(--surface-hover)]" onClick={() => navigate('/settings?tab=providers')}>{t('bots.settingsTabs.model')}</button>
         )}
-        <div className="mt-8 flex justify-end">
+        <div className="mt-8 flex justify-between gap-3">
+          <Button variant="secondary" size="lg" type="button" disabled={creating} onClick={() => setImporting(true)}>{t('bots.import.entry')}</Button>
           <Button
             variant="cta"
             size="lg"
@@ -105,18 +110,18 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
             <ArrowRight size={16} />
           </Button>
       </div>
-    </form>
+    </form>}
     </>
   );
   if (inline)
     return (
-      <main className="flex h-full items-center justify-center bg-[var(--surface)] px-6 text-[var(--text-primary)]"><div className="w-full max-w-lg">{content}</div></main>
+      <main className="flex h-full items-center justify-center bg-[var(--surface)] px-6 text-[var(--text-primary)]"><div className={importing ? "flex max-h-[90vh] w-full max-w-lg flex-col" : "w-full max-w-lg"}>{content}</div></main>
     );
   return (
     <Dialog.Root open onOpenChange={open => { if (!open && !creating) close(); }}><Dialog.Portal>
-    <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
-    <Dialog.Content aria-describedby={undefined} onCloseAutoFocus={event => { if (restoreFocus) { event.preventDefault(); restoreFocus(); } }}
-      className="fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-[calc(100vw-32px)] max-w-[520px] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-6 text-[var(--text-primary)] outline-none sm:p-8">
+    <Dialog.Overlay className="modal-scrim fixed inset-0 z-50" />
+    <Dialog.Content aria-describedby={undefined} onPointerDownOutside={(event) => event.preventDefault()} onCloseAutoFocus={event => { if (restoreFocus) { event.preventDefault(); restoreFocus(); } }}
+      className={`modal-panel fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-[calc(100vw-32px)] max-w-[520px] -translate-x-1/2 -translate-y-1/2 ${importing ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'} p-6 text-[var(--text-primary)] outline-none sm:p-8`}>
       {content}
     </Dialog.Content>
   </Dialog.Portal></Dialog.Root>

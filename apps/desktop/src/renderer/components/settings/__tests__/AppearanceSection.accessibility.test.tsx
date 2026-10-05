@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -36,6 +36,18 @@ vi.mock('@/hooks/useFontSettings', async (importOriginal) => ({
     resetCodeFamily: vi.fn(),
     resetUiSize: vi.fn(),
     resetCodeSize: vi.fn(),
+  }),
+}));
+
+vi.mock('@/hooks/useWallpaperSettings', () => ({
+  useWallpaperSettings: () => ({
+    wallpaperId: 'none',
+    wallpaperOverlay: 0,
+    wallpaperMotion: 'static',
+    setWallpaper: vi.fn(),
+    setOverlay: vi.fn(),
+    setMotion: vi.fn(),
+    resetWallpaper: vi.fn(),
   }),
 }));
 
@@ -79,6 +91,18 @@ describe('AppearanceSection accessibility', () => {
   it('labels the UI and code font-size number inputs', () => {
     render(<AppearanceSection />);
 
+    const wallpapers = within(
+      screen.getByRole('radiogroup', { name: 'settings.appearance.wallpaper.aria' }),
+    );
+    expect(
+      wallpapers.getAllByRole('radio').map((option) => option.getAttribute('aria-label')),
+    ).toEqual([
+      'settings.appearance.wallpaper.options.none',
+      'settings.appearance.wallpaper.options.cindy-window',
+      'settings.appearance.wallpaper.options.cindy-studio',
+      'settings.appearance.wallpaper.options.cindy-dream',
+      'settings.appearance.wallpaper.options.custom',
+    ]);
     expect(
       screen.getByRole('spinbutton', { name: 'settings.appearance.font.uiSize.label' }),
     ).toBeTruthy();

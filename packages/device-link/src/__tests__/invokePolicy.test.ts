@@ -4,6 +4,7 @@ import {
   isPeerResetRetryableReadChannel,
   isCompletedInvokeRetryableReadChannel,
   resolveRemoteInvokeTimeoutMs,
+  TASK_MIGRATION_CHANNEL,
 } from '../index.js';
 
 describe('remote invoke policy boundaries', () => {
@@ -59,5 +60,13 @@ describe('remote invoke policy boundaries', () => {
     expect(resolveRemoteInvokeTimeoutMs('device-link:remote-desktop:v1', [{ op: 'heartbeat' }], 'mobile')).toBe(5_000);
     expect(resolveRemoteInvokeTimeoutMs('device-link:remote-desktop:v1', [{ op: 'heartbeat' }], 'desktop')).toBe(59_000);
     expect(resolveRemoteInvokeTimeoutMs('unknown:read', [], 'mobile')).toBeUndefined();
+  });
+  it('gives the read-only task copy estimate a longer budget than other copy requests', () => {
+    const budget = (action: string) =>
+      resolveRemoteInvokeTimeoutMs(TASK_MIGRATION_CHANNEL, [{ action, sessionId: 's' }], 'desktop');
+    expect(budget('estimate')).toBe(3 * 60_000);
+    expect(budget('receive')).toBe(30 * 60_000);
+    expect(budget('status')).toBe(30_000);
+    expect(budget('caps')).toBe(30_000);
   });
 });

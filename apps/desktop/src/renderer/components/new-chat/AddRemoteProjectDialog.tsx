@@ -66,6 +66,10 @@ interface Props {
    * 未指名(从通用入口打开)时才由用户自己在下拉里选。
    */
   initialDeviceId?: string | null;
+  fixedDeviceId?: string;
+  title?: string;
+  confirmText?: string;
+  errorText?: string;
   /**
    * 当前 draft 选中的 agent(由父层的 VendorSegmentedSwitcher 决定,dialog 不选 vendor)。
    * 轮 35 CRITICAL:Pi 已支持 SSH 远端(startSession 全量支持 remoteHostId)——
@@ -80,6 +84,10 @@ export function AddRemoteProjectDialog({
   open,
   onOpenChange,
   initialDeviceId,
+  fixedDeviceId,
+  title,
+  confirmText,
+  errorText,
   agentVendor,
   onProjectAdded,
 }: Props) {
@@ -118,8 +126,10 @@ export function AddRemoteProjectDialog({
       deviceName: d.name,
       label: d.name,
     }));
-    return [...ssh, ...dev];
-  }, [excludeSsh, sshHosts, devices]);
+    return fixedDeviceId
+      ? dev.filter(target => target.kind === 'device' && target.deviceId === fixedDeviceId)
+      : [...ssh, ...dev];
+  }, [excludeSsh, sshHosts, devices, fixedDeviceId]);
 
   const sshTargets = useMemo(() => targets.filter((tg) => tg.kind === 'ssh'), [targets]);
   const deviceTargets = useMemo(() => targets.filter((tg) => tg.kind === 'device'), [targets]);
@@ -330,7 +340,7 @@ export function AddRemoteProjectDialog({
       }
       onOpenChange(false);
     } catch (err) {
-      toast.error(t(
+      toast.error(errorText ?? t(
         err instanceof SshModelSelectionError
           ? sshModelSelectionErrorKeys[err.reason]
           : mapIpcErrorToI18nKey(err, { fallback: 'newChat.addRemoteProject.toast.addFailed' }),
@@ -338,7 +348,7 @@ export function AddRemoteProjectDialog({
     } finally {
       setBusy(false);
     }
-  }, [selectedTarget, adapter, path, confirm, onProjectAdded, onOpenChange, t]);
+  }, [selectedTarget, adapter, path, confirm, onProjectAdded, onOpenChange, t, errorText]);
 
   const noTargets = targets.length === 0;
   // Pi 过滤掉 SSH 后无任何可用目标时,通用空态提示「加个 SSH 主机」是误导(Pi 用不了 SSH)。
@@ -350,14 +360,12 @@ export function AddRemoteProjectDialog({
     <Dialog.Root open={open} onOpenChange={busy ? undefined : onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-50"
-          style={{ backgroundColor: 'var(--overlay-modal, rgba(0,0,0,0.4))' }}
+          className="modal-scrim fixed inset-0 z-50"
         />
         <Dialog.Content
-          className="fixed left-1/2 top-1/2 z-50 flex w-[560px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl shadow-[var(--confirm-shadow)]"
+          onPointerDownOutside={(event) => event.preventDefault()}
+          className="modal-panel fixed left-1/2 top-1/2 z-50 flex w-[560px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col"
           style={{
-            backgroundColor: 'var(--surface-elevated, #ffffff)',
-            border: '1px solid var(--border-default, #d4d4d4)',
             // Keep the centered shell still across mode changes and async list loading.
             height: noTargets ? undefined : 660,
             maxHeight: '88vh',
@@ -383,7 +391,7 @@ export function AddRemoteProjectDialog({
                 className="text-15 font-medium"
                 style={{ color: 'var(--text-primary)' }}
               >
-                {t('newChat.addRemoteProject.title')}
+                {title ?? t('newChat.addRemoteProject.title')}
               </Dialog.Title>
               <Dialog.Close asChild disabled={busy}>
                 <button
@@ -472,7 +480,7 @@ export function AddRemoteProjectDialog({
                 {/* Mode toggle — 默认「已有项目」,「浏览文件夹」为次要入口 */}
                 <SegmentedControl
                   className="shrink-0"
-                  aria-label={t('newChat.addRemoteProject.title')}
+                  aria-label={title ?? t('newChat.addRemoteProject.title')}
                   value={mode}
                   disabled={busy}
                   fullWidth
@@ -688,7 +696,7 @@ export function AddRemoteProjectDialog({
               disabled={busy || noTargets || !selectedTarget || !path.trim()}
               className="min-w-[96px]"
             >
-              {t('newChat.addRemoteProject.add')}
+              {confirmText ?? t('newChat.addRemoteProject.add')}
             </Button>
           </div>
         </Dialog.Content>

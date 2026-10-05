@@ -37,7 +37,7 @@ export function useRemoteBots(): readonly RemoteBot[] {
   return isAuthenticated && owner === dataOwnerId ? rows : empty;
 }
 
-/** One subscription owner in BotsFeatureLayout; a failed host cannot erase another host. */
+/** One subscription owner in the main window; a failed host cannot erase another host. */
 export function useRemoteBotSync(): void {
   const { dataOwnerId, isAuthenticated } = useAuth();
   const devices = useDeviceLinkDeviceList();

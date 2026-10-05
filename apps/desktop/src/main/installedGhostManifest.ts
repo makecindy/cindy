@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import {
   ghostManifestToLegacyV2DigestFormat,
-  validateGhostManifest,
+  validateInstalledGhostManifest,
   type GhostManifest,
 } from '../shared/ghost.js';
 import { readBoundedFileNoFollowSync } from './utils/readBoundedFile.js';
@@ -39,14 +39,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * manifests; package/Forge validation remains strict via validateGhostManifest.
  */
 export function parseInstalledGhostManifest(raw: unknown): InstalledGhostManifestParse {
-  const strict = validateGhostManifest(raw);
+  const strict = validateInstalledGhostManifest(raw);
   if (strict.ok) return { ok: true, manifest: strict.manifest, legacyManualIgnored: false };
   if (!isPlainObject(raw) || !Object.prototype.hasOwnProperty.call(raw, 'manual')) {
     return { ok: false, reason: strict.reason };
   }
   const withoutLegacyManual = { ...raw };
   delete withoutLegacyManual.manual;
-  const compatible = validateGhostManifest(withoutLegacyManual);
+  const compatible = validateInstalledGhostManifest(withoutLegacyManual);
   return compatible.ok
     ? { ok: true, manifest: compatible.manifest, legacyManualIgnored: true }
     : { ok: false, reason: compatible.reason };

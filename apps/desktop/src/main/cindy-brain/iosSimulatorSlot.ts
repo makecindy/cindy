@@ -40,7 +40,7 @@ export interface IOSSimulatorSlotDeps {
   /** Read-only, redacted snapshot; must not reconcile or renew ownership. */
   getStatus(sessionId: string): Promise<GhostIOSSimulatorStatusProbeResult>;
   /** false = 当前没有可承载右侧栏的 Host 窗口。 */
-  focusViewer(context: IOSSimulatorSlotFocusContext, instanceId?: string): boolean;
+  focusViewer(context: IOSSimulatorSlotFocusContext, instanceId?: string, mobile?: { pageId: string; ghostId: string }): boolean;
   now?(): number;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -107,7 +107,7 @@ export class GhostIOSSimulatorSlot {
     return pending;
   }
 
-  async handleRequest(ghostId: string, payload: unknown): Promise<GhostPipeIOSSimulatorResult> {
+  async handleRequest(ghostId: string, payload: unknown, source?: { pageId: string; current(): boolean }): Promise<GhostPipeIOSSimulatorResult> {
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost?.enabled || ghost.manifest.iosSimulator !== true) {
       return fail(
@@ -191,7 +191,7 @@ export class GhostIOSSimulatorSlot {
       return fail('IOS_SIMULATOR_HOST_ERROR', '无法读取内置模拟器状态；请稍后重试');
     }
     // 防异步查询期间切任务/切窗口；revision 可拦 A → B → A 的 ABA 切换。
-    if (!this.deps.isContextCurrent(context)) {
+    if (!this.deps.isContextCurrent(context) || (source && !source.current())) {
       return fail('HOST_NOT_READY', '当前任务已切换；请刷新模拟器状态后重试');
     }
     if (!probe.ok) return fail(probe.errorCode, probe.message);
@@ -211,7 +211,8 @@ export class GhostIOSSimulatorSlot {
       }
     }
 
-    if (!this.deps.focusViewer(context, instanceId)) {
+    const opened = source ? this.deps.focusViewer(context, instanceId, { pageId: source.pageId, ghostId }) : this.deps.focusViewer(context, instanceId);
+    if (!opened) {
       return fail('HOST_NOT_READY', '当前没有可打开内置模拟器面板的 Cindy 窗口');
     }
     this.deps.log?.info('ghost ios simulator panel requested', {

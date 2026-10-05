@@ -387,7 +387,7 @@ export function CindyMakeSection() {
           </Button>
           <div className="flex items-start justify-between gap-4 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] p-5">
             <div className="min-w-0">
-              <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+              <p id="settings-search-settings-cindyMake-syncBeforeBuild-title" className="text-13 font-medium text-[var(--settings-section-sublabel)]">
                 {t('settings.cindyMake.syncBeforeBuild.title')}
               </p>
               <p className="mt-1 text-12 leading-[1.45] text-[var(--settings-section-desc)]">
@@ -536,7 +536,7 @@ function CindyMakeSourceStatusCard({
       .catch(() => toast.error(t('cindyMakeDoctor.failed')));
   };
   return (
-    <section
+    <section id="settings-search-settings-cindyMake-source-title"
       className="min-w-0 text-14 text-[var(--text-primary)]"
       aria-label={t('settings.cindyMake.source.title')}
     >

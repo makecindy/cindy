@@ -19,7 +19,7 @@ import { createHash } from 'node:crypto';
 import { createServer, request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions, type Server, type ServerResponse } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { Socket, TcpSocketConnectOpts } from 'node:net';
-import { PassThrough, type Transform } from 'node:stream';
+import { PassThrough, Readable, type Transform } from 'node:stream';
 import { URL } from 'node:url';
 import { brotliDecompressSync, gunzipSync, inflateRawSync, inflateSync } from 'node:zlib';
 
@@ -950,6 +950,7 @@ function forward(
   beforeRetry?: () => Promise<boolean>,
   // Optional request-local operational observer. It never receives raw request/response data.
   forwardLifecycle?: ForwardLifecycleObserver | null,
+  recoverUpstreamOversized?: (body: Buffer, signal: AbortSignal) => Promise<Buffer>,
 ): void {
   // Diagnostics are a strict side channel: callback failures must never change forwarding.
   const notifyForwardLifecycle = (notify: () => void): void => {
@@ -1135,7 +1136,8 @@ function forward(
     const activeRules = (status === 400 || status === 422)
       ? recoveryRules.filter((r) => r.enabled() && (canRetry || r.unrecoverableCode))
       : [];
-    if (activeRules.length > 0) {
+    const recover413 = status === 413 && canRetry && recoverUpstreamOversized;
+    if (activeRules.length > 0 || recover413) {
       const chunks: Buffer[] = [];
       const failBufferedResponse = (
         reason: 'error' | 'aborted' | 'close',
@@ -1173,7 +1175,7 @@ function forward(
         if (upstreamResponseTerminal !== null) return;
         chunks.push(chunk);
       });
-      upstreamRes.on('end', () => {
+      upstreamRes.on('end', async () => {
         if (upstreamResponseTerminal !== null) return;
         upstreamResponseTerminal = 'end';
         if (clientAborted || clientRes.destroyed || upstreamFailureHandled) return;
@@ -1183,6 +1185,43 @@ function forward(
         // (回客户端仍是原始 errBody + content-encoding 头透传, 客户端自己解压, 见下方 clientRes.end)
         const decodedErrBody = decodeBodyForLog(errBody, String(upstreamRes.headers['content-encoding'] ?? ''));
         const decodedText = decodedErrBody.toString('utf8');
+        if (recover413) {
+          const recoveryAbort = new AbortController();
+          const abortRecovery = (): void => recoveryAbort.abort();
+          clientRes.once('close', abortRecovery);
+          let recovered: Buffer | undefined;
+          try {
+            recovered = await recover413(body, recoveryAbort.signal);
+          } catch {
+            // Storage failure, unsupported content and cancellation must never
+            // replace the original 413 with an unrelated recovery error.
+            logger.info?.('upstream 413 attachment recovery unavailable', { reqId });
+          } finally {
+            clientRes.off('close', abortRecovery);
+          }
+          if (clientRes.destroyed || clientRes.writableEnded) return;
+          if (recovered && recovered.length < body.length) {
+            try {
+              if (beforeRetry && !(await beforeRetry())) return;
+            } catch {
+              recovered = undefined;
+            }
+            if (clientRes.destroyed || clientRes.writableEnded) return;
+            if (recovered) {
+              logger.info?.('upstream 413 attachment recovery retry', {
+                reqId, originalBytes: body.length, recoveredBytes: recovered.length,
+              });
+              forward(
+                target, method, path, headers, recovered, clientRes, logger,
+                recoveryRules, reqId, false, overrideTarget, headerOverride,
+                headerDelete, responseObserver, transformResponse, clientModel,
+                outboundProxy, pathOverride, responseToolUseIds, threadMintedIdCache,
+                requestDeclaredStream, beforeRetry, forwardLifecycle,
+              );
+              return;
+            }
+          }
+        }
         // 取第一条 match 命中且 strip 出东西的规则;命中错误文案但没东西可删 → 试下一条。
         for (const [matchedIndex, rule] of activeRules.entries()) {
           if (!canRetry) break;
@@ -1523,9 +1562,12 @@ function forward(
     // 失败语义(finishClientAfterUpstreamFailure → destroy),不补成正常结束。
     // 只约束显式流式请求:非流式 JSON 响应照旧字节透传,零行为变化。
     const gateStreamValidity = requestDeclaredStream && status >= 200 && status < 300;
-    // 合法 SSE 的首个事件必然远早于此(Anthropic 首行即 event: message_start);
-    // 上限只为封顶「持续输出无事件垃圾」时的内存与延迟。
+    // 合法 Anthropic SSE 的首个事件必然远早于此(首行即 event: message_start);
+    // 上限只为封顶「持续输出无事件垃圾」时的内存与延迟。缺 MIME 的 Responses
+    // 回退流必须等到完整事件才能确认，response.created 会回显长 instructions，
+    // 所以仅在已确认 SSE 前缀后使用独立且仍有界的首事件预算。
     const STREAM_GATE_PENDING_CAP_BYTES = 64 * 1024;
+    const STREAM_GATE_INFERRED_EVENT_CAP_BYTES = 8 * 1024 * 1024;
     const SSE_EVENT_MARKER_RE = /(^|\r?\n)(event|data):/;
     const SSE_PREFIX_RE = /^\uFEFF?(?:(?:|:[^\r\n]*)\r?\n)*(?:event|data):/;
     const SSE_DATA_FIELD_RE = /(?:^\uFEFF?|\r?\n)data:/;
@@ -1533,6 +1575,8 @@ function forward(
     const pendingChunks: Buffer[] = [];
     let pendingBytes = 0;
     let pendingText = '';
+    let inferredSseEventStart = 0;
+    let inferredSseBoundarySearchOffset = 0;
     const commitStreamResponse = (): void => {
       if (streamGateCommitted || upstreamFailureHandled || clientAborted || clientRes.destroyed) return;
       // Resolve the final MIME before constructing an adapter, and construct it
@@ -1638,24 +1682,69 @@ function forward(
       }
       if (!streamGateCommitted) {
         // 门控中(未提交):积累待发字节并判定是否可提交。
-        if (pendingBytes < STREAM_GATE_PENDING_CAP_BYTES) {
-          pendingChunks.push(chunk);
-          pendingBytes += chunk.length;
-        } else {
-          pendingBytes += chunk.length;
-        }
+        // 无条件入缓冲:曾用 `pendingBytes < CAP` 做入队条件, 累计恰好落在 CAP
+        // (64KiB, 回环读的常见块大小)时, 后续 chunk 只计数不入队 —— 一旦事件
+        // 标记在这些 chunk 里到达并提交, 这些字节被永久跳过, 客户端收到中间
+        // 有缺口的 200 SSE。任何把 pendingBytes 推过上限的 chunk 都会在该
+        // chunk 内提交或按 502 拒收, 缓冲仍有界(至多 CAP + 单 chunk 溢出)。
+        pendingChunks.push(chunk);
+        pendingBytes += chunk.length;
         if (!isSse) {
           if (canInferSse) {
             pendingText += chunk.toString('utf8');
-            // A field prefix alone cannot dispatch an event: keep buffering until
-            // a data-containing block ends in a blank line, including across chunks.
-            const completeEvents = pendingText.split(/\r?\n\r?\n/);
-            completeEvents.pop(); // The final block has no terminating blank line yet.
-            if (SSE_PREFIX_RE.test(pendingText) && completeEvents.some((event) => SSE_DATA_FIELD_RE.test(event))) {
-              respHeaders['content-type'] = 'text/event-stream';
-              commitStreamResponse();
+            // Fast-path the common first field. SSE_PREFIX_RE also admits BOM and
+            // comment preambles before that field.
+            const hasSsePrefix = pendingText.startsWith('event:')
+              || pendingText.startsWith('data:')
+              || SSE_PREFIX_RE.test(pendingText);
+            // A field prefix alone cannot dispatch an event: wait for a
+            // data-containing block to end in a blank line, including across
+            // chunks. Scan only newly appended text so a large valid first
+            // event cannot turn into repeated whole-buffer work.
+            if (hasSsePrefix) {
+              while (true) {
+                const boundary = [
+                  { value: '\n\n', offset: pendingText.indexOf('\n\n', inferredSseBoundarySearchOffset) },
+                  { value: '\n\r\n', offset: pendingText.indexOf('\n\r\n', inferredSseBoundarySearchOffset) },
+                  { value: '\r\n\n', offset: pendingText.indexOf('\r\n\n', inferredSseBoundarySearchOffset) },
+                  { value: '\r\n\r\n', offset: pendingText.indexOf('\r\n\r\n', inferredSseBoundarySearchOffset) },
+                ].filter((candidate) => candidate.offset !== -1)
+                  .sort((left, right) => left.offset - right.offset)[0];
+                if (!boundary) {
+                  // Retain three trailing characters to catch a delimiter
+                  // split across chunks (\n\n or \r\n\r\n).
+                  inferredSseBoundarySearchOffset = Math.max(
+                    inferredSseEventStart,
+                    pendingText.length - 3,
+                  );
+                  break;
+                }
+                const completeEvent = pendingText.slice(inferredSseEventStart, boundary.offset);
+                inferredSseEventStart = boundary.offset + boundary.value.length;
+                inferredSseBoundarySearchOffset = inferredSseEventStart;
+                if (SSE_DATA_FIELD_RE.test(completeEvent)) {
+                  respHeaders['content-type'] = 'text/event-stream';
+                  commitStreamResponse();
+                  return;
+                }
+              }
+            }
+            const pendingCap = hasSsePrefix
+              ? STREAM_GATE_INFERRED_EVENT_CAP_BYTES
+              : STREAM_GATE_PENDING_CAP_BYTES;
+            if (pendingBytes > pendingCap) {
+              const code = hasSsePrefix
+                ? 'sse_inference_limit_exceeded'
+                : 'non_sse_stream_response';
+              upstreamResponseTerminal = 'error';
+              observerError(new Error(`invalid streaming response (${code})`));
+              rejectInvalidStreamResponse(code, { bytes: totalBytes });
+              upstreamReq.destroy(new Error(`invalid streaming response (${code})`));
               return;
             }
+            // A valid prefix is waiting only for the terminator of its first data
+            // event; do not also apply the generic non-SSE 64 KiB limit below.
+            if (hasSsePrefix) return;
           }
           // 非 SSE 2xx:留在门控里等 end 统一转 502(有界缓冲做 errorType 诊断);
           // 超上限说明上游在持续输出非流式字节,立刻转 502 并切断上游。
@@ -2599,6 +2688,14 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       requestDeclaredStream,
       beforeRetry,
       forwardLifecycle,
+      recoverOversized
+        ? (body, signal) => collectRecoverableBody(
+            Readable.from([body]),
+            body.length - 1,
+            (spooled) => recoverOversized!({ ...spooled, upstreamRejected: true }, body.length - 1),
+            signal,
+          )
+        : undefined,
     );
   });
 

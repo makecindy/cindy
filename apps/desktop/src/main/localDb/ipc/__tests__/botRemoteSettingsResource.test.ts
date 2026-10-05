@@ -111,6 +111,18 @@ describe('opaque teammate settings actions', () => {
     expect(JSON.stringify(result)).not.toContain('PRIVATE');
     expect(result.effects.some(effect => effect.kind === 'refresh-resource')).toBe(false);
   });
+  it('confirms resuming a paused teammate with resume copy, not the restart warning', async () => {
+    const f = fixture(); const active = await f.get();
+    const restart = active.actions!.find(action => action.id === actionId(active, 'restart'))!;
+    f.source.status = 'paused';
+    const paused = await f.get();
+    expect(paused.blocks!.some(block => block.id === 'restart')).toBe(false);
+    const resume = paused.actions!.find(action => action.id === actionId(paused, 'resume'))!;
+    expect(resume.confirmation?.title).toMatchObject({ fallback: 'Resume Teammate' });
+    expect(resume.confirmation?.body).not.toEqual(restart.confirmation?.body);
+    expect(resume.confirmation?.body).toMatchObject({ translations: { 'zh-CN': expect.stringContaining('恢复后伙伴重新接收消息') } });
+    for (const locale of ['zh-CN', 'zh-TW', 'ja', 'ko']) expect((resume.confirmation?.body as { translations: Record<string, string> }).translations[locale]).toBeTruthy();
+  });
   it('does not misreport shelf failure as an empty shelf', async () => {
     const f = fixture(); vi.mocked(f.deps.skills).mockRejectedValue(new Error('unavailable'));
     const result = await f.get();
@@ -170,5 +182,25 @@ it('rejects invalid, duplicate and oversized model chains without modifying the 
   for (const value of ['not json', '{}', '[]', JSON.stringify([route, route]), JSON.stringify(Array.from({ length: 6 }, (_, index) => ({ ...route, model: String(index) }))), JSON.stringify([{ ...route, harness: 'unknown' }])]) {
     await expect(f.host.invoke(f.context, f.request(actionId(resource, 'models'), { followsDefault: false, modelChain: value }))).rejects.toThrow();
   }
+  expect(f.deps.update).not.toHaveBeenCalled();
+});
+
+
+it('saves and clears a task model without changing the primary model', async () => {
+  const f = fixture();
+  const route = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false };
+  let resource = await f.get();
+  expect((resource.blocks?.find(block => block.id === 'models')?.data as any).values.taskFollowsPrimary).toBe(true);
+  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: false, taskModel: JSON.stringify([route]) }));
+  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { taskModelOverride: route } }, 3);
+  resource = await f.get();
+  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: true }));
+  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { taskModelOverride: null } }, 4);
+});
+
+it('rejects task model submissions that discard the harness identity', async () => {
+  const f = fixture(); const resource = await f.get();
+  await expect(f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: false,
+    taskModel: JSON.stringify([{ model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false }]) }))).rejects.toThrow();
   expect(f.deps.update).not.toHaveBeenCalled();
 });

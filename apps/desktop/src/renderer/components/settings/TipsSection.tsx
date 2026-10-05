@@ -72,7 +72,7 @@ export function TipsSection() {
               <Sparkles size={18} className="text-[var(--settings-section-title)]" />
             </div>
             <div className="flex flex-col gap-[8px]">
-              <p className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
+              <p id="settings-search-settings-promptRecommendation-label" className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
                 {t('settings.promptRecommendation.label')}
               </p>
               <p className="text-12 leading-[1.4] text-[var(--settings-section-desc)]">

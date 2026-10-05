@@ -25,6 +25,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import { jsonObjectArg } from './json-object-arg.js';
+import { withAccountDataAccess } from './account-data-access.js';
 import { PathBoundaryError, resolvePathInsideRoot } from './shared/assertInsidePath.js';
 import type { SlackHookMcpDeps, SlackToolBridgeLike } from './types.js';
 
@@ -95,6 +96,7 @@ async function deliver(
   data: unknown,
   outFile: string | undefined,
   workingDir: string | undefined,
+  assertCurrent: () => Promise<void>,
 ): Promise<SlackToolResult> {
   const text = JSON.stringify(data ?? null);
   if (outFile === undefined && text.length <= RESULT_MAX_CHARS) {
@@ -106,6 +108,8 @@ async function deliver(
       const fileName = outFile ?? `slack-result-${Date.now().toString(36)}.json`;
       const abs = await resolvePathInsideRoot(workingDir, fileName);
       await fs.mkdir(path.dirname(abs), { recursive: true });
+      try { await assertCurrent(); }
+      catch { return errorResult('CAPABILITY_NOT_AVAILABLE', 'Account data is unavailable for this task.'); }
       await fs.writeFile(abs, text, 'utf-8');
       return jsonResult({
         ok: true,
@@ -143,7 +147,7 @@ export function createSlackMcpGatewayServer(deps: SlackHookMcpDeps): McpServer {
   const TEAM_ID_DESC =
     '可选: 以哪个 Slack workspace 的绑定身份执行(bindings 列表见 slack_status)。设备绑定了多个 workspace 时必须传, 否则 server 拒绝猜测(AMBIGUOUS_TEAM); 只绑一个时可省略';
 
-  server.tool('slack_status', descStatus.trim(), {}, async () => {
+  server.tool('slack_status', descStatus.trim(), {}, async () => withAccountDataAccess(deps.withAccountDataAccess, deps.getSessionContext?.().sessionId, async () => {
     const bridge = requireBridge(deps);
     if ('err' in bridge) return bridge.err;
     const local = bridge.availability();
@@ -167,7 +171,7 @@ export function createSlackMcpGatewayServer(deps: SlackHookMcpDeps): McpServer {
     const r = await bridge.callTool('status');
     if (!r.ok) return errorResult(r.error.code, r.error.message);
     return jsonResult({ ok: true, connected: true, ...(r.result as object) });
-  });
+  }));
 
   server.tool(
     'slack_list_tools',
@@ -179,13 +183,14 @@ export function createSlackMcpGatewayServer(deps: SlackHookMcpDeps): McpServer {
         .optional()
         .describe('可选: 把完整清单 JSON 写进会话工作目录的该相对路径, 只返回文件路径'),
     },
-    async ({ team_id, out_file }) => {
+    async ({ team_id, out_file }) => withAccountDataAccess(deps.withAccountDataAccess, deps.getSessionContext?.().sessionId, async assertCurrent => {
       const bridge = requireBridge(deps);
       if ('err' in bridge) return bridge.err;
       const r = await bridge.callTool('listTools', undefined, team_id ?? null);
+      await assertCurrent();
       if (!r.ok) return errorResult(r.error.code, r.error.message);
-      return deliver(r.result, out_file, deps.workingDir);
-    },
+      return deliver(r.result, out_file, deps.workingDir, assertCurrent);
+    }),
   );
 
   server.tool(
@@ -202,20 +207,15 @@ export function createSlackMcpGatewayServer(deps: SlackHookMcpDeps): McpServer {
           '可选: 把完整结果 JSON 写进会话工作目录的该相对路径(如 tmp/slack-result.json), 只返回文件路径 —— 结果大、要交给脚本处理时用。结果超 50KB 时即使不传也会自动落盘返回路径',
         ),
     },
-    async ({ name, arguments: toolArgs, team_id, out_file }) => {
+    async ({ name, arguments: toolArgs, team_id, out_file }) => withAccountDataAccess(deps.withAccountDataAccess, deps.getSessionContext?.().sessionId, async assertCurrent => {
       const bridge = requireBridge(deps);
       if ('err' in bridge) return bridge.err;
-      const r = await bridge.callTool(
-        'callTool',
-        {
-          name,
-          ...(toolArgs !== undefined ? { arguments: toolArgs } : {}),
-        },
-        team_id ?? null,
-      );
+      const r = await bridge.callTool('callTool', { name, ...(toolArgs !== undefined ? { arguments: toolArgs } : {}) }, team_id ?? null);
+      // Recheck before returning private bytes or spilling them to the workdir.
+      await assertCurrent();
       if (!r.ok) return errorResult(r.error.code, r.error.message);
-      return deliver(r.result, out_file, deps.workingDir);
-    },
+      return deliver(r.result, out_file, deps.workingDir, assertCurrent);
+    }),
   );
 
   return server;

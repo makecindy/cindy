@@ -118,3 +118,18 @@ describe('伙伴行的间距基线', () => {
     expect(source).toContain('<div className="flex min-h-0 flex-1 flex-col px-3 pt-2">');
   });
 });
+
+describe('群聊与伙伴行同一套几何', () => {
+  const groupRow = readFileSync(
+    resolve(__dirname, '..', 'BotGroupSidebarRow.tsx'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+
+  it('群行沿用对称的 10px / 8px 内边距、40px 头像位、14/12/11 字号', () => {
+    expect(groupRow).toContain('gap-2.5 rounded-xl px-2.5 py-2 text-left');
+    expect(groupRow).toContain('<span className="flex min-w-0 flex-1 flex-col gap-0.5">');
+    expect(groupRow).toContain('min-w-0 truncate text-14 leading-5');
+    expect(groupRow).toContain("'min-w-0 flex-1 truncate text-12 leading-4'");
+    expect(groupRow).toContain("'w-10 shrink-0 self-start pt-0.5 text-right text-11 tabular-nums'");
+  });
+});

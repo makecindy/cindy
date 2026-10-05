@@ -320,6 +320,11 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   // reset 使用 desktop 预签发、账号绑定的幂等 offer,手机不能自行指定 creditId。
   'maker:usage:codex-rate-limits',
   'maker:usage:codex-rate-limit-reset',
+  // 订阅账号余量快照(只读;Claude / SuperGrok)与 cc 默认路由会话的生效计费路由。
+  // 老被控端 CHANNEL_NOT_ALLOWED → 任务菜单保留「暂未获取账号配额」。
+  'maker:usage:claude-subscription',
+  'maker:usage:xai-subscription',
+  'maker:claude-session-route:get',
   // 网关 API key presence-only 探测(只回 boolean;拉不到 → unknown,折扣版不置灰)。
   'maker:api-key:present',
   'maker:list-agent-commands',
@@ -345,6 +350,20 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:rewind:commit',
   'maker:message:delete',
   'maker:close-session',
+  // —— Orca 协同(Lead / Worker 团队真身在被控端,手机只做编排入口)——
+  // 均已在被控端 REMOTE_INVOKE_ALLOWLIST 的 Orca 段;worker-changed 推送经
+  // `session:<leadId>` topic 转发。老被控端 CHANNEL_NOT_ALLOWED → 协同入口 fail-closed
+  // 提示设备版本过旧,不放行到 enable-orca 才撞错。
+  'maker:plugins:get-state',
+  'maker:session:enable-orca',
+  'maker:session:disable-orca',
+  'maker:worker:create',
+  'maker:worker:switch-focus',
+  'maker:worker:acknowledge-done',
+  'maker:worker:archive',
+  'maker:collaboration-settings:get',
+  'local-db:orca-workflows:list-workers-by-lead',
+  'local-db:orca-workflows:get-by-worker-session',
   'maker:schedule:list',
   'maker:schedule:get',
   'maker:schedule:list-templates',
@@ -425,6 +444,7 @@ const TRANSIENT_REMOTE_ERROR_MARKERS = [
   'NOT_CONNECTED',
   'LINK_NOT_OPEN',
   'BACKPRESSURE',
+  'DEVICE_LINK_BUSY',
   'DEVICE_OFFLINE',
   'DEVICE_LINK_TIMEOUT',
   'INVOKE_TIMEOUT',
@@ -569,6 +589,9 @@ export function describeRemoteError(error: string | null): string | null {
     if (error.includes('ACCOUNT_CHANGED')) return 'Codex 账号或工作区已变化，请刷新额度后重新确认。';
     if (error.includes('OFFER_EXPIRED')) return 'Codex 重置凭证已失效，请刷新额度后重新确认。';
     return '操作条件已变化，请刷新后重新确认。';
+  }
+  if (error.includes('BACKPRESSURE') || error.includes('DEVICE_LINK_BUSY')) {
+    return '远端繁忙，请稍后重试。';
   }
   if (TRANSIENT_REMOTE_ERROR_MARKERS.some((marker) => error.includes(marker))) {
     return '网络或被控端暂时不可用，可以稍后重新同步。';

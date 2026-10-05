@@ -188,8 +188,9 @@ export function SessionListDrawer({ currentSessionId, persistent = false, newSes
       <Animated.View style={[styles.panel, { paddingLeft: insets.left, paddingTop: insets.top, width: panelWidth },
         !persistent && panelStyle]} testID="sessionDrawer.panel">
         <View ref={homeContentRef} style={styles.content}>
-          <MobileHome onDismiss={persistent ? undefined : onClose} newSessionActionRef={newSessionActionRef} width={width} currentSessionId={currentSessionId}
-            newSessionInSystemBar={newSessionInSystemBar} onSelectSession={onSelectSession} runNavigation={runNavigation} />
+          <MobileHome newSessionActionRef={newSessionActionRef} width={width} currentSessionId={currentSessionId}
+            newSessionInSystemBar={newSessionInSystemBar} newSessionInHeader={!persistent}
+            onSelectSession={onSelectSession} runNavigation={runNavigation} />
         </View>
 
       </Animated.View>

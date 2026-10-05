@@ -41,6 +41,8 @@ import { WebView } from 'react-native-webview';
 import type { WebViewNavigation } from 'react-native-webview/lib/WebViewTypes';
 import { Text } from '@/components/AppText';
 import { goBackGuarded } from '@/utils/backGuard';
+import { errorText, resolvedUrlKind } from '@/debug/fileDiagnostics';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { useAuth } from '@/auth/AuthContext';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -68,6 +70,7 @@ import type { MobileHtmlPreview } from '@/session/mobileHtmlPreview';
 import { prepareMobileHtmlPreview, type PrepareMobileHtmlPreview } from '@/session/mobileHtmlPreview';
 import { useHtmlSnapshot } from '@/session/useHtmlSnapshot';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
+import { FileBrowserSegmentedControl } from '@/session/FileBrowserSegmentedControl';
 import { MarkdownFileReader } from '@/session/MarkdownFileReader';
 import { RemoteMediaPlayerWebView } from '@/session/mediaPlayerWebView';
 import {
@@ -198,8 +201,14 @@ export default function RemoteFilePreviewScreen() {
   // 渲染 / 源码的切换状态在子页里,所以由子页按页 key 上报;setter 用 key 比对而不是
   // 直接存布尔,避免翻页时「旧页报 false」与「新页报 true」的先后顺序决定结果。
   const [htmlPanPageKey, setHtmlPanPageKey] = useState<string | null>(null);
+  const [markdownPagerPageKey, setMarkdownPagerPageKey] = useState<string | null>(null);
   const reportHtmlPan = useCallback((key: string, wants: boolean) => {
     setHtmlPanPageKey((prev) => (wants ? key : (prev === key ? null : prev)));
+  }, []);
+  // Markdown WebView 的纵向滚动和宽公式横移保留在内层；正文明确横滑由文档
+  // 回调后在这里驱动同一个 pager，避免 WebView 与 FlatList 争抢触摸序列。
+  const reportMarkdownPager = useCallback((key: string, wants: boolean) => {
+    setMarkdownPagerPageKey((prev) => (wants ? key : (prev === key ? null : prev)));
   }, []);
 
   const showNotice = useCallback((text: string) => {
@@ -339,6 +348,12 @@ export default function RemoteFilePreviewScreen() {
 
   const current = siblings?.[pageIndex] ?? null;
   const pagerRef = useRef<FlatList<FileBrowserGridItem>>(null);
+  const moveMarkdownPager = useCallback((key: string, direction: 'previous' | 'next') => {
+    if (key !== current?.key || !siblings) return;
+    const next = pageIndex + (direction === 'next' ? 1 : -1);
+    if (next < 0 || next >= siblings.length) return;
+    pagerRef.current?.scrollToOffset({ animated: true, offset: next * pageWidth });
+  }, [current?.key, pageIndex, pageWidth, siblings]);
   // 当前可见文件路径镜像(pager 重建锚定用;不能进上面 effect 的依赖,否则
   // 每次翻页都会重列目录)。
   const currentRelPathRef = useRef<string | null>(null);
@@ -438,11 +453,34 @@ export default function RemoteFilePreviewScreen() {
     (relPath: string): Promise<FileBrowserReadFileResult> =>
       withTransientRemoteRetry(async () => {
         await openLink(deviceId);
-        if (singleAbsPath) {
-          const res = await maker.fs.readTextFilePreview(singleAbsPath);
-          return adaptTextFilePreviewResult(singleAbsPath, res);
+        const startedAt = Date.now();
+        const channel = singleAbsPath ? 'text-preview' : 'read-file';
+        try {
+          const res = singleAbsPath
+            ? adaptTextFilePreviewResult(singleAbsPath, await maker.fs.readTextFilePreview(singleAbsPath))
+            : await maker.fileBrowser.readFile(workdir, relPath, { acceptGzip: true });
+          // Whole-text reads share the relay with rendered-HTML resource requests; size only.
+          // gzip 回包是压缩数据的 base64,与纯文本字符数分字段记录,避免两种口径混用。
+          mobileDebugLog('debug', 'files', 'preview text read', {
+            channel,
+            ms: Date.now() - startedAt,
+            ...(res.ok
+              ? res.data.contentEncoding === 'gzip'
+                ? { gzip: true, base64Chars: res.data.content.length }
+                : { chars: res.data.content.length }
+              : { code: res.code }),
+          });
+          return res;
+        } catch (error) {
+          // 慢失败同样留痕:抛错触发重试时恰好漏掉最慢的样本。
+          // 走 errorText() 脱敏:错误串可能携带路径或签名 URL,不得进入 files 日志。
+          mobileDebugLog('debug', 'files', 'preview text read failed', {
+            channel,
+            ms: Date.now() - startedAt,
+            error: errorText(error),
+          });
+          throw error;
         }
-        return maker.fileBrowser.readFile(workdir, relPath, { acceptGzip: true });
       }),
     [deviceId, maker, openLink, singleAbsPath, workdir],
   );
@@ -569,6 +607,8 @@ export default function RemoteFilePreviewScreen() {
               // 对话界面之后继续跑脚本。screenFocused 翻假即卸载。
               visible={screenFocused && index === pageIndex}
               onHtmlPanChange={reportHtmlPan}
+              onMarkdownPagerChange={reportMarkdownPager}
+              onMarkdownPageSwipe={moveMarkdownPager}
               exportToUrl={exportToUrl}
               prepareHtmlPreview={prepareHtmlPreview}
               item={item}
@@ -613,7 +653,7 @@ export default function RemoteFilePreviewScreen() {
         // 超出视口的内容永远看不到。手势仲裁(区分内层平移与翻页)在 RN 上要自己写一套
         // 竞态裁决,属独立改动;这里沿用本文件对 PDF 已经采用的同一口径 —— 想翻页就切到
         // 「源码」态(源码是竖向列表,不冲突),或 Done 返回列表。
-        scrollEnabled={current.previewKind !== 'pdf' && htmlPanPageKey !== current.key}
+        scrollEnabled={current.previewKind !== 'pdf' && htmlPanPageKey !== current.key && markdownPagerPageKey !== current.key}
         showsHorizontalScrollIndicator={false}
         windowSize={3}
       />
@@ -700,6 +740,8 @@ function FilePreviewPage({
   maker,
   onDownload,
   onHtmlPanChange,
+  onMarkdownPagerChange,
+  onMarkdownPageSwipe,
   onOpenLightbox,
   onQuoteSelection,
   readTextFile,
@@ -718,6 +760,8 @@ function FilePreviewPage({
   onDownload(): void;
   /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,仅文本页产出)。 */
   onHtmlPanChange?: (key: string, wants: boolean) => void;
+  onMarkdownPagerChange?: (key: string, wants: boolean) => void;
+  onMarkdownPageSwipe?: (key: string, direction: 'previous' | 'next') => void;
   onOpenLightbox(url: string): void;
   /** chat-text-quote:markdown 渲染态的选中引用回调(仅文本页消费)。 */
   onQuoteSelection?: (text: string) => void;
@@ -746,7 +790,7 @@ function FilePreviewPage({
   }
   const avKind = avKindFor(item.relPath);
   if (avKind) {
-    return <AvPreviewPage active={active} exportToUrl={exportToUrl} item={item} kind={avKind} onDownload={onDownload} workdir={workdir} />;
+    return <AvPreviewPage active={active} exportToUrl={exportToUrl} item={item} kind={avKind} onDownload={onDownload} visible={visible} workdir={workdir} />;
   }
   if (item.thumb === 'doc') {
     return (
@@ -760,6 +804,8 @@ function FilePreviewPage({
         htmlBrowserActions={htmlBrowserActions}
         onDownload={onDownload}
         onHtmlPanChange={onHtmlPanChange}
+        onMarkdownPagerChange={onMarkdownPagerChange}
+        onMarkdownPageSwipe={onMarkdownPageSwipe}
         onQuoteSelection={onQuoteSelection}
         readTextFile={readTextFile}
         targetLine={targetLine}
@@ -771,13 +817,14 @@ function FilePreviewPage({
   return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.unsupportedType')} />;
 }
 
-/** 音视频页:导出→presign→复用消息同款播放器(切后台/换页自动暂停)。 */
+/** 音视频页:导出→presign→复用消息同款播放器(切后台/翻页失活自动暂停,回到本页不自动续播)。 */
 function AvPreviewPage({
   active,
   exportToUrl,
   item,
   kind,
   onDownload,
+  visible,
   workdir,
 }: {
   active: boolean;
@@ -785,6 +832,8 @@ function AvPreviewPage({
   item: FileBrowserGridItem;
   kind: 'video' | 'audio';
   onDownload(): void;
+  /** 是否真正可见的当前页:失活(翻页/压栈)时暂停播放,见 RemoteMediaPlayerWebView。 */
+  visible: boolean;
   workdir: string;
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -799,19 +848,27 @@ function AvPreviewPage({
     if (!active || requestedRef.current || !workdir) return undefined;
     requestedRef.current = true;
     let cancelled = false;
+    const startedAt = Date.now();
+    mobileDebugLog('debug', 'files', 'av preview fetch start', { kind, size: item.sizeBytes });
     setFailure(null);
     void exportToUrl(item.relPath, item.mtimeMs)
       .then((next) => {
+        mobileDebugLog('debug', 'files', 'av preview fetch done', {
+          kind, ms: Date.now() - startedAt, source: resolvedUrlKind(next), left: cancelled,
+        });
         if (!cancelled) setUrl(next);
       })
       .catch((err) => {
+        mobileDebugLog(cancelled ? 'debug' : 'warn', 'files', 'av preview fetch failed', {
+          kind, ms: Date.now() - startedAt, left: cancelled, error: errorText(err),
+        });
         if (cancelled) return;
         setFailure(formatRemoteError(err));
       });
     return () => {
       cancelled = true;
     };
-  }, [active, exportToUrl, item.mtimeMs, item.relPath, requestEpoch, workdir]);
+  }, [active, exportToUrl, item.mtimeMs, item.relPath, item.sizeBytes, kind, requestEpoch, workdir]);
 
   if (failure) {
     return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.readFailed')}
@@ -833,6 +890,7 @@ function AvPreviewPage({
         testID="filePreview.avPlayer"
         title={item.name}
         url={url}
+        visible={visible}
       />
     </View>
   );
@@ -933,6 +991,8 @@ function TextPreviewPage({
   htmlBrowserActions,
   onDownload,
   onHtmlPanChange,
+  onMarkdownPagerChange,
+  onMarkdownPageSwipe,
   onQuoteSelection,
   readTextFile,
   targetLine,
@@ -950,6 +1010,8 @@ function TextPreviewPage({
   onDownload(): void;
   /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,见调用处说明)。 */
   onHtmlPanChange?: (key: string, wants: boolean) => void;
+  onMarkdownPagerChange?: (key: string, wants: boolean) => void;
+  onMarkdownPageSwipe?: (key: string, direction: 'previous' | 'next') => void;
   /** chat-text-quote:markdown 渲染态的选中引用回调(源码态暂不支持,见 PR 说明)。 */
   onQuoteSelection?: (text: string) => void;
   /** 屏级注入:readFile 带瞬断重试 + openLink(与列表/搜索/导出同路径)。 */
@@ -1067,6 +1129,12 @@ function TextPreviewPage({
     onHtmlPanChange?.(item.key, htmlPanWanted);
     return () => onHtmlPanChange?.(item.key, false);
   }, [htmlPanWanted, item.key, onHtmlPanChange]);
+  const markdownPagerWanted = visible && richKind === 'markdown' && richView === 'rendered'
+    && state.status === 'ready';
+  useEffect(() => {
+    onMarkdownPagerChange?.(item.key, markdownPagerWanted);
+    return () => onMarkdownPagerChange?.(item.key, false);
+  }, [item.key, markdownPagerWanted, onMarkdownPagerChange]);
 
   if (website) return visible ? <HtmlWebsiteBrowser
     visit={website}
@@ -1116,19 +1184,21 @@ function TextPreviewPage({
       {/* HTML 的模式切换在浮动浏览器菜单中;Markdown 保留原有胶囊。 */}
       {canRenderRich && richKind !== 'html' ? (
         <View style={styles.mdToggleRow}>
-          {([['rendered', t('files.preview.mdRendered')], ['source', t('files.preview.mdSource')]] as const).map(([value, label]) => (
-            <Pressable
-              accessibilityLabel={t('files.preview.mdViewA11y', { view: label })}
-              key={value}
-              onPress={() => setRichView(value)}
-              style={[styles.mdTogglePill, richView === value && styles.mdTogglePillActive]}
-              testID={`filePreview.richView.${value}`}
-            >
-              <Text style={[styles.mdToggleLabel, richView === value && styles.mdToggleLabelActive]}>
-                {label}
-              </Text>
-            </Pressable>
-          ))}
+          <FileBrowserSegmentedControl<'rendered' | 'source'>
+            accessibilityLabel={t('files.preview.mdViewA11y', { view: richView === 'rendered' ? t('files.preview.mdRendered') : t('files.preview.mdSource') })}
+            onChange={setRichView}
+            options={(['rendered', 'source'] as const).map((value) => {
+              const label = t(value === 'rendered' ? 'files.preview.mdRendered' : 'files.preview.mdSource');
+              return {
+                value,
+                label,
+                accessibilityLabel: t('files.preview.mdViewA11y', { view: label }),
+                testID: `filePreview.richView.${value}`,
+              };
+            })}
+            testID="filePreview.richView"
+            value={richView}
+          />
         </View>
       ) : null}
       {showRendered ? (
@@ -1159,7 +1229,13 @@ function TextPreviewPage({
             />
           )
         ) : (
-          <MarkdownFileReader markdown={ready?.content ?? ''} onQuoteSelection={onQuoteSelection} targetLine={targetLine} testID="filePreview.markdownRendered" />
+          <MarkdownFileReader
+            markdown={ready?.content ?? ''}
+            onPageSwipe={onMarkdownPageSwipe ? (direction) => onMarkdownPageSwipe(item.key, direction) : undefined}
+            onQuoteSelection={onQuoteSelection}
+            targetLine={targetLine}
+            testID="filePreview.markdownRendered"
+          />
         )
       ) : state.status === 'loading' ? (
         <View style={styles.centerFill}><ActivityIndicator color={colors.textTertiary} /></View>
@@ -1306,14 +1382,14 @@ function ImagePreviewPage({
         <View style={styles.imageStateWrap} testID="filePreview.imageError">
           <GenericGlyph name={item.name} />
           <Text style={styles.hintText}>{t('files.preview.fetchOriginalFailed', { detail: failure })}</Text>
-          <Pressable
-            accessibilityLabel={t('files.preview.a11yRetryOriginal')}
-            onPress={() => setAttempt((n) => n + 1)}
-            style={({ pressed }) => [styles.retryBtn, pressed && styles.pressed]}
-            testID="filePreview.imageRetry"
-          >
-            <Text style={styles.retryLabel}>{t('files.preview.retry')}</Text>
-          </Pressable>
+          <MainWindowActionButton
+            action={{
+              accessibilityLabel: t('files.preview.a11yRetryOriginal'),
+              label: t('files.preview.retry'),
+              onPress: () => setAttempt((n) => n + 1),
+              testID: 'filePreview.imageRetry',
+            }}
+          />
         </View>
       ) : (
         <View style={styles.imageStateWrap} testID="filePreview.imageLoading">
@@ -1458,10 +1534,10 @@ const makeStyles = (colors: ThemeColors) => {
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.md,
     },
-    doneText: { color: colors.textPrimary, fontSize: typeScale.bodyLarge, fontWeight: fontWeight.semibold },
+    doneText: { color: colors.textPrimary, fontSize: typeScale.bodyLarge, lineHeight: lineHeight.bodyLarge, fontWeight: fontWeight.medium },
     navTitleCol: { alignItems: 'center', flex: 1, gap: 2, minWidth: 0 },
-    navTitle: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.semibold },
-    navMeta: { color: colors.textTertiary, fontSize: typeScale.caption },
+    navTitle: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
+    navMeta: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
     navHairline: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth },
     truncBar: {
       alignItems: 'center',
@@ -1472,26 +1548,12 @@ const makeStyles = (colors: ThemeColors) => {
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.sm - 1,
     },
-    truncText: { color: colors.textSecondary, fontSize: typeScale.caption },
+    truncText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
     textPage: { flex: 1 },
     mdToggleRow: {
-      flexDirection: 'row',
-      gap: spacing.sm,
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.sm,
     },
-    mdTogglePill: {
-      alignItems: 'center',
-      borderColor: colors.border,
-      borderRadius: radius.pill,
-      borderWidth: StyleSheet.hairlineWidth,
-      justifyContent: 'center',
-      minHeight: 28,
-      paddingHorizontal: spacing.md,
-    },
-    mdTogglePillActive: { backgroundColor: colors.surfaceChip, borderColor: colors.borderStrong },
-    mdToggleLabel: { color: colors.textSecondary, fontSize: typeScale.caption },
-    mdToggleLabelActive: { color: colors.textPrimary, fontWeight: fontWeight.medium },
     codeList: { flex: 1 },
     codeContent: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
     codeLine: { flexDirection: 'row', gap: spacing.sm + 2 },
@@ -1518,25 +1580,17 @@ const makeStyles = (colors: ThemeColors) => {
     imageFull: { height: '100%', width: '100%' },
     imageStateWrap: { alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.xl },
     avPage: { flex: 1, justifyContent: 'center', padding: spacing.lg },
-    avPlayer: { width: '100%' },
+    // The player's WebView fills its wrapper (flex: 1); a width-only wrapper collapses it to 0 pt.
+    avPlayer: { flex: 1, width: '100%' },
     imageUpgradeHint: {
       bottom: spacing.md,
       color: colors.textTertiary,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       position: 'absolute',
       textAlign: 'center',
       width: '100%',
     },
-    retryBtn: {
-      alignItems: 'center',
-      borderColor: colors.borderStrong,
-      borderRadius: radius.pill,
-      borderWidth: StyleSheet.hairlineWidth,
-      justifyContent: 'center',
-      minHeight: 40,
-      paddingHorizontal: spacing.xl,
-    },
-    retryLabel: { color: colors.textPrimary, fontSize: typeScale.code, fontWeight: fontWeight.medium },
     pdfView: { flex: 1 },
     bigPage: {
       alignItems: 'center',
@@ -1553,12 +1607,12 @@ const makeStyles = (colors: ThemeColors) => {
       justifyContent: 'center',
       width: 122,
     },
-    bigName: { color: colors.textPrimary, fontSize: typeScale.subtitle, fontWeight: fontWeight.semibold },
-    bigMeta: { color: colors.textSecondary, fontSize: typeScale.footnote },
+    bigName: { color: colors.textPrimary, fontSize: typeScale.subtitle, lineHeight: lineHeight.subtitle, fontWeight: fontWeight.semibold },
+    bigMeta: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
     hintText: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
-      lineHeight: lineHeight.code,
+      lineHeight: lineHeight.caption,
       textAlign: 'center',
     },
     ctaBtn: {
@@ -1572,7 +1626,7 @@ const makeStyles = (colors: ThemeColors) => {
       minHeight: 44,
       paddingHorizontal: spacing.xl,
     },
-    ctaLabel: { color: colors.ctaText, fontSize: typeScale.code, fontWeight: fontWeight.medium },
+    ctaLabel: { color: colors.ctaText, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
     toolbarHairline: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth },
     toolbar: {
       backgroundColor: colors.surface,
@@ -1582,10 +1636,11 @@ const makeStyles = (colors: ThemeColors) => {
       paddingTop: spacing.md,
     },
     toolItem: { alignItems: 'center', gap: spacing.xs, minWidth: 64 },
-    toolLabel: { color: colors.textSecondary, fontSize: typeScale.micro },
+    toolLabel: { color: colors.textSecondary, fontSize: typeScale.micro, lineHeight: lineHeight.micro },
     noticeText: {
       color: colors.textSecondary,
-      fontSize: typeScale.caption,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       paddingBottom: spacing.sm,
       textAlign: 'center',
     },

@@ -67,11 +67,8 @@ export const ESSENTIAL_PLUGIN_IDS: ReadonlySet<string> = new Set([
   'lsp',
 ]);
 
-/** Minimal built-ins every Bot needs; ordinary Cindy Sessions keep all essentials. */
-export const BOT_BASELINE_PLUGIN_IDS: ReadonlySet<string> = new Set([
-  'memory',
-  'xdt_helper',
-]);
+/** Companions share the ordinary task's infrastructure; no separate permission tier. */
+export const BOT_BASELINE_PLUGIN_IDS = ESSENTIAL_PLUGIN_IDS;
 
 export function resolveBotAllowedBuiltinPluginIds(
   catalog: readonly { id: string; available?: boolean }[],

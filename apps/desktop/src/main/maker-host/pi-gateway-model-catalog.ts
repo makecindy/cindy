@@ -44,7 +44,7 @@ function piApiFromWireProtocol(protocol: ProviderWireProtocol | undefined): PiMo
 }
 
 function catalogModelApi(
-  model: ProviderRuntimeModelConfig,
+  model: Pick<ProviderRuntimeModelConfig, 'piApi' | 'route'>,
   defaultProtocol: ProviderWireProtocol | undefined,
 ): PiModelApi | undefined {
   return model.piApi ?? piApiFromWireProtocol(model.route?.wireProtocol ?? defaultProtocol);

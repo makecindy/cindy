@@ -53,7 +53,7 @@ describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
     const state = resolveSessionTailBanner({ messages: [row(raw)], session: null, projection: { error: null, credentialSwitchWait: null }, isSessionStreaming: false, continuationInFlight: false, sessionMetadataSyncedForConnection: true, interruptAcked: false, hiddenErrorClientIds: new Set() });
     expect(state?.kind).toBe('error-tail');
     await act(async () => root.render(surface === 'live'
-      ? <InlineQueueSection projection={{ error: raw, errorRetryText: 'original-welcome' } as InputProjection} readOnlyReason={null} errorRecoveryReadOnlyReason={null} onRetryError={retry} onClearError={vi.fn()} onResume={vi.fn()} />
+      ? <InlineQueueSection projection={{ error: raw, errorRetryText: 'original-welcome' } as InputProjection} readOnlyReason={null} onRetryError={retry} onClearError={vi.fn()} onResume={vi.fn()} />
       : <SessionTailBanner state={state!} onContinue={retry} onDismiss={vi.fn()} />));
     expect(host.textContent).toContain(i18n.t('session.tail.requestFormatError'));
     expect(host.textContent).not.toContain('Responses-Lite');
@@ -120,7 +120,7 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
         const retry = vi.fn();
         const clear = vi.fn();
         await act(async () => root.render(surface === 'live'
-          ? <InlineQueueSection projection={{ error: message, errorRetryText: 'original user message' } as InputProjection} readOnlyReason={null} errorRecoveryReadOnlyReason={null} onRetryError={retry} onClearError={clear} onResume={vi.fn()} />
+          ? <InlineQueueSection projection={{ error: message, errorRetryText: 'original user message' } as InputProjection} readOnlyReason={null} onRetryError={retry} onClearError={clear} onResume={vi.fn()} />
           : <SessionTailBanner state={state!} onContinue={retry} onDismiss={clear} />));
         expect(host.textContent).toContain(i18n.t(key));
         expect(host.textContent).not.toContain('upstream diagnostic');
@@ -160,3 +160,44 @@ it.each(['REMOTE_DAEMON_CLOSED', 'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE', 'DEVICE_
     expect(requiresAgentErrorConfigurationChange(`[${code}] diagnostic`)).toBe(false);
   },
 );
+
+
+describe.each(SUPPORTED_LOCALES)('WeChat auto-review guidance in %s', locale => {
+  const message = '[AUTO_REVIEW_UNAVAILABLE] upstream diagnostic; api_key=private-test-value';
+
+  it('asks for direct confirmation on live, tail, and history', async () => {
+    await i18n.changeLanguage(locale);
+    const wechatKey = 'session.remoteError.AUTO_REVIEW_UNAVAILABLE_WECHAT';
+    const genericKey = 'session.remoteError.AUTO_REVIEW_UNAVAILABLE';
+    expect(unclassifiedAgentErrorI18nKey(message, 'wechat')).toBe(wechatKey);
+    expect(unclassifiedAgentErrorI18nKey(message, 'desktop')).toBe(genericKey);
+    const [historical] = normalizeRemoteMessages([row(message)], { sessionSource: 'wechat' });
+    expect(historical.body).toBe(i18n.t(wechatKey));
+    expect(historical.body).not.toContain('Switch this task');
+    expect(historical.errorSummaryKey).toBe(wechatKey);
+    const state = resolveSessionTailBanner({
+      messages: [row(message)],
+      session: { source: 'wechat', activeTurnStartedAt: null, lastTurnEndedAt: null, clearedAt: null },
+      projection: { error: null, credentialSwitchWait: null },
+      isSessionStreaming: false,
+      continuationInFlight: false,
+      sessionMetadataSyncedForConnection: true,
+      interruptAcked: false,
+      hiddenErrorClientIds: new Set(),
+    });
+    expect(state?.kind).toBe('error-tail');
+    if (state?.kind !== 'error-tail') return;
+    expect(state.text).toBe(i18n.t(wechatKey));
+    await act(async () => root.render(<InlineQueueSection
+      projection={{ error: message, errorRetryText: 'original user message' } as InputProjection}
+      sessionSource="wechat"
+      readOnlyReason={null}
+     
+      onRetryError={vi.fn()}
+      onClearError={vi.fn()}
+      onResume={vi.fn()}
+    />));
+    expect(host.textContent).toContain(i18n.t(wechatKey));
+    expect(host.textContent).not.toContain(i18n.t(genericKey));
+  });
+});

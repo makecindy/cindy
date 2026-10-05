@@ -32,6 +32,8 @@ export function createBotRuntimeRestoreCoordinator(
   deps: BotRuntimeRestoreCoordinatorDeps,
 ): { restoreCurrentOwner(): Promise<boolean> } {
   let restoredClientEpoch: number | null = null;
+  // Stages already restored for one client generation; a retry reruns only the rest.
+  let restoredStages: { clientEpoch: number; labels: Set<string> } | null = null;
   let tail: Promise<boolean> = Promise.resolve(false);
 
   const restoreOnce = async (): Promise<boolean> => {
@@ -46,21 +48,31 @@ export function createBotRuntimeRestoreCoordinator(
       ['Bot direct messages', services.directMessages],
       ['Bot delegation', services.delegation],
     ] as const;
+    if (restoredStages?.clientEpoch !== identity.clientEpoch) {
+      restoredStages = { clientEpoch: identity.clientEpoch, labels: new Set() };
+    }
+    const done = restoredStages.labels;
 
+    // The stages are independent queues: one failing must not leave the others
+    // (task timeouts, undelivered completion receipts) unrestored until the next launch.
+    let failed = false;
     for (const [label, service] of stages) {
+      if (done.has(label)) continue;
       const current = deps.readDbIdentity();
       if (!current || current.clientEpoch !== identity.clientEpoch) return false;
       try {
         await service!.restore();
+        done.add(label);
       } catch (error) {
         deps.log.warn(`${label} restore failed`, {
           userId: identity.userId,
           clientEpoch: identity.clientEpoch,
           error: error instanceof Error ? error.message : String(error),
         });
-        return false;
+        failed = true;
       }
     }
+    if (failed) return false;
 
     const current = deps.readDbIdentity();
     if (!current || current.clientEpoch !== identity.clientEpoch) return false;

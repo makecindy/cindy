@@ -112,6 +112,8 @@ const projectPiManagedCommandFailure = ${projectPiManagedCommandFailure.toString
 const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_SECRET_ENV_NAMES',
   'CINDY_PI_PERMISSION_FILE',
+  'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
+  'CINDY_PI_FAST_MODELS',
   'CINDY_PI_TURN_TOOL_POLICY',
   PI_PACKAGE_MANAGEMENT_ENV,
   PI_BASH_PACKAGE_HOME_ENV,
@@ -133,6 +135,12 @@ try {
 function withoutPiSecrets(env: Record<string, string | undefined>): Record<string, string | undefined> {
   const clean = { ...env };
   for (const name of SECRET_ENV_NAMES) delete clean[name];
+  // A provider added after session start was absent from the original host-generated list.
+  for (const name of Object.keys(clean)) {
+    if (/^CINDY_PI_KEY_[A-Z0-9_]+$/.test(name)
+      || name === 'CINDY_PI_SESSION_TOKEN' || name === 'CINDY_PI_API_KEY'
+      || name === 'CINDY_PI_OPENAI_PROXY_KEY' || name === 'CINDY_PI_XAI_PROXY_API_KEY') delete clean[name];
+  }
   return clean;
 }
 
@@ -2526,7 +2534,7 @@ const CINDY_DIRECT_BOT_TOOLS = new Set([
   CINDY_LIST_AGENTS_TOOL,
   CINDY_CREATE_TEAMMATE_TOOL,
   'routine_list', 'routine_save', 'routine_sources',
-  'routine_history', 'routine_delete', 'routine_run_now',
+  'routine_history', 'routine_delete', 'routine_run_now', 'schedule_notify_current_run', 'schedule_set_pre_run_hook',
 ]);
 
 interface ConnectedMcpTool {
@@ -3346,6 +3354,11 @@ class CindyMcpGateway {
       id: { type: 'string' },
     };
     const routineTools = [
+      { name: 'schedule_notify_current_run', description: 'Request one final report from the current silent automation run when there is a new actionable result or an explicit reminder. No run ID needed.', properties: {}, required: [] },
+      { name: 'schedule_set_pre_run_hook', description: 'Install and immediately test a Node ESM pre-run check using the existing host installer. exit 0 wakes the model, exit 2 skips it, other errors fail visibly. Attach returned command with routine_save.preRunHook. Only invoke when authorized to install and test the check.', properties: {
+        script: { type: 'string', description: 'Node ESM source; output a concise change summary. Use CINDY_PRECHECK_OK only after a complete successful check.' },
+        scheduleName: { type: 'string' },
+      }, required: ['script'] },
       { name: 'routine_list', description: 'List your own persistent Cindy routines. Use before creating to avoid duplicates, and after saving to verify.', properties: {}, required: [] },
       { name: 'routine_sources', description: 'List available local event sources, event types, filter fields and listening status. Read before creating event triggers; never guess source IDs.', properties: {}, required: [] },
       { name: 'routine_save', description: 'Create or fully update your own persistent Cindy routine when the user requests scheduled reminders, recurring work or event-triggered automation. Multiple triggers are OR. Do not use a background Session or shell loop for recurring work. Do not invent an end time. Read back with routine_list before confirming success.',
@@ -3354,15 +3367,25 @@ class CindyMcpGateway {
           name: { type: 'string', minLength: 1 },
           prompt: { type: 'string', minLength: 1, description: 'Instructions to execute at each trigger.' },
           enabled: { type: 'boolean' },
+          silentWhenIdle: { type: 'boolean', description: 'Set true for checks with no-change reporting suppressed. Set false for reminders/scheduled delivery. Omitted defaults to false; preserve user choices.' },
+          preRunHook: { anyOf: [{ type: 'null' }, { type: 'object', properties: {
+            command: { type: 'string', minLength: 1, maxLength: 32000 },
+            timeoutMs: { type: 'integer', minimum: 1 },
+          }, required: ['command'], additionalProperties: false }], description: 'Install scripts with schedule_set_pre_run_hook; exit 2 skips the model, exit 0 passes stdout, failures stay visible. null removes; omission preserves.' },
           triggers: { type: 'array', minItems: 1, maxItems: 32, items: { anyOf: [
             { type: 'object', properties: { ...routineTriggerProperties,
               kind: { type: 'string', enum: ['interval'] },
               intervalMs: { type: 'integer', minimum: 60000, description: 'Interval in milliseconds. One minute = 60000.' },
+              anchorMs: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: 'Original interval anchor in Unix milliseconds; preserve when editing.' },
             }, required: ['id', 'kind', 'intervalMs'], additionalProperties: false },
             { type: 'object', properties: { ...routineTriggerProperties,
               kind: { type: 'string', enum: ['cron'] },
               expression: { type: 'string' }, timezone: { type: 'string' },
             }, required: ['id', 'kind', 'expression', 'timezone'], additionalProperties: false },
+            { type: 'object', properties: { ...routineTriggerProperties,
+              kind: { type: 'string', enum: ['once'] },
+              at: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: 'One-time trigger timestamp in Unix milliseconds.' },
+            }, required: ['id', 'kind', 'at'], additionalProperties: false },
             { type: 'object', properties: { ...routineTriggerProperties,
               kind: { type: 'string', enum: ['event'] },
               sourceId: { type: 'string' }, eventType: { type: 'string' },
@@ -3627,13 +3650,87 @@ function astraResponsesPayload(payload, model) {
   return out;
 }
 
+async function nativeFastPayload(payload, model, ctx) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  if (!model || !['openai-responses', 'azure-openai-responses', 'openai-completions'].includes(model.api)) return undefined;
+  let models;
+  try { models = JSON.parse(process.env.CINDY_PI_FAST_MODELS || '[]'); } catch { return undefined; }
+  if (!Array.isArray(models) || !models.some(item => item.provider === model.provider && item.id === model.id)) return undefined;
+  const out = { ...payload };
+  delete out.service_tier;
+  let timer;
+  try {
+    // No UI is shown: Cindy answers this internal query from current host memory.
+    // Missing/closed hosts and malformed replies must not retain a premium tier.
+    const response = await Promise.race([
+      ctx.ui.input('cindy:request-preferences', JSON.stringify({ provider: model.provider, model: model.id })),
+      new Promise(resolve => { timer = setTimeout(() => resolve(undefined), 5000); }),
+    ]);
+    if (typeof response === 'string' && JSON.parse(response)?.fast === true) out.service_tier = 'priority';
+  } catch { /* A failed preference read falls back to the standard tier. */ }
+  finally { if (timer) clearTimeout(timer); }
+  return out;
+}
+
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
 
 export default async function cindyBridge(pi: any) {
   installTextOnlyTurnPolicy(pi);
-  await registerCindyNativeProviderAdapters(pi);
+  const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi);
+  const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined
+    : (() => {
+      try {
+        return JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'settings.json'), 'utf8'));
+      } catch (error) {
+        // Durable child homes may have no settings file: Pi uses its defaults.
+        // Keep malformed/unreadable settings visible instead of hiding them.
+        if (error?.code === 'ENOENT') return {};
+        throw error;
+      }
+    })();
+  pi.registerCommand('cindy-native-provider-refresh', {
+    description: 'Cindy internal native provider refresh',
+    handler: async (args: string, ctx: any) => {
+      const nonce = args.trim();
+      if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) return;
+      let code: 'INVALID_PAYLOAD' | 'APPLY_FAILED' | undefined;
+      let mutationStarted = false;
+      let runtimeSettings;
+      try {
+        const raw = await ctx.ui.input('cindy:provider-refresh', JSON.stringify({ nonce }));
+        let inspect = false;
+        try { const request = JSON.parse(raw); inspect = request?.nonce === nonce && request?.operation === 'inspect'; }
+        catch { /* The normal snapshot parser rejects invalid JSON. */ }
+        const snapshot = inspect ? undefined : parseCindyProviderRefreshSnapshot(raw, nonce);
+        if (!inspect && !snapshot) {
+          code = 'INVALID_PAYLOAD';
+        } else if (snapshot) {
+          mutationStarted = true;
+          await nativeProviderAdapters.refresh(snapshot, ctx, SECRET_ENV_NAMES);
+        }
+        if (!code) {
+          // getSettings returns a copy. Never reach into Pi's private session or
+          // pretend a settings.json rewrite changed the live SettingsManager.
+          const settings = typeof pi.getSettings === 'function' ? pi.getSettings() : initialNativeSettings;
+          runtimeSettings = { version: piCodingAgent.VERSION, compaction: settings.compaction ?? {} };
+        }
+      } catch {
+        code = mutationStarted ? 'APPLY_FAILED' : 'INVALID_PAYLOAD';
+      }
+      // RPC prompt swallows extension command exceptions. The host must see an
+      // explicit, nonce-bound receipt before accepting a refreshed catalog.
+      try {
+        await ctx.ui.input('cindy:provider-refresh-ack', JSON.stringify(
+          code ? { nonce, ok: false, code } : { nonce, ok: true, runtimeSettings },
+        ));
+      } catch { /* A missing receipt forces the host to retire this process. */ }
+    },
+  });
   if (!currentPermissionState().reviewOnly) registerCindyQuestionTool(pi);
-  pi.on('before_provider_request', (event, ctx) => astraResponsesPayload(event.payload, ctx.model));
+  pi.on('before_provider_request', async (event, ctx) => {
+    const payload = astraResponsesPayload(event.payload, ctx.model) ?? event.payload;
+    return (await nativeFastPayload(payload, ctx.model, ctx)) ?? payload;
+  });
   const mcpGateway = new CindyMcpGateway();
   // bash 隔离 home 经 resolveBashPackageHome 解析(首次加载读删 + 防篡改 stash,
   // 扩展重载(#3070)经双重验证取回,而不是拿到 undefined 让 bash 永久 fail-closed)。

@@ -94,7 +94,7 @@ describe('Usage History model colors', () => {
       </>,
     );
     const mark = view.container.querySelector<HTMLElement>(
-      'button[title^="2026-09-09"] [data-usage-mark]',
+      'button[data-day="2026-09-09"] [data-usage-mark]',
     )!;
     expect(mark.children).toHaveLength(35);
     expect(mark.style.height).toBe('96px');
@@ -158,7 +158,7 @@ describe('Usage History model colors', () => {
         <UsageModelTable rows={[row]} colorOrder={colorOrder} rangeLabel="day" />
       </>,
     );
-    const mark = view.container.querySelector('button[title^="2026-09-08"] [data-usage-mark]')!;
+    const mark = view.container.querySelector('button[data-day="2026-09-08"] [data-usage-mark]')!;
     const segment = mark.firstElementChild as HTMLElement;
     const swatch = view.getByText('second').previousElementSibling as HTMLElement;
     expect(segment.style.backgroundColor).toBe('var(--usage-model-2)');

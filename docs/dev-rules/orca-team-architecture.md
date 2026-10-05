@@ -51,6 +51,7 @@ Orca 是 Cindy Desktop 内的多 agent 协同能力：一个 **Lead session** �
 - workflow_run / CC Workflow 编排还未纳入当前实现。
 - side_chat 尚未登记为 side activity 对象，也未挂进 pane；PR #107 只是 fork 数据动作。
 - device-link 协同的 Lead / Worker / team 全部在被控端进程内编排，控制端只按 session 来源经隧道路由（`makerTransport` 的 `makerApiFor` / `orcaWorkflowsFor` / `subscribeOrcaWorkerChanged`，channel 见 `packages/device-link/src/allowlist.ts` 的 Orca 段）。collab 开关同样查被控端（`maker:plugins:get-state` 经 `pluginEnableStateFor`）：项目读取被控端项目级策略，对话读取被控端用户级/全局级策略。控制端本机状态不能代表被控端真相。老被控端没有该 channel 时回 `CHANNEL_NOT_ALLOWED`，控制端 fail-closed 置灰入口并提示设备版本过旧，而不是放行到 `enableOrca` 才撞错。
+- 手机端是同一套 device-link 控制端：Lead / Worker 任务与普通任务一样可操作（发消息、处理确认、编辑队列、Fork / Rewind、任务设置），协同编排经 `apps/mobile/src/device-link/mobileMakerTransport.ts` 的 `orca` 组走与桌面控制端相同的 channel（开启 / 创建 / 确认完成 / 归档 / 结束、Worker 列表、协同设置只读）；「焦点」只决定电脑端协同面板展开哪个 Worker，手机上既不展示也不提供切换。入口判定、超时回查与错误文案在 `apps/mobile/src/session/orcaTeam.ts`，会话页与新建任务页的状态在 `useSessionOrcaCollab.ts`。新建任务开启协同不走二段派单：createSession 后、首条消息入队前即时 `enable-orca`，Worker 任务按 `buildDraftWorkerInitialTask` 附带待发送的 Lead 输入作为上下文；失败时任务照单任务继续并在会话页提示。协同设置（Worker 上限、空闲释放）在手机上只读。「创建 Worker」的记忆规则与桌面 `workerCreationPrefs` 一致（上次的 Agent、每个 Agent 的模型 / 推理强度 / Fast、Worker 权限；初始任务不记；首次默认值共用 `@cindy/maker-shared/orca-team`），与桌面控制端一样存在发起创建的一端（`apps/mobile/src/session/orcaWorkerPrefs.ts`，按账号隔离），不读写被控端偏好；记住的模型不在该电脑可用列表时回落被控端默认。
 - SSH 远端协同支持 Claude Code、Codex 与 Pi Lead / Worker；Worker 继承 Lead 的 `remoteHostId` 与远端工作目录，在同一台远端主机执行，启动前复用远端就绪检查。cc 远端经 `cc-remote-mcp.ts` 把 `cindy_orca` / `orca_worker_bridge` 以 http 形态追加进 `startParams.mcpServers`（persistent token + `?session=` 路由，白名单仅此两个 server）。远端 worker 手动 `send_to_lead` 依赖 daemon 侧 `orca_worker_bridge` 经同一 bridge 可达；auto-bridge 回报不依赖 worker 侧 MCP，天然可用。Claude Code / Codex 共享 userData 多实例连同一远端 host 时，只有先建立 SSH 转发的实例能持有该 host 的 MCP bridge 端口，其余实例按“远端无 MCP”降级（与历史行为一致）。远端会话的项目级 collab 开关不查本机 fs；`assertCollabProjectEnabled` 对 remote 只查用户级/全局级开关，远端项目级配置机制是 follow-up。
 
 Pi 的远端 Lead 沿用统一的 Lead 身份与 prompt 装配；内部 MCP（含 `cindy_orca`、
@@ -289,6 +290,8 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
 3. **queued accepted 也要同样结算（状态：不变量）**<br>
    如果 inter-agent 消息进入队列，accepted callback 必须与直发路径保持同样的 settle / rollback / discard 语义，避免 auto-bridge pending 泄漏。accepted 只表示临时接管 worker 的 running／auto-bridge／manual-interrupt 身份；只有 vendor dispatch 成功后才 commit。直发／恢复路径 accepted 后若因 `SESSION_RUNNING` 转回排队，必须先 rollback 本次临时接管，再等待下一次 accepted；accepted 生命周期函数自身失败则必须回滚并取消 vendor dispatch，不能让普通 callback 异常被吞后留下半套状态。旧 terminal 若撞上这个窗口，必须先释放 worker transition 锁，再等 commit／rollback：commit 后旧 terminal 作废，rollback 后恢复旧身份并继续最终收口；不得持锁等待 settlement；rollback 也不得覆盖 provisional 期间产生的更新 manual-interrupt 标记。若 Stop 在 provisional 窗口写入了更新标记，rollback settlement 必须携带最终保留的 manual identity，等待中的旧 terminal 重绑该 identity 后再收口，不能继续拿最初快照把自己判 stale。实现指针：`orcaInterAgentDispatcher.ts` 的 queued accepted callback API、`orcaTeamService.ts` 的 provisional dispatch settlement，以及 `register.ts` 的 `AgentInputCoordinator` callbacks。
 
+   Host 为插件 Worker 的首次输入传入调用内来源复核时，直发与排队后的 accepted 均沿现有回调检查；任务接收的异步生命周期更新前后都要复核。就绪消息也使用同一来源复核并以 `AcceptedCallbackDispatchCancelled` 拒绝派发，不能让普通 callback 错误被吞后继续执行。直接拒绝后再由 lifecycle 清理本次新 Worker，不在 send／transition 锁内关闭 Session；排队后迟到的拒绝只取消该输入和本次 provisional 状态，保留 Worker。普通发送错误仍沿原有返回语义。此回调不是跨重启或跨工具执行的权限事务。
+
 4. **worker 主动回报会结清自动回报态（状态：不变量）**<br>
    worker 主动 `send_to_lead` 一旦入队或 accepted，就必须清掉该 worker 的 auto-bridge pending，防止 Lead 同时收到手动回报和 auto-bridge 双份结果。实现指针：`orca-bridge-mcp.ts` 的 `send_to_lead` tool handler，以及 `orcaTeamService.ts` 的 `clearAutoBridgeState` / `clearRuntimeState`。
 
@@ -332,6 +335,9 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 
 8. **被同 turn 收尾拒绝的 done 确认必须在 terminal 边界补收口（状态：不变量）**
    worker 的回报 settle（`send_to_lead` 被接受/入队）会先把持久化状态置 `done`，而 worker 自己的 turn 可能还在收尾；renderer「看到 done 即 ack」此时会被 active-turn / send 锁守卫以 `WORKER_STATE_CHANGED` 拒绝。被这两类守卫拒绝的确认必须登记下来，在该 turn 的 `handleWorkerTerminalTurn` done 分支重试一次（fire-once，重试失败不重登记）；新 turn 开始（`handleWorkerTurnStarted`）必须作废登记。没有登记过的 done 不得在 terminal 边界自动收口——`done` 的产品语义是「保持到用户看到为止」。实现指针：`orcaTeamService.ts` 的 `deferredDoneAcknowledgements`、`idleWorker`、`handleWorkerTurnStarted`、`handleWorkerTerminalTurn`。
+
+9. **Lead 的完成以团队收口为准（状态：不变量）**
+   Lead 派完活结束本轮时，团队仍在干活，这一轮不是完成：灵动岛保持 Lead 为运行中（不出完成卡片、不响完成音、不记未读），Work Louder 键盘、侧栏卡片与远程会话列表读同一份活动快照，因此一起保持运行中；renderer 不发完成通知（桌面／手机／飞书）、不亮完成角标。Worker 回报送达后 Lead 被唤起，那一轮的 done 才是团队完成。判据只有一份，在 Main：以「仍有 accepted 派活欠 Lead 回报」（auto-bridge pending）为准，最后一份回报送达或被丢弃（手动停止、归档等）时，若 Lead 空闲则补发被推迟的完成；renderer 不自行推算 Worker 状态，完成去抖落地时读灵动岛活动快照，Main 仍把该会话保持为 `running` 就不算完成（暂停的输入队列同样会让灵动岛保持运行中，但保留原有完成提醒，故排除）。Worker 自身仍不进灵动岛、不单独发通知。已知边界（刻意不处理，保持简单）：派给正忙 Worker、尚在其队列里未被接收的任务还没有待回报记录（Worker 正忙通常意味着已有同一 Lead 的待回报记录）；静默完成（如静默的自动运行）不走推迟，Lead 活动会直接变为完成。实现指针：`orcaTeamService.ts` 的 `hasPendingWorkerReports` / `deletePendingReport` / `onLeadWorkerReportsSettled`，`register.ts` 的 `setCompletionDeferResolver` 与 `onLeadWorkerReportsSettled` wiring，`agent-island/service.ts` 的 `notifyQueueEmptied`，renderer `state/agentIslandActivity.ts` 的 `isSessionCompletionHeldByAgentIsland` 与 `useSessionRunningStatus.ts` 的 done debounce。
 
 ### 测试与回归清单
 

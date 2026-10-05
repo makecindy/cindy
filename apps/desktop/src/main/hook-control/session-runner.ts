@@ -75,6 +75,7 @@ import {
 } from '../maker-ipc/agentHandoff.js';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.js';
 import { summarizeOpenPlan, buildPlanReconcileNote } from '../maker-ipc/planReconcile.js';
+import { peekGoalInactiveNote } from '../goal-host/inactiveNote.js';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
 import { enqueueDurableWrite } from '../messagePersistBroadcaster.js';
 import { toDesktopSessionDispatchOutcome } from '../maker-host/send-outcome.js';
@@ -109,6 +110,8 @@ import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInter
 import { observeHookTurn, type HookTurnObserver } from './turnObserver.js';
 import { bindRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
 import { beginGroupHistoryAccess } from '../im/shared/groupHistoryAccess.js';
+import { describeInteractionSource } from '../im/shared/interactionSource';
+import { groupLaneOf } from './groupWindow';
 
 import type {
   HookContinuationWatchRequest,
@@ -123,6 +126,8 @@ import {
   registerHookInteraction,
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
+import { getResolvedMainLocale } from '../i18n.js';
+import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 
 type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
 
@@ -778,7 +783,7 @@ export function createMakerHookSessionRunner(deps: {
       // 前向引用: 交互回调只在 turn 跑起来之后才可能被调用, 那时 observer 已就位。
       // 用它给过程区挂「等待授权」, 不新增任何渠道消息。
       let activeObserver: HookTurnObserver | null = null;
-      const handleHookInteraction: InteractionHandler = async (ireq) => {
+      const handleHookInteraction: InteractionHandler = async (ireq, sharedPermission) => {
         if (req.onInteraction) {
           const sendCard = req.onInteraction;
           const sendCancel = req.onInteractionCancel;
@@ -804,7 +809,6 @@ export function createMakerHookSessionRunner(deps: {
             return { kind: 'ask_user_question', answers: {} };
           }
           ownInteractionIds.add(ireq.requestId);
-          sendCard({ interactionId: ireq.requestId, ...composed.card });
           // 等授权期间没有任何 agent 事件 —— 渠道那条进度消息会彻底静止, 而卡片
           // 可能根本不在这个会话里(Telegram 群里的授权卡改投宿主私聊)。挂一行状态,
           // 收口后摘掉; 全程只改已经在发的那条快照, 不新增群消息。
@@ -812,11 +816,14 @@ export function createMakerHookSessionRunner(deps: {
           activeObserver?.markInteractionBoundary();
           activeObserver?.setNotice(awaitingInteractionNotice(ireq.kind));
           try {
-            const decision = await registerHookInteraction({
+            const pendingDecision = registerHookInteraction({
+              sharedPermission,
               interactionId: ireq.requestId,
               composed,
               onFallback: (reason) => sendCancel?.(ireq.requestId, reason),
             });
+            sendCard({ interactionId: ireq.requestId, ...composed.card });
+            const decision = await pendingDecision;
             ownInteractionIds.delete(ireq.requestId);
             return decision;
           } finally {
@@ -916,6 +923,7 @@ export function createMakerHookSessionRunner(deps: {
         kind: 'scheduler',
         scheduleId: `hook:${req.origin.connectionId}`,
         scheduleName: `Hook · ${req.origin.connectionName}`,
+        ...(req.source?.im ? { surface: 'im' as const } : {}),
       } as const;
 
       // 入站附件: 解码后图片/文件分流(server 2026-07 起全 MIME 转发) ->
@@ -1045,7 +1053,7 @@ export function createMakerHookSessionRunner(deps: {
       // 渲染层展示的用户消息保持来源 IM 原话。逐 turn 追加固定文本,教模型
       // 用 xdt-file 引用回传文件而非误用 cindy_feishu_bot(规则 9,实踩背景
       // 见 outbound.ts 的常量注释)。
-      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}`;
+      const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`;
       let replacementHandoff: string | null = null;
       if (req.isNew && req.replacementOfSessionId && req.source?.im === 'slack') {
         try {
@@ -1157,9 +1165,16 @@ export function createMakerHookSessionRunner(deps: {
             return null;
           }
         })() : null;
-        const outgoingMessage: UserMessage = planReconcileNote
+        const withPlanReconcile: UserMessage = planReconcileNote
           ? (prependNoteToWireUserMessage(withHandoff, planReconcileNote) as UserMessage)
           : withHandoff;
+        // 目标状态说明:与 makerSendTransaction 同语义,读库失败静默跳过。
+        const goalInactiveNote = await enqueueDurableWrite(`goal-inactive-read:${session.id}`, () =>
+          peekGoalInactiveNote(session.id),
+        ).catch(() => null);
+        const outgoingMessage: UserMessage = goalInactiveNote
+          ? (prependNoteToWireUserMessage(withPlanReconcile, goalInactiveNote) as UserMessage)
+          : withPlanReconcile;
         const trustedChannelOrigin = mainOwnedChannelOrigin(req.source?.im);
         const sendResult = await session.send(outgoingMessage, {
           origin,
@@ -1206,6 +1221,23 @@ export function createMakerHookSessionRunner(deps: {
                 turnId: randomUUID(),
                 origin: routeOrigin,
                 interactionSurface: req.onInteraction ? 'channel-card' : 'headless',
+                sourceDescription: describeInteractionSource({
+                  channelName: req.source?.im ?? req.origin.connectionName,
+                  chatId: req.source?.channelName ?? req.title ?? req.source?.im ?? 'IM',
+                  text: req.source?.userText ?? '',
+                  interactionSource: {
+                    senderName: req.source?.threadContext?.find((message) =>
+                      message.messageId === req.source?.triggerMessageId && !!message.messageId)?.author,
+                    ...(() => {
+                      const lane = groupLaneOf(req.origin.externalKey);
+                      const id = req.source?.triggerMessageId;
+                      return lane && /^-100\d+$/.test(lane.chatId) && id && /^\d+$/.test(id)
+                        ? { messageUrl: `https://t.me/c/${lane.chatId.slice(4)}/${id}`,
+                            ...(lane.threadId ? { threadName: lane.threadId } : {}) }
+                        : {};
+                    })(),
+                  },
+                }),
               },
               handle: handleHookInteraction,
               onCancel: (requestId) => {

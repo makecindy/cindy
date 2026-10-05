@@ -1,3 +1,4 @@
+import { botTaskResultKey, readBotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { extractRenderedMarkdownImageTargets } from '@/components/chat/markdownImageTargets';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import type { ChatMessage } from '@/lib/makerChatStore';
@@ -27,6 +28,11 @@ function publicItems(items: readonly RenderItem[]): RenderItem[] {
     const children = publicItems(item.children) as WorkGroupChildItem[];
     return children;
   });
+}
+
+function expandWorkGroups(items: readonly RenderItem[]): RenderItem[] {
+  return items.flatMap((item): RenderItem[] =>
+    item.type === 'work_group' ? expandWorkGroups(item.children) : [item]);
 }
 
 /** A presentation-only projection. Never mutate messages or infer intent from prose.
@@ -61,7 +67,14 @@ export function simplifyBotRenderItems(
     else if (end !== null) previousEnd = previousEnd === null ? end : Math.max(previousEnd, end);
   }
   result.push(...projectWindow(window, isStreaming, visibleGeneratedFileKeys));
-  return result;
+  const attached = new Set(result.flatMap(item => item.type === 'message'
+    && item.message.role === 'assistant' && item.message.turnCompleted === true && item.message.content.trim()
+    ? (item.message.botTaskResults ?? []).map(botTaskResultKey) : []));
+  return result.filter(item => {
+    if (item.type !== 'message' || item.message.systemCardType !== 'bot-session-task-result') return true;
+    const card = readBotCollaborationMeta(item.message.systemCardData);
+    return !card?.result || !attached.has(botTaskResultKey(card));
+  });
 }
 
 function projectWindow(
@@ -69,13 +82,14 @@ function projectWindow(
   isStreaming: boolean,
   visibleGeneratedFileKeys?: ReadonlySet<string>,
 ): RenderItem[] {
-  // groupWorkRuns leaves every contiguous block of a sealed answer outside its
-  // work group. Only the last block carries the seal. Capture that run before
-  // unwrapping groups/removing thinking, which must remain answer boundaries.
+  // A sealed answer may span several contiguous prose blocks; only the last carries
+  // the seal. groupWorkRuns folds earlier background-wake seals into work groups, so
+  // scan the expanded sequence while tools and thinking still act as boundaries.
+  const expanded = expandWorkGroups(items);
   const sealedAnswers = new Set<ChatMessage>();
   let sealedRun = false;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
+  for (let index = expanded.length - 1; index >= 0; index -= 1) {
+    const item = expanded[index];
     if (!isProse(item) || !item.message.content.trim()) {
       sealedRun = false;
       continue;
@@ -93,6 +107,7 @@ function projectWindow(
       if (isProse(item) && item.message.content.trim()) lastProse = index;
       if ((isProse(item) && (hasAttachments(item.message)
         || extractRenderedMarkdownImageTargets(item.message.content).length > 0))
+        || (item.type === 'message' && item.message.systemCardType === 'bot-session-task-result')
         || (item.type === 'generated_files' && visibleGeneratedFileKeys?.has(item.key))
         || (item.type === 'tool_media' && item.items.length > 0)
         || (item.type === 'ghost_card' && (item.settled || Boolean(item.media?.length)))) {

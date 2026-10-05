@@ -42,6 +42,55 @@
 - 测试只使用明显无效的假凭证，不读取或复制开发者真实的 `HOME`、Agent home、
   Electron userData 或系统凭证目录。
 
+## Claude 订阅只经 Claude Code 自己的登录
+
+Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**；第三方应用不得提供
+Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此只做内置 CLI 的外壳：
+
+- 登录只拉起内置 CLI 的 `claude auth login --claudeai`，登录态只读
+  `claude auth status --json`。凭证留在 CLI 默认凭证库（macOS 钥匙串 / `~/.claude`），
+  Cindy 不读取、不复制、不刷新它。CLI 按配置目录区分凭证库，所以本机 CLI 的会话（任何来源）
+  与登录检查都不得设 `CLAUDE_CONFIG_DIR`（dev 多实例也用默认目录），否则会看不到本机已有的
+  Claude Code 登录；SSH 远端的配置目录由远端 cc-manager 自己管理，不在此列。
+  只有 Claude.ai 订阅账号的 OAuth 登录算「Claude 订阅」；CLI 用 Console 账号、API Key、
+  apiKeyHelper、中转 token 或第三方云登录时按 `not_a_subscription` 处理，也不替用户改 CLI 的登录。
+- 登录态读取不得阻塞与订阅无关的路径：启动只在已连接时等待，列表类读取用缓存并后台刷新，
+  读失败有退避。
+- 订阅会话由 SDK 拉起同一个 CLI，自己读凭证、直连 Anthropic：不设 `ANTHROPIC_BASE_URL`、
+  不设 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`、不注入任何 token；认证 env 中的凭证键在
+  合并后一律剥除（maker-core env-builder `nativeCliAuth`）。Host 只可补代理 env：代理 env
+  给的 HTTP 代理原样继承；系统代理或 SOCKS5 时 `HTTPS_PROXY` 指向本机只接受 CONNECT 的回环
+  端口，它对每个目标重新按系统代理 / PAC 决定直连或走代理（env 作用于整棵进程树，含 Bash
+  工具里的 git / npm，内网例外必须照旧直连），明文 HTTP 不下发代理。都是 TCP 隧道，TLS
+  端到端，代理、转发端口与 Cindy 都看不到凭证。
+- 订阅会话不设 host 接管标记，CLI 会直接应用工作区 `.claude/settings.json` /
+  `settings.local.json` 的 env（SDK 模式没有工作区信任确认，也不像 Claude Desktop 那样剥掉
+  项目级上游 / 鉴权键）。所以对 CLI 实际加载的项目级设置（工作目录的两份文件，加上主仓库
+  根目录的 `settings.local.json`）设闸（maker-core `workspace-settings-guard`）：
+  - 每次拉起 CLI 进程前（含会话中途重建）命中就拒绝启动；
+  - 会话运行中，任何设置变更（ConfigChange hook）与 Cindy 触发的 flag settings 应用（切模型 /
+    effort / fast）前都整体复查；命中即判会话已污染，阻止这次变更并结束当前 CLI 进程——被拒
+    的文件还在磁盘上，CLI 之后任何一次全量重读都会读到它，不能只拦一次；
+  - 订阅会话禁用 EnterWorktree（它会把项目根挪到未检查、也不被 watcher 监视的目录）；
+  - 解析不了的文件按命中处理（读不懂不等于 CLI 不应用）。
+  命中范围是改写上游、鉴权或 TLS 信任的键，代理、模型、权限与 hooks 不拦。
+- 未指定来源的会话：有网关 key 走网关；没有时只有 Anthropic 一方模型交给本机登录，其它模型
+  仍经 loopback proxy 按模型路由。loopback proxy 从不转发订阅流量：显式订阅会话或无 Cindy
+  凭证的 claude-* 请求到了 proxy 一律本地拒绝。
+- 订阅只对本机 `claude-code` 开放：Codex / Pi 不列订阅模型，Codex 显式选中时本地拒绝；
+  SSH 远端、辅助 one-shot（标题、自动复核等）不使用订阅。订阅会话的子代理请求同样由 CLI
+  直连，只注入 Anthropic 一方的子代理模型覆写。
+- 「断开」只撤销 Cindy 的使用许可（`nativeProviderAuthBinding`），不登出 CLI。
+  旧版独立 Claude 账号已停用，但不删除其已存凭证。
+- 套餐余量由内置 CLI 的 `get_usage` 控制请求查询（CLI 用自己的登录发请求，拉起时不读
+  项目级设置、不起 MCP、不落会话记录），会话内的 SDK `rate_limit_event` 做增量刷新；
+  模型列表来自 SDK `supportedModels` 与 Registry；
+  不得为此恢复用订阅 token 直接调用 Anthropic API。
+- 实现见 [claude-native-cli.ts](../../apps/desktop/src/main/maker-host/claude-native-cli.ts)、
+  [env-builder.ts](../../packages/maker-core/src/agents/claude-code/env-builder.ts)；回归见
+  [claudeAuthAdapterOAuthEnv.test.ts](../../apps/desktop/src/main/maker-host/__tests__/claudeAuthAdapterOAuthEnv.test.ts)
+  与 [env-builder.test.ts](../../packages/maker-core/src/agents/claude-code/__tests__/env-builder.test.ts)。
+
 ## Linux Hyprland / Omarchy 凭证后端
 
 - Desktop 在 Electron `ready` 之前为 Hyprland 默认选择 `gnome-libsecret`，避免桌面
@@ -130,3 +179,35 @@
 [`desktop-development.md`](desktop-development.md) 或
 [`mobile-development.md`](mobile-development.md) 选择，并为路径回退、清理和秘密不外泄补
 定向测试。
+
+
+## Cindy 托管的预装技能
+
+内置技能字节仍在 Cindy 的 `shared-system-skills` 中随应用版本管理，当前实例在
+`<userData>/managed-agent-skills/cindy` 中建立私有入口。三套 Harness 分别通过本地
+Claude plugin、Cindy 的 `CODEX_HOME/skills`、Pi 显式 `--skill` 加载；不再安装到
+`~/.agents/skills` 或 `~/.claude/skills`。存量插件技能使用账号隔离的
+`<ghost-install-state>/agent-skills`，继续只指向已批准快照。
+
+运行期清单来自已验证的内置描述符与插件批准快照，不扫描私有投影目录中的占位内容。
+三套 Harness 均加载核验后的物理来源；Codex 在默认及独立账号的 `CODEX_HOME` 中
+逐个挂载这些技能，每次本地任务启动（包括复用 app-server）都刷新实际 home 的入口，
+并通过原生 `skills/list forceReload` 清除旧发现缓存；刷新失败则不提交新线程。
+投影函数统一要求每个托管来源为已建立或保持正确链接；缺失、冲突、扫描环及 I/O 错误
+直接抛出，默认账号、独立账号和复用进程均不能把 warning 当作成功。用户技能兼容根
+仍保留原有 warning 行为，用户实体目录及外来链接不被覆盖。
+不将整个私有目录交给扫描器。Bot 的路径授权与
+Claude/Pi 最终加载使用同一物理来源，目录别名重指不能替换已授权的技能。
+Codex Bot 在刷新原生技能清单后，按启动时冻结的物理路径授权生成线程级开关；
+刷新中新出现或未成功核验的技能默认禁用，无法定位路径的发现错误阻止线程启动。
+
+Pi 将筛选后的物理来源链接到现有会话配置目录内，通过单个 `--skill` 目录参数交给
+原生加载器；技能数量不会增加启动参数长度，`--no-skills` 的 Bot 白名单仍生效。
+入口随会话配置目录一起回收；技能发现、路径解析和建链失败均走同一既有启动失败清理，撤销 MCP 会话路由与
+权限临时文件，不新增全局目录或独立清理机制。
+
+Claude 的插件技能不受 `skillOverrides` 控制，因此每个本地 Query 只将已启用且
+符合 Bot 白名单的技能链接到临时插件入口；关闭 Query 时回收入口，源文件不变。
+
+升级清理只删除可确认由 Cindy 创建的旧软链接，不删除目标内容、不覆盖用户同名
+技能、不修改 Git ignore。旧版本 Cindy 实例仍可能重建旧链接，这是迁移的已知边界。

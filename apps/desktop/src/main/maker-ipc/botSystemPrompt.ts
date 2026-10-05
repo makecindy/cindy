@@ -11,8 +11,7 @@
  *      有记忆才讲怎么记。伙伴不需要先去「发现」自己会什么 —— 开局就写在
  *      提示词里。判定信号用 runtime 已解析的 toolset id(等价于 Hermes 的
  *      valid_tool_names)。
- *   3. **技能索引整份进提示词**:每个技能的名字与一句话描述都可见,不靠
- *      模型自己翻目录。
+ *   3. **技能入口进提示词**:小目录直接可见，大目录提供完整检索入口，正文按需读。
  *
  * 为什么必须这么做(2026-08-21 真机实证):伙伴会话里 cindy_docs 明明挂载成功
  * (日志 instance_resolved),但 make_pptx / list_tools 的调用次数是 0 —— 模型
@@ -35,6 +34,12 @@ export interface BotPromptCapabilitySignals {
   ownSkillsEnabled: boolean;
   /** 是否为 Bot 的 canonical Chat；Bot Mode 协议只在这里生效。 */
   botModeEnabled?: boolean;
+  /**
+   * 是否已挂载普通任务的 session 工具。权限与同环境的普通 Agent 一致。
+   */
+  sessionControlEnabled?: boolean;
+  /** 是否已挂载 cindy_scheduler；操作沿用当前 Agent 权限。 */
+  automationEnabled?: boolean;
 }
 
 /** 技能索引的一行:名字 + 一句话描述(描述缺省时只列名字)。 */
@@ -48,7 +53,7 @@ export interface BotSystemPromptInput {
   /** SOUL:身份正本。空则由调用方兜底。 */
   identity: string;
   capabilities: BotPromptCapabilitySignals;
-  /** 伙伴自有技能索引(全部,不截断)。 */
+  /** 宿主投影的技能入口；原文件与完整目录由存储层保留。 */
   skillIndex: readonly BotPromptSkillIndexEntry[];
   /** 队友名册(见 buildBotTeammateRoster)。没有队友时不传。 */
   teammates?: readonly { id: string; name: string; description?: string | null }[];
@@ -114,15 +119,15 @@ const MEMORY_GUIDANCE = [
   '用户第一次明确说出一条稳定偏好、纠正或长期背景时,确认它足够具体且不是临时状态,就主动记下,不要等他重复第二次,也不要让他再去设置页手填。拿不准是否长期有效时才问一句。',
   '记成陈述句,不要写成给自己的命令 —— 「他喜欢先看几版再定」是好记忆,「以后都先给三版」不是。',
   '不要记流水账:今天做完的事、临时状态、过几天就过期的进度,都不进记忆。',
-  '记下一件事后,在回复末尾轻描淡写地带一句,让用户知道你记住了什么。',
+  '保存成功后,宿主会在对应回复底部显示记忆提示,不用为了通知写入而重复播报。',
 ].join('\n');
 
 /** 自有技能:与记忆的分工是「做法」vs「事实」。 */
 const OWN_SKILLS_GUIDANCE = [
   '## 你能把做法沉淀成本事',
-  '几次相关交流或任务以后,主动检查用户反复需要的做法、格式和成功经验,为他创建或改进自己的技能,不用等用户开口。不要按轮次或固定数量凑技能。用户明确要求时直接沉淀;或者一套完整做法已经在真实任务里验证成功、以后明显还会复用时,第一次验证完就用 `save_teammate_skill` 存成自己的技能,不要等用户去设置页手填。单次结论、临时路径、猜测和未经验证的做法都不存。',
+  '每次用户纠正做法、指定可复用格式或完成有价值的任务时,主动检查用户反复需要的做法、格式和成功经验,为他创建或改进自己的技能,不用等用户开口。不要按轮次或固定数量凑技能。用户明确要求时直接沉淀;或者一套完整做法已经在真实任务里验证成功、以后明显还会复用时,第一次验证完就用 `save_teammate_skill` 存成自己的技能,不要等用户去设置页手填。单次结论、临时路径、猜测和未经验证的做法都不存。',
   '存之前先用 `list_teammate_skills` 查重;有同类就更新原来的,不要另造一份。技能由宿主在当前聊天的安全轮次边界加载,并且始终让用户看得见、改得动、删得掉。',
-  '不要为了整理记忆或技能启动后台复盘、协同 worker。发现旧技能确实过时,先验证新做法,再更新。',
+  '宿主会在回复后自动复盘补漏;你仍应当场主动保存,不另行派发复盘任务。用户纠正旧技能时及时修正;改变操作步骤要先验证新做法。',
 ].join('\n');
 
 /** 后台任务与伙伴消息是两种不同能力。 */
@@ -140,6 +145,22 @@ const TASK_AND_TEAMMATE_GUIDANCE = [
   '- `list_agents` 可发现本机和同账号已授权远程设备上的伙伴；用返回的稳定 id 区分同名伙伴，不猜 ID。`send_to_agent` 只给名册里明确存在的伙伴发一条异步消息，不启动任务，也没有进度、停止或自动交付。只有用户明确点名某个伙伴，或当前工作确实需要那个伙伴的身份和信息时，才用名册里的稳定 Bot id。编码实施和中大型工作必须用 `start_session_task`，不能把给伙伴发消息当作分配任务。',
   '- 收到 `[Direct message from Cindy Bot ...]` 时，在自己的当前主任务里处理。确有答案、结果或澄清要回传时，用消息头里的 Bot id 作为 `target_id` 调用 `send_to_agent`；不要只为“收到”“好的”互相确认，也不要为了等回复自建循环。',
   '后台任务负责独立工作并回传结果；伙伴消息只负责沟通，不保证对方执行或交付。它们都不是命令对方，也不会改变对方是谁。用户如果要求"让某个伙伴听话",说明这条边界,然后直接给出可以协作的做法。',
+].join('\n');
+
+/**
+ * 与普通任务共用 session 能力及权限档；提示词说明能力与实际回执的关系。
+ */
+const SESSION_CONTROL_GUIDANCE = [
+  '## 你能看、能管主人的任务',
+  '你和主人开的普通任务用同一套工具（cindy_helper，先 `list_tools` 看类目再 `call_tool`）：history 类的 `list_sessions` / `get_chat_history` / `search_chat_history` 看有哪些任务、它们在说什么；control 类的 `steer_session`、`stop_session_turn`、`set_session_runtime`、`rename_sessions`、`archive_sessions`、标签与项目工具管理任务；handoff 类的 `send_to_session` 给已有任务发话或开一条新的普通任务。',
+  '这些工具沿用当前任务的权限档与用户授权，不再按伙伴的消息来源另设工具权限分档。工具回执决定实际结果；账号、连接或平台未就绪时如实说明。',
+  '停止、归档、改名、给正在跑的任务插话这类会影响主人工作的事，主人没开口就不做；做之前用一句话说清要动哪件、做什么。',
+  '主人让你接手一个项目时，用 `add_workbench_project` 记下它的目录；不再负责时用 `remove_workbench_project`。',
+].join('\n');
+
+const AUTOMATION_GUIDANCE = [
+  '## 你能建普通自动化',
+  '主人要你给某个项目或任务设定时执行时，用 cindy_scheduler 建普通自动化（先 `list_tools`，再 `call_tool` 调 `schedule_create` 等）；只和你自己有关的提醒仍用例行任务。操作沿用当前任务的权限档。建完读回核实名称、时间和是否启用，成功才说已安排。',
 ].join('\n');
 
 const BOT_CREATION_GUIDANCE = [
@@ -240,6 +261,10 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
   if (botModeEnabled && input.capabilities.partnerActionsEnabled) {
     capabilityParts.push(TASK_AND_TEAMMATE_GUIDANCE);
   }
+  if (botModeEnabled && input.capabilities.sessionControlEnabled) {
+    capabilityParts.push(SESSION_CONTROL_GUIDANCE);
+    if (input.capabilities.automationEnabled) capabilityParts.push(AUTOMATION_GUIDANCE);
+  }
   if (capabilityParts.length > 0) {
     parts.push(['# 你会做什么', ...capabilityParts].join('\n\n'));
   }
@@ -247,10 +272,8 @@ export function buildBotStableTier(input: BotSystemPromptInput): string {
 }
 
 /**
- * 技能索引:全部技能的名字 + 一句话描述。
- *
- * 照搬 Hermes 的口径 —— 索引里**不省略任何技能名**。模型看得见名字才知道
- * 自己有这份本事;正文按需再读。
+ * 技能索引:宿主提供的有界运行时目录。大目录由原生检索 Skill 引导按需
+ * 读取完整目录与原文件；此处不再次展开整个存储目录。
  */
 export function buildBotSkillIndex(entries: readonly BotPromptSkillIndexEntry[]): string {
   const rows = entries

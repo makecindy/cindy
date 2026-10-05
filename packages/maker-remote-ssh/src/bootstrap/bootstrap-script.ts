@@ -25,7 +25,7 @@
  *   ALREADY_INSTALLED <version> (agent sentinel valid; skip install)
  *   INSTALL_START <package-or-installer>
  *                               (claude-code: npm package name;
- *                                codex: 'codex-standalone' — official curl install.sh)
+ *                                codex: 'codex-package' — official curl install.sh)
  *   INSTALL_LOG <line>          (relayed npm / curl / install.sh line, may repeat)
  *   INSTALL_DONE
  *   READY <version>             (final terminal-success; binary verified)
@@ -131,13 +131,30 @@ export const NODE_DIST_BASE_URL_DEFAULT = 'https://nodejs.org/dist';
 export const CODEX_RELEASE_INSTALLER_URL_BASE = 'https://github.com/openai/codex/releases/download';
 export const CODEX_LATEST_INSTALLER_URL = 'https://chatgpt.com/codex/install.sh';
 
+/** Shared by probe and bootstrap. Legacy standalone and incomplete packages
+ * need an upgrade, even when --version runs. The official installer preserves
+ * current/codex -> bin/codex for existing callers. */
+export const VERIFY_CODEX_LAYOUT_SH = String.raw`verify_codex_layout() {
+  local root
+  root="$(dirname "$BIN_PATH")"
+  [ -f "$root/codex-package.json" ] &&
+    [ -x "$root/bin/codex" ] &&
+    [ -x "$root/bin/codex-code-mode-host" ] &&
+    [ -x "$root/codex-path/rg" ] &&
+    [ -d "$root/codex-resources" ] || return 1
+  if [ "$(uname -s)" = "Linux" ]; then
+    [ -x "$root/codex-resources/bwrap" ] || return 1
+  fi
+}
+`;
+
 /**
  * Bash script. Args:
  *   $1 = agentKind (claude-code | codex)
  *   $2 = serverVersion (matches REMOTE_SERVER_SCHEMA_VERSION; reserved for future bumps)
  *   $3 = bundled node version (BUNDLED_NODE_VERSION)
  *   $4 = node dist base URL (NODE_DIST_BASE_URL_DEFAULT)
- *   $5 = codex release version (tools/codex/latest.json pin; codex only)
+ *   $5 = codex release version (tools/codex-package/latest.json pin; codex only)
  *   $6 = Claude Code version (tools/claude/latest.json pin; claude-code only)
  *
  * The version + URL are passed as args (not hardcoded) so a host-side
@@ -158,8 +175,8 @@ emit() { printf '%s\n' "$*"; }
 
 # Per-agent install method:
 #  - claude-code: npm install into our isolated $INSTALL_DIR/node_modules/
-#  - codex:       official install.sh standalone, redirected via CODEX_HOME
-#                 to our isolated $INSTALL_DIR/codex-home/. Why standalone:
+#  - codex:       official install.sh full package, redirected via CODEX_HOME
+#                 to our isolated $INSTALL_DIR/codex-home/. Why managed install:
 #                 codex daemon mode (app-server daemon bootstrap --remote-control)
 #                 requires a "managed install" at $CODEX_HOME/packages/standalone/current/codex.
 #                 The npm @openai/codex package does NOT create that layout
@@ -184,7 +201,7 @@ NODE_DIR="$INSTALL_DIR/node"
 NODE_BIN="$NODE_DIR/bin/node"
 NPM_BIN="$NODE_DIR/bin/npm"
 SENTINEL="$INSTALL_DIR/.installed-$AGENT_KIND"
-# codex 走 standalone (install.sh), binary 在 isolated CODEX_HOME 下;
+# codex 走完整 codex-package (install.sh), 保留 current/codex 兼容入口;
 # claude-code 走 npm,binary 在 isolated node_modules/.bin 下。
 # 所有路径都在 ~/.xdt-server/$SERVER_VER/ 下,卸载只需 rm -rf 这一棵树。
 if [ "$AGENT_KIND" = "codex" ]; then
@@ -300,8 +317,13 @@ ensure_node() {
 # chmod +x real target 兜底 — npm 装 native binary 偶尔丢 +x mode。
 # 失败时把 stderr + ls / file / head 几行 emit 到 INSTALL_LOG (silent install
 # pipeline 透传到 desktop main log), 不用 ssh 进远端调试。
+${VERIFY_CODEX_LAYOUT_SH}
 verify_binary() {
   if [ ! -L "$BIN_PATH" ] && [ ! -x "$BIN_PATH" ] && [ ! -f "$BIN_PATH" ]; then return 1; fi
+  if [ "$AGENT_KIND" = "codex" ] && ! verify_codex_layout; then
+    emit "INSTALL_LOG incomplete Codex package layout"
+    return 1
+  fi
   _STDERR_LOG="$INSTALL_DIR/.verify-stderr-$$"
 
   # Make sure the real binary (follow symlink) is executable — npm shim 创建
@@ -323,13 +345,14 @@ verify_binary() {
   fi
 
   if [ -n "$V" ] &&
-     { [ "$AGENT_KIND" != "claude-code" ] || [ "${'$'}{V%% *}" = "$CLAUDE_RELEASE" ]; }; then
+     { [ "$AGENT_KIND" != "claude-code" ] || [ "${'$'}{V%% *}" = "$CLAUDE_RELEASE" ]; } &&
+     { [ "$AGENT_KIND" != "codex" ] || [ "${'$'}{V##* }" = "$CODEX_RELEASE" ]; }; then
     emit "READY $V"
     rm -f "$_STDERR_LOG"
     return 0
   fi
   if [ -n "$V" ]; then
-    emit "INSTALL_LOG [verify-fail] Claude Code version ${'$'}{V%% *} != managed pin $CLAUDE_RELEASE"
+    emit "INSTALL_LOG [verify-fail] $AGENT_KIND version $V does not match managed pin"
   fi
   # Diagnostics on failure — these go to INSTALL_LOG so the desktop main process
   # logs them (silent install pipeline forwards INSTALL_LOG lines verbatim).
@@ -458,7 +481,7 @@ elif [ "$AGENT_KIND" = "codex" ]; then
       && emit "INSTALL_LOG mirrored existing $HOME/.codex/auth.json -> $CODEX_HOME_DIR/auth.json"
   fi
 
-  emit "INSTALL_START codex-standalone"
+  emit "INSTALL_START codex-package"
   # install.sh respects three env vars to keep everything in our tree:
   #   CODEX_HOME            → tarball extract target + daemon state + auth
   #   CODEX_INSTALL_DIR     → "visible command" symlink dir (we don't add to PATH; daemon uses absolute path)
@@ -511,6 +534,12 @@ elif [ "$AGENT_KIND" = "codex" ]; then
   if [ "$SH_EXIT" -ne 0 ]; then
     emit "ERROR install.sh exit=$SH_EXIT"
     exit 4
+  fi
+  # New installs must be the full package. The official installer supplies
+  # the compatibility symlink used by existing daemon / one-shot callers.
+  if [ ! -f "$CODEX_HOME_DIR/packages/standalone/current/codex-package.json" ] || ! verify_codex_layout; then
+    emit "ERROR install.sh did not produce a complete Codex package"
+    exit 5
   fi
 
   # install.sh's add_to_path() unconditionally writes a "# >>> Codex installer >>>"

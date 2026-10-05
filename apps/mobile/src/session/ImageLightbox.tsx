@@ -19,6 +19,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Modal,
   Platform,
@@ -31,7 +32,7 @@ import {
 import { Text } from '@/components/AppText';
 import { MessageSquarePlus, Pen, Share as ShareIcon, Undo2, X } from 'lucide-react-native';
 import Svg, { Path } from 'react-native-svg';
-import { fontWeight, iconSize, iconStroke, motionDuration, radius, typeScale } from '@/theme';
+import { fontWeight, iconSize, iconStroke, lineHeight, motionDuration, radius, typeScale } from '@/theme';
 import { Gesture, GestureDetector, GestureHandlerRootView } from '@/platform/gestureHandler';
 import Animated, {
   cancelAnimation,
@@ -47,6 +48,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { MobileMessageGalleryImage } from '@/session/messageGallery';
 import {
   isDesktopLocalMediaUrl,
+  mediaLoadFailureKey,
   type MobileResolvedRemoteMedia,
   type ResolveRemoteMediaFn,
 } from '@/session/remoteMedia';
@@ -74,15 +76,18 @@ import {
 } from '@/session/imageLightboxModel';
 import {
   ANNOTATION_OUTLINE_COLOR,
-  ANNOTATION_OUTLINE_WIDTH_RATIO,
   ANNOTATION_STROKE_COLOR,
   annotationBaseRect,
   annotationDisplayRect,
+  annotationMinPointDistanceForRect,
+  annotationOutlineWidth,
+  annotationStrokesEqual,
   annotationStrokeToSvgPath,
   annotationStrokeWidth,
   canAnnotateImageMime,
   normalizeAnnotationPoint,
   shouldAppendAnnotationPoint,
+  shouldDiscardInterruptedStroke,
   type AnnotationStroke,
 } from '@/session/imageAnnotationModel';
 
@@ -96,7 +101,7 @@ const AnimatedImage = Animated.createAnimatedComponent(Image);
 type PageResolveState =
   | { status: 'loading' }
   | { status: 'ready'; media: MobileResolvedRemoteMedia }
-  | { status: 'error' };
+  | { status: 'error'; error?: unknown };
 
 /** 宿主注入的底部操作(文件浏览器:复制路径/发送到会话);回调收当前活跃页。 */
 export interface ImageLightboxAction {
@@ -131,13 +136,24 @@ export interface ImageLightboxAnnotationConfig {
     image: MobileMessageGalleryImage,
     displayUri: string,
     strokes: AnnotationStroke[],
-    context: { mimeType?: string },
+    /** naturalWidth / naturalHeight:查看器已解码的图片尺寸(未加载完成时缺省)。 */
+    context: { mimeType?: string; naturalWidth?: number; naturalHeight?: number },
   ) => void | Promise<void>;
   /**
    * 某页的既有笔迹(托盘带标注图再编辑):打开/翻页时叠加显示,进入标注模式
    * 可继续画或撤销。不提供 = 全部从空白开始。
    */
   initialStrokesFor?: (image: MobileMessageGalleryImage) => readonly AnnotationStroke[] | undefined;
+  /**
+   * 某页此刻暂不能进入标注的原因(可选;返回 undefined = 可以)。有原因时画笔
+   * 按钮置灰但仍可点,点按弹出该说明(如托盘附件的上一次修改尚未上传完成)。
+   */
+  annotationBlockedReason?: (image: MobileMessageGalleryImage) => string | undefined;
+  /**
+   * 进入标注模式时调用(可选):宿主据此提前准备提交所需资源(烧录 WebView
+   * 预热)。返回的释放函数在退出标注 / 关闭查看器时调用。
+   */
+  prewarm?: () => () => void;
 }
 
 export interface ImageLightboxProps {
@@ -167,6 +183,11 @@ export interface ImageLightboxProps {
   showFileHeader?: boolean;
   /** 圈点标注(可选):见 {@link ImageLightboxAnnotationConfig}。 */
   annotation?: ImageLightboxAnnotationConfig;
+  /**
+   * 打开即进入标注模式(需同时提供 annotation;对齐桌面 autoAnnotate)。
+   * 为标注而开的临时图(如图表导出)用:放弃标注(取消 / 返回)直接关闭查看器。
+   */
+  autoAnnotate?: boolean;
 }
 
 // memo:父层(消息列表)在流式回复期间每 token 重渲染,props 全部引用稳定
@@ -181,6 +202,7 @@ export const ImageLightbox = memo(function ImageLightbox({
   extraActions,
   showFileHeader,
   annotation,
+  autoAnnotate = false,
 }: ImageLightboxProps) {
   const { t } = useTranslation();
   const { width, height } = useWindowDimensions();
@@ -205,7 +227,9 @@ export const ImageLightbox = memo(function ImageLightbox({
   }, []);
 
   // ---- 圈点标注状态(仅活跃页;笔迹归一化存储,显示/烧录共用同一映射)----
-  const [isAnnotating, setIsAnnotating] = useState(false);
+  // autoAnnotate 只作初值:打开即进标注(对齐桌面)。
+  const autoAnnotateActive = autoAnnotate && !!annotation;
+  const [isAnnotating, setIsAnnotating] = useState(autoAnnotateActive);
   const [annotationSubmitting, setAnnotationSubmitting] = useState(false);
   const submittingRef = useRef(false);
   const sharingRef = useRef(false);
@@ -213,10 +237,20 @@ export const ImageLightbox = memo(function ImageLightbox({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const [strokes, setStrokes] = useState<AnnotationStroke[]>([]);
+  // 取消 / 返回回调经 ref 读最新笔迹与文案:它们进入手势 deps(onRequestClose),
+  // 不能因每次作画 / 父层重渲染而让整张手势图重建。
+  const strokesRef = useRef(strokes);
+  strokesRef.current = strokes;
+  const tRef = useRef(t);
+  tRef.current = t;
   const [draftStroke, setDraftStroke] = useState<AnnotationStroke | null>(null);
   /** url → 图片自然尺寸(LightboxPage onLoad 上报;overlay 与坐标换算的基准)。 */
   const [naturalSizes, setNaturalSizes] = useState<Record<string, { width: number; height: number }>>({});
   const draftStrokeRef = useRef<AnnotationStroke | null>(null);
+  /** 进行中一笔的屏幕路径长度(容器坐标,px)与上一个原始触点:判定捏合误触。 */
+  const draftScreenLengthRef = useRef(0);
+  const draftLastScreenPointRef = useRef<{ x: number; y: number } | null>(null);
+  const discardConfirmOpenRef = useRef(false);
   const activeImageForDraw = images[activeIndex] ?? null;
   const activeNaturalSize = activeImageForDraw ? naturalSizes[activeImageForDraw.key] ?? null : null;
 
@@ -240,12 +274,18 @@ export const ImageLightbox = memo(function ImageLightbox({
     const initial = image ? annotation?.initialStrokesFor?.(image) : undefined;
     setStrokes(initial ? [...initial] : []);
     draftStrokeRef.current = null;
+    draftLastScreenPointRef.current = null;
+    draftScreenLengthRef.current = 0;
     setDraftStroke(null);
     // annotation 语义上只在打开时取一次快照,翻页时按新页(key)重取
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeIndex, activeImageKeyForStrokes]);
 
-  /** 画笔落点(容器坐标 + 当页 transform 状态,LightboxPage 手势经 runOnJS 上抛)。 */
+  /**
+   * 画笔落点(容器坐标 + 当页 transform 状态,LightboxPage 手势经 runOnJS 上抛)。
+   * end 带手势是否正常结束:第二根手指落下会让单指画笔手势被取消,此时屏幕
+   * 路径很短的半笔是捏合起手的误触(点 / 小短线),丢弃;点按与真正的笔画照常落笔。
+   */
   const handleDrawPoint = useCallback((
     phase: 'start' | 'move' | 'end',
     pointX: number,
@@ -253,13 +293,17 @@ export const ImageLightbox = memo(function ImageLightbox({
     translateX: number,
     translateY: number,
     scale: number,
+    gestureSucceeded = true,
   ) => {
     if (submittingRef.current) return;
     if (phase === 'end') {
       const draft = draftStrokeRef.current;
+      const screenLength = draftScreenLengthRef.current;
       draftStrokeRef.current = null;
+      draftLastScreenPointRef.current = null;
+      draftScreenLengthRef.current = 0;
       setDraftStroke(null);
-      if (draft && draft.points.length > 0) {
+      if (draft && draft.points.length > 0 && !shouldDiscardInterruptedStroke(gestureSucceeded, screenLength)) {
         setStrokes((prev) => [...prev, draft]);
       }
       return;
@@ -272,30 +316,94 @@ export const ImageLightbox = memo(function ImageLightbox({
     if (!point) return;
     if (phase === 'start') {
       draftStrokeRef.current = { points: [point] };
+      draftLastScreenPointRef.current = { x: pointX, y: pointY };
+      draftScreenLengthRef.current = 0;
       setDraftStroke(draftStrokeRef.current);
       return;
     }
     const draft = draftStrokeRef.current;
     if (!draft) return;
-    if (!shouldAppendAnnotationPoint(draft, point)) return;
-    draftStrokeRef.current = { points: [...draft.points, point] };
+    const lastScreen = draftLastScreenPointRef.current;
+    if (lastScreen) draftScreenLengthRef.current += Math.hypot(pointX - lastScreen.x, pointY - lastScreen.y);
+    draftLastScreenPointRef.current = { x: pointX, y: pointY };
+    // 最小点距按屏幕像素换算:放大作画保精度,1x 不逐事件记录。
+    if (!shouldAppendAnnotationPoint(draft, point, annotationMinPointDistanceForRect(rect))) return;
+    // 原地追加(O(1)),只换外层引用触发重渲染;落笔 / 提交后草稿引用即被置空,
+    // 已提交的笔迹不会再被改动。
+    draft.points.push(point);
+    draftStrokeRef.current = { points: draft.points };
     setDraftStroke(draftStrokeRef.current);
   }, [activeNaturalSize, width, height]);
 
   const undoLastStroke = useCallback(() => {
     setStrokes((prev) => prev.slice(0, -1));
     draftStrokeRef.current = null;
+    draftLastScreenPointRef.current = null;
+    draftScreenLengthRef.current = 0;
     setDraftStroke(null);
   }, []);
 
-  const exitAnnotationMode = useCallback(() => {
+  /**
+   * 放弃标注:恢复到该页既有笔迹并退出标注模式。autoAnnotate 宿主(为标注而开
+   * 的临时图)留在查看器没有意义,直接关闭(对齐桌面)。
+   */
+  const discardAnnotation = useCallback(() => {
+    if (autoAnnotateActive) {
+      onCloseRef.current();
+      return;
+    }
     const image = images[activeIndex];
     const initial = image ? annotation?.initialStrokesFor?.(image) : undefined;
     setStrokes(initial ? [...initial] : []);
     draftStrokeRef.current = null;
+    draftLastScreenPointRef.current = null;
+    draftScreenLengthRef.current = 0;
     setDraftStroke(null);
     setIsAnnotating(false);
-  }, [activeIndex, images, annotation]);
+  }, [activeIndex, images, annotation, autoAnnotateActive]);
+
+  /**
+   * 取消 / 返回:笔迹与打开时一致则直接放弃(与以往完全相同);有未保存的改动
+   * 先确认,避免误触丢掉整张图的圈点。
+   */
+  const exitAnnotationMode = useCallback(() => {
+    if (submittingRef.current) return;
+    const image = images[activeIndex];
+    const baseline = (image ? annotation?.initialStrokesFor?.(image) : undefined) ?? EMPTY_STROKES;
+    const changed = !!draftStrokeRef.current?.points.length
+      || !annotationStrokesEqual(strokesRef.current, baseline);
+    if (!changed) {
+      discardAnnotation();
+      return;
+    }
+    if (discardConfirmOpenRef.current) return;
+    discardConfirmOpenRef.current = true;
+    const settle = () => { discardConfirmOpenRef.current = false; };
+    const t = tRef.current;
+    Alert.alert(
+      t('message.lightbox.discardAnnotationTitle'),
+      t('message.lightbox.discardAnnotationBody'),
+      [
+        { text: t('message.lightbox.continueAnnotating'), style: 'cancel', onPress: settle },
+        {
+          text: t('message.lightbox.discardAnnotation'),
+          style: 'destructive',
+          onPress: () => {
+            settle();
+            discardAnnotation();
+          },
+        },
+      ],
+      { cancelable: true, onDismiss: settle },
+    );
+  }, [activeIndex, images, annotation, discardAnnotation]);
+
+  // 标注模式期间让宿主预热提交资源(烧录 WebView);退出 / 关闭时释放。
+  const prewarmAnnotation = annotation?.prewarm;
+  useEffect(() => {
+    if (!isAnnotating || !prewarmAnnotation) return undefined;
+    return prewarmAnnotation();
+  }, [isAnnotating, prewarmAnnotation]);
 
   // 每 url 只自动强制重取一次(Image 加载失败自愈),防 onError↔重取死循环;
   // 重试按钮的显式 forceRefresh 不受此限制。
@@ -335,8 +443,8 @@ export const ImageLightbox = memo(function ImageLightbox({
       .then((resolved) => {
         setResolveMap((prev) => ({ ...prev, [key]: { status: 'ready', media: resolved } }));
       })
-      .catch(() => {
-        setResolveMap((prev) => ({ ...prev, [key]: { status: 'error' } }));
+      .catch((error: unknown) => {
+        setResolveMap((prev) => ({ ...prev, [key]: { status: 'error', error } }));
       });
     // 垫底缩略图:列表里这张图已经解码好了,拿来从打开那一刻接住画面,一直垫到
     // 原图 onLoad(见 lightboxImageLayers)。写入**不看取件态** —— 原图可能在同
@@ -453,6 +561,24 @@ export const ImageLightbox = memo(function ImageLightbox({
     && canAnnotateImageMime(activeMimeType)
     && !activeLooksGif
     && !activeLooksSvg;
+  // 画笔要等图片自然尺寸就位(坐标换算基准),否则进入标注后作画静默无效:
+  // 此前按钮置灰禁用,与撤销的禁用态同观感。宿主给出暂不可标注的原因时,按钮
+  // 同样置灰但可点,点按说明原因(否则用户不知道为什么不能画)。
+  const annotateReady = annotateVisible && !!activeNaturalSize;
+  const annotateBlockedReason = annotateReady && activeImage
+    ? annotation?.annotationBlockedReason?.(activeImage)
+    : undefined;
+  const annotateEnabled = annotateReady && !annotateBlockedReason;
+  const enterAnnotationMode = useCallback(() => {
+    if (!annotateReady || submittingRef.current || sharingRef.current) return;
+    // 点按时重新询问宿主:替换上传可能在上次渲染后已落定,避免弹出过期原因。
+    const blockedReason = activeImage ? annotation?.annotationBlockedReason?.(activeImage) : undefined;
+    if (blockedReason) {
+      Alert.alert(t('message.lightbox.annotateUnavailableTitle'), blockedReason);
+      return;
+    }
+    setIsAnnotating(true);
+  }, [annotateReady, activeImage, annotation, t]);
   // 独立直发(发送到对话):不要求可标注——gif 等不可画的图同样能转发。
   const directSubmitVisible = !!annotation?.allowDirectSubmit && !!activeImage && !!activeUri;
 
@@ -470,6 +596,9 @@ export const ImageLightbox = memo(function ImageLightbox({
     void Promise.resolve()
       .then(() => annotation.onSubmit(activeImage, activeUri, submittedStrokes, {
         mimeType: activeMimeType,
+        ...(activeNaturalSize
+          ? { naturalWidth: activeNaturalSize.width, naturalHeight: activeNaturalSize.height }
+          : {}),
       }))
       .then(() => onCloseRef.current())
       .catch(() => {
@@ -479,12 +608,12 @@ export const ImageLightbox = memo(function ImageLightbox({
         submittingRef.current = false;
         setAnnotationSubmitting(false);
       });
-  }, [annotation, activeImage, activeUri, activeMimeType, strokes]);
+  }, [annotation, activeImage, activeUri, activeMimeType, activeNaturalSize, strokes]);
 
   // Android 物理返回键触发 Modal.onRequestClose,不受手势层/按钮层的
   // isAnnotating 禁用覆盖(review 发现:会绕开"标注模式中关闭均禁用"保护
-  // 直接整体关闭 lightbox,未保存笔迹丢失)。标注中改为退出标注模式,
-  // 提交中忽略返回键,非标注态才走原始关闭。
+  // 直接整体关闭 lightbox,未保存笔迹丢失)。标注中改为退出标注模式(有改动
+  // 先确认;autoAnnotate 放弃即关闭),提交中忽略返回键,非标注态才走原始关闭。
   const handleRequestClose = useCallback(() => {
     if (submittingRef.current) return;
     if (isAnnotating) {
@@ -682,15 +811,23 @@ export const ImageLightbox = memo(function ImageLightbox({
               <View style={styles.actionBarPill}>
                 {annotateVisible ? (
                   <Pressable
-                    accessibilityLabel={t('message.lightbox.annotateImage')}
-                    disabled={annotationSubmitting || sharing}
+                    accessibilityHint={annotateBlockedReason}
+                    accessibilityLabel={annotateBlockedReason
+                      ? t('message.lightbox.annotateImageUnavailable')
+                      : t('message.lightbox.annotateImage')}
+                    accessibilityState={{ disabled: !annotateReady }}
+                    disabled={annotationSubmitting || sharing || !annotateReady}
                     hitSlop={8}
-                    onPress={() => setIsAnnotating(true)}
+                    onPress={enterAnnotationMode}
                     style={styles.actionItem}
                     testID="message.imageLightboxAnnotateButton"
                   >
-                    <Pen color="#ffffff" size={iconSize.action} strokeWidth={iconStroke.regular} />
-                    <Text style={styles.actionLabel}>{t('message.lightbox.annotate')}</Text>
+                    <Pen
+                      color={annotateEnabled ? '#ffffff' : 'rgba(255,255,255,0.35)'}
+                      size={iconSize.action}
+                      strokeWidth={iconStroke.regular}
+                    />
+                    <Text style={[styles.actionLabel, !annotateEnabled && styles.actionLabelDisabled]}>{t('message.lightbox.annotate')}</Text>
                   </Pressable>
                 ) : null}
                 {extraActions.map((action) => (
@@ -738,15 +875,23 @@ export const ImageLightbox = memo(function ImageLightbox({
               <View style={styles.actionBarPill}>
                 {annotateVisible ? (
                   <Pressable
-                    accessibilityLabel={t('message.lightbox.annotateImage')}
-                    disabled={annotationSubmitting || sharing}
+                    accessibilityHint={annotateBlockedReason}
+                    accessibilityLabel={annotateBlockedReason
+                      ? t('message.lightbox.annotateImageUnavailable')
+                      : t('message.lightbox.annotateImage')}
+                    accessibilityState={{ disabled: !annotateReady }}
+                    disabled={annotationSubmitting || sharing || !annotateReady}
                     hitSlop={8}
-                    onPress={() => setIsAnnotating(true)}
+                    onPress={enterAnnotationMode}
                     style={styles.actionItem}
                     testID="message.imageLightboxAnnotateButton"
                   >
-                    <Pen color="#ffffff" size={iconSize.action} strokeWidth={iconStroke.regular} />
-                    <Text style={styles.actionLabel}>
+                    <Pen
+                      color={annotateEnabled ? '#ffffff' : 'rgba(255,255,255,0.35)'}
+                      size={iconSize.action}
+                      strokeWidth={iconStroke.regular}
+                    />
+                    <Text style={[styles.actionLabel, !annotateEnabled && styles.actionLabelDisabled]}>
                       {t('message.lightbox.annotate')}
                     </Text>
                   </Pressable>
@@ -846,7 +991,8 @@ const LightboxPage = memo(function LightboxPage({
   naturalSize: { width: number; height: number } | null;
   /** 捏合/平移开始与结束时通知父层开关 chrome 触摸。 */
   onChromeBusy(busy: boolean): void;
-  /** 画笔事件(容器坐标 + 当页 transform 快照),UI 线程经 runOnJS 上抛。 */
+  /** 画笔事件(容器坐标 + 当页 transform 快照),UI 线程经 runOnJS 上抛;
+   *  end 附带手势是否正常结束(第二根手指落下会让画笔手势被取消)。 */
   onDrawPoint: (
     phase: 'start' | 'move' | 'end',
     pointX: number,
@@ -854,6 +1000,7 @@ const LightboxPage = memo(function LightboxPage({
     translateX: number,
     translateY: number,
     scale: number,
+    gestureSucceeded?: boolean,
   ) => void;
   /** 原生 Image 加载失败(悬空 key 404 等)→ 上抛做一次性 forceRefresh 自愈。
    *  带 image 参数的稳定引用;是否接线由本页按 retryable 判定。 */
@@ -1227,7 +1374,8 @@ const LightboxPage = memo(function LightboxPage({
       });
 
     // 画笔:单指跟手采点(worklet 只搬运坐标 + transform 快照,归一化在 JS 侧
-    // 纯函数完成);第二根手指落下时本手势自然结束,已画的半笔照常落笔。
+    // 纯函数完成);第二根手指落下时本手势被取消(success=false):已画出一段的
+    // 半笔照常落笔,屏幕路径极短的(捏合起手误触的点 / 小短线)由 JS 侧丢弃。
     const panDraw = Gesture.Pan()
       .enabled(annotating && !interactionDisabled)
       .maxPointers(1)
@@ -1238,8 +1386,8 @@ const LightboxPage = memo(function LightboxPage({
       .onUpdate((event) => {
         runOnJS(onDrawPoint)('move', event.x, event.y, translateX.value, translateY.value, scale.value);
       })
-      .onFinalize(() => {
-        runOnJS(onDrawPoint)('end', 0, 0, 0, 0, 1);
+      .onFinalize((_event, success) => {
+        runOnJS(onDrawPoint)('end', 0, 0, 0, 0, 1, success);
       });
 
     return Gesture.Simultaneous(
@@ -1285,14 +1433,43 @@ const LightboxPage = memo(function LightboxPage({
     () => (naturalSize ? annotationBaseRect(width, height, naturalSize.width, naturalSize.height) : null),
     [naturalSize, width, height],
   );
-  const overlayStrokes = useMemo<readonly AnnotationStroke[]>(
-    () => (annotationDraftStroke ? [...annotationStrokes, annotationDraftStroke] : annotationStrokes),
-    [annotationStrokes, annotationDraftStroke],
-  );
-  const overlayVisible = !!uri && !!annotationBase && !!naturalSize && overlayStrokes.length > 0;
+  const overlayVisible = !!uri && !!annotationBase && !!naturalSize
+    && (annotationStrokes.length > 0 || !!annotationDraftStroke);
   const overlayStrokeWidth = naturalSize
     ? annotationStrokeWidth(naturalSize.width, naturalSize.height)
     : 0;
+  const overlayOutlineWidth = annotationOutlineWidth(overlayStrokeWidth);
+  // 已落笔迹的两层 path 元素按(笔迹, 尺寸)记忆:作画时每个 move 只重算进行中
+  // 那一笔,已有笔迹的 path 字符串与元素引用不变,React 直接跳过它们。
+  const committedOutlinePaths = useMemo(() => (naturalSize
+    ? annotationStrokes.map((stroke, index) => (
+      <Path
+        d={annotationStrokeToSvgPath(stroke, naturalSize.width, naturalSize.height)}
+        fill="none"
+        key={`outline-${index}`}
+        stroke={ANNOTATION_OUTLINE_COLOR}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={overlayOutlineWidth}
+      />
+    ))
+    : null), [annotationStrokes, naturalSize, overlayOutlineWidth]);
+  const committedStrokePaths = useMemo(() => (naturalSize
+    ? annotationStrokes.map((stroke, index) => (
+      <Path
+        d={annotationStrokeToSvgPath(stroke, naturalSize.width, naturalSize.height)}
+        fill="none"
+        key={`stroke-${index}`}
+        stroke={ANNOTATION_STROKE_COLOR}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={overlayStrokeWidth}
+      />
+    ))
+    : null), [annotationStrokes, naturalSize, overlayStrokeWidth]);
+  const draftPathD = naturalSize && annotationDraftStroke
+    ? annotationStrokeToSvgPath(annotationDraftStroke, naturalSize.width, naturalSize.height)
+    : null;
 
   return (
     <View style={{ height, width }}>
@@ -1368,28 +1545,30 @@ const LightboxPage = memo(function LightboxPage({
                   viewBox={`0 0 ${naturalSize.width} ${naturalSize.height}`}
                   width="100%"
                 >
-                  {overlayStrokes.map((stroke, index) => (
+                  {committedOutlinePaths}
+                  {draftPathD ? (
                     <Path
-                      d={annotationStrokeToSvgPath(stroke, naturalSize.width, naturalSize.height)}
+                      d={draftPathD}
                       fill="none"
-                      key={`outline-${index}`}
+                      key="outline-draft"
                       stroke={ANNOTATION_OUTLINE_COLOR}
                       strokeLinecap="round"
                       strokeLinejoin="round"
-                      strokeWidth={Math.round(overlayStrokeWidth * ANNOTATION_OUTLINE_WIDTH_RATIO)}
+                      strokeWidth={overlayOutlineWidth}
                     />
-                  ))}
-                  {overlayStrokes.map((stroke, index) => (
+                  ) : null}
+                  {committedStrokePaths}
+                  {draftPathD ? (
                     <Path
-                      d={annotationStrokeToSvgPath(stroke, naturalSize.width, naturalSize.height)}
+                      d={draftPathD}
                       fill="none"
-                      key={`stroke-${index}`}
+                      key="stroke-draft"
                       stroke={ANNOTATION_STROKE_COLOR}
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       strokeWidth={overlayStrokeWidth}
                     />
-                  ))}
+                  ) : null}
                 </Svg>
               </Animated.View>
             ) : null}
@@ -1409,7 +1588,7 @@ const LightboxPage = memo(function LightboxPage({
           (!retryable && !media.previewable) ? (
             <>
               <Text style={styles.stateText}>
-                {t('message.lightbox.loadFailed')}
+                {t(mediaLoadFailureKey(resolveState?.status === 'error' ? resolveState.error : undefined))}
               </Text>
               {retryable || layers.showFailure ? (
                 <Pressable
@@ -1484,6 +1663,7 @@ const styles = StyleSheet.create({
   pageLabel: {
     color: 'rgba(255, 255, 255, 0.85)',
     fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
     fontVariant: ['tabular-nums'],
   },
   fileHeader: {
@@ -1493,10 +1673,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     width: '100%',
   },
-  fileHeaderDone: { color: '#ffffff', fontSize: typeScale.bodyLarge, fontWeight: fontWeight.semibold },
+  fileHeaderDone: { color: '#ffffff', fontSize: typeScale.bodyLarge, lineHeight: lineHeight.bodyLarge, fontWeight: fontWeight.medium },
   fileHeaderTitleCol: { alignItems: 'center', flex: 1, gap: 2, minWidth: 0 },
-  fileHeaderTitle: { color: '#ffffff', fontSize: typeScale.body, fontWeight: fontWeight.semibold },
-  fileHeaderMeta: { color: 'rgba(255,255,255,0.64)', fontSize: typeScale.caption },
+  fileHeaderTitle: { color: '#ffffff', fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
+  fileHeaderMeta: { color: 'rgba(255,255,255,0.64)', fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   fileHeaderShareSpacer: { width: 20 },
   actionBar: {
     alignItems: 'center',
@@ -1532,6 +1712,7 @@ const styles = StyleSheet.create({
   actionLabel: {
     color: 'rgba(255,255,255,0.72)',
     fontSize: typeScale.micro,
+    lineHeight: lineHeight.micro,
     textAlign: 'center',
   },
   actionDivider: {
@@ -1540,7 +1721,7 @@ const styles = StyleSheet.create({
     width: StyleSheet.hairlineWidth,
   },
   actionLabelDisabled: { color: 'rgba(255,255,255,0.35)' },
-  stateText: { color: 'rgba(255, 255, 255, 0.85)', fontSize: typeScale.code },
+  stateText: { color: 'rgba(255, 255, 255, 0.85)', fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   retryButton: {
     borderColor: 'rgba(255, 255, 255, 0.5)',
     borderRadius: radius.pill, // 圆形按钮语义用 pill(胶囊,RN 截半)
@@ -1549,5 +1730,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 8,
   },
-  retryText: { color: '#ffffff', fontSize: typeScale.code },
+  retryText: { color: '#ffffff', fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
 });

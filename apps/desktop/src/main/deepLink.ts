@@ -41,7 +41,9 @@
 
 import { app, BrowserWindow } from 'electron';
 import path from 'node:path';
+import { parseSharedTaskInvitationIntent } from '@cindy/device-link';
 import { createLogger } from './logger';
+import { registerWindowsDeepLinkName } from './deepLinkWindowsRegistration';
 import {
   DEEP_LINK_PRIMARY_SCHEME,
   DEEP_LINK_SCHEMES,
@@ -63,6 +65,7 @@ export const OPEN_FOLDER_FLAG = '--open-folder';
 export const OPEN_SHARE_FILE_FLAG = '--open-share-file';
 
 export type DeepLinkPayload =
+  | { type: 'shared-task-join'; invitation: string; server: string }
   | { type: 'session'; id: string; messageClientId?: string }
   | { type: 'project'; workingDir: string }
   /**
@@ -100,6 +103,8 @@ export type DeepLinkPayload =
  */
 export function parseDeepLink(url: string): DeepLinkPayload | null {
   if (typeof url !== 'string') return null;
+  const invitation = parseSharedTaskInvitationIntent(url);
+  if (invitation) return { type: 'shared-task-join', ...invitation };
   const prefix = matchDeepLinkPrefix(url);
   if (prefix === null) return null;
   const rest = url.slice(prefix.length);
@@ -288,7 +293,7 @@ export function handleIncomingDeepLink(url: string, source: string): void {
     log.warn('ignoring unparseable deep link', { source });
     return;
   }
-  log.info('received deep link', { source, payload });
+  log.info('received deep link', { source, payload: safeDeepLinkLog(payload) });
   dispatchDeepLink(payload);
 }
 
@@ -406,6 +411,10 @@ export function sendMainWindowMessage(channel: string, payload: unknown): boolea
   return true;
 }
 
+function safeDeepLinkLog(payload: DeepLinkPayload) {
+  return payload.type === 'shared-task-join' ? { type: payload.type } : payload;
+}
+
 function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
   // 纯前台意图:main 进程内消化。冷启动时窗口还没建,app 启动流程本身会前台,直接丢弃。
   if (payload.type === 'focus') {
@@ -416,7 +425,7 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
   const windowReady = win && !win.isDestroyed() && win.webContents && !win.webContents.isLoading();
   // A loaded login/LocalDbGate page has no MainLayout listener yet. Imports stay
   // in the existing pending slot until the authenticated consumer takes them.
-  if (!windowReady || payload.type === 'provider-import') {
+  if (!windowReady || payload.type === 'provider-import' || payload.type === 'shared-task-join') {
     // 保留"用户最后意图"语义:同一次冷启动如果先后入站多条 (例如 argv 同时含
     // deep link URL 和 --open-folder, 现实场景极罕见但 bootstrap 两条 scan 都
     // 会触发),后到的覆盖前者。但 warn log 留下排查线索,事后能从日志识别这种
@@ -426,12 +435,12 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
         cancelProviderImport(pendingDeepLink.importId);
       }
       log.warn('overwriting buffered pending payload', {
-        previous: pendingDeepLink,
-        next: payload,
+        previous: safeDeepLinkLog(pendingDeepLink),
+        next: safeDeepLinkLog(payload),
       });
     }
     pendingDeepLink = payload;
-    log.debug('buffered pending deep link until renderer pull', payload);
+    log.debug('buffered pending deep link until renderer pull', safeDeepLinkLog(payload));
     // Agent-key first tap may switch in the background. A buffered deep link
     // from that path must not steal the frontmost app.
     if (!windowReady) {
@@ -458,7 +467,7 @@ export function takePendingDeepLink(): DeepLinkPayload | null {
   if (!pendingDeepLink) return null;
   const payload = pendingDeepLink;
   pendingDeepLink = null;
-  log.info('renderer pulled pending deep link', payload);
+  log.info('renderer pulled pending deep link', safeDeepLinkLog(payload));
   return payload;
 }
 
@@ -486,7 +495,7 @@ export function redactConsumedDeepLinkInArgv(argv: string[], deepLink?: string):
   for (let i = argv.length - 1; i >= 0; i -= 1) {
     const arg = argv[i];
     const prefix = typeof arg === 'string' ? matchDeepLinkPrefix(arg) : null;
-    if (arg !== deepLink && !(prefix && arg.slice(prefix.length).startsWith('provider/'))) continue;
+    if (arg !== deepLink && !(prefix && /^(provider\/|shared-task\/|shared-session\?)/.test(arg.slice(prefix.length)))) continue;
     argv[i] = `${DEEP_LINK_PRIMARY_SCHEME}://consumed`;
   }
 }
@@ -568,16 +577,18 @@ function isWindowsSlashSwitch(value: string): boolean {
  */
 export function registerDeepLinkProtocol(): void {
   for (const scheme of DEEP_LINK_SCHEMES) {
+    let registered: boolean;
     if (process.defaultApp) {
       // dev:用 Electron 解释器跑 main 入口
       if (process.argv.length >= 2) {
-        app.setAsDefaultProtocolClient(scheme, process.execPath, [path.resolve(process.argv[1])]);
+        registered = app.setAsDefaultProtocolClient(scheme, process.execPath, [path.resolve(process.argv[1])]);
       } else {
-        app.setAsDefaultProtocolClient(scheme);
+        registered = app.setAsDefaultProtocolClient(scheme);
       }
     } else {
       // packaged:直接调,OS 用 app bundle 路径
-      app.setAsDefaultProtocolClient(scheme);
+      registered = app.setAsDefaultProtocolClient(scheme);
     }
+    if (registered) void registerWindowsDeepLinkName(scheme);
   }
 }

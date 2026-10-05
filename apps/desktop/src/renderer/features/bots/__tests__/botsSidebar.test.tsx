@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
+import { useBotUnreadSync } from '../useBotUnreadSync';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { cloneElement, type ReactElement, type ReactNode } from 'react';
 import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/lib/makerChatStore', () => { const running = new Map(); return { makerChatStore: { subscribeAll: () => () => {}, getRunningSnapshot: () => running } }; });
 
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 beforeAll(() => { HTMLElement.prototype.scrollIntoView = vi.fn(); });
@@ -17,6 +20,7 @@ vi.mock('@/components/onboarding/ConnectProviderCard', () => ({
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }) }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: translate, i18n: { resolvedLanguage: 'en' } }),
 }));
@@ -512,6 +516,8 @@ describe('BotsSidebar 「正在输入…」', () => {
   });
 });
 
+function UnreadSync() { useBotUnreadSync(); return null; }
+
 describe('BotsSidebar rows', () => {
   it('shows durable Hermes attention without reviving the permissions badge', async () => {
     mocks.profiles = [bot({ id: 'bot-1', name: 'Needs help', needsAttention: true })];
@@ -740,7 +746,7 @@ describe('BotsSidebar rows', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
 
-    render(<BotsSidebar />);
+    render(<><UnreadSync /><BotsSidebar /></>);
     render(<>{mocks.registered.node}</>);
     await vi.waitFor(() => expect(messageListeners.length).toBe(1));
     mocks.refreshBotProfiles.mockClear();
@@ -758,10 +764,11 @@ describe('BotsSidebar rows', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
 
-    render(<BotsSidebar />);
+    render(<><UnreadSync /><BotsSidebar /></>);
     render(<>{mocks.registered.node}</>);
     await vi.waitFor(() => expect(messageListeners.length).toBe(1));
 
+    mocks.refreshBotProfiles.mockClear();
     act(() => {
       for (const listener of messageListeners) listener({ sessionId: 'some-other-session' });
       vi.advanceTimersByTime(2000);

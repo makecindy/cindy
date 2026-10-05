@@ -27,7 +27,7 @@
  *     the default Copy icon again).
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Check,
   Copy,
@@ -35,6 +35,8 @@ import {
   Link2,
   MessageSquarePlus,
   MessageSquareReply,
+  MessageSquare,
+  SmilePlus,
   Pencil,
   Share,
   Split,
@@ -43,8 +45,10 @@ import {
 } from 'lucide-react';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 import { cn } from '@/lib/utils';
+import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import { CHAT_COLOR_TRANSITION_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { Spinner } from '@/components/ui/spinner';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip, Tooltip } from '@/components/ui/tooltip';
 import {
   DropdownMenu,
@@ -89,6 +93,10 @@ interface MessageActionBarProps {
   onAddToChat?: () => void;
   /** 进入「分享为图片」选择模式并预选本条。放在复制按钮右边(产品指定位置)。 */
   onShareAsImage?: () => void;
+  /** Thread replies use the same toolbar geometry as private-chat replies. */
+  replyAction?: { onClick: () => void; label: string; count?: number };
+  /** The caller owns reaction persistence; the toolbar owns its trigger and placement. */
+  reactionAction?: { label: string; open: boolean; onOpenChange: (open: boolean) => void; disabled?: boolean; content: ReactNode };
   /** When provided, the More menu exposes single-message deletion. The
    *  parent owns confirmation + persistence; the promise keeps the action
    *  bar disabled until the flow resolves. */
@@ -141,6 +149,8 @@ export function MessageActionBar({
   onFork,
   onAddToChat,
   onShareAsImage,
+  replyAction,
+  reactionAction,
   onDelete,
   onEdit,
   onRewind,
@@ -354,28 +364,42 @@ export function MessageActionBar({
     </Tooltip.Root>
   );
 
-  const replyBtn = simplifiedBotConversation && onAddToChat && (
+  const replyBtn = (replyAction || (simplifiedBotConversation && onAddToChat)) && (
     <Tooltip.Root key="reply">
       <Tooltip.Trigger asChild>
         <button
           type="button"
           onClick={(event) => {
             event.stopPropagation();
-            onAddToChat();
+            (replyAction?.onClick ?? onAddToChat)?.();
           }}
           disabled={inFlight}
-          className={actionButtonClass}
-          aria-label={t('chat.messageActionBar.reply')}
+          className={cn(actionButtonClass, replyAction?.count && 'w-auto min-w-6 gap-1 px-1')}
+          aria-label={replyAction?.label ?? t('chat.messageActionBar.reply')}
         >
-          <MessageSquareReply
-            size={14}
-            strokeWidth={2}
-            className={actionIconClass}
-          />
+          {replyAction ? <MessageSquare size={14} strokeWidth={2} className={actionIconClass} />
+            : <MessageSquareReply size={14} strokeWidth={2} className={actionIconClass} />}
+          {!!replyAction?.count && <span className={cn('text-12 tabular-nums', actionIconClass)}>{replyAction.count}</span>}
         </button>
       </Tooltip.Trigger>
-      <Tooltip.Content>{t('chat.messageActionBar.reply')}</Tooltip.Content>
+      <Tooltip.Content>{replyAction?.label ?? t('chat.messageActionBar.reply')}</Tooltip.Content>
     </Tooltip.Root>
+  );
+
+  const reactionBtn = reactionAction && (
+    <Popover key="reaction" open={reactionAction.open} onOpenChange={reactionAction.onOpenChange}>
+      <Tip text={reactionAction.label}>
+        <PopoverTrigger asChild>
+          <button type="button" className={actionButtonClass} disabled={inFlight || reactionAction.disabled}
+            aria-label={reactionAction.label} onClick={event => event.stopPropagation()}>
+            <SmilePlus size={14} strokeWidth={2} className={actionIconClass} />
+          </button>
+        </PopoverTrigger>
+      </Tip>
+      <PopoverContent align={align === 'right' ? 'end' : 'start'} className="z-[80] w-fit p-2" aria-label={reactionAction.label}>
+        {reactionAction.content}
+      </PopoverContent>
+    </Popover>
   );
 
   const timeText = relText && (
@@ -570,10 +594,7 @@ export function MessageActionBar({
         onCloseAutoFocus={(event) => {
           if (menuInteractionFromPointerRef.current) event.preventDefault();
         }}
-        className={cn(
-          'min-w-[184px] rounded-xl border border-[var(--cmd-palette-border)]',
-          'bg-[var(--cmd-palette-bg)] p-1 text-[var(--cmd-palette-item-text)] shadow-none',
-        )}
+        className="min-w-[184px]"
       >
         {addToChatInMenu && (
           <DropdownMenuItem
@@ -581,9 +602,9 @@ export function MessageActionBar({
               event.stopPropagation();
               addToChatInMenu();
             }}
-            className="h-8 cursor-pointer select-none rounded-lg px-2 text-sm focus:bg-[var(--cmd-palette-item-hover)]"
+            className={MENU_ITEM_CLASS}
           >
-            <MessageSquarePlus size={14} strokeWidth={2} className="mr-2 shrink-0" />
+            <MessageSquarePlus size={14} strokeWidth={2} className="shrink-0" />
             {t('chat.quote.addToChat')}
           </DropdownMenuItem>
         )}
@@ -593,9 +614,9 @@ export function MessageActionBar({
               event.stopPropagation();
               void handleCopyLink();
             }}
-            className="h-8 cursor-pointer select-none rounded-lg px-2 text-sm focus:bg-[var(--cmd-palette-item-hover)]"
+            className={MENU_ITEM_CLASS}
           >
-            <Link2 size={14} strokeWidth={2} className="mr-2 shrink-0" />
+            <Link2 size={14} strokeWidth={2} className="shrink-0" />
             {t('chat.messageActionBar.copyLink')}
           </DropdownMenuItem>
         )}
@@ -606,16 +627,16 @@ export function MessageActionBar({
               event.stopPropagation();
               if (!rewindInFlight) onRewind?.();
             }}
-            className="h-8 cursor-pointer select-none rounded-lg px-2 text-sm focus:bg-[var(--cmd-palette-item-hover)]"
+            className={MENU_ITEM_CLASS}
           >
-            <Undo2 size={14} strokeWidth={2} className="mr-2 shrink-0" />
+            <Undo2 size={14} strokeWidth={2} className="shrink-0" />
             {t('chat.messageActionBar.rewind')}
           </DropdownMenuItem>
         )}
         {onDelete && (
           <>
             {(addToChatInMenu || copyLinkText || canRewind) && (
-              <DropdownMenuSeparator className="my-1 h-px bg-[var(--cmd-palette-border)]" />
+              <DropdownMenuSeparator />
             )}
             <DropdownMenuItem
               disabled={deleting}
@@ -623,12 +644,10 @@ export function MessageActionBar({
                 event.stopPropagation();
                 void handleDelete();
               }}
-              className={cn(
-                'h-8 cursor-pointer select-none rounded-lg px-2 text-sm',
-                'text-[hsl(var(--destructive))] focus:bg-[var(--cmd-palette-item-hover)]',
-              )}
+              variant="danger"
+              className={MENU_ITEM_CLASS}
             >
-              <Trash2 size={14} strokeWidth={2} className="mr-2 shrink-0" />
+              <Trash2 size={14} strokeWidth={2} className="shrink-0" />
               {t('chat.messageActionBar.delete')}
             </DropdownMenuItem>
           </>
@@ -648,12 +667,13 @@ export function MessageActionBar({
           shareBtn,
           forkBtn,
           replyBtn,
+          reactionBtn,
           editBtn,
           moreMenu,
           timeText,
           simplifiedBotConversation ? null : costText || tokensText,
         ]
-      : [timeText, copyBtn, shareBtn, forkBtn, replyBtn, editBtn, moreMenu];
+      : [timeText, copyBtn, shareBtn, forkBtn, replyBtn, reactionBtn, editBtn, moreMenu];
 
   return (
     <div
@@ -666,7 +686,7 @@ export function MessageActionBar({
         // Hover re-enters mid-fade interpolate from the current opacity
         // (browser CSS transition behavior — no replay from 0).
         'transition-opacity duration-[var(--motion-enter)] ease-[var(--motion-ease-out)] motion-reduce:transition-none',
-        simplifiedBotConversation || visible || menuOpen
+        simplifiedBotConversation || visible || menuOpen || reactionAction?.open
           ? 'opacity-100'
           : 'opacity-0 pointer-events-none focus-within:opacity-100 focus-within:pointer-events-auto',
         // Menu-owned actions dim the entire bar and block clicks. Fork only

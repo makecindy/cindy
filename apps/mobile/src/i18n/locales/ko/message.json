@@ -10,8 +10,6 @@
   },
   "renderer": {
     "moreActions": "추가 메시지 작업",
-    "previousQuestionJump": "이전 질문으로 이동: {{preview}}",
-    "noPreview": "미리보기 없음",
     "newMessagesToBottom": "새 메시지, 맨 아래로 이동",
     "jumpToBottom": "맨 아래로 이동",
     "openForkOrigin": "분기 원본 메시지 열기",
@@ -32,6 +30,10 @@
     "expand": "펼치기",
     "automationOriginNamed": "자동화 작업 「{{name}}」에서 전송",
     "automationOrigin": "자동화 작업에서 전송",
+    "sessionOriginNamed": "세션 “{{name}}”에서 보냄",
+    "botOriginNamed": "동료 “{{name}}”에서 보냄",
+    "sessionOrigin": "다른 세션에서 보냄",
+    "openSessionOrigin": "보낸 세션을 엽니다",
     "modelMismatch": "이번 턴은 선택한 {{selected}}이(가) 아니라 {{actual}}이(가) 응답했습니다(서버 측 임시 다운그레이드)",
     "copyStateCopying": "복사 중",
     "copyStateCopied": "복사됨",
@@ -63,6 +65,11 @@
     "subagentTyped": "하위 에이전트 · {{type}}",
     "subagent": "하위 에이전트",
     "workedDuration": "작업 시간 {{duration}}",
+    "durationSeconds": "{{seconds}}초",
+    "durationMinutes": "{{minutes}}분",
+    "durationMinutesSeconds": "{{minutes}}분 {{seconds}}초",
+    "durationHoursMinutes": "{{hours}}시간 {{minutes}}분",
+    "durationDaysHoursMinutes": "{{days}}일 {{hours}}시간 {{minutes}}분",
     "subagentSummary": "하위 에이전트 요약",
     "agentSwitchLabel": "{{from}}에서 {{to}}(으)로 전환됨",
     "agentSwitchViewHandoff": "{{label}}, 인계 내용 보기",
@@ -86,7 +93,6 @@
     "retryFetch": "가져오기 재시도",
     "openMedia": "미디어 열기",
     "readCurrentRemoteFile": "현재 원격 파일 읽기",
-    "reading": "읽는 중",
     "retryFilePreview": "파일 미리보기 재시도",
     "readCurrentFile": "현재 파일 읽기",
     "currentFilePreview": "현재 파일 미리보기",
@@ -119,17 +125,17 @@
     "mediaSize": "크기: {{size}}",
     "mediaExpiresAt": "만료 시간: {{time}}",
     "mediaErrorLine": "오류: {{message}}",
-    "mediaDeviceLinkHint": "모바일은 device-link를 통해 원격 기기에 미디어 업로드를 요청한 후 엽니다.",
+    "mediaDeviceLinkHint": "열기 전에 휴대폰이 원격 기기에 이 미디어 업로드를 요청합니다.",
     "controlDelete": "메시지 삭제",
-    "controlRewind": "여기로 되돌리기",
-    "controlFork": "세션 분기",
+    "controlRewind": "여기로 돌아가기",
+    "controlFork": "여기서 새 세션 시작",
     "markdownDocAriaLabel": "메시지 본문",
     "toolOutputTitle": "{{label}} 출력",
     "toolInputTitle": "{{label}} 입력",
     "viewToolInput": "전체 입력 보기",
     "loadingToolInput": "전체 입력 불러오는 중",
     "retryToolInput": "입력을 불러오지 못했습니다. 다시 시도",
-    "toolResultCompacted": "Full tool output was released (original size {{size}})",
+    "toolResultCompacted": "전체 도구 출력이 해제되었습니다(원래 크기 {{size}})",
     "mermaidEmpty": "빈 Mermaid 다이어그램.",
     "diffEditCount": "{{n}}개 편집"
   },
@@ -142,6 +148,8 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "sourceMissing": "이 컴퓨터에 원본 이미지가 없습니다. 원본 파일을 다시 가져오세요.",
+    "deviceOffline": "컴퓨터가 연결되지 않았습니다. 다시 연결한 후 시도하세요.",
     "cancelAnnotation": "주석 취소",
     "cancel": "취소",
     "undoLastStroke": "마지막 획 취소",
@@ -155,7 +163,13 @@
     "loadFailed": "이미지 로드 실패",
     "retryLoadImage": "이미지 로드 재시도",
     "retry": "재시도",
-    "closeImage": "이미지 닫기"
+    "closeImage": "이미지 닫기",
+    "discardAnnotationTitle": "주석을 버릴까요?",
+    "discardAnnotationBody": "저장하지 않은 획은 사라집니다.",
+    "continueAnnotating": "계속 주석 달기",
+    "discardAnnotation": "버리기",
+    "annotateUnavailableTitle": "지금은 주석을 달 수 없음",
+    "annotateImageUnavailable": "이미지에 주석 (현재 사용 불가)"
   },
   "queue": {
     "continueSystemInstruction": "완료되지 않은 작업 계속(시스템 지시)",
@@ -249,12 +263,13 @@
     },
     "row": {
       "syntheticEditDisabled": "시스템 지시 메시지는 편집하거나 끼어들기로 보낼 수 없습니다.",
+      "autoSentEditDisabled": "자동으로 보낸 메시지는 편집하거나 끼어들기로 보낼 수 없습니다.",
       "first": "이미 큐의 첫 항목입니다.",
       "last": "이미 큐의 마지막 항목입니다.",
       "steering": "끼어들기 전송 중",
       "orcaTitle": "협업 큐 {{index}}",
       "title": "큐 {{index}}",
-      "orcaReadOnly": "협업 메시지는 데스크톱에서 구성되며 모바일에서는 읽기 전용입니다.",
+      "orcaEditDisabled": "협업 메시지는 편집하거나 끼어들기로 보낼 수 없습니다.",
       "busy": "큐 작업을 동기화하는 중입니다. 완료 후 다시 조작하세요.",
       "steeringDisabled": "현재 turn에 끼어들기를 보내는 중입니다. 데스크톱 응답을 기다리세요.",
       "editLocked": "이 대기 메시지를 편집하는 중입니다. 완료 후 다시 조작하세요.",
@@ -307,7 +322,7 @@
     "inlineMediaData": "인라인 {{kind}} 데이터",
     "mediaActionsAvailable": "데스크톱 앱에서 이 미디어의 후속 작업을 제공합니다.",
     "availableActions": "사용 가능한 작업: {{actions}}",
-    "mediaActionsDesktopOnly": "모바일 V1에서는 이 작업을 표시만 하며 아직 원격으로 실행하지 않습니다. 데스크톱 앱으로 돌아가 선택하세요.",
+    "mediaActionsDesktopOnly": "휴대폰에서는 현재 이 작업을 확인만 할 수 있습니다. 컴퓨터에서 진행하세요.",
     "moreEdits": "…편집 {{count}}개 더 있음"
   },
   "quote": {
@@ -317,5 +332,10 @@
     "remove": "인용 제거",
     "closePreview": "인용 미리보기 닫기",
     "menuLabel": "대화에 추가"
+  },
+  "learning": {
+    "memory": "기억했어요: {{title}}",
+    "skillCreated": "스킬 생성: {{title}}",
+    "skillUpdated": "스킬 업데이트: {{title}}"
   }
 }

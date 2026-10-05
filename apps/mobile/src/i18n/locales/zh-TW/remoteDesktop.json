@@ -124,10 +124,9 @@
   "fps": "{{count}} 幀",
   "quality": "畫質",
   "automatic": "自動",
-  "clear": "清晰",
-  "highDefinition": "高清",
-  "original": "原畫",
-  "qualityHint": "自動會依網路調整畫質。畫質越高，需要的網路頻寬越大；實際流暢度取決於電腦和網路。",
+  "saver": "省流量",
+  "hd": "高清",
+  "qualityHint": "自動優先確保流暢，網路良好時盡量清晰；省流量會限制用量（最高 30 幀）；高清優先確保文字清晰，頻寬不足時會降低幀率。",
   "resolution": "電腦解析度",
   "settingUnsupported": "目前電腦端尚不支援此設定",
   "loadingSettings": "讀取中…",
@@ -159,7 +158,7 @@
   "lockOnExit": "退出後鎖定電腦",
   "lockOnExitHint": "離開遠端桌面時鎖定螢幕。重新連線或切換 App 不會觸發。",
   "lockOnExitFailed": "無法確認電腦已鎖定螢幕，請檢查電腦狀態。",
-  "hostMute": "被控端靜音",
-  "hostMuteHint": "連線期間將被控電腦靜音",
-  "hostMuteFailed": "無法修改被控端靜音狀態"
+  "hostMute": "遠端電腦靜音",
+  "hostMuteHint": "連線期間將遠端電腦靜音",
+  "hostMuteFailed": "無法修改遠端電腦的靜音狀態"
 }

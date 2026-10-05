@@ -164,6 +164,8 @@ export function taskTagErrorKey(error: unknown, action: TaskTagRequest['action']
     value && typeof value === 'object'
       ? String(value.message ?? value.error?.message ?? error)
       : String(error);
+  if (['BACKPRESSURE', 'DEVICE_LINK_BUSY'].includes(code) ||
+      /\[(?:BACKPRESSURE|DEVICE_LINK_BUSY)\]/.test(message)) return 'remoteBusy';
   if (
     ['CHANNEL_NOT_ALLOWED', 'UNKNOWN_CHANNEL', 'UNSUPPORTED_CHANNEL', 'METHOD_NOT_FOUND'].includes(
       code,

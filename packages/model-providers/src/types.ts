@@ -55,6 +55,20 @@ export const PI_MODEL_APIS = [
 ] as const;
 export type PiModelApi = (typeof PI_MODEL_APIS)[number];
 
+/**
+ * Cindy 自带鉴权的订阅账号家族(ChatGPT / Claude / SuperGrok)。新增订阅家族只在这里加一项:
+ * 各端按家族读取账号余量的入口都以 `Record<NativeSubscriptionAuth, …>` 声明,漏接会直接
+ * 编译失败(mobile 任务菜单见 readSessionMenuAccountUsage)。
+ */
+export const NATIVE_SUBSCRIPTION_AUTHS = ["codex", "claude", "xai"] as const;
+export type NativeSubscriptionAuth = (typeof NATIVE_SUBSCRIPTION_AUTHS)[number];
+/** 每个订阅家族的内置默认账号 providerId(独立账号另有自己的 id,以 auth.native 标识家族)。 */
+export const NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS = {
+  codex: "openai",
+  claude: "anthropic",
+  xai: "xai",
+} as const satisfies Record<NativeSubscriptionAuth, string>;
+
 /** Provider runtime 上游实际接受的推理 wire protocol。 */
 export type ProviderWireProtocol =
   "anthropic-messages" | "openai-responses" | "openai-chat" | "google-generative-ai";
@@ -397,6 +411,10 @@ export interface CatalogModel {
    * 不能读跨 provider 拍平去重后的列表（那只保留首个 provider 的值，会错）。
    */
   supportsFastMode?: boolean;
+  /** Same-provider, same-harness catalog model used for Fast. null explicitly disables mapping.
+   * Unlike a service tier, this changes the upstream model; availability must be checked per account.
+   */
+  fastModelId?: string | null;
   /**
    * 该模型在 Codex 下使用的模型级兼容 bridge 协议。
    *
@@ -508,7 +526,7 @@ export interface Provider {
    * OAuth Runner（generic-oauth）；不带描述符的 oauth 供应商 = host bespoke 鉴权
    * （anthropic / openai / xai 现状）。
    */
-  auth: { method: AuthMethod; oauth?: OAuthProviderDescriptor; native?: "codex" | "claude" | "xai" };
+  auth: { method: AuthMethod; oauth?: OAuthProviderDescriptor; native?: NativeSubscriptionAuth };
   /** 用户使用该供应商时的额度来源；旧目录可缺省，由 source 从 bundled 同 id 条目补齐。 */
   access?: ProviderAccess;
   /**
@@ -586,10 +604,7 @@ export interface Provider {
  * contextWindow 缺省时由 `buildUserProvider` 使用保守默认；预设可显式携带厂商文档确认的值，
  * 并随用户配置持久化，避免已知长上下文模型被错误降级。
  */
-export interface ProviderRuntimeModelConfig extends Pick<
-  ModelMetadata,
-  "mode" | "modalities" | "officialDocs"
-> {
+export interface ProviderRuntimeModelConfig extends ModelMetadata {
   discoveredMetadata?: ModelMetadata;
   discoveredCost?: ModelCost;
   nameExplicit?: boolean;
@@ -617,6 +632,17 @@ export interface ProviderRuntimeModelConfig extends Pick<
   reasoningDefaultEffort?: PiReasoningEffort;
   /** 思考只有开/关时走开关 UI。 */
   thinkingToggle?: boolean;
+}
+
+/**
+ * 预设推荐模型：三个引擎共用一份清单，数组顺序即推荐顺序（见 `expandPresetModels`）。
+ * 引擎间确有差异时用 `engines` / `engineOverrides` 显式声明，不再为每个引擎各写一份。
+ */
+export interface ProviderPresetModel extends ProviderRuntimeModelConfig {
+  /** 只在这些引擎可用（如协议限制）；缺省 = 预设声明的全部引擎。 */
+  engines?: AgentKind[];
+  /** 引擎专属字段（如 Pi 的推理档位、按模型路由），展开时覆盖共用字段。 */
+  engineOverrides?: Partial<Record<AgentKind, Partial<ProviderRuntimeModelConfig>>>;
 }
 
 /**
@@ -688,6 +714,11 @@ export interface ProviderPreset {
    * 创建后会快照进 CustomProviderConfig，不随预设后续更新。
    */
   authMethod?: "apiKey" | "none";
+  /**
+   * 目录源数据里的共用推荐模型清单。加载时由 `expandPresetModels` 展开进各
+   * `runtimes[agent].models` 并删除本字段；下游始终只读展开后的形状，旧格式照常可用。
+   */
+  models?: ProviderPresetModel[];
   /** per-runtime 预填数据（至少一个）。 */
   runtimes: Partial<Record<AgentKind, ProviderPresetRuntime>>;
 }
@@ -777,7 +808,7 @@ export interface CustomProviderConfig {
   auth?:
     | { method: "apiKey"; oauth?: never; native?: never }
     | { method: "oauth"; oauth: OAuthProviderDescriptor; native?: never }
-    | { method: "oauth"; native: "codex" | "claude" | "xai"; oauth?: never }
+    | { method: "oauth"; native: NativeSubscriptionAuth; oauth?: never }
     | { method: "none"; oauth?: never; native?: never };
   /** per-runtime 独立配置（键为 agent，只含已配置的 runtime；至少一个）。 */
   runtimes: Partial<Record<AgentKind, CustomProviderRuntimeConfig>>;

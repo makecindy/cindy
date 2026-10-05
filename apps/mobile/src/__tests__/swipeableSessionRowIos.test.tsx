@@ -104,6 +104,9 @@ vi.mock("lucide-react-native", () =>
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
+vi.mock("@/session/listDisclosureTransition", () => ({
+  useDisclosurePrepare: () => () => {},
+}));
 vi.mock("@/session/swipeRowRegistry", () => ({
   pinToggleAction: () => ({ label: "pin" }),
   statusToggleAction: () => ({ label: "archive", action: "archive" }),

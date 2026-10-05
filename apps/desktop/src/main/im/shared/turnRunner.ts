@@ -35,6 +35,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { isImAccountScopeClosedError } from '../accountBoundary';
 import { bindRuntimeRecoveryNotice } from './runtimeRecoveryNotice';
+import { isExpiredPermissionDecision, type SharedPermission } from '../../maker-ipc/sharedPermission';
+import { presentSharedPermissionCard } from './permissionPresentation';
+import { describeInteractionSource } from './interactionSource';
+import { hasSessionPermissionUpdates } from '@cindy/maker-core';
 
 /**
  * 群里的授权卡改投宿主私聊时, 加在卡片正文顶部的说明。
@@ -112,6 +116,7 @@ import { beginGroupHistoryAccess, type GroupHistoryAccessScope } from './groupHi
 import { agentHandoffPending } from '../../maker-ipc/agentHandoffPendingSingleton';
 import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../../maker-ipc/agentHandoff';
 import { buildPlanReconcileNote, summarizeOpenPlan } from '../../maker-ipc/planReconcile';
+import { peekGoalInactiveNote } from '../../goal-host/inactiveNote';
 import { listMessagesForAgentHandoff } from '../../localDb/ipc/messages';
 import {
   enqueueDurableWrite,
@@ -160,6 +165,8 @@ import {
 } from './sessionRepo';
 import type { ImCardBuilders } from './cardBuilders';
 import type { ImChannelAdapter } from './types';
+import { sameImDefaultRoute, type ImDefaultRoute } from './channelDefaultRoute';
+import type { ImChannelDefaultRouteSync } from './channelDefaultRouteSync';
 import {
   changeSessionPermissionMode,
   type PermissionModeChangeResult,
@@ -195,6 +202,7 @@ interface TurnState {
   /** thread = session 模型的会话维度键(slack thread root ts);feishu undefined。 */
   scopeKey?: string;
   initialMessageText: string;
+  sourceDescription?: string;
   reusesExistingSession?: boolean;
   notificationReply?: boolean;
   revalidateNotificationReply?: () => Promise<void>;
@@ -271,6 +279,13 @@ interface TurnState {
   /** Whether a callback-bound text response has already been reserved. */
   chunkedReplyBegun: boolean;
   queueMode: 'internal' | 'external';
+  /**
+   * 授权检查通过的「将要运行」路由(渠道默认跟随会切过去的那条; 未跟随则为 null)。
+   * 发送时刻实际路由不是它 = 跟随切换失败被吞、消息会按旧路由发送 —— 必须按实际
+   * 路由补一次授权检查, 否则旧供应商断开时消息进旧路由的发送流程运行时失败,
+   * 而不是给出缺授权提示(PR #5155 review P2)。
+   */
+  followAuthRoute: ImDefaultRoute | null;
   terminalPromise: Promise<ImTurnTerminal>;
   resolveTerminal: ((terminal: ImTurnTerminal) => void) | null;
 }
@@ -387,6 +402,7 @@ type DefaultRouteTargetResolution =
   | { target: null; missingAuth: ImAuthRouteStatus & { agentKind: AgentKind; model: string } };
 
 export interface ImRunAgentTurnArgs {
+  sourceDescription?: string;
   contextSnapshot?: ImContextSnapshot;
   /** Main-owned, resolved from an authenticated provider notification receipt. */
   notificationSessionId?: string;
@@ -526,6 +542,11 @@ export interface ImTurnRunner {
   disposeOneSession(sessionId: string): Promise<void>;
   /** Get the live Maker Session for a given DB session id, or null. */
   getMakerSessionById(sessionId: string): MakerSession | null;
+  /**
+   * 本渠道已接线自有任务的渠道 vendorOptions(切换引擎重建会话时补回);
+   * 未接线 / 接管 / 通知回复任务返回 undefined。
+   */
+  vendorOptionsForSession(sessionId: string): Record<string, unknown> | undefined;
   /** Permission choices exposed by the session's concrete Agent implementation. */
   getPermissionModes(agentKind: AgentKind): PermissionModeDescriptor[];
   changePermissionMode(args: {
@@ -550,9 +571,29 @@ export interface ImTurnRunner {
   }): Promise<{ stopped: boolean; droppedQueued: number }>;
 }
 
+/** row 的路由快照 —— 跟随切换的实际落点比对用。 */
+function routeOfRow(
+  row: Pick<ImSessionRow, 'agentKind' | 'model' | 'providerId' | 'effort'>,
+): ImDefaultRoute {
+  return {
+    agentKind: row.agentKind,
+    model: row.model,
+    providerId: row.providerId,
+    effort: row.effort,
+  };
+}
+
 export interface ImTurnRunnerDeps {
-  /** 锁住 session 并落实 deferred switch；IM 在刷新 live session + send 后 release。 */
-  acquirePendingAgentSwitch?: (sessionId: string) => Promise<() => void>;
+  /**
+   * 锁住 session 并落实 deferred switch；IM 在刷新 live session + send 后 release。
+   * `channelOwned` = 本渠道自有任务(非 `/ctr` 接管、非通知回复): 锁内先对齐渠道默认跟随。
+   */
+  acquirePendingAgentSwitch?: (
+    sessionId: string,
+    opts?: { channelOwned?: boolean },
+  ) => Promise<() => void>;
+  /** 渠道默认跟随: 发送前授权检查按真实会跑的路由判断; 未接线的任务接线前先对齐。 */
+  channelDefaultRoute?: Pick<ImChannelDefaultRouteSync, 'previewSwitchTarget' | 'syncBeforeWiring'>;
 }
 
 export function createTurnRunner(
@@ -599,6 +640,8 @@ export function createTurnRunner(
    *  the cache, both spawn a maker session, and the second clobbers the first
    *  in `sessionStates`. */
   const wiringInFlight = new Map<string, Promise<SessionState>>();
+  /** 接线前跟随切换期间, 切换重建会话要用的渠道 vendorOptions(见 vendorOptionsForSession)。 */
+  const coldWiringVendorOptions = new Map<string, Record<string, unknown>>();
   /**
    * agent switch 主动 close 的旧 Session。只有对象身份和 close reason 都匹配才
    * 忽略；同一业务 sessionId 下的用户关闭或新引擎关闭必须照常清缓存。
@@ -778,11 +821,26 @@ export function createTurnRunner(
     }
     const row = target.row;
     const allowedFileRoots = resolveTurnFileRoots(row.workingDir, row.remoteHostId);
+    let followTarget: ImDefaultRoute | null | undefined = null;
     if (!target.authChecked) {
-      const auth = await checkImRouteAuthDetailed(row, undefined, authCheckDeps());
+      // 渠道默认跟随: 本条消息会在 send 锁内切到新默认时, 按新路由检查授权 ——
+      // 否则旧默认坏掉(如供应商断开)时, 消息会先被「缺授权」挡掉, 永远换不过去。
+      followTarget =
+        !target.attached && !target.notificationReply
+          ? await deps.channelDefaultRoute?.previewSwitchTarget(row.id)
+          : null;
+      const authRow = followTarget
+        ? {
+            ...row,
+            agentKind: followTarget.agentKind,
+            model: followTarget.model,
+            providerId: followTarget.providerId,
+          }
+        : row;
+      const auth = await checkImRouteAuthDetailed(authRow, undefined, authCheckDeps());
       if (!auth.ok) {
         if (args.queueMode === 'internal') {
-          const authStatus = { ...auth, agentKind: row.agentKind, model: row.model };
+          const authStatus = { ...auth, agentKind: authRow.agentKind, model: authRow.model };
           const text =
             ui.agent.authMissing?.({ ...authStatus, attached: target.attached }) ??
             ui.agent.apiKeyMissing;
@@ -845,13 +903,16 @@ export function createTurnRunner(
       userId,
       scopeKey: target.scopeKey,
       initialMessageText: text,
+      sourceDescription: args.sourceDescription ?? describeInteractionSource({
+        channelName: channel, chatId: userId, text, protectedContent: args.protectedContent,
+      }),
       reusesExistingSession: target.attached || target.notificationReply,
       notificationReply: target.notificationReply,
       revalidateNotificationReply: args.revalidateNotificationReply,
       streamingHandle: null,
       streamingHandlePromise: null,
       streamingStartFailed: false,
-      presenter: createTurnPresenter({ mode: 'buffer-replace' }),
+      presenter: createTurnPresenter({ mode: 'buffer-replace', channel }),
       mediaAbsPaths: [],
       allowedFileRoots,
       done: false,
@@ -871,12 +932,64 @@ export function createTurnRunner(
       terminalErrorCode: null,
       chunkedReplyBegun: false,
       queueMode: args.queueMode,
+      followAuthRoute: followTarget ?? null,
       terminalPromise,
       resolveTerminal,
     };
+    // 未接线的任务(如重启后)要跟随新默认: 接线前先对齐, 不先用可能已坏的旧路由
+    // 起一次进程。只换接线用的路由; `row` 保持入口读到的值(标题等逻辑按它判断,
+    // 跨引擎切换清掉的原生会话 id 不应被当成「新对话」)。
+    let wireTarget = target;
+    if (
+      followTarget &&
+      deps.channelDefaultRoute &&
+      !sessionStates.has(row.id) &&
+      !wiringInFlight.has(row.id) &&
+      !getMaker().getSession(row.id)
+    ) {
+      coldWiringVendorOptions.set(row.id, adapter.buildVendorOptions(userId, target.scopeKey));
+      try {
+        await deps.channelDefaultRoute.syncBeforeWiring(row.id);
+      } finally {
+        coldWiringVendorOptions.delete(row.id);
+      }
+      const refreshed = await repo.peekSessionById(row.id);
+      if (refreshed) {
+        // 跟随切换没生效(失败被吞、保持原路由)时这条消息会按旧路由发送, 而此前的
+        // 授权检查只验过新默认路由 —— 按实际路由补一次, 旧供应商断开时在这里给出
+        // 缺授权提示, 而不是进旧路由的发送流程运行时失败(PR #5155 review P2)。
+        if (!sameImDefaultRoute(routeOfRow(refreshed), followTarget)) {
+          const auth = await checkImRouteAuthDetailed(refreshed, undefined, authCheckDeps());
+          if (!auth.ok) {
+            const authStatus = { ...auth, agentKind: refreshed.agentKind, model: refreshed.model };
+            if (args.queueMode === 'internal') {
+              const text =
+                ui.agent.authMissing?.({ ...authStatus, attached: target.attached }) ??
+                ui.agent.apiKeyMissing;
+              const consumed = (await args.onEarlyReject?.('missing_auth', text)) ?? false;
+              if (!consumed) await replyMissingAuth(userId, authStatus, scopeKey, target.attached);
+            }
+            await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
+            return { kind: 'rejected', reason: 'missing_auth' };
+          }
+        }
+        wireTarget = {
+          ...target,
+          row: {
+            ...target.row,
+            agentKind: refreshed.agentKind,
+            model: refreshed.model,
+            effort: refreshed.effort,
+            fastMode: refreshed.fastMode,
+            providerId: refreshed.providerId,
+            sdkSessionId: refreshed.sdkSessionId,
+          },
+        };
+      }
+    }
     let state: SessionState;
     try {
-      state = await ensureSessionWired(target, userId);
+      state = await ensureSessionWired(wireTarget, userId);
     } catch (err) {
       if (isCredentialModeSwitchBusyError(err)) {
         if (args.queueMode === 'internal') {
@@ -1067,6 +1180,9 @@ export function createTurnRunner(
     // 过程区耗时基准取真实派发时刻 — TurnState 创建时可能还要在 sendQueue 里
     // 等上一轮跑完, 排队等待不该计入"第 N 步 · 耗时"显示
     item.turn.presenter.activity.startedAt = Date.now();
+    if (item.notified && adapter.queuedEmoji) {
+      replaceAckReaction(item.turn, adapter.processingEmoji);
+    }
     state.queue.push(item.turn);
     log.info(
       `enqueued turn for session=${rowId.slice(-8)} queueDepth=${state.queue.length} pendingSends=${state.sendQueue.length}`,
@@ -1089,7 +1205,9 @@ export function createTurnRunner(
         };
         agentSwitchCloseSuppressed.set(rowId, suppression);
         try {
-          releaseAgentSwitchLock = await deps.acquirePendingAgentSwitch(rowId);
+          releaseAgentSwitchLock = await deps.acquirePendingAgentSwitch(rowId, {
+            channelOwned: !state.attached && !item.turn.notificationReply,
+          });
         } finally {
           agentSwitchCloseSuppressed.delete(rowId);
         }
@@ -1099,6 +1217,36 @@ export function createTurnRunner(
         await refreshSessionAfterPendingAgentSwitch(state, rowId, userId);
       } else {
         await refreshSessionAfterPendingAgentSwitch(state, rowId, userId);
+      }
+      // 发送时刻的实际路由兜底: 授权检查只验过「将要切到」的新默认路由, 跟随切换
+      // 失败被吞后这条消息会按旧路由发送 —— 按实际路由补一次授权检查, 旧供应商断开
+      // 时在这里给出缺授权提示, 而不是进发送流程运行时失败(PR #5155 review P2)。
+      // 冷路径在接线前已查过一次, 这里兜的是接线后切换才失败 / 热任务的切换失败。
+      const followAuthRoute = item.turn.followAuthRoute;
+      if (followAuthRoute) {
+        const landed = await repo.peekSessionById(rowId);
+        if (landed && !sameImDefaultRoute(routeOfRow(landed), followAuthRoute)) {
+          const auth = await checkImRouteAuthDetailed(landed, undefined, authCheckDeps());
+          if (!auth.ok) {
+            const authStatus = { ...auth, agentKind: landed.agentKind, model: landed.model };
+            if (item.turn.queueMode === 'internal') {
+              const text =
+                ui.agent.authMissing?.({ ...authStatus, attached: state.attached }) ??
+                ui.agent.apiKeyMissing;
+              const consumed = (await item.onEarlyReject?.('missing_auth', text)) ?? false;
+              if (!consumed) await replyMissingAuth(userId, authStatus, item.turn.scopeKey, state.attached);
+            }
+            // 文案已在上面按缺授权发过(外部队列由调用方消费), 这里只走收口。
+            await handleSendPreDispatchFailure(state, userId, {
+              turn: item.turn,
+              source: `${channel}-runner`,
+              reason: 'missing_auth',
+              context: buildSendContext(rowId),
+              onEarlyReject: async () => true,
+            });
+            return { kind: 'rejected', reason: 'missing_auth' };
+          }
+        }
       }
 
       // session-agent-switch:本路径直发 session.send(不经 makerSendTransaction),
@@ -1128,12 +1276,23 @@ export function createTurnRunner(
           return null;
         }
       })();
-      const outgoingMessage = planReconcileNote
+      const withPlanReconcile = planReconcileNote
         ? prependNoteToWireUserMessage(
             withHandoff as Parameters<typeof prependNoteToWireUserMessage>[0],
             planReconcileNote,
           )
         : withHandoff;
+      // 目标状态说明:与 makerSendTransaction 同语义,目标已不在运行时提醒模型别再
+      // 吐裁决块、别承诺自动续跑。读库失败静默跳过。
+      const goalInactiveNote = await enqueueDurableWrite(`goal-inactive-read:${rowId}`, () =>
+        peekGoalInactiveNote(rowId),
+      ).catch(() => null);
+      const outgoingMessage = goalInactiveNote
+        ? prependNoteToWireUserMessage(
+            withPlanReconcile as Parameters<typeof prependNoteToWireUserMessage>[0],
+            goalInactiveNote,
+          )
+        : withPlanReconcile;
 
       // 群护栏取缔: 按会话当前权限档决定是否真正挂强确认策略, 见
       // resolveEffectiveTurnPolicy。不挂时走与 DM 轮次相同的无策略路径。
@@ -1164,6 +1323,8 @@ export function createTurnRunner(
 
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
+        // IM owns successful replies, including turns in an attached desktop task.
+        origin: { kind: 'user', surface: 'im' },
         // The channel adapter and routing state live in Main. A symbol-keyed
         // context survives the in-process Session → Agent handoff but cannot be
         // fabricated by Renderer/device-link structured-clone input.
@@ -1219,6 +1380,7 @@ export function createTurnRunner(
                     turnId: item.turn.turnId,
                     origin: effectiveTurnPolicy?.origin ?? { kind: 'im', channel },
                     interactionSurface: 'channel-card',
+                    sourceDescription: item.turn.sourceDescription,
                     ...(effectiveTurnPolicy?.confirmationTimeoutMs
                       ? { timeoutMs: effectiveTurnPolicy.confirmationTimeoutMs }
                       : {}),
@@ -1232,6 +1394,12 @@ export function createTurnRunner(
                     item.turn.scopeKey,
                     effectiveTurnPolicy?.confirmationTimeoutMs,
                   ),
+                  permissionGuard: (request) => {
+                    const guard = checkChannelDestructiveToolCall(request.toolName, request.input);
+                    return guard.destructive
+                      ? { kind: 'permission', behavior: 'deny', reason: `[destructiveGuard] ${guard.reason}` }
+                      : null;
+                  },
                   // 文本渠道自己认领掉的不动卡片(它本来就没有卡);其余走
                   // dropInteractionCard —— 作废 pending 的同时把那张卡收口。
                   onCancel: (requestId, decision) =>
@@ -1520,12 +1688,18 @@ export function createTurnRunner(
     }, DISPATCH_RETRY_MS);
   }
 
-  /** 入队提示 — 每条消息只发一次(竞态 requeue 不重复提示)。失败 swallow。 */
+  /** 入队反馈：表情跟随排队状态，文字提示每条消息只发一次。 */
   async function notifyQueuedPosition(
     userId: string,
     item: QueuedSend,
     position: number,
   ): Promise<void> {
+    if (adapter.silentQueue) return;
+    if (adapter.queuedEmoji) {
+      item.notified = true;
+      replaceAckReaction(item.turn, adapter.queuedEmoji);
+      return;
+    }
     if (item.notified) return;
     item.notified = true;
     try {
@@ -1782,6 +1956,7 @@ export function createTurnRunner(
    */
   async function publishMigratedInteraction(
     entry: {
+      sharedPermission?: SharedPermission;
       requestId: string;
       request: InteractionRequest;
       resolve: (decision: InteractionDecision) => void;
@@ -1791,6 +1966,11 @@ export function createTurnRunner(
     scopeKey?: string,
   ): Promise<void> {
     const { request: req, resolve } = entry;
+    if (entry.sharedPermission) {
+      const decision = await handleInteractionFor(localSessionId, userId, scopeKey)(req, entry.sharedPermission);
+      entry.sharedPermission.decide(decision);
+      return;
+    }
     log.info(
       `publishMigrated kind=${req.kind} requestId=...${req.requestId.slice(-8)} session=...${localSessionId.slice(-8)}`,
     );
@@ -2094,6 +2274,31 @@ export function createTurnRunner(
     } catch {
       return null;
     }
+  }
+
+  /** 复用 ack 句柄串接状态切换，迟到的表情仍由现有终态清理接管。 */
+  function replaceAckReaction(turn: TurnState, emoji: string): void {
+    const messageId = turn.userMessageId;
+    if (!messageId) return;
+    const previous = turn.ackReactionIdPromise;
+    const next = Promise.resolve(previous)
+      .catch(() => null)
+      .then(async (reactionId) => {
+        // 已被下一次状态切换或收口接管：把现有 token 交给接管者清理。
+        if (turn.ackReactionIdPromise !== next) return reactionId;
+        try {
+          if (reactionId) await im.removeMessageReaction?.(messageId, reactionId);
+        } catch {
+          return reactionId;
+        }
+        if (turn.ackReactionIdPromise !== next) return null;
+        try {
+          return (await im.reactToMessage?.(messageId, emoji)) ?? null;
+        } catch {
+          return null;
+        }
+      });
+    turn.ackReactionIdPromise = next;
   }
 
   /**
@@ -2513,7 +2718,7 @@ export function createTurnRunner(
         // 取舍不同 —— 转播是自动任务的旁路展示, 没有人在等它; 为一条重试提示开卡,
         // 万一那轮重试成功后 agent 零输出收口, thread 里就多出一张只有标题的卡。
         {
-          const notice = turnRetryNotice(event.data);
+          const notice = turnRetryNotice(event.data, { channel });
           if (notice !== null && setActivityNotice(t.activity, notice)) {
             t.streamingHandle?.replace(composeTranspondView(t, false));
           }
@@ -3255,7 +3460,7 @@ export function createTurnRunner(
     scopeKey?: string,
     confirmationTimeoutMs?: number,
   ) {
-    return async (rawReq: InteractionRequest): Promise<InteractionDecision> => {
+    return async (rawReq: InteractionRequest, sharedPermission?: SharedPermission): Promise<InteractionDecision> => {
       // Redact BEFORE anything channel-facing sees the request. This listener
       // replaces the Desktop handler, which does its own redaction, so without
       // this the card builders (interactionCardModel copies `input` verbatim)
@@ -3290,6 +3495,7 @@ export function createTurnRunner(
             }
           }
           return adapter.handleTextInteraction(userId, req, {
+            sharedPermission,
             ...(confirmationTimeoutMs ? { timeoutMs: confirmationTimeoutMs } : {}),
           });
         }
@@ -3356,6 +3562,38 @@ export function createTurnRunner(
           return { kind, answers: {} };
         }
         return { kind, behavior: 'deny', reason: denyReason ?? 'no_card' };
+      }
+
+      if (req.kind === 'permission' && sharedPermission) {
+        const permissionSpec = spec;
+        const permissionUi = adapter.ui.cards.permission;
+        return presentSharedPermissionCard({
+          requestId: req.requestId,
+          toolName: req.toolName,
+          owner: pendingOwner,
+          permission: sharedPermission,
+          send: async () => {
+            await finalizeActiveStream(localSessionId);
+            const sent = await output.im.sendInteractiveCard(userId, permissionSpec, {
+              threadTs: scopeKey,
+              deliverToOwnerDm: true,
+            });
+            if (!sharedPermission.decision && userId.startsWith('g/') && permissionUi.dmRoutedNotice) {
+              const notice = permissionUi.dmRoutedNotice;
+              void im.sendText(userId, typeof notice === 'function' ? notice(req.toolName) : notice, { threadTs: scopeKey })
+                .catch(() => log.warn('shared permission source notice failed'));
+            }
+            return sent;
+          },
+          resolved: (decision) => cards.buildResolvedPermissionCard(
+            { title: permissionSpec.title ?? '', body: permissionSpec.body },
+            decision.kind === 'permission' && decision.behavior === 'allow'
+              ? hasSessionPermissionUpdates(decision) ? permissionUi.resolvedAllowAlways : permissionUi.resolvedAllowOnce
+              : isExpiredPermissionDecision(decision) ? '⌛ 本次确认已失效' : permissionUi.resolvedDeny,
+          ),
+          update: (messageId, card) => output.im.updateInteractiveCard(messageId, card),
+          onError: () => log.warn('shared permission card delivery/update failed'),
+        });
       }
 
       // Finalize any in-flight streaming card BEFORE sending the interaction
@@ -3743,6 +3981,13 @@ export function createTurnRunner(
     disposeAllSessions,
     disposeOneSession,
     getMakerSessionById,
+    vendorOptionsForSession: (sessionId) => {
+      const cold = coldWiringVendorOptions.get(sessionId);
+      if (cold) return cold;
+      const state = sessionStates.get(sessionId);
+      if (!state || state.preserveSessionConfig) return undefined;
+      return adapter.buildVendorOptions(state.userId, state.scopeKey);
+    },
     getPermissionModes: (agentKind) => getMaker().getCapabilities(agentKind).permissionModes,
     changePermissionMode: (args) =>
       changeSessionPermissionMode({

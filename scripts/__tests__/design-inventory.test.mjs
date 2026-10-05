@@ -118,6 +118,7 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
     '/bots/:botId/direct/:threadId BotDirectMessageView',
     '/bots/:botId/history/:sessionId BotHistorySessionView',
     '/bots/:botId/session/:sessionId BotSessionView',
+    '/bots/groups/:groupId BotGroupChatView',
     '/bots/list BotsListView',
     '/bots/remote/:deviceId/:botId RemoteBotSessionView',
     '/bots/roster BotRosterView',
@@ -1276,6 +1277,7 @@ test('Mobile actual route families and shared visible consumers are discoverable
     ['mobile.chat.session', ['MessageRenderer.tsx', 'CompanionMessageCard.tsx', 'AuthorizationMessageCard.tsx', 'FailedScheduleNotice.tsx']],
     ['mobile.remote-desktop', ['RemoteDesktopScreen.tsx', 'viewerHtml.ts']],
     ['mobile.settings', ['settings.tsx']],
+    ['mobile.plugins', ['PluginsScreen.tsx', 'PluginPage.tsx', 'PluginTaskSettings.tsx', 'PluginNativeIntent.tsx']],
     ['mobile.overlay.connection-startup', ['ConnectionNoticeOverlay.tsx', 'ConnectionBanner.tsx']],
   ]) {
     const surface = surfaces.find(s=>s.id===id);

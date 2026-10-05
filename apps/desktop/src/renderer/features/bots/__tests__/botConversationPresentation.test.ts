@@ -88,6 +88,17 @@ describe('teammate final-result presentation', () => {
     }
   });
 
+  it('keeps a persisted task result receipt visible while process rows are hidden', () => {
+    const receipt = message('receipt', 'assistant', '', {
+      systemCardType: 'bot-session-task-result',
+      systemCardData: { botCollaboration: { role: 'delegation-result' } },
+    });
+    const input = [message('u', 'user'), message('progress', 'assistant'), tool('t'), receipt];
+    for (const streaming of [true, false]) {
+      expect(allKeys(project(input, streaming))).toEqual(['msg-u', 'msg-receipt']);
+    }
+  });
+
   it('retains a later explanation after partial delivery and ignores unverified file candidates', () => {
     const result = project([message('u', 'user'),
       message('file', 'assistant', '', { files: [{ name: 'partial.pdf', path: '/partial.pdf' }] }),
@@ -177,4 +188,31 @@ describe('teammate final-result presentation', () => {
     expect(deferred.retry).not.toHaveBeenCalled();
     expect(group.deferred).toBe(deferred);
   });
+});
+
+it('keeps appended result receipts visible while the teammate is busy, across hidden wakeups', () => {
+  const input = [message('old-card', 'assistant', '', { systemCardType: 'bot-session-task' }),
+    message('new-input', 'user'),
+    message('result-1', 'assistant', '', { systemCardType: 'bot-session-task-result' }),
+    message('wake', 'user', '', { isSyntheticTrigger: true }),
+    message('result-2', 'assistant', '', { systemCardType: 'bot-session-task-result' }),
+    message('working', 'assistant')];
+  const result = project(input, true);
+  expect(result.filter(item => item.type === 'message' && item.message.systemCardType === 'bot-session-task-result').map(item => item.key))
+    .toEqual(['msg-result-1', 'msg-result-2']);
+});
+
+it('nests only explicitly bound results, preserving original anchor and human message order', () => {
+  const card = { v: 1 as const, role: 'delegation-result' as const, delegationId: 'job', fromBotId: 'bot',
+    fromBotName: 'Cindy', toBotId: null, toBotName: '', parentSessionId: 'chat', childSessionId: 'child', objective: 'Report',
+    result: { runSequence: 1, status: 'completed' as const, text: 'Report contents', artifacts: [] } };
+  const receipt = message('receipt', 'assistant', '', { systemCardType: 'bot-session-task-result', systemCardData: card });
+  const anchor = message('anchor', 'assistant', '', { systemCardType: 'bot-session-task' });
+  const final = message('final', 'assistant', 'Summary', { turnCompleted: true, botTaskResults: [card] });
+  const input = [anchor, receipt, message('human', 'user'), message('progress', 'assistant'), tool('t'), final];
+  expect(allKeys(project(input, false))).toEqual(['msg-anchor', 'msg-human', 'msg-final']);
+  expect(final.message.botTaskResults).toEqual([card]);
+  expect(allKeys(project(input.slice(0, -1), false))).toContain('msg-receipt');
+  expect(allKeys(project([receipt, message('unrelated', 'assistant', 'Other', { turnCompleted: true })], false))).toContain('msg-receipt');
+  expect(input[1]).toBe(receipt);
 });

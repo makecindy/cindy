@@ -49,7 +49,7 @@ export function MarketPluginDetailView({
 
   return (
     <main
-      className="plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
+      className="app-wallpaper-surface plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
       onScroll={onScroll}
     >
       <PluginDetailTopBar
@@ -99,12 +99,8 @@ export function MarketPluginDetailView({
                 aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
                 className="plugin-detail-primary-action min-w-[104px] whitespace-nowrap"
               >
-                {!busy && (
-                  <>
-                    <Download size={15} aria-hidden="true" />
-                    {t(actionKey)}
-                  </>
-                )}
+                <Download size={15} aria-hidden="true" />
+                {t(actionKey)}
               </Button>
             ) : null}
           </div>

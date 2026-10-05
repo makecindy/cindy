@@ -223,10 +223,12 @@ const providersRef = vi.hoisted(() => {
       },
     },
   ] as unknown[];
-  return { DEFAULT_PROVIDERS, providers: DEFAULT_PROVIDERS, loading: false, loadFailed: false };
+  return { DEFAULT_PROVIDERS, providers: DEFAULT_PROVIDERS, loading: false, loadFailed: false,
+    error: null as { reason: 'legacy-busy' } | null, refetch: vi.fn(async () => true) };
 });
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: providersRef.providers, providerOrder: [], loading: providersRef.loading, loadFailed: providersRef.loadFailed }),
+  useProviders: () => ({ providers: providersRef.providers, providerOrder: [],
+    loading: providersRef.loading, loadFailed: providersRef.loadFailed, error: providersRef.error, refetch: providersRef.refetch }),
 }));
 
 vi.mock('@/hooks/useDeviceProviders', () => ({
@@ -282,6 +284,8 @@ beforeEach(() => {
   providersRef.providers = providersRef.DEFAULT_PROVIDERS;
   providersRef.loading = false;
   providersRef.loadFailed = false;
+  providersRef.error = null;
+  providersRef.refetch.mockClear();
   modelAccessState.accountTier = null;
   visibleModelsRef.models = [];
   (window as unknown as { electronAPI: unknown }).electronAPI = {
@@ -562,6 +566,52 @@ async function waitForSearchInputFocus(): Promise<HTMLElement> {
 }
 
 describe('ModelSelector provider groups', () => {
+  it.each([false, true])('offers recovery instead of an empty local catalog (unified=%s)', async (unifiedPanel) => {
+    providersRef.providers = [];
+    providersRef.loading = true;
+    providersRef.error = { reason: 'legacy-busy' };
+    renderSelector({ unifiedPanel });
+    await openDropdown();
+    expect(screen.getByRole('status').textContent).toContain('catalogRecovery.legacy');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'settings.providers.catalogRecovery.retry' }));
+    });
+    expect(providersRef.refetch).toHaveBeenCalledOnce();
+  });
+
+  it('retains the usable local list when a subsequent refresh fails', async () => {
+    providersRef.error = { reason: 'legacy-busy' };
+    renderSelector();
+    await openDropdown();
+    expect(screen.getByRole('status').textContent).toContain('catalogRecovery.legacy');
+    expect(screen.getAllByRole('option').length).toBeGreaterThan(0);
+  });
+
+  it('keeps classic-picker recovery visible when the snapshot has no connected source for the current engine', async () => {
+    providersRef.providers = [{
+      id: 'gemini', name: 'Gemini', source: 'builtin', connected: true,
+      agents: [], models: {}, auth: { method: 'api-key' },
+    }];
+    providersRef.error = { reason: 'legacy-busy' };
+    renderSelector({ onNavigateToProviders: vi.fn() });
+    await openDropdown();
+    expect(screen.getByRole('status').textContent).toContain('catalogRecovery.legacy');
+    expect(screen.getByRole('button', { name: 'newChat.modelSelector.source.connectCta' })).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'settings.providers.catalogRecovery.retry' }));
+    });
+    expect(providersRef.refetch).toHaveBeenCalledOnce();
+  });
+
+  it('never presents the local recovery action in a remote device picker', async () => {
+    providersRef.loading = true;
+    providersRef.error = { reason: 'legacy-busy' };
+    renderSelector({ deviceId: 'remote-device' });
+    await openDropdown();
+    expect(screen.queryByText('settings.providers.catalogRecovery.legacy')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'settings.providers.catalogRecovery.retry' })).toBeNull();
+  });
+
   it('offers source navigation with only a connected media provider and no chat candidates', async () => {
     providersRef.providers = [{
       id: 'gemini', name: 'Gemini', source: 'builtin', connected: true,

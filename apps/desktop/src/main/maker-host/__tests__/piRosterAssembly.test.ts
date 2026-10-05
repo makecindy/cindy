@@ -12,6 +12,11 @@ const state = vi.hoisted(() => ({
   userDataPath: '',
 }));
 
+// Skill discovery is covered by managed-skills.test.ts, not this runtime/auth fixture.
+vi.mock('../managed-skills.js', () => ({
+  listCindyManagedSkills: async () => [],
+  cindyManagedSkillRoots: async () => [],
+}));
 // Account discovery persistence is outside this runtime/route fixture.
 vi.mock('../model-discovery/xai.js', () => ({
   discardXaiModelsDiskCache: vi.fn(async () => {}),
@@ -45,8 +50,9 @@ vi.mock('../anthropic-compat-proxy-host.js', () => ({
   getClaudeEndpoint: () => 'http://127.0.0.1:9',
 }));
 
-vi.mock('../claude-credentials-store.js', () => ({
-  hasClaudeAiOAuth: () => false,
+vi.mock('../claude-native-auth.js', () => ({
+  hasClaudeNativeLogin: () => false,
+  hasClaudeNativeLoginUnbound: () => false,
 }));
 
 vi.mock('../grok-oauth-login.js', () => ({

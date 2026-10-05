@@ -6,8 +6,9 @@ describe('connection identity vs public catalog identity', () => {
   it.each([
     ['openai', 'codex', [false, true, true]],
     ['openai-account', 'codex', [true, true, true]],
-    ['anthropic', 'claude', [true, false, true]],
-    ['claude-account', 'claude', [true, false, true]],
+    // Claude 订阅只在本机 Claude Code 的登录里,远端(SSH)任务一律不可用。
+    ['anthropic', 'claude', [true, true, true]],
+    ['claude-account', 'claude', [true, true, true]],
     ['xai', 'xai', [true, true, false]],
     ['grok-account', 'xai', [true, true, false]],
   ] as const)('matches SSH adapters for %s', (id, native, expected) => {

@@ -23,9 +23,22 @@ const reads = vi.hoisted(() => ({
   webSnapshot: null as RateLimitSnapshot | null,
   claudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
   xaiSnapshot: null as XaiSubscriptionUsageSnapshot | null,
+  remoteCodex: vi.fn(),
+  remoteClaude: vi.fn(),
+  remoteXai: vi.fn(),
 }));
 vi.mock('@/hooks/useCodexRateLimits', () => ({ useCodexRateLimits: reads.codex }));
-vi.mock('@/hooks/useAccountUsage', () => ({ useAccountUsage: reads.web }));
+vi.mock('@/hooks/useAccountUsage', async (importActual) => ({
+  ...(await importActual<typeof import('@/hooks/useAccountUsage')>()),
+  useAccountUsage: reads.web,
+}));
+vi.mock('@/hooks/useRemoteDeviceUsage', () => ({
+  useRemoteCodexAccountUsage: reads.remoteCodex,
+  useRemoteXaiSubscriptionUsage: reads.remoteXai,
+}));
+vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
+  useRemoteClaudeSubscriptionUsage: reads.remoteClaude,
+}));
 vi.mock('@/hooks/useClaudeSubscriptionUsage', () => ({ useClaudeSubscriptionUsage: reads.claude }));
 vi.mock('@/hooks/useXaiSubscriptionUsage', () => ({ useXaiSubscriptionUsage: reads.xai }));
 vi.mock('react-i18next', () => ({
@@ -51,6 +64,7 @@ const quotaText = (text: string) => (_: string, node: Element | null) =>
   !Array.from(node.children).some((child) => child.textContent === text);
 
 const now = Date.UTC(2026, 8, 12);
+const local = { deviceId: null };
 const provider = (id: string, native: 'codex' | 'claude' | 'xai' = 'codex'): ProviderView => ({
   id,
   name: id,
@@ -93,6 +107,9 @@ beforeEach(() => {
   );
   reads.claude.mockImplementation((enabled: boolean) => (enabled ? reads.claudeSnapshot : null));
   reads.xai.mockImplementation((enabled: boolean) => (enabled ? reads.xaiSnapshot : null));
+  reads.remoteCodex.mockReturnValue(null);
+  reads.remoteClaude.mockReturnValue(null);
+  reads.remoteXai.mockReturnValue(null);
 });
 afterEach(() => {
   cleanup();
@@ -103,15 +120,23 @@ afterEach(() => {
 describe('model source second line', () => {
   it('shares one reader per account across duplicate model and favorite rows', () => {
     const { container } = render(
-      <ModelSourceUsageProvider providers={[provider('account-a'), provider('account-b')]} enabled>
+      <ModelSourceUsageProvider
+        providers={[provider('account-a'), provider('account-b')]}
+        scope={local}
+      >
         {details()}
         {details()}
         {details('account-b')}
       </ModelSourceUsageProvider>,
     );
-    expect(screen.getAllByText(quotaText('2小时 78%'))).toHaveLength(2);
+    // Only the tightest window is shown: account-a's weekly, account-b's five-hour.
+    expect(screen.getAllByText(quotaText('5天 42%'))).toHaveLength(2);
     expect(screen.getByText(quotaText('2小时 12%'))).toBeTruthy();
-    expect(screen.getAllByText(quotaText('5天 42%'))).toHaveLength(3);
+    expect(screen.queryByText(/2小时 78%/)).toBeNull();
+    expect(container.textContent).not.toContain('/');
+    expect(container.querySelector('[data-model-source-details]')?.getAttribute('title')).toBe(
+      'account-a · Pro · 2小时 · 剩余 78% · 5天 · 剩余 42%',
+    );
     expect(
       reads.codex.mock.calls.filter(([enabled, id]) => enabled && id === 'account-a'),
     ).toHaveLength(1);
@@ -125,7 +150,7 @@ describe('model source second line', () => {
   it.each([70, 71, 89, 90, 98])('warns only on the percentage at %s percent used', (used) => {
     reads.accounts['account-a'] = snapshot(used);
     render(
-      <ModelSourceUsageProvider providers={[provider('account-a')]} enabled>
+      <ModelSourceUsageProvider providers={[provider('account-a')]} scope={local}>
         {details()}
       </ModelSourceUsageProvider>,
     );
@@ -136,17 +161,63 @@ describe('model source second line', () => {
     expect(percentage.parentElement?.className).toBe('');
     expect(percentage.parentElement?.textContent).toBe(`2小时 ${100 - used}%`);
   });
-  it('shows the source without reading local quota for a remote directory', () => {
+  it('shows only the source when the directory may not show account usage', () => {
     render(
-      <ModelSourceUsageProvider providers={[provider('account-a')]} enabled={false}>
+      <ModelSourceUsageProvider providers={[provider('account-a')]} scope={null}>
         {details()}
       </ModelSourceUsageProvider>,
     );
     expect(screen.getByText('account-a')).toBeTruthy();
     expect(reads.codex).not.toHaveBeenCalled();
     expect(reads.web).not.toHaveBeenCalled();
-    expect(reads.claude).not.toHaveBeenCalled();
-    expect(reads.xai).not.toHaveBeenCalled();
+    expect(reads.remoteCodex).not.toHaveBeenCalled();
+  });
+  it('reads a remote directory from the device mirror, never this desktop', () => {
+    const bucket = (limitId: string, used: number, limitName?: string) => ({
+      limitId,
+      limitName,
+      planType: 'plus',
+      primary: { usedPercent: used, windowMinutes: 300, resetsAt: now / 1000 + 7200 },
+    });
+    reads.remoteCodex.mockImplementation((deviceId: string | null, id: string) =>
+      deviceId === 'device-1' && id === 'account-a'
+        ? {
+            ...bucket('codex_other', 5),
+            webSnapshot: {
+              source: 'openai-web',
+              primary: { usedPercent: 61, resetsAt: now / 1000 + 3600 },
+            },
+            appServerBuckets: {
+              codex: bucket('codex', 40),
+              spark: bucket('spark', 90, 'GPT-5.3-Codex-Spark'),
+            },
+          }
+        : null,
+    );
+    reads.remoteClaude.mockImplementation((deviceId: string | null) =>
+      deviceId ? { subscriptionType: 'pro', fiveHour: { utilization: 25 } } : null,
+    );
+    render(
+      <ModelSourceUsageProvider
+        providers={[provider('account-a'), provider('claude', 'claude')]}
+        scope={{ deviceId: 'device-1' }}
+      >
+        {details()}
+        {details('account-a', 'gpt-5.3-codex-spark')}
+        {details('account-a', 'chatgpt/gpt-5.6')}
+        {details('claude', 'claude-opus-5')}
+      </ModelSourceUsageProvider>,
+    );
+    expect(screen.getByText(quotaText('2小时 60%'))).toBeTruthy();
+    expect(screen.getByText(quotaText('2小时 10%'))).toBeTruthy();
+    expect(screen.getByText(quotaText('1小时 39%'))).toBeTruthy();
+    expect(screen.getByText('claude · Pro')).toBeTruthy();
+    expect(screen.getAllByText('account-a · Plus')).toHaveLength(2);
+    expect(reads.remoteCodex).toHaveBeenCalledWith('device-1', 'account-a');
+    expect(reads.codex.mock.calls.some(([enabled]) => enabled)).toBe(false);
+    expect(reads.web.mock.calls.some(([, vendor]) => vendor === 'codex')).toBe(false);
+    expect(reads.claude.mock.calls.some(([enabled]) => enabled)).toBe(false);
+    expect(reads.xai.mock.calls.some(([enabled]) => enabled)).toBe(false);
   });
   it('does not borrow a native subscription for API or reconnect-required connections', () => {
     const api = { ...provider('account-a'), auth: { method: 'apiKey' as const } };
@@ -155,7 +226,7 @@ describe('model source second line', () => {
       subscriptionAccount: { source: 'oauth' as const, reconnectRequired: true },
     };
     render(
-      <ModelSourceUsageProvider providers={[api, reconnect]} enabled>
+      <ModelSourceUsageProvider providers={[api, reconnect]} scope={local}>
         {details()}
         {details('account-b')}
       </ModelSourceUsageProvider>,
@@ -174,16 +245,16 @@ describe('model source second line', () => {
     };
     data.rateLimits = data.rateLimitsByLimitId.promo!;
     render(
-      <ModelSourceUsageProvider providers={[provider('account-a')]} enabled>
+      <ModelSourceUsageProvider providers={[provider('account-a')]} scope={local}>
         {details()}
       </ModelSourceUsageProvider>,
     );
-    expect(screen.getByText(quotaText('2小时 78%'))).toBeTruthy();
-    expect(screen.queryByText(quotaText('2小时 1%'))).toBeNull();
+    expect(screen.getByText(quotaText('5天 42%'))).toBeTruthy();
+    expect(screen.queryByText(/1%/)).toBeNull();
   });
   it('never falls back to Codex CLI quota for a ChatGPT bridge model', () => {
     const { rerender } = render(
-      <ModelSourceUsageProvider providers={[provider('account-a')]} enabled>
+      <ModelSourceUsageProvider providers={[provider('account-a')]} scope={local}>
         {details('account-a', 'chatgpt/gpt-5.6')}
       </ModelSourceUsageProvider>,
     );
@@ -192,7 +263,7 @@ describe('model source second line', () => {
     expect(screen.queryByText('account-a · Pro')).toBeNull();
     reads.webSnapshot = { primary: { usedPercent: 61, resetsAt: now / 1000 + 3600 } };
     rerender(
-      <ModelSourceUsageProvider providers={[provider('account-a')]} enabled>
+      <ModelSourceUsageProvider providers={[provider('account-a')]} scope={local}>
         {details('account-a', 'chatgpt/gpt-5.6')}
       </ModelSourceUsageProvider>,
     );
@@ -202,7 +273,7 @@ describe('model source second line', () => {
   it('uses Claude model-scoped weekly quota and keeps unknown reset times honest', () => {
     reads.claudeSnapshot = {
       subscriptionType: 'max',
-      fiveHour: { utilization: 0 },
+      fiveHour: { utilization: 95 },
       sevenDay: { utilization: 50, resetsAt: now / 1000 + 86400 },
       scoped: [
         {
@@ -213,15 +284,55 @@ describe('model source second line', () => {
         },
       ],
     };
-    render(
-      <ModelSourceUsageProvider providers={[provider('claude', 'claude')]} enabled>
+    const { container } = render(
+      <ModelSourceUsageProvider providers={[provider('claude', 'claude')]} scope={local}>
         {details('claude', 'claude-opus-5')}
       </ModelSourceUsageProvider>,
     );
     expect(screen.getByText('claude · Max')).toBeTruthy();
-    expect(screen.getByText(quotaText('— 100%'))).toBeTruthy();
-    expect(screen.getByText(quotaText('2天 20%'))).toBeTruthy();
-    expect(screen.queryByText(quotaText('1天 50%'))).toBeNull();
+    expect(screen.getByText(quotaText('— 5%'))).toBeTruthy();
+    expect(screen.queryByText(/20%/)).toBeNull();
+    expect(container.querySelector('[data-model-source-details]')?.getAttribute('title')).toBe(
+      'claude · Max · 剩余 5% · 2天 · 剩余 20%',
+    );
+  });
+  it('caps countdowns at the window length right after a reset, except xAI', () => {
+    // resetsAt 比 now + 窗口长度晚 30 秒(服务端取整 / 时钟偏差),不得向上取整成多一天/一小时
+    reads.accounts['account-a'] = {
+      ...snapshot(0),
+      rateLimits: {
+        // 5h 窗口更紧张,来源行显示它
+        primary: { usedPercent: 50, windowMinutes: 300, resetsAt: now / 1000 + 5 * 3600 + 30 },
+        secondary: { usedPercent: 0, windowMinutes: 10080, resetsAt: now / 1000 + 7 * 86400 + 30 },
+      },
+    };
+    reads.claudeSnapshot = {
+      subscriptionType: 'max',
+      fiveHour: { utilization: 0, resetsAt: now / 1000 + 5 * 3600 + 30 },
+      sevenDay: { utilization: 0, resetsAt: now / 1000 + 7 * 86400 + 30 },
+    };
+    // xAI resetsAt 可能来自非周窗口 / 月度账期,原样显示
+    reads.xaiSnapshot = {
+      planLabel: 'SuperGrok',
+      creditUsagePercent: 0,
+      resetsAt: now / 1000 + 25 * 86400,
+      updatedAt: now,
+    };
+    render(
+      <ModelSourceUsageProvider
+        providers={[provider('account-a'), provider('claude', 'claude'), provider('xai', 'xai')]}
+        scope={local}
+      >
+        {details()}
+        {details('claude', 'claude-opus-5')}
+        {details('xai', 'grok-4')}
+      </ModelSourceUsageProvider>,
+    );
+    expect(screen.getByText(quotaText('5小时 50%'))).toBeTruthy();
+    // Claude 两窗口同为 0% 已用,后一个(周限)胜出
+    expect(screen.getByText(quotaText('7天 100%'))).toBeTruthy();
+    expect(screen.getByText(quotaText('25天 100%'))).toBeTruthy();
+    expect(screen.queryByText(/8天|6小时/)).toBeNull();
   });
   it('shows current xAI weekly quota and hides stale values', () => {
     reads.xaiSnapshot = {
@@ -231,7 +342,7 @@ describe('model source second line', () => {
       updatedAt: now,
     };
     const view = () => (
-      <ModelSourceUsageProvider providers={[provider('xai', 'xai')]} enabled>
+      <ModelSourceUsageProvider providers={[provider('xai', 'xai')]} scope={local}>
         {details('xai', 'grok-4')}
       </ModelSourceUsageProvider>
     );
@@ -250,12 +361,12 @@ describe('model source second line', () => {
       reads.accounts['account-a']!.rateLimits.primary!.resetsAt = now / 1000;
       reads.accounts['account-a']!.rateLimits.secondary!.resetsAt = now / 1000;
       const { container } = render(
-        <ModelSourceUsageProvider providers={[provider('account-a')]} enabled>
+        <ModelSourceUsageProvider providers={[provider('account-a')]} scope={local}>
           {details()}
         </ModelSourceUsageProvider>,
       );
       const line = container.querySelector('[data-model-source-details]')!;
-      expect(screen.getAllByText(reads.pendingLabel)).toHaveLength(2);
+      expect(screen.getAllByText(reads.pendingLabel)).toHaveLength(1);
       expect(line.getAttribute('title')).toBe(
         `account-a · Pro · ${reads.pendingLabel} · ${reads.pendingLabel}`,
       );
@@ -269,8 +380,9 @@ describe('model source second line', () => {
 
   it('replaces an expired period with reset pending, never inferred full quota', () => {
     reads.accounts['account-a']!.rateLimits.primary!.resetsAt = now / 1000 + 1;
+    reads.accounts['account-a']!.rateLimits.secondary = null;
     render(
-      <ModelSourceUsageProvider providers={[provider('account-a')]} enabled>
+      <ModelSourceUsageProvider providers={[provider('account-a')]} scope={local}>
         {details()}
       </ModelSourceUsageProvider>,
     );
@@ -286,5 +398,17 @@ describe('model source second line', () => {
     expect(screen.queryByText(reads.pendingLabel)).toBeNull();
     expect(screen.getByText('—')).toBeTruthy();
     expect(screen.queryByText('78%')).toBeNull();
+  });
+
+  it('keeps a live window at 0% used over a later window awaiting reset', () => {
+    reads.accounts['account-a'] = snapshot(0);
+    reads.accounts['account-a'].rateLimits.secondary!.resetsAt = now / 1000;
+    render(
+      <ModelSourceUsageProvider providers={[provider('account-a')]} scope={local}>
+        {details()}
+      </ModelSourceUsageProvider>,
+    );
+    expect(screen.getByText(quotaText('2小时 100%'))).toBeTruthy();
+    expect(screen.queryByText(reads.pendingLabel)).toBeNull();
   });
 });

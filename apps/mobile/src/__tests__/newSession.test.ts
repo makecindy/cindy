@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import ts from 'typescript';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import type { MobileModelOption } from '@/session/agentCapabilities';
@@ -7,10 +8,17 @@ import {
   DEFAULT_NEW_SESSION_DRAFT,
   NEW_SESSION_AGENT_OPTIONS,
   availableNewSessionAgentOptions,
+  canResolveStoredAgentRuntime,
+  isStoredAgentRestorePending,
+  nextStoredAgentRestoreStep,
+  type StoredAgentRestoreState,
   buildNewSessionCreatePreview,
   buildRecentWorkspaceOptions,
   buildRemoteCreateSessionOptions,
   filterRemoteDirectoryEntries,
+  isCurrentRemoteBrowseRequest,
+  normalizeRemoteDirectoryDrives,
+  shouldRetryRemoteBrowseDrives,
   defaultPermissionModeForNewSessionAgent,
   normalizeCreateSessionResult,
   parseNewSessionDeviceOptions,
@@ -317,6 +325,128 @@ describe('resolveSubmitGuardCatalog —— 提交终检目录取信(代际安全
     const res = await pending;
     expect(fetchSpy).toHaveBeenCalledTimes(3); // 循环上限 3
     expect(res).toMatchObject({ rows: [], catalogKnown: false });
+  });
+});
+
+describe('stored agent restore gating', () => {
+  const recentOpus = remoteSession('recent', {
+    deviceLinkDeviceId: 'mac',
+    model: 'claude-opus-5-5',
+    effort: 'high',
+  });
+
+  it('waits while neither the catalog nor a recent task for the agent is available', () => {
+    // 冷启动:目录未就绪、任务列表还没到 —— 此刻恢复只能落到内置 Sonnet 4.6。
+    expect(canResolveStoredAgentRuntime({
+      agentKind: 'claude-code',
+      sessions: [],
+      deviceId: 'mac',
+      catalogReady: false,
+      providersUnsupported: false,
+    })).toBe(false);
+    expect(pickAgentDefaultRuntime({
+      agentKind: 'claude-code',
+      sessions: [],
+      modelRows: [],
+      currentEffort: 'medium',
+      deviceId: 'mac',
+      catalogReady: false,
+    })).toMatchObject({ model: 'claude-sonnet-4-6', effort: 'medium' });
+  });
+
+  it('proceeds once a recent task of the stored agent exists on the device', () => {
+    expect(canResolveStoredAgentRuntime({
+      agentKind: 'claude-code',
+      sessions: [recentOpus],
+      deviceId: 'mac',
+      catalogReady: false,
+      providersUnsupported: false,
+    })).toBe(true);
+    // 其他设备或其他 agent 的任务不算。
+    expect(canResolveStoredAgentRuntime({
+      agentKind: 'codex',
+      sessions: [recentOpus],
+      deviceId: 'mac',
+      catalogReady: false,
+      providersUnsupported: false,
+    })).toBe(false);
+    expect(canResolveStoredAgentRuntime({
+      agentKind: 'claude-code',
+      sessions: [recentOpus],
+      deviceId: 'studio',
+      catalogReady: false,
+      providersUnsupported: false,
+    })).toBe(false);
+  });
+
+  it('proceeds once the catalog is ready or explicitly unsupported, or without a device', () => {
+    const base = { agentKind: 'claude-code' as const, sessions: [], deviceId: 'mac' };
+    expect(canResolveStoredAgentRuntime({ ...base, catalogReady: true, providersUnsupported: false })).toBe(true);
+    expect(canResolveStoredAgentRuntime({ ...base, catalogReady: false, providersUnsupported: true })).toBe(true);
+    expect(canResolveStoredAgentRuntime({ ...base, deviceId: '', catalogReady: false, providersUnsupported: false })).toBe(true);
+  });
+
+  it('reports a pending restore only for an unapplied stored agent on the target device', () => {
+    const base = { expectedDeviceId: 'mac', selectedDeviceId: 'mac' };
+    expect(isStoredAgentRestorePending({ ...base, storedAgentKind: 'claude-code', appliedStoredAgentKind: null })).toBe(true);
+    expect(isStoredAgentRestorePending({ ...base, storedAgentKind: 'claude-code', appliedStoredAgentKind: 'claude-code' })).toBe(false);
+    expect(isStoredAgentRestorePending({ ...base, storedAgentKind: null, appliedStoredAgentKind: null })).toBe(false);
+    // 显式路由到别的设备时不恢复,自动默认照常工作。
+    expect(isStoredAgentRestorePending({
+      storedAgentKind: 'claude-code',
+      appliedStoredAgentKind: null,
+      expectedDeviceId: 'mac',
+      selectedDeviceId: 'studio',
+    })).toBe(false);
+    expect(isStoredAgentRestorePending({
+      storedAgentKind: 'codex',
+      appliedStoredAgentKind: null,
+      expectedDeviceId: '',
+      selectedDeviceId: 'studio',
+    })).toBe(true);
+  });
+
+  it('restores the remembered agent immediately and fills its model exactly once when data arrives (codex P1)', () => {
+    // 事件序列:偏好到 → 数据未到 → 数据到 → 之后再有数据变化。
+    let restored: StoredAgentRestoreState | null = null;
+    const apply = (modelReady: boolean) => {
+      const step = nextStoredAgentRestoreStep({ storedAgentKind: 'codex', restored, modelReady });
+      if (step) restored = { agentKind: 'codex', phase: step === 'agent' ? 'agent' : 'done' };
+      return step;
+    };
+    // 目录拉不到、也没有 Codex 最近任务:仍先恢复 agent(旧补丁在这里返回不恢复,草稿停在 Claude)。
+    expect(apply(false)).toBe('agent');
+    expect(apply(false)).toBeNull();
+    expect(apply(true)).toBe('model');
+    expect(apply(true)).toBeNull();
+    expect(apply(false)).toBeNull();
+  });
+
+  it('restores agent and model together when data is already there, and restarts for a different remembered agent', () => {
+    expect(nextStoredAgentRestoreStep({ storedAgentKind: 'pi', restored: null, modelReady: true })).toBe('full');
+    expect(nextStoredAgentRestoreStep({
+      storedAgentKind: 'pi',
+      restored: { agentKind: 'codex', phase: 'done' },
+      modelReady: false,
+    })).toBe('agent');
+  });
+
+  it('gates the stored agent restore on real data and leaves the auto-default unblocked', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    const storedStart = source.indexOf('const storedAgentKind = newSessionPreferences?.agentKind;');
+    const autoStart = source.indexOf('const result = resolveNewSessionAutoDefault({');
+    const storedSource = source.slice(storedStart, source.indexOf('storedAgentRestoreRef.current = {', storedStart));
+    const autoGuardSource = source.slice(source.lastIndexOf('useEffect(() => {', autoStart), autoStart);
+    expect(storedSource).toContain('isStoredAgentRestorePending({');
+    expect(storedSource).toContain('canResolveStoredAgentRuntime({');
+    expect(storedSource).toContain('nextStoredAgentRestoreStep({');
+    // model 步只补模型,不写 agent / 权限。
+    const modelStep = source.slice(source.indexOf("if (step === 'model') {"), source.indexOf('const storedPermissionMode', storedStart));
+    expect(modelStep).not.toContain('permissionMode');
+    expect(modelStep).toContain('current.agentKind === storedAgentKind');
+    expect(storedSource).not.toContain('deviceProviders.loading');
+    // 恢复待落定时不阻断「跟随最近任务」(Greptile P1)。
+    expect(autoGuardSource).not.toContain('isStoredAgentRestorePending(');
   });
 });
 
@@ -1057,6 +1187,68 @@ describe('new session model', () => {
     expect(filterRemoteDirectoryEntries(entries, true)).toEqual(entries);
   });
 
+  it('normalizes Windows drive options from fs:list-dir and hides the switch without a second drive', () => {
+    // 盘符根是被控端 host-native 的 Windows wire 格式,固定写反斜杠。
+    expect(normalizeRemoteDirectoryDrives([
+      { name: 'C:', path: 'C:\\', current: false },
+      { name: 'D:', path: 'D:\\', current: true },
+      { path: 'E:\\' },
+      { name: 'dup', path: 'D:\\', current: false },
+      { name: 'bad' },
+      null,
+    ])).toEqual([
+      { name: 'C:', path: 'C:\\', current: false },
+      { name: 'D:', path: 'D:\\', current: true },
+      { name: 'E:\\', path: 'E:\\', current: false },
+    ]);
+    expect(normalizeRemoteDirectoryDrives([{ name: 'C:', path: 'C:\\', current: true }])).toEqual([]);
+    expect(normalizeRemoteDirectoryDrives(undefined)).toEqual([]);
+    expect(normalizeRemoteDirectoryDrives('C:')).toEqual([]);
+  });
+
+  it('drops in-flight remote browse results after switching computers, even if the sequence still matches', () => {
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: 'pc-a' },
+      { seq: 3, deviceId: 'pc-b' },
+    )).toBe(false);
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: 'pc-a' },
+      { seq: 4, deviceId: 'pc-a' },
+    )).toBe(false);
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: 'pc-a' },
+      { seq: 3, deviceId: 'pc-a' },
+    )).toBe(true);
+    expect(isCurrentRemoteBrowseRequest(
+      { seq: 3, deviceId: '' },
+      { seq: 3, deviceId: '' },
+    )).toBe(false);
+
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(newSource).toContain('browseSeqRef.current += 1');
+    expect(newSource).toContain('selectedDeviceIdRef.current = option.deviceId');
+    expect(newSource).toContain('isCurrentRemoteBrowseRequest');
+  });
+
+  it('retries the current directory when Windows drive enumeration is still pending', () => {
+    expect(shouldRetryRemoteBrowseDrives(true, 0)).toBe(true);
+    expect(shouldRetryRemoteBrowseDrives(true, 2)).toBe(true);
+    expect(shouldRetryRemoteBrowseDrives(true, 3)).toBe(false);
+    expect(shouldRetryRemoteBrowseDrives(false, 0)).toBe(false);
+    expect(shouldRetryRemoteBrowseDrives(undefined, 0)).toBe(false);
+
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(newSource).toContain('shouldRetryRemoteBrowseDrives');
+    expect(newSource).toContain('result.drivesPending');
+  });
+
+  it('keeps the Android drive pill at 34pt and wraps it in a 44pt hit target', () => {
+    const newSource = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    expect(newSource).toContain('styles.browseDriveHit');
+    expect(newSource).toMatch(/browseDriveHit:\s*\{[^}]*minHeight:\s*44/);
+    expect(newSource).toMatch(/browseDriveHit:\s*\{[^}]*minWidth:\s*44/);
+  });
+
   it('builds device-link create-session args with desktop remote-project semantics', () => {
     expect(buildRemoteCreateSessionOptions({
       ...DEFAULT_NEW_SESSION_DRAFT,
@@ -1264,7 +1456,7 @@ describe('new session model', () => {
       agentLabel: 'Codex',
       canCreate: true,
       runtimeLabel: 'Codex · gpt-5.4 · medium · Fast',
-      scopeLabel: '电脑端分配对话目录',
+      scopeLabel: '由电脑自动分配工作目录',
       workspaceLabel: '对话',
     });
   });
@@ -1346,6 +1538,74 @@ describe('new session model', () => {
       { deviceId: 'pc', name: 'pc' },
     ]);
     expect(parseNewSessionDeviceOptions('')).toEqual([]);
+  });
+
+  it('keeps the recent-project list nested-scrollable with a visible scroll indicator (#5013)', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8');
+    // Scope the guard to this list: the remote directory FlatList already has
+    // these props, so checking the whole page would miss the Android regression.
+    // Native gesture dispatch still needs Android emulator/device verification.
+    const lists = source.match(/<ScrollView\b[^>]*style=\{styles\.workspaceProjectList\}[^>]*>/g);
+    expect(lists).toHaveLength(1);
+    expect(lists![0]).toMatch(/\bnestedScrollEnabled(?:\s|=\{true\})/);
+    expect(lists![0]).toMatch(/\bshowsVerticalScrollIndicator(?:\s|=\{true\})/);
+    expect(lists![0]).toContain('keyboardShouldPersistTaps="handled"');
+  });
+
+  it('hosts the workspace popup outside scrolling and selector touch bounds (#5013)', () => {
+    const source = ts.createSourceFile('new.tsx', readTextLf(
+      resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8',
+    ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const panels: ts.JsxElement[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some(
+        (prop) => ts.isJsxAttribute(prop) && prop.name.getText(source) === 'testID'
+          && prop.initializer && ts.isStringLiteral(prop.initializer)
+          && prop.initializer.text === 'newSession.workspacePickerPanel',
+      )) panels.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    expect(panels).toHaveLength(1);
+    const ancestors: ts.JsxElement[] = [];
+    for (let parent: ts.Node | undefined = panels[0].parent; parent; parent = parent.parent) {
+      if (ts.isJsxElement(parent)) ancestors.push(parent);
+    }
+    expect(ancestors.map(node => node.openingElement.tagName.getText(source)))
+      .not.toContain('ScrollView');
+    expect(ancestors[0].openingElement.getText(source)).toContain('ref={workspacePickerHostRef}');
+    expect(ancestors[0].getText(source)).not.toContain('testID="newSession.backButton"');
+  });
+
+  it('scrolls every workspace action together so fixed rows cannot consume a short viewport', () => {
+    const source = ts.createSourceFile('new.tsx', readTextLf(
+      resolve(process.cwd(), 'app/sessions/new.tsx'), 'utf8',
+    ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const actionIds = new Set([
+      'newSession.workspaceDialogueOption',
+      'newSession.workspaceProjectOption',
+      'newSession.workspaceBrowseOption',
+    ]);
+    const scrollParents: ts.JsxElement[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some(
+        prop => ts.isJsxAttribute(prop) && prop.name.getText(source) === 'testID'
+          && prop.initializer && ts.isStringLiteral(prop.initializer)
+          && actionIds.has(prop.initializer.text),
+      )) {
+        for (let parent = node.parent; parent; parent = parent.parent) {
+          if (ts.isJsxElement(parent) && parent.openingElement.tagName.getText(source) === 'ScrollView') {
+            scrollParents.push(parent);
+            break;
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    expect(scrollParents).toHaveLength(3);
+    expect(new Set(scrollParents).size).toBe(1);
+    expect(scrollParents[0].openingElement.getText(source)).toContain('styles.workspaceProjectList');
   });
 
   it('builds recent workspace quick picks from mirrored remote sessions', () => {
@@ -1688,7 +1948,7 @@ describe('new session composer surface', () => {
     expect(newSource).toContain("import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';");
     expect(newSource).toContain("const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteString(params.visualFocusComposer) === '1';");
     expect(newSource).toContain('const visualInitialDraft = MOBILE_VISUAL_MOCK_ENABLED ? readRouteString(params.visualDraft) : null;');
-    expect(newSource).toContain('firstMessage: visualInitialDraft ?? (isRemoteTaskSuggestionId(params.suggestion)');
+    expect(newSource).toContain('firstMessage: visualInitialDraft ?? readRouteString(params.draft) ?? (isRemoteTaskSuggestionId(params.suggestion)');
     expect(newSource).toContain('t(`devices.list.taskSuggestions.items.${params.suggestion}.prompt`)');
     expect(newSource).toContain(': DEFAULT_NEW_SESSION_DRAFT.firstMessage)');
     expect(newComposerSource).toContain('inputTestID="newSession.firstMessageInput"');
@@ -1761,7 +2021,7 @@ describe('new session composer surface', () => {
     expect(modelPillStyle).toContain('paddingHorizontal: spacing.md');
     expect(modelPillTextStyle).toContain('color: colors.textPrimary');
     expect(modelPillTextStyle).toContain('fontSize: typeScale.caption');
-    expect(modelPillTextStyle).toContain('fontWeight: fontWeight.semibold');
+    expect(modelPillTextStyle).toContain('fontWeight: fontWeight.medium');
     // 输入框字号档由 MobileComposerInputRow 统一持有(MOBILE_COMPOSER_DRAFT_TEXT_STYLE),
     // 页面不再覆盖;语音草稿覆盖层必须引用同一档,否则换行位置与输入框错开(见
     // composerVoiceDraftMetrics.test.ts)。
@@ -1866,8 +2126,8 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('<VoiceMicWaveCaret color={colors.textPrimary} testID="newSession.voiceMicCaret" />');
     // 语音态占位文案就是普通态 TextInput 的 placeholder,必须与 placeholderTextColor 同源,
     // 否则一进语音态这行字会变色(2026-07-31 用户定案:不再用 statusReady 蓝绿)。
-    expect(newSource).toContain('placeholderTextColor={colors.textTertiary}');
-    expect(newSource).toContain('voiceDraftListeningText: {\n    color: colors.textTertiary,');
+    expect(newSource).toContain('placeholderTextColor={colors.textPlaceholder}');
+    expect(newSource).toContain('voiceDraftListeningText: {\n    color: colors.textPlaceholder,');
     expect(newSource).not.toContain('voiceDraftListeningText: {\n    color: colors.statusReady,');
     expect(newSource).toContain('const voiceDraftShowsListeningPrompt = voiceIsListening && draft.firstMessage.length === 0;');
     expect(newSource).toContain('firstMessageInputRef.current?.setNativeProps({ selection: firstMessageSelectionRef.current });');
@@ -1904,9 +2164,15 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('getAccessToken: () => auth.getAccessToken(),');
     expect(newSource).toContain('refreshAccessToken: () => auth.refreshAccessToken(),');
     expect(newSource).toContain('apiFetch: auth.apiFetch,');
-    expect(newSource).toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
-    expect(newSource).toContain('const prewarmedVoicePromise = takePrewarmedMobileVoiceAsr(selectedDeviceId) ?? Promise.resolve(null);');
-    expect(newSource).toContain('prewarmedVoicePromise.then((voice) => getMobileVoiceInputHistoryForHost(selectedDeviceId, voice?.credential.settings?.voiceInputHistory))');
+    expect(newSource).toContain('const prewarmedVoice = await (takePrewarmedMobileVoiceAsr(selectedDeviceId) ?? Promise.resolve(null));');
+    // 语音历史与词典快照只服务润色提示:后台读取,不挡在开麦之前。
+    expect(newSource).not.toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
+    expect(newSource).toContain('void getMobileVoiceInputHistoryForHost(selectedDeviceId, prewarmedVoice?.credential.settings?.voiceInputHistory)');
+    expect(newSource).toContain('localVoiceInputHistory: () => localVoiceInputHistory,');
+    // 停止后 150ms 内保持录音胶囊,超过才显示处理转圈。
+    expect(newSource).toContain('expanded: voiceIsListening || voiceStartPending || voiceProcessingIndicator.stopping,');
+    // 停止期保持胶囊外观,只有与语音无关的禁用原因(创建中)才置灰。
+    expect(newSource).toContain('(creating || (voiceIsProcessing && !voiceProcessingIndicator.stopping)) && styles.disabled,');
     expect(newSource).not.toContain('MobileVoiceServiceMode');
     expect(newSource).not.toContain('LiteLlm');
     expect(newSource).toContain('?? createMobileCindyVoiceCredential(selectedDeviceId);');
@@ -2599,5 +2865,25 @@ describe('new.tsx worktree 探测 effect 的离线起始态(#4046,源码契约)'
     ]) {
       expect(deps, `effect deps 应包含 ${dep}`).toContain(dep);
     }
+  });
+});
+
+describe('closed saved model requires reselection', () => {
+  const selected = { model: 'closed', providerId: 'prov-closed' };
+  const visibilityOverrides = { 'codex:prov-closed:closed': false };
+  const rows = [modelRow('replacement', ['medium'], 'medium')];
+  const sessions = [remoteSession('saved', { ...selected, agentKind: 'codex', effort: 'high', deviceLinkDeviceId: 'devA' })];
+  it('preserves the hidden pair during catalog reconciliation and remembered-agent restoration', () => {
+    expect(resolveRecentModelAndProvider(rows, selected, 'codex', true, visibilityOverrides)).toEqual(selected);
+    expect(pickAgentDefaultRuntime({ agentKind: 'codex', sessions, modelRows: rows,
+      currentEffort: 'medium', catalogReady: true, visibilityOverrides })).toMatchObject({ ...selected, effort: 'high' });
+    expect(resolveNewSessionAutoDefault({ userTouched: false, appliedDeviceId: null, selectedDeviceId: 'devA',
+      sessions, modelRows: rows, rowsAgentKind: 'codex', catalogReady: true, visibilityOverrides,
+      currentEffort: 'medium' })?.patch).toMatchObject(selected);
+  });
+  it('carries fresh visibility with its rows through the submit guard', async () => {
+    const result = await resolveSubmitGuardCatalog({ cached: () => undefined, gen: () => 0,
+      fetch: async () => ({ providers: [], modelVisibilityOverrides: visibilityOverrides }), buildRows: () => rows });
+    expect(result).toMatchObject({ catalogKnown: true, rows, visibilityOverrides });
   });
 });

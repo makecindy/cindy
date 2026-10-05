@@ -1,0 +1,5 @@
+{
+  "extends": "../../apps/desktop/tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["./*.ts", "./*.mts", "../../apps/desktop/env.d.ts", "../../apps/desktop/src/renderer/vite-env.d.ts"]
+}

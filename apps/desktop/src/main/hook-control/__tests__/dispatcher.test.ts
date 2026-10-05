@@ -792,7 +792,7 @@ describe('dispatcher 核心语义', () => {
     fr.finish();
   });
 
-  it('会话被移出工作目录映射 -> 断开绑定、换新对话并说明, 不跟随到映射外', async () => {
+  it('会话被移出工作目录映射 -> 断开绑定、静默换新对话, 不跟随到映射外', async () => {
     const bindings = memoryBindings();
     const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
     const fr = fakeRunner({ sessions });
@@ -820,10 +820,7 @@ describe('dispatcher 核心语义', () => {
 
     fr.finish({ finalText: '新对话的回答' });
     await tick();
-    const finalText = c.last('turn.end')!.payload.finalText;
-    expect(finalText).toContain('原任务已不在可用的工作目录里');
-    expect(finalText).toContain('把它所在的目录加进来');
-    expect(finalText).toContain('新对话的回答');
+    expect(c.last('turn.end')!.payload.finalText).toBe('新对话的回答');
   });
 
   it('旧任务还在跑时被移出映射: 新消息不排进旧会话(快路径也过边界)', async () => {
@@ -1138,7 +1135,7 @@ describe('dispatcher 核心语义', () => {
     fr.finish();
   });
 
-  it('工作目录映射被改(会话目录没变) -> 仍丢绑定重建, 并说明原因', async () => {
+  it('工作目录映射被改(会话目录没变) -> 仍丢绑定静默重建', async () => {
     const bindings = memoryBindings();
     const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
     const fr = fakeRunner({ sessions });
@@ -1167,9 +1164,7 @@ describe('dispatcher 核心语义', () => {
 
     fr.finish({ finalText: '新会话的回答' });
     await tick();
-    const finalText = c.last('turn.end')!.payload.finalText;
-    expect(finalText).toContain('原任务已不在可用的工作目录里');
-    expect(finalText).toContain('新会话的回答');
+    expect(c.last('turn.end')!.payload.finalText).toBe('新会话的回答');
   });
 
   it('存量绑定(带早期版本残留字段)照常判定: 在映射内即复用, 越界即重建', async () => {
@@ -1203,7 +1198,7 @@ describe('dispatcher 核心语义', () => {
     fr2.finish();
   });
 
-  it('绑定的会话已归档/删除 -> 重建并说明是原对话没了', async () => {
+  it('绑定的会话已归档/删除 -> 静默重建, 不向渠道追加说明', async () => {
     const bindings = memoryBindings();
     const fr = fakeRunner({ sessions: { 'gone-session': { workingDir: WS_DIR, usable: false } } });
     const { d } = makeDispatcher({ runner: fr.runner, bindings });
@@ -1216,8 +1211,7 @@ describe('dispatcher 核心语义', () => {
 
     fr.finish({ finalText: '新的回答' });
     await tick();
-    // 措辞留余地: inspect 的 null 也可能是读库瞬时失败, 不能一口咬定会话没了
-    expect(c.last('turn.end')!.payload.finalText).toContain('原任务现在读不到');
+    expect(c.last('turn.end')!.payload.finalText).toBe('新的回答');
   });
 
   it('切账号期间异步定位失败也不回写旧代 rejected ack', async () => {
@@ -4711,8 +4705,8 @@ describe('官方 bot ack 表情(msg.op)', () => {
     await tick();
 
     expect(c.last('task.ack')?.payload).toMatchObject({ result: 'queued' });
-    // 两条各一次 👀: 立即受理的那条 + 排队的那条; 出队启动时不重复补发。
-    expect(reactionEmojis(c.sent)).toEqual(['👀', '👀']);
+    // 第一条已经处理中，第二条仍显示排队。
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀']);
   });
 
   it('排队中被取消 → 👀 换成终态, 不永远挂着「在做」', async () => {
@@ -4730,8 +4724,8 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.cancel('conn-1', 'to-cancel');
     await tick();
 
-    // 两条各打 👀, 被取消那条补一个终态 —— 用户主动停止不算失败, 仍是 👍。
-    expect(reactionEmojis(c.sent)).toEqual(['👀', '👀', '👍']);
+    // 取消排队任务时清掉它的状态，不影响正在执行的任务。
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀', '']);
   });
 
   it('账号停用: 已打 👀 而终态没人发的任务, 停用时撤销那个 👀', async () => {
@@ -4750,12 +4744,12 @@ describe('官方 bot ack 表情(msg.op)', () => {
     await tick();
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'queued' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀', '👀']); // 两条各一个在册
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀']); // 两条各一个在册
 
     const draining = d.deactivateAccount();
     await tick();
     // 两个 👀 都被撤销(空串), 没有任何一个被装成终态。
-    const after = reactionEmojis(c.sent).slice(2);
+    const after = reactionEmojis(c.sent).slice(3);
     expect(after).toEqual(['', '']);
 
     // HookRunOutcome 只有 ok / error 两态, 取消由 dispatcher 侧改写。
@@ -4772,7 +4766,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'offline-final' }), online.send);
     await tick();
-    expect(reactionEmojis(online.sent)).toEqual(['👀']);
+    expect(reactionEmojis(online.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
 
     d.onDisconnected('conn-1');
     fr.finish({ status: 'ok' });
@@ -4781,7 +4775,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     const reconnected = collector();
     d.onConnected('conn-1', reconnected.send, [HOOK_FEATURE_MESSAGE_OPS]);
     await tick();
-    expect(reactionEmojis(reconnected.sent)).toEqual(['👍']);
+    expect(reactionEmojis(reconnected.sent)).toEqual(['']);
   });
 
   it('老 server 没宣告 msg-op-v1 → 一帧 msg.op 都不发', async () => {
@@ -4826,7 +4820,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'hydrated' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀']);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
   });
 
   it('账号切换后档位打回未知 —— 不拿上一位主人的选择顶上', async () => {
@@ -4837,7 +4831,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'first-owner' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀']);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
 
     const draining = d.deactivateAccount();
     fr.finish({ status: 'ok' });

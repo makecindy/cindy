@@ -3,14 +3,13 @@ import { MainViewHistoryContext } from '@/contexts/MainViewHistoryContext';
 import { Outlet, useOutletContext, useParams, useLocation } from 'react-router-dom';
 
 import { useOwnTopNavScrollableRows } from '../feature-context';
-import { useRemoteBotSync } from './useRemoteBots';
 import { BotsSidebar } from './BotsSidebar';
 import { BotSettingsDrawer } from './BotSettingsDrawer';
-import { refreshBotProfiles, useBotProfiles } from './botStore';
+import { BotGroupSettingsDrawer } from './BotGroupSettingsDrawer';
+import { useBotProfiles } from './botStore';
 
 export function BotsFeatureLayout() {
   useOwnTopNavScrollableRows(false);
-  useRemoteBotSync();
   const history = useContext(MainViewHistoryContext);
   const { botId, deviceId } = useParams();
   const location = useLocation();
@@ -22,19 +21,6 @@ export function BotsFeatureLayout() {
       history.current.lastBotId = bot.id;
     }
   }, [history, botId, deviceId, bots, location.key]);
-  useEffect(() => {
-    refreshBotProfiles();
-    const unsubscribeProfile = window.electronAPI.maker.onBotProfileChanged(() =>
-      refreshBotProfiles(),
-    );
-    const unsubscribeLifecycle = window.electronAPI.maker.onBotLifecycleChanged(() =>
-      refreshBotProfiles(),
-    );
-    return () => {
-      unsubscribeProfile();
-      unsubscribeLifecycle();
-    };
-  }, []);
   const shellContext = useOutletContext<{
     sidebarWidth?: number;
     rightSidebarCollapsed?: boolean;
@@ -56,6 +42,7 @@ export function BotsFeatureLayout() {
       <BotsSidebar />
       <Outlet context={shellContext} />
       <BotSettingsDrawer />
+      <BotGroupSettingsDrawer />
     </>
   );
 }

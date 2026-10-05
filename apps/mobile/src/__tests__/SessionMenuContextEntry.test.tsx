@@ -38,6 +38,11 @@ vi.mock("react-native", async () => {
       timing: () => ({ start: (done?: () => void) => done?.() }),
     },
     StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
+    Easing: { bezier: () => (t: number) => t },
+    AccessibilityInfo: {
+      isReduceMotionEnabled: () => Promise.resolve(false),
+      addEventListener: () => ({ remove() {} }),
+    },
     useWindowDimensions: () => ({ height: 800, width: 400 }),
   };
 });
@@ -89,7 +94,7 @@ vi.mock("@/session/SheetModal", () => ({
 vi.mock("@/session/SheetSurface", () => ({
   SheetSurface: ({ children }: { children: ReactNode }) => children,
 }));
-vi.mock("@/session/messageActions", () => ({ writeClipboardText: vi.fn() }));
+vi.mock("@/session/messageActions", () => ({ writeClipboardText: vi.fn(), formatModelShortLabel: (id: string) => id }));
 
 it("reopening the primary menu after info does not initialize an engine, but entering info does", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });

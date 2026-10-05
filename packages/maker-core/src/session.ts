@@ -52,6 +52,7 @@ import type { ContextUsageData } from './types/context-usage.js';
 import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
 import type {
   AgentSessionHandle,
+  PiModelSwitchPreview,
   AgentSessionTeardownOptions,
   BackgroundTaskSnapshot,
   SendOptions,
@@ -1584,17 +1585,26 @@ export class Session {
   }
 
   /**
-   * 底层 agent handle 的会话 id —— cc = SDK session id(也是出站请求的 `x-claude-code-session-id`
-   * header 值);SDK 尚未回填时为 '<pending>'。只读、不触发任何行为,供 host 把 loopback proxy
-   * 看到的请求归属回本会话做 per-session 路由(见 maker-host/anthropic-compat-proxy-host.ts)。
+   * Native identity safe to persist for resume. An unaccepted fork retains its source.
+   * Request routing uses requestSessionId, which may already identify the destination.
    */
   get sdkSessionId(): string {
     return this.handle.id;
   }
 
+  /** Live request identity, which may precede a fork's durable resume identity. */
+  get requestSessionId(): string {
+    return this.handle.requestSessionId ?? this.handle.id;
+  }
+
   /** 当前运行时模型。底层 handle 的 getter 会随 setModel 成功更新。 */
   get model(): string {
     return this.handle.model;
+  }
+
+  /** Codex-only: 当前会话实际绑定的本地 host 身份。 */
+  get codexHostKey(): string | undefined {
+    return this.handle.codexHostKey;
   }
 
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
@@ -1715,6 +1725,13 @@ export class Session {
       throw new NotSupportedError('switchModel', { supported: false, reason: 'not-implemented' });
     }
     await this.handle.setModel(model, opts);
+  }
+
+  async previewModelSwitch(
+    model: string,
+    opts?: { providerId?: string | null },
+  ): Promise<PiModelSwitchPreview | undefined> {
+    return this.handle.previewModelSwitch?.(model, opts);
   }
 
   async requiresModelSwitchRebuild(
@@ -2159,8 +2176,8 @@ export class Session {
       toolLoopGuard: this.agentKind === 'claude-code' ? null : new ToolLoopGuard({
         // These normalized events do not identify model-response batches.
         // Distinct malformed calls can belong to one parallel attempt, so do
-        // not enable the retry-count rule without that evidence. Claude keeps
-        // its existing batch-aware contract rule; repetition rules stay active.
+        // not enable the retry-count rule without that evidence. Claude also
+        // disables category-only retries; repetition rules stay active.
         contractConsecutiveLimit: Number.POSITIVE_INFINITY,
       }),
       pendingToolLoop: null,

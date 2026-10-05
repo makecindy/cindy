@@ -25,7 +25,7 @@ import Animated, {
   Easing,
   type SharedValue,
 } from 'react-native-reanimated';
-import { GripVertical, Pencil, MoreHorizontal, ArrowLeft } from 'lucide-react-native';
+import { GripVertical, Pencil, MoreHorizontal } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -41,6 +41,8 @@ import {
   type TaskTagResult,
 } from '@cindy/maker-shared';
 import { Text, TextInput } from '@/components/AppText';
+import { ScreenBackButton } from '@/components/MobilePrimitives';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useDeviceLink, subscribeRemoteTaskTagsChanged } from '@/device-link/DeviceLinkContext';
 import { useTheme, type ThemeColors } from '@/theme';
 import { radius, spacing, typeScale, iconSize, fontWeight, lineHeight, motionDuration, motionEasing } from '@/theme/tokens';
@@ -54,6 +56,24 @@ import {
   sameTaskTags,
 } from './taskTagCatalogCache';
 import type { RemoteSession } from './types';
+
+function taskTagsHeadingCollapsed(colors: ThemeColors) {
+  return {
+    color: colors.textSecondary,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
+  } as const;
+}
+
+function taskTagsHeadingExpanded(colors: ThemeColors) {
+  return {
+    color: colors.textPrimary,
+    fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
+    fontWeight: fontWeight.semibold,
+  } as const;
+}
 
 function colorFor(tag: TaskTag, colors: ThemeColors) {
   const palette = {
@@ -184,6 +204,7 @@ export function TaskTagLabels({ tags = [] }: { tags?: TaskTag[] }) {
             style={{
               color: colors.textPrimary,
               fontSize: typeScale.caption,
+              lineHeight: lineHeight.caption,
               flexShrink: 1,
             }}
           >
@@ -228,6 +249,7 @@ export function TaskMenuHeading({
             textAlign: 'center',
             color: colors.textPrimary,
             fontSize: typeScale.body,
+            lineHeight: lineHeight.body,
             fontWeight: fontWeight.semibold,
           }}
         >
@@ -637,7 +659,7 @@ export function TaskTagsPanel({
     }
     void reorder(id, to, expectedOrder);
   }
-  const textStyle = { color: colors.textPrimary, fontSize: typeScale.body };
+  const textStyle = { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body };
   const action = (
     label: string,
     onPress: () => void,
@@ -658,7 +680,7 @@ export function TaskTagsPanel({
         backgroundColor: primary ? colors.cta : undefined,
         justifyContent: 'center',
         paddingHorizontal: spacing.md,
-        opacity: busy || (!local && blocked) || inactive ? 0.4 : pressed ? 0.75 : 1,
+        opacity: busy || (!local && blocked) || inactive ? 0.4 : pressed ? mobileInteractionStyles.pressed.opacity : 1,
       })}
     >
       <Text
@@ -717,15 +739,15 @@ export function TaskTagsPanel({
     const reason = blocked ? 'offline' : error || 'loading';
     return (
       <View style={{ width: '100%', paddingVertical: spacing.md, gap: spacing.xs }}>
-        <Text style={{ color: colors.textPrimary, fontSize: typeScale.body }}>
+        <Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>
           {t('taskTags.title')}
         </Text>
         <Text
-          accessibilityRole={reason === 'loadFailed' ? 'alert' : 'text'}
+          accessibilityRole={reason === 'loadFailed' || reason === 'remoteBusy' ? 'alert' : 'text'}
           style={{
             color: colors.textSecondary,
             fontSize: typeScale.caption,
-            lineHeight: lineHeight.listBody,
+            lineHeight: lineHeight.bodySmall,
           }}
         >
           {t(`taskTags.${reason}`)}
@@ -743,7 +765,7 @@ export function TaskTagsPanel({
               alignSelf: 'flex-start',
             }}
           >
-            <Text style={{ color: colors.textPrimary, fontSize: typeScale.body }}>
+            <Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>
               {t('taskTags.retry')}
             </Text>
           </Pressable>
@@ -758,7 +780,7 @@ export function TaskTagsPanel({
               alignSelf: 'flex-end',
             }}
           >
-            <Text style={{ color: colors.textPrimary, fontSize: typeScale.body }}>
+            <Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>
               {t('taskTags.done')}
             </Text>
           </Pressable>
@@ -786,29 +808,19 @@ export function TaskTagsPanel({
         }}
       >
         {formOpen && !deletion && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t('taskTags.back')}
-            onPress={closeEditor}
-            disabled={busy}
-            style={{
-              width: 44,
-              height: 44,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: radius.pill,
-            }}
-          >
-            <ArrowLeft size={iconSize.action} color={colors.textPrimary} />
-          </Pressable>
+          // 统一返回键:共享 ScreenBackButton(44pt、ChevronLeft、统一按压态)。
+          <ScreenBackButton
+            onPress={busy ? undefined : closeEditor}
+            testID="taskTags.back"
+          />
         )}
         <Text
-          style={{
-            flex: 1,
-            color: expanded ? colors.textPrimary : colors.textSecondary,
-            fontSize: expanded ? typeScale.body : typeScale.caption,
-            fontWeight: expanded ? fontWeight.semibold : fontWeight.regular,
-          }}
+          style={[
+            { flex: 1 },
+            // 两种形态是两个角色,各自整行照抄 §3:收起 = 短元数据 12/18 · 400 · 二级色;
+            // 展开 = 面板顶栏标题 16/22 · 600 · 主色。每档都配行高。
+            expanded ? taskTagsHeadingExpanded(colors) : taskTagsHeadingCollapsed(colors),
+          ]}
         >
           {deletion
             ? t('taskTags.delete')
@@ -822,7 +834,7 @@ export function TaskTagsPanel({
               : t(formOpen ? (editing ? 'taskTags.editTitle' : 'taskTags.add') : 'taskTags.title')}
         </Text>
         {expanded && !formOpen && (
-          <Text style={{ color: colors.textSecondary, fontSize: typeScale.caption }}>
+          <Text style={{ color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption }}>
             {t('taskTags.selectedCount', { count: selected.length })}
           </Text>
         )}
@@ -925,6 +937,10 @@ export function TaskTagsPanel({
         <View ref={viewportRef} collapsable={false}>
           <ScrollView
             ref={listRef}
+            // This list is rendered inside the Android native action-sheet
+            // ScrollView; opt into Android's nested-scroll contract on both
+            // sides so tag scrolling remains usable at either edge.
+            nestedScrollEnabled
             scrollEnabled={!draggedId}
             scrollEventThrottle={16}
             onScroll={(event) => {
@@ -946,6 +962,7 @@ export function TaskTagsPanel({
                   textAlign: 'center',
                   paddingVertical: spacing.xl,
                   fontSize: typeScale.body,
+                  lineHeight: lineHeight.body,
                 }}
               >
                 {t(busy ? 'taskTags.loading' : 'taskTags.empty')}
@@ -1116,6 +1133,7 @@ export function TaskTagsPanel({
                   style={{
                     color: colors.textSecondary,
                     fontSize: typeScale.caption,
+                    lineHeight: lineHeight.caption,
                   }}
                 >
                   {t(
@@ -1328,7 +1346,7 @@ export function TaskTagsPanel({
           style={{
             color: colors.textSecondary,
             fontSize: typeScale.caption,
-            lineHeight: lineHeight.listBody,
+            lineHeight: lineHeight.bodySmall,
             paddingVertical: spacing.xs,
             marginTop: spacing.sm,
           }}
@@ -1336,7 +1354,7 @@ export function TaskTagsPanel({
           {t(`taskTags.${blocked ? 'offline' : error}`)}
         </Text>
       )}
-      {!blocked && error === 'loadFailed' && (
+      {!blocked && (error === 'loadFailed' || error === 'remoteBusy') && (
         <Pressable
           accessibilityRole="button"
           disabled={busy}
@@ -1347,7 +1365,7 @@ export function TaskTagsPanel({
             alignSelf: 'flex-start',
           }}
         >
-          <Text style={{ color: colors.textPrimary, fontSize: typeScale.body }}>
+          <Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>
             {t('taskTags.retry')}
           </Text>
         </Pressable>

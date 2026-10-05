@@ -11,7 +11,6 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { Globe, Lock, Users, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSkillhubIdentityPolicy } from '../hooks/useSkillhubIdentityPolicy';
@@ -134,14 +133,14 @@ export function VisibilityEditorDialog({
     <Dialog.Root open={open && !loading} onOpenChange={(v) => { if (!saving) onOpenChange(v); }}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]"
+          className="modal-scrim fixed inset-0 z-[10000]"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
+          onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'w-full max-w-[480px] rounded-xl',
-            'border bg-[var(--cmd-palette-bg)] border-[var(--cmd-palette-border)]',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'w-full max-w-[480px]',
             'max-h-[85vh] overflow-y-auto',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}

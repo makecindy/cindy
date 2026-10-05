@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  devices: [],
+  devices: [] as Array<{ deviceId: string; name: string }>,
   sessions: [],
   t: (key: string) => key,
   listDir: vi.fn(async () => ({ parent: null, entries: [] })),
@@ -25,6 +25,7 @@ import { AddRemoteProjectDialog } from '../AddRemoteProjectDialog';
 
 afterEach(() => {
   cleanup();
+  mocks.devices = [];
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
@@ -80,4 +81,22 @@ describe('remote project mode selection', () => {
       path: '/home/test',
     });
   });
+});
+
+it('locks the move folder picker to the task host and never falls back to another computer', async () => {
+  mocks.devices = [{ deviceId: 'A', name: 'Source Mac' }, { deviceId: 'B', name: 'Other Mac' }];
+  vi.stubGlobal('electronAPI', {
+    remoteSsh: { list: async () => ({ hosts: [] }) },
+    deviceLink: { invoke: async () => [] },
+  });
+  const props = { open: true, onOpenChange: vi.fn(), onProjectAdded: vi.fn(), initialDeviceId: 'A', fixedDeviceId: 'A', title: 'Move task', confirmText: 'Move' };
+  const view = render(<AddRemoteProjectDialog {...props} />);
+  await waitFor(() => expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('device:A'));
+  expect(screen.queryByRole('option', { name: 'Other Mac' })).toBeNull();
+  expect(screen.getByRole('heading', { name: 'Move task' })).toBeTruthy();
+  mocks.devices = [{ deviceId: 'B', name: 'Other Mac' }];
+  view.rerender(<AddRemoteProjectDialog {...props} />);
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Move' }) as HTMLButtonElement).disabled).toBe(true));
+  expect(screen.queryByRole('option', { name: 'Other Mac' })).toBeNull();
+  expect(props.onProjectAdded).not.toHaveBeenCalled();
 });

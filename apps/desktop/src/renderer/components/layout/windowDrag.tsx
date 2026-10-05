@@ -10,10 +10,15 @@
  *   - 页面顶部是空白（居中布局的 empty state / hero）→ 根部叠一条
  *     <InvisibleWindowDragStrip />。
  *
- * ⚠️ Electron 拖拽区域是纯几何计算：drag 矩形减 no-drag 矩形，与 z-index /
- * paint 顺序无关；但 no-drag 挖洞只在 drag 元素自己的**后代**上可靠生效，
- * 浮层／兄弟节点上的 no-drag 不被计入（实机结论，见 ContentHeader.tsx:155-157
- * ／ FileTabsBar.tsx:421-425）。交互元素漏标 no-drag 会变成"点了就拖窗口"；
+ * ⚠️ Electron 拖拽区域是纯几何计算，与 z-index / paint 顺序无关：renderer 按
+ * **布局树先序**上报 drag / no-drag 矩形，重叠处**列表中靠后者胜**（Electron
+ * shell/browser/ui/drag_util.cc，mac / Windows 同一实现）。因此 no-drag 只能
+ * 挖掉排在它**之前**的 drag 区：drag 元素的后代恒在其后，挖洞总是可靠；
+ * DOM 里排在 drag 区之前的浮层／兄弟节点，其 no-drag 会被后来的 drag 盖回
+ * （ContentHeader.tsx「浮层 no-drag 不被计入」、FileTabsBar.tsx 的实机结论
+ * 即此情形）。排在 drag 区之后的浮层（如 App.tsx 路由之后的 FindInPageBar、
+ * portal 到 body 的 GhostPanelBubbleLayer）自身标 no-drag 可以挖洞。
+ * 交互元素漏标 no-drag 会变成"点了就拖窗口"；
  * 反之 drag 条叠在交互元素上同样会吞掉点击 —— InvisibleWindowDragStrip
  * 只能用在顶部确实无交互元素的页面。
  *

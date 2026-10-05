@@ -20,7 +20,13 @@
     "allowOnceAccessibility": "Allow permission request once",
     "allowOnceConfirm": "Confirm allow once",
     "highRisk": "High risk",
-    "autoReviewUnavailable": "Automatic review could not finish. Confirm whether to allow this action."
+    "autoReviewUnavailable": "Automatic review could not finish. Confirm whether to allow this action.",
+    "fullAccessConfirm": {
+      "title": "Enable Full access?",
+      "description": "Full access disables the workspace sandbox and skips routine approvals. {{appName}} can modify files outside the workspace and run network commands without asking; built-in high-risk operations will still require confirmation.",
+      "confirm": "Enable Full access",
+      "cancel": "Keep current permissions"
+    }
   },
   "planMode": {
     "label": "Plan mode",
@@ -197,7 +203,8 @@
     "photoNotReadable": "This photo can't be read right now (it may not have finished downloading from iCloud). Try again later."
   },
   "pluginSetup": {
-    "completeOnDesktop": "Complete this setup on the controlled desktop. This card will update automatically.",
+    "remoteDesktop": "Open Desktop",
+    "completeOnDesktop": "Use remote desktop to complete setup on the computer. Login, authorization and credentials stay on that computer; this card updates automatically.",
     "chooseOne": "Choose one setup method",
     "progress": "{{satisfied}}/{{total}} completed",
     "desktopActionHint": "On your computer: {{action}}",
@@ -266,7 +273,6 @@
     },
     "queue": {
       "count": "{{count}} requests",
-      "readOnlyHint": "Collaboration is read-only; requests from the computer are shown here.",
       "empty": "No pending requests",
       "hint": {
         "plan_review": "Review the plan and request changes if needed. The computer continues only after approval.",
@@ -279,6 +285,7 @@
     }
   },
   "companion": {
+    "permissionRequest": "{{name}} needs your go-ahead",
     "operation": "Operation",
     "details": "Details",
     "fields": {

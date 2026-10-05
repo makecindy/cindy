@@ -66,6 +66,20 @@ async function fixture(
 }
 
 describe("Routine event admission and execution", () => {
+  it('persists a disabled draft without inventing a trigger and rejects premature activation', async () => {
+    const f = await fixture();
+    const draft = await f.engine.createOnce('bot', { ...input, enabled: false, triggers: [] }, 'imported-draft-fixture');
+    await f.engine.stop();
+    const restored = await fixture(undefined, f.snapshot());
+    try {
+      expect(restored.engine.list('bot')).toEqual([draft]);
+      restored.advance(3600_000);
+      await restored.engine.tick();
+      expect(restored.execute).not.toHaveBeenCalled();
+      await expect(restored.engine.put('bot', { ...draft, enabled: true }, draft.id)).rejects.toThrow('requires');
+      expect(restored.engine.list('bot')).toEqual([draft]);
+    } finally { await restored.engine.stop(); }
+  });
   it('deduplicates concurrent creation and a retry after restart without overwriting newer edits', async () => {
     const f = await fixture();
     const creationId = 'mobile-request-123456';
@@ -713,4 +727,45 @@ it('keeps committed deduplication across restart and expires it after the bounde
   expect(await restored.engine.publish('github', event('receipt'))).toMatchObject({ duplicate: false });
   expect(Object.keys(restored.snapshot()!.receipts)).toHaveLength(1);
   await restored.engine.stop();
+});
+
+describe('routine check configuration', () => {
+  it('persists an audible default for new rules without migrating legacy omissions', async () => {
+    const f = await fixture();
+    try {
+      const created = await f.engine.put('bot', input);
+      expect(created.silentWhenIdle).toBe(false);
+      const oldState = f.snapshot()!;
+      delete oldState.routines[0]!.silentWhenIdle;
+      const restarted = await fixture(undefined, oldState);
+      try {
+        const edited = await restarted.engine.put('bot', { ...input, name: 'Edited old rule' }, created.id);
+        expect(edited.silentWhenIdle).toBeUndefined();
+      } finally { await restarted.engine.stop(); }
+    } finally { await f.engine.stop(); }
+  });
+  it('round trips preferences, preserves omitted fields from old clients, and allows removal', async () => {
+    const f = await fixture();
+    try {
+      const original = await f.engine.put('bot', { ...input, silentWhenIdle: false, preRunHook: { command: 'node check.mjs', timeoutMs: 5000 } });
+      const edited = await f.engine.put('bot', { ...input, name: 'Edited' }, original.id);
+      expect(edited).toMatchObject({ silentWhenIdle: false, preRunHook: original.preRunHook });
+      const restarted = await fixture(undefined, f.snapshot());
+      expect(restarted.engine.list('bot')[0]).toEqual(edited);
+      await restarted.engine.stop();
+      const removed = await f.engine.put('bot', { ...input, preRunHook: null }, original.id);
+      expect(removed.preRunHook).toBeNull();
+      expect(removed.silentWhenIdle).toBe(false);
+      expect(() => parseRoutineInput({ ...input, preRunHook: { command: 'check', timeoutMs: 0 } })).toThrow();
+    } finally { await f.engine.stop(); }
+  });
+  it('records a completed check separately from a model run', async () => {
+    const f = await fixture(async () => ({ skipped: true, resultText: 'No changes' }));
+    try {
+      const routine = await f.engine.put('bot', input);
+      await f.engine.runNow('bot', routine.id);
+      await vi.waitFor(() => expect(f.engine.history(routine.id)[0]?.status).toBe('skipped'));
+      expect(f.engine.history(routine.id)[0]).toMatchObject({ resultText: 'No changes' });
+    } finally { await f.engine.stop(); }
+  });
 });

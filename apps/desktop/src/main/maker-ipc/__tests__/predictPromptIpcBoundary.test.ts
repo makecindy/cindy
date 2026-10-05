@@ -365,6 +365,40 @@ describe('maker:predict-prompt — sender 断言', () => {
 });
 
 describe('maker:predict-prompt — payload 运行期校验', () => {
+  it.each([undefined, 0, -1, 1.5, '2'])('取消请求拒绝无效完成轮次 %s', async (completionRevision) => {
+    await expect(invokePredict({ sessionId: 'session-1', cancel: true, completionRevision })).rejects.toThrow(/INVALID_PARAMS/);
+    expect(h.predict).not.toHaveBeenCalled();
+  });
+
+  it('取消仍校验来源，且取消本身不读取素材或调用模型', async () => {
+    const request = { sessionId: 'session-1', completionRevision: 2, cancel: true };
+    h.trusted = false;
+    await expect(invokePredict(request)).rejects.toThrow(/PERMISSION_DENIED/);
+    h.trusted = true;
+    await expect(invokePredict(request)).resolves.toEqual({ prompt: null });
+    expect(h.predict).not.toHaveBeenCalled();
+    expect(h.regenerateMaterial).not.toHaveBeenCalled();
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: null });
+    expect(h.predict).not.toHaveBeenCalled();
+  });
+
+  it('远控取消沿原通道执行，迟到的旧轮取消不阻塞下一完成轮', async () => {
+    h.trusted = false;
+    await runDeviceLinkInvokeContext({
+      controllerDeviceId: 'controller-a', controllerPlatform: 'win32', channel: 'maker:predict-prompt',
+    }, () => invokePredict({ sessionId: 'session-1', completionRevision: 1, cancel: true }));
+    h.trusted = true;
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: '下一步做什么' });
+    expect(h.predict).toHaveBeenCalledTimes(1);
+  });
+
+  it('取消当前轮后不再复用已缓存的成功结果', async () => {
+    await invokePredict(VALID_REQUEST);
+    await invokePredict({ sessionId: 'session-1', completionRevision: 2, cancel: true });
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: null });
+    expect(h.predict).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ['非对象', null],
     ['数组', []],

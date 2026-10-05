@@ -86,7 +86,7 @@ it('confirms toolbar and native exits, keeps cancellation connected, and discard
     displayId: '',
     transport: 'direct',
     latency: null,
-    settings: { fps: 30, bitrate: 0, audio: true },
+    settings: { fps: 30, quality: 'auto', audio: true },
     ready: true,
     preferences: {
       audio: true,
@@ -152,7 +152,7 @@ it('confirms toolbar and native exits, keeps cancellation connected, and discard
   expect(close).toHaveBeenCalledOnce();
 });
 
-it('explains view-only actions and enables the same actions when control is confirmed', async () => {
+it('hides view-only controls and enables desktop actions only after control is confirmed', async () => {
   await i18n.changeLanguage('zh-CN');
   Object.assign(window, {
     electronAPI: {
@@ -191,7 +191,7 @@ it('explains view-only actions and enables the same actions when control is conf
     displayId: 'one',
     transport: 'direct',
     latency: null,
-    settings: { fps: 30, bitrate: 0, audio: false },
+    settings: { fps: 30, quality: 'auto', audio: false },
     caps: {
       version: 1,
       enabled: true,
@@ -202,6 +202,7 @@ it('explains view-only actions and enables the same actions when control is conf
     },
   };
   await act(async () => lifecycle.update?.(state));
+  expect(screen.queryByText(i18n.t('remoteDesktop.viewOnly'))).toBeNull();
   const openPanel = (label: string) => {
     fireEvent.click(screen.getByRole('button', { name: label }));
     return within(screen.getByRole('dialog', { name: label }));
@@ -215,15 +216,13 @@ it('explains view-only actions and enables the same actions when control is conf
     ).disabled,
   ).toBe(true);
   expect(panel.getByText(i18n.t('remoteDesktop.settingUnsupported'))).toBeDefined();
-  expect(panel.getByText(i18n.t('remoteDesktop.viewer.controlRequired'))).toBeDefined();
+  expect(panel.queryByRole('button', { name: i18n.t('remoteDesktop.takeControl') })).toBeNull();
   const desktop = screen.getByRole('button', {
     name: i18n.t('remoteDesktop.showDesktop'),
   }) as HTMLButtonElement;
   expect(desktop.disabled).toBe(true);
-  fireEvent.click(panel.getByRole('button', { name: i18n.t('remoteDesktop.takeControl') }));
-  expect(lifecycle.setControl).toHaveBeenCalledWith(true);
   await act(async () => lifecycle.update?.({ ...state, controlPending: true }));
-  expect(panel.getByText(i18n.t('remoteDesktop.viewer.controlPending'))).toBeDefined();
+  expect(panel.queryByRole('button', { name: i18n.t('remoteDesktop.takeControl') })).toBeNull();
   const supported = {
     ...state,
     controlling: true,
@@ -325,7 +324,7 @@ it.each([
       displayId: 'one',
       transport,
       latency: null,
-      settings: { fps: 30, bitrate: 0, audio: false },
+      settings: { fps: 30, quality: 'auto', audio: false },
     }),
   );
   const toolbar = within(view.container.querySelector('header')!);

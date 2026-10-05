@@ -36,6 +36,7 @@ import {
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getDesktopNotificationsEnabled } from '../notificationService.js';
 import {
+  applyPiImModelSelectionUnderLock,
   acquirePendingAgentSwitchForDirectSend,
   broadcastSessionCreated,
   cancelSchedulerAutoResume,
@@ -100,6 +101,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
   const storage = new DrizzleScheduleStorage(deps.getDb);
   _storage = storage;
   const notifier = new DesktopNotifier({
+    hasUnrecoveredMatchingFailure: (run) => storage.hasUnrecoveredMatchingFailure(run),
     sendFeishuSessionNotification: async (sessionId, text) => {
       await sendFeishuSessionNotification(deps.feishuIm, sessionId, text);
     },
@@ -118,10 +120,11 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
     readAutoReviewHistory: async (sessionId) => {
       await drainPersistQueue();
-      return listMessagesForAgentHandoff(sessionId, 100, undefined, 'authorization');
+      return listMessagesForAgentHandoff(sessionId, null, undefined, 'authorization');
     },
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
+    applyPiModelSelectionUnderLock: applyPiImModelSelectionUnderLock,
     resolveModelSelection: resolveScheduledModelSelectionLive,
     onSessionCreated: broadcastSessionCreated,
     // 停用轴裁决:每次 fire 前判保存路由是否已被用户停用(见 runner deps 注释)。

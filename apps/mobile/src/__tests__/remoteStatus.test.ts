@@ -41,7 +41,9 @@ describe('remoteStatus', () => {
     expect(describeRemoteError("[CHANNEL_NOT_ALLOWED] channel 'x'")).toContain('版本不支持');
     expect(describeRemoteError('[ACCESS_REVOKED] revoked')).toContain('撤销手机访问权限');
     expect(describeRemoteError('[NOT_CONNECTED] offline')).toBe(i18n.t('session.screen.networkReconnecting'));
-    expect(describeRemoteError('unknown failure')).toBe('unknown failure');
+    expect(describeRemoteError('unknown failure')).toBe(i18n.t('deviceLink.remoteError.unclassified'));
+    expect(describeRemoteError('[NOT_FOUND] Session does not exist')).toBe(i18n.t('deviceLink.remoteError.notFound'));
+    expect(describeRemoteError('REMOTE_WORKDIR_NOT_FOUND missing folder')).not.toBe(i18n.t('deviceLink.remoteError.notFound'));
   });
 
   it('preserves structured remote error codes for banner classification', () => {
@@ -80,6 +82,9 @@ describe('remoteStatus', () => {
     expect(describeRemoteComposerBlockingError("[CHANNEL_NOT_ALLOWED] channel 'x'"))
       .toContain('版本不支持');
     expect(describeRemoteComposerBlockingError(null)).toBeNull();
+    expect(describeRemoteComposerBlockingError('unknown failure')).toBeNull();
+    expect(describeRemoteComposerBlockingError('OUTBOX_STORAGE_INVALID')).toBeNull();
+    expect(describeRemoteComposerBlockingError('[BAD_REQUEST] nope')).toBeNull();
   });
 
   it('localizes Stop connection recovery errors without dropping their structured classification', async () => {

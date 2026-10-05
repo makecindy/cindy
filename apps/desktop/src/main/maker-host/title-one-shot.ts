@@ -1,5 +1,5 @@
 import { isOpenAiSubscriptionProvider } from '@cindy/model-providers';
-import { getValidClaudeAccountOAuth, isClaudeSubscriptionProviderId } from './subscription-account-auth.js';
+import { isClaudeSubscriptionProviderId } from './subscription-account-auth.js';
 /**
  * title-one-shot —— 会话标题的「单次 HTTP」生成器。
  *
@@ -46,6 +46,7 @@ import {
   providerCatalogId,
 } from '@cindy/model-providers';
 import { toSdkModelString } from '@cindy/maker-core';
+import { AUTO_TITLE_MAX_CHARS } from '@cindy/maker-shared/session-title';
 
 import { createLogger } from '../logger.js';
 import { getAppCapabilities } from '../appCapabilities.js';
@@ -54,7 +55,6 @@ import { getActiveCatalog } from './active-catalog.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import { readClaudeApiKey, readCodexOneShotCreds } from './auth-adapters.js';
-import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
 import { outboundUndiciFetch } from './outbound-fetch.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { validateTitleOutput } from './title-output-validation.js';
@@ -63,11 +63,11 @@ const log = createLogger('maker-host:title-one-shot');
 
 /** 标题 oneShot 单次请求超时(对齐 renderer scheduleAutoName 的等待窗口语义,留余量)。 */
 const TITLE_TIMEOUT_MS = 12_000;
-/** 标题 ≤ 20 字,32 token 足够;codex Responses 协议层不暴露 max_tokens,仅对 messages/chat 生效。 */
-const TITLE_MAX_TOKENS = 32;
+/** 为多字节中文 / emoji 留出每字符 4 token；字符上限仍单独校验。 */
+const TITLE_MAX_TOKENS = AUTO_TITLE_MAX_CHARS * 4;
 /**
  * XD 网关思考模型(Hy3 / DeepSeek 等)默认会先写 reasoning_content。
- * 标题只要短正文;不关思考时 32 token 会全部烧掉,content 仍是空串。
+ * 标题只要短正文;不关思考时短标题的 token 预算会全部烧掉,content 仍是空串。
  * 网关认 OpenAI 兼容的 thinking.type=disabled;官方 no_think / enable_thinking=false 无效。
  */
 const TITLE_GATEWAY_THINKING = { type: 'disabled' } as const;
@@ -457,7 +457,7 @@ export function parseResponsesSse(raw: string): string {
  * 用于 prompt prediction 等复用同一条 provider 通路但需要不同 token/校验的场景。
  */
 export interface OneShotOpts {
-  /** 覆盖 max_tokens(标题默认 32)。 */
+  /** 覆盖 max_tokens(标题默认 160)。 */
   maxTokens?: number;
   /** 覆盖 Codex instructions(标题默认 CODEX_TITLE_INSTRUCTIONS)。 */
   codexInstructions?: string;
@@ -493,11 +493,9 @@ export async function generateTitleViaProviderResult(
   const readSessionProviderId = deps.readSessionProviderId ?? (async () => null);
   const listConnectedProviders = deps.listConnectedProviders ?? (async () => []);
   const readCodexCreds = deps.readCodexCreds ?? ((providerId?: string) => readCodexOneShotCreds(undefined, providerId));
-  // 走刷新模块而非直读凭证库:cc >= 2.1.198 后凭证库的新鲜度取决于 host 刷新节奏,
-  // 直读会在 token 过期后长期拿死值 → 静默 401 回落启发式标题。getValidClaudeAiOAuth
-  // 临期自动续(非强制语义,失败退回现值,行为不劣于直读)。
-  const readAnthropicOAuth = deps.readAnthropicOAuth ?? ((providerId?: string) =>
-    providerId && providerId !== 'anthropic' ? getValidClaudeAccountOAuth(providerId) : getValidClaudeAiOAuth());
+  // Claude 订阅凭证只在内置 Claude Code CLI 里,Cindy 不持有:缺省没有 anthropic 凭证,
+  // 该 wire 的标题请求一律跳过(回落启发式标题)。
+  const readAnthropicOAuth = deps.readAnthropicOAuth ?? (async () => null);
   const readGatewayKey = deps.readGatewayKey ?? readClaudeApiKey;
 
   // Provider 解析:WYSIWYG,与模型选择器高亮同口径。
@@ -643,7 +641,7 @@ log.debug('title oneShot skipped: no title target', {
   const maxTokens = opts?.maxTokens ?? TITLE_MAX_TOKENS;
   const codexInstructions = opts?.codexInstructions ?? CODEX_TITLE_INSTRUCTIONS;
   const maxOutputChars = opts?.maxOutputChars ?? TITLE_OUTPUT_MAX_CHARS;
-  const maxVisualChars = opts?.maxVisualChars ?? 40;
+  const maxVisualChars = opts?.maxVisualChars ?? AUTO_TITLE_MAX_CHARS;
   try {
     let text = '';
     switch (target.wire) {

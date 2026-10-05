@@ -2095,6 +2095,11 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/bot-import/openclawCronWorker.ts',
+          config: 'vite.contacts-sync-codec-worker.config.ts',
+          target: 'preload',
+        },
+        {
           entry: 'src/main/worktree/recoveryArchiveWorker.ts',
           config: 'vite.recovery-archive-worker.config.ts',
           // Physical ASAR bytes belong in recovery archives; isolate noAsar from main.
