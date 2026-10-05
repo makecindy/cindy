@@ -5,6 +5,8 @@ export const TASK_MIGRATION_LOCAL_CHANNEL = "task-copy:request";
 export const TASK_MIGRATION_MAX_FILES = 500_000;
 export const TASK_MIGRATION_ESTIMATE_TIMEOUT_MS = 3 * 60_000;
 export const TASK_MIGRATION_RECEIVE_TIMEOUT_MS = 30 * 60_000;
+/** Most transcripts one copy sends beside its conversation package. */
+export const TASK_MIGRATION_MAX_TRANSCRIPTS = 256;
 export interface MigrationFileRef {
   ref: string;
   size: number;
@@ -19,6 +21,8 @@ export interface MigrationResources {
   manifestBytes: number;
   repositoryBytes: number;
   entries: number;
+  /** Native transcripts sent as separate files; absent from older sources. */
+  transcriptBytes?: number;
 }
 export interface MigrationFiles {
   session: MigrationFile;
@@ -29,6 +33,11 @@ export interface MigrationFiles {
     workspace: MigrationFile;
     repository?: MigrationFile;
   }>;
+  /**
+   * Native transcripts kept out of the conversation package, in the order the copy's
+   * workspace manifest lists them. Only sent to targets declaring `externalTranscripts`.
+   */
+  transcripts?: MigrationFile[];
 }
 export type TaskMigrationRequest =
   | {
@@ -71,6 +80,10 @@ export interface TaskMigrationView {
   estimate?: { fileCount: number; bytes: number };
   copyEstimate?: true;
   running?: boolean;
+  /** A running copy accepts `cancel` (source staging only). Absent on older hosts. */
+  cancellable?: true;
+  /** `cancel` was accepted; the running copy is unwinding. Absent on older hosts. */
+  cancelling?: true;
   /** Optional live source-side upload telemetry; absent on older hosts. Never persisted. */
   progress?: {
     phase: "sending" | "finishing";
@@ -81,10 +94,21 @@ export interface TaskMigrationView {
   targetDeviceId?: string;
   targetSessionId?: string;
   error?: string;
+  /** Project-relative entry blamed for `error` (e.g. a non-portable name). Absent on older hosts. */
+  errorPath?: string;
+  /**
+   * Entries the copy left behind (a directory stands for its subtree), with why; `entries` is
+   * capped and `total` counts them all. Absent when nothing was skipped or on older hosts.
+   */
+  skipped?: { total: number; entries: Array<{ path: string; code: string }> };
   projects?: string[];
   agents?: Array<"cc" | "codex" | "pi">;
   /** Entire Orca graph, native contexts and per-member workspaces. Absence means unsupported. */
   teamMigration?: true;
+  /** Accepts `files.transcripts` (large native transcripts streamed outside the package). */
+  externalTranscripts?: true;
+  /** Bytes needed vs the limit, when `error` is a size failure. Absent on older hosts. */
+  errorSize?: { needed: number; limit: number };
 }
 
 export function parseTaskMigrationRequest(
@@ -132,6 +156,12 @@ export function parseTaskMigrationRequest(
     ] as const)
       if (!Number.isSafeInteger(resources[key]) || resources[key] < 0)
         throw new Error("MIGRATION_INVALID_REQUEST");
+    if (
+      resources.transcriptBytes !== undefined &&
+      (!Number.isSafeInteger(resources.transcriptBytes) ||
+        resources.transcriptBytes < 0)
+    )
+      throw new Error("MIGRATION_INVALID_REQUEST");
     return {
       action: "preflight",
       targetProject: (r.targetProject as string | null) ?? null,
@@ -178,6 +208,12 @@ export function parseTaskMigrationRequest(
         ))
     )
       throw new Error("MIGRATION_INVALID_REQUEST");
+    if (
+      files.transcripts !== undefined &&
+      (!Array.isArray(files.transcripts) ||
+        files.transcripts.length > TASK_MIGRATION_MAX_TRANSCRIPTS)
+    )
+      throw new Error("MIGRATION_INVALID_REQUEST");
     const allFiles = [
       files.session,
       files.workspace,
@@ -187,6 +223,7 @@ export function parseTaskMigrationRequest(
         entry.workspace,
         ...(entry.repository ? [entry.repository] : []),
       ]),
+      ...(files.transcripts ?? []),
     ];
     for (const file of allFiles) {
       if (!file || !Number.isSafeInteger(file.size) || file.size <= 0)

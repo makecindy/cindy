@@ -418,10 +418,10 @@ function ScopePicker({
             className={cn('shrink-0', !effectiveWorkingDir ? 'opacity-100' : 'opacity-0')}
           />
           <div className="flex flex-col gap-0.5">
-            <span className="whitespace-nowrap text-13 font-medium">
+            <span className="whitespace-nowrap">
               {t('settings.builtinTools.scopePicker.userDefault')}
             </span>
-            <span className="whitespace-nowrap text-11 text-[var(--settings-section-desc)]">
+            <span className="whitespace-nowrap text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
               {t('settings.builtinTools.scopePicker.userDefaultDescription')}
             </span>
           </div>
@@ -442,9 +442,9 @@ function ScopePicker({
               />
               <div className="flex min-w-0 flex-col gap-0.5">
                 <div className="flex items-center gap-1.5">
-                  <span className="truncate text-13 font-medium">{basename(dir)}</span>
+                  <span className="truncate">{basename(dir)}</span>
                 </div>
-                <span title={dir} className="truncate text-11 text-[var(--settings-section-desc)]">
+                <span title={dir} className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                   {dir}
                 </span>
               </div>

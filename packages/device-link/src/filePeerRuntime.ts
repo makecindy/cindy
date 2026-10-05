@@ -3,8 +3,20 @@
 export interface FilePeerRuntimeBridge {
   read(connection: string, ticket: string, offset: number): Promise<string>;
   write(sink: string, offset: number, base64: string): Promise<void>;
-  invoke?(connection: string, payload: string): Promise<string>;
+  /** `body` carries a request's binary payload (see RPC_BODY_MAX_BYTES). */
+  invoke?(
+    connection: string,
+    payload: string,
+    body?: Uint8Array,
+  ): Promise<string>;
 }
+
+/**
+ * A request may append up to 1 MiB of raw bytes after its JSON fragments. Peers that do
+ * not advertise `caps.streamAttachments` close the channel on binary frames, so callers
+ * send a body only to capable peers.
+ */
+export const RPC_BODY_MAX_BYTES = 1024 * 1024;
 
 /** Diagnostics only: application-level progress of the latest receive on a peer. */
 interface ReceiveProgress {
@@ -60,11 +72,16 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
     string,
     {
       channel: RTCDataChannel;
-      request(payload: string, timeoutMs?: number): Promise<string>;
+      request(
+        payload: string,
+        timeoutMs?: number,
+        body?: Uint8Array,
+      ): Promise<string>;
       close(): void;
     }
   >();
   function attachRpc(id: string, dc: RTCDataChannel) {
+    dc.binaryType = "arraybuffer";
     const pending = new Map<
       string,
       {
@@ -75,22 +92,91 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
     >();
     const fragments = new Map<
       string,
-      { data: string; timer: ReturnType<typeof setTimeout> }
+      {
+        data: string;
+        timer: ReturnType<typeof setTimeout>;
+        body?: { remaining: number; parts: Uint8Array[] };
+      }
     >();
+    // A body's binary frames directly follow its last JSON fragment: send() emits a whole
+    // message synchronously on an ordered channel, so nothing can interleave.
+    let receivingBody: string | undefined;
+    // An incomplete message closes the connection only after this long without any new frame:
+    // a slow but live link keeps a body alive however long it takes.
+    const stallMs = 15000;
     let sequence = 0;
     let active = 0;
-    const send = (key: string, response: boolean, value: string) => {
-      if (value.length > 4 * 1024 * 1024 || dc.readyState !== "open")
+    const send = (
+      key: string,
+      response: boolean,
+      value: string,
+      body?: Uint8Array,
+    ) => {
+      if (
+        value.length > 4 * 1024 * 1024 ||
+        (body && (!body.length || body.length > RPC_BODY_MAX_BYTES)) ||
+        dc.readyState !== "open"
+      )
         throw new Error("FILE_PEER_RPC_SIZE");
-      for (let offset = 0; offset < Math.max(1, value.length); offset += 16384)
+      for (
+        let offset = 0;
+        offset < Math.max(1, value.length);
+        offset += 16384
+      ) {
+        const last = offset + 16384 >= value.length;
         dc.send(
           JSON.stringify({
             key,
             response,
             data: value.slice(offset, offset + 16384),
-            last: offset + 16384 >= value.length,
+            last,
+            ...(last && body ? { body: body.length } : {}),
           }),
         );
+      }
+      if (body)
+        for (let offset = 0; offset < body.length; offset += 16384)
+          dc.send(body.slice(offset, offset + 16384));
+    };
+    const dispatch = (key: string, payload: string, body?: Uint8Array) => {
+      if (!bridge.invoke || active >= 4) throw new Error();
+      active++;
+      void bridge
+        .invoke(id, payload, body)
+        .then((value) => {
+          if (peers.has(id)) send(key, true, value);
+        })
+        .catch(() => close(id))
+        .finally(() => {
+          active--;
+        });
+    };
+    const receiveBody = (data: unknown) => {
+      const f = receivingBody ? fragments.get(receivingBody) : undefined;
+      if (!f?.body || !(data instanceof ArrayBuffer)) throw new Error();
+      const bytes = new Uint8Array(data);
+      // Exactly the sender's framing (16 KiB, shorter only at the end), like the files-v2 receive
+      // path: a peer cannot make the body arrive as millions of tiny frames.
+      if (bytes.length !== Math.min(16384, f.body.remaining)) throw new Error();
+      f.body.parts.push(bytes);
+      f.body.remaining -= bytes.length;
+      clearTimeout(f.timer);
+      if (f.body.remaining) {
+        f.timer = setTimeout(() => close(id), stallMs);
+        return;
+      }
+      const key = receivingBody!;
+      receivingBody = undefined;
+      fragments.delete(key);
+      const body = new Uint8Array(
+        f.body.parts.reduce((sum, part) => sum + part.length, 0),
+      );
+      let offset = 0;
+      for (const part of f.body.parts) {
+        body.set(part, offset);
+        offset += part.length;
+      }
+      dispatch(key.slice("false:".length), f.data, body);
     };
     const shutdown = () => {
       for (const p of pending.values()) {
@@ -105,6 +191,7 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
     dc.onclose = shutdown;
     dc.onmessage = ({ data }) => {
       try {
+        if (receivingBody !== undefined) return receiveBody(data);
         if (typeof data !== "string" || data.length > 100000) throw new Error();
         const m = JSON.parse(data);
         if (
@@ -113,7 +200,13 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
           typeof m.response !== "boolean" ||
           typeof m.last !== "boolean" ||
           typeof m.data !== "string" ||
-          m.data.length > 16384
+          m.data.length > 16384 ||
+          (m.body !== undefined &&
+            (m.response ||
+              !m.last ||
+              !Number.isSafeInteger(m.body) ||
+              m.body < 1 ||
+              m.body > RPC_BODY_MAX_BYTES))
         )
           throw new Error();
         if (m.response && !pending.has(m.key)) return;
@@ -121,12 +214,19 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
         let f = fragments.get(key);
         if (!f) {
           if (fragments.size >= 8) throw new Error();
-          f = { data: "", timer: setTimeout(() => close(id), 15000) };
+          f = { data: "", timer: setTimeout(() => close(id), stallMs) };
           fragments.set(key, f);
         }
         f.data += m.data;
         if (f.data.length > 4 * 1024 * 1024) throw new Error();
         if (!m.last) return;
+        if (m.body !== undefined) {
+          clearTimeout(f.timer);
+          f.timer = setTimeout(() => close(id), stallMs);
+          f.body = { remaining: m.body, parts: [] };
+          receivingBody = key;
+          return;
+        }
         clearTimeout(f.timer);
         fragments.delete(key);
         if (m.response) {
@@ -134,19 +234,7 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
           pending.delete(m.key);
           clearTimeout(p.timer);
           p.resolve(f.data);
-        } else {
-          if (!bridge.invoke || active >= 4) throw new Error();
-          active++;
-          void bridge
-            .invoke(id, f.data)
-            .then((value) => {
-              if (peers.has(id)) send(m.key, true, value);
-            })
-            .catch(() => close(id))
-            .finally(() => {
-              active--;
-            });
-        }
+        } else dispatch(m.key, f.data);
       } catch {
         close(id);
       }
@@ -154,21 +242,18 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
     rpcPeers.set(id, {
       channel: dc,
       close: shutdown,
-      request(payload, timeoutMs) {
+      request(payload, timeoutMs, body) {
         if (pending.size >= 4 || dc.readyState !== "open")
           return Promise.reject(new Error("FILE_PEER_UNAVAILABLE"));
         return new Promise((resolve, reject) => {
           const key = String(++sequence);
-          const timer = setTimeout(
-            () => {
-              pending.delete(key);
-              reject(new Error("FILE_PEER_TIMEOUT"));
-            },
-            rpcTimeoutMs(timeoutMs),
-          );
+          const timer = setTimeout(() => {
+            pending.delete(key);
+            reject(new Error("FILE_PEER_TIMEOUT"));
+          }, rpcTimeoutMs(timeoutMs));
           pending.set(key, { resolve, reject, timer });
           try {
-            send(key, false, payload);
+            send(key, false, payload, body);
           } catch (error) {
             pending.delete(key);
             clearTimeout(timer);
@@ -609,10 +694,29 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
     }
   }
   return {
-    async invoke(id: string, payload: string, timeoutMs?: number) {
+    /** `body` is base64 so string-only bridges (Mobile WebView) can pass it; it travels as raw bytes. */
+    async invoke(
+      id: string,
+      payload: string,
+      timeoutMs?: number,
+      body?: string,
+    ) {
       const rpc = rpcPeers.get(id);
       if (!rpc) throw new Error("FILE_PEER_UNAVAILABLE");
-      return rpc.request(payload, timeoutMs);
+      if (body === undefined) return rpc.request(payload, timeoutMs);
+      if (
+        typeof body !== "string" ||
+        body.length > Math.ceil(RPC_BODY_MAX_BYTES / 3) * 4 ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+          body,
+        )
+      )
+        throw new Error("FILE_PEER_RPC_SIZE");
+      return rpc.request(
+        payload,
+        timeoutMs,
+        Uint8Array.from(atob(body), (c) => c.charCodeAt(0)),
+      );
     },
     async stats(id: string) {
       const p = peers.get(id);

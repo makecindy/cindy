@@ -33,7 +33,7 @@ it('reuses one child for large bounded frames and releases it on cancellation', 
   const { child, owner } = setup();
   const first = owner.frame('wayland-portal');
   await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledOnce());
-  expect(h.spawn).toHaveBeenCalledWith('/capture', ['video', '1', '65'], { stdio: 'pipe' });
+  expect(h.spawn).toHaveBeenCalledWith('/capture', ['video', '1', '80'], { stdio: 'pipe' });
   await expect(owner.frame('wayland-portal')).resolves.toBeNull();
   const jpeg = 'a'.repeat(400000);
   child.stdout.write(jpeg + '\n');
@@ -86,11 +86,11 @@ it('parses a bounded Linux cursor frame and applies requested encoding quality',
   const { child, owner } = setup();
   const pending = owner.frame('wayland-portal', true, {
     fps: 60,
-    bitrate: 20_000_000,
+    quality: 'hd',
     audio: false,
   });
   await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledOnce());
-  expect(h.spawn).toHaveBeenCalledWith('/capture', ['cursor-overlay', '1', '95'], {
+  expect(h.spawn).toHaveBeenCalledWith('/capture', ['cursor-overlay', '1', '90'], {
     stdio: 'pipe',
   });
   const frame = { jpeg: 'anBlZw==', cursor: null };

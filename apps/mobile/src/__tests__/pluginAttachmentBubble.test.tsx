@@ -194,7 +194,10 @@ describe('companion native read position', () => {
     const acknowledge = vi.fn();
     const items = buildMobileMessageRenderItems([msg('a', 'assistant', 'Task reply')], { isSessionStreaming: false });
     renderClient(<MessageRenderer items={items} onCompanionReadThrough={acknowledge} />);
-    expect(viewportHarness.list.onViewableItemsChanged).toBeUndefined();
+    expect(viewportHarness.list.onViewableItemsChanged).toBeTypeOf('function');
+    viewportHarness.list.onViewableItemsChanged({ viewableItems: items.map(item => ({
+      item, key: item.key, isViewable: true,
+    })) });
     expect(acknowledge).not.toHaveBeenCalled();
   });
 

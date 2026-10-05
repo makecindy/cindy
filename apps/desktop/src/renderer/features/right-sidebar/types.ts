@@ -31,6 +31,7 @@ export type BuiltinTabKindId =
   | 'subagents'
   | 'background-tasks'
   | 'routines'
+  | 'bot-workbench'
   | 'resource-usage'
   | 'cindy-make';
 export type TabKindId = BuiltinTabKindId | `ghost:${string}`;

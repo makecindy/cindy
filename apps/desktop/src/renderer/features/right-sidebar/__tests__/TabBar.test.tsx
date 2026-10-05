@@ -63,7 +63,10 @@ function renderStrip(overrides?: {
 describe('TabStrip iOS Simulator plugin gate', () => {
   it('does not expose the Host viewer before the product plugin is enabled', () => {
     renderStrip();
-    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' }), {
+      button: 0,
+      ctrlKey: false,
+    });
     expect(screen.queryByText('rightSidebar.tabs.kinds.iosSimulator')).toBeNull();
   });
 
@@ -81,7 +84,7 @@ describe('TabStrip iOS Simulator plugin gate', () => {
       height: 24,
       toJSON: () => ({}),
     });
-    fireEvent.click(addButton);
+    fireEvent.pointerDown(addButton, { button: 0, ctrlKey: false });
     expect(screen.getByText('rightSidebar.tabs.kinds.iosSimulator')).toBeTruthy();
   });
 });
@@ -89,7 +92,10 @@ describe('TabStrip iOS Simulator plugin gate', () => {
 describe('TabStrip Pi Subagents gate', () => {
   it('does not expose Subagents for Claude Code or Codex tasks', () => {
     renderStrip();
-    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' }), {
+      button: 0,
+      ctrlKey: false,
+    });
     expect(screen.queryByText('rightSidebar.tabs.kinds.subagents')).toBeNull();
   });
 
@@ -107,7 +113,7 @@ describe('TabStrip Pi Subagents gate', () => {
       height: 24,
       toJSON: () => ({}),
     });
-    fireEvent.click(addButton);
+    fireEvent.pointerDown(addButton, { button: 0, ctrlKey: false });
     expect(screen.getByText('rightSidebar.tabs.kinds.subagents')).toBeTruthy();
   });
 });

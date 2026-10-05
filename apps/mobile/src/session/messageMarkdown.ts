@@ -8,6 +8,7 @@ import {
   classifyChatPathLinkTarget,
   findBareFilePathMatch,
   resolveChatAbsPath,
+  toWorkdirRel,
 } from '@/session/chatPathCandidate';
 import { DEEP_LINK_SCHEME_GROUP } from '@/session/sessionLinks';
 import { i18n } from '@/i18n';
@@ -628,6 +629,24 @@ export function mobileMarkdownImageUrlForWorkdir(
   return `${base}${sshContext}${version}`;
 }
 
+/** Automatic previews must not upload arbitrary model-named files. Explicit
+ * clicks keep the existing viewer path; the Host enforces baseDir after realpath. */
+export function mobileMarkdownManagedImagePreviewUrl(
+  url: string, workdir?: string, cacheKey?: string, remoteHostId?: string, sessionId?: string,
+): string | null {
+  const resolved = mobileMarkdownImageUrlForWorkdir(url, workdir, cacheKey, remoteHostId, sessionId);
+  if (!resolved || isMobileMarkdownImageDirectUrl(resolved)) return null;
+  if (!resolved.startsWith('xdt-file://')) return resolved;
+  if (!workdir) return null;
+  const parsed = new URL(resolved);
+  const file = parsed.searchParams.get('path');
+  if (!file || toWorkdirRel(workdir, file) === null) return null;
+  // Do not trust baseDir supplied in Markdown (including duplicate parameters).
+  parsed.searchParams.delete('baseDir');
+  parsed.searchParams.set('baseDir', workdir);
+  return parsed.toString();
+}
+
 // 流式(native)路径下正文图片的缩略图尺寸:默认宽 150,宽高都封顶 220。有声明宽高时按比例
 // 换算,但换算结果同样封顶——width/height 只过了「1-4 位纯数字」白名单,height="9999" 这类
 // 极端比例若不封顶会在流式阶段渲染出近万像素高的图,撑爆气泡(review P2)。
@@ -646,6 +665,8 @@ export type MobileMarkdownBlockGroup =
   | { type: 'single'; key: string; block: MobileMarkdownBlock };
 
 export interface MobileMarkdownTextRunGroupingOptions {
+  /** Only actual native image previews break text selection; text chips do not. */
+  imageRendersPreview?: (image: MobileMarkdownImageInline) => boolean;
   /**
    * Upper bound for one selectable native text view. Undefined keeps the
    * historical "merge until a non-text block" behavior.
@@ -684,7 +705,7 @@ export function groupMobileMarkdownSelectableBlocks(
     runInlineFragmentCount = 0;
   };
   for (const block of blocks) {
-    if (isTextRunBlock(block)) {
+    if (isTextRunBlock(block, options?.imageRendersPreview)) {
       for (const chunk of splitOversizedTextRunBlock(
         block,
         maxTextRunUtf16Length,
@@ -721,13 +742,16 @@ export function groupMobileMarkdownSelectableBlocks(
   return groups;
 }
 
-function isTextRunBlock(block: MobileMarkdownBlock): block is MobileMarkdownTextRunBlock {
+function isTextRunBlock(
+  block: MobileMarkdownBlock,
+  imageRendersPreview: (image: MobileMarkdownImageInline) => boolean = (image) => isMobileMarkdownImageDirectUrl(image.url),
+): block is MobileMarkdownTextRunBlock {
   if (block.type !== 'paragraph' && block.type !== 'heading' && block.type !== 'list_item') {
     return false;
   }
-  // 直连内联图渲染为 Text 内嵌 View,不能进合并文本树(Android selectable+内嵌 View 行为未定义)。
+  // Only image previews embed Views; fallback text chips remain selectable.
   return !block.inlines.some(
-    (inline) => inline.type === 'image' && isMobileMarkdownImageDirectUrl(inline.url),
+    (inline) => inline.type === 'image' && imageRendersPreview(inline),
   );
 }
 
@@ -1572,7 +1596,10 @@ function matchMarkdownImage(
     let candidate: RegExpExecArray | null;
     while ((candidate = matcher.re.exec(input)) !== null) {
       const rawUrl = matcher.local ? parseLocalMarkdownDestination(candidate[2]) : candidate[2];
-      if (matcher.local && !classifyChatPathLinkTarget(rawUrl)) continue;
+      // The destination parser also handles standard titles and angle brackets
+      // for remote images, just as it does for local image paths.
+      if (matcher.local && !classifyChatPathLinkTarget(rawUrl)
+        && !(SAFE_IMAGE_SRC_RE.test(rawUrl) && !/\s/.test(rawUrl))) continue;
       // 当前 matcher 的第一个正则命中可能只是注释/转义里的示例;必须继续 exec,
       // 否则同段后面的合法图片会被丢掉(review P2)。
       if (isInsideHtmlComment(guarded, candidate.index, startsInsideHtmlComment)) continue;

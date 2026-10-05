@@ -79,6 +79,20 @@ beforeEach(() => {
 });
 
 describe('auxiliary task-title routing', () => {
+  it.each([
+    ['研究Deepseek Harness对比Cindy', '研究Deepseek Harness对比Cindy'],
+    ['😀'.repeat(40), '😀'.repeat(40)],
+    ['😀'.repeat(41), '😀'.repeat(40)],
+    ['字'.repeat(41), '字'.repeat(40)],
+  ])('保留正常标题并按 40 个 Unicode 字符截断: %s', async (text, expected) => {
+    h.requestText.mockResolvedValue({ ok: true, text });
+    await expect(generateTitleWithAuxiliaryModel(REQUEST, {}, runtimeDeps())).resolves.toBe(expected);
+    // AI regenerate consumes the result API; both routes retain historical truncation.
+    await expect(generateTitleWithAuxiliaryModelResult(REQUEST, {}, runtimeDeps())).resolves.toEqual({
+      status: 'ok', title: expected,
+    });
+  });
+
   it('uses the shared utility chain in automatic mode', async () => {
     await expect(generateTitleWithAuxiliaryModel(REQUEST, {}, runtimeDeps())).resolves.toBe(
       '通用任务命名',
@@ -87,6 +101,7 @@ describe('auxiliary task-title routing', () => {
     expect(h.requestText).toHaveBeenCalledWith(
       REQUEST.prompt,
       expect.objectContaining({
+        maxTokens: 160,
         disableReasoning: true,
         reasoningEffort: 'minimal',
         responseInstructions: expect.stringContaining('Output only the short conversation title'),
@@ -108,7 +123,7 @@ describe('auxiliary task-title routing', () => {
       'codex',
       CODEX_REQUEST.prompt,
       expect.objectContaining({
-        maxTokens: 32,
+        maxTokens: 160,
         responseInstructions: expect.stringContaining('Output only the short conversation title'),
       }),
     );

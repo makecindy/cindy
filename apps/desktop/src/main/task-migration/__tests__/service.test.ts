@@ -11,6 +11,7 @@ import {
   TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
   TASK_MIGRATION_LOCAL_CHANNEL,
   TASK_MIGRATION_MAX_FILES,
+  TASK_MIGRATION_MAX_TRANSCRIPTS,
 } from '@cindy/device-link';
 
 const state = vi.hoisted(() => ({
@@ -28,6 +29,8 @@ const state = vi.hoisted(() => ({
   drain: vi.fn(),
   exported: vi.fn(),
   uploadedProgress: vi.fn(),
+  /** Models a long in-flight upload: it only ends when its signal aborts. */
+  stallUpload: undefined as undefined | (() => void),
   loseReply: '' as string,
   importsFail: false,
   siblingRunning: false,
@@ -44,11 +47,47 @@ const state = vi.hoisted(() => ({
   estimateLimits: [] as number[],
   timeoutAction: '' as string,
   exclusions: [] as string[],
+  /** Entries each snapshot reports it left behind. */
+  skipped: [] as Array<{ path: string; code: string }>,
+  migrationWarn: vi.fn(),
+  /** Native transcript the export streams beside the package when the target supports it. */
+  transcript: '' as string,
+  transcriptCount: 1,
+  exportOversize: null as null | {
+    totalBytes: number;
+    limitBytes: number;
+    transcriptBytes: number;
+    transcriptFileBytes?: number[];
+  },
+  /** Target without the `externalTranscripts` capability. */
+  oldTarget: false,
+  importedTranscripts: [] as Array<{ path: string; content: string }>,
+  recentProjects: [] as string[],
+  archiveDownloadFails: false,
 }));
+vi.mock('../../logger', async (original) => {
+  const actual = await original<typeof import('../../logger')>();
+  return {
+    ...actual,
+    createLogger: (scope: string) =>
+      scope === 'task-migration'
+        ? { ...actual.createLogger(scope), warn: state.migrationWarn }
+        : actual.createLogger(scope),
+  };
+});
 vi.mock('../../localDb/ipc/sessionCreatedBroadcast', () => ({
   emitSessionCreated: (id: string) => state.created(id),
 }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root }, ipcMain: { handle: vi.fn() } }));
+vi.mock('../../dialogue-workspace-settings', () => ({
+  readDialogueWorkspaceSettings: () => ({
+    directory: path.join(state.root, 'dialogues'),
+    isCustomized: false,
+  }),
+}));
+vi.mock('../../localDb/ipc/recentWorkdirs', () => ({
+  upsertRecentWorkdir: (dir: string) => state.recentProjects.push(dir),
+}));
 vi.mock('../resources', async (original) => {
   const actual = await original<typeof import('../resources')>();
   return {
@@ -104,6 +143,7 @@ vi.mock('../../device-link', () => ({
     const result = await state.context.run({ device: target, peer }, () =>
       requestTaskMigration(args[0]),
     );
+    if (state.oldTarget && args[0].action === 'caps') delete result.externalTranscripts;
     if (state.loseReply === args[0].action) {
       state.loseReply = '';
       throw new Error('connection lost after commit');
@@ -115,7 +155,16 @@ vi.mock('../../device-link/filePeer', () => ({ tryUploadPeerAttachment: async ()
 vi.mock('../../device-link/mediaTransfer', () => ({
   MAX_MEDIA_BYTES: 2 * 1024 ** 3,
   removeRemote: (key: string) => state.remove(key),
-  uploadLocalFile: async (file: string, opts: { onProgress?: (bytes: number) => void }) => {
+  uploadLocalFile: async (
+    file: string,
+    opts: { onProgress?: (bytes: number) => void; signal?: AbortSignal },
+  ) => {
+    if (state.stallUpload) {
+      state.stallUpload();
+      await new Promise((_, reject) =>
+        opts.signal?.addEventListener('abort', () => reject(new Error('UPLOAD_CANCELLED'))),
+      );
+    }
     const bytes = await fs.readFile(file),
       key = `migration/${state.files.size}`;
     opts.onProgress?.(bytes.length);
@@ -126,8 +175,13 @@ vi.mock('../../device-link/mediaTransfer', () => ({
 }));
 vi.mock('../../device-link/remoteAttachment', () => ({
   parseRemoteAttachmentRef: (ref: string) => parseAttachmentOssRef(ref),
-  materializeRemoteAttachment: (ref: { ossKey: string }, destination: string) =>
-    fs.copyFile(state.files.get(ref.ossKey)!, destination),
+  materializeRemoteAttachment: async (ref: { ossKey: string }, destination: string) => {
+    if (state.archiveDownloadFails && destination.endsWith('.tar.gz.enc')) {
+      state.archiveDownloadFails = false;
+      throw new Error('download interrupted');
+    }
+    await fs.copyFile(state.files.get(ref.ossKey)!, destination);
+  },
 }));
 vi.mock('../../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent() {} }));
 vi.mock('../../cindy-media/refCompensationJournal', () => ({
@@ -155,10 +209,33 @@ vi.mock('../../worktree/resourceLock', async (original) => ({
   withWorktreeResourceLocks: (_cwds: string[], fn: () => unknown) => fn(),
 }));
 vi.mock('../../session-share/sessionShareExport', () => ({
-  exportSessionShare: async ({ targetPath }: { targetPath: string }) => {
-    state.exported();
-    await fs.writeFile(targetPath, 'conversation');
-    return { status: 'ok', fidelity: 'full', ...state.exportMedia };
+  exportSessionShare: async (opts: {
+    targetPath: string;
+    externalTranscripts?: { dir: string; minBytes: number };
+  }) => {
+    state.exported(opts);
+    if (state.exportOversize) return { status: 'oversize', mediaBytes: 0, ...state.exportOversize };
+    await fs.writeFile(opts.targetPath, 'conversation');
+    const external = opts.externalTranscripts;
+    const staged =
+      external && state.transcript
+        ? Array.from({ length: state.transcriptCount }, (_, index) => ({
+            path: index
+              ? `transcripts/codex/rollout-${index}.jsonl`
+              : 'transcripts/codex/rollout.jsonl',
+            file: `transcript-${index}-0a1b2c3d.jsonl`,
+            bytes: Buffer.byteLength(state.transcript),
+            sha256: createHash('sha256').update(state.transcript).digest('hex'),
+          }))
+        : [];
+    for (const transcript of staged)
+      await fs.writeFile(path.join(external!.dir, transcript.file), state.transcript);
+    return {
+      status: 'ok',
+      fidelity: 'full',
+      ...state.exportMedia,
+      ...(external ? { externalTranscripts: staged } : {}),
+    };
   },
 }));
 vi.mock('../../session-share/sessionShareImport', () => ({
@@ -175,10 +252,16 @@ vi.mock('../../session-share/sessionShareImport', () => ({
         sessionId: string;
         workingDir: string;
         workers?: Array<{ sessionId: string; sourceSessionId: string; workingDir: string }>;
+        externalTranscripts?: ReadonlyMap<string, string>;
       };
     },
   ) => {
     state.imports();
+    for (const [transcriptPath, file] of scope.migration.externalTranscripts ?? [])
+      state.importedTranscripts.push({
+        path: transcriptPath,
+        content: await fs.readFile(file, 'utf8'),
+      });
     const { sessionId, workingDir } = scope.migration;
     state.rows.get(device())!.set(sessionId, {
       id: sessionId,
@@ -210,6 +293,7 @@ vi.mock('../../session-share/sessionShareImport', () => ({
 vi.mock('../workspace', async (original) => ({
   isExcludedFromWorkspace: (await original<typeof import('../workspace')>())
     .isExcludedFromWorkspace,
+  MigrationPathError: (await original<typeof import('../workspace')>()).MigrationPathError,
   managedWorktreeExclusions: async () => state.exclusions,
   estimateWorkspace: async (_root: string, check: () => void, maxFiles: number) => {
     state.estimateLimits.push(maxFiles);
@@ -220,7 +304,11 @@ vi.mock('../workspace', async (original) => ({
     state.snapshot();
     await fs.mkdir(directory, { recursive: true });
     await fs.copyFile(path.join(source, 'draft'), path.join(directory, 'a.tar.gz.enc'));
-    return { unpackedBytes: 8, archive: { file: 'a.tar.gz.enc', files: {} } };
+    return {
+      unpackedBytes: 8,
+      archive: { file: 'a.tar.gz.enc', files: {} },
+      skipped: state.skipped,
+    };
   },
   restoreWorkspace: async (_manifest: unknown, directory: string, target: string) => {
     await fs.copyFile(path.join(directory, 'a.tar.gz.enc'), path.join(target, 'draft'));
@@ -252,6 +340,7 @@ describe('resumable cross-computer copy', () => {
     state.drain.mockReset();
     state.exported.mockClear();
     state.uploadedProgress.mockReset();
+    state.stallUpload = undefined;
     state.root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-migration-service-')),
     );
@@ -262,6 +351,7 @@ describe('resumable cross-computer copy', () => {
     state.imports.mockClear();
     state.created.mockReset();
     state.snapshot.mockClear();
+    state.skipped = [];
     state.close.mockClear();
     state.remove.mockReset();
     state.loseReply = '';
@@ -275,6 +365,14 @@ describe('resumable cross-computer copy', () => {
     state.estimateLimits = [];
     state.timeoutAction = '';
     state.exclusions = [];
+    state.transcript = '';
+    state.transcriptCount = 1;
+    state.exportOversize = null;
+    state.oldTarget = false;
+    state.importedTranscripts = [];
+    state.recentProjects = [];
+    state.archiveDownloadFails = false;
+    state.migrationWarn.mockClear();
     const cwd = path.join(state.root, 'shared');
     await fs.mkdir(cwd);
     await fs.writeFile(path.join(cwd, 'draft'), 'original');
@@ -576,6 +674,49 @@ describe('resumable cross-computer copy', () => {
     expect(state.uploadedProgress).toHaveBeenCalled();
     expect(result.progress).toBeUndefined();
   });
+  it('cancels a running upload before the target receives it and removes source staging', async () => {
+    let cancel: Promise<Awaited<ReturnType<typeof requestTaskMigration>>> | undefined;
+    state.uploadedProgress.mockImplementation(async () => {
+      cancel ??= requestTaskMigration({ action: 'cancel', sessionId: 'fork' });
+    });
+    expect((await start()).cancellable).toBe(true);
+    const status = await settled();
+    expect(await cancel).toMatchObject({ running: true, cancelling: true });
+    expect(status.stage).toBe('cancelled');
+    expect(status.error).toBeUndefined();
+    expect(state.imports).not.toHaveBeenCalled();
+    expect(state.remove.mock.calls.map(([key]) => key)).toEqual([...state.files.keys()]);
+    await expect(
+      fs.stat(path.join(state.root, 'A', 'task-copies', 'outgoing', status.targetSessionId!)),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(state.root, 'shared', 'draft'), 'utf8')).toBe('original');
+    state.uploadedProgress.mockReset();
+    await start();
+    expect((await settled()).stage).toBe('complete');
+  });
+  it('cancelling stops the file in flight instead of waiting for it to finish', async () => {
+    let started!: () => void;
+    const uploading = new Promise<void>((resolve) => (started = resolve));
+    state.stallUpload = () => started();
+    expect((await start()).cancellable).toBe(true);
+    await uploading;
+    expect(await requestTaskMigration({ action: 'cancel', sessionId: 'fork' })).toMatchObject({
+      running: true,
+      cancelling: true,
+    });
+    // Without aborting the stalled upload this never settles.
+    const status = await settled();
+    expect(status.stage).toBe('cancelled');
+    expect(status.error).toBeUndefined();
+    expect(state.files.size).toBe(0);
+    expect(state.imports).not.toHaveBeenCalled();
+    await expect(
+      fs.stat(path.join(state.root, 'A', 'task-copies', 'outgoing', status.targetSessionId!)),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    state.stallUpload = undefined;
+    await start();
+    expect((await settled()).stage).toBe('complete');
+  });
   it('closing a failed transfer removes source staging without deleting an already committed target', async () => {
     state.loseReply = 'receive';
     await start();
@@ -605,9 +746,15 @@ describe('resumable cross-computer copy', () => {
     const status = await settled();
     expect(status.stage).toBe('preparing');
     expect(status.error).toBe('MIGRATION_NO_SPACE');
+    expect(state.migrationWarn).toHaveBeenCalledWith(
+      'task copy failed',
+      expect.objectContaining({ copyId: status.targetSessionId, code: 'MIGRATION_NO_SPACE' }),
+    );
     expect(state.files.size).toBe(0);
     expect(state.imports).not.toHaveBeenCalled();
-    await requestTaskMigration({ action: 'cancel', sessionId: 'fork' });
+    // Closing the failure dialog cancels the copy; the code must survive as the only trace.
+    const cancelled = await requestTaskMigration({ action: 'cancel', sessionId: 'fork' });
+    expect(cancelled).toMatchObject({ stage: 'cancelled', error: 'MIGRATION_NO_SPACE' });
     expect(await fs.readFile(path.join(state.root, 'shared', 'draft'), 'utf8')).toBe('original');
   });
   it('keeps cancellation retryable when staging cleanup fails', async () => {
@@ -709,9 +856,12 @@ describe('resumable cross-computer copy', () => {
     state.importsFail = true;
     await start();
     expect((await settled()).stage).toBe('transferring');
+    expect(state.recentProjects).toEqual([]);
     await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
     expect((await settled()).stage).toBe('complete');
     expect(state.imports).toHaveBeenCalledTimes(1);
+    // The adopted copy still joins the recent projects.
+    expect(state.recentProjects).toEqual([path.join(state.root, 'shared 2')]);
   });
 
   it('copies tasks with automation bindings without modifying the source', async () => {
@@ -728,6 +878,94 @@ describe('resumable cross-computer copy', () => {
     expect(state.close).not.toHaveBeenCalled();
     expect(db.queryOne.mock.calls.some(([sql]) => sql.includes('schedules'))).toBe(false);
     expect(await fs.readFile(path.join(state.root, 'shared', 'draft'), 'utf8')).toBe('original');
+  });
+  it('copies a project task into a new project at the same home-relative path without overwriting', async () => {
+    await start();
+    const result = await settled();
+    expect(result.stage).toBe('complete');
+    const receipt = state.context.run({ device: 'B' }, () =>
+      migrationScope().readIncoming(result.targetSessionId!)!,
+    );
+    // Both test computers share one home, where the source folder already exists.
+    expect(receipt.workingDir).toBe(path.join(state.root, 'shared 2'));
+    expect(state.recentProjects).toEqual([receipt.workingDir]);
+    expect(await fs.readFile(path.join(state.root, 'shared', 'draft'), 'utf8')).toBe('original');
+  });
+  it('reuses its own empty folder on retry instead of leaving a numbered copy behind', async () => {
+    state.archiveDownloadFails = true;
+    await start();
+    expect((await settled()).stage).toBe('transferring');
+    expect(await fs.readdir(path.join(state.root, 'shared 2'))).toEqual([]);
+    await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
+    const result = await settled();
+    expect(result.stage).toBe('complete');
+    const receipt = state.context.run({ device: 'B' }, () =>
+      migrationScope().readIncoming(result.targetSessionId!)!,
+    );
+    expect(receipt.workingDir).toBe(path.join(state.root, 'shared 2'));
+    expect(receipt.retainedWorkingDirs ?? []).toEqual([]);
+    await expect(fs.stat(path.join(state.root, 'shared 3'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+  async function moveSource(...segments: string[]) {
+    const cwd = path.join(state.root, ...segments);
+    await fs.mkdir(cwd, { recursive: true });
+    await fs.writeFile(path.join(cwd, 'draft'), 'original');
+    state.rows.get('A')!.get('fork')!.workingDir = cwd;
+  }
+  const copiedDir = async () => {
+    const result = await settled();
+    expect(result.stage).toBe('complete');
+    return state.context.run(
+      { device: 'B' },
+      () => migrationScope().readIncoming(result.targetSessionId!)!.workingDir,
+    );
+  };
+  it('names a worktree task copy after the project it belongs to', async () => {
+    await moveSource('app', '.cindy-worktrees', 'feature');
+    await start();
+    expect(await copiedDir()).toBe(path.join(state.root, 'app 2'));
+  });
+  it.each([
+    ['parent', ['Code']],
+    // E.g. a Windows reserved name such as CON: the parent exists, the folder itself is refused.
+    ['folder', ['Code', 'app 2']],
+  ])(
+    'falls back to the project folder name when the mirrored %s cannot be created',
+    async (_kind, blockedPath) => {
+      await moveSource('Code', 'app');
+      const blocked = path.join(state.root, ...blockedPath);
+      const mkdir = fs.mkdir.bind(fs);
+      const spy = vi
+        .spyOn(fs, 'mkdir')
+        .mockImplementation(((dir, options) =>
+          dir === blocked
+            ? Promise.reject(Object.assign(new Error('refused'), { code: 'EINVAL' }))
+            : mkdir(dir, options)) as typeof fs.mkdir);
+      try {
+        await start();
+        const dir = await copiedDir();
+        expect(dir).toBe(path.join(state.root, 'app'));
+        expect(state.recentProjects).toEqual([dir]);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+  it('copies a chat task into the dialogue workspace without adding a project', async () => {
+    state.rows.get('A')!.get('fork')!.workspaceKind = 'dialogue';
+    await start();
+    const result = await settled();
+    expect(result.stage).toBe('complete');
+    const receipt = state.context.run({ device: 'B' }, () =>
+      migrationScope().readIncoming(result.targetSessionId!)!,
+    );
+    const day = path.dirname(receipt.workingDir);
+    expect(path.dirname(day)).toBe(path.join(state.root, 'dialogues'));
+    expect(path.basename(day)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(path.basename(receipt.workingDir)).toBe(result.targetSessionId);
+    expect(state.recentProjects).toEqual([]);
   });
   it('copies the complete team and keeps independent target directories', async () => {
     const separate = await team();
@@ -760,6 +998,32 @@ describe('resumable cross-computer copy', () => {
     await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
     expect((await settled()).stage).toBe('complete');
     expect(state.imports).toHaveBeenCalledTimes(1);
+  });
+  it('refuses to cancel a resumed transfer before its receipt rules out a target import', async () => {
+    state.loseReply = 'receive';
+    await start();
+    expect((await settled()).stage).toBe('transferring');
+    const retry = await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
+    expect(retry.running).toBe(true);
+    expect(retry.cancellable).toBeUndefined();
+    await expect(requestTaskMigration({ action: 'cancel', sessionId: 'fork' })).rejects.toThrow(
+      'MIGRATION_CANNOT_CANCEL',
+    );
+    expect((await settled()).stage).toBe('complete');
+    expect(state.imports).toHaveBeenCalledTimes(1);
+  });
+  it('finishes despite skipped entries and reports them until the next copy', async () => {
+    state.skipped = [{ path: 'Pods/out.h', code: 'MIGRATION_EXTERNAL_LINK' }];
+    await start();
+    const first = await settled();
+    expect(first.stage).toBe('complete');
+    expect(first.error).toBeUndefined();
+    expect(first.skipped).toEqual({ total: 1, entries: state.skipped });
+    state.skipped = [];
+    await start();
+    const second = await settled();
+    expect(second.stage).toBe('complete');
+    expect(second.skipped).toBeUndefined();
   });
   it('allows another independent copy after completion', async () => {
     await start();
@@ -882,7 +1146,10 @@ describe('resumable cross-computer copy', () => {
   it('stops copying when source media exists but could not be packaged', async () => {
     state.exportMedia = { mediaMissing: 1, mediaDropped: 1 };
     await start();
-    expect(await settled()).toMatchObject({ stage: 'preparing', error: 'MIGRATION_INCOMPLETE_CONTEXT' });
+    expect(await settled()).toMatchObject({
+      stage: 'preparing',
+      error: 'MIGRATION_INCOMPLETE_CONTEXT',
+    });
     expect(state.imports).not.toHaveBeenCalled();
   });
   it('discards a snapshot when a new turn finishes during preparation', async () => {
@@ -898,6 +1165,110 @@ describe('resumable cross-computer copy', () => {
     expect(state.files.size).toBe(0);
     await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
     expect((await settled()).stage).toBe('complete');
+  });
+  it('reports which project entry blocked packing until a retry succeeds', async () => {
+    const { MigrationPathError } = await import('../workspace');
+    state.snapshot.mockImplementationOnce(() => {
+      throw new MigrationPathError('MIGRATION_NONPORTABLE_PATH', 'apps/desktop/C:');
+    });
+    await start();
+    expect(await settled()).toMatchObject({
+      stage: 'preparing',
+      error: 'MIGRATION_NONPORTABLE_PATH',
+      errorPath: 'apps/desktop/C:',
+    });
+    expect(state.migrationWarn).toHaveBeenCalledWith(
+      'task copy failed',
+      expect.objectContaining({
+        code: 'MIGRATION_NONPORTABLE_PATH',
+        error: expect.stringContaining('apps/desktop/C:'),
+      }),
+    );
+    await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
+    const done = await settled();
+    expect(done.stage).toBe('complete');
+    expect(done.error).toBeUndefined();
+    expect(done.errorPath).toBeUndefined();
+  });
+  it('sends a large native transcript beside the package and restores it', async () => {
+    state.transcript = '{"type":"session_meta"}\n'.repeat(4);
+    await start();
+    expect((await settled()).stage).toBe('complete');
+    expect(state.exported.mock.calls[0][0].externalTranscripts).toMatchObject({
+      minBytes: 32 * 1024 * 1024,
+    });
+    expect(state.importedTranscripts).toEqual([
+      { path: 'transcripts/codex/rollout.jsonl', content: state.transcript },
+    ]);
+    // Its upload is tracked with the others, so completing the copy deletes it too.
+    const transcriptKey = [...state.files].find(([, file]) => file.includes('transcript-0-'))![0];
+    expect(state.remove.mock.calls.map(([key]) => key)).toContain(transcriptKey);
+  });
+  it('stops before uploading more transcripts than the target accepts', async () => {
+    state.transcript = 'native history';
+    state.transcriptCount = TASK_MIGRATION_MAX_TRANSCRIPTS + 1;
+    await start();
+    expect(await settled()).toMatchObject({ stage: 'preparing', error: 'MIGRATION_NO_MEMORY' });
+    expect(state.files.size).toBe(0);
+  });
+  it('keeps transcripts inside the package for a target without the capability', async () => {
+    state.transcript = 'native history';
+    state.oldTarget = true;
+    await start();
+    expect((await settled()).stage).toBe('complete');
+    expect(state.exported.mock.calls[0][0].externalTranscripts).toBeUndefined();
+    expect(state.importedTranscripts).toEqual([]);
+  });
+  it('explains a package that exceeds the memory budget until a retry succeeds', async () => {
+    state.exportOversize = { totalBytes: 900, limitBytes: 100, transcriptBytes: 0 };
+    await start();
+    expect(await settled()).toMatchObject({
+      stage: 'preparing',
+      error: 'MIGRATION_NO_MEMORY',
+      errorSize: { needed: 900, limit: 100 },
+    });
+    expect(state.migrationWarn).toHaveBeenCalledWith(
+      'task copy package exceeds the memory budget',
+      expect.objectContaining({
+        totalBytes: 900,
+        limitBytes: 100,
+        budget: expect.objectContaining({ budget: expect.any(Number) }),
+      }),
+    );
+    state.exportOversize = null;
+    await requestTaskMigration({ action: 'retry', sessionId: 'fork' });
+    const done = await settled();
+    expect(done.stage).toBe('complete');
+    expect(done.errorSize).toBeUndefined();
+  });
+  it('asks to update an older target only when moving large transcripts would fit', async () => {
+    const MB = 1024 ** 2;
+    state.oldTarget = true;
+    state.exportOversize = {
+      totalBytes: 900 * MB,
+      limitBytes: 100 * MB,
+      transcriptBytes: 850 * MB,
+      transcriptFileBytes: [850 * MB],
+    };
+    await start();
+    expect(await settled()).toMatchObject({ error: 'MIGRATION_UNSUPPORTED' });
+    expect((await settled()).errorSize).toBeUndefined();
+  });
+  it('reports the size when an updated target would still keep small transcripts inside', async () => {
+    const MB = 1024 ** 2;
+    state.oldTarget = true;
+    // Thirty 28 MB transcripts stay in the package even on an updated target.
+    state.exportOversize = {
+      totalBytes: 900 * MB,
+      limitBytes: 100 * MB,
+      transcriptBytes: 840 * MB,
+      transcriptFileBytes: Array.from({ length: 30 }, () => 28 * MB),
+    };
+    await start();
+    expect(await settled()).toMatchObject({
+      error: 'MIGRATION_NO_MEMORY',
+      errorSize: { needed: 900 * MB, limit: 100 * MB },
+    });
   });
   it('serializes admission even without process-local route locks', async () => {
     const results = await Promise.allSettled([start(), start()]);

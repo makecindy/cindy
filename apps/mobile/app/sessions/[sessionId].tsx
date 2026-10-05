@@ -1,3 +1,5 @@
+import { modelNeedsReselection } from '@/session/modelReselection';
+import { getCachedDeviceProviders } from '@/device-link/deviceProvidersCache';
 import { MountOnFirstOpen } from '@/session/MountOnFirstOpen';
 import { RunningTokenRatePopover } from '@/session/RunningTokenRatePopover';
 import { companionConversationItems } from '@/session/companionConversationPresentation';
@@ -93,7 +95,6 @@ import {
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
 import Reanimated, { useAnimatedStyle } from 'react-native-reanimated';
-import { GestureDetector } from '@/platform/gestureHandler';
 import { MobileAgentMark } from '@/components/MobileAgentMark';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { SessionHeaderNativeBack, SessionHeaderNativeActions, SessionHeaderNativeTitle, SessionHeaderNativeBlur } from '@/session/SessionHeaderNativeControls';
@@ -198,7 +199,7 @@ import { createComposerDraftSource, useComposerVoiceDraftWriter, type ComposerDr
 import { InlineQueueSection } from '@/session/InlineQueueSection';
 import { inputProjectionErrorI18nKey } from '@/session/inputProjectionError';
 import { RewindPreviewPanel } from '@/session/RewindPreviewPanel';
-import { BlurBackdrop } from '@/session/BlurBackdrop';
+import { BlurBackdrop, FLOATING_CHROME_BLUR_INTENSITY } from '@/session/BlurBackdrop';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetGrabber, SheetSurface } from '@/session/SheetSurface';
 import { NativePermissionSheet } from '@/session/NativePermissionSheet';
@@ -381,6 +382,7 @@ import {
 import {
   appendOptimisticUserMessage,
   confirmedHistoryUserClientIds,
+  repliedHistoryUserClientIds,
   projectOptimisticUserMessages,
   reconcileOptimisticUserMessages,
   type OptimisticUserMessage,
@@ -434,6 +436,7 @@ import {
 import {
   buildOutboxItem,
   createOutboxClientId,
+  hasActiveOutboxHandoff,
   outboxDisplayItem,
   outboxItemAttachments,
   recoverOutboxItemsToComposerDraft,
@@ -1694,6 +1697,9 @@ export default function SessionScreen() {
   const outboxSessionAliveRef = useRef<string | null>(sessionId);
   const [messageListFollowLatestRequestKey, setMessageListFollowLatestRequestKey] = useState(0);
   const [bottomOverlayContentHeight, setBottomOverlayContentHeight] = useState(0);
+  // Where the input starts inside the bottom overlay. Status rows and bars
+  // above it carry their own surfaces, so the edge blur starts at the input.
+  const [composerInputTop, setComposerInputTop] = useState(0);
   const [topOverlayHeight, setTopOverlayHeight] = useState(0);
   const composerResizeDraggingRef = useRef(false);
   const pendingBottomOverlayHeightRef = useRef<number | null>(null);
@@ -2292,6 +2298,8 @@ export default function SessionScreen() {
   const sessionResourceCards = useSessionResourceCards(
     deviceId, deviceName, sessionId, currentSession?.source, remoteSessionRunning,
   );
+  // Without a mounted input there is no marker; fall back to the whole bottom layer.
+  const composerBackdropTop = sessionResourceCards.blocked ? 0 : composerInputTop;
   // AppState 门槛:锁屏 / 切后台时导航焦点不变,useFocusEffect 的 cleanup 不会跑,
   // 驻留计时器可能在没有真实前台展示的情况下(甚至后台恢复补跑时)发出 explicit
   // 回执。把 AppState 作为回执 effect 的重算信号:离开 active 立刻取消未到期的
@@ -2729,10 +2737,6 @@ export default function SessionScreen() {
       : composerRuntimeSummary.modelSummary
     : '';
   const adaptiveWindow = useAdaptiveWindow();
-  const nativeHeaderHeight = useSessionHeaderHeight(JSON.stringify([
-    windowDimensions.width, windowDimensions.height, windowDimensions.fontScale,
-    insets.top, insets.bottom, insets.left, insets.right, adaptiveWindow.barEdge,
-  ]));
   const paneLayout = sessionPaneLayout(adaptiveWindow);
   const horizontalSystemHeader = Platform.OS === 'ios' && adaptiveWindow.barEdge === 'none'
     && !paneLayout.persistent && !shareSelectionActive && !companionChat;
@@ -2771,6 +2775,13 @@ export default function SessionScreen() {
   // onClosed 才 false。它同时保证退场期 TalkBack 背景隔离,以及旋转/收窄退出宽屏时
   // 不会提前卸载 Drawer 而吞掉 pending 导航。
   const [sessionListDrawerOverlayMounted, setSessionListDrawerOverlayMounted] = useState(false);
+  // iOS 系统导航栏在 RN 内容之上,临时抽屉的 zIndex 盖不住它:抽屉存续期间收起系统栏,
+  // 抽屉自身的弹层(选项、改名、下拉菜单)仍在树内正常弹出。收起期间沿用打开前的顶栏
+  // 高度,遮罩下的聊天内容不跳动。
+  const nativeHeaderHeight = useSessionHeaderHeight(JSON.stringify([
+    windowDimensions.width, windowDimensions.height, windowDimensions.fontScale,
+    insets.top, insets.bottom, insets.left, insets.right, adaptiveWindow.barEdge,
+  ]), sessionListDrawerOverlayMounted);
   // 退出宽屏后 layout.drawerWidth 会变 0;退场期间继续用最后一个有效宽度,避免面板几何跳变。
   const sessionListDrawerWidthRef = useRef(wideSessionNav.drawerWidth);
   if (wideSessionNav.enabled) sessionListDrawerWidthRef.current = wideSessionNav.drawerWidth;
@@ -3194,7 +3205,20 @@ export default function SessionScreen() {
       applyComposerDocument(nextDocument);
       setComposerDraftHydrated(true);
     }).catch((error) => {
-      if (!cancelled) setError(formatRemoteError(error));
+      if (cancelled || appliedRouteDraftRef.current !== key) return;
+      const message = error instanceof Error ? error.message : String(error);
+      // A failed draft handoff must keep send() gated: the composer may still
+      // show a message the outbox already owns. Storage failures are different
+      // — they are not a pending handoff, and leaving hydrated false blocks
+      // every conversation.
+      const pendingHandoff = message.includes('COMPOSER_DRAFT_INVALID')
+        || message.includes('OUTBOX_STALE_WRITE')
+        || message.includes('OUTBOX_OWNER_CHANGED');
+      if (!pendingHandoff) {
+        setComposerDraftHydrated(true);
+        return;
+      }
+      setError(formatRemoteError(error));
     });
     return () => {
       cancelled = true;
@@ -4199,7 +4223,28 @@ export default function SessionScreen() {
   // Sending/queueing drives the composer immediately, but cannot reopen the loaded previous
   // turn before the new user message arrives. Only remote activity drives message grouping.
   const isMessageListStreaming = remoteSessionRunning || currentTurnStreaming;
-  // 活动条信号去抖:isSessionStreaming 由四个来源(sending / canStopQueue /
+  // 消息正在交给被控端(已进 outbox、被控端尚未确认)也算活动:sending 在本地写入 outbox
+  // 后就落下,而被控端回报运行要一次远程往返,远超下面的去抖窗口,不补这段活动条会
+  // 「出现 → 熄灭 → 再出现」。只作用于活动条,不改 isSessionStreaming 的停止 / 横幅语义。
+  // 只读本会话的 durable 记录(enqueue 在途即 state=sending):页面级的
+  // sendingQueueClientIds 不带会话身份、也不看连接,不能拿来驱动活动条。
+  const confirmedUserClientIds = useMemo(() => confirmedHistoryUserClientIds(historyView.snapshot, rawMessages),
+    [historyView.snapshot, rawMessages]);
+  // 已进被控端队列的消息归队列管,不再算交接。已回流进历史、且后面已有回复(turn 已跑过)
+  // 的消息也不算,否则快速 turn 结束后活动条要等后台对账才熄灭。只「已确认」不排除:
+  // 被控端先落库用户消息、再跑派发前钩子,这段还没有运行信号。
+  const handoffSettledClientIds = useMemo(() => new Set([
+    ...inputProjection.pendingQueue.map((item) => item.clientId),
+    ...repliedHistoryUserClientIds(historyView.snapshot, rawMessages),
+  ]), [inputProjection.pendingQueue, historyView.snapshot, rawMessages]);
+  const messageHandoffActive = hasActiveOutboxHandoff(
+    durableOutboxRecords,
+    { deviceId, sessionId },
+    outboxConnectionState,
+    handoffSettledClientIds,
+  );
+  const composerActivitySignal = isSessionStreaming || messageHandoffActive;
+  // 活动条信号去抖:composerActivitySignal 由多个来源(sending / 消息交接 / canStopQueue /
   // remoteSessionRunning / currentTurnStreaming)拼成,它们交接时会漏出一两帧空隙
   // ——实测日志里 streaming 1→0→1,活动条跟着闪一下、计时还被重置回 0s。
   // 上升沿立即生效(「跑起来了」要第一时间说),下降沿延后熄灭:真停了这点延迟无感,
@@ -4209,14 +4254,14 @@ export default function SessionScreen() {
   // 直接判定粘滞态是否属于当前会话,不依赖 effect 的执行时机。
   const [streamingSticky, setStreamingSticky] = useState<string | null>(null);
   useEffect(() => {
-    if (isSessionStreaming) {
+    if (composerActivitySignal) {
       setStreamingSticky(sessionId);
       return undefined;
     }
     const timer = setTimeout(() => setStreamingSticky(null), COMPOSER_ACTIVITY_SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [isSessionStreaming, sessionId]);
-  const showComposerActivity = isSessionStreaming || streamingSticky === sessionId;
+  }, [composerActivitySignal, sessionId]);
+  const showComposerActivity = composerActivitySignal || streamingSticky === sessionId;
   useEffect(() => {
     // 计时起点跟着去抖后的信号走:否则空隙一过 startedAt 被重置,活动条从 0s 重新数。
     setComposerActivityStartedAt(showComposerActivity ? Date.now() : null);
@@ -4235,8 +4280,6 @@ export default function SessionScreen() {
     ),
     [currentSession?.createdAt, currentSession?.forkedAtMessageId, currentSession?.parentSessionId],
   );
-  const confirmedUserClientIds = useMemo(() => confirmedHistoryUserClientIds(historyView.snapshot, rawMessages),
-    [historyView.snapshot, rawMessages]);
   // inline 排队区去重集:已回流进消息流的 clientId 不再渲染排队气泡(排队气泡消失的
   // 同帧正式气泡已在流里,视觉上原位变实心,无跳变)。
   const queueHiddenClientIds = useMemo(() => {
@@ -5544,6 +5587,11 @@ export default function SessionScreen() {
     ));
   }, []);
 
+  const handleComposerInputTopLayout = useCallback((event: LayoutChangeEvent) => {
+    const nextTop = Math.floor(event.nativeEvent.layout.y);
+    setComposerInputTop((currentTop) => (Math.abs(currentTop - nextTop) > 1 ? nextTop : currentTop));
+  }, []);
+
   const handleComposerDragActiveChange = useCallback((active: boolean) => {
     composerResizeDraggingRef.current = active;
     if (active) return;
@@ -5993,6 +6041,25 @@ export default function SessionScreen() {
       && pendingSkillAtSend.name === parsedDesktopCommandAtSend.name
         ? null
         : parsedDesktopCommandAtSend;
+    // A known hidden model requires an explicit choice before consuming the draft or enqueueing.
+    const sessionAtSend = readSessionRowNow() ?? currentSession;
+    const intentAtSend = sessionAtSend.agentSwitchIntent;
+    // Cross-agent picks take effect on the next message; validate that chosen target.
+    const selectionAtSend = intentAtSend
+      ? { agentKind: intentAtSend.targetAgentKind, model: intentAtSend.model, providerId: intentAtSend.providerId }
+      : { agentKind: resolveSessionAgentKind(sessionAtSend), model: sessionAtSend.model, providerId: sessionAtSend.providerId };
+    if (!earlyLocalCommand && !earlyDesktopCommand && modelNeedsReselection(
+      getCachedDeviceProviders(deviceId)?.modelVisibilityOverrides,
+      selectionAtSend.agentKind, selectionAtSend.model, selectionAtSend.providerId,
+    )) {
+      setError(t('session.common.modelHiddenReselect', { model: selectionAtSend.model }));
+      setModelSheetOpen(true);
+      sendInFlightRef.current = false;
+      setSending(false);
+      if (options.documentOverride) applyComposerDocument(options.documentOverride);
+      else if (options.draftOverride !== undefined) setComposerDraft(options.draftOverride);
+      return;
+    }
     // 需要远端会话的命令在会话建成前必须挡住(review P1)。
     //
     // 命令走的是下方「豁免 outbox」的原路径:/context 直接向被控端取用量、/learn 直接
@@ -8920,6 +8987,7 @@ export default function SessionScreen() {
         onBack={goBackToHome} />
     </> : <SessionHeaderBar
               horizontalSystemHeader={horizontalSystemHeader}
+              systemBarHidden={sessionListDrawerOverlayMounted}
               currentSession={currentSession}
               diffCount={diffCount}
               isDeviceAccessRevoked={isDeviceAccessRevoked}
@@ -8989,7 +9057,7 @@ export default function SessionScreen() {
         style={[styles.keyboard, { marginLeft: paneLayout.detail.x, marginRight: Math.max(0, windowDimensions.width - paneLayout.detail.x - paneLayout.detail.width) }]}
       >
         {Platform.OS === 'ios' ? (
-          <SessionHeaderNativeBlur height={Math.max(topOverlayHeight, insets.top + 44) + spacing.xxl} />
+          <SessionHeaderNativeBlur height={Math.max(topOverlayHeight, insets.top + 44)} />
         ) : null}
         <SessionChromeLayer
           hiddenFromAccessibility={sessionListDrawerOverlayMounted}
@@ -9591,7 +9659,7 @@ export default function SessionScreen() {
             pointerEvents="none" style={StyleSheet.absoluteFill}>
             <SessionHeaderNativeBlur
               edge="bottom"
-              height={bottomOverlayHeight + spacing.xxl}
+              height={Math.max(0, bottomOverlayHeight - composerBackdropTop)}
               inset={dockKeyboardFollow ? 0 : nativeShellLayout.keyboardBottomInset}
             />
           </DockKeyboardLift>
@@ -9651,7 +9719,11 @@ export default function SessionScreen() {
         >
           {androidFrostedComposer ? (
             // 与顶栏同一底:半透明 surface + 模糊,消息从输入区下面滚过时能透出一点。
-            <View pointerEvents="none" style={StyleSheet.absoluteFill} testID="session.composerFrost">
+            // 从输入框顶部起算:上方的状态胶囊自带底,再垫一层会叠成两层底。
+            <View pointerEvents="none" style={[
+              StyleSheet.absoluteFill,
+              sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive && { top: composerBackdropTop },
+            ]} testID="session.composerFrost">
               <BlurBackdrop intensity={50} overlayColor={colors.surfaceTranslucent} />
             </View>
           ) : null}
@@ -9957,6 +10029,7 @@ export default function SessionScreen() {
                 pendingUploadCount={pendingUploads.length}
                 onPasteImages={(uris) => void addPastedImageAttachments(uris)}
                 onDragActiveChange={handleComposerDragActiveChange}
+                onInputTopLayout={handleComposerInputTopLayout}
                 renderControls={renderComposerControls}
               /> : null}
             </>
@@ -10061,6 +10134,7 @@ type SessionHeaderIcon = typeof Folder;
 
 function SessionHeaderBar({
   horizontalSystemHeader,
+  systemBarHidden = false,
   currentSession,
   diffCount,
   isDeviceAccessRevoked,
@@ -10087,6 +10161,8 @@ function SessionHeaderBar({
   title,
 }: {
   horizontalSystemHeader: boolean;
+  /** 临时任务列表抽屉存续期间收起系统栏,让抽屉顶部控件可见可点。 */
+  systemBarHidden?: boolean;
   currentSession: RemoteSession | null;
   diffCount: number;
   isDeviceAccessRevoked: boolean;
@@ -10171,6 +10247,8 @@ function SessionHeaderBar({
 
   // Let UINavigationBar align controls with the system status area, including Duo portrait.
   if (horizontalSystemHeader) {
+    // Stack.Toolbar left/right forces headerShown: true; drop them while the bar is hidden.
+    if (systemBarHidden) return <Stack.Screen options={{ headerShown: false }} />;
     const files = overview?.actions.find(action => action.id === 'files');
     return <>
       <Stack.Screen options={{ headerShown: true, headerTransparent: true,
@@ -10182,6 +10260,7 @@ function SessionHeaderBar({
             // Reserve the toolbar gaps in the width budget, outside the title.
             minWidth: 0, flexShrink: 1, overflow: 'hidden', justifyContent: 'center' }}>
             <SessionHeaderNativeTitle title={title} pinned={!messageOnly && !!currentSession?.pinnedAt}
+              tags={isDeviceAccessRevoked ? undefined : currentSession?.tags} onTagsPress={onOpenSettings}
               syncing={syncing} syncingImmediately={syncingImmediately} notice={notice} />
           </View>
         ),
@@ -10780,6 +10859,8 @@ interface SessionComposerInputProps {
   resolvePastedSessionLinkLabel: NonNullable<React.ComponentProps<typeof ComposerRichInput>['resolveSessionLinkLabel']>;
   openVoiceSettings: () => void;
   onDragActiveChange: (active: boolean) => void;
+  /** Reports where the input itself starts in the bottom overlay (below any recommendation card). */
+  onInputTopLayout: (event: LayoutChangeEvent) => void;
   renderControls: (state: SessionComposerControlState) => SessionComposerControls;
 }
 
@@ -10789,7 +10870,7 @@ function SessionComposerInput({
   onDismissPromptRecommendation,
   source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceError, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
   composerSendUnavailableReason, attachmentCount, pendingUploadCount,
-  onPasteImages, onDragActiveChange, renderControls,
+  onPasteImages, onDragActiveChange, onInputTopLayout, renderControls,
 }: SessionComposerInputProps) {
   const creationTask = useNewSessionCreationTask(sessionId);
   const { document: composerDocument, draft } = useSyncExternalStore(source.subscribe, source.getSnapshot);
@@ -11124,6 +11205,8 @@ function SessionComposerInput({
           />
         </View>
       ) : null}
+      {/* Zero-height marker: the edge backdrop starts at the input, not at cards above it. */}
+      <View onLayout={onInputTopLayout} pointerEvents="none" testID="session.composerInputTop" />
               <Reanimated.View
                 style={[
                   styles.composer,
@@ -11169,17 +11252,6 @@ function SessionComposerInput({
                   unframed={!nativeComposerFrameAvailable}
                   style={styles.composerScrollFrame}
                 >
-                <GestureDetector gesture={composerResize.scrollGesture}>
-                <ScrollView
-                  ref={composerScrollViewRef}
-                  contentContainerStyle={styles.composerScrollContent}
-                  keyboardShouldPersistTaps="handled"
-                  scrollEnabled={composerScrollEnabled}
-                  showsVerticalScrollIndicator={composerScrollEnabled}
-                  style={styles.composerScroll}
-                  testID="session.composerScroll"
-                >
-
                 <View style={[
                   styles.composerSurface,
                   compactComposer && !composerCardActive && styles.composerSurfaceCompact,
@@ -11187,6 +11259,10 @@ function SessionComposerInput({
                   <MobileComposerInputRow
                     key={sessionId}
                     frameOutside={nativeComposerFrameAvailable}
+                    bodyScrollGesture={composerResize.scrollGesture}
+                    bodyScrollRef={composerScrollViewRef}
+                    bodyScrollTestID="session.composerScroll"
+                    bodyScrollEnabled={composerScrollEnabled}
                     collapsedHeight={composerDock.enabled ? composerDock.pillHeight : undefined}
                     onCollapsedPress={composerPillOpen.onCollapsedPress}
                     accessibilityLabel={t('session.screen.composerPlaceholder')}
@@ -11274,8 +11350,6 @@ function SessionComposerInput({
                     voicePlacement={composerVoicePlacement}
                   />
                 </View>
-                </ScrollView>
-                </GestureDetector>
                 </ComposerFrame>
               </Reanimated.View>
     </>
@@ -11761,9 +11835,12 @@ function ComposerActivityStatus({
     ? t('session.screen.tokenRate', { rate: rateValue })
     : null;
   const showUsageMeta = !showElapsedOnly && (Boolean(rateText) || tokenUsage > 0);
+  // iOS pills share the header/composer edge glass; Android's blur is too weak
+  // to carry text alone, so it keeps the translucent surface underneath.
+  const pillOverlayColor = Platform.OS === 'ios' ? 'transparent' : colors.surfaceTranslucent;
   const usageMeta = (
     <View style={[styles.composerActivityPill, styles.composerActivityMeta]}>
-      <BlurBackdrop intensity={20} overlayColor={colors.surfaceTranslucent} style={styles.composerActivityPillBackdrop} />
+      <BlurBackdrop intensity={FLOATING_CHROME_BLUR_INTENSITY} overlayColor={pillOverlayColor} style={styles.composerActivityPillBackdrop} />
       <Text style={styles.composerActivityMetaText}>{elapsedText}</Text>
       {showUsageMeta ? (
         <>
@@ -11809,7 +11886,7 @@ function ComposerActivityStatus({
       testID="session.composerActivityStatus"
     >
       <View pointerEvents="none" style={[styles.composerActivityPill, styles.composerActivityPrimary]}>
-        <BlurBackdrop intensity={20} overlayColor={colors.surfaceTranslucent} style={styles.composerActivityPillBackdrop} />
+        <BlurBackdrop intensity={FLOATING_CHROME_BLUR_INTENSITY} overlayColor={pillOverlayColor} style={styles.composerActivityPillBackdrop} />
         <Sparkles color={colors.statusAccent} size={iconSize.sm} strokeWidth={iconStroke.regular} />
         <Text numberOfLines={1} style={styles.composerActivityStatusText}>{activityText}</Text>
         {reconnectAttempt ? (
@@ -12242,18 +12319,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingBottom: spacing.xs,
     paddingTop: spacing.sm,
   },
-  composerScroll: {
-    flexShrink: 1,
-    maxHeight: '100%',
-  },
   composerScrollFrame: {
     flexShrink: 1,
     overflow: 'visible',
   },
-  composerScrollContent: {
-    gap: spacing.sm,
-  },
   composerSurface: {
+    flexShrink: 1,
     gap: 6,
   },
   composerSurfaceCompact: {

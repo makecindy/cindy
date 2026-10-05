@@ -96,6 +96,7 @@ export function TeammateHomeScreen({ active = true }: { active?: boolean }) {
       onModeChange={(mode) => afterDrawer(() => { void navigation.setMode(mode); })}
       onClose={() => { pending.current = null; setDrawer(false); }} onClosed={finishOverlay}
       onOpenSearch={() => afterDrawer(() => setSearchEpoch((epoch) => epoch + 1))}
+      onOpenPlugins={() => afterDrawer(() => push('/plugins'))}
       onOpenDevices={() => afterDrawer(() => push('/devices/manage'))}
       onOpenSettings={() => afterDrawer(() => push('/settings'))}
       onOpenAccounts={() => afterDrawer(() => setAccounts(true))}

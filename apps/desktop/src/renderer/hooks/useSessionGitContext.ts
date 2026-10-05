@@ -50,6 +50,29 @@ const DIR_RERESOLVE_INTERVAL_MS = 60_000;
 
 const GET_FOR_SESSION_CHANNEL = 'git-context:get-for-session';
 
+interface ResolvedBranch {
+  head: GitHeadInfo | null;
+  branchSource: GitContextDirSource;
+}
+
+/**
+ * 每个任务最近一次解析到的分支。切回看过的任务时先显示它自己上次的值,后台照常重新
+ * 解析;从不拿别的任务的值兜底,第一次打开的任务仍从空开始。只是展示用的短期记忆,
+ * 按插入序封顶,不落盘。
+ */
+const LAST_BRANCH_LIMIT = 64;
+const lastBranchBySession = new Map<string, ResolvedBranch>();
+
+function rememberBranch(sessionId: string, value: ResolvedBranch): void {
+  lastBranchBySession.delete(sessionId);
+  if (!value.head && !value.branchSource) return;
+  lastBranchBySession.set(sessionId, value);
+  if (lastBranchBySession.size > LAST_BRANCH_LIMIT) {
+    const oldest = lastBranchBySession.keys().next().value;
+    if (oldest !== undefined) lastBranchBySession.delete(oldest);
+  }
+}
+
 async function invokeRemoteGitContext<T>(
   deviceId: string,
   channel: string,
@@ -90,16 +113,28 @@ export function useSessionGitContext(session: Session): SessionGitContext {
     ? (worktreeMeta?.path ?? null)
     : (session.worktreePath ?? null);
 
-  const [head, setHead] = useState<GitHeadInfo | null>(null);
-  const [branchSource, setBranchSource] = useState<GitContextDirSource>(null);
+  // A single header instance can survive session switches. The branch is keyed
+  // by its task, so the old task's branch never renders beside the new title;
+  // the new task starts from its own last resolved value (or empty).
+  const [resolved, setResolved] = useState<{ sessionId: string } & ResolvedBranch>(() => ({
+    sessionId,
+    head: lastBranchBySession.get(sessionId)?.head ?? null,
+    branchSource: lastBranchBySession.get(sessionId)?.branchSource ?? null,
+  }));
+  const current =
+    resolved.sessionId === sessionId
+      ? resolved
+      : (lastBranchBySession.get(sessionId) ?? { head: null, branchSource: null });
+  const { head, branchSource } = current;
 
   // ── 分支:getForSession 解析真实工作目录 + 可换目录的 HEAD watch ──
   useEffect(() => {
-    // A single header instance can survive session switches. Clear the old
-    // task's branch immediately so a failed remote invoke cannot leave stale
-    // Git context beside the newly selected title.
-    setHead(null);
-    setBranchSource(null);
+    // 同一任务内依赖变化(详情晚到、worktree 元数据刷新)不先清空,新结果回来再替换,
+    // 避免徽标消失又出现。
+    const publish = (next: ResolvedBranch) => {
+      rememberBranch(sessionId, next);
+      setResolved({ sessionId, ...next });
+    };
     let cancelled = false;
     // 当前监听的(已 resolve 的绝对)目录,cleanup 与目录切换都靠它——
     // 用 ref 对象而非闭包 let:解析是异步的,cleanup 必须拿到最新值才能 unwatch。
@@ -111,6 +146,8 @@ export function useSessionGitContext(session: Session): SessionGitContext {
     // 更新的调用超越就丢弃本次陈旧结果——否则后发先至时旧结果会覆写 watchedRef、
     // 退回旧分支,正是本 PR 要修的 bug(Greptile review P2)。
     let resolveGen = 0;
+    // HEAD 推送只换分支,不换来源;沿用最近一次解析出的来源。
+    let lastSource: GitContextDirSource = lastBranchBySession.get(sessionId)?.branchSource ?? null;
 
     // 只有控制端本地目录能由本机 GitContextService watcher 监听。SSH / device-link
     // 路径属于真实执行端,不能在控制端对同名路径注册 watcher,否则会读错本机 checkout。
@@ -121,7 +158,7 @@ export function useSessionGitContext(session: Session): SessionGitContext {
             return;
           }
           if (snapshot.workdir === watchedRef.current) {
-            setHead(snapshot.head);
+            publish({ head: snapshot.head, branchSource: lastSource });
           }
         })
       : () => undefined;
@@ -144,15 +181,15 @@ export function useSessionGitContext(session: Session): SessionGitContext {
           : await window.electronAPI.gitContext.getForSession(input);
         // 被更新的调用超越(或 effect 已 cleanup)→ 丢弃陈旧结果,不碰 watchedRef。
         if (cancelled || gen !== resolveGen) return;
-        setHead(res.head);
-        setBranchSource(res.source);
+        lastSource = res.source;
+        publish({ head: res.head, branchSource: res.source });
         const next = res.workdir; // 已是 resolve 过的绝对路径或 null
         if (!isLocalSession) return;
         if (next === watchedRef.current) return; // 目录没变,仅刷新了 head
         const prev = watchedRef.current;
         watchedRef.current = next;
         if (next && pendingPush.current && pendingPush.current.workdir === next) {
-          setHead(pendingPush.current.head);
+          publish({ head: pendingPush.current.head, branchSource: lastSource });
         }
         pendingPush.current = null;
         if (prev) void window.electronAPI.gitContext.unwatch(prev).catch(() => undefined);
@@ -162,8 +199,8 @@ export function useSessionGitContext(session: Session): SessionGitContext {
       } catch (err) {
         log.warn('git context resolve failed', String(err));
         if (!cancelled && gen === resolveGen) {
-          setHead(null);
-          setBranchSource(null);
+          lastSource = null;
+          publish({ head: null, branchSource: null });
         }
       }
     };

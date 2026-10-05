@@ -39,7 +39,7 @@ export interface PickSlotDeps {
    * 弹系统级选文件夹窗口;返回所选绝对路径,取消返回 null。
    * 找不到可挂靠的 Cindy 窗口时应 reject(失败关闭,不弹无主对话框)。
    */
-  showDirectoryDialog(params: { ghostName: string; purpose: string | null }): Promise<string | null>;
+  showDirectoryDialog(params: { ghostName: string; purpose: string | null; ghostId: string; mobilePageId?: string }): Promise<string | null>;
   /** 签发目录过户票据(dirDeposit.deposit,userGranted 语义 = 用户已亲手选中)。 */
   depositDir(
     ghostId: string,
@@ -73,7 +73,7 @@ export class GhostPickSlot {
 
   constructor(private readonly deps: PickSlotDeps) {}
 
-  async handleRequest(ghostId: string, payload: unknown): Promise<GhostPipePickResult> {
+  async handleRequest(ghostId: string, payload: unknown, shouldContinue: () => boolean = () => true): Promise<GhostPipePickResult> {
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost?.enabled || ghost.manifest.pick !== true) {
       return fail('PERMISSION_DENIED', '插件未申请目录选择权限(pick),或当前未启用');
@@ -82,6 +82,7 @@ export class GhostPickSlot {
       return fail('INVALID_REQUEST', 'pick-request 载荷必须是对象');
     }
     const request = payload as Record<string, unknown>;
+    if (request.mobilePageId !== undefined && (typeof request.mobilePageId !== 'string' || request.mobilePageId.length > 128)) return fail('INVALID_REQUEST', 'Invalid mobile page context');
     if (request.mode !== 'directory') {
       return fail('INVALID_REQUEST', 'mode 目前只支持 "directory"');
     }
@@ -121,6 +122,8 @@ export class GhostPickSlot {
       picked = await this.deps.showDirectoryDialog({
         ghostName: ghost.manifest.name,
         purpose,
+        ghostId,
+        ...(typeof request.mobilePageId === 'string' ? { mobilePageId: request.mobilePageId } : {}),
       });
     } catch (error) {
       this.deps.log?.warn('ghost pick dialog failed', {
@@ -131,6 +134,7 @@ export class GhostPickSlot {
     } finally {
       this.dialogInFlight = false;
     }
+    if (!shouldContinue()) return fail('CANCELLED', 'The originating page has closed.');
     if (picked === null) {
       return fail('CANCELLED', '用户取消了选择');
     }

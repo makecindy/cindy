@@ -634,3 +634,11 @@ describe('Pi project skill availability', () => {
     expect(reloaded).toBe(false);
   });
 });
+
+
+describe('Claude managed skill dispatch', () => {
+  it('rewrites the short Cindy command to its native plugin command, preserving arguments', () => {
+    const command = skill({ name: 'learn', runtimeCommandName: 'cindy:learn', builtIn: true });
+    expect(rewriteAgentSkillInvocationForDispatch('/learn keep this workflow', command)).toBe('/cindy:learn keep this workflow');
+  });
+});

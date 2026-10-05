@@ -1,3 +1,4 @@
+import { modelNeedsReselection } from './modelReselection';
 /**
  * Shared model and permission selection for new and existing tasks.
  * iOS presents native Form pages inside one system sheet; options and permissions
@@ -377,7 +378,13 @@ function LegacyModelPickerSheet({
     </View>
   );
 
-  const agentContent = (agentSwitch ? (
+  const agentContent = (<>
+      {providersReady && modelNeedsReselection(modelVisibilityOverrides, agentKind, activeModelId, selectedProviderId) ? (
+        <Text style={styles.modelHiddenHint} testID={`${testID}.modelHiddenHint`}>
+          {t('session.common.modelHiddenReselect', { model: activeModelId })}
+        </Text>
+      ) : null}
+      {agentSwitch ? (
         <>
           <MobileAgentSwitcher
             disabled={disabled || agentSwitch.disabled}
@@ -396,7 +403,8 @@ function LegacyModelPickerSheet({
             </Text>
           ) : null}
         </>
-      ) : null);
+      ) : null}
+    </>);
 
   const primaryPinnedTop = (
     <View style={styles.pinnedTop}>
@@ -630,6 +638,13 @@ function makeStyles(colors: ThemeColors) {
     },
     pinnedTop: {
       gap: spacing.sm,
+    },
+    modelHiddenHint: {
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
+      paddingHorizontal: spacing.xs,
     },
     agentSwitchHint: {
       color: colors.textTertiary,

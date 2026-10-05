@@ -8,7 +8,7 @@ import { resolvePluginWorkerDirectory } from '../pluginWorkerDirectory.js';
 import { PluginTaskError } from '../pluginTaskService.js';
 
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
-const start = source.indexOf('      createSession: async (pluginId, taskId, title, route, isolatedWorkspace, requestedRoute, onPersistenceStarted) => {');
+const start = source.indexOf('      createSession: async (pluginId, taskId, title, route,');
 const branch = source.slice(start, source.indexOf('      readSession:', start)).trim().replace(/,$/, '');
 const js = ts.transpileModule(`return ({ ${branch} }).createSession;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const roots: string[] = [];
@@ -36,10 +36,10 @@ function fixture(workingDir?: string, afterResolve?: () => void) {
     snapshot, PluginTaskError,
     resolveRoute: async () => ({}),
     assertPlugin: () => { if (owner !== snapshot || !authorized) throw new PluginTaskError('PERMISSION_DENIED', 'Owner changed'); },
-    readGhostErrandConfig: () => ({ ...cfg }),
+    readPluginTaskConfig: () => ({ ...cfg }),
     resolvePluginWorkerDirectory: resolve,
-    createGhostErrandSession: create,
-    clampErrandPermissionMode: (mode: string) => mode,
+    createPluginTaskSession: create,
+    clampPluginTaskPermissionMode: (mode: string) => mode,
     getCurrentDbClientSnapshot: () => owner,
     isPluginTaskAuthorized: () => authorized,
     notifyGhostSessionEvent: vi.fn(), broadcastSessionCreated: vi.fn(),

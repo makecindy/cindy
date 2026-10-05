@@ -10,8 +10,6 @@
   },
   "renderer": {
     "moreActions": "更多消息操作",
-    "previousQuestionJump": "跳到上一条提问：{{preview}}",
-    "noPreview": "无预览",
     "newMessagesToBottom": "有新消息，跳到底部",
     "jumpToBottom": "跳到底部",
     "openForkOrigin": "打开分叉来源消息",
@@ -70,6 +68,8 @@
     "durationSeconds": "{{seconds}} 秒",
     "durationMinutes": "{{minutes}} 分钟",
     "durationMinutesSeconds": "{{minutes}} 分 {{seconds}} 秒",
+    "durationHoursMinutes": "{{hours}} 小时 {{minutes}} 分",
+    "durationDaysHoursMinutes": "{{days}} 天 {{hours}} 小时 {{minutes}} 分",
     "subagentSummary": "Subagent 小结",
     "agentSwitchLabel": "已从 {{from}} 切换到 {{to}}",
     "agentSwitchViewHandoff": "{{label}}，查看交接内容",
@@ -148,6 +148,8 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "sourceMissing": "源图片已不在这台电脑上，请重新导入原文件。",
+    "deviceOffline": "电脑尚未连接，请恢复连接后重试。",
     "cancelAnnotation": "取消标注",
     "cancel": "取消",
     "undoLastStroke": "撤销上一笔",

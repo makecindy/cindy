@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { Tooltip } from '@/components/ui/tooltip';
+import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
+import { queryShareableMessageIds } from '@/lib/shareConversationImage';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { clearDraft, getDraft } from '@/lib/composerDraftStore';
@@ -229,10 +232,12 @@ function HeaderSlot() {
 
 function renderView() {
   return render(
+    <Tooltip.Provider>
     <FeatureSidebarSlotProvider isCollapsed={false}>
       <HeaderSlot />
       <BotGroupChatView />
-    </FeatureSidebarSlotProvider>,
+    </FeatureSidebarSlotProvider>
+    </Tooltip.Provider>,
   );
 }
 
@@ -304,6 +309,15 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('BotGroupChatView', () => {
+  it('shows another human as a named participant instead of the current user bubble', async () => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+      msg({ id: 'guest', authorKind: 'user', isSelf: false, authorName: 'Invited human', content: 'Hello from another account' }),
+    ] }) });
+    renderView();
+    expect(await screen.findByText('Invited human')).toBeTruthy();
+    expect(screen.getByText('Hello from another account').closest('article')?.className).not.toContain('justify-end');
+  });
+
   it.each([true, false])('preserves the reader position when the notice changes (pinned=%s)', async (pinned) => {
     const view = renderView();
     await screen.findByRole('textbox');
@@ -1096,12 +1110,35 @@ describe('BotGroupChatView', () => {
   });
 });
 
- it('acknowledges only visible group replies at the tail and preserves new replies while reading above it', async () => {
+it('keeps copy/share in each author row and shares only message content through the standard selection flow', async () => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+    msg({ id: 'bot-share', authorKind: 'bot', authorName: '咪咪', content: 'Share this answer' }),
+    msg({ id: 'mine-share', sequence: 2, content: 'My question' }),
+    msg({ id: 'notice', sequence: 3, kind: 'notice', authorKind: 'system', content: 'Group notice' }),
+  ] }) });
+  const view = renderView();
+  try {
+    const article = (await screen.findByText('Share this answer')).closest('article')!;
+    expect(within(article).getByRole('button', { name: 'chat.messageActionBar.copy' })).toBeTruthy();
+    fireEvent.click(within(article).getByRole('button', { name: 'chat.shareImage.entry' }));
+    expect(shareSelectionStore.getSelectedIds()).toEqual(['bot-share']);
+    expect(queryShareableMessageIds('bot-group:g1')).toEqual(['bot-share', 'mine-share']);
+    expect(within(article).getByRole('checkbox').getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('button', { name: 'chat.shareImage.copy' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.shareImage.cancel' }));
+    expect(shareSelectionStore.getActiveSessionId()).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  } finally { view.unmount(); vi.unstubAllGlobals(); }
+});
+
+ it.each(['bot', 'guest'] as const)('acknowledges visible %s replies at the tail and preserves new replies while reading above it', async (sender) => {
   resetBotReadStateForTests();
+  const incoming = sender === 'bot' ? { authorKind: 'bot' as const } : { authorKind: 'user' as const, isSelf: false };
   const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
   markBotRead(botGroupReadKey('g1'), 100);
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
-    msg({ id: 'b', authorKind: 'bot', content: 'First reply', createdAt: 200 }),
+    msg({ id: 'b', ...incoming, content: 'First reply', createdAt: 200 }),
     msg({ id: 'u', sequence: 2, content: 'My message', createdAt: 900 }),
   ] }) });
   const view = renderView();
@@ -1112,7 +1149,7 @@ describe('BotGroupChatView', () => {
     const scroll = view.container.querySelector('.overflow-y-auto.px-5') as HTMLElement;
     Object.defineProperties(scroll, { scrollHeight: { configurable: true, value: 1000 }, clientHeight: { configurable: true, value: 100 } });
     scroll.scrollTop = 0; fireEvent.scroll(scroll);
-    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [msg({ id: 'new', authorKind: 'bot', content: 'New reply', createdAt: 1200 })] }) });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [msg({ id: 'new', ...incoming, content: 'New reply', createdAt: 1200 })] }) });
     act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
     await screen.findByText('New reply');
     act(() => window.dispatchEvent(new Event('focus')));

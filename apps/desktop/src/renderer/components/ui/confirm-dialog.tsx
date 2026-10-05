@@ -192,10 +192,7 @@ export function ConfirmDialog({
             套一层 Presence)。 */}
         <AlertDialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10000]',
-            'bg-neutral-900/40 dark:bg-neutral-950/60',
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10000]',
           )}
           style={{ ...WINDOW_DRAG_STYLE, zIndex }}
         >
@@ -205,16 +202,13 @@ export function ConfirmDialog({
               // 命中区域按布局矩形计算、不跟随 transform（ChromeActions.tsx 的既有结论），
               // transform 定位会让 no-drag 挖洞与弹窗视觉位置错位，点弹窗内容会变成拖窗。
               // inset-0 + m-auto + h-fit：布局矩形即视觉矩形，挖洞与弹窗严格重合。
-              'fixed inset-0 z-[10000] m-auto h-fit',
+              'modal-panel fixed inset-0 z-[10000] m-auto h-fit',
               'flex max-h-[85vh] flex-col',
-              'w-full rounded-xl p-4',
+              'w-full p-4',
               contentSelectable ? 'select-text' : 'select-none',
-              'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
               // 布局居中弹窗用无 translate 的 layout keyframes;共享
               // confirm-content-in/out 的每一帧都烘 translate(-50%, -50%),
               // 动画期间会把弹窗整体甩出 no-drag 挖洞。
-              'data-[state=open]:animate-confirm-content-layout-in',
-              'data-[state=closed]:animate-confirm-content-layout-out',
             )}
             style={{ ...WINDOW_NO_DRAG_STYLE, maxWidth: maxWidth ?? 400, zIndex }}
             {...(describeContent && content

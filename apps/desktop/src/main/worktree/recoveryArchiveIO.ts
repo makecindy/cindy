@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomUUID } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
+import { createReadStream, createWriteStream, type Stats } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -25,8 +25,9 @@ function restorableMode(mode: number): number {
   return mode & (process.platform === 'win32' ? 0o666 : 0o777);
 }
 
-/** `excludePaths` skips these root-relative directories (never files) — task copy leaves other tasks' worktrees behind. */
-export async function inventoryWorktree(root: string, maxBytes?: number, excludePaths: readonly string[] = []): Promise<Record<string, FileEvidence>> {
+/** `excludePaths` skips these root-relative directories (never files) — task copy leaves other tasks' worktrees behind.
+ * Sockets, FIFOs and devices throw unless `unsupported` collects their relative paths instead. */
+export async function inventoryWorktree(root: string, maxBytes?: number, excludePaths: readonly string[] = [], unsupported?: string[]): Promise<Record<string, FileEvidence>> {
   const files: Record<string, FileEvidence> = Object.create(null);
   let bytes = 0;
   const walk = async (directory: string): Promise<void> => {
@@ -48,6 +49,8 @@ export async function inventoryWorktree(root: string, maxBytes?: number, exclude
         const hash = createHash('sha256');
         for await (const chunk of createReadStream(absolute)) hash.update(chunk);
         files[relative] = { kind: 'file', hash: hash.digest('hex'), mode };
+      } else if (unsupported) {
+        unsupported.push(relative);
       } else {
         throw new Error('worktree contains an unsupported filesystem entry');
       }
@@ -130,8 +133,17 @@ export async function verifyRecoveryArchive(archive: WorktreeRecoveryArchive, di
   if (!sameWorktreeFiles(files, archive.files)) throw new Error('archive content does not match worktree inventory');
 }
 
-export async function createRecoveryArchive(root: string, resourceId: string, directory: string, key: Uint8Array, encryptedKey: string, iv: Uint8Array, maxBytes?: number, excludePaths: readonly string[] = []): Promise<WorktreeRecoveryArchive> {
-  const files = await inventoryWorktree(root, maxBytes, excludePaths);
+export interface ArchiveSelection {
+  files: Record<string, FileEvidence>;
+  skipped: Array<{ path: string; code: string }>;
+}
+
+/** `select` narrows what is packed (task copy leaves non-portable entries behind and reports them). */
+export async function createRecoveryArchive(root: string, resourceId: string, directory: string, key: Uint8Array, encryptedKey: string, iv: Uint8Array, maxBytes?: number, excludePaths: readonly string[] = [], select?: (files: Record<string, FileEvidence>, unsupported: string[]) => ArchiveSelection): Promise<WorktreeRecoveryArchive & { skipped?: ArchiveSelection['skipped'] }> {
+  const unsupported = select ? [] as string[] : undefined;
+  const inventory = await inventoryWorktree(root, maxBytes, excludePaths, unsupported);
+  const selection = select?.(inventory, unsupported!);
+  const files = selection?.files ?? inventory;
   const cipher = createCipheriv('aes-256-gcm', key, iv);
   const file = `${resourceId}-${randomUUID()}.tar.gz.enc`;
   await fs.mkdir(directory, { recursive: true });
@@ -150,21 +162,55 @@ export async function createRecoveryArchive(root: string, resourceId: string, di
     try { await handle.sync(); } finally { await handle.close(); }
     const archive = { file, encryptedKey, iv: Buffer.from(iv).toString('base64'), tag: cipher.getAuthTag().toString('base64'), files };
     await verifyRecoveryArchive(archive, directory, key, maxBytes);
-    if (!sameWorktreeFiles(await inventoryWorktree(root, undefined, excludePaths), files)) throw new Error('worktree changed during archive');
-    return archive;
+    if (!sameWorktreeFiles(await inventoryWorktree(root, undefined, excludePaths, unsupported && []), inventory)) throw new Error('worktree changed during archive');
+    return selection ? { ...archive, skipped: selection.skipped } : archive;
   } catch (error) {
     await fs.rm(target, { force: true });
     throw error;
   }
 }
 
-/** Authenticate first; keep mode fills only missing bytes of a verified partial restore. */
-export async function extractRecoveryArchive(archive: WorktreeRecoveryArchive, staging: string, keep: boolean, directory: string, key: Uint8Array, maxBytes?: number): Promise<void> {
+/** Authenticate first; keep mode fills only missing bytes of a verified partial restore.
+ * `exactCopy` (task copy to another computer) creates symbolic links from the verified inventory
+ * after every file and directory — tar refuses a link whose target crosses an already-extracted
+ * link, so chains would depend on archive order — then restores archived modes the local umask
+ * narrowed. Every parent is a verified directory; creating a link never writes through it. */
+export async function extractRecoveryArchive(archive: WorktreeRecoveryArchive, staging: string, keep: boolean, directory: string, key: Uint8Array, maxBytes?: number, exactCopy = false): Promise<void> {
   await verifyRecoveryArchive(archive, directory, key, maxBytes);
+  const skipLinks = (_path: string, entry: tar.ReadEntry | Stats) => !('type' in entry && entry.type === 'SymbolicLink');
   await pipeline(
     createReadStream(archivePath(directory, archive)), decryptArchive(archive, key),
-    tar.x({ cwd: staging, strict: true, preservePaths: false, unlink: !keep, keep }),
+    tar.x({ cwd: staging, strict: true, preservePaths: false, unlink: !keep, keep, ...(exactCopy ? { filter: skipLinks } : {}) }),
   );
+  if (exactCopy) {
+    const entries = Object.entries(archive.files);
+    let pending = [];
+    for (const [name, file] of entries) {
+      if (file.kind !== 'link') continue;
+      const target = path.join(staging, name);
+      if (!keep || !await fs.lstat(target).then(() => true, () => false)) pending.push({ target, link: file.hash });
+    }
+    // Windows fixes a link's file/directory type when it is created, judged by whether its target
+    // exists. Create links whose targets resolve first so chains get the right type; dangling last.
+    while (pending.length) {
+      const waiting = [];
+      for (const entry of pending) {
+        if (await fs.stat(path.resolve(path.dirname(entry.target), entry.link)).then(() => true, () => false)) await fs.symlink(entry.link, entry.target);
+        else waiting.push(entry);
+      }
+      if (waiting.length === pending.length) {
+        for (const entry of waiting) await fs.symlink(entry.link, entry.target);
+        break;
+      }
+      pending = waiting;
+    }
+    // Children before parents, so a read-only directory cannot block what lies beneath it.
+    for (const [name, file] of entries.reverse()) {
+      if (file.kind === 'link') continue;
+      const target = path.join(staging, name);
+      if (restorableMode((await fs.lstat(target)).mode) !== file.mode) await fs.chmod(target, file.mode);
+    }
+  }
   if (!sameWorktreeFiles(await inventoryWorktree(staging), archive.files)) {
     throw new Error('restored worktree files do not match recovery archive');
   }

@@ -15,6 +15,7 @@ import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-i
 import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import { describe, expect, it, vi } from 'vitest';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../autoReviewUserIntent.js';
 import {
   createMakerSendTransaction,
   restoreTrustedDesktopQueuedOrigin,
@@ -2514,6 +2515,23 @@ describe('session-agent-switch handoff injection', () => {
     expect(appendAutoReviewUserIntent('Send the old image.', 'decorated', opts)).toBe('修改这张图片。');
   });
 
+  it.each([false, true])('restores queued delegated history without a new human message (unavailable=%s)', async unavailable => {
+    const {deps,session}=createDeps({readAutoReviewHistory:async()=>{
+      if(unavailable) throw new Error('unavailable');
+      return [{clientId:'human',role:'user',content:{text:'Do not deploy'},agentMeta:{delivery:'turn',autoReviewUserText:'Do not deploy'}}];
+    }});
+    const pending = createMakerSendTransaction(deps).sendToAgentAccepted('session-1','Deploy now',undefined,{
+      [AUTO_REVIEW_SOURCE_CONTENT]:'',[AUTO_REVIEW_DELEGATED_CONTINUATION]:true,
+    });
+    if (unavailable) {
+      await expect(pending).rejects.toThrow('unavailable');
+      expect(session.send).not.toHaveBeenCalled();
+    } else {
+      await pending;
+      expect(vi.mocked(session.send).mock.calls[0]![1]![AUTO_REVIEW_USER_INTENT]).toBe('Do not deploy');
+    }
+  });
+
   it.each([false, true])('restores scheduled intent from owner history, not the prompt (unavailable=%s)', async (unavailable) => {
     const { deps, session } = createDeps({ readAutoReviewHistory: vi.fn(async () => {
       if (unavailable) throw new Error('history unavailable');
@@ -2583,6 +2601,18 @@ describe('session-agent-switch handoff injection', () => {
       earlierUserMessages: ['修复伙伴未读状态，不要部署。'],
       currentUserMessage: '修吧。',
     });
+  });
+
+  it('persists empty plugin authorship rather than promoting plugin instructions', async () => {
+    const { deps } = createDeps();
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Plugin instructions', undefined, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: '',
+      persistUserMessage: { clientId: 'plugin-input', content: 'Plugin instructions', delivery: 'turn' },
+    });
+    expect(deps.createDbMessage).toHaveBeenCalledWith('session-1', expect.objectContaining({
+      clientId: 'plugin-input',
+      agentMeta: expect.objectContaining({ autoReviewUserText: '', delivery: 'turn' }),
+    }), undefined);
   });
 
   it.each(['Earlier authorization; do not deploy.', ''])('preserves restored intent for wire-only recovery: %s', async (intent) => {
@@ -2934,6 +2964,74 @@ describe('session-agent-switch handoff injection', () => {
     const transaction = createMakerSendTransaction(deps);
 
     await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {});
+    expect(session.send).toHaveBeenCalledWith(withUiLanguageUserMessage('新消息'), expect.anything());
+  });
+
+  it('目标状态说明在计划对账外层前置进 wire payload,落库内容保持用户原文', async () => {
+    const { deps, session } = createDeps({
+      peekPlanReconcileNote: vi.fn(async () => ({ note: 'RECONCILE-NOTE' })),
+      peekGoalInactiveNote: vi.fn(async () => 'GOAL-NOTE'),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {
+      persistUserMessage: { clientId: 'client-1', content: '{"text":"新消息","images":[],"files":[]}' },
+    });
+
+    expect(session.send).toHaveBeenCalledWith(
+      withUiLanguageUserMessage('GOAL-NOTE\n\nRECONCILE-NOTE\n\n新消息'),
+      expect.anything(),
+    );
+    const persisted = vi.mocked(deps.createDbMessage).mock.calls[0]?.[1];
+    expect(persisted?.content).toBe('{"text":"新消息","images":[],"files":[]}');
+  });
+
+  it('目标状态说明覆盖自动任务轮次,不进自动续跑、斜杠指令与 steer', async () => {
+    const peekGoalInactiveNote = vi.fn(async () => 'GOAL-NOTE');
+    const { deps, session } = createDeps({ peekGoalInactiveNote });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '定时活' }, undefined, {
+      origin: { kind: 'scheduler', scheduleId: 's1', scheduleName: 'n' },
+    });
+    expect(session.send).toHaveBeenLastCalledWith(
+      withUiLanguageUserMessage('GOAL-NOTE\n\n定时活'),
+      expect.anything(),
+    );
+    expect(peekGoalInactiveNote).toHaveBeenCalledTimes(1);
+
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '继续' }, undefined, {
+      persistUserMessage: { clientId: 'c2', content: '继续', autoResume: true },
+    });
+    expect(session.send).toHaveBeenLastCalledWith(withUiLanguageUserMessage('继续'), expect.anything());
+
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '/compact' }, undefined, {
+      persistUserMessage: {
+        clientId: 'c3',
+        content: '{"text":"/compact","images":[],"files":[],"slashCommandRanges":[{"start":0,"end":8}]}',
+      },
+    });
+    expect(session.send).toHaveBeenLastCalledWith(withUiLanguageUserMessage('/compact'), expect.anything());
+
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '顺便看下' }, undefined, {
+      persistUserMessage: { clientId: 'c4', content: '{"text":"顺便看下"}', delivery: 'steer' },
+    });
+    expect(session.send).toHaveBeenLastCalledWith(withUiLanguageUserMessage('顺便看下'), expect.anything());
+
+    expect(peekGoalInactiveNote).toHaveBeenCalledTimes(1);
+  });
+
+  it('目标状态说明读取抛错时静默跳过,不挡发送', async () => {
+    const { deps, session } = createDeps({
+      peekGoalInactiveNote: vi.fn(async () => {
+        throw new Error('db unavailable');
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {
+      persistUserMessage: { clientId: 'client-1', content: '{"text":"新消息","images":[],"files":[]}' },
+    });
     expect(session.send).toHaveBeenCalledWith(withUiLanguageUserMessage('新消息'), expect.anything());
   });
 

@@ -1,3 +1,5 @@
+import type { SkippedEntry } from './portableEntries';
+
 /** Resumable copy progress. The source task is never retired. */
 export type MigrationStage = 'preparing' | 'transferring' | 'complete' | 'cancelled';
 export interface MigrationHandoff {
@@ -12,6 +14,12 @@ export interface MigrationHandoff {
   workers?: Array<{ sessionId: string; targetSessionId: string; workingDir: string }>;
   stage: MigrationStage;
   error?: string;
+  /** Project-relative entry that caused `error`, when one entry is to blame. */
+  errorPath?: string;
+  /** Bytes needed vs the limit, when `error` is a size failure. */
+  errorSize?: { needed: number; limit: number };
+  /** Entries the prepared copy leaves behind; `entries` is capped, `total` is not. */
+  skipped?: { total: number; entries: SkippedEntry[] };
 }
 export interface HandoffDependencies {
   save(record: MigrationHandoff): Promise<void>;
@@ -28,7 +36,7 @@ export async function advanceHandoff(
 ): Promise<void> {
   const transition = async (stage: MigrationStage) => {
     deps.assertCurrent();
-    const next = { ...record, stage, error: undefined };
+    const next = { ...record, stage, error: undefined, errorPath: undefined, errorSize: undefined };
     await deps.save(next);
     Object.assign(record, next);
     deps.assertCurrent();
@@ -47,6 +55,6 @@ export async function advanceHandoff(
 
 export function canCancelHandoff(record: MigrationHandoff): boolean {
   // Abandon only source staging. Never roll back a target that may have committed.
-  // The service rejects cancellation while a local transfer is still running.
+  // A running copy is cancelled only before the target starts receiving it.
   return record.stage === 'preparing' || record.stage === 'transferring';
 }

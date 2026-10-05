@@ -19,6 +19,7 @@ export const DESKTOP_LOCAL = {
   COMMAND: 'remote-desktop:host-command',
   REPLY: 'remote-desktop:host-reply',
   INPUT: 'remote-desktop:host-input',
+  CHANNEL_REQUEST: 'remote-desktop:channel-request',
   VIEW_HEARTBEAT: 'remote-desktop:view-heartbeat',
   NATIVE_FRAME: 'remote-desktop:native-frame',
   NATIVE_AUDIO: 'remote-desktop:native-audio',
@@ -30,7 +31,15 @@ export const DESKTOP_LOCAL = {
 export interface DesktopHostCommand {
   iceServers?: DesktopIceServer[];
   id: string;
-  op: 'offer' | 'stop' | 'capture-reset' | 'ice' | 'prepare' | 'frame';
+  op:
+    | 'offer'
+    | 'stop'
+    | 'capture-reset'
+    | 'display-hold'
+    | 'display-swap'
+    | 'ice'
+    | 'prepare'
+    | 'frame';
   /** Local-only: retain the system-selected Wayland stream for this lease. */
   portalCapture?: boolean;
   attemptId?: string;
@@ -55,6 +64,8 @@ export interface DesktopLocalState {
 }
 export type DesktopHostReply =
   | string
+  /** display-swap: true only when native capture kept a live stream. */
+  | boolean
   | RemoteDesktopIceReply
   | {
       error:
@@ -84,4 +95,7 @@ export interface DesktopCaptureApi {
   nativeFrame(lease: string): Promise<string | RemoteDesktopCursorFrame | null>;
   nativeAudio?(lease: string): Promise<Uint8Array>;
   input(lease: string, sequence: number, events: DesktopInput[]): Promise<void>;
+  /** A control request the viewer sent over `input-v1`; Main authorizes it. */
+  request?(lease: string, request: unknown): Promise<DesktopChannelResult>;
 }
+export type DesktopChannelResult = { ok: true; result: unknown } | { ok: false; error: string };

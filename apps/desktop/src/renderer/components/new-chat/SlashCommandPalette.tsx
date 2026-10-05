@@ -18,6 +18,15 @@ import { useTranslation } from 'react-i18next';
 import { ArrowUpRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
+import { MENU_CURRENT_ROW_ATTR, currentMarkedRow } from '@/components/ui/dropdown-menu-highlight';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  useMenuPanel,
+  withMenuLabels,
+} from '@/components/ui/menu-row';
 
 import { cn } from '@/lib/utils';
 import {
@@ -84,7 +93,16 @@ export function SlashCommandPalette({
   const { t } = useTranslation();
   const filtered = useMemo(() => filterSlashCommands(commands, query), [commands, query]);
   const rootRef = useRef<HTMLDivElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  // Glide highlight on the focused index; arrow keys are pressed in the editor.
+  const highlightPanelRef = useMenuPanel(panelRef, {
+    lockWidth: false,
+    options: {
+      current: currentMarkedRow,
+      currentAttributes: [MENU_CURRENT_ROW_ATTR],
+      keyboardSource: document,
+    },
+  });
   const tooltipRef = useRef<HTMLDivElement>(null);
   // Track panel scroll so the tooltip follows the focused row's visual position.
   const [panelScroll, setPanelScroll] = useState(0);
@@ -222,10 +240,11 @@ export function SlashCommandPalette({
     >
       {/* Panel */}
       <div
-        ref={panelRef}
+        ref={highlightPanelRef}
         onScroll={(e) => setPanelScroll(e.currentTarget.scrollTop)}
+        {...menuPanelAttrs}
         className={cn(
-          'w-[320px] overflow-y-auto',
+          'relative w-[320px] overflow-y-auto',
           'rounded-[12px] border p-[6px]',
           'bg-[var(--cmd-palette-bg)]',
           'border-[var(--cmd-palette-border)]',
@@ -233,8 +252,10 @@ export function SlashCommandPalette({
           // §14.4 轻浮层原型);输入过滤只重渲不重挂,动画不会重放。
           'origin-bottom-left animate-float-in',
         )}
-        style={{ boxShadow: 'var(--cmd-palette-shadow)', maxHeight }}
+        // Registered floating-layer shadow, as on the shared menus (DESIGN §4 / §6).
+        style={{ boxShadow: 'var(--shadow-menu)', maxHeight }}
       >
+        <MenuHighlightLayer />
         {filtered.length === 0 ? (
           <div
             className={cn(
@@ -266,17 +287,17 @@ export function SlashCommandPalette({
                   onSelect(cmd);
                 }}
                 onMouseEnter={() => onFocusedIndexChange(idx)}
+                // Shared menu row: the panel's glide highlight follows the focused index
+                // (focus stays in the editor), no own fill.
+                {...menuRowAttrs({ current: focused, disabled: unavailable })}
                 className={cn(
+                  COMPOSER_MENU_ROW,
                   'flex w-full items-center justify-between',
-                  'h-[36px] px-[10px] rounded-[6px]',
-                  'text-left text-14 font-medium',
-                  'text-[var(--cmd-palette-item-text)]',
-                  'outline-none transition-colors',
-                  focused && 'bg-[var(--cmd-palette-item-hover)]',
+                  'h-[36px] px-[10px] text-left',
                   unavailable && 'cursor-not-allowed opacity-50',
                 )}
               >
-                <span className="truncate">{cmd.name}</span>
+                {withMenuLabels(<span className="truncate">{cmd.name}</span>)}
                 {official ? (
                   <OfficialSkillBadge />
                 ) : metaLabel(cmd) && (

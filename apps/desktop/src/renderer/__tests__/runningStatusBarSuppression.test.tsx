@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import ts from 'typescript';
 import { afterEach, expect, it, vi } from 'vitest';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import {
   RunningTokenRatePopover,
   useRunningTokenRateHistory,
@@ -61,6 +62,7 @@ const deps = {
   formatRecentOutputTokenRate,
   formatRunningTokenCount,
   resolveRunningUsageMeta,
+  formatSessionDuration,
 };
 const RunningStatusBar = new Function(
   'deps',

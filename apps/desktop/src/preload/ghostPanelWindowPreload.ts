@@ -17,7 +17,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 
-import type { AppearanceSettings } from '../shared/appearanceSettings';
+import { createAppearanceSnapshotBridge } from './appearanceSnapshot';
 import type { LocalThemesResult } from '../shared/local-themes';
 import type { GhostPanelWindowsState } from '../shared/ghostPanelWindow';
 import { isValidGhostId } from '../shared/ghost';
@@ -114,9 +114,7 @@ function onCurrentGhostUnreadSnapshot(
   return () => ipcRenderer.removeListener('ghosts:unread-snapshot', listener);
 }
 
-const appearanceSettings = ipcRenderer.sendSync(
-  'appearance-settings:get-sync',
-) as AppearanceSettings | null;
+const appearanceSnapshot = createAppearanceSnapshotBridge();
 
 const fanOutFullscreenChange = (cb: (isFullscreen: boolean) => void): Unsub =>
   onPayload('fullscreen-change', cb);
@@ -134,11 +132,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ): void => ipcRenderer.send('renderer:log', level, scope, msg),
   onLocaleChanged: (cb: (locale: SupportedLocale) => void): Unsub =>
     onPayload(GHOST_PANEL_WINDOW_LOCALE_CHANGED_CHANNEL, cb),
-  appearanceSettings: {
-    getSync: (): AppearanceSettings | null => appearanceSettings,
-    onChanged: (cb: (settings: AppearanceSettings) => void): Unsub =>
-      onPayload('appearance-settings:changed', cb),
-  },
+  appearanceSettings: appearanceSnapshot,
   localThemes: {
     listSync: (): LocalThemesResult => {
       try {

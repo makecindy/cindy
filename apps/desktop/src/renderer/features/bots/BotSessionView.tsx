@@ -10,6 +10,7 @@ import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 import { getBotLastReadAt, markBotRead } from './botReadState';
 import { useBotProfiles } from './botStore';
+import { ensureBotWorkbenchTab } from '@/features/right-sidebar/lib/openBotWorkbenchTab';
 import type { BotChatIdentity } from './BotSessionContentHeader';
 import type { BotChatBinding } from './botChatPresentation';
 import { useBotIslandVisibleSession } from './useBotIslandVisibleSession';
@@ -184,6 +185,14 @@ function BotSessionGateView() {
       cancelled = true;
     };
   }, [botId, reloadVersion, sessionId]);
+
+  // 本机伙伴主任务:右侧栏默认带上「工作台」标签(首次进入时创建并展开)。
+  // 远程伙伴走 RemoteBotSessionView,不经过这里;渠道任务、历史任务不提供工作台。
+  const workbenchSessionId = gate.kind === 'ready' && gate.isCanonical ? sessionId : undefined;
+  useEffect(() => {
+    if (!botId || !workbenchSessionId) return;
+    void ensureBotWorkbenchTab(workbenchSessionId, botId).catch(() => undefined);
+  }, [botId, workbenchSessionId]);
 
   const onReadThrough = useCallback((at: number) => {
     if (isDataOwnerGenerationCurrent(readOwner.current) && gate.kind === 'ready' && gate.isCanonical && botId && gate.identity.sessionId === sessionId) markBotRead(botId, at);

@@ -33,6 +33,8 @@
 
 import type { InteractionButton, InteractionRequestPayload } from '@cindy/slack-hook-protocol';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import type { SharedPermission } from '../maker-ipc/sharedPermission';
+import { permissionOutcomeText } from '../im/shared/permissionPresentation';
 
 import {
   composeInteractionModel,
@@ -161,6 +163,7 @@ export function composeInteractionCard(req: InteractionRequest): ComposedInterac
 
 /** 挂起交互条目。 */
 interface PendingHookInteraction {
+  sharedPermission?: SharedPermission;
   decisions: Map<string, InteractionDecision>;
   defaultDecision: InteractionDecision;
   fallbackReason: string;
@@ -183,18 +186,24 @@ export function registerHookInteraction(opts: {
   composed: ComposedInteractionCard;
   onFallback: (reason: string) => void;
   timeoutMs?: number;
+  sharedPermission?: SharedPermission;
 }): Promise<InteractionDecision> {
   const { interactionId, composed, onFallback } = opts;
   return new Promise<InteractionDecision>((resolve) => {
     const timer = setTimeout(() => {
       const entry = pending.get(interactionId);
       if (!entry) return;
+      if (entry.sharedPermission) {
+        entry.sharedPermission.decide(entry.defaultDecision);
+        return;
+      }
       pending.delete(interactionId);
       entry.onFallback(entry.fallbackReason);
       entry.resolve(entry.defaultDecision);
     }, opts.timeoutMs ?? HOOK_INTERACTION_TIMEOUT_MS);
     timer.unref?.();
     pending.set(interactionId, {
+      sharedPermission: opts.sharedPermission,
       decisions: composed.decisions,
       defaultDecision: composed.defaultDecision,
       fallbackReason: composed.fallbackReason,
@@ -202,6 +211,18 @@ export function registerHookInteraction(opts: {
       timer,
       onFallback,
     });
+    if (opts.sharedPermission) {
+      void opts.sharedPermission.result.then((decision) => {
+        const entry = pending.get(interactionId);
+        if (entry?.sharedPermission !== opts.sharedPermission) return;
+        pending.delete(interactionId);
+        clearTimeout(timer);
+        const result = permissionOutcomeText(decision);
+        try { onFallback(`${composed.card.body ?? ''}\n\n${result}`); }
+        catch { /* A channel update cannot change an accepted decision. */ }
+        finally { resolve(decision); }
+      });
+    }
   });
 }
 
@@ -214,6 +235,7 @@ export function resolveHookInteraction(interactionId: string, buttonId: string):
   if (!entry) return false;
   const decision = entry.decisions.get(buttonId);
   if (!decision) return false; // 未知按钮(伪造/陈旧卡片), 保持挂起等真实决策
+  if (entry.sharedPermission) return entry.sharedPermission.decide(decision);
   pending.delete(interactionId);
   clearTimeout(entry.timer);
   entry.resolve(decision);
@@ -227,6 +249,9 @@ export function resolveHookInteraction(interactionId: string, buttonId: string):
 export function cancelHookInteraction(interactionId: string, reason: string): boolean {
   const entry = pending.get(interactionId);
   if (!entry) return false;
+  if (entry.sharedPermission) {
+    return entry.sharedPermission.settle({ kind: 'permission', behavior: 'deny', reason: 'turn_terminal' });
+  }
   pending.delete(interactionId);
   clearTimeout(entry.timer);
   entry.onFallback(reason);

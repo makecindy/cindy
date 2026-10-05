@@ -689,26 +689,15 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
         <DropdownMenuContent
           align="start"
           sideOffset={2}
-          className={cn(
-            'rounded-xl p-0.5 overflow-hidden',
-            'bg-[var(--cmd-palette-bg)]',
-            'border border-[var(--cmd-palette-border)]',
-            'shadow-[var(--shadow-menu)]',
-          )}
         >
           {menuActions.map((action) => (
             <DropdownMenuItem
               key={action.key}
               onClick={action.onSelect}
-              className={cn(
-                'h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)]',
-                'focus:bg-[var(--cmd-palette-item-hover)]',
-                action.danger &&
-                  'text-red-500 dark:text-red-400 focus:bg-red-50 dark:focus:bg-red-500/10',
-              )}
+              variant={action.danger ? 'danger' : undefined}
             >
               <action.icon className="mr-2 h-3.5 w-3.5 shrink-0" />
-              <span className="relative top-px">{action.label}</span>
+              {action.label}
             </DropdownMenuItem>
           ))}
         </DropdownMenuContent>

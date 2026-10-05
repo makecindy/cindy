@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
+import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
 import { once } from 'node:events';
 import type { ServerResponse } from 'node:http';
 import { ChatSseTranslator, translateResponsesRequestWithContext, type ResponsesRequest } from '@cindy/responses-chat-bridge';
@@ -105,12 +106,34 @@ function nativeHistory(request: ResponsesRequest, identity: string): Map<string,
 export interface PiProviderTransportOptions {
   row: ProviderModelRecord;
   providerId: string;
+  /** Catalog preset the connection was created from; survives renames and endpoint edits. */
+  catalogPresetId?: string;
   /** Account-specific destination; the catalog row still identifies its adapter. */
   upstream?: string;
   apiKey: string;
   headers?: Record<string, string>;
   env?: Record<string, string>;
   fetchImpl: typeof fetch;
+}
+
+/**
+ * Internal request header that carries the caller's stable conversation identity into
+ * `createPiProviderFetch` (the Claude bridge sets it from `x-claude-code-session-id`).
+ * The SDK rebuilds the outbound request from `options.headers`, so the inbound `init.headers`
+ * never reach the upstream — this carrier is read here, handed to the adapter as `sessionId`
+ * and turned into the provider-specific conversation header (OpenCode Go: `x-opencode-session`,
+ * #5325). It is a per-request value, never shared mutable state.
+ */
+export const NATIVE_BRIDGE_SESSION_HEADER = 'x-cindy-native-bridge-session';
+
+function nativeBridgeSessionId(init: RequestInit | undefined): string | undefined {
+  const headers = init?.headers;
+  if (!headers) return undefined;
+  const value = headers instanceof Headers ? headers.get(NATIVE_BRIDGE_SESSION_HEADER)
+    : Array.isArray(headers) ? headers.find(([name]) => name.toLowerCase() === NATIVE_BRIDGE_SESSION_HEADER)?.[1]
+      : Object.entries(headers).find(([name]) => name.toLowerCase() === NATIVE_BRIDGE_SESSION_HEADER)?.[1];
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return trimmed || undefined;
 }
 
 /** Provider-specific authentication must not be bypassed by a matching harness wire. */
@@ -160,6 +183,18 @@ function cloudflareGatewayHeaders(
     Authorization: null,
     'x-api-key': null,
   };
+}
+
+/**
+ * Pi adapters read a missing level as "thinking off" (Z.AI sends `thinking.type=disabled`).
+ * Models whose catalog marks `off` unsupported reject that: GLM-5.3 answers 400/1210 (#5402).
+ * For those, a request without an effort uses the declared default instead.
+ */
+function nativeThinkingLevel(requested: unknown, row: ProviderModelRecord, model: Model<Api>): ThinkingLevel | undefined {
+  const efforts = row.efforts ?? [];
+  const effort = reconcileOutboundReasoningEffort(requested, efforts);
+  if (effort || !model.reasoning || model.thinkingLevelMap?.off !== null) return effort as ThinkingLevel | undefined;
+  return reconcileOutboundReasoningEffort(row.defaultEffort, efforts) as ThinkingLevel | undefined;
 }
 
 function nativeInvocationModel(options: PiProviderTransportOptions, modelId: string): Model<Api> {
@@ -264,9 +299,17 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
       return `Native provider request failed [phase=${phase}${status}; category=${category}; request=${responseId}]`;
     };
     const cloudflareGateway = model.provider === 'cloudflare-ai-gateway';
+    // Conversation identity is per request. OpenCode Go rejects requests without a stable
+    // `x-opencode-session`; without an inbound identity the route falls back to the helper's
+    // one-shot (per-request) value rather than inventing a shared or pseudo-stable id.
+    const sessionId = nativeBridgeSessionId(init);
+    const routeHeaders = withOpenCodeGoSessionHeader(options.headers, {
+      providerId: options.providerId, catalogPresetId: options.catalogPresetId, upstream: model.baseUrl, sessionId,
+    });
     const events = adapter.streamSimple(model, context, {
       apiKey: cloudflareGateway ? undefined : options.apiKey, env: options.env,
-      headers: cloudflareGateway ? cloudflareGatewayHeaders(options.apiKey, options.headers) : options.headers,
+      headers: cloudflareGateway ? cloudflareGatewayHeaders(options.apiKey, routeHeaders) : routeHeaders,
+      ...(sessionId ? { sessionId } : {}),
       // Pi's Google SDK rejects injected fetch. Its native transport must be used; all other
       // adapters that support injection use Cindy's existing outbound route.
       ...(!['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(model.api)
@@ -276,7 +319,7 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
         ['openai-responses', 'azure-openai-responses', 'openai-completions'].includes(model.api)
         ? { onPayload: (payload: unknown) => payload && typeof payload === 'object' && !Array.isArray(payload)
           ? { ...payload, service_tier: 'priority' } : payload } : {}),
-      reasoning: reconcileOutboundReasoningEffort(request.reasoning?.effort, options.row.efforts ?? []) as ThinkingLevel | undefined,
+      reasoning: nativeThinkingLevel(request.reasoning?.effort, options.row, model),
       maxTokens: typeof request.max_output_tokens === 'number' ? Math.min(request.max_output_tokens, model.maxTokens) : model.maxTokens,
     });
     const iterator = events[Symbol.asyncIterator]();

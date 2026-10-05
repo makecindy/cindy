@@ -1,3 +1,4 @@
+import { setSessionOpeningModelAdmission, type SessionOpenBody } from '../../sessionOpening';
 /**
  * sessionsUpdate.test.ts — `local-db:sessions:update` handler 集成接线。
  * -------------------------------------------------------------------
@@ -106,6 +107,7 @@ vi.mock('../../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../../client/current', () => ({
+  getCurrentDbClientSnapshot: () => h,
   getDbClient: () => h.client,
   getCurrentDbClientUserId: () => 'test-user',
 }));
@@ -317,6 +319,7 @@ async function invokeCreate(body: Record<string, unknown>): Promise<unknown> {
 }
 
 beforeEach(() => {
+  setSessionOpeningModelAdmission(async body => body);
   vi.clearAllMocks();
   h.relocate.mockImplementation(async () => ({ persistedSdkSessionId: null }));
   h.commitBotProfileDeletion.mockResolvedValue({ status: 'archived', sessionIds: [] });
@@ -1372,4 +1375,19 @@ describe('local-db:sessions:set-pinned-card-summaries', () => {
     await expect(invokeSetPinnedCardSummaries({}, true)).rejects.toThrow('UNTRUSTED_RENDERER');
     expect(h.setPinnedSectionCardMode).not.toHaveBeenCalled();
   });
+});
+
+it('opens a normal renderer task through shared model admission', async () => {
+  const admission = vi.fn(async (body: SessionOpenBody) => ({ ...body, agentKind: 'codex' as const,
+    model: 'selected-model', providerId: 'selected-provider', effort: '', fastMode: false }));
+  setSessionOpeningModelAdmission(admission);
+  await invokeCreate({ id: 'normal-open', title: 'Normal task', workspaceKind: 'project', permissionMode: 'auto' });
+  expect(admission).toHaveBeenCalledOnce();
+  expect(h.sqlite!.prepare('SELECT model, provider_id, effort, permission_mode FROM sessions WHERE id = ?').get('normal-open'))
+    .toEqual({ model: 'selected-model', provider_id: 'selected-provider', effort: '', permission_mode: 'auto' });
+});
+it('does not create a renderer task when common model admission fails', async () => {
+  setSessionOpeningModelAdmission(async () => { throw new Error('model unavailable'); });
+  await expect(invokeCreate({ id: 'rejected-open', title: 'Rejected task' })).rejects.toThrow('model unavailable');
+  expect(h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('rejected-open')).toBeUndefined();
 });

@@ -1,3 +1,4 @@
+import plugins from './plugins.json';
 import taskTags from './taskTags.json';
 /**
  * 本 locale 的 catalog 组装:每个区域一个 JSON 文件、一个顶级 key,
@@ -26,6 +27,7 @@ import startup from './startup.json';
 import update from './update.json';
 
 export default {
+  plugins,
   taskTags,
   remoteDesktop,
   apiErrors,

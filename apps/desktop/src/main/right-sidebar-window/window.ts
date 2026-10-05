@@ -23,6 +23,7 @@ import { installExternalLinkGuards } from '../secondary-windows.js';
 import { installSelectionContextMenu } from '../selection-context-menu.js';
 import { applyAppearanceToWindow } from '../appearance-settings-ipc.js';
 import { markRsbWindowWebContentsId } from './registry.js';
+import { installWindowHiddenBroadcast } from '../windowHiddenBroadcast.js';
 
 const log = createLogger('right-sidebar-window');
 
@@ -89,6 +90,7 @@ export function createRightSidebarWindow(): BrowserWindow {
   });
   markRsbWindowWebContentsId(win.webContents.id);
   markAppContentWindow(win);
+  installWindowHiddenBroadcast(win);
   applyAppearanceToWindow(win);
   win.webContents.on('did-finish-load', () => {
     if (win.isDestroyed()) return;

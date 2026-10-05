@@ -1,3 +1,4 @@
+import { listCindyManagedSkills } from './managed-skills.js';
 import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { readCachedGenericOAuthAccessToken } from './generic-oauth.js';
 import { providerPresetModelRecord, providerModelAdapterId } from '@cindy/model-providers';
@@ -1876,6 +1877,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
   return new PiAgent({
     resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
     getDisabledSkillPaths: readDisabledSkillPaths,
+      getManagedSkills: listCindyManagedSkills,
     resolveModelContextLimit: (providerId, modelId) => {
       const catalog = getActiveCatalog();
       const source = resolveModelContextProviderId(catalog, 'pi', providerId, modelId);

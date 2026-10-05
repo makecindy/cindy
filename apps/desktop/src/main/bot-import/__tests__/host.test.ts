@@ -1730,7 +1730,10 @@ it.each([false, true])('pages setup without vault reads after one-time legacy me
   const requestId = 'fixture-setup-paging-12345';
   const result = await startCompanionImport({ requestId, previewId: preview.id, name: 'Ada',
     entryIds: h.snapshot.items.map(item => item.view.id), takeover: true, deferSetup: true }, 'fixture');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(requestId))?.status).toBe('needs-attention'));
+  // Acceptance precedes the 23 entries being saved. Join the existing write
+  // lock rather than imposing waitFor's 1s wall-clock limit on real filesystem IO.
+  const settled = await withBotProfileLocks([result.botId], () => getCompanionImportResult(requestId));
+  expect(settled?.status).toBe('needs-attention');
   const receiptFile = path.join(h.root, 'companion-imports', `${requestId}.json`);
   const bindingFile = path.join(h.root, 'bots', result.botId, 'environment.json');
   const originalCheckpoint = (await h.store.read(h.root, result.botId, () => {}))!.pendingImport!.snapshotJson;

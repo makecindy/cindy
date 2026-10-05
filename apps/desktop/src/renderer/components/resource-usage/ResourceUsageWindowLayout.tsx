@@ -20,6 +20,7 @@ import type { TabKindHostContext } from '@/features/right-sidebar/types';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { ThemeProvider } from '@/hooks/useTheme';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
+import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
 import { LocaleProvider, useLocale } from '@/hooks/useLocale';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { ToastContainer } from '@/components/ui/toast';
@@ -185,10 +186,12 @@ export function ResourceUsageWindowRoot() {
     <ThemeProvider>
       <FontSettingsProvider>
         <LocaleProvider>
-          <ConfirmDialogProvider>
-            <ResourceUsageWindowLayout />
-            <ToastContainer />
-          </ConfirmDialogProvider>
+          <WallpaperSettingsProvider>
+            <ConfirmDialogProvider>
+              <ResourceUsageWindowLayout />
+              <ToastContainer />
+            </ConfirmDialogProvider>
+          </WallpaperSettingsProvider>
         </LocaleProvider>
       </FontSettingsProvider>
     </ThemeProvider>

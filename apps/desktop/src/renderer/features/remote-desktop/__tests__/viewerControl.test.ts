@@ -332,13 +332,13 @@ it('coalesces rapid quality changes and waits for the current negotiation to pre
   await fixture();
   present();
   runtime.receive.mockClear();
-  controller.settings({ bitrate: 2000000 });
-  controller.settings({ bitrate: 20000000 });
+  controller.settings({ quality: 'saver' });
+  controller.settings({ quality: 'hd' });
   await vi.advanceTimersByTimeAsync(0);
   expect(
     runtime.receive.mock.calls.filter(([message]) => message.type === 'videoSettings'),
   ).toHaveLength(1);
-  controller.settings({ bitrate: 8000000 });
+  controller.settings({ quality: 'auto' });
   await vi.advanceTimersByTimeAsync(0);
   expect(
     runtime.receive.mock.calls.filter(([message]) => message.type === 'videoSettings'),
@@ -347,7 +347,7 @@ it('coalesces rapid quality changes and waits for the current negotiation to pre
   expect(
     runtime.receive.mock.calls.filter(([message]) => message.type === 'videoSettings'),
   ).toHaveLength(2);
-  expect(snapshot.settings.bitrate).toBe(8000000);
+  expect(snapshot.settings.quality).toBe('auto');
 });
 
 it('expires stale bitrate and latency samples', async () => {
@@ -370,9 +370,9 @@ it('does not let a fallback screenshot interrupt a pending video-settings negoti
   await fixture();
   runtime.post?.({ type: 'framePresented', epoch: 'lease' });
   runtime.receive.mockClear();
-  controller.settings({ bitrate: 2000000 });
+  controller.settings({ quality: 'saver' });
   await vi.advanceTimersByTimeAsync(0);
-  controller.settings({ bitrate: 8000000 });
+  controller.settings({ quality: 'auto' });
   await vi.advanceTimersByTimeAsync(0);
   runtime.post?.({ type: 'framePresented', epoch: 'lease' });
   expect(
