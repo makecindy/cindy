@@ -2211,6 +2211,13 @@ export class PiAgent extends BaseAgent {
       /** Current model context window used to translate the Pi percentage setting. */
       contextWindow?: number;
       workingContextWindow?: number;
+      /**
+       * 本任务的工作上下文预算(优先于每个模型自己的上限)。非空时**为全部可选模型**
+       * 生成按该预算的 compaction.modelOverrides —— 官方 Pi 1.0 在切模时按
+       * modelOverrides 选保留量，预算只落在顶层 reserveTokens 会被同模型的 override
+       * 盖掉。写成这样之后，同预算下切到别的模型命中同保留量，保持热切。
+       */
+      sessionContextWindowBudget?: number | null;
       /** Session-frozen Pi auto-compact percentage. Do not re-read the live getter. */
       piCompactionPct?: number;
       /** Host-installed roots/specs for Pi's own package discovery. */
@@ -2412,7 +2419,10 @@ export class PiAgent extends BaseAgent {
     // SDK retries can swallow quota errors before the agent sees them).
     const compactionModelOverrides: Record<string, { reserveTokens: number }> = {};
     const addBudget = (provider: string, id: string, window: number, workingWindow?: number) => {
-      const settings = JSON.parse(buildPiSettingsJsonContent(window, opts.piCompactionPct, [], workingWindow));
+      // 任务级预算优先:预算存在时**每个**可选模型都按预算生成保留量(与预演、切后写盘
+      // 同一口径)，否则顶层 reserveTokens 会被同模型的 model-level override 盖掉。
+      const effectiveWorkingWindow = opts.sessionContextWindowBudget ?? workingWindow;
+      const settings = JSON.parse(buildPiSettingsJsonContent(window, opts.piCompactionPct, [], effectiveWorkingWindow));
       compactionModelOverrides[`${provider}/${id}`] = { reserveTokens: settings.compaction?.reserveTokens ?? 16_384 };
     };
     for (const model of models) addBudget(PI_PROVIDER_ID, model.id, model.contextWindow,
@@ -2728,8 +2738,21 @@ export class PiAgent extends BaseAgent {
       && opts.contextWindowBudget > 0
         ? opts.contextWindowBudget
         : null;
-    const startupWorkingContextWindow = sessionContextWindowBudget
-      ?? this.deps.resolveModelContextLimit?.(authProviderId, opts.model) ?? undefined;
+    /**
+     * 有效工作窗口的唯一口径:任务级预算优先于模型级上限。
+     *
+     * 启动快照(顶层 reserveTokens + 每个模型的 modelOverrides)、切模预演、切后写盘与
+     * requiresModelSwitchRebuild 都必须走它 —— 任何一处漏掉预算，就会出现「预演算不出
+     * 保留量差异 → 预算静默失效」或「同预算切模被误判成需要重建」两种分叉。
+     */
+    const effectiveWorkingContextWindow = (
+      source: string | null | undefined,
+      model: string,
+    ): number | undefined =>
+      sessionContextWindowBudget
+      ?? this.deps.resolveModelContextLimit?.(source, model)
+      ?? undefined;
+    const startupWorkingContextWindow = effectiveWorkingContextWindow(authProviderId, opts.model);
     const nativeModel = nativeProviders.find((provider) => provider.id === initialProvider)?.models
       .find((model) => (model.wireId ?? model.id) === initialWireModel);
     const startupContextWindow = Math.max(
@@ -3126,6 +3149,7 @@ export class PiAgent extends BaseAgent {
         preview: true,
         contextWindow: startupContextWindow,
         workingContextWindow: startupWorkingContextWindow,
+        sessionContextWindowBudget,
         piCompactionPct: sessionPiAutoCompactPct,
       });
       configHome = joinRemotePosixPath(
@@ -3142,6 +3166,7 @@ export class PiAgent extends BaseAgent {
       {
         remote, fileOps, contextWindow: startupContextWindow,
         workingContextWindow: startupWorkingContextWindow,
+        sessionContextWindowBudget,
         piCompactionPct: sessionPiAutoCompactPct,
       },
     );
@@ -6269,7 +6294,7 @@ export class PiAgent extends BaseAgent {
     };
     const reserveForWindow = (window: number, source: string | null | undefined, model: string): number => {
       const settings = JSON.parse(buildPiSettingsJsonContent(window, sessionPiAutoCompactPct, [],
-        this.deps.resolveModelContextLimit?.(source, model) ?? undefined));
+        effectiveWorkingContextWindow(source, model)));
       return settings.compaction?.reserveTokens ?? 16_384;
     };
     const previewPiModelSwitch = async (
@@ -6392,7 +6417,8 @@ export class PiAgent extends BaseAgent {
         gateway ? requestedProviderId : authProviderId,
         { remote, fileOps, preview: true,
           contextWindow: targetContextWindow ?? ctx.contextWindow ?? startupContextWindow,
-          workingContextWindow: this.deps.resolveModelContextLimit?.(sourceId, model) ?? undefined,
+          workingContextWindow: effectiveWorkingContextWindow(sourceId, model),
+          sessionContextWindowBudget,
           piCompactionPct: sessionPiAutoCompactPct,
           packages: nativePackagePaths, disabledSkills: disabledSkillLaunch },
       );
@@ -6525,7 +6551,8 @@ export class PiAgent extends BaseAgent {
           nextGateway ? (nextDescriptor ?? retainedLiveGatewayModel ?? retainedRuntimeModel) : retainedLiveGatewayModel,
           nextGateway ? requestedProviderId : authProviderId,
           { remote, fileOps, contextWindow: nextDescriptor?.contextWindow ?? ctx.contextWindow,
-            workingContextWindow: this.deps.resolveModelContextLimit?.(sourceId, model) ?? undefined,
+            workingContextWindow: effectiveWorkingContextWindow(sourceId, model),
+            sessionContextWindowBudget,
             piCompactionPct: sessionPiAutoCompactPct, packages: nativePackagePaths,
             disabledSkills: disabledSkillLaunch },
         );
@@ -6836,12 +6863,13 @@ export class PiAgent extends BaseAgent {
         }
         await this.writePiRuntimeSettings(configHome, {
           fileOps, contextWindow: verifiedWindow,
-          workingContextWindow: this.deps.resolveModelContextLimit?.(effectiveProviderId, model) ?? undefined,
+          workingContextWindow: effectiveWorkingContextWindow(effectiveProviderId, model),
           piCompactionPct: sessionPiAutoCompactPct, packages: nativePackagePaths,
           disabledSkills: disabledSkillLaunch,
         });
         ctx.contextWindow = verifiedWindow;
-        ctx.workingContextWindow = this.deps.resolveModelContextLimit?.(effectiveProviderId, model) ?? undefined;
+        // 任务预算不能在这里被模型级上限顶掉:下一次预演要按同一个口径算保留量。
+        ctx.workingContextWindow = effectiveWorkingContextWindow(effectiveProviderId, model);
       } catch (error) {
         await terminateUnconfirmedCatalogReload(error);
       }
@@ -7495,8 +7523,7 @@ export class PiAgent extends BaseAgent {
         const contextSource = (id: string | null | undefined) =>
           id == null || id === 'xd' || id === PI_PROVIDER_ID ? PI_PROVIDER_ID : id;
         if (model !== mutableModel || contextSource(provider) !== contextSource(mutableProviderId)) return false;
-        const window = sessionContextWindowBudget ?? deps.resolveModelContextLimit?.(provider, model);
-        return (window ?? undefined) !== ctx.workingContextWindow;
+        return effectiveWorkingContextWindow(provider, model) !== ctx.workingContextWindow;
       },
 
       async setModel(
