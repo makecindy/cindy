@@ -13,7 +13,7 @@ vi.mock('@expo/ui', () => ({ Host: ({ children }: any) => <div>{children}</div> 
 vi.mock('@expo/ui/swift-ui', () => {
   const Container = ({ children }: any) => <div>{children}</div>;
   return { Form: Container, Button: Container, Group: Container, HStack: Container, Image: Container,
-    RNHostView: Container, Spacer: Container, Text: Container, VStack: Container,
+    RNHostView: Container, Spacer: Container, Text: Container, VStack: Container, ZStack: Container,
     BottomSheet: (props: any) => { state.sheet = props; return <div>{props.children}</div>; },
   };
 });

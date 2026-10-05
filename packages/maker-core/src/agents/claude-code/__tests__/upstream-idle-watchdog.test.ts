@@ -569,8 +569,17 @@ describe('Claude Code tool-loop guard runtime integration', () => {
       'deepseek/deepseek-v4-flash',
     );
     await session.handle.setModel?.('claude-opus-5');
+    const rebuiltStream = createControlledStream();
+    const rebuiltQuery = createFakeQuery(rebuiltStream);
+    sdkMock.query.mockImplementationOnce((options: { prompt: AsyncIterable<unknown> }) => {
+      session.stream.end();
+      void (async () => {
+        for await (const item of options.prompt) { void item; }
+      })();
+      return rebuiltQuery;
+    });
     const result = await runStableAbabLoop(
-      session,
+      { ...session, stream: rebuiltStream, fakeQuery: rebuiltQuery },
       'find the missing implementation after switching models',
       'toolu_issue_2721_switch',
     );

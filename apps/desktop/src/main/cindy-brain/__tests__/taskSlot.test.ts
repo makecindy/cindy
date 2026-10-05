@@ -1,8 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
+import { isPluginTeamPlanWithinBudget, PLUGIN_TEAM_PLAN_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
 import { handlePluginTaskRequest, validPluginTaskRequest } from '../taskSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 
 describe('plugin task pipe', () => {
+  it('bounds the complete JSON plan without truncating scope or breaking representative 200-item batches', () => {
+    const item = {label:'sample',workingDir:'/answer',route:{agentKind:'pi',providerId:'p',model:'m',effort:'high',fastMode:false},task:'测'.repeat(2600)};
+    const plan = {concurrency:4,task:'c'.repeat(8000),items:Array.from({length:200},(_,i)=>({...item,label:'w'+i}))};
+    expect(validPluginTaskRequest({type:'tasks-request',kind:'setTeamPlan',taskId:'lead',plan})).toBe(true);
+    expect(validPluginTaskRequest({type:'tasks-request',kind:'setTeamPlan',taskId:'lead',plan:{...plan,items:plan.items.map(x=>({...x,task:'x'.repeat(8000)}))}})).toBe(false);
+    const room = PLUGIN_TEAM_PLAN_MAX_JSON_CHARS - JSON.stringify({task:''}).length;
+    expect(isPluginTeamPlanWithinBudget({task:'x'.repeat(room)})).toBe(true);
+    expect(isPluginTeamPlanWithinBudget({task:'x'.repeat(room+1)})).toBe(false);
+    expect(isPluginTeamPlanWithinBudget({task:'\n'.repeat(room)})).toBe(false);
+  });
   const ghost = { enabled: true, taskCapabilityApproved: true, approval: {state:'approved', revision:'r'}, manifest: { agent: { tasks: true } } } as InstalledGhost;
   it('requires its own declared capability; errand alone grants nothing', async () => {
     const handler = vi.fn();
@@ -82,4 +93,29 @@ it('collaboration methods accept only an owned task identifier, not permission o
 it('allows an Auto request but never Full access', () => {
  expect(validPluginTaskRequest({type:'tasks-request',kind:'requestWriteAccess',taskId:'own',mode:'auto'})).toBe(true);
  expect(validPluginTaskRequest({type:'tasks-request',kind:'requestWriteAccess',taskId:'own',mode:'bypassPermissions'})).toBe(false);
+});
+
+ it('accepts opt-in call context only for creation, never a claimed source session', () => {
+   const create = { type: 'tasks-request', kind: 'create', requestKey: 'one', title: 'Work' };
+   expect(validPluginTaskRequest({ ...create, callId: 'active-call' })).toBe(true);
+   expect(validPluginTaskRequest({ ...create, sourceSessionId: 'foreign' })).toBe(false);
+   expect(validPluginTaskRequest({ ...create, callId: '' })).toBe(false);
+   expect(validPluginTaskRequest({ ...create, route: { agentKind: 'pi', providerId: 'mine', model: 'no-reasoning', effort: '', fastMode: false } })).toBe(true);
+ });
+
+it('exposes catalog and guarded model changes without accepting permission overrides', () => {
+  expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'models' })).toBe(true);
+  const request = { type: 'tasks-request', kind: 'setModel', taskId: 'own', expectedRevision: 1,
+    route: { agentKind: 'codex', model: 'm', providerId: 'p', effort: '', fastMode: false } };
+  expect(validPluginTaskRequest(request)).toBe(true);
+  expect(validPluginTaskRequest({ ...request, expectedRevision: undefined })).toBe(false);
+  expect(validPluginTaskRequest({ ...request, permissionMode: 'bypassPermissions' })).toBe(false);
+});
+
+it('accepts bounded plugin-authored scope, never caller-supplied authority', () => {
+ const item={label:'sample',workingDir:'/answer',route:{agentKind:'pi',providerId:'p',model:'m',effort:'high',fastMode:false},task:'Run tests'};
+ const request={type:'tasks-request',kind:'setTeamPlan',taskId:'lead',plan:{concurrency:null,task:'Coordinate',items:[item]}};
+ expect(validPluginTaskRequest(request)).toBe(true);
+ expect(validPluginTaskRequest({...request,plan:{...request.plan,ownerApproved:true}})).toBe(false);
+ expect(validPluginTaskRequest({...request,plan:{...request.plan,items:[{...item,task:'x'.repeat(8001)}]}})).toBe(false);
 });

@@ -159,12 +159,12 @@ describe('task labels transactions', () => {
       run({ action: 'update', tagId: 'default:red', revision: 1, color: 'blue' }),
     ).toThrow('CONFLICT');
   });
-  it('denies missing and bot callers at the write transaction boundary', () => {
-    expect(() =>
-      run({ action: 'create', newId: 'x', name: 'Work', color: 'red', callerSessionId: 'missing' }),
-    ).toThrow('NOT_FOUND');
-    db.exec("INSERT INTO bot_session_links VALUES('a')");
-    expect(() => run({ action: 'list', callerSessionId: 'a' })).toThrow('NOT_FOUND');
+  it('rejects missing callers and accepts ordinary and companion callers equally', () => {
+    expect(() => run({ action: 'list', callerSessionId: 'missing' })).toThrow('NOT_FOUND');
+    db.exec("INSERT INTO sessions(id,source) VALUES('bot-main','bot'),('bot-lane','bot')");
+    for (const callerSessionId of ['a', 'bot-main', 'bot-lane']) {
+      expect(run({ action: 'list', callerSessionId }).tags.length).toBeGreaterThan(0);
+    }
   });
   it('persists order across edits and projects it onto task associations', () => {
     const expectedOrder = run({ action: 'list' }).tags.map((t) => t.id);

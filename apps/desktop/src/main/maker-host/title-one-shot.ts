@@ -46,6 +46,7 @@ import {
   providerCatalogId,
 } from '@cindy/model-providers';
 import { toSdkModelString } from '@cindy/maker-core';
+import { AUTO_TITLE_MAX_CHARS } from '@cindy/maker-shared/session-title';
 
 import { createLogger } from '../logger.js';
 import { getAppCapabilities } from '../appCapabilities.js';
@@ -62,11 +63,11 @@ const log = createLogger('maker-host:title-one-shot');
 
 /** 标题 oneShot 单次请求超时(对齐 renderer scheduleAutoName 的等待窗口语义,留余量)。 */
 const TITLE_TIMEOUT_MS = 12_000;
-/** 标题 ≤ 20 字,32 token 足够;codex Responses 协议层不暴露 max_tokens,仅对 messages/chat 生效。 */
-const TITLE_MAX_TOKENS = 32;
+/** 为多字节中文 / emoji 留出每字符 4 token；字符上限仍单独校验。 */
+const TITLE_MAX_TOKENS = AUTO_TITLE_MAX_CHARS * 4;
 /**
  * XD 网关思考模型(Hy3 / DeepSeek 等)默认会先写 reasoning_content。
- * 标题只要短正文;不关思考时 32 token 会全部烧掉,content 仍是空串。
+ * 标题只要短正文;不关思考时短标题的 token 预算会全部烧掉,content 仍是空串。
  * 网关认 OpenAI 兼容的 thinking.type=disabled;官方 no_think / enable_thinking=false 无效。
  */
 const TITLE_GATEWAY_THINKING = { type: 'disabled' } as const;
@@ -456,7 +457,7 @@ export function parseResponsesSse(raw: string): string {
  * 用于 prompt prediction 等复用同一条 provider 通路但需要不同 token/校验的场景。
  */
 export interface OneShotOpts {
-  /** 覆盖 max_tokens(标题默认 32)。 */
+  /** 覆盖 max_tokens(标题默认 160)。 */
   maxTokens?: number;
   /** 覆盖 Codex instructions(标题默认 CODEX_TITLE_INSTRUCTIONS)。 */
   codexInstructions?: string;
@@ -640,7 +641,7 @@ log.debug('title oneShot skipped: no title target', {
   const maxTokens = opts?.maxTokens ?? TITLE_MAX_TOKENS;
   const codexInstructions = opts?.codexInstructions ?? CODEX_TITLE_INSTRUCTIONS;
   const maxOutputChars = opts?.maxOutputChars ?? TITLE_OUTPUT_MAX_CHARS;
-  const maxVisualChars = opts?.maxVisualChars ?? 40;
+  const maxVisualChars = opts?.maxVisualChars ?? AUTO_TITLE_MAX_CHARS;
   try {
     let text = '';
     switch (target.wire) {

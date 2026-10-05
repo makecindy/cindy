@@ -1,3 +1,4 @@
+import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
 import { prepareImportedAutomation, finishImportedAutomation } from './bot-import/automationRuntime.js';
 import { ensureImportedAutomationReady, recoverCompanionImports } from './bot-import/host.js';
 import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
@@ -2572,6 +2573,7 @@ registerBrowserBackendIpc();
 // ipcMain.handle 在 app ready 前注册也有效。
 registerAppShortcutIpc();
 registerAppearanceSettingsIpc();
+registerAccessibilitySupportIpc();
 registerLoginItemIpc();
 
 // ── 资源用量面板 IPC ─────────────────────────────────────────────────

@@ -279,12 +279,12 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(vendorSwitcherSource).not.toContain('create-agent-segment-track-bg');
 
     // 引擎下拉:trigger 是描边控件(与协同按钮同族,区别于裸态的权限/模型 trigger),
-    // 面板走 model dropdown 规格;定宽 h-30,引擎数量增加不改工具条布局。
+    // 面板行走共享菜单行(DESIGN §4 Composer dropdown rows);定宽 h-30,引擎数量增加不改工具条布局。
     expect(agentSelectSource).toContain("'h-[30px]'");
     expect(agentSelectSource).toContain('border-[var(--create-agent-control-border)]');
     expect(agentSelectSource).toContain('bg-[var(--create-agent-control-bg)]');
-    expect(agentSelectSource).toContain('text-[var(--model-item-text)]');
-    expect(agentSelectSource).toContain('text-[var(--model-section-label)]');
+    expect(agentSelectSource).toContain('COMPOSER_MENU_ROW');
+    expect(agentSelectSource).toContain('text-[var(--cmd-palette-item-meta)]');
     // 选项表来自单一来源,新增引擎不需要改控件;隐藏未注册引擎的语义与分段器一致
     expect(agentSelectSource).toContain('visibleOptions.map');
     expect(agentSelectSource).toContain('hiddenVendors');

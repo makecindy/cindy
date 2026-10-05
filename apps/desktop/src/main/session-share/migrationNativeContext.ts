@@ -46,39 +46,47 @@ export function migrationNativeContext(migrationId: string, nativeIds: readonly 
     }
     return changed ? JSON.stringify(value) : raw;
   };
+  /** One transcript line (without its `\n`). */
+  const line = (text: string, agent: 'cc' | 'codex'): string => {
+    if (!text.trim()) return text;
+    let row;
+    try {
+      row = JSON.parse(text);
+    } catch {
+      // Native readers tolerate interrupted/legacy lines; copying must preserve them.
+      return text;
+    }
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return text;
+    if (agent === 'cc' && typeof row.sessionId === 'string' && ids.has(row.sessionId)) {
+      return JSON.stringify({ ...row, sessionId: id(row.sessionId) });
+    }
+    if (
+      agent === 'codex' &&
+      row.type === 'session_meta' &&
+      typeof row.payload?.id === 'string' &&
+      ids.has(row.payload.id)
+    ) {
+      // Codex native IDs are equal-length UUIDs. Preserve all other bytes and line offsets.
+      return text.replace(
+        /("id"\s*:\s*)("(?:[^"\\]|\\.)*")/g,
+        (_match, prefix: string, value: string) =>
+          `${prefix}${JSON.stringify(id(JSON.parse(value)))}`,
+      );
+    }
+    return text;
+  };
+  /**
+   * Whether `line` can change the bytes. Rewrites need a mapped ID as a JSON string value,
+   * and native writers never escape UUID characters, so other lines can be copied as bytes.
+   */
+  const mayRewrite = (bytes: Buffer): boolean =>
+    [...ids.keys()].some((nativeId) => bytes.includes(nativeId));
   const transcript = (bytes: Buffer, agent: 'cc' | 'codex'): Buffer =>
     Buffer.from(
       bytes
         .toString('utf8')
         .split('\n')
-        .map((line) => {
-          if (!line.trim()) return line;
-          let row;
-          try {
-            row = JSON.parse(line);
-          } catch {
-            // Native readers tolerate interrupted/legacy lines; copying must preserve them.
-            return line;
-          }
-          if (!row || typeof row !== 'object' || Array.isArray(row)) return line;
-          if (agent === 'cc' && typeof row.sessionId === 'string' && ids.has(row.sessionId)) {
-            return JSON.stringify({ ...row, sessionId: id(row.sessionId) });
-          }
-          if (
-            agent === 'codex' &&
-            row.type === 'session_meta' &&
-            typeof row.payload?.id === 'string' &&
-            ids.has(row.payload.id)
-          ) {
-            // Codex native IDs are equal-length UUIDs. Preserve all other bytes and line offsets.
-            return line.replace(
-              /("id"\s*:\s*)("(?:[^"\\]|\\.)*")/g,
-              (_match, prefix: string, value: string) =>
-                `${prefix}${JSON.stringify(id(JSON.parse(value)))}`,
-            );
-          }
-          return line;
-        })
+        .map((text) => line(text, agent))
         .join('\n'),
     );
   const stateRows = <
@@ -106,5 +114,5 @@ export function migrationNativeContext(migrationId: string, nativeIds: readonly 
       ),
     };
   };
-  return { id, metadata, transcript, stateRows };
+  return { id, metadata, line, mayRewrite, transcript, stateRows };
 }

@@ -18,7 +18,7 @@ function viewer(lease: string, request: DesktopViewerRequest) {
       canControl: false,
       displays: [],
     },
-    settings: { fps: 30 as const, bitrate: 0 as const, audio: false },
+    settings: { fps: 30 as const, quality: "auto" as const, audio: false },
   };
   const media = new RemoteDesktopViewerMedia({
     request,
@@ -90,4 +90,53 @@ it("does not classify an ordinary video failure as consent and discards a retire
   await pending;
   expect(h.send).not.toHaveBeenCalled();
   expect(h.onOfferFailure).toHaveBeenCalledOnce();
+});
+
+it("sends the tier with a legacy bitrate only to hosts that accept video settings", async () => {
+  const request = vi.fn(async () => ({ sdp: "answer" }));
+  const h = viewer("lease", request as unknown as DesktopViewerRequest);
+  await h.offer();
+  expect(request).toHaveBeenLastCalledWith(
+    expect.not.objectContaining({ settings: expect.anything() }),
+    expect.any(Function),
+  );
+  const caps = { videoSettings: true };
+  const settings = {
+    fps: 60 as const,
+    quality: "saver" as const,
+    audio: false,
+  };
+  const media = new RemoteDesktopViewerMedia({
+    request: request as unknown as DesktopViewerRequest,
+    send: vi.fn(),
+    current: () => ({
+      lease: {
+        lease: "lease",
+        controlling: false,
+        display: { id: "s", name: "S", width: 1, height: 1 },
+      },
+      caps: {
+        version: 1,
+        enabled: true,
+        platform: "darwin",
+        canControl: true,
+        displays: [],
+        ...caps,
+      },
+      settings,
+    }),
+    loadIce: async () => [],
+  });
+  await media.handle({
+    type: "offer",
+    epoch: "lease",
+    attemptId: "attempt",
+    sdp: "offer",
+  });
+  expect(request).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      settings: { ...settings, fps: 30, bitrate: 2_000_000 },
+    }),
+    expect.any(Function),
+  );
 });

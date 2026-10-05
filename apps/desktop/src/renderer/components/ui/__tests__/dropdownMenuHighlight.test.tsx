@@ -380,9 +380,10 @@ describe('shared dropdown menu glide highlight', () => {
     expect(icon('Default icon').hasAttribute('data-menu-icon-stroke')).toBe(false);
     expect(icon('Default icon').getAttribute('stroke-width')).toBe('2');
     expect(icon('Explicit icon').hasAttribute('data-menu-icon-stroke')).toBe(true);
-    // The stroke rule lives in globals.css, scoped to shared rows and default-width icons.
+    // The stroke rule lives in globals.css, scoped to shared rows and default-width icons;
+    // non-option blocks (menuSkipAttrs, data-menu-row="skip") keep their stroke.
     expect(globals).toMatch(
-      /\[data-menu-row\] svg\.lucide\[stroke-width='2'\]:not\(\[data-menu-icon-stroke\]\) \{\s*stroke-width: 1\.5;\s*transition: stroke-width var\(--motion-instant\) var\(--motion-ease-out\);/,
+      /\[data-menu-row\]:not\(\[data-menu-row='skip'\]\) svg\.lucide\[stroke-width='2'\]:not\(\[data-menu-icon-stroke\]\) \{\s*stroke-width: 1\.5;\s*transition: stroke-width var\(--motion-instant\) var\(--motion-ease-out\);/,
     );
     expect(globals).toMatch(
       /\[data-menu-row\]:is\(\s*\[data-menu-active\],\s*\[data-highlighted\],\s*\[data-state='checked'\],\s*\[data-state='open'\]\s*\)\s*svg\.lucide\[stroke-width='2'\]:not\(\[data-menu-icon-stroke\]\) \{\s*stroke-width: 2;/,

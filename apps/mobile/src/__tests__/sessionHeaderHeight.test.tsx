@@ -19,12 +19,13 @@ describe('task header geometry during native preload', () => {
   let root: Root;
   let height = 0;
   let key = '';
-  function Probe() { height = useSessionHeaderHeight(key); return null; }
+  let hold = false;
+  function Probe() { height = useSessionHeaderHeight(key, hold); return null; }
   async function render() { await act(async () => root.render(<Probe />)); }
   async function settle() { await act(async () => state.listener?.({ data: { closing: false } })); }
   beforeEach(() => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-    state.focused = true; state.height = 82; state.listener = undefined;
+    state.focused = true; state.height = 82; state.listener = undefined; hold = false;
     state.navigation.addListener.mockImplementation((_event, listener) => {
       state.listener = listener; return () => { state.listener = undefined; };
     });
@@ -47,6 +48,31 @@ describe('task header geometry during native preload', () => {
     await render(); expect(height).toBe(44);
     state.focused = true; await render(); await settle();
     state.height = 50; await render(); expect(height).toBe(50);
+  });
+  it('holds the content height while the system bar is hidden and never caches the hidden height', async () => {
+    await render(); await settle(); expect(height).toBe(82);
+    hold = true; state.height = 24; await render(); expect(height).toBe(82);
+    // The next preload of this geometry still starts from the visible-bar measurement.
+    await act(async () => root.render(null));
+    hold = false; state.focused = false; state.height = 120;
+    await render(); expect(height).toBe(82);
+    state.focused = true; state.height = 82; await render(); await settle(); expect(height).toBe(82);
+  });
+  it('keeps holding after release until the restored bar reports a new height', async () => {
+    await render(); await settle(); expect(height).toBe(82);
+    hold = true; state.height = 24; await render(); expect(height).toBe(82);
+    // The drawer is gone but the native bar has not been measured again yet.
+    hold = false; await render(); expect(height).toBe(82);
+    state.height = 82; await render(); expect(height).toBe(82);
+    state.height = 90; await render(); expect(height).toBe(90);
+  });
+  it('does not cache the hidden height left over after release', async () => {
+    await render(); await settle();
+    hold = true; state.height = 24; await render();
+    hold = false; await render(); expect(height).toBe(82);
+    await act(async () => root.render(null));
+    state.focused = false; state.height = 120;
+    await render(); expect(height).toBe(82);
   });
   it('does not record offscreen estimates or a closing transition as measured geometry', async () => {
     await render();

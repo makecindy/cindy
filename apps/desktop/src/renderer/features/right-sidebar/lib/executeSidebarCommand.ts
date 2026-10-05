@@ -1,4 +1,5 @@
 import { openRoutinesTab } from './openRoutinesTab';
+import { ensureBotWorkbenchTab } from './openBotWorkbenchTab';
 /** 执行 main 已裁决并推给当前 renderer host 的 RSB command。 */
 
 import type { RsbWindowCommand } from '../../../../shared/rightSidebarWindow';
@@ -21,6 +22,10 @@ import { openUrlInSidebarBrowser } from './openInSidebarBrowser';
 export async function executeSidebarCommand(command: RsbWindowCommand): Promise<void> {
   if (command.type === 'open-routines-tab') {
     await openRoutinesTab(command.sessionId, command.botId);
+    return;
+  }
+  if (command.type === 'open-bot-workbench-tab') {
+    await ensureBotWorkbenchTab(command.sessionId, command.botId);
     return;
   }
   if (command.type === 'open-web-browser') {

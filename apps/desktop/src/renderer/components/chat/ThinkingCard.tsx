@@ -1,3 +1,5 @@
+import { formatSessionDuration as formatDuration } from '@/lib/sessionDurationFormat';
+import { useTranslation } from 'react-i18next';
 /**
  * ThinkingCard
  * ---------------------------------------------------------------------------
@@ -65,16 +67,10 @@ interface ThinkingCardProps {
 }
 
 /**
- * Format ms as `Xs` for short durations, or `Xm Ys` for longer.
+ * Format ms with hours/days for long durations, always retaining minutes.
  * Exported for reuse by WorkGroupBlock (same display convention).
  */
-export function formatDuration(ms: number): string {
-  const totalSec = Math.max(1, Math.round(ms / 1000));
-  if (totalSec < 60) return `${totalSec}s`;
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return s === 0 ? `${m}m` : `${m}m ${s}s`;
-}
+export { formatDuration };
 
 /** Shared body wrapper — left-railed container mirroring AgentActionsBlock. */
 function BodyRail({ children }: { children: React.ReactNode }) {
@@ -100,6 +96,7 @@ export function ThinkingCard({
   aborted,
   blockKey,
 }: ThinkingCardProps) {
+  const { t } = useTranslation();
   // Live elapsed counter while streaming. Re-renders every 500ms.
   const [elapsedMs, setElapsedMs] = useState(0);
   useEffect(() => {
@@ -191,7 +188,7 @@ export function ThinkingCard({
             </div>
             <div className="flex-1" />
             <span className="font-mono text-12 text-[var(--msg-tool-card-chevron)]">
-              {formatDuration(elapsedMs)}
+              {formatDuration(elapsedMs, t)}
             </span>
             <ChevronRight
               size={14}
@@ -223,9 +220,9 @@ export function ThinkingCard({
 
   // ── Final / aborted variant ───────────────────────────────────────────
   // aborted 是 Codex 专属(turn_aborted 时 reasoning 提前结束),Claude 不传。
-  const summary = aborted
-    ? `Thought for ${formatDuration(durationMs ?? 0)} (aborted)`
-    : `Thought for ${formatDuration(durationMs ?? 0)}`;
+  const summary = t(aborted ? 'chat.thinking.aborted' : 'chat.thinking.completed', {
+    duration: formatDuration(durationMs ?? 0, t),
+  });
   return (
     <div data-render-item-key={renderItemKey} className="flex w-full justify-start">
       <div className="w-full">

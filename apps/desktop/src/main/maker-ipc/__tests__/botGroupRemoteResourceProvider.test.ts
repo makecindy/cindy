@@ -118,6 +118,28 @@ describe('bot group remote resources', () => {
 
   afterEach(() => h.sqlite?.close());
 
+  it('includes server groups with people and companions on another computer', async () => {
+    const group = summary({ serverBacked: true, members: [
+      { botId: 'person', actorId: 'person', actorKind: 'human', isOwned: false, name: 'Guest', avatar: '', avatarColor: 'red', status: 'active' },
+      { botId: 'remote-bot', actorId: 'remote-bot', actorKind: 'bot', isOwned: true, name: 'Remote', avatar: '', avatarColor: 'blue', status: 'active' },
+    ] });
+    service.listGroups.mockResolvedValue({ ok: true, groups: [group] });
+    const listed = await remoteResourceRegistry.list(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID });
+    expect(listed.items.map(item => item.ref.id)).toEqual(['g1']);
+  });
+
+  it('denies list, detail and actions for a server group containing a hidden paused local companion', async () => {
+    h.sqlite!.prepare("UPDATE bot_profiles SET status='paused' WHERE id='ghost'").run();
+    const group = detail({ serverBacked: true, members: [{ botId: 'ghost', actorId: 'cloud-ghost', actorKind: 'bot', isOwned: true,
+      name: 'Hidden', avatar: '', avatarColor: '', status: 'paused' }] });
+    service.listGroups.mockResolvedValue({ ok: true, groups: [group] });
+    service.getGroup.mockResolvedValue({ ok: true, group });
+    expect((await remoteResourceRegistry.list(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID })).items).toEqual([]);
+    await expect(remoteResourceRegistry.get(context, { client: client(), ref: ref('g1') })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      actionId: 'stop', resourceRef: ref('g1') })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(service.stopRound).not.toHaveBeenCalled();
+  });
   it('lists only groups whose members are all visible to phones, with member links', async () => {
     const hidden = summary({
       id: 'g2',

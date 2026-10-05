@@ -2,6 +2,7 @@
  * 导出编排集成测试:mock DB / bridge / 媒体 store,用 temp projectsRoot 放真实
  * jsonl,走完整 exportSessionShare → openPayload → JSZip 解包验证内容。
  */
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
@@ -405,6 +406,114 @@ describe('exportSessionShare', () => {
     expect(manifest.activeSdkSessionId).toBeNull();
     expect(Object.keys(zip.files).filter((name) => name.startsWith('transcripts/pi/'))).toEqual([]);
     expect(`${manifestText}\n${sessionText}\n${messagesText}`).not.toContain(missingPiSessionFile);
+  });
+
+  describe('external transcripts for a migration', () => {
+    const rollout = `${JSON.stringify({ type: 'session_meta', payload: { id: 'thread-1' } })}\n${'x'.repeat(4096)}\n`;
+    const exportExternal = (name: string, extra: Partial<Parameters<typeof exportSessionShare>[0]> = {}) => {
+      const dir = path.join(tmpRoot, `staged-${name}`);
+      return {
+        dir,
+        outcome: exportSessionShare({
+          sessionId: 'xdt-session-1',
+          targetPath: path.join(tmpRoot, `out-${name}.xdtshare`),
+          migration: true,
+          externalTranscripts: { dir, minBytes: 1024 },
+          ...extra,
+        }),
+      };
+    };
+
+    it('streams large transcripts beside the package and keeps small ones inside', async () => {
+      await fsp.writeFile(path.join(tmpRoot, 'rollout-1-thread-1.jsonl'), rollout);
+      sessionRowRef.row = { ...baseSession(), agentKind: 'codex', sdkSessionId: 'thread-1' };
+      // The limit admits the messages but not the rollout: only in-memory bytes count.
+      const { dir, outcome: pending } = exportExternal('codex-external', { sizeLimitBytes: 4096 });
+      const outcome = await pending;
+      expect(outcome.status).toBe('ok');
+      if (outcome.status !== 'ok') return;
+      expect(outcome.fidelity).toBe('full');
+      const zipPath = 'transcripts/codex/rollout-1-thread-1.jsonl';
+      expect(outcome.externalTranscripts).toEqual([
+        {
+          path: zipPath,
+          file: expect.stringMatching(/^transcript-0-[a-f0-9]{8}\.jsonl$/),
+          bytes: Buffer.byteLength(rollout),
+          sha256: createHash('sha256').update(rollout).digest('hex'),
+        },
+      ]);
+      const staged = await fsp.readFile(path.join(dir, outcome.externalTranscripts![0].file), 'utf8');
+      expect(staged).toBe(rollout);
+      const zip = await unzipOf(path.join(tmpRoot, 'out-codex-external.xdtshare'));
+      expect(zip.file(zipPath)).toBeNull();
+      const manifest = validateManifest(JSON.parse(await zip.file('manifest.json')!.async('string')));
+      expect(manifest.transcripts).toEqual([{ sdkSessionId: 'thread-1', path: zipPath }]);
+      expect(manifest.entries.some((entry) => entry.path === zipPath)).toBe(false);
+      expect(outcome.unpackedBytes).toBeLessThan(4096);
+
+      // Claude transcripts under the threshold stay in the zip as before.
+      sessionRowRef.row = baseSession();
+      const small = exportExternal('cc-small');
+      const smallOutcome = await small.outcome;
+      expect(smallOutcome.status === 'ok' && smallOutcome.externalTranscripts).toEqual([]);
+      const smallZip = await unzipOf(path.join(tmpRoot, 'out-cc-small.xdtshare'));
+      expect(smallZip.file('transcripts/claude/sid-a.jsonl')).toBeTruthy();
+    });
+
+    it('derives the Pi portable id from the streamed bytes', async () => {
+      const piSessionFile = path.join(tmpRoot, 'pi-agent-home', 'sessions', 'large.jsonl');
+      const content = `${'{"type":"message"}\n'.repeat(200)}`;
+      await fsp.mkdir(path.dirname(piSessionFile), { recursive: true });
+      await fsp.writeFile(piSessionFile, content);
+      sessionRowRef.row = { ...baseSession(), agentKind: 'pi', sdkSessionId: piSessionFile };
+      messagesRef.rows = baseMessages().map((message) => ({ ...message, agentKind: 'pi' }));
+      const { outcome: pending } = exportExternal('pi-external');
+      const outcome = await pending;
+      expect(outcome.status).toBe('ok');
+      if (outcome.status !== 'ok') return;
+      const portableId = `pi-${createHash('sha256').update(content).digest('hex').slice(0, 32)}.jsonl`;
+      expect(outcome.externalTranscripts?.map((t) => t.path)).toEqual([`transcripts/pi/${portableId}`]);
+      const zip = await unzipOf(path.join(tmpRoot, 'out-pi-external.xdtshare'));
+      const manifest = validateManifest(JSON.parse(await zip.file('manifest.json')!.async('string')));
+      expect(manifest.activeSdkSessionId).toBe(portableId);
+    });
+
+    it('ignores the option outside a migration and reports where an oversize package went', async () => {
+      await fsp.writeFile(path.join(tmpRoot, 'rollout-1-thread-1.jsonl'), rollout);
+      sessionRowRef.row = { ...baseSession(), agentKind: 'codex', sdkSessionId: 'thread-1' };
+      const { dir, outcome } = exportExternal('not-migration', { migration: false, sizeLimitBytes: 4096 });
+      expect(await outcome).toMatchObject({
+        status: 'oversize',
+        limitBytes: 4096,
+        transcriptBytes: Buffer.byteLength(rollout),
+        externalTranscriptBytes: 0,
+      });
+      await expect(fsp.stat(dir)).rejects.toThrow();
+    });
+
+    // Permission bits do not restrict Windows or root.
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'fails instead of reporting missing context when the copy cannot be written',
+      async () => {
+        await fsp.writeFile(path.join(tmpRoot, 'rollout-1-thread-1.jsonl'), rollout);
+        sessionRowRef.row = { ...baseSession(), agentKind: 'codex', sdkSessionId: 'thread-1' };
+        const dir = path.join(tmpRoot, 'staged-readonly');
+        await fsp.mkdir(dir, { recursive: true });
+        await fsp.chmod(dir, 0o500);
+        try {
+          await expect(
+            exportSessionShare({
+              sessionId: 'xdt-session-1',
+              targetPath: path.join(tmpRoot, 'out-readonly.xdtshare'),
+              migration: true,
+              externalTranscripts: { dir, minBytes: 1024 },
+            }),
+          ).rejects.toThrow();
+        } finally {
+          await fsp.chmod(dir, 0o700);
+        }
+      },
+    );
   });
 
   it('oversize returns structured outcome without writing file', async () => {

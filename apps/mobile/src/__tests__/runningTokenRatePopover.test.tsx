@@ -185,6 +185,8 @@ const bindings = {
   View: ({ children }: any) => createElement("div", {}, children),
   Text: ({ children }: any) => createElement("span", {}, children),
   BlurBackdrop: () => null,
+  FLOATING_CHROME_BLUR_INTENSITY: 55,
+  Platform: { OS: "ios" },
   Sparkles: () => null,
   ArrowDown: () => null,
   iconSize: {},

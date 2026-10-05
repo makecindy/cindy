@@ -18,19 +18,36 @@ vi.mock('expo-router/react-navigation', () => ({ useIsFocused: () => state.focus
   NavigationContext: createContext(null), NavigationRouteContext: createContext(null) }));
 vi.mock('@/platform/AdaptiveWindowContext', () => ({
   usePaneViewport: () => ({ width: state.width, height: state.height }),
+  useAdaptiveWindow: () => ({ width: state.width, height: state.height }),
   PaneViewportProvider: ({ children }: { children: ReactNode }) => children,
+}));
+vi.mock('@/session/useHomeMode', () => ({ useHomeMode: () => ({ mode: 'tasks' }) }));
+vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
+vi.mock('@/session/sessionPaneLayout', () => ({ sessionPaneLayout: () => ({ persistent: true }) }));
+vi.mock('@/session/remoteSessionStore', () => ({
+  RemoteSessionStoreSubscriptionGate: ({ children }: { children: ReactNode }) => children,
+}));
+vi.mock('react-native-reanimated', () => ({
+  default: {
+    View: ({ children, pointerEvents, style }: { children: ReactNode; pointerEvents?: string; style?: unknown }) =>
+      <div data-resident-host="true" data-input={pointerEvents} data-layout={JSON.stringify(style)}>{children}</div>,
+  },
 }));
 vi.mock('react-native', () => ({
   StyleSheet: { create: (styles: unknown) => styles },
   View: ({ children, pointerEvents, accessibilityElementsHidden, ref, style, onLayout }: {
     children: ReactNode; pointerEvents?: string; accessibilityElementsHidden?: boolean; ref: Ref<unknown>; style?: unknown; onLayout?: () => void;
   }) => {
-    useImperativeHandle(ref, () => ({ measureInWindow: (fn: (...args: number[]) => void) => fn(0, 0, state.width, state.height) }));
+    useImperativeHandle(ref, () => ({
+      measureInWindow: (fn: (...args: number[]) => void) => fn(0, 0, state.width, state.height),
+      measureLayout: (_host: unknown, fn: (...args: number[]) => void) => fn(0, 0, state.width, state.height),
+    }));
     useEffect(() => { onLayout?.(); }, [onLayout]);
     return <div data-input={pointerEvents} aria-hidden={accessibilityElementsHidden} data-layout={JSON.stringify(style)}>{children}</div>;
   },
 }));
 import { RecentMessageHistories, RecentMessageHistoriesProvider, MessageHistoryOverlay, useMessageHistoryActive, useMessageHistoryPositioning } from '@/session/RecentMessageHistories';
+import { ResidentHomeList, ResidentHomeListProvider, useResidentHomeList } from '@/session/ResidentHomeList';
 import { recentTaskKey, rememberRecentTask } from '@/session/recentTasks';
 const key = (id: string) => recentTaskKey({ deviceId: 'pc', sessionId: id });
 const remember = (id: string) => rememberRecentTask({ pathname: '/sessions/[sessionId]', params: { deviceId: 'pc', deviceName: 'PC', sessionId: id } });
@@ -49,6 +66,14 @@ describe('resident five-task message lists outside route lifetimes', () => {
       return () => { unmounts.push(id); };
     }, [id]);
     return <button data-task={id} data-active={active} data-positioning={positioning} onClick={() => setPosition(420)}>{text}:{position}</button>;
+  }
+  function DrawerHomeProbe() {
+    const resident = useResidentHomeList();
+    return <div data-drawer="true" data-resident-enabled={resident.enabled}>
+      {resident.enabled ? <ResidentHomeList focused top={0} left={0} right={0}>
+        <button data-drawer-task-list="true">Drawer tasks</button>
+      </ResidentHomeList> : <button data-inline-task-list="true">Inline tasks</button>}
+    </div>;
   }
   async function show(id: string | null, text = id ?? '', ready = true) {
     state.onTask = id !== null;
@@ -162,9 +187,34 @@ describe('resident five-task message lists outside route lifetimes', () => {
     const nodes = container.querySelectorAll('button');
     expect(nodes[0]?.dataset.task).toBe('a');
     expect(nodes[1]?.dataset.drawer).toBe('true');
+    expect(nodes[1]?.closest('[data-layout]')?.getAttribute('data-layout')).toContain('"zIndex":40');
     await show(null);
     expect(container.querySelector('[data-drawer]')).toBeNull();
     expect(container.querySelector('[data-task="a"]')).not.toBeNull();
+  });
+  it('hosts route drawers after the outer resident task list on persistent layouts', async () => {
+    remember('a');
+    await act(async () => root.render(
+      <RecentMessageHistoriesProvider>
+        <ResidentHomeListProvider>
+          <ResidentHomeList focused top={0} left={0} right={0}>
+            <button data-resident-task-list="true">Tasks</button>
+          </ResidentHomeList>
+          <RecentMessageHistories activeKey={key('a')}>
+            <History id="a" text="Messages" />
+          </RecentMessageHistories>
+          <MessageHistoryOverlay><DrawerHomeProbe /></MessageHistoryOverlay>
+        </ResidentHomeListProvider>
+      </RecentMessageHistoriesProvider>,
+    ));
+    const residentHost = container.querySelector('[data-resident-host="true"]')!;
+    const drawer = container.querySelector('[data-drawer="true"]')!;
+    expect(drawer.getAttribute('data-resident-enabled')).toBe('true');
+    expect(container.querySelector('[data-inline-task-list="true"]')).toBeNull();
+    expect(residentHost.querySelector('[data-drawer-task-list="true"]')).not.toBeNull();
+    expect(residentHost.contains(drawer)).toBe(false);
+    expect(residentHost.compareDocumentPosition(drawer) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(drawer.closest('[data-layout]')?.getAttribute('data-layout')).toContain('"zIndex":40');
   });
   it('does not keep the old route preloading mechanism alongside the resident host', () => {
     const home = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
@@ -173,10 +223,17 @@ describe('resident five-task message lists outside route lifetimes', () => {
     const layout = readFileSync(resolve(process.cwd(), 'app/_layout.tsx'), 'utf8');
     // Source structure is independent of checkout line endings.
     for (const source of [layout.replace(/\r\n/g, '\n'), layout.replace(/\r?\n/g, '\r\n')]) {
-      const provider = source.indexOf('<RecentMessageHistoriesProvider>');
+      const provider = source.search(/<RecentMessageHistoriesProvider(?:\s|>)/);
+      const residentProvider = source.indexOf('<ResidentHomeListProvider>');
       const stack = source.search(/<Stack\s/);
       expect(provider).toBeGreaterThanOrEqual(0);
+      expect(residentProvider).toBeGreaterThan(provider);
       expect(stack).toBeGreaterThan(provider);
+      expect(stack).toBeGreaterThan(residentProvider);
+      expect(source.indexOf('</ResidentHomeListProvider>')).toBeGreaterThan(stack);
+      expect(source.indexOf('</RecentMessageHistoriesProvider>')).toBeGreaterThan(
+        source.indexOf('</ResidentHomeListProvider>'),
+      );
     }
   });
   it('clears all instances at an account boundary', async () => {

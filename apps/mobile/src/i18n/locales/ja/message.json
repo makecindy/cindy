@@ -10,8 +10,6 @@
   },
   "renderer": {
     "moreActions": "その他のメッセージ操作",
-    "previousQuestionJump": "前の質問へ移動：{{preview}}",
-    "noPreview": "プレビューなし",
     "newMessagesToBottom": "新着メッセージあり、最下部へ移動",
     "jumpToBottom": "最下部へ移動",
     "openForkOrigin": "分岐元メッセージを開く",
@@ -70,6 +68,8 @@
     "durationSeconds": "{{seconds}}秒",
     "durationMinutes": "{{minutes}}分",
     "durationMinutesSeconds": "{{minutes}}分{{seconds}}秒",
+    "durationHoursMinutes": "{{hours}}時間{{minutes}}分",
+    "durationDaysHoursMinutes": "{{days}}日{{hours}}時間{{minutes}}分",
     "subagentSummary": "サブエージェントの要約",
     "agentSwitchLabel": "{{from}} から {{to}} に切り替えました",
     "agentSwitchViewHandoff": "{{label}}、引き継ぎ内容を表示",
@@ -148,6 +148,8 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "sourceMissing": "このコンピューターに元の画像がありません。元のファイルを再度インポートしてください。",
+    "deviceOffline": "コンピューターが未接続です。再接続してからお試しください。",
     "cancelAnnotation": "注釈をキャンセル",
     "cancel": "キャンセル",
     "undoLastStroke": "直前の描画を取り消す",

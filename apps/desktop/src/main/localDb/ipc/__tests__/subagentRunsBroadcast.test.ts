@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => {
@@ -46,7 +47,7 @@ vi.mock('@cindy/maker-core/pi-subagent-runs', () => ({
   isPiSubagentTerminal: (state: string) => ['completed', 'failed', 'stopped'].includes(state),
   listPiSubagentRunDiagnostics: h.listPiSubagentRunDiagnostics,
   listPiSubagentRuns: h.listPiSubagentRuns,
-  piSubagentRunRoot: (agentHome: string, sessionId: string) => `${agentHome}/runtime/pi-subagent-runs/${sessionId}`,
+  piSubagentRunRoot: (agentHome: string, sessionId: string) => path.join(agentHome, 'runtime', 'pi-subagent-runs', sessionId),
   readPiSubagentTranscriptPage: h.readPiSubagentTranscriptPage,
 }));
 vi.mock('../../../appSessionState.js', () => ({
@@ -918,7 +919,7 @@ describe('Subagent runs broadcast boundary', () => {
       limit: 25,
     })).resolves.toEqual({ supported: true, entries: [] });
     expect(h.readPiSubagentTranscriptPage).toHaveBeenCalledWith(
-      '/user-data/pi-agent-home/runtime/pi-subagent-runs/session-1',
+      path.join('/user-data', 'pi-agent-home', 'runtime', 'pi-subagent-runs', 'session-1'),
       [
         '123e4567-e89b-42d3-a456-426614174000',
         '123e4567-e89b-42d3-a456-426614174001',

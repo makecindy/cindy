@@ -5,8 +5,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const electronMock = vi.hoisted(() => ({ userData: '' }));
+const electronMock = vi.hoisted(() => ({ userData: '', region: 'global' as 'global' | 'cn' }));
 const dbMock = vi.hoisted(() => ({ current: null as Database.Database | null }));
+
+vi.mock('../../shared/brandRegion.js', () => ({
+  get CURRENT_CINDY_REGION() { return electronMock.region; },
+}));
 
 vi.mock('electron', () => ({
   app: {
@@ -77,6 +81,9 @@ function createLocalDb(): Database.Database {
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
       fast_mode INTEGER NOT NULL DEFAULT 0,
+      list_preview TEXT,
+      list_preview_role TEXT,
+      list_message_count INTEGER,
       cleared_at INTEGER,
       pinned_at INTEGER,
       user_send_at INTEGER,
@@ -255,6 +262,7 @@ function rolloutLineWithImage(id: string, text: string, timestamp: string): stri
 }
 
 beforeEach(() => {
+  electronMock.region = 'global';
   originalCodexHome = process.env.CODEX_HOME;
   rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-local-sessions-'));
   externalHome = path.join(rootDir, 'external-codex-home');
@@ -1583,6 +1591,7 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
   }
 
   it('adopts a legacy branded Codex HOME and remains resumable after the old directory is removed', async () => {
+    electronMock.region = 'cn';
     const legacyUserData = path.join(path.dirname(targetUserData), 'xdt-maker');
     const legacyHome = path.join(legacyUserData, 'codex-home');
     const sourceRollout = path.join(
@@ -1628,7 +1637,28 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
     expect(fs.readFileSync(adopted.rolloutPath, 'utf-8')).toBe(sourceContents);
   });
 
+  it('does not implicitly adopt China-edition legacy state in the Global edition', async () => {
+    const legacyHome = path.join(path.dirname(targetUserData), 'xdt-maker', 'codex-home');
+    const sourceRollout = path.join(legacyHome, 'sessions', 'legacy.jsonl');
+    fs.mkdirSync(path.dirname(sourceRollout), { recursive: true });
+    fs.writeFileSync(sourceRollout, 'LEGACY_ROLLOUT');
+    insertThread(createStateDb(legacyHome), threadId, sourceRollout, { updatedAt: 2_000 });
+    const targetDbPath = createStateDb(desktopHome());
+    process.env.CODEX_HOME = path.join(rootDir, 'missing-external-home');
+
+    await prepareExternalCodexSessionForResume(threadId);
+
+    const targetDb = new Database(targetDbPath, { readonly: true });
+    try {
+      expect(targetDb.prepare('SELECT id FROM threads WHERE id = ?').get(threadId)).toBeUndefined();
+    } finally {
+      targetDb.close();
+    }
+    expect(fs.readFileSync(sourceRollout, 'utf8')).toBe('LEGACY_ROLLOUT');
+  });
+
   it('repairs a pre-existing external rollout pointer without overwriting current thread metadata', async () => {
+    electronMock.region = 'cn';
     const legacyHome = path.join(path.dirname(targetUserData), 'xdt-maker', 'codex-home');
     const sourceRollout = path.join(legacyHome, 'sessions', `rollout-2026-07-14-${threadId}.jsonl`);
     const sourceDbPath = createStateDb(legacyHome);
@@ -2043,6 +2073,7 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
   });
 
   it('prioritizes the legacy rollout already referenced by target state over a newer linked external copy', async () => {
+    electronMock.region = 'cn';
     const legacyHome = path.join(path.dirname(targetUserData), 'xdt-maker', 'codex-home');
     const legacyRollout = path.join(legacyHome, 'sessions', `rollout-2026-07-14-${threadId}.jsonl`);
     fs.mkdirSync(path.dirname(legacyRollout), { recursive: true });
@@ -2145,6 +2176,7 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
   });
 
   it('synthesizes into the current HOME when legacy state survives but its rollout is missing', async () => {
+    electronMock.region = 'cn';
     const legacyHome = path.join(path.dirname(targetUserData), 'xdt-maker', 'codex-home');
     const missingSourceRollout = path.join(
       legacyHome,

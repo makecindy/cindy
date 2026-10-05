@@ -268,20 +268,14 @@ function DeleteScheduleWithSessionsDialog({
       <AlertDialog.Portal>
         <AlertDialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10000]',
-            'bg-neutral-900/40 dark:bg-neutral-950/60',
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10000]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <AlertDialog.Content
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'w-full max-w-[460px] rounded-xl p-4',
-            'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
-            'data-[state=open]:animate-confirm-content-in',
-            'data-[state=closed]:animate-confirm-content-out',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'w-full max-w-[460px] p-4',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           onEscapeKeyDown={(event) => {

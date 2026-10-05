@@ -71,11 +71,13 @@ vi.mock('@/platform/gestureHandler', async () => {
 vi.mock('react-native-screens', () => ({ FullWindowOverlay: ({ children }: { children: ReactNode }) => children }));
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ left: 0, top: 0, bottom: 0 }) }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
-  ['Building2', 'LogOut', 'Monitor', 'Search', 'Settings', 'UsersRound'].map(name => [name, () => null]),
+  ['Building2', 'LogOut', 'Monitor', 'Puzzle', 'Search', 'Settings', 'UsersRound'].map(name => [name, () => null]),
 ));
 vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).View }));
 vi.mock('@/theme', () => ({ useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }) }));
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => driver.reduceMotion }));
+// The drawer tests navigation/animation; plugin polling belongs to its own boundary.
+vi.mock('@/plugins/PluginMenuUnreadDot', () => ({ PluginMenuUnreadDot: () => null }));
 vi.mock('@/session/HomeModeSwitch', () => ({ HomeModeSwitch: () => null }));
 
 describe('home navigation drawer', () => {

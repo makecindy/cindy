@@ -24,7 +24,6 @@ import { describe, expect, it } from 'vitest';
 const MUTATING_GHOST_CHANNELS = [
   'ghosts:install',
   'ghosts:update',
-  'ghosts:set-enabled',
   'ghosts:restore-builtin',
 ] as const;
 
@@ -52,6 +51,22 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
       );
     });
   }
+
+  it('ghosts:set-enabled 同步委托共用入口，入口先持 owner 租约再异步修改', () => {
+    const block = handlerBlock(source, 'ghosts:set-enabled');
+    expect(block).toContain('assertTrustedAppRendererEvent(event)');
+    expect(block).toContain('return setGhostEnabledForUser(id, enabled)');
+    expect(block).not.toMatch(/\bawait\b/);
+    const start = source.indexOf('async function setGhostEnabledForUser(');
+    expect(start).toBeGreaterThan(-1);
+    // 注释会描述 await 窗口，只比较真正语句中的租约和异步边界。
+    const fn = source.slice(start, source.indexOf('\n}', start)).replace(/\/\/[^\n]*/g, '');
+    const lease = fn.indexOf('beginGhostMutation(captureGhostMutationOwner())');
+    expect(lease).toBeGreaterThan(-1);
+    expect(lease).toBeLessThan(fn.indexOf('await '));
+    expect(fn).toContain('await manager.setEnabled(id, enabled)');
+    expect(fn).toMatch(/finally\s*\{\s*releaseMutation\(\)/);
+  });
 
   it('ghosts:uninstall 经 uninstallGhostAndCleanup 持租约(入口同步取,无异步窗口故无需 capture)', () => {
     const block = handlerBlock(source, 'ghosts:uninstall');

@@ -19,7 +19,7 @@ import { Button } from '@/components/ui/button';
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { RotateCw, AlertTriangle } from 'lucide-react';
+import { RotateCw, AlertTriangle, ServerOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Spinner } from '@/components/ui/spinner';
@@ -46,6 +46,32 @@ interface RuntimeError {
 }
 
 export function TerminalTabBody({ state, ctx, active, shellVisible = true }: Props) {
+  // The PTY IPC always executes on this Desktop instance. Remote workdirs must
+  // fail closed, including while device-link ownership is still unresolved.
+  const isLocalSession = ctx.remoteHostId === null && ctx.deviceLinkDeviceId === null;
+  if (!isLocalSession) return <RemoteTerminalUnavailable />;
+
+  return <LocalTerminalTabBody state={state} ctx={ctx} active={active} shellVisible={shellVisible} />;
+}
+
+function RemoteTerminalUnavailable() {
+  const { t } = useTranslation();
+  return (
+    <div className="flex h-full min-w-0 select-none items-center justify-center gap-2.5 bg-[var(--panel-bg)] p-6 text-left text-[var(--text-tertiary)]">
+      <ServerOff aria-hidden size={18} strokeWidth={1.6} />
+      <div className="max-w-[300px]">
+        <div className="text-13 font-medium leading-[1.384615] text-[var(--text-primary)]">
+          {t('rightSidebar.terminal.remoteUnavailableTitle')}
+        </div>
+        <div className="mt-[3px] text-12 leading-[1.5] text-[var(--text-secondary)]">
+          {t('rightSidebar.terminal.remoteUnavailableDescription')}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props) {
   const { tabId, workdir, patchState } = ctx;
   const { t } = useTranslation();
 

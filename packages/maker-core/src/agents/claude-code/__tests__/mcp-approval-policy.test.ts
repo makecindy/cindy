@@ -27,6 +27,7 @@ import type {
   TurnPermissionPolicy,
 } from '../../base-agent.js';
 import type { PermissionMode } from '../../../types/common.js';
+import type { AutoReviewRequest } from '../../shared/auto-review-decision.js';
 import type { CapabilityRoutingPolicy } from '../../../types/capability-routing.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { InteractionDecision, InteractionRequest } from '../../../types/events.js';
@@ -206,6 +207,7 @@ async function startSession(
     }>;
     turnChangeCapture?: AgentDeps['turnChangeCapture'];
     getMcpToolApprovalPresentation?: AgentDeps['getMcpToolApprovalPresentation'];
+    reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
     resolveClaudeSubagentModelAccess?: AgentDeps['resolveClaudeSubagentModelAccess'];
     resolveVerifiedContextWindow?: AgentDeps['resolveVerifiedContextWindow'];
     availableModels?: NonNullable<AgentDeps['capabilityAdditions']>['availableModels'];
@@ -227,6 +229,7 @@ async function startSession(
   deps.capabilityRouting = options?.capabilityRouting;
   deps.turnChangeCapture = options?.turnChangeCapture;
   deps.getMcpToolApprovalPresentation = options?.getMcpToolApprovalPresentation;
+  deps.reviewAutoPermissionAction = options?.reviewAutoPermissionAction;
   deps.resolveClaudeSubagentModelAccess = options?.resolveClaudeSubagentModelAccess;
   deps.resolveVerifiedContextWindow = options?.resolveVerifiedContextWindow;
   deps.capabilityAdditions = options?.availableModels
@@ -1326,6 +1329,25 @@ describe('remote sessions share the same permission semantics', () => {
     await handle.close();
   });
 
+  it('retains remote plan rejection restrictions through approval', async () => {
+    const review = vi.fn<NonNullable<AgentDeps['reviewAutoPermissionAction']>>(async () => ({ verdict: 'allow' }));
+    let response = 0;
+    const { handle, onApprovalRequest } = await startRemoteSession(() => 'prompt', {
+      permissionMode: 'auto', reviewAutoPermissionAction: review,
+      attachResolver: () => response++ === 0
+        ? { kind: 'plan_review', behavior: 'deny', reason: 'Do not publish.' }
+        : { kind: 'plan_review', behavior: 'allow' },
+    });
+    await handle.send({ type: 'user', content: 'Fix parser.' });
+    await onApprovalRequest({ requestId: 'reject', kind: 'plan_review', plan: 'draft' });
+    await onApprovalRequest({ requestId: 'approve', kind: 'plan_review', plan: 'Run tests.' });
+    await onApprovalRequest({ requestId: 'tool', kind: 'permission', toolName: 'Bash', input: { command: 'npm test' } });
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ userIntent: {
+      earlierUserMessages: ['Fix parser.', 'Do not publish.'], currentUserMessage: 'Approved plan:\nRun tests.',
+    } }));
+    await handle.close();
+  });
+
   /** 起一个远端会话并拿到 daemon 侧的 approval 回调。 */
   async function startRemoteSession(
     policy: (context: McpToolApprovalContext) => McpToolApprovalPolicy,
@@ -1413,6 +1435,58 @@ describe('remote sessions share the same permission semantics', () => {
       workingDir,
     };
   }
+
+  describe.each(['local', 'remote'] as const)('delegated trusted MCP %s', (transport) => {
+    it.each((['auto', 'acceptEdits', 'ask'] as const).flatMap(permissionMode =>
+      (['ordinary', 'allow', 'block', 'ask', 'revoked', 'unavailable', 'late-revoke', 'late-scope', 'confirmed'] as const)
+        .map(scenario => ({ permissionMode, scenario }))))(
+      'keeps live authorization before the Host shortcut: $permissionMode/$scenario', async ({ permissionMode, scenario }) => {
+        let active = scenario !== 'revoked' && scenario !== 'confirmed';
+        let revision = 'scope-1';
+        let preparations = 0;
+        const review = Object.assign(vi.fn(async (_request: AutoReviewRequest) => {
+          if (scenario === 'late-revoke') active = false;
+          if (scenario === 'late-scope') revision = 'scope-2';
+          return { verdict: scenario === 'block' ? 'block' as const : scenario === 'ask' ? 'ask' as const : 'allow' as const };
+        }), {
+          prepareRequest: vi.fn(async (request: AutoReviewRequest): Promise<AutoReviewRequest> => {
+            if (++preparations === 2 && permissionMode !== 'auto') {
+              if (scenario === 'late-revoke') active = false;
+              if (scenario === 'late-scope') revision = 'scope-2';
+            }
+            if (scenario === 'unavailable') throw new Error('storage unavailable');
+            if (scenario === 'ordinary') return request;
+            // Prove a previously ordinary shortcut cannot cross a late Host change.
+            if (permissionMode !== 'auto' && preparations === 1 && scenario.startsWith('late-')) return request;
+            return active ? { ...request, delegatedTask: { source: 'approved-plugin', pluginId: 'eval', role: 'worker',
+              task: 'Run the approved evaluation only', workingDir: request.workspaceRoots[0], authorizationRevision: revision } }
+              : { ...request, authorizationError: 'Plugin authorization revoked' };
+          }),
+        });
+        const deny = (): InteractionDecision => ({ kind: 'permission', behavior: scenario === 'confirmed' ? 'allow' : 'deny' });
+        const session = transport === 'local'
+        ? await startSession(() => 'auto-approve', { permissionMode, mcpServerNames: ['cindy_scheduler'], reviewAutoPermissionAction: review, decide: deny })
+        : await startRemoteSession(() => 'auto-approve', { permissionMode, mcpServerNames: ['cindy_scheduler'], reviewAutoPermissionAction: review, attachResolver: deny });
+        try {
+          await session.handle.send({ type: 'user', content: 'Run this evaluation; do not create schedules.' });
+          const toolName = 'mcp__cindy_scheduler__call_tool';
+          const input = { name: 'schedule_create', args: { prompt: 'outside task scope' } };
+          const result = 'canUseTool' in session
+            ? await session.canUseTool(toolName, input, { toolUseID: 'delegated-mcp' })
+            : await session.onApprovalRequest({ requestId: 'delegated-mcp', kind: 'permission', toolName, input });
+          expect(result.behavior).toBe(scenario === 'ordinary' || (permissionMode === 'auto' ? scenario === 'allow' : scenario === 'confirmed') ? 'allow' : 'deny');
+          expect(review.prepareRequest).toHaveBeenCalled();
+          expect(review).toHaveBeenCalledTimes(permissionMode !== 'auto' || ['ordinary', 'revoked', 'unavailable', 'confirmed'].includes(scenario) ? 0 : 1);
+          expect(session.seen).toHaveLength((permissionMode === 'auto' ? ['ask', 'unavailable'].includes(scenario) : scenario !== 'ordinary') ? 1 : 0);
+          if (review.mock.calls.length) {
+            const request = review.mock.calls[0][0];
+            expect(request.delegatedTask?.pluginId).toBe('eval');
+            expect(JSON.parse((request.action as { description: string }).description)).toMatchObject({ toolName, input });
+          }
+        } finally { await session.handle.close(); }
+      },
+    );
+  });
 
   it.each(['http', 'sse'] as const)('forwards a selected custom %s MCP to a remote Bot without the host bridge', async (transport) => {
     process.env.CLAUDE_CONFIG_DIR = await makeTempDir();

@@ -1993,7 +1993,7 @@ export function ProviderConnectionDialog({
   return (
     <div
       data-custom-provider-dialog-scrim="true"
-      className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
+      className="modal-scrim fixed inset-0 z-[10000] flex items-center justify-center"
       onKeyDown={(event) => {
         if (childLayer || runtimeFill || imageGenerationReloadConfirmation) return;
         if (event.key !== 'Tab') return;
@@ -2046,9 +2046,7 @@ export function ProviderConnectionDialog({
           }
         }}
         className={cn(
-          'flex max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col rounded-xl outline-none',
-          'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-          'shadow-[var(--shadow-menu)]',
+          'modal-panel flex max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col outline-none',
           '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-[var(--focus-ring)]',
         )}
       >
@@ -2823,7 +2821,7 @@ export function ProviderConnectionDialog({
           }}
         >
           <Dialog.Portal>
-            <Dialog.Overlay className="fixed inset-0 z-[10002] bg-[var(--overlay-modal)] data-[state=open]:animate-confirm-overlay-in data-[state=closed]:animate-confirm-overlay-out" />
+            <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10002]" />
             <Dialog.Content
               aria-describedby="custom-provider-image-generation-reload-description"
               onPointerDownOutside={(event) => event.preventDefault()}
@@ -2839,9 +2837,7 @@ export function ProviderConnectionDialog({
                 if (saving) event.preventDefault();
               }}
               className={cn(
-                'fixed inset-0 z-[10002] m-auto flex h-fit max-h-[85vh] w-[520px] max-w-[calc(100vw-2rem)] flex-col rounded-xl p-4 outline-none',
-                'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
-                'data-[state=open]:animate-confirm-content-layout-in data-[state=closed]:animate-confirm-content-layout-out',
+                'modal-panel fixed inset-0 z-[10002] m-auto flex h-fit max-h-[85vh] w-[520px] max-w-[calc(100vw-2rem)] flex-col p-4 outline-none',
               )}
             >
               <button
@@ -2944,8 +2940,7 @@ export function ModelPickerOverlay({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10001] bg-[var(--overlay-modal)]',
-            'data-[state=open]:animate-confirm-overlay-in data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10001]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
@@ -2969,11 +2964,8 @@ export function ModelPickerOverlay({
             returnFocusRef.current?.focus();
           }}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
-            'flex max-h-[72vh] w-[460px] max-w-[calc(100vw-2rem)] flex-col rounded-xl outline-none',
-            'border border-[var(--border-default)] bg-[var(--confirm-bg)]',
-            'shadow-[var(--confirm-shadow)]',
-            'data-[state=open]:animate-confirm-content-in data-[state=closed]:animate-confirm-content-out',
+            'modal-panel fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
+            'flex max-h-[72vh] w-[460px] max-w-[calc(100vw-2rem)] flex-col outline-none',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >

@@ -209,6 +209,7 @@ export interface SearchChatHistoryResult {
 // ── Deps interface ─────────────────────────────────────────────────────────
 
 export interface XdtHelperHistoryDeps {
+  remote?: import('./_history_devices.js').HistoryRemoteDeps;
   /** Resolve the maximum history scope for the current runtime Session. */
   resolveSessionScope?: (args: {
     callerSessionId?: string;

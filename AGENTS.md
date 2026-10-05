@@ -54,6 +54,9 @@
   前，必须先读 `docs/product-rules/core-product-principles.md`。
 - 修改共享任务、跨账号访客邀请、共享上下文或共享成员权限前，必须先读
   `docs/product-rules/shared-task-mode.md`；复用 device-link，同账号远控行为不变。
+- 修改 IM 工具授权、来源消息、多端确认或暂停期间的确认回执，或新增 IM 渠道前，
+  必须先读 `docs/product-rules/im-permission-confirmation.md`；Desktop、Mobile 与共享
+  packages 共用同一最终决定，渠道收到回答不代表执行已恢复。
 - 修改伙伴（Bot）的身份、Session 生命周期、模型 fallback、工作目录、Skill / MCP 装配、
   委派协作或伙伴设置前，必须先读 `docs/product-rules/cindy-bots-runtime.md`。
 - 新增或修改伙伴群聊的数据、发言编排、群专线 Session、分工（负责人、安排、分工 Session、群工作目录）、

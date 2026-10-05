@@ -117,14 +117,15 @@ export async function rewritePiSkillMessageForSend(params: {
   workingDir?: string | null;
   sessionId?: string;
 }): Promise<string> {
-  if (params.agentKind !== 'pi') return params.message;
+  if (params.agentKind !== 'pi' && params.agentKind !== 'claude-code') return params.message;
   const leading = leadingSlashInvocation(params.message);
   if (!leading) return params.message;
   const commands = await loadAllCommands(params.agentKind, params.workingDir, {
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
   });
   const hit = commands.find((command) => command.name.toLowerCase() === leading.name.toLowerCase());
-  return rewritePiSkillAliasFromCommand(params.message, hit);
+  return params.agentKind === 'pi' ? rewritePiSkillAliasFromCommand(params.message, hit)
+    : rewriteAgentSkillInvocationForDispatch(params.message, hit);
 }
 
 /**

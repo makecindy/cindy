@@ -36,9 +36,12 @@ export function mobileQuotaSource(p: ProviderView): QuotaSource | null {
   if (p.source !== "builtin") return null;
   return p.id === "anthropic" ? "claude" : p.id === "xai" ? "xai" : null;
 }
+const WEEKLY_WINDOW_MINUTES = 7 * 24 * 60;
 export interface MobileWeeklyQuota {
   remaining: number;
   resetsAt: number | null;
+  /** Known window length for capping the countdown; null when resetsAt may not be weekly (xAI). */
+  windowMinutes: number | null;
 }
 const object = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" && !Array.isArray(v)
@@ -53,6 +56,7 @@ export function mobileWeeklyQuota(
   const data = object(raw);
   let used: unknown;
   let resets: unknown;
+  let windowMinutes: number | null = WEEKLY_WINDOW_MINUTES;
   if (source === "codex") {
     const snapshot = data as unknown as MobileCodexRateLimitsResult;
     if (!snapshot.rateLimits) return null;
@@ -82,6 +86,8 @@ export function mobileWeeklyQuota(
       return null;
     used = data.creditUsagePercent;
     resets = data.resetsAt;
+    // resetsAt may fall back to a non-weekly period end.
+    windowMinutes = null;
   }
   if (typeof used !== "number" || !Number.isFinite(used)) return null;
   const resetsAt =
@@ -92,14 +98,23 @@ export function mobileWeeklyQuota(
   return {
     remaining: Math.round(Math.max(0, Math.min(100, 100 - used))),
     resetsAt,
+    windowMinutes,
   };
 }
-/** Match Desktop compactQuotaCountdown: one unit, rounded up; expired stays unknown. */
+/**
+ * Match Desktop compactQuotaCountdown: one unit, rounded up; expired stays unknown.
+ * A known windowMinutes caps the countdown: right after a reset, server rounding or
+ * clock skew can put resetsAt slightly past now + window, and rounding up would read
+ * "8d" for a 7-day window.
+ */
 export type QuotaTimeUnit = 'day' | 'hour' | 'minute' | 'second';
-export function quotaCountdown(reset: number, now: number, unitLabel: (unit: QuotaTimeUnit) => string = unit => ({day:'d',hour:'h',minute:'m',second:'s'})[unit]): string | null {
+export function quotaCountdown(reset: number, now: number, unitLabel: (unit: QuotaTimeUnit) => string = unit => ({day:'d',hour:'h',minute:'m',second:'s'})[unit], windowMinutes?: number | null): string | null {
   if (!Number.isFinite(reset) || reset <= 0) return null;
-  const remaining = reset * 1000 - now;
+  let remaining = reset * 1000 - now;
   if (remaining <= 0) return null;
+  if (typeof windowMinutes === "number" && Number.isFinite(windowMinutes) && windowMinutes > 0) {
+    remaining = Math.min(remaining, windowMinutes * 60000);
+  }
   if (remaining >= 86400000) return `${Math.ceil(remaining / 86400000)}${unitLabel("day")}`;
   if (remaining >= 3600000) return `${Math.ceil(remaining / 3600000)}${unitLabel("hour")}`;
   if (remaining >= 60000) return `${Math.ceil(remaining / 60000)}${unitLabel("minute")}`;

@@ -23,14 +23,14 @@ const wired = ts.transpileModule(`return {${callback}}.resolveSurface;`, {
 
 function fixture() {
   const sqlite = new Database(':memory:');
-  sqlite.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, source TEXT, cleared_at INTEGER DEFAULT 0);
+  sqlite.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, source TEXT, cleared_at INTEGER DEFAULT 0, status TEXT DEFAULT 'active', remote_host_id TEXT);
     CREATE TABLE messages(client_id TEXT, session_id TEXT, role TEXT, created_at INTEGER, agent_meta TEXT, rewind_at INTEGER);
-    CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT);
+    CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT, role TEXT, archived_at INTEGER);
     CREATE TABLE plugin_task_requests(id TEXT PRIMARY KEY, operation TEXT, payload TEXT);
     CREATE TABLE orca_teams(id TEXT PRIMARY KEY, lead_session_id TEXT, status TEXT);
     CREATE TABLE orca_workers(session_id TEXT PRIMARY KEY, team_id TEXT);
     INSERT INTO sessions(id,source) VALUES ('lead','plugin'),('worker','orca'),('legacy','plugin'),('user','user'),('bot','bot');
-    INSERT INTO bot_session_links VALUES ('bot','b');
+    INSERT INTO bot_session_links(session_id, bot_id) VALUES ('bot','b');
     INSERT INTO plugin_task_requests VALUES ('lead','create','{}');
     INSERT INTO orca_teams VALUES ('team','lead','completed');
     INSERT INTO orca_workers VALUES ('worker','team');`);
@@ -46,7 +46,8 @@ function fixture() {
   const searchStart = source.indexOf('      searchSessions:');
   const search = source.slice(searchStart, source.indexOf('      logger:', searchStart));
   const searchSessionsFn = vi.fn(async () => [{ sessionId: 'user', snippet: 'synthetic private message' }]);
-  const searchDeps = { ...deps, searchSessionsFn };
+  // Production routes through the Bot-scope variant; ordinary and plugin callers never widen.
+  const searchDeps = { ...deps, searchSessionsWithBotScope: searchSessionsFn, botReadsAccountHistory: async () => false };
   const searchWired = ts.transpileModule(`return {${search}}.searchSessions;`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
@@ -72,7 +73,7 @@ it.each(['lead', 'worker'])('restricts owned %s and preserves explicit revocatio
     expect(await f.resolve({ sessionId: 'legacy' })).toBe('default');
     expect(await f.resolve({ sessionId: 'user' })).toBe('default');
     expect(await f.resolve({ sessionId: 'bot' })).toBe('bot');
-    f.sqlite.exec(`INSERT INTO bot_session_links VALUES ('lead','b'); UPDATE plugin_task_requests SET payload='{}'`);
+    f.sqlite.exec(`INSERT INTO bot_session_links(session_id, bot_id) VALUES ('lead','b'); UPDATE plugin_task_requests SET payload='{}'`);
     expect(await f.resolve({ sessionId })).toBe('restricted');
   } finally { f.sqlite.close(); }
 });

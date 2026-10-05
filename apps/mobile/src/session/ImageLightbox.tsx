@@ -48,6 +48,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { MobileMessageGalleryImage } from '@/session/messageGallery';
 import {
   isDesktopLocalMediaUrl,
+  mediaLoadFailureKey,
   type MobileResolvedRemoteMedia,
   type ResolveRemoteMediaFn,
 } from '@/session/remoteMedia';
@@ -100,7 +101,7 @@ const AnimatedImage = Animated.createAnimatedComponent(Image);
 type PageResolveState =
   | { status: 'loading' }
   | { status: 'ready'; media: MobileResolvedRemoteMedia }
-  | { status: 'error' };
+  | { status: 'error'; error?: unknown };
 
 /** 宿主注入的底部操作(文件浏览器:复制路径/发送到会话);回调收当前活跃页。 */
 export interface ImageLightboxAction {
@@ -442,8 +443,8 @@ export const ImageLightbox = memo(function ImageLightbox({
       .then((resolved) => {
         setResolveMap((prev) => ({ ...prev, [key]: { status: 'ready', media: resolved } }));
       })
-      .catch(() => {
-        setResolveMap((prev) => ({ ...prev, [key]: { status: 'error' } }));
+      .catch((error: unknown) => {
+        setResolveMap((prev) => ({ ...prev, [key]: { status: 'error', error } }));
       });
     // 垫底缩略图:列表里这张图已经解码好了,拿来从打开那一刻接住画面,一直垫到
     // 原图 onLoad(见 lightboxImageLayers)。写入**不看取件态** —— 原图可能在同
@@ -1587,7 +1588,7 @@ const LightboxPage = memo(function LightboxPage({
           (!retryable && !media.previewable) ? (
             <>
               <Text style={styles.stateText}>
-                {t('message.lightbox.loadFailed')}
+                {t(mediaLoadFailureKey(resolveState?.status === 'error' ? resolveState.error : undefined))}
               </Text>
               {retryable || layers.showFailure ? (
                 <Pressable

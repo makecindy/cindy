@@ -95,7 +95,7 @@ export async function ingestMedia(
   }
   params.assertStillValid?.();
   // writeBlob 只在最终实际内容 hash 正确时返回;损坏/symlink/目录不会被当成去重。
-  const written = await blobStore.writeBlob(params);
+  const written = await blobStore.writeBlob({ ...params, scope: 'blobs' });
   params.assertStillValid?.();
   await ledger.recordBlob(
     {
@@ -151,3 +151,17 @@ export async function ingestMedia(
 
 /** 调用方可先判"这类字节进不进仓"(白名单外走 xdt-file 等直读通道,规则 25 边界)。 */
 export const supportedMime = blobStore.supportedMime;
+
+/**
+ * Client UI media has no account owner. Its reference is the client appearance
+ * setting (custom WebP) or bundled catalog (optional CDN MP4), not an account DB.
+ * Reuse the same atomic byte store in an isolated deletion scope; callers must
+ * serialize publication and recycling with the client wallpaper operation lock.
+ */
+export async function ingestClientWallpaper(
+  params: { buffer: Uint8Array; mimeType: 'image/webp' | 'video/mp4' },
+): Promise<blobStore.WrittenBlob> {
+  if (params.mimeType !== 'image/webp' && params.mimeType !== 'video/mp4')
+    throw new Error('cindy-media: unsupported client wallpaper type');
+  return blobStore.writeBlob({ ...params, scope: 'client-wallpaper' });
+}

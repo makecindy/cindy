@@ -55,6 +55,18 @@ export const messageCacheStorage = {
       async () => { await (await disk()).remove(`${key}.json`); },
     ]));
   },
+  /** Keys still held in the pre-file AsyncStorage backend; migrateLegacy moves each one. */
+  async legacyKeys(prefix: string): Promise<string[]> {
+    return (await AsyncStorage.getAllKeys()).filter(key => key.startsWith(`${prefix}.`));
+  },
+  /** An existing file already wins every read, so a leftover legacy copy is only deleted. */
+  async migrateLegacy(key: string): Promise<void> {
+    if (await (await disk()).read(`${key}.json`) !== null) {
+      await AsyncStorage.removeItem(key);
+      return;
+    }
+    await messageCacheStorage.getItem(key);
+  },
   async clear(prefix: string): Promise<void> {
     await persist(() => removeAll([
       async () => {

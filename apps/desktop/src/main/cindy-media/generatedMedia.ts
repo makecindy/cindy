@@ -184,7 +184,7 @@ function parseDataImageUrl(url: string): { mimeType: string; buffer: Buffer } | 
 }
 
 /**
- * codex 生成图 → 总仓物化:托管地址(老 xdt-image / 新 cindy-media)透传;
+ * codex 生成图 → 总仓物化:托管地址先核验当前 Host 的文件，再复用;
  * 本地路径 / data: base64 入仓(零引用,合成 tool_result 落库时挂账)。
  * 形状不认识返回 null;入仓失败(白名单外 mime / 读盘失败)向上抛,由调用方
  * 决定丢图语义。
@@ -192,11 +192,19 @@ function parseDataImageUrl(url: string): { mimeType: string; buffer: Buffer } | 
 export async function materializeGeneratedImage(
   data: GeneratedImageSource,
   deps: {
+    verifyManagedUrl: (url: string) => Promise<void>;
     ingestFromPath: (params: { sourcePath: string; originalName?: string }) => Promise<{ url: string; filename: string }>;
     ingestBuffer: (params: { buffer: Uint8Array; mimeType: string }) => Promise<{ url: string; filename: string }>;
   },
 ): Promise<{ url: string; filename: string } | null> {
   if (data.url?.startsWith('xdt-image://') || data.url?.startsWith('cindy-media://')) {
+    try {
+      await deps.verifyManagedUrl(data.url);
+    } catch (error) {
+      // Some harnesses supply both a stale reference and the actual generated file.
+      if (!data.path) throw error;
+      return deps.ingestFromPath({ sourcePath: data.path, originalName: safeGeneratedImageFilename(data.path) });
+    }
     return { url: data.url, filename: safeGeneratedImageFilename(data.url) };
   }
   if (data.path) {

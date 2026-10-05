@@ -1585,12 +1585,16 @@ export class Session {
   }
 
   /**
-   * 底层 agent handle 的会话 id —— cc = SDK session id(也是出站请求的 `x-claude-code-session-id`
-   * header 值);SDK 尚未回填时为 '<pending>'。只读、不触发任何行为,供 host 把 loopback proxy
-   * 看到的请求归属回本会话做 per-session 路由(见 maker-host/anthropic-compat-proxy-host.ts)。
+   * Native identity safe to persist for resume. An unaccepted fork retains its source.
+   * Request routing uses requestSessionId, which may already identify the destination.
    */
   get sdkSessionId(): string {
     return this.handle.id;
+  }
+
+  /** Live request identity, which may precede a fork's durable resume identity. */
+  get requestSessionId(): string {
+    return this.handle.requestSessionId ?? this.handle.id;
   }
 
   /** 当前运行时模型。底层 handle 的 getter 会随 setModel 成功更新。 */

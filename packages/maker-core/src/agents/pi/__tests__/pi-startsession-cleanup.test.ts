@@ -27,6 +27,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AutoReviewRequest } from '../../shared/auto-review-decision.js';
 
 // hoisted 控制旋钮:vi.mock 工厂被提升到 import 之上,不能闭包引用普通 let。
 const knobs = vi.hoisted(() => ({
@@ -360,6 +361,20 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       },
     };
   }
+
+  it('mounts native subagent tools for companion sessions too', async () => {
+    const agent = new PiAgent(buildDeps());
+    const handle = await agent.startSession({ ...opts(), botRuntimeProfile: {
+      botId: 'bot', profileVersion: 1,
+      skillPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+      mcpPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+      toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+    } });
+    try {
+      expect(repeatedArgValues(knobs.spawnedArgs[0]!, '--extension'))
+        .toEqual(expect.arrayContaining([expect.stringContaining('cindy-subagent')]));
+    } finally { await handle.close(); }
+  });
 
   it('disposes ctx (and does not close a nonexistent proc) when the process constructor throws synchronously', async () => {
     knobs.ctorThrows = true;
@@ -1101,6 +1116,102 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(resolver).not.toHaveBeenCalled();
     expect(control).not.toHaveBeenCalled();
     expect(proxyDisposed).toBe(2);
+  });
+
+  it.each((['auto', 'acceptEdits', 'ask'] as const).flatMap(permissionMode =>
+    (['ordinary', 'allow', 'block', 'ask', 'revoked', 'unavailable', 'late-revoke', 'late-scope', 'confirmed'] as const)
+      .map(scenario => ({ permissionMode, scenario }))))('delegated trusted MCP child keeps live authorization: $permissionMode/$scenario', async ({ permissionMode, scenario }) => {
+    let active = scenario !== 'revoked' && scenario !== 'confirmed';
+    let revision = 'scope-1';
+    let preparations = 0;
+    const review = Object.assign(vi.fn(async (_request: AutoReviewRequest) => {
+      if (scenario === 'late-revoke') active = false;
+      if (scenario === 'late-scope') revision = 'scope-2';
+      return { verdict: scenario === 'block' ? 'block' as const : scenario === 'ask' ? 'ask' as const : 'allow' as const };
+    }), { prepareRequest: vi.fn(async (request: AutoReviewRequest): Promise<AutoReviewRequest> => {
+      if (++preparations === 2 && permissionMode !== 'auto') {
+        if (scenario === 'late-revoke') active = false;
+        if (scenario === 'late-scope') revision = 'scope-2';
+      }
+      if (scenario === 'unavailable') throw new Error('Host storage unavailable');
+      if (scenario === 'ordinary') return request;
+      // Prove a previously ordinary shortcut cannot cross a late Host change.
+      if (permissionMode !== 'auto' && preparations === 1 && scenario.startsWith('late-')) return request;
+      return active ? { ...request, delegatedTask: { source: 'approved-plugin', pluginId: 'eval', role: 'worker',
+        task: 'Run the approved evaluation only', workingDir: cwd, authorizationRevision: revision } }
+        : { ...request, authorizationError: 'Plugin authorization revoked' };
+    }) });
+    const run = pendingSubagentRun({ toolName: 'mcp__cindy_scheduler__call_tool', input: { name: 'schedule_create', args: { prompt: 'outside task scope' } } }, {}, 'input');
+    const discovery = deferSubagentDiscovery(run);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const deps = buildDeps({ reviewAutoPermissionAction: review, getMcpToolApprovalPolicy: () => 'auto-approve' });
+    const prepareSpawn = deps.preparePiExtraSpawnConfig!;
+    deps.preparePiExtraSpawnConfig = async (...args) => {
+      const prepared = await prepareSpawn(...args);
+      if (!prepared?.mcpBridge) throw new Error('missing MCP bridge fixture');
+      return { ...prepared, mcpBridge: { ...prepared.mcpBridge, servers: [{ name: 'cindy_scheduler', url: 'http://127.0.0.1:4567/mcp' }] } };
+    };
+    const handle = await new PiAgent(deps).startSession({ ...opts(), permissionMode });
+    try {
+      const resolver = vi.fn(async () => ({ kind: 'permission', behavior: scenario === 'confirmed' ? 'allow' : 'deny' }) as const);
+      handle.setInteractionResolver(resolver);
+      await handle.send({ type: 'user', content: 'Run this evaluation; do not create schedules.' });
+      discovery.publish();
+      await vi.waitFor(() => expect(control).toHaveBeenCalled(), { timeout: 3_000 });
+      const asks = permissionMode === 'auto' ? ['ask', 'unavailable'].includes(scenario) : scenario !== 'ordinary';
+      expect(control).toHaveBeenCalledWith(expect.any(String), run.taskId, 'approval', expect.objectContaining({ value:
+        scenario === 'ordinary' || (permissionMode === 'auto' ? scenario === 'allow' : scenario === 'confirmed') ? 'allow' : asks ? 'user-deny' : expect.stringMatching(/^auto-review-deny(?::|$)/) }));
+      expect(review.prepareRequest).toHaveBeenCalled();
+      expect(review).toHaveBeenCalledTimes(permissionMode !== 'auto' || ['ordinary', 'revoked', 'unavailable', 'confirmed'].includes(scenario) ? 0 : 1);
+      expect(resolver).toHaveBeenCalledTimes(asks ? 1 : 0);
+      if (review.mock.calls.length) {
+        expect(review.mock.calls[0]![0].delegatedTask?.pluginId).toBe('eval');
+        expect(JSON.stringify(review.mock.calls[0]![0].action)).toContain('schedule_create');
+      }
+    } finally { discovery.clear(); await handle.close(); }
+  });
+
+  it.each((['zero', 'throw'] as const).flatMap((failure) =>
+    (['auto', 'ask'] as const).flatMap(permissionMode =>
+      (['allow-revoked', 'allow-current', 'ask', 'unavailable', 'control-plane'] as const).map((scenario) => ({ failure, scenario, permissionMode }))),
+  ))('delegated trusted MCP child rechecks automatic delivery, preserves human confirmation: $permissionMode/$failure/$scenario', async ({ failure, scenario, permissionMode }) => {
+    let active = true;
+    const review = Object.assign(vi.fn(async (_request: AutoReviewRequest) => ({ verdict: scenario === 'ask' ? 'ask' as const : 'allow' as const })), {
+      prepareRequest: vi.fn(async (request: AutoReviewRequest): Promise<AutoReviewRequest> => {
+        if (scenario === 'unavailable') throw new Error('Host storage unavailable');
+        if (permissionMode !== 'auto' && active && scenario.startsWith('allow-')) return request;
+        return active ? { ...request, delegatedTask: { source: 'approved-plugin', pluginId: 'eval', role: 'worker',
+          task: 'Run the approved evaluation only', workingDir: cwd, authorizationRevision: 'scope-1' } }
+          : { ...request, authorizationError: 'Plugin authorization revoked' };
+      }),
+    });
+    const run = pendingSubagentRun({ toolName: 'mcp__cindy_scheduler__call_tool', input: { name: 'schedule_create', args: {} }, controlPlaneWrite: scenario === 'control-plane' }, {}, 'input');
+    const discovery = deferSubagentDiscovery(run);
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockImplementationOnce(async () => {
+      if (scenario === 'allow-revoked') active = false;
+      if (failure === 'throw') throw new Error('mailbox write failed');
+      return 0;
+    }).mockResolvedValue(1);
+    const deps = buildDeps({ reviewAutoPermissionAction: review, getMcpToolApprovalPolicy: () => 'auto-approve' });
+    const prepareSpawn = deps.preparePiExtraSpawnConfig!;
+    deps.preparePiExtraSpawnConfig = async (...args) => {
+      const prepared = await prepareSpawn(...args);
+      if (!prepared?.mcpBridge) throw new Error('missing MCP bridge fixture');
+      return { ...prepared, mcpBridge: { ...prepared.mcpBridge, servers: [{ name: 'cindy_scheduler', url: 'http://127.0.0.1:4567/mcp' }] } };
+    };
+    const handle = await new PiAgent(deps).startSession({ ...opts(), permissionMode });
+    try {
+      const resolver = vi.fn(async () => ({ kind: 'permission', behavior: scenario === 'allow-revoked' ? 'deny' : 'allow' }) as const);
+      handle.setInteractionResolver(resolver);
+      await handle.send({ type: 'user', content: 'Run the approved evaluation.' });
+      discovery.publish();
+      await vi.waitFor(() => expect(control).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+      expect(control.mock.calls[0]?.[3]).toMatchObject({ value: 'allow' });
+      expect(control.mock.calls[1]?.[3]).toMatchObject({ value: scenario === 'allow-revoked'
+        ? permissionMode === 'auto' ? expect.stringContaining('auto-review-deny:Plugin authorization revoked') : 'user-deny' : 'allow' });
+      expect(review).toHaveBeenCalledTimes(permissionMode !== 'auto' || ['unavailable', 'control-plane'].includes(scenario) ? 0 : 1);
+      expect(resolver).toHaveBeenCalledTimes(['ask', 'unavailable', 'control-plane'].includes(scenario) || (permissionMode !== 'auto' && scenario === 'allow-revoked') ? 1 : 0);
+    } finally { discovery.clear(); await handle.close(); }
   });
 
   it('refuses to deliver an answer decided before the boundary but ready after it', async () => {
