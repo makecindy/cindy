@@ -695,6 +695,19 @@ describe("PiAgent native auto-compaction ownership", () => {
     await handle.close();
   });
 
+  it("never depends on the non-official reserve RPC when a task budget changes", async () => {
+    // `set_compaction_reserve_tokens` / `refresh_models` 不是官方 RPC：上游已删除全部
+    // 调用与配套补丁（docs/research/pi-native-model-refresh.md、docs/dev-rules/pi-harness.md
+    // 「只适配官方 Pi」）。测试替身固定拒收它们，这里锁住「任务级预算变化也不许回退到
+    // 非官方 RPC」这条不变量；预算本身走宿主重建或预演的 rebuild 分支。
+    const handle = await start();
+    knobs.rpcCalls = [];
+    await handle.setModel!("n", { contextWindowBudget: 32_000 }).catch(() => undefined);
+    expect(knobs.rpcCalls.some((call) => call.type === "set_compaction_reserve_tokens")).toBe(false);
+    expect(knobs.rpcCalls.some((call) => call.type === "refresh_models")).toBe(false);
+    await handle.close();
+  });
+
   it("rejects an unexpected runtime window rather than claiming an unapplied reserve", async () => {
     const deps = buildDeps();
     deps.runtimeConfig = {

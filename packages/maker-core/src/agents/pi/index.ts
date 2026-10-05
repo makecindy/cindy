@@ -6606,39 +6606,12 @@ export class PiAgent extends BaseAgent {
       if (preview.action === 'rebuild') {
         throw new Error(preview.reason ?? 'Pi model route needs a new process startup input');
       }
-      // If the target window changes the reserve, check the optional Pi RPC
-      // while the old catalog and route are still intact. An older runtime must
-      // not receive a bridge/catalog mutation before we learn it cannot finish.
-      const projectedReserve = (window: number, workingWindow?: number): number => {
-        const settings = JSON.parse(buildPiSettingsJsonContent(
-          window, sessionPiAutoCompactPct, [], workingWindow,
-        )) as { compaction?: { reserveTokens?: number } };
-        // Pi's null setter clears the runtime override back to its in-memory
-        // SettingsManager value, which may still be the old per-task reserve.
-        return settings.compaction?.reserveTokens ?? 16_384;
-      };
-      const currentReserve = projectedReserve(ctx.contextWindow, ctx.workingContextWindow);
-      // 目标工作窗口：任务级预算优先于模型级上限（与运行期创建、startupWorkingContextWindow
-      // 同一口径）。预演漏掉预算 ⇒ 预算变更时算不出 reserve 差异 ⇒ 既不实时改 reserve，
-      // 也不判定需要重建：预算就静默失效（档位卡仍显示预算值，Pi 压缩阈值仍是满窗）。
-      const nextWorkingContextWindow =
-        sessionContextWindowBudget
-        ?? this.deps.resolveModelContextLimit?.(effectiveProviderId, model)
-        ?? undefined;
-      const nextProjectedReserve = projectedReserve(
-        preview.targetContextWindow ?? ctx.contextWindow,
-        nextWorkingContextWindow);
-      if (currentReserve !== nextProjectedReserve) {
-        const reserveProbe = await proc.request({
-          type: 'set_compaction_reserve_tokens', reserveTokens: currentReserve,
-        });
-        if (!reserveProbe.success ||
-            (reserveProbe.data as { reserveTokens?: unknown } | undefined)?.reserveTokens !== currentReserve) {
-          throw new Error(/^Unknown command:/.test(reserveProbe.error ?? '')
-            ? 'Pi runtime does not support live compaction reserve updates; update the bundled Pi runtime and retry.'
-            : 'Pi did not confirm the current compaction reserve; model switch was not started.');
-        }
-      }
+      // 保留量（compaction reserveTokens）只在启动快照里生效，运行期改写文件不代表
+      // Pi 已更新设置。**不得**在这里探测或调用 `set_compaction_reserve_tokens`：它不是
+      // 官方 RPC，上游已连同 `refresh_models` 一起删除调用与配套补丁（见
+      // docs/research/pi-native-model-refresh.md 与 docs/dev-rules/pi-harness.md
+      // 「只适配官方 Pi」）。任务级窗口预算因此不走热改：预算变化由宿主判定有效窗口变化后
+      // 重启引擎（createOpts 重新注入），或在预演里判定需要重建后走既有恢复分支。
       if (preview.action === 'refresh') await refreshLiveCatalog(model, effectiveProviderId);
       // Never let a requested native source silently fall through to Cindy's
       // gateway when a provider disappeared or a model was removed.
