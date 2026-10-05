@@ -602,6 +602,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'worktree:suggest-name',
   'worktree:create',
   'worktree:discard-precreated',
+  'worktree:cancel-precreated',
   'worktree:removal-preview',
   // —— 个人 Telegram bot 跨设备上下线(准入论证见上方 DL_TELEGRAM_* 常量注释)——
   // 两条都由被控端 dispatch 拦截执行, 不是 ipcMain handler。
@@ -776,6 +777,7 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   'worktree:create': 60_000,
   // 可能先等待同 sessionId 的晚到 create 释放互斥锁，再执行 git worktree remove。
   'worktree:discard-precreated': 60_000,
+  'worktree:cancel-precreated': 60_000,
   // pi 手动压缩调 LLM 生成摘要,大上下文 + 网关排队可达分钟级(core 侧
   // PI_COMPACT_TIMEOUT_MS = 10min);默认 30s 隧道超时会截断远程压缩请求,
   // 用户在控制端看到的就是「无反馈失败」。给足执行预算 + 回程余量:

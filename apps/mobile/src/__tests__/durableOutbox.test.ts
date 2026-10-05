@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { accountVaultKey } from '@cindy/auth-client';
+import { cancelledCreationDraft, outboxCreationRetryIdentity } from '../session/cancelledCreationDraft';
 import {
   createDurableOutbox,
   isDurableOutboxUnsent,
@@ -65,6 +66,66 @@ function message(
     },
   };
 }
+
+describe('cancelled worktree draft recovery across restarts', () => {
+  it('retains one durable record and its attachments while successive retries rotate remote IDs', async () => {
+    const storage = disk();
+    let store = createDurableOutbox(storage);
+    await store.activate('alice');
+    const initial = message();
+    initial.creation = {
+      draft: { workingDir: '/repo/.cindy-worktrees/failed', firstMessage: initial.item.text } as NonNullable<DurableOutboxRecord['creation']>['draft'],
+      originalWorkingDir: '/repo/subdir', deviceName: 'Mac', planModeArm: false, restorePermissionMode: null,
+    };
+    initial.uploads = [{ slot: 0, fileName: 'slot-0.png', name: 'image.png', kind: 'image', size: 12 }];
+    await store.add(initial);
+    const originalKey = [...storage.data.keys()][0];
+    for (const newId of ['retry-1', 'retry-2']) {
+      // Cold start, host cancellation ACK, persist, another cold start, then user resubmits.
+      store = createDurableOutbox(storage);
+      await store.activate('alice');
+      let row = store.getSnapshot()[0];
+      await store.update(row, cancelledCreationDraft(row));
+      store = createDurableOutbox(storage);
+      await store.activate('alice');
+      row = store.getSnapshot()[0];
+      expect(row.creation?.draft.workingDir).toBe('/repo/subdir');
+      expect(row.suspended).toBe(true);
+      const identity = outboxCreationRetryIdentity(row, () => newId);
+      expect(identity.sessionId).toBe(newId);
+      await store.update(row, { storageSessionId: identity.storageSessionId,
+        item: { ...row.item, sessionId: identity.sessionId },
+        creation: { ...row.creation!, cancelled: undefined }, suspended: false,
+      });
+      store = createDurableOutbox(storage);
+      await store.activate('alice');
+      expect(store.getSnapshot()).toHaveLength(1);
+      expect(store.getSnapshot()[0]).toMatchObject({ item: { sessionId: newId, text: initial.item.text }, uploads: initial.uploads });
+      expect([...storage.data.keys()]).toEqual([originalKey]);
+    }
+    await store.remove(store.getSnapshot()[0]);
+    expect(storage.data.size).toBe(0);
+  });
+
+  it('preserves the cancelled draft after a failed resubmission write', async () => {
+    const storage = disk();
+    const store = createDurableOutbox(storage);
+    await store.activate('alice');
+    const initial = message();
+    initial.creation = { draft: { workingDir: 'D:\\repo\\.cindy-worktrees\\failed' } as NonNullable<DurableOutboxRecord['creation']>['draft'],
+      deviceName: 'PC', planModeArm: false, restorePermissionMode: null };
+    const row = cancelledCreationDraft(initial);
+    expect(row.creation?.draft.workingDir).toBe('D:\\repo');
+    await store.add(row);
+    storage.setItem = async () => { throw new Error('disk full'); };
+    const identity = outboxCreationRetryIdentity(row, () => 'fresh');
+    await expect(store.update(row, { storageSessionId: identity.storageSessionId,
+      item: { ...row.item, sessionId: identity.sessionId } })).rejects.toThrow('disk full');
+    const restarted = createDurableOutbox(storage);
+    await restarted.activate('alice');
+    expect(restarted.getSnapshot()[0]).toEqual(row);
+  });
+});
 function projection(
   clientId = "id-1",
   state: "unknown" | "pending" | "accepted" | "removed" = "unknown",

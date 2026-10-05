@@ -280,6 +280,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'worktree:suggest-name',
       'worktree:create',
       'worktree:discard-precreated',
+      'worktree:cancel-precreated',
       'worktree:removal-preview',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
@@ -474,6 +475,7 @@ describe('INVOKE_TIMEOUT_OVERRIDES_MS', () => {
 
   it('worktree:discard-precreated 可等待同 session 创建锁且不沿用默认 30s', () => {
     expect(INVOKE_TIMEOUT_OVERRIDES_MS['worktree:discard-precreated']).toBeGreaterThan(30_000);
+    expect(INVOKE_TIMEOUT_OVERRIDES_MS['worktree:cancel-precreated']).toBeGreaterThan(30_000);
   });
 
   it('maker:compact-session 隧道超时必须大于 pi 压缩执行预算(10min + 回程余量,不 30s 截断)', () => {

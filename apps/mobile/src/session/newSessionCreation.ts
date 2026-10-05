@@ -49,6 +49,7 @@ import {
 } from '@/session/newSession';
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { persistCancelledCreationDraft } from './mobileDurableOutbox';
 import {
   forgetPendingPrecreatedWorktree,
   parseDiscardPrecreatedAck,
@@ -327,7 +328,8 @@ export function retryNewSessionCreation(sessionId: string): void {
   // Once createSession may have run against a managed path, retrying can create
   // another wrong-id session that shares it. Recovery must first prove the
   // exact pre-generated id was claimed; unknown/NOT_FOUND stays retain-only.
-  if (task.precreatedWorktreeSessionCreateStarted) return;
+  // A retry may reconcile an exact-id success, but must never resend an
+  // uncertain managed create (see createSessionIdempotent).
   if (!isTaskOwnerCurrent(task)) {
     cancelStaleOwnerTask(task);
     return;
@@ -436,7 +438,10 @@ export async function prepareNewSessionCreationForEdit(
   }
   const precreated = task.precreatedWorktree;
   if (precreated) {
-    if (task.precreatedWorktreeSessionCreateStarted) {
+    const discard = task.precreatedWorktreeSessionCreateStarted
+      ? task.params.transport.maker.worktree.cancelPrecreated
+      : task.params.transport.maker.worktree.discardPrecreated;
+    if (!discard) {
       throw new Error(i18n.t('session.new.worktreeCleanupPending'));
     }
     try {
@@ -444,7 +449,7 @@ export async function prepareNewSessionCreationForEdit(
         assertTaskOwnerCurrent(task);
         await task.params.transport.openLink(task.deviceId);
         assertTaskOwnerCurrent(task);
-        const discardResult = await task.params.transport.maker.worktree.discardPrecreated({
+        const discardResult = await discard({
           sessionId,
           recoveryKey: precreated.recoveryKey,
         });
@@ -465,6 +470,9 @@ export async function prepareNewSessionCreationForEdit(
       }
       throw err;
     }
+    assertTaskOwnerCurrent(task);
+    await persistCancelledCreationDraft({ sessionId, deviceId: task.params.deviceId,
+      originalWorkingDir: precreated.originalWorkingDir });
     const accountId = task.params.precreatedWorktreeAccountId?.trim();
     if (accountId) {
       assertTaskOwnerCurrent(task);
@@ -482,6 +490,19 @@ export async function prepareNewSessionCreationForEdit(
 
 export function getNewSessionCreationTask(sessionId: string): NewSessionCreationTask | null {
   return tasks.get(sessionId) ?? null;
+}
+
+/** Host cancellation ACK is authoritative; keep the durable outbox draft for editing. */
+export function dismissRecoveredPrecreatedSession(record: { sessionId: string; deviceId: string }): void {
+  if (tasks.has(record.sessionId)) return;
+  if (remoteSessionStore.getSessionDeviceId(record.sessionId) !== record.deviceId) return;
+  const row = remoteSessionStore.getSessions().find((session) => session.id === record.sessionId);
+  // The host cancellation ACK proves this identity cannot become a live task.
+  // Cold outbox hydration and cached rows need not carry pendingLocalCreation.
+  if (!row) return;
+  remoteSessionStore.applySessionPatch(record.deviceId, record.sessionId, { status: 'deleted' });
+  remoteSessionStore.setInputProjectionOptimistically(record.sessionId, null);
+  remoteSessionStore.clearPendingTitlePreview(record.sessionId);
 }
 
 /**
@@ -672,9 +693,16 @@ async function createSessionIdempotent(
   };
 
   if (task.precreatedWorktree) {
+    if (task.precreatedWorktreeSessionCreateStarted) {
+      assertTaskOwnerCurrent(task);
+      const existing = exactSessionFromProbe(await maker.getSession(task.sessionId), task.sessionId);
+      assertTaskOwnerCurrent(task);
+      if (existing) return { workDir: existing.workingDir ?? null, finalDraft: effectiveDraft };
+      throw new Error(i18n.t('session.new.worktreeCleanupPending'));
+    }
     // Persist the retain-only phase before the first createSession side effect.
-    // From here on, only an exact-id session may clear the ledger; NOT_FOUND,
-    // malformed replies, wrong ids, and transport errors must never authorize
+    // From here on, only an exact-id session or a fenced cancellation ACK may
+    // clear the ledger; malformed replies, wrong ids, and transport errors never authorize
     // retrying or discarding the managed directory.
     await persistPrecreatedSessionCreateStarted(task);
     assertTaskOwnerCurrent(task);
@@ -765,7 +793,7 @@ async function createSessionIdempotent(
       } catch (probeError) {
         if (isStaleNewSessionOwnerError(probeError)) throw probeError;
       }
-      throw new Error(i18n.t('session.new.worktreeCleanupPending'));
+      throw new Error(`${formatRemoteError(error)}\n${i18n.t('session.new.worktreeCleanupPending')}`);
     }
   }
 

@@ -409,6 +409,7 @@ describe("mobile maker transport", () => {
       "worktree:suggest-name",
       "worktree:create",
       "worktree:discard-precreated",
+      "worktree:cancel-precreated",
       "text-file:read-preview",
       "file-browser:remote-op",
     ]);
@@ -936,6 +937,15 @@ describe("mobile maker transport", () => {
           },
         ],
       ],
+    ]);
+  });
+
+  it("routes terminal worktree cancellation through its distinct host channel", async () => {
+    const { calls, maker } = harness();
+    const input = { sessionId: "uncertain-create", recoveryKey: "recovery-key-1234567890" };
+    await maker.worktree.cancelPrecreated!(input);
+    expect(calls.map((call) => [call.channel, call.args])).toEqual([
+      ["worktree:cancel-precreated", [input]],
     ]);
   });
 

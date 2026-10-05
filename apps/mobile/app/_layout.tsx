@@ -1,3 +1,4 @@
+import { completePrecreatedWorktreeRecovery } from '@/session/completePrecreatedWorktreeRecovery';
 import { recentTaskKey } from '@/session/recentTasks';
 import { readComposerEntry } from '@/session/composerMorph';
 import { RecentMessageHistoriesProvider } from '@/session/RecentMessageHistories';
@@ -301,6 +302,8 @@ function PrecreatedWorktreeRecoveryBridge() {
         'worktree:discard-precreated',
         [input],
       ),
+      cancelPrecreated: (deviceId, input) => invoke(deviceId, 'worktree:cancel-precreated', [input]),
+      onDiscarded: completePrecreatedWorktreeRecovery,
       isSessionClaimed: (deviceId, sessionId) => isExactRemoteSessionClaimed(
         sessionId,
         (id) => invoke(deviceId, 'local-db:sessions:get', [id]),
