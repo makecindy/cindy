@@ -1064,6 +1064,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         botContextId: this.#epoch?.credentials.ilinkBotId ?? '',
         userId: task.peerId,
         userMessageId: task.id,
+        // 个人微信只有私聊; 渠道说明只进模型正文, 落库仍是 prompt。
+        channelNoteSource: { chatKind: 'direct', chatId: task.peerId },
         text: prompt,
         attachments: payload.attachments,
         queueMode: 'external',

@@ -27,7 +27,7 @@ describe('shared scheduler event projection', () => {
     expect(projectScheduleEvent({ type: 'ready' }).refresh).toEqual({
       runRefresh: { mode: 'none' },
       scheduleList: true,
-      sessionIndex: false,
+      sessionIndex: true,
       unreadSummary: false,
     });
     expect(projectScheduleEvent({ type: 'changed', scheduleId: 'sched-1' })).toMatchObject({
@@ -46,7 +46,8 @@ describe('shared scheduler event projection', () => {
       refresh: {
         runRefresh: { mode: 'schedule', scheduleId: 'sched-1' },
         scheduleList: false,
-        sessionIndex: false,
+        // 认领清空了 nextFireAt 并插入 running run,远端侧栏索引要立刻重拉。
+        sessionIndex: true,
         unreadSummary: false,
       },
       runPatch: { scheduleId: 'sched-1', runId: 'run-1', sessionId: null, status: 'running' },
@@ -194,6 +195,20 @@ describe('shared scheduler event projection', () => {
       runPatch: { scheduleId: null, runId: null, sessionId: null, status: 'unknown' },
       unreadImpact: 'none',
     });
+  });
+
+  it('treats silenced / notified reminder toggles as no-refresh events instead of unknown', () => {
+    for (const type of ['silenced', 'notified'] as const) {
+      const payload = { type, scheduleId: 'sched-1', runId: 'run-1', sessionId: 'chat-1' };
+      expect(normalizeSchedulerEvent(payload)).toEqual({ type, scheduleId: 'sched-1', runId: 'run-1' });
+      expect(projectScheduleEvent(payload).refresh).toEqual({
+        runRefresh: { mode: 'none' },
+        scheduleList: false,
+        sessionIndex: false,
+        unreadSummary: false,
+      });
+      expect(projectScheduleEvent(payload).unreadImpact).toBe('none');
+    }
   });
 
   it('decides whether a selected schedule should refresh its run list', () => {

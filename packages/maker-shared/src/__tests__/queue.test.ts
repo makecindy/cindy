@@ -310,6 +310,13 @@ describe('shared queue presentation model', () => {
       expect(row.actions.remove.disabled).toBe(false);
       expect(row.actions.moveDown.disabled).toBe(false);
     }
+    const pluginItem = { ...queued('q-2'), text: 'run', sourcePlugin: { pluginId: 'ghost-github', name: 'GitHub' } };
+    expect(isAutoSentQueueItem(pluginItem)).toBe(true);
+    const pluginRow = buildQueueRowPresentation({ item: pluginItem, originalIndex: 0, projection, queueLength: 1 });
+    expect(pluginRow.actions.edit.disabled).toBe(true);
+    expect(pluginRow.actions.steer.disabled).toBe(true);
+    expect(pluginRow.actions.remove.disabled).toBe(false);
+    expect(isAutoSentQueueItem({ sourcePlugin: { name: 'no id' } })).toBe(false);
     expect(isAutoSentQueueItem({ origin: { kind: 'orca', senderLabel: 'Lead' } })).toBe(false);
     expect(isAutoSentQueueItem({})).toBe(false);
   });

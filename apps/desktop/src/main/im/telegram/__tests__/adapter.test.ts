@@ -116,4 +116,20 @@ describe('Telegram group history access scope', () => {
       lane: null,
     });
   });
+
+  it('names the group in the channel note but leaves the speaker to the existing [发言人] line', async () => {
+    expect(
+      await adapter.channelNoteSourceFor?.({
+        contextId: 'bot-1',
+        senderId: 'g/-1001',
+        messageId: 'm-3',
+        chatId: '-1001',
+        text: 'hi',
+        speaker: { id: '7', name: 'Ann', isOwner: false },
+        interactionSource: { chatName: 'Dev Group', senderName: 'Ann' },
+        attachments: [],
+        unsupported: [],
+      } as never),
+    ).toEqual({ chatKind: 'group', chatId: '-1001', chatName: 'Dev Group' });
+  });
 });

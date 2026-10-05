@@ -240,6 +240,8 @@
     "controlUnavailable": "远端电脑暂时无法接受操作，请检查远端控制权限和连接，然后重新连接。",
     "beingControlled": "桌面正在被远程控制",
     "beingViewed": "桌面正在被远程查看",
+    "controlledByDevice": "{{name}} 正在远程控制桌面",
+    "viewedByDevice": "{{name}} 正在远程查看桌面",
     "disconnect": "断开连接",
     "back": "返回",
     "connect": "连接",
@@ -312,7 +314,7 @@
       "resolution": "电脑分辨率",
       "clipboardFailed": "剪贴板内容传输失败，请检查控制权限后重试。",
       "settingsFailed": "设置未能保存，请重试。",
-      "inputHint": "点击画面即可输入。Ctrl+Alt+Esc 释放键盘焦点；Cmd/Ctrl+W 关闭这个窗口。",
+      "inputHint": "点击画面即可输入，快捷键（包括 Cmd/Ctrl+W）会发送到远端电脑。按 Ctrl+Alt+Esc 释放键盘焦点后，Cmd/Ctrl+W 关闭这个窗口。",
       "controlPending": "正在取得控制权…",
       "controlRequired": "当前仅查看。接管后可操作远端电脑。",
       "confirmDisconnect": "断开与这台电脑的连接？",
@@ -320,6 +322,7 @@
       "disconnectFailed": "未能断开连接，请重试。",
       "clipboardShortcutHint": "在画面内使用 {{modifier}}+C / {{modifier}}+V 复制粘贴。支持的内容取决于远程电脑，暂不传输文件。",
       "fitViewerDisplay": "按当前画面比例调整",
+      "restoreViewerDisplay": "恢复原始比例",
       "fitViewerDisplayHint": "临时调整电脑桌面比例，保留当前桌面内容。退出连接后恢复原分辨率。",
       "resolutionHint": "分辨率修改会影响远端的实际显示器。"
     },
@@ -5806,7 +5809,7 @@
         "configurationTitle": "配置",
         "sidebarEntryTitle": "侧边栏入口",
         "showInSidebar": "显示在侧边栏",
-        "sidebarEntryDescription": "开启后，侧边栏会显示“{{title}}”。隐藏入口不会停用插件。",
+        "sidebarEntryDescription": "开启后，“{{title}}”会出现在侧边栏，显示在最外层还是收进“更多”，可在“更多 → 自定义”里调整。隐藏入口不会停用插件。",
         "iosSimulatorAutoOpenTitle": "自动打开内置模拟器面板",
         "iosSimulatorAutoOpenDescription": "启动模拟器或打开 App 后，自动在右侧显示模拟器画面。关闭后仍可手动打开，其他功能不受影响。",
         "openTool": "查看 Tool {{name}} 的详情",
@@ -7878,6 +7881,17 @@
       "issues": "Issue",
       "bots": "伙伴"
     },
+    "navigation": {
+      "more": "更多",
+      "new": "新",
+      "customize": {
+        "title": "自定义",
+        "done": "完成",
+        "reset": "恢复默认",
+        "reorder": "调整{{name}}顺序，按上下方向键"
+      },
+      "items": { "automations": "自动化", "plugins": "插件", "bots": "伙伴", "search": "搜索" }
+    },
     "user": {
       "settingsLink": "设置，当前用户：{{name}}",
       "settingsLinkBeta": "设置，当前用户：{{name}}，Beta 测试渠道已开启",
@@ -9299,6 +9313,8 @@
       "schedulerRowAria": "自动化「{{sender}}」的排队消息",
       "sessionRowAria": "任务「{{sender}}」发来的排队消息",
       "sessionSenderFallback": "其他任务",
+      "pluginRowAria": "插件「{{sender}}」发来的排队消息",
+      "pluginSenderFallback": "插件",
       "botRowAria": "伙伴「{{sender}}」发来的排队消息",
       "dragAria": "拖动第 {{index}} 条待发送消息排序",
       "steerAction": "插话",
@@ -9902,7 +9918,9 @@
       "stopAll": "全部停止",
       "stopAllTitle": "关闭该任务的后台进程，停止全部后台作业（任务可继续使用）",
       "stopBashTitle": "停止该任务仍在运行的后台作业（不关闭会话进程）",
-      "stopping": "停止中…"
+      "stopping": "停止中…",
+      "remoteStopUnsupported": "远程电脑上的 {{appName}} 版本过旧，暂不支持在这里停止后台任务，请升级后重试",
+      "remoteStopUnreachable": "远程电脑暂时无法响应，后台任务没有停止，请稍后重试"
     },
     "interruptedBanner": {
       "text": "任务执行到一半时应用退出，已被中断。",
@@ -10378,6 +10396,25 @@
       "botSentNamed": "由伙伴「{{name}}」发送",
       "orcaFromLead": "来自 Lead 的消息",
       "orcaFromWorker": "来自 Worker 的消息",
+      "orcaFromWorkerNamed": "来自 Worker「{{role}}」的消息",
+      "hookChannelFrom": "来自 {{channel}}",
+      "deviceSentMobileNamed": "从手机「{{name}}」发送",
+      "deviceSentMobile": "从手机发送",
+      "deviceSentDesktopNamed": "从电脑「{{name}}」发送",
+      "deviceSentDesktop": "从电脑发送",
+      "deviceViewSettings": "在我的设备中查看",
+      "deviceRemoved": "该设备已移除",
+      "pluginSentNamed": "由插件「{{name}}」发送",
+      "pluginSent": "由插件发送",
+      "pluginViewDetail": "查看插件",
+      "sourceIds": {
+        "session": "任务 ID：{{id}}",
+        "teammate": "伙伴 ID：{{id}}",
+        "automation": "自动化 ID：{{id}}",
+        "plugin": "插件 ID：{{id}}",
+        "device": "设备 ID：{{id}}",
+        "member": "成员 ID：{{id}}"
+      },
       "expandLongMessage": "展开全文",
       "collapseLongMessage": "收起",
       "sessionReference": {

@@ -756,16 +756,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     };
   };
 
-  const requesterDisplayName = async (botId: string): Promise<string> => {
-    const db = getDbClient().drizzle;
-    const [profile] = await db
-      .select({ displayName: botProfiles.displayName })
-      .from(botProfiles)
-      .where(eq(botProfiles.id, botId))
-      .limit(1);
-    return profile?.displayName || botId;
-  };
-
   /**
    * 冻结这次协作双方的展示身份。名字后来改了不回填历史消息——消息流讲的是
    * 「当时谁把活交给了谁」，不是「他们现在叫什么」。
@@ -893,8 +883,10 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
             ? '已超时'
             : '失败了';
     const artifacts = params.artifacts ?? [];
+    // 发给模型的回执正文不带 [UI_ACTION_TRIGGER] 前缀;前缀只留在落库 / 排队可见内容上,
+    // 让这条主机内部消息在时间线与排队区保持隐藏(同 botDirectMessageService 的私信)。
     const completionMessage = [
-      `${UI_ACTION_TRIGGER_PREFIX}[任务回执] ${taskSubject}${statusLine}。task_id: ${params.id}`,
+      `[任务回执] ${taskSubject}${statusLine}。task_id: ${params.id}`,
       `目标事项: ${params.objective.slice(0, 400)}`,
       params.resultSummary ? `结果:\n${params.resultSummary}` : '',
       artifacts.length
@@ -989,7 +981,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       const dispatched = await deps.dispatch({
         targetSessionId,
         message: completionMessage,
-        persistedContent: completionMessage,
+        persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${completionMessage}`,
         clientId: BOT_DELEGATION_CLIENT_ID.completionRun(params.id, params.runSequence),
       });
       if (!dispatched.ok) {
@@ -1409,8 +1401,9 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       && !pendingInteractions.get(row.id)?.decisionApplied;
     if (!stillPending()
       || (row.childSessionId && heldSessionIds.has(row.childSessionId))) return;
+    // 同任务回执:模型正文不带隐藏前缀,落库 / 排队可见内容保留它。
     const message = [
-      `${UI_ACTION_TRIGGER_PREFIX}[任务需要你处理] task_id: ${row.id}`,
+      `[任务需要你处理] task_id: ${row.id}`,
       `类型: ${pending.request.kind}`,
       pending.summary,
       pending.request.kind === 'permission' ? `请求工具: ${pending.request.toolName}` : '',
@@ -1423,7 +1416,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         ? await deps.dispatch({
             targetSessionId: requesterSessionId,
             message,
-            persistedContent: message,
+            persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${message}`,
             clientId: `bot-delegation-interaction:${row.id}:${pending.requestId}`,
           })
         : null;
@@ -2739,12 +2732,11 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     // token 只做幂等键，不进正文；限死字符集免得脏值污染 clientId 空间。
     const token = (idempotencyToken ?? createId()).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64)
       || createId();
-    const requesterName = await requesterDisplayName(caller.botId);
     const recovered = await dispatchTrackedInput(row, {
       dispatcherSessionId: callerSessionId,
-      // 前缀只给子任务里的 AI 看；界面上的来源由消息的来源标签（伙伴头像 + 名字）表达，
-      // 落库正文不再重复。
-      message: [`[来自 ${requesterName} 的补充]`, trimmed].join('\n\n'),
+      // 来源由消息 origin 统一表达:界面渲染来源标签(伙伴头像 + 名字),派发时主机前置
+      // `[消息来源]` 说明给子任务里的 AI;正文不再手写来源前缀。
+      message: trimmed,
       persistedContent: trimmed,
       clientId: BOT_DELEGATION_CLIENT_ID.interjection(delegationId, row.runSequence > 1 ? `${row.runSequence}:${token}` : token),
     });

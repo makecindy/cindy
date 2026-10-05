@@ -26,11 +26,7 @@ const SIDE_DRAWERS = new Set([
 // 不经过 Radix、自己写遮罩和面板的弹窗:每个都必须同时挂着 modal-scrim 与 modal-panel,
 // 删掉其中一个(改回独立底色 / 圆角)就会报出来。新增手写弹窗时登记到这里。
 const HAND_BUILT_DIALOGS = new Set([
-  'components/chat/GhostCardHostPrompts.tsx',
-  'components/markdown/MermaidSourceEditor.tsx',
-  'components/settings/AddProviderWizard.tsx',
-  'components/settings/ProviderConnectionDialog.tsx',
-  'features/cc-agent/CreateWorkerPopover.tsx',
+  // A tab-local recovery banner: must not trap focus or lock scrolling across the window.
   'features/right-sidebar/plugins/web-browser/BrowserTabBody.tsx',
 ]);
 

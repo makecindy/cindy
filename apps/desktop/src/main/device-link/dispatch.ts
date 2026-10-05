@@ -861,6 +861,8 @@ const controllerLinkGenerationByDevice = new Map<string, number>();
 const controllerDisplayNameByDevice = new Map<string, string>();
 /** 控制帧自报名称仅作数据库展示名缺失时的兼容回退。 */
 const reportedControllerNameByDevice = new Map<string, string>();
+/** 旧 relay presence 主机名：最后一级回退，与自报名同生命周期，供被控浮窗读取。 */
+const fallbackControllerNameByDevice = new Map<string, string>();
 
 /** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
 type SessionsSubscribedListener = (controllerDeviceId: string) => void;
@@ -903,6 +905,7 @@ function resolveControllerName(deviceId: string, reportedName: unknown): string 
 
 function clearReportedControllerName(deviceId: string): void {
   reportedControllerNameByDevice.delete(deviceId);
+  fallbackControllerNameByDevice.delete(deviceId);
 }
 
 function readConnectionEpoch(client: DeviceLinkClient): number | undefined {
@@ -935,6 +938,8 @@ export function setControllerDisplayName(deviceId: string, name: string): void {
     controllerDisplayNameByDevice.set(deviceId, normalized);
   } else {
     controllerDisplayNameByDevice.delete(deviceId);
+    // An explicit clear also retires the legacy host name, matching the banner.
+    fallbackControllerNameByDevice.delete(deviceId);
   }
   const displayName = normalized
     ?? reportedControllerNameByDevice.get(deviceId)
@@ -948,6 +953,7 @@ export function setControllerDisplayName(deviceId: string, name: string): void {
  */
 export function setControllerFallbackDisplayName(deviceId: string, name: string): void {
   const normalized = normalizeControllerName(name);
+  if (normalized) fallbackControllerNameByDevice.set(deviceId, normalized);
   if (
     !normalized
     || controllerDisplayNameByDevice.has(deviceId)
@@ -958,10 +964,20 @@ export function setControllerFallbackDisplayName(deviceId: string, name: string)
   if (subscriptions.updateControllerMetadata(deviceId, normalized)) syncForwarding();
 }
 
+/** 与被控横幅同一优先级的控制端展示名；未知时返回 undefined，由调用方决定兜底。 */
+export function getControllerDisplayName(deviceId: string): string | undefined {
+  return (
+    controllerDisplayNameByDevice.get(deviceId)
+    ?? reportedControllerNameByDevice.get(deviceId)
+    ?? fallbackControllerNameByDevice.get(deviceId)
+  );
+}
+
 /** 账号切换 / 链路 teardown 时清空 presence 展示名，避免串到下一段身份。 */
 export function clearControllerDisplayNames(): void {
   controllerDisplayNameByDevice.clear();
   reportedControllerNameByDevice.clear();
+  fallbackControllerNameByDevice.clear();
 }
 
 export function getActiveControllers(): ActiveController[] {
@@ -4032,6 +4048,8 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
         // 平台按 server 盖章的 src 查本机 presence 登记表,不采信控制端自报的任何
         // 帧内字段(allowlist 只挡 channel 不挡 args,见下方 dispatchLocalInvoke 前的说明)。
         controllerPlatform: getControllerPlatform(src),
+        // 来源展示名快照:presence / 目录权威名优先,其次控制帧自报名;只用于归属展示。
+        controllerName: resolveControllerName(src, undefined),
         historyView,
       },
       // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。

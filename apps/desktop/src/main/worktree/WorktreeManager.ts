@@ -47,6 +47,7 @@ import { recycleManagedWorktree } from './managedRecycle';
 import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
 import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease } from './runtimeLeases';
 import * as store from './worktreeStore';
+import { assertPrecreatedSessionNotCancelled, sealPrecreatedSessionCancellation, withPrecreatedSessionOperationLock } from './precreatedCancellation';
 import { createLogger } from '../logger';
 import { getDbClient } from '../localDb/client/current';
 import {
@@ -385,7 +386,7 @@ async function withPrecreatedWorktreeOperationQueue<T>(
 
   await previous.catch(() => {});
   try {
-    return await fn();
+    return await withPrecreatedSessionOperationLock(sessionId, fn);
   } finally {
     releaseCurrent();
     if (precreatedWorktreeOperationQueues.get(sessionId) === queued) {
@@ -1016,10 +1017,11 @@ export async function copyClaudeSiviDirs(
  *    删除/归档时由 removeWorktreeForSession 清理该 path 的条目, 见 #2627)
  */
 export async function createWorktree(req: CreateWorktreeReq): Promise<CreateWorktreeResp> {
-  const create = () => withCreateWorktreeQueue(req.baseRepo, () => createWorktreeInner(req));
-  return req.recoveryKey === undefined
-    ? create()
-    : withPrecreatedWorktreeOperationQueue(req.sessionId, create);
+  const create = () => withCreateWorktreeQueue(req.baseRepo, () => {
+    assertPrecreatedSessionNotCancelled(req.sessionId);
+    return createWorktreeInner(req);
+  });
+  return withPrecreatedWorktreeOperationQueue(req.sessionId, create);
 }
 
 async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktreeResp> {
@@ -1213,7 +1215,16 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
         );
       }
 
-      // 9. store + DB
+      // 9. Recheck after asynchronous Git/setup work before publishing metadata.
+      // The profile/session lock also closes the check -> store.set window.
+      try {
+        assertPrecreatedSessionNotCancelled(req.sessionId);
+      } catch (error) {
+        // Rollback must not race our own background checkout writer.
+        await bgPromise?.catch(() => undefined);
+        throw error;
+      }
+      // store + DB
       const meta: WorktreeMeta = {
         sessionId: req.sessionId,
         name,
@@ -1596,6 +1607,30 @@ export type DiscardPrecreatedWorktreeResult =
   | { status: 'path-mismatch' }
   | { status: 'preserved' }
   | { status: 'discarded'; branchDeleted: boolean };
+
+/** Caller holds the session-create lock. Seal before deleting so a late create
+ * cannot resurrect the cancelled id. Keep the seal even if dirty files prevent
+ * removal; the same explicit cancellation can safely be retried later. */
+export async function cancelPrecreatedWorktree(
+  sessionId: string,
+  locator: { path?: string; recoveryKey?: string },
+  options: Pick<RemoveWorktreeOptions, 'canRemove'>,
+): Promise<DiscardPrecreatedWorktreeResult> {
+  return withPrecreatedWorktreeOperationQueue(sessionId, async () => {
+    const meta = store.get(sessionId);
+    if (meta && (locator.recoveryKey !== undefined
+      ? meta.recoveryKey !== locator.recoveryKey
+      : !locator.path || (path.resolve(meta.path) !== path.resolve(locator.path)
+        && (!meta.quarantinePath || path.resolve(meta.quarantinePath) !== path.resolve(locator.path))))) {
+      return { status: 'path-mismatch' };
+    }
+    if (meta?.ephemeral) return { status: 'preserved' };
+    if (!options.canRemove || !(await options.canRemove())) return { status: 'preserved' };
+    sealPrecreatedSessionCancellation(sessionId);
+    return meta ? discardPrecreatedWorktree(sessionId, meta.path, options) : { status: 'absent' };
+  });
+}
+export { assertPrecreatedSessionNotCancelled } from './precreatedCancellation';
 
 /**
  * 手机在 worktree:create 之前先持久化 sessionId + recoveryKey；若进程在 create

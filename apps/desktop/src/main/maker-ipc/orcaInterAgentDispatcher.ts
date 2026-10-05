@@ -177,6 +177,10 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   ) => Promise<unknown>;
   beginDirectTurnChangeSet: (sessionId: string, clientId: string) => Promise<void>;
   abortDirectTurnChangeSet: (sessionId: string) => void;
+  /**
+   * 反查 worker 的 role，查不到返回 fallback。dispatcher 以空串作 fallback 区分「未知」，
+   * role 同时用于来源标签与发给 lead 的 `[From Orca Worker <role> (worker_id: …)]` 前缀。
+   */
   resolveWorkerSenderLabel: (workerId: string, fallback: string) => Promise<string>;
   /**
    * 反查 worker 所在的 Lead / Worker 会话，给消息来源标签定位发送方会话。
@@ -333,7 +337,12 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     }
 
     const clientId = deps.createId();
-    const agentMessageText = formatAgentMessage(params.source, params.rawContent, params.workerId);
+    // worker 回报的前缀要带发件 worker 的 role,需要反查;只查一次,文本与来源标签共用。
+    let workerRolePromise: Promise<string | undefined> | undefined;
+    const resolveRole = (): Promise<string | undefined> =>
+      (workerRolePromise ??= resolveOrcaWorkerRole(deps, params));
+    const buildAgentMessageText = async (): Promise<string> =>
+      formatAgentMessage(params.source, params.rawContent, params.workerId, await resolveRole());
     const persistedContent = formatOrcaCommunicationMessage(params.source, params.rawContent);
     let acceptedDidRun = false;
     const runAccepted = async (): Promise<void> => {
@@ -363,14 +372,8 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         : null,
     };
     // senderLabel 口径 = worker 的 role。包侧路径只有 workerId 可传, host 这里反查 role 覆盖。
-    const resolveSenderLabel = async (): Promise<string> => {
-      if (params.source !== 'worker' || !params.workerId) return params.senderLabel;
-      try {
-        return await deps.resolveWorkerSenderLabel(params.workerId, params.senderLabel);
-      } catch {
-        return params.senderLabel;
-      }
-    };
+    const resolveSenderLabel = async (): Promise<string> =>
+      (await resolveRole()) ?? params.senderLabel;
     const resolveOrigin = async (): Promise<NonNullable<AgentInputQueuedMessage['origin']>> => {
       const [senderLabel, senderSessionId] = await Promise.all([
         resolveSenderLabel(),
@@ -387,7 +390,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
       const queued = buildQueuedOrcaInterAgentMessage({
         clientId,
-        agentMessageText,
+        agentMessageText: await buildAgentMessageText(),
         persistedContent,
         origin: await resolveOrigin(),
         createOpts,
@@ -429,7 +432,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         const result = await deps.sendToSessionInternal({
           autoReviewUserText: { kind: 'delegated-continuation' },
           targetSessionId: params.targetSessionId,
-          message: agentMessageText,
+          message: await buildAgentMessageText(),
           persistedContent,
           clientId,
           onAccepted: runAccepted,
@@ -476,7 +479,10 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         await deps.prepareUnhealthySession?.(params.targetSessionId);
         const live = deps.getLiveSession(params.targetSessionId);
         if (!live) return null;
-        const origin = await resolveOrigin();
+        const [origin, agentMessageText] = await Promise.all([
+          resolveOrigin(),
+          buildAgentMessageText(),
+        ]);
         const result = await sendPersistedUserMessageToSession(deps, {
           session: live,
           dbContent: persistedContent,
@@ -551,18 +557,12 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
 
     const clientId = deps.createId();
     const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
-    let senderLabel = params.senderLabel;
-    if (params.source === 'worker' && params.workerId) {
-      try {
-        senderLabel = await deps.resolveWorkerSenderLabel(params.workerId, params.senderLabel);
-      } catch {
-        senderLabel = params.senderLabel;
-      }
-    }
+    const workerRole = await resolveOrcaWorkerRole(deps, params);
+    const senderLabel = workerRole ?? params.senderLabel;
     const senderSessionId = await resolveOrcaSenderSessionId(deps, params);
     const queued = buildQueuedOrcaInterAgentMessage({
       clientId,
-      agentMessageText: formatAgentMessage(params.source, params.rawContent, params.workerId),
+      agentMessageText: formatAgentMessage(params.source, params.rawContent, params.workerId, workerRole),
       persistedContent: formatOrcaCommunicationMessage(params.source, params.rawContent),
       origin: {
         kind: 'orca',
@@ -642,6 +642,23 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     settleQueuedOrcaInterAgentAcceptedCallback,
     discardQueuedOrcaInterAgentAcceptedCallback,
   };
+}
+
+/**
+ * worker 发出的消息反查其 role（lead 发出的消息不需要）。查不到或出错返回 undefined，
+ * 消息照常投递：前缀退回只带 worker_id，来源标签退回调用方给的 senderLabel。
+ */
+async function resolveOrcaWorkerRole<TSessionMeta>(
+  deps: OrcaInterAgentDispatcherDeps<TSessionMeta>,
+  params: Pick<DispatchOrcaInterAgentMessageParams, 'source' | 'workerId'>,
+): Promise<string | undefined> {
+  if (params.source !== 'worker' || !params.workerId) return undefined;
+  try {
+    const role = (await deps.resolveWorkerSenderLabel(params.workerId, '')).trim();
+    return role || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Lead 发出的消息来源是 Lead 会话，Worker 发出的是 Worker 会话；都以 workerId 反查。 */

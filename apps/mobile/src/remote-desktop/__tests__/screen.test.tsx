@@ -712,11 +712,19 @@ describe("remote desktop controls", () => {
             : Promise.resolve(),
         );
       }
-      if (reason === "control-busy" || reason === "settings-busy") {
-        act(() => button("operations").click());
+      if (reason === "control-busy") {
+        // View only is local; an overflow release keeps a host request in flight.
         await act(async () =>
-          button(reason === "control-busy" ? "viewOnly" : "sound").click(),
+          fixture.message!({
+            nativeEvent: {
+              data: JSON.stringify({ type: "inputOverflow", epoch: "lease" }),
+            },
+          }),
         );
+        expect(finish).toBeDefined();
+      } else if (reason === "settings-busy") {
+        act(() => button("operations").click());
+        await act(async () => button("sound").click());
         expect(finish).toBeDefined();
       }
       await act(async () => render(false));
@@ -975,18 +983,15 @@ describe("remote desktop controls", () => {
       await web("presentation", { active: false });
       await web("presentation", { active: false });
       expect(fixture.pipEnabled).toBe(true);
-      if (controlling) {
-        expect(
-          requests().filter((r) => r.op === "control" && r.enabled),
-        ).toHaveLength(1);
-      } else {
-        expect(
-          requests().filter((r) => r.op === "control" && r.enabled),
-        ).toHaveLength(0);
-        expect(
-          requests().filter((r) => r.op === "presentation" && !r.enabled),
-        ).toHaveLength(1);
-      }
+      // View only is local: the host gets control back either way, while a
+      // view-only phone keeps its input switched off.
+      expect(
+        requests().filter((r) => r.op === "control" && r.enabled),
+      ).toHaveLength(1);
+      expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+        type: "control",
+        enabled: controlling,
+      });
       expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
     },
   );
@@ -1105,9 +1110,11 @@ describe("remote desktop controls", () => {
     ).toMatchObject({ enabled: true });
     act(() => button("operations").click());
     await act(async () => button("viewOnly").click());
+    // View only is local; it never asks the host.
     expect(requests().filter((r) => r.op === "control")).toHaveLength(
-      before + 2,
+      before + 1,
     );
+    expect(button("viewOnly").getAttribute("aria-selected")).toBe("true");
   });
   it.each([true, false])(
     "restores the prior control choice (%s) when a Home gesture is cancelled during preparation",
@@ -1142,8 +1149,9 @@ describe("remote desktop controls", () => {
       expect(button("viewOnly").getAttribute("aria-selected")).toBe(
         String(!controlling),
       );
+      // View only is local, so the host regains control either way.
       expect(requests().filter((r) => r.op === "control")).toHaveLength(
-        before + Number(controlling),
+        before + 1,
       );
       expect(
         sent().filter((m) => m.type === "presentation" && m.enabled),
@@ -1448,13 +1456,15 @@ describe("remote desktop controls", () => {
       fixture.post.mockClear();
     };
     const relayedControl = () => requests().filter((r) => r.op === "control");
+    // View only is local now; an overflow release still asks the host.
+    const release = () => viewer({ type: "inputOverflow" });
     const channelRequest = () =>
       sent().findLast((m) => m.type === "channelRequest");
 
     it("sends control over the WebView channel and settles from its reply", async () => {
       withChannel(true);
       await live();
-      await act(async () => button("viewOnly").click());
+      await release();
       expect(channelRequest()).toMatchObject({
         request: { op: "control", lease: "lease", enabled: false },
       });
@@ -1470,7 +1480,6 @@ describe("remote desktop controls", () => {
         ok: true,
         result: { controlling: false },
       });
-      expect(button("viewOnly").getAttribute("aria-selected")).toBe("true");
       expect(relayedControl()).toEqual([]);
     });
 
@@ -1494,7 +1503,7 @@ describe("remote desktop controls", () => {
     ])("uses the relay when %s", async (_name, answer) => {
       withChannel(true);
       await live();
-      await act(async () => button("viewOnly").click());
+      await release();
       await viewer({ ...answer, id: channelRequest().id });
       expect(relayedControl()).toEqual([
         { op: "control", lease: "lease", enabled: false },
@@ -1504,7 +1513,7 @@ describe("remote desktop controls", () => {
     it("never replays a request the channel already took", async () => {
       withChannel(true);
       await live();
-      await act(async () => button("viewOnly").click());
+      await release();
       await viewer({
         type: "channelRequestState",
         id: channelRequest().id,
@@ -1523,13 +1532,13 @@ describe("remote desktop controls", () => {
     it("settles a sent request when the media falls back, without replaying it", async () => {
       withChannel(true);
       await live();
-      await act(async () => button("viewOnly").click());
+      await release();
       const first = channelRequest().id;
       await viewer({ type: "channelRequestState", id: first, sent: true });
       await viewer({ type: "fallback", reason: "failed" });
-      // The switch is free again right away and the next one uses the relay;
+      // Control is free again right away and the next release uses the relay;
       // the request the channel took is never sent twice.
-      await act(async () => button("viewOnly").click());
+      await release();
       expect(relayedControl().filter((r) => r.enabled === false)).toHaveLength(
         1,
       );
@@ -1539,7 +1548,7 @@ describe("remote desktop controls", () => {
     it("keeps the relay for hosts without the capability or before video", async () => {
       withChannel(false);
       await live();
-      await act(async () => button("viewOnly").click());
+      await release();
       expect(sent().some((m) => m.type === "channelRequest")).toBe(false);
       expect(relayedControl()).toHaveLength(1);
     });
@@ -1564,7 +1573,7 @@ describe("remote desktop controls", () => {
       act(() => button("operations").click());
       fixture.invoke.mockClear();
       fixture.post.mockClear();
-      await act(async () => button("viewOnly").click());
+      await release();
       const native = fixture.nativeRequest.mock.calls.at(-1)?.[0] as {
         id: string;
         epoch: string;
@@ -1588,8 +1597,9 @@ describe("remote desktop controls", () => {
           },
         }),
       );
-      expect(button("viewOnly").getAttribute("aria-selected")).toBe("true");
       fixture.nativeRequest.mockResolvedValue(false);
+      // Leaving view only asks the host again once it no longer controls.
+      await act(async () => button("viewOnly").click());
       await act(async () => button("viewOnly").click());
       expect(channelRequest()).toMatchObject({
         request: { op: "control", lease: "lease", enabled: true },
@@ -4450,6 +4460,18 @@ describe("remote desktop controls", () => {
     expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
     expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
   });
+  /** The host drops control (overflow release); the phone then enters view only. */
+  const dropHostControl = async () => {
+    await act(async () => {
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({ type: "inputOverflow", epoch: "lease" }),
+        },
+      });
+    });
+    act(() => button("operations").click());
+    await act(async () => button("viewOnly").click());
+  };
   it("finishes a timed-out overflow release before taking control again", async () => {
     await connect();
     const original = fixture.invoke.getMockImplementation()!;
@@ -4478,14 +4500,16 @@ describe("remote desktop controls", () => {
       requests().filter((r) => r.op === "control" && r.enabled === false),
     ).toHaveLength(1);
     act(() => button("operations").click());
+    // Entering view only is local and leaves the pending release alone.
     await act(async () => button("viewOnly").click());
-    const controlOps = requests()
-      .filter((r) => r.op === "control")
-      .map((r) => r.enabled);
-    // Overflow timed out with pending release. Take control must finish that
-    // release (host stopInput) before asking to enable, so the helper restarts.
-    expect(controlOps).toEqual([true, false, false]);
+    expect(
+      requests()
+        .filter((r) => r.op === "control")
+        .map((r) => r.enabled),
+    ).toEqual([true, false]);
     expect(button("viewOnly").getAttribute("aria-selected")).toBe("true");
+    // Overflow timed out with pending release. Taking control must finish that
+    // release (host stopInput) before asking to enable, so the helper restarts.
     await act(async () => button("viewOnly").click());
     expect(
       requests()
@@ -4505,8 +4529,7 @@ describe("remote desktop controls", () => {
   });
   it("restores control when a take-control reply is lost but the host still holds it", async () => {
     await connect();
-    act(() => button("operations").click());
-    await act(async () => button("viewOnly").click());
+    await dropHostControl();
     const original = fixture.invoke.getMockImplementation()!;
     fixture.invoke.mockImplementation((...args) => {
       const req = args[2][0];
@@ -4525,6 +4548,7 @@ describe("remote desktop controls", () => {
     ).toEqual({
       type: "control",
       enabled: false,
+      release: true,
     });
     await act(async () => vi.advanceTimersByTimeAsync(3000));
     expect(
@@ -4540,8 +4564,7 @@ describe("remote desktop controls", () => {
   });
   it("keeps a take-control intent when a settling heartbeat still reports view-only", async () => {
     await connect();
-    act(() => button("operations").click());
-    await act(async () => button("viewOnly").click());
+    await dropHostControl();
     const original = fixture.invoke.getMockImplementation()!;
     let rejectTakeControl: ((cause: unknown) => void) | undefined;
     let heartbeats = 0;
@@ -4637,19 +4660,130 @@ describe("remote desktop controls", () => {
       viewer,
     );
     await act(async () => button("viewOnly").click());
-    expect(requests()).toContainEqual({
-      op: "control",
-      lease: "lease",
+    // View only is local: input stops here and the host keeps control.
+    expect(requests().some((r) => r.op === "control" && !r.enabled)).toBe(false);
+    expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+      type: "control",
       enabled: false,
+      release: true,
     });
     expect(button("keyboard").disabled).toBe(true);
     await connect();
+    // A new lease takes host control again; the phone stays in view only.
     expect(
       requests().filter((r) => r.op === "control" && r.enabled),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(button("keyboard").disabled).toBe(true);
     await act(async () => button("viewOnly").click());
     expect(button("keyboard").disabled).toBe(false);
+  });
+  describe("hosts that grant control with the lease (autoControl)", () => {
+    const autoControl = () => {
+      const original = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation(async (...args) => {
+        const request = args[2][0];
+        const result = await original(...args);
+        if (request.op === "capabilities")
+          return { ...(result as object), autoControl: true };
+        if (request.op === "start")
+          return { ...(result as object), controlling: request.control === true };
+        return result;
+      });
+    };
+    it("enters without a separate control request", async () => {
+      autoControl();
+      await connect();
+      expect(requests().find((r) => r.op === "start")).toMatchObject({
+        control: true,
+      });
+      expect(requests().some((r) => r.op === "control")).toBe(false);
+      expect(sent()).toContainEqual({ type: "control", enabled: true });
+      expect(button("keyboard").disabled).toBe(false);
+    });
+    const viewerInput = (sequence: number, events: object[]) =>
+      act(async () =>
+        fixture.message!({
+          nativeEvent: {
+            data: JSON.stringify({ type: "input", epoch: "lease", sequence, events }),
+          },
+        }),
+      );
+    it("releases host input on entering view only even with a batch in flight", async () => {
+      autoControl();
+      await connect();
+      const original = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation((...args) =>
+        args[2][0].op === "input" && args[2][0].sequence === 1
+          ? new Promise(() => {})
+          : original(...args),
+      );
+      await viewerInput(1, [{ kind: "button", button: 0, down: true, x: 0.5, y: 0.5 }]);
+      act(() => button("operations").click());
+      await act(async () => button("viewOnly").click());
+      expect(sent()).toContainEqual({ type: "control", enabled: false, release: true });
+      // The runtime's trailing release reaches the host past the busy batch.
+      await viewerInput(2, [{ kind: "release" }]);
+      expect(requests()).toContainEqual({
+        op: "input",
+        lease: "lease",
+        sequence: 2,
+        events: [{ kind: "release" }],
+      });
+      // Other input stays local while viewing only.
+      await viewerInput(3, [{ kind: "move", x: 0.2, y: 0.2 }]);
+      expect(requests().some((r) => r.op === "input" && r.sequence === 3)).toBe(false);
+    });
+    it("drops a native-pending batch that falls back after view only started", async () => {
+      fixture.nativeMedia = true;
+      act(() => root.render(<RemoteDesktopScreen />));
+      autoControl();
+      await connect();
+      let fallback!: (sent: boolean) => void;
+      fixture.nativeInput.mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            fallback = resolve;
+          }),
+      );
+      await viewerInput(1, [{ kind: "move", x: 0.5, y: 0.5 }]);
+      expect(fallback).toBeTypeOf("function");
+      act(() => button("operations").click());
+      await act(async () => button("viewOnly").click());
+      await act(async () => fallback(false));
+      expect(requests().some((r) => r.op === "input" && r.sequence === 1)).toBe(false);
+    });
+    it("switches view only locally without asking the host", async () => {
+      autoControl();
+      await connect();
+      act(() => button("operations").click());
+      fixture.invoke.mockClear();
+      fixture.post.mockClear();
+      await act(async () => button("viewOnly").click());
+      expect(button("viewOnly").getAttribute("aria-selected")).toBe("true");
+      expect(button("keyboard").disabled).toBe(true);
+      expect(sent()).toContainEqual({ type: "control", enabled: false, release: true });
+      // Taps no longer reach the computer while viewing only.
+      await act(async () =>
+        fixture.message!({
+          nativeEvent: {
+            data: JSON.stringify({
+              type: "input",
+              epoch: "lease",
+              sequence: 1,
+              events: [{ kind: "move", x: 0.5, y: 0.5 }],
+            }),
+          },
+        }),
+      );
+      await act(async () => button("viewOnly").click());
+      expect(button("viewOnly").getAttribute("aria-selected")).toBe("false");
+      expect(button("keyboard").disabled).toBe(false);
+      expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+        type: "control",
+        enabled: true,
+      });
+      expect(requests()).toEqual([]);
+    });
   });
   it("asks before taking over an existing remote desktop viewer", async () => {
     const original = fixture.invoke.getMockImplementation()!;
@@ -4830,9 +4964,14 @@ describe("remote desktop controls", () => {
     fixture.status = "online";
     await act(async () => root.render(<RemoteDesktopScreen />));
     expect(requests().filter((r) => r.op === "start")).toHaveLength(2);
+    // The new lease takes host control again; view only stays a local choice.
     expect(
       requests().filter((r) => r.op === "control" && r.enabled),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
+    expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+      type: "control",
+      enabled: false,
+    });
     expect(fixture.openLink.mock.calls.every(([id]) => id === "computer")).toBe(
       true,
     );

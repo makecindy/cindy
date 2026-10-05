@@ -2769,13 +2769,13 @@ describe("Pi provider-aware model routing", () => {
     );
 
     for (const [index, model] of ["grok-4.6", "xai/grok-4.6"].entries()) {
-      await expect(
-        agent.startSession({
+      const startupFailure = await agent.startSession({
           sessionId: `providerless-grok-proxy-not-ready-${index}`,
           workingDir: cwd,
           model,
-        }),
-      ).rejects.toBe(proxyNotReady);
+        }).catch((error: unknown) => error);
+      expect(startupFailure).toMatchObject({ name: 'AgentStartupStoppedError' });
+      expect((startupFailure as Error).cause).toBe(proxyNotReady);
     }
     expect(captured.args).toEqual([]);
   });

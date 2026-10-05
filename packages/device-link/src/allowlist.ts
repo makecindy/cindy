@@ -428,6 +428,12 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // → 控制端降级空表(面板退化为事件流 + 消息扫描两源)。
   'maker:session-background-tasks:list',
   'maker:session-background-activity',
+  // 后台任务停止(写):单个任务精确停止 / 会话级「全部停止」。handler 只按 sessionId
+  // (+ taskId)操作被控端活跃会话,无 event.sender 依赖、无本机 UI 副作用;任务真身在
+  // 被控端,控制端本机调用只会假成功。仅同账号远控,不进 sharedTask 访客白名单。
+  // 老被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端提示升级被控端。
+  'maker:agent-task:stop',
+  'maker:session-background-tasks:stop',
   // Durable PI Subagent truth and process handles live on the data-owning device.
   // Reads and exact controls must execute there; the controller must never fall
   // back to its own pi-agent-home for a remote task.
@@ -588,6 +594,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'worktree:suggest-name',
   'worktree:create',
   'worktree:discard-precreated',
+  'worktree:cancel-precreated',
   'worktree:removal-preview',
   // —— 个人 Telegram bot 跨设备上下线(准入论证见上方 DL_TELEGRAM_* 常量注释)——
   // 两条都由被控端 dispatch 拦截执行, 不是 ipcMain handler。
@@ -762,6 +769,7 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   'worktree:create': 60_000,
   // 可能先等待同 sessionId 的晚到 create 释放互斥锁，再执行 git worktree remove。
   'worktree:discard-precreated': 60_000,
+  'worktree:cancel-precreated': 60_000,
   // pi 手动压缩调 LLM 生成摘要,大上下文 + 网关排队可达分钟级(core 侧
   // PI_COMPACT_TIMEOUT_MS = 10min);默认 30s 隧道超时会截断远程压缩请求,
   // 用户在控制端看到的就是「无反馈失败」。给足执行预算 + 回程余量:

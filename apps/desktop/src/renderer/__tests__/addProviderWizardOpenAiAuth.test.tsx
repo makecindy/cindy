@@ -9,7 +9,9 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import React from 'react';
+import React, { useState } from 'react';
+import userEvent from '@testing-library/user-event';
+import * as Dialog from '@radix-ui/react-dialog';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
@@ -283,7 +285,8 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     fireEvent.click(screen.getByText('settings.providers.openai.addIndependentAccount'));
     await waitFor(() => expect(providerOAuthLogin).toHaveBeenCalledTimes(1));
     const oldId = providerOAuthLogin.mock.calls[0][0];
-    fireEvent.click(screen.getByText('settings.providers.wizard.cancel'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.back'));
+    fireEvent.click(screen.getByText('OpenAI'));
     fireEvent.click(screen.getByText('settings.providers.openai.addIndependentAccount'));
     await waitFor(() => expect(providerOAuthLogin).toHaveBeenCalledTimes(2));
     const [newId, { ownerId }] = providerOAuthLogin.mock.calls[1];
@@ -295,7 +298,7 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     expect(screen.getByText('settings.providers.wizard.cancel')).toBeTruthy();
     expect(onDone).not.toHaveBeenCalled();
     await act(async () => { finishNew({ ok: true }); });
-    expect(onDone).toHaveBeenCalledWith(newId);
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(newId));
     expect(onDone).toHaveBeenCalledTimes(1);
   });
   it.each(['xai'])('cancels only the pending independent %s authorization', async id => {
@@ -523,7 +526,7 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
 });
 
 describe('AddProviderWizard — 关闭途径(取消 / Esc)', () => {
-  it('按 Esc 关闭向导', () => {
+  it('按 Esc 关闭向导', async () => {
     const onClose = vi.fn();
     render(
       <AddProviderWizard
@@ -533,11 +536,11 @@ describe('AddProviderWizard — 关闭途径(取消 / Esc)', () => {
         onDone={vi.fn()}
       />,
     );
-    fireEvent.keyDown(window, { key: 'Escape' });
-    expect(onClose).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
-  it('输入法组合期间按 Esc 不关闭向导(取消候选词,不是关闭命令)', () => {
+  it('输入法组合期间按 Esc 不关闭向导(取消候选词,不是关闭命令)', async () => {
     const onClose = vi.fn();
     render(
       <AddProviderWizard
@@ -547,17 +550,17 @@ describe('AddProviderWizard — 关闭途径(取消 / Esc)', () => {
         onDone={vi.fn()}
       />,
     );
-    fireEvent.keyDown(window, { key: 'Escape', isComposing: true });
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape', isComposing: true });
     expect(onClose).not.toHaveBeenCalled();
-    fireEvent.keyDown(window, { key: 'Escape', keyCode: 229 });
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape', keyCode: 229 });
     expect(onClose).not.toHaveBeenCalled();
-    fireEvent.keyDown(window, { key: 'Escape' });
-    expect(onClose).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
-  it('点击遮罩或弹窗内部不关闭;点击取消关闭', () => {
+  it('点击遮罩或弹窗内部不关闭;点击取消关闭', async () => {
     const onClose = vi.fn();
-    const { container } = render(
+    render(
       <AddProviderWizard
         providers={[OPENAI_PROVIDER]}
         onOpenCustomForm={vi.fn()}
@@ -567,7 +570,7 @@ describe('AddProviderWizard — 关闭途径(取消 / Esc)', () => {
     );
     fireEvent.click(screen.getByText('settings.providers.wizard.title'));
     expect(onClose).not.toHaveBeenCalled();
-    const overlay = container.firstElementChild as HTMLElement;
+    const overlay = document.querySelector('.modal-scrim')!;
     fireEvent.mouseDown(screen.getByText('settings.providers.wizard.title'));
     fireEvent.click(overlay);
     expect(onClose).not.toHaveBeenCalled();
@@ -575,6 +578,40 @@ describe('AddProviderWizard — 关闭途径(取消 / Esc)', () => {
     fireEvent.click(overlay);
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('settings.providers.wizard.cancel'));
-    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
+});
+
+it('wizard focuses search, contains Tab, restores its opener and lets a top dialog own Esc', async () => {
+  function Harness() {
+    const [open, setOpen] = useState(false);
+    const [child, setChild] = useState(false);
+    return <>
+      <button onClick={() => setOpen(true)}>Add provider</button>
+      {open && <AddProviderWizard providers={[]} onOpenCustomForm={vi.fn()} onClose={() => setOpen(false)} onDone={() => setOpen(false)} />}
+      <Dialog.Root open={child} onOpenChange={setChild}>
+        <Dialog.Portal><Dialog.Content aria-describedby={undefined}><Dialog.Title>Top layer</Dialog.Title><button>Child action</button></Dialog.Content></Dialog.Portal>
+      </Dialog.Root>
+      <button onClick={() => setChild(true)}>Open child</button>
+    </>;
+  }
+  const user = userEvent.setup();
+  render(<Harness />);
+  const opener = screen.getByRole('button', { name: 'Add provider' });
+  await user.click(opener);
+  const search = screen.getByPlaceholderText('settings.providers.wizard.searchPlaceholder');
+  const cancel = screen.getByRole('button', { name: 'settings.providers.wizard.cancel' });
+  expect(document.activeElement).toBe(search);
+  await user.tab({ shift: true });
+  expect(document.activeElement).toBe(cancel);
+  await user.tab();
+  expect(document.activeElement).toBe(search);
+  // Open a second Radix layer without moving focus outside the first modal.
+  fireEvent.click(screen.getByRole('button', { name: 'Open child', hidden: true }));
+  await user.keyboard('{Escape}');
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  expect(screen.queryByText('Top layer')).toBeNull();
+  await user.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(opener));
 });

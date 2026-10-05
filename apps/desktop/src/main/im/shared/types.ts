@@ -27,6 +27,7 @@ import type {
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
 import type { GroupHistoryAccessScope } from './groupHistoryAccess';
+import type { ImChannelNoteSource } from './channelNote';
 import type { ImOutputDriver, IMAttachment, IMMessageEvent, IMUnsupportedEntry, TextChannelIM } from '@cindy/im';
 
 /** 渠道名 — 同时是 sessions.source 列值与 IdentityKey.channel 的值域。 */
@@ -255,6 +256,14 @@ export interface ImChannelAdapter {
   ): boolean;
   /** Telegram 每轮的群历史检索授权；其它渠道不实现即 fail closed。 */
   groupHistoryAccessFor?(event: IMMessageEvent): GroupHistoryAccessScope | undefined;
+  /**
+   * 本条消息的 `[渠道说明]` 来源事实（只进模型正文, 见 channelNote.ts）。
+   * 缺省按入站事件通用推断（imChannelNoteSourceFromEvent）; 渠道有更准确的
+   * 群 id / 群名, 或已在正文别处写了发言人时覆盖。返回 null = 本条不写说明。
+   */
+  channelNoteSourceFor?(
+    event: IMMessageEvent,
+  ): ImChannelNoteSource | null | Promise<ImChannelNoteSource | null>;
 }
 
 // ── UI 文案包 ─────────────────────────────────────────────────────────────────

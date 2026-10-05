@@ -14,7 +14,14 @@ import { Button } from '@/components/ui/button';
  * 模型 = 总闸 + 逐设备例外。底层全部复用 useDeviceLinkSettings,本面板只做组装与展示。
  */
 
-import { useState, useSyncExternalStore, type ReactNode } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type MutableRefObject,
+  type ReactNode,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { RefreshCw, Pencil, Trash2, Check, X, Monitor } from 'lucide-react';
 import { toast } from '@/lib/toast';
@@ -101,6 +108,50 @@ function relativeTime(
   return new Date(ts).toLocaleDateString();
 }
 
+/** 与设置搜索命中同款的短暂高亮(globals.css),时长也一致。 */
+const FOCUS_HIGHLIGHT_CLASS = 'settings-search-target-highlight';
+const FOCUS_HIGHLIGHT_MS = 1600;
+
+/**
+ * 深链聚焦某台设备:行渲染出来后滚入视野并短暂高亮。等两帧再滚 —— 设置页自己的
+ * section 深链滚动(父组件 effect,同帧 rAF)会先把容器滚到「我的设备」顶部,
+ * 这里要排在它之后,否则被它盖掉。每个 focusRequestKey 只聚焦一次。
+ */
+function useFocusDeviceRow(
+  rowRefs: MutableRefObject<Map<string, HTMLLIElement>>,
+  focusDeviceId: string | null | undefined,
+  focusRequestKey: string | null | undefined,
+  rowRendered: boolean,
+): void {
+  const handledKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusDeviceId || !focusRequestKey || !rowRendered) return;
+    if (handledKeyRef.current === focusRequestKey) return;
+    let row: HTMLLIElement | undefined;
+    let timer: number | undefined;
+    let second = 0;
+    const first = window.requestAnimationFrame(() => {
+      second = window.requestAnimationFrame(() => {
+        row = rowRefs.current.get(focusDeviceId);
+        if (!row) return;
+        // 真正滚到并高亮后才记为已处理:列表刷新等让 effect 在两帧之间被清理时,
+        // 重新运行仍会再定位一次,不会因提前记账而永远跳过。
+        handledKeyRef.current = focusRequestKey;
+        const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+        row.scrollIntoView?.({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+        row.classList.add(FOCUS_HIGHLIGHT_CLASS);
+        timer = window.setTimeout(() => row?.classList.remove(FOCUS_HIGHLIGHT_CLASS), FOCUS_HIGHLIGHT_MS);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(first);
+      window.cancelAnimationFrame(second);
+      if (timer !== undefined) window.clearTimeout(timer);
+      row?.classList.remove(FOCUS_HIGHLIGHT_CLASS);
+    };
+  }, [focusDeviceId, focusRequestKey, rowRefs, rowRendered]);
+}
+
 /** 设备卡内的一条控件行:左标签(可带原因副文案)+ 右控件。 */
 function ControlRow({
   label,
@@ -134,10 +185,16 @@ export function MyDevicesPanel({
   s,
   variant = 'all',
   selfSettings,
+  focusDeviceId,
+  focusRequestKey,
 }: {
   s: DeviceLinkSettings;
   variant?: 'all' | 'self' | 'others';
   selfSettings?: ReactNode;
+  /** 深链要聚焦的设备(本实例渲染了该设备时才处理)。 */
+  focusDeviceId?: string | null;
+  /** 聚焦请求的唯一键;同一设备被再次请求时随之变化。 */
+  focusRequestKey?: string | null;
 }) {
   const { t } = useTranslation();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -154,6 +211,18 @@ export function MyDevicesPanel({
   const others = (s.devices ?? []).filter((d) => !d.isSelf).sort(compareDevicesByName);
   const revokedControllers = new Set(s.revokedControllers);
   const controlling = new Set(s.controlledBy.map((c) => c.deviceId));
+
+  const rowRefs = useRef(new Map<string, HTMLLIElement>());
+  const bindRow = (deviceId: string) => (node: HTMLLIElement | null) => {
+    if (node) rowRefs.current.set(deviceId, node);
+    else rowRefs.current.delete(deviceId);
+  };
+  const focusRowRendered = Boolean(
+    focusDeviceId &&
+      ((variant !== 'others' && self?.deviceId === focusDeviceId) ||
+        (variant !== 'self' && others.some((d) => d.deviceId === focusDeviceId))),
+  );
+  useFocusDeviceRow(rowRefs, focusDeviceId, focusRequestKey, focusRowRendered);
 
   // 连接问题(鉴权失效/被顶号/超限/版本不符/反复掉线)时不再显示笼统的 connecting 黄点。
   const activeConnectionIssue = resolveActiveConnectionIssue(s.linkStatus, s.connectionIssue);
@@ -222,7 +291,11 @@ export function MyDevicesPanel({
       >
         {/* 本机:承载重命名 + 被控总开关 + relay 状态 */}
         {variant !== 'others' && (
-        <li className={cardClass}>
+        <li
+          ref={self ? bindRow(self.deviceId) : undefined}
+          data-device-id={self?.deviceId}
+          className={cardClass}
+        >
           <div className="flex items-center gap-3">
             <span
               className="h-1.5 w-1.5 shrink-0 rounded-full"
@@ -333,7 +406,12 @@ export function MyDevicesPanel({
                 ? t('settings.remoteControl.myDevices.peerControlOff')
                 : null;
             return (
-              <li key={d.deviceId} className={cardClass}>
+              <li
+                key={d.deviceId}
+                ref={bindRow(d.deviceId)}
+                data-device-id={d.deviceId}
+                className={cardClass}
+              >
                 {/* header: 状态点 + 名字(可编辑) + 元信息 + 重命名/删除 */}
                 <div className="flex items-center gap-3">
                   <span

@@ -4551,6 +4551,12 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(completionRow.role).toBe('user');
       expect(completionRow.content).toContain('结论：三个版本都兼容。');
       expect(completionRow.content.startsWith(UI_ACTION_TRIGGER_PREFIX)).toBe(true);
+      // 发给模型的回执正文不带隐藏前缀;前缀只留在落库 / 排队可见内容上。
+      const completionDispatch = runtime.dispatch.mock.calls
+        .map(([params]) => params)
+        .find((params) => params.clientId === completionClientId);
+      expect(completionDispatch?.message.startsWith('[任务回执]')).toBe(true);
+      expect(completionDispatch?.persistedContent).toBe(`${UI_ACTION_TRIGGER_PREFIX}${completionDispatch?.message}`);
       // 发起方那一侧也真的被唤醒了（否则「结果回到 A 的对话」只是写了一行数据库）。
       expect(runtime.started.some((turn) => turn.sessionId === 'session-1')).toBe(true);
       expect(runtime.changed.at(-1)).toEqual({
@@ -6832,7 +6838,8 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(runtime.dispatch).toHaveBeenCalledWith(expect.objectContaining({
         targetSessionId: started.childSessionId,
         clientId: childClientId,
-        message: `[来自 发起方伙伴 的补充]\n\n${instruction}`,
+        // 来源由 origin 统一表达(派发时主机前置 `[消息来源]`),正文不再手写前缀。
+        message: instruction,
         persistedContent: instruction,
       }));
       const readMessage = (sessionId: string, clientId: string) => h.sqlite!.prepare(

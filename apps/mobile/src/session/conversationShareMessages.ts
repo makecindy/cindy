@@ -2,7 +2,6 @@ import type {
   MobileMessageRenderItem,
   MobileWorkChildItem,
 } from '@/session/messageRenderModel';
-import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
 import { projectConversationShareMessage } from '@/session/conversationShareProjection';
 import type { ConversationShareMessage } from '@/session/conversationShareWebViewHtml';
 import { isShareableMessage } from '@/session/shareSelectionStore';
@@ -38,13 +37,14 @@ export function collectConversationShareBlockIds(
   return blockIds;
 }
 
-/** 展平当前已展开的工作组 / 子 Agent，投影用户实际看得到的消息用于图片导出。 */
+/**
+ * 展平当前已展开的工作组 / 子 Agent，投影用户实际看得到的消息用于图片导出。
+ * 分享图不显示任何消息来源（自动化 / 任务 / 设备 / 插件 / 共享任务作者）；
+ * 自动化消息只沿用会话里的收起阈值，让分享内容与屏幕上看到的一致。
+ */
 export function collectConversationShareMessages(
   items: readonly MobileMessageRenderItem[],
   isBlockExpanded: (blockId: string) => boolean,
-  getAutomationOriginLabel?: (
-    origin: NonNullable<NormalizedRemoteMessage['automationOrigin']>,
-  ) => string,
 ): ConversationShareMessage[] {
   const messages: ConversationShareMessage[] = [];
   const visit = (item: ConversationShareRenderItem): void => {
@@ -64,9 +64,6 @@ export function collectConversationShareMessages(
           : LONG_USER_MESSAGE_COLLAPSED_LINES
         : undefined;
       const projected = projectConversationShareMessage(clientId, item.message, {
-        automationOriginLabel: item.message.automationOrigin && getAutomationOriginLabel
-          ? getAutomationOriginLabel(item.message.automationOrigin)
-          : undefined,
         maxVisibleLines,
         visualLineCapacity: maxVisibleLines ? MIN_HALF_WIDTH_UNITS_PER_VISUAL_LINE : undefined,
       });

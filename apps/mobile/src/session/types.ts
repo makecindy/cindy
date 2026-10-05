@@ -176,7 +176,7 @@ export interface RemoteSerializedAttachment {
   truncated?: boolean;
   /**
    * 图片带用户手绘圈点标注(lightbox 标注模式的烧录产物)。字段随 wire 契约
-   * 原样透传到被控端(materializeQueuedOssAttachments 只改写 url/path),桌面
+   * 原样透传到被控端(materializeQueuedOssAttachmentsDeferred 只改写 url/path),桌面
    * 端 buildMakerUserMessage 据此给模型注入「红色笔迹是用户标注」的固定说明,
    * 与桌面 AgentInputSerializedFile.annotated 同一契约。
    */

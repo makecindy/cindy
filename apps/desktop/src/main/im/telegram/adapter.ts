@@ -27,6 +27,7 @@ import { autoRegisterTelegramSpeaker } from './contactsAutoRegister';
 import { createTelegramGuestTurnPermissionPolicy } from './permissionPolicy';
 import { telegramUiText, ui, PROCESSING_EMOJI } from './uiText';
 import type { GroupHistoryAccessScope } from '../shared/groupHistoryAccess';
+import { imChannelNoteSourceFromEvent } from '../shared/channelNote';
 
 function ensureWorkingDir(botId: string): string {
   const dir = ownerScopedImUserDataPath('im-working-dir', `telegram-${botId}`);
@@ -132,6 +133,8 @@ export function buildTelegramAdapter(
         lane: lane ? { provider, chatId: lane.chatId, threadId: lane.threadId } : null,
       };
     },
+    // 群里发言人已由 prepareAgentTurnText 的 `[发言人]` 行写明(含主人标记), 渠道说明不再重复。
+    channelNoteSourceFor: (event) => imChannelNoteSourceFromEvent(event, { omitSender: true }),
     prepareAgentTurnText: async (event) => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       const replyBlock = event.replyContext

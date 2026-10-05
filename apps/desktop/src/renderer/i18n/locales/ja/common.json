@@ -240,6 +240,8 @@
     "controlUnavailable": "リモートコンピューターで操作を受け付けられません。操作権限と接続を確認して再接続してください。",
     "beingControlled": "デスクトップが操作されています",
     "beingViewed": "デスクトップが表示されています",
+    "controlledByDevice": "{{name}} がデスクトップを操作しています",
+    "viewedByDevice": "{{name}} がデスクトップを表示しています",
     "disconnect": "切断",
     "back": "戻る",
     "connect": "接続",
@@ -312,7 +314,7 @@
       "resolution": "コンピュータの解像度",
       "clipboardFailed": "クリップボードの内容を転送できませんでした。操作権限を確認して再試行してください。",
       "settingsFailed": "設定を保存できませんでした。再試行してください。",
-      "inputHint": "画面をクリックして入力します。Ctrl+Alt+Esc でキーボードのフォーカスを解除し、Cmd/Ctrl+W でこのウィンドウを閉じます。",
+      "inputHint": "画面をクリックして入力します。ショートカット（Cmd/Ctrl+W を含む）はリモートのコンピュータに送信されます。Ctrl+Alt+Esc でキーボードのフォーカスを解除すると、Cmd/Ctrl+W でこのウィンドウを閉じます。",
       "controlPending": "操作権限を取得中…",
       "controlRequired": "表示のみです。リモートのパソコンを操作するには操作権限を取得してください。",
       "confirmDisconnect": "このコンピュータとの接続を切断しますか？",
@@ -320,6 +322,7 @@
       "disconnectFailed": "切断できませんでした。もう一度お試しください。",
       "clipboardShortcutHint": "画面内で {{modifier}}+C / {{modifier}}+V を使ってコピー・貼り付けできます。対応する内容は接続先のパソコンによって異なります。ファイルは転送されません。",
       "fitViewerDisplay": "現在の画面比率に合わせる",
+      "restoreViewerDisplay": "元の縦横比に戻す",
       "fitViewerDisplayHint": "デスクトップの内容を保ったまま、パソコンの画面比率を一時的に変更します。切断すると元の解像度に戻ります。",
       "resolutionHint": "解像度の変更はリモートの実際のモニターに反映されます。"
     },
@@ -5806,7 +5809,7 @@
         "configurationTitle": "設定",
         "sidebarEntryTitle": "サイドバー項目",
         "showInSidebar": "サイドバーに表示",
-        "sidebarEntryDescription": "オンにすると、サイドバーに「{{title}}」が表示されます。非表示にしてもプラグインは無効になりません。",
+        "sidebarEntryDescription": "オンにすると、「{{title}}」がサイドバーに表示されます。最上部に置くか「その他」にまとめるかは「その他 → カスタマイズ」で変更できます。非表示にしてもプラグインは無効になりません。",
         "iosSimulatorAutoOpenTitle": "内蔵シミュレータパネルを自動的に開く",
         "iosSimulatorAutoOpenDescription": "シミュレータの起動時または App の起動後に、右側へシミュレータ画面を自動表示します。オフでも手動で開くことができ、ほかの機能には影響しません。",
         "openTool": "Tool {{name}} の詳細を表示",
@@ -7878,6 +7881,22 @@
       "issues": "問題",
       "bots": "仲間"
     },
+    "navigation": {
+      "more": "その他",
+      "new": "新着",
+      "customize": {
+        "title": "カスタマイズ",
+        "done": "完了",
+        "reset": "初期設定に戻す",
+        "reorder": "上下矢印キーで{{name}}の順序を変更"
+      },
+      "items": {
+        "automations": "自動化",
+        "plugins": "プラグイン",
+        "bots": "仲間",
+        "search": "検索"
+      }
+    },
     "user": {
       "settingsLink": "設定, 現在のユーザー: {{name}}",
       "settingsLinkBeta": "設定, 現在のユーザー: {{name}}, Beta チャンネル有効",
@@ -9299,6 +9318,8 @@
       "schedulerRowAria": "自動化タスク「{{sender}}」のキュー内メッセージ",
       "sessionRowAria": "セッション「{{sender}}」からのキュー内メッセージ",
       "sessionSenderFallback": "別のセッション",
+      "pluginRowAria": "プラグイン「{{sender}}」からのキュー内メッセージ",
+      "pluginSenderFallback": "プラグイン",
       "botRowAria": "仲間「{{sender}}」からのキュー内メッセージ",
       "dragAria": "キューの {{index}} 番目のメッセージをドラッグして並べ替え",
       "steerAction": "割り込み",
@@ -9902,7 +9923,9 @@
       "stopAll": "すべて停止",
       "stopAllTitle": "このセッションのバックグラウンドプロセスを終了し、すべてのサブタスクを停止します（セッションは引き続き使用できます）",
       "stopBashTitle": "このセッションで実行中のバックグラウンドタスクを停止します（セッションのプロセスは終了しません）",
-      "stopping": "停止中…"
+      "stopping": "停止中…",
+      "remoteStopUnsupported": "リモートのパソコンの {{appName}} のバージョンが古いため、ここからバックグラウンドタスクを停止できません。アップデート後にもう一度お試しください",
+      "remoteStopUnreachable": "リモートのパソコンが現在応答していないため、バックグラウンドタスクを停止できませんでした。しばらくしてからもう一度お試しください"
     },
     "interruptedBanner": {
       "text": "実行中にアプリが終了したため、タスクが中断されました。",
@@ -10378,6 +10401,25 @@
       "botSentNamed": "仲間「{{name}}」から送信",
       "orcaFromLead": "Lead からのメッセージ",
       "orcaFromWorker": "Worker からのメッセージ",
+      "orcaFromWorkerNamed": "Worker「{{role}}」からのメッセージ",
+      "hookChannelFrom": "{{channel}} から",
+      "deviceSentMobileNamed": "スマートフォン「{{name}}」から送信",
+      "deviceSentMobile": "スマートフォンから送信",
+      "deviceSentDesktopNamed": "パソコン「{{name}}」から送信",
+      "deviceSentDesktop": "パソコンから送信",
+      "deviceViewSettings": "マイデバイスで表示",
+      "deviceRemoved": "このデバイスは削除されています",
+      "pluginSentNamed": "プラグイン「{{name}}」から送信",
+      "pluginSent": "プラグインから送信",
+      "pluginViewDetail": "プラグインを表示",
+      "sourceIds": {
+        "session": "セッション ID：{{id}}",
+        "teammate": "仲間 ID：{{id}}",
+        "automation": "自動化 ID：{{id}}",
+        "plugin": "プラグイン ID：{{id}}",
+        "device": "デバイス ID：{{id}}",
+        "member": "メンバー ID：{{id}}"
+      },
       "expandLongMessage": "全文を表示",
       "collapseLongMessage": "折りたたむ",
       "sessionReference": {
