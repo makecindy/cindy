@@ -86,7 +86,7 @@ it('confirms toolbar and native exits, keeps cancellation connected, and discard
     displayId: '',
     transport: 'direct',
     latency: null,
-    settings: { fps: 30, bitrate: 0, audio: true },
+    settings: { fps: 30, quality: 'auto', audio: true },
     ready: true,
     preferences: {
       audio: true,
@@ -191,7 +191,7 @@ it('hides view-only controls and enables desktop actions only after control is c
     displayId: 'one',
     transport: 'direct',
     latency: null,
-    settings: { fps: 30, bitrate: 0, audio: false },
+    settings: { fps: 30, quality: 'auto', audio: false },
     caps: {
       version: 1,
       enabled: true,
@@ -324,7 +324,7 @@ it.each([
       displayId: 'one',
       transport,
       latency: null,
-      settings: { fps: 30, bitrate: 0, audio: false },
+      settings: { fps: 30, quality: 'auto', audio: false },
     }),
   );
   const toolbar = within(view.container.querySelector('header')!);

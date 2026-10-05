@@ -786,7 +786,13 @@ export class AgentIslandService {
     const suppressCompletionAttention = this.isCompletionEventSilenced(hydrated.sessionId, event);
     const changed = applyAgentIslandEvent(this.state, hydrated, event, now, {
       suppressCompletionAttention,
-      preserveCompletionAttention: suppressCompletionAttention && this.hadAttentionBeforeSilencedRun(hydrated.sessionId),
+      // Direct IM sends bypass handleUserPrompt. Running preserves unread in the
+      // live state/ledger, so use that state (including any intervening read ack).
+      preserveCompletionAttention: suppressCompletionAttention && (
+        event.turnOrigin?.surface === 'im'
+          ? hasAgentIslandSessionAttention(this.state, hydrated.sessionId)
+          : this.hadAttentionBeforeSilencedCompletion(hydrated.sessionId)
+      ),
       allowCompletionAfterTerminalError:
         isRemoteDaemonClosedErrorEvent(event) &&
         this.deps.isPlannedRemoteDaemonClose?.(hydrated.sessionId) === true,
@@ -1384,7 +1390,7 @@ export class AgentIslandService {
 
   private isCompletionEventSilenced(sessionId: string, event: AgentEvent): boolean {
     if (!isCompletionDoneEvent(event)) return false;
-    return this.silencedSessionRunIds.has(sessionId);
+    return event.turnOrigin?.surface === 'im' || this.silencedSessionRunIds.has(sessionId);
   }
 
   private hadAttentionBeforeSilencedRun(sessionId: string): boolean {

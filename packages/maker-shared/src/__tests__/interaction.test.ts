@@ -191,11 +191,12 @@ describe('interaction shared model', () => {
       requestId: 'p-unavailable',
       toolName: 'Bash',
       description: 'Automatic review could not finish, so this action needs your confirmation.',
-      metadata: { autoReviewUnavailable: true },
+      metadata: { autoReviewUnavailable: true, imSourceDescription: '来源：Telegram · 开发群' },
       input: { command: 'npx tsc --noEmit' },
     });
 
     expect(presentation.autoReviewUnavailable).toBe(true);
+    expect(presentation.sourceDescription).toBe('来源：Telegram · 开发群');
     expect(presentation.description).toBe(
       'Automatic review could not finish, so this action needs your confirmation.',
     );

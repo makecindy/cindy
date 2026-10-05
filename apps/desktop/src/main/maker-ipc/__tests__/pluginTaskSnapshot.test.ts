@@ -5,9 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect, it, vi } from 'vitest';
 import ts from 'typescript';
-import { PluginTaskError } from '../pluginTaskService.js';
+import { PluginTaskError, readPluginTaskPlanReceipt } from '../pluginTaskService.js';
 import type { PluginTaskRoute } from '../../../shared/pluginTasks.js';
 import { resolvePluginWorkerDirectory } from '../pluginWorkerDirectory.js';
+
+import { createSessionExecutionResolver } from '../sessionExecutionSelection';
 
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
 function compile(text: string, deps: Record<string, unknown>) {
@@ -20,18 +22,59 @@ function handler(kind: string, next: string, deps: Record<string, unknown>) {
   return compile(`return async function(pluginId,request){switch(request.kind){${branch}}}`, deps);
 }
 
+it.each([
+  {pending:'claude-code', target:'codex', harness:'codex'},
+  {pending:undefined, target:'cc', harness:'claude-code'},
+  {pending:undefined, target:'codex', harness:undefined},
+])('routes an explicit model choice through the correct runtime controller: %j', async ({pending,target,harness}) => {
+  const start = source.indexOf('      setModel: async (taskId, route, assertUnchanged) =>');
+  const property = source.slice(start, source.indexOf('      assertTeamPlanUnstarted:',start)).trim().replace(/,$/, '');
+  const set = vi.fn(async () => ({ok:true,status:'applied'}));
+  const apply = compile(`return ({${property}}).setModel;`, {PluginTaskError,sessionControlService:{
+    getSessionRuntime:async()=>({ok:true,runtime:{runtimeGeneration:7,effectiveProfile:{agentKind:'codex'},pendingMutation:pending ? {profile:{agentKind:pending}} : null}}),
+    setSessionRuntime:set,
+  }});
+  const assertCurrent=vi.fn();
+  await apply('task',{agentKind:target,providerId:'chosen',model:'chosen-model',effort:'medium',fastMode:false},assertCurrent);
+  expect(assertCurrent).toHaveBeenCalledOnce();
+  expect(set).toHaveBeenCalledWith({targetSessionId:'task',expectedGeneration:7,patch:{
+    ...(harness ? {harness} : {}),providerId:'chosen',model:'chosen-model',effort:'medium',fastMode:false,
+  }});
+});
+
 it.each(['auto', 'acceptEdits'])('exposes independent Plan Mode alongside stored %s permission', async permissionMode => {
   const start = source.indexOf('      readSession: async taskId =>');
   const property = source.slice(start, source.indexOf('      dispatch:', start)).trim().replace(/,$/, '');
   const row = {id:'task',source:'plugin',agentKind:'codex',status:'active',permissionMode,planModeEnabled:true};
   const query = {from:()=>query,where:()=>query,limit:async()=>[row]};
-  const read = compile(`return ({${property}}).readSession;`, {assertCurrent:()=>{},snapshot:{client:{drizzle:{select:()=>query}}},sessions:{},eq:()=>true,pluginTaskConfigHash:createHash});
+  const read = compile(`return ({${property}}).readSession;`, {assertCurrent:()=>{},snapshot:{client:{drizzle:{select:()=>query}}},sessions:{},eq:()=>true,pluginTaskConfigHash:createHash,readSessionRuntimeProfiles:async()=>null});
   const plan = await read('task');
   expect(plan).toMatchObject({permissionMode,planModeEnabled:true});
   row.planModeEnabled=false;
   const normal = await read('task');
   expect(normal).toMatchObject({permissionMode,planModeEnabled:false});
   expect(normal.revision).not.toBe(plan.revision);
+});
+
+it.each(['codex', 'claude-code'] as const)('keeps the accepted next-input route stable when a deferred %s switch settles', async agentKind => {
+  const start = source.indexOf('      readSession: async taskId =>');
+  const property = source.slice(start, source.indexOf('      dispatch:', start)).trim().replace(/,$/, '');
+  const old = {agentKind:'codex',providerId:'old-provider',model:'old',effort:'medium',fastMode:false};
+  const next = {agentKind,providerId:'selected-provider',model:'selected',effort:'high',fastMode:false};
+  const row = {id:'task',source:'plugin',status:'active',permissionMode:'ask',planModeEnabled:false,...old};
+  let pending = true;
+  const query = {from:()=>query,where:()=>query,limit:async()=>[row]};
+  const read = compile(`return ({${property}}).readSession;`, {
+    assertCurrent:()=>{}, snapshot:{client:{drizzle:{select:()=>query}}}, sessions:{},eq:()=>true,pluginTaskConfigHash:createHash,
+    readSessionRuntimeProfiles:async()=>({effective:pending ? old : next,pendingMutation:pending ? {profile:next} : null}),
+  });
+  const accepted = await read('task');
+  expect(accepted.resolvedConfig).toEqual({...next,agentKind:agentKind==='claude-code'?'cc':agentKind});
+  pending=false;
+  Object.assign(row,next,{agentKind:agentKind==='claude-code'?'cc':agentKind});
+  const applied = await read('task');
+  expect(applied.resolvedConfig).toEqual(accepted.resolvedConfig);
+  expect(applied.revision).toBe(accepted.revision);
 });
 
 it('freezes the directory returned by admission without mutating the caller plan', async () => {
@@ -42,7 +85,7 @@ it('freezes the directory returned by admission without mutating the caller plan
     PluginTaskError, withSendToSessionLock: async (_: string, fn: () => unknown) => fn(),
     getCurrentDbClientSnapshot: () => epoch,
     service: { get: async () => ({ revision: 1, workingDir: '/root' }), setTeamPlan: save },
-    readGhostErrandConfig: () => ({ workingDir: '/root' }), isPluginTaskAuthorized: () => true,
+    readPluginTaskConfig: () => ({ workingDir: '/root' }), isPluginTaskAuthorized: () => true,
     isGhostPickedDir: () => false, resolvePluginWorkerDirectory: async () => '/root/original',
   });
   await run('plugin', { kind: 'setTeamPlan', taskId: 'task', plan });
@@ -63,7 +106,7 @@ it('retargeting a real symlink cannot change the stored plan directory', async (
       PluginTaskError, withSendToSessionLock: async (_: string, fn: () => unknown) => fn(),
       getCurrentDbClientSnapshot: () => epoch,
       service: { get: async () => ({ revision: 1, workingDir: root }), setTeamPlan: save },
-      readGhostErrandConfig: () => ({ workingDir: root }), isPluginTaskAuthorized: () => true,
+      readPluginTaskConfig: () => ({ workingDir: root }), isPluginTaskAuthorized: () => true,
       isGhostPickedDir: () => false, resolvePluginWorkerDirectory,
     });
     await run('plugin', { kind: 'setTeamPlan', taskId: 'task', plan });
@@ -98,16 +141,21 @@ it.each(['provider', 'receipt', 'directory', 'creator'])('keeps default-route co
     });
     const api = compile(`${resolveSource}\nreturn {resolveRoute, create: ({${createSource}}).createSession};`, {
       PluginTaskError, snapshot: epoch, assertPlugin: vi.fn(),
-      readGhostErrandConfig: () => ({ ...cfg }), getWorkerDefaultsFromNewMaker: () => ({}),
-      getDesktopProviderService: () => ({ listProviders: async () => {
-        if (++lookups === 1 && phase === 'provider') change();
-        return ['one', 'two'].map(id => ({ id, connected: true }));
-      } }), getActiveCatalog: () => ({}),
-      findCatalogModel: () => ({ efforts: ['high', 'low'], supportsFastMode: true }),
-      isModelSelectableForNewRoute: () => true,
+      readPluginTaskConfig: () => ({ ...cfg }), getPluginTaskSourceSessionId: () => undefined,
+      resolveSessionExecution: createSessionExecutionResolver({
+        captureOwner: () => () => {}, readCaller: async () => { throw Error('unexpected caller'); }, readDefault: () => undefined,
+        availableAgents: () => ['claude-code', 'codex', 'pi'],
+        availableModels: () => ['model', 'other'].map(id => ({ id, efforts: ['high', 'low'], supportsFastMode: true })),
+        hasCindyAiApiKey: () => true,
+        readProviderRouting: async () => {
+          if (++lookups === 1 && phase === 'provider') change();
+          const providers = ['one','two'].map(id => ({ id, name: id, models: ['model','other'] }));
+          return { availability: { 'claude-code': providers, codex: providers, pi: providers }, resolveDefaultProviderIdForModel: () => 'one' };
+        },
+      }),
       routeUnavailable: () => { throw Error('unavailable'); },
       resolvePluginWorkerDirectory: async () => { if (phase === 'directory') change(); return '/root'; },
-      createGhostErrandSession: create, clampErrandPermissionMode: (value: string) => value,
+      createPluginTaskSession: create, clampPluginTaskPermissionMode: (value: string) => value,
       getCurrentDbClientSnapshot: () => epoch, isPluginTaskAuthorized: () => true,
       notifyGhostSessionEvent: vi.fn(), broadcastSessionCreated: vi.fn(),
     });
@@ -127,13 +175,13 @@ it('forwards the explicit route when revalidating creation', async () => {
   const create = vi.fn();
   const run = compile(`return ({${property}}).createSession;`, {
     PluginTaskError, snapshot: epoch, assertPlugin: vi.fn(),
-    readGhostErrandConfig: () => ({ model: 'different-default', permissionMode: 'plan' }),
-    resolveRoute, createGhostErrandSession: create, clampErrandPermissionMode: (x: string) => x,
+    readPluginTaskConfig: () => ({ model: 'different-default', permissionMode: 'plan' }),
+    resolveRoute, createPluginTaskSession: create, clampPluginTaskPermissionMode: (x: string) => x,
     getCurrentDbClientSnapshot: () => epoch, isPluginTaskAuthorized: () => true,
     notifyGhostSessionEvent: vi.fn(), broadcastSessionCreated: vi.fn(),
   });
   await run('plugin', 'task', 'title', route, true, route);
-  expect(resolveRoute).toHaveBeenCalledWith('plugin', route);
+  expect(resolveRoute).toHaveBeenCalledWith('plugin', route, undefined);
   expect(create).toHaveBeenCalledOnce();
 });
 
@@ -144,7 +192,7 @@ it.each(['pending', 'empty', 'incomplete', 'error'])('restores Lead input before
   const epoch = { client: { drizzle: { select: () => query } } };
   const workspace = vi.fn(async () => ({ ok: true, workers: [] }));
   const run = handler('getTeam', 'create', {
-    PluginTaskError, getCurrentDbClientSnapshot: () => epoch, service: { get: async () => ({}) },
+    PluginTaskError, readPluginTaskPlanReceipt, getCurrentDbClientSnapshot: () => epoch, service: { get: async () => ({}) },
     getOrcaWorkspaceInfoReadOnly: workspace, createOrcaDiagnosticsDeps: () => ({}),
     maker: { getSession: () => undefined }, sessions: {}, eq: vi.fn(),
     createPluginTaskStore: () => ({ get: async () => ({ payload: '{}' }) }),

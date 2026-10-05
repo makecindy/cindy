@@ -147,6 +147,19 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText(error)).toBeNull();
   });
 
+  it('replaces an unsettled account boundary error with retry guidance', () => {
+    const error =
+      'LAZY_CREATE_FAILED: Ghost skill projection is not stable for the active owner';
+    const onRetry = vi.fn();
+    render(
+      <ErrorBanner error={error} retryText="retry this turn" onRetry={onRetry} agentKind="codex" />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.accountBoundaryPending')).toBeTruthy();
+    expect(screen.queryByText(error)).toBeNull();
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+  });
+
   it('uses cause-neutral Codex app-server retirement copy and does not suggest switching models', () => {
     render(
       <ErrorBanner

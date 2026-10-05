@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 /**
  * 群聊页：顶栏（成员头像、群名、成员名单、群设置入口）+ 多作者时间线 + 输入框。
  *
@@ -21,6 +22,10 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { attachGhostMediaToSession, getGhostMediaUriFromDataTransfer } from '@/cindy-brain/ghostMediaHandover';
 import { ChatImageView } from '@/components/chat/ChatImageView';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
+import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
+import { ShareMessageCheckbox } from '@/components/chat/ShareMessageCheckbox';
+import { shareSelectionStore, useShareSelectionActive } from '@/components/chat/shareSelectionStore';
+import { SHARE_SESSION_ATTR, SHARE_MESSAGE_ATTR } from '@/lib/shareConversationImage';
 import { TextLightbox } from '@/components/chat/TextLightbox';
 import { UserAttachmentChip } from '@/components/chat/UserAttachmentChip';
 import { CHAT_BODY_CLASS } from '@/components/chat/chatChrome';
@@ -59,6 +64,8 @@ import { BotGenerationLabel } from './BotGenerationLabel';
 import { BotGroupAvatarStack } from './BotGroupAvatars';
 import { botGroupAttachmentScope, splitBotGroupMessageAttachments } from './botGroupAttachments';
 import { BotGroupComposer } from './BotGroupComposer';
+import { ChatInviteButton, ChatMessageActions } from './ChatServerControls';
+import { ChatThreadPanel } from './ChatThreadPanel';
 import { BotGroupPendingInteraction } from './BotGroupPendingInteraction';
 import {
   BotGroupHandoffFiles,
@@ -135,6 +142,12 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   const hasControlledBanner = controlledBy.length > 0;
   // Groups have no single task session; namespace their existing composer UI state.
   const controlledBannerKey = `bot-group:${groupId}`;
+  const shareScope = controlledBannerKey;
+  const sharing = useShareSelectionActive(shareScope);
+  useEffect(() => {
+    shareSelectionStore.exitIfNotSession(shareScope);
+    return () => { if (shareSelectionStore.isActive(shareScope)) shareSelectionStore.exit(); };
+  }, [shareScope]);
   const controlledBannerCollapsed = useComposerCollapsed(controlledBannerKey);
   const navigate = useNavigate();
   const location = useLocation();
@@ -223,7 +236,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   );
   const acknowledge = useCallback(() => {
     if (!isDataOwnerGenerationCurrent(readOwner.current) || !stickToBottomRef.current || document.visibilityState !== 'visible' || !document.hasFocus()) return;
-    const at = messages.reduce((latest, message) => message.kind === 'message' && message.authorKind === 'bot'
+    const at = messages.reduce((latest, message) => message.kind === 'message' && (message.authorKind === 'bot' || message.isSelf === false)
       ? Math.max(latest, message.createdAt) : latest, 0);
     if (at > 0) markBotRead(botGroupReadKey(groupId), at);
   }, [groupId, messages]);
@@ -247,6 +260,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   }, [location.pathname, location.search, navigate]);
 
   const separator = t('bots.groupChat.memberSeparator');
+  const [threadRootId, setThreadRootId] = useState<string | null>(null);
   const settingsLabel = t('bots.groupChat.settings.open');
   const headerMembers = group ? memberKey(group.members) : '';
   const header = useMemo(() => {
@@ -267,6 +281,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
           </span>
         </button>
         <div className="ml-auto flex shrink-0 items-center">
+          {group.serverBacked && group.canInvite && <ChatInviteButton groupId={group.id} />}
           <Tip text={settingsLabel}>
             <button
               type="button"
@@ -282,7 +297,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
       </div>
     );
     // headerMembers stands in for the member array, which is new on every read.
-  }, [group?.name, headerMembers, openSettings, separator, settingsLabel]);
+  }, [group?.name, group?.id, group?.serverBacked, group?.canInvite, headerMembers, openSettings, separator, settingsLabel]);
   useRegisterContentHeader(header);
 
   // Follow new messages and banner viewport changes only while the reader is at the bottom.
@@ -490,7 +505,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   const timeGroups = collectBotMessageTimeGroups(
     messages.map((message) => ({ clientId: message.id, createdAt: message.createdAt })),
   );
-  const mentionLabels = [t('bots.groupChat.mention.all'), ...group.members.map((member) => member.name)];
+  const mentionLabels = [t('bots.groupChat.mention.all'), ...group.members.flatMap((member) => [member.name, member.nickname || member.displayName || member.name])];
   const running = group.round.status === 'running';
   const speakers = running
     ? group.round.speakers.flatMap((speaker) => {
@@ -573,6 +588,13 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
                 ) : null}
                 <BotGroupTimelineItem
                   message={message}
+                  shareScope={shareScope}
+                  sharing={sharing}
+                  actions={message.kind === 'message' ? <ChatMessageActions
+                    groupId={group.serverBacked ? group.id : undefined} shareScope={shareScope} message={message}
+                    align={message.authorKind === 'user' && message.isSelf !== false ? 'right' : 'left'}
+                    onReply={group.serverBacked ? () => setThreadRootId(message.id) : undefined}
+                    onChanged={() => loadRef.current()} /> : undefined}
                   member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
                   members={group.members}
                   mentionLabels={mentionLabels}
@@ -631,7 +653,8 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
           </div>
         </div>
       )}
-      <BotGroupComposer
+      {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="100%"
+        getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 760} /> : group.archived ? <p className="border-t border-[var(--border-default)] p-4 text-center text-13 text-[var(--text-tertiary)]">{t('bots.groupChat.server.settings.archived')}</p> : <BotGroupComposer
         groupId={group.id}
         members={group.members}
         running={running}
@@ -643,7 +666,9 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
           stickToBottomRef.current = true;
           loadRef.current();
         }}
-      />
+      />}
+      {group.migrationPending && <p role="status" className="px-4 py-2 text-13 text-[var(--text-secondary)]">{t('bots.groupChat.migrationPending')}</p>}
+      {group.serverBacked && threadRootId && <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} onClose={() => setThreadRootId(null)} />}
       {/* Whole-page drop hint, as over a task's chat area; the card repeats it. */}
       {dragOver ? (
         <div
@@ -669,6 +694,9 @@ function followUpPending(action: PlanPending['action'] | null): BotGroupFollowUp
 
 function BotGroupTimelineItem({
   message,
+  shareScope,
+  sharing,
+  actions,
   member,
   members,
   mentionLabels,
@@ -683,6 +711,9 @@ function BotGroupTimelineItem({
   onEditStep,
 }: {
   message: BotGroupMessageView;
+  shareScope: string;
+  sharing: boolean;
+  actions?: ReactNode;
   member: BotGroupMemberView | undefined;
   members: readonly BotGroupMemberView[];
   mentionLabels: readonly string[];
@@ -722,11 +753,13 @@ function BotGroupTimelineItem({
     const text = key ? t(key, { name }) : message.content;
     return <p className="text-center text-12 text-[var(--text-tertiary)]">{text}</p>;
   }
-  if (message.authorKind === 'user') {
+  if (message.authorKind === 'user' && message.isSelf !== false) {
     // An attachment-only message shows just its attachments, without an empty bubble.
     const hasText = message.content.trim().length > 0;
     return (
-      <article className="flex justify-end">
+      <article {...{ [SHARE_SESSION_ATTR]: shareScope, [SHARE_MESSAGE_ATTR]: message.id }}
+        className={`relative flex justify-end ${sharing ? 'ml-10' : ''}`}>
+        {sharing && <ShareMessageCheckbox clientId={message.id} />}
         <div className="flex min-w-0 max-w-[72%] flex-col items-end gap-2">
           <BotGroupUserAttachments attachments={message.attachments} />
           {hasText ? (
@@ -747,6 +780,7 @@ function BotGroupTimelineItem({
               )}
             </div>
           ) : null}
+          {actions}
         </div>
       </article>
     );
@@ -755,12 +789,15 @@ function BotGroupTimelineItem({
   const author = {
     name: message.authorName || member?.name || '',
     avatar: member?.avatar ?? null,
+    avatarUrl: member?.avatarUrl,
     avatarColor: member?.avatarColor ?? null,
   };
   const isPlanCard = message.kind === 'plan';
   const hasText = message.content.trim().length > 0;
   return (
-    <article className="flex min-w-0 items-start gap-2.5">
+    <article {...(message.kind === 'message' ? { [SHARE_SESSION_ATTR]: shareScope, [SHARE_MESSAGE_ATTR]: message.id } : {})}
+      className={`relative flex min-w-0 items-start gap-2.5 ${sharing ? 'ml-10' : ''}`}>
+      {sharing && message.kind === 'message' && <ShareMessageCheckbox clientId={message.id} />}
       <BotAvatar bot={author} size="sm" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 select-none items-center gap-2">
@@ -787,7 +824,9 @@ function BotGroupTimelineItem({
                 <MarkdownRenderer workingDir="" content={message.content} allowPrivilegedLinks={false} />
               </div>
             ) : null}
+            <BotGroupUserAttachments attachments={message.attachments} />
             <BotGroupHandoffFiles files={message.files} workDir={plan?.workDir ?? null} />
+            {actions}
           </>
         )}
       </div>

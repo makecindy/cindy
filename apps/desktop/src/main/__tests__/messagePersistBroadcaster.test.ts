@@ -3839,7 +3839,23 @@ describe('媒体 echo 兜底:flushOrphanToolResults 从 fallback 池认领', () 
 
 describe('ask_user persist first-write-wins', () => {
   it.each([
+    [{ ' Scope? ': ' only inspect ' }, 'Clarifications:\n- Scope? → only inspect'],
+    [{ ' ': ' only inspect ' }, 'Clarifications:\n- only inspect'],
+    [{ Scope: ' ' }, ''],
+    [{}, ''],
+  ])('matches runtime clarification text for %j', async (answers, text) => {
+    const request = {kind: 'ask_user_question', requestId: 'answer-projection', questions: []};
+    const persistId = onInteractionMessage(SESSION, request);
+    onInteractionResolved(SESSION, persistId, 'ask_user_question', request, {answers});
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId, expect.any(Object), {
+      text, acceptedAt: expect.any(Number),
+    });
+  });
+  it.each([
     [{ behavior: 'allow', editedPlan: 'Only change build.' }, 'Approved plan:\nOnly change build.'],
+    [{ behavior: 'allow', editedPlan: '  Only change build. \n' }, 'Approved plan:\nOnly change build.'],
+    [{ behavior: 'allow', editedPlan: '  \n' }, ''],
     [{ behavior: 'deny', reason: 'Never change src.' }, 'Never change src.'],
     [{ behavior: 'deny', dismissed: true, reason: 'session_closed' }, ''],
   ])('records only the accepted plan or user feedback: %j', async (decision, text) => {

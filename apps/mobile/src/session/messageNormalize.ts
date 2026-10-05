@@ -1,3 +1,4 @@
+import { formatDuration } from '@cindy/maker-shared/message-render';
 import { collectPluginInvocations, type PluginInvocation } from './pluginInvocations';
 import { extractPayloadToolResultFiles, extractPayloadToolCardIds, type PayloadToolFile } from '@cindy/maker-shared/payload-summary';
 import { placeBotTaskCardsAfterIntroduction, readBotCollaborationMeta, type BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
@@ -21,6 +22,7 @@ import {
   type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
+import { stripGoalVerdictBlock } from '@cindy/maker-shared/goal-verdict';
 import {
   formatToolResultCompactionBytes,
   parseToolResultCompactionMarker,
@@ -495,7 +497,9 @@ export function normalizeRemoteMessages(
     }
     const rawBody = userContent ? userContent.text : contentToPreview(message.content);
     const hookSource = message.role === 'user' ? readHookSource(message, rawBody) : undefined;
-    const body = hookSource?.userText ?? rawBody;
+    // /goal 裁决块只给 Desktop 驱动续跑,与 Desktop 一致只在显示层剥掉(原文仍在 source)。
+    const body = hookSource?.userText
+      ?? (message.role === 'assistant' ? stripGoalVerdictBlock(rawBody) : rawBody);
     const turnCost = readTurnCost(message);
     result.push({
       key: messageNormalizeKey(message),
@@ -863,14 +867,6 @@ function summarizePlan(plan: string, maxLines = 3): string {
   const lines = plan.split('\n').map((line) => line.trim()).filter(Boolean);
   const head = lines.slice(0, maxLines).join('\n');
   return lines.length > maxLines ? `${head}\n...` : head;
-}
-
-function formatDuration(ms: number): string {
-  const totalSec = Math.max(1, Math.round(ms / 1000));
-  if (totalSec < 60) return `${totalSec}s`;
-  const minutes = Math.floor(totalSec / 60);
-  const seconds = totalSec % 60;
-  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {

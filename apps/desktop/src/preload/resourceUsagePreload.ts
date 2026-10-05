@@ -2,7 +2,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 
-import type { AppearanceSettings } from '../shared/appearanceSettings';
+import { createAppearanceSnapshotBridge } from './appearanceSnapshot';
 import type { LocalThemesResult } from '../shared/local-themes';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
 import {
@@ -30,6 +30,13 @@ function onPayload<T>(channel: string, cb: (payload: T) => void): () => void {
   return () => ipcRenderer.removeListener(channel, listener);
 }
 
+// This window is created hidden. Capture the initial main broadcast before the
+// lazy renderer entry loads, then replay it to late/HMR subscribers.
+let windowHidden = true;
+onPayload<boolean>('window-hidden-change', (hidden) => {
+  windowHidden = hidden;
+});
+
 function readPreferredSystemLocale(): ApplicationMenuLocale {
   try {
     const value = ipcRenderer.sendSync('app-locale:get-preferred-system-locale-sync');
@@ -41,15 +48,18 @@ function readPreferredSystemLocale(): ApplicationMenuLocale {
   }
 }
 
-const appearanceSettings = ipcRenderer.sendSync(
-  'appearance-settings:get-sync',
-) as AppearanceSettings | null;
+const appearanceSnapshot = createAppearanceSnapshotBridge();
 
 const fanOutFullscreenChange = (cb: (isFullscreen: boolean) => void): (() => void) =>
   onPayload('fullscreen-change', cb);
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  onWindowHiddenChange: (cb: (hidden: boolean) => void): (() => void) => {
+    const off = onPayload('window-hidden-change', cb);
+    cb(windowHidden);
+    return off;
+  },
   preferredSystemLocale: readPreferredSystemLocale(),
   windowMinimize: (): void => ipcRenderer.send('window-minimize'),
   windowMaximize: (): void => ipcRenderer.send('window-maximize'),
@@ -59,11 +69,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     scope: string,
     msg: string,
   ): void => ipcRenderer.send('renderer:log', level, scope, msg),
-  appearanceSettings: {
-    getSync: (): AppearanceSettings | null => appearanceSettings,
-    onChanged: (cb: (settings: AppearanceSettings) => void): (() => void) =>
-      onPayload('appearance-settings:changed', cb),
-  },
+  appearanceSettings: appearanceSnapshot,
   localThemes: {
     listSync: (): LocalThemesResult => {
       try {

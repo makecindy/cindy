@@ -2019,7 +2019,7 @@ export function IOSSimulatorTabBody({
     <div
       ref={panelViewportRef}
       data-testid="ios-simulator-panel-viewport"
-      className="h-full overflow-y-auto bg-[var(--surface)] text-[var(--text-primary)]"
+      className="app-wallpaper-surface h-full overflow-y-auto bg-[var(--surface)] text-[var(--text-primary)]"
       aria-busy={busy || refreshing || requestingAccess}
     >
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4">
@@ -2333,7 +2333,7 @@ export function IOSSimulatorTabBody({
                               </span>
                               <span
                                 aria-hidden="true"
-                                className="max-w-28 truncate text-10 text-[var(--text-secondary)]"
+                                className="max-w-28 truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]"
                               >
                                 {streamProfileLabel}
                               </span>
@@ -2435,7 +2435,7 @@ export function IOSSimulatorTabBody({
                           <DropdownMenuItem
                             disabled={busy}
                             onSelect={() => setDeleteTarget(attachedInstance)}
-                            className="text-[var(--error-fg)] focus:bg-[var(--error-bg)] focus:text-[var(--error-fg-strong)]"
+                            variant="danger"
                           >
                             <Trash2 size={14} className="mr-2 shrink-0" aria-hidden="true" />
                             {t('rightSidebar.iosSimulator.deleteDevice')}

@@ -18,6 +18,8 @@ vi.mock('@/session/messageCacheStorage', () => ({
     clear: vi.fn(async (prefix: string) => {
       for (const key of store.keys()) if (key.startsWith(`${prefix}.`)) store.delete(key);
     }),
+    migrateLegacy: vi.fn(async () => {}),
+    legacyKeys: vi.fn(async (prefix: string) => [...store.keys()].filter((key) => key.startsWith(`${prefix}.`))),
     multiRemove: vi.fn(async (keys: readonly string[]) => {
       for (const key of keys) store.delete(key);
     }),
@@ -64,6 +66,39 @@ function makeSession(id: string, patch: Partial<RemoteSession> = {}): RemoteSess
 }
 
 describe('mobileSessionMessageCache', () => {
+  it('migrates every legacy cache entry through the per-key queue, even before login', async () => {
+    const storage = (await import('@/session/messageCacheStorage')).messageCacheStorage;
+    const { migrateLegacySessionMessageCache } = await import('@/session/mobileSessionMessageCache');
+    store.set('xdt.mobileSessionMessageCache.v1.a', '[]');
+    store.set('xdt.mobileSessionMessageCache.v1.b', '[]');
+    store.set('unrelated', 'keep');
+    vi.mocked(storage.migrateLegacy).mockClear();
+    await migrateLegacySessionMessageCache();
+    expect(vi.mocked(storage.migrateLegacy).mock.calls.map(([key]) => key)).toEqual([
+      'xdt.mobileSessionMessageCache.v1.a', 'xdt.mobileSessionMessageCache.v1.b',
+    ]);
+    expect(storage.removeItem).not.toHaveBeenCalled();
+  });
+
+  it('a logout clear cancels legacy migrations still waiting in the queue', async () => {
+    const storage = (await import('@/session/messageCacheStorage')).messageCacheStorage;
+    const { migrateLegacySessionMessageCache, clearCachedSessionMessages } = await import('@/session/mobileSessionMessageCache');
+    store.set('xdt.mobileSessionMessageCache.v1.a', '[]');
+    let release!: () => void;
+    vi.mocked(storage.legacyKeys).mockImplementationOnce(async (prefix: string) => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      return [...store.keys()].filter((key) => key.startsWith(`${prefix}.`));
+    });
+    vi.mocked(storage.migrateLegacy).mockClear();
+    const migration = migrateLegacySessionMessageCache();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    const clearing = clearCachedSessionMessages();
+    release();
+    await Promise.all([migration, clearing]);
+    expect(storage.migrateLegacy).not.toHaveBeenCalled();
+    expect(store.has('xdt.mobileSessionMessageCache.v1.a')).toBe(false);
+  });
+
   it('logout waits for a migrating read and removes its late write', async () => {
     const storage = (await import('@/session/messageCacheStorage')).messageCacheStorage;
     const { getCachedSessionMessages, clearCachedSessionMessages } = await import('@/session/mobileSessionMessageCache');

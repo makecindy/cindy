@@ -1,16 +1,18 @@
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { hasAcceptedUserTaskInput, type AcceptedTaskInput } from '../maker-ipc/pluginTaskInput.js';
 
-/**
- * Either legacy ownership signal is enough to keep a caller on the Bot surface.
- * Requiring both lets a partial Bot record fall through to the full default
- * surface, which includes Session control and history.
+/** Companion tasks add their profile tools to the ordinary transport's helper surface.
+ * Classification is a business-object distinction, not a separate permission tier.
  */
 export function classifyHelperSurface(
   source: string | null | undefined,
   hasBotLink: boolean,
-): 'bot' | 'default' {
-  return source === 'bot' || hasBotLink ? 'bot' : 'default';
+  main?: { role: string | null | undefined; status: string | null | undefined; remoteHostId: string | null | undefined },
+): 'bot' | 'bot-main' | 'default' {
+  if (source !== 'bot' && !hasBotLink) return 'default';
+  return source === 'bot' && hasBotLink && main?.role === 'canonical' && main.status === 'active' && !main.remoteHostId
+    ? 'bot-main'
+    : 'bot';
 }
 
 /** Reuse the helper's existing runtime gate; plugin tasks need Orca, not account-wide helper tools. */
@@ -18,10 +20,15 @@ export async function resolveHelperSurface(
   db: Pick<DbClient, 'queryOne' | 'drizzle'>,
   sessionId: string,
   readExecution: (sessionId: string) => { executing: boolean; input: AcceptedTaskInput | null },
-): Promise<'bot' | 'default' | 'restricted'> {
+): Promise<'bot' | 'bot-main' | 'default' | 'restricted'> {
   const execution = readExecution(sessionId);
-  const row = await db.queryOne<{ source: string; botId: string | null; pluginOwned: number; retainedPlugin: number; isWorker: number }>(
-    `SELECT s.source AS source, b.bot_id AS botId, w.session_id IS NOT NULL AS isWorker,
+  const row = await db.queryOne<{
+    source: string; botId: string | null; botRole: string | null; status: string | null; remoteHostId: string | null;
+    pluginOwned: number; retainedPlugin: number; isWorker: number;
+  }>(
+    `SELECT s.source AS source, b.bot_id AS botId,
+       CASE WHEN b.archived_at IS NULL THEN b.role ELSE NULL END AS botRole, s.status AS status,
+       s.remote_host_id AS remoteHostId, w.session_id IS NOT NULL AS isWorker,
        EXISTS (SELECT 1 FROM plugin_task_requests p
          WHERE p.operation = 'create' AND p.id IN (s.id, t.lead_session_id)) AS retainedPlugin,
        EXISTS (
@@ -52,5 +59,9 @@ export async function resolveHelperSurface(
       || (['clientId', 'autoResume', 'retrySourceClientId', 'authoredText', 'originKind'] as const)
         .some(key => current.input?.[key] !== execution.input?.[key])) return 'restricted';
   }
-  return classifyHelperSurface(row.source, Boolean(row.botId));
+  return classifyHelperSurface(row.source, Boolean(row.botId), {
+    role: row.botRole,
+    status: row.status,
+    remoteHostId: row.remoteHostId,
+  });
 }

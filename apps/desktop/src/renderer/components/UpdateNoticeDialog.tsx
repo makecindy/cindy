@@ -1,6 +1,5 @@
 import { Button } from '@/components/ui/button';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { Flame, Zap, Wrench, Flower, ChevronDown } from 'lucide-react';
 import {
   useCallback,
@@ -18,6 +17,13 @@ import type {
   ReleaseNotes,
 } from '@/release-notes';
 import type { UpdateNoticeMode } from '@/hooks/useUpdateNotice';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 
@@ -392,7 +398,7 @@ interface VersionDropdownProps {
   onOpenChange?: (open: boolean) => void;
 }
 
-function VersionDropdown({
+export function VersionDropdown({
   versions,
   currentVersion,
   onSelect,
@@ -401,8 +407,8 @@ function VersionDropdown({
   onOpenChange,
 }: VersionDropdownProps) {
   return (
-    <DropdownMenu.Root onOpenChange={onOpenChange} modal>
-      <DropdownMenu.Trigger asChild>
+    <DropdownMenu onOpenChange={onOpenChange} modal>
+      <DropdownMenuTrigger asChild>
         <button
           type="button"
           className="inline-flex outline-none"
@@ -412,50 +418,28 @@ function VersionDropdown({
               flame glyph would be misleading — hence icon={false}. */}
           <VersionBadge label={triggerLabel} clickable icon={false} />
         </button>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          side="bottom"
-          align="end"
-          sideOffset={6}
-          // Stop clicks inside dropdown content from bubbling — belt-and-
-          // suspenders on top of `modal` prop + parent dropdownOpenRef guard.
-          onClick={(e) => e.stopPropagation()}
-          className={cn(
-            'z-[10001] max-h-[400px] w-[180px] overflow-y-auto rounded-lg py-1',
-            'bg-[var(--cmd-palette-bg)] border border-[var(--cmd-palette-border)]',
-            'shadow-[var(--shadow-menu)]',
-            // Animate with the overlay-style pure-fade keyframes; the
-            // confirm-content-in animation has a `translate(-50%,-50%) scale`
-            // transform meant for center-of-screen dialogs, and Radix Popper
-            // applies its own transform for anchor positioning — stacking the
-            // two causes the dropdown to visually "jump" from the middle of
-            // the screen to the trigger during mount. Pure opacity fade
-            // stays neutral to Popper's positioning transform.
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
-          )}
-        >
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        side="bottom"
+        align="end"
+        sideOffset={6}
+        // Stop clicks inside dropdown content from bubbling — belt-and-
+        // suspenders on top of `modal` prop + parent dropdownOpenRef guard.
+        onClick={(e) => e.stopPropagation()}
+        // Above the AlertDialog layer; long version lists scroll.
+        className="z-[10001] max-h-[400px] overflow-y-auto"
+      >
+        {/* The version on screen is the checked radio row. Each row still calls
+            onSelect on activation, the current one included, as before. */}
+        <DropdownMenuRadioGroup value={currentVersion}>
           {versions.map((v) => (
-            <DropdownMenu.Item
-              key={v}
-              onSelect={() => onSelect(v)}
-              className={cn(
-                'flex cursor-pointer items-center gap-2 px-3 py-1.5 text-13 outline-none',
-                'text-[var(--msg-assistant-text)]',
-                'data-[highlighted]:bg-[var(--cmd-palette-item-hover)]',
-                v === currentVersion && 'font-semibold',
-              )}
-            >
+            <DropdownMenuRadioItem key={v} value={v} onSelect={() => onSelect(v)}>
               <span className="tabular-nums">v{v}</span>
-              {v === currentVersion && (
-                <span className="ml-auto text-11 text-[var(--cmd-palette-item-meta)]">•</span>
-              )}
-            </DropdownMenu.Item>
+            </DropdownMenuRadioItem>
           ))}
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -956,10 +940,7 @@ export function UpdateNoticeDialog({
       <AlertDialog.Portal>
         <AlertDialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10000]',
-            'bg-black/40 dark:bg-black/60',
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10000]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           // No scrim click-to-dismiss (DESIGN.md closing affordance): the
@@ -968,15 +949,11 @@ export function UpdateNoticeDialog({
 
         <AlertDialog.Content
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
             // 920px, not the previous 1240px: the body is a single ~800px
             // reading column now, so the extra width only produced dead margins
             // and made the full-width chrome visibly mismatch the narrow body.
-            'w-[920px] h-[838px] max-w-[95vw] max-h-[90vh] rounded-xl flex flex-col',
-            'bg-[var(--cmd-palette-bg)]',
-            'border border-[var(--cmd-palette-border)]',
-            'data-[state=open]:animate-confirm-content-in',
-            'data-[state=closed]:animate-confirm-content-out',
+            'w-[920px] h-[838px] max-w-[95vw] max-h-[90vh] flex flex-col',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >

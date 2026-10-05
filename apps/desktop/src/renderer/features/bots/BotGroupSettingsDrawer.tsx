@@ -28,6 +28,7 @@ import {
   type BotGroupSpeakingMode,
   type BotGroupSummary,
 } from '../../../shared/botGroupChat';
+import { ChatGroupSettings } from './ChatGroupSettings';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupAvatarStack } from './BotGroupAvatars';
 import { BotGroupOrganizerTag } from './BotGroupPlan';
@@ -69,7 +70,7 @@ export function BotGroupSettingsDrawer() {
     <Dialog.Root open={open} onOpenChange={(next) => !next && close()}>
       <Dialog.Portal>
         {/* Keep portaled controls inside the overlay’s React tree so its scroll lock allows them. */}
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]">
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-50">
           <Dialog.Content
             onPointerDownOutside={(event) => event.preventDefault()}
             aria-describedby={undefined}
@@ -92,7 +93,7 @@ export function BotGroupSettingsDrawer() {
                 </Dialog.Close>
               </Tip>
             </header>
-            <BotGroupSettingsBody key={group.id} group={group} />
+            {group.serverBacked ? <ChatGroupSettings key={group.id} group={group} /> : <BotGroupSettingsBody key={group.id} group={group} />}
           </Dialog.Content>
         </Dialog.Overlay>
       </Dialog.Portal>

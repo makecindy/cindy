@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   createFile: vi.fn(),
   createImage: vi.fn(),
+  deleteReaction: vi.fn(),
   createMessage: vi.fn(async () => ({ data: { message_id: 'om_sent' } })),
 }));
 
@@ -16,7 +17,7 @@ vi.mock('@larksuiteoapi/node-sdk', () => ({
     im = {
       v1: {
         message: { create: mocks.createMessage },
-        messageReaction: { create: vi.fn(), delete: vi.fn() },
+        messageReaction: { create: vi.fn(), delete: mocks.deleteReaction },
         image: { create: mocks.createImage },
       },
       file: { create: mocks.createFile },
@@ -58,6 +59,21 @@ async function fileFixture(name: string, content: string): Promise<string> {
   await fs.writeFile(absPath, content);
   return absPath;
 }
+
+describe('Feishu reaction removal', () => {
+  afterEach(() => outbound.unbindClient());
+
+  it('propagates network and business failures, then permits successful cleanup', async () => {
+    outbound.bindClient({ appId: 'cli_reaction_test', appSecret: 'secret', service: 'feishu' });
+    const networkError = new Error('network unavailable');
+    mocks.deleteReaction.mockRejectedValueOnce(networkError)
+      .mockResolvedValueOnce({ code: 999, msg: 'rejected' })
+      .mockResolvedValueOnce({ code: 0 });
+    await expect(outbound.removeReaction('message-id', 'reaction-id')).rejects.toBe(networkError);
+    await expect(outbound.removeReaction('message-id', 'reaction-id')).rejects.toThrow('code=999');
+    await expect(outbound.removeReaction('message-id', 'reaction-id')).resolves.toBeUndefined();
+  });
+});
 
 describe('Feishu parent-chat file reuse', () => {
   beforeEach(() => {

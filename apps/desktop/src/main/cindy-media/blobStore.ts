@@ -22,6 +22,8 @@ import fs from 'node:fs/promises';
 
 const SCHEME = 'cindy-media';
 const HOST_BLOBS = 'blobs';
+/** Client-owned wallpaper bytes never share deletion ownership with account-ledger blobs. */
+export type BlobScope = 'blobs' | 'client-wallpaper';
 const destLocks = new Map<string, Promise<unknown>>();
 
 /** 指纹形状:SHA-256 十六进制,恰 64 位小写。 */
@@ -75,12 +77,13 @@ export interface WrittenBlob {
   deduplicated: boolean;
 }
 
-export function getBlobsRoot(): string {
-  return path.join(app.getPath('userData'), 'cindy-media', 'blobs');
+export function getBlobsRoot(scope: BlobScope = 'blobs'): string {
+  if (scope !== 'blobs' && scope !== 'client-wallpaper') throw new Error('cindy-media: invalid scope');
+  return path.join(app.getPath('userData'), 'cindy-media', scope);
 }
 
-export function blobUrl(hash: string, ext: string): string {
-  return `${SCHEME}://${HOST_BLOBS}/${hash}${ext}`;
+export function blobUrl(hash: string, ext: string, scope: BlobScope = 'blobs'): string {
+  return `${SCHEME}://${scope}/${hash}${ext}`;
 }
 
 /** Canonical extension used both when planning and writing a content-addressed file. */
@@ -106,6 +109,7 @@ export type BlobSource =
 export async function writeBlob(params: BlobSource & {
   mimeType: string;
   assertStillValid?: () => void;
+  scope?: BlobScope;
 }): Promise<WrittenBlob> {
   const { mimeType } = params;
   const ext = EXT_BY_MIME[mimeType];
@@ -127,7 +131,7 @@ export async function writeBlob(params: BlobSource & {
     }
     if (bytes === 0) throw new Error('cindy-media: empty buffer');
     const hash = hasher.digest('hex');
-    const { dir, dest } = await prepareBlobDestination(hash, ext);
+    const { dir, dest } = await prepareBlobDestination(hash, ext, params.scope);
 
     return await withDestLock(dest, async () => {
       // 同目录 tmp + link/rename 发布:终点不以半截内容出现;已存在分支
@@ -181,13 +185,13 @@ export async function writeBlob(params: BlobSource & {
             ? existingBlobError(finalState)
             : new Error('cindy-media: blob destination did not match input hash');
         }
-        await assertBlobPathContained(dest);
+        await assertBlobPathContained(dest, params.scope);
         return {
           hash,
           ext,
           mimeType,
           bytes,
-          url: blobUrl(hash, ext),
+          url: blobUrl(hash, ext, params.scope),
           deduplicated,
         };
       } finally {
@@ -267,11 +271,12 @@ async function ensureChildDir(parent: string, name: string): Promise<string> {
   return child;
 }
 
-async function prepareBlobDestination(hash: string, ext: string): Promise<{ dir: string; dest: string }> {
+async function prepareBlobDestination(hash: string, ext: string, scope: BlobScope = 'blobs'): Promise<{ dir: string; dest: string }> {
+  getBlobsRoot(scope); // Validate before using the scope as a directory name.
   const userData = path.resolve(app.getPath('userData'));
   await lstatRegularDir(userData);
   const mediaRoot = await ensureChildDir(userData, 'cindy-media');
-  const root = await ensureChildDir(mediaRoot, 'blobs');
+  const root = await ensureChildDir(mediaRoot, scope);
   const dir = await ensureChildDir(root, hash.slice(0, 2));
   const dest = path.join(dir, `${hash}${ext}`);
   if (!path.resolve(dest).startsWith(root + path.sep)) {
@@ -280,9 +285,9 @@ async function prepareBlobDestination(hash: string, ext: string): Promise<{ dir:
   return { dir, dest };
 }
 
-async function assertBlobPathContained(absPath: string): Promise<void> {
+async function assertBlobPathContained(absPath: string, scope: BlobScope = 'blobs'): Promise<void> {
   const userData = path.resolve(app.getPath('userData'));
-  const root = path.resolve(getBlobsRoot());
+  const root = path.resolve(getBlobsRoot(scope));
   if (!path.resolve(absPath).startsWith(root + path.sep)) {
     throw new Error('cindy-media: blob path out of bounds');
   }
@@ -451,7 +456,7 @@ export function resolveSafe(url: string): { absPath: string; mimeType: string; h
  * 指纹 + 扩展名 → 磁盘位置(供 cindy-ghost:// 供图分支等"手里已是指纹"的
  * 调用方使用,复用同一套校验与双保险)。
  */
-export function resolveHashRef(hash: string, ext: string): {
+export function resolveHashRef(hash: string, ext: string, scope: BlobScope = 'blobs'): {
   absPath: string;
   mimeType: string;
   hash: string;
@@ -463,7 +468,7 @@ export function resolveHashRef(hash: string, ext: string): {
   if (!mimeType) {
     throw new Error('cindy-media: unsupported ext');
   }
-  const root = path.resolve(getBlobsRoot());
+  const root = path.resolve(getBlobsRoot(scope));
   const absPath = path.resolve(root, hash.slice(0, 2), `${hash}${ext}`);
   if (!absPath.startsWith(root + path.sep)) {
     throw new Error('cindy-media: path out of bounds');
@@ -510,6 +515,21 @@ export async function readFile(url: string): Promise<{ buffer: Buffer; mimeType:
   return { buffer, mimeType };
 }
 
+// UI-owned assets have a separate lifetime from account attachments. Generic
+// parseBlobUrl/resolveSafe intentionally do not accept this Host-only namespace.
+export function parseClientWallpaperUrl(url: string): { hash: string; ext: string } | null {
+  const match = new RegExp('^cindy-media://client-wallpaper/([0-9a-f]{64})([.]webp|[.]mp4)$').exec(url);
+  return match ? { hash: match[1], ext: match[2] } : null;
+}
+
+export async function readClientWallpaperFile(url: string): Promise<{ buffer: Buffer; mimeType: string }> {
+  const parsed = parseClientWallpaperUrl(url);
+  if (!parsed) throw new Error('cindy-media: invalid client wallpaper url');
+  const { absPath, mimeType } = resolveHashRef(parsed.hash, parsed.ext, 'client-wallpaper');
+  await assertBlobPathContained(absPath, 'client-wallpaper');
+  return { buffer: await fs.readFile(absPath), mimeType };
+}
+
 // ── 回收器 / 对账底层能力(第 5 步)──────────────────────────────────────
 // 本模块仍然只管字节:下面的枚举与删除不看账本,"该不该删"由 recycler.ts
 // 按账本判定后才调用这里。
@@ -534,8 +554,8 @@ export interface BlobDirListing {
 const BUCKET_RE = /^[0-9a-f]{2}$/;
 
 /** 遍历 256 个分桶,枚举字节仓全量文件(stat 失败的条目跳过,当作已消失)。 */
-export async function listBlobFiles(): Promise<BlobDirListing> {
-  const root = getBlobsRoot();
+export async function listBlobFiles(scope: BlobScope = 'blobs'): Promise<BlobDirListing> {
+  const root = getBlobsRoot(scope);
   const listing: BlobDirListing = { entries: [], strayPaths: [], tmpFiles: [] };
   let buckets: string[];
   try {
@@ -570,6 +590,7 @@ export async function listBlobFiles(): Promise<BlobDirListing> {
         continue;
       }
       try {
+        if (scope !== 'blobs') await assertBlobPathContained(abs, scope);
         const st = await fs.stat(abs);
         listing.entries.push({ hash, ext, bytes: st.size, mtimeMs: st.mtimeMs, absPath: abs });
       } catch {
@@ -581,8 +602,12 @@ export async function listBlobFiles(): Promise<BlobDirListing> {
 }
 
 /** 删除单个 blob 文件(recycler 在账删成功且复查无重录后才调用);不存在视为成功。 */
-export async function deleteBlobFile(hash: string, ext: string): Promise<void> {
-  const { absPath } = resolveHashRef(hash, ext);
+export async function deleteBlobFile(hash: string, ext: string, scope: BlobScope = 'blobs'): Promise<void> {
+  const { absPath } = resolveHashRef(hash, ext, scope);
+  if (scope !== 'blobs') {
+    try { await assertBlobPathContained(absPath, scope); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+  }
   await fs.rm(absPath, { force: true });
 }
 
@@ -591,8 +616,8 @@ export async function deleteBlobFile(hash: string, ext: string): Promise<void> {
  * maxAgeMs 的——正在进行的 writeBlob 临时文件寿命是毫秒级,年龄门槛防
  * 误杀在途写入。
  */
-export async function listStaleTmpFiles(maxAgeMs: number): Promise<string[]> {
-  const { tmpFiles } = await listBlobFiles();
+export async function listStaleTmpFiles(maxAgeMs: number, scope: BlobScope = 'blobs'): Promise<string[]> {
+  const { tmpFiles } = await listBlobFiles(scope);
   const cutoff = Date.now() - maxAgeMs;
   const stale: string[] = [];
   for (const abs of tmpFiles) {
@@ -607,10 +632,11 @@ export async function listStaleTmpFiles(maxAgeMs: number): Promise<string[]> {
 }
 
 /** 清理写入中途崩溃残留的超龄 `.tmp-*` 文件,返回删除数。 */
-export async function cleanupTmpFiles(maxAgeMs: number): Promise<number> {
+export async function cleanupTmpFiles(maxAgeMs: number, scope: BlobScope = 'blobs'): Promise<number> {
   let removed = 0;
-  for (const abs of await listStaleTmpFiles(maxAgeMs)) {
+  for (const abs of await listStaleTmpFiles(maxAgeMs, scope)) {
     try {
+      if (scope !== 'blobs') await assertBlobPathContained(abs, scope);
       await fs.rm(abs, { force: true });
       removed++;
     } catch {

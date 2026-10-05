@@ -1048,7 +1048,7 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
     }
   });
 
-  it.each(['demote', 'in-flight-demote', 'purge'])('releases unmounted prefetch without starting another read (%s)', async (mode) => {
+  it.each(['evict', 'in-flight-evict', 'purge'])('releases unmounted prefetch without starting another read (%s)', async (mode) => {
     vi.useFakeTimers();
     const s = sid();
     let finishPage: () => void = () => {};
@@ -1060,7 +1060,7 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
       await vi.advanceTimersByTimeAsync(0);
       const view = getRemoteHistoryView(s)!;
       const invoke = host.invoke.getMockImplementation()!;
-      if (mode === 'in-flight-demote') {
+      if (mode === 'in-flight-evict') {
         host.invoke.mockImplementation(async (device, channel, args) => {
           if (channel === 'local-db:messages:view') await new Promise<void>((resolve) => { finishPage = resolve; });
           return invoke(device, channel, args);
@@ -1069,7 +1069,10 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
       }
       const reads = host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view').length;
       if (mode === 'purge') makerChatStore.purgeSession(s);
-      else await vi.advanceTimersByTimeAsync(5 * 60_000);
+      else {
+        makerChatStore.__activeViewTest.setSoftEvictionBudget({ messages: 0, characters: 0 });
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
       expect(view.isActive()).toBe(false);
       expect(getRemoteHistoryView(s)).toBeUndefined();
       finishPage();
@@ -1084,6 +1087,7 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
       expect(makerChatStore.getSnapshot(s).messages.map((row) => row.content)).toEqual(['new text']);
       expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view')).toHaveLength(reads + 1);
     } finally {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget(null);
       finishPage();
       makerChatStore.purgeSession(s);
       vi.useRealTimers();
@@ -1140,9 +1144,10 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
       expect(JSON.stringify(plan.insertion)).toContain('Collect logs');
       expect(view.getSnapshot().hasMore).toBe(false);
       expect(view.getSnapshot().details.size).toBe(0);
-      // Resuming starts a new receipt sync, which must read after the already
-      // running reactivation page rather than certifying that older request.
-      expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view')).toHaveLength(entry === 'resumed' ? 5 : 3);
+      // Resuming starts a new receipt sync. Reactivation already sent a page in
+      // the same synchronous step, after every earlier signal, so the sync joins
+      // it instead of queueing a second read of the same page.
+      expect(host.invoke.mock.calls.filter(([, channel]) => channel === 'local-db:messages:view')).toHaveLength(entry === 'resumed' ? 4 : 3);
       expect(host.invoke.mock.calls.some(([, channel]) => channel === 'local-db:messages:list' || channel === 'local-db:messages:work-details')).toBe(false);
     } finally {
       leave?.();

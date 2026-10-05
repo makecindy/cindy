@@ -338,6 +338,7 @@ export function buildFeishuAdapter(
       },
     },
     processingEmoji: REACTION_PROCESSING,
+    queuedEmoji: 'OneSecond',
     buildVendorOptions: (userId) => ({ feishuChatId: userId, source: 'feishu' }),
 
     // 群轮次(speaker 存在)统一挂强确认策略 — 群历史前缀携带成员可控文本,

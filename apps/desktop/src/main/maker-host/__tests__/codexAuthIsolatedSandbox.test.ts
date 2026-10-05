@@ -36,6 +36,11 @@ vi.mock('electron', () => ({
   safeStorage: { isEncryptionAvailable: () => false },
 }));
 
+// Skill discovery is covered by managed-skills.test.ts, not this runtime/auth fixture.
+vi.mock('../managed-skills.js', () => ({
+  listCindyManagedSkills: async () => [],
+  cindyManagedSkillRoots: async () => [],
+}));
 vi.mock('@cindy/maker-core', () => ({}));
 
 vi.mock('../../agent-binaries/index.js', () => ({
@@ -247,6 +252,8 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     h.dataOwnerId = 'owner-a';
     const { DesktopCodexAuthAdapter, readCodexOneShotCreds } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
+    // This fixture owns credentials only; asset preparation has separate boundary tests.
+    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
 
     await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
       authenticated: true,
@@ -956,6 +963,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     let finishLogout!: () => void;
+    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
     const logoutOperation = new Promise<void>((resolve) => {
       finishLogout = resolve;
     });

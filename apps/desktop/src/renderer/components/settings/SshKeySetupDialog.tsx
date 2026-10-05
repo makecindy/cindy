@@ -208,16 +208,11 @@ export function SshKeySetupDialog({ hostId, hostInline, open, onOpenChange, onKe
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-50"
-          style={{ backgroundColor: 'var(--overlay-modal, rgba(0,0,0,0.4))' }}
+          className="modal-scrim fixed inset-0 z-50"
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl flex flex-col"
-          style={{
-            backgroundColor: 'var(--surface-elevated, #ffffff)',
-            border: '1px solid var(--border-default, #d4d4d4)',
-          }}
+          className="modal-panel fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden flex flex-col"
         >
           {/* Header */}
           <div
@@ -644,16 +639,11 @@ function UnlockDialog({ privateKeyPath, onClose, onSubmit }: UnlockDialogProps) 
     <Dialog.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-[60]"
-          style={{ backgroundColor: 'var(--overlay-modal, rgba(0,0,0,0.5))' }}
+          className="modal-scrim fixed inset-0 z-[60]"
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="fixed left-1/2 top-1/2 z-[60] w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl"
-          style={{
-            backgroundColor: 'var(--surface-elevated, #ffffff)',
-            border: '1px solid var(--border-default, #d4d4d4)',
-          }}
+          className="modal-panel fixed left-1/2 top-1/2 z-[60] w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden"
         >
           <div className="flex items-center justify-between px-5 py-3"
                style={{ borderBottom: '1px solid var(--border-default, #d4d4d4)' }}>
@@ -1005,16 +995,11 @@ function AgentTroubleDialog({ state, onClose }: AgentTroubleDialogProps) {
     <Dialog.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-[60]"
-          style={{ backgroundColor: 'var(--overlay-modal, rgba(0,0,0,0.5))' }}
+          className="modal-scrim fixed inset-0 z-[60]"
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="fixed left-1/2 top-1/2 z-[60] w-[520px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl flex flex-col"
-          style={{
-            backgroundColor: 'var(--surface-elevated, #ffffff)',
-            border: '1px solid var(--border-default, #d4d4d4)',
-          }}
+          className="modal-panel fixed left-1/2 top-1/2 z-[60] w-[520px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden flex flex-col"
         >
           <div
             className="flex items-center justify-between px-5 py-3"

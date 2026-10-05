@@ -17,13 +17,16 @@
     "device": "복사 위치",
     "project": "저장 위치",
     "newFolder": "새 폴더를 만들며 기존 파일은 덮어쓰지 않습니다.",
-    "defaultFolder": "Cindy 기본 위치",
+    "dialogue": "대화",
+    "newProject": "새 프로젝트",
     "noDevices": "사용 가능한 컴퓨터가 없습니다. 다른 컴퓨터를 연결하고 두 컴퓨터 모두 원격 제어를 켜세요.",
     "openTarget": "새로 복사한 작업 열기",
     "close": "닫기",
     "cancel": "취소",
     "start": "작업 복사",
-    "failed": "복사가 완료되지 않았습니다. 두 컴퓨터를 확인한 후 다시 복사하세요.",
+    "failed": "복사가 완료되지 않았습니다. 두 컴퓨터를 확인한 후 다시 복사하세요. ({{code}})",
+    "errorPath": "문제 파일: {{path}}",
+    "errorSize": "필요한 용량 약 {{needed}}, 한도 약 {{limit}}.",
     "stages": {
       "preparing": "스냅샷 준비 중…",
       "transferring": "파일 전송 및 검증 중…",
@@ -36,7 +39,7 @@
       "MIGRATION_TASK_RUNNING": "복사하기 전에 작업을 중지하세요.",
       "MIGRATION_SHARED_DIRECTORY_BUSY": "다른 작업이 이 폴더를 사용 중입니다. 중지한 후 다시 시도하세요.",
       "MIGRATION_TASK_UNSUPPORTED": "이 작업의 유형 또는 현재 상태에서는 다른 컴퓨터로 복사할 수 없습니다.",
-      "MIGRATION_NO_MEMORY": "전체 작업 기록을 처리할 메모리가 부족합니다. 메모리를 확보한 후 다시 시도하세요.",
+      "MIGRATION_NO_MEMORY": "작업 기록이 너무 커서 복사할 때 처리할 수 있는 한도를 넘었습니다.",
       "MIGRATION_INCOMPLETE_CONTEXT": "전체 작업 기록을 가져올 수 없어 복사을 중지했습니다.",
       "MIGRATION_EXTERNAL_LINK": "폴더 외부 링크 또는 지원되지 않는 링크 체인이 있습니다. 원본 파일은 변경되지 않았습니다.",
       "MIGRATION_REQUIRES_REPOSITORY_ROOT": "Git 프로젝트의 작업 폴더는 저장소 루트여야 합니다.",
@@ -46,22 +49,45 @@
       "MIGRATION_UNSUPPORTED": "두 컴퓨터 모두 작업 복사을 지원하는 버전으로 업데이트하세요.",
       "MIGRATION_TASK_QUEUED": "이 작업에 대기 중인 메시지가 있습니다. 처리하거나 삭제한 후 복사하세요.",
       "MIGRATION_SOURCE_CHANGED": "준비 중 원본 작업이 변경되었습니다. 복사를 다시 시도하세요.",
-      "MIGRATION_TIMEOUT": "원본 컴퓨터가 제한 시간 내에 응답하지 않았습니다. 잠시 후 다시 시도하세요."
+      "MIGRATION_TIMEOUT": "원본 컴퓨터가 제한 시간 내에 응답하지 않았습니다. 잠시 후 다시 시도하세요.",
+      "MIGRATION_CANNOT_CANCEL": "대상 컴퓨터에서 작업 생성이 시작되어 더 이상 취소할 수 없습니다.",
+      "MIGRATION_WORKSPACE_CHANGED": "패키징 중 프로젝트의 Git 커밋 또는 스테이징된 내용이 변경되었습니다. 잠시 후 다시 복사하세요.",
+      "MIGRATION_TEAM_CHANGED": "협업 작업의 구성원이 변경되었습니다. 복사를 다시 시작하세요.",
+      "MIGRATION_NONPORTABLE_PATH": "다른 시스템에서 사용할 수 없는 파일 이름이 있습니다. 원본 파일은 변경되지 않았습니다.",
+      "MIGRATION_PATH_COLLISION": "대소문자만 다른 같은 이름의 파일이 있습니다. 원본 파일은 변경되지 않았습니다.",
+      "MIGRATION_NOT_CONNECTED": "이 컴퓨터가 연결되어 있지 않습니다. 로그인되어 있고 원격 제어가 켜져 있는지 확인한 후 다시 시도하세요.",
+      "MIGRATION_TASK_BUSY": "이 작업은 이미 복사 중이거나 다른 작업에서 사용 중입니다. 잠시 후 다시 시도하세요."
     },
     "successTitle": "복사 완료",
     "successDescription": "{{name}}에 복사했습니다.",
+    "skippedTitle_one": "다음 {{count}}개 파일 또는 폴더는 복사되지 않았습니다. 나머지는 모두 복사했습니다:",
+    "skippedTitle_other": "다음 {{count}}개 파일 또는 폴더는 복사되지 않았습니다. 나머지는 모두 복사했습니다:",
+    "skippedMore_one": "{{count}}개 항목은 표시되지 않았습니다.",
+    "skippedMore_other": "{{count}}개 항목은 표시되지 않았습니다.",
+    "completeWithSkipped_one": "복사 완료, {{count}}개 항목 제외",
+    "completeWithSkipped_other": "복사 완료, {{count}}개 항목 제외",
+    "skippedReasons": {
+      "MIGRATION_EXTERNAL_LINK": "프로젝트 폴더 외부를 가리키는 링크",
+      "MIGRATION_NONPORTABLE_PATH": "다른 시스템에서 사용할 수 없는 이름",
+      "MIGRATION_PATH_COLLISION": "다른 파일과 대소문자만 다름",
+      "MIGRATION_UNSUPPORTED_ENTRY": "복사할 수 없는 특수 파일(소켓, 파이프 등)"
+    },
     "copyingTitle": "{{name}}로 복사 중",
-    "keepOpen": "{{name}}로 복사 중입니다. 완료될 때까지 기다려 주세요.",
+    "keepOpen": "{{name}}로 복사 중입니다. 창을 닫아도 복사는 계속되며, 원본 작업 상단에서 진행 상황을 확인할 수 있습니다.",
+    "runInBackground": "백그라운드에서 계속",
+    "cancelCopy": "복사 취소",
+    "cancelling": "취소하는 중…",
     "failureTitle": "복사 실패",
     "failureDescription": "창을 닫은 후 작업 메뉴에서 새로 복사할 수 있습니다.",
     "finishing": "{{name}}에서 수신, 검증 및 작업 생성 중…",
-    "transferProgress": "업로드 {{sent}} / {{total}} · 평균 {{speed}}/s (수신 미완료)",
+    "transferProgress": "전송됨 {{sent}} / {{total}} · 평균 {{speed}}/s",
     "thisComputer": "이 컴퓨터",
     "selectedComputer": "선택한 컴퓨터",
     "estimating": "파일 수와 크기 계산 중…",
     "fileSummary": "프로젝트 파일: {{count}}개, 총 {{size}}",
     "estimateNote": "숨김 파일을 포함한 복사 전 예상치입니다. 별도로 복사하는 Git 기록, 작업 대화 및 첨부 파일은 제외됩니다. 파일 변경에 따라 최종 크기가 달라질 수 있습니다.",
     "estimateFailed": "파일을 집계하지 못했습니다. 원본 컴퓨터의 연결과 버전을 확인한 후 닫고 다시 시도하세요.",
+    "estimateFailedWithCode": "파일을 집계하지 못했습니다. 원본 컴퓨터의 연결과 버전을 확인한 후 닫고 다시 시도하세요. ({{code}})",
     "estimateTimeout": "집계 시간이 초과되었습니다. 프로젝트 파일이 너무 많아 원본 컴퓨터가 제한 시간 내에 집계하지 못했습니다. 파일이 더 적은 프로젝트를 복사해 보세요.",
     "estimateTooManyFiles": "프로젝트 파일이 {{limit, number}}개를 넘어 복사할 수 없습니다. 파일이 더 적은 프로젝트를 복사하세요."
   },
@@ -280,9 +306,9 @@
       "fps": "프레임 속도",
       "quality": "화질",
       "automatic": "자동",
-      "smooth": "원활",
-      "balanced": "균형",
-      "clear": "선명",
+      "saver": "데이터 절약",
+      "hd": "고화질",
+      "qualityHint": "자동은 부드러움을 우선하고 네트워크가 좋으면 더 선명하게 표시합니다. 데이터 절약은 사용량을 줄입니다(최대 30fps). 고화질은 글자 선명도를 우선하며 대역폭이 부족하면 프레임 속도를 낮춥니다.",
       "resolution": "컴퓨터 해상도",
       "clipboardFailed": "클립보드 내용을 전송하지 못했습니다. 제어 권한을 확인하고 다시 시도하세요.",
       "settingsFailed": "설정을 저장하지 못했습니다. 다시 시도하세요.",
@@ -871,6 +897,33 @@
         "aria": "플러그인 패널 복원 위치 선택",
         "bubble": "플로팅 버블",
         "sidebar": "사이드바"
+      },
+      "wallpaper": {
+        "title": "배경화면",
+        "description": "앱 전체에 Cindy 배경이나 내 이미지를 적용하세요. 테마는 별도로 선택할 수 있습니다.",
+        "reset": "기본값으로 복원",
+        "aria": "배경화면 선택",
+        "nonePreview": "없음",
+        "options": {
+          "none": "없음",
+          "cindy-window": "Cindy · 창가의 휴식",
+          "cindy-studio": "Cindy · 미래의 아틀리에",
+          "cindy-dream": "Cindy · 꿈속 여행",
+          "custom": "사용자 지정 배경화면"
+        },
+        "overlayLabel": "오버레이",
+        "overlayAria": "배경화면 오버레이 강도",
+        "motionLabel": "표시 방식",
+        "motionHint": "기본값은 정적입니다. 창이 숨겨지면 일시 정지하며 시스템의 동작 줄이기 설정을 따릅니다.",
+        "motionStatic": "정적",
+        "motionDynamic": "동적",
+        "customChoose": "이미지 선택",
+        "customReplace": "이미지 교체",
+        "customRemove": "이미지 제거",
+        "customBusy": "처리 중…",
+        "customHint": "PNG, JPEG, WebP, 최대 20 MB. 이 기기에만 저장되며 정지 이미지로 표시됩니다.",
+        "customInvalid": "올바른 PNG, JPEG 또는 WebP 이미지를 선택하세요(최대 20 MB, 4천만 화소).",
+        "customFailed": "배경화면을 저장하지 못했습니다. 다시 시도하세요."
       },
       "layout": {
         "label": "패널 레이아웃",
@@ -3912,6 +3965,15 @@
         "noProjectHint": "프로젝트 세션에서 설정을 열면 해당 프로젝트의 컴퓨터 직접 제어를 전환할 수 있습니다.",
         "update": {
           "available": "새 버전 v{{version}}을(를) 사용할 수 있습니다. 업데이트 후 시스템 권한을 다시 허용해야 할 수 있습니다.",
+          "previouslyAvailable": "이전 확인에서 v{{version}}을(를) 찾았습니다. 설치 전에 사용 가능한지 다시 확인합니다.",
+          "readingVersion": "버전 확인 중…",
+          "checking": "업데이트 확인 중…",
+          "upToDate": "최신 버전입니다",
+          "checkFailed": "업데이트를 확인하지 못했습니다",
+          "lastChecked": "마지막 확인: {{time}}",
+          "check": "업데이트 확인",
+          "retry": "다시 시도",
+          "notChecked": "아직 확인하지 않음",
           "action": "업데이트",
           "updating": "업데이트 중…",
           "downloadingPercent": "다운로드 중 {{percent}}%({{downloaded}}/{{total}} MB)…",
@@ -3997,6 +4059,38 @@
         "lsp": {
           "name": "LSP",
           "description": "TypeScript LSP 쿼리 (Beta — 설정 → 실험실 → LSP 모드에서 제어)"
+        },
+        "android": {
+          "name": "Android 자동화",
+          "description": "이 컴퓨터에 연결된 Android 기기를 확인하고 조작합니다."
+        },
+        "ios-simulator": {
+          "name": "iOS 시뮬레이터",
+          "description": "iOS 시뮬레이터에서 앱을 설치, 실행 및 검사합니다."
+        },
+        "browser": {
+          "name": "브라우저",
+          "description": "웹 페이지를 탐색하고 읽고 캡처하며 조작합니다."
+        },
+        "computer": {
+          "name": "컴퓨터 제어",
+          "description": "로컬 앱, 창, 마우스와 키보드를 확인하고 조작합니다."
+        },
+        "wechat": {
+          "name": "개인 WeChat",
+          "description": "알고 있는 WeChat 연락처에 메시지를 보냅니다."
+        },
+        "slack": {
+          "name": "Slack",
+          "description": "연결된 Slack 계정으로 메시지를 검색하고 읽고 보냅니다."
+        },
+        "ssh": {
+          "name": "SSH 명령",
+          "description": "설정된 SSH 연결로 원격 컴퓨터에서 명령을 실행합니다."
+        },
+        "contacts": {
+          "name": "스마트 연락처",
+          "description": "연락처 프로필과 교류 기록을 검색하고 관리합니다."
         }
       }
     },
@@ -5496,8 +5590,8 @@
         "agentTasksRequest": "세션 권한 확인",
         "agentTasks": "이 플러그인의 Cindy 세션을 만들고 관리할 수 있음",
         "agentTasksDetail": "메시지를 보내고 결과를 읽으며 자신의 실행을 중지할 수 있습니다. 세션은 사용자에게 표시됩니다. 플러그인의 AI 설정을 사용하며 모델 비용이 발생할 수 있습니다. 다른 세션에 대한 접근 권한은 부여하지 않습니다.",
-        "agentErrand": "Cindy Agent에게 작업을 맡기고 결과를 받아올 수 있음",
-        "agentErrandDetail": "작업은 이 플러그인 전용 세션에서 실행되며, 사이드바에서 언제든 확인하고 중단할 수 있습니다. 기본은 읽기 전용이며, 권한 상향은 플러그인 설정에서 직접 해야 합니다. 모델 비용이 발생할 수 있습니다.",
+        "agentErrand": "작업을 만들고 실행하며 결과를 읽을 수 있습니다",
+        "agentErrandDetail": "생성된 작업은 Cindy 작업 목록에 표시되며 진행 상황을 확인하고 대화를 이어갈 수 있습니다.",
         "agentSchedule": "자동화 새로 만들기를 요청할 수 있음",
         "agentScheduleDetail": "내용이 미리 채워진 자동화 만들기 패널을 여는 것만 할 수 있으며, 실제로 만들지는 사용자가 모델을 고르고 직접 저장해 결정합니다. 만든 뒤에는 Cindy가 설정한 시간에 실행합니다. 모델 비용이 발생할 수 있습니다.",
         "nodeRuntime": "함께 제공된 Node 프로그램을 이 컴퓨터에서 실행할 수 있음",
@@ -5636,16 +5730,21 @@
           "noModels": "사용 가능한 모델 없음"
         },
         "errandPrefs": {
-          "title": "AI 대행",
-          "desc": "이 플러그인이 Cindy Agent에게 작업을 맡길 때 사용하는 실행 설정입니다. 설정하지 않은 항목은 새 초안 선택을 따르며, 기본은 읽기 전용이고 전용 폴더에서 작업합니다.",
+          "title": "작업 설정",
+          "desc": "이 플러그인이 만드는 작업의 설정입니다. 새 작업은 호출한 작업의 모델을 사용하며, 패널에서 만들면 현재 새 작업의 선택을 사용합니다. 기존 작업은 자신의 모델을 유지합니다. 권한은 별도로 설정하며 일반 작업의 기본 권한을 사용합니다. 전체 접근 권한은 상속하지 않습니다.",
+          "legacyDesc": "이 플러그인이 만드는 작업의 설정입니다. 새 작업은 호출한 작업의 모델을 사용하며, 패널에서 만들면 현재 새 작업의 선택을 사용합니다. 기존 작업은 자신의 모델을 유지합니다. 기존 API는 원래 권한을 유지합니다. 권한을 선택하면 해당 설정을 사용합니다.",
+          "legacyPermission": "기존 권한 유지",
           "agent": "Agent",
           "model": "모델",
           "permission": "쓰기 권한",
-          "permissionDisabled": "대행 세션에서는 선택할 수 없음",
+          "permissionDisabled": "플러그인은 이 권한을 사용할 수 없습니다",
           "workdir": "작업 폴더",
           "workdirDefault": "플러그인 전용 폴더(기본)",
           "workdirPick": "선택…",
-          "workdirClear": "기본 폴더로 되돌리기"
+          "workdirClear": "기본 폴더로 되돌리기",
+          "sourceDefault": "호출한 작업 따르기 · 아래는 패널의 기본 모델",
+          "sourceCustom": "이 플러그인용으로 선택한 모델 사용",
+          "restoreModel": "모델 초기화"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "권한",
@@ -6626,6 +6725,8 @@
   "usageDetails": {
     "durationSeconds": "{{value}}초",
     "durationMinutesSeconds": "{{minutes}}분 {{seconds}}초",
+    "durationHoursMinutes": "{{hours}}시간 {{minutes}}분",
+    "durationDaysHoursMinutes": "{{days}}일 {{hours}}시간 {{minutes}}분",
     "performanceLine": "속도 {{rate}} 토큰/초 · 시간 {{duration}}",
     "performanceRateLine": "속도 {{rate}} 토큰/초",
     "timeLine": "시간 {{duration}}",
@@ -7167,7 +7268,9 @@
       "processKilled": "프로세스가 강제 종료되었습니다 (신호 {{signal}})",
       "restart": "다시 시작",
       "shellNotFound": "셸을 찾을 수 없습니다: {{detail}}",
-      "spawnFailed": "터미널을 시작할 수 없습니다: {{detail}}"
+      "spawnFailed": "터미널을 시작할 수 없습니다: {{detail}}",
+      "remoteUnavailableTitle": "원격 세션에서는 사용할 수 없음",
+      "remoteUnavailableDescription": "터미널은 현재 이 기기에서 로컬로 실행되는 세션에서만 사용할 수 있습니다."
     },
     "review": {
       "turn": {
@@ -7792,6 +7895,111 @@
     }
   },
   "bots": {
+    "workbench": {
+      "title": "작업대",
+      "open": "워크벤치 열기",
+      "emptyTitle": "{{name}}에게 프로젝트 맡기기",
+      "emptyDescription": "컴퓨터에 있는 작업을 {{name}}에게 넘겨 이어서 하게 합니다. 먼저 프로젝트의 문서, 최근 커밋과 PR, 지난 세션을 살펴보고, 끝나지 않았거나 해 볼 만한 것을 골라낸 뒤 무엇을 이어서 할지 물어봅니다.",
+      "scanning": "컴퓨터에서 프로젝트를 찾는 중…",
+      "noProjects": "세션이 있는 프로젝트가 아직 없습니다. 폴더를 골라 {{name}}에게 맡길 수 있습니다.",
+      "pickFolder": "다른 폴더 선택",
+      "cancelAdd": "취소",
+      "projectTasks_other": "세션 {{count}}개",
+      "projectAutomations_other": "자동화 {{count}}개",
+      "sourceCindy_other": "Cindy 세션 {{count}}개",
+      "sourceClaude_other": "Claude Code 세션 {{count}}개",
+      "sourceCodex_other": "Codex 세션 {{count}}개",
+      "moreProjects": "{{count}}개 더 보기",
+      "hideMoreProjects": "접기",
+      "grant": "{{name}}은(는) {{project}}의 {{scope}}을(를) 보고, 이어서 하고, 멈출 수 있으며 새 세션도 대신 시작합니다.",
+      "grantTasks_other": "세션 {{count}}개",
+      "grantCindy_other": "Cindy 세션 {{count}}개",
+      "grantClaude_other": "Claude Code 세션 {{count}}개",
+      "grantCodex_other": "Codex 세션 {{count}}개",
+      "grantAutomations_other": "자동화 {{count}}개",
+      "grantEverything": "세션과 자동화",
+      "handOver": "{{name}}에게 맡기기",
+      "handoverMessage": "{{project}}을(를) 맡길게요.",
+      "addProject": "{{name}}에게 다른 프로젝트 맡기기",
+      "removeProject": "{{name}}에게서 {{project}} 돌려받기",
+      "dirMissing": "폴더를 찾을 수 없습니다",
+      "dirUnavailable": "이 폴더를 열 수 없습니다. 다른 폴더를 선택하세요.",
+      "tooManyDirs": "{{name}}에게는 프로젝트를 최대 {{count}}개까지 맡길 수 있습니다",
+      "sendFailed": "{{name}}에게 보내지 못했습니다. 다시 시도하세요.",
+      "tasksEmpty": "이어서 할 세션이 아직 없습니다.",
+      "understanding": "{{name}}이(가) {{project}}을(를) 파악하는 중…",
+      "untitled": "제목 없는 세션",
+      "continueMessage": "‘{{title}}’ 이어서: {{text}}",
+      "verdict": {
+        "unfinished": "미완료",
+        "idea": "후속 없음"
+      },
+      "detail": {
+        "back": "작업대로 돌아가기",
+        "stop": "이 세션 중지",
+        "openInTasks": "세션 화면에서 열기",
+        "placeholder": "{{name}}에게 이어서 하도록 한마디…",
+        "send": "보내기",
+        "sent": "{{name}}에게 전했습니다",
+        "judgment": "{{name}}의 판단",
+        "empty": "아직 표시할 내용이 없습니다.",
+        "loadFailed": "이 세션의 기록을 읽을 수 없습니다.",
+        "truncated": "최근 내용만 표시합니다",
+        "ref": "참고",
+        "noRef": "첨부된 참고 링크가 없습니다.",
+        "openPr": "GitHub에서 PR #{{number}} 열기",
+        "refBlocked": "맡긴 프로젝트 밖의 경로라서 열지 않았습니다."
+      },
+      "openTask": "‘{{title}}’ 열기({{state}})",
+      "outputs": "결과물",
+      "outputsEmpty": "{{name}}이(가) 만든 파일이 여기에 표시됩니다.",
+      "state": {
+        "running": "실행 중",
+        "waiting": "응답 대기",
+        "queued": "대기 중",
+        "stopped": "멈춤",
+        "automation": "자동화",
+        "done": "완료"
+      },
+      "group": {
+        "waiting": "응답 대기",
+        "running": "실행 중",
+        "todo": "할 일",
+        "done": "완료"
+      },
+      "followUp": {
+        "label": "진행",
+        "message": "「{{title}}」 이어서 진행해 줘",
+        "aria": "「{{title}}」 진행하기"
+      },
+      "followingMark": "이 프로젝트 담당: {{names}}",
+      "olderCount_other": "이전 {{count}}개",
+      "kind": {
+        "existing": "기존 세션",
+        "delegated": "요청한 일",
+        "claudeCode": "Claude Code에서",
+        "codex": "Codex에서",
+        "pi": "Pi에서",
+        "pr": "PR #{{number}}",
+        "issue": "Issue #{{number}}",
+        "idea": "제안",
+        "automationPlain": "자동화"
+      },
+      "cycle": {
+        "manual": "수동",
+        "once": "1회",
+        "event": "이벤트 발생 시"
+      },
+      "line": {
+        "waiting": "응답을 기다리는 중",
+        "queued": "대기 중",
+        "interrupted": "지난번 실행이 끝나지 않았습니다",
+        "errored": "지난번 실행에서 오류가 났습니다",
+        "failed": "끝내지 못했습니다",
+        "paused": "일시 중지됨",
+        "disabled": "꺼짐"
+      }
+    },
     "remoteSettings": {
       "empty": "아직 항목이 없습니다.",
       "loadFailed": "설정을 불러오지 못했습니다. 다시 시도하세요.",
@@ -7838,11 +8046,13 @@
     "nameLabel": "어떻게 부를까요?",
     "close": "닫기",
     "list": {
+      "createMenu": "새로 만들기",
+      "createTeammate": "새 파트너",
       "startChat": "대화 시작하기",
       "typing": "입력 중…",
       "unread": "읽지 않은 메시지 {{count}}개",
-      "search": "동료 검색",
-      "searchPlaceholder": "동료 검색…",
+      "search": "파트너 또는 그룹 채팅 검색",
+      "searchPlaceholder": "파트너 또는 그룹 채팅 검색…",
       "showHidden": "숨긴 동료 표시",
       "hideHidden": "숨긴 동료 접기",
       "hidden": "숨김({{count}})",
@@ -8027,7 +8237,8 @@
       "duration": {
         "seconds": "{{n}}초",
         "minutes": "{{n}}분",
-        "hoursMinutes": "{{h}}시간 {{m}}분"
+        "hoursMinutes": "{{h}}시간 {{m}}분",
+        "daysHoursMinutes": "{{d}}일 {{h}}시간 {{m}}분"
       },
       "viewResult": "결과 보기",
       "noWrittenResult": "텍스트 결과가 없습니다."
@@ -8044,6 +8255,7 @@
       "limitReached": "이번 동료 간 대화가 한도에 도달해 양쪽 모두 각자의 기본 작업으로 돌아갔습니다"
     },
     "groupChat": {
+      "migrationPending": "이전 기록 일부가 아직 업로드되지 않았습니다. 자동으로 다시 시도하며 채팅은 계속 사용할 수 있습니다.",
       "memberSeparator": ", ",
       "memberCount_one": "동료 {{count}}명",
       "memberCount_other": "동료 {{count}}명",
@@ -8216,6 +8428,85 @@
       },
       "files": {
         "openFailed": "파일을 열지 못했습니다. 이동되었거나 삭제되었을 수 있습니다"
+      },
+      "server": {
+        "reply": "답글",
+        "replies": "답글",
+        "replyCount": "답글 {{count}}개",
+        "replyPlaceholder": "이 메시지에 답글을 쓰세요. @로 파트너를 멘션할 수 있어요…",
+        "sendReply": "답글 보내기",
+        "addReaction": "이모지 반응 추가",
+        "reactionCount": "{{emoji}} · 반응 {{count}}개",
+        "invite": "그룹에 초대",
+        "join": "그룹 참여",
+        "inviteDescription": "이 링크는 24시간 동안 한 번만 사용할 수 있습니다. 수락하면 그룹 구성원이 되어 대화 기록을 볼 수 있습니다.",
+        "joinDescription": "초대 링크를 붙여 넣고 그룹을 확인한 후 참여하세요.",
+        "inviteLink": "초대 링크",
+        "pasteLink": "초대 링크 붙여 넣기…",
+        "invitedBy": "{{name}}님의 초대",
+        "copyLink": "초대 링크 복사",
+        "copied": "초대 링크를 복사했습니다",
+        "createLink": "초대 링크 만들기",
+        "accept": "수락하고 참여",
+        "previewInvite": "초대 확인",
+        "invalidInvite": "유효하지 않거나 사용 또는 만료된 초대입니다. 새 링크를 받으세요.",
+        "notAllowed": "현재 계정에 권한이 없습니다. 계정을 확인하거나 그룹 소유자에게 문의하세요.",
+        "loginRequired": "현재 계정에 로그인한 후 다시 시도하세요.",
+        "requestFailed": "채팅 서비스에 연결할 수 없습니다. 잠시 후 다시 시도하세요.",
+        "copyFailed": "복사하지 못했습니다. 링크를 선택하여 직접 복사하세요.",
+        "createDescription": "파트너를 선택하거나 먼저 그룹을 만들고 친구를 초대할 수 있어요.",
+        "settings": {
+          "name": "그룹 이름",
+          "topic": "주제",
+          "description": "설명",
+          "save": "저장",
+          "myProfile": "내 프로필",
+          "editProfile": "이름과 사진 수정",
+          "nickname": "이 그룹에서의 이름",
+          "nicknameHint": "이 그룹에만 표시됩니다. 비워 두면 프로필 이름을 사용합니다.",
+          "members": "멤버 · {{count}}",
+          "owner": "그룹 소유자",
+          "admin": "관리자",
+          "member": "멤버",
+          "guest": "게스트",
+          "companionOf": "{{name}}의 파트너",
+          "guestAccess": "다른 멤버의 사용 권한",
+          "toolsHint": "멤버는 파트너의 기존 도구와 개인 정보를 사용할 수 있으며 결과는 모두에게 공개됩니다. 기존 승인 규칙은 유지됩니다. 권한 취소 시 진행 중인 요청은 중단되지만 완료된 작업은 되돌릴 수 없습니다.",
+          "chatHint": "그룹 메시지만 사용하며 소유자의 기억, 개인 정보, 도구는 사용하지 않습니다.",
+          "none": "소유자만 사용",
+          "chat": "그룹 내 대화만",
+          "tools": "도구와 정보 사용 승인됨",
+          "ownerOnly": "파트너 소유자만 이 권한을 변경할 수 있습니다.",
+          "authorizeTitle": "{{name}}의 도구와 정보 사용을 허용할까요?",
+          "makeAdmin": "관리자로 지정",
+          "removeAdmin": "관리자 해제",
+          "transfer": "소유권 이전",
+          "transferTitle": "{{name}}에게 소유권을 이전할까요?",
+          "transferHint": "상대가 소유자가 되고 본인은 관리자가 됩니다. 파트너도 소유자가 될 수 있습니다.",
+          "remove": "그룹에서 내보내기",
+          "removeTitle": "{{name}}을 그룹에서 내보낼까요?",
+          "removeHint": "메시지를 읽거나 보낼 수 없게 됩니다. 해당 멤버의 파트너도 나갑니다.",
+          "addCompanion": "내 파트너 초대",
+          "leave": "그룹 나가기",
+          "leaveHint": "본인과 자신의 파트너가 그룹을 나갑니다. 소유자는 먼저 소유권을 이전해야 합니다.",
+          "archive": "그룹 보관",
+          "archiveHint": "기록을 보존하고 새 메시지와 파트너 실행을 중단합니다.",
+          "confirm": "확인",
+          "lastOwner": "나가거나 소유자를 내보내기 전에 다른 멤버에게 소유권을 이전하세요.",
+          "conflict": "다른 멤버가 설정을 변경했습니다. 새로 고침 후 다시 시도하세요.",
+          "replyMode": "멘션이 없을 때",
+          "speakingMode": "발언 순서",
+          "all": "모든 파트너 응답 가능",
+          "mentioned": "멘션이 있을 때만",
+          "auto": "동시에 발언",
+          "sequential": "차례로 발언",
+          "unarchive": "그룹 보관 해제",
+          "unarchiveHint": "메시지와 파트너 실행을 재개합니다.",
+          "archived": "보관된 그룹입니다. 기록은 계속 볼 수 있습니다.",
+          "noneHint": "이 그룹에서는 동료의 소유자만 응답을 요청할 수 있습니다.",
+          "companionPermissions": "동료 권한",
+          "configureCapabilities": "도구 및 사용 권한 설정"
+        }
       }
     },
     "joined": {
@@ -8267,7 +8558,16 @@
       "mcp": "MCP",
       "toolset": "기본 제공 도구",
       "unavailable": "사용 불가",
-      "empty": "일치하는 기능이 없습니다"
+      "empty": "일치하는 기능이 없습니다",
+      "accessHint": "동료가 사용할 수 있는 내장 도구, MCP 및 스킬을 개별적으로 선택합니다. 변경은 허용된 그룹 요청을 포함해 다음 요청부터 적용됩니다.",
+      "inheritedHint": "현재 이 컴퓨터에서 활성화된 도구를 따릅니다. 항목을 끄면 이 목록에서는 선택한 항목만 사용합니다.",
+      "selectedHint": "이 목록에서는 선택한 항목만 사용할 수 있습니다.",
+      "personalHint": "이 동료가 학습한 스킬로 프로필과 함께 자동으로 불러옵니다.",
+      "unavailableHint": "이 컴퓨터 또는 실행 환경에서 사용할 수 없습니다. 연결이나 시스템 권한을 먼저 설정하세요.",
+      "configure": "설정 열기",
+      "empty_toolset": "이 실행 환경에 사용 가능한 내장 도구가 없습니다.",
+      "empty_mcp": "사용자 지정 MCP 서버가 아직 추가되지 않았습니다.",
+      "empty_skill": "선택할 수 있는 스킬이 없습니다."
     },
     "guided": {
       "title": "파트너 만들기",
@@ -9348,6 +9648,10 @@
       "noFeedback": "(피드백 없음)",
       "cancelled": "취소됨"
     },
+    "thinking": {
+      "completed": "생각 {{duration}}",
+      "aborted": "생각 {{duration}} (중단됨)"
+    },
     "workGroup": {
       "working": "작업 중…",
       "worked": "{{duration}} 동안 작업함",
@@ -9501,6 +9805,7 @@
       "viewBalance": "잔액 보기",
       "viewBalanceTitle": "「사용량 및 청구」를 열어 잔액을 확인하고 충전",
       "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 세션에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘재시도’를 눌러 주세요.",
+      "accountBoundaryPending": "Cindy가 계정 상태를 전환하는 중이라 아직 이 작업을 시작할 수 없습니다. 잠시 후 ‘재시도’를 눌러 주세요. 계속 표시되면 Cindy를 다시 시작해 주세요.",
       "codexThreadStale": "Codex 인증 모드가 변경되었습니다. 이 세션은 계속할 수 없습니다. 새 세션을 시작하세요.",
       "codexResumeNotReady": "Codex에서 현재 이 작업을 재개할 수 없습니다. 잠시 후 다시 시도해 주세요.",
       "claudeGatewayOpusPlanMismatch": "이 Opus 요청은 Claude.ai 구독이 아니라 XD Gateway를 통해 전송되었고, 해당 게이트웨이 경로에서 모델을 거부했습니다. Claude.ai 구독으로 전환해 다시 시도하거나 다른 모델을 선택하세요.",

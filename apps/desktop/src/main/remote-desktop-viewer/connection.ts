@@ -1,5 +1,6 @@
 import {
   parseRemoteDesktopRequest,
+  remoteDesktopVideoSettingsWire,
   isDesktopAttemptId,
   REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS,
   type RemoteDesktopRequest,
@@ -204,7 +205,13 @@ export class RemoteViewerConnection {
           if ('lease' in request && request.lease !== this.lease)
             throw new Error('DESKTOP_LEASE_EXPIRED');
           if (isStart) this.attempted = true;
-          const result = await this.deps.request(target.deviceId, request, check);
+          // Parsing normalizes offer settings to `quality`; older hosts still
+          // require the legacy `bitrate`, so restore the wire shape before sending.
+          const outgoing =
+            request.op === 'offer' && request.settings
+              ? { ...request, settings: remoteDesktopVideoSettingsWire(request.settings) }
+              : request;
+          const result = await this.deps.request(target.deviceId, outgoing, check);
           if (request.op === 'capabilities') {
             check();
             this.caps = result as RemoteDesktopCapabilities;

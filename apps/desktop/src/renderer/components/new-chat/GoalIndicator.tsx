@@ -1,3 +1,5 @@
+import type { TFunction } from 'i18next';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { Button } from '@/components/ui/button';
 /**
  * GoalIndicator —— 会话内 /goal 进行中的状态 chip(composer 上方)。
@@ -30,20 +32,13 @@ function isAttentionStatus(status: GoalStatusPayload['status']): boolean {
   return status === 'blocked' || status === 'budgetLimited' || status === 'usageLimited';
 }
 
-/**
- * 运行时长(ms)→ 紧凑展示,**始终显示秒**(每秒 tick):
- *   <60s → `9s`;<60m → `5m 09s`;否则 → `2h 05m 09s`。
- * 秒(及小时档的分)零补两位,避免位数变化导致每秒宽度抖动。
- */
-function formatElapsed(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const s = total % 60;
-  const m = Math.floor(total / 60) % 60;
-  const h = Math.floor(total / 3600);
-  const ss = String(s).padStart(2, '0');
-  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m ${ss}s`;
-  if (m > 0) return `${m}m ${ss}s`;
-  return `${s}s`;
+/** 运行时长折算小时、天后保留分钟,低位补零以保持计时宽度稳定。 */
+function formatElapsed(ms: number, t?: TFunction): string {
+  return formatSessionDuration(Math.floor(ms / 1000) * 1000, t, {
+    minimumSeconds: 0,
+    alwaysShowRemainder: true,
+    padRemainder: true,
+  });
 }
 
 /** 限额重置时刻 → 本地"时:分"(跨天则带日期);拿不到返回空。 */
@@ -128,10 +123,9 @@ function GoalEditor({
         </button>
       </AlertDialog.Trigger>
       <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
+        <AlertDialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <AlertDialog.Content
-          className="fixed left-1/2 top-1/2 z-[10001] flex w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 rounded-xl border p-4 shadow-[var(--confirm-shadow)]"
-          style={{ backgroundColor: 'var(--confirm-bg)', borderColor: 'var(--border-default)' }}
+          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 p-4"
           onOpenAutoFocus={(event) => {
             // 打开时焦点直接落在目标输入框。
             event.preventDefault();
@@ -277,7 +271,7 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
           style={{ color: 'var(--text-tertiary)' }}
           title={t('goal.elapsedTooltip')}
         >
-          {formatElapsed(elapsedMs)}
+          {formatElapsed(elapsedMs, t)}
         </span>
       )}
       <GoalEditor sessionId={sessionId} goal={goal} />

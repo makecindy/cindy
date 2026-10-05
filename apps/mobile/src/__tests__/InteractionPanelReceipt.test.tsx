@@ -112,6 +112,21 @@ it.each(['permission', 'ask_user_question', 'plan_review'])('lets a shared guest
   ));
 });
 
+it.each([false, true])('renders IM source once with companion=%s and keeps the operation as its title', async companion => {
+  const source = '来源：测试群\n原消息：检查目录';
+  remoteSessionStore.setPendingInteractions('s1', [{ request: {
+    kind: 'permission', requestId, toolName: 'Read', input: { path: '/tmp/test.txt' },
+    description: `${source}\n\nRead the requested file`, metadata: { imSourceDescription: source },
+  } }]);
+  await act(async () => root.render(<Harness companion={companion} />));
+  expect(host.textContent!.split(source)).toHaveLength(2);
+  expect(host.textContent).toContain('Read the requested file');
+  if (companion) {
+    const card = host.querySelector('[data-testid="interaction.permission.card"]')!;
+    expect(card.children[1].textContent).toBe('Read the requested file');
+  }
+});
+
 it('submits the host-provided Codex session approval from the shared guest always-allow button', async () => {
   const suggestions = [{ type: 'codexSessionApproval', destination: 'session' }];
   remoteSessionStore.setPendingInteractions('s1', [{ request: {

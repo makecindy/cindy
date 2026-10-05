@@ -118,6 +118,7 @@ describe('history viewport compensation', () => {
       viewportAnchorCorrection,
       settleChipJump: vi.fn(),
       chipJumpGenerationRef: { current: null },
+      focusJumpRef: { current: null },
       programmaticScrollRef: { current: true },
       programmaticScrollGenerationRef: { current: 1 },
       finishProgrammaticScroll: () => false,

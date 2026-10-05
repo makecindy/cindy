@@ -776,6 +776,27 @@ describe('message render shared model', () => {
     expect(formatDuration(65_000)).toBe('1m 5s');
     expect(formatDuration(120_000)).toBe('2m');
   });
+
+  it.each([
+    [3_599_000, '59m 59s'],
+    [3_599_600, '1h 0m'],
+    [3_661_000, '1h 1m'],
+    [77_516_000, '21h 31m'],
+    [86_399_000, '23h 59m'],
+    [86_399_600, '1d 0h 0m'],
+    [86_700_000, '1d 0h 5m'],
+    [183_845_000, '2d 3h 4m'],
+  ])('keeps long work durations readable (%i ms)', (ms, expected) => {
+    expect(formatDuration(ms)).toBe(expected);
+  });
+
+  it('preserves zero and padded remainder for live counters', () => {
+    const options = { minimumSeconds: 0, alwaysShowRemainder: true, padRemainder: true };
+    expect(formatDuration(0, options)).toBe('0s');
+    expect(formatDuration(60_000, options)).toBe('1m 00s');
+    expect(formatDuration(7_509_000, options)).toBe('2h 05m');
+    expect(formatDuration(86_400_000, options)).toBe('1d 00h 00m');
+  });
 });
 
 function expectType<TType extends MessageRenderItem<FixtureMessage>['type']>(

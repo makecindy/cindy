@@ -81,8 +81,8 @@ export interface GhostPluginDetail extends GhostPluginListItem {
   tools: readonly GhostToolDecl[];
   hasSettingsUi: boolean;
   cindyCapabilities: readonly string[];
-  /** 申请了派活取件(agent.errand)——详情页据此渲染宿主统一的「AI 代办」配置卡。 */
-  hasErrand: boolean;
+  /** 新建普通任务的能力共用宿主「任务设置」，包含旧 errand 适配器。 */
+  hasTaskPreferences: boolean;
   panelMinWidth: number | null;
   installDir: string | null;
 }
@@ -314,7 +314,7 @@ export function toGhostPluginDetail(
     cindyCapabilities: PINNABLE_CINDY_CATEGORIES.flatMap((category) =>
       (manifest.cindy?.[category] ?? []).map((action) => `${category}.${action}`),
     ),
-    hasErrand: manifest.agent?.errand === true || manifest.agent?.tasks === true,
+    hasTaskPreferences: !!manifest.workspace || manifest.agent?.errand === true || manifest.agent?.tasks === true,
     panelMinWidth: manifest.panel ? (manifest.panel.minWidth ?? 280) : null,
     installDir: ghost.dir,
   };

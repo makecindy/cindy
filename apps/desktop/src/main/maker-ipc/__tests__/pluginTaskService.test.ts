@@ -7,12 +7,49 @@ import {
   isPluginTaskPermissionAllowed,
   PluginTaskError,
   assertPluginTaskResult,
+  readPluginTaskPlanReceipt,
   type PluginTaskReceipt,
   type PluginTaskStore,
   type PluginTaskServiceDeps,
 } from '../pluginTaskService.js';
 import type { PluginTaskView } from '../../../shared/pluginTasks.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from '../sessionExecutionOwnership.js';
+import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
+
+it('rejects oversized plans before saving and refuses oversized legacy receipts without truncation', async () => {
+  const f=fixture(), task=await f.create();
+  const before=structuredClone(f.rows.get(task.taskId)!);
+  const plan={concurrency:2,items:Array.from({length:200},(_,i)=>({label:'w'+i,workingDir:'/answer',route:f.route,task:'x'.repeat(8000)}))};
+  await expect(f.service.setTeamPlan('p',task.taskId,plan)).rejects.toMatchObject({code:'INVALID_REQUEST'});
+  expect(f.rows.get(task.taskId)).toEqual(before);
+  for (const payload of [' '.repeat(PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS+1), JSON.stringify({teamPlan:{task:'x'.repeat(PLUGIN_TEAM_PLAN_MAX_JSON_CHARS)}})])
+    expect(()=>readPluginTaskPlanReceipt(payload)).toThrow('size');
+  f.rows.get(task.taskId)!.payload=JSON.stringify({teamPlan:plan});
+  await expect(f.service.settleWorkerLabel('p',task.taskId,'w0')).rejects.toMatchObject({code:'INVALID_REQUEST'});
+});
+
+it.each([false,true])('production Auto context checks uninstall after its projection await (worker=%s)', async worker => {
+  for (const revoked of [false,true]) {
+    const f=fixture(),task=await f.create();
+    const session={...f.route,source:'plugin',workingDir:'/answer',permissionMode:'auto',status:'active'};
+    const results=[[session],worker?[{leadId:task.taskId,label:'w',teamId:'team',teamStatus:'active'}]:[],[session]];
+    const query={from:()=>query,where:()=>query,innerJoin:()=>query,limit:async()=>results.shift()};
+    const epoch={client:{drizzle:{select:()=>query},queryOne:async()=>({unchanged:1}),tx:async()=>{if(revoked)await f.service.withUninstall('p',async()=>{});return {};}}};
+    let load!:(id:string)=>Promise<unknown>;
+    const deps={setAutoReviewContextResolver:(callback:typeof load)=>{load=callback;},createPluginTaskReviewResolver:(callback:typeof load)=>callback,
+      getCurrentDbClientSnapshot:()=>epoch,sessions:{},orcaWorkers:{},orcaTeams:{},eq:()=>true,
+      createPluginTaskStore:()=>f.deps.store,drainPersistQueue:async()=>{},
+      pluginTaskServiceForCurrentOwner:()=>f.service,readPluginTaskConfig:()=>({permissionMode:'auto'}),
+      readPluginTaskPlanReceipt,pluginTaskAuthorizationRevision:()=> 'new-install',isPluginTaskAuthorized:()=>true};
+    const source=readFileSync(new URL('../register.ts',import.meta.url),'utf8');
+    const start=source.indexOf('  setAutoReviewContextResolver(createPluginTaskReviewResolver(async sessionId => {');
+    const block=source.slice(start,source.indexOf('\n  }));',start)+7);
+    const js=ts.transpileModule(block,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+    new Function(...Object.keys(deps),js)(...Object.values(deps));
+    if(revoked)await expect(load(worker?'worker':task.taskId)).rejects.toMatchObject({code:'TASK_NOT_FOUND'});
+    else await expect(load(worker?'worker':task.taskId)).resolves.toMatchObject({authorized:true,pluginId:'p'});
+  }
+});
 
 function fixture() {
   let seq = 0;
@@ -296,11 +333,22 @@ describe('plugin ordinary task receipts', () => {
     const f = fixture();
     const input = { requestKey: 'isolated', title: 'Test', isolatedWorkspace: true };
     const task = await f.service.create('p', input);
-    expect(f.deps.createSession).toHaveBeenCalledWith('p', task.taskId, 'Test', f.route, true, undefined, expect.any(Function));
+    expect(f.deps.createSession).toHaveBeenCalledWith('p', task.taskId, 'Test', f.route, true, undefined, expect.any(Function), undefined);
     await f.service.create('p', input);
     expect(f.deps.createSession).toHaveBeenCalledTimes(1);
     await expect(f.service.create('p', { ...input, isolatedWorkspace: false }))
       .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+  });
+
+  it('binds the originating call to creation without re-resolving it on receipt replay', async () => {
+    const f = fixture();
+    const input = { requestKey: 'call-source', title: 'Test', callId: 'active-call' };
+    const task = await f.service.create('p', input);
+    expect(f.deps.resolveRoute).toHaveBeenCalledWith('p', undefined, 'active-call');
+    expect(f.deps.createSession).toHaveBeenCalledWith('p', task.taskId, 'Test', f.route, undefined, undefined, expect.any(Function), 'active-call');
+    vi.mocked(f.deps.resolveRoute).mockRejectedValue(new Error('call ended'));
+    expect((await f.service.create('p', input)).taskId).toBe(task.taskId);
+    await expect(f.service.create('p', { ...input, callId: 'other-call' })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
   });
 
   it('creates once under concurrent retries and rejects conflicting keys', async () => {
@@ -639,7 +687,7 @@ it.each(['validation', 'archive', 'settlement', 'alreadyArchived', 'failure'] as
  const record = {id:'worker',sessionId:'child',label:'one',status:phase === 'alreadyArchived' ? 'archived' : 'done'};
  const query = {from:()=>query,innerJoin:()=>query,where:()=>query,limit:async()=>[record]};
  const epoch = {client:{drizzle:{select:()=>query}}};
- const deps = {service, getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,assertPluginTaskResult,
+ const deps = {service, getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,assertPluginTaskResult,readPluginTaskPlanReceipt,
   orcaWorkers:{},orcaTeams:{},sessions:{},eq:()=>true,and:()=>true,
   createPluginTaskStore:()=>({get:async()=>({payload:JSON.stringify({teamPlan:{items:[{label:'one'}]}})})}),
   readPluginWorkerCompletion:async()=>({row:record,completedAt:1}),orcaTeamService:{archiveWorker}};
@@ -694,6 +742,7 @@ it('a rejected operation does not poison subsequent drain', async () => {
 });
 
 
+
 describe('current plugin dispatch authority', () => {
   it.each(['before', 'route', 'insert'])('blocks independent Plan Mode before dispatch at %s', async point => {
     const f=fixture(), task=await f.create();
@@ -716,8 +765,8 @@ describe('current plugin dispatch authority', () => {
     await expect(f.service.get('p',run.taskId)).resolves.toMatchObject({planModeEnabled:true});
     await expect(f.service.cancel('p',run.runId)).resolves.toMatchObject({status:'cancelled'});
   });
-  it.each(['plan', 'acceptEdits', 'auto'])('allows only authority within %s configuration', configured => {
-    const modes = ['plan', 'acceptEdits', 'auto'];
+  it.each(['plan', 'ask', 'acceptEdits', 'auto'])('allows only authority within %s configuration', configured => {
+    const modes = ['plan', 'ask', 'acceptEdits', 'auto'];
     for (const mode of [...modes, 'bypassPermissions', 'unknown', undefined]) {
       expect(isPluginTaskPermissionAllowed(mode, configured)).toBe(modes.includes(mode!) && modes.indexOf(mode!) <= modes.indexOf(configured));
     }
@@ -838,4 +887,64 @@ describe('current plugin dispatch authority', () => {
     expect(await f.send()).toEqual(run);
     expect(f.deps.dispatch).toHaveBeenCalledTimes(1);
   });
+});
+
+it('changes only the owned task model through the ordinary runtime adapter', async () => {
+  const f = fixture();
+  const task = await f.create();
+  const route = task.resolvedConfig;
+  const next = { ...route, model: 'next-model' };
+  f.deps.setModel = vi.fn<NonNullable<PluginTaskServiceDeps['setModel']>>(async (id, selected, assertCurrent) => {
+    await assertCurrent();
+    const stored = f.tasks.get(id)!;
+    f.tasks.set(id, { ...stored, revision: stored.revision + 1, resolvedConfig: selected });
+    return { status: 'applied' };
+  });
+  const changed = await f.service.setModel('p', { taskId: task.taskId, expectedRevision: task.revision, route: next });
+  expect(changed.task).toMatchObject({ taskId: task.taskId, permissionMode: task.permissionMode, resolvedConfig: next });
+  expect(f.tasks.size).toBe(1);
+  await expect(f.service.setModel('other', { taskId: task.taskId, expectedRevision: 2, route: next })).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+  await expect(f.service.setModel('p', { taskId: task.taskId, expectedRevision: 1, route: next })).rejects.toMatchObject({ code: 'STALE_REVISION' });
+  expect(f.deps.setModel).toHaveBeenCalledOnce();
+});
+
+it('does not apply a model after the task changes while route admission is pending', async () => {
+  const f = fixture();
+  const task = await f.create();
+  const route = task.resolvedConfig;
+  f.deps.resolveRoute = async () => { f.tasks.get(task.taskId)!.revision++; return route; };
+  f.deps.setModel = vi.fn();
+  await expect(f.service.setModel('p', { taskId: task.taskId, expectedRevision: task.revision, route })).rejects.toMatchObject({ code: 'STALE_REVISION' });
+  expect(f.deps.setModel).not.toHaveBeenCalled();
+});
+
+it('keeps taskless plans immutable instead of retroactively granting scope', async () => {
+ const f=fixture(),task=await f.create();
+ const old={concurrency:2,items:[{label:'sample',workingDir:'/answer',route:f.route}]};
+ await f.service.setTeamPlan('p',task.taskId,old);
+ const scoped={...old,task:'Coordinate',items:[{...old.items[0]!,task:'Run tests'}]};
+ await expect(f.service.setTeamPlan('p',task.taskId,scoped)).rejects.toThrow('immutable');
+ await f.send();
+ await expect(f.service.setTeamPlan('p',task.taskId,scoped)).rejects.toThrow('immutable');
+ await f.service.setTeamPlan('p',task.taskId,old);
+ expect(JSON.parse(f.rows.get(task.taskId)!.payload).teamPlan).toEqual(old);
+});
+
+it.each(['sent', 'running', 'queued', 'workers'])('rejects late initial plan registration after %s', async state => {
+ const f=fixture(),task=await f.create();
+ if(state==='sent') await f.send();
+ if(state==='running') vi.mocked(f.deps.inspect).mockResolvedValue({execution:f.execution,pending:[]});
+ if(state==='queued') vi.mocked(f.deps.inspect).mockResolvedValue({execution:null,pending:[{clientId:'queued'}]});
+ if(state==='workers') f.deps.assertTeamPlanUnstarted=async()=>{throw new Error('Workers already exist');};
+ await expect(f.service.setTeamPlan('p',task.taskId,{concurrency:1,task:'Coordinate',items:[]})).rejects.toThrow();
+ expect(JSON.parse(f.rows.get(task.taskId)!.payload).teamPlan).toBeUndefined();
+});
+
+it('registers a complete scope once and permits only identical replays', async () => {
+ const f=fixture(),task=await f.create();
+ const plan={concurrency:2,task:'Coordinate',items:[{label:'sample',workingDir:'/answer',route:f.route,task:'Run tests'}]};
+ await f.service.setTeamPlan('p',task.taskId,plan);
+ await f.service.setTeamPlan('p',task.taskId,plan);
+ await expect(f.service.setTeamPlan('p',task.taskId,{...plan,task:'Publish'})).rejects.toThrow('immutable');
+ await expect(f.service.setTeamPlan('p',task.taskId,{...plan,items:[{...plan.items[0]!,task:'Publish'}]})).rejects.toThrow('immutable');
 });

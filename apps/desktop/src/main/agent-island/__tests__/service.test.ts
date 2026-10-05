@@ -3569,6 +3569,72 @@ describe('AgentIslandService native publishing', () => {
     ]);
   });
 
+  it.each([
+    [false, 'user'], [true, 'user'], [false, 'scheduler'], [true, 'scheduler'],
+  ] as const)('keeps direct IM completions quiet (headless=%s, kind=%s)', async (headless, kind) => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn(() => true);
+    const onSessionActivityChange = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless, publish, playSound },
+      onSessionActivityChange,
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({ enabled: true, sounds: {
+      ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+      complete: customSound('complete.wav'),
+    } });
+    const meta = { sessionId: 'im', agentKind: 'codex' as const };
+    const turnOrigin = { kind, surface: 'im' } as const;
+    // Both IM runners send directly without the App's handleUserPrompt path.
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.setCompletionDeferResolver(() => true);
+    playSound.mockClear();
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: false, status: 'Done' }, turnOrigin });
+    service.handleAgentEvent(meta, { ...doneEvent(), turnOrigin });
+    service.notifyQueueEmptied(meta.sessionId);
+    expect(playSound).not.toHaveBeenCalled();
+    // Quiet completions are removed from the compact activity list, like silent schedules.
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([]);
+
+    service.setCompletionDeferResolver(() => false);
+    service.handleUserPrompt(meta, 'App message');
+    service.handleAgentEvent(meta, doneEvent());
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'im', phase: 'completed', attention: true }),
+    ]);
+    // A later IM reply must not erase the earlier unread App reply.
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: false, status: 'Done' }, turnOrigin });
+    service.handleAgentEvent(meta, { ...doneEvent(), turnOrigin });
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'im', attention: true }),
+    ]);
+    service.resetRuntimeState();
+    syncEnabledForTest(service, publish);
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.handleAgentEvent(meta, {
+      type: 'error', data: { message: 'model unavailable' }, turnOrigin,
+    });
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'im', phase: 'error', attention: true }),
+    ]);
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.handleAgentEvent(meta, { ...doneEvent(), turnOrigin });
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'im', attention: true }),
+    ]);
+    // Reading the old result during the IM turn must not resurrect it on completion.
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.handleSessionAttentionCleared(meta.sessionId, 'explicit');
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: false, status: 'Done' }, turnOrigin });
+    service.handleAgentEvent(meta, { ...doneEvent(), turnOrigin });
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([]);
+    service.resetRuntimeState();
+  });
+
   it('does not play a completion sound or reveal card for a silenced scheduler completion', async () => {
     vi.useFakeTimers();
     try {

@@ -39,7 +39,7 @@ export function CindyMakeTabBody({ ctx }: TabKindBodyProps<CindyMakeState>) {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[var(--surface)]">
+    <div className="app-wallpaper-surface flex h-full min-h-0 flex-col bg-[var(--surface)]">
       {request && (
         <CindyMakePreflightDialog
           key={ctx.sessionId}

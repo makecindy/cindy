@@ -5,6 +5,21 @@
   "sourceLocale": "en",
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
+    {"id": "group-owner", "status": "proposed", "en": "Group Owner", "translations": {"zh-CN": "群主", "zh-TW": "群主", "ja": "グループオーナー", "ko": "그룹 소유자"}, "checkCase": false, "note": "Chat Server 的群角色，可由人或伙伴担任；不要与伙伴主人或分工负责人混同。群设置成员行英文可简写 Owner。"},
+    {"id": "group-admin", "status": "proposed", "en": "Group Admin", "translations": {"zh-CN": "群管理员", "zh-TW": "群管理員", "ja": "グループ管理者", "ko": "그룹 관리자"}, "checkCase": false, "note": "可管理群资料和成员，但不能替伙伴主人授权工具或私人资料。群设置内可简称管理员 / Admin。"},
+    {"id": "group-nickname", "status": "proposed", "en": "Group Nickname", "translations": {"zh-CN": "群昵称", "zh-TW": "群暱稱", "ja": "グループ内の名前", "ko": "그룹에서의 이름"}, "checkCase": false, "note": "仅在单个群中显示的名字。为空时使用账号显示名；不覆盖个人资料名字或稳定身份。"},
+    {
+      "id": "wallpaper",
+      "status": "proposed",
+      "en": "Wallpaper",
+      "translations": {
+        "zh-CN": "壁纸",
+        "zh-TW": "桌布",
+        "ja": "壁紙",
+        "ko": "배경화면"
+      },
+      "note": "Desktop appearance setting for an in-app visual background layer."
+    },
     {
       "id": "shared-session",
       "status": "proposed",
@@ -2279,6 +2294,18 @@
         "ko": "초대 코드"
       },
       "note": "共享任务加入表单中由房主提供、访客输入的代码；用户要求明确称为邀请码，避免被理解为任意邀请文本。"
+    },
+    {
+      "id": "bot-workbench",
+      "status": "proposed",
+      "en": "Workbench",
+      "translations": {
+        "zh-CN": "工作台",
+        "zh-TW": "工作台",
+        "ja": "ワークベンチ",
+        "ko": "작업대"
+      },
+      "note": "伙伴主任务右侧栏里的标签：主人交给伙伴的项目，以及项目里的任务、自动化与产出（docs/product-rules/cindy-bots-runtime.md「工作台」一节）。只指这个伙伴视图，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。"
     }
   ]
 }

@@ -1,6 +1,7 @@
 import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
 
 export type DbTxName =
+  | 'authorization.readProjection'
   | 'taskTags.execute'
   | 'codex.importMessages'
   | 'claude.importMessages'
@@ -1303,6 +1304,7 @@ export type SkillUsageApplyMutationArgs =
   | { kind: 'promote'; analyzerVersion: string };
 
 export type DbTxArgsByName = {
+  'authorization.readProjection': { sessionId: string; leadId: string };
   'codex.importMessages': CodexImportMessagesArgs;
   'claude.importMessages': ClaudeImportMessagesArgs;
   'rewind.commit': RewindCommitArgs;
@@ -1387,6 +1389,7 @@ export type DbTxArgsByName = {
 };
 
 export type DbTxResultByName = {
+  'authorization.readProjection': import('../../autoReviewProjection.js').StoredAutoReviewProjection;
   'codex.importMessages': { changed: number };
   'claude.importMessages': { changed: number };
   'rewind.commit': undefined;

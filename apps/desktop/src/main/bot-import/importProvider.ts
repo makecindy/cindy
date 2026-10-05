@@ -25,7 +25,7 @@ export function createCompanionImportProvider(): McpProvider {
         const [shared] = await db.select({ id: sharedTaskEvents.id }).from(sharedTaskEvents).where(eq(sharedTaskEvents.sessionId, session.sessionId)).limit(1);
         // Local account migration is an owner operation. Guest/IM/SSH tasks cannot
         // use an ambient desktop login to discover or import this computer's credentials.
-        if (!task || task.source !== 'desktop' || task.status !== 'active' || task.remoteHostId || shared || isAppSessionBoundaryPending() || owner !== activeOwnerScopeKey()) throw new CompanionImportError('IMPORT_CALLER_UNAVAILABLE');
+        if (!task || !['desktop', 'bot'].includes(task.source ?? '') || task.status !== 'active' || task.remoteHostId || shared || isAppSessionBoundaryPending() || owner !== activeOwnerScopeKey()) throw new CompanionImportError('IMPORT_CALLER_UNAVAILABLE');
         const result = input.operation === 'sources' ? await listCompanionImportSources(controller)
           : input.operation === 'preview' && input.sourceId ? await previewCompanionImport(input.sourceId, controller)
             // Length-2 arrays are re-checked as [first, last] pairs by validateImportSelection.

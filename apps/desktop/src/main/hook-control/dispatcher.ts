@@ -1722,6 +1722,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   }
 
   function startExecution(task: PendingTask): void {
+    ackReactions.onStarted(ackTaskOf(task), sendFns.get(task.connectionId) ?? OFFLINE_SEND);
     const promise = execute(task);
     executing.add(promise);
     void promise.finally(() => executing.delete(promise));

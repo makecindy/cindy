@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { RichContentContext, useDeferredRichContent } from './richContentContext';
 import { StyleSheet, View } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { buildMathWebViewHtml } from '@/session/mathWebViewHtml';
@@ -18,25 +19,25 @@ const MATH_WEBVIEW_DEFAULT_HEIGHT = MATH_WEBVIEW_MIN_HEIGHT + 16;
 // 整屏闪动循环)。滞回 + 高度缓存(下方)从机制上掐断这个循环。
 const MATH_WEBVIEW_HEIGHT_EPSILON = 3;
 
-// 已测量高度缓存(key = 公式源码):虚拟化滚动会反复卸载/重建公式 WebView,
+// 已测量高度缓存(key = 公式源码 + 布局宽度):虚拟化滚动会反复卸载/重建公式 WebView,
 // 重挂载时直接用上次量好的高度作为初始值——不再经历「占位高 → 实际高」的
 // 布局跳变,滚回公式消息不抖、列表 contentSize 稳定。容量小上限 FIFO 淘汰,
 // 只是会话内的热缓存,不追求持久化。
 const measuredHeightCache = new Map<string, number>();
 const MEASURED_HEIGHT_CACHE_CAP = 200;
 
-function rememberMeasuredHeight(source: string, height: number): void {
-  if (measuredHeightCache.size >= MEASURED_HEIGHT_CACHE_CAP && !measuredHeightCache.has(source)) {
+function rememberMeasuredHeight(key: string, height: number): void {
+  if (measuredHeightCache.size >= MEASURED_HEIGHT_CACHE_CAP && !measuredHeightCache.has(key)) {
     const oldest = measuredHeightCache.keys().next().value;
     if (oldest !== undefined) measuredHeightCache.delete(oldest);
   }
-  measuredHeightCache.set(source, height);
+  measuredHeightCache.set(key, height);
 }
 
 /**
  * display LaTeX 公式块 —— WebView + KaTeX 渲染(固定本地资源,离线/非法
  * 公式在 WebView 内降级为源码文本)。高度由页面内脚本 postMessage 上报,
- * 组件按内容自适应;高度经滞回过滤 + 按公式源码缓存,保证消息列表布局稳定
+ * 组件按内容自适应;高度经滞回过滤 + 按公式源码和宽度缓存,保证消息列表布局稳定
  * (稳定性约束见上方常量注释,改动前先理解闪动循环的成因)。
  */
 export function MathFormulaWebView({
@@ -50,42 +51,50 @@ export function MathFormulaWebView({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const renderIdentityRef = useRef({ active, source });
+  const runtime = useContext(RichContentContext);
+  const [width, setWidth] = useState(0);
+  // Android observes layout width; the non-deferred path retains its existing width=0 behavior.
+  const heightCacheKey = JSON.stringify([source, width]);
+  const cacheKey = JSON.stringify(['math', source, colors.surface, colors.textPrimary, colors.textSecondary, width]);
+  // Read once per document identity; receiving a result must not reload the current document.
+  const cachedMarkup = useMemo(() => active ? runtime?.get(cacheKey) : undefined, [runtime, cacheKey, active]);
+  const mountWebView = useDeferredRichContent(active && (!runtime || width > 0), cacheKey);
+  const renderIdentityRef = useRef({ active, cacheKey });
   const renderGenerationRef = useRef(0);
   if (
     renderIdentityRef.current.active !== active
-    || renderIdentityRef.current.source !== source
+    || renderIdentityRef.current.cacheKey !== cacheKey
   ) {
-    renderIdentityRef.current = { active, source };
+    renderIdentityRef.current = { active, cacheKey };
     renderGenerationRef.current += 1;
   }
   const renderGeneration = renderGenerationRef.current;
   const [height, setHeight] = useState(
-    () => measuredHeightCache.get(source) ?? MATH_WEBVIEW_DEFAULT_HEIGHT,
+    () => measuredHeightCache.get(heightCacheKey) ?? MATH_WEBVIEW_DEFAULT_HEIGHT,
   );
   const heightRef = useRef(height);
   const katexHeightAppliedRef = useRef(false);
   useEffect(() => {
-    const cachedHeight = measuredHeightCache.get(source);
+    const cachedHeight = measuredHeightCache.get(heightCacheKey);
     const nextHeight = cachedHeight ?? MATH_WEBVIEW_DEFAULT_HEIGHT;
     katexHeightAppliedRef.current = cachedHeight !== undefined;
     heightRef.current = nextHeight;
     setHeight((current) => current === nextHeight ? current : nextHeight);
-  }, [source]);
+  }, [heightCacheKey]);
   useEffect(() => {
-    if (!active) return undefined;
+    if (!mountWebView) return undefined;
     return registerMobileMessageWebView('math');
-  }, [active]);
+  }, [mountWebView]);
   const html = useMemo(
     () =>
-      active
+      mountWebView
         ? buildMathWebViewHtml(source, {
             background: colors.surface,
             textPrimary: colors.textPrimary,
             textSecondary: colors.textSecondary,
-          })
+          }, cachedMarkup, !!runtime)
         : '',
-    [active, colors.surface, colors.textPrimary, colors.textSecondary, source],
+    [mountWebView, cachedMarkup, colors.surface, colors.textPrimary, colors.textSecondary, source, runtime],
   );
   // 本次挂载是否已应用过 KaTeX 最终态高度:应用过之后,迟到的过渡态上报
   // (乱序消息)不允许再把高度拉回去。
@@ -98,14 +107,21 @@ export function MathFormulaWebView({
         kind?: string;
         stage?: string;
         height?: number;
+        markup?: unknown;
       };
+      if (payload.kind === 'math-rendered') {
+        if (typeof payload.markup === 'string' && payload.markup.length <= 200_000) {
+          runtime?.set(cacheKey, payload.markup);
+        }
+        return;
+      }
       if (payload.kind !== 'math-height' || typeof payload.height !== 'number') return;
       if (!Number.isFinite(payload.height) || payload.height <= 0) return;
       const isFinalStage = payload.stage === 'katex';
       // 过渡态(源码占位)高度只在「既无最终高度缓存、本次挂载也还没等到
       // KaTeX 高度」时落地:重访已渲染过的公式直接保持缓存高度,消掉
       // 「缓存高 → 源码低 → 成品高」的高低跳动。
-      if (!isFinalStage && (measuredHeightCache.has(source) || katexHeightAppliedRef.current)) {
+      if (!isFinalStage && (measuredHeightCache.has(heightCacheKey) || katexHeightAppliedRef.current)) {
         return;
       }
       const next = Math.min(
@@ -116,7 +132,7 @@ export function MathFormulaWebView({
         katexHeightAppliedRef.current = true;
         // 只有最终态高度进缓存:过渡态高度是加载中间产物,缓存它会让下次
         // 重访以错误的初始高度起步。
-        rememberMeasuredHeight(source, next);
+        rememberMeasuredHeight(heightCacheKey, next);
       }
       if (Math.abs(next - heightRef.current) < MATH_WEBVIEW_HEIGHT_EPSILON) return;
       heightRef.current = next;
@@ -124,10 +140,12 @@ export function MathFormulaWebView({
     } catch {
       // 非 JSON 消息不属于本组件协议,忽略。
     }
-  }, [active, renderGeneration, source]);
+  }, [active, renderGeneration, heightCacheKey, cacheKey, runtime]);
   return (
-    <View style={[styles.container, { height }]} testID={testID}>
-      {active ? <WebView
+    <View style={[styles.container, { height }]} testID={testID}
+      onLayout={runtime ? (event) => setWidth(Math.round(event.nativeEvent.layout.width)) : undefined}>
+      {mountWebView ? <WebView
+        key={cacheKey}
         automaticallyAdjustContentInsets={false}
         javaScriptEnabled
         nestedScrollEnabled

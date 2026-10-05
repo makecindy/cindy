@@ -43,13 +43,27 @@ export interface PluginTaskRun {
 }
 export interface PluginTeamPlan {
   concurrency: number | null;
-  items: Array<{label: string; workingDir: string; route: PluginTaskRoute}>;
+  /** Plugin-authored scope, authenticated by Host registration; never user-authored intent. */
+  task?: string;
+  items: Array<{label: string; workingDir: string; route: PluginTaskRoute; task?: string}>;
 }
-export type PluginTaskRequest =
-  | { type: 'tasks-request'; kind: 'capabilities' }
+/** UTF-16 JSON characters, including escaping; reject rather than truncate scope. */
+export const PLUGIN_TEAM_PLAN_MAX_JSON_CHARS = 1_048_576;
+export const PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS = PLUGIN_TEAM_PLAN_MAX_JSON_CHARS + 65_536;
+export function isPluginTeamPlanWithinBudget(plan: unknown): boolean {
+  try {
+    const json = JSON.stringify(plan);
+    return typeof json === 'string' && json.length <= PLUGIN_TEAM_PLAN_MAX_JSON_CHARS;
+  } catch { return false; }
+}
+export type PluginTaskRequest = (
+  | { type: 'tasks-request'; kind: 'capabilities' | 'models' }
+  | { type: 'tasks-request'; kind: 'setModel'; taskId: string; expectedRevision: number; route: PluginTaskRoute }
   | {
       type: 'tasks-request';
       kind: 'create';
+      /** Optional active tool-call context; Host resolves its task and checks plugin ownership. */
+      callId?: string;
       requestKey: string;
       title: string;
       route?: PluginTaskRoute;
@@ -72,7 +86,8 @@ export type PluginTaskRequest =
     }
   | { type: 'tasks-request'; kind: 'getRun'; runId: string }
   | { type: 'tasks-request'; kind: 'listRuns'; taskId: string; after?: string; limit?: number }
-  | { type: 'tasks-request'; kind: 'cancel'; runId: string; requestKey: string };
+  | { type: 'tasks-request'; kind: 'cancel'; runId: string; requestKey: string }
+) & { /** Opaque page origin; never a permission grant. */ mobilePageId?: string };
 export type PluginTaskResult =
   | { ok: true; data: unknown }
   | {

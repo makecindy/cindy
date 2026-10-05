@@ -20,61 +20,23 @@
  * 而不是抛错;完全解析不出内容时返回 null,调用方按"无数据"处理(绝不从 token 用量反推)。
  */
 
-/** 单个用量窗口(5h / 周 / 分模型周)。utilization 一律 0-100 已用百分比。 */
-export interface ClaudeUsageWindow {
-  utilization: number;
-  /** Unix epoch 秒;缺失 = 未知。 */
-  resetsAt?: number | null;
-  /** 服务端判定的告警级别(端点 limits[].severity,如 'normal';headers 源无此字段)。 */
-  severity?: string | null;
-}
+import {
+  matchScopedWindowForModel,
+  scopedWindowBelongsToFamily,
+  type ClaudeExtraUsageSnapshot,
+  type ClaudeScopedUsageWindow,
+  type ClaudeSubscriptionUsageSnapshot,
+  type ClaudeUsageWindow,
+} from '@cindy/maker-shared/subscription-usage';
 
-/** 分模型周窗口(端点 limits[] 里 kind=weekly_scoped 的条目)。 */
-export interface ClaudeScopedUsageWindow extends ClaudeUsageWindow {
-  /** scope.model.display_name,如 'Fable' / 'Opus' / 'Sonnet'。 */
-  modelDisplayName: string;
-  /** scope.model.id(端点常为 null)。 */
-  modelId?: string | null;
-}
-
-/** extra usage(usage credits)状态 —— 套餐打满后的按量付费通道。 */
-export interface ClaudeExtraUsageSnapshot {
-  isEnabled: boolean;
-  /** 0-100;仅启用且服务端给值时有。 */
-  utilization?: number | null;
-  /**
-   * 已用 credits(服务端原值)。单位未文档化,不要当货币金额展示;
-   * 仅保留原始值,等拿到 extra-usage 账号实样后再定展示口径。
-   */
-  usedCredits?: number | null;
-  /** 月度上限原值;0 = 不限。单位未文档化,不要当货币金额展示。 */
-  monthlyLimit?: number | null;
-}
-
-export interface ClaudeSubscriptionUsageSnapshot {
-  /** 5 小时滚动窗口。 */
-  fiveHour?: ClaudeUsageWindow | null;
-  /** 总周限窗口。 */
-  sevenDay?: ClaudeUsageWindow | null;
-  /** 分模型周窗口(仅 oauth-endpoint 源有)。 */
-  scoped?: ClaudeScopedUsageWindow[];
-  /** 订阅套餐(凭证 blob 的 subscriptionType: pro / max 等,记录时由 main 一并写入)。 */
-  subscriptionType?: string | null;
-  /** headers 源的整体状态:allowed / allowed_warning / rejected。 */
-  rateLimitStatus?: string | null;
-  /** headers 源:当前代表性(最紧)窗口名,如 'five_hour' / 'seven_day'。 */
-  representativeClaim?: string | null;
-  extraUsage?: ClaudeExtraUsageSnapshot | null;
-  source?: 'oauth-endpoint' | 'unified-headers' | string | null;
-  /** 快照生成时间(ms epoch)。 */
-  updatedAt?: number | null;
-  /**
-   * 归属账号的 OAuth token 指纹(sha256 截断, main 记录时附加, 不含 token 原文)。
-   * 同机换号时 reader 据此判定持久化快照已过期, 避免 chip 闪上一个账号的余量。
-   * 缺失(旧快照 / 仅 headers 源)时按未知归属处理, 不据此清除。
-   */
-  accountFingerprint?: string | null;
-}
+// 快照契约与模型窗口匹配在 maker-shared,mobile 任务菜单复用同一份口径。
+export type {
+  ClaudeExtraUsageSnapshot,
+  ClaudeScopedUsageWindow,
+  ClaudeSubscriptionUsageSnapshot,
+  ClaudeUsageWindow,
+} from '@cindy/maker-shared/subscription-usage';
+export { claudeModelFamily, matchScopedWindowForModel } from '@cindy/maker-shared/subscription-usage';
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -368,58 +330,6 @@ export function mergeClaudeSubscriptionUsageSnapshot(
     subscriptionType: incoming.subscriptionType ?? prev.subscriptionType,
     accountFingerprint: incoming.accountFingerprint ?? prev.accountFingerprint,
   };
-}
-
-// ── 方案 B:当前模型 → scoped 窗口匹配 ───────────────────────────────────────
-
-/**
- * 从 model id 提取模型家族名(与端点 scope.model.display_name 对齐的小写词)。
- *   'claude-fable-5[1m]' → 'fable';'claude-opus-4-8' → 'opus';'sonnet' → 'sonnet'
- * 未识别 → null(调用方回退总周限)。
- */
-export function claudeModelFamily(modelId: string | null | undefined): string | null {
-  const normalized = (modelId ?? '').trim().toLowerCase().replace(/\[[^\]]*\]\s*$/, '');
-  if (!normalized) return null;
-  // 顺序无关 —— 家族名互斥地出现在 Anthropic model id 里。
-  for (const family of ['fable', 'mythos', 'opus', 'sonnet', 'haiku']) {
-    if (normalized.includes(family)) return family;
-  }
-  return null;
-}
-
-/**
- * 判断一个分模型周窗口是否属于指定家族。
- *
- * 优先用窗口自带的 `modelId` 经 `claudeModelFamily` 归类(权威、精确);`modelId`
- * 缺失或无法归类(端点常为 null,或 id 形态不在识别表里)时,回退用 `modelDisplayName`
- * 的变体包含匹配——端点对 display_name 的口径历史上有 "Fable" / "Claude Fable" /
- * "Fable 5" 等形态,精确等于会漏掉变体(issue #3244)。家族名互斥,不会跨家族误命中。
- *
- * matcher(`matchScopedWindowForModel`)与 legacy 兜底去重共用这一份口径,避免两份
- * includes 规则漂移。
- */
-function scopedWindowBelongsToFamily(
-  window: ClaudeScopedUsageWindow,
-  family: string,
-): boolean {
-  const fromId = claudeModelFamily(window.modelId);
-  if (fromId) return fromId === family;
-  return window.modelDisplayName.trim().toLowerCase().includes(family);
-}
-
-/**
- * 找当前会话模型对应的分模型周窗口(chip 方案 B:第二栏跟随当前模型)。
- * 找不到 → null,调用方回退 sevenDay 总周限(绝不臆造)。家族归属口径见
- * scopedWindowBelongsToFamily。
- */
-export function matchScopedWindowForModel(
-  scoped: ClaudeScopedUsageWindow[] | null | undefined,
-  modelId: string | null | undefined,
-): ClaudeScopedUsageWindow | null {
-  if (!scoped || scoped.length === 0) return null;
-  const family = claudeModelFamily(modelId);
-  if (!family) return null;
-  return scoped.find((w) => scopedWindowBelongsToFamily(w, family)) ?? null;
 }
 
 // ── 告警判定(chip 变红的口径;tooltip 另有 status 分流,见 TodaySpendChip) ───

@@ -44,7 +44,6 @@ const expoOpenBeforeTest = normalizeBooleanEnv(
   process.env.XDT_MOBILE_E2E_EXPO_OPEN_BEFORE_TEST ?? 'true',
   'XDT_MOBILE_E2E_EXPO_OPEN_BEFORE_TEST',
 );
-const toolEnv = resolveJavaRuntimeEnv(process.env);
 const flows = options.flows.length > 0
   ? options.flows
   : splitEnv(process.env.XDT_MOBILE_E2E_FLOWS) ?? ['remote_control_smoke.yaml'];
@@ -74,6 +73,10 @@ if (options.dryRun) {
   for (const flow of resolvedFlows) console.log(`- ${flow}`);
   process.exit(0);
 }
+
+// Dry runs only validate/print the plan; Java discovery can start slow external
+// processes and is needed only when actually running Maestro.
+const toolEnv = resolveJavaRuntimeEnv(process.env);
 
 if (includesLogin) {
   const metroPort = expoUrl ? new URL(expoUrl).port || '8081' : '8081';

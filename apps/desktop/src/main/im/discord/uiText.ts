@@ -189,4 +189,4 @@ export const ui = {
   },
 } satisfies ImUiTextPack;
 
-export const PROCESSING_EMOJI = '👀';
+export const PROCESSING_EMOJI = '👨‍💻';
