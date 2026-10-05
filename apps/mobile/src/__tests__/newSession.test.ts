@@ -2250,7 +2250,7 @@ describe('new session worktree wiring (source locks)', () => {
       recovery,
     );
     const sessionId = newSource.indexOf(
-      'const sessionId = recovering?.item.sessionId ?? createNewSessionId();',
+      'const sessionId = recoveryIdentity?.sessionId ?? createNewSessionId();',
       pendingGuard,
     );
     const worktreeCreate = newSource.indexOf(

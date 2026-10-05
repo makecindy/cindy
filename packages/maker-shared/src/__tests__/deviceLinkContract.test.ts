@@ -50,6 +50,7 @@ describe('device-link shared contract', () => {
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:apply-new-maker-worktree-branch-pref');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('worktree:list-branches');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('worktree:discard-precreated');
+    expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('worktree:cancel-precreated');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).not.toContain(DEVICE_LINK_VOICE_CREDENTIAL_SYNC_CHANNEL);
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain(DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL);
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('text-file:read-preview');

@@ -420,6 +420,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'worktree:suggest-name',
   'worktree:create',
   'worktree:discard-precreated',
+  'worktree:cancel-precreated',
   'text-file:read-preview',
   // 完整文件浏览(网格/预览/缩略图/大文件导出)走桌面同款聚合通道,
   // op 分发与响应形状见 apps/desktop/src/main/file-browser/device-op.ts。
