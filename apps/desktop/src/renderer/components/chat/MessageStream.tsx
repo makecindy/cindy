@@ -6705,6 +6705,7 @@ const MessageItem = memo(function MessageItem({
       return (
         <UserMessage
           sharedAuthorName={message.sharedAuthorName}
+          sharedAuthorMemberId={message.sharedAuthorMemberId}
           workingDir={workingDir}
           content={message.content}
           sessionReferences={message.sessionReferences}
@@ -6724,6 +6725,8 @@ const MessageItem = memo(function MessageItem({
           isLastUserMessage={isLastUserMessage}
           automationOrigin={message.automationOrigin}
           hookSource={message.hookSource}
+          sourceDevice={message.sourceDevice}
+          sourcePlugin={message.sourcePlugin}
           delivery={message.delivery}
           goalBadge={message.goalBadge}
           blockedByGhost={message.blockedByGhost}

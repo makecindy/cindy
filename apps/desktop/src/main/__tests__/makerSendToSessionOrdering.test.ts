@@ -508,7 +508,7 @@ describe('sendToSession ordering', () => {
       '          },\n          onDispatching:',
     );
     const sendCallEndNeedle =
-      '          onDispatching: () => dispatchAgentIslandUserPrompt(session.id),\n        });';
+      '          onDispatching: () => dispatchAgentIslandUserPrompt(session.id),\n        }, directSource);';
     const afterSendResolves = createBranch.slice(
       createBranch.indexOf(sendCallEndNeedle) + sendCallEndNeedle.length,
     );

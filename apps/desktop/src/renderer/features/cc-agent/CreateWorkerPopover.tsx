@@ -1,3 +1,5 @@
+import * as Dialog from '@radix-ui/react-dialog';
+import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -640,21 +642,45 @@ export function CreateWorkerPopover({
     supportsWorkerPermissionModeSelection,
   ]);
 
-  if (!open) return null;
+  const roleInputRef = useRef<HTMLInputElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const handleClose = useCallback(() => {
+    if (!submittingRef.current) onClose();
+  }, [onClose]);
 
   return (
-    <div className={cn('fixed inset-0 z-50 flex items-center justify-center', className)}>
-      <div className="modal-scrim absolute inset-0" />
-      <div
-        className="modal-panel relative z-10 w-[500px] p-6"
+    <Dialog.Root open={open} onOpenChange={(next) => { if (!next) handleClose(); }}>
+      <Dialog.Portal>
+      <Dialog.Overlay
+        className={cn('modal-scrim fixed inset-0 z-50 flex items-center justify-center', className)}
+        style={WINDOW_DRAG_STYLE}
+      >
+      <Dialog.Content
+        className="modal-panel relative z-10 w-[500px] p-6 outline-none"
+        aria-describedby={undefined}
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          roleInputRef.current?.focus();
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (openerRef.current?.isConnected) openerRef.current.focus({ preventScroll: true });
+        }}
+        onEscapeKeyDown={(event) => {
+          if (submittingRef.current || event.isComposing || event.keyCode === 229) event.preventDefault();
+        }}
+        style={WINDOW_NO_DRAG_STYLE}
       >
         <div className="mb-5 flex items-center justify-between">
-          <span className="text-16 font-medium text-[var(--text-primary)]">{resolvedTitle}</span>
+          <Dialog.Title asChild><span className="text-16 font-medium text-[var(--text-primary)]">{resolvedTitle}</span></Dialog.Title>
           <button
             type="button"
             aria-label={t('orca.createWorker.closeAria')}
             className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-            onClick={onClose}
+            disabled={isSubmitting}
+            onClick={handleClose}
           >
             <X size={15} />
           </button>
@@ -705,6 +731,7 @@ export function CreateWorkerPopover({
             ))}
           </div>
           <input
+            ref={roleInputRef}
             type="text"
             className="mt-2 w-full rounded-full border border-[var(--border-default)] bg-transparent px-3 py-1.5 text-13 leading-none text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] outline-none focus:border-[var(--text-secondary)]"
             placeholder={t('orca.createWorker.customRolePlaceholder')}
@@ -872,7 +899,9 @@ export function CreateWorkerPopover({
         >
           {resolvedSubmitLabel}
         </Button>
-      </div>
-    </div>
+      </Dialog.Content>
+      </Dialog.Overlay>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

@@ -240,6 +240,8 @@
     "controlUnavailable": "The remote computer cannot accept input. Check its control permissions and connection, then reconnect.",
     "beingControlled": "Your desktop is being controlled",
     "beingViewed": "Your desktop is being viewed",
+    "controlledByDevice": "{{name}} is controlling your desktop",
+    "viewedByDevice": "{{name}} is viewing your desktop",
     "disconnect": "Disconnect",
     "back": "Back",
     "connect": "Connect",
@@ -312,7 +314,7 @@
       "resolution": "Computer resolution",
       "clipboardFailed": "Could not transfer clipboard content. Check control access and try again.",
       "settingsFailed": "Could not save this setting. Try again.",
-      "inputHint": "Click the picture to type. Ctrl+Alt+Esc releases keyboard focus; Cmd/Ctrl+W closes this window.",
+      "inputHint": "Click the picture to type; shortcuts, including Cmd/Ctrl+W, go to the remote computer. Press Ctrl+Alt+Esc to release keyboard focus, then Cmd/Ctrl+W closes this window.",
       "controlPending": "Requesting control…",
       "controlRequired": "View only. Take control to interact with the remote computer.",
       "confirmDisconnect": "Disconnect from this computer?",
@@ -320,6 +322,7 @@
       "disconnectFailed": "Could not disconnect. Try again.",
       "clipboardShortcutHint": "Use {{modifier}}+C / {{modifier}}+V in the picture to copy and paste. Supported content depends on the remote computer; files are not transferred.",
       "fitViewerDisplay": "Match Current View",
+      "restoreViewerDisplay": "Restore Original Aspect Ratio",
       "fitViewerDisplayHint": "Temporarily adjusts the computer desktop to this view’s aspect ratio, keeping its contents. Disconnect to restore the original resolution.",
       "resolutionHint": "Resolution changes affect the actual remote monitor."
     },
@@ -5768,7 +5771,7 @@
         "configurationTitle": "Configuration",
         "sidebarEntryTitle": "Sidebar entry",
         "showInSidebar": "Show in sidebar",
-        "sidebarEntryDescription": "When turned on, “{{title}}” appears in the sidebar. Hiding it does not disable the plugin.",
+        "sidebarEntryDescription": "When turned on, “{{title}}” appears in the sidebar, either at the top or under More — choose where in More → Customize. Hiding it does not disable the plugin.",
         "iosSimulatorAutoOpenTitle": "Open the embedded Simulator panel automatically",
         "iosSimulatorAutoOpenDescription": "Show the Simulator in the right sidebar after starting it or launching an app. When off, you can still open it manually; all other features are unchanged.",
         "openTool": "View details for Tool {{name}}",
@@ -7841,6 +7844,22 @@
       "issues": "Issues",
       "bots": "Teammates"
     },
+    "navigation": {
+      "more": "More",
+      "new": "New",
+      "customize": {
+        "title": "Customize",
+        "done": "Done",
+        "reset": "Reset to default",
+        "reorder": "Reorder {{name}} with the up and down arrow keys"
+      },
+      "items": {
+        "automations": "Automations",
+        "plugins": "Plugins",
+        "bots": "Teammates",
+        "search": "Search"
+      }
+    },
     "user": {
       "settingsLink": "Settings, current user: {{name}}",
       "settingsLinkBeta": "Settings, current user: {{name}}, Beta channel enabled",
@@ -9273,6 +9292,8 @@
       "schedulerRowAria": "Queued automation task message from {{sender}}",
       "sessionRowAria": "Queued message from session \"{{sender}}\"",
       "sessionSenderFallback": "Another session",
+      "pluginRowAria": "Queued message from plugin \"{{sender}}\"",
+      "pluginSenderFallback": "Plugin",
       "botRowAria": "Queued message from teammate \"{{sender}}\"",
       "dragAria": "Drag queued message {{index}} to reorder",
       "steerAction": "Steer",
@@ -9880,7 +9901,9 @@
       "stopAll": "Stop all",
       "stopAllTitle": "Shut down this session's background process and stop all background subtasks (the session stays usable)",
       "stopBashTitle": "Stop the background tasks still running in this session (keeps the session process)",
-      "stopping": "Stopping…"
+      "stopping": "Stopping…",
+      "remoteStopUnsupported": "The {{appName}} version on the remote computer is too old to stop background tasks from here. Update it and try again",
+      "remoteStopUnreachable": "The remote computer isn't responding right now, so the background task wasn't stopped. Try again later"
     },
     "interruptedBanner": {
       "text": "This task was interrupted because the app exited while it was running.",
@@ -10356,6 +10379,25 @@
       "botSentNamed": "Sent by teammate \"{{name}}\"",
       "orcaFromLead": "Message from Lead",
       "orcaFromWorker": "Message from Worker",
+      "orcaFromWorkerNamed": "Message from Worker \"{{role}}\"",
+      "hookChannelFrom": "From {{channel}}",
+      "deviceSentMobileNamed": "Sent from phone \"{{name}}\"",
+      "deviceSentMobile": "Sent from phone",
+      "deviceSentDesktopNamed": "Sent from computer \"{{name}}\"",
+      "deviceSentDesktop": "Sent from computer",
+      "deviceViewSettings": "View in My devices",
+      "deviceRemoved": "This device has been removed",
+      "pluginSentNamed": "Sent by plugin \"{{name}}\"",
+      "pluginSent": "Sent by plugin",
+      "pluginViewDetail": "View plugin",
+      "sourceIds": {
+        "session": "Session ID: {{id}}",
+        "teammate": "Teammate ID: {{id}}",
+        "automation": "Automation ID: {{id}}",
+        "plugin": "Plugin ID: {{id}}",
+        "device": "Device ID: {{id}}",
+        "member": "Member ID: {{id}}"
+      },
       "expandLongMessage": "Show full message",
       "collapseLongMessage": "Collapse",
       "sessionReference": {

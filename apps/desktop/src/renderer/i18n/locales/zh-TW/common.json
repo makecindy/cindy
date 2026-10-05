@@ -240,6 +240,8 @@
     "controlUnavailable": "遠端電腦暫時無法接受操作，請檢查遠端控制權限和連線，然後重新連線。",
     "beingControlled": "桌面正在被遠端控制",
     "beingViewed": "桌面正在被遠端檢視",
+    "controlledByDevice": "{{name}} 正在遠端控制桌面",
+    "viewedByDevice": "{{name}} 正在遠端檢視桌面",
     "disconnect": "中斷連線",
     "back": "返回",
     "connect": "連線",
@@ -312,7 +314,7 @@
       "resolution": "電腦解析度",
       "clipboardFailed": "剪貼簿內容傳輸失敗，請檢查控制權限後重試。",
       "settingsFailed": "設定未能儲存，請重試。",
-      "inputHint": "點擊畫面即可輸入。Ctrl+Alt+Esc 釋放鍵盤焦點；Cmd/Ctrl+W 關閉這個視窗。",
+      "inputHint": "點擊畫面即可輸入，快捷鍵（包括 Cmd/Ctrl+W）會傳送到遠端電腦。按 Ctrl+Alt+Esc 釋放鍵盤焦點後，Cmd/Ctrl+W 關閉這個視窗。",
       "controlPending": "正在取得控制權…",
       "controlRequired": "目前僅供檢視。取得控制權後可操作遠端電腦。",
       "confirmDisconnect": "中斷與這台電腦的連線？",
@@ -320,6 +322,7 @@
       "disconnectFailed": "無法中斷連線，請重試。",
       "clipboardShortcutHint": "在畫面內使用 {{modifier}}+C / {{modifier}}+V 複製貼上。支援的內容取決於遠端電腦，暫不傳輸檔案。",
       "fitViewerDisplay": "依目前畫面比例調整",
+      "restoreViewerDisplay": "恢復原始比例",
       "fitViewerDisplayHint": "暫時調整電腦桌面比例，保留目前桌面內容。離開連線後恢復原解析度。",
       "resolutionHint": "解析度修改會影響遠端的實際顯示器。"
     },
@@ -5767,7 +5770,7 @@
         "configurationTitle": "配置",
         "sidebarEntryTitle": "側邊欄入口",
         "showInSidebar": "顯示在側邊欄",
-        "sidebarEntryDescription": "開啟後，側邊欄會顯示「{{title}}」。隱藏入口不會停用插件。",
+        "sidebarEntryDescription": "開啟後，「{{title}}」會出現在側邊欄，顯示在最外層還是收進「更多」，可在「更多 → 自訂」中調整。隱藏入口不會停用插件。",
         "iosSimulatorAutoOpenTitle": "自動開啟內建模擬器面板",
         "iosSimulatorAutoOpenDescription": "啟動模擬器或開啟 App 後，自動在右側顯示模擬器畫面。關閉後仍可手動開啟，其他功能不受影響。",
         "openTool": "檢視 Tool {{name}} 的詳情",
@@ -7839,6 +7842,17 @@
       "issues": "Issue",
       "bots": "夥伴"
     },
+    "navigation": {
+      "more": "更多",
+      "new": "新",
+      "customize": {
+        "title": "自訂",
+        "done": "完成",
+        "reset": "恢復預設",
+        "reorder": "調整{{name}}順序，按上下方向鍵"
+      },
+      "items": { "automations": "自動化", "plugins": "插件", "bots": "夥伴", "search": "搜尋" }
+    },
     "user": {
       "settingsLink": "設定，當前使用者：{{name}}",
       "settingsLinkBeta": "設定，當前使用者：{{name}}，Beta 測試管道已開啟",
@@ -9260,6 +9274,8 @@
       "schedulerRowAria": "自動化「{{sender}}」的排隊訊息",
       "sessionRowAria": "任務「{{sender}}」傳來的排隊訊息",
       "sessionSenderFallback": "其他任務",
+      "pluginRowAria": "插件「{{sender}}」傳來的排隊訊息",
+      "pluginSenderFallback": "插件",
       "botRowAria": "夥伴「{{sender}}」傳來的排隊訊息",
       "dragAria": "拖動第 {{index}} 條待傳送訊息排序",
       "steerAction": "插話",
@@ -9862,7 +9878,9 @@
       "stopAll": "全部停止",
       "stopAllTitle": "關閉該任務的後臺處理程序，停止全部後臺作業（任務可繼續使用）",
       "stopBashTitle": "停止該任務仍在執行的後臺作業（不關閉會話處理程序）",
-      "stopping": "停止中…"
+      "stopping": "停止中…",
+      "remoteStopUnsupported": "遠端電腦上的 {{appName}} 版本過舊，暫不支援在這裡停止後臺任務，請升級後重試",
+      "remoteStopUnreachable": "遠端電腦暫時無法回應，後臺任務沒有停止，請稍後重試"
     },
     "interruptedBanner": {
       "text": "任務執行到一半時應用退出，已被中斷。",
@@ -10338,6 +10356,25 @@
       "botSentNamed": "由夥伴「{{name}}」傳送",
       "orcaFromLead": "來自 Lead 的訊息",
       "orcaFromWorker": "來自 Worker 的訊息",
+      "orcaFromWorkerNamed": "來自 Worker「{{role}}」的訊息",
+      "hookChannelFrom": "來自 {{channel}}",
+      "deviceSentMobileNamed": "從手機「{{name}}」傳送",
+      "deviceSentMobile": "從手機傳送",
+      "deviceSentDesktopNamed": "從電腦「{{name}}」傳送",
+      "deviceSentDesktop": "從電腦傳送",
+      "deviceViewSettings": "在我的裝置中檢視",
+      "deviceRemoved": "該裝置已移除",
+      "pluginSentNamed": "由插件「{{name}}」傳送",
+      "pluginSent": "由插件傳送",
+      "pluginViewDetail": "檢視插件",
+      "sourceIds": {
+        "session": "任務 ID：{{id}}",
+        "teammate": "夥伴 ID：{{id}}",
+        "automation": "自動化 ID：{{id}}",
+        "plugin": "插件 ID：{{id}}",
+        "device": "裝置 ID：{{id}}",
+        "member": "成員 ID：{{id}}"
+      },
       "expandLongMessage": "展開全文",
       "collapseLongMessage": "收起",
       "sessionReference": {

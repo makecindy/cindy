@@ -884,3 +884,60 @@ describe('remote session title index', () => {
     expect(remoteProjectsStore.getSessionTitle('a')).toBeNull();
   });
 });
+
+/**
+ * 首条发送叠加层:远程建会话后、被控端收下首条前,列表回流里的 userSendAt 仍为空。
+ * 叠加层让会话一直留在项目里,不先掉进项目外的草稿区再跳回来。
+ */
+describe('remoteProjectsStore pending first send', () => {
+  const SENT_AT = '2026-10-05T03:41:49.000Z';
+  const unsent = (id: string): Session => ({ ...mk(id, { title: 'New Maker' }), userSendAt: null });
+
+  beforeEach(() => {
+    setRemoteReseedImpl(null);
+    remoteProjectsStore.clear();
+    remoteProjectsStore.__resetPendingTitlePreviewForTest();
+  });
+
+  it('keeps the send time across a list refresh that still reports the host row as unsent', () => {
+    remoteProjectsStore.setPendingFirstSend('s1', SENT_AT);
+    remoteProjectsStore.mergeDeviceSessions('dev-B', 'B', [unsent('s1')]);
+    expect(remoteProjectsStore.getMergedRemoteSessions()[0]?.userSendAt).toBe(SENT_AT);
+
+    // 权威快照再来一次(host 仍未收下首条)—— 叠加层继续顶着。
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [unsent('s1')]);
+    expect(remoteProjectsStore.getMergedRemoteSessions()[0]?.userSendAt).toBe(SENT_AT);
+    // 分片本身没有被改写 —— 纯镜像不变量。
+    expect(remoteProjectsStore.getDeviceSessions('dev-B')[0]?.userSendAt).toBeNull();
+  });
+
+  it('yields to the host value and retires once the host records the first send', () => {
+    remoteProjectsStore.setPendingFirstSend('s1', SENT_AT);
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [unsent('s1')]);
+
+    const hostSentAt = '2026-10-05T03:41:50.123Z';
+    remoteProjectsStore.applyPatch('dev-B', 's1', { userSendAt: hostSentAt });
+    expect(remoteProjectsStore.getMergedRemoteSessions()[0]?.userSendAt).toBe(hostSentAt);
+
+    // 已回收:之后即使有一份陈旧快照把它报回空,也不会再被叠加层补上。
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [unsent('s1')]);
+    expect(remoteProjectsStore.getMergedRemoteSessions()[0]?.userSendAt).toBeNull();
+  });
+
+  it('lets an undelivered first message fall back to the honest empty state', () => {
+    remoteProjectsStore.setPendingFirstSend('s1', SENT_AT);
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [unsent('s1')]);
+
+    remoteProjectsStore.clearPendingFirstSend('s1');
+    expect(remoteProjectsStore.getMergedRemoteSessions()[0]?.userSendAt).toBeNull();
+  });
+
+  it('drops the overlay when the session leaves the mirror', () => {
+    remoteProjectsStore.setPendingFirstSend('s1', SENT_AT);
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [unsent('s1')]);
+    remoteProjectsStore.applyPatch('dev-B', 's1', { status: 'deleted' });
+
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [unsent('s1')]);
+    expect(remoteProjectsStore.getMergedRemoteSessions()[0]?.userSendAt).toBeNull();
+  });
+});

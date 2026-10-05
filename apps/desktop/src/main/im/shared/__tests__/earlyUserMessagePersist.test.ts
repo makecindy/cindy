@@ -140,6 +140,19 @@ describe('messageHandler early user-message persist', () => {
     });
   });
 
+  it('按入站事件推出本条渠道来源并交给 turn(只进模型正文, 不改 text)', async () => {
+    const h = wire();
+    h.deliver(makeEvent({ speaker: { id: 'ou_y', name: '', isOwner: true } }));
+
+    await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(turnArgs(h.runAgentTurn).channelNoteSource).toEqual({
+      chatKind: 'group',
+      chatId: 'oc_chat',
+      senderId: 'ou_y',
+    });
+    expect(turnArgs(h.runAgentTurn).text).toBe('出行要注意什么吗');
+  });
+
   it('落库用渠道原文, 不用拼了群上下文前缀的 agentText', async () => {
     const h = wire();
     h.deliver(makeEvent({ text: '总结上面' }));

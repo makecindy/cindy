@@ -222,6 +222,8 @@ import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { resolveDesktopClaudeSubagentModelAccess } from './subagent-model-access.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
+import { createToolLoopReviewer } from './tool-loop-reviewer.js';
+import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import {
   AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
   createAutoReviewModelRouter,
@@ -425,6 +427,11 @@ export const reviewAutoPermissionAction: AutoReviewDelegate = createAutoPermissi
   resolveRequestTimeoutMs: () => AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
   requestText: (_request, prompt, { signal }) => requestAutoReviewText(prompt, signal),
 });
+/** 工具循环疑似命中时走共享辅助模型链复核;Claude Code 与 Pi/Codex 共用。 */
+const reviewToolLoop = createToolLoopReviewer({
+  requestText: (prompt, opts) => requestUtilityText(getMaker(), prompt, opts),
+});
+
 reviewAutoPermissionAction.prepareRequest = async request => {
   if (!autoReviewContextResolver) throw new Error('Authorization context is not ready');
   return autoReviewContextResolver(request);
@@ -1241,6 +1248,7 @@ export function getMaker(): Maker {
       },
       registerLocalAgentProcess: ({ pid, kind, role }) => registerAgentProcess(pid, kind, role),
       reviewAutoPermissionAction,
+      toolLoopReviewer: reviewToolLoop,
       // 每个 session 的 cc 子进程 debug 写到 sessions/<id>/cc-debug.raw.log (logger 拼路径
       // + mkdir), tailer 再归一化汇入该 session 的 <date>.ndjson。
       resolveCcDebugFile: resolveSessionCcDebugFile,
@@ -2676,6 +2684,7 @@ export function getMaker(): Maker {
       logger: desktopMakerLogger,
       makerMemory: makerMemoryManager,
       visionBridge: _visionBridgeInstance.hook,
+      toolLoopReviewer: reviewToolLoop,
       // Desktop-specific session 生命周期副作用钩子。maker-core 不知道文件系统细节，
       // 启动前的 Skill 共享与关闭后的清理都由 desktop host 注入。
       lifecycleHooks: {

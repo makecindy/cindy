@@ -118,6 +118,11 @@ import { formatManagedImageReferences } from '../shared/managed-image-reference.
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
 import { ToolLoopGuard } from '../shared/loop-guard.js';
 import {
+  ToolLoopMonitor,
+  type HardToolLoopVerdict,
+  type ToolLoopReviewBudget,
+} from '../shared/tool-loop-review.js';
+import {
   applyExploreInheritCapEnv,
   applyOAuthSpawnEntrypointGate,
   applySubagentModelEnv,
@@ -2815,7 +2820,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       });
     };
     // All models share the same detector, with independent per-sidechain history.
-    const toolLoopGuards = new Map<string | null, ToolLoopGuard>();
+    const toolLoopMonitors = new Map<string | null, ToolLoopMonitor>();
+    // 各 sidechain 的检测轨迹独立,但辅助模型复核次数按整个 turn 共用一份上限。
+    let toolLoopReviewBudget: ToolLoopReviewBudget = { used: 0 };
     /**
      * 错误归属用的模型:sidechain 用该 subagent 的实际模型
      * (Agent 异步回执的 resolvedModel 优先,其次 sidechain 流内消息的 model),
@@ -2831,22 +2838,46 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       return mutableModel;
     };
-    const getToolLoopGuard = (parentToolUseId?: string): ToolLoopGuard => {
+    const getToolLoopMonitor = (parentToolUseId?: string): ToolLoopMonitor => {
       const scopeKey = parentToolUseId ?? null;
-      let guard = toolLoopGuards.get(scopeKey);
-      if (!guard) {
-        guard = new ToolLoopGuard({
-          // Different inputs can be legitimate corrections, even when the
-          // tool keeps reporting the same error category. Match Pi/Codex:
-          // keep exact repetition/rotation guards, not category-only retries.
-          contractConsecutiveLimit: Number.POSITIVE_INFINITY,
-        });
-        toolLoopGuards.set(scopeKey, guard);
-      }
-      return guard;
+      const existing = toolLoopMonitors.get(scopeKey);
+      if (existing) return existing;
+      const monitor: ToolLoopMonitor = new ToolLoopMonitor(new ToolLoopGuard({
+        // Different inputs can be legitimate corrections, even when the
+        // tool keeps reporting the same error category. Match Pi/Codex:
+        // keep exact repetition/rotation guards, not category-only retries.
+        contractConsecutiveLimit: Number.POSITIVE_INFINITY,
+      }), {
+        reviewer: this.deps.toolLoopReviewer,
+        reviewBudget: toolLoopReviewBudget,
+        context: () => ({
+          sessionId: sid,
+          agentKind: 'claude-code',
+          model: toolLoopGuardModelForScope(parentToolUseId),
+        }),
+        // 复核结果晚到时,guard 可能已随新 turn 重置;只处理仍在位的同一 monitor。
+        onReviewedStop: (verdict) => {
+          // 与 Pi/Codex 的 toolLoopControlFor 同一前提:等用户确认期间不中断。
+          if (closed || toolLoopMonitors.get(scopeKey) !== monitor || !turnInFlight ||
+            turnState.interruptRequested || pendingInteractions.size > 0) return;
+          // 子代理已结束(其父 Agent/Task 调用已有结果):迟到结论不能中断父 turn。
+          if (parentToolUseId && !pendingToolIds.has(parentToolUseId)) return;
+          interruptForToolLoop(verdict, parentToolUseId);
+        },
+        logger: log,
+      });
+      toolLoopMonitors.set(scopeKey, monitor);
+      return monitor;
     };
+    /** 清空各 scope 的检测轨迹;复核次数仍计在当前 turn。 */
+    const clearToolLoopObservations = (): void => {
+      for (const monitor of toolLoopMonitors.values()) monitor.dispose();
+      toolLoopMonitors.clear();
+    };
+    /** turn 边界:清空检测轨迹,并重置本 turn 的复核次数。 */
     const resetToolLoopGuards = (): void => {
-      toolLoopGuards.clear();
+      clearToolLoopObservations();
+      toolLoopReviewBudget = { used: 0 };
     };
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode =
@@ -5129,6 +5160,67 @@ export class ClaudeCodeAgent extends BaseAgent {
       // turn 结束再压；这里立刻再注入会把 401/过载打成紧循环。
       if (!endingHostAutoCompact) triggerAutoCompactIfNeeded();
     }
+    /** 工具循环判定成立(直接判定或复核 stop):推终态错误并中断当前 turn。 */
+    function interruptForToolLoop(verdict: HardToolLoopVerdict, parentToolUseId?: string): void {
+      const loopHint = verdict.reason === 'consecutive'
+        ? `连续 ${verdict.count} 次发起完全相同的 ${verdict.toolName} 调用`
+        : verdict.reason === 'contract'
+          ? `连续 ${verdict.count} 次 ${verdict.toolName} 调用因同类参数错误`
+            + `(${verdict.contractCategory ?? 'contract'})被拒`
+          : `最近 ${verdict.count} 次工具调用一直在极少数几种(含 ${verdict.toolName})之间反复打转`;
+      // 报错归属:sidechain 命中时报 subagent 实际模型,不冤枉会话模型。
+      const loopModel = toolLoopGuardModelForScope(parentToolUseId);
+      // 与 upstream-idle watchdog 同款兜底: tool-loop 中断 = "整个 turn 序列已死",
+      // bridge counter 归零避免 filter 吞掉本条 error / counter 永久停在 >0。
+      // 实践上 bridge /compact turn 不用 tool, 该分支难以触发, 归零是防御性一致。
+      if (bridgeStateActive()) {
+        const interruptedBridgeKind = activeBridgeKind;
+        const interruptedRewindResumeAt = activeBridgeRewindResumeAt;
+        log.warn('tool-loop hard interrupt fired during bridge — clearing bridge state', {
+          queuedBridgeTurns,
+          activeBridgeKind,
+          activeBridgeRewindResumeAt,
+        });
+        restoreBridgeAutoCompactSnapshot('tool_loop_hard_interrupt');
+        autoCompactController?.onCompactCanceled('tool_loop_hard_interrupt');
+        clearBridgeState();
+        preserveBridgeRetryTarget(interruptedBridgeKind, interruptedRewindResumeAt);
+      }
+      eventQueue.push({
+        type: 'error',
+        data: {
+          message:
+            `上游模型 ${loopModel} ${loopHint},疑似陷入死循环,` +
+            `已自动中断当前 turn。可以直接发下一条消息继续,` +
+            `已完成的 tool result 都保留。`,
+          isTerminal: true,
+          reason: 'tool_use_loop_detected',
+          toolLoop: {
+            kind: verdict.reason,
+            count: verdict.count,
+          },
+          loopKind: verdict.reason,
+          loopCount: verdict.count,
+          model: loopModel,
+        },
+        source: 'claude-code',
+      });
+      turnInFlight = false;
+      pendingToolIds.clear();
+      // 复核 stop 晚于最后一个 tool_result 到达时,空闲看门狗可能已重新起表。
+      clearUpstreamResponseIdle();
+      // 上面已推过带 reason 的 terminal error, interrupt 后 SDK drain 出的
+      // is_error result 不能再触发 translator 的失败兜底(双 error banner),
+      // 与 watchdog / abort 的置位对齐。
+      turnState.interruptRequested = true;
+      turnState.interruptGeneration = turnState.generation;
+      void q.interrupt().catch((e) => {
+        // interrupt 失败 → 无 result 消费标记, 回收防误抑制(同 watchdog)。
+        turnState.interruptRequested = false;
+        log.warn('tool loop guard: interrupt threw', { error: String(e) });
+      });
+    }
+
     function startForwardLoop(currentQ: Query): void {
       // q 换代: 上一代 q 的 pending interrupted result 不可能从新 q drain 出来,
       // 残留的 interruptRequested 会错误抑制新 q 首个真实 is_error 终态 —— 兜底清。
@@ -5344,7 +5436,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 parentToolUseId?: string,
               ) => {
                 pendingToolIds.add(id);
-                getToolLoopGuard(parentToolUseId)?.onToolUse(id, toolName, input);
+                getToolLoopMonitor(parentToolUseId).onToolUse(id, toolName, input);
                 clearUpstreamResponseIdle();
               },
               onToolResultDone: (
@@ -5356,68 +5448,14 @@ export class ClaudeCodeAgent extends BaseAgent {
               ) => {
                 pendingToolIds.delete(id);
                 if (turnInFlight) {
-                  const verdict = getToolLoopGuard(parentToolUseId)?.onToolResult(
+                  const verdict = getToolLoopMonitor(parentToolUseId).onToolResult(
                     id,
                     output,
                     isError === true,
                     toolResultBatchId,
                   );
-                  if (verdict?.kind === 'hard') {
-                    const loopHint = verdict.reason === 'consecutive'
-                      ? `连续 ${verdict.count} 次发起完全相同的 ${verdict.toolName} 调用`
-                      : verdict.reason === 'contract'
-                        ? `连续 ${verdict.count} 次 ${verdict.toolName} 调用因同类参数错误`
-                          + `(${verdict.contractCategory ?? 'contract'})被拒`
-                        : `最近 ${verdict.count} 次工具调用一直在极少数几种(含 ${verdict.toolName})之间反复打转`;
-                    // 报错归属:sidechain 命中时报 subagent 实际模型,不冤枉会话模型。
-                    const loopModel = toolLoopGuardModelForScope(parentToolUseId);
-                    // 与 upstream-idle watchdog 同款兜底: tool-loop 中断 = "整个 turn 序列已死",
-                    // bridge counter 归零避免 filter 吞掉本条 error / counter 永久停在 >0。
-                    // 实践上 bridge /compact turn 不用 tool, 该分支难以触发, 归零是防御性一致。
-                    if (bridgeStateActive()) {
-                      const interruptedBridgeKind = activeBridgeKind;
-                      const interruptedRewindResumeAt = activeBridgeRewindResumeAt;
-                      log.warn('tool-loop hard interrupt fired during bridge — clearing bridge state', {
-                        queuedBridgeTurns,
-                        activeBridgeKind,
-                        activeBridgeRewindResumeAt,
-                      });
-                      restoreBridgeAutoCompactSnapshot('tool_loop_hard_interrupt');
-                      autoCompactController?.onCompactCanceled('tool_loop_hard_interrupt');
-                      clearBridgeState();
-                      preserveBridgeRetryTarget(interruptedBridgeKind, interruptedRewindResumeAt);
-                    }
-                    eventQueue.push({
-                      type: 'error',
-                      data: {
-                        message:
-                          `上游模型 ${loopModel} ${loopHint},疑似陷入死循环,` +
-                          `已自动中断当前 turn。可以直接发下一条消息继续,` +
-                          `已完成的 tool result 都保留。`,
-                        isTerminal: true,
-                        reason: 'tool_use_loop_detected',
-                        toolLoop: {
-                          kind: verdict.reason,
-                          count: verdict.count,
-                        },
-                        loopKind: verdict.reason,
-                        loopCount: verdict.count,
-                        model: loopModel,
-                      },
-                      source: 'claude-code',
-                    });
-                    turnInFlight = false;
-                    pendingToolIds.clear();
-                    // 上面已推过带 reason 的 terminal error, interrupt 后 SDK drain 出的
-                    // is_error result 不能再触发 translator 的失败兜底(双 error banner),
-                    // 与 watchdog / abort 的置位对齐。
-                    turnState.interruptRequested = true;
-                    turnState.interruptGeneration = turnState.generation;
-                    void q.interrupt().catch((e) => {
-                      // interrupt 失败 → 无 result 消费标记, 回收防误抑制(同 watchdog)。
-                      turnState.interruptRequested = false;
-                      log.warn('tool loop guard: interrupt threw', { error: String(e) });
-                    });
+                  if (verdict.kind === 'hard') {
+                    interruptForToolLoop(verdict, parentToolUseId);
                     return;
                   }
                 }
@@ -7189,8 +7227,9 @@ export class ClaudeCodeAgent extends BaseAgent {
             triggerAutoCompactIfNeeded();
           }
         }
-        // A model change begins a fresh observation history in every scope.
-        resetToolLoopGuards();
+        // A model change begins a fresh observation history in every scope,
+        // but stays in the same turn: keep this turn's review budget.
+        clearToolLoopObservations();
         if (exploreInheritCapNeedsRebuild && liveEnv && !opts.remoteHostId) {
           applyExploreInheritCapEnv(liveEnv, sdkModel, 'replace');
           // 子进程 env 在 spawn 时钉死,Query.setModel 改不了。只改字典并加代,

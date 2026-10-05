@@ -201,6 +201,10 @@ describe("invoke admission", () => {
   it("classifies PR reads as background and keeps control/lease maintenance outside the queue", () => {
     expect(isBackgroundInvoke("git-context:pr-refs:list")).toBe(true);
     expect(isBackgroundInvoke("git-context:pr-status")).toBe(true);
+    // 远程后台任务状态的定时复查让位于前台操作(停止通道仍是前台)。
+    expect(isBackgroundInvoke("maker:session-background-activity")).toBe(true);
+    expect(isBackgroundInvoke("maker:session-background-tasks:list")).toBe(true);
+    expect(isBackgroundInvoke("maker:agent-task:stop")).toBe(false);
     expect(isBackgroundInvoke("local-db:task-tags:execute")).toBe(false);
     expect(
       bypassInvokeScheduling({ channel: "device-link:subscribe", args: [] }),

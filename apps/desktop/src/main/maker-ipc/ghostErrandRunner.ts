@@ -87,7 +87,7 @@ export interface GhostErrandRunnerDeps {
   isUserPickedDir(ghostId: string, normalizedDir: string): boolean;
   isSessionBusy(sessionId: string): boolean;
   /** 统一投递通路(sendToSessionInternal 的窄化面)。 */
-  dispatch(params: { targetSessionId: string; message: string }): Promise<
+  dispatch(params: { targetSessionId: string; message: string; ghostId: string }): Promise<
     | { ok: true; wakeKind: 'resumed' | 'already-active' | 'created' | 'queued' }
     | { ok: false; errorCode: string; message: string }
   >;
@@ -235,7 +235,7 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
       return failure('SESSION_UNAVAILABLE', error instanceof Error ? error.message : String(error));
     }
     const dispatchedAt = now();
-    const dispatched = await deps.dispatch({ targetSessionId: sessionId, message: request.message });
+    const dispatched = await deps.dispatch({ targetSessionId: sessionId, message: request.message, ghostId: request.ghostId });
     assertOwner();
     if (!dispatched.ok) {
       if (dispatched.errorCode === 'BUSY') return failure('BUSY', dispatched.message);

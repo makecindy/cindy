@@ -699,6 +699,15 @@ export function AuthProvider({
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
+/**
+ * 本机设备 id（与 device-link 的本机 deviceId 同源）；不在 AuthProvider 内（独立预览、
+ * 单测）或尚未初始化时为 null。只读展示用途（如判断一条消息是不是本机发出的），
+ * 不抛错，便于在任意聊天视图里调用。
+ */
+export function useOptionalAuthDeviceId(): string | null {
+  return useContext(AuthContext)?.deviceId ?? null;
+}
+
 export function useAuth(): AuthContextValue {
   const context = useContext(AuthContext);
   if (!context) {

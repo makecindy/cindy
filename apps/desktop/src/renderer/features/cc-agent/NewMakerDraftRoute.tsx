@@ -117,6 +117,7 @@ import {
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
 import {
+  deliverRecoverableHandoff,
   rememberRecoverableHandoff,
   setPending,
   setPendingGoal,
@@ -3696,6 +3697,23 @@ export function NewMakerDraftRoute() {
             // commitRemoteSessionHandoff 里;它同步返回且不抛,所以这里既不 await 也不需要 try ——
             // **回流不能挡在 setPending 前面**:那段退避重试最长约 6.75 秒,应用在窗口内被关掉就会
             // 丢掉用户的首条消息,而对端会话已经建好了(第 33 轮 P1)。
+            //
+            // 远程普通首条在草稿路由直接交给 makerChatStore 的远程发件队列,不再绑在
+            // SessionView hydrate 上:队列由 store 驱动、不随视图卸载停止,发送后立刻切走
+            // 也会送达(手机端 newSessionCreation 同口径)。旧做法把首条放进 60s 的内存
+            // pending 等视图来取,用户切走超过 60s 首条就丢了,对端只剩一个空的未命名任务。
+            // 仍交给 SessionView 的只有两类(识别窗口与本机分支一致):
+            //  · 开了协同 —— 首轮必须排在被控端起 Worker 之后,等待与输入锁都在视图里;
+            //  · 斜杠命令首条(含任意 agent 的空白前缀命令)—— 需要 SessionView 的完整命令分派;
+            //    草稿路由的 rewritePiSkillMessageForSend 读的是本机命令目录,不能用在远程会话上。
+            // 侧栏「首条已发出」标记只给直接发送这一条:它的每个终态(受理 / 未受理 / 投递
+            // 失败 / 抛错)都在本函数内可见并能撤回;视图交接的失败分支散在 SessionView 里,
+            // 不登记就不会留下撤不回的标记。
+            const remoteSendWorkingDir = created?.workDir ?? remoteWorkingDir;
+            const remoteSlashFirst =
+              /^\/(\S+)(?:\s+(.*))?$/s.test(message) || !!leadingSlashInvocation(message);
+            const remoteDirectSend =
+              !shouldEnableCollab && !remoteSlashFirst && !!remoteSendWorkingDir;
             commitRemoteSessionHandoff({
               deviceId,
               deviceName,
@@ -3704,6 +3722,7 @@ export function NewMakerDraftRoute() {
               createArgs,
               nowIso: new Date().toISOString(),
               logTag: 'draft send',
+              markFirstSend: remoteDirectSend,
             });
             markedStartingSessionId = remoteSessionId;
             // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。锚点是
@@ -3734,6 +3753,93 @@ export function NewMakerDraftRoute() {
             const rehydratedFiles = await rehomeDraftAttachments(files, remoteSessionId);
             if (!isCurrentDataOwner()) {
               throw new RemotePrecreatedWorktreeOwnerChangedError();
+            }
+            // 远程普通首条直接发送(判据与理由见上方 remoteDirectSend)。
+            if (remoteDirectSend && remoteSendWorkingDir) {
+              // 视图还没 hydrate 被控端的行:createOpts 读 store 里的运行时,先按刚提交的
+              // args 确定性 seed(本机首条同款)。
+              makerChatStore.setSessionRuntime(remoteSessionId, {
+                agentKind: createArgs.agentKind,
+                fastMode: createArgs.fastMode,
+                sessionProviderId: createArgs.providerId ?? null,
+              });
+              const preNavDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
+              const preNavDraftDoc = opts?.recoveryDraftDoc ?? preNavDraft?.text ?? null;
+              const preNavBrowserComments = rewriteBrowserCommentsFromRehomedFiles(
+                preNavDraft?.browserComments,
+                rehydratedFiles,
+              );
+              // 远程发送受理即返回 true(只登记发件队列,不等隧道),所以这里 await 不会卡住
+              // 新建页;受理后副本即可丢弃 —— 之后的投递失败由下面的回调把正文放回输入框。
+              // 已过提交点:抛错也只退回视图交接,不能落到外层「创建失败」提示。
+              const accepted = await deliverRecoverableHandoff(remoteSessionId, () =>
+                makerChatStore.sendMessage(
+                  remoteSessionId,
+                  message,
+                  createArgs.model,
+                  createArgs.effort,
+                  createArgs.permissionMode,
+                  remoteSendWorkingDir,
+                  rehydratedFiles,
+                  mentions,
+                  {
+                    ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
+                    ...(opts?.agentReferences?.length
+                      ? { agentReferences: opts.agentReferences }
+                      : {}),
+                    ...(opts?.pastedTextRanges?.length
+                      ? { pastedTextRanges: opts.pastedTextRanges }
+                      : {}),
+                    ...(opts?.slashCommandRanges !== undefined
+                      ? { slashCommandRanges: opts.slashCommandRanges }
+                      : {}),
+                    // 订阅屏障:首轮的 maker:event / status / input push 必须有订阅者。视图引擎
+                    // 的订阅随 SessionView mount 才建立,首条又不再等视图,所以在发件队列的
+                    // preflight 里先显式 await 一次 session:<id> 订阅的注册 ack(新建目标交接
+                    // 同款;同窗口重复 subscribe 幂等,生命周期仍归视图引擎)。放在 preflight
+                    // 而非 navigate 之前:隧道往返不挡新建页,首条也已在队列里,切走不丢。
+                    // 订阅失败不拦首条:最坏退回到视图挂载后按历史补齐。
+                    beforeEnqueue: async () => {
+                      try {
+                        await window.electronAPI.deviceLink.subscribe(deviceId, [
+                          `session:${remoteSessionId}`,
+                        ]);
+                      } catch (err) {
+                        log.warn('[draft send] subscribe before remote first send failed', err);
+                      }
+                      return true;
+                    },
+                    onRemoteOptimisticFailure: (clientId) => {
+                      // FIFO 插回没送达的首条,不覆盖用户之后在该任务输入框里写的内容;
+                      // 撤回两层叠加层,空会话照实回到草稿区、标题回落到权威值。
+                      restoreRemoteOptimisticDraft(remoteSessionId, {
+                        clientId,
+                        text: preNavDraftDoc ?? plainTextToTiptapDoc(message),
+                        attachments: excludeCommentScreenshots(
+                          rehydratedFiles,
+                          preNavBrowserComments,
+                        ),
+                        browserComments: preNavBrowserComments,
+                      });
+                      remoteProjectsStore.clearPendingTitlePreview(remoteSessionId);
+                      remoteProjectsStore.clearPendingFirstSend(remoteSessionId);
+                    },
+                  },
+                ),
+              ).catch((err: unknown) => {
+                log.warn('[draft send] remote first send threw; handing off to SessionView', err);
+                return false;
+              });
+              if (accepted) {
+                opts?.onAccepted?.();
+                clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
+                attachmentState.clearFiles();
+                resetDraftWorkspaceAfterSend();
+                navigate(`/cc-agent/${remoteSessionId}`, { replace: true });
+                return;
+              }
+              // 没受理(归属切换 / 会话已删等):撤回首条标记,退回下面的视图交接,与改动前行为一致。
+              remoteProjectsStore.clearPendingFirstSend(remoteSessionId);
             }
             setPending(remoteSessionId, {
               text: message,
@@ -4310,7 +4416,11 @@ export function NewMakerDraftRoute() {
           if (remoteOptimisticTitleSessionId) {
             remoteProjectsStore.clearPendingTitlePreview(remoteOptimisticTitleSessionId);
           }
-          if (markedStartingSessionId) clearSessionStarting(markedStartingSessionId);
+          if (markedStartingSessionId) {
+            clearSessionStarting(markedStartingSessionId);
+            // 远程交接没完成:首条发送叠加层同样撤回(本机会话不在叠加层里,调用为空操作)。
+            remoteProjectsStore.clearPendingFirstSend(markedStartingSessionId);
+          }
           if (isRemotePrecreatedWorktreeOwnerChangedError(err)) return;
           log.error('[draft send]', err);
           toast.error(
@@ -5404,6 +5514,10 @@ export function NewMakerDraftRoute() {
                 <div className="w-full">
                   <ChatInput
                     onSend={handleSend}
+                    // 创建在途期间锁住输入框:handleSend 立刻返回、真正的创建在后台跑,远程要经
+                    // 几次隧道往返。锁定态即时告诉用户「已发出、处理中」,也免得这段时间补写的
+                    // 内容在交接成功清空草稿时被一并丢掉;失败解锁后原文仍在。
+                    disabled={sendInFlight}
                     onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
                     externalDragOver={pageDragOver}
                     visualVariant="create-agent"

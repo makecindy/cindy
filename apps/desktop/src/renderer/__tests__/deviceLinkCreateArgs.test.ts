@@ -284,14 +284,14 @@ describe('buildProvisionalRemoteSession', () => {
     expect(row.title).toBe('New Maker');
   });
 
-  it('userSendAt 置为当下:用户此刻正在发第一条,侧边栏该立刻浮到顶部(与本机路径同口径)', () => {
+  it('userSendAt 与被控端新行一致为空:「正在发第一条」交给投影层的首条发送叠加层', () => {
     const row = buildProvisionalRemoteSession({
       sessionId: 's-4',
       workDir: '/w',
       args: dialogue,
       nowIso: NOW,
     });
-    expect(row.userSendAt).toBe(NOW);
+    expect(row.userSendAt).toBeNull();
     expect(row.createdAt).toBe(NOW);
     expect(row.updatedAt).toBe(NOW);
   });

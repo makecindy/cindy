@@ -157,10 +157,3 @@ export function useRemoteScheduleEventSnapshot(deviceId: string): RemoteSchedule
     () => remoteScheduleEventStore.getSnapshot(deviceId),
   );
 }
-
-export function useRemoteScheduleEventVersion(deviceId: string): number {
-  return useSyncExternalStore(
-    remoteScheduleEventStore.subscribe,
-    () => remoteScheduleEventStore.getVersion(deviceId),
-  );
-}

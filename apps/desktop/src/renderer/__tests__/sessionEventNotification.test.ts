@@ -75,6 +75,21 @@ describe('shared session event notifications', () => {
     );
   });
 
+  it('leaves the desktop toast of a remote device task to the main-process scope filter', () => {
+    gates.feishu = true;
+
+    sendSessionEventNotification('remote-1', 'Fix login', 'done', { remoteDevice: true });
+
+    // 未读归属那台设备:本机 Dock 角标两条标记路径都不记。
+    expect(markAttention).not.toHaveBeenCalled();
+    expect(showSessionEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        markAttention: false,
+        channels: { desktop: false, feishu: true, mobile: true },
+      }),
+    );
+  });
+
   it('does not send external notifications while the user is already looking at Cindy', () => {
     vi.mocked(document.hasFocus).mockReturnValue(true);
 

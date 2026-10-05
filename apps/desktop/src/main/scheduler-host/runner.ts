@@ -45,6 +45,7 @@ import { routinePermissionSnapshot } from '../maker-host/routinePermission.js';
 import { randomUUID } from 'node:crypto';
 
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
+import { formatSourceRef } from '@cindy/maker-shared/message-source';
 import {
   restoreAutoReviewUserIntent,
   type AutoReviewHistoryMessage,
@@ -3454,12 +3455,16 @@ function buildScheduledRunPrompt(schedule: Schedule, ctx: FireContext, checkOutp
 }
 
 /**
- * 每次 fire 注入的权威时间上下文。UI / DB 仍展示用户原始 prompt；这里只让 agent
- * 明确知道本轮 run.firedAt；具体查询时间范围仍由任务 prompt 决定。
+ * 每次 fire 注入的权威运行上下文。UI / DB 仍展示用户原始 prompt；这里只让 agent
+ * 明确知道是哪条定时任务（名字 + schedule_id）触发了本轮、以及本轮 run.firedAt；
+ * 具体查询时间范围仍由任务 prompt 决定。
  * 采用 epoch ms + UTC ISO，避免 UTC 日期与任务时区的壁钟日期被直接比较。
+ * 名字一律配 schedule_id（伙伴 routine 也一样：id 用于区分同名任务、与界面和交接摘要
+ * 同源，与伙伴工具是否接受 scheduleId 无关）。名字是用户输入，按不可信展示文本处理。
+ * 这一段是 per-fire user message 后缀，不进 system 段，不影响 prompt cache 前缀。
  */
 function buildScheduledRunContextInstruction(
-  schedule: Pick<Schedule, 'timezone'>,
+  schedule: Pick<Schedule, 'id' | 'name' | 'source' | 'timezone'>,
   ctx: Pick<FireContext, 'firedAt'>,
 ): string {
   const zonedParts = Object.fromEntries(
@@ -3484,11 +3489,17 @@ function buildScheduledRunContextInstruction(
     '',
     '---',
     '[Scheduled run context]',
+    ...buildScheduleRefLine(schedule),
     `firedAtEpochMs: ${ctx.firedAt}`,
     `firedAtUtc: ${new Date(ctx.firedAt).toISOString()}`,
     `firedAtInScheduleTimezone: ${firedAtInScheduleTimezone}`,
     'These timestamps identify when this run was triggered, not when a queued run started processing. Use the task instructions to determine the requested time range.',
   ].join('\n');
+}
+
+function buildScheduleRefLine(schedule: Pick<Schedule, 'id' | 'name'>): string[] {
+  const ref = formatSourceRef(schedule.name, 'schedule_id', schedule.id).trim();
+  return ref ? [`schedule: ${ref}`] : [];
 }
 
 /**

@@ -163,8 +163,10 @@
     "dispatchBodyFallback": "Worker 생성",
     "sendTitle": "Worker에게 메시지 전송",
     "sendBodyFallback": "메시지 전송",
-    "reportTitle": "Worker 보고",
-    "reportBodyFallback": "(빈 보고)"
+    "fromLead": "Lead에서 온 메시지",
+    "fromWorkerNamed": "Worker 「{{role}}」에서 온 메시지",
+    "fromWorker": "Worker에서 온 메시지",
+    "emptyMessageBody": "(빈 메시지)"
   },
   "contextSheet": {
     "backAccessibility": "컨텍스트 패널로 돌아가기",

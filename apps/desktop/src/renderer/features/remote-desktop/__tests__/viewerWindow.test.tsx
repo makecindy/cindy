@@ -34,12 +34,14 @@ vi.mock('../viewerController', () => ({
     close = () => this._api.close(1);
   },
 }));
+const fullscreen = vi.hoisted(() => ({ value: false }));
 vi.mock('@/hooks/useMacFullscreen', () => ({
-  useMacFullscreen: () => ({ isMac: true, isFullscreen: false }),
+  useMacFullscreen: () => ({ isMac: true, isFullscreen: fullscreen.value }),
 }));
 vi.mock('@/components/title-bar/WindowControls', () => ({ WindowControls: () => null }));
 
 afterEach(() => {
+  fullscreen.value = false;
   cleanup();
   vi.clearAllMocks();
 });
@@ -101,6 +103,7 @@ it('confirms toolbar and native exits, keeps cancellation connected, and discard
     credential: null,
     credentialBusy: false,
     credentialNotice: null,
+    fittedDisplay: null,
   };
   for (const status of ['connecting', 'reconnecting']) {
     act(() => lifecycle.update?.({ ...connected, ready: false, status }));
@@ -182,6 +185,7 @@ it('hides view-only controls and enables desktop actions only after control is c
     credential: null,
     credentialBusy: false,
     credentialNotice: null,
+    fittedDisplay: null,
     target: { deviceId: 'host', name: 'Windows' },
     ready: true,
     controlling: false,
@@ -314,6 +318,7 @@ it.each([
       credential: null,
       credentialBusy: false,
       credentialNotice: null,
+      fittedDisplay: null,
       target: null,
       ready: true,
       controlling: true,
@@ -330,6 +335,59 @@ it.each([
   const toolbar = within(view.container.querySelector('header')!);
   expect(toolbar.getByText('正在控制')).toBeDefined();
   expect(toolbar.getByText(label)).toBeDefined();
+});
+
+it('marks an active privacy screen in the toolbar and for screen readers without a persistent banner', async () => {
+  await i18n.changeLanguage('zh-CN');
+  Object.assign(window, {
+    electronAPI: {
+      remoteDesktopViewer: {
+        onActive: () => () => {},
+        onLocale: () => () => {},
+        onCloseRequested: () => () => {},
+        state: async () => ({ generation: 1 }),
+        rendererReady: async () => {},
+        presentationReady: async () => {},
+      },
+    },
+  });
+  render(<RemoteDesktopViewerWindow />);
+  await act(async () =>
+    lifecycle.update?.({
+      preferences: {
+        audio: true,
+        privacyScreen: true,
+        hostMute: false,
+        clipboardSync: false,
+        lockOnExit: false,
+      },
+      safety: { privacyActive: true, notice: null, clipboardProgress: null },
+      receiveRate: null,
+      closing: false,
+      credential: null,
+      credentialBusy: false,
+      credentialNotice: null,
+      fittedDisplay: null,
+      target: null,
+      ready: true,
+      controlling: true,
+      controlPending: false,
+      status: 'live',
+      error: null,
+      caps: null,
+      displayId: 'one',
+      transport: 'direct',
+      latency: null,
+      settings: { fps: 30, quality: 'auto', audio: false },
+    }),
+  );
+  expect(document.querySelector('.remote-viewer-feedback')).toBeNull();
+  const announcement = screen.getByText(i18n.t('remoteDesktop.privacyActive'));
+  expect(announcement.getAttribute('role')).toBe('status');
+  expect(announcement.classList.contains('sr-only')).toBe(true);
+  expect(
+    screen.getByRole('button', { name: '安全' }).querySelector('.remote-viewer-active-dot'),
+  ).not.toBeNull();
 });
 
 it('updates translated controls without ending or recreating the viewer connection', async () => {
@@ -367,4 +425,59 @@ it('updates translated controls without ending or recreating the viewer connecti
   view.unmount();
   expect(lifecycle.disposed).toHaveBeenCalledOnce();
   expect(listeners.size).toBe(0);
+});
+
+it('reveals the fullscreen toolbar from the top edge and keeps it while macOS covers the edge', async () => {
+  fullscreen.value = true;
+  Object.assign(window, {
+    electronAPI: {
+      remoteDesktopViewer: {
+        onActive: () => () => {},
+        onLocale: () => () => {},
+        onCloseRequested: () => () => {},
+        state: async () => ({ generation: 1 }),
+        rendererReady: async () => {},
+        presentationReady: async () => {},
+        inputFocus: async () => {},
+        close: async () => {},
+      },
+    },
+  });
+  const { container } = render(<RemoteDesktopViewerWindow />);
+  await act(async () => {});
+  const toolbar = container.querySelector('.remote-viewer-toolbar')!;
+  Object.defineProperty(toolbar, 'offsetHeight', { value: 60 });
+  const move = (clientY: number) => fireEvent.pointerMove(window, { clientY });
+  expect(toolbar.hasAttribute('data-revealed')).toBe(false);
+  move(4);
+  expect(toolbar.getAttribute('data-revealed')).toBe('true');
+  // The pointer is still over the toolbar (or has left to the macOS menu bar).
+  move(70);
+  expect(toolbar.getAttribute('data-revealed')).toBe('true');
+  move(200);
+  expect(toolbar.hasAttribute('data-revealed')).toBe(false);
+});
+it('releases shortcut capture when the picture input loses focus programmatically', async () => {
+  const inputFocus = vi.fn(async () => {});
+  Object.assign(window, {
+    electronAPI: {
+      remoteDesktopViewer: {
+        onActive: () => () => {},
+        onLocale: () => () => {},
+        onCloseRequested: () => () => {},
+        state: async () => ({ generation: 1 }),
+        rendererReady: async () => {},
+        presentationReady: async () => {},
+        inputFocus,
+      },
+    },
+  });
+  const view = render(<RemoteDesktopViewerWindow />);
+  await act(async () => {});
+  const input = view.container.querySelector<HTMLTextAreaElement>('#keyboard-input')!;
+  act(() => input.focus());
+  expect(inputFocus).toHaveBeenLastCalledWith(1, true);
+  // Ctrl+Alt+Esc and control loss blur the input without focusing another element.
+  act(() => input.blur());
+  expect(inputFocus).toHaveBeenLastCalledWith(1, false);
 });
