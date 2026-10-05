@@ -2459,35 +2459,18 @@
           "codexContextUnknown": "CLI 설정을 읽을 수 없음",
           "codexContextValues": "전체 {{total}} · 사용 가능 {{usable}} · 자동 압축 {{compact}} tokens",
           "contextLimitGptHint": "GPT는 기본적으로 최대 272K를 사용하며 여기서 1M으로 변경할 수 있습니다. Codex는 창과 자동 압축 임계값을 함께 적용하고 5%의 여유를 유지합니다. 실제 용량은 모델 서비스에 따라 다릅니다.",
-          "thinking": {
-            "on": "사고 지원",
-            "off": "사고 미지원"
-          },
+          "thinking": "사고",
           "thinkingOverride": {
             "label": "사고 등급 선언",
             "inherit": "제공자 따르기",
             "declared": "선언됨",
             "sourceHint": "카탈로그에 사고 등급이 없습니다. 모델이 실제로 추론한다면 여기에서 선언하세요",
             "saveFailed": "사고 선언을 저장하지 못했습니다",
-            "saveFailedWithReason": "사고 선언을 저장하지 못했습니다: {{reason}}",
-            "tiers": {
-              "minimal": "최소",
-              "low": "낮음",
-              "medium": "보통",
-              "high": "높음",
-              "xhigh": "매우 높음",
-              "max": "최대"
-            }
+            "saveFailedWithReason": "사고 선언을 저장하지 못했습니다: {{reason}}"
           },
-          "thinkingLabel": "사고",
-          "thinkingTier": {
-            "minimal": "최소",
-            "low": "낮음",
-            "medium": "보통",
-            "high": "높음",
-            "xhigh": "매우 높음",
-            "max": "최대",
-            "ultra": "최고"
+          "thinkingCapability": {
+            "on": "사고 지원",
+            "off": "사고 미지원"
           }
         },
         "kindFilter": {

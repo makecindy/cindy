@@ -2459,35 +2459,18 @@
           "codexContextUnknown": "CLI 設定を取得できません",
           "codexContextValues": "総容量 {{total}} · 使用可能 {{usable}} · 自動圧縮 {{compact}} tokens",
           "contextLimitGptHint": "GPT は既定で最大 272K を使用します。ここで 1M に変更できます。Codex はウィンドウと自動圧縮のしきい値を同時に適用し、5% の余裕を確保します。実際の容量はモデルサービスに依存します。",
-          "thinking": {
-            "on": "思考に対応",
-            "off": "思考に非対応"
-          },
+          "thinking": "思考",
           "thinkingOverride": {
             "label": "思考ティアを宣言",
             "inherit": "プロバイダーに従う",
             "declared": "宣言済み",
             "sourceHint": "カタログに思考ティアの宣言がありません。モデルが実際に推論する場合はここで宣言できます",
             "saveFailed": "思考の宣言を保存できませんでした",
-            "saveFailedWithReason": "思考の宣言を保存できませんでした: {{reason}}",
-            "tiers": {
-              "minimal": "最小",
-              "low": "低",
-              "medium": "中",
-              "high": "高",
-              "xhigh": "非常に高",
-              "max": "最大"
-            }
+            "saveFailedWithReason": "思考の宣言を保存できませんでした: {{reason}}"
           },
-          "thinkingLabel": "思考",
-          "thinkingTier": {
-            "minimal": "最小",
-            "low": "低",
-            "medium": "中",
-            "high": "高",
-            "xhigh": "非常に高",
-            "max": "最大",
-            "ultra": "極限"
+          "thinkingCapability": {
+            "on": "思考に対応",
+            "off": "思考に非対応"
           }
         },
         "kindFilter": {

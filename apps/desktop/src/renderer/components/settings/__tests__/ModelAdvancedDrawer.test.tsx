@@ -236,7 +236,8 @@ describe('model advanced editor', () => {
         screen.getByRole('button', { name: 'settings.providers.models.advanced.thinkingOverride.label' }),
         { key: 'ArrowDown' },
       );
-      const high = await screen.findByRole('menuitemcheckbox', { name: 'settings.providers.models.advanced.thinkingTier.high' });
+      // 档位名走既有正本 effortLevels.*：与「默认推理强度」选择器逐字一致。
+      const high = await screen.findByRole('menuitemcheckbox', { name: 'effortLevels.high' });
       fireEvent.click(high);
       await waitFor(() => expect(setTiers).toHaveBeenCalledTimes(1));
       // 写入的是目录 override（不是连接配置），且带上目标行全部引擎的 id。

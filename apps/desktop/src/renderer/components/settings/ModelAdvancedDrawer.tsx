@@ -1054,7 +1054,7 @@ export function ModelAdvancedDrawer({
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </Row>
-                    <Row label={t('settings.providers.models.advanced.thinkingLabel')}>
+                    <Row label={t('settings.providers.models.advanced.thinking')}>
                       {/*
                         思考档位三态声明：目录说「不支持思考」时，Pi 客户端就没有 thinking
                         通道，模型推理只能随 content 返回、被当成普通正文渲染（用户看到的是
@@ -1085,8 +1085,8 @@ export function ModelAdvancedDrawer({
                               state={(primaryModel.efforts?.length ?? 0) > 0}
                               label={
                                 (primaryModel.efforts?.length ?? 0) > 0
-                                  ? t('settings.providers.models.advanced.thinking.on')
-                                  : t('settings.providers.models.advanced.thinking.off')
+                                  ? t('settings.providers.models.advanced.thinkingCapability.on')
+                                  : t('settings.providers.models.advanced.thinkingCapability.off')
                               }
                             />
                             <span className="text-11 text-[var(--text-tertiary)]">
@@ -1121,7 +1121,10 @@ export function ModelAdvancedDrawer({
                                   void setThinkingTiers(next.length > 0 ? next : []);
                                 }}
                               >
-                                {t(`settings.providers.models.advanced.thinkingTier.${tier}`)}
+                                {/* 档位名一律用既有正本 effortLevels：与「默认推理强度」
+                                    选择器逐字一致，避免同一档位在两处叫不同名字（也避免
+                                    ultra 被译成与 xhigh 同名的「超高」）。 */}
+                                {t(`effortLevels.${tier}`)}
                               </DropdownMenuCheckboxItem>
                             );
                           })}
