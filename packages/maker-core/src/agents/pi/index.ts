@@ -1638,7 +1638,7 @@ function piExtraDirsPrompt(readOnlyDirs: readonly string[], writableDirs: readon
 }
 
 interface FailedPiStartupCleanup {
-  proc: PiRpcProcess;
+  proc: Pick<PiRpcProcess, 'close'>;
   promise: Promise<void> | null;
   cleanupLocal?: () => void;
   confirmStopped: () => void;
@@ -2483,7 +2483,7 @@ export class PiAgent extends BaseAgent {
 
   override async startSession(opts: StartSessionOptions): Promise<AgentSessionHandle> {
     if (this.disposeStarted) {
-      throw new Error('Pi agent is disposing; refusing to start a new session');
+      throw new AgentStartupStoppedError(new Error('Pi agent is disposing; refusing to start a new session'));
     }
     const startup = this.startSessionWhileRunning(opts);
     this.inFlightStartups.add(startup);
@@ -2495,11 +2495,32 @@ export class PiAgent extends BaseAgent {
   }
 
   private async startSessionWhileRunning(opts: StartSessionOptions): Promise<AgentSessionHandle> {
-    const startupTraceId = randomBytes(8).toString('hex');
     const startupCleanupKey = opts.sessionId ?? '<anonymous>';
     // A previous pre-publication Pi process for this business session must be
     // confirmed dead before another spawn can begin.
     await this.retryFailedStartupCleanup(startupCleanupKey);
+    let runtimeStartAttempted = false;
+    try {
+      return await this.startSessionPrepared(opts, () => { runtimeStartAttempted = true; });
+    } catch (error) {
+      // Keep a previous quarantined process outside this boundary. Only this
+      // attempt's pre-spawn failures are proof that it has no workdir writer.
+      if (!runtimeStartAttempted
+        && !(error instanceof AgentNotAuthenticatedError)
+        && !(error instanceof AgentStartupCleanupPendingError)
+        && !(error instanceof AgentStartupStoppedError)) {
+        throw new AgentStartupStoppedError(error);
+      }
+      throw error;
+    }
+  }
+
+  private async startSessionPrepared(
+    opts: StartSessionOptions,
+    onRuntimeStartAttempted: () => void,
+  ): Promise<AgentSessionHandle> {
+    const startupTraceId = randomBytes(8).toString('hex');
+    const startupCleanupKey = opts.sessionId ?? '<anonymous>';
     // 轮 22 LOW-6:空串 remoteHostId 规范化 —— Boolean('') 是 false 会让会话
     // 被判定本地但后续仍把 '' 传给 resolvePiNativeProviders 等, 行为分裂。
     if (opts.remoteHostId === '') opts.remoteHostId = undefined;
@@ -4914,6 +4935,8 @@ export class PiAgent extends BaseAgent {
     let sessionTransport: PiTransport | undefined;
     /** 后台命令执行器;仅本地普通会话创建(见 backgroundCommandsSupported)。 */
     let backgroundCommands: PiBackgroundCommands | undefined;
+    // 上游:本会话是否真的在本机 spawn 过进程(远程创建失败回收用)。
+    let localProcessSpawned = false;
     let runtimeCapabilityManifest: PiRuntimeCapabilityManifest | undefined;
     let runtimeCapabilityGeneration = 0;
     let piAgentLifecycleSequence = 0;
@@ -5403,6 +5426,9 @@ export class PiAgent extends BaseAgent {
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;
       companionEnvironment?.assertCurrent?.();
       piSpawnStartedAt = Date.now();
+      // A remote rejection may lose the reply after spawning. Local spawning is
+      // synchronous and its process observer marks the boundary before returning.
+      if (remote) onRuntimeStartAttempted();
       const { transport } = await this.createTransport(
         {
           args,
@@ -5411,16 +5437,20 @@ export class PiAgent extends BaseAgent {
           sessionId: opts.sessionId,
           hostProxyForwards: initialHostProxyForward ? [initialHostProxyForward] : [],
         },
-        (pid) =>
-          this.deps.registerLocalAgentProcess?.({
+        (pid) => {
+          localProcessSpawned = true;
+          onRuntimeStartAttempted();
+          return this.deps.registerLocalAgentProcess?.({
             pid,
             kind: 'pi',
             role: 'task-host',
-          }),
+          });
+        },
         opts.remoteHostId,
         effectivePiBinaryPath,
       );
       sessionTransport = transport;
+      onRuntimeStartAttempted();
       proc = new PiRpcProcess({
         transport,
         logger: this.deps.logger,
@@ -5725,12 +5755,44 @@ export class PiAgent extends BaseAgent {
       } catch {
         /* best-effort:注销失败不掩盖原始构造错误 */
       }
+      // The transport can exist even if constructing its RPC wrapper throws.
+      // Reuse the same quarantine as RPC startup failures until close is proven.
+      if (sessionTransport) {
+        const transport = sessionTransport;
+        const cleanup = { close: async () => {
+          try { await transport.killRemoteSession?.(); }
+          finally { await transport.close(); }
+        } };
+        try {
+          await cleanup.close();
+        } catch (closeError) {
+          if (!remote) configHomeCleanupDeferredToQuarantine = true;
+          let confirmStopped!: () => void;
+          const whenStopped = new Promise<void>((resolve) => { confirmStopped = resolve; });
+          this.failedStartupCleanups.set(startupCleanupKey, {
+            proc: cleanup, promise: null, confirmStopped,
+            ...(!remote ? { cleanupLocal: () => {
+              void cleanupConfigHome();
+              cleanupRuntimeFiles();
+            } } : {}),
+          });
+          throw new AgentStartupCleanupPendingError(
+            `pi startup failed and transport cleanup remains unconfirmed: ${String(closeError)}`,
+            { cause: err, whenStopped },
+          );
+        }
+      } else if (remote || localProcessSpawned) {
+        // No handle after dispatch/spawn is not proof of exit. Keep runtime
+        // files too: an unpublished local writer may still be reading them.
+        if (!remote) configHomeCleanupDeferredToQuarantine = true;
+        throw err;
+      }
       // 轮 42 P1:远端失败也不清理 runtime 文件(可能与并发存活会话共享/复用)。
       if (!remote) {
         await cleanupConfigHome();
         cleanupRuntimeFiles();
       }
-      throw err;
+      throw new AgentStartupStoppedError(err);
     }
 
     let localSessionScanCache:

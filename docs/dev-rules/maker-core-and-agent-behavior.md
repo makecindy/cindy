@@ -11,6 +11,22 @@ Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户无
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
 Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture.md)。
 
+## 启动失败与工作目录占用
+
+Claude Code、Codex、Pi 共用 Maker 的启动失败清理契约：只有明确未启动进程或已确认
+进程退出时，adapter 才返回 `AgentStartupStoppedError`；Maker 释放本次启动的目录租约，
+并向调用方还原原始错误。准备环境失败也必须进入该契约，不能把尚未启动的任务永久
+记为可能仍占用目录。鉴权失败保留原 `AgentNotAuthenticatedError` 类型。
+
+本地 SDK 已接收启动调用、已观察到进程创建、或远端启动请求已发出后，普通异常不是
+退出证明。Pi 在 transport 已创建而 RPC 包装器构造失败时，也必须关闭已取得的
+transport；关闭未确认时复用原有隔离清理记录和 `AgentStartupCleanupPendingError`，
+保留运行期文件与目录保护，重试确认退出后才释放。旧隔离进程的清理失败不能被新一轮
+“尚未启动”的状态覆盖。此恢复只影响失败任务，不重置设备连接或其他任务，不自动重放消息。
+
+回归见 `claude-code/__tests__/startup-cleanup.test.ts`、
+`pi/__tests__/pi-startsession-cleanup.test.ts` 与 `maker.test.ts`。
+
 ## 工具循环与无响应的分工
 
 工具持续返回但反复原地搜索时，复用
