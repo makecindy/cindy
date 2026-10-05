@@ -1768,16 +1768,20 @@ describe('Maker start-option lifecycle hooks', () => {
     expect(onStartCleanupSucceeded).not.toHaveBeenCalled();
   });
 
-  it.each([new TypeError('startup RPC failed'), 'non-Error startup failure'])(
-    'releases only the confirmed-stopped startup and preserves its original error: %s', async (startupError) => {
+  it.each((['codex', 'claude-code', 'pi'] as const).flatMap((kind) =>
+    [new TypeError('startup RPC failed'), 'non-Error startup failure'].map((error) => ({ kind, error }))))(
+    'releases only the confirmed-stopped $kind startup and permits a fresh task: $error', async ({ kind, error: startupError }) => {
       const otherStartup = {} as CreateSessionOptions;
       const leased = new Set<CreateSessionOptions>([otherStartup]);
       const onStartFailed = vi.fn(({ options, runtimeMayBeAlive }: SessionStartFailureContext) => {
         if (!runtimeMayBeAlive) leased.delete(options);
       });
       const onStartCleanupSucceeded = vi.fn();
+      const startSession = vi.fn()
+        .mockRejectedValueOnce(new AgentStartupStoppedError(startupError))
+        .mockResolvedValueOnce(createHandle({ id: 'fresh-sdk-session' }));
       const maker = new Maker({
-        agents: { pi: createAgent(vi.fn().mockRejectedValue(new AgentStartupStoppedError(startupError)), 'pi') },
+        agents: { [kind]: createAgent(startSession, kind) },
         storage: createStorage(), logger: createLogger(),
         lifecycleHooks: {
           prepareStartOptions: (_id, options) => { leased.add(options); },
@@ -1785,7 +1789,7 @@ describe('Maker start-option lifecycle hooks', () => {
         },
       });
       await expect(maker.createSession({
-        id: 'confirmed-exit', agentKind: 'pi', workingDir: '/repo', model: 'pi-model',
+        id: 'confirmed-exit', agentKind: kind, workingDir: '/repo', model: 'test-model',
       })).rejects.toBe(startupError);
       expect(onStartFailed).toHaveBeenCalledOnce();
       expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({
@@ -1793,6 +1797,12 @@ describe('Maker start-option lifecycle hooks', () => {
       }));
       expect(leased).toEqual(new Set([otherStartup]));
       expect(onStartCleanupSucceeded).not.toHaveBeenCalled();
+      const replacement = await maker.createSession({
+        id: 'fresh-task', agentKind: kind, workingDir: '/repo', model: 'test-model',
+      });
+      expect(maker.getSession('fresh-task')).toBe(replacement);
+      expect(startSession).toHaveBeenCalledTimes(2);
+      await replacement.close();
     },
   );
 

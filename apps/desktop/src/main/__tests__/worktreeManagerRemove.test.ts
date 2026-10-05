@@ -17,6 +17,14 @@ import fsSync from 'node:fs';
 import os from 'node:os';
 
 import type { WorktreeMeta } from '../worktree/types';
+const cancelledIds = vi.hoisted(() => new Set<string>());
+vi.mock('../worktree/precreatedCancellation', () => ({
+  withPrecreatedSessionOperationLock: (_id: string, task: () => Promise<unknown>) => task(),
+  sealPrecreatedSessionCancellation: (id: string) => { cancelledIds.add(id); },
+  assertPrecreatedSessionNotCancelled: (id: string) => {
+    if (cancelledIds.has(id)) throw new Error('PRECONDITION_FAILED: cancelled');
+  },
+}));
 import { withWorktreeRestoreMutation } from '../worktree/restoreLock';
 
 const gitExecMock = vi.fn();
@@ -127,6 +135,7 @@ describe('removeWorktreeForSession', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     storeMap.clear();
+    cancelledIds.clear();
     pendingSafeDirectoryCleanups.length = 0;
     liveSessionRows.length = 0;
     liveSessionRows.push({
@@ -287,7 +296,38 @@ describe('removeWorktreeForSession', () => {
     expect(storeMap.get('s1')).toBe(meta);
   });
 
-  it('discard pre-created: recovery waits for an in-flight create before deciding the record is absent', async () => {
+  it('cancellation seals an absent creation against a late worktree request', async () => {
+    await expect(manager.cancelPrecreatedWorktree('late', { recoveryKey: 'key' }, { canRemove: async () => true }))
+      .resolves.toEqual({ status: 'absent' });
+    await expect(manager.createWorktree({ sessionId: 'late', baseRepo: BASE_REPO, name: 'late', sourceBranch: 'main', recoveryKey: 'key' }))
+      .rejects.toThrow('PRECONDITION_FAILED');
+    expect(gitExecMock).not.toHaveBeenCalled();
+  });
+
+  it('cancellation refuses mismatched or claimed records without sealing them', async () => {
+    const meta = { ...makeMeta('s1'), recoveryKey: 'right' };
+    storeMap.set('s1', meta);
+    await expect(manager.cancelPrecreatedWorktree('s1', { recoveryKey: 'wrong' }, { canRemove: async () => true }))
+      .resolves.toEqual({ status: 'path-mismatch' });
+    await expect(manager.cancelPrecreatedWorktree('s1', { recoveryKey: 'right' }, { canRemove: async () => false }))
+      .resolves.toEqual({ status: 'preserved' });
+    expect(cancelledIds.size).toBe(0);
+    expect(storeMap.get('s1')).toBe(meta);
+    expect(gitExecMock).not.toHaveBeenCalled();
+  });
+
+  it('cancellation preserves dirty content while fencing late recreation', async () => {
+    const meta = { ...makeMeta('s1'), recoveryKey: 'right' };
+    storeMap.set('s1', meta);
+    isWorktreeDirtyMock.mockResolvedValue(true);
+    await expect(manager.cancelPrecreatedWorktree('s1', { recoveryKey: 'right' }, { canRemove: async () => true }))
+      .resolves.toEqual({ status: 'preserved' });
+    expect(cancelledIds.has('s1')).toBe(true);
+    expect(storeMap.get('s1')).toBe(meta);
+    expect(gitExecMock).not.toHaveBeenCalledWith(['worktree', 'remove', meta.path], BASE_REPO);
+  });
+
+  it.each(['discard', 'cancel'])('%s waits for an in-flight create before deciding the record is absent', async (operation) => {
     let releaseGitProbe!: () => void;
     gitExecMock.mockImplementationOnce(
       () =>
@@ -316,8 +356,9 @@ describe('removeWorktreeForSession', () => {
     });
 
     let discardSettled = false;
-    const discard = manager
-      .discardPrecreatedWorktreeByRecoveryKey('s1', recoveryKey)
+    const discard = (operation === 'cancel'
+      ? manager.cancelPrecreatedWorktree('s1', { recoveryKey }, { canRemove: async () => true })
+      : manager.discardPrecreatedWorktreeByRecoveryKey('s1', recoveryKey))
       .finally(() => {
         discardSettled = true;
       });
@@ -327,6 +368,7 @@ describe('removeWorktreeForSession', () => {
     releaseGitProbe();
     await expect(create).resolves.toMatchObject({ ok: false });
     await expect(discard).resolves.toEqual({ status: 'absent' });
+    expect(cancelledIds.has('s1')).toBe(operation === 'cancel');
   });
 
   it('discard pre-created: a matching recovery key resolves the registered path and reuses cleanup guards', async () => {

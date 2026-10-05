@@ -30,6 +30,7 @@ import { getActiveAuthRealm } from '../authManager.js';
 import { getCustomProvider, updateCustomProviderIfUnchanged } from './custom-provider-store.js';
 import { refreshCustomProvidersIntoCatalog } from './createDesktopProviderService.js';
 import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease, type WorktreeRuntimeLease } from '../worktree/runtimeLeases';
+import { assertPrecreatedSessionNotCancelled } from '../worktree/precreatedCancellation';
 import { readCodexContextWindowInfo } from './codex-context-window.js';
 import { app, BrowserWindow } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
@@ -2728,6 +2729,9 @@ export function getMaker(): Maker {
           if (!createOpts.remoteHostId && createOpts.workingDir) {
             const lease = await acquireWorktreeRuntimeLease(sessionId, createOpts.workingDir);
             if (lease) worktreeRuntimeLeases.set(opts, lease);
+            // Recheck after acquiring the directory lease: cancellation may have
+            // arrived during preparation or through another local instance.
+            assertPrecreatedSessionNotCancelled(sessionId);
           }
           let skillLinksChanged = false;
           if (!createOpts.remoteHostId && createOpts.workingDir) {
