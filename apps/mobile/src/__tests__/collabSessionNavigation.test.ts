@@ -200,7 +200,7 @@ describe("collaboration navigation against the real StackRouter", () => {
   /**
    * 生产路径:每次跳转都由 navigateToCollabSession 自己读栈决定动作，测试不复刻
    * 判断逻辑 —— 否则决策口改成 push 也不会让这里变红。`currentSessionId` 跟着前进，
-   * 与真实会话页传入的是同一个值。
+   * 与真实会话页传入的是同一个值。每一步都录一帧栈快照，供逐步断言。
    */
   const driveThroughDecision = () => {
     const driver = createDriver();
@@ -209,10 +209,12 @@ describe("collaboration navigation against the real StackRouter", () => {
       push: driver.push,
       dismissTo: driver.dismissTo,
     };
-    const open = (target: CollabSessionTarget, currentSessionId: string) =>
-      navigateToCollabSession(navigator, target, currentSessionId);
+    const steps: { plan: string; stack: string[] }[] = [];
+    const open = (target: CollabSessionTarget, currentSessionId: string) => {
+      const plan = navigateToCollabSession(navigator, target, currentSessionId);
+      steps.push({ plan, stack: [...sessionIds(driver.state)] });
+    };
 
-    open(deviceList, "__devices__");
     open(lead, deviceList.sessionId);
     open(worker, lead.sessionId);
     open(lead, worker.sessionId);
@@ -220,17 +222,21 @@ describe("collaboration navigation against the real StackRouter", () => {
     open(lead, worker.sessionId);
     const beforeBack = [...sessionIds(driver.state)];
     driver.apply({ type: "GO_BACK" });
-    return { beforeBack, afterBack: sessionIds(driver.state) };
+    return { steps, beforeBack, afterBack: sessionIds(driver.state) };
   };
 
   /**
    * 回归对照:故意绕过决策口，把每次跳转都做成旧的裸 PUSH，用来证明上面的断言确实
    * 能捕捉这个缺陷(若哪天 push 行为不再改写历史，这条会一起变绿，说明对照组该重写)。
-   * 它不是生产路径。
+   * 它不是生产路径。同样逐步录快照。
    */
   const driveWithLegacyPush = () => {
     const driver = createDriver();
-    const open = (target: CollabSessionTarget) => driver.push(target);
+    const steps: { stack: string[] }[] = [];
+    const open = (target: CollabSessionTarget) => {
+      driver.push(target);
+      steps.push({ stack: [...sessionIds(driver.state)] });
+    };
     open(lead);
     open(worker);
     open(lead);
@@ -238,11 +244,19 @@ describe("collaboration navigation against the real StackRouter", () => {
     open(lead);
     const beforeBack = [...sessionIds(driver.state)];
     driver.apply({ type: "GO_BACK" });
-    return { beforeBack, afterBack: sessionIds(driver.state) };
+    return { steps, beforeBack, afterBack: sessionIds(driver.state) };
   };
 
   it("reproduces the reordered history when a stacked session is pushed again", () => {
     const legacy = driveWithLegacyPush();
+    // 逐步对账:前两步正常压栈,第一次「返回 Lead」开始把顺序对调。
+    expect(legacy.steps.map((step) => step.stack)).toEqual([
+      ["device-list", "lead-1"],
+      ["device-list", "lead-1", "worker-1"],
+      ["device-list", "worker-1", "lead-1"],
+      ["device-list", "lead-1", "worker-1"],
+      ["device-list", "worker-1", "lead-1"],
+    ]);
     // 「返回 Lead」把 Lead 提到顶、Worker 掉到它下面 —— 用户看到的「右滑又进了 Worker」。
     expect(legacy.beforeBack).toEqual(["device-list", "worker-1", "lead-1"]);
     expect(legacy.afterBack).toEqual(["device-list", "worker-1"]);
@@ -250,6 +264,22 @@ describe("collaboration navigation against the real StackRouter", () => {
 
   it("keeps the history truthful when a stacked session is popped back to", () => {
     const fixed = driveThroughDecision();
+    // 逐步对账:两轮都真的发生了(Worker 先压栈、返回时回退),首次进 Worker 与
+    // 复位后的二次进 Worker 各自可验，不会因为只看末态而漏掉中间跳转。
+    expect(fixed.steps.map((step) => step.plan)).toEqual([
+      "push",
+      "push",
+      "popTo",
+      "push",
+      "popTo",
+    ]);
+    expect(fixed.steps.map((step) => step.stack)).toEqual([
+      ["device-list", "lead-1"],
+      ["device-list", "lead-1", "worker-1"],
+      ["device-list", "lead-1"],
+      ["device-list", "lead-1", "worker-1"],
+      ["device-list", "lead-1"],
+    ]);
     expect(fixed.beforeBack).toEqual(["device-list", "lead-1"]);
     expect(fixed.afterBack).toEqual(["device-list"]);
   });
