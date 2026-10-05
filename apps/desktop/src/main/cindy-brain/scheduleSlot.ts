@@ -55,6 +55,7 @@ export interface ScheduleSlotDeps {
    * 保存成多条自动化。装配处负责选窗(focused ?? 第一个),本槽只管投一次。
    */
   sendToWindow(payload: GhostScheduleDraftPush): boolean;
+  sendToMobile?(pageId: string, payload: GhostScheduleDraftPush): boolean;
   now?(): number;
   /** 仅测试注入;生产用 randomUUID。 */
   newRequestId?(): string;
@@ -153,6 +154,7 @@ export class GhostScheduleSlot {
       return fail('INVALID_REQUEST', 'schedule-request 载荷必须是对象');
     }
     const request = payload as Record<string, unknown>;
+    if (request.mobilePageId !== undefined && (typeof request.mobilePageId !== 'string' || request.mobilePageId.length > 128)) return fail('INVALID_REQUEST', 'Invalid mobile page context');
     if (typeof request.name !== 'string' || request.name.trim().length === 0) {
       return fail('INVALID_REQUEST', 'name 必填且必须是非空字符串(预填的任务名)');
     }
@@ -198,7 +200,7 @@ export class GhostScheduleSlot {
           )
         : undefined;
 
-    const delivered = this.deps.sendToWindow({
+    const draft: GhostScheduleDraftPush = {
       requestId: this.deps.newRequestId?.() ?? randomUUID(),
       ghostId,
       ghostName: ghost.manifest.name,
@@ -206,7 +208,9 @@ export class GhostScheduleSlot {
       name,
       prompt,
       ...(intervalMs !== undefined ? { intervalMs } : {}),
-    });
+    };
+    const delivered = typeof request.mobilePageId === 'string'
+      ? this.deps.sendToMobile?.(request.mobilePageId, draft) : this.deps.sendToWindow(draft);
     if (!delivered) {
       return fail('HOST_NOT_READY', '当前没有可用的宿主窗口');
     }

@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
 import type { ReactNode } from 'react';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@/lib/ccAgent.types';
 import type { ProjectNode } from '../features/cc-agent/lib/projectGrouping';
+import { remoteProjectsStore } from '../features/device-link/remoteProjectsStore';
 import {
   ProjectsSection,
   type ProjectsSectionProps,
@@ -131,6 +132,7 @@ function props(groupDevice: boolean): ProjectsSectionProps {
 }
 
 beforeEach(() => {
+  remoteProjectsStore.clear();
   localStorage.clear();
   localStorage.setItem('sidebar.collapse.projectSessionLimit', '1');
   // ProjectsSection 渲染时读 window.electronAPI.platform 做项目键比较(main 897de9031);
@@ -142,6 +144,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  remoteProjectsStore.clear();
   localStorage.clear();
 });
 
@@ -169,6 +172,91 @@ describe('Online device headers without tasks', () => {
   it('does not show device headers when device grouping is disabled', () => {
     render(<ProjectsSection {...props(false)} bots={[]} allProjectKeysForOrder={[]} />);
     expect(screen.queryByText('Remote device')).toBeNull();
+  });
+});
+
+describe('Offline device header names', () => {
+  function cachedProjectProps(): ProjectsSectionProps {
+    const p = props(true);
+    p.projects = [
+      {
+        projectKey: 'device:offline:/project',
+        displayName: 'Cached project',
+        workingDir: '/project',
+        scope: 'remote',
+        remoteHostId: null,
+        deviceLinkDeviceId: 'offline',
+        deviceLinkDeviceName: 'Saved computer',
+        deviceLinkConnectionStatus: 'disconnected',
+        segments: 1,
+        sessions: [
+          {
+            id: 'cached-task',
+            title: 'Cached task',
+            status: 'active',
+            workingDir: '/project',
+            deviceLinkDeviceId: 'offline',
+            deviceLinkDeviceName: 'Saved computer',
+            createdAt: '2026-10-04T00:00:00Z',
+            updatedAt: '2026-10-04T00:00:00Z',
+          } as Session,
+        ],
+        latestActivityAt: '2026-10-04T00:00:00Z',
+      },
+    ];
+    p.allProjectKeysForOrder = p.projects.map((project) => project.projectKey);
+    return p;
+  }
+
+  it('keeps the cached name after disconnecting and uses the current name on reconnect', () => {
+    remoteProjectsStore.setDeviceSessions('offline', 'Saved computer', []);
+    const p = cachedProjectProps();
+    const onlineIndex = new Map(p.remoteDeviceIndex);
+    onlineIndex.set('offline', { name: 'Current computer', online: true });
+    const view = render(<ProjectsSection {...p} remoteDeviceIndex={onlineIndex} />);
+    expect(screen.getByText('Current computer')).toBeTruthy();
+    expect(screen.queryByText('Saved computer')).toBeNull();
+
+    act(() => remoteProjectsStore.markDeviceDisconnected('offline'));
+    view.rerender(<ProjectsSection {...p} />);
+    expect(screen.getByText('Saved computer')).toBeTruthy();
+    expect(screen.queryByText('offline')).toBeNull();
+    expect(screen.getByText('ccAgent.sidebar.deviceGroup.offline')).toBeTruthy();
+
+    act(() => remoteProjectsStore.renameDevice('offline', 'Renamed computer'));
+    expect(screen.getByText('Renamed computer')).toBeTruthy();
+    expect(screen.queryByText('Saved computer')).toBeNull();
+
+    view.rerender(<ProjectsSection {...p} remoteDeviceIndex={onlineIndex} />);
+    expect(screen.getByText('Current computer')).toBeTruthy();
+    expect(screen.queryByText('ccAgent.sidebar.deviceGroup.offline')).toBeNull();
+  });
+
+  it('reads the name from a restored offline snapshot on first render', () => {
+    remoteProjectsStore.hydrateFromCache([
+      {
+        deviceId: 'offline',
+        deviceName: 'Restored computer',
+        sessions: cachedProjectProps().projects[0].sessions,
+      },
+    ]);
+    render(<ProjectsSection {...cachedProjectProps()} />);
+    expect(screen.getByText('Restored computer')).toBeTruthy();
+    expect(screen.queryByText('offline')).toBeNull();
+  });
+
+  it('still falls back to the device ID when no name is known', () => {
+    render(<ProjectsSection {...cachedProjectProps()} />);
+    expect(screen.getByText('offline')).toBeTruthy();
+  });
+
+  it('does not enable device grouping when only disconnected devices remain', () => {
+    remoteProjectsStore.setDeviceSessions('offline', 'Saved computer', []);
+    remoteProjectsStore.markDeviceDisconnected('offline');
+    render(<ProjectsSection {...cachedProjectProps()} remoteDeviceIndex={new Map()} />);
+    expect(screen.getByText('Cached project')).toBeTruthy();
+    expect(screen.queryByText('Saved computer')).toBeNull();
+    expect(screen.queryByText('ccAgent.sidebar.deviceGroup.local')).toBeNull();
   });
 });
 

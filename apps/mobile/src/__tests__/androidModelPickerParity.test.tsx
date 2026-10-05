@@ -40,6 +40,7 @@ vi.mock("react-native", async () => {
     accessibilityRole,
     accessibilityValue,
     accessibilityLabel,
+    accessibilityElementsHidden,
     onLayout,
   }: AnyProps) => {
     if (testID && onLayout) native.layouts.set(testID, onLayout);
@@ -49,6 +50,7 @@ vi.mock("react-native", async () => {
         "data-testid": testID,
         role: accessibilityRole,
         "aria-label": accessibilityLabel,
+        "aria-hidden": accessibilityElementsHidden,
         "aria-valuenow": accessibilityValue?.now,
       },
       children,
@@ -461,8 +463,8 @@ describe("Android unified model picker follows the iOS structure", () => {
     expect(byId("modelSheet")!.getAttribute("data-title")).toBe(
       "models.unified.source",
     );
-    // 搜索框只在列表页出现;来源页有返回。
-    expect(byId("modelSheet.search")).toBeNull();
+    // 列表保持挂载以保留位置，但来源页打开时不能访问隐藏的搜索框。
+    expect(byId("modelSheet.search")!.closest('[aria-hidden="true"]')).not.toBeNull();
     const quota = byId("modelSheet.source.p1.quota")!;
     expect(quota.getAttribute("role")).toBe("progressbar");
     expect(quota.getAttribute("aria-valuenow")).toBe("40");
@@ -511,6 +513,7 @@ describe("Android unified model picker follows the iOS structure", () => {
         fastCapable: true,
         onChange: vi.fn(),
         favoritesDisabled: false,
+        canReset: true,
         onFavorite: vi.fn(),
         onReset: vi.fn(),
         context: "Provider One · 200K context",
@@ -588,15 +591,15 @@ describe("Android unified model picker follows the iOS structure", () => {
     expect(byId("modelSheet.effort.high")).toBeNull();
   });
 
-  it("hides the reset row for favorites", () => {
+  it("offers reset for customized parameters even when opened from favorites", () => {
     const props = optionsProps({
       row: unifiedRow({ favorite: { uid: "fav-1" } }),
     });
     render(createElement(UnifiedModelPickerView, props as never));
     expect(byId("modelSheet.favorite")!.textContent).toContain(
-      "models.unified.removeFavorite",
+      "models.unified.savedConfiguration",
     );
-    expect(byId("modelSheet.reset")).toBeNull();
+    expect(byId("modelSheet.reset")).not.toBeNull();
   });
 });
 

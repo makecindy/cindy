@@ -27,6 +27,9 @@ import {
 } from '../remoteResources.js';
 
 describe('REMOTE_INVOKE_ALLOWLIST', () => {
+  it('allows Review start to run on the data-owning Desktop', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:review:start')).toBe(true);
+  });
   it('allows the reduced teammate directory while keeping native configuration local', () => {
     for (const channel of ['local-db:bots:list', 'local-db:bots:get']) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
@@ -132,6 +135,11 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
 
   it('放行会话后台任务快照只读(任务真身在被控端,后台任务面板挂载水合用)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:session-background-tasks:list')).toBe(true);
+  });
+
+  it('放行后台任务停止(单个 / 全部):任务真身在被控端,控制端本机停止只会假成功', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:agent-task:stop')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:session-background-tasks:stop')).toBe(true);
   });
 
   it('routes durable PI Subagent reads and controls to the data-owning device', () => {

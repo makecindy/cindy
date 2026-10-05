@@ -349,6 +349,17 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
     mimeType = materialized.mime;
   } else {
     ({ absPath, mimeType } = resolveLocalMedia(url));
+    if (!isPathMedia && mimeType?.startsWith('image/')) {
+      try {
+        const source = await stat(absPath);
+        if (!source.isFile()) throw new Error('[MEDIA_SOURCE_MISSING] Media source is not a file');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new Error('[MEDIA_SOURCE_MISSING] Media source is missing on this Host');
+        }
+        throw error;
+      }
+    }
   }
   // For file/audio schemes the requested URL path carries the semantic
   // extension; if it resolves through a symlink whose target has a different
@@ -371,7 +382,8 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
     let real: string;
     try {
       real = await realpath(absPath);
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('[MEDIA_SOURCE_MISSING] Media source is missing on this Host');
       throw new Error('媒体文件不存在或不可读');
     }
     // realpath 再查:挡字面形式看似无害的 symlink 逃逸。

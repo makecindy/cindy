@@ -1,6 +1,7 @@
 import { TaskTagLabels, TaskTagsPanel } from './TaskTags';
 import { TaskTagsSheet, useTaskTagsSheet } from './TaskTagsSheet';
 import type { OpenAiAccountProvider } from './sessionControls';
+import { formatQuotaResetCountdown } from './sessionUsagePresentation';
 /**
  * SessionMenuSheet —— 会话右上角「…」菜单浮窗(取代旧三 tab 的会话设置面板)。
  *
@@ -498,6 +499,15 @@ export function SessionMenuSheet({
     return () => clearTimeout(timer);
   }, [visible, quotaBucketTables, quotaStaleTick]);
 
+  // Countdown labels move with the clock while the sheet is open; the card refreshes
+  // on the same 30s cadence through its usage polling.
+  const [countdownTick, setCountdownTick] = useState(0);
+  useEffect(() => {
+    if (!visible) return undefined;
+    const timer = setInterval(() => setCountdownTick((tick) => tick + 1), 30_000);
+    return () => clearInterval(timer);
+  }, [visible]);
+
   const accountLimits = useMemo(() => {
     const now = Date.now();
     // 账号可能同时有主配额桶与模型专属促销桶(如 GPT-5.3-Codex-Spark), 上游每次
@@ -510,9 +520,11 @@ export function SessionMenuSheet({
       modelId: session.model,
       nowMs: now,
     });
-    return summarizeAccountRateLimits(scoped, now, mobilePresentationLocalizer);
-    // visible / quotaStaleTick 进依赖: 重开与到点失效都要按当前时间重选。
-  }, [accountUsage, i18nInstance.language, quotaBucketTables, session.model, visible, quotaStaleTick]);
+    return summarizeAccountRateLimits(scoped, now, mobilePresentationLocalizer, (resetsAt, windowMinutes) =>
+      formatQuotaResetCountdown(resetsAt, now, t, windowMinutes),
+    );
+    // visible / quotaStaleTick / countdownTick 进依赖: 重开、到点失效与倒计时推进都按当前时间重算。
+  }, [accountUsage, i18nInstance.language, quotaBucketTables, session.model, visible, quotaStaleTick, countdownTick, t]);
   const resetSummary = useMemo(
     () => summarizeCodexRateLimitReset(codexRateLimits, Date.now(), mobilePresentationLocalizer),
     [codexRateLimits, i18nInstance.language],

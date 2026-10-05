@@ -11,7 +11,7 @@ import { computeListContinuation, matchListPrefix } from './composerListContinua
  * 重写逻辑。
  *
  * 与 tiptap 版的差异(纯文本框固有限制):textarea 做不了逐行 inline 缩进
- * 装饰,所以只提供"序号接续 + 空项整删",没有 ChatInput 那个整行缩进的视觉
+ * 装饰,所以只提供"序号接续 + 空项退出",没有 ChatInput 那个整行缩进的视觉
  * 反馈;等宽对齐由消费组件挂 `tabular-nums` class 解决。
  */
 
@@ -68,9 +68,9 @@ export function computeTextareaContinuation(
 }
 
 /**
- * 空列表项整体回删(对齐 Claude / ChatInput):当前行只剩前缀(如 "2. ")且
- * 光标在行尾时,一次 Backspace 删掉整个前缀——非首行连同前面的换行一起删,
- * 光标落到上一行行尾;首行则只删前缀。其余情况返回 null(走默认退格)。
+ * 空列表项退出(对齐 ChatInput):当前行只剩前缀(如 "2. ")且光标在行尾时,
+ * 一次 Backspace 只删掉前缀(含缩进)、保留本行换行,光标停在行首;再按一次
+ * 才走默认退格回到上一行。其余情况返回 null(走默认退格)。
  *
  * "行尾"= 光标后紧跟换行或已到文本末尾;仅光标折叠时生效。
  */
@@ -93,10 +93,8 @@ export function computeTextareaBackspace(
   // 前缀后还有内容 → 正常退格(逐字符删),不整删。
   if (line.slice(match.prefixLength).trim().length > 0) return null;
 
-  // 非首行连同前面的换行一起删。
-  const deleteFrom = lineStart > 0 ? lineStart - 1 : lineStart;
   return {
-    value: value.slice(0, deleteFrom) + value.slice(caret),
-    caret: deleteFrom,
+    value: value.slice(0, lineStart) + value.slice(caret),
+    caret: lineStart,
   };
 }

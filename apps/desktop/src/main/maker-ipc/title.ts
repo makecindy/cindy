@@ -1,7 +1,7 @@
 /**
  * registerMakerTitleIpc — maker:generate-title / maker:regenerate-title
  *
- * 给会话起一个 ≤ 20 字标题。自动起名与 Magic 重命名都走辅助模型链
+ * 给会话起一个 ≤ 40 字符标题。自动起名与 Magic 重命名都走辅助模型链
  * (`generateTitleWithAuxiliaryModel`)，不再按当前任务供应商目录捡最便宜的
  * `titleModel`。起不出来(链上模型都不可用 / 凭证缺失 / HTTP 失败 / 超时)
  * → 返回 null,renderer 回落「消息前 40 字」启发式。fire-and-forget,
@@ -20,6 +20,7 @@ import { eq } from 'drizzle-orm';
 
 import { connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
 import type { AgentKind } from '@cindy/maker-core';
+import { AUTO_TITLE_MAX_CHARS } from '@cindy/maker-shared/session-title';
 
 import { getResolvedMainLocale } from '../i18n.js';
 import { getDbClient } from '../localDb/client/current.js';
@@ -236,10 +237,9 @@ export async function regenerateMakerSessionTitle(
       log.warn('regenerate session title generation failed', context);
       throwIpcError('INTERNAL', 'AI title generation failed');
     }
-    // Regenerate has a stricter product contract than the shared auto-title path:
-    // one line, ≤20 Unicode characters, and no transcript/meta wrapper. The model is
-    // not trusted to enforce this by prompt alone.
-    const title = validateTitleOutput(generated.title, 20);
+    // Match the shared auto-title limit: one line, ≤40 Unicode code points,
+    // and no transcript/meta wrapper. The prompt alone cannot enforce this.
+    const title = validateTitleOutput(generated.title, AUTO_TITLE_MAX_CHARS);
     if (!title) {
       log.warn('regenerate session title rejected model output', {
         sessionId,

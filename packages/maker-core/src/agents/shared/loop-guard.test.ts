@@ -570,6 +570,196 @@ describe('ToolLoopGuard', () => {
   });
 });
 
+describe('ToolLoopGuard pacing and final limits', () => {
+  const ci = { cmd: 'gh api repos/o/r/actions/jobs/1 --jq .status' };
+  const minute = 60_000;
+
+  function clockGuard(options: ConstructorParameters<typeof ToolLoopGuard>[0] = {}) {
+    let now = 0;
+    const guard = new ToolLoopGuard({ now: () => now, ...options });
+    return { guard, advance: (ms: number) => { now += ms; } };
+  }
+
+  it('does not count CI polling separated by real waits (2026-10 PR #18 false positive)', () => {
+    const { guard, advance } = clockGuard();
+    for (let i = 0; i < 40; i++) {
+      // Codex 先 sleep 55s 再查同一个 job;结果长时间不变是正常等待。
+      expect(feed(guard, `sleep-${i}`, 'mcp:clock:sleep', { duration_ms: 55_000 }, 'Sleep completed.').kind).toBe('ok');
+      advance(66_000);
+      expect(feed(guard, `poll-${i}`, 'exec', ci, '{"status":"in_progress"}').kind).toBe('ok');
+    }
+  });
+
+  it('treats a command with a built-in wait as paced polling', () => {
+    const { guard, advance } = clockGuard();
+    for (let i = 0; i < 20; i++) {
+      guard.onToolUse(String(i), 'exec', { cmd: 'sleep 45 && gh run view 1' });
+      advance(46_000);
+      expect(guard.onToolResult(String(i), 'in_progress').kind).toBe('ok');
+    }
+  });
+
+  it('stops identical paced polling after one hour without review', () => {
+    const { guard, advance } = clockGuard();
+    let verdict: ToolLoopGuardVerdict = { kind: 'ok' };
+    let polls = 0;
+    while (verdict.kind === 'ok' && polls < 200) {
+      verdict = feed(guard, String(polls), 'exec', ci, 'in_progress');
+      polls += 1;
+      advance(minute);
+    }
+    // 首次调用在 t=0,第 61 次在 t=60min 时达到时长上限。
+    expect(polls).toBe(61);
+    expect(verdict).toMatchObject({ kind: 'hard', reason: 'consecutive', count: 61, final: true });
+  });
+
+  it('starts the one-hour limit when the first identical result arrives', () => {
+    const { guard, advance } = clockGuard();
+    guard.onToolUse('slow', 'exec', ci);
+    advance(61 * minute);
+    expect(guard.onToolResult('slow', 'done').kind).toBe('ok');
+    // 第一次快速调用距慢调用开始已超过 30 秒,按节奏不计数;之后三次计数到 4。
+    // 相同结果才持续几秒,只能是待复核的疑似,不因首次调用耗时长而直接判定。
+    for (let i = 0; i < 4; i++) {
+      advance(1_000);
+      const verdict = feed(guard, String(i), 'exec', ci, 'done');
+      if (i < 3) expect(verdict.kind).toBe('ok');
+      else expect(verdict).toMatchObject({ kind: 'hard', reason: 'consecutive', count: 4, final: false });
+    }
+  });
+
+  it('keeps paced polling alive while the observed state changes', () => {
+    const { guard, advance } = clockGuard();
+    for (let i = 0; i < 150; i++) {
+      expect(feed(guard, String(i), 'exec', ci, `step-${Math.floor(i / 10)}`).kind).toBe('ok');
+      advance(minute);
+    }
+  });
+
+  it('marks fast repetition as suspected and lets review grant a grace window', () => {
+    const { guard, advance } = clockGuard();
+    const call = (i: number) => {
+      advance(1_000);
+      return feed(guard, String(i), 'read', { path: 'same.ts' }, 'unchanged');
+    };
+    for (let i = 1; i <= 3; i++) expect(call(i).kind).toBe('ok');
+    expect(call(4)).toMatchObject({ kind: 'hard', reason: 'consecutive', count: 4, final: false });
+
+    guard.acceptCurrentPattern(20);
+    for (let i = 5; i <= 24; i++) expect(call(i).kind).toBe('ok');
+    expect(call(25)).toMatchObject({ kind: 'hard', count: 25, final: false });
+    for (let i = 26; i <= 29; i++) expect(call(i)).toMatchObject({ final: false });
+    // 快速完全相同调用的最终上限不受复核放行影响。
+    expect(call(30)).toMatchObject({ kind: 'hard', reason: 'consecutive', count: 30, final: true });
+  });
+
+  it('consumes the review grace window with paced polls too', () => {
+    const { guard, advance } = clockGuard();
+    const fast = (i: number) => {
+      advance(1_000);
+      return feed(guard, `fast-${i}`, 'read', { path: 'same.ts' }, 'unchanged');
+    };
+    for (let i = 1; i <= 4; i++) fast(i);
+    guard.acceptCurrentPattern(20);
+    for (let i = 0; i < 20; i++) {
+      advance(minute);
+      expect(feed(guard, `poll-${i}`, 'exec', ci, 'in_progress').kind).toBe('ok');
+    }
+    // 放行额度已被节奏轮询用完,新的快速重复照常报疑似。
+    for (let i = 5; i <= 7; i++) expect(fast(i).kind).toBe('ok');
+    expect(fast(8)).toMatchObject({ kind: 'hard', reason: 'consecutive', count: 4, final: false });
+  });
+
+  it('does not let one paced call hide surrounding fast repetitions', () => {
+    const { guard, advance } = clockGuard();
+    const verdicts: ToolLoopGuardVerdict[] = [];
+    for (const gap of [1_000, 1_000, 1_000, 40_000, 1_000]) {
+      advance(gap);
+      verdicts.push(feed(guard, String(verdicts.length), 'read', { path: 'same.ts' }, 'unchanged'));
+    }
+    expect(verdicts.slice(0, 4).every((verdict) => verdict.kind === 'ok')).toBe(true);
+    expect(verdicts[4]).toMatchObject({ kind: 'hard', reason: 'consecutive', count: 4, final: false });
+  });
+
+  it('lets a paced command break the long read window', () => {
+    const { guard, advance } = clockGuard();
+    for (let i = 0; i < 127; i++) {
+      advance(1_000);
+      expect(feed(guard, `read-${i}`, 'grep', { pattern: `symbol-${i % 6}` }, `file-${i % 6}: match`).kind).toBe('ok');
+    }
+    advance(40_000);
+    expect(feed(guard, 'build', 'exec', { cmd: 'pnpm build' }, 'done').kind).toBe('ok');
+    advance(1_000);
+    expect(feed(guard, 'read-127', 'grep', { pattern: 'symbol-1' }, 'file-1: match').kind).toBe('ok');
+  });
+
+  it('marks long stable read rotations as final', () => {
+    const guard = new ToolLoopGuard();
+    let verdict: ToolLoopGuardVerdict = { kind: 'ok' };
+    for (let i = 0; i < 128; i++) {
+      verdict = feed(guard, String(i), 'grep', { pattern: `symbol-${i % 6}` }, `file-${i % 6}: match`);
+    }
+    expect(verdict).toMatchObject({ kind: 'hard', reason: 'rotation', count: 128, final: true });
+  });
+
+  it('keeps the latest captured calls as review evidence and clears them per turn', () => {
+    const { guard, advance } = clockGuard();
+    for (let i = 0; i < 15; i++) {
+      guard.onToolUse(String(i), 'exec', { cmd: `step ${i}` });
+      advance(2_000);
+      guard.onToolResult(String(i), i === 14 ? 'x'.repeat(5_000) : `out ${i}`, i === 13);
+    }
+    const evidence = guard.recentEvidence();
+    expect(evidence).toHaveLength(12);
+    expect(evidence[0]).toMatchObject({ toolName: 'exec', input: { cmd: 'step 3' }, output: 'out 3' });
+    expect(evidence[10]).toMatchObject({ isError: true, startedAt: 26_000, finishedAt: 28_000 });
+    // 只为限制内存截取未脱敏原文;脱敏与发送截断由发送方负责。
+    // 截取点落在连续串中间:整段连续串一起丢掉,不留残缺前缀。
+    expect(evidence[11]?.output).toBe('…(+5000 chars)');
+    guard.resetTurn();
+    expect(guard.recentEvidence()).toEqual([]);
+  });
+
+  it('drops a token fragment cut by the capture limit but keeps earlier context', () => {
+    const guard = new ToolLoopGuard();
+    // 3990 字符的普通内容之后紧跟一个跨越 4000 截取点的长连续串(形同令牌)。
+    const output = `${'ok '.repeat(1330)}${'Z'.repeat(60)} tail`;
+    feed(guard, '1', 'exec', { cmd: 'env' }, output);
+    const captured = guard.recentEvidence()[0]?.output ?? '';
+    expect(captured).toBe(`${'ok '.repeat(1330)}…(+${output.length - 3990} chars)`);
+  });
+
+  it('drops the whole line cut by the capture limit, including quoted values', () => {
+    const guard = new ToolLoopGuard();
+    const head = `${'ok '.repeat(1320)}\n`;
+    const output = `${head}tool login --token "correct horse battery staple and more words"\nnext line`;
+    feed(guard, '1', 'exec', { cmd: 'env' }, output);
+    expect(guard.recentEvidence()[0]?.output).toBe(`${head}…(+${output.length - head.length} chars)`);
+  });
+
+  it('drops an unterminated quoted value when the cut has no newline', () => {
+    const guard = new ToolLoopGuard();
+    const head = `${'ok '.repeat(1320)}tool login --token `;
+    const output = `${head}"correct horse battery staple and more words"`;
+    feed(guard, '1', 'exec', { cmd: 'env' }, output);
+    const captured = guard.recentEvidence()[0]?.output ?? '';
+    expect(captured).not.toContain('horse');
+    expect(captured).not.toContain('correct');
+    expect(captured).toBe(`${head}…(+${output.length - head.length} chars)`);
+  });
+
+  it('keeps structured input as a bounded copy instead of serializing it', () => {
+    const guard = new ToolLoopGuard();
+    const input = { cmd: 'tool login --token "tok live value"', body: 'y'.repeat(5_000), nested: { a: [1, { b: 'c' }] } };
+    feed(guard, '1', 'exec', input, 'ok');
+    const captured = guard.recentEvidence()[0]?.input as Record<string, unknown>;
+    expect(captured.cmd).toBe('tool login --token "tok live value"');
+    expect(captured.body).toBe('…(+5000 chars)');
+    expect(captured.nested).toEqual({ a: [1, { b: 'c' }] });
+    expect(captured).not.toBe(input);
+  });
+});
+
 describe('classifyToolContractError', () => {
   it('逐类别识别稳定错误文案', () => {
     expect(classifyToolContractError('Edit', 'The required parameter `file_path` is missing')).toBe('missing_required_field');

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const loadImageSourceBase64 = vi.fn();
 const isImageBytesReachable = vi.fn();
@@ -14,6 +14,7 @@ const {
   SHARE_EXCLUDE_ATTR,
   SHARE_MESSAGE_ATTR,
   SHARE_SESSION_ATTR,
+  SHARE_SOURCE_ATTR,
   ShareImageTooLargeError,
   assertShareImageReadableSize,
   buildShareImageFooter,
@@ -23,12 +24,14 @@ const {
   redactTextNodes,
   stripCloneAnchors,
   stripInteractiveElements,
+  stripMessageSources,
 } = await import('@/lib/shareConversationImage');
 
 beforeEach(() => {
   vi.clearAllMocks();
   document.body.innerHTML = '';
 });
+afterEach(() => vi.unstubAllGlobals());
 
 function root(html: string): HTMLElement {
   const el = document.createElement('div');
@@ -49,6 +52,29 @@ describe('stripInteractiveElements', () => {
     expect(el.textContent).toContain('正文内容');
     expect(el.textContent).toContain('段落');
     expect(el.textContent).not.toContain('hover 工具栏');
+  });
+});
+
+describe('stripMessageSources', () => {
+  it('分享图不带任何消息来源标注,只留正文', () => {
+    const el = root(`
+      <span ${SHARE_SOURCE_ATTR}>张三</span>
+      <div ${SHARE_SOURCE_ATTR}>
+        <button data-message-origin="scheduler">由自动化「Nightly」发送</button>
+        <span data-message-origin="device">从手机「iPhone」发送</span>
+      </div>
+      <div class="hook-card">
+        <div ${SHARE_SOURCE_ATTR}>Cindy · 来自 Slack</div>
+        <div class="body">帮我看下这个报错</div>
+      </div>
+      <div class="bubble">正文内容</div>
+    `);
+    stripMessageSources(el);
+    expect(el.querySelectorAll(`[${SHARE_SOURCE_ATTR}]`)).toHaveLength(0);
+    expect(el.querySelector('[data-message-origin]')).toBeNull();
+    expect(el.textContent).not.toMatch(/张三|自动化|手机|Slack/);
+    expect(el.textContent).toContain('帮我看下这个报错');
+    expect(el.textContent).toContain('正文内容');
   });
 });
 
@@ -118,6 +144,27 @@ describe('redactTextNodes', () => {
 });
 
 describe('inlineCloneImages', () => {
+  it('preserves bundled relative avatars without routing app assets through privileged image reads', async () => {
+    isImageBytesReachable.mockReturnValue(false);
+    const fetchAsset = vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(['avatar'], { type: 'image/png' }) });
+    vi.stubGlobal('fetch', fetchAsset);
+    const el = root('<img src="./assets/cindy.png" loading="lazy" srcset="other.png 2x" />');
+    await inlineCloneImages(el);
+    expect(fetchAsset).toHaveBeenCalledWith('./assets/cindy.png');
+    expect(loadImageSourceBase64).not.toHaveBeenCalled();
+    expect(el.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,YXZhdGFy');
+    expect(el.querySelector('img')?.getAttribute('loading')).toBe('eager');
+    expect(el.querySelector('img')?.hasAttribute('srcset')).toBe(false);
+  });
+
+  it('drops relative asset responses that are HTML instead of images', async () => {
+    isImageBytesReachable.mockReturnValue(false);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(['fallback'], { type: 'text/html' }) }));
+    const el = root('<img src="/missing.png" />');
+    await inlineCloneImages(el);
+    expect(el.querySelector('img')).toBeNull();
+  });
+
   it('自定义协议图换成 data URL(否则 canvas 会被 taint)', async () => {
     isImageBytesReachable.mockReturnValue(true);
     loadImageSourceBase64.mockResolvedValue({ base64: 'AAAA', mimeType: 'image/png' });

@@ -51,6 +51,8 @@ export const DL_UNSUBSCRIBE_CHANNEL = 'device-link:unsubscribe';
  * 不出被控端。老被控端响应无此字段 → 控制端按无终态降级。
  */
 export const DL_HISTORY_MESSAGES_CHANNEL = 'local-db:history:messages';
+/** Same-account, linked, read-only history discovery/search. No shared-task or unlinked access. */
+export const DL_HISTORY_QUERY_CHANNEL = 'local-db:history:query';
 
 /**
  * 会话引用消费能力探针。控制端在发送含引用快照的队列消息前必须先调用；
@@ -162,6 +164,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:list-active',
   'maker:any-session-in-turn',
   'maker:session-in-turn',
+  // Review evidence and the Reviewer session are created on the data-owning
+  // device. The handler remains host-owned; this only permits the explicit
+  // start request to cross the device-link tunnel.
+  'maker:review:start',
   // —— 输入队列(input queue 全集,无本机副作用)——
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
   'maker:input:get-projection',
@@ -277,6 +283,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // projection.
   'local-db:conversations:search',
   DL_HISTORY_MESSAGES_CHANNEL,
+  DL_HISTORY_QUERY_CHANNEL,
   'local-db:messages:list',
   // Read-only visible history and recoverable work ranges; same session authorization as list.
   'local-db:messages:view',
@@ -430,6 +437,11 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 两侧都不做乐观收口 —— 任务确实还在跑。
   // 不进 INVOKE_TIMEOUT_OVERRIDES_MS:SIGTERM 宽限 + SIGKILL 确认最坏 ≈ 4s,默认 30s 够用。
   'maker:agent-task:stop',
+  // 会话级「全部停止」(写):handler 按 sessionId 操作被控端活跃会话的后台任务,
+  // 无 event.sender 依赖、无本机 UI 副作用;任务真身在被控端,控制端本机调用只会假成功。
+  // 仅同账号远控,不进 sharedTask 访客白名单。老被控端无此 channel → CHANNEL_NOT_ALLOWED
+  // → 控制端提示升级被控端。
+  'maker:session-background-tasks:stop',
   // Durable PI Subagent truth and process handles live on the data-owning device.
   // Reads and exact controls must execute there; the controller must never fall
   // back to its own pi-agent-home for a remote task.
@@ -749,6 +761,9 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
  * client-agnostic:mobile/web 控制端应使用同一映射(与 allowlist 同为协议契约)。
  */
 export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
+  // Evidence collection may include git diff and bounded artifact reads before
+  // the host can acknowledge the newly-created Reviewer session.
+  'maker:review:start': 90_000,
   // Two Git preflight/apply stages each allow 30s, plus snapshot and queue overhead.
   'maker:turn-change-set:apply': 90_000,
   [FILE_PEER_CHANNEL]: 30_000,

@@ -31,6 +31,20 @@ import type { LedgerDb } from './ledger';
 
 const log = createLogger('cindy-media-recycler');
 
+/** Called under the client wallpaper publication lock after saving its reference.
+ * This scope cannot contain chat/attachment bytes; never delete ordinary blobs.
+ * A later successful operation also retries failed cleanup or interrupted imports.
+ */
+export async function recycleClientWallpapers(keepUrls: string[], ext: '.webp' | '.mp4'): Promise<void> {
+  const keep = new Set(keepUrls.map((url) => blobStore.parseClientWallpaperUrl(url)?.hash).filter(Boolean));
+  const { entries } = await blobStore.listBlobFiles('client-wallpaper');
+  for (const entry of entries) {
+    if (entry.ext === ext && !keep.has(entry.hash))
+      await blobStore.deleteBlobFile(entry.hash, entry.ext, 'client-wallpaper');
+  }
+  await blobStore.cleanupTmpFiles(TMP_FILE_MAX_AGE_MS, 'client-wallpaper');
+}
+
 /** 零引用缓冲期(内部常量,规则 20 隐藏层):入库与最后访问都早于此才候选。 */
 export const ZERO_REF_BUFFER_MS = 72 * 60 * 60 * 1000;
 /** cache 总量上限(§4 默认 512MB 量级;内部常量,规则 20 隐藏层)。 */

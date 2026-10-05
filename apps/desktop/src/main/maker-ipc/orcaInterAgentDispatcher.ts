@@ -2,6 +2,8 @@ import {
   formatAgentMessage,
   formatOrcaCommunicationMessage,
 } from '@cindy/orca-workflow';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
+import { restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
 import type { AgentKind, SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
 
 import type {
@@ -54,6 +56,7 @@ export interface DispatchOrcaInterAgentMessageParams {
   workerId?: string;
   /** Synchronous reserve boundary hook; must return before drain is scheduled. */
   onReserved?: () => void;
+  beforeReserve?: () => Promise<void>;
   onAccepted?: () => void | Promise<void>;
   onAcceptedRollback?: () => void | Promise<void>;
   onAcceptedCommit?: () => void | Promise<void>;
@@ -115,6 +118,7 @@ export type OrcaInterAgentSendToSessionInternalResult =
 
 /** 通过既有 sendToSessionInternal 重建或排队目标 session 时传入的最小参数。 */
 export interface OrcaInterAgentSendToSessionInternalParams {
+  autoReviewUserText: { kind: 'delegated-continuation' };
   targetSessionId: string;
   message: string;
   persistedContent: string;
@@ -133,6 +137,7 @@ export interface OrcaInterAgentDispatcherLogger {
 
 /** Orca dispatcher 的 I/O 边界，register.ts 只负责注入 DB、Maker、queue 和 role 解析能力。 */
 export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
+  readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
   createId: () => string;
   getSessionMeta: (sessionId: string) => Promise<TSessionMeta | null>;
   getSessionRowSnapshot: (sessionId: string) => Promise<OrcaInterAgentSessionRowSnapshot | null>;
@@ -156,6 +161,7 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     sessionId: string,
     item: AgentInputQueuedMessage,
     onReserved?: () => void,
+    beforeReserve?: () => Promise<void>,
   ) => Promise<boolean>;
   sendToSessionInternal: (
     params: OrcaInterAgentSendToSessionInternalParams,
@@ -171,6 +177,10 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   ) => Promise<unknown>;
   beginDirectTurnChangeSet: (sessionId: string, clientId: string) => Promise<void>;
   abortDirectTurnChangeSet: (sessionId: string) => void;
+  /**
+   * 反查 worker 的 role，查不到返回 fallback。dispatcher 以空串作 fallback 区分「未知」，
+   * role 同时用于来源标签与发给 lead 的 `[From Orca Worker <role> (worker_id: …)]` 前缀。
+   */
   resolveWorkerSenderLabel: (workerId: string, fallback: string) => Promise<string>;
   /**
    * 反查 worker 所在的 Lead / Worker 会话，给消息来源标签定位发送方会话。
@@ -327,7 +337,12 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     }
 
     const clientId = deps.createId();
-    const agentMessageText = formatAgentMessage(params.source, params.rawContent, params.workerId);
+    // worker 回报的前缀要带发件 worker 的 role,需要反查;只查一次,文本与来源标签共用。
+    let workerRolePromise: Promise<string | undefined> | undefined;
+    const resolveRole = (): Promise<string | undefined> =>
+      (workerRolePromise ??= resolveOrcaWorkerRole(deps, params));
+    const buildAgentMessageText = async (): Promise<string> =>
+      formatAgentMessage(params.source, params.rawContent, params.workerId, await resolveRole());
     const persistedContent = formatOrcaCommunicationMessage(params.source, params.rawContent);
     let acceptedDidRun = false;
     const runAccepted = async (): Promise<void> => {
@@ -357,14 +372,8 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         : null,
     };
     // senderLabel 口径 = worker 的 role。包侧路径只有 workerId 可传, host 这里反查 role 覆盖。
-    const resolveSenderLabel = async (): Promise<string> => {
-      if (params.source !== 'worker' || !params.workerId) return params.senderLabel;
-      try {
-        return await deps.resolveWorkerSenderLabel(params.workerId, params.senderLabel);
-      } catch {
-        return params.senderLabel;
-      }
-    };
+    const resolveSenderLabel = async (): Promise<string> =>
+      (await resolveRole()) ?? params.senderLabel;
     const resolveOrigin = async (): Promise<NonNullable<AgentInputQueuedMessage['origin']>> => {
       const [senderLabel, senderSessionId] = await Promise.all([
         resolveSenderLabel(),
@@ -381,7 +390,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
       const queued = buildQueuedOrcaInterAgentMessage({
         clientId,
-        agentMessageText,
+        agentMessageText: await buildAgentMessageText(),
         persistedContent,
         origin: await resolveOrigin(),
         createOpts,
@@ -421,8 +430,9 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     try {
       const sendToInternal = async (): Promise<DispatchOrcaInterAgentMessageResult> => {
         const result = await deps.sendToSessionInternal({
+          autoReviewUserText: { kind: 'delegated-continuation' },
           targetSessionId: params.targetSessionId,
-          message: agentMessageText,
+          message: await buildAgentMessageText(),
           persistedContent,
           clientId,
           onAccepted: runAccepted,
@@ -469,7 +479,10 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         await deps.prepareUnhealthySession?.(params.targetSessionId);
         const live = deps.getLiveSession(params.targetSessionId);
         if (!live) return null;
-        const origin = await resolveOrigin();
+        const [origin, agentMessageText] = await Promise.all([
+          resolveOrigin(),
+          buildAgentMessageText(),
+        ]);
         const result = await sendPersistedUserMessageToSession(deps, {
           session: live,
           dbContent: persistedContent,
@@ -544,18 +557,12 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
 
     const clientId = deps.createId();
     const createOpts = await deps.buildCreateOptsForQueuedSession(params.targetSessionId, meta);
-    let senderLabel = params.senderLabel;
-    if (params.source === 'worker' && params.workerId) {
-      try {
-        senderLabel = await deps.resolveWorkerSenderLabel(params.workerId, params.senderLabel);
-      } catch {
-        senderLabel = params.senderLabel;
-      }
-    }
+    const workerRole = await resolveOrcaWorkerRole(deps, params);
+    const senderLabel = workerRole ?? params.senderLabel;
     const senderSessionId = await resolveOrcaSenderSessionId(deps, params);
     const queued = buildQueuedOrcaInterAgentMessage({
       clientId,
-      agentMessageText: formatAgentMessage(params.source, params.rawContent, params.workerId),
+      agentMessageText: formatAgentMessage(params.source, params.rawContent, params.workerId, workerRole),
       persistedContent: formatOrcaCommunicationMessage(params.source, params.rawContent),
       origin: {
         kind: 'orca',
@@ -580,6 +587,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         params.targetSessionId,
         queued,
         params.onReserved,
+        params.beforeReserve,
       );
     } catch (err) {
       if (!callbackAlreadyRegistered) {
@@ -636,6 +644,23 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
   };
 }
 
+/**
+ * worker 发出的消息反查其 role（lead 发出的消息不需要）。查不到或出错返回 undefined，
+ * 消息照常投递：前缀退回只带 worker_id，来源标签退回调用方给的 senderLabel。
+ */
+async function resolveOrcaWorkerRole<TSessionMeta>(
+  deps: OrcaInterAgentDispatcherDeps<TSessionMeta>,
+  params: Pick<DispatchOrcaInterAgentMessageParams, 'source' | 'workerId'>,
+): Promise<string | undefined> {
+  if (params.source !== 'worker' || !params.workerId) return undefined;
+  try {
+    const role = (await deps.resolveWorkerSenderLabel(params.workerId, '')).trim();
+    return role || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Lead 发出的消息来源是 Lead 会话，Worker 发出的是 Worker 会话；都以 workerId 反查。 */
 async function resolveOrcaSenderSessionId<TSessionMeta>(
   deps: OrcaInterAgentDispatcherDeps<TSessionMeta>,
@@ -666,17 +691,21 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
 ): Promise<CollabDirectDispatchResult> {
   const { session, dbContent, agentMessage, clientId = deps.createId(), source, context, origin, onAccepted } = params;
   let turnChangeSetStarted = false;
+  const humanIntent = restoreAutoReviewUserIntent(await deps.readAutoReviewHistory?.(session.id) ?? []);
   const result = await resolveCollabDispatchResult(
     () => session.send(agentMessage, {
       planMode: false,
       throwOnStartFailure: true,
+      [AUTO_REVIEW_SOURCE_CONTENT]: '',
+      [AUTO_REVIEW_USER_INTENT]: humanIntent,
+      [AUTO_REVIEW_DELEGATED_CONTINUATION]: true,
       onAccepted: async () => {
         // maker-core 会在 vendor handle.send 前 await 此 hook；必须先落库，再运行 accepted 副作用。
         await deps.createDbMessage(session.id, {
           clientId,
           role: 'user',
           content: dbContent,
-          ...(origin ? { agentMeta: { origin } } : {}),
+          agentMeta: { ...(origin ? { origin } : {}), autoReviewUserText: { kind: 'delegated-continuation' }, delivery: 'turn' },
         });
         await deps.beginDirectTurnChangeSet(session.id, clientId);
         turnChangeSetStarted = true;
@@ -739,6 +768,7 @@ function buildQueuedOrcaInterAgentMessage(params: {
   return {
     clientId: params.clientId,
     text: params.agentMessageText,
+    autoReviewUserText: { kind: 'delegated-continuation' },
     persistedContent: params.persistedContent,
     model: params.createOpts.model,
     effort: params.createOpts.effort ?? '',

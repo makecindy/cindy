@@ -311,6 +311,22 @@ try {
     ),
     'menu keyboard navigation never reaches the remote computer',
   );
+  // Fixed short choices use the shared segmented control; reselecting the current
+  // option keeps the fixture's negotiated settings unchanged.
+  const checkSegmented = async (name, option, screenshot) => {
+    const group = settings.getByRole('radiogroup', { name, exact: true });
+    const choice = group.getByRole('radio', { name: option, exact: true });
+    await choice.click();
+    assert((await choice.getAttribute('aria-checked')) === 'true', `${name} keeps ${option}`);
+    const bounds = await group.boundingBox();
+    const viewport = viewer.viewportSize();
+    assert(bounds && viewport, `${name} is visible`);
+    assert(
+      bounds.x >= 0 && bounds.x + bounds.width <= viewport.width,
+      `${name} stays within horizontal bounds`,
+    );
+    await viewer.screenshot({ animations: 'disabled', path: path.join(artifacts, screenshot) });
+  };
   const checkExitDialog = async (theme) => {
     const labels = await viewer.evaluate(async () => {
       const catalog = (await import('/i18n/index.ts')).default;
@@ -401,7 +417,7 @@ try {
     animations: 'disabled',
     path: path.join(artifacts, 'settings-zh-dark.png'),
   });
-  await checkSelect(settings.getByRole('combobox').first(), 'fps-select-zh-dark.png');
+  await checkSegmented('帧率', '30 fps', 'fps-segmented-zh-dark.png');
   await viewer.evaluate(async () => {
     const { themeService } = await import('/themes/theme-service.ts');
     const { cindyLight } = await import('/themes/builtin/cindy-light.ts');
@@ -411,7 +427,7 @@ try {
     animations: 'disabled',
     path: path.join(artifacts, 'settings-zh-light.png'),
   });
-  await checkSelect(settings.getByRole('combobox').nth(1), 'quality-select-zh-light.png');
+  await checkSegmented('画质', '自动', 'quality-segmented-zh-light.png');
   const desktopButton = settings.getByRole('button', { name: '桌面', exact: true });
   assert(await desktopButton.isEnabled(), 'desktop viewer opens with control');
   await viewer.waitForFunction(() => {
@@ -451,7 +467,7 @@ try {
     toolbar && settingsBounds && settingsBounds.y >= toolbar.y + toolbar.height,
     'settings follow the wrapped toolbar',
   );
-  await checkSelect(settings.getByRole('combobox').first(), 'fps-select-narrow.png');
+  await checkSegmented('帧率', '30 fps', 'fps-segmented-narrow.png');
   await viewer.setViewportSize({ width: 720, height: 420 });
   if (controllerPlatform === 'darwin') {
     await viewer.getByRole('button', { name: '关闭', exact: true }).click();

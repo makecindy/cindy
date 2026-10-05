@@ -1,3 +1,5 @@
+import type { TFunction } from 'i18next';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 /**
  * BackgroundTasksBody —— 「后台任务」tab 的内容区。
  *
@@ -58,12 +60,13 @@ import { getSessionDeviceId, useRemoteDevices } from '@/features/device-link/rem
 import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import { makerChatStore, EMPTY_TASK_UPDATES } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate, ChatMessage } from '@/lib/makerChatStore';
+import { canManageBackgroundTasks, stopBackgroundTask } from '@/lib/backgroundTaskStop';
+import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
 import {
   canStopAgentTask,
   getWorkflowProgressFor,
   isRemoteSessionSticky,
   readSessionBackgroundTasks,
-  stopAgentTaskFor,
 } from '@/lib/makerTransport';
 import { formatCompactTokens } from '@/lib/usageFormat';
 import type { Message } from '@/lib/ccAgent.types';
@@ -172,15 +175,11 @@ function statusIcon(status: string): LucideIcon {
   return LoaderCircle;
 }
 
-/** 毫秒 → 紧凑时长文案(与 AgentTaskCard 同口径;该实现未导出,此处内联)。 */
-function formatDuration(ms: number | undefined): string | undefined {
+/** 与 AgentTaskCard 共用长耗时换算,保留亚秒精度。 */
+function formatDuration(ms: number | undefined, t?: TFunction): string | undefined {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
   if (ms < 1000) return `${ms}ms`;
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+  return formatSessionDuration(ms, t);
 }
 
 /** workflow 行副标题:workflow_agent 条目 done/error 计数 / 总数。 */
@@ -203,10 +202,8 @@ function workflowAgentCounts(
 }
 
 /** 停止按钮 gating(与 AgentTaskCard 同口径):running + claude-code + 有 taskId +
- *  有可信的停止目标。远程镜像会话不再一律隐藏:stopAgentTaskFor 会把请求隧道到任务
- *  真身所在的被控端(append-only 新通道,老被控端 CHANNEL_NOT_ALLOWED → 失败提示)。
- *  仍然隐藏的只有「看起来是远程镜像、当下又拿不到设备」这一种(relay 注册表未水合):
- *  那条路径上本地调用会假成功,不给按钮。粘滞判定保证瞬断窗口不误判为本机。 */
+ *  有可信的停止目标(remote 镜像会话隧道到被控端;拿不到设备的老被控端不给按钮,
+ *  粘滞判定保证瞬断窗口不误判为本机)且有后台任务管理权(共享任务访客没有)。 */
 function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
   // 远程镜像会话：能不能停由**被控端的 channel** 决定（PI 后台命令自 #4700 起可停），
   // 控制端不按 provider 预筛；停不掉时由 StopButton 把「停止未确认」就地呈现。
@@ -219,13 +216,15 @@ function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
     item.status === 'running' &&
     providerCanStop &&
     Boolean(item.update?.taskId) &&
-    canStopAgentTask(sessionId)
+    // 与 AgentTaskCard 同一对判据:可信停止目标 + 后台任务管理权。
+    canStopAgentTask(sessionId) && Boolean(sessionId && canManageBackgroundTasks(sessionId))
   );
 }
 
-/** 停止按钮:在飞防连点、失败静默,状态翻转由事件流收口(不改本地状态)。
+/** 停止按钮:在飞防连点,状态翻转由事件流收口(不改本地状态)。
  *  onStopStart/onStopFailed 把「同一次点击」的起止告诉宿主:宿主据此先收掉上一次的
- *  失败提示、仅在本次失败时重新写上。 */
+ *  失败提示、仅在本次失败时重新写上。toast 只覆盖用户能立刻处理的远程失败
+ *  (reportBackgroundTaskStopFailure),其余失败留在行内就地说明。 */
 function StopButton({
   sessionId,
   taskId,
@@ -247,15 +246,16 @@ function StopButton({
       setStopping(true);
       // 重试先收掉上一次的「停止未确认」,再发本次请求;本次失败会在 catch 重新写上。
       onStopStart?.();
-      void stopAgentTaskFor(sessionId, taskId)
-        .catch(() => {
+      void stopBackgroundTask(sessionId, taskId)
+        .catch((error: unknown) => {
           // 不装成功:老被控端(无此 channel)等失败会让任务真的还在跑 —— 在行上就地
-          // 呈现「停止未确认」,按钮留着可重试。
+          // 呈现「停止未确认」,按钮留着可重试;可立即处理的远程失败额外给一句 toast。
+          reportBackgroundTaskStopFailure(error, t);
           onStopFailed();
         })
         .finally(() => setStopping(false));
     },
-    [sessionId, taskId, stopping, onStopFailed, onStopStart],
+    [sessionId, taskId, stopping, t, onStopFailed, onStopStart],
   );
   const actionLabel = t('rightSidebar.backgroundTasks.stop');
   const label = stopping
@@ -344,7 +344,7 @@ function TaskRow({
       }
     }
     const usage = item.update?.usage;
-    const duration = formatDuration(usage?.durationMs);
+    const duration = formatDuration(usage?.durationMs, t);
     if (duration) parts.push(duration);
     if (typeof usage?.totalTokens === 'number') {
       parts.push(

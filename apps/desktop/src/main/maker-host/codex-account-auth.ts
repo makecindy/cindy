@@ -4,7 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import type { AuthState } from '@cindy/maker-core';
+import type { AgentDeps, AuthState } from '@cindy/maker-core';
 import { getActiveAppSession } from '../appSessionState.js';
 import { getCachedBinaryStatus, isVettedAgentBinaryPath } from '../agent-binaries/index.js';
 import { getActiveCatalog } from './active-catalog.js';
@@ -41,11 +41,16 @@ export async function invalidateCodexAccount(providerId: string, reason: string,
   await retireAccount(providerId);
 }
 
+/** 当前账号在 `codex-accounts/` 下的目录名(owner id 的 sha256);没有登录的账号时为 null。 */
+export function codexAccountOwnerDir(): string | null {
+  const ownerId = getActiveAppSession().dataOwnerId;
+  return ownerId ? createHash('sha256').update(ownerId).digest('hex') : null;
+}
+
 export function codexAccountHome(providerId: string): string {
   if (!/^[a-z0-9_-]{1,40}$/.test(providerId)) throw new Error('Invalid Codex provider id');
-  const ownerId = getActiveAppSession().dataOwnerId;
-  if (!ownerId) throw new Error('An active owner is required');
-  const owner = createHash('sha256').update(ownerId).digest('hex');
+  const owner = codexAccountOwnerDir();
+  if (!owner) throw new Error('An active owner is required');
   return path.join(app.getPath('userData'), 'codex-accounts', owner, providerId);
 }
 
@@ -120,10 +125,10 @@ export function codexAccountState(providerId: string): AuthState {
   }
 }
 
-export async function prepareCodexAccountHome(providerId: string): Promise<string> {
+export async function prepareCodexAccountHome(providerId: string, managedRoots: readonly string[], managedSkills: Awaited<ReturnType<NonNullable<AgentDeps['getManagedSkills']>>>): Promise<string> {
   if (!codexAccountState(providerId).authenticated) throw new Error('Codex account requires login');
   const home = codexAccountHome(providerId);
-  await Promise.all([prepareCodexGlobalSkillsLinks(home), prepareCodexGlobalRulesCopy(home)]);
+  await Promise.all([prepareCodexGlobalSkillsLinks(home, { managedRoots, managedSkills }), prepareCodexGlobalRulesCopy(home)]);
   const plugins = await prepareCodexGlobalPluginsBridge(home, {
     capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
   });

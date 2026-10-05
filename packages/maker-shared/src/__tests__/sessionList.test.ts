@@ -446,6 +446,23 @@ describe('sessionList', () => {
     });
   });
 
+  it('carries the latest schedule next run time and omits it when the host has none', () => {
+    const nextFireAt = Date.parse('2026-01-01T00:15:00.000Z');
+    const index = buildSessionScheduleIndex([
+      schedule('sched-1', { nextFireAt }),
+      schedule('sched-2', { status: 'paused', nextFireAt: undefined }),
+      schedule('sched-3', { targetSessionId: 's3', nextFireAt: new Date(nextFireAt).toISOString() }),
+    ], new Map([
+      ['sched-1', [run('run-1', 'sched-1', { sessionId: 's1' })]],
+      ['sched-2', [run('run-2', 'sched-2', { sessionId: 's2' })]],
+    ]));
+
+    expect(index.get('s1')?.nextFireAt).toBe(nextFireAt);
+    expect(index.get('s2')).not.toHaveProperty('nextFireAt');
+    // 持久绑定会话没有 run 也要带上下次运行时间(ISO 时间戳归一为毫秒)。
+    expect(index.get('s3')?.nextFireAt).toBe(nextFireAt);
+  });
+
   it('groups multiple automation-generated sessions from the same schedule', () => {
     const now = new Date('2026-01-01T00:10:00.000Z').getTime();
     const scheduleIndex = buildSessionScheduleIndex([

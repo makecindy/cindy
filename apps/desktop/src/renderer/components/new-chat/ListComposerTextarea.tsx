@@ -8,7 +8,7 @@ import {
 
 /**
  * ListComposerTextarea —— 原生 `<textarea>` 的直替换包装,统一附带 composer
- * 列表输入辅助(Shift/Alt+Enter 序号接续、空列表项一次退格整删),并默认启用
+ * 列表输入辅助(Shift/Alt+Enter 序号接续、空列表项一次退格退出),并默认启用
  * `tabular-nums` 让多行序号对齐。
  *
  * 设计目标是"写一次、到处一行接入":列表逻辑集中在这里(纯逻辑复用
@@ -83,7 +83,7 @@ export const ListComposerTextarea = forwardRef<HTMLTextAreaElement, ListComposer
             return;
           }
         }
-        // Backspace(无修饰)— 空列表项整体回删。
+        // Backspace(无修饰)— 空列表项退出(只删前缀、保留换行)。
         else if (event.key === 'Backspace' && noHardMods && !event.altKey && !event.shiftKey) {
           const edit = computeTextareaBackspace(el.value, selStart, selEnd);
           if (edit) {

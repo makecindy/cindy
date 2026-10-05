@@ -51,7 +51,15 @@ try {
           failWrite = false;
         const ticket = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
         const host = createFilePeerRuntime({
-          invoke: async (_id, value) => value,
+          // Body requests echo a digest of the raw bytes so the client can verify them.
+          invoke: async (_id, value, body) =>
+            body
+              ? JSON.stringify({
+                  value,
+                  length: body.length,
+                  digest: body.reduce((sum, byte) => (sum * 31 + byte) >>> 0, 0),
+                })
+              : value,
           read: async (_id, t, offset) => {
             if (benchmark) await new Promise(resolve => setTimeout(resolve, 1));
             if (t !== ticket || offset !== sourceOffset)
@@ -97,6 +105,29 @@ try {
           );
           if (replies.join("") !== "abcd")
             throw new Error("RPC correlation failed");
+          // Binary request bodies around the 16 KiB frame boundary, up to the 1 MiB block.
+          const withBody = (value, length) => {
+            const bytes = Uint8Array.from({ length }, (_, i) => (i * 7 + length) % 256);
+            let binary = "";
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            const digest = bytes.reduce((sum, byte) => (sum * 31 + byte) >>> 0, 0);
+            return client
+              .invoke("client", value, undefined, btoa(binary))
+              .then((reply) => {
+                const r = JSON.parse(reply);
+                if (r.value !== value || r.length !== length || r.digest !== digest)
+                  throw new Error("RPC body differs");
+              });
+          };
+          for (const length of [1, 16384, 16385, 1048576]) await withBody("body", length);
+          // Three bodies in flight beside a plain request stay correlated.
+          const [, plain] = await Promise.all([
+            withBody("first", 1048576),
+            client.invoke("client", "plain"),
+            withBody("second", 300000),
+            withBody("third", 1048576),
+          ]);
+          if (plain !== "plain") throw new Error("RPC correlation with bodies failed");
           const stats = JSON.parse(await client.stats("client"));
           if (stats.path !== expectedPath || !stats.streaming)
             throw new Error("selected path missing");

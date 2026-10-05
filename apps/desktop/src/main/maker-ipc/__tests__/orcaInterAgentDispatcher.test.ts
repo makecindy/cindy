@@ -1,5 +1,8 @@
 import type { SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, appendAutoReviewUserIntent, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import {
@@ -116,6 +119,17 @@ beforeEach(() => {
 });
 
 describe('Orca lead/worker dispatcher', () => {
+  it.each([false, true])('restores human restrictions for ordinary direct continuation (unavailable=%s)', async unavailable => {
+    const h = createHarness({readAutoReviewHistory: async () => {
+      if(unavailable) throw new Error('unavailable');
+      return [{clientId:'human',role:'user',content:{text:'Do not deploy'},agentMeta:{delivery:'turn',autoReviewUserText:'Do not deploy'}}];
+    }});
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({targetSessionId:'target-session',rawContent:'Deploy now',source:'lead',senderLabel:'Lead',workerId:'worker-1',meta:{source:'orca',context:'test'}});
+    if (unavailable) {
+      expect(result).toMatchObject({ok:false});
+      expect(h.liveSession.send).not.toHaveBeenCalled();
+    } else expect(h.liveSession.send.mock.calls[0]?.[1]?.[AUTO_REVIEW_USER_INTENT]).toBe('Do not deploy');
+  });
   it('runs direct accepted side effects after DB persistence and before vendor turn release', async () => {
     const h = createHarness();
     const commit = vi.fn();
@@ -151,6 +165,8 @@ describe('Orca lead/worker dispatcher', () => {
       content: '{"orcaSource":"lead","content":"Implement feature"}',
       agentMeta: {
         origin: { kind: 'orca', senderLabel: 'Lead', displayText: 'Implement feature' },
+        autoReviewUserText: { kind: 'delegated-continuation' },
+        delivery: 'turn',
       },
     });
     expect(h.liveSession.send).toHaveBeenCalledWith(
@@ -159,7 +175,7 @@ describe('Orca lead/worker dispatcher', () => {
         content:
           '[From Orca Lead]\nImplement feature\n\n---\n(Bridge note: your worker_id for tool calls is worker-1.)',
       },
-      expect.objectContaining({ throwOnStartFailure: true }),
+      expect.objectContaining({ throwOnStartFailure: true, [AUTO_REVIEW_DELEGATED_CONTINUATION]: true }),
     );
   });
 
@@ -189,6 +205,7 @@ describe('Orca lead/worker dispatcher', () => {
     expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
     expect(prepareUnhealthySession).toHaveBeenCalledWith('target-session');
     expect(h.deps.sendToSessionInternal).toHaveBeenCalledWith(expect.objectContaining({
+      autoReviewUserText: {kind:'delegated-continuation'},
       targetSessionId: 'target-session',
       clientId: 'client-1',
     }));
@@ -644,7 +661,7 @@ describe('Orca lead/worker dispatcher', () => {
     });
     expect(h.queuedItems[0]).toMatchObject({
       clientId: 'client-1',
-      text: '[From Orca Worker]\nDone',
+      text: '[From Orca Worker Reviewer (worker_id: worker-1)]\nDone',
       persistedContent: '{"orcaSource":"worker","content":"Done"}',
       origin: {
         kind: 'orca',
@@ -653,6 +670,69 @@ describe('Orca lead/worker dispatcher', () => {
       },
     });
   });
+  it('names the sending worker by role and worker_id on direct, internal and reserved paths', async () => {
+    const resolveWorkerSenderLabel = vi.fn(async () => 'Backend');
+    const params = {
+      targetSessionId: 'target-session',
+      rawContent: '[Auto-bridged: worker 异常终止]\n\nboom',
+      source: 'worker' as const,
+      senderLabel: 'Worker',
+      workerId: 'worker-7',
+      meta: { source: 'orca', context: 'worker-prefix-test' },
+    };
+    const expectedText = '[From Orca Worker Backend (worker_id: worker-7)]\n[Auto-bridged: worker 异常终止]\n\nboom';
+
+    const direct = createHarness({ resolveWorkerSenderLabel });
+    await direct.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(params);
+    expect(direct.liveSession.send).toHaveBeenCalledWith(
+      { type: 'user', content: expectedText },
+      expect.anything(),
+    );
+    expect(direct.deps.createDbMessage).toHaveBeenCalledWith(
+      'target-session',
+      expect.objectContaining({
+        content: JSON.stringify({ orcaSource: 'worker', content: params.rawContent }),
+        agentMeta: expect.objectContaining({
+          origin: { kind: 'orca', senderLabel: 'Backend', displayText: params.rawContent },
+        }),
+      }),
+    );
+    // 文本与来源标签共用一次 role 反查。
+    expect(resolveWorkerSenderLabel).toHaveBeenCalledTimes(1);
+    expect(resolveWorkerSenderLabel).toHaveBeenCalledWith('worker-7', '');
+
+    const internal = createHarness({ resolveWorkerSenderLabel, getLiveSession: vi.fn(() => null) });
+    await internal.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(params);
+    expect(internal.deps.sendToSessionInternal).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expectedText }),
+    );
+
+    const reserved = createHarness({ resolveWorkerSenderLabel });
+    await reserved.dispatcher.reserveNextOrcaInterAgentMessage(params);
+    expect(reserved.queuedItems[0]).toMatchObject({
+      text: expectedText,
+      origin: { kind: 'orca', senderLabel: 'Backend' },
+    });
+  });
+
+  it('keeps worker_id in the prefix and the caller label in origin when the role is unknown', async () => {
+    const h = createHarness({ shouldQueueNewTurn: vi.fn(() => true) });
+
+    await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Done',
+      source: 'worker',
+      senderLabel: 'Worker',
+      workerId: 'worker-1',
+      meta: { source: 'orca', context: 'unknown-role-test' },
+    });
+
+    expect(h.queuedItems[0]).toMatchObject({
+      text: '[From Orca Worker (worker_id: worker-1)]\nDone',
+      origin: { kind: 'orca', senderLabel: 'Worker', displayText: 'Done' },
+    });
+  });
+
   it('records the sending Lead or Worker session so the receiver can link back to it', async () => {
     const resolveWorkerSessionLink = vi.fn(async () => ({
       leadSessionId: 'lead-session',
@@ -738,7 +818,32 @@ describe('Orca lead/worker dispatcher', () => {
         origin: { kind: 'orca', senderLabel: 'Lead', displayText: 'Replace current task' },
       }),
       expect.any(Function),
+      undefined,
     );
+  });
+
+  it.each([false, true])('checks authority after production queue restore before interrupt reservation: revoked=%s', async revoked => {
+    let restored = false;
+    const stop = vi.fn();
+    const inputCoordinator = {
+      ensureQueueRestored: async () => { restored = true; },
+      isQueueRestored: () => restored,
+      reserveNextInput: vi.fn((_id, _item, opts) => { opts.onReserved(); return { reserved: true }; }),
+    };
+    const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+    const start = source.indexOf('    reserveNextQueuedMessage: async');
+    const adapter = source.slice(start, source.indexOf('    sendToSessionInternal,', start));
+    const reserveNextQueuedMessage = new Function('inputCoordinator', ts.transpileModule(`return ({${adapter}}).reserveNextQueuedMessage;`, {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText)(inputCoordinator);
+    const h = createHarness({ reserveNextQueuedMessage });
+    const result = await h.dispatcher.reserveNextOrcaInterAgentMessage({
+      targetSessionId: 'target-session', rawContent: 'replacement', source: 'lead', senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'restore-check' }, onReserved: stop,
+      beforeReserve: async () => { if (restored && revoked) throw new Error('revoked during restore'); },
+    });
+    expect(restored).toBe(true);
+    expect(result.ok).toBe(!revoked);
+    expect(inputCoordinator.reserveNextInput).toHaveBeenCalledTimes(revoked ? 0 : 1);
+    expect(stop).toHaveBeenCalledTimes(revoked ? 0 : 1);
   });
 
   it('discards the accepted callback when priority reservation throws', async () => {
@@ -765,4 +870,16 @@ describe('Orca lead/worker dispatcher', () => {
     } as AgentInputQueuedMessage);
     expect(accepted).not.toHaveBeenCalled();
   });
+});
+
+it.each(['Do not publish', ''])('ordinary live continuation retains the last accepted intent %j', async live => {
+  const h = createHarness();
+  h.liveSession.send.mockImplementation(async (message, opts) => {
+    expect(opts?.[AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(true);
+    expect(appendAutoReviewUserIntent(live, message.content, opts)).toBe(live);
+    await opts?.onAccepted?.();
+    return {accepted:true};
+  });
+  const result=await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({targetSessionId:'target-session',rawContent:'Publish now',source:'lead',senderLabel:'Lead',meta:{source:'orca',context:'ordinary-live'}});
+  expect(result.ok).toBe(true);
 });

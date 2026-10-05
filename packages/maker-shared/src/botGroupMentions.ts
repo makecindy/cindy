@@ -11,6 +11,9 @@ import type { BotGroupMention } from './botGroupChat.js';
 export interface BotGroupMentionMember {
   botId: string;
   name: string;
+  /** Chat Server's undecorated name, so an existing @name still resolves. */
+  displayName?: string;
+  nickname?: string | null;
 }
 
 /** A mention picked from the candidate list; `label` is the text after `@`. */
@@ -73,11 +76,13 @@ function buildLabelEntries(
     trackedByLabel.set(label, ids);
   }
   for (const member of members) {
-    const label = member.name.trim();
-    if (!label || byLabel.get(label)?.all) continue;
-    const entry = byLabel.get(label) ?? { label, all: false, botIds: [] };
-    if (!entry.botIds.includes(member.botId)) entry.botIds.push(member.botId);
-    byLabel.set(label, entry);
+    for (const raw of [member.name, member.nickname || member.displayName || '']) {
+      const label = raw.trim();
+      if (!label || byLabel.get(label)?.all) continue;
+      const entry = byLabel.get(label) ?? { label, all: false, botIds: [] };
+      if (!entry.botIds.includes(member.botId)) entry.botIds.push(member.botId);
+      byLabel.set(label, entry);
+    }
   }
   // 重名时正文分辨不出是哪一位，才用选择候选时记下的 botId 收窄。
   for (const [label, ids] of trackedByLabel) {

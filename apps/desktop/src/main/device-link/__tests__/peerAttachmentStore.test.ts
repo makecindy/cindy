@@ -126,3 +126,40 @@ it('admits attachments of any size when the disk has room, reserving unwritten i
     'FILE_PEER_STORAGE',
   );
 });
+it('accepts raw-byte blocks and lands writes dispatched back to back in order', async () => {
+  const content = Buffer.from('hello world');
+  const meta = { size: content.length, sha256: createHash('sha256').update(content).digest('hex') };
+  const { ticket } = (await handlePeerAttachment('a', { op: 'begin', ...meta })) as {
+    ticket: string;
+  };
+  // Streaming senders keep several writes in flight; the per-ticket queue applies them in order.
+  await Promise.all([
+    handlePeerAttachment('a', { op: 'write', ticket, offset: 0, data: content.subarray(0, 4) }),
+    handlePeerAttachment('a', { op: 'write', ticket, offset: 4, data: content.subarray(4, 8) }),
+    handlePeerAttachment('a', {
+      op: 'write',
+      ticket,
+      offset: 8,
+      data: content.subarray(8).toString('base64'),
+    }),
+  ]);
+  await handlePeerAttachment('a', { op: 'finish', ticket });
+  expect(await readFile(path.join(state.root, ticket))).toEqual(content);
+  const empty = (await handlePeerAttachment('a', { op: 'begin', ...meta })) as { ticket: string };
+  await expect(
+    handlePeerAttachment('a', {
+      op: 'write',
+      ticket: empty.ticket,
+      offset: 0,
+      data: Buffer.alloc(0),
+    }),
+  ).rejects.toThrow('BLOCK');
+  await expect(
+    handlePeerAttachment('a', {
+      op: 'write',
+      ticket: empty.ticket,
+      offset: 0,
+      data: Buffer.alloc(1024 * 1024 + 1),
+    }),
+  ).rejects.toThrow('BLOCK');
+});

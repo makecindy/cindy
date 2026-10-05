@@ -120,7 +120,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
     readAutoReviewHistory: async (sessionId) => {
       await drainPersistQueue();
-      return listMessagesForAgentHandoff(sessionId, 100, undefined, 'authorization');
+      return listMessagesForAgentHandoff(sessionId, null, undefined, 'authorization');
     },
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,

@@ -13,6 +13,7 @@
 
 import {
   promises as fs,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -98,16 +99,29 @@ vi.mock('../transport.js', () => ({
 vi.mock('../rpc-client.js', () => ({
   PiRpcProcess: class {
     isClosed = false;
+    private readonly onEvent: (event: unknown) => void;
+    private readonly nativeSettings: { compaction?: Record<string, unknown> };
     constructor(opts: {
       onEvent: (event: unknown) => void;
       onExit: (exit: { code: number | null; signal: string | null }) => void }) {
       captured.onEvent = opts.onEvent;
       captured.onExit = opts.onExit;
+      this.onEvent = opts.onEvent;
+      // Freeze local startup settings; the remote spawn-only fixture has no
+      // local settings file. Keep ACK delivery bound to this runtime instance.
+      const settingsPath = captured.env.PI_CODING_AGENT_DIR
+        ? path.join(captured.env.PI_CODING_AGENT_DIR, 'settings.json') : undefined;
+      this.nativeSettings = settingsPath && existsSync(settingsPath)
+        ? JSON.parse(readFileSync(settingsPath, 'utf8'))
+        : {};
     }
     async request(
       cmd: Record<string, unknown> & { type: string },
     ): Promise<{ success: boolean; command?: string; data?: unknown; error?: string }> {
       captured.requests.push(cmd);
+      if (cmd.type === 'refresh_models' || cmd.type === 'set_compaction_reserve_tokens') {
+        return { success: false, error: `Unknown command: ${cmd.type}` };
+      }
       if (cmd.type === 'set_model' && captured.holdSetModel) {
         await captured.holdSetModel;
       }
@@ -134,13 +148,27 @@ vi.mock('../rpc-client.js', () => ({
       if (cmd.type === 'steer' && captured.failSteer) {
         return { command: 'steer', success: false, error: 'receipt steer rejected' };
       }
+      if (cmd.type === 'prompt' && typeof cmd.message === 'string' &&
+          cmd.message.startsWith('/cindy-native-provider-refresh ')) {
+        const nonce = cmd.message.split(' ')[1];
+        this.onEvent({ type: 'extension_ui_request', method: 'input',
+          title: 'cindy:provider-refresh', id: nonce, placeholder: JSON.stringify({ nonce }) });
+        const response = captured.sent.findLast((message) => message.id === nonce);
+        const snapshot = JSON.parse(String(response?.value ?? '{}'));
+        this.onEvent({ type: 'extension_ui_request', method: 'input',
+          title: 'cindy:provider-refresh-ack', id: `${nonce}-ack`, placeholder: JSON.stringify({
+            nonce, ok: snapshot.nonce === nonce && snapshot.operation === 'inspect',
+            runtimeSettings: { version: '1.0.0', compaction: this.nativeSettings.compaction ?? {} },
+          }) });
+        return { command: 'prompt', success: true };
+      }
       if (cmd.type === 'prompt') captured.onPrompt?.(cmd);
-      if (cmd.type === 'get_commands' && captured.commandCatalog) {
+      if (cmd.type === 'get_commands') {
         return {
           type: 'response',
           command: 'get_commands',
           success: true,
-          data: { commands: captured.commandCatalog },
+          data: { commands: captured.commandCatalog ?? [{ name: 'cindy-native-provider-refresh', source: 'extension' }] },
         } as never;
       }
       if (cmd.type === 'get_state') {
@@ -3204,12 +3232,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         arg === '--extension' ? [captured.args[index + 1]] : []);
       expect(extensionPaths).toEqual(expect.arrayContaining([
         path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'internal-extensions', 'cindy-bridge.ts'),
-      ]));
-      // Bot 会话是产品人格,不是 coding harness:pi 原生 subagent 面必须不可见,
-      // 项目/全局 AGENTS.md 也不得从 cwd 链被吸进上下文。
-      expect(extensionPaths).not.toEqual(expect.arrayContaining([
         path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'internal-extensions', 'cindy-subagent.ts'),
       ]));
+      // Bot 共享普通任务的子代理能力，但仍保留独立人格和记忆，
+      // 不从 cwd 链加载项目/全局 AGENTS.md。
       expect(captured.args).toContain('--no-context-files');
       expect(deps.resolvePiGlobalContextHome).not.toHaveBeenCalled();
       const promptIndex = captured.args.indexOf('--append-system-prompt');
@@ -4243,6 +4269,28 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   });
 
 
+  it('re-resolves Host plugin scope before cached approvals and blocks revocation', async () => {
+    let active = true;
+    const review = Object.assign(vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'allow' as const })), {
+      prepareRequest: async (request: AutoReviewRequest): Promise<AutoReviewRequest> => active
+        ? {...request, userIntent: '', delegatedTask: {source:'approved-plugin',pluginId:'eval',role:'worker',task:'Run project tests',workingDir:cwd,authorizationRevision:'scope-1'}}
+        : {...request, authorizationError:'Plugin Auto authorization revoked'},
+    });
+    const handle = await start('auto', review);
+    try {
+      await handle.send({type:'user',content:'[From Orca Lead] run tests'}, {[AUTO_REVIEW_SOURCE_CONTENT]:''});
+      const action = {kind:'exec' as const,command:'./runtime/node lab/preflight.cjs',cwd};
+      expect(await handle.reviewAutoPermissionAction!(action)).toMatchObject({verdict:'allow'});
+      expect(await handle.reviewAutoPermissionAction!(action)).toMatchObject({verdict:'allow'});
+      expect(review).toHaveBeenCalledOnce();
+      expect(review.mock.calls[0][0].userIntent).toBe('');
+      expect(review.mock.calls[0][0].delegatedTask?.task).toBe('Run project tests');
+      active = false;
+      expect(await handle.reviewAutoPermissionAction!(action)).toMatchObject({verdict:'block'});
+      expect(review).toHaveBeenCalledOnce();
+    } finally { await handle.close(); }
+  });
+
   it('passes flat task history and actual blocked plugin actions after a natural steer, then invalidates on revocation', async () => {
     const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
     const handle = await start('auto', review);
@@ -4645,6 +4693,47 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       orcaWorkflowId: 'team-1',
       orcaLeadSessionId: 's1',
     });
+  });
+
+  it.each((['auto', 'acceptEdits', 'ask'] as const).flatMap(permissionMode =>
+    (['ordinary', 'allow', 'block', 'ask', 'revoked', 'unavailable', 'late-revoke', 'late-scope', 'confirmed'] as const)
+      .map(scenario => ({ permissionMode, scenario }))))('delegated trusted MCP main keeps live authorization: $permissionMode/$scenario', async ({ permissionMode, scenario }) => {
+    let active = scenario !== 'revoked' && scenario !== 'confirmed';
+    let revision = 'scope-1';
+    let preparations = 0;
+    const review = Object.assign(vi.fn(async (_request: AutoReviewRequest) => {
+      if (scenario === 'late-revoke') active = false;
+      if (scenario === 'late-scope') revision = 'scope-2';
+      return { verdict: scenario === 'block' ? 'block' as const : scenario === 'ask' ? 'ask' as const : 'allow' as const };
+    }), { prepareRequest: vi.fn(async (request: AutoReviewRequest): Promise<AutoReviewRequest> => {
+      if (++preparations === 2 && permissionMode !== 'auto') {
+        if (scenario === 'late-revoke') active = false;
+        if (scenario === 'late-scope') revision = 'scope-2';
+      }
+      if (scenario === 'unavailable') throw new Error('Host storage unavailable');
+      if (scenario === 'ordinary') return request;
+      // Prove a previously ordinary shortcut cannot cross a late Host change.
+      if (permissionMode !== 'auto' && preparations === 1 && scenario.startsWith('late-')) return request;
+      return active ? { ...request, delegatedTask: { source: 'approved-plugin', pluginId: 'eval', role: 'worker',
+        task: 'Run the approved evaluation only', workingDir: cwd, authorizationRevision: revision } }
+        : { ...request, authorizationError: 'Plugin authorization revoked' };
+    }) });
+    const handle = await start(permissionMode, review, false, { serverNames: ['cindy_scheduler'], policy: () => 'auto-approve' });
+    try {
+      const resolver = vi.fn(async () => ({ kind: 'permission', behavior: scenario === 'confirmed' ? 'allow' : 'deny' }) as const);
+      handle.setInteractionResolver(resolver);
+      await handle.send({ type: 'user', content: 'Run this evaluation; do not create schedules.' });
+      firePermissionRequest('delegated-mcp', 'mcp__cindy_scheduler__call_tool', { name: 'schedule_create', args: { prompt: 'outside task scope' } });
+      await vi.waitFor(() => expect(captured.sent).toContainEqual(expect.objectContaining({ type: 'extension_ui_response', id: 'delegated-mcp' })));
+      expect(captured.sent).toContainEqual(expect.objectContaining({ id: 'delegated-mcp', confirmed: scenario === 'ordinary' || (permissionMode === 'auto' ? scenario === 'allow' : scenario === 'confirmed') }));
+      expect(review.prepareRequest).toHaveBeenCalled();
+      expect(review).toHaveBeenCalledTimes(permissionMode !== 'auto' || ['ordinary', 'revoked', 'unavailable', 'confirmed'].includes(scenario) ? 0 : 1);
+      expect(resolver).toHaveBeenCalledTimes((permissionMode === 'auto' ? ['ask', 'unavailable'].includes(scenario) : scenario !== 'ordinary') ? 1 : 0);
+      if (review.mock.calls.length) {
+        expect(review.mock.calls[0]![0].delegatedTask?.pluginId).toBe('eval');
+        expect(JSON.stringify(review.mock.calls[0]![0].action)).toContain('schedule_create');
+      }
+    } finally { await handle.close(); }
   });
 
   it('reviews actual operations for MCP servers the host policy does not trust', async () => {

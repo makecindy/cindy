@@ -19,7 +19,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkCjkFriendly from 'remark-cjk-friendly';
 import remarkMath from 'remark-math';
-import rehypeHighlight from 'rehype-highlight';
+import { rehypeHighlightShared } from './rehypeHighlightShared';
 import rehypeKatex from 'rehype-katex';
 import rehypeSlug from 'rehype-slug';
 import 'katex/dist/katex.min.css';
@@ -246,7 +246,7 @@ const REHYPE_PLUGINS: PluggableList = [
   rehypeSlug,
   [rehypeKatex, { strict: 'ignore', errorColor: 'inherit' }],
   rehypeMathBlockMarker,
-  rehypeHighlight,
+  rehypeHighlightShared,
   rehypeFencedCodeMarker,
 ];
 

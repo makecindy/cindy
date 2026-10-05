@@ -2,6 +2,7 @@ import type { InputDeliveryProjection } from "@cindy/device-link";
 import { isExplicitRemoteNotFoundError } from "./newSessionWorktree";
 import {
   createDurableOutbox,
+  isDurableOutboxHandedOff,
   isDurableOutboxSettled,
   isDurableOutboxUnsent,
   type DurableOutboxRecord,
@@ -315,11 +316,10 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         // Session FIFO, while one unavailable computer never blocks a different task.
         const candidates = [...groups.values()]
           .flatMap((group) => {
-            const handedOff = (r: DurableOutboxRecord) => hasDurableOwnership(r) || isDurableOutboxSettled(r);
-            const head = group.find((r) => !handedOff(r));
+            const head = group.find((r) => !isDurableOutboxHandedOff(r));
             return [
               ...(head ? [head] : []),
-              ...group.filter(handedOff),
+              ...group.filter(isDurableOutboxHandedOff),
             ];
           })
           .filter((r) => deps.canRun(r) && (due.get(id(r)) ?? 0) <= Date.now());

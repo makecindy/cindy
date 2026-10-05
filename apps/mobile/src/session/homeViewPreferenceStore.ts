@@ -51,10 +51,11 @@ export function saveHomeViewPreferences(patch: HomeViewPreferencePatch): Promise
 }
 
 async function writeHomeViewPreferences(patch: HomeViewPreferencePatch): Promise<void> {
-  // A failed read (including corrupt JSON) is not an empty preference record.
-  // Preserve it rather than replacing unrelated choices with defaults.
+  // A failed read (disk/lock) must reject so we do not replace a still-valid
+  // blob with defaults. Corrupt JSON is different: keeping it makes every
+  // computer switch alert "couldn't save" forever.
   const raw = await AsyncStorage.getItem(STORAGE_KEY);
-  const current = raw === null ? emptyPreferences() : normalizeStoredPreferences(JSON.parse(raw));
+  const current = raw === null ? emptyPreferences() : parseStoredPreferences(raw);
   const next: HomeViewPreferences = {
     groupByProject: patch.groupByProject ?? current.groupByProject,
     groupDialogue: patch.groupDialogue ?? current.groupDialogue,
@@ -108,13 +109,22 @@ function normalizeStoredPreferences(value: unknown): HomeViewPreferences {
   };
 }
 
+function parseStoredPreferences(raw: string): HomeViewPreferences {
+  try {
+    return normalizeStoredPreferences(JSON.parse(raw));
+  } catch {
+    return emptyPreferences();
+  }
+}
+
 function normalizeDevice(device: { deviceId: string; name: string } | null): HomeViewPreferences['selectedDevice'] {
   if (!device) return null;
-  const deviceId = device.deviceId.trim();
+  const deviceId = typeof device.deviceId === 'string' ? device.deviceId.trim() : '';
   if (!deviceId) return null;
+  const name = typeof device.name === 'string' ? device.name.trim() : '';
   return {
     deviceId,
-    name: device.name.trim() || deviceId,
+    name: name || deviceId,
   };
 }
 

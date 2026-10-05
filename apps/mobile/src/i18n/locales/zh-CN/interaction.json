@@ -163,8 +163,10 @@
     "dispatchBodyFallback": "创建 Worker",
     "sendTitle": "发消息给 Worker",
     "sendBodyFallback": "发送消息",
-    "reportTitle": "Worker 回报",
-    "reportBodyFallback": "（空回报）"
+    "fromLead": "来自 Lead 的消息",
+    "fromWorkerNamed": "来自 Worker「{{role}}」的消息",
+    "fromWorker": "来自 Worker 的消息",
+    "emptyMessageBody": "（空消息）"
   },
   "contextSheet": {
     "backAccessibility": "返回上下文面板",

@@ -40,6 +40,12 @@ export const SHARE_SESSION_ATTR = 'data-share-session-id';
 export const SHARE_MESSAGE_ATTR = 'data-share-message-id';
 /** 打了这个标记的元素是纯交互件(操作栏、复选框、hover 工具栏),不进图。 */
 export const SHARE_EXCLUDE_ATTR = 'data-share-exclude';
+/**
+ * 消息来源标注(来源标签、设备 / 插件标签、Hook 卡片渠道头、共享任务作者行)。
+ * 分享图一律不带来源:这些是本机视角的归属信息(任务名、设备名、渠道、成员名),
+ * 发给别人既无意义又可能泄露身份;正文保留。
+ */
+export const SHARE_SOURCE_ATTR = 'data-share-source';
 
 /**
  * 克隆体里必须清掉的锚点属性:离屏容器挂在 document 内,这些 data 属性会让
@@ -114,6 +120,11 @@ export function queryShareableMessageIds(sessionId: string): string[] {
  */
 export function stripInteractiveElements(root: HTMLElement): void {
   root.querySelectorAll(`[${SHARE_EXCLUDE_ATTR}]`).forEach((el) => el.remove());
+}
+
+/** 删掉消息来源标注(见 SHARE_SOURCE_ATTR),只留正文。 */
+export function stripMessageSources(root: HTMLElement): void {
+  root.querySelectorAll(`[${SHARE_SOURCE_ATTR}]`).forEach((el) => el.remove());
 }
 
 /** 清掉会污染全局 querySelector 的锚点属性(见 CLONE_STRIPPED_ATTRS 注释)。 */
@@ -267,7 +278,10 @@ export async function inlineCloneImages(root: HTMLElement): Promise<void> {
         img.remove();
         return;
       }
-      if (!isImageBytesReachable(src)) {
+      // Bundled avatars use relative asset URLs. Read them like the bundled
+      // footer artwork; absolute/managed URLs retain the shared byte reader.
+      const relativeAsset = !/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(src);
+      if (!relativeAsset && !isImageBytesReachable(src)) {
         log.warn('share image: unreachable image source, dropping', {
           scheme: src.slice(0, 16),
         });
@@ -275,8 +289,11 @@ export async function inlineCloneImages(root: HTMLElement): Promise<void> {
         return;
       }
       try {
-        const { base64, mimeType } = await loadImageSourceBase64(src);
-        img.setAttribute('src', `data:${mimeType};base64,${base64}`);
+        if (relativeAsset) img.setAttribute('src', await sameOriginToDataUrl(src));
+        else {
+          const { base64, mimeType } = await loadImageSourceBase64(src);
+          img.setAttribute('src', `data:${mimeType};base64,${base64}`);
+        }
         img.setAttribute('loading', 'eager');
         img.removeAttribute('srcset');
       } catch (err) {
@@ -379,6 +396,7 @@ async function sameOriginToDataUrl(url: string): Promise<string> {
     throw new Error(`share image asset fetch failed (${response.status})`);
   }
   const blob = await response.blob();
+  if (!blob.type.startsWith('image/')) throw new Error('share image asset is not an image');
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
@@ -514,6 +532,7 @@ export async function buildShareImageBlob({
       prevIndex = currentIndex;
     }
     stripInteractiveElements(stage);
+    stripMessageSources(stage);
     expandCollapsedMessages(stage);
     stripCloneAnchors(stage);
     redactTextNodes(stage);

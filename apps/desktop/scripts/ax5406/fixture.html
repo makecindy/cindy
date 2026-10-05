@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'">
+<title>AX5406 synthetic text fixture</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 16px/1.5 sans-serif; margin: 0; }
+  #viewport { height: 660px; overflow: auto; overflow-anchor: none; }
+  #items { display: flex; flex-direction: column; gap: 14px; }
+  #items > article { content-visibility: auto; contain-intrinsic-size: auto 240px; }
+  body.no-containment #items > article { content-visibility: visible !important; contain-intrinsic-size: none; }
+  article { padding: 12px; }
+  p { white-space: pre-wrap; overflow-wrap: anywhere; }
+  pre { white-space: pre-wrap; }
+  .ellipsis { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .first::first-letter { float: left; font-size: 200%; }
+</style>
+<main id="viewport"><div id="items" role="log" aria-live="polite"></div></main>
+<!-- No user content, accounts, network, OS input, or application preload. -->
+<script src="fixture.js"></script>

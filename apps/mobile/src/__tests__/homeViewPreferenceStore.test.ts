@@ -44,11 +44,20 @@ describe('homeViewPreferenceStore', () => {
     expect((await readHomeViewPreferences()).groupDialogue).toBe(true);
   });
 
-  it('preserves corrupt stored JSON instead of replacing it with defaults on save', async () => {
-    const { __testing, saveHomeViewPreferences } = await import('@/session/homeViewPreferenceStore');
+  it('replaces corrupt stored JSON so a later device switch can still save', async () => {
+    const { __testing, readHomeViewPreferences, saveHomeViewPreferences } = await import('@/session/homeViewPreferenceStore');
     store.set(__testing.storageKey, 'broken');
-    await expect(saveHomeViewPreferences({ sortBy: 'priority' })).rejects.toThrow();
-    expect(store.get(__testing.storageKey)).toBe('broken');
+    await saveHomeViewPreferences({ sortBy: 'priority', selectedDevice: { deviceId: 'devA', name: 'Mac A' } });
+    await expect(readHomeViewPreferences()).resolves.toMatchObject({
+      sortBy: 'priority',
+      selectedDevice: { deviceId: 'devA', name: 'Mac A' },
+    });
+    await saveHomeViewPreferences({
+      selectedDevice: { deviceId: 'devB', name: 12 as unknown as string },
+    });
+    await expect(readHomeViewPreferences()).resolves.toMatchObject({
+      selectedDevice: { deviceId: 'devB', name: 'devB' },
+    });
   });
   beforeEach(async () => {
     vi.clearAllMocks();

@@ -1,3 +1,5 @@
+import type { TFunction } from 'i18next';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { Fragment, useEffect, useMemo, useCallback, useState } from 'react';
 import {
   AlertCircle,
@@ -29,12 +31,9 @@ import {
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
-import {
-  canStopAgentTask,
-  getWorkflowProgressFor,
-  isRemoteSessionSticky,
-  stopAgentTaskFor,
-} from '@/lib/makerTransport';
+import { canManageBackgroundTasks, stopBackgroundTask } from '@/lib/backgroundTaskStop';
+import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
+import { canStopAgentTask, getWorkflowProgressFor, isRemoteSessionSticky } from '@/lib/makerTransport';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { extractWorkflowTaskId } from '@/features/right-sidebar/plugins/background-tasks/listSessionTasks';
@@ -116,14 +115,10 @@ function detailText(...values: Array<string | undefined>): string | undefined {
   return undefined;
 }
 
-function formatDuration(ms: number | undefined): string | undefined {
+function formatDuration(ms: number | undefined, t?: TFunction): string | undefined {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
   if (ms < 1000) return `${ms}ms`;
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+  return formatSessionDuration(ms, t);
 }
 
 function statusIcon(status: AgentTaskUpdate['status']) {
@@ -347,6 +342,7 @@ export function AgentTaskCard({
           ?? (startedAtMs !== undefined && endedAtMs !== undefined && endedAtMs >= startedAtMs
             ? endedAtMs - startedAtMs
             : undefined),
+        t,
       );
   const bashCommand = isBash ? readInputString(toolCall?.toolInput, ['command']) : undefined;
   const providerLabel = isWorkflow
@@ -362,11 +358,14 @@ export function AgentTaskCard({
   // 停止按钮:Claude 后台任务沿用 SDK stopTask；PI 只开放 Cindy durable runner
   // 明确标成 taskType=pi_subagent 的异步任务。普通 PI 前台委派没有 durable 控制面，
   // 不能仅凭 provider 猜测可停止。Codex 仍无 stopTask 通道。
-  // 点击后交给 main 的 stopAgentTask;成功与否都由 task_notification / durable status
-  // 事件流收口(状态翻 stopped → 按钮自然消失),这里只管在飞态防连点。
+  // 点击后交给会话归属端的 stopAgentTask(device-link 远程会话隧道到被控端);成功与否
+  // 都由 task_notification / durable status 事件流收口(状态翻 stopped → 按钮自然消失),
+  // 这里只管在飞态防连点。
   const [stopping, setStopping] = useState(false);
-  // 「点了停止但没停掉」:老被控端(无此 channel)等失败让任务真的还在跑 —— 卡片上
-  // 就地说明,按钮留着可重试;任务状态一变或用户再点一次就收掉(它描述的是上一次点击)。
+  // 「点了停止但没停掉」:失败让任务真的还在跑 —— 卡片上就地说明,按钮留着可重试;
+  // 任务状态一变或用户再点一次就收掉(它描述的是上一次点击)。这不是 toast 的替代品:
+  // toast 只覆盖「远程电脑版本过旧 / 暂时无响应」这两类用户能立刻处理的失败
+  // (reportBackgroundTaskStopFailure),其余失败靠这条常驻信号。
   const [stopFailed, setStopFailed] = useState(false);
   useEffect(() => {
     setStopFailed(false);
@@ -380,22 +379,25 @@ export function AgentTaskCard({
     status === 'running' &&
     Boolean(update?.taskId) &&
     providerCanStop &&
-    // 远程镜像会话不再一律隐藏:stopAgentTaskFor 把停止隧道到任务真身所在的被控端
-    // (与后台任务面板同口径)。只有「看起来是远程镜像、当下又拿不到设备」才隐藏 ——
-    // 那条路径上本地调用会假成功、任务在被控端继续跑。粘滞判定保证瞬断窗口不误判本机。
-    canStopAgentTask(sessionId);
+    // 两个判据都保留:canStopAgentTask 管「有没有可信的停止目标」(unknown 镜像来源 /
+    // 共享任务访客都没有),canManageBackgroundTasks 管「后台任务管理权」(共享任务里
+    // 管理权保留给房主)。远程镜像会话不再一律隐藏 —— 停止隧道到任务真身所在的被控端,
+    // 与后台任务面板同口径;粘滞判定保证瞬断窗口不误判本机。
+    canStopAgentTask(sessionId) && Boolean(sessionId && canManageBackgroundTasks(sessionId));
   const handleStop = useCallback(() => {
     if (!sessionId || !update?.taskId) return;
     setStopping(true);
     // 重试先收掉上一次的失败提示:它描述的是上一次点击;这次再失败会在 catch 重新写上。
     setStopFailed(false);
-    void stopAgentTaskFor(sessionId, update.taskId)
-      .catch(() => {
-        // 不装成功:卡片仍显示 running,同时给一句「停止未确认」,按钮留着可重试。
+    void stopBackgroundTask(sessionId, update.taskId)
+      .catch((error: unknown) => {
+        // 不装成功:卡片仍显示 running。可立即处理的远程失败走统一 toast(升级被控端 /
+        // 稍后重试),其余失败留在卡片上就地说明,按钮始终可重试。
+        reportBackgroundTaskStopFailure(error, t);
         setStopFailed(true);
       })
       .finally(() => setStopping(false));
-  }, [sessionId, update?.taskId]);
+  }, [sessionId, update?.taskId, t]);
 
   // workflow 卡整卡点击 → 打开右栏后台任务面板并定位本任务(workflowTaskId 在
   // 组件顶部与状态修正共用同一次推导)。三者缺一就退回传统展开交互,让

@@ -6,6 +6,7 @@
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { InstalledGhost } from '../../../../shared/ghost';
 
 const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
@@ -156,7 +157,7 @@ const detail: GhostPluginDetail = {
   tools: [],
   hasSettingsUi: false,
   cindyCapabilities: [],
-  hasErrand: false,
+  hasTaskPreferences: false,
   panelMinWidth: 320,
   installDir: '/tmp/cindy-brain/builtin.example',
   trust: {
@@ -271,6 +272,24 @@ describe('Ghost plugin detail sections', () => {
       unmount();
     },
   );
+  it('lets the user retry task permission, disables duplicate clicks, and hides after approval', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    let finish!: (value: { granted: boolean }) => void;
+    const requestTaskApproval = vi.fn(() => new Promise<{ granted: boolean }>(resolve => { finish = resolve; }));
+    Object.assign(window.electronAPI, { ghosts: { requestTaskApproval } });
+    const ghost = { manifest: { agent: { tasks: true } }, enabled: true } as InstalledGhost;
+    const view = (approved = false) => <GhostPluginDetailView ghost={{ ...ghost, ...(approved ? { taskCapabilityApproved: true as const } : {}) }} detail={detail} panelStatus="Docked" onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />;
+    const { rerender } = render(view());
+    const button = screen.getByRole('button', { name: 'settings.ghosts.perm.agentTasksRequest' }) as HTMLButtonElement;
+    fireEvent.click(button); fireEvent.click(button);
+    expect(requestTaskApproval).toHaveBeenCalledOnce();
+    expect(requestTaskApproval).toHaveBeenCalledWith(detail.id);
+    expect(button.disabled).toBe(true);
+    finish({ granted: false });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    rerender(view(true));
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentTasksRequest' })).toBeNull();
+  });
   it('uses the shared Cindy Switch for the plugin enabled control', () => {
     vi.stubGlobal(
       'ResizeObserver',

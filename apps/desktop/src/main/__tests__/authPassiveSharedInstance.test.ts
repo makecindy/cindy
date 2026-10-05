@@ -246,9 +246,8 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(body.indexOf('prepareBuiltInSkills({')).toBeGreaterThan(ownerBoundary);
     expect(body.indexOf('prepareSharedGlobalSkillLinks({')).toBeGreaterThan(ownerBoundary);
     expect(body).not.toContain('refreshBuiltInSharedSkillLinks({');
-    expect(body.indexOf('refreshBuiltInClaudeSkillLinks({')).toBeGreaterThan(
-      body.indexOf('prepareSharedGlobalSkillLinks({'),
-    );
+    expect(body.indexOf('migrateBuiltInGlobalSkillLinks({')).toBeGreaterThan(ownerBoundary);
+    expect(body.indexOf('migrateBuiltInGlobalSkillLinks({')).toBeLessThan(body.indexOf('prepareSharedGlobalSkillLinks({'));
   });
 
   it('relogin marker:passive 不消费整机一份的 marker,也不删 primary 的 token', () => {

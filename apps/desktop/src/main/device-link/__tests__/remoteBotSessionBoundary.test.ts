@@ -5,6 +5,67 @@ import {
 
 afterEach(() => setRemoteBotSessionLookup(null));
 
+it.each([false, true])('rechecks parent references on repeated history delivery (batch=%s)', async (useBatch) => {
+  let parentAccess: 'visible' | 'hidden' | 'missing' = 'visible';
+  const single = vi.fn(async (id: string) => id === 'parent' ? parentAccess : 'ordinary' as const);
+  const batch = vi.fn(async (ids: readonly string[]) => new Map(ids.map((id) => [id, id === 'parent' ? parentAccess : 'ordinary' as const])));
+  setRemoteBotSessionLookup(single, useBatch ? batch : null);
+  const result = { ok: true, sessions: [{ id: 'child', parentSessionId: 'parent' }], nextCursor: 'cursor', hasMore: true };
+  expect(await projectRemoteSessionResult('local-db:history:query', result)).toEqual(result);
+  for (const status of ['hidden', 'missing'] as const) {
+    parentAccess = status;
+    expect(await projectRemoteSessionResult('local-db:history:query', result)).toEqual({
+      ...result, sessions: [{ id: 'child' }],
+    });
+  }
+  expect(result.sessions[0].parentSessionId).toBe('parent');
+  if (useBatch) {
+    expect(batch).toHaveBeenLastCalledWith(['child', 'parent'], 'session');
+    expect(single).not.toHaveBeenCalled();
+  }
+});
+
+it('rejects stale history pages without returning hidden content or pagination metadata', async () => {
+  let hide = false;
+  setRemoteBotSessionLookup(async (id) => hide && id === 'secret' ? 'hidden' : 'ordinary');
+  const result = { ok: true, hits: [
+    { sessionId: 'normal', context: [{ content: 'visible' }] },
+    { sessionId: 'secret', context: [{ content: 'private' }] },
+  ], sessions: { normal: { title: 'Normal' }, secret: { title: 'Private title' } }, pool_size: 2, pool_capped: true, nextCursor: 'opaque', hasMore: true };
+  expect(await projectRemoteSessionResult('local-db:history:query', result)).toMatchObject({ hits: result.hits });
+  hide = true;
+  await expect(projectRemoteSessionResult('local-db:history:query', result)).rejects.toThrow('[NOT_FOUND] History page is no longer available');
+  for (const sessions of [[{ id: 'normal' }, { id: 'secret' }], [{ id: 'secret' }]]) {
+    await expect(projectRemoteSessionResult('local-db:history:query', { ok: true, sessions, nextCursor: 'cursor', hasMore: true })).rejects.toThrow('[NOT_FOUND] History page is no longer available');
+  }
+  await expect(projectRemoteSessionResult('local-db:history:query', { ...result, hits: [result.hits[1]] })).rejects.toThrow('[NOT_FOUND] History page is no longer available');
+});
+
+it('validates history target IDs without probing existence and fails closed before initialization', async () => {
+  const args = [{ tool: 'search_chat_history', args: { session_ids: ['secret'] } }];
+  await expect(assertRemoteBotInvocationAllowed(args, 'local-db:history:query')).rejects.toThrow('HOST_NOT_READY');
+  const lookup = vi.fn(async () => 'hidden' as const);
+  setRemoteBotSessionLookup(lookup);
+  await expect(assertRemoteBotInvocationAllowed(args, 'local-db:history:query')).resolves.toBeUndefined();
+  await expect(assertRemoteBotInvocationAllowed([{ tool: 'search_chat_history', args: { session_ids: Array(51).fill('id') } }], 'local-db:history:query')).rejects.toThrow('INVALID_PARAMS');
+  expect(lookup).not.toHaveBeenCalled();
+});
+
+it('checks the normalized source task before remote Review and rechecks visibility changes', async () => {
+  let hidden = false;
+  const lookup = vi.fn(async () => hidden ? 'hidden' as const : 'ordinary' as const);
+  setRemoteBotSessionLookup(lookup);
+  const args = [{ sourceSessionId: ' source ' }];
+  await assertRemoteBotInvocationAllowed(args, 'maker:review:start');
+  expect(lookup).toHaveBeenCalledWith('source', 'session');
+  hidden = true;
+  await expect(assertRemoteBotInvocationAllowed(args, 'maker:review:start')).rejects.toThrow('[NOT_FOUND]');
+});
+
+it.each([undefined, '', '   ', 123, 'x'.repeat(513)])('rejects invalid Review source ID %s', async (sourceSessionId) => {
+  await expect(assertRemoteBotInvocationAllowed([{ sourceSessionId }], 'maker:review:start')).rejects.toThrow('[INVALID_PARAMS]');
+});
+
 it.each(['turn-list', 'turn-get'])('rechecks nested %s targets before returning remote snapshots', async (op) => {
   let hidden = false;
   setRemoteBotSessionLookup(async () => hidden ? 'hidden' : 'visible');

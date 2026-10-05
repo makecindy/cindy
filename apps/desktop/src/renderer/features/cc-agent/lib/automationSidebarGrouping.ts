@@ -58,6 +58,8 @@ export interface AutomationSessionGroup {
   nextFireAt?: number;
   workingDir?: string;
   projectConfigId?: string;
+  /** 远程设备上的自动化分组（组键已按设备作用域隔离，组内会话同属这台设备）。 */
+  deviceLinkDeviceId?: string;
   title: string;
   sessions: Session[];
   attentionSessionIds: string[];
@@ -164,6 +166,7 @@ export function groupAutomationSidebarEntries(
         nextFireAt: groupInfo.nextFireAt,
         workingDir: groupInfo.workingDir,
         projectConfigId: groupInfo.projectConfigId,
+        ...(session.deviceLinkDeviceId ? { deviceLinkDeviceId: session.deviceLinkDeviceId } : {}),
         title: groupInfo.title,
         sessions: [session],
         attentionSessionIds: options.notifications.has(session.id) ? [session.id] : [],

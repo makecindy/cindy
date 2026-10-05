@@ -2868,6 +2868,19 @@ describe('远程 set-* 持久化回流', () => {
     expect(persist).not.toHaveBeenCalled();
   });
 
+  it.each([['maker:set-permission-mode','ask'],['maker:set-plan-mode',true]])('%s commits inside the handler without a later duplicate write', async (channel,value) => {
+    const persist = vi.fn();
+    setRemoteSettingsPersist(persist);
+    const response = {};
+    markRemoteSettingPersistedInsideHandler(response);
+    registry.register(channel as string, () => response);
+    const result = await runInvoke('ctrl-a', {
+      channel: channel as string, args: ['sess-1', value],
+    });
+    expect(result).toEqual({ ok: true, result: response });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it('set-fast-mode → {fastMode}', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);

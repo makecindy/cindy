@@ -28,6 +28,15 @@ import { Check, ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import { currentFocusedRow } from '@/components/ui/dropdown-menu-highlight';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  useMenuPanel,
+  withMenuLabels,
+} from '@/components/ui/menu-row';
 import { MorphPopover } from '@/components/ui/morph-popover';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { MakerVendor } from '@/lib/ccAgent.types';
@@ -123,7 +132,12 @@ export function AgentSelect({
   const [open, setOpen] = useState(false);
   /** field 形态每次打开前按上下可用空间定的方向; null = 用调用方给的 side。 */
   const [autoSide, setAutoSide] = useState<'top' | 'bottom' | null>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  // The panel's glide highlight follows keyboard focus; MorphPopover owns the width.
+  const panelRef = useMenuPanel(listRef, {
+    lockWidth: false,
+    options: { current: currentFocusedRow },
+  });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const selectedOptionRef = useRef<HTMLButtonElement>(null);
   const isCreateAgent = visualVariant === 'create-agent';
@@ -305,13 +319,15 @@ export function AgentSelect({
 
   const optionsList = (
     <div
-      ref={listRef}
+      ref={panelRef}
       role="listbox"
       aria-label={t('newChat.agentSelect.label')}
       onKeyDown={onListKeyDown}
-      className="flex flex-col gap-0.5"
+      {...menuPanelAttrs}
+      className="relative flex flex-col gap-0.5"
     >
-        <div className="px-2.5 pb-2 pt-1.5 text-11 leading-none text-[var(--model-section-label)]">
+        <MenuHighlightLayer />
+        <div className="px-2.5 pb-2 pt-1.5 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]">
           {t('newChat.agentSelect.label')}
         </div>
         {visibleOptions.map((opt) => {
@@ -329,19 +345,20 @@ export function AgentSelect({
               data-morph-autofocus={selected ? 'true' : undefined}
               data-testid={`agent-select-option-${opt.vendor}`}
               onClick={() => select(opt.vendor)}
-              className={cn(
-                'flex w-full items-center gap-2.5 rounded-[8px] px-3 py-2 text-left',
-                'transition-colors duration-100 hover:bg-[var(--model-item-hover)]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                selected && 'bg-[var(--model-item-hover)]',
-              )}
+              {...menuRowAttrs({ checked: selected })}
+              // Shared menu row (DESIGN §4 Composer dropdown rows): the panel's glide
+              // highlight marks the pointer / keyboard-focused row; the chosen row is the
+              // check and 500, no fill.
+              className={cn(COMPOSER_MENU_ROW, 'flex w-full items-center gap-2.5 px-3 py-2 text-left')}
             >
-              <opt.Mark size={14} className="shrink-0 text-[var(--text-secondary)]" />
-              <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--model-item-text)]">
-                {opt.label}
-              </span>
-              {selected && (
-                <Check size={15} className="shrink-0 text-[var(--model-item-check)]" />
+              {withMenuLabels(
+                <>
+                  <opt.Mark size={14} className="shrink-0 text-[var(--text-secondary)]" />
+                  <span className="min-w-0 flex-1 truncate">{opt.label}</span>
+                  {selected && (
+                    <Check size={15} className="shrink-0 text-[var(--model-item-check)]" />
+                  )}
+                </>,
               )}
             </button>
           );

@@ -375,7 +375,7 @@ function stopRouteFor(
  * 失败(含老被控端的 CHANNEL_NOT_ALLOWED)由调用方按静默失败处理:行仍显示 running、按钮
  * 留在原地可重试,不做乐观收口 —— 任务确实还在跑。
  */
-export function stopAgentTaskFor(
+export async function stopAgentTaskFor(
   sessionId: string,
   taskId: string,
 ): ReturnType<RoutableMaker['stopAgentTask']> {
@@ -384,22 +384,46 @@ export function stopAgentTaskFor(
     return makerApiForDevice(route.deviceId).stopAgentTask(sessionId, taskId);
   }
   if (route.kind === 'unknown') {
-    return Promise.reject(
-      new Error(
-        'REMOTE_ORIGIN_UNKNOWN: refusing to stop a mirrored background task on the local host',
-      ),
+    throw new Error(
+      'REMOTE_ORIGIN_UNKNOWN: refusing to stop a mirrored background task on the local host',
     );
   }
   if (route.kind === 'shared-task') {
     // 共享任务访客:被控端不授权逐任务停止(只授权 agent.stop 停整轮)。UI 已隐藏入口,
     // 这里是防御性拒绝 —— 绝不回退本机(那会停掉控制端自己的同 id 任务)。
-    return Promise.reject(
-      new Error(
-        'SHARED_TASK_STOP_NOT_AUTHORIZED: shared-task guests may stop the agent, not individual background tasks',
-      ),
+    throw new Error(
+      'SHARED_TASK_STOP_NOT_AUTHORIZED: shared-task guests may stop the agent, not individual background tasks',
     );
   }
+  // 本机候选:本机库确有这条会话才停(冷启动时远程注册表未水合,退回本机会对不存在的
+  // 会话幂等「成功」,任务却在被控端继续跑)。**只有「证明没有」才拒绝**:本机库查不了
+  // (老客户端没有该 IPC / 非数据库来源)时按旧行为直接走本机,不把「查不了」当「没有」。
+  try {
+    await sessionService.get(sessionId);
+  } catch (error) {
+    if (sessionMissingError(error)) {
+      throw new Error(
+        '[DEVICE_LINK_NOT_CONNECTED] Background task ownership is unresolved',
+      );
+    }
+  }
+  // 本机查询在途期间远程注册表可能完成水合(恢复 / 复制的本机库可含同 id 会话):
+  // 远程归属优先,停止不落到同 id 的本机会话。
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (deviceId) {
+    return invokeRemote(deviceId, 'maker:agent-task:stop', [sessionId, taskId]) as Promise<{
+      ok: true;
+    }>;
+  }
   return window.electronAPI.maker.stopAgentTask(sessionId, taskId);
+}
+
+/** 本机库明确回答「没有这条会话」(NOT_FOUND)才算归属未解析;其余失败按「查不了」处理。 */
+function sessionMissingError(error: unknown): boolean {
+  const code = extractIpcError(error)?.code;
+  if (code) return code === 'NOT_FOUND';
+  const message = error instanceof Error ? error.message : String(error);
+  return /\[NOT_FOUND\]|NOT_FOUND|does not exist/i.test(message);
 }
 
 /**
@@ -699,6 +723,48 @@ export function listSessionBackgroundTasksFor(
   return readSessionBackgroundTasks(sessionId).then(({ tasks, pendingContinuations }) =>
     pendingContinuations === undefined ? { tasks } : { tasks, pendingContinuations },
   );
+}
+
+/**
+ * 会话后台活动快照(只读,best-effort):「turn 已结束但子进程仍在调模型」的信号
+ * 由被控端 loopback proxy 观察,远程会话必须隧道读(控制端本机查恒为 false)。
+ * 隧道失败一律按无活动降级,与 listSessionBackgroundTasksFor 同口径。
+ */
+export async function sessionBackgroundActivityFor(sessionId: string): Promise<{ active: boolean }> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return window.electronAPI.maker.getSessionBackgroundActivity(sessionId);
+  return (
+    invokeRemote(deviceId, 'maker:session-background-activity', [sessionId]) as Promise<{
+      active: boolean;
+    }>
+  ).catch(() => ({ active: false }));
+}
+
+/**
+ * 停止类操作的执行端:远程 → 被控设备 id(粘滞解析,relay 瞬断窗口内不退回本机);
+ * 本机 → null,但仅当本机库确有该会话。两者都不是即归属未解析(冷启动时远程注册表
+ * 尚未就绪),拒绝执行 —— 本机停止对不存在的会话会幂等「成功」,任务却在被控端继续跑。
+ */
+async function resolveStopOwner(sessionId: string): Promise<string | null> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (deviceId) return deviceId;
+  try {
+    await sessionService.get(sessionId);
+  } catch {
+    throw new Error('[DEVICE_LINK_NOT_CONNECTED] Background task ownership is unresolved');
+  }
+  // 本机查询在途期间远程注册表可能完成水合(恢复 / 复制的本机库可含同 id 会话):
+  // 查询落地后再核验一次,远程归属优先,停止不落到同 id 的本机会话。
+  return getStickySessionDeviceId(sessionId) ?? null;
+}
+
+/** 会话级「全部停止」(关闭归属端常驻 agent 进程);路由与错误语义同 stopAgentTaskFor。 */
+export async function stopSessionBackgroundTasksFor(sessionId: string): Promise<{ ok: true }> {
+  const deviceId = await resolveStopOwner(sessionId);
+  if (!deviceId) return window.electronAPI.maker.stopSessionBackgroundTasks(sessionId);
+  return invokeRemote(deviceId, 'maker:session-background-tasks:stop', [sessionId]) as Promise<{
+    ok: true;
+  }>;
 }
 
 /**

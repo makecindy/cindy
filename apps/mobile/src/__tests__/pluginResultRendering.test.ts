@@ -11,6 +11,56 @@ function messages(content: unknown): RemoteMessage[] {
   ];
 }
 describe('plugin results are visible outside collapsed tool details', () => {
+  it.each([true, false])('keeps URLs later in source literals out of file cards (streaming=%s)', (isSessionStreaming) => {
+    for (const source of [
+      'const message = "Open xdt-file:///tmp/fixture.pdf";',
+      'const message = "Open xdt-file:///tmp/fixture.pdf\n[remote content truncated]',
+    ]) {
+      const rows = messages({ text: source });
+      const normalized = normalizeRemoteMessages(rows).find((row) => row.kind === 'tool');
+      expect(normalized?.files).toEqual([]);
+      expect(normalized?.secondaryBody).toBe(JSON.stringify({ text: source }));
+      expect(buildMobileMessageRenderItems(rows, { isSessionStreaming }).some((row) => row.type === 'tool_media')).toBe(false);
+    }
+  });
+  it.each([true, false])('does not render source fixtures as delivered files (streaming=%s)', (isSessionStreaming) => {
+    const source = "const urls = ['xdt-file://open?path=%2Ftmp%2Ffixture.pdf', 'xdt-file:///tmp/example.html'];\n"
+      + "const path = enabled ? 'xdt-file:///tmp/conditional.pdf' : undefined\n"
+      + "const fallback = candidate || 'xdt-file:///tmp/logical.pdf'\n"
+      + "const paths = names.map(() => 'Open xdt-file:///tmp/callback.pdf')\n"
+      + 'const combined = "prefix" + "xdt-file:///tmp/combined.pdf"\n'
+      + 'path = """Open\nxdt-file:///tmp/triple.pdf"""\n'
+      + 'path = r"xdt-file:///tmp/python.pdf"\nvar path = @"Open xdt-file:///tmp/csharp.pdf"\n'
+      + '// fixture: xdt-file:///tmp/comment.pdf\n/* example: xdt-file:///tmp/block.pdf */\n'
+      + "const list = [/* first */ 'xdt-file:///tmp/a.pdf', // next\n 'xdt-file:///tmp/b.pdf']";
+    for (const content of [source, { text: source }]) {
+      const rows = messages(content);
+      rows[0].content = { toolName: 'Read', toolUseId: 'u', input: { file_path: '/tmp/source.ts' } };
+      if (typeof content === 'string') rows[1].content = content;
+      const normalized = normalizeRemoteMessages(rows).find((row) => row.kind === 'tool');
+      expect(normalized?.files).toEqual([]);
+      expect(normalized?.secondaryBody).toContain('const urls');
+      expect(buildMobileMessageRenderItems(rows, { isSessionStreaming }).some((row) => row.type === 'tool_media')).toBe(false);
+    }
+  });
+  it('retains a real file with legacy punctuation as a standalone delivery', () => {
+    const file = "xdt-file:///tmp/O'Brien;[final]}.pdf";
+    const rows = messages({ note: '[report](' + file + ')' });
+    expect(normalizeRemoteMessages(rows).find((row) => row.kind === 'tool')?.files).toEqual([
+      { url: file, title: "O'Brien;[final]}.pdf" },
+    ]);
+    expect(buildMobileMessageRenderItems(rows, { isSessionStreaming: false }).some((row) => row.type === 'tool_media')).toBe(true);
+  });
+  it('retains all adjacent quoted file references in the mobile render model', () => {
+    const first = 'xdt-file:///tmp/first.pdf';
+    const second = 'xdt-file:///tmp/second.pdf';
+    for (const quote of ['"', String.fromCharCode(96)]) {
+      const rows = messages({ note: 'Saved ' + quote + first + quote + ', ' + quote + second + quote });
+      expect(normalizeRemoteMessages(rows).find((row) => row.kind === 'tool')?.files).toEqual([
+        { url: first, title: 'first.pdf' }, { url: second, title: 'second.pdf' },
+      ]);
+    }
+  });
   it.each([true, false])('keeps partner authorization and delivered assets as independent visible rows (streaming=%s)', (isSessionStreaming) => {
     const rows = messages({ ok: true, result: { xdt_image_url: url, xdt_card_id: 'card', _xdt_model_files: [{ url: url.replace('.png', '.glb') }] } });
     const user: RemoteMessage = { ...rows[0], id: 'user', clientId: 'user', role: 'user', toolUseId: null, content: 'Draw a cat', createdAt: '2025-12-31T23:59:58Z' };

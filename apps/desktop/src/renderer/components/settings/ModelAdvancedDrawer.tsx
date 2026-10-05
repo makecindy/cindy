@@ -456,18 +456,13 @@ export function ModelAdvancedDrawer({
         <Dialog.Portal>
           <Dialog.Overlay
             className={cn(
-              'fixed inset-0 z-[10001] bg-[var(--overlay-modal)]',
-              'data-[state=open]:animate-confirm-overlay-in',
-              'data-[state=closed]:animate-confirm-overlay-out',
+              'modal-scrim fixed inset-0 z-[10001]',
             )}
           />
           <Dialog.Content
             onPointerDownOutside={(event) => event.preventDefault()}
             className={cn(
-              'fixed inset-0 z-[10001] m-auto flex h-fit max-h-[calc(100dvh-48px)] w-[800px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-xl',
-              'border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
-              'data-[state=open]:animate-confirm-content-layout-in',
-              'data-[state=closed]:animate-confirm-content-layout-out',
+              'modal-panel fixed inset-0 z-[10001] m-auto flex h-fit max-h-[calc(100dvh-48px)] w-[800px] max-w-[calc(100vw-32px)] flex-col overflow-hidden',
             )}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             aria-describedby={undefined}

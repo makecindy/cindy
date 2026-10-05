@@ -104,7 +104,7 @@ export function ManageMenu({
         // 菜单渲染在 portal 里,但 React 事件仍沿组件树冒泡——不拦截的话,
         // 点菜单项(编辑/删除等)会触发卡片 onClick,把详情浮窗一起带出来。
         onClick={(e) => e.stopPropagation()}
-        className="w-56 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 shadow-[var(--shadow-menu)]"
+        className="w-56"
       >
         {items.map(({ action, labelKey, icon: Icon, danger, disabled }) => {
           const item = (
@@ -112,11 +112,7 @@ export function ManageMenu({
               key={action}
               disabled={disabled}
               onSelect={() => onAction(skill, action)}
-              className={cn(
-                'h-10 rounded-lg px-3 text-sm focus:bg-[var(--cmd-palette-item-hover)]',
-                danger ? 'text-[var(--error-fg)]' : 'text-[var(--msg-assistant-text)]',
-                disabled && 'opacity-50',
-              )}
+              variant={danger ? 'danger' : 'default'}
             >
               <Icon size={15} className="mr-3 shrink-0" />
               {t(labelKey)}

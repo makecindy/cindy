@@ -32,7 +32,7 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { isUnsupportedResponsesImageErrorPayload } from '@cindy/responses-chat-bridge';
 import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
 import { createLogger } from '../logger.js';
-import { readAutoReviewUserText } from './autoReviewUserIntent.js';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText } from './autoReviewUserIntent.js';
 import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import {
@@ -75,6 +75,7 @@ import {
   updateQueuedMessageText,
 } from '../../shared/agentInputQueue.js';
 import { CONTINUE_AFTER_ERROR_PROMPT, syntheticTriggerKind } from '../../shared/interruptedTurn.js';
+import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 import { attachSessionReferenceMetadata } from '../../shared/sessionReferenceMetadata.js';
 import {
   appendRecoveryCheckpointPrompt,
@@ -109,6 +110,11 @@ const TERMINAL_DONE_FALLBACK_DELAY_MS = 250;
 const REWIND_BOUNDARY_POLL_INTERVAL_MS = 100;
 
 type QueuedAttachment = NonNullable<AgentInputQueuedMessage['files']>[number];
+
+/** Typed Host continuations carry provenance, never user-authored permission text. */
+function queuedAutoReviewText(item: AgentInputQueuedMessage): string {
+  return typeof item.autoReviewUserText === 'string' ? item.autoReviewUserText : '';
+}
 
 function isMakerImageAttachment(file: Pick<QueuedAttachment, 'category' | 'ext'>): boolean {
   return getAgentInputAttachmentBlockType(file.category, file.ext) === 'image';
@@ -195,6 +201,7 @@ function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
 }
 
 export interface AgentInputSendOpts {
+  readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
   /** Main-owned identity of the zero-output user turn being replaced. */
   retryUserClientId?: string;
   toolsDisabled?: boolean;
@@ -223,6 +230,19 @@ export interface AgentInputSendOpts {
   uiLanguage?: string;
   /** Queue provenance stamped by the controlled desktop at device-link input IPC entry. */
   fromDeviceLinkClient?: boolean;
+  /**
+   * 远程设备来源(见 AgentInputQueuedMessage.sourceDevice)。drain 与 steer 都透传:
+   * 派发时生成 `[客户端说明]`,落库写 agentMeta.sourceDevice。**由 main 构造,不是 wire 输入。**
+   */
+  sourceDevice?: AgentInputQueuedMessage['sourceDevice'];
+  /**
+   * steer 投递专用的消息来源(drain 走 persistUserMessage.origin / sourcePlugin /
+   * sharedTaskAuthor)。只用于生成 `[消息来源]` 说明,**不是** maker-core SendOrigin,
+   * 也不参与任何权限判定;刻意不复用 `origin`(那是 scheduler 的 turn origin)。
+   */
+  sourceOrigin?: AgentInputQueuedMessage['origin'];
+  sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
+  sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
   /** Main-owned clear token captured when this input became active. */
   expectedClearBoundaryMs?: number | null;
   /** Main-owned input generation captured before async preparation. */
@@ -235,6 +255,8 @@ export interface AgentInputSendOpts {
   onVendorTurnReserved?: (generation: number) => void;
   persistUserMessage?: {
     sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
+    /** 插件来源:写入 agentMeta.sourcePlugin 并生成 `[消息来源]`(不传给 maker-core)。 */
+    sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
     clientId: string;
     content: string;
     /** Overflow 重放用的 agent-facing wire payload（mention / 标注附件等）。 */
@@ -1028,6 +1050,13 @@ function sendFailureLogFields(result: AgentInputSendFailure): Record<string, unk
   };
 }
 
+/** 主机生成的隐藏指令或自动续跑:沿用原条目的来源,但不是来源方说的话。 */
+function isHostGeneratedSteerItem(item: AgentInputQueuedMessage): boolean {
+  if (item.autoResume === true || item.agentOmitsTriggerPrefix === true) return true;
+  return isSyntheticTriggerText(item.text.trimStart())
+    || isSyntheticTriggerText((item.persistedContent ?? '').trimStart());
+}
+
 export class AgentInputCoordinator {
   private readonly states = new Map<string, SessionInputState>();
   private readonly steerAbortControllers = new Map<string, Map<string, AbortController>>();
@@ -1099,6 +1128,20 @@ export class AgentInputCoordinator {
       && vendorGeneration !== active.vendorTurnGeneration) return null;
     // A human steering a private reply takes ownership of the resulting output.
     return active.latestSteeringClientId ?? active.item?.clientId ?? null;
+  }
+
+  /** Authority follows the active input, never pending steering or cumulative reply attribution. */
+  getAcceptedInputProvenance(sessionId: string): {
+    clientId: string; autoResume?: boolean; retrySourceClientId?: string; authoredText?: string; originKind?: string;
+  } | null {
+    const active = this.states.get(sessionId)?.activeTurn;
+    const item = active?.item;
+    // Native tools may arrive before sendToAgent returns its dispatch acknowledgement.
+    if (!item) return null;
+    return { clientId: item.clientId, autoResume: item.autoResume,
+      authoredText: typeof item.autoReviewUserText === 'string' ? item.autoReviewUserText : undefined,
+      originKind: item.origin?.kind,
+      retrySourceClientId: item.retrySourceClientId ?? item.supersedesUserClientId };
   }
 
   /** Inputs consumed by this native turn, excluding queued work and stale generations. */
@@ -2207,9 +2250,11 @@ export class AgentInputCoordinator {
       );
       await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts), {
         ...(item.sharedTaskAuthor ? { sharedTaskAuthor: item.sharedTaskAuthor } : {}),
-        [AUTO_REVIEW_SOURCE_CONTENT]: item.autoReviewUserText ?? '',
-        ...(readAutoReviewUserText(item.persistedContent) === null
-          ? { [AUTO_REVIEW_USER_INTENT]: item.autoReviewUserText ?? '' } : {}),
+        [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(item),
+        ...(item.autoReviewUserText && typeof item.autoReviewUserText === 'object' && item.autoReviewUserText.kind === 'delegated-continuation'
+          ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const } : {}),
+        ...(typeof item.autoReviewUserText !== 'object' && readAutoReviewUserText(item.persistedContent) === null
+          ? { [AUTO_REVIEW_USER_INTENT]: queuedAutoReviewText(item) } : {}),
         messageUuid,
         userName: item.userName,
         signal: AbortSignal.any([inputBoundarySignal, steerAbort.signal]),
@@ -2224,6 +2269,11 @@ export class AgentInputCoordinator {
         // 同 drain:steer 投递也在入队时的 async context 之外。
         ...(item.fromMobileClient ? { fromMobileClient: true } : {}),
         ...(item.uiLanguage ? { uiLanguage: item.uiLanguage } : {}),
+        // 消息来源同样随 steer 透传(只用于说明与归属,steer 不经 send 事务)。主机生成的
+        // 隐藏指令([UI_ACTION_TRIGGER])与自动续跑不是来源方的话,同 send 事务不加 `[消息来源]`。
+        ...(item.sourceDevice ? { sourceDevice: item.sourceDevice } : {}),
+        ...(!isHostGeneratedSteerItem(item) && item.sourcePlugin ? { sourcePlugin: item.sourcePlugin } : {}),
+        ...(!isHostGeneratedSteerItem(item) && item.origin ? { sourceOrigin: item.origin } : {}),
       });
     } catch (err) {
       const latest = this.getState(sessionId);
@@ -4007,6 +4057,8 @@ export class AgentInputCoordinator {
     delete projected.hostAcceptedAtMs;
     delete projected.autoReviewUserText;
     delete projected.fromDeviceLinkClient;
+    // Main-only wire-assembly hint; renderers mask rows from `text` alone.
+    delete projected.agentOmitsTriggerPrefix;
     delete projected.trustedSessionReferenceContexts;
     delete projected.sessionReferencesRequireTrustedSnapshot;
     delete (projected as Record<string, unknown>)[TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT];
@@ -4565,7 +4617,9 @@ export class AgentInputCoordinator {
       const preVendorDispatchAt = Math.max(0, Date.now() - 1);
       const result = await this.deps.sendToAgent(sessionId, makerUserMessage, head.createOpts, {
         ...(head.supersedesUserClientId ? { retryUserClientId: head.supersedesUserClientId } : {}),
-        [AUTO_REVIEW_SOURCE_CONTENT]: head.autoReviewUserText ?? '',
+        [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(head),
+        ...(head.autoReviewUserText && typeof head.autoReviewUserText === 'object' && head.autoReviewUserText.kind === 'delegated-continuation'
+          ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const } : {}),
         messageUuid: active.messageUuid,
         userName: head.userName,
         ...(head.toolsDisabled === true ? { toolsDisabled: true } : {}),
@@ -4583,8 +4637,10 @@ export class AgentInputCoordinator {
         ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
         ...(head.uiLanguage ? { uiLanguage: head.uiLanguage } : {}),
         ...(head.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : {}),
+        ...(head.sourceDevice ? { sourceDevice: head.sourceDevice } : {}),
         persistUserMessage: {
           ...(head.sharedTaskAuthor ? { sharedTaskAuthor: head.sharedTaskAuthor } : {}),
+          ...(head.sourcePlugin ? { sourcePlugin: head.sourcePlugin } : {}),
           clientId: head.clientId,
           content: head.persistedContent,
           agentFacingWireContent: makerUserMessage,
@@ -6310,6 +6366,9 @@ export class AgentInputCoordinator {
           agentMeta: {
             uuid: active.messageUuid,
             ...(item.sharedTaskAuthor ? { sharedTaskAuthor: item.sharedTaskAuthor } : {}),
+            // 来源标签数据(同 drain 落库口径;只用于归属展示,不是权限判据)。
+            ...(item.sourceDevice ? { sourceDevice: item.sourceDevice } : {}),
+            ...(item.sourcePlugin ? { sourcePlugin: item.sourcePlugin } : {}),
             ...(item.autoReviewUserText !== undefined ? { autoReviewUserText: item.autoReviewUserText } : {}),
             // 与 drain 派发落库（makerSendTransaction）同口径：工具 / Orca / 自动化注入的
             // steer 也要保留来源，接收方才能渲染来源标签。

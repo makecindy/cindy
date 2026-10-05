@@ -36,6 +36,8 @@ import {
   canCoalesceRemoteListing,
   isCompletedInvokeRetryableReadChannel,
   INVOKE_TIMEOUT_OVERRIDES_MS,
+  ACTION_INVOKE_TIMEOUTS_MS,
+  resolveRemoteInvokeTimeoutMs,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   REMOTE_INVOKE_ALLOWLIST,
@@ -81,6 +83,7 @@ import {
   type ProviderLogoKind,
   type ProviderLogoRouting,
 } from '@cindy/model-providers/branding';
+import { isModelVisible } from '@cindy/model-providers/sections';
 import { app } from 'electron';
 import { remoteDesktop, requestRemoteDesktop } from '../remote-desktop';
 import { remoteCredentialHost } from '../remote-desktop/credentialHost';
@@ -514,19 +517,37 @@ function projectRoutingForDisplay(
  * availability marker so both current and independently-updated legacy Mobile clients keep the
  * published provider model shape.
  */
-function projectModelsForController(models: unknown): unknown {
+function projectModelsForController(
+  models: unknown,
+  providerId: string,
+  visibility: Record<string, boolean>,
+): unknown {
   if (!models || typeof models !== 'object' || Array.isArray(models)) return models;
   return Object.fromEntries(
-    Object.entries(models as Record<string, unknown>).map(([agent, value]) => {
-      if (!Array.isArray(value)) return [agent, value];
-      const projected = value.flatMap((model) => {
-        if (!model || typeof model !== 'object' || Array.isArray(model)) return [model];
-        const { availability, ...legacyModel } = model as Record<string, unknown>;
-        return availability === 'requires_payment' ? [] : [legacyModel];
-      });
-      return [agent, projected];
-    }),
+    Object.entries(models as Record<string, unknown>).map(([agent, value]) => [
+      agent, projectVisibleModelList(value, providerId, agent, visibility),
+    ]),
   );
+}
+
+/** Apply the same owner preferences as the picker before paying the transport cost. */
+function projectVisibleModelList(
+  value: unknown,
+  providerId: string,
+  agent: string,
+  visibility: Record<string, boolean>,
+): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.flatMap((model) => {
+    if (!model || typeof model !== 'object' || Array.isArray(model)) return [model];
+    const { availability, ...legacyModel } = model as Record<string, unknown>;
+    const visible = isModelVisible(
+      visibility[`${agent}:${providerId}:${legacyModel.id}`],
+      typeof legacyModel.defaultEnabled === 'boolean' ? legacyModel.defaultEnabled : undefined,
+    );
+    visibility[`${agent}:${providerId}:${legacyModel.id}`] = visible;
+    return availability === 'requires_payment' || !visible ? [] : [legacyModel];
+  });
 }
 
 /**
@@ -603,6 +624,14 @@ function projectInvokeResultForTunnel(
   if (channel !== 'maker:provider:list') return result;
   const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown; providerOrder?: unknown };
   if (!Array.isArray(r.providers)) return result;
+  const modelVisibilityOverrides = r.modelVisibilityOverrides
+    && typeof r.modelVisibilityOverrides === 'object'
+    && !Array.isArray(r.modelVisibilityOverrides)
+    ? Object.fromEntries(
+        Object.entries(r.modelVisibilityOverrides)
+          .filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'),
+      )
+    : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
     const logoKind = typeof p.id === 'string'
@@ -616,18 +645,18 @@ function projectInvokeResultForTunnel(
     ) {
       rest.logoKind = logoKind;
     }
-    rest.models = projectModelsForController(p.models);
+    const providerId = typeof p.id === 'string' ? p.id : '';
+    const visibility = modelVisibilityOverrides ?? {};
+    rest.models = projectModelsForController(p.models, providerId, visibility);
+    // Media uses the same preference key as the host visibility snapshot.
+    const mediaAgent = Array.isArray(p.agents) && typeof p.agents[0] === 'string'
+      ? p.agents[0] : 'claude-code';
+    for (const field of ['imageModels', 'videoModels', 'audioModels', 'embeddingModels'] as const) {
+      if (Array.isArray(p[field])) rest[field] = projectVisibleModelList(p[field], providerId, mediaAgent, visibility);
+    }
     rest.routing = projectRoutingForDisplay(p.routing);
     return rest;
   });
-  const modelVisibilityOverrides = r.modelVisibilityOverrides
-    && typeof r.modelVisibilityOverrides === 'object'
-    && !Array.isArray(r.modelVisibilityOverrides)
-    ? Object.fromEntries(
-        Object.entries(r.modelVisibilityOverrides)
-          .filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'),
-      )
-    : undefined;
   return {
     providers,
     ...(modelVisibilityOverrides !== undefined ? { modelVisibilityOverrides } : {}),
@@ -741,6 +770,7 @@ const DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS = 30_000;
 const REMOTE_INVOKE_MAX_CLIENT_WAIT_MS = Math.max(
   DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS,
   ...Object.values(INVOKE_TIMEOUT_OVERRIDES_MS),
+  ...ACTION_INVOKE_TIMEOUTS_MS,
 );
 /** 再保留一轮同等重连窗口后才放弃无人等待的回包(全局上限;逐条按 channel 收窄)。 */
 const REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS * 2;
@@ -752,10 +782,18 @@ const REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS 
  * 弱网时段最多占 outbox 两分钟纯属浪费配额;长任务 channel(60s 预算)自动保留
  * 更久。控制端可能配置更短的超时(mobile 15s),推断值只偏保守、不早丢。
  */
-function outboxEntryMaxAgeMs(channel: string | undefined): number {
-  const budgetMs =
-    (channel && INVOKE_TIMEOUT_OVERRIDES_MS[channel]) || DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS;
-  return Math.min(budgetMs * 2, REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS);
+function outboxEntryMaxAgeMs(channel: string | undefined, args?: unknown[]): number {
+  return Math.min(remoteInvokeClientBudgetMs(channel, args) * 2, REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS);
+}
+/**
+ * 控制端对这次调用的等待预算:与桌面控制端同一个 resolver(带 args),所以任务复制
+ * estimate/receive 这类按动作区分的预算在被控端的 orphan 与 outbox 两处同样生效。
+ */
+function remoteInvokeClientBudgetMs(channel: string | undefined, args?: unknown[]): number {
+  return (
+    (channel && resolveRemoteInvokeTimeoutMs(channel, args, 'desktop')) ||
+    DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS
+  );
 }
 /**
  * ipcMain handler 没有统一 AbortSignal，不能在 30s 客户端超时时假装取消副作用。
@@ -769,10 +807,8 @@ const REMOTE_INVOKE_ORPHAN_TIMEOUT_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS * 2;
  * 默认 30s handler 都会占满 controller 的 in-flight 配额整整 22 分钟,后续远程控制
  * 动作看起来卡住(BACKPRESSURE)。
  */
-function remoteInvokeOrphanTimeoutMs(channel: string | undefined): number {
-  const budgetMs =
-    (channel && INVOKE_TIMEOUT_OVERRIDES_MS[channel]) || DEFAULT_REMOTE_INVOKE_CLIENT_WAIT_MS;
-  return Math.min(budgetMs * 2, REMOTE_INVOKE_ORPHAN_TIMEOUT_MS);
+function remoteInvokeOrphanTimeoutMs(channel: string | undefined, args?: unknown[]): number {
+  return Math.min(remoteInvokeClientBudgetMs(channel, args) * 2, REMOTE_INVOKE_ORPHAN_TIMEOUT_MS);
 }
 interface CachedRemoteInvokeResult {
   result: InvokeResultPayload;
@@ -825,6 +861,8 @@ const controllerLinkGenerationByDevice = new Map<string, number>();
 const controllerDisplayNameByDevice = new Map<string, string>();
 /** 控制帧自报名称仅作数据库展示名缺失时的兼容回退。 */
 const reportedControllerNameByDevice = new Map<string, string>();
+/** 旧 relay presence 主机名：最后一级回退，与自报名同生命周期，供被控浮窗读取。 */
+const fallbackControllerNameByDevice = new Map<string, string>();
 
 /** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
 type SessionsSubscribedListener = (controllerDeviceId: string) => void;
@@ -867,6 +905,7 @@ function resolveControllerName(deviceId: string, reportedName: unknown): string 
 
 function clearReportedControllerName(deviceId: string): void {
   reportedControllerNameByDevice.delete(deviceId);
+  fallbackControllerNameByDevice.delete(deviceId);
 }
 
 function readConnectionEpoch(client: DeviceLinkClient): number | undefined {
@@ -899,6 +938,8 @@ export function setControllerDisplayName(deviceId: string, name: string): void {
     controllerDisplayNameByDevice.set(deviceId, normalized);
   } else {
     controllerDisplayNameByDevice.delete(deviceId);
+    // An explicit clear also retires the legacy host name, matching the banner.
+    fallbackControllerNameByDevice.delete(deviceId);
   }
   const displayName = normalized
     ?? reportedControllerNameByDevice.get(deviceId)
@@ -912,6 +953,7 @@ export function setControllerDisplayName(deviceId: string, name: string): void {
  */
 export function setControllerFallbackDisplayName(deviceId: string, name: string): void {
   const normalized = normalizeControllerName(name);
+  if (normalized) fallbackControllerNameByDevice.set(deviceId, normalized);
   if (
     !normalized
     || controllerDisplayNameByDevice.has(deviceId)
@@ -922,10 +964,20 @@ export function setControllerFallbackDisplayName(deviceId: string, name: string)
   if (subscriptions.updateControllerMetadata(deviceId, normalized)) syncForwarding();
 }
 
+/** 与被控横幅同一优先级的控制端展示名；未知时返回 undefined，由调用方决定兜底。 */
+export function getControllerDisplayName(deviceId: string): string | undefined {
+  return (
+    controllerDisplayNameByDevice.get(deviceId)
+    ?? reportedControllerNameByDevice.get(deviceId)
+    ?? fallbackControllerNameByDevice.get(deviceId)
+  );
+}
+
 /** 账号切换 / 链路 teardown 时清空 presence 展示名，避免串到下一段身份。 */
 export function clearControllerDisplayNames(): void {
   controllerDisplayNameByDevice.clear();
   reportedControllerNameByDevice.clear();
+  fallbackControllerNameByDevice.clear();
 }
 
 export function getActiveControllers(): ActiveController[] {
@@ -2747,6 +2799,7 @@ async function handleInvoke(
     executionPromise,
     src,
     payload?.channel,
+    payload?.args,
   ).finally(releaseBusyLease);
   const inFlightEntry = {
     channel: payload?.channel,
@@ -2804,9 +2857,10 @@ function settleRemoteInvokeWithOrphanDeadline(
   execution: Promise<InvokeResultPayload>,
   src: string,
   channel: string | undefined,
+  args?: unknown[],
 ): Promise<InvokeResultPayload> {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const orphanMs = remoteInvokeOrphanTimeoutMs(channel);
+  const orphanMs = remoteInvokeOrphanTimeoutMs(channel, args);
   const timeout = new Promise<InvokeResultPayload>((resolve) => {
     timer = setTimeout(() => {
       timer = null;
@@ -3304,7 +3358,7 @@ function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
   const blockedPeers = new Set<string>();
   for (const [key, queued] of remoteInvokeResultOutbox) {
     if (onlySrc && queued.src !== onlySrc) continue;
-    if (now - queued.queuedAt >= outboxEntryMaxAgeMs(queued.channel)) {
+    if (now - queued.queuedAt >= outboxEntryMaxAgeMs(queued.channel, queued.args)) {
       log.warn(
         `dropping expired invoke-result outbox entry for ${queued.channel ?? '?'} ` +
         `to ${shortId(queued.src)} request=${shortId(queued.requestId)} queuedMs=${now - queued.queuedAt}`,
@@ -3994,6 +4048,8 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
         // 平台按 server 盖章的 src 查本机 presence 登记表,不采信控制端自报的任何
         // 帧内字段(allowlist 只挡 channel 不挡 args,见下方 dispatchLocalInvoke 前的说明)。
         controllerPlatform: getControllerPlatform(src),
+        // 来源展示名快照:presence / 目录权威名优先,其次控制帧自报名;只用于归属展示。
+        controllerName: resolveControllerName(src, undefined),
         historyView,
       },
       // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。

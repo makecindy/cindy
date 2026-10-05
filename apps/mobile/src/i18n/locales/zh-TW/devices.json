@@ -427,7 +427,13 @@
       "needAttention": "{{count}} 個需關注",
       "waiting": "等待處理 {{count}} 個",
       "automationRunning": "自動化執行中",
-      "totalRuns": "共 {{count}} 次執行"
+      "totalRuns": "共 {{count}} 次執行",
+      "runCount": "共 {{count}} 次",
+      "nextRunMinutes": "{{count}} 分鐘後執行",
+      "nextRunHours": "{{count}} 小時後執行",
+      "nextRunDays": "{{count}} 天後執行",
+      "imminent": "即將執行",
+      "stopped": "已停止"
     }
   },
   "detail": {

@@ -281,6 +281,37 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
+  it('asks the host before each call and does not run a denied one', async () => {
+    await h.cleanup();
+    const storage = new InMemoryStorage();
+    const scheduler = new Scheduler({
+      storage, runner: noopRunner, clock: new FakeClock(), generateId: makeIdGen(), tickIntervalMs: 60_000_000,
+    });
+    const authorizeCall = vi.fn(async ({ tool }: { tool: string }) => (tool === 'schedule_create'
+      ? { ok: false as const, errorCode: 'OWNER_TURN_REQUIRED', message: 'owner only' }
+      : { ok: true as const }));
+    const server = createSchedulerMcpServer({ getScheduler: () => scheduler, authorizeCall });
+    const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'scheduler-gate', version: '0.0.0' });
+    await Promise.all([server.connect(serverTx), client.connect(clientTx)]);
+    try {
+      const denied = await client.callTool({
+        name: 'call_tool',
+        arguments: { name: 'schedule_create', args: baseCreate as unknown as Record<string, unknown> },
+      });
+      const deniedPayload = JSON.parse((denied.content as Array<{ text: string }>)[0]!.text) as Record<string, unknown>;
+      expect(deniedPayload).toMatchObject({ ok: false, errorCode: 'OWNER_TURN_REQUIRED' });
+      expect(await scheduler.list()).toHaveLength(0);
+      expect(authorizeCall).toHaveBeenCalledWith(expect.objectContaining({ server: 'cindy_scheduler', tool: 'schedule_create' }));
+
+      const listed = await client.callTool({ name: 'call_tool', arguments: { name: 'schedule_list', args: {} } });
+      expect(parseToolResult(listed as { content: unknown[]; isError?: boolean }).envelope).toMatchObject({ ok: true });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it('call_tool(schedule_create) creates a schedule and call_tool(schedule_list) returns it (same payload as scheduler.list)', async () => {
     // schedule_create
     const created = await h.client.callTool({
