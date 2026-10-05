@@ -6030,6 +6030,34 @@ export class AgentInputCoordinator {
   }
 
   /**
+   * 接管仍属于 attemptToken 时更新进行中提示（例如从「正在检查配额」切到「正在用一次
+   * 重置」）。续跑指令落库时带的是更新后的信息，历史记录与最终动作一致。
+   */
+  updateAutoResumePending(
+    sessionId: string,
+    attemptToken: number,
+    patch: Partial<AutoResumeInfo>,
+  ): boolean {
+    const state = this.getState(sessionId);
+    if (!state.autoResumePending || state.autoResumeAttemptToken !== attemptToken) return false;
+    state.autoResumePending = { ...state.autoResumePending, ...patch };
+    this.emit(sessionId);
+    return true;
+  }
+
+  /**
+   * 接管放弃、错误已交还后补上稳定 reason，让报错横幅说明原因（例如没用重置的理由）。
+   * 只在错误仍在、且还没有 reason 时生效。
+   */
+  noteSurfacedErrorReason(sessionId: string, reason: string): boolean {
+    const state = this.getState(sessionId);
+    if (!state.error || state.errorReason) return false;
+    state.errorReason = reason;
+    this.emit(sessionId);
+    return true;
+  }
+
+  /**
    * unexpected close 只交棒 stall/idle/reconnect 的 CONTINUE-only 续跑。
    * generic auto-retry（empty-response / overload）会克隆原文，不能跟着 Session 重建走。
    */

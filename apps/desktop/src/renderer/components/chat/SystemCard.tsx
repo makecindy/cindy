@@ -26,6 +26,7 @@ import { useNavigate } from 'react-router-dom';
 
 import {
   autoResumePendingLabel,
+  recordedAutoResumeLabelKey,
   hasInterruptionContext,
   readAutoResumeInfo,
   type AutoResumeCardInfo,
@@ -944,10 +945,11 @@ function AutoResumeActionRow({
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  // 用重置后的续跑只做一次，重连的次数与累计对它没有意义。
+  // 配额耗尽后的续跑不是重连，重连的次数与累计对它没有意义。
+  const quotaKind = info.quotaKind;
   const hasProgress =
-    !info.resetCredit && info.attempt !== undefined && info.maxAttempts !== undefined;
-  const sessionTotal = info.resetCredit ? undefined : info.sessionTotal;
+    !quotaKind && info.attempt !== undefined && info.maxAttempts !== undefined;
+  const sessionTotal = quotaKind ? undefined : info.sessionTotal;
   // **转圈的判据是"此刻真的有 turn 在跑",不是"是不是 ephemeral 行"。**
   //
   // 一次中断的进行中状态跨两种载体:退避那 3–20 秒是 ephemeral 行(state='live'),续跑
@@ -965,17 +967,7 @@ function AutoResumeActionRow({
   const pendingLabel = autoResumePendingLabel(info);
   const label = live
     ? t(pendingLabel.key, pendingLabel.params)
-    : info.resetCredit
-      ? outcome === 'succeeded'
-        ? t('chat.systemCard.autoResume.resetCreditLabel')
-        : outcome === 'failed'
-          ? t('chat.systemCard.autoResume.resetCreditLabelFailed')
-          : t('chat.systemCard.autoResume.resetCreditLabelNeutral')
-      : outcome === 'succeeded'
-        ? t('chat.systemCard.autoResume.label')
-        : outcome === 'failed'
-          ? t('chat.systemCard.autoResume.labelFailed')
-          : t('chat.systemCard.autoResume.labelNeutral');
+    : t(recordedAutoResumeLabelKey(quotaKind, outcome));
   const summary = summarizeInterruption(info.error);
   const canExpand = Boolean(info.error) || hasProgress || sessionTotal !== undefined;
   return (

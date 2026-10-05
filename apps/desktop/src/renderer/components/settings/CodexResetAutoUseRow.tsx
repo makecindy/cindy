@@ -1,6 +1,7 @@
 /**
  * OpenAI 订阅账号的「自动使用重置」开关（默认关）。挂在设置页该账号的用量卡片下方；
- * 规则在 main/usage/codexResetCreditAutoUse.ts，这里只读写开关。
+ * 规则在 main/usage/codexResetCreditAutoUse.ts，这里只读写开关，并列出最近一次自动
+ * 使用——重置用掉不可撤回，每次自动使用都要让用户看得到。
  *
  * 「恢复默认」删除这个账号的显式设置，重新跟随默认值。
  */
@@ -13,8 +14,10 @@ import { toast } from '@/lib/toast';
 import type { CodexResetCreditAutoUseState } from '../../../shared/codexResetCreditAutoUse';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
+const LAST_AUTO_USE_REFRESH_MS = 60_000;
+
 export function CodexResetAutoUseRow({ providerId }: { providerId: string }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [state, setState] = useState<CodexResetCreditAutoUseState | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -25,13 +28,18 @@ export function CodexResetAutoUseRow({ providerId }: { providerId: string }) {
     // 旧版 preload 没有这个入口：不显示开关。
     const read = window.electronAPI?.maker?.usage?.getCodexResetAutoUse;
     if (!read) return;
-    void read(providerId)
-      .then((next) => {
-        if (!cancelled && isDataOwnerGenerationCurrent(owner)) setState(next);
-      })
-      .catch(() => undefined);
+    const load = () =>
+      void read(providerId)
+        .then((next) => {
+          if (!cancelled && isDataOwnerGenerationCurrent(owner)) setState(next);
+        })
+        .catch(() => undefined);
+    load();
+    // 自动使用发生在后台：停留在设置页时定期重读，最近一次记录能跟上。
+    const timer = window.setInterval(load, LAST_AUTO_USE_REFRESH_MS);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, [providerId]);
 
@@ -61,6 +69,13 @@ export function CodexResetAutoUseRow({ providerId }: { providerId: string }) {
 
   if (!state) return null;
   const labelId = `codex-reset-auto-use-${providerId}`;
+  const lastAutoUse = state.lastAutoUse;
+  const lastAutoUseAt = lastAutoUse
+    ? new Intl.DateTimeFormat(i18n?.resolvedLanguage ?? i18n?.language, {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      }).format(new Date(lastAutoUse.atMs))
+    : null;
   return (
     <div
       data-testid="provider-codex-reset-auto-use"
@@ -74,6 +89,19 @@ export function CodexResetAutoUseRow({ providerId }: { providerId: string }) {
         <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
           {t('settings.providers.codexResetAutoUse.description')}
         </p>
+        {lastAutoUse && lastAutoUseAt ? (
+          <p
+            data-testid="provider-codex-reset-last-auto-use"
+            className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]"
+          >
+            {t(
+              lastAutoUse.kind === 'expiring'
+                ? 'settings.providers.codexResetAutoUse.lastAutoUseExpiring'
+                : 'settings.providers.codexResetAutoUse.lastAutoUseUsageLimit',
+              { at: lastAutoUseAt },
+            )}
+          </p>
+        ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <DefaultOverrideControls

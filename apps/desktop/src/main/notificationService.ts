@@ -195,6 +195,19 @@ export function showDeviceSessionDesktopEvent(
   });
 }
 
+/**
+ * 与具体任务无关的桌面提醒（例如后台自动用掉了一次重置）。遵守桌面通知开关；点击只把
+ * 主窗口拉到前台。
+ */
+export function showDesktopNotice(
+  getWindow: () => BrowserWindow | null,
+  title: string,
+  body: string,
+): boolean {
+  if (!desktopNotificationsEnabled) return false;
+  return showDesktopToast(title, 'done', () => focusWindow(getWindow, ''), body);
+}
+
 export interface NotificationServiceDeps {
   getWindow: () => BrowserWindow | null;
   /**

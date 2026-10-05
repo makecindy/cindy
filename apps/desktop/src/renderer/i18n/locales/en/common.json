@@ -1896,10 +1896,16 @@
     "providers": {
       "codexResetAutoUse": {
         "label": "Use Resets Automatically",
-        "description": "When the weekly quota runs out and stops a task, use one reset and continue the task, at most once a week. A reset about to expire is used 30 minutes before it does, so it isn’t wasted. A used reset can’t be restored.",
+        "description": "When the weekly quota runs out and stops a task, use one reset and continue the task. A reset about to expire is used 30 minutes before it does. A used reset can’t be restored.",
+        "lastAutoUseUsageLimit": "Used 1 reset automatically on {{at}} when the weekly quota ran out",
+        "lastAutoUseExpiring": "Used 1 reset about to expire automatically on {{at}}",
         "enabledToast": "Automatic resets turned on",
         "disabledToast": "Automatic resets turned off",
-        "saveFailed": "Couldn’t save the setting — try again"
+        "saveFailed": "Couldn’t save the setting — try again",
+        "notification": {
+          "title": "A reset was used automatically",
+          "body": "A Codex reset about to expire was used before it did, and the quota started again."
+        }
       },
       "llamacpp": {
         "ownedElsewhere": "The model service is running in another Cindy instance. Download models or change context there, or stop its service first.",
@@ -9841,6 +9847,9 @@
       "codexOrganizationUsageLimit": "The connected Codex account is managed by your organization and has reached its usage limit. Wait for the limit to reset, or switch to another available account before retrying.",
       "codexUsageLimitWithReset": "The connected Codex account has reached its usage limit. Usage is expected to reset at {{resetAt}}.",
       "codexUsageLimit": "The connected Codex account has reached its usage limit. Wait for the limit to reset, or switch to another available account before retrying.",
+      "codexResetCreditShortWindow": "The connected Codex account used up its 5-hour quota, which recovers on its own soon. Weekly quota is still left, so no reset was used.",
+      "codexResetCreditNone": "The connected Codex account used up its weekly quota and has no reset available. Wait for the quota to reset, then continue the task.",
+      "codexResetCreditFailed": "The connected Codex account is out of quota, and using a reset automatically didn’t work. Try again later.",
       "gatewayQuotaExhausted": "Your Cindy AI balance is used up. Add funds to continue.",
       "viewBalance": "View balance",
       "viewBalanceTitle": "Open Usage & Billing to check your balance and add funds",
@@ -10257,8 +10266,11 @@
         "labelFailed": "Reconnect failed",
         "labelNeutral": "Reconnect",
         "resetCreditLabel": "Used a reset and continued",
-        "resetCreditLabelFailed": "Couldn’t use a reset",
+        "resetCreditLabelFailed": "Used a reset, but the task didn’t continue",
         "resetCreditLabelNeutral": "Used a reset",
+        "quotaRestoredLabel": "Quota restored and continued",
+        "quotaRestoredLabelFailed": "Quota restored, but the task didn’t continue",
+        "quotaRestoredLabelNeutral": "Quota restored",
         "detail": {
           "reason": "Interruption reason",
           "attempt": "Attempt {{attempt}}/{{total}}",
@@ -10271,7 +10283,9 @@
       "autoResumePending": {
         "label": "Reconnecting",
         "labelWithProgress": "Reconnecting {{attempt}}/{{total}}",
-        "resetCredit": "Using a reset to restore quota…"
+        "resetCredit": "Using a reset to restore quota…",
+        "resetCreditChecking": "Checking quota…",
+        "quotaRestored": "Quota restored, continuing…"
       },
       "agentSwitch": {
         "label": "Switched from {{from}} to {{to}}",

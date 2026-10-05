@@ -7,15 +7,23 @@ const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, params?: { at?: string }) => (params?.at ? `${key} @ ${params.at}` : key),
+    i18n: { language: 'en' },
   }),
 }));
 
 vi.mock('@/lib/toast', () => ({ toast }));
 
+import type { CodexResetCreditAutoUseState } from '../../../../shared/codexResetCreditAutoUse';
 import { CodexResetAutoUseRow } from '../CodexResetAutoUseRow';
 
-const off = { providerId: 'openai', enabled: false, isCustomized: false, defaultEnabled: false };
+const off: CodexResetCreditAutoUseState = {
+  providerId: 'openai',
+  enabled: false,
+  isCustomized: false,
+  defaultEnabled: false,
+  lastAutoUse: null,
+};
 const on = { ...off, enabled: true, isCustomized: true };
 
 function installApi(state = off) {
@@ -89,5 +97,27 @@ describe('CodexResetAutoUseRow', () => {
     (window as unknown as { electronAPI: unknown }).electronAPI = { maker: { usage: {} } };
     const { container } = render(<CodexResetAutoUseRow providerId="openai" />);
     expect(container.innerHTML).toBe('');
+  });
+
+  it('shows the latest automatic use so a spent reset is never silent', async () => {
+    const atMs = Date.UTC(2026, 9, 7, 9, 30);
+    installApi({ ...on, lastAutoUse: { atMs, kind: 'expiring' } });
+    render(<CodexResetAutoUseRow providerId="openai" />);
+    const line = await screen.findByTestId('provider-codex-reset-last-auto-use');
+    expect(line.textContent).toContain('settings.providers.codexResetAutoUse.lastAutoUseExpiring @ ');
+  });
+
+  it('re-reads the setting while open so a background use shows up', async () => {
+    vi.useFakeTimers();
+    try {
+      const api = installApi();
+      render(<CodexResetAutoUseRow providerId="openai" />);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.getCodexResetAutoUse).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(api.getCodexResetAutoUse).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

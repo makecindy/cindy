@@ -107,7 +107,7 @@ function sameAccount(
   return expected.email === current.email && expected.accountId === current.accountId;
 }
 
-export function normalizeAvailableCount(value: unknown): number {
+function normalizeAvailableCount(value: unknown): number {
   const count = Number(value);
   if (!Number.isFinite(count) || count <= 0) return 0;
   return Math.floor(count);
@@ -168,8 +168,7 @@ function displayRateLimitsById(
   );
 }
 
-/** Available Codex credit that expires first; a credit without expiry sorts last. */
-export function selectEarliestExpiringCredit(
+function selectEarliestExpiringCredit(
   credits: readonly AccountRateLimitResetCredit[] | null,
 ): AccountRateLimitResetCredit | null {
   if (!credits) return null;

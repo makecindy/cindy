@@ -13,7 +13,8 @@ import {
 import { i18n } from '@/i18n';
 import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
-import { CODEX_RESET_CREDIT_RESUME_REASON } from '@cindy/maker-shared/synthetic-trigger';
+import { codexQuotaResumeKind } from '@cindy/maker-shared/synthetic-trigger';
+import { mobileAutoResumeLabelKey } from '@/session/autoResumePresentation';
 
 /**
  * 手机端系统卡类型 = 共享 slash 命令卡 + goal 持久记录卡 + silent-stop 自动续跑卡。
@@ -179,14 +180,10 @@ function formatAutoResumeCard(data: Record<string, unknown> | undefined): System
   const maxAttempts = number(data?.maxAttempts);
   const sessionTotal = number(data?.sessionTotal);
   const outcome = data?.outcome === 'succeeded' || data?.outcome === 'failed' ? data.outcome : undefined;
-  if (data?.reason === CODEX_RESET_CREDIT_RESUME_REASON) {
-    const title = data?.live === true
-      ? i18n.t('message.systemCard.autoResume.resetCreditPending')
-      : outcome === 'succeeded'
-        ? i18n.t('message.systemCard.autoResume.resetCreditSucceeded')
-        : outcome === 'failed'
-          ? i18n.t('message.systemCard.autoResume.resetCreditFailed')
-          : i18n.t('message.systemCard.autoResume.resetCreditNeutral');
+  const quotaKind = codexQuotaResumeKind(data?.reason);
+  if (quotaKind) {
+    const state = data?.live === true ? 'live' : (outcome ?? 'neutral');
+    const title = i18n.t(mobileAutoResumeLabelKey(quotaKind, state, false));
     return { title, ...(error ? { body: error } : {}), rows: [] };
   }
   const hasInterruptionContext = !!(data?.live === true || error || attempt || maxAttempts || sessionTotal || outcome);

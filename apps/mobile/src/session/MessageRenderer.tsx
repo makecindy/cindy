@@ -336,6 +336,7 @@ import {
   getMobileAutoResumePresentation,
   isMobileAutoResumeRowInFlight,
   toggleMobileAutoResumeExpanded,
+  mobileAutoResumeLabelKey,
 } from '@/session/autoResumePresentation';
 import type { ContinuationInFlightProjectionCapability } from '@/session/types';
 import {
@@ -5143,14 +5144,8 @@ function MobileAutoResumeActionRow({
     );
   }
 
-  const label = info.resetCredit
-    ? state === 'live'
-      ? t('message.systemCard.autoResume.resetCreditPending')
-      : state === 'succeeded'
-        ? t('message.systemCard.autoResume.resetCreditSucceeded')
-        : state === 'failed'
-          ? t('message.systemCard.autoResume.resetCreditFailed')
-          : t('message.systemCard.autoResume.resetCreditNeutral')
+  const label = info.quotaKind
+    ? t(mobileAutoResumeLabelKey(info.quotaKind, state, hasProgress))
     : state === 'live'
       ? hasProgress
         ? t('message.systemCard.autoResume.pendingWithProgress', {

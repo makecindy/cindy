@@ -4,26 +4,25 @@
  *   <userData>/codex-reset-credit-auto-use/<owner>/settings.json
  *     只记录用户显式拨过的开关（providerId → boolean）；没记录的账号跟随默认值（关）。
  *     「恢复默认」删除该账号的记录。
- *   <userData>/codex-reset-credit-auto-use/<owner>/weekly-resets.json
- *     周配额用完时自动用掉的那一次：每个 ChatGPT 工作区一个周窗口最多一次（不分连接），
- *     重启后不会再用第二次。扣卡前先写，写不进就不扣。工作区 id 只存哈希；周窗口结束后
- *     的记录在下次写入时清掉。
+ *   <userData>/codex-reset-credit-auto-use/<owner>/last-auto-use.json
+ *     每个连接最近一次自动用掉重置的时刻与原因，只用于设置页展示。
  *
  * <owner> 与 codex-accounts/ 用同一个 owner 目录名（owner id 的 sha256）。没有登录的
  * Cindy 账号时一律视为关闭，写入拒绝。
  */
 
 import { app } from 'electron';
-import { createHash } from 'node:crypto';
 import path from 'node:path';
 
-import type { CodexResetCreditAutoUseState } from '../../shared/codexResetCreditAutoUse.js';
+import type {
+  CodexResetCreditAutoUseRecord,
+  CodexResetCreditAutoUseState,
+} from '../../shared/codexResetCreditAutoUse.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { codexAccountOwnerDir } from '../maker-host/codex-account-auth.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
-import type { WeeklyResetRecord } from './codexResetCreditAutoUse.js';
 
 const log = desktopMakerLogger.child('codex-reset-credit-auto-use-store');
 
@@ -92,11 +91,13 @@ function readProviders(): Record<string, boolean> {
 export function readCodexResetCreditAutoUseState(providerId: string): CodexResetCreditAutoUseState {
   requireProviderId(providerId);
   const explicit = readProviders()[providerId];
+  const owner = ownerDir();
   return {
     providerId,
     enabled: explicit ?? CODEX_RESET_CREDIT_AUTO_USE_DEFAULT,
     isCustomized: explicit !== undefined,
     defaultEnabled: CODEX_RESET_CREDIT_AUTO_USE_DEFAULT,
+    lastAutoUse: owner ? (readLastAutoUses(owner)[providerId] ?? null) : null,
   };
 }
 
@@ -144,80 +145,60 @@ export async function resetCodexResetCreditAutoUse(
   return readCodexResetCreditAutoUseState(providerId);
 }
 
-// ── 周配额用完时自动用过的记录 ─────────────────────────────────────────────
+// ── 最近一次自动使用 ─────────────────────────────────────────────────────
 
-type WeeklyResets = Record<string, WeeklyResetRecord>;
+type LastAutoUses = Record<string, CodexResetCreditAutoUseRecord>;
 
-function weeklyResetsPath(owner: string): string {
-  return path.join(storeDir(owner), 'weekly-resets.json');
+function lastAutoUsesPath(owner: string): string {
+  return path.join(storeDir(owner), 'last-auto-use.json');
 }
 
-/** 按 ChatGPT 工作区记，不按连接：同一工作区挂在两个连接下也只算一次。 */
-function weeklyRecordKey(accountKey: string): string {
-  return createHash('sha256').update(`codex-reset:${accountKey}`).digest('hex').slice(0, 16);
-}
-
-function parseWeeklyResets(text: string | null): WeeklyResets {
+function parseLastAutoUses(text: string | null): LastAutoUses {
   if (!text) return {};
   const raw = JSON.parse(text) as unknown;
-  const out: WeeklyResets = {};
+  const out: LastAutoUses = {};
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
-  for (const [key, value] of Object.entries(raw)) {
-    const record = value as { untilMs?: unknown; atMs?: unknown } | null;
+  for (const [providerId, value] of Object.entries(raw)) {
+    const record = value as { atMs?: unknown; kind?: unknown } | null;
     if (
+      PROVIDER_ID_PATTERN.test(providerId) &&
       record &&
-      typeof record.untilMs === 'number' &&
-      Number.isFinite(record.untilMs) &&
       typeof record.atMs === 'number' &&
-      Number.isFinite(record.atMs)
+      Number.isFinite(record.atMs) &&
+      (record.kind === 'usage-limit' || record.kind === 'expiring')
     ) {
-      out[key] = { untilMs: record.untilMs, atMs: record.atMs };
+      out[providerId] = { atMs: record.atMs, kind: record.kind };
     }
   }
   return out;
 }
 
-function readWeeklyResets(owner: string): WeeklyResets {
+function readLastAutoUses(owner: string): LastAutoUses {
   try {
-    return parseWeeklyResets(readAtomicFileSync(weeklyResetsPath(owner)));
+    return parseLastAutoUses(readAtomicFileSync(lastAutoUsesPath(owner)));
   } catch (error) {
-    log.warn('codex weekly reset records unreadable', {
+    log.warn('codex reset auto-use records unreadable', {
       error: error instanceof Error ? error.message : String(error),
     });
     return {};
   }
 }
 
-function requireOwner(): string {
+/** 记下这个连接最近一次自动用掉重置；只用于展示，写不进只记日志。 */
+export function recordCodexResetCreditAutoUse(
+  providerId: string,
+  record: CodexResetCreditAutoUseRecord,
+): void {
   const owner = ownerDir();
-  if (!owner) throw new Error('A Cindy account is required');
-  return owner;
-}
-
-export function readCodexWeeklyReset(accountKey: string): WeeklyResetRecord | null {
-  const owner = ownerDir();
-  if (!owner) return null;
-  return readWeeklyResets(owner)[weeklyRecordKey(accountKey)] ?? null;
-}
-
-/** 落不了盘时抛错：调用方据此不扣卡，宁可少用一次也不突破每周一次。 */
-export function writeCodexWeeklyReset(accountKey: string, record: WeeklyResetRecord): void {
-  const owner = requireOwner();
-  const records = readWeeklyResets(owner);
-  for (const [key, existing] of Object.entries(records)) {
-    if (existing.untilMs <= record.atMs) delete records[key];
+  if (!owner || !PROVIDER_ID_PATTERN.test(providerId)) return;
+  const records = readLastAutoUses(owner);
+  records[providerId] = record;
+  try {
+    atomicWriteFileSync(lastAutoUsesPath(owner), `${JSON.stringify(records, null, 2)}\n`);
+  } catch (error) {
+    log.warn('codex reset auto-use record not written', {
+      providerId,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
-  records[weeklyRecordKey(accountKey)] = record;
-  atomicWriteFileSync(weeklyResetsPath(owner), `${JSON.stringify(records, null, 2)}\n`);
-}
-
-/** 扣卡确定没发生时撤掉先写的记录；只撤与 record 完全相同的那条。 */
-export function clearCodexWeeklyReset(accountKey: string, record: WeeklyResetRecord): void {
-  const owner = requireOwner();
-  const records = readWeeklyResets(owner);
-  const key = weeklyRecordKey(accountKey);
-  const existing = records[key];
-  if (!existing || existing.untilMs !== record.untilMs || existing.atMs !== record.atMs) return;
-  delete records[key];
-  atomicWriteFileSync(weeklyResetsPath(owner), `${JSON.stringify(records, null, 2)}\n`);
 }

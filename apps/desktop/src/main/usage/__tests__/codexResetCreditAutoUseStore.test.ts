@@ -1,6 +1,6 @@
 /**
  * 自动使用重置的本地存储：只记显式拨过的开关、恢复默认删除记录、按 Cindy 账号隔离，
- * 周窗口记录只存工作区 id 的哈希且过期即清。用 mkdtemp 的真实目录覆盖落盘与回读。
+ * 并记下每个连接最近一次自动使用。用 mkdtemp 的真实目录覆盖落盘与回读。
  */
 
 import fs from 'node:fs';
@@ -32,8 +32,8 @@ async function importStore() {
 
 const settingsPath = (who: string) =>
   path.join(userDataDir, 'codex-reset-credit-auto-use', who, 'settings.json');
-const weeklyPath = (who: string) =>
-  path.join(userDataDir, 'codex-reset-credit-auto-use', who, 'weekly-resets.json');
+const lastUsePath = (who: string) =>
+  path.join(userDataDir, 'codex-reset-credit-auto-use', who, 'last-auto-use.json');
 
 beforeEach(() => {
   userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-reset-'));
@@ -52,6 +52,7 @@ describe('codex reset auto-use settings', () => {
       enabled: false,
       isCustomized: false,
       defaultEnabled: false,
+      lastAutoUse: null,
     });
     expect(store.listCodexResetCreditAutoUseProviderIds()).toEqual([]);
     expect(fs.existsSync(settingsPath('owner-a'))).toBe(false);
@@ -96,46 +97,31 @@ describe('codex reset auto-use settings', () => {
   });
 });
 
-describe('codex weekly reset records', () => {
-  it('keeps one record per workspace, whichever connection wrote it, without the raw id', async () => {
+describe('codex reset last auto-use', () => {
+  it('keeps the latest automatic use per connection and per Cindy account', async () => {
     const store = await importStore();
-    store.writeCodexWeeklyReset('workspace-secret-1', { untilMs: 2_000, atMs: 1_000 });
-    expect(store.readCodexWeeklyReset('workspace-secret-1')).toEqual({ untilMs: 2_000, atMs: 1_000 });
-    expect(store.readCodexWeeklyReset('workspace-2')).toBeNull();
-    expect(fs.readFileSync(weeklyPath('owner-a'), 'utf8')).not.toContain('workspace-secret-1');
+    store.recordCodexResetCreditAutoUse('openai', { atMs: 1_000, kind: 'usage-limit' });
+    store.recordCodexResetCreditAutoUse('openai', { atMs: 2_000, kind: 'expiring' });
+    store.recordCodexResetCreditAutoUse('chatgpt-work', { atMs: 3_000, kind: 'usage-limit' });
+    expect(store.readCodexResetCreditAutoUseState('openai').lastAutoUse).toEqual({
+      atMs: 2_000,
+      kind: 'expiring',
+    });
+    expect(store.readCodexResetCreditAutoUseState('chatgpt-work').lastAutoUse).toEqual({
+      atMs: 3_000,
+      kind: 'usage-limit',
+    });
+    owner = 'owner-b';
+    expect(store.readCodexResetCreditAutoUseState('openai').lastAutoUse).toBeNull();
   });
 
-  it('drops records of weeks that ended when writing a new one', async () => {
+  it('ignores a damaged file and records nothing without a Cindy account', async () => {
     const store = await importStore();
-    store.writeCodexWeeklyReset('w1', { untilMs: 2_000, atMs: 1_000 });
-    store.writeCodexWeeklyReset('w2', { untilMs: 9_000, atMs: 3_000 });
-    expect(store.readCodexWeeklyReset('w1')).toBeNull();
-    expect(store.readCodexWeeklyReset('w2')).toEqual({ untilMs: 9_000, atMs: 3_000 });
-  });
-
-  it('withdraws only the record it wrote', async () => {
-    const store = await importStore();
-    const record = { untilMs: 9_000, atMs: 3_000 };
-    store.writeCodexWeeklyReset('w1', record);
-    store.clearCodexWeeklyReset('w1', { untilMs: 9_000, atMs: 4_000 });
-    expect(store.readCodexWeeklyReset('w1')).toEqual(record);
-    store.clearCodexWeeklyReset('w1', record);
-    expect(store.readCodexWeeklyReset('w1')).toBeNull();
-  });
-
-  it('fails loudly when the record cannot be written', async () => {
-    const store = await importStore();
-    // A directory where the file should be makes the atomic write fail.
-    fs.mkdirSync(weeklyPath('owner-a'), { recursive: true });
-    expect(() => store.writeCodexWeeklyReset('w1', { untilMs: 9_000, atMs: 3_000 })).toThrow();
+    fs.mkdirSync(path.dirname(lastUsePath('owner-a')), { recursive: true });
+    fs.writeFileSync(lastUsePath('owner-a'), '{not json');
+    expect(store.readCodexResetCreditAutoUseState('openai').lastAutoUse).toBeNull();
     owner = null;
-    expect(() => store.writeCodexWeeklyReset('w1', { untilMs: 9_000, atMs: 3_000 })).toThrow();
-  });
-
-  it('treats a damaged file as no record', async () => {
-    const store = await importStore();
-    fs.mkdirSync(path.dirname(weeklyPath('owner-a')), { recursive: true });
-    fs.writeFileSync(weeklyPath('owner-a'), '{not json');
-    expect(store.readCodexWeeklyReset('w1')).toBeNull();
+    store.recordCodexResetCreditAutoUse('openai', { atMs: 1_000, kind: 'expiring' });
+    expect(fs.existsSync(lastUsePath('none'))).toBe(false);
   });
 });

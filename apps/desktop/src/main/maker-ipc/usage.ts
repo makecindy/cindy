@@ -36,7 +36,7 @@ import {
   CodexWebUsageUnauthorizedError,
   fetchCodexWebUsageSnapshot,
 } from '../usage/codexWebUsage.js';
-import { app } from 'electron';
+import { app, powerMonitor, type BrowserWindow } from 'electron';
 import { requireAppCapability } from '../appCapabilities.js';
 import { emptyUsageHistoryPayload, readUsageHistory } from '../usage/usageHistory.js';
 import { readUsageDeviceRows } from '../usage/usageDeviceRows.js';
@@ -78,18 +78,18 @@ import { createCodexRateLimitResetService } from '../usage/codexRateLimitReset.j
 import {
   createCodexResetCreditAutoUse,
   type CodexResetCreditAutoUse,
-  type WeeklyLimitResetResult,
+  type UsageLimitResolution,
 } from '../usage/codexResetCreditAutoUse.js';
 import {
-  clearCodexWeeklyReset,
   isCodexResetCreditAutoUseEnabled,
   listCodexResetCreditAutoUseProviderIds,
   readCodexResetCreditAutoUseState,
-  readCodexWeeklyReset,
+  recordCodexResetCreditAutoUse,
   resetCodexResetCreditAutoUse,
   writeCodexResetCreditAutoUse,
-  writeCodexWeeklyReset,
 } from '../usage/codexResetCreditAutoUseStore.js';
+import { showDesktopNotice } from '../notificationService.js';
+import { t as mainT } from '../i18n.js';
 
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
 import { registerMakerUsageHandlers } from './usageHandlers.js';
@@ -265,22 +265,31 @@ export function triggerCodexAccountUsageRefresh(providerId?: string): void {
 
 let codexResetCreditAutoUse: CodexResetCreditAutoUse | null = null;
 
+let codexResetResumeListenerInstalled = false;
+
 /**
- * 任务因配额耗尽中断时，这个 OpenAI 订阅账号值不值得去试一次自动用重置（同步预判，
- * 不读网络）。未注册或账号没开启时为 false。
+ * 任务因配额耗尽中断时，这个 OpenAI 订阅账号开没开自动使用重置（同步预判，不读网络）。
+ * 未注册或没开启时为 false。
  */
 export function mayUseCodexResetCreditForUsageLimit(providerId: string): boolean {
   return codexResetCreditAutoUse?.mayUseForUsageLimit(providerId) ?? false;
 }
 
-/** 周配额用完时自动用一次重置；规则见 usage/codexResetCreditAutoUse.ts。 */
-export function spendCodexResetCreditForWeeklyLimit(providerId: string): Promise<WeeklyLimitResetResult> {
+/** 处理一次配额耗尽：重新读额度，决定直接续跑、用一次重置，还是交还错误。 */
+export function resolveCodexUsageLimit(
+  providerId: string,
+  modelId: string | null,
+  onSpending?: () => void,
+): Promise<UsageLimitResolution> {
   return codexResetCreditAutoUse
-    ? codexResetCreditAutoUse.spendForWeeklyLimit(providerId)
+    ? codexResetCreditAutoUse.resolveUsageLimit(providerId, modelId, onSpending)
     : Promise.resolve({ kind: 'skipped', why: 'disabled' });
 }
 
-export function registerMakerUsageIpc(maker: Maker): void {
+export function registerMakerUsageIpc(
+  maker: Maker,
+  options: { getMainWindow?: () => BrowserWindow | null } = {},
+): void {
   log.info('registering maker:usage:* IPC handlers');
 
   const resetServices = new Map<string, ReturnType<typeof createCodexRateLimitResetService>>();
@@ -316,46 +325,36 @@ export function registerMakerUsageIpc(maker: Maker): void {
     return service;
   }
 
-  /** 账号级 RPC 只在稳定的 owner 作用域里发出，返回时作用域变了就作废。 */
-  async function inOwnerScope<T>(operation: () => Promise<T>): Promise<T> {
-    const scope = activeOwnerScopeKey();
-    if (isAppSessionBoundaryPending()) throw new Error('PRECONDITION_FAILED: Account scope changed');
-    const result = await operation();
-    if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
-    return result;
-  }
-
+  // 自动使用重置只判断「该不该用」，读与扣都走上面这个重置服务：身份核对、幂等键与
+  // 并发共用（含手机上的手动重置）都在那里。
   codexResetCreditAutoUse?.stop();
-  codexResetCreditAutoUse = createCodexResetCreditAutoUse({
+  const autoUse = createCodexResetCreditAutoUse({
     enabledProviderIds: () =>
       listCodexResetCreditAutoUseProviderIds().filter((providerId) => isOpenAiSubscriptionProviderId(providerId)),
     isEnabled: (providerId) =>
       isOpenAiSubscriptionProviderId(providerId) && isCodexResetCreditAutoUseEnabled(providerId),
-    readAccountKey: (providerId) =>
-      inOwnerScope(async () => {
-        const accountProvider = normalizeCodexUsageProvider(providerId);
-        const state = await desktopCodexAuthAdapter.getState({ providerId: accountProvider });
-        return state.authSource === 'oauth'
-          ? await desktopCodexAuthAdapter.getAccountId(accountProvider)
-          : null;
-      }),
-    readRateLimits: (providerId) =>
-      inOwnerScope(() => maker.readAgentAccountRateLimits('codex', normalizeCodexUsageProvider(providerId))),
-    consumeResetCredit: (providerId, params) =>
-      inOwnerScope(() =>
-        maker.consumeAgentAccountRateLimitResetCredit('codex', params, normalizeCodexUsageProvider(providerId)),
-      ),
-    // 刷新额度卡片与任务卡上的配额与剩余重置次数。
-    afterReset: (providerId) => {
-      void getResetService(providerId).read().catch(() => undefined);
+    readRateLimits: async (providerId) => getResetService(providerId).read(),
+    consumeReset: async (providerId, idempotencyKey) => getResetService(providerId).consume(idempotencyKey),
+    onAutoUsed: (providerId, record) => {
+      recordCodexResetCreditAutoUse(providerId, record);
+      if (record.kind === 'expiring') {
+        showDesktopNotice(
+          options.getMainWindow ?? (() => null),
+          mainT('settings.providers.codexResetAutoUse.notification.title'),
+          mainT('settings.providers.codexResetAutoUse.notification.body'),
+        );
+      }
     },
-    readWeeklyReset: readCodexWeeklyReset,
-    writeWeeklyReset: writeCodexWeeklyReset,
-    clearWeeklyReset: clearCodexWeeklyReset,
     scopeKey: activeOwnerScopeKey,
     log,
   });
-  codexResetCreditAutoUse.start();
+  codexResetCreditAutoUse = autoUse;
+  autoUse.start();
+  if (!codexResetResumeListenerInstalled) {
+    codexResetResumeListenerInstalled = true;
+    // 睡眠期间定时器不走：醒来按当前时间重排，已过点的立即处理。
+    powerMonitor.on('resume', () => codexResetCreditAutoUse?.reschedule());
+  }
 
   setSubscriptionAccountUsageBroadcaster(broadcastSubscriptionAccountUsage, clearXaiRateLimitSnapshot);
   registerMakerUsageHandlers(createElectronIpcHandlerRegistry(), {
@@ -371,12 +370,14 @@ export function registerMakerUsageIpc(maker: Maker): void {
         ? await service.read()
         : await desktopCodexAuthAdapter.verifyRecoveryWithAccountRpc(() => service.read());
       if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
+      autoUse.noteRateLimits(providerId ?? 'openai', result);
       return { ...result, providerId: providerId ?? 'openai' };
     },
     consumeCodexRateLimitReset: async (key, providerId) => {
       const scope = activeOwnerScopeKey();
       const result = await getResetService(providerId).consume(key);
       if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
+      if (result.rateLimits) autoUse.noteRateLimits(providerId ?? 'openai', result.rateLimits);
       return { ...result, providerId: providerId ?? 'openai',
         rateLimits: result.rateLimits ? { ...result.rateLimits, providerId: providerId ?? 'openai' } : null };
     },
@@ -389,7 +390,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
       const state = enabled === null
         ? await resetCodexResetCreditAutoUse(providerId)
         : await writeCodexResetCreditAutoUse(providerId, enabled);
-      codexResetCreditAutoUse?.noteSettingChanged(providerId);
+      autoUse.noteSettingChanged(providerId);
       return state;
     },
     readClaudeSubscriptionUsageSnapshot: readClaudeSubscriptionUsageSnapshotForDeviceLink,

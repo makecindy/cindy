@@ -1012,6 +1012,26 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText('chat.errorBanner.codexOrganizationUsageLimitWithReset')).toBeNull();
   });
 
+  it.each([
+    ['codex_reset_credit_short_window', 'chat.errorBanner.codexResetCreditShortWindow'],
+    ['codex_reset_credit_none', 'chat.errorBanner.codexResetCreditNone'],
+    ['codex_reset_credit_failed', 'chat.errorBanner.codexResetCreditFailed'],
+  ])('says why no reset was used for a Codex usage limit (%s)', (errorReason, key) => {
+    render(
+      <ErrorBanner
+        error="usageLimitExceeded"
+        errorReason={errorReason}
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="codex"
+        usageLimitRecovery={{ resetAtMs: Date.now() + 3_600_000, isAccountUsageLimit: true }}
+      />,
+    );
+
+    expect(screen.getByText(key)).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.codexUsageLimitWithReset')).toBeNull();
+  });
+
   it('keeps a transient Codex 429 on its normal rate-limit path', () => {
     const rawError = 'Too many requests (429)';
     render(
