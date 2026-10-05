@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
-import { cn } from '@/lib/utils';
 
 export interface SessionProjectMoveSubmenuProps {
   heading?: string;
@@ -46,11 +45,8 @@ export function SessionProjectMoveSubmenu({
                 key={project.path}
                 disabled={isCurrent}
                 onSelect={() => onSelectProject(project.path)}
-                className={cn(
-                  'h-auto min-h-9 px-3 py-2 rounded-md text-sm text-[var(--msg-assistant-text)]',
-                  'focus:bg-[var(--cmd-palette-item-hover)]',
-                  'data-[disabled]:opacity-50 data-[disabled]:pointer-events-none',
-                )}
+                // Two-line rows; px-3 lines the text up with the px-3 heading above.
+                className="h-auto min-h-9 px-3 py-2"
               >
                 <Folder size={16} className="mr-2 shrink-0 text-[var(--folder-item-icon)]" />
                 <div className="flex min-w-0 flex-1 flex-col">
@@ -70,27 +66,16 @@ export function SessionProjectMoveSubmenu({
           </div>
         )}
       </div>
-      {(onBrowseProject || onMoveToDialogue) && (
-        <DropdownMenuSeparator className="my-1 h-px bg-[var(--cmd-palette-border)]" />
-      )}
+      {(onBrowseProject || onMoveToDialogue) && <DropdownMenuSeparator />}
       {onBrowseProject && (
-        <DropdownMenuItem
-          onSelect={onBrowseProject}
-          className="h-8 px-3 rounded-md text-sm text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
-        >
+        <DropdownMenuItem onSelect={onBrowseProject} className="h-8 px-3">
           <FolderPlus size={16} className="mr-2 shrink-0 text-[var(--folder-item-icon)]" />
           {t('ccAgent.sidebar.sessionMenu.browseProjectFolder')}
         </DropdownMenuItem>
       )}
+      {onMoveToDialogue && <DropdownMenuSeparator />}
       {onMoveToDialogue && (
-        <DropdownMenuSeparator className="my-1 h-px bg-[var(--cmd-palette-border)]" />
-      )}
-      {onMoveToDialogue && (
-        <DropdownMenuItem
-          disabled={isDialogue}
-          onSelect={onMoveToDialogue}
-          className="h-8 px-3 rounded-md text-sm text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)] data-[disabled]:opacity-50 data-[disabled]:pointer-events-none"
-        >
+        <DropdownMenuItem disabled={isDialogue} onSelect={onMoveToDialogue} className="h-8 px-3">
           <MessageCircle size={16} className="mr-2 shrink-0 text-[var(--folder-item-icon)]" />
           {t('ccAgent.sidebar.sessionMenu.moveToDialogue')}
         </DropdownMenuItem>

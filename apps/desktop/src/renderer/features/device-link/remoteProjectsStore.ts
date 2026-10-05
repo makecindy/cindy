@@ -17,9 +17,10 @@ import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
  *      · 增量(`applyPatch`):收到被控端 `local-db:sessions:patched` push 时就地幂等合并;
  *        status=deleted → 移出分片；active/archived → 在状态桶间迁移。
  *      · 新建(`requestRemoteReseed`):`sessions:created` push 无 row 数据 → 触发该设备重拉。
- *    唯一例外是**投影层**的标题预览(`setPendingTitlePreview`):它不写分片、只在权威
- *    标题仍是系统占位(默认名 / fork 占位 / 本端登记过的合成占位)时顶替显示,被控端
- *    写下真正的标题一到就自动让位。分片数据仍是纯镜像。
+ *    唯一例外是**投影层**的两个叠加层:标题预览(`setPendingTitlePreview`)只在权威
+ *    标题仍是系统占位(默认名 / fork 占位 / 本端登记过的合成占位)时顶替显示;首条发送
+ *    时刻(`setPendingFirstSend`)只在权威 userSendAt 仍为空时补上。被控端写下真实值
+ *    一到就自动让位。分片数据仍是纯镜像。
  *  - **复用本地渲染管线**:每条 session 注入 `deviceLinkDeviceId/Name/ConnectionStatus`
  *    后喂给 `groupSessions`。
  *  - **origin 注册表**:`sessionId → deviceId`(`getSessionDeviceId`),供传输层 / SessionView 用。
@@ -331,6 +332,34 @@ function withPendingTitle(session: Session): Session {
   return { ...session, title: preview };
 }
 
+/**
+ * 「首条已发出」叠加层 —— 与标题预览同一性质的投影层覆盖,**不写分片**。
+ *
+ * 远程建会话到被控端收下首条之间,权威行的 userSendAt 仍是 null。这段时间里任何一次列表
+ * 回流(建会话后的 refresh / sessions:created 重拉)都会把临时行带的 userSendAt 冲掉,
+ * projectGrouping 随即按「未发送 + 0 条消息」把它挪进项目外的草稿区,首条落地后再跳回项目。
+ *
+ * 发送瞬间登记;投影时只在权威 userSendAt 仍为空时补上,被控端写下真实值即让位并回收。
+ * 首条最终没交出去时由发送方撤回,空会话照实回到草稿区。重启后叠加层不存在,以权威值为准。
+ */
+const pendingFirstSendAt = new Map<string, string>();
+
+function withPendingFirstSend(session: Session): Session {
+  const sentAt = pendingFirstSendAt.get(session.id);
+  if (!sentAt) return session;
+  if (session.userSendAt != null) {
+    pendingFirstSendAt.delete(session.id);
+    return session;
+  }
+  return { ...session, userSendAt: sentAt };
+}
+
+/** 会话离场(删除 / 归档 / 快照里消失 / 设备移除)时回收全部投影叠加层。 */
+function dropSessionOverlays(sessionId: string): void {
+  dropTitleOverlay(sessionId);
+  pendingFirstSendAt.delete(sessionId);
+}
+
 /** 重算扁平快照 + origin 注册表,然后通知订阅者。所有 mutation 走这里。 */
 function recompute(): void {
   recomputeScheduleIndex();
@@ -345,7 +374,7 @@ function recompute(): void {
     const flat: Session[] = [];
     for (const shard of shards.values()) {
       for (const s of shard.sessions) {
-        const projected = withPendingTitle(s);
+        const projected = withPendingFirstSend(withPendingTitle(s));
         flat.push(projected);
         sessionDeviceIndex.set(s.id, shard.deviceId);
         if (projected.title) sessionTitleIndex.set(s.id, projected.title);
@@ -519,7 +548,7 @@ const actions = {
     if (existing) {
       const kept = new Set(nextSessions.map((session) => session.id));
       for (const session of existing.sessions) {
-        if (!kept.has(session.id)) dropTitleOverlay(session.id);
+        if (!kept.has(session.id)) dropSessionOverlays(session.id);
       }
     }
     const loadedStatuses = new Set(existing?.loadedStatuses ?? []);
@@ -693,7 +722,7 @@ const actions = {
       // 叠加层随会话一起离场:留着的话 removeDevice 也回收不到(它只遍历分片里还在的
       // 会话),之后 unarchive / reseed 会把边界前的旧预览顶回一个仍是系统占位的
       // 会话上(PR #510 review)。
-      dropTitleOverlay(sessionId);
+      dropSessionOverlays(sessionId);
       // 消息冷缓存已在函数开头清掉(那里能覆盖"会话不在分片里"的情形)。
       shard.sessions = shard.sessions.filter((s) => s.id !== sessionId);
       recompute();
@@ -701,7 +730,7 @@ const actions = {
     }
     if (status === 'archived') {
       // 归档后仍保留完整行，供已归档 / 全部筛选直接展示；标题即时预览不跨归档边界。
-      dropTitleOverlay(sessionId);
+      dropSessionOverlays(sessionId);
     }
     const wasPinned = shard.sessions[idx]?.pinnedAt != null;
     const unpinned =
@@ -818,7 +847,7 @@ const actions = {
     // 标题叠加层随分片一起丢弃:撤销授权 / 关闭控制后该设备的会话已不在视图里,
     // 留着会在下次重新接入时把边界前的旧预览顶回一个仍是系统占位的会话上。
     for (const session of shards.get(deviceId)?.sessions ?? []) {
-      dropTitleOverlay(session.id);
+      dropSessionOverlays(session.id);
     }
     const shardDeleted = shards.delete(deviceId);
     const bootstrapStateCleared = setBootstrapState(deviceId, 'idle');
@@ -841,6 +870,7 @@ const actions = {
     pendingTitlePreview.clear();
     landedSystemTitles.clear();
     synthesizedPreviewSessions.clear();
+    pendingFirstSendAt.clear();
     const bootstrapStateChanged =
       bootstrapLoadingDeviceIds.size > 0 ||
       archivedLoadingDeviceIds.size > 0 ||
@@ -912,11 +942,29 @@ const actions = {
     recompute();
   },
 
-  /** 测试专用:清空标题预览叠加层。 */
+  /**
+   * 远程新建会话的首条直接交给发件队列时登记(见 {@link pendingFirstSendAt});登记方负责在未受理 / 投递失败时撤回。
+   * 被控端写下真实 userSendAt 后自动让位。
+   */
+  setPendingFirstSend(sessionId: string, sentAtIso: string): void {
+    if (!sessionId || !sentAtIso || pendingFirstSendAt.get(sessionId) === sentAtIso) return;
+    pendingFirstSendAt.set(sessionId, sentAtIso);
+    recompute();
+  },
+
+  /** 首条最终没交出去时撤回,让空会话照实回到草稿区。 */
+  clearPendingFirstSend(sessionId: string): void {
+    if (!sessionId || !pendingFirstSendAt.has(sessionId)) return;
+    pendingFirstSendAt.delete(sessionId);
+    recompute();
+  },
+
+  /** 测试专用:清空标题预览与首条发送叠加层。 */
   __resetPendingTitlePreviewForTest(): void {
     pendingTitlePreview.clear();
     landedSystemTitles.clear();
     synthesizedPreviewSessions.clear();
+    pendingFirstSendAt.clear();
   },
 
   /** 测试专用:清空 origin 钉子(生产期刻意不清,见 pinnedOrigins)。 */

@@ -13,6 +13,8 @@
  *   - 读位只前进不后退(`markBotRead` 单调),避免乱序事件把已读退回未读。
  */
 
+import type { BotGroupSummary } from '../../../shared/botGroupChat';
+
 const STORAGE_KEY_PREFIX = 'cindy.bots.readState.v1';
 
 type ReadStateMap = Record<string, number>;
@@ -144,18 +146,27 @@ export function resetBotReadStateForTests(): void {
 
 /** Group replies use the same owner-scoped, monotonic local read positions. */
 export const botGroupReadKey = (groupId: string) => `group:${groupId}`;
-export function isBotGroupUnread(group: { id: string; lastReplyAt?: number }): boolean {
-  const readAt = getBotLastReadAt(botGroupReadKey(group.id));
-  return readAt !== null && (group.lastReplyAt ?? 0) > readAt;
+type GroupReadSummary = Pick<BotGroupSummary, 'id' | 'lastReplyAt'> & Partial<Pick<BotGroupSummary, 'lastMessage'>>;
+
+function latestGroupReplyAt(group: GroupReadSummary): number {
+  // Older hosts may omit lastReplyAt; other humans count just like companions.
+  const last = group.lastMessage;
+  return Math.max(group.lastReplyAt ?? 0,
+    last && (last.authorKind === 'bot' || last.isSelf === false) ? last.createdAt : 0);
 }
-export function seedBotGroupReadState(groups: readonly { id: string; lastReplyAt?: number }[]): void {
+
+export function isBotGroupUnread(group: GroupReadSummary): boolean {
+  const readAt = getBotLastReadAt(botGroupReadKey(group.id));
+  return readAt !== null && latestGroupReplyAt(group) > readAt;
+}
+export function seedBotGroupReadState(groups: readonly GroupReadSummary[]): void {
   const current = readStorage();
   const next = { ...current };
   const alive = new Set(groups.map(group => botGroupReadKey(group.id)));
   for (const key of Object.keys(next)) if (key.startsWith('group:') && !alive.has(key)) delete next[key];
   for (const group of groups) {
     const key = botGroupReadKey(group.id);
-    if (next[key] === undefined) next[key] = Math.max(1, group.lastReplyAt ?? 0);
+    if (next[key] === undefined) next[key] = Math.max(1, latestGroupReplyAt(group));
   }
   if (JSON.stringify(next) !== JSON.stringify(current)) writeStorage(next);
 }

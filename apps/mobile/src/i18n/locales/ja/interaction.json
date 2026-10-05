@@ -163,8 +163,10 @@
     "dispatchBodyFallback": "Worker を作成",
     "sendTitle": "Worker にメッセージ送信",
     "sendBodyFallback": "メッセージを送信",
-    "reportTitle": "Worker の報告",
-    "reportBodyFallback": "(報告なし)"
+    "fromLead": "Lead からのメッセージ",
+    "fromWorkerNamed": "Worker「{{role}}」からのメッセージ",
+    "fromWorker": "Worker からのメッセージ",
+    "emptyMessageBody": "（空のメッセージ）"
   },
   "contextSheet": {
     "backAccessibility": "コンテキストパネルに戻る",

@@ -69,8 +69,15 @@ describe('deriveNavRailEntries', () => {
         content: '任务发来',
         automationOrigin: { kind: 'session', senderSessionId: 'caller' },
       }),
+      // Hook 渠道(IM)提问复用 scheduler 来源,但它是真人提问,不是自动化。
+      msg({
+        clientId: 'u5',
+        role: 'user',
+        content: 'Slack 提问',
+        automationOrigin: { kind: 'scheduler', scheduleId: 'hook:slack-1', scheduleName: 'Hook · Slack' },
+      }),
     ]);
-    expect(entries.map((entry) => entry.isAutomation)).toEqual([false, true, false, false]);
+    expect(entries.map((entry) => entry.isAutomation)).toEqual([false, true, false, false, false]);
   });
 
   it('运行中插话(delivery=steer)不算新一轮,不产生刻度', () => {

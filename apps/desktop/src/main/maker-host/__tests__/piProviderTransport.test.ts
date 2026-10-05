@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
 import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, parseModelsListResponse, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
-import { createPiProviderFetch, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, readBoundedResponseText } from '../pi-provider-transport.js';
+import { createPiProviderFetch, hostCredentialEndpointAllowed, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, NATIVE_BRIDGE_SESSION_HEADER, readBoundedResponseText } from '../pi-provider-transport.js';
 
 vi.mock('@earendil-works/pi-ai/api/openai-completions', async (importOriginal) => ({
   ...await importOriginal<typeof import('@earendil-works/pi-ai/api/openai-completions')>(),
@@ -125,6 +125,25 @@ describe('Pi-owned transport for Cindy harnesses', () => {
     if (providerId === 'zai') expect(sent).toMatchObject({ thinking: { type: 'enabled', clear_thinking: false } });
     if (providerId === 'together') expect(sent).toMatchObject({ reasoning: { enabled: true } });
     expect(sent!.max_tokens ?? sent!.max_completion_tokens).toBe(1024);
+  });
+
+  it('does not ask an always-thinking GLM-5.3 to disable thinking when the request has no effort (#5402)', async () => {
+    const glm = PROVIDER_MODEL_CATALOG.providers['zai-coding-cn'].find(row => row.id === 'glm-5.3')!;
+    const { off: _off, ...optionalOffLevels } = glm.execution.pi.thinkingLevelMap ?? {};
+    const optionalOff = { ...glm, execution: { pi: { ...glm.execution.pi, thinkingLevelMap: optionalOffLevels } } };
+    const sentFor = async (row: typeof glm) => {
+      let sent: Record<string, unknown> | undefined;
+      const send = createPiProviderFetch({ row, providerId: 'zai-coding-cn', apiKey: 'fixture-provider-key', fetchImpl: async (_url, init) => {
+        sent = JSON.parse(String(init?.body));
+        return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+      } });
+      await (await send('https://unused.invalid', { body: JSON.stringify({ model: row.id, input: 'hello', stream: true }) })).text();
+      return sent;
+    };
+
+    expect(glm.execution.pi.thinkingLevelMap?.off).toBeNull();
+    expect(await sentFor(glm)).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'high' });
+    expect(await sentFor(optionalOff)).toMatchObject({ thinking: { type: 'disabled' } });
   });
 });
 
@@ -403,4 +422,69 @@ it.each([undefined, 200, 302])('keeps iterator exceptions private after HTTP %s 
   } finally {
     stream.mockRestore();
   }
+});
+
+describe('OpenCode Go session header on the native transport (#5325)', () => {
+  const goUpstream = 'https://opencode.ai/zen/go/v1';
+  function rowFor(providerId: string, baseUrl: string, catalogPresetId?: string) {
+    const provider = buildUserProvider({ id: providerId, name: providerId, runtimes: {
+      codex: { baseUrl, wireProtocol: 'openai-chat', models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek', reasoning: false, reasoningEfforts: [], ...(catalogPresetId ? { catalogPresetId } : {}) }] },
+    } });
+    return invocationModelRecord(provider.models.codex![0], baseUrl, 'openai-completions')!;
+  }
+  /** Rejects exactly like the real upstream when the conversation header is missing. */
+  function upstreamRequiringSession(seen: Headers[]) {
+    return (async (_url: unknown, init?: RequestInit) => {
+      const headers = new Headers(init?.headers as HeadersInit);
+      seen.push(headers);
+      if (!headers.get('x-opencode-session')?.trim()) return new Response(JSON.stringify({ error: 'MissingSessionID' }), { status: 400, headers: { 'content-type': 'application/json' } });
+      return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+    }) as typeof fetch;
+  }
+  const body = JSON.stringify({ model: 'deepseek-v4.1-flash', input: 'hello', stream: true });
+
+  it('derives a stable per-conversation header from the bridge session carrier and reaches the SDK request', async () => {
+    const seen: Headers[] = [];
+    const send = createPiProviderFetch({ row: rowFor('opencode-go', goUpstream), providerId: 'opencode-go', apiKey: 'fixture-key', fetchImpl: upstreamRequiringSession(seen) });
+    const texts: string[] = [];
+    for (const session of ['cc-a', 'cc-a', 'cc-b']) {
+      texts.push(await (await send('https://unused.invalid', { body, headers: { [NATIVE_BRIDGE_SESSION_HEADER]: session } })).text());
+    }
+    for (const text of texts) { expect(text).toContain('response.completed'); expect(text).not.toContain('response.failed'); }
+    const values = seen.map(headers => headers.get('x-opencode-session'));
+    expect(values[0]).toMatch(/^[0-9a-f]{32}$/);
+    expect(values[1]).toBe(values[0]);
+    expect(values[2]).not.toBe(values[0]);
+    expect(seen.every(headers => headers.get(NATIVE_BRIDGE_SESSION_HEADER) === null)).toBe(true);
+    expect(seen[0]!.get('authorization')).toBe('Bearer fixture-key');
+  });
+
+  it('recognizes a preset-derived Go connection whose id and endpoint changed, and ignores unrelated routes', async () => {
+    const seen: Headers[] = [];
+    const relay = 'https://relay.example/v1';
+    const viaPreset = createPiProviderFetch({ row: rowFor('my-go-copy', relay, 'opencode-go'), providerId: 'my-go-copy', catalogPresetId: 'opencode-go', apiKey: 'k', fetchImpl: upstreamRequiringSession(seen) });
+    expect(await (await viaPreset('https://unused.invalid', { body, headers: { [NATIVE_BRIDGE_SESSION_HEADER]: 'cc-a' } })).text()).toContain('response.completed');
+    expect(seen[0]!.get('x-opencode-session')).toMatch(/^[0-9a-f]{32}$/);
+    const other: Headers[] = [];
+    const unrelated = createPiProviderFetch({ row: rowFor('sub2api', relay), providerId: 'sub2api', apiKey: 'k', fetchImpl: (async (_url: unknown, init?: RequestInit) => {
+      other.push(new Headers(init?.headers as HeadersInit));
+      return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+    }) as typeof fetch });
+    await (await unrelated('https://unused.invalid', { body, headers: { [NATIVE_BRIDGE_SESSION_HEADER]: 'cc-a' } })).text();
+    expect(other[0]!.get('x-opencode-session')).toBeNull();
+    expect(other[0]!.get(NATIVE_BRIDGE_SESSION_HEADER)).toBeNull();
+  });
+
+  it('keeps an explicitly configured user session header and still accepts a carrier-less request as a one-shot', async () => {
+    const seen: Headers[] = [];
+    const configured = createPiProviderFetch({ row: rowFor('opencode-go', goUpstream), providerId: 'opencode-go', apiKey: 'k', headers: { 'X-OpenCode-Session': 'user-fixed' }, fetchImpl: upstreamRequiringSession(seen) });
+    await (await configured('https://unused.invalid', { body, headers: { [NATIVE_BRIDGE_SESSION_HEADER]: 'cc-a' } })).text();
+    expect(seen[0]!.get('x-opencode-session')).toBe('user-fixed');
+    const oneShot = createPiProviderFetch({ row: rowFor('opencode-go', goUpstream), providerId: 'opencode-go', apiKey: 'k', fetchImpl: upstreamRequiringSession(seen) });
+    const first = await (await oneShot('https://unused.invalid', { body })).text();
+    const second = await (await oneShot('https://unused.invalid', { body })).text();
+    expect(first).toContain('response.completed'); expect(second).toContain('response.completed');
+    expect(seen[1]!.get('x-opencode-session')).toMatch(/^[0-9a-f-]{36}$/);
+    expect(seen[2]!.get('x-opencode-session')).not.toBe(seen[1]!.get('x-opencode-session'));
+  });
 });

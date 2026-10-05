@@ -43,6 +43,7 @@ export interface PreviewSlotDeps {
   getGhost(id: string): InstalledGhost | null;
   /** 把开页请求推给宿主窗口;false = 一个窗口都不在(HOST_NOT_READY)。 */
   broadcast(payload: GhostPreviewOpenPush): boolean;
+  openMobile?(pageId: string, ghostId: string, url: string): boolean;
   /** 台前会话快照(请求缺省 sessionId 时的落点;非会话页为 null)。 */
   focusedSessionId(): string | null;
   now?(): number;
@@ -78,6 +79,7 @@ export class GhostPreviewSlot {
       return fail('INVALID_REQUEST', 'preview-request 载荷必须是对象');
     }
     const request = payload as Record<string, unknown>;
+    if (request.mobilePageId !== undefined && (typeof request.mobilePageId !== 'string' || request.mobilePageId.length > 128)) return fail('INVALID_REQUEST', 'Invalid mobile page context');
     if (typeof request.url !== 'string' || request.url.length === 0) {
       return fail('INVALID_REQUEST', 'url 必填且必须是字符串');
     }
@@ -101,6 +103,10 @@ export class GhostPreviewSlot {
       return fail('RATE_LIMITED', '预览打开请求太频繁,稍后再试');
     }
 
+    if (typeof request.mobilePageId === 'string') {
+      return this.deps.openMobile?.(request.mobilePageId, ghostId, request.url)
+        ? { ok: true } : fail('HOST_NOT_READY', 'The originating mobile page is unavailable');
+    }
     // 落点会话:显式 sessionId 优先(通常来自 session-context 注入),缺省
     // 落台前会话;两者皆无(用户不在会话页)= 没有可开标签的家,如实拒。
     const sessionId =

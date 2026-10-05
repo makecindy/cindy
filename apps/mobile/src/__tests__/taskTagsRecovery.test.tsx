@@ -190,6 +190,17 @@ beforeEach(() => {
   root = createRoot(node);
 });
 afterEach(() => act(() => root.unmount()));
+it("shows busy without marking the host offline and retries only when requested", async () => {
+  h.invoke.mockRejectedValueOnce(Object.assign(new Error('queue full'), { code: 'BACKPRESSURE' }));
+  await render();
+  expect(h.compact.message).toBe('taskTags.remoteBusy');
+  expect(h.compact.disabled).toBe(false);
+  expect(h.compact.canRetry).toBe(true);
+  expect(h.invoke).toHaveBeenCalledTimes(1);
+  await act(async () => h.compact.onRetry());
+  expect(h.invoke).toHaveBeenCalledTimes(2);
+  expect(h.compact.message).toBeUndefined();
+});
 it.each(["other", "host", "account"])(
   "scopes in-flight catalog invalidation to %s",
   async (scope) => {

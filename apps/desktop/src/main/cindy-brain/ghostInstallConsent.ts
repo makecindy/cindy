@@ -49,6 +49,18 @@ export type GhostInstallConsentDecision =
 
 const pendingPromptAborts = new Set<AbortController>();
 
+/** Use only after assertGhostInstallConsent binds the confirmed facts to this package/receiver. */
+export function confirmedTaskCapability(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+  next: GhostManifest,
+): true | undefined {
+  if (decision.mode !== 'confirmed') return undefined;
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return shown?.some(item => item.key === 'agent:tasks') ? true : undefined;
+}
+
 /**
  * 登记一次等待中的确认，账号边界时由 `abortAllGhostInstallConsentPrompts` 一并取消。
  * 确认不得占用 owner 租约；取消是为了让等待中的安装调用尽快按用户取消收口。

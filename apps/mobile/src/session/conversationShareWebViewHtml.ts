@@ -10,8 +10,8 @@ import { buildMessageContentLayout } from "@/session/messageContentLayout";
 import { collectMobileMarkdownImages } from "@/session/messageMarkdown";
 import { lineHeight, typeScale } from "@/theme/tokens";
 
+/** 分享图只含消息内容：不带任何消息来源（自动化 / 任务 / 设备 / 插件 / 作者）。 */
 export interface ConversationShareMessage {
-  automationOriginLabel?: string;
   attachments?: readonly ConversationShareAttachment[];
   clientId: string;
   kind: "user" | "assistant";
@@ -180,12 +180,8 @@ function buildMessageHtml(
           "</div>",
         ].join("")
       : "";
-  const automationOriginHtml = message.automationOriginLabel
-    ? `<div class="share-automation-origin">${escapeHtml(redactSensitiveText(message.automationOriginLabel).trim())}</div>`
-    : "";
   return [
     `<article class="share-message share-message-${message.kind}" data-share-message-id="${escapeAttribute(message.clientId)}">`,
-    automationOriginHtml,
     attachmentsHtml,
     bubbleHtml,
     "</article>",
@@ -309,15 +305,6 @@ function buildConversationShareCss({
     }
     .share-message-user { align-items: flex-end; }
     .share-message-assistant { align-items: flex-start; }
-    .share-automation-origin {
-      box-sizing: border-box;
-      align-self: flex-end;
-      max-width: 86%;
-      margin-bottom: 4px;
-      color: ${cssValue(textTertiary)};
-      font-size: 12px;
-      line-height: 18px;
-    }
     .share-attachments {
       display: flex;
       flex-direction: column;

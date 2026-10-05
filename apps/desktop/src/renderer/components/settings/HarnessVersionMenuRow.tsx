@@ -4,7 +4,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Spinner } from '@/components/ui/spinner';
 
 /** Shared About geometry so every harness row and menu stays identical to Pi's. */
-export const HARNESS_MENU_ITEM_CLASS = 'min-h-9 gap-3 rounded-lg px-3 text-13';
+export const HARNESS_MENU_ITEM_CLASS = 'gap-3';
 
 /** One harness, one row: the version pill opens that harness's action menu. */
 export function HarnessVersionMenuRow({ label, manageLabel, version, status, pending, testId, children }: {
@@ -33,7 +33,7 @@ export function HarnessVersionMenuRow({ label, manageLabel, version, status, pen
             <ChevronDown size={13} aria-hidden className="shrink-0" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" sideOffset={6} className="z-[10000] w-[272px] max-w-[calc(100vw-24px)] rounded-xl p-1.5 shadow-none">
+        <DropdownMenuContent align="end" sideOffset={6} className="z-[10000] w-[272px] max-w-[calc(100vw-24px)] p-1.5">
           {children}
         </DropdownMenuContent>
       </DropdownMenu>
@@ -50,11 +50,11 @@ export function HarnessVersionMenuItem({ label, version, disabled, onSelect }: {
 }) {
   return (
     <DropdownMenuItem className={HARNESS_MENU_ITEM_CLASS} disabled={disabled} onSelect={onSelect}>
-      <span className="flex-1">{label}</span><span className="text-12 text-[var(--text-secondary)]">{version ?? '—'}</span>
+      <span className="flex-1">{label}</span><span className="text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">{version ?? '—'}</span>
     </DropdownMenuItem>
   );
 }
 
 export function HarnessMenuFootnote({ children }: { children: ReactNode }) {
-  return <p className="px-3 py-1.5 text-11 text-[var(--text-secondary)]">{children}</p>;
+  return <p className="px-2 py-1.5 text-11 text-[var(--text-secondary)]">{children}</p>;
 }

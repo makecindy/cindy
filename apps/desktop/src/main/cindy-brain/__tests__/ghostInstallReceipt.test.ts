@@ -172,6 +172,23 @@ describe('GhostInstallReceiptStore cleanup', () => {
     expect(fs.existsSync(path.join(stateRoot, 'hello.json'))).toBe(false);
   });
 
+  it.each(['future', { future: true }, null, false])('reads and rewrites old unknown tasks %j without changing approval evidence', async (tasks) => {
+    const original = createSetupReceipt();
+    await store.write(original);
+    const file = path.join(stateRoot, 'hello.json');
+    const raw = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+    raw.manifest.slots.splice(1, 0, 'agent');raw.manifest.agent = { tasks };
+    await fs.promises.writeFile(file, JSON.stringify(raw));
+    const loaded = store.read('hello');
+    expect(loaded.state).toBe('approved');
+    if (loaded.state !== 'approved') throw new Error('fixture not approved');
+    expect(loaded.receipt).toMatchObject({revision:original.revision,enabled:true,manifest:{agent:{tasks}},skillContentSha256:original.skillContentSha256});
+    expect(loaded.receipt.taskCapabilityApproved).toBeUndefined();
+    await store.write(loaded.receipt);
+    const saved = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+    expect(saved).toEqual(raw);
+  });
+
   it('writes setup in the author format accepted by the v0.1.48 receipt reader', async () => {
     const receipt = createSetupReceipt();
     await store.write(receipt);

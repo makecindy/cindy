@@ -162,6 +162,34 @@ it('loads the completed task from the target computer before navigation and dism
   expect(state.merge).toHaveBeenCalledWith('B', 'B', [{ id: 'migrated', status: 'active' }]);
 });
 
+it('lists what a finished copy left behind, with the count of unlisted entries', async () => {
+  state.request.mockImplementation(async (device: string | null, command: { action: string }) => ({
+    supported: true,
+    deviceId: device ?? 'local',
+    ...(command.action === 'status'
+      ? {
+          stage: 'complete',
+          running: false,
+          targetDeviceId: 'B',
+          targetSessionId: 'migrated',
+          skipped: {
+            total: 3,
+            entries: [
+              { path: 'Pods/out.h', code: 'MIGRATION_EXTERNAL_LINK' },
+              { path: 'dev.sock', code: 'MIGRATION_UNSUPPORTED_ENTRY' },
+            ],
+          },
+        }
+      : {}),
+  }));
+  mount();
+  await screen.findByText('taskMigration.skippedTitle');
+  expect(screen.getByText('Pods/out.h')).toBeTruthy();
+  expect(screen.getByText('dev.sock')).toBeTruthy();
+  expect(screen.getByText('taskMigration.skippedMore')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'taskMigration.openTarget' })).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
+});
 it('confirms the project selected in the menu without asking for a second selection', async () => {
   render(
     <MemoryRouter>
@@ -253,10 +281,13 @@ it('keeps transfer progress in the dialog until the target completes, including 
   );
   mount();
   await screen.findByRole('progressbar');
-  expect(screen.getByRole('progressbar').hasAttribute('value')).toBe(false);
+  expect(screen.getByRole('progressbar').hasAttribute('aria-valuenow')).toBe(false);
   expect(screen.queryByRole('button', { name: 'taskMigration.close' })).toBeNull();
+  // Older hosts do not report cancellable, so only the background option is offered.
+  expect(screen.queryByRole('button', { name: 'taskMigration.cancelCopy' })).toBeNull();
   fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
-  expect(state.dismiss).not.toHaveBeenCalled();
+  expect(state.dismiss).toHaveBeenCalledOnce();
+  expect(state.request.mock.calls.some(([, command]) => command.action === 'cancel')).toBe(false);
   snapshot = {
     stage: 'transferring',
     running: true,
@@ -267,9 +298,10 @@ it('keeps transfer progress in the dialog until the target completes, including 
       bytesPerSecond: 10,
     },
   };
-  await waitFor(() => expect(screen.getByRole('progressbar').getAttribute('value')).toBe('25'), {
-    timeout: 2500,
-  });
+  await waitFor(
+    () => expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('25'),
+    { timeout: 2500 },
+  );
   expect(screen.getByText('taskMigration.transferProgress')).toBeTruthy();
   snapshot = {
     stage: 'transferring',
@@ -288,6 +320,58 @@ it('keeps transfer progress in the dialog until the target completes, including 
   expect(screen.queryByRole('progressbar')).toBeNull();
   expect(screen.queryByRole('button', { name: 'taskMigration.start' })).toBeNull();
   expect(screen.getAllByRole('button')).toHaveLength(2);
+});
+
+it('reopening a running copy shows its progress at once, never the start form', async () => {
+  const running = {
+    supported: true,
+    deviceId: 'A',
+    stage: 'transferring',
+    running: true,
+    targetDeviceId: 'B',
+    progress: { phase: 'sending', sentBytes: 1, totalBytes: 2, bytesPerSecond: 1 },
+  } as const;
+  // The first poll is still in flight when the dialog opens.
+  state.request.mockImplementation(() => new Promise(() => {}));
+  render(
+    <MemoryRouter>
+      <TaskMigrationDialog session={source} initialStatus={running} onDismiss={state.dismiss} />
+    </MemoryRouter>,
+  );
+  expect(screen.getByText('taskMigration.copyingTitle')).toBeTruthy();
+  expect(screen.getByText('taskMigration.transferProgress')).toBeTruthy();
+  expect(screen.queryByText('taskMigration.title')).toBeNull();
+  expect(screen.queryByText('taskMigration.start')).toBeNull();
+  expect(screen.queryByText('taskMigration.bindingsNotice')).toBeNull();
+  expect(
+    state.request.mock.calls.some(
+      ([, command]) => (command as { action: string }).action === 'estimate',
+    ),
+  ).toBe(false);
+});
+it('cancels a running copy and closes once the source has stopped it', async () => {
+  let snapshot: Record<string, unknown> = {
+    stage: 'transferring',
+    running: true,
+    cancellable: true,
+  };
+  state.request.mockImplementation(async (_device, command) => {
+    if (command.action === 'cancel')
+      snapshot = { stage: 'transferring', running: true, cancelling: true };
+    return command.action === 'status' || command.action === 'cancel'
+      ? snapshot
+      : { deviceId: 'local', projects: [] };
+  });
+  mount();
+  fireEvent.click(await screen.findByRole('button', { name: 'taskMigration.cancelCopy' }));
+  await waitFor(() =>
+    expect(state.request).toHaveBeenCalledWith('A', { action: 'cancel', sessionId: 'task' }),
+  );
+  await screen.findByText('taskMigration.cancelling');
+  expect(screen.queryByRole('button', { name: 'taskMigration.cancelCopy' })).toBeNull();
+  expect(state.dismiss).not.toHaveBeenCalled();
+  snapshot = { stage: 'cancelled', running: false };
+  await waitFor(() => expect(state.dismiss).toHaveBeenCalledOnce(), { timeout: 2500 });
 });
 
 it('a new destination selection does not reopen the previous copy success screen', async () => {
@@ -368,6 +452,24 @@ it('does not copy when the source does not support inventory', async () => {
     (screen.getByRole('button', { name: 'taskMigration.start' }) as HTMLButtonElement).disabled,
   ).toBe(true);
   expect(state.request.mock.calls.some(([, c]) => c.action === 'estimate')).toBe(false);
+});
+
+it.each([
+  ['[PRECONDITION_FAILED] MIGRATION_TIMEOUT', 'taskMigration.estimateTimeout'],
+  ['[PRECONDITION_FAILED] MIGRATION_TOO_MANY_FILES', 'taskMigration.estimateTooManyFiles'],
+  ['[PRECONDITION_FAILED] MIGRATION_FAILED', 'taskMigration.estimateFailed'],
+  // A refusal with its own reason must not be reported as a connection/version problem.
+  ['[PRECONDITION_FAILED] MIGRATION_TASK_QUEUED', 'taskMigration.errors.MIGRATION_TASK_QUEUED'],
+])('explains why inventory failed (%s) and keeps Copy disabled', async (message, text) => {
+  const original = state.request.getMockImplementation()!;
+  state.request.mockImplementation((device, command) =>
+    command.action === 'estimate' ? Promise.reject(new Error(message)) : original(device, command),
+  );
+  mount();
+  await screen.findByText(text);
+  expect(
+    (screen.getByRole('button', { name: 'taskMigration.start' }) as HTMLButtonElement).disabled,
+  ).toBe(true);
 });
 
 it.each(['confirm', 'complete'])(
@@ -462,6 +564,59 @@ it.each(['rejected', 'lost-ack', 'accepted'])(
       fireEvent.click(screen.getByRole('button', { name: 'taskMigration.openTarget' }));
       await waitFor(() =>
         expect(state.invoke).toHaveBeenCalledWith('B', 'local-db:sessions:get', ['new-copy']),
+      );
+    }
+  },
+);
+it('ignores clicks outside and only closes through Cancel or Escape', async () => {
+  mount();
+  await screen.findByRole('option', { name: 'B' });
+  const dialog = screen.getByRole('dialog');
+  // Dialog defers dismissal until the click following a primary pointer press.
+  fireEvent.pointerDown(document.body, { button: 0, pointerType: 'mouse' });
+  fireEvent.pointerUp(document.body, { button: 0, pointerType: 'mouse' });
+  fireEvent.click(document.body);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  expect(state.dismiss).not.toHaveBeenCalled();
+  fireEvent.keyDown(dialog, { key: 'Escape' });
+  await waitFor(() => expect(state.dismiss).toHaveBeenCalledOnce());
+});
+// The dialog paints the confirmation surface; the default Button palette has almost
+// no contrast on it, so every footer action must use the confirmation palette.
+it.each([
+  ['confirming', undefined, ['taskMigration.start'], ['taskMigration.cancel']],
+  [
+    'copying',
+    { stage: 'transferring', running: true, cancellable: true },
+    [],
+    ['taskMigration.cancelCopy', 'taskMigration.runInBackground'],
+  ],
+  [
+    'complete',
+    { stage: 'complete', running: false, targetDeviceId: 'B', targetSessionId: 'migrated' },
+    ['taskMigration.openTarget'],
+    ['taskMigration.close'],
+  ],
+])(
+  'paints %s footer actions with the confirmation palette',
+  async (_stage, status, primary, secondary) => {
+    if (status)
+      state.request.mockImplementation(
+        async (device: string | null, command: { action: string }) =>
+          command.action === 'status'
+            ? status
+            : { supported: true, deviceId: device ?? 'local', projects: [] },
+      );
+    mount();
+    for (const name of primary) {
+      const button = await screen.findByRole('button', { name });
+      expect(button.className).toContain('[--button-face-bg:var(--confirm-btn-primary-bg)]');
+    }
+    for (const name of secondary) {
+      const button = await screen.findByRole('button', { name });
+      expect(button.className).toContain(
+        '[--button-face-border:var(--confirm-btn-secondary-border)]',
       );
     }
   },

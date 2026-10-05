@@ -7,6 +7,11 @@ import '@/i18n';
 import i18n from '@/i18n';
 import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import { parsePendingPluginSetup, type PendingPluginSetup } from '@/lib/makerChatStore';
+import { sharedTaskHostPeer } from '@cindy/device-link';
+
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
+  useDeviceLinkDeviceList: () => [{ deviceId: 'computer-a', name: 'Studio' }],
+}));
 
 const pending: PendingPluginSetup = {
   requestId: 'setup-1',
@@ -248,6 +253,46 @@ describe('PluginSetupPrompt', () => {
     expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(
       false,
     );
+  });
+
+  it('opens the target computer’s remote desktop for steps only it can finish', async () => {
+    const openRemoteDesktop = vi.fn(async () => {});
+    Object.assign(window.electronAPI, { openRemoteDesktop });
+    const props = {
+      viewerState: 'expanded' as const,
+      commandInFlight: null,
+      remote: true,
+      onViewerStateChange: vi.fn(),
+      onCommand: vi.fn(),
+    };
+    const { rerender } = render(
+      <PluginSetupPrompt pending={pending} remoteDeviceId="computer-a" {...props} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open remote desktop' }));
+    expect(openRemoteDesktop).toHaveBeenCalledWith({ deviceId: 'computer-a', name: 'Studio' });
+    await vi.waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Open remote desktop' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    // A secret entered on this card is saved remotely; nothing to do on the computer.
+    rerender(
+      <PluginSetupPrompt
+        pending={{ ...inlinePending, remoteSecret: true }}
+        remoteDeviceId="computer-a"
+        {...props}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Open remote desktop' })).toBeNull();
+    // A shared task's host computer is not this account's to control.
+    rerender(
+      <PluginSetupPrompt
+        pending={pending}
+        remoteDeviceId={sharedTaskHostPeer('task-1', 'computer-b')}
+        {...props}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Open remote desktop' })).toBeNull();
   });
 
   it('enables only OAuth actions advertised by the cloud Host', () => {

@@ -50,6 +50,7 @@ export function NativePermissionSheet(props: NativePermissionSheetProps) {
   }, [props.visible]);
   return (
     <SheetModal
+      nativePresentation
       backdropTestID={props.testID ? `${props.testID}.backdrop` : undefined}
       onBackdropPress={props.onClose}
       onClosed={() => {

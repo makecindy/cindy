@@ -1,3 +1,4 @@
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { shouldShowFailedScheduleNotice } from '@cindy/maker-shared/schedule-model';
 /**
@@ -124,6 +125,7 @@ import { useAutomationScheduleSessionInfo } from './hooks/useAutomationScheduleS
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useBackgroundSessionTasks } from '@/hooks/useBackgroundSessionTasks';
 import { useSessionBackgroundActivity } from '@/hooks/useSessionBackgroundActivity';
+import { useRemoteSessionBackgroundTasks } from '@/hooks/useRemoteSessionBackgroundTasks';
 import { workflowAgentVisualState } from '@/features/right-sidebar/plugins/background-tasks/workflowProgressModel';
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
 import {
@@ -242,6 +244,7 @@ import {
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { AttachedFile, ComposerBotMention, MentionedResource } from '@/lib/fileTypes';
 import { serializeAttachedFiles } from '@/lib/messageAttachmentPayload';
+import { startReviewOnDevice } from '@/lib/startReviewOnDevice';
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
 import {
   isQueueComposerEditCurrent,
@@ -2138,13 +2141,24 @@ export function CCAgentSessionView({
   const backgroundActivity = useSessionBackgroundActivity(sessionId);
   // 后台 Bash / 后台命令与 PI 后台任务:CC 的 run_in_background 与 PI 的
   // background:true / async subagent 都不调模型(或没有 proxy 信号),从
-  // taskUpdates 事件流折算,并在挂载/重载后用 main 快照补回存量。
-  // 与上面的 proxy 信号一起点亮状态栏后台模式;stopAll 是逐个精确停止任务。
+  // taskUpdates 事件流折算,并在挂载/重载后用 main 快照补回存量(本机一条 hook 同时
+  // 覆盖 local_bash 与 pi_subagent);stopAll 是逐个精确停止任务。
   const backgroundSessionTasks = useBackgroundSessionTasks(sessionId, taskUpdates, historyLoaded);
+  // device-link 远程会话:上面两路本机信号都不覆盖(镜像事件可能丢终态),改为定时
+  // 读被控端的权威快照;停止同样隧道到被控端执行。共享任务访客由 hook 内部跳过。
+  const remoteBackground = useRemoteSessionBackgroundTasks(
+    sessionId,
+    remoteDeviceId,
+    agentStatus.isRunning || isStreaming,
+  );
+  const backgroundModelActive = remoteDeviceId
+    ? remoteBackground.active
+    : backgroundActivity.active;
+  const backgroundBashTasks = remoteDeviceId ? remoteBackground.tasks : backgroundSessionTasks.tasks;
   // 与运行态互斥(turn 一开跑 main 即广播熄灭,这里再加一道渲染守卫防瞬时竞态):
   // 只在「无 turn 在跑」时才把状态栏切到后台子任务模式。
   const backgroundTasksActive =
-    (backgroundActivity.active || backgroundSessionTasks.tasks.length > 0) &&
+    (backgroundModelActive || backgroundBashTasks.length > 0) &&
     !agentStatus.isRunning &&
     !isStreaming &&
     Boolean(sessionId);
@@ -3281,8 +3295,7 @@ export function CCAgentSessionView({
         return {
           handled: false,
           accepted: false,
-          message:
-            agentKind === 'pi' ? rewriteAgentSkillInvocationForDispatch(message, hit) : message,
+          message: rewriteAgentSkillInvocationForDispatch(message, hit),
         };
       }
       // Desktop commands stay `^/` only. A whitespace-prefixed `/help` is not a dispatch.
@@ -3293,19 +3306,20 @@ export function CCAgentSessionView({
       // nor share a mutable attachment ref with a later command.
       if (hit.name === 'review') {
         if (!sessionId) return { handled: true, accepted: false, message };
-        if (remoteDeviceId || session?.remoteHostId) {
-          // 轮 35 HIGH-2:SSH 远端会话同样不支持 /review —— 与 device-link 并列
-          // 前置拦截, 避免命令进入 main 后被 UNSUPPORTED_CAPABILITY 拒绝。
+        if (session?.remoteHostId) {
+          // SSH workspaces still have no Review transport. Device-link tasks
+          // use the controlled Desktop's local Review lifecycle below.
           toast.warning(t('review.toast.remoteUnsupported'));
           return { handled: true, accepted: false, message };
         }
         const attachments = files?.length ? serializeAttachedFiles(files) : undefined;
         try {
-          await window.electronAPI.maker.startReview({
+          const request = {
             sourceSessionId: sessionId,
             ...(args.trim() ? { focus: args.trim() } : {}),
             ...(attachments?.length ? { attachments } : {}),
-          });
+          };
+          await startReviewOnDevice(request, rightSidebarDeviceLinkDeviceId);
           return { handled: true, accepted: true, message };
         } catch (err) {
           const ipcError = extractIpcError(err);
@@ -3346,6 +3360,7 @@ export function CCAgentSessionView({
       session?.workingDir,
       sessionId,
       remoteDeviceId,
+      rightSidebarDeviceLinkDeviceId,
       t,
     ],
   );
@@ -4349,9 +4364,9 @@ export function CCAgentSessionView({
     [sessionId, t],
   );
 
-  // delayed-create:device-link / 远程草稿,以及本机斜杠命令首条(含 Pi 空白前缀),把内容登记在
-  // pending 里,等 session 完全 hydrate 后再由 maybeDispatchDesktopSlashCommand /
-  // sendMessage 消费。本机普通文本已在草稿路由发出。一次性消费 + ref guard,防
+  // delayed-create:device-link 远程草稿的协同 / 斜杠命令首条,以及本机斜杠命令首条(含 Pi 空白
+  // 前缀),把内容登记在 pending 里,等 session 完全 hydrate 后再由 maybeDispatchDesktopSlashCommand /
+  // sendMessage 消费。本机与远程的普通文本已在草稿路由发出。一次性消费 + ref guard,防
   // StrictMode 双 mount / 重渲染时重复发送。
   const pendingConsumedRef = useRef(false);
   useEffect(() => {
@@ -5004,7 +5019,10 @@ export function CCAgentSessionView({
         {/* Scroll container — full height, bottom padding reserves space for input overlay.
            key={sessionId}: force a full remount on session switch so scroll state,
            refs, and ResizeObservers are fresh — guarantees per-session isolation. */}
-        <div className="relative min-h-0 flex-1">
+        <div
+          className="wallpaper-message-viewport relative min-h-0 flex-1"
+          style={{ '--wallpaper-composer-height': `${overlayHeight}px` } as CSSProperties}
+        >
           {/* perf/session-switch 探针纯诊断:仅 DEV 用 Profiler 量 MessageStream commit,
             生产直接渲染 el(见上方 messageStreamEl),不引入多余 Profiler fiber。 */}
           {import.meta.env.DEV ? (
@@ -5026,11 +5044,11 @@ export function CCAgentSessionView({
         >
           {/* Gradient mask: transparent → content-area */}
           <div className="pointer-events-none h-8 w-full">
-            <div className="h-full w-full bg-gradient-to-t from-[hsl(var(--content-area))] to-transparent" />
+            <div className="wallpaper-composer-fade h-full w-full bg-gradient-to-t from-[hsl(var(--content-area))] to-transparent" />
           </div>
 
           {/* Solid background zone */}
-          <div className="pointer-events-auto flex w-full flex-col items-center bg-[hsl(var(--content-area))] pb-5">
+          <div className="wallpaper-composer-zone pointer-events-auto flex w-full flex-col items-center bg-[hsl(var(--content-area))] pb-5">
             {/* 单行 composer 状态层：RunningStatusBar 与中央胶囊组合叠在同一个 grid row。
               展开态由「计划 + 完整被控提示」组成真实 flex 组合共同居中,被控提示会把计划
               向左挤且不会互相覆盖；折叠态计划恢复单独居中,呼吸灯移到 token 统计左侧。 */}
@@ -5080,17 +5098,29 @@ export function CCAgentSessionView({
                   // PI durable subagent 也在同一条逐任务停止路径上,但不算「后台命令」,
                   // 计数归零使文案回落到通用「后台任务运行中」。
                   backgroundBashOnlyCount={
-                    backgroundActivity.active || backgroundSessionTasks.subagentCount > 0
-                      ? 0
-                      : backgroundSessionTasks.bashCount
+                    remoteDeviceId
+                      ? backgroundModelActive
+                        ? 0
+                        : backgroundBashTasks.length
+                      : backgroundActivity.active || backgroundSessionTasks.subagentCount > 0
+                        ? 0
+                        : backgroundSessionTasks.bashCount
                   }
-                  backgroundStopping={backgroundActivity.stopping || backgroundSessionTasks.stopping}
+                  backgroundStopping={
+                    backgroundActivity.stopping ||
+                    backgroundSessionTasks.stopping ||
+                    remoteBackground.stopping
+                  }
                   // 「全部停止」停下不来的条数(host 只在 SIGKILL 后仍未确认退出时让 stop
                   // 失败):状态栏按钮的悬浮说明里明确点出来,不再静默当作全部成功。
-                  backgroundStopUnconfirmedCount={backgroundSessionTasks.stopUnconfirmedCount}
+                  // 远程镜像的「全部停止」由被控端权威快照收口,不并进这个本机计数。
+                  backgroundStopUnconfirmedCount={
+                    remoteDeviceId ? 0 : backgroundSessionTasks.stopUnconfirmedCount
+                  }
                   suppressContent={Boolean(pendingPlanReview)}
                   onStopBackgroundTasks={() => {
-                    if (backgroundActivity.active) void backgroundActivity.stopAll();
+                    if (remoteDeviceId) void remoteBackground.stopAll();
+                    else if (backgroundActivity.active) void backgroundActivity.stopAll();
                     else void backgroundSessionTasks.stopAll();
                   }}
                   rightLeadingSlot={
@@ -6096,9 +6126,10 @@ function RunningStatusBar({
   // the icon answers "what is it doing right now".
   const isCompacting = typeof status === 'string' && status.toLowerCase().startsWith('compact');
 
-  const minutes = Math.floor(elapsed / 60);
-  const seconds = elapsed % 60;
-  const elapsedText = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+  const elapsedText = formatSessionDuration(elapsed * 1000, t, {
+    minimumSeconds: 0,
+    alwaysShowRemainder: true,
+  });
 
   // Cadenced shimmer(DESIGN.md §14.4):status-shimmer 已是一次性动画,这里在
   // 每次真实动静(状态文案变化 / token 计数推进)时通过 key 重挂载触发一次呼吸。

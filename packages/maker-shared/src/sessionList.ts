@@ -125,6 +125,8 @@ export interface RemoteSessionScheduleInfo {
   scheduleId: string;
   scheduleName: string;
   scheduleStatus?: RemoteSchedule['status'];
+  /** 该 schedule 的下次自动运行时间(毫秒,宿主时钟);手动、已停止或运行中被清空时缺失。 */
+  nextFireAt?: number;
   /** 同一会话的所有已知 schedule 绑定都已 paused / expired 时为 true；缺失按 false。 */
   allSchedulesStopped?: boolean;
   unreadRunIds: string[];
@@ -637,6 +639,7 @@ export function buildSessionScheduleIndex(
         scheduleId: schedule.id,
         scheduleName: schedule.name || schedule.id,
         scheduleStatus: schedule.status,
+        ...nextFireAtField(schedule),
         allSchedulesStopped: false,
         unreadRunIds: [],
         unreadCount: 0,
@@ -671,6 +674,7 @@ export function buildSessionScheduleIndex(
         scheduleId: isLatest ? scheduleId : existing.scheduleId,
         scheduleName: isLatest ? schedule?.name || scheduleId : existing.scheduleName,
         scheduleStatus: isLatest ? schedule?.status : existing.scheduleStatus,
+        ...(isLatest ? nextFireAtField(schedule) : existing.nextFireAt !== undefined ? { nextFireAt: existing.nextFireAt } : {}),
         allSchedulesStopped: false,
         unreadRunIds,
         unreadCount: unreadRunIds.length,
@@ -690,6 +694,11 @@ export function buildSessionScheduleIndex(
     index.set(sessionId, { ...info, allSchedulesStopped });
   }
   return index;
+}
+
+function nextFireAtField(schedule: RemoteSchedule | undefined): { nextFireAt?: number } {
+  const nextFireAt = schedule ? toMillis(schedule.nextFireAt) : 0;
+  return nextFireAt > 0 ? { nextFireAt } : {};
 }
 
 export function buildSessionMessagePreviewIndex(

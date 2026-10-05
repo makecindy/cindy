@@ -1,3 +1,4 @@
+import { formatLocalizedSeconds } from './sessionDurationFormat';
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
 import { Component, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useLocalSearchParams } from 'expo-router';
@@ -228,10 +229,12 @@ function CompanionTaskCard({
           ? t('devices.companions.duration.minutes', {
               n: Math.floor(seconds / 60),
             })
-          : t('devices.companions.duration.hoursMinutes', {
-              h: Math.floor(seconds / 3600),
-              m: Math.floor(seconds / 60) % 60,
-            });
+          : seconds >= 86_400
+            ? formatLocalizedSeconds(seconds)
+            : t('devices.companions.duration.hoursMinutes', {
+                h: Math.floor(seconds / 3600),
+                m: Math.floor(seconds / 60) % 60,
+              });
   const associated = useRemoteCompanionQuery<SessionPrRef[]>(
     deviceId,
     'git-context:pr-refs:list',

@@ -24,18 +24,18 @@ beforeEach(() => {
 });
 
 describe('asset preparation boundaries', () => {
-  it('rechecks plugin capability revocation even while successful Skill preparation is cached', async () => {
+  it('rechecks plugin capability revocation and Skill projections at each launch', async () => {
     const skills = vi.fn(async () => true);
     // Avoid constructor credential reconciliation; exercise the real preparation entry points.
     const adapter = Object.assign(Object.create(DesktopCodexAuthAdapter.prototype), {
       pendingAssetsPrep: new PreparationCache(0),
-      skillAssetsPrep: new PreparationCache(30_000), runEnsureGlobalCodexSkills: skills,
+      runEnsureGlobalCodexSkills: skills,
     }) as DesktopCodexAuthAdapter;
     Object.defineProperty(adapter, 'codexHome', { value: 'unused-test-home' });
     await adapter.ensureGlobalCodexAssets();
     state.bridge.mockResolvedValueOnce({ warnings: [], routingFailures: ['revoked'] });
     await expect(adapter.ensureGlobalCodexAssets()).rejects.toThrow('Cannot start Codex safely');
-    expect(skills).toHaveBeenCalledTimes(1);
+    expect(skills).toHaveBeenCalledTimes(2);
     expect(state.bridge).toHaveBeenCalledTimes(2);
     state.bridge.mockRejectedValueOnce(new Error('unreadable'));
     await expect(adapter.ensureGlobalCodexAssets()).rejects.toThrow('unreadable');

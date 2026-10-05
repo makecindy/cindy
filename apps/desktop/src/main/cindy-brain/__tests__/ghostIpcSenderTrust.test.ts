@@ -41,6 +41,13 @@ function handlerBlock(source: string, channel: string): string {
 describe('高权限 ghost IPC 的来源闸(源码契约)', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
 
+  it('keeps task permission retry behind the trusted Host sender gate', () => {
+    const block = handlerBlock(source, 'ghosts:request-task-approval');
+    expect(block.indexOf('assertTrustedAppRendererEvent(event)')).toBeLessThan(block.indexOf('requestPluginTaskApproval'));
+    expect(block).toContain('requireGhostAvailableForActiveSession(id)');
+    expect(block).toContain("purpose: 'task-capability'");
+  });
+
   for (const channel of TRUSTED_SENDER_CHANNELS) {
     it(`${channel} 断言 assertTrustedAppRendererEvent 且不吞 sender`, () => {
       const block = handlerBlock(source, channel);

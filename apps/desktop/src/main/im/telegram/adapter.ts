@@ -27,6 +27,7 @@ import { autoRegisterTelegramSpeaker } from './contactsAutoRegister';
 import { createTelegramGuestTurnPermissionPolicy } from './permissionPolicy';
 import { telegramUiText, ui, PROCESSING_EMOJI } from './uiText';
 import type { GroupHistoryAccessScope } from '../shared/groupHistoryAccess';
+import { imChannelNoteSourceFromEvent } from '../shared/channelNote';
 
 function ensureWorkingDir(botId: string): string {
   const dir = ownerScopedImUserDataPath('im-working-dir', `telegram-${botId}`);
@@ -94,8 +95,10 @@ export function buildTelegramAdapter(
       }),
     },
     processingEmoji: PROCESSING_EMOJI,
-    // 官方 bot 的结果表情习惯: 成功 👍 / 失败 👎; 中止不放(撤回 👀 即可)。
-    terminalReactionEmoji: (kind) => (kind === 'done' ? '👍' : kind === 'error' ? '👎' : null),
+    // 已收到、等待处理；开始执行后切换为 processingEmoji。
+    queuedEmoji: '👀',
+    // 正常完成由回复本身反馈，清除状态表情；失败保留提醒。
+    terminalReactionEmoji: (kind) => (kind === 'error' ? '👎' : null),
     // /project: 从 Telegram 把当前会话切到 desktop 项目目录(bot 原生会话)。
     projectSwitching: true,
     buildVendorOptions: (userId) => ({ telegramChatId: userId, source: 'telegram' }),
@@ -130,6 +133,8 @@ export function buildTelegramAdapter(
         lane: lane ? { provider, chatId: lane.chatId, threadId: lane.threadId } : null,
       };
     },
+    // 群里发言人已由 prepareAgentTurnText 的 `[发言人]` 行写明(含主人标记), 渠道说明不再重复。
+    channelNoteSourceFor: (event) => imChannelNoteSourceFromEvent(event, { omitSender: true }),
     prepareAgentTurnText: async (event) => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       const replyBlock = event.replyContext

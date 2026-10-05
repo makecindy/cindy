@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   consumeLearnInvocationGrant,
+  canGrantUnqualifiedClaudeLearnInvocation,
   createLearnInvocationGrantConsumer,
   parseDirectLearnInvocation,
 } from '../invocationGrant.js';
@@ -16,6 +17,7 @@ let activeDb: { sqlite: Database.Database; client: DbClient } | null = null;
 function createInvocationDb(): Database.Database {
   const sqlite = new Database(':memory:');
   sqlite.exec(`
+    CREATE TABLE bot_session_links (session_id TEXT PRIMARY KEY);
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY,
       cleared_at INTEGER
@@ -49,6 +51,13 @@ afterEach(() => {
 });
 
 describe('Learn invocation grant', () => {
+  it('does not attest a Bot-owned /learn alias using the global skill catalog', async () => {
+    const sqlite = createInvocationDb();
+    sqlite.prepare('INSERT INTO bot_session_links(session_id) VALUES (?)').run('bot-session');
+    await expect(canGrantUnqualifiedClaudeLearnInvocation('bot-session')).resolves.toBe(false);
+    await expect(canGrantUnqualifiedClaudeLearnInvocation('ordinary-session')).resolves.toBe(true);
+  });
+
   const grant = (sessionInstanceId = 'instance-1') => ({
     version: 1 as const,
     sessionInstanceId,
@@ -84,6 +93,8 @@ describe('Learn invocation grant', () => {
   it.each([
     ['/learn', { input: '', sourceKind: 'session' }],
     ['/Learn', { input: '', sourceKind: 'session' }],
+    ['/cindy:learn', { input: '', sourceKind: 'session' }],
+    ['/cindy:learn release flow', { input: 'release flow', sourceKind: 'freetext' }],
     ['/learn release flow', { input: 'release flow', sourceKind: 'freetext' }],
     ['/LEARN Preserve Release Case', { input: 'Preserve Release Case', sourceKind: 'freetext' }],
     [
@@ -110,6 +121,8 @@ describe('Learn invocation grant', () => {
 
   it.each([
     '/learner',
+    '/other:learn',
+    '/cindy:learner',
     '/learning release flow',
     '/skill:learner release flow',
     'please inspect /Learn docs',

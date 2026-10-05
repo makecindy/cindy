@@ -1,3 +1,5 @@
+import type { TFunction } from 'i18next';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 /**
  * BackgroundTasksBody —— 「后台任务」tab 的内容区。
  *
@@ -56,6 +58,8 @@ import { getSessionDeviceId, useRemoteDevices } from '@/features/device-link/rem
 import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import { makerChatStore, EMPTY_TASK_UPDATES } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate, ChatMessage } from '@/lib/makerChatStore';
+import { canManageBackgroundTasks, stopBackgroundTask } from '@/lib/backgroundTaskStop';
+import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
 import {
   getWorkflowProgressFor,
   isRemoteSessionSticky,
@@ -168,15 +172,11 @@ function statusIcon(status: string): LucideIcon {
   return LoaderCircle;
 }
 
-/** 毫秒 → 紧凑时长文案(与 AgentTaskCard 同口径;该实现未导出,此处内联)。 */
-function formatDuration(ms: number | undefined): string | undefined {
+/** 与 AgentTaskCard 共用长耗时换算,保留亚秒精度。 */
+function formatDuration(ms: number | undefined, t?: TFunction): string | undefined {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
   if (ms < 1000) return `${ms}ms`;
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+  return formatSessionDuration(ms, t);
 }
 
 /** workflow 行副标题:workflow_agent 条目 done/error 计数 / 总数。 */
@@ -199,11 +199,13 @@ function workflowAgentCounts(
 }
 
 /** 停止按钮 gating(与 AgentTaskCard 同口径):running + (claude-code 或可停的 PI 任务) +
- *  有 taskId + 非远程。远程判定用粘滞版:relay 瞬断窗口误判本机会放出假 Stop(本地调用假成功,
- *  任务在被控端继续跑),与水合的粘滞归属同口径。
+ *  有 taskId + 有后台任务管理权(共享任务访客没有)。
  *
  *  PI 只开放有 durable 控制面的任务:后台命令(local_bash,host-owned 子进程)与
- *  async durable subagent(pi_subagent);普通前台 subagent 没有 stopBackgroundTask 路径。 */
+ *  async durable subagent(pi_subagent);普通前台 subagent 没有 stop 路径。
+ *
+ *  远程镜像会话不再一律隐藏:stopBackgroundTask 按会话归属隧道到被控端执行。归属用
+ *  粘滞判定(relay 瞬断窗口不回退本机,否则本地调用假成功、任务在被控端继续跑)。 */
 function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
   const providerCanStop =
     item.provider === 'claude-code'
@@ -213,13 +215,13 @@ function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
     item.status === 'running' &&
     providerCanStop &&
     Boolean(item.update?.taskId) &&
-    Boolean(sessionId) &&
-    !(sessionId && isRemoteSessionSticky(sessionId))
+    Boolean(sessionId && canManageBackgroundTasks(sessionId))
   );
 }
 
 /** 停止按钮:在飞防连点;失败**不静默** —— 回调给行使它把「停止未确认」显示出来
- *  (host 只会在 SIGKILL 之后仍未确认退出时让 stop 失败)。状态翻转仍由事件流收口。 */
+ *  (host 只会在 SIGKILL 之后仍未确认退出时让 stop 失败),可立即处理的远程失败另外
+ *  给一句统一 toast。状态翻转仍由事件流收口。 */
 function StopButton({
   sessionId,
   taskId,
@@ -235,23 +237,23 @@ function StopButton({
     (e: MouseEvent) => {
       // 行点击(进详情 / 聊天定位)不该被停止按钮触发。
       e.stopPropagation();
-      const api = window.electronAPI?.maker;
-      if (!api?.stopAgentTask || stopping) return;
+      if (stopping) return;
       setStopping(true);
-      void api
-        .stopAgentTask(sessionId, taskId)
+      void stopBackgroundTask(sessionId, taskId)
         .then(() => {
           // 与卡片同口径:停止对「main 侧其实已不在」的 id 是静默成功,点完对一次账,
           // 让僵尸行很快翻成已停止,而不是留给下一次活动熄灭对账。
           makerChatStore.requestBackgroundTaskReconcile(sessionId);
         })
-        .catch(() => {
-          // 真失败时状态仍是 running:按钮保留可重试,并把提示交给行。
+        .catch((error: unknown) => {
+          // 真失败时状态仍是 running:按钮保留可重试,把提示交给行;远程版本过旧 /
+          // 暂时无响应这两类额外给一句统一 toast。
+          reportBackgroundTaskStopFailure(error, t);
           onStopFailed();
         })
         .finally(() => setStopping(false));
     },
-    [sessionId, taskId, stopping, onStopFailed],
+    [sessionId, taskId, stopping, t, onStopFailed],
   );
   const actionLabel = t('rightSidebar.backgroundTasks.stop');
   const label = stopping
@@ -338,7 +340,7 @@ function TaskRow({
       }
     }
     const usage = item.update?.usage;
-    const duration = formatDuration(usage?.durationMs);
+    const duration = formatDuration(usage?.durationMs, t);
     if (duration) parts.push(duration);
     if (typeof usage?.totalTokens === 'number') {
       parts.push(

@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import i18n from '@/i18n';
 import HookTaskCard from '@/components/chat/HookTaskCard';
+import { SHARE_SOURCE_ATTR, stripMessageSources } from '@/lib/shareConversationImage';
 import {
   resolveHookGroupContext,
   resolveUserDisplayText,
@@ -302,4 +303,14 @@ describe('HookTaskCard attached context', () => {
       expect(screen.getByRole('region', { name: background })).toBeTruthy();
     },
   );
+
+  it('marks the channel header as a source so share images keep only the message body', () => {
+    const { container } = render(<HookTaskCard im="slack" userText="帮我看下这个报错" />);
+    const header = container.querySelector(`[${SHARE_SOURCE_ATTR}]`);
+    expect(header?.textContent).toBe('Cindy · 来自 Slack');
+    const clone = container.cloneNode(true) as HTMLElement;
+    stripMessageSources(clone);
+    expect(clone.textContent).not.toContain('来自 Slack');
+    expect(clone.textContent).toContain('帮我看下这个报错');
+  });
 });

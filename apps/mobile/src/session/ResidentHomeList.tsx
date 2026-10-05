@@ -23,6 +23,18 @@ export function useResidentHomeList() {
   return { enabled: context?.enabled ?? false, mounted: context?.mounted };
 }
 
+/** Preserve the resident-list owner when route content is re-hosted above this
+ * provider. React context follows the render destination, so an explicit bridge
+ * is required for Android root overlays that otherwise fall back to an inline
+ * Home list. */
+export function useResidentHomeListContextBridge(children: ReactNode) {
+  const context = useContext(Context);
+  return useMemo(
+    () => <Context.Provider value={context}>{children}</Context.Provider>,
+    [children, context],
+  );
+}
+
 /** The list lives above route lifetimes. Owners only supply its frame and props;
  * never key the host by route, session, or presentation width. */
 export function ResidentHomeListProvider({ children }: { children: ReactNode }) {

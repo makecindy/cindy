@@ -185,7 +185,7 @@ function AccountSwitcherContainer({ visible, onClosed, children, ...surface }: S
     visible={visible} onClose={surface.onClose} onClosed={onClosed}
     title={surface.title} footer={surface.footer} testID={surface.testID}
   >{children}</ComposerSheet>;
-  return <SheetModal visible={visible} onRequestClose={surface.onClose}
+  return <SheetModal nativePresentation visible={visible} onRequestClose={surface.onClose}
     onBackdropPress={surface.onClose} onClosed={onClosed} backdropTestID="accountSwitcher.backdrop">
     <SheetSurface {...surface}>{children}</SheetSurface>
   </SheetModal>;

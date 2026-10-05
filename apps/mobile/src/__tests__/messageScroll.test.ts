@@ -12,7 +12,6 @@ import {
   evaluateMobileAnchorVerify,
   evaluateMobileFollowEndContentSizePin,
   findMobileRenderItemKeyByClientId,
-  firstNonEmptyMessageLine,
   isNearMessageListBottom,
   isNearMobileMessageListBottom,
   isNearMessageListTop,
@@ -31,7 +30,6 @@ import {
   mobileMessageListEndOffset,
   mobileMessageListBottomPadding,
   mobileMessageListNearBottomThreshold,
-  previousUserMessageJumpTarget,
   shouldAutoFollowMessages,
   shouldAutoLoadEarlier,
   shouldShowNewMessageIndicator,
@@ -188,28 +186,6 @@ describe('messageScroll', () => {
       label: '加载更早继续搜索',
       visible: true,
     });
-  });
-
-  it('finds the previous user message above the first visible item', () => {
-    const items = renderItems([
-      remoteMessage({ id: 'u1', role: 'user', content: '\n  first question\nsecond line', createdAt: at(1) }),
-      remoteMessage({ id: 'a1', role: 'assistant', content: 'answer', createdAt: at(2) }),
-      remoteMessage({ id: 'u2', role: 'user', content: 'second question', createdAt: at(3) }),
-      remoteMessage({ id: 'a2', role: 'assistant', content: 'answer 2', createdAt: at(4) }),
-    ]);
-
-    expect(firstNonEmptyMessageLine('\n  first question\nsecond line')).toBe('first question');
-    expect(previousUserMessageJumpTarget(items, 3)).toMatchObject({
-      clientId: 'u2',
-      itemKey: 'message-u2',
-      preview: 'second question',
-    });
-    expect(previousUserMessageJumpTarget(items, 1)).toMatchObject({
-      clientId: 'u1',
-      itemKey: 'message-u1',
-      preview: 'first question',
-    });
-    expect(previousUserMessageJumpTarget(items, 0)).toBeNull();
   });
 
   it('maps client ids inside folded render items to the top-level scroll target', () => {

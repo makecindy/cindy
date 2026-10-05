@@ -29,6 +29,7 @@ import { isBotAuthorizationSession } from '../maker-ipc/botAuthorizationHost.js'
  */
 
 import fs from 'node:fs';
+import { publishImage } from '../cindy-media/publishImage.js';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -1767,6 +1768,17 @@ export function getCindyGhostsMcpDeps(
     callMedia: async (request) => {
       const sessionContext = resolveSessionContext();
       const sessionId = sessionContext?.sessionId;
+      if (request.action === 'import_image') {
+        const live = requireLiveSessionInstance(sessionId, sessionContext?.sessionInstanceId, hostDeps.getLiveSessionGrantState);
+        if (!live.ok || !sessionContext?.workingDir) return { ok: false, errorCode: 'PERMISSION_DENIED', message: live.ok ? '当前任务缺少工作目录。' : live.message };
+        return publishImage(request.path, { ...sessionContext, sessionId: live.sessionId }, {
+          isCurrent: () => requireLiveSessionInstance(live.sessionId, live.sessionInstanceId, hostDeps.getLiveSessionGrantState).ok,
+          authorize: (absPath) => authorizeDesktopSessionPath({
+            ...sessionContext, sessionId: live.sessionId, sessionInstanceId: live.sessionInstanceId,
+            path: absPath, toolName: 'media.import_image', operation: 'read',
+          }, hostDeps.getLiveSessionGrantState),
+        });
+      }
       const downloadContext = (request.action === 'request' || request.action === 'poll') && sessionId && sessionContext?.sessionInstanceId
         ? hostDeps.createMediaDownloadContext?.(sessionId, sessionContext.sessionInstanceId)
         : undefined;

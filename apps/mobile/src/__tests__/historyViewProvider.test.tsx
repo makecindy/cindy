@@ -3,6 +3,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DeviceLinkError,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   SHARED_TASK_CAPABILITY,
   type DeviceLinkClient,
@@ -67,7 +68,10 @@ const transport = vi.hoisted(() => {
     peerReset: Parameters<DeviceLinkClient['onPeerTransportReset']>[0] = () => {};
     frame: Parameters<DeviceLinkClient['onFrame']>[0] = () => {};
     openLink = vi.fn<(deviceId: string) => Promise<LinkAcceptPayload>>();
-    invoke = vi.fn(async () => ({ ok: true, result: 'history page' }));
+    invoke = vi.fn<DeviceLinkClient['invoke']>(async (_deviceId, _payload, _timeout, options) => {
+      options?.preSend?.();
+      return { ok: true, result: 'history page' };
+    });
     start = vi.fn();
     stop = vi.fn();
     connectNow = vi.fn();
@@ -124,6 +128,39 @@ beforeEach(async () => {
 });
 afterEach(async () => { await act(async () => root.unmount()); });
 
+describe('Provider queued send guards', () => {
+  it('rejects a write cancelled after admission without sending or counting a remote timeout', async () => {
+    resetDeviceResponsivenessTracking();
+    const client = transport.clients[0];
+    const send = vi.fn();
+    const cancelled = new DeviceLinkError('INVOKE_TIMEOUT', 'local operation expired');
+    // Two actual remote timeouts: a third would open the breaker if the local
+    // guard rejection were incorrectly classified as a failed remote request.
+    for (let i = 0; i < 2; i++) settleDeviceSend('host', acquireDeviceSendSlot('host'), 'timeout');
+    let current = true;
+    let dispatch!: () => void;
+    client.invoke.mockImplementation((_deviceId, _payload, _timeout, options) => new Promise((resolve, reject) => {
+      dispatch = () => {
+        try { options?.preSend?.(); send(); resolve({ ok: true, result: null }); }
+        catch (error) { reject(error); }
+      };
+    }));
+    let result!: Promise<unknown>;
+    await act(async () => {
+      result = context.invoke('host', 'maker:send', [], {
+        preSend: () => { if (!current) throw cancelled; },
+      }).catch(error => error);
+    });
+    expect(client.invoke).toHaveBeenCalledTimes(1);
+    current = false;
+    await act(async () => dispatch());
+    expect(await result).toBe(cancelled);
+    expect(send).not.toHaveBeenCalled();
+    expect(unresponsiveDevicesStore.getSnapshot().has('host')).toBe(false);
+    resetDeviceResponsivenessTracking();
+  });
+});
+
 describe('pending catalog recovery', () => {
   it.each(['foreground', 'peer response'] as const)('wakes a blocked invalidation on %s before its long retry timer expires', async (recovery) => {
     vi.useFakeTimers();
@@ -145,8 +182,8 @@ describe('pending catalog recovery', () => {
         } else unresponsiveDevicesStore.clearUnresponsive('host');
         await vi.advanceTimersByTimeAsync(50);
       });
-      expect(client.invoke).toHaveBeenCalledWith('host', expect.objectContaining({ channel: 'maker:provider:list' }), undefined);
-      expect(client.invoke).toHaveBeenCalledWith('host', expect.objectContaining({ channel: 'maker:get-capabilities' }), undefined);
+      expect(client.invoke).toHaveBeenCalledWith('host', expect.objectContaining({ channel: 'maker:provider:list' }), undefined, expect.objectContaining({ preSend: expect.any(Function) }));
+      expect(client.invoke).toHaveBeenCalledWith('host', expect.objectContaining({ channel: 'maker:get-capabilities' }), undefined, expect.objectContaining({ preSend: expect.any(Function) }));
     } finally { unresponsiveDevicesStore.clearAll(); vi.useRealTimers(); }
   });
 });
@@ -169,7 +206,7 @@ describe('pending probe reply recovery', () => {
         for (let i = 0; i < 3; i++) settleDeviceSend('host', acquireDeviceSendSlot('host'), 'timeout');
         await vi.advanceTimersByTimeAsync(14_000);
       });
-      expect(client.invoke).toHaveBeenCalledExactlyOnceWith('host', expect.objectContaining({ channel: 'local-db:sessions:list' }), expect.any(Number));
+      expect(client.invoke).toHaveBeenCalledExactlyOnceWith('host', expect.objectContaining({ channel: 'local-db:sessions:list' }), expect.any(Number), expect.objectContaining({ preSend: expect.any(Function) }));
       expect(unresponsiveDevicesStore.has('host')).toBe(true);
       client.hasPendingRequestsTo.mockImplementation(device => device === 'host');
       const freshAccept = deferredAccept();
@@ -434,7 +471,7 @@ describe('Provider history handshake lifetime', () => {
       await act(async () => current.resolve(accepted(supported)));
       expect(await fresh.result).toBe('history page');
       expect(currentClient.invoke).toHaveBeenCalledTimes(1);
-      expect(currentClient.invoke).toHaveBeenCalledWith('host', { channel: historyChannel, args: [] }, undefined);
+      expect(currentClient.invoke).toHaveBeenCalledWith('host', { channel: historyChannel, args: [] }, undefined, expect.objectContaining({ preSend: expect.any(Function) }));
       // A late old completion must not evict the new successful single-flight.
       await act(async () => { expect(await context.invoke('host', historyChannel)).toBe('history page'); });
       expect(currentClient.openLink).toHaveBeenCalledTimes(currentClient === client ? 2 : 1);

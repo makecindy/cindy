@@ -294,6 +294,25 @@ describe('notificationService — channels 分发', () => {
     expect(feishuIm.sendText).toHaveBeenCalledTimes(1);
   });
 
+  it('skips the local badge mark for remote device tasks while keeping other channels', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
+    markSessionNeedsAttention.mockClear();
+
+    await invokeHandler({
+      sessionId: 'remote-1',
+      title: 'Fix login',
+      kind: 'needs-reply',
+      markAttention: false,
+      channels: { desktop: false, feishu: false, mobile: true },
+    });
+
+    expect(markSessionNeedsAttention).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).toHaveBeenCalled();
+    await expect(invokeHandler({ sessionId: 'remote-1', title: 'x', kind: 'done', markAttention: 'no' }))
+      .rejects.toThrow('invalid session event payload');
+  });
+
   it('does not treat a pre-drain running snapshot as a reason to lose the completion fallback', async () => {
     const { initNotificationService } = await freshService();
     initNotificationService(baseDeps(makeFeishuIm('owner')));

@@ -140,7 +140,7 @@ describe('ComputerUseSection browser backend health loading', () => {
       name: 'settings.computerUse.directControl.toggleAria',
     });
     expect((computerToggle as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('settings.computerUse.directControl.status.checking')).toBeTruthy();
+    expect(screen.getByText('settings.computerUse.directControl.update.readingVersion')).toBeTruthy();
     expect(screen.queryByText('settings.computerUse.directControl.notDetected')).toBeNull();
     expect(api.getComputerStatus).toHaveBeenCalledWith({
       refreshPermissionGuide: false,
@@ -158,14 +158,14 @@ describe('ComputerUseSection browser backend health loading', () => {
 
     await act(async () => { initialComputer.resolve(computerUnavailable); });
     expect((computerToggle as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.queryByText('settings.computerUse.directControl.status.checking')).toBeNull();
+    expect(screen.queryByText('settings.computerUse.directControl.update.readingVersion')).toBeNull();
   });
 
   it('settles a failed computer probe without hiding the settings', async () => {
     api.getComputerStatus.mockRejectedValueOnce(new Error('probe failed'));
     render(<ComputerUseSection workingDir="/tmp/project" />);
     expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
-    expect(screen.queryByText('settings.computerUse.directControl.status.checking')).toBeNull();
+    expect(screen.queryByText('settings.computerUse.directControl.update.readingVersion')).toBeNull();
     expect((screen.getByRole('switch', {
       name: 'settings.computerUse.directControl.toggleAria',
     }) as HTMLButtonElement).disabled).toBe(false);

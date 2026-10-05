@@ -1025,8 +1025,8 @@ export interface InteractionDecisionPayload {
 }
 
 /**
- * interaction.cancel(desktop -> server): 交互已在 desktop 侧收口(超时按
- * 安全默认自决 / turn 结束), 通知 server 改写卡片(摘按钮 + reason 文案),
+ * interaction.cancel(desktop -> server): 交互已在 desktop 侧收口(任一端确认、
+ * 超时按安全默认自决或 turn 结束), 通知 server 改写卡片(摘按钮 + reason 文案),
  * 防止用户对着死卡片按。幂等: server 找不到对应卡片时静默忽略。
  */
 export interface InteractionCancelPayload {

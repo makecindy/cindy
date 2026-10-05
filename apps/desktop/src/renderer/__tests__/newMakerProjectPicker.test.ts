@@ -1173,11 +1173,15 @@ describe('Shared create project picker', () => {
     expect(remoteSessionHandoffSource).not.toContain('await refreshRemoteDeviceSessions(');
     // 两处调用点都不得 await 它 —— await 一个同步函数不报错,但会把「不要等」这个意图悄悄改回去。
     expect(newMakerDraftRouteSource).not.toContain('await commitRemoteSessionHandoff(');
-    // 而 setPending / setPendingGoal 必须在各自的 handoff 之后仍然发生(交接本体没被搬走)。
+    // 而首条交接必须在各自的 handoff 之后仍然发生(交接本体没被搬走):发送路径先把普通首条
+    // 直接交给 store 发件队列再导航;协同 / 斜杠命令 / 未受理时退回 setPending 再导航。
     const sendPart = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf("logTag: 'draft send'"),
     );
-    expect(sendPart.slice(0, sendPart.indexOf('navigate('))).toContain(
+    const directNavigate = sendPart.indexOf('navigate(');
+    expect(sendPart.slice(0, directNavigate)).toContain('makerChatStore.sendMessage(');
+    const fallbackNavigate = sendPart.indexOf('navigate(', directNavigate + 1);
+    expect(sendPart.slice(directNavigate, fallbackNavigate)).toContain(
       'setPending(remoteSessionId',
     );
     const goalPart = newMakerDraftRouteSource.slice(

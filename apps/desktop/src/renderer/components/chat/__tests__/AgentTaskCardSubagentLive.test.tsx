@@ -25,6 +25,10 @@ vi.mock('@/lib/makerTransport', () => ({
   getWorkflowProgressFor: vi.fn(async () => null),
   isRemoteSessionSticky: () => false,
 }));
+vi.mock('@/lib/backgroundTaskStop', () => ({
+  canManageBackgroundTasks: () => true,
+  stopBackgroundTask: vi.fn(async () => {}),
+}));
 
 // 卡片在停止成功后会对一次账(僵尸行自愈);真实 store 会拖进完整 i18n 初始化。
 vi.mock('@/lib/makerChatStore', () => ({

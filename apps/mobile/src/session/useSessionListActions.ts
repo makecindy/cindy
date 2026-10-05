@@ -146,7 +146,7 @@ export function useSessionListActions(options?: { animateListChange?: (apply: ()
     setActionSheetSession(null);
     if (!session) return;
     if (action === 'rename' || action === 'delete') {
-      // Android 自绘 Modal、iOS Expo BottomSheet、系统 Alert 都不能在 Sheet
+      // Android Compose BottomSheet、iOS Expo BottomSheet、系统 Alert 都不能在 Sheet
       // dismiss 过程中再 present,否则会被吞掉或压在后面。
       pendingSheetActionRef.current = () => applySessionSheetAction(session, action);
       return;

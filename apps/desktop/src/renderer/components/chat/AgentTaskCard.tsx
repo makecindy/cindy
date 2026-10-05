@@ -1,3 +1,5 @@
+import type { TFunction } from 'i18next';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { Fragment, useEffect, useMemo, useCallback, useState } from 'react';
 import {
   AlertCircle,
@@ -29,6 +31,8 @@ import {
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
+import { canManageBackgroundTasks, stopBackgroundTask } from '@/lib/backgroundTaskStop';
+import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
 import { getWorkflowProgressFor, isRemoteSessionSticky } from '@/lib/makerTransport';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
@@ -115,14 +119,10 @@ function detailText(...values: Array<string | undefined>): string | undefined {
   return undefined;
 }
 
-function formatDuration(ms: number | undefined): string | undefined {
+function formatDuration(ms: number | undefined, t?: TFunction): string | undefined {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
   if (ms < 1000) return `${ms}ms`;
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+  return formatSessionDuration(ms, t);
 }
 
 function statusIcon(status: AgentTaskUpdate['status']) {
@@ -348,6 +348,7 @@ export function AgentTaskCard({
           ?? (startedAtMs !== undefined && endedAtMs !== undefined && endedAtMs >= startedAtMs
             ? endedAtMs - startedAtMs
             : undefined),
+        t,
       );
   const bashCommand = isBash ? readInputString(toolCall?.toolInput, ['command']) : undefined;
   const providerLabel = isWorkflow
@@ -360,11 +361,13 @@ export function AgentTaskCard({
           ? t('chat.agentTask.provider.pi')
           : t('chat.agentTask.provider.claude');
 
-  // 停止按钮:Claude 后台任务沿用 SDK stopTask;PI 只开放有 durable 控制面的任务:
-  // 后台命令(host-owned 子进程)与 async durable subagent。普通 PI 前台委派没有
-  // 控制面,不能仅凭 provider 猜测可停止。Codex 仍无 stopTask 通道。
-  // 点击后交给 main 的 stopAgentTask;成功与否都由 task_notification / durable status
-  // 事件流收口(状态翻 stopped → 按钮自然消失),这里只管在飞态防连点。
+  // 停止按钮:Claude 后台任务沿用 SDK stopTask；PI 只开放有 durable 控制面的任务:
+  // Cindy durable runner 明确标成 taskType=pi_subagent 的异步任务,以及后台命令
+  // (host-owned 子进程, taskType=local_bash)。普通 PI 前台委派没有控制面,不能仅凭
+  // provider 猜测可停止。Codex 仍无 stopTask 通道。
+  // 点击后交给会话归属端的 stopBackgroundTask(device-link 远程会话隧道到被控端);
+  // 成功与否都由 task_notification / durable status 事件流收口(状态翻 stopped →
+  // 按钮自然消失),这里只管在飞态防连点。
   const [stopping, setStopping] = useState(false);
   // 「点了停止但没停掉」:host 只有在 SIGKILL 之后仍未确认退出时才会让 stop 失败,
   // 其余失败(会话已关、IPC 出错)同样归到这里 —— 两种情况对用户是同一句话。
@@ -377,27 +380,25 @@ export function AgentTaskCard({
     Boolean(sessionId) &&
     Boolean(update?.taskId) &&
     providerCanStop &&
-    // device-link 镜像会话:session 活在被控端,本地 stopAgentTask 会假成功 —— 不给
-    // 按钮。粘滞判定:relay 瞬断清空注册表的窗口内不误判为本机(与面板同口径)。
-    !(sessionId && isRemoteSessionSticky(sessionId));
+    Boolean(sessionId && canManageBackgroundTasks(sessionId));
   const handleStop = useCallback(() => {
-    const api = window.electronAPI?.maker;
-    if (!sessionId || !update?.taskId || !api?.stopAgentTask) return;
+    if (!sessionId || !update?.taskId) return;
     setStopping(true);
-    void api
-      .stopAgentTask(sessionId, update.taskId)
+    void stopBackgroundTask(sessionId, update.taskId)
       .then(() => {
         // 停止对「main 侧其实已不在」的 id 是**静默成功**的(两套控制面都查无此任务,
         // 例如终态事件丢包)。点完立刻对一次账:行要么很快翻成已停止(它本就结束了),
         // 要么证明它确实还在跑。不做乐观收口 —— 那会伪造一个不存在的终态。
         makerChatStore.requestBackgroundTaskReconcile(sessionId);
       })
-      .catch(() => {
-        // 不弹打断式错误,但也不能装作成功:行上给一句「停止未确认」,按钮留着可重试。
+      .catch((error: unknown) => {
+        // 不弹打断式错误,但也不能装作成功:可立即处理的远程失败给一句 toast
+        // (升级被控端 / 稍后重试),行上再给一句「停止未确认」,按钮留着可重试。
+        reportBackgroundTaskStopFailure(error, t);
         setStopFailed(true);
       })
       .finally(() => setStopping(false));
-  }, [sessionId, update?.taskId]);
+  }, [sessionId, update?.taskId, t]);
 
   // 任务状态一变(真停了 / 换成另一条任务)就把提示收掉:它描述的是上一次点击。
   useEffect(() => {

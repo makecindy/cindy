@@ -507,3 +507,35 @@ it('acknowledges requested dimensions separately from actual host geometry', asy
   expect(f.deps.startInput).toHaveBeenLastCalledWith('2');
   f.host.stop('phone');
 });
+
+describe('viewer-sized desktop with live video', () => {
+  it.each(['viewerDisplay', 'restoreViewerDisplay'] as const)(
+    '%s keeps the stream on the changed display when requested',
+    async (op) => {
+      const f = fixture();
+      f.deps.pauseVideo = vi.fn(() => true);
+      f.deps.resumeVideo = vi.fn(async () => true);
+      const { lease } = await f.start();
+      if (op === 'restoreViewerDisplay') {
+        await f.host.request('phone', { op: 'viewerDisplay', lease, width: 900, height: 1600 });
+        await f.host.request('phone', { op: 'control', lease, enabled: true });
+      }
+      vi.mocked(f.deps.stopVideo).mockClear();
+      vi.mocked(f.deps.resumeVideo!).mockClear();
+      const result = (await f.host.request('phone', {
+        op,
+        lease,
+        width: 900,
+        height: 1600,
+        keepVideo: true,
+      })) as RemoteDesktopLease;
+      expect(result.videoKept).toBe(true);
+      expect(f.deps.stopVideo).not.toHaveBeenCalled();
+      expect(f.deps.resumeVideo).toHaveBeenCalledWith(
+        op === 'viewerDisplay'
+          ? { id: '2', name: 'Viewer', width: 900, height: 1600 }
+          : { id: '1', name: 'Main', width: 1920, height: 1080 },
+      );
+    },
+  );
+});

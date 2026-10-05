@@ -189,8 +189,9 @@ export function UnifiedFlyoutHost({
             data-testid="unified-model-config-flyout"
             className={cn(
               // 设计稿 .flyout:padding 14px 14px 12px。
-              'w-full rounded-[16px] border p-3.5 pb-3 shadow-[var(--shadow-menu)]',
-              'border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)]',
+              // 12px 容器档 + 登记浮层阴影 + 共享菜单面板材质(DESIGN §4 / §5 / §15.12)。
+              'w-full rounded-xl border p-3.5 pb-3 shadow-[shadow:var(--shadow-menu)]',
+              'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
               'transition-[top] duration-150 ease-out motion-reduce:transition-none',
               className,
             )}

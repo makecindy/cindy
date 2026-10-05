@@ -1,5 +1,4 @@
 export {
-  __testing,
   createOrcaWorkerBridgeMcpProvider,
   formatAgentMessage,
   formatOrcaCommunicationMessage,

@@ -100,7 +100,7 @@ export function RemoteDesktopControls({
     notice: string | null;
     onChange(settings: Partial<RemoteDesktopVideoSettings>): void;
     readModes(): Promise<RemoteDesktopDisplayMode[]>;
-    onResolution(id: string): Promise<void>;
+    onResolution(mode: RemoteDesktopDisplayMode): Promise<void>;
   };
 }) {
   const { t } = useTranslation();

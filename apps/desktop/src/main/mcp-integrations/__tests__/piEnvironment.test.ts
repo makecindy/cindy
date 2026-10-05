@@ -25,6 +25,7 @@ vi.mock('electron', () => ({
 import type { Logger, McpProvider } from '@cindy/maker-core';
 import { CustomMcpProvider } from '../custom-mcp-provider.js';
 import { buildBotMcpCatalog } from '../../maker-host/botMcpCatalog.js';
+import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY } from '../../maker-host/agentCapabilityCatalog.js';
 import {
   CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
   CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
@@ -319,6 +320,54 @@ describe('piEnvironment per-session identity', () => {
       result: { content: [{ type: 'text', text: 'pi-bot-minimal-tools' }] },
     });
     config?.disposeSessionCtx?.();
+  });
+
+  it('reports the actual mounted Pi capabilities through the live bridge context', async () => {
+    const isEnabled = vi.spyOn(PluginRegistry.prototype, 'isEnabled')
+      .mockImplementation((pluginId) => pluginId !== 'collab');
+    const providers = ['cindy_helper', 'cindy_memory', 'cindy_docs', 'cindy_computer',
+      'cindy_make', 'cindy_orca', 'custom_probe'].map((name) => makeProvider(name));
+    const vendorOptions: Record<string, unknown> = {
+      [RUNTIME_MCP_NAMES_KEY]: providers.map((provider) => provider.name),
+      [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: ['xdt_helper', 'memory', 'docs', 'collab'],
+      [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['docs'],
+    };
+    try {
+      const config = await getPiExtraSpawnConfig(providers, noopLogger(), {
+        sessionId: 'pi-capability-catalog', workingDir: '/repo', memoryEnabled: false,
+        vendorOptions,
+        botMcpPolicy: { mode: 'allowlist', configured: ['custom_probe'],
+          catalog: [{ name: 'custom_probe', source: 'custom', available: true }] },
+      });
+      expect(config?.mcpBridge?.servers.map((server) => server.name))
+        .toEqual(['cindy_helper', 'custom_probe']);
+      const probe = config!.mcpBridge!.servers.find((server) => server.name === 'custom_probe')!;
+      const headers = { authorization: `Bearer ${config!.mcpBridge!.token}`,
+        accept: 'application/json, text/event-stream', 'content-type': 'application/json' };
+      const initialized = await fetch(probe.url, { method: 'POST', headers, body: INIT_BODY(1) });
+      const mcpSessionId = initialized.headers.get('mcp-session-id')!;
+      await initialized.text();
+      const response = await fetch(probe.url, {
+        method: 'POST', headers: { ...headers, 'mcp-session-id': mcpSessionId },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call',
+          params: { name: 'current_vendor_options', arguments: {} } }),
+      });
+      const result = await readRpcText(response) as { result: { content: Array<{ text: string }> } };
+      const runtimeOptions = JSON.parse(result.result.content[0]!.text);
+      expect(runtimeOptions[RUNTIME_MCP_NAMES_KEY]).toEqual(['cindy_helper', 'custom_probe']);
+      expect(await readAgentCapabilityCatalog(providers, {
+        agentKind: 'pi', workingDir: '/repo', vendorOptions: runtimeOptions,
+      }, {})).toMatchObject({ capabilities: [
+        { server: 'cindy_helper', status: 'registered' },
+        ...['cindy_memory', 'cindy_docs', 'cindy_computer', 'cindy_make', 'cindy_orca'].map((server) => ({
+          server, status: 'unavailable', reason: 'not-mounted-in-current-runtime',
+        })),
+        { server: 'custom_probe', status: 'registered' },
+      ] });
+      config?.disposeSessionCtx?.();
+    } finally {
+      isEnabled.mockRestore();
+    }
   });
 
   it('keeps native companion helpers available when memory is disabled', async () => {
@@ -706,13 +755,14 @@ describe('piEnvironment per-session identity', () => {
     });
     const allowedSecret = 'allowed-remote-secret';
     const excludedSecret = 'excluded-remote-secret';
+    const vendorOptions: Record<string, unknown> = { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [] };
     const config = await getPiExtraSpawnConfig([
       remoteProvider('allowed_remote', 'ALLOWED_REMOTE_TOKEN', allowedSecret),
       remoteProvider('excluded_remote', 'EXCLUDED_REMOTE_TOKEN', excludedSecret),
     ], noopLogger(), {
       sessionId: 'pi-bot-remote-allowlist',
       workingDir: '/repo',
-      vendorOptions: { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [] },
+      vendorOptions,
       botMcpPolicy: {
         mode: 'allowlist',
         configured: ['allowed_remote'],
@@ -726,6 +776,7 @@ describe('piEnvironment per-session identity', () => {
     expect(config?.mcpBridge?.servers.map((server) => server.name)).toEqual([
       'allowed_remote',
     ]);
+    expect(vendorOptions[RUNTIME_MCP_NAMES_KEY]).toEqual(['allowed_remote']);
     expect(Object.values(config?.mcpEnv ?? {})).toContain(`Bearer ${allowedSecret}`);
     expect(Object.values(config?.mcpEnv ?? {})).not.toContain(`Bearer ${excludedSecret}`);
     config?.disposeSessionCtx?.();

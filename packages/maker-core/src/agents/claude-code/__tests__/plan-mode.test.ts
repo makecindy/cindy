@@ -1479,8 +1479,12 @@ describe('ClaudeCodeAgent plan mode', () => {
       { reviewAutoPermissionAction },
       'auto',
     );
+    const feedback = ['Do not publish.', 'Only change parser files.'];
+    let response = 0;
     handle.setInteractionResolver(async (req): Promise<InteractionDecision> => {
-      if (req.kind === 'plan_review') return { kind: 'plan_review', behavior: 'allow' };
+      if (req.kind === 'plan_review') return response < feedback.length
+        ? { kind: 'plan_review', behavior: 'deny', reason: feedback[response++] }
+        : { kind: 'plan_review', behavior: 'allow' };
       return { kind: 'permission', behavior: 'allow' };
     });
     const canUseTool = queryOptions.canUseTool;
@@ -1490,6 +1494,7 @@ describe('ClaudeCodeAgent plan mode', () => {
       type: 'user',
       content: 'Refactor the parser without changing public behavior',
     });
+    for (let i = 0; i < feedback.length; i++) await canUseTool('ExitPlanMode', { plan: 'draft' }, { toolUseID: `rejected-${i}` });
     await canUseTool(
       'ExitPlanMode',
       { plan: '1. Inspect parser call sites\n2. Update parser\n3. Run focused tests' },
@@ -1503,7 +1508,7 @@ describe('ClaudeCodeAgent plan mode', () => {
 
     expect(reviewAutoPermissionAction).toHaveBeenCalledWith(expect.objectContaining({
       userIntent: {
-        earlierUserMessages: ['Refactor the parser without changing public behavior'],
+        earlierUserMessages: ['Refactor the parser without changing public behavior', ...feedback],
         currentUserMessage: 'Approved plan:\n1. Inspect parser call sites\n2. Update parser\n3. Run focused tests',
       },
     }));

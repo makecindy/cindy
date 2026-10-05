@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
+import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -282,12 +284,78 @@ describe('CreateWorkerPopover', () => {
     ) as HTMLTextAreaElement;
     fireEvent.change(initialTask, { target: { value: 'Draft a plan' } });
     const panel = screen.getByText('orca.createWorker.title').closest('.relative.z-10');
-    fireEvent.click(panel!.previousElementSibling!);
+    fireEvent.click(panel!.closest('.modal-scrim')!);
 
     expect(onClose).not.toHaveBeenCalled();
     expect(initialTask.value).toBe('Draft a plan');
 
     fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.closeAria' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('focuses the role input, traps Tab, closes with Esc, and returns focus on reopen', async () => {
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return <><button onClick={() => setOpen(true)}>Add worker</button><CreateWorkerPopover open={open} onClose={() => setOpen(false)} onCreate={vi.fn()} /></>;
+    }
+    const user = userEvent.setup();
+    render(<Harness />);
+    const opener = screen.getByRole('button', { name: 'Add worker' });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await user.click(opener);
+      expect(document.activeElement).toBe(screen.getByPlaceholderText('orca.createWorker.customRolePlaceholder'));
+      const close = screen.getByRole('button', { name: 'orca.createWorker.closeAria' });
+      const submit = screen.getByRole('button', { name: 'orca.createWorker.submit' });
+      close.focus();
+      await user.tab({ shift: true });
+      expect(document.activeElement).toBe(submit);
+      await user.tab();
+      expect(document.activeElement).toBe(close);
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      await waitFor(() => expect(document.activeElement).toBe(opener));
+    }
+  });
+
+  it.each([
+    ['role', 'orca.createWorker.customRolePlaceholder', { isComposing: true }],
+    ['role', 'orca.createWorker.customRolePlaceholder', { keyCode: 229 }],
+    ['task', 'orca.createWorker.initialTaskPlaceholder', { isComposing: true }],
+    ['task', 'orca.createWorker.initialTaskPlaceholder', { keyCode: 229 }],
+  ] as const)('preserves the %s draft in %s on IME Esc (%j)', (_field, placeholder, ime) => {
+    const onClose = vi.fn();
+    render(<CreateWorkerPopover open onClose={onClose} onCreate={vi.fn()} />);
+    const input = screen.getByPlaceholderText(placeholder) as HTMLInputElement | HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'Worker draft' } });
+    input.focus();
+
+    fireEvent.keyDown(input, { key: 'Escape', ...ime });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(input.value).toBe('Worker draft');
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('blocks both Esc and the close button until creation settles', async () => {
+    let finish!: () => void;
+    const onCreate = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<CreateWorkerPopover open onClose={onClose} onCreate={onCreate} />);
+    await user.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    expect(onCreate).toHaveBeenCalledOnce();
+    const close = screen.getByRole('button', { name: 'orca.createWorker.closeAria' }) as HTMLButtonElement;
+    expect(close.disabled).toBe(true);
+    await user.keyboard('{Escape}');
+    fireEvent.click(close);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    await act(async () => finish());
+    expect(close.disabled).toBe(false);
+    await user.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalledOnce();
   });
 

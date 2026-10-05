@@ -123,6 +123,20 @@ async function runMigrationStatement(target: DbClient, statement: string): Promi
 }
 
 function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
+  if (fileName === '0097_fresh_stryfe.sql') {
+    ensureColumnSync(db, 'sessions', 'list_preview', 'text');
+    ensureColumnSync(db, 'sessions', 'list_preview_role', 'text');
+    ensureColumnSync(db, 'sessions', 'list_message_count', 'integer');
+    return;
+  }
+  if (fileName === '0099_boring_champions.sql') {
+    ensureColumnSync(db, 'sessions', 'writable_dirs', "text DEFAULT '[]' NOT NULL");
+    return;
+  }
+  if (fileName === '0091_amazing_blur.sql') {
+    ensureColumnSync(db, 'sessions', 'codex_plan_json', 'text');
+    return;
+  }
   if (fileName === '0038_add_session_remote_host_id.sql') {
     ensureColumnSync(db, 'sessions', 'remote_host_id', 'text');
     return;
@@ -205,6 +219,20 @@ function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
 }
 
 async function applyMigrationScript(target: DbClient, fileName: string): Promise<void> {
+  if (fileName === '0097_fresh_stryfe.sql') {
+    await ensureColumn(target, 'sessions', 'list_preview', 'text');
+    await ensureColumn(target, 'sessions', 'list_preview_role', 'text');
+    await ensureColumn(target, 'sessions', 'list_message_count', 'integer');
+    return;
+  }
+  if (fileName === '0099_boring_champions.sql') {
+    await ensureColumn(target, 'sessions', 'writable_dirs', "text DEFAULT '[]' NOT NULL");
+    return;
+  }
+  if (fileName === '0091_amazing_blur.sql') {
+    await ensureColumn(target, 'sessions', 'codex_plan_json', 'text');
+    return;
+  }
   if (fileName === '0038_add_session_remote_host_id.sql') {
     await ensureColumn(target, 'sessions', 'remote_host_id', 'text');
     return;

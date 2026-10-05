@@ -218,6 +218,7 @@ describe('session control domain service', () => {
         text: 'after',
         origin: expect.objectContaining({ displayText: 'after' }),
       }),
+      expect.objectContaining({clientId:'queued-1',text:'before'}),
     );
 
     const foreign = setup({
@@ -268,6 +269,7 @@ describe('session control domain service', () => {
           chatMessage: expect.objectContaining({ content: replacement }),
           origin: expect.objectContaining({ displayText: replacement }),
         }),
+        queued,
       );
     },
   );

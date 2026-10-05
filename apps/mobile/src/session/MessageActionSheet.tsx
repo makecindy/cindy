@@ -64,6 +64,7 @@ export function MessageActionSheet({
 
   return (
     <SheetModal
+      nativePresentation
       backdropTestID="message.actions.backdrop"
       onBackdropPress={closeWithoutAction}
       onClosed={handleClosed}

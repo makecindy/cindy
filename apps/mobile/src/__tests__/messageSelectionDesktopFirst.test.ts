@@ -61,13 +61,15 @@ describe('mobile message text selection', () => {
 
     // 各块 Text 开原生选中,含内嵌图片 View 的块除外(Android 上 selectable+内嵌 View 有风险)。
     expect(markdownBodySource).toContain('const inlinesSelectable = useCallback((inlines: readonly MobileMarkdownInline[]) => (');
-    expect(markdownBodySource).toContain("inline.type === 'image' && isMobileMarkdownImageDirectUrl(inline.url)");
+    expect(markdownBodySource).toContain("inline.type === 'image' && imageRendersPreview(inline)");
+    expect(markdownBodySource).toContain('isMobileMarkdownImageDirectUrl(inline.url) || managedImagePreviewUrl(inline.url) !== null');
     expect(markdownBodySource).toContain('selectable={inlinesSelectable(block.inlines)}');
 
     // 跨段选择:连续纯文本块合并进同一个原生文本视图(text_run),原生选择手柄可横跨段落。
     // Android 上长 selectable Text 分块,避免单个超高原生文本视图干扰列表测高/滚动。
     expect(markdownBodySource).toContain('ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS');
-    expect(markdownBodySource).toContain("const textRunGroupingOptions = Platform.OS === 'android'");
+    expect(markdownBodySource).toContain("...(Platform.OS === 'android' ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS : {})");
+    expect(markdownBodySource).toMatch(/const textRunGroupingOptions = useMemo[(][\s\S]*?imageRendersPreview,/);
     expect(markdownBodySource).not.toContain("selectable === true && Platform.OS === 'android'");
     expect(markdownBodySource).toContain('groupMobileMarkdownSelectableBlocks(blocks, textRunGroupingOptions)');
     expect(markdownBodySource).toContain('testID="message.markdownTextRun"');

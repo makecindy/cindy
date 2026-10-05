@@ -4705,8 +4705,8 @@ describe('官方 bot ack 表情(msg.op)', () => {
     await tick();
 
     expect(c.last('task.ack')?.payload).toMatchObject({ result: 'queued' });
-    // 两条各一次 👀: 立即受理的那条 + 排队的那条; 出队启动时不重复补发。
-    expect(reactionEmojis(c.sent)).toEqual(['👀', '👀']);
+    // 第一条已经处理中，第二条仍显示排队。
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀']);
   });
 
   it('排队中被取消 → 👀 换成终态, 不永远挂着「在做」', async () => {
@@ -4724,8 +4724,8 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.cancel('conn-1', 'to-cancel');
     await tick();
 
-    // 两条各打 👀, 被取消那条补一个终态 —— 用户主动停止不算失败, 仍是 👍。
-    expect(reactionEmojis(c.sent)).toEqual(['👀', '👀', '👍']);
+    // 取消排队任务时清掉它的状态，不影响正在执行的任务。
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀', '']);
   });
 
   it('账号停用: 已打 👀 而终态没人发的任务, 停用时撤销那个 👀', async () => {
@@ -4744,12 +4744,12 @@ describe('官方 bot ack 表情(msg.op)', () => {
     await tick();
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'queued' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀', '👀']); // 两条各一个在册
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/), '👀']); // 两条各一个在册
 
     const draining = d.deactivateAccount();
     await tick();
     // 两个 👀 都被撤销(空串), 没有任何一个被装成终态。
-    const after = reactionEmojis(c.sent).slice(2);
+    const after = reactionEmojis(c.sent).slice(3);
     expect(after).toEqual(['', '']);
 
     // HookRunOutcome 只有 ok / error 两态, 取消由 dispatcher 侧改写。
@@ -4766,7 +4766,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'offline-final' }), online.send);
     await tick();
-    expect(reactionEmojis(online.sent)).toEqual(['👀']);
+    expect(reactionEmojis(online.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
 
     d.onDisconnected('conn-1');
     fr.finish({ status: 'ok' });
@@ -4775,7 +4775,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     const reconnected = collector();
     d.onConnected('conn-1', reconnected.send, [HOOK_FEATURE_MESSAGE_OPS]);
     await tick();
-    expect(reactionEmojis(reconnected.sent)).toEqual(['👍']);
+    expect(reactionEmojis(reconnected.sent)).toEqual(['']);
   });
 
   it('老 server 没宣告 msg-op-v1 → 一帧 msg.op 都不发', async () => {
@@ -4820,7 +4820,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'hydrated' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀']);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
   });
 
   it('账号切换后档位打回未知 —— 不拿上一位主人的选择顶上', async () => {
@@ -4831,7 +4831,7 @@ describe('官方 bot ack 表情(msg.op)', () => {
     d.setEmojiReactionsMode('minimal');
     d.handleDispatch('conn-1', telegramDispatch({ requestId: 'first-owner' }), c.send);
     await tick();
-    expect(reactionEmojis(c.sent)).toEqual(['👀']);
+    expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(👨‍💻|🤔|🤓|✍)$/)]);
 
     const draining = d.deactivateAccount();
     fr.finish({ status: 'ok' });

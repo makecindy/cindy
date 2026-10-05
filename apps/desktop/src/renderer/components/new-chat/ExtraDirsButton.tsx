@@ -58,8 +58,6 @@ export function ExtraDirsButton({
       panelWidth={480}
       panelClassName="p-0"
       panelAriaLabel={t('extraDirs.menuAria')}
-      endBg="var(--cmd-palette-bg)"
-      endBorderColor="var(--cmd-palette-border)"
       wrapperClassName="shrink-0"
       autoFocusTarget={autoFocusTarget}
       trigger={

@@ -745,3 +745,82 @@ export const AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL = 'agent-island:set-display
 export const AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL = 'agent-island:get-display-options';
 export const AGENT_ISLAND_PREVIEW_SOUND_CHANNEL = 'agent-island:preview-sound';
 export const AGENT_ISLAND_SELECT_SOUND_FILE_CHANNEL = 'agent-island:select-sound-file';
+/** renderer(主窗)→ main:按侧栏「任务范围」筛过的远程设备任务活动。 */
+export const AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL = 'agent-island:set-remote-sessions';
+
+/**
+ * 远程设备(device-link「我控制它」)任务的活动镜像,供本机灵动岛与桌面通知使用。
+ * 只含 running / needs-interaction / 未读终态;范围由 renderer 按侧栏「任务范围」裁剪。
+ */
+export interface AgentIslandRemoteSessionInput {
+  sessionId: string;
+  deviceId: string;
+  deviceName: string | null;
+  title: string | null;
+  workingDir: string | null;
+  workspaceKind: string | null;
+  /** DB 形态('cc' | 'codex' | 'pi')。 */
+  agentKind: string | null;
+  phase: AgentIslandSessionPhase;
+  detail: string;
+  workingPhase?: string;
+  interactionKind?: AgentIslandInteractionKind;
+}
+
+const AGENT_ISLAND_REMOTE_SESSIONS_MAX = 500;
+const AGENT_ISLAND_REMOTE_ID_MAX_LENGTH = 256;
+const AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH = 1024;
+const AGENT_ISLAND_SESSION_PHASES: readonly AgentIslandSessionPhase[] = [
+  'running',
+  'needs-interaction',
+  'completed',
+  'error',
+];
+const AGENT_ISLAND_INTERACTION_KINDS: readonly AgentIslandInteractionKind[] = [
+  'permission',
+  'ask_user_question',
+  'plan_review',
+  'plugin_setup',
+];
+
+/** renderer payload 的运行时校验:整体形状非法返回 null,单条非法条目丢弃。 */
+export function parseAgentIslandRemoteSessions(raw: unknown): AgentIslandRemoteSessionInput[] | null {
+  if (!Array.isArray(raw) || raw.length > AGENT_ISLAND_REMOTE_SESSIONS_MAX) return null;
+  const out: AgentIslandRemoteSessionInput[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue;
+    const record = item as Record<string, unknown>;
+    const sessionId = readBoundedString(record.sessionId, AGENT_ISLAND_REMOTE_ID_MAX_LENGTH);
+    const deviceId = readBoundedString(record.deviceId, AGENT_ISLAND_REMOTE_ID_MAX_LENGTH);
+    const phase = record.phase;
+    if (!sessionId || !deviceId || seen.has(sessionId)) continue;
+    if (!(AGENT_ISLAND_SESSION_PHASES as readonly unknown[]).includes(phase)) continue;
+    seen.add(sessionId);
+    const interactionKind = (AGENT_ISLAND_INTERACTION_KINDS as readonly unknown[]).includes(record.interactionKind)
+      ? record.interactionKind as AgentIslandInteractionKind
+      : undefined;
+    const workingPhase = readBoundedString(record.workingPhase, 64);
+    out.push({
+      sessionId,
+      deviceId,
+      deviceName: readBoundedString(record.deviceName, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH),
+      title: readBoundedString(record.title, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH),
+      workingDir: readBoundedString(record.workingDir, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH * 4),
+      workspaceKind: readBoundedString(record.workspaceKind, 64),
+      agentKind: readBoundedString(record.agentKind, 64),
+      phase: phase as AgentIslandSessionPhase,
+      detail: readBoundedString(record.detail, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH) ?? '',
+      ...(workingPhase ? { workingPhase } : {}),
+      ...(interactionKind ? { interactionKind } : {}),
+    });
+  }
+  return out;
+}
+
+function readBoundedString(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
+}

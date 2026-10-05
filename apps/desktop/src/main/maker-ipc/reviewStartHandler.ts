@@ -153,6 +153,8 @@ export interface PreparedReviewRun {
   prompt: string;
   targetKind: ReviewTargetKind;
   prepareLaunch(): Promise<PreparedReviewLaunch>;
+  /** Release transport staging once the Review prompt is durably accepted. */
+  onAccepted?(): void;
   cleanup?(): Promise<void>;
 }
 
@@ -172,6 +174,8 @@ export interface ReviewCardWrite {
 
 export interface ReviewStartHandlerDeps {
   assertCaller(event: unknown): void;
+  /** Capture trusted invocation origin now; refresh source visibility at each launch boundary. */
+  captureSourceAccessGuard(sourceSessionId: string): () => Promise<void>;
   waitUntilReady(sourceSessionId: string): Promise<void>;
   createRunId(): string;
   createReviewerSessionId(): string;
@@ -266,6 +270,7 @@ export function registerReviewStartHandler(
   registry.handle(MAKER_INVOKE.START_REVIEW, async (event, raw: unknown) => {
     deps.assertCaller(event);
     const request = readStartReviewRequest(raw);
+    const assertSourceAccess = deps.captureSourceAccessGuard(request.sourceSessionId);
     await deps.waitUntilReady(request.sourceSessionId);
     if (activeReviewsBySource.has(request.sourceSessionId)) {
       throwIpcError('SESSION_RUNNING', 'This task already has a review in progress');
@@ -468,6 +473,7 @@ export function registerReviewStartHandler(
     try {
       const prepared = await deps.prepareRun({ event, request, runId, reviewerSessionId });
       preparedRunCleanup = prepared.cleanup?.bind(prepared) ?? null;
+      await assertSourceAccess();
       const preparedSourceAgentKind = prepared.sourceAgentKind;
       sourceAgentKind = preparedSourceAgentKind;
       const startedAt = deps.now();
@@ -503,6 +509,8 @@ export function registerReviewStartHandler(
       const launch = await prepared.prepareLaunch();
       const startFailure = await launch.verifyBeforeStart();
       if (startFailure) throw new ReviewPreconditionError(startFailure);
+      // Evidence/fingerprint preparation can outlive the source's remote visibility.
+      await assertSourceAccess();
       const reviewer = await deps.startReviewer(launch.reviewerCreateOpts);
       const linkedRunningMeta: ReviewRunMeta = { ...runningMeta, reviewerSessionId };
       runningMeta = linkedRunningMeta;
@@ -594,6 +602,7 @@ export function registerReviewStartHandler(
       // created broadcast and listener registration, leaving the source gate
       // permanently occupied.
       await deps.markReviewerStarted(reviewerSessionId, startedAt);
+      await assertSourceAccess();
       if (settled) {
         await terminalFinalization;
         throwIpcError('PRECONDITION_FAILED', 'Reviewer task closed before it started');
@@ -619,6 +628,7 @@ export function registerReviewStartHandler(
 
       const sendResult = await reviewer.send(launch.message, {
         planMode: false,
+        beforeProviderStart: assertSourceAccess,
         onAccepted: async () => {
           await deps.persistReviewerPrompt({
             reviewerSessionId,
@@ -626,6 +636,7 @@ export function registerReviewStartHandler(
             prompt: prepared.prompt,
             sourceAgentKind: preparedSourceAgentKind,
           });
+          prepared.onAccepted?.();
         },
       });
       if (!sendResult.accepted) {

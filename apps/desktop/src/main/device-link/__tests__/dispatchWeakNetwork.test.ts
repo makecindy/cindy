@@ -20,6 +20,9 @@ import {
   DL_SUBSCRIBE_CHANNEL,
   INVOKE_TIMEOUT_OVERRIDES_MS,
   PROTOCOL_VERSION,
+  TASK_MIGRATION_CHANNEL,
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
+  resolveRemoteInvokeTimeoutMs,
   type Envelope,
 } from '@cindy/device-link';
 
@@ -58,6 +61,10 @@ vi.mock('../sharedTaskDispatch.js', async (original) => ({
 
 import {
   __testing,
+  clearControllerDisplayNames,
+  getControllerDisplayName,
+  setControllerDisplayName,
+  setControllerFallbackDisplayName,
   deactivateAllControllers,
   deactivateController,
   flushRemoteInvokeResultOutboxOnReconnect,
@@ -673,6 +680,38 @@ describe('[5] orphan 截止时间按 channel 收窄', () => {
       compactBudget * 2,
     );
   });
+
+  it('按与控制端相同的动作级预算给任务复制统计留足时间', () => {
+    const orphan = (action: string) =>
+      __testing.remoteInvokeOrphanTimeoutForChannelMs(TASK_MIGRATION_CHANNEL, [
+        { action, sessionId: 's' },
+      ]);
+    expect(orphan('estimate')).toBe(TASK_MIGRATION_ESTIMATE_TIMEOUT_MS * 2);
+    expect(orphan('status')).toBe(60_000);
+    // A reply that could not be sent is kept for the same action-specific window.
+    const outbox = (action: string) =>
+      __testing.outboxEntryMaxAgeMs(TASK_MIGRATION_CHANNEL, [{ action, sessionId: 's' }]);
+    expect(outbox('estimate')).toBe(TASK_MIGRATION_ESTIMATE_TIMEOUT_MS * 2);
+    expect(outbox('status')).toBe(60_000);
+  });
+
+  it('被控端从不早于控制端放弃：orphan 与 outbox 覆盖每个通道与动作的等待预算', () => {
+    const calls: Array<[string | undefined, unknown[] | undefined]> = [
+      [undefined, undefined],
+      ...Object.keys(INVOKE_TIMEOUT_OVERRIDES_MS).map(
+        (channel) => [channel, undefined] as [string, undefined],
+      ),
+      ...['estimate', 'receive', 'status', 'start', 'caps'].map(
+        (action) => [TASK_MIGRATION_CHANNEL, [{ action, sessionId: 's' }]] as [string, unknown[]],
+      ),
+    ];
+    for (const [channel, args] of calls) {
+      const budget =
+        (channel && resolveRemoteInvokeTimeoutMs(channel, args, 'desktop')) || 30_000;
+      expect(__testing.remoteInvokeOrphanTimeoutForChannelMs(channel, args)).toBeGreaterThanOrEqual(budget);
+      expect(__testing.outboxEntryMaxAgeMs(channel, args)).toBeGreaterThanOrEqual(budget);
+    }
+  });
 });
 
 describe('[6] active controller 生命周期与故障半径', () => {
@@ -830,5 +869,24 @@ describe('[6] active controller 生命周期与故障半径', () => {
       linkGeneration: 2,
     });
     expect(__testing.getActiveControllers()).toEqual([]);
+  });
+});
+
+describe('被控浮窗读取控制端展示名', () => {
+  afterEach(() => clearControllerDisplayNames());
+
+  it('旧 presence 主机名作为最后一级回退，权威展示名优先', () => {
+    setControllerFallbackDisplayName('ctrl-legacy', 'Legacy Mac');
+    expect(getControllerDisplayName('ctrl-legacy')).toBe('Legacy Mac');
+    setControllerDisplayName('ctrl-legacy', 'Dash 的 MacBook');
+    expect(getControllerDisplayName('ctrl-legacy')).toBe('Dash 的 MacBook');
+    clearControllerDisplayNames();
+    expect(getControllerDisplayName('ctrl-legacy')).toBeUndefined();
+  });
+
+  it('权威名被显式清空时同时清掉旧 presence 主机名', () => {
+    setControllerFallbackDisplayName('ctrl-legacy', 'Legacy Mac');
+    setControllerDisplayName('ctrl-legacy', '');
+    expect(getControllerDisplayName('ctrl-legacy')).toBeUndefined();
   });
 });

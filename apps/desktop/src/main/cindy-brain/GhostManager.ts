@@ -1805,6 +1805,7 @@ export class GhostManager {
           dir,
           enabled: this.effectiveEnabled(dir, receipt.enabled),
           approval: { state: 'approved', revision: receipt.revision },
+          ...(receipt.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
           trust: receipt.trust,
           ...(receipt.manifest.skill?.items.length
             ? {
@@ -1977,6 +1978,28 @@ export class GhostManager {
       localePath,
     });
     return runtimeManifest;
+  }
+
+  /** Called only after Host permission UI confirms this exact installed revision. */
+  async approveTaskCapability(id: string, revision: string, isCurrent: () => boolean): Promise<boolean> {
+    return this.runExclusiveMutation(async () => {
+      const approval = this.readApproval(id);
+      if (!isCurrent() || approval.state !== 'approved' || approval.receipt.revision !== revision ||
+          approval.receipt.manifest.agent?.tasks !== true ||
+          !this.list().some(ghost => ghost.manifest.id === id && ghost.enabled)) return false;
+      if (approval.receipt.taskCapabilityApproved !== true) {
+        const expired = new Error('Task capability approval owner changed');
+        try {
+          await this.receiptStore.write({ ...approval.receipt, taskCapabilityApproved: true }, {
+            assertCurrent: () => { if (!isCurrent()) throw expired; },
+          });
+        } catch (error) {
+          if (error === expired) return false;
+          throw error;
+        }
+      }
+      return isCurrent();
+    });
   }
 
   /**
@@ -2594,6 +2617,7 @@ export class GhostManager {
   async install(
     lizFilePath: string,
     opts?: {
+      taskCapabilityApproved?: true;
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -2608,6 +2632,7 @@ export class GhostManager {
   private async installUnlocked(
     lizFilePath: string,
     opts?: {
+      taskCapabilityApproved?: true;
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -2717,6 +2742,7 @@ export class GhostManager {
           manifest: approvedManifest,
           localeResources,
           enabled: initiallyEnabled,
+          ...(opts?.taskCapabilityApproved === true && approvedManifest.agent?.tasks === true ? {taskCapabilityApproved:true as const} : {}),
           trust,
           // 指纹取自包投影而不是刚发布的 finalDir:发布后被换的字节应当在快照
           // 对账时被拒,而不是被首读钉成批准基线(P0-8)。
@@ -2823,6 +2849,7 @@ export class GhostManager {
   async update(
     lizFilePath: string,
     opts: {
+      taskCapabilityApproved?: true;
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -2838,6 +2865,7 @@ export class GhostManager {
   private async updateUnlocked(
     lizFilePath: string,
     opts: {
+      taskCapabilityApproved?: true;
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -3058,6 +3086,8 @@ export class GhostManager {
         manifest: approvedManifest,
         localeResources,
         enabled,
+        ...((opts.taskCapabilityApproved === true || (approvalResult.state === 'approved' && approvalResult.receipt.taskCapabilityApproved === true)) &&
+          approvedManifest.agent?.tasks === true ? { taskCapabilityApproved: true as const } : {}),
         trust,
         // 同 install:指纹取自包投影,发布后的目录漂移在快照对账时 fail closed(P0-8)。
         skillContentSha256: await this.hashSkillContentFromPackage(
@@ -3437,6 +3467,8 @@ export class GhostManager {
         trust,
         skillContentSha256,
         packageSha256,
+        ...(current.state === 'approved' && current.receipt.taskCapabilityApproved === true &&
+          approvedManifest.agent?.tasks === true ? { taskCapabilityApproved: true as const } : {}),
         ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
       }),
       { skillSourceDir: sourceDir },

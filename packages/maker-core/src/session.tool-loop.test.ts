@@ -6,6 +6,7 @@ import { newCodexRuntimeState, translateItemNotification } from './agents/codex/
 import type { AgentSessionHandle } from './agents/base-agent.js';
 import type { AgentEvent, InteractionDecision } from './types/events.js';
 import type { Logger } from './interfaces/logger.js';
+import type { ToolLoopReviewer } from './agents/shared/tool-loop-review.js';
 
 const sessions: Session[] = [];
 afterEach(async () => {
@@ -13,7 +14,7 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-function setup(agentKind: 'pi' | 'codex', hangAbort = false) {
+function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: ToolLoopReviewer) {
   vi.useFakeTimers();
   const queue = createAsyncQueue<AgentEvent>();
   let running = false;
@@ -31,7 +32,9 @@ function setup(agentKind: 'pi' | 'codex', hangAbort = false) {
     setInteractionResolver() {},
   } as unknown as AgentSessionHandle;
   const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
-  const session = new Session({ id: 'test-session', agentKind, handle, workDir: '/test', capabilities: {} as never, logger });
+  const session = new Session({
+    id: 'test-session', agentKind, handle, workDir: '/test', capabilities: {} as never, logger, toolLoopReviewer,
+  });
   sessions.push(session);
   const seen: AgentEvent[] = [];
   session.onEvent((event) => seen.push(event));
@@ -173,6 +176,98 @@ describe.each(['pi', 'codex'] as const)('%s Session tool loop coverage', (agentK
     await pending;
     for (let i = 0; i < 4; i++) await t.tool(`resumed-${i}`);
     expect(t.errors()).toHaveLength(1);
+  });
+
+  it('keeps paced CI polling alive (2026-10 PR #18 false positive)', async () => {
+    const t = setup(agentKind);
+    await t.session.send('wait for CI');
+    const poll = { cmd: 'gh api repos/o/r/actions/jobs/1 --jq .status' };
+    for (let i = 0; i < 30; i++) {
+      await t.tool(`sleep-${i}`, {}, 'mcp:clock:sleep', { duration_ms: 55_000 });
+      await vi.advanceTimersByTimeAsync(66_000);
+      await t.tool(`poll-${i}`, {}, 'exec', poll);
+    }
+    expect(t.errors()).toHaveLength(0);
+    expect(t.handle.abort).not.toHaveBeenCalled();
+  });
+
+  it('lets the reviewer keep a suspected loop running', async () => {
+    const reviewer = vi.fn<ToolLoopReviewer>(async () => 'continue');
+    const t = setup(agentKind, false, reviewer);
+    await t.session.send('investigate');
+    for (let i = 0; i < 6; i++) await t.tool(String(i));
+    expect(reviewer).toHaveBeenCalledOnce();
+    expect(reviewer.mock.calls[0]?.[0]).toMatchObject({
+      sessionId: 'test-session', agentKind, model: 'test-model',
+      verdict: { reason: 'consecutive', count: 4, toolName: 'read' },
+    });
+    expect(t.errors()).toHaveLength(0);
+    expect(t.handle.abort).not.toHaveBeenCalled();
+  });
+
+  it('interrupts after the reviewer confirms a loop, once and only for the reviewed turn', async () => {
+    let decide!: (decision: 'continue' | 'stop') => void;
+    const reviewer = vi.fn<ToolLoopReviewer>(() => new Promise((resolve) => { decide = resolve; }));
+    const t = setup(agentKind, false, reviewer);
+    await t.session.send('investigate');
+    for (let i = 0; i < 4; i++) await t.tool(String(i));
+    expect(t.errors()).toHaveLength(0);
+    decide('stop');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.errors()).toHaveLength(1);
+    expect(t.errors()[0]).toMatchObject({ data: {
+      reason: 'tool_use_loop_detected', isTerminal: true, toolLoop: { kind: 'consecutive', count: 4 },
+    } });
+    expect(t.handle.abort).toHaveBeenCalledOnce();
+
+    // 新 turn 再次进入复核;turn 结束后才到的 stop 结论必须丢弃。
+    await t.session.send('try again');
+    for (let i = 0; i < 4; i++) await t.tool(`next-${i}`);
+    await t.end();
+    decide('stop');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.errors()).toHaveLength(1);
+    expect(t.handle.abort).toHaveBeenCalledOnce();
+  });
+
+  it('emits a reviewed stop only after the pending result summary', async () => {
+    let decide!: (decision: 'continue' | 'stop') => void;
+    const reviewer = vi.fn<ToolLoopReviewer>(() => new Promise((resolve) => { decide = resolve; }));
+    const t = setup(agentKind, false, reviewer);
+    await t.session.send('investigate');
+    for (let i = 0; i < 3; i++) await t.tool(String(i));
+    t.queue.push({ type: 'tool_use', source: agentKind, data: { toolUseId: 'last', toolName: 'read', input: { path: 'same.ts' } } });
+    t.queue.push({ type: 'tool_result_full', source: agentKind, data: { toolUseId: 'last', fullText: 'same result' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reviewer).toHaveBeenCalledOnce();
+    decide('stop');
+    await vi.advanceTimersByTimeAsync(0);
+    // 完整结果已送达、摘要未到:终态必须等摘要。
+    expect(t.errors()).toHaveLength(0);
+    t.queue.push({ type: 'tool_result', source: agentKind, data: { toolUseIds: ['last'], summary: 'done' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.errors()).toHaveLength(1);
+    const summaryIndex = t.seen.findIndex((e) => e.type === 'tool_result'
+      && (e.data as { toolUseIds?: string[] }).toolUseIds?.includes('last'));
+    expect(summaryIndex).toBeGreaterThanOrEqual(0);
+    expect(summaryIndex).toBeLessThan(t.seen.indexOf(t.errors()[0]!));
+    expect(t.handle.abort).toHaveBeenCalledOnce();
+  });
+
+  it('discards a reviewed stop that arrives after detachment starts', async () => {
+    let decide!: (decision: 'continue' | 'stop') => void;
+    const reviewer = vi.fn<ToolLoopReviewer>(() => new Promise((resolve) => { decide = resolve; }));
+    const t = setup(agentKind, false, reviewer);
+    // handle.detach 挂起:会话仍处于 active,但拆除已开始。
+    (t.handle as unknown as { detach: () => Promise<void> }).detach = vi.fn(() => new Promise<void>(() => {}));
+    await t.session.send('investigate');
+    for (let i = 0; i < 4; i++) await t.tool(String(i));
+    void t.session.detach({ reason: 'account-boundary' });
+    await vi.advanceTimersByTimeAsync(0);
+    decide('stop');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.errors()).toHaveLength(0);
+    expect(t.handle.abort).not.toHaveBeenCalled();
   });
 
   it('uses existing abort recovery when interrupt never settles', async () => {

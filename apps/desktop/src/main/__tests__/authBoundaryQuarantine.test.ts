@@ -4,7 +4,11 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const lockMock = vi.hoisted(() => ({ held: true }));
+const lockMock = vi.hoisted(() => ({
+  held: true,
+  busyPaths: new Set<string>(),
+  acquired: [] as string[],
+}));
 const pathMock = vi.hoisted(() => ({ homeDir: '', userDataDir: '' }));
 
 vi.mock('node:os', async () => {
@@ -26,10 +30,16 @@ vi.mock('../logger.js', () => ({
 
 vi.mock('../device-link/crossProcessLock.js', () => ({
   withSecurityBoundaryLock: async (
-    _lockPath: string,
+    lockPath: string,
     _options: unknown,
     task: (status: { held: true } | { held: false; reason: 'busy' }) => Promise<unknown>,
-  ) => task(lockMock.held ? { held: true } : { held: false, reason: 'busy' }),
+  ) => {
+    if (!lockMock.held || lockMock.busyPaths.has(lockPath)) {
+      return task({ held: false, reason: 'busy' });
+    }
+    lockMock.acquired.push(lockPath);
+    return task({ held: true });
+  },
 }));
 
 import {
@@ -39,22 +49,35 @@ import {
   withGhostSkillProjectionOwnerCommit,
   withGhostSkillProjectionReadOnlyOwner,
   withGhostSkillProjectionReconcile,
+  withSharedGlobalSkillProjectionMutation,
+  withSharedSkillRootsLock,
   withStableOwnerBoundaryMutation,
 } from '../authBoundaryQuarantine.js';
 
 function readPersistedState(): unknown {
   return JSON.parse(
     fs.readFileSync(
-      path.join(pathMock.homeDir, '.cindy', 'ghost-skill-projection-boundary.json'),
+      path.join(pathMock.userDataDir, 'ghost-skill-projection-boundary.json'),
       'utf8',
     ),
   );
+}
+
+async function commitOwner(ownerId: string | null): Promise<void> {
+  await withGhostSkillProjectionOwnerCommit({
+    previousOwnerId: null,
+    nextOwnerId: ownerId,
+    prepareTransition: async () => {},
+    commit: () => undefined,
+  });
 }
 
 beforeEach(() => {
   pathMock.homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-auth-boundary-'));
   pathMock.userDataDir = path.join(pathMock.homeDir, 'profile-user-data');
   lockMock.held = true;
+  lockMock.busyPaths.clear();
+  lockMock.acquired.length = 0;
   delete process.env.XDT_PASSIVE_SHARED_USER_DATA;
   __testing.resetProcessQuarantine();
 });
@@ -67,11 +90,87 @@ afterEach(() => {
 });
 
 describe('Ghost skill projection boundary state', () => {
-  it('stores the machine-user projection marker beside the shared home skill roots', () => {
+  it('stores owner state per instance and keeps only the shared-roots lock machine-wide', () => {
     expect(__testing.filePath()).toBe(
-      path.join(pathMock.homeDir, '.cindy', 'ghost-skill-projection-boundary.json'),
+      path.join(pathMock.userDataDir, 'ghost-skill-projection-boundary.json'),
     );
-    expect(__testing.filePath()).not.toContain(pathMock.userDataDir);
+    expect(__testing.quarantinePath()).toBe(
+      path.join(pathMock.userDataDir, 'ghost-skill-projection-boundary.quarantine.json'),
+    );
+    expect(__testing.lockPath()).toBe(`${__testing.filePath()}.lock`);
+    // Same path as the former machine-wide marker lock, so older builds still
+    // serialize their shared-root writes with this one.
+    expect(__testing.sharedSkillRootsLockPath()).toBe(
+      path.join(pathMock.homeDir, '.cindy', 'ghost-skill-projection-boundary.json.lock'),
+    );
+  });
+
+  it('keeps one instance stable while another instance commits a different owner', async () => {
+    const instanceA = pathMock.userDataDir;
+    const instanceB = path.join(pathMock.homeDir, 'isolated-dev-user-data');
+    await commitOwner('cloud-user');
+
+    pathMock.userDataDir = instanceB;
+    await commitOwner('local-v1');
+    expect(isGhostSkillProjectionBoundaryStableForOwner('local-v1')).toBe(true);
+
+    pathMock.userDataDir = instanceA;
+    expect(isGhostSkillProjectionBoundaryStableForOwner('cloud-user')).toBe(true);
+    await expect(
+      withSharedGlobalSkillProjectionMutation('cloud-user', async () => 'codex-home'),
+    ).resolves.toBe('codex-home');
+    await expect(
+      withGhostSkillProjectionReconcile('cloud-user', async () => 'reconciled'),
+    ).resolves.toBe('reconciled');
+  });
+
+  it('ignores a legacy machine-wide marker owned by another account', async () => {
+    const legacyDir = path.join(pathMock.homeDir, '.cindy');
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(legacyDir, 'ghost-skill-projection-boundary.json'),
+      JSON.stringify({
+        version: 1,
+        phase: 'stable',
+        ownerId: 'local-v1',
+        transitionId: 'legacy',
+        updatedAt: 1,
+      }),
+    );
+    await commitOwner('cloud-user');
+
+    expect(isGhostSkillProjectionBoundaryStableForOwner('cloud-user')).toBe(true);
+    expect(isGhostSkillProjectionBoundaryStableForOwner('local-v1')).toBe(false);
+  });
+
+  it('treats a missing instance marker as unstable until this instance commits', async () => {
+    expect(isGhostSkillProjectionBoundaryStableForOwner('cloud-user')).toBe(false);
+    await expect(
+      withSharedGlobalSkillProjectionMutation('cloud-user', async () => undefined),
+    ).rejects.toThrow('not stable');
+  });
+
+  it('takes the owner lock before the shared-roots lock', async () => {
+    await commitOwner('owner-a');
+    lockMock.acquired.length = 0;
+
+    await withSharedGlobalSkillProjectionMutation('owner-a', async () => undefined);
+    expect(lockMock.acquired).toEqual([__testing.lockPath(), __testing.sharedSkillRootsLockPath()]);
+
+    lockMock.acquired.length = 0;
+    await withSharedSkillRootsLock(async () => undefined);
+    expect(lockMock.acquired).toEqual([__testing.sharedSkillRootsLockPath()]);
+  });
+
+  it('fails closed while another process holds the shared roots', async () => {
+    await commitOwner('owner-a');
+    lockMock.busyPaths.add(__testing.sharedSkillRootsLockPath());
+    const shared = vi.fn(async () => undefined);
+
+    await expect(withSharedGlobalSkillProjectionMutation('owner-a', shared)).rejects.toThrow(
+      'lock is busy or unavailable',
+    );
+    expect(shared).not.toHaveBeenCalled();
   });
 
   it('accepts only versioned stable and pending records', () => {
@@ -409,6 +508,27 @@ describe('Ghost skill projection boundary state', () => {
       }),
     ).rejects.toThrow('cannot publish');
     expect(fs.readFileSync(__testing.filePath(), 'utf8')).toBe(before);
+  });
+
+  it('fails closed when a passive process only finds the legacy machine-wide marker', async () => {
+    const legacyDir = path.join(pathMock.homeDir, '.cindy');
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(legacyDir, 'ghost-skill-projection-boundary.json'),
+      JSON.stringify({
+        version: 1,
+        phase: 'stable',
+        ownerId: 'owner-a',
+        transitionId: 'legacy',
+        updatedAt: 1,
+      }),
+    );
+    process.env.XDT_PASSIVE_SHARED_USER_DATA = '1';
+
+    await expect(withGhostSkillProjectionReadOnlyOwner('owner-a', async () => 42)).rejects.toThrow(
+      'another active session',
+    );
+    expect(fs.existsSync(__testing.filePath())).toBe(false);
   });
 
   it('serializes owner commit and reconcile inside one process', async () => {

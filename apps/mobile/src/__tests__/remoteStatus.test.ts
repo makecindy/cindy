@@ -82,6 +82,9 @@ describe('remoteStatus', () => {
     expect(describeRemoteComposerBlockingError("[CHANNEL_NOT_ALLOWED] channel 'x'"))
       .toContain('版本不支持');
     expect(describeRemoteComposerBlockingError(null)).toBeNull();
+    expect(describeRemoteComposerBlockingError('unknown failure')).toBeNull();
+    expect(describeRemoteComposerBlockingError('OUTBOX_STORAGE_INVALID')).toBeNull();
+    expect(describeRemoteComposerBlockingError('[BAD_REQUEST] nope')).toBeNull();
   });
 
   it('localizes Stop connection recovery errors without dropping their structured classification', async () => {

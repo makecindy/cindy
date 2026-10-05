@@ -37,29 +37,22 @@ import {
   fontWeight,
   useTheme,
 } from "@/theme";
-import { BlurBackdrop } from "./BlurBackdrop";
+import { BlurBackdrop, FLOATING_CHROME_BLUR_INTENSITY } from "./BlurBackdrop";
+import { edgeBlurMask } from "./edgeBlurMask";
 import type {
   SessionHeaderNativeActionsProps,
   SessionHeaderNativeBackProps,
   SessionHeaderNativeTitleProps,
 } from "./SessionHeaderNativeControls";
 
-/** A stationary, feathered backdrop: scrolling content passes beneath it. */
-/** Fade length at the content edge; the chrome area itself stays fully blurred. */
-const BLUR_FADE = 32;
 /**
- * A two-stop gradient left the title row at roughly half blur, so text that
- * scrolled under a header stayed legible and read as overlapping it. Keep the
- * mask opaque over the chrome and fade only the last BLUR_FADE points
- * (evenly spaced stops approximate the break point).
+ * A stationary, feathered backdrop: scrolling content passes beneath it.
+ * `height` is the chrome area; the blur is solid over most of it and eases out
+ * across its content-side edge (see edgeBlurMask).
  */
-function blurMaskStops(height: number): string[] {
-  const solid = Math.max(1, Math.round(height / Math.min(BLUR_FADE, height / 2)) - 1);
-  return [...Array<string>(solid).fill("black"), "transparent"];
-}
-
-export function SessionHeaderNativeBlur({ height, edge = 'top', inset = 0 }: { height: number; edge?: 'top' | 'bottom'; inset?: number }) {
+export function SessionHeaderNativeBlur({ height: chromeHeight, edge = 'top', inset = 0 }: { height: number; edge?: 'top' | 'bottom'; inset?: number }) {
   const { mode } = useTheme();
+  const mask = edgeBlurMask(chromeHeight, edge);
   return (
     <View
       pointerEvents="none"
@@ -69,7 +62,7 @@ export function SessionHeaderNativeBlur({ height, edge = 'top', inset = 0 }: { h
         ...(edge === 'top' ? { top: inset } : { bottom: inset }),
         left: 0,
         right: 0,
-        height,
+        height: mask.height,
         zIndex: 9,
       }}
     >
@@ -77,7 +70,7 @@ export function SessionHeaderNativeBlur({ height, edge = 'top', inset = 0 }: { h
         <Mask modifiers={[frame({ maxWidth: Infinity, maxHeight: Infinity })]}>
           <RNHostView>
             <View style={{ flex: 1 }}>
-              <BlurBackdrop intensity={55} overlayColor="transparent" />
+              <BlurBackdrop intensity={FLOATING_CHROME_BLUR_INTENSITY} overlayColor="transparent" />
             </View>
           </RNHostView>
           <Mask.Content>
@@ -85,10 +78,9 @@ export function SessionHeaderNativeBlur({ height, edge = 'top', inset = 0 }: { h
               modifiers={[
                 foregroundStyle({
                   type: "linearGradient",
-                  // Mask colors encode alpha only; they never tint the content.
-                  colors: edge === 'top' ? blurMaskStops(height) : blurMaskStops(height).reverse(),
-                  startPoint: { x: 0.5, y: 0 },
-                  endPoint: { x: 0.5, y: 1 },
+                  colors: mask.colors,
+                  startPoint: mask.startPoint,
+                  endPoint: mask.endPoint,
                 }),
               ]}
             />

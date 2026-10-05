@@ -314,8 +314,10 @@
   inset: 0 0 auto;
   transition: transform 150ms ease-out;
   transform: translateY(calc(-100% + 8px));
+  /* Drag regions never receive pointer events; fullscreen has no window to drag. */
+  -webkit-app-region: no-drag;
 }
-.remote-viewer-fullscreen .remote-viewer-toolbar:hover,
+.remote-viewer-fullscreen .remote-viewer-toolbar[data-revealed='true'],
 .remote-viewer-fullscreen .remote-viewer-toolbar:focus-within,
 .remote-viewer-fullscreen .remote-viewer-toolbar[data-settings-open='true'],
 .remote-viewer-fullscreen .remote-viewer-toolbar[data-select-open='true'] {

@@ -106,6 +106,7 @@ export interface BotGroupChatServiceDeps {
     botId: string;
     groupId: string;
     title: string;
+    chatAccess?: import('../../shared/botGroupChat.js').ChatLaneAccess;
     plan?: { planId: string; workDir: string; sessionId?: string };
   }) => Promise<LaneResult>;
   /** Same hidden, durable input path as Bot DMs; attachments go with the turn like a task message's. */
@@ -115,6 +116,8 @@ export interface BotGroupChatServiceDeps {
     persistedContent: string;
     clientId: string;
     attachments?: BotGroupAttachment[];
+    toolsDisabled?: boolean;
+    onQueued?: (clientId: string) => Promise<void>;
     onAccepted: () => void | Promise<void>;
   }) => Promise<DispatchResult>;
   /**
@@ -506,7 +509,7 @@ export function buildMemberTurnPrompt(input: {
 }
 
 /** Some harnesses report no result text on `done`; the persisted turn reply is authoritative then. */
-async function readPersistedReplyText(sessionId: string, messageClientId: string): Promise<string | null> {
+export async function readPersistedReplyText(sessionId: string, messageClientId: string): Promise<string | null> {
   const [row] = await getDbClient()
     .drizzle.select({ content: messages.content })
     .from(messages)
@@ -2148,4 +2151,6 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
   };
 }
 
-export type BotGroupChatService = ReturnType<typeof createBotGroupChatService>;
+export type BotGroupChatService = ReturnType<typeof createBotGroupChatService> & {
+  chatServer?: import('../../shared/botGroupChat.js').ChatServerApi;
+};

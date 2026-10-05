@@ -83,7 +83,7 @@ describe('shared-task account boundary cleanup', () => {
       expect(site[1]).toContain('releaseOwnership: releaseDeviceLinkOwnershipBeforeLogout');
       expect(site[1]).toContain('onClosureFailure: () => markAccountBoundaryAbortedMidTeardown(reason)');
       const next = teardown.slice(site.index! + site[0].length).trimStart();
-      expect(next).toMatch(/^(?:try \{\s*)?await lifecycleDbClientManager\.dispose\(reason\);/);
+      expect(next).toMatch(/^(?:try \{\s*)?await flushPluginTaskLifecycle\(\);\s*await lifecycleDbClientManager\.dispose\(reason\);/);
     }
     expect(teardown).not.toContain('await closeSharedTasksBeforeLogout()');
   });
