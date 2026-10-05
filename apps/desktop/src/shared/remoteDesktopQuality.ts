@@ -84,6 +84,22 @@ export function desktopVideoFramerate(settings?: RemoteDesktopVideoSettings): 30
   return Math.min(settings?.fps ?? 30, desktopVideoProfile(settings).maxFramerate) as 30 | 60;
 }
 
+/** Live encoder ceilings. A background viewer (phone picture-in-picture) only
+ * shows a small window, so it gets the saver tier until it returns to fullscreen;
+ * the viewer's own choice is untouched and applies again once it is back. */
+export function desktopEncoderLimits(
+  settings: RemoteDesktopVideoSettings,
+  background: boolean,
+): Pick<DesktopVideoProfile, 'maxBitrate' | 'degradation' | 'sharpWhenStill'> & {
+  maxFramerate: 30 | 60;
+} {
+  const tier: RemoteDesktopVideoSettings = background
+    ? { ...settings, quality: 'saver' }
+    : settings;
+  const { maxBitrate, degradation, sharpWhenStill } = desktopVideoProfile(tier);
+  return { maxBitrate, degradation, sharpWhenStill, maxFramerate: desktopVideoFramerate(tier) };
+}
+
 const BITRATE_HINTS = ['x-google-start-bitrate', 'x-google-min-bitrate', 'x-google-max-bitrate'];
 const MEDIA_CODECS = /^(H264|VP8|VP9|AV1|H265)$/i;
 

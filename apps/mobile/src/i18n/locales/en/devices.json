@@ -427,7 +427,13 @@
       "needAttention": "{{count}} need attention",
       "waiting": "{{count}} waiting",
       "automationRunning": "Automation running",
-      "totalRuns": "{{count}} runs total"
+      "totalRuns": "{{count}} runs total",
+      "runCount": "{{count}} runs",
+      "nextRunMinutes": "Runs in {{count}}m",
+      "nextRunHours": "Runs in {{count}}h",
+      "nextRunDays": "Runs in {{count}}d",
+      "imminent": "Running soon",
+      "stopped": "Stopped"
     }
   },
   "detail": {

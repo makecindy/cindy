@@ -240,6 +240,8 @@
     "controlUnavailable": "원격 컴퓨터에서 입력을 받을 수 없습니다. 제어 권한과 연결을 확인한 다음 다시 연결하세요.",
     "beingControlled": "데스크톱을 원격으로 제어 중",
     "beingViewed": "데스크톱을 원격으로 보는 중",
+    "controlledByDevice": "{{name}}에서 데스크톱을 원격으로 제어 중",
+    "viewedByDevice": "{{name}}에서 데스크톱을 원격으로 보는 중",
     "disconnect": "연결 끊기",
     "back": "뒤로",
     "connect": "연결",
@@ -312,7 +314,7 @@
       "resolution": "컴퓨터 해상도",
       "clipboardFailed": "클립보드 내용을 전송하지 못했습니다. 제어 권한을 확인하고 다시 시도하세요.",
       "settingsFailed": "설정을 저장하지 못했습니다. 다시 시도하세요.",
-      "inputHint": "화면을 클릭하여 입력하세요. Ctrl+Alt+Esc로 키보드 포커스를 해제하고 Cmd/Ctrl+W로 이 창을 닫습니다.",
+      "inputHint": "화면을 클릭하여 입력하세요. 단축키(Cmd/Ctrl+W 포함)는 원격 컴퓨터로 전송됩니다. Ctrl+Alt+Esc로 키보드 포커스를 해제한 뒤 Cmd/Ctrl+W로 이 창을 닫습니다.",
       "controlPending": "제어 권한을 가져오는 중…",
       "controlRequired": "보기 전용입니다. 원격 컴퓨터를 조작하려면 제어 권한을 가져오세요.",
       "confirmDisconnect": "이 컴퓨터와의 연결을 끊을까요?",
@@ -320,6 +322,7 @@
       "disconnectFailed": "연결을 끊지 못했습니다. 다시 시도하세요.",
       "clipboardShortcutHint": "화면 안에서 {{modifier}}+C / {{modifier}}+V로 복사하고 붙여넣으세요. 지원되는 내용은 원격 컴퓨터에 따라 다르며 파일은 전송되지 않습니다.",
       "fitViewerDisplay": "현재 화면 비율에 맞추기",
+      "restoreViewerDisplay": "원래 화면 비율로 복원",
       "fitViewerDisplayHint": "데스크톱 내용을 유지하면서 컴퓨터 화면 비율을 일시적으로 변경합니다. 연결을 종료하면 원래 해상도로 돌아갑니다.",
       "resolutionHint": "해상도를 변경하면 원격 컴퓨터의 실제 모니터에 적용됩니다."
     },
@@ -5767,7 +5770,7 @@
         "configurationTitle": "설정",
         "sidebarEntryTitle": "사이드바 항목",
         "showInSidebar": "사이드바에 표시",
-        "sidebarEntryDescription": "켜면 사이드바에 “{{title}}” 항목이 표시됩니다. 숨겨도 플러그인이 비활성화되지는 않습니다.",
+        "sidebarEntryDescription": "켜면 “{{title}}” 항목이 사이드바에 표시됩니다. 맨 위에 둘지 “더 보기”에 넣을지는 “더 보기 → 사용자 지정”에서 바꿀 수 있습니다. 숨겨도 플러그인이 비활성화되지는 않습니다.",
         "iosSimulatorAutoOpenTitle": "내장 시뮬레이터 패널 자동 열기",
         "iosSimulatorAutoOpenDescription": "시뮬레이터를 시작하거나 App을 실행한 뒤 오른쪽에 시뮬레이터 화면을 자동으로 표시합니다. 꺼도 수동으로 열 수 있으며 다른 기능에는 영향을 주지 않습니다.",
         "openTool": "Tool {{name}} 세부 정보 보기",
@@ -7839,6 +7842,22 @@
       "issues": "이슈",
       "bots": "동료"
     },
+    "navigation": {
+      "more": "더 보기",
+      "new": "새 항목",
+      "customize": {
+        "title": "사용자 지정",
+        "done": "완료",
+        "reset": "기본값으로 복원",
+        "reorder": "위아래 화살표 키로 {{name}} 순서 변경"
+      },
+      "items": {
+        "automations": "자동화",
+        "plugins": "플러그인",
+        "bots": "동료",
+        "search": "검색"
+      }
+    },
     "user": {
       "settingsLink": "설정, 현재 사용자: {{name}}",
       "settingsLinkBeta": "설정, 현재 사용자: {{name}}, 베타 채널 활성화됨",
@@ -9260,6 +9279,8 @@
       "schedulerRowAria": "자동화 작업 “{{sender}}”의 대기 메시지",
       "sessionRowAria": "세션 \"{{sender}}\"에서 온 대기 메시지",
       "sessionSenderFallback": "다른 세션",
+      "pluginRowAria": "플러그인 \"{{sender}}\"에서 온 대기 메시지",
+      "pluginSenderFallback": "플러그인",
       "botRowAria": "동료 \"{{sender}}\"에서 온 대기 메시지",
       "dragAria": "큐의 {{index}}번째 메시지를 드래그해 순서 변경",
       "steerAction": "끼어들기",
@@ -9863,7 +9884,9 @@
       "stopAll": "모두 중지",
       "stopAllTitle": "이 세션의 백그라운드 프로세스를 종료하고 모든 하위 작업을 중지합니다(세션은 계속 사용할 수 있습니다)",
       "stopBashTitle": "이 세션에서 실행 중인 백그라운드 작업을 중지합니다(세션 프로세스는 유지됩니다)",
-      "stopping": "중지 중…"
+      "stopping": "중지 중…",
+      "remoteStopUnsupported": "원격 컴퓨터의 {{appName}} 버전이 오래되어 여기에서 백그라운드 작업을 중지할 수 없습니다. 업데이트 후 다시 시도해 주세요",
+      "remoteStopUnreachable": "원격 컴퓨터가 지금 응답하지 않아 백그라운드 작업을 중지하지 못했습니다. 잠시 후 다시 시도해 주세요"
     },
     "interruptedBanner": {
       "text": "실행 중에 앱이 종료되어 작업이 중단되었습니다.",
@@ -10339,6 +10362,25 @@
       "botSentNamed": "동료 \"{{name}}\"에서 보냄",
       "orcaFromLead": "Lead에서 온 메시지",
       "orcaFromWorker": "Worker에서 온 메시지",
+      "orcaFromWorkerNamed": "Worker \"{{role}}\"에서 온 메시지",
+      "hookChannelFrom": "{{channel}}에서",
+      "deviceSentMobileNamed": "휴대폰 \"{{name}}\"에서 보냄",
+      "deviceSentMobile": "휴대폰에서 보냄",
+      "deviceSentDesktopNamed": "컴퓨터 \"{{name}}\"에서 보냄",
+      "deviceSentDesktop": "컴퓨터에서 보냄",
+      "deviceViewSettings": "내 기기에서 보기",
+      "deviceRemoved": "이 기기는 삭제되었습니다",
+      "pluginSentNamed": "플러그인 \"{{name}}\"에서 보냄",
+      "pluginSent": "플러그인에서 보냄",
+      "pluginViewDetail": "플러그인 보기",
+      "sourceIds": {
+        "session": "세션 ID: {{id}}",
+        "teammate": "동료 ID: {{id}}",
+        "automation": "자동화 ID: {{id}}",
+        "plugin": "플러그인 ID: {{id}}",
+        "device": "기기 ID: {{id}}",
+        "member": "멤버 ID: {{id}}"
+      },
       "expandLongMessage": "전체 메시지 보기",
       "collapseLongMessage": "접기",
       "sessionReference": {

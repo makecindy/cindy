@@ -125,6 +125,7 @@ import { useAutomationScheduleSessionInfo } from './hooks/useAutomationScheduleS
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
 import { useSessionBackgroundActivity } from '@/hooks/useSessionBackgroundActivity';
+import { useRemoteSessionBackgroundTasks } from '@/hooks/useRemoteSessionBackgroundTasks';
 import { workflowAgentVisualState } from '@/features/right-sidebar/plugins/background-tasks/workflowProgressModel';
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
 import {
@@ -2143,10 +2144,21 @@ export function CCAgentSessionView({
   // proxy 活动信号覆盖不到 —— 从 taskUpdates 事件流折算,并在挂载/重载后用 main
   // 快照补回存量。与上面的 proxy 信号一起点亮状态栏后台模式。
   const backgroundBash = useBackgroundBashTasks(sessionId, taskUpdates, historyLoaded);
+  // device-link 远程会话:上面两路本机信号都不覆盖(镜像事件可能丢终态),改为定时
+  // 读被控端的权威快照;停止同样隧道到被控端执行。
+  const remoteBackground = useRemoteSessionBackgroundTasks(
+    sessionId,
+    remoteDeviceId,
+    agentStatus.isRunning || isStreaming,
+  );
+  const backgroundModelActive = remoteDeviceId
+    ? remoteBackground.active
+    : backgroundActivity.active;
+  const backgroundBashTasks = remoteDeviceId ? remoteBackground.tasks : backgroundBash.tasks;
   // 与运行态互斥(turn 一开跑 main 即广播熄灭,这里再加一道渲染守卫防瞬时竞态):
   // 只在「无 turn 在跑」时才把状态栏切到后台子任务模式。
   const backgroundTasksActive =
-    (backgroundActivity.active || backgroundBash.tasks.length > 0) &&
+    (backgroundModelActive || backgroundBashTasks.length > 0) &&
     !agentStatus.isRunning &&
     !isStreaming &&
     Boolean(sessionId);
@@ -4352,9 +4364,9 @@ export function CCAgentSessionView({
     [sessionId, t],
   );
 
-  // delayed-create:device-link / 远程草稿,以及本机斜杠命令首条(含 Pi 空白前缀),把内容登记在
-  // pending 里,等 session 完全 hydrate 后再由 maybeDispatchDesktopSlashCommand /
-  // sendMessage 消费。本机普通文本已在草稿路由发出。一次性消费 + ref guard,防
+  // delayed-create:device-link 远程草稿的协同 / 斜杠命令首条,以及本机斜杠命令首条(含 Pi 空白
+  // 前缀),把内容登记在 pending 里,等 session 完全 hydrate 后再由 maybeDispatchDesktopSlashCommand /
+  // sendMessage 消费。本机与远程的普通文本已在草稿路由发出。一次性消费 + ref guard,防
   // StrictMode 双 mount / 重渲染时重复发送。
   const pendingConsumedRef = useRef(false);
   useEffect(() => {
@@ -5084,12 +5096,17 @@ export function CCAgentSessionView({
                   // 逐任务 stopTask,不关常驻子进程。proxy 信号在时维持原语义
                   // (关子进程止损,bash 任务随之终止,无需再逐个停)。
                   backgroundBashOnlyCount={
-                    backgroundActivity.active ? 0 : backgroundBash.tasks.length
+                    backgroundModelActive ? 0 : backgroundBashTasks.length
                   }
-                  backgroundStopping={backgroundActivity.stopping || backgroundBash.stopping}
+                  backgroundStopping={
+                    backgroundActivity.stopping ||
+                    backgroundBash.stopping ||
+                    remoteBackground.stopping
+                  }
                   suppressContent={Boolean(pendingPlanReview)}
                   onStopBackgroundTasks={() => {
-                    if (backgroundActivity.active) void backgroundActivity.stopAll();
+                    if (remoteDeviceId) void remoteBackground.stopAll();
+                    else if (backgroundActivity.active) void backgroundActivity.stopAll();
                     else void backgroundBash.stopAll();
                   }}
                   rightLeadingSlot={

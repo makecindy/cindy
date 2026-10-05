@@ -664,6 +664,13 @@ export interface MobileMakerTransport {
         | { sessionId: string; path: string; recoveryKey?: never }
         | { sessionId: string; recoveryKey: string; path?: never },
     ): Promise<{ discarded: true; branchDeleted?: boolean }>;
+    /** New hosts seal the creation id before discarding; never fall back to
+     * discardPrecreated once a session-create request may have been sent. */
+    cancelPrecreated?(
+      input:
+        | { sessionId: string; path: string; recoveryKey?: never }
+        | { sessionId: string; recoveryKey: string; path?: never },
+    ): Promise<{ discarded: true; branchDeleted?: boolean }>;
   };
   listAgentCommands(
     agentKind: MobileAgentKind,
@@ -1257,6 +1264,8 @@ export function createMobileMakerTransport({
       create: (req) => call("worktree:create", [req]),
       discardPrecreated: (input) =>
         call("worktree:discard-precreated", [input]),
+      cancelPrecreated: (input) =>
+        call("worktree:cancel-precreated", [input]),
     },
     listAgentCommands: (agentKind, opts) =>
       call("maker:list-agent-commands", opts ? [agentKind, opts] : [agentKind]),

@@ -245,3 +245,20 @@ describe("remote desktop channel requests", () => {
     expect(parseRemoteDesktopChannelReply({ type: "cursor" })).toBe(null);
   });
 });
+
+describe("remote desktop viewerHidden", () => {
+  it("parses a lease-scoped boolean and stays off the media channel", () => {
+    for (const hidden of [true, false]) {
+      const request = { op: "viewerHidden", lease: "l", hidden };
+      expect(parseRemoteDesktopRequest({ ...request, extra: 1 })).toEqual(request);
+      expect(isRemoteDesktopChannelRequest(request as never)).toBe(false);
+    }
+    for (const hidden of [undefined, "yes", 1])
+      expect(() => parseRemoteDesktopRequest({ op: "viewerHidden", lease: "l", hidden })).toThrow(
+        "INVALID_REQUEST",
+      );
+    expect(() => parseRemoteDesktopRequest({ op: "viewerHidden", hidden: true })).toThrow(
+      "INVALID_LEASE",
+    );
+  });
+});

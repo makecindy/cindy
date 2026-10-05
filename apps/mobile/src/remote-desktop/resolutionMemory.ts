@@ -1,5 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { RemoteDesktopDisplayMode } from "@cindy/device-link";
+
+// Shared with the Desktop viewer window.
+export { findRememberedMode } from "@cindy/device-link";
 
 // Non-secret, phone-local: the last display choice this phone made for one
 // monitor of one computer. The host still restores its own display on
@@ -62,17 +64,4 @@ export async function readRememberedResolution(
   } catch {
     return null;
   }
-}
-
-/** Mode IDs may change after OS or monitor updates; fall back to the same size. */
-export function findRememberedMode(
-  modes: RemoteDesktopDisplayMode[],
-  remembered: { modeId: string } & Size,
-): RemoteDesktopDisplayMode | undefined {
-  const sameSize = (mode: RemoteDesktopDisplayMode) =>
-    mode.width === remembered.width && mode.height === remembered.height;
-  return (
-    modes.find((mode) => mode.id === remembered.modeId && sameSize(mode)) ??
-    modes.find(sameSize)
-  );
 }

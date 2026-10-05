@@ -157,10 +157,9 @@ export function applyListContinuation(view: EditorView): boolean {
 }
 
 /**
- * 空列表项整体回删:当前行只剩前缀(如 "2. ")且光标在行尾时,
- * 一次 Backspace 删掉整个前缀——有上一行则连同前面的换行一起删,光标落到
- * 上一行行尾;是首行则只删前缀(等效退出列表)。其余情况返回 false,调用方
- * 走默认退格。
+ * 空列表项退出:当前行只剩前缀(如 "2. ")且光标在行尾时,一次 Backspace
+ * 只删掉前缀(含缩进)、保留本行换行,与结构化列表的空项退出一致;再按一次
+ * Backspace 才走默认退格回到上一行。其余情况返回 false,调用方走默认退格。
  */
 export function applyListBackspace(view: EditorView): boolean {
   const { state } = view;
@@ -179,8 +178,6 @@ export function applyListBackspace(view: EditorView): boolean {
   if (lineText.slice(match.prefixLength).trim().length > 0) return false;
 
   const lineStartAbs = $from.start() + lineStartOffset;
-  // 非首行连同前面的 hardBreak(占 1 个 position)一起删。
-  const deleteFrom = lineStartOffset > 0 ? lineStartAbs - 1 : lineStartAbs;
-  view.dispatch(state.tr.delete(deleteFrom, $from.pos).scrollIntoView());
+  view.dispatch(state.tr.delete(lineStartAbs, $from.pos).scrollIntoView());
   return true;
 }

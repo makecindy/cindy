@@ -590,7 +590,6 @@ async function materializePersistedContent(
 async function materializeQueuedOssAttachmentsInternal(
   sessionId: string,
   item: unknown,
-  deferCleanup: boolean,
 ): Promise<{
   item: unknown;
   cleanupAfterAcceptance?: () => void;
@@ -789,7 +788,7 @@ async function materializeQueuedOssAttachmentsInternal(
     };
     return {
       item: materializedItem,
-      ...(deferCleanup && (ossKeys.size > 0 || localCleanupCallbacks.length > 0)
+      ...(ossKeys.size > 0 || localCleanupCallbacks.length > 0
         ? {
             cleanupAfterAcceptance: cleanupOss,
             cleanupBeforeAcceptance,
@@ -802,16 +801,7 @@ async function materializeQueuedOssAttachmentsInternal(
   } catch (err) {
     await cleanupBeforeAcceptance();
     throw err;
-  } finally {
-    if (!deferCleanup) cleanupOss();
   }
-}
-
-export async function materializeQueuedOssAttachments(
-  sessionId: string,
-  item: unknown,
-): Promise<unknown> {
-  return (await materializeQueuedOssAttachmentsInternal(sessionId, item, false)).item;
 }
 
 /**
@@ -832,7 +822,7 @@ export async function materializeQueuedOssAttachmentsDeferred(
   cleanupBeforeAcceptance?: () => Promise<void>;
   cleanupLocalMaterialization?: () => Promise<void>;
 }> {
-  return materializeQueuedOssAttachmentsInternal(sessionId, item, true);
+  return materializeQueuedOssAttachmentsInternal(sessionId, item);
 }
 
 /**
@@ -906,7 +896,6 @@ export async function materializeDirectSendOssAttachments(
       files: projectedFiles,
       ...(typeof persistedContent === 'string' ? { persistedContent } : {}),
     },
-    true,
   );
   const projected = materialized.item as { files?: unknown; persistedContent?: unknown };
   const materializedFiles = Array.isArray(projected.files) ? projected.files : projectedFiles;

@@ -10,6 +10,7 @@
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
+import type { MessageSourceDevice, MessageSourcePlugin } from '@cindy/maker-shared/message-source';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
 import {
@@ -328,6 +329,28 @@ export interface AgentInputQueuedMessage {
   uiLanguage?: string;
   /** Main-owned provenance: this queue item entered through device-link input IPC. */
   fromDeviceLinkClient?: boolean;
+  /**
+   * 远程操作本机的同账号控制端(手机 / 另一台电脑)。被控端在 input:enqueue /
+   * input:steer 的 IPC 边界按 device-link invoke context 盖章:设备 id 来自 relay
+   * 填写的 `env.src`,平台来自 presence(未知平台不盖章),名字是被控端当时可见的
+   * 展示名快照。共享任务访客、本机输入都不盖章。
+   *
+   * **只由被控端写入,wire 传来的值在 IPC 边界一律剥掉**。落库到
+   * `agentMeta.sourceDevice` 驱动界面设备标签,并在派发时生成发给模型的
+   * `[客户端说明]`。只用于归属展示,**不是**任何信任 / 权限判据。
+   */
+  sourceDevice?: MessageSourceDevice;
+  /**
+   * 插件任务派发的消息(`plugin-task:` 入口由主机盖章)。落库到
+   * `agentMeta.sourcePlugin` 驱动「由插件「X」发送」标签,派发时生成
+   * `[消息来源]` 说明。只用于归属展示,不是权限判据;wire 值在 IPC 边界剥掉。
+   */
+  sourcePlugin?: MessageSourcePlugin;
+  /**
+   * Host-owned:`text` 上的 `[UI_ACTION_TRIGGER]` 前缀只为让排队行与落库行保持隐藏
+   * (主机构造的任务回执等内部消息),发给模型时去掉前缀。wire 值在 IPC 边界剥掉。
+   */
+  agentOmitsTriggerPrefix?: true;
   /**
    * 一次性跳过意识拦截钩(订阅槽①)。**预留字段,v1 无调用点置位**:当前
    * 没有"强制发送"UI,被拦消息只能编辑后重发且重发仍会再审;未来落地
@@ -1058,7 +1081,11 @@ export function buildMakerUserMessage(
   sessionReferenceContexts: AgentInputSessionReferenceContext[] = [],
 ): AgentInputMakerMessage {
   const blocks: Array<{ type: string; [k: string]: unknown }> = [];
-  const agentFacingText = getAgentFacingText(queued);
+  const facingText = getAgentFacingText(queued);
+  // 主机内部消息只在排队行 / 历史里需要隐藏前缀;发给模型的正文不带它。
+  const agentFacingText = queued.agentOmitsTriggerPrefix === true && facingText.startsWith(UI_ACTION_TRIGGER_PREFIX)
+    ? facingText.slice(UI_ACTION_TRIGGER_PREFIX.length)
+    : facingText;
   if (agentFacingText.length > 0) {
     blocks.push({ type: 'text', text: agentFacingText });
   }

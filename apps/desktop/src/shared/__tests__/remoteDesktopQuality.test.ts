@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DESKTOP_MOTION,
+  desktopEncoderLimits,
   desktopFrameChange,
   desktopVideoFramerate,
   desktopVideoProfile,
@@ -38,6 +39,25 @@ describe('remote desktop quality tiers', () => {
       expect(p.minBitrateKbps).toBeLessThanOrEqual(p.startBitrateKbps);
       expect(p.startBitrateKbps * 1000).toBeLessThanOrEqual(p.maxBitrate);
     }
+  });
+
+  it('caps a background viewer at the saver tier without changing its own choice', () => {
+    const hd = { fps: 60, quality: 'hd', audio: true } as const;
+    expect(desktopEncoderLimits(hd, false)).toEqual({
+      maxBitrate: 20_000_000,
+      maxFramerate: 60,
+      degradation: 'maintain-resolution',
+      sharpWhenStill: false,
+    });
+    expect(desktopEncoderLimits(hd, true)).toEqual({
+      maxBitrate: 2_000_000,
+      maxFramerate: 30,
+      degradation: 'maintain-framerate',
+      sharpWhenStill: true,
+    });
+    expect(hd.quality).toBe('hd');
+    const saver = { fps: 30, quality: 'saver', audio: false } as const;
+    expect(desktopEncoderLimits(saver, true)).toEqual(desktopEncoderLimits(saver, false));
   });
 
   it('adds bandwidth hints to every video media codec only', () => {

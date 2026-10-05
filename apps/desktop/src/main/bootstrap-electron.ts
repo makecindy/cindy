@@ -558,7 +558,7 @@ import {
   clearAllSessionAttention,
   refreshWindowsAppBadge,
 } from './appBadgeService';
-import { initNotificationService } from './notificationService';
+import { initNotificationService, showDeviceSessionDesktopEvent } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
 import { attachWorkLouderCodexWindowReveal } from './worklouder-codex/index.js';
@@ -600,6 +600,8 @@ import {
   isSharedTaskAvailable,
   releaseDeviceLinkOwnershipBeforeLogout,
   handleDeviceLinkSystemResume,
+  getControllerName,
+  revokeController,
 } from './device-link';
 import { closeSharedTasksBeforeLogout } from './device-link/sharedTaskRuntime.js';
 import { closeSharedTasksBeforeAccountHandover } from './device-link/sharedTaskAccountBoundary.js';
@@ -4498,6 +4500,11 @@ const registerIpcHandlers = () => {
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
     onSessionActivityChange: (activity) => {
       updateInputDeviceSessionActivity(activity);
+    },
+    onDeviceSessionEvent: (event) => {
+      // 与本机任务同口径:Cindy 在前台时不弹系统通知。
+      if (hasFocusedAppWindow()) return;
+      showDeviceSessionDesktopEvent(() => getWindow() ?? null, event);
     },
   })?.setAppFocused(hasFocusedAppWindow());
   // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播
@@ -9705,7 +9712,10 @@ app.on('ready', async () => {
   );
   registerSharedTaskIpc(isSharedTaskAvailable, () => getDeviceLinkStatus() === 'online');
   registerFilePeerIpc();
-  registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender);
+  registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender, {
+    name: getControllerName,
+    revoke: revokeController,
+  });
   void startupPurgeDrain
     .then(({ purged, pending }) => {
       if (purged > 0 || pending > 0) {

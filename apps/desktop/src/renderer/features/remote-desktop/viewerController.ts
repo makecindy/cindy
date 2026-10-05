@@ -6,10 +6,16 @@ import {
   RemoteDesktopViewerSession,
   REMOTE_DESKTOP_CONNECTION_TIMEOUT_MS,
   viewerDisplaySize,
+  fittedDisplayModes,
+  findRememberedMode,
   RemoteDesktopViewerMedia,
   remoteDesktopFailureKey,
   isDesktopInput,
+  isRemoteDesktopChannelRequest,
+  parseRemoteDesktopChannelReply,
+  REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
   type RemoteDesktopCapabilities,
+  type RemoteDesktopDisplayMode,
   type RemoteDesktopVideoSettings,
   type RemoteDesktopRequest,
   type DesktopInput,
@@ -22,10 +28,15 @@ import type {
 } from '../../../shared/remoteDesktopViewer';
 import {
   DEFAULT_VIEWER_PREFERENCES,
+  type RememberedViewerResolution,
+  type RemoteViewerChannelOutcome as ChannelOutcome,
+  type RemoteViewerChannelRequest,
   type RemoteViewerPreferences,
   type RemoteViewerSafety,
   type RemoteViewerCredentialState,
 } from '../../../shared/remoteDesktopViewer';
+
+type Size = { width: number; height: number };
 
 export interface ViewerSnapshot {
   target: RemoteViewerState['target'];
@@ -48,7 +59,16 @@ export interface ViewerSnapshot {
   credential: RemoteViewerCredentialState | null;
   credentialBusy: boolean;
   credentialNotice: string | null;
+  /** The picture was fitted to this window; restore and same-ratio sizes apply. */
+  fittedDisplay: Size | null;
 }
+
+const sameAspect = (display: Size, width: number, height: number) =>
+  width > 0 && height > 0 && Math.abs(display.width / display.height - width / height) < 0.003;
+
+/** macOS reports native fullscreen transitions as a brief hide/show; only a
+ * viewer that stays hidden pauses the host's video. Showing resumes at once. */
+const HIDDEN_VIDEO_PAUSE_MS = 1500;
 
 function connectionBudget(caps: RemoteDesktopCapabilities | null): number {
   // Match Mobile: system consent has its own two-minute host deadline.
@@ -81,6 +101,7 @@ export class DesktopViewerController {
     credential: null,
     credentialBusy: false,
     credentialNotice: null,
+    fittedDisplay: null,
   };
   private scope: RemoteViewerState = { target: null, active: false, generation: -1 };
   private disposed = false;
@@ -102,7 +123,24 @@ export class DesktopViewerController {
   private settingsTimer: ReturnType<typeof setTimeout> | null = null;
   private statsAt = 0;
   private frameAt = 0;
+  private hidden = false;
+  private hiddenTimer: ReturnType<typeof setTimeout> | null = null;
+  private hiddenBusy = false;
+  /** Counts host video streams; each new offer starts unpaused. */
+  private videoStream = 0;
+  private videoHidden = false;
   private unlockAttempted = false;
+  private unlockAttempt: Promise<void> = Promise.resolve();
+  private channelRequests = new Map<
+    string,
+    { op: RemoteDesktopRequest['op']; settle(outcome: ChannelOutcome): void }
+  >();
+  /** The computer's own mode at the start of a lease; choosing it again forgets the memory. */
+  private hostMode: { lease: string; modeId?: string } | null = null;
+  /** The remembered display choice is reapplied once per lease. */
+  private rememberedLease: string | null = null;
+  /** A remembered choice that failed is not retried in this window, so it cannot loop reconnects. */
+  private rememberedGaveUp = false;
   private credentialRetry: {
     action: 'settings' | 'enable' | 'disable' | 'unlock' | 'biometric';
     enabled?: boolean;
@@ -135,6 +173,8 @@ export class DesktopViewerController {
           : null,
       onOfferStart: (lease) => {
         this.offers.add(lease);
+        this.videoStream++;
+        this.videoHidden = false;
       },
       onOfferSettled: (lease) => {
         this.offers.delete(lease);
@@ -147,7 +187,12 @@ export class DesktopViewerController {
       iceServers: REMOTE_DESKTOP_ICE_SERVERS,
       keyCodes: DESKTOP_KEY_CODES,
     });
-    this.unsubscribers = [api.onActive((scope) => this.updateScope(scope))];
+    this.unsubscribers = [
+      api.onActive((scope) => this.updateScope(scope)),
+      ...(api.onChannelRequest
+        ? [api.onChannelRequest((message) => void this.forwardChannelRequest(message))]
+        : []),
+    ];
     void api
       .state()
       .then((scope) => this.updateScope(scope))
@@ -189,6 +234,52 @@ export class DesktopViewerController {
     }
     if (!this.disposed) this.changed(this.state);
   }
+  /** Main decides and checks every request, then may hand small ones back to
+   * carry over this window's live media data channel: a direct peer skips the
+   * relay round trip. Anything not sent here goes back to Main for the relay. */
+  private async forwardChannelRequest(message: RemoteViewerChannelRequest): Promise<void> {
+    const { generation, id, request } = message ?? {};
+    if (!this.api.channelReply || typeof id !== 'string' || id.length > 64) return;
+    const lease = this.session.lease;
+    const outcome: ChannelOutcome =
+      generation === this.scope.generation &&
+      !this.disposed &&
+      lease &&
+      this.streaming &&
+      this.state.caps?.channelRequests === true &&
+      isRemoteDesktopChannelRequest(request) &&
+      'lease' in request &&
+      request.lease === lease.lease
+        ? await this.sendOverChannel(id, request)
+        : { kind: 'relay' };
+    await this.api.channelReply(generation, id, outcome).catch(() => {
+      /* Main settles a retired or stale request itself. */
+    });
+  }
+  private sendOverChannel(id: string, request: RemoteDesktopRequest): Promise<ChannelOutcome> {
+    // Main never reuses an id; a duplicate is not sent twice.
+    if (this.channelRequests.has(id)) return Promise.resolve({ kind: 'relay' });
+    return new Promise((resolve) => {
+      const timer = setTimeout(
+        () => settle({ kind: 'error', code: 'INVOKE_TIMEOUT' }),
+        REMOTE_DESKTOP_CHANNEL_TIMEOUT_MS,
+      );
+      const settle = (outcome: ChannelOutcome) => {
+        if (this.channelRequests.get(id)?.settle !== settle) return;
+        this.channelRequests.delete(id);
+        clearTimeout(timer);
+        resolve(outcome);
+      };
+      this.channelRequests.set(id, { op: request.op, settle });
+      // The viewer answers with channelRequestState / channelReply.
+      this.runtime.receive({ type: 'channelRequest', id, request });
+    });
+  }
+  /** Requests ride the media peer. Once it is gone their outcome is unknown. */
+  private abandonChannelRequests(): void {
+    for (const pending of [...this.channelRequests.values()])
+      pending.settle({ kind: 'error', code: 'INVOKE_TIMEOUT' });
+  }
   private request = async <T>(
     request: RemoteDesktopRequest,
     beforeSend?: () => void,
@@ -229,6 +320,7 @@ export class DesktopViewerController {
     });
     this.unlockAttempted = false;
     this.credentialRetry = null;
+    this.rememberedGaveUp = false;
     if (scope.active)
       void (async () => {
         try {
@@ -254,10 +346,13 @@ export class DesktopViewerController {
     this.offers.clear();
     this.statsAt = 0;
     this.frameAt = 0;
+    this.videoStream++;
+    this.videoHidden = false;
     this.clipboardQueue = Promise.resolve();
     this.clipboardQueued = 0;
     this.opening = false;
     this.streaming = false;
+    this.abandonChannelRequests();
     this.media.reset();
     this.runtime?.receive({ type: 'releaseInput' });
     void this.session.stop().catch(() => {});
@@ -271,6 +366,7 @@ export class DesktopViewerController {
       clipboardError: false,
       receiveRate: null,
       safety: { privacyActive: false, notice: null, clipboardProgress: null },
+      fittedDisplay: null,
     });
   }
   private async connect(takeover = false): Promise<void> {
@@ -288,6 +384,8 @@ export class DesktopViewerController {
         displayId: this.state.displayId || undefined,
         resume,
         takeover,
+        // Desktop always operates; a host with `autoControl` grants it with the lease.
+        control: true,
         isCurrent: () => this.epoch === epoch && !this.disposed && this.scope.active,
         onCapabilities: (caps) => this.publish({ caps }),
         onStart: () => {
@@ -312,7 +410,11 @@ export class DesktopViewerController {
       });
       this.runtime.receive({ type: 'mode', mode: 'pointer' });
       if (!caps.canControl) throw new Error('DESKTOP_INPUT_UNSUPPORTED');
-      await this.acquireControl();
+      if (lease.controlling) {
+        this.publish({ error: null });
+        this.syncControl();
+        this.applySettings();
+      } else await this.acquireControl();
     } catch (error) {
       if (epoch === this.epoch) this.fail(error);
     } finally {
@@ -365,6 +467,7 @@ export class DesktopViewerController {
     this.clipboardRevision++;
     this.publish({ controlling });
     this.runtime.receive({ type: 'control', enabled: controlling });
+    if (controlling) void this.applyRememberedResolution();
   }
   selectDisplay(displayId: string): void {
     if (
@@ -490,6 +593,56 @@ export class DesktopViewerController {
   releaseInput(): void {
     this.runtime.receive({ type: 'releaseInput' });
   }
+  /** Hiding keeps the session but pauses the host's video; showing resumes it. */
+  setHidden(hidden: boolean): void {
+    if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
+    this.hiddenTimer = null;
+    this.hidden = hidden;
+    if (hidden)
+      this.hiddenTimer = setTimeout(() => {
+        this.hiddenTimer = null;
+        void this.syncHidden();
+      }, HIDDEN_VIDEO_PAUSE_MS);
+    else void this.syncHidden();
+  }
+  private hiddenSettled(): boolean {
+    return this.hidden && this.hiddenTimer === null;
+  }
+  private async syncHidden(): Promise<void> {
+    const lease = this.session.lease;
+    const hidden = this.hiddenSettled();
+    if (
+      this.hiddenBusy ||
+      this.disposed ||
+      !lease ||
+      !this.streaming ||
+      !this.state.caps?.viewerHidden ||
+      hidden === this.videoHidden
+    )
+      return;
+    const stream = this.videoStream;
+    this.hiddenBusy = true;
+    let failed = false;
+    try {
+      await this.request({ op: 'viewerHidden', lease: lease.lease, hidden });
+    } catch {
+      failed = true;
+    } finally {
+      this.hiddenBusy = false;
+    }
+    if (stream === this.videoStream) {
+      // Even an unacknowledged request may have applied, so track it as applied:
+      // showing then always sends a resume. A resume that may not have applied
+      // must not leave the picture frozen: rebuild, since a new offer starts unpaused.
+      this.videoHidden = hidden;
+      if (failed && !hidden && this.session.lease === lease) {
+        this.pendingSettings = true;
+        this.applySettings();
+      }
+    }
+    // Terminates: after any outcome videoHidden equals the requested state.
+    void this.syncHidden();
+  }
   actualSize(): void {
     const lease = this.session.lease;
     if (!lease || !this.state.ready) return;
@@ -553,46 +706,66 @@ export class DesktopViewerController {
   async permissionGuide(): Promise<void> {
     await this.request({ op: 'permissions', action: 'guide' });
   }
-  async displayModes() {
+  async displayModes(): Promise<RemoteDesktopDisplayMode[]> {
     const lease = this.session.lease;
     if (!lease) return [];
-    const modes = await this.request<import('@cindy/device-link').RemoteDesktopDisplayMode[]>({
+    const modes = await this.request<RemoteDesktopDisplayMode[]>({
       op: 'displayModes',
       lease: lease.lease,
     });
     if (this.session.lease !== lease) throw new Error('DESKTOP_STOPPED');
+    if (this.hostMode?.lease !== lease.lease)
+      this.hostMode = { lease: lease.lease, modeId: modes.find((mode) => mode.current)?.id };
     return modes;
   }
-  async resolution(modeId: string): Promise<void> {
+  /** Choices for the resolution list. A picture fitted to this window offers
+   * sizes of the same ratio instead of the physical monitor's modes; those keep
+   * the monitor's own ratio so the picture is never letterboxed by the host. */
+  async resolutionModes(): Promise<RemoteDesktopDisplayMode[]> {
     const lease = this.session.lease;
-    if (!lease) return;
+    if (!lease) return [];
+    if (this.state.fittedDisplay) return fittedDisplayModes(this.state.fittedDisplay, lease.display);
+    const modes = await this.displayModes();
+    // CoreGraphics modes keep their own orientation when Electron's display
+    // geometry is rotated. Compare modes in the enumeration's coordinate space.
+    const reference = modes.find((mode) => mode.current) ?? lease.display;
+    return modes.filter((mode) => sameAspect(mode, reference.width, reference.height));
+  }
+  /** Applies an entry of the list just read; the host still rejects a stale mode. */
+  async resolution(mode: RemoteDesktopDisplayMode): Promise<void> {
+    if (!this.session.lease) return;
+    const caps = this.state.caps;
     if (
-      this.state.caps?.resolutionRestore ||
-      (this.state.caps?.viewerDisplay && this.state.caps.viewerDisplayRestore)
+      (caps?.resolutionRestore || (caps?.viewerDisplay && caps.viewerDisplayRestore)) &&
+      (caps?.resolutionRestore ||
+        [mode.width, mode.height].every((size) => size >= 320 && size <= 2560))
     ) {
-      const mode = (await this.displayModes()).find((item) => item.id === modeId);
-      if (this.session.lease !== lease) return;
-      if (!mode) throw new Error('DESKTOP_DISPLAY_MODE_MISSING');
-      if (
-        this.state.caps?.resolutionRestore ||
-        [mode.width, mode.height].every((size) => size >= 320 && size <= 2560)
-      ) {
-        await this.fitDisplay(
-          mode.width,
-          mode.height,
-          true,
-          this.state.caps?.resolutionRestore ? mode.id : undefined,
-        );
-        return;
-      }
+      await this.fitDisplay(
+        mode.width,
+        mode.height,
+        true,
+        !this.state.fittedDisplay && caps?.resolutionRestore ? mode.id : undefined,
+      );
+      return;
     }
     throw new Error('DESKTOP_DISPLAY_MODES_UNAVAILABLE');
+  }
+  /** Whether the fit button restores the computer's own display for this viewer size. */
+  viewerDisplayMatched(width: number, height: number): boolean {
+    const fitted = this.state.fittedDisplay;
+    return Boolean(
+      fitted &&
+        this.state.caps?.viewerDisplayRestore &&
+        this.session.lease &&
+        sameAspect(fitted, width, height),
+    );
   }
   async fitDisplay(
     width: number,
     height: number,
     exactResolution = false,
     modeId?: string,
+    options: { viewport?: Size; remembered?: boolean } = {},
   ): Promise<void> {
     if (
       exactResolution &&
@@ -602,21 +775,51 @@ export class DesktopViewerController {
       throw new Error('DESKTOP_DISPLAY_MODE_MISSING');
     const size = exactResolution ? { width, height } : viewerDisplaySize(width, height);
     const lease = this.session.lease;
+    const caps = this.state.caps;
     if (
       !size ||
       !lease?.controlling ||
-      !(modeId ? this.state.caps?.resolutionRestore : this.state.caps?.viewerDisplay) ||
+      !(modeId ? caps?.resolutionRestore : caps?.viewerDisplay) ||
       this.state.controlPending
     )
       return;
+    const fitted = this.state.fittedDisplay;
+    // Fitting again at the ratio already fitted restores the computer's display.
+    const restore = Boolean(
+      !exactResolution && fitted && caps?.viewerDisplayRestore && sameAspect(fitted, width, height),
+    );
     this.publish({ controlPending: true });
     this.syncControl();
-    this.media.reset();
+    // A host that can follow display changes keeps the running stream; only a
+    // response without `videoKept` falls back to rebuilding it.
+    const keepVideo = caps?.liveDisplaySwitch === true;
+    if (!keepVideo) this.media.reset();
     const sourceDisplayId = this.state.displayId;
     try {
-      const next = await this.session.fitDisplay(size.width, size.height, false, modeId);
+      const { videoKept, ...next } = await this.session.fitDisplay(
+        size.width,
+        size.height,
+        restore,
+        modeId,
+        keepVideo,
+        caps?.autoControl === true,
+      );
       if (this.session.lease !== lease) return;
-      const caps = this.state.caps;
+      // The next connection reapplies this choice; restoring or choosing the
+      // computer's own mode again forgets it. A fit remembers the requested
+      // size: a HiDPI host may answer with a smaller mode of the same ratio.
+      const ownMode = this.hostMode?.lease === lease.lease && this.hostMode.modeId === modeId;
+      void this.rememberResolution(
+        sourceDisplayId,
+        restore || (modeId && ownMode)
+          ? null
+          : modeId
+            ? { kind: 'mode', modeId, width, height }
+            : { kind: 'fit', width: size.width, height: size.height },
+      );
+      const fittedBase = options.viewport
+        ? viewerDisplaySize(options.viewport.width, options.viewport.height)
+        : null;
       this.publish({
         // Keep the physical source as the reconnect target; the temporary
         // display is only the current capture/input surface.
@@ -624,17 +827,33 @@ export class DesktopViewerController {
         // The temporary capture surface is lease state, never a reconnectable
         // display choice in the selector.
         caps,
+        // Same-ratio sizes stay around the plain fit of the viewer.
+        fittedDisplay:
+          modeId || restore
+            ? null
+            : exactResolution && (fitted ?? fittedBase)
+              ? (fitted ?? fittedBase)
+              : { width: next.display.width, height: next.display.height },
       });
-      this.streaming = false;
-      this.runtime.receive({
-        type: 'videoSettings',
+      const geometry = {
         width: next.display.width,
         height: next.display.height,
-        ...(modeId ? { restore: true } : {}),
-        audio: this.state.settings.audio && this.state.caps?.systemAudio === true,
-      });
-      await this.session.control(true);
+        restore: restore || Boolean(modeId),
+      };
+      if (videoKept) this.runtime.receive({ type: 'displayGeometry', ...geometry });
+      else {
+        if (keepVideo) this.media.reset();
+        this.streaming = false;
+        this.abandonChannelRequests();
+        this.runtime.receive({
+          type: 'videoSettings',
+          ...geometry,
+          audio: this.state.settings.audio && this.state.caps?.systemAudio === true,
+        });
+      }
+      if (!next.controlling) await this.session.control(true);
     } catch (error) {
+      if (options.remembered) this.rememberedGaveUp = true;
       if (error instanceof Error && error.message === 'INVOKE_TIMEOUT') {
         this.cancel(true);
         void this.connect();
@@ -645,6 +864,77 @@ export class DesktopViewerController {
         this.publish({ controlPending: false });
         this.syncControl();
       }
+    }
+  }
+  private async rememberResolution(
+    displayId: string,
+    value: RememberedViewerResolution | null,
+  ): Promise<void> {
+    try {
+      await this.api.resolution?.(this.scope.generation, displayId, value);
+    } catch {
+      /* Memory is a convenience; the change itself already applied. */
+    }
+  }
+  /** The host restores its own display when a viewer leaves. Reapply this
+   * window's last choice once per lease, after control and the first frame. */
+  private async applyRememberedResolution(): Promise<void> {
+    const lease = this.session.lease;
+    const caps = this.state.caps;
+    if (
+      !lease ||
+      !this.state.ready ||
+      !this.state.controlling ||
+      !this.api.resolution ||
+      !(caps?.resolutionRestore || caps?.viewerDisplay) ||
+      this.state.fittedDisplay ||
+      this.rememberedGaveUp ||
+      this.rememberedLease === lease.lease
+    )
+      return;
+    this.rememberedLease = lease.lease;
+    const displayId = this.state.displayId;
+    const { id, width, height } = lease.display;
+    // A display change the user made meanwhile wins over the remembered one.
+    const unchanged = () =>
+      this.session.lease === lease &&
+      lease.display.id === id &&
+      lease.display.width === width &&
+      lease.display.height === height &&
+      !this.state.fittedDisplay;
+    try {
+      const remembered = await this.api.resolution(this.scope.generation, displayId);
+      if (!remembered) return;
+      // A locked computer refuses display changes; let auto-unlock run first.
+      await this.unlockAttempt;
+      if (!unchanged()) return;
+      if (remembered.kind === 'fit') {
+        if (!caps.viewerDisplay) return;
+        // Same path as the button: measure this window now, then fit at the
+        // remembered size if it is one of the same-ratio choices.
+        const viewport = { width: this.root.clientWidth, height: this.root.clientHeight };
+        const base = viewerDisplaySize(viewport.width, viewport.height);
+        const edge = Math.max(remembered.width, remembered.height);
+        const exact = base
+          ? fittedDisplayModes(base, base).find((mode) => Math.max(mode.width, mode.height) === edge)
+          : undefined;
+        if (exact)
+          await this.fitDisplay(exact.width, exact.height, true, undefined, {
+            viewport,
+            remembered: true,
+          });
+        else
+          await this.fitDisplay(viewport.width, viewport.height, false, undefined, {
+            remembered: true,
+          });
+        return;
+      }
+      if (!caps.resolutionRestore) return;
+      const mode = findRememberedMode(await this.resolutionModes(), remembered);
+      if (!mode || mode.current || !unchanged()) return;
+      await this.fitDisplay(mode.width, mode.height, true, mode.id, { remembered: true });
+    } catch {
+      /* A failed reapply leaves the computer's own display in place. */
     }
   }
   private async heartbeat(): Promise<void> {
@@ -678,7 +968,9 @@ export class DesktopViewerController {
       this.state.closing ||
       this.streaming ||
       this.frameBusy === lease.lease ||
-      !this.scope.active
+      !this.scope.active ||
+      // Screenshot fallback stops polling while hidden, once it has shown a frame.
+      (this.hiddenSettled() && this.state.ready)
     )
       return;
     this.frameBusy = lease.lease;
@@ -746,6 +1038,7 @@ export class DesktopViewerController {
         this.streaming = true;
         this.publish({ transport: 'video', latency: null });
         this.present('live');
+        void this.syncHidden();
         break;
       case 'framePresented':
         if (this.streaming) break;
@@ -755,9 +1048,32 @@ export class DesktopViewerController {
       case 'fallback':
         this.mediaChanging = false;
         this.streaming = false;
+        this.abandonChannelRequests();
         this.publish({ transport: 'screenshots', status: 'compatibility', latency: null });
         this.applySettings();
         break;
+      case 'channelRequestState':
+        // The channel could not take it: nothing ran, use the relay.
+        if (typeof message.id === 'string' && message.sent !== true)
+          this.channelRequests.get(message.id)?.settle({ kind: 'relay' });
+        break;
+      case 'channelReply': {
+        const reply = parseRemoteDesktopChannelReply({ ...message, type: 'reply' });
+        const pending = reply && this.channelRequests.get(reply.id);
+        if (!reply || !pending) break;
+        if (reply.ok) pending.settle({ kind: 'result', value: reply.result });
+        else
+          pending.settle(
+            // Refused before running, or a read-only result that did not fit.
+            reply.error === 'DESKTOP_CHANNEL_UNSUPPORTED' ||
+              reply.error === 'DESKTOP_CHANNEL_BUSY' ||
+              (reply.error === 'DESKTOP_REPLY_TOO_LARGE' &&
+                (pending.op === 'displayModes' || pending.op === 'clipboardVersion'))
+              ? { kind: 'relay' }
+              : { kind: 'error', code: reply.error },
+          );
+        break;
+      }
       case 'reconnecting':
         this.publish({ status: 'reconnecting' });
         break;
@@ -823,17 +1139,21 @@ export class DesktopViewerController {
     if (status === 'live') this.mediaChanging = false;
     this.retryDelay = 1000;
     this.publish({ ready: true, status });
+    // Start auto-unlock before control can trigger the remembered display
+    // change, which waits for it: a locked computer refuses display changes.
+    if (!this.unlockAttempted && this.state.caps?.platform === 'darwin') {
+      this.unlockAttempted = true;
+      this.unlockAttempt = this.credential('unlock').catch(() => {});
+    }
     this.syncControl();
     this.applySettings();
     void this.refreshSafety();
-    if (!this.unlockAttempted && this.state.caps?.platform === 'darwin') {
-      this.unlockAttempted = true;
-      void this.credential('unlock');
-    }
   }
   dispose(): void {
     this.cancel();
     this.disposed = true;
+    if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
+    this.hiddenTimer = null;
     if (this.connectionTimer !== null) clearTimeout(this.connectionTimer);
     this.connectionTimer = null;
     for (const t of this.timers) clearInterval(t);

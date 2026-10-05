@@ -14,6 +14,7 @@ const {
   SHARE_EXCLUDE_ATTR,
   SHARE_MESSAGE_ATTR,
   SHARE_SESSION_ATTR,
+  SHARE_SOURCE_ATTR,
   ShareImageTooLargeError,
   assertShareImageReadableSize,
   buildShareImageFooter,
@@ -23,6 +24,7 @@ const {
   redactTextNodes,
   stripCloneAnchors,
   stripInteractiveElements,
+  stripMessageSources,
 } = await import('@/lib/shareConversationImage');
 
 beforeEach(() => {
@@ -50,6 +52,29 @@ describe('stripInteractiveElements', () => {
     expect(el.textContent).toContain('正文内容');
     expect(el.textContent).toContain('段落');
     expect(el.textContent).not.toContain('hover 工具栏');
+  });
+});
+
+describe('stripMessageSources', () => {
+  it('分享图不带任何消息来源标注,只留正文', () => {
+    const el = root(`
+      <span ${SHARE_SOURCE_ATTR}>张三</span>
+      <div ${SHARE_SOURCE_ATTR}>
+        <button data-message-origin="scheduler">由自动化「Nightly」发送</button>
+        <span data-message-origin="device">从手机「iPhone」发送</span>
+      </div>
+      <div class="hook-card">
+        <div ${SHARE_SOURCE_ATTR}>Cindy · 来自 Slack</div>
+        <div class="body">帮我看下这个报错</div>
+      </div>
+      <div class="bubble">正文内容</div>
+    `);
+    stripMessageSources(el);
+    expect(el.querySelectorAll(`[${SHARE_SOURCE_ATTR}]`)).toHaveLength(0);
+    expect(el.querySelector('[data-message-origin]')).toBeNull();
+    expect(el.textContent).not.toMatch(/张三|自动化|手机|Slack/);
+    expect(el.textContent).toContain('帮我看下这个报错');
+    expect(el.textContent).toContain('正文内容');
   });
 });
 

@@ -28,6 +28,10 @@ vi.mock('@/lib/makerTransport', () => ({
   isRemoteSessionSticky: () => remoteState.value,
   readBackgroundTaskOutputTailFor: readTailMock,
 }));
+vi.mock('@/lib/backgroundTaskStop', () => ({
+  canManageBackgroundTasks: () => true,
+  stopBackgroundTask: vi.fn(async () => {}),
+}));
 
 vi.mock('@/features/right-sidebar/lib/openBackgroundTasksTab', () => ({
   openBackgroundTasksTab: vi.fn(),

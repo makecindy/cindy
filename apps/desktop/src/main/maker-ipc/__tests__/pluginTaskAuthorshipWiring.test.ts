@@ -49,7 +49,11 @@ it('marks plugin dispatch and every queue fallback with the host-only receipt', 
   expect(dispatch).toContain("message: text, autoReviewUserText: { kind: 'delegated-continuation' }, forceQueue: true");
   const queues = [...dispatch.matchAll(/await enqueueSendToSessionMessage\(\{([\s\S]*?)\}\);/g)];
   expect(queues).toHaveLength(4);
-  for (const call of queues) expect(call[1]).toContain('autoReviewUserText: params.autoReviewUserText');
+  for (const call of queues) {
+    expect(call[1]).toContain('autoReviewUserText: params.autoReviewUserText');
+    // 插件来源随每个入队回退分支传递(含 queued-before-dispatch 竞态),排队项不丢插件身份。
+    expect(call[1]).toMatch(/\bsourcePlugin\b/);
+  }
   // Both newly created and resumed direct tasks persist the same authored metadata.
   expect(dispatch.match(/agentMeta: inputAgentMeta/g)).toHaveLength(2);
 });
@@ -69,14 +73,42 @@ it('builds a durable queued plugin input without promoting plugin text to user i
   const end = source.indexOf('  const orcaInterAgentDispatcher:', start);
   expect(start).toBeGreaterThan(0);
   const createOpts = { model: 'm', effort: 'high', permissionMode: 'auto', workingDir: '/answer' };
-  const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk',
+  const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX',
     compile(source.slice(start, end) + '\nreturn buildSessionControlInputItem;'))(
-      vi.fn(async () => createOpts), (mode: string) => mode,
+      vi.fn(async () => createOpts), (mode: string) => mode, '[UI_ACTION_TRIGGER]',
     );
   const base = { targetSessionId: 'lead', clientId: 'plugin-input', message: 'Plugin instructions', persistedContent: 'Plugin instructions', meta: {} };
   const queued = JSON.parse(JSON.stringify(await build({ ...base, autoReviewUserText: { kind: 'delegated-continuation' } })));
   expect(queued).toMatchObject({ text: base.message, persistedContent: base.persistedContent, autoReviewUserText: { kind: 'delegated-continuation' }, permissionMode: 'auto' });
   expect(await build(base)).not.toHaveProperty('autoReviewUserText');
+  expect(await build(base)).not.toHaveProperty('agentOmitsTriggerPrefix');
+  // Plugin attribution travels on the queued item for the label and source note; it is not an origin.
+  const fromPlugin = await build({ ...base, sourcePlugin: { pluginId: 'gh-1', name: 'Reviewer' } });
+  expect(fromPlugin).toMatchObject({ sourcePlugin: { pluginId: 'gh-1', name: 'Reviewer' } });
+  expect(fromPlugin).not.toHaveProperty('origin');
+});
+
+it('keeps host receipts hidden in the queue while the model text omits the trigger prefix', async () => {
+  const start = source.indexOf('  async function buildSessionControlInputItem(params: {');
+  const end = source.indexOf('  const orcaInterAgentDispatcher:', start);
+  const createOpts = { model: 'm', effort: 'high', permissionMode: 'auto', workingDir: '/answer' };
+  const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX',
+    compile(source.slice(start, end) + '\nreturn buildSessionControlInputItem;'))(
+      vi.fn(async () => createOpts), (mode: string) => mode, '[UI_ACTION_TRIGGER]',
+    );
+  const receipt = '[任务回执] 后台任务已完成。task_id: d-1';
+  const queued = await build({
+    targetSessionId: 'lead', clientId: 'bot-delegation-completion:d-1', meta: {},
+    message: receipt, persistedContent: `[UI_ACTION_TRIGGER]${receipt}`,
+  });
+  // Queue rows mask on `text`; the prefix stays there and is dropped at wire assembly.
+  expect(queued).toMatchObject({ text: `[UI_ACTION_TRIGGER]${receipt}`, persistedContent: `[UI_ACTION_TRIGGER]${receipt}`, agentOmitsTriggerPrefix: true });
+  // Ordinary prefixed synthetic input (continue prompts) is untouched.
+  const continueItem = await build({
+    targetSessionId: 'lead', clientId: 'c', meta: {},
+    message: '[UI_ACTION_TRIGGER] continue', persistedContent: '[UI_ACTION_TRIGGER] continue',
+  });
+  expect(continueItem).not.toHaveProperty('agentOmitsTriggerPrefix');
 });
 
 it.each(['empty', 'user', 'worker', 'reserved', 'started', 'ended', 'unavailable'])('seals initial plans against persisted activity: %s', async state => {

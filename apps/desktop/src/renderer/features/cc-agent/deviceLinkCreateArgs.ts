@@ -217,9 +217,10 @@ export function buildProvisionalRemoteSession(p: ProvisionalRemoteSessionParams)
     fastMode: p.args.fastMode,
     clearedAt: null,
     pinnedAt: null,
-    // 用户此刻正在发第一条消息 —— 与本机路径建完会话就写 userSendAt 同口径,
-    // 侧边栏按这条时间轴排序,新会话该立刻浮到顶部。
-    userSendAt: p.nowIso,
+    // 与被控端刚建出的行一致:首条还没被收下,userSendAt 为空。「用户正在发第一条」由
+    // remoteProjectsStore 的首条发送叠加层在投影层补上 —— 写进分片的话,随后任何一次列表
+    // 回流都会把它冲回 null,会话就先掉进项目外的草稿区、首条落地后再跳回项目。
+    userSendAt: null,
     status: 'active',
     // Session.agentKind 是本机形态('cc' | 'codex' | 'pi'),args 里是 maker-core 形态,这里转回来。
     agentKind: p.args.agentKind === 'claude-code' ? 'cc' : p.args.agentKind,

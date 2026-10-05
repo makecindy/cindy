@@ -185,7 +185,7 @@ vi.mock('../fbotTitle', () => ({
   generateAndPersistFbotTitle: mocks.generateAndPersistFbotTitle,
 }));
 
-import { createTurnRunner, type ImTurnRunner } from '../turnRunner';
+import { createTurnRunner, type ImRunAgentTurnArgs, type ImTurnRunner } from '../turnRunner';
 import {
   readGroupHistoryAccess,
   resetGroupHistoryAccessForTests,
@@ -438,6 +438,7 @@ interface TurnOverrides {
   userMessageId?: string;
   text?: string;
   agentText?: string;
+  channelNoteSource?: ImRunAgentTurnArgs['channelNoteSource'];
   onRouteResolved?: (sessionId: string) => void | Promise<void>;
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
@@ -458,6 +459,7 @@ async function startDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrid
     userMessageId: overrides.userMessageId ?? 'msg-user',
     text: overrides.text ?? 'PROMPT_SECRET full user message TOKEN_VALUE file body',
     ...(overrides.agentText ? { agentText: overrides.agentText } : {}),
+    ...(overrides.channelNoteSource ? { channelNoteSource: overrides.channelNoteSource } : {}),
     contextSnapshot: overrides.contextSnapshot,
     attachments: [],
     onTurnComplete,
@@ -801,6 +803,34 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       origin: { kind: 'im', channel: 'feishu', taskId: 'msg-user' },
       rawChannelText: 'pi install npm:context-mode',
     });
+  });
+
+  it('puts the channel note in the model message only; persisted text and raw channel text stay original', async () => {
+    fakeAdapter.messageSourceIm = () => 'lark';
+    try {
+      mocks.persistUserMessage.mockResolvedValue({ clientId: 'im-anchor-client' });
+      const h = setupSession(async () => ({ accepted: true }));
+
+      await runDefaultTurn(vi.fn(), {
+        text: 'hello',
+        agentText: '<group_chat_context>…</group_chat_context>hello',
+        channelNoteSource: { chatKind: 'group', chatId: 'oc_x', chatName: '产品群', senderId: 'ou_y' },
+      });
+
+      expect(h.send.mock.calls[0]?.[0]).toMatchObject({
+        content:
+          '[渠道说明] 系统追加，不是用户消息。本条来自 Lark 群「产品群」(chat_id: oc_x)，发言人 (user_id: ou_y)。\n\n' +
+          '<group_chat_context>…</group_chat_context>hello',
+      });
+      expect(h.send.mock.calls[0]?.[1]?.[MAIN_OWNED_SEND_CONTEXT]).toMatchObject({
+        rawChannelText: 'hello',
+      });
+      const persisted = JSON.stringify(mocks.persistUserMessage.mock.calls);
+      expect(persisted).not.toContain('渠道说明');
+      expect(persisted).not.toContain('chat_id');
+    } finally {
+      delete fakeAdapter.messageSourceIm;
+    }
   });
 
   it('prepends the goal inactive note to the agent wire message only', async () => {

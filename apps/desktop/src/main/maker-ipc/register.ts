@@ -20,7 +20,7 @@ import { getManagedLlamaCppService } from '../local-model-runtime/llamaCppServic
 import { ensureManagedLlamaCppProvider } from '../local-model-runtime/managedLlamaCppProvider.js';
 import { setBotRemoteMessageService } from './botRemoteMessageReceiver.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
-import { getSelfDeviceId, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
+import { getHostSourceDevice, getSelfDeviceId, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
 import { registerModelFavoritesSync } from './modelFavoritesSync.js';
 import { advanceRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
 import { markImSessionManualRouteOverride } from '../im/shared/manualRouteOverride.js';
@@ -869,10 +869,13 @@ import {
 import { pendingHarnessRuntimeMutation, setSessionRuntimeHarness } from './sessionRuntimeHarnessSelection.js';
 import {
   extractAgentIslandPromptText,
+  extractPlainText,
   prependNoteToWireUserMessage,
   prependHandoffToUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
+import { sanitizeSourceName } from '@cindy/maker-shared/message-source';
+import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
 import {
   createContextOverflowRollover,
   hasModelWindowContextToProtect,
@@ -1128,6 +1131,7 @@ import {
   getDeviceLinkInvokeContext,
   isDeviceLinkInvoke,
   isMobileControllerInvoke,
+  readDeviceLinkInvokeSourceDevice,
 } from '../device-link/invoke-context.js';
 import { stampSharedTaskInput } from './sharedTaskInput.js';
 import { createSharedTaskContextUsageGuard } from './sharedTaskContextUsage.js';
@@ -1140,12 +1144,14 @@ function captureSharedTaskSettingGuard(sessionId: string) {
 }
 import {
   attachMainOwnedInputBoundary,
-  buildMobileClientPromptNote,
+  buildClientEnvironmentNote,
   shouldPrependMobileClientPromptNote,
+  stampDirectSendSourceDevice,
   stripMainOnlySendOpts,
   stampMobileClientOrigin,
   type MainOwnedInputBoundaryStamp,
 } from './mobileClientPromptNote.js';
+import { buildWireMessageSourceNote, readWireSourceDevice } from './messageSourceNote.js';
 import { getResolvedMainLocale } from '../i18n.js';
 import {
   buildUiLanguageErrorNote,
@@ -7217,6 +7223,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     didInjectProjectContext: boolean;
   }> {
     assertAccess?.();
+    if (o.id && !o.remoteHostId) worktreeManager.assertPrecreatedSessionNotCancelled(o.id);
     if (o.id && o.workingDir && !o.remoteHostId) {
       o.workingDir = workingDirectoryRecovery.resolve(o.id, o.workingDir);
       await workingDirectoryRecovery.observe(o.id, o.workingDir).catch((error) => {
@@ -8754,6 +8761,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       worktreeManager.discardPrecreatedWorktree(sessionId, expectedPath, options),
     discardByRecoveryKey: (sessionId, recoveryKey, options) =>
       worktreeManager.discardPrecreatedWorktreeByRecoveryKey(sessionId, recoveryKey, options),
+    cancel: (sessionId, locator, options) =>
+      worktreeManager.cancelPrecreatedWorktree(sessionId, locator, options),
   });
 
   // turn 运行中登记的切换意图(下一条消息发送时刻由 send 事务 apply)。
@@ -9218,6 +9227,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     message: string,
     anchorClientId: string,
     opts: SessionSendOptions,
+    /**
+     * 本条落库行的来源(origin / sourcePlugin),只用于在 wire 上前置 `[消息来源]`;
+     * persistedText 用来识别主机隐藏指令(不加说明)。空闲直发不经 send 事务,
+     * 说明只在这里加一次。
+     */
+    source?: { origin?: unknown; sourcePlugin?: unknown; persistedText?: string },
   ): Promise<SessionSendResult> {
     const dispatchMergeTurn = prepareUpstreamMergeTurn(session.id);
     if (!session.remoteHostId && isCindyMakeWorktreePath(app.getPath('userData'), session.workDir)) {
@@ -9229,12 +9244,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       let baselineStarted = false;
       let turnChangeSetStarted = false;
       const pendingHandoff = await agentHandoffPending.peek(session.id);
-      const outgoingMessage: UserMessage = pendingHandoff
+      const withHandoff: UserMessage = pendingHandoff
         ? (prependHandoffToUserMessage(
             { type: 'user', content: message },
             pendingHandoff,
           ) as UserMessage)
         : { type: 'user', content: message };
+      // 来源说明是元信息,排在交接段之前(交接自带「以下是用户的新消息」结束标记);
+      // 原生命令必须留在消息开头,同 send 事务的占位规则。
+      const sourceNote = source && shouldPrependMobileClientPromptNote(message, session.agentKind)
+        ? buildWireMessageSourceNote(
+            { origin: source.origin, sourcePlugin: source.sourcePlugin },
+            { visibleText: source.persistedText ?? message },
+          )
+        : null;
+      const outgoingMessage: UserMessage = sourceNote
+        ? (prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, sourceNote) as UserMessage)
+        : withHandoff;
       try {
         const sendResult = await session.send(outgoingMessage, {
           ...opts,
@@ -9335,6 +9361,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     inheritSourcePermissionMode?: boolean;
     /** Host-owned durable inputs use the coordinator even when idle. */
     forceQueue?: boolean;
+    /** 插件任务派发的来源(只用于标签与 `[消息来源]`,不是权限判据,也不是 origin)。 */
+    sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
   }): Promise<SendToSessionInternalResult> {
     const {
       targetSessionId,
@@ -9359,9 +9387,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       message,
       explicitOrigin: origin,
     });
-    const inputAgentMeta: AgentMeta | undefined = queuedOrigin || params.autoReviewUserText !== undefined
+    const inputAgentMeta: AgentMeta | undefined = queuedOrigin || params.sourcePlugin || params.autoReviewUserText !== undefined
       ? {
           ...(queuedOrigin ? { origin: queuedOrigin } : {}),
+          // 插件来源只用于标签(主机在插件派发入口盖章,名字已清洗)。
+          ...(params.sourcePlugin ? { sourcePlugin: params.sourcePlugin } : {}),
           ...(params.autoReviewUserText !== undefined
             ? { autoReviewUserText: params.autoReviewUserText, delivery: 'turn' as const }
             : {}),
@@ -9370,6 +9400,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!message) {
       return { ok: false, errorCode: 'INVALID_ARGS', message: 'message required' };
     }
+    const sourcePlugin = params.sourcePlugin;
+    // 空闲直发的 wire 来源说明与落库标签读同一份数据。
+    const directSource = {
+      origin: queuedOrigin,
+      sourcePlugin,
+      persistedText: extractPlainText(persistedContent ?? message),
+    };
 
     if (targetSessionId) {
       try {
@@ -9605,7 +9642,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             broadcastSessionCreated(session.id);
           },
           onDispatching: () => dispatchAgentIslandUserPrompt(session.id),
-        });
+        }, directSource);
         if (createdPreviewStarted) {
           if (sendResult.accepted) {
             commitAgentIslandUserPrompt(session.id, clientId);
@@ -9726,6 +9763,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           onAcceptedRollback,
           onAcceptedCommit,
           origin: queuedOrigin,
+          sourcePlugin,
           autoReviewUserText: params.autoReviewUserText,
           authorizationGuard: params.authorizationGuard,
         });
@@ -9790,6 +9828,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             onAcceptedRollback,
             onAcceptedCommit,
             origin: queuedOrigin,
+            sourcePlugin,
             autoReviewUserText: params.autoReviewUserText,
           });
           return {
@@ -9877,7 +9916,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             planMode: false,
             onAccepted: persistUserMessage,
             onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),
-          });
+          }, directSource);
           if (userPromptPreviewStarted) {
             if (sendResult.accepted) {
               commitAgentIslandUserPrompt(targetSessionId, clientId);
@@ -9919,6 +9958,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               onAcceptedRollback,
               onAcceptedCommit,
               origin: queuedOrigin,
+              sourcePlugin,
               autoReviewUserText: params.autoReviewUserText,
             });
             return {
@@ -9992,7 +10032,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           planMode: false,
           onAccepted: persistUserMessage,
           onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),
-        });
+        }, directSource);
         if (userPromptPreviewStarted) {
           if (sendResult.accepted) {
             commitAgentIslandUserPrompt(targetSessionId, clientId);
@@ -10034,6 +10074,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             onAcceptedRollback,
             onAcceptedCommit,
             origin: queuedOrigin,
+            sourcePlugin,
             autoReviewUserText: params.autoReviewUserText,
           });
           return {
@@ -10808,8 +10849,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     catch (error) { return { ok: false, errorCode: 'MODEL_UNAVAILABLE',
       message: error instanceof Error ? error.message : '任务模型不可用，请在任务中重新选择' }; }
 
+    // agent.run 的真正发送方是插件(来源任务只是它运行的地方):三种模式都盖插件来源。
+    const agentRunPluginName = sanitizeSourceName(getInstalledGhostName(request.ghostId));
+    const agentRunSourcePlugin = {
+      pluginId: request.ghostId,
+      ...(agentRunPluginName ? { name: agentRunPluginName } : {}),
+    };
+
     if (request.mode === 'new') {
       const result = await sendToSessionInternal({
+        sourcePlugin: agentRunSourcePlugin,
         dispatcherSessionId: request.sourceSessionId,
         message: request.prompt,
         persistedContent: request.persistedContent,
@@ -10826,6 +10875,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
     if (request.mode === 'continue') {
       const result = await sendToSessionInternal({
+        sourcePlugin: agentRunSourcePlugin,
         targetSessionId: request.sourceSessionId,
         message: request.prompt,
         persistedContent: request.persistedContent,
@@ -10881,6 +10931,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
 
     const sent = await sendToSessionInternal({
+      sourcePlugin: agentRunSourcePlugin,
       targetSessionId: forkedSessionId,
       message: request.prompt,
       persistedContent: request.persistedContent,
@@ -11019,7 +11070,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       },
       dispatch: async (pluginId, taskId, clientId, text) => {
         assertPlugin(pluginId);
-        const outcome = await sendToSessionInternal({ targetSessionId: taskId, clientId, message: text, autoReviewUserText: { kind: 'delegated-continuation' }, forceQueue: true, onAccepted: async () => { assertPlugin(pluginId); await pluginTaskServiceForCurrentOwner!().assertDispatch(pluginId, taskId); assertPlugin(pluginId); } });
+        // 插件来源只用于标签与 `[消息来源]` 说明;不新增 origin 类型,也不是权限判据。
+        const pluginName = sanitizeSourceName(getInstalledGhostName(pluginId));
+        const outcome = await sendToSessionInternal({ targetSessionId: taskId, clientId, message: text, autoReviewUserText: { kind: 'delegated-continuation' }, forceQueue: true, sourcePlugin: { pluginId, ...(pluginName ? { name: pluginName } : {}) }, onAccepted: async () => { assertPlugin(pluginId); await pluginTaskServiceForCurrentOwner!().assertDispatch(pluginId, taskId); assertPlugin(pluginId); } });
         await awaitAgentInputQueueSnapshotPersistence(taskId);
         assertCurrent();
         return outcome;
@@ -11459,8 +11512,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       normalizeWorkingDir: (dir) => normalizeWorkingDirForStorage(dir),
       isUserPickedDir: isGhostPickedDir,
       isSessionBusy: isSessionInTurn,
-      dispatch: async ({ targetSessionId, message }) => {
-        const r = await sendToSessionInternal({ targetSessionId, message });
+      dispatch: async ({ targetSessionId, message, ghostId }) => {
+        // errand 同样由插件发出:盖插件来源(标签与 `[消息来源]`),不是权限判据。
+        const errandPluginName = sanitizeSourceName(getInstalledGhostName(ghostId));
+        const r = await sendToSessionInternal({
+          targetSessionId,
+          message,
+          sourcePlugin: { pluginId: ghostId, ...(errandPluginName ? { name: errandPluginName } : {}) },
+        });
         if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
         return { ok: true, wakeKind: r.wakeKind };
       },
@@ -11622,6 +11681,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onAcceptedRollback?: SchedulerQueuedPromptRequest['onAcceptedRollback'];
     onAcceptedCommit?: () => void | Promise<void>;
     origin?: AgentInputQueuedMessage['origin'];
+    sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
     /** Host-only receipt: plugin-authored input is not user-authored permission. */
     autoReviewUserText?: { kind: 'delegated-continuation' };
     authorizationGuard?: BotAuthorizationInputGuard;
@@ -11663,6 +11723,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     meta: NonNullable<Awaited<ReturnType<typeof maker.getSessionMeta>>>;
     files?: AgentInputQueuedMessage['files'];
     origin?: AgentInputQueuedMessage['origin'];
+    sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
     /** Host-only receipt: plugin-authored input is not user-authored permission. */
     autoReviewUserText?: { kind: 'delegated-continuation' };
     toolsDisabled?: boolean;
@@ -11696,9 +11757,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           files: fileAttachments,
         })
       : params.persistedContent;
+    // 主机隐藏指令(任务回执等):落库行带 [UI_ACTION_TRIGGER] 前缀、发给模型的正文不带。
+    // 排队行的遮蔽按 text 判定,所以 text 保留前缀,只在最终 wire 组装时去掉
+    // (agentOmitsTriggerPrefix → buildMakerUserMessage)。
+    const hiddenTriggerForAgent = !params.message.startsWith(UI_ACTION_TRIGGER_PREFIX)
+      && params.persistedContent === `${UI_ACTION_TRIGGER_PREFIX}${params.message}`;
     return {
       clientId: params.clientId,
-      text: params.message,
+      text: hiddenTriggerForAgent ? params.persistedContent : params.message,
+      ...(hiddenTriggerForAgent ? { agentOmitsTriggerPrefix: true as const } : {}),
       ...(params.autoReviewUserText !== undefined ? { autoReviewUserText: params.autoReviewUserText } : {}),
       ...(params.toolsDisabled === true ? { toolsDisabled: true } : {}),
       persistedContent,
@@ -11718,6 +11785,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       },
       createOpts,
       ...(params.origin ? { origin: params.origin } : {}),
+      ...(params.sourcePlugin ? { sourcePlugin: params.sourcePlugin } : {}),
     };
   }
 
@@ -14398,6 +14466,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 未知一律 false)。必须在这里现取,不能提前求值缓存——同一个装配好的事务会服务
     // 后续所有 send,来源是逐次调用的属性。
     isMobileClientInvoke: () => isMobileControllerInvoke(),
+    // 被控电脑自身身份(设备说明里的「本机」),同样每次现取。
+    readHostDeviceIdentity: () => getHostSourceDevice(),
     // 个人版制作任务说明:按持久化的 sessions.source 判定,每次 send 现读,不信任
     // 调用方自报;与手机说明同层(只进 wire 消息)。
     isCindyMakeSession: async (sessionId) =>
@@ -14729,6 +14799,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       /** coordinator 从队列项透传的手机来源(main 构造,非 wire 输入)。 */
       fromMobileClient?: boolean;
       uiLanguage?: string;
+      /**
+       * 消息来源(coordinator 从队列项透传;直连 maker:steer 只有 IPC 边界按 invoke
+       * context 盖的 sourceDevice,其余字段的 wire 值已被 stripMainOnlySendOpts 剥掉)。
+       * 只用于生成发给模型的说明,不是权限判据。
+       */
+      sourceDevice?: unknown;
+      sourceOrigin?: unknown;
+      sourcePlugin?: unknown;
+      sharedTaskAuthor?: unknown;
       expectedClearBoundaryMs?: number | null;
       expectedInputGeneration?: number;
       expectedTurnSession?: object;
@@ -14807,16 +14886,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (sess !== authorizationSession || sess.getTurnGeneration() !== authorizationTurn) {
       throw new Error(`[STALE_TURN] Session ${sessionId} changed turns while restoring authorization`);
     }
-    // 手机说明同样只进 wire payload(steer 路径不落库用户消息,天然不污染原话)。
-    // 两个来源都要认:IPC 直连 steer 时 async context 在;coordinator 投递时靠透传。
-    const steerNote =
-      (isMobileControllerInvoke() || so.fromMobileClient === true) &&
-      shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-        ? buildMobileClientPromptNote()
-        : null;
-    const withSteerNote = steerNote
-      ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerNote)
+    // 来源说明与客户端说明同样只进 wire payload(steer 路径的落库由 coordinator 写原话,
+    // 天然不污染原话)。steer 不经 send 事务,两段说明只在这里加一次。
+    const steerSourceNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+      ? buildWireMessageSourceNote({
+          origin: so.sourceOrigin,
+          sourcePlugin: so.sourcePlugin,
+          sharedTaskAuthor: so.sharedTaskAuthor,
+        })
+      : null;
+    const withSteerSourceNote = steerSourceNote
+      ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerSourceNote)
       : normalized;
+    // 设备来源只认盖章值(coordinator 透传 / 直连 IPC 边界按 async context 盖);没有设备
+    // 信息时沿用旧手机判据:IPC 直连 steer 时 async context 在;coordinator 投递时靠透传。
+    const steerDevice = readWireSourceDevice(so.sourceDevice);
+    const steerNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+      ? buildClientEnvironmentNote({
+          device: steerDevice,
+          host: steerDevice ? getHostSourceDevice() : undefined,
+          legacyMobile: isMobileControllerInvoke() || so.fromMobileClient === true,
+        })
+      : null;
+    const withSteerNote = steerNote
+      ? prependNoteToWireUserMessage(withSteerSourceNote as HandoffWireMessage, steerNote)
+      : withSteerSourceNote;
     const steerLanguageNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
       ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()))
       : null;
@@ -14918,8 +15012,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           sessionId,
           message,
           createOpts,
+          // 直连 maker:send 的设备来源只由 main 按 invoke context 盖章(wire 值已在
+          // sessionSendHandler 边界剥掉);本机 renderer 不盖。
           isDeviceLinkInvoke()
-            ? sendOpts
+            ? stampDirectSendSourceDevice(sendOpts, readDeviceLinkInvokeSourceDevice())
             : attachTrustedDesktopSendContext(message, sendOpts),
         );
       },
@@ -14954,7 +15050,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         sessionId,
         message,
         deviceLinkInvoke
-          ? sanitizedSendOpts
+          ? stampDirectSendSourceDevice(sanitizedSendOpts, readDeviceLinkInvokeSourceDevice())
           : attachTrustedDesktopSendContext(message, sanitizedSendOpts),
       );
     },
@@ -15895,7 +15991,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     previewQueuedUserTurn: (sessionId, item) => {
       notifyAgentIslandUserPrompt(
         { id: sessionId, agentKind: item.createOpts?.agentKind, workDir: item.workingDir },
-        item.text || item.persistedContent,
+        // 预览给人看的正文:落库可见内容优先(发给模型的 text 可能带来源 / 回执前缀);
+        // Orca 条目落库的是 {orcaSource, content} JSON,取原话 displayText。
+        item.origin?.kind === 'orca'
+          ? (item.origin.displayText ?? item.text)
+          : item.persistedContent || item.text,
         { source: 'enqueue', clientId: item.clientId },
       );
     },
@@ -16888,7 +16988,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // device-link 出方向:远程入队消息的 OSS 引用(files[] + persistedContent)在入队前一次性物化成本地
   // 临时文件(共用下载、用后删 OSS),保证喂 agent 的 files[] 与落库的 persistedContent 都是本地路径。
-  // 本机会话无 OSS 引用 → materializeQueuedOssAttachments 原样返回,零开销。
+  // 本机会话无 OSS 引用 → materializeQueuedOssAttachmentsDeferred 原样返回,零开销。
   ipcMain.handle(
     MAKER_INVOKE.INPUT_ENQUEUE,
     async (event, sessionId: unknown, item: unknown, opts?: unknown) => {
@@ -16977,6 +17077,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               deviceLinkInvoke,
             ),
             deviceLinkInvoke,
+            readDeviceLinkInvokeSourceDevice(),
           ),
           {
             remote: deviceLinkInvoke,
@@ -17214,6 +17315,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               deviceLinkInvoke,
             ),
             deviceLinkInvoke,
+            readDeviceLinkInvokeSourceDevice(),
           ),
           {
             remote: deviceLinkInvoke,
@@ -17429,6 +17531,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   );
 
+  /**
+   * 排队消息被编辑时按**编辑者**所在设备重新盖章:改写后的正文出自这次编辑的设备,原条目的
+   * 设备 / 手机来源(以及插件来源)不再属实。与入队同一套盖章,wire 自报一律不生效;
+   * 设备与平台在 IPC 边界的 invoke context 里读,回调执行时不再依赖 async context。
+   */
+  function readQueuedEditorProvenance(): {
+    sourceDevice: ReturnType<typeof readDeviceLinkInvokeSourceDevice>;
+    isMobile: boolean;
+  } {
+    return { sourceDevice: readDeviceLinkInvokeSourceDevice(), isMobile: isMobileControllerInvoke() };
+  }
+  function stampQueuedEditProvenance(
+    updated: AgentInputQueuedMessage,
+    remote: boolean,
+    editor: ReturnType<typeof readQueuedEditorProvenance>,
+  ): AgentInputQueuedMessage {
+    return stampTrustedDeviceLinkQueuedOrigin(
+      stampTrustedDesktopQueuedOrigin(stampMobileClientOrigin(updated, editor.isMobile), remote, true),
+      remote,
+      editor.sourceDevice,
+    );
+  }
+
   ipcMain.handle(
     MAKER_INVOKE.INPUT_UPDATE_TEXT,
     async (
@@ -17454,6 +17579,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           'remote session references were not resolved by the controller',
         );
       }
+      const editor = readQueuedEditorProvenance();
       return inputCoordinator.updateText(
         sid,
         cid,
@@ -17461,7 +17587,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         refs,
         contexts,
         remote,
-        (updated) => stampTrustedDesktopQueuedOrigin(updated, remote, true),
+        (updated) => stampQueuedEditProvenance(updated, remote, editor),
       );
     },
   );
@@ -17539,11 +17665,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           assertExpectedRemoteInputClearBoundary(sid, clearBoundaryPrecondition, row);
         }
         assertCurrentInputGeneration();
+        const editor = readQueuedEditorProvenance();
         const result = inputCoordinator.updateContentWithResult(
           sid,
           cid,
           update,
-          (updated) => stampTrustedDesktopQueuedOrigin(updated, remote, true),
+          (updated) => stampQueuedEditProvenance(updated, remote, editor),
         );
         acceptedByCoordinator = result.updated;
         if (result.updated) {

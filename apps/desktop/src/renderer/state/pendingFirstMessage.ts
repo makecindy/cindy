@@ -7,10 +7,11 @@
  * desktop / Pi 分派必须等 SessionView 挂上(SSH 跳过控制端 skill、远端 /review 拒绝、
  * Pi runtime 重试),不能在草稿路由复制一套。
  *
- * 仍走这套交接的还有 device-link 远程草稿(含开协同):对端建会话之后,首条必须等
- * SessionView 挂上隧道订阅 / 开协同,不能挡在 navigate 前面。
+ * device-link 远程草稿的普通首条同样不走这里:对端建会话之后,草稿路由直接交给
+ * makerChatStore 的远程发件队列,切走也会送达。仍走这套交接的远程首条只有开了协同
+ * (首轮要排在被控端起 Worker 之后,不能挡在 navigate 前面)与斜杠命令两类:
  *
- *   NewMakerDraftRoute.handleSend(远程)
+ *   NewMakerDraftRoute.handleSend(远程,协同 / 斜杠命令)
  *     → 对端 create-session 拿到 remoteSessionId
  *     → setPending(remoteSessionId, { text, files, remoteCollab? })
  *     → navigate('/cc-agent/' + remoteSessionId)

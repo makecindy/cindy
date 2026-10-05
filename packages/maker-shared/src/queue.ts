@@ -114,7 +114,7 @@ export function buildQueuePanelSummary(
 
 export function buildQueueRowPresentation(input: {
   busy?: boolean;
-  item: Pick<{ clientId: string; origin?: unknown; text?: string }, 'clientId' | 'origin' | 'text'>;
+  item: { clientId: string; origin?: unknown; text?: string; sourcePlugin?: unknown };
   originalIndex: number;
   projection: QueueRowProjectionLike;
   queueLength: number;
@@ -142,7 +142,7 @@ export function buildQueueRowPresentation(input: {
       // 协同成员发来的消息(对齐桌面 canEdit / canSteer=false):删除与排序照常。
       ? presentationText(localizer, 'message.queuePresentation.row.orcaEditDisabled', '协同消息不支持编辑或插话发送。')
       : isAutoSentQueueItem(input.item)
-        // 自动化 / 其他任务经工具排进来的消息(对齐桌面 canEdit / canSteer=false):改写后
+        // 自动化 / 其他任务经工具 / 插件排进来的消息(对齐桌面 canEdit / canSteer=false):改写后
         // 落库气泡的来源标签就不再属实;删除与排序照常。
         ? presentationText(localizer, 'message.queuePresentation.row.autoSentEditDisabled', '自动发送的消息不支持编辑或插话发送。')
         : null;
@@ -193,18 +193,24 @@ export function isOrcaQueueItem(
   return origin?.kind === 'orca';
 }
 
-/** 自动化(scheduler)或其他任务经工具(session)排进来的消息。Orca 消息另有来源标题与文案。 */
+/**
+ * 自动化(scheduler)、其他任务经工具(session)或插件任务(主机盖章的 sourcePlugin)
+ * 排进来的消息。Orca 消息另有来源标题与文案。
+ */
 export function isAutoSentQueueItem(
-  item: Pick<{ origin?: unknown }, 'origin'>,
+  item: { origin?: unknown; sourcePlugin?: unknown },
 ): boolean {
   const kind = readRecord(item.origin)?.kind;
-  return kind === 'scheduler' || kind === 'session';
+  if (kind === 'scheduler' || kind === 'session') return true;
+  const plugin = readRecord(item.sourcePlugin);
+  return typeof plugin?.pluginId === 'string' && plugin.pluginId.trim().length > 0;
 }
 
 /**
  * 排队条目给人看的正文。自动化调度或其他任务经工具发来（origin.kind 为 scheduler /
- * session）的条目，`text` 是发给 Agent 的原文——可能带「[来自 X 的补充]」前缀或静默运行
- * 协议——可见正文以落库的 `persistedContent` 为准；带附件时落库是主机构造的
+ * session）的条目，`text` 是发给 Agent 的原文——可能带静默运行协议等只给 Agent 的内容
+ * （来源身份不再写进正文，而是派发时在 wire 消息上另加统一的 `[消息来源]` 说明）——
+ * 可见正文以落库的 `persistedContent` 为准；带附件时落库是主机构造的
  * `{text, images, files}` 信封，取其中 text（只在确有附件时解包，正文本身是 JSON 的消息
  * 原样显示）。其它条目沿用 `text`。桌面排队面板、手机待发送气泡与共享访客投影共用此判据。
  */
@@ -213,6 +219,7 @@ export function queueItemVisibleText(item: {
   persistedContent?: string;
   files?: readonly unknown[];
   origin?: unknown;
+  sourcePlugin?: unknown;
 }): string {
   const text = item.text ?? '';
   if (!isAutoSentQueueItem(item)) return text;

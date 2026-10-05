@@ -346,6 +346,33 @@ it.each(['key', 'button', 'scroll'])(
     expect(events().some((event) => event.kind === 'release')).toBe(false);
   },
 );
+it('forwards Cmd+W to the remote computer while the picture owns the keyboard', () => {
+  pointer('pointerdown');
+  pointer('pointerup');
+  messages = [];
+  const input = document.getElementById('keyboard-input')!;
+  input.dispatchEvent(
+    new KeyboardEvent('keydown', { code: 'MetaLeft', metaKey: true, bubbles: true }),
+  );
+  const close = new KeyboardEvent('keydown', {
+    code: 'KeyW',
+    key: 'w',
+    metaKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  input.dispatchEvent(close);
+  input.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW', metaKey: true, bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent('keyup', { code: 'MetaLeft', bubbles: true }));
+  vi.advanceTimersByTime(34);
+  expect(close.defaultPrevented).toBe(true);
+  expect(events().filter((event) => event.kind === 'key')).toEqual([
+    { kind: 'key', code: 'MetaLeft', down: true },
+    { kind: 'key', code: 'KeyW', down: true },
+    { kind: 'key', code: 'KeyW', down: false },
+    { kind: 'key', code: 'MetaLeft', down: false },
+  ]);
+});
 it('maps real mouse movement, right button and wheel to the picture below the toolbar', () => {
   pointer('pointermove');
   vi.advanceTimersByTime(34);
@@ -357,6 +384,21 @@ it('maps real mouse movement, right button and wheel to the picture below the to
   expect(events()).toContainEqual({ kind: 'button', button: 2, down: true, x: 0.5, y: 0.5 });
   expect(events()).toContainEqual({ kind: 'button', button: 2, down: false, x: 0.5, y: 0.5 });
   expect(events()).toContainEqual({ kind: 'scroll', dx: 0, dy: 32 });
+});
+it('carries sub-pixel wheel deltas instead of letting hosts truncate them away', () => {
+  pointer('pointermove');
+  vi.advanceTimersByTime(34);
+  const wheel = (deltaX: number, deltaY: number) =>
+    stage.dispatchEvent(new WheelEvent('wheel', { deltaX, deltaY, bubbles: true, cancelable: true }));
+  wheel(0, 0.4);
+  wheel(0, 0.4);
+  expect(events().filter((e) => e.kind === 'scroll')).toEqual([]);
+  wheel(-0.5, 0.4);
+  wheel(-0.7, 2.5);
+  expect(events().filter((e) => e.kind === 'scroll')).toEqual([
+    { kind: 'scroll', dx: 0, dy: 1 },
+    { kind: 'scroll', dx: -1, dy: 2 },
+  ]);
 });
 it('commits IME text once and never forwards local toolbar keyboard input', () => {
   pointer('pointerdown');
@@ -533,4 +575,34 @@ it('continues edge panning when the first browser frame predates the pointer eve
   firstFrame(performance.now() - 1);
   vi.advanceTimersByTime(200);
   expect(parseFloat(document.getElementById('image')!.style.left)).toBeLessThan(-500);
+});
+it('still releases host input when a local view-only switch abandons an in-flight batch', () => {
+  viewer.dispose();
+  messages = [];
+  // No automatic ACK: the first batch stays in flight.
+  viewer = mountRemoteDesktopViewer(document, (message) => messages.push(message), {
+    desktop: true,
+    net: REMOTE_DESKTOP_NETWORK,
+    iceServers: [],
+    keyCodes: DESKTOP_KEY_CODES,
+  });
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600 });
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointermove');
+  vi.advanceTimersByTime(34);
+  pointer('pointerdown');
+  vi.advanceTimersByTime(34);
+  const before = messages.filter((m) => m.type === 'input').length;
+  viewer.receive({ type: 'control', enabled: false, release: true });
+  const after = messages.filter((m) => m.type === 'input');
+  expect(after.length).toBe(before + 1);
+  expect(after.at(-1)?.events).toEqual([{ kind: 'release' }]);
+  // Without the flag (the host revoked control) an in-flight batch still
+  // drops the queued release, as before.
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointermove', 400, 300);
+  vi.advanceTimersByTime(34);
+  const count = messages.filter((m) => m.type === 'input').length;
+  viewer.receive({ type: 'control', enabled: false });
+  expect(messages.filter((m) => m.type === 'input').length).toBe(count);
 });

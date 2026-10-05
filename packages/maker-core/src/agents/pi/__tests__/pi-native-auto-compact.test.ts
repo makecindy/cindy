@@ -156,6 +156,7 @@ vi.mock("../rpc-client.js", () => ({
 
 import { buildPiSettingsJsonContent, PiAgent } from "../index.js";
 import type { AgentDeps, AgentSessionHandle } from "../../base-agent.js";
+import { AgentStartupStoppedError } from "../../base-agent.js";
 import type { Logger } from "../../../interfaces/logger.js";
 
 const noopLogger: Logger = {
@@ -472,8 +473,10 @@ describe("PiAgent native auto-compaction ownership", () => {
         return originalSymlink(target, link, type);
       });
     }
-    await expect(new PiAgent(deps).startSession({ sessionId: 'failed-skill', workingDir: cwd, model: 'm' }))
-      .rejects.toBe(failure);
+    const startupFailure = await new PiAgent(deps).startSession({ sessionId: 'failed-skill', workingDir: cwd, model: 'm' })
+      .catch((error: unknown) => error);
+    expect(startupFailure).toBeInstanceOf(AgentStartupStoppedError);
+    expect((startupFailure as AgentStartupStoppedError).cause).toBe(failure);
     expect(failedPath).not.toBe('');
     expect(disposeSessionCtx).toHaveBeenCalledTimes(1);
     expect(knobs.spawnArgs).toEqual([]);

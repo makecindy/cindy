@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { GhostCardLinkConfirm, GhostCardPromptPanel } from '../GhostCardHostPrompts';
@@ -46,25 +48,37 @@ it('prompt panel keeps typed text when the scrim is clicked and closes only via 
   expect(onSubmit).toHaveBeenCalledTimes(1);
 });
 
-it('link confirmation ignores scrim clicks and closes only via Cancel or Escape', () => {
+it.each(['Escape', 'Cancel', 'Open'])('link confirmation ignores scrim clicks and handles %s once', async (action) => {
   const onCancel = vi.fn();
   const onConfirm = vi.fn();
-  render(
-    <GhostCardLinkConfirm
-      url="https://example.com/path"
-      host="example.com"
-      onConfirm={onConfirm}
-      onCancel={onCancel}
-    />,
-  );
+  render(<GhostCardLinkConfirm url="https://example.com/path" host="example.com" onConfirm={onConfirm} onCancel={onCancel} />);
   expect(pressScrim()).toBe(true);
   expect(onCancel).not.toHaveBeenCalled();
   expect(onConfirm).not.toHaveBeenCalled();
+  if (action === 'Escape') fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+  else fireEvent.click(screen.getByRole('button', { name: action === 'Cancel' ? 'chat.ghostCall.linkConfirmCancel' : 'chat.ghostCall.linkConfirmOpen' }));
+  await waitFor(() => expect(action === 'Open' ? onConfirm : onCancel).toHaveBeenCalledOnce());
+  expect(action === 'Open' ? onCancel : onConfirm).not.toHaveBeenCalled();
+  expect(screen.queryByRole('alertdialog')).toBeNull();
+});
 
-  fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' });
-  expect(onCancel).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole('button', { name: 'chat.ghostCall.linkConfirmCancel' }));
-  expect(onCancel).toHaveBeenCalledTimes(2);
-  fireEvent.click(screen.getByRole('button', { name: 'chat.ghostCall.linkConfirmOpen' }));
-  expect(onConfirm).toHaveBeenCalledTimes(1);
+it('focuses Cancel, traps Tab in both directions, and restores the link opener', async () => {
+  function Harness() {
+    const [open, setOpen] = useState(false);
+    return <><button onClick={() => setOpen(true)}>Open link</button>{open && <GhostCardLinkConfirm url="https://example.com" host="example.com" onConfirm={() => setOpen(false)} onCancel={() => setOpen(false)} />}</>;
+  }
+  const user = userEvent.setup();
+  render(<Harness />);
+  const opener = screen.getByRole('button', { name: 'Open link' });
+  await user.click(opener);
+  const cancel = screen.getByRole('button', { name: 'chat.ghostCall.linkConfirmCancel' });
+  const confirm = screen.getByRole('button', { name: 'chat.ghostCall.linkConfirmOpen' });
+  expect(document.activeElement).toBe(cancel);
+  await user.tab({ shift: true });
+  expect(document.activeElement).toBe(confirm);
+  await user.tab();
+  expect(document.activeElement).toBe(cancel);
+  await user.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(opener));
 });

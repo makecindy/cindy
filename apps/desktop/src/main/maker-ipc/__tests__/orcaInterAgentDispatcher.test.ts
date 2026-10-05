@@ -661,7 +661,7 @@ describe('Orca lead/worker dispatcher', () => {
     });
     expect(h.queuedItems[0]).toMatchObject({
       clientId: 'client-1',
-      text: '[From Orca Worker]\nDone',
+      text: '[From Orca Worker Reviewer (worker_id: worker-1)]\nDone',
       persistedContent: '{"orcaSource":"worker","content":"Done"}',
       origin: {
         kind: 'orca',
@@ -670,6 +670,69 @@ describe('Orca lead/worker dispatcher', () => {
       },
     });
   });
+  it('names the sending worker by role and worker_id on direct, internal and reserved paths', async () => {
+    const resolveWorkerSenderLabel = vi.fn(async () => 'Backend');
+    const params = {
+      targetSessionId: 'target-session',
+      rawContent: '[Auto-bridged: worker 异常终止]\n\nboom',
+      source: 'worker' as const,
+      senderLabel: 'Worker',
+      workerId: 'worker-7',
+      meta: { source: 'orca', context: 'worker-prefix-test' },
+    };
+    const expectedText = '[From Orca Worker Backend (worker_id: worker-7)]\n[Auto-bridged: worker 异常终止]\n\nboom';
+
+    const direct = createHarness({ resolveWorkerSenderLabel });
+    await direct.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(params);
+    expect(direct.liveSession.send).toHaveBeenCalledWith(
+      { type: 'user', content: expectedText },
+      expect.anything(),
+    );
+    expect(direct.deps.createDbMessage).toHaveBeenCalledWith(
+      'target-session',
+      expect.objectContaining({
+        content: JSON.stringify({ orcaSource: 'worker', content: params.rawContent }),
+        agentMeta: expect.objectContaining({
+          origin: { kind: 'orca', senderLabel: 'Backend', displayText: params.rawContent },
+        }),
+      }),
+    );
+    // 文本与来源标签共用一次 role 反查。
+    expect(resolveWorkerSenderLabel).toHaveBeenCalledTimes(1);
+    expect(resolveWorkerSenderLabel).toHaveBeenCalledWith('worker-7', '');
+
+    const internal = createHarness({ resolveWorkerSenderLabel, getLiveSession: vi.fn(() => null) });
+    await internal.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(params);
+    expect(internal.deps.sendToSessionInternal).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expectedText }),
+    );
+
+    const reserved = createHarness({ resolveWorkerSenderLabel });
+    await reserved.dispatcher.reserveNextOrcaInterAgentMessage(params);
+    expect(reserved.queuedItems[0]).toMatchObject({
+      text: expectedText,
+      origin: { kind: 'orca', senderLabel: 'Backend' },
+    });
+  });
+
+  it('keeps worker_id in the prefix and the caller label in origin when the role is unknown', async () => {
+    const h = createHarness({ shouldQueueNewTurn: vi.fn(() => true) });
+
+    await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Done',
+      source: 'worker',
+      senderLabel: 'Worker',
+      workerId: 'worker-1',
+      meta: { source: 'orca', context: 'unknown-role-test' },
+    });
+
+    expect(h.queuedItems[0]).toMatchObject({
+      text: '[From Orca Worker (worker_id: worker-1)]\nDone',
+      origin: { kind: 'orca', senderLabel: 'Worker', displayText: 'Done' },
+    });
+  });
+
   it('records the sending Lead or Worker session so the receiver can link back to it', async () => {
     const resolveWorkerSessionLink = vi.fn(async () => ({
       leadSessionId: 'lead-session',

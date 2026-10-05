@@ -146,6 +146,7 @@ function buildCodexForkRecoveryMarker(opts: {
         content: parseJsonContent(row.content),
         createdAt: row.createdAt,
         toolUseId: row.toolUseId,
+        agentMeta: row.agentMeta,
       })), {
         fromLabel: 'Codex',
         toLabel: 'Codex',
@@ -174,6 +175,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
       content: parseJsonContent(row.content),
       createdAt: row.createdAt,
       toolUseId: row.toolUseId,
+      agentMeta: row.agentMeta,
     }));
   const lastUser = [...opts.rows].reverse().find((row) => row.role === 'user');
   const label =

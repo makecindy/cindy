@@ -158,6 +158,9 @@ Mobile 未新增卡片入口。服务端无需改动。
 按原流程拆掉重建。
 旧被控端丢弃不认识的 `keepVideo`，照旧拆掉重建；旧控制端不发 `keepVideo`，新被控端照旧拆掉重建。
 切换失败仍只结束本次远程桌面 lease。不修改 relay、IPC allowlist 或协议版本；先发被控端。
+Mobile 与 Desktop 远程桌面窗口都按上述规则发送 `keepVideo` 并以 `videoKept` 回执为准；两端还按电脑和
+显示器记住上次的系统分辨率或「适配画面」尺寸（各自本地保存，不进协议），下次连接拿到操作权后重新套用，
+选回电脑原分辨率或恢复原始比例时清除。
 实现见 `apps/desktop/src/main/remote-desktop/controller.ts`，回归见同目录 `__tests__/controller.test.ts`
 与 `packages/device-link/src/__tests__/viewerDisplay.test.ts`。
 
@@ -179,7 +182,9 @@ Mobile 未新增卡片入口。服务端无需改动。
 `offer.settings` 的画质由码率改为档位 `quality: "auto" | "saver" | "hd"`（自动／省流／高清）。
 控制端只表达意图，具体的码率上限、降级取舍（`auto`/`saver` 先降分辨率保帧数，`hd` 锁分辨率
 降帧数）、截屏分辨率与 JPEG 预算由被控端 `apps/desktop/src/shared/remoteDesktopQuality.ts`
-决定，调整数值无需两端同时发版。
+决定，调整数值无需两端同时发版。控制端处于后台观看（`presentation` 已开启，如手机画中画）
+期间，被控端临时按 `saver` 档的码率／帧率上限编码，回到前台即恢复所选档位；这是被控端本地
+行为，控制端发送的档位不变，也不新增协议字段。
 
 新控制端经 `remoteDesktopVideoSettingsWire` 同时发送档位与旧 `bitrate`（auto→0、saver→2M、
 hd→20M）：旧被控端只校验 `bitrate` 并忽略 `quality`，无需新增能力声明。新被控端优先读取
@@ -193,6 +198,22 @@ hd→20M）：旧被控端只校验 `bitrate` 并忽略 `quality`，无需新增
 `x-google-min-bitrate` / `x-google-max-bitrate`，避免近静止画面因发送量过低导致带宽估计塌到
 百 kbps 级、分辨率被锁在低档。这些是 libwebrtc 对发送端生效的本地提示，不改变协商出的编解码；
 不识别它们的控制端不受影响，旧控制端（无 `settings`）的 offer 原样使用。
+
+## 远程桌面查看窗口隐藏时暂停视频
+
+被控端以可选能力 `viewerHidden` 声明支持 `{ op: "viewerHidden", lease, hidden }`：控制端窗口
+隐藏、最小化、切换 macOS Space 或被完全遮挡时，被控端截屏页把当前视频发送端的
+`encoding.active` 置为 `false`，原地停发视频；音频、输入、数据通道与 lease 不受影响，
+`hidden: false` 原地恢复，不重新协商。被控端等截屏页确认编码器已应用才回复成功，未应用（含截屏页忙）
+时返回错误，控制端据此重建视频。请求只要求当前 lease，不要求操作权；每次新 offer
+从未暂停开始，控制端在视频重新播放后按当前可见性重发。显示切换期间同样接受该请求。
+
+新版 Desktop 控制端仅在能力为真时发送，并在持续隐藏 1.5 秒后才暂停（macOS 原生全屏切换
+会短暂报告 hide/show），显示时立即恢复；恢复失败时重建视频连接，不让画面停在旧帧。
+截图中转模式在隐藏期间停止拉取，不涉及协议。旧被控端无该能力，控制端不发送、照旧完整推流；
+旧控制端不发送，新被控端行为不变。只走既有 relay 业务请求，不加入媒体数据通道白名单，
+不修改 relay、服务端或 IPC allowlist；Mobile 未接入。实现见
+`apps/desktop/src/renderer/features/remote-desktop/viewerController.ts` 与 `captureHost.ts`。
 
 ## 远程桌面控制请求走媒体数据通道
 
@@ -209,6 +230,26 @@ lease 与当前 lease 一致时才走通道，否则照旧走 relay。被控端�
 其余失败不自动改走 relay 重试，超时按结果未知处理。
 旧控制端不发通道请求，新被控端行为不变。此扩展不修改 relay、服务端或 device-link 帧格式；
 iOS 原生接收器新增 `sendRequest`，属于冷更新。
+Desktop 控制端由主进程决定并校验每个请求（lease、操作权记录、剪贴板权限都不变），白名单内的请求交给
+远程桌面窗口经它的媒体数据通道发出，回复再交回主进程（`remote-desktop-viewer:channel-request` /
+`channel-reply`，仅限该窗口）；窗口没有发出（无视频、能力缺失、lease 或代次不符、通道拒收）时主进程照旧
+走 relay，已发出的请求不经 relay 重发，窗口退场时在途请求按结果未知结束。
+
+## 远程桌面随连接自动给操作权
+
+被控端以可选能力 `autoControl` 声明（仅当本机能注入输入，即 `canControl` 为真）：`start`、`viewerDisplay`、
+`restoreViewerDisplay` 与 `resolution { temporary: true }` 接受 `control: true`（只接受布尔值），被控端在同一个
+请求里启动输入并以 `controlling: true` 回复，控制端不再单独发 `control`。启动输入失败（缺权限、输入不可用）
+时租约照常返回且 `controlling: false`，控制端再发 `control` 取得具体错误。操作权仍由被控端持有：它决定输入
+助手的启停，手机画中画后台观看照旧经 `presentation` 收回，回到前台再取回；Agent 让位仍只看实际输入。
+
+控制端仅在能力为真时发送 `control: true`；会话层只在请求过时接受 `controlling: true` 回复。旧被控端丢弃不认识的
+字段并回复 `controlling: false`，控制端按原流程补发 `control`；旧控制端不发该字段，新被控端行为不变。
+Desktop 控制端主进程把带 `control: true` 的回复与 `control` 回复同样记录，用于本机剪贴板判定。
+
+Mobile 的「仅查看」改为纯本地开关：只停止转发输入、关闭键盘与鼠标按钮，不再向被控端发 `control: false`；
+被控端仍持有操作权。退出仅查看时若被控端已不再给操作权（输入失败、溢出释放、后台观看），才重新请求。
+不修改 relay、服务端或 IPC allowlist；需被控端和控制端都更新才省掉这次往返。
 
 ## 手机首页会话活动快照
 
@@ -360,6 +401,21 @@ schema，服务端无需改动。
 1024 字符）。只在 `error` 存在时下发，进入下一阶段或重新发起复制时与 `error` 一并清除；源端复制
 记录里同名可选字段，旧记录缺省。旧源端不下发，控制端只显示错误提示；旧控制端忽略该字段。
 不新增 channel、relay 类型或持久化 schema，服务端无需改动。
+
+## 远程任务的后台任务状态与停止
+
+Desktop 控制端在远程任务的输入框状态栏显示后台任务提示：进入任务、前台 turn 结束、设备重连或
+窗口重新可见时，读取已登记的只读 `maker:session-background-activity` 与
+`maker:session-background-tasks:list`（两者登记为后台 invoke，让位于用户操作），之后在「在线 + 可见 +
+无前台 turn」期间每 15 秒复查；
+不依赖镜像事件，断连或停读时清空提示。读取失败（含旧被控端）按无后台任务处理。
+
+同账号 invoke allowlist 新增写通道 `maker:agent-task:stop`（单个后台任务）与
+`maker:session-background-tasks:stop`（全部停止，关闭被控端会话进程），入参与本机 IPC 相同，
+handler 无 sender 依赖；不加入共享任务访客白名单，不进入自动重试。任务卡、后台任务面板与状态栏
+的停止按归属粘滞路由到被控端，不回退本机。旧被控端回 `CHANNEL_NOT_ALLOWED` 时提示升级远程电脑；
+旧控制端行为不变。Mobile 未接入，服务端无需改动。实现见 `makerTransport.ts` 与
+`useRemoteSessionBackgroundTasks.ts`。
 
 ## 事实来源
 
@@ -552,6 +608,20 @@ X 快照有请求正文时，按原始 triggerMessageId 排除引用列表中的
   开发不应因此失败。
 - 不要重新引入预装／播种机制或私有种子 submodule；需要推荐插件时走 SkillHub 的
   分发与用户主动安装流程。
+
+## 预创建 worktree 的终止确认
+
+同账号设备互联新增 `worktree:cancel-precreated`，参数仍为 `sessionId` 加 `path` 或
+`recoveryKey` 二选一，成功回执沿用严格的 `{ discarded: true, branchDeleted?: boolean }`。
+主机在与创建共用的任务锁内检查任务归属，再按创建 ID 持久标记取消、回收未认领目录。
+迟到的 worktree 创建和任务启动均检查该标记；有内容改动、运行时占用或真实任务时仍保留。
+
+Mobile 对所有预创建恢复记录（含未收到创建回包的 `reserved`）只接受此终止确认，不用一次 `NOT_FOUND` 授权
+旧式删除。旧主机拒绝未知 channel 时保留记录，不回退 `discard-precreated`；旧控制端
+继续使用原 channel。完全恢复需要两端均更新，服务端与 Mobile 原生配置无需改动。
+恢复仅作用于该任务 ID，不重启 peer 或共享 relay，也不将创建请求加入自动重放。
+终止确认后先持久保存草稿的取消状态和原项目目录，再删除回收账本；再次提交使用新任务 ID。
+手机发件箱保留原持久键与附件目录，只原子替换记录中的远端任务 ID，写入失败仍可恢复原草稿。
 
 ## 3. Ghost manifest 与 Cindy 专属界面能力
 
