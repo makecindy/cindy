@@ -903,7 +903,7 @@
       },
       "wallpaper": {
         "title": "Wallpaper",
-        "description": "Choose a Cindy scene or your own image for the whole app, independently of the theme.",
+        "description": "Choose a Cindy scene, image or video for the whole app, independently of the theme.",
         "reset": "Reset",
         "aria": "Wallpaper selection",
         "nonePreview": "None",
@@ -920,12 +920,13 @@
         "motionHint": "Still by default. Motion pauses when hidden and follows your reduced-motion preference.",
         "motionStatic": "Static",
         "motionDynamic": "Dynamic",
-        "customChoose": "Choose image",
-        "customReplace": "Replace image",
-        "customRemove": "Remove image",
+        "customChoose": "Choose Wallpaper",
+        "customReplace": "Replace Wallpaper",
+        "customRemove": "Remove Wallpaper",
         "customBusy": "Working…",
-        "customHint": "PNG, JPEG or WebP, up to 20 MB. Stored on this device, displayed as a still image.",
-        "customInvalid": "Choose a valid PNG, JPEG or WebP image (up to 20 MB and 40 megapixels).",
+        "customPlaybackFailed": "This video could not be played. Choose an MP4 video encoded with H.264.",
+        "customHint": "PNG, JPEG or WebP up to 20 MB; MP4 video up to 100 MB. Stored on this device. Videos loop silently in Dynamic mode.",
+        "customInvalid": "Choose a valid PNG, JPEG or WebP image (up to 20 MB and 40 megapixels), or an MP4 video up to 100 MB.",
         "customFailed": "Could not save the wallpaper. Please try again."
       },
       "layout": {

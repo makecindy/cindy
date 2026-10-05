@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { RotateCcw, ImagePlus } from 'lucide-react';
+import { RotateCcw, ImagePlus, Film } from 'lucide-react';
 import { useState } from 'react';
 import { extractIpcError } from '@/utils/ipcError';
 
@@ -12,6 +12,7 @@ import { getBuiltinWallpaperBackground, isSceneWallpaper } from '@/lib/wallpaper
 import {
   APPEARANCE_LIMITS,
   DEFAULT_APPEARANCE_SETTINGS,
+  isCustomWallpaperVideo,
   type WallpaperId,
 } from '@/../shared/appearanceSettings';
 
@@ -31,12 +32,14 @@ export function WallpaperSection() {
     wallpaperOverlay,
     wallpaperMotion,
     customWallpaperUrl,
+    playbackFailed,
     setWallpaper,
     setOverlay,
     setMotion,
     resetWallpaper,
   } = useWallpaperSettings();
-  const chooseImage = async () => {
+  const customVideo = isCustomWallpaperVideo(customWallpaperUrl);
+  const chooseWallpaper = async () => {
     setBusy(true);
     setError('');
     try {
@@ -54,7 +57,7 @@ export function WallpaperSection() {
       setBusy(false);
     }
   };
-  const removeImage = async () => {
+  const removeWallpaper = async () => {
     setBusy(true);
     setError('');
     try {
@@ -110,7 +113,7 @@ export function WallpaperSection() {
         {[...WALLPAPER_OPTIONS, { id: 'custom' as const }].map((option) => {
           const selected = wallpaperId === option.id;
           const background =
-            option.id === 'custom' && customWallpaperUrl
+            option.id === 'custom' && customWallpaperUrl && !customVideo
               ? `url("${customWallpaperUrl}")`
               : getBuiltinWallpaperBackground(option.id);
           return (
@@ -123,7 +126,7 @@ export function WallpaperSection() {
               disabled={busy}
               onClick={() =>
                 option.id === 'custom' && !customWallpaperUrl
-                  ? void chooseImage()
+                  ? void chooseWallpaper()
                   : setWallpaper(option.id)
               }
               className={cn(
@@ -145,6 +148,11 @@ export function WallpaperSection() {
                   backgroundSize: 'cover',
                 }}
               >
+                {option.id === 'custom' && customVideo ? (
+                  <span className="absolute inset-0 flex items-center justify-center text-[var(--settings-section-sublabel)]">
+                    <Film size={22} aria-hidden="true" />
+                  </span>
+                ) : null}
                 {option.id === 'custom' && !customWallpaperUrl ? (
                   <span className="absolute inset-0 flex items-center justify-center text-[var(--settings-section-sublabel)]">
                     <ImagePlus size={22} aria-hidden="true" />
@@ -176,7 +184,7 @@ export function WallpaperSection() {
           variant="secondary"
           type="button"
           disabled={busy}
-          onClick={() => void chooseImage()}
+          onClick={() => void chooseWallpaper()}
         >
           <ImagePlus size={14} aria-hidden="true" />
           {t(
@@ -188,7 +196,7 @@ export function WallpaperSection() {
             variant="secondary"
             type="button"
             disabled={busy}
-            onClick={() => void removeImage()}
+            onClick={() => void removeWallpaper()}
           >
             {t('settings.appearance.wallpaper.customRemove')}
           </Button>
@@ -197,16 +205,16 @@ export function WallpaperSection() {
           {t('settings.appearance.wallpaper.customHint')}
         </p>
       </div>
-      {error && (
+      {(error || (wallpaperId === 'custom' && playbackFailed)) && (
         <p role="alert" className="text-12 text-[var(--text-primary)]">
-          {error}
+          {error || t('settings.appearance.wallpaper.customPlaybackFailed')}
         </p>
       )}
 
       <div className="h-px bg-[var(--settings-input-border)]" />
 
       <div className="flex flex-col gap-3">
-        {isSceneWallpaper(wallpaperId) && (
+        {(isSceneWallpaper(wallpaperId) || (wallpaperId === 'custom' && customVideo)) && (
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">

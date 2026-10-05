@@ -49,7 +49,7 @@ export const APPEARANCE_LIMITS = {
   uiSize: { min: 12, max: 24 },
   codeSize: { min: 10, max: 24 },
   windowZoom: { min: 0.5, max: 3, step: 0.1 },
-  wallpaperOverlay: { min: 0, max: 0.6, step: 0.05 },
+  wallpaperOverlay: { min: 0, max: 1, step: 0.05 },
 } as const;
 
 export const WALLPAPER_IDS = [
@@ -62,9 +62,23 @@ export const WALLPAPER_IDS = [
 export type WallpaperId = (typeof WALLPAPER_IDS)[number];
 
 export function normalizeCustomWallpaperUrl(value: unknown): string {
-  return typeof value === 'string' && /^cindy-media:\/\/client-wallpaper\/[0-9a-f]{64}\.webp$/.test(value)
+  return typeof value === 'string' &&
+    /^cindy-media:\/\/client-wallpaper\/[0-9a-f]{64}\.(webp|mp4)$/.test(value)
     ? value
     : '';
+}
+
+export function isCustomWallpaperVideo(value: unknown): boolean {
+  return normalizeCustomWallpaperUrl(value).endsWith('.mp4');
+}
+
+/** Keep existing 0–60% preferences visually unchanged; extend to a fully opaque veil. */
+export function getWallpaperVeil(overlay: number, isDark: boolean): number {
+  const strength = clampAppearanceWallpaperOverlay(overlay);
+  const base = isDark ? 65 : 55;
+  if (strength <= 0.6) return base + strength * 40;
+  const previousMax = base + 24;
+  return previousMax + ((strength - 0.6) / 0.4) * (100 - previousMax);
 }
 
 export function clampAppearanceWallpaperOverlay(

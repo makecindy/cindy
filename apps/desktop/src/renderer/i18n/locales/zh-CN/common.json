@@ -903,7 +903,7 @@
       },
       "wallpaper": {
         "title": "壁纸",
-        "description": "为整个应用选择 Cindy 场景或自己的图片，主题保持独立。",
+        "description": "为整个应用选择 Cindy 场景、自己的图片或视频，主题保持独立。",
         "reset": "恢复默认",
         "aria": "壁纸选择",
         "nonePreview": "无",
@@ -920,12 +920,13 @@
         "motionHint": "默认静态；动态在窗口隐藏时暂停，并遵循系统减少动效设置。",
         "motionStatic": "静态",
         "motionDynamic": "动态",
-        "customChoose": "选择图片",
-        "customReplace": "替换图片",
-        "customRemove": "移除图片",
+        "customChoose": "选择壁纸",
+        "customReplace": "替换壁纸",
+        "customRemove": "移除壁纸",
         "customBusy": "处理中…",
-        "customHint": "PNG、JPEG、WebP，最大 20 MB。仅保存在此设备，静态展示。",
-        "customInvalid": "请选择有效的 PNG、JPEG 或 WebP 图片（不超过 20 MB、4000 万像素）。",
+        "customPlaybackFailed": "无法播放此视频，请选择使用 H.264 编码的 MP4 视频。",
+        "customHint": "PNG、JPEG、WebP 图片最大 20 MB，MP4 视频最大 100 MB。仅保存在此设备，视频在动态模式下静音循环播放。",
+        "customInvalid": "请选择有效的 PNG、JPEG 或 WebP 图片(不超过 20 MB、4000 万像素)，或不超过 100 MB 的 MP4 视频。",
         "customFailed": "未能保存壁纸，请重试。"
       },
       "layout": {

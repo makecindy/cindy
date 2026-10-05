@@ -78,10 +78,11 @@ Verify actual Light/Dark screenshots across host pages and the expanded tool pan
 
 The built-in wallpaper catalog contains only Window Companion, Future Atelier and Dream
 Wander, plus None to restore the theme canvas (user decision, 2026-10-01).
-Custom wallpaper is available through Choose image, Replace image and Remove image
-in the same section (user addition, 2026-10-01). Accept local PNG/JPEG/WebP up to
+Custom wallpaper is available through Choose Wallpaper, Replace Wallpaper and Remove Wallpaper
+in the same section (user addition, 2026-10-01; video support, 2026-10-05). Accept local PNG/JPEG/WebP up to
 20 MB and 40 megapixels, store a metadata-free static image up to 3840 pixels
-in the managed media store. Wallpaper selection and the custom image reference
+in the managed media store. Also accept local MP4 videos up to 100 MB, preserving their bytes;
+H.264 is recommended for playback compatibility. Wallpaper selection and the custom media reference
 are shared within the Desktop profile, just like theme preferences (user decision,
 2026-10-02). Import, replacement, removal and recycling are client-wide as well:
 no account database, account-bound operation guard or pre-release owner migration.
@@ -90,9 +91,17 @@ switching accounts (or signing out) keeps the same wallpaper. Font-only utility 
 custom media URLs.
 Detached sidebar and plugin-panel host chrome use the same wallpaper provider;
 embedded plugin webviews retain their own surfaces and permission boundary.
-Cancellation and import failures retain the existing image. Switching to a built-in
-or None keeps the imported image available; Remove image forgets it. Custom imagery
-shares the continuous cover-fit canvas and readability veil; no dynamic toggle.
+Cancellation and import failures retain the existing media. Switching to a built-in
+or None keeps the imported media available; Remove Wallpaper forgets it. Custom imagery
+shares the continuous cover-fit canvas and readability veil. Custom MP4 exposes the existing
+Static / Dynamic choice: Static and reduced motion show a paused frame; Dynamic loops silently
+and pauses when hidden/minimized. Playback failure releases the decoder, leaves the theme surface
+visible and shows an actionable error in wallpaper settings. The custom video tile uses a film icon
+instead of opening a second decoder for a thumbnail.
+Overlay strength ranges from 0% to 100% (2026-10-05). Preserve the existing Light/Dark veil
+mapping through 60%; interpolate the remainder to fully opaque at 100%. At 100%, release the
+wallpaper video because the artwork is completely covered. The percentage is a strength setting,
+not literal image opacity; the default stays 20% and saved overrides are preserved.
 Remove the previous arrow, standalone portrait, gradient and paper
 options and assets. Retired saved selections normalize to None; unrelated theme
 and font preferences remain unchanged. All three scenes use the same cover fit,

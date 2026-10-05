@@ -903,7 +903,7 @@
       },
       "wallpaper": {
         "title": "壁紙",
-        "description": "アプリ全体に Cindy の壁紙や自分の画像を設定できます。テーマは独立して選べます。",
+        "description": "アプリ全体に Cindy の壁紙や自分の画像・動画を設定できます。テーマは独立して選べます。",
         "reset": "デフォルトに戻す",
         "aria": "壁紙の選択",
         "nonePreview": "なし",
@@ -920,12 +920,13 @@
         "motionHint": "初期設定は静止画です。非表示時は停止し、システムの視差効果を減らす設定に従います。",
         "motionStatic": "静止画",
         "motionDynamic": "動画",
-        "customChoose": "画像を選択",
-        "customReplace": "画像を変更",
-        "customRemove": "画像を削除",
+        "customChoose": "壁紙を選択",
+        "customReplace": "壁紙を変更",
+        "customRemove": "壁紙を削除",
         "customBusy": "処理中…",
-        "customHint": "PNG・JPEG・WebP、最大 20 MB。この端末にのみ保存し、静止画として表示します。",
-        "customInvalid": "有効な PNG・JPEG・WebP 画像を選択してください（最大 20 MB・4000 万画素）。",
+        "customPlaybackFailed": "この動画を再生できません。H.264 でエンコードされた MP4 動画を選択してください。",
+        "customHint": "PNG・JPEG・WebP 画像は最大 20 MB、MP4 動画は最大 100 MB。この端末にのみ保存します。動画モードでは無音で繰り返し再生します。",
+        "customInvalid": "有効な PNG・JPEG・WebP 画像（最大 20 MB・4000 万画素）、または最大 100 MB の MP4 動画を選択してください。",
         "customFailed": "壁紙を保存できませんでした。もう一度お試しください。"
       },
       "layout": {

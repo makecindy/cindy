@@ -903,7 +903,7 @@
       },
       "wallpaper": {
         "title": "桌布",
-        "description": "為整個應用程式選擇 Cindy 場景或自己的圖片，主題保持獨立。",
+        "description": "為整個應用程式選擇 Cindy 場景、自己的圖片或影片，主題保持獨立。",
         "reset": "恢復預設",
         "aria": "桌布選擇",
         "nonePreview": "無",
@@ -920,12 +920,13 @@
         "motionHint": "預設靜態；動態在視窗隱藏時暫停，並遵循系統減少動態效果設定。",
         "motionStatic": "靜態",
         "motionDynamic": "動態",
-        "customChoose": "選擇圖片",
-        "customReplace": "替換圖片",
-        "customRemove": "移除圖片",
+        "customChoose": "選擇桌布",
+        "customReplace": "替換桌布",
+        "customRemove": "移除桌布",
         "customBusy": "處理中…",
-        "customHint": "PNG、JPEG、WebP，最大 20 MB。僅儲存在此裝置，靜態顯示。",
-        "customInvalid": "請選擇有效的 PNG、JPEG 或 WebP 圖片（不超過 20 MB、4000 萬像素）。",
+        "customPlaybackFailed": "無法播放此影片，請選擇使用 H.264 編碼的 MP4 影片。",
+        "customHint": "PNG、JPEG、WebP 圖片最大 20 MB，MP4 影片最大 100 MB。僅儲存在此裝置，影片在動態模式下靜音循環播放。",
+        "customInvalid": "請選擇有效的 PNG、JPEG 或 WebP 圖片（不超過 20 MB、4000 萬像素），或不超過 100 MB 的 MP4 影片。",
         "customFailed": "無法儲存桌布，請重試。"
       },
       "layout": {

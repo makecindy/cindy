@@ -18,6 +18,8 @@ import {
   type WallpaperId,
   type WallpaperMotion,
   normalizeCustomWallpaperUrl,
+  isCustomWallpaperVideo,
+  getWallpaperVeil,
 } from '@/../shared/appearanceSettings';
 
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
@@ -32,6 +34,7 @@ export interface WallpaperSettings {
 }
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
+  playbackFailed: boolean;
   setWallpaper: (id: WallpaperId) => void;
   setOverlay: (value: number) => void;
   setMotion: (value: WallpaperMotion) => void;
@@ -64,6 +67,12 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
 
 export function WallpaperSettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<WallpaperSettings>(getInitialWallpaperSettings);
+  const [failedUrl, setFailedUrl] = useState('');
+  const onPlaybackFailure = useCallback(
+    () => setFailedUrl(settings.customWallpaperUrl ?? ''),
+    [settings.customWallpaperUrl],
+  );
+  const onPlaybackReady = useCallback(() => setFailedUrl(''), []);
   const isDark = useIsDarkMode();
   // Document-level surface also covers settings, split panes, portals and detached
   // app windows, without changing the layout tree or stacking order of its panes.
@@ -73,7 +82,9 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
     const background =
       settings.wallpaperId === 'custom'
         ? customUrl
-          ? `url("${customUrl}")`
+          ? isCustomWallpaperVideo(customUrl)
+            ? 'none'
+            : `url("${customUrl}")`
           : undefined
         : getBuiltinWallpaperBackground(settings.wallpaperId);
     const active = Boolean(background);
@@ -81,7 +92,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       root.dataset.wallpaperActive = 'true';
       root.style.setProperty('--app-wallpaper-image', background!);
       // One cover-fitted canvas; theme-derived veil keeps messages readable.
-      const veil = (isDark ? 65 : 55) + settings.wallpaperOverlay * 40;
+      const veil = getWallpaperVeil(settings.wallpaperOverlay, isDark);
       root.style.setProperty('--app-wallpaper-veil', `${veil}%`);
     }
     return () => {
@@ -186,13 +197,28 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
   );
 
   const value = useMemo<WallpaperSettingsContextValue>(
-    () => ({ ...settings, setWallpaper, setOverlay, setMotion, resetWallpaper }),
-    [resetWallpaper, setMotion, setOverlay, setWallpaper, settings],
+    () => ({
+      ...settings,
+      playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
+      setWallpaper,
+      setOverlay,
+      setMotion,
+      resetWallpaper,
+    }),
+    [resetWallpaper, setMotion, setOverlay, setWallpaper, settings, failedUrl],
   );
 
   return (
     <WallpaperSettingsContext.Provider value={value}>
-      <WallpaperVideo wallpaperId={settings.wallpaperId} motion={settings.wallpaperMotion} />
+      {settings.wallpaperOverlay < 1 && (
+        <WallpaperVideo
+          wallpaperId={settings.wallpaperId}
+          motion={settings.wallpaperMotion}
+          customWallpaperUrl={settings.customWallpaperUrl}
+          onFailure={onPlaybackFailure}
+          onReady={onPlaybackReady}
+        />
+      )}
       {children}
     </WallpaperSettingsContext.Provider>
   );

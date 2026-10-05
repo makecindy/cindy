@@ -31,14 +31,48 @@ afterEach(() => {
 });
 
 describe('application wallpaper lifecycle', () => {
+  it.each([false, true])(
+    'fully covers custom video at 100% without keeping a decoder (dark=%s)',
+    (dark) => {
+      document.documentElement.classList.toggle('dark', dark);
+      let changed: (value: typeof DEFAULT_APPEARANCE_SETTINGS) => void = () => {};
+      const settings = {
+        ...DEFAULT_APPEARANCE_SETTINGS,
+        wallpaperId: 'custom' as const,
+        wallpaperMotion: 'dynamic' as const,
+        customWallpaperUrl: `cindy-media://client-wallpaper/${'a'.repeat(64)}.mp4`,
+      };
+      vi.stubGlobal('electronAPI', {
+        appearanceSettings: {
+          getSync: () => settings,
+          onChanged: (fn: typeof changed) => {
+            changed = fn;
+            return () => {};
+          },
+        },
+      });
+      render(
+        <WallpaperSettingsProvider>
+          <Controls />
+        </WallpaperSettingsProvider>,
+      );
+      const video = document.querySelector('video')!;
+      expect(video).not.toBeNull();
+      expect(document.documentElement.style.getPropertyValue('--app-wallpaper-image')).toBe('none');
+      act(() => changed({ ...settings, wallpaperOverlay: 1 }));
+      expect(document.documentElement.style.getPropertyValue('--app-wallpaper-veil')).toBe('100%');
+      expect(document.querySelector('video')).toBeNull();
+      expect(video.getAttribute('src')).toBeNull();
+      act(() => changed(settings));
+      expect(document.querySelector('video')).not.toBeNull();
+    },
+  );
   it('loads client artwork without subscribing to account changes', async () => {
     const url = `cindy-media://client-wallpaper/${'b'.repeat(64)}.webp`;
     const subscribeAuth = vi.fn();
-    const get = vi
-      .fn()
-      .mockResolvedValue({
-        value: { ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'custom', customWallpaperUrl: url },
-      });
+    const get = vi.fn().mockResolvedValue({
+      value: { ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'custom', customWallpaperUrl: url },
+    });
     vi.stubGlobal('electronAPI', {
       onAuthStateChange: subscribeAuth,
       appearanceSettings: {
