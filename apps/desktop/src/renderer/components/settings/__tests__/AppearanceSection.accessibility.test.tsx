@@ -45,7 +45,8 @@ vi.mock('@/hooks/useWallpaperSettings', () => ({
     wallpaperOverlay: 0,
     wallpaperMotion: 'static',
     setWallpaper: vi.fn(),
-    setOverlay: vi.fn(),
+    visibility: 0.37,
+    setVisibility: vi.fn(),
     setMotion: vi.fn(),
     resetWallpaper: vi.fn(),
   }),
@@ -90,6 +91,14 @@ vi.mock('../LayoutResetControl', () => ({ LayoutResetControl: () => null }));
 describe('AppearanceSection accessibility', () => {
   it('labels the UI and code font-size number inputs', () => {
     render(<AppearanceSection />);
+    const visibility = screen.getByRole('slider', {
+      name: 'settings.appearance.wallpaper.visibilityLabel',
+    });
+    expect(visibility.getAttribute('min')).toBe('0');
+    expect(visibility.getAttribute('max')).toBe('1');
+    expect(visibility.getAttribute('step')).toBe('0.01');
+    expect(visibility.getAttribute('aria-describedby')).toBe('wallpaper-visibility-hint');
+    expect(screen.getByText('37%')).toBeTruthy();
 
     const wallpapers = within(
       screen.getByRole('radiogroup', { name: 'settings.appearance.wallpaper.aria' }),

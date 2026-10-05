@@ -30,11 +30,13 @@ export function WallpaperSection() {
   const {
     wallpaperId,
     wallpaperOverlay,
+    wallpaperVisibility,
+    visibility,
     wallpaperMotion,
     customWallpaperUrl,
     playbackFailed,
     setWallpaper,
-    setOverlay,
+    setVisibility,
     setMotion,
     resetWallpaper,
   } = useWallpaperSettings();
@@ -97,6 +99,7 @@ export function WallpaperSection() {
             busy ||
             (wallpaperId === DEFAULT_APPEARANCE_SETTINGS.wallpaperId &&
               wallpaperOverlay === DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay &&
+              wallpaperVisibility == null &&
               wallpaperMotion === DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion)
           }
         >
@@ -237,22 +240,29 @@ export function WallpaperSection() {
         )}
         <div className="flex items-center gap-3">
           <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
-            {t('settings.appearance.wallpaper.overlayLabel')}
+            {t('settings.appearance.wallpaper.visibilityLabel')}
           </span>
           <Slider
-            min={APPEARANCE_LIMITS.wallpaperOverlay.min}
-            max={APPEARANCE_LIMITS.wallpaperOverlay.max}
-            step={APPEARANCE_LIMITS.wallpaperOverlay.step}
-            value={[wallpaperOverlay]}
+            min={APPEARANCE_LIMITS.wallpaperVisibility.min}
+            max={APPEARANCE_LIMITS.wallpaperVisibility.max}
+            step={APPEARANCE_LIMITS.wallpaperVisibility.step}
+            value={[visibility]}
             onValueChange={([value]) => {
-              if (typeof value === 'number') setOverlay(value);
+              if (typeof value === 'number') setVisibility(value);
             }}
-            aria-label={t('settings.appearance.wallpaper.overlayAria')}
+            aria-label={t('settings.appearance.wallpaper.visibilityLabel')}
+            aria-describedby="wallpaper-visibility-hint"
           />
           <span className="w-10 shrink-0 text-right font-mono text-12 text-[var(--settings-section-sublabel)]">
-            {Math.round(wallpaperOverlay * 100)}%
+            {Math.round(visibility * 100)}%
           </span>
         </div>
+        <p
+          id="wallpaper-visibility-hint"
+          className="text-12 text-[var(--settings-section-sublabel)]"
+        >
+          {t('settings.appearance.wallpaper.visibilityHint')}
+        </p>
       </div>
     </div>
   );

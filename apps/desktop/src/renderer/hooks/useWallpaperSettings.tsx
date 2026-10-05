@@ -12,14 +12,14 @@ import {
 
 import {
   DEFAULT_APPEARANCE_SETTINGS,
-  clampAppearanceWallpaperOverlay,
+  clampAppearanceWallpaperVisibility,
   normalizeAppearanceSettings,
   type AppearanceSettings,
   type WallpaperId,
   type WallpaperMotion,
   normalizeCustomWallpaperUrl,
   isCustomWallpaperVideo,
-  getWallpaperVeil,
+  getWallpaperVisibility,
 } from '@/../shared/appearanceSettings';
 
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
@@ -29,14 +29,16 @@ import { WallpaperVideo } from '@/components/layout/WallpaperVideo';
 export interface WallpaperSettings {
   wallpaperId: WallpaperId;
   wallpaperOverlay: number;
+  wallpaperVisibility?: number | null;
   wallpaperMotion: WallpaperMotion;
   customWallpaperUrl?: string;
 }
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
   playbackFailed: boolean;
+  visibility: number;
   setWallpaper: (id: WallpaperId) => void;
-  setOverlay: (value: number) => void;
+  setVisibility: (value: number) => void;
   setMotion: (value: WallpaperMotion) => void;
   resetWallpaper: () => void;
 }
@@ -60,6 +62,7 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
   return {
     wallpaperId: settings.wallpaperId,
     wallpaperOverlay: settings.wallpaperOverlay,
+    wallpaperVisibility: settings.wallpaperVisibility,
     wallpaperMotion: settings.wallpaperMotion,
     customWallpaperUrl: settings.customWallpaperUrl,
   };
@@ -74,6 +77,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
   );
   const onPlaybackReady = useCallback(() => setFailedUrl(''), []);
   const isDark = useIsDarkMode();
+  const visibility = getWallpaperVisibility(settings, isDark);
   // Document-level surface also covers settings, split panes, portals and detached
   // app windows, without changing the layout tree or stacking order of its panes.
   useLayoutEffect(() => {
@@ -92,7 +96,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       root.dataset.wallpaperActive = 'true';
       root.style.setProperty('--app-wallpaper-image', background!);
       // One cover-fitted canvas; theme-derived veil keeps messages readable.
-      const veil = getWallpaperVeil(settings.wallpaperOverlay, isDark);
+      const veil = 100 - visibility * 100;
       root.style.setProperty('--app-wallpaper-veil', `${veil}%`);
     }
     return () => {
@@ -100,7 +104,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       for (const name of ['--app-wallpaper-image', '--app-wallpaper-veil'])
         root.style.removeProperty(name);
     };
-  }, [settings, isDark]);
+  }, [settings, visibility]);
   const settingsRef = useRef(settings);
   const confirmedRef = useRef(settings);
   const pendingRef = useRef<Array<{ id: number; patch: Partial<WallpaperSettings> }>>([]);
@@ -178,8 +182,8 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
   }, []);
 
   const setWallpaper = useCallback((wallpaperId: WallpaperId) => patch({ wallpaperId }), [patch]);
-  const setOverlay = useCallback(
-    (value: number) => patch({ wallpaperOverlay: clampAppearanceWallpaperOverlay(value) }),
+  const setVisibility = useCallback(
+    (value: number) => patch({ wallpaperVisibility: clampAppearanceWallpaperVisibility(value) }),
     [patch],
   );
   const setMotion = useCallback(
@@ -191,6 +195,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       patch({
         wallpaperId: DEFAULT_APPEARANCE_SETTINGS.wallpaperId,
         wallpaperOverlay: DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
+        wallpaperVisibility: null,
         wallpaperMotion: DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion,
       }),
     [patch],
@@ -199,18 +204,19 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
   const value = useMemo<WallpaperSettingsContextValue>(
     () => ({
       ...settings,
+      visibility,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
       setWallpaper,
-      setOverlay,
+      setVisibility,
       setMotion,
       resetWallpaper,
     }),
-    [resetWallpaper, setMotion, setOverlay, setWallpaper, settings, failedUrl],
+    [resetWallpaper, setMotion, setVisibility, setWallpaper, settings, failedUrl, visibility],
   );
 
   return (
     <WallpaperSettingsContext.Provider value={value}>
-      {settings.wallpaperOverlay < 1 && (
+      {visibility > 0 && (
         <WallpaperVideo
           wallpaperId={settings.wallpaperId}
           motion={settings.wallpaperMotion}

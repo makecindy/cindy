@@ -35,6 +35,24 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(h.dir, { recursive: true, force: true }));
 
 describe('profile-wide wallpaper preference', () => {
+  it('keeps old preferences untouched, persists zero visibility, and removes its override on reset', async () => {
+    const file = path.join(h.dir, 'appearance-settings.json');
+    const original = JSON.stringify({ wallpaperOverlay: 0.35, uiSize: 18 });
+    fs.writeFileSync(file, original);
+    expect(readAppearanceSettings()).toMatchObject({ wallpaperOverlay: 0.35, uiSize: 18 });
+    expect(readAppearanceSettings()).not.toHaveProperty('wallpaperVisibility');
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
+    await writeAppearanceSettingsPatch({ wallpaperVisibility: 0 });
+    expect(readAppearanceSettings().wallpaperVisibility).toBe(0);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).wallpaperVisibility).toBe(0);
+    await writeAppearanceSettingsPatch({ wallpaperVisibility: 1 });
+    expect(readAppearanceSettings().wallpaperVisibility).toBe(1);
+    await writeAppearanceSettingsPatch({ wallpaperVisibility: null, wallpaperOverlay: 0.2 });
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(saved).not.toHaveProperty('wallpaperVisibility');
+    expect(saved).not.toHaveProperty('wallpaperOverlay');
+    expect(saved.uiSize).toBe(18);
+  });
   it('shares selection, replacement and reset across accounts, including sign-out', async () => {
     await customWallpaperStore.writePatchAtomic({ url: urlA });
     await writeAppearanceSettingsPatch({ wallpaperId: 'custom' });

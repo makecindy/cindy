@@ -914,8 +914,8 @@
           "cindy-dream": "Cindy · 夢境漫遊",
           "custom": "自訂桌布"
         },
-        "overlayLabel": "遮罩",
-        "overlayAria": "桌布遮罩強度",
+        "visibilityLabel": "桌布可見度",
+        "visibilityHint": "0% 隱藏桌布，100% 完全顯示桌布。",
         "motionLabel": "展示方式",
         "motionHint": "預設靜態；動態在視窗隱藏時暫停，並遵循系統減少動態效果設定。",
         "motionStatic": "靜態",

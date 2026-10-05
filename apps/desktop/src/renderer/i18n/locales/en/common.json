@@ -914,8 +914,8 @@
           "cindy-dream": "Cindy · Dream Voyage",
           "custom": "Custom wallpaper"
         },
-        "overlayLabel": "Overlay",
-        "overlayAria": "Wallpaper overlay strength",
+        "visibilityLabel": "Wallpaper Visibility",
+        "visibilityHint": "0% hides the wallpaper; 100% shows it without an overlay.",
         "motionLabel": "Display",
         "motionHint": "Still by default. Motion pauses when hidden and follows your reduced-motion preference.",
         "motionStatic": "Static",

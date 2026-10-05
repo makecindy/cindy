@@ -914,8 +914,8 @@
           "cindy-dream": "Cindy · 梦境漫游",
           "custom": "自定义壁纸"
         },
-        "overlayLabel": "遮罩",
-        "overlayAria": "壁纸遮罩强度",
+        "visibilityLabel": "壁纸可见度",
+        "visibilityHint": "0% 隐藏壁纸，100% 完全显示壁纸。",
         "motionLabel": "展示方式",
         "motionHint": "默认静态；动态在窗口隐藏时暂停，并遵循系统减少动效设置。",
         "motionStatic": "静态",

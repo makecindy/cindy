@@ -65,17 +65,36 @@ const persisted = {
 };
 
 describe('appearance settings IPC authorization', () => {
+  it('validates literal visibility and accepts null only to reset its override', () => {
+    for (const wallpaperVisibility of [0, 0.37, 1, null]) {
+      expect(__testing.parsePatch({ wallpaperVisibility })).toEqual({ wallpaperVisibility });
+    }
+    expect(__testing.parsePatch({ wallpaperVisibility: 2 })).toEqual({ wallpaperVisibility: 1 });
+    expect(__testing.parsePatch({ wallpaperVisibility: -1 })).toEqual({ wallpaperVisibility: 0 });
+    for (const wallpaperVisibility of ['0.5', true, NaN, Infinity, {}]) {
+      expect(() => __testing.parsePatch({ wallpaperVisibility })).toThrow('INVALID_PARAMS');
+    }
+  });
   it('authorizes the CDN request and keeps it valid across account switches', async () => {
-    const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === 'appearance-settings:ensure-wallpaper-video')?.[1];
+    const handler = mocks.ipcHandle.mock.calls.find(
+      ([name]) => name === 'appearance-settings:ensure-wallpaper-video',
+    )?.[1];
     mocks.ensureVideo.mockResolvedValueOnce(null);
     expect(await handler({}, 'cindy-window')).toBeNull();
     expect(mocks.assertTrustedAppRendererEvent).toHaveBeenCalled();
-    mocks.ensureVideo.mockImplementationOnce(async () => { mocks.owner = 'owner-b:2'; return 'client-video-url'; });
+    mocks.ensureVideo.mockImplementationOnce(async () => {
+      mocks.owner = 'owner-b:2';
+      return 'client-video-url';
+    });
     expect(await handler({}, 'cindy-window')).toBe('client-video-url');
   });
   it('rejects an untrusted CDN request before starting a download', async () => {
-    mocks.assertTrustedAppRendererEvent.mockImplementation(() => { throw new Error('untrusted'); });
-    const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === 'appearance-settings:ensure-wallpaper-video')?.[1];
+    mocks.assertTrustedAppRendererEvent.mockImplementation(() => {
+      throw new Error('untrusted');
+    });
+    const handler = mocks.ipcHandle.mock.calls.find(
+      ([name]) => name === 'appearance-settings:ensure-wallpaper-video',
+    )?.[1];
     await expect(handler({}, 'cindy-window')).rejects.toThrow('untrusted');
     expect(mocks.ensureVideo).not.toHaveBeenCalled();
   });
@@ -86,7 +105,9 @@ describe('appearance settings IPC authorization', () => {
       const pending = handler({ sender: {} });
       mocks.owner = 'owner-b:2';
       await expect(pending).resolves.not.toBeUndefined();
-      expect(channel.endsWith('import-wallpaper') ? mocks.importWallpaper : mocks.removeWallpaper).toHaveBeenCalledOnce();
+      expect(
+        channel.endsWith('import-wallpaper') ? mocks.importWallpaper : mocks.removeWallpaper,
+      ).toHaveBeenCalledOnce();
     },
   );
   it.each(['appearance-settings:import-wallpaper', 'appearance-settings:remove-wallpaper'])(
@@ -96,13 +117,17 @@ describe('appearance settings IPC authorization', () => {
       const pending = handler({ sender: {} });
       mocks.boundaryPending = true;
       await expect(pending).resolves.not.toBeUndefined();
-      expect(channel.endsWith('import-wallpaper') ? mocks.importWallpaper : mocks.removeWallpaper).toHaveBeenCalledOnce();
+      expect(
+        channel.endsWith('import-wallpaper') ? mocks.importWallpaper : mocks.removeWallpaper,
+      ).toHaveBeenCalledOnce();
     },
   );
   it('does not let a renderer inject a path or media URL through the generic preference channel', () => {
     expect(__testing.parsePatch({ wallpaperId: 'custom' })).toEqual({ wallpaperId: 'custom' });
     expect(() =>
-      __testing.parsePatch({ customWallpaperUrl: `cindy-media://client-wallpaper/${'a'.repeat(64)}.webp` }),
+      __testing.parsePatch({
+        customWallpaperUrl: `cindy-media://client-wallpaper/${'a'.repeat(64)}.webp`,
+      }),
     ).toThrow('unknown appearance field');
     expect(() => __testing.parsePatch({ wallpaperPath: '/private.png' })).toThrow(
       'unknown appearance field',
@@ -195,12 +220,20 @@ describe('appearance settings IPC authorization', () => {
       wallpaperId: 'custom',
       customWallpaperUrl: `cindy-media://client-wallpaper/${'a'.repeat(64)}.webp`,
     });
-    const utility = { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: vi.fn() } };
-    const content = { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: vi.fn(), setZoomFactor: vi.fn() } };
+    const utility = {
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, send: vi.fn() },
+    };
+    const content = {
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, send: vi.fn(), setZoomFactor: vi.fn() },
+    };
     markAppContentWindow(content as never);
     mocks.trustedRead.mockReturnValue(true);
     mocks.readAppearanceSettings.mockReturnValue(settings);
-    const sync = mocks.ipcOn.mock.calls.find(([name]) => name === 'appearance-settings:get-sync')![1];
+    const sync = mocks.ipcOn.mock.calls.find(
+      ([name]) => name === 'appearance-settings:get-sync',
+    )![1];
     const event = { sender: {}, returnValue: undefined as unknown };
     mocks.fromWebContents.mockReturnValue(utility);
     sync(event);
@@ -213,7 +246,9 @@ describe('appearance settings IPC authorization', () => {
     mocks.allWindows.push(utility, content);
     mocks.trustedReadWindow.mockReturnValue(true);
     mocks.writeAppearanceSettingsPatch.mockResolvedValue(settings);
-    const set = mocks.ipcHandle.mock.calls.find(([name]) => name === 'appearance-settings:set-patch')![1];
+    const set = mocks.ipcHandle.mock.calls.find(
+      ([name]) => name === 'appearance-settings:set-patch',
+    )![1];
     await set({}, { uiSize: 15 });
     expect(utility.webContents.send.mock.calls[0][1]).not.toHaveProperty('customWallpaperUrl');
     expect(content.webContents.send).toHaveBeenCalledWith('appearance-settings:changed', settings);

@@ -914,8 +914,8 @@
           "cindy-dream": "Cindy · 夢の旅",
           "custom": "カスタム壁紙"
         },
-        "overlayLabel": "オーバーレイ",
-        "overlayAria": "壁紙オーバーレイの強さ",
+        "visibilityLabel": "壁紙の表示濃度",
+        "visibilityHint": "0% で壁紙を非表示にし、100% でそのまま表示します。",
         "motionLabel": "表示方法",
         "motionHint": "初期設定は静止画です。非表示時は停止し、システムの視差効果を減らす設定に従います。",
         "motionStatic": "静止画",

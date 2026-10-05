@@ -12,6 +12,9 @@ function Controls() {
       <button onClick={() => settings.setWallpaper('cindy-window')}>Choose</button>
       <button onClick={settings.resetWallpaper}>Reset</button>
       <button onClick={() => settings.setMotion('dynamic')}>Animate</button>
+      <button onClick={() => settings.setVisibility(1)}>Show Fully</button>
+      <button onClick={() => settings.setVisibility(0)}>Hide</button>
+      <span data-testid="visibility">{settings.visibility}</span>
       <span data-testid="motion">{settings.wallpaperMotion}</span>
     </>
   );
@@ -31,8 +34,29 @@ afterEach(() => {
 });
 
 describe('application wallpaper lifecycle', () => {
+  it('updates literal visibility and restores the previous value when saving fails', async () => {
+    const setPatch = vi.fn().mockRejectedValue(new Error('save failed'));
+    vi.stubGlobal('electronAPI', {
+      appearanceSettings: {
+        getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'cindy-window' }),
+        onChanged: () => () => {},
+        setPatch,
+      },
+    });
+    render(
+      <WallpaperSettingsProvider>
+        <Controls />
+      </WallpaperSettingsProvider>,
+    );
+    expect(screen.getByTestId('visibility').textContent).toBe('0.37');
+    fireEvent.click(screen.getByText('Show Fully'));
+    expect(document.documentElement.style.getPropertyValue('--app-wallpaper-veil')).toBe('0%');
+    await waitFor(() => expect(setPatch).toHaveBeenCalledWith({ wallpaperVisibility: 1 }));
+    await waitFor(() => expect(screen.getByTestId('visibility').textContent).toBe('0.37'));
+    expect(document.documentElement.style.getPropertyValue('--app-wallpaper-veil')).toBe('63%');
+  });
   it.each([false, true])(
-    'fully covers custom video at 100% without keeping a decoder (dark=%s)',
+    'hides custom video at zero visibility and fully reveals it at 100% (dark=%s)',
     (dark) => {
       document.documentElement.classList.toggle('dark', dark);
       let changed: (value: typeof DEFAULT_APPEARANCE_SETTINGS) => void = () => {};
@@ -59,12 +83,13 @@ describe('application wallpaper lifecycle', () => {
       const video = document.querySelector('video')!;
       expect(video).not.toBeNull();
       expect(document.documentElement.style.getPropertyValue('--app-wallpaper-image')).toBe('none');
-      act(() => changed({ ...settings, wallpaperOverlay: 1 }));
+      act(() => changed({ ...settings, wallpaperVisibility: 0 }));
       expect(document.documentElement.style.getPropertyValue('--app-wallpaper-veil')).toBe('100%');
       expect(document.querySelector('video')).toBeNull();
       expect(video.getAttribute('src')).toBeNull();
-      act(() => changed(settings));
+      act(() => changed({ ...settings, wallpaperVisibility: 1 }));
       expect(document.querySelector('video')).not.toBeNull();
+      expect(document.documentElement.style.getPropertyValue('--app-wallpaper-veil')).toBe('0%');
     },
   );
   it('loads client artwork without subscribing to account changes', async () => {
@@ -250,7 +275,11 @@ describe('application wallpaper lifecycle', () => {
     expect(screen.getByTestId('motion').textContent).toBe('static');
     await waitFor(() =>
       expect(setPatch).toHaveBeenLastCalledWith(
-        expect.objectContaining({ wallpaperMotion: 'static', wallpaperId: 'none' }),
+        expect.objectContaining({
+          wallpaperMotion: 'static',
+          wallpaperId: 'none',
+          wallpaperVisibility: null,
+        }),
       ),
     );
   });

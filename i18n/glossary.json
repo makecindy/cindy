@@ -9,6 +9,18 @@
     {"id": "group-admin", "status": "proposed", "en": "Group Admin", "translations": {"zh-CN": "群管理员", "zh-TW": "群管理員", "ja": "グループ管理者", "ko": "그룹 관리자"}, "checkCase": false, "note": "可管理群资料和成员，但不能替伙伴主人授权工具或私人资料。群设置内可简称管理员 / Admin。"},
     {"id": "group-nickname", "status": "proposed", "en": "Group Nickname", "translations": {"zh-CN": "群昵称", "zh-TW": "群暱稱", "ja": "グループ内の名前", "ko": "그룹에서의 이름"}, "checkCase": false, "note": "仅在单个群中显示的名字。为空时使用账号显示名；不覆盖个人资料名字或稳定身份。"},
     {
+      "id": "wallpaper-visibility",
+      "status": "proposed",
+      "en": "Wallpaper Visibility",
+      "translations": {
+        "zh-CN": "壁纸可见度",
+        "zh-TW": "桌布可見度",
+        "ja": "壁紙の表示濃度",
+        "ko": "배경화면 표시 강도"
+      },
+      "note": "壁纸背景层的实际可见程度，0% 隐藏，100% 原样显示；不改变文字或控件的不透明度。"
+    },
+    {
       "id": "wallpaper",
       "status": "proposed",
       "en": "Wallpaper",

@@ -914,8 +914,8 @@
           "cindy-dream": "Cindy · 꿈속 여행",
           "custom": "사용자 지정 배경화면"
         },
-        "overlayLabel": "오버레이",
-        "overlayAria": "배경화면 오버레이 강도",
+        "visibilityLabel": "배경화면 표시 강도",
+        "visibilityHint": "0%에서는 배경화면을 숨기고, 100%에서는 원본 그대로 표시합니다.",
         "motionLabel": "표시 방식",
         "motionHint": "기본값은 정적입니다. 창이 숨겨지면 일시 정지하며 시스템의 동작 줄이기 설정을 따릅니다.",
         "motionStatic": "정적",

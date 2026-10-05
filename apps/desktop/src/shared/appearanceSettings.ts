@@ -15,6 +15,8 @@ export interface AppearanceOverrides {
   windowZoom?: number;
   wallpaperId?: WallpaperId;
   wallpaperOverlay?: number;
+  /** null removes the explicit visibility override. */
+  wallpaperVisibility?: number | null;
   wallpaperMotion?: WallpaperMotion;
 }
 
@@ -28,6 +30,8 @@ export interface AppearanceSettings {
   windowZoom: number;
   wallpaperId: WallpaperId;
   wallpaperOverlay: number;
+  /** Absent for legacy/default preferences; derive visibility from the theme's old veil. */
+  wallpaperVisibility?: number | null;
   wallpaperMotion: WallpaperMotion;
   /** Read-only, host-owned media reference; never accepted by set-patch. */
   customWallpaperUrl?: string;
@@ -50,6 +54,7 @@ export const APPEARANCE_LIMITS = {
   codeSize: { min: 10, max: 24 },
   windowZoom: { min: 0.5, max: 3, step: 0.1 },
   wallpaperOverlay: { min: 0, max: 1, step: 0.05 },
+  wallpaperVisibility: { min: 0, max: 1, step: 0.01 },
 } as const;
 
 export const WALLPAPER_IDS = [
@@ -79,6 +84,21 @@ export function getWallpaperVeil(overlay: number, isDark: boolean): number {
   if (strength <= 0.6) return base + strength * 40;
   const previousMax = base + 24;
   return previousMax + ((strength - 0.6) / 0.4) * (100 - previousMax);
+}
+
+export function clampAppearanceWallpaperVisibility(value: number): number {
+  return Number.isFinite(value) ? roundDecimal(Math.min(1, Math.max(0, value)), 2) : 0;
+}
+
+/** Old settings retain their exact Light/Dark appearance until explicitly adjusted. */
+export function getWallpaperVisibility(
+  settings: Pick<AppearanceSettings, 'wallpaperOverlay' | 'wallpaperVisibility'>,
+  isDark: boolean,
+): number {
+  return typeof settings.wallpaperVisibility === 'number' &&
+    Number.isFinite(settings.wallpaperVisibility)
+    ? clampAppearanceWallpaperVisibility(settings.wallpaperVisibility)
+    : (100 - getWallpaperVeil(settings.wallpaperOverlay, isDark)) / 100;
 }
 
 export function clampAppearanceWallpaperOverlay(
@@ -156,6 +176,9 @@ export function normalizeAppearanceSettings(raw: unknown): AppearanceSettings {
         ? clampAppearanceWallpaperOverlay(value.wallpaperOverlay)
         : DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
     wallpaperMotion: value.wallpaperMotion === 'dynamic' ? 'dynamic' : 'static',
+    ...(typeof value.wallpaperVisibility === 'number' && Number.isFinite(value.wallpaperVisibility)
+      ? { wallpaperVisibility: clampAppearanceWallpaperVisibility(value.wallpaperVisibility) }
+      : {}),
     customWallpaperUrl: normalizeCustomWallpaperUrl(value.customWallpaperUrl),
   };
 }

@@ -98,10 +98,14 @@ Static / Dynamic choice: Static and reduced motion show a paused frame; Dynamic 
 and pauses when hidden/minimized. Playback failure releases the decoder, leaves the theme surface
 visible and shows an actionable error in wallpaper settings. The custom video tile uses a film icon
 instead of opening a second decoder for a thumbnail.
-Overlay strength ranges from 0% to 100% (2026-10-05). Preserve the existing Light/Dark veil
-mapping through 60%; interpolate the remainder to fully opaque at 100%. At 100%, release the
-wallpaper video because the artwork is completely covered. The percentage is a strength setting,
-not literal image opacity; the default stays 20% and saved overrides are preserved.
+Wallpaper Visibility ranges from 0% (hidden) to 100% (fully visible), in 1% steps
+(user decision, 2026-10-05). Use the existing theme-surface veil with opacity equal to
+100% minus visibility; never reduce text or control opacity. Release video playback at 0%.
+Existing preferences without an explicit visibility override keep the previous Light/Dark veil
+mapping and display its equivalent visibility. The unchanged soft default is 37% visible in
+Light and 27% in Dark. Adjusting the slider saves literal visibility, shared across themes;
+Reset removes that override and restores the theme-dependent default. Do not rewrite old
+preferences just because they were read or a theme changed.
 Remove the previous arrow, standalone portrait, gradient and paper
 options and assets. Retired saved selections normalize to None; unrelated theme
 and font preferences remain unchanged. All three scenes use the same cover fit,
