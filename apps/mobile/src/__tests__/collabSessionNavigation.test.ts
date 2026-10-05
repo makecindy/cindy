@@ -7,6 +7,7 @@ import {
   findStackedSessionRoute,
   navigateToCollabSession,
   planCollabSessionNavigation,
+  type CollabSessionNavigator,
   type CollabSessionRouteLike,
   type CollabSessionStateLike,
   type CollabSessionTarget,
@@ -160,8 +161,14 @@ describe("collaboration navigation against the real StackRouter", () => {
   });
   const sessionIds = (state: TestState) =>
     state.routes.map((item) => String((item.params ?? {}).sessionId));
+  const toParams = (target: CollabSessionTarget) => ({
+    sessionId: target.sessionId,
+    deviceId: target.deviceId,
+    deviceName: target.deviceName,
+  });
 
-  const drive = (popToStackedTargets: boolean) => {
+  /** 真 router + 真 action:供 navigator 的 push / dismissTo 落地。 */
+  const createDriver = () => {
     const router = StackRouter({});
     let state = startState();
     const apply = (action: unknown) => {
@@ -172,46 +179,77 @@ describe("collaboration navigation against the real StackRouter", () => {
       );
       if (next) state = next as TestState;
     };
-    const open = (target: CollabSessionTarget) => {
-      const params = {
-        sessionId: target.sessionId,
-        deviceId: target.deviceId,
-        deviceName: target.deviceName,
-      };
-      const stacked = state.routes.some(
-        (item) =>
-          item.name === SESSION_ROUTE_NAME &&
-          getId({ params: item.params }) === getId({ params }),
-      );
-      if (stacked && popToStackedTargets) {
+    return {
+      get state() {
+        return state;
+      },
+      apply,
+      push: (target: CollabSessionTarget) =>
+        apply({
+          type: "PUSH",
+          payload: { name: SESSION_ROUTE_NAME, params: toParams(target) },
+        }),
+      dismissTo: (target: CollabSessionTarget) =>
         apply({
           type: "POP_TO",
-          payload: { name: SESSION_ROUTE_NAME, params },
-        });
-        return;
-      }
-      apply({ type: "PUSH", payload: { name: SESSION_ROUTE_NAME, params } });
+          payload: { name: SESSION_ROUTE_NAME, params: toParams(target) },
+        }),
     };
+  };
 
+  /**
+   * 生产路径:每次跳转都由 navigateToCollabSession 自己读栈决定动作，测试不复刻
+   * 判断逻辑 —— 否则决策口改成 push 也不会让这里变红。`currentSessionId` 跟着前进，
+   * 与真实会话页传入的是同一个值。
+   */
+  const driveThroughDecision = () => {
+    const driver = createDriver();
+    const navigator: CollabSessionNavigator = {
+      getState: () => driver.state as unknown as CollabSessionStateLike,
+      push: driver.push,
+      dismissTo: driver.dismissTo,
+    };
+    const open = (target: CollabSessionTarget, currentSessionId: string) =>
+      navigateToCollabSession(navigator, target, currentSessionId);
+
+    open(deviceList, "__devices__");
+    open(lead, deviceList.sessionId);
+    open(worker, lead.sessionId);
+    open(lead, worker.sessionId);
+    open(worker, lead.sessionId);
+    open(lead, worker.sessionId);
+    const beforeBack = [...sessionIds(driver.state)];
+    driver.apply({ type: "GO_BACK" });
+    return { beforeBack, afterBack: sessionIds(driver.state) };
+  };
+
+  /**
+   * 回归对照:故意绕过决策口，把每次跳转都做成旧的裸 PUSH，用来证明上面的断言确实
+   * 能捕捉这个缺陷(若哪天 push 行为不再改写历史，这条会一起变绿，说明对照组该重写)。
+   * 它不是生产路径。
+   */
+  const driveWithLegacyPush = () => {
+    const driver = createDriver();
+    const open = (target: CollabSessionTarget) => driver.push(target);
     open(lead);
     open(worker);
     open(lead);
     open(worker);
     open(lead);
-    const beforeBack = [...sessionIds(state)];
-    apply({ type: "GO_BACK" });
-    return { beforeBack, afterBack: sessionIds(state) };
+    const beforeBack = [...sessionIds(driver.state)];
+    driver.apply({ type: "GO_BACK" });
+    return { beforeBack, afterBack: sessionIds(driver.state) };
   };
 
   it("reproduces the reordered history when a stacked session is pushed again", () => {
-    const legacy = drive(false);
+    const legacy = driveWithLegacyPush();
     // 「返回 Lead」把 Lead 提到顶、Worker 掉到它下面 —— 用户看到的「右滑又进了 Worker」。
     expect(legacy.beforeBack).toEqual(["device-list", "worker-1", "lead-1"]);
     expect(legacy.afterBack).toEqual(["device-list", "worker-1"]);
   });
 
   it("keeps the history truthful when a stacked session is popped back to", () => {
-    const fixed = drive(true);
+    const fixed = driveThroughDecision();
     expect(fixed.beforeBack).toEqual(["device-list", "lead-1"]);
     expect(fixed.afterBack).toEqual(["device-list"]);
   });
