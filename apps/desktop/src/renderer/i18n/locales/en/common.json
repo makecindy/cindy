@@ -1894,6 +1894,13 @@
       }
     },
     "providers": {
+      "codexResetAutoUse": {
+        "label": "Use Resets Automatically",
+        "description": "When the weekly quota runs out and stops a task, use one reset and continue the task, at most once a week. A reset about to expire is used 30 minutes before it does, so it isn’t wasted. A used reset can’t be restored.",
+        "enabledToast": "Automatic resets turned on",
+        "disabledToast": "Automatic resets turned off",
+        "saveFailed": "Couldn’t save the setting — try again"
+      },
       "llamacpp": {
         "ownedElsewhere": "The model service is running in another Cindy instance. Download models or change context there, or stop its service first.",
         "primaryPick": "Primary pick · try this first",
@@ -10249,6 +10256,9 @@
         "label": "Reconnected",
         "labelFailed": "Reconnect failed",
         "labelNeutral": "Reconnect",
+        "resetCreditLabel": "Used a reset and continued",
+        "resetCreditLabelFailed": "Couldn’t use a reset",
+        "resetCreditLabelNeutral": "Used a reset",
         "detail": {
           "reason": "Interruption reason",
           "attempt": "Attempt {{attempt}}/{{total}}",
@@ -10260,7 +10270,8 @@
       },
       "autoResumePending": {
         "label": "Reconnecting",
-        "labelWithProgress": "Reconnecting {{attempt}}/{{total}}"
+        "labelWithProgress": "Reconnecting {{attempt}}/{{total}}",
+        "resetCredit": "Using a reset to restore quota…"
       },
       "agentSwitch": {
         "label": "Switched from {{from}} to {{to}}",

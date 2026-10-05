@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { findActiveReconnect } from '@/lib/autoResumePresentation';
+import { CODEX_RESET_CREDIT_RESUME_REASON } from '@cindy/maker-shared/synthetic-trigger';
+import {
+  autoResumePendingLabel,
+  findActiveReconnect,
+  readAutoResumeInfo,
+} from '@/lib/autoResumePresentation';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
 const row = (overrides: Partial<ChatMessage> = {}): ChatMessage => ({
@@ -98,5 +103,32 @@ describe('composer reconnect presentation', () => {
     expect(active).not.toBeNull();
     expect(active?.attempt).toBeUndefined();
     expect(active?.maxAttempts).toBeUndefined();
+  });
+});
+
+describe('reset-credit continuation presentation', () => {
+  it('labels a continuation after a Codex reset instead of a reconnect', () => {
+    const info = readAutoResumeInfo({
+      reason: CODEX_RESET_CREDIT_RESUME_REASON,
+      error: 'You have hit your usage limit.',
+      attempt: 1,
+      maxAttempts: 5,
+    });
+    expect(info.resetCredit).toBe(true);
+    expect(autoResumePendingLabel(info)).toEqual({
+      key: 'chat.systemCard.autoResumePending.resetCredit',
+    });
+  });
+
+  it('keeps reconnect labels for every other reason', () => {
+    const info = readAutoResumeInfo({ reason: 'empty-response', attempt: 2, maxAttempts: 5 });
+    expect(info.resetCredit).toBeUndefined();
+    expect(autoResumePendingLabel(info)).toEqual({
+      key: 'chat.systemCard.autoResumePending.labelWithProgress',
+      params: { attempt: 2, total: 5 },
+    });
+    expect(autoResumePendingLabel(readAutoResumeInfo({}))).toEqual({
+      key: 'chat.systemCard.autoResumePending.label',
+    });
   });
 });

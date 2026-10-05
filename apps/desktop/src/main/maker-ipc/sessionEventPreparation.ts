@@ -468,6 +468,7 @@ export function prepareSessionEvent(
                 sdkError?: unknown;
                 errorStatus?: unknown;
                 toolLoop?: unknown;
+                codexErrorInfo?: unknown;
               }
             | undefined)
         : undefined;
@@ -511,6 +512,10 @@ export function prepareSessionEvent(
           ...(typeof errData?.reason === 'string' ? { reason: errData.reason } : {}),
           ...(typeof errData?.errorStatus === 'number' ? { errorStatus: errData.errorStatus } : {}),
           ...(toolLoop ? { toolLoop } : {}),
+          // 只透传已知的账号配额耗尽 tag，不让任意 provider 字符串进入 coordinator 状态。
+          ...(errData?.codexErrorInfo === 'usageLimitExceeded'
+            ? { codexErrorInfo: 'usageLimitExceeded' as const }
+            : {}),
         },
         {
           sessionTurnGeneration: event.sessionTurnGeneration,

@@ -226,6 +226,10 @@
       "neutral": "Reconnect",
       "pending": "Reconnecting…",
       "pendingWithProgress": "Reconnecting {{attempt}}/{{total}}…",
+      "resetCreditPending": "Using a reset to restore quota…",
+      "resetCreditSucceeded": "Used a reset and continued",
+      "resetCreditFailed": "Couldn’t use a reset",
+      "resetCreditNeutral": "Used a reset",
       "details": "Attempt {{attempt}}/{{total}} · {{count}} reconnects in this session",
       "detail": {
         "reason": "Interruption reason",

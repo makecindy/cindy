@@ -1894,6 +1894,13 @@
       }
     },
     "providers": {
+      "codexResetAutoUse": {
+        "label": "自動使用重置",
+        "description": "週配額用完導致任務中斷時，自動用一次重置並繼續任務，每週最多一次；重置快過期時，在過期前 30 分鐘自動用掉，避免浪費。重置用掉後無法撤回。",
+        "enabledToast": "已開啟自動使用重置",
+        "disabledToast": "已關閉自動使用重置",
+        "saveFailed": "設定未儲存，請重試"
+      },
       "llamacpp": {
         "ownedElsewhere": "模型服務正在另一個 Cindy 執行個體中執行。請在那裡下載模型或修改上下文，或先停止該執行個體的服務。",
         "primaryPick": "主推 · 先試這個",
@@ -10226,6 +10233,9 @@
         "label": "已重新連線",
         "labelFailed": "重新連線未成功",
         "labelNeutral": "重新連線",
+        "resetCreditLabel": "已用一次重置，任務已繼續",
+        "resetCreditLabelFailed": "未能使用重置",
+        "resetCreditLabelNeutral": "使用重置",
         "detail": {
           "reason": "中斷原因",
           "attempt": "本次重試 {{attempt}}/{{total}}",
@@ -10237,7 +10247,8 @@
       },
       "autoResumePending": {
         "label": "重新連線中",
-        "labelWithProgress": "重新連線中 {{attempt}}/{{total}}"
+        "labelWithProgress": "重新連線中 {{attempt}}/{{total}}",
+        "resetCredit": "正在用一次重置恢復配額…"
       },
       "agentSwitch": {
         "label": "已從 {{from}} 切換到 {{to}}",

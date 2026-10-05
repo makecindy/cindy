@@ -5143,18 +5143,26 @@ function MobileAutoResumeActionRow({
     );
   }
 
-  const label = state === 'live'
-    ? hasProgress
-      ? t('message.systemCard.autoResume.pendingWithProgress', {
-          attempt: info.attempt,
-          total: info.maxAttempts,
-        })
-      : t('message.systemCard.autoResume.pending')
-    : state === 'succeeded'
-      ? t('message.systemCard.autoResume.succeeded')
-      : state === 'failed'
-        ? t('message.systemCard.autoResume.failed')
-        : t('message.systemCard.autoResume.neutral');
+  const label = info.resetCredit
+    ? state === 'live'
+      ? t('message.systemCard.autoResume.resetCreditPending')
+      : state === 'succeeded'
+        ? t('message.systemCard.autoResume.resetCreditSucceeded')
+        : state === 'failed'
+          ? t('message.systemCard.autoResume.resetCreditFailed')
+          : t('message.systemCard.autoResume.resetCreditNeutral')
+    : state === 'live'
+      ? hasProgress
+        ? t('message.systemCard.autoResume.pendingWithProgress', {
+            attempt: info.attempt,
+            total: info.maxAttempts,
+          })
+        : t('message.systemCard.autoResume.pending')
+      : state === 'succeeded'
+        ? t('message.systemCard.autoResume.succeeded')
+        : state === 'failed'
+          ? t('message.systemCard.autoResume.failed')
+          : t('message.systemCard.autoResume.neutral');
   const accessibilityLabel = summary ? `${label}: ${summary}` : label;
 
   return (

@@ -13,6 +13,7 @@ import {
 import { i18n } from '@/i18n';
 import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
+import { CODEX_RESET_CREDIT_RESUME_REASON } from '@cindy/maker-shared/synthetic-trigger';
 
 /**
  * 手机端系统卡类型 = 共享 slash 命令卡 + goal 持久记录卡 + silent-stop 自动续跑卡。
@@ -178,6 +179,16 @@ function formatAutoResumeCard(data: Record<string, unknown> | undefined): System
   const maxAttempts = number(data?.maxAttempts);
   const sessionTotal = number(data?.sessionTotal);
   const outcome = data?.outcome === 'succeeded' || data?.outcome === 'failed' ? data.outcome : undefined;
+  if (data?.reason === CODEX_RESET_CREDIT_RESUME_REASON) {
+    const title = data?.live === true
+      ? i18n.t('message.systemCard.autoResume.resetCreditPending')
+      : outcome === 'succeeded'
+        ? i18n.t('message.systemCard.autoResume.resetCreditSucceeded')
+        : outcome === 'failed'
+          ? i18n.t('message.systemCard.autoResume.resetCreditFailed')
+          : i18n.t('message.systemCard.autoResume.resetCreditNeutral');
+    return { title, ...(error ? { body: error } : {}), rows: [] };
+  }
   const hasInterruptionContext = !!(data?.live === true || error || attempt || maxAttempts || sessionTotal || outcome);
   if (!hasInterruptionContext) return { title: i18n.t('message.systemCard.autoResume.separator'), rows: [] };
   const title = data?.live === true

@@ -11,6 +11,7 @@ import type {
   MobileCodexRateLimitsResult,
 } from '@cindy/maker-shared/device-link-contract';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
+import type { CodexResetCreditAutoUseState } from '../../shared/codexResetCreditAutoUse.js';
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
 import type { ClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
 import type { ModelPricingMap } from '../usage/modelPricing.js';
@@ -75,6 +76,13 @@ export interface MakerUsageHandlerDeps {
   readCodexAccountUsageSnapshot(providerId?: string): Promise<RateLimitSnapshot | null>;
   readCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
   consumeCodexRateLimitReset(idempotencyKey: string, providerId?: string): Promise<MobileCodexRateLimitResetResult>;
+  /** 抛错 = providerId 不是 OpenAI 订阅账号。 */
+  readCodexResetCreditAutoUse(providerId: string): CodexResetCreditAutoUseState;
+  /** enabled 为 null 时删除该账号的显式设置，恢复默认。 */
+  writeCodexResetCreditAutoUse(
+    providerId: string,
+    enabled: boolean | null,
+  ): Promise<CodexResetCreditAutoUseState>;
   readClaudeSubscriptionUsageSnapshot(providerId?: string): Promise<ClaudeSubscriptionUsageSnapshot | null>;
   readXaiSubscriptionUsageSnapshot(providerId?: string): Promise<XaiSubscriptionUsageSnapshot | null>;
   /**
@@ -140,6 +148,38 @@ export function registerMakerUsageHandlers(
           throwIpcError('PRECONDITION_FAILED', `${err.reason}: ${err.message}`);
         }
         throw err;
+      }
+    },
+  );
+
+  // 自动使用重置的开关只给本机设置页：用掉重置不可撤回，开关不经远程控制改动。
+  registry.handle(MAKER_INVOKE.USAGE_CODEX_RESET_AUTO_USE_GET, async (event, providerId: unknown) => {
+    deps.assertTrustedSender(event);
+    const id = requireString(providerId, 'providerId');
+    try {
+      return deps.readCodexResetCreditAutoUse(id);
+    } catch {
+      throwIpcError('INVALID_PARAMS', 'providerId must be an OpenAI subscription account');
+    }
+  });
+
+  registry.handle(
+    MAKER_INVOKE.USAGE_CODEX_RESET_AUTO_USE_SET,
+    async (event, providerId: unknown, enabled: unknown) => {
+      deps.assertTrustedSender(event);
+      const id = requireString(providerId, 'providerId');
+      if (typeof enabled !== 'boolean' && enabled !== null) {
+        throwIpcError('INVALID_PARAMS', 'enabled must be a boolean or null');
+      }
+      try {
+        deps.readCodexResetCreditAutoUse(id);
+      } catch {
+        throwIpcError('INVALID_PARAMS', 'providerId must be an OpenAI subscription account');
+      }
+      try {
+        return await deps.writeCodexResetCreditAutoUse(id, enabled);
+      } catch (err) {
+        throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
       }
     },
   );

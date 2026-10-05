@@ -226,6 +226,10 @@
       "neutral": "重新連線",
       "pending": "重新連線中…",
       "pendingWithProgress": "重新連線中 {{attempt}}/{{total}}…",
+      "resetCreditPending": "正在用一次重置恢復配額…",
+      "resetCreditSucceeded": "已用一次重置，任務已繼續",
+      "resetCreditFailed": "未能使用重置",
+      "resetCreditNeutral": "使用重置",
       "details": "本次重試 {{attempt}}/{{total}} · 本任務累計重連 {{count}} 次",
       "detail": {
         "reason": "中斷原因",

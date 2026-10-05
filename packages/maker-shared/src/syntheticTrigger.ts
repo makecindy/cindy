@@ -16,6 +16,12 @@ export const UI_ACTION_TRIGGER_PREFIX = '[UI_ACTION_TRIGGER]';
  */
 export const APP_EXIT_INTERRUPTED_REASON = 'app-exit-interrupted';
 
+/**
+ * 自动续跑记录（autoResumeInfo.reason）：续跑前先用掉了一次 Codex 重置（账号配额耗尽），
+ * 不是连接中断后的重连。桌面 coordinator 写入，两端据此换成「用了重置」的文案。
+ */
+export const CODEX_RESET_CREDIT_RESUME_REASON = 'codex_reset_credit_used';
+
 /** 已解析出的 user 文本是否是合成 UI 指令(所有面向用户的文本消费的统一判定)。 */
 export function isSyntheticTriggerText(text: string): boolean {
   return text.startsWith(UI_ACTION_TRIGGER_PREFIX);

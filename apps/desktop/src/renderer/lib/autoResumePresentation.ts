@@ -1,3 +1,4 @@
+import { CODEX_RESET_CREDIT_RESUME_REASON } from '../../shared/codexResetCreditAutoUse';
 import type { ChatMessage, ContinuationInFlightProjectionCapability } from './makerChatStore';
 
 export interface AutoResumeCardInfo {
@@ -6,6 +7,8 @@ export interface AutoResumeCardInfo {
   maxAttempts?: number;
   sessionTotal?: number;
   outcome?: 'succeeded' | 'failed';
+  /** 这次续跑前先用了一次 Codex 重置（配额耗尽），不是连接中断后的重连。 */
+  resetCredit?: true;
 }
 
 /** Silent-stop continuations have no interruption context and are not reconnects. */
@@ -30,7 +33,21 @@ export function readAutoResumeInfo(data?: Record<string, unknown>): AutoResumeCa
     ...(data?.outcome === 'succeeded' || data?.outcome === 'failed'
       ? { outcome: data.outcome }
       : {}),
+    ...(data?.reason === CODEX_RESET_CREDIT_RESUME_REASON ? { resetCredit: true as const } : {}),
   };
+}
+
+/** 进行中的续跑在状态栏与活动行上的文案 key。 */
+export function autoResumePendingLabel(
+  info: AutoResumeCardInfo,
+): { key: string; params?: Record<string, number> } {
+  if (info.resetCredit) return { key: 'chat.systemCard.autoResumePending.resetCredit' };
+  return info.attempt !== undefined && info.maxAttempts !== undefined
+    ? {
+        key: 'chat.systemCard.autoResumePending.labelWithProgress',
+        params: { attempt: info.attempt, total: info.maxAttempts },
+      }
+    : { key: 'chat.systemCard.autoResumePending.label' };
 }
 
 /** Synthetic continuation inputs own turns; steering messages do not replace that owner. */

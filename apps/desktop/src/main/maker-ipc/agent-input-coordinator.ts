@@ -407,6 +407,7 @@ export interface AgentInputCoordinatorDeps {
   isResumableTurnErrorCandidate?: (
     signals: InterruptedTurnErrorSignals,
     item?: AgentInputQueuedMessage | null,
+    sessionId?: string,
   ) => boolean;
   /**
    * 一条被 `isAutoResumeDeferred` 按住的 error 最终**没能走到决策**（用户气泡持久化失败等），
@@ -6099,6 +6100,7 @@ export class AgentInputCoordinator {
       return this.deps.isResumableTurnErrorCandidate(
         { ...(signals ?? {}), message },
         item,
+        sessionId,
       ) === true;
     } catch (err) {
       log.warn('isResumableTurnErrorCandidate failed', { sessionId, error: errorMessage(err) });

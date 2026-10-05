@@ -11691,7 +11691,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     h.coordinator.onTurnEvent(sid, 'error', info.error, { reason: info.reason });
     await flush();
     expect(h.isResumableTurnErrorCandidate).toHaveBeenCalledWith(
-      { message: info.error, reason: info.reason }, expect.objectContaining({ clientId: item.clientId }),
+      { message: info.error, reason: info.reason }, expect.objectContaining({ clientId: item.clientId }), sid,
     );
     expect(latestProjection(h.projections).error).toBeNull();
     expect(await h.coordinator.autoRetryLastError(sid, info.sessionTotal)).toBe('resumed');

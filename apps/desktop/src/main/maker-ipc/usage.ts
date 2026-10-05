@@ -75,6 +75,20 @@ import { readClaudeCliPlanUsage } from '../maker-host/claude-native-cli.js';
 import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { createCodexRateLimitResetService } from '../usage/codexRateLimitReset.js';
+import {
+  createCodexResetCreditAutoUse,
+  type CodexResetCreditAutoUse,
+  type WeeklyLimitResetResult,
+} from '../usage/codexResetCreditAutoUse.js';
+import {
+  isCodexResetCreditAutoUseEnabled,
+  listCodexResetCreditAutoUseProviderIds,
+  readCodexResetCreditAutoUseState,
+  readCodexWeeklyReset,
+  resetCodexResetCreditAutoUse,
+  writeCodexResetCreditAutoUse,
+  writeCodexWeeklyReset,
+} from '../usage/codexResetCreditAutoUseStore.js';
 
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
 import { registerMakerUsageHandlers } from './usageHandlers.js';
@@ -248,6 +262,23 @@ export function triggerCodexAccountUsageRefresh(providerId?: string): void {
   });
 }
 
+let codexResetCreditAutoUse: CodexResetCreditAutoUse | null = null;
+
+/**
+ * 任务因配额耗尽中断时，这个 OpenAI 订阅账号值不值得去试一次自动用重置（同步预判，
+ * 不读网络）。未注册或账号没开启时为 false。
+ */
+export function mayUseCodexResetCreditForUsageLimit(providerId: string): boolean {
+  return codexResetCreditAutoUse?.mayUseForUsageLimit(providerId) ?? false;
+}
+
+/** 周配额用完时自动用一次重置；规则见 usage/codexResetCreditAutoUse.ts。 */
+export function spendCodexResetCreditForWeeklyLimit(providerId: string): Promise<WeeklyLimitResetResult> {
+  return codexResetCreditAutoUse
+    ? codexResetCreditAutoUse.spendForWeeklyLimit(providerId)
+    : Promise.resolve({ kind: 'skipped', why: 'disabled' });
+}
+
 export function registerMakerUsageIpc(maker: Maker): void {
   log.info('registering maker:usage:* IPC handlers');
 
@@ -284,6 +315,46 @@ export function registerMakerUsageIpc(maker: Maker): void {
     return service;
   }
 
+  /** 账号级 RPC 只在稳定的 owner 作用域里发出，返回时作用域变了就作废。 */
+  async function inOwnerScope<T>(operation: () => Promise<T>): Promise<T> {
+    const scope = activeOwnerScopeKey();
+    if (isAppSessionBoundaryPending()) throw new Error('PRECONDITION_FAILED: Account scope changed');
+    const result = await operation();
+    if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
+    return result;
+  }
+
+  codexResetCreditAutoUse?.stop();
+  codexResetCreditAutoUse = createCodexResetCreditAutoUse({
+    enabledProviderIds: () =>
+      listCodexResetCreditAutoUseProviderIds().filter((providerId) => isOpenAiSubscriptionProviderId(providerId)),
+    isEnabled: (providerId) =>
+      isOpenAiSubscriptionProviderId(providerId) && isCodexResetCreditAutoUseEnabled(providerId),
+    readAccountKey: (providerId) =>
+      inOwnerScope(async () => {
+        const accountProvider = normalizeCodexUsageProvider(providerId);
+        const state = await desktopCodexAuthAdapter.getState({ providerId: accountProvider });
+        return state.authSource === 'oauth'
+          ? await desktopCodexAuthAdapter.getAccountId(accountProvider)
+          : null;
+      }),
+    readRateLimits: (providerId) =>
+      inOwnerScope(() => maker.readAgentAccountRateLimits('codex', normalizeCodexUsageProvider(providerId))),
+    consumeResetCredit: (providerId, params) =>
+      inOwnerScope(() =>
+        maker.consumeAgentAccountRateLimitResetCredit('codex', params, normalizeCodexUsageProvider(providerId)),
+      ),
+    // 刷新额度卡片与任务卡上的配额与剩余重置次数。
+    afterReset: (providerId) => {
+      void getResetService(providerId).read().catch(() => undefined);
+    },
+    readWeeklyReset: readCodexWeeklyReset,
+    writeWeeklyReset: writeCodexWeeklyReset,
+    scopeKey: activeOwnerScopeKey,
+    log,
+  });
+  codexResetCreditAutoUse.start();
+
   setSubscriptionAccountUsageBroadcaster(broadcastSubscriptionAccountUsage, clearXaiRateLimitSnapshot);
   registerMakerUsageHandlers(createElectronIpcHandlerRegistry(), {
     readAgentTodayUsage,
@@ -306,6 +377,18 @@ export function registerMakerUsageIpc(maker: Maker): void {
       if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
       return { ...result, providerId: providerId ?? 'openai',
         rateLimits: result.rateLimits ? { ...result.rateLimits, providerId: providerId ?? 'openai' } : null };
+    },
+    readCodexResetCreditAutoUse: (providerId) => {
+      normalizeCodexUsageProvider(providerId);
+      return readCodexResetCreditAutoUseState(providerId);
+    },
+    writeCodexResetCreditAutoUse: async (providerId, enabled) => {
+      normalizeCodexUsageProvider(providerId);
+      const state = enabled === null
+        ? await resetCodexResetCreditAutoUse(providerId)
+        : await writeCodexResetCreditAutoUse(providerId, enabled);
+      codexResetCreditAutoUse?.noteSettingChanged(providerId);
+      return state;
     },
     readClaudeSubscriptionUsageSnapshot: readClaudeSubscriptionUsageSnapshotForDeviceLink,
     readXaiSubscriptionUsageSnapshot: readXaiSubscriptionUsageSnapshotForDeviceLink,

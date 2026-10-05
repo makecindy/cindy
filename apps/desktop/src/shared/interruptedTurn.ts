@@ -23,6 +23,7 @@
  */
 export {
   APP_EXIT_INTERRUPTED_REASON,
+  CODEX_RESET_CREDIT_RESUME_REASON,
   UI_ACTION_TRIGGER_PREFIX,
   isSyntheticTriggerText,
   syntheticTriggerKind,

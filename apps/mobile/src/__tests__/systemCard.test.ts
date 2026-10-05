@@ -195,6 +195,17 @@ describe('formatMobileSystemCard — 中断自动重连状态', () => {
       formatMobileSystemCard('auto-resume', outcome ? { ...info, outcome } : {}).title,
     )).toEqual(['Reconnected', 'Reconnect failed', 'Connection interrupted — resumed automatically']);
   });
+  it('describes a continuation after a Codex reset without reconnect counters', () => {
+    const reset = { ...info, reason: 'codex_reset_credit_used', error: "You've hit your usage limit." };
+    expect(formatMobileSystemCard('auto-resume', { ...reset, live: true })).toEqual({
+      title: 'Using a reset to restore quota…',
+      body: "You've hit your usage limit.",
+      rows: [],
+    });
+    expect(['succeeded', 'failed', undefined].map((outcome) =>
+      formatMobileSystemCard('auto-resume', outcome ? { ...reset, outcome } : reset).title,
+    )).toEqual(['Used a reset and continued', 'Couldn’t use a reset', 'Used a reset']);
+  });
 });
 
 describe('formatMobileSystemCard — Agent 切换', () => {

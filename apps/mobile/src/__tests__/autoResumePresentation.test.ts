@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CODEX_RESET_CREDIT_RESUME_REASON } from '@cindy/maker-shared/synthetic-trigger';
 import {
   canExpandMobileAutoResume,
   getMobileAutoResumePresentation,
@@ -54,5 +55,30 @@ describe('autoResumePresentation', () => {
     expect(toggleMobileAutoResumeExpanded(false, true)).toBe(true);
     expect(toggleMobileAutoResumeExpanded(true, true)).toBe(false);
     expect(toggleMobileAutoResumeExpanded(true, false)).toBe(false);
+  });
+});
+
+describe('reset-credit continuation', () => {
+  it('drops reconnect counters and keeps the row expandable to the usage-limit reason', () => {
+    const data = {
+      reason: CODEX_RESET_CREDIT_RESUME_REASON,
+      error: "You've hit your usage limit.",
+      attempt: 1,
+      maxAttempts: 5,
+      sessionTotal: 4,
+    };
+    expect(readMobileAutoResumeInfo(data)).toEqual({
+      resetCredit: true,
+      error: "You've hit your usage limit.",
+    });
+    const presentation = getMobileAutoResumePresentation({ ...data, live: true });
+    expect(presentation.state).toBe('live');
+    expect(presentation.hasProgress).toBe(false);
+    expect(presentation.info.resetCredit).toBe(true);
+  });
+
+  it('is never shown as the silent-stop separator, even without an error text', () => {
+    expect(getMobileAutoResumePresentation({ reason: CODEX_RESET_CREDIT_RESUME_REASON }).state)
+      .toBe('neutral');
   });
 });

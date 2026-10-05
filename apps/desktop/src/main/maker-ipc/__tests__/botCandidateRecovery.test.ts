@@ -1,15 +1,26 @@
 import { readFileSync } from 'node:fs';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import { CODEX_RESET_CREDIT_RESUME_REASON } from '@cindy/maker-shared/synthetic-trigger';
+import { isCodexUsageLimitSignal } from '../../usage/codexResetCreditAutoUse';
 import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable } from '../botCandidateRecovery';
 import { isInterruptedTurnError, isAcceptedTurnContinuationOnlyReason } from '../interruptedTurnAutoResume';
 
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
 
 /** Execute the production registration callbacks without starting Electron or touching accounts. */
-function harness(bot = true) {
+function harness(bot = true, codex: {
+  agentKind?: string;
+  remoteHostId?: string | null;
+  providerId?: string | null;
+  autoUse?: boolean;
+} = {}) {
   const item = { clientId: 'input', createOpts: {} };
   const hints = source.slice(source.indexOf('  const botFallbackInputs ='), source.indexOf('  const sendToAgentAccepted:'));
+  const resetCredit = source.slice(
+    source.indexOf('  // 账号配额耗尽 → 用一次重置 → 续跑'),
+    source.indexOf('  const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({'),
+  );
   const callbacks = source.slice(source.indexOf('    isResumableTurnErrorCandidate: canRecoverTurn,'), source.indexOf('    steerToAgent: (sessionId, message, sendOpts) =>'));
   let current = true;
   let scheduled: (() => Promise<void>) | undefined;
@@ -18,11 +29,22 @@ function harness(bot = true) {
   const finalize = vi.fn();
   const guard = vi.fn(() => ({ action: 'resume', attempt: 1, maxAttempts: 5,
     episodeAttempt: 1, maxEpisodeAttempts: 10, sessionTotal: 1, attemptToken: 1, delayMs: 1000 }));
+  const noteResumeSendFailed = vi.fn();
+  const spendReset = vi.fn(async () => ({ kind: 'reset' }));
+  const mayUseReset = vi.fn(() => codex.autoUse ?? false);
   const deps = {
+    isCodexUsageLimitSignal, CODEX_RESET_CREDIT_RESUME_REASON,
+    maker: {
+      getSession: () => ({ agentKind: codex.agentKind ?? 'codex', remoteHostId: codex.remoteHostId ?? null }),
+    },
+    getSessionProvider: () => codex.providerId ?? null,
+    isOpenAiSubscriptionProviderId: (id: string) => id === 'openai' || id === 'chatgpt-work',
+    mayUseCodexResetCreditForUsageLimit: mayUseReset,
+    spendCodexResetCreditForWeeklyLimit: spendReset,
     isInterruptedTurnError, isBotCandidateUnavailable, canResumeAfterRuntimeFallback,
     isAcceptedTurnContinuationOnlyReason,
     inputCoordinator: { isExecutionPaused: () => false, autoRetryLastError: resume },
-    interruptedTurnAutoResumeGuard: { onInterruptedTurn: guard, noteResumeSendFailed: vi.fn() },
+    interruptedTurnAutoResumeGuard: { onInterruptedTurn: guard, noteResumeSendFailed },
     maybeApplySessionRuntimeFallback: fallback,
     autoResumeBookkeeping: {
       beginAttempt: vi.fn(), finalizeSuppressedError: finalize,
@@ -34,12 +56,13 @@ function harness(bot = true) {
     pendingSessionRuntimeFallbackRebuilds: new WeakMap(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
   };
-  const js = transpileModule(`${hints}\nreturn { callbacks: { ${callbacks} }, botFallbackInputs };`, {
+  const js = transpileModule(`${hints}\n${resetCredit}\nreturn { callbacks: { ${callbacks} }, botFallbackInputs };`, {
     compilerOptions: { target: ScriptTarget.ES2022 },
   }).outputText;
   const runtime = new Function(...Object.keys(deps), js)(...Object.values(deps));
   if (bot) runtime.botFallbackInputs.add(item.createOpts);
-  return { item, ...runtime.callbacks, resume, fallback, finalize, guard,
+  return { item, ...runtime.callbacks, resume, fallback, finalize, guard, spendReset, mayUseReset,
+    noteResumeSendFailed, scheduled: () => scheduled !== undefined,
     run: () => scheduled!(), cancel: () => { current = false; } };
 }
 
@@ -175,5 +198,94 @@ describe('Bot candidate recovery', () => {
     h.guard.mockReturnValue({ action: 'stop' } as ReturnType<typeof h.guard>);
     expect(h.onResumableTurnError('s', drop, h.item)).toBeNull();
     expect(h.fallback).not.toHaveBeenCalled();
+  });
+});
+
+describe('Codex reset auto-use on a usage limit', () => {
+  const usageLimit = {
+    errorStatus: 429,
+    codexErrorInfo: 'usageLimitExceeded' as const,
+    message: "You've hit your usage limit. Upgrade to Pro or try again in 3 days.",
+  };
+
+  it('takes over a Codex usage-limit error, spends a reset, then continues the task', async () => {
+    const h = harness(false, { autoUse: true });
+    expect(h.isResumableTurnErrorCandidate(usageLimit, h.item, 's')).toBe(true);
+    // Without the session the account cannot be resolved, so nothing is held back.
+    expect(h.isResumableTurnErrorCandidate(usageLimit, h.item)).toBe(false);
+    expect(h.onResumableTurnError('s', usageLimit, h.item)).toEqual({
+      error: usageLimit.message,
+      reason: CODEX_RESET_CREDIT_RESUME_REASON,
+      attempt: 1,
+      maxAttempts: 5,
+      sessionTotal: 1,
+    });
+    expect(h.resume).not.toHaveBeenCalled();
+    await h.run();
+    expect(h.spendReset).toHaveBeenCalledWith('openai');
+    expect(h.resume).toHaveBeenCalledWith('s', 1);
+    expect(h.fallback).not.toHaveBeenCalled();
+    expect(h.finalize).not.toHaveBeenCalled();
+  });
+
+  it('continues without spending again when another task just restored the account', async () => {
+    const h = harness(false, { autoUse: true, providerId: 'chatgpt-work' });
+    h.spendReset.mockResolvedValue({ kind: 'restored' });
+    h.onResumableTurnError('s', usageLimit, h.item);
+    await h.run();
+    expect(h.spendReset).toHaveBeenCalledWith('chatgpt-work');
+    expect(h.resume).toHaveBeenCalledWith('s', 1);
+  });
+
+  it.each([
+    { kind: 'skipped', why: 'already-used' },
+    { kind: 'skipped', why: 'not-used-up' },
+    { kind: 'failed', outcome: 'noCredit' },
+  ])('gives the usage-limit error back when no reset was used (%j)', async (result) => {
+    const h = harness(false, { autoUse: true });
+    h.spendReset.mockResolvedValue(result as never);
+    h.onResumableTurnError('s', usageLimit, h.item);
+    await h.run();
+    expect(h.resume).not.toHaveBeenCalled();
+    expect(h.noteResumeSendFailed).toHaveBeenCalledWith('s', 1);
+    expect(h.finalize).toHaveBeenCalledWith('s', 1, { surfaceBanner: true });
+  });
+
+  it('does not continue after Stop or a newer user turn', async () => {
+    const h = harness(false, { autoUse: true });
+    h.spendReset.mockImplementation(async () => { h.cancel(); return { kind: 'reset' }; });
+    h.onResumableTurnError('s', usageLimit, h.item);
+    await h.run();
+    expect(h.resume).not.toHaveBeenCalled();
+    expect(h.finalize).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['auto-use is off', { autoUse: false }],
+    ['the task runs on an SSH host', { autoUse: true, remoteHostId: 'host-1' }],
+    ['the task is not Codex', { autoUse: true, agentKind: 'claude-code' }],
+    ['the task uses another provider', { autoUse: true, providerId: 'xd' }],
+  ])('leaves the error to the user when %s', (_label, codex) => {
+    const h = harness(false, codex);
+    expect(h.isResumableTurnErrorCandidate(usageLimit, h.item, 's')).toBe(false);
+    expect(h.onResumableTurnError('s', usageLimit, h.item)).toBeNull();
+    expect(h.guard).not.toHaveBeenCalled();
+    expect(h.spendReset).not.toHaveBeenCalled();
+  });
+
+  it('ignores errors that are not an account usage limit', () => {
+    const h = harness(false, { autoUse: true });
+    const transient = { errorStatus: 429, message: 'Too Many Requests' };
+    expect(h.isResumableTurnErrorCandidate(transient, h.item, 's')).toBe(false);
+    expect(h.onResumableTurnError('s', transient, h.item)).toBeNull();
+    expect(h.spendReset).not.toHaveBeenCalled();
+  });
+
+  it('still spends the reset when automatic continuation is not granted', () => {
+    const h = harness(false, { autoUse: true });
+    h.guard.mockReturnValue({ action: 'skip', why: 'disabled' } as never);
+    expect(h.onResumableTurnError('s', usageLimit, h.item)).toBeNull();
+    expect(h.spendReset).toHaveBeenCalledWith('openai');
+    expect(h.scheduled()).toBe(false);
   });
 });

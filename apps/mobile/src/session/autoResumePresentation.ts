@@ -1,3 +1,4 @@
+import { CODEX_RESET_CREDIT_RESUME_REASON } from '@cindy/maker-shared/synthetic-trigger';
 import type { ContinuationInFlightProjectionCapability } from '@/session/types';
 
 export interface MobileAutoResumeInfo {
@@ -6,6 +7,8 @@ export interface MobileAutoResumeInfo {
   maxAttempts?: number;
   sessionTotal?: number;
   outcome?: 'succeeded' | 'failed';
+  /** 续跑前先用了一次 Codex 重置（配额耗尽），不是重连；没有重连次数可言。 */
+  resetCredit?: true;
 }
 
 export type MobileAutoResumeState = 'separator' | 'live' | 'succeeded' | 'failed' | 'neutral';
@@ -21,10 +24,12 @@ export interface MobileAutoResumePresentation {
 export function readMobileAutoResumeInfo(data?: Record<string, unknown>): MobileAutoResumeInfo {
   const number = (value: unknown) =>
     typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
-  const attempt = number(data?.attempt);
-  const maxAttempts = number(data?.maxAttempts);
-  const sessionTotal = number(data?.sessionTotal);
+  const resetCredit = data?.reason === CODEX_RESET_CREDIT_RESUME_REASON;
+  const attempt = resetCredit ? undefined : number(data?.attempt);
+  const maxAttempts = resetCredit ? undefined : number(data?.maxAttempts);
+  const sessionTotal = resetCredit ? undefined : number(data?.sessionTotal);
   return {
+    ...(resetCredit ? { resetCredit: true as const } : {}),
     ...(typeof data?.error === 'string' && data.error.trim() ? { error: data.error } : {}),
     ...(attempt !== undefined ? { attempt } : {}),
     ...(maxAttempts !== undefined ? { maxAttempts } : {}),
@@ -59,6 +64,7 @@ export function getMobileAutoResumePresentation(
   const hasProgress = info.attempt !== undefined && info.maxAttempts !== undefined;
   const hasInterruptionContext =
     data?.live === true ||
+    info.resetCredit === true ||
     info.error !== undefined ||
     hasProgress ||
     info.sessionTotal !== undefined ||

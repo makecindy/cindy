@@ -226,6 +226,10 @@
       "neutral": "다시 연결",
       "pending": "다시 연결하는 중…",
       "pendingWithProgress": "다시 연결하는 중 {{attempt}}/{{total}}…",
+      "resetCreditPending": "재설정 1회로 할당량 복구 중…",
+      "resetCreditSucceeded": "재설정 1회를 사용해 계속했습니다",
+      "resetCreditFailed": "재설정을 사용하지 못했습니다",
+      "resetCreditNeutral": "재설정 사용",
       "details": "이번 재시도 {{attempt}}/{{total}} · 이 세션에서 재연결 {{count}}회",
       "detail": {
         "reason": "중단 원인",

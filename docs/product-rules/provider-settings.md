@@ -73,6 +73,26 @@ Grok 产品消耗是共享池贡献，不是独立限额，不反算成产品余
 缓存回显及隔离遵循 [统一模型选择与订阅用量规则](./model-selector-unified.md)。
 用量刷新不占用连接操作的位置；读取失败保留缓存，断开或账号变化按权威事件清理。
 
+### 自动使用重置（OpenAI 订阅）
+
+OpenAI 订阅连接的用量下方有「自动使用重置」开关，按连接分别设置，默认关闭（重置用掉不可撤回）。
+开关只在本机设置页读写，不经远程控制修改；只记录用户显式拨过的值，「恢复默认」删除该连接的记录。
+
+- **周配额用完**：本机 Codex 任务因账号配额耗尽中断时，只要读到的周窗口（≥ 1 天）已用满，
+  就用一次重置并自动继续该任务；5 小时窗口用满不用重置。每个 ChatGPT 工作区每个周窗口最多
+  自动用一次，记录跨重启保留。多个任务同时撞上只用一次；刚用过之后到达的中断直接继续。
+  没用成（本周已用过、窗口没满、没有重置）就把原错误交还用户。自动续跑被关闭或次数用尽时，
+  照样用重置让账号恢复，但不替用户继续任务。SSH 远端与网关来源的任务不参与。
+- **重置快过期**：后台巡检开启的连接，快过期的重置在过期前 30 分钟用掉；账号此刻被用满的
+  窗口卡住、且在那之前恢复不了时提前到立即用。窗口一点没用过时任它过期。这条不占每周一次的名额。
+- 两条路径都只用最早过期的一张，同一连接的读与用串行执行。续跑行显示「用了重置」而不是「重新连接」，
+  手机端同样。
+
+实现见 `apps/desktop/src/main/usage/codexResetCreditAutoUse.ts`、`codexResetCreditAutoUseStore.ts`
+与 `maker-ipc/register.ts` 的 `resumeAfterCodexResetCredit`；回归见同目录
+`__tests__/codexResetCreditAutoUse.test.ts`、`codexResetCreditAutoUseStore.test.ts` 与
+`maker-ipc/__tests__/botCandidateRecovery.test.ts`。
+
 ## 5. 实现与验证边界
 
 `ProvidersSection.tsx` 的 `DetailHeader` 统一渲染类型化状态、至多一个主要操作、

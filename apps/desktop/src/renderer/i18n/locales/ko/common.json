@@ -1894,6 +1894,13 @@
       }
     },
     "providers": {
+      "codexResetAutoUse": {
+        "label": "재설정 자동 사용",
+        "description": "주간 할당량이 소진되어 작업이 중단되면 재설정을 1회 사용하고 작업을 계속합니다(주 1회까지). 곧 만료되는 재설정은 낭비되지 않도록 만료 30분 전에 사용합니다. 사용한 재설정은 되돌릴 수 없습니다.",
+        "enabledToast": "재설정 자동 사용을 켰습니다",
+        "disabledToast": "재설정 자동 사용을 껐습니다",
+        "saveFailed": "설정을 저장하지 못했습니다. 다시 시도해 주세요"
+      },
       "llamacpp": {
         "ownedElsewhere": "다른 Cindy 인스턴스에서 모델 서비스가 실행 중입니다. 해당 인스턴스에서 모델을 다운로드하거나 컨텍스트를 변경하거나, 먼저 서비스를 중지하세요.",
         "primaryPick": "우선 선택 · 먼저 사용",
@@ -10232,6 +10239,9 @@
         "label": "다시 연결되었습니다",
         "labelFailed": "다시 연결하지 못했습니다",
         "labelNeutral": "다시 연결",
+        "resetCreditLabel": "재설정 1회를 사용해 계속했습니다",
+        "resetCreditLabelFailed": "재설정을 사용하지 못했습니다",
+        "resetCreditLabelNeutral": "재설정 사용",
         "detail": {
           "reason": "중단 원인",
           "attempt": "이번 재시도 {{attempt}}/{{total}}",
@@ -10243,7 +10253,8 @@
       },
       "autoResumePending": {
         "label": "다시 연결하는 중",
-        "labelWithProgress": "다시 연결하는 중 {{attempt}}/{{total}}"
+        "labelWithProgress": "다시 연결하는 중 {{attempt}}/{{total}}",
+        "resetCredit": "재설정 1회로 할당량 복구 중…"
       },
       "agentSwitch": {
         "label": "{{from}}에서 {{to}}(으)로 전환됨",

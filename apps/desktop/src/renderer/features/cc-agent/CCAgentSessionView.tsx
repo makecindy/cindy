@@ -317,7 +317,7 @@ import {
 } from './deferredUiAssignment';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
 import { localizeAgentStatus } from './lib/localizeAgentStatus';
-import { findActiveReconnect } from '@/lib/autoResumePresentation';
+import { autoResumePendingLabel, findActiveReconnect } from '@/lib/autoResumePresentation';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
 import { hasInlineOverloadRetry } from './lib/inlineRetryError';
 import { createSessionSnapshotPatchBuffer } from './lib/sessionSnapshotPatchBuffer';
@@ -2163,14 +2163,8 @@ export function CCAgentSessionView({
     }),
     [messages, agentStatus.isRunning, isStreaming, continuationTurnClientId, continuationInFlightProjectionCapability],
   );
-  const reconnectStatus = activeReconnect
-    ? activeReconnect.attempt !== undefined && activeReconnect.maxAttempts !== undefined
-      ? t('chat.systemCard.autoResumePending.labelWithProgress', {
-          attempt: activeReconnect.attempt,
-          total: activeReconnect.maxAttempts,
-        })
-      : t('chat.systemCard.autoResumePending.label')
-    : null;
+  const reconnectLabel = activeReconnect ? autoResumePendingLabel(activeReconnect) : null;
+  const reconnectStatus = reconnectLabel ? t(reconnectLabel.key, reconnectLabel.params) : null;
   const composerStatus = runningWorkflow
     ? runningWorkflow.total > 0
       ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)
