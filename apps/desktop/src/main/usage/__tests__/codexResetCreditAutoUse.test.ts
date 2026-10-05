@@ -68,10 +68,12 @@ function harness(over: Partial<CodexResetCreditAutoUseDeps> = {}) {
     readRateLimits: vi.fn(async () => response),
     consumeResetCredit: vi.fn(async () => ({ outcome: 'reset' as const })),
     afterReset: vi.fn(),
-    readWeeklyReset: vi.fn((providerId: string, accountKey: string) =>
-      records.get(`${providerId}:${accountKey}`) ?? null),
-    writeWeeklyReset: vi.fn((providerId: string, accountKey: string, record: WeeklyResetRecord) => {
-      records.set(`${providerId}:${accountKey}`, record);
+    readWeeklyReset: vi.fn((accountKey: string) => records.get(accountKey) ?? null),
+    writeWeeklyReset: vi.fn((accountKey: string, record: WeeklyResetRecord) => {
+      records.set(accountKey, record);
+    }),
+    clearWeeklyReset: vi.fn((accountKey: string, record: WeeklyResetRecord) => {
+      if (records.get(accountKey) === record) records.delete(accountKey);
     }),
     scopeKey: vi.fn(() => 'owner-a'),
     log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
@@ -157,7 +159,7 @@ describe('weekly limit', () => {
       idempotencyKey: 'key-1',
       creditId: 'soon',
     });
-    expect(h.deps.writeWeeklyReset).toHaveBeenCalledWith('openai', 'workspace-1', {
+    expect(h.deps.writeWeeklyReset).toHaveBeenCalledWith('workspace-1', {
       untilMs: sec(NOW + 3 * DAY) * 1000,
       atMs: NOW,
     });
@@ -259,7 +261,9 @@ describe('weekly limit', () => {
       kind: 'failed',
       outcome: 'noCredit',
     });
-    expect(h.deps.writeWeeklyReset).not.toHaveBeenCalled();
+    // Written ahead of the spend, withdrawn once the backend said nothing was spent.
+    expect(h.deps.writeWeeklyReset).toHaveBeenCalledOnce();
+    expect(h.records.size).toBe(0);
     await expect(h.service.spendForWeeklyLimit('openai')).resolves.toEqual({
       kind: 'skipped',
       why: 'backoff',
@@ -275,7 +279,7 @@ describe('weekly limit', () => {
     expect(h.deps.consumeResetCredit).not.toHaveBeenCalled();
   });
 
-  it('never records a spend under another Cindy account', async () => {
+  it('does not continue a task once the Cindy account changed mid-spend', async () => {
     let scope = 'owner-a';
     const h = harness({
       scopeKey: vi.fn(() => scope),
@@ -286,7 +290,76 @@ describe('weekly limit', () => {
     });
     const result = await h.service.spendForWeeklyLimit('openai');
     expect(result.kind).toBe('failed');
+    expect(h.deps.afterReset).not.toHaveBeenCalled();
+  });
+
+  it('does not spend when the weekly record cannot be saved', async () => {
+    const h = harness({
+      writeWeeklyReset: vi.fn(() => {
+        throw new Error('EACCES');
+      }),
+    });
+    await expect(h.service.spendForWeeklyLimit('openai')).resolves.toEqual({
+      kind: 'failed',
+      error: 'EACCES',
+    });
+    expect(h.deps.consumeResetCredit).not.toHaveBeenCalled();
+  });
+
+  it('keeps the week closed when a spend request fails without an answer', async () => {
+    const h = harness({
+      consumeResetCredit: vi.fn(async () => {
+        throw new Error('socket hang up');
+      }),
+    });
+    await expect(h.service.spendForWeeklyLimit('openai')).resolves.toEqual({
+      kind: 'failed',
+      error: 'socket hang up',
+    });
+    h.setNow(NOW + HOUR);
+    await expect(h.service.spendForWeeklyLimit('openai')).resolves.toEqual({
+      kind: 'skipped',
+      why: 'already-used',
+    });
+    expect(h.deps.consumeResetCredit).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not spend when the account switched workspaces while quota was read', async () => {
+    const h = harness();
+    vi.mocked(h.deps.readAccountKey)
+      .mockResolvedValueOnce('workspace-1')
+      .mockResolvedValueOnce('workspace-2');
+    await expect(h.service.spendForWeeklyLimit('openai')).resolves.toEqual({
+      kind: 'skipped',
+      why: 'account-changed',
+    });
+    expect(h.deps.consumeResetCredit).not.toHaveBeenCalled();
     expect(h.deps.writeWeeklyReset).not.toHaveBeenCalled();
+  });
+
+  it('does not spend when the setting was turned off while quota was read', async () => {
+    let enabled = true;
+    const h = harness({ isEnabled: vi.fn(() => enabled) });
+    vi.mocked(h.deps.readRateLimits).mockImplementation(async () => {
+      enabled = false;
+      return limits(fiveHour(40), weekly(100));
+    });
+    await expect(h.service.spendForWeeklyLimit('openai')).resolves.toEqual({
+      kind: 'skipped',
+      why: 'disabled',
+    });
+    expect(h.deps.consumeResetCredit).not.toHaveBeenCalled();
+  });
+
+  it('counts one week per workspace even when two connections share it', async () => {
+    const h = harness();
+    const [first, second] = await Promise.all([
+      h.service.spendForWeeklyLimit('openai'),
+      h.service.spendForWeeklyLimit('chatgpt-work'),
+    ]);
+    expect(first).toEqual({ kind: 'reset' });
+    expect(second.kind).not.toBe('reset');
+    expect(h.deps.consumeResetCredit).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -321,6 +394,27 @@ describe('reset about to expire', () => {
     h.setResponse(limits(fiveHour(100, HOUR), weekly(60), [credit('soon', 6 * HOUR)]));
     await expect(h.service.checkExpiring('openai')).resolves.toEqual({ kind: 'idle' });
     expect(h.deps.consumeResetCredit).not.toHaveBeenCalled();
+  });
+
+  it('re-checks the setting and the workspace right before spending', async () => {
+    let enabled = true;
+    const turnedOff = harness({ isEnabled: vi.fn(() => enabled) });
+    turnedOff.setResponse(limits(fiveHour(40), weekly(60), [credit('soon', 20 * MINUTE)]));
+    vi.mocked(turnedOff.deps.readRateLimits).mockImplementation(async () => {
+      enabled = false;
+      return limits(fiveHour(40), weekly(60), [credit('soon', 20 * MINUTE)]);
+    });
+    await expect(turnedOff.service.checkExpiring('openai')).resolves.toEqual({ kind: 'idle' });
+
+    const switched = harness();
+    switched.setResponse(limits(fiveHour(40), weekly(60), [credit('soon', 20 * MINUTE)]));
+    vi.mocked(switched.deps.readAccountKey)
+      .mockResolvedValueOnce('workspace-1')
+      .mockResolvedValueOnce('workspace-2');
+    await expect(switched.service.checkExpiring('openai')).resolves.toEqual({ kind: 'idle' });
+
+    expect(turnedOff.deps.consumeResetCredit).not.toHaveBeenCalled();
+    expect(switched.deps.consumeResetCredit).not.toHaveBeenCalled();
   });
 
   it('lets a reset expire when no window has been used', async () => {

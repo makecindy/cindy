@@ -97,29 +97,45 @@ describe('codex reset auto-use settings', () => {
 });
 
 describe('codex weekly reset records', () => {
-  it('keeps a record per workspace without the raw workspace id', async () => {
+  it('keeps one record per workspace, whichever connection wrote it, without the raw id', async () => {
     const store = await importStore();
-    store.writeCodexWeeklyReset('openai', 'workspace-secret-1', { untilMs: 2_000, atMs: 1_000 });
-    expect(store.readCodexWeeklyReset('openai', 'workspace-secret-1')).toEqual({
-      untilMs: 2_000,
-      atMs: 1_000,
-    });
-    expect(store.readCodexWeeklyReset('openai', 'workspace-2')).toBeNull();
+    store.writeCodexWeeklyReset('workspace-secret-1', { untilMs: 2_000, atMs: 1_000 });
+    expect(store.readCodexWeeklyReset('workspace-secret-1')).toEqual({ untilMs: 2_000, atMs: 1_000 });
+    expect(store.readCodexWeeklyReset('workspace-2')).toBeNull();
     expect(fs.readFileSync(weeklyPath('owner-a'), 'utf8')).not.toContain('workspace-secret-1');
   });
 
   it('drops records of weeks that ended when writing a new one', async () => {
     const store = await importStore();
-    store.writeCodexWeeklyReset('openai', 'w1', { untilMs: 2_000, atMs: 1_000 });
-    store.writeCodexWeeklyReset('chatgpt-work', 'w2', { untilMs: 9_000, atMs: 3_000 });
-    expect(store.readCodexWeeklyReset('openai', 'w1')).toBeNull();
-    expect(store.readCodexWeeklyReset('chatgpt-work', 'w2')).toEqual({ untilMs: 9_000, atMs: 3_000 });
+    store.writeCodexWeeklyReset('w1', { untilMs: 2_000, atMs: 1_000 });
+    store.writeCodexWeeklyReset('w2', { untilMs: 9_000, atMs: 3_000 });
+    expect(store.readCodexWeeklyReset('w1')).toBeNull();
+    expect(store.readCodexWeeklyReset('w2')).toEqual({ untilMs: 9_000, atMs: 3_000 });
+  });
+
+  it('withdraws only the record it wrote', async () => {
+    const store = await importStore();
+    const record = { untilMs: 9_000, atMs: 3_000 };
+    store.writeCodexWeeklyReset('w1', record);
+    store.clearCodexWeeklyReset('w1', { untilMs: 9_000, atMs: 4_000 });
+    expect(store.readCodexWeeklyReset('w1')).toEqual(record);
+    store.clearCodexWeeklyReset('w1', record);
+    expect(store.readCodexWeeklyReset('w1')).toBeNull();
+  });
+
+  it('fails loudly when the record cannot be written', async () => {
+    const store = await importStore();
+    // A directory where the file should be makes the atomic write fail.
+    fs.mkdirSync(weeklyPath('owner-a'), { recursive: true });
+    expect(() => store.writeCodexWeeklyReset('w1', { untilMs: 9_000, atMs: 3_000 })).toThrow();
+    owner = null;
+    expect(() => store.writeCodexWeeklyReset('w1', { untilMs: 9_000, atMs: 3_000 })).toThrow();
   });
 
   it('treats a damaged file as no record', async () => {
     const store = await importStore();
     fs.mkdirSync(path.dirname(weeklyPath('owner-a')), { recursive: true });
     fs.writeFileSync(weeklyPath('owner-a'), '{not json');
-    expect(store.readCodexWeeklyReset('openai', 'w1')).toBeNull();
+    expect(store.readCodexWeeklyReset('w1')).toBeNull();
   });
 });

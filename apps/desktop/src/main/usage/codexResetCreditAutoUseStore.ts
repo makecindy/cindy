@@ -5,8 +5,9 @@
  *     只记录用户显式拨过的开关（providerId → boolean）；没记录的账号跟随默认值（关）。
  *     「恢复默认」删除该账号的记录。
  *   <userData>/codex-reset-credit-auto-use/<owner>/weekly-resets.json
- *     周配额用完时自动用掉的那一次：每个 ChatGPT 工作区一个周窗口最多一次，重启后不会
- *     再用第二次。工作区 id 只存哈希；周窗口结束后的记录在下次写入时清掉。
+ *     周配额用完时自动用掉的那一次：每个 ChatGPT 工作区一个周窗口最多一次（不分连接），
+ *     重启后不会再用第二次。扣卡前先写，写不进就不扣。工作区 id 只存哈希；周窗口结束后
+ *     的记录在下次写入时清掉。
  *
  * <owner> 与 codex-accounts/ 用同一个 owner 目录名（owner id 的 sha256）。没有登录的
  * Cindy 账号时一律视为关闭，写入拒绝。
@@ -151,9 +152,9 @@ function weeklyResetsPath(owner: string): string {
   return path.join(storeDir(owner), 'weekly-resets.json');
 }
 
-function weeklyRecordKey(providerId: string, accountKey: string): string {
-  const account = createHash('sha256').update(`codex-reset:${accountKey}`).digest('hex').slice(0, 16);
-  return `${providerId}:${account}`;
+/** 按 ChatGPT 工作区记，不按连接：同一工作区挂在两个连接下也只算一次。 */
+function weeklyRecordKey(accountKey: string): string {
+  return createHash('sha256').update(`codex-reset:${accountKey}`).digest('hex').slice(0, 16);
 }
 
 function parseWeeklyResets(text: string | null): WeeklyResets {
@@ -187,30 +188,36 @@ function readWeeklyResets(owner: string): WeeklyResets {
   }
 }
 
-export function readCodexWeeklyReset(providerId: string, accountKey: string): WeeklyResetRecord | null {
+function requireOwner(): string {
   const owner = ownerDir();
-  if (!owner) return null;
-  return readWeeklyResets(owner)[weeklyRecordKey(providerId, accountKey)] ?? null;
+  if (!owner) throw new Error('A Cindy account is required');
+  return owner;
 }
 
-export function writeCodexWeeklyReset(
-  providerId: string,
-  accountKey: string,
-  record: WeeklyResetRecord,
-): void {
+export function readCodexWeeklyReset(accountKey: string): WeeklyResetRecord | null {
   const owner = ownerDir();
-  if (!owner) return;
+  if (!owner) return null;
+  return readWeeklyResets(owner)[weeklyRecordKey(accountKey)] ?? null;
+}
+
+/** 落不了盘时抛错：调用方据此不扣卡，宁可少用一次也不突破每周一次。 */
+export function writeCodexWeeklyReset(accountKey: string, record: WeeklyResetRecord): void {
+  const owner = requireOwner();
   const records = readWeeklyResets(owner);
   for (const [key, existing] of Object.entries(records)) {
     if (existing.untilMs <= record.atMs) delete records[key];
   }
-  records[weeklyRecordKey(providerId, accountKey)] = record;
-  try {
-    atomicWriteFileSync(weeklyResetsPath(owner), `${JSON.stringify(records, null, 2)}\n`);
-  } catch (error) {
-    log.warn('codex weekly reset record not written', {
-      providerId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  records[weeklyRecordKey(accountKey)] = record;
+  atomicWriteFileSync(weeklyResetsPath(owner), `${JSON.stringify(records, null, 2)}\n`);
+}
+
+/** 扣卡确定没发生时撤掉先写的记录；只撤与 record 完全相同的那条。 */
+export function clearCodexWeeklyReset(accountKey: string, record: WeeklyResetRecord): void {
+  const owner = requireOwner();
+  const records = readWeeklyResets(owner);
+  const key = weeklyRecordKey(accountKey);
+  const existing = records[key];
+  if (!existing || existing.untilMs !== record.untilMs || existing.atMs !== record.atMs) return;
+  delete records[key];
+  atomicWriteFileSync(weeklyResetsPath(owner), `${JSON.stringify(records, null, 2)}\n`);
 }

@@ -81,6 +81,7 @@ import {
   type WeeklyLimitResetResult,
 } from '../usage/codexResetCreditAutoUse.js';
 import {
+  clearCodexWeeklyReset,
   isCodexResetCreditAutoUseEnabled,
   listCodexResetCreditAutoUseProviderIds,
   readCodexResetCreditAutoUseState,
@@ -350,6 +351,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
     },
     readWeeklyReset: readCodexWeeklyReset,
     writeWeeklyReset: writeCodexWeeklyReset,
+    clearWeeklyReset: clearCodexWeeklyReset,
     scopeKey: activeOwnerScopeKey,
     log,
   });

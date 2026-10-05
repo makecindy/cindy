@@ -14,8 +14,10 @@
  *    恢复可用。窗口一点都没用过时不用，任它过期：用了也没有可重置的东西。
  *    这条路径不占「每周一次」的名额：不用也会白白过期。
  *
- * 两条路径都只用**最早过期**的那张（显式传 creditId），有效期更长的留着；同一账号的
- * 读与用串行在一把锁里，避免两条路径或多个任务同时各用一张。
+ * 两条路径都只用**最早过期**的那张（显式传 creditId），有效期更长的留着。所有账号的
+ * 读与用串行在同一把锁里：两条路径、多个任务，或两个连接登录同一工作区，都不会同时
+ * 各用一张。真正扣卡前再核对一次开关与工作区：读额度期间关掉开关或换了账号就不扣。
+ * 每周记录先落盘再扣卡，落不了盘就不扣，宁可少用一次也不突破每周一次。
  *
  * 时间一律用墙钟（Date.now）：重置按墙钟过期，Mac 睡眠期间单调时钟不走。
  */
@@ -193,7 +195,14 @@ export type WeeklyLimitResetResult =
   | { kind: 'restored' }
   | {
       kind: 'skipped';
-      why: 'disabled' | 'no-account' | 'already-used' | 'not-used-up' | 'no-credit' | 'backoff';
+      why:
+        | 'disabled'
+        | 'no-account'
+        | 'account-changed'
+        | 'already-used'
+        | 'not-used-up'
+        | 'no-credit'
+        | 'backoff';
     }
   | { kind: 'failed'; outcome?: ConsumeAccountRateLimitResetCreditOutcome; error?: string };
 
@@ -221,8 +230,12 @@ export interface CodexResetCreditAutoUseDeps {
   ): Promise<ConsumeAccountRateLimitResetCreditResponse>;
   /** 用掉之后刷新额度展示。 */
   afterReset?(providerId: string): void;
-  readWeeklyReset(providerId: string, accountKey: string): WeeklyResetRecord | null;
-  writeWeeklyReset(providerId: string, accountKey: string, record: WeeklyResetRecord): void;
+  /** 按 ChatGPT 工作区记录，不按连接：同一工作区挂在两个连接下也只算一次。 */
+  readWeeklyReset(accountKey: string): WeeklyResetRecord | null;
+  /** 落不了盘时抛错；调用方据此放弃扣卡。 */
+  writeWeeklyReset(accountKey: string, record: WeeklyResetRecord): void;
+  /** 扣卡确定没发生时撤掉先写的记录；只撤与 record 相同的那条。 */
+  clearWeeklyReset(accountKey: string, record: WeeklyResetRecord): void;
   /** 当前 Cindy 账号作用域；变了就丢弃旧作用域的内存状态。 */
   scopeKey(): string;
   log: Logger;
@@ -253,9 +266,13 @@ class ScopeChangedError extends Error {
   }
 }
 
+type ConsumeAttempt =
+  | { kind: 'consumed'; response: ConsumeAccountRateLimitResetCreditResponse }
+  | { kind: 'skipped'; why: 'disabled' | 'account-changed' | 'no-credit' };
+
 interface ScopeState {
   scope: string;
-  locks: Map<string, Promise<unknown>>;
+  lock: Promise<unknown>;
   weeklyInflight: Map<string, Promise<WeeklyLimitResetResult>>;
   weeklyRetryAt: Map<string, number>;
   lastAccountKey: Map<string, string>;
@@ -282,7 +299,7 @@ export function createCodexResetCreditAutoUse(
     if (!state || state.scope !== scope) {
       state = {
         scope,
-        locks: new Map(),
+        lock: Promise.resolve(),
         weeklyInflight: new Map(),
         weeklyRetryAt: new Map(),
         lastAccountKey: new Map(),
@@ -297,36 +314,57 @@ export function createCodexResetCreditAutoUse(
     if (deps.scopeKey() !== owner.scope) throw new ScopeChangedError();
   };
 
-  const withProviderLock = <T>(
+  const withLock = <T>(owner: ScopeState, run: () => Promise<T>): Promise<T> => {
+    const result = owner.lock.then(run, run);
+    owner.lock = result.catch(() => undefined);
+    return result;
+  };
+
+  /** 扣卡前的最后核对：开关仍开、登录的仍是读额度时那个工作区。 */
+  const stillAllowed = async (
     owner: ScopeState,
     providerId: string,
-    run: () => Promise<T>,
-  ): Promise<T> => {
-    const previous = owner.locks.get(providerId) ?? Promise.resolve();
-    const result = previous.then(run, run);
-    const tail = result.catch(() => undefined);
-    owner.locks.set(providerId, tail);
-    void tail.then(() => {
-      if (owner.locks.get(providerId) === tail) owner.locks.delete(providerId);
-    });
-    return result;
+    accountKey: string,
+  ): Promise<'ok' | 'disabled' | 'account-changed'> => {
+    if (!deps.isEnabled(providerId)) return 'disabled';
+    const current = await deps.readAccountKey(providerId);
+    assertScope(owner);
+    if (current !== accountKey) return 'account-changed';
+    return deps.isEnabled(providerId) ? 'ok' : 'disabled';
   };
 
   const consumeEarliest = async (
     owner: ScopeState,
     providerId: string,
+    accountKey: string,
     response: AccountRateLimitsResponse,
-  ): Promise<ConsumeAccountRateLimitResetCreditResponse | null> => {
+    beforeConsume?: () => void,
+  ): Promise<ConsumeAttempt> => {
     const credits = response.rateLimitResetCredits?.credits ?? null;
     const credit = selectEarliestExpiringCredit(credits);
     // 有明细却没有可用的 Codex 重置：计数与明细不一致，不让后端替我们挑一张。
-    if (credits !== null && !credit) return null;
+    if (credits !== null && !credit) return { kind: 'skipped', why: 'no-credit' };
+    const allowed = await stillAllowed(owner, providerId, accountKey);
+    if (allowed !== 'ok') return { kind: 'skipped', why: allowed };
+    beforeConsume?.();
     const result = await deps.consumeResetCredit(providerId, {
       idempotencyKey: createIdempotencyKey(),
       ...(credit ? { creditId: credit.id } : {}),
     });
     assertScope(owner);
-    return result;
+    return { kind: 'consumed', response: result };
+  };
+
+  const clearAhead = (ahead: {
+    accountKey: string | null;
+    record: WeeklyResetRecord | null;
+  }): void => {
+    if (!ahead.accountKey || !ahead.record) return;
+    try {
+      deps.clearWeeklyReset(ahead.accountKey, ahead.record);
+    } catch (error) {
+      deps.log.warn('codex weekly reset record not cleared', { error: errorMessage(error) });
+    }
   };
 
   const runWeekly = async (owner: ScopeState, providerId: string): Promise<WeeklyLimitResetResult> => {
@@ -334,6 +372,11 @@ export function createCodexResetCreditAutoUse(
     if (now() < (owner.weeklyRetryAt.get(providerId) ?? 0)) {
       return { kind: 'skipped', why: 'backoff' };
     }
+    // 先写的每周记录；属性而非 let，异步回调里赋值后外面能读到。
+    const ahead: { accountKey: string | null; record: WeeklyResetRecord | null } = {
+      accountKey: null,
+      record: null,
+    };
     try {
       const accountKey = await deps.readAccountKey(providerId);
       assertScope(owner);
@@ -347,7 +390,7 @@ export function createCodexResetCreditAutoUse(
       assertScope(owner);
       const windows = accountQuotaWindows(response.rateLimits);
       const readAt = now();
-      const record = deps.readWeeklyReset(providerId, accountKey);
+      const record = deps.readWeeklyReset(accountKey);
       if (record && readAt < record.untilMs) {
         if (readAt - record.atMs <= WEEKLY_RECENT_RESET_MS && !quotaHeldUp(windows).stopped) {
           return { kind: 'restored' };
@@ -359,31 +402,43 @@ export function createCodexResetCreditAutoUse(
         owner.weeklyRetryAt.set(providerId, readAt + WEEKLY_RETRY_NOT_USED_UP_MS);
         return { kind: 'skipped', why: 'not-used-up' };
       }
-      const consumed =
+      const attempt =
         normalizeAvailableCount(response.rateLimitResetCredits?.availableCount ?? 0) > 0
-          ? await consumeEarliest(owner, providerId, response)
-          : null;
-      if (!consumed) {
+          ? await consumeEarliest(owner, providerId, accountKey, response, () => {
+              // 先落盘再扣卡：落不了盘这里抛错，不扣。
+              const record = { untilMs, atMs: now() };
+              deps.writeWeeklyReset(accountKey, record);
+              ahead.accountKey = accountKey;
+              ahead.record = record;
+            })
+          : ({ kind: 'skipped', why: 'no-credit' } as const);
+      if (attempt.kind === 'skipped') {
         owner.weeklyRetryAt.set(providerId, now() + WEEKLY_RETRY_FAILED_MS);
-        return { kind: 'skipped', why: 'no-credit' };
+        if (attempt.why !== 'no-credit') {
+          deps.log.info('codex reset for weekly limit not used', { providerId, why: attempt.why });
+        }
+        return { kind: 'skipped', why: attempt.why };
       }
-      if (consumed.outcome !== 'reset') {
+      if (attempt.response.outcome !== 'reset') {
         owner.weeklyRetryAt.set(providerId, now() + WEEKLY_RETRY_FAILED_MS);
+        // 后端明确没有扣：撤掉先写的记录，本周仍可再用。
+        clearAhead(ahead);
         deps.log.info('codex reset not used for weekly limit', {
           providerId,
-          outcome: consumed.outcome,
+          outcome: attempt.response.outcome,
         });
-        return { kind: 'failed', outcome: consumed.outcome };
+        return { kind: 'failed', outcome: attempt.response.outcome };
       }
-      deps.writeWeeklyReset(providerId, accountKey, { untilMs, atMs: now() });
       deps.log.info('codex reset used for weekly limit', { providerId, weekEndsAt: untilMs });
       deps.afterReset?.(providerId);
       return { kind: 'reset' };
     } catch (error) {
       if (error instanceof ScopeChangedError) return { kind: 'failed', error: error.message };
       owner.weeklyRetryAt.set(providerId, now() + WEEKLY_RETRY_FAILED_MS);
+      // 扣卡请求发出后失败：不知道扣没扣，保留记录，本周不再自动用。
       deps.log.warn('codex reset for weekly limit failed', {
         providerId,
+        consumeStarted: ahead.record !== null,
         error: errorMessage(error),
       });
       return { kind: 'failed', error: errorMessage(error) };
@@ -395,8 +450,9 @@ export function createCodexResetCreditAutoUse(
     const startedAt = now();
     if (startedAt < (owner.expiringNextLookAt.get(providerId) ?? 0)) return { kind: 'idle' };
     let response: AccountRateLimitsResponse;
+    let accountKey: string | null;
     try {
-      const accountKey = await deps.readAccountKey(providerId);
+      accountKey = await deps.readAccountKey(providerId);
       assertScope(owner);
       if (!accountKey) {
         owner.expiringNextLookAt.set(providerId, startedAt + EXPIRY_WATCH_MS);
@@ -435,16 +491,20 @@ export function createCodexResetCreditAutoUse(
       return { kind: 'idle' };
     }
     try {
-      const consumed = await consumeEarliest(owner, providerId, response);
-      if (!consumed || consumed.outcome !== 'reset') {
+      const attempt = await consumeEarliest(owner, providerId, accountKey, response);
+      if (attempt.kind === 'skipped' || attempt.response.outcome !== 'reset') {
         owner.expiringNextLookAt.set(providerId, nextExpiringCreditLookAt(untilMs, now()));
-        if (consumed) {
-          deps.log.info('codex reset about to expire not used', {
-            providerId,
-            outcome: consumed.outcome,
-          });
+        if (attempt.kind === 'skipped') {
+          if (attempt.why !== 'no-credit') {
+            deps.log.info('codex reset about to expire not used', { providerId, why: attempt.why });
+          }
+          return { kind: 'idle' };
         }
-        return consumed ? { kind: 'failed', outcome: consumed.outcome } : { kind: 'idle' };
+        deps.log.info('codex reset about to expire not used', {
+          providerId,
+          outcome: attempt.response.outcome,
+        });
+        return { kind: 'failed', outcome: attempt.response.outcome };
       }
       owner.expiringNextLookAt.set(providerId, now() + EXPIRY_CLOSE_MS);
       deps.log.info('codex reset about to expire used', { providerId, expiresAt: untilMs });
@@ -469,7 +529,7 @@ export function createCodexResetCreditAutoUse(
       if (at < (owner.weeklyRetryAt.get(providerId) ?? 0)) return false;
       const accountKey = owner.lastAccountKey.get(providerId);
       if (!accountKey) return true;
-      const record = deps.readWeeklyReset(providerId, accountKey);
+      const record = deps.readWeeklyReset(accountKey);
       return !record || at >= record.untilMs || at - record.atMs <= WEEKLY_RECENT_RESET_MS;
     },
 
@@ -478,7 +538,7 @@ export function createCodexResetCreditAutoUse(
       // 同一账号同时有多个任务撞上配额：共用正在进行的那一次，不各用一张。
       const inflight = owner.weeklyInflight.get(providerId);
       if (inflight) return inflight;
-      const run = withProviderLock(owner, providerId, () => runWeekly(owner, providerId)).finally(
+      const run = withLock(owner, () => runWeekly(owner, providerId)).finally(
         () => {
           if (owner.weeklyInflight.get(providerId) === run) owner.weeklyInflight.delete(providerId);
         },
@@ -489,7 +549,7 @@ export function createCodexResetCreditAutoUse(
 
     checkExpiring(providerId) {
       const owner = current();
-      return withProviderLock(owner, providerId, () => runExpiring(owner, providerId));
+      return withLock(owner, () => runExpiring(owner, providerId));
     },
 
     async sweepExpiring() {
