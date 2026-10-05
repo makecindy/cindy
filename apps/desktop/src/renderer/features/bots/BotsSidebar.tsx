@@ -2,7 +2,7 @@ import { useNavigationAttention } from '@/lib/navigationAttentionStore';
 import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
 import { BotGenerationLabel } from './BotGenerationLabel';
 import { botRosterLabel } from '../../../shared/botCreation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -47,7 +47,10 @@ import { cindyDeviceKey, cindyDeviceOptions, isCindyDeviceBot } from './cindyDev
 import { BotAvatar } from './BotAvatar';
 import { BotCreateMenu } from './BotCreateMenu';
 import { BotDeleteDialog } from './BotDeleteDialog';
-import { BotGroupSidebarSection } from './BotGroupSidebarSection';
+import { BotGroupSidebarRow } from './BotGroupSidebarRow';
+import { useBotGroupList } from './botGroupStore';
+import { subscribeBotReadState, getBotLastReadAtMap } from './botReadState';
+import { ChatJoinButton } from './ChatServerControls';
 import { isBotGroupLaneSession, withoutBotGroupLanes } from './botGroupLane';
 import {
   botListSubtitle,
@@ -65,6 +68,8 @@ import {
   useBotUnreadCounts,
   type BotProfile,
 } from './botStore';
+
+const readRevision = () => JSON.stringify(getBotLastReadAtMap());
 
 /**
  * 未读药丸。用的是登记在 DESIGN.md §10 的窄作用域 token `--bot-unread-bg` /
@@ -90,6 +95,8 @@ function BotsSidebarContent() {
     ...remoteBots.map((bot) => ({ deviceId: bot.deviceId, name: bot.deviceName })),
   ];
   const bots = useBotProfiles();
+  const { groups } = useBotGroupList();
+  useSyncExternalStore(subscribeBotReadState, readRevision, readRevision);
   const unreadByBotId = useBotUnreadCounts();
   const rosterBots = bots.filter((bot) => bot.status !== 'archived');
   const archivedBots = bots.filter((bot) => bot.status === 'archived');
@@ -159,8 +166,19 @@ function BotsSidebarContent() {
     ...roster.visible.filter(bot => !hasMultipleCindys || !cindyOptions.some(option => option.bot === bot)),
     ...remoteBots.filter(bot => (!hasMultipleCindys || !isCindyDeviceBot(bot)) && (!normalizedQuery || `${bot.name} ${bot.description} ${bot.deviceName}`.toLocaleLowerCase().includes(normalizedQuery))),
   ];
-  const rosterSize = rosterBots.length + remoteBots.length - (hasMultipleCindys ? cindyOptions.length - 1 : 0);
+  const rosterSize = groups.length + rosterBots.length + remoteBots.length - (hasMultipleCindys ? cindyOptions.length - 1 : 0);
   const showSearch = rosterSize >= 8 || normalizedQuery.length > 0;
+  const visibleGroups = groups.filter(group => !normalizedQuery ||
+    `${group.name} ${group.members.map(member => member.name).join(' ')}`.toLocaleLowerCase().includes(normalizedQuery));
+  const visibleChats = [
+    ...visibleBots.map(bot => ({ kind: 'bot' as const, bot,
+      pinned: 'pinnedAt' in bot && Boolean(bot.pinnedAt),
+      activityAt: 'activityAt' in bot ? bot.activityAt : bot.lastMessageAt ?? bot.createdAt })),
+    ...visibleGroups.map(group => ({ kind: 'group' as const, group, pinned: false,
+      activityAt: group.lastMessage?.createdAt ?? group.updatedAt })),
+    ...(showCindy && currentCindy ? [{ kind: 'cindy' as const, pinned: cindyOptions.some(option => 'pinnedAt' in option.bot && Boolean(option.bot.pinnedAt)),
+      activityAt: Math.max(...cindyOptions.map(option => 'activityAt' in option.bot ? option.bot.activityAt : option.bot.lastMessageAt ?? option.bot.createdAt)) }] : []),
+  ].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.activityAt - a.activityAt);
 
   const { sessionOwners, groupLaneSessionIds } = useMemo(() => {
     const owners = new Map<string, { bot: BotProfile; title: string }>();
@@ -241,10 +259,10 @@ function BotsSidebarContent() {
   });
 
   useEffect(() => {
-    if (roster.visible.length + remoteBots.length === 0) return;
+    if (roster.visible.length + remoteBots.length + groups.length === 0) return;
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
-  }, [roster.visible.length, remoteBots.length]);
+  }, [roster.visible.length, remoteBots.length, groups.length]);
 
   // 曾经这里还按 bot 逐个拉 `getBotHealth` 只为在行尾画一个状态图标。图标下线之后
   // 这一轮 N 次 IPC 也一起下线——列表不再为一个不显示的东西查询。
@@ -321,9 +339,7 @@ function BotsSidebarContent() {
           </>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem
-          className="text-[var(--text-danger)] focus:text-[var(--text-danger)]"
-          onSelect={() => setDeleteTarget(bot)}
+        <DropdownMenuItem variant="danger" onSelect={() => setDeleteTarget(bot)}
         >
           <Trash2 size={14} className="mr-2" />
           {t('bots.lifecycle.delete')}
@@ -368,6 +384,7 @@ function BotsSidebarContent() {
               {showHidden ? <EyeOff size={15} /> : <Eye size={15} />}
             </button>
           ) : null}
+          <ChatJoinButton onJoined={id => navigate(`/bots/groups/${encodeURIComponent(id)}`)} />
           <BotCreateMenu />
         </span>
       </div>
@@ -390,47 +407,48 @@ function BotsSidebarContent() {
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-3">
-        {roster.visible.length === 0 && roster.hidden.length === 0 && archivedBots.length === 0 && remoteBots.length === 0 ? (
+        {roster.visible.length === 0 && roster.hidden.length === 0 && archivedBots.length === 0 && remoteBots.length === 0 && groups.length === 0 ? (
           <div className="px-3 py-3">
             <BotCreateMenu label={t('bots.add')} />
           </div>
         ) : (
           <div className="flex flex-col gap-1">
-            {showCindy && currentCindy ? (() => {
-              const bot = currentCindy.bot;
-              const local = 'deviceId' in bot ? null : bot;
-              const selected = Boolean(routeCindy);
-              const activity = local ? botRunningActivity(local) : undefined;
-              const subtitle = local ? botListSubtitle(local) : null;
-              const subtitleText = activity ? <BotGenerationLabel sessionId={activity.sessionId} phase={activity.workingPhase} startedAt={activity.startedAtMs} />
-                : 'deviceId' in bot && bot.online && bot.generation ? <BotGenerationLabel sessionId={bot.sessionId ?? undefined} {...bot.generation} remote={{ deviceId: bot.deviceId, botId: bot.id }} />
-                : subtitle ? subtitle.kind === 'placeholder' ? t('bots.list.startChat') : subtitle.text
-                  : 'preview' in bot ? bot.preview || bot.description || t('bots.list.startChat') : '';
-              return <CindyDeviceRow key="cindy-devices" current={currentCindy} options={cindyOptions}
-                selected={selected} typing={Boolean(activity || ('deviceId' in bot && bot.online && bot.generation))} subtitle={subtitleText}
-                timestamp={formatBotListTimestamp(local
-                  ? botListTimestampAt({ lastMessageAt: local.lastMessageAt, working: Boolean(activity) }, now)
-                  : 'activityAt' in bot ? bot.activityAt : 0, now)}
-                onOpen={() => navigate(currentCindy.route)}
-                onSelect={option => navigate(option.route)}
-                onContextMenu={local ? event => {
-                  event.preventDefault(); event.stopPropagation();
-                  openBotContextMenu(local.id, event.currentTarget, event.clientX, event.clientY);
-                } : undefined}
-                onKeyDown={local ? event => {
-                  if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
-                  event.preventDefault();
-                  const rect = event.currentTarget.getBoundingClientRect();
-                  openBotContextMenu(local.id, event.currentTarget, rect.left + 10, rect.bottom);
-                } : undefined}>
-                {local ? renderBotContextMenu(local, selected) : null}
-              </CindyDeviceRow>;
-            })() : null}
-            {visibleBots
-              .sort((a, b) => {
-                const pin = Number('pinnedAt' in b && Boolean(b.pinnedAt)) - Number('pinnedAt' in a && Boolean(a.pinnedAt));
-                return pin || ('activityAt' in b ? b.activityAt : b.lastMessageAt ?? b.createdAt) - ('activityAt' in a ? a.activityAt : a.lastMessageAt ?? a.createdAt);
-              }).map((bot) => {
+            {visibleChats.map(entry => {
+              if (entry.kind === 'group') return <BotGroupSidebarRow key={`group:${entry.group.id}`} group={entry.group}
+                bots={bots} islandActivity={islandActivity} now={now} selected={entry.group.id === groupId}
+                onOpenGroup={id => navigate(`/bots/groups/${encodeURIComponent(id)}`)} />;
+              if (entry.kind === 'cindy') {
+                if (!currentCindy) return null;
+                const bot = currentCindy.bot;
+                const local = 'deviceId' in bot ? null : bot;
+                const selected = Boolean(routeCindy);
+                const activity = local ? botRunningActivity(local) : undefined;
+                const subtitle = local ? botListSubtitle(local) : null;
+                const subtitleText = activity ? <BotGenerationLabel sessionId={activity.sessionId} phase={activity.workingPhase} startedAt={activity.startedAtMs} />
+                  : 'deviceId' in bot && bot.online && bot.generation ? <BotGenerationLabel sessionId={bot.sessionId ?? undefined} {...bot.generation} remote={{ deviceId: bot.deviceId, botId: bot.id }} />
+                  : subtitle ? subtitle.kind === 'placeholder' ? t('bots.list.startChat') : subtitle.text
+                    : 'preview' in bot ? bot.preview || bot.description || t('bots.list.startChat') : '';
+                return <CindyDeviceRow key="cindy-devices" current={currentCindy} options={cindyOptions}
+                  selected={selected} typing={Boolean(activity || ('deviceId' in bot && bot.online && bot.generation))} subtitle={subtitleText}
+                  timestamp={formatBotListTimestamp(local
+                    ? botListTimestampAt({ lastMessageAt: local.lastMessageAt, working: Boolean(activity) }, now)
+                    : 'activityAt' in bot ? bot.activityAt : 0, now)}
+                  onOpen={() => navigate(currentCindy.route)}
+                  onSelect={option => navigate(option.route)}
+                  onContextMenu={local ? event => {
+                    event.preventDefault(); event.stopPropagation();
+                    openBotContextMenu(local.id, event.currentTarget, event.clientX, event.clientY);
+                  } : undefined}
+                  onKeyDown={local ? event => {
+                    if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
+                    event.preventDefault();
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    openBotContextMenu(local.id, event.currentTarget, rect.left + 10, rect.bottom);
+                  } : undefined}>
+                  {local ? renderBotContextMenu(local, selected) : null}
+                </CindyDeviceRow>;
+              }
+              const bot = entry.bot;
               if ('deviceId' in bot) {
                 const selected = bot.id === botId && bot.deviceId === deviceId;
                 const deviceName = botDeviceLabel({ deviceId: bot.deviceId, name: bot.deviceName }, rosterDevices);
@@ -673,15 +691,7 @@ function BotsSidebarContent() {
             ) : null}
           </div>
         )}
-        {rosterBots.length > 0 ? (
-          <BotGroupSidebarSection
-            bots={bots}
-            islandActivity={islandActivity}
-            now={now}
-            selectedGroupId={groupId}
-            onOpenGroup={(id) => navigate(`/bots/groups/${encodeURIComponent(id)}`)}
-          />
-        ) : null}
+
       </div>
       <BotDeleteDialog
         bot={deleteTarget}

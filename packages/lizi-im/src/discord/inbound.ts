@@ -9,9 +9,9 @@ const MAX_INBOUND_FILE_BYTES = 50 * 1024 * 1024;
 export interface MessageLike {
   id: string;
   content?: string | null;
-  author: { id: string };
+  author: { id: string; username?: string; globalName?: string | null };
   channelId?: string;
-  channel?: { id?: string };
+  channel?: { id?: string; name?: string };
   attachments?: Iterable<AttachmentLike> | { values(): IterableIterator<AttachmentLike> };
   stickers?: Iterable<StickerLike> | { values(): IterableIterator<StickerLike> };
   type?: string | number;
@@ -122,6 +122,11 @@ export async function normalizeDmMessage(
 
   return {
     channelName: 'discord',
+    interactionSource: {
+      chatName: m.channel?.name ?? m.author.globalName ?? m.author.username,
+      senderName: m.author.globalName ?? m.author.username ?? m.author.id,
+      messageUrl: `https://discord.com/channels/@me/${chatId}/${m.id}`,
+    },
     senderId: m.author.id,
     chatId,
     contextId: ctx.contextId,

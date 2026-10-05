@@ -566,7 +566,8 @@ describe('MobileDownloadDialog', () => {
     expect(source).toContain('<Smartphone');
     expect(source).toContain('<Monitor');
     expect(source).toContain("t('sidebar.mobileDownload.subtitle')");
-    expect(source).toContain('bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]');
+    expect(source).toContain('modal-scrim');
+    expect(source).toContain('modal-panel');
     expect(source).not.toMatch(/(?:linear|conic|radial)-gradient/);
     expect(source).not.toMatch(/#[0-9a-f]{3,8}|rgba?\(/i);
   });

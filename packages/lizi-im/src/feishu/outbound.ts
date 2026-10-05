@@ -1049,17 +1049,19 @@ export async function addReaction(messageId: string, emojiType: string): Promise
 
 /**
  * 撤销之前 addReaction 返回的 reaction_id 对应的表情。
- * 失败 swallow,因为这是 ack 的清理动作,不应影响 turn 结束流程。
+ * 失败向调用方抛出，让状态切换保留原 token；终态由编排层尽力清理。
  */
 export async function removeReaction(messageId: string, reactionId: string): Promise<void> {
-  const log = getLog();
   try {
-    await ensureClient().im.v1.messageReaction.delete({
+    const response = await ensureClient().im.v1.messageReaction.delete({
       path: { message_id: messageId, reaction_id: reactionId },
     });
+    const rejected = feishuBusinessRejectReason(response);
+    if (rejected) throw new Error(`removeReaction failed: ${rejected}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`[feishu/outbound] removeReaction failed (non-fatal): ${msg}`);
+    getLog().warn(`[feishu/outbound] removeReaction failed (non-fatal): ${msg}`);
+    throw err;
   }
 }
 

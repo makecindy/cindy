@@ -10,8 +10,6 @@
   },
   "renderer": {
     "moreActions": "更多訊息操作",
-    "previousQuestionJump": "跳到上一條提問：{{preview}}",
-    "noPreview": "無預覽",
     "newMessagesToBottom": "有新訊息，跳到底部",
     "jumpToBottom": "跳到底部",
     "openForkOrigin": "開啟分叉來源訊息",
@@ -70,6 +68,8 @@
     "durationSeconds": "{{seconds}} 秒",
     "durationMinutes": "{{minutes}} 分鐘",
     "durationMinutesSeconds": "{{minutes}} 分 {{seconds}} 秒",
+    "durationHoursMinutes": "{{hours}} 小時 {{minutes}} 分",
+    "durationDaysHoursMinutes": "{{days}} 天 {{hours}} 小時 {{minutes}} 分",
     "subagentSummary": "Subagent 小結",
     "agentSwitchLabel": "已從 {{from}} 切換到 {{to}}",
     "agentSwitchViewHandoff": "{{label}}，檢視交接內容",
@@ -148,6 +148,8 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "sourceMissing": "原始圖片已不在這台電腦上，請重新匯入原始檔案。",
+    "deviceOffline": "電腦尚未連線，請恢復連線後重試。",
     "cancelAnnotation": "取消標註",
     "cancel": "取消",
     "undoLastStroke": "撤銷上一筆",

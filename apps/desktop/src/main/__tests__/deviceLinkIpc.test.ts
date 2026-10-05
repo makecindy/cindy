@@ -112,6 +112,8 @@ import {
 import { DeviceLinkError, PLUGIN_OAUTH_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL } from '@cindy/device-link';
 import { invokeWithClosedLinkRecovery } from '../device-link/linkRecovery';
 import { ServerApiError } from '../serverApiClient';
+import { createIpcError } from '../../shared/ipc-errors';
+import { ReviewArtifactAuthorizationError } from '../reviewer/reviewArtifactAuthorization';
 import {
   __testing as settingsTesting,
   normalizeCachedDeviceName,
@@ -900,13 +902,23 @@ describe('device-link controller handlers', () => {
     );
   });
 
-  it('invoke:本地传输背压 → DEVICE_LINK_NOT_CONNECTED', async () => {
+  it('invoke:本地传输背压 → DEVICE_LINK_BUSY', async () => {
     const deps = makeDeps({
       invoke: vi.fn().mockRejectedValue(new DeviceLinkError('BACKPRESSURE', 'buffer full')),
     });
     await expect(handleInvoke(deps, 'dev-2', 'maker:send', [])).rejects.toThrowError(
-      /\[DEVICE_LINK_NOT_CONNECTED\]/,
+      /\[DEVICE_LINK_BUSY\]/,
     );
+  });
+
+  it('invoke: remote admission backpressure remains busy rather than disconnected', async () => {
+    const deps = makeDeps({
+      invoke: vi.fn().mockResolvedValue({
+        ok: false, error: { code: 'BACKPRESSURE', message: 'remote invoke execution queue is full' },
+      }),
+    });
+    await expect(handleInvoke(deps, 'dev-2', 'local-db:task-tags:execute', []))
+      .rejects.toMatchObject({ code: 'DEVICE_LINK_BUSY' });
   });
 
   it('invoke: a second peer reset stops retrying and becomes a disconnected IPC error', async () => {
@@ -929,6 +941,37 @@ describe('device-link controller handlers', () => {
     await expect(handleInvoke(deps, 'dev-2', 'local-db:messages:list', ['session'])).rejects.toMatchObject({
       code: 'DEVICE_LINK_NOT_CONNECTED', message: '[DEVICE_LINK_NOT_CONNECTED] peer reset',
     });
+  });
+
+  it('invoke:Review 授权/校验拒绝保留原错误码,不再误标为媒体传输失败', async () => {
+    // 回归:maker:review:start 与附件上传共用 rewriteOutboundMedia, 其 PERMISSION_DENIED
+    // (凭证/密钥附件拒绝)、INVALID_PARAMS(整批请求校验)与用户取消授权对话框
+    // (ReviewArtifactAuthorizationError)曾被 catch 一律折叠成
+    // DEVICE_LINK_MEDIA_TRANSFER_FAILED —— 消费端会把"有意拒绝"当可重试传输故障。
+    const invoke = vi.fn().mockResolvedValue({ ok: true, result: null });
+    for (const rejection of [
+      createIpcError('PERMISSION_DENIED', 'Review refused a credential or key attachment'),
+      createIpcError('INVALID_PARAMS', 'review attachments must be an array'),
+      Object.assign(new ReviewArtifactAuthorizationError('Review of external artifacts was cancelled')),
+    ]) {
+      const deps = makeDeps({
+        invoke,
+        rewriteOutboundMedia: vi.fn().mockRejectedValue(rejection),
+      });
+      await expect(handleInvoke(deps, 'dev-2', 'maker:review:start', [{ sourceSessionId: 's' }]))
+        .rejects.toThrowError(rejection instanceof ReviewArtifactAuthorizationError
+          ? /\[PERMISSION_DENIED\] Review of external artifacts was cancelled/
+          : new RegExp(`\\[${rejection.code}\\]`));
+      expect(invoke).not.toHaveBeenCalled();
+    }
+    // 真传输失败(普通 Error)仍折叠为 MEDIA_TRANSFER_FAILED。
+    const deps = makeDeps({
+      invoke,
+      rewriteOutboundMedia: vi.fn().mockRejectedValue(new Error('OSS PUT 失败 (403)')),
+    });
+    await expect(handleInvoke(deps, 'dev-2', 'maker:review:start', [{ sourceSessionId: 's' }]))
+      .rejects.toThrowError(/\[DEVICE_LINK_MEDIA_TRANSFER_FAILED\]/);
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it('invoke:出方向附件改写失败 → DEVICE_LINK_MEDIA_TRANSFER_FAILED,不发 invoke(整条不发)', async () => {
@@ -1062,7 +1105,7 @@ describe('device-link controller handlers', () => {
     });
     await handleSubscribe(deps, 'dev-2', ['sessions'], 1);
     await expect(handleUnsubscribe(deps, 'dev-2', ['sessions'], 1)).rejects.toThrowError(
-      /\[DEVICE_LINK_NOT_CONNECTED\]/,
+      /\[DEVICE_LINK_BUSY\]/,
     );
     await expect(handleUnsubscribe(deps, 'dev-2', ['sessions'], 1)).resolves.toEqual({ ok: true });
     expect(deps.unsubscribe).toHaveBeenCalledTimes(2);

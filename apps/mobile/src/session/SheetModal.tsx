@@ -1,5 +1,6 @@
 import { useAdaptiveWindow, PaneViewportProvider, FloatingSheetContext } from '@/platform/AdaptiveWindowContext';
 import { modalLayout } from '@/platform/modalLayout';
+import { NativeBottomSheet } from './NativeBottomSheet';
 /**
  * SheetModal —— 底部 sheet 共用的 Modal 外壳(背板淡入淡出 + 面板自底部滑入滑出)。
  *
@@ -36,6 +37,8 @@ import { useThemedStyles, type ThemeColors } from '@/theme';
 import { motionDuration } from '@/theme/tokens';
 
 export interface SheetModalProps {
+  /** Single-level, unconditional dismissal only. Nested Back / unsaved draft veto keeps the compatibility shell. */
+  nativePresentation?: boolean;
   visible: boolean;
   /** Android 返回键 / iOS 关闭手势(调用方可做两段式:二级先回一级)。 */
   onRequestClose: () => void;
@@ -51,7 +54,17 @@ export interface SheetModalProps {
   children: ReactNode;
 }
 
-export function SheetModal({
+export function SheetModal(props: SheetModalProps) {
+  const geometry = useAdaptiveWindow();
+  const { floating } = modalLayout(geometry, 0);
+  // Floating/hinged layouts retain pane placement rather than a full-window dialog.
+  if (Platform.OS === 'android' && props.nativePresentation && !floating && geometry.regions.length === 0) {
+    return <NativeBottomSheet visible={props.visible} onClose={props.onBackdropPress} onClosed={props.onClosed}>{props.children}</NativeBottomSheet>;
+  }
+  return <CompatibleSheetModal {...props} />;
+}
+
+function CompatibleSheetModal({
   visible,
   onRequestClose,
   onBackdropPress,
@@ -127,6 +140,7 @@ export function SheetModal({
       </PaneViewportProvider>
     </Animated.View>
   );
+
 
   return (
     <Modal

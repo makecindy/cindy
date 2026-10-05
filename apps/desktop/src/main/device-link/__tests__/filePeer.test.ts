@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, truncate } from 'node:fs/promises';
+import { promises as fsPromises } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 const mock = vi.hoisted(() => ({
@@ -10,7 +11,9 @@ const mock = vi.hoisted(() => ({
   iceConfig: vi.fn(async () => []),
   ready: vi.fn(async () => {}),
   replyDelay: 0,
-  commandReply: vi.fn((_action: string) => 'v=0'),
+  sent: [] as string[],
+  commands: [] as Record<string, any>[],
+  commandReply: vi.fn((_action: string): string | undefined => 'v=0'),
   now: undefined as number | undefined,
   receiving: undefined as undefined | { sink: string; reply: () => void },
 }));
@@ -46,6 +49,8 @@ vi.mock('../../remote-desktop/captureWindow', () => ({
         isDestroyed: () => false,
         send: (_channel: string, id: string, c: { action: string; sink?: string }) => {
           if (c.action !== 'close') {
+            mock.sent.push(c.action);
+            mock.commands.push(c);
             const reply = () =>
               mock.handlers.get('file-peer:host:reply')!({}, id, true, mock.commandReply(c.action));
             if (c.action === 'receive') {
@@ -229,6 +234,8 @@ describe('authorized file peer source', () => {
     mock.current = true;
     mock.receiving = undefined;
     mock.now = undefined;
+    mock.sent.length = 0;
+    mock.commands.length = 0;
     mock.iceConfig.mockReset().mockResolvedValue([]);
     mock.ready.mockReset().mockResolvedValue();
     mock.replyDelay = 0;
@@ -326,6 +333,7 @@ describe('authorized file peer source', () => {
       streaming: true,
       attachments: true,
       largeAttachments: true,
+      streamAttachments: true,
     });
     const first = await connect();
     expect((await open(first.connection)).size).toBe(limit);
@@ -333,6 +341,319 @@ describe('authorized file peer source', () => {
     await truncate(file, limit + 1);
     const second = await connect();
     await expect(open(second.connection)).rejects.toThrow('SIZE');
+  });
+  it('hands a streamed block body to the attachment write as raw bytes, never to other requests', async () => {
+    const invoke = vi.fn(async (_channel: string, args: unknown[]) => ({ ok: true, args }));
+    const { connection } = (await requestFilePeer(
+      'device-a',
+      { action: 'offer', sdp: 'v=0' },
+      invoke as never,
+    )) as { connection: string };
+    const handle = mock.handlers.get('file-peer:host:invoke')!;
+    const payload = (request: Record<string, unknown>) =>
+      JSON.stringify({
+        channel: 'device-link:file-peer',
+        args: [{ action: 'attachment', connection, request }],
+      });
+    const body = new Uint8Array(Buffer.from('hi'));
+    await handle({}, connection, payload({ op: 'write', ticket: 't', offset: 0 }), body);
+    const data = (invoke.mock.calls[0][1][0] as { request: { data: unknown } }).request.data;
+    expect(Buffer.isBuffer(data) && data.toString()).toBe('hi');
+    for (const [text, bytes] of [
+      [payload({ op: 'finish', ticket: 't' }), body],
+      [payload({ op: 'write', ticket: 't', offset: 0, data: 'aGk=' }), body],
+      [payload({ op: 'write', ticket: 't', offset: 0 }), new Uint8Array(1024 * 1024 + 1)],
+      [payload({ op: 'write', ticket: 't', offset: 0 }), 'aGk='],
+      [JSON.stringify({ channel: 'file-browser:remote-op', args: [{ op: 'readFile' }] }), body],
+    ] as const)
+      await expect(handle({}, connection, text, bytes)).rejects.toThrow('DENIED');
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    ['stream-peer', true],
+    ['old-attachment-peer', false],
+  ])('uploads blocks to %s with the advertised write format', async (peer, stream) => {
+    const source = path.join(directory, 'upload');
+    await writeFile(source, Buffer.alloc(2.5 * 1024 * 1024, 7));
+    const ticket = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+    const invoke = vi.fn(async (_peer: string, _channel: string, args: unknown[]) => ({
+      ok: true,
+      result:
+        (args[0] as { action: string }).action === 'caps'
+          ? { version: 1, streaming: true, attachments: true, streamAttachments: stream }
+          : { connection: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', sdp: 'v=0' },
+    }));
+    // Replies are synchronous, so the command being answered is the last one recorded.
+    mock.commandReply.mockImplementation((action) =>
+      action === 'invoke'
+        ? JSON.stringify({
+            ok: true,
+            result:
+              JSON.parse(mock.commands.at(-1)!.payload).args[0].request.op === 'begin'
+                ? { ticket }
+                : {},
+          })
+        : 'v=0',
+    );
+    const ref = await tryUploadPeerAttachment(peer, source, 'application/octet-stream', invoke);
+    expect(ref).toContain(ticket);
+    const writes = mock.commands
+      .filter((c) => c.action === 'invoke')
+      .map((c) => ({
+        body: c.body as string | undefined,
+        timeoutMs: c.timeoutMs as number | undefined,
+        request: JSON.parse(c.payload).args[0].request,
+      }))
+      .filter((c) => c.request.op === 'write');
+    expect(writes.map((c) => c.request.offset)).toEqual([0, 1024 * 1024, 2 * 1024 * 1024]);
+    for (const c of writes) {
+      // Old receivers only understand the base64 field; streaming ones get the raw-byte body.
+      expect(c.body !== undefined).toBe(stream);
+      expect(c.request.data !== undefined).toBe(!stream);
+      expect(c.timeoutMs).toBe(stream ? 45_000 : undefined);
+    }
+    expect(Buffer.from(writes[2].body ?? writes[2].request.data, 'base64')).toEqual(
+      Buffer.alloc(0.5 * 1024 * 1024, 7),
+    );
+  });
+  it('stops a cancelled upload mid-file, discards the staging and keeps the peer usable', async () => {
+    const peer = 'cancel-upload-peer';
+    const source = path.join(directory, 'upload');
+    await writeFile(source, Buffer.alloc(5 * 1024 * 1024, 3));
+    const ticket = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
+    const invoke = vi.fn(async (_peer: string, _channel: string, args: unknown[]) => ({
+      ok: true,
+      result:
+        (args[0] as { action: string }).action === 'caps'
+          ? { version: 1, streaming: true, attachments: true, streamAttachments: true }
+          : { connection: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', sdp: 'v=0' },
+    }));
+    const abort = new AbortController();
+    const ops = () =>
+      mock.commands
+        .filter((c) => c.action === 'invoke')
+        .map((c) => JSON.parse(c.payload).args[0].request.op as string);
+    mock.commandReply.mockImplementation((action) => {
+      if (action !== 'invoke') return 'v=0';
+      const op = JSON.parse(mock.commands.at(-1)!.payload).args[0].request.op;
+      // The user cancels while the second block is on the wire.
+      if (op === 'write' && ops().filter((o) => o === 'write').length === 2) abort.abort();
+      return JSON.stringify({ ok: true, result: op === 'begin' ? { ticket } : {} });
+    });
+    await expect(
+      tryUploadPeerAttachment(peer, source, undefined, invoke, undefined, abort.signal),
+    ).rejects.toThrow('FILE_PEER_CANCELLED');
+    // No further blocks after the cancel; the receiver is then told to drop what it staged
+    // (the abandoned upload sends that after the caller has already returned).
+    await vi.waitFor(() => expect(ops().at(-1)).toBe('cancel'));
+    expect(ops().filter((o) => o === 'write').length).toBeLessThanOrEqual(4);
+    // A cancel is not a transport failure: the next upload still goes direct.
+    mock.commands.length = 0;
+    expect(await tryUploadPeerAttachment(peer, source, undefined, invoke)).toContain(ticket);
+    expect(ops().at(-1)).toBe('finish');
+  });
+  it('returns at once when cancelled while a block reply is still pending', async () => {
+    const peer = 'pending-reply-cancel-peer';
+    const source = path.join(directory, 'upload');
+    await writeFile(source, Buffer.alloc(3 * 1024 * 1024, 5));
+    const ticket = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
+    const invoke = vi.fn(async (_peer: string, _channel: string, args: unknown[]) => ({
+      ok: true,
+      result:
+        (args[0] as { action: string }).action === 'caps'
+          ? { version: 1, streaming: true, attachments: true, streamAttachments: true }
+          : { connection: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', sdp: 'v=0' },
+    }));
+    const abort = new AbortController();
+    const ops = () =>
+      mock.commands
+        .filter((c) => c.action === 'invoke')
+        .map((c) => JSON.parse(c.payload).args[0].request.op as string);
+    mock.commandReply.mockImplementation((action) => {
+      if (action !== 'invoke') return 'v=0';
+      const op = JSON.parse(mock.commands.at(-1)!.payload).args[0].request.op;
+      // From the first block on, replies stall like a slow link; then the user cancels.
+      if (op === 'write' && !mock.replyDelay) {
+        mock.replyDelay = 4_000;
+        setTimeout(() => abort.abort(), 10);
+      }
+      return JSON.stringify({ ok: true, result: op === 'begin' ? { ticket } : {} });
+    });
+    const startedAt = Date.now();
+    await expect(
+      tryUploadPeerAttachment(peer, source, undefined, invoke, undefined, abort.signal),
+    ).rejects.toThrow('FILE_PEER_CANCELLED');
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    // The connection stays up, so the target is still told to drop the partial staging.
+    await vi.waitFor(() => expect(ops().at(-1)).toBe('cancel'));
+  });
+  it('returns at once when cancelled during the capability probe, with the source already closed', async () => {
+    const source = path.join(directory, 'upload');
+    await writeFile(source, 'hello');
+    const opened = vi.spyOn(fsPromises, 'open');
+    let answer!: (value: unknown) => void;
+    const invoke = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const abort = new AbortController();
+    const upload = tryUploadPeerAttachment(
+      'silent-peer',
+      source,
+      undefined,
+      invoke as never,
+      undefined,
+      abort.signal,
+    );
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalled());
+    const handle = await (opened.mock.results[0].value as ReturnType<typeof fsPromises.open>);
+    // A slow close (like a busy disk) makes a caller that settles early observable.
+    const close = handle.close.bind(handle);
+    let closed = false;
+    handle.close = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await close();
+      closed = true;
+    };
+    abort.abort();
+    // The caller may delete the file straight away (Windows), so the close must have finished
+    // when the call settles — not still be running in the background.
+    const settled = await upload.then(
+      () => ({ error: '', closed }),
+      (error: Error) => ({ error: error.message, closed }),
+    );
+    opened.mockRestore();
+    expect(settled).toEqual({ error: 'FILE_PEER_CANCELLED', closed: true });
+    // The late probe result is ignored: nothing is hashed or sent afterwards.
+    answer({ ok: true, result: { version: 1, streaming: true, attachments: true } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(mock.commands.filter((c) => c.action === 'invoke')).toEqual([]);
+  });
+  it('drops the ticket of a begin answered only after the upload was cancelled', async () => {
+    const peer = 'late-begin-peer';
+    const source = path.join(directory, 'upload');
+    await writeFile(source, 'hello');
+    const ticket = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+    const invoke = vi.fn(async (_peer: string, _channel: string, args: unknown[]) => ({
+      ok: true,
+      result:
+        (args[0] as { action: string }).action === 'caps'
+          ? { version: 1, streaming: true, attachments: true, streamAttachments: true }
+          : { connection: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', sdp: 'v=0' },
+    }));
+    const abort = new AbortController();
+    const requests = () =>
+      mock.commands
+        .filter((c) => c.action === 'invoke')
+        .map((c) => JSON.parse(c.payload).args[0].request as { op: string; ticket?: string });
+    mock.commandReply.mockImplementation((action) => {
+      // Once connected, the target answers slowly.
+      if (action === 'answer') mock.replyDelay = 50;
+      if (action !== 'invoke') return 'v=0';
+      const op = JSON.parse(mock.commands.at(-1)!.payload).args[0].request.op;
+      return JSON.stringify({ ok: true, result: op === 'begin' ? { ticket } : {} });
+    });
+    const upload = tryUploadPeerAttachment(peer, source, undefined, invoke, undefined, abort.signal);
+    // The target has created the ticket, but before its answer arrives the user cancels.
+    await vi.waitFor(() => expect(requests().map((r) => r.op)).toContain('begin'));
+    abort.abort();
+    await expect(upload).rejects.toThrow('FILE_PEER_CANCELLED');
+    // The cancel returned at once; the late ticket is still released on the target.
+    await vi.waitFor(() => expect(requests().at(-1)).toEqual({ op: 'cancel', ticket }));
+    expect(requests().filter((r) => r.op === 'write')).toEqual([]);
+  });
+  it('cancelling an upload during connection setup leaves another peer and its transfer untouched', async () => {
+    const source = path.join(directory, 'upload');
+    await writeFile(source, 'hello');
+    // Peer B: an established connection with a download in flight.
+    const invokeB = vi.fn(async (_peer: string, _channel: string, args: unknown[]) => {
+      const action = (args[0] as { action: string }).action;
+      return {
+        ok: true,
+        result:
+          action === 'caps'
+            ? { version: 1, streaming: true }
+            : action === 'open'
+              ? { ticket: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', size: 5, mimeType: 'text/plain' }
+              : { connection: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', sdp: 'v=0' },
+      };
+    });
+    const download = tryPeerFile('fault-radius-peer-b', 'xdt-file://test', invokeB);
+    await vi.waitFor(() => expect(mock.receiving).toBeDefined());
+    const inFlightB = mock.receiving!;
+    // Peer A: the upload is cancelled while its connection is still being set up (no answer).
+    const invokeA = vi.fn(async (_peer: string, _channel: string, args: unknown[]) =>
+      (args[0] as { action: string }).action === 'caps'
+        ? {
+            ok: true,
+            result: { version: 1, streaming: true, attachments: true, streamAttachments: true },
+          }
+        : new Promise<never>(() => {}),
+    );
+    const abort = new AbortController();
+    const upload = tryUploadPeerAttachment(
+      'fault-radius-peer-a',
+      source,
+      undefined,
+      invokeA as never,
+      undefined,
+      abort.signal,
+    );
+    await vi.waitFor(() =>
+      expect(invokeA.mock.calls.map((call) => (call[2][0] as { action: string }).action)).toContain(
+        'offer',
+      ),
+    );
+    abort.abort();
+    await expect(upload).rejects.toThrow('FILE_PEER_CANCELLED');
+    // B never notices: its in-flight transfer completes on the same connection.
+    await mock.handlers.get('file-peer:host:write')!({}, inFlightB.sink, 0, 'aGVsbG8=');
+    inFlightB.reply();
+    const result = await download;
+    expect(result?.size).toBe(5);
+    await result?.dispose();
+    expect(invokeB.mock.calls.map((call) => (call[2][0] as { action: string }).action)).not.toContain(
+      'close',
+    );
+  });
+  it('drops a cancelled upload still queued behind another transfer on the same peer', async () => {
+    const peer = 'queued-cancel-peer';
+    const source = path.join(directory, 'upload');
+    await writeFile(source, 'hello');
+    const invoke = vi.fn(async (_peer: string, _channel: string, args: unknown[]) => {
+      const action = (args[0] as { action: string }).action;
+      return {
+        ok: true,
+        result:
+          action === 'caps'
+            ? { version: 1, streaming: true, attachments: true, streamAttachments: true }
+            : action === 'open'
+              ? { ticket: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', size: 5, mimeType: 'text/plain' }
+              : { connection: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', sdp: 'v=0' },
+      };
+    });
+    // A preview download holds the peer's transfer queue until its bytes arrive.
+    const download = tryPeerFile(peer, 'xdt-file://test', invoke);
+    await vi.waitFor(() => expect(mock.receiving).toBeDefined());
+    const abort = new AbortController();
+    const upload = tryUploadPeerAttachment(
+      peer,
+      source,
+      undefined,
+      invoke,
+      undefined,
+      abort.signal,
+    );
+    abort.abort();
+    await expect(upload).rejects.toThrow('FILE_PEER_CANCELLED');
+    await mock.handlers.get('file-peer:host:write')!({}, mock.receiving!.sink, 0, 'aGVsbG8=');
+    mock.receiving!.reply();
+    const result = await download;
+    expect(result?.size).toBe(5);
+    await result?.dispose();
   });
   it('rejects another peer using a connection handle', async () => {
     const { connection } = await connect();
@@ -451,6 +772,98 @@ describe('authorized file peer source', () => {
       const next = await open(connection);
       await vi.advanceTimersByTimeAsync(61_000);
       await expect(read(connection, next.ticket, 0)).rejects.toThrow('FILE_PEER_BLOCK');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('samples send progress without renewing the idle deadline and stops with the connection', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      const { connection } = await connect();
+      const { ticket } = await open(connection);
+      mock.commandReply.mockClear();
+      await vi.advanceTimersByTimeAsync(3_000);
+      const samples = () => mock.commandReply.mock.calls.filter(([action]) => action === 'stats');
+      expect(samples().length).toBeGreaterThanOrEqual(3);
+      await vi.advanceTimersByTimeAsync(58_000);
+      await expect(read(connection, ticket, 0)).rejects.toThrow('FILE_PEER_BLOCK');
+      mock.commandReply.mockClear();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(samples()).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('keeps a transfer usable when a diagnostics stats probe stalls', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      const { connection } = await connect();
+      mock.replyDelay = 20_000;
+      const { ticket } = await open(connection);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(await read(connection, ticket, 0)).toBe(Buffer.from('hello').toString('base64'));
+      expect(await read(connection, ticket, 5)).toBe('');
+      expect((await open(connection)).ticket).toEqual(expect.any(String));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('keeps sampling after a failed stats probe while the transfer runs', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      const { connection } = await connect();
+      // Every stats reply stalls past the 5s probe budget: each sample times out.
+      mock.replyDelay = 20_000;
+      const { ticket } = await open(connection);
+      await vi.advanceTimersByTimeAsync(30_000);
+      // A transient stats failure skips one sample instead of silencing the rest
+      // of the transfer: probes keep flowing (old code sent exactly two).
+      expect(mock.sent.filter((action) => action === 'stats').length).toBeGreaterThanOrEqual(5);
+      expect(await read(connection, ticket, 0)).toBe(Buffer.from('hello').toString('base64'));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('does not let transfer chunks stretch a stalled stats probe past its budget', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      await truncate(file, 100_000);
+      mock.resolve.mockResolvedValue({ absPath: file, mimeType: 'text/plain', maxBytes: 100_000 });
+      const { connection } = await connect();
+      mock.replyDelay = 20_000;
+      const { ticket, size } = await open(connection);
+      expect(size).toBe(100_000);
+      // Chunks keep arriving well within 5s; a shared timer would let them refresh
+      // the stalled probe forever and skip every later sample.
+      for (let offset = 0; ; offset += 16_384) {
+        await vi.advanceTimersByTimeAsync(3_000);
+        const base64 = await read(connection, ticket, Math.min(offset, size));
+        if (!base64) break;
+      }
+      expect(mock.sent.filter((action) => action === 'stats').length).toBeGreaterThanOrEqual(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('attributes channel drain to one file at a time', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      mock.commandReply.mockImplementation((action) =>
+        action === 'stats' ? JSON.stringify({ channel: { bufferedAmount: 5 } }) : 'v=0',
+      );
+      const { connection } = await connect();
+      const first = await open(connection);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await read(connection, first.ticket, 0)).toBe(Buffer.from('hello').toString('base64'));
+      expect(await read(connection, first.ticket, 5)).toBe('');
+      // The first file is still draining (bufferedAmount stays above zero) when the
+      // next transfer starts and owns the channel buffer.
+      await vi.advanceTimersByTimeAsync(1_000);
+      await open(connection);
+      mock.sent.length = 0;
+      await vi.advanceTimersByTimeAsync(3_000);
+      // Only the new file samples now; a superseded drain monitor would double the rate.
+      expect(mock.sent.filter((action) => action === 'stats').length).toBeLessThanOrEqual(4);
     } finally {
       vi.useRealTimers();
     }

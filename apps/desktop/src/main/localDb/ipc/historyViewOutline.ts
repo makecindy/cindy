@@ -8,10 +8,19 @@ import { messages } from '../schema';
 /** Read-model headers only. Full content is read by ID after visible items are selected.
  * Candidate artifact results are conservative: the shared parser remains authoritative.
  * Invalid legacy JSON stays intact instead of disappearing from the history.
+ * Plain-text tool output (Codex stores most results this way) is folded like a
+ * JSON result; otherwise one long turn exhausts the scan budget on outlines alone.
+ * Media and card payloads require JSON, so plain text can only carry `xdt-file://`
+ * links or a bare `cindy-media://` URL. Real deliveries are short; long logs that
+ * merely mention those schemes are folded too.
  */
 export function historyOutlineContent(): SQL<string> {
   const body = messages.content;
   return sql<string>`CASE
+    WHEN ${messages.role} = 'tool_result' AND NOT json_valid(${body})
+      AND NOT (length(${body}) <= 16384
+        AND (instr(${body}, 'xdt-file://') > 0 OR instr(${body}, 'cindy-media://') > 0))
+      THEN json_quote(CASE WHEN instr(${body}, '<tool_use_error>') > 0 THEN '<tool_use_error>' ELSE '' END)
     WHEN NOT json_valid(${body}) THEN ${body}
     WHEN ${messages.role} = 'thinking' THEN json_object('isRedacted', json(CASE
       WHEN (json_type(${body}, '$') = 'text' AND length(json_extract(${body}, '$')) > 0)

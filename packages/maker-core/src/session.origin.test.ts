@@ -12,6 +12,7 @@ import { Session } from './session.js';
 import {
   MAIN_OWNED_SEND_CONTEXT,
   AUTO_REVIEW_USER_INTENT,
+  AUTO_REVIEW_DELEGATED_CONTINUATION,
   type AgentSessionHandle,
   type SendOptions,
   type TurnContinuationState,
@@ -147,6 +148,14 @@ function createControllableHandle(opts?: {
 }
 
 describe('dispatch authorization refresh', () => {
+  it('passes the protected continuation marker through acceptance to the harness', async () => {
+    const h = createControllableHandle();
+    const session = makeSession(h.handle);
+    await session.send('Lead continuation', { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true, [AUTO_REVIEW_USER_INTENT]: 'persisted fallback' });
+    expect(h.lastSendOptions()?.[AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(true);
+    await session.close();
+  });
+
   it('reads authorization after accepted preparation and overrides an earlier snapshot', async () => {
     const h = createControllableHandle();
     const session = makeSession(h.handle);
@@ -309,19 +318,19 @@ describe('Session per-turn origin 打标', () => {
     releaseLease();
   });
 
-  it('带 origin 的 send → 本轮每个事件都带同一 turnOrigin;done 后清空', async () => {
+  it.each([SCHED_ORIGIN, { kind: 'user', surface: 'im' } as const])('带 origin 的 send → 本轮每个事件都带同一 turnOrigin;done 后清空 (%j)', async (origin) => {
     const { handle, emit } = createControllableHandle();
     const session = makeSession(handle);
     const seen: AgentEvent[] = [];
     session.onEvent((e) => seen.push({ ...e }));
 
-    await session.send('go', { origin: SCHED_ORIGIN });
+    await session.send('go', { origin });
     await emit({ type: 'text', data: { text: 'hi', isFinal: false } });
     await emit({ type: 'done', data: {} });
 
     expect(seen.map((e) => e.type)).toEqual(['text', 'done']);
-    expect(seen[0]!.turnOrigin).toEqual(SCHED_ORIGIN);
-    expect(seen[1]!.turnOrigin).toEqual(SCHED_ORIGIN); // 终止事件本身也带 origin
+    expect(seen[0]!.turnOrigin).toEqual(origin);
+    expect(seen[1]!.turnOrigin).toEqual(origin); // 终止事件本身也带 origin
 
     // done 之后的事件(下一轮还没 send)不应再带 origin —— 已清空
     await emit({ type: 'status', data: { isRunning: false } });

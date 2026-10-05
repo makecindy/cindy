@@ -26,7 +26,8 @@ describe('ChatInput voice lifecycle locks', () => {
     const extraDirsBlock = chatInputSource.slice(extraDirsStart, permissionStart);
     expect(extraDirsBlock).toContain('disabled={composerMutationLocked}');
 
-    const permissionEnd = chatInputSource.indexOf('/>', permissionStart);
+    // Inline footer elements can close before the outer permission selector.
+    const permissionEnd = permissionStart + chatInputSource.slice(permissionStart).search(/\n\s*\/>/);
     expect(permissionEnd).toBeGreaterThan(permissionStart);
     const permissionBlock = chatInputSource.slice(permissionStart, permissionEnd);
     expect(permissionBlock).toContain('disabled={composerEditorLocked || settingsLocked || sharedGuest}');

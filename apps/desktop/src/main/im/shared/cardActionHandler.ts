@@ -1646,6 +1646,7 @@ export function createCardActionHandler(
           // 授权卡保留原始正文(工具名 + 参数预览)再追加决策结果 — 用户要能
           // 回看自己批准的是什么; 其它交互卡维持整卡替换的旧形态。
           const resolvedLabel = describeDecision(decision);
+          if (resolved.shared) return; // Shared presenter updates every surface once.
           const spec = resolved.permissionCard
             ? cards.buildResolvedPermissionCard(resolved.permissionCard, resolvedLabel)
             : cards.buildResolvedCard(resolvedLabel);

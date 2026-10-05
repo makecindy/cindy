@@ -2,7 +2,7 @@ import {
   collectMobileMarkdownImages,
   isMobileMarkdownImageDirectUrl,
   mobileMarkdownImageTitle,
-  mobileMarkdownImageUrlForWorkdir,
+  mobileMarkdownManagedImagePreviewUrl,
 } from '@/session/messageMarkdown';
 import type { NormalizedRemoteMessage, NormalizedToolMedia } from '@/session/messageNormalize';
 import type { MessagePayload } from '@/session/messagePayload';
@@ -73,7 +73,9 @@ export function collectMobileMessageGalleryImages(
     // 正文 Markdown 图片(![](url) / 安全 <img>)也纳入图集,点开后可与附件图片一起横滑翻页。
     if (includeBodyImages && message.body) {
       collectMobileMarkdownImages(message.body).forEach((image, index) => {
-        const url = mobileMarkdownImageUrlForWorkdir(
+        // The viewer automatically fetches neighboring pages. Apply the same
+        // workdir/realpath boundary as inline previews before adding any page.
+        const url = isMobileMarkdownImageDirectUrl(image.url) ? image.url : mobileMarkdownManagedImagePreviewUrl(
           image.url,
           workdir,
           message.key,

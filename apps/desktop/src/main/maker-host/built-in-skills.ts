@@ -26,6 +26,7 @@ export const BUILT_IN_SKILLS_BUNDLE_VERSION = 12;
 export interface BuiltInSkillDescriptor {
   name: string;
   absolutePath: string;
+  /** Profile-owned discovery projection (legacy field name); never a user-global path. */
   nativeClaudePath: string;
 }
 
@@ -98,6 +99,10 @@ export function resolveBundledSystemSkillsRoot(input: {
     : path.join(input.appPath, 'resources', 'system-skills');
 }
 
+export function builtInSkillPluginRoot(userDataDir: string): string {
+  return path.join(userDataDir, 'managed-agent-skills', 'cindy');
+}
+
 export function builtInSkillsRoot(userDataDir: string): string {
   return path.join(userDataDir, 'system-skills');
 }
@@ -149,7 +154,7 @@ function builtInSkillDescriptorsAtRoot(
   return BUILT_IN_SKILL_NAMES.map((name) => ({
     name,
     absolutePath: path.join(root, name),
-    nativeClaudePath: path.join(userDataDir, 'claude-home', 'skills', name),
+    nativeClaudePath: path.join(builtInSkillPluginRoot(userDataDir), 'skills', name),
   }));
 }
 
@@ -652,14 +657,13 @@ async function removeActiveBundlePointer(root: string): Promise<boolean> {
 
 async function ensureSharedEntry(
   descriptor: BuiltInSkillDescriptor,
-  homeDir: string,
   legacyUserDataDir: string,
   appDataDir?: string,
   replaceDirectoryEntryAtomically?: AtomicReplaceDirectoryEntry,
 ): Promise<{ changed: boolean; warning?: string; targetPath?: string }> {
   return ensureSkillEntry(
     descriptor,
-    path.join(homeDir, '.agents', 'skills', descriptor.name),
+    descriptor.nativeClaudePath,
     true,
     legacyUserDataDir,
     appDataDir,
@@ -674,7 +678,6 @@ async function refreshBuiltInSharedSkillLinksUnlocked(
 ): Promise<RefreshBuiltInSharedSkillLinksResult> {
   const descriptors = options.descriptors
     ?? builtInSkillDescriptors(options.userDataDir, options.appDataDir);
-  const homeDir = options.homeDir ?? os.homedir();
   const warnings: string[] = [];
   let changed = false;
   let complete = true;
@@ -683,7 +686,6 @@ async function refreshBuiltInSharedSkillLinksUnlocked(
     try {
       const linked = await ensureSharedEntry(
         descriptor,
-        homeDir,
         options.userDataDir,
         options.appDataDir,
         options.replaceDirectoryEntryAtomically,
@@ -701,7 +703,7 @@ async function refreshBuiltInSharedSkillLinksUnlocked(
   return { changed, complete, warnings };
 }
 
-/** Refresh the home-level shared projection. Call only inside the stable owner boundary. */
+/** Refresh private skill projections. Call only inside the stable owner boundary. */
 export async function refreshBuiltInSharedSkillLinks(
   options: RefreshBuiltInSharedSkillLinksOptions,
 ): Promise<RefreshBuiltInSharedSkillLinksResult> {
@@ -725,13 +727,10 @@ function realPathOrNormalized(value: string): string {
   catch { return normalizeForCompare(value); }
 }
 
-async function hasSkillFile(skillDir: string): Promise<boolean> {
-  for (const fileName of ['SKILL.md', 'skill.md']) {
-    if ((await fsp.stat(path.join(skillDir, fileName)).catch(() => null))?.isFile()) {
-      return true;
-    }
-  }
-  return false;
+function builtInCommandName(skill: AgentSkillCommand): string {
+  return skill.name.startsWith('cindy:') && skill.runtimeCommandName === skill.name
+    ? skill.name.slice('cindy:'.length)
+    : skill.name;
 }
 
 /** Main-owned attestation used by the renderer; names and descriptions are not trusted. */
@@ -744,7 +743,7 @@ export function markCindyBuiltInAgentSkills(
     realPathOrNormalized(path.join(descriptor.absolutePath, 'SKILL.md')),
   ]));
   return skills.map((skill) => {
-    const trustedPath = trustedSkillFiles.get(skill.name);
+    const trustedPath = trustedSkillFiles.get(builtInCommandName(skill));
     const builtIn = Boolean(skill.path && trustedPath && realPathOrNormalized(skill.path) === trustedPath);
     if (builtIn) return { ...skill, builtIn: true };
     if (skill.builtIn === undefined) return skill;
@@ -763,68 +762,36 @@ export function activeCindyBuiltInAgentSkills(
   const descriptorsByName = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
   return markCindyBuiltInAgentSkills(skills, descriptors).filter((skill) => {
     if (skill.builtIn !== true) return true;
-    const descriptor = descriptorsByName.get(skill.name);
+    const descriptor = descriptorsByName.get(builtInCommandName(skill));
     return descriptor ? isEnabled(descriptor.absolutePath) : false;
   });
 }
 
 async function refreshBuiltInClaudeSkillLinksUnlocked(
-  options: Omit<RefreshBuiltInClaudeSkillLinksOptions, 'withSharedMutation'> & {
-    allowUnresolvedManagedSharedTarget?: boolean;
-  },
+  options: Omit<RefreshBuiltInClaudeSkillLinksOptions, 'withSharedMutation'>,
 ): Promise<RefreshBuiltInClaudeSkillLinksResult> {
   const descriptors = options.descriptors
     ?? builtInSkillDescriptors(options.userDataDir, options.appDataDir);
-  const homeDir = options.homeDir ?? os.homedir();
   const warnings: string[] = [];
   let changed = false;
   let complete = true;
 
   for (const descriptor of descriptors) {
-    const sharedPath = path.join(homeDir, '.agents', 'skills', descriptor.name);
-    const claudePalettePath = path.join(homeDir, '.claude', 'skills', descriptor.name);
-    const hasClaudePaletteSkill = await hasSkillFile(claudePalettePath);
-    const claudeRuntimeTarget = hasClaudePaletteSkill ? claudePalettePath : sharedPath;
-    const unresolvedSharedTargetIsManaged = !hasClaudePaletteSkill
-      && options.allowUnresolvedManagedSharedTarget === true
-      && await isCindyManagedSystemSkillTarget(
-        sharedPath,
-        descriptor,
-        options.userDataDir,
-        options.appDataDir,
-      );
-    if (!(await hasSkillFile(claudeRuntimeTarget)) && !unresolvedSharedTargetIsManaged) {
-      complete = false;
-      warnings.push(
-        `could not expose built-in Skill ${descriptor.name} to Claude because its palette winner is unavailable`,
-      );
-      continue;
-    }
     try {
-      const linked = await ensureSkillEntry(
-        descriptor,
-        descriptor.nativeClaudePath,
-        true,
-        options.userDataDir,
-        options.appDataDir,
-        claudeRuntimeTarget,
-        [sharedPath, claudePalettePath],
-        options.replaceDirectoryEntryAtomically,
-      );
+      const linked = await ensureSkillEntry(descriptor, descriptor.nativeClaudePath, true,
+        options.userDataDir, options.appDataDir, undefined, [], options.replaceDirectoryEntryAtomically);
       changed = linked.changed || changed;
-      if (linked.warning) warnings.push(linked.warning);
+      if (linked.warning) { complete = false; warnings.push(linked.warning); }
     } catch (error) {
       complete = false;
-      warnings.push(
-        `could not expose built-in Skill ${descriptor.name} to Claude: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      warnings.push(`could not expose built-in Skill ${descriptor.name}: ${String(error)}`);
     }
   }
 
   return { changed, complete, warnings };
 }
 
-/** Keep Cindy's isolated Claude runtime pointed at the latest shared/palette winner. */
+/** Refresh private projections used by Cindy's local Claude plugin and other harnesses. */
 export async function refreshBuiltInClaudeSkillLinks(
   options: RefreshBuiltInClaudeSkillLinksOptions,
 ): Promise<RefreshBuiltInClaudeSkillLinksResult> {
@@ -843,6 +810,32 @@ export async function refreshBuiltInClaudeSkillLinks(
   };
 }
 
+/** Remove only old Cindy-owned links, inspecting fanout before its source. */
+export async function migrateBuiltInGlobalSkillLinks(options: {
+  userDataDir: string; appDataDir?: string; homeDir?: string;
+}): Promise<string[]> {
+  const warnings: string[] = [];
+  const home = options.homeDir ?? os.homedir();
+  // Descriptors here identify legacy targets, not official identity.
+  const root = options.appDataDir ? sharedBuiltInSkillsRoot(options.appDataDir) : builtInSkillsRoot(options.userDataDir);
+  for (const descriptor of stableBuiltInSkillDescriptors(root, options.userDataDir)) {
+    const shared = path.join(home, '.agents', 'skills', descriptor.name);
+    const sharedManaged = await isCindyManagedSystemSkillTarget(shared, descriptor, options.userDataDir, options.appDataDir);
+    for (const entry of [path.join(home, '.claude', 'skills', descriptor.name),
+      path.join(options.userDataDir, 'claude-home', 'skills', descriptor.name), shared]) {
+      try {
+        const before = await fsp.readlink(entry);
+        if (!await isCindyManagedSystemSkillTarget(entry, descriptor, options.userDataDir, options.appDataDir,
+          sharedManaged ? [shared] : [])) continue;
+        if (await fsp.readlink(entry) === before) await fsp.unlink(entry);
+      } catch (error) {
+        if (!['ENOENT', 'EINVAL'].includes((error as NodeJS.ErrnoException).code ?? '')) warnings.push(String(error));
+      }
+    }
+  }
+  return warnings;
+}
+
 interface BuiltInProjectionSnapshot {
   path: string;
   kind: 'missing' | 'symlink' | 'other';
@@ -855,7 +848,6 @@ function builtInProjectionPaths(
 ): string[] {
   return [...new Set(descriptors.flatMap((descriptor) => [
     descriptor.nativeClaudePath,
-    path.join(homeDir, '.agents', 'skills', descriptor.name),
   ]))];
 }
 
@@ -993,29 +985,15 @@ async function removeInactiveBuiltInProjections(
 async function projectBuiltInSkillLinksUnlocked(
   options: PrepareBuiltInSkillsOptions,
   descriptors: readonly BuiltInSkillDescriptor[],
-  allowUnresolvedManagedSharedTarget = false,
 ): Promise<{ changed: boolean; complete: boolean; warnings: string[] }> {
-  const homeDir = options.homeDir ?? os.homedir();
-  const shared = await refreshBuiltInSharedSkillLinksUnlocked({
+  // All harnesses now share one private projection. Preparing the old shared
+  // and Claude branches twice would replace our own still-dangling entry.
+  return refreshBuiltInClaudeSkillLinksUnlocked({
     userDataDir: options.userDataDir,
     appDataDir: options.appDataDir,
-    homeDir,
     descriptors,
     replaceDirectoryEntryAtomically: options.replaceDirectoryEntryAtomically,
   });
-  const claude = await refreshBuiltInClaudeSkillLinksUnlocked({
-    userDataDir: options.userDataDir,
-    appDataDir: options.appDataDir,
-    homeDir,
-    descriptors,
-    allowUnresolvedManagedSharedTarget,
-    replaceDirectoryEntryAtomically: options.replaceDirectoryEntryAtomically,
-  });
-  return {
-    changed: shared.changed || claude.changed,
-    complete: shared.complete && claude.complete,
-    warnings: [...shared.warnings, ...claude.warnings],
-  };
 }
 
 /**
@@ -1233,7 +1211,6 @@ export async function prepareBuiltInSkills(
       const candidateProjection = await projectBuiltInSkillLinksUnlocked(
         options,
         stableDescriptors,
-        true,
       );
       warnings.push(...candidateProjection.warnings);
       if (!candidateProjection.complete) {

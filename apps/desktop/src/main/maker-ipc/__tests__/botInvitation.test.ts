@@ -5,6 +5,13 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// These checkpoints include real filesystem I/O, not a one-second performance contract.
+// Use the existing platform test budget; vi.waitFor otherwise defaults to only 1000 ms.
+let ioTimeout: number;
+function waitForIo(assertion: () => unknown) {
+  return vi.waitFor(assertion, { timeout: ioTimeout });
+}
+
 const h = vi.hoisted(() => ({
   client: {} as { drizzle: unknown; tx: unknown },
   root: '',
@@ -93,7 +100,8 @@ function seed(invitation: Record<string, unknown> = {}, config: Record<string, u
       }),
     );
 }
-beforeEach(async () => {
+beforeEach(async ({ task }) => {
+  ioTimeout = task.timeout;
   vi.clearAllMocks();
   h.owner = 'owner-a';
   h.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-invitation-'));
@@ -131,13 +139,13 @@ describe('companion invitation with SQLite and real skill files', () => {
     const createCanonicalSession = vi.fn(async () => ({ canonicalSessionId: 'chat-1' }));
     const canStartWelcome = vi.fn(async () => Boolean(getSelectedNewMakerRoute(h.owner)));
     enqueueBotInvitation('bot-1', { canStartWelcome, createCanonicalSession, broadcastProfileChanged: h.broadcast });
-    await vi.waitFor(() => expect(canStartWelcome).toHaveBeenCalledOnce());
+    await waitForIo(() => expect(canStartWelcome).toHaveBeenCalledOnce());
     expect(state().stage).toBe('welcome');
     expect(createCanonicalSession).not.toHaveBeenCalled();
     expect(h.welcome).not.toHaveBeenCalled();
     const selected = { harness: 'codex' as const, providerId: 'user-provider', model: 'user-selected-model', effort: 'low', fastMode: true };
     mirror(selected);
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await waitForIo(() => expect(state().stage).toBe('ready'));
     mirror(selected);
     expect(getSelectedNewMakerRoute(h.owner)).toEqual(selected);
     expect(createCanonicalSession).toHaveBeenCalledOnce();
@@ -240,7 +248,7 @@ describe('companion invitation with SQLite and real skill files', () => {
     expect(state().stage).toBe('welcome');
     expect(createCanonicalSession).not.toHaveBeenCalled();
     cold.setBotInvitationWelcomeDispatch(h.welcome);
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(createCanonicalSession).toHaveBeenCalledOnce();
     expect(h.welcome).toHaveBeenCalledOnce();
   });
@@ -252,7 +260,7 @@ describe('companion invitation with SQLite and real skill files', () => {
   ])('greets in invitation locale %s without a separate generation step', async (locale, expectedLocale) => {
     seed({ locale });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(h.welcome).toHaveBeenCalledOnce();
     expect(h.generate).not.toHaveBeenCalled();
     const { message, persistedContent } = h.welcome.mock.calls[0]![0];
@@ -269,7 +277,7 @@ describe('companion invitation with SQLite and real skill files', () => {
     const welcomeContext = { projects: ['Puzzle Studio'], tasks: ['Build a game editor'], automations: ['Daily issue triage'] };
     seed({ welcomeContext });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(h.welcome).toHaveBeenCalledOnce();
     expect(h.generate).not.toHaveBeenCalled();
     const { message } = h.welcome.mock.calls[0]![0];
@@ -286,7 +294,7 @@ describe('companion invitation with SQLite and real skill files', () => {
     const welcomeContext = { projects: [], tasks: [], automations: [], [field]: [attack] };
     seed({ welcomeContext });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(h.welcome).toHaveBeenCalledOnce();
     expect(h.generate).not.toHaveBeenCalled();
     const { message, persistedContent } = h.welcome.mock.calls[0]![0];
@@ -309,7 +317,7 @@ describe('companion invitation with SQLite and real skill files', () => {
     seed({ draft });
     queueBotInvitation('bot-1');
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(h.generate).not.toHaveBeenCalled();
     expect(await readBotSkill(h.root, 'bot-1', 'develop-characters')).toMatchObject(
       draft.skills[0],
@@ -331,7 +339,7 @@ describe('companion invitation with SQLite and real skill files', () => {
     seed({ stage: 'skills', draft });
     await seedBotSkillIfMissing(h.root, 'bot-1', { ...draft.skills[0]!, body: '用户自己的方法' });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(h.generate).not.toHaveBeenCalled();
     expect((await readBotSkill(h.root, 'bot-1', 'develop-characters'))?.body).toBe(
       '用户自己的方法',
@@ -350,17 +358,17 @@ describe('companion invitation with SQLite and real skill files', () => {
       return { ok: await receipts.dispatch(input.targetSessionId, clientId, enqueued) };
     });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(enqueued).toHaveBeenCalledOnce());
+    await waitForIo(() => expect(enqueued).toHaveBeenCalledOnce());
     expect(state()).toMatchObject({ stage: 'welcome', draft, welcomeContext, welcomeClientId: 'welcome-attempt-1' });
     receipts.settle('chat-1', 'welcome-attempt-1', false);
-    await vi.waitFor(() => expect(state().stage).toBe('failed'));
+    await waitForIo(() => expect(state().stage).toBe('failed'));
     expect(state()).toMatchObject({ draft, welcomeContext, welcomeClientId: 'welcome-attempt-1' });
 
     queueBotInvitation('bot-1', true);
-    await vi.waitFor(() => expect(enqueued).toHaveBeenCalledTimes(2));
+    await waitForIo(() => expect(enqueued).toHaveBeenCalledTimes(2));
     expect(h.welcome.mock.calls[1][0]).toMatchObject({ clientId: 'welcome-attempt-1', retry: true });
     receipts.settle('chat-1', 'welcome-attempt-2', true);
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(state().draft).toBeUndefined();
     expect(state().welcomeContext).toBeUndefined();
     expect(state().welcomeClientId).toBeUndefined();
@@ -371,10 +379,10 @@ describe('companion invitation with SQLite and real skill files', () => {
     seed();
     h.welcome.mockResolvedValueOnce({ ok: false });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('failed'));
+    await waitForIo(() => expect(state().stage).toBe('failed'));
     expect(h.welcome).toHaveBeenCalledTimes(1);
     queueBotInvitation('bot-1', true);
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(sqlite.prepare('SELECT count(*) AS n FROM bot_profiles').get()).toEqual({ n: 1 });
   });
 
@@ -384,7 +392,7 @@ describe('companion invitation with SQLite and real skill files', () => {
       seed({}, { templateId });
       sqlite.prepare('UPDATE bot_profile_versions SET identity_source = ?').run('用户已经修改的人设');
       queueBotInvitation('bot-1');
-      await vi.waitFor(() => expect(state().stage).toBe('ready'));
+      await waitForIo(() => expect(state().stage).toBe('ready'));
       expect(h.generate).not.toHaveBeenCalled();
       const folder = await readBotProfileFolder(h.root, 'bot-1');
       expect(folder.identitySource).toBe('用户已经修改的人设');
@@ -395,7 +403,7 @@ describe('companion invitation with SQLite and real skill files', () => {
   it('does not lose a prepared character when optional image generation is unavailable', async () => {
     seed({ avatarRequested: true, avatarPrompt: draft.avatarPrompt });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state()).toMatchObject({ stage: 'ready', avatarSkipped: true }));
+    await waitForIo(() => expect(state()).toMatchObject({ stage: 'ready', avatarSkipped: true }));
     expect(sqlite.prepare('SELECT avatar FROM bot_profiles').get()).toEqual({ avatar: '✦' });
     expect(h.welcome).toHaveBeenCalledTimes(1);
   });
@@ -403,11 +411,11 @@ describe('companion invitation with SQLite and real skill files', () => {
   it('retries an optional portrait without regenerating the character or greeting again', async () => {
     seed({ avatarRequested: true, avatarPrompt: draft.avatarPrompt });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(state().avatarSkipped).toBe(true);
     queueBotInvitation('bot-1', true);
-    await vi.waitFor(() => expect(h.prepareAvatar).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await waitForIo(() => expect(h.prepareAvatar).toHaveBeenCalledTimes(2));
+    await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(h.generate).not.toHaveBeenCalled();
     expect(h.welcome).toHaveBeenCalledTimes(1);
   });
@@ -416,7 +424,7 @@ describe('companion invitation with SQLite and real skill files', () => {
     seed({ stage: 'avatar', avatarRequested: true, avatarPrompt: draft.avatarPrompt });
     sqlite.prepare("UPDATE bot_profiles SET canonical_session_id = 'chat-1' WHERE id = 'bot-1'").run();
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(h.generate).not.toHaveBeenCalled();
     expect(h.welcome).not.toHaveBeenCalled();
     expect(state().avatarSkipped).toBe(true);
@@ -430,7 +438,7 @@ describe('companion invitation with SQLite and real skill files', () => {
       return { url: 'ai-portrait', hash: 'a'.repeat(64) };
     });
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(sqlite.prepare('SELECT avatar FROM bot_profiles').get()).toEqual({
       avatar: 'user-upload',
     });
@@ -445,7 +453,7 @@ describe('companion invitation with SQLite and real skill files', () => {
     });
     h.finishAvatar.mockRejectedValueOnce(new Error('outcome unknown'));
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(h.prepareAvatar).not.toHaveBeenCalled();
     expect(h.finishAvatar).toHaveBeenCalledWith(
       'image-1',
@@ -458,7 +466,7 @@ describe('companion invitation with SQLite and real skill files', () => {
   it('creates from a name without generating a profile or padding Skills', async () => {
     seed();
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(h.generate).not.toHaveBeenCalled();
     expect(await readBotSkill(h.root, 'bot-1', 'develop-characters')).toBeNull();
     expect((await readBotProfileFolder(h.root, 'bot-1')).identitySource).toContain('original');
@@ -470,7 +478,7 @@ describe('companion invitation with SQLite and real skill files', () => {
     let finish!: (value: unknown) => void;
     h.finishAvatar.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     queueBotInvitation('bot-1');
-    await vi.waitFor(() => expect(h.finishAvatar).toHaveBeenCalled());
+    await waitForIo(() => expect(h.finishAvatar).toHaveBeenCalled());
     h.owner = 'owner-b';
     finish({ url: 'ai-portrait', hash: 'a'.repeat(64) });
     await new Promise(resolve => setTimeout(resolve, 20));
@@ -481,8 +489,7 @@ describe('companion invitation with SQLite and real skill files', () => {
 
 describe('generated character validation', () => {
   it.each([{ skills: [] }, { skills: [draft.skills[0]] }])('accepts only the methods the character needs', ({ skills }) => {
-    const { greeting, ...withoutGreeting } = draft;
-    expect(parseBotInvitationDraft(JSON.stringify({ ...withoutGreeting, skills })).skills).toEqual(skills);
+    expect(parseBotInvitationDraft(JSON.stringify({ ...draft, greeting: undefined, skills })).skills).toEqual(skills);
   });
   it('keeps the sketch as quoted input and accepts a complete role-specific draft', () => {
     expect(botInvitationPrompt('阿橙', '一个热爱写网文的小说家', 'zh-CN')).toContain(

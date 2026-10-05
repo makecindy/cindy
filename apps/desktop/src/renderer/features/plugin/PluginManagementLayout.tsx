@@ -87,7 +87,7 @@ export function PluginManagementLayout({
   return (
     <div
       className={cn(
-        'plugin-management-layout-root plugin-motion-root flex h-full min-h-0 w-full flex-col',
+        'app-wallpaper-surface plugin-management-layout-root plugin-motion-root flex h-full min-h-0 w-full flex-col',
         embedded ? 'bg-transparent' : 'bg-[var(--surface)]',
       )}
     >

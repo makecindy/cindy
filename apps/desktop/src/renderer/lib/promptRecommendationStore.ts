@@ -75,7 +75,7 @@ function handlePreferenceChanged(enabled: boolean): void {
     entries.clear();
     pendingCompletionRevisions.clear();
     sawRunningSessionIds.clear();
-      runStartedAtBySession.clear();
+    runStartedAtBySession.clear();
     for (const timer of settleTimers.values()) clearTimeout(timer);
     settleTimers.clear();
     for (const sessionId of changedSessionIds) emitSession(sessionId);
@@ -104,8 +104,8 @@ function settleCompletion(sessionId: string): void {
   if (revision == null || !sawRunningSessionIds.has(sessionId)) return;
 
   pendingCompletionRevisions.delete(sessionId);
-  sawRunningSessionIds.delete(sessionId);
-  runStartedAtBySession.delete(sessionId);
+  // status:false 与最终 done 都可能写 ended revision。500ms 只是合并窗口，
+  // 不是终末证明：保留本轮观察资格，Main 暂时返回 null 后仍能接住迟到的 done。
   const previousHandled = handledCompletionRevisions.get(sessionId) ?? 0;
   if (revision <= previousHandled) return;
   handledCompletionRevisions.set(sessionId, revision);
@@ -121,6 +121,8 @@ function settleCompletion(sessionId: string): void {
     !status.hasAutoDrainingQueue;
 
   if (!eligible) {
+    sawRunningSessionIds.delete(sessionId);
+    runStartedAtBySession.delete(sessionId);
     deleteEntry(sessionId);
     return;
   }
@@ -194,6 +196,8 @@ function noteTurnEnded(sessionId: string, revision: number): void {
   const pending = pendingCompletionRevisions.get(sessionId) ?? 0;
   if (revision <= handled || revision <= pending) return;
   pendingCompletionRevisions.set(sessionId, revision);
+  // 新 revision 已到达时立即隔离旧 Promise，不能等 settle timer 才作废。
+  deleteEntry(sessionId);
   scheduleCompletionSettle(sessionId);
 }
 
@@ -325,6 +329,8 @@ export function resolvePromptRecommendationPrediction(
     deleteEntry(sessionId);
     return;
   }
+  sawRunningSessionIds.delete(sessionId);
+  runStartedAtBySession.delete(sessionId);
   entries.set(sessionId, {
     ...current,
     phase: 'ready',
@@ -333,10 +339,18 @@ export function resolvePromptRecommendationPrediction(
   emitSession(sessionId);
 }
 
-/** Tab / 发送 / workingDir / 附件等消费路径同步作废当前推荐。 */
+/** Tab / 发送 / workingDir 等显式消费路径同步作废当前推荐和迟到的完成通知。 */
 export function dismissPromptRecommendation(sessionId: string, revision?: number): void {
   const current = entries.get(sessionId);
-  if (!current || (revision != null && current.revision !== revision)) return;
+  if (revision != null && current?.revision !== revision) return;
+  // 无 entry 也可能仍在等待最终 done；显式发送/换目录应取消这份等待。
+  // 新 running 的 layout effect 也会调用本函数，不能清掉刚开始的新轮资格。
+  if (!runningSessionIds.has(sessionId)) {
+    clearSettleTimer(sessionId);
+    pendingCompletionRevisions.delete(sessionId);
+    sawRunningSessionIds.delete(sessionId);
+    runStartedAtBySession.delete(sessionId);
+  }
   deleteEntry(sessionId);
 }
 

@@ -411,8 +411,9 @@ export class AgentIslandService {
   }
 
   /**
-   * 当某会话的排队工作因 INPUT_REMOVE / INPUT_CLEAR_SESSION 被清空(而非被派发)时调用。
-   * 若该会话有待补发的完成事件(之前因队列非空而被推迟),且现在队列确实为空,则立即补发。
+   * 当某会话的排队工作因 INPUT_REMOVE / INPUT_CLEAR_SESSION 被清空(而非被派发)、
+   * 或 Orca Lead 的最后一份 Worker 回报已结清时调用。若该会话有待补发的完成事件
+   * (之前因推迟判定成立而被压住),且现在推迟判定已不成立,则立即补发。
    */
   notifyQueueEmptied(sessionId: string): void {
     const deferred = this.deferredCompletions.get(sessionId);
@@ -785,7 +786,13 @@ export class AgentIslandService {
     const suppressCompletionAttention = this.isCompletionEventSilenced(hydrated.sessionId, event);
     const changed = applyAgentIslandEvent(this.state, hydrated, event, now, {
       suppressCompletionAttention,
-      preserveCompletionAttention: suppressCompletionAttention && this.hadAttentionBeforeSilencedRun(hydrated.sessionId),
+      // Direct IM sends bypass handleUserPrompt. Running preserves unread in the
+      // live state/ledger, so use that state (including any intervening read ack).
+      preserveCompletionAttention: suppressCompletionAttention && (
+        event.turnOrigin?.surface === 'im'
+          ? hasAgentIslandSessionAttention(this.state, hydrated.sessionId)
+          : this.hadAttentionBeforeSilencedCompletion(hydrated.sessionId)
+      ),
       allowCompletionAfterTerminalError:
         isRemoteDaemonClosedErrorEvent(event) &&
         this.deps.isPlannedRemoteDaemonClose?.(hydrated.sessionId) === true,
@@ -1383,7 +1390,7 @@ export class AgentIslandService {
 
   private isCompletionEventSilenced(sessionId: string, event: AgentEvent): boolean {
     if (!isCompletionDoneEvent(event)) return false;
-    return this.silencedSessionRunIds.has(sessionId);
+    return event.turnOrigin?.surface === 'im' || this.silencedSessionRunIds.has(sessionId);
   }
 
   private hadAttentionBeforeSilencedRun(sessionId: string): boolean {

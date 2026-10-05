@@ -65,6 +65,9 @@ vi.mock('@/device-link/remoteResources', () => ({
   loadRemoteResourceManifest: h.manifest,
   invokeRemoteResourceAction: h.action,
 }));
+vi.mock('@/device-link/remoteStatus', () => ({
+  humanizeRemoteError: (error: unknown) => String(error),
+}));
 vi.mock('@/device-link/focusedTopicSubscription', () => ({
   startFocusedTopicSubscription: () => () => {},
 }));
@@ -150,7 +153,6 @@ it('does not discover host-wide cards or retry them for a shared-task guest', as
   await act(async () => root!.render(createElement(Probe, { device: peer })));
   expect(h.manifest).not.toHaveBeenCalled();
   expect(views.get(peer)).toMatchObject({ resources: [], failed: false, blocked: false });
-  act(() => views.get(peer)!.refresh());
   foreground('background'); foreground('active');
   await advance(10_000);
   expect(h.manifest).not.toHaveBeenCalled();
@@ -330,7 +332,7 @@ describe('host task cards on Mobile', () => {
     await act(async () => slow.resolve(resource('slow')));
     expect(views.get('mac')?.fresh).toBe(true);
   });
-  it('keeps another device usable when one read fails; retries reads only', async () => {
+  it('keeps another device usable when one read fails; polls reads only', async () => {
     await render('task', true);
     h.get.mockImplementation(async (_invoke, target) => {
       if (target.deviceId === 'mac') throw new Error('timeout');
@@ -343,9 +345,17 @@ describe('host task cards on Mobile', () => {
     expect(views.get('pc')?.blocked).toBe(false);
     expect(h.action).not.toHaveBeenCalled();
     h.get.mockResolvedValue(resource('recovered', 'available'));
-    act(() => views.get('mac')?.refresh());
-    await advance();
+    await advance(5_200);
     expect(views.get('mac')?.failed).toBe(false);
+  });
+  it('retries a failed manifest read without a manual retry', async () => {
+    h.manifest.mockRejectedValueOnce(new Error('timeout'));
+    await render();
+    expect(views.get('mac')).toMatchObject({ resources: [], failed: true, blocked: false });
+    await advance(5_200);
+    expect(h.manifest).toHaveBeenCalledTimes(2);
+    expect(views.get('mac')?.failed).toBe(false);
+    expect(views.get('mac')?.resources).toHaveLength(1);
   });
   it.each(['account', 'session', 'reconnect'])(
     'ignores late results after %s changes',
@@ -361,6 +371,21 @@ describe('host task cards on Mobile', () => {
       expect(views.get('mac')?.resources[0].revision).toBe('current');
     },
   );
+  it('does not alert an action failure that settles after the app left the foreground', async () => {
+    await render();
+    const pending = deferred<{ effects: [] }>();
+    h.action.mockReturnValueOnce(pending.promise);
+    let run!: Promise<void>;
+    act(() => {
+      run = views.get('mac')!.act(views.get('mac')!.resources[0], 'start');
+    });
+    foreground('background');
+    await act(async () => {
+      pending.reject(new Error('timeout'));
+      await run;
+    });
+    expect(h.alert).not.toHaveBeenCalled();
+  });
   it('refreshes after foreground and reconnect without replaying a timed-out action', async () => {
     await render();
     h.action.mockRejectedValueOnce(new Error('timeout after host accepted'));
@@ -368,7 +393,11 @@ describe('host task cards on Mobile', () => {
       views.get('mac')!.act(views.get('mac')!.resources[0], 'start'),
     );
     await advance();
-    expect(views.get('mac')?.failed).toBe(true);
+    expect(h.alert).toHaveBeenCalledExactlyOnceWith(
+      'session.screen.operationFailed',
+      expect.any(String),
+    );
+    expect(views.get('mac')?.failed).toBe(false);
     expect(h.action).toHaveBeenCalledOnce();
     foreground('background');
     const before = h.get.mock.calls.length;
@@ -383,9 +412,8 @@ describe('host task cards on Mobile', () => {
     h.link.connectionEpoch += 1;
     await render();
     expect(h.action).toHaveBeenCalledOnce();
-    act(() => views.get('mac')!.refresh());
-    await advance();
-    expect(views.get('mac')?.failed).toBe(false);
+    await advance(5_200);
+    expect(views.get('mac')?.fresh).toBe(true);
   });
   it('prevents a double tap and does not carry its pending state to another task', async () => {
     await render();

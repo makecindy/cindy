@@ -46,6 +46,16 @@ import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { MorphPopover } from '@/components/ui/morph-popover';
+import { currentFocusedRow } from '@/components/ui/dropdown-menu-highlight';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  menuSkipAttrs,
+  useMenuPanel,
+  withMenuLabels,
+} from '@/components/ui/menu-row';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
@@ -324,8 +334,8 @@ function ModelOptionsFloatingPanel({
               onScheduleClose();
             }}
             className={cn(
-              'w-full overflow-hidden rounded-[12px] p-2 shadow-[var(--shadow-menu)] outline-none duration-100',
-              'animate-float-in border border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)]',
+              'w-full overflow-hidden rounded-[12px] p-2 shadow-[shadow:var(--shadow-menu)] outline-none duration-100',
+              'animate-float-in border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
               className,
             )}
             style={{ transformOrigin: placedSide === 'left' ? 'right center' : 'left center' }}
@@ -1249,7 +1259,18 @@ function ModelSelectorContentView({
     editTick + useProviderModelMemoryVersion() + useDeviceLinkModelMirrorVersion();
   void storeVersion;
 
-  const listRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  // Classic list and options panel: one glide highlight each, following the pointer, the
+  // keyboard-focused row or the row whose options are open (MorphPopover owns the width).
+  const highlightOptions = {
+    current: (rows: readonly HTMLElement[]) =>
+      currentFocusedRow(rows) ?? rows.find((r) => r.getAttribute('data-state') === 'open'),
+  };
+  const legacyListHighlightRef = useMenuPanel(listRef, { lockWidth: false, options: highlightOptions });
+  const configHighlightRef = useMenuPanel<HTMLDivElement>(undefined, {
+    lockWidth: false,
+    options: { current: currentFocusedRow },
+  });
   const configPanelRef = useRef<HTMLDivElement>(null);
   const previousSelectionRef = useRef<{ modelId: string; sourceId: string | null } | null>(null);
   // 选中行对齐是程序化滚动,它触发的 scroll 事件不代表用户意图,不应收起行配置浮层。
@@ -2195,12 +2216,15 @@ function ModelSelectorContentView({
   const editingDescription = editingModel ? localizedModelDescription(editingModel, t) : undefined;
   const configPanel = editingModel ? (
     <div
+      ref={configHighlightRef}
       role="group"
       aria-label={`${localizedModelName(editingModel.displayName, t)} ${t('newChat.modelSelector.options')}`}
-      className="flex flex-col gap-0.5"
+      {...menuPanelAttrs}
+      className="relative flex flex-col gap-0.5"
     >
+      <MenuHighlightLayer />
       {/* 名字 / 简介先帮助确认模型；面板整体居中后，操作区仍贴近当前 hover 行。 */}
-      <div className="flex flex-col gap-1 px-2 py-1.5">
+      <div {...menuSkipAttrs} className="flex flex-col gap-1 px-2 py-1.5">
         <span className="min-w-0 text-14 font-medium text-[var(--model-item-text)]">
           {localizedModelName(editingModel.displayName, t)}
         </span>
@@ -2214,7 +2238,7 @@ function ModelSelectorContentView({
         <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
       )}
       {editShowFast && (
-        <div className="px-0.5">
+        <div {...menuSkipAttrs} className="px-0.5">
           {/* 遵循设计稿:单色反色(轨/文字 --text-primary,钮 --surface-on-card),不用品牌橙。 */}
           <FastModeToggle
             enabled={editFastValue}
@@ -2229,7 +2253,7 @@ function ModelSelectorContentView({
         <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
       )}
       {editThinkingToggle && editingModel && (
-        <div className="px-0.5">
+        <div {...menuSkipAttrs} className="px-0.5">
           <ThinkingToggle
             enabled={
               editingIsActive
@@ -2276,7 +2300,7 @@ function ModelSelectorContentView({
       {editHasEfforts && (
         <>
           <div className="px-2 pb-0.5 pt-1">
-            <span className="text-11 font-medium text-[var(--text-tertiary)]">
+            <span className="text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]">
               {t('newChat.modelSelector.effortLabel')}
             </span>
           </div>
@@ -2291,22 +2315,17 @@ function ModelSelectorContentView({
                 onClick={() => available && handleEditEffort(e)}
                 role="option"
                 aria-selected={selected}
+                // Shared menu row (DESIGN §4 Composer dropdown rows): glide highlight. Model
+                // menu exception: the chosen effort keeps its whole-row fill and the check.
+                {...menuRowAttrs({ checked: selected, disabled: !available })}
                 className={cn(
-                  // 行内边距/圆角/hover 与选中底统一到 --model-item-hover(见 §Select 菜单行规约),
-                  // 与一级模型行、权限、+ 菜单一致;px-3 对齐其它菜单行的横向内边距。
-                  'flex w-full items-center justify-between rounded-[8px] px-3 py-2 text-left transition-colors duration-100',
-                  available ? 'hover:bg-[var(--model-item-hover)]' : 'cursor-not-allowed opacity-45',
-                  selected && 'bg-[var(--model-item-hover)]',
+                  COMPOSER_MENU_ROW,
+                  'flex w-full items-center justify-between px-3 py-2 text-left',
+                  selected && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
+                  !available && 'cursor-not-allowed opacity-45',
                 )}
               >
-                <span
-                  className={cn(
-                    'truncate text-14 text-[var(--model-item-text)]',
-                    selected ? 'font-medium' : 'font-normal',
-                  )}
-                >
-                  {effortLabelFor(editingModel, e)}
-                </span>
+                {withMenuLabels(<span className="truncate">{effortLabelFor(editingModel, e)}</span>)}
                 {selected && (
                   <Check size={15} className="ml-2 shrink-0 text-[var(--model-item-check)]" />
                 )}
@@ -2320,7 +2339,7 @@ function ModelSelectorContentView({
       )}
       {editingPricePresentation && (
         <>
-          <div className="px-2 pb-1 pt-1">
+          <div {...menuSkipAttrs} className="px-2 pb-1 pt-1">
             <div
               className={cn(
                 'flex items-center gap-1.5 text-11 font-medium text-[var(--text-tertiary)]',
@@ -2570,13 +2589,16 @@ function ModelSelectorContentView({
               ev.preventDefault();
               handleRowSelect(providerId, model.id);
             }}
+            // Shared menu row (DESIGN §4 Composer dropdown rows): the list's glide highlight
+            // marks the pointer / keyboard-focused row and the row whose options are open.
+            {...menuRowAttrs()}
+            data-state={isEditingThis ? 'open' : isSelected ? 'checked' : undefined}
             className={cn(
-              'group/row flex w-full cursor-pointer items-center justify-between rounded-[8px] px-3 py-2',
+              COMPOSER_MENU_ROW,
+              'group/row flex w-full cursor-pointer items-center justify-between px-3 py-2',
+              // Model menu exception (DESIGN §4): the chosen row keeps its whole-row fill.
+              isSelected && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
               constrainedListMaxHeight !== undefined && 'min-h-9',
-              'transition-colors duration-100 hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-              isSelected && 'bg-[var(--model-item-hover)]',
-              isEditingThis &&
-                'bg-[var(--surface-hover)] ring-1 ring-inset ring-[var(--model-dropdown-border)]',
               (disabled || paymentRequired) && 'opacity-50',
             )}
           >
@@ -2595,7 +2617,7 @@ function ModelSelectorContentView({
               )}
               <span className="flex min-w-0 flex-1 items-center gap-1.5">
                 <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                  <span className="truncate text-14 font-medium leading-5 text-[var(--model-item-text)]">
+                  <span className="truncate font-medium leading-5">
                     {localizedModelName(model.displayName, t)}
                   </span>
                   {rowEffort && (
@@ -2687,8 +2709,8 @@ function ModelSelectorContentView({
               scheduleOptionsClose();
             }}
             className={cn(
-              'w-[248px] overflow-hidden rounded-[12px] p-2 shadow-[var(--shadow-menu)] duration-100',
-              'border border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)]',
+              'w-[248px] overflow-hidden rounded-[12px] p-2 shadow-[shadow:var(--shadow-menu)] duration-100',
+              'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
               overlayContentClassName,
             )}
           >
@@ -3108,15 +3130,15 @@ function ModelSelectorContentView({
             }}
             role="option"
             aria-selected={followSession.active}
+            data-state={followSession.active ? 'checked' : undefined}
             className={cn(
-              'flex w-full items-center justify-between rounded-[8px] px-3 py-2 transition-colors',
-              'hover:bg-[var(--model-item-hover)]',
-              followSession.active && 'bg-[var(--model-item-hover)]',
+              COMPOSER_MENU_ROW,
+              'flex w-full items-center justify-between px-3 py-2',
+              'hover:bg-sidebar-item-hover focus-visible:bg-sidebar-item-hover',
+              followSession.active && 'bg-sidebar-item-hover',
             )}
           >
-            <span className="text-14 font-medium text-[var(--model-item-text)]">
-              {followSession.label}
-            </span>
+            {withMenuLabels(<span>{followSession.label}</span>)}
             {followSession.active && (
               <Check size={16} className="ml-2 shrink-0 text-[var(--model-item-check)]" />
             )}
@@ -3129,10 +3151,11 @@ function ModelSelectorContentView({
 
       {/* 模型列表 —— 单栏;分段(供应商)或 flat。 */}
       <div
-        ref={listRef}
+        ref={legacyListHighlightRef}
+        {...menuPanelAttrs}
         // -mr-2 把滚动条挪进面板右侧 8px 留白;scrollbar-gutter:stable 让无滚动时
         // 行宽与有滚动时一致(否则行会比搜索框宽 8px);细滚动条见 globals.css
-        className="morph-panel-list-scroll -mr-2 flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+        className="morph-panel-list-scroll relative -mr-2 flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
         style={
           constrainedListMaxHeight === undefined
             ? undefined
@@ -3149,6 +3172,7 @@ function ModelSelectorContentView({
           if (editing) closeOptionsPanel();
         }}
       >
+        <MenuHighlightLayer />
         {!hasAnyModel ? (
           // 发现还在途、且用户没在搜索时不摆「无结果」:那句话和下方的「正在获取」自相矛盾,
           // 而用户看到「没有模型」就会走。搜索无命中是本地过滤的确定结论,照常显示。
@@ -3174,7 +3198,7 @@ function ModelSelectorContentView({
                 aria-label={providerDisplayName(sec.provider, t)}
               >
                 {index > 0 && <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />}
-                <div className="flex min-w-0 items-center gap-2 px-3 pb-0.5 pt-1 text-11 font-medium text-[var(--text-tertiary)]">
+                <div className="flex min-w-0 items-center gap-2 px-3 pb-0.5 pt-1 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                   <span className="min-w-0 truncate">{providerDisplayName(sec.provider, t)}</span>
                   {!deviceId && sec.provider.id === 'xd' && modelAccessAccountTier === 'free' && (
                     <span
@@ -3220,8 +3244,9 @@ function ModelSelectorContentView({
               disabled={interactionDisabled}
               onClick={onNavigateToProviders}
               className={cn(
-                'flex min-w-0 items-center gap-1.5 rounded-[8px] px-3 py-2',
-                'transition-colors hover:bg-[var(--model-item-hover)]',
+                COMPOSER_MENU_ROW,
+                'flex min-w-0 items-center gap-1.5 px-3 py-2',
+                'hover:bg-sidebar-item-hover focus-visible:bg-sidebar-item-hover',
               )}
             >
               <Plus size={14} className="shrink-0 text-[var(--text-tertiary)]" />

@@ -1,3 +1,4 @@
+import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
 import { prepareImportedAutomation, finishImportedAutomation } from './bot-import/automationRuntime.js';
 import { ensureImportedAutomationReady, recoverCompanionImports } from './bot-import/host.js';
 import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
@@ -762,6 +763,7 @@ import {
   scheduleDeferredCodexRestart,
   clearWorkingDirectoryRecoveryForOwnerBoundary,
   collectAgentInputQueueScanTexts,
+  flushPluginTaskLifecycle,
   createAutomationUserTurnGitBaselineHooks,
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
@@ -2090,6 +2092,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
           `[bootstrap-electron] release device-link ownership on ${reason} failed (non-fatal):`, err,
         ),
       });
+      await flushPluginTaskLifecycle();
       await lifecycleDbClientManager.dispose(reason);
     } finally {
       releaseEndedSuppression();
@@ -2115,6 +2118,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
     ),
   });
   try {
+    await flushPluginTaskLifecycle();
     await lifecycleDbClientManager.dispose(reason);
   } finally {
     try {
@@ -2569,6 +2573,7 @@ registerBrowserBackendIpc();
 // ipcMain.handle 在 app ready 前注册也有效。
 registerAppShortcutIpc();
 registerAppearanceSettingsIpc();
+registerAccessibilitySupportIpc();
 registerLoginItemIpc();
 
 // ── 资源用量面板 IPC ─────────────────────────────────────────────────
@@ -10163,7 +10168,10 @@ onQuit('ios-simulator-host', disposeIOSSimulatorHost, 'async');
 onQuit('ios-simulator-ownership-registry', flushIOSSimulatorOwnershipRegistry, 'async');
 
 // Post-async 阶段: 串行跑, 确保依赖 async 阶段产物的清理 (WAL checkpoint by close)。
-onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'post-async');
+onQuit('db-client', async () => {
+  await flushPluginTaskLifecycle();
+  await lifecycleDbClientManager.dispose('quit');
+}, 'post-async');
 onQuit('local-db-close', () => localDbCloseDb(), 'post-async');
 
 // A display restore may join an in-flight native mode write (5s), restore the

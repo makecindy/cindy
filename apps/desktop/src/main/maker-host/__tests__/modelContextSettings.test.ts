@@ -18,7 +18,7 @@ vi.mock('../model-context-limit-store.js', () => ({
     state.limits.get(`${agent}:${provider}:${model}`) ?? null,
 }));
 
-import { resolveConfiguredContextWindow, resolveDesktopModelContextProviderId } from '../model-context-settings.js';
+import { resolveConfiguredContextWindow, resolveDesktopModelContextProviderId, resolveDesktopModelEfforts } from '../model-context-settings.js';
 import { shouldRebuildForModelWindowSwitch } from '../../maker-ipc/contextOverflowRollover.js';
 
 function dualCatalog(agent: AgentKind): Catalog {
@@ -116,5 +116,24 @@ describe('implicit context settings use the startup source in history protection
     }
     state.limits.set('codex:xd:codex/shared-model', 100_000);
     expect(resolveConfiguredContextWindow(catalog, 'codex', null, 'codex/shared-model')).toBe(100_000);
+  });
+});
+
+describe('route efforts follow the session source', () => {
+  it('reads the selected provider instead of another same-ID route (#5402)', () => {
+    const catalog = dualCatalog('claude-code');
+    for (const provider of catalog.providers) {
+      for (const model of provider.models['claude-code'] ?? []) {
+        model.efforts = provider.id === 'xd' ? ['low', 'medium', 'high', 'max'] : ['low', 'high', 'xhigh', 'max'];
+      }
+    }
+    expect(resolveDesktopModelEfforts(catalog, 'claude-code', 'anthropic', 'shared-model'))
+      .toEqual(['low', 'high', 'xhigh', 'max']);
+    expect(resolveDesktopModelEfforts(catalog, 'claude-code', 'xd', 'shared-model'))
+      .toEqual(['low', 'medium', 'high', 'max']);
+    // Implicit sessions use the same startup source as the context settings (gateway here).
+    expect(resolveDesktopModelEfforts(catalog, 'claude-code', null, 'shared-model'))
+      .toEqual(['low', 'medium', 'high', 'max']);
+    expect(resolveDesktopModelEfforts(catalog, 'claude-code', 'missing', 'shared-model')).toBeNull();
   });
 });

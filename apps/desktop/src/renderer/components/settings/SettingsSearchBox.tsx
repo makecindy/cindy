@@ -5,6 +5,15 @@ import { useTranslation } from 'react-i18next';
 
 import { Input } from '@/components/ui/input';
 import { Tip } from '@/components/ui/tooltip';
+import { currentSelectedOption } from '@/components/ui/dropdown-menu-highlight';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  useMenuPanel,
+  withMenuLabels,
+} from '@/components/ui/menu-row';
 import { cn } from '@/lib/utils';
 import type { SettingsTab, VisibleSettingsTab } from '@/lib/tabLabels';
 import {
@@ -24,6 +33,15 @@ export function SettingsSearchBox({ visibleTabIds, searchContext, onSelect }: Se
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Results list: glide highlight on the aria-selected result; arrow keys stay in the field.
+  const resultsRef = useMenuPanel<HTMLDivElement>(undefined, {
+    lockWidth: false,
+    options: {
+      current: currentSelectedOption,
+      currentAttributes: ['aria-selected'],
+      keyboardSource: document,
+    },
+  });
   const documents = useMemo(
     () => buildSettingsSearchDocuments(t, visibleTabIds, searchContext),
     [t, visibleTabIds, searchContext],
@@ -117,8 +135,11 @@ export function SettingsSearchBox({ visibleTabIds, searchContext, onSelect }: Se
           id="settings-search-results"
           role="listbox"
           aria-label={t('settings.search.resultsLabel')}
-          className="mt-1 max-h-[min(55vh,420px)] overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1"
+          ref={resultsRef}
+          {...menuPanelAttrs}
+          className="relative mt-1 max-h-[min(55vh,420px)] overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1"
         >
+          <MenuHighlightLayer />
           {results.length > 0 ? (
             results.map((result, index) => (
               <button
@@ -129,17 +150,16 @@ export function SettingsSearchBox({ visibleTabIds, searchContext, onSelect }: Se
                 aria-selected={index === activeIndex}
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => selectResult(result)}
+                // Shared menu row: the list's glide highlight follows the active result
+                // (focus stays in the search field), title 400 → 500, 12px meta line.
+                {...menuRowAttrs()}
                 className={cn(
-                  'flex w-full flex-col items-start rounded-lg px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                  index === activeIndex
-                    ? 'bg-[var(--settings-menu-bg-hover)]'
-                    : 'hover:bg-[var(--settings-menu-bg-hover)]',
+                  COMPOSER_MENU_ROW,
+                  'flex w-full flex-col items-start px-2.5 py-2 text-left focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                 )}
               >
-                <span className="w-full truncate text-12 font-medium text-[var(--settings-section-title)]">
-                  {result.title}
-                </span>
-                <span className="w-full truncate text-11 text-[var(--settings-section-sublabel)]">
+                {withMenuLabels(<span className="w-full truncate">{result.title}</span>)}
+                <span className="w-full truncate text-12 font-normal leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                   {result.entry.id === result.entry.tab
                     ? result.category
                     : `${result.category} · ${result.section}`}

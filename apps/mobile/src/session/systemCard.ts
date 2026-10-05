@@ -1,3 +1,4 @@
+import { formatLocalizedDuration, formatLocalizedSeconds } from './sessionDurationFormat';
 import type { MobileSlashCommand } from '@/device-link/mobileMakerTransport';
 import type { InputProjection, RemoteSession } from '@/session/types';
 import {
@@ -46,11 +47,7 @@ function formatGoalCompleteCard(data: Record<string, unknown> | undefined): Syst
 }
 
 function formatGoalDuration(ms: number): string {
-  const totalSec = Math.max(0, Math.round(ms / 1000));
-  if (totalSec < 60) return `${totalSec}s`;
-  const min = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  return sec > 0 ? `${min}m ${sec}s` : `${min}m`;
+  return formatLocalizedSeconds(Math.max(0, Math.round(ms / 1000)));
 }
 
 export const MOBILE_LOCAL_SYSTEM_COMMANDS = DEFAULT_LOCAL_SYSTEM_COMMANDS as MobileSlashCommand[];
@@ -147,7 +144,11 @@ function formatCompactCard(data: Record<string, unknown> | undefined): SystemCar
   if (preTokens !== undefined && postTokens !== undefined && preTokens > postTokens) {
     parts.push(i18n.t('message.systemCard.compact.savedTokens', { tokens: formatCompactTokens(preTokens - postTokens) }));
   }
-  if (durationMs) parts.push(`${(durationMs / 1000).toFixed(1)}s`);
+  if (durationMs) {
+    parts.push(durationMs >= 3_600_000
+      ? formatLocalizedDuration(durationMs)
+      : `${(durationMs / 1000).toFixed(1)}s`);
+  }
   return { title: parts.join(' · '), rows: [] };
 }
 

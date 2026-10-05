@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { desktopVideoFramerate, desktopVideoProfile } from '../../shared/remoteDesktopQuality';
 import { openWindowsDesktopConnection, type WindowsDesktopConnection } from './windowsHost';
 import { decodeWindowsCursorFrame } from './windowsCursorFrame';
 
@@ -119,9 +120,11 @@ export class NativeDesktopCapture {
     overlay = false,
     settings?: RemoteDesktopVideoSettings,
   ): Promise<string | RemoteDesktopCursorFrame | null> {
+    const profile = desktopVideoProfile(settings);
+    const fps = desktopVideoFramerate(settings);
     if (process.platform === 'win32') {
       if (this.busy) return null;
-      const config = overlay ? 'overlay:' + (settings?.bitrate ?? 0) : '';
+      const config = overlay ? 'overlay:' + profile.windowsBitrate : '';
       if (this.windows && (this.display !== display || this.config !== config)) this.stop();
       const selected = screen.getAllDisplays().find((item) => String(item.id) === display);
       if (!selected) return null;
@@ -133,7 +136,7 @@ export class NativeDesktopCapture {
           const connection = await openWindowsDesktopConnection({
             mode: 'capture',
             rect: [bounds.x, bounds.y, bounds.width, bounds.height],
-            ...(overlay ? { cursorOverlay: true, bitrate: settings?.bitrate ?? 0 } : {}),
+            ...(overlay ? { cursorOverlay: true, bitrate: profile.windowsBitrate } : {}),
           });
           if (generation !== this.generation) {
             connection.close();
@@ -164,7 +167,7 @@ export class NativeDesktopCapture {
     }
     const config =
       overlay || process.platform === 'linux'
-        ? [overlay, settings?.fps ?? 30, settings?.bitrate ?? 0].join(':')
+        ? [overlay, fps, settings?.quality ?? 'auto'].join(':')
         : '';
     if (this.child && this.config !== config) this.stop();
     const linux = process.platform === 'linux';
@@ -183,8 +186,7 @@ export class NativeDesktopCapture {
         const output = linux && display !== WAYLAND_DISPLAY_ID ? await linuxMonitor(display) : null;
         const executable = await binary();
         if (generation !== this.generation) return null;
-        const quality =
-          settings?.bitrate === 20_000_000 ? 0.95 : settings?.bitrate === 8_000_000 ? 0.8 : 0.65;
+        const quality = profile.jpegQuality;
         const args = linux
           ? [
               overlay ? 'cursor-overlay' : 'video',
@@ -193,7 +195,14 @@ export class NativeDesktopCapture {
               ...(output ? [output.name] : []),
             ]
           : overlay
-            ? [display, 'cursor-overlay', String(settings?.fps ?? 30), String(quality)]
+            ? [
+                display,
+                'cursor-overlay',
+                String(fps),
+                String(quality),
+                String(profile.physicalMaxEdge),
+                String(profile.maxFrameBytes),
+              ]
             : [display];
         if (!linux && this.excludedWindows) args.push(this.excludedWindows);
         const child = spawn(executable, args, { stdio: 'pipe' });
@@ -218,6 +227,11 @@ export class NativeDesktopCapture {
         });
       }
       const child = this.child;
+      // macOS overlay frames follow the tier's byte budget; the base64 frame
+      // plus the bounded cursor PNG and JSON keep the historical 1.5 MB margin.
+      const frameBytes = overlay && !linux ? profile.maxFrameBytes : 1_000_000;
+      const jpegLimit = Math.ceil(frameBytes / 3) * 4;
+      const textLimit = jpegLimit + 166_664;
       return await new Promise<string | RemoteDesktopCursorFrame | null>((resolve, reject) => {
         let text = '';
         const finish = (frame: string | RemoteDesktopCursorFrame | null, error?: Error) => {
@@ -231,7 +245,7 @@ export class NativeDesktopCapture {
         };
         const receive = (chunk: Buffer) => {
           text += chunk.toString('ascii');
-          if (text.length > (overlay || linux ? 1_500_000 : 240_001)) {
+          if (text.length > (overlay || linux ? textLimit : 240_001)) {
             this.stop();
             return;
           }
@@ -241,7 +255,7 @@ export class NativeDesktopCapture {
               const value = JSON.parse(text) as RemoteDesktopCursorFrame;
               if (
                 typeof value.jpeg !== 'string' ||
-                value.jpeg.length > 1_333_336 ||
+                value.jpeg.length > jpegLimit ||
                 !/^[A-Za-z0-9+/]+={0,2}$/.test(value.jpeg) ||
                 (value.cursor !== null && !isRemoteDesktopCursor(value.cursor))
               )

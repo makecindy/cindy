@@ -1024,6 +1024,19 @@ export const migrationMeta = sqliteTable('migration_meta', {
   value: text('value'),
 });
 
+/** Host-only bounded authority projections; transcript mutations invalidate their revision. */
+export const autoReviewProjections = sqliteTable('auto_review_projections', {
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  leadId: text('lead_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull().default(0),
+  projectedRevision: integer('projected_revision').notNull().default(-1),
+  version: integer('version').notNull().default(1),
+  payload: text('payload'),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.sessionId, t.leadId] }),
+  byLead: index('auto_review_projections_lead_idx').on(t.leadId),
+}));
+
 /**
  * schema-drift-detection (#37)：每条已 apply 的 migration 的指纹记录。
  *
@@ -2282,3 +2295,19 @@ export const sessionTaskTags = sqliteTable(
     byTag: index('session_task_tags_tag_idx').on(t.tagId),
   }),
 );
+
+/** Plugin attribution/idempotency receipts. Survive Session deletion as tombstones. */
+export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
+  id: text('id').primaryKey(),
+  pluginId: text('plugin_id').notNull(),
+  operation: text('operation', { enum: ['create', 'send'] }).notNull(),
+  targetId: text('target_id').notNull(),
+  requestKey: text('request_key').notNull(),
+  fingerprint: text('fingerprint').notNull(),
+  payload: text('payload').notNull(),
+  revision: integer('revision').notNull().default(0),
+  createdAt: integer('created_at').notNull(),
+}, table => [
+  uniqueIndex('plugin_task_request_key').on(table.pluginId, table.operation, table.targetId, table.requestKey),
+  index('plugin_task_target').on(table.targetId, table.pluginId),
+]);

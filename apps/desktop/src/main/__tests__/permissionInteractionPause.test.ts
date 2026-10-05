@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import { createSharedPermission, type SharedPermission } from '../maker-ipc/sharedPermission';
+import { beginInteractionRoute, installDesktopInteractionHandler, type InteractionHandler, type InteractionSession } from '../maker-ipc/interactionRouter';
 import { assertSharedTaskInteractionResolveCurrent, assertSharedTaskInvoke, setSharedTaskInteractionReader, type SharedTaskPeerCapture } from '../device-link/sharedTaskDispatch.js';
 
 // Execute the production listener and control adapter without booting Electron.
@@ -12,6 +14,7 @@ const names = new Set([
   'schedulePendingPermissionTimeout', 'setPendingInteractionTimeoutsPaused',
   'resolvePendingInteraction', 'defaultDecisionForPending',
   'cleanupPendingAgentInteractionsForSession', 'takePendingInteractionsForSession',
+  'bindSharedPermission',
 ]);
 const functions = ast.statements.filter((node) => ts.isFunctionDeclaration(node)
   && node.name && names.has(node.name.text)).map(node => node.getText(ast).replace(/^export /, ''));
@@ -56,6 +59,7 @@ function harness() {
   const entries = new Map();
   const dismiss = vi.fn();
   const deps = {
+    createSharedPermission,
     getDeviceLinkInvokeContext: () => ({ sharedTask }),
     assertSharedTaskInteractionResolveCurrent,
     setSharedTaskInteractionReader,
@@ -64,7 +68,7 @@ function harness() {
     pendingInteractionResolvers: entries,
     agentInputCoordinatorHolder: coordinator, inputCoordinator: coordinator,
     PERMISSION_INTERACTION_TIMEOUT_MS: 10 * MINUTE,
-    installDesktopInteractionHandler: (session: { id: string }, handler: (request: InteractionRequest) => Promise<InteractionDecision>) => listeners.set(session.id, handler),
+    installDesktopInteractionHandler,
     shouldNotifyAgentIslandForSession: () => false,
     flushAssistantBlock: vi.fn(), onInteractionMessage: vi.fn(),
     redactToolInputForUntrustedBoundary: (_tool: string, input: unknown) => input,
@@ -75,19 +79,26 @@ function harness() {
     goalAskAnswerObserver: null, ghostSetupInteractionBridge: { cleanupForSession: vi.fn() },
   };
   const runtime = new Function(...Object.keys(deps), compiled)(...Object.values(deps)) as {
-    install: (session: { id: string }) => void;
+    install: (session: InteractionSession) => void;
     hold: (id: string, held: boolean) => string[];
     answer: (id: string, decision: InteractionDecision) => boolean;
     cleanup: (id: string, reason: string) => void;
-    take: (id: string) => Array<{ resolve: (decision: InteractionDecision) => void }>;
+    take: (id: string) => Array<{ resolve: (decision: InteractionDecision) => void; sharedPermission?: SharedPermission }>;
     resolveFromIpc: (event: unknown, id: string, decision: InteractionDecision) => Promise<{ accepted: boolean }>;
   };
-  const request = (id = 'permission', sessionId = 'task', kind: InteractionRequest['kind'] = 'permission') => {
-    runtime.install({ id: sessionId });
+  const request = (id = 'permission', sessionId = 'task', kind: InteractionRequest['kind'] = 'permission', channel?: InteractionHandler) => {
+    const session: InteractionSession = { id: sessionId, setInteractionListener: handler => { if (handler) listeners.set(sessionId, handler); } };
+    runtime.install(session);
+    const lease = channel ? beginInteractionRoute(session, {
+      route: { sessionId, turnId: 'turn', origin: { kind: 'hook', source: 'test' }, interactionSurface: 'channel-card', timeoutMs: 10 * MINUTE },
+      handle: channel,
+      // A presentation acknowledges cancellation; Router must still finalize it.
+      onCancel: () => true,
+    }) : undefined;
     const settled = vi.fn();
     const promise = listeners.get(sessionId)!({ kind, requestId: id, toolName: 'Shell', input: {} } as InteractionRequest);
     void promise.then(settled);
-    return { promise, settled };
+    return { promise, settled, lease };
   };
   return { ...runtime, request, entries, dismiss, setSharedTask: (peer?: SharedTaskPeerCapture) => { sharedTask = peer; } };
 }
@@ -120,7 +131,7 @@ it('does not consume the pending decision when membership is revoked after dispa
   expect(h.dismiss).toHaveBeenCalledTimes(1);
 });
 
-it.each(['permission', 'ask_user_question', 'plan_review'] as const)('rejects guest decisions after %s is handed to Feishu, including already-admitted requests', async (kind) => {
+it.each(['ask_user_question', 'plan_review'] as const)('rejects guest decisions after %s is handed to Feishu, including already-admitted requests', async (kind) => {
   const h = harness();
   const p = h.request(kind, 'task', kind);
   const peer: SharedTaskPeerCapture = {
@@ -144,6 +155,22 @@ it.each(['permission', 'ask_user_question', 'plan_review'] as const)('rejects gu
   expect(h.entries.has(kind)).toBe(false);
 });
 
+it('keeps an authorized shared-task permission answer available after IM takeover', async () => {
+  const h = harness();
+  const p = h.request();
+  const [taken] = h.take('task');
+  expect(h.entries.get('permission').migrated).not.toBe(true);
+  h.setSharedTask({
+    author: { sharedTaskId: 'shared', sessionId: 'task', memberId: 'guest', accountId: 'guest', displayName: 'Guest' },
+    isCurrent: () => true, authorize: () => true,
+  });
+  const answer = { kind: 'permission', behavior: 'allow' } as const;
+  await expect(h.resolveFromIpc({}, 'permission', answer)).resolves.toEqual({ accepted: true });
+  taken.resolve({ kind: 'permission', behavior: 'deny' });
+  await expect(p.promise).resolves.toEqual(answer);
+  expect(h.dismiss).toHaveBeenCalledTimes(1);
+});
+
 it('rejects a guest replacement tool input without consuming the pending request', async () => {
   const h = harness();
   const p = h.request();
@@ -163,6 +190,59 @@ it('rejects a guest replacement tool input without consuming the pending request
 });
 
 describe('permission timeout follows the task pause lifecycle', () => {
+  it('holds a shared route timeout until resume without closing either surface early', async () => {
+    const h = harness();
+    h.hold('task', true);
+    let shared!: SharedPermission;
+    const p = h.request('permission', 'task', 'permission', (_req, permission) => {
+      shared = permission!;
+      return shared.result;
+    });
+    await vi.advanceTimersByTimeAsync(30 * MINUTE);
+    expect(p.settled).not.toHaveBeenCalled();
+    expect(shared.decision).toBeUndefined();
+    expect(h.dismiss).not.toHaveBeenCalled();
+    h.hold('task', false);
+    await expect(p.promise).resolves.toMatchObject({ behavior: 'deny', reason: 'interaction_timeout' });
+    await expect(shared.result).resolves.toMatchObject({ behavior: 'deny', reason: 'interaction_timeout' });
+    p.lease!.release();
+  });
+
+  it.each(['resume', 'session_aborted', 'session_closed', 'release'] as const)(
+    'keeps a new IM answer provisional until %s and converges every surface', async finish => {
+      const h = harness();
+      h.hold('task', true);
+      let shared!: SharedPermission;
+      const presented = vi.fn();
+      const p = h.request('permission', 'task', 'permission', (_req, permission) => {
+        shared = permission!;
+        void shared.result.then(presented);
+        // Synchronous channel answers must already see the Host pause gate.
+        expect(shared.decide({ kind: 'permission', behavior: 'allow' })).toBe(true);
+        expect(shared.decide({ kind: 'permission', behavior: 'deny' })).toBe(false);
+        return shared.result;
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(p.settled).not.toHaveBeenCalled();
+      expect(presented).not.toHaveBeenCalled();
+      expect(h.dismiss).not.toHaveBeenCalled();
+      expect(shared.decision).toBeUndefined();
+      if (finish === 'resume') h.hold('task', false);
+      else if (finish === 'release') p.lease!.release();
+      else h.cleanup('task', finish);
+      const expected = finish === 'resume'
+        ? { kind: 'permission', behavior: 'allow' }
+        : { kind: 'permission', behavior: 'deny', reason: finish === 'release' ? 'interaction_route_released' : finish };
+      await expect(p.promise).resolves.toEqual(expected);
+      await expect(shared.result).resolves.toEqual(expected);
+      expect(presented).toHaveBeenCalledExactlyOnceWith(expected);
+      expect(h.dismiss).toHaveBeenCalledTimes(1);
+      h.hold('task', false);
+      expect(shared.decide({ kind: 'permission', behavior: 'allow' })).toBe(false);
+      p.lease!.release();
+    },
+  );
+
   it('keeps the permission pending across its original deadline and resumes only the remaining budget', async () => {
     const h = harness();
     const p = h.request();
@@ -268,12 +348,14 @@ describe('permission timeout follows the task pause lifecycle', () => {
     const [taken] = h.take('task');
     h.hold('task', true);
     taken.resolve({ kind: 'permission', behavior: 'allow' });
+    expect(taken.sharedPermission!.decision).toBeUndefined();
     h.cleanup('task', reason);
     h.cleanup('task', reason);
     h.hold('task', false);
     taken.resolve({ kind: 'permission', behavior: 'allow' });
     await vi.advanceTimersByTimeAsync(30 * MINUTE);
     expect(p.settled).toHaveBeenCalledExactlyOnceWith({ kind: 'permission', behavior: 'deny', reason });
+    await expect(taken.sharedPermission!.result).resolves.toEqual({ kind: 'permission', behavior: 'deny', reason });
     expect(h.entries.size).toBe(0);
   });
 

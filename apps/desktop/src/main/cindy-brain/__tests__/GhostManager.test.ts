@@ -308,6 +308,57 @@ describe('hashApprovedSkillContent · item.dir 路径段校验', () => {
 });
 
 describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => {
+  it.each(['future', { future: true }, ['future'], null, false])('keeps historical unknown tasks %j enabled without task approval', async (tasks) => {
+    await writeLegacyInstall('hello', {...goodManifest(), slots:['tool','agent'], agent:{tasks}});
+    await manager.migrateLegacyApprovalsOnce();
+    const old = manager.list()[0];
+    expect(old).toMatchObject({enabled:true, manifest:{agent:{tasks}}, approval:{state:'approved'}});
+    expect(old.taskCapabilityApproved).toBeUndefined();
+    if (old.approval.state !== 'approved') throw new Error('fixture not approved');
+    expect(await manager.approveTaskCapability('hello', old.approval.revision, () => true)).toBe(false);
+    await manager.setEnabled('hello', false);
+    await manager.setEnabled('hello', true);
+    expect(manager.list()[0]).toMatchObject({enabled:true,manifest:{agent:{tasks}},approval:old.approval});
+    expect(manager.list()[0].taskCapabilityApproved).toBeUndefined();
+  });
+  it('keeps legacy tasks data inert, persists only explicit approval, and preserves it through enable and update', async () => {
+    const manifest = {...goodManifest(), slots:['tool','agent'], agent:{tasks:true}};
+    await writeLegacyInstall('hello', manifest);
+    await manager.migrateLegacyApprovalsOnce();
+    const old = manager.list()[0];
+    expect(old.enabled).toBe(true);
+    expect(old.taskCapabilityApproved).toBeUndefined();
+    if (old.approval.state !== 'approved') throw new Error('fixture not approved');
+    expect(await manager.approveTaskCapability('hello', 'stale', () => true)).toBe(false);
+    expect(await manager.approveTaskCapability('hello', old.approval.revision, () => false)).toBe(false);
+    expect(await manager.approveTaskCapability('hello', old.approval.revision, () => true)).toBe(true);
+    expect(manager.list()[0]).toMatchObject({enabled:true,taskCapabilityApproved:true,approval:old.approval});
+    await manager.setEnabled('hello', false);
+    expect(await manager.approveTaskCapability('hello', old.approval.revision, () => true)).toBe(false);
+    await manager.setEnabled('hello', true);
+    expect(manager.list()[0].taskCapabilityApproved).toBe(true);
+    const pkg = await makeCindy('tasks-update.cindy', {...manifest,version:'1.0.1'}, {'main.js':'// plugin'});
+    const updated = await manager.update(pkg, {expectedInstalledApproval:ghostInstallApprovalToken(old.approval)});
+    expect(updated).toHaveProperty('ghost.taskCapabilityApproved', true);
+  });
+  it('does not publish task approval when owner changes during receipt preparation', async () => {
+    await writeLegacyInstall('hello', {...goodManifest(), slots:['tool','agent'], agent:{tasks:true}});
+    await manager.migrateLegacyApprovalsOnce();
+    const old = manager.list()[0];
+    if (old.approval.state !== 'approved') throw new Error('fixture not approved');
+    let current = true;
+    const write = fs.promises.writeFile.bind(fs.promises);
+    const spy = vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (file, data, options) => {
+      await write(file, data, options);
+      if (String(file).endsWith('.tmp') && String(data).includes('"taskCapabilityApproved": true')) current = false;
+    });
+    expect(await manager.approveTaskCapability('hello', old.approval.revision, () => current)).toBe(false);
+    spy.mockRestore();
+    expect(manager.list()[0].taskCapabilityApproved).toBeUndefined();
+    expect(await manager.approveTaskCapability('hello', old.approval.revision, () => true)).toBe(true);
+    expect(manager.list()[0].taskCapabilityApproved).toBe(true);
+  });
+
   /** 带 skill 槽的旧布局清单 + 配套 SKILL.md(frontmatter 与声明逐字一致)。 */
   const legacySkillManifest = (id = 'skilled'): Record<string, unknown> => ({
     ...goodManifest(id),

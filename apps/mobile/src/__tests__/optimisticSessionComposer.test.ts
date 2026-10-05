@@ -415,7 +415,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     // 同一族的两处泄漏:活动条粘滞态跨会话、缩略图锁定跨附件变更 —— 派生状态不带身份,
     // 切换目标时旧值会顶着新目标(review P1/P2)。
     const screen = readSource(SCREEN);
-    expect(screen).toContain('const showComposerActivity = isSessionStreaming || streamingSticky === sessionId;');
+    expect(screen).toContain('const showComposerActivity = composerActivitySignal || streamingSticky === sessionId;');
 
     const bubble = readSource('src/session/PendingSendBubble.tsx');
     // 上传补齐 ossRef 不改变本地图片身份；附件替换仍重置预览。

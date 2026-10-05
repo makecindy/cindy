@@ -10,6 +10,12 @@ vi.mock('../behaviorStore', () => ({
 describe('Telegram group history access scope', () => {
   const adapter = buildTelegramAdapter({} as never, {} as never);
 
+  it('clears successful and cancelled status reactions but retains an error signal', () => {
+    expect(adapter.terminalReactionEmoji?.('done')).toBeNull();
+    expect(adapter.terminalReactionEmoji?.('aborted')).toBeNull();
+    expect(adapter.terminalReactionEmoji?.('error')).toBe('👎');
+  });
+
   it('saves the actual quoted text but excludes persona and technical instructions', async () => {
     const result = await adapter.prepareAgentTurnText?.({
       senderId: '123',

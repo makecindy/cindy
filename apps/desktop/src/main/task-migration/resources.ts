@@ -3,24 +3,38 @@ import os from 'node:os';
 import v8 from 'node:v8';
 import { constants } from 'node:buffer';
 
+/** Each input to {@link memoryBudget}, for logs explaining a `MIGRATION_NO_MEMORY`. */
+export function memoryBudgetDetail() {
+  const heap = v8.getHeapStatistics();
+  const inputs = {
+    freeMemory: os.freemem(),
+    availableMemory: process.availableMemory(),
+    heapRemaining: heap.heap_size_limit - heap.used_heap_size,
+    maxBufferLength: constants.MAX_LENGTH,
+  };
+  return { ...inputs, budget: Math.max(0, Math.floor(Math.min(...Object.values(inputs)) / 4)) };
+}
+
 /** JSZip keeps input, inflated content and JS strings alive together. Reserve headroom. */
 export function memoryBudget(): number {
-  const heap = v8.getHeapStatistics();
-  return Math.max(
-    0,
-    Math.floor(
-      Math.min(
-        os.freemem(),
-        process.availableMemory(),
-        heap.heap_size_limit - heap.used_heap_size,
-        constants.MAX_LENGTH,
-      ) / 4,
-    ),
-  );
+  return memoryBudgetDetail().budget;
 }
+
+/** Work that does not fit the budget; the numbers explain the failure in logs and the UI. */
+export class MigrationSizeError extends Error {
+  constructor(
+    readonly code: string,
+    readonly neededBytes: number,
+    readonly limitBytes: number,
+  ) {
+    super(`${code}: needs ${neededBytes} bytes, limit ${limitBytes} bytes`);
+  }
+}
+
 export function assertMemoryCapacity(bytes: number): void {
-  if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > memoryBudget())
-    throw new Error('MIGRATION_NO_MEMORY');
+  const budget = memoryBudget();
+  if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > budget)
+    throw new MigrationSizeError('MIGRATION_NO_MEMORY', bytes, budget);
 }
 
 /** Combine simultaneous allocations on the same filesystem, including separate mount paths. */

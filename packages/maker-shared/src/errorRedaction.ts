@@ -203,6 +203,7 @@ export function isResponsesLiteParallelToolCallsError(message: string): boolean 
 }
 
 const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
+  'DEVICE_LINK_BUSY',
   'DEVICE_LINK_CONTROL_DISABLED',
   'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
   'AUTO_REVIEW_UNAVAILABLE',

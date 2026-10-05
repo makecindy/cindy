@@ -9,6 +9,7 @@ import { useCloseWindowFallbackShortcut } from '@/hooks/useCloseWindowShortcut';
 import { useNewMakerPrefsOwnerResync } from '@/hooks/useNewMakerPrefsOwnerResync';
 import { useDisableContextMenu } from '@/hooks/useDisableContextMenu';
 import { ThemeProvider } from '@/hooks/useTheme';
+import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
 import { LocaleProvider } from '@/hooks/useLocale';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
@@ -165,7 +166,6 @@ function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
     // worktree 勾选记忆(vendor 无关根字段):远程草稿(手机 / 桌面控制端)播种用。
     worktreeEnabled: draft.worktreeEnabled,
   });
-
 }
 
 function MakerBootstrap() {
@@ -282,11 +282,26 @@ export function App() {
   // 通过 providerModelMemory 同步。写入触发上面的镜像 effect → NEW_MAKER_DRAFT_CHANGED 回流控制端。
   useEffect(() => {
     const offDraft = window.electronAPI.onMakerDraftPrefApply(
-      ({ agent, providerId, modelId, active, effort, fast, thinking, markModelChoice, appDefaultSelection }) => {
+      ({
+        agent,
+        providerId,
+        modelId,
+        active,
+        effort,
+        fast,
+        thinking,
+        markModelChoice,
+        appDefaultSelection,
+      }) => {
         if (appDefaultSelection) {
           if (applyAppDefaultModelSelection(appDefaultSelection)) {
             const route = appDefaultSelection.route;
-            setProviderModelChoice(agent, route.providerId ?? '', route.model, route.effort as Effort);
+            setProviderModelChoice(
+              agent,
+              route.providerId ?? '',
+              route.model,
+              route.effort as Effort,
+            );
             setProviderModelFast(agent, route.providerId ?? '', route.model, route.fastMode);
             syncNewMakerPrefs(appDefaultSelection.requestId);
           }
@@ -390,57 +405,61 @@ export function App() {
   return (
     <ThemeProvider>
       <FontSettingsProvider>
-        <LocaleProvider>
-          <ConfirmDialogProvider>
-            <EnvCheckProvider>
-              <AuthProvider>
-                <AppShellCoverProvider>
-                  <WorktreeProvider>
-                    <PrRefsProvider>
-                    <Tooltip.Provider>
-                      {/* LoginHandoffProvider 包 SplashScreen + RouterProvider(Step 3b
+        <WallpaperSettingsProvider>
+          <LocaleProvider>
+            <ConfirmDialogProvider>
+              <EnvCheckProvider>
+                <AuthProvider>
+                  <AppShellCoverProvider>
+                    <WorktreeProvider>
+                      <PrRefsProvider>
+                        <Tooltip.Provider>
+                          {/* LoginHandoffProvider 包 SplashScreen + RouterProvider(Step 3b
                           WHAT2 宿主契约):Splash→登录/主界面衔接动画状态机。
                           LoginBrandStage = 品牌视觉唯一渲染者(白底体系背景 + 立绘/
                           字标/Slogan),overlay pointer-events:none,仅主窗挂载(与
                           Splash gating 同源;副窗/sidebar 窗不挂)。 */}
-                      <LoginHandoffHost>
-                        {/* 副窗口(「在新窗口打开」)/ 右侧栏子窗口跳过 splash:env/热更检查
+                          <LoginHandoffHost>
+                            {/* 副窗口(「在新窗口打开」)/ 右侧栏子窗口跳过 splash:env/热更检查
                             由主窗启动时完成,附属窗 EnvCheckProvider 初始即 'passed',
                             不需要也不应再走 splash 流程。 */}
-                        {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && (
-                          <LoginBrandStage />
-                        )}
-                        {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && (
-                          <SplashScreen />
-                        )}
-                        <EnvCheckGuard>
-                          <MakerBootstrap />
-                          {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && <RemoteDesktopHost />}
-                          <ProjectAutomationNotifyBridge />
-                          {/* confirm 槽:插件请主机弹确认框。必须在 ConfirmDialogProvider
+                            {!isSecondaryWindow() &&
+                              !isSidebarWindow() &&
+                              !isGhostPanelWindow() && <LoginBrandStage />}
+                            {!isSecondaryWindow() &&
+                              !isSidebarWindow() &&
+                              !isGhostPanelWindow() && <SplashScreen />}
+                            <EnvCheckGuard>
+                              <MakerBootstrap />
+                              {!isSecondaryWindow() &&
+                                !isSidebarWindow() &&
+                                !isGhostPanelWindow() && <RemoteDesktopHost />}
+                              <ProjectAutomationNotifyBridge />
+                              {/* confirm 槽:插件请主机弹确认框。必须在 ConfirmDialogProvider
                               内(要 useConfirmDialog);main 只投单个窗口,所以每个窗口
                               都挂、谁收到谁弹,不按窗口类型 gate。 */}
-                          <GhostConfirmDialogHost />
-                          <ForgeOidcInstallConfirmHost />
-                          <GhostInstallConsentHost />
-                          <PluginPublisherConfirmHost />
-                          <OwnerScopedRouter />
-                        </EnvCheckGuard>
-                      </LoginHandoffHost>
-                      <FindInPageBar />
-                      <ToastContainer />
-                      {/* 首登轻量数据迁移弹窗:只挂主窗(副窗/侧栏窗不重复弹) */}
-                      {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && (
-                        <LegacyMigrationDialog />
-                      )}
-                    </Tooltip.Provider>
-                    </PrRefsProvider>
-                  </WorktreeProvider>
-                </AppShellCoverProvider>
-              </AuthProvider>
-            </EnvCheckProvider>
-          </ConfirmDialogProvider>
-        </LocaleProvider>
+                              <GhostConfirmDialogHost />
+                              <ForgeOidcInstallConfirmHost />
+                              <GhostInstallConsentHost />
+                              <PluginPublisherConfirmHost />
+                              <OwnerScopedRouter />
+                            </EnvCheckGuard>
+                          </LoginHandoffHost>
+                          <FindInPageBar />
+                          <ToastContainer />
+                          {/* 首登轻量数据迁移弹窗:只挂主窗(副窗/侧栏窗不重复弹) */}
+                          {!isSecondaryWindow() && !isSidebarWindow() && !isGhostPanelWindow() && (
+                            <LegacyMigrationDialog />
+                          )}
+                        </Tooltip.Provider>
+                      </PrRefsProvider>
+                    </WorktreeProvider>
+                  </AppShellCoverProvider>
+                </AuthProvider>
+              </EnvCheckProvider>
+            </ConfirmDialogProvider>
+          </LocaleProvider>
+        </WallpaperSettingsProvider>
       </FontSettingsProvider>
     </ThemeProvider>
   );

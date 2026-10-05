@@ -1,3 +1,4 @@
+import type { RemoteDesktopDisplay } from '@cindy/device-link';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import {
   DESKTOP_AUDIO_RETRY_MS,
@@ -42,6 +43,8 @@ const h = vi.hoisted(() => ({
   nativeFrame: vi.fn(async () => 'frame'),
   input: vi.fn(),
   viewHeartbeat: vi.fn(),
+  controllerState: null as null | { peer: string; controlling: boolean },
+  controllerRequest: vi.fn(async (..._args: any[]): Promise<unknown> => ({})),
   hostInput: vi.fn(),
   startInput: vi.fn(async () => {}),
   iceConfig: vi.fn(async (): Promise<any[]> => [
@@ -159,7 +162,10 @@ vi.mock('../controller', () => ({
     constructor(deps: any) {
       h.deps = deps;
     }
-    state = null;
+    get state() {
+      return h.controllerState;
+    }
+    request = h.controllerRequest;
     displayId = '1';
     changingDisplay = false;
     displayGeometryMatches = h.geometryMatches;
@@ -683,6 +689,62 @@ it.each(['darwin', 'win32'])(
   },
 );
 
+it('holds native video across a display change and resumes it on the new display', async () => {
+  vi.stubGlobal('process', { ...process, platform: 'darwin' });
+  expect((await h.deps.capabilities()).liveDisplaySwitch).toBe(true);
+  // No video yet: nothing to hold.
+  expect(h.deps.pauseVideo!()).toBe(false);
+  const pending = h.deps.offer(
+    { lease: h.lease, display: { id: '1' } },
+    'sdp',
+    undefined,
+    false,
+    'attempt',
+  );
+  h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
+  await flush();
+  h.handlers.get(DESKTOP_LOCAL.REPLY)(event(), h.owner.send.mock.calls[0][1].id, 'answer');
+  await pending;
+  const owner = h.owner;
+  const frame = h.handlers.get(DESKTOP_LOCAL.NATIVE_FRAME);
+  const reply = h.handlers.get(DESKTOP_LOCAL.REPLY);
+  const swap = async (display: RemoteDesktopDisplay, kept: unknown) => {
+    const result = h.deps.resumeVideo!(display);
+    await flush();
+    const command = owner.send.mock.calls.at(-1)[1];
+    expect(command).toMatchObject({ op: 'display-swap', lease: h.lease });
+    reply(event(), command.id, kept);
+    return result;
+  };
+  expect(h.deps.pauseVideo!()).toBe(true);
+  // The capture page pauses its no-frame timeout for a slow display change.
+  expect(owner.send.mock.calls.at(-1)[1]).toMatchObject({ op: 'display-hold', lease: h.lease });
+  h.nativeFrame.mockClear();
+  // Frames of the old geometry never reach the held stream.
+  await expect(frame(event(), h.lease)).resolves.toBeNull();
+  expect(h.nativeFrame).not.toHaveBeenCalled();
+  h.nativeStop.mockClear();
+  await expect(swap({ id: '5', name: 'Viewer', width: 900, height: 1600 }, true)).resolves.toBe(
+    true,
+  );
+  // Same capture process and peer; only the source follows the new display.
+  expect(h.owner).toBe(owner);
+  expect(owner.dead).toBe(false);
+  expect(h.nativeStop).toHaveBeenCalled();
+  await frame(event(), h.lease);
+  expect(h.nativeFrame).toHaveBeenLastCalledWith('5', false, undefined);
+  // Browser capture (or an ended stream) cannot follow: not reported as kept.
+  expect(h.deps.pauseVideo!()).toBe(true);
+  await expect(swap({ id: '1', name: 'Main', width: 1920, height: 1080 }, false)).resolves.toBe(
+    false,
+  );
+  // A stopped stream cannot be resumed and is not reported as kept.
+  h.deps.stopVideo();
+  await expect(
+    h.deps.resumeVideo!({ id: '1', name: 'Main', width: 1920, height: 1080 }),
+  ).resolves.toBe(false);
+});
+
 it('does not advertise or select Windows overlays without a ready native service', async () => {
   vi.stubGlobal('process', { ...process, platform: 'win32' });
   const { readWindowsDesktopSupport } = await import('../windowsHost');
@@ -881,6 +943,63 @@ it('uses native Hyprland capture for video and relay without opening a portal pi
   expect(h.hyprlandStop).toHaveBeenCalled();
 });
 
+it('authorizes channel requests exactly like the relay and only for small control ops', async () => {
+  const settings = await import('../../device-link/settings-store');
+  const config = {
+    remoteDesktopEnabled: true,
+    remoteControlEnabled: true,
+    revokedControllers: [] as string[],
+  };
+  vi.spyOn(settings, 'readDeviceLinkSettings').mockImplementation(() => config as any);
+  const { screen } = await import('electron');
+  vi.spyOn(screen, 'getAllDisplays').mockReturnValue([
+    { id: 1, label: 'Main', size: { width: 1920, height: 1080 } },
+  ] as any);
+  expect((await h.deps.capabilities()).channelRequests).toBe(true);
+  const pending = offer();
+  h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
+  await flush();
+  h.handlers.get(DESKTOP_LOCAL.REPLY)(event(), h.owner.send.mock.calls[0][1].id, 'answer');
+  await pending;
+  h.controllerState = { peer: 'phone', controlling: true };
+  h.controllerRequest.mockResolvedValue({ controlling: true });
+  const channel = h.handlers.get(DESKTOP_LOCAL.CHANNEL_REQUEST);
+  const control = { op: 'control', lease: h.lease, enabled: true };
+  await expect(channel(event(), h.lease, control)).resolves.toEqual({
+    ok: true,
+    result: { controlling: true },
+  });
+  // The lease owner is the authority, never anything the viewer claims.
+  expect(h.controllerRequest).toHaveBeenLastCalledWith('phone', control);
+  h.controllerRequest.mockClear();
+  for (const [value, error] of [
+    [{ op: 'start', displayId: '1' }, 'INVALID_REQUEST'],
+    [{ op: 'offer', lease: h.lease, sdp: 'x' }, 'INVALID_REQUEST'],
+    [{ op: 'windowAction', lease: h.lease, action: 'list' }, 'INVALID_REQUEST'],
+    [{ ...control, lease: 'other' }, 'INVALID_REQUEST'],
+    [{ op: 'nope' }, 'INVALID_LEASE'],
+  ] as const)
+    await expect(channel(event(), h.lease, value)).resolves.toEqual({ ok: false, error });
+  config.revokedControllers = ['phone'];
+  await expect(channel(event(), h.lease, control)).resolves.toEqual({
+    ok: false,
+    error: 'DESKTOP_UNAVAILABLE',
+  });
+  expect(h.controllerRequest).not.toHaveBeenCalled();
+  config.revokedControllers = [];
+  h.controllerRequest.mockRejectedValueOnce(new Error('DESKTOP_VIEW_ONLY'));
+  await expect(channel(event(), h.lease, control)).resolves.toEqual({
+    ok: false,
+    error: 'DESKTOP_VIEW_ONLY',
+  });
+  // Wrong process or a stale lease is an authorization failure, not a reply.
+  await expect(channel(event({ mainFrame: {} }), h.lease, control)).rejects.toThrow(
+    'PERMISSION_DENIED',
+  );
+  await expect(channel(event(), 'other', control)).rejects.toThrow('PERMISSION_DENIED');
+  h.controllerState = null;
+});
+
 it('advertises native Wayland geometry to existing viewers without a 16:9 placeholder', async () => {
   h.wayland = h.hyprland = true;
   const settings = await import('../../device-link/settings-store');
@@ -1062,7 +1181,7 @@ it.each([true, false])(
     const pending = h.deps.offer(
       { lease: h.lease, display: { id: '1' } },
       'sdp',
-      { audio: true, fps: 30, bitrate: 0 },
+      { audio: true, fps: 30, quality: 'auto' },
       true,
       'attempt',
     );
@@ -1108,7 +1227,7 @@ it('revokes audio recovery with the lease and never grants it to an audio-off re
   const pending = h.deps.offer(
     { lease: h.lease, display: { id: '1' } },
     'sdp',
-    { audio: true, fps: 30, bitrate: 0 },
+    { audio: true, fps: 30, quality: 'auto' },
     true,
     'attempt',
   );

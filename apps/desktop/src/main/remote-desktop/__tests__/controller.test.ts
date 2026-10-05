@@ -1344,3 +1344,68 @@ it('joins duplicate privacy initialization and invalidates it on control loss', 
   ready();
   await errors;
 });
+
+describe('live display switch', () => {
+  function modes(h: ReturnType<typeof harness>) {
+    h.deps.displayModes = vi.fn(async () => [
+      { id: '1', width: 1920, height: 1080, current: true },
+      { id: '2', width: 3840, height: 2160, current: false },
+    ]);
+    h.deps.resolution = vi.fn(async () => {});
+  }
+  it.each([
+    ['kept', true, true, true],
+    ['not requested', false, true, true],
+    ['capture cannot pause', true, false, true],
+    ['capture gone after the change', true, true, false],
+  ] as const)(
+    'holds video across a temporary resolution only when %s allows it',
+    async (_name, keepVideo, canPause, canResume) => {
+      const h = harness();
+      modes(h);
+      h.deps.pauseVideo = vi.fn(() => canPause);
+      h.deps.resumeVideo = vi.fn(async () => canResume);
+      const { lease } = await h.start();
+      await h.controller.request('phone', { op: 'control', lease, enabled: true });
+      vi.mocked(h.deps.stopVideo).mockClear();
+      const result = (await h.controller.request('phone', {
+        op: 'resolution',
+        lease,
+        modeId: '2',
+        temporary: true,
+        ...(keepVideo ? { keepVideo: true } : {}),
+      })) as RemoteDesktopLease;
+      const kept = keepVideo && canPause && canResume;
+      expect(result).toMatchObject({ lease, controlling: false });
+      expect(result.display).toMatchObject({ id: '1', width: 3840, height: 2160 });
+      expect(result.videoKept).toBe(kept ? true : undefined);
+      expect(h.deps.stopVideo).toHaveBeenCalledTimes(kept ? 0 : 1);
+      if (keepVideo && canPause) expect(h.deps.resumeVideo).toHaveBeenCalledWith(result.display);
+      else expect(h.deps.resumeVideo).not.toHaveBeenCalled();
+      expect(h.controller.state).not.toBeNull();
+    },
+  );
+  it('ends the session as before when a kept display change fails', async () => {
+    const h = harness();
+    modes(h);
+    h.deps.resolution = vi.fn(async () => {
+      throw new Error('DESKTOP_DISPLAY_MODE_FAILED');
+    });
+    h.deps.pauseVideo = vi.fn(() => true);
+    h.deps.resumeVideo = vi.fn(async () => true);
+    const { lease } = await h.start();
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
+    await expect(
+      h.controller.request('phone', {
+        op: 'resolution',
+        lease,
+        modeId: '2',
+        temporary: true,
+        keepVideo: true,
+      }),
+    ).rejects.toThrow('DESKTOP_DISPLAY_MODE_FAILED');
+    expect(h.deps.resumeVideo).not.toHaveBeenCalled();
+    expect(h.deps.stopVideo).toHaveBeenCalled();
+    expect(h.controller.state).toBeNull();
+  });
+});

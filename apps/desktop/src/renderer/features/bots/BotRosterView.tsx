@@ -119,9 +119,9 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
     );
   return (
     <Dialog.Root open onOpenChange={open => { if (!open && !creating) close(); }}><Dialog.Portal>
-    <Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-modal)]" />
+    <Dialog.Overlay className="modal-scrim fixed inset-0 z-50" />
     <Dialog.Content aria-describedby={undefined} onPointerDownOutside={(event) => event.preventDefault()} onCloseAutoFocus={event => { if (restoreFocus) { event.preventDefault(); restoreFocus(); } }}
-      className={`fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-[calc(100vw-32px)] max-w-[520px] -translate-x-1/2 -translate-y-1/2 ${importing ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'} rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-6 text-[var(--text-primary)] outline-none sm:p-8`}>
+      className={`modal-panel fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-[calc(100vw-32px)] max-w-[520px] -translate-x-1/2 -translate-y-1/2 ${importing ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'} p-6 text-[var(--text-primary)] outline-none sm:p-8`}>
       {content}
     </Dialog.Content>
   </Dialog.Portal></Dialog.Root>

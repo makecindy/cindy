@@ -1778,6 +1778,7 @@ export async function callCindyMedia(
         mime_type: resolved.mimeType,
       };
     }
+    if (request.action === 'import_image') return failure('PERMISSION_DENIED', '图片导入必须通过当前任务的 Host 授权入口。');
     if (request.action === 'list_models') {
       const capability = request.capability as MediaCapability | undefined;
       const availability = await listExecutableMediaModels(

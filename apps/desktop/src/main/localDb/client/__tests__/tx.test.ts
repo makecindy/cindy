@@ -241,6 +241,21 @@ interface TestSessionRow {
 }
 
 describe('db worker tx handlers', () => {
+  it.each([false, true])('persists bounded authority through the real worker transport (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 'authority');
+      const initial = await client.tx('authorization.readProjection', { sessionId: 'authority', leadId: 'authority' });
+      await client.exec('INSERT INTO messages(id,client_id,session_id,role,content,created_at,agent_meta) VALUES (?,?,?,?,?,?,?)',
+        ['authority-user', 'authority-user', 'authority', 'user', JSON.stringify({ text: 'Do not publish' }), 100,
+          JSON.stringify({ delivery: 'turn', autoReviewUserText: 'Do not publish' })]);
+      const next = await client.tx('authorization.readProjection', { sessionId: 'authority', leadId: 'authority' });
+      expect(next.sessionIntent).toBe('Do not publish');
+      expect(next.reviewIntent).toBe('Do not publish');
+      expect(next.revision).toBeGreaterThan(initial.revision);
+      await client.exec('UPDATE sessions SET cleared_at=? WHERE id=?', [100, 'authority']);
+      expect((await client.tx('authorization.readProjection', { sessionId: 'authority', leadId: 'authority' })).sessionIntent).toBe('');
+    }, { useInlineWorker, authorityProjection: true });
+  });
   beforeAll(async () => {
     workerBundleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-db-tx-worker-'));
     workerScriptPath = await buildDbWorkerBundle(path.join(workerBundleDir, 'build'));
@@ -3590,7 +3605,7 @@ describe('db worker tx handlers', () => {
 
 async function withClient(
   fn: (client: DbClient) => Promise<void>,
-  opts: { useInlineWorker?: boolean } = {},
+  opts: { useInlineWorker?: boolean; authorityProjection?: boolean } = {},
 ): Promise<void> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-db-tx-'));
   const drizzleDir = path.join(dir, 'drizzle');
@@ -3598,6 +3613,15 @@ async function withClient(
   fs.mkdirSync(drizzleDir);
   fs.writeFileSync(path.join(drizzleDir, '0000_init.sql'), INIT_SQL, 'utf-8');
   createMigratedTxDb(dbPath);
+  if (opts.authorityProjection) {
+    const db = new Database(dbPath);
+    try {
+      db.exec(fs.readFileSync(path.resolve('drizzle/0122_auto_review_projections.sql'), 'utf8'));
+      const module = { exports: {} as { run?: (db: Database.Database) => void } };
+      new Function('module', fs.readFileSync(path.resolve('drizzle/scripts/0122_auto_review_projections.ts'), 'utf8'))(module);
+      module.exports.run!(db);
+    } finally { db.close(); }
+  }
   let client: DbClient | undefined;
   try {
     client = await createDbClient({

@@ -337,6 +337,7 @@ export type CindyMediaCapability =
 export type CindyMediaToolRequest =
   | { action: 'list_models'; capability?: CindyMediaCapability }
   | { action: 'resolve_local_path'; url: string }
+  | { action: 'import_image'; path: string }
   | {
       action: 'prepare';
       /** 精确执行来源；插件配置返回 providerId 时必须原样传入。 */

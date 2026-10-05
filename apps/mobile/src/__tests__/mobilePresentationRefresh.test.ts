@@ -111,7 +111,7 @@ describe('mobile localized presentation refresh', () => {
     const source = read('src/session/SessionMenuSheet.tsx');
 
     expect(source).toContain(
-      '[accountUsage, i18nInstance.language, quotaBucketTables, session.model, visible, quotaStaleTick]',
+      '[accountUsage, i18nInstance.language, quotaBucketTables, session.model, visible, quotaStaleTick, countdownTick, t]',
     );
     expect(source).toContain('[codexRateLimits, i18nInstance.language]');
   });

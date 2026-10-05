@@ -159,6 +159,7 @@ function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, 
       protocol, headers: route.headerOverride ?? {}, efforts: model.efforts,
       supportsFastMode: model.supportsFastMode === true,
       providerId: provider.id,
+      catalogPresetId: model.catalogPresetId,
       ...(row && (protocol === 'openai-chat' || model.api) ? { model: row, nativeUpstream: base } : {}),
       capabilities: {
         ...(model.supportsImageInput ? { imageInput: 'image_url' as const } : {}),

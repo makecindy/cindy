@@ -28,6 +28,7 @@ import {
   Terminal,
   GitPullRequestArrow,
   UsersRound,
+  LayoutGrid,
   ListTodo,
   Plus,
   Puzzle,
@@ -142,6 +143,7 @@ const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   subagents: Bot,
   'background-tasks': ListTodo,
   routines: ListTodo,
+  'bot-workbench': LayoutGrid,
   'resource-usage': Activity,
   'cindy-make': Wrench,
 };
@@ -156,6 +158,7 @@ const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   subagents: 'rightSidebar.tabs.kinds.subagents',
   'background-tasks': 'rightSidebar.tabs.kinds.backgroundTasks',
   routines: 'routines.title',
+  'bot-workbench': 'bots.workbench.title',
   'resource-usage': 'rightSidebar.tabs.kinds.resourceUsage',
   'cindy-make': 'settings.cindyMake.title',
 };
@@ -320,6 +323,7 @@ export function TabStrip({
   const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const closeDropdown = useCallback(() => setDropdownOpen(false), []);
   const tabsScrollRef = useRef<HTMLDivElement | null>(null);
   const addButtonWrapperRef = useRef<HTMLDivElement | null>(null);
   const existingKinds = useMemo(() => new Set<TabKindId>(tabs.map((t) => t.kind)), [tabs]);
@@ -439,45 +443,42 @@ export function TabStrip({
           )}
         />
       </div>
-      {/* 「+」按钮 wrapper:scroll 容器外、shrink-0 永远可见。dropdown portal 到
-          body(fixed 定位,以本 wrapper 为 anchor),不被面板 overflow-hidden 切。 */}
+      {/* 「+」按钮 wrapper:scroll 容器外、shrink-0 永远可见。菜单 portal 到 body,
+          不被面板 overflow-hidden 切;非 modal,点菜单外的控件照常生效。 */}
       <div
         ref={addButtonWrapperRef}
         className={cn('relative flex shrink-0 items-center', addButtonWrapperClassName)}
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
-        <Tip text={t('rightSidebar.tabs.addAria')} side="bottom">
-          <button
-            type="button"
-            aria-label={t('rightSidebar.tabs.addAria')}
-            aria-haspopup="menu"
-            aria-expanded={dropdownOpen}
-            onClick={() => setDropdownOpen((v) => !v)}
-            className={cn(
-              'inline-flex h-6 w-6 items-center justify-center rounded-full transition-colors',
-              addButtonClassName,
-              dropdownOpen
-                ? 'bg-[var(--surface-chip)] text-[var(--text-primary)]'
-                : 'text-[var(--titlebar-icon)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
-            )}
-          >
-            <Plus size={13} />
-          </button>
-        </Tip>
-        {dropdownOpen && (
+        <DropdownMenu open={dropdownOpen} onOpenChange={setDropdownOpen} modal={false}>
+          <DropdownMenuTrigger asChild>
+            <Tip text={t('rightSidebar.tabs.addAria')} side="bottom">
+              <button
+                type="button"
+                aria-label={t('rightSidebar.tabs.addAria')}
+                className={cn(
+                  'inline-flex h-6 w-6 items-center justify-center rounded-full transition-colors',
+                  addButtonClassName,
+                  dropdownOpen
+                    ? 'bg-[var(--surface-chip)] text-[var(--text-primary)]'
+                    : 'text-[var(--titlebar-icon)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+                )}
+              >
+                <Plus size={13} />
+              </button>
+            </Tip>
+          </DropdownMenuTrigger>
           <AddTabDropdown
+            open={dropdownOpen}
             anchorRef={addButtonWrapperRef}
             sessionId={sessionId}
-            onClose={() => setDropdownOpen(false)}
-            onSelect={(kind) => {
-              onAdd(kind);
-              setDropdownOpen(false);
-            }}
+            onClose={closeDropdown}
+            onSelect={onAdd}
             existingKinds={existingKinds}
             iosSimulatorAvailable={iosSimulatorAvailable}
             subagentsAvailable={subagentsAvailable}
           />
-        )}
+        </DropdownMenu>
       </div>
 
       {/* Tab pill 右键菜单 —— 虚拟 trigger 在右键位置弹 DropdownMenu(跟
@@ -505,12 +506,6 @@ export function TabStrip({
         <DropdownMenuContent
           align="start"
           sideOffset={2}
-          className={cn(
-            'rounded-xl p-0.5 overflow-hidden',
-            'bg-[var(--cmd-palette-bg)]',
-            'border border-[var(--cmd-palette-border)]',
-            'shadow-[var(--shadow-menu)]',
-          )}
         >
           {contextMenu && (
             <>
@@ -520,7 +515,6 @@ export function TabStrip({
                   closeContextMenu();
                   onClose(id);
                 }}
-                className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
               >
                 {t('rightSidebar.tabs.contextMenu.close')}
               </DropdownMenuItem>
@@ -532,7 +526,6 @@ export function TabStrip({
                   closeContextMenu();
                   onCloseOthers?.(id);
                 }}
-                className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)] data-[disabled]:opacity-50"
               >
                 {t('rightSidebar.tabs.contextMenu.closeOthers')}
               </DropdownMenuItem>
@@ -541,7 +534,6 @@ export function TabStrip({
                   closeContextMenu();
                   onCloseAll?.();
                 }}
-                className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
               >
                 {t('rightSidebar.tabs.contextMenu.closeAll')}
               </DropdownMenuItem>

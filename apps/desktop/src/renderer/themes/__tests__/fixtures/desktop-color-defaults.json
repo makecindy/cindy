@@ -629,8 +629,8 @@
     },
     {
       "id": "login-bg-base",
-      "light": "#EDEDED",
-      "dark": "#1F1F1E"
+      "light": "#F2F2ED",
+      "dark": "#181818"
     },
     {
       "id": "login-bg-gradient-radial",

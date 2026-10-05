@@ -248,6 +248,9 @@ vi.mock('../../cindy-media/ledger.js', () => ({
 vi.mock('../../cindy-media/invocationService.js', () => ({
   callCindyMedia: callCindyMediaMock,
 }));
+// Image ingestion has its own publishImage tests; keep this permission-gate
+// fixture isolated from the real blob store and database dependency graph.
+vi.mock('../../cindy-media/publishImage.js', () => ({ publishImage: vi.fn() }));
 vi.mock('../../cindy-media/attachmentGrantGate.js', () => ({ chatAttachmentOrigin: vi.fn() }));
 vi.mock('../ghostAttachmentResolve.js', () => ({
   resolveGhostAttachmentUrl: resolveGhostAttachmentUrlMock,

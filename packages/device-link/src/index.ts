@@ -54,3 +54,4 @@ export * from "./pluginDeviceAuthorization.js";
 export * from "./pluginOauthAuthentication.js";
 export * from "./inputDelivery.js";
 export * from "./taskMigration.js";
+export * from './pluginPages.js';

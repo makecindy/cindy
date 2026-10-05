@@ -51,6 +51,8 @@ export const DL_UNSUBSCRIBE_CHANNEL = 'device-link:unsubscribe';
  * 不出被控端。老被控端响应无此字段 → 控制端按无终态降级。
  */
 export const DL_HISTORY_MESSAGES_CHANNEL = 'local-db:history:messages';
+/** Same-account, linked, read-only history discovery/search. No shared-task or unlinked access. */
+export const DL_HISTORY_QUERY_CHANNEL = 'local-db:history:query';
 
 /**
  * 会话引用消费能力探针。控制端在发送含引用快照的队列消息前必须先调用；
@@ -162,6 +164,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:list-active',
   'maker:any-session-in-turn',
   'maker:session-in-turn',
+  // Review evidence and the Reviewer session are created on the data-owning
+  // device. The handler remains host-owned; this only permits the explicit
+  // start request to cross the device-link tunnel.
+  'maker:review:start',
   // —— 输入队列(input queue 全集,无本机副作用)——
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
   'maker:input:get-projection',
@@ -277,6 +283,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // projection.
   'local-db:conversations:search',
   DL_HISTORY_MESSAGES_CHANNEL,
+  DL_HISTORY_QUERY_CHANNEL,
   'local-db:messages:list',
   // Read-only visible history and recoverable work ranges; same session authorization as list.
   'local-db:messages:view',
@@ -740,6 +747,9 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
  * client-agnostic:mobile/web 控制端应使用同一映射(与 allowlist 同为协议契约)。
  */
 export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
+  // Evidence collection may include git diff and bounded artifact reads before
+  // the host can acknowledge the newly-created Reviewer session.
+  'maker:review:start': 90_000,
   // Two Git preflight/apply stages each allow 30s, plus snapshot and queue overhead.
   'maker:turn-change-set:apply': 90_000,
   [FILE_PEER_CHANNEL]: 30_000,

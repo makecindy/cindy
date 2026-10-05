@@ -71,16 +71,28 @@ export function peerAttachmentFinishTimeoutMs(size: number): number {
   return 15_000 + Math.ceil(Math.max(0, size) / (20 * 1024 ** 2)) * 1000;
 }
 
-/** A failed upload is abandoned before sending the message; callers then upload through OSS. */
+/**
+ * 对端声明 `caps.streamAttachments` 时,同时在途的写入块数。块按发送顺序在接收端逐个落盘;
+ * 文件通道每端最多 4 个在途请求,留 1 个给同一连接上的远程读取。
+ */
+export const PEER_ATTACHMENT_STREAM_WINDOW = 3;
+
+/**
+ * A failed upload is abandoned before sending the message; callers then upload through OSS.
+ * `stream` (peer advertised `caps.streamAttachments`) keeps several writes in flight and passes
+ * each block as the RPC binary body instead of a base64 field.
+ */
 export async function uploadPeerAttachment(
   metadata: Omit<PeerAttachment, "ticket">,
   read: (offset: number, length: number) => Promise<string>,
   invoke: (
     request: Record<string, unknown>,
     timeoutMs?: number,
+    body?: string,
   ) => Promise<unknown>,
   check: () => void,
   onProgress?: (bytes: number) => void,
+  stream = false,
 ): Promise<string> {
   check();
   const { ticket } = (await invoke({ op: "begin", ...metadata })) as {
@@ -88,17 +100,39 @@ export async function uploadPeerAttachment(
   };
   if (typeof ticket !== "string" || !/^[a-f0-9-]{36}$/.test(ticket))
     throw new Error("INVALID_PEER_ATTACHMENT");
+  const window = stream ? PEER_ATTACHMENT_STREAM_WINDOW : 1;
+  // A queued block waits behind the others on the wire, so its deadline covers the whole window.
+  // The receiver only drops a body that stalls, so it never cuts a block off before this deadline.
+  const writeTimeoutMs = stream ? 15_000 * window : undefined;
+  const inFlight: Promise<number>[] = [];
+  let failed = false;
+  // Not `onProgress?.(await …)`: optional call skips its argument, which would never dequeue.
+  const settleOldest = async () => {
+    const end = await inFlight.shift()!;
+    onProgress?.(end);
+  };
   try {
     for (let offset = 0; offset < metadata.size; offset += 1024 * 1024) {
       check();
-      const data = await read(
-        offset,
-        Math.min(1024 * 1024, metadata.size - offset),
-      );
+      const end = Math.min(offset + 1024 * 1024, metadata.size);
+      const data = await read(offset, end - offset);
       check();
-      await invoke({ op: "write", ticket, offset, data });
-      onProgress?.(Math.min(offset + 1024 * 1024, metadata.size));
+      // Awaiting in send order reports progress monotonically; once any block failed, stop
+      // sending and drain until that failure surfaces.
+      while (inFlight.length >= window || (failed && inFlight.length))
+        await settleOldest();
+      const write = (
+        stream
+          ? invoke({ op: "write", ticket, offset }, writeTimeoutMs, data)
+          : invoke({ op: "write", ticket, offset, data })
+      ).then(() => end);
+      // A later block may fail before earlier ones settle; record it instead of leaving it unhandled.
+      write.catch(() => {
+        failed = true;
+      });
+      inFlight.push(write);
     }
+    while (inFlight.length) await settleOldest();
     check();
     await invoke(
       { op: "finish", ticket },

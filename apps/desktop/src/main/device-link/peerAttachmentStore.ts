@@ -109,19 +109,23 @@ export async function handlePeerAttachment(peer: string, r: Record<string, unkno
       return { ok: true };
     }
     if (r.op === 'write') {
+      // Streaming senders deliver raw bytes (attached by the file-peer IPC); older senders base64.
+      const binary = r.data instanceof Uint8Array;
       if (
         entry.complete ||
         !Number.isSafeInteger(r.offset) ||
         Number(r.offset) < 0 ||
-        typeof r.data !== 'string' ||
-        r.data.length > 1400000
+        (!binary && (typeof r.data !== 'string' || r.data.length > 1400000))
       )
         throw new Error('FILE_PEER_BLOCK');
-      const bytes = Buffer.from(r.data, 'base64');
+      const view = r.data as Uint8Array;
+      const bytes = binary
+        ? Buffer.from(view.buffer, view.byteOffset, view.byteLength)
+        : Buffer.from(r.data as string, 'base64');
       if (
         !bytes.length ||
         bytes.length > 1024 * 1024 ||
-        bytes.toString('base64') !== r.data ||
+        (!binary && bytes.toString('base64') !== r.data) ||
         Number(r.offset) + bytes.length > entry.size
       )
         throw new Error('FILE_PEER_BLOCK');

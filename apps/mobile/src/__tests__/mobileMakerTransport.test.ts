@@ -267,6 +267,31 @@ describe("mobile maker transport", () => {
       "Account scope unsupported",
     );
   });
+  it("reads subscription snapshots by family, scoping only independent accounts", async () => {
+    const calls: Array<[string, unknown[] | undefined]> = [];
+    const invoke: RemoteInvoke = async (_deviceId, channel, args) => {
+      calls.push([channel, args]);
+      return (args?.length ? { providerId: args[0] } : { creditUsagePercent: 1 }) as never;
+    };
+    const maker = createMobileMakerTransport({ deviceId: "dev-1", invoke });
+    await maker.getSubscriptionUsage("claude", "anthropic");
+    await maker.getSubscriptionUsage("xai");
+    await maker.getSubscriptionUsage("xai", "grok-second");
+    await maker.getClaudeSessionRoute("s1");
+    expect(calls).toEqual([
+      ["maker:usage:claude-subscription", []],
+      ["maker:usage:xai-subscription", []],
+      ["maker:usage:xai-subscription", ["grok-second"]],
+      ["maker:claude-session-route:get", ["s1"]],
+    ]);
+    const legacy = createMobileMakerTransport({
+      deviceId: "dev-1",
+      invoke: async () => ({ creditUsagePercent: 1 }) as never,
+    });
+    await expect(legacy.getSubscriptionUsage("xai", "grok-second")).rejects.toThrow(
+      "Account scope unsupported",
+    );
+  });
   it("documents the remote channels used by the mobile transport", () => {
     expect(MOBILE_MAKER_CHANNELS).toEqual([
       "maker:create-session",
@@ -305,6 +330,9 @@ describe("mobile maker transport", () => {
       "local-db:messages:estimatedSessionValue",
       "maker:usage:codex-rate-limits",
       "maker:usage:codex-rate-limit-reset",
+      "maker:usage:claude-subscription",
+      "maker:usage:xai-subscription",
+      "maker:claude-session-route:get",
       "maker:api-key:present",
       "maker:list-agent-commands",
       "maker:list-agent-skills",

@@ -7,7 +7,7 @@ import { ResidentHomeList, useResidentHomeList } from './ResidentHomeList';
 import { HomeNewTaskButton } from './HomeNewTaskButton';
 import { useRetainedHomeState, getHomeViewSession } from './homeViewSession';
 import { rememberRecentTask } from './recentTasks';
-import { homeListStyles, SESSION_ROW_LONG_PRESS_MS, SessionStatusMark } from '@/session/HomeListVisuals';
+import { homeListStyles, SESSION_ROW_LONG_PRESS_MS, SessionStatusMark, SessionStatusPulse } from '@/session/HomeListVisuals';
 import { useOptionalHeaderHeight } from '@/session/useOptionalHeaderHeight';
 import { SessionHeaderNativeBlur } from "@/session/SessionHeaderNativeControls";
 import { rememberComposerEntry } from './composerMorph';
@@ -60,6 +60,7 @@ import {
   Lock,
   Pin,
   RefreshCw,
+  SquarePen,
   UsersRound,
   X,
 } from 'lucide-react-native';
@@ -85,6 +86,7 @@ import { HomeChromeFrost } from '@/session/HomeChromeFrost';
 import { HomeGlassMenuPanel, HomeMenuScrim } from '@/session/HomeGlassMenuPanel';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { useBalancedTitle } from '@/platform/chrome/balancedTitle';
 import { HomeSearchBar } from '@/session/HomeSearchBar';
 import { HomeProjectMachineLabel } from '@/session/HomeProjectMachineLabel';
 import { buildHomeProjectMachineIdentities, type HomeProjectMachineIdentity } from '@/session/homeProjectMachineIdentity';
@@ -254,7 +256,11 @@ import {
   replaceSessionScheduleIndexEntries,
 } from '@/session/scheduleIndex';
 import { createScheduleIndexDeferRegistry } from '@/session/scheduleIndexDefer';
-import { latestMobileSessionRow, resolveMobileSessionRowStatus } from '@/session/sessionRightStatus';
+import {
+  latestMobileSessionRow,
+  resolveMobileCollapsedGroupStatus,
+  resolveMobileSessionRowStatus,
+} from '@/session/sessionRightStatus';
 import { SessionRightSpinner } from '@/session/SessionRightSpinner';
 import { AutomationTimerIcon } from '@/session/AutomationTimerIcon';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
@@ -386,8 +392,9 @@ export interface MobileHomeProps {
   /** The same Home surface, constrained by its host rather than the screen width. */
   width?: number;
   currentSessionId?: string;
-  onDismiss?: () => void;
   newSessionInSystemBar?: boolean;
+  /** Temporary drawers put New task in their own header instead of floating over the short list. */
+  newSessionInHeader?: boolean;
   onSelectSession?: (item: RemoteSessionListItem) => void;
   runNavigation?: (action: () => void) => void;
   newSessionActionRef?: MutableRefObject<(() => void) | null>;
@@ -409,7 +416,7 @@ export function MobileHome(props: MobileHomeProps) {
   </RemoteSessionStoreSubscriptionGate>;
 }
 
-function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newSessionInSystemBar = false, onSelectSession, runNavigation, newSessionActionRef }: MobileHomeProps) {
+function HomeScreenContent({ active = true, onModeChange, width, newSessionInSystemBar = false, newSessionInHeader = false, onSelectSession, runNavigation, newSessionActionRef }: MobileHomeProps) {
   const ownedSharedTasks = useSharedTasks();
   const [sharedCollapsed, setSharedCollapsed] = useState(false);
   // The retained page and its visible sidebar must never release each other's subscriptions.
@@ -2051,6 +2058,10 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
     candidateMode: taskSuggestionsCandidateMode,
     syncing: taskSuggestionsSyncing,
   });
+  // 无可控电脑时不提供入口;完整空态已有主按钮,避免重复显示新建 CTA。
+  const newSessionEntryVisible = !showRemoteGuide && !taskSuggestionsPending && taskSuggestionsMode !== 'empty';
+  // 临时任务列表抽屉的新建放在顶栏,不浮动遮挡短列表。
+  const headerNewSession = newSessionInHeader && newSessionEntryVisible;
   const selectedDeviceLabel = useMemo(() => {
     if (!selectedDeviceId) return t('devices.list.allConversations');
     // 设备列表尚未同步回来时,用偏好里存的设备名兜底,避免冷启动表头闪占位文案。
@@ -2058,6 +2069,21 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
       ?? restoredDeviceName
       ?? t('devices.list.thisComputer');
   }, [home.deviceFilters, restoredDeviceName, selectedDeviceId, t]);
+  // 设备名放得下时居中在顶栏中线;放不下时贴住右侧按钮,向左侧富余空间伸展后才截断。
+  const homeTitle = useBalancedTitle();
+  // Embedded drawers never show the remote-desktop action.
+  const showHeaderRemoteDesktop = Boolean(selectedDeviceId) && !embedded;
+  const reportHomeTitleSlot = homeTitle.reportSlot;
+  const [homeHeaderWidth, setHomeHeaderWidth] = useState(0);
+  const [homeTitleSlotFrame, setHomeTitleSlotFrame] = useState<{ x: number; width: number } | null>(null);
+  useEffect(() => {
+    if (!homeHeaderWidth || !homeTitleSlotFrame) return;
+    reportHomeTitleSlot({
+      center: homeHeaderWidth / 2,
+      end: homeTitleSlotFrame.x + homeTitleSlotFrame.width - spacing.sm,
+      start: homeTitleSlotFrame.x + spacing.sm,
+    });
+  }, [homeHeaderWidth, homeTitleSlotFrame, reportHomeTitleSlot]);
 
   const openSession = useCallback((item: RemoteSessionListItem) => {
     // 有行处于滑开状态时,点击(本行或他行)只负责收起,不进会话(iOS 列表滑动操作惯例)。
@@ -2722,7 +2748,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         contentContainerStyle={[
           styles.listContent,
           {
-            paddingBottom: (newSessionInSystemBar ? spacing.sm : LEGACY_HOME_LIST_BOTTOM_RESERVE) + insets.bottom,
+            paddingBottom: (newSessionInSystemBar || newSessionInHeader ? spacing.sm : LEGACY_HOME_LIST_BOTTOM_RESERVE) + insets.bottom,
             paddingTop: residentList.enabled ? 0 : chromeHeight,
           },
         ]}
@@ -2840,8 +2866,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         />
       ) : null}
 
-      {newSessionInSystemBar || showRemoteGuide || taskSuggestionsPending || taskSuggestionsMode === 'empty' ? null : (
-        // 无可控电脑时不提供入口;完整空态已有主按钮,避免重复显示新建 CTA。
+      {newSessionInSystemBar || newSessionInHeader || !newSessionEntryVisible ? null : (
         // iOS: the circle stretches into the new task's composer pill (origin → morph handoff).
         <HomeNewTaskButton bottomInset={insets.bottom} disabled={newSessionDisabled} morph
           onPress={(origin) => openNewSession(undefined, undefined, undefined, origin)} />
@@ -2854,7 +2879,7 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
       style={[styles.safeArea, { paddingLeft: embedded ? 0 : edgePadding.paddingLeft, paddingRight: embedded ? 0 : edgePadding.paddingRight }]}
       testID="devices.screen"
     >
-      {nativeHomeHeader ? <SessionHeaderNativeBlur height={nativeHeaderHeight + spacing.xxl} /> : null}
+      {nativeHomeHeader ? <SessionHeaderNativeBlur height={nativeHeaderHeight} /> : null}
       {nativeHomeHeader && active ? (
         <HomeNativeStackHeader
           keepMenuTopLeft={keepMenuTopLeft}
@@ -2887,14 +2912,15 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         <HomeChromeFrost disabled={nativeHomeHeader} visible={headerFrosted}>
         <View style={{ paddingTop: nativeHomeHeader ? 0 : embedded ? spacing.lg : edgePadding.paddingTop }}>
         {nativeHomeHeader ? null : (
-        <View style={styles.homeHeader}>
-        <View style={[styles.headerLeadingActions, embedded && styles.headerEmbeddedActions]}>
+        <View onLayout={(e) => setHomeHeaderWidth(e.nativeEvent.layout.width)} style={styles.homeHeader}>
+        <View style={styles.headerLeadingActions}>
+        {/* 临时任务列表抽屉同样放系统菜单:关闭走遮罩、左滑和系统返回。 */}
         <HomeHeaderGlassButton
-          accessibilityLabel={onDismiss ? t('home.drawer.closeA11y') : t('devices.list.a11y.openMenu')}
-          onPress={onDismiss ?? openChromeMenu}
+          accessibilityLabel={t('devices.list.a11y.openMenu')}
+          onPress={openChromeMenu}
           testID="home.chromeMenu"
         >
-          <>{onDismiss ? <X color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} /> : <Menu color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />}</>
+          <Menu color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
         </HomeHeaderGlassButton>
         </View>
         {showRemoteGuide ? (
@@ -2903,32 +2929,48 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
             <Text style={styles.headerTitle} numberOfLines={1}>Cindy</Text>
           </View>
         ) : (
+          <View
+            onLayout={(e) => {
+              const { x, width } = e.nativeEvent.layout;
+              setHomeTitleSlotFrame(prev => prev && prev.x === x && prev.width === width ? prev : { x, width });
+            }}
+            style={styles.headerTitleSlot}
+          >
           <NativePullDownMenu
             actions={homeScopePullDownActions}
             onAction={handleHomeScopeAction}
-            style={styles.headerTitleSlot}
           >
             <Pressable
               accessibilityLabel={t('devices.list.a11y.selectScope')}
               accessibilityRole="button"
               onPress={nativeHomeMenus ? () => undefined : openDeviceMenu}
               onPressIn={nativeHomeMenus ? undefined : openDeviceMenu}
-              style={({ pressed }) => [styles.headerTitleWrap, pressed && styles.pressed]}
+              style={({ pressed }) => [styles.headerTitleWrap, homeTitle.shift != null && styles.headerTitleWrapTrailing, pressed && styles.pressed]}
               testID="devices.title"
             >
-              <View style={styles.headerTitleCluster}>
+              <View
+                onLayout={homeTitle.onContentLayout}
+                style={[styles.headerTitleCluster, homeTitle.shift != null && { transform: [{ translateX: homeTitle.shift }] }]}
+              >
                 <Text style={styles.headerTitle} numberOfLines={1}>{selectedDeviceLabel}</Text>
                 <ChevronDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.medium} />
                 <QuietSyncIndicator active={quietSyncing} />
               </View>
             </Pressable>
           </NativePullDownMenu>
+          </View>
         )}
         {showRemoteGuide ? (
-          <View style={[styles.headerActions, embedded && styles.headerEmbeddedActions]} />
+          <View style={styles.headerActions} />
         ) : (
-          <View style={[styles.headerActions, embedded && styles.headerEmbeddedActions]}>
-            {selectedDeviceId && !embedded ? (
+          <View style={[styles.headerActions, (showHeaderRemoteDesktop || headerNewSession) && styles.headerActionsWide]}>
+            {headerNewSession ? (
+              <HomeHeaderGlassButton accessibilityLabel={t('devices.list.a11y.newRemoteConversation')} disabled={newSessionDisabled}
+                onPress={() => openNewSession()} testID="home.headerNewSessionButton">
+                <SquarePen color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+              </HomeHeaderGlassButton>
+            ) : null}
+            {showHeaderRemoteDesktop ? (
               <HomeHeaderGlassButton accessibilityLabel={t('remoteDesktop.title')} onPress={openSelectedRemoteDesktop} testID="home.remoteDesktopButton">
                 <Monitor color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
               </HomeHeaderGlassButton>
@@ -3080,6 +3122,12 @@ function HomeScreenContent({ active = true, onModeChange, width, onDismiss, newS
         onOpenAccounts={() => {
           pendingMenuActionRef.current = () => setAccountSwitcherOpen(true);
           setChromeMenuCloseInstant(false);
+          setChromeMenuOpen(false);
+        }}
+        onOpenPlugins={() => {
+          pendingMenuActionRef.current = null;
+          guardedPush('/plugins');
+          setChromeMenuCloseInstant(true);
           setChromeMenuOpen(false);
         }}
         onOpenDevices={() => {
@@ -3460,12 +3508,11 @@ function RevokedAccessTip({
   const { colors } = useTheme();
   const { t } = useTranslation();
   return (
-    // 说明型提示:只有右上角 × 与「重试访问」,没有「取消」按钮,按 DESIGN.md 关闭规则可点背景关闭;
-    // 重试在父级持有状态,关闭提示不会中断进行中的重试。
+    // 说明型提示:只有右上角 × 与「重试访问」;按 DESIGN.md 关闭规则点背景不关闭,
+    // 只能用 × 或系统返回。重试在父级持有状态,关闭提示不会中断进行中的重试。
     <Modal animationType="fade" transparent visible={deviceName != null} onRequestClose={onClose}>
-      <Pressable style={styles.revokedTipBackdrop} onPress={onClose} testID="home.revokedTip.backdrop">
-        {/* Inner press swallow keeps taps on the card from dismissing via the backdrop. */}
-        <Pressable style={styles.revokedTipCard} onPress={() => undefined}>
+      <View style={styles.revokedTipBackdrop} testID="home.revokedTip.backdrop">
+        <View style={styles.revokedTipCard}>
           <View style={styles.revokedTipHeader}>
             <View style={styles.revokedTipIcon}>
               <Lock color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
@@ -3494,8 +3541,8 @@ function RevokedAccessTip({
             }}
             style={styles.revokedTipRetry}
           />
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -3660,6 +3707,27 @@ function ProjectRow({
       isSessionRunning: (sessionId) => remoteSessionStore.isSessionRunning(sessionId),
     },
   );
+  // 与桌面侧栏收起项目同一规则:仅收起时汇总组内全部任务——任一在跑则组头图标橙色呼吸,
+  // 右槽只放一颗点(出错红 > 等你回复蓝 > 完成未读绿);展开后由子行各自显示,组头不重复。
+  // 运行态命令式读取,依赖 homeStatusVersion 兜底感知变化(理由同上方折叠豁免)。
+  const collapsedStatus = useMemo(
+    () => (collapsed
+      ? resolveMobileCollapsedGroupStatus(project.sessions, (sessionId) => remoteSessionStore.isSessionRunning(sessionId))
+      : null),
+    [collapsed, homeStatusVersion, project.sessions],
+  );
+  const groupIconColor = collapsedStatus?.running ? colors.statusAccent : colors.textSecondary;
+  // 组头按钮是单个无障碍元素(子节点标签不会被读出),汇总状态挂在按钮自身的 value 上。
+  const collapsedStatusA11y = [
+    collapsedStatus?.running ? t('devices.list.a11y.running') : null,
+    collapsedStatus?.dot === 'error'
+      ? t('devices.list.a11y.taskError')
+      : collapsedStatus?.dot === 'awaiting'
+        ? t('devices.list.a11y.awaitingYou')
+        : collapsedStatus?.dot === 'done'
+          ? t('devices.list.a11y.doneUnread')
+          : null,
+  ].filter(Boolean).join(', ');
   const projectHeaderHeight = useSharedValue(HOME_PROJECT_HEADER_HEIGHT);
   const projectRef = useAnimatedRef<View>();
   const prepareDisclosure = useDisclosurePrepare();
@@ -3748,6 +3816,7 @@ function ProjectRow({
         : t('devices.list.a11y.project', { title: displayTitle })}
       accessibilityRole="button"
       accessibilityState={{ expanded: !collapsed }}
+      accessibilityValue={collapsedStatusA11y ? { text: collapsedStatusA11y } : undefined}
       onLayout={(event) => {
         const height = event.nativeEvent.layout.height;
         if (Number.isFinite(height) && height > 0) projectHeaderHeight.value = height;
@@ -3771,20 +3840,37 @@ function ProjectRow({
       ) : (
         <ChevronDown color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
       )}
-      {kind === 'dialogue' ? (
-        <MessagesSquare color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.thin} />
-      ) : kind === 'cindy-make' ? (
-        <Hammer color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.thin} />
-      ) : collapsed ? (
-        <Folder color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.thin} />
-      ) : (
-        <FolderOpen color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.thin} />
-      )}
+      <SessionStatusPulse running={!!collapsedStatus?.running}>
+        {kind === 'dialogue' ? (
+          <MessagesSquare color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
+        ) : kind === 'cindy-make' ? (
+          <Hammer color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
+        ) : collapsed ? (
+          <Folder color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
+        ) : (
+          <FolderOpen color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.thin} />
+        )}
+      </SessionStatusPulse>
       <View style={styles.projectLabel}>
         <Text style={[styles.projectTitle, styles.projectFolderTitle]} numberOfLines={1}>{project.title}</Text>
         {machineIdentity ? <HomeProjectMachineLabel identity={machineIdentity} /> : null}
       </View>
       <Text style={styles.projectCount} numberOfLines={1}>{project.sessionCount}</Text>
+      {collapsedStatus?.dot ? (
+        // 与任务行右槽同一 18×18 槽、同一右边缘,点色与任务行同表。
+        <View style={styles.sessionRightStatusCell}>
+          <View
+            style={[styles.sessionRightDot, {
+              backgroundColor: collapsedStatus.dot === 'error'
+                ? colors.statusError
+                : collapsedStatus.dot === 'awaiting'
+                  ? colors.statusAwaiting
+                  : colors.statusDone,
+            }]}
+            testID={`home.projectCollapsedStatus.${collapsedStatus.dot}.${project.key}`}
+          />
+        </View>
+      ) : null}
     </Pressable>
   );
   return (
@@ -4269,17 +4355,19 @@ function HomeSessionRowInner({
           (hideDivider || blockMode || (!!group && groupExpanded)) && styles.sessionListContentNoDivider,
         ]}>
           <View style={styles.sessionTitleRow}>
-            <Text
-              style={styles.sessionTitle}
-              ellipsizeMode="tail"
-              numberOfLines={1}
-              testID={titleTestIDPrefix === 'deviceDetail.sessionRowTitle'
-                ? `deviceDetail.sessionRowTitle.${item.session.id}`
-                : `home.sessionRowTitle.${item.session.id}`}
-            >
-              {item.title}
-            </Text>
-            <TaskTagDots tags={item.session.tags} surfaceColor={colors.surface} />
+            <View style={styles.sessionTitleCluster}>
+              <Text
+                style={styles.sessionTitle}
+                ellipsizeMode="tail"
+                numberOfLines={1}
+                testID={titleTestIDPrefix === 'deviceDetail.sessionRowTitle'
+                  ? `deviceDetail.sessionRowTitle.${item.session.id}`
+                  : `home.sessionRowTitle.${item.session.id}`}
+              >
+                {item.title}
+              </Text>
+              <TaskTagDots tags={item.session.tags} surfaceColor={colors.surface} />
+            </View>
             {sourceLabel ? (
               <Text
                 ellipsizeMode="tail"
@@ -4641,26 +4729,26 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   headerLeadingActions: {
-    // Match the trailing two-button slot so the title is centered on the
-    // screen, even when selecting a device reveals the remote-desktop action.
+    // Only the menu button lives here. The title centers itself on the header
+    // midline and may use the spare room on this side when the name is long.
     alignItems: 'flex-start',
     flexShrink: 0,
     height: navigationChrome.target,
     justifyContent: 'center',
-    width: navigationChrome.target * 2 + spacing.xs,
+    width: navigationChrome.target,
   },
+  // Sized to the buttons actually shown, so the guide's brand title stays
+  // centered and a long device name is not cut short by an empty slot.
   headerActions: {
     alignItems: 'center',
     flexDirection: 'row',
     flexShrink: 0,
     gap: spacing.xs,
     justifyContent: 'flex-end',
-    width: navigationChrome.target * 2 + spacing.xs,
-  },
-  headerEmbeddedActions: {
-    // Embedded drawers never show the remote-desktop action. Keep both sides
-    // symmetric without reserving space for a second button that cannot appear.
     width: navigationChrome.target,
+  },
+  headerActionsWide: {
+    width: navigationChrome.target * 2 + spacing.xs,
   },
   // 菜单外层替标题占住顶栏中间的剩余宽度,长设备名在这里截断而不是挤开右侧按钮。
   headerTitleSlot: {
@@ -4674,6 +4762,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: 44,
     minWidth: 0,
     paddingHorizontal: spacing.sm,
+  },
+  headerTitleWrapTrailing: {
+    alignItems: 'flex-end',
   },
   headerTitleCluster: {
     alignItems: 'center',
