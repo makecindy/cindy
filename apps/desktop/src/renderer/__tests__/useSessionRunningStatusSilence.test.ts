@@ -18,6 +18,7 @@ import {
   addSessionAttention,
   clearSessionAttention,
   getSessionAttentionKind,
+  hasSessionAttention,
 } from '@/lib/sessionAttentionStore';
 
 const storeMock = vi.hoisted(() => ({
@@ -638,6 +639,34 @@ describe('useSessionRunningStatus silenced completion handling', () => {
 
     expect(vi.mocked(addSessionAttention)).toHaveBeenCalledWith('s-setup', 'awaiting');
     expect(onSessionNeedsReply).toHaveBeenCalledWith('s-setup');
+  });
+
+  it('clears awaiting attention when resolving a card immediately starts a continuation', async () => {
+    vi.mocked(getSessionAttentionKind).mockReturnValue('awaiting');
+    vi.mocked(hasSessionAttention).mockReturnValue(true);
+    renderHook(() => useSessionRunningStatus(undefined));
+
+    await emitSnapshot(new Map([['s-confirm', {
+      ...status(false),
+      hasPendingAskUser: true,
+    }]]));
+    vi.mocked(clearSessionAttention).mockClear();
+
+    // Resolving ask/plan can start its continuation in the same projection
+    // that removes the card. The awaiting badge must not survive that run.
+    await emitSnapshot(new Map([['s-confirm', status(true)]]));
+
+    expect(clearSessionAttention).toHaveBeenCalledExactlyOnceWith('s-confirm');
+
+    vi.mocked(getSessionAttentionKind).mockReturnValue('done');
+    await emitSnapshot(new Map([['s-confirm', {
+      ...status(true),
+      hasPendingPermission: true,
+    }]]));
+    vi.mocked(clearSessionAttention).mockClear();
+    await emitSnapshot(new Map([['s-confirm', status(true)]]));
+
+    expect(clearSessionAttention).not.toHaveBeenCalled();
   });
 
   it('clears an orphaned error badge when a new turn starts and the terminal error is gone', async () => {

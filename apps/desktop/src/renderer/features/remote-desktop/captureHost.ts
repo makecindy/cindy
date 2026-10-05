@@ -54,8 +54,40 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
   let finishGathering: (() => void) | undefined;
   let exchanging = false;
   let audioRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  // A hidden viewer pauses the video encoder in place; audio, input and the
+  // data channel keep running, and showing the viewer resumes the same stream.
+  let viewerHidden = false;
+  // setParameters rejects stale parameters, so every sender update is queued.
+  let senderUpdates = Promise.resolve();
+  /** Resolves false when an encoder update was rejected. */
+  const updateVideoSenders = (
+    update: (parameters: RTCRtpSendParameters) => boolean,
+  ): Promise<boolean> => {
+    const rtc = peer,
+      current = generation;
+    const run = senderUpdates.then(async () => {
+      for (const sender of rtc?.getSenders() ?? []) {
+        if (current !== generation || sender.track?.kind !== 'video') continue;
+        const parameters = sender.getParameters();
+        if (parameters.encodings?.length && update(parameters))
+          await sender.setParameters(parameters);
+      }
+    });
+    senderUpdates = run.catch(() => {});
+    return run.then(
+      () => true,
+      () => false,
+    );
+  };
+  const applyViewerHidden = () =>
+    updateVideoSenders((parameters) => {
+      if (parameters.encodings.every((encoding) => encoding.active === !viewerHidden)) return false;
+      for (const encoding of parameters.encodings) encoding.active = !viewerHidden;
+      return true;
+    });
   const stop = () => {
     generation++;
+    viewerHidden = false;
     exchanging = false;
     clearTimeout(disconnectedTimer);
     clearTimeout(gatheringTimer);
@@ -167,6 +199,15 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
       void api.reply(command.id, kept).catch(() => {});
       return;
     }
+    if (command.op === 'viewer-hidden') {
+      if (command.lease !== activeLease || typeof command.hidden !== 'boolean') {
+        void api.reply(command.id, false).catch(() => {});
+        return;
+      }
+      viewerHidden = command.hidden;
+      void applyViewerHidden().then((applied) => api.reply(command.id, applied).catch(() => {}));
+      return;
+    }
     stop();
     if (
       command.op !== 'offer' ||
@@ -188,22 +229,16 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
         // Native capture reports whether the screen is moving; tiers that stay
         // sharp when still trade frame rate for resolution only while still.
         let moving = true;
-        let videoSender: RTCRtpSender | null = null;
-        let preference = Promise.resolve();
+        let tuned = false;
         const degradation = () => (moving ? profile.degradation : 'maintain-resolution');
         const onMotion = (next: boolean) => {
           moving = next;
-          preference = preference
-            .then(async () => {
-              const sender = videoSender;
-              if (!sender || current !== generation) return;
-              const parameters = sender.getParameters();
-              if (!parameters.encodings?.length) return;
-              if (parameters.degradationPreference === degradation()) return;
-              parameters.degradationPreference = degradation();
-              await sender.setParameters(parameters);
-            })
-            .catch(() => {});
+          if (!tuned || current !== generation) return;
+          void updateVideoSenders((parameters) => {
+            if (parameters.degradationPreference === degradation()) return false;
+            parameters.degradationPreference = degradation();
+            return true;
+          });
         };
         const capture = () =>
           navigator.mediaDevices.getDisplayMedia({
@@ -557,13 +592,15 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
           // Below these ceilings WebRTC's congestion controller picks the rate;
           // the tier decides whether resolution or frame rate gives way first.
           parameters.degradationPreference = degradation();
-          videoSender = sender;
+          tuned = true;
           for (const encoding of parameters.encodings) {
             encoding.maxFramerate = fps;
             encoding.maxBitrate = profile.maxBitrate;
           }
           await sender.setParameters(parameters);
         }
+        // A pause that arrived while this peer was still being set up applies now.
+        if (viewerHidden) void applyViewerHidden();
         if (!command.attemptId)
           await new Promise<void>((resolve) => {
             finishGathering = resolve;

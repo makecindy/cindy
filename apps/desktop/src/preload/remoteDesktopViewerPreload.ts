@@ -92,6 +92,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onActive: (cb) => onPayload(REMOTE_VIEWER.ACTIVE, cb),
     onLocale: (cb) => onPayload(REMOTE_VIEWER.LOCALE, cb),
     onCloseRequested: (cb) => onPayload(REMOTE_VIEWER.CLOSE_REQUESTED, cb),
+    onHidden: (cb) => onPayload(REMOTE_VIEWER.HIDDEN, cb),
     inputFocus: (generation, focused) =>
       ipcRenderer.invoke(REMOTE_VIEWER.INPUT_FOCUS, generation, focused),
     preferences: (generation, patch) =>

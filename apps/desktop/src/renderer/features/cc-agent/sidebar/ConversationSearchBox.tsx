@@ -653,6 +653,8 @@ export interface ConversationSearchBoxProps {
   triggerClassName?: string;
   /** Popover open 态变化上报(供 SidebarActionBar 的 openChildCount 守卫;含程序化打开)。 */
   onOpenChange?: (open: boolean) => void;
+  /** 挂载即打开:rail 从「更多」打开未勾选的搜索时,图标随打开一起出现。 */
+  defaultOpen?: boolean;
 }
 
 /**
@@ -670,9 +672,10 @@ export function ConversationSearchBox({
   searchDevices = EMPTY_SEARCH_DEVICES,
   triggerClassName,
   onOpenChange,
+  defaultOpen = false,
 }: ConversationSearchBoxProps) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // search.reset 在 search 声明后才拿得到,但 handleResultChosen 需先于 search 定义(要作为

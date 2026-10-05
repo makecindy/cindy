@@ -82,6 +82,7 @@ const mocks = vi.hoisted(() => ({
   generateAndPersistFbotTitle: vi.fn(),
   desktopSessionRows: vi.fn(),
   materializeLocalMarkdownImages: vi.fn(),
+  peekGoalInactiveNote: vi.fn(async (): Promise<string | null> => null),
 }));
 
 vi.mock('../../../logger', () => ({
@@ -117,6 +118,10 @@ vi.mock('../../../localDb/client/current', () => ({
 
 vi.mock('../../../localDb/schema', () => ({
   sessions: {},
+}));
+
+vi.mock('../../../goal-host/inactiveNote', () => ({
+  peekGoalInactiveNote: mocks.peekGoalInactiveNote,
 }));
 
 vi.mock('../../../imageCacheStore', () => ({
@@ -796,6 +801,25 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       origin: { kind: 'im', channel: 'feishu', taskId: 'msg-user' },
       rawChannelText: 'pi install npm:context-mode',
     });
+  });
+
+  it('prepends the goal inactive note to the agent wire message only', async () => {
+    mocks.peekGoalInactiveNote.mockResolvedValueOnce('GOAL-NOTE');
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn(vi.fn(), { text: 'hello', agentText: 'hello' });
+
+    expect(mocks.peekGoalInactiveNote).toHaveBeenCalledTimes(1);
+    expect(h.send.mock.calls[0]?.[0]).toMatchObject({ content: 'GOAL-NOTE\n\nhello' });
+  });
+
+  it('sends unchanged when reading the goal inactive note fails', async () => {
+    mocks.peekGoalInactiveNote.mockRejectedValueOnce(new Error('db unavailable'));
+    const h = setupSession(async () => ({ accepted: true }));
+
+    await runDefaultTurn(vi.fn(), { text: 'hello', agentText: 'hello' });
+
+    expect(h.send.mock.calls[0]?.[0]).toMatchObject({ content: 'hello' });
   });
 
   it('marks only an accepted attached IM turn headless and releases it on done', async () => {

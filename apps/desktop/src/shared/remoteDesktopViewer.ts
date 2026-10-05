@@ -11,6 +11,7 @@ export const REMOTE_VIEWER = {
   READY: 'remote-desktop-viewer:ready',
   PRESENTED: 'remote-desktop-viewer:presented',
   ACTIVE: 'remote-desktop-viewer:active',
+  HIDDEN: 'remote-desktop-viewer:hidden',
   LOCALE: 'remote-desktop-viewer:locale',
   FULLSCREEN: 'remote-desktop-viewer:fullscreen',
   RESIZE: 'remote-desktop-viewer:resize',
@@ -74,6 +75,8 @@ export interface RemoteDesktopViewerApi {
   onActive(listener: (state: RemoteViewerState) => void): () => void;
   onLocale(listener: (locale: string) => void): () => void;
   onCloseRequested(listener: (generation: number) => void): () => void;
+  /** Native hide/minimize (incl. macOS Space switches and full occlusion) and show/restore. */
+  onHidden?(listener: (hidden: boolean) => void): () => void;
   inputFocus(generation: number, focused: boolean): Promise<void>;
   preferences?(
     generation: number,

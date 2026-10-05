@@ -116,6 +116,7 @@ import { beginGroupHistoryAccess, type GroupHistoryAccessScope } from './groupHi
 import { agentHandoffPending } from '../../maker-ipc/agentHandoffPendingSingleton';
 import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../../maker-ipc/agentHandoff';
 import { buildPlanReconcileNote, summarizeOpenPlan } from '../../maker-ipc/planReconcile';
+import { peekGoalInactiveNote } from '../../goal-host/inactiveNote';
 import { listMessagesForAgentHandoff } from '../../localDb/ipc/messages';
 import {
   enqueueDurableWrite,
@@ -1275,12 +1276,23 @@ export function createTurnRunner(
           return null;
         }
       })();
-      const outgoingMessage = planReconcileNote
+      const withPlanReconcile = planReconcileNote
         ? prependNoteToWireUserMessage(
             withHandoff as Parameters<typeof prependNoteToWireUserMessage>[0],
             planReconcileNote,
           )
         : withHandoff;
+      // 目标状态说明:与 makerSendTransaction 同语义,目标已不在运行时提醒模型别再
+      // 吐裁决块、别承诺自动续跑。读库失败静默跳过。
+      const goalInactiveNote = await enqueueDurableWrite(`goal-inactive-read:${rowId}`, () =>
+        peekGoalInactiveNote(rowId),
+      ).catch(() => null);
+      const outgoingMessage = goalInactiveNote
+        ? prependNoteToWireUserMessage(
+            withPlanReconcile as Parameters<typeof prependNoteToWireUserMessage>[0],
+            goalInactiveNote,
+          )
+        : withPlanReconcile;
 
       // 群护栏取缔: 按会话当前权限档决定是否真正挂强确认策略, 见
       // resolveEffectiveTurnPolicy。不挂时走与 DM 轮次相同的无策略路径。

@@ -341,22 +341,19 @@ export function useSessionRunningStatus(
     }
 
     // --- 4. Auto-clear notifications when pending state disappears ---
-    // If a session previously had a pending state but no longer does, and
-    // it's not running (i.e. the notification wasn't from a done transition),
-    // remove the notification. We only auto-clear for sessions that were
-    // in the previous pending set — done notifications are sticky until clicked.
+    // If a session previously had a pending state but no longer does, remove
+    // the matching awaiting notification. Do this even when resolving the card
+    // immediately starts a continuation: otherwise the pending falling edge is
+    // consumed while running, and no later snapshot can clear the stale badge.
+    // Done/error notifications have separate owners and remain sticky.
     for (const sessionId of prevPendingRef.current) {
       if (
         !currentPendingSet.has(sessionId) &&
-        !currentRunningSet.has(sessionId) &&
-        hasSessionAttention(sessionId)
+        hasSessionAttention(sessionId) &&
+        getSessionAttentionKind(sessionId) === 'awaiting'
       ) {
-        // The pending state is gone — the session was answered/resolved elsewhere.
-        // Only auto-clear if it's not also a done-transition notification.
-        // Since we can't distinguish, we clear it: if it truly just finished,
-        // the done transition would have re-added it above.
-        // 默认 passive:store 会保住 'error' 红角标(pending 消失往往正是 run 以
-        // error 终止,branch 2 刚挂上的红角标不能被这条自动清理吞掉)。
+        // 默认 passive 即可：这里只会命中 awaiting，且 clear 通知仍需同步给
+        // Main / 远端，使 Windows 任务栏角标与任务行一起收敛。
         clearSessionAttention(sessionId);
       }
     }

@@ -312,7 +312,7 @@
       "resolution": "电脑分辨率",
       "clipboardFailed": "剪贴板内容传输失败，请检查控制权限后重试。",
       "settingsFailed": "设置未能保存，请重试。",
-      "inputHint": "点击画面即可输入。Ctrl+Alt+Esc 释放键盘焦点；Cmd/Ctrl+W 关闭这个窗口。",
+      "inputHint": "点击画面即可输入，快捷键（包括 Cmd/Ctrl+W）会发送到远端电脑。按 Ctrl+Alt+Esc 释放键盘焦点后，Cmd/Ctrl+W 关闭这个窗口。",
       "controlPending": "正在取得控制权…",
       "controlRequired": "当前仅查看。接管后可操作远端电脑。",
       "confirmDisconnect": "断开与这台电脑的连接？",
@@ -5765,7 +5765,7 @@
         "configurationTitle": "配置",
         "sidebarEntryTitle": "侧边栏入口",
         "showInSidebar": "显示在侧边栏",
-        "sidebarEntryDescription": "开启后，侧边栏会显示“{{title}}”。隐藏入口不会停用插件。",
+        "sidebarEntryDescription": "开启后，“{{title}}”会出现在侧边栏，显示在最外层还是收进“更多”，可在“更多 → 自定义”里调整。隐藏入口不会停用插件。",
         "openTool": "查看 Tool {{name}} 的详情",
         "noToolDescription": "该 Tool 暂无描述。",
         "viewAllTools": "查看更多",
@@ -7675,6 +7675,17 @@
       "plugins": "插件",
       "issues": "Issue",
       "bots": "伙伴"
+    },
+    "navigation": {
+      "more": "更多",
+      "new": "新",
+      "customize": {
+        "title": "自定义",
+        "done": "完成",
+        "reset": "恢复默认",
+        "reorder": "调整{{name}}顺序，按上下方向键"
+      },
+      "items": { "automations": "自动化", "plugins": "插件", "bots": "伙伴", "search": "搜索" }
     },
     "user": {
       "settingsLink": "设置，当前用户：{{name}}",

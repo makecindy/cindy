@@ -76,8 +76,13 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(sidebarShellSource).toContain('useOwnsTopNavScrollableRows()');
     expect(sidebarShellSource).not.toMatch(/^import .*from 'react-router-dom'/m);
 
-    // cc-agent:展开态声明接管,并把可滚动段画进滚动容器;rail 态交回 Shell。
-    expect(sidebarUpperSource).toContain('useOwnTopNavScrollableRows(!isCollapsed)');
+    // cc-agent:展开态把可滚动段画进滚动容器;rail 态也由 CollapsedView 按导航偏好
+    // 整段渲染(SidebarRailNavigation),Shell 不再补 rail 伙伴图标。
+    expect(sidebarUpperSource).toContain('useOwnTopNavScrollableRows(true)');
+    expect(sidebarUpperSource).toContain('<SidebarRailNavigation');
+    expect(sidebarShellSource).toContain(
+      '!ownsTopNavScrollableRows && <SidebarTopNav section="rail" />',
+    );
     expect(sidebarUpperSource).toContain('<SidebarTopNav section="scrollable" />');
     const scrollRefIdx = sidebarUpperSource.indexOf('ref={sidebarScrollRef}');
     const scrollableRowsIdx = sidebarUpperSource.indexOf('<SidebarTopNav section="scrollable" />');
@@ -88,7 +93,10 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(topNavSource).toContain(
       "const pinSearch = section === 'scrollable' && search.query.trim().length > 0",
     );
-    expect(topNavSource).toContain("pinSearch && 'sticky top-0 z-30 bg-[var(--cmd-palette-bg)]'");
+    // 搜索可排在中间,底部间距只在钉住时补上(未钉住时由后续行的 gap 承担)。
+    expect(topNavSource).toContain(
+      "pinSearch && 'sticky top-0 z-30 bg-[var(--cmd-palette-bg)] pb-2.5'",
+    );
     expect(topNavSource).toContain("if (section === 'scrollable')");
     expect(sidebarUpperSource).toContain('lastListScrollTopRef.current = el.scrollTop');
     expect(sidebarUpperSource).toContain(
@@ -121,29 +129,41 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(featureContextSource).toContain('export function useOwnsTopNavScrollableRows');
   });
 
-  it('插件主视图紧随插件入口，面板恢复入口仍位于插件区与搜索之间', () => {
-    const expandedPluginsIdx = topNavSource.indexOf('{pluginsRow}');
-    const expandedMainViewsIdx = topNavSource.indexOf('{mainViewRows}', expandedPluginsIdx);
-    const expandedRestoreIdx = topNavSource.indexOf('{restoreRow}', expandedPluginsIdx);
-    const expandedSearchIdx = topNavSource.indexOf('{searchRow}', expandedRestoreIdx);
-    expect(expandedPluginsIdx).toBeGreaterThanOrEqual(0);
-    expect(expandedMainViewsIdx).toBeGreaterThan(expandedPluginsIdx);
-    expect(expandedRestoreIdx).toBeGreaterThan(expandedMainViewsIdx);
-    expect(expandedSearchIdx).toBeGreaterThan(expandedRestoreIdx);
+  // 导航改为用户自定义顺序:内置入口与插件主视图按保存顺序排列,面板恢复入口
+  // 紧随其后,「更多」收尾;展开态与 rail 同一契约。
+  it('插件主视图与内置入口按保存顺序排列，面板恢复入口在其后、「更多」收尾', () => {
+    expect(topNavSource).toContain('<GhostMainViewNavEntry item={app} variant="row" />');
+    const scrollRowsIdx = topNavSource.indexOf('{orderedNavigationRows}');
+    const scrollRestoreIdx = topNavSource.indexOf('{restoreRow}', scrollRowsIdx);
+    const scrollMoreIdx = topNavSource.indexOf('{customizeRow}', scrollRestoreIdx);
+    expect(scrollRowsIdx).toBeGreaterThanOrEqual(0);
+    expect(scrollRestoreIdx).toBeGreaterThan(scrollRowsIdx);
+    expect(scrollMoreIdx).toBeGreaterThan(scrollRestoreIdx);
 
-    const persistentPluginsIdx = topNavSource.lastIndexOf('{pluginsRow}');
-    const persistentMainViewsIdx = topNavSource.indexOf('{mainViewRows}', persistentPluginsIdx);
-    const persistentRestoreIdx = topNavSource.indexOf('{restoreRow}', persistentMainViewsIdx);
-    expect(persistentPluginsIdx).toBeGreaterThan(expandedPluginsIdx);
-    expect(persistentMainViewsIdx).toBeGreaterThan(persistentPluginsIdx);
-    expect(persistentRestoreIdx).toBeGreaterThan(persistentMainViewsIdx);
+    const persistentRowsIdx = topNavSource.lastIndexOf('orderedNavigationRows');
+    const persistentRestoreIdx = topNavSource.indexOf(
+      '!customizing && restoreRow',
+      persistentRowsIdx,
+    );
+    const persistentMoreIdx = topNavSource.indexOf(
+      '!customizing && customizeRow',
+      persistentRestoreIdx,
+    );
+    expect(persistentRowsIdx).toBeGreaterThan(scrollRowsIdx);
+    expect(persistentRestoreIdx).toBeGreaterThan(persistentRowsIdx);
+    expect(persistentMoreIdx).toBeGreaterThan(persistentRestoreIdx);
 
-    const railPluginsIdx = sidebarUpperSource.indexOf("label={t('sidebar.tabs.plugins')}");
-    const railRestoreIdx = sidebarUpperSource.indexOf('<GhostPanelRestoreEntry', railPluginsIdx);
-    const railSearchIdx = sidebarUpperSource.indexOf('<ConversationSearchBox', railRestoreIdx);
-    expect(railPluginsIdx).toBeGreaterThanOrEqual(0);
-    expect(railRestoreIdx).toBeGreaterThan(railPluginsIdx);
-    expect(railSearchIdx).toBeGreaterThan(railRestoreIdx);
+    const railStart = topNavSource.indexOf('export function SidebarRailNavigation');
+    const railTilesIdx = topNavSource.indexOf('variant="rail" />', railStart);
+    const railRestoreIdx = topNavSource.indexOf(
+      '<GhostPanelRestoreEntry variant="rail"',
+      railTilesIdx,
+    );
+    const railMoreIdx = topNavSource.indexOf('<SidebarNavigationMoreMenu', railRestoreIdx);
+    expect(railStart).toBeGreaterThanOrEqual(0);
+    expect(railTilesIdx).toBeGreaterThan(railStart);
+    expect(railRestoreIdx).toBeGreaterThan(railTilesIdx);
+    expect(railMoreIdx).toBeGreaterThan(railRestoreIdx);
   });
 
   // 2026-08-12 用户反馈:滚动后首行紧贴固定的「新建」被硬切、露出半截字。

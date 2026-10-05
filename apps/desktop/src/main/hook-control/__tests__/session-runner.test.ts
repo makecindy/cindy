@@ -60,6 +60,7 @@ const h = vi.hoisted(() => {
     createSessionRow: vi.fn(async () => undefined),
     peekPendingHandoff: vi.fn(async () => null as string | null),
     consumePendingHandoff: vi.fn(),
+    peekGoalInactiveNote: vi.fn(async () => null as string | null),
     listProviders: vi.fn(async (): Promise<unknown[]> => []),
     getModelVisibilityOverride: vi.fn(() => undefined),
     readImDefaultSettings: vi.fn(),
@@ -154,6 +155,9 @@ vi.mock('../../maker-ipc/agentHandoffPendingSingleton.js', () => ({
     peek: h.peekPendingHandoff,
     consume: h.consumePendingHandoff,
   },
+}));
+vi.mock('../../goal-host/inactiveNote.js', () => ({
+  peekGoalInactiveNote: h.peekGoalInactiveNote,
 }));
 vi.mock('../../imageCacheStore.js', () => ({
   resolveSafe: vi.fn(),
@@ -1063,6 +1067,34 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     >;
     expect(createCalls[0][1].content).toBe('hello');
     expect(h.consumePendingHandoff).toHaveBeenCalledWith('sess-new');
+  });
+
+  it('目标状态说明只注入 agent wire 内容,排在交接段外层', async () => {
+    h.peekPendingHandoff.mockResolvedValueOnce('HANDOFF');
+    h.peekGoalInactiveNote.mockResolvedValueOnce('GOAL-NOTE');
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({}));
+
+    expect(outcome.status).toBe('ok');
+    expect(h.peekGoalInactiveNote).toHaveBeenCalledWith('sess-new');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send.mock.calls[0][0]).toMatchObject({
+      content: `GOAL-NOTE\n\nHANDOFF\n\n${HELLO_WITH_NOTE}`,
+    });
+    const createCalls = h.createMessage.mock.calls as unknown as Array<
+      [string, { content: unknown }]
+    >;
+    expect(createCalls[0][1].content).toBe('hello');
+  });
+
+  it('目标状态说明读取抛错时静默跳过,不挡发送', async () => {
+    h.peekGoalInactiveNote.mockRejectedValueOnce(new Error('db unavailable'));
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({}));
+
+    expect(outcome.status).toBe('ok');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send.mock.calls[0][0]).toMatchObject({ content: HELLO_WITH_NOTE });
   });
 
   it('复用/接管(isNew=false):createSession 不带 vendorOptions,不给可能的桌面会话打 Slack 标', async () => {

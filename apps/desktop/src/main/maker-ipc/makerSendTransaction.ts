@@ -495,6 +495,11 @@ export interface MakerSendTransactionDeps {
   } | null>;
   consumeSealedPlanReconcileNote?(sessionId: string, turnId: string): void | Promise<void>;
   /**
+   * 目标状态说明:会话没有运行中的目标、上一条回复却仍以 goal_status 裁决块收尾时,
+   * 返回一段只进 wire payload 的说明(见 goal-host/inactiveNote.ts);无需注入返回 null。
+   */
+  peekGoalInactiveNote?(sessionId: string): Promise<string | null>;
+  /**
    * 本次调用是否来自手机控制端(缺省 = 否)。**纯体验分流,不是安全判据。**
    *
    * 注入而非直接 import `isMobileControllerInvoke`,是为了可单测(同
@@ -1242,6 +1247,16 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const withPlanReconcile = planReconcile
         ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, planReconcile.note)
         : withHandoff;
+      // 目标状态说明:用户的普通新轮次与自动任务轮次都要带上,模型才不会照着历史继续
+      // 吐裁决块、承诺自动续跑。原生命令必须留在消息开头,同手机说明的占位规则。
+      const goalInactiveNote =
+        (isOrdinaryUserTurn || soForReconcile.origin?.kind === 'scheduler') &&
+        shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+          ? ((await deps.peekGoalInactiveNote?.(sessionId).catch(() => null)) ?? null)
+          : null;
+      const withGoalInactiveNote = goalInactiveNote
+        ? prependNoteToWireUserMessage(withPlanReconcile as HandoffWireMessage, goalInactiveNote)
+        : withPlanReconcile;
       const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
       // 手机客户端说明:同样只进 wire payload,落库/显示内容(persistUserMessage.content)
       // 不含它。位置在交接段**之前** —— 交接正文自带「以下是用户的新消息」结束标记,
@@ -1255,8 +1270,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ? buildMobileClientPromptNote()
           : null;
       const withMobileNote = mobileClientNote
-        ? prependNoteToWireUserMessage(withPlanReconcile as HandoffWireMessage, mobileClientNote)
-        : withPlanReconcile;
+        ? prependNoteToWireUserMessage(withGoalInactiveNote as HandoffWireMessage, mobileClientNote)
+        : withGoalInactiveNote;
       // 个人版制作任务说明:与手机说明同层、同占位规则(原生命令必须留在消息开头)。
       const cindyMakeNote =
         (await deps.isCindyMakeSession?.(sessionId).catch(() => false)) === true &&

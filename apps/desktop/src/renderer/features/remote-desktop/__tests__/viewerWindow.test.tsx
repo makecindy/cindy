@@ -34,12 +34,14 @@ vi.mock('../viewerController', () => ({
     close = () => this._api.close(1);
   },
 }));
+const fullscreen = vi.hoisted(() => ({ value: false }));
 vi.mock('@/hooks/useMacFullscreen', () => ({
-  useMacFullscreen: () => ({ isMac: true, isFullscreen: false }),
+  useMacFullscreen: () => ({ isMac: true, isFullscreen: fullscreen.value }),
 }));
 vi.mock('@/components/title-bar/WindowControls', () => ({ WindowControls: () => null }));
 
 afterEach(() => {
+  fullscreen.value = false;
   cleanup();
   vi.clearAllMocks();
 });
@@ -367,4 +369,59 @@ it('updates translated controls without ending or recreating the viewer connecti
   view.unmount();
   expect(lifecycle.disposed).toHaveBeenCalledOnce();
   expect(listeners.size).toBe(0);
+});
+
+it('reveals the fullscreen toolbar from the top edge and keeps it while macOS covers the edge', async () => {
+  fullscreen.value = true;
+  Object.assign(window, {
+    electronAPI: {
+      remoteDesktopViewer: {
+        onActive: () => () => {},
+        onLocale: () => () => {},
+        onCloseRequested: () => () => {},
+        state: async () => ({ generation: 1 }),
+        rendererReady: async () => {},
+        presentationReady: async () => {},
+        inputFocus: async () => {},
+        close: async () => {},
+      },
+    },
+  });
+  const { container } = render(<RemoteDesktopViewerWindow />);
+  await act(async () => {});
+  const toolbar = container.querySelector('.remote-viewer-toolbar')!;
+  Object.defineProperty(toolbar, 'offsetHeight', { value: 60 });
+  const move = (clientY: number) => fireEvent.pointerMove(window, { clientY });
+  expect(toolbar.hasAttribute('data-revealed')).toBe(false);
+  move(4);
+  expect(toolbar.getAttribute('data-revealed')).toBe('true');
+  // The pointer is still over the toolbar (or has left to the macOS menu bar).
+  move(70);
+  expect(toolbar.getAttribute('data-revealed')).toBe('true');
+  move(200);
+  expect(toolbar.hasAttribute('data-revealed')).toBe(false);
+});
+it('releases shortcut capture when the picture input loses focus programmatically', async () => {
+  const inputFocus = vi.fn(async () => {});
+  Object.assign(window, {
+    electronAPI: {
+      remoteDesktopViewer: {
+        onActive: () => () => {},
+        onLocale: () => () => {},
+        onCloseRequested: () => () => {},
+        state: async () => ({ generation: 1 }),
+        rendererReady: async () => {},
+        presentationReady: async () => {},
+        inputFocus,
+      },
+    },
+  });
+  const view = render(<RemoteDesktopViewerWindow />);
+  await act(async () => {});
+  const input = view.container.querySelector<HTMLTextAreaElement>('#keyboard-input')!;
+  act(() => input.focus());
+  expect(inputFocus).toHaveBeenLastCalledWith(1, true);
+  // Ctrl+Alt+Esc and control loss blur the input without focusing another element.
+  act(() => input.blur());
+  expect(inputFocus).toHaveBeenLastCalledWith(1, false);
 });

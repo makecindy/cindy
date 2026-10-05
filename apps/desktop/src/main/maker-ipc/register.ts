@@ -890,6 +890,7 @@ import {
 } from './sessionLastLiveUsage.js';
 import { clearSealedCodexPlanState, readCodexPlanState } from '../localDb/codexPlanState.js';
 import { buildCompletedPlanGuardNote, buildPlanReconcileNote } from './planReconcile.js';
+import { peekGoalInactiveNote } from '../goal-host/inactiveNote.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
@@ -14246,6 +14247,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       enqueueDurableWrite(`plan-seal-consume:${sessionId}:${turnId}`, () =>
         clearSealedCodexPlanState(sessionId, turnId),
       ),
+    // 读排在持久化 FIFO 之后,与计划对账同口径,避免读到上一条回复尚未落库的旧快照。
+    peekGoalInactiveNote: (sessionId) =>
+      enqueueDurableWrite(`goal-inactive-read:${sessionId}`, () => peekGoalInactiveNote(sessionId)),
     // 手机客户端说明的开关:被控端盖章的来源判据(本机 renderer / 桌面控制端 / 平台
     // 未知一律 false)。必须在这里现取,不能提前求值缓存——同一个装配好的事务会服务
     // 后续所有 send,来源是逐次调用的属性。

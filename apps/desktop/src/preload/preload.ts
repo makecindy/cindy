@@ -57,11 +57,13 @@ import {
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
   AGENT_ISLAND_SET_ENABLED_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
+  AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
   AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL,
   AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL,
   type AgentIslandDisplayOption,
   type AgentIslandDisplayTarget,
   type AgentIslandMascotSkin,
+  type AgentIslandRemoteSessionInput,
   type AgentIslandSessionActivity,
   type AgentIslandSoundChoice,
   type AgentIslandSoundSettings,
@@ -1990,6 +1992,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL, sessionId),
     setEnabled: (enabled: boolean): Promise<{ ok: true }> =>
       ipcRenderer.invoke(AGENT_ISLAND_SET_ENABLED_CHANNEL, enabled),
+    /** 按侧栏「任务范围」筛过的远程设备任务活动(灵动岛 / 桌面通知用)。 */
+    setRemoteSessions: (sessions: AgentIslandRemoteSessionInput[]): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL, sessions),
     setSoundSettings: (settings: AgentIslandSoundSettings): Promise<{ ok: true }> =>
       ipcRenderer.invoke(AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL, settings),
     setMascotSkin: (skin: AgentIslandMascotSkin): Promise<{ ok: true }> =>
@@ -3647,6 +3652,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     title: string;
     kind: 'done' | 'error' | 'needs-reply';
     channels?: { desktop?: boolean; feishu?: boolean; mobile?: boolean };
+    markAttention?: boolean;
   }): Promise<void> => ipcRenderer.invoke('notification:show-session-event', payload),
   notificationSetDesktopEnabled: (enabled: boolean): Promise<{ ok: true }> =>
     ipcRenderer.invoke('notification:set-desktop-enabled', enabled),

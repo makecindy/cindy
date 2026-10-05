@@ -29,8 +29,9 @@ It opens a clean, independent window with native mouse/keyboard input and a smal
 toolbar. Reopening the same target focuses its existing window. Full screen,
 display selection, sound, video settings and portable
 clipboard shortcuts are available. Resolution changes appear only for a capable
-host and affect its actual monitor. Ctrl+Alt+Esc releases keyboard focus;
-Cmd/Ctrl+W requests closing this viewer, including while it owns keyboard focus.
+host and affect its actual monitor. While the picture owns keyboard focus,
+shortcuts including Cmd/Ctrl+W go to the remote computer. Ctrl+Alt+Esc releases
+keyboard focus; without it, Cmd/Ctrl+W requests closing this viewer.
 Native window close and the close shortcut share a confirmation
 dialog only after a connection is established; cancelling keeps the connection and control lease. Confirmation belongs
 to the current window generation and cannot close a later connection.

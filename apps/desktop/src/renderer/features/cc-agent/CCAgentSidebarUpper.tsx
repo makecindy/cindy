@@ -37,9 +37,7 @@ import {
   Folder,
   Hammer,
   Loader2,
-  Plug,
   SquarePen,
-  Timer,
   Trash2,
   X,
 } from 'lucide-react';
@@ -65,7 +63,7 @@ import {
 import { WORKLOUDER_CODEX_AGENT_SLOT_COUNT } from '../../../shared/workLouderCodex';
 import { setSessionOrdinalBadges } from './sidebar/sessionOrdinalBadges';
 import { useOwnTopNavScrollableRows, useSidebarCollapsedState } from '../feature-context';
-import { SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
+import { SidebarRailNavigation, SidebarTopNav } from '@/components/sidebar/SidebarTopNav';
 import { SidebarFilterPopover } from './sidebar/SidebarFilterPopover';
 import { MainListScopeHeader } from './sidebar/MainListScopeHeader';
 import { SharedTasksSection } from '@/features/device-link/SharedTasksSection';
@@ -96,10 +94,6 @@ import {
 } from '@/lib/worktreeRemovalWarning';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useAttachedSessionIds } from '@/hooks/useAttachedSessionIds';
-import { useActiveMainView } from '@/hooks/useActiveMainView';
-import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
-import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
-import { GhostMainViewNavEntries } from '@/components/sidebar/GhostMainViewNavEntries';
 import {
   BOT_GROUP_LANE_SESSION,
   botOwnedSessionNotificationTitle,
@@ -418,8 +412,9 @@ export function CCAgentSidebarUpper() {
   const isCollapsed = useSidebarCollapsedState();
   // 展开态由本 Feature 在自己的列表滚动区里渲染顶部导航的可滚动段(自动任务 /
   // 插件 / 搜索 / 远程机器),shell 顶部只留固定的「新建」——列表上滚时这些行一起
-  // 滚走(2026-08-12 用户裁决,对齐 Codex)。rail 态没有该滚动区,交回 shell 整块渲染。
-  useOwnTopNavScrollableRows(!isCollapsed);
+  // 滚走(2026-08-12 用户裁决,对齐 Codex)。rail 态由 CollapsedView 按同一份导航偏好
+  // 整段渲染(含伙伴),shell 不再补 rail 伙伴图标。
+  useOwnTopNavScrollableRows(true);
   // F-PJ-10：filter.status 决定后端 fetch 时是否带 ?status=archived|all
   const hiddenProjects = useHiddenProjects();
   const { hiddenProjectKeys, initialSnapshot: sidebarSettingsSnapshot } = hiddenProjects;
@@ -1096,7 +1091,9 @@ function ExpandedView({
       if (session && isOrcaWorkerSession(session)) return;
       if (session) {
         const title = projectDraftSessionTitle(session.title, unnamedLabelRef.current);
-        sendSessionEventNotification(sessionId, title, kind);
+        sendSessionEventNotification(sessionId, title, kind, {
+          remoteDevice: !!session.deviceLinkDeviceId,
+        });
         return;
       }
       void botOwnedSessionNotificationTitle(sessionId).then((botTitle) => {
@@ -3972,15 +3969,6 @@ function CollapsedView({
   const handleNewCCS = useCallback(() => {
     navigate('/cc-agent/new', { state: makeGenericNewMakerRouteState(location.pathname) });
   }, [location.pathname, navigate]);
-  const handleNavScheduled = useCallback(() => {
-    navigate('/cc-agent/scheduled');
-  }, [navigate]);
-  const onScheduleMatch = useMatch('/cc-agent/scheduled');
-  // 主视图切换(Plugin / Skill 管理)——与展开态 SidebarTopNav 的管理入口同源:
-  // 命中 Plugin 或 Skill 视图时高亮。折叠 rail 之前漏了这颗按钮,现保持两态一致。
-  const { activeKey, navigateToView } = useActiveMainView();
-  // 插件未读聚合(badge 槽)——与展开态同源同语义。
-  const hasGhostUnread = useAnyGhostUnread();
 
   // 接管中的会话(/ctr)——面板行沿用 SessionStatusIcon 的 RadioTower 表达。
   const attachedSessionIds = useAttachedSessionIds();
@@ -4009,37 +3997,24 @@ function CollapsedView({
         label={t('ccAgent.layout.new')}
         onClick={handleNewCCS}
       />
-      {/* 自动化 rail 入口 —— 仅导航,不再显示未读 dot(与展开态 SidebarTopNav 一致,
-          未读 / 运行状态由展开后的各 schedule 组头承载)。 */}
-      <SidebarIconButton
-        icon={Timer}
-        label={t('ccAgent.layout.automations')}
-        aria-label={t('ccAgent.layout.automations')}
-        aria-current={onScheduleMatch ? 'page' : undefined}
-        active={Boolean(onScheduleMatch)}
-        onClick={handleNavScheduled}
-      />
-      <GhostMainViewNavEntries variant="rail" />
-      {/* 插件 rail 入口 —— 未读绿点与展开态 SidebarTopNav 对称(同一聚合语义:
-          任一插件有未读就点亮,静态不呼吸)。 */}
-      <SidebarIconButton
-        icon={Plug}
-        label={t('sidebar.tabs.plugins')}
-        active={activeKey === 'plugins'}
-        aria-current={activeKey === 'plugins' ? 'page' : undefined}
-        showDot={hasGhostUnread}
-        onClick={() => navigateToView('plugins')}
-      />
-      <GhostPanelRestoreEntry variant="rail" className={SIDEBAR_RAIL_ICON_BUTTON_CLASS} />
-      <ConversationSearchBox
-        navigate={navigate}
-        allKnownProjects={allSearchProjects}
-        allowedSessionIds={searchableSessionIds}
-        hiddenProjectKeys={hiddenProjectKeys}
-        projectFilterRequest={isCollapsed ? projectFilterRequest : null}
-        machineSelection={selectedMachineId}
-        searchDevices={searchDevices}
-        triggerClassName={SIDEBAR_RAIL_ICON_BUTTON_CLASS}
+      {/* 自动化 / 插件 / 伙伴 / 搜索按「自定义」的顺序与勾选排列,未勾选项收进「更多」
+          (与展开态 SidebarTopNav 同一份偏好)。搜索在 project-menu 锁定请求时临时出现。 */}
+      <SidebarRailNavigation
+        forceSearch={isCollapsed && projectFilterRequest != null}
+        renderSearch={({ defaultOpen, onOpenChange }) => (
+          <ConversationSearchBox
+            navigate={navigate}
+            allKnownProjects={allSearchProjects}
+            allowedSessionIds={searchableSessionIds}
+            hiddenProjectKeys={hiddenProjectKeys}
+            projectFilterRequest={isCollapsed ? projectFilterRequest : null}
+            machineSelection={selectedMachineId}
+            searchDevices={searchDevices}
+            triggerClassName={SIDEBAR_RAIL_ICON_BUTTON_CLASS}
+            defaultOpen={defaultOpen}
+            onOpenChange={onOpenChange}
+          />
+        )}
       />
 
       <div className="my-[7px] h-px w-[22px] shrink-0 bg-sidebar-border" aria-hidden />

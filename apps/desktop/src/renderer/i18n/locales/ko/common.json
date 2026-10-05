@@ -312,7 +312,7 @@
       "resolution": "컴퓨터 해상도",
       "clipboardFailed": "클립보드 내용을 전송하지 못했습니다. 제어 권한을 확인하고 다시 시도하세요.",
       "settingsFailed": "설정을 저장하지 못했습니다. 다시 시도하세요.",
-      "inputHint": "화면을 클릭하여 입력하세요. Ctrl+Alt+Esc로 키보드 포커스를 해제하고 Cmd/Ctrl+W로 이 창을 닫습니다.",
+      "inputHint": "화면을 클릭하여 입력하세요. 단축키(Cmd/Ctrl+W 포함)는 원격 컴퓨터로 전송됩니다. Ctrl+Alt+Esc로 키보드 포커스를 해제한 뒤 Cmd/Ctrl+W로 이 창을 닫습니다.",
       "controlPending": "제어 권한을 가져오는 중…",
       "controlRequired": "보기 전용입니다. 원격 컴퓨터를 조작하려면 제어 권한을 가져오세요.",
       "confirmDisconnect": "이 컴퓨터와의 연결을 끊을까요?",
@@ -5765,7 +5765,7 @@
         "configurationTitle": "설정",
         "sidebarEntryTitle": "사이드바 항목",
         "showInSidebar": "사이드바에 표시",
-        "sidebarEntryDescription": "켜면 사이드바에 “{{title}}” 항목이 표시됩니다. 숨겨도 플러그인이 비활성화되지는 않습니다.",
+        "sidebarEntryDescription": "켜면 “{{title}}” 항목이 사이드바에 표시됩니다. 맨 위에 둘지 “더 보기”에 넣을지는 “더 보기 → 사용자 지정”에서 바꿀 수 있습니다. 숨겨도 플러그인이 비활성화되지는 않습니다.",
         "openTool": "Tool {{name}} 세부 정보 보기",
         "noToolDescription": "이 Tool에는 설명이 없습니다.",
         "viewAllTools": "더 보기",
@@ -7675,6 +7675,22 @@
       "plugins": "플러그인",
       "issues": "이슈",
       "bots": "동료"
+    },
+    "navigation": {
+      "more": "더 보기",
+      "new": "새 항목",
+      "customize": {
+        "title": "사용자 지정",
+        "done": "완료",
+        "reset": "기본값으로 복원",
+        "reorder": "위아래 화살표 키로 {{name}} 순서 변경"
+      },
+      "items": {
+        "automations": "자동화",
+        "plugins": "플러그인",
+        "bots": "동료",
+        "search": "검색"
+      }
     },
     "user": {
       "settingsLink": "설정, 현재 사용자: {{name}}",

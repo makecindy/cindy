@@ -1496,7 +1496,6 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         composing
       )
         return;
-      if ((e.metaKey || e.ctrlKey) && e.code === "KeyW") return; // always retain a local close shortcut
       if (
         control &&
         clipboardShortcuts &&

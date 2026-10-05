@@ -312,7 +312,7 @@
       "resolution": "Computer resolution",
       "clipboardFailed": "Could not transfer clipboard content. Check control access and try again.",
       "settingsFailed": "Could not save this setting. Try again.",
-      "inputHint": "Click the picture to type. Ctrl+Alt+Esc releases keyboard focus; Cmd/Ctrl+W closes this window.",
+      "inputHint": "Click the picture to type; shortcuts, including Cmd/Ctrl+W, go to the remote computer. Press Ctrl+Alt+Esc to release keyboard focus, then Cmd/Ctrl+W closes this window.",
       "controlPending": "Requesting control…",
       "controlRequired": "View only. Take control to interact with the remote computer.",
       "confirmDisconnect": "Disconnect from this computer?",
@@ -5766,7 +5766,7 @@
         "configurationTitle": "Configuration",
         "sidebarEntryTitle": "Sidebar entry",
         "showInSidebar": "Show in sidebar",
-        "sidebarEntryDescription": "When turned on, “{{title}}” appears in the sidebar. Hiding it does not disable the plugin.",
+        "sidebarEntryDescription": "When turned on, “{{title}}” appears in the sidebar, either at the top or under More — choose where in More → Customize. Hiding it does not disable the plugin.",
         "openTool": "View details for Tool {{name}}",
         "noToolDescription": "No description is available for this Tool.",
         "viewAllTools": "See All",
@@ -7677,6 +7677,22 @@
       "plugins": "Plugins",
       "issues": "Issues",
       "bots": "Teammates"
+    },
+    "navigation": {
+      "more": "More",
+      "new": "New",
+      "customize": {
+        "title": "Customize",
+        "done": "Done",
+        "reset": "Reset to default",
+        "reorder": "Reorder {{name}} with the up and down arrow keys"
+      },
+      "items": {
+        "automations": "Automations",
+        "plugins": "Plugins",
+        "bots": "Teammates",
+        "search": "Search"
+      }
     },
     "user": {
       "settingsLink": "Settings, current user: {{name}}",

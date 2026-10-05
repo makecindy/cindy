@@ -346,6 +346,33 @@ it.each(['key', 'button', 'scroll'])(
     expect(events().some((event) => event.kind === 'release')).toBe(false);
   },
 );
+it('forwards Cmd+W to the remote computer while the picture owns the keyboard', () => {
+  pointer('pointerdown');
+  pointer('pointerup');
+  messages = [];
+  const input = document.getElementById('keyboard-input')!;
+  input.dispatchEvent(
+    new KeyboardEvent('keydown', { code: 'MetaLeft', metaKey: true, bubbles: true }),
+  );
+  const close = new KeyboardEvent('keydown', {
+    code: 'KeyW',
+    key: 'w',
+    metaKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  input.dispatchEvent(close);
+  input.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW', metaKey: true, bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent('keyup', { code: 'MetaLeft', bubbles: true }));
+  vi.advanceTimersByTime(34);
+  expect(close.defaultPrevented).toBe(true);
+  expect(events().filter((event) => event.kind === 'key')).toEqual([
+    { kind: 'key', code: 'MetaLeft', down: true },
+    { kind: 'key', code: 'KeyW', down: true },
+    { kind: 'key', code: 'KeyW', down: false },
+    { kind: 'key', code: 'MetaLeft', down: false },
+  ]);
+});
 it('maps real mouse movement, right button and wheel to the picture below the toolbar', () => {
   pointer('pointermove');
   vi.advanceTimersByTime(34);

@@ -312,7 +312,7 @@
       "resolution": "コンピュータの解像度",
       "clipboardFailed": "クリップボードの内容を転送できませんでした。操作権限を確認して再試行してください。",
       "settingsFailed": "設定を保存できませんでした。再試行してください。",
-      "inputHint": "画面をクリックして入力します。Ctrl+Alt+Esc でキーボードのフォーカスを解除し、Cmd/Ctrl+W でこのウィンドウを閉じます。",
+      "inputHint": "画面をクリックして入力します。ショートカット（Cmd/Ctrl+W を含む）はリモートのコンピュータに送信されます。Ctrl+Alt+Esc でキーボードのフォーカスを解除すると、Cmd/Ctrl+W でこのウィンドウを閉じます。",
       "controlPending": "操作権限を取得中…",
       "controlRequired": "表示のみです。リモートのパソコンを操作するには操作権限を取得してください。",
       "confirmDisconnect": "このコンピュータとの接続を切断しますか？",
@@ -5765,7 +5765,7 @@
         "configurationTitle": "設定",
         "sidebarEntryTitle": "サイドバー項目",
         "showInSidebar": "サイドバーに表示",
-        "sidebarEntryDescription": "オンにすると、サイドバーに「{{title}}」が表示されます。非表示にしてもプラグインは無効になりません。",
+        "sidebarEntryDescription": "オンにすると、「{{title}}」がサイドバーに表示されます。最上部に置くか「その他」にまとめるかは「その他 → カスタマイズ」で変更できます。非表示にしてもプラグインは無効になりません。",
         "openTool": "Tool {{name}} の詳細を表示",
         "noToolDescription": "この Tool には説明がありません。",
         "viewAllTools": "さらに表示",
@@ -7675,6 +7675,22 @@
       "plugins": "プラグイン",
       "issues": "問題",
       "bots": "仲間"
+    },
+    "navigation": {
+      "more": "その他",
+      "new": "新着",
+      "customize": {
+        "title": "カスタマイズ",
+        "done": "完了",
+        "reset": "初期設定に戻す",
+        "reorder": "上下矢印キーで{{name}}の順序を変更"
+      },
+      "items": {
+        "automations": "自動化",
+        "plugins": "プラグイン",
+        "bots": "仲間",
+        "search": "検索"
+      }
     },
     "user": {
       "settingsLink": "設定, 現在のユーザー: {{name}}",

@@ -2186,6 +2186,209 @@ describe('DeviceLinkClient', () => {
     }
   });
 
+  it('多个对端同时沉默且期间没有任何对端入站:判定 relay 连接卡死并重连,而不是逐个复位 peer', async () => {
+    vi.useFakeTimers();
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 3,
+      },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      const openB = establishInboundReliableLink(h, 'stall-stream-b', 1, 'dev-b');
+      const openC = establishInboundReliableLink(h, 'stall-stream-c', 1, 'dev-c');
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.all([openB, openC]);
+
+      const firstSocket = h.current();
+      h.client.sendInvokeResult('dev-b', 'stuck-b', { ok: true, result: [] });
+      h.client.sendInvokeResult('dev-c', 'stuck-c', { ok: true, result: [] });
+
+      // 两个对端都不 ACK,也没有任何对端帧到达 → 连接级故障,整条 relay 连接重建
+      await vi.advanceTimersByTimeAsync(100);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/relay connection looks stalled, forcing reconnect/));
+      expect(firstSocket.terminated || firstSocket.closed !== null).toBe(true);
+      expect(h.sockets.length).toBeGreaterThan(1);
+      expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/resetting peer link/));
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('多 peer:一个对端沉默而另一对端仍有入站时只复位沉默 peer,relay 连接与健康 peer 零感知', async () => {
+    vi.useFakeTimers();
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 3,
+      },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      const openB = establishInboundReliableLink(h, 'quiet-stream-b', 1, 'dev-b');
+      const openC = establishInboundReliableLink(h, 'healthy-stream-c', 1, 'dev-c');
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.all([openB, openC]);
+
+      const socket = h.current();
+      // dev-c 每收到一条就正常 ACK:证明 relay 转发方向是通的,dev-b 沉默只是它自己的问题
+      const ackLatestToC = () => {
+        const latest = socket.sent.filter((env) => (
+          env.kind === 'invoke-result' && env.dst === 'dev-c' && parseTransportPayload(env.payload)
+        )).at(-1)!;
+        const meta = parseTransportPayload(latest.payload)!.meta;
+        socket.push({
+          v: PROTOCOL_VERSION,
+          kind: 'push',
+          src: 'dev-c',
+          payload: {
+            channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+            payload: { streamId: meta.streamId, ackSeq: meta.seq },
+          },
+        });
+      };
+      h.client.sendInvokeResult('dev-b', 'sleeping-b', { ok: true, result: [] });
+      h.client.sendInvokeResult('dev-c', 'answered-c', { ok: true, result: [] });
+      await vi.advanceTimersByTimeAsync(1);
+      ackLatestToC();
+      await vi.advanceTimersByTimeAsync(1);
+      h.client.sendInvokeResult('dev-c', 'answered-again-c', { ok: true, result: [] });
+      await vi.advanceTimersByTimeAsync(1);
+      ackLatestToC();
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/resetting peer link .*dst=dev-b/));
+      expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/relay connection looks stalled/));
+      // 健康 peer 自身从未被复位
+      expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/dst=dev-c/));
+      expect(socket.terminated).toBe(false);
+      expect(socket.closed).toBeNull();
+      expect(h.sockets).toHaveLength(1);
+      // 健康 peer 的 link 仍就绪:新回包立即在同一条连接上发出
+      const sentBefore = socket.sent.length;
+      h.client.sendInvokeResult('dev-c', 'after-reset-c', { ok: true, result: [] });
+      expect(socket.sent.slice(sentBefore).some((env) => (
+        env.kind === 'invoke-result' && env.dst === 'dev-c' && parseTransportPayload(env.payload)
+      ))).toBe(true);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('多 peer:两个对端同时沉默但第三个已就绪 peer 空闲时,不得连带断开它', async () => {
+    vi.useFakeTimers();
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 3,
+      },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      const opens = [
+        establishInboundReliableLink(h, 'asleep-stream-b', 1, 'dev-b'),
+        establishInboundReliableLink(h, 'asleep-stream-c', 1, 'dev-c'),
+        establishInboundReliableLink(h, 'idle-stream-d', 1, 'dev-d'),
+      ];
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.all(opens);
+
+      const socket = h.current();
+      // 两台手机同时休眠;dev-d 健康但暂时没有任何待确认帧,拿不出卡死证据
+      h.client.sendInvokeResult('dev-b', 'asleep-b', { ok: true, result: [] });
+      h.client.sendInvokeResult('dev-c', 'asleep-c', { ok: true, result: [] });
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/resetting peer link .*dst=dev-b/));
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/resetting peer link .*dst=dev-c/));
+      expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/relay connection looks stalled/));
+      expect(socket.terminated).toBe(false);
+      expect(socket.closed).toBeNull();
+      expect(h.sockets).toHaveLength(1);
+      const sentBefore = socket.sent.length;
+      h.client.sendInvokeResult('dev-d', 'still-ready-d', { ok: true, result: [] });
+      expect(socket.sent.slice(sentBefore).some((env) => (
+        env.kind === 'invoke-result' && env.dst === 'dev-d' && parseTransportPayload(env.payload)
+      ))).toBe(true);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('多 peer:两个可靠对端同时沉默但还有活动的旧版控制端时,不得连带断开它', async () => {
+    vi.useFakeTimers();
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 3,
+      },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      const opens = [
+        establishInboundReliableLink(h, 'asleep-stream-b', 1, 'dev-b'),
+        establishInboundReliableLink(h, 'asleep-stream-c', 1, 'dev-c'),
+        // 旧版控制端:不声明可靠传输,走 legacy 帧
+        establishInboundReliableLink(h, 'legacy-stream-e', 1, 'dev-e', []),
+      ];
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.all(opens);
+
+      const socket = h.current();
+      h.client.sendInvokeResult('dev-b', 'asleep-b', { ok: true, result: [] });
+      h.client.sendInvokeResult('dev-c', 'asleep-c', { ok: true, result: [] });
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/resetting peer link .*dst=dev-b/));
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/resetting peer link .*dst=dev-c/));
+      expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/relay connection looks stalled/));
+      expect(socket.terminated).toBe(false);
+      expect(socket.closed).toBeNull();
+      expect(h.sockets).toHaveLength(1);
+      // 旧版控制端仍在原连接上收到回包
+      const sentBefore = socket.sent.length;
+      h.client.sendInvokeResult('dev-e', 'legacy-e', { ok: true, result: [] });
+      expect(socket.sent.slice(sentBefore).some((env) => (
+        env.kind === 'invoke-result' && env.dst === 'dev-e'
+      ))).toBe(true);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('互控:出站 link-accept 不覆盖入站标记,重试耗尽仍走 peer 级重置不拆共享 relay', async () => {
     const h = makeHarness({
       timing: {

@@ -535,7 +535,7 @@ import {
   clearAllSessionAttention,
   refreshWindowsAppBadge,
 } from './appBadgeService';
-import { initNotificationService } from './notificationService';
+import { initNotificationService, showDeviceSessionDesktopEvent } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
 import { attachWorkLouderCodexWindowReveal } from './worklouder-codex/index.js';
@@ -4319,6 +4319,11 @@ const registerIpcHandlers = () => {
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
     onSessionActivityChange: (activity) => {
       updateInputDeviceSessionActivity(activity);
+    },
+    onDeviceSessionEvent: (event) => {
+      // 与本机任务同口径:Cindy 在前台时不弹系统通知。
+      if (hasFocusedAppWindow()) return;
+      showDeviceSessionDesktopEvent(() => getWindow() ?? null, event);
     },
   })?.setAppFocused(hasFocusedAppWindow());
   // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播

@@ -178,6 +178,11 @@ export interface RemoteDesktopCapabilities {
   clipboardInline?: boolean;
   privacyScreen?: boolean;
   hostMute?: boolean;
+  /**
+   * Accepts `viewerHidden`: the host stops sending video while the viewer is
+   * hidden, keeping audio, input and the lease. Each new offer starts unpaused.
+   */
+  viewerHidden?: boolean;
   /** Explicit host actions, independent of user-configured keyboard bindings. */
   windowActions?: boolean;
   workspaceNavigation?: boolean;
@@ -224,6 +229,7 @@ export type RemoteDesktopRequest =
       lockOnExit?: boolean;
     }
   | { op: "hostMute"; lease: string; enabled: boolean }
+  | { op: "viewerHidden"; lease: string; hidden: boolean }
   | { op: "clipboardSync"; lease: string; enabled: boolean }
   | { op: "clipboardVersion"; lease: string }
   | RemoteDesktopIceRequest
@@ -330,6 +336,8 @@ export function parseRemoteDesktopRequest(
   )
     return { op: v.op, lease, enabled: v.enabled };
   if (v.op === "clipboardVersion") return { op: v.op, lease };
+  if (v.op === "viewerHidden" && typeof v.hidden === "boolean")
+    return { op: v.op, lease, hidden: v.hidden };
   if (v.op === "ice") {
     if (!isDesktopAttemptId(v.attemptId) || !isDesktopIceCursor(v.after))
       throw new Error("INVALID_REQUEST");
