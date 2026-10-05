@@ -1564,10 +1564,14 @@ export interface CodexThreadStateDump {
 
 /**
  * 会话分享导出:dump 一个 codex thread 的 state 三表行 + rollout 文件位置。
- * 查找顺序与 resume 恢复链一致:desktop codex home 的 state DB 优先,
+ * 调用方给出 storage(多账号线程的 thread-index 位置)时只读那一处,不回退别的
+ * HOME,与 resume 同口径;未给出时 desktop codex home 的 state DB 优先,
  * 缺行/缺文件再回退外部 CODEX_HOME(~/.codex、Codex.app)。全程只读。
  */
-export async function dumpCodexThreadStateRows(threadId: string): Promise<CodexThreadStateDump> {
+export async function dumpCodexThreadStateRows(
+  threadId: string,
+  storage?: { sqliteHome: string; rolloutPath?: string },
+): Promise<CodexThreadStateDump> {
   const empty: CodexThreadStateDump = {
     threads: [],
     threadDynamicTools: [],
@@ -1575,6 +1579,24 @@ export async function dumpCodexThreadStateRows(threadId: string): Promise<CodexT
     rolloutPath: null,
   };
   if (!isLikelyThreadId(threadId)) return empty;
+
+  if (storage) {
+    // 记录位置的状态库读不出(目录不可访问、库损坏)不等于「本就没有 state」:
+    // 不返回 rollout,让导出按缺转录降档,而不是带着空 state 判成完整。
+    // 没有状态库(纯 rollout 的外部线程)仍是合法的空 state。
+    try {
+      fs.accessSync(storage.sqliteHome, fs.constants.R_OK | fs.constants.X_OK);
+    } catch {
+      return empty;
+    }
+    const dbPath = findLatestStateDb(storage.sqliteHome);
+    const rows = dbPath ? readThreadStateRows(dbPath, threadId) : empty;
+    if (!rows) return empty;
+    return {
+      ...rows,
+      rolloutPath: storage.rolloutPath && fs.existsSync(storage.rolloutPath) ? storage.rolloutPath : null,
+    };
+  }
 
   const dbCandidates: string[] = [];
   const desktopDb = findLatestStateDb(getDesktopCodexHome());
@@ -1585,7 +1607,7 @@ export async function dumpCodexThreadStateRows(threadId: string): Promise<CodexT
   let dump = empty;
   for (const dbPath of dbCandidates) {
     const rows = readThreadStateRows(dbPath, threadId);
-    if (rows.threads.length > 0) {
+    if (rows && rows.threads.length > 0) {
       dump = { ...rows, rolloutPath: null };
       break;
     }
@@ -1666,7 +1688,7 @@ export function reserveCodexForkCleanup(
 function readThreadStateRows(
   dbPath: string,
   threadId: string,
-): Pick<CodexThreadStateDump, 'threads' | 'threadDynamicTools' | 'threadSpawnEdges'> {
+): Pick<CodexThreadStateDump, 'threads' | 'threadDynamicTools' | 'threadSpawnEdges'> | null {
   let db: Database.Database | null = null;
   try {
     db = openReadonlyDb(dbPath);
@@ -1683,14 +1705,14 @@ function readThreadStateRows(
       threadSpawnEdges: readTable('thread_spawn_edges', 'parent_thread_id'),
     };
   } catch (err) {
-    // DB 锁 / 权限 / schema 漂移都会走到这:返回空让导出降档,但必须留痕,
+    // DB 锁 / 权限 / schema 漂移都会走到这:返回 null 交调用方决定降档,但必须留痕,
     // 否则"为什么 codex state 没进包"无从排查(review bot 指出)。
     log.warn('readThreadStateRows failed, exporting without codex state', {
       dbPath,
       threadId,
       error: err instanceof Error ? err.message : String(err),
     });
-    return { threads: [], threadDynamicTools: [], threadSpawnEdges: [] };
+    return null;
   } finally {
     closeDbQuietly(db);
   }
@@ -1719,6 +1741,11 @@ export interface ImportSharedCodexThreadParams {
     threadSpawnEdges: Array<Record<string, unknown>>;
   };
   rolloutBuffer: Buffer | null;
+  /**
+   * Migration alternative to `rolloutBuffer` for rollouts too large to hold in memory:
+   * writes the rollout to the given path atomically, replacing an interrupted attempt.
+   */
+  writeRollout?: (target: string) => Promise<void>;
   rolloutFilename: string | null;
   newCwd: string;
   title: string;
@@ -1765,7 +1792,7 @@ export async function importSharedCodexThread(
   const home = getDesktopCodexHome();
   let rolloutPath: string | null = null;
   let rolloutWritten = false;
-  if (params.rolloutBuffer) {
+  if (params.rolloutBuffer || params.writeRollout) {
     const candidate = params.rolloutFilename && /^[\w.-]+\.jsonl$/.test(params.rolloutFilename)
       ? params.rolloutFilename
       : `rollout-imported-${params.threadId}.jsonl`;
@@ -1778,11 +1805,13 @@ export async function importSharedCodexThread(
       // wx 独占写:同名 rollout 已在盘上(典型是删除 Maker 会话后重导同一分享包)
       // 时不覆盖、直接复用——盘上副本可能包含删除前 resume 产生的更新内容。
       try {
-        if (params.migration) atomicWriteFileSync(rolloutPath, params.rolloutBuffer.toString('utf8'));
-        else await fsp.writeFile(rolloutPath, params.rolloutBuffer, { flag: 'wx' });
+        if (params.writeRollout) await params.writeRollout(rolloutPath);
+        else if (params.migration) atomicWriteFileSync(rolloutPath, params.rolloutBuffer!.toString('utf8'));
+        else await fsp.writeFile(rolloutPath, params.rolloutBuffer!, { flag: 'wx' });
         rolloutWritten = true;
       } catch (err) {
-        if (params.migration || (err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        if (params.migration || params.writeRollout || (err as NodeJS.ErrnoException).code !== 'EEXIST')
+          throw err;
         log.info('import shared codex thread: rollout already on disk, reusing', {
           threadId: params.threadId,
         });
@@ -3625,12 +3654,16 @@ function dropUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
 
 export type CodexHistoryOversizedClass = 'oversized' | 'healthy' | 'unknown';
 
-/** 只读测量本地 Codex rollout 活尾巴。找不到文件或读失败归 unknown，不得当成健康。 */
+/**
+ * 只读测量本地 Codex rollout 活尾巴。找不到文件或读失败归 unknown，不得当成健康。
+ * 调用方给出 storage(多账号线程的 thread-index 位置)时只认那一处 rollout。
+ */
 export async function classifyCodexHistoryOversized(
   threadId: string,
+  storage?: { rolloutPath?: string },
 ): Promise<CodexHistoryOversizedClass> {
   if (!threadId) return 'unknown';
-  const rolloutPath = resolveRolloutPath(threadId);
+  const rolloutPath = storage ? storage.rolloutPath : resolveRolloutPath(threadId);
   if (!rolloutPath) return 'unknown';
   try {
     const stats = await measureRolloutLiveTailStats(rolloutPath);

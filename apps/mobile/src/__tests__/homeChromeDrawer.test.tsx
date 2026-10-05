@@ -113,6 +113,8 @@ vi.mock('@/platform/gestureHandler', () => {
   };
 });
 
+// Keep native device polling outside the drawer window/lifecycle fixture.
+vi.mock('@/plugins/PluginMenuUnreadDot', () => ({ PluginMenuUnreadDot: () => null }));
 vi.mock('@/session/HomeModeSwitch', () => ({ HomeModeSwitch: () => null }));
 
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));

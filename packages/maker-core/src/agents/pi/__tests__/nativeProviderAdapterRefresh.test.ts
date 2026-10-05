@@ -91,9 +91,39 @@ describe('Cindy native provider refresh bridge', () => {
     expect(h.handlers.size).toBe(1);
   });
 
+  it.each([
+    ['missing', () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); }, {}],
+    ['configured', () => JSON.stringify({ compaction: { reserveTokens: 1234 } }), { compaction: { reserveTokens: 1234 } }],
+  ])('loads legacy runtime settings when the file is %s', (_label, read, expected) => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const start = source.indexOf('const initialNativeSettings =');
+    const end = source.indexOf("pi.registerCommand('cindy-native-provider-refresh'", start);
+    const code = source.slice(start, end) + ';globalThis.settings = initialNativeSettings;';
+    const sandbox: Record<string, unknown> = {
+      pi: {}, process: { env: { PI_CODING_AGENT_DIR: '/fixture' } },
+      path: { join: () => '/fixture/settings.json' }, readFileSync: read,
+    };
+    runInNewContext(code, sandbox);
+    expect(sandbox.settings).toEqual(expected);
+  });
+
+  it.each(['EACCES', 'invalid-json'])('does not hide %s while loading legacy settings', (kind) => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const start = source.indexOf('const initialNativeSettings =');
+    const end = source.indexOf("pi.registerCommand('cindy-native-provider-refresh'", start);
+    expect(() => runInNewContext(source.slice(start, end), {
+      pi: {}, process: { env: { PI_CODING_AGENT_DIR: '/fixture' } },
+      path: { join: () => '/fixture/settings.json' },
+      readFileSync: () => {
+        if (kind === 'EACCES') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        return '{';
+      },
+    })).toThrow();
+  });
+
   it('acknowledges success only after applying a valid staged snapshot', async () => {
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;
-    const start = source.indexOf("pi.registerCommand('cindy-native-provider-refresh'");
+    const start = source.indexOf('const initialNativeSettings =');
     const end = source.indexOf('if (!currentPermissionState().reviewOnly)', start);
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
@@ -101,16 +131,25 @@ describe('Cindy native provider refresh bridge', () => {
       `async function setup(pi: any, nativeProviderAdapters: any, parseCindyProviderRefreshSnapshot: any) {\nconst SECRET_ENV_NAMES = new Set<string>();\n${source.slice(start, end)}\n}\n(globalThis as any).setup = setup;`,
       { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
     ).outputText;
-    const sandbox: Record<string, unknown> = {};
+    const sandbox: Record<string, unknown> = { piCodingAgent: { VERSION: '1.0.0' },
+      process: { env: { PI_CODING_AGENT_DIR: '/fixture' } }, path: { join: () => '/fixture/settings.json' },
+      readFileSync: () => JSON.stringify({ compaction: { reserveTokens: 1234 } }),
+    };
     runInNewContext(code, sandbox);
     const setup = sandbox.setup as (
       pi: unknown, controller: unknown, parse: (raw: unknown, nonce: string) => unknown,
     ) => Promise<void>;
     let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
     const applied: unknown[] = [];
-    await setup({ registerCommand: (_name: string, command: { handler: typeof handler }) => { handler = command.handler; } },
+    let loaded = false;
+    await setup({ getSettings: () => {
+      if (!loaded) throw new Error('Action methods cannot be called during extension loading');
+      return { compaction: { reserveTokens: 1234 } };
+    },
+      registerCommand: (_name: string, command: { handler: typeof handler }) => { handler = command.handler; } },
       { refresh: async (snapshot: unknown) => { applied.push(snapshot); } },
       (raw, nonce) => raw === 'valid' ? { nonce, env: {}, aliases: [] } : undefined);
+    loaded = true;
     const calls: Array<{ title: string; payload: unknown }> = [];
     const ctx = { ui: { input: async (title: string, raw: string) => {
       const payload = JSON.parse(raw) as unknown;
@@ -121,7 +160,16 @@ describe('Cindy native provider refresh bridge', () => {
     expect(applied).toHaveLength(1);
     expect(calls).toEqual([
       { title: 'cindy:provider-refresh', payload: { nonce: 'abcdefghijklmnop' } },
-      { title: 'cindy:provider-refresh-ack', payload: { nonce: 'abcdefghijklmnop', ok: true } },
+      { title: 'cindy:provider-refresh-ack', payload: { nonce: 'abcdefghijklmnop', ok: true,
+        runtimeSettings: { version: '1.0.0', compaction: { reserveTokens: 1234 } } } },
     ]);
+    calls.length = 0;
+    await handler?.('abcdefghijklmnop', { ui: { input: async (title: string, raw: string) => {
+      calls.push({ title, payload: JSON.parse(raw) });
+      return title === 'cindy:provider-refresh'
+        ? JSON.stringify({ nonce: 'abcdefghijklmnop', operation: 'inspect' }) : undefined;
+    } } });
+    expect(applied).toHaveLength(1); // Inspection never refreshes providers or credentials.
+    expect(calls.at(-1)?.payload).toMatchObject({ ok: true, runtimeSettings: { version: '1.0.0' } });
   });
 });

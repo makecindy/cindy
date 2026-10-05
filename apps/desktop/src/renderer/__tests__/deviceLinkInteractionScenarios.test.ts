@@ -1021,8 +1021,8 @@ describe('远程交互接线不变式', () => {
       'await sessionService.update(sessionId, { permissionMode: newMode });',
     );
     expect(runtimeSet).toBeGreaterThan(-1);
-    expect(persistSet).toBeGreaterThan(runtimeSet);
-    expect(src).toContain(
+    expect(persistSet).toBe(-1);
+    expect(src).not.toContain(
       'await window.electronAPI.maker.setPermissionMode(sessionId, previousMode);',
     );
     expect(src).toContain('requiresFullAccessConfirmation(previousMode, newMode)');

@@ -5,6 +5,10 @@ import { app, ipcMain } from 'electron';
 import {
   TASK_MIGRATION_CHANNEL,
   TASK_MIGRATION_LOCAL_CHANNEL,
+  TASK_MIGRATION_MAX_FILES,
+  TASK_MIGRATION_MAX_TRANSCRIPTS,
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
+  DeviceLinkError,
   parseTaskMigrationRequest,
   buildAttachmentOssRef,
   parsePeerAttachmentRef,
@@ -18,6 +22,10 @@ import {
   type TaskMigrationView,
 } from '@cindy/device-link';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current';
+import { dialogueWorkspaceDayKey } from '../localDb/dialogueWorkspace';
+import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs';
+import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings';
+import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast';
 import { withSessionRouteLocks } from '../localDb/sessionRouteLock';
 import { getActiveTeamByLead } from '../localDb/orcaTeamStore';
@@ -31,6 +39,7 @@ import {
   materializeRemoteAttachment,
   parseRemoteAttachmentRef,
 } from '../device-link/remoteAttachment';
+import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { throwIpcError } from '../utils/ipcValidate';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile';
@@ -44,6 +53,7 @@ import {
 } from '../session-share/sessionShareImport';
 import type { moveSessionProjectFromHost } from '../mcp-integrations/moveSession';
 import { physicalWorktreeKey, withWorktreeResourceLocks } from '../worktree/resourceLock';
+import { GitExecError } from '../worktree/gitExec';
 import { getMakerIfReady } from '../maker-host';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService';
 import { pickEnabledFallbackModel } from '../maker-host/model-route-guard';
@@ -53,11 +63,27 @@ import {
   snapshotWorkspace,
   restoreWorkspace,
   estimateWorkspace,
+  isExcludedFromWorkspace,
+  managedWorktreeExclusions,
+  MigrationPathError,
   type PortableWorkspace,
 } from './workspace';
 
-import { memoryBudget, assertMemoryCapacity, assertDiskCapacity } from './resources';
+import {
+  memoryBudget,
+  memoryBudgetDetail,
+  assertMemoryCapacity,
+  assertDiskCapacity,
+  MigrationSizeError,
+} from './resources';
 import { sendParts, receiveParts } from './transferParts';
+import type { SkippedEntry } from './portableEntries';
+
+const log = createLogger('task-migration');
+/** Native transcripts this large travel as separate streamed files, not inside the package. */
+const EXTERNAL_TRANSCRIPT_MIN_BYTES = 32 * 1024 * 1024;
+/** The finished copy lists this many left-behind entries; the count covers the rest. */
+const MAX_REPORTED_SKIPPED = 100;
 
 type MoveProject = (
   sessionId: string,
@@ -67,7 +93,27 @@ type MoveProject = (
 // Bootstrap supplies the existing business handler; importing maker IPC here creates a cycle.
 let moveProjectOnHost: MoveProject | undefined;
 let sourceBoundary: { isBusy(sessionId: string): boolean; drain(): Promise<void> } | undefined;
-const running = new Map<string, { progress?: TaskMigrationView['progress'] }>();
+interface RunningCopy {
+  progress?: TaskMigrationView['progress'];
+  /** The target may commit from here on; cancelling would orphan its copy. */
+  committing?: boolean;
+  cancelRequested?: boolean;
+  /** Aborted together with cancelRequested so the file in flight stops, not just the next checkpoint. */
+  abort: AbortController;
+}
+const running = new Map<string, RunningCopy>();
+/** The target's cause never crosses the wire (only its code does), so keep it in this log. */
+const logTargetFailure =
+  (action: 'preflight' | 'receive', copyId: string | null) =>
+  (error: unknown): never => {
+    log.warn('task copy target step failed', {
+      action,
+      copyId,
+      code: errorCode(error),
+      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    });
+    throw error;
+  };
 const errorCode = (error: unknown): string => {
   if ((error as NodeJS.ErrnoException)?.code === 'ENOSPC') return 'MIGRATION_NO_SPACE';
   const message = error instanceof Error ? error.message : '';
@@ -127,9 +173,17 @@ async function invoke(
   scope: Scope,
 ): Promise<TaskMigrationView> {
   scope.assertCurrent();
-  const response = await remoteInvoke(device, TASK_MIGRATION_CHANNEL, [request], {
-    preSend: scope.assertCurrent,
-  });
+  let response: Awaited<ReturnType<typeof remoteInvoke>>;
+  try {
+    response = await remoteInvoke(device, TASK_MIGRATION_CHANNEL, [request], {
+      preSend: scope.assertCurrent,
+    });
+  } catch (error) {
+    // The source may still be working; tell the user it was slow, not that it is offline.
+    if (error instanceof DeviceLinkError && error.code === 'INVOKE_TIMEOUT')
+      throw new Error('MIGRATION_TIMEOUT');
+    throw error;
+  }
   scope.assertCurrent();
   if (!response.ok)
     throw new Error(
@@ -143,19 +197,33 @@ async function invoke(
   return result;
 }
 function view(scope: Scope, record: MigrationRecord | null): TaskMigrationView {
+  const live = record ? running.get(`${scope.root}:${record.sessionId}`) : undefined;
   return {
     supported: true,
     deviceId: selfId(),
     ...(record
       ? {
           stage: record.stage,
-          running: running.has(`${scope.root}:${record.sessionId}`),
-          progress: running.get(`${scope.root}:${record.sessionId}`)?.progress,
+          running: !!live,
+          progress: live?.progress,
+          ...(live?.cancelRequested
+            ? { cancelling: true as const }
+            : live && !live.committing && record.kind === 'outgoing'
+              ? { cancellable: true as const }
+              : {}),
           ...(record.kind === 'outgoing'
             ? {
                 targetDeviceId: record.targetDeviceId,
                 targetSessionId: record.targetSessionId,
                 ...(record.error ? { error: record.error } : {}),
+                ...(record.error && record.errorPath ? { errorPath: record.errorPath } : {}),
+                ...(record.skipped ? { skipped: record.skipped } : {}),
+                ...(record.error &&
+                record.errorSize &&
+                Number.isSafeInteger(record.errorSize.needed) &&
+                Number.isSafeInteger(record.errorSize.limit)
+                  ? { errorSize: record.errorSize }
+                  : {}),
               }
             : {}),
         }
@@ -166,6 +234,7 @@ function view(scope: Scope, record: MigrationRecord | null): TaskMigrationView {
 interface SourceSession {
   id: string;
   workingDir: string;
+  workspaceKind: string;
   remoteHostId: string | null;
   status: string;
   source: string;
@@ -179,7 +248,7 @@ async function assertSource(
   worker = false,
 ): Promise<SourceSession> {
   const row = await scope.db.queryOne<SourceSession>(
-    'SELECT id, working_dir AS workingDir, remote_host_id AS remoteHostId, status, source, orca_role AS orcaRole, agent_kind AS agentKind, updated_at AS updatedAt FROM sessions WHERE id = ?',
+    'SELECT id, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, status, source, orca_role AS orcaRole, agent_kind AS agentKind, updated_at AS updatedAt FROM sessions WHERE id = ?',
     [sessionId],
   );
   scope.assertCurrent();
@@ -237,6 +306,124 @@ async function sourceGroup(scope: Scope, sessionId: string): Promise<SourceSessi
 interface WorkspaceBundle extends PortableWorkspace {
   additionalWorkspaces?: PortableWorkspace[];
   workers?: Array<{ sourceSessionId: string; sessionId: string; workspace: number }>;
+  /**
+   * Native transcripts sent beside the package (`files.transcripts`, same order): `path` is the
+   * transcript ref they stand for, `file` the staged name in the outgoing directory.
+   */
+  transcripts?: Array<{ path: string; file: string; bytes: number }>;
+  /**
+   * Where a copy lands when no target project is chosen: the dialogue workspace, or a new project
+   * at the source folder's path under the home directory. Older sources omit it.
+   */
+  destination?: { kind: 'dialogue' } | { kind: 'project'; path: string[] };
+}
+function copyDestination(lead: SourceSession): NonNullable<WorkspaceBundle['destination']> {
+  if (lead.workspaceKind === 'dialogue') return { kind: 'dialogue' };
+  // A task in a worktree belongs to the project the sidebar groups it under.
+  const project = collapseWorktreeDirForGrouping(lead.workingDir);
+  const relative = path.relative(app.getPath('home'), project);
+  const segments = relative ? relative.split(path.sep) : [];
+  return {
+    kind: 'project',
+    path:
+      segments.length && segments[0] !== '..' && !path.isAbsolute(relative)
+        ? segments
+        : [path.basename(project)],
+  };
+}
+const folderName = (name: unknown): name is string =>
+  typeof name === 'string' &&
+  name.length > 0 &&
+  name.length <= 255 &&
+  name !== '.' &&
+  name !== '..' &&
+  !/[\\/\0]/.test(name) &&
+  (process.platform !== 'win32' || !/[<>:"|?*\x00-\x1f]|[. ]$/.test(name));
+interface Placement {
+  parent: string;
+  name: string;
+  project?: true;
+  /** Makes `parent` usable; rejects when this place cannot hold the copy. */
+  prepare(): Promise<unknown>;
+}
+/**
+ * Places a copy may land, in order. A chosen project or the dialogue workspace is the only place.
+ * A new project mirrors the source path under home, then tries the source folder name alone,
+ * then an app-managed folder, which is also where copies from older sources land.
+ */
+function placements(
+  scope: Scope,
+  request: { id: string; targetProject: string | null },
+  destination: WorkspaceBundle['destination'],
+): Placement[] {
+  const managedName = `cindy-${request.id.slice(0, 8)}-${randomUUID()}`;
+  if (request.targetProject)
+    return [{ parent: request.targetProject, name: managedName, prepare: async () => {} }];
+  if (destination?.kind === 'dialogue') {
+    const { directory, isCustomized } = readDialogueWorkspaceSettings();
+    const parent = path.join(directory, dialogueWorkspaceDayKey(Date.now()));
+    return [
+      {
+        parent,
+        name: request.id,
+        // A custom root is never recreated: an unmounted volume may leave a writable mount point.
+        prepare: () =>
+          fs
+            .mkdir(parent, { recursive: !isCustomized })
+            .catch(async (error: NodeJS.ErrnoException) => {
+              if (error.code !== 'EEXIST' || !(await fs.stat(parent)).isDirectory()) throw error;
+            }),
+      },
+    ];
+  }
+  const managed = path.join(scope.root, 'projects');
+  const fallback: Placement = {
+    parent: managed,
+    name: managedName,
+    prepare: () => fs.mkdir(managed, { recursive: true, mode: 0o700 }),
+  };
+  if (destination?.kind !== 'project' || !Array.isArray(destination.path)) return [fallback];
+  const segments = destination.path;
+  return [
+    ...[segments.length <= 32 ? segments : [], segments.slice(-1)]
+      .filter((candidate) => candidate.length && candidate.every(folderName))
+      .map((candidate): Placement => {
+        const parent = path.join(app.getPath('home'), ...candidate.slice(0, -1));
+        return {
+          parent,
+          name: candidate[candidate.length - 1],
+          project: true,
+          prepare: () => fs.mkdir(parent, { recursive: true }),
+        };
+      }),
+    fallback,
+  ];
+}
+/**
+ * Creates the copy folder at the first place that accepts it. `mkdir` is the reservation: an
+ * existing entry is never reused (`name`, then `name 2`…), so concurrent copies cannot share one.
+ * Any other failure, such as a parent that is a file or a name the file system rejects, moves on.
+ */
+async function createWorkingDir(places: Placement[]): Promise<{ dir: string; place: Placement }> {
+  let failure: unknown = new Error('MIGRATION_TARGET_UNKNOWN');
+  for (const place of places) {
+    try {
+      await place.prepare();
+      // Each EEXIST is another existing entry, so numbering ends within the folder's entries.
+      for (let n = 1; ; n++) {
+        const dir = path.join(place.parent, n === 1 ? place.name : `${place.name} ${n}`);
+        try {
+          await fs.mkdir(dir);
+          return { dir, place };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+      }
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw failure;
 }
 const workspaces = (workspace: WorkspaceBundle) => [
   workspace,
@@ -253,6 +440,7 @@ const transferFiles = (files: MigrationFiles) => [
     entry.workspace,
     ...(entry.repository ? [entry.repository] : []),
   ]),
+  ...(files.transcripts ?? []),
 ];
 
 async function prepare(scope: Scope, record: MigrationHandoff) {
@@ -285,6 +473,8 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
           await Promise.all(members.map((member) => physicalWorktreeKey(member.workingDir))),
         ),
       ];
+      // A task inside another managed worktree under a copied root does not touch copied files.
+      const excluded = await Promise.all(sourceKeys.map(managedWorktreeExclusions));
       for (const session of getMakerIfReady()?.listActiveSessions() ?? []) {
         if (!session.isTurnRunning() && !sourceBoundary!.isBusy(session.id)) continue;
         const row = await scope.db.queryOne<{
@@ -298,9 +488,10 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
           const key = await physicalWorktreeKey(row.workingDir);
           if (
             sourceKeys.some(
-              (sourceKey) =>
+              (sourceKey, index) =>
                 key === sourceKey ||
-                key.startsWith(sourceKey + path.sep) ||
+                (key.startsWith(sourceKey + path.sep) &&
+                  !isExcludedFromWorkspace(sourceKey, key, excluded[index])) ||
                 sourceKey.startsWith(key + path.sep),
             )
           )
@@ -312,21 +503,65 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
       scope.assertCurrent();
       if (members.some((member) => sourceBoundary!.isBusy(member.id)))
         throw new Error('MIGRATION_TASK_RUNNING');
+      // Decided per preparation (not at start), so retrying after updating the target uses it.
+      const external =
+        (await invoke(record.targetDeviceId, { action: 'caps' }, scope)).externalTranscripts ===
+        true;
       const result = await exportSessionShare({
         sessionId: record.sessionId,
         targetPath: path.join(directory, 'session.cshare'),
         sizeLimitBytes: memoryBudget(),
         migration: true,
+        ...(external
+          ? {
+              externalTranscripts: { dir: directory, minBytes: EXTERNAL_TRANSCRIPT_MIN_BYTES },
+            }
+          : {}),
       });
       scope.assertCurrent();
-      if (result.status === 'oversize') throw new Error('MIGRATION_NO_MEMORY');
-      if (result.status !== 'ok' || result.fidelity !== 'full' || result.mediaMissing)
+      if (result.status === 'oversize') {
+        const { status: _status, ...sizes } = result;
+        log.warn('task copy package exceeds the memory budget', {
+          copyId: record.id,
+          externalTranscripts: external,
+          ...sizes,
+          budget: memoryBudgetDetail(),
+        });
+        // An older target needs transcripts inside the package. Ask to update it only when the
+        // transcripts an updated target would move out actually bring the package within budget.
+        const movable = (result.transcriptFileBytes ?? [])
+          .filter((bytes) => bytes >= EXTERNAL_TRANSCRIPT_MIN_BYTES)
+          .reduce((sum, bytes) => sum + bytes, 0);
+        if (!external && movable > 0 && result.totalBytes - movable <= result.limitBytes)
+          throw new Error('MIGRATION_UNSUPPORTED');
+        throw new MigrationSizeError('MIGRATION_NO_MEMORY', result.totalBytes, result.limitBytes);
+      }
+      if (result.status !== 'ok' || result.fidelity !== 'full' || result.mediaDropped)
         throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
+      // The target rejects more transcripts than the protocol allows; stop before uploading them.
+      if ((result.externalTranscripts?.length ?? 0) > TASK_MIGRATION_MAX_TRANSCRIPTS)
+        throw new Error('MIGRATION_NO_MEMORY');
       const snapshots: PortableWorkspace[] = [];
-      for (const [index, dir] of sourceKeys.entries())
-        snapshots.push(
-          await snapshotWorkspace(dir, workspaceDirectory(directory, index), record.id),
+      const skipped: SkippedEntry[] = [];
+      for (const [index, dir] of sourceKeys.entries()) {
+        const { skipped: left, ...snapshot } = await snapshotWorkspace(
+          dir,
+          workspaceDirectory(directory, index),
+          record.id,
         );
+        snapshots.push(snapshot);
+        // Other members' worktrees are named by folder; the task's own paths stay project-relative.
+        for (const entry of left)
+          skipped.push(index ? { ...entry, path: `${path.basename(dir)}/${entry.path}` } : entry);
+      }
+      if (skipped.length)
+        log.warn('task copy leaves entries behind', {
+          copyId: record.id,
+          count: skipped.length,
+        });
+      record.skipped = skipped.length
+        ? { total: skipped.length, entries: skipped.slice(0, MAX_REPORTED_SKIPPED) }
+        : undefined;
       // Copy does not freeze input. Discard preparation if the task or team changed
       // while capturing conversation and files, including a turn that already finished.
       await sourceBoundary!.drain();
@@ -334,6 +569,16 @@ async function prepare(scope: Scope, record: MigrationHandoff) {
         throw new Error('MIGRATION_SOURCE_CHANGED');
       const workspace: WorkspaceBundle = {
         ...snapshots[0],
+        destination: copyDestination(members[0]),
+        ...(result.externalTranscripts?.length
+          ? {
+              transcripts: result.externalTranscripts.map(({ path: ref, file, bytes }) => ({
+                path: ref,
+                file,
+                bytes,
+              })),
+            }
+          : {}),
         ...(record.workers
           ? {
               additionalWorkspaces: snapshots.slice(1),
@@ -362,20 +607,31 @@ async function sendFile(
   file: string,
   artifacts = path.dirname(file),
   onProgress?: (bytes: number) => void,
+  signal?: AbortSignal,
 ): Promise<MigrationFile> {
   const space = await fs.statfs(path.dirname(file));
   const partBytes = Math.floor(
     Math.min(FILE_PEER_MAX_BYTES, MAX_MEDIA_BYTES, (space.bavail * space.bsize) / 4),
   );
   let completed = 0;
-  return sendParts(file, partBytes, async (part) => {
-    const result = await sendPart(scope, device, part, artifacts, (bytes) =>
-      onProgress?.(completed + bytes),
-    );
-    completed += result.size;
-    onProgress?.(completed);
-    return result;
-  });
+  return sendParts(
+    file,
+    partBytes,
+    async (part) => {
+      const result = await sendPart(
+        scope,
+        device,
+        part,
+        artifacts,
+        (bytes) => onProgress?.(completed + bytes),
+        signal,
+      );
+      completed += result.size;
+      onProgress?.(completed);
+      return result;
+    },
+    signal,
+  );
 }
 async function sendPart(
   scope: Scope,
@@ -383,6 +639,7 @@ async function sendPart(
   file: string,
   artifacts: string,
   onProgress?: (bytes: number) => void,
+  signal?: AbortSignal,
 ): Promise<MigrationFileRef> {
   scope.assertCurrent();
   const peer = await tryUploadPeerAttachment(
@@ -392,6 +649,7 @@ async function sendPart(
     (deviceId, channel, args) =>
       remoteInvoke(deviceId, channel, args, { preSend: scope.assertCurrent }),
     onProgress,
+    signal,
   );
   scope.assertCurrent();
   if (peer) {
@@ -400,11 +658,16 @@ async function sendPart(
     return { ref: peer, size: result.size, sha256: result.sha256 };
   }
   onProgress?.(0); // OSS fallback starts this part again, not a second completed part.
-  const result = await uploadLocalFile(file, { maxBytes: (await fs.stat(file)).size, onProgress });
-  scope.assertCurrent();
+  const result = await uploadLocalFile(file, {
+    maxBytes: (await fs.stat(file)).size,
+    onProgress,
+    signal,
+  });
+  // Record the upload before the checkpoint so a cancelled copy still deletes it.
   const keysFile = path.join(artifacts, 'transfer-keys.json');
   const keys = JSON.parse(readAtomicFileSync(keysFile) ?? '[]') as string[];
   atomicWriteFileSync(keysFile, JSON.stringify([...keys, result.key]));
+  scope.assertCurrent();
   return {
     ref: buildAttachmentOssRef({ ossKey: result.key, size: result.size, sha256: result.sha256 }),
     size: result.size,
@@ -417,6 +680,7 @@ async function preflight(
   workspace: WorkspaceBundle,
   directory: string,
 ) {
+  const statSize = async (name: string) => (await fs.stat(path.join(directory, name))).size;
   const sizes = await Promise.all(
     [
       'session.cshare',
@@ -425,10 +689,15 @@ async function preflight(
         path.join(index ? String(index) : '', entry.archive.file),
         ...(entry.git ? [path.join(index ? String(index) : '', 'repository.bundle')] : []),
       ]),
-    ].map(async (name) => (await fs.stat(path.join(directory, name))).size),
+    ].map(statSize),
   );
+  const transcriptSizes = await Promise.all(
+    (workspace.transcripts ?? []).map((transcript) => statSize(transcript.file)),
+  );
+  const transcriptBytes = transcriptSizes.reduce((a, b) => a + b, 0);
   const resources: MigrationResources = {
-    transferBytes: sizes.reduce((a, b) => a + b, 0),
+    ...(transcriptSizes.length ? { transcriptBytes } : {}),
+    transferBytes: sizes.reduce((a, b) => a + b, 0) + transcriptBytes,
     unpackedBytes: workspaces(workspace).reduce((sum, entry) => sum + entry.unpackedBytes, 0),
     contextBytes: Math.max(workspace.contextBytes ?? sizes[0], sizes[0]),
     manifestBytes: sizes[1],
@@ -457,6 +726,8 @@ async function preflight(
 async function checkTargetResources(
   scope: Scope,
   targetProject: string | null,
+  /** Where the files land; null before the target knows (the receive step checks it again). */
+  destination: string | null,
   resources: MigrationResources,
 ) {
   if (targetProject && !(await projects(scope)).includes(targetProject))
@@ -465,24 +736,38 @@ async function checkTargetResources(
   await fs.mkdir(scope.root, { recursive: true });
   await assertDiskCapacity([
     { path: scope.root, bytes: resources.transferBytes * 2 + resources.contextBytes * 2 },
-    {
-      path: targetProject ?? scope.root,
-      bytes: resources.unpackedBytes + resources.repositoryBytes * 3 + resources.entries * 4096,
-    },
+    ...(destination
+      ? [
+          {
+            path: destination,
+            bytes:
+              resources.unpackedBytes + resources.repositoryBytes * 3 + resources.entries * 4096,
+          },
+        ]
+      : []),
     {
       path: app.getPath('temp'),
       bytes: Math.min(resources.transferBytes, FILE_PEER_MAX_BYTES) * 2,
     },
+    // Restored native transcripts land under the user's agent homes (codex-home, ~/.claude, Pi).
+    ...(resources.transcriptBytes
+      ? [{ path: app.getPath('home'), bytes: resources.transcriptBytes }]
+      : []),
   ]);
   scope.assertCurrent();
 }
 async function transfer(scope: Scope, record: MigrationHandoff) {
+  const live = running.get(`${scope.root}:${record.sessionId}`)!;
+  // A retried transfer may follow a lost receive reply; until the target proves it has
+  // no receipt for this copy, it may be importing or already committed.
+  live.committing = true;
   const existing = await invoke(
     record.targetDeviceId,
     { action: 'receipt', id: record.id, sourceSessionId: record.sessionId },
     scope,
   );
   if (existing.stage === 'active') return;
+  if (!existing.stage) live.committing = false;
   const directory = path.join(scope.root, 'outgoing', record.id);
   const workspace = JSON.parse(
     readAtomicFileSync(path.join(directory, 'workspace.json')) ?? 'null',
@@ -501,7 +786,6 @@ async function transfer(scope: Scope, record: MigrationHandoff) {
   }
   scope.assertCurrent();
   const resources = await preflight(scope, record, workspace, directory);
-  const live = running.get(`${scope.root}:${record.sessionId}`)!;
   const startedAt = Date.now();
   let completed = 0;
   live.progress = {
@@ -511,15 +795,22 @@ async function transfer(scope: Scope, record: MigrationHandoff) {
     bytesPerSecond: 0,
   };
   const send = async (file: string, artifacts = path.dirname(file)) => {
-    const result = await sendFile(scope, record.targetDeviceId, file, artifacts, (bytes) => {
-      const sentBytes = Math.min(resources.transferBytes, completed + bytes);
-      live.progress = {
-        phase: 'sending',
-        sentBytes,
-        totalBytes: resources.transferBytes,
-        bytesPerSecond: (sentBytes * 1000) / Math.max(1, Date.now() - startedAt),
-      };
-    });
+    const result = await sendFile(
+      scope,
+      record.targetDeviceId,
+      file,
+      artifacts,
+      (bytes) => {
+        const sentBytes = Math.min(resources.transferBytes, completed + bytes);
+        live.progress = {
+          phase: 'sending',
+          sentBytes,
+          totalBytes: resources.transferBytes,
+          bytesPerSecond: (sentBytes * 1000) / Math.max(1, Date.now() - startedAt),
+        };
+      },
+      live.abort.signal,
+    );
     completed += result.size;
     return result;
   };
@@ -547,7 +838,14 @@ async function transfer(scope: Scope, record: MigrationHandoff) {
       });
     }
   }
+  if (workspace.transcripts?.length) {
+    files.transcripts = [];
+    for (const transcript of workspace.transcripts)
+      files.transcripts.push(await send(path.join(directory, transcript.file)));
+  }
   live.progress = { ...live.progress!, phase: 'finishing', bytesPerSecond: 0 };
+  // A cancel accepted before this point still aborts in invoke's preSend check.
+  live.committing = true;
   const result = await invoke(
     record.targetDeviceId,
     {
@@ -579,7 +877,20 @@ async function cleanupOutgoing(scope: Scope, record: MigrationHandoff) {
 function launch(scope: Scope, record: MigrationHandoff & { kind: 'outgoing' }) {
   const key = `${scope.root}:${record.sessionId}`;
   if (running.has(key)) return;
-  running.set(key, {});
+  // See transfer(): a resumed transfer stays non-cancellable until its receipt is checked.
+  const live: RunningCopy = {
+    committing: record.stage !== 'preparing',
+    abort: new AbortController(),
+  };
+  running.set(key, live);
+  // Every existing checkpoint doubles as a cancellation point for this copy.
+  const copyScope: Scope = {
+    ...scope,
+    assertCurrent: () => {
+      scope.assertCurrent();
+      if (live.cancelRequested) throw new Error('MIGRATION_CANCELLED');
+    },
+  };
   void withCrossProcessLock(
     path.join(scope.root, `source-${record.sessionId}.lock`),
     { label: 'task-migration', waitMs: 0 },
@@ -587,21 +898,57 @@ function launch(scope: Scope, record: MigrationHandoff & { kind: 'outgoing' }) {
       if (!lock.held) return;
       const current = scope.read(record.sessionId);
       if (!current || current.kind !== 'outgoing' || current.id !== record.id) return;
-      await advanceHandoff(current, {
-        assertCurrent: scope.assertCurrent,
-        save: async (next) => scope.save({ ...next, kind: 'outgoing' }),
-        prepare: (r) => prepare(scope, r),
-        import: (r) => transfer(scope, r),
-        cleanup: (r) => cleanupOutgoing(scope, r),
-      });
+      try {
+        await advanceHandoff(current, {
+          assertCurrent: copyScope.assertCurrent,
+          save: async (next) => scope.save({ ...next, kind: 'outgoing' }),
+          prepare: (r) => prepare(copyScope, r),
+          import: (r) => transfer(copyScope, r),
+          cleanup: (r) => cleanupOutgoing(copyScope, r),
+        });
+      } catch (error) {
+        if (!live.cancelRequested) throw error;
+        // Same cleanup as cancelling a stopped copy, still under this copy's lock.
+        scope.assertCurrent();
+        const latest = scope.read(record.sessionId);
+        if (latest?.kind !== 'outgoing' || latest.id !== record.id) return;
+        await cleanupOutgoing(scope, latest);
+        scope.assertCurrent();
+        scope.save({
+          ...latest,
+          stage: 'cancelled',
+          error: undefined,
+          errorPath: undefined,
+          errorSize: undefined,
+        });
+      }
     },
   )
     .catch((error) => {
+      // The journal keeps the code and any blamed entry; the cause (git stderr, fs errno) exists only here.
+      log.warn('task copy failed', {
+        copyId: record.id,
+        code: errorCode(error),
+        error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        ...(error instanceof GitExecError
+          ? { gitArgs: error.args.slice(0, 2).join(' '), stderr: error.stderr.slice(0, 2000) }
+          : {}),
+      });
       try {
         scope.assertCurrent();
         const latest = scope.read(record.sessionId);
         if (latest?.kind === 'outgoing' && latest.id === record.id)
-          scope.save({ ...latest, error: errorCode(error) });
+          scope.save({
+            ...latest,
+            error: errorCode(error),
+            // A name can be up to 4096 characters; the start is enough to find it.
+            errorPath:
+              error instanceof MigrationPathError ? error.relPath.slice(0, 1024) : undefined,
+            errorSize:
+              error instanceof MigrationSizeError
+                ? { needed: error.neededBytes, limit: error.limitBytes }
+                : undefined,
+          });
       } catch {
         /* Preserve the old-owner journal; never write under a replacement account. */
       }
@@ -663,43 +1010,15 @@ async function receive(
           );
           if (row?.workingDir !== worker.workingDir) throw new Error('MIGRATION_ID_CONFLICT');
         }
-        record = { ...record, stage: 'active' } as IncomingMigration;
-        scope.save(record);
-        for (const id of [record.sessionId, ...(record.workers ?? []).map((w) => w.sessionId)])
-          emitSessionCreated(id);
-        return view(scope, record);
+        return activate(scope, record);
       }
       const knownProjects = await projects(scope);
       if (request.targetProject && !knownProjects.includes(request.targetProject))
         throw new Error('MIGRATION_TARGET_UNKNOWN');
-      const parent = request.targetProject ?? path.join(scope.root, 'projects');
-      if (request.targetProject) {
-        if (!(await fs.stat(parent)).isDirectory()) throw new Error('MIGRATION_TARGET_UNKNOWN');
-      } else await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+      if (request.targetProject && !(await fs.stat(request.targetProject)).isDirectory())
+        throw new Error('MIGRATION_TARGET_UNKNOWN');
       scope.assertCurrent();
-      // Each failed attempt owns only its new directory. It never replaces a user's existing folder.
-      const workingDir = path.join(parent, `cindy-${request.id.slice(0, 8)}-${randomUUID()}`);
-      const retainedWorkingDirs = record
-        ? [
-            ...new Set([
-              ...(record.retainedWorkingDirs ?? []),
-              record.workingDir,
-              ...(record.workers ?? []).map((worker) => worker.workingDir),
-            ]),
-          ]
-        : [];
-      record = {
-        kind: 'incoming',
-        id: request.id,
-        sessionId: request.id,
-        sourceDeviceId: peer,
-        sourceSessionId: request.sourceSessionId,
-        stage: 'receiving',
-        workingDir,
-        ...(retainedWorkingDirs.length ? { retainedWorkingDirs } : {}),
-      };
-      scope.save(record);
-      await fs.mkdir(workingDir);
+      const previous = record;
       try {
         await fs.mkdir(directory, { recursive: true, mode: 0o700 });
         assertMemoryCapacity(request.files.manifest.size);
@@ -751,7 +1070,67 @@ async function receive(
           )
         )
           throw new Error('MIGRATION_INVALID_MANIFEST');
-        await checkTargetResources(scope, request.targetProject, {
+        // Each delivered transcript is listed once, in order, with its transcript ref path.
+        const transcripts = workspace.transcripts ?? [];
+        const transcriptFiles = request.files.transcripts ?? [];
+        if (
+          !Array.isArray(transcripts) ||
+          transcripts.length !== transcriptFiles.length ||
+          new Set(transcripts.map((transcript) => transcript?.path)).size !== transcripts.length ||
+          transcripts.some(
+            (transcript, index) =>
+              !transcript ||
+              typeof transcript.path !== 'string' ||
+              !transcript.path ||
+              transcript.path.length > 1024 ||
+              transcript.bytes !== transcriptFiles[index].size,
+          )
+        )
+          throw new Error('MIGRATION_INVALID_MANIFEST');
+        // Each failed attempt owns only its new directory. It never replaces a user's existing folder.
+        // The record names a folder only after this copy created it, so a retry may reuse its own
+        // still-empty folder rather than leaving `name 2` behind. (A process exit between creating
+        // and recording leaves at most one empty folder.)
+        const places = placements(scope, request, workspace.destination);
+        const own = previous
+          ? places.find((place) => place.parent === path.dirname(previous.workingDir))
+          : undefined;
+        const reused =
+          own &&
+          previous &&
+          (await fs.readdir(previous.workingDir).then(
+            (entries) => entries.length === 0,
+            () => false,
+          ))
+            ? { dir: previous.workingDir, place: own }
+            : null;
+        const { dir: workingDir, place } = reused ?? (await createWorkingDir(places));
+        scope.assertCurrent();
+        const retainedWorkingDirs = previous
+          ? [
+              ...new Set([
+                ...(previous.retainedWorkingDirs ?? []),
+                previous.workingDir,
+                ...(previous.workers ?? []).map((worker) => worker.workingDir),
+              ]),
+            ].filter((dir) => dir !== workingDir)
+          : [];
+        record = {
+          kind: 'incoming',
+          id: request.id,
+          sessionId: request.id,
+          sourceDeviceId: peer,
+          sourceSessionId: request.sourceSessionId,
+          stage: 'receiving',
+          workingDir,
+          ...(place.project ? { newProject: true } : {}),
+          ...(retainedWorkingDirs.length ? { retainedWorkingDirs } : {}),
+        };
+        scope.save(record);
+        await checkTargetResources(scope, request.targetProject, path.dirname(workingDir), {
+          ...(transcriptFiles.length
+            ? { transcriptBytes: transcriptFiles.reduce((sum, file) => sum + file.size, 0) }
+            : {}),
           transferBytes: transferFiles(request.files).reduce((sum, file) => sum + file.size, 0),
           unpackedBytes: snapshots.reduce((sum, entry) => sum + entry.unpackedBytes, 0),
           contextBytes: Math.max(
@@ -769,16 +1148,19 @@ async function receive(
           ),
         });
         const targetDirs = [workingDir];
+        // Worker folders stay app-managed unless the user chose a project for the copy.
+        const workerParent = request.targetProject ?? path.join(scope.root, 'projects');
+        if (snapshots.length > 1) await fs.mkdir(workerParent, { recursive: true, mode: 0o700 });
         for (let index = 1; index < snapshots.length; index++) {
-          const target = path.join(parent, `cindy-${request.id.slice(0, 8)}-${randomUUID()}`);
+          const dir = path.join(workerParent, `cindy-${request.id.slice(0, 8)}-${randomUUID()}`);
           // Persist intent before allocation: even a process exit cannot orphan a directory.
           record = {
             ...record,
-            retainedWorkingDirs: [...(record.retainedWorkingDirs ?? []), target],
+            retainedWorkingDirs: [...(record.retainedWorkingDirs ?? []), dir],
           };
           scope.save(record);
-          await fs.mkdir(target);
-          targetDirs.push(target);
+          await fs.mkdir(dir);
+          targetDirs.push(dir);
         }
         record = {
           ...record,
@@ -804,6 +1186,13 @@ async function receive(
           await restoreWorkspace(entry, dir, targetDirs[index]);
         }
         await receiveFile(scope, request.files.session, path.join(directory, 'session.cshare'));
+        // Names come from the index, never from the source-supplied ref paths.
+        const externalTranscripts = new Map<string, string>();
+        for (const [index, transcript] of transcripts.entries()) {
+          const file = path.join(directory, `transcript-${index}.jsonl`);
+          await receiveFile(scope, transcriptFiles[index], file);
+          externalTranscripts.set(transcript.path, file);
+        }
         scope.assertCurrent();
         const inspected = await inspectShareFile(path.join(directory, 'session.cshare'), {
           resourceBudgetBytes: memoryBudget(),
@@ -859,7 +1248,13 @@ async function receive(
               dbClient: scope.db,
               assertStillValid: scope.assertCurrent,
               refCompensationScope: captureMediaRefCompensationScope(),
-              migration: { sessionId: request.id, workingDir, workers: record.workers, agentPrefs },
+              migration: {
+                sessionId: request.id,
+                workingDir,
+                workers: record.workers,
+                agentPrefs,
+                externalTranscripts,
+              },
             },
           );
           if (result.fidelity !== 'full') throw new Error('MIGRATION_INCOMPLETE_CONTEXT');
@@ -872,13 +1267,21 @@ async function receive(
         await fs.rm(directory, { recursive: true, force: true });
       }
       scope.assertCurrent();
-      record = { ...record, stage: 'active' } as IncomingMigration;
-      scope.save(record);
-      for (const id of [record.sessionId, ...(record.workers ?? []).map((w) => w.sessionId)])
-        emitSessionCreated(id);
-      return view(scope, record);
+      return activate(scope, record);
     },
   );
+}
+/** Publishes an imported copy, including one adopted after its acknowledgement was lost. */
+async function activate(scope: Scope, record: IncomingMigration) {
+  // A new project joins the recent projects, like a task started in a chosen folder.
+  if (record.newProject)
+    await upsertRecentWorkdir(record.workingDir, Date.now(), undefined, scope.db);
+  scope.assertCurrent();
+  const active: IncomingMigration = { ...record, stage: 'active' };
+  scope.save(active);
+  for (const id of [active.sessionId, ...(active.workers ?? []).map((w) => w.sessionId)])
+    emitSessionCreated(id);
+  return view(scope, active);
 }
 
 export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationView> {
@@ -908,8 +1311,19 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
       await Promise.all(members.map((member) => physicalWorktreeKey(member.workingDir))),
     );
     const estimate = { fileCount: 0, bytes: 0 };
+    // Same budget as the remote wait, enforced here so a local or orphaned scan also stops.
+    const deadline = Date.now() + TASK_MIGRATION_ESTIMATE_TIMEOUT_MS;
+    const check = () => {
+      scope.assertCurrent();
+      if (Date.now() > deadline) throw new Error('MIGRATION_TIMEOUT');
+    };
     for (const root of roots) {
-      const next = await estimateWorkspace(root, scope.assertCurrent);
+      // The cap covers every copied directory together.
+      const next = await estimateWorkspace(
+        root,
+        check,
+        TASK_MIGRATION_MAX_FILES - estimate.fileCount,
+      );
       estimate.fileCount += next.fileCount;
       estimate.bytes += next.bytes;
     }
@@ -917,7 +1331,13 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
     return { ...view(scope, null), estimate };
   }
   if (request.action === 'preflight') {
-    await checkTargetResources(scope, request.targetProject, request.resources);
+    await checkTargetResources(
+      scope,
+      request.targetProject,
+      // Without a chosen project the landing folder depends on the task the manifest describes.
+      request.targetProject,
+      request.resources,
+    ).catch(logTargetFailure('preflight', null));
     return view(scope, null);
   }
   if (request.action === 'caps') {
@@ -927,6 +1347,7 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
       ...view(scope, null),
       projects: await projects(scope),
       teamMigration: true,
+      externalTranscripts: true,
       copyEstimate: true,
       agents: (['cc', 'codex', 'pi'] as const).filter(
         (agent) => !!pickEnabledFallbackModel(providers, agent === 'cc' ? 'claude-code' : agent),
@@ -936,7 +1357,8 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
   if (request.action === 'receive' || request.action === 'receipt') {
     const peer = getDeviceLinkInvokeContext()?.controllerDeviceId;
     if (!peer || isSharedTaskPeer(peer)) throw new Error('MIGRATION_ACCESS_REVOKED');
-    if (request.action === 'receive') return receive(scope, request, peer);
+    if (request.action === 'receive')
+      return receive(scope, request, peer).catch(logTargetFailure('receive', request.id));
     const record = scope.readIncoming(request.id);
     if (request.action === 'receipt') {
       if (
@@ -949,6 +1371,16 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
     throw new Error('MIGRATION_INVALID_REQUEST');
   }
   if (request.action === 'status') return view(scope, scope.read(request.sessionId));
+  if (request.action === 'cancel') {
+    // A running copy holds the source lock; signal it instead of waiting for the lock.
+    const live = running.get(`${scope.root}:${request.sessionId}`);
+    if (live) {
+      if (live.committing) throw new Error('MIGRATION_CANNOT_CANCEL');
+      live.cancelRequested = true;
+      live.abort.abort();
+      return view(scope, scope.read(request.sessionId));
+    }
+  }
   await fs.mkdir(scope.root, { recursive: true, mode: 0o700 });
   scope.assertCurrent();
   const initialMembers =
@@ -972,7 +1404,8 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
               running.has(`${scope.root}:${record.sessionId}`)
             )
               throw new Error('MIGRATION_CANNOT_CANCEL');
-            const cancelled = { ...record, stage: 'cancelled' as const, error: undefined };
+            // Closing a failed copy cancels it; keep its error code as the only trace of why.
+            const cancelled = { ...record, stage: 'cancelled' as const };
             // Keep the journal retryable until its staging data is gone.
             await cleanupOutgoing(scope, record);
             scope.assertCurrent();

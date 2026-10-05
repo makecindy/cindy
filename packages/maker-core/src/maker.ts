@@ -137,6 +137,11 @@ export interface MakerDeps {
    * 零干扰（见 docs/vision-bridge-design.md 层 B）。
    */
   visionBridge?: import('./types/vision-bridge.js').VisionBridgeHook;
+  /**
+   * 可选: Pi / Codex 工具循环疑似命中时的辅助模型复核入口。Claude Code 在 agent 内
+   * 检测,由 AgentDeps.toolLoopReviewer 注入同一实现。缺省 = 疑似即中断。
+   */
+  toolLoopReviewer?: import('./agents/shared/tool-loop-review.js').ToolLoopReviewer;
 }
 
 export interface CreateSessionOptions extends StartSessionOptions {
@@ -442,11 +447,13 @@ export class Maker {
   public readonly makerMemory: MakerMemoryManager | undefined;
   /** 视觉桥钩子（层 B）全局默认（可选）。见 MakerDeps.visionBridge。 */
   protected readonly visionBridge: import('./types/vision-bridge.js').VisionBridgeHook | undefined;
+  private readonly toolLoopReviewer: import('./agents/shared/tool-loop-review.js').ToolLoopReviewer | undefined;
 
   constructor(deps: MakerDeps) {
     this.agents = deps.agents;
     this.storage = deps.storage;
     this.visionBridge = deps.visionBridge;
+    this.toolLoopReviewer = deps.toolLoopReviewer;
     // 不 child 自己名字 — host 传进来的 logger 通常已经命名(如 'maker'),
     // 再 child 'maker' 会变成 'maker/maker'。host 自己决定 root scope 名字。
     this.logger = deps.logger;
@@ -988,6 +995,7 @@ export class Maker {
       remoteHostId: meta.remoteHostId ?? null,
       // 层 B：视觉桥钩子（per-session 优先，否则全局默认；缺省不传 = 零干扰）。
       visionBridge: startOpts.visionBridge ?? this.visionBridge,
+      toolLoopReviewer: this.toolLoopReviewer,
     });
 
     // 当 SDK 回填 sdkSessionId 时持久化

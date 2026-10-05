@@ -337,17 +337,11 @@ export function RunHistoryCard({
                 <DropdownMenuContent
                   align="end"
                   sideOffset={4}
-                  className={cn(
-                    'min-w-[140px] rounded-xl p-1',
-                    'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] text-[var(--msg-assistant-text)]',
-                  )}
+                  className="min-w-[140px]"
                 >
                   <DropdownMenuItem
                     onSelect={() => void onDelete(run)}
-                    className={cn(
-                      'cursor-pointer h-8 px-3 rounded-md text-sm',
-                      'text-[hsl(var(--destructive))] focus:bg-[var(--cmd-palette-item-hover)]',
-                    )}
+                    variant="danger"
                   >
                     <Trash2 size={13} strokeWidth={2} className="mr-2" />
                     {t('scheduler.runs.delete')}

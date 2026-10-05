@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractPayloadToolResultMedia } from '@cindy/maker-shared/payload-summary';
+import { extractPayloadToolResultMedia, extractPayloadToolResultFiles } from '@cindy/maker-shared/payload-summary';
 import {
   MOBILE_HISTORY_PAGE_BYTES, MOBILE_TOOL_RESULT_BYTES,
   projectMobileMessagePage, projectMobileToolMessage, projectMobileToolPush, projectMobileToolResult,
@@ -14,6 +14,52 @@ const tool = (toolName = 'Bash', input: unknown = { command: 'echo hello ' + 'x'
 });
 
 describe('mobile tool projection', () => {
+  it('keeps URLs inside long source literals as text even when the closing quote is truncated', () => {
+    const source = 'const message = "Open xdt-file:///tmp/fixture.pdf '
+      + 'source text '.repeat(1500) + '";';
+    const row = { ...tool('Read'), role: 'tool_result', content: source };
+    const live = projectMobileToolPush('local-db:messages:created', { message: row }) as { message: typeof row };
+    const history = projectMobileMessagePage([row], {}) as typeof row[];
+    expect(live.message).toEqual(history[0]);
+    expect(live.message.content).toContain('const message = "Open');
+    expect(live.message.content).toContain('[remote content truncated');
+    expect(live.message.content).not.toContain('_xdt_model_files');
+    expect(extractPayloadToolResultFiles(live.message.content)).toEqual([]);
+    expect(row.content).toBe(source);
+  });
+  it('keeps large source output as text instead of promoting fixtures to file declarations', () => {
+    const source = "const urls = ['xdt-file://open?path=%2Ftmp%2Ffixture.pdf', 'xdt-file:///tmp/example.html'];\n"
+      + "const path = enabled ? 'xdt-file:///tmp/conditional.pdf' : undefined\n"
+      + "const fallback = candidate || 'xdt-file:///tmp/logical.pdf'\n"
+      + "const paths = names.map(() => 'Open xdt-file:///tmp/callback.pdf')\n"
+      + 'const combined = "prefix" + "xdt-file:///tmp/combined.pdf"\n'
+      + 'path = """Open\nxdt-file:///tmp/triple.pdf"""\n'
+      + 'path = r"xdt-file:///tmp/python.pdf"\nvar path = @"Open xdt-file:///tmp/csharp.pdf"\n'
+      + '// fixture: xdt-file:///tmp/comment.pdf\n/* example: xdt-file:///tmp/block.pdf */\n'
+      + "const list = [/* first */ 'xdt-file:///tmp/a.pdf', // next\n 'xdt-file:///tmp/b.pdf']\n"
+      + '// source 中文\n'.repeat(1500);
+    const row = { ...tool('Read'), role: 'tool_result', content: source };
+    const live = projectMobileToolPush('local-db:messages:created', { message: row }) as { message: typeof row };
+    const history = projectMobileMessagePage([row], {}) as typeof row[];
+    expect(live.message).toEqual(history[0]);
+    expect(live.message.content).toContain('const urls =');
+    expect(live.message.content).toContain('[remote content truncated');
+    expect(live.message.content).not.toContain('_xdt_model_files');
+    expect(extractPayloadToolResultFiles(live.message.content)).toEqual([]);
+    expect(new TextEncoder().encode(live.message.content).byteLength).toBeLessThanOrEqual(MOBILE_TOOL_RESULT_BYTES);
+    expect(row.content).toBe(source);
+  });
+  it('preserves declared real files next to source fixtures during compaction', () => {
+    const url = 'xdt-file:///tmp/report;final}.pdf';
+    const content = JSON.stringify({
+      text: "const fixture = 'xdt-file:///tmp/example.pdf';\n" + '// source\n'.repeat(1500),
+      _xdt_model_files: [{ url, name: 'Report' }],
+    });
+    const projected = projectMobileToolResult(content) as string;
+    expect(JSON.parse(projected)._xdt_model_files).toEqual([{ url, name: 'Report' }]);
+    expect(extractPayloadToolResultFiles(projected)).toEqual([{ url, title: 'Report' }]);
+    expect(new TextEncoder().encode(projected).byteLength).toBeLessThanOrEqual(MOBILE_TOOL_RESULT_BYTES);
+  });
   it('retains bounded plugin call identity while compacting large arguments', () => {
     const projected = projectMobileToolMessage(tool('mcp__cindy__ghost_call', { ghost_id: 'art', tool: 'generate', grant_only: false, args: { data: 'x'.repeat(40_000) } })) as ReturnType<typeof tool>;
     expect(projected.content.input).toEqual({ ghost_id: 'art', tool: 'generate', grant_only: false });

@@ -179,3 +179,35 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
 [`desktop-development.md`](desktop-development.md) 或
 [`mobile-development.md`](mobile-development.md) 选择，并为路径回退、清理和秘密不外泄补
 定向测试。
+
+
+## Cindy 托管的预装技能
+
+内置技能字节仍在 Cindy 的 `shared-system-skills` 中随应用版本管理，当前实例在
+`<userData>/managed-agent-skills/cindy` 中建立私有入口。三套 Harness 分别通过本地
+Claude plugin、Cindy 的 `CODEX_HOME/skills`、Pi 显式 `--skill` 加载；不再安装到
+`~/.agents/skills` 或 `~/.claude/skills`。存量插件技能使用账号隔离的
+`<ghost-install-state>/agent-skills`，继续只指向已批准快照。
+
+运行期清单来自已验证的内置描述符与插件批准快照，不扫描私有投影目录中的占位内容。
+三套 Harness 均加载核验后的物理来源；Codex 在默认及独立账号的 `CODEX_HOME` 中
+逐个挂载这些技能，每次本地任务启动（包括复用 app-server）都刷新实际 home 的入口，
+并通过原生 `skills/list forceReload` 清除旧发现缓存；刷新失败则不提交新线程。
+投影函数统一要求每个托管来源为已建立或保持正确链接；缺失、冲突、扫描环及 I/O 错误
+直接抛出，默认账号、独立账号和复用进程均不能把 warning 当作成功。用户技能兼容根
+仍保留原有 warning 行为，用户实体目录及外来链接不被覆盖。
+不将整个私有目录交给扫描器。Bot 的路径授权与
+Claude/Pi 最终加载使用同一物理来源，目录别名重指不能替换已授权的技能。
+Codex Bot 在刷新原生技能清单后，按启动时冻结的物理路径授权生成线程级开关；
+刷新中新出现或未成功核验的技能默认禁用，无法定位路径的发现错误阻止线程启动。
+
+Pi 将筛选后的物理来源链接到现有会话配置目录内，通过单个 `--skill` 目录参数交给
+原生加载器；技能数量不会增加启动参数长度，`--no-skills` 的 Bot 白名单仍生效。
+入口随会话配置目录一起回收；技能发现、路径解析和建链失败均走同一既有启动失败清理，撤销 MCP 会话路由与
+权限临时文件，不新增全局目录或独立清理机制。
+
+Claude 的插件技能不受 `skillOverrides` 控制，因此每个本地 Query 只将已启用且
+符合 Bot 白名单的技能链接到临时插件入口；关闭 Query 时回收入口，源文件不变。
+
+升级清理只删除可确认由 Cindy 创建的旧软链接，不删除目标内容、不覆盖用户同名
+技能、不修改 Git ignore。旧版本 Cindy 实例仍可能重建旧链接，这是迁移的已知边界。

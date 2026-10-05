@@ -207,6 +207,7 @@ export type IpcErrorCode =
   // device-link(跨设备远程控制)
   | 'DEVICE_LINK_UNAVAILABLE' // relay 不可达 / server 未启用该功能
   | 'DEVICE_LINK_NOT_CONNECTED' // 本机尚未连上 relay(未登录 / 断线中)
+  | 'DEVICE_LINK_BUSY' // 请求队列繁忙，连接仍可能正常
   | 'DEVICE_LINK_STANDBY' // 本实例处于单持有者仲裁的被动态(同机另一实例持有 relay 连接)
   | 'DEVICE_LINK_DEVICE_OFFLINE' // 目标设备离线
   | 'DEVICE_LINK_REMOTE_DISABLED' // 目标设备「允许被控」开关关闭
@@ -447,6 +448,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'FS_BROWSE_FAILED',
   'DEVICE_LINK_UNAVAILABLE',
   'DEVICE_LINK_NOT_CONNECTED',
+  'DEVICE_LINK_BUSY',
   'DEVICE_LINK_STANDBY',
   'DEVICE_LINK_DEVICE_OFFLINE',
   'DEVICE_LINK_REMOTE_DISABLED',

@@ -18,8 +18,8 @@ export interface SessionQueueControlSnapshot {
 
 export interface SessionQueueControlDeps {
   getSnapshot(sessionId: string): Promise<SessionQueueControlSnapshot>;
-  replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage): boolean;
-  removeQueuedMessage(sessionId: string, clientId: string): boolean;
+  replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage, expected?: AgentInputQueuedMessage): boolean;
+  removeQueuedMessage(sessionId: string, clientId: string, expected?: AgentInputQueuedMessage): boolean;
 }
 
 export type SessionQueueAuthorization = (
@@ -30,6 +30,7 @@ type BaseControlParams = {
   sessionId: string;
   queuedMessageId: string;
   authorize: SessionQueueAuthorization;
+  beforeMutation?: () => Promise<void>;
 };
 
 /**
@@ -83,6 +84,7 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
       }
       const resolved = await resolve(params);
       if (!resolved.ok) return resolved;
+      await params.beforeMutation?.();
       const next = params.rebuild(resolved.item, params.message);
       if (
         next.clientId !== params.queuedMessageId ||
@@ -94,7 +96,7 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
           message: 'replacement must preserve queued message identity',
         };
       }
-      if (!deps.replaceQueuedMessage(params.sessionId, params.queuedMessageId, next)) {
+      if (!deps.replaceQueuedMessage(params.sessionId, params.queuedMessageId, next, resolved.item)) {
         return classifyLostRace(params.sessionId, params.queuedMessageId);
       }
       return { ok: true, queuedMessageId: params.queuedMessageId };
@@ -103,7 +105,8 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
     async cancel(params: BaseControlParams): Promise<SessionQueueControlResult> {
       const resolved = await resolve(params);
       if (!resolved.ok) return resolved;
-      if (!deps.removeQueuedMessage(params.sessionId, params.queuedMessageId)) {
+      await params.beforeMutation?.();
+      if (!deps.removeQueuedMessage(params.sessionId, params.queuedMessageId, resolved.item)) {
         return classifyLostRace(params.sessionId, params.queuedMessageId);
       }
       return { ok: true, queuedMessageId: params.queuedMessageId };

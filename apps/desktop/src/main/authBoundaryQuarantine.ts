@@ -1,10 +1,20 @@
 /**
- * Cross-process state machine for the globally visible Ghost skill projection.
+ * Durable owner boundary for this instance's skill projections, plus the
+ * machine-wide lock for the shared home-level skill roots.
  *
- * Owner-scoped plugin bytes live under userData, but the links consumed by
- * agents live in shared home directories. Every owner transition and every
- * Ghost reconcile therefore uses the same strict lock and durable owner state.
- * Missing, malformed, or pending state never authorizes a reconcile.
+ * Two independent layers:
+ * - Owner state (stable / pending / quarantined) lives under userData. Ghost
+ *   and built-in skill bytes are projected into owner-private roots, so the
+ *   question "is my owner stable?" belongs to this instance only. Another
+ *   Cindy instance (a different build, region, or isolated dev sandbox) using
+ *   another account must not be able to flip it.
+ * - The shared roots (~/.agents/skills, ~/.claude/skills, ~/.codex/skills and
+ *   the appData built-in bundle) are touched by every instance of this OS
+ *   user. Mutations there only need cross-process serialization; Cindy-owned
+ *   entries in them are identified by link targets inside each instance's own
+ *   userData, so no machine-wide owner is required.
+ *
+ * Missing, malformed, or pending owner state never authorizes a reconcile.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -76,18 +86,23 @@ type QuarantineRead =
   | { kind: 'missing' | 'invalid' };
 
 function filePath(): string {
-  // This marker deliberately lives beside the shared home-level Ghost skill
-  // projection. It must be visible to every Cindy instance using this OS user;
-  // profile-scoped application state remains under app.getPath('userData').
-  return path.join(os.homedir(), '.cindy', FILE_NAME);
+  // Instance-scoped: instances sharing one userData (passive dev joins) share
+  // this marker, separate userData directories never observe each other.
+  return path.join(app.getPath('userData'), FILE_NAME);
 }
 
 function quarantinePath(): string {
-  return path.join(os.homedir(), '.cindy', QUARANTINE_FILE_NAME);
+  return path.join(app.getPath('userData'), QUARANTINE_FILE_NAME);
 }
 
 function lockPath(): string {
   return `${filePath()}.lock`;
+}
+
+function sharedSkillRootsLockPath(): string {
+  // Same path as the former machine-wide marker lock, so builds that still use
+  // the home-level marker keep serializing their shared-root writes with ours.
+  return path.join(os.homedir(), '.cindy', `${FILE_NAME}.lock`);
 }
 
 function normalizeOwnerId(value: unknown): string | null | undefined {
@@ -183,6 +198,9 @@ function normalizeQuarantineRecord(raw: unknown): QuarantineState | null {
   };
 }
 
+// Only this instance's marker is authoritative. A passive join beside an older
+// primary that still publishes the legacy machine-wide marker fails closed
+// (known boundary for mixed dev builds; --isolated is unaffected).
 function readState(): StateRead {
   return readStateFile(filePath(), normalizeRecord);
 }
@@ -265,43 +283,65 @@ function clearQuarantineState(transitionId: string): void {
   });
 }
 
-async function withStrictBoundaryLock<T>(task: () => Promise<T>): Promise<T> {
+type StrictLock = <T>(task: () => Promise<T>) => Promise<T>;
+
+function createStrictLock(label: string, resolveLockPath: () => string): StrictLock {
   // The in-process tail and the cross-process security lock are complementary:
   // the tail preserves ordering inside this Main process, while the strict lock
-  // proves the owner of the globally shared projection transition. This is an
-  // authorization boundary, so busy/unavailable must fail closed and must not
-  // be replaced with the ordinary advisory tier.
-  const previous = inProcessBoundaryTail;
-  let releaseInProcess: () => void = () => undefined;
-  inProcessBoundaryTail = new Promise<void>((resolve) => {
-    releaseInProcess = () => resolve();
-  });
-  await previous;
-  try {
-    const file = filePath();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    return await withSecurityBoundaryLock(
-      lockPath(),
-      {
-        label: 'ghost-skill-projection-boundary',
-        waitMs: 12_000,
-      },
-      async (status) => {
-        if (!status.held) {
-          throw new Error('Ghost skill projection boundary lock is busy or unavailable');
-        }
-        return task();
-      },
-    );
-  } finally {
-    releaseInProcess();
-  }
+  // serializes other processes. This is an authorization boundary, so
+  // busy/unavailable must fail closed and must not be replaced with the
+  // ordinary advisory tier. Each lock keeps its own tail so the owner lock may
+  // hold the shared-roots lock without waiting on itself.
+  let inProcessTail: Promise<void> = Promise.resolve();
+  return async <T>(task: () => Promise<T>): Promise<T> => {
+    const previous = inProcessTail;
+    let releaseInProcess: () => void = () => undefined;
+    inProcessTail = new Promise<void>((resolve) => {
+      releaseInProcess = () => resolve();
+    });
+    await previous;
+    try {
+      const target = resolveLockPath();
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      return await withSecurityBoundaryLock(
+        target,
+        {
+          label,
+          waitMs: 12_000,
+        },
+        async (status) => {
+          if (!status.held) {
+            throw new Error('Ghost skill projection boundary lock is busy or unavailable');
+          }
+          return task();
+        },
+      );
+    } finally {
+      releaseInProcess();
+    }
+  };
 }
 
-let inProcessBoundaryTail: Promise<void> = Promise.resolve();
+/** Owner state of this instance. Always taken before the shared-roots lock. */
+const withStrictBoundaryLock = createStrictLock('ghost-skill-projection-boundary', lockPath);
+
+const withSharedRootsLock = createStrictLock(
+  'shared-skill-roots',
+  sharedSkillRootsLockPath,
+);
 
 /**
- * Serialize an application owner commit with the global Ghost skill projection.
+ * Serialize a write to the machine-wide skill roots with every other Cindy
+ * process of this OS user. Carries no owner check: callers that need one go
+ * through withSharedGlobalSkillProjectionMutation, which takes the owner lock
+ * first (lock order: owner → shared roots).
+ */
+export async function withSharedSkillRootsLock<T>(task: () => Promise<T>): Promise<T> {
+  return withSharedRootsLock(task);
+}
+
+/**
+ * Serialize an application owner commit with this instance's Ghost skill projection owner state.
  *
  * A stable matching owner may commit without another sweep, but still commits
  * under the same lock as reconcile. Missing/invalid/pending/mismatched state
@@ -427,7 +467,10 @@ export async function withGhostSkillProjectionOwnerCommit<T>(
   });
 }
 
-/** Allow link mutation only for the globally stable owner, under the same lock. */
+/**
+ * Allow link mutation only for this instance's stable owner. Reconcile also
+ * retires legacy links in the shared roots, so it holds both locks.
+ */
 export async function withGhostSkillProjectionReconcile<T>(
   ownerId: string,
   reconcile: () => Promise<T>,
@@ -437,7 +480,11 @@ export async function withGhostSkillProjectionReconcile<T>(
   return withSharedGlobalSkillProjectionMutation(normalizedOwnerId, reconcile);
 }
 
-/** Serialize every mutation of the shared home-level skill discovery roots. */
+/**
+ * Mutate the shared home-level skill discovery roots for this instance's
+ * stable owner: owner check under the instance lock, then the shared-roots
+ * lock around the mutation.
+ */
 export async function withSharedGlobalSkillProjectionMutation<T>(
   ownerId: string | null,
   mutation: () => Promise<T>,
@@ -445,7 +492,7 @@ export async function withSharedGlobalSkillProjectionMutation<T>(
   if (isPassiveSharedUserDataInstance()) {
     throw new Error('Passive shared-userData instances cannot mutate global skill projections');
   }
-  return withStableOwnerBoundaryMutation(ownerId, mutation);
+  return withStableOwnerBoundaryMutation(ownerId, () => withSharedRootsLock(mutation));
 }
 
 /** Serialize non-projection state that must agree with the same durable owner. */
@@ -524,6 +571,7 @@ export const __testing = {
   filePath,
   quarantinePath,
   lockPath,
+  sharedSkillRootsLockPath,
   normalizeRecord,
   readState,
   resetProcessQuarantine: () => {

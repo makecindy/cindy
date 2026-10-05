@@ -138,6 +138,8 @@ export interface AgentTaskUpdateEventData {
  */
 export interface SendOrigin {
   kind: 'user' | 'scheduler' | 'goal';
+  /** IM user turns deliver their successful replies on that surface, without App completion alerts. */
+  surface?: 'im';
   /** scheduler 来源时的任务标识(供 IM 转播时显示"哪个自动任务")。 */
   scheduleId?: string;
   scheduleName?: string;

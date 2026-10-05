@@ -21,12 +21,10 @@ import {
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { toast } from '@/lib/toast';
 import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
-import {
-  MENU_ITEM_CLASS,
-  MENU_ROW_CLASS,
-  MENU_SEPARATOR_CLASS,
-  MENU_SUB_CONTENT_CLASS,
-} from './menuStyles';
+import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
+
+// Static (non-focusable) loading line laid out like a menu row.
+const LOADING_ROW_CLASS = 'flex h-8 select-none items-center gap-2 px-2 text-14 leading-[1.43]';
 
 export interface TaskMoveDestination {
   deviceId: string;
@@ -34,6 +32,10 @@ export interface TaskMoveDestination {
   isSelf?: boolean;
   project: string | null;
 }
+
+/** Without a chosen project, a chat copy stays a chat and a project copy becomes a new project. */
+export const copyDefaultLabelKey = (session: Pick<Session, 'workspaceKind'>) =>
+  session.workspaceKind === 'dialogue' ? 'taskMigration.dialogue' : 'taskMigration.newProject';
 
 /** Same source-host business operation for recent projects, dialogue, and the folder picker. */
 export async function moveRemoteTaskProject(session: Session, workingDir: string | null) {
@@ -158,13 +160,10 @@ export function TaskMoveSubmenu({
         <span className="flex-1">{t('ccAgent.sidebar.sessionMenu.moveToProject')}</span>
         <ChevronRight size={14} className="ml-2 shrink-0 text-[var(--cmd-palette-item-meta)]" />
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent
-        sideOffset={4}
-        className={`${MENU_SUB_CONTENT_CLASS} w-[320px] overflow-hidden`}
-      >
+      <DropdownMenuSubContent sideOffset={4} className="w-[320px] overflow-hidden">
         {session.deviceLinkDeviceId ? (
           <>
-            {loading && <div className={MENU_ITEM_CLASS}>{t('taskMove.loading')}</div>}
+            {loading && <div className={LOADING_ROW_CLASS}>{t('taskMove.loading')}</div>}
             {projectError && (
               <DropdownMenuItem
                 className={MENU_ITEM_CLASS}
@@ -192,7 +191,7 @@ export function TaskMoveSubmenu({
         {['desktop', 'shared', 'feishu'].includes(session.source ?? 'desktop') &&
           session.orcaRole !== 'worker' && (
             <>
-              <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+              <DropdownMenuSeparator />
               <div className="px-3 py-1.5 text-xs text-[var(--cmd-palette-item-meta)]">
                 {t('taskMove.otherComputers')}
               </div>
@@ -212,6 +211,7 @@ export function TaskMoveSubmenu({
                     key={device.deviceId}
                     device={device}
                     team={session.orcaRole === 'lead'}
+                    defaultLabelKey={copyDefaultLabelKey(session)}
                     onSelect={onMigration}
                   />
                 ))
@@ -231,10 +231,12 @@ export function TaskMoveSubmenu({
 function DeviceProjects({
   device,
   team,
+  defaultLabelKey,
   onSelect,
 }: {
   device: DeviceLinkDeviceView;
   team: boolean;
+  defaultLabelKey: string;
   onSelect(value: TaskMoveDestination): void;
 }) {
   const { t } = useTranslation();
@@ -293,10 +295,7 @@ function DeviceProjects({
           <ChevronRight size={14} className="ml-2 shrink-0" />
         )}
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent
-        sideOffset={4}
-        className={`${MENU_SUB_CONTENT_CLASS} w-[320px] overflow-hidden`}
-      >
+      <DropdownMenuSubContent sideOffset={4} className="w-[320px] overflow-hidden">
         {error === 'upgrade' ? (
           <div role="status" className="px-3 py-2 text-sm text-[var(--cmd-palette-item-meta)]">
             {t('taskMove.upgradeComputer', { name: device.name })}
@@ -314,7 +313,7 @@ function DeviceProjects({
         ) : projects ? (
           <>
             <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => choose(null)}>
-              {t('taskMigration.defaultFolder')}
+              {t(defaultLabelKey)}
             </DropdownMenuItem>
             <SessionProjectMoveSubmenu
               heading={t('taskMigration.project')}
@@ -324,7 +323,7 @@ function DeviceProjects({
             />
           </>
         ) : (
-          <div className={MENU_ITEM_CLASS}>{t('taskMove.loading')}</div>
+          <div className={LOADING_ROW_CLASS}>{t('taskMove.loading')}</div>
         )}
       </DropdownMenuSubContent>
     </DropdownMenuSub>

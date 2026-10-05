@@ -13,6 +13,7 @@
     "@expo/metro-runtime": "^57.0.14",
     "@expo/ui": "~57.0.14",
     "@legendapp/list": "^3.3.3",
+    "@noble/curves": "1.9.7",
     "@noble/hashes": "^1.8.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-google-signin/google-signin": "16.1.2",

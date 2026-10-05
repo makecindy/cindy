@@ -1,7 +1,7 @@
 /**
- * 手机客户端说明:来源判据(体验分流用,**非**安全边界 —— 平台值由对端自报,见
- * device-link/invoke-context 的可信度说明)、wire 注入形态、以及「只进喂给 agent 的
- * 内容、不进落库原话」这条不变量的源码级守卫。
+ * 客户端说明(远程设备):来源判据(体验分流用,**非**安全边界 —— 平台值由对端自报,见
+ * device-link/invoke-context 的可信度说明)、设备盖章、wire 注入形态、以及「只进喂给
+ * agent 的内容、不进落库原话」这条不变量的源码级守卫。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -16,16 +16,20 @@ import {
 import {
   isDeviceLinkInvoke,
   isMobileControllerInvoke,
+  readDeviceLinkInvokeSourceDevice,
   runDeviceLinkInvokeContext,
 } from '../device-link/invoke-context';
+import type { SharedTaskPeerCapture } from '../device-link/sharedTaskDispatch';
 import {
   prependHandoffToUserMessage,
   prependNoteToWireUserMessage,
 } from '../maker-ipc/agentHandoff';
 import {
   attachMainOwnedInputBoundary,
+  buildClientEnvironmentNote,
   buildMobileClientPromptNote,
   shouldPrependMobileClientPromptNote,
+  stampDirectSendSourceDevice,
   stampMobileClientOrigin,
   stripMainOnlySendOpts,
 } from '../maker-ipc/mobileClientPromptNote';
@@ -126,6 +130,96 @@ describe('isMobileControllerInvoke(来源判据)', () => {
   });
 });
 
+describe('readDeviceLinkInvokeSourceDevice(设备盖章判据)', () => {
+  it('本机 renderer 没有 context → 不盖章', () => {
+    expect(readDeviceLinkInvokeSourceDevice()).toBeUndefined();
+  });
+
+  it('手机控制端 → mobile,名字取被控端快照并清洗', () => {
+    const seen = runDeviceLinkInvokeContext(
+      { controllerDeviceId: 'dev-phone', channel: 'maker:input:enqueue', controllerPlatform: 'ios', controllerName: '  Dash 的\niPhone「伪」 ' },
+      () => readDeviceLinkInvokeSourceDevice(),
+    );
+    expect(seen).toEqual({ deviceId: 'dev-phone', platform: 'mobile', name: 'Dash 的 iPhone"伪"' });
+  });
+
+  it('另一台电脑 → desktop;缺名字时只带 id', () => {
+    const seen = runDeviceLinkInvokeContext(
+      { controllerDeviceId: 'dev-mac', channel: 'maker:input:steer', controllerPlatform: 'win32' },
+      () => readDeviceLinkInvokeSourceDevice(),
+    );
+    expect(seen).toEqual({ deviceId: 'dev-mac', platform: 'desktop' });
+  });
+
+  it('平台未知 → 不盖章(fail closed)', () => {
+    const seen = runDeviceLinkInvokeContext(
+      { controllerDeviceId: 'dev-x', channel: 'maker:input:enqueue', controllerPlatform: 'freebsd', controllerName: 'X' },
+      () => readDeviceLinkInvokeSourceDevice(),
+    );
+    expect(seen).toBeUndefined();
+  });
+
+  it('共享任务访客 → 不盖章(访客不是用户的另一台设备)', () => {
+    const seen = runDeviceLinkInvokeContext(
+      {
+        controllerDeviceId: 'guest-peer',
+        channel: 'maker:input:enqueue',
+        controllerPlatform: 'ios',
+        controllerName: 'Guest',
+        sharedTask: {} as SharedTaskPeerCapture,
+      },
+      () => readDeviceLinkInvokeSourceDevice(),
+    );
+    expect(seen).toBeUndefined();
+  });
+});
+
+describe('buildClientEnvironmentNote(设备说明)', () => {
+  const host = { deviceId: 'mac-1', name: 'Mac' };
+
+  it('手机:设备事实 + 原有产出偏好,首句声明不是用户消息', () => {
+    const note = buildClientEnvironmentNote({
+      device: { deviceId: 'p-1', name: 'iPhone', platform: 'mobile' },
+      host,
+    });
+    expect(note).toBe(
+      '[客户端说明] 系统追加的环境说明，不是用户消息，不要回应或复述。'
+      + '本轮用户在手机「iPhone」(device_id: p-1) 上远程操作本机「Mac」(device_id: mac-1)。'
+      + '产出 HTML 等可预览成品时**优先做成自包含单文件**:样式与脚本内联,'
+      + '图片用 data: URI 或公网地址,避免拆成需要同目录资源的多文件产物;'
+      + '用户明确要求多文件时照常产出。'
+      + '给出文件路径时同时给出结论或内容摘要,不要只回一个路径。',
+    );
+  });
+
+  it('另一台电脑:只有设备事实,不带手机产出偏好', () => {
+    const note = buildClientEnvironmentNote({
+      device: { deviceId: 'pc-2', name: 'Office PC', platform: 'desktop' },
+      host,
+      legacyMobile: true,
+    });
+    expect(note).toBe(
+      '[客户端说明] 系统追加的环境说明，不是用户消息，不要回应或复述。'
+      + '本轮用户在另一台电脑「Office PC」(device_id: pc-2) 上远程操作本机「Mac」(device_id: mac-1)。',
+    );
+  });
+
+  it('只有旧 fromMobileClient 标记(无设备信息):沿用旧版手机说明', () => {
+    expect(buildClientEnvironmentNote({ legacyMobile: true })).toBe(buildMobileClientPromptNote());
+  });
+
+  it('本机输入:没有说明', () => {
+    expect(buildClientEnvironmentNote({})).toBeNull();
+  });
+
+  it('同一台设备逐轮稳定(不含时间戳 / 计数器)', () => {
+    const device = { deviceId: 'p-1', name: 'iPhone', platform: 'mobile' as const };
+    const note = buildClientEnvironmentNote({ device, host });
+    expect(buildClientEnvironmentNote({ device: { ...device }, host: { ...host } })).toBe(note);
+    expect(note).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+  });
+});
+
 describe('buildMobileClientPromptNote(送进模型的文本)', () => {
   const note = buildMobileClientPromptNote();
 
@@ -155,7 +249,7 @@ describe('buildMobileClientPromptNote(送进模型的文本)', () => {
     expect(note).toContain('不要只回一个路径');
   });
 
-  it('逐字节稳定:不含时间戳 / 随机量等易变内容(否则污染 prompt 前缀假设)', () => {
+  it('逐字节稳定(同一台设备逐轮不变):不含时间戳 / 随机量等易变内容', () => {
     expect(buildMobileClientPromptNote()).toBe(note);
     expect(note).not.toMatch(/\d{4}-\d{2}-\d{2}/);
     expect(note).not.toMatch(/\d{10,}/);
@@ -233,8 +327,11 @@ describe('注入接线(源码级守卫)', () => {
     expect(source).toContain(
       'deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true',
     );
-    // 注入链:normalized → withHandoff → withPlanReconcile → mobile note(最外层)。
-    expect(source).toContain('prependNoteToWireUserMessage(withPlanReconcile as HandoffWireMessage, mobileClientNote)');
+    // 注入链:normalized → withHandoff → withPlanReconcile → withGoalInactiveNote
+    // → 来源说明 → 客户端说明(元信息都在交接段之前)。
+    expect(source).toContain('prependNoteToWireUserMessage(withGoalInactiveNote as HandoffWireMessage, messageSourceNote)');
+    expect(source).toContain('prependNoteToWireUserMessage(withSourceNote as HandoffWireMessage, mobileClientNote)');
+    expect(source).toContain('readWireSourceDevice(so.sourceDevice)');
     expect(source).toContain('shouldPrependMobileClientPromptNote(normalized, sess.agentKind)');
     // 落库内容必须仍取 persistUserMessage.content —— 若改成 outgoing,提示语会写进
     // 用户消息、污染界面显示的原话。
@@ -299,6 +396,28 @@ describe('stripMainOnlySendOpts(直连路径消毒)', () => {
   it('剥掉客户端自报的 fromMobileClient', () => {
     expect(stripMainOnlySendOpts({ messageUuid: 'u', fromMobileClient: true }))
       .toEqual({ messageUuid: 'u' });
+  });
+
+  it('剥掉客户端自报的消息来源(设备 / 插件 / steer 来源 / 共享成员)', () => {
+    const forged = {
+      messageUuid: 'u',
+      sourceDevice: { deviceId: 'forged', platform: 'mobile' },
+      sourcePlugin: { pluginId: 'forged' },
+      sourceOrigin: { kind: 'session', senderSessionId: 'forged' },
+      sharedTaskAuthor: { memberId: 'forged' },
+      persistUserMessage: {
+        clientId: 'c',
+        content: 'hi',
+        origin: { kind: 'session', senderSessionId: 'forged' },
+        sourceDevice: { deviceId: 'forged', platform: 'mobile' },
+        sourcePlugin: { pluginId: 'forged' },
+      },
+    };
+    expect(stripMainOnlySendOpts(forged)).toEqual({
+      messageUuid: 'u',
+      persistUserMessage: { clientId: 'c', content: 'hi' },
+    });
+    expect(forged.persistUserMessage.origin).toEqual({ kind: 'session', senderSessionId: 'forged' });
   });
 
   it('剥掉客户端自报的 fromDeviceLinkClient', () => {
@@ -389,6 +508,15 @@ describe('stripMainOnlySendOpts(直连路径消毒)', () => {
     expect(opts.persistUserMessage.sharedTaskAuthor).toEqual({ accountId: 'forged' });
   });
 
+  it('直连 IPC 边界只写 main 读到的设备来源,覆盖 wire 值', () => {
+    const device = { deviceId: 'p-1', platform: 'mobile' as const, name: 'iPhone' };
+    expect(stampDirectSendSourceDevice({ messageUuid: 'u', sourceDevice: { deviceId: 'forged' } }, device))
+      .toEqual({ messageUuid: 'u', sourceDevice: device });
+    expect(stampDirectSendSourceDevice({ messageUuid: 'u', sourceDevice: { deviceId: 'forged' } }, undefined))
+      .toEqual({ messageUuid: 'u' });
+    expect(stampDirectSendSourceDevice(undefined, device)).toEqual({ sourceDevice: device });
+  });
+
   it('非对象输入原样返回(事务自己 ?? {} 兜底)', () => {
     expect(stripMainOnlySendOpts(undefined)).toBeUndefined();
     expect(stripMainOnlySendOpts(null)).toBeNull();
@@ -411,17 +539,31 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
     'utf8',
   );
 
-  it('enqueue 与 steer 两个 IPC 边界都盖章', () => {
+  it('enqueue 与 steer 两个 IPC 边界都盖章,编辑时按编辑者重新盖章', () => {
     // 手机会话页所有发送都走这两条,只在 invoke context 里读来源实际读不到(review P1)。
+    // 第三处是排队编辑(两个编辑入口共用 stampQueuedEditProvenance)。
     const stamps = register.match(/stampMobileClientOrigin\(/g) ?? [];
-    expect(stamps.length).toBe(2);
+    expect(stamps.length).toBe(3);
+    expect(register.match(/stampQueuedEditProvenance\(updated, remote, editor\)/g)?.length).toBe(2);
     expect(register).toContain('isMobileControllerInvoke(),');
   });
 
   it('device-link provenance is stamped at both queue input boundaries', () => {
     const stamps = register.match(/stampTrustedDeviceLinkQueuedOrigin\(/g) ?? [];
-    expect(stamps.length).toBe(2);
+    expect(stamps.length).toBe(3);
     expect(register).toContain('deviceLinkInvoke,');
+    // 设备来源与 device-link 标记同点盖章(两处 IPC 边界)。
+    expect(register.match(/deviceLinkInvoke,\r?\n\s+readDeviceLinkInvokeSourceDevice\(\),/g)?.length).toBe(2);
+  });
+
+  it('直连 maker:send / maker:steer 在 IPC 边界按 invoke context 盖设备来源', () => {
+    expect(register.match(/stampDirectSendSourceDevice\([^)]*readDeviceLinkInvokeSourceDevice\(\)\)/g)?.length).toBe(2);
+  });
+
+  it('coordinator 在 drain 与 steer 两处都透传设备来源', () => {
+    expect(coordinator).toContain('...(head.sourceDevice ? { sourceDevice: head.sourceDevice } : {})');
+    expect(coordinator).toContain('...(item.sourceDevice ? { sourceDevice: item.sourceDevice } : {})');
+    expect(coordinator).toContain('...(!isHostGeneratedSteerItem(item) && item.origin ? { sourceOrigin: item.origin } : {})');
   });
 
   it('coordinator 在 drain 与 steer 两处都透传', () => {
@@ -443,7 +585,9 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
   it('steer 投递也注入说明,且只进 wire payload', () => {
     expect(register).toContain("isMobileControllerInvoke() || so.fromMobileClient === true");
     expect(register).toContain('shouldPrependMobileClientPromptNote(normalized, sess.agentKind)');
-    expect(register).toContain('prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerNote)');
+    expect(register).toContain('prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerSourceNote)');
+    expect(register).toContain('prependNoteToWireUserMessage(withSteerSourceNote as HandoffWireMessage, steerNote)');
+    expect(register).toContain('readWireSourceDevice(so.sourceDevice)');
     expect(register).toContain('await sess.steer(steerPayload as never');
   });
 

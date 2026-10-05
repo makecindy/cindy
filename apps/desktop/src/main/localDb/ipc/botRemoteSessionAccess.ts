@@ -1,7 +1,7 @@
-import { eq, inArray } from 'drizzle-orm';
+import { inArray, sql } from 'drizzle-orm';
 import { getDbClient } from '../client/current.js';
-import { botProfiles, botSessionLinks, sessions } from '../schema.js';
-import { isBotVisibleRemotely } from './botRemoteVisibility.js';
+import { botProfiles, sessions } from '../schema.js';
+import { isBotVisibleRemotely, remoteVisibleSessionSql } from './botRemoteVisibility.js';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../../device-link/broadcast-tap.js';
 import type { RemoteBotSessionAccess } from '../../device-link/remoteBotSessionBoundary.js';
 
@@ -33,18 +33,13 @@ export async function readRemoteBotSessionAccessBatch(
       const rows = await db.select({
         id: sessions.id,
         source: sessions.source,
-        botId: botProfiles.id,
-        hiddenAt: botProfiles.hiddenAt,
-        status: botProfiles.status,
+        visible: sql<number>`${sql.raw(remoteVisibleSessionSql('sessions'))}`,
       }).from(sessions)
-        .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
-        .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
         .where(inArray(sessions.id, chunk));
       if (!isDataOwnerBroadcastScopeCurrent(owner)) return denyAll();
       for (const row of rows) {
         access.set(row.id, row.source !== 'bot' ? 'ordinary'
-          : row.botId && row.status && isBotVisibleRemotely({ hiddenAt: row.hiddenAt, status: row.status })
-            ? 'visible' : 'hidden');
+          : row.visible ? 'visible' : 'hidden');
       }
     }
   }

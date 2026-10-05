@@ -1155,14 +1155,13 @@ function DatabaseCleanupDialog({
     >
       <AlertDialog.Portal>
         <AlertDialog.Overlay
-          className="fixed inset-0 z-[10020] bg-[var(--overlay-modal)]"
+          className="modal-scrim fixed inset-0 z-[10020]"
           style={{ ...WINDOW_DRAG_STYLE, zIndex: 10020 }}
         >
           <AlertDialog.Content
             className={cn(
-              'fixed inset-0 z-[10020] m-auto flex h-fit min-h-[180px] w-full max-w-[640px] flex-col',
-              'rounded-xl border border-[var(--settings-theme-card-border)]',
-              'bg-[var(--confirm-bg)] p-4 shadow-[var(--confirm-shadow)]',
+              'modal-panel fixed inset-0 z-[10020] m-auto flex h-fit min-h-[180px] w-full max-w-[640px] flex-col',
+              'p-4',
               mode === 'report' ? 'select-text' : 'select-none',
             )}
             style={{ ...WINDOW_NO_DRAG_STYLE, zIndex: 10020 }}

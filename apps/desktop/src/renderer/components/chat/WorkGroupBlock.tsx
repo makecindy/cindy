@@ -356,7 +356,7 @@ export function WorkGroupBlock({
     : isStreaming
       ? t('chat.workGroup.working')
       : durationMs !== undefined
-        ? t('chat.workGroup.worked', { duration: formatDuration(durationMs) })
+        ? t('chat.workGroup.worked', { duration: formatDuration(durationMs, t) })
         : t('chat.workGroup.workDetails');
   const explorationSummary =
     !compact && activityProjection?.isPureExploration
@@ -415,7 +415,7 @@ export function WorkGroupBlock({
           <div className="flex-1" />
           {!compact && isStreaming && startedAtMs !== undefined && (
             <span className="font-mono text-12 text-[var(--msg-tool-card-chevron)]">
-              {formatDuration(elapsedMs)}
+              {formatDuration(elapsedMs, t)}
             </span>
           )}
           {canToggle && (

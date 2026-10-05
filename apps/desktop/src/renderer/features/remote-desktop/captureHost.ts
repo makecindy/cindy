@@ -1,13 +1,31 @@
 import {
   isDesktopInput,
+  isRemoteDesktopChannelId,
   parseDesktopIceCandidates,
+  parseRemoteDesktopChannelRequest,
+  REMOTE_DESKTOP_CHANNEL_MAX_BYTES,
   REMOTE_DESKTOP_ICE_SERVERS,
   REMOTE_DESKTOP_NETWORK,
   type RemoteDesktopIceCandidate,
   type DesktopInput,
   type RemoteDesktopCursor,
+  type RemoteDesktopChannelReply,
+  type RemoteDesktopChannelRequestMessage,
 } from '@cindy/device-link';
+
+/** The id of a well-formed channel request envelope, whatever its payload. */
+function channelRequestId(message: unknown): string | null {
+  if (!message || typeof message !== 'object') return null;
+  const value = message as { type?: unknown; id?: unknown };
+  return value.type === 'request' && isRemoteDesktopChannelId(value.id) ? value.id : null;
+}
 import { DESKTOP_AUDIO_RETRY_MS, type DesktopCaptureApi } from '../../../shared/remoteDesktop';
+import {
+  desktopEncoderLimits,
+  desktopVideoFramerate,
+  desktopVideoProfile,
+  withDesktopBitrateHints,
+} from '../../../shared/remoteDesktopQuality';
 import { nativeCaptureStream } from './nativeCaptureStream';
 import { PortalCaptureStream } from './portalCaptureStream';
 import { nativeAudioStream } from './nativeAudioStream';
@@ -37,8 +55,46 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
   let finishGathering: (() => void) | undefined;
   let exchanging = false;
   let audioRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  // A hidden viewer pauses the video encoder in place; audio, input and the
+  // data channel keep running, and showing the viewer resumes the same stream.
+  let viewerHidden = false;
+  // A background viewer (phone picture-in-picture) gets the saver ceilings on
+  // the same stream; returning to fullscreen restores the negotiated tier.
+  let background = false;
+  let applyEncoder: (() => Promise<boolean>) | null = null;
+  // setParameters rejects stale parameters, so every sender update is queued.
+  let senderUpdates = Promise.resolve();
+  /** Resolves false when an encoder update was rejected. */
+  const updateVideoSenders = (
+    update: (parameters: RTCRtpSendParameters) => boolean,
+  ): Promise<boolean> => {
+    const rtc = peer,
+      current = generation;
+    const run = senderUpdates.then(async () => {
+      for (const sender of rtc?.getSenders() ?? []) {
+        if (current !== generation || sender.track?.kind !== 'video') continue;
+        const parameters = sender.getParameters();
+        if (parameters.encodings?.length && update(parameters))
+          await sender.setParameters(parameters);
+      }
+    });
+    senderUpdates = run.catch(() => {});
+    return run.then(
+      () => true,
+      () => false,
+    );
+  };
+  const applyViewerHidden = () =>
+    updateVideoSenders((parameters) => {
+      if (parameters.encodings.every((encoding) => encoding.active === !viewerHidden)) return false;
+      for (const encoding of parameters.encodings) encoding.active = !viewerHidden;
+      return true;
+    });
   const stop = () => {
     generation++;
+    viewerHidden = false;
+    background = false;
+    applyEncoder = null;
     exchanging = false;
     clearTimeout(disconnectedTimer);
     clearTimeout(gatheringTimer);
@@ -139,6 +195,32 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
       }
       return;
     }
+    if (command.op === 'display-hold') {
+      if (command.lease === activeLease) native?.hold();
+      return;
+    }
+    if (command.op === 'display-swap') {
+      // Only a live native stream follows the new display; browser capture
+      // stays on the old one, so the main process rebuilds the video instead.
+      const kept = command.lease === activeLease && native?.resume() === true;
+      void api.reply(command.id, kept).catch(() => {});
+      return;
+    }
+    if (command.op === 'viewer-hidden') {
+      if (command.lease !== activeLease || typeof command.hidden !== 'boolean') {
+        void api.reply(command.id, false).catch(() => {});
+        return;
+      }
+      viewerHidden = command.hidden;
+      void applyViewerHidden().then((applied) => api.reply(command.id, applied).catch(() => {}));
+      return;
+    }
+    if (command.op === 'background-viewing') {
+      if (command.lease !== activeLease) return;
+      background = command.background === true;
+      void applyEncoder?.();
+      return;
+    }
     stop();
     if (
       command.op !== 'offer' ||
@@ -151,15 +233,43 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
     const current = generation;
     const lease = command.lease;
     activeLease = lease;
+    background = command.background === true;
     attemptId = command.attemptId;
     void (async () => {
       try {
         let captureSettled: Promise<void> = Promise.resolve();
+        const profile = desktopVideoProfile(command.settings);
+        const fps = desktopVideoFramerate(command.settings);
+        // Native capture reports whether the screen is moving; tiers that stay
+        // sharp when still trade frame rate for resolution only while still.
+        let moving = true;
+        // Below these ceilings WebRTC's congestion controller picks the rate;
+        // the tier decides whether resolution or frame rate gives way first.
+        const tune = () =>
+          updateVideoSenders((parameters) => {
+            const limits = desktopEncoderLimits(command.settings!, background);
+            const degradation =
+              moving || !limits.sharpWhenStill ? limits.degradation : 'maintain-resolution';
+            let changed = parameters.degradationPreference !== degradation;
+            parameters.degradationPreference = degradation;
+            for (const encoding of parameters.encodings) {
+              changed ||=
+                encoding.maxBitrate !== limits.maxBitrate ||
+                encoding.maxFramerate !== limits.maxFramerate;
+              encoding.maxBitrate = limits.maxBitrate;
+              encoding.maxFramerate = limits.maxFramerate;
+            }
+            return changed;
+          });
+        const onMotion = (next: boolean) => {
+          moving = next;
+          if (current === generation) void applyEncoder?.();
+        };
         const capture = () =>
           navigator.mediaDevices.getDisplayMedia({
             audio: command.settings?.audio === true,
             video: {
-              frameRate: { ideal: command.settings?.fps ?? 30, max: command.settings?.fps ?? 30 },
+              frameRate: { ideal: fps, max: fps },
             },
           });
         const boundedCapture = async () => {
@@ -204,9 +314,9 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
             (value) => {
               if (current === generation) latestCursor = value;
             },
-            command.cursorOverlay || command.continuousNativeCapture
-              ? (command.settings?.fps ?? 30)
-              : 15,
+            command.cursorOverlay || command.continuousNativeCapture ? fps : 15,
+            // Any tier may become the saver tier in the background, so motion is always tracked.
+            command.settings ? onMotion : undefined,
           );
           if (current !== generation) {
             result.stop();
@@ -293,7 +403,9 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
             const replacement = await nativeStream();
             const sender = rtc.getSenders().find((item) => item.track?.kind === 'video');
             if (!sender || current !== generation) throw new Error('DESKTOP_VIDEO_STOPPED');
-            await sender.replaceTrack(replacement.getVideoTracks()[0]);
+            const video = replacement.getVideoTracks()[0];
+            if (video) video.contentHint = profile.contentHint;
+            await sender.replaceTrack(video);
             captured.getVideoTracks().forEach((track) => {
               track.onended = null;
               track.onmute = null;
@@ -346,8 +458,12 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
             }, 50);
           }
           let pending = 0;
+          let requests = 0;
           let challenge = '';
           heartbeat = setInterval(() => {
+            // Encoder ceilings follow state, not events: an update the encoder
+            // rejected converges here, and a matching encoder is left untouched.
+            if (current === generation) void applyEncoder?.();
             // Keep one outstanding challenge until its reply arrives. The host
             // lease bounds silence; replacing it here rejects valid slow pongs.
             if (channel.readyState !== 'open' || current !== generation || challenge) return;
@@ -361,14 +477,67 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
               void api.viewHeartbeat(lease).catch(() => {});
               return;
             }
-            if (typeof data !== 'string' || data.length > 32_768 || pending >= 8) {
+            if (typeof data !== 'string' || data.length > 32_768) {
               stop();
               void api.stop().catch(() => {});
               return;
             }
             try {
               const message = JSON.parse(data) as { sequence: number; events: DesktopInput[] };
+              // Control requests share the channel so they keep their order with input.
+              const id = channelRequestId(message);
+              if (id) {
+                const send = (reply: RemoteDesktopChannelReply) => {
+                  if (current !== generation || channel.readyState !== 'open') return;
+                  let data = JSON.stringify(reply);
+                  if (data.length > REMOTE_DESKTOP_CHANNEL_MAX_BYTES)
+                    data = JSON.stringify({
+                      type: 'reply',
+                      id,
+                      ok: false,
+                      error: 'DESKTOP_REPLY_TOO_LARGE',
+                    } satisfies RemoteDesktopChannelReply);
+                  channel.send(data);
+                };
+                let request: RemoteDesktopChannelRequestMessage | null = null;
+                try {
+                  request = parseRemoteDesktopChannelRequest(message);
+                } catch {}
+                // A newer viewer may move more operations here; refusing one
+                // lets it fall back to the relay instead of losing the session.
+                if (!request || !api.request) {
+                  send({ type: 'reply', id, ok: false, error: 'DESKTOP_CHANNEL_UNSUPPORTED' });
+                  return;
+                }
+                // Requests have their own bound so they never end the input session.
+                if (requests >= 8) {
+                  send({ type: 'reply', id, ok: false, error: 'DESKTOP_CHANNEL_BUSY' });
+                  return;
+                }
+                requests++;
+                void api
+                  .request(lease, request.request)
+                  .then(
+                    (result): RemoteDesktopChannelReply =>
+                      result.ok
+                        ? { type: 'reply', id: request.id, ok: true, result: result.result }
+                        : { type: 'reply', id: request.id, ok: false, error: result.error },
+                    (): RemoteDesktopChannelReply => ({
+                      type: 'reply',
+                      id: request.id,
+                      ok: false,
+                      error: 'DESKTOP_REQUEST_FAILED',
+                    }),
+                  )
+                  .then(send)
+                  .finally(() => {
+                    requests--;
+                  });
+                return;
+              }
+              // Only input batches count toward the input overflow bound.
               if (
+                pending >= 8 ||
                 !Number.isSafeInteger(message.sequence) ||
                 !Array.isArray(message.events) ||
                 message.events.length > 64 ||
@@ -391,8 +560,17 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
             }
           };
         };
-        stream.getTracks().forEach((track) => rtc.addTrack(track, captured));
-        await rtc.setRemoteDescription({ type: 'offer', sdp: command.sdp });
+        stream.getTracks().forEach((track) => {
+          if (track.kind === 'video') track.contentHint = profile.contentHint;
+          rtc.addTrack(track, captured);
+        });
+        await rtc.setRemoteDescription({
+          type: 'offer',
+          sdp:
+            command.settings && command.sdp
+              ? withDesktopBitrateHints(command.sdp, profile)
+              : command.sdp,
+        });
         // Negotiate audio now even when permission is not ready. replaceTrack
         // can fill this sender later without interrupting video or the data channel.
         const audioTransceiver =
@@ -436,19 +614,14 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
           };
         }
         await rtc.setLocalDescription(await rtc.createAnswer());
-        for (const sender of rtc.getSenders()) {
-          if (sender.track?.kind !== 'video' || !command.settings) continue;
-          const parameters = sender.getParameters();
-          if (!parameters.encodings?.length) continue;
-          // Let WebRTC's congestion controller trade resolution AND frame rate
-          // below the user's ceilings without renegotiating the capture lease.
-          parameters.degradationPreference = 'balanced';
-          for (const encoding of parameters.encodings) {
-            encoding.maxFramerate = command.settings.fps;
-            if (command.settings.bitrate) encoding.maxBitrate = command.settings.bitrate;
-          }
-          await sender.setParameters(parameters);
+        if (current !== generation) throw new Error('DESKTOP_VIDEO_STOPPED');
+        if (command.settings) {
+          // Published before the first update, so a change arriving meanwhile queues after it.
+          applyEncoder = tune;
+          if (!(await tune())) throw new Error('DESKTOP_VIDEO_UNAVAILABLE');
         }
+        // A pause that arrived while this peer was still being set up applies now.
+        if (viewerHidden) void applyViewerHidden();
         if (!command.attemptId)
           await new Promise<void>((resolve) => {
             finishGathering = resolve;

@@ -1,3 +1,5 @@
+import type { TFunction } from 'i18next';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { Fragment, useEffect, useMemo, useCallback, useState } from 'react';
 import {
   AlertCircle,
@@ -29,6 +31,8 @@ import {
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
+import { canManageBackgroundTasks, stopBackgroundTask } from '@/lib/backgroundTaskStop';
+import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
 import { getWorkflowProgressFor, isRemoteSessionSticky } from '@/lib/makerTransport';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
@@ -111,14 +115,10 @@ function detailText(...values: Array<string | undefined>): string | undefined {
   return undefined;
 }
 
-function formatDuration(ms: number | undefined): string | undefined {
+function formatDuration(ms: number | undefined, t?: TFunction): string | undefined {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
   if (ms < 1000) return `${ms}ms`;
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+  return formatSessionDuration(ms, t);
 }
 
 function statusIcon(status: AgentTaskUpdate['status']) {
@@ -342,6 +342,7 @@ export function AgentTaskCard({
           ?? (startedAtMs !== undefined && endedAtMs !== undefined && endedAtMs >= startedAtMs
             ? endedAtMs - startedAtMs
             : undefined),
+        t,
       );
   const bashCommand = isBash ? readInputString(toolCall?.toolInput, ['command']) : undefined;
   const providerLabel = isWorkflow
@@ -357,8 +358,9 @@ export function AgentTaskCard({
   // 停止按钮:Claude 后台任务沿用 SDK stopTask；PI 只开放 Cindy durable runner
   // 明确标成 taskType=pi_subagent 的异步任务。普通 PI 前台委派没有 durable 控制面，
   // 不能仅凭 provider 猜测可停止。Codex 仍无 stopTask 通道。
-  // 点击后交给 main 的 stopAgentTask;成功与否都由 task_notification / durable status
-  // 事件流收口(状态翻 stopped → 按钮自然消失),这里只管在飞态防连点。
+  // 点击后交给会话归属端的 stopAgentTask(device-link 远程会话隧道到被控端);成功与否
+  // 都由 task_notification / durable status 事件流收口(状态翻 stopped → 按钮自然消失),
+  // 这里只管在飞态防连点。
   const [stopping, setStopping] = useState(false);
   const providerCanStop = update?.provider === 'claude-code'
     || (update?.provider === 'pi' && update.taskType === 'pi_subagent');
@@ -367,20 +369,17 @@ export function AgentTaskCard({
     Boolean(sessionId) &&
     Boolean(update?.taskId) &&
     providerCanStop &&
-    // device-link 镜像会话:session 活在被控端,本地 stopAgentTask 会假成功 —— 不给
-    // 按钮。粘滞判定:relay 瞬断清空注册表的窗口内不误判为本机(与面板同口径)。
-    !(sessionId && isRemoteSessionSticky(sessionId));
+    Boolean(sessionId && canManageBackgroundTasks(sessionId));
   const handleStop = useCallback(() => {
-    const api = window.electronAPI?.maker;
-    if (!sessionId || !update?.taskId || !api?.stopAgentTask) return;
+    if (!sessionId || !update?.taskId) return;
     setStopping(true);
-    void api
-      .stopAgentTask(sessionId, update.taskId)
-      .catch(() => {
-        // 静默:失败时卡片仍显示 running,用户可重试;不弹打断式错误。
+    void stopBackgroundTask(sessionId, update.taskId)
+      .catch((error: unknown) => {
+        // 失败时卡片仍显示 running,用户可重试;只有远程电脑版本过旧时提示升级。
+        reportBackgroundTaskStopFailure(error, t);
       })
       .finally(() => setStopping(false));
-  }, [sessionId, update?.taskId]);
+  }, [sessionId, update?.taskId, t]);
 
   // workflow 卡整卡点击 → 打开右栏后台任务面板并定位本任务(workflowTaskId 在
   // 组件顶部与状态修正共用同一次推导)。三者缺一就退回传统展开交互,让

@@ -158,7 +158,15 @@ describe("iOS chrome presenters stay on the system menu path", () => {
       "utf8",
     );
 
-    expect(sessionSheet).toContain('testID="home.sessionActions"');
+    expect(sessionSheet).toContain("<SessionActionSheetFrame");
+    for (const file of [
+      "SessionActionSheetFrame.tsx",
+      "SessionActionSheetFrame.android.tsx",
+    ]) {
+      expect(
+        readTextLf(resolve(process.cwd(), "src/session", file), "utf8"),
+      ).toContain('testID="home.sessionActions"');
+    }
     expect(messageSheet).toContain("<SheetModal");
     expect(chipSheet).toContain('testID="session.chipMenu"');
     expect(settings).toContain('backTestID="settings.backButton"');

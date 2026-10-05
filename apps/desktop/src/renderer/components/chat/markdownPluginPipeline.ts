@@ -54,13 +54,13 @@
 import remarkCjkFriendly from 'remark-cjk-friendly';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
-import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
 import rehypeSlug from 'rehype-slug';
 import type { PluggableList } from 'unified';
 
 import { rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
+import { rehypeHighlightShared } from './rehypeHighlightShared';
 import rehypeReviewMathMarks from './rehypeReviewMathMarks';
 import remarkHtmlImages from './remarkHtmlImages';
 import remarkLocalPathLinks from './remarkLocalPathLinks';
@@ -110,6 +110,10 @@ export const MARKDOWN_REMARK_PLUGINS_PRIVILEGED: PluggableList = [
  *    （components 映射只认 tagName，认不了 class）。
  *  - rehypeFencedCodeMarker 必须排在最后：katex 已消费掉 `$$…$$` 的 `<pre><code>`、
  *    highlight 已注入 hljs span，此时剩下的 `pre > code` 就是真正的代码块。
+ *  - 高亮走 ./rehypeHighlightShared（全渲染器共用一个 lowlight 实例）：上游把
+ *    rehype-highlight 直接挂在链上时，每次渲染都会重建 lowlight 并重复注册约四十种
+ *    语言；切回长任务会一次性重渲染所有气泡，这份重复工作必须留在外面。审查链与
+ *    聊天链共用同一份清单，因此两边都拿到同一份收益。
  */
 function buildRehypePlugins(options: {
   withReviewMathMarks?: boolean;
@@ -124,7 +128,7 @@ function buildRehypePlugins(options: {
       ? [[rehypeReviewMathMarks, injectedMathFlags ? { injectedMathFlags } : {}] as unknown as PluggableList[number]]
       : []),
     rehypeMathBlockMarker,
-    rehypeHighlight,
+    rehypeHighlightShared,
     rehypeFencedCodeMarker,
   ];
 }

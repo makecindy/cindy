@@ -68,7 +68,7 @@ import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { ScheduleBindingBadge } from './sidebar/ScheduleBindingBadge';
 import { RemoteProjectIcon } from './sidebar/RemoteProjectIcon';
-import { MENU_ITEM_CLASS, MENU_ROW_CLASS, MENU_SUB_CONTENT_CLASS } from './sidebar/menuStyles';
+import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import { SessionShareExportDialog } from './sidebar/SessionShareExportDialog';

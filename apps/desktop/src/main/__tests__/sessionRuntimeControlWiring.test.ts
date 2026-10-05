@@ -102,15 +102,18 @@ describe('session runtime control wiring', () => {
       'MAKER_INVOKE.INPUT_UPDATE_TEXT,',
       'MAKER_INVOKE.INPUT_UPDATE_CONTENT,',
     );
+    expect(registerSource).toContain(
+      'stampTrustedDesktopQueuedOrigin(stampMobileClientOrigin(updated, editor.isMobile), remote, true)',
+    );
     expect(updateText).toContain('if (!remote) assertTrustedAppRendererEvent(event);');
-    expect(updateText).toContain('stampTrustedDesktopQueuedOrigin(updated, remote, true)');
+    expect(updateText).toContain('stampQueuedEditProvenance(updated, remote, editor)');
     const updateContent = handlerBody(
       registerSource,
       'MAKER_INVOKE.INPUT_UPDATE_CONTENT,',
       'MAKER_INVOKE.INPUT_MOVE,',
     );
     expect(updateContent).toContain('if (!remote) assertTrustedAppRendererEvent(event);');
-    expect(updateContent).toContain('stampTrustedDesktopQueuedOrigin(updated, remote, true)');
+    expect(updateContent).toContain('stampQueuedEditProvenance(updated, remote, editor)');
     const enqueue = handlerBody(
       registerSource,
       'MAKER_INVOKE.INPUT_ENQUEUE,',

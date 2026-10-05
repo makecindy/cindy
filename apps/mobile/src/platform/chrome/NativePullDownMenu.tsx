@@ -28,7 +28,7 @@ let nativePullDownAvailable: boolean | null = null;
 
 /**
  * 是否用「贴着触发控件弹出」的菜单:iOS 在包里编进 MenuView 时用系统 UIMenu(没冷更前
- * 自动退回调用方的自绘面板);Android 始终用 Cindy 自绘的 AnchoredPullDownMenu。
+ * 自动退回调用方的自绘面板);Android 用 Compose DropdownMenu 的平台实现。
  */
 export function usesNativePullDownMenu(): boolean {
   if (Platform.OS === "android") return true;
@@ -101,8 +101,8 @@ function childDisabled(children: ReactNode): boolean {
 }
 
 /**
- * 收起时完全是调用方原来的按钮/标题;iOS 点开是系统 UIMenu 下拉,Android 是 Cindy 自绘
- * 的同交互菜单(AnchoredPullDownMenu)。iOS 尚未编进 MenuView 的包只渲染 children,
+ * 收起时完全是调用方原来的按钮/标题;iOS 点开是系统 UIMenu 下拉,Android 是 Material
+ * 下拉菜单(AnchoredPullDownMenu.android)。iOS 尚未编进 MenuView 的包只渲染 children,
  * 由调用方继续走自绘面板。
  */
 export function NativePullDownMenu({

@@ -127,8 +127,8 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * 一个网址标签页。网址范围装入时在 preview.hosts 白名单里定死(同 network
  * 域名白名单语法),运行期主机逐次校验,范围外一律拒——防钓鱼是结构性的。
  * 'skill' = 捆绑 Agent Skills(2026-07-25):插件随包携带 SKILL.md 技能目录,
- * 装入且启用后由主机链接进共享技能根 ~/.agents/skills/<id>--<name>(win32 用
- * junction),Claude Code 与 Codex 都能发现。信任面与其它槽完全不同量级:技能
+ * 装入且启用后由主机投影到 Cindy 的账号隔离目录,通过各 Harness 的私有入口
+ * 提供给 Claude Code、Codex、Pi,不写入用户共用技能目录。信任面与其它槽完全不同量级:技能
  * 指令由主 Agent 以**用户全部权限**执行、对所有项目与会话生效、不受插件沙箱
  * 约束,也不随"某工作目录停用本插件"而隐藏——仅全局停用/卸载才撤链。因此
  * manifest 全声明式(items 的 name/description 必须与 SKILL.md frontmatter 逐字
@@ -205,6 +205,7 @@ export interface GhostCardNeeds {
 export interface GhostAgentNeeds {
   background?: boolean;
   errand?: boolean;
+  tasks?: boolean;
   /**
    * schedule = 「可以请你新建自动化任务」(2026-08-04)。
    *
@@ -1046,7 +1047,7 @@ export const GHOST_SKILL_NAME_MAX_CHARS = 64;
 /**
  * skill 槽:技能 name 形状——小写字母/数字,连字符仅作单段分隔(禁首尾与连续
  * 连字符)。比 learn-host 的 SKILL_NAME_RE 更严:意识 id 允许含 `--`
- * (GHOST_ID_RE),共享技能根的链接名是 `<id>--<name>`,只有 name 侧禁 `--`,
+ * (GHOST_ID_RE),插件私有技能根的链接名是 `<id>--<name>`,只有 name 侧禁 `--`,
  * 按"最后一个 `--`"拆分才唯一,不同插件才不可能撞出同一个链接名。
  */
 export const GHOST_SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -1455,6 +1456,8 @@ export interface GhostManifest {
    * Secret 不得写入 `/kv`。
    */
   settingsHtml?: string;
+  /** Optional mobile page projection; unknown/invalid declarations leave desktop behavior unchanged. */
+  mobile?: { channels: string[]; panel?: string; mainView?: string; settings?: string };
   /**
    * 自定义设置区固定高度(px,可选;160–800)。缺省 = 宿主量 guest 内容
    * 高度自适应(同区间收口);声明本字段 = 固定高度(内容动态增减的设置
@@ -1492,7 +1495,7 @@ export interface GhostManifest {
   preview?: GhostPreviewNeeds;
   /**
    * 随包捆绑的 Agent Skills 清单。
-   * 启用时主机链接进共享技能根,Claude Code 与 Codex 双端可见;字段不参与
+   * 启用时由 Cindy 私有入口加载到本地 Claude Code、Codex 与 Pi,不写用户共享目录;字段不参与
    * 本地化(必须与 SKILL.md 逐字一致,见 GhostSkillItem)。
    */
   skill?: GhostSkillNeeds;
@@ -1600,6 +1603,8 @@ export function isGhostInstallApprovalToken(value: unknown): value is string {
 
 /** 已装入主机的插件(批准清单 + 安装位置 + 启用态)。 */
 export interface InstalledGhost {
+  /** Host receipt fact, not a manifest declaration. Missing means tasks need confirmation. */
+  taskCapabilityApproved?: true;
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id>)。 */
   dir: string;
@@ -1971,6 +1976,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         labelKey: 'agentErrand',
         detailKey: 'agentErrandDetail',
       });
+    }
+    if (manifest.agent?.tasks === true) {
+      items.unshift({ key: 'agent:tasks', kind: 'agent', labelKey: 'agentTasks', detailKey: 'agentTasksDetail' });
     }
     // 「可以请你新建自动化任务」:独立 key 单列一档。理由同 badge/errand ——
     // diffGhostPermissionItems 按 key + detail 比对,若并进任何既有 key,已装插件
@@ -3752,6 +3760,15 @@ export function resolveGhostManifestLocale(
  * 顶层字段原样保留但不解释、不展示、不授权。任何已知字段不合格都给出 reason。
  */
 export function validateGhostManifest(value: unknown): ManifestValidation {
+  return validateGhostManifestInput(value, false);
+}
+
+/** Installed snapshots retain historical unknown tasks data without granting it. */
+export function validateInstalledGhostManifest(value: unknown): ManifestValidation {
+  return validateGhostManifestInput(value, true);
+}
+
+function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boolean): ManifestValidation {
   const preparation = prepareGhostManifestForValidation(value);
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
@@ -4310,20 +4327,24 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     if (agentRaw.errand !== undefined && typeof agentRaw.errand !== 'boolean') {
       return { ok: false, reason: 'agent.errand 必须是布尔值' };
     }
+    if (!preserveHistoricalTasks && agentRaw.tasks !== undefined && typeof agentRaw.tasks !== 'boolean') {
+      return { ok: false, reason: 'agent.tasks must be boolean' };
+    }
     if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
       return { ok: false, reason: 'agent.schedule 必须是布尔值' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule'])).length === 0) {
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true 三项加档；仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true 四项加档；仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule']),
+      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
+      ...(agentRaw.tasks === true ? { tasks: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
     };
   }
@@ -4619,7 +4640,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   // 技能是本能力的全部知情面)。name/description 与 SKILL.md 的逐字一致性在
   // 打包(packGhostDir)与装入(GhostManager.parse)两侧另行强制,这里只管
   // 声明本身的形状。name/dir 大小写折叠去重:win32 文件系统折叠大小写,
-  // 共享技能根的链接名不允许折叠后相撞。
+  // 插件私有技能根的链接名不允许折叠后相撞。
   let skill: GhostSkillNeeds | undefined;
   if (raw.skill !== undefined) {
     if (!isPlainObject(raw.skill)) {
@@ -5939,6 +5960,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       entry: raw.entry,
       ...(raw.launch !== undefined ? { launch: raw.launch as GhostLaunchMode } : {}),
       ...(raw.settingsHtml !== undefined ? { settingsHtml: raw.settingsHtml as string } : {}),
+      ...(raw.mobile !== undefined ? { mobile: raw.mobile as GhostManifest['mobile'] } : {}),
       ...(raw.settingsHeight !== undefined ? { settingsHeight: raw.settingsHeight as number } : {}),
       ...(tools !== undefined ? { tools } : {}),
       ...(card !== undefined || prepared.v3BaseCard || slots.includes('card')
@@ -5987,7 +6009,7 @@ export function validateNormalizedGhostManifest(raw: unknown): ManifestValidatio
   // after a rollback. Still accept normalized snapshots produced by affected dev
   // builds and passed between current Host code paths.
   const authorInput = isPlainObject(raw) ? withLegacyAuthorSlots(raw) : raw;
-  const authorResult = validateGhostManifest(authorInput);
+  const authorResult = validateInstalledGhostManifest(authorInput);
   if (authorResult.ok || !isPlainObject(raw) || raw.setup === undefined) return authorResult;
   if (!isPlainObject(raw.setup) || !Array.isArray(raw.setup.requires)) {
     return { ok: false, reason: '标准化清单 setup 必须是带 requires 数组的对象' };
@@ -6019,7 +6041,7 @@ export function validateNormalizedGhostManifest(raw: unknown): ManifestValidatio
     requires.push({ anyOf });
   }
 
-  return validateGhostManifest({ ...withLegacyAuthorSlots(raw), setup: { requires } });
+  return validateInstalledGhostManifest({ ...withLegacyAuthorSlots(raw), setup: { requires } });
 }
 
 /** 把无 slots 的 v2 运行时投影还原成旧客户端能读取的作者清单。 */
@@ -6263,11 +6285,11 @@ export const GHOST_ERRAND_MIN_INTERVAL_MS = 10_000;
 export const GHOST_ERRAND_SESSION_KEY_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
 /**
- * errand 会话允许的权限档。plan = 只读默认档;acceptEdits / auto 由用户在
- * 插件详情页显式放开。**bypassPermissions 刻意不在此列**(2026-07-31 定案:
+ * 插件创建普通任务使用 ask；plan 仅保留旧配置兼容，其执行语义由原 Agent 决定。
+ * acceptEdits / auto 由用户显式选择。**bypassPermissions 刻意不在此列**(2026-07-31 定案:
  * 被骗的插件配上不设防会话 = 无人看守的用户全权,风险不可接受)。
  */
-export const GHOST_ERRAND_PERMISSION_MODES = ['plan', 'acceptEdits', 'auto'] as const;
+export const GHOST_ERRAND_PERMISSION_MODES = ['ask', 'plan', 'acceptEdits', 'auto'] as const;
 export type GhostErrandPermissionMode = (typeof GHOST_ERRAND_PERMISSION_MODES)[number];
 
 /** 上行:派活提交与取件查询。 */
@@ -6292,7 +6314,7 @@ export type GhostPipeAgentErrandRequest =
        * 可选:请求把 errand 会话建在这个目录(绝对路径,≤1024 字符)。
        * 只是**转述**,不是授权——主机只认用户此前在 pick 槽系统窗口里
        * 亲手选过的目录(pickGrantsStore 台账);台账里没有 → INVALID_REQUEST。
-       * 用户在「AI 代办」卡里配置了工作目录时以用户配置优先,本字段忽略。
+       * 用户在「任务设置」卡里配置了工作目录时以用户配置优先,本字段忽略。
        */
       workingDir?: string;
       /**
@@ -6508,6 +6530,7 @@ export const GHOST_PICK_MIN_INTERVAL_MS = 3000;
  */
 export interface GhostPipePickRequest {
   type: 'pick-request';
+  mobilePageId?: string;
   /** v1 只支持选目录;将来扩文件类型时在此收窄枚举。 */
   mode: 'directory';
   /** 选择框内的用途说明(净化后随插件名一起展示,让用户知道谁在要、要来干嘛)。 */
@@ -6573,6 +6596,7 @@ export const GHOST_WORKSPACE_MIN_INTERVAL_MS = 3000;
 export type GhostPipeWorkspaceRequest =
   | {
       type: 'workspace-request';
+      mobilePageId?: string;
       kind: 'ensure-session';
       mode: 'pick';
       /** pick 模式选择框里的用途说明(净化后随插件名展示);也用作新会话标题。 */
@@ -6582,6 +6606,7 @@ export type GhostPipeWorkspaceRequest =
     }
   | {
       type: 'workspace-request';
+      mobilePageId?: string;
       kind: 'ensure-session';
       mode: 'dir';
       /** 目标项目目录的本机绝对路径。 */
@@ -6656,10 +6681,10 @@ export type GhostIOSSimulatorStatusProbeResult =
   | { ok: false; errorCode: IOSSimulatorMcpErrorCode; message: string };
 
 /** 插件只能请求能力摘要、当前台前任务状态，或打开 Host 面板。 */
-export type GhostPipeIOSSimulatorRequest =
+export type GhostPipeIOSSimulatorRequest = { mobilePageId?: string } & (
   | { type: 'ios-simulator-request'; kind: 'capabilities' }
   | { type: 'ios-simulator-request'; kind: 'status' }
-  | { type: 'ios-simulator-request'; kind: 'open-panel'; instanceId?: string };
+  | { type: 'ios-simulator-request'; kind: 'open-panel'; instanceId?: string });
 
 export type GhostPipeIOSSimulatorErrorCode =
   | IOSSimulatorMcpErrorCode
@@ -6703,6 +6728,7 @@ export type GhostPipeIOSSimulatorResult =
  */
 export interface GhostPipePreviewRequest {
   type: 'preview-request';
+  mobilePageId?: string;
   url: string;
   sessionId?: string;
 }
@@ -6731,6 +6757,7 @@ export type GhostPipePreviewResult =
  */
 export interface GhostPipeScheduleDraftRequest {
   type: 'schedule-request';
+  mobilePageId?: string;
   /** 预填的自动化名称(净化后按 GHOST_SCHEDULE_DRAFT_NAME_MAX_CHARS 截断)。 */
   name: string;
   /** 预填提示词:这条自动化到点要干什么(净化后按 …PROMPT_MAX_CHARS 截断)。 */
@@ -7026,6 +7053,7 @@ export type GhostNotifyTone = (typeof GHOST_NOTIFY_TONES)[number];
  */
 export interface GhostPipeNotify {
   type: 'notify';
+  mobilePageId?: string;
   /** 提示正文(纯文本,≤ GHOST_NOTIFY_MAX_CHARS;允许 \n 换行)。 */
   text: string;
   /** 语气(图标/配色);缺省 'info'。 */
@@ -7114,6 +7142,8 @@ export const GHOST_NOTIFY_MIN_INTERVAL_MS = 5000;
  */
 export interface GhostPipeConfirm {
   type: 'confirm-request';
+  /** Forward the originating mobile business request's opaque page ID, if present. */
+  mobilePageId?: string;
   /** 问句正文(纯文本,≤ GHOST_CONFIRM_BODY_MAX_CHARS;允许 \n 换行)。 */
   body: string;
   /** 主按钮文案(≤ GHOST_CONFIRM_BUTTON_MAX_CHARS);缺省用主机的「确认」。 */
@@ -8005,6 +8035,8 @@ export type GhostPipeEventPush =
        */
       type: 'event';
       name: 'card-action';
+      /** Opaque origin for host confirmation routing. Forward it to cindy.confirm. */
+      mobilePageId?: string;
       callId: string;
       actionId: string;
       /** 被点卡片所属会话；老卡可能没有归属，缺省时不能唤起 Agent。 */

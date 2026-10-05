@@ -12,6 +12,11 @@ const state = vi.hoisted(() => ({
   userDataPath: '',
 }));
 
+// Skill discovery is covered by managed-skills.test.ts, not this runtime/auth fixture.
+vi.mock('../managed-skills.js', () => ({
+  listCindyManagedSkills: async () => [],
+  cindyManagedSkillRoots: async () => [],
+}));
 // Account discovery persistence is outside this runtime/route fixture.
 vi.mock('../model-discovery/xai.js', () => ({
   discardXaiModelsDiskCache: vi.fn(async () => {}),

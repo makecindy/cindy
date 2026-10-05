@@ -165,6 +165,13 @@ export interface IMUnsupportedEntry {
 }
 
 export interface IMMessageEvent {
+  /** Optional transport-owned display context for shared permission prompts. */
+  interactionSource?: {
+    chatName?: string;
+    threadName?: string;
+    senderName?: string;
+    messageUrl?: string;
+  };
   channelName: string;
   /** Sender open_id (or channel-equivalent stable user id). */
   senderId: string;

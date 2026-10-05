@@ -2144,7 +2144,7 @@ describe('FORGE_GUIDE', () => {
       '捆绑 Agent Skills(skill 能力)',
       'skill.items',
       'SKILL.md',
-      '~/.agents/skills',
+      '不写入用户的全局技能目录',
       '逐字一致',
       '不受插件沙箱约束',
       // 工作区会话(workspace):目录亲选/确认卡授权,判重复用。

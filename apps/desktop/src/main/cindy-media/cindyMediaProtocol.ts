@@ -42,7 +42,9 @@ export const cindyMediaSchemePrivilege: CustomScheme = {
 export function registerCindyMediaProtocolHandler(): void {
   protocol.handle(SCHEME, async (request) => {
     try {
-      const { buffer, mimeType } = await blobStore.readFile(request.url);
+      const { buffer, mimeType } = blobStore.parseClientWallpaperUrl(request.url)
+        ? await blobStore.readClientWallpaperFile(request.url)
+        : await blobStore.readFile(request.url);
       // 惰性刷 lastAccess(cache LRU 依据);解析成功才有合法 hash。
       const parsed = blobStore.parseBlobUrl(request.url);
       if (parsed) void ledger.touchBlob(parsed.hash);

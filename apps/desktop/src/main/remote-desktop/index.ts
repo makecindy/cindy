@@ -20,8 +20,11 @@ import {
   REMOTE_DESKTOP_OFFER_BUDGET,
   REMOTE_DESKTOP_MAX_FRAME_BYTES,
   parseDesktopIceReply,
+  parseRemoteDesktopRequest,
+  isRemoteDesktopChannelRequest,
   type RemoteDesktopIceRequest,
   type RemoteDesktopIceReply,
+  type RemoteDesktopDisplay,
   type RemoteDesktopLease,
   type RemoteDesktopVideoSettings,
 } from '@cindy/device-link';
@@ -29,6 +32,7 @@ import {
   DESKTOP_LOCAL,
   DESKTOP_AUDIO_RETRY_MS,
   type DesktopHostCommand,
+  type DesktopChannelResult,
   type DesktopHostReply,
 } from '../../shared/remoteDesktop';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
@@ -70,6 +74,7 @@ import {
 import { readLinuxCursorSupport } from './linuxCapture';
 import { LinuxDesktopMute, supportsLinuxMute } from './linuxMute';
 import { PrivacyScreen } from './privacyScreen';
+import { ControlledOverlay } from './controlledOverlay';
 import { LinuxPrivacyScreen, supportsLinuxPrivacy, prepareLinuxPrivacy } from './linuxPrivacy';
 import { LinuxWindowActions, supportsOmarchyMenu } from './linuxWindowActions';
 import { systemAudioMuteGuard } from '../voice-input/SystemAudioMuteGuard.js';
@@ -163,8 +168,16 @@ const linuxMute = new LinuxDesktopMute();
 const linuxWindows = new LinuxWindowActions();
 const nativeWayland = () => wayland() && supportsHyprlandCapture();
 const portalWayland = () => wayland() && !nativeWayland();
+// Privacy masks and the controlled-desktop overlay share one capture filter.
+let privacyExcluded: number[] = [];
+let overlayExcluded: number[] = [];
+const applyExcludedWindows = () =>
+  nativeCapture.setExcludedWindows([...privacyExcluded, ...overlayExcluded]);
 const privacyScreen = new PrivacyScreen(
-  (ids) => nativeCapture.setExcludedWindows(ids),
+  (ids) => {
+    privacyExcluded = ids;
+    applyExcludedWindows();
+  },
   () => {
     return remoteDesktop
       .stopPrivacyByUser()
@@ -181,6 +194,41 @@ const supportsPrivacyScreen =
     typeof process.getSystemVersion === 'function' &&
     Number(process.getSystemVersion().split('.')[0]) >= 14) ||
   (process.platform === 'win32' && Number(osRelease().split('.')[2]) >= 19041);
+// Windows honours content protection in capture; modern macOS capture needs the
+// explicit filter. Same platform floor as the privacy masks.
+const controlledOverlay = new ControlledOverlay(
+  (ids) => {
+    if (process.platform !== 'darwin') return;
+    overlayExcluded = ids;
+    applyExcludedWindows();
+  },
+  async (peer) => {
+    if (!controllerDirectory) throw new Error('controller directory unavailable');
+    await controllerDirectory.revoke(peer);
+  },
+);
+/** Device-link owns names and revocation; injected at registration (no import cycle). */
+export interface RemoteDesktopControllerDirectory {
+  name(peer: string): string | undefined;
+  revoke(peer: string): Promise<void>;
+}
+let controllerDirectory: RemoteDesktopControllerDirectory | null = null;
+// The privacy masks replace the overlay for as long as they are requested.
+let privacyRequested = false;
+function syncControlledOverlay(): void {
+  const state = remoteDesktop.state;
+  const displayId = remoteDesktop.displayId;
+  controlledOverlay.update(
+    supportsPrivacyScreen && state && displayId && !privacyRequested
+      ? {
+          displayId,
+          controlling: state.controlling,
+          peer: state.peer,
+          name: controllerDirectory?.name(state.peer),
+        }
+      : null,
+  );
+}
 let displayAwake: number | null = null;
 let nativeDisplay: string | null = null;
 let windowsAvailable = false;
@@ -211,7 +259,7 @@ let preparingOffer = false;
 let videoAttempt: string | undefined;
 let pending: {
   id: string;
-  op: 'offer' | 'ice' | 'frame';
+  op: 'offer' | 'ice' | 'frame' | 'display-swap' | 'viewer-hidden';
   resolve(result: DesktopHostReply): void;
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
@@ -220,7 +268,55 @@ let pending: {
 // failure: release control and keep the lease, capture and media running.
 const input = new DesktopInputHost(() => remoteDesktop.releaseControl());
 const clipboardCounter = new ClipboardCounter(resolveDesktopInputBinary);
+// A display change holds native capture instead of stopping it: frames pause
+// until the changed display is known, then the same stream follows it. The
+// capture page also pauses its no-frame timeout, since the change may be slow.
+let videoPaused = false;
+function pauseVideo(): boolean {
+  if (!videoLease || !nativeDisplay || !host || host.isDestroyed()) return false;
+  videoPaused = true;
+  host.send(DESKTOP_LOCAL.COMMAND, {
+    id: randomUUID(),
+    op: 'display-hold',
+    lease: videoLease,
+  } satisfies DesktopHostCommand);
+  return true;
+}
+/** True only when the capture page confirms a live native stream now follows `display`. */
+async function resumeVideo(display: RemoteDesktopDisplay): Promise<boolean> {
+  if (!videoPaused || !videoLease || !host || host.isDestroyed()) return false;
+  const lease = videoLease;
+  nativeDisplay = display.id;
+  // Helpers bind their capture geometry at start; the next frame restarts them.
+  nativeCapture.stop();
+  hyprlandCapture.stop();
+  videoPaused = false;
+  try {
+    const kept = await requestHost({ id: randomUUID(), op: 'display-swap', lease }, 2000);
+    return kept === true && videoLease === lease;
+  } catch {
+    return false;
+  }
+}
+/** The viewer is hidden: the capture page stops sending the current stream until shown.
+ * Resolves only once the encoder applied it, so a failed resume reaches the viewer. */
+async function setViewerHidden(lease: string, hidden: boolean): Promise<void> {
+  if (lease !== videoLease) throw new Error('DESKTOP_VIDEO_STOPPED');
+  const applied = await requestHost({ id: randomUUID(), op: 'viewer-hidden', lease, hidden }, 2000);
+  if (applied !== true || lease !== videoLease) throw new Error('DESKTOP_VIDEO_UNAVAILABLE');
+}
+/** Retunes the live encoder in place; a later offer reads the state from the lease. */
+function setVideoBackground(lease: string, background: boolean): void {
+  if (lease !== videoLease || !host || host.isDestroyed()) return;
+  host.send(DESKTOP_LOCAL.COMMAND, {
+    id: randomUUID(),
+    op: 'background-viewing',
+    lease,
+    background,
+  } satisfies DesktopHostCommand);
+}
 function stopVideo(): void {
+  videoPaused = false;
   offerGeneration++;
   portalReady = null;
   portalGrant = false;
@@ -293,6 +389,7 @@ async function offer(
           portalCapture: true,
           sdp,
           settings,
+          background: remoteDesktop.isBackgroundViewing(lease.lease),
           attemptId,
           iceServers,
         },
@@ -387,6 +484,7 @@ async function offer(
         lease: lease.lease,
         sdp,
         settings,
+        background: remoteDesktop.isBackgroundViewing(lease.lease),
         attemptId,
         iceServers,
       },
@@ -404,7 +502,9 @@ async function offer(
 
 /** One bounded command to the existing capture owner; never reset the shared device link. */
 function requestHost(
-  command: DesktopHostCommand & { op: 'offer' | 'ice' | 'frame' },
+  command: DesktopHostCommand & {
+    op: 'offer' | 'ice' | 'frame' | 'display-swap' | 'viewer-hidden';
+  },
   timeoutMs: number,
 ): Promise<DesktopHostReply> {
   const currentHost = host;
@@ -495,6 +595,33 @@ export async function requestRemoteDesktop(peer: string, value: unknown): Promis
     : remoteDesktop.request(peer, value);
 }
 
+async function setPrivacyScreen(enabled: boolean, current: () => boolean): Promise<void> {
+  if (enabled && process.platform === 'darwin' && videoLease && nativeDisplay) {
+    nativeOverlay = true;
+    await privacyScreen.set(true, current);
+    try {
+      await nativeCapture.preparePrivacy(nativeDisplay, nativeSettings);
+    } catch (error) {
+      if (current()) privacyScreen.stop();
+      throw error;
+    }
+    if (!current()) {
+      throw new Error('DESKTOP_LEASE_EXPIRED');
+    }
+    return;
+  }
+  await privacyScreen.set(enabled, current);
+  if (!enabled || process.platform === 'win32') return;
+  const deadline = Date.now() + 4500;
+  while (current() && !nativeCapture.privacyReady && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+  if (!nativeCapture.privacyReady) {
+    privacyScreen.stop();
+    throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+  }
+}
+
 export const remoteDesktop: RemoteDesktopController = new RemoteDesktopController({
   prepare: async (current) => {
     if (nativeWayland() && (await supportsLinuxPrivacy())) {
@@ -555,6 +682,13 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       systemAudio: supportsSystemAudio(),
       viewerDisplay,
       viewerDisplayRestore: viewerDisplay,
+      channelRequests: true,
+      viewerHidden: true,
+      // Native canvas capture can follow a display change without a new offer.
+      liveDisplaySwitch:
+        process.platform === 'darwin' ||
+        (process.platform === 'win32' && windowsAvailable) ||
+        Boolean(enabled && nativeWayland()),
       displayModes: process.platform === 'darwin' || Boolean(linuxDisplays?.length),
       enabled,
       canControl:
@@ -640,34 +774,32 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
   privacyScreen: async (enabled, current) => {
     if (process.platform === 'linux') return linuxPrivacy.set(enabled, current);
     if (!supportsPrivacyScreen) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
-    if (enabled && process.platform === 'darwin' && videoLease && nativeDisplay) {
-      nativeOverlay = true;
-      await privacyScreen.set(true, current);
-      try {
-        await nativeCapture.preparePrivacy(nativeDisplay, nativeSettings);
-      } catch (error) {
-        if (current()) privacyScreen.stop();
-        throw error;
-      }
-      if (!current()) {
-        throw new Error('DESKTOP_LEASE_EXPIRED');
-      }
-      return;
+    // The masks replace the overlay: remove it before they appear, restore it
+    // after they are gone, so the privacy filter only ever covers masks.
+    if (enabled) {
+      privacyRequested = true;
+      syncControlledOverlay();
     }
-    await privacyScreen.set(enabled, current);
-    if (!enabled || process.platform === 'win32') return;
-    const deadline = Date.now() + 4500;
-    while (current() && !nativeCapture.privacyReady && Date.now() < deadline)
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
-    if (!nativeCapture.privacyReady) {
-      privacyScreen.stop();
-      throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+    let restoreOverlay = !enabled;
+    try {
+      await setPrivacyScreen(enabled, current);
+    } catch (error) {
+      restoreOverlay = true;
+      throw error;
+    } finally {
+      // A newer privacy request or the lease teardown owns the flag otherwise.
+      if (restoreOverlay && current()) {
+        privacyRequested = false;
+        syncControlledOverlay();
+      }
     }
   },
   stopPrivacyScreen: () => {
     privacyScreen.stop();
     linuxPrivacy.stop();
+    privacyRequested = false;
+    // Called from inside lease teardown; read controller state afterwards.
+    queueMicrotask(syncControlledOverlay);
   },
   windowAction: (action, id, display, current) => {
     if (!nativeWayland()) throw new Error('DESKTOP_INPUT_UNSUPPORTED');
@@ -683,6 +815,8 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
     process.platform === 'linux'
       ? linuxMute.set(false)
       : systemAudioMuteGuard.restore('remote-desktop'),
+  viewerHidden: setViewerHidden,
+  videoBackground: setVideoBackground,
   displayModes: readDesktopDisplayModes,
   displayPresent: async (displayId) => {
     if (nativeWayland()) {
@@ -733,6 +867,8 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
   },
   stopInput: () => input.stop(),
   releaseInput: () => input.release(),
+  pauseVideo,
+  resumeVideo,
   ...(process.platform === 'darwin' || supportsLinuxLock()
     ? {
         lockScreen: async (isCurrent: () => boolean, signal: AbortSignal) => {
@@ -753,14 +889,21 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       powerSaveBlocker.stop(displayAwake);
       displayAwake = null;
     }
+    syncControlledOverlay();
   },
 });
 
 export function registerRemoteDesktopIpc(
   isVoiceInputOwner?: Parameters<typeof denyAppDesktopCapture>[1],
+  controllers?: RemoteDesktopControllerDirectory,
 ): void {
+  controllerDirectory = controllers ?? null;
   denyAppDesktopCapture(session.defaultSession, isVoiceInputOwner);
-  const timer = setInterval(() => remoteDesktop.tick(), 1000);
+  const timer = setInterval(() => {
+    remoteDesktop.tick();
+    // Device names can arrive after the lease starts (presence refresh).
+    syncControlledOverlay();
+  }, 1000);
   timer.unref();
   onQuit('remote-desktop-clipboard', stopLinuxClipboardWriter);
   onQuit('remote-desktop-stop', () => {
@@ -889,6 +1032,8 @@ export function registerRemoteDesktopIpc(
       !remoteDesktop.hasLease(lease)
     )
       throwIpcError('PERMISSION_DENIED', 'Invalid desktop capture lease');
+    // Frames from the previous display geometry must not reach the held stream.
+    if (videoPaused) return null;
     const generation = offerGeneration;
     const jpeg = await (
       nativeWayland()
@@ -1101,6 +1246,11 @@ export function registerRemoteDesktopIpc(
             /^[A-Za-z0-9+/]+={0,2}$/.test(sdp)))
       )
         request.resolve(sdp);
+      else if (
+        (request.op === 'display-swap' || request.op === 'viewer-hidden') &&
+        typeof sdp === 'boolean'
+      )
+        request.resolve(sdp);
       else if (request.op === 'ice') {
         const result = parseDesktopIceReply(sdp);
         if (result.attemptId !== videoAttempt) throw new Error('DESKTOP_VIDEO_STOPPED');
@@ -1131,5 +1281,41 @@ export function registerRemoteDesktopIpc(
         throwIpcError('PERMISSION_DENIED', 'Desktop input rejected');
       }
     },
+  );
+  ipcMain.handle(
+    DESKTOP_LOCAL.CHANNEL_REQUEST,
+    async (event, lease: unknown, value: unknown): Promise<DesktopChannelResult> => {
+      captureWindow.assertSender(event);
+      if (event.sender !== host || typeof lease !== 'string' || lease !== videoLease)
+        throwIpcError('PERMISSION_DENIED', 'Invalid desktop channel request');
+      // Same authority as the relay path: the peer owning this lease, with the
+      // settings and revocation checks of requestRemoteDesktop and the lease
+      // check of the controller. Only small control operations ride here.
+      try {
+        const request = parseRemoteDesktopRequest(value);
+        if (
+          !('lease' in request) ||
+          request.lease !== lease ||
+          !isRemoteDesktopChannelRequest(request)
+        )
+          throw new Error('INVALID_REQUEST');
+        const owner = remoteDesktop.state;
+        if (!owner || !remoteDesktop.hasLease(lease)) throw new Error('DESKTOP_LEASE_EXPIRED');
+        return { ok: true, result: await requestRemoteDesktop(owner.peer, request) };
+      } catch (error) {
+        // Business refusals are replies, not IPC failures: no error log per tap.
+        return { ok: false, error: desktopErrorCode(error) };
+      }
+    },
+  );
+}
+
+/** Stable code of a request failure; never forwards free-form messages. */
+function desktopErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  if (/^[A-Z][A-Z0-9_]{0,63}$/.test(message)) return message;
+  return (
+    message.match(/\b(?:DESKTOP|CREDENTIAL|REMOTE|ACCESS)_[A-Z_]{1,56}\b/)?.[0] ??
+    'DESKTOP_REQUEST_FAILED'
   );
 }

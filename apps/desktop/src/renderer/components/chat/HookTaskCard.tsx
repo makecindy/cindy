@@ -12,6 +12,7 @@ import { useId, useState } from 'react';
 import { ChevronRight, MessageSquare, Send } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
+import { SHARE_SOURCE_ATTR } from '@/lib/shareConversationImage';
 import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
 import SlackIcon from './SlackIcon';
@@ -57,7 +58,8 @@ function ImIcon({ im }: { im: string }) {
 const disclosureClassName =
   'inline-flex min-h-6 min-w-6 items-center py-1 w-fit cursor-pointer text-12 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] focus-visible:outline-offset-2';
 
-function imLabel(im: string, t: TFunction): string {
+/** IM 渠道的显示名(卡片头与 Hook 来源标签共用)。未知渠道原样显示。 */
+export function imLabel(im: string, t: TFunction): string {
   switch (im) {
     case 'slack':
       return t('settings.tina.prefs.providerSlack');
@@ -117,13 +119,17 @@ export default function HookTaskCard({
   return (
     <div
       className={cn(
-        'w-full rounded-[12px] overflow-hidden',
+        // 顶部留白放在卡片上而不是头部:分享图摘掉头部后正文仍不贴边。
+        'w-full rounded-[12px] overflow-hidden pt-[10px]',
         'bg-[var(--msg-tool-card-bg)]',
         'border border-[var(--msg-tool-card-border)]',
       )}
     >
-      {/* Header: IM 图标 + Cindy 署名 */}
-      <div className="flex items-center gap-2 px-[14px] pt-[10px] pb-[6px]">
+      {/* Header: IM 图标 + Cindy 署名。属于来源标注,分享图不带(只留正文)。 */}
+      <div
+        {...{ [SHARE_SOURCE_ATTR]: '' }}
+        className="flex items-center gap-2 px-[14px] pb-[6px]"
+      >
         <ImIcon im={im} />
         <span className="text-13 font-semibold text-[var(--text-primary)]">
           {t('chat.threadContext.cindyFrom', { platform: imLabel(im, t) })}

@@ -6,6 +6,26 @@ import {
   type RemoteMoney,
 } from "./remoteMoney";
 import type { RemoteSession } from "./types";
+import { quotaCountdown } from "./mobileModelRowPresentation";
+
+/**
+ * Time left until a quota resets, used as the window label like the desktop status
+ * chip ("7 hours": one unit, rounded up). Null once the reset time has passed.
+ * A known windowMinutes caps it so a just-reset weekly window never reads "8 days".
+ */
+export function formatQuotaResetCountdown(
+  resetsAt: number,
+  now: number,
+  t: TFunction,
+  windowMinutes?: number | null,
+): string | null {
+  return quotaCountdown(
+    resetsAt,
+    now,
+    (unit) => t(`models.unified.timeUnit.${unit}`),
+    windowMinutes,
+  );
+}
 
 export function formatSessionUsageMoney(money: RemoteMoney): string {
   const symbol = remoteMoneySymbol(money.currency);
@@ -70,14 +90,27 @@ export function accountUsageRows(
   if (!account) return [];
   const rows: AccountUsageRow[] = [];
   for (const window of account.windows) {
+    // The countdown replaces the window name; without one (unknown or elapsed
+    // reset) the row falls back to naming the window.
+    const countdown =
+      window.resetsAt === null
+        ? null
+        : formatQuotaResetCountdown(
+            window.resetsAt,
+            now,
+            t,
+            // xAI resetsAt may fall back to a non-weekly period end; only its label is weekly.
+            account.source === "xai" ? null : window.minutes,
+          );
     const label =
-      window.minutes === 10080
+      countdown ??
+      (window.minutes === 10080
         ? t("session.menu.usage.week")
         : window.minutes && window.minutes % 60 === 0
           ? t("session.menu.usage.hours", { count: window.minutes / 60 })
           : window.minutes
             ? t("session.menu.usage.minutes", { count: window.minutes })
-            : t("session.menu.usage.quota");
+            : t("session.menu.usage.quota"));
     const expired = window.resetsAt !== null && window.resetsAt * 1000 <= now;
     rows.push({
       label: window.modelLabel ? `${window.modelLabel} · ${label}` : label,
@@ -87,18 +120,33 @@ export function accountUsageRows(
             percent: Math.round(window.remainingPercent),
           }),
       warning: !expired && window.remainingPercent <= 10,
-      ...(window.resetsAt !== null
-        ? {
-            detail: t("session.menu.usage.resets", {
-              time: new Date(window.resetsAt * 1000).toLocaleString(locale, {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-              }),
+    });
+  }
+  const credits = account.credits;
+  if (credits) {
+    const parts = [
+      credits.balance === null
+        ? null
+        : t("session.menu.usage.creditsRemaining", {
+            credits: credits.balance.toLocaleString(locale, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
             }),
-          }
-        : {}),
+          }),
+      credits.status === null
+        ? null
+        : t(
+            {
+              unlimited: "session.menu.usage.creditsUnlimited",
+              depleted: "session.menu.usage.creditsDepleted",
+              available: "session.menu.usage.creditsAvailable",
+            }[credits.status],
+          ),
+    ].filter((part): part is string => part !== null);
+    rows.push({
+      label: t("session.menu.usage.credits"),
+      value: parts.join(" · "),
+      warning: credits.status === "depleted",
     });
   }
   for (const amount of account.amounts) {

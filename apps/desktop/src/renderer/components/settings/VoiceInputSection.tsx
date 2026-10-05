@@ -2332,20 +2332,15 @@ export function VoiceInputSection() {
                     <Dialog.Portal>
                       <Dialog.Overlay
                         className={cn(
-                          'fixed inset-0 z-50 bg-[var(--overlay-modal)]',
-                          'data-[state=open]:animate-confirm-overlay-in',
-                          'data-[state=closed]:animate-confirm-overlay-out',
+                          'modal-scrim fixed inset-0 z-50',
                         )}
                         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
                       />
                       <Dialog.Content
                         onPointerDownOutside={(event) => event.preventDefault()}
                         className={cn(
-                          'fixed left-1/2 top-1/2 z-50 w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2',
-                          'rounded-[18px] border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
-                          'p-5 shadow-[var(--shadow-menu)] outline-none',
-                          'data-[state=open]:animate-confirm-content-in',
-                          'data-[state=closed]:animate-confirm-content-out',
+                          'modal-panel fixed left-1/2 top-1/2 z-50 w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2',
+                          'p-5 outline-none',
                         )}
                         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
                       >

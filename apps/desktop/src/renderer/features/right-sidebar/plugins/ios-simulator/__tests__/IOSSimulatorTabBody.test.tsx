@@ -3084,7 +3084,9 @@ describe('IOSSimulatorTabBody', () => {
       name: 'rightSidebar.iosSimulator.deleteDevice',
     });
     expect(deleteButton.className).toContain('text-[var(--error-fg)]');
-    expect(deleteButton.className).toContain('focus:bg-[var(--error-bg)]');
+    // Danger rows share the menu's grey glide highlight; no own red fill (DESIGN §4).
+    expect(deleteButton.className).not.toContain('focus:bg-');
+    expect(deleteButton.hasAttribute('data-menu-own-highlight')).toBe(false);
     fireEvent.click(deleteButton);
     expect(screen.getByText('rightSidebar.iosSimulator.deleteDeviceConfirmTitle')).toBeTruthy();
     expect(

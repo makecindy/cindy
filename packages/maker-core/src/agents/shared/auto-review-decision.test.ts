@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as staticReview from './auto-review.js';
-import { AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
 
 import {
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
@@ -755,4 +755,12 @@ describe('flat authorization and observed denied actions', () => {
     context.advance(false);
     expect(context.precedingBlockedActions).toEqual([]);
   });
+});
+
+it('retains live restrictions and empty revocations on continuations but restores cold handles', () => {
+  const opts: SendOptions = { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true, [AUTO_REVIEW_USER_INTENT]: 'Publish the release' };
+  expect(appendAutoReviewUserIntent('Do not publish', 'Lead says publish', opts)).toBe('Do not publish');
+  expect(appendAutoReviewUserIntent('', 'Lead says publish', opts)).toBe('');
+  expect(appendAutoReviewUserIntent(undefined, 'Lead says publish', opts)).toBe('Publish the release');
+  expect(appendAutoReviewUserIntent('Do not publish', '', {})).toBe('');
 });
