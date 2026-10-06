@@ -2000,9 +2000,9 @@ describe('CodexAgent permissions', () => {
         expect.objectContaining({ name: 'review_view_image' }),
       ]);
     } else {
-      expect(threadStart.config).not.toHaveProperty('project_doc_max_bytes');
       expect(threadStart).not.toHaveProperty('dynamicTools');
     }
+    expect(threadStart.config).toHaveProperty('project_doc_max_bytes', 0);
     expect(threadStart.config).not.toHaveProperty(['windows.sandbox']);
     expect((threadStart.config as Record<string, unknown>)['skills.config']).toEqual([
       {
