@@ -86,6 +86,21 @@ export function isTeamPlanLabelLocked(
   );
   return labels.some((label) => label !== null && locked.has(label));
 }
+
+/**
+ * 收据级计划锁：只有当创建收据仍属于活动插件归属（pluginAuthorized）时才锁定 label。
+ * 插件卸载 / 撤权后，原插件任务按普通 Orca 任务继续使用，releaseWorker 已不可用，
+ * 保留的收据不得继续禁止改名。
+ */
+export function isTeamPlanLabelLockedByReceipt(
+  receipt: Pick<PluginTaskReceipt, 'payload' | 'operation'> | undefined,
+  pluginAuthorized: boolean,
+  labels: ReadonlyArray<string | null>,
+): boolean {
+  if (!receipt || receipt.operation !== 'create' || !pluginAuthorized) return false;
+  const data = readPluginTaskPlanReceipt(receipt.payload);
+  return isTeamPlanLabelLocked(data.teamPlan, data.settledLabels, labels);
+}
 /** Service failures must reject the public task API, without exposing internal diagnostics. */
 export function assertPluginTaskResult(result: { ok: boolean; errorCode?: string }, message: string): void {
   if (!result.ok) throw new PluginTaskError(result.errorCode || 'HOST_NOT_READY', message);

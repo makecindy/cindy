@@ -6,6 +6,7 @@ import {
   createPluginTaskService,
   isPluginTaskPermissionAllowed,
   isTeamPlanLabelLocked,
+  isTeamPlanLabelLockedByReceipt,
   PluginTaskError,
   assertPluginTaskResult,
   readPluginTaskPlanReceipt,
@@ -32,6 +33,20 @@ it('locks only unsettled team-plan labels for worker rename', () => {
   expect(isTeamPlanLabelLocked(plan, ['w0'], ['w1'])).toBe(true);
   expect(isTeamPlanLabelLocked(plan, [], ['other'])).toBe(false);
   expect(isTeamPlanLabelLocked(undefined, [], ['w0'])).toBe(false);
+});
+
+it('releases the plan label lock once the owning plugin is no longer authorized', () => {
+  const route = {} as never;
+  const plan = {
+    concurrency: 1,
+    items: [{ label: 'w0', workingDir: '/answer', route }],
+  } as unknown as PluginTeamPlan;
+  const receipt = { payload: JSON.stringify({ teamPlan: plan }), operation: 'create' as const };
+  expect(isTeamPlanLabelLockedByReceipt(receipt, true, ['w0'])).toBe(true);
+  // 插件卸载 / 撤权后，保留的收据不再锁定改名。
+  expect(isTeamPlanLabelLockedByReceipt(receipt, false, ['w0'])).toBe(false);
+  expect(isTeamPlanLabelLockedByReceipt({ payload: receipt.payload, operation: 'send' }, true, ['w0'])).toBe(false);
+  expect(isTeamPlanLabelLockedByReceipt(undefined, true, ['w0'])).toBe(false);
 });
 
 it('rejects oversized plans before saving and refuses oversized legacy receipts without truncation', async () => {

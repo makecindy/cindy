@@ -2,7 +2,7 @@ import { assertBotTaskCoordination, classifySessionMessagePurpose, coordinationI
 import type { BotTaskCoordination, SessionMessagePurpose } from '../../shared/botTaskCoordination.js';
 import { openSession, setSessionOpeningModelAdmission } from '../localDb/sessionOpening.js';
 import { createPluginTaskReviewResolver } from './pluginTaskReviewContext.js';
-import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, isTeamPlanLabelLocked, readPluginTaskPlanReceipt, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
+import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, isTeamPlanLabelLockedByReceipt, readPluginTaskPlanReceipt, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
 import { assertPluginWorkerDirectoryScope, resolvePluginWorkerDirectory } from './pluginWorkerDirectory.js';
 import { PluginWriteAccessGate } from './pluginWriteAccessGate.js';
 import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
@@ -12876,10 +12876,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!epoch) throw new Error('plugin task storage unavailable');
       const receipt = await createPluginTaskStore(epoch.client).get(leadSessionId);
       if (epoch !== getCurrentDbClientSnapshot()) throw new Error('account changed');
-      if (!receipt || receipt.operation !== 'create') return false;
-      const data = readPluginTaskPlanReceipt(receipt.payload);
-      // 已登记计划整体不可变；未结算条目才是活动引用。已结算的 Worker 已归档且不可达。
-      return isTeamPlanLabelLocked(data.teamPlan, data.settledLabels, labels);
+      // 插件卸载 / 撤权后原任务按普通 Orca 任务继续使用，releaseWorker 已不可用；
+      // 保留的创建收据不再构成计划锁。
+      return isTeamPlanLabelLockedByReceipt(
+        receipt,
+        receipt ? isPluginTaskAuthorized(receipt.pluginId) : false,
+        labels,
+      );
     },
     markWorkerIdle: async (workerId) => {
       const now = Date.now();
