@@ -1727,6 +1727,8 @@ export class PiAgent extends BaseAgent {
   private readonly inFlightStartups = new Set<Promise<AgentSessionHandle>>();
   private readonly subagentRunners = new Map<string, PiSubagentRunnerProcess>();
   private readonly subagentRunnerExitErrors = new Map<string, string>();
+  /** Local Pi-bundled windows learned from its runtime catalog for the next process rebuild. */
+  private readonly inheritedNativeContextWindows = new Map<string, number>();
   private disposeStarted = false;
 
   constructor(deps: AgentDeps) {
@@ -1794,6 +1796,10 @@ export class PiAgent extends BaseAgent {
         ));
       });
     });
+  }
+
+  private inheritedNativeContextWindowKey(provider: string, model: string): string {
+    return `${provider}\0${model}`;
   }
 
   private requestSubagentRunnerExit(
@@ -2423,12 +2429,18 @@ export class PiAgent extends BaseAgent {
         const workingWindow = this.deps.resolveModelContextLimit?.(provider.sourceProviderId ?? provider.id, model.id) ?? undefined;
         const inheritsNativeWindow = provider.inheritModels === true && model.api === undefined
           && model.catalogAddition !== true && model.contextWindow === undefined;
+        const learnedWindow = !opts.remote && inheritsNativeWindow
+          ? this.inheritedNativeContextWindows.get(
+              this.inheritedNativeContextWindowKey(provider.id, model.wireId ?? model.id),
+            )
+          : undefined;
         // An inherited entry without a Cindy-owned window keeps Pi's native
-        // compaction budget. Writing a 128K-derived override here would make a
-        // later live window check request a rebuild that recreates the same
-        // stale override forever.
-        if (inheritsNativeWindow && !(workingWindow && workingWindow > 0)) continue;
-        addBudget(provider.id, model.wireId ?? model.id, Math.max(model.contextWindow ?? 128_000, workingWindow ?? 0), workingWindow);
+        // compaction budget until Pi reports its real catalog value. Cache that
+        // value across the required local process rebuild; never synthesize a
+        // 128K override for a model whose bundled window is still unknown.
+        if (inheritsNativeWindow && !(workingWindow && workingWindow > 0) && !learnedWindow) continue;
+        addBudget(provider.id, model.wireId ?? model.id,
+          Math.max(model.contextWindow ?? learnedWindow ?? 128_000, workingWindow ?? 0), workingWindow);
       }
     }
     const settingsJsonContent = await this.buildSettingsJsonPreservingUserKeys(
@@ -2731,8 +2743,14 @@ export class PiAgent extends BaseAgent {
     const startupWorkingContextWindow = this.deps.resolveModelContextLimit?.(authProviderId, opts.model) ?? undefined;
     const nativeModel = nativeProviders.find((provider) => provider.id === initialProvider)?.models
       .find((model) => (model.wireId ?? model.id) === initialWireModel);
+    const learnedNativeContextWindow = !remote && nativeModel?.contextWindow === undefined
+      ? this.inheritedNativeContextWindows.get(
+          this.inheritedNativeContextWindowKey(initialProvider, initialWireModel),
+        )
+      : undefined;
     const startupContextWindow = Math.max(
-      nativeModel?.contextWindow ?? selectedRuntimeModel?.contextWindow ?? publicRuntimeModel?.contextWindow ?? 128_000,
+      nativeModel?.contextWindow ?? learnedNativeContextWindow
+        ?? selectedRuntimeModel?.contextWindow ?? publicRuntimeModel?.contextWindow ?? 128_000,
       startupWorkingContextWindow ?? 0,
     );
 
@@ -6372,6 +6390,12 @@ export class PiAgent extends BaseAgent {
               ? entries?.find((entry) => entry.provider === provider && entry.id === wireId)?.contextWindow : undefined;
             if (typeof actualWindow === 'number' && Number.isSafeInteger(actualWindow) && actualWindow > 0) {
               configuredWindow = actualWindow;
+              if (!remote && provider && wireId) {
+                this.inheritedNativeContextWindows.set(
+                  this.inheritedNativeContextWindowKey(provider, wireId),
+                  actualWindow,
+                );
+              }
             }
           } catch { /* No mutation: leave window resolution to the existing recovery path. */ }
           if (!configuredWindow) {
@@ -6426,8 +6450,7 @@ export class PiAgent extends BaseAgent {
       const targetProvider = gateway ? PI_PROVIDER_ID
         : latestProviders.find((entry) => (entry.sourceProviderId ?? entry.id) === sourceId)?.id;
       const targetModel = nativeModel?.wireId ?? nativeModel?.id ?? model;
-      const hasCindyManagedReserve = !inheritsNativeWindow || workingWindow > 0;
-      if (targetContextWindow && targetProvider && hasCindyManagedReserve &&
+      if (targetContextWindow && targetProvider &&
           resolvePiNativeReserve(liveRuntimeSettings, targetProvider, targetModel) !==
             reserveForWindow(targetContextWindow, sourceId, model)) {
         return { action: 'rebuild', targetContextWindow, windowVerified: false,
@@ -6820,18 +6843,8 @@ export class PiAgent extends BaseAgent {
         }
         const verifiedWindow = verifiedModel.contextWindow;
         const verifiedReserve = reserveForWindow(verifiedWindow, effectiveProviderId, model);
-        const native = effectiveProviderId && effectiveProviderId !== PI_PROVIDER_ID
-          && effectiveProviderId !== 'xd'
-          ? nativeProviderForSource(effectiveProviderId)
-          : undefined;
-        const nativeId = native?.modelIdAliases?.[model] ?? model;
-        const nativeModel = native?.models.find((candidate) => candidate.id === nativeId);
-        const inheritsNativeWindow = native?.inheritModels === true && nativeModel?.api === undefined
-          && nativeModel?.catalogAddition !== true && nativeModel?.contextWindow === undefined;
-        const workingWindow = this.deps.resolveModelContextLimit?.(effectiveProviderId, model) ?? 0;
-        const hasCindyManagedReserve = !inheritsNativeWindow || workingWindow > 0;
-        if (!liveRuntimeSettings || (hasCindyManagedReserve &&
-            resolvePiNativeReserve(liveRuntimeSettings, provider, wireModel) !== verifiedReserve)) {
+        if (!liveRuntimeSettings ||
+            resolvePiNativeReserve(liveRuntimeSettings, provider, wireModel) !== verifiedReserve) {
           throw new Error('Pi selected a model whose native compaction settings require a fresh runtime');
         }
         await this.writePiRuntimeSettings(configHome, {
