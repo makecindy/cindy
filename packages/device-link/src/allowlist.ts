@@ -170,6 +170,8 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:review:start',
   // —— 输入队列(input queue 全集,无本机副作用)——
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
+  'maker:codex-follow-up:get',
+  'maker:codex-follow-up:set-session',
   'maker:input:get-projection',
   'maker:input:enqueue',
   'maker:input:compact',
@@ -610,6 +612,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
 export const REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS: ReadonlySet<string> = new Set([
   'maker:send',
   'maker:steer',
+  'maker:codex-follow-up:set-session',
   'maker:input:enqueue',
   'maker:input:compact',
   'maker:input:steer',

@@ -14634,5 +14634,15 @@
     "detail": "将此插件的 AI 权限设为“允许修改”，后续任务沿用此选择。独立作答目录不是系统沙箱；命令仍遵循 Cindy 的权限检查。你可以随时在插件 AI 设置中改回只读。",
     "allow": "允许并继续",
     "cancel": "暂不允许"
+  },
+  "codexFollowUp": {
+    "globalLabel": "Codex 跟进消息",
+    "globalHint": "Codex 工作期间，新消息的默认处理方式。仅影响普通 Codex 任务。",
+    "taskLabel": "对话跟进方式",
+    "taskHint": "对话过程中的后续消息加入排队，或引导当前对话",
+    "queue": "排队",
+    "steer": "引导",
+    "inherit": "跟随全局：{{mode}}",
+    "saveFailed": "保存失败，请重试。"
   }
 }

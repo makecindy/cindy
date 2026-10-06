@@ -464,6 +464,8 @@ import {
   resetCollaborationSettings,
   writeCollaborationSetting,
 } from '../maker-host/collaboration-settings-store.js';
+import { readCodexFollowUpSettings, writeCodexFollowUpSettings } from '../maker-host/codex-follow-up-settings.js';
+import { isCodexFollowUpMode, resolveCodexFollowUpMode, shouldAutoSteerCodex, type CodexFollowUpMode } from '../../shared/codexFollowUp.js';
 import {
   readAgentResourceSettingsState,
   resetAgentResourceSettings,
@@ -15458,7 +15460,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await awaitQueuedSnapshotWrite(sessionId);
   }
 
+  const codexFollowUpOverrides = new Map<string, CodexFollowUpMode | null>();
+  const codexFollowUpState = (sessionId?: string) => {
+    const global = readCodexFollowUpSettings();
+    const override = sessionId ? codexFollowUpOverrides.get(sessionId) ?? null : null;
+    return { globalMode: global.value.mode, override,
+      effectiveMode: resolveCodexFollowUpMode(global.value.mode, override), isCustomized: global.isCustomized };
+  };
+  const hydrateCodexFollowUp = async (sid: string) => {
+    const rows = await getDbClient().drizzle.select({ mode: sessions.codexFollowUpMode }).from(sessions).where(eq(sessions.id, sid));
+    if (!rows[0]) throwIpcError('NOT_FOUND', 'Session not found');
+    codexFollowUpOverrides.set(sid, rows[0].mode);
+    return codexFollowUpState(sid);
+  };
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
+    getCodexFollowUpState: codexFollowUpState,
+    awaitQueuePersistence: awaitAgentInputQueueSnapshotPersistence,
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
         const result = await sendToAgentAccepted(sessionId, message, createOpts, sendOpts);
@@ -16489,6 +16506,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
     const normalized: AgentInputQueuedMessage = { ...msg };
+    delete normalized.followUpSteerAttempted;
     delete normalized.sharedTaskAuthor;
     delete normalized.autoReviewUserText;
     if (normalized.durableDelivery !== true) delete normalized.durableDelivery;
@@ -16805,6 +16823,41 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
   };
 
+  ipcMain.handle(MAKER_INVOKE.CODEX_FOLLOW_UP_GET, async (event, sessionId?: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    if (sessionId === undefined) {
+      if (isDeviceLinkInvoke()) throwIpcError('INVALID_PARAMS', 'Session required');
+      return codexFollowUpState();
+    }
+    const sid = requireSessionId(sessionId);
+    await getInputSessionRow(sid);
+    return hydrateCodexFollowUp(sid);
+  });
+  ipcMain.handle(MAKER_INVOKE.CODEX_FOLLOW_UP_SET_GLOBAL, async (event, mode: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (isDeviceLinkInvoke()) throwIpcError('INVALID_PARAMS', 'Local settings only');
+    if (mode !== null && !isCodexFollowUpMode(mode)) throwIpcError('INVALID_PARAMS', 'Invalid follow-up mode');
+    try {
+      await writeCodexFollowUpSettings(mode as CodexFollowUpMode | null);
+      inputCoordinator.refreshFollowUpSettings();
+      broadcastToAllWindows('maker:codex-follow-up:changed', codexFollowUpState());
+      return codexFollowUpState();
+    } catch { throwIpcError('INTERNAL', 'Could not save follow-up settings'); }
+  });
+  ipcMain.handle(MAKER_INVOKE.CODEX_FOLLOW_UP_SET_SESSION, async (event, sessionId: unknown, mode: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    if (getDeviceLinkInvokeContext()?.sharedTask) throwIpcError('INVALID_PARAMS', 'Task settings are not available to guests');
+    const sid = requireSessionId(sessionId);
+    if (mode !== null && !isCodexFollowUpMode(mode)) throwIpcError('INVALID_PARAMS', 'Invalid follow-up mode');
+    await getInputSessionRow(sid);
+    try {
+      await getDbClient().drizzle.update(sessions).set({ codexFollowUpMode: mode as CodexFollowUpMode | null }).where(eq(sessions.id, sid));
+      codexFollowUpOverrides.set(sid, mode as CodexFollowUpMode | null);
+      inputCoordinator.refreshFollowUpSettings();
+      return codexFollowUpState(sid);
+    } catch { throwIpcError('INTERNAL', 'Could not save task follow-up settings'); }
+  });
+
   ipcMain.handle(MAKER_INVOKE.INPUT_GET_PROJECTION, async (_e, sessionId: unknown, options?: unknown) => {
     const sid = requireSessionId(sessionId);
     const remote = isDeviceLinkInvoke();
@@ -16825,6 +16878,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const sessionRow = remote ? await getInputSessionRow(sid) : await getSessionRowSnapshot(sid);
     const durableSessionRow = await retryPendingInputClearBoundary(sid, remote, sessionRow);
     inputCoordinator.observeClearBoundary(sid, durableSessionRow?.clearedAt);
+    if (durableSessionRow) await hydrateCodexFollowUp(sid);
     // 崩溃恢复(issue #761):renderer 打开会话首次取 projection 前,先把持久化的
     // 排队输入读回内存态,返回值即含恢复后的队列,不依赖 push 补发。
     // 失败时仍返回当前内存态 projection(宁可漏恢复也不阻塞会话打开)。
@@ -16857,6 +16911,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await withSessionPermissionChange(sid, async () => undefined);
       if (!inputOwner || inputOwner !== getCurrentDbClientSnapshot()) throwIpcError('PRECONDITION_FAILED', 'Account changed before input');
       const parsed = await prepareSharedTaskInput(sid, requireQueuedMessage(item));
+      delete parsed.followUpSteerAttempted;
+      const delivery = opts && typeof opts === 'object' ? (opts as { composerDelivery?: unknown }).composerDelivery : undefined;
+      if (delivery !== undefined && delivery !== 'auto' && delivery !== 'queue') throwIpcError('INVALID_PARAMS', 'Invalid composer delivery');
       if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);
       assertRemoteInputClearNotInFlight(sid, deviceLinkInvoke);
       const clearBoundaryPrecondition = readRemoteInputClearBoundaryPrecondition(opts);
@@ -16971,7 +17028,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // 排队可取消时旧中断提示必须能恢复；accepted 但仍可能 cancelled-before-dispatch
         // 时也不能提前 ack。续跑项本身由 coordinator 插到队首（普通输入仍 FIFO）。
         let duplicate = false;
-        const projection = inputCoordinator.enqueue(sid, queued, {
+        const followUp = delivery === 'auto' ? await hydrateCodexFollowUp(sid) : null;
+        const row = followUp ? await getInputSessionRow(sid) : null;
+        assertCurrentInputGeneration();
+        const autoSteer = shouldAutoSteerCodex({ mode: followUp?.effectiveMode, agentKind: row?.agentKind, source: row?.source, orcaRole: row?.orcaRole, origin: queued.origin, synthetic: queued.originalSyntheticTrigger, automatic: queued.autoResume });
+        const projection = autoSteer
+          ? await inputCoordinator.enqueueAutoSteer(sid, queued)
+          : inputCoordinator.enqueue(sid, queued, {
           ...(opts && typeof opts === 'object' ? (opts as { sendAtMs?: number }) : undefined),
           // INPUT_ENQUEUE 只承载显式用户输入(composer 发送 / UI trigger / device-link
           // 被控端转投的用户消息):崩溃恢复出的暂停队列遇到显式输入即放行,解开
@@ -16999,7 +17062,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);
         return projection;
       } catch (err) {
-        if (!acceptedByCoordinator) {
+        if (!acceptedByCoordinator && !inputCoordinator.hasKnownClientId(sid, parsed.clientId)) {
           await materialized.cleanupBeforeAcceptance?.();
           if (attachmentOwnerId) {
             await discardSpecificQueuedAttachmentOwnership(sid, parsed.clientId, attachmentOwnerId);

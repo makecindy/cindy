@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { CodexFollowUpControl } from '@/components/new-chat/CodexFollowUpControl';
 import { Switch } from '@/components/ui/switch';
 import {
   getComposerModifierShortcutLabel,
@@ -52,6 +53,7 @@ export function ComposerSendShortcutSection() {
             />
           </div>
         </div>
+        <CodexFollowUpControl />
       </div>
     </div>
   );

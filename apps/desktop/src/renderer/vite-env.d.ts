@@ -6099,6 +6099,12 @@ interface ElectronAPI {
     onInputProjection: (
       cb: (payload: import('../shared/agentInputQueue').AgentInputProjection) => void,
     ) => () => void;
+    codexFollowUp: {
+      onChanged: (callback: () => void) => () => void;
+      get: (sessionId?: string) => Promise<import('../shared/codexFollowUp').CodexFollowUpState>;
+      setGlobal: (mode: import('../shared/codexFollowUp').CodexFollowUpMode | null) => Promise<import('../shared/codexFollowUp').CodexFollowUpState>;
+      setSession: (sessionId: string, mode: import('../shared/codexFollowUp').CodexFollowUpMode | null) => Promise<import('../shared/codexFollowUp').CodexFollowUpState>;
+    };
     input: {
       getProjection: (
         sessionId: string,
@@ -6106,7 +6112,7 @@ interface ElectronAPI {
       enqueue: (
         sessionId: string,
         item: import('../shared/agentInputQueue').AgentInputQueuedMessage,
-        opts?: { sendAtMs?: number; expectedClearBoundaryMs?: number | null },
+        opts?: { sendAtMs?: number; expectedClearBoundaryMs?: number | null; composerDelivery?: 'auto' | 'queue' },
       ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
       compact: (
         sessionId: string,

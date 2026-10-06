@@ -305,6 +305,8 @@ export type AgentInputSendResult =
     };
 
 export interface AgentInputCoordinatorDeps {
+  getCodexFollowUpState?: (sessionId: string) => import('../../shared/codexFollowUp').CodexFollowUpState;
+  awaitQueuePersistence?: (sessionId: string) => Promise<void>;
   sendToAgent: (
     sessionId: string,
     message: AgentInputMakerMessage,
@@ -1428,9 +1430,9 @@ export class AgentInputCoordinator {
       !this.deps.isTurnRunning(sessionId);
     for (const item of restored) this.restoredQueueItems.add(item);
     state.pendingQueue = [...restored, ...state.pendingQueue];
-    if (wasQuiet) {
+    if (wasQuiet || restored.some((item) => item.followUpSteerAttempted)) {
       state.queuePaused = true;
-      state.queuePausedByRestore = true;
+      state.queuePausedByRestore = !restored.some((item) => item.followUpSteerAttempted);
     }
     log.info('restored queued input from crash snapshot', {
       sessionId,
@@ -1615,10 +1617,14 @@ export class AgentInputCoordinator {
       sendAtMs?: number;
       resumeRestorePausedQueue?: boolean;
       onDuplicate?: () => void;
+      deferDrain?: boolean;
     },
   ): AgentInputProjection {
     const state = this.getState(sessionId);
     item = captureOriginalSyntheticTrigger(item);
+    if (state.pendingQueue.some((queued) => queued.followUpSteerAttempted)) {
+      opts = { ...opts, resumeRestorePausedQueue: false };
+    }
     assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.send');
     // 幂等去重(弱网重发防线,PR #881):同 clientId 重复投递说明是控制端(手机
     // 断连自动重试 / 用户对 ack 丢失的消息重发)在补发同一条消息,不是新消息。
@@ -1775,7 +1781,9 @@ export class AgentInputCoordinator {
     // 一帧 pendingQueue=[item] 的队列灰字再消失(空闲发送闪烁的根因)。drain 内部
     // 仍有 getDrainableHead 幂等校验, 不会与既有 wake 点重复派发。agent 忙 / 队列
     // 已有积压时走 else, 维持原排队语义(emit 中间态 + 异步 drain)。
-    if (this.getDrainableHead(sessionId, state) === item) {
+    if (opts?.deferDrain) {
+      this.emit(sessionId);
+    } else if (this.getDrainableHead(sessionId, state) === item) {
       // 只预览马上要派发的队首。排队项若也预览,删除较早项会把整份岛快照滚回去,
       // 抹掉后来的预览和期间事件。合成 Continue 同样不预览内部 prompt。
       if (!automaticOrigin && !isUiContinuationItem(item)) {
@@ -2005,11 +2013,56 @@ export class AgentInputCoordinator {
     }
   }
 
+  refreshFollowUpSettings(): void {
+    for (const sessionId of this.states.keys()) this.emit(sessionId);
+  }
+
+  /** Reserve and persist the existing queue row before crossing the content RPC boundary. */
+  async enqueueAutoSteer(sessionId: string, item: AgentInputQueuedMessage): Promise<AgentInputProjection> {
+    item = captureOriginalSyntheticTrigger(item);
+    if (this.hasKnownClientId(sessionId, item.clientId)) return this.getProjection(sessionId);
+    if ((this.deps.getAgentKind && this.deps.getAgentKind(sessionId) !== 'codex') || item.originalSyntheticTrigger || item.autoResume || item.origin) return this.enqueue(sessionId, item, { resumeRestorePausedQueue: true });
+    const state = this.getState(sessionId);
+    // An earlier uncertain delivery remains paused until explicitly resolved.
+    if (state.pendingQueue.some((queued) => queued.followUpSteerAttempted)) {
+      return this.enqueue(sessionId, item);
+    }
+    if (!this.isTurnSteerable(sessionId, state) || state.steeringQueueClientIds.length > 0
+      || state.queueAbortPending || state.queueInteractionLocks.length > 0) {
+      return this.enqueue(sessionId, item, { resumeRestorePausedQueue: true });
+    }
+    const generation = state.generation;
+    const turnGeneration = this.deps.getTurnGeneration?.(sessionId);
+    const lock = `auto-steer:${item.clientId}`;
+    this.setInteractionLock(sessionId, lock, true);
+    try {
+      this.enqueue(sessionId, item, { deferDrain: true, resumeRestorePausedQueue: true });
+      await this.deps.awaitQueuePersistence?.(sessionId);
+    } catch (error) {
+      if (this.isGenerationCurrent(sessionId, generation)) {
+        this.getState(sessionId).queuePaused = true;
+        this.emit(sessionId);
+      }
+      throw error;
+    } finally {
+      if (this.isGenerationCurrent(sessionId, generation)) {
+        this.setInteractionLock(sessionId, lock, false);
+      }
+    }
+    if (!this.isGenerationCurrent(sessionId, generation)) return this.getProjection(sessionId);
+    // A concurrent stop/clear may have removed the host-owned item.
+    const queued = this.getState(sessionId).pendingQueue.find((q) => q.clientId === item.clientId);
+    if (!queued) return this.getProjection(sessionId);
+    await this.steer(sessionId, queued, { removeFromQueue: true, durableAutoSteer: true, expectedTurnGeneration: turnGeneration ?? undefined });
+    return this.getProjection(sessionId);
+  }
+
   async steer(
     sessionId: string,
     item: AgentInputQueuedMessage,
     opts?: {
       removeFromQueue?: boolean;
+      durableAutoSteer?: boolean;
       touchUserSend?: boolean;
       /** 控制面插话不允许在 turn 结束竞态下退化成下一轮普通输入。 */
       fallbackToTurn?: boolean;
@@ -2111,7 +2164,12 @@ export class AgentInputCoordinator {
 
     if (!this.isTurnSteerable(sessionId, state)) {
       if (opts?.fallbackToTurn === false) return false;
-      this.fallbackPreparedAsTurn(sessionId, item, opts?.removeFromQueue === true);
+      this.fallbackPreparedAsTurn(
+        sessionId,
+        item,
+        opts?.removeFromQueue === true,
+        opts?.durableAutoSteer === true,
+      );
       if (opts?.touchUserSend) this.touchUserSend(sessionId);
       return true;
     }
@@ -2248,6 +2306,15 @@ export class AgentInputCoordinator {
         item.persistedContent,
         referenceContexts,
       );
+      if (opts?.durableAutoSteer) {
+        item.followUpSteerAttempted = true;
+        this.emit(sessionId);
+        await this.deps.awaitQueuePersistence?.(sessionId);
+        if (inputBoundarySignal.aborted || steerAbort.signal.aborted || !matchesExpectedTurn()) {
+          delete item.followUpSteerAttempted;
+          throw new Error('No active turn to steer');
+        }
+      }
       await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts), {
         ...(item.sharedTaskAuthor ? { sharedTaskAuthor: item.sharedTaskAuthor } : {}),
         [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(item),
@@ -2304,6 +2371,7 @@ export class AgentInputCoordinator {
       }
 
       if (isNoActiveTurnError(err)) {
+        delete item.followUpSteerAttempted;
         if (!markerStillPresent) {
           // Stop/close owns the abort boundary after clearing this marker. Its token-guarded
           // reconciliation path is the only code allowed to release that lock.
@@ -2339,7 +2407,12 @@ export class AgentInputCoordinator {
           return finishSteerRequest(false);
         }
         this.emit(sessionId);
-        this.fallbackPreparedAsTurn(sessionId, item, opts?.removeFromQueue === true);
+        this.fallbackPreparedAsTurn(
+          sessionId,
+          item,
+          opts?.removeFromQueue === true,
+          opts?.durableAutoSteer === true,
+        );
         if (opts?.touchUserSend) this.touchUserSend(sessionId);
         return finishSteerRequest(true);
       }
@@ -2370,7 +2443,7 @@ export class AgentInputCoordinator {
         // 没有落点——用户按草稿重发同一段文字时模型可能双份消费,review #939 第三轮)
         // 并暂停队列,不让 turn 结束后的自动 drain 把它再派发一遍。用户确认模型
         // 已回应就删行,没回应就点「继续发送」。队列行入口 prepend 幂等,无副作用。
-        else if (isSteerDeliveryUncertainError(err)) {
+        else if (isSteerDeliveryUncertainError(err) || (opts?.durableAutoSteer && item.followUpSteerAttempted)) {
           this.prependQueueHeadIfMissing(latest, item);
           latest.queuePaused = true;
           // 不确定投递的保护性暂停必须由用户显式处置,不许新输入静默放行。
@@ -4020,6 +4093,8 @@ export class AgentInputCoordinator {
     return {
       sessionId,
       pendingQueue,
+      composerAutoDelivery: true,
+      ...(this.deps.getCodexFollowUpState ? { codexFollowUp: this.deps.getCodexFollowUpState(sessionId) } : {}),
       // Modern projections always carry the explicit null token for a session
       // that has never been cleared.  Only an older controlled Desktop can
       // omit the field at the wire boundary; keeping null here lets a remote
@@ -4055,6 +4130,7 @@ export class AgentInputCoordinator {
   private toProjectedItem(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
     const projected = { ...item };
     delete projected.hostAcceptedAtMs;
+    delete projected.followUpSteerAttempted;
     delete projected.autoReviewUserText;
     delete projected.fromDeviceLinkClient;
     // Main-only wire-assembly hint; renderers mask rows from `text` alone.
@@ -5646,6 +5722,7 @@ export class AgentInputCoordinator {
     sessionId: string,
     item: AgentInputQueuedMessage,
     removeFromQueue: boolean,
+    preserveQueuePosition = false,
   ): void {
     const state = this.getState(sessionId);
     // 插话回落成普通派发 = 也是一条新用户输入。普通 composer / 队列项可能在
@@ -5663,7 +5740,15 @@ export class AgentInputCoordinator {
     state.queuePaused = false;
     this.clearSteeringMarker(state, item.clientId);
     state.queueEditLocks = state.queueEditLocks.filter((id) => id !== item.clientId);
-    this.movePreparedItemToQueueFront(state, item, removeFromQueue);
+    if (preserveQueuePosition) {
+      // Automatic steer falls back to FIFO; only explicit insertion gets priority.
+      // Replace the row with the prepared item to retain its trusted snapshot.
+      const index = state.pendingQueue.findIndex((queued) => queued.clientId === item.clientId);
+      if (index >= 0) state.pendingQueue[index] = item;
+      else state.pendingQueue.push(item);
+    } else {
+      this.movePreparedItemToQueueFront(state, item, removeFromQueue);
+    }
     this.emit(sessionId);
     this.scheduleDrain(sessionId, 'steer-fallback');
   }

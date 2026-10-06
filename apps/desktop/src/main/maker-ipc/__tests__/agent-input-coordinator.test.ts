@@ -844,6 +844,7 @@ function unsupportedChatBridgeImageError(feature = "input content part 'input_im
 }
 
 function createHarness(opts?: {
+  awaitQueuePersistence?: AgentInputCoordinatorDeps['awaitQueuePersistence'];
   getRecoveryContextSnapshot?: (sessionId: string, userClientId: string) => Promise<RecoveryContextSnapshot>;
 }) {
   let running = false;
@@ -983,6 +984,7 @@ function createHarness(opts?: {
   >(async () => []);
   const rewindPersistedUserMessageAfterClear = vi.fn(async (_sessionId: string, _clientId: string) => {});
   const coordinator = new AgentInputCoordinator({
+    awaitQueuePersistence: opts?.awaitQueuePersistence,
     rewindPersistedUserMessageAfterClear,
     sendToAgent,
     steerToAgent,
@@ -13152,5 +13154,138 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       expect.objectContaining({ surfaceError: true, owner: expect.any(Object) }),
     );
     expect(h.onResumableTurnError, '落库失败就没有可续跑的目标,不该消耗额度').not.toHaveBeenCalled();
+  });
+});
+
+
+describe('Codex default follow-up delivery', () => {
+  it('keeps FIFO when the turn ends during automatic-steer persistence', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const h = createHarness({
+      awaitQueuePersistence: vi
+        .fn()
+        .mockImplementationOnce(() => gate)
+        .mockResolvedValue(undefined),
+    });
+    h.setRunning(true);
+    h.setAgentKind('codex');
+    h.coordinator.enqueue('auto-fifo-end', makeItem('a', 'first'));
+    const sending = h.coordinator.enqueueAutoSteer('auto-fifo-end', makeItem('b', 'second'));
+    await Promise.resolve();
+    h.setRunning(false);
+    release();
+    await sending;
+    await flush();
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toMatchObject({ content: 'first' });
+    expect(
+      h.coordinator.getProjection('auto-fifo-end').pendingQueue.map((item) => item.clientId),
+    ).toEqual(['b']);
+  });
+  it('keeps FIFO when native automatic steer rejects with NO_ACTIVE_TURN', async () => {
+    const h = createHarness({ awaitQueuePersistence: async () => {} });
+    h.setRunning(true);
+    h.setAgentKind('codex');
+    h.coordinator.enqueue('auto-fifo-reject', makeItem('a', 'first'));
+    h.reconcileTurnIdle.mockImplementationOnce(() => {
+      h.setRunning(false);
+      return true;
+    });
+    h.steerToAgent.mockRejectedValueOnce(new Error('[NO_ACTIVE_TURN] Session has no active turn'));
+    await h.coordinator.enqueueAutoSteer('auto-fifo-reject', makeItem('b', 'second'));
+    await flush();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toMatchObject({ content: 'first' });
+    expect(
+      h.coordinator.getProjection('auto-fifo-reject').pendingQueue.map((item) => item.clientId),
+    ).toEqual(['b']);
+  });
+  it('preserves explicit queue insertion priority on manual steer fallback', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    h.setAgentKind('codex');
+    h.coordinator.enqueue('manual-priority', makeItem('a', 'first'));
+    h.coordinator.enqueue('manual-priority', makeItem('b', 'second'));
+    h.reconcileTurnIdle.mockImplementationOnce(() => {
+      h.setRunning(false);
+      return true;
+    });
+    h.steerToAgent.mockRejectedValueOnce(new Error('[NO_ACTIVE_TURN] Session has no active turn'));
+    await h.coordinator.steer('manual-priority', makeItem('b', 'second'), {
+      removeFromQueue: true,
+    });
+    await flush();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toMatchObject({ content: 'second' });
+  });
+
+  it('persists the queue and attempt before steering, preserving one client identity', async () => {
+    const persist = vi.fn(async () => {});
+    const h = createHarness({ awaitQueuePersistence: persist });
+    h.setRunning(true);
+    h.setAgentKind('codex');
+    await h.coordinator.ensureQueueRestored('codex-auto');
+    h.steerToAgent.mockImplementationOnce(async () => {
+      expect(h.persistQueueSnapshot.mock.calls.at(-1)?.[1]).toEqual([expect.objectContaining({ clientId: 'auto-1', followUpSteerAttempted: true })]);
+    });
+    const result = await h.coordinator.enqueueAutoSteer('codex-auto', makeItem('auto-1', 'follow-up'));
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(persist.mock.invocationCallOrder[1]).toBeLessThan(h.steerToAgent.mock.invocationCallOrder[0]!);
+    expect(h.steerToAgent).toHaveBeenCalledTimes(1);
+    expect(result.pendingQueue).toEqual([]);
+    await h.coordinator.enqueueAutoSteer('codex-auto', makeItem('auto-1', 'follow-up'));
+    expect(h.steerToAgent).toHaveBeenCalledTimes(1);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+  it('queues normally for another engine', async () => {
+    const h = createHarness(); h.setRunning(true);
+    await h.coordinator.enqueueAutoSteer('other', makeItem('other-1', 'follow-up'));
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection('other').pendingQueue).toHaveLength(1);
+  });
+  it('pauses an uncertain attempt and does not release it for a later ordinary input', async () => {
+    const h = createHarness({ awaitQueuePersistence: async () => {} });
+    h.setRunning(true); h.setAgentKind('codex');
+    h.steerToAgent.mockRejectedValueOnce(new Error('did not acknowledge within 1000ms'));
+    const result = await h.coordinator.enqueueAutoSteer('uncertain', makeItem('uncertain-1', 'follow-up'));
+    expect(result.queuePaused).toBe(true);
+    h.coordinator.enqueue('uncertain', makeItem('next', 'another'), { resumeRestorePausedQueue: true });
+    expect(h.coordinator.getProjection('uncertain').queuePaused).toBe(true);
+    await h.coordinator.enqueueAutoSteer('uncertain', makeItem('next-auto', 'another auto'));
+    expect(h.coordinator.getProjection('uncertain').queuePaused).toBe(true);
+    expect(h.steerToAgent).toHaveBeenCalledTimes(1);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+  it('keeps an uncertain crash snapshot paused after restart, including later automatic sends', async () => {
+    const h = createHarness();
+    h.setRunning(true); h.setAgentKind('codex');
+    h.setLoadQueueSnapshot(async () => [{ ...makeItem('uncertain-restored', 'follow-up'), followUpSteerAttempted: true }]);
+    await h.coordinator.ensureQueueRestored('restored');
+    await h.coordinator.enqueueAutoSteer('restored', makeItem('later', 'new follow-up'));
+    expect(h.coordinator.getProjection('restored').queuePaused).toBe(true);
+    expect(h.coordinator.getProjection('restored').pendingQueue).toHaveLength(2);
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+  it('does not dispatch before initial persistence succeeds', async () => {
+    const h = createHarness({ awaitQueuePersistence: async () => { throw new Error('disk full'); } });
+    h.setRunning(true); h.setAgentKind('codex');
+    await expect(h.coordinator.enqueueAutoSteer('disk-full', makeItem('disk-full-1', 'follow-up'))).rejects.toThrow('disk full');
+    expect(h.coordinator.getProjection('disk-full').queuePaused).toBe(true);
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+  });
+  it('protects the row while initial durable persistence is pending', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const persist = vi.fn().mockImplementationOnce(() => gate).mockResolvedValue(undefined);
+    const h = createHarness({ awaitQueuePersistence: persist });
+    h.setRunning(true); h.setAgentKind('codex');
+    const promise = h.coordinator.enqueueAutoSteer('guarded', makeItem('guarded-1', 'follow-up'));
+    await Promise.resolve();
+    expect(h.coordinator.getProjection('guarded').queueInteractionLocks).toContain('auto-steer:guarded-1');
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    release(); await promise;
+    expect(h.coordinator.getProjection('guarded').queueInteractionLocks).not.toContain('auto-steer:guarded-1');
   });
 });

@@ -103,6 +103,41 @@ function columnNames(db: Database.Database, tableName: string): string[] {
 }
 
 describeMigrationReplay('migration replay', () => {
+  it('upgrades main schema v122 with nullable Codex preferences without changing existing sessions', () => {
+    const { db, cleanup } = createTempDb();
+    const stagedDir = mkdtempSync(path.join(tmpdir(), 'cindy-drizzle-pre0123-'));
+    try {
+      for (const migration of listMigrations(drizzleDir())) {
+        if (migration.seq >= 123) continue;
+        copyFileSync(migration.sqlPath, path.join(stagedDir, migration.fileName));
+        if (migration.tsScriptPath) {
+          mkdirSync(path.join(stagedDir, 'scripts'), { recursive: true });
+          copyFileSync(
+            migration.tsScriptPath,
+            path.join(stagedDir, 'scripts', path.basename(migration.tsScriptPath)),
+          );
+        }
+      }
+      runMigrationReplay(db, { drizzleDir: stagedDir });
+      db.prepare("INSERT INTO sessions (id, created_at, updated_at) VALUES ('existing', 1, 2)").run();
+      expect(columnNames(db, 'sessions')).not.toContain('codex_follow_up_mode');
+      const before = db.prepare("SELECT * FROM sessions WHERE id='existing'").get();
+      const result = runMigrationReplay(db, { drizzleDir: drizzleDir() });
+      expect(result.applied.map((migration) => migration.seq)).toContain(123);
+      expect(db.prepare("SELECT * FROM sessions WHERE id='existing'").get()).toEqual({
+        ...(before as Record<string, unknown>),
+        codex_follow_up_mode: null,
+      });
+      db.prepare("UPDATE sessions SET codex_follow_up_mode='steer' WHERE id='existing'").run();
+      expect(runMigrationReplay(db, { drizzleDir: drizzleDir() }).applied).toEqual([]);
+      expect(
+        db.prepare("SELECT codex_follow_up_mode FROM sessions WHERE id='existing'").pluck().get(),
+      ).toBe('steer');
+    } finally {
+      cleanup();
+      rmSync(stagedDir, { recursive: true, force: true });
+    }
+  });
   it('commits the complete fresh schema and task presets in one outer transaction', () => {
     const { db, cleanup } = createTempDb();
     try {

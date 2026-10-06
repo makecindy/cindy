@@ -14669,5 +14669,15 @@
     "detail": "This sets the plugin’s AI permission to Allow edits for future tasks too. A separate working directory is not a system sandbox; commands still follow Cindy permission checks. You can switch back to read-only in the plugin’s AI settings.",
     "allow": "Allow and continue",
     "cancel": "Not now"
+  },
+  "codexFollowUp": {
+    "globalLabel": "Codex follow-up messages",
+    "globalHint": "Default delivery for follow-up messages while Codex works. Applies only to ordinary Codex tasks.",
+    "taskLabel": "Follow-up delivery",
+    "taskHint": "Queue follow-up messages during the conversation, or steer the current conversation.",
+    "queue": "Queue",
+    "steer": "Steer",
+    "inherit": "Use global: {{mode}}",
+    "saveFailed": "Could not save. Please try again."
   }
 }

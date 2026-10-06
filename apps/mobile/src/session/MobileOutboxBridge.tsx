@@ -287,6 +287,7 @@ export function MobileOutboxBridge() {
           r.prepared,
           {
             sendAtMs: r.sendAtMs,
+            ...(r.prepared?.composerDelivery === 'auto' ? { composerDelivery: 'auto' } : {}),
             ...(r.clearBoundaryMs !== undefined
               ? { expectedClearBoundaryMs: r.clearBoundaryMs }
               : {}),

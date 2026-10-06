@@ -14639,5 +14639,15 @@
     "autoTitle": "Auto 自動承認を有効化",
     "autoMessage": "「{{name}}」で Auto 自動承認を使用しますか？",
     "autoDetail": "主タスクと Worker の操作を Cindy が自動審査します。確認が必要な操作や拒否された操作は停止します。完全アクセスではありません。他のタスクの全体設定は変更しません。"
+  },
+  "codexFollowUp": {
+    "globalLabel": "Codex の追加メッセージ",
+    "globalHint": "Codex 作業中の追加メッセージの既定の送信方法。通常の Codex タスクにのみ適用されます。",
+    "taskLabel": "追加メッセージの送信方法",
+    "taskHint": "追加メッセージをキューに入れるか、現在の会話に追加します。",
+    "queue": "キュー",
+    "steer": "誘導",
+    "inherit": "全体設定：{{mode}}",
+    "saveFailed": "保存に失敗しました。再試行してください。"
   }
 }

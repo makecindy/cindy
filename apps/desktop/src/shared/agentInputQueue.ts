@@ -242,6 +242,8 @@ export interface AgentInputQueuedMessage {
   clientId: string;
   /** Opt-in: a cancelled delivery ID must never become a fresh enqueue on reconnect. */
   durableDelivery?: true;
+  /** Main-owned crash fence; never trust a value received from Renderer. */
+  followUpSteerAttempted?: true;
   text: string;
   /**
    * Host-owned receipt for the first acceptance boundary.  The controlled
@@ -429,6 +431,8 @@ export function normalizeAgentInputClearBoundaryMs(value: unknown): number | nul
 }
 
 export interface AgentInputProjection {
+  composerAutoDelivery?: true;
+  codexFollowUp?: import('./codexFollowUp').CodexFollowUpState;
   sessionId: string;
   pendingQueue: AgentInputQueuedMessage[];
   /**

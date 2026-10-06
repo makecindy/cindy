@@ -10848,6 +10848,7 @@ async function dispatchRemoteOptimisticSend(
     }
     const projection = await operation.api.input.enqueue(sessionId, record.queued, {
       sendAtMs: Date.now(),
+      composerDelivery: record.queued.originalSyntheticTrigger ? 'queue' : 'auto',
       ...(record.expectedClearBoundaryMs !== undefined
         ? { expectedClearBoundaryMs: record.expectedClearBoundaryMs }
         : {}),
@@ -14820,7 +14821,7 @@ async function sendMessageCore(
 
   const operation = beginInputProjectionOperation(sessionId);
   return operation.api.input
-    .enqueue(sessionId, queued, { sendAtMs: Date.now() })
+    .enqueue(sessionId, queued, { sendAtMs: Date.now(), composerDelivery: queued.originalSyntheticTrigger ? 'queue' : 'auto' })
     .then((projection) => {
       if (opts?.authRetryPersistOnProjectionError) {
         setState(sessionId, (s) => ({

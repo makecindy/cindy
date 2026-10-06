@@ -96,6 +96,7 @@ export function submitRemotePluginConnection(sessionId: string, request: Omit<Lo
  * REMOTE_INVOKE_ALLOWLIST 白名单内(被控端执行前还会再校验一层)。
  */
 export interface RoutableMaker {
+  codexFollowUp: Pick<FullMaker['codexFollowUp'], 'get' | 'setSession'>;
   predictNextPrompt: FullMaker['predictNextPrompt'];
   listBotDelegations: FullMaker['listBotDelegations'];
   cancelBotDelegation: FullMaker['cancelBotDelegation'];
@@ -248,6 +249,10 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
       'maker:worker:dispatch-ui-assignment',
     ) as FullMaker['dispatchOrcaUiAssignment'],
     disableOrca: t('maker:session:disable-orca') as FullMaker['disableOrca'],
+    codexFollowUp: {
+      get: t('maker:codex-follow-up:get') as FullMaker['codexFollowUp']['get'],
+      setSession: t('maker:codex-follow-up:set-session') as FullMaker['codexFollowUp']['setSession'],
+    },
     input: {
       enqueue: t('maker:input:enqueue') as FullMaker['input']['enqueue'],
       compact: t('maker:input:compact') as FullMaker['input']['compact'],

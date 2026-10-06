@@ -241,6 +241,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         await update({
           prepared: {
             ...prepared,
+            ...(projection.composerAutoDelivery === true ? { composerDelivery: 'auto' as const } : {}),
             // Snapshot Plan on this input, never arm the session during preparation.
             ...(record.creation ? {
               createOpts: { ...prepared.createOpts, planMode: record.creation.planModeArm },
