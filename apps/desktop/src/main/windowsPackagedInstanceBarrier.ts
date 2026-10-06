@@ -50,6 +50,8 @@ public static class CindyProcessSingletonProbe {
   public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 }
 '@
+  [Console]::Out.WriteLine('{"status":"compiled"}')
+  [Console]::Out.Flush()
 
   $messageOnlyWindow = [IntPtr]::new(-3)
   $window = [CindyProcessSingletonProbe]::FindWindowEx(
@@ -82,6 +84,7 @@ public static class CindyProcessSingletonProbe {
 type BarrierStatus =
   | { status: 'started' }
   | { status: 'locked' }
+  | { status: 'compiled' }
   | { status: 'acquired' }
   | { status: 'busy' }
   | { status: 'occupied'; pid: number };
@@ -118,6 +121,9 @@ function waitForBarrierStatus(
     let stdout = '';
     let stderr = '';
     let settled = false;
+    const startedAt = Date.now();
+    let phase = 'starting';
+    let phaseStartedAt = startedAt;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (settle: () => void): void => {
       if (settled) return;
@@ -135,7 +141,15 @@ function waitForBarrierStatus(
       clearTimeout(timer);
       timer = setTimeout(() => {
         finish(() =>
-          reject(new Error(`timed out ${stage} Windows packaged-instance barrier`)),
+          // Only report protocol metadata: stderr may contain private paths or
+          // environment values, so retain its size rather than its raw content.
+          reject(
+            new Error(
+              `timed out ${stage} Windows packaged-instance barrier ` +
+                `(phase=${phase}, elapsedMs=${Date.now() - startedAt}, ` +
+                `phaseElapsedMs=${Date.now() - phaseStartedAt}, stderrChars=${stderr.length})`,
+            ),
+          ),
         );
         child.kill();
       }, durationMs);
@@ -162,10 +176,18 @@ function waitForBarrierStatus(
           return;
         }
         if (status.status === 'started') {
+          phase = 'waiting-for-mutex';
+          phaseStartedAt = Date.now();
           armTimeout(timeoutMs + 1_000, 'waiting for');
         } else if (status.status === 'locked') {
+          phase = 'compiling';
+          phaseStartedAt = Date.now();
           // Add-Type + message-window 探测只在 mutex 安全持有后发生。
           armTimeout(HELPER_PROBE_TIMEOUT_MS, 'probing');
+        } else if (status.status === 'compiled') {
+          phase = 'probing-window';
+          phaseStartedAt = Date.now();
+          // A progress marker must not reset or extend the existing probe budget.
         } else {
           finish(() => resolve({ line, stderr }));
           return;
@@ -201,6 +223,7 @@ function parseBarrierStatus(line: string): BarrierStatus {
   if (
     value.status === 'started' ||
     value.status === 'locked' ||
+    value.status === 'compiled' ||
     value.status === 'acquired' ||
     value.status === 'busy'
   ) {
@@ -326,4 +349,5 @@ export const __testing = {
   parseBarrierStatus,
   processSingletonNames,
   waitForExit,
+  waitForBarrierStatus,
 };

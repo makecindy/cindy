@@ -57,11 +57,9 @@ describe('windowsPackagedInstanceBarrier', () => {
     child.signalCode = null;
     child.kill = vi.fn(() => true);
     let finished = false;
-    const waiting = __testing
-      .waitForExit(child as never, 20)
-      .then(() => {
-        finished = true;
-      });
+    const waiting = __testing.waitForExit(child as never, 20).then(() => {
+      finished = true;
+    });
 
     await vi.waitFor(() => expect(child.kill).toHaveBeenCalledOnce(), {
       // 20ms 的强制终止定时器在有负载的 runner 上可能晚触发；
@@ -74,6 +72,61 @@ describe('windowsPackagedInstanceBarrier', () => {
     child.emit('exit', 1, null);
     await waiting;
     expect(finished).toBe(true);
+  });
+
+  it.each([
+    { compiled: false, phase: 'compiling', phaseElapsedMs: 15_000 },
+    { compiled: true, phase: 'probing-window', phaseElapsedMs: 1_000 },
+  ])(
+    'reports $phase without extending the held-mutex budget',
+    async ({ compiled, phase, phaseElapsedMs }) => {
+      vi.useFakeTimers();
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        kill: vi.fn(() => true),
+      });
+      try {
+        const waiting = __testing.waitForBarrierStatus(child as never, 50);
+        const failure = expect(waiting).rejects.toThrow(
+          `phase=${phase}, elapsedMs=15000, phaseElapsedMs=${phaseElapsedMs}, stderrChars=20`,
+        );
+        child.stdout.emit('data', '{"status":"started"}\n{"status":"locked"}\n');
+        child.stderr.emit('data', 'private stderr value');
+        await vi.advanceTimersByTimeAsync(14_000);
+        if (compiled) child.stdout.emit('data', '{"status":"compiled"}\n');
+        expect(child.kill).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1_000);
+        await failure;
+        expect(await waiting.catch((error: Error) => error.message)).not.toContain(
+          'private stderr value',
+        );
+        expect(child.kill).toHaveBeenCalledOnce();
+        expect(child.stdout.listenerCount('data')).toBe(0);
+        expect(child.stderr.listenerCount('data')).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('does not treat compilation progress as a ready barrier', async () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      kill: vi.fn(() => true),
+    });
+    let ready = false;
+    const waiting = __testing.waitForBarrierStatus(child as never, 50).then((result) => {
+      ready = true;
+      return result;
+    });
+    child.stdout.emit('data', '{"status":"started"}\n{"status":"locked"}\n{"status":"compiled"}\n');
+    await Promise.resolve();
+    expect(ready).toBe(false);
+    child.stdout.emit('data', '{"status":"acquired"}\n');
+    expect(await waiting).toEqual({ line: '{"status":"acquired"}', stderr: '' });
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it.runIf(process.platform === 'win32')(
