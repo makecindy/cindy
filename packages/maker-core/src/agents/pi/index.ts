@@ -5863,14 +5863,16 @@ export class PiAgent extends BaseAgent {
       }
 
       if (opts.thinkingEnabled === false) {
+        // 启动/恢复侧记录的是宿主带来的用户意图（本机偏好镜像），不是会被用户看到的交互
+        // 操作：这次下发即使被拒（只告警），标记也必须承认该意图——否则恢复失败一次就
+        // 永久丢失「明确关闭」，之后无载体切模会按会话档位重开（2026-10-06 Greptile P1）。
+        // 与之相反，setThinkingEnabled 是交互开关、失败会抛给用户，标记只在成功后更新。
+        thinkingExplicitlyOff = true;
         const resp = await proc.request({
           type: 'set_thinking_level',
           level: 'off',
         });
-        if (resp.success) {
-          // 同款口径：只在 Pi 确认后才承认「明确关闭」。
-          thinkingExplicitlyOff = true;
-        } else {
+        if (!resp.success) {
           this.deps.logger.warn('pi set_thinking_level rejected', { effort: 'off', error: resp.error });
         }
       } else if (startupEffort) {

@@ -4375,6 +4375,82 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("keeps the declared-off marker when the startup off assert is rejected", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    let failNextThinking = false;
+    captured.requestHandler = async (command) => {
+      if (command.type === "get_state") {
+        return {
+          success: true,
+          data: { sessionFile: "/mock/s.jsonl", model: { contextWindow: 200_000 } },
+        };
+      }
+      if (command.type === "set_model") {
+        return { success: true, data: { contextWindow: 200_000 } };
+      }
+      if (command.type === "set_thinking_level") {
+        if (failNextThinking) {
+          failNextThinking = false;
+          return { success: false, error: "transient" };
+        }
+        return { success: true, data: {} };
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    // 宿主带的用户意图：启动即关；这次 off 下发被拒（只告警）。
+    failNextThinking = true;
+    const handle = await agent.startSession({
+      sessionId: "thinking-off-marker-survives-rejected-startup",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+      thinkingEnabled: false,
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a" });
+
+    // 启动 off 被拒只告警，但意图标记必须保留：无载体切模不得重开用户关闭的思考，
+    // 否则恢复失败一次就永久丢失「明确关闭」。
+    expect(
+      captured.requests
+        .slice(beforeSwitch)
+        .some((request) => request.type === "set_thinking_level"),
+    ).toBe(false);
+    await handle.close();
+  });
+
   it("keeps the model switch successful when the post-switch thinking level is rejected", async () => {
     const denseMap = {
       minimal: "minimal",
