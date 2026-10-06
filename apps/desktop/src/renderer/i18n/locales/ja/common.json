@@ -13562,7 +13562,8 @@
       "labelPlaceholder": "Worker 識別子（空欄なら変更しません）",
       "labelInvalid": "識別子は英数字・ハイフン・アンダースコアのみ使用できます",
       "duplicateLabel": "識別子 {{label}} はこのチームの別の Worker が使用しています",
-      "saveFailed": "保存に失敗しました。もう一度お試しください。"
+      "saveFailed": "保存に失敗しました。もう一度お試しください。",
+      "labelLocked": "この Worker の識別子は進行中のプラグインのチーム計画から参照されているため、計画の完了まで変更できません。役割名の変更か、先に Worker を解放してください。"
     },
     "rolePill": {
       "unread": "未読の更新",

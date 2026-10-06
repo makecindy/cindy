@@ -13595,7 +13595,8 @@
       "labelPlaceholder": "Worker label (leave empty to keep)",
       "labelInvalid": "Label may only contain letters, numbers, hyphens and underscores",
       "duplicateLabel": "Label {{label}} is already used by another worker in this team",
-      "saveFailed": "Failed to save. Please try again."
+      "saveFailed": "Failed to save. Please try again.",
+      "labelLocked": "This worker's label is referenced by an active plugin team plan and can't be changed until the plan finishes. Change the role name, or release the worker first."
     },
     "rolePill": {
       "unread": "Unread update",

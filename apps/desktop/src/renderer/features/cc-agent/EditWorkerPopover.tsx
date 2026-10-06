@@ -78,14 +78,16 @@ export function EditWorkerPopover({
     customRole.length > 0 && (PREDEFINED_ROLES as readonly string[]).includes(customRole)
       ? t('orca.createWorker.customRolePredefinedError')
       : null;
+  // 提交与校验都用 trim 后的角色名：只输空格不能启用保存（服务端会拒绝空角色）。
+  const trimmedActiveRole = activeRole.trim();
   const trimmedLabel = label.trim();
   const labelValidation = trimmedLabel ? normalizeOrcaWorkerLabel(trimmedLabel) : null;
   const labelError = labelValidation?.ok === false ? t('orca.editWorker.labelInvalid') : null;
   const canSave =
     !isSubmitting &&
     !!worker &&
-    activeRole.length >= 1 &&
-    activeRole.length <= 32 &&
+    trimmedActiveRole.length >= 1 &&
+    trimmedActiveRole.length <= 32 &&
     !customRoleError &&
     !labelError;
 
@@ -98,7 +100,7 @@ export function EditWorkerPopover({
     submittingRef.current = true;
     setIsSubmitting(true);
     try {
-      const ok = await onSave({ role: activeRole, label: trimmedLabel });
+      const ok = await onSave({ role: trimmedActiveRole, label: trimmedLabel });
       if (!ok) {
         submittingRef.current = false;
         setIsSubmitting(false);
@@ -108,7 +110,7 @@ export function EditWorkerPopover({
       submittingRef.current = false;
       setIsSubmitting(false);
     }
-  }, [activeRole, canSave, onSave, trimmedLabel]);
+  }, [canSave, onSave, trimmedActiveRole, trimmedLabel]);
 
   return (
     <Dialog.Root open={open} onOpenChange={(next) => { if (!next) handleClose(); }}>

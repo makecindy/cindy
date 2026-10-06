@@ -13562,7 +13562,8 @@
       "labelPlaceholder": "Worker 標識（留空表示不變更）",
       "labelInvalid": "標識只能包含字母、數字、連字號與底線",
       "duplicateLabel": "標識 {{label}} 已被本團隊其他 Worker 使用",
-      "saveFailed": "儲存失敗，請重試"
+      "saveFailed": "儲存失敗，請重試",
+      "labelLocked": "該 Worker 的標識已被活躍的插件團隊計畫引用，計畫結束前不能修改；可改角色名，或先釋放該 Worker。"
     },
     "rolePill": {
       "unread": "未讀更新",

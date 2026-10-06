@@ -272,6 +272,62 @@ describe('OrcaTeamService updateWorker', () => {
     })).resolves.toMatchObject({ ok: false, errorCode: 'DUPLICATE_LABEL' });
     expect(deps.broadcastOrcaWorkerChanged).not.toHaveBeenCalled();
   });
+
+  it('serializes concurrent partial renames so the later one merges the earlier result', async () => {
+    const { deps, service, getWorker } = createDeps();
+    const original = deps.updateWorkerIdentity;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let writes = 0;
+    deps.updateWorkerIdentity = vi.fn(async (input) => {
+      writes += 1;
+      if (writes === 1) await firstGate;
+      return original(input);
+    });
+
+    const roleOnly = service.updateWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      role: 'Reviewer',
+    });
+    const labelOnly = service.updateWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      label: 'backend-2',
+    });
+
+    releaseFirst();
+    await expect(Promise.all([roleOnly, labelOnly])).resolves.toEqual([
+      { ok: true, workerId: 'worker-1', role: 'Reviewer', label: 'research' },
+      { ok: true, workerId: 'worker-1', role: 'Reviewer', label: 'backend-2' },
+    ]);
+    expect(getWorker()).toMatchObject({ role: 'Reviewer', label: 'backend-2' });
+  });
+
+  it('rejects a label rename locked by the active plugin team plan but still allows role changes', async () => {
+    const isWorkerLabelLockedByPlan = vi.fn(async () => true);
+    const { deps, service, getWorker } = createDeps({ isWorkerLabelLockedByPlan });
+
+    await expect(service.updateWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      label: 'backend-2',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+    expect(isWorkerLabelLockedByPlan).toHaveBeenCalledWith({
+      leadSessionId: 'lead-1',
+      labels: ['research', 'backend-2'],
+    });
+    expect(deps.updateWorkerIdentity).not.toHaveBeenCalled();
+
+    // 计划只按 label 寻址，role 改名不受影响，也不触发计划查询。
+    await expect(service.updateWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      role: 'Reviewer',
+    })).resolves.toMatchObject({ ok: true, role: 'Reviewer', label: 'research' });
+    expect(isWorkerLabelLockedByPlan).toHaveBeenCalledTimes(1);
+    expect(getWorker()).toMatchObject({ role: 'Reviewer', label: 'research' });
+  });
 });
 
 function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {

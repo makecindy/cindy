@@ -13562,7 +13562,8 @@
       "labelPlaceholder": "Worker 标识（留空表示不变）",
       "labelInvalid": "标识只能包含字母、数字、连字符和下划线",
       "duplicateLabel": "标识 {{label}} 已被本团队其他 Worker 使用",
-      "saveFailed": "保存失败，请重试"
+      "saveFailed": "保存失败，请重试",
+      "labelLocked": "该 Worker 的标识已被活跃的插件团队计划引用，计划结束前不能修改；可改角色名，或先释放该 Worker。"
     },
     "rolePill": {
       "unread": "未读更新",

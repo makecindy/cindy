@@ -267,7 +267,7 @@ export interface OrcaMcpDeps {
   }) => Promise<
     ControlResult<
       { workerId: string; role: string; label: string | null },
-      'WORKER_NOT_FOUND' | 'INVALID_PARAMS' | 'DUPLICATE_LABEL'
+      'WORKER_NOT_FOUND' | 'INVALID_PARAMS' | 'DUPLICATE_LABEL' | 'WORKER_STATE_CHANGED'
     >
   >;
   /** 列出 agent 可用 model 清单。 */

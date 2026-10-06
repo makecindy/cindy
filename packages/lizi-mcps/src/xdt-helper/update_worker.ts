@@ -22,7 +22,7 @@ export interface UpdateWorkerDeps {
   }) => Promise<
     ControlResult<
       { workerId: string; role: string; label: string | null },
-      'WORKER_NOT_FOUND' | 'INVALID_PARAMS' | 'DUPLICATE_LABEL'
+      'WORKER_NOT_FOUND' | 'INVALID_PARAMS' | 'DUPLICATE_LABEL' | 'WORKER_STATE_CHANGED'
     >
   >;
 }
@@ -31,7 +31,7 @@ const DESCRIPTION =
   '修改已创建 worker 的角色名(role)/标识(label),不改 Agent/模型/权限,也不重启会话。' +
   'worker_id 接受 worker_id 或 session_id 任一(不接受用 label 定位,先 list_workers 取 id)。' +
   'label 是 team 内唯一 slug(字母/数字/连字符/下划线, 1-32 字符); 改名后 send_to_worker / switch_focus 用新 id 定位。' +
-  '失败码: LEAD_NOT_SUPPORTED / WORKER_NOT_FOUND / INVALID_PARAMS / DUPLICATE_LABEL。';
+  '失败码: LEAD_NOT_SUPPORTED / WORKER_NOT_FOUND / INVALID_PARAMS / DUPLICATE_LABEL / WORKER_STATE_CHANGED(被活动插件团队计划引用的 label 不允许改)。';
 
 export function registerUpdateWorkerTool(
   registry: XdtHelperToolRegistry,

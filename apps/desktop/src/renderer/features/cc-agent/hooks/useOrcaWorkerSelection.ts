@@ -431,6 +431,8 @@ export function useOrcaWorkerSelection({
         const ipcError = extractIpcError(err);
         if (ipcError?.code === 'DUPLICATE_LABEL') {
           toast.error(t('orca.editWorker.duplicateLabel', { label: payload.label ?? '' }));
+        } else if (ipcError?.code === 'WORKER_STATE_CHANGED') {
+          toast.error(t('orca.editWorker.labelLocked'));
         } else if (deviceId && ipcError?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
           toast.error(t('newChat.collaboration.unsupportedRemoteHint'));
         } else {

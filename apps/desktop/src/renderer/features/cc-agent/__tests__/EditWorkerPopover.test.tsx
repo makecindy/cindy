@@ -70,6 +70,19 @@ describe('EditWorkerPopover', () => {
     });
   });
 
+  it('blocks saving when the custom role is only whitespace', () => {
+    render(
+      <EditWorkerPopover open worker={worker()} onClose={vi.fn()} onSave={vi.fn(async () => true)} />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('orca.createWorker.customRolePlaceholder'), {
+      target: { value: '   ' },
+    });
+    expect(
+      (screen.getByRole('button', { name: 'orca.editWorker.submit' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
   it('blocks saving on an invalid label and reports it inline', () => {
     render(
       <EditWorkerPopover open worker={worker()} onClose={vi.fn()} onSave={vi.fn(async () => true)} />,
