@@ -11,6 +11,11 @@ export const ORCA_PREDEFINED_WORKER_ROLES = ['developer', 'designer', 'reviewer'
 /** 自定义角色名的长度上限(被控端 `maker:worker:create` 同口径校验)。 */
 export const ORCA_WORKER_ROLE_MAX_LENGTH = 32;
 
+/** Worker label 的长度上限(被控端 `maker:worker:create` / `maker:worker:update` 同口径校验)。 */
+export const ORCA_WORKER_LABEL_MAX_LENGTH = 32;
+
+const ORCA_WORKER_LABEL_PATTERN = /^[a-z0-9_-]+$/i;
+
 export type OrcaWorkerAgentKind = 'claude-code' | 'codex' | 'pi';
 export type OrcaWorkerPermissionMode = 'auto' | 'bypassPermissions';
 export type OrcaWorkerStatus = 'idle' | 'running' | 'done' | 'error';
@@ -27,6 +32,46 @@ export const DEFAULT_ORCA_WORKER_MODELS: Readonly<Record<OrcaWorkerAgentKind, st
   // 与被控端 orcaWorkerCreationService 的 pi 默认一致。
   pi: 'claude-sonnet-4-6',
 };
+
+/**
+ * 归一/校验 Worker label(创建与改名共用同一组 slug 约束)。
+ * label 是 switch_focus 的稳定定位键,团队内唯一性由被控端负责,这里只做形态校验。
+ */
+export function normalizeOrcaWorkerLabel(
+  value: string,
+): { ok: true; value: string } | { ok: false; message: string } {
+  const label = value.trim();
+  if (!label) return { ok: false, message: 'label required' };
+  if (label.length > ORCA_WORKER_LABEL_MAX_LENGTH) {
+    return { ok: false, message: 'label must be 1-32 chars' };
+  }
+  if (!ORCA_WORKER_LABEL_PATTERN.test(label)) {
+    return { ok: false, message: 'label may only contain letters, numbers, hyphens and underscores' };
+  }
+  return { ok: true, value: label.toLowerCase() };
+}
+
+/** 归一/校验 Worker 展示角色名(创建与改名共用):trim 后 1-32 字符。 */
+export function normalizeOrcaWorkerRole(
+  value: string,
+): { ok: true; value: string } | { ok: false; message: string } {
+  const role = value.trim();
+  if (!role) return { ok: false, message: 'role required' };
+  if (role.length > ORCA_WORKER_ROLE_MAX_LENGTH) {
+    return { ok: false, message: 'role must be 1-32 chars' };
+  }
+  return { ok: true, value: role };
+}
+
+/**
+ * Worker session 的生成标题。创建与改名共用同一形态;改名只在标题仍是这个形态时同步改写,不覆盖用户自定义标题。
+ * role 与 label（忽略大小写/首尾空白）相同时只写一次(「Worker · reader」)。
+ */
+export function orcaWorkerSessionTitle(role: string, label: string): string {
+  return role.trim().toLowerCase() === label.trim().toLowerCase()
+    ? `Worker · ${role}`
+    : `Worker · ${role} · ${label}`;
+}
 
 /**
  * 按角色派生 Worker label(被控端要求 /^[a-z0-9_-]+$/i、≤32、团队内唯一)。

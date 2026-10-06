@@ -1,6 +1,7 @@
 import { BrowserWindow } from 'electron';
 import { and, desc, eq, gt, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
+import { orcaWorkerSessionTitle } from '@cindy/maker-shared/orca-team';
 import type { OrcaRemotePendingReport } from '../../shared/orcaRemoteWorker.js';
 
 import { getDbClient } from './client/current.js';
@@ -441,6 +442,62 @@ export async function addOrUpdateWorker(input: {
   const worker = workers.find((w) => w.id === input.id || w.sessionId === input.sessionId);
   if (!worker) throwIpcError('INTERNAL', `Orca worker ${input.id} was not found after save`);
   return worker;
+}
+
+/** Worker label 唯一性由 uniq_orca_workers_team_label 保证；约束错误翻译成稳定业务码。 */
+function isWorkerLabelConstraintError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return err.message.includes('uniq_orca_workers_team_label');
+}
+
+export type OrcaWorkerIdentityUpdateResult =
+  | { ok: true }
+  | { ok: false; errorCode: 'NOT_FOUND' | 'DUPLICATE_LABEL' };
+
+/**
+ * 更新 worker 的 role/label；当 worker session 的标题仍是「上一个生成标题」时同步改写。
+ *
+ * 标题同步只认 `Worker · role · label` 这一生成形态：用户自定义/重命名过的标题保持不动。
+ * label 唯一性由 `uniq_orca_workers_team_label` 在 UPDATE 时最终把关（含已归档 worker）。
+ */
+export async function updateWorkerIdentity(input: {
+  workerId: string;
+  role: string;
+  label: string | null;
+  previousRole: string;
+  previousLabel: string | null;
+}): Promise<OrcaWorkerIdentityUpdateResult> {
+  const db = getDbClient().drizzle;
+  const now = Date.now();
+  const [existing] = await db
+    .select({ id: orcaWorkers.id, sessionId: orcaWorkers.sessionId })
+    .from(orcaWorkers)
+    .where(eq(orcaWorkers.id, input.workerId))
+    .limit(1);
+  if (!existing) return { ok: false, errorCode: 'NOT_FOUND' };
+
+  try {
+    await db
+      .update(orcaWorkers)
+      .set({ role: input.role, label: input.label, updatedAt: now })
+      .where(eq(orcaWorkers.id, input.workerId));
+  } catch (err) {
+    if (isWorkerLabelConstraintError(err)) return { ok: false, errorCode: 'DUPLICATE_LABEL' };
+    throw err;
+  }
+
+  // previousLabel 为空（旧行/已清空）时无法证明旧标题是生成标题，跳过标题同步。
+  if (input.label !== null && input.previousLabel !== null) {
+    const previousTitle = orcaWorkerSessionTitle(input.previousRole, input.previousLabel);
+    const nextTitle = orcaWorkerSessionTitle(input.role, input.label);
+    const updated = await db
+      .update(sessions)
+      .set({ title: nextTitle, updatedAt: now })
+      .where(and(eq(sessions.id, existing.sessionId), eq(sessions.title, previousTitle)))
+      .returning({ id: sessions.id });
+    if (updated.length > 0) broadcastSessionPatch(existing.sessionId, { title: nextTitle });
+  }
+  return { ok: true };
 }
 
 export async function listWorkersByLead(

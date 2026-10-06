@@ -11,6 +11,7 @@ import {
   type ConversationSearchJump,
 } from '../../../../shared/conversationSearchJump';
 import type { CreateWorkerForm } from '../CreateWorkerPopover';
+import type { EditWorkerForm } from '../EditWorkerPopover';
 import {
   executionDeviceErrorMessage,
   getCollaborationStartErrorMessage,
@@ -61,6 +62,7 @@ export function useOrcaWorkerSelection({
     refreshCreationState,
   } = useWorkers(leadSessionId);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editWorkerId, setEditWorkerId] = useState<string | null>(null);
   const [searchJumpPinnedWorkerSessionId, setSearchJumpPinnedWorkerSessionId] = useState<
     string | null
   >(null);
@@ -98,6 +100,7 @@ export function useOrcaWorkerSelection({
     setSearchJumpPinnedWorkerSessionId(null);
     setFocusWorkerPinnedSessionId(null);
     setPendingFocusWorkerSessionId(null);
+    setEditWorkerId(null);
   }, [leadSessionId]);
 
   const searchJumpWorkerSessionId = useMemo(
@@ -245,6 +248,10 @@ export function useOrcaWorkerSelection({
   ]);
   const selectedWorkerId = selectedWorkerRecord?.workerId ?? null;
   const workerSessionId = selectedWorkerRecord?.sessionId ?? null;
+  const editWorker = useMemo(
+    () => (editWorkerId ? workers.find((w) => w.workerId === editWorkerId) ?? null : null),
+    [editWorkerId, workers],
+  );
 
   const clearSelectionHints = useCallback(() => {
     selectionIntentGenerationRef.current += 1;
@@ -397,6 +404,44 @@ export function useOrcaWorkerSelection({
     [leadSessionId, refresh],
   );
 
+  const handleOpenEditWorker = useCallback((workerId: string) => {
+    setEditWorkerId(workerId);
+  }, []);
+
+  const handleCloseEditWorker = useCallback(() => {
+    setEditWorkerId(null);
+  }, []);
+
+  const handleUpdateWorker = useCallback(
+    async (form: EditWorkerForm): Promise<boolean> => {
+      if (!editWorkerId) return false;
+      const payload: { role: string; label?: string } = { role: form.role.trim() };
+      const trimmedLabel = form.label.trim();
+      if (trimmedLabel) payload.label = trimmedLabel;
+      try {
+        await orcaWorkflowsFor(leadSessionId).updateWorker({
+          leadSessionId,
+          workerId: editWorkerId,
+          ...payload,
+        });
+        setEditWorkerId(null);
+        await refresh();
+        return true;
+      } catch (err) {
+        const ipcError = extractIpcError(err);
+        if (ipcError?.code === 'DUPLICATE_LABEL') {
+          toast.error(t('orca.editWorker.duplicateLabel', { label: payload.label ?? '' }));
+        } else if (deviceId && ipcError?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+          toast.error(t('newChat.collaboration.unsupportedRemoteHint'));
+        } else {
+          toast.error(t('orca.editWorker.saveFailed'));
+        }
+        return false;
+      }
+    },
+    [deviceId, editWorkerId, leadSessionId, refresh, t],
+  );
+
   return {
     workers,
     focusedWorker,
@@ -410,6 +455,10 @@ export function useOrcaWorkerSelection({
     workerSessionId,
     createOpen,
     setCreateOpen,
+    editWorker,
+    handleOpenEditWorker,
+    handleCloseEditWorker,
+    handleUpdateWorker,
     handleCreateWorker,
     handleSwitchFocus,
     handleArchiveWorker,

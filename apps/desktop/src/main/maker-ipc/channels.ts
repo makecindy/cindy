@@ -670,6 +670,8 @@ export const MAKER_INVOKE = {
   /** New wire contract for automatic done acknowledgements; old peers reject it safely. */
   WORKER_ACKNOWLEDGE_DONE: 'maker:worker:acknowledge-done',
   WORKER_ARCHIVE: 'maker:worker:archive',
+  /** 修改已创建 Worker 的展示角色名(role)与 team 内唯一标识(label)。 */
+  WORKER_UPDATE: 'maker:worker:update',
   TEAM_END: 'maker:team:end',
   COLLABORATION_SETTINGS_GET: 'maker:collaboration-settings:get',
   COLLABORATION_SETTINGS_SET: 'maker:collaboration-settings:set',

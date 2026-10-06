@@ -1,4 +1,5 @@
 import type { AgentKind } from '@cindy/maker-core';
+import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-shared/orca-team';
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
@@ -149,6 +150,15 @@ export type DispatchWorkerTaskResult =
 export type OrcaOkResult =
   { ok: true; workerId?: string } | { ok: false; errorCode: string; message: string };
 
+/** update_worker 的 domain result：worker 展示角色名与 team 内唯一 label。 */
+export type UpdateWorkerResult =
+  | { ok: true; workerId: string; role: string; label: string | null }
+  | {
+      ok: false;
+      errorCode: 'WORKER_NOT_FOUND' | 'INVALID_PARAMS' | 'DUPLICATE_LABEL' | 'INTERNAL';
+      message: string;
+    };
+
 /** worker 排队消息控制(list/update/cancel)对外暴露的失败码。 */
 export type WorkerQueuedMessageFailureCode =
   | 'WORKER_NOT_FOUND'
@@ -260,6 +270,14 @@ export interface OrcaTeamServiceDeps {
     worker: OrcaWorkerRecordSnapshot,
     link: OrcaWorkerLinkSnapshot,
   ): Promise<void>;
+  /** 修订 worker 的 role/label；label 唯一性由 store 的唯一索引把关。 */
+  updateWorkerIdentity: (input: {
+    workerId: string;
+    role: string;
+    label: string | null;
+    previousRole: string;
+    previousLabel: string | null;
+  }) => Promise<{ ok: true } | { ok: false; errorCode: 'NOT_FOUND' | 'DUPLICATE_LABEL' }>;
   updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
   markWorkerIdle(workerId: string): Promise<void>;
   markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
@@ -377,6 +395,13 @@ export interface OrcaTeamService {
   }, opts?: { deferredRetry?: boolean; assertCurrent?: () => Promise<void> }): Promise<OrcaOkResult>;
   /** 外部调用边界：按 caller lead 校验 worker 可见性。 */
   archiveWorker(params: { callerLeadSessionId: string; workerId: string; onlyIfIdle?: boolean; beforeArchive?: () => Promise<void> }): Promise<OrcaOkResult>;
+  /** 外部调用边界：修改 worker 的展示角色名(role)与 team 内唯一标识(label)，不改执行单元本身。 */
+  updateWorker(params: {
+    callerLeadSessionId: string;
+    workerId: string;
+    role?: string;
+    label?: string;
+  }): Promise<UpdateWorkerResult>;
   /** 外部调用边界：列出目标 worker 输入队列中的排队消息(lead 自己的条目含正文)。 */
   /** workerRef 省略时读取 Lead 自己的输入队列(Worker 回报在 Lead 忙时排在这里)。 */
   listWorkerQueuedMessages(params: {
@@ -1376,6 +1401,63 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     return params.onlyIfIdle ? withWorkerTransition(params.workerId,perform) : perform();
   }
 
+  async function updateWorker(params: {
+    callerLeadSessionId: string;
+    workerId: string;
+    role?: string;
+    label?: string;
+  }): Promise<UpdateWorkerResult> {
+    const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
+    if (!found.ok) {
+      if (found.errorCode === 'NOT_FOUND') {
+        return { ok: false, errorCode: 'WORKER_NOT_FOUND', message: `worker ${params.workerId} not found` };
+      }
+      return { ok: false, errorCode: 'INTERNAL', message: found.message };
+    }
+    const { link, worker } = found;
+    if (params.role === undefined && params.label === undefined) {
+      return { ok: false, errorCode: 'INVALID_PARAMS', message: 'role or label required' };
+    }
+
+    let role = worker.role;
+    if (params.role !== undefined) {
+      const normalized = normalizeOrcaWorkerRole(params.role);
+      if (!normalized.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: normalized.message };
+      role = normalized.value;
+    }
+    let label = worker.label;
+    if (params.label !== undefined) {
+      const normalized = normalizeOrcaWorkerLabel(params.label);
+      if (!normalized.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: normalized.message };
+      label = normalized.value;
+    }
+
+    // 幂等：值没变时不写库、不广播（MCP 重试与 UI 重复提交都落到这里）。
+    if (role === worker.role && label === worker.label) {
+      return { ok: true, workerId: worker.id, role, label };
+    }
+
+    const updated = await deps.updateWorkerIdentity({
+      workerId: worker.id,
+      role,
+      label,
+      previousRole: worker.role,
+      previousLabel: worker.label,
+    });
+    if (!updated.ok) {
+      if (updated.errorCode === 'DUPLICATE_LABEL') {
+        return {
+          ok: false,
+          errorCode: 'DUPLICATE_LABEL',
+          message: `label "${label}" already used in this team`,
+        };
+      }
+      return { ok: false, errorCode: 'WORKER_NOT_FOUND', message: `worker ${params.workerId} not found` };
+    }
+    deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+    return { ok: true, workerId: worker.id, role, label };
+  }
+
   /** 排队消息 source 判定:worker 队列里 orca 条目只可能来自其 lead(通信拓扑为 Lead↔Worker)。 */
   function queuedMessageSource(
     item: AgentInputQueuedMessage,
@@ -1730,6 +1812,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     interruptWorker,
     idleWorker,
     archiveWorker,
+    updateWorker,
     listWorkerQueuedMessages,
     updateWorkerQueuedMessage,
     cancelWorkerQueuedMessage,

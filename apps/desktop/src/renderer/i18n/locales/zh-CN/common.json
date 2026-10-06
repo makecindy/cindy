@@ -13552,6 +13552,18 @@
         "dirUnavailable": "{{device}} 上的目录暂时无法访问。请检查连接或网络盘后重试。Worker 没有创建。"
       }
     },
+    "editWorker": {
+      "title": "编辑 Worker",
+      "submit": "保存",
+      "closeAria": "关闭编辑 Worker 弹窗",
+      "labelLabel": "标识",
+      "labelHint": "标识用于在团队内唯一识别这个 Worker，只能包含字母、数字、连字符和下划线；改动后 Lead 与各处引用按新标识定位。",
+      "labelHintAria": "标识说明",
+      "labelPlaceholder": "Worker 标识（留空表示不变）",
+      "labelInvalid": "标识只能包含字母、数字、连字符和下划线",
+      "duplicateLabel": "标识 {{label}} 已被本团队其他 Worker 使用",
+      "saveFailed": "保存失败，请重试"
+    },
     "rolePill": {
       "unread": "未读更新",
       "worker": "Worker",
@@ -13559,6 +13571,7 @@
       "workerCountSummary_other": "{{totalCount}} 个 Worker · {{activeCount}} 运行中",
       "statusAria": "状态 {{status}}",
       "archiveWorkerAria": "归档 Worker {{name}}",
+      "editWorkerAria": "编辑 Worker {{name}}",
       "createWorker": "创建新 Worker",
       "hardLimitHint": "已达硬上限 {{count}} 个 · 归档现有 Worker 后可继续创建",
       "hardLimitSettingsHint": "已达硬上限 {{count}} 个 · 点击前往协同设置调整",

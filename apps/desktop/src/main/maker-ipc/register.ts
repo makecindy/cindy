@@ -128,6 +128,7 @@ import {
   isGatewayProxyTokenInvalidError,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
+import { normalizeOrcaWorkerLabel } from '@cindy/maker-shared/orca-team';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
   isProductTurnCompletionTailEvent,
@@ -440,6 +441,7 @@ import {
   setRemoteWorkerStatusProvider,
   setSessionOrcaRole,
   setWorkerFocus,
+  updateWorkerIdentity,
   updateWorkerStatus,
 } from '../localDb/orcaTeamStore.js';
 import {
@@ -856,10 +858,7 @@ import {
   type WorkerQueuedMessageControlResult,
   type WorkerTerminalTurnCapture,
 } from './orcaTeamService.js';
-import {
-  createOrcaWorkerCreationService,
-  normalizeOrcaWorkerLabel,
-} from './orcaWorkerCreationService.js';
+import { createOrcaWorkerCreationService } from './orcaWorkerCreationService.js';
 import {
   resolveSendToSessionExecutionConfig,
   type SendToSessionExecutionOverrides,
@@ -2402,6 +2401,15 @@ interface OrcaCollabService {
     workerId: string;
   }) => Promise<
     { ok: true; workerId?: string } | { ok: false; errorCode: string; message: string }
+  >;
+  updateWorker: (params: {
+    callerLeadSessionId: string;
+    workerId: string;
+    role?: string;
+    label?: string;
+  }) => Promise<
+    | { ok: true; workerId: string; role: string; label: string | null }
+    | { ok: false; errorCode: string; message: string }
   >;
   listAvailableModels: (params: { agent?: AgentKind; callerSessionId?: string }) => Promise<
     | {
@@ -6001,6 +6009,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 新控制端只有看到此位才允许给被控端 Orca Team 选择 Worker Full access。
       // 旧 desktop 缺省为 false，避免显式 bypassPermissions 被旧 handler 静默忽略。
       supportsOrcaWorkerPermissionMode: true,
+      // 新控制端只有看到此位才允许对远程 Worker 显示「编辑」入口(maker:worker:update);
+      // 旧 desktop 缺省为 false,因为其 allowlist 不认识该 channel。
+      supportsOrcaWorkerUpdate: true,
       // 新控制端只有看到此位，才会让被控端延后 UI initial_task 并在 Lead 首条
       // 输入 accepted 且历史可查询后走 WORKER_DISPATCH_UI_ASSIGNMENT；旧端继续即时派发。
       supportsDeferredOrcaUiAssignment: true,
@@ -12794,6 +12805,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   registerOrcaWorkerControlHandlers(createElectronIpcHandlerRegistry(), {
     idleWorker: (params) => orcaTeamService.idleWorker(params),
     archiveWorker: (params) => orcaTeamService.archiveWorker(params),
+    updateWorker: (params) => orcaTeamService.updateWorker(params),
     logInfo: (message, fields) => log.info(message, fields),
   });
 
@@ -12858,6 +12870,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await resumeOrcaWorkerSessionIfMissing(target);
     },
     updateWorkerStatus,
+    updateWorkerIdentity,
     markWorkerIdle: async (workerId) => {
       const now = Date.now();
       const db = getDbClient().drizzle;
@@ -14714,6 +14727,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       try {
         const { assertCurrent } = await captureOrcaPluginAuthority(callerLeadSessionId);
         return await orcaTeamService.archiveWorker({ callerLeadSessionId, workerId, beforeArchive: assertCurrent });
+      } catch (err) {
+        return {
+          ok: false,
+          errorCode: 'INTERNAL',
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
+    },
+    updateWorker: async ({ callerLeadSessionId, workerId, role, label }) => {
+      try {
+        const { assertCurrent } = await captureOrcaPluginAuthority(callerLeadSessionId);
+        await assertCurrent();
+        return await orcaTeamService.updateWorker({ callerLeadSessionId, workerId, role, label });
       } catch (err) {
         return {
           ok: false,

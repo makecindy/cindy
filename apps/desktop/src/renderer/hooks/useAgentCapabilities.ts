@@ -120,6 +120,11 @@ export interface AgentCapabilities {
    * device-link 老被控端无此字段 → undefined，控制端必须阻止开启协同并提示升级。
    */
   supportsOrcaWorkerPermissionMode?: boolean;
+  /**
+   * 被控端是否支持创建后修改 Worker 的角色名/标识(maker:worker:update)。
+   * device-link 老被控端无此字段 → undefined,控制端对远程 Worker 隐藏编辑入口。
+   */
+  supportsOrcaWorkerUpdate?: boolean;
   /** 被控端支持把 UI initial_task 延后到 Lead 首条输入 accepted 后派发。 */
   supportsDeferredOrcaUiAssignment?: boolean;
   /**
@@ -287,6 +292,7 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !isOptionalBoolean(value.supportsSessionAgentSwitch) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitchCas) ||
     !isOptionalBoolean(value.supportsOrcaWorkerPermissionMode) ||
+    !isOptionalBoolean(value.supportsOrcaWorkerUpdate) ||
     !isOptionalBoolean(value.supportsDeferredOrcaUiAssignment) ||
     !isOptionalCapabilityStatus(value.writableDirs) ||
     !isOptionalCapabilityStatus(value.manualCompact)

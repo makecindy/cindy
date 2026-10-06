@@ -5084,6 +5084,12 @@ interface ElectronAPI {
         expectedStatus?: 'done',
       ) => Promise<unknown>;
       archiveWorker: (leadSessionId: string, workerId: string) => Promise<unknown>;
+      updateWorker: (input: {
+        leadSessionId: string;
+        workerId: string;
+        role?: string;
+        label?: string;
+      }) => Promise<unknown>;
       endTeam: (leadSessionId: string) => Promise<unknown>;
       getCollaborationSettings: () => Promise<unknown>;
       /** 可放 Worker 的同账号其他电脑(`{ devices: OrcaExecutionDeviceView[] }`)。 */
