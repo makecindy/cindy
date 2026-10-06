@@ -5863,12 +5863,14 @@ export class PiAgent extends BaseAgent {
       }
 
       if (opts.thinkingEnabled === false) {
-        thinkingExplicitlyOff = true;
         const resp = await proc.request({
           type: 'set_thinking_level',
           level: 'off',
         });
-        if (!resp.success) {
+        if (resp.success) {
+          // 同款口径：只在 Pi 确认后才承认「明确关闭」。
+          thinkingExplicitlyOff = true;
+        } else {
           this.deps.logger.warn('pi set_thinking_level rejected', { effort: 'off', error: resp.error });
         }
       } else if (startupEffort) {
@@ -6629,9 +6631,6 @@ export class PiAgent extends BaseAgent {
       // 制造「Pi 已切模、宿主认为没切」的分裂。用户可在 UI 上重新选择。
       const explicitThinking =
         setOpts && typeof setOpts.thinkingEnabled === 'boolean' ? setOpts.thinkingEnabled : undefined;
-      // 显式意图即权威：关掉/打开都落成用户意图标记，供无载体切换判断能否重开思考。
-      if (explicitThinking === true) thinkingExplicitlyOff = false;
-      else if (explicitThinking === false) thinkingExplicitlyOff = true;
       {
         const requestedEffort = setOpts?.effort ?? mutableEffort ?? startupEffort ?? null;
         const nativeTarget = provider !== PI_PROVIDER_ID
@@ -6711,6 +6710,10 @@ export class PiAgent extends BaseAgent {
               const resp = await proc.request({ type: 'set_thinking_level', level });
               if (resp.success) {
                 if (appliedEffort) mutableEffort = appliedEffort;
+                // 意图标记只在 RPC 成功后更新：显式意图才算用户意图（显式 true+目标
+                // 不支持思考而下发的 off 不是用户意图，标记仍为开）；失败沿用原标记。
+                if (explicitThinking === true) thinkingExplicitlyOff = false;
+                else if (explicitThinking === false) thinkingExplicitlyOff = true;
                 break;
               }
               if (attempt === 1) {
@@ -7401,7 +7404,6 @@ export class PiAgent extends BaseAgent {
 
       async setThinkingEnabled(enabled: boolean): Promise<void> {
         if (reviewMode) return;
-        thinkingExplicitlyOff = !enabled;
         // 打开时回到会话当前的期望档位，而不是固定 xhigh：显式开关不该把用户选好的
         // max/medium 抹平——否则紧随其后的切模按 mutableEffort 归一化时又会把它降档。
         // 没有期望档位时才回到历史默认 xhigh。
@@ -7416,6 +7418,9 @@ export class PiAgent extends BaseAgent {
           level,
         });
         if (!resp.success) throw new Error(`pi set_thinking_level failed: ${resp.error ?? 'unknown'}`);
+        // 意图标记只在 RPC 成功后更新：失败时 Pi 仍是旧状态，提前改标记会让之后的
+        // 无载体切模误判（2026-10-06 Greptile P1：已报错的操作在之后意外生效）。
+        thinkingExplicitlyOff = !enabled;
         // 只在打开时更新档位记忆：关掉思考不丢档位——档位是用户的独立选择，
         // 再打开应回到原档位，而不是回落到启动时的档位。
         if (enabled) mutableEffort = targetEffort ?? 'xhigh';

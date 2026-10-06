@@ -4299,6 +4299,82 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("keeps the explicit-off marker when re-enabling thinking is rejected", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    let failNextThinking = false;
+    captured.requestHandler = async (command) => {
+      if (command.type === "get_state") {
+        return {
+          success: true,
+          data: { sessionFile: "/mock/s.jsonl", model: { contextWindow: 200_000 } },
+        };
+      }
+      if (command.type === "set_model") {
+        return { success: true, data: { contextWindow: 200_000 } };
+      }
+      if (command.type === "set_thinking_level") {
+        if (failNextThinking) {
+          failNextThinking = false;
+          return { success: false, error: "transient" };
+        }
+        return { success: true, data: {} };
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-off-marker-survives-rejected-enable",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    await handle.setThinkingEnabled!(false);
+    // 重开思考被拒绝：抛错的同时不得把「明确关闭」标记提前清掉（Pi 实际仍是 off）。
+    failNextThinking = true;
+    await expect(handle.setThinkingEnabled!(true)).rejects.toThrow(/set_thinking_level/);
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a" });
+
+    // 一次已报错的操作不得在之后的无载体切模里意外生效：保持关闭。
+    expect(
+      captured.requests
+        .slice(beforeSwitch)
+        .some((request) => request.type === "set_thinking_level"),
+    ).toBe(false);
+    await handle.close();
+  });
+
   it("keeps the model switch successful when the post-switch thinking level is rejected", async () => {
     const denseMap = {
       minimal: "minimal",
