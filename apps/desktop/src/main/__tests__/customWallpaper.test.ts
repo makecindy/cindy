@@ -73,6 +73,86 @@ async function selectImage(color = 'blue') {
 const parent = {} as never;
 
 describe('client-owned custom wallpaper lifecycle', () => {
+  it('rejects a 20–100 MB image after only the header, even with an MP4 filename', async () => {
+    const png = await selectImage();
+    const file = path.join(h.dir, 'oversized.mp4');
+    fs.writeFileSync(file, png);
+    fs.truncateSync(file, 50 * 1024 * 1024);
+    h.picker.mockResolvedValue({ canceled: false, filePaths: [file] });
+    const realOpen = fs.promises.open;
+    const lengths: number[] = [];
+    vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      if (args[0] === file) {
+        const realRead = handle.read.bind(handle);
+        vi.spyOn(handle, 'read').mockImplementation((async (...readArgs: unknown[]) => {
+          lengths.push((readArgs[0] as Buffer).length);
+          return realRead(
+            readArgs[0] as Buffer,
+            readArgs[1] as number,
+            readArgs[2] as number,
+            readArgs[3] as number,
+          );
+        }) as typeof handle.read);
+      }
+      return handle;
+    });
+    await expect(importCustomWallpaper(parent)).rejects.toThrow('INVALID_PARAMS');
+    expect(lengths).toEqual([4096]);
+  });
+
+  it.each([false, true])(
+    'cleans failed imports from durable references (published=%s)',
+    async (published) => {
+      await selectImage();
+      await importCustomWallpaper(parent);
+      const official = await writeBlob({
+        buffer: Buffer.from('abc'),
+        mimeType: 'video/mp4',
+        scope: 'client-wallpaper',
+      });
+      const oldUrl = readCustomWallpaperUrl();
+      const video = Buffer.from('000000186674797069736f6d0000000069736f6d6d703432', 'hex');
+      const file = path.join(h.dir, 'replacement.mp4');
+      fs.writeFileSync(file, video);
+      h.picker.mockResolvedValue({ canceled: false, filePaths: [file] });
+      const write = customWallpaperStore.writePatchAtomic.bind(customWallpaperStore);
+      vi.spyOn(customWallpaperStore, 'writePatchAtomic').mockImplementationOnce(async (patch) => {
+        if (published) await write(patch);
+        throw new Error('save failed');
+      });
+      await expect(importCustomWallpaper(parent)).rejects.toThrow('save failed');
+      const current = readCustomWallpaperUrl();
+      expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(2);
+      await expect(readClientWallpaperFile(official.url)).resolves.toBeDefined();
+      if (published) {
+        expect(current).not.toBe(oldUrl);
+        expect((await readClientWallpaperFile(current)).buffer).toEqual(video);
+      } else {
+        expect(current).toBe(oldUrl);
+        await expect(readClientWallpaperFile(oldUrl)).resolves.toBeDefined();
+      }
+      expect(fs.readFileSync(file)).toEqual(video);
+    },
+  );
+
+  it('preserves the original save error if compensating cleanup also fails', async () => {
+    await selectImage();
+    await importCustomWallpaper(parent);
+    const oldUrl = readCustomWallpaperUrl();
+    await selectImage('red');
+    vi.spyOn(customWallpaperStore, 'writePatchAtomic').mockRejectedValueOnce(
+      new Error('save failed'),
+    );
+    vi.spyOn(recycler, 'recycleClientWallpapers').mockRejectedValueOnce(
+      new Error('cleanup failed'),
+    );
+    await expect(importCustomWallpaper(parent)).rejects.toThrow('save failed');
+    await expect(readClientWallpaperFile(oldUrl)).resolves.toBeDefined();
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(2);
+    await removeCustomWallpaper();
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(0);
+  });
   it('retains an official CDN video when removing custom media', async () => {
     const official = await writeBlob({
       buffer: Buffer.from('abc'),
@@ -203,7 +283,7 @@ describe('client-owned custom wallpaper lifecycle', () => {
     expect((await readClientWallpaperFile(current)).buffer.length).toBeGreaterThan(0);
   });
 
-  it('keeps the published image after save failure and collects the unused bytes on the next successful operation', async () => {
+  it('keeps the published image after save failure and allows subsequent removal', async () => {
     await selectImage();
     await importCustomWallpaper(parent);
     const first = readCustomWallpaperUrl();

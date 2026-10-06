@@ -49,6 +49,11 @@ export async function importCustomWallpaper(parent: BrowserWindow): Promise<bool
   try {
     const read = await readBoundedFileNoFollow(selected.filePaths[0], MAX_VIDEO_BYTES, {
       nonBlocking: true,
+      // Reject known oversized images before allocating their full contents.
+      // Unknown prefixes retain the outer limit (e.g. a large ftyp box);
+      // full-byte sniffing and image decoding still validate them below.
+      maxBytesForPrefix: (prefix) =>
+        sniffMediaMime(prefix)?.startsWith('image/') ? MAX_BYTES : MAX_VIDEO_BYTES,
     });
     if (!read) throw new Error('Unreadable wallpaper');
     bytes = read;
@@ -62,10 +67,14 @@ export async function importCustomWallpaper(parent: BrowserWindow): Promise<bool
       buffer,
       mimeType: isVideo ? 'video/mp4' : 'image/webp',
     });
-    await customWallpaperStore.writePatchAtomic({ url: media.url });
-    // Recycle only after successful publication. Unreadable settings or a failed
-    // write must not delete the previous image; a later successful operation also
-    // collects bytes left by interrupted/failed imports.
+    try {
+      await customWallpaperStore.writePatchAtomic({ url: media.url });
+    } catch (error) {
+      // A reported failure may follow publication: re-read durable references.
+      // Unreadable references defer cleanup rather than risking the current media.
+      await recycleUnusedWallpapers();
+      throw error;
+    }
     await recycleUnusedWallpapers();
     return true;
   });

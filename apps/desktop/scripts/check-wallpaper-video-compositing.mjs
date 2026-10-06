@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // Run: node apps/desktop/scripts/check-wallpaper-video-compositing.mjs [Chromium executable]
 // Uses production CSS and a deterministic video poster in an isolated browser.
+// The companion WallpaperVideo.test.tsx checks the CSS contract in normal unit/CI runs.
+// Requires an installed Chromium executable argument or a Playwright Chromium cache.
+// playwright-core does not download a browser; this script does not install one.
 // Guards blending/visibility without relying on codec availability. HDR/driver behavior still
 // requires the Windows FP16 screen-capture regression described in the test output.
 import assert from 'node:assert/strict';

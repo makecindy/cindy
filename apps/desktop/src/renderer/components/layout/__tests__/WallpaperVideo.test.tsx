@@ -4,6 +4,10 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WallpaperVideo } from '../WallpaperVideo';
 import { HIDDEN_ANIMATION_ATTR } from '@/lib/hiddenAnimationGate';
+import { parse } from 'postcss';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import '@/styles/globals.css';
 
 const state = vi.hoisted(() => ({ reduced: false, tier: 'standard', cdn: true }));
 const ensureVideo = vi.fn();
@@ -16,6 +20,32 @@ vi.mock('@/lib/wallpaper', () => ({
 }));
 
 describe('dynamic wallpaper lifecycle', () => {
+  it('keeps visibility on the video over an opaque theme backing without an independent veil', () => {
+    // The import tracks CSS dependencies for Vitest related; unit mode stubs CSS
+    // modules, so read the source explicitly. Pixel/HDR acceptance stays separate.
+    const css = parse(readFileSync(resolve(__dirname, '../../../styles/globals.css'), 'utf8'));
+    const declarations = (selector: string) => {
+      const values: Record<string, string> = {};
+      css.walkRules(selector, (rule) => {
+        rule.walkDecls((decl) => {
+          values[decl.prop] = decl.value;
+        });
+      });
+      return values;
+    };
+    expect(declarations('.app-wallpaper-video').background).toBe('var(--surface)');
+    expect(declarations('.app-wallpaper-video').opacity).toBeUndefined();
+    expect(declarations('.app-wallpaper-video video').opacity).toBe(
+      'calc(100% - var(--app-wallpaper-veil))',
+    );
+    css.walkRules((rule) => {
+      if (/\.app-wallpaper-video[^,{]*::?(before|after)/.test(rule.selector)) {
+        rule.walkDecls('content', (decl) => {
+          expect(['none', 'normal']).toContain(decl.value);
+        });
+      }
+    });
+  });
   beforeEach(() => {
     state.reduced = false;
     state.tier = 'standard';
