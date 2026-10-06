@@ -35,7 +35,7 @@ it('locks only unsettled team-plan labels for worker rename', () => {
   expect(isTeamPlanLabelLocked(undefined, [], ['w0'])).toBe(false);
 });
 
-it('releases the plan label lock once the owning plugin is no longer authorized', () => {
+it('releases the plan label lock only after the plugin is uninstalled', () => {
   const route = {} as never;
   const plan = {
     concurrency: 1,
@@ -43,7 +43,8 @@ it('releases the plan label lock once the owning plugin is no longer authorized'
   } as unknown as PluginTeamPlan;
   const receipt = { payload: JSON.stringify({ teamPlan: plan }), operation: 'create' as const };
   expect(isTeamPlanLabelLockedByReceipt(receipt, true, ['w0'])).toBe(true);
-  // 插件卸载 / 撤权后，保留的收据不再锁定改名。
+  // 插件卸载（任务归属确实撤销）后，保留的收据不再锁定改名；
+  // 停用 / 未批准仍传入 true（可恢复），继续锁定由上层保证。
   expect(isTeamPlanLabelLockedByReceipt(receipt, false, ['w0'])).toBe(false);
   expect(isTeamPlanLabelLockedByReceipt({ payload: receipt.payload, operation: 'send' }, true, ['w0'])).toBe(false);
   expect(isTeamPlanLabelLockedByReceipt(undefined, true, ['w0'])).toBe(false);

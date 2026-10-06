@@ -9,7 +9,7 @@ import { pluginWorkerCompletedAt } from './pluginWorkerCompletion.js';
 import { createPluginTaskStore } from './pluginTaskStore.js';
 import { hasAcceptedUserTaskInput } from './pluginTaskInput.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
-import { showMobilePluginTaskPermission, setPluginTaskHandler, getPluginTaskSourceSessionId, setPluginTaskUninstaller, isPluginTaskAuthorized, getPluginTaskInstallRevision, pluginTaskAuthorizationRevision } from '../cindy-brain/index.js';
+import { showMobilePluginTaskPermission, setPluginTaskHandler, getPluginTaskSourceSessionId, setPluginTaskUninstaller, isPluginTaskAuthorized, findAvailableGhostForAuthorization, getPluginTaskInstallRevision, pluginTaskAuthorizationRevision } from '../cindy-brain/index.js';
 import type { PluginTaskRoute, PluginTaskRequest } from '../../shared/pluginTasks.js';
 import { createHash as pluginTaskConfigHash } from 'node:crypto';
 import { finishCompanionEnvironmentRemoval } from '../bot-import/runtime.js';
@@ -12876,13 +12876,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!epoch) throw new Error('plugin task storage unavailable');
       const receipt = await createPluginTaskStore(epoch.client).get(leadSessionId);
       if (epoch !== getCurrentDbClientSnapshot()) throw new Error('account changed');
-      // 插件卸载 / 撤权后原任务按普通 Orca 任务继续使用，releaseWorker 已不可用；
-      // 保留的创建收据不再构成计划锁。
-      return isTeamPlanLabelLockedByReceipt(
-        receipt,
-        receipt ? isPluginTaskAuthorized(receipt.pluginId) : false,
-        labels,
-      );
+      // 仅"插件已卸载（任务归属确实撤销）"解除计划锁；停用 / 未批准可恢复，重新启用后
+      // 计划仍会继续，保持锁定（fail closed）。
+      const pluginInstalled =
+        receipt !== undefined && findAvailableGhostForAuthorization(receipt.pluginId) !== null;
+      return isTeamPlanLabelLockedByReceipt(receipt, pluginInstalled, labels);
     },
     markWorkerIdle: async (workerId) => {
       const now = Date.now();

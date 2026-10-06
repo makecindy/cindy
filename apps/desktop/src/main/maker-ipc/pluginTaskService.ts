@@ -88,16 +88,16 @@ export function isTeamPlanLabelLocked(
 }
 
 /**
- * 收据级计划锁：只有当创建收据仍属于活动插件归属（pluginAuthorized）时才锁定 label。
- * 插件卸载 / 撤权后，原插件任务按普通 Orca 任务继续使用，releaseWorker 已不可用，
- * 保留的收据不得继续禁止改名。
+ * 收据级计划锁：只有当插件仍安装（pluginInstalled，任务归属未被卸载撤销）时才锁定 label。
+ * 插件卸载后，原插件任务按普通 Orca 任务继续使用，releaseWorker 已不可用，
+ * 保留的收据不得继续禁止改名；停用 / 未批准可恢复，重新启用后计划仍会继续，故仍锁定。
  */
 export function isTeamPlanLabelLockedByReceipt(
   receipt: Pick<PluginTaskReceipt, 'payload' | 'operation'> | undefined,
-  pluginAuthorized: boolean,
+  pluginInstalled: boolean,
   labels: ReadonlyArray<string | null>,
 ): boolean {
-  if (!receipt || receipt.operation !== 'create' || !pluginAuthorized) return false;
+  if (!receipt || receipt.operation !== 'create' || !pluginInstalled) return false;
   const data = readPluginTaskPlanReceipt(receipt.payload);
   return isTeamPlanLabelLocked(data.teamPlan, data.settledLabels, labels);
 }
