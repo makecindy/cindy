@@ -3811,7 +3811,7 @@ describe("Pi provider-aware model routing", () => {
   });
 
   it.each([
-    { label: 'different live window', window: 400_000, action: 'rebuild' },
+    { label: 'different live window', window: 400_000, action: 'hot' },
     { label: 'matching live window', window: 128_000, action: 'hot' },
     { label: 'missing live window', window: undefined, action: 'rebuild' },
     { label: 'failed live catalog read', window: null, action: 'rebuild' },
@@ -3840,6 +3840,10 @@ describe("Pi provider-aware model routing", () => {
     });
     const config = captured.env.PI_CODING_AGENT_DIR!;
     const before = ['models.json', 'settings.json'].map(file => readFileSync(path.join(config, file), 'utf8'));
+    const startupSettings = JSON.parse(before[1]) as {
+      compaction?: { modelOverrides?: Record<string, { reserveTokens?: number }> };
+    };
+    expect(startupSettings.compaction?.modelOverrides).not.toHaveProperty('pi-native/wire-model');
     captured.requests.length = 0;
     const preview = await handle.previewModelSwitch?.('catalog-alias', { providerId: 'native-account' });
     expect(preview).toMatchObject({ action, targetContextWindow: window ?? null, windowVerified: false });

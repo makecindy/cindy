@@ -2421,6 +2421,13 @@ export class PiAgent extends BaseAgent {
       if (provider.id === PI_PROVIDER_ID) continue;
       for (const model of provider.models) {
         const workingWindow = this.deps.resolveModelContextLimit?.(provider.sourceProviderId ?? provider.id, model.id) ?? undefined;
+        const inheritsNativeWindow = provider.inheritModels === true && model.api === undefined
+          && model.catalogAddition !== true && model.contextWindow === undefined;
+        // An inherited entry without a Cindy-owned window keeps Pi's native
+        // compaction budget. Writing a 128K-derived override here would make a
+        // later live window check request a rebuild that recreates the same
+        // stale override forever.
+        if (inheritsNativeWindow && !(workingWindow && workingWindow > 0)) continue;
         addBudget(provider.id, model.wireId ?? model.id, Math.max(model.contextWindow ?? 128_000, workingWindow ?? 0), workingWindow);
       }
     }
@@ -6419,7 +6426,8 @@ export class PiAgent extends BaseAgent {
       const targetProvider = gateway ? PI_PROVIDER_ID
         : latestProviders.find((entry) => (entry.sourceProviderId ?? entry.id) === sourceId)?.id;
       const targetModel = nativeModel?.wireId ?? nativeModel?.id ?? model;
-      if (targetContextWindow && targetProvider &&
+      const hasCindyManagedReserve = !inheritsNativeWindow || workingWindow > 0;
+      if (targetContextWindow && targetProvider && hasCindyManagedReserve &&
           resolvePiNativeReserve(liveRuntimeSettings, targetProvider, targetModel) !==
             reserveForWindow(targetContextWindow, sourceId, model)) {
         return { action: 'rebuild', targetContextWindow, windowVerified: false,
@@ -6812,7 +6820,18 @@ export class PiAgent extends BaseAgent {
         }
         const verifiedWindow = verifiedModel.contextWindow;
         const verifiedReserve = reserveForWindow(verifiedWindow, effectiveProviderId, model);
-        if (!liveRuntimeSettings || resolvePiNativeReserve(liveRuntimeSettings, provider, wireModel) !== verifiedReserve) {
+        const native = effectiveProviderId && effectiveProviderId !== PI_PROVIDER_ID
+          && effectiveProviderId !== 'xd'
+          ? nativeProviderForSource(effectiveProviderId)
+          : undefined;
+        const nativeId = native?.modelIdAliases?.[model] ?? model;
+        const nativeModel = native?.models.find((candidate) => candidate.id === nativeId);
+        const inheritsNativeWindow = native?.inheritModels === true && nativeModel?.api === undefined
+          && nativeModel?.catalogAddition !== true && nativeModel?.contextWindow === undefined;
+        const workingWindow = this.deps.resolveModelContextLimit?.(effectiveProviderId, model) ?? 0;
+        const hasCindyManagedReserve = !inheritsNativeWindow || workingWindow > 0;
+        if (!liveRuntimeSettings || (hasCindyManagedReserve &&
+            resolvePiNativeReserve(liveRuntimeSettings, provider, wireModel) !== verifiedReserve)) {
           throw new Error('Pi selected a model whose native compaction settings require a fresh runtime');
         }
         await this.writePiRuntimeSettings(configHome, {
