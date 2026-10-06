@@ -6613,10 +6613,19 @@ export class PiAgent extends BaseAgent {
       // 上一个模型的档位带过去（Pi 会把 thinkingLevelMap 里的 null 当成关闭
       // reasoning）。快照未知时不猜、不动 Pi 现有档位。
       //
+      // 载体缺失（scheduler / IM 回滚 / 插件任务 / 会话恢复等旁路入口不带
+      // thinkingEnabled）同样必须收敛：目标支持思考时按会话档位重新下发一次。历史上
+      // 「没有意图就不动」把这类切换留成了静默失效——2026-10-06 实报的 Orca lead 切到
+      // commandcode/deepseek-v4.1-flash 后 usage.reasoning 归零、推理整段写进正文，直到
+      // 用户手动改一次档位才恢复；Pi 侧没有任何 set_thinking_level 记录。载体缺失只影响
+      // 「开」：目标空档位时保持不动（Pi 会把 null 档位当关闭），显式 false 仍明确发 off。
+      //
       // 失败只告警、不抛：模型切换已经成功，抛出会让上层回滚 route / 终止会话，反而
       // 制造「Pi 已切模、宿主认为没切」的分裂。用户可在 UI 上重新选择。
-      if (setOpts && typeof setOpts.thinkingEnabled === 'boolean') {
-        const requestedEffort = setOpts.effort ?? mutableEffort ?? startupEffort ?? null;
+      const explicitThinking =
+        setOpts && typeof setOpts.thinkingEnabled === 'boolean' ? setOpts.thinkingEnabled : undefined;
+      {
+        const requestedEffort = setOpts?.effort ?? mutableEffort ?? startupEffort ?? null;
         const nativeTarget = provider !== PI_PROVIDER_ID
           ? nativeProviderById.get(provider)?.models.find(
               (candidate) => candidate.id === resolveNativeModelId(provider, model),
@@ -6629,7 +6638,7 @@ export class PiAgent extends BaseAgent {
             : nextEffortSnapshot.length > 0;
         let level: string | null = null;
         let appliedEffort: Effort | null = null;
-        if (!setOpts.thinkingEnabled || targetReasoning === false) {
+        if (explicitThinking === false || (explicitThinking === true && targetReasoning === false)) {
           level = 'off';
         } else if (targetReasoning === true) {
           const usable = nextEffortSnapshot && nextEffortSnapshot.length > 0
@@ -6661,6 +6670,14 @@ export class PiAgent extends BaseAgent {
               // 会话本来就没期望档位（BYOM/无 effort 目录）：同样要留下观察点，
               // 否则 DB/投影显示 null 而 Pi 实跑默认档，漂移无从发现。
               deps.logger.info('pi: thinking level defaulted to the target snapshot after model switch', {
+                model,
+                provider,
+                appliedEffort: reconciled,
+              });
+            } else if (explicitThinking === undefined) {
+              // 旁路入口（无 intent 载体）也要留痕：这类收敛是新补的能力，出现异常时
+              // 需要能把「谁把档位改回来了」和用户主动切档位区分开。
+              deps.logger.info('pi: thinking level re-applied after a model switch without an intent carrier', {
                 model,
                 provider,
                 appliedEffort: reconciled,

@@ -91,12 +91,17 @@ Cindy 显式设置:models.json、`settings.json` 的 `transport:sse` 与 `retry.
 漂移给新模型——实测推理模型在 off 下把思考写进正文）。思考意图由 renderer 的原子 selection 携带
 （主进程只对 Pi 转成 `thinkingEnabled`，点选暂存与 deferred 重放一并回放）；目标档位不在启动快照内时
 按默认档/首档回落（同 `reconcilePiStartupEffort` 口径），目标声明不支持思考时明确 `off`，能力未知
-则不动。实现见 `packages/maker-core/src/agents/pi/index.ts` 的 `switchModel` 末尾，
+则不动。**载体缺失（旁路入口热切模型）时同样按目标快照收敛**：目标支持思考就按会话档位重新下发一次，
+否则保留现有档位——历史实现的「无意图就不动」会让这类切换静默丢思考通道（2026-10-06 实报：Orca lead
+切到 `commandcode/deepseek-v4.1-flash` 后 `usage.reasoning` 归零、推理整段写进正文，Pi 侧无任何
+`set_thinking_level` 记录，直到用户手动改一次档位才恢复）。实现见
+`packages/maker-core/src/agents/pi/index.ts` 的 `switchModel` 末尾，
 回归见 `pi-provider-routing.test.ts` 的 thinking-level 用例。跨引擎切换提交时还会把这次选择写进
 本机偏好镜像（普通 send 走 lazy-create 只读镜像、不经过 bootstrap），避免远端推送未回流时新建会话
-用旧值。已知未覆盖面：Bot 设置保存、
-agent/scheduler/IM 回滚等**旁路入口**热切 Pi 模型时没有 thinking 载体（`SessionRuntimeProfile`
-不含该字段），这些路径仍可能保留旧档位；需要补载体或按目标快照收敛后才能彻底消除。
+用旧值。**仍未覆盖**：Bot 设置保存、agent/scheduler/IM 回滚等**旁路入口**热切 Pi 模型时没有 thinking
+载体（`SessionRuntimeProfile` 不含该字段），按目标快照收敛能保证推理模型不丢通道，但无法区分
+「用户本想关思考」；要完全对齐用户意图仍需给这些入口补载体（本机偏好镜像已有
+`getThinkingEnabledFromMemory`，目前只在会话启动钩子接入）。
 Pi 原生负责 threshold 与 overflow 压缩；
 Cindy 消费 compaction 事件做 UI、usage、digest 投影，并只在本机原生自动压缩确定性失败后锁存
 下一次发送前换窗。设置页的 Pi 百分比默认 90%（已有显式 override 保留），在每次启动或恢复

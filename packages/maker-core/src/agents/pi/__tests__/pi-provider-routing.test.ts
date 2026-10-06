@@ -4142,7 +4142,7 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
-  it("does not touch the thinking level when the caller sends no thinking intent", async () => {
+  it("re-applies the session effort when a switch to a reasoning-capable model carries no intent", async () => {
     const denseMap = {
       minimal: "minimal",
       low: "low",
@@ -4175,6 +4175,57 @@ describe("Pi provider-aware model routing", () => {
       ),
     );
     const handle = await agent.startSession({
+      sessionId: "thinking-converged-without-intent",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a" });
+
+    // 旁路入口（scheduler / IM 回滚 / 插件任务 / 会话恢复）不带 thinking 载体，也必须按会话
+    // 档位重新下发一次：历史实现的「没有意图就不动」让 Pi 保留旧档位，实测表现是切模后
+    // usage.reasoning 归零、推理整段写进正文（2026-10-06 Orca lead 切 commandcode 实报）。
+    const switched = captured.requests.slice(beforeSwitch);
+    expect(switched).toContainEqual({ type: "set_thinking_level", level: "high" });
+    await handle.close();
+  });
+
+  it("keeps the thinking level untouched when a switch without an intent targets a model without thinking levels", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b" },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: [], defaultEffort: null },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
       sessionId: "thinking-untouched-without-intent",
       workingDir: cwd,
       model: "model-a",
@@ -4185,7 +4236,7 @@ describe("Pi provider-aware model routing", () => {
 
     await handle.setModel!("model-b", { providerId: "native-a" });
 
-    // 老调用方（无 intent）保持既有语义：只切模型，不动 thinking level。
+    // 载体缺失只补「开」：目标自身没有档位时不猜、不写（要关思考的调用方会显式传 false）。
     expect(
       captured.requests
         .slice(beforeSwitch)
