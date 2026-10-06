@@ -2397,25 +2397,23 @@ html[data-wallpaper-active='true'] .wallpaper-composer-fade {
   mask-image: linear-gradient(transparent, currentColor);
 }
 
-/* Opt-in scene motion shares one decoder behind every pane. Its veil matches
-   the still canvas exactly; no animated paint properties or per-frame JS. */
+/* Blend video into an opaque theme surface before composing with the UI.
+   A separate translucent veil over a hardware video overlay changes brightness
+   when P3 content switches Windows HDR output to scRGB. Keep visibility on the
+   video itself; the wrapper opacity is reserved for loading/exit crossfades. */
 .app-wallpaper-video {
   position: fixed;
   inset: 0;
   z-index: -1;
   pointer-events: none;
+  background: var(--surface);
   transition: opacity var(--motion-base) var(--motion-ease-move);
 }
 .app-wallpaper-video video {
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-.app-wallpaper-video::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent);
+  opacity: calc(100% - var(--app-wallpaper-veil));
 }
 /* Fade the message layer itself, so the moving scene remains continuous behind
    the composer. Repainting a static copy there would create a visible seam. */

@@ -69,7 +69,7 @@ the whole host application: title bar, navigation, messages, tool-pane chrome,
 settings and other host pages share continuous viewport-aligned artwork. This
 opt-in setting supersedes the CINDY sidebar-only backdrop treatment while active;
 disabling it restores the original theme without modifying theme files or tokens.
-Use a theme-surface veil, never a fixed black overlay in Light mode. Image opacity
+Blend wallpaper with the theme surface, never a fixed black overlay in Light mode. Image opacity
 must not affect text or icons. Elevated controls, menus, dialogs and embedded web
 or editor content keep their readable surfaces. Composer scroll masking must
 align with the same wallpaper instead of introducing an opaque footer rectangle.
@@ -99,8 +99,12 @@ and pauses when hidden/minimized. Playback failure releases the decoder, leaves 
 visible and shows an actionable error in wallpaper settings. The custom video tile uses a film icon
 instead of opening a second decoder for a thumbnail.
 Wallpaper Visibility ranges from 0% (hidden) to 100% (fully visible), in 1% steps
-(user decision, 2026-10-05). Use the existing theme-surface veil with opacity equal to
-100% minus visibility; never reduce text or control opacity. Release video playback at 0%.
+(user decision, 2026-10-05). Static images use the theme-surface veil with opacity equal to
+100% minus visibility. Video uses visibility directly as the video element's opacity over
+an opaque theme-surface backing, without a separate translucent veil; this avoids the
+observed Windows HDR brightness shift when P3 content changes the output composition.
+The video wrapper's opacity is reserved for loading/exit crossfades. Never reduce text
+or control opacity. Release video playback at 0%. Blur and blend-mode controls are out of scope.
 Existing preferences without an explicit visibility override keep the previous Light/Dark veil
 mapping and display its equivalent visibility. The unchanged soft default is 37% visible in
 Light and 27% in Dark. Adjusting the slider saves literal visibility, shared across themes;
