@@ -80,6 +80,9 @@
 - 客户端壁纸地址为 `cindy-media://client-wallpaper/<sha256>.webp` 或 `.mp4`，
   由既有协议 handler 的严格解析分支服务，不触发账号账本的访问时间更新。普通附件
   与插件的 blob 解析器不接受该 UI 专用作用域；字体工具窗口不获得自定义图片地址。
+- 客户端壁纸 MP4 的播放请求从已校验的同一文件句柄按 Range 流式读取；无 Range 或开放区间
+  也分块传输，不先把整份视频读入主进程。Node 与 Web 两侧队列均按字节设置缓冲上限，
+  结束、错误、请求中止和消费者取消时关闭句柄；沿用既有 200 / 206 / 416 与缓存语义。
 - `cindy-media://` 的 scheme privilege 和 handler 只在现有集中入口注册。不要为单一功能
   新增媒体协议；确需改变协议能力时，同时按 Electron 安全规则审查 CSP、fetch、Range、
   路径校验和 Renderer 暴露面。

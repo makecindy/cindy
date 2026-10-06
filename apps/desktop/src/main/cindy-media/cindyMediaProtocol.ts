@@ -19,7 +19,7 @@ import { protocol, type CustomScheme } from 'electron';
 
 import * as blobStore from './blobStore';
 import * as ledger from './ledger';
-import { buildRangedMediaResponse } from './rangeResponse';
+import { buildRangedFileResponse, buildRangedMediaResponse } from './rangeResponse';
 import { createLogger } from '../logger';
 
 const log = createLogger('cindyMediaProtocol');
@@ -42,6 +42,14 @@ export const cindyMediaSchemePrivilege: CustomScheme = {
 export function registerCindyMediaProtocolHandler(): void {
   protocol.handle(SCHEME, async (request) => {
     try {
+      if (blobStore.parseClientWallpaperUrl(request.url)?.ext === '.mp4') {
+        return await buildRangedFileResponse({
+          ...(await blobStore.openClientWallpaperVideo(request.url)),
+          rangeHeader: request.headers.get('range'),
+          cacheControl: 'public, max-age=31536000, immutable',
+          signal: request.signal,
+        });
+      }
       const { buffer, mimeType } = blobStore.parseClientWallpaperUrl(request.url)
         ? await blobStore.readClientWallpaperFile(request.url)
         : await blobStore.readFile(request.url);
