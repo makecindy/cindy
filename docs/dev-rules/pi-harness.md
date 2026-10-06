@@ -99,9 +99,11 @@ Cindy 显式设置:models.json、`settings.json` 的 `transport:sse` 与 `retry.
 回归见 `pi-provider-routing.test.ts` 的 thinking-level 用例。跨引擎切换提交时还会把这次选择写进
 本机偏好镜像（普通 send 走 lazy-create 只读镜像、不经过 bootstrap），避免远端推送未回流时新建会话
 用旧值。**仍未覆盖**：Bot 设置保存、agent/scheduler/IM 回滚等**旁路入口**热切 Pi 模型时没有 thinking
-载体（`SessionRuntimeProfile` 不含该字段），按目标快照收敛能保证推理模型不丢通道，但无法区分
-「用户本想关思考」；要完全对齐用户意图仍需给这些入口补载体（本机偏好镜像已有
-`getThinkingEnabledFromMemory`，目前只在会话启动钩子接入）。
+载体（`SessionRuntimeProfile` 不含该字段）。按目标快照收敛保证推理模型不丢通道；用户明确关过的
+思考（`setThinkingEnabled(false)` / 显式 `thinkingEnabled:false` / 启动关闭）由运行期意图标记
+保护，无载体切换不会重新开启。剩下的是本机偏好镜像里的 per-model 开关意图（记忆里关了、运行期
+从未显式下发过）仍无法携带，要完全对齐需给这些入口补载体（镜像已有 `getThinkingEnabledFromMemory`，
+目前只在会话启动钩子接入）。
 Pi 原生负责 threshold 与 overflow 压缩；
 Cindy 消费 compaction 事件做 UI、usage、digest 投影，并只在本机原生自动压缩确定性失败后锁存
 下一次发送前换窗。设置页的 Pi 百分比默认 90%（已有显式 override 保留），在每次启动或恢复

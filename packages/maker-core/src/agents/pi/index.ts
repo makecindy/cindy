@@ -3819,6 +3819,10 @@ export class PiAgent extends BaseAgent {
     let mutableProviderId: string | null | undefined = opts.providerId ?? authProviderId;
     let activeEffortSnapshot = initialEffortSnapshot;
     let mutableEffort: Effort | null = startupEffort ?? null;
+    // 用户明确关掉思考（setThinkingEnabled(false) / 切模显式 thinkingEnabled:false /
+    // 启动 opts.thinkingEnabled === false）的意图标记：无载体切模不得据此悄悄重新开启。
+    // 只跟随显式意图变化；目标不支持思考而下发 off 不算用户意图，不置位。
+    let thinkingExplicitlyOff = false;
     let currentAutoReviewIntent: AutoReviewUserIntent = '';
     const autoReviewActionContext = createAutoReviewActionContext();
     const autoReviewContext = () => activeTurnPermissionPolicy?.autoReviewContext
@@ -5859,6 +5863,7 @@ export class PiAgent extends BaseAgent {
       }
 
       if (opts.thinkingEnabled === false) {
+        thinkingExplicitlyOff = true;
         const resp = await proc.request({
           type: 'set_thinking_level',
           level: 'off',
@@ -6624,6 +6629,9 @@ export class PiAgent extends BaseAgent {
       // 制造「Pi 已切模、宿主认为没切」的分裂。用户可在 UI 上重新选择。
       const explicitThinking =
         setOpts && typeof setOpts.thinkingEnabled === 'boolean' ? setOpts.thinkingEnabled : undefined;
+      // 显式意图即权威：关掉/打开都落成用户意图标记，供无载体切换判断能否重开思考。
+      if (explicitThinking === true) thinkingExplicitlyOff = false;
+      else if (explicitThinking === false) thinkingExplicitlyOff = true;
       {
         const requestedEffort = setOpts?.effort ?? mutableEffort ?? startupEffort ?? null;
         const nativeTarget = provider !== PI_PROVIDER_ID
@@ -6640,6 +6648,14 @@ export class PiAgent extends BaseAgent {
         let appliedEffort: Effort | null = null;
         if (explicitThinking === false || (explicitThinking === true && targetReasoning === false)) {
           level = 'off';
+        } else if (explicitThinking === undefined && thinkingExplicitlyOff) {
+          // 用户明确关过思考：无载体切换保留这个关闭状态，不得悄悄重新开启（即使只是
+          // 重下发同一模型路由）。有能力的旁路入口应补 thinking 载体；这里只保证不违背
+          // 用户意图，与 2026-10-06 Greptile P1 同口径。
+          deps.logger.info('pi: thinking kept off after a model switch without an intent carrier', {
+            model,
+            provider,
+          });
         } else if (targetReasoning === true) {
           const usable = nextEffortSnapshot && nextEffortSnapshot.length > 0
             ? nextEffortSnapshot
@@ -7385,6 +7401,7 @@ export class PiAgent extends BaseAgent {
 
       async setThinkingEnabled(enabled: boolean): Promise<void> {
         if (reviewMode) return;
+        thinkingExplicitlyOff = !enabled;
         // 打开时回到会话当前的期望档位，而不是固定 xhigh：显式开关不该把用户选好的
         // max/medium 抹平——否则紧随其后的切模按 mutableEffort 归一化时又会把它降档。
         // 没有期望档位时才回到历史默认 xhigh。

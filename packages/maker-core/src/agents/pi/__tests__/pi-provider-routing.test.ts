@@ -4245,6 +4245,60 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("keeps thinking off after a carrier-less switch when the user had turned it off", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-stays-off-without-intent",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    await handle.setThinkingEnabled!(false);
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a" });
+
+    // 用户明确关过思考：无载体切换不得悄悄重新开启（scheduler 复用会话即此类入口），
+    // 也不得把用户关掉后的关闭状态改写成档位。
+    expect(
+      captured.requests
+        .slice(beforeSwitch)
+        .some((request) => request.type === "set_thinking_level"),
+    ).toBe(false);
+    await handle.close();
+  });
+
   it("keeps the model switch successful when the post-switch thinking level is rejected", async () => {
     const denseMap = {
       minimal: "minimal",
