@@ -15,6 +15,87 @@ const logger: Logger = {
   child: () => logger,
 };
 
+describe.skipIf(!binaryPath || process.platform !== 'darwin')('macOS Codex Review with real app-server', () => {
+  it('starts without reading an ancestor AGENTS.md outside the review workspace', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'cindy-review-project-doc-'));
+    const home = path.join(root, 'codex');
+    const workingDir = path.join(root, 'repo', 'work');
+    const projectRule = 'ANCESTOR_PROJECT_RULE_MUST_NOT_REACH_REVIEW';
+    await mkdir(home);
+    await mkdir(path.join(root, 'repo', '.git'), { recursive: true });
+    await mkdir(workingDir, { recursive: true });
+    await writeFile(path.join(root, 'repo', 'AGENTS.md'), projectRule);
+    const requests: unknown[] = [];
+    const server = createServer(async (req, res) => {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      requests.push(JSON.parse(Buffer.concat(chunks).toString()));
+      res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
+      const events = [
+        { type: 'response.created', response: { id: 'response-fixture' } },
+        { type: 'response.output_item.done', item: { type: 'message', role: 'assistant', id: 'message-fixture',
+          content: [{ type: 'output_text', text: 'fixture complete' }] } },
+        { type: 'response.completed', response: { id: 'response-fixture',
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
+      ];
+      res.end(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    await writeFile(path.join(home, 'config.toml'), [
+      'model="fixture-model"',
+      'model_provider="fixture"',
+      'cli_auth_credentials_store="ephemeral"',
+      'check_for_update_on_startup=false',
+      '[analytics]', 'enabled=false',
+      '[model_providers.fixture]', 'name="Fixture"',
+      `base_url="${endpoint}"`, 'wire_api="responses"',
+      'requires_openai_auth=false', 'request_max_retries=0',
+    ].join('\n'));
+    const agent = new CodexAgent({
+      binaryPath: binaryPath!, logger, runtimeConfig: {},
+      resolveCodexLocalAuthPolicy: () => 'isolated',
+      prepareCodexExtraSpawnConfig: async () => ({
+        extraArgs: [], extraEnv: {}, codexProxyActive: true,
+      }),
+      auth: {
+        getState: async () => ({ authenticated: true }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({
+          HOME: root, USERPROFILE: root, APPDATA: root, LOCALAPPDATA: root,
+          CODEX_HOME: home, TMPDIR: root,
+          OPENAI_API_KEY: '', CODEX_API_KEY: '',
+          HTTP_PROXY: 'http://127.0.0.1:1', HTTPS_PROXY: 'http://127.0.0.1:1',
+          ALL_PROXY: 'http://127.0.0.1:1', NO_PROXY: '127.0.0.1,localhost',
+        }),
+      },
+    });
+    try {
+      const handle = await agent.startSession({
+        sessionId: 'review-project-doc', providerId: 'cprov-fixture',
+        model: 'fixture-model', workingDir, reviewMode: true,
+        makerMemoryEnabled: false,
+      });
+      const events = (async () => {
+        for await (const event of handle.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event));
+          if (event.type === 'done') return;
+        }
+      })();
+      await handle.send({ type: 'user', content: 'Review the fixture' }, { throwOnStartFailure: true });
+      await events;
+      expect(requests).toHaveLength(1);
+      expect(JSON.stringify(requests)).not.toContain(projectRule);
+      await handle.close();
+    } finally {
+      await agent.dispose();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }, 30_000);
+});
+
 describe.skipIf(!binaryPath || process.platform !== 'win32')('Windows Codex Review with real app-server', () => {
   it.each([
     { binary: binaryPath!, configuredMemory: false, compatible: true, providerId: 'cprov-fixture', model: 'fixture-model' },
