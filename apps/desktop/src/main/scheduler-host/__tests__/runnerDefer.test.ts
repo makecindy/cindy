@@ -11,7 +11,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
-import type { FireContext, Logger, Notifier, Schedule } from '@cindy/maker-scheduler';
+import type { FireContext, Logger, Notifier, Schedule, Scheduler } from '@cindy/maker-scheduler';
 
 const mocks = vi.hoisted(() => ({
   createMessage: vi.fn(),
@@ -244,6 +244,28 @@ describe('MakerScheduleRunner 顺延 / 礼让', () => {
     expect(h.send).toHaveBeenCalledTimes(1);
     h.emit({ type: 'done', data: {} });
     await firePromise;
+  });
+
+  it('reported business failure is visible in notification and rejects the runner result', async () => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', title: null, userSendAt: null });
+    mocks.isSessionInTurn.mockReturnValue(false);
+    const h = createSessionHarness(async (_m, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
+    const { runner, notifier } = createRunnerHarness(h.session);
+    runner.attachScheduler({
+      getReportedFailure: () => ({ code: 'INVALID_BOARD', message: 'readback mismatch' }),
+      isRunSilenced: () => false,
+    } as unknown as Scheduler);
+    const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    h.emit({ type: 'done', data: {} });
+    await expect(firePromise).rejects.toThrow('INVALID_BOARD: readback mismatch');
+    expect(notifier.notify).toHaveBeenCalledTimes(1);
+    expect((notifier.notify.mock.calls[0] as unknown[])[1]).toMatchObject({
+      status: 'failed', failureCode: 'INVALID_BOARD', errorMsg: 'INVALID_BOARD: readback mismatch',
+    });
   });
 
   it('B2 撞忙:send 抛 SESSION_RUNNING → deferred,不通知、摘 listener', async () => {

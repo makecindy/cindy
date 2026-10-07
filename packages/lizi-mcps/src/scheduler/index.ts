@@ -17,6 +17,7 @@ export { registerScheduleRunNowTool } from './runNow.js';
 export { registerScheduleListRunsTool } from './listRuns.js';
 export { registerScheduleSilenceCurrentRunTool } from './silenceCurrentRun.js';
 export { registerScheduleNotifyCurrentRunTool } from './notifyCurrentRun.js';
+export { registerScheduleFailCurrentRunTool } from './failCurrentRun.js';
 export { registerScheduleSetPreRunHookTool } from './setPreRunHook.js';
 
 export { classifySchedulerError } from './errors.js';

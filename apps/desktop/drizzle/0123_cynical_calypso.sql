@@ -1,0 +1,1 @@
+ALTER TABLE `schedule_runs` ADD `failure_code` text;

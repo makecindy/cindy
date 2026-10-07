@@ -38,6 +38,7 @@ import { createSchedulerMcpServer } from '../cindy_schedulerMcpServer.js';
 import { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import { registerScheduleDeleteTool } from '../scheduler/delete.js';
 import { registerScheduleNotifyCurrentRunTool } from '../scheduler/notifyCurrentRun.js';
+import { registerScheduleFailCurrentRunTool } from '../scheduler/failCurrentRun.js';
 import { registerSchedulePauseTool } from '../scheduler/pause.js';
 import { registerScheduleSilenceCurrentRunTool } from '../scheduler/silenceCurrentRun.js';
 import { registerScheduleCreateTool } from '../scheduler/create.js';
@@ -229,7 +230,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       categories: { name: string; tool_count: number }[];
     };
     expect(payload.ok).toBe(true);
-    expect(payload.categories).toEqual([{ name: 'scheduler', tool_count: 11 }]);
+    expect(payload.categories).toEqual([{ name: 'scheduler', tool_count: 12 }]);
     await h.cleanup();
   });
 
@@ -243,7 +244,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     } finally { await h.cleanup(); }
   });
 
-  it('list_tools(category=scheduler) lists all 11 tools by name', async () => {
+  it('list_tools(category=scheduler) lists all 12 tools by name', async () => {
     const result = await h.client.callTool({
       name: 'list_tools',
       arguments: { category: 'scheduler' },
@@ -258,6 +259,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(names).toEqual([
       'schedule_create',
       'schedule_delete',
+      'schedule_fail_current_run',
       'schedule_get',
       'schedule_list',
       'schedule_list_runs',
@@ -792,6 +794,39 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect((okEnv.data as Schedule).targetSessionId).toBeUndefined();
 
     await h.cleanup();
+  });
+});
+
+describe('schedule_fail_current_run — caller ownership', () => {
+  it('binds to the calling session and accepts structured failure data', async () => {
+    const reports: Array<{ sessionId: string; code: string; message: string }> = [];
+    const registry = new SchedulerToolRegistry();
+    registerScheduleFailCurrentRunTool(registry, {
+      getScheduler: () => ({
+        reportFailureForSession: (sessionId: string, report: { code: string; message: string }) => {
+          reports.push({ sessionId, ...report });
+          return sessionId === 'sess-own';
+        },
+      }) as never,
+    }, () => ({ agentKind: 'codex', workingDir: '/x', sessionId: 'sess-own' }));
+    const invalid = await registry.call('schedule_fail_current_run', {
+      code: 'INVALID_BOARD', message: 'readback mismatch', runId: 'run-other',
+    });
+    expect(JSON.parse((invalid.content[0] as { text: string }).text)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    const result = await registry.call('schedule_fail_current_run', {
+      code: 'INVALID_BOARD', message: 'readback mismatch',
+    });
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({ ok: true, data: { reported: true } });
+    expect(reports).toEqual([{ sessionId: 'sess-own', code: 'INVALID_BOARD', message: 'readback mismatch' }]);
+  });
+
+  it('rejects calls without an owned in-flight run', async () => {
+    const registry = new SchedulerToolRegistry();
+    registerScheduleFailCurrentRunTool(registry, {
+      getScheduler: () => ({ reportFailureForSession: () => false }) as never,
+    }, () => ({ agentKind: 'codex', workingDir: '/x', sessionId: 'sess-other' }));
+    const result = await registry.call('schedule_fail_current_run', { code: 'INVALID_BOARD', message: 'bad' });
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({ ok: false, code: 'NOT_FOUND' });
   });
 });
 

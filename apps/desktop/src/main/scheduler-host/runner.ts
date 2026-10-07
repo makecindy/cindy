@@ -3004,16 +3004,24 @@ export class MakerScheduleRunner implements ScheduleRunner {
     assistantText: string,
     finalTextMatchesStream: boolean,
   ): Promise<FireResult> {
+    const reportedFailure = this.scheduler?.getReportedFailure(ctx.runId);
+    const businessError = reportedFailure
+      ? `${reportedFailure.code}: ${reportedFailure.message}`
+      : undefined;
+    const effectiveError = businessError
+      ? runError ? `${businessError}; runtime error: ${runError}` : businessError
+      : runError;
     const finalRun: ScheduleRun = {
       id: ctx.runId,
       scheduleId: schedule.id,
       sessionId,
       firedAt: ctx.firedAt,
       finishedAt: Date.now(),
-      status: runError ? 'failed' : 'success',
-      errorMsg: runError,
+      status: effectiveError ? 'failed' : 'success',
+      errorMsg: effectiveError,
+      failureCode: reportedFailure?.code,
       // 仅 success 时落库 — 失败 run 的部分输出意义不大,errorMsg 已经覆盖原因
-      resultText: !runError && assistantText ? assistantText : undefined,
+      resultText: !effectiveError && assistantText ? assistantText : undefined,
     };
     // 静默 run:静默运行默认静默;若 agent 经 schedule_notify_current_run 主动上报,
     // scheduler.isRunSilenced 会变回 false,这里照常通知。
@@ -3118,7 +3126,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         this.deps.logger.warn?.('notifier.notify threw (should not happen)', err);
       }
     }
-    if (runError) throw new Error(runError);
+    if (effectiveError) throw new Error(effectiveError);
     if (reportPersistFailed) throw new Error('Scheduled result could not be saved');
     return { sessionId, resultText: assistantText || undefined };
   }
