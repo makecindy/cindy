@@ -328,6 +328,8 @@ import { invalidateWorkersByLeadSingleFlight } from '../localDb/ipc/orcaWorkerLi
 import { messageToCamel, setSessionRuntimeProjector } from '../localDb/mapper.js';
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
 import { buildReviewPrompt } from '../reviewer/reviewPrompt.js';
+import { resolveReviewScope, withSessionReviewWorkspace } from '../git-review/scopeResolver.js';
+import { selectReviewWorkspace } from '../reviewer/reviewWorkspaceSelection.js';
 import {
   listReviewHistoricalAttachments,
   loadReviewEvidence,
@@ -354,7 +356,7 @@ import {
   ReviewArtifactFingerprintChangedError,
   ReviewArtifactFingerprintLimitError,
 } from '../reviewer/reviewArtifactFingerprint.js';
-import { reviewChangeSetContentPaths } from '../reviewer/reviewEvidenceSafety.js';
+import { reviewChangeSetContentPaths, usableReviewChangeSet } from '../reviewer/reviewEvidenceSafety.js';
 import { enforceReviewCreateOptions } from '../reviewer/reviewSessionPolicy.js';
 import { reviewSourceIdentityMatches } from '../reviewer/reviewSourceIdentity.js';
 import { buildReviewSessionTitle } from '../reviewer/reviewSessionTitle.js';
@@ -8303,7 +8305,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!source.workingDir) {
         throwIpcError('INVALID_PARAMS', 'The source task has no working directory to review');
       }
-      const sourceWorkingDir = source.workingDir;
+      const sourceScope = await resolveReviewScope(source.id);
+      let sourceWorkingDir = sourceScope.repoRoot ?? sourceScope.workdir ?? source.workingDir;
+      const inReviewWorkspace = <T>(task: () => Promise<T>): Promise<T> =>
+        withSessionReviewWorkspace(source.id, sourceWorkingDir, task);
       if (await sourceHasActiveTurn(source.id)) {
         throwIpcError(
           'SESSION_RUNNING',
@@ -8311,7 +8316,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         );
       }
 
-      let evidence: Awaited<ReturnType<typeof loadReviewEvidence>>;
+      let evidence!: Awaited<ReturnType<typeof loadReviewEvidence>>;
+      let workspaceSelected = false;
+      let historyCaptureIncomplete = false;
       let sourceArtifactFingerprint = '';
       let authorizedArtifactPaths: string[] = [];
       let cleanupPreparedArtifacts: (() => Promise<void>) | null = null;
@@ -8327,37 +8334,69 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           cleanupRemoteAttachments = remote.cleanup;
           cleanupPreparedArtifacts = remote.cleanup;
         }
-        const historicalAttachments = await listReviewHistoricalAttachments(source.id);
-        const explicitArtifactGrant = await authorizeReviewExplicitArtifacts({
-          workingDir: sourceWorkingDir,
-          focus: request.focus,
-          attachments: [...request.attachments, ...historicalAttachments],
-          resolvePath: resolveReviewArtifactPath,
-          confirm: (items) => confirmReviewExternalArtifacts(event as IpcMainInvokeEvent, items),
-        });
-        authorizedArtifactPaths = explicitArtifactGrant.paths;
-        const prepared = await prepareStableReviewArtifactSnapshots({
-          workingDir: sourceWorkingDir,
-          grant: explicitArtifactGrant,
-          owner: reviewRunOwner,
-          prepare: (snapshotGrant) =>
-            loadReviewEvidence({
-              sourceSessionId: source.id,
-              workingDir: sourceWorkingDir,
-              focus: request.focus,
-              attachments: request.attachments,
-              explicitArtifactGrant: snapshotGrant,
-            }),
-        });
-        cleanupPreparedArtifacts = async () => {
-          try {
-            await prepared.cleanup();
-          } finally {
-            await cleanupRemoteAttachments?.();
-          }
+        const prepareEvidence = async () => {
+          const historicalAttachments = await listReviewHistoricalAttachments(source.id);
+          const explicitArtifactGrant = await authorizeReviewExplicitArtifacts({
+            workingDir: sourceWorkingDir,
+            focus: request.focus,
+            attachments: [...request.attachments, ...historicalAttachments],
+            resolvePath: resolveReviewArtifactPath,
+            confirm: (items) => confirmReviewExternalArtifacts(event as IpcMainInvokeEvent, items),
+          });
+          authorizedArtifactPaths = explicitArtifactGrant.paths;
+          const prepared = await prepareStableReviewArtifactSnapshots({
+            workingDir: sourceWorkingDir,
+            grant: explicitArtifactGrant,
+            owner: reviewRunOwner,
+            prepare: (snapshotGrant) =>
+              inReviewWorkspace(() => loadReviewEvidence({
+                sourceSessionId: source.id,
+                workingDir: sourceWorkingDir,
+                focus: request.focus,
+                attachments: request.attachments,
+                explicitArtifactGrant: snapshotGrant,
+              })),
+          });
+          cleanupPreparedArtifacts = async () => {
+            try {
+              await prepared.cleanup();
+            } finally {
+              await cleanupRemoteAttachments?.();
+            }
+          };
+          evidence = prepared.value;
+          sourceArtifactFingerprint = prepared.fingerprint;
         };
-        evidence = prepared.value;
-        sourceArtifactFingerprint = prepared.fingerprint;
+        await prepareEvidence();
+        // An empty main checkout commonly means the work happened in a linked
+        // worktree. Historical turn metadata cannot tell us which current code
+        // the user wants; ask about the directory instead of refusing the run.
+        if (
+          evidence.workspace && !evidence.workspace.disabledReason &&
+          !evidence.workspace.dirty && !evidence.branch &&
+          evidence.artifacts.length === 0 && !evidence.focusPath && !isDeviceLinkInvoke()
+        ) {
+          const selectedDir = await selectReviewWorkspace(event as IpcMainInvokeEvent, sourceWorkingDir);
+          if (!selectedDir) throwIpcError('MUTATION_CANCELLED', 'Review workspace selection cancelled');
+          workspaceSelected = true;
+          if (path.resolve(selectedDir) !== path.resolve(sourceWorkingDir)) {
+            await cleanupPreparedArtifacts?.();
+            sourceWorkingDir = selectedDir;
+            await prepareEvidence();
+          }
+        }
+        // Reversible turn capture is advisory. Bash (even `git status`) and
+        // overlapping tasks mark it partial; a fresh Git baseline or explicitly
+        // selected artifacts must not be blocked by unrelated capture gaps.
+        const historicalChangeSet = evidence.changeSet;
+        evidence.changeSet = usableReviewChangeSet(evidence.changeSet, sourceWorkingDir, {
+          hasGitBaseline: !!evidence.workspaceFingerprint,
+          hasExplicitArtifacts: evidence.artifacts.length > 0 || workspaceSelected,
+        });
+        historyCaptureIncomplete = !!historicalChangeSet && !evidence.changeSet;
+        // An explicit directory choice targets its current code, not a turn
+        // captured in the previous task directory.
+        if (workspaceSelected) evidence.changeSet = null;
       } catch (error) {
         await cleanupPreparedArtifacts?.();
         if (
@@ -8377,7 +8416,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         !evidence.branch &&
         !evidence.changeSet &&
         evidence.artifacts.length === 0 &&
-        !request.focus
+        !request.focus &&
+        !workspaceSelected
       ) {
         await cleanupPreparedArtifacts?.();
         // "Nothing to review" and "the branch was there but could not be read"
@@ -8395,6 +8435,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         builtPrompt = buildReviewPrompt({
           focus: evidence.focusPath ? `审查路径：${evidence.focusPath}` : request.focus,
           context: evidence.context,
+          historyCaptureIncomplete,
           workspace: evidence.workspace,
           branch: evidence.branch,
           ...(evidence.branchUnavailableReason
@@ -8415,6 +8456,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         sourceAgentKind: source.agentKind as 'cc' | 'codex' | 'pi',
         prompt: builtPrompt.prompt,
         targetKind: builtPrompt.targetKind,
+        workspace: {
+          workingDir: sourceWorkingDir,
+          ...(evidence.branch ? { baseRef: evidence.branch.baseRef } : {}),
+          hasUncommittedChanges: !!evidence.workspace?.dirty,
+        },
         onAccepted: () => acceptRemoteAttachments?.(),
         cleanup: async () => {
           await cleanupPreparedArtifacts?.();
@@ -8489,6 +8535,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             });
           }
           const artifactPaths = [...new Set([...reviewReadPaths, ...changeSetContent.paths])];
+          if (workspaceSelected && !evidence.workspaceFingerprint) {
+            // A selected non-Git directory has no HEAD/status baseline. Bind
+            // its contents with the existing bounded artifact fingerprinter.
+            artifactPaths.push(sourceWorkingDir);
+          }
           const artifactFingerprintOptions = { linkConfinementRoot: sourceWorkingDir };
           let artifactFingerprint: string;
           try {
@@ -8573,10 +8624,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 };
               }
               if (
-                !(await reviewWorkspaceFingerprintIsCurrent(
+                !(await inReviewWorkspace(() => reviewWorkspaceFingerprintIsCurrent(
                   source.id,
                   evidence.workspaceFingerprint,
-                ))
+                )))
               ) {
                 return {
                   code: 'source-files-changed',
@@ -8586,7 +8637,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               }
               // The workspace fingerprint pins HEAD, not the base it is compared
               // against; a moved base changes the branch diff without touching it.
-              if (!(await reviewBranchBaselineIsCurrent(source.id, evidence.branch))) {
+              if (!(await inReviewWorkspace(() => reviewBranchBaselineIsCurrent(source.id, evidence.branch)))) {
                 return {
                   code: 'source-files-changed',
                   message:
@@ -8633,10 +8684,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 };
               }
               if (
-                !(await reviewWorkspaceFingerprintIsCurrent(
+                !(await inReviewWorkspace(() => reviewWorkspaceFingerprintIsCurrent(
                   source.id,
                   evidence.workspaceFingerprint,
-                ))
+                )))
               ) {
                 return {
                   code: 'source-files-changed',
@@ -8644,7 +8695,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                     'The task files changed while Review was running. Run /review again for the current result.',
                 };
               }
-              if (!(await reviewBranchBaselineIsCurrent(source.id, evidence.branch))) {
+              if (!(await inReviewWorkspace(() => reviewBranchBaselineIsCurrent(source.id, evidence.branch)))) {
                 return {
                   code: 'source-files-changed',
                   message:

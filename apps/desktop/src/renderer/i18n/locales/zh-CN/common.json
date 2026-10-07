@@ -10168,9 +10168,12 @@
           "sourceConversationChanged": "来源任务已变化，请针对当前任务重新运行 /review。",
           "sourceFilesChanged": "来源任务的文件已变化，请针对当前成果重新运行 /review。",
           "artifactChanged": "审查成果已变化，请针对当前成果重新运行 /review。",
-          "artifactUnavailable": "Cindy 无法安全读取审查成果，请检查工作区或附件后重新运行 /review。",
+          "artifactUnavailable": "Cindy 无法准备审查文件，请检查所选目录或附件后重新运行 /review。",
           "providerFailed": "审查任务执行失败"
-        }
+        },
+        "directory": "目录：",
+        "baseline": "基线分支：",
+        "unverifiedResult": "以下结论已生成，但未能验证是否仍然有效。"
       }
     },
     "markdownRenderer": {
@@ -13289,6 +13292,13 @@
       "inline": "内存附件",
       "allow": "仅本次允许",
       "cancel": "取消"
+    },
+    "workspaceSelection": {
+      "title": "选择要审查的代码",
+      "message": "这个目录没有可用的代码差异。可以审查当前代码，或选择实际开发的目录。",
+      "current": "审查当前目录",
+      "choose": "选择其他目录",
+      "open": "审查"
     }
   },
   "learn": {

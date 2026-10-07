@@ -10,7 +10,7 @@
  * 信号(按 agent):
  *   - Codex exec:每条命令 content.input.cwd = agent 当前 shell 目录,直接可信
  *     (实测:agent `cd` 进 worktree 后,后续每条命令的 cwd 都跟着变)。
- *   - Claude Code:Bash 不带 cwd;改用 Edit/Write/MultiEdit/NotebookEdit 的
+ *   - Claude Code:Bash 的字面量开头 cd 或 Edit/Write/MultiEdit/NotebookEdit 的
  *     input.file_path 绝对路径,取其所在目录(Read 不算——读文件 ≠ 在此工作)。
  *
  * 取「最近一条产出候选目录的 tool-use」(= 对话此刻在哪),用 readGitHead 校验:
@@ -72,7 +72,7 @@ export interface SessionGitDirResult {
  * 从一条 tool-use 消息 content(已是 JSON 文本)解析候选工作目录:
  *   - input.cwd 是绝对路径(Codex exec)→ 直接用;
  *   - toolName ∈ 编辑类 且 input.file_path 是绝对路径 → 取 path.dirname;
- *   - 其它(Read / 普通 Bash / 脏 JSON / 相对路径)→ null。
+ *   - 其它(Read / 无字面量 cd 的 Bash / 脏 JSON / 相对路径)→ null。
  * 纯函数,不碰 IO。
  */
 export function extractDirCandidate(
@@ -100,6 +100,18 @@ export function extractDirCandidate(
     const cwd = (input as { cwd?: unknown }).cwd;
     if (typeof cwd === 'string' && cwd.trim() !== '' && path.isAbsolute(cwd)) {
       return posixDriveToWin32(cwd, pathPlatform);
+    }
+  }
+
+  // Claude's Bash tool does not report cwd. A literal leading `cd ... &&`
+  // identifies where this command ran; ordinary Bash/Read remain non-signals.
+  // Do not evaluate variables, substitutions, relative paths or later cd's.
+  if (toolName === 'Bash' && typeof (input as { command?: unknown }).command === 'string') {
+    const command = (input as { command: string }).command;
+    const match = /^\s*cd\s+(?:--\s+)?(?:'([^'\n]+)'|"([^"\n]+)"|([^\s;&|]+))\s*&&/.exec(command);
+    const dir = match?.[1] ?? match?.[2] ?? match?.[3];
+    if (dir && !/[\x00-\x1f$`\\*?{}]/.test(dir) && path.isAbsolute(dir)) {
+      return posixDriveToWin32(dir, pathPlatform);
     }
   }
 

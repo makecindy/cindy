@@ -1137,9 +1137,7 @@ describe('loadReviewEvidence attachment boundaries', () => {
     ]);
   });
 
-  it('does not read the branch diff while uncommitted work exists', async () => {
-    // Uncommitted work is the review target; reading the branch as well would
-    // bury it under commits the user is not asking about.
+  it('reads the committed branch changes even when uncommitted work exists', async () => {
     const repoRoot = await tempDir();
     readReviewDataMock.mockResolvedValue(cappedReviewData(repoRoot, 'src/a.ts'));
 
@@ -1154,7 +1152,9 @@ describe('loadReviewEvidence attachment boundaries', () => {
       },
     });
 
-    expect(readReviewBranchDiffMock).not.toHaveBeenCalled();
+    expect(readReviewBranchDiffMock).toHaveBeenCalledWith('source', null);
+    // This fixture has no commits above the baseline; reading it is still
+    // necessary to distinguish an unchanged branch from hidden committed work.
     expect(evidence.branch).toBeNull();
   });
 

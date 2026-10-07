@@ -10168,9 +10168,12 @@
           "sourceConversationChanged": "원본 작업이 변경되었습니다. 현재 작업에 대해 /review를 다시 실행하세요.",
           "sourceFilesChanged": "원본 작업의 파일이 변경되었습니다. 현재 결과물에 대해 /review를 다시 실행하세요.",
           "artifactChanged": "검토 대상 결과물이 변경되었습니다. 현재 결과물에 대해 /review를 다시 실행하세요.",
-          "artifactUnavailable": "Cindy가 검토 대상 결과물을 안전하게 읽지 못했습니다. 작업 공간 또는 첨부 파일을 확인한 후 /review를 다시 실행하세요.",
+          "artifactUnavailable": "검토할 파일을 준비하지 못했습니다. 선택한 폴더나 첨부 파일을 확인한 후 /review를 다시 실행하세요.",
           "providerFailed": "검토 작업 실행에 실패했습니다"
-        }
+        },
+        "directory": "폴더: ",
+        "baseline": "기준 브랜치: ",
+        "unverifiedResult": "아래 결과가 생성되었지만 현재도 유효한지 확인하지 못했습니다."
       }
     },
     "markdownRenderer": {
@@ -13289,6 +13292,13 @@
       "inline": "메모리 첨부 파일",
       "allow": "이번만 허용",
       "cancel": "취소"
+    },
+    "workspaceSelection": {
+      "title": "검토할 코드 선택",
+      "message": "이 디렉터리에는 사용할 수 있는 코드 차이가 없습니다. 현재 코드를 검토하거나 실제 개발한 디렉터리를 선택하세요.",
+      "current": "현재 폴더 검토",
+      "choose": "다른 폴더 선택",
+      "open": "검토"
     }
   },
   "learn": {

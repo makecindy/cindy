@@ -10185,9 +10185,12 @@
           "sourceConversationChanged": "The source task changed. Run /review again for the current task.",
           "sourceFilesChanged": "The source task files changed. Run /review again for the current result.",
           "artifactChanged": "A review artifact changed. Run /review again for the current result.",
-          "artifactUnavailable": "Cindy couldn't safely read the review artifacts. Check the workspace or attachments, then run /review again.",
+          "artifactUnavailable": "Cindy could not prepare the files for review. Check the selected directory or attachments, then run /review again.",
           "providerFailed": "The review task failed"
-        }
+        },
+        "directory": "Directory: ",
+        "baseline": "Base branch: ",
+        "unverifiedResult": "The reviewer produced these findings, but their validity could not be verified."
       }
     },
     "markdownRenderer": {
@@ -13317,6 +13320,13 @@
       "inline": "in-memory attachment",
       "allow": "Allow once",
       "cancel": "Cancel"
+    },
+    "workspaceSelection": {
+      "title": "Choose code to review",
+      "message": "No code diff is available in this directory. Review the current code, or select the directory where you worked.",
+      "current": "Review this directory",
+      "choose": "Choose another directory",
+      "open": "Review"
     }
   },
   "learn": {

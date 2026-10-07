@@ -950,6 +950,32 @@ describe('maker:review:start IPC lifecycle', () => {
     expect(deps.closeReviewer).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['returned-failure', 'verification-exception'])(
+    'keeps an existing conclusion when final verification encounters %s', async (mode) => {
+      const harness = new IpcHarness();
+      const reviewer = new FakeReviewer();
+      const launch = makeLaunch({ verifyBeforePublish: vi.fn(async () => {
+        if (mode === 'verification-exception') throw new Error('Git backend unavailable');
+        return { code: 'artifact-unavailable' as const, message: 'Cannot verify source files' };
+      }) });
+      const workspace = { workingDir: '/repo/actual', baseRef: 'main', hasUncommittedChanges: true };
+      const deps = makeDeps(reviewer, {
+        prepareRun: vi.fn(async () => makePreparedRun(launch, { workspace })),
+      });
+      registerReviewStartHandler(harness, deps);
+      await harness.invoke(MAKER_INVOKE.START_REVIEW, reviewRequest());
+      expect(deps.createSourceCard).toHaveBeenCalledWith(expect.objectContaining({
+        meta: expect.objectContaining({ workspace }),
+      }));
+      reviewer.emit({ type: 'done', data: {} });
+      await vi.waitFor(() => expect(deps.updateSourceCard).toHaveBeenCalledTimes(1));
+      expect(deps.updateSourceCard).toHaveBeenCalledWith(expect.objectContaining({
+        result: 'P1: real finding', meta: expect.objectContaining({ status: 'failed', workspace }),
+      }));
+      expect(deps.closeReviewer).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('fails the visible card when evidence changes before reviewer bootstrap', async () => {
     const harness = new IpcHarness();
     const reviewer = new FakeReviewer();

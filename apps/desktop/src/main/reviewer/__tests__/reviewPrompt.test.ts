@@ -326,8 +326,7 @@ describe('buildReviewPrompt', () => {
     expect(result.prompt).not.toContain('src/unrelated.ts');
   });
 
-  it('prefers uncommitted work over the branch diff', () => {
-    // Uncommitted changes are what the user is looking at right now.
+  it('reviews branch commits together with the current uncommitted edits', () => {
     const result = buildReviewPrompt({
       context: [],
       workspace: {
@@ -353,10 +352,13 @@ describe('buildReviewPrompt', () => {
       },
       changeSet: null,
       artifacts: [],
+      historyCaptureIncomplete: true,
     });
 
     expect(result.prompt).toContain('src/wip.ts');
-    expect(result.prompt).not.toContain('src/committed.ts');
+    expect(result.prompt).toContain('src/committed.ts');
+    expect(result.prompt).toContain('以磁盘上的当前代码为最终状态');
+    expect(result.prompt).toContain('历史改动记录不完整');
   });
 
   it('says so when the branch diff was unreadable and there is no change set', () => {

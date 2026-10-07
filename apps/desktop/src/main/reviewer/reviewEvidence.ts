@@ -109,12 +109,8 @@ function mapReviewWorkspace(
 }
 
 /**
- * The branch's own commits, read only when the tree is clean.
- *
- * With uncommitted work present that work is the review target. Once it is
- * committed the tree goes clean and the last turn is no longer a faithful
- * stand-in for the branch — reviewing it would silently cover one turn while
- * appearing to cover the whole branch.
+ * The branch's own commits. Read independently of current uncommitted edits;
+ * a last-turn record is not a faithful substitute for the whole deliverable.
  */
 async function loadReviewBranchEvidence(
   sessionId: string,
@@ -691,10 +687,10 @@ export async function loadReviewEvidence(input: {
   const changeSet = sanitizeReviewChangeSet(rawChangeSet).value;
   const workspaceSnapshot = await readReviewWorkspaceSnapshot(input.sourceSessionId);
   const workspace = workspaceSnapshot?.workspace ?? null;
-  // Only when there is no uncommitted work: that work, when present, is what
-  // the user is asking about, and reading the branch as well would bury it.
+  // Self-review covers the deliverable: branch commits plus current edits.
+  // A dirty tree must not hide the already committed part of that work.
   const branchEvidence =
-    workspace && !workspace.dirty && !workspace.disabledReason
+    workspace && !workspace.disabledReason
       ? await loadReviewBranchEvidence(input.sourceSessionId, readReviewBranchDiff)
       : { branch: null };
 
