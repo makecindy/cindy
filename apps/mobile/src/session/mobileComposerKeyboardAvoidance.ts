@@ -36,7 +36,12 @@ function positive(value: number): number {
 export function androidViewportShrink(
   input: Pick<AndroidComposerKeyboardPaddingInput, 'restingWindowHeight' | 'windowHeight'>,
 ): number {
-  const shrink = positive(input.restingWindowHeight) - positive(input.windowHeight);
+  // 当前窗口高未知（0 / NaN；RN 在 Android 启动、旋转或部分厂商 ROM 上会瞬时上报）时
+  // 不参与减法：未知值会把「系统已缩满窗」算成真，让位被整个吃掉——正好倒向重现原始
+  // 遮挡的那一侧。未知即按「系统没缩窗」处理，照常全额让位。
+  const windowHeight = input.windowHeight;
+  if (typeof windowHeight !== 'number' || !Number.isFinite(windowHeight) || windowHeight <= 0) return 0;
+  const shrink = positive(input.restingWindowHeight) - windowHeight;
   return shrink > ANDROID_VIEWPORT_RESIZE_THRESHOLD ? shrink : 0;
 }
 

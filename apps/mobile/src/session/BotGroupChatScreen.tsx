@@ -110,15 +110,23 @@ export function BotGroupChatScreen({ deviceId, deviceName, groupId }: { deviceId
   const keyboard = useMobileKeyboardState();
   const insets = useSafeAreaInsets();
   const window = useWindowDimensions();
-  // 全高按宽度分桶取最大值：横竖屏切换时旧的全高不能拿来算缩窗，否则旋转后误判。
-  const restingWindow = useRef({ width: 0, height: 0 });
-  if (restingWindow.current.width !== window.width) restingWindow.current = { width: window.width, height: window.height };
-  else restingWindow.current.height = Math.max(restingWindow.current.height, window.height);
+  // 全高（键盘未显示时的窗口高）跟踪，口径与登录页 fullViewportHeight 一致（login.tsx）：
+  // - 宽度变化（横竖屏）= 换了一个窗口，直接重置；
+  // - 键盘不可见时的窗口变化 = 真实窗口尺寸变化（上下分屏、自由窗口），必须跟着走，
+  //   否则旧的全高会把分屏后缩小的窗口算成「系统已缩满窗」，让位被整个吃掉，遮挡原样复现；
+  // - 键盘可见时只允许涨：系统替我们缩的那部分不能被记成全高，否则系统与自定义双算。
+  const restingWidth = useRef(window.width);
+  const [restingWindowHeight, setRestingWindowHeight] = useState(window.height);
+  useEffect(() => {
+    const resized = restingWidth.current !== window.width;
+    restingWidth.current = window.width;
+    setRestingWindowHeight(prev => resized || !keyboard.visible ? window.height : Math.max(prev, window.height));
+  }, [window.height, window.width, keyboard.visible]);
   const keyboardBottomPadding = Platform.OS === 'android'
     ? androidComposerKeyboardBottomPadding({
       keyboardHeight: keyboard.height,
       bottomInset: insets.bottom,
-      restingWindowHeight: restingWindow.current.height,
+      restingWindowHeight,
       windowHeight: window.height,
     })
     : 0;

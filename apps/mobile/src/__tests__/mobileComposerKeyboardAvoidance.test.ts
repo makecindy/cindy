@@ -61,3 +61,20 @@ describe('androidComposerKeyboardBottomPadding', () => {
     })).toBe(0);
   });
 });
+
+describe('unknown window height (RN reports 0x0 mid-launch, mid-rotation or on some vendor ROMs)', () => {
+  it('reads a zero window height as "the system did not resize", not as "resized to nothing"', () => {
+    // 0 当成真实窗口高 → shrink = 全高 → 判定系统已缩满窗 → 让位被整个吃掉，遮挡复现。
+    expect(androidViewportShrink({ restingWindowHeight: RESTING, windowHeight: 0 })).toBe(0);
+  });
+
+  it('reads a NaN window height the same way', () => {
+    expect(androidViewportShrink({ restingWindowHeight: RESTING, windowHeight: Number.NaN })).toBe(0);
+  });
+
+  it('still lifts the composer by the whole keyboard height when the window height is unknown', () => {
+    expect(androidComposerKeyboardBottomPadding({
+      keyboardHeight: KEYBOARD, bottomInset: NAV_BAR, restingWindowHeight: RESTING, windowHeight: 0,
+    })).toBe(KEYBOARD - NAV_BAR);
+  });
+});

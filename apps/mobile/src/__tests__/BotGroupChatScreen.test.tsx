@@ -803,3 +803,29 @@ describe('android keyboard avoidance', () => {
     expect(containerStyle()).not.toContain('paddingBottom');
   });
 });
+
+describe('android keyboard avoidance: the resting window height follows real window changes', () => {
+  const containerStyle = () => byId('botGroup.timeline')?.parentElement?.getAttribute('data-style') ?? '';
+  const rerender = async () => {
+    await act(async () => { root.render(el(BotGroupChatScreen, { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1' })); });
+  };
+
+  it('keeps lifting the composer after the window shrinks at the same width (stacked split screen)', async () => {
+    h.platform = 'android';
+    await render();                          // 全屏 390x844
+    h.window = { width: 390, height: 422 };  // 上下分屏：宽度不变、高度砍半
+    await rerender();
+    h.keyboard = { height: 400, visible: true, transition: { current: null } };
+    await rerender();
+    // 400 键盘高 − 60 底部 inset。全高若还停在 844，shrink = 422 会把让位整个吃掉 → 遮挡复现。
+    expect(containerStyle()).toContain('"paddingBottom":340');
+  });
+
+  it('control: the same keyboard height lifts the composer on a full screen', async () => {
+    h.platform = 'android';
+    await render();
+    h.keyboard = { height: 400, visible: true, transition: { current: null } };
+    await rerender();
+    expect(containerStyle()).toContain('"paddingBottom":340');
+  });
+});
