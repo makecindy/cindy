@@ -329,7 +329,7 @@ import { messageToCamel, setSessionRuntimeProjector } from '../localDb/mapper.js
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
 import { buildReviewPrompt } from '../reviewer/reviewPrompt.js';
 import { resolveReviewScope, withSessionReviewWorkspace } from '../git-review/scopeResolver.js';
-import { selectReviewWorkspace } from '../reviewer/reviewWorkspaceSelection.js';
+import { selectReviewWorkspace, shouldSelectReviewWorkspace } from '../reviewer/reviewWorkspaceSelection.js';
 import {
   listReviewHistoricalAttachments,
   loadReviewEvidence,
@@ -8368,14 +8368,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           sourceArtifactFingerprint = prepared.fingerprint;
         };
         await prepareEvidence();
-        // An empty main checkout commonly means the work happened in a linked
-        // worktree. Historical turn metadata cannot tell us which current code
+        // An empty checkout or non-Git source commonly means the work happened
+        // elsewhere. Historical turn metadata cannot tell us which current code
         // the user wants; ask about the directory instead of refusing the run.
-        if (
-          evidence.workspace && !evidence.workspace.disabledReason &&
-          !evidence.workspace.dirty && !evidence.branch &&
-          evidence.artifacts.length === 0 && !evidence.focusPath && !isDeviceLinkInvoke()
-        ) {
+        if (shouldSelectReviewWorkspace(evidence, isDeviceLinkInvoke())) {
           const selectedDir = await selectReviewWorkspace(event as IpcMainInvokeEvent, sourceWorkingDir);
           if (!selectedDir) throwIpcError('MUTATION_CANCELLED', 'Review workspace selection cancelled');
           workspaceSelected = true;

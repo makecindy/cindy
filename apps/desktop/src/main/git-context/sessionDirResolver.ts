@@ -105,12 +105,16 @@ export function extractDirCandidate(
 
   // Claude's Bash tool does not report cwd. A literal leading `cd ... &&`
   // identifies where this command ran; ordinary Bash/Read remain non-signals.
-  // Do not evaluate variables, substitutions, relative paths or later cd's.
+  // Do not evaluate variables, substitutions or relative paths. If another
+  // directory switch appears later, the leading directory is not a reliable
+  // signal; leave the actual directory to other telemetry or explicit selection.
   if (toolName === 'Bash' && typeof (input as { command?: unknown }).command === 'string') {
     const command = (input as { command: string }).command;
     const match = /^\s*cd\s+(?:--\s+)?(?:'([^'\n]+)'|"([^"\n]+)"|([^\s;&|]+))\s*&&/.exec(command);
     const dir = match?.[1] ?? match?.[2] ?? match?.[3];
-    if (dir && !/[\x00-\x1f$`\\*?{}]/.test(dir) && path.isAbsolute(dir)) {
+    const remaining = match ? command.slice(match[0].length) : '';
+    const hasLaterDirectorySwitch = /(?:^|[\s;&|()'"])(?:cd|pushd|popd)(?=[\s;&|()'"]|$)/.test(remaining);
+    if (dir && !hasLaterDirectorySwitch && !/[\x00-\x1f$`\\*?{}]/.test(dir) && path.isAbsolute(dir)) {
       return posixDriveToWin32(dir, pathPlatform);
     }
   }

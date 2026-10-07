@@ -14,7 +14,18 @@ vi.mock('electron', () => ({
 vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: assertTrusted }));
 
-import { selectReviewWorkspace } from '../reviewWorkspaceSelection.js';
+import { selectReviewWorkspace, shouldSelectReviewWorkspace } from '../reviewWorkspaceSelection.js';
+import type { LoadedReviewEvidence } from '../reviewEvidence.js';
+
+function emptyEvidence(): Pick<LoadedReviewEvidence, 'workspace' | 'branch' | 'artifacts' | 'focusPath'> {
+  return {
+    workspace: {
+      dirty: false, totalFiles: 0, stagedFiles: 0, unstagedFiles: 0, untrackedFiles: 0,
+      disabledReason: null, diffs: { staged: [], unstaged: [] },
+    },
+    branch: null, artifacts: [], focusPath: null,
+  };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -26,6 +37,33 @@ beforeEach(() => {
 
 describe('Review directory selection', () => {
   const event = { sender: {} } as IpcMainInvokeEvent;
+
+  it.each([null, 'non-git'] as const)('recovers the actual checkout from an empty %s source', async (reason) => {
+    const evidence = emptyEvidence();
+    evidence.workspace!.disabledReason = reason;
+    expect(shouldSelectReviewWorkspace(evidence, false)).toBe(true);
+    expect(await selectReviewWorkspace(event, '/projects')).toBe('/repo/actual');
+  });
+
+  it.each(['git-unavailable', 'no-workdir', 'invalid-worktree', 'remote-session', 'no-session', 'unknown'] as const)(
+    'does not hide a %s failure behind a directory picker', (reason) => {
+      const evidence = emptyEvidence();
+      evidence.workspace!.disabledReason = reason;
+      expect(shouldSelectReviewWorkspace(evidence, false)).toBe(false);
+    },
+  );
+
+  it('preserves explicit targets, existing code changes, and remote caller behavior', () => {
+    const evidence = emptyEvidence();
+    expect(shouldSelectReviewWorkspace(evidence, true)).toBe(false);
+    expect(shouldSelectReviewWorkspace({ ...evidence, workspace: null }, false)).toBe(false);
+    expect(shouldSelectReviewWorkspace({ ...evidence, workspace: { ...evidence.workspace!, dirty: true } }, false)).toBe(false);
+    expect(shouldSelectReviewWorkspace({ ...evidence, artifacts: [{ kind: 'file', label: 'result.ts' }] }, false)).toBe(false);
+    expect(shouldSelectReviewWorkspace({ ...evidence, focusPath: '/repo/file.ts' }, false)).toBe(false);
+    expect(shouldSelectReviewWorkspace({ ...evidence, branch: {
+      baseRef: 'main', baseOid: 'base', mergeBaseOid: 'base', fileCount: 1, diffs: [], capped: null,
+    } }, false)).toBe(false);
+  });
 
   it('uses the directory picked in a native dialog without changing the source task', async () => {
     expect(await selectReviewWorkspace(event, '/repo/main')).toBe('/repo/actual');

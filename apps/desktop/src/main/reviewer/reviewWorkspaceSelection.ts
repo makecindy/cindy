@@ -4,6 +4,21 @@ import { BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron';
 
 import { t } from '../i18n.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import type { LoadedReviewEvidence } from './reviewEvidence.js';
+
+/** A non-Git source directory also needs recovery, but a failed Git read or a
+ * remote task must not be turned into a local directory-selection fallback.
+ */
+export function shouldSelectReviewWorkspace(
+  evidence: Pick<LoadedReviewEvidence, 'workspace' | 'branch' | 'artifacts' | 'focusPath'>,
+  deviceLinkInvoke: boolean,
+): boolean {
+  const workspace = evidence.workspace;
+  return !deviceLinkInvoke && !!workspace &&
+    (!workspace.disabledReason || workspace.disabledReason === 'non-git') &&
+    !workspace.dirty && !evidence.branch &&
+    evidence.artifacts.length === 0 && !evidence.focusPath;
+}
 
 /** No changes were found in the task's directory. Let the user choose the
  * actual checkout, or explicitly review the current code without a diff.

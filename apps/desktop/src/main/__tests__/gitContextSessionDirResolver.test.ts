@@ -77,6 +77,17 @@ describe('extractDirCandidate', () => {
     ]) expect(extractDirCandidate(toolUse('Bash', { command }))).toBeNull();
   });
 
+  it.each([
+    'cd /repo/main && cd ../feature && git diff',
+    'cd /repo/main && git status; cd /repo/feature && git diff',
+    'cd /repo/main &&\ncd -- /repo/feature && git diff',
+    'cd /repo/main && command cd /repo/feature && git diff',
+    'cd /repo/main && pushd /repo/feature && git diff',
+    'cd /repo/main && popd && git diff',
+  ])('does not mistake the first directory for the final one: %s', (command) => {
+    expect(extractDirCandidate(toolUse('Bash', { command }))).toBeNull();
+  });
+
   it('相对路径不采纳(cwd / file_path 都要求绝对)→ null', () => {
     expect(extractDirCandidate(toolUse('exec', { command: 'ls', cwd: '../wt-a' }))).toBeNull();
     expect(extractDirCandidate(toolUse('Edit', { file_path: 'src/y.ts' }))).toBeNull();
