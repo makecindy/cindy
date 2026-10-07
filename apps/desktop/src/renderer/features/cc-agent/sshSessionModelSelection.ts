@@ -56,12 +56,12 @@ export function resolveSshSessionModelSelection(args: {
   loading: boolean;
   loadFailed: boolean;
   agentKind: AgentKind;
-  preferred?: { model: string; providerId?: string | null; effort: Effort; fastMode: boolean };
+  preferred?: { model: string; providerId?: string | null; effort?: Effort; fastMode: boolean };
   getPresetEffort?: (agent: AgentKind, providerId: string, model: string) => Effort | undefined;
   getPresetFast?: (agent: AgentKind, providerId: string, model: string) => boolean | undefined;
 }):
   | { ok: false; reason: keyof typeof sshModelSelectionErrorKeys }
-  | { ok: true; model: string; providerId: string; effort: Effort; fastMode: boolean } {
+  | { ok: true; model: string; providerId: string; effort?: Effort; fastMode: boolean } {
   if (args.loadFailed) return { ok: false, reason: 'catalog-error' };
   if (args.loading) return { ok: false, reason: 'catalog-loading' };
   const { agentKind, preferred } = args;
@@ -108,6 +108,9 @@ export function resolveSshSessionModelSelection(args: {
       presetEffort: args.getPresetEffort?.(agentKind, providerId, model),
       efforts: descriptor.efforts,
       defaultEffort: descriptor.defaultEffort,
+      // 目录尚未就绪时保留候选值；已声明「无档位」时交出「不指定」，
+      // 否则 SSH 首帧也会把一个该型号根本不存在的档提交上去（与本机草稿同一规则）。
+      effortsUnknown: descriptor.effortsUnknown === true,
     }),
     fastMode:
       descriptor.supportsFastMode === true &&

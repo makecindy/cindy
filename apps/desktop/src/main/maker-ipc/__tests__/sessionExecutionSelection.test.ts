@@ -110,6 +110,36 @@ describe('ordinary Session model selection', () => {
     await expect(resolveDeclared({ agentKind: 'cc', model, providerId: 'custom-anthropic', effort: 'medium' }))
       .rejects.toThrow('valid: none');
   });
+
+  /**
+   * 与上一条同为「已声明空档位表」，区别只在**有没有交出档位**：目录已声明该型号没有
+   * reasoning_effort 档位（Registry 描述原文「无 reasoning_effort 档位」）时，UI 侧没有档位
+   * 可让用户选，因此必须能以「不指定档位」提交；这条路径一旦通，普通任务创建就不再被
+   * `valid: none` 阻断（用户实测：opencode-go / pi / mimo-v2.6-flash 新建任务连挂 5 次）。
+   */
+  it('创建目录已声明无档位的型号时，不指定档位不被 valid: none 阻断', async () => {
+    const model = 'mimo-v2.6-flash';
+    const routingPi = {
+      availability: {
+        ...routing.availability,
+        pi: [{
+          id: 'opencode-go', name: 'OpenCode Go', models: [model],
+          effortMetaByModel: { [model]: { efforts: [] as const, defaultEffort: null } },
+        }],
+      },
+      resolveDefaultProviderIdForModel: (agent: string, id: string) =>
+        agent === 'pi' && id === model ? 'opencode-go' : null,
+    };
+    const { resolve } = setup({
+      availableModels: () => [{ id: model, efforts: [], defaultEffort: null }],
+      readProviderRouting: async () => routingPi,
+    });
+    await expect(resolve({ agentKind: 'pi', model, providerId: 'opencode-go' }))
+      .resolves.toMatchObject({ agentKind: 'pi', model, providerId: 'opencode-go', fastMode: false });
+    // 同一型号一旦带出档位，按 #5536 的裁决仍拒绝 —— 放宽的只是「无档可交」这条。
+    await expect(resolve({ agentKind: 'pi', model, providerId: 'opencode-go', effort: 'high' }))
+      .rejects.toThrow('valid: none');
+  });
   it('does not silently choose a hardcoded model when default selection is missing', async () => {
     await expect(setup({ readDefault: () => undefined }).resolve({})).rejects.toThrow('尚未选择');
   });

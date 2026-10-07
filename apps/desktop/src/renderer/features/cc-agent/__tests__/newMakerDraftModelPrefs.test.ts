@@ -36,12 +36,15 @@ describe('resolveNewMakerDraftEffort', () => {
         defaultEffort: 'high',
       }),
     ).toBe('medium');
+    // 空表 + **目录尚未就绪**（能力未知）→ 保留原值，避免首帧跳变。
+    // 另一半语义（空表 + 目录已声明无档位 → 交出「不指定」）见下方两条用例。
     expect(
       resolveNewMakerDraftEffort({
         currentEffort: 'medium',
         presetEffort: 'high',
         efforts: [],
         defaultEffort: null,
+        effortsUnknown: true,
       }),
     ).toBe('medium');
   });
@@ -117,6 +120,37 @@ describe('resolveNewMakerDraftEffort', () => {
         defaultEffort: 'high',
       }),
     ).toBe('max');
+  });
+
+  /**
+   * 空档位表有两种语义，必须分开（与 main 侧 `effortsUnknown` 同一套三态）：
+   *
+   * · **目录尚未就绪**（`effortsUnknown: true`）→ 还不知道，保留草稿原值，避免首帧跳变。
+   * · **目录已声明无档位**（`efforts: []` + `defaultEffort: null`，如 Registry 里明写
+   *   「无 reasoning_effort 档位」的型号）→ 这个档对该模型**根本不存在**。此时交出任何档
+   *   位，main 准入都会按「明确无档位」拒绝：`effort "high" not supported … valid: none`，
+   *   而 UI 又没有档位可让用户改 —— 新建任务必然失败且无规避路径。
+   */
+  it('目录已声明无档位时不交出档位（否则 main 准入按 valid: none 拒绝）', () => {
+    expect(
+      resolveNewMakerDraftEffort({
+        currentEffort: 'high',
+        presetEffort: 'high',
+        efforts: [],
+        defaultEffort: null,
+      }),
+    ).toBeUndefined();
+  });
+
+  it('目录尚未就绪(能力未知)时仍保留草稿原值，不把「还没加载」误当成「不支持」', () => {
+    expect(
+      resolveNewMakerDraftEffort({
+        currentEffort: 'medium',
+        efforts: [],
+        defaultEffort: null,
+        effortsUnknown: true,
+      }),
+    ).toBe('medium');
   });
 });
 

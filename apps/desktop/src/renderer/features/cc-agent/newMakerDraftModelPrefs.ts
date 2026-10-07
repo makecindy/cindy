@@ -25,6 +25,12 @@ import type { Effort } from '@/lib/userPreferences.types';
  * 刻意**不回写**草稿:`lastByVendor.effort` 是用户跨模型的偏好记忆,不能因为当前这个模型不
  * 支持就把它擦掉 —— 切回支持 'medium' 的模型时那份记忆还得在。与 `calibratedDraftModel`
  * 只派生不落盘同理。
+ *
+ * 返回 `undefined` = **不指定档位**（只在目录已声明「无档位」时出现），交由 main 的非显式
+ * 分支归一（`selection.effort` 为 undefined → 落到 defaultEffort / 不指定）。显示侧不受此
+ * 控制：ChatInput 的 `activeEffort` 由 `composerSelection.display.effort ?? 'low'` 独立算出，
+ * `initialEffort` 只当初值（`initialEffort ?? localVendorDefaults.effort`）—— 显示侧本轮未做
+ * 实机目检，仅由此静态推定。
  */
 
 /** 档位强弱序里的位置;不认识的档返回 -1(不参与距离计算)。 */
@@ -55,13 +61,23 @@ export function resolveNewMakerDraftEffort(args: {
   presetEffort?: Effort;
   efforts: readonly Effort[];
   defaultEffort: Effort | null;
-}): Effort {
-  const { currentEffort, presetEffort, efforts, defaultEffort } = args;
-  // 目录尚未就绪(档位表为空)= **还不知道**,不是「不支持」:保留草稿原值,避免首帧跳变。
-  // 这也是唯一一条允许放行未经校验档位的路径。
-  if (efforts.length === 0) return currentEffort;
-  // 优先级:全局预设 > 草稿当前值。两者都必须过档位表这一关(旧实现在没有预设时直接
-  // 交出 currentEffort,种子 'medium' 就是这样漏到 DeepSeek 这类 high/max-only 模型上的)。
+  /**
+   * 目录对该型号的档位**尚未就绪**（能力未知）。缺省 = 目录已给出声明，空表即
+   * 「明确无档位」。与 main 侧 `effortsUnknown` 同一套三态，避免两侧对同一个 `[]` 读反。
+   */
+  effortsUnknown?: boolean;
+}): Effort | undefined {
+  const { currentEffort, presetEffort, efforts, defaultEffort, effortsUnknown } = args;
+  // 空档位表有两种语义，不能当同一件事处理：
+  //  · 目录尚未就绪 = **还不知道**，保留草稿原值，避免首帧跳变（也是唯一一条允许
+  //    放行未经校验档位的路径）。
+  //  · 目录已声明「无档位」（如 Registry 里明写「无 reasoning_effort 档位」的型号）= 这个档
+  //    对该模型根本不存在。交出任何档位，main 准入都会按「明确无档位」拒绝
+  //    （`effort "high" not supported … valid: none`），而 UI 又没有档位可让用户改 ——
+  //    新建任务必然失败且无规避路径。此时交出「不指定」，由非显式分支归一。
+  if (efforts.length === 0) return effortsUnknown ? currentEffort : undefined;
+  // 优先级：全局预设 > 草稿当前值。两者都必须过档位表这一关（旧实现在没有预设时直接
+  // 交出 currentEffort，种子 'medium' 就是这样漏到 DeepSeek 这类 high/max-only 模型上的）。
   const preferred = presetEffort ?? currentEffort;
   if (efforts.includes(preferred)) return preferred;
   if (defaultEffort && efforts.includes(defaultEffort)) return defaultEffort;
