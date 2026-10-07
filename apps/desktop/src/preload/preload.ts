@@ -7643,6 +7643,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** Codex app-server authoritative windows and banked reset-credit metadata. */
       getCodexRateLimits: (providerId?: string): Promise<MobileCodexRateLimitsResult> =>
         ipcRenderer.invoke('maker:usage:codex-rate-limits', providerId),
+      /** OpenAI 订阅账号的「自动使用重置」开关。 */
+      getCodexResetAutoUse: (providerId: string): Promise<unknown> =>
+        ipcRenderer.invoke('maker:usage:codex-reset-auto-use:get', providerId),
+      /** enabled 为 null = 恢复默认。 */
+      setCodexResetAutoUse: (providerId: string, enabled: boolean | null): Promise<unknown> =>
+        ipcRenderer.invoke('maker:usage:codex-reset-auto-use:set', providerId, enabled),
       /** Claude 订阅账号余量 (5h/周/分模型窗口, cached-first, main 侧按需后台刷新)。 */
       getClaudeSubscription: (providerId?: string): Promise<unknown | null> =>
         ipcRenderer.invoke('maker:usage:claude-subscription', providerId),

@@ -25,6 +25,8 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import {
+  autoResumePendingLabel,
+  recordedAutoResumeLabelKey,
   hasInterruptionContext,
   readAutoResumeInfo,
   type AutoResumeCardInfo,
@@ -943,7 +945,11 @@ function AutoResumeActionRow({
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const hasProgress = info.attempt !== undefined && info.maxAttempts !== undefined;
+  // 配额耗尽后的续跑不是重连，重连的次数与累计对它没有意义。
+  const quotaKind = info.quotaKind;
+  const hasProgress =
+    !quotaKind && info.attempt !== undefined && info.maxAttempts !== undefined;
+  const sessionTotal = quotaKind ? undefined : info.sessionTotal;
   // **转圈的判据是"此刻真的有 turn 在跑",不是"是不是 ephemeral 行"。**
   //
   // 一次中断的进行中状态跨两种载体:退避那 3–20 秒是 ephemeral 行(state='live'),续跑
@@ -958,20 +964,12 @@ function AutoResumeActionRow({
   //   - 已回填          → ✓ / ✗ 定格,`inFlight` 不参与(终态优先)
   const live = state === 'live' || (inFlight === true && info.outcome === undefined);
   const outcome = live ? undefined : info.outcome;
+  const pendingLabel = autoResumePendingLabel(info);
   const label = live
-    ? hasProgress
-      ? t('chat.systemCard.autoResumePending.labelWithProgress', {
-          attempt: info.attempt,
-          total: info.maxAttempts,
-        })
-      : t('chat.systemCard.autoResumePending.label')
-    : outcome === 'succeeded'
-      ? t('chat.systemCard.autoResume.label')
-      : outcome === 'failed'
-        ? t('chat.systemCard.autoResume.labelFailed')
-        : t('chat.systemCard.autoResume.labelNeutral');
+    ? t(pendingLabel.key, pendingLabel.params)
+    : t(recordedAutoResumeLabelKey(quotaKind, outcome));
   const summary = summarizeInterruption(info.error);
-  const canExpand = Boolean(info.error) || hasProgress || info.sessionTotal !== undefined;
+  const canExpand = Boolean(info.error) || hasProgress || sessionTotal !== undefined;
   return (
     <div className="flex flex-col">
       <button
@@ -1049,7 +1047,7 @@ function AutoResumeActionRow({
               </pre>
             </>
           )}
-          {(hasProgress || info.sessionTotal !== undefined) && (
+          {(hasProgress || sessionTotal !== undefined) && (
             <div className={cn('flex flex-wrap gap-x-4 gap-y-[2px] text-12', info.error && 'mt-2')}>
               {hasProgress && (
                 <span>
@@ -1059,10 +1057,10 @@ function AutoResumeActionRow({
                   })}
                 </span>
               )}
-              {info.sessionTotal !== undefined && (
+              {sessionTotal !== undefined && (
                 <span>
                   {t('chat.systemCard.autoResume.detail.sessionTotal', {
-                    count: info.sessionTotal,
+                    count: sessionTotal,
                   })}
                 </span>
               )}

@@ -1228,6 +1228,8 @@ describe('maker usage IPC handlers', () => {
       readCodexAccountUsageSnapshot: vi.fn(),
       readCodexRateLimits: vi.fn(),
       consumeCodexRateLimitReset: vi.fn(),
+      readCodexResetCreditAutoUse: vi.fn(),
+      writeCodexResetCreditAutoUse: vi.fn(),
       readClaudeSubscriptionUsageSnapshot: vi.fn().mockResolvedValue(null),
       readXaiSubscriptionUsageSnapshot: vi.fn().mockResolvedValue(null),
       readClaudeAccountUsageSnapshot: vi.fn(),
@@ -1275,6 +1277,80 @@ describe('maker usage IPC handlers', () => {
       /PERMISSION_DENIED/,
     );
     expect(readXaiSubscriptionUsageSnapshot).not.toHaveBeenCalled();
+  });
+
+  describe('Codex reset auto-use setting', () => {
+    const state = {
+      providerId: 'openai',
+      enabled: true,
+      isCustomized: true,
+      defaultEnabled: false,
+    };
+
+    it('rejects untrusted senders before touching the setting', async () => {
+      const harness = new IpcHarness();
+      const writeCodexResetCreditAutoUse = vi.fn();
+      registerMakerUsageHandlers(
+        harness,
+        makeUsageDeps({
+          writeCodexResetCreditAutoUse,
+          assertTrustedSender: vi.fn(() => {
+            throw new Error('[PERMISSION_DENIED] untrusted');
+          }),
+        }),
+      );
+
+      await expect(
+        harness.invoke(MAKER_INVOKE.USAGE_CODEX_RESET_AUTO_USE_SET, 'openai', true),
+      ).rejects.toThrow(/PERMISSION_DENIED/);
+      expect(writeCodexResetCreditAutoUse).not.toHaveBeenCalled();
+    });
+
+    it('reads and writes the setting of an OpenAI subscription account', async () => {
+      const harness = new IpcHarness();
+      const readCodexResetCreditAutoUse = vi.fn(() => state);
+      const writeCodexResetCreditAutoUse = vi.fn().mockResolvedValue(state);
+      registerMakerUsageHandlers(
+        harness,
+        makeUsageDeps({ readCodexResetCreditAutoUse, writeCodexResetCreditAutoUse }),
+      );
+
+      await expect(
+        harness.invoke(MAKER_INVOKE.USAGE_CODEX_RESET_AUTO_USE_GET, 'openai'),
+      ).resolves.toEqual(state);
+      await expect(
+        harness.invoke(MAKER_INVOKE.USAGE_CODEX_RESET_AUTO_USE_SET, 'openai', true),
+      ).resolves.toEqual(state);
+      await harness.invoke(MAKER_INVOKE.USAGE_CODEX_RESET_AUTO_USE_SET, 'openai', null);
+      expect(writeCodexResetCreditAutoUse).toHaveBeenNthCalledWith(1, 'openai', true);
+      expect(writeCodexResetCreditAutoUse).toHaveBeenNthCalledWith(2, 'openai', null);
+    });
+
+    it('rejects a non-boolean value and an account that is not an OpenAI subscription', async () => {
+      const harness = new IpcHarness();
+      const writeCodexResetCreditAutoUse = vi.fn();
+      registerMakerUsageHandlers(
+        harness,
+        makeUsageDeps({
+          readCodexResetCreditAutoUse: vi.fn((providerId: string) => {
+            if (providerId !== 'openai') throw new Error('Unknown OpenAI account provider');
+            return state;
+          }),
+          writeCodexResetCreditAutoUse,
+        }),
+      );
+
+      await expect(
+        harness.invoke(MAKER_INVOKE.USAGE_CODEX_RESET_AUTO_USE_SET, 'openai', 'yes'),
+      ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+      await expect(
+        harness.invoke(MAKER_INVOKE.USAGE_CODEX_RESET_AUTO_USE_SET, 'anthropic', true),
+      ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+      await expect(
+        harness.invoke(MAKER_INVOKE.USAGE_CODEX_RESET_AUTO_USE_GET, 'anthropic'),
+      ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+      expect(writeCodexResetCreditAutoUse).not.toHaveBeenCalled();
+    });
   });
 
   it('reads SuperGrok usage after the trusted-sender gate passes', async () => {

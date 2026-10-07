@@ -1,3 +1,7 @@
+import {
+  codexQuotaResumeKind,
+  type CodexQuotaResumeKind,
+} from '@cindy/maker-shared/synthetic-trigger';
 import type { ChatMessage, ContinuationInFlightProjectionCapability } from './makerChatStore';
 
 export interface AutoResumeCardInfo {
@@ -6,11 +10,14 @@ export interface AutoResumeCardInfo {
   maxAttempts?: number;
   sessionTotal?: number;
   outcome?: 'succeeded' | 'failed';
+  /** Codex 配额耗尽后的处理（检查配额 / 用了重置 / 配额已恢复），不是连接中断后的重连。 */
+  quotaKind?: CodexQuotaResumeKind;
 }
 
 /** Silent-stop continuations have no interruption context and are not reconnects. */
 export function hasInterruptionContext(info: AutoResumeCardInfo): boolean {
   return (
+    info.quotaKind !== undefined ||
     info.error !== undefined ||
     info.attempt !== undefined ||
     info.maxAttempts !== undefined ||
@@ -20,6 +27,7 @@ export function hasInterruptionContext(info: AutoResumeCardInfo): boolean {
 }
 
 export function readAutoResumeInfo(data?: Record<string, unknown>): AutoResumeCardInfo {
+  const quotaKind = codexQuotaResumeKind(data?.reason);
   const num = (value: unknown) =>
     typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
   return {
@@ -30,7 +38,42 @@ export function readAutoResumeInfo(data?: Record<string, unknown>): AutoResumeCa
     ...(data?.outcome === 'succeeded' || data?.outcome === 'failed'
       ? { outcome: data.outcome }
       : {}),
+    ...(quotaKind ? { quotaKind } : {}),
   };
+}
+
+/** 落库续跑记录在结果定格后的文案 key（检查配额只会出现在进行中，按重连处理）。 */
+export function recordedAutoResumeLabelKey(
+  quotaKind: CodexQuotaResumeKind | undefined,
+  outcome: AutoResumeCardInfo['outcome'],
+): string {
+  const keys =
+    quotaKind === 'reset'
+      ? ['resetCreditLabel', 'resetCreditLabelFailed', 'resetCreditLabelNeutral']
+      : quotaKind === 'restored'
+        ? ['quotaRestoredLabel', 'quotaRestoredLabelFailed', 'quotaRestoredLabelNeutral']
+        : ['label', 'labelFailed', 'labelNeutral'];
+  const key = outcome === 'succeeded' ? keys[0] : outcome === 'failed' ? keys[1] : keys[2];
+  return `chat.systemCard.autoResume.${key}`;
+}
+
+/** 进行中的续跑在状态栏与活动行上的文案 key。 */
+export function autoResumePendingLabel(
+  info: AutoResumeCardInfo,
+): { key: string; params?: Record<string, number> } {
+  if (info.quotaKind === 'checking') {
+    return { key: 'chat.systemCard.autoResumePending.resetCreditChecking' };
+  }
+  if (info.quotaKind === 'reset') return { key: 'chat.systemCard.autoResumePending.resetCredit' };
+  if (info.quotaKind === 'restored') {
+    return { key: 'chat.systemCard.autoResumePending.quotaRestored' };
+  }
+  return info.attempt !== undefined && info.maxAttempts !== undefined
+    ? {
+        key: 'chat.systemCard.autoResumePending.labelWithProgress',
+        params: { attempt: info.attempt, total: info.maxAttempts },
+      }
+    : { key: 'chat.systemCard.autoResumePending.label' };
 }
 
 /** Synthetic continuation inputs own turns; steering messages do not replace that owner. */

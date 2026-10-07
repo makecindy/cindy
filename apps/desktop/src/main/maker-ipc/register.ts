@@ -38,7 +38,18 @@ import { refreshSubscriptionAccountModels } from '../maker-host/subscription-acc
 import { syncSubscriptionAccountUsage } from '../usage/subscriptionAccountUsage.js';
 import { clearXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { subscriptionAccountKind, subscriptionAccountState, loginSubscriptionAccount, logoutSubscriptionAccount, cancelSubscriptionAccountLogin, removeSubscriptionAccountCredentialsReversibly } from '../maker-host/subscription-account-auth.js';
-import { isCodexAccountProvider, codexAccountState, codexAccountLoginName, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.js';
+import { isCodexAccountProvider, isOpenAiSubscriptionProviderId, codexAccountState, codexAccountLoginName, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.js';
+import { isCodexUsageLimitSignal } from '../usage/codexResetCreditAutoUse.js';
+import {
+  CODEX_QUOTA_RESTORED_RESUME_REASON,
+  CODEX_RESET_CREDIT_CHECKING_REASON,
+  CODEX_RESET_CREDIT_RESUME_REASON,
+} from '@cindy/maker-shared/synthetic-trigger';
+import {
+  CODEX_RESET_CREDIT_FAILED_REASON,
+  CODEX_RESET_CREDIT_SKIPPED_NONE_REASON,
+  CODEX_RESET_CREDIT_SKIPPED_SHORT_WINDOW_REASON,
+} from '../../shared/codexResetCreditAutoUse.js';
 import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
 /**
  * registerMakerIpc — 把 Maker Core 的能力暴露为 maker:* IPC channel。
@@ -675,7 +686,12 @@ import {
   issuePiPackageMutationGrant,
   piPackageMutationNeedsGrant,
 } from '../maker-host/pi-package-mutation-grant.js';
-import { readXaiSubscriptionUsageSnapshotForDeviceLink, readClaudeSubscriptionUsageSnapshotForDeviceLink } from './usage.js';
+import {
+  mayUseCodexResetCreditForUsageLimit,
+  readXaiSubscriptionUsageSnapshotForDeviceLink,
+  readClaudeSubscriptionUsageSnapshotForDeviceLink,
+  resolveCodexUsageLimit,
+} from './usage.js';
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import { applyPersistedCindyMakeMarker } from './cindyMakeSessionStart.js';
 import { CINDY_MAKE_SESSION_SOURCE } from '../../shared/cindyMakeSession.js';
@@ -14394,9 +14410,34 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // Host-only hints belong to the dispatched input, not a persistent session cache.
   // The fallback transaction still rechecks the authoritative Bot link and chain.
   const botFallbackInputs = new WeakSet<object>();
-  const canRecoverTurn = (signals: InterruptedTurnErrorSignals, item?: AgentInputQueuedMessage | null) =>
+  const canRecoverInterruptedTurn = (
+    signals: InterruptedTurnErrorSignals,
+    item?: AgentInputQueuedMessage | null,
+  ) =>
     isInterruptedTurnError(signals) ||
     (!!item && botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals));
+  // 本机 Codex 任务因账号配额耗尽中断，且它明确走的 OpenAI 订阅账号开了「自动使用重置」：
+  // 返回该账号与任务模型。是否真用以读到的窗口为准（usage/codexResetCreditAutoUse.ts）。
+  // 来源不明（未指定来源，可能走了网关）的任务不接管。
+  const codexResetCreditAccountFor = (
+    sessionId: string,
+    signals: InterruptedTurnErrorSignals,
+  ): { providerId: string; modelId: string | null } | null => {
+    if (!isCodexUsageLimitSignal(signals)) return null;
+    const session = maker.getSession(sessionId);
+    if (!session || session.agentKind !== 'codex' || session.remoteHostId) return null;
+    const providerId = getSessionProvider(sessionId);
+    if (!providerId || !isOpenAiSubscriptionProviderId(providerId)) return null;
+    if (!mayUseCodexResetCreditForUsageLimit(providerId)) return null;
+    return { providerId, modelId: session.model || null };
+  };
+  const canRecoverTurn = (
+    signals: InterruptedTurnErrorSignals,
+    item?: AgentInputQueuedMessage | null,
+    sessionId?: string,
+  ) =>
+    canRecoverInterruptedTurn(signals, item) ||
+    (sessionId !== undefined && codexResetCreditAccountFor(sessionId, signals) !== null);
 
   const sendToAgentAccepted: typeof sendToAgentAcceptedUnlocked = async (...args) => {
     const [sessionId] = args;
@@ -15512,6 +15553,109 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await awaitQueuedSnapshotWrite(sessionId);
   }
 
+  // 账号配额耗尽 → 读额度 → 已恢复就续跑 / 周配额用满就用一次重置再续跑 / 否则交还错误
+  // 并写明原因。沿用中断续跑的额度守卫、接管态与错误补落；自动续跑被关闭或次数用尽时
+  // 不接管，也不扣卡——扣卡一定伴随续跑行，用户总能看到。
+  const resumeAfterCodexUsageLimit = (
+    sessionId: string,
+    signals: InterruptedTurnErrorSignals,
+    item: AgentInputQueuedMessage,
+    account: { providerId: string; modelId: string | null },
+  ) => {
+    const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, Date.now());
+    if (decision.action !== 'resume') return null;
+    const { providerId, modelId } = account;
+    // 与中断续跑同理：补落 error 行时 turn 开始时刻已被清掉，先存一份。
+    saveTurnStartedAtForDeferred(sessionId);
+    log.info('codex usage limit taken over', {
+      sessionId,
+      providerId,
+      attemptToken: decision.attemptToken,
+    });
+    autoResumeBookkeeping.beginAttempt(sessionId, decision.attemptToken);
+    const schedulerRunId =
+      item.origin?.kind === 'scheduler' && typeof item.origin.runId === 'string'
+        ? item.origin.runId
+        : null;
+    if (schedulerRunId) beginSchedulerAutoResume(sessionId, schedulerRunId, decision.attemptToken);
+    const giveBack = (reason: string | null) => {
+      interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
+      if (reason) autoResumeBookkeeping.annotateSuppressedErrorReason(sessionId, decision.attemptToken, reason);
+      const finalized = autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
+        surfaceBanner: true,
+      });
+      if (finalized && reason) inputCoordinator.noteSurfacedErrorReason(sessionId, reason);
+    };
+    autoResumeBookkeeping.schedule(sessionId, decision.attemptToken, 0, (attempt) =>
+      (async () => {
+        try {
+          const resolution = await resolveCodexUsageLimit(providerId, modelId, () => {
+            if (attempt.isCurrent()) {
+              inputCoordinator.updateAutoResumePending(sessionId, decision.attemptToken, {
+                reason: CODEX_RESET_CREDIT_RESUME_REASON,
+              });
+            }
+          });
+          if (!attempt.isCurrent()) return;
+          if (resolution.kind !== 'reset' && resolution.kind !== 'restored') {
+            log.info('codex usage limit given back', {
+              sessionId,
+              providerId,
+              result: resolution.kind,
+              ...(resolution.kind === 'skipped' ? { why: resolution.why } : {}),
+            });
+            giveBack(
+              resolution.kind === 'failed'
+                ? CODEX_RESET_CREDIT_FAILED_REASON
+                : resolution.why === 'short-window'
+                  ? CODEX_RESET_CREDIT_SKIPPED_SHORT_WINDOW_REASON
+                  : resolution.why === 'no-credit'
+                    ? CODEX_RESET_CREDIT_SKIPPED_NONE_REASON
+                    : null,
+            );
+            return;
+          }
+          inputCoordinator.updateAutoResumePending(sessionId, decision.attemptToken, {
+            reason:
+              resolution.kind === 'reset'
+                ? CODEX_RESET_CREDIT_RESUME_REASON
+                : CODEX_QUOTA_RESTORED_RESUME_REASON,
+          });
+          const outcome = await inputCoordinator.autoRetryLastError(sessionId, decision.attemptToken);
+          if (!attempt.isCurrent()) return;
+          if (outcome !== 'resumed') {
+            interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
+            autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
+              surfaceBanner: outcome === 'no-progress',
+            });
+            return;
+          }
+          log.info('codex usage limit resolved; task continued', {
+            sessionId,
+            providerId,
+            result: resolution.kind,
+          });
+        } catch (err) {
+          if (!attempt.isCurrent()) return;
+          giveBack(CODEX_RESET_CREDIT_FAILED_REASON);
+          log.warn('codex usage limit handling failed', {
+            sessionId,
+            providerId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })(),
+    );
+    // 先只说在检查配额；确定要用重置时再切到「正在用一次重置」。
+    return {
+      ...(signals.message !== undefined ? { error: signals.message } : {}),
+      reason: CODEX_RESET_CREDIT_CHECKING_REASON,
+      attempt: decision.attempt,
+      maxAttempts: decision.maxAttempts,
+      sessionTotal: decision.sessionTotal,
+    };
+  };
+
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
@@ -15552,7 +15696,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       signals: InterruptedTurnErrorSignals,
       item: AgentInputQueuedMessage,
     ) => {
-      if (!canRecoverTurn(signals, item) || inputCoordinator.isExecutionPaused(sessionId)) return null;
+      if (inputCoordinator.isExecutionPaused(sessionId)) return null;
+      if (!canRecoverInterruptedTurn(signals, item)) {
+        const resetCreditAccount = codexResetCreditAccountFor(sessionId, signals);
+        return resetCreditAccount
+          ? resumeAfterCodexUsageLimit(sessionId, signals, item, resetCreditAccount)
+          : null;
+      }
       const requireRouteChange = botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals);
       const erroredAt = Date.now();
       const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt);

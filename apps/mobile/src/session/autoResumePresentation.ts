@@ -1,3 +1,7 @@
+import {
+  codexQuotaResumeKind,
+  type CodexQuotaResumeKind,
+} from '@cindy/maker-shared/synthetic-trigger';
 import type { ContinuationInFlightProjectionCapability } from '@/session/types';
 
 export interface MobileAutoResumeInfo {
@@ -6,6 +10,8 @@ export interface MobileAutoResumeInfo {
   maxAttempts?: number;
   sessionTotal?: number;
   outcome?: 'succeeded' | 'failed';
+  /** Codex 配额耗尽后的处理（检查配额 / 用了重置 / 配额已恢复），不是重连；没有重连次数可言。 */
+  quotaKind?: CodexQuotaResumeKind;
 }
 
 export type MobileAutoResumeState = 'separator' | 'live' | 'succeeded' | 'failed' | 'neutral';
@@ -21,10 +27,12 @@ export interface MobileAutoResumePresentation {
 export function readMobileAutoResumeInfo(data?: Record<string, unknown>): MobileAutoResumeInfo {
   const number = (value: unknown) =>
     typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
-  const attempt = number(data?.attempt);
-  const maxAttempts = number(data?.maxAttempts);
-  const sessionTotal = number(data?.sessionTotal);
+  const quotaKind = codexQuotaResumeKind(data?.reason);
+  const attempt = quotaKind ? undefined : number(data?.attempt);
+  const maxAttempts = quotaKind ? undefined : number(data?.maxAttempts);
+  const sessionTotal = quotaKind ? undefined : number(data?.sessionTotal);
   return {
+    ...(quotaKind ? { quotaKind } : {}),
     ...(typeof data?.error === 'string' && data.error.trim() ? { error: data.error } : {}),
     ...(attempt !== undefined ? { attempt } : {}),
     ...(maxAttempts !== undefined ? { maxAttempts } : {}),
@@ -59,6 +67,7 @@ export function getMobileAutoResumePresentation(
   const hasProgress = info.attempt !== undefined && info.maxAttempts !== undefined;
   const hasInterruptionContext =
     data?.live === true ||
+    info.quotaKind !== undefined ||
     info.error !== undefined ||
     hasProgress ||
     info.sessionTotal !== undefined ||
@@ -79,6 +88,23 @@ export function getMobileAutoResumePresentation(
     hasProgress,
     canExpand: canExpandMobileAutoResume(info),
   };
+}
+
+/** 续跑行文案 key（配额处理与重连各一套；检查配额只会出现在进行中）。 */
+export function mobileAutoResumeLabelKey(
+  quotaKind: CodexQuotaResumeKind | undefined,
+  state: Exclude<MobileAutoResumeState, 'separator'>,
+  hasProgress: boolean,
+): string {
+  const base = 'message.systemCard.autoResume.';
+  if (quotaKind === 'checking' && state === 'live') return `${base}resetCreditChecking`;
+  if (quotaKind === 'reset' || quotaKind === 'restored') {
+    const prefix = quotaKind === 'reset' ? 'resetCredit' : 'quotaRestored';
+    const suffix = { live: 'Pending', succeeded: 'Succeeded', failed: 'Failed', neutral: 'Neutral' }[state];
+    return `${base}${prefix}${suffix}`;
+  }
+  if (state === 'live') return `${base}${hasProgress ? 'pendingWithProgress' : 'pending'}`;
+  return `${base}${state}`;
 }
 
 export function toggleMobileAutoResumeExpanded(expanded: boolean, canExpand: boolean): boolean {

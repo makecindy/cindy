@@ -353,6 +353,7 @@ import {
   getMobileAutoResumePresentation,
   isMobileAutoResumeRowInFlight,
   toggleMobileAutoResumeExpanded,
+  mobileAutoResumeLabelKey,
 } from '@/session/autoResumePresentation';
 import type { ContinuationInFlightProjectionCapability } from '@/session/types';
 import {
@@ -5323,18 +5324,20 @@ function MobileAutoResumeActionRow({
     );
   }
 
-  const label = state === 'live'
-    ? hasProgress
-      ? t('message.systemCard.autoResume.pendingWithProgress', {
-          attempt: info.attempt,
-          total: info.maxAttempts,
-        })
-      : t('message.systemCard.autoResume.pending')
-    : state === 'succeeded'
-      ? t('message.systemCard.autoResume.succeeded')
-      : state === 'failed'
-        ? t('message.systemCard.autoResume.failed')
-        : t('message.systemCard.autoResume.neutral');
+  const label = info.quotaKind
+    ? t(mobileAutoResumeLabelKey(info.quotaKind, state, hasProgress))
+    : state === 'live'
+      ? hasProgress
+        ? t('message.systemCard.autoResume.pendingWithProgress', {
+            attempt: info.attempt,
+            total: info.maxAttempts,
+          })
+        : t('message.systemCard.autoResume.pending')
+      : state === 'succeeded'
+        ? t('message.systemCard.autoResume.succeeded')
+        : state === 'failed'
+          ? t('message.systemCard.autoResume.failed')
+          : t('message.systemCard.autoResume.neutral');
   const accessibilityLabel = summary ? `${label}: ${summary}` : label;
 
   return (

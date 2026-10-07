@@ -1915,6 +1915,19 @@
       }
     },
     "providers": {
+      "codexResetAutoUse": {
+        "label": "自动使用重置",
+        "description": "周配额用完导致任务中断时，自动用一次重置并继续任务；快过期的重置会在过期前 30 分钟自动用掉。重置用掉后无法撤回。",
+        "lastAutoUseUsageLimit": "{{at}} 因周配额用完自动使用了 1 次重置",
+        "lastAutoUseExpiring": "{{at}} 自动使用了 1 次即将过期的重置",
+        "enabledToast": "已开启自动使用重置",
+        "disabledToast": "已关闭自动使用重置",
+        "saveFailed": "设置未保存，请重试",
+        "notification": {
+          "title": "已自动使用一次重置",
+          "body": "一次即将过期的 Codex 重置已在过期前用掉，配额已重新开始。"
+        }
+      },
       "llamacpp": {
         "ownedElsewhere": "模型服务正在另一个 Cindy 实例中运行。请在那里下载模型或修改上下文，或先在该实例停止服务。",
         "primaryPick": "主推 · 先试这个",
@@ -9672,6 +9685,9 @@
       "codexOrganizationUsageLimit": "当前连接的是企业 Codex 账号，已达到用量上限。请等待用量上限重置，或切换其他可用账号后再重试。",
       "codexUsageLimitWithReset": "当前连接的 Codex 账号已达到用量上限，预计于 {{resetAt}} 恢复。",
       "codexUsageLimit": "当前连接的 Codex 账号已达到用量上限。请等待用量上限重置，或切换其他可用账号后再重试。",
+      "codexResetCreditShortWindow": "当前连接的 Codex 账号 5 小时配额已用完，稍后会自动恢复；周配额还有剩余，所以没有使用重置。",
+      "codexResetCreditNone": "当前连接的 Codex 账号周配额已用完，且没有可用的重置。请等待配额重置后再继续任务。",
+      "codexResetCreditFailed": "当前连接的 Codex 账号配额已用完，自动使用重置没有成功。请稍后重试。",
       "gatewayQuotaExhausted": "Cindy AI 余额不足，请充值后继续",
       "viewBalance": "查看余额",
       "viewBalanceTitle": "打开「用量和计费」查看余额并充值",
@@ -10096,6 +10112,12 @@
         "label": "已重新连接",
         "labelFailed": "重新连接未成功",
         "labelNeutral": "重新连接",
+        "resetCreditLabel": "已用一次重置，任务已继续",
+        "resetCreditLabelFailed": "已用一次重置，任务未能继续",
+        "resetCreditLabelNeutral": "使用重置",
+        "quotaRestoredLabel": "配额已恢复，任务已继续",
+        "quotaRestoredLabelFailed": "配额已恢复，任务未能继续",
+        "quotaRestoredLabelNeutral": "配额已恢复",
         "detail": {
           "reason": "中断原因",
           "attempt": "本次重试 {{attempt}}/{{total}}",
@@ -10107,7 +10129,10 @@
       },
       "autoResumePending": {
         "label": "重新连接中",
-        "labelWithProgress": "重新连接中 {{attempt}}/{{total}}"
+        "labelWithProgress": "重新连接中 {{attempt}}/{{total}}",
+        "resetCredit": "正在用一次重置恢复配额…",
+        "resetCreditChecking": "正在检查配额…",
+        "quotaRestored": "配额已恢复，正在继续…"
       },
       "agentSwitch": {
         "label": "已从 {{from}} 切换到 {{to}}",

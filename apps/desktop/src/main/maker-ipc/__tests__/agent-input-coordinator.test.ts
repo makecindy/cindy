@@ -11863,7 +11863,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     h.coordinator.onTurnEvent(sid, 'error', info.error, { reason: info.reason });
     await flush();
     expect(h.isResumableTurnErrorCandidate).toHaveBeenCalledWith(
-      { message: info.error, reason: info.reason }, expect.objectContaining({ clientId: item.clientId }),
+      { message: info.error, reason: info.reason }, expect.objectContaining({ clientId: item.clientId }), sid,
     );
     expect(latestProjection(h.projections).error).toBeNull();
     expect(await h.coordinator.autoRetryLastError(sid, info.sessionTotal)).toBe('resumed');
@@ -12962,6 +12962,49 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       expect(h.sendToAgent).toHaveBeenCalledTimes(outcome === 'allow' ? 2 : 1);
     },
   );
+
+  it('updateAutoResumePending 只改仍属于该 attempt 的接管提示，并带进续跑记录', async () => {
+    const h = createHarness();
+    const sid = 'update-pending-takeover';
+    const checking = { ...TAKEOVER_INFO, reason: 'codex_reset_credit_checking' };
+    h.setResumableTurnErrorTakeover(checking);
+    await failAfterDispatch(h, sid);
+
+    expect(h.coordinator.updateAutoResumePending(sid, checking.sessionTotal + 1, { reason: 'x' })).toBe(false);
+    expect(
+      h.coordinator.updateAutoResumePending(sid, checking.sessionTotal, {
+        reason: 'codex_reset_credit_used',
+      }),
+    ).toBe(true);
+    expect(latestProjection(h.projections).autoResumePending).toEqual({
+      ...checking,
+      reason: 'codex_reset_credit_used',
+    });
+    await expect(h.coordinator.autoRetryLastError(sid, checking.sessionTotal)).resolves.toBe('resumed');
+    await flush();
+    expect(h.onDispatchedUserTurn.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        autoResumeInfo: { ...checking, reason: 'codex_reset_credit_used' },
+      }),
+    );
+  });
+
+  it('noteSurfacedErrorReason 只给已交还、尚无 reason 的错误补原因', async () => {
+    const h = createHarness();
+    const sid = 'surfaced-error-reason';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    await failAfterDispatch(h, sid);
+    // 接管中还没有错误横幅：不补。
+    expect(h.coordinator.noteSurfacedErrorReason(sid, 'codex_reset_credit_none')).toBe(false);
+
+    h.coordinator.abandonAutoResume(sid, truncationMessage);
+    expect(h.coordinator.noteSurfacedErrorReason(sid, 'codex_reset_credit_none')).toBe(true);
+    await flush();
+    expect(latestProjection(h.projections)).toEqual(
+      expect.objectContaining({ error: truncationMessage, errorReason: 'codex_reset_credit_none' }),
+    );
+    expect(h.coordinator.noteSurfacedErrorReason(sid, 'codex_reset_credit_failed')).toBe(false);
+  });
 
   it('abandonAutoResume 带 message → 错误回落成横幅', async () => {
     const h = createHarness();

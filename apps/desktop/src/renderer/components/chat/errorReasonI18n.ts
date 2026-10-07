@@ -5,6 +5,11 @@ import {
 } from '../../../shared/claudeGatewayError';
 import { UPSTREAM_OVERLOAD_REASON } from '@/utils/overloadError';
 import { UPSTREAM_STREAM_INTERRUPTED_REASON } from '@/utils/streamInterruptError';
+import {
+  CODEX_RESET_CREDIT_FAILED_REASON,
+  CODEX_RESET_CREDIT_SKIPPED_NONE_REASON,
+  CODEX_RESET_CREDIT_SKIPPED_SHORT_WINDOW_REASON,
+} from '../../../shared/codexResetCreditAutoUse';
 
 /**
  * Stable maker-core error reason -> renderer i18n key.
@@ -48,4 +53,15 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   [CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON]:
     'chat.errorBanner.claudeSubscriptionOpusPlanMismatch',
   [GATEWAY_PROXY_TOKEN_INVALID_REASON]: 'chat.errorBanner.gatewayProxyTokenInvalidNoRetry',
+  // Codex 配额耗尽、开了自动使用重置却没有用：说明原因（Codex 配额横幅优先用这几条）。
+  [CODEX_RESET_CREDIT_SKIPPED_SHORT_WINDOW_REASON]: 'chat.errorBanner.codexResetCreditShortWindow',
+  [CODEX_RESET_CREDIT_SKIPPED_NONE_REASON]: 'chat.errorBanner.codexResetCreditNone',
+  [CODEX_RESET_CREDIT_FAILED_REASON]: 'chat.errorBanner.codexResetCreditFailed',
 };
+
+/** 没有用重置的原因 reason：Codex 配额横幅用它替代通用的「已达上限」。 */
+export const CODEX_RESET_CREDIT_SKIP_REASONS: ReadonlySet<string> = new Set([
+  CODEX_RESET_CREDIT_SKIPPED_SHORT_WINDOW_REASON,
+  CODEX_RESET_CREDIT_SKIPPED_NONE_REASON,
+  CODEX_RESET_CREDIT_FAILED_REASON,
+]);

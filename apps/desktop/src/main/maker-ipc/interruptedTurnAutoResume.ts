@@ -45,6 +45,8 @@ export interface InterruptedTurnErrorSignals {
   errorStatus?: number;
   /** Bounded details for the live error projection; never contains raw provider data. */
   toolLoop?: AgentInputToolLoopDetails;
+  /** Codex 结构化错误 tag；只透传账号配额耗尽这一种。 */
+  codexErrorInfo?: 'usageLimitExceeded';
 }
 
 /**

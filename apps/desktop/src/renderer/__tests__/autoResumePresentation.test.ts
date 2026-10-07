@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { findActiveReconnect } from '@/lib/autoResumePresentation';
+import {
+  CODEX_QUOTA_RESTORED_RESUME_REASON,
+  CODEX_RESET_CREDIT_CHECKING_REASON,
+  CODEX_RESET_CREDIT_RESUME_REASON,
+} from '@cindy/maker-shared/synthetic-trigger';
+import {
+  autoResumePendingLabel,
+  findActiveReconnect,
+  hasInterruptionContext,
+  readAutoResumeInfo,
+  recordedAutoResumeLabelKey,
+} from '@/lib/autoResumePresentation';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
 const row = (overrides: Partial<ChatMessage> = {}): ChatMessage => ({
@@ -98,5 +109,42 @@ describe('composer reconnect presentation', () => {
     expect(active).not.toBeNull();
     expect(active?.attempt).toBeUndefined();
     expect(active?.maxAttempts).toBeUndefined();
+  });
+});
+
+describe('Codex quota continuation presentation', () => {
+  it('says it is checking quota, then that it uses a reset or that quota is back', () => {
+    const base = { error: 'You have hit your usage limit.', attempt: 1, maxAttempts: 5 };
+    const checking = readAutoResumeInfo({ ...base, reason: CODEX_RESET_CREDIT_CHECKING_REASON });
+    expect(checking.quotaKind).toBe('checking');
+    expect(autoResumePendingLabel(checking)).toEqual({
+      key: 'chat.systemCard.autoResumePending.resetCreditChecking',
+    });
+    expect(autoResumePendingLabel(readAutoResumeInfo({ ...base, reason: CODEX_RESET_CREDIT_RESUME_REASON })))
+      .toEqual({ key: 'chat.systemCard.autoResumePending.resetCredit' });
+    expect(autoResumePendingLabel(readAutoResumeInfo({ ...base, reason: CODEX_QUOTA_RESTORED_RESUME_REASON })))
+      .toEqual({ key: 'chat.systemCard.autoResumePending.quotaRestored' });
+    // A quota row is never mistaken for a silent-stop separator, even without an error text.
+    expect(hasInterruptionContext(readAutoResumeInfo({ reason: CODEX_RESET_CREDIT_RESUME_REASON }))).toBe(true);
+  });
+
+  it('never reads a reset that did not continue the task as continued', () => {
+    expect(recordedAutoResumeLabelKey('reset', 'succeeded')).toBe('chat.systemCard.autoResume.resetCreditLabel');
+    expect(recordedAutoResumeLabelKey('reset', 'failed')).toBe('chat.systemCard.autoResume.resetCreditLabelFailed');
+    expect(recordedAutoResumeLabelKey('reset', undefined)).toBe('chat.systemCard.autoResume.resetCreditLabelNeutral');
+    expect(recordedAutoResumeLabelKey('restored', 'failed')).toBe('chat.systemCard.autoResume.quotaRestoredLabelFailed');
+    expect(recordedAutoResumeLabelKey(undefined, 'succeeded')).toBe('chat.systemCard.autoResume.label');
+  });
+
+  it('keeps reconnect labels for every other reason', () => {
+    const info = readAutoResumeInfo({ reason: 'empty-response', attempt: 2, maxAttempts: 5 });
+    expect(info.quotaKind).toBeUndefined();
+    expect(autoResumePendingLabel(info)).toEqual({
+      key: 'chat.systemCard.autoResumePending.labelWithProgress',
+      params: { attempt: 2, total: 5 },
+    });
+    expect(autoResumePendingLabel(readAutoResumeInfo({}))).toEqual({
+      key: 'chat.systemCard.autoResumePending.label',
+    });
   });
 });

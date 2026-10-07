@@ -6798,6 +6798,15 @@ interface ElectronAPI {
       getCodexRateLimits: (
         providerId?: string,
       ) => Promise<import('@cindy/maker-shared/device-link-contract').MobileCodexRateLimitsResult>;
+      /** OpenAI 订阅账号的「自动使用重置」开关。 */
+      getCodexResetAutoUse: (
+        providerId: string,
+      ) => Promise<import('../shared/codexResetCreditAutoUse').CodexResetCreditAutoUseState>;
+      /** enabled 为 null = 恢复默认。 */
+      setCodexResetAutoUse: (
+        providerId: string,
+        enabled: boolean | null,
+      ) => Promise<import('../shared/codexResetCreditAutoUse').CodexResetCreditAutoUseState>;
       /** Cindy AI /models 下发的 XD 原生报价。 */
       getModelPricing: () => Promise<import('../shared/regionalMoney').ModelPricingCatalog | null>;
       onModelPricingChanged: (

@@ -1915,6 +1915,19 @@
       }
     },
     "providers": {
+      "codexResetAutoUse": {
+        "label": "リセットを自動で使用",
+        "description": "週のクォータを使い切ってタスクが中断したとき、リセットを1回使ってタスクを続行します。期限切れが近いリセットは期限の30分前に自動で使います。使ったリセットは元に戻せません。",
+        "lastAutoUseUsageLimit": "{{at}} 週のクォータを使い切ったため、リセットを1回自動で使用しました",
+        "lastAutoUseExpiring": "{{at}} 期限切れが近いリセットを1回自動で使用しました",
+        "enabledToast": "リセットの自動使用をオンにしました",
+        "disabledToast": "リセットの自動使用をオフにしました",
+        "saveFailed": "設定を保存できませんでした。もう一度お試しください",
+        "notification": {
+          "title": "リセットを自動で1回使用しました",
+          "body": "期限切れが近い Codex のリセットを期限前に使い、クォータが再開しました。"
+        }
+      },
       "llamacpp": {
         "ownedElsewhere": "モデルサービスは別の Cindy インスタンスで実行中です。モデルのダウンロードやコンテキストの変更はそちらで行うか、先にそのサービスを停止してください。",
         "primaryPick": "第一候補 · まず試す",
@@ -9677,6 +9690,9 @@
       "codexOrganizationUsageLimit": "接続中の Codex アカウントは組織によって管理されており、利用上限に達しました。上限のリセットを待つか、別の利用可能なアカウントに切り替えてから再試行してください。",
       "codexUsageLimitWithReset": "接続中の Codex アカウントは利用上限に達しました。{{resetAt}} にリセットされる見込みです。",
       "codexUsageLimit": "接続中の Codex アカウントは利用上限に達しました。上限のリセットを待つか、別の利用可能なアカウントに切り替えてから再試行してください。",
+      "codexResetCreditShortWindow": "接続中の Codex アカウントは5時間のクォータを使い切りましたが、まもなく自動で回復します。週のクォータは残っているため、リセットは使いませんでした。",
+      "codexResetCreditNone": "接続中の Codex アカウントは週のクォータを使い切り、使えるリセットもありません。クォータのリセット後にタスクを続行してください。",
+      "codexResetCreditFailed": "接続中の Codex アカウントはクォータを使い切り、リセットの自動使用に失敗しました。しばらくしてから再試行してください。",
       "gatewayQuotaExhausted": "Cindy AI の残高が不足しています。チャージすると続行できます。",
       "viewBalance": "残高を見る",
       "viewBalanceTitle": "「使用量と請求」を開いて残高を確認・チャージ",
@@ -10101,6 +10117,12 @@
         "label": "再接続しました",
         "labelFailed": "再接続できませんでした",
         "labelNeutral": "再接続",
+        "resetCreditLabel": "リセットを1回使って続行しました",
+        "resetCreditLabelFailed": "リセットを1回使いましたが、タスクを続行できませんでした",
+        "resetCreditLabelNeutral": "リセットを使用",
+        "quotaRestoredLabel": "クォータが回復し、続行しました",
+        "quotaRestoredLabelFailed": "クォータは回復しましたが、タスクを続行できませんでした",
+        "quotaRestoredLabelNeutral": "クォータが回復しました",
         "detail": {
           "reason": "中断の理由",
           "attempt": "今回の再試行 {{attempt}}/{{total}}",
@@ -10112,7 +10134,10 @@
       },
       "autoResumePending": {
         "label": "再接続中",
-        "labelWithProgress": "再接続中 {{attempt}}/{{total}}"
+        "labelWithProgress": "再接続中 {{attempt}}/{{total}}",
+        "resetCredit": "リセットを1回使ってクォータを回復中…",
+        "resetCreditChecking": "クォータを確認中…",
+        "quotaRestored": "クォータが回復しました。続行中…"
       },
       "agentSwitch": {
         "label": "{{from}} から {{to}} に切り替えました",

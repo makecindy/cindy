@@ -6083,7 +6083,7 @@ const registerIpcHandlers = () => {
       registerMakerForkIpc();
       registerMakerAuthIpc(ipcMaker);
       registerMakerStatusIpc(ipcMaker);
-      registerMakerUsageIpc(ipcMaker);
+      registerMakerUsageIpc(ipcMaker, { getMainWindow: () => mainWindowRef });
       registerMakerBinaryVersionIpc();
       registerCrossAgentConvertIpc();
       // Workdir File Browser (vscode-style lazy file tree + content viewer for

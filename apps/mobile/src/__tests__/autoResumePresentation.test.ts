@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CODEX_QUOTA_RESTORED_RESUME_REASON,
+  CODEX_RESET_CREDIT_CHECKING_REASON,
+  CODEX_RESET_CREDIT_RESUME_REASON,
+} from '@cindy/maker-shared/synthetic-trigger';
+import {
   canExpandMobileAutoResume,
   getMobileAutoResumePresentation,
   isMobileAutoResumeRowInFlight,
+  mobileAutoResumeLabelKey,
   readMobileAutoResumeInfo,
   summarizeMobileInterruption,
   toggleMobileAutoResumeExpanded,
@@ -54,5 +60,40 @@ describe('autoResumePresentation', () => {
     expect(toggleMobileAutoResumeExpanded(false, true)).toBe(true);
     expect(toggleMobileAutoResumeExpanded(true, true)).toBe(false);
     expect(toggleMobileAutoResumeExpanded(true, false)).toBe(false);
+  });
+});
+
+describe('Codex quota continuation', () => {
+  it('drops reconnect counters and keeps the row expandable to the usage-limit reason', () => {
+    const data = {
+      reason: CODEX_RESET_CREDIT_RESUME_REASON,
+      error: "You've hit your usage limit.",
+      attempt: 1,
+      maxAttempts: 5,
+      sessionTotal: 4,
+    };
+    expect(readMobileAutoResumeInfo(data)).toEqual({
+      quotaKind: 'reset',
+      error: "You've hit your usage limit.",
+    });
+    const presentation = getMobileAutoResumePresentation({ ...data, live: true });
+    expect(presentation.state).toBe('live');
+    expect(presentation.hasProgress).toBe(false);
+  });
+
+  it('is never shown as the silent-stop separator, even without an error text', () => {
+    expect(getMobileAutoResumePresentation({ reason: CODEX_RESET_CREDIT_RESUME_REASON }).state)
+      .toBe('neutral');
+  });
+
+  it('labels checking, using a reset and restored quota, and never calls a failed one continued', () => {
+    expect(mobileAutoResumeLabelKey('checking', 'live', false)).toBe('message.systemCard.autoResume.resetCreditChecking');
+    expect(mobileAutoResumeLabelKey('reset', 'live', false)).toBe('message.systemCard.autoResume.resetCreditPending');
+    expect(mobileAutoResumeLabelKey('reset', 'failed', false)).toBe('message.systemCard.autoResume.resetCreditFailed');
+    expect(mobileAutoResumeLabelKey('restored', 'succeeded', false)).toBe('message.systemCard.autoResume.quotaRestoredSucceeded');
+    expect(mobileAutoResumeLabelKey(undefined, 'live', true)).toBe('message.systemCard.autoResume.pendingWithProgress');
+    expect(mobileAutoResumeLabelKey(undefined, 'neutral', false)).toBe('message.systemCard.autoResume.neutral');
+    expect(readMobileAutoResumeInfo({ reason: CODEX_RESET_CREDIT_CHECKING_REASON }).quotaKind).toBe('checking');
+    expect(readMobileAutoResumeInfo({ reason: CODEX_QUOTA_RESTORED_RESUME_REASON }).quotaKind).toBe('restored');
   });
 });

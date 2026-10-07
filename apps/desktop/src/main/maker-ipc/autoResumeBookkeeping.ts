@@ -525,6 +525,17 @@ export class AutoResumeBookkeeping {
    * `surfaceError=false` 用于「退避窗口内用户自己接手了」：那时再弹错误只是打扰，
    * 但错误行仍要补落。
    */
+  /**
+   * 给压住的错误补一个稳定 reason（只在它本来没有 reason 时），补落的 error 行与交还的
+   * 横幅据此说明原因。只改属于 attemptToken 的那条。
+   */
+  annotateSuppressedErrorReason(sessionId: string, attemptToken: number, reason: string): boolean {
+    const entry = this.suppressedErrors.get(sessionId);
+    if (!entry || entry.attemptToken !== attemptToken || entry.detail.reason) return false;
+    entry.detail = { ...entry.detail, reason };
+    return true;
+  }
+
   finalizeSuppressedError(
     sessionId: string,
     attemptOrOptions: number | { surfaceError?: boolean; surfaceBanner?: boolean },

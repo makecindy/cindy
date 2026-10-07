@@ -1915,6 +1915,19 @@
       }
     },
     "providers": {
+      "codexResetAutoUse": {
+        "label": "自動使用重置",
+        "description": "週配額用完導致任務中斷時，自動用一次重置並繼續任務；快過期的重置會在過期前 30 分鐘自動用掉。重置用掉後無法撤回。",
+        "lastAutoUseUsageLimit": "{{at}} 因週配額用完自動使用了 1 次重置",
+        "lastAutoUseExpiring": "{{at}} 自動使用了 1 次即將過期的重置",
+        "enabledToast": "已開啟自動使用重置",
+        "disabledToast": "已關閉自動使用重置",
+        "saveFailed": "設定未儲存，請重試",
+        "notification": {
+          "title": "已自動使用一次重置",
+          "body": "一次即將過期的 Codex 重置已在過期前用掉，配額已重新開始。"
+        }
+      },
       "llamacpp": {
         "ownedElsewhere": "模型服務正在另一個 Cindy 執行個體中執行。請在那裡下載模型或修改上下文，或先停止該執行個體的服務。",
         "primaryPick": "主推 · 先試這個",
@@ -9671,6 +9684,9 @@
       "codexOrganizationUsageLimit": "目前連線的是企業 Codex 帳號，已達到用量上限。請等待用量上限重置，或切換其他可用帳號後再重試。",
       "codexUsageLimitWithReset": "目前連線的 Codex 帳號已達到用量上限，預計於 {{resetAt}} 恢復。",
       "codexUsageLimit": "目前連線的 Codex 帳號已達到用量上限。請等待用量上限重置，或切換其他可用帳號後再重試。",
+      "codexResetCreditShortWindow": "目前連線的 Codex 帳號 5 小時配額已用完，稍後會自動恢復；週配額還有剩餘，所以沒有使用重置。",
+      "codexResetCreditNone": "目前連線的 Codex 帳號週配額已用完，且沒有可用的重置。請等待配額重置後再繼續任務。",
+      "codexResetCreditFailed": "目前連線的 Codex 帳號配額已用完，自動使用重置沒有成功。請稍後重試。",
       "gatewayQuotaExhausted": "Cindy AI 餘額不足，請充值後繼續",
       "viewBalance": "檢視餘額",
       "viewBalanceTitle": "開啟「用量和計費」檢視餘額並充值",
@@ -10095,6 +10111,12 @@
         "label": "已重新連線",
         "labelFailed": "重新連線未成功",
         "labelNeutral": "重新連線",
+        "resetCreditLabel": "已用一次重置，任務已繼續",
+        "resetCreditLabelFailed": "已用一次重置，任務未能繼續",
+        "resetCreditLabelNeutral": "使用重置",
+        "quotaRestoredLabel": "配額已恢復，任務已繼續",
+        "quotaRestoredLabelFailed": "配額已恢復，任務未能繼續",
+        "quotaRestoredLabelNeutral": "配額已恢復",
         "detail": {
           "reason": "中斷原因",
           "attempt": "本次重試 {{attempt}}/{{total}}",
@@ -10106,7 +10128,10 @@
       },
       "autoResumePending": {
         "label": "重新連線中",
-        "labelWithProgress": "重新連線中 {{attempt}}/{{total}}"
+        "labelWithProgress": "重新連線中 {{attempt}}/{{total}}",
+        "resetCredit": "正在用一次重置恢復配額…",
+        "resetCreditChecking": "正在檢查配額…",
+        "quotaRestored": "配額已恢復，正在繼續…"
       },
       "agentSwitch": {
         "label": "已從 {{from}} 切換到 {{to}}",

@@ -16,6 +16,27 @@ export const UI_ACTION_TRIGGER_PREFIX = '[UI_ACTION_TRIGGER]';
  */
 export const APP_EXIT_INTERRUPTED_REASON = 'app-exit-interrupted';
 
+/**
+ * 自动续跑记录（autoResumeInfo.reason）里与 Codex 配额耗尽有关的三种，都不是连接中断后的
+ * 重连。桌面 coordinator 写入，两端据此换文案：
+ *  - CHECKING：正在读账号配额，还没决定用不用重置（只出现在进行中）；
+ *  - RESUME：用掉了一次重置后继续；
+ *  - QUOTA_RESTORED：配额已被恢复（别的任务刚用过重置等），没再用重置就继续。
+ */
+export const CODEX_RESET_CREDIT_CHECKING_REASON = 'codex_reset_credit_checking';
+export const CODEX_RESET_CREDIT_RESUME_REASON = 'codex_reset_credit_used';
+export const CODEX_QUOTA_RESTORED_RESUME_REASON = 'codex_quota_restored';
+
+export type CodexQuotaResumeKind = 'checking' | 'reset' | 'restored';
+
+/** 这条续跑记录属于哪种 Codex 配额处理；不是这三种时为 null（按重连呈现）。 */
+export function codexQuotaResumeKind(reason: unknown): CodexQuotaResumeKind | null {
+  if (reason === CODEX_RESET_CREDIT_CHECKING_REASON) return 'checking';
+  if (reason === CODEX_RESET_CREDIT_RESUME_REASON) return 'reset';
+  if (reason === CODEX_QUOTA_RESTORED_RESUME_REASON) return 'restored';
+  return null;
+}
+
 /** 已解析出的 user 文本是否是合成 UI 指令(所有面向用户的文本消费的统一判定)。 */
 export function isSyntheticTriggerText(text: string): boolean {
   return text.startsWith(UI_ACTION_TRIGGER_PREFIX);

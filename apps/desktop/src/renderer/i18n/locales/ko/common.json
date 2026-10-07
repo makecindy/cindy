@@ -1915,6 +1915,19 @@
       }
     },
     "providers": {
+      "codexResetAutoUse": {
+        "label": "재설정 자동 사용",
+        "description": "주간 할당량이 소진되어 작업이 중단되면 재설정을 1회 사용하고 작업을 계속합니다. 곧 만료되는 재설정은 만료 30분 전에 자동으로 사용합니다. 사용한 재설정은 되돌릴 수 없습니다.",
+        "lastAutoUseUsageLimit": "{{at}} 주간 할당량 소진으로 재설정 1회를 자동 사용했습니다",
+        "lastAutoUseExpiring": "{{at}} 곧 만료되는 재설정 1회를 자동 사용했습니다",
+        "enabledToast": "재설정 자동 사용을 켰습니다",
+        "disabledToast": "재설정 자동 사용을 껐습니다",
+        "saveFailed": "설정을 저장하지 못했습니다. 다시 시도해 주세요",
+        "notification": {
+          "title": "재설정 1회를 자동으로 사용했습니다",
+          "body": "곧 만료되는 Codex 재설정을 만료 전에 사용해 할당량이 다시 시작되었습니다."
+        }
+      },
       "llamacpp": {
         "ownedElsewhere": "다른 Cindy 인스턴스에서 모델 서비스가 실행 중입니다. 해당 인스턴스에서 모델을 다운로드하거나 컨텍스트를 변경하거나, 먼저 서비스를 중지하세요.",
         "primaryPick": "우선 선택 · 먼저 사용",
@@ -9677,6 +9690,9 @@
       "codexOrganizationUsageLimit": "현재 연결된 Codex 계정은 조직에서 관리하며 사용량 한도에 도달했습니다. 한도 재설정을 기다리거나 사용 가능한 다른 계정으로 전환한 후 다시 시도하세요.",
       "codexUsageLimitWithReset": "현재 연결된 Codex 계정이 사용량 한도에 도달했습니다. {{resetAt}}에 한도가 재설정될 예정입니다.",
       "codexUsageLimit": "현재 연결된 Codex 계정이 사용량 한도에 도달했습니다. 한도 재설정을 기다리거나 사용 가능한 다른 계정으로 전환한 후 다시 시도하세요.",
+      "codexResetCreditShortWindow": "현재 연결된 Codex 계정의 5시간 할당량이 소진되었지만 곧 자동으로 복구됩니다. 주간 할당량이 남아 있어 재설정을 사용하지 않았습니다.",
+      "codexResetCreditNone": "현재 연결된 Codex 계정의 주간 할당량이 소진되었고 사용할 수 있는 재설정이 없습니다. 할당량이 재설정된 후 작업을 계속하세요.",
+      "codexResetCreditFailed": "현재 연결된 Codex 계정의 할당량이 소진되었고 재설정 자동 사용에 실패했습니다. 잠시 후 다시 시도하세요.",
       "gatewayQuotaExhausted": "Cindy AI 잔액이 부족합니다. 충전한 후 계속하세요.",
       "viewBalance": "잔액 보기",
       "viewBalanceTitle": "「사용량 및 청구」를 열어 잔액을 확인하고 충전",
@@ -10101,6 +10117,12 @@
         "label": "다시 연결되었습니다",
         "labelFailed": "다시 연결하지 못했습니다",
         "labelNeutral": "다시 연결",
+        "resetCreditLabel": "재설정 1회를 사용해 계속했습니다",
+        "resetCreditLabelFailed": "재설정을 1회 사용했지만 작업을 계속하지 못했습니다",
+        "resetCreditLabelNeutral": "재설정 사용",
+        "quotaRestoredLabel": "할당량이 복구되어 계속했습니다",
+        "quotaRestoredLabelFailed": "할당량은 복구되었지만 작업을 계속하지 못했습니다",
+        "quotaRestoredLabelNeutral": "할당량 복구됨",
         "detail": {
           "reason": "중단 원인",
           "attempt": "이번 재시도 {{attempt}}/{{total}}",
@@ -10112,7 +10134,10 @@
       },
       "autoResumePending": {
         "label": "다시 연결하는 중",
-        "labelWithProgress": "다시 연결하는 중 {{attempt}}/{{total}}"
+        "labelWithProgress": "다시 연결하는 중 {{attempt}}/{{total}}",
+        "resetCredit": "재설정 1회로 할당량 복구 중…",
+        "resetCreditChecking": "할당량 확인 중…",
+        "quotaRestored": "할당량이 복구되어 계속하는 중…"
       },
       "agentSwitch": {
         "label": "{{from}}에서 {{to}}(으)로 전환됨",

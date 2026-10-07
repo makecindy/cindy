@@ -847,3 +847,24 @@ describe('shouldSkipOrcaWorkerTerminal', () => {
     expect(h.book.consumeFailedTurnCompletionTail('s1', 5)).toBe(false);
   });
 });
+
+describe('补落前给压住的错误补 reason', () => {
+  it('只给属于该 attempt、且本来没有 reason 的错误补，补落与横幅都带上', () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: "You've hit your usage limit." }, 7);
+    expect(h.book.annotateSuppressedErrorReason('s1', 8, 'codex_reset_credit_none')).toBe(false);
+    expect(h.book.annotateSuppressedErrorReason('s1', 7, 'codex_reset_credit_none')).toBe(true);
+    expect(h.book.annotateSuppressedErrorReason('s1', 7, 'codex_reset_credit_failed')).toBe(false);
+    h.book.beginAttempt('s1', 7);
+    h.book.finalizeSuppressedError('s1', 7, { surfaceBanner: true });
+    const detail = { message: "You've hit your usage limit.", reason: 'codex_reset_credit_none' };
+    expect(h.persisted).toEqual([{ sessionId: 's1', detail }]);
+    expect(h.surfaced).toEqual([{ sessionId: 's1', detail }]);
+  });
+
+  it('不覆盖原错误已有的 reason', () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'x', reason: 'turn-failed' }, 3);
+    expect(h.book.annotateSuppressedErrorReason('s1', 3, 'codex_reset_credit_none')).toBe(false);
+  });
+});

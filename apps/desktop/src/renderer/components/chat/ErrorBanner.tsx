@@ -52,7 +52,7 @@ import {
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
-import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
+import { CODEX_RESET_CREDIT_SKIP_REASONS, ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
 import { getToolLoopI18nKey } from './toolLoopI18n';
 import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
@@ -412,7 +412,10 @@ export function ErrorBanner({
   } else if (isCodexUsageLimitError) {
     // Codex 会把整段 429 JSON 放进 message。用户需要的是「哪个账号受限」和
     // 「什么时候恢复」；原始响应仍保留在下方的可展开区域供排障。
-    if (usageLimitResetAt) {
+    if (localizedReasonError && errorReason && CODEX_RESET_CREDIT_SKIP_REASONS.has(errorReason)) {
+      // 开了自动使用重置却没有用：直接说原因（短窗口会自己恢复 / 没有可用的重置）。
+      displayError = localizedReasonError;
+    } else if (usageLimitResetAt) {
       displayError = t(
         isOrganizationCodexPlan
           ? 'chat.errorBanner.codexOrganizationUsageLimitWithReset'

@@ -27,7 +27,7 @@ describe('model pricing prewarm ordering', () => {
       unchangedGuard,
     );
     const lifecycleStartupBlock = source.slice(localDbReady, takeoverStart);
-    const earlyUsageIpc = source.indexOf('registerMakerUsageIpc(ipcMaker);');
+    const earlyUsageIpc = source.indexOf('registerMakerUsageIpc(ipcMaker');
     const prewarm = source.indexOf('void prewarmModelPricing();');
     const refreshCatalog = source.indexOf('await refreshCustomProvidersIntoCatalog(');
 
@@ -45,7 +45,7 @@ describe('model pricing prewarm ordering', () => {
   });
 
   it('does not prewarm in the early IPC registration block', () => {
-    const earlyUsageIpc = source.indexOf('registerMakerUsageIpc(ipcMaker);');
+    const earlyUsageIpc = source.indexOf('registerMakerUsageIpc(ipcMaker');
     const nextIpc = source.indexOf('registerMakerBinaryVersionIpc();', earlyUsageIpc);
     expect(earlyUsageIpc).toBeGreaterThanOrEqual(0);
     expect(nextIpc).toBeGreaterThan(earlyUsageIpc);

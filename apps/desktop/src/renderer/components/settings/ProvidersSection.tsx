@@ -83,6 +83,8 @@ import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money'
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
 import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
+import { CodexResetAutoUseRow } from './CodexResetAutoUseRow';
+import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
 import { ProviderConnectionDialog } from './ProviderConnectionDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
@@ -731,6 +733,9 @@ function DetailHeader({
               />
             </div>
           ))}
+        {provider && providerWeeklyQuotaSource({ ...provider, suspended: false }) === 'codex' && (
+          <CodexResetAutoUseRow providerId={provider.id} />
+        )}
         {children}
       </div>
     </div>
