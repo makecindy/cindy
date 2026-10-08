@@ -93,6 +93,8 @@ import {
   type MessageOpResultPayload,
   type HookMessageOpMessage,
   type HookMessageOpResultMessage,
+  type HookProviderCommandsSetMessage,
+  type ProviderCommandsSetPayload,
   type TurnReopenPayload,
   type WelcomePayload,
 } from './types';
@@ -312,6 +314,13 @@ export function makeProviderBehaviorSet(
   payload: ProviderBehaviorSetPayload,
 ): HookProviderBehaviorSetMessage {
   return envelope('provider.behavior.set', payload);
+}
+
+/** provider.commands.set: 官方 Telegram 命令菜单以 desktop 注册表为准(见 types.ts)。 */
+export function makeProviderCommandsSet(
+  payload: ProviderCommandsSetPayload,
+): HookProviderCommandsSetMessage {
+  return envelope('provider.commands.set', payload);
 }
 
 export function makeProviderBehaviorState(

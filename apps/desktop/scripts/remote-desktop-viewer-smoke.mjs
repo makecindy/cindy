@@ -351,10 +351,38 @@ try {
   await checkExitDialog('light');
   await viewer.locator('#stage').click();
   const modifier = controllerPlatform === 'darwin' ? 'Meta' : 'Control';
+  const shortcutCodes = [modifier + 'Left', 'KeyC', 'KeyV'];
+  const shortcutStart = await host.evaluate(() => window.inputs.length);
   await viewer.keyboard.press(modifier + '+c');
   await viewer.keyboard.press(modifier + '+v');
-  await viewer.waitForFunction(() => window.clipboardActions.length === 2);
-  assert.deepEqual(await viewer.evaluate(() => window.clipboardActions), ['copy', 'paste']);
+  // Shortcuts act on the remote clipboard as complete key combos; only panel
+  // actions transfer content between computers.
+  const shortcutKeys = () =>
+    host.evaluate(
+      ({ start, codes }) =>
+        window.inputs
+          .slice(start)
+          .filter((event) => event.kind === 'key' && codes.includes(event.code))
+          .map((event) => (event.down ? '+' : '-') + event.code),
+      { start: shortcutStart, codes: shortcutCodes },
+    );
+  await host.waitForFunction(
+    ({ start, codes }) =>
+      window.inputs
+        .slice(start)
+        .filter((event) => event.kind === 'key' && codes.includes(event.code)).length >= 8,
+    { start: shortcutStart, codes: shortcutCodes },
+  );
+  assert.deepEqual(
+    await shortcutKeys(),
+    ['KeyC', 'KeyV'].flatMap((code) => [
+      '+' + shortcutCodes[0],
+      '+' + code,
+      '-' + code,
+      '-' + shortcutCodes[0],
+    ]),
+  );
+  assert.deepEqual(await viewer.evaluate(() => window.clipboardActions), []);
   await viewer.evaluate(async () => {
     const { themeService } = await import('/themes/theme-service.ts');
     const { cindyDark } = await import('/themes/builtin/cindy-dark.ts');
@@ -508,7 +536,7 @@ try {
       mouse: true,
       dataChannelInput: true,
       bridgeInput: true,
-      clipboardShortcuts: true,
+      remoteClipboardShortcuts: true,
       exitConfirmation: true,
       controllerPlatform,
       mediaRecovery: true,

@@ -21,7 +21,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { PassThrough } from 'node:stream';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 interface FakeEntry {
   killed: boolean;
@@ -140,7 +140,7 @@ async function waitForPending(deadlineMs = 4_000): Promise<void> {
   expect(fake.pending.length).toBeGreaterThan(0);
 }
 
-let killSpy: ReturnType<typeof vi.spyOn> | null = null;
+let killSpy: MockInstance<(pid: number, signal?: string | number | undefined) => true> | null = null;
 
 beforeEach(() => {
   // POSIX 路径的 SIGTERM/SIGKILL 走 process.kill(负 pid):同样只在假进程上生效,

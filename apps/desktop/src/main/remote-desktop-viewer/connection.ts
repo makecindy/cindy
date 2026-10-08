@@ -341,17 +341,15 @@ export class RemoteViewerConnection {
           check,
         )) as { text?: unknown };
         check();
-        if (
-          typeof result.text !== 'string' ||
-          !result.text ||
-          result.text.length > REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS
-        )
+        if (typeof result.text !== 'string') throw new Error('CLIPBOARD_UNSUPPORTED');
+        if (!result.text) throw new Error('CLIPBOARD_EMPTY');
+        if (result.text.length > REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS)
           throw new Error('CLIPBOARD_TOO_LONG');
         this.deps.writeClipboard(result.text);
       } else if (action === 'paste') {
         const text = this.deps.readClipboard();
-        if (!text || text.length > REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS)
-          throw new Error('CLIPBOARD_TOO_LONG');
+        if (!text) throw new Error('CLIPBOARD_EMPTY');
+        if (text.length > REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS) throw new Error('CLIPBOARD_TOO_LONG');
         await this.deps.request(
           this.target!.deviceId,
           { op: 'clipboard', lease, action: 'paste', text },

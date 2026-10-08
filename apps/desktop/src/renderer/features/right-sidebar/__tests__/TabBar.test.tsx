@@ -39,7 +39,6 @@ function renderStrip(overrides?: {
   onClose?: () => void;
   onActivate?: () => void;
   onReorder?: (orderedIds: string[]) => void;
-  iosSimulatorAvailable?: boolean;
   subagentsAvailable?: boolean;
 }) {
   const onClose = vi.fn(overrides?.onClose);
@@ -53,14 +52,13 @@ function renderStrip(overrides?: {
       onClose={onClose}
       onReorder={onReorder}
       onAdd={vi.fn()}
-      iosSimulatorAvailable={overrides?.iosSimulatorAvailable}
       subagentsAvailable={overrides?.subagentsAvailable}
     />,
   );
   return { onClose, onActivate, onReorder };
 }
 
-describe('TabStrip iOS Simulator plugin gate', () => {
+describe('TabStrip retired feature boundary', () => {
   it('does not expose the Host viewer before the product plugin is enabled', () => {
     renderStrip();
     fireEvent.pointerDown(screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' }), {
@@ -70,8 +68,8 @@ describe('TabStrip iOS Simulator plugin gate', () => {
     expect(screen.queryByText('rightSidebar.tabs.kinds.iosSimulator')).toBeNull();
   });
 
-  it('exposes the Host viewer menu item for the enabled product plugin', () => {
-    renderStrip({ iosSimulatorAvailable: true });
+  it('does not offer the removed viewer in the add menu', () => {
+    renderStrip();
     const addButton = screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' });
     vi.spyOn(addButton.parentElement as HTMLElement, 'getBoundingClientRect').mockReturnValue({
       x: 20,
@@ -85,7 +83,7 @@ describe('TabStrip iOS Simulator plugin gate', () => {
       toJSON: () => ({}),
     });
     fireEvent.pointerDown(addButton, { button: 0, ctrlKey: false });
-    expect(screen.getByText('rightSidebar.tabs.kinds.iosSimulator')).toBeTruthy();
+    expect(screen.queryByText('rightSidebar.tabs.kinds.iosSimulator')).toBeNull();
   });
 });
 

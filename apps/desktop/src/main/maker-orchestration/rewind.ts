@@ -167,6 +167,39 @@ interface RewindContext {
   codexUserMessages?: CodexRewindUserMessage[];
   /** DB 事务保留用 uuid；旧数据里可能是 synthetic block uuid，和 SDK anchor 不同。 */
   preserveMessageUuid?: string;
+  /**
+   * Claude Code 在另一台电脑运行：那台没有原生文件检查点，文件用本机保存点链回退(与 Codex /
+   * Pi 同一套)，对话只在那台截断。本机 Claude Code 任务不设。
+   */
+  savepointRewind?: true;
+}
+
+/** target 及其之后仍可见的 user 消息(按时间线)；不含 target 时说明它已不在当前时间线。 */
+async function loadTailUserTurns(
+  sessionId: string,
+  target: { rowid: number; createdAt: number },
+): Promise<Array<{ rowid: number; clientId: string; createdAt: number }>> {
+  const db = getDbClient().drizzle;
+  return db
+    .select({
+      rowid: messageRowid,
+      id: messages.id,
+      clientId: messages.clientId,
+      createdAt: messages.createdAt,
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.role, 'user'),
+        or(
+          gt(messages.createdAt, target.createdAt),
+          and(eq(messages.createdAt, target.createdAt), gte(messageRowid, target.rowid)),
+        ),
+        isNull(messages.rewindAt),
+      ),
+    )
+    .orderBy(asc(messages.createdAt), asc(messageRowid));
 }
 
 async function loadRewindContext(
@@ -262,26 +295,7 @@ async function loadRewindContext(
   }
 
   if (agentKind === 'codex' || agentKind === 'pi') {
-    const tailTurns = await db
-      .select({
-        rowid: messageRowid,
-        id: messages.id,
-        clientId: messages.clientId,
-        createdAt: messages.createdAt,
-      })
-      .from(messages)
-      .where(
-        and(
-          eq(messages.sessionId, sessionId),
-          eq(messages.role, 'user'),
-          or(
-            gt(messages.createdAt, target.createdAt),
-            and(eq(messages.createdAt, target.createdAt), gte(messageRowid, target.rowid)),
-          ),
-          isNull(messages.rewindAt),
-        ),
-      )
-      .orderBy(asc(messages.createdAt), asc(messageRowid));
+    const tailTurns = await loadTailUserTurns(sessionId, target);
     const targetStillVisible = tailTurns.some((row) => row.rowid === target.rowid);
     if (!targetStillVisible) {
       throw rewindError('MESSAGE_NOT_FOUND', `Message ${clientId} 不在当前 agent turn 时间线`);
@@ -363,6 +377,20 @@ async function loadRewindContext(
     `[rewind] sessionId=${sessionId.slice(0, 8)} clientId=${clientId} target.createdAt=${target.createdAt} userUuid=${userUuid ?? 'NONE'} assistantUuid=${assistantUuid} preserveMessageUuid=${preserveMessageUuid ?? assistantUuid}`,
   );
 
+  // Claude Code 在另一台电脑运行：文件按本机保存点链回退，需要 target 之后的 user 消息时间线。
+  let savepointTimeline: Pick<RewindContext, 'savepointRewind' | 'codexUserMessages' | 'targetRowid'> = {};
+  if (currentSessionMeta?.agentDeviceId && !currentSessionMeta.remoteHostId) {
+    const tailTurns = await loadTailUserTurns(sessionId, target);
+    if (!tailTurns.some((row) => row.rowid === target.rowid)) {
+      throw rewindError('MESSAGE_NOT_FOUND', `Message ${clientId} 不在当前 agent turn 时间线`);
+    }
+    savepointTimeline = {
+      savepointRewind: true,
+      targetRowid: target.rowid,
+      codexUserMessages: tailTurns.map((row) => ({ clientId: row.clientId, createdAt: row.createdAt })),
+    };
+  }
+
   return {
     targetCreatedAt: target.createdAt,
     targetMessageId: target.id,
@@ -371,6 +399,7 @@ async function loadRewindContext(
     assistantUuid,
     userUuid,
     preserveMessageUuid: preserveMessageUuid ?? assistantUuid,
+    ...savepointTimeline,
   };
 }
 
@@ -393,7 +422,7 @@ export async function previewRewindAtMessage(
   if (!makerSession) {
     throw rewindError('NO_LIVE_QUERY', '会话未激活');
   }
-  if (ctx.agentKind === 'codex' || ctx.agentKind === 'pi') {
+  if (ctx.agentKind === 'codex' || ctx.agentKind === 'pi' || ctx.savepointRewind) {
     return previewCodexFileRewindPlan(await buildCodexFilePlanForSession(sessionId, clientId, ctx.codexUserMessages ?? [], makerSession));
   }
   if (!ctx.userUuid) {
@@ -794,6 +823,35 @@ export async function commitRewindAtMessage(
       rewindResult.sdkSessionId !== previousSdkSessionId
     ) {
       nativeForkAnchorSessionMap = [[previousSdkSessionId, rewindResult.sdkSessionId]];
+    }
+  } else if (ctx.savepointRewind) {
+    // Claude Code 在另一台电脑运行：先用本机保存点链回退文件，再让那台的 Claude Code 只截断
+    // 对话(空 userUuid = 不碰它那边并不存在的文件检查点)；截断失败时撤回文件回退。
+    expectedClearedAt = await rereadSessionClearedAt(sessionId);
+    await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
+    const commitConversationRewind = () => makerSession.commitRewindFiles('', ctx.assistantUuid!);
+    if (opts?.allowFileRestore === false) {
+      rewindResult = await commitConversationRewind();
+    } else {
+      const filePlan = await buildCodexFilePlanForSession(sessionId, clientId, ctx.codexUserMessages ?? [], makerSession);
+      const onCompensationError = (compErr: unknown, execution: { rollbackCommit: string | null }) => {
+        log.error('[rewind commit] claude-code (other computer) file rewind compensation failed', {
+          sessionId,
+          rollbackCommit: execution.rollbackCommit,
+          error: compErr instanceof Error ? compErr.message : String(compErr),
+        });
+      };
+      const result =
+        filePlan.mode === 'file-restore'
+          ? await executeCodexFileRestorePlanWithThreadRollback(filePlan, sessionId, {
+              commitThreadRollback: commitConversationRewind,
+              onCompensationError,
+            })
+          : await executeCodexFileRewindPlanWithThreadRollback(filePlan, sessionId, {
+              commitThreadRollback: commitConversationRewind,
+              onCompensationError,
+            });
+      rewindResult = result.threadRollback;
     }
   } else {
     expectedClearedAt = await rereadSessionClearedAt(sessionId);

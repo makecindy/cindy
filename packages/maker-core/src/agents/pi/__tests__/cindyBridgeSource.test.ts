@@ -1838,9 +1838,9 @@ describe('cindy-bridge extension source', () => {
     expect(source).toContain('const controlPlaneWrite = Boolean(');
     expect(source).toContain('...(controlPlaneWrite ? { controlPlaneWrite: true } : {})');
     expect(source).toContain('resolvedWritePath: writeTargetResolved');
-    expect(source).toContain(
-      'resolvedWritableRoots: resolveWritableRootsForHost(permission.writableRoots)',
-    );
+    // 设备托管会话改用任务所在电脑的真实工作目录作可写根(见 CINDY_HOSTED)，其余照旧。
+    expect(source).toContain('resolvedWritableRoots: CINDY_HOSTED');
+    expect(source).toContain(': resolveWritableRootsForHost(permission.writableRoots)');
     expect(source).toContain('event.input.path = writeTargetResolved');
     expect(source).toContain('Cindy could not verify the real file-write target.');
   });

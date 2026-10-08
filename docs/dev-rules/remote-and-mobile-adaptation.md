@@ -68,6 +68,21 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
 一起打掉线，由 #1405 收窄止损半径修复。协议兼容、allowlist、单测三层防线对这类问题
 全部免疫，只有 review 时点名问「半径」才拦得住。
 
+## 远程 Agent 的拉取与恢复(`maker:remote-agent:v1`)
+
+协议见 [`protocol-compatibility.md`](protocol-compatibility.md)「远程 Agent」。恢复策略按故障半径三问：
+
+1. **故障层级**：只处理同一台被控端的事件拉取。`poll` 遇到 peer reset、超时、背压或链路暂断时，
+   用同样的游标重拉(0.5s 起指数退避，上限 5s；另一个在途 poll 成功即提前恢复)；连续 2 分钟拉不到
+   才结束这台被控端上的任务并提示对方不可达。单个任务的流数据与游标对不上时只结束那一个任务。
+   其余 op 不自动重放。
+2. **动作层级**：与故障同半径——只影响这台被控端的拉取器，不重建 link、不断开 relay、不影响其它
+   被控端和普通远控请求。被控端侧对无人拉取的任务按任务超时(3 分钟)收尾，不波及其它任务。
+3. **多 peer**：被控端按 `(控制端, runId)` 隔离任务；每个控制端最多 16 个任务。控制端每台被控端一个
+   拉取器，全部任务共用一个挂起最多 10s 的 `poll`，同时在途最多两个，任务再多也不占满共享的
+   12 个在途配额；被控端连续立即返回空结果时控制端放慢到 1s 一次，防止空转。2 台控制端共享被控端、
+   其中一台静默的回归仍需在双实例实机验证中补测。
+
 ## 共享恢复与请求策略
 
 普通出站 invoke 在共享 `InvokeScheduler` 中按目标设备排队：每台最多 12 个在途，
@@ -283,6 +298,31 @@ review 按此检查：功能类 PR 缺这段说明 = P1。
 
 触及 device-link 重试／超时／断链恢复路径的 PR，Description 还必须写明「故障半径
 三问」的结论（故障层级、动作层级、多 peer 用例）。缺失同样 = P1。
+
+## 桌面远程文件获取的进度
+
+- 直传进度来自接收端每次成功写入的字节数，经 `device-link/fileAccess.ts` 的
+  `onProgress` 交给调用方；工作目录内的大文件与目录外的媒体取件都必须接入。
+  日志采样不是 UI 进度源，不能等整份文件返回后才上报 100%。
+- 聊天打开／定位／复制、下载到本地和侧栏大文件预览，共用
+  `file-browser/transfer-progress.ts` 推送到发起窗口。用本机 IPC 的 `requestId`
+  关联消费者，不按路径判断归属；它不进入跨设备协议，旧调用可省略。
+- 提示、文本预览与侧栏预览共用 `renderer/lib/fileTransferProgress.ts` 的订阅或采样。
+  订阅先于请求，完成、失败、卸载时释放；同一路径跨设备、并发获取与下载互不影响。
+  阶段切换、回退重置和完成不被限频丢弃；字节回退重置速度，总量未知不显示百分比。
+- 文件夹下载仍使用既有打包／发送／下载／解包进度。SSH 使用分片字节或 tar 流字节；
+  不将播放中的 Range 缓冲当作整文件下载，也不为媒体协议后台预取弹出下载 Toast。
+- 目录外媒体回退旧 `media:fetch` 上传接口时，该接口没有上传字节回调；准备期间不编造
+  上传百分比，开始本机下载后再显示真实进度。手机版有独立接收与播放器缓冲链路，
+  不消费桌面本机 IPC；相关界面进度由 [PR #5542](https://github.com/makecindy/cindy/pull/5542)
+  跟进，桌面修复不代表手机已覆盖。
+
+回归入口：`device-link/__tests__/filePeer.test.ts`（分块、观察者异常、取消与账号失效）、
+`device-link/__tests__/fileAccess.test.ts`（两类入口及回退）、
+`file-browser/__tests__/chatFile.test.ts`、`file-browser/__tests__/transferProgress.test.ts`，
+以及 `renderer/__tests__/remoteFileProgress.test.ts`
+（并发隔离、释放、百分比和速度）。源码路径均相对 `apps/desktop/src/main/`，
+最后一项相对 `apps/desktop/src/`。
 
 ## Review 清单
 

@@ -17,6 +17,8 @@ export function readRemoteDeviceFile(
   rawInvoke: Invoke,
   options: {
     signal?: AbortSignal;
+    /** Bytes actually written by the direct receiver, shared by every file entry point. */
+    onProgress?: (received: number, total: number) => void;
     skipCache?: boolean;
     maxPeerBytes?: number;
     maxBytes?: number;
@@ -79,11 +81,19 @@ export function readRemoteDeviceFile(
     },
     peer: async (metadata) => {
       if (
-        metadata.size >
-          Math.min(options.maxPeerBytes ?? FILE_PEER_MAX_BYTES, FILE_PEER_MAX_BYTES)
+        metadata.size > Math.min(options.maxPeerBytes ?? FILE_PEER_MAX_BYTES, FILE_PEER_MAX_BYTES)
       )
         return null;
-      const result = await tryPeerFile(device, url, invoke, options.signal);
+      const result = await tryPeerFile(device, url, invoke, options.signal, options.onProgress);
+      // A failed direct attempt is discarded before OSS starts; do not leave its partial
+      // percentage/speed on screen during the fallback preparation.
+      if (!result && !options.signal?.aborted && isDataOwnerBroadcastScopeCurrent(owner)) {
+        try {
+          options.onProgress?.(0, metadata.size);
+        } catch {
+          /* observer only */
+        }
+      }
       return result ? { ...result, ossKey: '' } : null;
     },
     fallback: options.fallback ?? (() => fetch(false)),

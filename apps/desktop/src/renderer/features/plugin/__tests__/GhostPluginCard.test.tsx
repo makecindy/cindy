@@ -173,7 +173,6 @@ const commandPlugin: GhostPluginListItem = {
   tabPanel: false,
   hasMainView: false,
   mainViewTitle: null,
-  hostCapability: null,
   oauthAuthorizationExpired: false,
 };
 
@@ -191,12 +190,6 @@ const toolPlugin: GhostPluginListItem = {
   canUse: false,
 };
 
-const simulatorPlugin: GhostPluginListItem = {
-  ...toolPlugin,
-  id: 'ios-simulator',
-  name: 'iOS Simulator',
-  hostCapability: 'ios-simulator',
-};
 
 const mainViewPlugin: GhostPluginListItem = {
   ...panelPlugin,
@@ -296,17 +289,6 @@ describe('GhostPluginCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Signoff Board' }));
     expect(onManage).toHaveBeenCalledTimes(1);
     expect(onPrimary).not.toHaveBeenCalled();
-  });
-
-  it('offers a conversation entry for a Host capability plugin', () => {
-    const onPrimary = vi.fn();
-    const onManage = vi.fn();
-    render(<GhostPluginCard item={simulatorPlugin} onPrimary={onPrimary} onManage={onManage} />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.chatAria' }));
-    expect(onPrimary).toHaveBeenCalledTimes(1);
-    expect(onManage).not.toHaveBeenCalled();
-    expect(screen.queryByText('settings.ghosts.page.agentInvoked')).toBeNull();
   });
 
   it('keeps the tab-panel action when the plugin also declares main-view', () => {

@@ -770,6 +770,8 @@ function main() {
       ];
       if (task.model) args.push('--model', task.model);
       if (task.thinking) args.push('--thinking', task.thinking);
+      // 受邀者(另一个账号)的托管会话：不发现本机用户的技能与会话目录之外的说明文件。
+      if (config.guestIsolation === true) args.push('--no-skills', '--no-context-files');
       const childEnv = Object.assign({}, process.env, {
         CINDY_PI_PERMISSION_FILE: config.permissionFile,
         PI_CODING_AGENT_DIR: config.childConfigHome,

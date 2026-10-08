@@ -611,6 +611,16 @@ describe("cindy_helper MCP server", () => {
             ok: true as const,
             queuedMessageId,
           })),
+          steerQueuedMessage: vi.fn(async ({ queuedMessageId }) => ({
+            ok: true as const,
+            queuedMessageId,
+            delivery: "steered" as const,
+          })),
+          moveQueuedMessage: vi.fn(async ({ queuedMessageId, position }) => ({
+            ok: true as const,
+            queuedMessageId,
+            position,
+          })),
           steerSession: vi.fn(async () => ({
             ok: true as const,
             queuedMessageId: "steer-1",
@@ -675,6 +685,8 @@ describe("cindy_helper MCP server", () => {
       expect(names).toEqual(expect.arrayContaining([
         "update_session_queued_message",
         "cancel_session_queued_message",
+        "steer_session_queued_message",
+        "move_session_queued_message",
         "steer_session",
         "stop_session_turn",
         "get_session_runtime",
@@ -755,6 +767,8 @@ describe("cindy_helper MCP server", () => {
         sessionControl: {
           updateQueuedMessage: vi.fn(),
           cancelQueuedMessage: vi.fn(),
+          steerQueuedMessage: vi.fn(),
+          moveQueuedMessage: vi.fn(),
           steerSession: vi.fn(),
           stopSessionTurn,
           getSessionRuntime: vi.fn(),
@@ -832,6 +846,8 @@ describe("cindy_helper MCP server", () => {
         sessionControl: {
           updateQueuedMessage: vi.fn(),
           cancelQueuedMessage: vi.fn(),
+          steerQueuedMessage: vi.fn(),
+          moveQueuedMessage: vi.fn(),
           steerSession: vi.fn(),
           stopSessionTurn,
           getSessionRuntime: vi.fn(),

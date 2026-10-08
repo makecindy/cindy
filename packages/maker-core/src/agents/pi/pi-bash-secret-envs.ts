@@ -31,4 +31,6 @@ export const PI_BASH_STATIC_SECRET_ENV_NAMES = [
   'CINDY_PI_MANAGED_RG_PATH',
   'CINDY_PI_SUBAGENT_RUN_DIR',
   'PI_CODING_AGENT_DIR',
+  // 设备托管配置(url + bearer token):与上游 cindy-bridge 静态名单保持同集。
+  'CINDY_PI_HOSTED',
 ] as const;

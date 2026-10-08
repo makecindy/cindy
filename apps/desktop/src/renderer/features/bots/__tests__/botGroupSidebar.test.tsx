@@ -341,3 +341,11 @@ describe('BotsSidebar group chats', () => {
     expect(mocks.sendNotification).not.toHaveBeenCalled();
   });
 });
+
+it('localizes the join preview without presenting its subject as a chat author', async () => {
+  mocks.groups = [group({ lastMessage: { authorKind: 'system', authorName: 'Taylor',
+    noticeCode: 'member-joined', preview: 'Fallback text', createdAt: 30 } })];
+  await renderSidebar();
+  expect(screen.getByText('bots.groupChat.notice.memberJoined:{"name":"Taylor"}')).toBeTruthy();
+  expect(screen.queryByText(/Fallback text/)).toBeNull();
+});

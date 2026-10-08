@@ -105,6 +105,8 @@ import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNe
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { ensureBotProfilesLoaded, getBotProfiles } from '@/features/bots/botStore';
 import { createSessionEntryNavigator, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
+import { requestProviderShareJoin } from '@/features/provider-share/joinIntent';
+import { ProviderShareGlobalHost } from '@/features/provider-share/ProviderShareGlobalHost';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
@@ -635,8 +637,13 @@ export function MainLayout() {
         | { type: 'share-import'; filePath: string }
         | { type: 'provider-import'; importId: string }
         | { type: 'shared-task-join'; invitation: string; server: string }
+        | { type: 'provider-share-join'; link: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
     ) => {
+      if (payload.type === 'provider-share-join') {
+        requestProviderShareJoin(payload.link);
+        return;
+      }
       if (payload.type === 'shared-task-join') {
         setSharedTaskInvitation({ link: buildSharedTaskInvitationLink(payload.invitation, payload.server), id: ++invitationSequence.current });
         return;
@@ -680,9 +687,17 @@ export function MainLayout() {
     },
     [navigate, navigateToSession, openShareImport],
   );
+  useEffect(
+    () =>
+      window.electronAPI.ghosts.onRetirementOpen((id) => {
+        navigate(`/plugins?retired=${encodeURIComponent(id)}`);
+      }),
+    [navigate],
+  );
+
   useEffect(() => {
     const unsubscribe = window.electronAPI.onDeepLinkNavigate((payload) => {
-      if (payload.type !== 'provider-import' && payload.type !== 'shared-task-join') {
+      if (payload.type !== 'provider-import' && payload.type !== 'shared-task-join' && payload.type !== 'provider-share-join') {
         handleDeepLinkPayload(payload);
         return;
       }
@@ -1662,6 +1677,8 @@ export function MainLayout() {
       )}
       {/* FeiShu Bot conflict dialog -- subscribes to main process push and surfaces a global modal */}
       <FeishuConflictDialogHost />
+      {/* 供应商分享：分享者的审批弹窗与受邀者的申请弹窗。只挂在主窗口，副窗不重复弹。 */}
+      {!isSecondaryWindow() && <ProviderShareGlobalHost />}
       {sharedTaskInvitation && <JoinSharedTaskDialog key={sharedTaskInvitation.id} open initialInvitation={sharedTaskInvitation.link}
         onOpenChange={(open) => { if (!open) setSharedTaskInvitation(null); }} />}
       {/* 窗口级拖拽兜底:拖 .cshare 进窗口空白处 → 会话导入向导 */}

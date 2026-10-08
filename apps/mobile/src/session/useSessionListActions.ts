@@ -7,6 +7,7 @@ import { humanizeRemoteError } from '@/device-link/remoteStatus';
 import type { SessionMetaPatch } from '@/device-link/mobileMakerTransport';
 import {
   remoteSessionStore,
+  resolveSessionWriteDevices,
   sessionMetaWriteGuard,
   sessionMetaWriteQueue,
   sessionPendingWrites,
@@ -44,10 +45,9 @@ export function useSessionListActions(options?: { animateListChange?: (apply: ()
   const pendingSheetActionRef = useRef<(() => void) | null>(null);
 
   const patchSession = useCallback(async (session: RemoteSession, patch: SessionMetaPatch) => {
-    const rpcDeviceId = session.canonicalDeviceId ?? session.deviceLinkDeviceId
-      ?? remoteSessionStore.getSessionDeviceId(session.id);
-    if (!rpcDeviceId) throw new Error(t('devices.list.error.sessionDeviceNotFound'));
-    const shardId = session.deviceLinkDeviceId ?? remoteSessionStore.getSessionDeviceId(session.id) ?? rpcDeviceId;
+    const devices = resolveSessionWriteDevices(session.id, session);
+    if (!devices) throw new Error(t('devices.list.error.sessionDeviceNotFound'));
+    const { rpcDeviceId, shardId } = devices;
     const fields = Object.keys(patch);
     const write = sessionMetaWriteGuard.begin(session.id, writeGuardFields(patch));
     const applyOptimistic = () => remoteSessionStore.applySessionPatch(shardId, session.id, patch);
@@ -86,6 +86,8 @@ export function useSessionListActions(options?: { animateListChange?: (apply: ()
             .find((s) => s.deviceLinkDeviceId === shardId)?.deviceLinkDeviceName
             ?? session.deviceLinkDeviceName
             ?? shardId;
+          // 先释放本笔在途登记:upsertDeviceSession 会挡掉 status 在途、已被乐观移出的行。
+          releasePending();
           const rollback = () => {
             remoteSessionStore.upsertDeviceSession(shardId, shardName, session);
             remoteSessionStore.requestReseed(shardId);

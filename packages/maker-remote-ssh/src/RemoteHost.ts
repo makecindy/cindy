@@ -186,6 +186,9 @@ export interface ExecStreamHandle {
   onDrain(cb: () => void): () => void;
   onClose(cb: (info: { code: number | null; signal: string | null }) => void): () => void;
   onError(cb: (err: Error) => void): () => void;
+  /** 暂停 / 恢复读取 stdout(背压:下游消费不过来时停读,ssh2 随之停止扩窗,远端暂停发送)。 */
+  pause?(): void;
+  resume?(): void;
   /**
    * Try to terminate the remote process. ssh2's `channel.signal()` is
    * subject to OpenSSH server config (`AcceptEnv` / `PermitSignal`); many
@@ -312,6 +315,8 @@ function wrapChannel(channel: ClientChannel): ExecStreamHandle {
     onDrain: (cb) => { drainListeners.add(cb); return () => { drainListeners.delete(cb); }; },
     onClose: (cb) => { closeListeners.add(cb); return () => { closeListeners.delete(cb); }; },
     onError: (cb) => { errorListeners.add(cb); return () => { errorListeners.delete(cb); }; },
+    pause: () => { channel.pause(); },
+    resume: () => { channel.resume(); },
     kill: (signal = 'TERM') => {
       try { channel.signal(signal); } catch { /* server may reject */ }
       try { channel.close(); } catch { /* already gone */ }

@@ -38,7 +38,7 @@ import { cn } from '@/lib/utils';
 import { useNavigationAttention } from '@/lib/navigationAttentionStore';
 import { NavigationCountBadge } from '@/components/sidebar/NavigationCountBadge';
 import { useAuth } from '@/contexts/AuthContext';
-import { AttentionDot } from '@/components/sidebar/AttentionDot';
+import { AttentionDot, type DotTone } from '@/components/sidebar/AttentionDot';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { useGhostMainViews, type GhostMainViewItem } from '@/cindy-brain/ghostMainViews';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
@@ -105,6 +105,7 @@ export interface SidebarNavigationAction {
   onSelect: () => void;
   active: boolean;
   showDot: boolean;
+  dotTone?: DotTone;
   /** Attention count shown at the entry's end (99+ overflow), with its spoken label. */
   count?: { value: number; label: string };
 }
@@ -124,7 +125,8 @@ function useSidebarNavigationActions(
   const onScheduleMatch = useMatch('/cc-agent/scheduled');
   // 任一插件有未读 → 入口行尾一颗**静态**绿点(聚合入口按 AttentionDot 规范不呼吸,
   // 呼吸留给单条卡片;见 AttentionDot 头部的形态规范)。
-  const hasGhostUnread = useAnyGhostUnread();
+  const hasRetirementUnread = useInstalledGhosts().some((ghost) => ghost.retirement?.unread);
+  const hasGhostUnread = useAnyGhostUnread() || hasRetirementUnread;
   // `activeKey` is intentionally sticky for the other navigation rows, but this
   // action must describe the actual destination. Settings and other auxiliary
   // routes should continue to offer entry to Teammates, not a stale return.
@@ -147,6 +149,7 @@ function useSidebarNavigationActions(
       onSelect: () => navigateToView('plugins'),
       active: activeKey === 'plugins',
       showDot: hasGhostUnread,
+      dotTone: hasRetirementUnread ? 'awaiting' : 'done',
     },
     bots: {
       label: t(isBotsView ? 'sidebar.backToSessions' : 'sidebar.tabs.bots'),
@@ -321,7 +324,7 @@ function SidebarNavigationMoreMenu({
             <DropdownMenuItem key={id} onSelect={action.onSelect} className="gap-2.5">
               <Icon size={16} strokeWidth={1.8} />
               {action.label}
-              {action.showDot && <AttentionDot size={6} className="ml-auto" />}
+              {action.showDot && <AttentionDot size={6} tone={action.dotTone} className="ml-auto" />}
               <EntryCountBadge count={action.count} className="ml-auto" />
             </DropdownMenuItem>
           );
@@ -405,6 +408,7 @@ export function SidebarRailNavigation({
             aria-current={action.active ? 'page' : undefined}
             aria-description={action.count?.value ? action.count.label : undefined}
             showDot={action.showDot}
+            dotTone={action.dotTone}
             badge={<EntryCountBadge count={action.count} />}
             onClick={action.onSelect}
           />
@@ -513,7 +517,7 @@ export function SidebarTopNav({
           )}
         />
         <span className="leading-none">{action.label}</span>
-        {action.showDot && <AttentionDot size={6} className="ml-auto mr-0.5" />}
+        {action.showDot && <AttentionDot size={6} tone={action.dotTone} className="ml-auto mr-0.5" />}
         <EntryCountBadge count={action.count} className="ml-auto" />
       </button>
     );

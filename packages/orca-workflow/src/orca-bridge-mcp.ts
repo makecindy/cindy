@@ -168,6 +168,8 @@ export interface OrcaBridgeMcpDeps {
     source: 'lead' | 'worker';
     senderLabel: string;
     workerId?: string;
+    /** 仅 send_to_lead 显式选择时传入;缺省(含 auto-bridge 自动补报)等价 'queue'。 */
+    delivery?: OrcaMessageDelivery;
     onAccepted?: () => void | Promise<void>;
     onAcceptedRollback?: () => void | Promise<void>;
     meta: {
@@ -176,14 +178,22 @@ export interface OrcaBridgeMcpDeps {
     };
   }) => Promise<{
     ok: true;
-    mode: 'dispatched' | 'queued';
+    mode: 'dispatched' | 'queued' | 'steered';
     clientId: string;
     dispatchOutcome?: unknown;
+    /** 请求 steer 但消息进了队列时的原因;空闲直发不带。 */
+    steerFallbackReason?: OrcaSteerFallbackReason;
   } | {
     ok: false;
     dispatchOutcome?: unknown;
   }>;
 }
+
+/** 协同消息投递方式:queue = 普通直发/排队(缺省),steer = 尝试插进对方当前 turn。 */
+export type OrcaMessageDelivery = 'queue' | 'steer';
+
+/** 请求 steer 但未插成、消息进入队列时的原因。 */
+export type OrcaSteerFallbackReason = 'STEER_UNSUPPORTED' | 'INPUT_BOUNDARY_BUSY' | 'STEER_UNCERTAIN';
 
 function text(data: unknown, isError = false) {
   return {
@@ -195,7 +205,12 @@ function text(data: unknown, isError = false) {
 type OrcaToolResult = ReturnType<typeof text>;
 
 type OrcaSendSource = 'mcp-tool' | 'auto-bridge';
-type HostOrcaDispatch = { hostDispatched: true; queued: boolean };
+type HostOrcaDispatch = {
+  hostDispatched: true;
+  queued: boolean;
+  steered: boolean;
+  steerFallbackReason?: OrcaSteerFallbackReason;
+};
 
 interface OrcaSendMeta {
   source: OrcaSendSource;
@@ -228,6 +243,7 @@ export const SEND_TO_LEAD_TOOL_DESCRIPTION = [
   'Call once per turn, only with the final report or one blocking question.',
   'After a question, stop and wait for send_to_worker.',
   'Combine all results; do not send progress, partial findings, or same-turn corrections.',
+  'If the Lead is blocked waiting on this report, delivery=steer delivers it into the Lead\'s current turn; otherwise keep the default.',
 ].join(' ');
 
 export function authorizeSendToLeadCaller(ctx: McpProviderContext):
@@ -347,6 +363,7 @@ async function dispatchOrcaToolMessage(input: {
   rawContent?: string;
   source?: 'lead' | 'worker';
   senderLabel?: string;
+  delivery?: OrcaMessageDelivery;
   log: Logger;
   meta: OrcaSendMeta;
   errorExtra?: Record<string, unknown>;
@@ -366,6 +383,7 @@ async function dispatchOrcaToolMessage(input: {
       source: input.source,
       senderLabel: input.senderLabel,
       workerId: input.meta.workerId,
+      ...(input.delivery ? { delivery: input.delivery } : {}),
       onAccepted: input.hostOnAccepted ?? input.onAccepted,
       onAcceptedRollback: input.hostOnAcceptedRollback,
       meta: {
@@ -373,7 +391,14 @@ async function dispatchOrcaToolMessage(input: {
         context: input.meta.context,
       },
     });
-    if (result.ok) return { hostDispatched: true, queued: result.mode === 'queued' };
+    if (result.ok) {
+      return {
+        hostDispatched: true,
+        queued: result.mode === 'queued',
+        steered: result.mode === 'steered',
+        ...(result.steerFallbackReason ? { steerFallbackReason: result.steerFallbackReason } : {}),
+      };
+    }
     const meta = readMeta();
     logOrcaSendNotDispatched(input.log, meta, 'send-rejected', {
       dispatchOutcome: result.dispatchOutcome,
@@ -736,8 +761,12 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
         {
           message: z.string().min(1),
           worker_id: z.string().min(1).describe('Required. Your assigned worker_id. Find it in the Bridge note at the end of the most recent lead message, or in the system prompt Identity line.'),
+          delivery: z
+            .enum(['queue', 'steer'])
+            .optional()
+            .describe('queue (default) = deliver now or queue behind the Lead\'s current turn; steer = try to enter the Lead\'s current turn.'),
         },
-        async ({ message, worker_id }) => {
+        async ({ message, worker_id, delivery }) => {
           const authorization = authorizeSendToLeadCaller(resolveRuntimeMcpContext(ctx));
           if (!authorization.ok) return text(authorization.error, true);
           const resolved = await resolveLead(worker_id);
@@ -790,6 +819,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
             rawContent: message,
             source: 'worker',
             senderLabel: link.workerId,
+            ...(delivery ? { delivery } : {}),
             log,
             meta: {
               source: 'mcp-tool',
@@ -817,10 +847,15 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
             },
           });
           if (isHostOrcaDispatch(dispatchError)) {
-            if (dispatchError.queued) settleWorkerReport();
+            // 排队与插话都视为已回报;直发仍由 hostOnAccepted 结清(settle 幂等)。
+            if (dispatchError.queued || dispatchError.steered) settleWorkerReport();
             return text({
               ok: true,
+              ...(dispatchError.steered ? { steered: true } : {}),
               ...(dispatchError.queued ? { queued: true } : {}),
+              ...(dispatchError.queued && dispatchError.steerFallbackReason
+                ? { steer_fallback_reason: dispatchError.steerFallbackReason }
+                : {}),
               worker_id: link.workerId,
               lead_session_id: link.leadSessionId,
             });

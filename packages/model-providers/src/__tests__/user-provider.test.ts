@@ -427,6 +427,19 @@ describe("buildUserProvider (per-runtime)", () => {
         expect(provider.models[agent]?.[0].userModelConfig).not.toHaveProperty(
           "reasoning",
         );
+        // 没有任何来源声明过档位:[] 只是占位,准入不得当成明确无档位(#5535)。
+        // Pi 例外:Pi 运行时按 efforts 物化 reasoning,放行的档位不会生效,所以不标「未知」。
+        if (agent === "pi") {
+          expect(provider.models[agent]?.[0]).not.toHaveProperty("effortsUnknown");
+        } else {
+          expect(provider.models[agent]?.[0]).toMatchObject({ effortsUnknown: true });
+        }
+        // 发现元数据、显式 reasoning:true 与 reasoning:false 都算已声明,不带「未知」标记。
+        for (const index of [1, 2, 3]) {
+          expect(provider.models[agent]?.[index]).not.toHaveProperty(
+            "effortsUnknown",
+          );
+        }
       }
     },
   );
@@ -631,6 +644,7 @@ describe("buildUserProvider (per-runtime)", () => {
       id: "custom/my-model",
       efforts: [],
       defaultEffort: null,
+      effortsUnknown: true,
     });
   });
 

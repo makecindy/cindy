@@ -152,7 +152,7 @@ function latestGroupReplyAt(group: GroupReadSummary): number {
   // Older hosts may omit lastReplyAt; other humans count just like companions.
   const last = group.lastMessage;
   return Math.max(group.lastReplyAt ?? 0,
-    last && (last.authorKind === 'bot' || last.isSelf === false) ? last.createdAt : 0);
+    last && last.authorKind !== 'system' && (last.authorKind === 'bot' || last.isSelf === false) ? last.createdAt : 0);
 }
 
 export function isBotGroupUnread(group: GroupReadSummary): boolean {

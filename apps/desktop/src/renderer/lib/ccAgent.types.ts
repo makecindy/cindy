@@ -404,6 +404,12 @@ export interface Session {
    */
   remoteHostId?: string | null;
   /**
+   * Agent 在同账号另一台电脑上运行时，那台电脑的 deviceId。任务、项目文件与命令仍在本机
+   * (workingDir 是本机路径，文件浏览、改动对比照本机方式工作)；只有 Agent 进程、登录与供应商
+   * 在那台电脑上。null/undefined = Agent 在本机。与 remoteHostId 互斥。
+   */
+  agentDeviceId?: string | null;
+  /**
    * device-link 跨设备远程控制:本 session 实际归属的**被控设备 deviceId**。
    * 仅存在于控制端**内存**里(由 remoteProjectsStore 注入),**永不落本地 DB**——
    * 从本地 DB 反序列化出来的 session 此字段恒为 undefined。

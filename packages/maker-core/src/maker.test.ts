@@ -561,6 +561,57 @@ describe('Maker local Pi package generation fence', () => {
   });
 });
 
+describe('Maker initial plan persistence', () => {
+  it.each([true, false, undefined])('stores initial plan mode %s with the new task', async (planMode) => {
+    const storage = createStorage();
+    const create = vi.spyOn(storage, 'create');
+    const update = vi.spyOn(storage, 'update');
+    const maker = new Maker({
+      agents: { codex: createAgent(async () => createHandle({ id: 'plan-handle' })) },
+      storage,
+      logger: createLogger(),
+    });
+    try {
+      const session = await maker.createSession({
+        agentKind: 'codex', workingDir: '/repo', model: 'm', planMode,
+      });
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(create.mock.calls[0][0].planMode).toBe(planMode);
+      expect((await storage.get(session.id))?.planMode).toBe(planMode);
+      expect(update).not.toHaveBeenCalled();
+    } finally {
+      await maker.shutdown();
+    }
+  });
+
+  it.each(['codex', 'claude-code', 'pi'] as const)(
+    'cleans up %s after a failed plan-bearing insert and permits retry without an orphan',
+    async (agentKind) => {
+      const close = vi.fn(async () => undefined);
+      const start = vi.fn(async () => ({ ...createHandle({ id: 'plan-handle', agentKind }), close }));
+      const storage = createStorage();
+      const create = storage.create.bind(storage);
+      const insert = vi.spyOn(storage, 'create')
+        .mockRejectedValueOnce(new Error('storage unavailable'))
+        .mockImplementation(create);
+      const maker = new Maker({ agents: { [agentKind]: createAgent(start, agentKind) }, storage, logger: createLogger() });
+      const opts: CreateSessionOptions = { agentKind, workingDir: '/repo', model: 'm', planMode: true };
+      try {
+        await expect(maker.createSession(opts)).rejects.toThrow('storage unavailable');
+        expect(insert.mock.calls[0][0].planMode).toBe(true);
+        expect(close).toHaveBeenCalledTimes(1);
+        expect(maker.listActiveSessions()).toEqual([]);
+        expect(await storage.list()).toEqual([]);
+        const session = await maker.createSession(opts);
+        expect(await storage.list()).toEqual([expect.objectContaining({ id: session.id, planMode: true })]);
+        expect(maker.listActiveSessions()).toHaveLength(1);
+      } finally {
+        await maker.shutdown();
+      }
+    },
+  );
+});
+
 describe('Maker session creation singleflight', () => {
   it('persists the durable resume id while exposing a distinct transient request id', async () => {
     const storage = createStorage();

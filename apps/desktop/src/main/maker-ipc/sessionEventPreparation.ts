@@ -47,6 +47,7 @@ import {
   InterruptedTurnAutoResumeGuard,
   isSubstantiveProgressEvent,
 } from './interruptedTurnAutoResume.js';
+import type { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 
 /** Bot DMs and group-lane turns answer an internal channel, not the user watching this Session. */
@@ -69,6 +70,8 @@ export interface PrepareSessionEventDeps {
     InterruptedTurnAutoResumeGuard,
     'noteAttemptEvent' | 'noteTurnStarted' | 'noteAttemptSettled' | 'noteProgress'
   >;
+  /** 限额自动继续：有实质产出时重算连续自动继续次数。 */
+  readonly usageLimitAutoResume?: Pick<UsageLimitAutoResume, 'noteProgress'>;
   readonly redactEventForRenderer: (event: AgentEvent) => AgentEvent;
   readonly handleAgentIslandInteractionDismissed: (sessionId: string, requestId: string) => void;
   readonly clearPendingInteraction: (requestId: string) => DismissedInteraction | null;
@@ -468,6 +471,9 @@ export function prepareSessionEvent(
                 sdkError?: unknown;
                 errorStatus?: unknown;
                 toolLoop?: unknown;
+                usageLimit?: unknown;
+                usageResetAt?: unknown;
+                codexErrorInfo?: unknown;
               }
             | undefined)
         : undefined;
@@ -511,6 +517,14 @@ export function prepareSessionEvent(
           ...(typeof errData?.reason === 'string' ? { reason: errData.reason } : {}),
           ...(typeof errData?.errorStatus === 'number' ? { errorStatus: errData.errorStatus } : {}),
           ...(toolLoop ? { toolLoop } : {}),
+          // 账号限额信号:普通任务据此等额度重置后自动继续(见 usageLimitAutoResume.ts)。
+          ...(errData?.usageLimit === true ? { usageLimit: true } : {}),
+          ...(typeof errData?.usageResetAt === 'number' && Number.isFinite(errData.usageResetAt)
+            ? { usageResetAt: errData.usageResetAt }
+            : {}),
+          ...(typeof errData?.codexErrorInfo === 'string'
+            ? { codexErrorInfo: errData.codexErrorInfo }
+            : {}),
         },
         {
           sessionTurnGeneration: event.sessionTurnGeneration,
@@ -548,6 +562,7 @@ export function prepareSessionEvent(
     if (accepted && typeof progressAttemptToken === 'number') {
       deps.autoResumeBookkeeping.settleOutcome(session.id, progressAttemptToken, 'succeeded');
     }
+    deps.usageLimitAutoResume?.noteProgress(session.id);
   }
   return {
     event,

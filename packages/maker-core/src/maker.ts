@@ -39,6 +39,7 @@ import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilitie
 import { piExplicitSkillRuntimePath } from './agents/pi/skill-runtime-provenance.js';
 import { fingerprintPiProjectSkillEntrypoint } from './agents/pi/project-resource-assembly.js';
 import { Session, generateSessionId, type SessionStartupPreferences } from './session.js';
+import { NotSupportedError } from './types/capabilities.js';
 import {
   AgentNotAuthenticatedError,
   AgentStartupCleanupPendingError,
@@ -120,6 +121,15 @@ export interface SessionLifecycleHooks {
 
 export interface MakerDeps {
   agents: Partial<Record<AgentKind, BaseAgent>>;
+  /**
+   * 可选：在同账号另一台电脑上启动 Agent(CreateSessionOptions.agentDeviceId)。返回的句柄由
+   * host 实现(对方运行 Agent、本机执行文件与命令)。缺省时这类会话无法创建。
+   */
+  startDeviceAgentSession?: (input: {
+    agentKind: AgentKind;
+    deviceId: string;
+    options: StartSessionOptions;
+  }) => Promise<AgentSessionHandle>;
   storage: SessionStorage;
   logger: Logger;
   /** 可选: session 生命周期副作用钩子 (host 层注入)。详见 SessionLifecycleHooks。 */
@@ -158,6 +168,12 @@ export interface CreateSessionOptions extends StartSessionOptions {
   /** 可选：父会话 id，用于 fork / orchestration 等会话关系。 */
   parentSessionId?: string;
   /**
+   * 可选：Agent 在同账号的另一台电脑上运行(那台电脑的设备 id)。任务、项目文件与命令留在本机，
+   * Agent 用那台电脑的程序、登录、供应商与网络。由 MakerDeps.startDeviceAgentSession 启动；
+   * 持久化到 SessionMeta.agentDeviceId，恢复时据此找回那台电脑。与 remoteHostId 互斥。
+   */
+  agentDeviceId?: string;
+  /**
    * 可选：调用方提供的 sessionId(通常来自外部 DB row)。提供后:
    *   - storage 已有同 id 的 row → 跳过 create, 直接复用
    *   - storage 没有 → 用此 id 创建新 row
@@ -184,11 +200,31 @@ export type MakerEvent =
 
 export type MakerEventListener = (event: MakerEvent) => void;
 
+/** Codex thread 归属键：SSH 主机或运行 Agent 的另一台电脑(两者的 thread 都不在本机)。 */
+function codexThreadOwnerKey(opts: { remoteHostId?: string; agentDeviceId?: string }): string | undefined {
+  return opts.remoteHostId ?? (opts.agentDeviceId ? `device:${opts.agentDeviceId}` : undefined);
+}
+
 function capabilitiesForSession(
   agentKind: AgentKind,
   base: Capabilities,
   remoteHostId?: string | null,
+  agentDeviceId?: string | null,
+  handle?: AgentSessionHandle,
 ): Capabilities {
+  if (agentDeviceId) {
+    // Agent 在另一台电脑上：对话在那台截断(handle 转发 commitRewindFiles)，文件由本机按保存点
+    // 回退。那台的 Cindy 不支持转发时不提供。
+    if (base.rewind.supported && typeof handle?.commitRewindFiles === 'function') return base;
+    return {
+      ...base,
+      rewind: {
+        supported: false,
+        reason: 'platform-limited',
+        message: 'Update Cindy on the computer running the agent to rewind this task',
+      },
+    };
+  }
   if (agentKind !== 'codex' || !remoteHostId) return base;
   return {
     ...base,
@@ -448,10 +484,12 @@ export class Maker {
   /** 视觉桥钩子（层 B）全局默认（可选）。见 MakerDeps.visionBridge。 */
   protected readonly visionBridge: import('./types/vision-bridge.js').VisionBridgeHook | undefined;
   private readonly toolLoopReviewer: import('./agents/shared/tool-loop-review.js').ToolLoopReviewer | undefined;
+  private readonly startDeviceAgentSession: MakerDeps['startDeviceAgentSession'];
 
   constructor(deps: MakerDeps) {
     this.agents = deps.agents;
     this.storage = deps.storage;
+    this.startDeviceAgentSession = deps.startDeviceAgentSession;
     this.visionBridge = deps.visionBridge;
     this.toolLoopReviewer = deps.toolLoopReviewer;
     // 不 child 自己名字 — host 传进来的 logger 通常已经命名(如 'maker'),
@@ -713,12 +751,37 @@ export class Maker {
         codexThreadClaim = this.claimCodexThread({
           sessionId: id,
           sessionInstanceId,
-          remoteHostId: startOpts.remoteHostId,
+          remoteHostId: codexThreadOwnerKey(startOpts),
           threadId: startOpts.resumeSessionId,
         });
       }
       agentStartAttempted = true;
-      handle = await agent.startSession({
+      if (startOpts.agentDeviceId) {
+        if (startOpts.remoteHostId) {
+          throw new Error('A session cannot run its agent on another computer and on an SSH host at the same time');
+        }
+        if (!this.startDeviceAgentSession) {
+          throw new NotSupportedError('remoteSession', {
+            supported: false,
+            reason: 'not-implemented',
+            message: 'Running the agent on another computer is not available in this host',
+          });
+        }
+        handle = await this.startDeviceAgentSession({
+          agentKind: opts.agentKind,
+          deviceId: startOpts.agentDeviceId,
+          options: {
+            ...startOpts,
+            sessionId: id,
+            sessionInstanceId,
+            onInvalidResumeSession:
+              opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
+                ? (expectedSdkSessionId) =>
+                    this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
+                : undefined,
+          },
+        });
+      } else handle = await agent.startSession({
         ...startOpts,
         sessionId: id,
         sessionInstanceId,
@@ -765,7 +828,7 @@ export class Maker {
           codexThreadClaim = this.claimCodexThread({
             sessionId: id,
             sessionInstanceId,
-            remoteHostId: startOpts.remoteHostId,
+            remoteHostId: codexThreadOwnerKey(startOpts),
             threadId: handle.id,
           });
         }
@@ -845,11 +908,13 @@ export class Maker {
           effort: opts.effort,
           permissionMode: opts.permissionMode,
           fastMode: opts.fastMode,
+          ...(typeof opts.planMode === 'boolean' ? { planMode: opts.planMode } : {}),
           reviewMode: opts.reviewMode,
           parentSessionId: opts.parentSessionId,
           // remoteHostId: 远端 session 把目标机器持久化, 之后 resume / list 都能识别。
           // 本地 session 留 undefined (sqlite 落空), 跟历史行为兼容。
           remoteHostId: opts.remoteHostId,
+          ...(opts.agentDeviceId ? { agentDeviceId: opts.agentDeviceId } : {}),
           sdkSessionId: handle.id !== '<pending>' ? handle.id : undefined,
         });
         createdMetadata = true;
@@ -987,7 +1052,13 @@ export class Maker {
       workDir: startOpts.workingDir,
       handle,
       hostStartupPreferences: opts.hostStartupPreferences,
-      capabilities: capabilitiesForSession(meta.agentKind, agent.capabilities, meta.remoteHostId),
+      capabilities: capabilitiesForSession(
+        meta.agentKind,
+        agent.capabilities,
+        meta.remoteHostId,
+        meta.agentDeviceId ?? startOpts.agentDeviceId,
+        handle,
+      ),
       logger: this.logger,
       permissionMode: startOpts.permissionMode,
       // 透传 remoteHostId 让 host 层在 hot path 上能 O(1) 判 local/remote
@@ -1009,7 +1080,7 @@ export class Maker {
               codexThreadClaim = this.claimCodexThread({
                 sessionId: id,
                 sessionInstanceId,
-                remoteHostId: startOpts.remoteHostId,
+                remoteHostId: codexThreadOwnerKey(startOpts),
                 threadId: evt.data,
               });
             }
@@ -1359,6 +1430,17 @@ export class Maker {
     if (this.agents[kind]) return false;
     this.agents[kind] = agent;
     return true;
+  }
+
+  /**
+   * 设备托管：同账号另一台电脑上的任务让 Agent 在本机运行。直接用本机的 agent 启动会话，
+   * 不建本机 Session 与持久化记录(任务、消息与状态都在对方电脑上)；opts.deviceHosted 必填。
+   */
+  async startHostedAgentSession(kind: AgentKind, opts: StartSessionOptions): Promise<AgentSessionHandle> {
+    if (this.shutdownStarted) throw new Error('Maker is shutting down; refusing to start a hosted session');
+    if (!opts.deviceHosted) throw new Error('hosted sessions require deviceHosted');
+    if (opts.remoteHostId) throw new Error('hosted sessions cannot target an SSH host');
+    return this.requireAgent(kind).startSession(opts);
   }
 
   /**

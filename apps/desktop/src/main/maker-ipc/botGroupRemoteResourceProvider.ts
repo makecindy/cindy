@@ -96,6 +96,13 @@ const COPY = {
     ja: '{name}：{text}',
     ko: '{name}: {text}',
   },
+  memberJoined: {
+    en: '{name} joined the group',
+    'zh-CN': '{name}加入了群聊',
+    'zh-TW': '{name}加入了群聊',
+    ja: '{name}さんがグループに参加しました',
+    ko: '{name} 님이 그룹에 참여했습니다',
+  },
 } satisfies Record<string, Copy>;
 
 function fill(template: string, vars: Record<string, string | number>): string {
@@ -128,6 +135,8 @@ export function botGroupRemotePreview(group: BotGroupSummary): RemoteLocalizedTe
   }
   const last = group.lastMessage;
   if (!last) return undefined;
+  if (last.authorKind === 'system' && last.noticeCode === 'member-joined')
+    return localized(COPY.memberJoined, { name: last.authorName });
   return last.authorKind === 'bot' && last.authorName
     ? localized(COPY.lastMessage, { name: last.authorName, text: last.preview })
     : last.preview;
@@ -183,7 +192,9 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
 
 function fallbackMarkdown(detail: BotGroupDetail): string {
   const lines = detail.messages
-    .filter((message) => message.kind === 'message' && (message.content.trim() || message.attachments.length > 0))
+    .filter((message) => (message.kind === 'message' || (message.kind === 'notice' && message.authorKind === 'system' &&
+      (message.noticeCode === 'member-joined' || message.noticeCode === null))) &&
+      (message.content.trim() || message.attachments.length > 0))
     .slice(-FALLBACK_MESSAGES)
     .map((message) => {
       // Older phones cannot show attachments; they still see what was attached.
@@ -192,6 +203,7 @@ function fallbackMarkdown(detail: BotGroupDetail): string {
       const clipped = Array.from(text).length > FALLBACK_MESSAGE_CHARS
         ? `${Array.from(text).slice(0, FALLBACK_MESSAGE_CHARS - 1).join('')}…`
         : text;
+      if (message.authorKind === 'system') return clipped;
       return message.authorKind === 'user' ? `> ${clipped}` : `**${message.authorName}**: ${clipped}`;
     });
   return lines.length > 0 ? lines.join('\n\n') : detail.name;

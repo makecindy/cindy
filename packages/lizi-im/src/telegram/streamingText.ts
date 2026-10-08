@@ -15,7 +15,8 @@
  *     (对齐 turnRunner 的 CARD_PATCH_THROTTLE_MS, 双层节流冗余但无害);
  *   - "message is not modified" 错误静默吞掉(内容未变的重复编辑);
  *   - 中间态超过单条上限后停止编辑(终稿由 finalize 分段补发), 与 Discord
- *     的 INTERMEDIATE_EDIT_LIMIT 行为一致;
+ *     的 INTERMEDIATE_EDIT_LIMIT 行为一致; 上限与"哪些帧不落地"取自
+ *     progressFrame.ts —— 官方 bot 经 msg.op 驱动的进度消息用的是同一份;
  *   - **终稿永远新发**: 过程消息是可替换的载体, 不能承担最终答案。终稿先尝试
  *     新发 Rich Message, 不可用时回落新发 HTML/Markdown；答案落地后才尽力清理
  *     过程载体。
@@ -27,16 +28,16 @@ import {
   type TelegramFinalIntent,
   type TelegramMessageLifecycle,
 } from './messageLifecycle.js';
+import {
+  isTelegramProgressFrameSilent,
+  NO_REPLY_SENTINEL,
+  TELEGRAM_PROGRESS_FRAME_MAX_CHARS,
+} from './progressFrame.js';
+
+export { NO_REPLY_SENTINEL };
 
 export const TELEGRAM_UPDATE_THROTTLE_MS = 1500;
-/** 中间态渲染后 HTML 超过该长度就不再编辑(接近 4096 上限时停手)。 */
-const INTERMEDIATE_EDIT_LIMIT = 3800;
 const IMAGE_ONLY_PLACEHOLDER = '🖼️';
-/**
- * 自主判断沉默哨兵(全响应群的 ambient turn): 模型整条回复只有它时,
- * 本次 turn 静默 — 经典路径删掉流式占位消息, draft 路径什么都不发。
- */
-export const NO_REPLY_SENTINEL = 'NO_REPLY';
 
 function isNoReply(text: string): boolean {
   return text.trim() === NO_REPLY_SENTINEL;
@@ -95,9 +96,21 @@ function isDefiniteRejection(err: unknown): boolean {
   return code >= 400 && code < 500;
 }
 
-export interface TelegramStreamingDeps {
+/**
+ * 过程载体(运行中那条消息)的出站。两个 bot 都实现它: 个人走 Bot API
+ * (`index.ts`), 官方走 msg.op(desktop `hook-control/telegramProgressCarrier.ts`)。
+ * 渲染与失败回落(HTML 400 → 纯文本、not modified、429)由实现方经
+ * `outboundPolicy.ts` 的同一组判据兑现。
+ */
+export interface TelegramProgressDeps {
   /** 发送一条 markdown 渲染消息, 返回编码 messageId。 */
   send: (markdown: string) => Promise<string>;
+  /** 用 markdown 渲染结果覆盖既有消息。 */
+  edit: (messageId: string, markdown: string) => Promise<void>;
+}
+
+/** 本端发布终稿的车道(个人 bot)才需要的出站; 过程载体之外的全部能力。 */
+export interface TelegramStreamingDeps extends TelegramProgressDeps {
   /**
    * HTML/Markdown 终稿的补送专用发送。与 send 有两点不同, 都由实现方
    * (index.ts)负责：
@@ -108,8 +121,6 @@ export interface TelegramStreamingDeps {
    * 身份失效时本函数应当抛错，终稿与后续分段、图片一并不发。未提供时回落 send。
    */
   repost?: (markdown: string) => Promise<string>;
-  /** 用 markdown 渲染结果覆盖既有消息。 */
-  edit: (messageId: string, markdown: string) => Promise<void>;
   /**
    * 终稿里的受管图片旁路上传(sendPhoto)。
    *
@@ -133,6 +144,13 @@ export interface TelegramStreamingDeps {
    * 回落 HTML/Markdown 新发。网络/权限失败必须抛出，不能伪装成可安全降级。
    */
   sendFinal?: (markdown: string, reuseReplyTarget: boolean) => Promise<string | null>;
+  /**
+   * 终稿 HTML/Markdown 分段的专用发送(第 `part` 段, 0 起)。提供时 finalize 的首段与
+   * 后续分段都走它, 不再走 `send` / `repost` —— 给需要区分"过程帧 send"与"终稿段
+   * send"的传输用(官方 bot: msg.op 的 turn-progress 与 turn-final 是两种登记)。
+   * 个人 bot 不提供, 行为不变。
+   */
+  sendFinalChunk?: (markdown: string, part: number) => Promise<string>;
   /** NO_REPLY 静默时删除流式占位消息。 */
   deleteMessage?: (messageId: string) => Promise<void>;
 }
@@ -142,6 +160,61 @@ export function startTelegramStreaming(
   initial?: string,
 ): Promise<StreamingTextHandle> {
   return TelegramStreamingTextHandle.create(deps, initial);
+}
+
+/**
+ * 只驱动过程载体、终稿不由本端发布的车道(官方 bot: 终稿仍由服务端按 turn.end 发布)。
+ * 与个人 bot 是**同一个**生命周期实现(惰性占位、1.5s 尾沿节流、send→edit、单帧上限、
+ * NO_REPLY 不落地、失败等下一窗口), 只是不暴露 finalize。
+ */
+export interface TelegramProgressCarrier {
+  /** 过程载体的 messageId; 惰性占位下首帧落地前为空串。 */
+  readonly messageId: string;
+  /** 整体替换当前快照(latest-wins), 按尾沿节流出站。 */
+  replace(fullText: string): void;
+  /** 跳过尾沿节流, 立即尝试发出最新快照; 有在途出站时等它结束再发。 */
+  flush(): Promise<void>;
+  /** 永久停止: 丢弃未出站的帧, 不再发起任何出站。幂等。 */
+  close(): void;
+}
+
+export function startTelegramProgressCarrier(deps: TelegramProgressDeps): TelegramProgressCarrier {
+  const handle = TelegramStreamingTextHandle.createProgressOnly(deps);
+  return {
+    get messageId() {
+      return handle.messageId;
+    },
+    replace: (fullText) => handle.replace(fullText),
+    flush: () => handle.flush(),
+    close: () => handle.close(),
+  };
+}
+
+/**
+ * 过程载体 + 本端终稿收口: 同一个 handle(同一份惰性占位 / 节流 / finalize), 但不暴露
+ * 个人 bot 的 append / 图片旁路 —— 官方 bot 在协商了客户端终稿时用它。
+ */
+export interface TelegramTurnCarrier extends TelegramProgressCarrier {
+  /** 与个人 bot 完全相同的终稿收口(Rich → HTML → 纯文本、分段、落地后删过程载体)。 */
+  finalize(finalText: string): Promise<void>;
+}
+
+export function startTelegramTurnCarrier(deps: TelegramStreamingDeps): TelegramTurnCarrier {
+  const handle = TelegramStreamingTextHandle.createWithDeps(deps);
+  return {
+    get messageId() {
+      return handle.messageId;
+    },
+    replace: (fullText) => handle.replace(fullText),
+    flush: () => handle.flush(),
+    close: () => handle.close(),
+    finalize: (finalText) => handle.finalize(finalText),
+  };
+}
+
+/** 进度专用 handle 的终稿依赖占位: finalize 不对外暴露, 走到这里即接线错误。 */
+function finalUnsupported(): never {
+  throw new Error('telegram progress carrier does not publish finals');
 }
 
 class TelegramStreamingTextHandle implements StreamingTextHandle {
@@ -217,6 +290,22 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
     return this.messageIdValue;
   }
 
+  /** 见 startTelegramProgressCarrier: 同一实现, 终稿依赖占位为接线错误。 */
+  static createProgressOnly(deps: TelegramProgressDeps): TelegramStreamingTextHandle {
+    return TelegramStreamingTextHandle.createWithDeps({
+      send: deps.send,
+      edit: deps.edit,
+      chunk: finalUnsupported,
+      extractImageUrls: finalUnsupported,
+      uploadImages: finalUnsupported,
+    });
+  }
+
+  /** 同步建 handle(不带初始正文 = 惰性占位, 与 create 无 initial 时等价)。 */
+  static createWithDeps(deps: TelegramStreamingDeps): TelegramStreamingTextHandle {
+    return new TelegramStreamingTextHandle(deps, createTelegramMessageLifecycle());
+  }
+
   static async create(
     deps: TelegramStreamingDeps,
     initial?: string,
@@ -254,6 +343,13 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
     this.done = true;
     this.lifecycle.cancel();
     this.clearPending();
+  }
+
+  /** 跳过尾沿节流窗口, 立即尝试发出最新快照(在途出站先等它结束)。 */
+  async flush(): Promise<void> {
+    if (this.done) return;
+    this.clearPending();
+    await this.flushIntermediate();
   }
 
   async finalize(finalText: string): Promise<void> {
@@ -385,7 +481,12 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
           // Hermes-style close: always mint a fresh final message. If a process
           // carrier already exists, repost keeps its frozen reply target; if the
           // turn was lazy and has no carrier, send consumes the normal target lease.
-          const post = staleMessageId ? (this.deps.repost ?? this.deps.send) : this.deps.send;
+          const sendFinalChunk = this.deps.sendFinalChunk;
+          const post = sendFinalChunk
+            ? (markdown: string) => sendFinalChunk(markdown, 0)
+            : staleMessageId
+              ? (this.deps.repost ?? this.deps.send)
+              : this.deps.send;
           await sendFirstChunk(() => post(seed), seed, 1);
         }
       }
@@ -404,7 +505,9 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
         const chunk = chunks[index]!;
         this.deliveredChunks += 1;
         try {
-          await this.deps.send(chunk);
+          await (this.deps.sendFinalChunk
+            ? this.deps.sendFinalChunk(chunk, index)
+            : this.deps.send(chunk));
           this.unconfirmedChunks.delete(index);
         } catch (err) {
           if (isDefiniteRejection(err)) {
@@ -507,10 +610,9 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
       }
     }
     if (this.done || !this.lifecycle.progressOpen || this.buffer === this.flushed) return;
-    if (this.buffer.length > INTERMEDIATE_EDIT_LIMIT) return;
+    if (this.buffer.length > TELEGRAM_PROGRESS_FRAME_MAX_CHARS) return;
     // 哨兵(或其前缀, 流式可能分片送达)不落地 — 惰性占位下连消息都不建。
-    const trimmed = this.buffer.trim();
-    if (trimmed === '' || NO_REPLY_SENTINEL.startsWith(trimmed)) return;
+    if (isTelegramProgressFrameSilent(this.buffer)) return;
 
     const next = this.buffer;
     this.inFlight = (async () => {
