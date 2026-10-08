@@ -149,11 +149,9 @@ export function buildConversationShareSvgLayout({
       });
       cursorY += height + gap;
     };
-    // One ordered traversal owns attribution, attachments, then body. Failed
-    // images replace their own occurrence rather than moving into the bubble.
-    if (message.automationOriginLabel) {
-      appendMetadata(message.automationOriginLabel, colors.textTertiary, 4);
-    }
+    // One ordered traversal owns attachments, then body. Failed images replace
+    // their own occurrence rather than moving into the bubble. Share images
+    // carry no message-source labels (automation / device / plugin / author).
     const appendImage = (image: ConversationShareImage) => {
       const scale = Math.min(1, bubbleWidth / image.width, 320 / image.height);
       const imageWidth = image.width * scale;

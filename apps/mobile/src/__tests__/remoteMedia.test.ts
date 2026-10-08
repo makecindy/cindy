@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   canPreviewResolvedRemoteMedia,
   formatRemoteMediaSize,
+  mediaLoadFailureKey,
   isDesktopLocalMediaUrl,
   isDirectPreviewableMediaUrl,
   isResolvedRemoteMediaFresh,
@@ -11,6 +12,25 @@ import {
 } from "@/session/remoteMedia";
 
 describe("mobile remote media", () => {
+  it.each(['DEVICE_OFFLINE', 'NOT_CONNECTED', 'DEVICE_LINK_NOT_CONNECTED', 'PEER_OFFLINE'])(
+    'recognizes the structured %s code even when its message has no code', (code) => {
+      expect(mediaLoadFailureKey(Object.assign(new Error('remote device is unavailable'), { code }))).toBe('message.lightbox.deviceOffline');
+      expect(mediaLoadFailureKey({ code, message: 'unavailable' })).toBe('message.lightbox.deviceOffline');
+    },
+  );
+  it('does not misclassify permission, timeout or configuration errors as offline', () => {
+    for (const code of ['REMOTE_DISABLED', 'PERMISSION_DENIED', 'TIMEOUT', 'VERSION_MISMATCH']) {
+      expect(mediaLoadFailureKey(Object.assign(new Error('request failed'), { code }))).toBe('message.lightbox.loadFailed');
+    }
+    expect(mediaLoadFailureKey({ code: 'MEDIA_SOURCE_MISSING' })).toBe('message.lightbox.sourceMissing');
+    expect(mediaLoadFailureKey(new Error('[NOT_CONNECTED] relay closed'))).toBe('message.lightbox.deviceOffline');
+  });
+  it('classifies stable failure codes without exposing paths or assuming every failure is a missing file', () => {
+    expect(mediaLoadFailureKey(new Error('[MEDIA_SOURCE_MISSING] missing'))).toBe('message.lightbox.sourceMissing');
+    expect(mediaLoadFailureKey(new Error('[DEVICE_LINK_NOT_CONNECTED]'))).toBe('message.lightbox.deviceOffline');
+    expect(mediaLoadFailureKey(new Error('ENOENT /private/user.png'))).toBe('message.lightbox.loadFailed');
+    expect(mediaLoadFailureKey(new Error('timeout'))).toBe('message.lightbox.loadFailed');
+  });
   it("accepts inline audio and video data URLs for the media player", () => {
     expect(isDirectPreviewableMediaUrl("https://example.com/a.mp4")).toBe(true);
     expect(isDirectPreviewableMediaUrl("data:image/png;base64,aaa")).toBe(true);

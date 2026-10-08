@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { Tooltip } from '@/components/ui/tooltip';
+import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
+import { queryShareableMessageIds } from '@/lib/shareConversationImage';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { clearDraft, getDraft } from '@/lib/composerDraftStore';
 import { FeatureSidebarSlotProvider, useFeatureContentHeader } from '../../feature-context';
+import { markBotRead, getBotLastReadAt, botGroupReadKey, resetBotReadStateForTests } from '../botReadState';
+import { botGroupAttachmentScope } from '../botGroupAttachments';
 import { BotGroupChatView } from '../BotGroupChatView';
 import { ControlledBanner, __resetControlledBannerForTests } from '../../remote-device/ControlledBanner';
 import type {
@@ -28,12 +34,19 @@ const mocks = vi.hoisted(() => ({
   openPath: vi.fn(),
   pushes: [] as Array<(payload: BotGroupChangedPayload, stamp?: unknown) => void>,
   toastError: vi.fn(),
+  toastWarning: vi.fn(),
+  /** Real paths the fake `getFilePath` knows; anything else is an in-memory bitmap. */
+  filePaths: new Map<File, string>(),
+  cacheImageFromBuffer: vi.fn(),
+  cacheImageFromPath: vi.fn(),
   controlledPush: null as null | ((payload: { controllers: Array<{ deviceId: string; name: string }> }) => void),
   getControlledState: vi.fn(),
   revoke: vi.fn(),
 }));
 
-vi.mock('react-i18next', () => ({
+// Partial: the shared attachment pieces pull in the app i18n instance, which needs initReactI18next.
+vi.mock('react-i18next', async (original) => ({
+  ...(await original<typeof import('react-i18next')>()),
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) =>
       options && 'name' in options ? `${key}:${String(options.name)}` : key,
@@ -50,7 +63,7 @@ vi.mock('@/contexts/dataOwnerGeneration', () => ({
   isDataOwnerGenerationCurrent: () => true,
   isDataOwnerPushCurrent: () => true,
 }));
-vi.mock('@/lib/toast', () => ({ toast: { error: mocks.toastError } }));
+vi.mock('@/lib/toast', () => ({ toast: { error: mocks.toastError, warning: mocks.toastWarning } }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: vi.fn(async () => false) }),
 }));
@@ -88,6 +101,7 @@ function msg(overrides: Partial<BotGroupMessageView>): BotGroupMessageView {
     noticeCode: null,
     planId: null,
     files: [],
+    attachments: [],
     createdAt: 1_700_000_000_000,
     ...overrides,
   };
@@ -191,20 +205,50 @@ function withPlan(planView: BotGroupPlanView, extra: BotGroupMessageView[] = [],
   });
 }
 
+/** A file the fake `getFilePath` resolves, as one picked or copied in a file manager. */
+function diskFile(name: string, type: string, path = `/tmp/${name}`): File {
+  const file = new File(['content'], name, { type });
+  mocks.filePaths.set(file, path);
+  return file;
+}
+
+function pickFiles(files: File[]) {
+  const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+  fireEvent.change(input, { target: { files } });
+}
+
+function clipboardFileItem(file: File, directory = false) {
+  return { kind: 'file', type: file.type, getAsFile: () => file, webkitGetAsEntry: () => ({ isDirectory: directory }) };
+}
+
+function lastSend(): Record<string, unknown> {
+  const calls = mocks.sendBotGroupMessage.mock.calls;
+  return calls[calls.length - 1]![0] as Record<string, unknown>;
+}
+
 function HeaderSlot() {
   return <header data-testid="content-header">{useFeatureContentHeader()}</header>;
 }
 
 function renderView() {
   return render(
+    <Tooltip.Provider>
     <FeatureSidebarSlotProvider isCollapsed={false}>
       <HeaderSlot />
       <BotGroupChatView />
-    </FeatureSidebarSlotProvider>,
+    </FeatureSidebarSlotProvider>
+    </Tooltip.Provider>,
   );
 }
 
 beforeEach(() => {
+  window.localStorage.clear();
+  for (const id of ['g1', 'g2']) clearDraft(botGroupAttachmentScope(id));
+  mocks.toastWarning.mockReset();
+  mocks.filePaths = new Map();
+  mocks.cacheImageFromBuffer.mockReset().mockResolvedValue({ url: 'cindy-media://blobs/pasted.png', filename: 'pasted.png' });
+  mocks.cacheImageFromPath.mockReset().mockResolvedValue({ url: 'cindy-media://blobs/photo.png', filename: 'photo.png' });
+  resetBotReadStateForTests();
   mocks.groupId = 'g1';
   __resetControlledBannerForTests();
   mocks.controlledPush = null;
@@ -235,6 +279,11 @@ beforeEach(() => {
         revoke: mocks.revoke,
       },
       openPath: (...args: unknown[]) => mocks.openPath(...args),
+      getFilePath: (file: File) => mocks.filePaths.get(file) ?? '',
+      cacheImageFromPath: (...args: unknown[]) => mocks.cacheImageFromPath(...args),
+      cacheImageFromBuffer: (...args: unknown[]) => mocks.cacheImageFromBuffer(...args),
+      cleanupCachedImages: vi.fn(async () => undefined),
+      getFileThumbnail: vi.fn(async () => null),
       maker: {
         listBotGroups: vi.fn(async () => ({ ok: true, groups: [] })),
         getBotGroup: (...args: unknown[]) => mocks.getBotGroup(...args),
@@ -260,6 +309,15 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('BotGroupChatView', () => {
+  it('shows another human as a named participant instead of the current user bubble', async () => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+      msg({ id: 'guest', authorKind: 'user', isSelf: false, authorName: 'Invited human', content: 'Hello from another account' }),
+    ] }) });
+    renderView();
+    expect(await screen.findByText('Invited human')).toBeTruthy();
+    expect(screen.getByText('Hello from another account').closest('article')?.className).not.toContain('justify-end');
+  });
+
   it.each([true, false])('preserves the reader position when the notice changes (pinned=%s)', async (pinned) => {
     const view = renderView();
     await screen.findByRole('textbox');
@@ -367,6 +425,17 @@ describe('BotGroupChatView', () => {
     act(() => mocks.controlledPush?.({ controllers: [] }));
     expect(main.childElementCount).toBe(originalRows);
     expect(document.querySelector('[data-controlled-banner-chip]')).toBeNull();
+  });
+
+  it('renders a joined member as a localized system line without message actions', async () => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [msg({ id: 'join', kind: 'notice',
+      authorKind: 'system', authorName: 'Taylor', authorBotId: null, noticeCode: 'member-joined', content: 'Fallback text' })] }) });
+    renderView();
+    const notice = await screen.findByText('bots.groupChat.notice.memberJoined:Taylor');
+    expect(notice.tagName).toBe('P');
+    expect(notice.closest('article')).toBeNull();
+    expect(screen.queryByText('Fallback text')).toBeNull();
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
   });
 
   it('renders user, teammate, notice and round-end rows with the header lockup', async () => {
@@ -824,4 +893,279 @@ describe('BotGroupChatView', () => {
       await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
     });
   });
+
+  describe('附件', () => {
+    it('offers 添加文件、图片或视频… above 安排分工 and puts the picked files in the tray', async () => {
+      renderView();
+      await screen.findByRole('textbox');
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      expect(fileInput.multiple).toBe(true);
+      const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {});
+      try {
+        fireEvent.pointerDown(screen.getByRole('button', { name: 'bots.groupChat.composer.more' }), {
+          button: 0,
+          ctrlKey: false,
+        });
+        const items = await screen.findAllByRole('menuitem');
+        expect(items.map((item) => item.textContent)).toEqual([
+          'extraDirs.addFiles',
+          expect.stringContaining('bots.groupChat.composer.division'),
+        ]);
+        fireEvent.click(items[0]!);
+        expect(click).toHaveBeenCalledTimes(1);
+        expect(click.mock.contexts[0]).toBe(fileInput);
+      } finally {
+        click.mockRestore();
+      }
+
+      pickFiles([diskFile('report.pdf', 'application/pdf'), diskFile('photo.png', 'image/png')]);
+      expect(await screen.findByText('report.pdf')).toBeTruthy();
+      expect((await screen.findByAltText('photo.png')).getAttribute('src')).toBe('cindy-media://blobs/photo.png');
+      // Images go through the normal cache path under the group's own scope.
+      expect(mocks.cacheImageFromPath).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 'bot-group:g1', sourcePath: '/tmp/photo.png' }),
+      );
+    });
+
+    it('attaches pasted files and screenshots and leaves plain text to the input', async () => {
+      renderView();
+      const input = await screen.findByRole('textbox');
+      const onDisk = diskFile('notes.md', 'text/markdown');
+      const bitmap = new File([new Uint8Array([137, 80, 78, 71])], 'image.png', { type: 'image/png' });
+      const paste = createEvent.paste(input, {
+        clipboardData: { items: [clipboardFileItem(onDisk), clipboardFileItem(bitmap)], getData: () => '' },
+      });
+      fireEvent(input, paste);
+      expect(paste.defaultPrevented).toBe(true);
+      expect(await screen.findByText('notes.md')).toBeTruthy();
+      await waitFor(() =>
+        expect(mocks.cacheImageFromBuffer).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: 'bot-group:g1', mimeType: 'image/png' }),
+        ),
+      );
+      expect(await screen.findByAltText(/^clipboard-\d+\.png$/)).toBeTruthy();
+
+      const textPaste = createEvent.paste(input, {
+        clipboardData: { items: [{ kind: 'string', type: 'text/plain' }], getData: () => '你好' },
+      });
+      fireEvent(input, textPaste);
+      expect(textPaste.defaultPrevented).toBe(false);
+    });
+
+    it('sends the attachments with the text and takes them out of the tray once main has them', async () => {
+      renderView();
+      const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+      pickFiles([diskFile('report.pdf', 'application/pdf')]);
+      await screen.findByText('report.pdf');
+      fireEvent.change(input, { target: { value: '@咪咪 看看这份', selectionStart: 9 } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+      expect(lastSend()).toMatchObject({
+        groupId: 'g1',
+        text: '@咪咪 看看这份',
+        mentions: { all: false, botIds: ['mimi'] },
+        attachments: [
+          {
+            name: 'report.pdf',
+            originalName: 'report.pdf',
+            path: '/tmp/report.pdf',
+            ext: '.pdf',
+            category: 'pdf',
+            mimeType: 'application/pdf',
+          },
+        ],
+      });
+      await waitFor(() => expect(screen.queryByText('report.pdf')).toBeNull());
+      expect(getDraft(botGroupAttachmentScope('g1'))?.attachments ?? []).toEqual([]);
+    });
+
+    it('sends attachments without text, even while a round runs', async () => {
+      mocks.getBotGroup.mockResolvedValue({
+        ok: true,
+        group: detail({ round: { status: 'running', speakers: [], canContinue: false } }),
+      });
+      renderView();
+      await screen.findByRole('textbox');
+      expect(screen.getByRole('button', { name: 'bots.groupChat.composer.stop' })).toBeTruthy();
+      pickFiles([diskFile('photo.png', 'image/png')]);
+      await screen.findByAltText('photo.png');
+      fireEvent.click(screen.getByRole('button', { name: 'bots.send' }));
+      await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+      expect(lastSend()).toMatchObject({
+        text: '',
+        attachments: [
+          { name: 'photo.png', category: 'image', url: 'cindy-media://blobs/photo.png', path: '/tmp/photo.png' },
+        ],
+      });
+      expect(mocks.stopBotGroupRound).not.toHaveBeenCalled();
+    });
+
+    it('keeps the text and attachments when the send fails, and retries with the same clientId', async () => {
+      mocks.sendBotGroupMessage
+        .mockResolvedValueOnce({ ok: false, errorCode: 'INVALID_PARAMS', message: '' })
+        .mockResolvedValueOnce({ ok: true, messageId: 'u2' });
+      renderView();
+      const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
+      pickFiles([diskFile('report.pdf', 'application/pdf')]);
+      await screen.findByText('report.pdf');
+      fireEvent.change(input, { target: { value: '看看' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() =>
+        expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.composer.attachmentsFailed'),
+      );
+      expect(input.value).toBe('看看');
+      expect(screen.getByText('report.pdf')).toBeTruthy();
+      expect(getDraft(botGroupAttachmentScope('g1'))?.attachments.map((file) => file.name)).toEqual(['report.pdf']);
+      const firstClientId = lastSend().clientId;
+
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(2));
+      expect(lastSend().clientId).toBe(firstClientId);
+      await waitFor(() => expect(screen.queryByText('report.pdf')).toBeNull());
+    });
+
+    it('holds a message over the attachment limit with a hint', async () => {
+      renderView();
+      await screen.findByRole('textbox');
+      pickFiles(Array.from({ length: 21 }, (_, index) => diskFile(`part-${index}.txt`, 'text/plain')));
+      await screen.findByText('part-20.txt');
+      expect(screen.getByText('bots.groupChat.composer.tooManyAttachments')).toBeTruthy();
+      const send = screen.getByRole('button', { name: 'bots.send' }) as HTMLButtonElement;
+      expect(send.disabled).toBe(true);
+    });
+
+    it('takes files dropped anywhere on the page and explains that folders cannot be attached', async () => {
+      const view = renderView();
+      await screen.findByRole('textbox');
+      const main = view.container.querySelector('main')!;
+      const file = diskFile('data.csv', 'text/csv');
+      const folder = diskFile('assets', '');
+      const dataTransfer = {
+        types: ['Files'],
+        files: [file, folder],
+        items: [clipboardFileItem(file), clipboardFileItem(folder, true)],
+        getData: () => '',
+        dropEffect: 'none',
+      };
+      fireEvent.dragEnter(main, { dataTransfer });
+      expect(screen.getByTestId('bot-group-drop-hint')).toBeTruthy();
+      fireEvent.drop(main, { dataTransfer });
+      expect(screen.queryByTestId('bot-group-drop-hint')).toBeNull();
+      expect(await screen.findByText('data.csv')).toBeTruthy();
+      expect(screen.queryByText('assets')).toBeNull();
+      expect(mocks.toastWarning).toHaveBeenCalledWith('bots.groupChat.composer.folderNotSupported');
+    });
+
+    it('shows a sent message’s image and file like a task’s user message, without an empty bubble', async () => {
+      mocks.getBotGroup.mockResolvedValue({
+        ok: true,
+        group: detail({
+          messages: [
+            msg({
+              id: 'u9',
+              content: '',
+              attachments: [
+                {
+                  id: 'a1',
+                  name: '截图.png',
+                  category: 'image',
+                  mimeType: 'image/png',
+                  size: 10,
+                  url: 'cindy-media://blobs/abc.png',
+                  path: null,
+                },
+                {
+                  id: 'a2',
+                  name: '报告.pdf',
+                  category: 'pdf',
+                  mimeType: 'application/pdf',
+                  size: 20,
+                  url: null,
+                  path: '/Users/me/报告.pdf',
+                },
+              ],
+            }),
+            msg({
+              id: 'u10',
+              sequence: 2,
+              content: '再看这张',
+              attachments: [
+                {
+                  id: 'a3',
+                  name: '草图.png',
+                  category: 'image',
+                  mimeType: 'image/png',
+                  size: 10,
+                  url: 'cindy-media://blobs/def.png',
+                  path: null,
+                },
+              ],
+            }),
+          ],
+        }),
+      });
+      renderView();
+      const image = await screen.findByAltText('截图.png');
+      expect(image.getAttribute('src')).toBe('cindy-media://blobs/abc.png');
+      const article = image.closest('article')!;
+      expect(article.querySelector('.whitespace-pre-wrap')).toBeNull();
+      const chip = screen.getByRole('button', { name: '报告.pdf' });
+      expect(article.contains(chip)).toBe(true);
+      // A PDF is not text: it opens in the system app, as from a task's chip.
+      fireEvent.click(chip);
+      await waitFor(() => expect(mocks.openPath).toHaveBeenCalledWith('/Users/me/报告.pdf'));
+
+      const withText = screen.getByAltText('草图.png').closest('article')!;
+      expect(withText.querySelector('.whitespace-pre-wrap')?.textContent).toBe('再看这张');
+    });
+  });
+});
+
+it('keeps copy/share in each author row and shares only message content through the standard selection flow', async () => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+    msg({ id: 'bot-share', authorKind: 'bot', authorName: '咪咪', content: 'Share this answer' }),
+    msg({ id: 'mine-share', sequence: 2, content: 'My question' }),
+    msg({ id: 'notice', sequence: 3, kind: 'notice', authorKind: 'system', content: 'Group notice' }),
+  ] }) });
+  const view = renderView();
+  try {
+    const article = (await screen.findByText('Share this answer')).closest('article')!;
+    expect(within(article).getByRole('button', { name: 'chat.messageActionBar.copy' })).toBeTruthy();
+    fireEvent.click(within(article).getByRole('button', { name: 'chat.shareImage.entry' }));
+    expect(shareSelectionStore.getSelectedIds()).toEqual(['bot-share']);
+    expect(queryShareableMessageIds('bot-group:g1')).toEqual(['bot-share', 'mine-share']);
+    expect(within(article).getByRole('checkbox').getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('button', { name: 'chat.shareImage.copy' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.shareImage.cancel' }));
+    expect(shareSelectionStore.getActiveSessionId()).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  } finally { view.unmount(); vi.unstubAllGlobals(); }
+});
+
+ it.each(['bot', 'guest'] as const)('acknowledges visible %s replies at the tail and preserves new replies while reading above it', async (sender) => {
+  resetBotReadStateForTests();
+  const incoming = sender === 'bot' ? { authorKind: 'bot' as const } : { authorKind: 'user' as const, isSelf: false };
+  const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  markBotRead(botGroupReadKey('g1'), 100);
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+    msg({ id: 'b', ...incoming, content: 'First reply', createdAt: 200 }),
+    msg({ id: 'u', sequence: 2, content: 'My message', createdAt: 900 }),
+  ] }) });
+  const view = renderView();
+  try {
+    await screen.findByText('First reply');
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
+    const scroll = view.container.querySelector('.overflow-y-auto.px-5') as HTMLElement;
+    Object.defineProperties(scroll, { scrollHeight: { configurable: true, value: 1000 }, clientHeight: { configurable: true, value: 100 } });
+    scroll.scrollTop = 0; fireEvent.scroll(scroll);
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [msg({ id: 'new', ...incoming, content: 'New reply', createdAt: 1200 })] }) });
+    act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await screen.findByText('New reply');
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
+    scroll.scrollTop = 900; fireEvent.scroll(scroll);
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(1200);
+  } finally { focus.mockRestore(); resetBotReadStateForTests(); }
 });

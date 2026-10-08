@@ -10,24 +10,24 @@ vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'owner
 beforeEach(() => setDataOwnerGeneration('owner'));
 afterEach(cleanup);
 
-it('keeps ordinary remote exits unchanged and offers a new invitation after a shared-task exit', () => {
-  const onJoin = vi.fn();
-  render(<SharedTaskEndedNotice onJoin={onJoin} />);
+it('keeps ordinary remote exits unchanged and returns to tasks after a shared-task exit', () => {
+  const onReturnToTasks = vi.fn();
+  render(<SharedTaskEndedNotice onReturnToTasks={onReturnToTasks} />);
   act(() => { expect(notifySharedTaskEnded('ordinary-device')).toBe(false); });
   expect(screen.queryByRole('dialog')).toBeNull();
   act(() => { expect(notifySharedTaskEnded(sharedTaskHostPeer('share-1', 'desktop'))).toBe(true); });
   expect(screen.getByRole('dialog').textContent).toContain('sharedTask.accessEndedBody');
-  fireEvent.click(screen.getByRole('button', { name: 'sharedTask.rejoin' }));
-  expect(onJoin).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button', { name: 'sharedTask.returnToTasks' }));
+  expect(onReturnToTasks).toHaveBeenCalledOnce();
   expect(screen.queryByRole('dialog')).toBeNull();
 });
 
 it('does not keep an ending notice visible across an account boundary', () => {
-  const onJoin = vi.fn();
-  const view = render(<SharedTaskEndedNotice onJoin={onJoin} />);
+  const onReturnToTasks = vi.fn();
+  const view = render(<SharedTaskEndedNotice onReturnToTasks={onReturnToTasks} />);
   act(() => { notifySharedTaskEnded(sharedTaskHostPeer('share-1', 'desktop')); });
   expect(screen.getByRole('dialog')).toBeTruthy();
   setDataOwnerGeneration('other');
-  view.rerender(<SharedTaskEndedNotice onJoin={onJoin} />);
+  view.rerender(<SharedTaskEndedNotice onReturnToTasks={onReturnToTasks} />);
   expect(screen.queryByRole('dialog')).toBeNull();
 });

@@ -166,7 +166,7 @@ describe('ChatInput session switch focus contract', () => {
     );
   });
 
-  it('reuses composer entry paths for Plugin commands and Host capabilities', () => {
+  it('reuses composer entry paths for Plugin commands', () => {
     const capabilitySelectionBlock = extractBetween(
       chatInputSource,
       'const insertAtResource = useCallback(',
@@ -174,29 +174,23 @@ describe('ChatInput session switch focus contract', () => {
     );
 
     expect(pluginPageSource).toContain('pendingGhostId: ghost.manifest.id');
-    expect(pluginPageSource).toContain('pendingHostCapabilityGhostId: ghost.manifest.id');
     expect(pluginPageSource.match(/focusAtEnd: true/g)).toHaveLength(1);
     expect(
       chatInputSource.match(/placeGhostAtComposerStart\(editor, ghost, installedGhosts\)/g),
     ).toHaveLength(1);
     expect(
       chatInputSource.match(
-        /placeGhostAtComposerStart\(editor, ghost, installedGhostsRef\.current\)/g,
+        /placeGhostAtComposerStart\(editor, ghost, composerGhostsRef\.current\)/g,
       ),
     ).toHaveLength(1);
     expect(chatInputSource).toContain('pendingGhostId: undefined');
-    expect(chatInputSource).toContain('pendingHostCapabilityGhostId: undefined');
-    expect(
-      chatInputSource.match(
-        /placeHostCapabilityAtComposerStart\(editor, ghost, installedGhosts\)/g,
-      ),
-    ).toHaveLength(1);
+
     expect(capabilitySelectionBlock).toContain("selectedItem.type === 'plugin-command'");
-expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
+    expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
+    expect(capabilitySelectionBlock).toContain('composerGhostsRef.current.find(');
     expect(capabilitySelectionBlock).toContain(
-      'placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current);',
+      'placeGhostAtComposerStart(editor, ghost, composerGhostsRef.current);',
     );
-    expect(capabilitySelectionBlock).toContain('placeHostCapabilityAtComposerStart(editor, ghost, installedGhostsRef.current);');
     expect(capabilitySelectionBlock).toContain('closeAtPanel();');
     expect(capabilitySelectionBlock).not.toContain('focusIOSSimulatorPanel');
     expect(chatInputSource).toContain('focusComposerEndNextFrame(editor);');
@@ -217,7 +211,8 @@ expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
     expect(chatInputSource).toContain('findGhostByCommand(eligibleGhosts, ghostCommandWord)');
     expect(chatInputSource).toContain('onAccepted: markRecentPluginUsage');
     expect(successfulSendBlock).toContain('markRecentPluginUsage();');
-    expect(newMakerDraftRouteSource.match(/opts\?\.onAccepted\?\.\(\);/g)).toHaveLength(3);
+    // 本机首条 / worktree 首条 / 远程普通首条直接发送 / 远程视图交接 四处受理点。
+    expect(newMakerDraftRouteSource.match(/opts\?\.onAccepted\?\.\(\);/g)).toHaveLength(4);
     expect(worktreeSendBlock).toContain('if (accepted) {');
     expect(worktreeSendBlock).toContain('opts?.onAccepted?.();');
     expect(worktreeSendBlock).toContain(

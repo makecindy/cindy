@@ -15,26 +15,37 @@ const TAKEOVER_DELIVERY_CONTEXT =
  *
  * Attached desktop sessions are created without channel vendor options, so the
  * model needs to know that normal replies are already delivered. Native agents
- * may retain this UserMessage in their own history; consequently the hint is a
- * transport-invariant rule and deliberately contains no vendor or destination.
- * The local transcript still receives the original user text in turnRunner.
+ * may retain this UserMessage in their own history; consequently the delivery
+ * hint stays a transport-invariant rule and contains no vendor or destination.
+ *
+ * Channel facts travel separately in `channelNote` (`[渠道说明] 系统追加，不是用户消息。本条来自…`, see
+ * channelNote.ts). That line is worded about this one message only, so a later
+ * turn from another surface cannot read it as a persistent reply destination.
+ * Splitting the two was approved by the user on 2026-10-05; before that no
+ * IM turn told the model its channel at all.
+ *
+ * Order: delivery rule → channel note → channel-prepared text (persona /
+ * ambient / group / reply blocks + user text) → attachments. The local
+ * transcript still receives the original user text in turnRunner.
  */
 export function buildImUserMessage(
   text: string,
   attachments: IMAttachment[],
   attachedTakeover = false,
+  channelNote: string | null = null,
 ): UserMessage {
   const deliveryContext = attachedTakeover ? TAKEOVER_DELIVERY_CONTEXT : null;
 
   if (attachments.length === 0) {
     return {
       type: 'user',
-      content: deliveryContext ? `${deliveryContext}\n\n${text}` : text,
+      content: [deliveryContext, channelNote || null, text].filter((part) => part !== null).join('\n\n'),
     };
   }
 
   const blocks: UserContentBlock[] = [];
   if (deliveryContext) blocks.push({ type: 'text', text: deliveryContext });
+  if (channelNote) blocks.push({ type: 'text', text: channelNote });
   if (text) blocks.push({ type: 'text', text });
   for (const att of attachments) {
     blocks.push({

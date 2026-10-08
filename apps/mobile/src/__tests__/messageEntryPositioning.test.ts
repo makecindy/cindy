@@ -118,6 +118,8 @@ it('reconciles late attachment, composer and keyboard measurements through the p
     const bindings = {
       scrollMetricsRef: metrics, nearBottomRef: nearBottom, readingOlderRef: readingOlder,
       historyPrependTransactionRef: ref(null),
+      // Companion receipt behavior is covered by the mounted MessageRenderer tests.
+      acknowledgeCompanionReadRef: ref(vi.fn()),
       reconcileReopeningAnchor: vi.fn(), markMobileMvcpSettle: vi.fn(),
       getTailFollower: () => follower, runStickToLatestVerify: () => follower.reconcile(),
     };

@@ -252,18 +252,18 @@ describe('ProviderConnectionDialog preset locale ownership', () => {
     expect(onClose).not.toHaveBeenCalled();
 
     fireEvent.keyDown(document, { key: 'Escape' });
-    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
   it('does not close the provider form on a scrim gesture', async () => {
     i18nState.language = 'zh-TW';
-    const { container, onClose } = renderDialog();
+    const { onClose } = renderDialog();
 
     const trigger = await findReadyPresetTrigger();
     fireEvent.click(trigger);
     expect(await screen.findByRole('option', { name: '繁體供應商' })).not.toBeNull();
 
-    const scrim = container.firstElementChild as Element;
+    const scrim = document.querySelector('[data-custom-provider-dialog-scrim]')!;
     fireEvent.pointerDown(scrim);
     expect(screen.getByRole('option', { name: '繁體供應商' })).not.toBeNull();
     expect(onClose).not.toHaveBeenCalled();
@@ -271,7 +271,7 @@ describe('ProviderConnectionDialog preset locale ownership', () => {
     fireEvent.pointerDown(scrim);
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('settings.providers.custom.cancel'));
-    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
   it('does not consume runtime tab or input pointerdowns while a child layer is open', async () => {
@@ -314,7 +314,7 @@ describe('ProviderConnectionDialog preset locale ownership', () => {
 
     await findReadyPresetTrigger();
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.cancel' }));
-    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
 
@@ -444,7 +444,7 @@ describe('ProviderConnectionDialog preset locale ownership', () => {
       expect(onClose).not.toHaveBeenCalled();
 
       fireEvent.keyDown(document, { key: 'Escape' });
-      expect(onClose).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     } finally {
       document.removeEventListener('keydown', staleLayerListener, true);
     }

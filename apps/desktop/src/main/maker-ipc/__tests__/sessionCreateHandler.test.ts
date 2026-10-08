@@ -33,6 +33,33 @@ function createDeps(overrides: Record<string, unknown> = {}) {
 }
 
 describe('maker session CREATE_SESSION IPC handler', () => {
+  it.each([true, false])('passes initial plan mode %s to the creation transaction', async (planMode) => {
+    const harness = new IpcHarness();
+    const deps = createDeps();
+    registerMakerSessionCreateHandler(harness, deps);
+    await harness.invoke(MAKER_INVOKE.CREATE_SESSION, {
+      agentKind: 'codex', workingDir: 'C:\\repo', model: 'gpt-5.4', planMode,
+    });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ planMode }));
+    expect(deps.bootstrapSession.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.broadcastSessionCreated.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('rejects invalid plan flags before creation and propagates persistence failures', async () => {
+    const harness = new IpcHarness();
+    const deps = createDeps();
+    registerMakerSessionCreateHandler(harness, deps);
+    const args = { agentKind: 'codex', workingDir: 'C:\\repo', model: 'gpt-5.4' };
+    await expect(harness.invoke(MAKER_INVOKE.CREATE_SESSION, { ...args, planMode: 'true' }))
+      .rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    deps.bootstrapSession.mockRejectedValue(new Error('storage unavailable'));
+    await expect(harness.invoke(MAKER_INVOKE.CREATE_SESSION, { ...args, planMode: true }))
+      .rejects.toThrow('storage unavailable');
+    expect(deps.broadcastSessionCreated).not.toHaveBeenCalled();
+  });
+
   it('bootstraps a session and returns the public create-session payload', async () => {
     const harness = new IpcHarness();
     const deps = createDeps();

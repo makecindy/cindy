@@ -12,6 +12,10 @@
     "deleteFailed": "デバイスを削除できませんでした。",
     "deleteOnline": "デバイスがオンラインです。オフラインにしてから削除してください。",
     "currentlyOnline": "現在オンライン",
+    "availableSection": "オンラインのデバイス",
+    "offlineSection": "オフラインのデバイス",
+    "showAllOffline": "すべて表示（{{count}} 台）",
+    "showFewerOffline": "表示を減らす",
     "nameTooLong": "デバイス名は {{limit}} 文字以内で入力してください。",
     "fields": {
       "name": "名前",
@@ -29,9 +33,7 @@
   "common": {
     "cancel": "キャンセル",
     "save": "保存",
-    "saving": "保存中",
     "delete": "削除",
-    "deleting": "削除中",
     "create": "新規"
   },
   "resources": {
@@ -47,7 +49,8 @@
     "openFailed": "セッションを開けませんでした",
     "resolving": "最新のセッションを開いています…",
     "retry": "もう一度試す",
-    "hostCount": "{{count}} 台のコンピュータ"
+    "hostCount": "{{count}} 台のコンピュータ",
+    "stale": "内容が古い可能性があります。更新できません。"
   },
   "presentation": {
     "deviceList": {
@@ -177,10 +180,10 @@
     },
     "home": {
       "allDevices": "すべて",
-      "allComputers": "すべてのコンピューター",
+      "allComputers": "すべてのデバイス",
       "waitingCount": "保留中 {{count}} 件",
       "synced": "同期済み",
-      "unknownComputer": "不明なコンピューター",
+      "unknownComputer": "不明なデバイス",
       "uncategorizedProject": "未分類のプロジェクト",
       "cindyMake": "Cindy Make",
       "empty": {
@@ -314,7 +317,7 @@
       "syncing": "再同期中",
       "sync": "再同期",
       "pinnedConversations": "ピン留めしたセッション {{count}} 件",
-      "newRemoteConversation": "新しいリモートセッション",
+      "newRemoteConversation": "新しいセッション",
       "renameDevice": "{{label}} の名前を変更",
       "project": "プロジェクト {{title}}",
       "dialogue": "チャット",
@@ -424,7 +427,13 @@
       "needAttention": "要対応 {{count}} 件",
       "waiting": "対応待ち {{count}} 件",
       "automationRunning": "自動化を実行中",
-      "totalRuns": "全 {{count}} 回の実行"
+      "totalRuns": "全 {{count}} 回の実行",
+      "runCount": "全 {{count}} 回",
+      "nextRunMinutes": "{{count}} 分後に実行",
+      "nextRunHours": "{{count}} 時間後に実行",
+      "nextRunDays": "{{count}} 日後に実行",
+      "imminent": "まもなく実行",
+      "stopped": "停止中"
     }
   },
   "detail": {
@@ -528,6 +537,9 @@
     "viewAllRuns": "すべての実行 {{count}} 回を表示"
   },
   "companions": {
+    "noCreateHosts": "対応するコンピュータを利用できません。パソコンで Cindy を開き、同じアカウントでログインするとチームメイトを新規作成できます。",
+    "taskAttentionCount": "確認が必要なタスク：{{count}}",
+    "unreadChatCount": "未読のチャット：{{count}}",
     "messageSent": "バックグラウンドタスクにメッセージを送信しました",
     "sentTo": "{{name}} にメッセージを送信",
     "receivedFrom": "{{name}} からのメッセージ",
@@ -552,18 +564,18 @@
     "messages": "メッセージ",
     "readOnly": "閲覧のみ",
     "directEmpty": "表示できるメッセージはまだありません。",
-    "directLimitReached": "今回の会話は上限に達し、双方がそれぞれのメインタスクに戻りました",
-    "directUnavailable": "この仲間同士の会話は利用できません。",
+    "directLimitReached": "今回の会話は上限に達し、双方がそれぞれのメインセッションに戻りました",
+    "directUnavailable": "このチームメイト同士の会話は利用できません。",
     "unread": "新しい返信",
     "status": {
       "queued": "開始しています",
-      "running": "作業中",
+      "running": "実行中",
       "waiting": "対応待ち",
       "completed": "完了",
       "failed": "失敗",
       "cancelled": "停止済み",
       "timed-out": "タイムアウト",
-      "unknown": "タスクの状況を確認できません"
+      "unknown": "状態不明"
     },
     "title": "チームメイト",
     "tasks": "セッション",
@@ -622,7 +634,14 @@
     },
     "viewResult": "結果を見る",
     "noWrittenResult": "テキストの結果はありません。",
-    "errorDetails": "エラー詳細"
+    "errorDetails": "エラー詳細",
+    "createTeammate": "新しい仲間",
+    "createMenu": "新規作成",
+    "searchWithGroups": "仲間とグループを検索",
+    "awaiting": "確認待ち",
+    "emptyCopyCreate": "仲間は話した内容を覚えていて、パソコンで作業も手伝えます。",
+    "taskResult": "タスクの結果",
+    "collapseResult": "結果を閉じる"
   },
   "companionProfile": {
     "avatar": "アバター",
@@ -649,7 +668,7 @@
     "memorySaveFailed": "保存できませんでした。編集内容は保持されています。",
     "memoryMissing": "この記憶はもう存在しません。",
     "memoryDeleteFailed": "削除できませんでした",
-    "create": "新しいチームメイト",
+    "create": "チームメイトを新規作成",
     "createFailed": "作成結果を確認できていません。再試行して確認してください。",
     "title": "チームメイト",
     "profile": "プロフィールと性格",
@@ -671,6 +690,8 @@
     "artifactsEmpty": "成果物はまだありません。チームメイトに作成を頼んでみましょう。",
     "openSourceTask": "元のセッションを開く",
     "modelFollowsDefault": "現在のデフォルトモデル候補を使用",
+    "taskModel": "セッション用モデル",
+    "taskInheritsPrimary": "メインモデルを継承",
     "modelOverride": "このチームメイト固有のモデル候補を使用",
     "modelsUnavailable": "利用可能なモデルがありません。パソコンでこのチームメイトのモデル設定を確認し、更新してください。",
     "artifactsRecovery": "メッセージカードからファイルを開くか、{{deviceName}} でファイルを参照してください。",
@@ -702,13 +723,13 @@
     "automations": "自動化",
     "paused": "停止状態を維持",
     "itemAttention": "確認が必要",
-    "takeover": "確認後に自動化を引き継ぐ",
+    "takeover": "インポート後に自動化を確認して引き継ぐ",
     "takeoverNote": "データ接続を確認してから元のタスクを停止します。必要な項目を除外した場合、元のタスクは実行を続けます。",
     "submit": "インポート",
     "back": "戻る",
     "open": "仲間を開く",
     "running": "インポートと接続確認中…",
-    "complete": "インポート完了",
+    "complete": "インポートを保存しました",
     "attention": "確認が必要な項目があります。詳細をご確認ください。",
     "error": "インポートできませんでした。同じ選択で再試行できます。",
     "keptAtSource": "引き継ぎは未完了です",
@@ -723,6 +744,30 @@
     "credentialFailed": "認証情報を安全に保存できませんでした。",
     "scriptMissing": "必要なスクリプトがありません。",
     "sourceCommand": "元の Agent の制御コマンドが見つかりません。",
-    "readFailed": "このタスクに必要なデータ取得を確認できていません。"
+    "readFailed": "このタスクに必要なデータ取得を確認できていません。",
+    "search": "検索",
+    "selectAll": "すべて選択",
+    "previous": "前のページ",
+    "next": "次のページ",
+    "chatSetup": "取り込める情報を保存しました。すぐに会話を始められます。ログインや確認が必要な項目は、都合のよいときに進めましょう。引き継ぎが完了するまで、元の自動化の状態は変わりません。",
+    "chatReady": "情報をインポートしました。会話を始められます。",
+    "partial": "一部の内容は完全にインポートされていません",
+    "details": "インポートの詳細",
+    "partlySaved": "一部のみ保存済み",
+    "savedNeedsSetup": "保存済み・設定または有効化が必要",
+    "notSaved": "未保存",
+    "databaseDriver": "データベースドライバーを読み込めません。Cindy を更新または修復して再試行してください。",
+    "databaseUnavailable": "元のデータベースを読み込めません。元データは変更されていません。修復後に再試行できます。",
+    "fileTooLarge": "ファイルまたはインポート全体が読み取り上限を超えています。内容は切り捨てていません。",
+    "memoryMetadata": "メモリの概要またはタイトルが保存要件を満たしていません。",
+    "memoryWrite": "メモリの保存または整合性確認に失敗しました。再試行できます。",
+    "memoryChanged": "保存済みのメモリが変更されているため、上書きしていません。",
+    "attachmentUnsupported": "この添付形式にはまだ対応していません。元ファイルはインポート元に残っています。",
+    "diskFull": "ディスク容量が不足しています。空きを確保して再試行してください。",
+    "permissionDenied": "読み取りまたは保存の権限がありません。権限を修正して再試行してください。",
+    "setupDeferred": "パートナーとのチャットでログインと確認を続けられます。",
+    "automationInvalid": "自動化の定義を変換できず、作成されていません。",
+    "itemFailed": "この項目は未完了です。再試行するか詳細を確認してください。",
+    "chatPartial": "パートナーは作成されましたが、一部の情報は完全に保存されていません。以下の項目は対応が必要です。他の情報とチャットは利用できます。"
   }
 }

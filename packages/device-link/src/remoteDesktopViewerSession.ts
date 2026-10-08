@@ -1,5 +1,6 @@
 import type {
   RemoteDesktopCapabilities,
+  RemoteDesktopDisplayMode,
   RemoteDesktopLease,
   RemoteDesktopRequest,
 } from "./remoteDesktop.js";
@@ -18,6 +19,8 @@ interface ViewerConnectOptions {
   resume?: boolean;
   takeover?: boolean;
   isCurrent: () => boolean;
+  /** Ask a host advertising `autoControl` to grant control with the lease. */
+  control?: boolean;
   onCapabilities?: (caps: RemoteDesktopCapabilities) => void | Promise<void>;
   onStart?: () => void;
 }
@@ -95,6 +98,9 @@ export class RemoteDesktopViewerSession {
           : options.resume
             ? { resume: true }
             : {}),
+        ...(options.control && caps.autoControl && caps.canControl
+          ? { control: true }
+          : {}),
       },
       check,
     );
@@ -102,6 +108,8 @@ export class RemoteDesktopViewerSession {
       await this.request({ op: "stop", lease: lease.lease }).catch(() => {});
       throw new Error("DESKTOP_VIDEO_STOPPED");
     }
+    // Only a confirmed grant counts; older hosts always start view only.
+    lease.controlling = lease.controlling === true;
     this.active = lease;
     return { caps, lease };
   }
@@ -162,12 +170,20 @@ export class RemoteDesktopViewerSession {
     return { controlling: lease.controlling };
   }
 
-  /** Keep the lease and input sequence, replacing only its display geometry. */
+  /**
+   * Keep the lease and input sequence, replacing only its display geometry.
+   * With `keepVideo`, a host advertising `liveDisplaySwitch` may also keep the
+   * current video stream; the result then carries `videoKept: true`. With
+   * `control`, a host advertising `autoControl` grants control in the same
+   * request; otherwise the lease returns view only, as before.
+   */
   async fitDisplay(
     width: number,
     height: number,
     restore = false,
     modeId?: string,
+    keepVideo = false,
+    control = false,
   ): Promise<RemoteDesktopLease> {
     const lease = this.active;
     if (!lease?.controlling) throw new Error("DESKTOP_VIEW_ONLY");
@@ -178,10 +194,29 @@ export class RemoteDesktopViewerSession {
     };
     const operation = this.request<RemoteDesktopLease>(
       modeId
-        ? { op: "resolution", lease: lease.lease, modeId, temporary: true }
+        ? {
+            op: "resolution",
+            lease: lease.lease,
+            modeId,
+            temporary: true,
+            ...(keepVideo ? { keepVideo: true } : {}),
+            ...(control ? { control: true } : {}),
+          }
         : restore
-          ? { op: "restoreViewerDisplay", lease: lease.lease }
-          : { op: "viewerDisplay", lease: lease.lease, width, height },
+          ? {
+              op: "restoreViewerDisplay",
+              lease: lease.lease,
+              ...(keepVideo ? { keepVideo: true } : {}),
+              ...(control ? { control: true } : {}),
+            }
+          : {
+              op: "viewerDisplay",
+              lease: lease.lease,
+              width,
+              height,
+              ...(keepVideo ? { keepVideo: true } : {}),
+              ...(control ? { control: true } : {}),
+            },
       check,
     );
     this.controlPending = operation;
@@ -214,12 +249,15 @@ export class RemoteDesktopViewerSession {
         result.display.width <= 0 ||
         !Number.isFinite(result.display.height) ||
         result.display.height <= 0 ||
-        result.controlling !== false
+        // Control comes back only when it was asked for.
+        (control ? typeof result.controlling !== "boolean" : result.controlling !== false)
       )
         throw new Error("INVALID_RESPONSE");
       lease.display = result.display;
-      lease.controlling = false;
-      return lease;
+      lease.controlling = control && result.controlling === true;
+      return keepVideo && result.videoKept === true
+        ? { ...lease, videoKept: true }
+        : lease;
     } finally {
       if (this.controlPending === operation) this.controlPending = null;
     }
@@ -262,6 +300,53 @@ export function viewerDisplaySize(
     height: Math.round((height * scale) / 2) * 2,
   };
   return Math.min(result.width, result.height) >= 320 ? result : null;
+}
+
+type DisplaySize = { width: number; height: number };
+
+/** Resize the fitted desktop without offering modes from the physical monitor. */
+export function fittedDisplayModes(
+  fitted: DisplaySize,
+  current: DisplaySize,
+): RemoteDesktopDisplayMode[] {
+  const modes = new Map<string, RemoteDesktopDisplayMode>();
+  const add = ({ width, height }: DisplaySize) => {
+    if (
+      ![width, height].every(
+        (size) => Number.isInteger(size) && size >= 320 && size <= 2560,
+      )
+    )
+      return;
+    const id = `fitted:${width}x${height}`;
+    modes.set(id, {
+      id,
+      width,
+      height,
+      current: width === current.width && height === current.height,
+    });
+  };
+  for (const edge of [960, 1280, 1600, 1920, 2560]) {
+    const scale = edge / Math.max(fitted.width, fitted.height);
+    add({
+      width: Math.round((fitted.width * scale) / 2) * 2,
+      height: Math.round((fitted.height * scale) / 2) * 2,
+    });
+  }
+  add(current);
+  return [...modes.values()].sort((a, b) => a.width - b.width);
+}
+
+/** Mode IDs may change after OS or monitor updates; fall back to the same size. */
+export function findRememberedMode(
+  modes: RemoteDesktopDisplayMode[],
+  remembered: { modeId: string } & DisplaySize,
+): RemoteDesktopDisplayMode | undefined {
+  const sameSize = (mode: RemoteDesktopDisplayMode) =>
+    mode.width === remembered.width && mode.height === remembered.height;
+  return (
+    modes.find((mode) => mode.id === remembered.modeId && sameSize(mode)) ??
+    modes.find(sameSize)
+  );
 }
 
 /** Only transient connection errors may restart a viewer. Explicit stop wins. */

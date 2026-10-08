@@ -7,7 +7,14 @@ vi.mock('expo-crypto', () => ({ randomUUID: () => 'test-uuid' }));
 const test = vi.hoisted(() => ({ view: null as any, favoritesReady:true, quotas:{} as any, syncError:null as unknown, prefs: {favorites:[],engines:{}} as any, save: vi.fn(), entries: [] as any[] }));
 vi.mock('@/session/UnifiedModelPickerView', () => ({ UnifiedModelPickerView: (p:any) => {test.view=p;return null;} }));
 vi.mock('@/session/useMobileModelQuotas',()=>({useMobileModelQuotas:()=>({quotas:test.quotas,now:0})}));
-vi.mock('@/session/mobileModelPreferences', () => ({useMobileModelPreferences:()=>({ready:true,favoritesReady:test.favoritesReady,error:test.syncError,value:test.prefs,save:test.save})}));
+vi.mock('@/session/mobileModelPreferences', async () => {
+  const {useReducer} = await import('react');
+  return {useMobileModelPreferences:()=>{
+    const [,refresh] = useReducer(value => value + 1, 0);
+    return {ready:true,favoritesReady:test.favoritesReady,error:test.syncError,value:test.prefs,
+      save:async (value:typeof test.prefs)=>{await test.save(value);refresh();}};
+  }};
+});
 vi.mock('@/session/providerModelSections', () => ({buildMobileModelSections:()=>({activeSourceId:'account'})}));
 vi.mock('@/session/draftModelMemory',()=>({useDraftModelMemoryVersion:()=>0}));
 vi.mock('@/session/sessionModelMirror',()=>({useSessionModelMirrorVersion:()=>0}));
@@ -16,7 +23,7 @@ vi.mock('@/session/unifiedMobileModels',async importOriginal=>({...await importO
 vi.mock('react-i18next',()=>({useTranslation:()=>({t:(key:string)=>key})}));
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT=true;
 let root:ReturnType<typeof createRoot>;
-beforeEach(()=>{test.favoritesReady=true;test.syncError=null;test.quotas={};test.save.mockReset();test.prefs={favorites:[],engines:{}};test.entries=[{
+beforeEach(()=>{test.favoritesReady=true;test.syncError=null;test.quotas={};test.save.mockReset().mockImplementation(async value => {test.prefs=value;});test.prefs={favorites:[],engines:{}};test.entries=[{
   providerId:'account',modelId:'model',displayName:'Model',candidates:['codex','claude-code'],recommended:'codex',nativeAgent:'codex',
   capabilities:{codex:{wireModelId:'codex/model',efforts:['medium','high'],defaultEffort:'medium',supportsFastMode:true,contextWindow:200000},
   'claude-code':{wireModelId:'model',efforts:['medium','high'],defaultEffort:'medium',supportsFastMode:false,contextWindow:200000}},
@@ -40,7 +47,7 @@ it('keeps the sheet and preferences unchanged after cancelled selection',async()
 it('only closes after selection succeeds and passes the full wire configuration',async()=>{
   const {onSelect,onClose}=await mount();
   await act(async()=>test.view.onSelect(test.view.groups[0].rows[0]));
-  expect(onSelect).toHaveBeenCalledWith({providerId:'account',modelId:'codex/model',agent:'codex',effort:'medium',fast:false});
+  expect(onSelect).toHaveBeenCalledWith({providerId:'account',modelId:'codex/model',agent:'codex',effort:'medium',fast:false},{deviceId:null});
   expect(onClose).toHaveBeenCalledOnce();
 });
 it('shows favorites before recommendations, with selected mark only on the model',async()=>{
@@ -50,11 +57,14 @@ it('shows favorites before recommendations, with selected mark only on the model
   expect(test.view.groups[0].rows[0].config).toMatchObject({effort:'high',fast:true});
   expect(test.view.groups[1].rows[0].selected).toBe(true);
 });
-it('does not mutate a favorite or current task when editing a different configuration copy',async()=>{
+it('edits a favorite only through explicit editing and save, without changing the current task',async()=>{
   test.prefs.favorites=[{uid:'fav',providerId:'account',modelId:'codex/model',agent:'codex',effort:'high',fast:false}];
   const {onSelect}=await mount();
   await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  await act(async()=>test.view.options.onEditFavorite());
   await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'medium'}));
+  expect(test.save).not.toHaveBeenCalled();
+  await act(async()=>test.view.options.onSaveEdit());
   expect(onSelect).not.toHaveBeenCalled();expect(test.save).toHaveBeenCalledWith(expect.objectContaining({favorites:[expect.objectContaining({uid:'fav',effort:'medium'})]}));
 });
 it('does not save an engine override when applying the selected row is cancelled',async()=>{
@@ -120,4 +130,478 @@ it('keeps model selection and settings usable when an old host lacks favorites',
   await act(async()=>test.view.onSelect(test.view.options.row));
   expect(onClose).toHaveBeenCalled();
   expect(test.view.error).toBeNull();
+});
+
+it('preserves search and source filtering when returning from model details', async () => {
+  await mount();
+  await act(async () => test.view.onFilter('account'));
+  await act(async () => test.view.onQuery('Model'));
+  const groups = test.view.groups;
+  await act(async () => test.view.onOptions(groups[0].rows[0]));
+  await act(async () => test.view.onBack());
+  expect(test.view.options).toBeUndefined();
+  expect(test.view.query).toBe('Model');
+  expect(test.view.filter).toBe('account');
+  expect(test.view.groups).toEqual(groups);
+});
+
+it('adds and removes a favorite in place only after saving, without changing the current configuration', async () => {
+  let finishSave!: () => void;
+  test.save.mockImplementation(value => new Promise<void>(resolve => {
+    finishSave = () => {
+      // The host, rather than the phone, assigns the persisted favorite UID.
+      test.prefs = { ...value, favorites: value.favorites.map((item: any) => ({ ...item, uid: 'remote-saved' })) };
+      resolve();
+    };
+  }));
+  const { onSelect, onClose } = await mount(undefined, {selectedEffort:'high', selectedFastMode:true});
+  await act(async () => test.view.onOptions(test.view.groups[0].rows[0]));
+  const source = test.view.options.row;
+  await act(async () => test.view.options.onFavorite());
+  expect(test.view.busy).toBe(true);
+  expect(test.view.options.isFavorite).toBe(false);
+  await act(async () => test.view.options.onFavorite());
+  expect(test.save).toHaveBeenCalledTimes(1);
+  expect(test.save).toHaveBeenCalledWith(expect.objectContaining({
+    favorites: [expect.objectContaining({ ...source.config, modelId: source.entry.modelId })],
+  }));
+  await act(async () => finishSave());
+  expect(test.view.busy).toBe(false);
+  expect(test.view.options.isFavorite).toBe(true);
+  expect(test.view.options.row).toEqual(source);
+  expect(test.view.groups[0].rows[0].favorite.uid).toBe('remote-saved');
+  await act(async () => test.view.options.onFavorite());
+  expect(test.view.busy).toBe(true);
+  expect(test.view.options.isFavorite).toBe(true);
+  expect(test.save).toHaveBeenLastCalledWith(expect.objectContaining({ favorites: [] }));
+  await act(async () => finishSave());
+  expect(test.view.options.isFavorite).toBe(false);
+  expect(test.view.options.row).toEqual(source);
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it.each([false, true])('preserves favorite state after a failed toggle and allows retry (saved=%s)', async saved => {
+  if (saved) test.prefs.favorites = [{ uid: 'existing', providerId: 'account', modelId: 'model', agent: 'codex', effort: 'medium', fast: false }];
+  test.save.mockRejectedValueOnce(new Error('offline'));
+  await mount();
+  await act(async () => test.view.onOptions(test.view.groups.find((g:any) => g.key === 'recommended').rows[0]));
+  await act(async () => test.view.options.onFavorite());
+  expect(test.view.error).toBe('models.unified.saveFailed');
+  expect(test.view.busy).toBe(false);
+  expect(test.view.options.isFavorite).toBe(saved);
+  await act(async () => test.view.options.onFavorite());
+  expect(test.view.error).toBeNull();
+  expect(test.view.options.isFavorite).toBe(!saved);
+});
+
+it.each(['model', 'codex/model'])('recognizes an existing favorite with ID %s and removes only the matching configuration', async modelId => {
+  const matching = { uid: 'existing', providerId: 'account', modelId, agent: 'codex', effort: 'medium', fast: false };
+  const others = [
+    { ...matching, uid: 'other-effort', effort: 'high' },
+    { ...matching, uid: 'other-fast', fast: true },
+    { ...matching, uid: 'other-provider', providerId: 'other' },
+    { ...matching, uid: 'other-model', modelId: 'other' },
+    { ...matching, uid: 'other-agent', agent: 'claude-code' },
+    { ...matching, uid: 'unsupported-effort', effort: 'max' },
+  ];
+  test.prefs.favorites = [...others, matching];
+  await mount();
+  await act(async () => test.view.onOptions(test.view.groups[1].rows[0]));
+  expect(test.view.options.isFavorite).toBe(true);
+  await act(async () => test.view.options.onFavorite());
+  expect(test.prefs.favorites).toEqual(others);
+  expect(test.view.options.isFavorite).toBe(false);
+});
+
+it('updates favorite state after changing the displayed effort or Fast without editing existing copies', async () => {
+  const saved = { uid: 'existing', providerId: 'account', modelId: 'model', agent: 'codex', effort: 'high', fast: true };
+  test.prefs.favorites = [saved];
+  await mount();
+  await act(async () => test.view.onOptions(test.view.groups[1].rows[0]));
+  expect(test.view.options.isFavorite).toBe(false);
+  await mount(undefined, { selectedEffort: 'high', selectedFastMode: true });
+  expect(test.view.options.isFavorite).toBe(true);
+  await mount(undefined, { selectedEffort: 'high', selectedFastMode: false });
+  expect(test.view.options.isFavorite).toBe(false);
+  await act(async () => test.view.options.onFavorite());
+  expect(test.prefs.favorites).toEqual([saved, expect.objectContaining({ effort: 'high', fast: false })]);
+  expect(test.view.options.isFavorite).toBe(true);
+});
+
+it('reflects persisted favorite state after reopening the source details', async () => {
+  await mount();
+  const source = test.view.groups[0].rows[0];
+  await act(async () => test.view.onOptions(source));
+  await act(async () => test.view.options.onFavorite());
+  await act(async () => test.view.onBack());
+  await act(async () => test.view.onOptions(source));
+  expect(test.view.options.isFavorite).toBe(true);
+  await act(async () => test.view.options.onFavorite());
+  await act(async () => test.view.onBack());
+  await act(async () => test.view.onOptions(source));
+  expect(test.view.options.isFavorite).toBe(false);
+});
+
+it('removes a favorite copy without applying a fallback and keeps its details open', async () => {
+  const saved = { uid: 'existing', providerId: 'account', modelId: 'model', agent: 'codex', effort: 'high', fast: true };
+  test.prefs.favorites = [saved];
+  const {onSelect} = await mount(vi.fn(async () => false), {selectedEffort:'high', selectedFastMode:true});
+  await act(async () => test.view.onOptions(test.view.groups[0].rows[0]));
+  await act(async () => test.view.options.onFavorite());
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(test.save).toHaveBeenCalledWith(expect.objectContaining({favorites:[]}));
+  expect(test.view.options.row.config).toMatchObject({effort:'high',fast:true});
+  expect(test.view.options.isFavorite).toBe(false);
+});
+
+it('adjusts model preferences from favorite details without overwriting the original copy', async () => {
+  const saved = {uid:'original',providerId:'account',modelId:'model',agent:'codex',effort:'high',fast:true};
+  test.prefs.favorites=[saved];
+  const {onSelect}=await mount();
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  expect(test.view.options.isFavorite).toBe(true);
+  await act(async()=>test.view.options.onChange({...test.view.options.row.config,fast:false}));
+  expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({effort:'high',fast:false}));
+  expect(test.prefs.favorites).toEqual([saved]);
+  expect(test.view.options.row.config).toMatchObject({effort:'high',fast:false});
+  expect(test.view.options.isFavorite).toBe(false);
+  expect(test.view.options.notice).toBe('models.unified.originalFavoriteKept');
+  await act(async()=>test.view.options.onFavorite());
+  expect(test.prefs.favorites).toEqual([saved,expect.objectContaining({effort:'high',fast:false})]);
+});
+
+it('cancels explicit editing without saving or changing the active configuration', async () => {
+  const saved={uid:'original',providerId:'account',modelId:'model',agent:'codex',effort:'medium',fast:false};
+  test.prefs.favorites=[saved];
+  const {onSelect}=await mount();
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  await act(async()=>test.view.options.onEditFavorite());
+  await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high'}));
+  expect(test.view.options.editingFavorite).toBe(true);
+  await act(async()=>test.view.onBack());
+  expect(test.view.options.editingFavorite).toBe(false);
+  expect(test.view.options.row.config.effort).toBe('medium');
+  expect(test.prefs.favorites).toEqual([saved]);
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(test.save).not.toHaveBeenCalled();
+});
+
+it('keeps explicit edits after failed saving and updates only the favorite when retried', async () => {
+  const saved={uid:'original',providerId:'account',modelId:'model',agent:'codex',effort:'medium',fast:false};
+  test.prefs.favorites=[saved];
+  const {onSelect}=await mount();
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  await act(async()=>test.view.options.onEditFavorite());
+  await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high'}));
+  test.save.mockRejectedValueOnce(new Error('offline'));
+  await act(async()=>test.view.options.onSaveEdit());
+  expect(test.view.error).toBe('models.unified.saveFailed');
+  expect(test.view.options.editingFavorite).toBe(true);
+  expect(test.view.options.row.config.effort).toBe('high');
+  expect(test.prefs.favorites).toEqual([saved]);
+  await act(async()=>test.view.options.onSaveEdit());
+  expect(test.view.options.editingFavorite).toBe(false);
+  expect(test.prefs.favorites).toEqual([{...saved,effort:'high'}]);
+  expect(onSelect).not.toHaveBeenCalled();
+});
+
+it.each(['changed','removed'])('rejects a stale edit when the original was %s remotely',async mode=>{
+  const saved={uid:'original',providerId:'account',modelId:'model',agent:'codex',effort:'medium',fast:false};
+  test.prefs.favorites=[saved];
+  await mount();
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  await act(async()=>test.view.options.onEditFavorite());
+  await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high'}));
+  test.prefs={...test.prefs,favorites:mode==='changed'?[{...saved,fast:true}]:[]};
+  await mount();
+  await act(async()=>test.view.options.onSaveEdit());
+  expect(test.save).not.toHaveBeenCalled();
+  expect(test.view.error).toBe('models.unified.favoriteChanged');
+  expect(test.view.options.editingFavorite).toBe(true);
+});
+
+it('rejects duplicate configurations during explicit favorite editing',async()=>{
+  const saved={uid:'original',providerId:'account',modelId:'model',agent:'codex',effort:'medium',fast:false};
+  test.prefs.favorites=[saved,{...saved,uid:'other',modelId:'codex/model',effort:'high'}];
+  await mount();
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  await act(async()=>test.view.options.onEditFavorite());
+  await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high'}));
+  await act(async()=>test.view.options.onSaveEdit());
+  expect(test.save).not.toHaveBeenCalled();
+  expect(test.view.error).toBe('models.unified.favoriteExists');
+});
+
+it('distinguishes recommended settings from explicit overrides with the same values',async()=>{
+  await mount();
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  expect(test.view.options.canReset).toBe(false);
+  test.prefs.engines[JSON.stringify(['account','model'])]='codex';
+  await mount();
+  expect(test.view.options.canReset).toBe(true);
+  await act(async()=>test.view.options.onReset());
+  expect(test.view.options.canReset).toBe(false);
+  expect(test.prefs.engines).toEqual({});
+});
+
+it('resets engine, effort and Fast overrides for this model while preserving favorites and other models',async()=>{
+  const effort=new Map([['codex:codex/model','high'],['claude-code:model','high'],['codex:other','high']]);
+  const fast=new Map([['codex:codex/model',true],['claude-code:model',false],['codex:other',true]]);
+  const memory={
+    getEffort:(a:string,_p:string,m:string)=>effort.get(`${a}:${m}`),
+    getFast:(a:string,_p:string,m:string)=>fast.get(`${a}:${m}`),
+    setEffort:vi.fn(),setFast:vi.fn(),
+    clearEffort:vi.fn((a:string,_p:string,m:string)=>{effort.delete(`${a}:${m}`);}),
+    clearFast:vi.fn((a:string,_p:string,m:string)=>{fast.delete(`${a}:${m}`);}),
+  };
+  const saved={uid:'original',providerId:'account',modelId:'model',agent:'codex',effort:'high',fast:true};
+  test.prefs={favorites:[saved],engines:{[JSON.stringify(['account','model'])]:'claude-code',[JSON.stringify(['account','other'])]:'codex'}};
+  const {onSelect}=await mount(undefined,{activeModelId:'other',modelMemory:memory});
+  const source=test.view.groups.flatMap((g:any)=>g.rows).find((r:any)=>!r.favorite);
+  await act(async()=>test.view.onOptions(source));
+  expect(test.view.options.canReset).toBe(true);
+  await act(async()=>test.view.options.onReset());
+  expect(test.view.options.canReset).toBe(false);
+  expect(test.view.options.row.config).toMatchObject({agent:'codex',effort:'medium',fast:false});
+  expect([...effort.entries()]).toEqual([['codex:other','high']]);
+  expect([...fast.entries()]).toEqual([['codex:other',true]]);
+  expect(test.prefs.engines).toEqual({[JSON.stringify(['account','other'])]:'codex'});
+  expect(test.prefs.favorites).toEqual([saved]);
+  expect(onSelect).not.toHaveBeenCalled();
+});
+
+it('does not clear model memory when restoring the active configuration is cancelled',async()=>{
+  const memory={getEffort:()=>undefined,getFast:()=>undefined,setEffort:vi.fn(),setFast:vi.fn(),clearEffort:vi.fn(),clearFast:vi.fn()};
+  await mount(vi.fn(async()=>false),{selectedEffort:'high',selectedFastMode:true,modelMemory:memory});
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  await act(async()=>test.view.options.onReset());
+  expect(test.view.options.canReset).toBe(true);
+  expect(test.view.options.row.config).toMatchObject({effort:'high',fast:true});
+  expect(memory.clearEffort).not.toHaveBeenCalled();
+  expect(memory.clearFast).not.toHaveBeenCalled();
+  expect(test.save).not.toHaveBeenCalled();
+});
+
+it('restores session mirrors through the existing value-only remote accessors',async()=>{
+  const {makeSessionMirrorAccessors,clearSessionMirror}=await vi.importActual<typeof import('@/session/sessionModelMirror')>('@/session/sessionModelMirror');
+  const onWrite=vi.fn();
+  const memory=makeSessionMirrorAccessors('restore-test',onWrite);
+  try {
+    memory.setEffort('codex','account','codex/model','high');
+    memory.setFast('codex','account','codex/model',true);
+    onWrite.mockClear();
+    await mount(undefined,{activeModelId:'other',modelMemory:memory});
+    await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+    expect(test.view.options.canReset).toBe(true);
+    await act(async()=>test.view.options.onReset());
+    expect(memory.getEffort('codex','account','codex/model')).toBe('medium');
+    expect(memory.getFast('codex','account','codex/model')).toBe(false);
+    expect(onWrite).toHaveBeenCalledWith('codex','account','codex/model',{effort:'medium'});
+    expect(onWrite).toHaveBeenCalledWith('codex','account','codex/model',{fast:false});
+    expect(test.view.options.canReset).toBe(false);
+  } finally { clearSessionMirror('restore-test'); }
+});
+
+it('rolls back the active configuration if saving a recommendation reset fails',async()=>{
+  const memory={getEffort:()=>undefined,getFast:()=>undefined,setEffort:vi.fn(),setFast:vi.fn(),clearEffort:vi.fn(),clearFast:vi.fn()};
+  const {onSelect}=await mount(undefined,{selectedEffort:'high',selectedFastMode:true,modelMemory:memory});
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  test.save.mockRejectedValueOnce(new Error('disk unavailable'));
+  await act(async()=>test.view.options.onReset());
+  expect(onSelect).toHaveBeenNthCalledWith(1,expect.objectContaining({effort:'medium',fast:false}));
+  expect(onSelect).toHaveBeenNthCalledWith(2,expect.objectContaining({effort:'high',fast:true}));
+  expect(memory.clearEffort).not.toHaveBeenCalled();
+  expect(memory.clearFast).not.toHaveBeenCalled();
+  expect(test.view.options.notice).toBeNull();
+  expect(test.view.error).toBe('models.unified.saveFailed');
+});
+
+it('restores the session-pinned baseline without leaving a reset button', async () => {
+  test.entries[0].nativeAgent = null;
+  test.entries[0].recommended = 'claude-code';
+  const memory = {getEffort:()=>undefined,getFast:()=>undefined,setEffort:vi.fn(),setFast:vi.fn()};
+  await mount(undefined, {activeModelId:'other',modelMemory:memory});
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  expect(test.view.options.canReset).toBe(false);
+  await act(async()=>test.view.options.onChange({...test.view.options.row.config,agent:'claude-code',modelId:'model',effort:'high'}));
+  expect(test.view.options.canReset).toBe(true);
+  await act(async()=>test.view.options.onReset());
+  expect(test.view.options.row.config).toMatchObject({agent:'codex',effort:'medium',fast:false});
+  expect(test.view.options.canReset).toBe(false);
+  expect(test.prefs.engines).toEqual({});
+});
+
+it.each(['edit','parameters','favorite','failure'])('ignores late %s UI completion after close and reopen', async (operation) => {
+  test.prefs.favorites=[{uid:'fav',providerId:'account',modelId:'model',agent:'codex',effort:'medium',fast:false}];
+  await mount();
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  if (operation === 'edit' || operation === 'failure') {
+    await act(async()=>test.view.options.onEditFavorite());
+    await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high'}));
+  }
+  let finish!:()=>void;
+  const pending=new Promise<void>(resolve=>{finish=resolve;});
+  test.save.mockImplementationOnce(async value=>{await pending;if(operation==='failure') throw new Error('offline');test.prefs=value;});
+  await act(async()=>{
+    if(operation==='parameters') test.view.options.onChange({...test.view.options.row.config,effort:'high'});
+    else if(operation==='favorite') test.view.options.onFavorite();
+    else test.view.options.onSaveEdit();
+  });
+  expect(test.view.busy).toBe(true);
+  await mount(undefined,{visible:false});
+  await mount(undefined,{visible:true});
+  expect(test.view.options).toBeUndefined();
+  expect(test.view.busy).toBe(true);
+  await act(async()=>{finish();await pending;});
+  expect(test.view.options).toBeUndefined();
+  expect(test.view.error).toBeNull();
+  expect(test.view.busy).toBe(false);
+  if(operation==='edit') expect(test.prefs.favorites[0].effort).toBe('high');
+});
+
+it.each(['success', 'cancel', 'save-failure'])('applies ordinary edits of the running favorite while another model is pending: %s', async outcome => {
+  const saved = {uid:'running',providerId:'account',modelId:'codex/model',agent:'codex',effort:'high',fast:true};
+  test.prefs.favorites = [saved];
+  const onSelect = vi.fn(async () => outcome !== 'cancel');
+  const memory = {getEffort:()=>undefined,getFast:()=>undefined,setEffort:vi.fn(),setFast:vi.fn()};
+  await mount(onSelect, {
+    agentKind:'claude-code',activeModelId:'pending-model',modelMemory:memory,
+    unified:{scope:'user-device',agents:['codex','claude-code'],loadCapabilities:async()=>({hasFastMode:true}),onSelect,
+      currentSelection:{agentKind:'codex',activeModelId:'codex/model',selectedProviderId:'account',selectedEffort:'high',selectedFastMode:true}},
+  });
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  expect(test.view.options.row.selected).toBe(false);
+  if(outcome === 'save-failure') test.save.mockRejectedValueOnce(new Error('offline'));
+  await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'medium'}));
+  expect(onSelect).toHaveBeenNthCalledWith(1,{providerId:'account',modelId:'codex/model',agent:'codex',effort:'medium',fast:true});
+  expect(test.prefs.favorites).toEqual([saved]);
+  if(outcome === 'cancel') {
+    expect(test.save).not.toHaveBeenCalled();
+    expect(memory.setEffort).not.toHaveBeenCalled();
+  } else if(outcome === 'save-failure') {
+    expect(onSelect).toHaveBeenNthCalledWith(2,{providerId:'account',modelId:'codex/model',agent:'codex',effort:'high',fast:true});
+    expect(memory.setEffort).not.toHaveBeenCalled();
+    expect(test.view.error).toBe('models.unified.saveFailed');
+  } else {
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(memory.setEffort).toHaveBeenCalledWith('codex','account','codex/model','medium');
+  }
+});
+
+it.each(['closed', 'reopened', 'rebound'])('does not roll back a newer selection after the original panel is %s', async lifecycle => {
+  let rejectSave!: (error: Error) => void;
+  const pending = new Promise<void>((_resolve,reject)=>{rejectSave=reject;});
+  test.save.mockImplementationOnce(()=>pending);
+  const onSelect = vi.fn(async()=>true);
+  await mount(onSelect);
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high'}));
+  expect(onSelect).toHaveBeenCalledOnce();
+  expect(test.save).toHaveBeenCalledOnce();
+  if(lifecycle === 'rebound') {
+    await mount(onSelect,{activeModelId:'new-model',unified:{scope:'other-device',agents:['codex','claude-code'],loadCapabilities:async()=>({hasFastMode:true}),onSelect}});
+  } else {
+    await mount(onSelect,{visible:false,activeModelId:'new-model'});
+    if(lifecycle === 'reopened') await mount(onSelect,{activeModelId:'new-model'});
+  }
+  await act(async()=>{rejectSave(new Error('stale favorite binding'));});
+  expect(onSelect).toHaveBeenCalledOnce();
+  expect(test.view.error).toBeNull();
+  expect(test.view.busy).toBe(false);
+});
+
+it('does not start preference writes after selection completes for a closed panel', async()=>{
+  let finish!: (applied: boolean)=>void;
+  const onSelect = vi.fn(()=>new Promise<boolean>(resolve=>{finish=resolve;}));
+  const memory = {getEffort:()=>undefined,getFast:()=>undefined,setEffort:vi.fn(),setFast:vi.fn()};
+  await mount(onSelect,{modelMemory:memory});
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high'}));
+  await mount(onSelect,{visible:false,modelMemory:memory});
+  await mount(onSelect,{modelMemory:memory});
+  await act(async()=>{finish(true);});
+  expect(test.save).not.toHaveBeenCalled();
+  expect(memory.setEffort).not.toHaveBeenCalled();
+  expect(onSelect).toHaveBeenCalledOnce();
+  expect(test.view.options).toBeUndefined();
+  expect(test.view.error).toBeNull();
+});
+
+it('explains a closed current model without changing it and still allows choosing a replacement', async () => {
+  const { onSelect } = await mount(undefined, {
+    providersReady: true,
+    modelVisibilityOverrides: { 'codex:account:codex/model': false },
+  });
+  expect(test.view.error).toBe('session.common.modelHiddenReselect');
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(test.view.busy).toBe(false);
+  await act(async () => test.view.onSelect(test.view.groups[0].rows[0]));
+  expect(onSelect).toHaveBeenCalledOnce();
+});
+
+// 远程 Agent:其他电脑上开放了远程调用的供应商接在被控电脑自己的之后,每个供应商一段、标题带电脑名。
+const studioCatalog = {
+  deviceId:'device-studio-mac', name:'Studio Mac', status:'ready',
+  providers:[{id:'account',name:'Studio Provider',models:{},connected:true,logoKind:'anthropic'}],
+};
+const remoteId = 'remote:["device-studio-mac","account"]';
+async function mountRemote(selectedDeviceId:string|null,onSelect=vi.fn(async()=>true)) {
+  const onClose=vi.fn();
+  await act(async()=>root.render(createElement(UnifiedModelPickerSheet,{
+    visible:true,onClose,providers:[{id:'account',name:'Provider',models:{},connected:true}],agentKind:'codex',capabilities:{hasFastMode:true},
+    activeModelId:'codex/model',selectedProviderId:'account',selectedEffort:'medium',selectedFastMode:false,
+    existingSessionRoute:true,modelMemory:{getEffort:()=>undefined,getFast:()=>undefined,setEffort:vi.fn(),setFast:vi.fn()},
+    unified:{scope:'user-device',agents:['codex','claude-code'],loadCapabilities:async()=>({hasFastMode:true}),onSelect,
+      remote:{catalogs:[studioCatalog],selectedDeviceId}},
+  } as any)));
+  return {onSelect,onClose};
+}
+it('lists another computer\'s providers after the controlled computer\'s own',async()=>{
+  await mountRemote(null);
+  expect(test.view.groups.map((g:any)=>g.key)).toEqual(['recommended',remoteId]);
+  expect(test.view.groups[1].title).toBe('models.unified.remoteProvider');
+  const remoteRow = test.view.groups[1].rows[0];
+  expect(remoteRow.remoteDevice).toEqual({deviceId:'device-studio-mac',name:'Studio Mac'});
+  expect(remoteRow.providerMark).toMatchObject({name:'Studio Provider',logoKind:'anthropic'});
+  // 选中态只在 Agent 所在的那份目录里。
+  expect(remoteRow.selected).toBe(false);
+  expect(test.view.groups[0].rows[0].selected).toBe(true);
+  expect(test.view.filters.at(-1)).toMatchObject({
+    id:remoteId,
+    remote:{deviceId:'device-studio-mac',deviceName:'Studio Mac',providerLabel:'Studio Provider'},
+  });
+  // 只看被控电脑的某个供应商 / 收藏时,不夹带其他电脑。
+  await act(async()=>test.view.onFilter('account'));
+  expect(test.view.groups.map((g:any)=>g.key)).toEqual(['account']);
+  await act(async()=>test.view.onFilter(remoteId));
+  expect(test.view.groups.map((g:any)=>g.key)).toEqual([remoteId]);
+});
+it('passes the computer of the picked row with the selection',async()=>{
+  const {onSelect}=await mountRemote(null);
+  await act(async()=>test.view.onSelect(test.view.groups[1].rows[0]));
+  expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({providerId:'account',agent:'codex'}),{deviceId:'device-studio-mac'});
+});
+it('opens on the Agent\'s computer and marks the current model there',async()=>{
+  await mountRemote('device-studio-mac');
+  expect(test.view.filter).toBe(remoteId);
+  expect(test.view.groups.map((g:any)=>g.key)).toEqual([remoteId]);
+  expect(test.view.groups[0].rows[0].selected).toBe(true);
+  await act(async()=>test.view.onFilter('all'));
+  expect(test.view.groups.find((g:any)=>g.key==='recommended')?.rows.some((row:any)=>row.selected)??false).toBe(false);
+});
+it('keeps settings of another computer\'s rows out of this phone\'s preferences',async()=>{
+  const {onSelect}=await mountRemote(null);
+  await act(async()=>test.view.onOptions(test.view.groups[1].rows[0]));
+  expect(test.view.options.favoritesDisabled).toBe(true);
+  expect(test.view.options.canReset).toBe(false);
+  await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high'}));
+  expect(test.save).not.toHaveBeenCalled();
+  expect(onSelect).not.toHaveBeenCalled();
+  // 调好的档位跟着这一行,选中时一并带上。
+  expect(test.view.options.row.config.effort).toBe('high');
+  expect(test.view.options.canReset).toBe(true);
+  await act(async()=>test.view.onBack());
+  await act(async()=>test.view.onSelect(test.view.groups[1].rows[0]));
+  expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({effort:'high'}),{deviceId:'device-studio-mac'});
 });

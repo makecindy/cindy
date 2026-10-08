@@ -9,8 +9,15 @@ describe('notification plain text', () => {
     ['`a_b * 2`\n\n```ts\nconst a_b = 2 * 3;\n```', 'a_b * 2 const a_b = 2 * 3;'],
     ['> 已完成\n\n- 第一项\n- 第二项\n\n~~旧内容~~', '已完成 第一项 第二项 旧内容'],
     ['![private filename](/private/file.png)', ''],
+    ['![private filename][image]\n\n[image]: https://example.com/image.png', ''],
+    ['<img src="https://example.com/image.png" alt="private filename">', ''],
+    ['&amp; &#x1f600; &lt;tag&gt;', '& 😀 <tag>'],
     ['**日本語** / _한국어_ / [繁體中文](url)', '日本語 / 한국어 / 繁體中文'],
   ])('converts %s', (markdown, expected) => expect(notificationPreview(markdown)).toBe(expected));
+  it('does not stall on bracketed repeated code spans', () => {
+    const markdown = '[' + '`````a`````'.repeat(15) + ']';
+    expect(notificationPreview(markdown)).toBe('[' + ('a' + '`'.repeat(10)).repeat(14) + 'a]');
+  });
   it('shortens after parsing, without splitting Unicode characters', () => {
     expect(notificationPreview('**😀中文abc**', 4)).toBe('😀中文');
     expect(notificationPreview('abc😀', 4)).toBe('abc');

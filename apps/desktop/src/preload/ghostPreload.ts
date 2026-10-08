@@ -35,8 +35,6 @@ import { contextBridge, ipcRenderer } from 'electron';
  *   的语法糖;URL 白名单守门在主机侧 previewSlot。
  * - workspace(req):workspace 槽的便捷口——send({type:'workspace-request',
  *   …req}) 的语法糖;目录授权与会话创建守门全在主机侧 workspaceSlot。
- * - iosSimulator.request(req):ios-simulator 槽的便捷口——只能读取当前台前
- *   任务的公开状态并打开 Host 内置面板；不提供帧、输入或 Sidecar 权限。
  * - confirm(req):confirm 槽的便捷口——send({type:'confirm-request', …req}) 的
  *   语法糖;主机弹自己那套确认框并把用户的真实点击回给沙箱,资格审/净化/限速/
  *   单飞/超时兜底全在主机侧 confirmSlot 与 ghostConfirmDialogBridge。
@@ -61,10 +59,23 @@ contextBridge.exposeInMainWorld('cindy', {
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'host-request' }),
   fetch: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'fetch-request' }),
+  downloads: {
+    start: (req: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'download-request', kind: 'start' }),
+    cancel: (req: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'download-request', kind: 'cancel' }),
+  },
   fs: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'fs-request' }),
   library: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'library-request' }),
+  tasks: Object.fromEntries(
+    ['capabilities', 'models', 'setModel', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'create', 'list', 'get', 'send', 'getRun', 'listRuns', 'cancel', 'readMessages'].map(kind => [
+      kind, async (req: Record<string, unknown> = {}): Promise<unknown> => {
+        const result = await ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'tasks-request', kind });
+        if (result?.ok === true) return result.data;
+        throw Object.assign(new Error(result?.error?.message ?? 'Task request failed'), { code: result?.error?.code ?? 'HOST_NOT_READY', retryable: result?.error?.retryable === true });
+      },
+    ]),
+  ),
   agent: {
     run: (req: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'agent-request' }),
@@ -101,10 +112,6 @@ contextBridge.exposeInMainWorld('cindy', {
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'preview-request' }),
   workspace: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'workspace-request' }),
-  iosSimulator: {
-    request: (req: Record<string, unknown>): Promise<unknown> =>
-      ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'ios-simulator-request' }),
-  },
   confirm: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'confirm-request' }),
 });

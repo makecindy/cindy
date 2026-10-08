@@ -114,7 +114,6 @@ const subagentRunsKeys = exposedNestedKeys(localDbBody, 'subagentRuns');
 const orcaWorkflowKeys = exposedNestedKeys(localDbBody, 'orcaWorkflows');
 const gitReviewKeys = exposedNestedKeys(source, 'gitReview');
 const makerKeys = exposedNestedKeys(source, 'maker');
-const iosSimulatorKeys = exposedNestedKeys(source, 'iosSimulator');
 const fileBrowserKeys = exposedNestedKeys(source, 'fileBrowser');
 const terminalKeys = exposedNestedKeys(source, 'terminal');
 const processMonitorKeys = exposedNestedKeys(source, 'processMonitor');
@@ -188,7 +187,8 @@ describe('sidebarWindowPreload 椤跺眰濂戠害', () => {
     expect(fileBrowserKeys).toEqual(expect.arrayContaining([
       'listDir', 'listAllFiles', 'readFile', 'writeFile', 'createFile', 'createFolder',
       'deleteEntry', 'renameEntry', 'stat', 'startWatch', 'stopWatch', 'onEvent',
-      'fetchRemote', 'readCached', 'cachePut', 'onTransferProgress', 'chatFetch', 'chatStat',
+      'fetchRemote', 'readCached', 'cachePut', 'onTransferProgress', 'chatFetch', 'chatDownload',
+      'chatStat',
     ]));
     expect(terminalKeys).toEqual(expect.arrayContaining([
       'create', 'write', 'resize', 'dispose', 'restart', 'onData', 'onExit',
@@ -311,13 +311,7 @@ describe('sidebar nested namespace contract', () => {
     expect(makerKeys).toEqual(expect.arrayContaining([
       'getTurnChangeSets', 'getWorkflowProgress', 'listSessionBackgroundTasks', 'stopAgentTask',
       'getPendingInteractions',
-      'iosSimulator',
     ]));
-    expect(iosSimulatorKeys).toEqual(expect.arrayContaining([
-      'requestAccess', 'status', 'call', 'setAgentControl', 'setMutationControl',
-      'setViewerVisibility', 'retryNativeRoute', 'latestFrame', 'copyScreenshot',
-      'setStreamProfile', 'liveTouch',
-      'onH264Frame', 'onRouteStatus', 'onFocusRequest',
-    ]));
+    expect(makerKeys).not.toContain('iosSimulator');
   });
 });

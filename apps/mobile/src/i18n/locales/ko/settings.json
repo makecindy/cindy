@@ -19,8 +19,8 @@
     "cancel": "취소",
     "exportHint": "문제 해결을 위해 상세 로컬 로그를 공유합니다. 대화 내용이나 인증 정보는 포함하지 않습니다.",
     "options": "로그 옵션",
-    "uploadCopied": "업로드했습니다. 번호 {{code}}를 복사했습니다.",
-    "uploadSucceeded": "업로드했습니다. 번호 {{code}}."
+    "uploadCopied": "로그를 업로드했습니다. 번호 {{code}}를 복사했습니다",
+    "uploadSucceeded": "로그를 업로드했습니다. 번호 {{code}}"
   },
   "title": "설정",
   "appearance": {
@@ -47,20 +47,22 @@
   },
   "version": {
     "sectionTitle": "버전",
-    "currentLabel": "현재 버전",
-    "bundleVersion": "앱 패키지 {{version}}",
-    "otaVersion": "OTA 버전 {{version}}",
+    "appVersion": "버전 {{version}}",
+    "updateMethodInApp": "업데이트 방식: 앱 내 업데이트(다시 시작하면 적용)",
+    "updateMethodPackage": "업데이트 방식: 새 버전을 다운로드해 설치",
+    "updateMethodUnavailable": "개발 빌드에서는 앱 내 업데이트를 사용할 수 없습니다",
     "pairedDesktopVersion": "연동 대상 데스크톱 버전 {{version}}",
-    "devNoOta": "개발 빌드에서는 OTA 업데이트를 사용할 수 없습니다",
     "checkAction": "업데이트 확인",
     "testFlightCheckAction": "콘텐츠 업데이트 확인",
     "checking": "확인 중",
-    "updating": "업데이트 중",
     "checkingAccessibility": "업데이트를 확인하는 중",
     "testFlightCheckingAccessibility": "콘텐츠 업데이트를 확인하는 중",
     "testFlightUpdateManaged": "테스트 빌드 업데이트는 TestFlight에서 관리합니다",
     "testFlightNoContentUpdate": "사용 가능한 콘텐츠 업데이트가 없습니다. 새 테스트 빌드는 TestFlight에서 확인해 주세요.",
     "testFlightContentUpdateUnavailable": "이 빌드에서는 콘텐츠 업데이트를 확인할 수 없습니다. 새 테스트 빌드는 TestFlight에서 확인해 주세요.",
+    "googlePlayUpdateManaged": "앱 버전 업데이트는 Google Play에서 관리합니다",
+    "googlePlayNoContentUpdate": "사용 가능한 콘텐츠 업데이트가 없습니다. 새 앱 버전은 Google Play에서 확인해 주세요.",
+    "googlePlayContentUpdateUnavailable": "이 빌드에서는 콘텐츠 업데이트를 확인할 수 없습니다. 새 앱 버전은 Google Play에서 확인해 주세요.",
     "bundleUpdateFound": "앱 패키지 업데이트가 있습니다",
     "upToDate": "이미 최신 버전입니다",
     "bundleUpToDateNoOta": "앱 패키지는 최신입니다. 현재 버전은 OTA 업데이트를 지원하지 않습니다",
@@ -144,7 +146,8 @@
     "runtime": "Runtime",
     "otaMarker": "OTA 마커",
     "emergencyLaunch": "긴급 실행",
-    "emergencyLaunchYes": "예 (이번 실행에서는 OTA를 적용할 수 없음)"
+    "emergencyLaunchYes": "예 (이번 실행에서는 OTA를 적용할 수 없음)",
+    "otaVersion": "OTA 버전"
   },
   "legal": {
     "sectionTitle": "법적 정보",
@@ -161,6 +164,8 @@
     "analyticsResetAction": "되돌리기"
   },
   "account": {
+    "logoutConfirmTitle": "로그아웃할까요?",
+    "logoutConfirmRunning": "실행 중인 세션이 있습니다. 세션은 컴퓨터에서 계속 실행되지만 이 휴대폰에서는 더 이상 받거나 제어할 수 없으며, 저장된 계정과 로컬 원격 미러도 삭제됩니다.",
     "logoutHint": "로그아웃하면 이 휴대폰에 저장된 모든 계정과 로컬 원격 미러가 삭제됩니다. 컴퓨터의 세션에는 영향이 없습니다.",
     "logout": "로그아웃",
     "loggingOut": "로그아웃 중",
@@ -193,9 +198,12 @@
     "resetAccessibility": "기본 기기 이름 복원",
     "emptyError": "기기 이름을 입력해 주세요.",
     "deviceInitializing": "기기를 초기화하는 중입니다. 잠시 후 다시 시도해 주세요.",
-    "saving": "저장 중…",
-    "saved": "저장했습니다.",
-    "restoringDefault": "기본 이름을 복원하는 중…",
-    "restoredDefault": "기본 이름을 복원했습니다."
+    "restoredDefault": "기본 이름을 복원했습니다.",
+    "resetAction": "기본 이름 복원",
+    "clearAccessibility": "이름 지우기",
+    "discardTitle": "변경 사항을 버릴까요?",
+    "discardBody": "기기 이름 변경 사항이 아직 저장되지 않았습니다.",
+    "discardConfirm": "변경 사항 버리기",
+    "keepEditing": "계속 편집"
   }
 }

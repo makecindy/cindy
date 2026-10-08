@@ -165,10 +165,14 @@ describe('统一 composer 建议入口', () => {
     expect(screen.getByText('Cindy Art')).toBeTruthy();
     const plan = screen.getByRole('menuitemcheckbox', { name: 'planMode.menuItem' });
     expect(plan.getAttribute('aria-checked')).toBe('true');
-    expect(plan.className).toContain('rounded-[8px]');
+    // Shared menu row (DESIGN §4 Composer dropdown rows): 8px inner tier, the panel's glide
+    // highlight instead of an own hover fill, and the checked row turns 500.
+    expect(plan.className).toContain('rounded-lg');
     expect(plan.className).toContain('px-3');
     expect(plan.className).toContain('py-2');
-    expect(plan.className).toContain('hover:bg-[var(--model-item-hover)]');
+    expect(plan.className).not.toContain('hover:bg-');
+    expect(plan.hasAttribute('data-menu-row')).toBe(true);
+    expect(plan.getAttribute('data-state')).toBe('checked');
     fireEvent.click(plan);
     expect(onPlanToggle).toHaveBeenCalledWith(false);
     expect(
@@ -227,37 +231,6 @@ describe('统一 composer 建议入口', () => {
     expect(document.activeElement).toBe(removeButton);
     await user.keyboard('{Enter}');
     expect(onRemove).toHaveBeenCalledWith('/repo-shared');
-  });
-
-  it('Host capability 插件由统一建议面板交给 composer 处理，不伪造 command', () => {
-    const entries = buildComposerSuggestionEntries({
-      query: '',
-      actions: [],
-      resources: [],
-      plugins: [iosSimulatorPluginSuggestion],
-    });
-    const onSelect = vi.fn();
-    render(
-      createElement(AtMentionPanel, {
-        query: '',
-        state: { kind: 'ready', items: [], truncated: false },
-        entries,
-        focusedIndex: 0,
-        onFocusedIndexChange: vi.fn(),
-        onSelect,
-        onClose: vi.fn(),
-        onRetry: vi.fn(),
-        embedded: true,
-      }),
-    );
-
-    const pluginRow = screen.getByRole('button', { name: 'iOS Simulator' });
-    expect((pluginRow as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(pluginRow);
-    expect(onSelect).toHaveBeenCalledWith({
-      kind: 'resource',
-      item: iosSimulatorPluginSuggestion.item,
-    });
   });
 
   it('已停用优先显示停用状态；可用但无直接入口的 Skill 标为 Agent 自动调用', () => {

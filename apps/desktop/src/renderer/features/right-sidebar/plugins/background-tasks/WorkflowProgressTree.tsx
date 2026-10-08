@@ -92,7 +92,7 @@ export function WorkflowProgressTree({ model }: WorkflowProgressTreeProps) {
     metaParts.push(t('chat.agentTask.toolUses', { count: aggregate.totalToolCalls }));
   }
   if (typeof aggregate.durationMs === 'number') {
-    metaParts.push(formatDuration(aggregate.durationMs));
+    metaParts.push(formatDuration(aggregate.durationMs, t));
   }
 
   const stripCells = model.groups.flatMap((group) =>
@@ -193,7 +193,7 @@ function AgentRow({ row }: { row: WorkflowTreeAgentRow }) {
       )}
       {isDoneState && typeof row.durationMs === 'number' && (
         <span className="shrink-0 text-11 leading-4 text-[var(--text-tertiary)]">
-          {formatDuration(row.durationMs)}
+          {formatDuration(row.durationMs, t)}
         </span>
       )}
     </div>

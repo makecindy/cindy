@@ -35,6 +35,7 @@ it('retains credentials before deletion commits and retries failed cleanup after
   const store = createCompanionEnvironmentStore(io);
   const environment = { version: 1 as const, env: { TOKEN: 'fixture-secret' }, mcp: [], credentials: [] };
   await store.write(root, 'fixture', environment, () => {});
+  remove.mockClear();
   await store.stageRemoval(root, 'fixture', () => {});
   const marker = path.join(root, 'companion-import-cleanups/fixture.json');
   expect(await fs.readFile(marker, 'utf8')).not.toContain('fixture-secret');
@@ -46,14 +47,14 @@ it('retains credentials before deletion commits and retries failed cleanup after
   await fs.rm(path.join(root, 'bots/fixture'), { recursive: true });
   remove.mockReturnValueOnce(false);
   await expect(store.finishRemoval(root, 'fixture', () => {})).rejects.toThrow('CREDENTIAL_STORAGE_FAILED');
-  expect(values.size).toBe(1);
+  expect(values.size).toBe(2);
   expect(await fs.readFile(marker, 'utf8')).toContain('fixture');
   const restarted = createCompanionEnvironmentStore(io);
   await restarted.recoverRemovals(root, () => {}, async () => false);
   expect(values.size).toBe(0);
   await expect(fs.access(marker)).rejects.toThrow();
   await restarted.recoverRemovals(root, () => {}, async () => false);
-  expect(remove).toHaveBeenCalledTimes(2);
+  expect(remove).toHaveBeenCalledTimes(3);
 });
 
 it('retains pending cleanup if ownership changes while checking the committed profile state', async () => {
@@ -83,7 +84,7 @@ it('does no cleanup writes for ordinary companions even when the cleanup path is
 
 it('still stages a vault-only checkpoint left before the binding was written', async () => {
   const values = new Map([[companionEnvironmentKey('fixture'), 'private-checkpoint']]);
-  const store = createCompanionEnvironmentStore({ read: key => values.get(key) ?? null, write: () => true, remove: key => values.delete(key) });
+  const store = createCompanionEnvironmentStore({ read: key => values.get(key) ?? null, write: () => true, remove: key => { values.delete(key); return true; } });
   await store.stageRemoval(root, 'fixture', () => {});
   await store.finishRemoval(root, 'fixture', () => {});
   expect(values.size).toBe(0);
@@ -127,4 +128,18 @@ it('joins asynchronous writes before committed deletion removes credentials', as
   release();
   await rejected; await removal;
   expect(values.size).toBe(0);
+});
+
+it('recovers media cleanup before removing the private import checkpoint', async () => {
+  const remove = vi.fn(() => true);
+  const removeResources = vi.fn().mockRejectedValueOnce(new Error('ledger unavailable')).mockResolvedValue(undefined);
+  const store = createCompanionEnvironmentStore({ read: () => 'private-checkpoint', write: () => true, remove, removeResources });
+  await store.stageRemoval(root, 'fixture', () => {});
+  await expect(store.finishRemoval(root, 'fixture', () => {})).rejects.toThrow('ledger unavailable');
+  expect(remove).not.toHaveBeenCalled();
+  await expect(fs.access(path.join(root, 'companion-import-cleanups/fixture.json'))).resolves.toBeUndefined();
+  await store.recoverRemovals(root, () => {}, async () => false);
+  expect(removeResources).toHaveBeenCalledTimes(2);
+  expect(remove).toHaveBeenCalledTimes(2);
+  await expect(fs.access(path.join(root, 'companion-import-cleanups/fixture.json'))).rejects.toThrow();
 });

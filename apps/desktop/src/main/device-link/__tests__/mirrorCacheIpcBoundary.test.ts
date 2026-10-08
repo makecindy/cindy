@@ -234,7 +234,7 @@ it('records the originating window and raw error before the IPC adapter maps it'
     vi.mocked(remoteInvoke).mockRejectedValueOnce(new DeviceLinkError('BACKPRESSURE', 'private failure'));
     await expect(call(DEVICE_LINK_INVOKE.INVOKE, {
       deviceId: 'private-peer', channel: 'local-db:sessions:list', args: ['private argument'],
-    })).rejects.toThrow('DEVICE_LINK_NOT_CONNECTED');
+    })).rejects.toThrow('DEVICE_LINK_BUSY');
     expect(h.diagnosticsInfo).toHaveBeenCalledWith('transport first failure', expect.objectContaining({
       windowId: 42, operation: 'invoke', channel: 'local-db:sessions:list', code: 'BACKPRESSURE', completed: 1,
     }));

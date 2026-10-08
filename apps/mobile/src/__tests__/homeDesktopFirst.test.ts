@@ -294,10 +294,12 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('<HomeHeaderGlassButton');
     const floatingAction = readSource('src/session/HomeNewTaskButton.tsx');
     expect(source).toContain('<HomeNewTaskButton');
-    expect(floatingAction).toContain('prominent size={HOME_NEW_TASK_SIZE} artworkSize={iconSize.xxl}');
+    expect(floatingAction).toContain('prominent={!glass} size={HOME_NEW_TASK_SIZE} artworkSize={iconSize.xxl}');
     // Preserve SquarePen artwork while adopting the shared native action size.
     expect(floatingAction).toContain('SquarePen');
-    expect(floatingAction).toContain('<SquarePen color={colors.ctaText} size={iconSize.xxl} strokeWidth={iconStroke.regular} />');
+    // Untinted system glass with a primary icon; the solid filled circle is only the no-glass fallback.
+    expect(floatingAction).toContain('<SquarePen color={glass ? colors.textPrimary : colors.ctaText} size={iconSize.xxl} strokeWidth={iconStroke.regular} />');
+    expect(floatingAction).toContain('prominent={!glass}');
     expect(source).not.toContain('<Send');
     expect(source).not.toContain('function HomeNewChatGlyph');
     expect(source).not.toContain("import Svg, { Path } from 'react-native-svg';");
@@ -307,8 +309,10 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('fontWeight: fontWeight.medium');
     expect(floatingAction).toContain('testID="home.newChatButton"');
     expect(floatingAction).toContain("position: 'absolute'");
-    expect(floatingAction).toContain('bottom: 45 + bottomInset');
-    expect(floatingAction).toContain('right: 20');
+    // The button sits on the composer's resting line so the circle can stretch into the pill.
+    expect(floatingAction).toContain('bottom: bottomInset + composerGeometry.restingGap');
+    expect(floatingAction).toContain('right: composerGeometry.horizontalInset');
+    expect(floatingAction).toContain('HOME_NEW_TASK_SIZE = composerGeometry.pillHeight');
   });
 
   it('opens desktop-parity search filters from the search sliders, not display settings', () => {
@@ -554,15 +558,33 @@ describe('mobile home desktop-first surface', () => {
     expect(projectRowSource).not.toContain('<SquarePen');
     expect(projectRowSource).not.toContain('<Ellipsis');
     expect(projectRowSource).not.toContain('project.pendingInteractionCount');
+    // 收起组头汇总对齐桌面 ProjectNode:仅收起时计算,运行态走图标呼吸,右槽只放一颗点。
+    expect(desktopProjectNode).toContain('isCollapsed && lamp?.running');
+    expect(projectRowSource).toMatch(/collapsed\s*\?\s*resolveMobileCollapsedGroupStatus\(project\.sessions,/);
+    expect(projectRowSource).toContain('<SessionStatusPulse running={!!collapsedStatus?.running}>');
+    expect(projectRowSource).toContain('home.projectCollapsedStatus.');
+    // 组头按钮是单个无障碍元素:汇总状态必须挂在按钮自身,读屏才能读出。
+    expect(projectRowSource).toContain('accessibilityValue={collapsedStatusA11y ? { text: collapsedStatusA11y } : undefined}');
     expect(projectRowSource).not.toContain('project.subtitle');
     expect(sessionRowSource).toContain('titleTestIDPrefix = \'home.sessionRowTitle\'');
     expect(sessionRowSource).toContain('`home.sessionRowTitle.${item.session.id}`');
+    // 标签色球紧跟标题(与桌面侧栏一致):标题与色球同在一组,标题只取文字宽度,
+    // 不能再用 flex: 1 把色球挤到行尾贴着时间。
+    const titleCluster = sessionRowSource.slice(
+      sessionRowSource.indexOf('<View style={styles.sessionTitleCluster}>'),
+      sessionRowSource.indexOf('{sourceLabel ? ('),
+    );
+    expect(titleCluster).toMatch(/\{item\.title\}\s*<\/Text>\s*<TaskTagDots tags=\{item\.session\.tags\}/);
+    const listStyles = readSource('src/session/HomeListVisuals.tsx');
+    const titleStyle = listStyles.slice(listStyles.indexOf('  sessionTitle: {'), listStyles.indexOf('},', listStyles.indexOf('  sessionTitle: {')));
+    expect(titleStyle).toContain('flexShrink: 1');
+    expect(titleStyle).not.toContain('flex: 1');
     expect(sessionRowSource).toContain('ellipsizeMode="tail"');
     expect(sessionRowSource).toContain('numberOfLines={1}');
     expect(sessionRowSource).toContain('buildRemoteSessionCardPreview(');
     expect(sessionRowSource).toContain('useRemoteSessionMessagePreview(item.session.id)');
     expect(sessionRowSource).toContain('testID={`home.sessionRowPreview.${item.session.id}`}');
-    expect(sessionRowSource).toContain('const showPreviewLine = !!preview?.trim() || showSchedule || showPinned;');
+    expect(sessionRowSource).toContain('const showPreviewLine = !!group || !!preview?.trim() || showSchedule || showPinned;');
     expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionListRowSingleLine');
     expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionIconCellSingleLine');
     expect(sessionRowSource).toContain('{showPreviewLine ? (');
@@ -738,7 +760,16 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('testID="home.remoteAccessGuide"');
     // 引导态没有可筛选的对话:表头退化为纯品牌标题(无下拉菜单),新建 FAB 不渲染。
     expect(source).toContain('{showRemoteGuide ? (');
-    expect(source).toContain("{newSessionInSystemBar || showRemoteGuide || taskSuggestionsPending || taskSuggestionsMode === 'empty' ? null : (");
+    expect(source).toContain("const newSessionEntryVisible = !showRemoteGuide && !taskSuggestionsPending && taskSuggestionsMode !== 'empty';");
+    expect(source).toContain('{newSessionInSystemBar || newSessionInHeader || !newSessionEntryVisible ? null : (');
+    // 临时任务列表抽屉不浮动新建按钮,新建放进抽屉顶栏;常驻列与首页不变。
+    expect(source).toContain('const headerNewSession = newSessionInHeader && newSessionEntryVisible;');
+    // 顶栏新建与浮动按钮走同一入口(openNewSession → guardedPush → 抽屉 runNavigation 先关再跳)。
+    expect(source).toContain('onPress={() => openNewSession()} testID="home.headerNewSessionButton">');
+    expect(source).toContain("if (run) run(() => push(href)); else push(href);");
+    // 抽屉与首页左上角都只打开系统菜单(HomeChromeDrawer 自有渲染测试),不再有关闭分支。
+    expect(source).toContain('onPress={openChromeMenu}\n          testID="home.chromeMenu"');
+    expect(source).not.toContain('onDismiss');
 
     const guideSource = readSource('src/components/RemoteAccessGuide.tsx');
     // 文案已 i18n 化,断言改查 zh-CN catalog(单一事实源);源码只保留结构/交互契约。
@@ -784,5 +815,23 @@ describe('home menu presentation', () => {
     expect(drawer).toContain('onPress={onClose}');
     expect(drawer).toContain('Gesture.Pan()');
     expect(drawer).not.toContain('ComposerSheet');
+  });
+
+  it('keeps the Android drawer in its own window above the resident home list', () => {
+    const drawer = readSource('src/session/HomeChromeDrawer.tsx');
+    // Wide layouts mount the home list in a root layer after the routes; an in-route
+    // overlay cannot rise above it, so Android presents the drawer as a Dialog window.
+    expect(drawer).not.toContain('if (Platform.OS !== "ios") return overlay;');
+    expect(drawer).toMatch(/<Modal[\s\S]*?onRequestClose=\{requestClose\}[\s\S]*?transparent[\s\S]*?\{content\}\s*<\/Modal>/);
+    expect(drawer).toContain('statusBarTranslucent');
+    expect(drawer).toContain('navigationBarTranslucent');
+    expect(drawer).not.toContain('BackHandler');
+  });
+
+  it('mounts the drawer search only after the Android dialog fully unmounts', () => {
+    const home = readSource('src/session/HomeSurface.tsx');
+    // 退场期间 Dialog 仍占着窗口焦点,搜索框 autoFocus 挂早了首次聚焦和软键盘
+    // 会丢;搜索动作和其它菜单动作一样延后到 onClosed 再执行。
+    expect(home).toContain('pendingMenuActionRef.current = () => setSearchOpen(true);');
   });
 });

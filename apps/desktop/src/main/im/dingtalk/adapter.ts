@@ -5,6 +5,7 @@ import type { DingTalkIM, RichChannelIM } from '@cindy/im';
 import { decodeDingTalkLaneUserId } from '@cindy/im';
 
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
+import { imChannelNoteSourceFromEvent } from '../shared/channelNote';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
 import { handleDingTalkTextInteraction } from './interaction';
 import { createDingTalkTurnPermissionPolicy } from './permissionPolicy';
@@ -69,14 +70,17 @@ export function buildDingTalkAdapter(
       }),
     },
     processingEmoji: '',
+    silentQueue: true,
     buildVendorOptions: (userId) => ({ dingtalkChatId: userId, source: 'dingtalk' }),
-    handleTextInteraction: (userId, request) =>
-      handleDingTalkTextInteraction(dingtalkIm, userId, request),
+    handleTextInteraction: (userId, request, options) =>
+      handleDingTalkTextInteraction(dingtalkIm, userId, request, options),
     // 对齐 Telegram / 飞书的边界：主人私聊完全遵循 session.permissionMode，
     // 因而可以显式选择 bypassPermissions（完全访问）；群聊携带成员可控上下文，
     // 无论谁 @ bot 都附加强确认策略，危险操作仍须主人在群里确认。
     turnPermissionPolicyFor: (event) =>
       event.speaker ? createDingTalkTurnPermissionPolicy(event.messageId, event.speaker.isOwner) : undefined,
+    // 群里发言人已由下面的 `[发言人]` 行写明(含主人标记), 渠道说明不再重复。
+    channelNoteSourceFor: (event) => imChannelNoteSourceFromEvent(event, { omitSender: true }),
     prepareAgentTurnText: async (event) => {
       if (!event.speaker) return null;
       const speaker = sanitizeSpeaker(event.speaker.name);

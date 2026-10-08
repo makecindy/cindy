@@ -7,11 +7,11 @@
 import { describe, it, expect, vi } from 'vitest';
 
 import {
-  clampErrandPermissionMode,
   createGhostErrandRunner,
   type GhostErrandRunnerDeps,
   type GhostErrandSessionRow,
 } from '../ghostErrandRunner';
+import { clampPluginTaskPermissionMode } from '../../cindy-brain/pluginTaskPrefsStore';
 import type { AgentEvent } from '@cindy/maker-core';
 
 /** 最小可观察会话替身:测试手动放事件。 */
@@ -82,7 +82,12 @@ function makeDeps(overrides: Partial<GhostErrandRunnerDeps> = {}): {
     getSessionRow: async () => ACTIVE_ROW,
     createSession: vi.fn(async () => 'sess-new'),
     getGhostName: () => '帮手',
-    getDraftDefaults: () => ({}),
+    resolveExecution: async (cfg, _caller, row) => ({
+      agentKind: cfg.agentKind === 'cc' ? 'claude-code' : cfg.agentKind ?? (row?.agentKind === 'codex' ? 'codex' : row?.agentKind === 'pi' ? 'pi' : 'claude-code'),
+      model: cfg.model ?? row?.model ?? 'claude-x', providerId: cfg.providerId ?? row?.providerId,
+      effort: cfg.effort ?? undefined, fastMode: cfg.fastMode ?? row?.fastMode ?? false,
+    }),
+    captureOwner: () => () => {},
     normalizeWorkingDir: (dir) => dir.replace(/\/+$/, ''),
     isUserPickedDir: () => false,
     isSessionBusy: () => false,
@@ -105,23 +110,25 @@ const REQUEST = {
 };
 
 describe('权限档钳制', () => {
-  it('白名单外/缺省一律收敛到 plan;bypassPermissions 不存在', () => {
-    expect(clampErrandPermissionMode(undefined)).toBe('plan');
-    expect(clampErrandPermissionMode('bypassPermissions')).toBe('plan');
-    expect(clampErrandPermissionMode('ask')).toBe('plan');
-    expect(clampErrandPermissionMode('acceptEdits')).toBe('acceptEdits');
-    expect(clampErrandPermissionMode('auto')).toBe('auto');
+  it('普通任务使用 ask；旧适配器可保留 plan；完全访问不能进入配置', () => {
+    expect(clampPluginTaskPermissionMode(undefined)).toBe('ask');
+    expect(clampPluginTaskPermissionMode(undefined, 'plan')).toBe('plan');
+    expect(clampPluginTaskPermissionMode('bypassPermissions')).toBe('ask');
+    expect(clampPluginTaskPermissionMode('bypassPermissions', 'plan')).toBe('plan');
+    expect(clampPluginTaskPermissionMode('ask')).toBe('ask');
+    expect(clampPluginTaskPermissionMode('acceptEdits')).toBe('acceptEdits');
+    expect(clampPluginTaskPermissionMode('auto')).toBe('auto');
   });
 });
 
 describe('Pi 代办路由', () => {
-  it('读取 Pi 草稿默认并创建 Pi 会话', async () => {
+  it('使用通用任务配置创建 Pi 会话', async () => {
     const createSession = vi.fn(async () => 'sess-pi');
-    const getDraftDefaults = vi.fn(() => ({ model: 'gpt-5.5' }));
+    const resolveExecution = vi.fn(async () => ({ agentKind: 'pi' as const, model: 'gpt-5.5', fastMode: false }));
     const { deps, emitters } = makeDeps({
       readConfig: () => ({ agentKind: 'pi' }),
       createSession,
-      getDraftDefaults,
+      resolveExecution,
     });
     const runner = createGhostErrandRunner(deps);
     const pending = runner(REQUEST);
@@ -129,7 +136,7 @@ describe('Pi 代办路由', () => {
     emitters.get('sess-pi')!.emit(doneEvent());
     await pending;
 
-    expect(getDraftDefaults).toHaveBeenCalledWith('pi');
+    expect(resolveExecution).toHaveBeenCalledWith({ agentKind: 'pi' }, undefined, undefined);
     expect(createSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentKind: 'pi', model: 'gpt-5.5' }),
     );
@@ -187,7 +194,7 @@ describe('专属会话建/复用', () => {
     const e = emitters.get('sess-new')!;
     e.emit(doneEvent());
     await p;
-    expect(writes[0]).toEqual(['helper', null]);
+    expect(writes).not.toContainEqual(['helper', null]);
     expect(writes).toContainEqual(['helper', 'sess-new']);
   });
 
@@ -436,4 +443,54 @@ describe('收口与取文', () => {
     await vi.waitFor(() => expect(emitters.has('sess-1')).toBe(true));
     expect(await p).toMatchObject({ ok: false, errorCode: 'TIMEOUT' });
   });
+});
+
+ describe('model admission and recovery before legacy execution', () => {
+   it('retains a failed task mapping and never dispatches an unavailable route', async () => {
+     const { deps, writes } = makeDeps({ readSessionId: () => 'old',
+       resolveExecution: async () => { throw Error('供应商未连接，请重新选择'); } });
+     expect(await createGhostErrandRunner(deps)(REQUEST)).toMatchObject({ ok: false, errorCode: 'SESSION_UNAVAILABLE' });
+     expect(deps.createSession).not.toHaveBeenCalled();
+     expect(deps.dispatch).not.toHaveBeenCalled();
+     expect(writes).toEqual([]);
+   });
+   it('retains the old history mapping when replacement creation fails', async () => {
+     const { deps, writes } = makeDeps({ readSessionId: () => 'old',
+       readConfig: () => ({ model: 'new-model' }), createSession: vi.fn(async () => { throw Error('create failed'); }) });
+     expect(await createGhostErrandRunner(deps)(REQUEST)).toMatchObject({ ok: false });
+     expect(writes).toEqual([]);
+     expect(deps.dispatch).not.toHaveBeenCalled();
+   });
+   it('keeps user-repaired Codex tasks and their history when app defaults change', async () => {
+     const repaired = { ...ACTIVE_ROW, agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' };
+     const { deps, emitters, writes } = makeDeps({ readSessionId: () => 'repaired', getSessionRow: async () => repaired });
+     const result = createGhostErrandRunner(deps)({ ...REQUEST, sourceSessionId: 'caller' });
+     await vi.waitFor(() => expect(emitters.has('repaired')).toBe(true));
+     emitters.get('repaired')!.emit(doneEvent());
+     expect(await result).toMatchObject({ ok: true, sessionId: 'repaired', model: 'gpt-6-astra' });
+     expect(deps.createSession).not.toHaveBeenCalled();
+     expect(writes).toEqual([]);
+   });
+   it('does not send after the user changes a validated task route', async () => {
+     let reads = 0;
+     const { deps } = makeDeps({ readSessionId: () => 'old', getSessionRow: async () =>
+       ++reads === 1 ? ACTIVE_ROW : { ...ACTIVE_ROW, model: 'changed-model' } });
+     expect(await createGhostErrandRunner(deps)(REQUEST)).toMatchObject({ ok: false, errorCode: 'SESSION_UNAVAILABLE' });
+     expect(deps.dispatch).not.toHaveBeenCalled();
+   });
+ });
+
+it('does not dispatch when plugin permission changes during model admission', async () => {
+  let permissionMode: 'auto' | 'plan' = 'auto';
+  const { deps } = makeDeps({
+    readConfig: () => ({ permissionMode }),
+    resolveExecution: async () => {
+      permissionMode = 'plan';
+      return { agentKind: 'claude-code', model: 'claude-x', fastMode: false };
+    },
+  });
+  const result = await createGhostErrandRunner(deps)(REQUEST);
+  expect(result).toMatchObject({ ok: false, errorCode: 'SESSION_UNAVAILABLE' });
+  expect(deps.createSession).not.toHaveBeenCalled();
+  expect(deps.dispatch).not.toHaveBeenCalled();
 });

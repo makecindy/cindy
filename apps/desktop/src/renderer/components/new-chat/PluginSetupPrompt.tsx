@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button';
 import { AlertCircle, Check, Circle, ExternalLink, LoaderCircle } from 'lucide-react';
 import { useEffect, useId, useState, type ComponentProps } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
 import { GhostPluginIcon } from '@/features/plugin/GhostPluginIcon';
@@ -17,6 +18,7 @@ import type { GhostSetupStepPhase } from '../../../shared/ghost';
 import { RemoteOauthSetupCard } from './RemoteOauthSetupCard';
 import { PluginOauthDeviceCode } from './PluginOauthDeviceCode';
 import { PluginConnectionForm } from './PluginConnectionForm';
+import { PluginSetupRemoteDesktopButton } from './PluginSetupRemoteDesktopButton';
 
 interface PluginSetupPromptProps {
   remoteDeviceId?: string;
@@ -115,6 +117,12 @@ function PluginSetupPromptStateful({
     ((pending.remoteOauth && commandInFlight.action === 'run_action') ||
       ((pending.remoteSecret || pending.remoteConnection) && commandInFlight.action === 'submit_form')));
   const connectionForm = (step = currentStep) => remote && pending.remoteConnection && step?.action?.kind === 'manage_connection';
+  // Steps that only the target computer can finish: offer its remote desktop.
+  const remoteDesktopTarget =
+    remote && remoteDeviceId && !terminal && !connectionForm() && !isSharedTaskPeer(remoteDeviceId) &&
+    !(pending.remoteSecret && currentStep?.action?.kind === 'inline_form')
+      ? remoteDeviceId
+      : null;
   const title = compact ? pending.ghost.name : t('newChat.pluginSetup.title', { name: pending.ghost.name });
   const inlineFormAction = currentStep?.action?.kind === 'inline_form' ? currentStep.action : null;
   const inlineFormField = inlineFormAction?.form.fields[0];
@@ -452,6 +460,7 @@ function PluginSetupPromptStateful({
           </span>
         </Button>
       ) : null}
+      {remoteDesktopTarget ? <PluginSetupRemoteDesktopButton deviceId={remoteDesktopTarget} /> : null}
       {!terminal ? (
         <Button
           variant="secondary"

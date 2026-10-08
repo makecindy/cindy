@@ -27,6 +27,13 @@ import {
 } from '../remoteResources.js';
 
 describe('REMOTE_INVOKE_ALLOWLIST', () => {
+  it('allows the public composer projection without exposing the full installed plugin records', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('ghosts:composer-list')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('ghosts:list')).toBe(false);
+  });
+  it('allows Review start to run on the data-owning Desktop', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:review:start')).toBe(true);
+  });
   it('allows the reduced teammate directory while keeping native configuration local', () => {
     for (const channel of ['local-db:bots:list', 'local-db:bots:get']) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
@@ -134,6 +141,11 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:session-background-tasks:list')).toBe(true);
   });
 
+  it('放行后台任务停止(单个 / 全部):任务真身在被控端,控制端本机停止只会假成功', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:agent-task:stop')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:session-background-tasks:stop')).toBe(true);
+  });
+
   it('routes durable PI Subagent reads and controls to the data-owning device', () => {
     for (const channel of [
       'local-db:subagent-runs:list',
@@ -143,7 +155,6 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
     }
-    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:agent-task:stop')).toBe(false);
   });
 
   it('放行会话级完整对等补充(fork-strip / context-usage / 窄口径 patch-meta / Magic 重命名)', () => {
@@ -266,6 +277,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'worktree:suggest-name',
       'worktree:create',
       'worktree:discard-precreated',
+      'worktree:cancel-precreated',
       'worktree:removal-preview',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
@@ -396,6 +408,8 @@ describe('PUSH_FORWARD_ALLOWLIST', () => {
       'maker:interaction-request',
       'maker:interaction-dismissed',
       'maker:auto-permission:fallback',
+      'maker:session-credential-switch-applied',
+      'maker:session-credential-switch-failed',
       'maker:provider:changed',
       'maker:agents:changed',
       'maker:schedule:event',
@@ -458,6 +472,7 @@ describe('INVOKE_TIMEOUT_OVERRIDES_MS', () => {
 
   it('worktree:discard-precreated 可等待同 session 创建锁且不沿用默认 30s', () => {
     expect(INVOKE_TIMEOUT_OVERRIDES_MS['worktree:discard-precreated']).toBeGreaterThan(30_000);
+    expect(INVOKE_TIMEOUT_OVERRIDES_MS['worktree:cancel-precreated']).toBeGreaterThan(30_000);
   });
 
   it('maker:compact-session 隧道超时必须大于 pi 压缩执行预算(10min + 回程余量,不 30s 截断)', () => {

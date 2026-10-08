@@ -2,13 +2,14 @@ import { CompanionImportSheet } from './CompanionImportSheet';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
 import { randomUUID } from 'expo-crypto';
-import { ActivityIndicator, Alert, Image, Platform, Pressable, StyleSheet, Switch, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Brain, Camera, FileText, Hand, History, Info, Link2, Settings2, Sparkles } from 'lucide-react-native';
 import { resolveRemoteText, type RemoteResource, type RemoteResourceRef, type RemoteText } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
+import { NativeSwitch } from '@/platform/chrome';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { invokeRemoteResourceAction } from '@/device-link/remoteResources';
@@ -34,6 +35,7 @@ const fieldMaxLength = (id: string) => id === 'name' || id === 'confirmName' ? 2
 const normalizeTeammateName = (name: string) => name.normalize('NFKC').trim().toLowerCase();
 
 export interface CompanionProfileSheetProps {
+  initialPage?: 'home' | 'memory' | 'capabilities';
   visible: boolean;
   onClose: () => void;
   onClosed?: () => void;
@@ -67,6 +69,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const [page, setPage] = useState('home');
   const [modelStage, setModelStage] = useState<'profile' | 'closing-profile' | 'picker' | 'closing-picker'>('profile');
   const [modelIndex, setModelIndex] = useState(0);
+  const [modelPurpose, setModelPurpose] = useState<'primary' | 'task'>('primary');
   const [editor, setEditor] = useState<CompanionProfileData | null>(null);
   const [editorPanel, setEditorPanel] = useState<string | null>(null);
   const [editorResourceId, setEditorResourceId] = useState('');
@@ -122,7 +125,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     }
   }, [binding, read]);
   useEffect(() => {
-    setModelStage('profile'); setConflict(null); setEditor(null); setEditorPanel(null); setEditorLoading(false); setData(null); setPage('home'); setValues({}); setReceipt(null); setConfirmation(null); setDeleted(false); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setEditing(false); setBusy(false);
+    setModelStage('profile'); setConflict(null); setEditor(null); setEditorPanel(null); setEditorLoading(false); setData(null); setPage(props.initialPage === 'memory' ? 'memoryEntries' : props.initialPage === 'capabilities' ? 'skills' : 'home'); setValues({}); setReceipt(null); setConfirmation(null); setDeleted(false); setError(false); setDeleteFailure(false); setNameTakenOnSave(false); setEditing(false); setBusy(false);
     return () => { generation.current++; };
   }, [binding]);
   useEffect(() => { if (visible && online) void refresh(); }, [visible, online, refresh]);
@@ -299,8 +302,26 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const memoryPage = <CompanionMemoryPage memory={memory} online={online} botName={name} memoryEnabled={actionPanel('memory')?.values.memory !== false} />;
   const modelValues = editing ? values : panel?.values ?? {};
   const changeValues = (next: ProfileValues) => { if (!editing) draftBase.current = panel?.values ?? {}; setValues(next); setEditing(true); };
-  const models = <CompanionModelChain deviceId={deviceId} values={modelValues} disabled={busy || !online || !panel?.action} onChange={changeValues}
-    onPick={index => { setModelIndex(index); setModelStage('closing-profile'); }} />;
+  const taskValues = {
+    modelChain: modelValues.taskFollowsPrimary === true
+      ? JSON.stringify(readCompanionModelChain(modelValues.modelChain).slice(0, 1))
+      : modelValues.taskModel,
+    followsDefault: modelValues.taskFollowsPrimary === true,
+  };
+  const pickModel = (purpose: 'primary' | 'task', index: number) => {
+    setModelPurpose(purpose); setModelIndex(index); setModelStage('closing-profile');
+  };
+  const models = <View style={{ gap: spacing.lg }}>
+    <CompanionModelChain deviceId={deviceId} values={modelValues} disabled={busy || !online || !panel?.action} onChange={changeValues}
+      onPick={index => pickModel('primary', index)} />
+    {panel?.action?.fields?.some(field => field.id === 'taskModel') && <View style={{ gap: spacing.sm }}>
+      <Text style={{ fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium, color: colors.textPrimary }}>{t('devices.companionProfile.taskModel')}</Text>
+      <CompanionModelChain single deviceId={deviceId} values={taskValues} disabled={busy || !online || !panel?.action}
+        inheritanceLabel={t('devices.companionProfile.taskInheritsPrimary')}
+        onChange={next => changeValues({ ...modelValues, taskFollowsPrimary: next.followsDefault === true, taskModel: String(next.modelChain ?? '[]') })}
+        onPick={index => pickModel('task', index)} />
+    </View>}
+  </View>;
   const afterClosed = () => {
     if (modelStage === 'closing-profile') { setModelStage('picker'); return; }
     const taskId = pendingTask.current; pendingTask.current = null;
@@ -315,9 +336,13 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const confirm = (target: ProfilePanel | null) => { setConfirmation(target); if (target && (target.id === 'delete' || page === 'home')) { setValues({}); setEditing(false); } };
   const selectEditorPanel = (item: ProfilePanel) => { setEditorPanel(item.id); setValues(item.values); setEditing(false); };
   const retry = () => { if (page === 'editor') void retryEditor(); else void refresh(); };
-  const modelPicker = <CompanionModelPicker visible={visible && modelStage === 'picker'} deviceId={deviceId} route={readCompanionModelChain(modelValues.modelChain)[modelIndex]}
+  const modelPicker = <CompanionModelPicker visible={visible && modelStage === 'picker'} deviceId={deviceId} route={readCompanionModelChain(modelPurpose === 'task' ? taskValues.modelChain : modelValues.modelChain)[modelIndex]}
     onClose={() => setModelStage('closing-picker')} onClosed={() => setModelStage('profile')}
-    onSelect={route => { const chain = readCompanionModelChain(modelValues.modelChain);
+    onSelect={route => {
+      if (modelPurpose === 'task') {
+        changeValues({ ...modelValues, taskModel: JSON.stringify([route]), taskFollowsPrimary: false }); return true;
+      }
+      const chain = readCompanionModelChain(modelValues.modelChain);
       if (chain.some((item, index) => index !== modelIndex && item.harness === route.harness && item.model === route.model && item.providerId === route.providerId)) return false;
       chain[modelIndex] = route; changeValues({ ...modelValues, modelChain: JSON.stringify(chain), followsDefault: false }); return true; }} />;
 
@@ -551,7 +576,7 @@ function CompanionProfileForm({ panel, values, onChange, disabled }: { panel: Pr
     };
     if (field.kind === 'toggle') return <View key={field.id} style={styles.inline}>
       <Text style={[styles.heading, styles.flex]}>{label}</Text>
-      <Switch accessibilityLabel={label} value={values[field.id] === true} onValueChange={change} disabled={fieldDisabled} trackColor={{ false: colors.border, true: colors.cta }} />
+      <NativeSwitch accessibilityLabel={label} value={values[field.id] === true} onValueChange={change} disabled={fieldDisabled} seedColor={colors.inputCaret} />
     </View>;
     if (field.kind === 'select') return <CompanionChoice key={field.id} label={label} value={typeof values[field.id] === 'string' ? values[field.id] as string : ''} disabled={fieldDisabled}
       options={options.map(option => ({ value: option.value, label: resolveRemoteText(option.label, i18n.language), disabled: optionDisabled(option) }))} onChange={change} />;

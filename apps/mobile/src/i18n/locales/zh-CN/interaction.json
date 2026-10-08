@@ -20,7 +20,13 @@
     "allowOnceAccessibility": "允许一次权限请求",
     "allowOnceConfirm": "确认允许一次",
     "highRisk": "高风险",
-    "autoReviewUnavailable": "自动审批没完成，请确认要不要允许这次操作。"
+    "autoReviewUnavailable": "自动审批没完成，请确认要不要允许这次操作。",
+    "fullAccessConfirm": {
+      "title": "开启完全访问？",
+      "description": "完全访问会关闭工作区沙箱并跳过常规审批。{{appName}} 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
+      "confirm": "开启完全访问",
+      "cancel": "保留当前权限"
+    }
   },
   "planMode": {
     "label": "计划模式",
@@ -37,7 +43,7 @@
     "queuePositionNth": "第 {{index}}",
     "composerBlockedByPending": "先处理电脑端的待处理请求后才能继续输入。",
     "missingRequestId": "这个远程交互缺少 requestId，无法回传决定。",
-    "desktopConfirmUnsupported": "此确认只能在远程电脑处理。请回到桌面端继续。",
+    "desktopConfirmUnsupported": "此确认只能在远程电脑上处理。请回到电脑端继续。",
     "unsupportedType": "手机版暂不支持这个远程交互类型。",
     "unsupportedKind": "暂不支持",
     "desktopOnlyKind": "电脑端处理",
@@ -157,8 +163,10 @@
     "dispatchBodyFallback": "创建 Worker",
     "sendTitle": "发消息给 Worker",
     "sendBodyFallback": "发送消息",
-    "reportTitle": "Worker 回报",
-    "reportBodyFallback": "(空回报)"
+    "fromLead": "来自 Lead 的消息",
+    "fromWorkerNamed": "来自 Worker「{{role}}」的消息",
+    "fromWorker": "来自 Worker 的消息",
+    "emptyMessageBody": "（空消息）"
   },
   "contextSheet": {
     "backAccessibility": "返回上下文面板",
@@ -194,7 +202,7 @@
     "enablePhotoPermission": "开启照片权限",
     "enable": "去开启",
     "icloudTimeout": "照片还在从 iCloud 下载，等待超时了。请检查网络，稍后重试。",
-    "photoNotReadable": "这张照片暂时无法读取(可能还没从 iCloud 下载完成)，请稍后重试。"
+    "photoNotReadable": "这张照片暂时无法读取（可能还没从 iCloud 下载完成），请稍后重试。"
   },
   "pluginSetup": {
     "remoteDesktop": "打开桌面",
@@ -274,7 +282,7 @@
         "ask_user_question": "回答会保存草稿，提交后电脑端继续。",
         "issue_confirm": "确认标题和正文后再提交。",
         "plugin_setup": "配置要在电脑端完成，这里可以取消这次请求。",
-        "fallback": "手机版会按桌面端的请求顺序处理。"
+        "fallback": "手机上会按电脑端的请求顺序处理。"
       }
     }
   },

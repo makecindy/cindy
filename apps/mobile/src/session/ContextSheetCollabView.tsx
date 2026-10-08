@@ -246,7 +246,6 @@ export function OrcaTeamPanelView({
             detail={[
               orcaAgentLabel(worker.agentKind),
               worker.model,
-              worker.focused ? t('session.collab.focused') : null,
             ].filter(Boolean).join(' · ')}
             disabled={busy}
             icon={<WorkerStatusDot status={worker.status} />}

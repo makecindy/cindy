@@ -362,6 +362,10 @@ describe('ask_user 与 done 的时序', () => {
     emitDone('codex');
     const original = action === 'ask' ? makerChatStore.getSnapshot(SESSION_ID).pendingAskUser
       : makerChatStore.getSnapshot(SESSION_ID).pendingPlanReview;
+    // Rejection can mean execution is paused: the Host still owns this request.
+    getPendingInteractions.mockResolvedValue([{ request: {
+      kind: action === 'ask' ? 'ask_user_question' : 'plan_review', ...original,
+    }, persistId: action === 'ask' ? 'persist-receipt' : 'receipt-message' }]);
     const resolveInteraction = vi.mocked(window.electronAPI.maker.resolveInteraction);
     let resolve!: (receipt: { accepted: boolean }) => void;
     resolveInteraction.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
@@ -377,7 +381,7 @@ describe('ask_user 与 done 的时序', () => {
     expect(pending()).toBe(original);
     resolve({ accepted: false });
     await new Promise((done) => setTimeout(done, 0));
-    expect(pending()).toBe(original);
+    expect(pending()).toEqual(original);
     expect(updateMessageContent).not.toHaveBeenCalled();
     submit();
     await vi.waitFor(() => expect(pending()).toBeNull());
@@ -388,6 +392,9 @@ describe('ask_user 与 done 的时序', () => {
   it.each(['reject', 'missing', 'timeout'] as const)('retains an unanswered card after a %s receipt and can retry', async (failure) => {
     makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
     emitAskUserRequest('failed-receipt');
+    getPendingInteractions.mockResolvedValue([{ request: {
+      kind: 'ask_user_question', ...makerChatStore.getSnapshot(SESSION_ID).pendingAskUser,
+    }, persistId: 'persist-failed-receipt' }]);
     const resolveInteraction = vi.mocked(window.electronAPI.maker.resolveInteraction);
     if (failure === 'reject') resolveInteraction.mockRejectedValueOnce(new Error('offline'));
     if (failure === 'missing') resolveInteraction.mockResolvedValueOnce(undefined as never);

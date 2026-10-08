@@ -89,6 +89,12 @@ pnpm --filter mobile test:smoke
 - 旧 AsyncStorage 消息按需迁移：仅在文件缺失时读取旧条目，成功原子写入后再删除旧值；
   失败保留旧条目。回退到旧版不会读取新文件，会重新从主机获取消息。
   迁移与同一任务的写入／删除共用队列，退出账号等待在途迁移后清理两种存储。
+- 每次启动把剩余旧 AsyncStorage 消息条目逐条迁成文件（走同一按需迁移与按 key 队列，
+  成功后才删旧值；同 key 已有文件时以文件为准，只删旧值）：未打开会话的旧副本会占满 Android AsyncStorage 的 6 MiB 库，使发件箱、
+  草稿写入报 `SQLITE_FULL`（#5403）。旧副本含没有服务端副本的 `mobile-system-*` 卡片，
+  不能直接丢弃。
+- 发件箱写入遇到 `SQLITE_FULL` 时先执行上述迁移再重试一次；仍失败提示「手机本地存储已满」，
+  不把原始 SQLite 报错直接给用户，也不清理草稿、发件箱或其他非缓存数据。
 - 删除逐项尝试旧条目和文件，不依赖新增文件写入；任一后端失败不阻止另一后端清理，
   单个文件失败也不阻止后续文件删除，全部尝试结束后统一报告失败。清理报错时可能仍有
   无法删除的残留，不能视为清理成功。新登录或切换账号必须在持久化
@@ -96,8 +102,7 @@ pnpm --filter mobile test:smoke
   退出账号仍完成凭证清除；若缓存清理失败，下次登录会先重试。无有效账号期间禁止
   读取或写入消息缓存，避免退出后的卸载回调重新落盘。
 - 首页分组等偏好继续使用 AsyncStorage。合并保存时读失败不得当成空配置；写失败
-  必须向用户提示，不能把未落盘的选择当成已保存。旧消息只按需迁移，升级首次启动
-  不会立即释放所有旧数据库占用。
+  必须向用户提示，不能把未落盘的选择当成已保存。
 - 文件写入失败（含磁盘空间不足）会提示检查剩余空间，并说明离线内容可能不完整。
   同一次启动最多提示一次，后台失败延后到前台提示；不把所有 I/O 错误都断言为磁盘已满。
 
@@ -158,6 +163,16 @@ pnpm --filter mobile test:smoke
 
 ## 原生配置与 runtime fingerprint(冷更边界)
 
+### 伙伴通信通知
+
+`plugins/with-communication-notifications.js` 为当前 bundle identity 生成
+`CindyNotificationService` 扩展，启用 Communication Notifications，并向 EAS 登记扩展签名。
+扩展仅消费伙伴回复的可选 `sender` 数据；保留正文、深链和系统隐私设置，任何处理失败或
+系统超时都回退原通知，且只交付一次。头像不发起网络请求、不读取用户账号存储。
+Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生新包和重新生成的签名配置；
+服务端须先支持可选发送者透传和 `aps.mutable-content = 1`，未升级双方保持普通推送。
+这不是 OTA 可独立交付的功能，仍受下述冷更审核门约束。
+
 Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致**的装机上生效,
 指纹一旦变化就必须**冷更出包**(新商店包 / 自建重装),存量装机拿不到该次热更。
 
@@ -216,7 +231,17 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
 
 启动检查、设置页与强制更新屏共用 `src/update/useBundleUpdatePrompt.ts` 的安装出口。
 Android 8 及以上的新原生包优先应用内下载 HTTPS APK；Android 7、旧包缺少
-`CindyAppInstaller`，或安装地址是网页时，继续使用浏览器。权限只由自建构建的 `app.config.js` 声明，商店构建不声明。
+`CindyAppInstaller`，或安装地址是网页时，继续使用浏览器。权限由自建构建的
+`app.config.js` 声明；同流程生成的官网 APK 和 Google Play AAB 当前共享这一原生配置，
+EAS 商店构建不声明。
+
+Global 自建 APK 与 Google Play AAB 共用自建 OTA 配置和原生构建流程，不能仅凭
+`IS_OTA_SELFHOST` 判断整包更新渠道。Android 原生安装桥读取系统记录的 installer：
+Google Play 安装跳过官网 `/latest` APK 整包提示，由 Google Play 管理原生包更新；
+JS OTA 仍按现有通道检查，设置页手动检查只报告内容更新。遗留强更目标的安装按钮也
+只能打开该应用在 Google Play 的页面。官网 APK 安装继续使用下述应用内更新流程。
+这项原生查询改变 Android runtime fingerprint，旧 Play 包必须经一次 Play 冷更后才具备
+可靠的安装来源识别能力；不能把 JS OTA 当作旧包已经修复。
 
 - 已授权直接下载；未授权先显示说明与「去授权 / 浏览器下载 / 稍后」，用户点「去授权」
   才打开系统设置。返回后读取实际权限；拒绝不会循环申请，可选择浏览器下载。

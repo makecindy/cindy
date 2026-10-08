@@ -19,6 +19,8 @@ export {
 export {
   SimpleStackHeader,
   simpleScreenSafeAreaEdges,
+  simpleScrollInsetProps,
+  simpleScrollScreenSafeAreaEdges,
   usesNativeStackHeader,
 } from "@/platform/chrome/SimpleStackHeader";
 export { HomeNativeStackHeader } from "@/platform/chrome/HomeNativeStackHeader";

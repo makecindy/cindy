@@ -7,7 +7,7 @@ import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 /** Membership loss has a recovery action, without claiming an unverified offline cause. */
-export function SharedTaskEndedState({ onRejoin }: { onRejoin(): void }) {
+export function SharedTaskEndedState({ onReturnToTasks }: { onReturnToTasks(): void }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
@@ -15,7 +15,7 @@ export function SharedTaskEndedState({ onRejoin }: { onRejoin(): void }) {
     <View style={styles.icon}><Square size={iconSize.md} color={colors.textTertiary} /></View>
     <Text style={styles.title}>{t('sharedTask.ended')}</Text>
     <Text style={styles.text}>{t('sharedTask.accessEndedBody')}</Text>
-    <SharedTaskAction action={{ label: t('sharedTask.rejoin'), tone: 'primary', onPress: onRejoin }} />
+    <SharedTaskAction action={{ label: t('sharedTask.returnToTasks'), tone: 'primary', onPress: onReturnToTasks }} />
   </View>;
 }
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({

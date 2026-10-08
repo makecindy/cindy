@@ -60,6 +60,11 @@ export function botGroupFolderPath(ownerRoot: string, groupId: string): string {
   return path.join(ownerRoot, 'bot-groups', groupId, 'files');
 }
 
+/** Files a phone attached to the group's messages; trashed with the group like `files`. */
+export function botGroupAttachmentsPath(ownerRoot: string, groupId: string): string {
+  return path.join(ownerRoot, 'bot-groups', groupId, 'attachments');
+}
+
 /** Signature per relative path (POSIX separators): mtime + size; git trees also keep HEAD. */
 export type WorkDirSnapshot = Map<string, string>;
 

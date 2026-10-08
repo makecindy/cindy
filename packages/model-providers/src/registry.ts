@@ -94,6 +94,8 @@ export type ModelDiscoveryFailureState = Partial<
 
 /** 供应商 + 连接状态。 */
 export interface ProviderView extends Provider {
+  /** 本机是否允许同账号另一台电脑调用该供应商；缺省等同关闭。 */
+  remoteInvocationEnabled?: boolean;
   /** Definition remains available for adding a removed local connection again. */
   removed?: boolean;
   subscriptionAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };

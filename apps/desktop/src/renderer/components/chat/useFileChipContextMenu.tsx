@@ -37,6 +37,7 @@ import {
   AppWindow,
   ClipboardCopy,
   Copy,
+  Download,
   FileCode,
   FolderOpen,
   FolderTree,
@@ -64,7 +65,7 @@ import {
   openFileInSidebarFileBrowser,
 } from '@/features/right-sidebar/lib/openInSidebarFileBrowser';
 import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
-import { copyRemoteChatFile, revealRemoteChatFile } from '@/lib/remoteFileOpen';
+import { copyRemoteChatFile, downloadRemoteChatEntry } from '@/lib/remoteFileOpen';
 import { toWorkdirRel } from '../../../shared/workdirPath';
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
 import { openHtmlFileByPreference } from './useOpenWithMenu';
@@ -167,8 +168,8 @@ export function useFileChipContextMenu({
     setMenuPos(null);
     const abs = await getAbsPath();
     if (remoteOrigin) {
-      // 远端路径本机不存在:下载缓存副本后在文件管理器中定位副本。
-      await revealRemoteChatFile(remoteOrigin, sessionFileCtx.workingDir, abs);
+      // 远端路径本机不存在:文件 / 文件夹下载到系统下载文件夹后再定位。
+      await downloadRemoteChatEntry(remoteOrigin, sessionFileCtx.workingDir, abs);
       return;
     }
     const res = await window.electronAPI.showItemInFolder({ filePath: abs });
@@ -376,10 +377,12 @@ export function useFileChipContextMenu({
             </DropdownMenuSubContent>
           </DropdownMenuSub>
         ) : null}
-        <DropdownMenuItem onClick={handleCopyFile}>
-          <Copy className="mr-2 h-4 w-4" />
-          {t('chat.markdownRenderer.copyFile')}
-        </DropdownMenuItem>
+        {remoteOrigin && sidebarFileBrowserKind === 'directory' ? null : (
+          <DropdownMenuItem onClick={handleCopyFile}>
+            <Copy className="mr-2 h-4 w-4" />
+            {t('chat.markdownRenderer.copyFile')}
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onClick={handleCopyPath}>
           <ClipboardCopy className="mr-2 h-4 w-4" />
           {t('chat.markdownRenderer.copyFilePath')}
@@ -391,9 +394,13 @@ export function useFileChipContextMenu({
           </DropdownMenuItem>
         ) : null}
         <DropdownMenuItem onClick={handleReveal}>
-          <FolderOpen className="mr-2 h-4 w-4" />
+          {remoteOrigin ? (
+            <Download className="mr-2 h-4 w-4" />
+          ) : (
+            <FolderOpen className="mr-2 h-4 w-4" />
+          )}
           {remoteOrigin
-            ? t('chat.remoteFile.revealLocalCopy')
+            ? t('chat.remoteFile.downloadToLocal')
             : t('chat.markdownRenderer.revealFile')}
         </DropdownMenuItem>
         {canOpenInBrowser ? (

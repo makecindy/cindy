@@ -12,6 +12,10 @@
     "deleteFailed": "删除设备失败。",
     "deleteOnline": "设备当前在线，请让设备离线后再删除。",
     "currentlyOnline": "当前在线",
+    "availableSection": "在线设备",
+    "offlineSection": "离线设备",
+    "showAllOffline": "显示全部 {{count}} 台",
+    "showFewerOffline": "收起",
     "nameTooLong": "设备名称不能超过 {{limit}} 个字符。",
     "fields": {
       "name": "名称",
@@ -29,9 +33,7 @@
   "common": {
     "cancel": "取消",
     "save": "保存",
-    "saving": "保存中",
     "delete": "删除",
-    "deleting": "删除中",
     "create": "新建"
   },
   "resources": {
@@ -47,7 +49,8 @@
     "openFailed": "无法打开任务",
     "resolving": "正在打开最新任务…",
     "retry": "重试",
-    "hostCount": "{{count}} 台电脑"
+    "hostCount": "{{count}} 台电脑",
+    "stale": "内容可能已过期，暂时无法更新"
   },
   "presentation": {
     "deviceList": {
@@ -155,7 +158,7 @@
         },
         "active": {
           "title": "这台电脑暂无活跃任务",
-          "copy": "先在桌面端创建或继续一个任务，手机端会把它显示在这里。"
+          "copy": "先在电脑端创建或继续一个任务，手机端会把它显示在这里。"
         }
       },
       "time": {
@@ -177,10 +180,10 @@
     },
     "home": {
       "allDevices": "全部",
-      "allComputers": "全部电脑",
+      "allComputers": "全部设备",
       "waitingCount": "{{count}} 待处理",
       "synced": "已同步",
-      "unknownComputer": "未知电脑",
+      "unknownComputer": "未知设备",
       "uncategorizedProject": "未分类项目",
       "cindyMake": "Cindy Make",
       "empty": {
@@ -202,7 +205,7 @@
         },
         "noSession": {
           "title": "还没有任务",
-          "copy": "先在桌面端创建或继续一个任务，手机端会直接显示对应项目和任务。"
+          "copy": "先在电脑端创建或继续一个任务，手机端会直接显示对应项目和任务。"
         }
       },
       "noDevice": {
@@ -294,7 +297,7 @@
     "error": {
       "sessionDeviceNotFound": "找不到这个任务所属设备，请重新同步后再试。",
       "taskDeviceNotFound": "找不到这个任务所属设备，请重新同步后再试。",
-      "noDevice": "没有可用设备。请先打开桌面端远程控制，然后重新同步。"
+      "noDevice": "没有可用设备。请先在电脑端打开远程控制，然后重新同步。"
     },
     "alert": {
       "cacheSaveFailed": "离线缓存未能保存",
@@ -314,7 +317,7 @@
       "syncing": "正在重新同步",
       "sync": "重新同步",
       "pinnedConversations": "置顶 {{count}} 条任务",
-      "newRemoteConversation": "新建远程任务",
+      "newRemoteConversation": "新建任务",
       "renameDevice": "重命名 {{label}}",
       "project": "项目 {{title}}",
       "dialogue": "对话",
@@ -424,7 +427,13 @@
       "needAttention": "{{count}} 个需关注",
       "waiting": "等待处理 {{count}} 个",
       "automationRunning": "自动化运行中",
-      "totalRuns": "共 {{count}} 次运行"
+      "totalRuns": "共 {{count}} 次运行",
+      "runCount": "共 {{count}} 次",
+      "nextRunMinutes": "{{count}} 分钟后运行",
+      "nextRunHours": "{{count}} 小时后运行",
+      "nextRunDays": "{{count}} 天后运行",
+      "imminent": "即将运行",
+      "stopped": "已停止"
     }
   },
   "detail": {
@@ -528,6 +537,9 @@
     "viewAllRuns": "查看全部 {{count}} 次运行"
   },
   "companions": {
+    "noCreateHosts": "当前没有可用的兼容电脑。在电脑上打开 Cindy 并登录同一账号后即可新建伙伴。",
+    "taskAttentionCount": "{{count}} 个任务待关注",
+    "unreadChatCount": "{{count}} 段对话未读",
     "messageSent": "已向后台任务发送消息",
     "sentTo": "已发消息给 {{name}}",
     "receivedFrom": "消息来自 {{name}}",
@@ -557,13 +569,13 @@
     "unread": "有新回复",
     "status": {
       "queued": "正在开始",
-      "running": "正在做",
+      "running": "运行中",
       "waiting": "等待处理",
       "completed": "已完成",
-      "failed": "失败了",
+      "failed": "失败",
       "cancelled": "已停止",
       "timed-out": "已超时",
-      "unknown": "任务状态查不到了"
+      "unknown": "状态未知"
     },
     "title": "伙伴",
     "tasks": "任务",
@@ -622,7 +634,14 @@
     },
     "viewResult": "查看结果",
     "noWrittenResult": "没有文字结果。",
-    "errorDetails": "错误详情"
+    "errorDetails": "错误详情",
+    "createTeammate": "新建伙伴",
+    "createMenu": "新建",
+    "searchWithGroups": "搜索伙伴和群聊",
+    "awaiting": "等你确认",
+    "emptyCopyCreate": "伙伴会记得你们聊过的事，也能帮你在电脑上做事。",
+    "taskResult": "任务结果",
+    "collapseResult": "收起结果"
   },
   "companionProfile": {
     "avatar": "头像",
@@ -649,7 +668,7 @@
     "memorySaveFailed": "没有保存成功，你的编辑已保留。",
     "memoryMissing": "这条记忆已不存在。",
     "memoryDeleteFailed": "删除失败",
-    "create": "新伙伴",
+    "create": "新建伙伴",
     "createFailed": "暂未确认创建结果，请重试核对。",
     "title": "伙伴资料",
     "profile": "资料与性格",
@@ -671,6 +690,8 @@
     "artifactsEmpty": "还没有成果，可以让伙伴创作一些内容。",
     "openSourceTask": "打开来源任务",
     "modelFollowsDefault": "跟随当前默认模型链",
+    "taskModel": "任务模型",
+    "taskInheritsPrimary": "继承主模型",
     "modelOverride": "使用此伙伴的自定义模型链",
     "modelsUnavailable": "暂无可用模型，请在电脑上检查此伙伴的模型设置后刷新。",
     "artifactsRecovery": "请从消息卡中打开文件，或在 {{deviceName}} 上浏览文件。",
@@ -702,13 +723,13 @@
     "automations": "自动化",
     "paused": "导入后仍停用",
     "itemAttention": "需要处理",
-    "takeover": "检查通过后，由伙伴接管自动化",
+    "takeover": "导入后检查并接管自动化",
     "takeoverNote": "数据连接验证通过后才暂停原任务。取消所需依赖时，原任务继续运行。",
     "submit": "导入",
     "back": "上一步",
     "open": "打开伙伴",
     "running": "正在导入并检查连接…",
-    "complete": "导入完成",
+    "complete": "导入已保存",
     "attention": "部分内容需要处理，详见下方。",
     "error": "未能完成导入，可按原选择重试。",
     "keptAtSource": "尚未完成接管",
@@ -723,6 +744,30 @@
     "credentialFailed": "凭证未能安全保存。",
     "scriptMissing": "缺少这项任务所需的脚本。",
     "sourceCommand": "找不到原 Agent 的控制命令。",
-    "readFailed": "尚未验证这项任务实际需要的数据查询。"
+    "readFailed": "尚未验证这项任务实际需要的数据查询。",
+    "search": "搜索",
+    "selectAll": "全选",
+    "previous": "上一页",
+    "next": "下一页",
+    "chatSetup": "已保存可导入的资料，可以开始交流了。部分内容还需要登录或检查，你方便时我们再继续。接管前，原来的自动化保持原状。",
+    "chatReady": "资料已经导入，可以开始交流了。",
+    "partial": "部分内容未完整导入",
+    "details": "查看导入详情",
+    "partlySaved": "仅部分保存",
+    "savedNeedsSetup": "已保存，尚未启用或完成设置",
+    "notSaved": "未保存",
+    "databaseDriver": "数据库驱动无法加载，请更新或修复 Cindy 后重试。",
+    "databaseUnavailable": "无法读取来源数据库，原数据未改动。修复后可重试。",
+    "fileTooLarge": "文件或本次资料超过读取上限，未截断导入。",
+    "memoryMetadata": "记忆摘要或标题不符合存储要求。",
+    "memoryWrite": "记忆写入或完整性检查失败，可重试。",
+    "memoryChanged": "已保存的记忆发生变化，未覆盖。",
+    "attachmentUnsupported": "此附件格式暂不支持，原文件保留在来源。",
+    "diskFull": "磁盘空间不足，释放空间后可重试。",
+    "permissionDenied": "没有权限读取或保存此项，修复权限后可重试。",
+    "setupDeferred": "可在伙伴对话中继续登录与验证。",
+    "automationInvalid": "自动化定义无法转换，尚未创建。",
+    "itemFailed": "此项未完成，可重试并查看导入详情。",
+    "chatPartial": "伙伴已创建，但部分资料未完整保存。以下项目仍需处理；其他内容和对话可以正常使用。"
   }
 }

@@ -6,6 +6,7 @@ import {
 } from '../../../shared/subagentModelSettings';
 import {
   buildCodexSubagentSpawnArgs,
+  codexHostUsesSmartSubagentRouting,
   resolveCodexSubagentRoutingProfile,
   type CodexSmartSubagentConfig,
 } from '../codex-subagent-config';
@@ -48,5 +49,24 @@ describe('buildCodexSubagentSpawnArgs', () => {
     const enabled = settings({ codexSmartSubagentRouting: true });
     expect(buildCodexSubagentSpawnArgs(enabled)).toEqual([]);
     expect(resolveCodexSubagentRoutingProfile(enabled)).toBe('default');
+  });
+});
+
+describe('codexHostUsesSmartSubagentRouting', () => {
+  const enabled = settings({ codexSmartSubagentRouting: true });
+
+  it('applies smart routing to ordinary task hosts when enabled (unchanged)', () => {
+    expect(codexHostUsesSmartSubagentRouting(enabled, {})).toBe(true);
+    expect(codexHostUsesSmartSubagentRouting(enabled, { hostPurpose: 'custom-context' })).toBe(true);
+    expect(codexHostUsesSmartSubagentRouting(settings(), {})).toBe(false);
+    expect(codexHostUsesSmartSubagentRouting(enabled, { hostPurpose: 'control-plane' })).toBe(false);
+    expect(codexHostUsesSmartSubagentRouting(enabled, { hostPurpose: 'review' })).toBe(false);
+  });
+
+  it('never applies it to a shared-provider guest host: no catalog, no spawn model overrides', () => {
+    expect(codexHostUsesSmartSubagentRouting(enabled, { deviceHostedGuestProviderId: 'xd' })).toBe(false);
+    // The host skips preparation, so the spawn arguments stay empty and the routing profile default.
+    expect(buildCodexSubagentSpawnArgs(enabled, undefined)).toEqual([]);
+    expect(resolveCodexSubagentRoutingProfile(enabled, undefined)).toBe('default');
   });
 });

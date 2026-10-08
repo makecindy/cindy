@@ -14,6 +14,7 @@ import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
 import { Check } from "lucide-react-native";
 import { NativeSwitch } from "@/platform/chrome";
+import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 
 import type { MobileAgentCapabilities } from "@/session/agentCapabilities";
 import type { MobileModelPricingMap } from "@/device-link/mobileMakerTransport";
@@ -254,7 +255,7 @@ export function ModelOptionsSheetView({
             accessibilityLabel={t("models.options.fastMode")}
             disabled={disabled}
             onValueChange={setFast}
-            seedColor={colors.cta}
+            seedColor={colors.inputCaret}
             testID={`${testID}.fastToggle`}
             value={fastOn}
           />
@@ -282,7 +283,7 @@ export function ModelOptionsSheetView({
                 onPress={() => setEffort(effortId)}
                 style={({ pressed }) => [
                   styles.effortOptionRow,
-                  pressed && { opacity: 0.65 },
+                  pressed && mobileInteractionStyles.pressed,
                 ]}
                 testID={`${testID}.effortOption`}
               >

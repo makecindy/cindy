@@ -29,7 +29,7 @@ import { formatSidebarFutureTime, formatSidebarTime } from '../lib/formatSidebar
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { hasSessionSelectionModifier, SessionItem } from './SessionItem';
 import type { SessionClickHandler } from './SessionItem';
-import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS, MENU_SEPARATOR_CLASS } from './menuStyles';
+import { MENU_ITEM_CLASS } from './menuStyles';
 import {
   useSessionAttentionUrgency,
   useSessionsAttentionUrgencyIdSet,
@@ -210,6 +210,11 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     }, [collapsedAttention, group.sessions, groupRemotePhases, notifications, groupAttentionKinds]);
     // 与组头红/绿未读点同源:没有未读就不提供「标为已读」,避免空操作占菜单。
     const canMarkRead = collapsedAttention.tone != null;
+    // 远程分组只提供在对方电脑上执行的操作（运行、暂停 / 恢复、标为已读）；编辑页与删除
+    // 确认只管本机任务，查看入口也不能拿远程 id 去聚焦本机自动化页。
+    const isRemoteGroup = !!group.deviceLinkDeviceId;
+    // 远程且已结束、又没有未读时，菜单里没有可执行项，不显示「更多」。
+    const hasMoreMenuItems = !isRemoteGroup || canMarkRead || group.scheduleStatus !== 'expired';
     // childView 的 24h 豁免依赖实时 now,必须每次渲染直接算,不能进 useMemo —— 否则依赖项
     // 不变时时间窗口会被冻结,跨过 24h 阈值的运行不会及时移出豁免。与普通对话列表
     // SessionEntryList 一致(它也是 render 内直接算 getSessionListCollapseView、不 memo);
@@ -543,7 +548,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                   onClick={(event) => {
                     event.stopPropagation();
                     navigate(
-                      group.scheduleId
+                      group.scheduleId && !isRemoteGroup
                         ? scheduleFocusPath(group.scheduleId)
                         : '/cc-agent/scheduled',
                     );
@@ -750,77 +755,89 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                           <Play size={14} strokeWidth={2} />
                         </button>
                       </Tip>
-                      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-                        <DropdownMenuTrigger asChild>
-                          <Tip text={t('ccAgent.sidebar.automationGroup.menu.more')} side="bottom">
-                            <button
-                              type="button"
-                              data-automation-group-inline-action="true"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                event.currentTarget.blur();
-                              }}
-                              onPointerDown={(event) => event.stopPropagation()}
-                              aria-label={t('ccAgent.sidebar.automationGroup.menu.more')}
-                              className={cn(
-                                'flex size-5 shrink-0 items-center justify-center rounded-md',
-                                'transition-colors',
-                                actionButtonToneClassName,
-                              )}
+                      {hasMoreMenuItems && (
+                        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+                          <DropdownMenuTrigger asChild>
+                            <Tip
+                              text={t('ccAgent.sidebar.automationGroup.menu.more')}
+                              side="bottom"
                             >
-                              <EllipsisVertical size={14} strokeWidth={2} />
-                            </button>
-                          </Tip>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent
-                          align="end"
-                          sideOffset={2}
-                          onClick={(event) => event.stopPropagation()}
-                          className={cn(MENU_CONTENT_CLASS, 'min-w-36 overflow-hidden')}
-                        >
-                          <MountedMenuContent>
-                            {() => (
-                              <>
-                                {canMarkRead && (
-                                  <DropdownMenuItem
-                                    onSelect={() => onScheduleAction(group, 'mark-read')}
-                                    className={MENU_ITEM_CLASS}
-                                  >
-                                    {t('ccAgent.sidebar.automationGroup.menu.markAllAsRead')}
-                                  </DropdownMenuItem>
+                              <button
+                                type="button"
+                                data-automation-group-inline-action="true"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  event.currentTarget.blur();
+                                }}
+                                onPointerDown={(event) => event.stopPropagation()}
+                                aria-label={t('ccAgent.sidebar.automationGroup.menu.more')}
+                                className={cn(
+                                  'flex size-5 shrink-0 items-center justify-center rounded-md',
+                                  'transition-colors',
+                                  actionButtonToneClassName,
                                 )}
-                                <DropdownMenuItem
-                                  onSelect={() => onScheduleAction(group, 'edit')}
-                                  className={MENU_ITEM_CLASS}
-                                >
-                                  {t('ccAgent.sidebar.automationGroup.menu.edit')}
-                                </DropdownMenuItem>
-                                {group.scheduleStatus !== 'expired' && (
-                                  <DropdownMenuItem
-                                    onSelect={() => onScheduleAction(group, 'toggle-pause')}
-                                    className={MENU_ITEM_CLASS}
-                                  >
-                                    {group.scheduleStatus === 'paused'
-                                      ? t('ccAgent.sidebar.automationGroup.menu.resume')
-                                      : t('ccAgent.sidebar.automationGroup.menu.pause')}
-                                  </DropdownMenuItem>
-                                )}
-                                <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
-                                <DropdownMenuItem
-                                  onSelect={() => onScheduleAction(group, 'delete')}
-                                  disabled={
-                                    group.scheduleSource === 'project' &&
-                                    (!group.workingDir || !group.projectConfigId)
-                                  }
-                                  className={cn(MENU_ITEM_CLASS, 'text-[hsl(var(--destructive))]')}
-                                >
-                                  {t('ccAgent.sidebar.automationGroup.menu.delete')}
-                                </DropdownMenuItem>
-                              </>
-                            )}
-                          </MountedMenuContent>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                              >
+                                <EllipsisVertical size={14} strokeWidth={2} />
+                              </button>
+                            </Tip>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent
+                            align="end"
+                            sideOffset={2}
+                            onClick={(event) => event.stopPropagation()}
+                            className="min-w-36 overflow-hidden"
+                          >
+                            <MountedMenuContent>
+                              {() => (
+                                <>
+                                  {canMarkRead && (
+                                    <DropdownMenuItem
+                                      onSelect={() => onScheduleAction(group, 'mark-read')}
+                                      className={MENU_ITEM_CLASS}
+                                    >
+                                      {t('ccAgent.sidebar.automationGroup.menu.markAllAsRead')}
+                                    </DropdownMenuItem>
+                                  )}
+                                  {!isRemoteGroup && (
+                                    <DropdownMenuItem
+                                      onSelect={() => onScheduleAction(group, 'edit')}
+                                      className={MENU_ITEM_CLASS}
+                                    >
+                                      {t('ccAgent.sidebar.automationGroup.menu.edit')}
+                                    </DropdownMenuItem>
+                                  )}
+                                  {group.scheduleStatus !== 'expired' && (
+                                    <DropdownMenuItem
+                                      onSelect={() => onScheduleAction(group, 'toggle-pause')}
+                                      className={MENU_ITEM_CLASS}
+                                    >
+                                      {group.scheduleStatus === 'paused'
+                                        ? t('ccAgent.sidebar.automationGroup.menu.resume')
+                                        : t('ccAgent.sidebar.automationGroup.menu.pause')}
+                                    </DropdownMenuItem>
+                                  )}
+                                  {!isRemoteGroup && (
+                                    <>
+                                      <DropdownMenuSeparator />
+                                      <DropdownMenuItem
+                                        onSelect={() => onScheduleAction(group, 'delete')}
+                                        disabled={
+                                          group.scheduleSource === 'project' &&
+                                          (!group.workingDir || !group.projectConfigId)
+                                        }
+                                        variant="danger"
+                                        className={MENU_ITEM_CLASS}
+                                      >
+                                        {t('ccAgent.sidebar.automationGroup.menu.delete')}
+                                      </DropdownMenuItem>
+                                    </>
+                                  )}
+                                </>
+                              )}
+                            </MountedMenuContent>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
                     </div>
                   </>
                 )}

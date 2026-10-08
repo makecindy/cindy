@@ -27,6 +27,7 @@ import type {
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
 import type { GroupHistoryAccessScope } from './groupHistoryAccess';
+import type { ImChannelNoteSource } from './channelNote';
 import type { ImOutputDriver, IMAttachment, IMMessageEvent, IMUnsupportedEntry, TextChannelIM } from '@cindy/im';
 
 /** 渠道名 — 同时是 sessions.source 列值与 IdentityKey.channel 的值域。 */
@@ -151,11 +152,14 @@ export interface ImChannelAdapter {
   config: ImOrchestratorConfig;
   ui: ImUiTextPack;
   sessions: ImSessionNamespace;
-  /** "已收到" ack 的 emoji(feishu: emoji_type 枚举名;slack: emoji 名)。 */
+  /** 处理中表情的基础款（Feishu 使用原生 emoji_type 名）。 */
   processingEmoji: string;
+  /** 用原消息表情表示排队，不另发排队提示；缺省保留文字提示。 */
+  queuedEmoji?: string;
+  /** 没有可撤销状态反馈的渠道静默排队，避免永久残留提示。 */
+  silentQueue?: boolean;
   /**
-   * turn 终态时把 ack 表情替换成结果表情(官方 Telegram bot 习惯:
-   * 成功 👍 / 失败 👎)。返回 null = 该终态不放表情(按默认撤掉 ack);
+   * turn 终态时可将状态替换为错误表情。返回 null = 该终态不放表情(撤掉 ack);
    * 缺省 = 全部按默认撤掉。仅真正跑过的 turn 生效, pre-dispatch 失败不放。
    */
   terminalReactionEmoji?(kind: 'done' | 'aborted' | 'error'): string | null;
@@ -192,7 +196,7 @@ export interface ImChannelAdapter {
   handleTextInteraction?(
     userId: string,
     request: InteractionRequest,
-    options?: { timeoutMs?: number },
+    options?: { timeoutMs?: number; sharedPermission?: import('../../maker-ipc/sharedPermission').SharedPermission },
   ): Promise<InteractionDecision>;
   /**
    * Cancel a channel-owned text interaction when the central route times out,
@@ -229,6 +233,11 @@ export interface ImChannelAdapter {
   prepareAgentTurnText?(event: IMMessageEvent): Promise<{
     agentText: string;
     contextSnapshot?: ImContextSnapshot;
+    /**
+     * agentText 里实际交给模型的被回复消息投影(过滤后的占位也算)。Auto 审阅只用它,
+     * 不读 event.replyContext 原值 —— 审阅器看到的引用不得多于模型看到的。
+     */
+    replyContext?: IMMessageEvent['replyContext'];
     contextAttachments?: IMAttachment[];
     commit?: () => void | Promise<void>;
   } | null>;
@@ -252,6 +261,14 @@ export interface ImChannelAdapter {
   ): boolean;
   /** Telegram 每轮的群历史检索授权；其它渠道不实现即 fail closed。 */
   groupHistoryAccessFor?(event: IMMessageEvent): GroupHistoryAccessScope | undefined;
+  /**
+   * 本条消息的 `[渠道说明]` 来源事实（只进模型正文, 见 channelNote.ts）。
+   * 缺省按入站事件通用推断（imChannelNoteSourceFromEvent）; 渠道有更准确的
+   * 群 id / 群名, 或已在正文别处写了发言人时覆盖。返回 null = 本条不写说明。
+   */
+  channelNoteSourceFor?(
+    event: IMMessageEvent,
+  ): ImChannelNoteSource | null | Promise<ImChannelNoteSource | null>;
 }
 
 // ── UI 文案包 ─────────────────────────────────────────────────────────────────

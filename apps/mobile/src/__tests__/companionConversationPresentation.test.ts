@@ -117,3 +117,19 @@ it('drops persisted auto-resume separators like Desktop, keeping only the live r
   }));
   expect(live.filter(isResumeCard)).toHaveLength(1);
 });
+
+it('attaches exact frozen results to their final reply across reload and keeps unbound receipts', () => {
+  const card = { v: 1, role: 'delegation-result', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Cindy',
+    toBotId: null, toBotName: '', parentSessionId: 'chat', childSessionId: 'child', objective: 'Report',
+    result: { runSequence: 1, status: 'completed', text: 'Frozen result', artifacts: [] } };
+  const input = [row('r1', 'assistant', 'Frozen result', { botCollaboration: card }),
+    row('u2', 'user', 'Include priorities'), row('a3', 'assistant', 'Checking'),
+    row('t4', 'tool_use', { toolName: 'Read', toolUseId: 't4', input: {} }),
+    row('a5', 'assistant', 'Summary', { turnCompleted: true, botTaskResults: [card] })];
+  const projected = bodies(input, false).filter(item => item.type === 'message');
+  expect(projected.map(item => item.message.body)).toEqual(['Include priorities', 'Summary']);
+  expect(projected.at(-1)?.message.source.agentMeta?.botTaskResults).toEqual([card]);
+  expect(bodies(input.slice(0, -1), false).some(item => item.type === 'message' && item.message.companion)).toBe(true);
+  expect(bodies([input[0], row('a6', 'assistant', 'Other reply', { turnCompleted: true })], false)
+    .some(item => item.type === 'message' && item.message.companion)).toBe(true);
+});

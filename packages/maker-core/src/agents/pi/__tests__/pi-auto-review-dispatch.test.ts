@@ -13,6 +13,7 @@
 
 import {
   promises as fs,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -98,16 +99,29 @@ vi.mock('../transport.js', () => ({
 vi.mock('../rpc-client.js', () => ({
   PiRpcProcess: class {
     isClosed = false;
+    private readonly onEvent: (event: unknown) => void;
+    private readonly nativeSettings: { compaction?: Record<string, unknown> };
     constructor(opts: {
       onEvent: (event: unknown) => void;
       onExit: (exit: { code: number | null; signal: string | null }) => void }) {
       captured.onEvent = opts.onEvent;
       captured.onExit = opts.onExit;
+      this.onEvent = opts.onEvent;
+      // Freeze local startup settings; the remote spawn-only fixture has no
+      // local settings file. Keep ACK delivery bound to this runtime instance.
+      const settingsPath = captured.env.PI_CODING_AGENT_DIR
+        ? path.join(captured.env.PI_CODING_AGENT_DIR, 'settings.json') : undefined;
+      this.nativeSettings = settingsPath && existsSync(settingsPath)
+        ? JSON.parse(readFileSync(settingsPath, 'utf8'))
+        : {};
     }
     async request(
       cmd: Record<string, unknown> & { type: string },
     ): Promise<{ success: boolean; command?: string; data?: unknown; error?: string }> {
       captured.requests.push(cmd);
+      if (cmd.type === 'refresh_models' || cmd.type === 'set_compaction_reserve_tokens') {
+        return { success: false, error: `Unknown command: ${cmd.type}` };
+      }
       if (cmd.type === 'set_model' && captured.holdSetModel) {
         await captured.holdSetModel;
       }
@@ -134,13 +148,27 @@ vi.mock('../rpc-client.js', () => ({
       if (cmd.type === 'steer' && captured.failSteer) {
         return { command: 'steer', success: false, error: 'receipt steer rejected' };
       }
+      if (cmd.type === 'prompt' && typeof cmd.message === 'string' &&
+          cmd.message.startsWith('/cindy-native-provider-refresh ')) {
+        const nonce = cmd.message.split(' ')[1];
+        this.onEvent({ type: 'extension_ui_request', method: 'input',
+          title: 'cindy:provider-refresh', id: nonce, placeholder: JSON.stringify({ nonce }) });
+        const response = captured.sent.findLast((message) => message.id === nonce);
+        const snapshot = JSON.parse(String(response?.value ?? '{}'));
+        this.onEvent({ type: 'extension_ui_request', method: 'input',
+          title: 'cindy:provider-refresh-ack', id: `${nonce}-ack`, placeholder: JSON.stringify({
+            nonce, ok: snapshot.nonce === nonce && snapshot.operation === 'inspect',
+            runtimeSettings: { version: '1.0.0', compaction: this.nativeSettings.compaction ?? {} },
+          }) });
+        return { command: 'prompt', success: true };
+      }
       if (cmd.type === 'prompt') captured.onPrompt?.(cmd);
-      if (cmd.type === 'get_commands' && captured.commandCatalog) {
+      if (cmd.type === 'get_commands') {
         return {
           type: 'response',
           command: 'get_commands',
           success: true,
-          data: { commands: captured.commandCatalog },
+          data: { commands: captured.commandCatalog ?? [{ name: 'cindy-native-provider-refresh', source: 'extension' }] },
         } as never;
       }
       if (cmd.type === 'get_state') {
@@ -284,19 +312,15 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     /** 本会话「已注册」的桥接 MCP server 名(经 preparePiExtraSpawnConfig 下发)。 */
     serverNames?: string[];
     policy?: AgentDeps['getMcpToolApprovalPolicy'];
-    presentation?: AgentDeps['getMcpToolApprovalPresentation'];
   }
 
   function buildDeps(
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
-    includeNextModel = false,
+    includeNextModel: boolean | readonly string[] = false,
     mcp?: McpSetup,
   ): AgentDeps {
     return {
       ...(mcp?.policy ? { getMcpToolApprovalPolicy: mcp.policy } : {}),
-      ...(mcp?.presentation
-        ? { getMcpToolApprovalPresentation: mcp.presentation }
-        : {}),
       ...(mcp?.serverNames
         ? {
           preparePiExtraSpawnConfig: async (_providers, context) => {
@@ -345,10 +369,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
             maxOutputTokens: 64_000,
           },
           ...(includeNextModel
-            ? [
-                {
-                  id: 'm-next',
-                  displayName: 'M Next',
+            ? (includeNextModel === true ? ['m-next'] : includeNextModel).map((id) => ({
+                  id,
+                  displayName: id,
                   contextWindow: 200_000,
                   efforts: [],
                   defaultEffort: null,
@@ -359,8 +382,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
                     cacheWrite: 3.75,
                   },
                   maxOutputTokens: 64_000,
-                },
-              ]
+                }))
             : []),
         ],
       },
@@ -424,7 +446,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   async function start(
     permissionMode?: string,
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
-    includeNextModel = false,
+    includeNextModel: boolean | readonly string[] = false,
     mcp?: McpSetup,
     directories?: {
       extraDirs?: string[];
@@ -3206,12 +3228,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         arg === '--extension' ? [captured.args[index + 1]] : []);
       expect(extensionPaths).toEqual(expect.arrayContaining([
         path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'internal-extensions', 'cindy-bridge.ts'),
-      ]));
-      // Bot 会话是产品人格,不是 coding harness:pi 原生 subagent 面必须不可见,
-      // 项目/全局 AGENTS.md 也不得从 cwd 链被吸进上下文。
-      expect(extensionPaths).not.toEqual(expect.arrayContaining([
         path.posix.join(captured.env.PI_CODING_AGENT_DIR!, 'internal-extensions', 'cindy-subagent.ts'),
       ]));
+      // Bot 共享普通任务的子代理能力，但仍保留独立人格和记忆，
+      // 不从 cwd 链加载项目/全局 AGENTS.md。
       expect(captured.args).toContain('--no-context-files');
       expect(deps.resolvePiGlobalContextHome).not.toHaveBeenCalled();
       const promptIndex = captured.args.indexOf('--append-system-prompt');
@@ -3282,7 +3302,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     // 撤销是**无效的**:该标志只在构造 spawnEnv 时读一次(spawn 之前),进程起来后改它既收不回
     // 已注入的 env、也不能让扩展停止读那个文件。于是"写失败 + 删除也失败"(只读挂载/磁盘满)时,
     // 父会话已切到新 provider,子代理仍按上一个有效快照跑 —— 委派发往旧 endpoint(review)。
-    const handle = await start();
+    const handle = await start(undefined, undefined, true);
     const runtimeDir = path.join(agentHome, 'runtime');
     const snapshot = readdirSync(runtimeDir).find((f) => f.startsWith('subagent-'));
     expect(snapshot).toBeTruthy();
@@ -3294,7 +3314,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     mkdirSync(snapshotPath);
     captured.requests = [];
 
-    await expect(handle.setModel('m')).rejects.toThrow(/子代理路由快照/);
+    await expect(handle.setModel('m-next')).rejects.toThrow(/子代理路由快照/);
     // 关键:pi 侧的 set_model **根本没发出去** —— 父子路由不会出现"父已切、子没切"的中间态。
     expect(captured.requests.map((r) => r.type)).not.toContain('set_model');
 
@@ -3309,7 +3329,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     // 快照指向**被拒绝的** provider/model,而父会话仍在旧路由 —— 下一次委派就打到用户并未启用
     // 的端点。此时 subagentRoutingEnabled 是空操作(只在 spawn 前读),删文件也已失败,唯一
     // 可证明有效的手段是让这个 pi 进程不再有下一次派发:终止会话(review 连点两轮)。
-    const handle = await start();
+    const handle = await start(undefined, undefined, true);
     const runtimeDir = path.join(agentHome, 'runtime');
     const snapshot = readdirSync(runtimeDir).find((f) => f.startsWith('subagent-'));
     const snapshotPath = path.join(runtimeDir, snapshot as string);
@@ -3323,7 +3343,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       mkdirSync(snapshotPath);
     };
 
-    await expect(handle.setModel('m')).rejects.toThrow(/已终止本会话/);
+    await expect(handle.setModel('m-next')).rejects.toThrow(/已终止本会话/);
     // 会话必须真的被关掉,而不是只置一个拦不住任何东西的标志。
     expect(captured.closed).toBe(true);
 
@@ -3334,7 +3354,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     // reject / 超时与 `success:false` 有本质区别:后者我们**知道**没生效、可以回滚;前者我们
     // **不知道** pi 侧切没切。两条路都不安全 —— 回滚可能与真实状态相反,放行也可能相反,任一
     // 方向都是父子路由分叉(下一次委派打到用户并未启用的端点)。所以 fail-closed:终止会话。
-    const handle = await start();
+    const handle = await start(undefined, undefined, true);
     const runtimeDir = path.join(agentHome, 'runtime');
     const snapshot = readdirSync(runtimeDir).find((f) => f.startsWith('subagent-'));
     const snapshotPath = path.join(runtimeDir, snapshot as string);
@@ -3346,7 +3366,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(before.provider).toBeTruthy();
 
     captured.rejectSetModel = true;
-    await expect(handle.setModel('m')).rejects.toThrow(/未收到确认/);
+    await expect(handle.setModel('m-next')).rejects.toThrow(/未收到确认/);
     // 会话必须真的被关掉:进程还活着就意味着"下一次委派"仍可能发生。
     expect(captured.closed).toBe(true);
     // 快照**刻意**停在 pending:它既不是已确认的新路由、也不是旧路由,扩展一律拒绝派发。
@@ -3356,7 +3376,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       model?: string;
     };
     expect(stuck.pending).toBe(true);
-    expect(stuck.model).toBe('m');
+    expect(stuck.model).toBe('m-next');
   });
 
   it('isolates the routing snapshot per runtime instance (dev + packaged sharing one userData)', async () => {
@@ -3371,12 +3391,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     // bypassPermissions,本实例的破坏性工具不再确认(跨实例权限提升)。同一把 nonce 一起收口。
     const permsOf = () => readdirSync(runtimeDir).filter((f) => f.startsWith('perm-s1-'));
 
-    const first = await start();
+    const first = await start(undefined, undefined, true);
     const firstFiles = snapshotsOf();
     expect(firstFiles).toHaveLength(1);
     expect(permsOf()).toHaveLength(1);
     // 第二个实例:同一个 sessionId、同一个 agentHome —— 就是 dev + 打包版共库双开的形状。
-    const second = await start();
+    const second = await start(undefined, undefined, true);
     const bothFiles = snapshotsOf();
     expect(bothFiles).toHaveLength(2);
     // 权限档也必须是两份独立文件,否则一个实例切档会改掉另一个实例 bridge 现读的那份。
@@ -3386,10 +3406,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(firstPath).not.toBe(secondPath);
 
     const secondBefore = readFileSync(secondPath, 'utf8');
-    await first.setModel('m-only-in-first');
+    await first.setModel('m-next');
 
     // 切换只落在自己那份快照上;另一个活着的实例一个字节都没被动过。
-    expect((JSON.parse(readFileSync(firstPath, 'utf8')) as { model?: string }).model).toBe('m-only-in-first');
+    expect((JSON.parse(readFileSync(firstPath, 'utf8')) as { model?: string }).model).toBe('m-next');
     expect(readFileSync(secondPath, 'utf8')).toBe(secondBefore);
 
     // 会话结束要回收:带 nonce 之后文件不再按 sessionId 复用,不回收就随每次 startSession 堆积。
@@ -3405,7 +3425,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     // review P1:原来在 RPC 回包**之前**就把新路由写成"已确认"形状,于是等待窗口里模型发起的
     // 派发会现读快照、按未确认的 provider 起子进程;RPC 随后失败时回滚文件撤不回已起的子进程。
     // 修法:窗口内快照带 `pending: true`,扩展见到就拒绝派发(拒绝的真实性由集成用例验证)。
-    const handle = await start();
+    const handle = await start(undefined, undefined, true);
     const runtimeDir = path.join(agentHome, 'runtime');
     const snapshot = readdirSync(runtimeDir).find((f) => f.startsWith('subagent-'));
     const snapshotPath = path.join(runtimeDir, snapshot as string);
@@ -3444,7 +3464,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     // 并发/连点切换(本地 + 远程控制端同时切)若交错:A 写 pending、B 写 pending、A 落定 B 的
     // 内容 —— 盘上就会出现没人确认过的 model/provider 组合,而 `previousSnapshot` 也不再是真正
     // 可回滚的那一份。串行闸保证第二次切换在第一次落定之后才开始。
-    const handle = await start();
+    const handle = await start(undefined, undefined, ['m-first', 'm-second']);
     const runtimeDir = path.join(agentHome, 'runtime');
     const snapshot = readdirSync(runtimeDir).find((f) => f.startsWith('subagent-'));
     const snapshotPath = path.join(runtimeDir, snapshot as string);
@@ -3471,10 +3491,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     release();
     await Promise.all([first, second]);
 
-    // 两次切换按调用序抵达 Pi；每次 settings reload 都重放同一路由后才确认终态。
+    // 两次切换按调用序抵达 Pi；不重载会话，也不重复发送 set_model。
     const setModelCalls = captured.requests.filter((r) => r.type === 'set_model');
     expect(setModelCalls.map((r) => r.modelId)).toEqual([
-      'm-first', 'm-first', 'm-second', 'm-second',
+      'm-first', 'm-second',
     ]);
     const after = JSON.parse(readFileSync(snapshotPath, 'utf8')) as Record<string, unknown>;
     expect(after.model).toBe('m-second');
@@ -3486,7 +3506,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   it('rolls back to the user-selected provider when set_model cleanly reports failure', async () => {
     // 与上一条对照:success:false 是**确定**没生效 → 回滚,快照必须回到用户原本选定的
     // provider/model,下一次委派才会继续直连那个 Pi 原生 provider(BYOM 约束)。
-    const handle = await start();
+    const handle = await start(undefined, undefined, true);
     const runtimeDir = path.join(agentHome, 'runtime');
     const snapshot = readdirSync(runtimeDir).find((f) => f.startsWith('subagent-'));
     const snapshotPath = path.join(runtimeDir, snapshot as string);
@@ -3496,7 +3516,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     };
 
     captured.failSetModel = true;
-    await expect(handle.setModel('m')).rejects.toThrow(/set_model failed/);
+    await expect(handle.setModel('m-next')).rejects.toThrow(/set_model failed/);
     // 会话不该因为一次干净的失败被终止(那是 reject/超时才有的代价)。
     expect(captured.closed).toBe(false);
     // 快照已回滚到切换前的值 —— 父进程路由与下一次委派一致。
@@ -3617,7 +3637,11 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       resumeSessionId: resumeFile,
     });
 
-    expect(deps.resolvePiGatewayModelDescriptor).toHaveBeenCalledWith('openai', 'chatgpt/gpt-missing');
+    expect(deps.resolvePiRuntimeModelDescriptor).toHaveBeenCalledWith('openai', 'chatgpt/gpt-missing');
+    expect(deps.resolvePiGatewayModelDescriptor).toHaveBeenCalledWith('openai', 'm');
+    const config = JSON.parse(readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'));
+    expect(config.providers.cindy.models.map((model: { id: string }) => model.id))
+      .not.toContain('chatgpt/gpt-missing');
     await handle.close();
   });
 
@@ -4241,6 +4265,28 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   });
 
 
+  it('re-resolves Host plugin scope before cached approvals and blocks revocation', async () => {
+    let active = true;
+    const review = Object.assign(vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'allow' as const })), {
+      prepareRequest: async (request: AutoReviewRequest): Promise<AutoReviewRequest> => active
+        ? {...request, userIntent: '', delegatedTask: {source:'approved-plugin',pluginId:'eval',role:'worker',task:'Run project tests',workingDir:cwd,authorizationRevision:'scope-1'}}
+        : {...request, authorizationError:'Plugin Auto authorization revoked'},
+    });
+    const handle = await start('auto', review);
+    try {
+      await handle.send({type:'user',content:'[From Orca Lead] run tests'}, {[AUTO_REVIEW_SOURCE_CONTENT]:''});
+      const action = {kind:'exec' as const,command:'./runtime/node lab/preflight.cjs',cwd};
+      expect(await handle.reviewAutoPermissionAction!(action)).toMatchObject({verdict:'allow'});
+      expect(await handle.reviewAutoPermissionAction!(action)).toMatchObject({verdict:'allow'});
+      expect(review).toHaveBeenCalledOnce();
+      expect(review.mock.calls[0][0].userIntent).toBe('');
+      expect(review.mock.calls[0][0].delegatedTask?.task).toBe('Run project tests');
+      active = false;
+      expect(await handle.reviewAutoPermissionAction!(action)).toMatchObject({verdict:'block'});
+      expect(review).toHaveBeenCalledOnce();
+    } finally { await handle.close(); }
+  });
+
   it('passes flat task history and actual blocked plugin actions after a natural steer, then invalidates on revocation', async () => {
     const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
     const handle = await start('auto', review);
@@ -4315,6 +4361,21 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await waitForResponse('raw-channel');
     expect(JSON.stringify(review.mock.calls[0]?.[0].userIntent)).toContain('Do not send.');
     expect(JSON.stringify(review.mock.calls[0]?.[0].userIntent)).not.toContain('SEND THE REPORT');
+    await handle.close();
+  });
+
+  it.each(['send', 'steer'] as const)('%s carries Host references beside the authored channel text', async (method) => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
+    const handle = await start('auto', review);
+    if (method === 'steer') await handle.send({ type: 'user', content: 'Inspect only.' });
+    const references = { attachments: { images: 1, files: 0 }, quotedMessages: [{ author: '群友', text: '[图片]', attachmentCount: 1 }] };
+    await handle[method]!({ type: 'user', content: '<reply_context>[群友] [图片]</reply_context>这啥情况' }, {
+      [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'im', channel: 'telegram' }, rawChannelText: '这啥情况', autoReviewReferences: references },
+    });
+    firePermissionRequest('references', 'unknown_sender', { action: 'search' });
+    await waitForResponse('references');
+    expect(review.mock.calls[0]?.[0].userIntent)
+      .toMatchObject({ currentUserMessage: '这啥情况', currentUserReferences: references });
     await handle.close();
   });
 
@@ -4645,6 +4706,47 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
   });
 
+  it.each((['auto', 'acceptEdits', 'ask'] as const).flatMap(permissionMode =>
+    (['ordinary', 'allow', 'block', 'ask', 'revoked', 'unavailable', 'late-revoke', 'late-scope', 'confirmed'] as const)
+      .map(scenario => ({ permissionMode, scenario }))))('delegated trusted MCP main keeps live authorization: $permissionMode/$scenario', async ({ permissionMode, scenario }) => {
+    let active = scenario !== 'revoked' && scenario !== 'confirmed';
+    let revision = 'scope-1';
+    let preparations = 0;
+    const review = Object.assign(vi.fn(async (_request: AutoReviewRequest) => {
+      if (scenario === 'late-revoke') active = false;
+      if (scenario === 'late-scope') revision = 'scope-2';
+      return { verdict: scenario === 'block' ? 'block' as const : scenario === 'ask' ? 'ask' as const : 'allow' as const };
+    }), { prepareRequest: vi.fn(async (request: AutoReviewRequest): Promise<AutoReviewRequest> => {
+      if (++preparations === 2 && permissionMode !== 'auto') {
+        if (scenario === 'late-revoke') active = false;
+        if (scenario === 'late-scope') revision = 'scope-2';
+      }
+      if (scenario === 'unavailable') throw new Error('Host storage unavailable');
+      if (scenario === 'ordinary') return request;
+      // Prove a previously ordinary shortcut cannot cross a late Host change.
+      if (permissionMode !== 'auto' && preparations === 1 && scenario.startsWith('late-')) return request;
+      return active ? { ...request, delegatedTask: { source: 'approved-plugin', pluginId: 'eval', role: 'worker',
+        task: 'Run the approved evaluation only', workingDir: cwd, authorizationRevision: revision } }
+        : { ...request, authorizationError: 'Plugin authorization revoked' };
+    }) });
+    const handle = await start(permissionMode, review, false, { serverNames: ['cindy_scheduler'], policy: () => 'auto-approve' });
+    try {
+      const resolver = vi.fn(async () => ({ kind: 'permission', behavior: scenario === 'confirmed' ? 'allow' : 'deny' }) as const);
+      handle.setInteractionResolver(resolver);
+      await handle.send({ type: 'user', content: 'Run this evaluation; do not create schedules.' });
+      firePermissionRequest('delegated-mcp', 'mcp__cindy_scheduler__call_tool', { name: 'schedule_create', args: { prompt: 'outside task scope' } });
+      await vi.waitFor(() => expect(captured.sent).toContainEqual(expect.objectContaining({ type: 'extension_ui_response', id: 'delegated-mcp' })));
+      expect(captured.sent).toContainEqual(expect.objectContaining({ id: 'delegated-mcp', confirmed: scenario === 'ordinary' || (permissionMode === 'auto' ? scenario === 'allow' : scenario === 'confirmed') }));
+      expect(review.prepareRequest).toHaveBeenCalled();
+      expect(review).toHaveBeenCalledTimes(permissionMode !== 'auto' || ['ordinary', 'revoked', 'unavailable', 'confirmed'].includes(scenario) ? 0 : 1);
+      expect(resolver).toHaveBeenCalledTimes((permissionMode === 'auto' ? ['ask', 'unavailable'].includes(scenario) : scenario !== 'ordinary') ? 1 : 0);
+      if (review.mock.calls.length) {
+        expect(review.mock.calls[0]![0].delegatedTask?.pluginId).toBe('eval');
+        expect(JSON.stringify(review.mock.calls[0]![0].action)).toContain('schedule_create');
+      }
+    } finally { await handle.close(); }
+  });
+
   it('reviews actual operations for MCP servers the host policy does not trust', async () => {
     const review = vi.fn(async () => ({ verdict: 'allow' as const }));
     const handle = await start('auto', review, false, {
@@ -4669,38 +4771,6 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       id: 'r21',
       confirmed: true,
     });
-  });
-
-  it('uses the host security disclosure for progressive MCP approvals', async () => {
-    const disclosure = {
-      title: 'Allow Xcode to build this project?',
-      description: 'Build scripts may access files outside the project, and output is returned to the Agent.',
-    };
-    const handle = await start('auto', async () => ({ verdict: 'ask' as const }), false, {
-      serverNames: ['cindy_ios_simulator'],
-      policy: () => 'prompt-each-time',
-      presentation: () => disclosure,
-    });
-    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
-    handle.setInteractionResolver?.(resolver as never);
-
-    firePermissionRequest('r-build', 'mcp__cindy_ios_simulator__call_tool', {
-      name: 'build_app',
-      args: {},
-    });
-
-    expect(await waitForResponse('r-build')).toEqual({
-      type: 'extension_ui_response',
-      id: 'r-build',
-      confirmed: false,
-    });
-    expect(resolver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: 'permission',
-        title: disclosure.title,
-        description: disclosure.description,
-      }),
-    );
   });
 
   /**

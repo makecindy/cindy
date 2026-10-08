@@ -24,6 +24,10 @@
  *
  * 边界:远程会话(remoteHostId)与 Orca 协同会话不支持切换(UNSUPPORTED_CAPABILITY);
  * turn 进行中登记 pending 推迟到下一条消息发送时刻执行。
+ *
+ * 远程 Agent 换电脑(agentDeviceId 变化,null = 任务所在电脑):原生会话记录在原来运行 Agent
+ * 的那台电脑上，换位置无法续接，即使引擎相同也按跨引擎同一流程走(全量交接 + 全新原生会话)；
+ * 目标是另一台电脑时，登记与落地前都按那台的目录校验，不留一个发送时必然失败的意图。
  */
 
 import type { AgentKind } from '@cindy/maker-core';
@@ -95,6 +99,14 @@ export interface AgentSwitchBoundaryContent {
    * 缺失表示 v1 老行,重建时继续使用“边界后是否存在 user 行”的兼容启发式。
    */
   consumed?: boolean;
+  /**
+   * 只在 Agent 换电脑时出现:离场 / 目标位置(null = 任务所在电脑)。名称在切换时快照,
+   * 那台电脑之后改名或移除，分隔条仍看得懂；缺名称时界面显示「另一台电脑」。
+   */
+  fromAgentDeviceId?: string | null;
+  toAgentDeviceId?: string | null;
+  fromAgentDeviceName?: string | null;
+  toAgentDeviceName?: string | null;
 }
 
 export interface AgentSwitchSessionRow {
@@ -107,7 +119,12 @@ export interface AgentSwitchSessionRow {
   orcaRole: string | null;
   sdkSessionId: string | null;
   source?: string | null;
+  /** Agent 在哪台电脑运行(null / 缺省 = 任务所在电脑)。 */
+  agentDeviceId?: string | null;
 }
+
+/** 与 create-session 的 agentDeviceId 校验同一口径。 */
+const AGENT_DEVICE_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 export interface MakerSessionAgentSwitchHandlerDeps {
   /** Same-engine choices use SET_MODEL validation; only the send boundary applies them. Caller owns the session lock. */
@@ -131,7 +148,23 @@ export interface MakerSessionAgentSwitchHandlerDeps {
     agent: 'claude-code' | 'codex' | 'pi',
     model: string,
     providerId: string | null,
+    /** 被切换的任务；Agent 在另一台电脑运行的任务按那台的目录裁决(本机不校验)。 */
+    sessionId?: string,
+    /** 本次选择的 Agent 位置；undefined = 按任务当前位置，null = 任务所在电脑。 */
+    targetAgentDeviceId?: string | null,
   ): Promise<string | undefined>;
+  /**
+   * Agent 将在另一台电脑运行时的准入：那台在线、允许被远程调用该供应商、目录里有这个模型。
+   * 不满足抛错。缺省 = 不校验(测试最小 harness)。
+   */
+  assertAgentDeviceRouteUsable?(
+    deviceId: string,
+    agent: 'claude-code' | 'codex' | 'pi',
+    model: string,
+    providerId: string | null,
+  ): Promise<void>;
+  /** 分隔条展示用的电脑名(null = 任务所在电脑)。缺省 = 不记名称。 */
+  describeAgentDevice?(deviceId: string | null): string | null;
   getSessionRow(sessionId: string): Promise<AgentSwitchSessionRow | null>;
   getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null | undefined;
   closeSession(sessionId: string): Promise<void>;
@@ -163,6 +196,8 @@ export interface MakerSessionAgentSwitchHandlerDeps {
       /** 目标引擎下的 effort / fastMode(意图登记时由 renderer 解析,apply 时一并落库)。 */
       effort?: string;
       fastMode?: boolean;
+      /** Agent 换电脑:undefined = 不动,null = 改回任务所在电脑。 */
+      agentDeviceId?: string | null;
     },
   ): Promise<void>;
   /**
@@ -272,6 +307,13 @@ export interface PendingAgentSwitchIntent {
   effort?: string;
   fastMode?: boolean;
   /**
+   * Agent 在另一台电脑运行的任务：点选时按那台的目录确认过的目标上下文窗口。本机目录里没有
+   * 那台的模型，发送时据此做「换小窗口前先交接」。本机任务不设。
+   */
+  confirmedContextWindow?: number;
+  /** 选择同时换 Agent 所在电脑(null = 任务所在电脑)；缺省 = 位置不变。 */
+  targetAgentDeviceId?: string | null;
+  /**
    * Pi-only：目标模型的思考开关意图（renderer 记忆，缺省开）。发送时刻回放暂存
    * 选择时必须一并应用，否则上一模型的 off 会残留——Pi 的 set_model 不重置
    * thinking level。
@@ -298,6 +340,8 @@ export interface PublicAgentSwitchIntent {
   providerId: string | null;
   effort?: string;
   fastMode?: boolean;
+  /** 只在换 Agent 所在电脑时出现(null = 任务所在电脑)；旧控制端忽略。 */
+  agentDeviceId?: string | null;
 }
 
 /**
@@ -326,6 +370,7 @@ export function projectPendingAgentSwitchIntent(
     providerId: intent.providerId ?? null,
     ...(intent.effort ? { effort: intent.effort } : {}),
     ...(typeof intent.fastMode === 'boolean' ? { fastMode: intent.fastMode } : {}),
+    ...(intent.targetAgentDeviceId !== undefined ? { agentDeviceId: intent.targetAgentDeviceId } : {}),
   };
 }
 
@@ -392,6 +437,11 @@ export async function performSessionAgentSwitch(
     effort?: unknown;
     fastMode?: unknown;
     /**
+     * 选择的 Agent 位置(远程 Agent):undefined = 保持任务当前位置(内部调用与不认识该字段的
+     * 旧控制端都走这里，不做推断)，null = 任务所在电脑，字符串 = 同账号另一台电脑。
+     */
+    agentDeviceId?: unknown;
+    /**
      * Pi-only：目标模型的思考开关意图。重登记(意图期内改档位 / 改选 / 切思考
      * 开关)时必须带上；缺省时由同引擎分支继承既有 intent，不能静默丢字段。
      */
@@ -435,6 +485,15 @@ export async function performSessionAgentSwitch(
   if (providerId !== undefined && providerId !== null && typeof providerId !== 'string') {
     throwIpcError('INVALID_PARAMS', 'providerId must be string | null');
   }
+  const rawAgentDeviceId = params.agentDeviceId;
+  if (
+    rawAgentDeviceId !== undefined &&
+    rawAgentDeviceId !== null &&
+    (typeof rawAgentDeviceId !== 'string' || !AGENT_DEVICE_ID_PATTERN.test(rawAgentDeviceId))
+  ) {
+    throwIpcError('INVALID_PARAMS', 'agentDeviceId must be a device id or null');
+  }
+  const requestedAgentDeviceId = rawAgentDeviceId as string | null | undefined;
   // 必须在第一个 await 前快照：跨窗口 / 跨设备写入即使 set→clear 回到同值，修订号也会变化。
   const pendingRevisionAtStart = deps.pendingSwitches?.revision?.(sessionId);
   let normalizedProviderId =
@@ -448,6 +507,8 @@ export async function performSessionAgentSwitch(
       targetAgentKind,
       model,
       typeof normalizedProviderId === 'string' ? normalizedProviderId : null,
+      sessionId,
+      requestedAgentDeviceId,
     );
     if (reroute && shouldApplyExclusiveProviderRerouteLive(normalizedProviderId)) {
       normalizedProviderId = reroute;
@@ -478,7 +539,23 @@ export async function performSessionAgentSwitch(
 
   const fromDbKind: DbAgentKind = normalizeDbAgentKind(row.agentKind);
   const toDbKind: DbAgentKind = makerToDbAgentKind(targetAgentKind);
-  if (fromDbKind === toDbKind) {
+  const currentAgentDeviceId = row.agentDeviceId ?? null;
+  const targetAgentDeviceId =
+    requestedAgentDeviceId === undefined ? currentAgentDeviceId : requestedAgentDeviceId;
+  const agentDeviceChanges = targetAgentDeviceId !== currentAgentDeviceId;
+  // 落到另一台电脑的完整切换(换引擎或换电脑)：登记与落地前都按那台的目录裁决。同引擎同位置
+  // 的模型选择走 selectSameAgentModel，在 SET_MODEL 链路里裁决。
+  if (targetAgentDeviceId && (agentDeviceChanges || fromDbKind !== toDbKind)) {
+    await deps.assertAgentDeviceRouteUsable?.(
+      targetAgentDeviceId,
+      targetAgentKind,
+      model,
+      typeof normalizedProviderId === 'string' ? normalizedProviderId : null,
+    );
+    throwIfAgentSwitchAborted(signal);
+    params.assertSelectionCurrent?.();
+  }
+  if (fromDbKind === toDbKind && !agentDeviceChanges) {
     // Only picker calls stage a model choice here. Internal cross-engine apply/recovery
     // callers retain the existing same-engine no-op; send consumes staged choices below.
     if (deps.selectSameAgentModel && !params.applyNow) {
@@ -580,6 +657,7 @@ export async function performSessionAgentSwitch(
       ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
       ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
       ...(typeof thinking === 'boolean' ? { thinking } : {}),
+      ...(agentDeviceChanges ? { targetAgentDeviceId } : {}),
     };
     deps.pendingSwitches.set(sessionId, intent);
     deps.onPendingSwitchChanged?.(sessionId, projectPendingAgentSwitchIntent(intent));
@@ -587,6 +665,7 @@ export async function performSessionAgentSwitch(
       sessionId,
       targetAgentKind,
       model,
+      ...(agentDeviceChanges ? { agentDeviceChange: targetAgentDeviceId ? 'other-device' : 'task-device' } : {}),
     });
     return { switched: false, agentKind: targetAgentKind, model, engineReady: true, deferred: true };
   }
@@ -603,13 +682,17 @@ export async function performSessionAgentSwitch(
   // 交接素材与停泊绑定先于任何状态变更取得(失败不留半切换状态)。
   // Phase 2:目标引擎有停泊原生会话 → resume + 增量交接(只补离开期间的进展,
   // 工作状态区仍按全量历史提取);无绑定 → v1 全量交接 + 全新原生会话。
-  const parked = deps.findParkedEngineSession
+  // 换电脑时停泊的原生会话在原来那台电脑上，目标电脑接不上，一律全量交接。
+  const parked = deps.findParkedEngineSession && !agentDeviceChanges
     ? await deps.findParkedEngineSession(sessionId, toDbKind)
     : null;
   const fullSourceMessages = await deps.listMessagesForHandoff(sessionId);
   throwIfAgentSwitchAborted(signal);
   const handoffOptsBase = {
-    fromLabel: agentEngineLabel(fromDbKind),
+    // 同引擎换电脑时两边引擎名相同，标出旧的那段跑在另一台电脑上。
+    fromLabel: agentDeviceChanges
+      ? `${agentEngineLabel(fromDbKind)} (on a different computer)`
+      : agentEngineLabel(fromDbKind),
     toLabel: agentEngineLabel(toDbKind),
     // 附带早期原文检索指引(get_chat_history / search_chat_history 定向到本会话)。
     sessionId,
@@ -644,6 +727,8 @@ export async function performSessionAgentSwitch(
         targetAgentKind,
         model,
         typeof normalizedProviderId === 'string' ? normalizedProviderId : null,
+        sessionId,
+        requestedAgentDeviceId,
       );
       if (rerouteAtCommit && typeof normalizedProviderId !== 'string') {
         normalizedProviderId = rerouteAtCommit;
@@ -658,6 +743,7 @@ export async function performSessionAgentSwitch(
       sdkSessionId: parked?.sdkSessionId ?? null,
       ...(typeof params.effort === 'string' && params.effort ? { effort: params.effort } : {}),
       ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
+      ...(agentDeviceChanges ? { agentDeviceId: targetAgentDeviceId } : {}),
     });
     if (normalizedProviderId !== undefined) {
       deps.setSessionProvider(sessionId, normalizedProviderId);
@@ -685,6 +771,14 @@ export async function performSessionAgentSwitch(
       handoff,
       resumed: !!parked,
       consumed: false,
+      ...(agentDeviceChanges
+        ? {
+            fromAgentDeviceId: currentAgentDeviceId,
+            toAgentDeviceId: targetAgentDeviceId,
+            fromAgentDeviceName: deps.describeAgentDevice?.(currentAgentDeviceId) ?? null,
+            toAgentDeviceName: deps.describeAgentDevice?.(targetAgentDeviceId) ?? null,
+          }
+        : {}),
     };
     let boundaryClientId: string | null = null;
     try {
@@ -819,6 +913,7 @@ export async function performSessionAgentSwitch(
       engineReady,
       resumed,
       handoffChars: handoff.length,
+      ...(agentDeviceChanges ? { agentDeviceChange: targetAgentDeviceId ? 'other-device' : 'task-device' } : {}),
     });
     return {
       switched: true,
@@ -981,6 +1076,7 @@ export function applyPendingAgentSwitchIfIdle(
         effort: intent.effort,
         fastMode: intent.fastMode,
         thinking: intent.thinking,
+        agentDeviceId: intent.targetAgentDeviceId,
         // 普通 maker send 随后会按 DB 真源 lazy-create,无需在 apply 内多 spawn 一次;
         // Goal / IM / scheduler 三条直发路径没有该 lazy-create 事务,必须先把新引擎
         // bootstrap 好再拿 live session 发送,否则会继续持有已关闭的旧 session。
@@ -1017,10 +1113,12 @@ export function applyPendingAgentSwitchIfIdle(
       // Never send on the old model after the user's selected route failed preparation.
       // 墓碑写失败同理: 跨引擎的 fail-continue 也必须挡住 —— 发送继续 + 进程退出会把
       // 同值重选的唯一证据一起丢掉(PR #5155 review P2)。
+      // 换电脑同理:用户选的是另一台电脑(或改回本机)，不能悄悄留在原来那台继续发。
       if (
         err instanceof UserRouteSelectionMarkerError ||
         intent.sameAgentSelection ||
-        intent.runtimeSource === 'agent'
+        intent.runtimeSource === 'agent' ||
+        intent.targetAgentDeviceId !== undefined
       ) {
         throw err;
       }
@@ -1048,9 +1146,20 @@ export function registerMakerSessionAgentSwitchHandler(
       providerId: unknown,
       effort: unknown,
       fastMode: unknown,
-      thinking: unknown,
+      // 第 7 参(可选):{ agentDeviceId } —— 同时换 Agent 所在电脑。旧被控端忽略多余参数,
+      // 位置保持不变(与今天一致)。
+      options?: unknown,
+      thinking?: unknown,
     ) => {
       const context = getDeviceLinkInvokeContext();
+      const agentDeviceId =
+        options && typeof options === 'object' && !Array.isArray(options) && 'agentDeviceId' in options
+          ? (options as { agentDeviceId?: unknown }).agentDeviceId
+          : undefined;
+      // 共享任务的访客只能在主人给的范围内改设置，不能把 Agent 挪到主人的其他电脑上。
+      if (agentDeviceId !== undefined && context?.sharedTask) {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'shared task guests cannot move the agent to another computer');
+      }
       const guard = createSharedTaskSettingGuard(context?.sharedTask, String(sessionId), context?.sharedTaskSetting ?? { admitted: false });
       const run = () => performSessionAgentSwitch(deps, {
         sessionId,
@@ -1059,6 +1168,7 @@ export function registerMakerSessionAgentSwitchHandler(
         providerId,
         effort,
         fastMode,
+        ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
         thinking,
         assertSelectionCurrent: guard.admit,
       });

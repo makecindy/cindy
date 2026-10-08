@@ -53,11 +53,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import {
-  MENU_ITEM_CLASS,
-  MENU_ROW_CLASS,
-  MENU_SUB_CONTENT_CLASS,
-} from './menuStyles';
+import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 import { toast } from '@/lib/toast';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
@@ -85,6 +81,7 @@ import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
 import type { SessionMoveTarget } from './sessionMoveTarget';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
+import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMark';
 import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
 import { Tip } from '@/components/ui/tooltip';
@@ -348,6 +345,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   sharedTaskRole,
 }: SessionItemProps & SidebarNavigationProps) {
   const { t } = useTranslation();
+  const followers = useSessionFollowers(session);
   const cindyMakeActivity = useCindyMakeActivity(session);
   const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
   const prRefs = usePrRefsForSession(session.id);
@@ -456,7 +454,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   const isAutomationGenerated = isAutomationGeneratedSession(session);
   // heartbeat schedule 绑定标识(targetSessionId 指向本会话);schedule 删除/过期后
   // schedulesStore 'changed' 刷新 → 列表为空 → 徽章消失。
-  const boundSchedules = useSessionBoundSchedules(session.id);
+  const boundSchedules = useSessionBoundSchedules(session.id, session.deviceLinkDeviceId);
   const hasAutomationMeta = boundSchedules.length > 0 || isAutomationGenerated;
   // 单个 automation-generated 会话行的「schedule 反查」:sessionId → scheduleId 走
   // sidebar-index-runs(Session 上没有 scheduleId 字段)。用于两处:
@@ -810,6 +808,8 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     !isEmpty &&
     !session.remoteHostId &&
     !session.deviceLinkDeviceId &&
+    // Agent 在另一台电脑运行：它的会话记录按项目路径存在那台，移动后无法继续。
+    !session.agentDeviceId &&
     session.status !== 'archived';
 
   // 导出 .cshare 的可见性:draft 无内容、remote 转录在远端、device-link 数据在
@@ -819,7 +819,9 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     !isEmpty &&
     !session.remoteHostId &&
     session.orcaRole !== 'worker' &&
-    !session.deviceLinkDeviceId;
+    !session.deviceLinkDeviceId &&
+    // Agent 在另一台电脑运行：转录在那台，本机打包不全。
+    !session.agentDeviceId;
 
   const exportShareMenuItem = canExportShare ? (
     <DropdownMenuItem onSelect={handleExportShareSelect} className={MENU_ITEM_CLASS}>
@@ -986,10 +988,11 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           : isSelected
             ? 'bg-[var(--chat-input-chip-bg)] [--task-tag-ring-bg:var(--chat-input-chip-bg)] text-foreground'
             : cn(
-                'text-foreground hover:bg-sidebar-item-hover hover:[--task-tag-ring-bg:hsl(var(--sidebar-item-hover))]',
+                // 标签色球描边不随 hover 换色:CINDY 的 hover 底是半透明叠加色,
+                // 用作描边会透出色球本色,描边消失、色球看似变大。
+                'text-foreground hover:bg-sidebar-item-hover',
                 // 菜单开着时鼠标常会离开行,行底仍保持 hover 色。
-                menuPos !== null &&
-                  'bg-sidebar-item-hover [--task-tag-ring-bg:hsl(var(--sidebar-item-hover))]',
+                menuPos !== null && 'bg-sidebar-item-hover',
               ),
         isSelected && 'ring-1 ring-inset ring-[var(--focus-ring-soft)]',
       )}
@@ -1055,7 +1058,11 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           {/* 绑定徽章优先于普通自动化 Timer:persistentSession 会话两者皆真,
               主图标统一为 Timer，绑定态额外承载频率/暂停信息。 */}
           {boundSchedules.length > 0 ? (
-            <ScheduleBindingBadge schedules={boundSchedules} activeForeground={isActive} />
+            <ScheduleBindingBadge
+              schedules={boundSchedules}
+              deviceLinkDeviceId={session.deviceLinkDeviceId}
+              activeForeground={isActive}
+            />
           ) : isAutomationGenerated ? (
             <AutomationSessionButton sessionId={session.id} size={10} activeForeground={isActive} />
           ) : null}
@@ -1065,6 +1072,10 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           >
             {titleContent}
           </SidebarTitleMarquee>
+          {/* 任务标签常显、紧跟标题，不属于任务信息复选；标题过长时标题截断让位。 */}
+          <TaskTagDots tags={session.tags} />
+          {/* 这件任务所在的项目交给了伙伴时，显示伙伴头像（伙伴在跟进）。 */}
+          <BotFollowMark followers={followers} />
           {remoteIconKind && (
             <RemoteProjectIcon
               kind={remoteIconKind}
@@ -1076,6 +1087,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
               )}
             />
           )}
+          {/* Agent 在另一台电脑运行(任务在本机)的标识在左侧 Agent 图标上(信号波纹)。 */}
           {sourceLabel ? (
             <span
               title={sourceLabel}
@@ -1102,11 +1114,6 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           槽宽取信息层与按钮的较大值——不再绝对定位盖到标题上。 */}
       {!isEditing && (
         <div className="group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">
-          {infoPieces.find((piece) => piece.key === 'tags')?.tags?.length ? (
-            <span className="mr-1 inline-flex shrink-0 items-center">
-              <TaskTagDots tags={session.tags} />
-            </span>
-          ) : null}
           {/* 任务信息同步 fade-out:hover/菜单打开/archivePending 时
               一起让位,确保只有 action buttons 占住右侧。fade 容器复用同一份条件,
               避免两个元素 fade 时机不一致产生闪烁。
@@ -1145,7 +1152,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                 // 任务信息复选:按用户勾选拼装 pr / worktree / tokens / cost / time;默认仅
                 // time,与旧时间槽渲染等价。全不选 → SessionInfoMeta 渲染 null,槽宽归零。
                 <SessionInfoMeta
-                  pieces={infoPieces.filter((piece) => piece.key !== 'tags')}
+                  pieces={infoPieces}
                   prRef={infoPrRef}
                   worktree={infoWorktree ?? undefined}
                   isActive={isActive}

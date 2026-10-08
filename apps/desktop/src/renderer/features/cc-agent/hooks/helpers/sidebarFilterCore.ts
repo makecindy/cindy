@@ -74,7 +74,7 @@ export type FilterProjectOrder = 'activity' | 'custom';
  * 任务行右侧信息项（复选）。存储数组的顺序 = 用户勾选先后(nextTaskInfoAfterToggle
  * 按序追加),列表行据此渲染(2026-08-12 用户裁决);菜单里选项的排列另有固定顺序。
  */
-export type TaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost' | 'tags';
+export type TaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost';
 export type ManualProjectDropPosition = 'before' | 'after';
 
 const STATUS_VALUES: ReadonlySet<string> = new Set<FilterStatus>(['active', 'archived', 'all']);
@@ -556,15 +556,13 @@ const TASK_INFO_VALUES: ReadonlySet<string> = new Set<TaskInfoField>([
   'worktree',
   'tokens',
   'cost',
-  'tags',
 ]);
-/** 默认显示标签和最近活动时间。 */
-export const DEFAULT_TASK_INFO_FIELDS: readonly TaskInfoField[] = ['tags', 'time'];
+/** 默认仅显示最近活动时间。任务标签不属于可选信息项，始终跟在标题后显示。 */
+export const DEFAULT_TASK_INFO_FIELDS: readonly TaskInfoField[] = ['time'];
 
 /**
- * 旧 string[] 没有记录用户是否见过标签开关，升级时补上默认开启的标签，
- * 保留其他字段及顺序。新版本以带版本号的字段列表记录显式选择，
- * 包括关闭标签或全不选；后续启动不再覆盖这些选择。
+ * 兼容旧 string[] 与带版本号的字段列表，保留字段及顺序（全不选合法）。
+ * 旧版本存下的 'tags' 已不是信息项，按未知值静默丢弃。
  */
 export function loadTaskInfoFields(): TaskInfoField[] {
   const storage = safeStorage();
@@ -589,7 +587,7 @@ export function loadTaskInfoFields(): TaskInfoField[] {
       seen.add(value);
       cleaned.push(value as TaskInfoField);
     }
-    return legacy && !seen.has('tags') ? ['tags', ...cleaned] : cleaned;
+    return cleaned;
   } catch (err) {
     log.warn('[useSidebarFilter] failed to parse taskInfo JSON:', err);
     return [...DEFAULT_TASK_INFO_FIELDS];

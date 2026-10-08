@@ -6,6 +6,7 @@ import {
   NOTIFY_TITLE_MAX_LENGTH,
   type NotifyCategory,
   type NotifyPayload,
+  type NotifySender,
 } from '@cindy/device-link';
 
 /**
@@ -43,6 +44,7 @@ export function buildSessionNotifyPayload(opts: {
    * 而不是普通任务视图；参数与名册进入聊天时相同，旧手机同样识别，缺省保持原深链。
    */
   teammateBotId?: string;
+  teammateAvatar?: NotifySender['avatar'];
 }): NotifyPayload {
   const safeTitle = (opts.title.trim() || opts.sessionId.slice(0, 8)).slice(
     0,
@@ -54,6 +56,12 @@ export function buildSessionNotifyPayload(opts: {
     title: safeTitle,
     body: detail || opts.fallbackBody.slice(0, NOTIFY_BODY_MAX_LENGTH),
     deepLink: sessionDeepLink(opts.sessionId, opts.selfDeviceId, opts.teammateBotId),
+    ...(opts.kind === 'done' && opts.teammateBotId ? {
+      sender: {
+        id: createHash('sha256').update(`${opts.selfDeviceId}:bot:${opts.teammateBotId}`).digest('hex'),
+        ...(opts.teammateAvatar ? { avatar: opts.teammateAvatar } : {}),
+      },
+    } : {}),
     // 同会话的通知在系统层合并(APNs collapse-id / thread-id);混入 srcDeviceId,
     // 多台桌面推同名会话时互不顶替。原样拼接不可行:deviceId 可能是 64 位
     // machineId,拼出 100+ 字符会被 APNs 的 64 字节 collapse-id 上限截断成

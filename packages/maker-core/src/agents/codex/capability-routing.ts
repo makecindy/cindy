@@ -3,6 +3,7 @@ import type {
   CapabilityRoutingPolicy,
 } from '../../types/capability-routing.js';
 import type { BotRuntimeMcpPolicy, BotRuntimeSkillPolicy } from '../base-agent.js';
+import { canonicalSkillPath } from '../shared/skill-activation.js';
 import { isBotMcpServerAllowed } from '../shared/bot-runtime-policy.js';
 
 const CODEX_HARNESS_ID = 'codex';
@@ -15,6 +16,7 @@ interface CodexSkillState {
 /** Build Codex's native per-thread Skill config for a Bot allowlist. */
 export function buildCodexBotSkillConfigOverrides(
   policy: BotRuntimeSkillPolicy | undefined,
+  refreshed?: { skills: readonly { path: string; enabled?: boolean }[]; grants: ReadonlySet<string> },
 ): Record<string, unknown> {
   if (!policy) return {};
   const byPath = new Map<string, { path: string; enabled: boolean }>();
@@ -28,7 +30,16 @@ export function buildCodexBotSkillConfigOverrides(
     byPath.set(skillPath, {
       path: skillPath,
       enabled: item.enabled !== false && item.runtimeStatus !== 'failed' &&
+        (!refreshed || refreshed.grants.has(canonicalSkillPath(skillPath))) &&
         (allowed.has(item.name.trim()) || (!!runtimeName && allowed.has(runtimeName))),
+    });
+  }
+  // The refreshed native catalog can contain skills absent from the Bot's
+  // earlier catalog. Grant by frozen physical identity, never by a new name.
+  for (const item of refreshed?.skills ?? []) {
+    byPath.set(item.path, {
+      path: item.path,
+      enabled: item.enabled !== false && refreshed!.grants.has(canonicalSkillPath(item.path)),
     });
   }
   // Cindy-owned Bot Skills are outside the ambient allowlist. Codex has no

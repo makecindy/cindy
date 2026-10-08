@@ -12,6 +12,10 @@
     "deleteFailed": "刪除裝置失敗。",
     "deleteOnline": "裝置目前在線，請讓裝置離線後再刪除。",
     "currentlyOnline": "目前在線",
+    "availableSection": "在線裝置",
+    "offlineSection": "離線裝置",
+    "showAllOffline": "顯示全部 {{count}} 台",
+    "showFewerOffline": "收合",
     "nameTooLong": "裝置名稱不能超過 {{limit}} 個字元。",
     "fields": {
       "name": "名稱",
@@ -29,9 +33,7 @@
   "common": {
     "cancel": "取消",
     "save": "儲存",
-    "saving": "儲存中",
     "delete": "刪除",
-    "deleting": "刪除中",
     "create": "新建"
   },
   "resources": {
@@ -47,7 +49,8 @@
     "openFailed": "無法開啟任務",
     "resolving": "正在開啟最新任務…",
     "retry": "重試",
-    "hostCount": "{{count}} 台電腦"
+    "hostCount": "{{count}} 台電腦",
+    "stale": "內容可能已過期，暫時無法更新"
   },
   "presentation": {
     "deviceList": {
@@ -177,10 +180,10 @@
     },
     "home": {
       "allDevices": "全部",
-      "allComputers": "全部電腦",
+      "allComputers": "全部裝置",
       "waitingCount": "{{count}} 待處理",
       "synced": "已同步",
-      "unknownComputer": "未知電腦",
+      "unknownComputer": "未知裝置",
       "uncategorizedProject": "未分類專案",
       "cindyMake": "Cindy Make",
       "empty": {
@@ -294,7 +297,7 @@
     "error": {
       "sessionDeviceNotFound": "找不到這個任務所屬裝置，請重新同步後再試。",
       "taskDeviceNotFound": "找不到這個任務所屬裝置，請重新同步後再試。",
-      "noDevice": "沒有可用裝置。請先開啟桌面端遠端控制，然後重新同步。"
+      "noDevice": "沒有可用裝置。請先在電腦端開啟遠端控制，然後重新同步。"
     },
     "alert": {
       "cacheSaveFailed": "離線快取未能儲存",
@@ -314,7 +317,7 @@
       "syncing": "正在重新同步",
       "sync": "重新同步",
       "pinnedConversations": "置頂 {{count}} 條任務",
-      "newRemoteConversation": "新建遠端任務",
+      "newRemoteConversation": "新建任務",
       "renameDevice": "重新命名 {{label}}",
       "project": "專案 {{title}}",
       "dialogue": "對話",
@@ -424,7 +427,13 @@
       "needAttention": "{{count}} 個需關注",
       "waiting": "等待處理 {{count}} 個",
       "automationRunning": "自動化執行中",
-      "totalRuns": "共 {{count}} 次執行"
+      "totalRuns": "共 {{count}} 次執行",
+      "runCount": "共 {{count}} 次",
+      "nextRunMinutes": "{{count}} 分鐘後執行",
+      "nextRunHours": "{{count}} 小時後執行",
+      "nextRunDays": "{{count}} 天後執行",
+      "imminent": "即將執行",
+      "stopped": "已停止"
     }
   },
   "detail": {
@@ -528,6 +537,9 @@
     "viewAllRuns": "檢視全部 {{count}} 次執行"
   },
   "companions": {
+    "noCreateHosts": "目前沒有可用的相容電腦。在電腦上開啟 Cindy 並登入同一帳號後即可新建夥伴。",
+    "taskAttentionCount": "{{count}} 個任務待關注",
+    "unreadChatCount": "{{count}} 段對話未讀",
     "messageSent": "已向背景任務傳送訊息",
     "sentTo": "已傳訊息給 {{name}}",
     "receivedFrom": "訊息來自 {{name}}",
@@ -557,13 +569,13 @@
     "unread": "有新回覆",
     "status": {
       "queued": "正在開始",
-      "running": "正在做",
+      "running": "執行中",
       "waiting": "等待處理",
       "completed": "已完成",
-      "failed": "失敗了",
+      "failed": "失敗",
       "cancelled": "已停止",
       "timed-out": "已逾時",
-      "unknown": "任務狀態查不到了"
+      "unknown": "狀態未知"
     },
     "title": "夥伴",
     "tasks": "任務",
@@ -622,7 +634,14 @@
     },
     "viewResult": "查看結果",
     "noWrittenResult": "沒有文字結果。",
-    "errorDetails": "錯誤詳情"
+    "errorDetails": "錯誤詳情",
+    "createTeammate": "新增夥伴",
+    "createMenu": "新增",
+    "searchWithGroups": "搜尋夥伴和群聊",
+    "awaiting": "等你確認",
+    "emptyCopyCreate": "夥伴會記得你們聊過的事，也能幫你在電腦上做事。",
+    "taskResult": "任務結果",
+    "collapseResult": "收起結果"
   },
   "companionProfile": {
     "avatar": "頭像",
@@ -649,7 +668,7 @@
     "memorySaveFailed": "沒有儲存成功，你的編輯已保留。",
     "memoryMissing": "這條記憶已不存在。",
     "memoryDeleteFailed": "刪除失敗",
-    "create": "新夥伴",
+    "create": "新建夥伴",
     "createFailed": "尚未確認建立結果，請重試核對。",
     "title": "夥伴資料",
     "profile": "資料與性格",
@@ -671,6 +690,8 @@
     "artifactsEmpty": "還沒有成果，可以讓夥伴創作一些內容。",
     "openSourceTask": "開啟來源任務",
     "modelFollowsDefault": "跟隨目前預設模型鏈",
+    "taskModel": "任務模型",
+    "taskInheritsPrimary": "繼承主模型",
     "modelOverride": "使用此夥伴的自訂模型鏈",
     "modelsUnavailable": "暫無可用模型，請在電腦上檢查此夥伴的模型設定後重新整理。",
     "artifactsRecovery": "請從訊息卡中開啟檔案，或在 {{deviceName}} 上瀏覽檔案。",
@@ -702,13 +723,13 @@
     "automations": "自動化",
     "paused": "匯入後仍停用",
     "itemAttention": "需要處理",
-    "takeover": "檢查通過後，由夥伴接管自動化",
+    "takeover": "匯入後檢查並接管自動化",
     "takeoverNote": "資料連線驗證通過後才暫停原任務。取消所需依賴時，原任務繼續執行。",
     "submit": "匯入",
     "back": "上一步",
     "open": "開啟夥伴",
     "running": "正在匯入並檢查連線…",
-    "complete": "匯入完成",
+    "complete": "匯入已儲存",
     "attention": "部分內容需要處理，詳見下方。",
     "error": "未能完成匯入，可按原選擇重試。",
     "keptAtSource": "尚未完成接管",
@@ -723,6 +744,30 @@
     "credentialFailed": "憑證未能安全儲存。",
     "scriptMissing": "缺少這項任務所需的指令碼。",
     "sourceCommand": "找不到原 Agent 的控制命令。",
-    "readFailed": "尚未驗證這項任務實際需要的資料查詢。"
+    "readFailed": "尚未驗證這項任務實際需要的資料查詢。",
+    "search": "搜尋",
+    "selectAll": "全選",
+    "previous": "上一頁",
+    "next": "下一頁",
+    "chatSetup": "已儲存可匯入的資料，可以開始交流了。部分內容還需要登入或檢查，你方便時我們再繼續。接管前，原來的自動化保持原狀。",
+    "chatReady": "資料已經匯入，可以開始交流了。",
+    "partial": "部分內容未完整匯入",
+    "details": "查看匯入詳情",
+    "partlySaved": "僅部分儲存",
+    "savedNeedsSetup": "已儲存，尚未啟用或完成設定",
+    "notSaved": "未儲存",
+    "databaseDriver": "資料庫驅動程式無法載入，請更新或修復 Cindy 後重試。",
+    "databaseUnavailable": "無法讀取來源資料庫，原資料未變更。修復後可重試。",
+    "fileTooLarge": "檔案或本次資料超過讀取上限，未截斷匯入。",
+    "memoryMetadata": "記憶摘要或標題不符合儲存要求。",
+    "memoryWrite": "記憶寫入或完整性檢查失敗，可重試。",
+    "memoryChanged": "已儲存的記憶發生變更，未覆寫。",
+    "attachmentUnsupported": "此附件格式暫不支援，原檔案保留在來源。",
+    "diskFull": "磁碟空間不足，釋放空間後可重試。",
+    "permissionDenied": "沒有權限讀取或儲存此項，修復權限後可重試。",
+    "setupDeferred": "可在夥伴對話中繼續登入與驗證。",
+    "automationInvalid": "自動化定義無法轉換，尚未建立。",
+    "itemFailed": "此項未完成，可重試並查看匯入詳情。",
+    "chatPartial": "夥伴已建立，但部分資料未完整儲存。以下項目仍需處理；其他內容和對話可以正常使用。"
   }
 }

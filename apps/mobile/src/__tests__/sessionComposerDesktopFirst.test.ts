@@ -117,14 +117,14 @@ describe('mobile session composer desktop-first surface', () => {
     const inputEnd = sharedSource.indexOf('resizeGrabberTouch:', inputStart);
     const inputStyle = sharedSource.slice(inputStart, inputEnd);
     const composerStyleStart = source.indexOf('composer: {');
-    const composerStyleEnd = source.indexOf('composerScroll:', composerStyleStart);
+    const composerStyleEnd = source.indexOf('composerScrollFrame:', composerStyleStart);
     const composerStyle = source.slice(composerStyleStart, composerStyleEnd);
     const composerStatusCallIndex = source.indexOf('<ComposerActivityStatus');
     const composerViewStart = source.indexOf('testID="session.composer"');
-    const composerScrollEnd = source.indexOf('</ScrollView>', composerViewStart);
+    const composerScrollEnd = source.indexOf('</ComposerFrame>', composerViewStart);
     const composerViewSource = source.slice(composerViewStart, composerScrollEnd);
     const voiceStatusIndex = composerViewSource.indexOf('testID="session.voiceStatus"');
-    const composerScrollIndex = composerViewSource.indexOf('testID="session.composerScroll"');
+    const composerScrollIndex = composerViewSource.indexOf('bodyScrollTestID="session.composerScroll"');
     const voiceDraftTextStart = source.indexOf('onTextLayout={handleVoiceDraftTextLayout}');
     const voiceDraftTextEnd = source.indexOf('</Text>', voiceDraftTextStart);
     const voiceDraftTextSource = source.slice(voiceDraftTextStart, voiceDraftTextEnd);
@@ -159,7 +159,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('toolbar: renderComposerToolbar()');
     expect(source).toContain('trailing: renderComposerTrailingActions()');
     expect(source).toContain('gesture={composerResize.gesture}');
-    expect(source).toContain('<GestureDetector gesture={composerResize.scrollGesture}>');
+    expect(source).toContain('bodyScrollGesture={composerResize.scrollGesture}');
     expect(source).not.toContain('styles.composerCompactAttachmentSlot');
     expect(source).toContain('styles.composerCompactAttachmentHit');
     expect(source).not.toContain('styles.composerCompactAttachmentHitArea');
@@ -178,7 +178,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(composerInputSource).toContain('trailing={composerCardActive ? null : controls.trailing}');
     expect(trailingActionsSource).toContain('<PaperPlaneIcon');
     expect(trailingActionsSource).toContain('color={composerSendDisabled ? colors.textSecondary : colors.ctaText}');
-    expect(source).toContain('const composerCardActive = (canUseComposer && composerFocused)');
+    // 收起胶囊点开到真正聚焦之间的过渡期(composerPillOpen.opening)同样算激活态,仍受 canUseComposer 门控。
+    expect(source).toContain('const composerCardActive = (canUseComposer && (composerFocused || composerPillOpen.opening))');
     expect(source).toContain('|| permissionSheetOpen');
     // 2026-07-29 用户裁决:权限入口是 composer 左侧图标钮 + 独立浮窗
     // (两端都经 NativePermissionSheet:点选先关浮窗,关闭完成后再生效);
@@ -261,7 +262,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('composerRuntimePillTextRisky');
     expect(source).toContain('color: colors.statusAccent');
     expect(source).not.toContain("import { BlurView } from 'expo-blur';");
-    expect(source).toContain("import { BlurBackdrop } from '@/session/BlurBackdrop';");
+    expect(source).toContain("import { BlurBackdrop, FLOATING_CHROME_BLUR_INTENSITY } from '@/session/BlurBackdrop';");
     expect(source).toContain('<SessionHeaderNativeBlur height=');
     expect(source).toMatch(/<SessionHeaderNativeTitle\s+title=\{sharedTaskEnded \? t\('sharedTask.ended'\) : title\}/);
     expect(source).toContain('<SessionHeaderNativeActions');
@@ -366,7 +367,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const handleGrabberTouchActiveChange = useCallback((active: boolean) => {');
     expect(source).toContain('composerScrollViewRef.current?.setNativeProps({');
     expect(source).toContain('onGrabberTouchActiveChange: handleGrabberTouchActiveChange,');
-    expect(source).toContain('ref={composerScrollViewRef}');
+    expect(source).toContain('bodyScrollRef={composerScrollViewRef}');
     expect(source).not.toContain('const composerScrollEnabled = nativeShellLayout.composerScrollEnabled || voiceIsListening || composerInputScrollEnabled;');
     expect(source).toContain('onContentSizeChange={handleComposerInputContentSizeChange}');
     expect(source).not.toContain('voiceIsListening && { height: composerInputVisibleHeight }');
@@ -393,7 +394,12 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('testID="session.bottomLayer"');
     expect(source).toContain('testID="session.bottomContent"');
     expect(source).toContain("paddingBottom: sessionOperationLayout.composerSlot === 'pending-interaction'");
-    expect(source).toContain('? 0\n                  : insets.bottom');
+    // 底部 padding:待处理面板自己收 safe-area(0);dock 形态(键盘跟随 / 胶囊停靠)另行计算;
+    // 非 dock 的普通 composer 仍由外层留一次 insets.bottom。
+    const bottomPaddingStart = source.indexOf("paddingBottom: sessionOperationLayout.composerSlot === 'pending-interaction'");
+    const bottomPadding = source.slice(bottomPaddingStart, source.indexOf('testID="session.bottomContent"', bottomPaddingStart));
+    expect(bottomPadding).toMatch(/^paddingBottom: sessionOperationLayout\.composerSlot === 'pending-interaction'\s*\n\s*\? 0\s*\n/);
+    expect(bottomPadding).toMatch(/: insets\.bottom,\s*\n\s*\},/);
     expect(source.match(/safeAreaBottomInset={insets\.bottom}/g)).toHaveLength(2);
     expect(source).toContain('pointerEvents="box-none"\n            style={[');
     expect(source).toContain('nativeShellLayout.wideViewport && { maxWidth: nativeShellLayout.contentMaxWidth }');
@@ -796,7 +802,9 @@ describe('mobile session composer desktop-first surface', () => {
     // 手势被系统/滚动打断时撤销按下即录(review P1)。
     expect(source).toContain('cancelVoiceForAppBackground();');
     expect(source).toContain('testID="session.voiceRecordingPill"');
-    expect(source).toContain('{ width: voiceRecordingTimer.pillWidth }');
+    // 胶囊宽度驱动语音按钮外框(过渡由 voicePillWidthMotion 负责);外框要带上按钮的
+    // hitSlop,否则收起态 34pt 麦克风的命中区会因新的直接父视图而缩小。
+    expect(source).toContain('<VoicePillWidthFrame hitSlop={COMPOSER_CONTROL_HIT_SLOP} width={voiceRecordingTimer.pillWidth}>');
     expect(source).not.toContain('voiceDuration');
     expect(source).not.toContain('recordingDuration');
     expect(source).not.toContain('formatVoiceDuration');

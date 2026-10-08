@@ -20,6 +20,7 @@
 export const PROTOCOL_VERSION = 1;
 
 export * from './sharedTask.js';
+export * from './providerShare.js';
 
 /** 单帧最大字节数(超过即回 PAYLOAD_TOO_LARGE 并丢弃,不断连;发送方应先行拒绝/裁剪) */
 export const MAX_FRAME_BYTES = 2 * 1024 * 1024;
@@ -58,6 +59,8 @@ export interface Envelope {
   dst?: string;
   /** Optional cross-account task scope; absent means legacy same-account routing. */
   sharedTask?: import('./sharedTask.js').SharedTaskScope;
+  /** Optional cross-account provider-share scope; never combined with sharedTask. */
+  providerShare?: import('./providerShare.js').ProviderShareScope;
   payload?: unknown;
 }
 
@@ -145,6 +148,14 @@ export const NOTIFY_TITLE_MAX_LENGTH = 120;
 export const NOTIFY_BODY_MAX_LENGTH = 240;
 export const NOTIFY_DEEP_LINK_MAX_LENGTH = 512;
 export const NOTIFY_COLLAPSE_ID_MAX_LENGTH = 128;
+/** Small offline thumbnail; relay must still enforce APNs' total 4096-byte budget. */
+export const NOTIFY_AVATAR_JPEG_MAX_LENGTH = 2048;
+
+export interface NotifySender {
+  /** Device-scoped opaque Bot identity. Display name is the notification title. */
+  id: string;
+  avatar?: { kind: 'jpeg' | 'symbol' | 'preset'; value: string };
+}
 
 /**
  * notify 帧 payload(client→server;server 消费,不转发)。
@@ -169,6 +180,8 @@ export interface NotifyPayload {
   collapseId: string;
   /** 只推给指定设备;缺省 = 本账号全部已注册推送 token 的设备(不含发送方) */
   targetDeviceId?: string;
+  /** Incoming teammate reply only. Older relays ignore this optional enrichment. */
+  sender?: NotifySender;
 }
 
 /** 设备识别用的轻量硬件 / 系统信息。所有字段 best-effort,可缺省。 */

@@ -161,6 +161,120 @@ it('old hosts without the channel fail silently', async () => {
   expect(value.prompt).toBeNull();
 });
 
+it('keeps live completion eligibility when its timestamp settles during debounce', async () => {
+  await render({ running: true });
+  await render({ running: false, revision: 20 });
+  await act(async () => vi.advanceTimersByTimeAsync(18));
+  await render({ revision: 38 });
+  await advance();
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({
+    cacheOnly: false, completionRevision: 38,
+  }));
+  expect(value.prompt).toBe('Suggested next step');
+  await render({ revision: 50 }); await advance();
+  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ cacheOnly: true }));
+});
+
+it('waits for connectivity before requesting a just-completed turn', async () => {
+  await render({ running: true, available: false });
+  await render({ running: false, revision: 20 }); await advance();
+  expect(request).not.toHaveBeenCalled();
+  await render({ available: true }); await advance();
+  expect(request).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    completionRevision: 20, cacheOnly: false,
+  }));
+  expect(value.prompt).toBe('Suggested next step');
+});
+
+it('recovers a failed live request from host cache after reconnect without paying twice', async () => {
+  request.mockRejectedValueOnce(new Error('DEVICE_LINK_NOT_CONNECTED'));
+  await render({ running: true });
+  await render({ running: false, revision: 20 }); await advance();
+  expect(value.prompt).toBeNull();
+  await render({ available: false });
+  await render({ available: true }); await advance();
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({
+    completionRevision: 20, cacheOnly: true,
+  }));
+  expect(value.prompt).toBe('Suggested next step');
+});
+
+it('recovers when the old request fails after a new connection is already ready', async () => {
+  let reject!: (reason: Error) => void;
+  request.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+  await render({ running: true });
+  await render({ running: false, revision: 20 }); await advance();
+  await render({ connectionEpoch: 1 }); await advance();
+  expect(request).toHaveBeenCalledTimes(1);
+  await act(async () => reject(new Error('INVOKE_TIMEOUT')));
+  await advance();
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ cacheOnly: true }));
+  expect(value.prompt).toBe('Suggested next step');
+});
+
+it('does not retry link failures on timers, ordinary transport refreshes or draft interaction', async () => {
+  request.mockRejectedValue(new Error('INVOKE_TIMEOUT'));
+  await render({ running: true });
+  await render({ running: false, revision: 20 }); await advance();
+  await render({ maker: { predictNextPrompt: request } });
+  await render({ hasAttachments: true });
+  await render({ hasAttachments: false });
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+  expect(request).toHaveBeenCalledTimes(1);
+  await render({ connectionEpoch: 1 }); await advance();
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ cacheOnly: true }));
+});
+
+it('keeps a deferred recovery cache-only when input cancels its debounce', async () => {
+  request.mockRejectedValueOnce(new Error('INVOKE_TIMEOUT'));
+  await render({ running: true });
+  await render({ running: false, revision: 20 }); await advance();
+  await render({ connectionEpoch: 1 });
+  await render({ hasAttachments: true }); await advance();
+  await render({ hasAttachments: false }); await advance();
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ cacheOnly: true }));
+});
+
+it('retains an in-flight success through reconnect without another request', async () => {
+  let resolve!: (result: { prompt: string }) => void;
+  request.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+  await render({ running: true });
+  await render({ running: false, revision: 20 }); await advance();
+  await render({ available: false });
+  await render({ available: true, connectionEpoch: 1 }); await advance();
+  await act(async () => resolve({ prompt: 'Recovered result' }));
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(value.prompt).toBe('Recovered result');
+});
+
+it('does not restore dismissed recommendations after a failed request and reconnect', async () => {
+  request.mockRejectedValueOnce(new Error('INVOKE_TIMEOUT'));
+  await render({ running: true });
+  await render({ running: false, revision: 20 }); await advance();
+  await act(async () => value.dismiss());
+  await render({ connectionEpoch: 1 }); await advance();
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(value.prompt).toBeNull();
+});
+
+it('resumes cache lookup after connectivity interrupts a bounded cache retry', async () => {
+  request.mockResolvedValueOnce({ prompt: null });
+  await render(); await advance();
+  await render({ available: false });
+  await act(async () => vi.advanceTimersByTimeAsync(10_000));
+  expect(request).toHaveBeenCalledTimes(1);
+  await render({ available: true }); await advance();
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request.mock.calls.every(([args]) => args.cacheOnly === true)).toBe(true);
+  expect(value.prompt).toBe('Suggested next step');
+});
+
 it('consumes terminal failures without predicting, but permits the next successful turn', async () => {
   await render({ running: true });
   await render({ running: false, revision: 20, hasTerminalError: true });

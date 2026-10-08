@@ -20,7 +20,13 @@
     "allowOnceAccessibility": "権限リクエストを1回だけ許可",
     "allowOnceConfirm": "1回だけ許可を確認",
     "highRisk": "高リスク",
-    "autoReviewUnavailable": "自動レビューを完了できませんでした。この操作を許可するか確認してください。"
+    "autoReviewUnavailable": "自動レビューを完了できませんでした。この操作を許可するか確認してください。",
+    "fullAccessConfirm": {
+      "title": "フルアクセスを有効にしますか？",
+      "description": "フルアクセスはワークスペースのサンドボックスを無効にし、通常の承認を省略します。{{appName}} はワークスペース外のファイル変更やネットワークコマンドを確認なしで実行できます。組み込みの高リスク操作では引き続き確認が必要です。",
+      "confirm": "フルアクセスを有効にする",
+      "cancel": "現在の権限を維持"
+    }
   },
   "planMode": {
     "label": "プランモード",
@@ -157,8 +163,10 @@
     "dispatchBodyFallback": "Worker を作成",
     "sendTitle": "Worker にメッセージ送信",
     "sendBodyFallback": "メッセージを送信",
-    "reportTitle": "Worker の報告",
-    "reportBodyFallback": "(報告なし)"
+    "fromLead": "Lead からのメッセージ",
+    "fromWorkerNamed": "Worker「{{role}}」からのメッセージ",
+    "fromWorker": "Worker からのメッセージ",
+    "emptyMessageBody": "（空のメッセージ）"
   },
   "contextSheet": {
     "backAccessibility": "コンテキストパネルに戻る",

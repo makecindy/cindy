@@ -242,6 +242,8 @@ async function makeFixture(options: {
   surviveStdinEnd?: boolean;
   /** Model a wedged runner: publish status, never consume the stop mailbox. */
   ignoreStopControl?: boolean;
+  /** Runner config of a shared-user (guest) hosted session. */
+  guestIsolation?: boolean;
   /**
    * Hold a finishing child's turn until this many child pids are on disk.
    *
@@ -464,6 +466,7 @@ process.stdin.on('end', () => {
     taskId: 'tool-fixture',
     parentSessionId: 'parent-fixture',
     ...(options.runtimeOwnerId ? { runtimeOwnerId: options.runtimeOwnerId } : {}),
+    ...(options.guestIsolation ? { guestIsolation: true } : {}),
     runDir,
     cwd: root,
     binary: process.execPath,
@@ -621,6 +624,21 @@ describe('Cindy durable PI Subagent runner', () => {
         .split('\n')
         .map((line) => JSON.parse(line)),
     ).toEqual([null, null]);
+    await waitForClose(fixture.child, fixture.stderr);
+  });
+
+  it.each([false, true])('disables implicit context files and skills only for shared-user children (guest: %s)', async (guest) => {
+    const fixture = await makeFixture({ guestIsolation: guest });
+    await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'completed' ? run : null;
+    });
+    const [args] = (await readFile(fixture.argsFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as string[]);
+    expect(args).toContain('--no-extensions');
+    for (const flag of ['--no-context-files', '--no-skills']) {
+      if (guest) expect(args).toContain(flag);
+      else expect(args).not.toContain(flag);
+    }
     await waitForClose(fixture.child, fixture.stderr);
   });
 

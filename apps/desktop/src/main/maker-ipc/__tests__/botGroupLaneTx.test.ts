@@ -1,7 +1,22 @@
 import Database from 'better-sqlite3';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtemp, mkdir, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const h = vi.hoisted(() => ({ sqlite: null as import('better-sqlite3').Database | null }));
+vi.mock('electron', () => ({ app: { getPath: () => '/unused-user-data' } }));
+vi.mock('../../appSessionState.js', () => ({ ownerScopedUserDataPath: () => '/unused-owner-root' }));
+vi.mock('../../localDb/client/current.js', async () => {
+  const { drizzle } = await import('drizzle-orm/better-sqlite3');
+  return { getDbClient: () => ({ drizzle: drizzle(h.sqlite!) }) };
+});
 
 import { tx } from '../../localDb/worker/opHandlers/tx.js';
+import { BotPlanWorkDirUnavailableError, prepareBotWorkspaceRuntime } from '../botWorkspaceRuntime.js';
+import { ensureBotChatOnlyWorkspaceDir } from '../botProfileFolder.js';
+import { chatGroupLaneRouteKey } from '../../../shared/botGroupChat.js';
+import type { MakerSessionCreateOpts } from '../sessionRequest.js';
 
 function laneSession(id: string) {
   return {
@@ -13,7 +28,7 @@ function laneSession(id: string) {
     effort: 'medium',
     fastMode: false,
     permissionMode: 'ask',
-    agentKind: 'cc',
+    agentKind: 'claude-code',
     remoteHostId: null,
     providerId: null,
     extraDirs: '[]',
@@ -25,9 +40,13 @@ function laneSession(id: string) {
 
 describe('Bot group lane transactions', () => {
   let db: Database.Database;
+  let ownerRoot: string;
+  let queries: string[];
 
-  beforeEach(() => {
-    db = new Database(':memory:');
+  beforeEach(async () => {
+    ownerRoot = await mkdtemp(path.join(tmpdir(), 'bot-lane-start-'));
+    queries = [];
+    db = h.sqlite = new Database(':memory:', { verbose: query => queries.push(String(query)) });
     db.exec(`
       PRAGMA foreign_keys = ON;
       CREATE TABLE bot_profiles (
@@ -73,7 +92,10 @@ describe('Bot group lane transactions', () => {
     `);
   });
 
-  afterEach(() => db.close());
+  afterEach(async () => {
+    db.close();
+    await rm(ownerRoot, { recursive: true, force: true });
+  });
 
   it('creates one hidden group lane per member and reuses it', () => {
     const args = { botId: 'mimi', groupId: 'g1', routeKey: 'group:g1', session: laneSession('lane-1') };
@@ -95,6 +117,63 @@ describe('Bot group lane transactions', () => {
       .toEqual({ working_dir: '/work/site-wt', workspace_kind: 'project' });
     expect(db.prepare("SELECT route_key FROM bot_session_links WHERE session_id = 'step-1'").get())
       .toEqual({ route_key: 'group:g1:plan:p1' });
+  });
+
+  it.each(['owner', 'tools', 'chat'] as const)('starts and restores a server plan lane with %s access without a local plan table', async mode => {
+    const routeKey = `${chatGroupLaneRouteKey('g1', { mode, revision: 1 })}:plan:server-plan`;
+    const workingDir = mode === 'chat'
+      ? await ensureBotChatOnlyWorkspaceDir(ownerRoot, 'mimi', routeKey)
+      : path.join(ownerRoot, 'project-worktree');
+    await mkdir(workingDir, { recursive: true });
+    const workspaceKind = mode === 'chat' ? 'dialogue' : 'project';
+    const session = { ...laneSession('server-step'), workingDir, workspaceKind };
+    // The real creation transaction persists the lane and its workspace, but no
+    // bot_group_plans row: plan state lives on the chat server.
+    tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session } });
+    const ensureWorkspaceDir = vi.fn(async () => '/private-bot-home');
+    for (let start = 0; start < 2; start++) {
+      const opts: MakerSessionCreateOpts = { id: session.id, agentKind: 'claude-code', model: session.model, workingDir: '/stale-project', workspaceKind: 'project', remoteHostId: 'stale-host' };
+      await prepareBotWorkspaceRuntime(opts, { ownerUserDataPath: () => ownerRoot, ensureWorkspaceDir });
+      expect(opts).toMatchObject({ workingDir, workspaceKind, remoteHostId: undefined });
+      expect((await stat(opts.workingDir)).isDirectory()).toBe(true);
+    }
+    expect(ensureWorkspaceDir).not.toHaveBeenCalled();
+  });
+
+  it.each(['', ':plan:server-plan'])('isolates chat-only startup%s even with a matching legacy project plan and stale session directory', async suffix => {
+    const routeKey = `${chatGroupLaneRouteKey('g1', { mode: 'chat', revision: 2 })}${suffix}`;
+    const workingDir = await ensureBotChatOnlyWorkspaceDir(ownerRoot, 'mimi', routeKey);
+    const projectDir = path.join(ownerRoot, 'private-project');
+    await mkdir(projectDir);
+    db.exec('CREATE TABLE bot_group_plans (id TEXT PRIMARY KEY, group_id TEXT, work_dir TEXT)');
+    db.prepare('INSERT INTO bot_group_plans VALUES (?, ?, ?)').run('server-plan', 'g1', projectDir);
+    const session = { ...laneSession('chat-step'), workingDir, workspaceKind: 'dialogue' };
+    tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session } });
+    // Recovery must not trust a prior startup's incorrect project projection.
+    db.prepare('UPDATE sessions SET working_dir = ?, workspace_kind = ? WHERE id = ?').run(projectDir, 'project', session.id);
+    await rm(workingDir, { recursive: true });
+    const opts: MakerSessionCreateOpts = { id: session.id, agentKind: 'claude-code', model: session.model, workingDir: projectDir, workspaceKind: 'project' };
+    const ensureWorkspaceDir = vi.fn(async () => '/private-bot-home');
+    queries.length = 0;
+    await prepareBotWorkspaceRuntime(opts, { ownerUserDataPath: () => ownerRoot, ensureWorkspaceDir });
+    expect(opts).toMatchObject({ workingDir, workspaceKind: 'dialogue', remoteHostId: undefined });
+    expect((await stat(workingDir)).isDirectory()).toBe(true);
+    expect(queries.some(query => query.includes('bot_group_plans'))).toBe(false);
+    expect(ensureWorkspaceDir).not.toHaveBeenCalled();
+  });
+
+  it.each(['owner', 'tools'] as const)('fails closed when a %s server plan has no usable recorded workspace', async mode => {
+    const routeKey = `${chatGroupLaneRouteKey('g1', { mode, revision: 1 })}:plan:server-plan`;
+    const session = { ...laneSession('server-step'), workingDir: path.join(ownerRoot, 'missing'), workspaceKind: 'project' };
+    tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session } });
+    const ensureWorkspaceDir = vi.fn(async () => '/private-bot-home');
+    for (const recorded of [session.workingDir, null]) {
+      db.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(recorded, session.id);
+      const opts: MakerSessionCreateOpts = { id: session.id, agentKind: 'claude-code', model: session.model, workingDir: ownerRoot, workspaceKind: 'project' };
+      await expect(prepareBotWorkspaceRuntime(opts, { ensureWorkspaceDir })).rejects.toBeInstanceOf(BotPlanWorkDirUnavailableError);
+      expect(opts.workingDir).toBe(ownerRoot);
+    }
+    expect(ensureWorkspaceDir).not.toHaveBeenCalled();
   });
 
   it('refuses lanes for non-members and unavailable Bots', () => {

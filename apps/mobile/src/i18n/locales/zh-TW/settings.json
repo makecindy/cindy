@@ -19,8 +19,8 @@
     "cancel": "取消",
     "exportHint": "分享詳細本機日誌供疑難排解；不含任務內文或憑證。",
     "options": "日誌選項",
-    "uploadCopied": "上傳成功，編號 {{code}} 已複製。",
-    "uploadSucceeded": "上傳成功，編號 {{code}}。"
+    "uploadCopied": "日誌已上傳，編號 {{code}} 已複製",
+    "uploadSucceeded": "日誌已上傳，編號 {{code}}"
   },
   "title": "設定",
   "appearance": {
@@ -47,20 +47,22 @@
   },
   "version": {
     "sectionTitle": "版本",
-    "currentLabel": "當前版本",
-    "bundleVersion": "整包版本 {{version}}",
-    "otaVersion": "熱更版本 {{version}}",
+    "appVersion": "版本 {{version}}",
+    "updateMethodInApp": "更新方式：在 App 內更新，重新啟動後生效",
+    "updateMethodPackage": "更新方式：下載並安裝新版本",
+    "updateMethodUnavailable": "開發版，不支援 App 內更新",
     "pairedDesktopVersion": "配套桌面版本 {{version}}",
-    "devNoOta": "開發版，熱更不可用",
     "checkAction": "檢查更新",
     "testFlightCheckAction": "檢查內容更新",
     "checking": "檢查中",
-    "updating": "更新中",
     "checkingAccessibility": "正在檢查更新",
     "testFlightCheckingAccessibility": "正在檢查內容更新",
     "testFlightUpdateManaged": "測試版安裝更新由 TestFlight 管理",
     "testFlightNoContentUpdate": "當前沒有可用的內容更新。新測試版本請在 TestFlight 中檢視。",
     "testFlightContentUpdateUnavailable": "當前構建無法檢查內容更新。新測試版本請在 TestFlight 中檢視。",
+    "googlePlayUpdateManaged": "應用程式版本更新由 Google Play 管理",
+    "googlePlayNoContentUpdate": "目前沒有可用的內容更新。新應用程式版本請在 Google Play 中查看。",
+    "googlePlayContentUpdateUnavailable": "目前無法檢查內容更新。新應用程式版本請在 Google Play 中查看。",
     "bundleUpdateFound": "發現整包更新",
     "upToDate": "已是最新版本",
     "bundleUpToDateNoOta": "整包已是最新，當前版本不支援熱更新",
@@ -144,7 +146,8 @@
     "runtime": "Runtime",
     "otaMarker": "熱更標記",
     "emergencyLaunch": "應急啟動",
-    "emergencyLaunchYes": "是（本次執行內熱更無法生效）"
+    "emergencyLaunchYes": "是（本次執行內熱更無法生效）",
+    "otaVersion": "熱更版本"
   },
   "legal": {
     "sectionTitle": "備案資訊",
@@ -161,6 +164,8 @@
     "analyticsResetAction": "恢復"
   },
   "account": {
+    "logoutConfirmTitle": "退出登入？",
+    "logoutConfirmRunning": "仍有任務正在執行。退出後任務會繼續在電腦上執行，但這臺手機將不再接收和控制這些任務；這臺手機上儲存的帳號和本地遠端映象也會被清除。",
     "logoutHint": "退出會清除這臺手機上儲存的全部帳號和本地遠端映象，不會影響電腦端任務。",
     "logout": "退出登入",
     "loggingOut": "退出中",
@@ -193,9 +198,12 @@
     "resetAccessibility": "恢復預設本機名稱",
     "emptyError": "裝置名稱不能為空。",
     "deviceInitializing": "裝置還在初始化，請稍後再試。",
-    "saving": "儲存中…",
-    "saved": "已儲存。",
-    "restoringDefault": "正在恢復預設名稱…",
-    "restoredDefault": "已恢復預設名稱。"
+    "restoredDefault": "已恢復預設名稱。",
+    "resetAction": "恢復預設名稱",
+    "clearAccessibility": "清空名稱",
+    "discardTitle": "放棄修改？",
+    "discardBody": "裝置名稱的修改還沒有儲存。",
+    "discardConfirm": "放棄修改",
+    "keepEditing": "繼續編輯"
   }
 }

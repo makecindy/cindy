@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 /**
  * 群聊页：顶栏（成员头像、群名、成员名单、群设置入口）+ 多作者时间线 + 输入框。
  *
@@ -8,13 +9,25 @@
  *
  * 分工（§7）：安排卡、交接文件与「下一步 · 继续」「没做完 · 重试」见 BotGroupPlan.tsx；
  * 这里只负责把安排快照接到对应消息上，并调用 main 的安排操作。
+ *
+ * 附件（§3.1）：托盘状态（`useAttachments`）由页面持有，文件拖到页面任意位置都进托盘，
+ * 与普通任务的整区拖入一致；用户消息上的图片与文件复用普通聊天用户气泡的图片视图与
+ * 附件 chip。
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { ArrowLeft, CircleAlert, RefreshCcw, Settings2, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
+import { attachGhostMediaToSession, getGhostMediaUriFromDataTransfer } from '@/cindy-brain/ghostMediaHandover';
+import { ChatImageView } from '@/components/chat/ChatImageView';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
+import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
+import { ShareMessageCheckbox } from '@/components/chat/ShareMessageCheckbox';
+import { shareSelectionStore, useShareSelectionActive } from '@/components/chat/shareSelectionStore';
+import { SHARE_SESSION_ATTR, SHARE_MESSAGE_ATTR } from '@/lib/shareConversationImage';
+import { TextLightbox } from '@/components/chat/TextLightbox';
+import { UserAttachmentChip } from '@/components/chat/UserAttachmentChip';
 import { CHAT_BODY_CLASS } from '@/components/chat/chatChrome';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
@@ -24,10 +37,19 @@ import {
   isDataOwnerGenerationCurrent,
   isDataOwnerPushCurrent,
 } from '@/contexts/dataOwnerGeneration';
+import { useAttachments } from '@/hooks/useAttachments';
+import { discardDraft } from '@/lib/composerDraftStore';
+import {
+  classifyUnclassifiedDroppedItems,
+  getDroppedFileItems,
+  type DroppedFileItems,
+} from '@/lib/fileDrop';
+import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { toast } from '@/lib/toast';
 import { ControlledBanner, useControlledBy, useComposerCollapsed } from '@/features/remote-device/ControlledBanner';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import type {
+  BotGroupAttachment,
   BotGroupDetail,
   BotGroupMemberView,
   BotGroupMessageView,
@@ -40,7 +62,10 @@ import { useRegisterContentHeader } from '../feature-context';
 import { BotAvatar } from './BotAvatar';
 import { BotGenerationLabel } from './BotGenerationLabel';
 import { BotGroupAvatarStack } from './BotGroupAvatars';
+import { botGroupAttachmentScope, splitBotGroupMessageAttachments } from './botGroupAttachments';
 import { BotGroupComposer } from './BotGroupComposer';
+import { ChatInviteButton, ChatMessageActions } from './ChatServerControls';
+import { ChatThreadPanel } from './ChatThreadPanel';
 import { BotGroupPendingInteraction } from './BotGroupPendingInteraction';
 import {
   BotGroupHandoffFiles,
@@ -65,6 +90,7 @@ import {
   openBotGroupPlan,
 } from './botGroupPresentation';
 import { botGroupApi, editBotGroupPlanStep, runBotGroupPlanAction } from './botGroupStore';
+import { botGroupReadKey, markBotRead } from './botReadState';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime } from './botConversationTimeline';
 
 type GroupViewState =
@@ -96,6 +122,15 @@ function memberKey(members: readonly BotGroupMemberView[]): string {
   return JSON.stringify(members.map((member) => [member.botId, member.name, member.avatar, member.avatarColor]));
 }
 
+/**
+ * Files from the system or media dragged out of a Plugin panel. Plain text keeps its
+ * native drop into the input.
+ */
+function isAttachmentDrag(event: DragEvent): boolean {
+  const types = Array.from(event.dataTransfer.types);
+  return types.includes('Files') || types.includes('text/uri-list');
+}
+
 export function BotGroupChatView() {
   const { groupId } = useParams();
   return <BotGroupChatContent key={groupId ?? ''} groupId={groupId ?? ''} />;
@@ -107,6 +142,12 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   const hasControlledBanner = controlledBy.length > 0;
   // Groups have no single task session; namespace their existing composer UI state.
   const controlledBannerKey = `bot-group:${groupId}`;
+  const shareScope = controlledBannerKey;
+  const sharing = useShareSelectionActive(shareScope);
+  useEffect(() => {
+    shareSelectionStore.exitIfNotSession(shareScope);
+    return () => { if (shareSelectionStore.isActive(shareScope)) shareSelectionStore.exit(); };
+  }, [shareScope]);
   const controlledBannerCollapsed = useComposerCollapsed(controlledBannerKey);
   const navigate = useNavigate();
   const location = useLocation();
@@ -120,7 +161,12 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const readOwner = useRef(getDataOwnerGeneration());
   const prependAnchorRef = useRef<{ height: number; top: number } | null>(null);
+  const attachmentScope = botGroupAttachmentScope(groupId);
+  const attachmentState = useAttachments(attachmentScope, attachmentScope);
+  const [dragOver, setDragOver] = useState(false);
+  const dragCounterRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -139,6 +185,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
         const result = await api.getBotGroup(groupId);
         if (!isCurrent()) return;
         if (result.ok) {
+          readOwner.current = owner;
           setState((previous) =>
             previous.kind === 'ready'
               ? { ...previous, group: result.group }
@@ -167,6 +214,8 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
         if (!isDataOwnerPushCurrent(ownerStamp) || payload.groupId !== groupId) return;
         if (payload.change === 'deleted') {
           requestVersion += 1;
+          // Unsent attachments go with the group (staged copies included).
+          discardDraft(botGroupAttachmentScope(groupId));
           setState({ kind: 'missing' });
           return;
         }
@@ -185,6 +234,18 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
     () => (state.kind === 'ready' ? mergeBotGroupMessages(state.older, state.group.messages) : []),
     [state],
   );
+  const acknowledge = useCallback(() => {
+    if (!isDataOwnerGenerationCurrent(readOwner.current) || !stickToBottomRef.current || document.visibilityState !== 'visible' || !document.hasFocus()) return;
+    const at = messages.reduce((latest, message) => message.kind === 'message' && (message.authorKind === 'bot' || message.isSelf === false)
+      ? Math.max(latest, message.createdAt) : latest, 0);
+    if (at > 0) markBotRead(botGroupReadKey(groupId), at);
+  }, [groupId, messages]);
+  useEffect(() => {
+    const frame = requestAnimationFrame(acknowledge);
+    window.addEventListener('focus', acknowledge);
+    document.addEventListener('visibilitychange', acknowledge);
+    return () => { cancelAnimationFrame(frame); window.removeEventListener('focus', acknowledge); document.removeEventListener('visibilitychange', acknowledge); };
+  }, [acknowledge]);
   const plans = useMemo(
     () => (state.kind === 'ready' ? mergeBotGroupPlans(state.olderPlans, state.group.plans) : []),
     [state],
@@ -199,6 +260,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   }, [location.pathname, location.search, navigate]);
 
   const separator = t('bots.groupChat.memberSeparator');
+  const [threadRootId, setThreadRootId] = useState<string | null>(null);
   const settingsLabel = t('bots.groupChat.settings.open');
   const headerMembers = group ? memberKey(group.members) : '';
   const header = useMemo(() => {
@@ -219,6 +281,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
           </span>
         </button>
         <div className="ml-auto flex shrink-0 items-center">
+          {group.serverBacked && group.canInvite && <ChatInviteButton groupId={group.id} />}
           <Tip text={settingsLabel}>
             <button
               type="button"
@@ -234,7 +297,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
       </div>
     );
     // headerMembers stands in for the member array, which is new on every read.
-  }, [group?.name, headerMembers, openSettings, separator, settingsLabel]);
+  }, [group?.name, group?.id, group?.serverBacked, group?.canInvite, headerMembers, openSettings, separator, settingsLabel]);
   useRegisterContentHeader(header);
 
   // Follow new messages and banner viewport changes only while the reader is at the bottom.
@@ -364,6 +427,34 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
     }
   };
 
+  const resetDrag = () => {
+    dragCounterRef.current = 0;
+    setDragOver(false);
+  };
+
+  /** Same drop routing as a task's chat area, minus folder references a group does not have. */
+  const dropAttachments = (event: DragEvent) => {
+    // .cindy / .cshare drops belong to the window-level import; only clear the hint.
+    if (isGlobalDropIntercepted(event.nativeEvent)) return;
+    const ghostMediaUri = getGhostMediaUriFromDataTransfer(event.dataTransfer);
+    if (ghostMediaUri) {
+      void attachGhostMediaToSession(ghostMediaUri, attachmentScope, t);
+      return;
+    }
+    const attach = (items: Pick<DroppedFileItems, 'files' | 'directories'>) => {
+      if (items.directories.length > 0) toast.warning(t('bots.groupChat.composer.folderNotSupported'));
+      if (items.files.length > 0) void attachmentState.addFiles(items.files);
+    };
+    const dropped = getDroppedFileItems(event.dataTransfer);
+    attach(dropped);
+    if (dropped.unclassified.length > 0) {
+      void classifyUnclassifiedDroppedItems(dropped.unclassified, {
+        getFilePath: (file) => window.electronAPI.getFilePath(file),
+        classifyPath: (path) => window.electronAPI.localDb.sessionShare.classifyPath({ path }),
+      }).then(attach);
+    }
+  };
+
   if (state.kind === 'loading') {
     // Local reads are fast; an empty surface avoids a spinner flash.
     return <main className="h-full bg-[var(--surface)]" />;
@@ -414,7 +505,7 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
   const timeGroups = collectBotMessageTimeGroups(
     messages.map((message) => ({ clientId: message.id, createdAt: message.createdAt })),
   );
-  const mentionLabels = [t('bots.groupChat.mention.all'), ...group.members.map((member) => member.name)];
+  const mentionLabels = [t('bots.groupChat.mention.all'), ...group.members.flatMap((member) => [member.name, member.nickname || member.displayName || member.name])];
   const running = group.round.status === 'running';
   const speakers = running
     ? group.round.speakers.flatMap((speaker) => {
@@ -426,12 +517,38 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
     planId && planPending?.planId === planId ? planPending.action : null;
 
   return (
-    <main className="flex h-full min-w-0 flex-col overflow-hidden bg-[var(--surface)]">
+    <main
+      className="relative flex h-full min-w-0 flex-col overflow-hidden bg-[var(--surface)]"
+      onDragEnter={(event) => {
+        if (!isAttachmentDrag(event)) return;
+        event.preventDefault();
+        dragCounterRef.current += 1;
+        if (dragCounterRef.current === 1) setDragOver(true);
+      }}
+      onDragOver={(event) => {
+        if (!isAttachmentDrag(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+      }}
+      onDragLeave={(event) => {
+        if (!isAttachmentDrag(event)) return;
+        event.preventDefault();
+        dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+        if (dragCounterRef.current === 0) setDragOver(false);
+      }}
+      onDrop={(event) => {
+        if (!isAttachmentDrag(event)) return;
+        event.preventDefault();
+        resetDrag();
+        dropAttachments(event);
+      }}
+    >
       <div
         ref={scrollRef}
         onScroll={(event) => {
           const element = event.currentTarget;
           stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+          acknowledge();
         }}
         className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-6"
       >
@@ -471,6 +588,13 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
                 ) : null}
                 <BotGroupTimelineItem
                   message={message}
+                  shareScope={shareScope}
+                  sharing={sharing}
+                  actions={message.kind === 'message' ? <ChatMessageActions
+                    groupId={group.serverBacked ? group.id : undefined} shareScope={shareScope} message={message}
+                    align={message.authorKind === 'user' && message.isSelf !== false ? 'right' : 'left'}
+                    onReply={group.serverBacked ? () => setThreadRootId(message.id) : undefined}
+                    onChanged={() => loadRef.current()} /> : undefined}
                   member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
                   members={group.members}
                   mentionLabels={mentionLabels}
@@ -529,16 +653,33 @@ function BotGroupChatContent({ groupId }: { groupId: string }) {
           </div>
         </div>
       )}
-      <BotGroupComposer
+      {sharing ? <ShareSelectionBar sessionId={shareScope} barWidth="100%"
+        getContentWidth={() => contentRef.current?.querySelector('article')?.getBoundingClientRect().width ?? 760} /> : group.archived ? <p className="border-t border-[var(--border-default)] p-4 text-center text-13 text-[var(--text-tertiary)]">{t('bots.groupChat.server.settings.archived')}</p> : <BotGroupComposer
         groupId={group.id}
         members={group.members}
         running={running}
         planState={botGroupComposerPlanState(openPlan)}
+        attachments={attachmentState}
+        attachmentScope={attachmentScope}
+        dragOver={dragOver}
         onSent={() => {
           stickToBottomRef.current = true;
           loadRef.current();
         }}
-      />
+      />}
+      {group.migrationPending && <p role="status" className="px-4 py-2 text-13 text-[var(--text-secondary)]">{t('bots.groupChat.migrationPending')}</p>}
+      {group.serverBacked && threadRootId && <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} onClose={() => setThreadRootId(null)} />}
+      {/* Whole-page drop hint, as over a task's chat area; the card repeats it. */}
+      {dragOver ? (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 z-50"
+          style={{
+            backgroundColor: 'var(--drop-overlay-bg)',
+            border: '2px dashed var(--drop-overlay-border)',
+          }}
+        />
+      ) : null}
     </main>
   );
 }
@@ -553,6 +694,9 @@ function followUpPending(action: PlanPending['action'] | null): BotGroupFollowUp
 
 function BotGroupTimelineItem({
   message,
+  shareScope,
+  sharing,
+  actions,
   member,
   members,
   mentionLabels,
@@ -567,6 +711,9 @@ function BotGroupTimelineItem({
   onEditStep,
 }: {
   message: BotGroupMessageView;
+  shareScope: string;
+  sharing: boolean;
+  actions?: ReactNode;
   member: BotGroupMemberView | undefined;
   members: readonly BotGroupMemberView[];
   mentionLabels: readonly string[];
@@ -606,24 +753,34 @@ function BotGroupTimelineItem({
     const text = key ? t(key, { name }) : message.content;
     return <p className="text-center text-12 text-[var(--text-tertiary)]">{text}</p>;
   }
-  if (message.authorKind === 'user') {
+  if (message.authorKind === 'user' && message.isSelf !== false) {
+    // An attachment-only message shows just its attachments, without an empty bubble.
+    const hasText = message.content.trim().length > 0;
     return (
-      <article className="flex justify-end">
-        <div
-          className={`max-w-[72%] whitespace-pre-wrap break-words rounded-xl border border-[var(--msg-user-border)] bg-[var(--msg-user-bg)] px-3.5 py-2.5 text-[var(--msg-user-text)] ${CHAT_BODY_CLASS}`}
-        >
-          {splitBotGroupMentionSegments(message.content, mentionLabels).map((segment, index) =>
-            segment.mention ? (
-              <span
-                key={index}
-                className="rounded-full bg-[var(--surface-chip)] px-1.5 font-medium"
-              >
-                {segment.text}
-              </span>
-            ) : (
-              <span key={index}>{segment.text}</span>
-            ),
-          )}
+      <article {...{ [SHARE_SESSION_ATTR]: shareScope, [SHARE_MESSAGE_ATTR]: message.id }}
+        className={`relative flex justify-end ${sharing ? 'ml-10' : ''}`}>
+        {sharing && <ShareMessageCheckbox clientId={message.id} />}
+        <div className="flex min-w-0 max-w-[72%] flex-col items-end gap-2">
+          <BotGroupUserAttachments attachments={message.attachments} />
+          {hasText ? (
+            <div
+              className={`max-w-full whitespace-pre-wrap break-words rounded-xl border border-[var(--msg-user-border)] bg-[var(--msg-user-bg)] px-3.5 py-2.5 text-[var(--msg-user-text)] ${CHAT_BODY_CLASS}`}
+            >
+              {splitBotGroupMentionSegments(message.content, mentionLabels).map((segment, index) =>
+                segment.mention ? (
+                  <span
+                    key={index}
+                    className="rounded-full bg-[var(--surface-chip)] px-1.5 font-medium"
+                  >
+                    {segment.text}
+                  </span>
+                ) : (
+                  <span key={index}>{segment.text}</span>
+                ),
+              )}
+            </div>
+          ) : null}
+          {actions}
         </div>
       </article>
     );
@@ -632,12 +789,15 @@ function BotGroupTimelineItem({
   const author = {
     name: message.authorName || member?.name || '',
     avatar: member?.avatar ?? null,
+    avatarUrl: member?.avatarUrl,
     avatarColor: member?.avatarColor ?? null,
   };
   const isPlanCard = message.kind === 'plan';
   const hasText = message.content.trim().length > 0;
   return (
-    <article className="flex min-w-0 items-start gap-2.5">
+    <article {...(message.kind === 'message' ? { [SHARE_SESSION_ATTR]: shareScope, [SHARE_MESSAGE_ATTR]: message.id } : {})}
+      className={`relative flex min-w-0 items-start gap-2.5 ${sharing ? 'ml-10' : ''}`}>
+      {sharing && message.kind === 'message' && <ShareMessageCheckbox clientId={message.id} />}
       <BotAvatar bot={author} size="sm" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 select-none items-center gap-2">
@@ -664,11 +824,54 @@ function BotGroupTimelineItem({
                 <MarkdownRenderer workingDir="" content={message.content} allowPrivilegedLinks={false} />
               </div>
             ) : null}
+            <BotGroupUserAttachments attachments={message.attachments} />
             <BotGroupHandoffFiles files={message.files} workDir={plan?.workDir ?? null} />
+            {actions}
           </>
         )}
       </div>
     </article>
+  );
+}
+
+/**
+ * A user message's images and files, drawn like a task's user bubble: each image as the
+ * same attached-image view (click for the lightbox, right-click to copy or reveal), files
+ * as the same chips (text preview or the system app, right-click menu).
+ */
+function BotGroupUserAttachments({ attachments }: { attachments: readonly BotGroupAttachment[] }) {
+  const [textPreview, setTextPreview] = useState<{ path: string; name: string } | null>(null);
+  const chipRef = useRef<HTMLElement | null>(null);
+  const { images, files } = splitBotGroupMessageAttachments(attachments);
+  if (images.length === 0 && files.length === 0) return null;
+  return (
+    <>
+      {images.map((image) => (
+        <ChatImageView key={image.id} src={image.url} filename={image.name} variant="user-attached" />
+      ))}
+      {files.length > 0 ? (
+        <div className="flex flex-wrap items-end justify-end gap-1.5">
+          {files.map((file) => (
+            <UserAttachmentChip
+              key={file.id}
+              file={{ name: file.name, path: file.path }}
+              onOpenTextPreview={(chip) => {
+                chipRef.current = chip;
+                setTextPreview({ path: file.path, name: file.name });
+              }}
+            />
+          ))}
+        </div>
+      ) : null}
+      {textPreview ? (
+        <TextLightbox
+          filePath={textPreview.path}
+          fileName={textPreview.name}
+          triggerRef={chipRef}
+          onClose={() => setTextPreview(null)}
+        />
+      ) : null}
+    </>
   );
 }
 

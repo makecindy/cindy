@@ -23,7 +23,6 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
-  Download,
   FileText,
   Folder as FolderIcon,
   Sparkles,
@@ -41,10 +40,6 @@ import { resolveLocalPath, resolveLocalPathSmart, toLocalFileUrl } from '@/lib/l
 import { isBrowserOpenablePath } from '../../../shared/browserOpenableExts';
 import { toast } from '@/lib/toast';
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
-import {
-  isSafetyDowngradedAttachment,
-  saveChatAttachmentWithToasts,
-} from '@/lib/chatAttachmentSave';
 import { saveDraft as saveComposerDraft } from '@/lib/composerDraftStore';
 import { emitPatch as emitSessionPatch } from '@/lib/sessionsBus';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -53,6 +48,12 @@ import type {
   AgentKind as RendererAgentKind,
   MessageAutomationOrigin,
 } from '@/lib/ccAgent.types';
+import type {
+  MessageSourceDevice,
+  MessageSourcePlugin,
+} from '@cindy/maker-shared/message-source';
+import { isRealAutomationOrigin } from '@/lib/messageAutomationOrigin';
+import { SHARE_SOURCE_ATTR } from '@/lib/shareConversationImage';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '../../../shared/agentInputQueue';
 import type { PersistedSessionReferenceMetadata } from '../../../shared/sessionReferenceMetadata';
@@ -65,6 +66,7 @@ import {
   useAgentCapabilities,
   type AgentKind as MakerAgentKind,
 } from '@/hooks/useAgentCapabilities';
+import { useAgentOnOtherDevice } from './AgentOnOtherDeviceContext';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { isRemoteFileOrigin, originDeviceId, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
@@ -93,12 +95,7 @@ import { RewindPreviewDialog } from './RewindPreviewDialog';
 import { UserMessageEditBox } from './UserMessageEditBox';
 import HookTaskCard from './HookTaskCard';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { UserAttachmentChip } from './UserAttachmentChip';
 import {
   AUTOMATION_USER_MESSAGE_VISUAL_LINE_THRESHOLD,
   LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD,
@@ -119,7 +116,7 @@ import {
   GhostSummonCard,
   type GhostSummonDisplay,
 } from './GhostSummonCard';
-import { AutomationOriginBadge } from './AutomationOriginBadge';
+import { MessageSourceLabels } from './MessageSourceLabels';
 import { UserMessageUrlLink } from './UserMessageUrlLink';
 import { InlineReferenceChip } from './InlineReferenceChip';
 import { QuoteChip } from './QuoteChip';
@@ -148,6 +145,8 @@ type UserImageItem =
 
 interface UserMessageProps {
   sharedAuthorName?: string;
+  /** 共享任务成员 id:作者行悬停显示。 */
+  sharedAuthorMemberId?: string;
   /** F2: session cwd used to resolve relative paths in inline @-chip refs.
    *  Stable per-session — only changes on session switch. */
   workingDir: string;
@@ -208,6 +207,10 @@ interface UserMessageProps {
   automationOrigin?: MessageAutomationOrigin;
   /** Hook 来源元数据;存在时渲染左对齐 Cindy 署名任务卡片(替代右对齐气泡)。 */
   hookSource?: ImMessageSource;
+  /** 手机 / 另一台电脑远程发来时的发送设备;查看者就是该设备时不显示标签。 */
+  sourceDevice?: MessageSourceDevice;
+  /** 插件任务派发的消息来源。 */
+  sourcePlugin?: MessageSourcePlugin;
   /** /goal 目标设定/更新标记:在气泡上方渲一个「目标 / 目标已更新」徽标。 */
   goalBadge?: { updated: boolean };
   /** 订阅槽①:本条消息被意识钩子拦下(未发出)。存在时气泡下方渲一条 error
@@ -267,118 +270,6 @@ function UserFileChip({
         className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
       />
       {ctxMenu.menu}
-    </>
-  );
-}
-
-/**
- * UserAttachmentChip — 用户消息下方的文件附件 chip(与正文里的 `@file` 引用
- * chip 是两种呈现;此前只有 onClick,右键无反应,与 UserFileChip 交互不一致,
- * Issue #1811 讨论中实捉)。左键保持既有行为:安全降级附件走另存流程,其余
- * 文本预览 / 交系统默认应用。右键:
- *   - 普通附件 → 共享文件 chip 菜单(复制 / 路径 / 定位等,与 UserFileChip 同款);
- *   - 安全降级附件 → 仅「另存为…」单项。受控 `.bin` 副本的路径不该经「复制
- *     文件路径 / 打开所在目录」外泄,打开类动作更会绕过降级本身。
- */
-function UserAttachmentChip({
-  file,
-  onOpenTextPreview,
-}: {
-  file: { name: string; path: string };
-  /** 文本预览分支的回调:父组件记录 chip 元素(关闭预览后焦点复位)并开 lightbox。 */
-  onOpenTextPreview: (chip: HTMLElement) => void;
-}) {
-  const { t } = useTranslation();
-  const sessionFileCtx = useChatSessionFile();
-  const downloadOnly = isSafetyDowngradedAttachment(file);
-  // Rules-of-hooks:两个菜单 hook/状态都无条件建,按 downloadOnly 选用其一。
-  const ctxMenu = useFileChipContextMenu({
-    getAbsPath: () => file.path,
-    canOpenInBrowser: isBrowserOpenablePath(file.path),
-  });
-  const [saveMenuPos, setSaveMenuPos] = useState<{ x: number; y: number } | null>(null);
-
-  const saveOnlyMenu = (
-    <DropdownMenu
-      open={saveMenuPos !== null}
-      onOpenChange={(open) => {
-        if (!open) setSaveMenuPos(null);
-      }}
-    >
-      <DropdownMenuTrigger asChild>
-        <span
-          aria-hidden
-          data-fixed-menu-anchor
-          style={{
-            position: 'fixed',
-            left: saveMenuPos?.x ?? 0,
-            top: saveMenuPos?.y ?? 0,
-            width: 0,
-            height: 0,
-            pointerEvents: 'none',
-          }}
-        />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" sideOffset={2} onClick={(e) => e.stopPropagation()}>
-        <DropdownMenuItem
-          onClick={() => {
-            setSaveMenuPos(null);
-            void saveChatAttachmentWithToasts(sessionFileCtx, file);
-          }}
-        >
-          <Download className="mr-2 h-4 w-4" />
-          {t('chat.media.saveAs')}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-
-  return (
-    <>
-      <button
-        type="button"
-        aria-label={
-          downloadOnly ? t('chat.userMessage.saveAttachmentAs', { name: file.name }) : undefined
-        }
-        onClick={async (e) => {
-          if (downloadOnly) {
-            await saveChatAttachmentWithToasts(sessionFileCtx, file);
-            return;
-          }
-          const chip = e.currentTarget;
-          if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, file.path))) return;
-          onOpenTextPreview(chip);
-        }}
-        onContextMenu={(e) => {
-          if (downloadOnly) {
-            e.preventDefault();
-            e.stopPropagation();
-            setSaveMenuPos({ x: e.clientX, y: e.clientY });
-            return;
-          }
-          ctxMenu.onContextMenu(e);
-        }}
-        className={cn(
-          'inline-flex items-center gap-1.5',
-          'h-7 px-2.5 py-1.5',
-          'rounded-[9999px]',
-          'bg-[var(--msg-user-bg)]',
-          'border border-[var(--msg-user-border)]',
-          'text-13 font-medium',
-          'text-[var(--msg-user-text)]',
-          'hover:bg-[var(--cmd-palette-item-hover)]',
-          'transition-colors cursor-pointer',
-          'max-w-[280px]',
-        )}
-      >
-        {downloadOnly ? (
-          <Download size={14} className="shrink-0 text-[var(--msg-user-text)]" />
-        ) : (
-          <FileTypeIcon name={file.name} size={14} className="shrink-0 text-[var(--msg-user-text)]" />
-        )}
-        <span className="truncate">{file.name}</span>
-      </button>
-      {downloadOnly ? saveOnlyMenu : ctxMenu.menu}
     </>
   );
 }
@@ -947,6 +838,7 @@ export function renderContent(
 
 export function UserMessage({
   sharedAuthorName,
+  sharedAuthorMemberId,
   workingDir,
   allowPrivilegedLinks = true,
   content,
@@ -969,6 +861,8 @@ export function UserMessage({
   simplifiedBotConversation = false,
   automationOrigin,
   hookSource,
+  sourceDevice,
+  sourcePlugin,
   goalBadge,
   blockedByGhost,
 }: UserMessageProps) {
@@ -993,7 +887,10 @@ export function UserMessage({
   // 远端 cc daemon 会话暂不支持 Fork/Rewind 依赖的 query rebuild (MVP),
   // remoteHostId 非空时直接关掉这两个能力, 避免点了落到后端错误。
   const isRemote = Boolean(remoteHostId);
-  const forkSupported = !isRemote && (!agentKind || (capabilities?.fork?.supported ?? true));
+  // Agent 在另一台电脑运行：会话记录在那台，分叉入口先隐藏(回退照常可用)。
+  const agentOnOtherDevice = useAgentOnOtherDevice();
+  const forkSupported =
+    !isRemote && !agentOnOtherDevice && (!agentKind || (capabilities?.fork?.supported ?? true));
   const rewindSupported =
     !isRemote &&
     (!agentKind || (capabilities?.rewind?.supported ?? true));
@@ -1127,7 +1024,8 @@ export function UserMessage({
   // 自动化任务注入的消息(模板化调度 prompt,每轮重复出现)用更低的收起
   // 阈值,收起后也只留 3 行(手打消息 14 行阈值 / 收起留 10 行不变)。
   // 其他任务经工具发来的消息不是每轮重复的模板，保持手打消息的收起口径。
-  const isScheduledAutomation = automationOrigin?.kind === 'scheduler';
+  // Hook 渠道消息复用自动化来源，但它是真人提问，不算自动化。
+  const isScheduledAutomation = isRealAutomationOrigin(automationOrigin);
   const collapseThreshold = isScheduledAutomation
     ? AUTOMATION_USER_MESSAGE_VISUAL_LINE_THRESHOLD
     : LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD;
@@ -1365,10 +1263,14 @@ export function UserMessage({
     if (editing && !isLastUserMessage) setEditing(false);
   }, [editing, isLastUserMessage]);
 
+  const orcaWorkerRole =
+    automationOrigin?.kind === 'session' ? automationOrigin.orcaSenderLabel : undefined;
   const orcaCardTitle =
     orcaCommunication?.orcaSource === 'lead'
       ? t('chat.userMessage.orcaFromLead')
-      : t('chat.userMessage.orcaFromWorker');
+      : orcaWorkerRole
+        ? t('chat.userMessage.orcaFromWorkerNamed', { role: orcaWorkerRole })
+        : t('chat.userMessage.orcaFromWorker');
 
   // Attachments belong to the user message independently of its visual shell.
   const messageActions = (
@@ -1462,13 +1364,29 @@ export function UserMessage({
               : 'max-w-[488px] items-end',
         )}
       >
-        {sharedAuthorName && <span className="text-12 text-[var(--text-secondary)]">{sharedAuthorName}</span>}
+        {sharedAuthorName && (
+          <span
+            {...{ [SHARE_SOURCE_ATTR]: '' }}
+            className="text-12 text-[var(--text-secondary)]"
+            title={
+              sharedAuthorMemberId
+                ? t('chat.userMessage.sourceIds.member', { id: sharedAuthorMemberId })
+                : undefined
+            }
+          >
+            {sharedAuthorName}
+          </span>
+        )}
         {orcaCommunication ? (
           <>
             {/* Orca 卡片标题只说明 Lead / Worker 角色；来源标签补上可跳转的发送方任务。 */}
-            {automationOrigin && (
-              <AutomationOriginBadge automationOrigin={automationOrigin} hostSessionId={sessionId} />
-            )}
+            <MessageSourceLabels
+              automationOrigin={automationOrigin}
+              sourceDevice={sourceDevice}
+              sourcePlugin={sourcePlugin}
+              hostSessionId={sessionId}
+              align="start"
+            />
             <div
               className={cn(
                 'w-full rounded-[8px] border border-[var(--msg-tool-card-border)]',
@@ -1506,7 +1424,13 @@ export function UserMessage({
         ) : hookSource && !editing ? (
           <>
             {/* hook 消息: Cindy 署名任务卡片(左对齐), 替代右对齐用户气泡 +
-                automation 标签。图片 / 文件附件仍属于同一条入站消息。 */}
+                automation 标签(卡片头已写明渠道)。图片 / 文件附件仍属于同一条入站消息。 */}
+            <MessageSourceLabels
+              sourceDevice={sourceDevice}
+              sourcePlugin={sourcePlugin}
+              hostSessionId={sessionId}
+              align="start"
+            />
             {imageAttachmentNodes}
             {fileAttachmentNodes}
             <HookTaskCard
@@ -1523,13 +1447,18 @@ export function UserMessage({
           </>
         ) : (
           <>
-            {/* 自动化 / 其他任务注入的消息:气泡上方右对齐渲染来源标签(不进气泡、不入
-            copyText)。自动化来源跳转自动化页并 focus 对应条目(与侧边栏自动化分组"编辑"
-            同款 query 机制;已删除时 SchedulerPage 的 focus 兜底回退到列表首条);
-            任务来源跳转发送方任务。 */}
-            {automationOrigin && (
-              <AutomationOriginBadge automationOrigin={automationOrigin} hostSessionId={sessionId} />
-            )}
+            {/* 自动化 / 其他任务 / 插件注入或远程设备发来的消息:气泡上方右对齐渲染来源
+            标签(不进气泡、不入 copyText)。自动化来源跳转自动化页并 focus 对应条目(与侧边栏
+            自动化分组"编辑"同款 query 机制;已删除时 SchedulerPage 的 focus 兜底回退到列表
+            首条);任务来源跳转发送方任务;Hook 渠道(编辑态或缺 hookSource 时走到这里)
+            只显示渠道;设备标签跳设置 → 我的设备。 */}
+            <MessageSourceLabels
+              automationOrigin={automationOrigin}
+              hookIm={hookSource?.im}
+              sourceDevice={sourceDevice}
+              sourcePlugin={sourcePlugin}
+              hostSessionId={sessionId}
+            />
             {/* /goal 目标设定/更新:气泡上方右对齐渲一个徽标(不进气泡、不入 copyText)。 */}
             {goalBadge && (
               <span

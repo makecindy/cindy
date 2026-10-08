@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,12 +31,14 @@ const h = vi.hoisted(() => ({
   getGrokAccessToken: vi.fn(),
   recoverGrokAuthAfterRejection: vi.fn(),
   warn: vi.fn(),
+  request: vi.fn(),
+  catalogIo: null as Parameters<typeof import('@cindy/model-providers').loadCatalog>[1] | null,
 }));
 
 vi.mock('electron', () => ({
   app: { getPath: () => os.tmpdir() },
   BrowserWindow: { getAllWindows: () => [] },
-  net: { request: vi.fn() },
+  net: { request: h.request },
 }));
 
 vi.mock('@cindy/model-providers', async (importOriginal) => {
@@ -43,8 +46,13 @@ vi.mock('@cindy/model-providers', async (importOriginal) => {
   return {
     ...actual,
     loadCatalog: vi.fn(
-      (source: Record<string, unknown>, _io: unknown, onResolved?: (result: unknown) => void) =>
+      (
+        source: Record<string, unknown>,
+        io: Parameters<typeof import('@cindy/model-providers').loadCatalog>[1],
+        onResolved?: (result: unknown) => void,
+      ) =>
         new Promise((resolve) => {
+          h.catalogIo = io;
           h.loads.push({
             source,
             resolve: (
@@ -1311,5 +1319,22 @@ describe('provider catalog realm reload', () => {
       if (savedForceOff === undefined) delete process.env.XDT_DISABLE_MODELS_FETCH;
       else process.env.XDT_DISABLE_MODELS_FETCH = savedForceOff;
     }
+  });
+
+  it('aborts a non-200 catalog body before dropping its timeout', async () => {
+    if (!h.catalogIo) {
+      const loading = ensureActiveCatalogLoaded();
+      h.loads.at(-1)!.resolve(BUNDLED_CATALOG);
+      await loading;
+    }
+    const response = Object.assign(new EventEmitter(), { statusCode: 404 });
+    const request = Object.assign(new EventEmitter(), {
+      setHeader: vi.fn(),
+      end: vi.fn(() => request.emit('response', response)),
+      abort: vi.fn(() => response.emit('error', new Error('cancelled'))),
+    });
+    h.request.mockReturnValueOnce(request);
+    await expect(h.catalogIo!.fetchText!('https://catalog.example.test', 100)).rejects.toThrow('HTTP 404');
+    expect(request.abort).toHaveBeenCalledTimes(1);
   });
 });

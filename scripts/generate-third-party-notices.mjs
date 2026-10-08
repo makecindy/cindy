@@ -97,6 +97,26 @@ const PACKAGE_POLICIES = {
     category: "proprietary",
     license: "LicenseRef-Anthropic-Commercial-Terms",
   },
+  // SDK >= 0.2.113 distributes native CLI packages under the same Anthropic
+  // commercial terms (their LICENSE.md is identical to the parent SDK's).
+  ...Object.fromEntries(
+    [
+      "darwin-arm64",
+      "darwin-x64",
+      "linux-arm64",
+      "linux-arm64-musl",
+      "linux-x64",
+      "linux-x64-musl",
+      "win32-arm64",
+      "win32-x64",
+    ].map((platform) => [
+      `@anthropic-ai/claude-agent-sdk-${platform}`,
+      {
+        category: "proprietary",
+        license: "LicenseRef-Anthropic-Commercial-Terms",
+      },
+    ]),
+  ),
 };
 
 /** 商业发行明确禁止进入生产依赖闭包的包。 */

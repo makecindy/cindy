@@ -37,7 +37,12 @@ export * from "./filePeerRuntime.js";
 export { FILE_PEER_RUNTIME_SOURCE } from "./filePeerRuntimeSource.js";
 export * from "./sharedTask.js";
 export * from "./sharedTaskApi.js";
+export * from "./sharedTaskInvitation.js";
 export * from "./sharedTaskProbe.js";
+export * from "./providerShareApi.js";
+export * from "./providerShareInvitation.js";
+export * from "./providerShareCatalog.js";
+export * from "./providerShareEnvelope.js";
 export * from "./modelFavorites.js";
 export * from "./sessionListTransport.js";
 
@@ -53,3 +58,5 @@ export * from "./pluginDeviceAuthorization.js";
 export * from "./pluginOauthAuthentication.js";
 export * from "./inputDelivery.js";
 export * from "./taskMigration.js";
+export * from "./remoteAgent.js";
+export * from './pluginPages.js';

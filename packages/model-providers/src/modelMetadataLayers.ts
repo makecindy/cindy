@@ -272,6 +272,15 @@ export function resolveModelMetadata(
     result.contextWindow = result.contextWindowMax;
     result[inheritedContextWindow] = true;
   }
+  // A maximum-only report can be below a public/preset working default.
+  // Tighten that default to this connection's capacity instead of discarding
+  // the live maximum. Explicit user/force windows still own their semantics.
+  if (currentLive?.contextWindowMax !== undefined && currentLive.contextWindow === undefined &&
+      user?.contextWindow === undefined && matched?.route.forceOverrides?.contextWindow === undefined &&
+      result.contextWindow !== undefined && result.contextWindow > currentLive.contextWindowMax) {
+    result.contextWindow = currentLive.contextWindowMax;
+    result[inheritedContextWindow] = true;
+  }
   if (result.contextWindow !== undefined && result.contextWindowMax !== undefined &&
       result.contextWindowMax < result.contextWindow) {
     delete result.contextWindowMax;

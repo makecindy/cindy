@@ -13,35 +13,15 @@
  * 字段在但解不出数、只有未来 billingPeriodEnd、或非周窗口,都不能推断 0%。
  */
 
-/** 分产品周用量(页面「Grok Build 2%」)。 */
-export interface XaiProductUsage {
-  /** 上游 product id,如 GrokBuild。 */
-  product: string;
-  /** 0-100 已用百分比。 */
-  usagePercent: number;
-}
+import {
+  isXaiWeeklyUsageCurrent,
+  type XaiProductUsage,
+  type XaiSubscriptionUsageSnapshot,
+} from '@cindy/maker-shared/subscription-usage';
 
-export interface XaiSubscriptionUsageSnapshot {
-  /** 套餐展示名,如 SuperGrok Heavy。 */
-  planLabel?: string | null;
-  /** 0-100 本周已用百分比(页面「2% 已使用」)。 */
-  creditUsagePercent?: number | null;
-  /** Unix epoch 秒;周窗口重置时刻。 */
-  resetsAt?: number | null;
-  /** 分产品已用百分比。 */
-  productUsage?: XaiProductUsage[];
-  /**
-   * 额外使用点数余额。单位按 grok.com 页面为美元;0 / 缺失不要当「免费额度」展示。
-   */
-  prepaidBalance?: number | null;
-  source?: 'cli-billing' | string | null;
-  updatedAt?: number | null;
-  /**
-   * 稳定账号指纹(OIDC sub 的不可逆哈希)。换 SuperGrok 号时用来丢掉旧快照。
-   * 不是 access token 哈希 —— token 刷新会轮换。
-   */
-  accountFingerprint?: string | null;
-}
+// 快照契约与新鲜度判定在 maker-shared,mobile 任务菜单复用同一份口径。
+export type { XaiProductUsage, XaiSubscriptionUsageSnapshot } from '@cindy/maker-shared/subscription-usage';
+export { isXaiWeeklyUsageCurrent, XAI_USAGE_STALE_MS } from '@cindy/maker-shared/subscription-usage';
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -196,34 +176,6 @@ export function formatXaiProductLabel(product: string): string {
   if (!trimmed) return trimmed;
   if (/\s/.test(trimmed)) return trimmed;
   return trimmed.replace(/([a-z])([A-Z])/g, '$1 $2');
-}
-
-/** 超过这个时间没刷新到新快照,就不再当「当前额度」展示。 */
-export const XAI_USAGE_STALE_MS = 30 * 60 * 1000;
-
-/**
- * 周窗口数字是否还能当当前额度:过了 TTL,或已经过了 resetsAt 却还没新快照,
- * 都不当当前值(避免无限显示旧百分比 / 卡在「重置中」)。套餐名仍可单独展示。
- */
-export function isXaiWeeklyUsageCurrent(
-  snapshot: XaiSubscriptionUsageSnapshot | null | undefined,
-  nowMs: number,
-): boolean {
-  if (!snapshot) return false;
-  if (
-    typeof snapshot.creditUsagePercent !== 'number'
-    || !Number.isFinite(snapshot.creditUsagePercent)
-  ) {
-    return false;
-  }
-  if (typeof snapshot.updatedAt !== 'number' || !Number.isFinite(snapshot.updatedAt) || snapshot.updatedAt <= 0) {
-    return false;
-  }
-  if (nowMs - snapshot.updatedAt > XAI_USAGE_STALE_MS) return false;
-  if (typeof snapshot.resetsAt === 'number' && Number.isFinite(snapshot.resetsAt) && snapshot.resetsAt > 0) {
-    if (nowMs >= snapshot.resetsAt * 1000) return false;
-  }
-  return true;
 }
 
 const WINDOW_ALERT_UTILIZATION_PERCENT = 90;

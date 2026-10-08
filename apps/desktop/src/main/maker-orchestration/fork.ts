@@ -145,6 +145,7 @@ function buildCodexForkRecoveryMarker(opts: {
         content: parseJsonContent(row.content),
         createdAt: row.createdAt,
         toolUseId: row.toolUseId,
+        agentMeta: row.agentMeta,
       })), {
         fromLabel: 'Codex',
         toLabel: 'Codex',
@@ -173,6 +174,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
       content: parseJsonContent(row.content),
       createdAt: row.createdAt,
       toolUseId: row.toolUseId,
+      agentMeta: row.agentMeta,
     }));
   const lastUser = [...opts.rows].reverse().find((row) => row.role === 'user');
   const label =
@@ -789,6 +791,10 @@ export async function forkSessionAtMessage(
   if (source.remoteHostId) {
     throw forkError('REMOTE_NOT_SUPPORTED', '远端会话暂不支持在本地 fork');
   }
+  // Agent 在另一台电脑运行的任务：Agent 会话记录在那台，本机无法从中分叉。
+  if (source.agentDeviceId) {
+    throw forkError('REMOTE_NOT_SUPPORTED', '这个任务的 Agent 在另一台电脑运行，暂不支持分叉');
+  }
 
   // 2. 读 target message + rowid —— 同毫秒边界必须按真实插入顺序判断。
   const [target] = await db
@@ -1098,6 +1104,9 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
       'REMOTE_NOT_SUPPORTED',
       '远端 Codex 会话暂不支持剥离 fork(rollout 在远端,本地无法剥离)',
     );
+  }
+  if (source.agentDeviceId) {
+    throw forkError('REMOTE_NOT_SUPPORTED', '这个任务的 Agent 在另一台电脑运行，暂不支持分叉');
   }
   if (!source.sdkSessionId) {
     throw forkError('SOURCE_NEVER_RAN', '原会话尚未运行，无法 fork');

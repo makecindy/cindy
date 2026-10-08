@@ -19,6 +19,7 @@ import {
   sortSessionsForMainList,
   partitionCindyMakeSessions,
   onlineDeviceSectionIds,
+  hasSettledOnlineDeviceSection,
   splitEntriesByDevice,
   type MainListEntry,
 } from '../features/cc-agent/lib/mainListModel';
@@ -1093,6 +1094,22 @@ describe('splitEntriesByDevice — 拆段后按本段重排', () => {
     ]);
     expect(onlineDeviceSectionIds(devices, ['b', 'offline'])).toEqual(['b']);
     expect(onlineDeviceSectionIds(devices, ['local', 'a'])).toEqual([null, 'a']);
+  });
+
+  it('does not count empty sections of remote devices still loading or failed', () => {
+    const devices = new Map([
+      ['a', { online: true }],
+      ['b', { online: true }],
+    ]);
+    // 单机范围选中一台正在首次读取 / 读取失败的远程设备:空段头不能遮掉整屏提示。
+    expect(hasSettledOnlineDeviceSection(devices, ['a'], new Set(['a']))).toBe(false);
+    expect(hasSettledOnlineDeviceSection(devices, ['a', 'b'], new Set(['a', 'b']))).toBe(false);
+    // 读取就绪后,在线空段照常算作已有内容。
+    expect(hasSettledOnlineDeviceSection(devices, ['a'], new Set())).toBe(true);
+    expect(hasSettledOnlineDeviceSection(devices, ['a', 'b'], new Set(['a']))).toBe(true);
+    // 本机段不受远程读取状态影响。
+    expect(hasSettledOnlineDeviceSection(devices, ['local'], new Set(['a']))).toBe(true);
+    expect(hasSettledOnlineDeviceSection(devices, 'all', new Set(['a', 'b']))).toBe(true);
   });
 
   it('keeps offline tasks and avoids duplicating populated online device sections', () => {

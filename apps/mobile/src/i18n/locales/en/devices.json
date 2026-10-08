@@ -12,6 +12,10 @@
     "deleteFailed": "Could not delete the device.",
     "deleteOnline": "This device is online. Take it offline before deleting it.",
     "currentlyOnline": "Currently online",
+    "availableSection": "Online",
+    "offlineSection": "Offline",
+    "showAllOffline": "Show All ({{count}})",
+    "showFewerOffline": "Show Less",
     "nameTooLong": "Device names must be {{limit}} characters or fewer.",
     "fields": {
       "name": "Name",
@@ -29,9 +33,7 @@
   "common": {
     "cancel": "Cancel",
     "save": "Save",
-    "saving": "Saving",
     "delete": "Delete",
-    "deleting": "Deleting",
     "create": "New"
   },
   "resources": {
@@ -47,7 +49,8 @@
     "openFailed": "Couldn’t open the session",
     "resolving": "Opening the latest session…",
     "retry": "Try again",
-    "hostCount": "{{count}} computers"
+    "hostCount": "{{count}} computers",
+    "stale": "These items may be outdated. Unable to refresh."
   },
   "presentation": {
     "deviceList": {
@@ -177,10 +180,10 @@
     },
     "home": {
       "allDevices": "All",
-      "allComputers": "All computers",
+      "allComputers": "All devices",
       "waitingCount": "{{count}} pending",
       "synced": "Synced",
-      "unknownComputer": "Unknown computer",
+      "unknownComputer": "Unknown device",
       "uncategorizedProject": "Uncategorized project",
       "cindyMake": "Cindy Make",
       "empty": {
@@ -314,7 +317,7 @@
       "syncing": "Syncing",
       "sync": "Sync again",
       "pinnedConversations": "{{count}} pinned sessions",
-      "newRemoteConversation": "New remote session",
+      "newRemoteConversation": "New session",
       "renameDevice": "Rename {{label}}",
       "project": "Project {{title}}",
       "dialogue": "Chat",
@@ -424,7 +427,13 @@
       "needAttention": "{{count}} need attention",
       "waiting": "{{count}} waiting",
       "automationRunning": "Automation running",
-      "totalRuns": "{{count}} runs total"
+      "totalRuns": "{{count}} runs total",
+      "runCount": "{{count}} runs",
+      "nextRunMinutes": "Runs in {{count}}m",
+      "nextRunHours": "Runs in {{count}}h",
+      "nextRunDays": "Runs in {{count}}d",
+      "imminent": "Running soon",
+      "stopped": "Stopped"
     }
   },
   "detail": {
@@ -528,6 +537,9 @@
     "viewAllRuns": "View all {{count}} runs"
   },
   "companions": {
+    "noCreateHosts": "No compatible computer is available. Open Cindy on a computer and sign in with the same account to create a teammate.",
+    "taskAttentionCount": "Tasks needing attention: {{count}}",
+    "unreadChatCount": "Unread chats: {{count}}",
     "messageSent": "Message sent to background task",
     "sentTo": "Sent a message to {{name}}",
     "receivedFrom": "Message from {{name}}",
@@ -557,13 +569,13 @@
     "unread": "New reply",
     "status": {
       "queued": "Getting started",
-      "running": "Working on it",
+      "running": "Running",
       "waiting": "Waiting for input",
-      "completed": "Done",
+      "completed": "Completed",
       "failed": "Failed",
       "cancelled": "Stopped",
       "timed-out": "Timed out",
-      "unknown": "Task status unavailable"
+      "unknown": "Unknown status"
     },
     "title": "Teammates",
     "tasks": "Sessions",
@@ -622,7 +634,14 @@
     },
     "viewResult": "View Result",
     "noWrittenResult": "No written result.",
-    "errorDetails": "Error details"
+    "errorDetails": "Error details",
+    "createTeammate": "New teammate",
+    "createMenu": "New",
+    "searchWithGroups": "Search teammates and groups",
+    "awaiting": "Needs your OK",
+    "emptyCopyCreate": "Teammates remember what you talked about and can get things done on your computer.",
+    "taskResult": "Task result",
+    "collapseResult": "Hide result"
   },
   "companionProfile": {
     "avatar": "Avatar",
@@ -671,6 +690,8 @@
     "artifactsEmpty": "No artifacts yet. Ask your teammate to create something.",
     "openSourceTask": "Open Source Session",
     "modelFollowsDefault": "Follow the default model chain",
+    "taskModel": "Task Model",
+    "taskInheritsPrimary": "Inherit Primary Model",
     "modelOverride": "Using this teammate’s own model chain",
     "modelsUnavailable": "No usable models. Check this teammate’s model settings on your computer, then refresh.",
     "artifactsRecovery": "Open files from the message cards, or browse them on {{deviceName}}.",
@@ -702,13 +723,13 @@
     "automations": "Automations",
     "paused": "Keep paused",
     "itemAttention": "Needs attention",
-    "takeover": "Take over automations after verification",
+    "takeover": "Check and take over automations after import",
     "takeoverNote": "Source tasks pause only after their data connections are verified. Unselected dependencies keep the source task running.",
     "submit": "Import",
     "back": "Back",
     "open": "Open teammate",
     "running": "Importing and checking connections…",
-    "complete": "Import complete",
+    "complete": "Import saved",
     "attention": "Some items need attention. See the details below.",
     "error": "Import could not finish. Retry with the same selection.",
     "keptAtSource": "Takeover is not complete",
@@ -723,6 +744,30 @@
     "credentialFailed": "Credentials could not be saved securely.",
     "scriptMissing": "A required script is missing.",
     "sourceCommand": "The original Agent command is unavailable.",
-    "readFailed": "The required data query has not been verified."
+    "readFailed": "The required data query has not been verified.",
+    "search": "Search",
+    "selectAll": "Select all",
+    "previous": "Previous",
+    "next": "Next",
+    "chatSetup": "Your imported information is saved. We can start talking. Some items still need a login or a check; we can finish those whenever you are ready. Source automations stay unchanged until takeover.",
+    "chatReady": "Your information has been imported. We can start talking.",
+    "partial": "Some content was not fully imported",
+    "details": "View import details",
+    "partlySaved": "Partially saved",
+    "savedNeedsSetup": "Saved; setup or activation remains",
+    "notSaved": "Not saved",
+    "databaseDriver": "The database driver could not load. Update or repair Cindy, then retry.",
+    "databaseUnavailable": "The source database could not be read. Original data is unchanged; retry after repair.",
+    "fileTooLarge": "A file or this import exceeds the read limit. Content was not truncated.",
+    "memoryMetadata": "The memory summary or title exceeds storage requirements.",
+    "memoryWrite": "Memory writing or integrity verification failed. You can retry.",
+    "memoryChanged": "The saved memory was changed and has not been overwritten.",
+    "attachmentUnsupported": "This attachment format is not supported yet. The original remains at the source.",
+    "diskFull": "Disk space is insufficient. Free space, then retry.",
+    "permissionDenied": "Permission to read or save this item is missing. Fix permissions, then retry.",
+    "setupDeferred": "Continue sign-in and verification in the teammate chat.",
+    "automationInvalid": "The automation definition could not be converted; it was not created.",
+    "itemFailed": "This item is unfinished. Retry or view import details.",
+    "chatPartial": "Your teammate is created, but some content was not fully saved. The items below still need attention; other content and chat remain available."
   }
 }

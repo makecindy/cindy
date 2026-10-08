@@ -262,7 +262,8 @@ export async function putCachedContent(id: RemoteFileIdentity, content: string):
 type InflightRead = {
   promise: Promise<string>;
   controller: AbortController;
-  consumers: Set<symbol>;
+  consumers: Map<symbol, FetchProgressFn>;
+  lastProgress?: Parameters<FetchProgressFn>;
 };
 const inflight = new Map<string, InflightRead>();
 
@@ -281,12 +282,22 @@ export async function fetchRemoteFileToCache(
   if (signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
   id = { ...id, scope };
   const dest = cachePathFor(id);
+  const consumerProgress: FetchProgressFn = (...args) => {
+    if (signal?.aborted) return;
+    try {
+      onProgress(...args);
+    } catch {
+      // A closed UI consumer must not fail the shared transfer for other readers.
+      log.debug('cache progress consumer unavailable');
+    }
+  };
   const existing = inflight.get(dest);
   if (existing && !existing.controller.signal.aborted) {
     const consumer = Symbol('remote-file-consumer');
-    existing.consumers.add(consumer);
+    existing.consumers.set(consumer, consumerProgress);
     try {
       if (signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
+      if (existing.lastProgress) consumerProgress(...existing.lastProgress);
       const result = await raceWithAbort(existing.promise, signal);
       assertCacheOwner(scope);
       return result;
@@ -305,7 +316,13 @@ export async function fetchRemoteFileToCache(
   };
   const report: FetchProgressFn = (...args) => {
     assertCacheOwner(scope);
-    if (!controller.signal.aborted) onProgress(...args);
+    if (controller.signal.aborted) return;
+    owner.lastProgress = args;
+    for (const progress of owner.consumers.values()) {
+      assertCacheOwner(scope);
+      if (controller.signal.aborted) return;
+      progress(...args);
+    }
   };
   const firstConsumer = Symbol('remote-file-consumer');
   const run = (async () => {
@@ -354,7 +371,11 @@ export async function fetchRemoteFileToCache(
     return dest;
   })();
 
-  const owner: InflightRead = { promise: run, controller, consumers: new Set([firstConsumer]) };
+  const owner: InflightRead = {
+    promise: run,
+    controller,
+    consumers: new Map([[firstConsumer, consumerProgress]]),
+  };
   inflight.set(dest, owner);
   void run.then(
     () => {

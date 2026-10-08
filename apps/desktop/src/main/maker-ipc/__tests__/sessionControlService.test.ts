@@ -3,6 +3,7 @@ import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activi
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import {
+  authorizeSessionQueueReorder,
   createSessionControlService,
   rebuildSessionQueueItem,
   sessionQueueOriginForDispatcher,
@@ -143,6 +144,8 @@ function setup(opts?: {
     getQueueSnapshot: vi.fn(async () => ({ pendingQueue: [queueItem], consumingClientIds: [] })),
     replaceQueuedMessage: vi.fn(() => true),
     removeQueuedMessage: vi.fn(() => true),
+    steerStoredQueuedMessage: vi.fn(async () => ({ kind: 'steered' as const })),
+    moveQueuedMessage: vi.fn(() => 0),
     createId: vi.fn(() => 'steer-1'),
   };
   return { deps, live, service: createSessionControlService(deps) };
@@ -218,6 +221,7 @@ describe('session control domain service', () => {
         text: 'after',
         origin: expect.objectContaining({ displayText: 'after' }),
       }),
+      expect.objectContaining({clientId:'queued-1',text:'before'}),
     );
 
     const foreign = setup({
@@ -231,6 +235,32 @@ describe('session control domain service', () => {
       }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'NOT_AUTHORIZED' });
     expect(foreign.deps.removeQueuedMessage).not.toHaveBeenCalled();
+  });
+
+  it('steers and moves own-sent rows or machine rows in the caller\'s own queue only', async () => {
+    const { deps, service } = setup();
+    const base = { callerSessionId: 'caller', targetSessionId: 'target', queuedMessageId: 'queued-1' };
+    await expect(service.steerQueuedMessage(base))
+      .resolves.toEqual({ ok: true, queuedMessageId: 'queued-1', delivery: 'steered' });
+    expect(deps.steerStoredQueuedMessage).toHaveBeenCalledWith('target', 'queued-1');
+    await expect(service.moveQueuedMessage({ ...base, position: 0 }))
+      .resolves.toEqual({ ok: true, queuedMessageId: 'queued-1', position: 0 });
+    await expect(service.moveQueuedMessage({ ...base, position: -1 }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+
+    const own = (origin: AgentInputQueuedMessage['origin'], extra: Partial<AgentInputQueuedMessage> = {}) =>
+      authorizeSessionQueueReorder({ ...item(origin), ...extra }, 'target', 'target').ok;
+    expect(own({ kind: 'orca', senderLabel: 'reviewer', displayText: 'r' })).toBe(true);
+    expect(own({ kind: 'session', senderSessionId: 'other', displayText: 'r' })).toBe(true);
+    expect(own(undefined)).toBe(false);
+    expect(own({ kind: 'session', senderSessionId: 'other', senderBotId: 'bot-1', displayText: 'r' })).toBe(false);
+    expect(own({ kind: 'session', senderSessionId: 'other', displayText: 'r' }, {
+      sourcePlugin: { pluginId: 'plugin-1', name: 'Plugin' },
+    } as Partial<AgentInputQueuedMessage>)).toBe(false);
+    // Someone else's queue: only rows this session sent itself.
+    expect(authorizeSessionQueueReorder(
+      item({ kind: 'session', senderSessionId: 'other', displayText: 'r' }), 'caller', 'target',
+    ).ok).toBe(false);
   });
 
   it.each([
@@ -268,6 +298,7 @@ describe('session control domain service', () => {
           chatMessage: expect.objectContaining({ content: replacement }),
           origin: expect.objectContaining({ displayText: replacement }),
         }),
+        queued,
       );
     },
   );

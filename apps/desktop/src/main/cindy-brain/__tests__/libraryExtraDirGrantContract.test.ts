@@ -65,7 +65,7 @@ describe('library extraDirs harness grant timing', () => {
   });
 
   it('Claude rebuilds next send without fresh; Codex refuses old app-server; Pi writes the current-turn permission file', () => {
-    expect(claudeSource).toContain('pendingRewindTo = sdkSessionId');
+    expect(claudeSource).toContain('pendingRewindTo = durableSdkSessionId');
     expect(claudeSource).toContain('directoryGrantRebuild ? {} : { resumeSessionAt: resumeAt }');
     expect(claudeSource).toContain('下一 turn 生效,不用 fresh:true');
     expect(claudeSource).not.toMatch(/directoryGrantRebuild[\s\S]{0,80}fresh:\s*true/);

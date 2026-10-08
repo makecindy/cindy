@@ -654,6 +654,25 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
       continue;
     }
 
+    if (item.type === 'web_search_call') {
+      if (
+        record.status !== 'completed'
+        || !isPlainObject(record.action)
+        || typeof record.action.type !== 'string'
+        || !record.action.type.trim()
+      ) throw new UnsupportedResponsesFeatureError("input item 'web_search_call'");
+      const message: ChatMessage = {
+        role: 'assistant',
+        content: '[completed web search]\n' + JSON.stringify(record.action),
+      };
+      if ((assistant?.tool_calls?.length ?? 0) > 0 || pendingToolCalls.length > 0) {
+        deferredBarriers.push(message);
+      } else {
+        pushBarrier(message);
+      }
+      continue;
+    }
+
     if (item.type === 'function_call' || item.type === 'custom_tool_call' || item.type === 'tool_search_call') {
       if (!assistant && pendingToolCalls.length > 0) closeUnresolvedToolRound();
       const callId = typeof record.call_id === 'string' && record.call_id

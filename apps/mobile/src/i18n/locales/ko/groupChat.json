@@ -78,6 +78,7 @@
     "olderOnComputer": "이전 메시지는 컴퓨터에서 확인하세요"
   },
   "notice": {
+    "memberJoined": "{{name}} 님이 그룹에 참여했습니다",
     "memberFailed": "{{name}} 님이 이번에는 답하지 못했습니다",
     "memberTimeout": "{{name}} 님의 답이 너무 늦어 이번에는 건너뛰었습니다",
     "memberUnavailable": "{{name}} 님을 지금 사용할 수 없어 이번에는 발언하지 않았습니다",
@@ -110,7 +111,13 @@
     "dismissFailed": "이 계획을 끝내지 못했습니다. 다시 시도하세요",
     "editFailed": "이 단계를 바꾸지 못했습니다. 다시 시도하세요",
     "editStepHint": "담당을 바꾸거나 이 단계를 삭제합니다",
-    "reassignStepHint": "이 단계의 담당을 바꿉니다"
+    "reassignStepHint": "이 단계의 담당을 바꿉니다",
+    "eyebrow_one": "분담 · {{count}}단계",
+    "eyebrow_other": "분담 · {{count}}단계",
+    "awaitingStart": "시작 대기",
+    "progressRunning": "진행 중 {{current}} / {{total}}",
+    "progressDone": "완료 {{done}} / {{total}}",
+    "allDone": "모두 완료"
   },
   "speaking": {
     "planning": "역할을 나누는 중…",
@@ -153,7 +160,8 @@
     "projectDirNone": "선택 안 함",
     "projectDirNote": "역할 분담으로 일할 때 동료들이 여기서 작업합니다. 선택하지 않아도 되며, 그러면 이 그룹 채팅 전용 폴더를 사용합니다. git 프로젝트를 선택하면 역할 분담마다 새 worktree와 브랜치를 만들어, 지금 작업 중인 코드는 건드리지 않습니다.",
     "add": "동료 추가",
-    "projectDirOnComputer": "컴퓨터에서 선택하거나 바꿀 수 있습니다"
+    "projectDirOnComputer": "컴퓨터에서 선택하거나 바꿀 수 있습니다",
+    "memberActions": "{{name}} 작업"
   },
   "errors": {
     "memberLimit": "그룹 채팅에는 동료가 2~6명 필요합니다",
@@ -162,5 +170,9 @@
     "hostNotReady": "Cindy가 아직 준비 중입니다. 잠시 후 다시 시도하세요",
     "planOpen": "역할 분담이 진행 중입니다. 끝내거나 중지한 뒤 새로 시작하세요",
     "planClosed": "이 계획은 이미 끝났거나 업데이트되었습니다"
+  },
+  "followUp": {
+    "next": "분담 · 다음 단계",
+    "failedStep": "{{step}}단계를 끝내지 못했어요"
   }
 }

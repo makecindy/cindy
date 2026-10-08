@@ -68,8 +68,8 @@ function isWindowsReservedName(name: string): boolean {
  * 一个网址标签页。网址范围装入时在 preview.hosts 白名单里定死(同 network
  * 域名白名单语法),运行期主机逐次校验,范围外一律拒——防钓鱼是结构性的。
  * 'skill' = 捆绑 Agent Skills(2026-07-25):插件随包携带 SKILL.md 技能目录,
- * 装入且启用后由主机链接进共享技能根 ~/.agents/skills/<id>--<name>(win32 用
- * junction),Claude Code 与 Codex 都能发现。信任面与其它槽完全不同量级:技能
+ * 装入且启用后由主机投影到 Cindy 的账号隔离目录,通过各 Harness 的私有入口
+ * 提供给 Claude Code、Codex、Pi,不写入用户共用技能目录。信任面与其它槽完全不同量级:技能
  * 指令由主 Agent 以**用户全部权限**执行、对所有项目与会话生效、不受插件沙箱
  * 约束,也不随"某工作目录停用本插件"而隐藏——仅全局停用/卸载才撤链。因此
  * manifest 全声明式(items 的 name/description 必须与 SKILL.md frontmatter 逐字
@@ -80,9 +80,7 @@ function isWindowsReservedName(name: string): boolean {
  * 即授权(pick 模式,路径不回沙箱),或 tool-call 语境下带在途 callId + 绝对
  * 路径(目录在该会话 workdir 内自动放行,workdir 外弹确认卡)。远程工作区
  * v1 一律拒(fail closed)。
- * 'ios-simulator' = Host 托管的内嵌 iOS 模拟器入口:插件只能读取当前任务的
- * 脱敏状态并请求 Host 打开控制面板。视频帧、输入、设备标识、Native Helper、
- * 生命周期与恢复均不跨插件边界,仍由 Cindy Host 独占管理。
+ * 'ios-simulator' is retired; retained only to round-trip legacy approval receipts.
  *
  * 以下名称只用于 schemaVersion 2 的兼容校验。schemaVersion 3 使用顶层直接
  * 字段声明能力，不再提供 slots。未知 v2 slot 会被保留供兼容诊断，但不会
@@ -208,6 +206,7 @@ export interface GhostCardNeeds {
 export interface GhostAgentNeeds {
   background?: boolean;
   errand?: boolean;
+  tasks?: boolean;
   schedule?: boolean;
 }
 
@@ -785,7 +784,7 @@ export const GHOST_SKILL_NAME_MAX_CHARS = 64;
 /**
  * skill 槽:技能 name 形状——小写字母/数字,连字符仅作单段分隔(禁首尾与连续
  * 连字符)。比 SkillHub 的技能名规则更严:意识 id 允许含 `--`(GHOST_ID_RE),
- * 共享技能根的链接名是 `<id>--<name>`,只有 name 侧禁 `--`,
+ * 插件私有技能根的链接名是 `<id>--<name>`,只有 name 侧禁 `--`,
  * 按"最后一个 `--`"拆分才唯一,不同插件才不可能撞出同一个链接名。
  */
 export const GHOST_SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -917,6 +916,8 @@ export interface GhostManifest {
    * `/kv`；其它自定义参数持久化走同源 `fetch('/kv')`。
    */
   settingsHtml?: string;
+  /** Optional mobile page projection; unknown/invalid declarations leave desktop behavior unchanged. */
+  mobile?: { channels: string[]; panel?: string; mainView?: string; settings?: string };
   /**
    * 自定义设置区固定高度(px,可选;160–800)。缺省 = 宿主量 guest 内容
    * 高度自适应(同区间收口);声明本字段 = 固定高度(内容动态增减的设置
@@ -972,7 +973,7 @@ export interface GhostManifest {
   preview?: GhostPreviewNeeds;
   /**
    * skill 能力详单；v2 与 'skill' slot 成对。随包捆绑的 Agent Skills 清单。
-   * 启用时主机链接进共享技能根,Claude Code 与 Codex 双端可见;字段不参与
+   * 启用时由 Cindy 私有入口加载到本地 Claude Code、Codex 与 Pi,不写用户共享目录;字段不参与
    * 本地化(必须与 SKILL.md 逐字一致,见 GhostSkillItem)。
    */
   skill?: GhostSkillNeeds;
@@ -986,6 +987,7 @@ export interface GhostManifest {
   sessionContext?: true;
   pick?: true;
   workspace?: true;
+  /** @deprecated Retirement detection only. No runtime capability is granted. */
   iosSimulator?: true;
   /**
    * 随包渐进披露手册。它不是能力 slot 或授权项；Host 只把索引投影给模型，
@@ -2934,20 +2936,24 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     if (agentRaw.errand !== undefined && typeof agentRaw.errand !== 'boolean') {
       return { ok: false, reason: 'agent.errand 必须是布尔值' };
     }
+    if (agentRaw.tasks !== undefined && typeof agentRaw.tasks !== 'boolean') {
+      return { ok: false, reason: 'agent.tasks must be boolean' };
+    }
     if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
       return { ok: false, reason: 'agent.schedule 必须是布尔值' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule'])).length === 0) {
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true 三项加档;仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true 四项加档;仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule']),
+      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
+      ...(agentRaw.tasks === true ? { tasks: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
     };
   }
@@ -3320,7 +3326,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   // skill 槽详单:与 slots 含 'skill' **严格成对**(有槽必有详单——捆绑了什么
   // 技能是本能力的全部知情面)。name/description 与 SKILL.md 的逐字一致性在
   // 打包与装入两侧另行强制,这里只管声明本身的形状。name/dir 大小写折叠去重:
-  // win32 文件系统折叠大小写,共享技能根的链接名不允许折叠后相撞。
+  // win32 文件系统折叠大小写,插件私有技能根的链接名不允许折叠后相撞。
   let skill: GhostSkillNeeds | undefined;
   if (raw.skill !== undefined) {
     if (!isPlainObject(raw.skill)) {
@@ -3729,6 +3735,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         : {}),
       ...(node !== undefined ? { node } : {}),
       ...(raw.settingsHtml !== undefined ? { settingsHtml: raw.settingsHtml as string } : {}),
+      ...(raw.mobile !== undefined ? { mobile: raw.mobile as GhostManifest['mobile'] } : {}),
       ...(raw.settingsHeight !== undefined ? { settingsHeight: raw.settingsHeight as number } : {}),
       ...(prepared.schemaVersion === 2 ? { slots } : {}),
       ...(card !== undefined

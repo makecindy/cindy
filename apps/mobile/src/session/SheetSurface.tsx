@@ -1,4 +1,5 @@
-import { useContext, useMemo } from 'react';
+import { useContext, useEffect, useMemo } from 'react';
+import { NativeSheetContext } from './NativeSheetContext';
 import { FloatingSheetContext, usePaneViewport } from '@/platform/AdaptiveWindowContext';
 /**
  * SheetSurface —— 可拖动底部浮窗的「面板表面」(从 ContextSheet 抽出,非 Modal)。
@@ -17,7 +18,7 @@ import { FloatingSheetContext, usePaneViewport } from '@/platform/AdaptiveWindow
 import type { ReactNode, RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronLeft } from 'lucide-react-native';
-import { Pressable, ScrollView, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, ScrollView, View, type ScrollViewProps, type StyleProp, type ViewStyle } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { GestureDetector } from '@/platform/gestureHandler';
 import { Text } from '@/components/AppText';
@@ -40,6 +41,8 @@ export interface SheetSurfaceProps {
   /** header 下、滚动区上的固定插槽(如搜索框);不传不占位。 */
   pinnedTop?: ReactNode;
   children: ReactNode;
+  /** Replace the ScrollView for virtualized content; never nest a vertical list inside it. */
+  renderScrollContent?: (props: Pick<ScrollViewProps, 'style' | 'contentContainerStyle' | 'keyboardShouldPersistTaps' | 'testID'>) => ReactNode;
   /** 固定在面板底部(滚动区之外)的操作区。 */
   footer?: ReactNode;
   /** 暴露内容 ScrollView(打开时滚动到选中行用);不传则内部自管。 */
@@ -65,6 +68,7 @@ export function SheetSurface({
   headerTrailing,
   pinnedTop,
   children,
+  renderScrollContent,
   footer,
   scrollRef,
   heights,
@@ -79,6 +83,8 @@ export function SheetSurface({
   const { t } = useTranslation();
   const viewport = usePaneViewport();
   const floating = useContext(FloatingSheetContext);
+  const nativeSheet = useContext(NativeSheetContext);
+  useEffect(() => { if (snap === 'full') nativeSheet?.expand(); }, [snap, nativeSheet]);
   const boundedHeights = useMemo(() => ({ half: Math.min(heights.half, viewport.height), full: Math.min(heights.full, viewport.height) }), [heights, viewport.height]);
   const drag = useContextSheetDrag({
     heights: boundedHeights,
@@ -92,20 +98,20 @@ export function SheetSurface({
       style={[
         styles.sheet,
         variant === 'tasksheet' && styles.sheetTasksheet,
-        { paddingBottom: floating ? spacing.md : bottomInset },
+        { paddingBottom: nativeSheet || floating ? spacing.md : bottomInset },
         floating && { borderRadius: radius.container },
-        drag.animatedStyle,
+        nativeSheet ? { height: Math.min(boundedHeights[snap], nativeSheet.height) } : drag.animatedStyle,
         { maxHeight: "100%" },
       ]}
       testID={testID}
     >
-      <BlurBackdrop
+      {!nativeSheet && <BlurBackdrop
         intensity={32}
         overlayColor={variant === 'tasksheet' ? colors.sheetSurface : colors.surfaceGlassPanel}
-      />
-      <GestureDetector gesture={drag.gesture}>
-      <View collapsable={false} style={styles.dragZone} {...drag.panHandlers}>
-        <SheetGrabber variant={variant} />
+      />}
+      <GestureDetector gesture={drag.gesture.enabled(!nativeSheet)}>
+      <View collapsable={false} style={styles.dragZone} {...(nativeSheet ? {} : drag.panHandlers)}>
+        {!nativeSheet && <SheetGrabber variant={variant} />}
         <View style={styles.header}>
           {onBack ? (
             <Pressable
@@ -116,7 +122,7 @@ export function SheetSurface({
               style={styles.headerButton}
               testID={testID ? `${testID}.back` : undefined}
             >
-              <ChevronLeft color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+              <ChevronLeft color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
             </Pressable>
           ) : (
             <View style={styles.headerSpacer} />
@@ -129,7 +135,12 @@ export function SheetSurface({
       </View>
       </GestureDetector>
       {pinnedTop ? <View style={styles.pinnedTop}>{pinnedTop}</View> : null}
-      <ScrollView
+      {renderScrollContent ? renderScrollContent({
+        contentContainerStyle: styles.contentScrollContent,
+        keyboardShouldPersistTaps: 'handled',
+        style: styles.contentScroll,
+        testID: testID ? `${testID}.scroll` : undefined,
+      }) : <ScrollView
         contentContainerStyle={styles.contentScrollContent}
         keyboardShouldPersistTaps="handled"
         ref={scrollRef}
@@ -137,7 +148,7 @@ export function SheetSurface({
         testID={testID ? `${testID}.scroll` : undefined}
       >
         {children}
-      </ScrollView>
+      </ScrollView>}
       {footer ? (
         <View style={styles.footer} testID={testID ? `${testID}.footer` : undefined}>
           {footer}

@@ -11,7 +11,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
 } }));
 vi.mock('../session/durableOutboxFiles', () => ({ durableOutboxUploadUri: vi.fn(), removeOutboxFiles: mocks.removeFiles }));
 vi.mock('../session/mobileAttachmentUpload', () => ({ discardMobileUploadedAttachment: mocks.discard }));
-import { cleanupOutboxResources, discardOutboxUploads, getCurrentMobileOutboxRecords, mobileDurableOutbox } from '../session/mobileDurableOutbox';
+import { cleanupOutboxResources, discardOutboxUploads, getCurrentMobileOutboxRecords, mobileDurableOutbox, persistCancelledCreationDraft } from '../session/mobileDurableOutbox';
 
 function record(): DurableOutboxRecord {
   return { version: 1, accountId: getMobileAuthOwner().accountKey, deviceId: 'mac', createdAt: 1,
@@ -31,6 +31,31 @@ beforeEach(async () => {
   mocks.removeFiles.mockReset();
   setMobileAuthOwner('alice', 'global');
   await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
+});
+
+it('persists cancellation for only the matching device and restores it after a cold activation', async () => {
+  const own = record();
+  own.creation = { draft: { workingDir: '/repo/.cindy-worktrees/failed', firstMessage: 'draft' } as NonNullable<DurableOutboxRecord['creation']>['draft'],
+    originalWorkingDir: '/repo', deviceName: 'PC', planModeArm: false, restorePermissionMode: null };
+  await mobileDurableOutbox.add(own);
+  const other = { ...own, deviceId: 'other-device' };
+  await mobileDurableOutbox.add(other);
+  await persistCancelledCreationDraft({ sessionId: 'task', deviceId: 'mac' });
+  await mobileDurableOutbox.activate('');
+  await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
+  const restored = getCurrentMobileOutboxRecords().find((r) => r.deviceId === 'mac')!;
+  expect(restored).toMatchObject({ suspended: true, state: 'failed', item: own.item,
+    creation: { cancelled: true, draft: { workingDir: '/repo', firstMessage: 'draft' } } });
+  expect(getCurrentMobileOutboxRecords().find((r) => r.deviceId === 'other-device')).toEqual(other);
+});
+
+it('does not cancel another account draft when the owner switches during activation', async () => {
+  await mobileDurableOutbox.add(record());
+  const original = new Map(mocks.data);
+  const pending = persistCancelledCreationDraft({ sessionId: 'task', deviceId: 'mac' });
+  setMobileAuthOwner('bob', 'global');
+  await expect(pending).rejects.toThrow('OUTBOX_OWNER_CHANGED');
+  expect(mocks.data).toEqual(original);
 });
 
 it('still disposes confirmed-cancelled uploads when local deletion rejects', async () => {

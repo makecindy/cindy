@@ -10,6 +10,7 @@
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
+import type { MessageSourceDevice, MessageSourcePlugin } from '@cindy/maker-shared/message-source';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
 import {
@@ -204,6 +205,18 @@ export interface AutoResumeInfo {
   sessionTotal: number;
 }
 
+/** 账号额度重置后自动继续时 `AutoResumeInfo.reason` 的取值（活动行据此换文案）。 */
+export const USAGE_LIMIT_RESET_AUTO_RESUME_REASON = 'usage-limit-reset';
+
+/**
+ * 普通任务撞上账号 5 小时 / 周限额后的等待计划：错误照常呈现，用户可随时自己处理；
+ * 到 `resumeAt` 仍无人处理时被控端自动继续该任务。仅在本次运行内有效（不落盘）。
+ */
+export interface AgentInputUsageLimitWait {
+  /** 预计自动继续的时刻（unix ms，已含重置后的缓冲）。 */
+  resumeAt: number;
+}
+
 /**
  * Durable recovery context for a retry/continue action.
  *
@@ -235,7 +248,7 @@ export interface AgentInputQueuedMessage {
   /** Host-stamped attribution, retained in durable queue snapshots and messages. */
   sharedTaskAuthor?: SharedTaskAuthor;
   /** Host-captured authored text before plugin/reference decoration; omitted from wire projections. */
-  autoReviewUserText?: string;
+  autoReviewUserText?: string | { kind: 'delegated-continuation' };
   /** Host-owned text-only input; retained by queue persistence and retry. */
   toolsDisabled?: boolean;
   clientId: string;
@@ -328,6 +341,28 @@ export interface AgentInputQueuedMessage {
   uiLanguage?: string;
   /** Main-owned provenance: this queue item entered through device-link input IPC. */
   fromDeviceLinkClient?: boolean;
+  /**
+   * 远程操作本机的同账号控制端(手机 / 另一台电脑)。被控端在 input:enqueue /
+   * input:steer 的 IPC 边界按 device-link invoke context 盖章:设备 id 来自 relay
+   * 填写的 `env.src`,平台来自 presence(未知平台不盖章),名字是被控端当时可见的
+   * 展示名快照。共享任务访客、本机输入都不盖章。
+   *
+   * **只由被控端写入,wire 传来的值在 IPC 边界一律剥掉**。落库到
+   * `agentMeta.sourceDevice` 驱动界面设备标签,并在派发时生成发给模型的
+   * `[客户端说明]`。只用于归属展示,**不是**任何信任 / 权限判据。
+   */
+  sourceDevice?: MessageSourceDevice;
+  /**
+   * 插件任务派发的消息(`plugin-task:` 入口由主机盖章)。落库到
+   * `agentMeta.sourcePlugin` 驱动「由插件「X」发送」标签,派发时生成
+   * `[消息来源]` 说明。只用于归属展示,不是权限判据;wire 值在 IPC 边界剥掉。
+   */
+  sourcePlugin?: MessageSourcePlugin;
+  /**
+   * Host-owned:`text` 上的 `[UI_ACTION_TRIGGER]` 前缀只为让排队行与落库行保持隐藏
+   * (主机构造的任务回执等内部消息),发给模型时去掉前缀。wire 值在 IPC 边界剥掉。
+   */
+  agentOmitsTriggerPrefix?: true;
   /**
    * 一次性跳过意识拦截钩(订阅槽①)。**预留字段,v1 无调用点置位**:当前
    * 没有"强制发送"UI,被拦消息只能编辑后重发且重发仍会再审;未来落地
@@ -462,6 +497,11 @@ export interface AgentInputProjection {
    * 老被控端可能缺省该字段,消费方按 falsy 处理即可(退化成"没有自愈提示")。
    */
   autoResumePending?: AutoResumeInfo;
+  /**
+   * 账号限额等待中(与 `error` 同时存在:错误照常显示,横幅附「将于 X 自动继续 · 取消」)。
+   * 老被控端缺省该字段,消费方按 null 处理(退化成只有错误、没有自动继续)。
+   */
+  usageLimitWait?: AgentInputUsageLimitWait | null;
 }
 
 export type AgentInputMakerMessage =
@@ -1058,7 +1098,11 @@ export function buildMakerUserMessage(
   sessionReferenceContexts: AgentInputSessionReferenceContext[] = [],
 ): AgentInputMakerMessage {
   const blocks: Array<{ type: string; [k: string]: unknown }> = [];
-  const agentFacingText = getAgentFacingText(queued);
+  const facingText = getAgentFacingText(queued);
+  // 主机内部消息只在排队行 / 历史里需要隐藏前缀;发给模型的正文不带它。
+  const agentFacingText = queued.agentOmitsTriggerPrefix === true && facingText.startsWith(UI_ACTION_TRIGGER_PREFIX)
+    ? facingText.slice(UI_ACTION_TRIGGER_PREFIX.length)
+    : facingText;
   if (agentFacingText.length > 0) {
     blocks.push({ type: 'text', text: agentFacingText });
   }

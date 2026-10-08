@@ -60,6 +60,10 @@ import type {
   MobileVoiceDictionaryLearningResult,
 } from "@cindy/maker-shared/device-link-contract";
 import type { ProviderView } from "@cindy/model-providers/registry";
+import {
+  NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS,
+  type NativeSubscriptionAuth,
+} from "@cindy/model-providers/types";
 import type { RewindPreviewPayload } from "@/session/rewindPreview";
 import type {
   MobileRemoteMediaFetchOptions,
@@ -126,6 +130,17 @@ export interface CreateSessionResult {
 }
 
 export type MobileAgentKind = "claude-code" | "codex" | "pi";
+
+/**
+ * 订阅家族 → 被控端余量快照 channel。ChatGPT 走 Codex 自有控制面
+ * (getCodexRateLimits / getAccountUsage),其余家族各有一个只读快照 channel。
+ * 以 NativeSubscriptionAuth 为键:新增订阅家族时这里漏接会直接编译失败。
+ */
+export type SubscriptionUsageKind = Exclude<NativeSubscriptionAuth, "codex">;
+export const SUBSCRIPTION_USAGE_CHANNELS = {
+  claude: "maker:usage:claude-subscription",
+  xai: "maker:usage:xai-subscription",
+} as const satisfies Record<SubscriptionUsageKind, string>;
 
 export type MobileSlashCommand =
   | { kind: "agent-builtin"; name: string; description: string }
@@ -547,7 +562,11 @@ export interface MobileMakerTransport {
     providerId?: string,
     selection?: { effort: string | null; fastMode: boolean },
   ): Promise<{ deferred?: boolean; superseded?: boolean } | undefined>;
-  /** 登记跨 Agent 切换意图；真正切换在下一条消息发送时由 desktop main 执行。 */
+  /**
+   * 登记跨 Agent 切换意图；真正切换在下一条消息发送时由 desktop main 执行。
+   * 可选 options.agentDeviceId(远程 Agent)同时换 Agent 所在电脑:null = 改回被控电脑本机
+   * 运行;只在显式传入时作为第 7 个 wire 参数发送,缺省 = 位置不变(旧被控端忽略多余参数)。
+   */
   switchSessionAgent(
     sessionId: string,
     targetAgentKind: MobileAgentKind,
@@ -555,6 +574,7 @@ export interface MobileMakerTransport {
     providerId: string | null,
     effort?: string,
     fastMode?: boolean,
+    options?: { agentDeviceId?: string | null },
   ): Promise<MobileSessionAgentSwitchResult>;
   /** 读取 desktop main 的权威 pending intent，用于重连 / 重进页面恢复。 */
   getSessionAgentSwitchIntent(
@@ -583,6 +603,17 @@ export interface MobileMakerTransport {
   ): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number }>;
   /** Codex app-server authoritative windows plus banked reset credits and a bound reset offer. */
   getCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
+  /**
+   * 被控端订阅账号余量快照(只读,cached-first;Claude 5h/周/分模型窗口、SuperGrok 周用量)。
+   * 默认账号不传 providerId;独立账号的回包必须回显同一 providerId,否则按旧被控端处理。
+   * 老被控端 CHANNEL_NOT_ALLOWED → 调用方保留「暂未获取」提示。
+   */
+  getSubscriptionUsage(
+    kind: SubscriptionUsageKind,
+    providerId?: string,
+  ): Promise<unknown>;
+  /** cc 默认路由会话在被控端 proxy 观察到的生效计费路由('gateway' | 'subscription' | null)。 */
+  getClaudeSessionRoute(sessionId: string): Promise<unknown>;
   /** Consume the desktop-issued offer; retries must pass the same idempotency key. */
   resetCodexRateLimits(
     idempotencyKey: string,
@@ -634,6 +665,13 @@ export interface MobileMakerTransport {
      * 校验登记匹配、dirty 与 live ownership。
      */
     discardPrecreated(
+      input:
+        | { sessionId: string; path: string; recoveryKey?: never }
+        | { sessionId: string; recoveryKey: string; path?: never },
+    ): Promise<{ discarded: true; branchDeleted?: boolean }>;
+    /** New hosts seal the creation id before discarding; never fall back to
+     * discardPrecreated once a session-create request may have been sent. */
+    cancelPrecreated?(
       input:
         | { sessionId: string; path: string; recoveryKey?: never }
         | { sessionId: string; recoveryKey: string; path?: never },
@@ -801,6 +839,8 @@ export interface MobileMakerTransport {
     resume(sessionId: string): Promise<InputProjection>;
     retryLastError(sessionId: string): Promise<InputProjection>;
     clearError(sessionId: string): Promise<InputProjection>;
+    /** 取消账号限额重置后的自动继续;老被控端没有该通道时会被拒(调用方只在投影带等待时显示入口)。 */
+    cancelUsageLimitWait(sessionId: string): Promise<InputProjection>;
     remove(sessionId: string, clientId: string): Promise<InputProjection>;
     updateText(
       sessionId: string,
@@ -847,7 +887,11 @@ export interface MobileMakerTransport {
       relPath: string,
       signal?: AbortSignal,
       beforeInvoke?: () => Promise<unknown>,
-      options?: { stream?: boolean },
+      options?: {
+        stream?: boolean;
+        /** Upload progress while the computer stages the file in cloud storage. */
+        onProgress?: (uploaded: number, total: number) => void;
+      },
     ): Promise<MobileRemoteMediaFetchResult>;
     caps(workdir: string): Promise<FileBrowserCapsResult>;
     /** 返回裸 entries(unknown),消费方用 normalizeRemoteOpDirEntries 归一化。 */
@@ -1126,15 +1170,22 @@ export function createMobileMakerTransport({
       providerId,
       effort,
       fastMode,
+      options,
     ) =>
-      call("maker:switch-session-agent", [
-        sessionId,
-        targetAgentKind,
-        model,
-        providerId,
-        effort,
-        fastMode,
-      ]),
+      call(
+        "maker:switch-session-agent",
+        options?.agentDeviceId !== undefined
+          ? [
+              sessionId,
+              targetAgentKind,
+              model,
+              providerId,
+              effort ?? null,
+              fastMode ?? null,
+              { agentDeviceId: options.agentDeviceId },
+            ]
+          : [sessionId, targetAgentKind, model, providerId, effort, fastMode],
+      ),
     getSessionAgentSwitchIntent: (sessionId) =>
       call("maker:get-session-agent-switch-intent", [sessionId]),
     setEffort: (sessionId, effort) =>
@@ -1177,6 +1228,24 @@ export function createMobileMakerTransport({
         throw new Error("PRECONDITION_FAILED: Account scope unsupported");
       return result;
     },
+    getSubscriptionUsage: async (kind, providerId) => {
+      // 默认账号不带参数,兼容只认默认账号的老被控端。
+      const scoped =
+        providerId && providerId !== NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS[kind];
+      const result = await call<unknown>(
+        SUBSCRIPTION_USAGE_CHANNELS[kind],
+        scoped ? [providerId] : undefined,
+      );
+      if (
+        scoped &&
+        result &&
+        (result as { providerId?: string }).providerId !== providerId
+      )
+        throw new Error("PRECONDITION_FAILED: Account scope unsupported");
+      return result;
+    },
+    getClaudeSessionRoute: (sessionId) =>
+      call("maker:claude-session-route:get", [sessionId]),
     resetCodexRateLimits: async (idempotencyKey, providerId) => {
       const result = await call<MobileCodexRateLimitResetResult>(
         "maker:usage:codex-rate-limit-reset",
@@ -1213,6 +1282,8 @@ export function createMobileMakerTransport({
       create: (req) => call("worktree:create", [req]),
       discardPrecreated: (input) =>
         call("worktree:discard-precreated", [input]),
+      cancelPrecreated: (input) =>
+        call("worktree:cancel-precreated", [input]),
     },
     listAgentCommands: (agentKind, opts) =>
       call("maker:list-agent-commands", opts ? [agentKind, opts] : [agentKind]),
@@ -1323,6 +1394,8 @@ export function createMobileMakerTransport({
       retryLastError: (sessionId) =>
         call("maker:input:retry-last-error", [sessionId]),
       clearError: (sessionId) => call("maker:input:clear-error", [sessionId]),
+      cancelUsageLimitWait: (sessionId) =>
+        call("maker:input:cancel-usage-limit-wait", [sessionId]),
       remove: (sessionId, clientId) =>
         call("maker:input:remove", [sessionId, clientId]),
       updateText: (
@@ -1375,7 +1448,7 @@ export function createMobileMakerTransport({
         });
         assertFileReadActive(signal);
         const fallback = () =>
-          exportDeviceFile(retryOp, workdir, relPath, signal);
+          exportDeviceFile(retryOp, workdir, relPath, signal, options?.onProgress);
         if (!caps.fileRead) {
           mobileDebugLog("debug", "files", "file export without direct read", {
             reason: "host-lacks-file-read",

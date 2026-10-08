@@ -908,6 +908,58 @@ describe('commitRewindAtMessage', () => {
     expect(result.id).toBe('sess-1');
   });
 
+  it('Claude Code on another computer: restores files from local savepoints and only truncates the conversation there', async () => {
+    getSessionMetaMock.mockImplementation(async () => ({ sdkSessionId: 'sdk-uuid-old', agentDeviceId: 'device-b' }));
+    detectCwdMock.mockResolvedValueOnce({ gitInstalled: true, isGitRepo: true, repoRoot: '/repo', isInsideWorktree: false });
+    listShadowSavepointsMock.mockResolvedValueOnce([
+      {
+        commit: 'sc1', sessionId: 'sess-1', kind: 'after-edit', source: 'cindy', parentCount: 1,
+        anchor: 'client-id', baselineCommit: 'base1', label: '本轮修改', time: '2026-10-06T00:00:00+08:00',
+      },
+    ]);
+    selectQueue.push([makeUserMessageRow()]); // target user msg
+    selectQueue.push([]); // agent_switch 边界守卫:无边界
+    selectQueue.push([makeAssistantMessageRow()]); // prior assistants
+    selectQueue.push([makeUserMessageRow()]); // target 及之后的 user 时间线
+    selectQueue.push([makeSessionRow()]); // post-update select
+
+    const result = await commitRewindAtMessage('sess-1', 'client-id');
+
+    expect(executeCodexFileRestorePlanWithThreadRollbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'file-restore', repoRoot: '/repo', baselineCommit: 'base1' }),
+      'sess-1',
+      expect.objectContaining({ commitThreadRollback: expect.any(Function), onCompensationError: expect.any(Function) }),
+    );
+    // 那台没有本机的文件检查点：空 userUuid 只截断对话。
+    expect(commitRewindFilesMock).toHaveBeenCalledTimes(1);
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', 'sdk-msg-uuid-prior-asst');
+    const txCall = txCalls.find((c) => c.name === 'rewind.commit');
+    if (!txCall) throw new Error('缺少 rewind.commit tx 调用');
+    expect(txCall.args).toMatchObject({ targetClientId: 'client-id', preserveMessageUuid: 'sdk-msg-uuid-prior-asst' });
+    expect(result.id).toBe('sess-1');
+  });
+
+  it('Claude Code on another computer: previews the local savepoint plan instead of native checkpoints', async () => {
+    getSessionMetaMock.mockImplementation(async () => ({ sdkSessionId: 'sdk-uuid-old', agentDeviceId: 'device-b' }));
+    detectCwdMock.mockResolvedValueOnce({ gitInstalled: true, isGitRepo: true, repoRoot: '/repo', isInsideWorktree: false });
+    listSnapshotsMock.mockResolvedValueOnce([{ commit: 'sp1', sessionId: 'sess-1', kind: 'after-edit', source: 'legacy-xdt', branch: 'main', parentCount: 1, anchor: 'client-id' }]);
+    gitExecMock.mockResolvedValueOnce({ stdout: '3\t1\tsrc/a.ts\n', stderr: '' });
+    selectQueue.push([makeUserMessageRow()], [], [makeAssistantMessageRow()], [makeUserMessageRow()]);
+
+    await expect(previewRewindAtMessage('sess-1', 'client-id')).resolves.toEqual({
+      canRewind: true, filesChanged: ['src/a.ts'], insertions: 1, deletions: 3,
+    });
+    expect(previewRewindFilesMock).not.toHaveBeenCalled();
+  });
+
+  it('Claude Code on another computer: refuses a target that is no longer on the timeline', async () => {
+    getSessionMetaMock.mockImplementation(async () => ({ sdkSessionId: 'sdk-uuid-old', agentDeviceId: 'device-b' }));
+    selectQueue.push([makeUserMessageRow()], [], [makeAssistantMessageRow()], [makeUserMessageRow({ rowid: 99 })]);
+
+    await expect(commitRewindAtMessage('sess-1', 'client-id')).rejects.toMatchObject({ code: 'MESSAGE_NOT_FOUND' });
+    expect(commitRewindFilesMock).not.toHaveBeenCalled();
+  });
+
   it('Codex: uses tail turn count and does not require prior assistant uuid', async () => {
     useFakeSession('codex');
     commitRewindFilesMock.mockResolvedValueOnce({ sdkSessionId: 'rollback-thread-id' });

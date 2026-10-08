@@ -198,6 +198,15 @@ describe('runManualUpdateCheck', () => {
 });
 
 describe('manualUpdateCheckMessage', () => {
+  it('does not claim the Google Play app package is current after checking only content updates', async () => {
+    await i18n.changeLanguage('zh-CN');
+    const options = { isTestFlightBuild: false, isGooglePlayInstallation: true, t: i18n.t };
+    expect(manualUpdateCheckMessage({ kind: 'up-to-date' }, options))
+      .toBe('当前没有可用的内容更新。新应用版本请在 Google Play 中查看。');
+    expect(manualUpdateCheckMessage({ kind: 'ota-unavailable' }, options))
+      .toBe('当前构建无法检查内容更新。新应用版本请在 Google Play 中查看。');
+  });
+
   it('tells the user to fully reopen the app when reload was rejected', async () => {
     await i18n.changeLanguage('zh-CN');
     expect(manualUpdateCheckMessage({ kind: 'restart-required' }, { isTestFlightBuild: false, t: i18n.t }))

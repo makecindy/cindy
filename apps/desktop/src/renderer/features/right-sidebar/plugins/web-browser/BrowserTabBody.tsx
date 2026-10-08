@@ -629,8 +629,8 @@ function BrowserCrashBanner({
           ? 'rightSidebar.browser.crash.unresponsiveDesc'
           : 'rightSidebar.browser.crash.crashedDesc';
   return (
-    <div className="absolute inset-0 flex items-center justify-center bg-[var(--overlay-modal)] backdrop-blur-sm">
-      <div className="flex max-w-xs flex-col items-center gap-3 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-5 text-center">
+    <div className="modal-scrim absolute inset-0 flex items-center justify-center">
+      <div className="modal-panel flex max-w-xs flex-col items-center gap-3 px-6 py-5 text-center">
         <AlertTriangle size={28} strokeWidth={1.5} className="text-[var(--error-fg)]" />
         <div className="text-13 font-medium text-[var(--text-primary)]">{t(titleKey)}</div>
         <div className="text-12 text-[var(--text-secondary)]">{t(descKey)}</div>

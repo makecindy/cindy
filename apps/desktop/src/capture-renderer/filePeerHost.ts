@@ -15,7 +15,7 @@ export function startFilePeerHost(api: FilePeerHostApi) {
             result = await runtime.stats(c.connection);
             break;
           case 'invoke':
-            result = await runtime.invoke(c.connection, c.payload);
+            result = await runtime.invoke(c.connection, c.payload, c.timeoutMs, c.body);
             break;
           case 'accept':
             result = await runtime.accept(c.connection, c.servers, c.sdp);

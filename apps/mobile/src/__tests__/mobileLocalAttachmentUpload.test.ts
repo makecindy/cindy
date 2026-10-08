@@ -195,18 +195,39 @@ describe('createMobileLocalAttachmentUploadController', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it('reclaims an upload arriving after the total deadline without publishing it', async () => {
+  it('does not apply the total deadline while a large upload is transferring', async () => {
     vi.useFakeTimers();
     try {
       const gate = gatedUpload();
-      const { deps, uploaded, discarded } = makeDeps({ upload: gate.upload });
+      const { deps, uploaded, failed } = makeDeps({ upload: gate.upload });
       const controller = createMobileLocalAttachmentUploadController(deps);
       controller.enqueue([candidate('a.jpg')], { token: 't' });
+      // 传输层自己按无进度判超时;这里跨过多个 180 秒窗口仍在上传。
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(gate.inFlight()).toEqual(['a.jpg']);
+      expect(failed).toEqual([]);
+      gate.release('a.jpg');
+      expect(await controller.waitForIdle()).toEqual({ failedCount: 0 });
+      expect(uploaded).toHaveLength(1);
+      controller.dispose();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('re-arms the deadline after upload and reclaims the attachment when delivery never settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const gate = gatedUpload();
+      const { deps, discarded, failed } = makeDeps({
+        upload: gate.upload,
+        onUploaded: () => new Promise<void>(() => {}),
+      });
+      const controller = createMobileLocalAttachmentUploadController(deps);
+      controller.enqueue([candidate('a.jpg')], { token: 't' });
+      await vi.advanceTimersByTimeAsync(600_000);
+      gate.release('a.jpg');
       await vi.advanceTimersByTimeAsync(180_000);
       expect(await controller.waitForIdle()).toEqual({ failedCount: 1 });
-      gate.release('a.jpg');
-      await vi.advanceTimersByTimeAsync(0);
-      expect(uploaded).toEqual([]);
+      expect(failed).toHaveLength(1);
       expect(discarded).toEqual([attachmentFor('a.jpg')]);
       controller.dispose();
     } finally { vi.useRealTimers(); }

@@ -45,7 +45,8 @@ describe('message WebView visibility wiring', () => {
     const composer = readFileSync(resolve(process.cwd(), 'src/session/ComposerRichInput.tsx'), 'utf8');
 
     expect(renderer).not.toContain('MessageListVisibleKeysContext');
-    expect(renderer).toContain('useViewability<MobileMessageRenderItem>(');
+    expect(renderer).toContain('useMessageListItemVisible(item.key)');
+    expect(renderer).toContain('onViewableItemsChanged={handleViewableItemsChanged}');
     expect(renderer).toContain('const heavyContentVisible = focused || isViewable;');
     expect(renderer).toContain('function ViewabilityGatedMermaidDiagram(');
     expect(renderer).toContain('function ViewabilityGatedMathFormula(');
@@ -61,9 +62,11 @@ describe('message WebView visibility wiring', () => {
     expect(renderer).toContain('recycleItems={recycleItems}');
     expect(renderer).toContain('getItemType={mobileMessageListItemType}');
     expect(mermaid).toContain('active?: boolean;');
-    expect(mermaid).toMatch(/active\s*\?\s*<WebView/);
+    expect(mermaid).toMatch(/mountWebView\s*\?\s*<WebView/);
+    expect(mermaid).toContain('useDeferredRichContent(active && !preview');
     expect(math).toContain('active?: boolean;');
-    expect(math).toMatch(/active\s*\?\s*<WebView/);
+    expect(math).toMatch(/mountWebView\s*\?\s*<WebView/);
+    expect(math).toContain('useDeferredRichContent(active &&');
     expect(math).toContain('renderGenerationRef.current !== renderGeneration');
     expect(mermaid).toContain('pendingExportsRef.current.clear();');
     expect(mermaid).toContain('}, [active, source]);');

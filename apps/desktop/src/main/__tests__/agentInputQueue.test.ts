@@ -61,6 +61,21 @@ describe('agentInputQueue', () => {
     expect(getAgentFacingText(rewritten)).toBe('Updated welcome.');
   });
 
+  it('keeps the hidden-row prefix on host receipts but omits it from the model input', () => {
+    const body = '[任务回执] 后台任务已完成。task_id: d-1';
+    const text = `[UI_ACTION_TRIGGER]${body}`;
+    const queued = {
+      ...queuedMessage([]), text, persistedContent: text, agentOmitsTriggerPrefix: true as const,
+    };
+    const restored = JSON.parse(JSON.stringify(sanitizeQueuedMessageForPersistence(queued)));
+    // 排队行遮蔽按 text 判定,text / 落库内容都保留前缀。
+    expect(restored.text).toBe(text);
+    expect(restored.persistedContent).toBe(text);
+    expect(buildMakerUserMessage(restored)).toEqual({ type: 'user', content: body });
+    // 没有主机标记的合成指令(续跑)照旧带前缀发给模型。
+    expect(buildMakerUserMessage({ ...queued, agentOmitsTriggerPrefix: undefined })).toEqual({ type: 'user', content: text });
+  });
+
   it('sends queued GIF attachments as file blocks', () => {
     expect(
       buildMakerUserMessage(

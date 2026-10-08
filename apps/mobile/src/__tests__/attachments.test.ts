@@ -7,12 +7,12 @@ import {
   buildMobileRemoteFileAttachment,
   buildMobileUploadedAttachment,
   MOBILE_MAX_ATTACHMENTS,
-  MOBILE_MAX_ATTACHMENT_BYTES,
   categorizeMobileAttachment,
   mergeAttachmentsWithinLimit,
   extractRemoteFileExt,
 } from '@/session/attachments';
 import { isAttachmentOssRef, parseAttachmentOssRef } from '@/session/attachmentOssRef';
+import { OSS_ATTACHMENT_MAX_BYTES, buildPeerAttachmentRef } from '@cindy/device-link';
 import type { RemoteSerializedAttachment } from '@/session/types';
 
 const SHA256 = 'a'.repeat(64);
@@ -31,7 +31,9 @@ describe('mobile remote file attachments', () => {
     expect(categorizeMobileAttachment('report.docx')).toBe('office');
     expect(categorizeMobileAttachment('SessionScreen.tsx')).toBe('text');
     expect(categorizeMobileAttachment('Dockerfile')).toBe('text');
-    expect(categorizeMobileAttachment('archive.zip')).toBeNull();
+    expect(categorizeMobileAttachment('archive.zip')).toBe('file');
+    expect(categorizeMobileAttachment('clip.mp4')).toBe('file');
+    expect(categorizeMobileAttachment('LICENSE')).toBe('file');
   });
 
   it('builds desktop-compatible serialized attachment and persisted file refs', () => {
@@ -159,23 +161,48 @@ describe('mobile remote file attachments', () => {
     });
   });
 
-  it('rejects uploaded mobile files outside desktop attachment limits', () => {
+  it('accepts any file type like desktop', () => {
+    const archive = buildMobileUploadedAttachment({
+      ossKey: 'cindy/device-link/user-1/archive.zip',
+      name: 'archive.zip',
+      size: 1024,
+      sha256: SHA256,
+    });
+    expect(archive).toMatchObject({
+      name: 'archive.zip',
+      ext: '.zip',
+      category: 'file',
+      mimeType: 'application/octet-stream',
+    });
+    expect(archive).not.toHaveProperty('url');
+  });
+
+  it('limits only OSS-relayed attachments; direct attachments have no fixed size cap', () => {
     expect(
       buildMobileUploadedAttachment({
-        ossKey: 'cindy/device-link/user-1/archive.zip',
-        name: 'archive.zip',
-        size: 1024,
+        ossKey: 'cindy/device-link/user-1/big.pdf',
+        name: 'big.pdf',
+        size: OSS_ATTACHMENT_MAX_BYTES,
         sha256: SHA256,
       }),
-    ).toBeNull();
+    ).toMatchObject({ category: 'pdf', size: OSS_ATTACHMENT_MAX_BYTES });
     expect(
       buildMobileUploadedAttachment({
         ossKey: 'cindy/device-link/user-1/spec.pdf',
         name: 'spec.pdf',
-        size: MOBILE_MAX_ATTACHMENT_BYTES + 1,
+        size: OSS_ATTACHMENT_MAX_BYTES + 1,
         sha256: SHA256,
       }),
     ).toBeNull();
+    const size = 10 * 1024 ** 3;
+    const peerRef = buildPeerAttachmentRef({
+      ticket: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      size,
+      sha256: SHA256,
+    });
+    expect(
+      buildMobileUploadedAttachment({ peerRef, name: 'movie.mov', size, sha256: SHA256 }),
+    ).toMatchObject({ category: 'file', size, path: peerRef });
   });
 });
 

@@ -1,16 +1,19 @@
+import { formatLocalizedSeconds } from './sessionDurationFormat';
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
-import { Component, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Linking, Pressable, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import { Component, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useLocalSearchParams } from 'expo-router';
+import { useGuardedPush } from '@/utils/useGuardedPush';
+import { Animated, Easing, Linking, Pressable, StyleSheet, View } from 'react-native';
 import {
-  FileText,
+  CircleAlert,
+  CircleCheck,
   GitPullRequest,
   GitMerge,
   GitPullRequestClosed,
   GitPullRequestDraft,
   Square,
-  ArrowLeftRight,
   ChevronRight,
+  Layers,
   Megaphone,
   TriangleAlert,
 } from 'lucide-react-native';
@@ -45,6 +48,11 @@ import {
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import type { NormalizedRemoteMessage } from './messageNormalize';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+
+const TRACE_AVATAR_SIZE = 20;
+const TRACE_HIT_SLOP = { top: 6, bottom: 6 } as const;
+const AUX_HIT_SLOP = { top: 6, bottom: 6 } as const;
 import { useRemoteCompanionQuery } from './useRemoteCompanionQuery';
 
 class CompanionRenderBoundary extends Component<
@@ -121,7 +129,7 @@ function CompanionMessageCardContent({ message, renderMarkdown }: {
 /** Desktop BotDirectMessageCard: a separator pill with the peer's portrait, opening the read-only thread. */
 function CompanionPrivateTrace({ deviceId, meta }: { deviceId: string; meta: BotDirectMessageMeta }) {
   const { t, i18n } = useTranslation();
-  const router = useRouter();
+  const push = useGuardedPush();
   const { user } = useAuth();
   const { status, getPresenceAvailability } = useDeviceLink();
   const styles = useThemedStyles(makeStyles);
@@ -134,12 +142,12 @@ function CompanionPrivateTrace({ deviceId, meta }: { deviceId: string; meta: Bot
     || meta.peerBotName || meta.peerBotId;
   return (
     <View style={styles.privateTrace} testID="companion.privateTrace">
-      <View style={styles.traceLine} />
       <Pressable
         accessibilityRole="button"
+        hitSlop={TRACE_HIT_SLOP}
         style={styles.traceTouchTarget}
         onPress={() =>
-          router.push({
+          push({
             pathname: '/companions/direct/[threadId]',
             params: {
               deviceId,
@@ -152,16 +160,14 @@ function CompanionPrivateTrace({ deviceId, meta }: { deviceId: string; meta: Bot
         {({ pressed }) => (
           <View style={[styles.traceAction, pressed && mobileInteractionStyles.pressed]}>
             {peer ? <RemoteCompanionAvatar avatar={peer.display.avatar} deviceId={deviceId} name={peerName}
-              online={status === 'online' && getPresenceAvailability(deviceId) !== false} size={iconSize.md} framed /> : null}
-            <ArrowLeftRight size={iconSize.xs} color={colors.textTertiary} />
-            <Text numberOfLines={2} style={[styles.note, styles.traceLabel]}>
+              online={status === 'online' && getPresenceAvailability(deviceId) !== false} size={TRACE_AVATAR_SIZE} framed /> : null}
+            <Text numberOfLines={1} style={[styles.note, styles.traceLabel]}>
               {t(meta.direction === 'sent' ? 'devices.companions.sentTo' : 'devices.companions.receivedFrom', { name: peerName })}
             </Text>
-            <ChevronRight size={iconSize.xs} color={colors.textTertiary} />
+            <ChevronRight size={iconSize.sm} color={colors.textTertiary} />
           </View>
         )}
       </Pressable>
-      <View style={styles.traceLine} />
     </View>
   );
 }
@@ -176,7 +182,7 @@ function CompanionTaskCard({
   meta: BotCollaborationMeta;
 }) {
   const { t } = useTranslation();
-  const router = useRouter();
+  const push = useGuardedPush();
   const { invoke } = useDeviceLink();
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -196,18 +202,10 @@ function CompanionTaskCard({
     row && (BOT_DELEGATION_STATUSES as readonly string[]).includes(row.status)
       ? row.status
       : resolved ? 'unknown' : 'queued';
-  const statusColor =
-    status === 'completed' ? colors.statusDone
-      : status === 'failed' || status === 'timed-out' ? colors.statusError
-      : status === 'running' ? colors.statusAccent
-      : status === 'waiting' ? colors.statusAwaiting
-      : colors.textTertiary;
   const title = row?.title || meta.objective.trim().split('\n')[0] || t('devices.companions.backgroundTask');
   const [pending, setPending] = useState(false);
   const [actionFailed, setActionFailed] = useState(false);
   const [showPrs, setShowPrs] = useState(false);
-  // Equal intrinsic widths in every language; the 32px visible frame sits inside a 44px hit target.
-  const [actionWidth, setActionWidth] = useState(104);
   const [now, setNow] = useState(Date.now);
   const childSessionId = row?.childSessionId || meta.childSessionId;
   const active = Boolean(row && ['queued', 'running', 'waiting'].includes(row.status));
@@ -231,10 +229,12 @@ function CompanionTaskCard({
           ? t('devices.companions.duration.minutes', {
               n: Math.floor(seconds / 60),
             })
-          : t('devices.companions.duration.hoursMinutes', {
-              h: Math.floor(seconds / 3600),
-              m: Math.floor(seconds / 60) % 60,
-            });
+          : seconds >= 86_400
+            ? formatLocalizedSeconds(seconds)
+            : t('devices.companions.duration.hoursMinutes', {
+                h: Math.floor(seconds / 3600),
+                m: Math.floor(seconds / 60) % 60,
+              });
   const associated = useRemoteCompanionQuery<SessionPrRef[]>(
     deviceId,
     'git-context:pr-refs:list',
@@ -311,48 +311,37 @@ function CompanionTaskCard({
       setPending(false);
     }
   };
-  const rememberActionWidth = (event: LayoutChangeEvent) => {
-    const width = event.nativeEvent?.layout?.width;
-    if (typeof width !== 'number' || !Number.isFinite(width)) return;
-    const measuredWidth = Math.ceil(width);
-    setActionWidth((current) => Math.max(current, measuredWidth));
-  };
+  const openTask = childSessionId ? () => push({
+    pathname: '/sessions/[sessionId]',
+    params: { deviceId, sessionId: childSessionId },
+  }) : undefined;
+  const stale = (!online || error || associated.error || prStatuses.error
+    || (Array.isArray(prStatuses.value) && prStatuses.value.some((result) => !result.ok))) && row;
+  const facts = [
+    duration,
+    Array.isArray(row?.artifacts) && row.artifacts.length > 0 ? t('devices.companions.artifactCount', { count: row.artifacts.length }) : null,
+    prs.length === 1 ? `${prs[0].owner}/${prs[0].repo} #${prs[0].prNumber}` : prs.length > 1 ? t('devices.companions.prCount', { count: prs.length }) : null,
+  ].filter((part): part is string => !!part);
   return (
     <View style={styles.card} testID="companion.taskCard">
-      <View style={styles.header}>
-        <Text numberOfLines={2} style={[styles.title, styles.taskTitle]}>
-          {title}
-        </Text>
-        <View style={styles.status}>
-          <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-          <Text style={[styles.note, { color: statusColor }]}>
-            {t(`devices.companions.status.${status}`)}
-          </Text>
+      {/* K6: the whole card opens the task; secondary actions sit below as small buttons. */}
+      <Pressable accessibilityRole="button" disabled={!openTask} onPress={openTask}
+        accessibilityLabel={`${t('devices.companions.backgroundTask')}, ${title}, ${t(`devices.companions.status.${status}`)}`}
+        accessibilityHint={openTask ? t('devices.companions.openTask') : undefined}
+        style={({ pressed }) => [styles.head, pressed && openTask && mobileInteractionStyles.pressed]} testID="companion.taskCard.open">
+        <View style={styles.eyebrow}>
+          <Layers size={iconSize.sm} color={colors.textSecondary} />
+          <Text style={styles.eyebrowText}>{t('devices.companions.backgroundTask')}</Text>
+          {openTask ? <ChevronRight size={iconSize.md} color={colors.textTertiary} /> : null}
         </View>
-      </View>
-      <View style={styles.metadata}>
-        {duration ? <Text style={styles.note}>{duration}</Text> : null}
-        {Array.isArray(row?.artifacts) && row.artifacts.length > 0 ? (
-          <Text style={styles.note}>
-            {t('devices.companions.artifactCount', {
-              count: row.artifacts.length,
-            })}
-          </Text>
-        ) : null}
-        {prs.length === 1 ? (
-          <Text numberOfLines={1} style={styles.note}>
-            {prs[0].owner}/{prs[0].repo} #{prs[0].prNumber}
-          </Text>
-        ) : prs.length > 1 ? (
-          <Text style={styles.note}>{t('devices.companions.prCount', { count: prs.length })}</Text>
-        ) : null}
-      </View>
-      {(!online ||
-        error ||
-        associated.error ||
-        prStatuses.error ||
-        (Array.isArray(prStatuses.value) && prStatuses.value.some((status) => !status.ok))) &&
-      row ? (
+        <Text numberOfLines={2} style={styles.title}>{title}</Text>
+        <View style={styles.metadata}>
+          <TaskStatusMark status={status} />
+          <Text style={styles.note}>{t(`devices.companions.status.${status}`)}</Text>
+          {facts.map((part) => <Text key={part} numberOfLines={1} style={styles.note}>{`· ${part}`}</Text>)}
+        </View>
+      </Pressable>
+      {stale ? (
         <View style={styles.messageTrace}>
           <TriangleAlert size={iconSize.xs} color={colors.textTertiary} style={styles.traceIcon} />
           <Text style={[styles.note, styles.tertiary, styles.traceLabel]}>{t('devices.companions.stale')}</Text>
@@ -370,89 +359,37 @@ function CompanionTaskCard({
           {row.lastError.replace(/^[A-Z_]+:\s*/, '')}
         </Text>
       ) : null}
-      <View style={styles.actions}>
+      {prs.length > 0 || active || error ? <View style={styles.actions}>
         {prs.length > 0 ? (
           <Pressable
             accessibilityRole="button"
             accessibilityState={prs.length > 1 ? { expanded: showPrs } : undefined}
-            style={styles.touchTarget}
+            hitSlop={AUX_HIT_SLOP}
+            style={({ pressed }) => [styles.action, pressed && mobileInteractionStyles.pressed]}
             onPress={() => (prs.length === 1 ? openPr(sessionPrUrl(prs[0])) : setShowPrs(!showPrs))}
           >
-            {({ pressed }) => (
-              <View
-                onLayout={rememberActionWidth}
-                style={[
-                  styles.action,
-                  { minWidth: actionWidth },
-                  pressed && mobileInteractionStyles.pressed,
-                ]}
-              >
-                {prs.length === 1 ? (
-                  prIcon(prs[0])
-                ) : (
-                  <GitPullRequest size={iconSize.sm} color={colors.textPrimary} />
-                )}
-                <Text style={styles.actionLabel}>{t('devices.companions.viewPr')}</Text>
-              </View>
-            )}
-          </Pressable>
-        ) : null}
-        {childSessionId ? (
-          <Pressable
-            accessibilityRole="button"
-            style={styles.touchTarget}
-            onPress={() =>
-              router.push({
-                pathname: '/sessions/[sessionId]',
-                params: { deviceId, sessionId: childSessionId },
-              })
-            }
-          >
-            {({ pressed }) => (
-              <View
-                onLayout={rememberActionWidth}
-                style={[
-                  styles.action,
-                  { minWidth: actionWidth },
-                  pressed && mobileInteractionStyles.pressed,
-                ]}
-              >
-                <FileText size={iconSize.sm} color={colors.textPrimary} />
-                <Text style={styles.actionLabel}>{t('devices.companions.openTask')}</Text>
-              </View>
-            )}
+            {prs.length === 1 ? prIcon(prs[0]) : <GitPullRequest size={iconSize.sm} color={colors.textPrimary} />}
+            <Text style={styles.actionLabel}>{t('devices.companions.viewPr')}</Text>
           </Pressable>
         ) : null}
         {active ? (
           <Pressable
             accessibilityRole="button"
             disabled={!online || pending}
-            style={[styles.touchTarget, (!online || pending) && styles.disabled]}
+            hitSlop={AUX_HIT_SLOP}
+            style={({ pressed }) => [styles.action, (!online || pending) && styles.disabled, pressed && mobileInteractionStyles.pressed]}
             onPress={() => void stop()}
           >
-            {({ pressed }) => (
-              <View
-                onLayout={rememberActionWidth}
-                style={[
-                  styles.action,
-                  { minWidth: actionWidth },
-                  pressed && mobileInteractionStyles.pressed,
-                ]}
-              >
-                <Square size={iconSize.sm} color={colors.textPrimary} />
-                <Text style={styles.actionLabel}>{t('devices.companions.stopTask')}</Text>
-              </View>
-            )}
+            <Square size={iconSize.sm} color={colors.textPrimary} />
+            <Text style={styles.actionLabel}>{t('devices.companions.stopTask')}</Text>
           </Pressable>
         ) : null}
         {error ? (
-          <Pressable accessibilityRole="button" style={styles.touchTarget} onPress={refresh}>
-            <View style={[styles.action, { minWidth: actionWidth }]}>
-              <Text style={styles.actionLabel}>{t('devices.resources.retry')}</Text>
-            </View>
+          <Pressable accessibilityRole="button" hitSlop={AUX_HIT_SLOP} style={({ pressed }) => [styles.action, pressed && mobileInteractionStyles.pressed]} onPress={refresh}>
+            <Text style={styles.actionLabel}>{t('devices.resources.retry')}</Text>
           </Pressable>
         ) : null}
-      </View>
+      </View> : null}
       {showPrs && prs.length > 1 ? (
         <View>
           {prs.map((pr) => (
@@ -479,52 +416,70 @@ function CompanionTaskCard({
   );
 }
 
+/** K7: running breathes in Heart Orange, done is a check, failure a red alert; nothing else gets a color. */
+function TaskStatusMark({ status }: { status: string }) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
+  const animate = useReduceMotionEnabled() === false;
+  const opacity = useRef(new Animated.Value(1)).current;
+  const running = status === 'running' || status === 'queued';
+  useEffect(() => {
+    if (!running || !animate) { opacity.setValue(1); return; }
+    const step = (toValue: number) => Animated.timing(opacity, { toValue, duration: 750, easing: Easing.inOut(Easing.ease), useNativeDriver: true });
+    const loop = Animated.loop(Animated.sequence([step(0.3), step(1)]));
+    loop.start();
+    return () => loop.stop();
+  }, [animate, opacity, running]);
+  if (running) return <Animated.View style={[styles.runningDot, { opacity }]} testID="companion.taskCard.running" />;
+  if (status === 'completed') return <CircleCheck size={iconSize.xs} color={colors.textSecondary} />;
+  if (status === 'failed' || status === 'timed-out') return <CircleAlert size={iconSize.xs} color={colors.statusError} />;
+  return null;
+}
+
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
-    privateTrace: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-    traceLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
-    traceTouchTarget: { minHeight: 44, maxWidth: '90%', justifyContent: 'center', flexShrink: 1 },
-    traceAction: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border, borderRadius: radius.pill, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+    // K10: a small pill under the reply text, left aligned with it.
+    privateTrace: { flexDirection: 'row', alignItems: 'center' },
+    traceTouchTarget: { maxWidth: '100%', flexShrink: 1 },
+    traceAction: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs + 2, minHeight: 32, borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border, borderRadius: radius.pill, backgroundColor: colors.surfaceElevated,
+      paddingLeft: spacing.xs + 2, paddingRight: spacing.sm + 2 },
     traceLabel: { flexShrink: 1 },
     // Quiet persisted traces (Desktop BotSessionTaskMessageTrace): tertiary, icon aligned to the first line.
     messageTrace: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm, marginVertical: spacing.xs },
     traceIcon: { marginTop: 3, flexShrink: 0 },
     tertiary: { color: colors.textTertiary },
-    status: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
-    statusDot: { width: 6, height: 6, borderRadius: radius.pill },
+    runningDot: { width: 6, height: 6, borderRadius: radius.pill, backgroundColor: colors.statusAccent },
+    // K1 card shell.
     card: {
       marginVertical: spacing.sm,
-      padding: spacing.md,
-      gap: spacing.xs,
+      padding: spacing.lg,
+      gap: spacing.sm,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
       backgroundColor: colors.surfaceElevated,
       borderRadius: radius.container,
     },
-    header: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
-    taskTitle: { flex: 1, minWidth: 0 },
-    title: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
+    head: { gap: spacing.xs },
+    eyebrow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs + 2, minHeight: lineHeight.caption },
+    eyebrowText: { flex: 1, minWidth: 0, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
+    title: { marginTop: 2, color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
     note: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
     actionLabel: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
     // Paragraph errors follow errorText; red is reserved for the status dot.
     error: { color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-    metadata: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-    actions: { flexDirection: 'row', flexWrap: 'wrap', columnGap: spacing.sm },
-    touchTarget: { minHeight: 44, justifyContent: 'center' },
+    metadata: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: spacing.xs + 2 },
+    actions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.xs },
+    // K6 auxiliary actions: 32 visible (hitSlop to 44), chip fill, no border.
     action: {
       minHeight: 32,
-      minWidth: 104,
-      paddingHorizontal: 12,
-      paddingVertical: 5,
-      gap: 6,
+      paddingHorizontal: spacing.md,
+      gap: spacing.xs + 2,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
       borderRadius: radius.pill,
-      backgroundColor: colors.surfaceElevated,
+      backgroundColor: colors.surfaceChip,
     },
     prOption: { minHeight: 44, justifyContent: 'center' },
     disabled: { opacity: 0.5 },

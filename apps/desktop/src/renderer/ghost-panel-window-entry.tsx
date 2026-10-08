@@ -26,6 +26,7 @@ import { ConfirmDialogProvider } from './components/ui/confirm-dialog-provider';
 import { applyFontSettings, getInitialFontSettings } from './hooks/useFontSettings';
 import { bootstrapInitialLocale, LocaleProvider } from './hooks/useLocale';
 import { getInitialThemeVariant } from './hooks/useTheme';
+import { WallpaperSettingsProvider } from './hooks/useWallpaperSettings';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
 import { themeService } from './themes/theme-service';
 import {
@@ -46,7 +47,9 @@ createRoot(rootElement).render(
   <TopLevelErrorBoundary>
     <LocaleProvider>
       <ConfirmDialogProvider>
-        <GhostPanelWindowLayout />
+        <WallpaperSettingsProvider>
+          <GhostPanelWindowLayout />
+        </WallpaperSettingsProvider>
       </ConfirmDialogProvider>
     </LocaleProvider>
   </TopLevelErrorBoundary>,

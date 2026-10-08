@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { cloneElement, type ReactElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { BotGroupOpenPlanSummary, BotGroupSummary } from '../../../../shared/botGroupChat';
@@ -87,6 +87,9 @@ vi.mock('../botGroupStore', () => ({
 vi.mock('../BotDeleteDialog', () => ({ BotDeleteDialog: () => null }));
 vi.mock('../BotGroupCreateDialog', () => ({
   BotGroupCreateDialog: () => <div role="dialog">create-group-dialog</div>,
+}));
+vi.mock('../BotRosterView', () => ({
+  BotRosterView: () => <div role="dialog">create-teammate-dialog</div>,
 }));
 vi.mock('../BotGenerationLabel', () => ({
   BotGenerationLabel: ({ sessionId }: { sessionId?: string }) => <span>{`generation:${sessionId}`}</span>,
@@ -175,11 +178,11 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('BotsSidebar group chats', () => {
-  it('lists groups below teammates with an author preview and opens them', async () => {
+  it('lists groups alongside teammates with an author preview and opens them', async () => {
     mocks.groups = [group(), group({ id: 'g2', name: '读书会', lastMessage: null, updatedAt: 1 })];
     mocks.params = { groupId: 'g1' };
     await renderSidebar();
-    expect(screen.getByText('bots.groupChat.sidebar.title')).toBeTruthy();
+    expect(screen.queryByText('bots.groupChat.sidebar.title')).toBeNull();
     const rows = screen.getAllByRole('button', { current: 'page' });
     expect(rows).toHaveLength(1);
     expect(rows[0]?.textContent).toContain('周末出游');
@@ -190,8 +193,53 @@ describe('BotsSidebar group chats', () => {
     fireEvent.click(screen.getByText('读书会'));
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/groups/g2');
 
-    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.create.title' }));
+    fireEvent.keyDown(screen.getByRole('button', { name: 'bots.list.createMenu' }), { key: 'Enter' });
+    expect(screen.getByRole('menuitem', { name: 'bots.list.createTeammate' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'bots.groupChat.create.title' }));
     expect(screen.getByRole('dialog').textContent).toBe('create-group-dialog');
+  });
+
+  it('opens teammate creation from the same plus menu', async () => {
+    await renderSidebar();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'bots.list.createMenu' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'bots.list.createTeammate' }));
+    expect(screen.getByRole('dialog').textContent).toBe('create-teammate-dialog');
+  });
+
+  it('moves a group above older private chats on a new message while preserving pins', async () => {
+    mocks.profiles = [{ ...bot('mimi', '咪咪'), lastMessageAt: 20 },
+      { ...bot('xiaoman', '小满'), pinnedAt: 1 }];
+    mocks.groups = [group()];
+    const view = await renderSidebar();
+    const order = () => Array.from(view.container.querySelectorAll('button'))
+      .map(row => ['咪咪', '小满', '周末出游'].find(name => screen.getByText(name).closest('button') === row))
+      .filter(Boolean);
+    expect(order()).toEqual(['小满', '咪咪', '周末出游']);
+    mocks.groups = [group({ lastMessage: { ...group().lastMessage!, createdAt: 30 } })];
+    view.rerender(cloneElement(mocks.registered.node as ReactElement));
+    expect(order()).toEqual(['小满', '周末出游', '咪咪']);
+  });
+
+  it('keeps joined groups visible when the account has no local teammates', async () => {
+    mocks.profiles = [];
+    mocks.groups = [group()];
+    await renderSidebar();
+    expect(screen.getByRole('button', { name: /周末出游/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'bots.add' })).toBeNull();
+  });
+
+  it('searches both group names and members in the unified list', async () => {
+    mocks.groups = [group(), ...Array.from({ length: 5 }, (_, i) =>
+      group({ id: `other-${i}`, name: `其他群 ${i}`, members: [] }))];
+    await renderSidebar();
+    const input = screen.getByRole('textbox', { name: 'bots.list.search' });
+    fireEvent.change(input, { target: { value: '出游' } });
+    expect(screen.getByRole('button', { name: /周末出游/ })).toBeTruthy();
+    expect(screen.queryByText('咪咪 private preview')).toBeNull();
+    expect(screen.queryByRole('button', { name: /其他群/ })).toBeNull();
+    fireEvent.change(input, { target: { value: '咪咪' } });
+    expect(screen.getByRole('button', { name: /周末出游/ })).toBeTruthy();
+    expect(screen.getByText('咪咪 private preview')).toBeTruthy();
   });
 
   it('shows the running mark on the group, not on the speaking teammate’s own row', async () => {
@@ -292,4 +340,12 @@ describe('BotsSidebar group chats', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(mocks.sendNotification).not.toHaveBeenCalled();
   });
+});
+
+it('localizes the join preview without presenting its subject as a chat author', async () => {
+  mocks.groups = [group({ lastMessage: { authorKind: 'system', authorName: 'Taylor',
+    noticeCode: 'member-joined', preview: 'Fallback text', createdAt: 30 } })];
+  await renderSidebar();
+  expect(screen.getByText('bots.groupChat.notice.memberJoined:{"name":"Taylor"}')).toBeTruthy();
+  expect(screen.queryByText(/Fallback text/)).toBeNull();
 });

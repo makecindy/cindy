@@ -7,7 +7,7 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { getRemoteResource } from '@/device-link/remoteResources';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 
-/** A card is a read-only remote resource, scoped to account + device + task.
+/** Card content and Host-projected actions are scoped to account + device + task.
  * Refresh after foreground/reconnect and host invalidation; stale replies cannot
  * replace a recycled row or another account's card. */
 export function usePluginResultCard(deviceId: string | undefined, sessionId: string, callId: string) {
@@ -35,7 +35,7 @@ export function useSessionPluginResource(deviceId: string | undefined, sessionId
       const expected = ++generation;
       const valid = () => !disposed && current.current === binding && generation === expected && AppState.currentState === 'active';
       try {
-        const resource = await getRemoteResource(invoke, { deviceId, deviceName: deviceId }, { collectionId, kind, id });
+        const resource = await getRemoteResource(invoke, { deviceId, deviceName: deviceId }, { collectionId, kind, id }, undefined, collectionId === 'plugin-results' ? ['plugin-card-actions'] : []);
         if (valid()) setState({ binding, blocks: resource.blocks ?? [], title: typeof resource.display.title === 'string' ? resource.display.title : resource.display.title.fallback, error: kind === 'card' && !resource.blocks?.length });
       } catch (error) {
         const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;

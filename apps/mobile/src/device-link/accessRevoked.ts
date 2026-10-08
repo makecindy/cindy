@@ -1,6 +1,7 @@
 import type { Envelope, LinkClosePayload } from '@cindy/device-link';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { evictDeviceProviders } from '@/device-link/deviceProvidersCache';
+import { evictProviderShareCatalogs } from '@/device-link/providerShareCatalogCache';
 import { evictDeviceModelMeta } from '@/device-link/deviceModelMetaCache';
 import { evictAgentCapabilitiesForDevice } from '@/session/agentCapabilitiesCache';
 import { evictComposerPaletteCacheForDevice } from '@/session/composerPaletteCache';
@@ -22,6 +23,7 @@ export function markDeviceAccessRevoked(deviceId: string): void {
   remoteScheduleEventStore.clearDeviceMirrorInvalidation(deviceId);
   remoteSessionStore.removeDevice(deviceId);
   evictDeviceProviders(deviceId);
+  evictProviderShareCatalogs(deviceId);
   evictDeviceModelMeta(deviceId);
   evictAgentCapabilitiesForDevice(deviceId);
   evictComposerPaletteCacheForDevice(deviceId);

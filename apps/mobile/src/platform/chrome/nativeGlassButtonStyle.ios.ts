@@ -1,6 +1,6 @@
 import {
   background, buttonBorderShape, buttonStyle, contentShape, controlSize,
-  foregroundStyle, font, frame, glassEffect, shapes,
+  foregroundStyle, font, frame, glassEffect, shapes, tint,
 } from '@expo/ui/swift-ui/modifiers';
 import { useLiquidGlassAvailable } from '@/session/useLiquidGlassAvailable';
 import { iconSize, navigationChrome, useTheme } from '@/theme';
@@ -29,6 +29,9 @@ export function useNativeGlassButtonStyle({
   }
   return [
     buttonStyle(glass ? (prominent ? 'glassProminent' : 'glass') : (prominent ? 'borderedProminent' : 'bordered')),
+    // A light tint in Dark mode does not make SwiftUI's prominent label dark.
+    // Pair both colors here; custom labels also set ctaText inside the style.
+    ...(prominent ? [tint(colors.cta), foregroundStyle(colors.ctaText)] : []),
     buttonBorderShape(shape),
     controlSize('regular'),
     frame({ minHeight: navigationChrome.target }),

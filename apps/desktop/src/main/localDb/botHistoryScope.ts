@@ -45,14 +45,22 @@ export async function resolveBotHistorySessionIds(
   const scope = await resolveBotHistoryScope(callerSessionId, callerMemoryScopeKey);
   if (scope.kind === 'unscoped') return null;
   if (scope.kind === 'denied') return [];
+  // The Bot's own sessions plus the background tasks it started (ordinary
+  // `desktop` sessions without a bot_session_links row).
   const rows = await getDbClient().query<{ sessionId: string }>(
-    `SELECT session_id AS sessionId
-       FROM bot_session_links
-      WHERE bot_id = ?
-      ORDER BY created_at DESC`,
-    [scope.botId],
+    `SELECT sessionId FROM (
+       SELECT session_id AS sessionId, created_at AS createdAt
+         FROM bot_session_links
+        WHERE bot_id = ?
+       UNION
+       SELECT child_session_id AS sessionId, created_at AS createdAt
+         FROM bot_delegations
+        WHERE requesting_bot_id = ? AND child_session_id IS NOT NULL
+     )
+     ORDER BY createdAt DESC`,
+    [scope.botId, scope.botId],
   );
-  return rows.map((row) => row.sessionId);
+  return [...new Set(rows.map((row) => row.sessionId))];
 }
 
 /**

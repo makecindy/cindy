@@ -360,15 +360,12 @@ export function AddRemoteProjectDialog({
     <Dialog.Root open={open} onOpenChange={busy ? undefined : onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-50"
-          style={{ backgroundColor: 'var(--overlay-modal, rgba(0,0,0,0.4))' }}
+          className="modal-scrim fixed inset-0 z-50"
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="fixed left-1/2 top-1/2 z-50 flex w-[560px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl shadow-[var(--confirm-shadow)]"
+          className="modal-panel fixed left-1/2 top-1/2 z-50 flex w-[560px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col"
           style={{
-            backgroundColor: 'var(--surface-elevated, #ffffff)',
-            border: '1px solid var(--border-default, #d4d4d4)',
             // Keep the centered shell still across mode changes and async list loading.
             height: noTargets ? undefined : 660,
             maxHeight: '88vh',

@@ -12,20 +12,15 @@ import {
   type RefObject,
   type ReactNode,
 } from 'react';
-import { createPortal } from 'react-dom';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { useNavigate } from 'react-router-dom';
 import { buildLocalSkillPathRoute } from '@/features/skillhub/lib/localRoutes';
-import { Folder, MessageSquarePlus, Mic, Pen, TriangleAlert, X } from 'lucide-react';
+import { Folder, MessageSquarePlus, Mic, TriangleAlert, X } from 'lucide-react';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
-import { ImageLightbox } from '@/components/chat/ImageLightbox';
-import { AnnotationStrokesSvg } from '@/components/chat/AnnotationStrokesSvg';
 import { isAnnotationBurnInError } from '@/lib/annotationBurnIn';
-import { ImageHoverPreview } from '@/components/chat/ImageHoverPreview';
-import { formatBytes, TextLightbox } from '@/components/chat/TextLightbox';
-import { AttachmentTypeThumb } from './AttachmentTypeThumb';
+import { AttachmentRejectionStrip, ThumbnailStrip } from './ComposerAttachments';
 import { FullAccessConfirmContent } from './FullAccessConfirmContent';
 import { useEditor, EditorContent } from '@tiptap/react';
 import Document from '@tiptap/extension-document';
@@ -84,7 +79,6 @@ import type {
   AttachedFile,
   ComposerBotMention,
   MentionedResource,
-  ImageAnnotationStroke,
 } from '@/lib/fileTypes';
 import {
   commentPreviewTag,
@@ -98,8 +92,6 @@ import {
   getDroppedFileItems,
   type DroppedFileItems,
 } from '@/lib/fileDrop';
-import { shouldOpenTextLightbox } from '@/lib/filePreview';
-import { isDangerousAttachmentName } from '../../../shared/attachmentSafety';
 import {
   getDraft as getComposerDraft,
   getOrCreateRemoteOptimisticTransitionCheckpoint,
@@ -128,7 +120,10 @@ import {
   ModelSelector,
   resolveRemoteModelListStatus,
   resolveModelSelectorAgentIdentity,
+  type EffortChangeOptions,
   type ModelMemoryAccessors,
+  type RemoteAgentSelectorOptions,
+  type UnifiedSelectionAgentDevice,
 } from './ModelSelector';
 import {
   enqueueEffortChange,
@@ -172,13 +167,11 @@ import {
 } from './sourceSwitch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PermissionSelector } from './PermissionSelector';
+import { PluginWriteAccessRecovery } from './PluginWriteAccessRecovery';
 import { ExtraDirsButton, type CollaborationMenuConfig } from './ExtraDirsButton';
-import { expandHostCapabilityInvocation } from '../../cindy-brain/hostCapabilityInvocation';
 import {
   focusComposerEndNextFrame,
-  hostCapabilityForGhost,
   placeGhostAtComposerStart,
-  placeHostCapabilityAtComposerStart,
 } from './ghostComposerPlacement';
 import { NewGoalDialog } from './NewGoalDialog';
 import { PlanModeIndicator } from './PlanModeIndicator';
@@ -198,8 +191,10 @@ import {
   findGhostByCommand,
   parseGhostCommandWord,
 } from '@/cindy-brain/ghostCommand';
-import { filterGhostsForWorkdir } from '@/cindy-brain/ghostWorkdirFilter';
+import { filterGhostsForWorkdir, getWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { useRemoteComposerGhosts } from '@/cindy-brain/useRemoteComposerGhosts';
+import { projectGhostComposerEntries, type GhostCommandSource } from '../../../shared/ghostComposer';
 import {
   attachGhostMediaToSession,
   getGhostMediaUriFromDataTransfer,
@@ -301,10 +296,10 @@ import {
   useComposerSendShortcutPreference,
 } from '@/hooks/useComposerSendShortcutPreference';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
+import { usePromptRecommendationPrediction } from '@/hooks/usePromptRecommendationPrediction';
+import { predictPromptUntilDisabled } from '@/lib/predictPromptUntilDisabled';
 import {
-  beginPromptRecommendationPrediction,
   dismissPromptRecommendation,
-  resolvePromptRecommendationPrediction,
   usePromptRecommendation,
 } from '@/lib/promptRecommendationStore';
 import { createLogger } from '@/lib/logger';
@@ -315,7 +310,10 @@ import {
   shouldRefreshComposerRender,
   type ComposerRenderSnapshot,
 } from './composerRenderGate';
-import { shouldShowComposerPromptRecommendation } from './composerPromptRecommendation';
+import {
+  isComposerReadyForPromptRecommendation,
+  shouldShowComposerPromptRecommendation,
+} from './composerPromptRecommendation';
 import { createComposerFrameScheduler } from './composerFrameScheduler';
 import {
   serializeEditorContent,
@@ -323,11 +321,9 @@ import {
   type SerializedComposerContent,
 } from './composerContentSerialization';
 import {
-  composerDocumentContainsHostCapabilityChip,
   composerDocumentContainsList,
   normalizeComposerDocumentJSON,
   plainTextToComposerDocument,
-  stripHostCapabilityChips,
 } from '@/lib/composerListDocument';
 import { useAgentCapabilities, type AgentKind } from '@/hooks/useAgentCapabilities';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
@@ -355,6 +351,10 @@ import {
   setProviderModelThinking,
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
+import {
+  agentDeviceModelMemoryAccessors,
+  useAgentDeviceModelMemoryVersion,
+} from '@/state/agentDeviceModelMemory';
 import {
   setSessionFavoriteAnchor as setSessionFavoriteAnchorMemory,
   useSessionFavoriteAnchor,
@@ -406,7 +406,7 @@ import { createWorkLouderCodexVoiceGesture } from '@/lib/workLouderCodexVoiceGes
 import { appendMentionChip } from './mentionChipInsertion';
 // device-link 远程会话:设置变更不落本地 DB(会 404),改写远程内存层 + 运行时隧道。
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
-import { makerApiFor, makerApiForDevice, makerApiForSticky } from '@/lib/makerTransport';
+import { makerApiFor, makerApiForDevice, makerApiForSticky, subscribeRemoteCredentialSwitchOutcome } from '@/lib/makerTransport';
 import { SESSION_LINK_DROP_MIME } from '@/lib/sessionLinkDrop';
 
 const log = createLogger('ChatInput');
@@ -534,6 +534,20 @@ interface ChatInputProps {
    * 由 CCAgentSessionView(reactive remoteDeviceId)/ NewMakerDraftRoute(目标设备)传入;本地会话 undefined。
    */
   deviceLinkDeviceId?: string | null;
+  /**
+   * 本机任务、但 Agent 在同账号另一台电脑上运行:那台电脑的 deviceId。只决定**模型目录**
+   * (能力、供应商、可用引擎)从哪台读 —— 任务、文件、命令、斜杠命令、附件仍按本机任务处理,
+   * 切换模型也走本机 IPC(由本机转给那台的 Agent)。与 deviceLinkDeviceId 互斥。
+   */
+  agentDeviceId?: string | null;
+  /** agentDeviceId 那台电脑的名字(模型选择器悬停 / 读屏用);未知时显示「另一台电脑」。 */
+  agentDeviceName?: string | null;
+  /**
+   * 新任务草稿可选的「Agent 在其他电脑运行」目标(在线的同账号电脑)。传了且非空时,模型面板
+   * 左侧栏在本机供应商之后列出这些电脑上的供应商;选中那里的模型会经 onUnifiedDraftSelect 的
+   * agentDevice 交给草稿层。已建任务 / 远程任务 / SSH 任务不传。
+   */
+  remoteAgentDevices?: readonly { deviceId: string; name: string }[];
   /**
    * device-link「纯显示镜像」记忆 override:非空时优先于本机全局模型预设注入 ModelSelector,
    * 用于远程草稿 / 远程会话——非选中行读被控端镜像、改动经隧道写穿被控端,绝不碰控制端本地记忆
@@ -851,12 +865,49 @@ interface ChatInputProps {
     favoriteUid: string | null;
     /** 来自配置浮层「恢复推荐」，不得把推荐档重新写成用户 override。 */
     resetToRecommended?: true;
+    /**
+     * 只在传了 remoteAgentDevices 时出现:这一行属于哪台电脑(null = 本机)。与当前
+     * agentDeviceId 不同 = 连 Agent 的运行位置一起换。
+     */
+    agentDevice?: UnifiedSelectionAgentDevice;
   }) => void;
   /**
    * 统一面板里被选中的收藏锚点 uid(与 onUnifiedDraftSelect 成对,由草稿层持有)。
    * 语义见 ModelSelectorProps.selectedFavoriteUid。
    */
   selectedFavoriteUid?: string | null;
+}
+
+/** 本机模型全局预设的读写器(本机目录的选择器共用一份,引用稳定)。 */
+const LOCAL_MODEL_MEMORY: ModelMemoryAccessors = {
+  getEffort: getProviderModelEffort,
+  setEffort: setProviderModelEffort,
+  setChoice: setProviderModelChoice,
+  getFast: getProviderModelFast,
+  setFast: setProviderModelFast,
+  getThinking: getProviderModelThinking,
+  setThinking: setProviderModelThinking,
+  // 「恢复推荐」= 删记忆键(跟随目录新默认),不是把这一版的默认快照写回去。
+  // device-link 镜像没有这两个入口(隧道协议没有删除那一笔),按各自能力退化。
+  clearEffort: clearProviderModelEffort,
+  clearFast: clearProviderModelFast,
+};
+
+/**
+ * 把已有任务里选定的档位 / Fast 记进**这个模型所在目录**的那份记忆:deviceId = null 写本机预设,
+ * 否则写本机为那台电脑单独记的一份。只写模型档位,不碰新建任务记忆。来源缺失时不写。
+ */
+function rememberCatalogModelPrefs(
+  deviceId: string | null,
+  agent: AgentKind,
+  providerId: string | null | undefined,
+  modelId: string,
+  patch: { effort?: Effort; fast?: boolean },
+): void {
+  if (!providerId || !modelId) return;
+  const memory = deviceId ? agentDeviceModelMemoryAccessors(deviceId) : LOCAL_MODEL_MEMORY;
+  if (patch.effort !== undefined) memory.setEffort(agent, providerId, modelId, patch.effort);
+  if (patch.fast !== undefined) memory.setFast(agent, providerId, modelId, patch.fast);
 }
 
 /** 统一模型选择器联合列表的候选引擎全集(与 SELECTABLE_VENDORS 同一顺序)。 */
@@ -1141,6 +1192,9 @@ export function ChatInput({
   initialWorkingDir,
   remoteHostId,
   deviceLinkDeviceId: _deviceLinkDeviceId,
+  agentDeviceId: _agentDeviceId,
+  agentDeviceName = null,
+  remoteAgentDevices,
   modelMemoryOverride,
   initialModel,
   initialEffort,
@@ -1218,6 +1272,21 @@ export function ChatInput({
   // device-link 远程会话:null = 已确认本地会话,undefined = 所有权尚未解析,string = 远程会话。
   // 预测守卫用原始值区分 null vs undefined,下游通路继续用 ?? undefined 归一化。
   const deviceLinkDeviceId = _deviceLinkDeviceId;
+  /** Agent 在另一台电脑运行的本机任务(只影响模型目录来源)。 */
+  const agentDeviceId = deviceLinkDeviceId ? null : (_agentDeviceId ?? null);
+  /**
+   * 已建任务选了换电脑、下一条消息才生效时(意图带位置):模型目录、选中态与 trigger 都按意图里的
+   * 电脑显示。undefined = 没有换位置的意图。
+   */
+  const intentAgentDeviceId =
+    sessionId && !deviceLinkDeviceId && !remoteHostId
+      ? makerChatStore.getAgentSwitchIntent(sessionId)?.agentDeviceId
+      : undefined;
+  /** 下一条消息时 Agent 所在的电脑(null = 本机)。 */
+  const effectiveAgentDeviceId =
+    intentAgentDeviceId !== undefined ? intentAgentDeviceId : agentDeviceId;
+  /** 模型目录所在的电脑:远程任务在那台;Agent 在另一台电脑运行时也是那台。 */
+  const catalogDeviceId = deviceLinkDeviceId ?? effectiveAgentDeviceId ?? undefined;
   const sharedGuest = isSharedTaskPeer(deviceLinkDeviceId ?? '');
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -1242,7 +1311,7 @@ export function ChatInput({
   const promptPreviewInputGuardRef = useRef<() => boolean>(() => false);
   const acceptPromptRecommendationRef = useRef<() => boolean>(() => false);
   // session 切换时 ChatInput/Editor 会复用；推荐资格必须等目标草稿完成水合后再判断。
-  const [composerHydrationGeneration, setComposerHydrationGeneration] = useState(0);
+  const [, setComposerHydrationGeneration] = useState(0);
   // 完整输入框空判断:不仅检查 ProseMirror 文档是否为空,还检查附件、浏览器评论和语音稿。
   // 避免在用户放好了附件/评论/语音稿但正文为空时,仍发起付费的 predictNextPrompt 调用。
   const voiceDraftTextRef = useRef('');
@@ -1316,9 +1385,28 @@ export function ChatInput({
     if (!sessionId) return;
     return window.electronAPI.maker.onSessionCredentialSwitchApplied((payload) => {
       if (payload.sessionId !== sessionId) return;
+      if (deviceLinkDeviceId || getSessionDeviceId(sessionId)) return;
       toast.success(t('newChat.chatInput.credentialSwitchApplied'), { duration: 3000 });
     });
-  }, [sessionId, t]);
+  }, [deviceLinkDeviceId, sessionId, t]);
+  useEffect(() => {
+    if (!sessionId) return;
+    return window.electronAPI.maker.onSessionCredentialSwitchFailed((payload) => {
+      if (payload.sessionId !== sessionId) return;
+      if (deviceLinkDeviceId || getSessionDeviceId(sessionId)) return;
+      toast.error(t('newChat.chatInput.credentialSwitchFailed'), { duration: 6000 });
+    });
+  }, [deviceLinkDeviceId, sessionId, t]);
+  useEffect(() => {
+    if (!sessionId) return;
+    return subscribeRemoteCredentialSwitchOutcome(sessionId, deviceLinkDeviceId ?? undefined, (outcome) => {
+      if (outcome.kind === 'applied') {
+        toast.success(t('newChat.chatInput.credentialSwitchApplied'), { duration: 3000 });
+      } else {
+        toast.error(t('newChat.chatInput.credentialSwitchFailed'), { duration: 6000 });
+      }
+    });
+  }, [deviceLinkDeviceId, sessionId, t]);
   // F-QUEUE-1 — preserve prior semantics
   const showStopButton = isAgentBusy ?? isStreaming;
   const { confirm: confirmDialog } = useConfirmDialog();
@@ -1361,90 +1449,7 @@ export function ChatInput({
     }
   }, [recommendationEnabled, sessionId]);
 
-  // messages 是可选 prop。只把「是否已有历史」放进 deps，避免流式 delta 让预测 effect
-  // 每个 token 都重跑；真正素材仍由 main 从 DB 读取，renderer payload 不作为信任来源。
-  const messagesRef = useRef(messages ?? []);
-  messagesRef.current = messages ?? [];
   const hasPredictionMessages = (messages?.length ?? 0) > 0;
-  useEffect(() => {
-    if (!sessionId || recommendation?.phase !== 'candidate') return;
-    if (!recommendationEnabled) {
-      dismissPromptRecommendation(sessionId, recommendation.revision);
-      return;
-    }
-    // deviceLinkDeviceId=undefined 是归属尚未解析的暂态，先保留 candidate；
-    // 远程推荐通过被控端 maker 隧道生成，避免在控制端读取不到会话素材。
-    if (deviceLinkDeviceId === undefined || runtimeAgentKind == null || !hasPredictionMessages) {
-      return;
-    }
-    if (remoteHostId || disabled) {
-      dismissPromptRecommendation(sessionId, recommendation.revision);
-      return;
-    }
-    const ed = editorRef.current;
-    if (!ed || ed.isDestroyed) return;
-    // ChatInput/Editor 在 session 间复用。目标 storageKey 的草稿尚未水合时，editor 里仍是
-    // 上一 session 的正文；此时判非空会误删目标 session candidate。等水合代次推进后重试。
-    if (
-      !hasHydratedRef.current ||
-      storageKeyForDraftRef.current !== storageKey ||
-      isRestoringRef.current
-    ) {
-      return;
-    }
-    // candidate 首次进入前台时已有草稿/附件/评论/语音稿，沿用旧逻辑：不发付费调用。
-    if (!composerFullyEmptyRef.current()) {
-      dismissPromptRecommendation(sessionId, recommendation.revision);
-      return;
-    }
-
-    const requestSeq = beginPromptRecommendationPrediction(sessionId, recommendation.revision);
-    if (requestSeq == null) return;
-    const requestSessionId = sessionId;
-    const requestRevision = recommendation.revision;
-    const requestTurnGen = turnGenRef.current;
-    const contextMsgs = messagesRef.current.slice(-20).map((message) => ({
-      role: message.role,
-      content: message.content,
-    }));
-
-    makerApiForSticky(requestSessionId)
-      .predictNextPrompt({
-        sessionId: requestSessionId,
-        agentKind: runtimeAgentKind,
-        messages: contextMsgs,
-        workingDir: workingDirRef.current ?? undefined,
-        turnGen: requestTurnGen,
-        completionRevision: requestRevision,
-      })
-      .then((result) => {
-        // 结果按原 session + completion revision 落入 Store；即使用户已切到其它
-        // session，也只更新原 session，切回时再展示，不污染当前输入框。
-        resolvePromptRecommendationPrediction(
-          requestSessionId,
-          requestRevision,
-          requestSeq,
-          result?.prompt ?? null,
-        );
-      })
-      .catch(() => {
-        resolvePromptRecommendationPrediction(requestSessionId, requestRevision, requestSeq, null);
-        // 预测失败静默处理:不显示推荐,也不回落任何默认文案。
-      });
-  }, [
-    composerHydrationGeneration,
-    deviceLinkDeviceId,
-    disabled,
-    hasPredictionMessages,
-    recommendation?.phase,
-    recommendation?.revision,
-    recommendationEnabled,
-    remoteHostId,
-    runtimeAgentKind,
-    sessionId,
-    storageKey,
-  ]);
-
   // F-QUEUE-DEFER: when the queue panel is expanded, esc collapses it
   // BEFORE falling through to the existing stop / history shortcuts. That
   // way the user's mental model stays consistent: esc = "back out of the
@@ -1653,24 +1658,10 @@ export function ChatInput({
   remoteHostIdRef.current = remoteHostId;
   const deviceLinkDeviceIdRef = useRef<string | null | undefined>(deviceLinkDeviceId);
   deviceLinkDeviceIdRef.current = deviceLinkDeviceId;
-  // Host capability 芯片只在「已确认本机」的 composer 里有效:SSH(remoteHostId)或
-  // device-link 远程会话若恢复本地草稿里序列化的芯片,发送路径会因
-  // TARGET_UNAVAILABLE 中断、逼用户手动删芯片。这里把「归一化 + 已确认远程剥芯片」
-  // 收口成一个入口,供草稿恢复路径统一复用。
-  // 三态:deviceLinkDeviceId = string(远程) / null(本机) / undefined(归属未解析)。
-  // 冷打开/重载时首帧归属尚未回流(undefined),不能当远程把已存本机草稿的芯片剥掉
-  // —— 只在「已确认远程」(SSH remoteHostId 或 deviceLinkDeviceId 为 string)时剥离,
-  // 未解析(undefined)时延后决定、保留芯片;随后本机(null)自然保留,若解析成远程则由
-  // 发送路径的 hostCapabilityGhost 谓词 fail-closed 兜底。
+  // Every restored draft drops retired capability atoms while preserving its content.
   const normalizeRestoredComposerDraft = (
     draftText: JSONContent | null | undefined,
-  ): JSONContent | null => {
-    if (!draftText) return null;
-    const normalized = normalizeComposerDocumentJSON(draftText);
-    const isConfirmedRemote =
-      !!remoteHostIdRef.current || typeof deviceLinkDeviceIdRef.current === 'string';
-    return isConfirmedRemote ? stripHostCapabilityChips(normalized) : normalized;
-  };
+  ): JSONContent | null => draftText ? normalizeComposerDocumentJSON(draftText) : null;
   const tRef = useRef(t);
   tRef.current = t;
   // 长文本粘贴 chip 的点击编辑目标。保存时用 nodePos + originalText 双重校验，
@@ -1834,9 +1825,9 @@ export function ChatInput({
 
   const agentKind = vendorKeyToAgentKind(vendorKey);
   // device-link 远程会话:能力(模型 / fast / effort)从被控端读;本地会话 deviceLinkDeviceId undefined → 本地。
-  const ccCaps = useAgentCapabilities('claude-code', deviceLinkDeviceId ?? undefined);
-  const codexCaps = useAgentCapabilities('codex', deviceLinkDeviceId ?? undefined);
-  const piCaps = useAgentCapabilities('pi', deviceLinkDeviceId ?? undefined);
+  const ccCaps = useAgentCapabilities('claude-code', catalogDeviceId);
+  const codexCaps = useAgentCapabilities('codex', catalogDeviceId);
+  const piCaps = useAgentCapabilities('pi', catalogDeviceId);
   const activeAgentCapabilities =
     agentKind === 'codex'
       ? codexCaps.capabilities
@@ -1964,8 +1955,8 @@ export function ChatInput({
   const sshCodexHostId = currentModelAgentKind === 'codex' && !deviceLinkDeviceId ? remoteHostId : null;
   const sshCodexProviders = useSshCodexProviders(sshCodexHostId);
   const localProviders = useProviders();
-  const remoteProviders = useDeviceProviders(deviceLinkDeviceId ?? undefined);
-  const providers = deviceLinkDeviceId ? remoteProviders.providers
+  const remoteProviders = useDeviceProviders(catalogDeviceId);
+  const providers = catalogDeviceId ? remoteProviders.providers
     : sshCodexHostId ? sshCodexProviders.providers : localProviders.providers;
   const sendProviders = filterChatBridgedCodexProviders(
     providers,
@@ -1981,14 +1972,14 @@ export function ChatInput({
   // provider 目录，且真实读取失败时 fail closed。只有结构化 unsupported 才允许旧端回退。
   const { loading: localProvidersLoading } = useConnectedSource(currentModelAgentKind, activeModel);
   const remoteModelListStatus = resolveRemoteModelListStatus({
-    deviceId: deviceLinkDeviceId ?? undefined,
+    deviceId: catalogDeviceId,
     agentKind: currentModelAgentKind,
     cc: ccCaps,
     codex: codexCaps,
     pi: piCaps,
     providers: remoteProviders,
   });
-  const providersLoading = deviceLinkDeviceId
+  const providersLoading = catalogDeviceId
     ? remoteModelListStatus === 'loading'
     : sshCodexHostId ? sshCodexProviders.status === 'loading' : localProvidersLoading;
   // 统一模型选择器(model-selector-unified M5 / M6)在 composer 上的开关 —— **能力级**那一半
@@ -2000,13 +1991,13 @@ export function ChatInput({
   // 的「已知边界」)。unsupported 是**结构化**判定(isDeviceProvidersUnsupportedError),
   // 不是 providers.length===0:后者在首帧加载中恒成立,拿它当条件会让面板每次打开先闪
   // 一下旧版布局。
-  const unifiedModelPanelEnabled = !deviceLinkDeviceId || !remoteProviders.unsupported;
+  const unifiedModelPanelEnabled = !catalogDeviceId || !remoteProviders.unsupported;
   // 联合列表参与哪些引擎 —— 以**运行时注册结果**为准(device-link 取被控端的)。
   // 撤掉新会话工具条的 AgentSelect 后,它的 hiddenVendors 门禁就落到这里:Pi 二进制缺失
   // 时模型目录照样投影 Pi 模型,只看目录会让用户一路选到 requireAgent 的 not-registered。
   // 未加载完成 → 传 undefined(fail-open,不隐藏任何引擎);当前引擎恒在列。
   const { availableVendors: runtimeAvailableVendors, loaded: runtimeAgentsLoaded } =
-    useAvailableAgents(deviceLinkDeviceId);
+    useAvailableAgents(catalogDeviceId);
   const unifiedAgents = useMemo<readonly AgentKind[] | undefined>(() => {
     if (!runtimeAgentsLoaded) return undefined;
     const kinds = UNIFIED_AGENT_KINDS.filter(
@@ -2023,9 +2014,9 @@ export function ChatInput({
     !!activeModel && activeModel === (runtimeEffective?.model ?? initialModel) &&
     (activeProviderId ?? null) === (runtimeEffective ? runtimeEffective.providerId ?? null : initialProviderId ?? null) &&
     (!activeProviderId || activeProviderId === 'openai');
-  const enforceConnectedSourceGate = (!sessionId || !deviceLinkDeviceId) && !preserveSshCodexRoute;
+  const enforceConnectedSourceGate = (!sessionId || !catalogDeviceId) && !preserveSshCodexRoute;
   const remoteModelListBlocked =
-    (!!deviceLinkDeviceId && enforceConnectedSourceGate && remoteModelListStatus !== 'ready') ||
+    (!!catalogDeviceId && enforceConnectedSourceGate && remoteModelListStatus !== 'ready') ||
     (!!sshCodexHostId && sshCodexProviders.status !== 'ready');
   // chatEligibleSourcesForModel(不是裸 sourcesForModel):非聊天模型即便"存在于某个
   // 已连接来源"也不算有可发送来源(issue #882 第 3 点,2026-07 review)——否则 Send
@@ -2046,7 +2037,7 @@ export function ChatInput({
     !remoteModelListBlocked &&
     // 老被控端明确不支持 provider:list 时只能依据 capabilities 放行；不能把缺少
     // provider 镜像误判成权威的「没有已连接来源」。
-    (!deviceLinkDeviceId || !remoteProviders.unsupported) &&
+    (!catalogDeviceId || !remoteProviders.unsupported) &&
     !hasConnectedSendSource;
 
   // 会话显式选中的来源已断开(如外部删除订阅 OAuth 凭证):trigger 显示「已断开」错误态 +
@@ -2057,7 +2048,7 @@ export function ChatInput({
   // providersLoading 期间不判(规则同 noConnectedSource,避免首帧闪断开态)。
   const selectedSourceDisconnected =
     !!sessionId &&
-    !deviceLinkDeviceId &&
+    !catalogDeviceId &&
     !preserveSshCodexRoute &&
     isSelectedSourceDisconnected({
       providers,
@@ -2089,26 +2080,33 @@ export function ChatInput({
   //     该会话切走后再切回此模型,才会采用最新全局预设。
   //   - 首页草稿无 live 会话,NewMakerDraftRoute 会把当前显示模型的 props 也从全局预设派生。
   //   - device-link 必须使用被控端镜像 override;旧被控端拿不到镜像时宁可无记忆,也不掺控制端本机。
+  //   - 远程 Agent(Agent 在另一台电脑,任务在本机)用本机为那台电脑单独记的一份(按电脑分开,
+  //     跨重启保留),不掺本机目录的记忆。
   useProviderModelMemoryVersion();
+  useAgentDeviceModelMemoryVersion();
   const modelMemory = useMemo<ModelMemoryAccessors | undefined>(() => {
     if (sshCodexHostId) return undefined;
     // device-link 远程草稿 / 会话:用纯显示镜像 override(读被控端全局预设、写穿被控端)。
     if (modelMemoryOverride) return modelMemoryOverride;
+    // 模型目录在另一台电脑时不掺本机记忆(那台的来源 id 与本机的不是一回事)。
     if (deviceLinkDeviceId) return undefined;
-    return {
-      getEffort: getProviderModelEffort,
-      setEffort: setProviderModelEffort,
-      setChoice: setProviderModelChoice,
-      getFast: getProviderModelFast,
-      setFast: setProviderModelFast,
-      getThinking: getProviderModelThinking,
-      setThinking: setProviderModelThinking,
-      // 「恢复推荐」= 删记忆键(跟随目录新默认),不是把这一版的默认快照写回去。
-      // device-link 镜像没有这两个入口(隧道协议没有删除那一笔),按各自能力退化。
-      clearEffort: clearProviderModelEffort,
-      clearFast: clearProviderModelFast,
-    };
-  }, [deviceLinkDeviceId, modelMemoryOverride, sshCodexHostId]);
+    if (catalogDeviceId) return agentDeviceModelMemoryAccessors(catalogDeviceId);
+    return LOCAL_MODEL_MEMORY;
+  }, [catalogDeviceId, deviceLinkDeviceId, modelMemoryOverride, sshCodexHostId]);
+
+  // 远程 Agent(仅本机新任务草稿):模型面板左侧栏同时列出其他电脑上的供应商。
+  const remoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(
+    () =>
+      !sessionId && !deviceLinkDeviceId && !remoteHostId && remoteAgentDevices && remoteAgentDevices.length > 0
+        ? {
+            devices: remoteAgentDevices,
+            selectedDeviceId: agentDeviceId,
+            localModelMemory: LOCAL_MODEL_MEMORY,
+            deviceModelMemory: agentDeviceModelMemoryAccessors,
+          }
+        : undefined,
+    [sessionId, deviceLinkDeviceId, remoteHostId, remoteAgentDevices, agentDeviceId],
+  );
 
   // 把「用户在当前来源下选定的 (model, effort)」记进模型全局预设,供其它非活跃行和之后的
   // 模型切换恢复。agent / 来源缺失(未知模型 / 0 已连接来源)/ device-link 无镜像时静默跳过。
@@ -2119,12 +2117,12 @@ export function ChatInput({
       if (kind && effectiveSourceId && modelId) {
         if (modelMemory?.setChoice) {
           modelMemory.setChoice(kind, effectiveSourceId, modelId, eff);
-        } else if (!deviceLinkDeviceId) {
+        } else if (!catalogDeviceId) {
           setProviderModelChoice(kind, effectiveSourceId, modelId, eff);
         }
       }
     },
-    [currentModelAgentKind, effectiveSourceId, modelMemory, deviceLinkDeviceId, sshCodexHostId],
+    [currentModelAgentKind, effectiveSourceId, modelMemory, catalogDeviceId, sshCodexHostId],
   );
 
   const folderOpen = folderPickerOpen ?? internalFolderOpen;
@@ -2830,9 +2828,6 @@ export function ChatInput({
             quotes: existing?.quotes ?? [],
             browserComments: existing?.browserComments ?? [],
             ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
-            ...(existing?.pendingHostCapabilityGhostId
-              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
-              : {}),
             ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
           },
           { silent: true },
@@ -3035,22 +3030,29 @@ export function ChatInput({
   // 反映;plugin 不自己查 listSync,同步 IPC 不进 keystroke 热路径)。
   // 目录级禁用同判(ghostWorkdirFilter):被禁用的意识胶囊不亮——渲染层
   // 绝不比发送层乐观;禁用变更会广播 ghosts:changed,清单引用变化时重滤。
-  const installedGhosts = useInstalledGhosts();
+  const installedGhosts = useInstalledGhosts(deviceLinkDeviceId === null);
   const installedGhostsRef = useRef(installedGhosts);
   installedGhostsRef.current = installedGhosts;
+  const trigger: TriggerState = editor ? detectTrigger(editor) : { kind: 'none' };
+  const remoteComposerGhosts = useRemoteComposerGhosts(
+    deviceLinkDeviceId,
+    workingDir,
+    syntheticAtAnchor !== null ||
+      trigger.kind === 'at' ||
+      (trigger.kind === 'slash' && trigger.sigil === '$'),
+    remoteReconnectEpoch,
+  );
   const pluginsForMenu = useMemo(
-    () =>
-      installedGhosts.filter(
-        (ghost) =>
-          ghost.manifest.id !== 'cindy-mivo' ||
-          !installedGhosts.some((candidate) => candidate.manifest.id === 'xd-mivo'),
-      ),
-    [installedGhosts],
+    () => deviceLinkDeviceId
+      ? remoteComposerGhosts.ghosts
+      : deviceLinkDeviceId === null
+        ? projectGhostComposerEntries(installedGhosts, [...getWorkdirDisabledGhostIds(workingDir)])
+        : [],
+    [deviceLinkDeviceId, remoteComposerGhosts.ghosts, installedGhosts, workingDir],
   );
-  const ghostsForCommand = useMemo(
-    () => filterGhostsForWorkdir(installedGhosts, workingDir),
-    [installedGhosts, workingDir],
-  );
+  const composerGhostsRef = useRef(pluginsForMenu);
+  composerGhostsRef.current = pluginsForMenu;
+  const ghostsForCommand = pluginsForMenu;
   const pluginAvailableIds = useMemo(
     () =>
       new Set(ghostsForCommand.filter((ghost) => ghost.enabled).map((ghost) => ghost.manifest.id)),
@@ -3059,27 +3061,18 @@ export function ChatInput({
   // 统一建议面板的插件条目(旧 `+` 菜单口径的并集):可用项可选,无指令或
   // Host 入口或未生效项保留展示但置灰(entry 级 disabled + 原因)。
   const pluginSuggestions = useMemo<ComposerPluginSuggestion[]>(() => {
-    // device-link 会话的插件运行在被控端；控制端清单既不代表远端已安装
-    // 状态，选择后也无法用本地 InstalledGhost 解析并插入命令。fail-closed：
-    // 仅 deviceLinkDeviceId === null（已确认本机）才展示；undefined（所有权
-    // 尚未解析）与 string（远程）一律隐藏，避免 bootstrap/重连窗口期把控制端
-    // 本地插件项泄漏进可能落为远程的会话。
-    if (deviceLinkDeviceId !== null) return [];
     return pluginsForMenu.map((ghost) => {
       const hasCommand = !!ghost.manifest.command;
-      const hostCapability = remoteHostId ? null : hostCapabilityForGhost(ghost);
-      const hasComposerEntry = hasCommand || hostCapability !== null;
+      const hasComposerEntry = hasCommand;
       const selectable = pluginAvailableIds.has(ghost.manifest.id) && hasComposerEntry;
-      const entryKey = ghost.manifest.command ?? hostCapability ?? '';
+      const entryKey = ghost.manifest.command ?? '';
       return {
         item: {
           type: 'plugin-command' as const,
           name: ghost.manifest.name,
           relPath:
             ghost.manifest.command ??
-            (hostCapability
-              ? `cindy://host-capability/${hostCapability}`
-              : `cindy://plugin/${ghost.manifest.id}`),
+            `cindy://plugin/${ghost.manifest.id}`,
           pluginId: ghost.manifest.id,
           ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
           sourceLabel: entryKey,
@@ -3093,7 +3086,7 @@ export function ChatInput({
               disabledReason: t(
                 !pluginAvailableIds.has(ghost.manifest.id)
                   ? 'extraDirs.pluginDisabled'
-                  : ghost.manifest.skill
+                  : ghost.hasSkill
                     ? 'extraDirs.pluginAgentInvoked'
                     : 'extraDirs.pluginNoCommand',
               ),
@@ -3174,9 +3167,6 @@ export function ChatInput({
             quotes: existing?.quotes ?? [],
             browserComments: existing?.browserComments ?? [],
             ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
-            ...(existing?.pendingHostCapabilityGhostId
-              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
-              : {}),
             ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
           },
           { silent: true },
@@ -3221,30 +3211,6 @@ export function ChatInput({
   useEffect(() => {
     editor?.setEditable(!composerTypingLocked);
   }, [composerTypingLocked, editor]);
-
-  // 附件/浏览器评论/语音/锁定保持原有「失效」语义（不同于普通文字输入的暂时隐藏）。
-  // 同步清 ref，避免稳定闭包里的 Tab 在 React 重渲染前填入已隐藏推荐。
-  useEffect(() => {
-    const activeRecommendation = recommendationRef.current;
-    if (
-      sessionId &&
-      activeRecommendation &&
-      (attachments.length > 0 ||
-        browserComments.length > 0 ||
-        composerMutationLocked ||
-        (voiceBusyOnCurrentComposer && voiceInput.draftText.trim().length > 0))
-    ) {
-      showRecommendationRef.current = false;
-      dismissPromptRecommendation(sessionId, activeRecommendation.revision);
-    }
-  }, [
-    attachments.length,
-    browserComments.length,
-    composerMutationLocked,
-    sessionId,
-    voiceBusyOnCurrentComposer,
-    voiceInput.draftText,
-  ]);
 
   const captureSendFocusForRestore = useComposerSendFocusRestore(editor, composerTypingLocked);
   const { settings: voiceInputSettings } = useVoiceInputSettings();
@@ -4021,9 +3987,6 @@ export function ChatInput({
             quotes: existing?.quotes ?? [],
             browserComments: existing?.browserComments ?? [],
             ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
-            ...(existing?.pendingHostCapabilityGhostId
-              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
-              : {}),
             ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
           },
           { silent: latestStorageKeyRef.current !== sourceKey },
@@ -4100,27 +4063,6 @@ export function ChatInput({
     });
   }, [editor, storageKey]);
 
-  // device-link 归属解析成「已确认远程」后补剥 Host capability 芯片。草稿恢复
-  // 效果依赖 [editor, storageKey],归属从 undefined(未解析)→ 远程 string 时不会
-  // 重跑,而 normalizeRestoredComposerDraft 在未解析阶段保留了芯片(不能把已存本机
-  // 草稿的芯片当远程剥掉);这里监听归属转译,一旦确认远程就把当前编辑器内容里残留
-  // 的 Host 芯片剥掉,避免发送路径被 TARGET_UNAVAILABLE 拦截、逼用户手动删芯片。
-  const prevConfirmedRemoteRef = useRef<boolean>(false);
-  useEffect(() => {
-    const isConfirmedRemote = !!remoteHostId || typeof deviceLinkDeviceId === 'string';
-    const becameRemote = isConfirmedRemote && !prevConfirmedRemoteRef.current;
-    prevConfirmedRemoteRef.current = isConfirmedRemote;
-    if (!becameRemote || !editor) return;
-    const doc = editor.getJSON();
-    if (!composerDocumentContainsHostCapabilityChip(doc)) return;
-    isRestoringRef.current = true;
-    try {
-      editor.commands.setContent(stripHostCapabilityChips(doc));
-    } finally {
-      isRestoringRef.current = false;
-    }
-  }, [editor, remoteHostId, deviceLinkDeviceId]);
-
   // Plugin page routed entry: wait until the editor has hydrated its existing
   // draft, then reuse the exact same insertion/focus path as the in-composer
   // `$` / `+` selectors. This preserves body text and replaces an existing
@@ -4145,42 +4087,6 @@ export function ChatInput({
         { silent: true },
       );
       placeGhostAtComposerStart(editor, ghost, installedGhosts);
-      return;
-    }
-
-    if (draft.pendingHostCapabilityGhostId) {
-      const ghost = ghostsForCommand.find(
-        (candidate) => candidate.manifest.id === draft.pendingHostCapabilityGhostId,
-      );
-      // 远程/未解析归属不恢复 Host capability 芯片(与 `+` 菜单和发送路径的
-      // fail-closed 同口径):SSH(remoteHostId)或 device-link(deviceLinkDeviceId
-      // !== null,含未解析)会话若恢复芯片,发送时会被 TARGET_UNAVAILABLE 拦截,
-      // 阻塞用户发送正文。仅已确认本机(deviceLinkDeviceId === null 且无
-      // remoteHostId)才恢复,否则静默丢弃芯片意图。
-      const dlDeviceId = deviceLinkDeviceIdRef.current;
-      const canPlaceHostCapability = !remoteHostIdRef.current && dlDeviceId === null;
-      // 归属未解析(deviceLinkDeviceId === undefined)且非 SSH 时延后决定:不清除
-      // pendingHostCapabilityGhostId,等归属解析后 effect 重跑。若此时清除,
-      // 后续解析成本机也无法恢复芯片,Host 插件(如 iOS Simulator)的"使用"
-      // handoff 会静默丢失。
-      // SSH(remoteHostId 已解析)时:即使 dlDeviceId === undefined,SSH 会话
-      // 永远无法放置 Host capability 芯片,直接清除 pendingHostCapabilityGhostId,
-      // 避免残留芯片在后续依赖变化时延迟插入已失效的能力。
-      if (dlDeviceId === undefined && !remoteHostIdRef.current) {
-        return;
-      }
-      saveComposerDraft(
-        storageKey,
-        {
-          ...draft,
-          pendingHostCapabilityGhostId: undefined,
-          focusAtEnd: false,
-        },
-        { silent: true },
-      );
-      if (ghost && canPlaceHostCapability) {
-        placeHostCapabilityAtComposerStart(editor, ghost, installedGhosts);
-      }
       return;
     }
 
@@ -4230,9 +4136,6 @@ export function ChatInput({
             quotes: existing?.quotes ?? [],
             browserComments: next,
             ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
-            ...(existing?.pendingHostCapabilityGhostId
-              ? { pendingHostCapabilityGhostId: existing.pendingHostCapabilityGhostId }
-              : {}),
             ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
           },
           { silent: true },
@@ -4327,7 +4230,6 @@ export function ChatInput({
   );
 
   // ── Slash / At panel state ─────────────────────────────────────────
-  const trigger: TriggerState = editor ? detectTrigger(editor) : { kind: 'none' };
 
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
   // agent-builtin + agent-skill); 内部并发, mergeCommands 按优先级合并去重。
@@ -4727,6 +4629,13 @@ export function ChatInput({
         },
       });
     }
+    if (remoteComposerGhosts.failed) {
+      actions.push({
+        id: 'retry-plugins',
+        label: t('extraDirs.retryRemotePlugins'),
+        run: remoteComposerGhosts.reload,
+      });
+    }
     return actions;
   }, [
     collaboration,
@@ -4741,6 +4650,8 @@ export function ChatInput({
     planModeEntry,
     remoteHostId,
     runNewGoalAction,
+    remoteComposerGhosts.failed,
+    remoteComposerGhosts.reload,
     t,
     deviceLinkDeviceId,
     writableDirs,
@@ -5112,7 +5023,7 @@ export function ChatInput({
       if (selectedItem.type === 'file-picker') return;
       if (selectedItem.type === 'plugin-command') {
         if (!selectedItem.pluginId) return;
-        const ghost = installedGhostsRef.current.find(
+        const ghost = composerGhostsRef.current.find(
           (candidate) => candidate.manifest.id === selectedItem.pluginId,
         );
         if (!ghost?.enabled) return;
@@ -5127,12 +5038,7 @@ export function ChatInput({
           .run();
 
         if (ghost.manifest.command) {
-          placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current);
-        } else {
-          const hostCap = hostCapabilityForGhost(ghost);
-          if (hostCap) {
-            placeHostCapabilityAtComposerStart(editor, ghost, installedGhostsRef.current);
-          }
+          placeGhostAtComposerStart(editor, ghost, composerGhostsRef.current);
         }
 
         closeAtPanel();
@@ -5257,6 +5163,7 @@ export function ChatInput({
       // 语音发送等所有入口，确保 host 已登记切换意图后才允许 maker:send。
       if (sessionId && hasPendingAgentSendDispatch(sessionId)) return;
       const sourceSessionId = sessionId;
+      const sourceRemoteGhosts = deviceLinkDeviceId ? composerGhostsRef.current : null;
       const sourceStorageKey = storageKey;
       const sendInFlightKey = sourceStorageKey ?? sourceSessionId ?? '__draft__';
       if (dispatchSendInFlightKeysRef.current.has(sendInFlightKey)) return;
@@ -5380,7 +5287,6 @@ export function ChatInput({
           agentReferences: serializedAgentReferences,
           pastedTextRanges,
           slashCommandRanges,
-          hostCapability,
         } = serializedContent;
         let agentReferences = serializedAgentReferences;
         const sourceDraftExtras =
@@ -5405,7 +5311,6 @@ export function ChatInput({
           ? commentsBeforeOptimisticClear
           : sourceOwnedExtras.comments;
         if (
-          !hostCapability &&
           classifyCindyMakeCommand(editorText, slashCommandsReady ? mergedCommands : null).kind !== 'none'
         ) {
           const isMakeSourceCurrent = () =>
@@ -5484,7 +5389,6 @@ export function ChatInput({
           }
         }
         if (
-          !hostCapability &&
           isPlanModeComposerCommandText(
             editorText,
             planModeEntry !== undefined,
@@ -5541,9 +5445,7 @@ export function ChatInput({
         // (截图在下方并入 filesToSend,与文本块里的 "attached as a labeled image"
         // caption 对应)。
         const text = formatBrowserCommentsForSend(commentsForSend, editorText);
-        // Allow send if there is text, attachments, or a host-capability chip
-        // (host-capability chips carry routing metadata but no visible text).
-        if (!text && attachmentsForSend.length === 0 && !hostCapability) return;
+        if (!text && attachmentsForSend.length === 0) return;
 
         // device-link 模型清单未结算或真实读取失败时禁止发送。模型选择器会同步显示
         // loading / error；这里兜住快捷键、语音等间接派发入口，避免旧快照继续路由。
@@ -5623,47 +5525,14 @@ export function ChatInput({
         const mentionsToSend = mentions.length > 0 ? mentions : undefined;
         // 意识 $指令展开(C3d 双触发):`$画图 ...` 开头且命中已唤醒意识时,
         // 追加"必须走 cindy 总机"的机器指令;未命中原样发送。
-        // 读取 useInstalledGhosts 的最新窗口级快照。ghosts:changed 会原子更新
-        // 该快照;发送路径无需同步 IPC,仍按当前工作目录执行同一禁用判定。
-        const eligibleGhosts = filterGhostsForWorkdir(
+        // 远控沿用发送开始时的目标设备快照；本机仍读取最新窗口清单并检查目录禁用。
+        const eligibleGhosts: GhostCommandSource[] = sourceRemoteGhosts ?? filterGhostsForWorkdir(
           installedGhostsRef.current,
           workingDirRef.current,
         );
         const ghostCommandWord = parseGhostCommandWord(text);
-        // Host-capability 芯片同样计入最近插件使用(与 $command 路径对齐)：
-        // 从 eligibleGhosts 解析出仍有效(启用 + workdir + manifest 一致 + 非远程会话)
-        // 的 host 插件对象交给 usedGhost，使发送后 markUsed 能更新该插件的最近使用排序。
-        const hostCapabilityGhost =
-          hostCapability !== undefined && !remoteHostId && deviceLinkDeviceId === null
-            ? eligibleGhosts.find(
-                (g) =>
-                  g.manifest.id === hostCapability.ghostId &&
-                  g.enabled &&
-                  hostCapabilityForGhost(g) === hostCapability.capability,
-              )
-            : undefined;
-        const usedGhost = ghostCommandWord
-          ? findGhostByCommand(eligibleGhosts, ghostCommandWord)
-          : (hostCapabilityGhost ?? null);
-        const textToSend = expandGhostCommand(text, eligibleGhosts);
-        // 发送前校验 host-capability 插件仍处于启用且 workdir 可用的状态。
-        // 若用户在插入芯片后停用/卸载了该插件，芯片内序列化的 ghostId/capability
-        // 已失时效，不应再展开 Host 路由指令（fail-closed）。
-        // 额外收口(remote session + manifest 一致性)：
-        //   - SSH(remoteHostId)/device-link(deviceLinkDeviceId) 远程会话不展开控制端 Host 路由；
-        //     deviceLinkDeviceId 仅 null（已确认本机）放行，undefined（所有权未解析）fail-closed；
-        //   - 插件更新后芯片保留旧 capability 时，manifest 当前声明必须仍匹配才放行。
-        const isHostCapabilityValid = hostCapabilityGhost !== undefined;
-        // 校验失败(插件停用/卸载/超 workdir/远程会话)时不静默退化为普通文本发送:
-        // 芯片承载的是用户选择的能力路由意图,退化发送会丢失 Host 路由,仅芯片消息还会
-        // 以空文本派发,静默丢弃用户意图。直接提示并拦截,让用户修复插件状态后重发。
-        if (hostCapability && !isHostCapabilityValid) {
-          toast.warning(t('newChat.pluginSetup.error.TARGET_UNAVAILABLE'));
-          return;
-        }
-        const routedText = hostCapability
-          ? expandHostCapabilityInvocation(textToSend, hostCapability, hostCapability.name)
-          : textToSend;
+        const usedGhost = ghostCommandWord ? findGhostByCommand(eligibleGhosts, ghostCommandWord) : null;
+        const routedText = expandGhostCommand(text, eligibleGhosts);
         const sendSnapshot = captureComposerSendSnapshot(
           editor.getJSON(),
           latestAttachmentsRef.current,
@@ -5689,7 +5558,7 @@ export function ChatInput({
         }
         let recentUsageMarked = false;
         const markRecentPluginUsage = () => {
-          if (!usedGhost || recentUsageMarked) return;
+          if (!usedGhost || recentUsageMarked || sourceRemoteGhosts) return;
           recentUsageMarked = true;
           void window.electronAPI.ghosts.markUsed(usedGhost.manifest.id).catch((error) => {
             log.warn(
@@ -6317,8 +6186,8 @@ export function ChatInput({
       providerId?: string | null,
       targetAgentKind?: AgentKind,
     ): { efforts: readonly Effort[]; defaultEffort: Effort | null } => {
-      if (deviceLinkDeviceId) {
-        const m = getModelById(modelId, deviceLinkDeviceId);
+      if (catalogDeviceId) {
+        const m = getModelById(modelId, catalogDeviceId);
         return { efforts: m?.efforts ?? [], defaultEffort: m?.defaultEffort ?? null };
       }
       const kinds: readonly AgentKind[] = targetAgentKind
@@ -6346,7 +6215,7 @@ export function ChatInput({
       const legacy = getModelById(modelId);
       return { efforts: legacy?.efforts ?? [], defaultEffort: legacy?.defaultEffort ?? null };
     },
-    [deviceLinkDeviceId, currentModelAgentKind, providers],
+    [catalogDeviceId, currentModelAgentKind, providers],
   );
 
   // 解析切到某 (供应商, 模型) 时应恢复的 fast —— 先读 (agent, model) 全局预设,再按目标来源
@@ -6359,7 +6228,7 @@ export function ChatInput({
   const modelFastSupported = useCallback(
     (targetModelId: string, providerId: string | null): boolean =>
       resolveFastSupported({
-        deviceId: deviceLinkDeviceId ?? undefined,
+        deviceId: catalogDeviceId,
         deviceProviders: remoteProviders.providers,
         localProviders: providers,
         capabilities:
@@ -6373,7 +6242,7 @@ export function ChatInput({
         agentKind: currentModelAgentKind,
       }),
     [
-      deviceLinkDeviceId,
+      catalogDeviceId,
       remoteProviders.providers,
       providers,
       currentModelAgentKind,
@@ -6414,6 +6283,12 @@ export function ChatInput({
         opts.activeProviderId !== undefined ? opts.activeProviderId : selectedProviderId;
       const memoryProviderId =
         opts.memoryProviderId !== undefined ? opts.memoryProviderId : effectiveSourceId;
+      // Agent 在另一台电脑运行的任务:模型属于那台的目录,不写回本机的新建任务记忆;
+      // 档位与 Fast 只记进本机为那台电脑单独记的一份(换模后意图期调档也走这里)。
+      if (agentDeviceId) {
+        rememberCatalogModelPrefs(agentDeviceId, agentKind, memoryProviderId, modelId, patch);
+        return;
+      }
       const remoteDeviceId =
         opts.remoteDeviceId ?? getSessionDeviceId(sessionId) ?? deviceLinkDeviceId;
       const markModelChoice = opts.markModelChoice === true;
@@ -6456,7 +6331,7 @@ export function ChatInput({
           log.warn('session draft model preference sync failed:', err);
         });
     },
-    [sessionId, deviceLinkDeviceId, currentModelAgentKind, selectedProviderId, effectiveSourceId, sshCodexHostId],
+    [sessionId, deviceLinkDeviceId, agentDeviceId, currentModelAgentKind, selectedProviderId, effectiveSourceId, sshCodexHostId],
   );
 
   const persistFastModeChange = useCallback(
@@ -6798,6 +6673,11 @@ export function ChatInput({
       overrides?: {
         effort?: Effort;
         fastMode?: boolean;
+        /**
+         * 远程 Agent:这一行属于哪台电脑的目录(null = 本机)。与任务当前所在电脑不同 = 连 Agent
+         * 的运行位置一起换。不传 = 沿用已登记的换位置意图,没有就是位置不变。
+         */
+        agentDeviceId?: string | null;
         thinking?: boolean;
       },
     ): Promise<boolean> => {
@@ -6823,6 +6703,24 @@ export function ChatInput({
       const exclusiveTurn = reserveAgentSwitchExclusive(sourceSessionId);
       try {
         await exclusiveTurn.ready;
+        // 远程 Agent:这次选择落在哪台电脑。左侧栏点了另一台电脑的目录就用那台;否则沿用已登记
+        // 的换位置意图 —— 意图期内在同一份目录里改选,不能被当成原来那台的选择。与任务当前
+        // 所在电脑相同 = 位置不变,不带给 main(旧被控端 / 内部调用同样不带)。
+        const pendingAgentDeviceId =
+          makerChatStore.getAgentSwitchIntent(sourceSessionId)?.agentDeviceId;
+        const requestedAgentDeviceId =
+          overrides?.agentDeviceId !== undefined ? overrides.agentDeviceId : pendingAgentDeviceId;
+        const relocateTo =
+          !deviceLinkDeviceId &&
+          requestedAgentDeviceId !== undefined &&
+          requestedAgentDeviceId !== agentDeviceId
+            ? requestedAgentDeviceId
+            : undefined;
+        // 这一行来自当前没在显示的那份目录:档位与 Fast 已由面板按那份目录解析好,原样采用,
+        // 不拿当前目录再解析一遍(同 id 模型两台电脑的档位 / Fast 能力可以不同)。
+        const fromOtherCatalog =
+          overrides?.agentDeviceId !== undefined &&
+          overrides.agentDeviceId !== effectiveAgentDeviceId;
         // effort 档按**目标引擎 + 目标来源**目录解析（同 id 模型跨来源档位可不同）；浏览态
         // 悬浮面板写下的 per-(目标引擎,来源,模型) 预设在此恢复。
         const { efforts, defaultEffort } = resolveModelEfforts(
@@ -6834,14 +6732,17 @@ export function ChatInput({
           modelMemory && providerId
             ? modelMemory.getEffort(targetAgentKind, providerId, newModelId)
             : undefined;
-        const newEffort = resolveRequestedEffort({
-          requested: overrides?.effort,
-          efforts,
-          defaultEffort,
-          activeEffort,
-          providerEffort,
-          rememberedEffort: getRememberedEffort(newModelId),
-        });
+        const newEffort =
+          fromOtherCatalog && overrides?.effort
+            ? overrides.effort
+            : resolveRequestedEffort({
+                requested: overrides?.effort,
+                efforts,
+                defaultEffort,
+                activeEffort,
+                providerEffort,
+                rememberedEffort: getRememberedEffort(newModelId),
+              });
         // Fast 目标值:目标 (来源,模型) 支持时按目标引擎全局预设,否则 false——
         // 旧引擎的 fastMode 不能原样带进新引擎。
         // 显式 override 也必须过目标能力门:意图期改选到不支持 Fast 的模型/来源时,
@@ -6860,8 +6761,9 @@ export function ChatInput({
           modelId: newModelId,
           agentKind: targetAgentKind,
         });
-        const targetFast =
-          overrides?.fastMode !== undefined
+        const targetFast = fromOtherCatalog
+          ? overrides?.fastMode === true
+          : overrides?.fastMode !== undefined
             ? overrides.fastMode && fastCapable
             : fastCapable &&
               !!providerId &&
@@ -6885,15 +6787,27 @@ export function ChatInput({
         const switchApi = deviceLinkDeviceId
           ? makerApiForDevice(deviceLinkDeviceId)
           : makerApiFor(sourceSessionId);
-        const result = await switchApi.switchSessionAgent(
-          sourceSessionId,
-          targetAgentKind,
-          newModelId,
-          providerId,
-          newEffort,
-          targetFast,
-          targetThinking,
-        );
+        const result = relocateTo !== undefined
+          ? await switchApi.switchSessionAgent(
+              sourceSessionId,
+              targetAgentKind,
+              newModelId,
+              providerId,
+              newEffort,
+              targetFast,
+              { agentDeviceId: relocateTo },
+              targetThinking,
+            )
+          : await switchApi.switchSessionAgent(
+              sourceSessionId,
+              targetAgentKind,
+              newModelId,
+              providerId,
+              newEffort,
+              targetFast,
+              undefined,
+              targetThinking,
+            );
         // device-link 往返期间可以切到另一个任务:同一路由下 ChatInput 会带着新
         // sessionId 继续渲染,sameEngineReselectRef 等闭包也已指向新会话。旧会话的
         // 响应绝不能借最新的 ref 把模型/来源写进当前会话。
@@ -6924,7 +6838,9 @@ export function ChatInput({
           registeredIntent !== null &&
           registeredIntent.target === targetAgentKind &&
           registeredIntent.model === newModelId &&
-          (providerId === null || registeredIntent.providerId === providerId);
+          (providerId === null || registeredIntent.providerId === providerId) &&
+          // 位置同样是这份意图的一部分:没换位置时 main 的投影也不带该字段。
+          registeredIntent.agentDeviceId === relocateTo;
         const ackAction = resolveAgentSwitchAckAction({
           deferred: result.deferred === true,
           switched: result.switched,
@@ -6964,6 +6880,7 @@ export function ChatInput({
               providerId,
               effort: newEffort,
               fastMode: targetFast,
+              ...(relocateTo !== undefined ? { agentDeviceId: relocateTo } : {}),
             });
           }
           // 跨引擎点选也是用户显式选模:记到目标 vendor,下次用该引擎新建跟随这次选择。
@@ -6979,20 +6896,29 @@ export function ChatInput({
           const syncedEffort = authoritative ? authoritative.effort : newEffort;
           const syncedFast = authoritative ? authoritative.fastMode : targetFast;
           const syncedProviderId = authoritative ? authoritative.providerId : providerId;
-          syncSessionDraftModelPrefs(
-            newModelId,
-            {
-              ...(syncedEffort ? { effort: syncedEffort } : {}),
-              ...(syncedFast !== undefined ? { fast: syncedFast } : {}),
-            },
-            {
+          const syncedPatch = {
+            ...(syncedEffort ? { effort: syncedEffort } : {}),
+            ...(syncedFast !== undefined ? { fast: syncedFast } : {}),
+          };
+          // 换电脑的选择属于目标电脑的目录:不写进本机的新建任务记忆,档位与 Fast 记进目标
+          // 那份目录的记忆(意图期再调档同样落在这里)。
+          if (relocateTo !== undefined) {
+            rememberCatalogModelPrefs(
+              relocateTo,
+              targetAgentKind,
+              syncedProviderId,
+              newModelId,
+              syncedPatch,
+            );
+          } else {
+            syncSessionDraftModelPrefs(newModelId, syncedPatch, {
               activeProviderId: syncedProviderId,
               memoryProviderId: syncedProviderId,
               remoteDeviceId: deviceLinkDeviceId ?? undefined,
               agentKind: targetAgentKind,
               markModelChoice: true,
-            },
-          );
+            });
+          }
           if (makerChatStore.getSnapshot(sourceSessionId).agentStatus.isRunning) {
             toast.success(
               t('newChat.chatInput.agentSwitch.deferred', {
@@ -7047,17 +6973,24 @@ export function ChatInput({
         }
         // 立即切换路径(harness / registry 缺省兜底,生产不走):维持旧收敛语义。
         makerChatStore.noteAgentSwitched(sourceSessionId, targetAgentKind);
-        syncSessionDraftModelPrefs(
-          newModelId,
-          { effort: newEffort, fast: targetFast },
-          {
-            activeProviderId: providerId,
-            memoryProviderId: providerId,
-            remoteDeviceId: deviceLinkDeviceId ?? undefined,
-            agentKind: targetAgentKind,
-            markModelChoice: true,
-          },
-        );
+        if (relocateTo !== undefined) {
+          rememberCatalogModelPrefs(relocateTo, targetAgentKind, providerId, newModelId, {
+            effort: newEffort,
+            fast: targetFast,
+          });
+        } else {
+          syncSessionDraftModelPrefs(
+            newModelId,
+            { effort: newEffort, fast: targetFast },
+            {
+              activeProviderId: providerId,
+              memoryProviderId: providerId,
+              remoteDeviceId: deviceLinkDeviceId ?? undefined,
+              agentKind: targetAgentKind,
+              markModelChoice: true,
+            },
+          );
+        }
         if (!result.engineReady) {
           toast.error(t('newChat.chatInput.agentSwitch.engineNotReady'), { duration: 4000 });
         }
@@ -7084,6 +7017,8 @@ export function ChatInput({
       providers,
       modelMemory,
       deviceLinkDeviceId,
+      agentDeviceId,
+      effectiveAgentDeviceId,
       remoteProviders.providers,
       providers,
       ccCaps.capabilities,
@@ -7206,6 +7141,59 @@ export function ChatInput({
     setSessionFavoriteAnchor,
   ]);
 
+  // ── 远程 Agent · 已建任务:选另一台电脑(或本机)目录里的模型 = 把 Agent 挪过去 ──────────
+  // 与跨引擎同一套事务(performAgentSwitch:意图在下一条消息发送时落地,交接摘要接续)。换电脑
+  // 同样续接不了原生会话,复用同一份风险确认与「不再提示」偏好,只换说明文案。选回任务当前
+  // 所在电脑(撤销挂着的换位置)或已确认过的同一目标不再问。
+  const confirmAgentRelocation = useCallback(
+    (target: UnifiedSelectionAgentDevice) =>
+      confirmAgentSwitchRisk({
+        hasSwitchIntent:
+          (target?.deviceId ?? null) === agentDeviceId ||
+          (intentAgentDeviceId !== undefined && intentAgentDeviceId === (target?.deviceId ?? null)),
+        confirm: confirmDialog,
+        copy: {
+          title: target
+            ? t('newChat.chatInput.agentRelocation.titleOther', { device: target.name })
+            : t('newChat.chatInput.agentRelocation.titleLocal'),
+          description: t('newChat.chatInput.agentRelocation.description'),
+          confirmText: t('newChat.chatInput.agentRelocation.confirm'),
+          cancelText: t('newChat.chatInput.agentRelocation.cancel'),
+          dontShowAgainLabel: t('newChat.chatInput.agentSwitch.confirmation.dontShowAgain'),
+        },
+      }),
+    [agentDeviceId, intentAgentDeviceId, confirmDialog, t],
+  );
+  const sessionRemoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(() => {
+    // 只有本机任务、且会话内能走切换事务时才开放(SSH / 被控端任务 / 协同任务都不行)。
+    if (!sessionId || deviceLinkDeviceId || remoteHostId || !sessionEngineFilter) return undefined;
+    if (!remoteAgentDevices || (remoteAgentDevices.length === 0 && !effectiveAgentDeviceId)) {
+      return undefined;
+    }
+    return {
+      devices: remoteAgentDevices,
+      selectedDeviceId: effectiveAgentDeviceId,
+      localModelMemory: LOCAL_MODEL_MEMORY,
+      deviceModelMemory: agentDeviceModelMemoryAccessors,
+      onRelocate: async (selection) => {
+        if (!(await confirmAgentRelocation(selection.agentDevice))) return false;
+        return performAgentSwitchRef.current(selection.agent, selection.modelId, selection.providerId, {
+          ...(selection.effort ? { effort: selection.effort } : {}),
+          fastMode: selection.fast,
+          agentDeviceId: selection.agentDevice?.deviceId ?? null,
+        });
+      },
+    };
+  }, [
+    sessionId,
+    deviceLinkDeviceId,
+    remoteHostId,
+    sessionEngineFilter,
+    remoteAgentDevices,
+    effectiveAgentDeviceId,
+    confirmAgentRelocation,
+  ]);
+
   // composer pill 尾部引擎小标的取值(model-selector-unified §1.1,Chris 2026-08-12 裁决:
   // pill 不再写 harness 名字文本)。与 agentIdentity **同一口径**,不另起一套:
   //   · 已建会话:身份由 session / runtime 确认后才画;切换意图期画目标引擎;
@@ -7286,19 +7274,30 @@ export function ChatInput({
       /** 行的归一化 id(面板行身份)。草稿层不消费,更不作为发送 id。 */
       rowModelId?: string;
       resetToRecommended?: true;
+      agentDevice?: UnifiedSelectionAgentDevice;
     }) => {
       if (sessionId || settingsLocked) return;
       const targetKind = vendorKeyToAgentKind(selection.engine);
+      // 这一行与当前目录不在同一台电脑(远程 Agent 换落点):记忆按目标目录写 —— 落到本机就写
+      // 本机预设;落到另一台电脑就写本机为那台记的那一份。
+      const crossDevice =
+        selection.agentDevice !== undefined &&
+        (selection.agentDevice?.deviceId ?? null) !== agentDeviceId;
+      const targetMemory = !crossDevice
+        ? modelMemory
+        : selection.agentDevice
+          ? agentDeviceModelMemoryAccessors(selection.agentDevice.deviceId)
+          : LOCAL_MODEL_MEMORY;
       if (targetKind && selection.providerId && !selection.resetToRecommended) {
         if (selection.effort) {
-          modelMemory?.setEffort(
+          targetMemory?.setEffort(
             targetKind,
             selection.providerId,
             selection.modelId,
             selection.effort,
           );
         }
-        modelMemory?.setFast(targetKind, selection.providerId, selection.modelId, selection.fast);
+        targetMemory?.setFast(targetKind, selection.providerId, selection.modelId, selection.fast);
       }
       // 乐观来源:草稿没有 SSoT 回流,pill 的来源图标靠这份本地态即时跟上。
       setSelectedProviderId(selection.providerId);
@@ -7310,9 +7309,10 @@ export function ChatInput({
         fast: selection.fast,
         favoriteUid: selection.favoriteUid,
         ...(selection.resetToRecommended ? { resetToRecommended: true as const } : {}),
+        ...(selection.agentDevice !== undefined ? { agentDevice: selection.agentDevice } : {}),
       });
     },
-    [sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect],
+    [sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect, agentDeviceId],
   );
 
   const showModelSwitchFailure = useCallback(
@@ -7677,7 +7677,7 @@ export function ChatInput({
    * handleFastModeChange)。统一面板的「先应用、后清存储」入口按它决定要不要收尾。
    */
   const handleEffortChange = useCallback(
-    async (newEffort: Effort): Promise<boolean> => {
+    async (newEffort: Effort, options?: EffortChangeOptions): Promise<boolean> => {
       if (settingsLocked) return false;
       // 切换意图期:effort 改动 = 更新意图(重登记),不走普通 setEffort 链路。
       if (sessionId && makerChatStore.getAgentSwitchIntent(sessionId)) {
@@ -7701,19 +7701,24 @@ export function ChatInput({
             // 控制端纯镜像:**await** 运行时隧道 setEffort,被控端持久化后广播回流更新分片。
             // New-K:await 而非 fire-and-forget —— 失败时被控端没真改,不能照报成功、污染默认偏好;
             // toast 提示并 return,不跑下方 onEffortDidChange 成功收尾。
-            // 乐观显示目标 effort + 置灰 selector(model/provider 不变),等被控端 echo 回流;失败回滚。
-            setPendingRemoteSwitch({
+            // 乐观显示目标 effort,等被控端 echo 回流;失败回滚。统一面板发起时不置灰 selector:
+            // 面板同一时刻只提交一笔,调档期间的后续点击由面板排队。平铺选择器 / 快捷键等其它
+            // 入口没有这层串行,仍在隧道 await 期间置灰,防止多笔远程写入交错。
+            const lockSelector = options?.serializedByPanel !== true;
+            const optimisticSwitch = {
               model: activeModel,
               effort: newEffort,
               providerId: selectedProviderId,
               fastMode: fastMode === true,
-            });
-            setRemoteSwitchInFlight(true);
+            };
+            setPendingRemoteSwitch(optimisticSwitch);
+            if (lockSelector) setRemoteSwitchInFlight(true);
             try {
               await makerApiForDevice(remoteDeviceId).setEffort(sessionId, newEffort);
             } catch (err) {
               if (isSessionScopeCurrent(sessionId, currentSessionIdRef.current)) {
-                setPendingRemoteSwitch(null);
+                // 之后又调过档时,乐观显示已是那一笔的目标,不能被这笔的失败撤掉。
+                setPendingRemoteSwitch((current) => (current === optimisticSwitch ? null : current));
                 toast.error(
                   t(
                     mapIpcErrorToI18nKey(err, { fallback: 'newChat.chatInput.remoteSwitchFailed' }),
@@ -7722,7 +7727,7 @@ export function ChatInput({
               }
               return false;
             } finally {
-              if (isSessionScopeCurrent(sessionId, currentSessionIdRef.current))
+              if (lockSelector && isSessionScopeCurrent(sessionId, currentSessionIdRef.current))
                 setRemoteSwitchInFlight(false);
             }
             if (activeModel) {
@@ -8399,19 +8404,8 @@ export function ChatInput({
             // 控制端纯镜像:运行时隧道 setPermissionMode,被控端持久化后广播回流更新分片。
             await makerApiFor(sessionId).setPermissionMode(sessionId, newMode);
           } else {
-            // runtime-first:运行时成功后才持久化，避免 UI/DB 先显示已切换而实际 agent 仍是旧档。
+            // Host 串行完成运行时、持久化和失败恢复，界面只等待最终结果。
             await window.electronAPI.maker.setPermissionMode(sessionId, newMode);
-            try {
-              await sessionService.update(sessionId, { permissionMode: newMode });
-            } catch (persistError) {
-              // DB 写入失败时尽力恢复运行时，保持用户看到的旧设置与实际行为一致。
-              try {
-                await window.electronAPI.maker.setPermissionMode(sessionId, previousMode);
-              } catch (rollbackError) {
-                log.warn('permission runtime rollback failed:', rollbackError);
-              }
-              throw persistError;
-            }
           }
         }
         // SSoT: notify parent so it refreshes `session.permissionMode` → props update.
@@ -8452,20 +8446,45 @@ export function ChatInput({
   renderSnapshotRef.current = composerRenderSnapshot(trigger, hasMessage);
   const hasComposerPayload = hasMessage || hasAttachments || browserComments.length > 0;
   const hasVoiceDraftText = voiceBusyOnCurrentComposer && voiceInput.draftText.trim().length > 0;
-  // 推荐 overlay 的可见判据:开关开启 + 有推荐词 + 输入框空 + 无附件/浏览器评论/语音草稿 + 输入框未锁定。
-  // composerMutationLocked 涵盖 disabled、sendDispatchInFlight、当前输入框所属语音及远程只读/锁定状态。
-  const showRecommendationOverlay = shouldShowComposerPromptRecommendation({
+  const recommendationComposerState = {
     enabled: recommendationEnabled,
     hydrated:
       hasHydratedRef.current &&
       storageKeyForDraftRef.current === storageKey &&
       !isRestoringRef.current,
-    prompt: recommendedPrompt,
     hasMessage,
     hasAttachments,
     hasBrowserComments: browserComments.length > 0,
     hasVoiceDraftText,
     mutationLocked: composerMutationLocked,
+  };
+  const recommendationComposerReady = isComposerReadyForPromptRecommendation(recommendationComposerState);
+  usePromptRecommendationPrediction({
+    sessionId,
+    recommendation,
+    canPredict:
+      recommendationComposerReady && !!editor && !editor.isDestroyed &&
+      deviceLinkDeviceId !== undefined && runtimeAgentKind != null &&
+      hasPredictionMessages && !remoteHostId,
+    predict: async (revision) => {
+      if (!sessionId || runtimeAgentKind == null) return null;
+      // 素材仍由 Main 从 DB 读取；远程任务经 sticky 路由交给被控电脑。
+      const result = await predictPromptUntilDisabled(makerApiForSticky(sessionId), {
+        sessionId,
+        agentKind: runtimeAgentKind,
+        messages: (messages ?? []).slice(-20).map(({ role, content }) => ({ role, content })),
+        workingDir: workingDirRef.current ?? undefined,
+        turnGen: turnGenRef.current,
+        completionRevision: revision,
+      });
+      return result?.prompt ?? null;
+    },
+  });
+  // 推荐 overlay 的可见判据:开关开启 + 有推荐词 + 输入框空 + 无附件/浏览器评论/语音草稿 + 输入框未锁定。
+  // composerMutationLocked 涵盖 disabled、sendDispatchInFlight、当前输入框所属语音及远程只读/锁定状态。
+  const showRecommendationOverlay = shouldShowComposerPromptRecommendation({
+    ...recommendationComposerState,
+    prompt: recommendedPrompt,
   });
   // handleKeyDown 的稳定闭包只按真实可见性接受 Tab，避免隐藏推荐被误填入。
   showRecommendationRef.current = showRecommendationOverlay;
@@ -9180,6 +9199,7 @@ export function ChatInput({
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
                 <PermissionSelector
+                  footer={sessionId && !getSessionDeviceId(sessionId) && !deviceLinkDeviceId && !sharedGuest ? <PluginWriteAccessRecovery key={sessionId} sessionId={sessionId} onGranted={onPermissionModeDidChange} /> : undefined}
                   permissionMode={activePermissionMode}
                   onPermissionModeChange={handlePermissionModeChange}
                   vendorKey={vendorKey}
@@ -9365,7 +9385,28 @@ export function ChatInput({
                           }
                         : undefined
                     }
-                    deviceId={deviceLinkDeviceId ?? undefined}
+                    deviceId={catalogDeviceId}
+                    // 远程 Agent:面板同时列出其他电脑上的供应商。草稿选中即换 Agent 落点;已建任务
+                    // 选中另一台电脑的模型 = 把 Agent 挪过去(下一条消息生效)。
+                    {...(remoteAgentOptions && unifiedPanelActive && onUnifiedDraftSelect
+                      ? { remoteAgent: remoteAgentOptions }
+                      : sessionRemoteAgentOptions && unifiedPanelActive
+                        ? { remoteAgent: sessionRemoteAgentOptions }
+                        : {})}
+                    // Agent 在另一台电脑运行(草稿或已建任务;意图期按下一条消息时的位置):
+                    // trigger 用带信号波纹的远程 Logo。
+                    agentDevice={
+                      effectiveAgentDeviceId
+                        ? {
+                            deviceId: effectiveAgentDeviceId,
+                            name:
+                              remoteAgentDevices?.find(
+                                (device) => device.deviceId === effectiveAgentDeviceId,
+                              )?.name ??
+                              (effectiveAgentDeviceId === agentDeviceId ? agentDeviceName : null),
+                          }
+                        : null
+                    }
                     // SSH 远程会话隐藏订阅直连模型(chatgpt/ / xai/):bridge 只挂在本地 compat-proxy,
                     // 远程模式走 remoteEndpoint 不经翻译,选了必失败。
                     excludeSubscriptionDirect={!!remoteHostId}
@@ -9961,353 +10002,5 @@ function VoiceInputButton({
         </span>
       </button>
     </Tip>
-  );
-}
-
-// ── Attachment rejection strip — internal to ChatInput ──
-//
-// Replacement for the old top-center toast.warning on attachment rejection
-// (oversize / blocked type / read failure). Floats ABOVE the input card (same
-// slot as the voice-input error notice) so it doesn't shrink the typing area,
-// and persists until the next add attempt or manual dismiss (no auto-hide).
-// Visually mirrors VoiceInputStatusNotice: a neutral rounded pill with a red
-// warning icon + a dismiss button, stacked one per rejected file.
-function AttachmentRejectionStrip({
-  rejections,
-  onDismiss,
-}: {
-  rejections: { id: string; message: string }[];
-  onDismiss: (id: string) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <>
-      {rejections.map((r) => (
-        <div
-          key={r.id}
-          role="status"
-          className={cn(
-            'pointer-events-auto inline-flex max-w-[640px] items-center gap-2',
-            'rounded-full border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
-            'px-4 py-[10px] text-13 font-medium leading-snug text-[var(--cmd-palette-item-text)]',
-            'shadow-[var(--shadow-menu)]',
-          )}
-        >
-          <TriangleAlert
-            aria-hidden
-            className="h-4 w-4 shrink-0 text-[var(--error-fg)]"
-            strokeWidth={2}
-          />
-          <span className="min-w-0 max-w-[calc(100vw-96px)] break-words">{r.message}</span>
-          <button
-            type="button"
-            onClick={() => onDismiss(r.id)}
-            aria-label={t('newChat.chatInput.attachmentRejection.dismiss')}
-            className="-mr-1 shrink-0 rounded-full p-0.5 opacity-60 transition-opacity hover:opacity-100"
-          >
-            <X aria-hidden className="h-3.5 w-3.5" strokeWidth={2} />
-          </button>
-        </div>
-      ))}
-    </>
-  );
-}
-
-// ── Thumbnail components (F-FI-3/4/5) — internal to ChatInput ──
-
-/**
- * 标注编辑保存回调(惰性烧录):只把矢量笔迹写回附件——url/base64 保持原图
- * 不变,烧录位图在发送消息时由 materializeAnnotatedAttachmentsForSend 统一
- * 生成。空笔迹 = 清掉标注字段,附件回到普通图片。
- */
-function applyAnnotationEdit(
-  file: AttachedFile,
-  result: { strokes: ImageAnnotationStroke[] },
-  onUpdate: (id: string, patch: Partial<AttachedFile>) => void,
-): void {
-  if (result.strokes.length === 0) {
-    onUpdate(file.id, { annotationStrokes: undefined });
-  } else {
-    onUpdate(file.id, { annotationStrokes: result.strokes });
-  }
-}
-
-function ThumbnailStrip({
-  attachments,
-  onRemove,
-  onUpdate,
-}: {
-  attachments: AttachedFile[];
-  onRemove: (id: string) => void;
-  /** 标注编辑保存后就地替换附件(useAttachments.updateFile)。 */
-  onUpdate: (id: string, patch: Partial<AttachedFile>) => void;
-}) {
-  return (
-    <div className="scrollbar-hide flex items-center gap-2 overflow-x-auto pb-2 pl-0 pr-2 pt-2">
-      {attachments.map((file) => (
-        <ThumbnailItem key={file.id} file={file} onRemove={onRemove} onUpdate={onUpdate} />
-      ))}
-    </div>
-  );
-}
-
-function ThumbnailItem({
-  file,
-  onRemove,
-  onUpdate,
-}: {
-  file: AttachedFile;
-  onRemove: (id: string) => void;
-  onUpdate: (id: string, patch: Partial<AttachedFile>) => void;
-}) {
-  const { t } = useTranslation();
-  const [isHovered, setIsHovered] = useState(false);
-  const thumbRef = useRef<HTMLDivElement>(null);
-  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
-
-  // attachment-thumb-click (2026-04-19): mirror UserMessage behaviour — clicking
-  // a thumbnail opens the same overlay used in the message stream:
-  //   - image  → ImageLightbox (full-screen image preview)
-  //   - other  → TextLightbox (file content / oversize CTA)
-  // Lightbox state is local to each item so multiple thumbnails don't fight.
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-  const [textLightboxOpen, setTextLightboxOpen] = useState(false);
-  // 缩略图自然尺寸:标注叠加层的 viewBox 基准(onLoad 取得,换图时重置)。
-  const [thumbNaturalSize, setThumbNaturalSize] = useState<{
-    src: string;
-    width: number;
-    height: number;
-  } | null>(null);
-  const isDownloadOnly =
-    isDangerousAttachmentName(file.name) || isDangerousAttachmentName(file.path);
-
-  // 非图片附件仍使用路径 tooltip；图片定位由共享 ImageHoverPreview 自己负责。
-  useLayoutEffect(() => {
-    if (isHovered && file.category !== 'image' && thumbRef.current) {
-      const rect = thumbRef.current.getBoundingClientRect();
-      setPopoverPos({
-        top: rect.top,
-        left: rect.left + rect.width / 2,
-      });
-    } else {
-      setPopoverPos(null);
-    }
-  }, [file.category, isHovered]);
-
-  const handleOpenPreview = useCallback(async () => {
-    // attachment-thumb-click polish (2026-04-19): clicking opens the lightbox
-    // INSTEAD of leaving the hover preview/tooltip dangling. Reset the hover
-    // flag here so the portal popover (image preview / path tooltip) hides
-    // immediately — otherwise it stays visible behind the lightbox and is
-    // still on screen the moment the lightbox closes (mouse hasn't moved, so
-    // onMouseLeave never fires on its own).
-    setIsHovered(false);
-    if (file.category === 'image') {
-      // 惰性烧录:托盘附件的 url/base64 恒为原图,已有笔迹由 lightbox 以矢量
-      // 叠加显示(可继续编辑/撤销)。
-      const src = file.url ?? (file.base64 ? `data:${file.mimeType};base64,${file.base64}` : null);
-      if (src) setLightboxSrc(src);
-      return;
-    }
-    // Historical composer drafts may still contain an executable's original
-    // path from before dangerous attachments were staged as `.bin`. Never pass
-    // those paths to the OS default-app opener from the attachment tray.
-    if (isDownloadOnly) return;
-    // Non-image text/code/markdown files preview via TextLightbox. Other
-    // supported attachment categories (PDF, etc.) open in the system app.
-    if (!file.path) return;
-    if (!(await shouldOpenTextLightbox(file.path))) return;
-    setTextLightboxOpen(true);
-  }, [file, isDownloadOnly]);
-
-  // 图片缩略图恒为 56×56 方块;其余附件走横向文件卡,宽度随文件名自适应
-  // (上限 220px)。判定条件必须与下面渲染分支一致——缓存写失败、既无 url 也无
-  // base64 的图片同样落到文件卡分支。
-  const isImageThumb = file.category === 'image' && Boolean(file.url || file.base64);
-  const thumbSrc = file.url ?? `data:${file.mimeType};base64,${file.base64}`;
-  // 副行是「类型 · 大小」;无扩展名(Makefile 之类)或 size 缺失时按存在的部分给。
-  // file.size 是拖入那一刻的快照:文件在托盘期间被改写后,发出去的是新内容,卡片
-  // 却还报旧字节数。缩略图复核时 main 会把当前 stat 大小一并带回,这里优先用它。
-  const extLabel = file.ext.replace('.', '').toUpperCase();
-  const [liveByteSize, setLiveByteSize] = useState<number | null>(null);
-  const shownSize = liveByteSize ?? file.size;
-  // 复核回来的 0 是**真实的当前大小**(文件被清空了),要照实显示 0 B;只有拿不到
-  // 复核值、且快照本身就是 0/缺失时才省掉大小段。
-  const hasSize =
-    Number.isFinite(shownSize) && (liveByteSize !== null ? shownSize >= 0 : shownSize > 0);
-  const metaLine = [extLabel || null, hasSize ? formatBytes(shownSize) : null]
-    .filter(Boolean)
-    .join(' · ');
-
-  return (
-    <div
-      ref={thumbRef}
-      className="group relative shrink-0"
-      style={isImageThumb ? { width: 56, height: 56 } : { height: 56, maxWidth: 220 }}
-      onPointerEnter={() => setIsHovered(true)}
-      onPointerLeave={() => setIsHovered(false)}
-    >
-      {/* Thumbnail content */}
-      {/* image-local-cache: prefer xdt-image:// url; fall back to base64 (F6). */}
-      <button
-        type="button"
-        className={cn(
-          'h-full w-full border-0 bg-transparent p-0 text-left',
-          isDownloadOnly ? 'cursor-default' : 'cursor-pointer',
-        )}
-        onClick={handleOpenPreview}
-        disabled={isDownloadOnly}
-        aria-label={
-          isDownloadOnly
-            ? t('chat.userMessage.attachmentAttachedAria', { name: file.name })
-            : `Preview ${file.name}`
-        }
-      >
-        {file.category === 'image' && (file.url || file.base64) ? (
-          <span className="relative block h-full w-full">
-            <img
-              src={thumbSrc}
-              alt={file.name}
-              className="h-full w-full rounded-lg object-cover"
-              draggable={false}
-              onLoad={(event) => {
-                setThumbNaturalSize({
-                  src: thumbSrc,
-                  width: event.currentTarget.naturalWidth,
-                  height: event.currentTarget.naturalHeight,
-                });
-              }}
-            />
-            {file.annotationStrokes?.length &&
-            thumbNaturalSize?.src === thumbSrc &&
-            thumbNaturalSize.width > 0 &&
-            thumbNaturalSize.height > 0 ? (
-              // 缩略图是 object-cover:SVG 以 xMidYMid slice 做同样的居中裁切,笔迹与
-              // 图片严格对齐;外层圆角裁剪与图片圆角一致。
-              <span
-                className="pointer-events-none absolute inset-0 overflow-hidden rounded-lg"
-                aria-hidden
-              >
-                <AnnotationStrokesSvg
-                  strokes={file.annotationStrokes}
-                  naturalWidth={thumbNaturalSize.width}
-                  naturalHeight={thumbNaturalSize.height}
-                  preserveAspectRatio="xMidYMid slice"
-                  className="block h-full w-full"
-                />
-              </span>
-            ) : null}
-            {file.annotationStrokes && file.annotationStrokes.length > 0 ? (
-              <span
-                className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full"
-                style={{ backgroundColor: 'var(--annotation-accent)' }}
-                aria-hidden
-              >
-                <Pen className="h-2.5 w-2.5 text-white" />
-              </span>
-            ) : null}
-          </span>
-        ) : (
-          // 文件卡(2026-07-27):图标块 + 文件名 + 「类型 · 大小」。此前是一个只印
-          // 扩展名的 56×56 方块,并排两份 PDF 根本认不出谁是谁——文件名必须直接
-          // 可见,不能只挂在 hover tooltip 上。
-          <div
-            className="flex h-full w-full items-center gap-2 rounded-xl px-2"
-            style={{ backgroundColor: 'var(--surface-chip)' }}
-          >
-            <span
-              // 缩略区比卡片底再抬一层:--file-chip-bg 与 --surface-chip 在 Light
-              // 下只差一档灰(#D8D9DB / #e5e5e5),实机上根本看不出块。内容由
-              // AttachmentTypeThumb 决定:优先系统缩略图,拿不到回落自绘类型图标。
-              className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg"
-              style={{ backgroundColor: 'var(--surface-elevated)' }}
-            >
-              <AttachmentTypeThumb file={file} onByteSize={setLiveByteSize} />
-            </span>
-            <span className="flex min-w-0 flex-col gap-0.5">
-              <span className="truncate text-xs" style={{ color: 'var(--text-primary)' }}>
-                {file.name}
-              </span>
-              {metaLine ? (
-                <span className="truncate text-11" style={{ color: 'var(--text-secondary)' }}>
-                  {metaLine}
-                </span>
-              ) : null}
-            </span>
-          </div>
-        )}
-      </button>
-
-      {/* Remove button — visible on hover */}
-      <button
-        type="button"
-        className={cn(
-          'absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full text-10 text-white',
-          'opacity-0 transition-opacity group-hover:opacity-100',
-        )}
-        style={{ backgroundColor: 'var(--file-remove-bg)' }}
-        onClick={(e) => {
-          e.stopPropagation();
-          onRemove(file.id);
-        }}
-        aria-label={`Remove ${file.name}`}
-      >
-        &times;
-      </button>
-
-      {/* Hover preview / tooltip (F-FI-4) — rendered via portal to escape overflow clipping */}
-      {file.category === 'image' && (file.url || file.base64) ? (
-        <ImageHoverPreview
-          open={isHovered}
-          anchorRef={thumbRef}
-          src={thumbSrc}
-          alt={file.name}
-          annotationStrokes={file.annotationStrokes}
-        />
-      ) : null}
-      {isHovered &&
-        popoverPos &&
-        file.category !== 'image' &&
-        createPortal(
-          <div
-            className="pointer-events-none fixed z-50 whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs"
-            style={{
-              top: popoverPos.top - 10, // 10px gap above thumbnail
-              left: popoverPos.left,
-              transform: 'translate(-50%, -100%)',
-              backgroundColor: 'var(--tooltip-bg)',
-              color: 'var(--tooltip-text)',
-            }}
-          >
-            {file.path}
-          </div>,
-          document.body,
-        )}
-
-      {/* attachment-thumb-click (2026-04-19): lightboxes mirroring UserMessage. */}
-      {lightboxSrc && (
-        <ImageLightbox
-          src={lightboxSrc}
-          onClose={() => setLightboxSrc(null)}
-          // 托盘图片的标注编辑:惰性烧录只写回矢量笔迹,不再依赖会话缓存,
-          // 缓存附件与草稿 base64 附件统一支持。
-          annotationEdit={
-            file.category === 'image' && (file.url || file.base64)
-              ? {
-                  initialStrokes: file.annotationStrokes,
-                  onSave: (result) => applyAnnotationEdit(file, result, onUpdate),
-                }
-              : undefined
-          }
-        />
-      )}
-      {textLightboxOpen && (
-        <TextLightbox
-          filePath={file.path}
-          fileName={file.name}
-          onClose={() => setTextLightboxOpen(false)}
-        />
-      )}
-    </div>
   );
 }

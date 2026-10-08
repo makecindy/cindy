@@ -37,6 +37,13 @@ describe('isInterruptedTurnError', () => {
     },
   );
 
+  it('leaves account usage limits to the reset-time wait instead of a quick reconnect', () => {
+    expect(isInterruptedTurnError({ message: availabilityError, errorStatus: 503, usageLimit: true })).toBe(false);
+    expect(
+      isInterruptedTurnError({ message: availabilityError, codexErrorInfo: 'usageLimitExceeded' }),
+    ).toBe(false);
+  });
+
   it.each([502, 503, 504, 529])('still recovers HTTP %s without a rejection category', (errorStatus) => {
     expect(isInterruptedTurnError({ message: 'opaque', sdkError: 'server_error', errorStatus })).toBe(true);
   });

@@ -36,6 +36,8 @@ export interface ThemeColors {
   surface: string;
   /** 抬一层的 Card / 弹窗 / 输入框 */
   surfaceElevated: string;
+  /** 首页导航抽屉投影，局部浮层例外（2026-09-27 用户要求）。 */
+  homeDrawerShadow: string;
   /** Surface 半透明(吸顶栏等,solid 非模糊——chrome/composer 热路径专用,守护测试禁 BlurView) */
   surfaceTranslucent: string;
   /** 侧栏/抽屉类面板毛玻璃底色(R1 audit 模式1,blur≈50 等效;BlurView tint 用) */
@@ -149,6 +151,11 @@ export interface ThemeColors {
   statusDone: string;
   /** 自动审批权限模式强调色(Auto Approval 蓝 #417CDD,L=D 同值,设计定稿 2026-07-17;取代 M2 的 #1D4ED8/#19D2C1 拆值) */
   permAutoAccent: string;
+  /**
+   * 伙伴列表未读点(信息蓝 #417CDD,L=D 同值)。对齐桌面 `--bot-unread-bg`(DESIGN.md「Bot Unread Badge」):
+   * 表示 IM 未读语义,只用于伙伴列表行(伙伴与群聊)的未读点,不是 CTA、不是状态色,不得挪作他用。
+   */
+  botUnread: string;
   /**
    * 错误说明文案的黑白系前景 —— **刻意跟随 textPrimary,不是红色**(黑白反色设计里成段
    * 错误文案不点红,错误语义由文案与上下文承担;"error" 是历史命名)。勿用于按钮文字
@@ -407,6 +414,7 @@ export const lightColors: ThemeColors = {
   taskTagWhiteCheck: '#525252',
 
   surfaceElevated: '#FFFFFC',
+  homeDrawerShadow: 'rgba(0, 0, 0, 0.16)',
   surfaceTranslucent: 'rgba(249, 249, 246, 0.78)',
   surfaceTranslucentSidebar: 'rgba(255, 255, 252, 0.90)',
   chatHeaderSurface: 'rgba(249, 249, 246, 0.90)',
@@ -453,6 +461,7 @@ export const lightColors: ThemeColors = {
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
+  botUnread: '#417CDD',
   errorText: '#0F0F0F',
   destructive: '#f43d3f',
   sharedTaskConfirmBackground: '#ac3535',
@@ -494,6 +503,7 @@ export const darkColors: ThemeColors = {
   taskTagWhite: '#ffffff',
   taskTagWhiteCheck: '#525252',
   surfaceElevated: '#1E1E1E',
+  homeDrawerShadow: 'rgba(0, 0, 0, 0.40)',
   surfaceTranslucent: 'rgba(18, 18, 18, 0.78)',
   surfaceTranslucentSidebar: 'rgba(10, 10, 10, 0.85)',
   chatHeaderSurface: 'rgba(18, 18, 18, 0.80)',
@@ -541,6 +551,7 @@ export const darkColors: ThemeColors = {
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
+  botUnread: '#417CDD',
   errorText: '#EDEDED',
   destructive: '#f43d3f',
   sharedTaskConfirmBackground: '#ec9898',
@@ -802,6 +813,16 @@ export const motionEasing = {
   in: [0.4, 0, 1, 1],
   /** 位置 / 尺寸插值 */
   move: [0.4, 0, 0.2, 1],
+} as const;
+
+/**
+ * 移动端列表展开 / 收起节奏(DESIGN.md §14.4 登记的移动端例外,2026-09-30 用户要求
+ * 「符合 iOS 节奏」,同日要求把首版 450ms 加快一倍)。手机列表用 225ms 二次缓出,约
+ * 150ms 完成九成位移,先快后缓、无回弹(桌面 base 档为 200ms)。只用于列表分组的展开 /
+ * 收起(session/listDisclosureTransition.tsx)。
+ */
+export const listDisclosureMotion = {
+  duration: 225,
 } as const;
 
 /** Shared size for floating iOS navigation/menu controls (points). */

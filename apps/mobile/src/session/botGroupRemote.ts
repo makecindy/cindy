@@ -7,10 +7,13 @@
  */
 import { resolveRemoteText, type RemoteActionEffect, type RemoteCollectionItem, type RemoteResource, type RemoteResourceAvatar, type RemoteResourceRef } from '@cindy/device-link';
 import {
+  BOT_GROUP_ATTACHMENTS_MAX,
   BOT_GROUP_CHAT_PRIMITIVE,
   BOT_GROUP_MEMBER_LINK_REL,
   BOT_GROUP_REMOTE_COLLECTION_ID,
   BOT_GROUP_REMOTE_RESOURCE_KIND,
+  type BotGroupAttachment,
+  type BotGroupAttachmentCategory,
   type BotGroupErrorCode,
   type BotGroupLastMessage,
   type BotGroupMemberStatus,
@@ -25,6 +28,7 @@ import {
   type BotGroupSpeaker,
 } from '@cindy/maker-shared/botGroupChat';
 import { formatRemoteError } from '@cindy/maker-shared/device-link-contract';
+import { isPayloadDesktopLocalMediaUrl } from '@cindy/maker-shared/payload-summary';
 
 /** Member links point at the teammates collection; avatars come from its cached rows. */
 export const BOT_GROUP_TEAMMATES_COLLECTION_ID = 'teammates';
@@ -95,13 +99,14 @@ const MEMBER_STATUSES = new Set<BotGroupMemberStatus>(['active', 'paused', 'erro
 const MESSAGE_KINDS = new Set<BotGroupMessageView['kind']>(['message', 'round-end', 'notice', 'plan', 'plan-end']);
 const AUTHOR_KINDS = new Set<BotGroupMessageView['authorKind']>(['user', 'bot', 'system']);
 const NOTICE_CODES = new Set<string>([
-  'member-failed', 'member-timeout', 'member-unavailable', 'plan-failed', 'plan-stopped', 'workdir-unavailable',
+  'member-joined', 'member-failed', 'member-timeout', 'member-unavailable', 'plan-failed', 'plan-stopped', 'workdir-unavailable',
 ]);
 const PLAN_STATUSES = new Set<BotGroupPlanView['status']>([
   'proposed', 'running', 'waiting', 'done', 'stopped', 'dismissed', 'superseded',
 ]);
 const STEP_STATUSES = new Set<BotGroupPlanStepView['status']>(['pending', 'running', 'done', 'failed']);
 const SPEAKER_ACTIVITIES = new Set<BotGroupSpeaker['activity']>(['reply', 'planning', 'step']);
+const ATTACHMENT_CATEGORIES = new Set<BotGroupAttachmentCategory>(['image', 'pdf', 'text', 'office', 'file']);
 const MAX_ID = 256;
 const MAX_NAME = 512;
 const MAX_TEXT = 200_000;
@@ -151,6 +156,29 @@ function parseMentions(value: unknown): BotGroupMention {
   return { all: record?.all === true, botIds: stringList(record?.botIds, 32, MAX_ID) };
 }
 
+/**
+ * What the user attached to a message. Only the computer's media address of an image is
+ * kept (read through remote media); host paths never reach the phone.
+ */
+function parseAttachment(value: unknown): BotGroupAttachment | null {
+  const record = recordOf(value);
+  const attachmentId = id(record?.id);
+  const name = text(record?.name, MAX_NAME);
+  if (!record || !attachmentId || !name) return null;
+  const url = text(record.url, 4_096);
+  const size = finite(record.size);
+  return {
+    id: attachmentId,
+    name,
+    category: enumOf(record.category, ATTACHMENT_CATEGORIES) ?? 'file',
+    mimeType: text(record.mimeType, 255) ?? '',
+    size: size !== null && size >= 0 ? size : 0,
+    url: url && isPayloadDesktopLocalMediaUrl(url) ? url : null,
+    path: null,
+    ...(record.annotated === true ? { annotated: true } : {}),
+  };
+}
+
 function parseMessage(value: unknown): BotGroupMessageView | null {
   const record = recordOf(value);
   const messageId = id(record?.id);
@@ -176,6 +204,13 @@ function parseMessage(value: unknown): BotGroupMessageView | null {
     noticeCode,
     planId: optionalId(record.planId),
     files: stringList(record.files, MAX_FILES, 1_024),
+    // Older computers send no attachments.
+    attachments: Array.isArray(record.attachments)
+      ? record.attachments.slice(0, BOT_GROUP_ATTACHMENTS_MAX).flatMap((raw) => {
+        const attachment = parseAttachment(raw);
+        return attachment ? [attachment] : [];
+      })
+      : [],
     createdAt,
   };
 }
@@ -259,6 +294,8 @@ function parseLastMessage(value: unknown): BotGroupLastMessage | null {
     authorKind,
     authorName: text(record.authorName, MAX_NAME) ?? '',
     preview: text(record.preview, 4_096) ?? '',
+    ...(typeof record.noticeCode === 'string' && NOTICE_CODES.has(record.noticeCode)
+      ? { noticeCode: record.noticeCode as BotGroupMessageView['noticeCode'] } : {}),
     createdAt,
   };
 }
@@ -306,6 +343,8 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     hasMoreBefore: record.hasMoreBefore === true,
     round: parseRound(record.round),
     plans,
+    // Older computers would drop attachments on `send`; only an explicit yes offers them.
+    supportsAttachments: record.supportsAttachments === true,
   };
 }
 
@@ -366,20 +405,25 @@ export function botGroupMemberAvatar(member: Pick<BotGroupMemberView, 'avatar' |
 export interface BotGroupSendAttempt {
   text: string;
   division: boolean;
+  /** Ids of the attached uploads, in order. */
+  attachmentIds: readonly string[];
   clientId: string;
 }
 
 /**
- * A retry of the same text with the same 「分工」 tag reuses its clientId, so the host
- * returns the message it already stored instead of writing it twice.
+ * A retry of the same text with the same 「分工」 tag and the same attachments reuses its
+ * clientId, so the host returns the message it already stored instead of writing it twice.
  */
 export function nextBotGroupSendAttempt(
   previous: BotGroupSendAttempt | null,
   text: string,
   division: boolean,
   newClientId: () => string,
+  attachmentIds: readonly string[] = [],
 ): BotGroupSendAttempt {
   return previous && previous.text === text && previous.division === division
+    && previous.attachmentIds.length === attachmentIds.length
+    && previous.attachmentIds.every((attachmentId, index) => attachmentId === attachmentIds[index])
     ? previous
-    : { text, division, clientId: newClientId() };
+    : { text, division, attachmentIds: [...attachmentIds], clientId: newClientId() };
 }

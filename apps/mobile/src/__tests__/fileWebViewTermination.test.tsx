@@ -44,6 +44,7 @@ vi.mock('@/device-link/peerFileRegistry', () => ({
   installPeerFileDownload: (...args: unknown[]) => { state.install(...args); return state.unregister; },
   installPeerInvoke: () => state.unregisterInvoke,
   installPeerUpload: () => state.unregisterUpload,
+  installPeerUploadProbe: () => () => {},
   installPeerReset: () => state.unregisterReset,
   clearPeerMedia() {}, recordPeerMedia: vi.fn(),
 }));

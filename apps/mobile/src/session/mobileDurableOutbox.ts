@@ -6,8 +6,12 @@ import { outboxItemAttachments, type MobileOutboxItem } from "./sessionOutbox";
 import { discardMobileUploadedAttachment } from "./mobileAttachmentUpload";
 import type { RemoteSerializedAttachment } from "./types";
 import { reconcileCommittedComposerDraft } from './composerDraftStore';
+import { withAsyncStorageFullRecovery } from './asyncStorageFull';
+import { migrateLegacySessionMessageCache } from './mobileSessionMessageCache';
+import { cancelledCreationDraft } from './cancelledCreationDraft';
 
-export const mobileDurableOutbox = createDurableOutbox(AsyncStorage, async (record, guard) => {
+const outboxStorage = withAsyncStorageFullRecovery(AsyncStorage, migrateLegacySessionMessageCache);
+export const mobileDurableOutbox = createDurableOutbox(outboxStorage, async (record, guard) => {
   if (!record.draftHandoff) return;
   const owner = getMobileAuthOwner();
   const check = () => {
@@ -18,6 +22,27 @@ export const mobileDurableOutbox = createDurableOutbox(AsyncStorage, async (reco
   };
   await reconcileCommittedComposerDraft(record.item.sessionId, record.draftHandoff, check);
 });
+
+/** Host ACK must be followed by this durable write before the recovery ledger is removed. */
+export async function persistCancelledCreationDraft(record: { sessionId: string; deviceId: string; originalWorkingDir?: string }): Promise<void> {
+  const owner = getMobileAuthOwner();
+  const guard = () => {
+    if (!owner.accountKey || !isMobileAuthOwnerCurrent(owner)) throw new Error('OUTBOX_OWNER_CHANGED');
+  };
+  guard();
+  await mobileDurableOutbox.activate(owner.accountKey);
+  guard();
+  const drafts = mobileDurableOutbox.getSnapshot().filter((r) =>
+    r.deviceId === record.deviceId && r.item.sessionId === record.sessionId && r.creation);
+  for (const draft of drafts) {
+    guard();
+    const next = record.originalWorkingDir !== undefined
+      ? { ...draft, creation: { ...draft.creation!, originalWorkingDir: record.originalWorkingDir } }
+      : draft;
+    await mobileDurableOutbox.update(draft, cancelledCreationDraft(next));
+  }
+  guard();
+}
 export async function reconcileMobileOutboxDrafts(sessionId: string): Promise<void> {
   const owner = getMobileAuthOwner();
   if (!owner.accountKey) return;

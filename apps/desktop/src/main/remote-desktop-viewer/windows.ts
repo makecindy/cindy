@@ -18,6 +18,7 @@ import {
   isTrustedCindyRendererWindow,
 } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { createLogger } from '../logger.js';
 import { ResourceUsageWindowController } from '../resource-usage-window/controller.js';
 import { createResourceUsageWindow } from '../resource-usage-window/window.js';
 import type { SupportedLocale } from '../../shared/locale.js';
@@ -27,9 +28,12 @@ import { extractIpcError } from '../../shared/ipcError.js';
 import { RemoteViewerConnection } from './connection.js';
 import { ViewerCredentials } from './credentials.js';
 import { readViewerPreferences, writeViewerPreferences } from './preferences.js';
+import { readViewerResolution, writeViewerResolution } from './resolutionMemory.js';
 import { resolveDesktopInputBinary } from '../remote-desktop/inputHost.js';
 import { ClipboardCounter } from '../remote-desktop/clipboardCounter.js';
 import { transferDesktopClipboardContent } from '../remote-desktop/clipboard.js';
+
+const log = createLogger('remote-viewer');
 
 async function requestRemote<T>(device: string, request: unknown, check: () => void): Promise<T> {
   check();
@@ -64,6 +68,8 @@ type Entry = {
   window: BrowserWindow | null;
   controller: ResourceUsageWindowController;
   connection: RemoteViewerConnection;
+  /** The remote keyboard surface owns shortcuts, including Cmd/Ctrl+W. */
+  inputCaptured: boolean;
 };
 
 /** Reuses the existing auxiliary-window lifecycle. One window per target plus
@@ -113,6 +119,11 @@ export class RemoteDesktopViewerWindows {
     }
     this.entries.clear();
   }
+  private setInputCaptured(entry: Entry, captured: boolean): void {
+    entry.inputCaptured = captured;
+    const win = entry.window;
+    if (win && !win.isDestroyed()) win.webContents.setIgnoreMenuShortcuts(captured);
+  }
   private requestClose(entry: Entry): void {
     const win = entry.window;
     if (!win || win.isDestroyed()) return;
@@ -133,6 +144,14 @@ export class RemoteDesktopViewerWindows {
       writeClipboard: (value) => clipboard.writeText(value),
       preferences: readViewerPreferences,
       savePreferences: writeViewerPreferences,
+      resolution: readViewerResolution,
+      saveResolution: writeViewerResolution,
+      channel: (generation, id, request) => {
+        const win = entry.window;
+        if (!win || win.isDestroyed()) return false;
+        win.webContents.send(REMOTE_VIEWER.CHANNEL_REQUEST, { generation, id, request });
+        return true;
+      },
       focused: () => entry.window?.isFocused() === true,
       clipboard: {
         version: (current) => {
@@ -161,11 +180,14 @@ export class RemoteDesktopViewerWindows {
       request: requestRemote,
       credentials,
     });
-    const entry: Entry = { window: null, connection, controller: null! };
+    const entry: Entry = { window: null, connection, controller: null!, inputCaptured: false };
     entry.controller = new ResourceUsageWindowController({
       isOpenSender: this.isOpenSender,
       // Independent top-level windows do not follow main-window minimize/hide.
       prewarmWork: false,
+      // A live session survives minimize, Space switches and fullscreen transitions;
+      // only closing the viewer disconnects.
+      pauseWhenHidden: false,
       activityChannel: REMOTE_VIEWER.ACTIVE,
       activityPayload: () => connection.snapshot(),
       localeChannel: REMOTE_VIEWER.LOCALE,
@@ -174,7 +196,7 @@ export class RemoteDesktopViewerWindows {
         [connection.target?.name, t('remoteDesktop.title')].filter(Boolean).join(' · '),
       onActivityChanged: (win, active) => {
         connection.setActive(active);
-        if (!active && !win.isDestroyed()) win.webContents.setIgnoreMenuShortcuts(false);
+        if (!active) this.setInputCaptured(entry, false);
       },
       createWindow: () => {
         const win = createResourceUsageWindow(undefined, {
@@ -190,16 +212,36 @@ export class RemoteDesktopViewerWindows {
         });
         entry.window = win;
         win.on('blur', () => {
+          this.setInputCaptured(entry, false);
           void connection.focusChanged();
         });
+        // The session survives hiding; the page pauses the host's video instead.
+        const hidden = (value: boolean) => () => {
+          if (!win.isDestroyed() && !win.webContents.isDestroyed())
+            win.webContents.send(REMOTE_VIEWER.HIDDEN, value);
+        };
+        win.on('hide', hidden(true));
+        win.on('minimize', hidden(true));
+        win.on('show', hidden(false));
+        win.on('restore', hidden(false));
         // Local navigation/reloads/crashes immediately retire authority, including in-flight starts.
+        // A retired renderer can no longer report focus loss, so its shortcut capture ends too.
+        const retire = () => {
+          this.setInputCaptured(entry, false);
+          connection.deactivate();
+        };
         win.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
-          if (isMainFrame && !isInPlace) connection.deactivate();
+          if (isMainFrame && !isInPlace) retire();
         });
-        win.webContents.on('render-process-gone', () => connection.deactivate());
-        win.on('closed', () => connection.deactivate());
+        win.webContents.on('render-process-gone', retire);
+        win.on('closed', retire);
         win.webContents.on('before-input-event', (event, input) => {
-          if (input.type === 'keyDown' && input.code === 'KeyW' && (input.meta || input.control)) {
+          if (
+            !entry.inputCaptured &&
+            input.type === 'keyDown' &&
+            input.code === 'KeyW' &&
+            (input.meta || input.control)
+          ) {
             event.preventDefault();
             this.requestClose(entry);
           }
@@ -251,6 +293,23 @@ export class RemoteDesktopViewerWindows {
         throwIpcError('PRECONDITION_FAILED', 'DESKTOP_SETTINGS_FAILED');
       }
     });
+    ipcMain.handle(REMOTE_VIEWER.RESOLUTION, async (event, generation, displayId, value) => {
+      const entry = this.entry(event);
+      try {
+        // An omitted value reads; an explicit null forgets.
+        return await entry.connection.resolution(generation, displayId, value);
+      } catch {
+        throwIpcError('PRECONDITION_FAILED', 'DESKTOP_SETTINGS_FAILED');
+      }
+    });
+    ipcMain.handle(REMOTE_VIEWER.CHANNEL_REPLY, (event, generation, id, outcome) => {
+      const entry = this.entry(event);
+      try {
+        entry.connection.channelReply(generation, id, outcome);
+      } catch {
+        throwIpcError('PRECONDITION_FAILED', 'DESKTOP_STOPPED');
+      }
+    });
     ipcMain.handle(REMOTE_VIEWER.SAFETY, async (event, generation, retry) => {
       if (retry !== undefined && typeof retry !== 'boolean')
         throwIpcError('INVALID_PARAMS', 'Invalid retry');
@@ -267,7 +326,14 @@ export class RemoteDesktopViewerWindows {
     });
     ipcMain.handle(REMOTE_VIEWER.CLIPBOARD, async (event, generation, action) => {
       const result = await this.entry(event).connection.clipboard(generation, action);
-      if (!result.ok) throwIpcError('PRECONDITION_FAILED', result.code);
+      if (!result.ok) {
+        // Code only: clipboard contents never reach logs.
+        log.warn('clipboard transfer failed', {
+          action: action === 'copy' || action === 'paste' ? action : 'invalid',
+          code: result.code,
+        });
+        throwIpcError('PRECONDITION_FAILED', result.code);
+      }
     });
     ipcMain.handle(REMOTE_VIEWER.CREDENTIAL, async (event, generation, action, enabled) => {
       try {
@@ -364,7 +430,7 @@ export class RemoteDesktopViewerWindows {
           throwIpcError('PRECONDITION_FAILED', 'DESKTOP_STOPPED');
         }
       } else if (generation !== entry.connection.generation) return;
-      event.sender.setIgnoreMenuShortcuts(focused && entry.window!.isFocused());
+      this.setInputCaptured(entry, focused && entry.window!.isFocused());
     });
   }
 }

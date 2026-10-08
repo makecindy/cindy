@@ -1166,7 +1166,7 @@ describe('remote schedule mirror', () => {
     expect(remoteProjectsStore.getSessionScheduleInfo('schedule-session')).toMatchObject({ hasUnreadFailedRun: true });
     invoke.mockClear().mockResolvedValue(snapshot(10));
     await refreshRemoteDeviceSessions(device, undefined, { scope: 'schedule' });
-    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke).toHaveBeenCalledWith(device, 'maker:schedule:list-sidebar-index-runs', []);
     expect(remoteProjectsStore.getSessionScheduleInfo('schedule-session')).toMatchObject({ hasUnreadFailedRun: false });
   });

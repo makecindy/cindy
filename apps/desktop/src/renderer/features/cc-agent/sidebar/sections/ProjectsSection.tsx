@@ -49,7 +49,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { useEffectiveSelectedMachineId } from '@/features/device-link/useMachineSwitcher';
-import { MACHINE_ALL } from '@/features/device-link/selectedMachineStore';
+import { useRemoteDevices } from '@/features/device-link/remoteProjectsStore';
 import {
   projectOrderWriteLedger,
   resolveDisplayedProjectOrder,
@@ -315,6 +315,12 @@ export function ProjectsSection({
   isCreateDialogueDisabled = false,
 }: ProjectsSectionProps) {
   const { t } = useTranslation();
+  const remoteDevices = useRemoteDevices();
+  // 分组索引会排除断线设备；已有缓存条目的段头仍需读取设备名，并跟随改名更新。
+  const cachedDeviceNames = useMemo(
+    () => new Map(remoteDevices.map((device) => [device.deviceId, device.deviceName])),
+    [remoteDevices],
+  );
   const localPlatform = window.electronAPI.platform;
   const projectComparisonKey = useCallback(
     (projectKey: string) => projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey,
@@ -565,13 +571,11 @@ export function ProjectsSection({
   // E 期「按设备分组」:有远程设备连接 + 开关开 → 按设备切段(本机在前,
   // 远程按设备切换栏顺序);其余情况单段直渲。切段后按当前排序重排本段。
   // 自定义项目顺序可以和设备分组叠加:每段内项目行按全局序的子集排,段内可拖。
-  // 范围收窄到单台机器时同样退场(2026-08-13 用户定稿):只有一台无段可切,
-  // 唯一的段头还会和范围标题重复报同一个设备名;整理菜单的选项行同步隐藏
-  // (deviceGroupingAvailable),偏好照旧不改写、范围放宽自动恢复。
+  // 范围收窄到单台机器时照常保留分组与整理菜单选项(2026-10-05 用户定稿,推翻
+  // 2026-08-13「单机范围退场」):单段也挂设备段头,与多机范围同一套 UI。
   const hasRemoteDevices = (remoteDeviceIndex?.size ?? 0) > 0;
   const selectedMachineId = useEffectiveSelectedMachineId();
-  const singleMachineScope = selectedMachineId !== MACHINE_ALL && selectedMachineId.length === 1;
-  const deviceGroupingAvailable = hasRemoteDevices && !singleMachineScope;
+  const deviceGroupingAvailable = hasRemoteDevices;
   const deviceGroupingActive = deviceGroupingAvailable && filter.groupDevice;
   // F-PJ-10：未分类区在 projects 为具体多选状态时不渲染（spec 验收第 14 条）
   const unclassifiedHidden = filter.projects !== 'all';
@@ -1148,7 +1152,7 @@ export function ProjectsSection({
                   ? remoteDeviceIndex?.get(section.deviceId)
                   : undefined;
                 const name = section.deviceId
-                  ? (device?.name ?? section.deviceId)
+                  ? (device?.name ?? cachedDeviceNames.get(section.deviceId) ?? section.deviceId)
                   : t('ccAgent.sidebar.deviceGroup.local');
                 const online = section.deviceId ? (device?.online ?? false) : true;
                 const sectionCollapsed = collapsedDevices.has(key);

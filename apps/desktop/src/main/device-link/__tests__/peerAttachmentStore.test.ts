@@ -106,3 +106,60 @@ it('rejects incorrect hashes and out of order writes', async () => {
   });
   await expect(handlePeerAttachment('a', { op: 'finish', ticket })).rejects.toThrow('INTEGRITY');
 });
+it('admits attachments of any size when the disk has room, reserving unwritten in-flight bytes', async () => {
+  const gib = 1024 ** 3;
+  const statfs = vi.spyOn(fs, 'statfs');
+  // 16 GiB free: a 5 GiB upload peaks at three copies (inbox, temp, durable) + 256 MiB headroom,
+  // with no fixed total cap.
+  statfs.mockResolvedValue({ bavail: 16, bsize: gib } as Awaited<ReturnType<typeof fs.statfs>>);
+  const large = { size: 5 * gib, sha256: 'a'.repeat(64) };
+  const first = (await handlePeerAttachment('a', { op: 'begin', ...large })) as { ticket: string };
+  expect(first.ticket).toMatch(/^[a-f0-9-]{36}$/);
+  // The unfinished 5 GiB upload still has to land on disk: 5 + 3*5 + 0.25 > 16.
+  await expect(handlePeerAttachment('a', { op: 'begin', ...large })).rejects.toThrow(
+    'FILE_PEER_STORAGE',
+  );
+  await handlePeerAttachment('a', { op: 'cancel', ticket: first.ticket });
+  // 15 GiB would fit two copies but not the three-copy materialization peak.
+  statfs.mockResolvedValue({ bavail: 15, bsize: gib } as Awaited<ReturnType<typeof fs.statfs>>);
+  await expect(handlePeerAttachment('a', { op: 'begin', ...large })).rejects.toThrow(
+    'FILE_PEER_STORAGE',
+  );
+});
+it('accepts raw-byte blocks and lands writes dispatched back to back in order', async () => {
+  const content = Buffer.from('hello world');
+  const meta = { size: content.length, sha256: createHash('sha256').update(content).digest('hex') };
+  const { ticket } = (await handlePeerAttachment('a', { op: 'begin', ...meta })) as {
+    ticket: string;
+  };
+  // Streaming senders keep several writes in flight; the per-ticket queue applies them in order.
+  await Promise.all([
+    handlePeerAttachment('a', { op: 'write', ticket, offset: 0, data: content.subarray(0, 4) }),
+    handlePeerAttachment('a', { op: 'write', ticket, offset: 4, data: content.subarray(4, 8) }),
+    handlePeerAttachment('a', {
+      op: 'write',
+      ticket,
+      offset: 8,
+      data: content.subarray(8).toString('base64'),
+    }),
+  ]);
+  await handlePeerAttachment('a', { op: 'finish', ticket });
+  expect(await readFile(path.join(state.root, ticket))).toEqual(content);
+  const empty = (await handlePeerAttachment('a', { op: 'begin', ...meta })) as { ticket: string };
+  await expect(
+    handlePeerAttachment('a', {
+      op: 'write',
+      ticket: empty.ticket,
+      offset: 0,
+      data: Buffer.alloc(0),
+    }),
+  ).rejects.toThrow('BLOCK');
+  await expect(
+    handlePeerAttachment('a', {
+      op: 'write',
+      ticket: empty.ticket,
+      offset: 0,
+      data: Buffer.alloc(1024 * 1024 + 1),
+    }),
+  ).rejects.toThrow('BLOCK');
+});

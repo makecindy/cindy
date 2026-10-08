@@ -19,8 +19,8 @@
     "cancel": "取消",
     "exportHint": "分享详细本地日志供排障使用；不包含对话正文或凭证。",
     "options": "日志选项",
-    "uploadCopied": "上传成功，编号 {{code}} 已复制。",
-    "uploadSucceeded": "上传成功，编号 {{code}}。"
+    "uploadCopied": "日志已上传，编号 {{code}} 已复制",
+    "uploadSucceeded": "日志已上传，编号 {{code}}"
   },
   "title": "设置",
   "appearance": {
@@ -47,20 +47,22 @@
   },
   "version": {
     "sectionTitle": "版本",
-    "currentLabel": "当前版本",
-    "bundleVersion": "整包版本 {{version}}",
-    "otaVersion": "热更版本 {{version}}",
+    "appVersion": "版本 {{version}}",
+    "updateMethodInApp": "更新方式：在 App 内更新，重启后生效",
+    "updateMethodPackage": "更新方式：下载并安装新版本",
+    "updateMethodUnavailable": "开发版，不支持 App 内更新",
     "pairedDesktopVersion": "配套桌面版本 {{version}}",
-    "devNoOta": "开发版，热更不可用",
     "checkAction": "检查更新",
     "testFlightCheckAction": "检查内容更新",
     "checking": "检查中",
-    "updating": "更新中",
     "checkingAccessibility": "正在检查更新",
     "testFlightCheckingAccessibility": "正在检查内容更新",
     "testFlightUpdateManaged": "测试版安装更新由 TestFlight 管理",
     "testFlightNoContentUpdate": "当前没有可用的内容更新。新测试版本请在 TestFlight 中查看。",
     "testFlightContentUpdateUnavailable": "当前构建无法检查内容更新。新测试版本请在 TestFlight 中查看。",
+    "googlePlayUpdateManaged": "应用版本更新由 Google Play 管理",
+    "googlePlayNoContentUpdate": "当前没有可用的内容更新。新应用版本请在 Google Play 中查看。",
+    "googlePlayContentUpdateUnavailable": "当前构建无法检查内容更新。新应用版本请在 Google Play 中查看。",
     "bundleUpdateFound": "发现整包更新",
     "upToDate": "已是最新版本",
     "bundleUpToDateNoOta": "整包已是最新，当前版本不支持热更新",
@@ -144,7 +146,8 @@
     "runtime": "Runtime",
     "otaMarker": "热更标记",
     "emergencyLaunch": "应急启动",
-    "emergencyLaunchYes": "是（本次运行内热更无法生效）"
+    "emergencyLaunchYes": "是（本次运行内热更无法生效）",
+    "otaVersion": "热更版本"
   },
   "legal": {
     "sectionTitle": "备案信息",
@@ -161,6 +164,8 @@
     "analyticsResetAction": "恢复"
   },
   "account": {
+    "logoutConfirmTitle": "退出登录？",
+    "logoutConfirmRunning": "仍有任务正在运行。退出后任务会继续在电脑上运行，但这台手机将不再接收和控制这些任务；这台手机上保存的账号和本地远程镜像也会被清除。",
     "logoutHint": "退出会清除这台手机上保存的全部账号和本地远程镜像，不会影响电脑端任务。",
     "logout": "退出登录",
     "loggingOut": "退出中",
@@ -193,9 +198,12 @@
     "resetAccessibility": "恢复默认本机名称",
     "emptyError": "设备名称不能为空。",
     "deviceInitializing": "设备还在初始化，请稍后再试。",
-    "saving": "保存中…",
-    "saved": "已保存。",
-    "restoringDefault": "正在恢复默认名称…",
-    "restoredDefault": "已恢复默认名称。"
+    "restoredDefault": "已恢复默认名称。",
+    "resetAction": "恢复默认名称",
+    "clearAccessibility": "清空名称",
+    "discardTitle": "放弃修改？",
+    "discardBody": "设备名称的修改还没有保存。",
+    "discardConfirm": "放弃修改",
+    "keepEditing": "继续编辑"
   }
 }

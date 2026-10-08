@@ -101,7 +101,7 @@ function ConsentSection({ title, children }: { title: string; children: ReactNod
   );
 }
 
-export function GhostInstallConsentContent({ facts }: { facts: GhostInstallConsentFacts }) {
+export function GhostInstallConsentContent({ facts, capabilityOnly = false }: { facts: GhostInstallConsentFacts; capabilityOnly?: boolean }) {
   const { t } = useTranslation();
   if (facts.kind === 'install') {
     return (
@@ -128,7 +128,7 @@ export function GhostInstallConsentContent({ facts }: { facts: GhostInstallConse
   return (
     <div>
       <p className="text-13 leading-5 text-[var(--confirm-desc)]">
-        {t('settings.ghosts.installConsent.updateDescription')}
+        {capabilityOnly ? null : t('settings.ghosts.installConsent.updateDescription')}
       </p>
       {facts.builtinOauthClientChanged ? (
         <p className="mt-2 text-13 leading-5 text-[var(--confirm-desc)]">
@@ -201,15 +201,16 @@ export function GhostInstallConsentHost() {
             // 账号已切换的旧请求不渲染任何插件事实，直接按取消回给 Main。
             if (ownerStamp !== undefined && !isDataOwnerPushStampCurrent(ownerStamp)) return;
             const { facts } = request;
+            const capabilityOnly = request.purpose === 'task-capability';
             const source = ghostInstallConsentSourceLabel(t, request);
             confirmed = await confirm(
               {
                 title:
-                  facts.kind === 'install'
+                  capabilityOnly ? facts.name : facts.kind === 'install'
                     ? t('settings.ghosts.installConsent.installTitle', { name: facts.name })
                     : t('settings.ghosts.installConsent.updateTitle', { name: facts.name }),
                 description:
-                  facts.kind === 'install'
+                  capabilityOnly ? t('settings.ghosts.installConsent.addedTitle') : facts.kind === 'install'
                     ? t('settings.ghosts.installConsent.installMeta', {
                         version: facts.version,
                         source,
@@ -219,12 +220,12 @@ export function GhostInstallConsentHost() {
                         to: facts.version,
                         source,
                       }),
-                content: <GhostInstallConsentContent facts={facts} />,
+                content: <GhostInstallConsentContent facts={facts} capabilityOnly={capabilityOnly} />,
                 maxWidth: 460,
                 contentSelectable: true,
                 describeContent: true,
                 confirmText:
-                  facts.kind === 'install'
+                  capabilityOnly ? t('settings.ghosts.connections.confirmAllow') : facts.kind === 'install'
                     ? t('settings.ghosts.installConsent.confirmInstall')
                     : t('settings.ghosts.installConsent.confirmUpdate'),
                 cancelText: t('settings.ghosts.installConsent.cancel'),

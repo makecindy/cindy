@@ -19,6 +19,8 @@ export interface IncomingMigration {
   workers?: Array<{ sessionId: string; sourceSessionId: string; workingDir: string }>;
   /** Retained failed attempts; never delete or overwrite files a user may have opened. */
   retainedWorkingDirs?: string[];
+  /** The copy created a new project folder, registered as a recent project once imported. */
+  newProject?: true;
 }
 export type MigrationRecord = (MigrationHandoff & { kind: 'outgoing' }) | IncomingMigration;
 const validId = (value: string) => /^[a-zA-Z0-9_-]{1,128}$/.test(value);

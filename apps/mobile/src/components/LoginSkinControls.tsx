@@ -35,7 +35,7 @@ import { parseLegalSegments } from '@/auth/legalText';
 import { Text, TextInput } from '@/components/AppText';
 import { hasNativeLoginButtons, LoginNativeButton } from './LoginNativeButton';
 import { useTheme, useThemedStyles } from '@/theme';
-import { fontWeight, loginSizes, radius, type ThemeColors } from '@/theme/tokens';
+import { fontWeight, loginSizes, motionDuration, radius, type ThemeColors } from '@/theme/tokens';
 
 /**
  * LoginSkinControls —— 登录布局与跨平台入口。iOS 按钮交给 LoginNativeButton，
@@ -748,7 +748,7 @@ function SpinBox({ box, children }: { box: number; children: ReactNode }) {
   useEffect(() => {
     const loop = Animated.loop(
       Animated.timing(spin, {
-        duration: 900,
+        duration: motionDuration.spinnerCycle,
         easing: Easing.linear,
         toValue: 1,
         useNativeDriver: true,
@@ -1146,7 +1146,7 @@ export function LoginLoadingRing({ y, label }: { y: number; label: string }) {
 
 /**
  * 验证码重发倒计时链接(figma §4.7 + Step 3a 契约:@(70,238) 540×50 20;
- * 倒计时中 = controlPlaceholder 无下划线「{n} 秒后可重新发送」(42 起,首帧 42);
+ * 倒计时中 = controlPlaceholder 无下划线「{n} 秒后可重新发送」(60 起,首帧 60);
  * 归零 = controlText 带下划线「重新发送验证码」可点)。
  * 绝对 deadline 模型:渲染每 tick 用 Date.now() 重算剩余秒(非递减计数,
  * 系统休眠/挂起恢复自校正);deadline 变化(重发成功重置)即重启 tick;

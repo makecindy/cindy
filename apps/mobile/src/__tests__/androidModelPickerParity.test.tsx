@@ -30,6 +30,7 @@ const flatStyle = (style: unknown): AnyProps => {
   if (Array.isArray(value)) return Object.assign({}, ...value.map(flatStyle));
   return value && typeof value === "object" ? (value as AnyProps) : {};
 };
+vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => false, getCachedReduceMotionEnabled: () => false }));
 vi.mock("react-native", async () => {
   const { createElement: el } = await import("react");
   const passthrough = ({ children }: AnyProps) => el("div", null, children);
@@ -39,6 +40,7 @@ vi.mock("react-native", async () => {
     accessibilityRole,
     accessibilityValue,
     accessibilityLabel,
+    accessibilityElementsHidden,
     onLayout,
   }: AnyProps) => {
     if (testID && onLayout) native.layouts.set(testID, onLayout);
@@ -48,6 +50,7 @@ vi.mock("react-native", async () => {
         "data-testid": testID,
         role: accessibilityRole,
         "aria-label": accessibilityLabel,
+        "aria-hidden": accessibilityElementsHidden,
         "aria-valuenow": accessibilityValue?.now,
       },
       children,
@@ -100,7 +103,24 @@ vi.mock("react-native", async () => {
       );
     },
     ScrollView: passthrough,
+    FlatList: ({
+      data,
+      renderItem,
+      ListHeaderComponent,
+      ListEmptyComponent,
+    }: AnyProps) =>
+      el(
+        "div",
+        null,
+        ListHeaderComponent,
+        data.length
+          ? data.map((item: any, index: number) =>
+              el("div", { key: item.key }, renderItem({ item, index })),
+            )
+          : ListEmptyComponent,
+      ),
     StyleSheet: { create: <T,>(styles: T) => styles, hairlineWidth: 1 },
+    Easing: { bezier: () => (t: number) => t },
     View,
     useWindowDimensions: () => ({ height: 800, width: 400 }),
   };
@@ -205,10 +225,10 @@ vi.mock("@/components/MobileAgentMark", async () => {
 vi.mock("@/session/MobileProviderMark", async () => {
   const { createElement: el } = await import("react");
   return {
-    MobileProviderMark: ({ providerId }: AnyProps) =>
-      el("i", { "data-provider-mark": providerId }),
-    MobileModelIconMark: ({ providerId }: AnyProps) =>
-      el("i", { "data-model-mark": providerId }),
+    MobileProviderMark: ({ providerId, remote }: AnyProps) =>
+      el("i", { "data-provider-mark": providerId, ...(remote ? { "data-remote-mark": "" } : {}) }),
+    MobileModelIconMark: ({ providerId, remote }: AnyProps) =>
+      el("i", { "data-model-mark": providerId, ...(remote ? { "data-remote-mark": "" } : {}) }),
   };
 });
 vi.mock("@/session/sessionAgentSwitch", () => ({
@@ -229,7 +249,14 @@ vi.mock("@/session/SheetModal", async () => {
 vi.mock("@/session/SheetSurface", async () => {
   const { createElement: el } = await import("react");
   return {
-    SheetSurface: ({ children, title, pinnedTop, onBack, testID }: AnyProps) =>
+    SheetSurface: ({
+      children,
+      title,
+      pinnedTop,
+      onBack,
+      testID,
+      renderScrollContent,
+    }: AnyProps) =>
       el(
         "section",
         { "data-testid": testID, "data-title": title },
@@ -237,7 +264,7 @@ vi.mock("@/session/SheetSurface", async () => {
           ? el("button", { "data-testid": `${testID}.back`, onClick: onBack })
           : null,
         pinnedTop,
-        children,
+        renderScrollContent ? renderScrollContent({}) : children,
       ),
   };
 });
@@ -436,8 +463,8 @@ describe("Android unified model picker follows the iOS structure", () => {
     expect(byId("modelSheet")!.getAttribute("data-title")).toBe(
       "models.unified.source",
     );
-    // 搜索框只在列表页出现;来源页有返回。
-    expect(byId("modelSheet.search")).toBeNull();
+    // 列表保持挂载以保留位置，但来源页打开时不能访问隐藏的搜索框。
+    expect(byId("modelSheet.search")!.closest('[aria-hidden="true"]')).not.toBeNull();
     const quota = byId("modelSheet.source.p1.quota")!;
     expect(quota.getAttribute("role")).toBe("progressbar");
     expect(quota.getAttribute("aria-valuenow")).toBe("40");
@@ -486,6 +513,7 @@ describe("Android unified model picker follows the iOS structure", () => {
         fastCapable: true,
         onChange: vi.fn(),
         favoritesDisabled: false,
+        canReset: true,
         onFavorite: vi.fn(),
         onReset: vi.fn(),
         context: "Provider One · 200K context",
@@ -563,15 +591,15 @@ describe("Android unified model picker follows the iOS structure", () => {
     expect(byId("modelSheet.effort.high")).toBeNull();
   });
 
-  it("hides the reset row for favorites", () => {
+  it("offers reset for customized parameters even when opened from favorites", () => {
     const props = optionsProps({
       row: unifiedRow({ favorite: { uid: "fav-1" } }),
     });
     render(createElement(UnifiedModelPickerView, props as never));
     expect(byId("modelSheet.favorite")!.textContent).toContain(
-      "models.unified.removeFavorite",
+      "models.unified.savedConfiguration",
     );
-    expect(byId("modelSheet.reset")).toBeNull();
+    expect(byId("modelSheet.reset")).not.toBeNull();
   });
 });
 
@@ -648,7 +676,14 @@ describe("Android legacy model list groups by source like iOS", () => {
     try {
       render(
         createElement(MobileModelPickerList, {
-          providerRows: [{ provider: provider("sub", "ChatGPT", { access: { kind: "subscription" } }), model: model("a") }],
+          providerRows: [
+            {
+              provider: provider("sub", "ChatGPT", {
+                access: { kind: "subscription" },
+              }),
+              model: model("a"),
+            },
+          ],
           flatOptions: [],
           activeModelId: "b",
           activeSourceId: "sub",
@@ -663,7 +698,9 @@ describe("Android legacy model list groups by source like iOS", () => {
       expect(hint.textContent).toBe("needs key");
       expect(hint.getAttribute("data-lines")).toBeNull();
       const row = host.querySelector('button[data-testid="list"]')!;
-      const meta = [...row.querySelectorAll('span[data-lines="1"]')].map((node) => node.textContent);
+      const meta = [...row.querySelectorAll('span[data-lines="1"]')].map(
+        (node) => node.textContent,
+      );
       expect(meta.some((text) => text?.includes("needs key"))).toBe(false);
     } finally {
       native.budgetDisabled = false;
@@ -715,9 +752,17 @@ describe("Android legacy model list groups by source like iOS", () => {
         testID: "flat",
       } as never),
     );
-    act(() => native.layouts.get("flat.selectedRow")!({ nativeEvent: { layout: { y: 60 } } }));
+    act(() =>
+      native.layouts.get("flat.selectedRow")!({
+        nativeEvent: { layout: { y: 60 } },
+      }),
+    );
     expect(onSelectedRowLayout).not.toHaveBeenCalled();
-    act(() => native.layouts.get("flat.group.__flat__")!({ nativeEvent: { layout: { y: 120 } } }));
+    act(() =>
+      native.layouts.get("flat.group.__flat__")!({
+        nativeEvent: { layout: { y: 120 } },
+      }),
+    );
     expect(onSelectedRowLayout).toHaveBeenLastCalledWith(180);
   });
 });
